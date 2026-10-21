@@ -9,8 +9,9 @@
  *  trigger that navigation; real targets still run first and do their work.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, type IWorkbenchContribution } from '@universe-editor/platform'
+import { Disposable, toDisposable, type IWorkbenchContribution } from '@universe-editor/platform'
 import { dragContainsResources } from '@universe-editor/workbench-ui'
+import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 
 export class GlobalDragAndDropContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -23,13 +24,19 @@ export class GlobalDragAndDropContribution extends Disposable implements IWorkbe
     const onDrop = (e: DragEvent): void => {
       if (dragContainsResources(e.dataTransfer)) e.preventDefault()
     }
-    window.addEventListener('dragover', onDragOver)
-    window.addEventListener('drop', onDrop)
-    this._register({
-      dispose: () => {
-        window.removeEventListener('dragover', onDragOver)
-        window.removeEventListener('drop', onDrop)
-      },
-    })
+    // Every workbench document needs the net: a file dropped over an auxiliary
+    // window would otherwise navigate that window to the file.
+    this._register(
+      installPerWorkbenchDocument((doc) => {
+        const view = doc.defaultView
+        if (!view) return toDisposable(() => {})
+        view.addEventListener('dragover', onDragOver)
+        view.addEventListener('drop', onDrop)
+        return toDisposable(() => {
+          view.removeEventListener('dragover', onDragOver)
+          view.removeEventListener('drop', onDrop)
+        })
+      }),
+    )
   }
 }

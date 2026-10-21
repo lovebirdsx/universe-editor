@@ -77,6 +77,51 @@ describe('TooltipProvider', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
+  it('keeps a focus-driven tooltip when an unrelated mouseout fires during the delay', () => {
+    vi.useFakeTimers()
+    render(<Fixture delay={500} />)
+
+    fireEvent.focusIn(screen.getByTestId('outer'))
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    // Window activation can synthesize a mouseout on body while the focus
+    // tooltip is still waiting out its delay.
+    fireEvent.mouseOut(document.body)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.getByRole('tooltip').textContent).toBe('outer tip')
+  })
+
+  it('keeps a visible focus-driven tooltip when the pointer moves elsewhere', () => {
+    vi.useFakeTimers()
+    render(<Fixture delay={0} />)
+
+    fireEvent.focusIn(screen.getByTestId('outer'))
+    act(() => {
+      vi.advanceTimersByTime(10)
+    })
+    fireEvent.mouseOut(document.body)
+    expect(screen.getByRole('tooltip').textContent).toBe('outer tip')
+  })
+
+  it('still cancels a pending hover tooltip on its own mouseout', () => {
+    vi.useFakeTimers()
+    render(<Fixture delay={500} />)
+
+    const outer = screen.getByTestId('outer')
+    fireEvent.mouseOver(outer)
+    act(() => {
+      vi.advanceTimersByTime(100)
+    })
+    fireEvent.mouseOut(outer)
+    act(() => {
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
   it('prefers the innermost data-tooltip host', () => {
     vi.useFakeTimers()
     render(<Fixture delay={0} />)

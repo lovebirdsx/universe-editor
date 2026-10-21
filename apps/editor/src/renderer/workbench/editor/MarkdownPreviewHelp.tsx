@@ -7,6 +7,7 @@
 
 import { useEffect } from 'react'
 import { localize } from '@universe-editor/platform'
+import { useOwnerDocument } from '@universe-editor/workbench-ui'
 import styles from './MarkdownPreviewEditor.module.css'
 
 interface Shortcut {
@@ -55,6 +56,7 @@ function shortcuts(): readonly Shortcut[] {
 }
 
 export function MarkdownPreviewHelp({ onClose }: { onClose: () => void }) {
+  const doc = useOwnerDocument()
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
@@ -63,9 +65,9 @@ export function MarkdownPreviewHelp({ onClose }: { onClose: () => void }) {
         onClose()
       }
     }
-    document.addEventListener('keydown', onKeyDown, true)
-    return () => document.removeEventListener('keydown', onKeyDown, true)
-  }, [onClose])
+    doc?.addEventListener('keydown', onKeyDown, true)
+    return () => doc?.removeEventListener('keydown', onKeyDown, true)
+  }, [onClose, doc])
 
   return (
     <div

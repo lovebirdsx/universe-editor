@@ -5,7 +5,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { isEditableElement, isElementLike, isHTMLElementLike } from '../dom/domRealm.js'
+import {
+  isEditableElement,
+  isElementLike,
+  isHTMLElementLike,
+  isNodeLike,
+  isTagElement,
+} from '../dom/domRealm.js'
 
 /** 只带形状的异 realm 元素替身（真实场景由辅助窗口 e2e 守护）。 */
 const foreign = (tagName: string, isContentEditable = false) => ({
@@ -40,5 +46,19 @@ describe('domRealm', () => {
     expect(isElementLike(document)).toBe(false)
     expect(isElementLike({})).toBe(false)
     expect(isHTMLElementLike({ nodeType: 3, tagName: 'X' })).toBe(false)
+  })
+
+  it('classifies nodes and tags across realms', () => {
+    const text = document.createTextNode('x')
+    expect(isNodeLike(text)).toBe(true)
+    expect(isNodeLike({ nodeType: 3 })).toBe(true)
+    expect(isNodeLike(document)).toBe(true)
+    expect(isNodeLike(null)).toBe(false)
+    expect(isNodeLike({})).toBe(false)
+
+    expect(isTagElement(document.createElement('input'), 'INPUT')).toBe(true)
+    expect(isTagElement({ nodeType: 1, tagName: 'TEXTAREA' }, 'textarea')).toBe(true)
+    expect(isTagElement(document.createElement('div'), 'input')).toBe(false)
+    expect(isTagElement(text, 'input')).toBe(false)
   })
 })

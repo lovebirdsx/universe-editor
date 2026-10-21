@@ -7,7 +7,9 @@ import {
   type IEditorGroup,
   type IViewsService,
 } from '@universe-editor/platform'
+import { isHTMLElementLike } from '@universe-editor/workbench-ui'
 import { focusEditorInput, syncEditorFocusContext } from '../editor/editorFocus.js'
+import { currentWorkbenchDocumentOrUndefined } from '../windows/workbenchDocuments.js'
 
 export const EXPLORER_TREE_VIEW_ID = 'workbench.view.explorer.tree'
 const EXPLORER_CONTAINER_ID = 'workbench.view.explorer'
@@ -30,9 +32,9 @@ export async function restoreWorkbenchFocus(
   // Restoring focus must not steal it from an element the user already reached
   // inside the editor area (e.g. Ctrl+F's find input opened right after a
   // workspace switch) — the editor branch's goal is already met.
-  const activeElement = globalThis.document?.activeElement
+  const activeElement = currentWorkbenchDocumentOrUndefined()?.activeElement
   if (
-    activeElement instanceof HTMLElement &&
+    isHTMLElementLike(activeElement) &&
     activeElement.closest('[data-testid="part-editorArea"]') !== null
   ) {
     syncEditorFocusContext(contextKeyService)
@@ -62,9 +64,9 @@ export async function restoreWorkbenchFocus(
   // Nor steal a view outside the sidebar the user already focused — e.g. the
   // Output editor focused via toggleOutput mid-restore-window. Restoring to
   // Explorer would rip keyboard focus out of the panel the user is typing in.
-  const activeElement2 = globalThis.document?.activeElement
+  const activeElement2 = currentWorkbenchDocumentOrUndefined()?.activeElement
   if (
-    activeElement2 instanceof HTMLElement &&
+    isHTMLElementLike(activeElement2) &&
     activeElement2.closest('[data-view-id]') !== null &&
     activeElement2.closest('[data-testid="part-sidebar"]') === null
   ) {

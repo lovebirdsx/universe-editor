@@ -36,38 +36,55 @@ renderer（主窗口，唯一运行时）
 
 ## 浮层与文档归属
 
-每个窗口有自己的 Document，所有文档级浮层必须挂到**owner document**：
+每个窗口有自己的 Document，所有文档级浮层必须挂到**owner document**。解析顺序统一走 `@universe-editor/workbench-ui` 的 `useOwnerDocument(explicit?)`：**显式 prop > `OwnerDocumentProvider` > 全局 `document`**。`Workbench` 根部 provide 主文档，`AuxiliaryWindowHost` 为每个辅助 portal 子树重新 provide 该窗口的 document。
 
-- React portal 宿主（`DialogHost` / `ProgressDialogHost` / `QuickInput` / tooltip）以目标窗口的 `document.body` 为容器；`RendererDialogService` 在**发起操作时**捕获活跃窗口的 Document，而不是在服务构造时固定。
-- `DialogHost` 把该 Document 传给 `ConfirmDialog` → `FocusScopeOverlay targetDocument`，否则 Escape 监听会留在主窗口的 document 上。
-- `TooltipProvider` 与 `useDragSessionDocument` 在辅助窗口内按 `entry.window.document` 注册监听。
-- Monaco 的 overflow widget 容器按编辑区所在 Document 创建；hover、suggest、find 因此落在发起编辑的窗口（见 [overlay-layers.md](overlay-layers.md)）。但 `monacoWorkbenchLayoutService` 的 `ILayoutService` 仍锚定主窗口 `#root`（已知限制）：辅助窗口里的 context view / hover 会渲染到主窗口。
+- React context 沿 React 树传播、**不沿 DOM portal 传播**：任何跨文档的 `createPortal` 子树都必须重新包一层 `OwnerDocumentProvider`，否则子树里的浮层仍会解析到主文档。通知/进度宿主、`ChatImage`、`WhenInputCell`、`PerforceGraphSyncDialog` 都按此处理。
+- 原语内部解析，调用点不必逐个传文档：`AnchoredSurface`（菜单、hover、context view）、`useMenuNavigation`（键盘捕获）、`Select`、`FocusScopeOverlay`、`TooltipProvider`。显式 `targetDocument` 仍可覆盖，供宿主在 provider 之外使用。
+- `FloatingPortal` 的 `root` 必须是 owner document 的 `body`，window capture 监听挂 owner document 的 `defaultView`；只改 portal 不改监听，会出现"菜单画在辅助窗口、方向键却由主窗口处理"。
+- 直接 portal 的浮层（`ChatImage` 预览、`WhenInputCell`、`PerforceGraphSyncDialog`）自己解析 owner document，并用所选窗口的 `innerWidth/innerHeight` 做视口夹取。
+- `DialogHost` 仍把发起时捕获的 Document 传给 `ConfirmDialog` → `FocusScopeOverlay targetDocument`；`RendererDialogService` 在**发起操作时**捕获活跃窗口的 Document，而不是在服务构造时固定；`QuickInput` 同理。
+- Monaco 编辑器内容浮层（hover / suggest / find 详情）由编辑器自身创建，落在编辑器所在文档；`monacoWorkbenchLayoutService.getContainer(window)` 按目标窗口解析该窗口的 `#root`，平台级 hover 同样跟随目标文档。`mainContainer` / `activeContainer` 仍固定主窗口，只作无目标容器时的兜底（见 [overlay-layers.md](overlay-layers.md)）。
 
-通用规则：**浮层跟随宿主文档，不跟随全局 `document`**。新增 overlay 时先问"它渲染进哪个 document"，再把该 document 显式传给 portal / FocusScope / 事件监听。
+通用规则：**浮层跟随宿主文档，不跟随全局 `document`**。新增 overlay 时先问"它渲染进哪个 document"，优先让原语从 context 解析；只有跨文档 portal 才需要显式重新 provide。
+
+### 通知与进度：按发起文档路由
+
+VSCode 的 `INotificationService` / `IProgressService` 是每个 workbench 窗口一份。本仓库只有一个 renderer、一份服务，因此用"**发起文档**"达到等价语义：
+
+- `NotificationService.notify()` 在调用时捕获 `currentWorkbenchDocumentOrUndefined()`；真正需要指定窗口的调用方用 `notifyWithOrigin(origin, opts)`。origin 只存在于 renderer 内存（`notificationOrigins` observable），**绝不进入 platform 的 `INotification` 或持久化 JSON**；恢复的通知没有 origin，自然回落主窗口。
+- `NotificationsToast` 按 `workbenchDocumentOrMain(origin)` 分组，每组 `createPortal` 到目标文档；每窗口最多 5 条。通知中心在 `toggleCenter()` 打开时捕获 `centerDocument`，关闭/文档注销时清空。
+- 文档关闭后 origin 被清理，尚未处理的条目回落主窗口（`workbenchDocumentOrMain`）；通知**不会**跟着之后切换的活跃窗口漂移。
+- `ProgressService.withProgress()` 在**进入时**捕获 origin（不是延迟 mount 时），notification 走 `notifyWithOrigin`，dialog 同时发布 `dialogDocument`；`ProgressDialogHost` portal 到该文档。来源文档注销时服务立即清空 `dialogDocument`，宿主回落主窗口；`QuickInputService` 在来源文档注销时直接 `hide()`，让挂起的 `pick()` / `input()` 结算，避免继续 portal 到死文档。
+- 通知的已读状态、`unreadCount`、清空/全部已读仍是应用级全局状态——只有"画在哪个窗口"按 origin 路由。
+
+语义边界：origin 是"调用 `notify()` 时活跃的窗口"，不是"任务发起窗口"。后台任务完成时用户已切窗口，会落在当前窗口；需要固定归属的调用点应显式传 origin。
 
 ### 跨 realm 的 DOM 判定
 
-辅助窗口是独立 JS realm：主 realm 的 `element instanceof HTMLElement` / `Element` / `Node` 对辅助窗口元素**恒为 false**（两者的构造函数不是同一对象）。因此所有"这是不是可编辑元素 / 是不是浮层祖先"的判定都必须按形状（`nodeType === 1` + `tagName` + `isContentEditable`）实现，唯一入口是 workbench-ui 的 `isElementLike` / `isHTMLElementLike` / `isEditableElement`（`dom/domRealm.ts`）。典型后果：
+辅助窗口是独立 JS realm：主 realm 的 `element instanceof HTMLElement` / `Element` / `Node` 对辅助窗口元素**恒为 false**（两者的构造函数不是同一对象）。所有"这是不是可编辑元素 / 是不是浮层祖先 / 是不是节点"的判定都必须按形状实现，入口是 workbench-ui 的 `isElementLike` / `isHTMLElementLike` / `isEditableElement` / `isNodeLike` / `isTagElement`（`dom/domRealm.ts`）。典型后果：
 
 - `isEditableTarget` 若是主 realm 判定，辅助窗口里的 Quick Input 输入框不算可编辑元素，全局 keybinding dispatcher 会先手吞掉 `Ctrl+N` / `Ctrl+P`（新建文件 / 快速打开），quick-navigate 的列表导航失效。
+- `focusout.relatedTarget` 跨 realm 时被 `instanceof Node` 拒绝，会误清 `acpChatFocused`（Copy Message 等行消失）。
 - 对话框 Enter 判定、菜单/浮层的祖先遍历、焦点恢复的 `previousFocus` 捕获同理。
-- **事件字段同样跨 realm**：`ev.target`、`ev.relatedTarget`、`document.activeElement`、`focusin/focusout` 的 `relatedTarget` 都可能是辅助窗口节点，不要写 `target instanceof Node/Element/HTMLElement`；用 `isElementLike`。这一条同时覆盖 click 委派、dragover 落点、tooltip 的宿主体内移动判定、焦点是否仍在容器内（`relatedTarget` 在容器内时不能当作移出）。
+- **事件字段同样跨 realm**：`ev.target`、`ev.relatedTarget`、`document.activeElement`、`focusin/focusout` 的 `relatedTarget` 都可能是辅助窗口节点，不要写 `target instanceof Node/Element/HTMLElement`；用形状判定。这一条同时覆盖 click 委派、dragover 落点、tooltip 的宿主体内移动判定、焦点是否仍在容器内（`relatedTarget` 在容器内时不能当作移出）。
 
 **创建 DOM 时优先跟随宿主 document**：Chromium 允许主文档方法遍历并插入辅助文档节点（会自动 adopt，通常不抛 `WrongDocumentError`），但 wrapper 的 prototype 仍属创建它的 realm，`instanceof` 结果与节点所在窗口不一致。辅助窗口里的代码块后处理等应先用 `root.ownerDocument` 建 walker / fragment / 节点，使 realm 与宿主一致（参考 `useFindInContainer.ts`、`codeBlockLinks.ts`）。反过来，**主 document 创建、随后被 adopt 进辅助 document 的节点，其 JS wrapper 仍属于主 realm**（React 异步提交、Swarm inline comment 的 zone 即此类），不要依赖 realm 判定来区分它。
 
-**焦点恢复也要按 document 捕获**：react-aria 的 `FocusScope` 在 render 阶段用全局 `document.activeElement` 播种恢复目标，辅助窗口里会指向主窗口。`FocusScopeOverlay` 在 `targetDocument !== document`（或显式传了 `shouldRestoreFocus`）时禁用 react-aria 的恢复，改用自己从宿主 `doc.activeElement` 捕获的 previous focus；新增模态浮层不要再绕过它直接使用 `FocusScope`。
+**焦点恢复也要按 document 捕获**：react-aria 的 `FocusScope` 在 render 阶段用全局 `document.activeElement` 播种恢复目标，辅助窗口里会指向主窗口。`FocusScopeOverlay` 在解析后的 owner document 不是主 document（或显式传了 `shouldRestoreFocus`）时禁用 react-aria 的恢复，改用自己从宿主 `doc.activeElement` 捕获的 previous focus；新增模态浮层不要再绕过它直接使用 `FocusScope`。
 
-本轮已加固的判定点：`TooltipProvider`（显示与宿主体内移动）、`EditorGroupView` 的 Shift-drop / prompt drop host、`chatContextSlot` / `ChatBody` 的 focus surface、代码块链接的解析与 linkify 创建、markdown link hints / reader nav、Git/Perforce 列表焦点、`AcpChatWidgetService` 的 focusin/focusout、`ConfigOptionsBar` 与 `PerforceGraphSyncDialog` 的浮层文档归属（含 `targetDocument` 透传）。
-
-已知仍挂主 document 的浮层/监听（未在辅助窗口内验证，后续按同一模式修）：`AgentChatContextMenu`、`ChatImage` 预览、`SideTasksBar` / `SessionCostIndicator` / `UsageIndicator` 弹层；`PeekNavigationContribution` 的 keydown 仍只绑主 document（辅助窗口内 peek 键盘不生效，是监听注册问题而非 realm 判定）；`SessionsFilterPopover` 的 `instanceof Node` 仅服务主窗口侧栏；`workbenchFocusRestorer` 读 `globalThis.document.activeElement`，辅助窗口激活时的恢复语义尚未验证。
-
-platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocument` 形状（`{ activeElement: unknown }`），不引入 `instanceof`。单测里 `new Window()` 与主 realm 共享构造函数，**造不出真正的独立 realm**——跨 realm 语义只能由真实 Electron e2e 守护（`smoke.auxiliaryEditorWindow.realm.spec.ts`）。
+platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocument` 形状（`{ activeElement: unknown }`），不引入 `instanceof`。`apps/editor/src/renderer/__tests__/domRealmUsage.test.ts` 扫描 `packages/workbench-ui/src` 与 `apps/editor/src/renderer` 的生产代码，禁止对 DOM 构造器做 `instanceof`（`domRealm.ts`、测试与 e2e 除外）。happy-dom 的 `new Window()` 元素构造器与主 realm 共享、但 Document 构造器独立：它能覆盖文档归属语义，元素跨 realm 的 `instanceof` 失败仍无法在单测复现，由真实 Electron e2e（`smoke.auxiliaryEditorWindow.realm.spec.ts`）守护。
 
 **ResizeObserver 必须用元素所属 window 的构造器**（`el.ownerDocument.defaultView.ResizeObserver`）。Blink 在构造时把 observer 注册到该 window 的 `ResizeObserverController`，而 `LocalFrameView::NotifyResizeObservers` 只取**本 frame** `DomWindow` 的 controller：主 realm 构造的 observer 观察辅助 document 元素时，回调只在主窗口的渲染生命周期里投递。辅助窗口最大化遮住主窗口后主 frame 停帧，回调永不触发，Monaco 的内联 px 尺寸停在最大化前，画布只剩旧矩形。已修复 `GridLayout`（`packages/workbench-ui`）与 Monaco `ElementSizeObserver`（monaco patch，覆盖所有 `automaticLayout` 编辑器）；回归用例 `apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`。新增任何驱动布局的 RO 时照此取 owner window。
 
+### 文档级全局监听
+
+需要挂 `window`/`document` 监听的功能（鼠标侧键、全局拖放安全网、peek 导航）不能只挂主窗口。`installPerWorkbenchDocument(attach)`（`services/windows/workbenchDocumentEvents.ts`）对当前已注册文档和之后新增的文档各调用一次 `attach(doc)`，文档注销时自动 `dispose`，没有注册文档时回落全局 `document`。新增此类监听一律用它，不要自己维护文档集合。
+
+跨窗口广播的自定义事件（打开设置/快捷键编辑器时聚焦搜索框、切换设置作用域）走 `workbench/preferences/preferencesFocus.ts`：向**每个已注册文档**派发，事件用目标文档 realm 的构造函数创建（主 realm 的 `Event` 不是辅助窗口 WebIDL 的 `Event`）；接收组件监听自己的 owner document。
+
 ### 文档级焦点跟踪
 
-`RendererFocusTrackerService` 在构造时订阅主文档，并对之后 `registerWorkbenchDocument` 的每个辅助文档挂 `focusin`/`focusout`，注销时解绑。只盯主文档会让辅助窗口的焦点事件完全缺席，焦点历史与 `settled` 当前项永远停在主窗口。
+`RendererFocusTrackerService` 在构造时订阅主文档，并对之后 `registerWorkbenchDocument` 的每个辅助文档挂 `focusin`/`focusout`，注销时解绑。只盯主文档会让辅助窗口的焦点事件完全缺席，焦点历史与 `settled` 当前项永远停在主窗口。`workbenchFocusRestorer` 读取的是 `currentWorkbenchDocumentOrUndefined()?.activeElement`，不能用全局 `document.activeElement`。
 
 ## 标签拖放与拖出建窗
 
@@ -88,6 +105,11 @@ platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocume
 ## 窗口级命令
 
 `CloseWindowAction` 与缩放三命令按 `IWorkbenchWindowService.activeWindow` 路由：焦点在辅助窗口时只操作该窗口的 webContents，绝不误关主工作区。`ReloadWindow` 仍是整应用重启（所有窗口共享一个 renderer），这是当前架构限制；恢复后按持久化布局重建辅助窗口。
+
+main 进程有两处不能只看"当前窗口 id"：
+
+- **原生文件夹对话框**以焦点辅助窗口为父。`ElectronFolderDialog` 接受 `getDialogParent(fallback)`，`windowScopeFactory` 注入 `auxiliaryWindows.getDialogParent(win.id, fallback)`：焦点在属于该工作区的辅助窗口时，对话框挂在辅助窗口上；否则回落工作区窗口。`MainHostService` 已走同一规则。
+- **`WindowMainService.getFocusedWindowId()`**：焦点窗口是工作区窗口时原样返回；是辅助窗口时经 `AuxiliaryWindowsMainService.getParentWindowId()` 映射回**存活的**父工作区窗口，再走 lastFocused/首个窗口回退。窗口级 IPC 服务仍绑定在父窗口上，返回辅助窗口 id 会让命令找不到服务。
 
 ## 标题栏与窗口控制
 
@@ -114,6 +136,7 @@ platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocume
 - **后台文档的 Part 不算聚焦**：Part 容器的 `isFocused()` 读自己的 `ownerDocument.activeElement`，但失去 OS 焦点的文档会保留最后的 activeElement。凡是"当前是否聚焦在某 Part/视图"的产品判定（context key、`Ctrl+Shift+E` 等 toggle 命令）必须在 `isFocused()` 之外再要求该 Part 的 document 等于当前 active workbench document（`services/focus/partFocus.ts` 的 `isPartFocusedInActiveDocument`），否则在辅助窗口打字时主窗口会误判侧栏仍聚焦，命令执行成"关闭侧栏"而不是"显示 Explorer"。
 - **焦点竞争还来自两处细节**：`LayoutService.focusView` 的落点确认读元素自己的 `ownerDocument.activeElement`（主文档判定对辅助元素恒 false）；`_focusPart` 只在没有显式目标视图时才委派给该 Part 上次记住的视图，显式 `focusView(A)` 不能先打开/聚焦记住的视图 B。
 
+
 两个关键细节：
 
 - **判定"已有焦点"只读目标 `document.hasFocus()`**，不能读 `WorkbenchWindowService.activeWindow`——pointerdown/focusin 会把 activeWindow 提前写成目标窗口，但原生焦点未必已过去；读错会在 Windows 上触发 always-on-top 窗口闪烁。
@@ -121,7 +144,9 @@ platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocume
 
 ## 测试与已知限制
 
-- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接）。
+- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接）。
+- **DevTools 属于主 renderer**：辅助窗口共享主窗口的 JS realm 与 webContents，`toggleDevTools` 只能打开主窗口的开发者工具，无法按辅助窗口分别打开。这是同 renderer 架构的直接结果，不是遗漏；要按窗口调试需等辅助窗口拥有独立 renderer。
+- **Monaco 平台容器仍以主窗口为准**：`monacoWorkbenchLayoutService.mainContainer/activeContainer` 固定返回主 `#root`（`getContainer(window)` 已按目标窗口解析）。monaco 自带的 quick input、无障碍提示等少数走 `activeContainer` 的浮层在辅助窗口中仍会挂到主窗口；编辑器内容浮层与平台 hover 不受影响。完整重构需按 window 维护多容器集合，暂未做。
 - 跨窗口焦点用例在 main 进程猴补 `BrowserWindow.prototype.focus/showInactive` 记录焦点请求，再断言最后一次请求指向辅助窗口（`about:blank`）。silent E2E 下窗口不真正抢焦点，所以断言"请求了哪个窗口"而不是 OS 焦点状态。
 - Playwright/CDP 不能发起跨两个 BrowserWindow 的原生 OS 拖拽。跨窗口 DnD 用例把 `DragEvent` 合成进真实 React 树：处理器、共享 DragSession、screen 几何、IPC 建窗与编辑器迁移都真实执行，但**不是**原生 OS 拖拽测试；没有用探针直接调 `moveEditorToNewWindow` 冒充拖拽。
 - 拖出建窗的落点断言按 main 侧同样的"工作区可达范围"公式校验，避免把窗口管理器的边缘裁剪误判为产品错误。

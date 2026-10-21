@@ -12,7 +12,7 @@ import type { LifecycleService, InstantiationService, LayoutSizes } from '@unive
 import { PerfMarks } from '../../shared/perf/marks.js'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
-import { DragSessionProvider } from '@universe-editor/workbench-ui'
+import { DragSessionProvider, OwnerDocumentProvider } from '@universe-editor/workbench-ui'
 import { AuxiliaryWindowHost } from './windows/AuxiliaryWindowHost.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { TitleBar } from './titlebar/TitleBar.js'
@@ -134,10 +134,14 @@ export function Workbench({ instantiation, lifecycle }: WorkbenchProps) {
   return (
     <ServicesContext.Provider value={instantiation}>
       {/* Tabs dragged across windows share one payload: auxiliary trees are
-          portals inside this provider, so the context reaches them. */}
-      <DragSessionProvider>
-        <WorkbenchShell />
-      </DragSessionProvider>
+          portals inside this provider, so the context reaches them. The
+          owner-document provider defaults every overlay to the main document;
+          each auxiliary portal re-provides its own document below. */}
+      <OwnerDocumentProvider targetDocument={document}>
+        <DragSessionProvider>
+          <WorkbenchShell />
+        </DragSessionProvider>
+      </OwnerDocumentProvider>
     </ServicesContext.Provider>
   )
 }

@@ -4,21 +4,24 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useSyncExternalStore } from 'react'
-import { isWindowFocused } from './domUtils.js'
+import { useOwnerDocument } from '@universe-editor/workbench-ui'
+import { isDocumentFocused } from './domUtils.js'
 
 export function useWindowFocused(): boolean {
+  const doc = useOwnerDocument()
   return useSyncExternalStore(
     (onChange) => {
-      window.addEventListener('focus', onChange)
-      window.addEventListener('blur', onChange)
-      document.addEventListener('visibilitychange', onChange)
+      const view = doc?.defaultView
+      view?.addEventListener('focus', onChange)
+      view?.addEventListener('blur', onChange)
+      doc?.addEventListener('visibilitychange', onChange)
       return () => {
-        window.removeEventListener('focus', onChange)
-        window.removeEventListener('blur', onChange)
-        document.removeEventListener('visibilitychange', onChange)
+        view?.removeEventListener('focus', onChange)
+        view?.removeEventListener('blur', onChange)
+        doc?.removeEventListener('visibilitychange', onChange)
       }
     },
-    isWindowFocused,
-    isWindowFocused,
+    () => isDocumentFocused(doc),
+    () => isDocumentFocused(doc),
   )
 }

@@ -16,6 +16,10 @@ import {
   type IQuickPickItemButtonEvent,
 } from '@universe-editor/platform'
 import { QuickInputService, type QuickPickState } from '../QuickInputService.js'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../windows/workbenchDocuments.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
@@ -270,6 +274,25 @@ describe('QuickInputService — onDidChangeState', () => {
 
     svc.hide()
     await expect(promise).resolves.toBeUndefined()
+  })
+})
+
+describe('QuickInputService — document origin', () => {
+  it('hides the panel when the window it was opened in closes', async () => {
+    const doc = { name: 'aux' } as unknown as Document
+    const registration = registerWorkbenchDocument(doc)
+    setActiveWorkbenchDocument(doc)
+    const { svc } = createService()
+
+    const promise = svc.pick([{ id: 'a', label: 'A' }])
+    expect(svc.currentDocument).toBe(doc)
+
+    registration.dispose()
+
+    await expect(promise).resolves.toBeUndefined()
+    expect(svc.currentState).toBeNull()
+    expect(svc.currentDocument).toBeUndefined()
+    svc.dispose()
   })
 })
 

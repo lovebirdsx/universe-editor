@@ -23,6 +23,7 @@ import {
   FloatingFocusManager,
 } from '@floating-ui/react'
 import { cx } from './cx.js'
+import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import styles from './Select.module.css'
 
 /**
@@ -61,6 +62,8 @@ export interface SelectProps<T extends string> {
    * push the popover past the viewport.
    */
   readonly wrapItems?: boolean
+  /** Document hosting the dropdown (an auxiliary workbench window). */
+  readonly targetDocument?: Document | undefined
 }
 
 export function Select<T extends string>({
@@ -70,10 +73,12 @@ export function Select<T extends string>({
   disabled = false,
   invalid = false,
   wrapItems = false,
+  targetDocument,
   className,
   'aria-label': ariaLabel,
   'data-testid': testId,
 }: SelectProps<T>) {
+  const doc = useOwnerDocument(targetDocument)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
 
@@ -177,7 +182,7 @@ export function Select<T extends string>({
         </svg>
       </button>
       {open && (
-        <FloatingPortal>
+        <FloatingPortal {...(doc ? { root: doc.body } : {})}>
           <FloatingFocusManager context={context} modal={false}>
             <div
               ref={refs.setFloating}

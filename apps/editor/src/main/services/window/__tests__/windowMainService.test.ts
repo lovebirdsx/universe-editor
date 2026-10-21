@@ -1209,6 +1209,43 @@ describe('WindowMainService', () => {
       expect(listener).toHaveBeenCalledWith(id1)
     })
 
+    it('maps a focused auxiliary window back to its workspace parent', async () => {
+      const svc = makeService()
+      const parentId = await svc.createWindow()
+      const auxiliary = (
+        svc as unknown as {
+          _auxiliaryWindows: { getParentWindowId(id: number): number | undefined }
+        }
+      )._auxiliaryWindows
+      const getParent = vi.spyOn(auxiliary, 'getParentWindowId').mockReturnValue(parentId)
+      vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValueOnce({
+        id: 987_654,
+        isDestroyed: () => false,
+      } as never)
+
+      expect(svc.getFocusedWindowId()).toBe(parentId)
+      expect(getParent).toHaveBeenCalledWith(987_654)
+    })
+
+    it('falls back to the last focused window when an auxiliary window has no parent', async () => {
+      const svc = makeService()
+      await svc.createWindow()
+      const id2 = await svc.createWindow()
+      grabWindowFocusHandler(1)() // lastFocused = id2
+      const auxiliary = (
+        svc as unknown as {
+          _auxiliaryWindows: { getParentWindowId(id: number): number | undefined }
+        }
+      )._auxiliaryWindows
+      vi.spyOn(auxiliary, 'getParentWindowId').mockReturnValue(undefined)
+      vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValueOnce({
+        id: 987_654,
+        isDestroyed: () => false,
+      } as never)
+
+      expect(svc.getFocusedWindowId()).toBe(id2)
+    })
+
     it('refires the fallback top window when the last focused window closes', async () => {
       const svc = makeService()
       const id1 = await svc.createWindow()

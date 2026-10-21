@@ -28,6 +28,7 @@ import {
 import { createPortal } from 'react-dom'
 import { Check, Copy, X } from 'lucide-react'
 import { IHostService, localize } from '@universe-editor/platform'
+import { isNodeLike, useOwnerDocument } from '@universe-editor/workbench-ui'
 import { toPngBase64 } from '../../services/acp/promptImage.js'
 import { useOptionalService } from '../useService.js'
 import styles from './agents.module.css'
@@ -137,10 +138,13 @@ export function computeDisplaySize(
 }
 
 function measureDisplaySize(anchor: HTMLImageElement): DisplaySize {
-  const minWidth = Math.min(PREVIEW_MIN_BASE, window.innerWidth * PREVIEW_MIN_VIEWPORT_RATIO)
-  const minHeight = Math.min(PREVIEW_MIN_BASE, window.innerHeight * PREVIEW_MIN_VIEWPORT_RATIO)
-  const maxWidth = Math.max(minWidth, window.innerWidth - PREVIEW_MAX_MARGIN * 2)
-  const maxHeight = Math.max(minHeight, window.innerHeight - PREVIEW_MAX_MARGIN * 2)
+  const view = anchor.ownerDocument.defaultView
+  const vw = view?.innerWidth ?? 0
+  const vh = view?.innerHeight ?? 0
+  const minWidth = Math.min(PREVIEW_MIN_BASE, vw * PREVIEW_MIN_VIEWPORT_RATIO)
+  const minHeight = Math.min(PREVIEW_MIN_BASE, vh * PREVIEW_MIN_VIEWPORT_RATIO)
+  const maxWidth = Math.max(minWidth, vw - PREVIEW_MAX_MARGIN * 2)
+  const maxHeight = Math.max(minHeight, vh - PREVIEW_MAX_MARGIN * 2)
   return computeDisplaySize(
     anchor.naturalWidth,
     anchor.naturalHeight,
@@ -158,8 +162,9 @@ function computePlacement(
 ): Placement {
   const a = anchor.getBoundingClientRect()
   const p = popover.getBoundingClientRect()
-  const vw = window.innerWidth
-  const vh = window.innerHeight
+  const view = anchor.ownerDocument.defaultView
+  const vw = view?.innerWidth ?? 0
+  const vh = view?.innerHeight ?? 0
 
   if (size.isLarge) {
     const left = clamp(
@@ -204,6 +209,7 @@ function ImagePreviewPopover({
   readonly onDismiss: () => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const contextDocument = useOwnerDocument()
   const [size, setSize] = useState<DisplaySize | null>(null)
   const [placement, setPlacement] = useState<Placement | null>(null)
   const [t, setT] = useState<Transform>(IDENTITY)
@@ -267,11 +273,16 @@ function ImagePreviewPopover({
   }, [retrack])
 
   useEffect(() => {
+    // The preview lives in the thumbnail's document: an auxiliary window's
+    // document has its own selection, listeners and viewport metrics.
+    const doc = anchorRef.current?.ownerDocument ?? contextDocument
+    const view = doc?.defaultView
+    if (!doc || !view) return
     const handlePointer = (ev: MouseEvent) => {
       const el = containerRef.current
       if (!el) return
-      if (ev.target instanceof Node && el.contains(ev.target)) return
-      if (ev.target instanceof Node && anchorRef.current?.contains(ev.target)) return
+      if (isNodeLike(ev.target) && el.contains(ev.target)) return
+      if (isNodeLike(ev.target) && anchorRef.current?.contains(ev.target)) return
       onDismiss()
     }
     const handleKey = (ev: KeyboardEvent) => {
@@ -286,20 +297,20 @@ function ImagePreviewPopover({
       onDismiss()
     }
     const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', handlePointer)
-      document.addEventListener('keydown', handleKey, true)
-      window.addEventListener('resize', scheduleRetrack)
-      window.addEventListener('scroll', scheduleRetrack, true)
+      doc.addEventListener('mousedown', handlePointer)
+      doc.addEventListener('keydown', handleKey, true)
+      view.addEventListener('resize', scheduleRetrack)
+      view.addEventListener('scroll', scheduleRetrack, true)
     })
     return () => {
       cancelAnimationFrame(raf)
       if (retrackRaf.current !== undefined) cancelAnimationFrame(retrackRaf.current)
-      document.removeEventListener('mousedown', handlePointer)
-      document.removeEventListener('keydown', handleKey, true)
-      window.removeEventListener('resize', scheduleRetrack)
-      window.removeEventListener('scroll', scheduleRetrack, true)
+      doc.removeEventListener('mousedown', handlePointer)
+      doc.removeEventListener('keydown', handleKey, true)
+      view.removeEventListener('resize', scheduleRetrack)
+      view.removeEventListener('scroll', scheduleRetrack, true)
     }
-  }, [anchorRef, onDismiss, scheduleRetrack])
+  }, [anchorRef, contextDocument, onDismiss, scheduleRetrack])
 
   const onWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
     e.preventDefault()
@@ -368,6 +379,8 @@ function ImagePreviewPopover({
     }
   }, [src, hostService])
 
+  const ownerDocument = anchorRef.current?.ownerDocument ?? contextDocument
+  if (!ownerDocument) return null
   return createPortal(
     <>
       {size?.isLarge ? (
@@ -435,7 +448,7 @@ function ImagePreviewPopover({
         </div>
       </div>
     </>,
-    document.body,
+    ownerDocument.body,
   )
 }
 

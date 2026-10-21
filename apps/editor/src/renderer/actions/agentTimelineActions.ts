@@ -29,6 +29,7 @@ import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorI
 import { readChatContextArg, readContextTarget } from '../services/acp/chatContextTarget.js'
 import { openResourceForRead } from '../services/resourcePreview/openResourcePreview.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
+import { currentWorkbenchDocumentOrUndefined } from '../services/windows/workbenchDocuments.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
 import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 import { toPngBase64 } from '../services/acp/promptImage.js'
@@ -800,7 +801,9 @@ export class CopySelectedTextAction extends Action2 {
     })
   }
   override async run(): Promise<void> {
-    const text = window.getSelection()?.toString()
+    // The selection lives in the window hosting the chat, not necessarily the
+    // main one (`window.getSelection()` is realm-global).
+    const text = currentWorkbenchDocumentOrUndefined()?.defaultView?.getSelection()?.toString()
     if (text) await navigator.clipboard.writeText(text)
   }
 }

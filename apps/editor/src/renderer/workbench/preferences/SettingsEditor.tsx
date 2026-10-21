@@ -21,6 +21,7 @@ import {
 } from '@universe-editor/platform'
 import {
   VirtualList,
+  useOwnerDocument,
   useScrollRestore,
   type VirtualListHandle,
 } from '@universe-editor/workbench-ui'
@@ -75,6 +76,7 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   const [activeTocId, setActiveTocId] = useState<string | undefined>(undefined)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const listRef = useRef<VirtualListHandle>(null)
+  const doc = useOwnerDocument()
 
   const scrollPersister = useMemo(() => new SettingsScrollPersister(storage), [storage])
   useEffect(() => {
@@ -96,9 +98,9 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
     }
 
     focusSearch()
-    document.addEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
-    return () => document.removeEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
-  }, [])
+    doc?.addEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+    return () => doc?.removeEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+  }, [doc])
 
   // Track workspace open/close to enable/disable the Workspace tab.
   useEffect(() => {
@@ -119,9 +121,9 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
       setActiveTarget(t)
       ;(input as SettingsEditorInput).switchTarget(t)
     }
-    document.addEventListener(SETTINGS_EDITOR_SWITCH_TARGET_EVENT, handler)
-    return () => document.removeEventListener(SETTINGS_EDITOR_SWITCH_TARGET_EVENT, handler)
-  }, [input, workspace])
+    doc?.addEventListener(SETTINGS_EDITOR_SWITCH_TARGET_EVENT, handler)
+    return () => doc?.removeEventListener(SETTINGS_EDITOR_SWITCH_TARGET_EVENT, handler)
+  }, [input, workspace, doc])
 
   // Re-render whenever schema registry changes or any configuration value changes.
   useEffect(() => {

@@ -21,6 +21,7 @@ import {
   Emitter,
   type ILogger,
 } from '@universe-editor/platform'
+import { isElementLike } from '@universe-editor/workbench-ui'
 import { getRecordedPhases } from './perfPhases.js'
 import {
   WarnThrottle,
@@ -347,7 +348,7 @@ function firstLiveTarget(
 }
 
 function describeTarget(target: EventTarget | null): string {
-  if (typeof Element === 'undefined' || !(target instanceof Element)) return '<none>'
+  if (!isElementLike(target)) return '<none>'
   const marker = target.getAttribute('data-testid') ?? (target.id ? `#${target.id}` : '')
   const raw = `${target.tagName.toLowerCase()}${marker}`
   return raw.length > MAX_TARGET_LENGTH ? raw.slice(0, MAX_TARGET_LENGTH) : raw

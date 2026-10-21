@@ -19,6 +19,17 @@ export function isHTMLElementLike(value: unknown): value is HTMLElement {
   return isElementLike(value)
 }
 
+/** 任意节点（文本、注释、Document、元素…），`instanceof Node` 的跨 realm 替代。 */
+export function isNodeLike(value: unknown): value is Node {
+  if (typeof value !== 'object' || value === null) return false
+  return typeof (value as { nodeType?: unknown }).nodeType === 'number'
+}
+
+/** 元素且 tagName 匹配（大小写不敏感），`instanceof HTMLInputElement` 的替代。 */
+export function isTagElement(value: unknown, tagName: string): value is HTMLElement {
+  return isElementLike(value) && value.tagName.toUpperCase() === tagName.toUpperCase()
+}
+
 /** 原生文本输入控件或 contenteditable 区域。 */
 export function isEditableElement(value: unknown): boolean {
   if (!isElementLike(value)) return false

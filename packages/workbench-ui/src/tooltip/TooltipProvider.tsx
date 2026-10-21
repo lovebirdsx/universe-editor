@@ -15,7 +15,8 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useFloating, autoUpdate, offset, flip, shift, FloatingPortal } from '@floating-ui/react'
-import { isElementLike } from '../dom/domRealm.js'
+import { isElementLike, isNodeLike } from '../dom/domRealm.js'
+import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import styles from './tooltipSurface.module.css'
 
 export const TOOLTIP_ATTRIBUTE = 'data-tooltip'
@@ -39,6 +40,8 @@ const DETACHED_CHECK_INTERVAL_MS = 500
 interface TooltipState {
   target: Element
   text: string
+  /** How the tooltip was requested; mouseouts only dismiss pointer-driven ones. */
+  source: 'mouse' | 'focus'
 }
 
 export interface TooltipProviderProps {
@@ -105,21 +108,24 @@ export function TooltipProvider({
   targetDocument,
   children,
 }: TooltipProviderProps) {
-  const doc = targetDocument ?? document
+  const doc = useOwnerDocument(targetDocument)
   const [tip, setTip] = useState<TooltipState | null>(null)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const tipRef = useRef<TooltipState | null>(null)
+  const pendingRef = useRef<{ target: Element; source: TooltipState['source'] } | null>(null)
   const lastHideAtRef = useRef(0)
   const lastMouseDownAtRef = useRef(0)
 
   tipRef.current = tip
 
   useEffect(() => {
+    if (doc === undefined) return
     const clear = () => {
       if (timerRef.current !== null) {
         clearTimeout(timerRef.current)
         timerRef.current = null
       }
+      pendingRef.current = null
     }
     const hide = () => {
       clear()
@@ -129,7 +135,7 @@ export function TooltipProvider({
       }
       setTip(null)
     }
-    const show = (next: TooltipState) => {
+    const show = (next: { target: Element; text: string }, source: TooltipState['source']) => {
       clear()
       // Chain behavior: while a tooltip is visible (or just dismissed), moving to
       // another tooltip host shows it instantly instead of waiting out the delay.
@@ -141,13 +147,15 @@ export function TooltipProvider({
         restoreNativeTitle(tipRef.current.target)
       }
       if (instant) {
-        setTip(next)
+        setTip({ ...next, source })
       } else {
+        pendingRef.current = { target: next.target, source }
         timerRef.current = setTimeout(() => {
           timerRef.current = null
+          pendingRef.current = null
           // Re-read the attribute at fire time: hosts may fill in the text
           // asynchronously (e.g. lazy-fetched content) during the delay.
-          setTip(tooltipTargetFrom(next.target, resolveShortcut) ?? next)
+          setTip({ ...(tooltipTargetFrom(next.target, resolveShortcut) ?? next), source })
         }, delay)
       }
     }
@@ -156,23 +164,33 @@ export function TooltipProvider({
       const next = tooltipTargetFrom(e.target, resolveShortcut)
       if (!next) return
       if (tipRef.current?.target === next.target && tipRef.current.text === next.text) return
-      show(next)
+      show(next, 'mouse')
     }
     const onMouseOut = (e: MouseEvent) => {
       const current = tipRef.current
       if (!current) {
-        clear()
+        // Window activation can synthesize a mouseout on body during the delay;
+        // only the pointer leaving the pending hover target cancels a show.
+        const pending = pendingRef.current
+        if (pending?.source !== 'mouse') return
+        const left = e.target
+        if (isNodeLike(left) && (left === pending.target || pending.target.contains(left))) {
+          clear()
+        }
         return
       }
+      // Keyboard-driven tooltips are dismissed by focusout/Escape/mousedown, not
+      // by the pointer moving somewhere else.
+      if (current.source === 'focus') return
       const movingTo = e.relatedTarget
-      if (isElementLike(movingTo) && current.target.contains(movingTo)) return
+      if (isNodeLike(movingTo) && current.target.contains(movingTo)) return
       hide()
     }
     const onFocusIn = (e: FocusEvent) => {
       // Clicking focuses the element too; the mouse handlers own that scenario.
       if (Date.now() - lastMouseDownAtRef.current < FOCUS_SUPPRESS_AFTER_MOUSEDOWN_MS) return
       const next = tooltipTargetFrom(e.target, resolveShortcut)
-      if (next) show(next)
+      if (next) show(next, 'focus')
     }
     const onFocusOut = () => hide()
     const onMouseDown = () => {
@@ -217,9 +235,7 @@ export function TooltipProvider({
   return (
     <>
       {children}
-      {tip ? (
-        <TooltipSurface target={tip.target} text={tip.text} targetDocument={targetDocument} />
-      ) : null}
+      {tip ? <TooltipSurface target={tip.target} text={tip.text} targetDocument={doc} /> : null}
     </>
   )
 }
@@ -228,7 +244,7 @@ function TooltipSurface({
   target,
   text,
   targetDocument,
-}: TooltipState & { targetDocument: Document | undefined }) {
+}: Pick<TooltipState, 'target' | 'text'> & { targetDocument: Document | undefined }) {
   const { refs, floatingStyles } = useFloating({
     open: true,
     placement: 'top',

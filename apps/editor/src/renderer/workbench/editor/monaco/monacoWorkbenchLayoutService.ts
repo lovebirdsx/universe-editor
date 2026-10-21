@@ -67,8 +67,13 @@ class WorkbenchLayoutService {
     return { top: 0, quickPickTop: 0 }
   }
 
-  getContainer(_window: IMonacoWindowLike): HTMLElement {
-    return this._root
+  getContainer(monacoWindow: IMonacoWindowLike): HTMLElement {
+    // Monaco resolves the container from the target element's window (its hover
+    // service does this explicitly "to enable aux window support"). An
+    // auxiliary window's overlays must mount into that window's root, not the
+    // main window's — the two are different documents.
+    const doc = monacoWindow.document
+    return doc.getElementById('root') ?? doc.body
   }
 
   whenContainerStylesLoaded(): undefined {

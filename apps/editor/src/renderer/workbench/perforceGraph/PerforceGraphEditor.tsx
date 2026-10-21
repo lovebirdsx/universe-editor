@@ -256,22 +256,26 @@ function syncPointTooltip(point: P4GraphSyncPoint): string {
  *  delta so the caller can resize the column. */
 function ColumnResizer({ onResize }: { onResize: (deltaX: number) => void }) {
   const lastX = useRef(0)
-  const onMouseDown = (e: MouseEvent) => {
+  const onMouseDown = (e: MouseEvent<HTMLSpanElement>) => {
     e.preventDefault()
     e.stopPropagation()
     lastX.current = e.clientX
+    // Listen on the document hosting this editor: an auxiliary window's mouse
+    // events never reach the main document.
+    const doc = e.currentTarget.ownerDocument
+    const view = doc.defaultView
     const onMove = (ev: globalThis.MouseEvent) => {
       onResize(ev.clientX - lastX.current)
       lastX.current = ev.clientX
     }
     const onUp = () => {
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = ''
+      view?.removeEventListener('mousemove', onMove)
+      view?.removeEventListener('mouseup', onUp)
+      doc.body.style.cursor = ''
     }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-    document.body.style.cursor = 'col-resize'
+    view?.addEventListener('mousemove', onMove)
+    view?.addEventListener('mouseup', onUp)
+    doc.body.style.cursor = 'col-resize'
   }
   return <span className={styles['colResizer']} onMouseDown={onMouseDown} />
 }

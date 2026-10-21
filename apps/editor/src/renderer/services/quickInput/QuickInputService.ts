@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  Disposable,
   Emitter,
   IContextKeyService,
   IQuickInputService,
@@ -26,11 +27,14 @@ import type {
   QuickPickPresentation,
 } from '@universe-editor/platform'
 import type { QuickPickState } from '@universe-editor/workbench-ui'
-import { getActiveWorkbenchDocument } from '../windows/workbenchDocuments.js'
+import {
+  currentWorkbenchDocumentOrUndefined,
+  onDidRemoveWorkbenchDocument,
+} from '../windows/workbenchDocuments.js'
 
 export type { QuickPickState }
 
-export class QuickInputService implements IQuickInputService {
+export class QuickInputService extends Disposable implements IQuickInputService {
   declare readonly _serviceBrand: undefined
 
   private readonly _onDidChangeState = new Emitter<QuickPickState | null>()
@@ -55,7 +59,16 @@ export class QuickInputService implements IQuickInputService {
     @IStorageService private readonly _storage: IStorageService,
     @IContextKeyService contextKeyService: IContextKeyService,
   ) {
+    super()
     this._visibleKey = contextKeyService.createKey<boolean>('quickInputVisible', false)
+    // The panel is portalled into the document captured when it opened. If that
+    // window closes while the panel is up, hide it: the host would otherwise
+    // keep portalling into a dead document, and pick()/input() would never settle.
+    this._register(
+      onDidRemoveWorkbenchDocument((doc) => {
+        if (this._currentDocument === doc) this.hide()
+      }),
+    )
   }
 
   get currentState(): QuickPickState | null {
@@ -69,9 +82,7 @@ export class QuickInputService implements IQuickInputService {
 
   private _setState(state: QuickPickState | null): void {
     if (state !== null && this._currentState === null) {
-      // Renderer-node unit tests construct this service without a DOM.
-      this._currentDocument =
-        typeof document === 'undefined' ? undefined : getActiveWorkbenchDocument()
+      this._currentDocument = currentWorkbenchDocumentOrUndefined()
     } else if (state === null) {
       this._currentDocument = undefined
     }

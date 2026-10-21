@@ -41,8 +41,29 @@ describe('monacoWorkbenchLayoutService', () => {
 
     expect(monacoWorkbenchLayoutService.mainContainer).toBe(root)
     expect(monacoWorkbenchLayoutService.activeContainer).toBe(root)
-    expect(monacoWorkbenchLayoutService.getContainer({ document: {} as Document })).toBe(root)
+    expect(monacoWorkbenchLayoutService.getContainer({ document: globalThis.document })).toBe(root)
     expect(monacoWorkbenchLayoutService.containers).toEqual([root])
+  })
+
+  it('resolves getContainer against the target window document', () => {
+    stubDocument(null)
+    const auxRoot = { tagName: 'DIV' } as unknown as HTMLElement
+    const auxDocument = {
+      getElementById: (id: string) => (id === 'root' ? auxRoot : null),
+      body: { tagName: 'BODY' },
+    } as unknown as Document
+
+    expect(monacoWorkbenchLayoutService.getContainer({ document: auxDocument })).toBe(auxRoot)
+  })
+
+  it('getContainer falls back to the target document body when #root is missing', () => {
+    const auxBody = { tagName: 'BODY' }
+    const auxDocument = {
+      getElementById: () => null,
+      body: auxBody,
+    } as unknown as Document
+
+    expect(monacoWorkbenchLayoutService.getContainer({ document: auxDocument })).toBe(auxBody)
   })
 
   it('falls back to document.body when #root is missing', () => {

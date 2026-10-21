@@ -60,8 +60,9 @@ export function collectVisibleLinks(root: HTMLElement): HTMLAnchorElement[] {
 }
 
 function activate(el: HTMLAnchorElement, inNewTab: boolean): void {
+  const EventCtor = el.ownerDocument.defaultView?.MouseEvent ?? MouseEvent
   el.dispatchEvent(
-    new MouseEvent('click', {
+    new EventCtor('click', {
       bubbles: true,
       cancelable: true,
       ctrlKey: inNewTab,

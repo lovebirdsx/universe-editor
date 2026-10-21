@@ -25,6 +25,7 @@ import {
   type Placement,
 } from '@floating-ui/react'
 import { AnchoredSurfacePositionedContext } from './anchoredSurfaceContext.js'
+import { useOwnerDocument } from './ownerDocumentContext.js'
 
 export interface AnchoredSurfaceProps {
   /** Viewport point the surface is anchored to (e.g. click / caret coordinates). */
@@ -47,7 +48,8 @@ export interface AnchoredSurfaceProps {
   readonly surfaceProps?: React.HTMLAttributes<HTMLDivElement>
   /**
    * Document the surface belongs to (an auxiliary workbench window). Defaults to
-   * the main document; portalling and keyboard capture follow it.
+   * the nearest `OwnerDocumentProvider`, then the main document; portalling and
+   * keyboard capture follow it.
    */
   readonly targetDocument?: Document | undefined
   readonly children: ReactNode
@@ -65,6 +67,8 @@ export function AnchoredSurface({
   targetDocument,
   children,
 }: AnchoredSurfaceProps) {
+  const doc = useOwnerDocument(targetDocument)
+  const view = doc ? doc.defaultView : typeof window !== 'undefined' ? window : undefined
   const { refs, floatingStyles, context, isPositioned } = useFloating({
     open: true,
     onOpenChange: (open) => {
@@ -126,7 +130,7 @@ export function AnchoredSurface({
   // surface stayed open. Intercepting at window capture runs ahead of the
   // dispatcher and keeps the Escape fully owned by the topmost surface.
   useEffect(() => {
-    if (onClose === undefined) return
+    if (onClose === undefined || !view) return
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       e.preventDefault()
@@ -136,16 +140,15 @@ export function AnchoredSurface({
       if (onEscape?.() === true) return
       onClose()
     }
-    const view = (targetDocument ?? document).defaultView ?? window
     view.addEventListener('keydown', onKeyDown, true)
     return () => view.removeEventListener('keydown', onKeyDown, true)
-  }, [onClose, onEscape, targetDocument])
+  }, [onClose, onEscape, view])
   const { getFloatingProps } = useInteractions([dismiss])
 
   const { style: extraStyle, ...restSurfaceProps } = surfaceProps ?? {}
 
   return (
-    <FloatingPortal {...(targetDocument ? { root: targetDocument.body } : {})}>
+    <FloatingPortal {...(doc ? { root: doc.body } : {})}>
       <div
         ref={refs.setFloating}
         style={{

@@ -112,7 +112,9 @@ export async function createWindowScopedServices(opts: {
 
   const disposables = new DisposableStore()
   const windowStorage = disposables.add(new MainStorageService(getDefaultStorage()))
-  const folderDialog = new ElectronFolderDialog(win)
+  const folderDialog = new ElectronFolderDialog(win, (fallback) =>
+    auxiliaryWindows.getDialogParent(win.id, fallback),
+  )
   const workspace = disposables.add(
     new WorkspaceMainService(
       windowStorage,

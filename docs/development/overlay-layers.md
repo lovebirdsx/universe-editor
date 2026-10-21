@@ -22,11 +22,14 @@ C 曾经是缺口：monaco 的编辑器内容浮层不走 `ILayoutService`，默
 
 辅助编辑器窗口共用同一 React 树与 Monaco 运行时，但每个窗口是独立的 `Document`。文档级事件与 portal 容器必须跟随**宿主窗口的 document**，不能落到模块作用域里的全局 `document`（那永远指向主窗口）：
 
-- `RendererDialogService` 在 `confirm()` / `prompt()` **被调用的那一刻**记录 `getActiveWorkbenchDocument()`；`DialogHost` 用该 document 作为 portal 容器，并把 `targetDocument` 传给 `FocusScopeOverlay`——否则 Escape 监听留在主窗口，辅助窗口里的对话框关不掉。
+- 解析统一走 `useOwnerDocument(explicit?)`：**显式 prop > `OwnerDocumentProvider` > 全局 `document`**。`Workbench` provide 主文档，`AuxiliaryWindowHost` 给每个辅助 portal 子树重新 provide。原语 `AnchoredSurface`（菜单 / hover / context view）、`useMenuNavigation`、`Select`、`FocusScopeOverlay`、`TooltipProvider` 内部解析，`FloatingPortal root` 与 window capture 监听都用它；`ContextMenu` / `ListMenu` 因此无需每个调用点传文档。
+- **React context 不沿 DOM portal 传播**：跨文档 portal 的子树必须重新包 `OwnerDocumentProvider`，否则里面的浮层仍解析到主文档。通知/进度宿主、`ChatImage` 预览、`WhenInputCell`、`PerforceGraphSyncDialog` 都按此处理。
+- 直接 `createPortal` 的浮层自己解析目标文档并用该窗口的 `innerWidth/innerHeight` 夹取；`RendererDialogService` 在 `confirm()` / `prompt()` **被调用的那一刻**记录活跃文档，`QuickInput` 同理。
 - `TooltipProvider`、`useDragSessionDocument` 在辅助窗口挂载时显式传 `entry.window.document`；拖放终结事件（drop / dragend / Escape）不会回到主 document。
-- Monaco 的 `ILayoutService` 覆写与 overflow widget 容器按编辑器所在的窗口创建（`monacoWorkbenchLayoutService`），因此 hover / suggest / find 的 DOM 落在发起编辑的窗口。
+- 通知 toast 按 `notify()` 发起时的文档分组，每窗口一个 portal；通知中心在打开时捕获 `centerDocument`，进度对话框用 `dialogDocument`。文档关闭后回落主窗口。语义见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)。
+- Monaco 编辑器内容浮层（hover / suggest / 内容 widget）由编辑器自身创建，DOM 落在编辑器所在文档；`monacoWorkbenchLayoutService.getContainer(window)` 也按传入窗口解析该窗口的 `#root`，平台级 hover 因此跟随目标文档。`mainContainer` / `activeContainer` 仍固定主窗口，只在没有目标容器时兜底——依赖它们的 monaco 平台浮层落到主窗口是已知限制。
 
-判据：新增任何 `document.addEventListener`、`createPortal`、focus trap 时，先确认"宿主的 document 是哪一个"，再把它显式传下去。完整架构见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)。
+判据：新增任何 `document.addEventListener`、`createPortal`、focus trap 时，先确认"宿主的 document 是哪一个"——优先让原语从 context 解析，跨文档 portal 则显式重新 provide。完整架构见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)。
 
 ## 三段式分层
 

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Window } from 'happy-dom'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { FocusScopeOverlay } from '../overlay/FocusScopeOverlay.js'
+import { OwnerDocumentProvider } from '../overlay/ownerDocumentContext.js'
 import { Select } from '../atoms/Select.js'
 
 describe('FocusScopeOverlay', () => {
@@ -160,6 +161,29 @@ describe('FocusScopeOverlay', () => {
 
       unmount()
       expect(doc.activeElement).toBe(outside)
+    })
+
+    it('resolves the owner document from OwnerDocumentProvider', () => {
+      const win = new Window()
+      const aux = win.document as unknown as Document
+      const opener = aux.createElement('button')
+      aux.body.appendChild(opener)
+      opener.focus()
+      const focusSpy = vi.spyOn(opener, 'focus')
+
+      const container = aux.createElement('div')
+      aux.body.appendChild(container)
+      const { unmount } = render(
+        <OwnerDocumentProvider targetDocument={aux}>
+          <FocusScopeOverlay visible shouldRestoreFocus={() => true}>
+            <button data-testid="inside">inside</button>
+          </FocusScopeOverlay>
+        </OwnerDocumentProvider>,
+        { container },
+      )
+
+      unmount()
+      expect(focusSpy).toHaveBeenCalledTimes(1)
     })
   })
 })

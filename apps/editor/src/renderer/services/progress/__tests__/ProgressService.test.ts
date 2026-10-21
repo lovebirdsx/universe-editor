@@ -20,6 +20,10 @@ import type {
   IStoredStatusBarEntry,
 } from '@universe-editor/platform'
 import { ProgressService } from '../ProgressService.js'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../windows/workbenchDocuments.js'
 
 class StubStatusBarService implements IStatusBarService {
   declare readonly _serviceBrand: undefined
@@ -56,6 +60,7 @@ class StubNotificationService implements INotificationService {
   readonly unreadCount: IObservable<number> = observableValue('stub.unread', 0)
   readonly centerVisible: IObservable<boolean> = observableValue('stub.center', false)
   readonly captured: RecordedNotification[] = []
+  readonly origins: Array<Document | undefined> = []
   readonly progressReports: Array<Parameters<INotificationProgress['report']>[0]> = []
   doneCount = 0
   disposedCount = 0
@@ -92,6 +97,10 @@ class StubNotificationService implements INotificationService {
         this.disposedCount++
       },
     }
+  }
+  notifyWithOrigin(origin: Document | undefined, opts: RecordedNotification): INotificationHandle {
+    this.origins.push(origin)
+    return this.notify(opts)
   }
   prompt(): Promise<void> {
     return Promise.resolve()
@@ -251,5 +260,93 @@ describe('ProgressService', () => {
 
     expect(observed?.isCancellationRequested).toBe(true)
     expect(await p).toBe('cancelled')
+  })
+
+  describe('document origin routing', () => {
+    const registrations: Array<{ dispose(): void }> = []
+
+    function registerDocument(name: string): Document {
+      const doc = { name } as unknown as Document
+      registrations.push(registerWorkbenchDocument(doc))
+      return doc
+    }
+
+    afterEach(() => {
+      while (registrations.length) registrations.pop()!.dispose()
+    })
+
+    it('captures the origin at entry, not when the delayed UI mounts', async () => {
+      const first = registerDocument('first')
+      const second = registerDocument('second')
+      setActiveWorkbenchDocument(first)
+
+      let release!: () => void
+      const p = svc.withProgress(
+        { location: ProgressLocation.Notification, title: 'load' },
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve
+          }),
+      )
+
+      // The user switched windows while the 150 ms delay was still pending.
+      setActiveWorkbenchDocument(second)
+      await vi.advanceTimersByTimeAsync(150)
+
+      expect(notification.origins).toEqual([first])
+      release()
+      await p
+    })
+
+    it('unpins the dialog document when the origin window closes mid-task', async () => {
+      const first = registerDocument('first')
+      setActiveWorkbenchDocument(first)
+
+      let release!: () => void
+      const p = svc.withProgress(
+        { location: ProgressLocation.Dialog, title: 'save' },
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve
+          }),
+      )
+
+      await vi.advanceTimersByTimeAsync(150)
+      expect(svc.dialogDocument.get()).toBe(first)
+
+      // Destroying the window unregisters its document.
+      registrations.pop()!.dispose()
+      expect(svc.dialogDocument.get()).toBeUndefined()
+      expect(svc.dialogState.get()).not.toBeNull()
+
+      release()
+      await p
+    })
+
+    it('pins the progress dialog to the origin window and clears it on completion', async () => {
+      const first = registerDocument('first')
+      const second = registerDocument('second')
+      setActiveWorkbenchDocument(first)
+
+      let release!: () => void
+      const p = svc.withProgress(
+        { location: ProgressLocation.Dialog, title: 'save' },
+        () =>
+          new Promise<void>((resolve) => {
+            release = resolve
+          }),
+      )
+
+      await vi.advanceTimersByTimeAsync(150)
+      expect(svc.dialogDocument.get()).toBe(first)
+
+      setActiveWorkbenchDocument(second)
+      expect(svc.dialogDocument.get()).toBe(first)
+
+      release()
+      await p
+      expect(svc.dialogDocument.get()).toBeUndefined()
+      expect(svc.dialogState.get()).toBeNull()
+    })
   })
 })

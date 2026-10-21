@@ -1434,12 +1434,16 @@ export function PromptInput({
   // every drop/leave for the same reason).
   useEffect(() => {
     if (!dropActive) return
+    // A movable editor: the drag can end in an auxiliary window, where the main
+    // window's document never sees the event.
+    const view = dropHostRef.current?.ownerDocument.defaultView
+    if (!view) return
     const clear = (): void => setDropActive(false)
-    window.addEventListener('dragend', clear)
-    window.addEventListener('drop', clear)
+    view.addEventListener('dragend', clear)
+    view.addEventListener('drop', clear)
     return () => {
-      window.removeEventListener('dragend', clear)
-      window.removeEventListener('drop', clear)
+      view.removeEventListener('dragend', clear)
+      view.removeEventListener('drop', clear)
     }
   }, [dropActive])
 

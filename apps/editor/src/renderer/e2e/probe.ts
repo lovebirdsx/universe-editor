@@ -786,7 +786,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     focusAuxiliaryWindow: async (token) => {
       const entry = services.auxiliaryEditorWindowService.getWindowForToken(token)
       if (!entry) return
-      services.editorGroupsService.activatePart(entry.part)
+      // Mirror real window activation (AuxiliaryEditorWindowService): activation
+      // is not an editor-focus intent, so it must not steal DOM focus.
+      services.editorGroupsService.activatePart(entry.part, { preserveFocus: true })
       services.workbenchWindowService.setActiveWindow(entry.window)
       entry.window.window.focus()
     },

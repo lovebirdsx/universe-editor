@@ -489,4 +489,17 @@ describe('AuxiliaryWindowsMainService', () => {
     vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(otherParent as never)
     expect(service.getDialogParent(parent.id, parent as never)).toBe(parent)
   })
+
+  it('maps an auxiliary window id back to its parent workspace window', () => {
+    const parent = makeParent(service)
+    const otherParent = makeParent(service)
+    const { child } = createWindow(service, parent)
+
+    expect(service.getParentWindowId(child.id)).toBe(parent.id)
+    expect(service.getParentWindowId(otherParent.id)).toBeUndefined()
+    expect(service.getParentWindowId(424242)).toBeUndefined()
+
+    child.destroy()
+    expect(service.getParentWindowId(child.id)).toBeUndefined()
+  })
 })

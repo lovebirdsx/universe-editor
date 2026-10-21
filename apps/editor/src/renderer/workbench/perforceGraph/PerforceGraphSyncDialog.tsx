@@ -12,7 +12,11 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { localize } from '@universe-editor/platform'
-import { FocusScopeOverlay, isHTMLElementLike } from '@universe-editor/workbench-ui'
+import {
+  FocusScopeOverlay,
+  isHTMLElementLike,
+  useOwnerDocument,
+} from '@universe-editor/workbench-ui'
 import type { P4GraphSyncScopeDto } from '@universe-editor/extensions-common'
 import styles from '../gitGraph/GitGraphEditor.module.css'
 
@@ -37,6 +41,7 @@ export function PerforceGraphSyncDialog({
   /** Document hosting the graph editor (an auxiliary workbench window). */
   targetDocument?: Document | undefined
 }) {
+  const doc = useOwnerDocument(targetDocument)
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(state.candidates.map((c) => c.path)),
   )
@@ -100,8 +105,9 @@ export function PerforceGraphSyncDialog({
     if (e.key === 'Enter' && !isButtonTarget(e.target)) confirm()
   }
 
+  if (!doc) return null
   return createPortal(
-    <FocusScopeOverlay visible onEscape={onCancel} targetDocument={targetDocument}>
+    <FocusScopeOverlay visible onEscape={onCancel} targetDocument={doc}>
       <div className={styles['pickerBackdrop']} onClick={onCancel} />
       <div
         role="dialog"
@@ -174,7 +180,7 @@ export function PerforceGraphSyncDialog({
         </div>
       </div>
     </FocusScopeOverlay>,
-    (targetDocument ?? document).body,
+    doc.body,
   )
 }
 

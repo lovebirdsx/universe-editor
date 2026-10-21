@@ -17,7 +17,13 @@ import {
   type JSX,
 } from 'react'
 import { CommandsRegistry, IContextKeyService, localize } from '@universe-editor/platform'
-import { Badge, IconButton, Input, reconcileFocusedKeyIndex } from '@universe-editor/workbench-ui'
+import {
+  Badge,
+  IconButton,
+  Input,
+  reconcileFocusedKeyIndex,
+  useOwnerDocument,
+} from '@universe-editor/workbench-ui'
 import { ArrowDownWideNarrow, CircleDot, X } from 'lucide-react'
 import { useService } from '../useService.js'
 import {
@@ -92,6 +98,7 @@ export function KeybindingsEditor(): JSX.Element {
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   const tableContainerRef = useRef<HTMLDivElement | null>(null)
+  const doc = useOwnerDocument()
 
   // Immediate echo in the input; the expensive re-filter trails by 300ms.
   useEffect(() => {
@@ -181,10 +188,9 @@ export function KeybindingsEditor(): JSX.Element {
     // Mount covers the freshly-opened editor (the microtask event fired before
     // the listener existed); the event covers the reused-tab path.
     applyFocusSearch()
-    document.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
-    return () =>
-      document.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
-  }, [focusSearch])
+    doc?.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
+    return () => doc?.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, applyFocusSearch)
+  }, [focusSearch, doc])
 
   // -- record keys mode ---------------------------------------------------------
   // While active, every keystroke (capture phase, stopPropagation — nothing
@@ -209,9 +215,12 @@ export function KeybindingsEditor(): JSX.Element {
       recordedStrokesRef.current = next
       setQuery(`"${next.join(' ')}"`)
     }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [recordingKeys, focusSearch])
+    // Record in the window that hosts this editor only: a capture listener on
+    // the main window would swallow keystrokes typed in an auxiliary window.
+    const view = doc?.defaultView
+    view?.addEventListener('keydown', onKeyDown, true)
+    return () => view?.removeEventListener('keydown', onKeyDown, true)
+  }, [recordingKeys, focusSearch, doc])
 
   // -- define keybinding overlay -------------------------------------------------
   const closeDefine = useCallback(() => {

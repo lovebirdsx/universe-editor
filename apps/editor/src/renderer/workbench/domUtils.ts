@@ -28,6 +28,11 @@ export function isEditableTarget(target: EventTarget | null): boolean {
  * focused — it is the window the user/script is "looking at".
  */
 export function isWindowFocused(): boolean {
-  if (window[E2E_PROBE_ENABLED_KEY] === true) return true
-  return document.hasFocus() && document.visibilityState !== 'hidden'
+  return isDocumentFocused(typeof document === 'undefined' ? undefined : document)
+}
+
+/** {@link isWindowFocused} for an explicit workbench document (auxiliary windows). */
+export function isDocumentFocused(doc: Document | undefined): boolean {
+  if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) return true
+  return doc?.hasFocus() === true && doc.visibilityState !== 'hidden'
 }

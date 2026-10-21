@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { Window } from 'happy-dom'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { useMenuNavigation } from '../contextMenu/useMenuNavigation.js'
+import { OwnerDocumentProvider } from '../overlay/ownerDocumentContext.js'
 import type { RowModel } from '../contextMenu/menuModel.js'
 
 afterEach(cleanup)
@@ -32,6 +33,12 @@ const ROWS: readonly RowModel[] = [
 
 function Harness({ targetDocument }: { targetDocument: Document }) {
   const nav = useMenuNavigation(ROWS, true, true, undefined, targetDocument)
+  return <output data-testid="active">{JSON.stringify(nav.state.active)}</output>
+}
+
+/** Same harness, relying on OwnerDocumentProvider instead of an explicit prop. */
+function ProviderHarness() {
+  const nav = useMenuNavigation(ROWS, true, true)
   return <output data-testid="active">{JSON.stringify(nav.state.active)}</output>
 }
 
@@ -63,5 +70,21 @@ describe('useMenuNavigation — owner window', () => {
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }))
     expect(activeIndex()).toBe(0)
+  })
+
+  it('resolves the owner window from OwnerDocumentProvider', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    render(
+      <OwnerDocumentProvider targetDocument={doc}>
+        <ProviderHarness />
+      </OwnerDocumentProvider>,
+    )
+
+    fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'ArrowDown' })
+    expect(activeIndex()).toBe(1)
+
+    fireEvent.keyDown(window, { key: 'ArrowDown' })
+    expect(activeIndex()).toBe(1)
   })
 })

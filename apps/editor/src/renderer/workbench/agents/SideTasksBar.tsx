@@ -27,6 +27,7 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { CornerUpLeft, GitBranch, TextQuote, Trash2 } from 'lucide-react'
+import { isNodeLike } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import {
@@ -65,10 +66,12 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
 
   useEffect(() => {
     if (!open) return
+    const doc = popoverRef.current?.ownerDocument
+    if (!doc) return
     const handlePointer = (ev: MouseEvent) => {
       const el = popoverRef.current
       if (!el) return
-      if (ev.target instanceof Node && el.contains(ev.target)) return
+      if (isNodeLike(ev.target) && el.contains(ev.target)) return
       setOpen(false)
     }
     const handleKey = (ev: KeyboardEvent) => {
@@ -77,13 +80,13 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
     // Defer one tick so the click that opened the popover doesn't immediately
     // close it (the open click bubbles into document before our handler attaches).
     const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', handlePointer)
-      document.addEventListener('keydown', handleKey)
+      doc.addEventListener('mousedown', handlePointer)
+      doc.addEventListener('keydown', handleKey)
     })
     return () => {
       cancelAnimationFrame(raf)
-      document.removeEventListener('mousedown', handlePointer)
-      document.removeEventListener('keydown', handleKey)
+      doc.removeEventListener('mousedown', handlePointer)
+      doc.removeEventListener('keydown', handleKey)
     }
   }, [open])
 

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
+import { OwnerDocumentProvider } from '../overlay/ownerDocumentContext.js'
 
 describe('AnchoredSurface', () => {
   afterEach(cleanup)
@@ -55,5 +57,28 @@ describe('AnchoredSurface', () => {
     )
     const surface = screen.getByRole('menu')
     expect(surface.getAttribute('aria-label')).toBe('surface')
+  })
+
+  it('portals into the provider document and takes Escape from its window', () => {
+    const win = new Window()
+    const aux = win.document as unknown as Document
+    const onClose = vi.fn()
+    render(
+      <OwnerDocumentProvider targetDocument={aux}>
+        <AnchoredSurface x={0} y={0} onClose={onClose}>
+          <div data-testid="aux-content">aux</div>
+        </AnchoredSurface>
+      </OwnerDocumentProvider>,
+    )
+
+    expect(aux.body.querySelector('[data-testid="aux-content"]')).not.toBeNull()
+    expect(document.body.querySelector('[data-testid="aux-content"]')).toBeNull()
+
+    fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+
+    // The main window's Escape belongs to whatever is open there.
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 })

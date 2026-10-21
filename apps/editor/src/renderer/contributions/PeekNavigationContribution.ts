@@ -34,8 +34,10 @@
  *     move, so mirroring there is correct by construction.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, type IWorkbenchContribution } from '@universe-editor/platform'
+import { Disposable, toDisposable, type IWorkbenchContribution } from '@universe-editor/platform'
+import { isHTMLElementLike } from '@universe-editor/workbench-ui'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
+import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 
 const PREVIEW_NAV_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'])
 
@@ -63,10 +65,11 @@ export class PeekNavigationContribution extends Disposable implements IWorkbench
       if (!this._store.isDisposed) this._listService = svc
     })
 
-    const onKeyDown = (e: KeyboardEvent): void => {
+    const onKeyDown = (doc: Document, e: KeyboardEvent): void => {
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
-      const active = document.activeElement
-      if (!(active instanceof HTMLElement) || !active.closest('.ref-tree')) return
+      // The peek can live in an auxiliary window; use that document's focus.
+      const active = doc.activeElement
+      if (!isHTMLElementLike(active) || !active.closest('.ref-tree')) return
 
       if (e.key === 'Enter') {
         // Multi-file group headers keep the tree's own Enter handling so they
@@ -98,11 +101,20 @@ export class PeekNavigationContribution extends Disposable implements IWorkbench
         this._pendingFocusMirror = sub
       }
     }
-    document.addEventListener('keydown', onKeyDown, true)
+    this._register(
+      installPerWorkbenchDocument((doc) => {
+        const view = doc.defaultView
+        if (!view) return toDisposable(() => {})
+        const handler = (e: KeyboardEvent): void => onKeyDown(doc, e)
+        view.addEventListener('keydown', handler, true)
+        return toDisposable(() => {
+          view.removeEventListener('keydown', handler, true)
+        })
+      }),
+    )
     this._register({
       dispose: () => {
         this._pendingFocusMirror?.dispose()
-        document.removeEventListener('keydown', onKeyDown, true)
       },
     })
   }

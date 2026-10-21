@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ctrlNavigationKey, type CtrlNavigationKey } from '../keybinding/ctrlNavigation.js'
+import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
 
 /**
@@ -74,10 +75,14 @@ export function useMenuNavigation(
   initialActivePath?: readonly number[] | undefined,
   /**
    * 菜单所在的 document。键盘/悬停 capture 注册在它的 window 上：菜单可能
-   * portal 进辅助窗口，主窗口的监听既看不到也不该接管那些按键。
+   * portal 进辅助窗口，主窗口的监听既看不到也不该接管那些按键。不传时取最近的
+   * `OwnerDocumentProvider`，再退回全局 document。
    */
   targetDocument?: Document | undefined,
 ): MenuNavigation {
+  const doc = useOwnerDocument(targetDocument)
+  const view = doc ? doc.defaultView : typeof window !== 'undefined' ? window : undefined
+
   // Lazy initializer: `rows` is final on the first render (both flavours resolve
   // synchronously), so the opening highlight lands on the right row without an
   // extra effect + re-render.
@@ -147,15 +152,13 @@ export function useMenuNavigation(
   // Hover only takes over once the pointer has demonstrably moved.
   const hoverArmed = useRef(!autoFocusFirst)
   useEffect(() => {
-    if (hoverArmed.current) return
-    const view = targetDocument?.defaultView ?? (typeof window !== 'undefined' ? window : undefined)
-    if (!view) return
+    if (hoverArmed.current || !view) return
     const arm = (): void => {
       hoverArmed.current = true
     }
     view.addEventListener('mousemove', arm, { once: true, capture: true })
     return () => view.removeEventListener('mousemove', arm, true)
-  }, [targetDocument])
+  }, [view])
 
   const scheduleClose = useCallback(
     (level: number) => {
@@ -243,9 +246,7 @@ export function useMenuNavigation(
   // capture, so registering here runs first; stopping propagation also keeps the
   // arrow keys away from whatever tree or list the menu was opened from.
   useEffect(() => {
-    if (!enabled) return
-    const view = targetDocument?.defaultView ?? (typeof window !== 'undefined' ? window : undefined)
-    if (!view) return
+    if (!enabled || !view) return
     const onKeyDown = (e: KeyboardEvent): void => {
       // Mid-composition Enter commits an IME candidate; it is not ours to take.
       if (e.isComposing || e.altKey || e.metaKey) return
@@ -322,7 +323,7 @@ export function useMenuNavigation(
     }
     view.addEventListener('keydown', onKeyDown, true)
     return () => view.removeEventListener('keydown', onKeyDown, true)
-  }, [enabled, cancelClose, collapse, expand, targetDocument])
+  }, [enabled, cancelClose, collapse, expand, view])
 
   return { state, onRowEnter, onCancelClose: cancelClose, onEscape }
 }

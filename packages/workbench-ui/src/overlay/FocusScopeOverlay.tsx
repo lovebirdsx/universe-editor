@@ -12,6 +12,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { FocusScope } from '@react-aria/focus'
 import { isHTMLElementLike } from '../dom/domRealm.js'
+import { useOwnerDocument } from './ownerDocumentContext.js'
 
 export interface FocusScopeOverlayProps {
   /** Render the overlay only while visible. Toggling this drives restoreFocus. */
@@ -37,12 +38,14 @@ export function FocusScopeOverlay({
   shouldRestoreFocus,
   children,
 }: FocusScopeOverlayProps) {
-  const doc = targetDocument ?? document
+  const doc = useOwnerDocument(targetDocument)
   // react-aria seeds its restore target during render from the *global*
   // document; inside an auxiliary window that would be the main window's active
   // element. Use the document-aware restore below whenever the overlay is not
   // hosted by the main document, not just when a caller supplies a gate.
-  const ownsRestore = shouldRestoreFocus !== undefined || doc !== document
+  const ownsRestore =
+    shouldRestoreFocus !== undefined ||
+    (doc !== undefined && (typeof document === 'undefined' || doc !== document))
   const conditionRef = useRef(shouldRestoreFocus)
   conditionRef.current = shouldRestoreFocus
 
@@ -52,7 +55,7 @@ export function FocusScopeOverlay({
   const previousFocusRef = useRef<HTMLElement | null>(null)
   const wasVisibleRef = useRef(false)
   if (visible && !wasVisibleRef.current) {
-    const active = doc.activeElement
+    const active = doc?.activeElement
     previousFocusRef.current = isHTMLElementLike(active) ? active : null
   }
   wasVisibleRef.current = visible
@@ -67,11 +70,10 @@ export function FocusScopeOverlay({
     }
     // `conditionRef` keeps the predicate out of the deps: an inline arrow would
     // otherwise re-run this effect (and restore focus) on every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, doc, ownsRestore])
 
   useEffect(() => {
-    if (!visible || !onEscape) return
+    if (!visible || !onEscape || !doc) return
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       // Floating UI popups (Select, ContextMenu…) render in a body-level portal

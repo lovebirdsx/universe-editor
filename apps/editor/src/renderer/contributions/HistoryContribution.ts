@@ -39,6 +39,7 @@ import {
 } from '@universe-editor/platform'
 import { GoBackAction, GoForwardAction } from '../actions/historyActions.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { findExistingFileEditor } from '../services/editor/revealEditorPosition.js'
 import {
@@ -197,12 +198,18 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     }
     const onMouseDown = (e: MouseEvent): void => onMouseDownOrUp(e, true)
     const onMouseUp = (e: MouseEvent): void => onMouseDownOrUp(e, false)
-    window.addEventListener('mousedown', onMouseDown)
-    window.addEventListener('mouseup', onMouseUp)
+    // Auxiliary windows own their documents; the main window's listeners never
+    // see their mouse events.
     this._register(
-      toDisposable(() => {
-        window.removeEventListener('mousedown', onMouseDown)
-        window.removeEventListener('mouseup', onMouseUp)
+      installPerWorkbenchDocument((doc) => {
+        const view = doc.defaultView
+        if (!view) return toDisposable(() => {})
+        view.addEventListener('mousedown', onMouseDown)
+        view.addEventListener('mouseup', onMouseUp)
+        return toDisposable(() => {
+          view.removeEventListener('mousedown', onMouseDown)
+          view.removeEventListener('mouseup', onMouseUp)
+        })
       }),
     )
   }

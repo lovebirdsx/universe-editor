@@ -19,6 +19,10 @@ import {
 import { NotificationService } from '../NotificationService.js'
 import { NotificationStatusContribution } from '../../../contributions/NotificationStatusContribution.js'
 import { StatusBarService } from '../../statusbar/StatusBarService.js'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../windows/workbenchDocuments.js'
 
 // ---------------------------------------------------------------------------
 // FakeStorage
@@ -301,6 +305,48 @@ describe('NotificationService', () => {
     svc.dispose()
   })
 
+  it('merges notifications created while the persisted list is still loading', async () => {
+    const storage = new FakeStorage()
+    let release!: (value: unknown[] | PromiseLike<unknown[]>) => void
+    vi.spyOn(storage, 'get').mockImplementationOnce(
+      () =>
+        new Promise<unknown[]>((resolve) => {
+          release = resolve
+        }) as never,
+    )
+    const doc = { name: 'aux' } as unknown as Document
+    const registration = registerWorkbenchDocument(doc)
+    setActiveWorkbenchDocument(doc)
+    const svc = buildService(storage)
+
+    // Created before the storage read resolves: the live item (and its origin)
+    // must survive, and a restored entry reusing its id is the stale copy.
+    const handle = svc.notify({ severity: Severity.Info, message: 'live' })
+    release([
+      {
+        id: 'notification-5',
+        severity: Severity.Info,
+        message: 'restored',
+        sticky: false,
+        timestamp: 1,
+      },
+      {
+        id: handle.id,
+        severity: Severity.Info,
+        message: 'stale',
+        sticky: false,
+        timestamp: 2,
+      },
+    ])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(svc.notifications.get().map((n) => n.message)).toEqual(['restored', 'live'])
+    expect(svc.notificationOrigins.get().get(handle.id)).toBe(doc)
+    registration.dispose()
+    svc.dispose()
+  })
+
   it('drops the actions of a restored notification instead of resurrecting dead buttons', async () => {
     // JSON keeps an action's label and loses its handler, so a restored notification would
     // render a button that throws on click. The memory reminder makes this the common path
@@ -327,6 +373,98 @@ describe('NotificationService', () => {
     expect(restored[0]?.message).toBe('high memory')
     expect(restored[0]?.actions).toBeUndefined()
     svc.dispose()
+  })
+
+  describe('document origin routing', () => {
+    const registrations: Array<{ dispose(): void }> = []
+
+    function registerDocument(name: string): Document {
+      const doc = { name } as unknown as Document
+      registrations.push(registerWorkbenchDocument(doc))
+      return doc
+    }
+
+    afterEach(() => {
+      while (registrations.length) registrations.pop()!.dispose()
+    })
+
+    it('pins notify() to the active workbench document without persisting it', async () => {
+      vi.useFakeTimers()
+      const storage = new FakeStorage()
+      const spy = vi.spyOn(storage, 'set')
+      const svc = buildService(storage)
+      const aux = registerDocument('aux')
+      setActiveWorkbenchDocument(aux)
+
+      const handle = svc.notify({ severity: Severity.Info, message: 'hello' })
+
+      expect(svc.notificationOrigins.get().get(handle.id)).toBe(aux)
+
+      vi.advanceTimersByTime(500)
+      await Promise.resolve()
+      const persisted = spy.mock.calls.find(([key]) => key === 'workbench.notifications.list')?.[1]
+      expect(JSON.stringify(persisted)).not.toContain('aux')
+      svc.dispose()
+    })
+
+    it('notifyWithOrigin(undefined) records no origin', () => {
+      const svc = buildService()
+      registerDocument('aux')
+      const handle = svc.notifyWithOrigin(undefined, {
+        severity: Severity.Info,
+        message: 'background',
+      })
+
+      expect(svc.notificationOrigins.get().has(handle.id)).toBe(false)
+      svc.dispose()
+    })
+
+    it('forgets origins on dismiss, clearAll and document removal', () => {
+      const svc = buildService()
+      const aux = registerDocument('aux')
+      setActiveWorkbenchDocument(aux)
+
+      const dismissed = svc.notify({ severity: Severity.Info, message: 'a' })
+      const cleared = svc.notifyWithOrigin(aux, { severity: Severity.Info, message: 'b' })
+      const orphaned = svc.notifyWithOrigin(aux, { severity: Severity.Info, message: 'c' })
+
+      svc.dismiss(dismissed.id)
+      expect(svc.notificationOrigins.get().has(dismissed.id)).toBe(false)
+      expect(svc.notificationOrigins.get().has(cleared.id)).toBe(true)
+      expect(svc.notificationOrigins.get().has(orphaned.id)).toBe(true)
+
+      registrations.pop()!.dispose()
+      expect(svc.notificationOrigins.get().size).toBe(0)
+
+      svc.clearAll()
+      expect(svc.notificationOrigins.get().size).toBe(0)
+      svc.dispose()
+    })
+
+    it('opens the center in the document it was invoked from and clears it on close', () => {
+      const svc = buildService()
+      const first = registerDocument('first')
+      const second = registerDocument('second')
+      setActiveWorkbenchDocument(first)
+
+      svc.toggleCenter()
+      expect(svc.centerDocument.get()).toBe(first)
+
+      // Switching windows while the center is open must not teleport it.
+      setActiveWorkbenchDocument(second)
+      expect(svc.centerDocument.get()).toBe(first)
+
+      svc.toggleCenter()
+      expect(svc.centerDocument.get()).toBeUndefined()
+
+      svc.toggleCenter()
+      expect(svc.centerDocument.get()).toBe(second)
+      registrations.pop()!.dispose()
+      expect(svc.centerDocument.get()).toBeUndefined()
+      // The panel stays open; the host falls back to the main document.
+      expect(svc.centerVisible.get()).toBe(true)
+      svc.dispose()
+    })
   })
 })
 

@@ -87,6 +87,13 @@ test.describe('@p1 auxiliary editor windows — cross-realm DOM', () => {
       'workbench.action.newEmptyEditorWindow',
     )
 
+    // A background window can drop focus events, so make the auxiliary window
+    // active first; the tooltip is driven by focusin.
+    const [aux] = await auxWindows(page)
+    if (!aux) throw new Error('auxiliary window was not registered')
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), aux.token)
+    await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+
     const titlebarButtons = child.locator('[data-testid="auxiliary-titlebar"] [data-tooltip]')
     await expect(titlebarButtons.first()).toBeVisible()
     await titlebarButtons.first().focus()

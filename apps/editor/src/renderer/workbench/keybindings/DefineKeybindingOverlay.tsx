@@ -12,7 +12,7 @@
 
 import { useEffect, useRef, useState, type JSX } from 'react'
 import { localize } from '@universe-editor/platform'
-import { KeybindingLabel } from '@universe-editor/workbench-ui'
+import { KeybindingLabel, useOwnerDocument } from '@universe-editor/workbench-ui'
 import { formatKey } from '../titlebar/keybindingFormat.js'
 import { buildKeyString, isModifierOnly } from './keyEventUtils.js'
 import styles from './KeybindingsEditor.module.css'
@@ -40,6 +40,7 @@ export function DefineKeybindingOverlay({
 }: DefineKeybindingOverlayProps): JSX.Element {
   const [strokes, setStrokes] = useState<readonly string[]>([])
   const widgetRef = useRef<HTMLDivElement | null>(null)
+  const doc = useOwnerDocument()
 
   useEffect(() => {
     widgetRef.current?.focus()
@@ -64,9 +65,10 @@ export function DefineKeybindingOverlay({
       const key = buildKeyString(e)
       setStrokes((prev) => (prev.length >= 2 ? [key] : [...prev, key]))
     }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [strokes, onConfirm, onCancel])
+    const view = doc?.defaultView
+    view?.addEventListener('keydown', onKeyDown, true)
+    return () => view?.removeEventListener('keydown', onKeyDown, true)
+  }, [strokes, onConfirm, onCancel, doc])
 
   const keyString = strokes.join(' ')
   const conflicts = keyString !== '' ? countConflicts(keyString) : 0

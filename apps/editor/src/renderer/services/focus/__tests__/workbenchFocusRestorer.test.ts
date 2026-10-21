@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import {
   ContextKeyService,
   EditorInput,
@@ -11,6 +12,10 @@ import {
   type IViewsService,
 } from '@universe-editor/platform'
 import { EXPLORER_TREE_VIEW_ID, restoreWorkbenchFocus } from '../workbenchFocusRestorer.js'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../windows/workbenchDocuments.js'
 
 class SelfFocusingInput extends EditorInput {
   constructor(private readonly _target: HTMLElement) {
@@ -111,7 +116,11 @@ function focusTerminalHost(): HTMLElement {
 }
 
 describe('restoreWorkbenchFocus', () => {
+  let auxRegistration: { dispose(): void } | undefined
+
   afterEach(() => {
+    auxRegistration?.dispose()
+    auxRegistration = undefined
     document.body.innerHTML = ''
   })
 
@@ -229,6 +238,36 @@ describe('restoreWorkbenchFocus', () => {
 
     expect(result).toEqual({ target: 'kept', ok: true })
     expect(document.activeElement).toBe(editorTextarea)
+    expect(focusView).not.toHaveBeenCalled()
+  })
+
+  it('reads the active element of an auxiliary window document', async () => {
+    const context = new ContextKeyService()
+    const aux = new Window()
+    const auxDocument = aux.document as unknown as Document
+    auxRegistration = registerWorkbenchDocument(auxDocument)
+    setActiveWorkbenchDocument(auxDocument)
+
+    const editorArea = auxDocument.createElement('div')
+    editorArea.setAttribute('data-testid', 'part-editorArea')
+    const findInput = auxDocument.createElement('input')
+    editorArea.appendChild(findInput)
+    auxDocument.body.appendChild(editorArea)
+    findInput.focus()
+    expect(auxDocument.activeElement).toBe(findInput)
+
+    const { layout, focusView } = makeLayoutService()
+
+    const result = await restoreWorkbenchFocus(
+      makeGroupsService(makeGroup(1)),
+      layout,
+      context,
+      makeViewsService('workbench.view.explorer'),
+    )
+
+    // The main document's activeElement is <body> here; only the registered
+    // auxiliary document shows the focus is already inside the editor area.
+    expect(result).toEqual({ target: 'kept', ok: true })
     expect(focusView).not.toHaveBeenCalled()
   })
 })

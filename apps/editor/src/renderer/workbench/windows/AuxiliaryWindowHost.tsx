@@ -7,7 +7,11 @@
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { TooltipProvider, useDragSessionDocument } from '@universe-editor/workbench-ui'
+import {
+  OwnerDocumentProvider,
+  TooltipProvider,
+  useDragSessionDocument,
+} from '@universe-editor/workbench-ui'
 import { IWorkbenchWindowService } from '../../services/windows/workbenchWindowService.js'
 import {
   IAuxiliaryEditorWindowService,
@@ -57,7 +61,9 @@ export function AuxiliaryWindowHost() {
       {auxiliaryService.windows.map((entry) => {
         const root = entry.window.document.getElementById('root') ?? entry.window.document.body
         return createPortal(
-          <AuxiliaryWindowContent key={entry.token} entry={entry} />,
+          <OwnerDocumentProvider key={entry.token} targetDocument={entry.window.document}>
+            <AuxiliaryWindowContent entry={entry} />
+          </OwnerDocumentProvider>,
           root,
           entry.token,
         )

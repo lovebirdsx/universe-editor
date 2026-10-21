@@ -754,7 +754,13 @@ export class WindowMainService implements IWindowMainService {
 
   getFocusedWindowId(): number | null {
     const focused = BrowserWindow.getFocusedWindow()
-    if (focused && !focused.isDestroyed() && this._windows.has(focused.id)) return focused.id
+    if (focused && !focused.isDestroyed()) {
+      if (this._windows.has(focused.id)) return focused.id
+      // An auxiliary window shares the parent renderer's services; map it back
+      // to the workspace window that owns it.
+      const parent = this._auxiliaryWindows.getParentWindowId(focused.id)
+      if (parent !== undefined && this._windows.has(parent)) return parent
+    }
     if (this._lastFocusedWindowId !== undefined && this._windows.has(this._lastFocusedWindowId)) {
       return this._lastFocusedWindowId
     }

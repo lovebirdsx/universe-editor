@@ -18,6 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, Gauge, RefreshCw, TimerReset, Wallet } from 'lucide-react'
+import { isNodeLike } from '@universe-editor/workbench-ui'
 import {
   constObservable,
   generateUuid,
@@ -264,23 +265,25 @@ function useDismissOnOutside(onDismiss: () => void) {
   const containerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
+    const doc = containerRef.current?.ownerDocument
+    if (!doc) return
     const handlePointer = (ev: MouseEvent) => {
       const el = containerRef.current
       if (!el) return
-      if (ev.target instanceof Node && el.contains(ev.target)) return
+      if (isNodeLike(ev.target) && el.contains(ev.target)) return
       onDismiss()
     }
     const handleKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') onDismiss()
     }
     const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', handlePointer)
-      document.addEventListener('keydown', handleKey)
+      doc.addEventListener('mousedown', handlePointer)
+      doc.addEventListener('keydown', handleKey)
     })
     return () => {
       cancelAnimationFrame(raf)
-      document.removeEventListener('mousedown', handlePointer)
-      document.removeEventListener('keydown', handleKey)
+      doc.removeEventListener('mousedown', handlePointer)
+      doc.removeEventListener('keydown', handleKey)
     }
   }, [onDismiss])
 

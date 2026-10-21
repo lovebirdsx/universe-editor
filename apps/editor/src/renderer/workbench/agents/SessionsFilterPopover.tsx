@@ -10,6 +10,7 @@
 import { useEffect, useRef } from 'react'
 import { localize } from '@universe-editor/platform'
 import { Check } from 'lucide-react'
+import { isNodeLike } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
@@ -81,23 +82,25 @@ export function SessionsFilterPopover({ onDismiss }: SessionsFilterPopoverProps)
   const agents = registry.list()
 
   useEffect(() => {
+    const doc = containerRef.current?.ownerDocument
+    if (!doc) return
     const handlePointer = (ev: MouseEvent) => {
       const el = containerRef.current
       if (!el) return
-      if (ev.target instanceof Node && el.contains(ev.target)) return
+      if (isNodeLike(ev.target) && el.contains(ev.target)) return
       onDismiss()
     }
     const handleKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') onDismiss()
     }
     const raf = requestAnimationFrame(() => {
-      document.addEventListener('mousedown', handlePointer)
-      document.addEventListener('keydown', handleKey)
+      doc.addEventListener('mousedown', handlePointer)
+      doc.addEventListener('keydown', handleKey)
     })
     return () => {
       cancelAnimationFrame(raf)
-      document.removeEventListener('mousedown', handlePointer)
-      document.removeEventListener('keydown', handleKey)
+      doc.removeEventListener('mousedown', handlePointer)
+      doc.removeEventListener('keydown', handleKey)
     }
   }, [onDismiss])
 

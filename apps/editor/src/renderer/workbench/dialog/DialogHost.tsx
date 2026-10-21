@@ -8,7 +8,7 @@
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { markAsSingleton, type IConfirmResult } from '@universe-editor/platform'
-import { ConfirmDialog, PromptDialog } from '@universe-editor/workbench-ui'
+import { ConfirmDialog, OwnerDocumentProvider, PromptDialog } from '@universe-editor/workbench-ui'
 import type { RendererDialogService } from '../../services/dialog/RendererDialogService.js'
 
 export function DialogHost({ service }: { service: RendererDialogService }) {
@@ -39,5 +39,8 @@ export function DialogHost({ service }: { service: RendererDialogService }) {
         onResolve={(v) => service._resolveEntry<string | undefined>(head, v)}
       />
     )
-  return createPortal(node, head.document.body)
+  return createPortal(
+    <OwnerDocumentProvider targetDocument={head.document}>{node}</OwnerDocumentProvider>,
+    head.document.body,
+  )
 }

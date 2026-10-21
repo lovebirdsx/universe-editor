@@ -999,7 +999,9 @@ function ChatScroll({
     if (isKeyupContextMenuSupplement(e)) return
     // Read the selection *before* anything moves focus: focusing the scroll
     // container can drop the DOM selection the plain "Copy" item exists for.
-    const hasSelection = !!window.getSelection()?.toString()
+    // Use the event's document, not the active workbench document: the pointer
+    // can right-click an auxiliary window before focus has moved there.
+    const hasSelection = !!e.currentTarget.ownerDocument.defaultView?.getSelection()?.toString()
     const key = slotKeyFromEvent(e.target)
     if (key) focusSlot(key)
     e.preventDefault()

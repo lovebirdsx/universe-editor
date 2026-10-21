@@ -418,6 +418,10 @@ export class InlineDirtyDiffController extends Disposable {
     handle.addEventListener('mousedown', (down) => {
       down.preventDefault()
       down.stopPropagation()
+      // The peek may live in an auxiliary window; its mouse events never reach
+      // the main document (the node is adopted when the overlay attaches).
+      const doc = (down.currentTarget as HTMLElement).ownerDocument
+      const view = doc.defaultView
       const startY = down.clientY
       const startLines = this._heightInLines
       const lineHeight = this._fontInfo().lineHeight
@@ -433,11 +437,11 @@ export class InlineDirtyDiffController extends Disposable {
         }
       }
       const onUp = (): void => {
-        document.removeEventListener('mousemove', onMove, true)
-        document.removeEventListener('mouseup', onUp, true)
+        view?.removeEventListener('mousemove', onMove, true)
+        view?.removeEventListener('mouseup', onUp, true)
       }
-      document.addEventListener('mousemove', onMove, true)
-      document.addEventListener('mouseup', onUp, true)
+      view?.addEventListener('mousemove', onMove, true)
+      view?.addEventListener('mouseup', onUp, true)
     })
     return handle
   }

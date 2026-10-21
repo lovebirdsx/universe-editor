@@ -20,6 +20,7 @@
 import { createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { Disposable } from '@universe-editor/platform'
+import { isTagElement } from '@universe-editor/workbench-ui'
 import type { SwarmCommentDto } from '@universe-editor/extensions-common'
 import { MonacoLoader, type monaco } from '../editor/monaco/MonacoLoader.js'
 import { SwarmInlineThread } from './SwarmInlineThread.js'
@@ -279,7 +280,7 @@ export class SwarmInlineCommentController extends Disposable {
     if (!zone) return
     queueMicrotask(() => {
       const ta = zone.node.querySelector('textarea')
-      if (ta instanceof HTMLTextAreaElement) ta.focus()
+      if (isTagElement(ta, 'textarea')) (ta as HTMLTextAreaElement).focus()
     })
   }
 

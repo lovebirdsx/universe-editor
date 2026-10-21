@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { ListMenu, type ListMenuEntry } from '../contextMenu/ListMenu.js'
+import { OwnerDocumentProvider } from '../overlay/ownerDocumentContext.js'
 
 /** The row the virtual focus points at, read back through the ARIA attribute. */
 function activeLabel(menu: HTMLElement): string | null {
@@ -485,6 +487,38 @@ describe('ListMenu', () => {
 
       press('Enter')
       expect(run).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('owner document', () => {
+    it('portals into and takes keyboard from the provider document', () => {
+      const win = new Window()
+      const aux = win.document as unknown as Document
+      const onClose = vi.fn()
+      render(
+        <OwnerDocumentProvider targetDocument={aux}>
+          <ListMenu
+            items={[
+              { kind: 'item', label: 'First', run: vi.fn() },
+              { kind: 'item', label: 'Second', run: vi.fn() },
+            ]}
+            anchor={{ x: 0, y: 0 }}
+            autoFocusFirst
+            onClose={onClose}
+          />
+        </OwnerDocumentProvider>,
+      )
+
+      const menu = aux.querySelector<HTMLElement>('[role="menu"]')
+      expect(menu).not.toBeNull()
+      expect(document.querySelector('[role="menu"]')).toBeNull()
+      expect(activeLabel(menu!)).toBe('First')
+
+      fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'ArrowDown' })
+      expect(activeLabel(menu!)).toBe('Second')
+
+      fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'Escape' })
+      expect(onClose).toHaveBeenCalled()
     })
   })
 })

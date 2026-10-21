@@ -118,8 +118,9 @@ export function StickyUserMessageBar({
     // here, or the same ContextMenu keystroke re-opens the menu anchored on the
     // focus holder instead of the row.
     if (isKeyupContextMenuSupplement(e)) return
-    // Read the selection before anything moves focus (see below).
-    const hasSelection = !!window.getSelection()?.toString()
+    // Read the selection before anything moves focus (see below). The event's
+    // document owns the selection — this bar can live in an auxiliary window.
+    const hasSelection = !!e.currentTarget.ownerDocument.defaultView?.getSelection()?.toString()
     e.preventDefault()
     if (slotKey !== null) {
       onFocusSlot?.(slotKey)

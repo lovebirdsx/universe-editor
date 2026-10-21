@@ -33,7 +33,7 @@ import {
   useFloating,
 } from '@floating-ui/react'
 import { localize } from '@universe-editor/platform'
-import { PopoverList } from '@universe-editor/workbench-ui'
+import { PopoverList, useOwnerDocument } from '@universe-editor/workbench-ui'
 import {
   collectKnownContextKeys,
   type IKnownContextKey,
@@ -59,6 +59,7 @@ export function WhenInputCell({
   onCancel,
   onFocusChange,
 }: WhenInputCellProps): JSX.Element {
+  const doc = useOwnerDocument()
   const [value, setValue] = useState(initialValue)
   const [cursor, setCursor] = useState(initialValue.length)
   const [activeIndex, setActiveIndex] = useState(0)
@@ -194,7 +195,7 @@ export function WhenInputCell({
         onBlur={() => exit(() => onCancel(false))}
       />
       {suggestionsVisible && (
-        <FloatingPortal>
+        <FloatingPortal {...(doc ? { root: doc.body } : {})}>
           <PopoverList
             ref={refs.setFloating}
             style={{ zIndex: 'var(--z-popover)', ...floatingStyles }}

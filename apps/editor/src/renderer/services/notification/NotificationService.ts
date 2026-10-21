@@ -17,22 +17,43 @@ import type {
   INotification,
   INotificationHandle,
   INotificationProgress,
-  INotificationProgressOptions,
   INotificationPromptOptions,
-  INotificationService,
+  IObservable,
   IPromptChoice,
 } from '@universe-editor/platform'
+import type {
+  IDocumentAwareNotificationService,
+  NotificationOptions,
+} from './notificationDocumentRouting.js'
+import {
+  currentWorkbenchDocumentOrUndefined,
+  onDidRemoveWorkbenchDocument,
+} from '../windows/workbenchDocuments.js'
 
 const STORAGE_KEY = 'workbench.notifications.list'
 const MAX_STORED = 50
 const AUTO_READ_MS = 3000
 const PERSIST_DEBOUNCE_MS = 500
 
-export class NotificationService extends Disposable implements INotificationService {
+export class NotificationService extends Disposable implements IDocumentAwareNotificationService {
   declare readonly _serviceBrand: undefined
 
   private _nextId = 0
   private _items: INotification[] = []
+
+  /** Origin document per notification; renderer-only and never persisted. */
+  private readonly _origins = new Map<string, Document>()
+  private readonly _originsValue = observableValue<ReadonlyMap<string, Document>>(
+    'NotificationService.notificationOrigins',
+    new Map(),
+  )
+  private readonly _centerDocument = observableValue<Document | undefined>(
+    'NotificationService.centerDocument',
+    undefined,
+  )
+
+  readonly notificationOrigins: IObservable<ReadonlyMap<string, Document>> = this._originsValue
+  readonly centerDocument: IObservable<Document | undefined> = this._centerDocument
 
   /** Timers that mark non-sticky notifications as read after AUTO_READ_MS. */
   private readonly _readTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -56,28 +77,36 @@ export class NotificationService extends Disposable implements INotificationServ
 
   constructor(@IStorageService private readonly _storage: IStorageService) {
     super()
+    // An item pinned to a closed auxiliary window must fall back to the main
+    // window instead of holding a dead document (and its DOM) alive.
+    this._register(onDidRemoveWorkbenchDocument((doc) => this._forgetDocument(doc)))
     void this._load()
   }
 
   private async _load(): Promise<void> {
     const raw = await this._storage.get<unknown[]>(STORAGE_KEY)
-    if (!Array.isArray(raw) || raw.length === 0) return
-    // Restore as read — they appear in center but not as fresh toasts. What is restored is
-    // an explicit list rather than everything the entry happens to carry: `JSON.stringify`
-    // keeps an action's label and loses its handler, so a restored action renders a button
-    // that throws the moment it is clicked. Nothing clickable is better than a button that
-    // fails — and a whitelist keeps the next field with a handler out of here by default.
-    this._items = (raw as INotification[]).map((restored) => ({
-      id: restored.id,
-      severity: restored.severity,
-      message: restored.message,
-      sticky: restored.sticky,
-      timestamp: restored.timestamp,
-      ...(restored.progress === undefined ? {} : { progress: restored.progress }),
-      ...(restored.cancellable === undefined ? {} : { cancellable: restored.cancellable }),
-      read: true,
-      dismissed: false,
-    }))
+    // Notifications created while the storage read was in flight are live; a
+    // restored entry with the same id is the stale copy. Keep the live one so
+    // its origin/handle stays paired with an existing item.
+    const live = this._items
+    const liveIds = new Set(live.map((n) => n.id))
+    const restored = Array.isArray(raw)
+      ? (raw as INotification[]).filter((entry) => !liveIds.has(entry.id))
+      : []
+    this._items = [
+      ...restored.map((entry) => ({
+        id: entry.id,
+        severity: entry.severity,
+        message: entry.message,
+        sticky: entry.sticky,
+        timestamp: entry.timestamp,
+        ...(entry.progress === undefined ? {} : { progress: entry.progress }),
+        ...(entry.cancellable === undefined ? {} : { cancellable: entry.cancellable }),
+        read: true,
+        dismissed: false,
+      })),
+      ...live,
+    ]
     // Advance _nextId past any restored ids, otherwise new notifications would
     // reuse ids and _findItem would resolve to the stale restored entry.
     let maxId = -1
@@ -92,14 +121,16 @@ export class NotificationService extends Disposable implements INotificationServ
     this.notifications.set([...this._items], undefined)
   }
 
-  notify(opts: {
-    severity: Severity
-    message: string
-    actions?: IPromptChoice[]
-    sticky?: boolean
-    progress?: INotificationProgressOptions
-  }): INotificationHandle {
+  notify(opts: NotificationOptions): INotificationHandle {
+    return this.notifyWithOrigin(currentWorkbenchDocumentOrUndefined(), opts)
+  }
+
+  notifyWithOrigin(origin: Document | undefined, opts: NotificationOptions): INotificationHandle {
     const id = `notification-${this._nextId++}`
+    if (origin !== undefined) {
+      this._origins.set(id, origin)
+      this._publishOrigins()
+    }
     const cancellable = opts.progress?.cancellable === true
     const notification: INotification = {
       id,
@@ -238,6 +269,7 @@ export class NotificationService extends Disposable implements INotificationServ
   dismiss(id: string): void {
     this._clearReadTimer(id)
     this._cancelHandlers.delete(id)
+    this._forgetOrigin(id)
 
     const settler = this._promptSettlers.get(id)
     if (settler !== undefined) {
@@ -276,6 +308,8 @@ export class NotificationService extends Disposable implements INotificationServ
     this._promptSettlers.clear()
 
     this._cancelHandlers.clear()
+    this._origins.clear()
+    this._publishOrigins()
 
     for (const item of this._items) {
       item.dismissed = true
@@ -293,10 +327,15 @@ export class NotificationService extends Disposable implements INotificationServ
     const next = !this.centerVisible.get()
     this.centerVisible.set(next, undefined)
     if (next) {
+      // The center belongs to the window it was opened in; opening it in an
+      // auxiliary window must not paint the panel into the main one.
+      this._centerDocument.set(currentWorkbenchDocumentOrUndefined(), undefined)
       for (const item of this._items) {
         if (!item.dismissed) item.read = true
       }
       this._syncObservable()
+    } else {
+      this._centerDocument.set(undefined, undefined)
     }
   }
 
@@ -333,6 +372,26 @@ export class NotificationService extends Disposable implements INotificationServ
     )
   }
 
+  private _publishOrigins(): void {
+    this._originsValue.set(new Map(this._origins), undefined)
+  }
+
+  private _forgetOrigin(id: string): void {
+    if (!this._origins.delete(id)) return
+    this._publishOrigins()
+  }
+
+  private _forgetDocument(doc: Document): void {
+    let changed = false
+    for (const [id, origin] of this._origins) {
+      if (origin !== doc) continue
+      this._origins.delete(id)
+      changed = true
+    }
+    if (changed) this._publishOrigins()
+    if (this._centerDocument.get() === doc) this._centerDocument.set(undefined, undefined)
+  }
+
   private _clearReadTimer(id: string): void {
     const timer = this._readTimers.get(id)
     if (timer !== undefined) {
@@ -357,6 +416,7 @@ export class NotificationService extends Disposable implements INotificationServ
   override dispose(): void {
     this._readTimers.forEach((t) => clearTimeout(t))
     this._readTimers.clear()
+    this._origins.clear()
     if (this._persistTimer !== undefined) {
       clearTimeout(this._persistTimer)
       this._persistTimer = undefined

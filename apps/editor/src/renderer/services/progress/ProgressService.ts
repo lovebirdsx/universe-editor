@@ -26,6 +26,14 @@ import type {
   IStatusBarEntryAccessor,
 } from '@universe-editor/platform'
 import type { DialogProgressState } from '@universe-editor/workbench-ui'
+import type {
+  IDocumentAwareNotificationService,
+  NotificationOptions,
+} from '../notification/notificationDocumentRouting.js'
+import {
+  currentWorkbenchDocumentOrUndefined,
+  onDidRemoveWorkbenchDocument,
+} from '../windows/workbenchDocuments.js'
 
 export type { DialogProgressState }
 
@@ -42,11 +50,25 @@ export class ProgressService extends Disposable implements IProgressService {
 
   readonly dialogState: IObservable<DialogProgressState | null> = this._dialogState
 
+  /** Window the dialog progress was started in (auxiliary-window aware). */
+  private readonly _dialogDocument = observableValue<Document | undefined>(
+    'ProgressService.dialogDocument',
+    undefined,
+  )
+  readonly dialogDocument: IObservable<Document | undefined> = this._dialogDocument
+
   constructor(
     @IStatusBarService private readonly _statusBar: IStatusBarService,
     @INotificationService private readonly _notification: INotificationService,
   ) {
     super()
+    // Drop the pin when the origin window closes: the host would fall back to
+    // the main window anyway, and keeping the dead document here retains its DOM.
+    this._register(
+      onDidRemoveWorkbenchDocument((doc) => {
+        if (this._dialogDocument.get() === doc) this._dialogDocument.set(undefined, undefined)
+      }),
+    )
   }
 
   async withProgress<R>(
@@ -55,6 +77,9 @@ export class ProgressService extends Disposable implements IProgressService {
   ): Promise<R> {
     const cts = new CancellationTokenSource()
     const delay = options.delay ?? DEFAULT_DELAY_MS
+    // Capture at entry, not at mount: the UI appears after `delay`, by which
+    // time the user may already have switched to another window.
+    const origin = currentWorkbenchDocumentOrUndefined()
 
     // Steps reported before the UI mounts are buffered into `pending` and
     // replayed once the UI handle attaches.
@@ -78,13 +103,13 @@ export class ProgressService extends Disposable implements IProgressService {
           break
         }
         case ProgressLocation.Notification: {
-          const [progress, dispose] = this._mountNotification(options, cts)
+          const [progress, dispose] = this._mountNotification(options, cts, origin)
           liveProgress = progress
           uiDispose = dispose
           break
         }
         case ProgressLocation.Dialog: {
-          const [progress, dispose] = this._mountDialog(options, cts)
+          const [progress, dispose] = this._mountDialog(options, cts, origin)
           liveProgress = progress
           uiDispose = dispose
           break
@@ -152,8 +177,9 @@ export class ProgressService extends Disposable implements IProgressService {
   private _mountNotification(
     options: IProgressOptions,
     cts: CancellationTokenSource,
+    origin: Document | undefined,
   ): [IProgress<IProgressStep>, () => void] {
-    const handle = this._notification.notify({
+    const notifyOptions: NotificationOptions = {
       severity: Severity.Info,
       message: options.title,
       sticky: true,
@@ -167,7 +193,12 @@ export class ProgressService extends Disposable implements IProgressService {
             },
           }
         : {}),
-    })
+    }
+    const documentAware = this._notification as Partial<IDocumentAwareNotificationService>
+    const handle =
+      typeof documentAware.notifyWithOrigin === 'function'
+        ? documentAware.notifyWithOrigin(origin, notifyOptions)
+        : this._notification.notify(notifyOptions)
 
     // Accumulate increments (VSCode semantics): each report adds to the bar.
     let cumulative = 0
@@ -207,6 +238,7 @@ export class ProgressService extends Disposable implements IProgressService {
   private _mountDialog(
     options: IProgressOptions,
     cts: CancellationTokenSource,
+    origin: Document | undefined,
   ): [IProgress<IProgressStep>, () => void] {
     const cancel = (): void => {
       cts.cancel()
@@ -218,6 +250,7 @@ export class ProgressService extends Disposable implements IProgressService {
       cancellable: options.cancellable === true,
       cancel,
     }
+    this._dialogDocument.set(origin, undefined)
     this._dialogState.set(baseState, undefined)
 
     let cumulative = 0
@@ -254,6 +287,7 @@ export class ProgressService extends Disposable implements IProgressService {
       progress,
       () => {
         this._dialogState.set(null, undefined)
+        this._dialogDocument.set(undefined, undefined)
       },
     ]
   }

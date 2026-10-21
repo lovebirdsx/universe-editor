@@ -311,6 +311,20 @@ export class AuxiliaryWindowsMainService implements IDisposable {
   }
 
   /**
+   * Workspace window that owns the auxiliary window `windowId`. Window-scoped
+   * commands (getFocusedWindowId) map an auxiliary focus back to its parent,
+   * because auxiliary windows share the parent renderer and have no services of
+   * their own.
+   */
+  getParentWindowId(windowId: number): number | undefined {
+    for (const entry of this._windows.values()) {
+      if (entry.win.id !== windowId || entry.win.isDestroyed()) continue
+      return entry.parentWindowId
+    }
+    return undefined
+  }
+
+  /**
    * Tear down every auxiliary window owned by a parent. Called only at points where the
    * parent is really going away (accepted close, reload, renderer crash, quit), never
    * while its renderer is still deciding whether a close veto should hold.

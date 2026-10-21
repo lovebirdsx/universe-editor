@@ -10,10 +10,35 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { mkTempDir } from '@universe-editor/e2e-harness'
+
+const ECHO_AGENT_PATH = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '..',
+  '..',
+  'src',
+  'test-fixtures',
+  'echoAgent.cjs',
+)
+
+/** Install the echo agent and open one session editor. */
+async function openEchoSession(page: Page, env: Record<string, string> = {}): Promise<void> {
+  await page.evaluate(([id, p, extra]) => window.__E2E__!.installAcpEchoAgent(id, p, extra), [
+    'echo',
+    ECHO_AGENT_PATH,
+    env,
+  ] as const)
+  await page.evaluate(() => {
+    void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+  })
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10_000 })
+    .toBe(1)
+}
 
 function seedFile(name: string, content: string): string {
   const dir = mkTempDir('universe-editor-e2e-aux-')
@@ -1163,6 +1188,115 @@ test.describe('@p0 auxiliary editor windows', () => {
       await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
       await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
     })
+  })
+
+  test('ACP session context menu opens in the auxiliary window', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    await workbench.waitForRestored()
+    await openEchoSession(page)
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('hello from the aux test'))
+    await expect(page.getByTestId('acp-user-bar')).toBeVisible({ timeout: 10_000 })
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+    const bar = child.getByTestId('acp-user-bar')
+    await expect(bar).toBeVisible({ timeout: 10_000 })
+
+    // The session editor is a React portal into the auxiliary document, but the
+    // menu is rendered by the main realm. It must follow the host document.
+    await bar.click({ button: 'right' })
+    const menu = child.locator('[role="menu"]').first()
+    await expect(menu).toBeVisible({ timeout: 5000 })
+    await expect(menu.getByRole('menuitem', { name: 'Copy Message' })).toBeVisible()
+    await expect(page.locator('[role="menu"]')).toHaveCount(0)
+
+    await child.keyboard.press('Escape')
+    await expect(menu).toHaveCount(0)
+
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+
+  test('ACP image preview opens and dismisses in the auxiliary window', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    await workbench.waitForRestored()
+    await openEchoSession(page, { ECHO_AGENT_IMAGE: '1' })
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('emit-image:1x1'))
+    await expect(page.locator('[data-testid="acp-image-block"]').last()).toBeVisible({
+      timeout: 10_000,
+    })
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+    const image = child.locator('[data-testid="acp-image-block"]').last()
+    await expect(image).toBeVisible({ timeout: 10_000 })
+    await image.click()
+
+    const preview = child.getByTestId('acp-image-preview-popover')
+    await expect(preview).toBeVisible({ timeout: 5000 })
+    await expect(page.getByTestId('acp-image-preview-popover')).toHaveCount(0)
+
+    // Clicking inside the preview is not an outside click, even though the
+    // preview element and the listener live in different DOM realms.
+    await child.getByTestId('acp-image-preview-stage').click()
+    await expect(preview).toBeVisible()
+
+    await child.keyboard.press('Escape')
+    await expect(preview).toHaveCount(0)
+
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+
+  test('notifications raised from an auxiliary window toast there', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await workbench.runCommand('workbench.action.notifications.clearAll')
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.newEmptyEditorWindow',
+    )
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+
+    // Sticky so the 3 s auto-read cannot race the assertion.
+    await page.evaluate(() => window.__E2E__!.triggerUnexpectedError('E2E auxiliary toast'))
+    const toast = child
+      .locator('[data-testid="notification-toast-item"]')
+      .filter({ hasText: 'E2E auxiliary toast' })
+    await expect(toast).toBeVisible({ timeout: 5000 })
+    await expect(
+      page
+        .locator('[data-testid="notification-toast-item"]')
+        .filter({ hasText: 'E2E auxiliary toast' }),
+    ).toHaveCount(0)
+
+    await workbench.runCommand('workbench.action.notifications.clearAll')
+    await expect(toast).toHaveCount(0)
+
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
   })
 
   test.describe('tab drag and drop across windows', () => {

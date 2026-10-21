@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom'
 import { IQuickInputService, markAsSingleton } from '@universe-editor/platform'
 import {
   FocusScopeOverlay,
+  OwnerDocumentProvider,
   QuickInputPanel,
   useBackdropDismiss,
 } from '@universe-editor/workbench-ui'
@@ -55,48 +56,50 @@ export function QuickInputPortal() {
 
   const targetDocument = svc.currentDocument ?? document
   return createPortal(
-    <FocusScopeOverlay
-      visible
-      onEscape={close}
-      targetDocument={targetDocument}
-      // An accepted item may reveal an editor in another workbench window and
-      // move activation there before React unmounts this overlay; restoring
-      // focus into this (now inactive) document would activate it right back.
-      shouldRestoreFocus={() => getActiveWorkbenchDocument() === targetDocument}
-    >
-      <div className={styles['overlay']} data-testid="quick-input-overlay" {...backdropHandlers}>
-        <QuickInputPanel
-          state={panelState}
-          onClose={close}
-          targetDocument={targetDocument}
-          renderIcon={(id, size, className) => {
-            const parsed = parseResourceIconId(id)
-            if (parsed) {
-              return (
-                <FileIcon
-                  resource={parsed.resource}
-                  isDirectory={parsed.isDirectory}
-                  size={size}
-                  className={className}
-                />
-              )
-            }
-            const symbolIcon = renderSymbolIconById(id, size)
-            if (symbolIcon) return symbolIcon
-            const Icon = resolveFallbackIcon(id)
-            return <Icon size={size} className={className} />
-          }}
-          renderStatusIcon={(id, size, className) => {
-            const Icon = resolveSessionStatusIcon(id)
-            return <Icon size={size} className={className} />
-          }}
-          renderTitleButton={(id, size, className) => {
-            const Icon = resolveFallbackIcon(id)
-            return <Icon size={size} className={className} />
-          }}
-        />
-      </div>
-    </FocusScopeOverlay>,
+    <OwnerDocumentProvider targetDocument={targetDocument}>
+      <FocusScopeOverlay
+        visible
+        onEscape={close}
+        targetDocument={targetDocument}
+        // An accepted item may reveal an editor in another workbench window and
+        // move activation there before React unmounts this overlay; restoring
+        // focus into this (now inactive) document would activate it right back.
+        shouldRestoreFocus={() => getActiveWorkbenchDocument() === targetDocument}
+      >
+        <div className={styles['overlay']} data-testid="quick-input-overlay" {...backdropHandlers}>
+          <QuickInputPanel
+            state={panelState}
+            onClose={close}
+            targetDocument={targetDocument}
+            renderIcon={(id, size, className) => {
+              const parsed = parseResourceIconId(id)
+              if (parsed) {
+                return (
+                  <FileIcon
+                    resource={parsed.resource}
+                    isDirectory={parsed.isDirectory}
+                    size={size}
+                    className={className}
+                  />
+                )
+              }
+              const symbolIcon = renderSymbolIconById(id, size)
+              if (symbolIcon) return symbolIcon
+              const Icon = resolveFallbackIcon(id)
+              return <Icon size={size} className={className} />
+            }}
+            renderStatusIcon={(id, size, className) => {
+              const Icon = resolveSessionStatusIcon(id)
+              return <Icon size={size} className={className} />
+            }}
+            renderTitleButton={(id, size, className) => {
+              const Icon = resolveFallbackIcon(id)
+              return <Icon size={size} className={className} />
+            }}
+          />
+        </div>
+      </FocusScopeOverlay>
+    </OwnerDocumentProvider>,
     targetDocument.body,
   )
 }

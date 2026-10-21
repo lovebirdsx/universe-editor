@@ -49,6 +49,7 @@ import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceI
 import { IAcpMessageAttachmentStore } from '../services/acp/session/acpMessageAttachmentStore.js'
 import { resolveLiveSessionTitle } from '../services/acp/session/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
+import { currentWorkbenchDocumentOrUndefined } from '../services/windows/workbenchDocuments.js'
 import {
   ISubProjectService,
   type SubProjectScope,
@@ -1371,7 +1372,10 @@ export class NewSideTaskAction extends Action2 {
     const fromMenu = menuSessionArg(arg) !== undefined
     let quote: { text: string; label: string } | undefined
     if (fromMenu) {
-      const text = (window.getSelection()?.toString() ?? '').trim()
+      // The selection belongs to the window hosting the chat, not the main one.
+      const text = (
+        currentWorkbenchDocumentOrUndefined()?.defaultView?.getSelection()?.toString() ?? ''
+      ).trim()
       if (text.length > 0) {
         let clipped = text
         if (clipped.length > SIDE_TASK_QUOTE_MAX_CHARS) {
