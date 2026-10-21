@@ -19,6 +19,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useLayoutEffect, useRef, type RefObject } from 'react'
+import { getOwnerResizeObserver } from '@universe-editor/workbench-ui'
 import { MarkdownPreviewViewStateCache } from '../../services/editor/MarkdownPreviewViewStateCache.js'
 import { findMarkdownAnchor } from '../markdown/markdownAnchors.js'
 import { collectEntries, previewTopForLine } from './previewScrollMap.js'
@@ -116,16 +117,17 @@ export function useMarkdownPreviewScrollRestore(
     }
     apply()
 
-    const ro = new ResizeObserver(apply)
-    ro.observe(el)
+    const ResizeObserverCtor = getOwnerResizeObserver(el)
+    const ro = ResizeObserverCtor ? new ResizeObserverCtor(apply) : null
+    ro?.observe(el)
     const inner = el.firstElementChild
-    if (inner) ro.observe(inner)
+    if (inner) ro?.observe(inner)
 
     const timerRef: { id?: ReturnType<typeof setTimeout> } = {}
     const stop = () => {
       if (!restoringRef.current) return
       restoringRef.current = false
-      ro.disconnect()
+      ro?.disconnect()
       if (timerRef.id !== undefined) clearTimeout(timerRef.id)
       el.removeEventListener('wheel', stop)
       el.removeEventListener('pointerdown', stop)

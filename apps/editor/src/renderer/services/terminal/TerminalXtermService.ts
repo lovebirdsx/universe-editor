@@ -28,6 +28,7 @@ import {
   type URI,
 } from '@universe-editor/platform'
 import { ITerminalManagerService } from './TerminalManagerService.js'
+import { cancelOwnerFrame, requestOwnerFrame, type OwnerFrame } from '@universe-editor/workbench-ui'
 import { createFileLinkProvider } from '../../workbench/panel/terminal/terminalLinkProvider.js'
 import {
   copyTerminalSelection,
@@ -174,7 +175,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
   private _handlers: ITerminalLinkHandlers = noopHandlers
   private _hasSelection = false
   private _savedScroll: number | undefined
-  private _rafId = 0
+  private _raf: OwnerFrame | undefined
   private readonly _id: string
   private readonly _manager: ITerminalManagerService
 
@@ -285,7 +286,8 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
 
     this._register({
       dispose: () => {
-        if (this._rafId) cancelAnimationFrame(this._rafId)
+        cancelOwnerFrame(this._raf)
+        this._raf = undefined
         this.wrapper.remove()
         this.term.dispose()
       },
@@ -301,6 +303,10 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
   }
 
   reattachTo(host: HTMLElement): void {
+    // The queued fit was scheduled on the previous window; cancel it and fit
+    // synchronously below (the observer schedules later frames when needed).
+    cancelOwnerFrame(this._raf)
+    this._raf = undefined
     // appendChild moves the node (single-host); remove() first is just defensive.
     this.wrapper.remove()
     host.appendChild(this.wrapper)
@@ -324,9 +330,9 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
   }
 
   scheduleFit(): void {
-    if (this._rafId) return
-    this._rafId = requestAnimationFrame(() => {
-      this._rafId = 0
+    if (this._raf !== undefined) return
+    this._raf = requestOwnerFrame(this.wrapper, () => {
+      this._raf = undefined
       this.fit()
     })
   }

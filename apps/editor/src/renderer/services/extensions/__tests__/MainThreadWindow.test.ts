@@ -32,7 +32,9 @@ import {
   REMOTE_SCHEME,
 } from '@universe-editor/platform'
 import type { IExtHostWindow } from '@universe-editor/extensions-common'
+import { setClipboardHost } from '@universe-editor/workbench-ui'
 import { E2E_PROBE_ENABLED_KEY } from '../../../../shared/e2e/contract.js'
+import { registerWorkbenchDocument } from '../../windows/workbenchDocuments.js'
 import { MainThreadWindow } from '../MainThreadWindow.js'
 
 function fakeNotification(): {
@@ -221,6 +223,28 @@ describe('MainThreadWindow', () => {
       await mt.$clipboardWriteText('hello')
       expect(writeText).toHaveBeenCalledWith('hello')
     } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('prefers the injected host clipboard over an unfocused navigator', async () => {
+    // In an auxiliary window the main document is unfocused, so navigator
+    // clipboard rejects; the extension API must go through the main-process host.
+    const navigatorWrite = vi.fn().mockRejectedValue(new Error('Document is not focused'))
+    vi.stubGlobal('navigator', { clipboard: { writeText: navigatorWrite } })
+    const write = vi.fn().mockResolvedValue(undefined)
+    setClipboardHost({
+      writeClipboardText: write,
+      readClipboardText: () => Promise.resolve('from-host'),
+    })
+    try {
+      const mt = makeWindow()
+      await expect(mt.$clipboardReadText()).resolves.toBe('from-host')
+      await mt.$clipboardWriteText('hello')
+      expect(write).toHaveBeenCalledWith('hello')
+      expect(navigatorWrite).not.toHaveBeenCalled()
+    } finally {
+      setClipboardHost(undefined)
       vi.unstubAllGlobals()
     }
   })
@@ -716,6 +740,45 @@ describe('MainThreadWindow window state', () => {
       expect(acceptWindowState).toHaveBeenCalledWith({ focused: true })
     } finally {
       Reflect.deleteProperty(window, E2E_PROBE_ENABLED_KEY)
+    }
+  })
+
+  it('tracks focus for auxiliary workbench documents, not just the main window', async () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(false)
+    const auxDoc = document.implementation.createHTMLDocument('aux')
+    // Start unfocused so the window is constructed in the false state; the test
+    // then drives the transition that must be pushed to the host.
+    let auxFocused = false
+    Object.defineProperty(auxDoc, 'hasFocus', { value: () => auxFocused, configurable: true })
+    Object.defineProperty(auxDoc, 'visibilityState', { value: 'visible', configurable: true })
+    Object.defineProperty(auxDoc, 'defaultView', {
+      value: new EventTarget(),
+      configurable: true,
+    })
+    const registration = registerWorkbenchDocument(auxDoc)
+    try {
+      const { extHostWindow, acceptWindowState } = fakeExtHostWindow()
+      makeWindow({ extHostWindow })
+      acceptWindowState.mockClear()
+
+      auxFocused = true
+      auxDoc.dispatchEvent(new Event('visibilitychange'))
+      expect(acceptWindowState).toHaveBeenCalledWith({ focused: true })
+
+      acceptWindowState.mockClear()
+      auxFocused = false
+      auxDoc.dispatchEvent(new Event('visibilitychange'))
+      expect(acceptWindowState).toHaveBeenCalledWith({ focused: false })
+
+      // Closing the auxiliary window falls back to the main document's state.
+      auxFocused = true
+      auxDoc.dispatchEvent(new Event('visibilitychange'))
+      acceptWindowState.mockClear()
+      registration.dispose()
+      await Promise.resolve()
+      expect(acceptWindowState).toHaveBeenCalledWith({ focused: false })
+    } finally {
+      registration.dispose()
     }
   })
 })

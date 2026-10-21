@@ -4,7 +4,7 @@
  *  from per-row state like ExtensionActionsMenu, anchored at the click point.
  *--------------------------------------------------------------------------------------------*/
 
-import { AnchoredSurface } from '@universe-editor/workbench-ui'
+import { AnchoredSurface, copyText } from '@universe-editor/workbench-ui'
 import { localize } from '@universe-editor/platform'
 import styles from './SettingsEditor.module.css'
 
@@ -15,10 +15,6 @@ export interface SettingsGearMenuState {
   readonly value: unknown
   readonly canReset: boolean
   readonly onReset: () => void
-}
-
-function copyText(text: string): void {
-  void navigator.clipboard.writeText(text)
 }
 
 export function SettingsGearMenu({

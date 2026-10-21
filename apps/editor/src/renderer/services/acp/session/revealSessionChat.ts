@@ -16,7 +16,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IEditorGroupsService, IInstantiationService } from '@universe-editor/platform'
+import { requestOwnerFrame } from '@universe-editor/workbench-ui'
 import type { IWindowFocusService } from '../../windows/windowFocusService.js'
+import { currentWorkbenchDocumentOrUndefined } from '../../windows/workbenchDocuments.js'
 import { revealSessionEditorTab } from './revealSessionEditorTab.js'
 import { IAcpChatWidgetService } from './acpChatWidgetService.js'
 
@@ -39,6 +41,9 @@ export function revealSessionChat(
   // Guarded because node tests exercise this path with no DOM (same idiom as
   // LayoutService / QuickTextSearchService).
   if (typeof requestAnimationFrame === 'function') {
-    requestAnimationFrame(() => target.widgets.focusSessionInput(sessionId))
+    // The chat may now live in an auxiliary window — schedule on its frame loop.
+    requestOwnerFrame(currentWorkbenchDocumentOrUndefined(), () =>
+      target.widgets.focusSessionInput(sessionId),
+    )
   }
 }

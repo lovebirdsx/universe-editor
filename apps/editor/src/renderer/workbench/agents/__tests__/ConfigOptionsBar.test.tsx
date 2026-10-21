@@ -1059,6 +1059,22 @@ describe('ConfigOptionsBar — auxiliary document', () => {
   it('opens the overflow panel in the trigger document', async () => {
     globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
     const doc = makeAuxDocument()
+    // The hook resolves the observer and rAF from the element's owner window;
+    // stub the auxiliary window too, otherwise happy-dom's built-in observer
+    // (which never emits) wins over the global fake.
+    const win = doc.defaultView as unknown as Window
+    Object.defineProperty(win, 'ResizeObserver', {
+      configurable: true,
+      value: FakeResizeObserver,
+    })
+    Object.defineProperty(win, 'requestAnimationFrame', {
+      configurable: true,
+      value: (cb: FrameRequestCallback) => requestAnimationFrame(cb),
+    })
+    Object.defineProperty(win, 'cancelAnimationFrame', {
+      configurable: true,
+      value: (id: number) => cancelAnimationFrame(id),
+    })
     const session = makeSession([MODEL_OPTION, MODE_OPTION])
     renderWithServices(
       <ConfigOptionsBar session={session} />,

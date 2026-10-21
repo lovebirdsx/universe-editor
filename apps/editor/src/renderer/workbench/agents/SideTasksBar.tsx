@@ -27,7 +27,7 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { CornerUpLeft, GitBranch, TextQuote, Trash2 } from 'lucide-react'
-import { isNodeLike } from '@universe-editor/workbench-ui'
+import { cancelOwnerFrame, isNodeLike, requestOwnerFrame } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import {
@@ -79,12 +79,12 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
     }
     // Defer one tick so the click that opened the popover doesn't immediately
     // close it (the open click bubbles into document before our handler attaches).
-    const raf = requestAnimationFrame(() => {
+    const raf = requestOwnerFrame(doc, () => {
       doc.addEventListener('mousedown', handlePointer)
       doc.addEventListener('keydown', handleKey)
     })
     return () => {
-      cancelAnimationFrame(raf)
+      cancelOwnerFrame(raf)
       doc.removeEventListener('mousedown', handlePointer)
       doc.removeEventListener('keydown', handleKey)
     }

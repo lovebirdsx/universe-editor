@@ -71,6 +71,7 @@ import {
   TreeModel,
   cx,
   isKeyboardContextMenu,
+  copyText,
   useOwnedTreeModel,
   type ITreeDataSource,
   type ITreeRowRenderContext,
@@ -770,7 +771,7 @@ export function SwarmReviewsView() {
           id: 'copyName',
           icon: 'copy',
           label: localize('swarm.menu.copyName', 'Copy Review Name'),
-          run: () => void navigator.clipboard?.writeText(swarmReviewName(review)),
+          run: () => copyText(swarmReviewName(review)),
         },
         ...(url
           ? ([
@@ -779,7 +780,7 @@ export function SwarmReviewsView() {
                 id: 'copyLink',
                 icon: 'copy',
                 label: localize('swarm.menu.copyLink', 'Copy Review Link'),
-                run: () => void navigator.clipboard?.writeText(url),
+                run: () => copyText(url),
               },
             ] satisfies SwarmReviewMenuItem[])
           : []),

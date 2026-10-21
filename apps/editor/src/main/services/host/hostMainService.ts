@@ -517,6 +517,21 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
+  // Text clipboard is process-global and, unlike navigator.clipboard, is not
+  // gated on the calling document having focus. Log lengths only — content can
+  // contain paths, tokens or agent output.
+  writeClipboardText(text: string): Promise<void> {
+    clipboard.writeText(text)
+    this._logger.debug(`writeClipboardText: ${text.length} chars`)
+    return Promise.resolve()
+  }
+
+  readClipboardText(): Promise<string> {
+    const text = clipboard.readText()
+    this._logger.debug(`readClipboardText: ${text.length} chars`)
+    return Promise.resolve(text)
+  }
+
   async getVersionInfo(): Promise<IVersionInfo> {
     return {
       productName: app.getName(),

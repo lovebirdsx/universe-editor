@@ -22,6 +22,7 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { subAgentTranscriptToText } from '../services/acp/session/acpSessionContent.js'
@@ -782,7 +783,7 @@ export class CopyFocusedAcpMessageAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
     const text = resolveNavWidget(accessor)?.getFocusedText()
-    if (text) await navigator.clipboard.writeText(text)
+    if (text) await writeClipboardText(text)
   }
 }
 
@@ -804,7 +805,7 @@ export class CopySelectedTextAction extends Action2 {
     // The selection lives in the window hosting the chat, not necessarily the
     // main one (`window.getSelection()` is realm-global).
     const text = currentWorkbenchDocumentOrUndefined()?.defaultView?.getSelection()?.toString()
-    if (text) await navigator.clipboard.writeText(text)
+    if (text) await writeClipboardText(text)
   }
 }
 
@@ -873,7 +874,7 @@ export class CopyAcpResourcePathAction extends Action2 {
     } catch {
       // Malformed agent output — fall back to the raw uri string.
     }
-    await navigator.clipboard.writeText(text)
+    await writeClipboardText(text)
   }
 }
 
@@ -904,7 +905,7 @@ export class CopyAcpContextTextAction extends Action2 {
   override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
     const target = readContextTarget(arg)
     if (target?.kind !== 'text') return
-    await navigator.clipboard.writeText(target.text)
+    await writeClipboardText(target.text)
   }
 }
 
@@ -929,7 +930,7 @@ export class CopyAcpReferenceAction extends Action2 {
   override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
     const target = readContextTarget(arg)
     if (target?.kind !== 'text') return
-    await navigator.clipboard.writeText(target.text)
+    await writeClipboardText(target.text)
   }
 }
 
@@ -970,7 +971,7 @@ export class CopyAcpSubAgentTranscriptAction extends Action2 {
     // on its own, e.g. to paste into a fresh prompt. A card whose children are
     // all blank copies nothing rather than clearing the clipboard.
     const transcript = subAgentTranscriptToText(item.call)
-    if (transcript !== undefined) await navigator.clipboard.writeText(transcript)
+    if (transcript !== undefined) await writeClipboardText(transcript)
   }
 }
 

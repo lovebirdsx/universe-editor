@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Check, Copy, Play, Plug, RefreshCw, Trash2, Unplug } from 'lucide-react'
 import { IEditorInput, localize, type IObservable } from '@universe-editor/platform'
-import { Button, IconButton, cx } from '@universe-editor/workbench-ui'
+import { Button, IconButton, cx, writeClipboardText } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IMcpDebugService } from '../../services/acp/mcp/mcpDebugService.js'
 import { McpDebugEditorInput } from '../../services/acp/mcp/mcpDebugEditorInput.js'
@@ -266,7 +266,7 @@ function ErrorBanner({
   )
   const onCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(details)
+      await writeClipboardText(details)
       setCopied(true)
       if (timer.current) clearTimeout(timer.current)
       timer.current = setTimeout(() => setCopied(false), 1500)

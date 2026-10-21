@@ -11,9 +11,10 @@
  *  so a path in a code block opens the file just like one in prose.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
+import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { addCodeHtmlBytes, bumpHeapFlow } from '../../services/memory/heapFlowCounters.js'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
 import { resolveLanguageId } from '../editor/monaco/languageId.js'
@@ -58,7 +59,7 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
 
   const onCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(code)
+      await writeClipboardText(code)
       setCopied(true)
       if (copyTimer.current) clearTimeout(copyTimer.current)
       copyTimer.current = setTimeout(() => setCopied(false), 1500)
@@ -134,8 +135,12 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
   }
 
   // Both branches inject HTML so the linkifier has a stable DOM to walk: plain
-  // text is escaped first (Monaco already escapes its colorized output).
+  // text is escaped first (Monaco already escapes its colorized output). The
+  // prop object is memoized because React diffs `dangerouslySetInnerHTML` by
+  // identity: a fresh literal on every render rewrites innerHTML and wipes the
+  // anchors added by the linkifier (copying a block re-renders this component).
   const innerHtml = streaming || html === null ? escapeHtmlText(code) : html
+  const innerHtmlProp = useMemo(() => ({ __html: innerHtml }), [innerHtml])
 
   // The wrapper owns the hover copy button: it can't live inside <pre> because
   // `overflow-x: auto` would clip it and scroll it away with long lines.
@@ -146,7 +151,7 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
         data-lang={lang || 'text'}
         {...(line !== undefined ? { 'data-line': line } : {})}
       >
-        <code ref={codeRef} onClick={onClick} dangerouslySetInnerHTML={{ __html: innerHtml }} />
+        <code ref={codeRef} onClick={onClick} dangerouslySetInnerHTML={innerHtmlProp} />
       </pre>
       <button
         type="button"

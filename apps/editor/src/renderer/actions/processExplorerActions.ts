@@ -15,6 +15,7 @@ import {
   Severity,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { ProcessExplorerInput } from '../services/editor/ProcessExplorerInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
@@ -133,7 +134,7 @@ export class CopyProcessAction extends Action2 {
   override async run(_accessor: ServicesAccessor, arg?: unknown): Promise<void> {
     const target = asProcessContextArg(arg)
     if (!target) return
-    await navigator.clipboard.writeText(`${target.pid}\t${target.name}\t${target.cmd}`)
+    await writeClipboardText(`${target.pid}\t${target.name}\t${target.cmd}`)
   }
 }
 
@@ -153,6 +154,6 @@ export class CopyAllProcessesAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const processMonitor = accessor.get(IProcessMonitorService)
     const text = await processMonitor.formatProcessList()
-    await navigator.clipboard.writeText(text)
+    await writeClipboardText(text)
   }
 }

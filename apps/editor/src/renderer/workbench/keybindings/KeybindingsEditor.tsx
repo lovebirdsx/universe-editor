@@ -20,6 +20,7 @@ import { CommandsRegistry, IContextKeyService, localize } from '@universe-editor
 import {
   Badge,
   IconButton,
+  copyText,
   Input,
   reconcileFocusedKeyIndex,
   useOwnerDocument,
@@ -360,7 +361,7 @@ export function KeybindingsEditor(): JSX.Element {
                   null,
                   2,
                 )
-        void navigator.clipboard.writeText(text)
+        copyText(text)
       },
       showSameKeybindings: () => {
         const row = selectedRow()

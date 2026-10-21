@@ -8,6 +8,7 @@ import {
   type ServicesAccessor,
   type URI,
 } from '@universe-editor/platform'
+import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { sameUri } from '../services/explorer/explorerTreeUtils.js'
@@ -53,7 +54,7 @@ export class CopyFileNameAction extends Action2 {
     const uris = resolveUris(accessor, args)
     if (uris.length === 0) return
     const text = uris.map((uri) => uri.path.slice(uri.path.lastIndexOf('/') + 1)).join('\n')
-    await navigator.clipboard.writeText(text)
+    await writeClipboardText(text)
   }
 }
 
@@ -78,7 +79,7 @@ export class CopyEditorNameAction extends Action2 {
     const target = resolveTargetEditor(accessor, args[0])
     const name = target?.editor.getName()
     if (!name) return
-    await navigator.clipboard.writeText(name)
+    await writeClipboardText(name)
   }
 }
 
@@ -104,7 +105,7 @@ export class CopyFilePathAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const uris = resolveUris(accessor, args)
     if (uris.length === 0) return
-    await navigator.clipboard.writeText(uris.map((uri) => resourceDisplayPath(uri)).join('\n'))
+    await writeClipboardText(uris.map((uri) => resourceDisplayPath(uri)).join('\n'))
   }
 }
 
@@ -141,6 +142,6 @@ export class CopyFileRelativePathAction extends Action2 {
         return uriId.relativePath(root, uri) ?? resourceDisplayPath(uri)
       })
       .join('\n')
-    await navigator.clipboard.writeText(text)
+    await writeClipboardText(text)
   }
 }

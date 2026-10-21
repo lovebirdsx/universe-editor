@@ -16,6 +16,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
+import { ECHO_MARKER, MARKER, makeCustomEditorVsix } from '../fixtures/customEditorVsix.js'
 import type { ElectronApplication, Page } from '@playwright/test'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -74,6 +75,7 @@ test.describe('@p1 auxiliary editor windows — cross-realm DOM', () => {
         mkdirSync(join(dir, 'src'), { recursive: true })
         writeFileSync(join(dir, 'src', 'a.ts'), 'export const a = 1\n')
         writeFileSync(join(dir, 'doc.md'), '# Doc\n')
+        writeFileSync(join(dir, 'sample.uecustom'), 'custom editor body\n')
       },
     },
   })
@@ -134,7 +136,7 @@ test.describe('@p1 auxiliary editor windows — cross-realm DOM', () => {
     await expect.poll(() => overlayCount(child), { timeout: 3000 }).toBe(0)
   })
 
-  test('chat controls in the auxiliary window use its document and realm', async ({
+  test('chat controls in the auxiliary window use its document and realm @serial', async ({
     electronApp,
     page,
     workbench,
@@ -198,7 +200,69 @@ test.describe('@p1 auxiliary editor windows — cross-realm DOM', () => {
       .poll(() => child.evaluate(() => document.activeElement?.getAttribute('data-testid') ?? null))
       .toBe('acp-config-model-trigger')
 
-    // 3. Code-block file link: the anchor was created by the child document, so
+    // 3. Code-block copy: the message content is rendered from the main JS realm
+    //    into the child document, so a bare `navigator.clipboard` is bound to the
+    //    unfocused main document and rejects. Make that path fail loudly — the
+    //    copy has to go through the main-process clipboard instead. Do this
+    //    before the file link: opening src/a.ts replaces the chat in this group.
+    await page.evaluate(() => {
+      const reject = () => Promise.reject(new Error('Document is not focused'))
+      const clipboard = navigator.clipboard
+      if (clipboard) {
+        Object.defineProperty(clipboard, 'writeText', { configurable: true, value: reject })
+      } else {
+        Object.defineProperty(navigator, 'clipboard', {
+          configurable: true,
+          value: { writeText: reject },
+        })
+      }
+    })
+    await electronApp.evaluate(({ clipboard }) => clipboard.writeText('sentinel'))
+    const copyButton = child.getByTestId('code-block-copy').first()
+    await copyButton.click()
+    await expect(copyButton).toHaveAttribute('data-tooltip', 'Copied')
+    await expect
+      .poll(() => electronApp.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 5000 })
+      .toBe('// see src/a.ts')
+
+    // 4. In-session find: CSS Custom Highlight registries are per document. The
+    //    ranges must be written into the child document's registry; the main
+    //    window's registry paints nothing there (and leaks ranges).
+    const findHighlightCount = (target: Page): Promise<number> =>
+      target.evaluate(() => {
+        const registry = (
+          globalThis as unknown as {
+            CSS?: { highlights?: { get(name: string): { size: number } | undefined } }
+          }
+        ).CSS?.highlights
+        // A sole match is the "current" one; the two registries are disjoint.
+        return (
+          (registry?.get('acp-find-match')?.size ?? 0) +
+          (registry?.get('acp-find-match-current')?.size ?? 0)
+        )
+      })
+    const mainHasFindHighlight = (): Promise<boolean> =>
+      page.evaluate(() => {
+        const registry = (
+          globalThis as unknown as {
+            CSS?: { highlights?: { has(name: string): boolean } }
+          }
+        ).CSS?.highlights
+        return (
+          (registry?.has('acp-find-match') ?? false) ||
+          (registry?.has('acp-find-match-current') ?? false)
+        )
+      })
+    await child.keyboard.press('Control+f')
+    await child.getByTestId('acp-find-input').fill('src/a.ts')
+    await expect.poll(() => findHighlightCount(child), { timeout: 5000 }).toBeGreaterThan(0)
+    expect(await mainHasFindHighlight()).toBe(false)
+
+    await child.keyboard.press('Escape')
+    await expect.poll(() => findHighlightCount(child), { timeout: 5000 }).toBe(0)
+    expect(await mainHasFindHighlight()).toBe(false)
+
+    // 5. Code-block file link: the anchor was created by the child document, so
     //    the main realm's `instanceof Element` rejects it; the shape check must
     //    still resolve the click and open the file.
     await child.getByTestId('md-codeblock-filepath').first().click()
@@ -208,5 +272,68 @@ test.describe('@p1 auxiliary editor windows — cross-realm DOM', () => {
     if (!token) throw new Error('auxiliary window token missing')
     await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
     await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+
+  test('webview message bridge follows the auxiliary window @regression', async ({
+    electronApp,
+    page,
+    workbench,
+    launchWorkspace,
+    scratchDir,
+  }) => {
+    await workbench.waitForRestored()
+    if (!launchWorkspace) throw new Error('workspace seeder did not run')
+    // A folder workspace is untrusted by default, and an installed extension
+    // that requires trust never activates in Restricted Mode. The seeder pins
+    // the workspace at launch, so grant trust before installing the vsix.
+    await workbench.runCommand('workbench.trust.grant')
+    const vsixPath = await makeCustomEditorVsix(scratchDir('ue2-realm-webview-'))
+    const installedId = await page.evaluate(
+      (p) => window.__E2E__!.installVsixExtension(p),
+      vsixPath,
+    )
+    expect(installedId).toBe('universe.e2e-custom-editor')
+
+    const docPath = launchWorkspace.file('sample.uecustom')
+    await expect
+      .poll(
+        async () => {
+          await page.evaluate((p) => window.__E2E__!.openFileUri(p), docPath)
+          return page.evaluate(() => window.__E2E__!.getActiveEditorTypeId())
+        },
+        { timeout: 10000 },
+      )
+      .toBe('customEditor')
+    await expect(
+      page.frameLocator('[data-testid="webview-frame"]').locator(`#${MARKER}`),
+    ).toHaveText('ok', { timeout: 15000 })
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+    const frame = child.frameLocator('[data-testid="webview-frame"]')
+    await expect(frame.locator(`#${MARKER}`)).toHaveText('ok', { timeout: 15000 })
+
+    // iframe → host: the bootstrap's `parent.postMessage` lands on the child
+    // window now owning the iframe. A listener left on the main window never
+    // receives it, so the extension never echoes (host → iframe).
+    await frame.locator('body').evaluate(() => {
+      const api = (
+        window as unknown as {
+          acquireVsCodeApi?: () => { postMessage(message: unknown): void }
+        }
+      ).acquireVsCodeApi?.()
+      if (!api) throw new Error('webview bootstrap API missing')
+      api.postMessage({ ping: 'aux-window' })
+    })
+    await expect(frame.locator(`#${ECHO_MARKER}`)).toHaveText('aux-window', { timeout: 10000 })
+
+    const token = (await auxWindows(page))[0]?.token
+    if (!token) throw new Error('auxiliary window token missing')
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    await page.evaluate((id) => window.__E2E__!.uninstallExtension(id), installedId)
   })
 })

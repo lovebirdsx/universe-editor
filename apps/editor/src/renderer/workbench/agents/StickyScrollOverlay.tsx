@@ -11,6 +11,12 @@
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
 import { localize } from '@universe-editor/platform'
+import {
+  cancelOwnerFrame,
+  getOwnerResizeObserver,
+  requestOwnerFrame,
+  type OwnerFrame,
+} from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
 import { ToolCallStatusIcon } from './ToolCallOutput.js'
@@ -47,7 +53,7 @@ export function StickyScrollOverlay({
   revision,
 }: StickyScrollOverlayProps) {
   const [entries, setEntries] = useState<StickyEntry[]>([])
-  const rafRef = useRef<number | undefined>(undefined)
+  const rafRef = useRef<OwnerFrame | undefined>(undefined)
 
   const measure = useCallback(() => {
     const container = containerRef.current
@@ -84,28 +90,31 @@ export function StickyScrollOverlay({
 
   const schedule = useCallback(() => {
     if (rafRef.current !== undefined) return
-    rafRef.current = requestAnimationFrame(() => {
+    const container = containerRef.current
+    if (!container) return
+    rafRef.current = requestOwnerFrame(container, () => {
       rafRef.current = undefined
       measure()
     })
-  }, [measure])
+  }, [containerRef, measure])
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
     measure()
     container.addEventListener('scroll', schedule, { passive: true })
-    const ro = new ResizeObserver(schedule)
-    ro.observe(container)
+    const ResizeObserverCtor = getOwnerResizeObserver(container)
+    const ro = ResizeObserverCtor ? new ResizeObserverCtor(schedule) : null
+    ro?.observe(container)
     // Observe the content wrapper (last child; the overlay itself is the first)
     // so async growth — Monaco colorizing, images decoding, streaming tails —
     // re-measures the sticky stack.
     const content = container.lastElementChild
-    if (content) ro.observe(content)
+    if (content) ro?.observe(content)
     return () => {
       container.removeEventListener('scroll', schedule)
-      ro.disconnect()
-      if (rafRef.current !== undefined) cancelAnimationFrame(rafRef.current)
+      ro?.disconnect()
+      cancelOwnerFrame(rafRef.current)
       rafRef.current = undefined
     }
   }, [containerRef, schedule, measure])

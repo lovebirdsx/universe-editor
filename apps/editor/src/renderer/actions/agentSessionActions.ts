@@ -32,6 +32,7 @@ import {
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { writeClipboardText } from '@universe-editor/workbench-ui'
 import {
   IAcpSessionService,
   AcpForeignWorktreeError,
@@ -945,7 +946,7 @@ export class CopyAgentSessionPathAction extends Action2 {
       return
     }
 
-    await navigator.clipboard.writeText(transcriptPath)
+    await writeClipboardText(transcriptPath)
   }
 }
 

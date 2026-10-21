@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { setClipboardHost } from '@universe-editor/workbench-ui'
 import { CodeBlock } from '../CodeBlock.js'
 import { MarkdownStreamingContext } from '../../markdown/markdownStreamingContext.js'
 
@@ -21,6 +22,7 @@ vi.mock('../../editor/monaco/languageId.js', () => ({
 
 afterEach(() => {
   cleanup()
+  setClipboardHost(undefined)
   vi.unstubAllGlobals()
   vi.useRealTimers()
 })
@@ -59,6 +61,43 @@ describe('CodeBlock copy button', () => {
     await act(async () => {})
 
     expect(button.dataset['tooltip']).toBe('Copy code')
+  })
+
+  it('uses the injected host clipboard, not the (unfocused) navigator', async () => {
+    // The auxiliary-window failure mode: navigator.clipboard rejects because the
+    // main document lacks focus. The main-process host must be used instead.
+    const navigatorWrite = vi.fn().mockRejectedValue(new Error('Document is not focused'))
+    stubClipboard(navigatorWrite)
+    const hostWrite = vi.fn().mockResolvedValue(undefined)
+    setClipboardHost({
+      readClipboardText: () => Promise.resolve(''),
+      writeClipboardText: hostWrite,
+    })
+    render(<CodeBlock code="// see src/a.ts" />)
+
+    const button = screen.getByTestId('code-block-copy')
+    fireEvent.click(button)
+    await act(async () => {})
+
+    expect(hostWrite).toHaveBeenCalledWith('// see src/a.ts')
+    expect(navigatorWrite).not.toHaveBeenCalled()
+    expect(button.dataset['tooltip']).toBe('Copied')
+  })
+
+  it('keeps linkified file paths when the copied state re-renders the block', async () => {
+    // React diffs `dangerouslySetInnerHTML` by object identity, so an inline
+    // literal rewrites innerHTML on every render and wipes the anchors added by
+    // the DOM linkifier — the copy state update is exactly such a re-render.
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    stubClipboard(writeText)
+    render(<CodeBlock code="// see src/a.ts" onOpenFilePath={() => {}} />)
+
+    expect(screen.getByTestId('md-codeblock-filepath')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('code-block-copy'))
+    await act(async () => {})
+
+    expect(screen.getByTestId('code-block-copy').dataset['tooltip']).toBe('Copied')
+    expect(screen.getByTestId('md-codeblock-filepath')).toBeTruthy()
   })
 })
 

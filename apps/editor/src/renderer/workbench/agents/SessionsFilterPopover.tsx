@@ -10,7 +10,7 @@
 import { useEffect, useRef } from 'react'
 import { localize } from '@universe-editor/platform'
 import { Check } from 'lucide-react'
-import { isNodeLike } from '@universe-editor/workbench-ui'
+import { cancelOwnerFrame, isNodeLike, requestOwnerFrame } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
@@ -93,12 +93,12 @@ export function SessionsFilterPopover({ onDismiss }: SessionsFilterPopoverProps)
     const handleKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') onDismiss()
     }
-    const raf = requestAnimationFrame(() => {
+    const raf = requestOwnerFrame(doc, () => {
       doc.addEventListener('mousedown', handlePointer)
       doc.addEventListener('keydown', handleKey)
     })
     return () => {
-      cancelAnimationFrame(raf)
+      cancelOwnerFrame(raf)
       doc.removeEventListener('mousedown', handlePointer)
       doc.removeEventListener('keydown', handleKey)
     }

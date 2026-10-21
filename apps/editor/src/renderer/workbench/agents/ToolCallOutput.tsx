@@ -15,6 +15,7 @@ import {
   type ReactElement,
   type ReactNode,
 } from 'react'
+import { getOwnerResizeObserver } from '@universe-editor/workbench-ui'
 import {
   Check,
   ChevronDown,
@@ -113,9 +114,10 @@ export function TerminalOutput({ text, contentKey }: { text: string; contentKey?
       setOverflows((prev) => (prev === next ? prev : next))
     }
     measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
+    const ResizeObserverCtor = getOwnerResizeObserver(el)
+    const ro = ResizeObserverCtor ? new ResizeObserverCtor(measure) : null
+    ro?.observe(el)
+    return () => ro?.disconnect()
   }, [contentKey])
 
   const collapsed = overflows && !expanded

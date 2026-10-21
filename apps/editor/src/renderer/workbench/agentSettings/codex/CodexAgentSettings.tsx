@@ -20,7 +20,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { IStorageService, StorageScope, localize } from '@universe-editor/platform'
-import { cx } from '@universe-editor/workbench-ui'
+import { cx, requestOwnerFrame } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
 import { registerAgentSettings } from '../agentSettingsRegistry.js'
 import { CodexAuthenticationPanel } from './CodexAuthenticationPanel.js'
@@ -96,7 +96,7 @@ export function CodexAgentSettings() {
     let active = true
     void storage.get<number>(scrollKey(categoryId), StorageScope.GLOBAL).then((top) => {
       if (!active) return
-      requestAnimationFrame(() => {
+      requestOwnerFrame(bodyRef.current, () => {
         if (active && bodyRef.current && typeof top === 'number') bodyRef.current.scrollTop = top
       })
     })

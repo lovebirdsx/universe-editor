@@ -10,6 +10,7 @@
 import { memo, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, GitBranch, RotateCcw, Undo2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
+import { getOwnerResizeObserver } from '@universe-editor/workbench-ui'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
 import { useContentExpansion, useRevealOnCollapse } from './chatContentExpansion.js'
@@ -83,9 +84,10 @@ export const UserMessageItem = memo(function UserMessageItem({
       setOverflows((prev) => (prev === next ? prev : next))
     }
     measure()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    return () => ro.disconnect()
+    const ResizeObserverCtor = getOwnerResizeObserver(el)
+    const ro = ResizeObserverCtor ? new ResizeObserverCtor(measure) : null
+    ro?.observe(el)
+    return () => ro?.disconnect()
   }, [contentKey])
 
   const collapsed = overflows && !expanded

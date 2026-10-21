@@ -52,16 +52,20 @@ import {
 } from '@universe-editor/platform'
 import {
   DragSessionContext,
+  cancelOwnerFrame,
   dispatchKeyboardContextMenu,
   dragContainsResources,
+  getOwnerResizeObserver,
   isContextMenuKey,
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
   isHTMLElementLike,
+  requestOwnerFrame,
   useHover,
   useDragHandle,
   useDropTarget,
   type DragEndSnapshot,
+  type OwnerFrame,
 } from '@universe-editor/workbench-ui'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
@@ -898,11 +902,22 @@ export const EditorGroupView = memo(function EditorGroupView({
     if (!el) return
     updateScrollButtons()
     el.addEventListener('scroll', updateScrollButtons, { passive: true })
-    const ro = new ResizeObserver(() => requestAnimationFrame(updateScrollButtons))
-    ro.observe(el)
+    let frame: OwnerFrame | undefined
+    const ResizeObserverCtor = getOwnerResizeObserver(el)
+    const ro = ResizeObserverCtor
+      ? new ResizeObserverCtor(() => {
+          cancelOwnerFrame(frame)
+          frame = requestOwnerFrame(el, () => {
+            frame = undefined
+            updateScrollButtons()
+          })
+        })
+      : null
+    ro?.observe(el)
     return () => {
       el.removeEventListener('scroll', updateScrollButtons)
-      ro.disconnect()
+      ro?.disconnect()
+      cancelOwnerFrame(frame)
     }
   }, [tabBarEl, updateScrollButtons])
 

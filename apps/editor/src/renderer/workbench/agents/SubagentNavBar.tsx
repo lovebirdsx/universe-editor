@@ -10,6 +10,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { localize } from '@universe-editor/platform'
+import {
+  cancelOwnerFrame,
+  getOwnerResizeObserver,
+  requestOwnerFrame,
+  type OwnerFrame,
+} from '@universe-editor/workbench-ui'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
@@ -50,14 +56,16 @@ export function SubagentNavBar({ session, scrollContainerRef, handleRef }: Subag
   const recomputeRef = useRef(recompute)
   recomputeRef.current = recompute
 
-  const rafRef = useRef<number | undefined>(undefined)
+  const rafRef = useRef<OwnerFrame | undefined>(undefined)
   const schedule = useCallback(() => {
     if (rafRef.current !== undefined) return
-    rafRef.current = requestAnimationFrame(() => {
+    const container = scrollContainerRef.current
+    if (!container) return
+    rafRef.current = requestOwnerFrame(container, () => {
       rafRef.current = undefined
       recomputeRef.current()
     })
-  }, [])
+  }, [scrollContainerRef])
 
   useEffect(() => {
     const container = scrollContainerRef.current
@@ -67,8 +75,8 @@ export function SubagentNavBar({ session, scrollContainerRef, handleRef }: Subag
     // Collapsing a card above the viewport and resizing the pane both move rows
     // without a scroll event; the collapse bridge covers Alt+F / Ctrl+Alt+F and
     // the observer covers split-view resizes.
-    const observer =
-      typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule)
+    const ResizeObserverCtor = getOwnerResizeObserver(container)
+    const observer = ResizeObserverCtor ? new ResizeObserverCtor(schedule) : undefined
     observer?.observe(container)
     const timelineEl = container.querySelector('[data-testid="acp-timeline"]')
     if (timelineEl) observer?.observe(timelineEl)
@@ -77,10 +85,8 @@ export function SubagentNavBar({ session, scrollContainerRef, handleRef }: Subag
       container.removeEventListener('scroll', schedule)
       observer?.disconnect()
       collapseSub.dispose()
-      if (rafRef.current !== undefined) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = undefined
-      }
+      cancelOwnerFrame(rafRef.current)
+      rafRef.current = undefined
     }
   }, [scrollContainerRef, handleRef, schedule, session.id])
 

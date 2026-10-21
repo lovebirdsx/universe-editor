@@ -22,6 +22,7 @@ import {
 import { IAiDebugService } from '../../../shared/ipc/aiDebugService.js'
 import { useEventSubscription, useService } from '../useService.js'
 import {
+  copyText,
   useFlatListNavigation,
   useScrollRestore,
   type IFlatListRowProps,
@@ -205,7 +206,7 @@ function RecordDetail({ id }: { id: string }) {
         <button
           type="button"
           className={styles['toolButton']}
-          onClick={() => void navigator.clipboard?.writeText(JSON.stringify(record, null, 2))}
+          onClick={() => copyText(JSON.stringify(record, null, 2))}
         >
           {localize('aiDebug.copyJson', 'Copy JSON')}
         </button>

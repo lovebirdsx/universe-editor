@@ -360,7 +360,10 @@ export function ChangesTree<TEntry>({
   }, [viewId])
   useLayoutEffect(
     () => () => {
-      if (treeRef.current !== null && treeRef.current.contains(document.activeElement)) {
+      if (
+        treeRef.current !== null &&
+        treeRef.current.contains(treeRef.current.ownerDocument.activeElement)
+      ) {
         remountFocusIntent.add(viewId)
         queueMicrotask(() => remountFocusIntent.delete(viewId))
       }

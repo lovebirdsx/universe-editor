@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
 import { Boxes, Cpu, Plug, SlidersHorizontal, type LucideIcon } from 'lucide-react'
 import { IStorageService, StorageScope, localize } from '@universe-editor/platform'
-import { cx } from '@universe-editor/workbench-ui'
+import { cx, requestOwnerFrame } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { AgentIcon } from '../agents/agentIcon.js'
@@ -119,7 +119,7 @@ export function AiSettingsEditor() {
     let active = true
     void storage.get<number>(scrollKey(itemId), StorageScope.GLOBAL).then((top) => {
       if (!active) return
-      requestAnimationFrame(() => {
+      requestOwnerFrame(bodyRef.current, () => {
         if (active && bodyRef.current && typeof top === 'number') bodyRef.current.scrollTop = top
       })
     })

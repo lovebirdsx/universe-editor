@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useLayoutEffect, useRef, useState, type MutableRefObject } from 'react'
+import { getOwnerWindow } from '@universe-editor/workbench-ui'
 import { computeMatches } from '../../services/acp/chatFindMatcher.js'
 
 interface DomMatch {
@@ -30,15 +31,37 @@ interface HighlightRegistryLike {
 }
 type HighlightCtor = new () => HighlightLike
 
-function highlightApi(): { registry: HighlightRegistryLike; Highlight: HighlightCtor } | undefined {
+/**
+ * Highlight registry and constructor from the container's own window. An
+ * auxiliary window has its own `CSS.highlights`; writing a range into the main
+ * window's registry renders nothing there and leaves the main document's
+ * registry holding ranges it can never paint.
+ */
+function highlightApi(node: Node | null | undefined):
+  | {
+      registry: HighlightRegistryLike
+      Highlight: HighlightCtor
+    }
+  | undefined {
+  const win = getOwnerWindow(node) as
+    | (Window & {
+        CSS?: { highlights?: HighlightRegistryLike }
+        Highlight?: HighlightCtor
+      })
+    | undefined
   const g = globalThis as unknown as {
     CSS?: { highlights?: HighlightRegistryLike }
     Highlight?: HighlightCtor
   }
-  const registry = g.CSS?.highlights
-  const Highlight = g.Highlight
-  if (!registry || !Highlight) return undefined
-  return { registry, Highlight }
+  // Both halves must come from the same realm: a Highlight created by window A
+  // written into window B's registry silently paints nothing.
+  const ownerRegistry = win?.CSS?.highlights
+  const ownerCtor = win?.Highlight
+  if (ownerRegistry && ownerCtor) return { registry: ownerRegistry, Highlight: ownerCtor }
+  const globalRegistry = g.CSS?.highlights
+  const globalCtor = g.Highlight
+  if (globalRegistry && globalCtor) return { registry: globalRegistry, Highlight: globalCtor }
+  return undefined
 }
 
 function collectMatches(root: HTMLElement, query: string): DomMatch[] {
@@ -63,13 +86,14 @@ function collectMatches(root: HTMLElement, query: string): DomMatch[] {
 }
 
 function applyHighlights(
+  root: Node,
   matches: readonly DomMatch[],
   currentIndex: number,
   hlAll: string,
   hlCurrent: string,
-): void {
-  const api = highlightApi()
-  if (!api) return
+): HighlightRegistryLike | undefined {
+  const api = highlightApi(root)
+  if (!api) return undefined
   const all = new api.Highlight()
   const current = new api.Highlight()
   matches.forEach((m, i) => {
@@ -84,13 +108,16 @@ function applyHighlights(
   })
   api.registry.set(hlAll, all)
   api.registry.set(hlCurrent, current)
+  return api.registry
 }
 
-function clearHighlights(hlAll: string, hlCurrent: string): void {
-  const api = highlightApi()
-  if (!api) return
-  api.registry.delete(hlAll)
-  api.registry.delete(hlCurrent)
+function clearHighlights(
+  registry: HighlightRegistryLike | undefined,
+  hlAll: string,
+  hlCurrent: string,
+): void {
+  registry?.delete(hlAll)
+  registry?.delete(hlCurrent)
 }
 
 // Reveal the current match centered in the container. We only scroll when the
@@ -140,6 +167,8 @@ export function useFindInContainer<T extends HTMLElement>(
   const [currentIndex, setCurrentIndex] = useState(-1)
 
   const matchesRef = useRef<DomMatch[]>([])
+  /** Registry the current highlights were written into (owner of the container). */
+  const registryRef = useRef<HighlightRegistryLike | undefined>(undefined)
   const currentIndexRef = useRef(-1)
   currentIndexRef.current = currentIndex
   const onVisibleChangeRef = useRef(onVisibleChange)
@@ -158,7 +187,11 @@ export function useFindInContainer<T extends HTMLElement>(
       else idx = Math.min(Math.max(currentIndexRef.current, 0), found.length - 1)
       currentIndexRef.current = idx
       setCurrentIndex(idx)
-      applyHighlights(found, idx, hlAll, hlCurrent)
+      const registry = applyHighlights(root, found, idx, hlAll, hlCurrent)
+      // An elementary "container adopted into another document" path would
+      // otherwise leave the old registry holding ranges forever.
+      if (registry !== registryRef.current) clearHighlights(registryRef.current, hlAll, hlCurrent)
+      registryRef.current = registry
       if (doReveal && idx >= 0) reveal(root, found[idx])
     },
     [containerRef, query, hlAll, hlCurrent],
@@ -182,12 +215,19 @@ export function useFindInContainer<T extends HTMLElement>(
   const close = useCallback(() => {
     setVisible(false)
     onVisibleChangeRef.current(false)
-    clearHighlights(hlAll, hlCurrent)
+    clearHighlights(registryRef.current, hlAll, hlCurrent)
+    registryRef.current = undefined
     matchesRef.current = []
     setCount(0)
     setCurrentIndex(-1)
     setQueryState('')
   }, [hlAll, hlCurrent])
+
+  // Unmount without close (editor moved/closed) must drop the ranges too.
+  useLayoutEffect(
+    () => () => clearHighlights(registryRef.current, hlAll, hlCurrent),
+    [hlAll, hlCurrent],
+  )
 
   const move = useCallback(
     (delta: number) => {
@@ -196,8 +236,10 @@ export function useFindInContainer<T extends HTMLElement>(
       const idx = (currentIndexRef.current + delta + found.length) % found.length
       currentIndexRef.current = idx
       setCurrentIndex(idx)
-      applyHighlights(found, idx, hlAll, hlCurrent)
       const root = containerRef.current
+      // Container unmounted mid-navigation: fall back to a match's own document.
+      const anchor = root ?? found[0]?.node
+      if (anchor) registryRef.current = applyHighlights(anchor, found, idx, hlAll, hlCurrent)
       if (root) reveal(root, found[idx])
     },
     [containerRef, hlAll, hlCurrent],

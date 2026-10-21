@@ -101,6 +101,17 @@ class FakeHost implements IHostServiceWire {
   writeClipboardImage(): Promise<void> {
     return Promise.resolve()
   }
+  clipboardText = ''
+  readonly writeText = vi.fn((text: string) => {
+    this.clipboardText = text
+  })
+  writeClipboardText(text: string): Promise<void> {
+    this.writeText(text)
+    return Promise.resolve()
+  }
+  readClipboardText(): Promise<string> {
+    return Promise.resolve(this.clipboardText)
+  }
   showSaveFileDialog(): Promise<null> {
     return Promise.resolve(null)
   }
@@ -203,6 +214,14 @@ describe('IHostService proxy', () => {
     expect(h.fake.close).toHaveBeenCalledTimes(1)
     expect(h.fake.restartWindow).toHaveBeenCalledTimes(1)
     expect(h.fake.devTools).toHaveBeenCalledTimes(1)
+    h.dispose()
+  })
+
+  it('forwards text clipboard calls to the server implementation', async () => {
+    const h = setup()
+    await h.proxy.writeClipboardText('copied')
+    expect(h.fake.writeText).toHaveBeenCalledWith('copied')
+    await expect(h.proxy.readClipboardText()).resolves.toBe('copied')
     h.dispose()
   })
 

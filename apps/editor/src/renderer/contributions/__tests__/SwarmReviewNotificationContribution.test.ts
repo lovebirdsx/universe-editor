@@ -525,6 +525,41 @@ describe('SwarmReviewNotificationContribution', () => {
       expect(dashboardCalls()).toBe(baseline + 1)
       t.dispose()
     })
+
+    it('covers auxiliary windows and merges simultaneous foregrounding into one poll', async () => {
+      const t = await setup({ config: { 'perforce.swarm.pollInterval': 10 } })
+      const dashboardCalls = () =>
+        t.executeCommand.mock.calls.filter((c) => c[0] === 'perforce.swarm.dashboard').length
+      // Same fresh module graph as the contribution (vi.resetModules ran in setup).
+      const windows = await import('../../services/windows/workbenchDocuments.js')
+      const auxDoc = document.implementation.createHTMLDocument('aux')
+      Object.defineProperty(auxDoc, 'visibilityState', { value: 'visible', configurable: true })
+      Object.defineProperty(auxDoc, 'defaultView', {
+        value: new EventTarget(),
+        configurable: true,
+      })
+      const registration = windows.registerWorkbenchDocument(auxDoc)
+      try {
+        vi.useFakeTimers()
+        vi.setSystemTime(Date.now() + 11_000)
+        const baseline = dashboardCalls()
+        auxDoc.dispatchEvent(new Event('visibilitychange'))
+        await vi.advanceTimersByTimeAsync(0)
+        expect(dashboardCalls()).toBe(baseline + 1)
+
+        // Main + auxiliary turning visible in the same burst share one 0ms merge
+        // window, so only one catch-up poll runs.
+        vi.setSystemTime(Date.now() + 11_000)
+        const beforeBoth = dashboardCalls()
+        document.dispatchEvent(new Event('visibilitychange'))
+        auxDoc.dispatchEvent(new Event('visibilitychange'))
+        await vi.advanceTimersByTimeAsync(0)
+        expect(dashboardCalls()).toBe(beforeBoth + 1)
+      } finally {
+        registration.dispose()
+        t.dispose()
+      }
+    })
   })
 
   it('does not notify for reviews already present at launch (priming poll)', async () => {

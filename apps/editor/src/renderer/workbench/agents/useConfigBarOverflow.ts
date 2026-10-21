@@ -14,6 +14,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  getOwnerComputedStyle,
+  getOwnerResizeObserver,
+  requestOwnerFrame,
+  type OwnerFrame,
+} from '@universe-editor/workbench-ui'
 import { splitConfigBarOverflow, type ConfigBarEntry } from '../../services/acp/configBarLayout.js'
 
 const EMPTY: ReadonlySet<string> = new Set()
@@ -61,7 +67,7 @@ export function useConfigBarOverflow(entries: readonly ConfigBarEntry[]): {
   const measure = useCallback(() => {
     const items = itemsRef.current
     if (!items) return
-    const gap = parseFloat(getComputedStyle(items).columnGap) || 0
+    const gap = parseFloat(getOwnerComputedStyle(items)?.columnGap ?? '') || 0
     // The ... button stays mounted (hidden via CSS when there is no overflow),
     // so its width can always be reserved by the packing.
     const buttonWidth = overflowRef.current?.offsetWidth ?? 0
@@ -83,12 +89,28 @@ export function useConfigBarOverflow(entries: readonly ConfigBarEntry[]): {
     // fallback; entries are re-measured here too whenever the entry set
     // changes (options arriving async, switching agents).
     measure()
-    if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => requestAnimationFrame(measure))
+    const ResizeObserverCtor = getOwnerResizeObserver(items)
+    if (!ResizeObserverCtor) return
+    let disposed = false
+    const frames = new Set<OwnerFrame>()
+    const schedule = (): void => {
+      if (disposed) return
+      const frame = requestOwnerFrame(items, () => {
+        frames.delete(frame)
+        measure()
+      })
+      frames.add(frame)
+    }
+    const ro = new ResizeObserverCtor(schedule)
     ro.observe(items)
     for (const el of entryElsRef.current.values()) ro.observe(el)
     if (overflowRef.current) ro.observe(overflowRef.current)
-    return () => ro.disconnect()
+    return () => {
+      disposed = true
+      ro.disconnect()
+      for (const frame of frames) frame.cancel()
+      frames.clear()
+    }
   }, [measure, keys])
 
   return { itemsRef, overflowRef, entryRefFor, overflowedKeys }

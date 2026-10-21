@@ -44,6 +44,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { WEBVIEW_BLANK_URL, WEBVIEW_SETUP_MARKER } from '@universe-editor/extensions-common'
 import { IContextKeyService } from '@universe-editor/platform'
+import { getOwnerKeyboardEvent, getOwnerWindow } from '@universe-editor/workbench-ui'
 import { IResourceAccessService } from '../../../shared/ipc/resourceAccessService.js'
 import { WebviewFocusRegistry } from '../../services/editor/WebviewFocusRegistry.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
@@ -101,18 +102,23 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
   // Bridge messages: iframe → host (WebviewService → ext host), and
   // host → iframe (WebviewService.onMessageToWebview → iframe.postMessage).
   useEffect(() => {
+    // The frame's `parent.postMessage` lands on the window that owns the iframe
+    // element — the auxiliary window when this editor lives in one. A listener
+    // on the main window would never fire there. The host is rebuilt when the
+    // editor moves between windows, so resolving once per effect is enough.
+    const messageWindow = getOwnerWindow(iframeRef.current) ?? window
     const onWindowMessage = (e: MessageEvent) => {
       const data = e.data as { [CHANNEL]?: boolean; payload?: unknown } | null
       if (!data || data[CHANNEL] !== true) return
       if (e.source !== iframeRef.current?.contentWindow) return
       panel.postMessageFromWebview(data.payload)
     }
-    window.addEventListener('message', onWindowMessage)
+    messageWindow.addEventListener('message', onWindowMessage)
     const sub = panel.onMessageToWebview((payload) => {
       iframeRef.current?.contentWindow?.postMessage({ [CHANNEL]: true, payload }, '*')
     })
     return () => {
-      window.removeEventListener('message', onWindowMessage)
+      messageWindow.removeEventListener('message', onWindowMessage)
       sub.dispose()
     }
   }, [panel])
@@ -182,21 +188,24 @@ export function WebviewElement({ panel }: { panel: IWebviewPanelModel }) {
   // the iframe (a non-editable surface). Mirrors VSCode's did-keydown replay
   // (workaround for keyboard events not bubbling out of a webview).
   useEffect(() => {
+    const messageWindow = getOwnerWindow(iframeRef.current) ?? window
     const onKeyMessage = (e: MessageEvent) => {
       const data = e.data as { [KEY_CHANNEL]?: boolean; init?: KeyboardEventInit } | null
       if (!data || data[KEY_CHANNEL] !== true || !data.init) return
       if (e.source !== iframeRef.current?.contentWindow) return
       const target = iframeRef.current
       if (!target) return
-      const replay = new KeyboardEvent('keydown', {
+      const KeyboardEventCtor = getOwnerKeyboardEvent(target)
+      if (!KeyboardEventCtor) return
+      const replay = new KeyboardEventCtor('keydown', {
         ...data.init,
         bubbles: true,
         cancelable: true,
       })
       target.dispatchEvent(replay)
     }
-    window.addEventListener('message', onKeyMessage)
-    return () => window.removeEventListener('message', onKeyMessage)
+    messageWindow.addEventListener('message', onKeyMessage)
+    return () => messageWindow.removeEventListener('message', onKeyMessage)
   }, [])
 
   return (

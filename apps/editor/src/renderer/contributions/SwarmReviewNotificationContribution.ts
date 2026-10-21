@@ -50,6 +50,7 @@ import { filterNeedsAction, readSwarmFilterConfig } from '../services/swarm/swar
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
 import { setSwarmNotificationTickHandler } from '../services/swarm/swarmNotificationTick.js'
 import { OpenSwarmReviewAction, OpenSwarmReviewsAction } from '../actions/swarmActions.js'
+import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 const POLL_INTERVAL_MS = 60_000
@@ -139,6 +140,8 @@ export class SwarmReviewNotificationContribution
   private _lastPollCounts: string | undefined
   private _pushRetryTimer: ReturnType<typeof setTimeout> | undefined
   private _pushRetryAttempt = 0
+  /** Coalesces foreground catch-ups when several windows become visible together. */
+  private _foregroundTimer: ReturnType<typeof setTimeout> | undefined
   private readonly _logger: ILogger
 
   constructor(
@@ -211,42 +214,40 @@ export class SwarmReviewNotificationContribution
     // background-throttled (or the host tick chain wedged) long enough that no
     // poll succeeded for over an interval, refreshing on `visible` turns
     // "reviews appear the moment the user comes back" from a throttling side
-    // effect into an explicit guarantee.
-    if (typeof document !== 'undefined') {
-      const onVisibilityChange = () => {
-        if (document.visibilityState !== 'visible') return
-        const elapsedMs = Date.now() - this._lastSuccessfulPollAt
-        if (elapsedMs > this._pollIntervalMs()) {
-          this._logger.info(
-            `window visible after ${Math.round(elapsedMs / 1000)}s without a successful poll → catch-up tick`,
-          )
-          void this.refresh()
+    // effect into an explicit guarantee. Auxiliary windows are separate
+    // documents — each one that becomes visible counts as foregrounding.
+    this._register(
+      installPerWorkbenchDocument((doc) => {
+        const win = doc.defaultView
+        const onVisibilityChange = () => {
+          if (doc.visibilityState !== 'visible') return
+          this._scheduleForegroundCatchUp()
         }
-      }
-      document.addEventListener('visibilitychange', onVisibilityChange)
-      this._register({
-        dispose: () => document.removeEventListener('visibilitychange', onVisibilityChange),
-      })
-    }
-    // The rising-edge soft refresh fired by _notifyNew is a one-shot signal scoped
-    // to this renderer process: requestSwarmReviewsRefresh drops it when the view
-    // isn't mounted (no consumer), and an Emitter cannot reach another
-    // BrowserWindow's renderer. So switching back to the window has no guarantee of
-    // fresh data. This focus listener re-sends a throttled soft refresh, making
-    // "switch to the window and see the latest" an explicit guarantee — and the
-    // soft refresh is cheap: it hits the host-side list cache the background poll
-    // already repopulated (60s TTL).
-    if (typeof window !== 'undefined') {
-      const onFocus = () => {
-        const now = Date.now()
-        if (now - this._lastFocusRefreshAt < FOCUS_REFRESH_MIN_INTERVAL_MS) return
-        this._lastFocusRefreshAt = now
-        this._logger.debug('window focused → soft reviews view refresh')
-        void requestSwarmReviewsRefresh(false)
-      }
-      window.addEventListener('focus', onFocus)
-      this._register({ dispose: () => window.removeEventListener('focus', onFocus) })
-    }
+        // The rising-edge soft refresh fired by _notifyNew is a one-shot signal
+        // scoped to this renderer process: requestSwarmReviewsRefresh drops it
+        // when the view isn't mounted (no consumer), and an Emitter cannot reach
+        // another BrowserWindow's renderer. So switching back to the window has
+        // no guarantee of fresh data. This focus listener re-sends a throttled
+        // soft refresh, making "switch to the window and see the latest" an
+        // explicit guarantee — and the soft refresh is cheap: it hits the
+        // host-side list cache the background poll already repopulated (60s TTL).
+        const onFocus = () => {
+          const now = Date.now()
+          if (now - this._lastFocusRefreshAt < FOCUS_REFRESH_MIN_INTERVAL_MS) return
+          this._lastFocusRefreshAt = now
+          this._logger.debug('window focused → soft reviews view refresh')
+          void requestSwarmReviewsRefresh(false)
+        }
+        doc.addEventListener('visibilitychange', onVisibilityChange)
+        win?.addEventListener('focus', onFocus)
+        return {
+          dispose: () => {
+            doc.removeEventListener('visibilitychange', onVisibilityChange)
+            win?.removeEventListener('focus', onFocus)
+          },
+        }
+      }),
+    )
     // E2E: let a spec drive one poll synchronously (the 60s timer is far too slow
     // for a test, and the window is focused so the OS toast is gated away anyway).
     if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) {
@@ -324,6 +325,21 @@ export class SwarmReviewNotificationContribution
     return seconds > 0 ? Math.max(10, seconds) * 1000 : POLL_INTERVAL_MS
   }
 
+  /** One 0ms merge window: several documents turning visible together (main + a
+   *  restored auxiliary window) must produce one catch-up poll, not one each. */
+  private _scheduleForegroundCatchUp(): void {
+    if (this._foregroundTimer !== undefined) return
+    this._foregroundTimer = setTimeout(() => {
+      this._foregroundTimer = undefined
+      const elapsedMs = Date.now() - this._lastSuccessfulPollAt
+      if (elapsedMs <= this._pollIntervalMs()) return
+      this._logger.info(
+        `window visible after ${Math.round(elapsedMs / 1000)}s without a successful poll → catch-up tick`,
+      )
+      void this.refresh()
+    }, 0)
+  }
+
   private _stop(): void {
     setSwarmNotificationTickHandler(undefined)
     if (this._timer) {
@@ -333,6 +349,10 @@ export class SwarmReviewNotificationContribution
     if (this._pushRetryTimer) {
       clearTimeout(this._pushRetryTimer)
       this._pushRetryTimer = undefined
+    }
+    if (this._foregroundTimer !== undefined) {
+      clearTimeout(this._foregroundTimer)
+      this._foregroundTimer = undefined
     }
   }
 

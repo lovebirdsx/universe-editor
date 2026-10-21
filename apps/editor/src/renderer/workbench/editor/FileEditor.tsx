@@ -14,6 +14,7 @@
 
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { IDisposable, IEditorInput } from '@universe-editor/platform'
+import { cancelOwnerFrame, requestOwnerFrame, type OwnerFrame } from '@universe-editor/workbench-ui'
 import {
   ICommandService,
   IConfigurationService,
@@ -373,8 +374,8 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     fileInputRef.current = fileInput
     if (!monacoNs) return
     let cancelled = false
-    let modelRaf: number | undefined
-    let focusRaf: number | undefined
+    let modelRaf: OwnerFrame | undefined
+    let focusRaf: OwnerFrame | undefined
     // True once applyModel actually ran: guards the cleanup flush — with the
     // swap deferred a frame, cleanup can run while the editor still holds the
     // *previous* input's model, and flushing then would save that file's
@@ -493,7 +494,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
             groupsService.activeGroup.activeEditor === fileInput &&
             !groupsService.activeGroup.lastActivationPreservedFocus
           ) {
-            focusRaf = requestAnimationFrame(() => {
+            focusRaf = requestOwnerFrame(containerRef.current, () => {
               if (cancelled) return
               // 后台窗口的帧可能晚于导航执行，必须重新核对焦点意图，避免抢回旧编辑器。
               const activeGroup = groupsService.activeGroup
@@ -535,8 +536,8 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // (a brief loading frame there is unavoidable).
     const cachedModel = fileInput.peekModel()
     if (cachedModel) {
-      modelRaf = requestAnimationFrame(() => {
-        modelRaf = requestAnimationFrame(() => applyModel(cachedModel))
+      modelRaf = requestOwnerFrame(containerRef.current, () => {
+        modelRaf = requestOwnerFrame(containerRef.current, () => applyModel(cachedModel))
       })
     } else {
       void fileInput.resolveModel().then(applyModel)
@@ -544,8 +545,8 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
     return () => {
       cancelled = true
-      if (modelRaf !== undefined) cancelAnimationFrame(modelRaf)
-      if (focusRaf !== undefined) cancelAnimationFrame(focusRaf)
+      if (modelRaf !== undefined) cancelOwnerFrame(modelRaf)
+      if (focusRaf !== undefined) cancelOwnerFrame(focusRaf)
       // Final flush before this input is swapped out or component unmounts.
       flushViewState()
       contentSub?.dispose()
@@ -569,10 +570,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     if (activeGroup.lastActivationPreservedFocus) return
     // Deferred a frame for the same reason as the model-swap focus: a sync
     // focus here on the switch frame forces a wasted relayout of a large file.
-    const raf = requestAnimationFrame(() => {
+    const raf = requestOwnerFrame(containerRef.current, () => {
       if (editorRef.current) focusStandaloneEditor(editorRef.current, contextKeyService)
     })
-    return () => cancelAnimationFrame(raf)
+    return () => cancelOwnerFrame(raf)
   }, [activeGroup, activeGroupActiveEditor, contextKeyService, fileInput, group])
 
   if (!monacoNs) {

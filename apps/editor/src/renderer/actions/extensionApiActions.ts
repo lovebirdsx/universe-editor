@@ -27,6 +27,7 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import {
@@ -227,7 +228,7 @@ export class WriteClipboardAction extends Action2 {
 
   override async run(_accessor: ServicesAccessor, text: unknown): Promise<void> {
     if (typeof text !== 'string' || text === '') return
-    await navigator.clipboard.writeText(text)
+    await writeClipboardText(text)
   }
 }
 

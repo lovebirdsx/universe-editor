@@ -29,6 +29,7 @@
 
 import { useLayoutEffect } from 'react'
 import { ScrollStateCache } from './scrollStateCache.js'
+import { cancelOwnerFrame, requestOwnerFrame, type OwnerFrame } from '../dom/ownerWindow.js'
 
 // Upper bound on how long we keep trying to reapply the saved position. Long
 // enough to outlast an async content hydrate + pane layout, short enough that it
@@ -59,7 +60,7 @@ export function useScrollRestore(
     const saved = persister.load(key)
     const hasTarget = saved !== undefined && saved > 0
 
-    let rafId = 0
+    let frame: OwnerFrame | undefined
     let cancelled = false
     // Cleared to save on cleanup only once we've applied the target (or there's
     // nothing to protect). While a positive target is pending, a cleanup must not
@@ -83,7 +84,8 @@ export function useScrollRestore(
           }
         }
         if (performance.now() - start < RESTORE_WINDOW_MS) {
-          rafId = requestAnimationFrame(tryRestore)
+          // 调度到滚动元素所属的 window；元素尚未挂载时 helper 回退全局 rAF。
+          frame = requestOwnerFrame(el ?? undefined, tryRestore)
         }
       }
       tryRestore()
@@ -91,7 +93,7 @@ export function useScrollRestore(
 
     return () => {
       cancelled = true
-      if (rafId) cancelAnimationFrame(rafId)
+      cancelOwnerFrame(frame)
       // Re-resolve on cleanup: the element captured on mount may have been
       // swapped (e.g. crossing the virtualization threshold) during the view's
       // lifetime, so read the current scroller's position at unmount time.

@@ -158,6 +158,26 @@ export interface IHostService {
    */
   writeClipboardImage(dataBase64: string): Promise<void>
 
+  /**
+   * Write plain text to the OS clipboard via the main-process `clipboard` module.
+   *
+   * The renderer's `navigator.clipboard` is bound to its own document's focus.
+   * Auxiliary editor windows are same-origin popups portaled from the main
+   * renderer, so their code runs in the main realm while the focused document is
+   * the popup — Chromium then rejects the main navigator's write with
+   * NotAllowedError ("Document is not focused"). The main process has no such
+   * gate. Mirrors {@link writeClipboardImage}; an empty string clears the OS
+   * clipboard.
+   */
+  writeClipboardText(text: string): Promise<void>
+
+  /**
+   * Read plain text off the OS clipboard via the main-process `clipboard` module.
+   * Same focus reasoning as {@link writeClipboardText}. Resolves to '' when the
+   * clipboard holds no text (Electron's `clipboard.readText` contract).
+   */
+  readClipboardText(): Promise<string>
+
   /** Application and runtime version info, for the About dialog. */
   getVersionInfo(): Promise<IVersionInfo>
 }

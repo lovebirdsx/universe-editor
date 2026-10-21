@@ -13,6 +13,7 @@ import {
   type IPromptOptions,
 } from '@universe-editor/platform'
 import { FocusScopeOverlay } from '../../overlay/FocusScopeOverlay.js'
+import { copyText } from '../../dom/clipboard.js'
 import { isHTMLElementLike } from '../../dom/domRealm.js'
 import styles from './Dialogs.module.css'
 
@@ -143,7 +144,7 @@ export function ConfirmDialog({
               <button
                 type="button"
                 className={styles['btn']}
-                onClick={() => void navigator.clipboard.writeText(opts.detail ?? '')}
+                onClick={() => copyText(opts.detail ?? '', targetDocument)}
               >
                 {opts.copyButton}
               </button>

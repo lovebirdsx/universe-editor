@@ -23,6 +23,7 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import {
@@ -163,7 +164,7 @@ export class ReportIssueAction extends Action2 {
       opener: accessor.get(IOpenerService),
       quickInput: accessor.get(IQuickInputService),
       configuration: accessor.get(IConfigurationService),
-      writeClipboard: (text) => navigator.clipboard.writeText(text),
+      writeClipboard: (text) => writeClipboardText(text),
     })
   }
 }

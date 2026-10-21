@@ -12,7 +12,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Wallet } from 'lucide-react'
 import { CNY_PER_USD, localize } from '@universe-editor/platform'
-import { isNodeLike } from '@universe-editor/workbench-ui'
+import { cancelOwnerFrame, isNodeLike, requestOwnerFrame } from '@universe-editor/workbench-ui'
 import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import type { AcpModelCost, AcpUsage } from '../../services/acp/session/acpSession.js'
@@ -103,12 +103,12 @@ function SessionCostPopover({
     const handleKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') onDismiss()
     }
-    const raf = requestAnimationFrame(() => {
+    const raf = requestOwnerFrame(doc, () => {
       doc.addEventListener('mousedown', handlePointer)
       doc.addEventListener('keydown', handleKey)
     })
     return () => {
-      cancelAnimationFrame(raf)
+      cancelOwnerFrame(raf)
       doc.removeEventListener('mousedown', handlePointer)
       doc.removeEventListener('keydown', handleKey)
     }

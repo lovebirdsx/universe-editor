@@ -68,11 +68,15 @@ import {
 } from '../../services/acp/session/acpChatViewStateCache.js'
 import {
   CollapsibleSlot,
+  cancelOwnerFrame,
   dispatchKeyboardContextMenu,
   findRowElement,
+  getOwnerResizeObserver,
   isContextMenuKey,
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
+  requestOwnerFrame,
+  type OwnerFrame,
 } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { describeAcpChatSlot, focusSurfaceFromEvent, slotKeyFromEvent } from './chatContextSlot.js'
@@ -1072,7 +1076,7 @@ function ChatScroll({
   // Re-pin across frames until scrollHeight stops growing. Always assigning
   // scrollTop = scrollHeight (never scrollToIndex) keeps the motion monotonic —
   // it only ever moves toward the bottom, so it never overshoots and flickers.
-  const bottomRafRef = useRef<ReturnType<typeof requestAnimationFrame> | undefined>(undefined)
+  const bottomRafRef = useRef<OwnerFrame | undefined>(undefined)
   // The stop() of whichever hand-driven scroll loop currently owns scrollTop
   // (bottom-pin on remount / anchor restore / outline jump). They all fight the
   // estimate→measured shift by setting scrollTop each frame, so only one may run
@@ -1081,7 +1085,7 @@ function ChatScroll({
   const scrollToBottomStable = useCallback(() => {
     const el = containerRef.current
     if (!el) return
-    if (bottomRafRef.current !== undefined) cancelAnimationFrame(bottomRafRef.current)
+    if (bottomRafRef.current !== undefined) cancelOwnerFrame(bottomRafRef.current)
     let tries = 0
     let lastHeight = -1
     const step = (): void => {
@@ -1090,7 +1094,7 @@ function ChatScroll({
       el.scrollTop = el.scrollHeight
       if (el.scrollHeight !== lastHeight && tries++ < 10) {
         lastHeight = el.scrollHeight
-        bottomRafRef.current = requestAnimationFrame(step)
+        bottomRafRef.current = requestOwnerFrame(el, step)
       }
     }
     step()
@@ -1116,7 +1120,7 @@ function ChatScroll({
 
     applyOnce()
 
-    let rafId: number | undefined
+    let rafId: OwnerFrame | undefined
     const startedAt = performance.now()
     const stop = (): void => {
       if (!restoringRef.current) return
@@ -1126,7 +1130,7 @@ function ChatScroll({
       if (vz) {
         vz.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustTimelineScrollOnSizeChange
       }
-      if (rafId !== undefined) cancelAnimationFrame(rafId)
+      cancelOwnerFrame(rafId)
       el.removeEventListener('wheel', stop)
       el.removeEventListener('pointerdown', stop)
       el.removeEventListener('keydown', stop)
@@ -1135,10 +1139,10 @@ function ChatScroll({
       rafId = undefined
       if (!restoringRef.current) return
       applyOnce()
-      if (performance.now() - startedAt < 600) rafId = requestAnimationFrame(tick)
+      if (performance.now() - startedAt < 600) rafId = requestOwnerFrame(el, tick)
       else stop()
     }
-    rafId = requestAnimationFrame(tick)
+    rafId = requestOwnerFrame(el, tick)
     el.addEventListener('wheel', stop, { passive: true })
     el.addEventListener('pointerdown', stop)
     el.addEventListener('keydown', stop)
@@ -1183,7 +1187,7 @@ function ChatScroll({
       stickRef.current = true
       const vz0 = virtualizerRef.current
       if (vz0) vz0.shouldAdjustScrollPositionOnItemSizeChange = () => false
-      let rafId: number | undefined
+      let rafId: OwnerFrame | undefined
       let lastPinnedTop = -1
       const startedAt = performance.now()
       const stop = (): void => {
@@ -1194,7 +1198,7 @@ function ChatScroll({
         if (vz) {
           vz.shouldAdjustScrollPositionOnItemSizeChange = shouldAdjustTimelineScrollOnSizeChange
         }
-        if (rafId !== undefined) cancelAnimationFrame(rafId)
+        cancelOwnerFrame(rafId)
         el.removeEventListener('wheel', stop)
         el.removeEventListener('pointerdown', stop)
         el.removeEventListener('keydown', stop)
@@ -1213,12 +1217,12 @@ function ChatScroll({
         }
         el.scrollTop = el.scrollHeight
         lastPinnedTop = el.scrollTop
-        if (performance.now() - startedAt < 600) rafId = requestAnimationFrame(tick)
+        if (performance.now() - startedAt < 600) rafId = requestOwnerFrame(el, tick)
         else stop()
       }
       el.scrollTop = el.scrollHeight
       lastPinnedTop = el.scrollTop
-      rafId = requestAnimationFrame(tick)
+      rafId = requestOwnerFrame(el, tick)
       el.addEventListener('wheel', stop, { passive: true })
       el.addEventListener('pointerdown', stop)
       el.addEventListener('keydown', stop)
@@ -1262,7 +1266,7 @@ function ChatScroll({
   // because ChatBody keys ChatScroll by it.
   useEffect(() => {
     return () => {
-      if (bottomRafRef.current !== undefined) cancelAnimationFrame(bottomRafRef.current)
+      if (bottomRafRef.current !== undefined) cancelOwnerFrame(bottomRafRef.current)
       persist()
     }
   }, [persist])
@@ -1293,13 +1297,16 @@ function ChatScroll({
     const el = containerRef.current
     if (!el) return
     let prevHeight = el.clientHeight
-    const observer = new ResizeObserver(() => {
-      const h = el.clientHeight
-      if (h < prevHeight && stickRef.current) scrollToBottomStable()
-      prevHeight = h
-    })
-    observer.observe(el)
-    return () => observer.disconnect()
+    const ResizeObserverCtor = getOwnerResizeObserver(el)
+    const observer = ResizeObserverCtor
+      ? new ResizeObserverCtor(() => {
+          const h = el.clientHeight
+          if (h < prevHeight && stickRef.current) scrollToBottomStable()
+          prevHeight = h
+        })
+      : null
+    observer?.observe(el)
+    return () => observer?.disconnect()
   }, [scrollToBottomStable])
 
   // Re-pin when the scroll CONTENT grows asynchronously without a corresponding
@@ -1318,16 +1325,19 @@ function ChatScroll({
     const content = container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')
     if (!content) return
     let prevHeight = content.getBoundingClientRect().height
-    const observer = new ResizeObserver(() => {
-      const h = content.getBoundingClientRect().height
-      // Only chase growth, and only while pinned — a shrink or an out-of-view
-      // change must not yank a user who has scrolled up. restoringRef guards the
-      // restore window, which drives scrollTop by hand.
-      if (h > prevHeight && stickRef.current && !restoringRef.current) scrollToBottomStable()
-      prevHeight = h
-    })
-    observer.observe(content)
-    return () => observer.disconnect()
+    const ResizeObserverCtor = getOwnerResizeObserver(content)
+    const observer = ResizeObserverCtor
+      ? new ResizeObserverCtor(() => {
+          const h = content.getBoundingClientRect().height
+          // Only chase growth, and only while pinned — a shrink or an out-of-view
+          // change must not yank a user who has scrolled up. restoringRef guards the
+          // restore window, which drives scrollTop by hand.
+          if (h > prevHeight && stickRef.current && !restoringRef.current) scrollToBottomStable()
+          prevHeight = h
+        })
+      : null
+    observer?.observe(content)
+    return () => observer?.disconnect()
   }, [virtualize, hasTimelineContent, scrollToBottomStable])
 
   // Writes a per-item collapse override. Idempotent on purpose: the keyboard's

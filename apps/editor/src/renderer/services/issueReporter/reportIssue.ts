@@ -38,7 +38,7 @@ export interface ReportIssueFlowDeps {
   readonly opener: IOpenerService
   readonly quickInput: IQuickInputService
   readonly configuration: IConfigurationService
-  /** Injectable for tests: navigator.clipboard.writeText in the real action. */
+  /** Injectable for tests: the workbench clipboard helper in the real action. */
   readonly writeClipboard: (text: string) => Promise<void>
 }
 

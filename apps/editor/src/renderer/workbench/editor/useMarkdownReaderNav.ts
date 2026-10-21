@@ -16,7 +16,7 @@
 
 import { useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { Emitter, ICommandService, IContextKeyService, type URI } from '@universe-editor/platform'
-import { isElementLike } from '@universe-editor/workbench-ui'
+import { isElementLike, requestOwnerFrame } from '@universe-editor/workbench-ui'
 import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
@@ -193,17 +193,16 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
 
 function revealAnchor(root: HTMLElement, anchor: string): void {
   const startedAt = Date.now()
-  const schedule =
-    typeof requestAnimationFrame === 'function'
-      ? requestAnimationFrame
-      : (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 16)
   const tryReveal = (): void => {
     const target = findMarkdownAnchor(root, anchor)
     if (target) {
       target.scrollIntoView({ block: 'start', behavior: 'smooth' })
       return
     }
-    if (Date.now() - startedAt < ANCHOR_REVEAL_WINDOW_MS) schedule(tryReveal)
+    if (Date.now() - startedAt < ANCHOR_REVEAL_WINDOW_MS) {
+      // 预览可能已在辅助窗口：帧必须排到它所属的 window。
+      requestOwnerFrame(root, tryReveal)
+    }
   }
   tryReveal()
 }

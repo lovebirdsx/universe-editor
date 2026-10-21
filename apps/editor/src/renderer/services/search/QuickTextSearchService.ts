@@ -32,6 +32,8 @@ import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 import { applyEditorSelection } from '../editor/revealEditorPosition.js'
 import { IWindowFocusService } from '../windows/windowFocusService.js'
+import { currentWorkbenchDocumentOrUndefined } from '../windows/workbenchDocuments.js'
+import { requestOwnerFrame } from '@universe-editor/workbench-ui'
 
 export interface IQuickTextSearchService {
   readonly _serviceBrand: undefined
@@ -208,9 +210,11 @@ function toPicks(
   return picks
 }
 
-function nextFrame(): Promise<void> {
+function nextFrame(node: Node | null | undefined): Promise<void> {
   if (typeof requestAnimationFrame === 'function') {
-    return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+    // The quick input (and the editor it reveals into) may be in an auxiliary
+    // window; the main window's frame loop can be throttled while it is behind.
+    return new Promise((resolve) => requestOwnerFrame(node, () => resolve()))
   }
   return Promise.resolve()
 }
@@ -550,7 +554,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     }
 
     if (reveal()) return
-    await nextFrame()
+    await nextFrame(currentWorkbenchDocumentOrUndefined())
     if (reveal()) return
     await delay(50)
     reveal()

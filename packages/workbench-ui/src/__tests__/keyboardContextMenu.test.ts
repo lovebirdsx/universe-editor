@@ -47,6 +47,37 @@ describe('keyboardContextMenu', () => {
     container.remove()
   })
 
+  it('constructs the dispatched event with the target document’s MouseEvent', () => {
+    // A contextmenu dispatched into an auxiliary window must be an event of that
+    // realm: the main window's constructor is what the component's realm would
+    // reach for, and listeners in the auxiliary document never see it.
+    const doc = document.implementation.createHTMLDocument('aux')
+    let constructed = 0
+    class OwnerMouseEvent extends MouseEvent {
+      constructor(type: string, init?: MouseEventInit) {
+        super(type, init)
+        constructed++
+      }
+    }
+    Object.defineProperty(doc, 'defaultView', {
+      value: { MouseEvent: OwnerMouseEvent },
+      configurable: true,
+    })
+    const row = doc.createElement('div')
+    row.getBoundingClientRect = () => ({ left: 1, top: 2, bottom: 3 }) as DOMRect
+    doc.body.appendChild(row)
+    let seen: MouseEvent | undefined
+    row.addEventListener('contextmenu', (e) => {
+      seen = e as MouseEvent
+    })
+
+    dispatchKeyboardContextMenu(row, true)
+
+    expect(constructed).toBe(1)
+    expect(seen!.clientY).toBe(3)
+    expect(isKeyboardContextMenu(seen!)).toBe(true)
+  })
+
   it('reads the marker through a React synthetic wrapper too', () => {
     const row = document.createElement('div')
     row.getBoundingClientRect = () => ({ left: 0, top: 0, bottom: 0 }) as DOMRect

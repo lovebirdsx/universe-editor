@@ -219,9 +219,13 @@ export function PerforceSyncHistoryEditor(_props: { input: IEditorInput }) {
   }, [])
 
   const maxPaneWidth = useCallback((): number => {
-    // `|| window.innerWidth`: a container with no layout yet (or a hidden group)
-    // reports 0, and 0 must not collapse the ceiling to the minimum.
-    const available = bodyRef.current?.clientWidth || window.innerWidth
+    // A container with no layout yet (or a hidden group) reports 0, and 0 must
+    // not collapse the ceiling to the minimum. Prefer the owning window's width
+    // (this editor may be in an auxiliary window), main window last.
+    const available =
+      bodyRef.current?.clientWidth ||
+      bodyRef.current?.ownerDocument.defaultView?.innerWidth ||
+      window.innerWidth
     return Math.max(MIN_LIST_PANE_WIDTH, Math.round(available * MAX_LIST_PANE_FRACTION))
   }, [])
 

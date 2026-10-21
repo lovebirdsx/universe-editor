@@ -28,7 +28,13 @@ import {
 import { createPortal } from 'react-dom'
 import { Check, Copy, X } from 'lucide-react'
 import { IHostService, localize } from '@universe-editor/platform'
-import { isNodeLike, useOwnerDocument } from '@universe-editor/workbench-ui'
+import {
+  cancelOwnerFrame,
+  isNodeLike,
+  requestOwnerFrame,
+  useOwnerDocument,
+  type OwnerFrame,
+} from '@universe-editor/workbench-ui'
 import { toPngBase64 } from '../../services/acp/promptImage.js'
 import { useOptionalService } from '../useService.js'
 import styles from './agents.module.css'
@@ -263,14 +269,14 @@ function ImagePreviewPopover({
     if (popover) setPlacement(computePlacement(anchor, popover, nextSize))
   }, [anchorRef, onDismiss])
 
-  const retrackRaf = useRef<number | undefined>(undefined)
+  const retrackRaf = useRef<OwnerFrame | undefined>(undefined)
   const scheduleRetrack = useCallback(() => {
     if (retrackRaf.current !== undefined) return
-    retrackRaf.current = requestAnimationFrame(() => {
+    retrackRaf.current = requestOwnerFrame(anchorRef.current, () => {
       retrackRaf.current = undefined
       retrack()
     })
-  }, [retrack])
+  }, [anchorRef, retrack])
 
   useEffect(() => {
     // The preview lives in the thumbnail's document: an auxiliary window's
@@ -296,15 +302,17 @@ function ImagePreviewPopover({
       ev.stopPropagation()
       onDismiss()
     }
-    const raf = requestAnimationFrame(() => {
+    // 监听装在文档所属窗口，帧也必须排到同一个窗口。
+    const raf = requestOwnerFrame(doc, () => {
       doc.addEventListener('mousedown', handlePointer)
       doc.addEventListener('keydown', handleKey, true)
       view.addEventListener('resize', scheduleRetrack)
       view.addEventListener('scroll', scheduleRetrack, true)
     })
     return () => {
-      cancelAnimationFrame(raf)
-      if (retrackRaf.current !== undefined) cancelAnimationFrame(retrackRaf.current)
+      cancelOwnerFrame(raf)
+      cancelOwnerFrame(retrackRaf.current)
+      retrackRaf.current = undefined
       doc.removeEventListener('mousedown', handlePointer)
       doc.removeEventListener('keydown', handleKey, true)
       view.removeEventListener('resize', scheduleRetrack)

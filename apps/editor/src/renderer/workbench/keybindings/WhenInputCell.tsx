@@ -33,7 +33,7 @@ import {
   useFloating,
 } from '@floating-ui/react'
 import { localize } from '@universe-editor/platform'
-import { PopoverList, useOwnerDocument } from '@universe-editor/workbench-ui'
+import { PopoverList, requestOwnerFrame, useOwnerDocument } from '@universe-editor/workbench-ui'
 import {
   collectKnownContextKeys,
   type IKnownContextKey,
@@ -125,7 +125,7 @@ export function WhenInputCell({
     setValue(next)
     setCursor(nextCursor)
     setActiveIndex(0)
-    requestAnimationFrame(() => {
+    requestOwnerFrame(inputRef.current, () => {
       inputRef.current?.setSelectionRange(nextCursor, nextCursor)
     })
   }

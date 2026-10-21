@@ -49,7 +49,15 @@ import {
   type IProgressStepDto,
   type ISaveDialogOptionsDto,
 } from '@universe-editor/extensions-common'
-import { isWindowFocused } from '../../workbench/domUtils.js'
+import { readClipboardText, writeClipboardText } from '@universe-editor/workbench-ui'
+import { isDocumentFocused } from '../../workbench/domUtils.js'
+import {
+  currentWorkbenchDocumentOrUndefined,
+  getWorkbenchDocuments,
+  onDidAddWorkbenchDocument,
+  onDidRemoveWorkbenchDocument,
+} from '../windows/workbenchDocuments.js'
+import { installPerWorkbenchDocument } from '../windows/workbenchDocumentEvents.js'
 
 function mapSeverity(severity: ExtHostMessageSeverity): Severity {
   return severity === 'error'
@@ -110,16 +118,25 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   ) {
     super()
     this._focused = this._computeFocused()
-    window.addEventListener('focus', this._onFocusChange)
-    window.addEventListener('blur', this._onFocusChange)
-    document.addEventListener('visibilitychange', this._onFocusChange)
+    // Focus/visibility is per workbench window: the extension-visible "focused"
+    // state is true while ANY editor window (main or auxiliary) is focused.
     this._register(
-      toDisposable(() => {
-        window.removeEventListener('focus', this._onFocusChange)
-        window.removeEventListener('blur', this._onFocusChange)
-        document.removeEventListener('visibilitychange', this._onFocusChange)
+      installPerWorkbenchDocument((doc) => {
+        const win = doc.defaultView
+        const onChange = (): void => this._onFocusChange()
+        doc.addEventListener('visibilitychange', onChange)
+        win?.addEventListener('focus', onChange)
+        win?.addEventListener('blur', onChange)
+        return toDisposable(() => {
+          doc.removeEventListener('visibilitychange', onChange)
+          win?.removeEventListener('focus', onChange)
+          win?.removeEventListener('blur', onChange)
+        })
       }),
     )
+    // Closing or opening a window changes the aggregate without any focus event.
+    this._register(onDidAddWorkbenchDocument(() => this._onFocusChange()))
+    this._register(onDidRemoveWorkbenchDocument(() => this._onFocusChange()))
   }
 
   private readonly _onFocusChange = (): void => {
@@ -130,7 +147,11 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   }
 
   private _computeFocused(): boolean {
-    return isWindowFocused()
+    const documents = getWorkbenchDocuments()
+    if (documents.length === 0) {
+      return isDocumentFocused(currentWorkbenchDocumentOrUndefined())
+    }
+    return documents.some((doc) => isDocumentFocused(doc))
   }
 
   /** Seed the host's window focus state once at connect, before any activation. */
@@ -307,11 +328,11 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   }
 
   $clipboardReadText(): Promise<string> {
-    return navigator.clipboard.readText()
+    return readClipboardText()
   }
 
   $clipboardWriteText(value: string): Promise<void> {
-    return navigator.clipboard.writeText(value)
+    return writeClipboardText(value)
   }
 
   $openExternal(target: string): Promise<boolean> {

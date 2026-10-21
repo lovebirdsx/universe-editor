@@ -59,8 +59,10 @@ import {
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
 import {
+  copyText,
   createKeyboardContextMenuEvent,
   isKeyboardContextMenu,
+  writeClipboardText,
 } from '@universe-editor/workbench-ui'
 import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import {
@@ -1311,7 +1313,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
               id: 'copyHash',
               icon: 'copy',
               label: localize('gitGraph.copyHash', 'Copy commit hash'),
-              run: () => void navigator.clipboard?.writeText(hash),
+              run: () => copyText(hash),
             },
           ],
         })
@@ -1426,7 +1428,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           id: 'copyHash',
           icon: 'copy',
           label: localize('gitGraph.copyHash', 'Copy commit hash'),
-          run: () => void navigator.clipboard?.writeText(hash),
+          run: () => copyText(hash),
         },
         {
           kind: 'item',
@@ -1435,7 +1437,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
           run: async () => {
             const body = await fullMessages.load(hash)
-            await navigator.clipboard?.writeText(body ?? commit.message)
+            await writeClipboardText(body ?? commit.message)
           },
         },
         { kind: 'sep' },
@@ -1479,7 +1481,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           id: 'copyBranchName',
           icon: 'copy',
           label: localize('gitGraph.copyBranchName', 'Copy branch name'),
-          run: () => void navigator.clipboard?.writeText(name),
+          run: () => copyText(name),
         },
         { kind: 'sep' },
         {
@@ -1655,7 +1657,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           id: 'copyBranchName',
           icon: 'copy',
           label: localize('gitGraph.copyBranchName', 'Copy branch name'),
-          run: () => void navigator.clipboard?.writeText(name),
+          run: () => copyText(name),
         },
         { kind: 'sep' },
         {
@@ -2049,7 +2051,7 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           id: 'copyPath',
           icon: 'copy',
           label: localize('gitGraph.worktree.copyPath', 'Copy worktree path'),
-          run: () => void navigator.clipboard?.writeText(path),
+          run: () => copyText(path),
         },
       )
       // Sync other worktrees onto this one's branch (git reset --hard <branch>).

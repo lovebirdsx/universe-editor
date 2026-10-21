@@ -34,6 +34,7 @@ import {
   useOwnedTreeModel,
   isKeyboardContextMenu,
   resourceDragProps,
+  copyText,
   selectionDragUris,
   type ITreeDataSource,
   type ITreeRowRenderContext,
@@ -432,7 +433,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           id: 'copy',
           icon: 'copy',
           label: localize('search.menu.copy', 'Copy'),
-          run: () => void navigator.clipboard?.writeText(n.match.preview.trim()),
+          run: () => copyText(n.match.preview.trim()),
         })
         if (onDismissMatch)
           items.push({
@@ -446,16 +447,13 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           id: 'copyPath',
           icon: 'copy',
           label: localize('search.menu.copyPath', 'Copy Path'),
-          run: () => void navigator.clipboard?.writeText(resourceDisplayPath(n.resource)),
+          run: () => copyText(resourceDisplayPath(n.resource)),
         })
         items.push({
           id: 'copyAll',
           icon: 'copy',
           label: localize('search.menu.copyAll', 'Copy All'),
-          run: () =>
-            void navigator.clipboard?.writeText(
-              n.fileMatch.matches.map((m) => m.preview.trim()).join('\n'),
-            ),
+          run: () => copyText(n.fileMatch.matches.map((m) => m.preview.trim()).join('\n')),
         })
         if (onDismissFile)
           items.push({
@@ -469,7 +467,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           id: 'copyPath',
           icon: 'copy',
           label: localize('search.menu.copyPath', 'Copy Path'),
-          run: () => void navigator.clipboard?.writeText(n.relPath),
+          run: () => copyText(n.relPath),
         })
       }
       if (items.length > 0)

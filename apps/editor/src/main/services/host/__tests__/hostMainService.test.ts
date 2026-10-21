@@ -31,6 +31,12 @@ vi.mock('electron', async () => {
     shell: {},
     nativeImage: {},
     nativeTheme,
+    clipboard: {
+      readImage: vi.fn(() => ({ isEmpty: () => true })),
+      writeImage: vi.fn(),
+      readText: vi.fn(() => ''),
+      writeText: vi.fn(),
+    },
     Notification: { isSupported: () => false },
   }
 })

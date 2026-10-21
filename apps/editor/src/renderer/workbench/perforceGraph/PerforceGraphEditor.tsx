@@ -61,6 +61,7 @@ import {
   type ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
 import {
+  copyText,
   createKeyboardContextMenuEvent,
   isKeyboardContextMenu,
   Spinner,
@@ -1337,14 +1338,14 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
           id: 'copyId',
           icon: 'copy',
           label: localize('perforceGraph.copyId', 'Copy changelist number'),
-          run: () => void navigator.clipboard?.writeText(id),
+          run: () => copyText(id),
         },
         {
           kind: 'item',
           id: 'copyMessage',
           icon: 'copy',
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
-          run: () => void navigator.clipboard?.writeText(change.body || change.message),
+          run: () => copyText(change.body || change.message),
         },
         { kind: 'sep' },
         {

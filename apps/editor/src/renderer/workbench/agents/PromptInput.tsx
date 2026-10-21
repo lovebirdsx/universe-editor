@@ -53,6 +53,7 @@ import {
   dragContainsResources,
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
+  requestOwnerFrame,
 } from '@universe-editor/workbench-ui'
 import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
 import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
@@ -237,6 +238,12 @@ export function PromptInput({
   // The React-owned host div wrapping the Monaco editor. Paste listens here
   // (outside Monaco's editContext DOM — see onPromptPaste).
   const dropHostRef = useRef<HTMLDivElement | null>(null)
+  // Focus/caret restores must land on the frame loop of the window this input
+  // lives in — it may have been moved to an auxiliary window.
+  const requestFrame = useCallback(
+    (callback: FrameRequestCallback) => requestOwnerFrame(dropHostRef.current, callback),
+    [],
+  )
   // Saves the in-progress draft text when the user enters history navigation mode,
   // so Escape / Down-past-end restores it.
   const historyDraftRef = useRef('')
@@ -465,7 +472,7 @@ export function PromptInput({
       if (id === session.id) pull()
     })
     return () => sub.dispose()
-  }, [session.id, editorReady])
+  }, [session.id, editorReady, requestFrame])
 
   // Drain any plain-text snippets a command (e.g. Git Graph's "Send to Agent
   // Chat") deposited for this session, appending them to the textarea and moving
@@ -480,14 +487,14 @@ export function PromptInput({
       const joined = incoming.join('\n')
       const next = prev ? `${prev}\n${joined}` : joined
       el?.setText(next, next.length)
-      requestAnimationFrame(() => el?.focus())
+      requestFrame(() => el?.focus())
     }
     pull()
     const sub = AcpPromptTextInbox.onDidDeposit((id) => {
       if (id === session.id) pull()
     })
     return () => sub.dispose()
-  }, [session.id, editorReady])
+  }, [session.id, editorReady, requestFrame])
 
   // Drain any replacement text the Rewind command deposited (edit-and-retry):
   // unlike the append inbox above this OVERWRITES the draft, since the turn it
@@ -504,14 +511,14 @@ export function PromptInput({
       el?.clearRefs()
       setContexts(replacement.contexts)
       setImages([])
-      requestAnimationFrame(() => el?.focus())
+      requestFrame(() => el?.focus())
     }
     pull()
     const sub = AcpPromptReplaceInbox.onDidDeposit((id) => {
       if (id === session.id) pull()
     })
     return () => sub.dispose()
-  }, [session.id, editorReady])
+  }, [session.id, editorReady, requestFrame])
 
   // Cancel restore (Claude Code CLI parity): a user-initiated cancel with an
   // in-flight turn fires session.onDidCancelForRestore — restore the stashed
@@ -530,10 +537,10 @@ export function PromptInput({
       el.restoreRefs(draft.refs ?? [])
       setContexts(draft.contexts ?? [])
       setImages(draft.images ?? [])
-      requestAnimationFrame(() => el.focus())
+      requestFrame(() => el.focus())
     })
     return () => sub.dispose()
-  }, [session, session.id, editorReady, contexts, images])
+  }, [session, session.id, editorReady, contexts, images, requestFrame])
 
   // On mount, restore the saved caret position into the textarea DOM so the
   // cursor lands at the right spot when the user refocuses after switching
@@ -961,14 +968,14 @@ export function PromptInput({
     editorHandleRef.current?.setText(insert + after, insert.length)
     setSlashDismissed(true)
     setSlashIndex(0)
-    requestAnimationFrame(() => editorHandleRef.current?.focus())
+    requestFrame(() => editorHandleRef.current?.focus())
   }
 
   const acceptMention = (entry: MentionFileEntry, q: ActiveMentionQuery): void => {
     editorHandleRef.current?.insertRef(mentionEntryToRef(entry, 'file'), q.startIndex, q.endIndex)
     setMentionDismissed(true)
     setMentionIndex(0)
-    requestAnimationFrame(() => editorHandleRef.current?.focus())
+    requestFrame(() => editorHandleRef.current?.focus())
   }
 
   // `selection` entries route to the existing chip mechanism (setContexts) —
@@ -987,7 +994,7 @@ export function PromptInput({
       setContexts((prev) => mergeContexts(prev, [entry.selection]))
       setHashDismissed(true)
       setHashIndex(0)
-      requestAnimationFrame(() => editorHandleRef.current?.focus())
+      requestFrame(() => editorHandleRef.current?.focus())
       return
     }
     if (entry.item.kind === 'commit') {
@@ -1000,7 +1007,7 @@ export function PromptInput({
       const picker = instantiation.createInstance(CommitRefPicker)
       void picker.pick().then((ref) => {
         if (ref) editorHandleRef.current?.insertRef(ref, caret, caret)
-        requestAnimationFrame(() => editorHandleRef.current?.focus())
+        requestFrame(() => editorHandleRef.current?.focus())
       })
       return
     }
@@ -1022,14 +1029,14 @@ export function PromptInput({
         .chatContext.resolve(handle, q.query, mentionRoot?.fsPath)
         .then((item) => {
           if (item) editorHandleRef.current?.insertRef(chatContextItemToRef(item), caret, caret)
-          requestAnimationFrame(() => editorHandleRef.current?.focus())
+          requestFrame(() => editorHandleRef.current?.focus())
         })
       return
     }
     editorHandleRef.current?.insertRef(suggestionItemToRef(entry.item), q.startIndex, q.endIndex)
     setHashDismissed(true)
     setHashIndex(0)
-    requestAnimationFrame(() => editorHandleRef.current?.focus())
+    requestFrame(() => editorHandleRef.current?.focus())
   }
 
   // `@@` opens a file picker, `@#` a folder picker. Strip the two-char trigger
@@ -1069,7 +1076,7 @@ export function PromptInput({
       )?.[0]
       if (!picked) {
         // Cancelled: leave the trigger-stripped buffer, restore focus/caret.
-        requestAnimationFrame(() => {
+        requestFrame(() => {
           const el = editorHandleRef.current
           if (el) {
             el.focus()
@@ -1093,18 +1100,18 @@ export function PromptInput({
         insertStart,
       )
       setMentionDismissed(true)
-      requestAnimationFrame(() => editorHandleRef.current?.focus())
+      requestFrame(() => editorHandleRef.current?.focus())
     },
-    [fileDialog, mentionRoot],
+    [fileDialog, mentionRoot, requestFrame],
   )
 
   const acceptHistory = useCallback((): void => {
     setHistoryOpen(false)
-    requestAnimationFrame(() => {
+    requestFrame(() => {
       const el = editorHandleRef.current
       if (el) el.setSelectionRange(el.getText().length, el.getText().length)
     })
-  }, [])
+  }, [requestFrame])
 
   const restoreHistoryDraft = useCallback((): void => {
     const draft = historyDraftRef.current
@@ -1423,7 +1430,7 @@ export function PromptInput({
       el.insertRef(mentionEntryToRef({ uri: p.uri, relPath: p.name }, 'file'), at, at)
     }
     setMentionDismissed(true)
-    requestAnimationFrame(() => el.focus())
+    requestFrame(() => el.focus())
   }
 
   // Safety net for the drop-highlight: a drag can end without ever firing a

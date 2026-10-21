@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '@universe-editor/platform'
+import { currentWorkbenchDocumentOrUndefined } from '../../../services/windows/workbenchDocuments.js'
 
 // ---------------------------------------------------------------------------
 // Why this exists (monaco-editor 0.55.1)
@@ -91,7 +92,10 @@ class WorkbenchLayoutService {
   focus(): void {
     // Reasonable approximation of StandaloneLayoutService.focus(): give
     // keyboard focus back to whatever element monaco thinks is active.
-    ;(document.activeElement as HTMLElement | null)?.focus?.()
+    // The active editor may live in an auxiliary window, so read that window's
+    // document rather than the main realm's global one.
+    const active = currentWorkbenchDocumentOrUndefined()?.activeElement
+    ;(active as HTMLElement | null)?.focus?.()
   }
 }
 

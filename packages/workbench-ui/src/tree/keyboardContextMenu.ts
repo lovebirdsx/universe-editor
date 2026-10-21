@@ -12,6 +12,8 @@
  *  with the first entry highlighted.
  *--------------------------------------------------------------------------------------------*/
 
+import { getOwnerMouseEvent } from '../dom/ownerWindow.js'
+
 /**
  * Contextmenu events synthesized from a key press. They cannot be told apart by
  * `detail` — the synthetic event deliberately claims `detail: 1` to get past the
@@ -37,6 +39,8 @@ export function isKeyboardContextMenu(e: Event | { nativeEvent: Event }): boolea
  * it would for a real right-click.
  */
 export function createKeyboardContextMenuEvent(clientX: number, clientY: number): MouseEvent {
+  // 这个事件从不进入 DOM：宿主只读坐标并用 isKeyboardContextMenu 判来源，
+  // 没有 owner 元素可借 realm；需要 dispatch 的路径走 dispatchKeyboardContextMenu。
   const event = new MouseEvent('contextmenu', { cancelable: true, detail: 1, clientX, clientY })
   keyboardContextMenuEvents.add(event)
   return event
@@ -48,8 +52,10 @@ export function createKeyboardContextMenuEvent(clientX: number, clientY: number)
  * empty-area menu with no focused row).
  */
 export function dispatchKeyboardContextMenu(target: HTMLElement, isRow: boolean): void {
+  const MouseEventCtor = getOwnerMouseEvent(target)
+  if (!MouseEventCtor) return
   const rect = target.getBoundingClientRect()
-  const event = new MouseEvent('contextmenu', {
+  const event = new MouseEventCtor('contextmenu', {
     bubbles: true,
     cancelable: true,
     // detail 1 marks the event as mouse-like so the detail-0 guards that swallow

@@ -8,7 +8,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { localize } from '@universe-editor/platform'
-import { Button } from '@universe-editor/workbench-ui'
+import { Button, getOwnerResizeObserver } from '@universe-editor/workbench-ui'
 import type { SwarmCommentDto, SwarmTaskState } from '@universe-editor/extensions-common'
 import styles from './SwarmInlineThread.module.css'
 
@@ -61,9 +61,10 @@ export function SwarmInlineThread({
     if (!el) return
     const report = () => onHeight(el.offsetHeight + 8)
     report()
-    const ro = new ResizeObserver(report)
-    ro.observe(el)
-    return () => ro.disconnect()
+    const ResizeObserverCtor = getOwnerResizeObserver(el)
+    const ro = ResizeObserverCtor ? new ResizeObserverCtor(report) : null
+    ro?.observe(el)
+    return () => ro?.disconnect()
   }, [onHeight, comments.length, composing])
 
   useEffect(() => {

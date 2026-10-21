@@ -43,6 +43,12 @@ import {
   isKeyupContextMenuSupplement,
 } from './keyboardContextMenu.js'
 import { useTreeModel } from './useTreeModel.js'
+import {
+  cancelOwnerFrame,
+  getOwnerResizeObserver,
+  requestOwnerFrame,
+  type OwnerFrame,
+} from '../dom/ownerWindow.js'
 
 const PAGE_STEP = 10
 const DEFAULT_ROW_HEIGHT = 22
@@ -240,7 +246,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     // is confirmed visible against a laid-out viewport.
     let attempt = 0
     let cancelled = false
-    let rafId = 0
+    let frame: OwnerFrame | undefined
     const tryScroll = (): void => {
       if (cancelled) return
       attempt += 1
@@ -278,7 +284,7 @@ export function Tree<T>(props: ITreeProps<T>) {
         // frame when layout has settled. A genuinely visible row confirms when
         // the retried attempt still needs no scroll.
         if (viewport >= scroller.scrollHeight && attempt < 10) {
-          rafId = requestAnimationFrame(tryScroll)
+          frame = requestOwnerFrame(scroller, tryScroll)
         }
         return
       }
@@ -287,7 +293,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     tryScroll()
     return () => {
       cancelled = true
-      cancelAnimationFrame(rafId)
+      cancelOwnerFrame(frame)
     }
     // sizeAt 身份恒定后必须显式依赖 structureVersion：只被展开带出来的目标行要等结构变化重跑；
     // 同一 id 的重复 reveal 仍由 revealRequest 里的 tick 触发。
@@ -302,7 +308,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     start: number
     end: number
   } | null>(null)
-  const windowRafRef = useRef(0)
+  const windowFrameRef = useRef<OwnerFrame | undefined>(undefined)
 
   const emitVisibleWindow = useStableCallback((): void => {
     const scroller = containerRef.current
@@ -354,9 +360,11 @@ export function Tree<T>(props: ITreeProps<T>) {
   })
 
   const scheduleVisibleWindow = useStableCallback((): void => {
-    if (windowRafRef.current !== 0) return
-    windowRafRef.current = requestAnimationFrame(() => {
-      windowRafRef.current = 0
+    if (windowFrameRef.current !== undefined) return
+    const scroller = containerRef.current
+    if (!scroller) return
+    windowFrameRef.current = requestOwnerFrame(scroller, () => {
+      windowFrameRef.current = undefined
       emitVisibleWindow()
     })
   })
@@ -372,19 +380,18 @@ export function Tree<T>(props: ITreeProps<T>) {
     scroller.addEventListener('scroll', scheduleVisibleWindow, { passive: true })
     // A resize fires no scroll event, and it is the only signal when a hidden
     // pane (clientHeight 0, reported as "no rows") comes back.
-    const observer = new ResizeObserver(scheduleVisibleWindow)
-    observer.observe(scroller)
+    const ResizeObserverCtor = getOwnerResizeObserver(scroller)
+    const observer = ResizeObserverCtor ? new ResizeObserverCtor(scheduleVisibleWindow) : null
+    observer?.observe(scroller)
     // The first read is deferred a frame: layout is not committed at mount, and
     // a pre-layout clientHeight can span the whole content (the trap the reveal
     // path documents above).
     scheduleVisibleWindow()
     return () => {
       scroller.removeEventListener('scroll', scheduleVisibleWindow)
-      observer.disconnect()
-      if (windowRafRef.current !== 0) {
-        cancelAnimationFrame(windowRafRef.current)
-        windowRafRef.current = 0
-      }
+      observer?.disconnect()
+      cancelOwnerFrame(windowFrameRef.current)
+      windowFrameRef.current = undefined
       // Forget the last report: a host that toggles the prop off and on must not
       // have the re-attached window suppressed by a stale de-dupe key.
       lastWindowRef.current = null

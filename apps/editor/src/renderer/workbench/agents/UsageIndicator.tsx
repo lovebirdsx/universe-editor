@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CircleAlert, Gauge, RefreshCw, TimerReset, Wallet } from 'lucide-react'
-import { isNodeLike } from '@universe-editor/workbench-ui'
+import { cancelOwnerFrame, isNodeLike, requestOwnerFrame } from '@universe-editor/workbench-ui'
 import {
   constObservable,
   generateUuid,
@@ -276,12 +276,12 @@ function useDismissOnOutside(onDismiss: () => void) {
     const handleKey = (ev: KeyboardEvent) => {
       if (ev.key === 'Escape') onDismiss()
     }
-    const raf = requestAnimationFrame(() => {
+    const raf = requestOwnerFrame(doc, () => {
       doc.addEventListener('mousedown', handlePointer)
       doc.addEventListener('keydown', handleKey)
     })
     return () => {
-      cancelAnimationFrame(raf)
+      cancelOwnerFrame(raf)
       doc.removeEventListener('mousedown', handlePointer)
       doc.removeEventListener('keydown', handleKey)
     }

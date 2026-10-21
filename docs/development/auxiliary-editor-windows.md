@@ -74,7 +74,14 @@ VSCode 的 `INotificationService` / `IProgressService` 是每个 workbench 窗�
 
 platform 的 `part.ts` 不依赖 DOM 类型，因此只读容器的 `ownerDocument` 形状（`{ activeElement: unknown }`），不引入 `instanceof`。`apps/editor/src/renderer/__tests__/domRealmUsage.test.ts` 扫描 `packages/workbench-ui/src` 与 `apps/editor/src/renderer` 的生产代码，禁止对 DOM 构造器做 `instanceof`（`domRealm.ts`、测试与 e2e 除外）。happy-dom 的 `new Window()` 元素构造器与主 realm 共享、但 Document 构造器独立：它能覆盖文档归属语义，元素跨 realm 的 `instanceof` 失败仍无法在单测复现，由真实 Electron e2e（`smoke.auxiliaryEditorWindow.realm.spec.ts`）守护。
 
-**ResizeObserver 必须用元素所属 window 的构造器**（`el.ownerDocument.defaultView.ResizeObserver`）。Blink 在构造时把 observer 注册到该 window 的 `ResizeObserverController`，而 `LocalFrameView::NotifyResizeObservers` 只取**本 frame** `DomWindow` 的 controller：主 realm 构造的 observer 观察辅助 document 元素时，回调只在主窗口的渲染生命周期里投递。辅助窗口最大化遮住主窗口后主 frame 停帧，回调永不触发，Monaco 的内联 px 尺寸停在最大化前，画布只剩旧矩形。已修复 `GridLayout`（`packages/workbench-ui`）与 Monaco `ElementSizeObserver`（monaco patch，覆盖所有 `automaticLayout` 编辑器）；回归用例 `apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`。新增任何驱动布局的 RO 时照此取 owner window。
+**owner-window API 必须用元素所属 window**。RO、rAF、事件构造器、`getComputedStyle` 都绑定 window，跨 realm 借主 window 会静默失效：
+
+- **ResizeObserver**：Blink 在构造时把 observer 注册到该 window 的 `ResizeObserverController`，而 `LocalFrameView::NotifyResizeObservers` 只取**本 frame** `DomWindow` 的 controller：主 realm 构造的 observer 观察辅助 document 元素时，回调只在主窗口的渲染生命周期里投递。辅助窗口最大化遮住主窗口后主 frame 停帧，回调永不触发，Monaco 的内联 px 尺寸停在最大化前，画布只剩旧矩形。已修复 `GridLayout`（`packages/workbench-ui`）与 Monaco `ElementSizeObserver`（monaco patch，覆盖所有 `automaticLayout` 编辑器）；回归用例 `apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`。新增任何驱动布局的 RO 时照此取 owner window。
+- **rAF** 是绑定 window 的 WebIDL 方法，必须 `win.requestAnimationFrame(fn)` 调用，调度与取消必须同一个 window。循环/延迟任务（scroll 收敛、reveal、RO 回调、visible-window）保存 `OwnerFrame` token，cleanup 用 `cancelOwnerFrame`，不要裸 `cancelAnimationFrame`；一次性滚动/选区/focus 恢复同样改走 owner window。
+- **事件构造器**：新建后要 dispatch 进 DOM 的事件（键盘右键菜单的 `contextmenu`）用目标元素 owner window 的构造器，否则辅助 document 收到的是主 realm 事件；从不进入 DOM 的合成事件（`createKeyboardContextMenuEvent`）没有 owner，保留全局构造器并注释原因。
+- **`getComputedStyle`** 必须作为 owner window 的方法调用（`win.getComputedStyle(el)`）。
+
+统一入口是 workbench-ui 的 `dom/ownerWindow.ts`：`getOwnerDocument` / `getOwnerWindow` / `getOwnerResizeObserver` / `getOwnerMouseEvent` / `getOwnerKeyboardEvent` / `getOwnerComputedStyle` / `requestOwnerFrame` / `cancelOwnerFrame`。`requestOwnerFrame` 在 owner window 缺失时依次回退全局 rAF → `setTimeout(0)`，token 的 `cancel()` 绑定实际调度的 window。**被 adopt 进辅助 document 的节点不豁免**（Swarm inline comment、conflict/dirty diff、xterm wrapper）：它们的 JS wrapper 属于创建它的 realm，但 owner-window API 要按节点**当前** `ownerDocument` 解析，因为 DOM 生命周期已经跟到新窗口。
 
 ### 缩放回归测试的冻结边界
 
@@ -89,6 +96,16 @@ Windows 下主/辅助窗口可共享 renderer 进程，CDP `Emulation.setVirtual
 ### 文档级焦点跟踪
 
 `RendererFocusTrackerService` 在构造时订阅主文档，并对之后 `registerWorkbenchDocument` 的每个辅助文档挂 `focusin`/`focusout`，注销时解绑。只盯主文档会让辅助窗口的焦点事件完全缺席，焦点历史与 `settled` 当前项永远停在主窗口。`workbenchFocusRestorer` 读取的是 `currentWorkbenchDocumentOrUndefined()?.activeElement`，不能用全局 `document.activeElement`。
+
+## 文本剪贴板
+
+`navigator.clipboard` 受**调用时文档是否有焦点**约束：辅助窗口聚焦时主文档 `hasFocus()` 为 false，Chromium 以 `NotAllowedError: Document is not focused` 拒绝 `writeText/readText`；而辅助窗口里的组件仍跑在主 realm，裸 `navigator` 指向主窗口的 Navigator。所以「在辅助窗口点复制」会必然失败（`CodeBlock` 曾把错误静默吞掉，表现为点击没反应）。文本剪贴板因此统一走主进程 Electron `clipboard`：
+
+- 契约：`IHostService.writeClipboardText/readClipboardText`（`packages/platform/src/host/hostService.ts`）；main 实现用 Electron `clipboard.writeText/readText`，与焦点无关，和已有的图片剪贴板路径对齐。日志只记字符数，绝不记内容。
+- 调用入口：workbench-ui 的 `dom/clipboard.ts` —— `writeClipboardText` / `readClipboardText` 供需要成功/失败反馈的调用方 `await`，`copyText` 是 fire-and-forget（内部 catch）。`main.tsx` 启动时用 `setClipboardHost(IHostService)` 注入宿主。
+- **禁止新代码直接写 `navigator.clipboard`**：editor 内一律 import helper。workbench-ui 是无 DI 纯组件包，用模块级注入而不是新增服务依赖；未注入宿主时（单测、非 editor 宿主）helper 才回退 `doc?.defaultView?.navigator.clipboard` 或全局 `navigator.clipboard`。
+- 图片剪贴板（`readClipboardImage/writeClipboardImage`）与文件剪贴板（`IFileClipboardService`）不受影响；`PromptInput` 只读 `ClipboardEvent.clipboardData` 的粘贴字节，也不经过这里。
+- e2e 中 OS 剪贴板是跨 worker 的全局资源，覆盖复制行为的用例必须标 `@serial`；断言走 `electronApp.evaluate(({ clipboard }) => clipboard.readText())`。
 
 ## 标签拖放与拖出建窗
 
@@ -148,7 +165,7 @@ main 进程有两处不能只看"当前窗口 id"：
 
 ## 测试与已知限制
 
-- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接）。
+- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。
 - **DevTools 属于主 renderer**：辅助窗口共享主窗口的 JS realm 与 webContents，`toggleDevTools` 只能打开主窗口的开发者工具，无法按辅助窗口分别打开。这是同 renderer 架构的直接结果，不是遗漏；要按窗口调试需等辅助窗口拥有独立 renderer。
 - **Monaco 平台容器仍以主窗口为准**：`monacoWorkbenchLayoutService.mainContainer/activeContainer` 固定返回主 `#root`（`getContainer(window)` 已按目标窗口解析）。monaco 自带的 quick input、无障碍提示等少数走 `activeContainer` 的浮层在辅助窗口中仍会挂到主窗口；编辑器内容浮层与平台 hover 不受影响。完整重构需按 window 维护多容器集合，暂未做。
 - 跨窗口焦点用例在 main 进程猴补 `BrowserWindow.prototype.focus/showInactive` 记录焦点请求，再断言最后一次请求指向辅助窗口（`about:blank`）。silent E2E 下窗口不真正抢焦点，所以断言"请求了哪个窗口"而不是 OS 焦点状态。

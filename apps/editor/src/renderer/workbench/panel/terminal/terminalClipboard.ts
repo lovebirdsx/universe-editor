@@ -1,4 +1,5 @@
 import type { Terminal } from '@xterm/xterm'
+import { readClipboardText, writeClipboardText } from '@universe-editor/workbench-ui'
 
 type ClipboardTerminal = Pick<Terminal, 'getSelection' | 'hasSelection' | 'paste'>
 
@@ -7,8 +8,13 @@ interface TextClipboard {
   writeText(text: string): Promise<void>
 }
 
-function getClipboard(clipboard?: TextClipboard): TextClipboard | undefined {
-  return clipboard ?? globalThis.navigator?.clipboard
+const defaultClipboard: TextClipboard = {
+  readText: () => readClipboardText(),
+  writeText: (text) => writeClipboardText(text),
+}
+
+function getClipboard(clipboard?: TextClipboard): TextClipboard {
+  return clipboard ?? defaultClipboard
 }
 
 export async function copyTerminalSelection(
@@ -18,14 +24,14 @@ export async function copyTerminalSelection(
   if (!term.hasSelection()) return
   const text = term.getSelection()
   if (!text) return
-  await getClipboard(clipboard)?.writeText(text)
+  await getClipboard(clipboard).writeText(text)
 }
 
 export async function pasteClipboardIntoTerminal(
   term: Pick<ClipboardTerminal, 'paste'>,
   clipboard?: TextClipboard,
 ): Promise<void> {
-  const text = await getClipboard(clipboard)?.readText()
+  const text = await getClipboard(clipboard).readText()
   if (text) term.paste(text)
 }
 

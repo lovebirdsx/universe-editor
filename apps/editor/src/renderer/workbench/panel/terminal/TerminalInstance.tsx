@@ -7,7 +7,12 @@ import {
   type ITerminalXtermHolder,
 } from '../../../services/terminal/TerminalXtermService.js'
 import { useService } from '../../useService.js'
-import { dragContainsResources, ListMenu, type ListMenuEntry } from '@universe-editor/workbench-ui'
+import {
+  dragContainsResources,
+  getOwnerResizeObserver,
+  ListMenu,
+  type ListMenuEntry,
+} from '@universe-editor/workbench-ui'
 import { renderMenuIcon } from '../../icons/menuIcon.js'
 import {
   formatPathForTerminal,
@@ -75,11 +80,12 @@ export function TerminalInstance({
     const selectionSub = markAsSingleton(
       holder.onDidChangeSelection(() => setHasSelection(holder.hasSelection())),
     )
-    const observer = new ResizeObserver(() => holder.scheduleFit())
-    observer.observe(host)
+    const ResizeObserverCtor = getOwnerResizeObserver(host)
+    const observer = ResizeObserverCtor ? new ResizeObserverCtor(() => holder.scheduleFit()) : null
+    observer?.observe(host)
 
     return () => {
-      observer.disconnect()
+      observer?.disconnect()
       selectionSub.dispose()
       holder.saveScroll()
       holder.wrapper.remove()
@@ -127,13 +133,13 @@ export function TerminalInstance({
         icon: 'copy',
         label: localize('common.copy', 'Copy'),
         disabled: !hasSelection,
-        run: () => void holderRef.current?.copy(),
+        run: () => void holderRef.current?.copy().catch(() => {}),
       },
       {
         kind: 'item',
         icon: 'paste',
         label: localize('common.paste', 'Paste'),
-        run: () => void holderRef.current?.paste(),
+        run: () => void holderRef.current?.paste().catch(() => {}),
       },
     ],
     [hasSelection],

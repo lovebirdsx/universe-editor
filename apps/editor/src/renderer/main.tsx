@@ -16,6 +16,7 @@ import {
   IEditorGroupsService,
   IFileService,
   IFileWatcherService,
+  IHostService,
   ITextSearchMainService,
   IFocusableRegistry,
   IFocusStackService,
@@ -280,7 +281,7 @@ import {
   ISubscriptionUsageService,
   SubscriptionUsageService,
 } from './services/usage/SubscriptionUsageService.js'
-import { TooltipProvider } from '@universe-editor/workbench-ui'
+import { copyText, setClipboardHost, TooltipProvider } from '@universe-editor/workbench-ui'
 import { resolveShortcut } from './workbench/titlebar/keybindingFormat.js'
 import '@universe-editor/workbench-ui/tokens.css'
 import '@vscode/codicons/dist/codicon.css'
@@ -563,6 +564,10 @@ async function bootstrapWorkbench(): Promise<void> {
   // main-side channel. The full table lives in registerProxyServices.ts.
   const platform = normalizePlatform(window.ipc?.platform)
   registerProxyChannelServices(services, ipcService, platform)
+
+  // 文本剪贴板走主进程：辅助窗口获得焦点时主文档 hasFocus() 为 false，
+  // Chromium 会拒绝 navigator.clipboard；主进程 clipboard 无此门槛。
+  setClipboardHost(services.get(IHostService) as IHostService)
 
   // Single source of truth for resource / path comparison. Binds the host
   // platform once so consumers never thread `platform` through or hand-roll
@@ -866,7 +871,7 @@ async function bootstrapWorkbench(): Promise<void> {
         {
           label: localize('errorToast.copyDetails', 'Copy Details'),
           run: () => {
-            void navigator.clipboard.writeText(`${message}\n\n${detail}`)
+            copyText(`${message}\n\n${detail}`)
           },
         },
       ],
