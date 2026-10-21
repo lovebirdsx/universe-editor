@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import {
   Event,
   type IContextKeyService,
@@ -206,11 +207,11 @@ describe('LayoutService — focus routing', () => {
     }
   }
 
-  function makeProbeViews(): IViewsService {
+  function makeProbeViews(containerId: string = CONTAINER_ID): IViewsService {
     return {
       _serviceBrand: undefined,
       openViewContainer: vi.fn(),
-      getActiveViewContainerId: vi.fn(() => CONTAINER_ID),
+      getActiveViewContainerId: vi.fn(() => containerId),
     } as unknown as IViewsService
   }
 
@@ -230,10 +231,11 @@ describe('LayoutService — focus routing', () => {
     memory: ViewContainerMemoryService = new ViewContainerMemoryService(),
     windowFocus: FakeWindowFocusService = new FakeWindowFocusService(),
     editorGroups: IEditorGroupsService = makeEditorGroups(),
+    views: IViewsService = makeProbeViews(),
   ): LayoutService {
     const svc = new LayoutService(
       makeStorage(),
-      makeProbeViews(),
+      views,
       registry,
       memory as unknown as IViewContainerMemoryService,
       editorGroups,
@@ -355,6 +357,84 @@ describe('LayoutService — focus routing', () => {
 
     expect(viewDescriptors.setViewCollapsed).not.toHaveBeenCalled()
     registered.dispose()
+  })
+
+  // 辅助窗口按 Ctrl+Shift+E 曾先打开“记住的视图”容器：_focusPart 把显式视图
+  // 当成“聚焦该 Part 的上次视图”，于是 openViewContainer() 之后又被改开另一个容器。
+  it('does not re-open a different remembered view when one view is requested', async () => {
+    const containerA = 'workbench.view.rememberedA'
+    const containerB = 'workbench.view.requestedB'
+    const viewA = 'workbench.view.rememberedA.main'
+    const viewB = 'workbench.view.requestedB.main'
+    const registeredA = ViewContainerRegistry.registerViewContainer({
+      id: containerA,
+      label: 'A',
+      icon: 'window',
+      order: 98,
+      location: ViewContainerLocation.SideBar,
+    })
+    const registeredViewA = ViewRegistry.registerView({
+      id: viewA,
+      name: 'A',
+      containerId: containerA,
+      componentKey: 'a.main',
+      order: 1,
+    })
+    const registeredB = ViewContainerRegistry.registerViewContainer({
+      id: containerB,
+      label: 'B',
+      icon: 'window',
+      order: 99,
+      location: ViewContainerLocation.SideBar,
+    })
+    const registeredViewB = ViewRegistry.registerView({
+      id: viewB,
+      name: 'B',
+      containerId: containerB,
+      componentKey: 'b.main',
+      order: 1,
+    })
+    try {
+      const memory = new ViewContainerMemoryService()
+      memory.setLastFocusedView(containerA, viewA)
+      const views = makeProbeViews(containerA)
+      const elementB = { focus: vi.fn() }
+      const registry = {
+        _serviceBrand: undefined,
+        register: vi.fn(() => ({ dispose() {} })),
+        get: vi.fn((id: string) => (id === viewB ? () => elementB : undefined)),
+        onDidChange: Event.None,
+      } as unknown as IFocusableRegistry
+      const svc = newFocusSvc(registry, makeViewDescriptors(), memory, undefined, undefined, views)
+
+      await expect(svc.focusView(viewB, { timeoutMs: 50 })).resolves.toBe(false)
+
+      expect(views.openViewContainer).toHaveBeenCalledWith(containerB)
+      expect(views.openViewContainer).not.toHaveBeenCalledWith(containerA)
+    } finally {
+      registeredViewB.dispose()
+      registeredB.dispose()
+      registeredViewA.dispose()
+      registeredA.dispose()
+    }
+  })
+
+  // 辅助窗口的视图元素通过自己的 document 报告焦点；拿主文档 activeElement
+  // 比较会让每次轮询超时，成功聚焦被误判为失败并触发重试。
+  it("confirms focus using the view element's own document", async () => {
+    const registered = registerProbeView()
+    try {
+      const win = new Window()
+      const doc = win.document
+      const element = doc.createElement('button')
+      doc.body.appendChild(element)
+      const svc = newFocusSvc(makeRegistryFor(element), makeViewDescriptors())
+
+      await expect(svc.focusView(VIEW_ID, { timeoutMs: 50 })).resolves.toBe(true)
+      expect(doc.activeElement).toBe(element)
+    } finally {
+      registered.dispose()
+    }
   })
 
   it('resolves false when no focusable element ever registers', async () => {

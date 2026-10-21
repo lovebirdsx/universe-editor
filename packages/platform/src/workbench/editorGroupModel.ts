@@ -73,7 +73,7 @@ export interface IEditorGroupModel {
    * seeing repeat activations.
    */
   readonly activationId: number
-  /** Whether the most recent activation asked to keep keyboard focus off the editor. */
+  /** 最近一次激活是否要求不把键盘焦点移进编辑器；每次激活都会重写。 */
   readonly lastActivationPreservedFocus: boolean
   /**
    * A locked group does not accept editors opened for a fresh resource: the
@@ -197,11 +197,19 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     this._onDidChangeModel.fire({ kind: 'lock', editor: undefined })
   }
 
+  /**
+   * 窗口激活不是编辑器聚焦请求：标记即将发生的组激活，让焦点处理器保留窗口原有焦点。
+   * 传 false 用于默认的 activatePart 清掉上一次窗口激活留下的意图。
+   */
+  preserveFocusOnActivation(preserve = true): void {
+    this._lastActivationPreservedFocus = preserve
+  }
+
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void {
     const activate = options?.activate !== false
     const makeSticky = options?.sticky === true
     const pinned = options?.pinned !== false || makeSticky
-    this._lastActivationPreservedFocus = options?.preserveFocus === true
+    const preserveFocus = options?.preserveFocus === true
     const existing = this.findEditor(editor)
 
     if (existing) {
@@ -216,7 +224,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
         this._onDidChangeModel.fire({ kind: 'pin', editor: existing })
       }
       if (activate && existing !== this._activeEditor) {
-        this._setActiveInternal(existing)
+        this._setActiveInternal(existing, preserveFocus)
       }
       // The caller handed us ownership of `editor`; when it's a freshly-built
       // duplicate of an already-open input (same identity, different instance —
@@ -261,7 +269,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
           })
           this._editorStore.delete(oldPreview)
           if (activate || wasActive) {
-            this._setActiveInternal(editor)
+            this._setActiveInternal(editor, preserveFocus)
           }
           return
         }
@@ -289,10 +297,10 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     this._onDidChangeModel.fire({ kind: 'open', editor, newIndex: clampedIndex })
 
     if (activate) {
-      this._setActiveInternal(editor)
+      this._setActiveInternal(editor, preserveFocus)
     } else if (this._activeEditor === undefined) {
       // First editor in an empty group is implicitly active.
-      this._setActiveInternal(editor)
+      this._setActiveInternal(editor, preserveFocus)
     }
   }
 
@@ -433,7 +441,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
   setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void {
     const existing = this.findEditor(editor)
     if (!existing) return
-    this._lastActivationPreservedFocus = options?.preserveFocus === true
+    const preserveFocus = options?.preserveFocus === true
     if (existing === this._activeEditor) {
       // Re-activating the editor that is already active still counts as an
       // activation: the caller asked for it (command palette, keybinding, tab
@@ -442,11 +450,12 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       // without it, "open X" while X is already active was a silent no-op and
       // focus stayed wherever it was (sidebar, quick input). Active editor
       // identity is unchanged, so `onDidActiveEditorChange` stays quiet.
+      this._lastActivationPreservedFocus = preserveFocus
       this._activationId++
       this._onDidChangeModel.fire({ kind: 'active', editor: existing })
       return
     }
-    this._setActiveInternal(existing)
+    this._setActiveInternal(existing, preserveFocus)
   }
 
   pinEditor(editor: EditorInput): void {
@@ -518,10 +527,13 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     return this._editors.length > 0 && this._editors[this._editors.length - 1]!.matches(editor)
   }
 
-  private _setActiveInternal(editor: EditorInput | undefined): void {
+  private _setActiveInternal(editor: EditorInput | undefined, preserveFocus = false): void {
     if (this._activeEditor === editor) return
     this._activeEditor = editor
     this._activationId++
+    // 关闭/分离/批量关闭触发的自动激活默认要把焦点交给新编辑器；窗口激活留下的
+    // 意图只对当时那次激活有效，不能粘到后续激活上。
+    this._lastActivationPreservedFocus = preserveFocus
     if (editor) {
       // Move to front of MRU.
       const idx = this._mru.indexOf(editor)

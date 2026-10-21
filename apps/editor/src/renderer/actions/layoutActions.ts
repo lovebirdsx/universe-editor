@@ -32,6 +32,7 @@ import {
   RESIZE_STEP,
 } from '../services/layout/layoutConstraints.js'
 import { IViewPaneResizeRegistry } from '../services/views/viewPaneResizeRegistry.js'
+import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 
 export class ShowExplorerAction extends Action2 {
   static readonly ID = 'workbench.view.explorer'
@@ -53,7 +54,7 @@ export class ShowExplorerAction extends Action2 {
     if (
       sidebarVisible &&
       activeId === 'workbench.view.explorer' &&
-      layoutService.getPart(PartId.SideBar)?.isFocused()
+      isPartFocusedInActiveDocument(layoutService, PartId.SideBar)
     ) {
       layoutService.setVisible(PartId.SideBar, false)
       return
@@ -214,7 +215,7 @@ export class ShowScmAction extends Action2 {
     if (
       sidebarVisible &&
       activeId === 'workbench.view.scm' &&
-      layoutService.getPart(PartId.SideBar)?.isFocused()
+      isPartFocusedInActiveDocument(layoutService, PartId.SideBar)
     ) {
       layoutService.setVisible(PartId.SideBar, false)
       return
@@ -259,7 +260,7 @@ export class ShowExtensionsViewAction extends Action2 {
     if (
       sidebarVisible &&
       activeId === 'workbench.view.extensions' &&
-      layoutService.getPart(PartId.SideBar)?.isFocused()
+      isPartFocusedInActiveDocument(layoutService, PartId.SideBar)
     ) {
       layoutService.setVisible(PartId.SideBar, false)
       return
@@ -302,7 +303,7 @@ const RESIZABLE_PARTS = [
 
 function focusedResizablePart(layout: ILayoutService): PartId | undefined {
   for (const id of RESIZABLE_PARTS) {
-    if (layout.getPart(id)?.isFocused()) return id
+    if (isPartFocusedInActiveDocument(layout, id)) return id
   }
   return undefined
 }

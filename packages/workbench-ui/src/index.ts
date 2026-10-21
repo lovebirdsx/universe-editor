@@ -1,5 +1,6 @@
 export * from './contextView/IContextViewService.js'
 export * from './contextView/ContextViewService.js'
+export * from './dom/domRealm.js'
 export * from './contextMenu/ContextMenu.js'
 export * from './contextMenu/ListMenu.js'
 export * from './hover/HoverService.js'

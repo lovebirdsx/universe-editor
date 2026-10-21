@@ -24,6 +24,11 @@ import type { ILayoutService, PartId } from './layoutService.js'
 export interface IPartContainerElement {
   focus(): void
   contains?(node: unknown): boolean
+  /**
+   * Part 所在窗口的 document。辅助窗口的聚焦状态必须从那里读：另一个窗口
+   * 处于活动状态时，主文档的 activeElement 是陈旧的。
+   */
+  readonly ownerDocument?: { readonly activeElement: unknown } | undefined
 }
 
 export type PartMountState = 'unmounted' | 'mounted'
@@ -138,7 +143,8 @@ export abstract class Part extends Disposable implements IPart {
     const container = this._container
     if (!container) return false
     const g = globalThis as unknown as { document?: { activeElement: unknown } }
-    const active = g.document?.activeElement ?? null
+    const owner = container.ownerDocument ?? g.document
+    const active = owner?.activeElement ?? null
     return typeof container.contains === 'function' && container.contains(active)
   }
 

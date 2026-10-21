@@ -81,8 +81,9 @@ import {
   PartId,
 } from '@universe-editor/platform'
 import { installEditorFocusDerivation } from '../services/editor/editorFocus.js'
-import { closestAttr } from '../services/focus/FocusStackService.js'
+import { closestAttr, closestPartId } from '../services/focus/FocusStackService.js'
 import { installDocumentFocusReconcile } from '../services/focus/documentFocusReconcile.js'
+import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 import { getActiveWorkbenchDocument } from '../services/windows/workbenchDocuments.js'
 
 const PART_KEY_BY_ID: Readonly<Record<PartId, string>> = {
@@ -130,12 +131,22 @@ export class FocusContextKeyContribution extends Disposable implements IWorkbenc
     // true", so the two can never disagree, and a new PartId only has to be added
     // to PART_KEY_BY_ID (a Record<PartId, …>, so the compiler enforces it).
     const reconcile = (): void => {
-      const active = getActiveWorkbenchDocument().activeElement
+      const doc = getActiveWorkbenchDocument()
+      const active = doc.activeElement
       let currentPart = ''
       for (const [id, key] of perPart) {
-        const focused = layoutService.getPart(id)?.isFocused() ?? false
+        const focused = isPartFocusedInActiveDocument(layoutService, id)
         key.set(focused)
         if (focused) currentPart = id
+      }
+      // 辅助窗口只渲染编辑区，且没有注册进主窗口的 Part 注册表；改按活动文档里的
+      // part-* 根标记正向识别。主文档不能走这条兜底，否则未注册的节点会冒充聚焦。
+      if (currentPart === '' && doc !== document) {
+        const auxPart = closestPartId(active)
+        if (auxPart !== undefined) {
+          perPart.get(auxPart)?.set(true)
+          currentPart = auxPart
+        }
       }
       focusedPart.set(currentPart)
       focusedView.set(closestAttr(active, 'data-view-id') ?? '')

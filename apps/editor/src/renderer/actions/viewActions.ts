@@ -16,6 +16,7 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 
 const CATEGORY = localize2('command.category.view', 'View')
 
@@ -59,7 +60,7 @@ async function cycleViewContainer(accessor: ServicesAccessor, delta: 1 | -1): Pr
 
   let location: ViewContainerLocation | undefined
   for (const [partId, loc] of LOCATION_BY_PART) {
-    if (layoutService.getPart(partId)?.isFocused()) {
+    if (isPartFocusedInActiveDocument(layoutService, partId)) {
       location = loc
       break
     }

@@ -276,6 +276,28 @@ describe('Part', () => {
     part.dispose()
   })
 
+  it('isFocused reads the container owner document, not the main one', () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.EditorArea, 'editor', ls)
+    // 辅助窗口的 Part 有自己的 document；读主文档会让所有辅助 Part 都显得
+    // 未聚焦（或错误地依据陈旧 activeElement 显得聚焦），从而翻转焦点键。
+    const active = { id: 'aux-focused' }
+    const ownerDocument = { activeElement: active }
+    const container = {
+      ownerDocument,
+      focus: vi.fn(),
+      contains: (node: unknown) => node === active,
+    }
+    ;(part as unknown as { _attachContainer(e: typeof container | null): void })._attachContainer(
+      container,
+    )
+    expect(part.isFocused()).toBe(true)
+
+    container.contains = () => false
+    expect(part.isFocused()).toBe(false)
+    part.dispose()
+  })
+
   it('_notifyFocusChange fires onDidFocus / onDidBlur', () => {
     const ls = new StubLayoutService()
     const part = new TestPart(PartId.SideBar, 'complementary', ls)

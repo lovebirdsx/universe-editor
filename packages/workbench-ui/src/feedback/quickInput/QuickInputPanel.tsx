@@ -49,6 +49,11 @@ export interface QuickInputPanelProps {
   renderStatusIcon?: RenderQuickIcon | undefined
   /** Resolves a title-button icon id (right edge of the input row). */
   renderTitleButton?: RenderQuickIcon | undefined
+  /**
+   * 面板所在的 document（可能是辅助窗口）。quick-navigate 的按键释放与文本
+   * 测量都必须跟随它，而不是主文档。
+   */
+  targetDocument?: Document | undefined
 }
 
 function wordItemMatches(
@@ -452,11 +457,21 @@ function isQuickNavigateModifierHeld(
   return modifier === 'alt' ? e.altKey && !e.ctrlKey : e.ctrlKey && !e.altKey
 }
 
-let sharedMeasureCanvas: HTMLCanvasElement | undefined
-function measureText(text: string, fontSize: number, fontFamily: string): number {
-  if (typeof document === 'undefined') return 0
-  sharedMeasureCanvas ??= document.createElement('canvas')
-  const ctx = sharedMeasureCanvas.getContext('2d')
+// 每个 document 一个测量 canvas：不同窗口的字体与 realm 不同。
+const measureCanvases = new WeakMap<Document, HTMLCanvasElement>()
+function measureText(
+  doc: Document | undefined,
+  text: string,
+  fontSize: number,
+  fontFamily: string,
+): number {
+  if (!doc) return 0
+  let canvas = measureCanvases.get(doc)
+  if (!canvas) {
+    canvas = doc.createElement('canvas')
+    measureCanvases.set(doc, canvas)
+  }
+  const ctx = canvas.getContext('2d')
   if (!ctx) return 0
   ctx.font = `${fontSize}px ${fontFamily}`
   return ctx.measureText(text).width
@@ -470,7 +485,9 @@ export function QuickPickPanel({
   renderIcon,
   renderStatusIcon,
   renderTitleButton,
+  targetDocument,
 }: QuickInputPanelProps) {
+  const doc = targetDocument ?? (typeof document !== 'undefined' ? document : undefined)
   const prefix = state.prefix ?? ''
   const [query, setQuery] = useState(state.value ?? prefix)
   const quickNavigate = state.quickNavigate
@@ -533,16 +550,16 @@ export function QuickPickPanel({
   // label text lets the trailing status icons line up in a column with no dead
   // space to their right. Other pickers keep the CSS default width.
   const contentWidth = useMemo(() => {
-    if (!hasStatusColumn || typeof document === 'undefined') return undefined
-    const family = getComputedStyle(document.body).fontFamily || 'sans-serif'
+    if (!hasStatusColumn || !doc) return undefined
+    const family = doc.defaultView?.getComputedStyle(doc.body).fontFamily || 'sans-serif'
     let leadMax = 0
     let labelMax = 0
     for (const item of state.items ?? []) {
       if (isSeparator(item)) continue
       if (item.leadingLabel) {
-        leadMax = Math.max(leadMax, measureText(item.leadingLabel, ITEM_FONT, family))
+        leadMax = Math.max(leadMax, measureText(doc, item.leadingLabel, ITEM_FONT, family))
       }
-      labelMax = Math.max(labelMax, measureText(item.label, ITEM_FONT, family))
+      labelMax = Math.max(labelMax, measureText(doc, item.label, ITEM_FONT, family))
     }
     const leadW = leadMax > 0 ? Math.min(LEADING_CAP, Math.ceil(leadMax) + 2) + LEADING_MARGIN : 0
     const labelW = Math.min(LABEL_CAP, Math.ceil(labelMax) + 2)
@@ -551,12 +568,12 @@ export function QuickPickPanel({
     if (state.placeholder) {
       total = Math.max(
         total,
-        ROW_H_PADDING + Math.ceil(measureText(state.placeholder, INPUT_FONT, family)) + 8,
+        ROW_H_PADDING + Math.ceil(measureText(doc, state.placeholder, INPUT_FONT, family)) + 8,
       )
     }
-    const max = (typeof window !== 'undefined' ? window.innerWidth : 1000) * 0.9
+    const max = (doc.defaultView?.innerWidth ?? 1000) * 0.9
     return Math.round(Math.max(MIN_CONTAINER_WIDTH, Math.min(total, max)))
-  }, [hasStatusColumn, hasIconColumn, state.items, state.placeholder])
+  }, [hasStatusColumn, hasIconColumn, state.items, state.placeholder, doc])
 
   // An explicit host width (e.g. the commit picker's trailing author/time
   // column) wins over the measured shrink-to-fit width.
@@ -827,14 +844,16 @@ export function QuickPickPanel({
 
   useEffect(() => {
     if (!locked || quickNavigate === undefined) return
+    const host = targetDocument ?? (typeof document !== 'undefined' ? document : undefined)
+    if (!host) return
     const releaseKey = QUICK_NAVIGATE_MODIFIERS[quickNavigate.modifier].releaseKey
     const onKeyUp = (e: globalThis.KeyboardEvent) => {
       if (e.key !== releaseKey) return
       releaseAcceptRef.current()
     }
-    document.addEventListener('keyup', onKeyUp)
-    return () => document.removeEventListener('keyup', onKeyUp)
-  }, [locked, quickNavigate])
+    host.addEventListener('keyup', onKeyUp)
+    return () => host.removeEventListener('keyup', onKeyUp)
+  }, [locked, quickNavigate, targetDocument])
 
   const PAGE_SIZE = 8
 
@@ -1326,6 +1345,7 @@ export function QuickInputPanel({
   renderIcon,
   renderStatusIcon,
   renderTitleButton,
+  targetDocument,
 }: QuickInputPanelProps) {
   return state.type === 'pick' ? (
     <QuickPickPanel
@@ -1334,6 +1354,7 @@ export function QuickInputPanel({
       renderIcon={renderIcon}
       renderStatusIcon={renderStatusIcon}
       renderTitleButton={renderTitleButton}
+      targetDocument={targetDocument}
     />
   ) : (
     <InputPanel state={state} onClose={onClose} />

@@ -134,6 +134,20 @@ describe('EditorGroupsService — parts', () => {
     expect(svc.activeGroup).toBe(second)
   })
 
+  it('activatePart records the focus intent for that activation and clears stale ones', () => {
+    const svc = new EditorGroupsService()
+    const aux = svc.createAuxiliaryPart({ activate: false })
+    aux.activeGroup.preserveFocusOnActivation?.()
+
+    // 默认 activatePart 不是窗口激活，必须清掉上一次遗留的保留焦点意图。
+    svc.activatePart(aux)
+    expect(aux.activeGroup.lastActivationPreservedFocus).toBe(false)
+
+    svc.activatePart(svc.mainPart)
+    svc.activatePart(aux, { preserveFocus: true })
+    expect(aux.activeGroup.lastActivationPreservedFocus).toBe(true)
+  })
+
   it('findGroup stays inside the source group’s part', () => {
     const svc = new EditorGroupsService()
     const main = svc.mainPart.activeGroup

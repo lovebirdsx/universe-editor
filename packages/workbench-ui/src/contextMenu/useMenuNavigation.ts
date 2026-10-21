@@ -72,6 +72,11 @@ export function useMenuNavigation(
    * "last executed command id" to a path; the hook itself stays id-agnostic.
    */
   initialActivePath?: readonly number[] | undefined,
+  /**
+   * 菜单所在的 document。键盘/悬停 capture 注册在它的 window 上：菜单可能
+   * portal 进辅助窗口，主窗口的监听既看不到也不该接管那些按键。
+   */
+  targetDocument?: Document | undefined,
 ): MenuNavigation {
   // Lazy initializer: `rows` is final on the first render (both flavours resolve
   // synchronously), so the opening highlight lands on the right row without an
@@ -143,12 +148,14 @@ export function useMenuNavigation(
   const hoverArmed = useRef(!autoFocusFirst)
   useEffect(() => {
     if (hoverArmed.current) return
+    const view = targetDocument?.defaultView ?? (typeof window !== 'undefined' ? window : undefined)
+    if (!view) return
     const arm = (): void => {
       hoverArmed.current = true
     }
-    window.addEventListener('mousemove', arm, { once: true, capture: true })
-    return () => window.removeEventListener('mousemove', arm, true)
-  }, [])
+    view.addEventListener('mousemove', arm, { once: true, capture: true })
+    return () => view.removeEventListener('mousemove', arm, true)
+  }, [targetDocument])
 
   const scheduleClose = useCallback(
     (level: number) => {
@@ -237,6 +244,8 @@ export function useMenuNavigation(
   // arrow keys away from whatever tree or list the menu was opened from.
   useEffect(() => {
     if (!enabled) return
+    const view = targetDocument?.defaultView ?? (typeof window !== 'undefined' ? window : undefined)
+    if (!view) return
     const onKeyDown = (e: KeyboardEvent): void => {
       // Mid-composition Enter commits an IME candidate; it is not ours to take.
       if (e.isComposing || e.altKey || e.metaKey) return
@@ -311,9 +320,9 @@ export function useMenuNavigation(
       e.preventDefault()
       e.stopPropagation()
     }
-    window.addEventListener('keydown', onKeyDown, true)
-    return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [enabled, cancelClose, collapse, expand])
+    view.addEventListener('keydown', onKeyDown, true)
+    return () => view.removeEventListener('keydown', onKeyDown, true)
+  }, [enabled, cancelClose, collapse, expand, targetDocument])
 
   return { state, onRowEnter, onCancelClose: cancelClose, onEscape }
 }

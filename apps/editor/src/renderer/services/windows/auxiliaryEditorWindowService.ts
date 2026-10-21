@@ -255,7 +255,7 @@ export class AuxiliaryEditorWindowService
         // when the target is already current, so the two subscriptions cannot
         // ping-pong.
         if (this._groups.activePart === window.part) return
-        this._groups.activatePart(window.part)
+        this._groups.activatePart(window.part, { preserveFocus: true })
       }),
     )
   }
@@ -540,7 +540,7 @@ export class AuxiliaryEditorWindowService
       this._groups.removePart(part, { force: true })
     }
     this._workbenchWindows.setActiveWindow(this._workbenchWindows.mainWindow)
-    this._groups.activatePart(this._groups.mainPart)
+    this._groups.activatePart(this._groups.mainPart, { preserveFocus: true })
     this._windowFocus.focusMainWindow()
   }
 
@@ -674,7 +674,7 @@ export class AuxiliaryEditorWindowService
 
   private _activateEntry(entry: WindowEntry): void {
     this._workbenchWindows.setActiveWindow(entry.window)
-    this._groups.activatePart(entry.part)
+    this._groups.activatePart(entry.part, { preserveFocus: true })
   }
 
   private _cloneForCopy(editor: EditorInput): EditorInput | undefined {
@@ -873,7 +873,9 @@ export class AuxiliaryEditorWindowService
       }
 
       const document = child.document
-      document.title = options.title ?? this._workbenchWindows.mainWindow.document.title
+      // 不复制主工作区标题，否则 Alt+Tab/任务栏出现多个同名窗口；workbench
+      // 挂载后由标题栏同步活动编辑器名。
+      document.title = options.title ?? localize('auxiliaryWindow.windowTitle', 'Editor Window')
       disposables.add(mirrorDocumentChrome(this._workbenchWindows.mainWindow.document, document))
       ensureAuxiliaryRoot(document)
       disposables.add(await registerMonacoWindow(child))

@@ -12,6 +12,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  localize,
   type ILoggerService,
   type INotificationService,
   type IEditorGroupsService,
@@ -193,6 +194,20 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     expect(result.window).toBeUndefined()
     expect(ctx.groups.parts).toHaveLength(1)
     expect(ctx.aux.cancelPrepared).toHaveBeenCalled()
+  })
+
+  it('seeds an empty auxiliary title that is distinguishable from the main window', async () => {
+    // 复制主工作区标题会让 Alt+Tab 出现两个完全相同的条目。
+    const mainTitle = ctx.mainDoc.title
+    const window = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+    expect(window).toBeDefined()
+    expect(ctx.auxDoc.title).not.toBe(mainTitle)
+    expect(ctx.auxDoc.title).toBe(localize('auxiliaryWindow.windowTitle', 'Editor Window'))
+  })
+
+  it('keeps an explicitly requested title', async () => {
+    await ctx.service.createEmptyWindow({ explicitEmpty: true, title: 'Custom' })
+    expect(ctx.auxDoc.title).toBe('Custom')
   })
 
   it('removes a window part it created when the preload marker is missing', async () => {

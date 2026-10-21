@@ -212,6 +212,7 @@ export function ContextMenu({
     autoFocusFirst,
     hasRows,
     initialActivePath,
+    targetDocument,
   )
 
   // An empty menu never opens: report the close so the host drops its state

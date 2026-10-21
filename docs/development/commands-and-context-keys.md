@@ -49,6 +49,8 @@ f1: false,
 
 **设计定论：焦点类 context key 一律从 DOM 派生，禁止任何「由事件记账」的布尔键。** `editorFocus`（`installEditorFocusDerivation`）与逐 Part 布尔键 + `focusedPart` / `focusedView` / `terminalFocus`（`services/focus/documentFocusReconcile.ts` 的 `installDocumentFocusReconcile`：`focusin` 同步重算 / `focusout` 合并成一次 `setTimeout(0)`）皆然——新增嵌入 Monaco **不要再补 `editorFocus` bridge**。唯一保留的记账是 `part.onDidFocus` 作 intent：editor-area / activity-bar / status-bar 三个 Part 根没有 `tabIndex`，`Part.focus()` 的 `container.focus()` 在真实浏览器里是 DOM no-op，F6 / 启动恢复 / `focusPart` 兜底全靠它；**新增 Part 根若指望 `Part.focus()` 真把 DOM 焦点搬过去，必须补 `tabIndex={-1}`**。`focusedPart` 取值是 `PartId`（如 `sideBar`），不是 testid 后缀。挂载在 `contributions/FocusContextKeyContribution.ts`，回归见 `FocusContextKeyContribution.test.ts`。
 
+**多窗口下的「聚焦」还要限定文档**：辅助编辑器窗口有独立 Document，而失去 OS 焦点的文档会保留最后的 `activeElement`。逐 Part 布尔键因此不能只问 `part.isFocused()`（它读容器自己的 `ownerDocument`），还必须要求该文档就是当前 active workbench document——`services/focus/partFocus.ts` 的 `isPartFocusedInActiveDocument` 是唯一入口，toggle 类命令（`Ctrl+Shift+E` 等）与 `FocusContextKeyContribution` 都走它。只读主文档或只看 `isFocused()` 都会在辅助窗口操作时把后台主窗口的侧栏误判为"仍聚焦"。
+
 **嵌入 Monaco 的键要选对**：可编辑 standalone Monaco（Monaco 0.55 起 `editContext` **默认 true**，没显式设也命中）必须把焦点桥到文本面 key，否则全局 Delete/Backspace/裸字符绑定会被守卫吞——MergeEditor 的 Result 面板曾按 Delete 弹删文件确认框，ACP 输入框（`PromptMonacoEditor.tsx`）曾 Delete 无反应。但**文件编辑器 / MergeResult 用 `editorTextFocus`，嵌入输入框一律用专用键**（ACP prompt = `acpPromptInputFocused`，**绝不冒充 `editorTextFocus`**，否则 VSCode 导入的 User 级绑定会偷键）。只读实例（DiffEditor / LogOutputView / InlineDirtyDiff）不受影响。详见 `docs/development/monaco-embedding.md`。
 
 ## `ScopedContextKeyService` 的静默 dispose

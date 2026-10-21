@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useLayoutEffect, useRef } from 'react'
+import { isElementLike, isHTMLElementLike } from '@universe-editor/workbench-ui'
 import {
   ICommandService,
   IContextKeyService,
@@ -79,10 +80,11 @@ function isQuickInputOwnedKey(e: KeyboardEvent): boolean {
 // Modal dialogs rendered by RendererDialogService own their keyboard events
 // entirely. Walk up from the event target to detect if we're inside one.
 function isInsideRendererDialog(target: EventTarget | null): boolean {
-  let el = target instanceof HTMLElement ? target : null
+  let el: Element | null = isElementLike(target) ? target : null
   while (el) {
-    if (el.dataset['rendererDialog'] !== undefined) return true
-    el = el.parentElement
+    if (el.getAttribute?.('data-renderer-dialog') !== null) return true
+    const parent = el.parentElement
+    el = isElementLike(parent) ? parent : null
   }
   return false
 }
@@ -92,7 +94,8 @@ function isInsideRendererDialog(target: EventTarget | null): boolean {
 // Claiming a key here would stop it before their handlers see it — Escape in
 // particular, which a native <select> popup used to get from the browser.
 function isInsideFloatingPopup(target: EventTarget | null): boolean {
-  return target instanceof Element && target.closest('[data-floating-ui-portal]') !== null
+  const el: Element | null = isElementLike(target) ? target : null
+  return el?.closest?.('[data-floating-ui-portal]') != null
 }
 
 interface PendingChord {
@@ -108,7 +111,7 @@ function diagTime(): string {
 }
 
 function toDiagnostics(e: KeyboardEvent, builtKey: string): KeyEventDiagnostics {
-  const targetTag = e.target instanceof HTMLElement ? e.target.tagName : '<non-element>'
+  const targetTag = isHTMLElementLike(e.target) ? e.target.tagName : '<non-element>'
   return {
     time: diagTime(),
     code: e.code,

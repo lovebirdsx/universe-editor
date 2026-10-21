@@ -22,12 +22,15 @@ export interface ConfirmEntry {
   readonly opts: IConfirmOptions
   readonly resolve: Resolver<IConfirmResult>
   readonly document: Document
+  /** 首次 resolve 后置位，忽略同一对话框的重复回报。 */
+  settled?: boolean
 }
 export interface PromptEntry {
   readonly kind: 'prompt'
   readonly opts: IPromptOptions
   readonly resolve: Resolver<string | undefined>
   readonly document: Document
+  settled?: boolean
 }
 export type DialogEntry = ConfirmEntry | PromptEntry
 
@@ -67,11 +70,24 @@ export class RendererDialogService extends Disposable implements IDialogService 
     })
   }
 
-  /** Internal — invoked by DialogHost when the user resolves the head entry. */
-  _resolveHead<T>(value: T): void {
-    const head = this._queue.shift()
-    if (!head) return
-    ;(head.resolve as Resolver<T>)(value)
+  /**
+   * 内部：DialogHost 在用户处理该对话框时调用。
+   * 按 entry 身份而不是“当前队头”决议——对话框可能回报两次（按钮 Enter +
+   * 背景 Enter、双击），盲移队头会把本次的值错答给下一个对话框。
+   */
+  _resolveEntry<T>(entry: DialogEntry, value: T): void {
+    if (entry.settled === true) return
+    const index = this._queue.indexOf(entry)
+    if (index === -1) return
+    entry.settled = true
+    this._queue.splice(index, 1)
+    ;(entry.resolve as Resolver<T>)(value)
     this._onDidChange.fire()
+  }
+
+  /** 内部：决议当前队头对话框。 */
+  _resolveHead<T>(value: T): void {
+    const head = this._queue[0]
+    if (head) this._resolveEntry(head, value)
   }
 }

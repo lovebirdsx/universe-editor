@@ -33,12 +33,14 @@ export function registerWorkbenchDocument(doc: Document): IDisposable {
   // so tell the leak tracker it is intentionally rooted at module scope.
   return markAsSingleton(
     toDisposable(() => {
-      onDidRemoveDocumentEmitter.fire(doc)
+      // 先注销再广播：监听方（焦点跟踪/派生键）要在一致的注册表状态下重算，
+      // 否则会读到正在销毁的文档仍是 active。
       documents.delete(doc)
       if (activeDocument === doc) {
         const first = documents.values().next()
         activeDocument = first.done ? undefined : first.value
       }
+      onDidRemoveDocumentEmitter.fire(doc)
     }),
   )
 }

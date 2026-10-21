@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import { useCallback, useState } from 'react'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
@@ -377,5 +378,30 @@ describe('useOverlayListNavigation', () => {
       fireEvent.keyDown(window, { key: 'n', ctrlKey: true, keyCode: 229 })
       expect(active()).toBe(0)
     })
+  })
+})
+
+describe('useOverlayListNavigation — owner window', () => {
+  // popup 可能位于辅助窗口。Ctrl 别名在该窗口的 capture 阶段被占用，监听必须
+  // 挂在 popup 自己的 window 上。
+  it('takes the Ctrl aliases from the window that owns the popup', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const container = doc.createElement('div')
+    doc.body.appendChild(container)
+    render(<Harness targetDocument={doc} />, { container })
+
+    const activeIn = (): number =>
+      Array.from(container.querySelectorAll('[data-testid^="item-"]')).findIndex(
+        (el) => el.getAttribute('data-active') === 'true',
+      )
+
+    expect(activeIn()).toBe(0)
+    fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'n', ctrlKey: true })
+    expect(activeIn()).toBe(1)
+
+    // 主窗口的监听不能替另一个 document 的 popup 处理按键。
+    fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+    expect(activeIn()).toBe(1)
   })
 })

@@ -512,6 +512,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.newUntitledFile.title': '新建文件',
   'action.restoreEditorsToMainWindow.title': '将编辑器恢复到主窗口',
   'auxiliaryWindow.copyUnsupported': '此编辑器无法复制到新窗口：{label}',
+  'auxiliaryWindow.titleWithEditor': '{editor} — 编辑器窗口',
+  'auxiliaryWindow.windowTitle': '编辑器窗口',
   'auxiliaryWindow.restoreFailed':
     '无法将“{label}”移回主窗口。该编辑器已保留在可访问的辅助窗口中；可使用“将编辑器恢复到主窗口”重试。',
   'auxiliaryWindow.restoreFailed.action': '将编辑器恢复到主窗口',

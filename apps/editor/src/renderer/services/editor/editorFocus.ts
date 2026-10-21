@@ -1,5 +1,6 @@
 import type { EditorInput, IContextKeyService, IDisposable } from '@universe-editor/platform'
 import { autorun } from '@universe-editor/platform'
+import { isElementLike } from '@universe-editor/workbench-ui'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { installDocumentFocusReconcile } from '../focus/documentFocusReconcile.js'
 import { getActiveWorkbenchDocument, getWorkbenchDocuments } from '../windows/workbenchDocuments.js'
@@ -8,7 +9,8 @@ import { DiffEditorRegistry } from './DiffEditorRegistry.js'
 
 export function syncEditorFocusContext(contextKeyService: IContextKeyService): void {
   const active = getActiveWorkbenchDocument().activeElement
-  const hasEditorFocus = active instanceof HTMLElement && active.closest('.monaco-editor') !== null
+  const hasEditorFocus =
+    isElementLike(active) && (active as HTMLElement).closest('.monaco-editor') !== null
   contextKeyService.set('editorFocus', hasEditorFocus)
   // `editorTextFocus` is set true by Monaco's onDidFocusEditorText and cleared by
   // onDidBlurEditorText — but that blur subscription is disposed before the editor

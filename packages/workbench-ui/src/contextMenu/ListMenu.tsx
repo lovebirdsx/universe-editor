@@ -168,6 +168,7 @@ export function ListMenu({
     autoFocusFirst,
     hasRows,
     initialActivePath,
+    targetDocument,
   )
 
   // An empty menu never opens: report the close so the host drops its state

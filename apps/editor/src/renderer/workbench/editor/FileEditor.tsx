@@ -211,7 +211,11 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       // (e.g. a tab div) moves focus to document.body. Reclaim it only if the
       // user hasn't moved focus elsewhere — focusStack.getTop() is the source
       // of truth because FocusTracker observed any real navigation already.
-      if (document.activeElement !== document.body) return
+      // 读编辑器自己的 document：辅助窗口编辑器会把焦点停在它的 <body>，
+      // 主文档可能完全没动过。
+      const domNode = (ed as { getDomNode?(): HTMLElement }).getDomNode?.()
+      const doc = domNode?.ownerDocument ?? document
+      if (doc.activeElement !== doc.body) return
       if (group === null) return
       if (groupsService.activeGroup !== group) return
       if (groupsService.activeGroup.activeEditor !== fileInputRef.current) return
@@ -490,11 +494,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
             !groupsService.activeGroup.lastActivationPreservedFocus
           ) {
             focusRaf = requestAnimationFrame(() => {
-              if (!cancelled) {
-                recordPerfPhase('fileEditor.focus', () =>
-                  focusStandaloneEditor(ed, contextKeyService),
-                )
-              }
+              if (cancelled) return
+              // 后台窗口的帧可能晚于导航执行，必须重新核对焦点意图，避免抢回旧编辑器。
+              const activeGroup = groupsService.activeGroup
+              if (group !== null && activeGroup !== group) return
+              if (activeGroup.activeEditor !== fileInput) return
+              if (activeGroup.lastActivationPreservedFocus) return
+              recordPerfPhase('fileEditor.focus', () =>
+                focusStandaloneEditor(ed, contextKeyService),
+              )
             })
           }
           // Keep cache live so toJSON() always captures the latest position.

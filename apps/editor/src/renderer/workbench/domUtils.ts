@@ -3,6 +3,7 @@
  *  Small DOM predicates shared across the workbench keyboard layers.
  *--------------------------------------------------------------------------------------------*/
 
+import { isEditableElement } from '@universe-editor/workbench-ui'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 /**
@@ -11,12 +12,12 @@ import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
  * mean "type", not "trigger a shortcut". Keyboard handlers that claim bare keys
  * (global keybindings, the markdown preview's vim navigation) must yield here so
  * typing into an in-preview find box or any embedded input still works.
+ *
+ * 主 realm 的 `instanceof HTMLElement` 对辅助窗口元素恒为 false，曾让 dispatcher
+ * 在辅助窗口吞掉 Ctrl+P/N（见 `domRealm`）。
  */
 export function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  const tag = target.tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
-  return target.isContentEditable
+  return isEditableElement(target)
 }
 
 /**

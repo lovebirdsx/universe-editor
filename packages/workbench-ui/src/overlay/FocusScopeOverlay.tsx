@@ -11,6 +11,7 @@
 
 import { useEffect, useRef, type ReactNode } from 'react'
 import { FocusScope } from '@react-aria/focus'
+import { isHTMLElementLike } from '../dom/domRealm.js'
 
 export interface FocusScopeOverlayProps {
   /** Render the overlay only while visible. Toggling this drives restoreFocus. */
@@ -47,7 +48,7 @@ export function FocusScopeOverlay({
   const wasVisibleRef = useRef(false)
   if (visible && !wasVisibleRef.current) {
     const active = doc.activeElement
-    previousFocusRef.current = active instanceof HTMLElement ? active : null
+    previousFocusRef.current = isHTMLElementLike(active) ? active : null
   }
   wasVisibleRef.current = visible
 

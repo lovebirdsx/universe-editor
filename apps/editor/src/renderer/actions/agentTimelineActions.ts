@@ -30,6 +30,7 @@ import { readChatContextArg, readContextTarget } from '../services/acp/chatConte
 import { openResourceForRead } from '../services/resourcePreview/openResourcePreview.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
+import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 import { toPngBase64 } from '../services/acp/promptImage.js'
 import { findByStickyKey } from '../workbench/agents/stickyScroll.js'
 import { subtreeCardKeys } from '../workbench/agents/timelineCollapse.js'
@@ -318,7 +319,7 @@ export class ShowAcpSessionChangesAction extends Action2 {
       layoutService.getVisible(PartId.SideBar) &&
       viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar) ===
         SESSION_CHANGES_CONTAINER_ID &&
-      layoutService.getPart(PartId.SideBar)?.isFocused()
+      isPartFocusedInActiveDocument(layoutService, PartId.SideBar)
     ) {
       layoutService.setVisible(PartId.SideBar, false)
       return

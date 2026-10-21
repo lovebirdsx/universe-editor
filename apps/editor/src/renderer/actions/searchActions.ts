@@ -22,6 +22,7 @@ import type { monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { searchSession } from '../workbench/search/searchSession.js'
 import { searchViewState } from '../workbench/search/searchViewState.js'
 import { EXPLORER_FOCUS_WHEN, resolvePrimaryTarget } from './fileActionsCommon.js'
+import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 
 const SEED_TEXT_MAX_LENGTH = 200
 
@@ -70,7 +71,7 @@ export class FindInFilesAction extends Action2 {
     if (
       sidebarVisible &&
       activeId === 'workbench.view.search' &&
-      layoutService.getPart(PartId.SideBar)?.isFocused()
+      isPartFocusedInActiveDocument(layoutService, PartId.SideBar)
     ) {
       layoutService.setVisible(PartId.SideBar, false)
       return

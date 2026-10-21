@@ -133,6 +133,37 @@ test.describe('@p0 quick open recent targets', () => {
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(previous)
   })
 
+  // Ctrl+N / Ctrl+P 是按住修饰键时的列表导航，必须移动松手接受所消费的同一个高亮。
+  test('Ctrl+N and Ctrl+P walk the highlight before release accepts', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+    const previous = await workbench.getActiveEditorUri()
+    expect(previous).toBeDefined()
+
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect.poll(() => workbench.getActiveEditorUri()).not.toBe(previous)
+    const current = await workbench.getActiveEditorUri()
+    expect(current).toBeDefined()
+    await waitForRecentTargetHead(page, 'editor', current!)
+
+    await openSwitcherHoldingCtrl(page, workbench)
+    const selected = workbench.quickInput.dialog.locator('[aria-selected="true"]')
+    await expect(selected).toContainText(previous!.split('/').pop() ?? '')
+    const initial = await selected.textContent()
+
+    await page.keyboard.press('n')
+    await expect.poll(() => selected.textContent()).not.toBe(initial)
+    await page.keyboard.press('p')
+    await expect.poll(() => selected.textContent()).toBe(initial)
+
+    await page.keyboard.up('Control')
+    await workbench.quickInput.waitForHidden()
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(previous)
+  })
+
   // Holding Ctrl keeps the field read-only (typed characters must not land in it),
   // and Enter is what hands it over. Until then a release opens the row, so this is
   // also the regression guard for "the filter box became unreachable".

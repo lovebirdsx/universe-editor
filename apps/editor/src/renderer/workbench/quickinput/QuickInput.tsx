@@ -68,6 +68,7 @@ export function QuickInputPortal() {
         <QuickInputPanel
           state={panelState}
           onClose={close}
+          targetDocument={targetDocument}
           renderIcon={(id, size, className) => {
             const parsed = parseResourceIconId(id)
             if (parsed) {

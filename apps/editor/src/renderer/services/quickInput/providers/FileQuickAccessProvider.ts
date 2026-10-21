@@ -480,10 +480,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     if (!pick) return
     const viewId = decodeViewPickId(pick.id)
     if (viewId !== undefined) {
-      // focusView owns the whole reveal: active container, hosting part, and the
-      // view's own collapsed state — no need to expand anything here first.
-      // Views live in the main window, so bring it forward before focusing.
-      this._windowFocus.focusMainWindow()
+      // focusView 负责完整揭示（容器、宿主 part、折叠状态），并为命令来源请求
+      // 把主窗口带到前台，这里不要再补一次聚焦。
       void this._layout.focusView(viewId, { source: 'command' })
       return
     }

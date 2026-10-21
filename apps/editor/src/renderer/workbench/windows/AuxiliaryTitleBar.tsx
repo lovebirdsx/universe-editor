@@ -10,6 +10,7 @@ import {
   DisposableStore,
   IHostService,
   MutableDisposable,
+  localize,
   markAsSingleton,
   type IDisposable,
   type IEditorGroup,
@@ -57,8 +58,21 @@ export function AuxiliaryTitleBar({ entry }: { entry: IAuxiliaryEditorWindow }) 
   const aux = useService(IAuxiliaryWindowsService)
   const auxEditor = useService(IAuxiliaryEditorWindowService)
   const [isMaximized, setIsMaximized] = useState(false)
-  const title = useActiveEditorTitle(entry)
+  const editorTitle = useActiveEditorTitle(entry)
   const isMac = host.platform === 'darwin'
+
+  // 原生标题跟随活动编辑器，Alt+Tab/任务栏才能区分各辅助窗口；窗口无边框，
+  // 这是唯一的原生标题来源。
+  const windowTitle = localize('auxiliaryWindow.windowTitle', 'Editor Window')
+  const nativeTitle =
+    editorTitle.length > 0
+      ? localize('auxiliaryWindow.titleWithEditor', '{editor} — Editor Window', {
+          editor: editorTitle,
+        })
+      : windowTitle
+  useEffect(() => {
+    entry.window.document.title = nativeTitle
+  }, [entry, nativeTitle])
 
   useEffect(() => {
     let cancelled = false
@@ -90,7 +104,7 @@ export function AuxiliaryTitleBar({ entry }: { entry: IAuxiliaryEditorWindow }) 
       <div className={auxStyles['titlebar-left']}>
         {isMac && <div className={styles['traffic-light-spacer']} />}
         <span className={styles['title']} data-testid="auxiliary-titlebar-title">
-          {title}
+          {editorTitle}
         </span>
       </div>
       <div className={styles['right']}>

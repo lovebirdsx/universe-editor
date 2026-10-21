@@ -142,7 +142,8 @@ export function mirrorDocumentChrome(mainDoc: Document, targetDoc: Document): ID
   const syncChrome = (): void => {
     copyAttributes(mainDoc.documentElement, targetRoot, OBSERVED_ROOT_ATTRIBUTES)
     copyAttributes(mainDoc.body, targetBody, OBSERVED_ATTRIBUTES)
-    if (targetDoc.title !== mainDoc.title) targetDoc.title = mainDoc.title
+    // 刻意不镜像 document.title：每个窗口有自己的原生标题（活动编辑器 +
+    // "Editor Window"，见 AuxiliaryTitleBar）；复制主标题会让 Alt+Tab 条目重名。
   }
 
   syncStyles()

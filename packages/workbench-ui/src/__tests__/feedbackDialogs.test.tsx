@@ -4,6 +4,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
+import type { ReactElement } from 'react'
 import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { ProgressDialog } from '../feedback/progress/ProgressDialog.js'
 import { ConfirmDialog, PromptDialog } from '../feedback/dialog/Dialogs.js'
@@ -284,6 +286,32 @@ describe('PromptDialog', () => {
     const onResolve = vi.fn()
     render(<PromptDialog opts={{ title: 'Name' }} onResolve={onResolve} />)
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(onResolve).toHaveBeenCalledWith(undefined)
+  })
+})
+
+describe('dialogs in an auxiliary document realm', () => {
+  function renderIn(win: Window, ui: ReactElement) {
+    const doc = win.document as unknown as Document
+    return render(ui, { container: doc.body })
+  }
+
+  it('closes PromptDialog on Escape dispatched to its host document', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const onResolve = vi.fn()
+    renderIn(
+      win,
+      <PromptDialog opts={{ title: 'Name' }} targetDocument={doc} onResolve={onResolve} />,
+    )
+
+    doc.dispatchEvent(
+      new win.KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }) as unknown as Event,
+    )
     expect(onResolve).toHaveBeenCalledWith(undefined)
   })
 })

@@ -85,6 +85,11 @@ export interface IEditorGroup extends IEditorGroupModel, IGridView {
   readonly index: number
   focus(): void
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void
+  /**
+   * 标记即将发生的激活是否要求保留键盘焦点。窗口获得原生焦点属于此类：
+   * 把窗口带到前台不应把焦点从侧栏抢进 Monaco。传 false 清除旧意图。
+   */
+  preserveFocusOnActivation?(preserve?: boolean): void
 }
 
 /**
@@ -152,6 +157,11 @@ export interface IEditorPart {
   arrangeGroups(arrangement: GroupsArrangement, group?: IEditorGroup): void
 }
 
+export interface IActivatePartOptions {
+  /** 激活 part 及其活动组，但不把键盘焦点移进编辑器（窗口激活的默认语义）。 */
+  readonly preserveFocus?: boolean
+}
+
 export interface IEditorGroupsService {
   readonly _serviceBrand: undefined
 
@@ -205,7 +215,7 @@ export interface IEditorGroupsService {
   findGroup(scope: IFindGroupScope, source?: IEditorGroup, wrap?: boolean): IEditorGroup | undefined
 
   activateGroup(group: IEditorGroup | number): IEditorGroup
-  activatePart(part: IEditorPart | number): IEditorPart
+  activatePart(part: IEditorPart | number, options?: IActivatePartOptions): IEditorPart
   addGroup(location: IEditorGroup | number, direction: GroupDirection): IEditorGroup
   removeGroup(group: IEditorGroup | number): void
   /**

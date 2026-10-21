@@ -855,6 +855,259 @@ test.describe('@p0 auxiliary editor windows', () => {
       await expectAuxiliaryFocus(electronApp, child, workbench, 'switch-aux-alpha.txt')
     })
 
+    test('Ctrl+Shift+E in an auxiliary window reveals Explorer instead of hiding it', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const sidebarPaneVisible = () =>
+        page.evaluate(() => {
+          const part = document.querySelector('[data-testid="part-sidebar"]')
+          const pane = part?.closest('.split-view-view')
+          return pane?.classList.contains('split-view-view-visible') ?? false
+        })
+
+      // 在主窗口侧栏放一个真实 DOM 焦点：主窗口退到后台后 activeElement 仍在，
+      // 正是旧 toggle 误判为“仍聚焦”的场景。先 blur，避免启动焦点恢复留下的
+      // 侧栏焦点让 Show Explorer 直接收起面板。
+      await page.evaluate(() => {
+        ;(document.activeElement as HTMLElement | null)?.blur()
+        document.body.tabIndex = -1
+        document.body.focus()
+      })
+      await workbench.runCommand('workbench.view.explorer')
+      await page.getByRole('button', { name: /Open Folder/ }).focus()
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => document.activeElement?.closest('[data-testid="part-sidebar"]') !== null,
+          ),
+        )
+        .toBe(true)
+      await expect.poll(() => workbench.getContextKey<boolean>('sideBarFocus')).toBe(true)
+      await expect.poll(sidebarPaneVisible).toBe(true)
+
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.newEmptyEditorWindow',
+      )
+      const token = (await auxWindows(page))[0]!.token
+      await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => document.activeElement?.closest('[data-testid="part-sidebar"]') !== null,
+          ),
+        )
+        .toBe(true)
+
+      await child.keyboard.press('Control+Shift+E')
+
+      // 命令必须显示并聚焦 Explorer（切回主窗口且侧栏仍可见）；旧逻辑会误收起。
+      await expect.poll(sidebarPaneVisible).toBe(true)
+      await expect
+        .poll(() =>
+          page.evaluate(() => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)?.active),
+        )
+        .toBe(true)
+
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
+
+    test('auxiliary editor area reports editorAreaFocus and focusedPart', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const file = seedFile('aux-focus-keys.txt', 'keys\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), file)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('aux-focus-keys.txt'))
+      const token = (await auxWindows(page))[0]!.token
+
+      // 先退回主窗口，再真实点击辅助窗口里的编辑器：主文档残留的 activeElement
+      // 不能继续占着聚焦判定，辅助窗口的编辑区必须报告聚焦。
+      await activateMainWindow(page)
+      await expect
+        .poll(() =>
+          page.evaluate(() => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)?.active),
+        )
+        .toBe(true)
+      await child.locator('.monaco-editor').first().click()
+      await expect.poll(() => workbench.getContextKey<boolean>('editorAreaFocus')).toBe(true)
+      expect(await workbench.getContextKey('focusedPart')).toBe('editorArea')
+
+      // 非 Monaco 元素（标签页按钮）位于编辑区根内，同样算编辑区聚焦。
+      await child.getByRole('tab').first().focus()
+      await expect
+        .poll(() => child.evaluate(() => document.activeElement?.getAttribute('role') === 'tab'))
+        .toBe(true)
+      await expect.poll(() => workbench.getContextKey<boolean>('editorAreaFocus')).toBe(true)
+      expect(await workbench.getContextKey('focusedPart')).toBe('editorArea')
+
+      // 焦点离开编辑区后必须清掉，否则键位会在错误的窗口/区域上继续生效。
+      await child.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await expect.poll(() => workbench.getContextKey<boolean>('editorAreaFocus')).toBe(false)
+      expect(await workbench.getContextKey('focusedPart')).toBe('')
+
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
+
+    test('Ctrl+W after a window round trip focuses and types into the next editor', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const first = seedFile('aux-close-focus-first.txt', 'first\n')
+      const second = seedFile('aux-close-focus-second.txt', 'second\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), first)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      // 移动后辅助窗口处于活动状态，再开第二个文件，让它有两个标签。
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), second)
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('aux-close-focus-second.txt'))
+      await expect
+        .poll(() => workbench.getActiveEditorUri())
+        .toContain('aux-close-focus-second.txt')
+      const token = (await auxWindows(page))[0]!.token
+
+      // 真实往返：切回主窗口，再点回辅助窗口的 Monaco。窗口激活只应保留原焦点，
+      // 但随后的 Ctrl+W 是关闭标签，必须把焦点交给下一个编辑器。
+      await activateMainWindow(page)
+      await child.locator('.monaco-editor').first().click()
+      await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+
+      await child.keyboard.press('Control+w')
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toHaveLength(1)
+      await expect.poll(() => workbench.getActiveEditorUri()).toContain('aux-close-focus-first.txt')
+      await expect
+        .poll(() =>
+          child.evaluate(() => document.activeElement?.closest('.monaco-editor') !== null),
+        )
+        .toBe(true)
+
+      // 不再点编辑器，直接输入：这是「关闭后能继续敲字」的回归断言。
+      await child.keyboard.type('typed-after-close')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorText()))
+        .toContain('typed-after-close')
+
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
+
+    test('quick navigate keeps modifier release and Ctrl+P/N in the auxiliary document', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.newEmptyEditorWindow',
+      )
+      const token = (await auxWindows(page))[0]!.token
+      await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+
+      const selectedIndex = () =>
+        child.evaluate(() => {
+          const rows = Array.from(
+            document.querySelectorAll('[data-testid="quick-input"] [role="option"]'),
+          )
+          return rows.findIndex((row) => row.getAttribute('aria-selected') === 'true')
+        })
+
+      await child.keyboard.down('Control')
+      await child.keyboard.press('Tab')
+      const overlay = child.locator('[data-testid="quick-input-overlay"]')
+      await expect(overlay).toBeVisible()
+
+      // Ctrl+N / Ctrl+P 由拥有该面板的窗口处理。
+      const initial = await selectedIndex()
+      await child.keyboard.press('n')
+      await expect.poll(selectedIndex).not.toBe(initial)
+      await child.keyboard.press('p')
+      await expect.poll(selectedIndex).toBe(initial)
+
+      // 松开修饰键会接受高亮行；旧监听挂在主文档，辅助窗口里松手后面板永远不关。
+      await child.keyboard.up('Control')
+      await expect(overlay).toHaveCount(0)
+
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
+
+    test('native titles distinguish main and auxiliary windows and follow editors', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.newEmptyEditorWindow',
+      )
+      const token = (await auxWindows(page))[0]!.token
+      await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+
+      const nativeTitles = () =>
+        electronApp.evaluate(({ BrowserWindow }) =>
+          BrowserWindow.getAllWindows().map((win) => win.getTitle()),
+        )
+      const mainTitle = await page.title()
+      const auxTitles = async () => (await nativeTitles()).filter((t) => t !== mainTitle)
+      await expect.poll(auxTitles).toContain('Editor Window')
+      expect(mainTitle).not.toContain('Editor Window')
+
+      const first = seedFile('aux-title-first.txt', 'first\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), first)
+      // 窗口 document.title（popup 的系统标题）和渲染的标题栏都必须带编辑器名；
+      // 旧实现会把它覆盖成主工作区标题。
+      await expect.poll(() => child.evaluate(() => document.title)).toContain('aux-title-first.txt')
+      await expect.poll(auxTitles).toContainEqual(expect.stringContaining('aux-title-first.txt'))
+
+      const second = seedFile('aux-title-second.txt', 'second\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), second)
+      await expect
+        .poll(() => child.evaluate(() => document.title))
+        .toContain('aux-title-second.txt')
+      await expect.poll(auxTitles).toContainEqual(expect.stringContaining('aux-title-second.txt'))
+
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
+
     test('auxiliary title bar tracks the main title bar theme', async ({
       electronApp,
       workbench,

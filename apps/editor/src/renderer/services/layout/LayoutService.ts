@@ -352,8 +352,10 @@ export class LayoutService extends Disposable implements ILayoutService {
     if (!part) return false
     if (!this.getVisible(id)) this.setVisible(id, true)
 
-    const lastViewId = this._lastFocusedViewForPart(id)
-    if (lastViewId && lastViewId !== skipViewId) {
+    // 只有 focusPart 自己作为入口时才委派给该 Part 上次记住的视图；调用方显式
+    // 指定 skipViewId 时再委派会先打开并聚焦另一个视图容器。
+    const lastViewId = skipViewId === undefined ? this._lastFocusedViewForPart(id) : undefined
+    if (lastViewId) {
       const ok = await this.focusView(lastViewId, opts)
       if (ok) return true
     }
@@ -422,8 +424,10 @@ export class LayoutService extends Disposable implements ILayoutService {
         // expanded one line above is still display:none until React commits,
         // and browsers refuse focus to boxless elements. Keep polling until
         // focus actually lands, otherwise callers get a false success and the
-        // view never reaches the focus history.
-        if (typeof document !== 'undefined' && document.activeElement === el) return true
+        // 读元素自己的 document：辅助窗口里的视图只在它自己的文档报告焦点，
+        // 用主文档判定会一直以为没聚焦、导致调用方重试。
+        const ownerDoc = (el as { ownerDocument?: Document }).ownerDocument
+        if (ownerDoc?.activeElement === el) return true
       }
       if (Date.now() >= deadline) break
       await new Promise<void>((r) => {

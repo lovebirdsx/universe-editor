@@ -2035,9 +2035,8 @@ describe('FileQuickAccessProvider — views as switch targets', () => {
     await flushPromises()
     picker.fireAccept([rows(picker).find((i) => i.label === 'Terminal')!])
 
-    // Views live in the main window; accepting from an auxiliary window must
-    // bring the main window forward before focusing the view.
-    expect(windowFocus.focusMainWindowCalls).toBe(1)
+    // focusView 已负责把主窗口带到前台（LayoutService 测试覆盖），provider 不再抢着聚焦。
+    expect(windowFocus.focusMainWindowCalls).toBe(0)
     expect(layout.focusedViews).toEqual(['workbench.view.terminal.main'])
     // Never routed through the editor resolver — a view id is not a URI.
     expect(resolver.opened).toHaveLength(0)

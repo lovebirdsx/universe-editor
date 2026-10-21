@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import { QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
 import { BUSY_BAR_DELAY_MS } from '../feedback/quickInput/QuickInputProgress.js'
@@ -1990,5 +1991,47 @@ describe('QuickPickPanel busy bar', () => {
 
     rerender(panel({ items: [] }))
     expect(screen.getByRole('listbox').hasAttribute('aria-busy')).toBe(false)
+  })
+})
+
+describe('QuickPickPanel owner document', () => {
+  // 辅助窗口是独立 realm，其 KeyboardEvent 到不了主 renderer 的 document 监听；
+  // 松手接受的监听必须跟随面板 portal 进去的那个 document。
+  it('accepts the quick-navigate modifier release from the host document', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onAccept,
+        })}
+        onClose={() => undefined}
+        targetDocument={doc}
+      />,
+    )
+
+    doc.dispatchEvent(new win.KeyboardEvent('keyup', { key: 'Control' }) as unknown as Event)
+    expect(onAccept).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a modifier release delivered to another document', () => {
+    const win = new Window()
+    const doc = win.document as unknown as Document
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onAccept,
+        })}
+        onClose={() => undefined}
+        targetDocument={doc}
+      />,
+    )
+
+    fireEvent.keyUp(document, { key: 'Control' })
+    expect(onAccept).not.toHaveBeenCalled()
   })
 })

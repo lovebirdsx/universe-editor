@@ -15,6 +15,7 @@
 import {
   Disposable,
   Emitter,
+  markAsSingleton,
   toDisposable,
   type Event,
   type IDisposable,
@@ -22,11 +23,29 @@ import {
   type IFocusTrackerService,
   type IFocusableElement,
 } from '@universe-editor/platform'
+import { isHTMLElementLike } from '@universe-editor/workbench-ui'
+import {
+  getActiveWorkbenchDocument,
+  getWorkbenchDocuments,
+  onDidAddWorkbenchDocument,
+  onDidRemoveWorkbenchDocument,
+} from '../windows/workbenchDocuments.js'
 
 interface ElementTracker {
   readonly element: IFocusableElement
   readonly listener: (focused: boolean) => void
   lastState: boolean
+}
+
+function readActive(doc: Document): IFocusableElement | null {
+  const active = doc.activeElement
+  if (!isHTMLElementLike(active) || active === doc.body) return null
+  return active as unknown as IFocusableElement
+}
+
+function readActiveUnlessRemoved(doc: Document, removed: Document): IFocusableElement | null {
+  if (doc === removed) return null
+  return readActive(doc)
 }
 
 export class RendererFocusTrackerService extends Disposable implements IFocusTrackerService {
@@ -42,15 +61,11 @@ export class RendererFocusTrackerService extends Disposable implements IFocusTra
 
   constructor(private readonly _doc: Document) {
     super()
-    this._current =
-      _doc.activeElement instanceof HTMLElement && _doc.activeElement !== _doc.body
-        ? (_doc.activeElement as unknown as IFocusableElement)
-        : null
+    this._current = readActive(_doc)
     this._pendingTarget = this._current
+    const attached = new Set<Document>()
     const onFocusIn = (e: FocusEvent): void => {
-      const target = (e.target instanceof HTMLElement ? e.target : null) as
-        | (IFocusableElement & HTMLElement)
-        | null
+      const target = isHTMLElementLike(e.target) ? (e.target as unknown as IFocusableElement) : null
       this._scheduleSettle(target)
     }
     const onFocusOut = (): void => {
@@ -59,12 +74,35 @@ export class RendererFocusTrackerService extends Disposable implements IFocusTra
       // `_pendingTarget` if focus is moving within the window.
       this._scheduleSettle(this._pendingTarget)
     }
-    _doc.addEventListener('focusin', onFocusIn, true)
-    _doc.addEventListener('focusout', onFocusOut, true)
+    // 辅助窗口是独立 document，焦点事件不会到达主文档；每个注册的文档各挂一对
+    // 监听，并像其他焦点移动一样参与历史。
+    const attach = (doc: Document): void => {
+      if (attached.has(doc)) return
+      attached.add(doc)
+      doc.addEventListener('focusin', onFocusIn, true)
+      doc.addEventListener('focusout', onFocusOut, true)
+    }
+    const detach = (doc: Document): void => {
+      if (!attached.delete(doc)) return
+      doc.removeEventListener('focusin', onFocusIn, true)
+      doc.removeEventListener('focusout', onFocusOut, true)
+    }
+    attach(_doc)
+    for (const doc of getWorkbenchDocuments()) attach(doc)
+    const addSub = this._register(markAsSingleton(onDidAddWorkbenchDocument(attach)))
+    const removeSub = this._register(
+      markAsSingleton(
+        onDidRemoveWorkbenchDocument((doc) => {
+          detach(doc)
+          this._reconcileAfterRemoval(doc)
+        }),
+      ),
+    )
     this._register(
       toDisposable(() => {
-        _doc.removeEventListener('focusin', onFocusIn, true)
-        _doc.removeEventListener('focusout', onFocusOut, true)
+        addSub.dispose()
+        removeSub.dispose()
+        for (const doc of attached) detach(doc)
         if (this._settleTimer !== undefined) clearTimeout(this._settleTimer)
       }),
     )
@@ -93,6 +131,45 @@ export class RendererFocusTrackerService extends Disposable implements IFocusTra
       this._settleTimer = undefined
       this._settle()
     }, 0)
+  }
+
+  /**
+   * 文档注销时不能把 current / pending 留在已销毁的 DOM 上：同步改指向仍有
+   * 效的活动文档焦点（或 null）并通知订阅方，不引入额外延时。
+   */
+  private _reconcileAfterRemoval(removed: Document): void {
+    const currentRemoved = this._inDocument(this._current, removed)
+    const pendingRemoved = this._inDocument(this._pendingTarget, removed)
+    if (!currentRemoved && !pendingRemoved) return
+
+    const next =
+      this._pendingTarget !== null && !pendingRemoved
+        ? this._pendingTarget
+        : !currentRemoved
+          ? this._current
+          : this._focusAfterRemoval(removed)
+
+    this._pendingTarget = next
+    if (this._settleTimer !== undefined) {
+      clearTimeout(this._settleTimer)
+      this._settleTimer = undefined
+    }
+    this._settle()
+  }
+
+  private _focusAfterRemoval(removed: Document): IFocusableElement | null {
+    const activeDoc = getActiveWorkbenchDocument()
+    if (activeDoc !== removed && getWorkbenchDocuments().includes(activeDoc)) {
+      const active = readActive(activeDoc)
+      if (active !== null) return active
+    }
+    return readActiveUnlessRemoved(this._doc, removed)
+  }
+
+  private _inDocument(element: IFocusableElement | null, doc: Document): boolean {
+    if (element === null) return false
+    const owner = (element as { ownerDocument?: Document | null }).ownerDocument
+    return owner === doc || doc.contains(element as unknown as Node)
   }
 
   private _settle(): void {

@@ -204,6 +204,102 @@ describe('EditorGroupModel — close', () => {
   })
 })
 
+describe('EditorGroupModel — activation focus intent', () => {
+  // 窗口激活留下的「保留焦点」只对当时那次激活有效。关闭标签触发的自动激活
+  // 必须把焦点交给下一个编辑器，否则切回窗口后 Ctrl+W，输入仍落在窗口外。
+  it('clears a window-activation preserve intent on a close-driven activation', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a)
+    model.openEditor(b)
+    model.preserveFocusOnActivation()
+    expect(model.lastActivationPreservedFocus).toBe(true)
+
+    model.closeEditor(b)
+
+    expect(model.activeEditor).toBe(a)
+    expect(model.lastActivationPreservedFocus).toBe(false)
+  })
+
+  it('clears a window-activation preserve intent when the active editor is detached', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a)
+    model.openEditor(b)
+    model.preserveFocusOnActivation()
+
+    model.detachEditor(b)
+
+    expect(model.activeEditor).toBe(a)
+    expect(model.lastActivationPreservedFocus).toBe(false)
+  })
+
+  it('clears a window-activation preserve intent when all editors are closed', () => {
+    const model = new EditorGroupModel()
+    model.openEditor(make('a'))
+    model.openEditor(make('b'))
+    model.preserveFocusOnActivation()
+
+    model.closeAllEditors()
+
+    expect(model.activeEditor).toBeUndefined()
+    expect(model.lastActivationPreservedFocus).toBe(false)
+  })
+
+  it('clears the previous intent on a normal open or setActive', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a)
+    model.preserveFocusOnActivation()
+    model.openEditor(b)
+    expect(model.lastActivationPreservedFocus).toBe(false)
+
+    model.preserveFocusOnActivation()
+    model.setActive(a)
+    expect(model.lastActivationPreservedFocus).toBe(false)
+  })
+
+  it('keeps an explicit preserveFocus on open and setActive', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a, { preserveFocus: true })
+    expect(model.lastActivationPreservedFocus).toBe(true)
+
+    model.openEditor(b)
+    expect(model.lastActivationPreservedFocus).toBe(false)
+    model.setActive(a, { preserveFocus: true })
+    expect(model.lastActivationPreservedFocus).toBe(true)
+  })
+
+  it('can be cleared explicitly with preserveFocusOnActivation(false)', () => {
+    const model = new EditorGroupModel()
+    model.openEditor(make('a'))
+    model.preserveFocusOnActivation()
+    expect(model.lastActivationPreservedFocus).toBe(true)
+
+    model.preserveFocusOnActivation(false)
+
+    expect(model.lastActivationPreservedFocus).toBe(false)
+  })
+
+  it('keeps a rename-driven preserve intent until an activation replaces it', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a)
+    model.openEditor(b)
+    model.replaceEditor(b, make('b-renamed'))
+    expect(model.lastActivationPreservedFocus).toBe(true)
+
+    model.closeEditor(model.activeEditor!)
+    expect(model.lastActivationPreservedFocus).toBe(false)
+  })
+})
+
 describe('EditorGroupModel — move', () => {
   it('moveEditor fires move event with old and newIndex', () => {
     const model = new EditorGroupModel()

@@ -16,6 +16,7 @@
  *---------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { Window } from 'happy-dom'
 import {
   ContextKeyService,
   Emitter,
@@ -30,6 +31,10 @@ import {
   type IPart,
 } from '@universe-editor/platform'
 import { FocusContextKeyContribution } from '../FocusContextKeyContribution.js'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../services/windows/workbenchDocuments.js'
 
 class TestPart extends Part {}
 
@@ -258,6 +263,85 @@ describe('FocusContextKeyContribution — per-part keys', () => {
     expect(context.get('editorAreaFocus')).toBe(true)
 
     contribution.dispose()
+  })
+
+  it('never reports a background document Part as focused', () => {
+    // 用户在辅助窗口输入时 Ctrl+Shift+E 读到 sideBarFocus：主文档失去 OS 焦点
+    // 后仍保留 activeElement，Explorer Part 看似聚焦，命令于是把侧栏收起。
+    const { layout } = makeLayout()
+    const { contribution, context } = makeContribution(layout)
+    const part = new TestPart(PartId.SideBar, 'sidebar', layout)
+    const trigger = document.createElement('button')
+    mountPart(part, partRoot('part-sidebar', trigger))
+    trigger.focus()
+    expect(context.get('sideBarFocus')).toBe(true)
+
+    const win = new Window()
+    const auxDoc = win.document
+    const mainRegistration = registerWorkbenchDocument(document)
+    const registration = registerWorkbenchDocument(auxDoc as unknown as Document)
+    try {
+      const auxButton = auxDoc.createElement('button')
+      auxDoc.body.appendChild(auxButton)
+      auxButton.focus()
+      setActiveWorkbenchDocument(auxDoc as unknown as Document)
+      auxDoc.dispatchEvent(new win.FocusEvent('focusin', { bubbles: true }))
+
+      expect(context.get('sideBarFocus')).toBe(false)
+      expect(context.get('focusedPart')).toBe('')
+
+      setActiveWorkbenchDocument(document)
+      // 必须在主文档上真正移动焦点才能重新触发 focusin；陈旧 activeElement 仍是侧栏按钮。
+      const outside = document.createElement('button')
+      document.body.appendChild(outside)
+      outside.focus()
+      trigger.focus()
+      expect(context.get('sideBarFocus')).toBe(true)
+    } finally {
+      setActiveWorkbenchDocument(document)
+      registration.dispose()
+      mainRegistration.dispose()
+      contribution.dispose()
+    }
+  })
+
+  it('derives editorAreaFocus and focusedPart from an auxiliary editor-area root', () => {
+    // 辅助窗口只渲染编辑区，这个编辑区没有注册成主窗口的 Part，因此不能走
+    // getPart/isFocused；按活动 document 里的 part-* 根标记正向识别。
+    const { layout } = makeLayout()
+    const { contribution, context } = makeContribution(layout)
+    const win = new Window()
+    const auxDoc = win.document
+    const mainRegistration = registerWorkbenchDocument(document)
+    const registration = registerWorkbenchDocument(auxDoc as unknown as Document)
+    try {
+      const root = auxDoc.createElement('div')
+      root.setAttribute('data-testid', 'part-editorArea')
+      // 非 Monaco 元素（标签页按钮）也必须算编辑区聚焦。
+      const tab = auxDoc.createElement('button')
+      root.appendChild(tab)
+      auxDoc.body.appendChild(root)
+      setActiveWorkbenchDocument(auxDoc as unknown as Document)
+
+      tab.focus()
+      auxDoc.dispatchEvent(new win.FocusEvent('focusin', { bubbles: true }))
+
+      expect(context.get('editorAreaFocus')).toBe(true)
+      expect(context.get('focusedPart')).toBe('editorArea')
+
+      // 编辑区之外（例如标题栏）不得继续算作聚焦。
+      const titleButton = auxDoc.createElement('button')
+      auxDoc.body.appendChild(titleButton)
+      titleButton.focus()
+      auxDoc.dispatchEvent(new win.FocusEvent('focusin', { bubbles: true }))
+      expect(context.get('editorAreaFocus')).toBe(false)
+      expect(context.get('focusedPart')).toBe('')
+    } finally {
+      setActiveWorkbenchDocument(document)
+      registration.dispose()
+      mainRegistration.dispose()
+      contribution.dispose()
+    }
   })
 
   it('picks up a Part that is registered after the contribution', () => {

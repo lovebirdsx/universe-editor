@@ -13,6 +13,7 @@ import {
   type IPromptOptions,
 } from '@universe-editor/platform'
 import { FocusScopeOverlay } from '../../overlay/FocusScopeOverlay.js'
+import { isHTMLElementLike } from '../../dom/domRealm.js'
 import styles from './Dialogs.module.css'
 
 export function ConfirmDialog({
@@ -63,7 +64,8 @@ export function ConfirmDialog({
         aria-modal="true"
         data-renderer-dialog
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
+          const onButton = isHTMLElementLike(e.target) && e.target.tagName === 'BUTTON'
+          if (e.key === 'Enter' && !onButton) {
             e.preventDefault()
             onResolve(
               buttons
@@ -177,68 +179,76 @@ export function ConfirmDialog({
 export function PromptDialog({
   opts,
   onResolve,
+  targetDocument,
 }: {
   opts: IPromptOptions
   onResolve: (v: string | undefined) => void
+  /** 对话框 portal 进辅助窗口时所在的 document。 */
+  targetDocument?: Document | undefined
 }) {
   let inputEl: HTMLInputElement | null = null
   return (
-    <div
-      className={styles['backdrop']}
-      role="dialog"
-      aria-modal="true"
-      data-renderer-dialog
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          onResolve(undefined)
-        } else if (e.key === 'Enter') {
-          e.preventDefault()
-          onResolve(inputEl?.value ?? '')
-        }
-      }}
+    <FocusScopeOverlay
+      visible
+      onEscape={() => onResolve(undefined)}
+      targetDocument={targetDocument}
     >
-      <div className={styles['dialog']}>
-        <p className={styles['message']}>{opts.title}</p>
-        <input
-          ref={(el) => {
-            inputEl = el
-            if (el) {
-              el.value = opts.initialValue ?? ''
-              el.focus()
-              el.select()
-            }
-          }}
-          className={styles['input']}
-          placeholder={opts.placeholder}
-          aria-label={opts.title}
-          onKeyDown={(e) => {
-            // Enter during an IME composition confirms a candidate, not submit.
-            if (e.nativeEvent.isComposing) return
-            if (e.key === 'Escape') {
-              e.preventDefault()
-              e.stopPropagation()
-              onResolve(undefined)
-            } else if (e.key === 'Enter') {
-              e.preventDefault()
-              e.stopPropagation()
-              onResolve(inputEl?.value ?? '')
-            }
-          }}
-        />
-        <div className={styles['buttons']}>
-          <button
-            type="button"
-            className={styles['btnPrimary']}
-            onClick={() => onResolve(inputEl?.value ?? '')}
-          >
-            {localize('dialog.default.ok', 'OK')}
-          </button>
-          <button type="button" className={styles['btn']} onClick={() => onResolve(undefined)}>
-            {localize('dialog.default.cancel', 'Cancel')}
-          </button>
+      <div
+        className={styles['backdrop']}
+        role="dialog"
+        aria-modal="true"
+        data-renderer-dialog
+        onKeyDown={(e) => {
+          // Escape 由 overlay 的 document 监听处理（输入框会 stopPropagation），
+          // 保证只决议一次。
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            onResolve(inputEl?.value ?? '')
+          }
+        }}
+      >
+        <div className={styles['dialog']}>
+          <p className={styles['message']}>{opts.title}</p>
+          <input
+            ref={(el) => {
+              inputEl = el
+              if (el) {
+                el.value = opts.initialValue ?? ''
+                el.focus()
+                el.select()
+              }
+            }}
+            className={styles['input']}
+            placeholder={opts.placeholder}
+            aria-label={opts.title}
+            onKeyDown={(e) => {
+              // IME 组合期间的 Enter 是确认候选词，不是提交。
+              if (e.nativeEvent.isComposing) return
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                onResolve(undefined)
+              } else if (e.key === 'Enter') {
+                e.preventDefault()
+                e.stopPropagation()
+                onResolve(inputEl?.value ?? '')
+              }
+            }}
+          />
+          <div className={styles['buttons']}>
+            <button
+              type="button"
+              className={styles['btnPrimary']}
+              onClick={() => onResolve(inputEl?.value ?? '')}
+            >
+              {localize('dialog.default.ok', 'OK')}
+            </button>
+            <button type="button" className={styles['btn']} onClick={() => onResolve(undefined)}>
+              {localize('dialog.default.cancel', 'Cancel')}
+            </button>
+          </div>
         </div>
       </div>
-    </div>
+    </FocusScopeOverlay>
   )
 }

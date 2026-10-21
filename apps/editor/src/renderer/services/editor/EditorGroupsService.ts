@@ -174,10 +174,10 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     return (target.part as EditorPart).activateGroup(target)
   }
 
-  activatePart(part: IEditorPart | number): IEditorPart {
+  activatePart(part: IEditorPart | number, options?: { preserveFocus?: boolean }): IEditorPart {
     const target = this._resolvePart(part)
     if (!target) return this._activePart
-    this._setActivePart(target, true)
+    this._setActivePart(target, true, options?.preserveFocus === true)
     return target
   }
 
@@ -364,16 +364,23 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     this._partStores.set(part, store)
   }
 
-  private _setActivePart(part: EditorPart, fireGroupChange: boolean): boolean {
+  private _setActivePart(
+    part: EditorPart,
+    fireGroupChange: boolean,
+    preserveFocus = false,
+  ): boolean {
     if (this._activePart === part) return false
     this._activePart = part
     this._onDidActivePartChange.fire(part)
     if (fireGroupChange) {
       const group = part.activeGroup
+      // 必须先标记再广播：EditorGroupView / FileEditor 在同一任务里读取该意图。
+      // 默认 false 也要写入，清掉上一次窗口激活遗留的保留焦点标志。
+      group.preserveFocusOnActivation?.(preserveFocus)
       this._bumpGlobalMru(group)
       this._onDidActiveGroupChange.fire(group)
     }
-    this._logger.debug(`activatePart id=${part.id}`)
+    this._logger.debug(`activatePart id=${part.id}${preserveFocus ? ' preserveFocus' : ''}`)
     return true
   }
 

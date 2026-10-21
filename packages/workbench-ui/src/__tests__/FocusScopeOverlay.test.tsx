@@ -111,5 +111,28 @@ describe('FocusScopeOverlay', () => {
       expect(document.activeElement).not.toBe(outside)
       expect(document.activeElement).not.toBe(inside)
     })
+
+    it('restores an element from another DOM realm', () => {
+      // 辅助窗口是独立 realm，previous-focus 元素对主 realm 的 HTMLElement
+      // 构造器做 instanceof 会失败；这里用只带 nodeType/tagName 的形状对象
+      // 建模，真实跨 realm 行为由辅助窗口 e2e 守护。
+      const doc = document.implementation.createHTMLDocument('aux')
+      const outside = {
+        nodeType: 1,
+        tagName: 'BUTTON',
+        isConnected: true,
+        focus: vi.fn(),
+      }
+      Object.defineProperty(doc, 'activeElement', { value: outside, configurable: true })
+
+      const { unmount } = render(
+        <FocusScopeOverlay visible targetDocument={doc} shouldRestoreFocus={() => true}>
+          <button data-testid="inside">inside</button>
+        </FocusScopeOverlay>,
+      )
+
+      unmount()
+      expect(outside.focus).toHaveBeenCalledTimes(1)
+    })
   })
 })

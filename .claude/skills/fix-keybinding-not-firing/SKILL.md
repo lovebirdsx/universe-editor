@@ -124,6 +124,15 @@ registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它�
 - **诊断顺序（用户报「键在输入框里失效、别处正常」）**：① 先查 `%APPDATA%/Code/User/keybindings.json` 导入层是否有同键的 `editorTextFocus` 门控绑定抢占；② 再查本项目注册表冲突。
 - **锚点**：`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts`（inTextSurface 守卫，`acpPromptInputFocused`）、`apps/editor/src/renderer/workbench/agents/PromptMonacoEditor.tsx`（焦点桥接 + 卸载清 key）、`apps/editor/src/renderer/contributions/ContextKeyContribution.ts`（seed）、`apps/editor/src/renderer/actions/_agentShared.ts`（`ACP_SCOPED_KEY_WEIGHT`）；通用机制（嵌入 Monaco 的焦点桥接红线）见 `docs/development/monaco-embedding.md`。
 
+### 案例 7：只在辅助编辑器窗口里失效（跨 realm 的 `instanceof` 判定）
+
+- **症状/诊断**：同一个键在主窗口正常，在辅助编辑器窗口（拖出的独立 BrowserWindow）里触发的是**别的命令**（如快切面板里按 `Ctrl+N` 变成了「新建文件」、`Ctrl+P` 重开了快速打开）；主窗口复现不了，键盘调试日志显示全局 dispatcher 先手命中。
+- **断在**：分叉 C 的 guard 层——不是没注册，而是 guard 里的判定用了主 realm 的 `instanceof`。
+- **根因**：辅助窗口是独立 JS realm，`element instanceof HTMLElement/Element` 对它的元素恒 false。`useGlobalKeybindingHandler` 在每个窗口的 document 上各挂一份 capture handler（`WorkbenchHost` 与 `AuxiliaryWindowHost`）；Quick Input 打开时 `isQuickInputOwnedKey` 靠 `isEditableTarget(e.target)` 放行 `Ctrl+N/P`，而 `isEditableTarget` 若按主 realm `instanceof` 判，辅助窗口的输入框不算可编辑 → 键继续走 registry，被「新建文件/快速打开」吃掉并 `stopPropagation`，面板收不到。
+- **修法**：所有这类判定改走 workbench-ui 的形状判定 `isElementLike` / `isHTMLElementLike` / `isEditableElement`（`dom/domRealm.ts`），`isInsideRendererDialog` / `isInsideFloatingPopup` / Monaco 祖先遍历同理。单测的 `new Window()` 与主 realm 共享构造函数，**测不出**这个问题；必须用真实 Electron 辅助窗口 e2e 守护（`smoke.auxiliaryEditorWindow.spec.ts` 的 quick-navigate 用例）。
+- **锚点**：`apps/editor/src/renderer/workbench/domUtils.ts`、`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts`、`apps/editor/src/renderer/services/editor/editorFocus.ts`、`packages/workbench-ui/src/dom/domRealm.ts`。
+- 相关：辅助窗口激活后焦点被编辑器抢走，会让命令「执行了但焦点不在目标上」，见 `docs/development/auxiliary-editor-windows.md` 的“窗口激活不是编辑器聚焦意图”。
+
 ## 易踩坑速记
 0. **先数日志行**：组合键应有「每修饰键一行 + 主键一行」。**主键那一行整个消失** = 键没到达 document 监听器（分叉 0、案例 4）。**头号嫌疑是编辑器聚焦时 Monaco 内置默认键 `stopPropagation`**（用「点到编辑器外按同键是否出现」区分；OS/显卡热键则编辑器内外都消失）。Monaco 吃键现在可用 keybindings.json 的 `-monacoCommand` 同步解绑（案例 4）。
 1. **`no-match` 先看 `same-key`**（前提：主键已到达、有 `traceKeystroke`）：`0` = 没注册（分叉 A）；`>0` = when/运行期问题（分叉 B/C）。别一上来就改 when。

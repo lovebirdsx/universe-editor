@@ -26,13 +26,14 @@ export function DialogHost({ service }: { service: RendererDialogService }) {
         key={`c-${service.queue.length}`}
         opts={head.opts}
         targetDocument={head.document}
-        onResolve={(r) => service._resolveHead<IConfirmResult>(r)}
+        onResolve={(r) => service._resolveEntry<IConfirmResult>(head, r)}
       />
     ) : (
       <PromptDialog
         key={`p-${service.queue.length}`}
         opts={head.opts}
-        onResolve={(v) => service._resolveHead<string | undefined>(v)}
+        targetDocument={head.document}
+        onResolve={(v) => service._resolveEntry<string | undefined>(head, v)}
       />
     )
   return createPortal(node, head.document.body)

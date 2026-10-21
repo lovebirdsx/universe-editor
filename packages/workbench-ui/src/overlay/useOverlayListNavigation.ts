@@ -91,6 +91,11 @@ export interface IUseOverlayListNavigationOptions {
    */
   readonly autoFocus?: boolean | undefined
   readonly ariaLabel?: string | undefined
+  /**
+   * popup 所在的 document。Ctrl 别名在该窗口的 capture 阶段被占用；portal 进
+   * 辅助窗口的 popup 若仍注册在主窗口就永远收不到这些按键。
+   */
+  readonly targetDocument?: Document | undefined
 }
 
 export interface IOverlayListContainerProps {
@@ -258,6 +263,11 @@ export function useOverlayListNavigation(
   // their global commands and never let them reach a React handler. Same phase,
   // same reason as AnchoredSurface's Escape just above.
   useEffect(() => {
+    const view =
+      containerElRef.current?.ownerDocument.defaultView ??
+      optionsRef.current.targetDocument?.defaultView ??
+      (typeof window !== 'undefined' ? window : undefined)
+    if (!view) return
     const onWindowKeyDown = (e: KeyboardEvent): void => {
       // Mid-composition strokes are the IME's. A native event carries
       // `isComposing` directly — no `nativeEvent` hop as in the React handler.
@@ -282,8 +292,8 @@ export function useOverlayListNavigation(
       e.preventDefault()
       e.stopPropagation()
     }
-    window.addEventListener('keydown', onWindowKeyDown, true)
-    return () => window.removeEventListener('keydown', onWindowKeyDown, true)
+    view.addEventListener('keydown', onWindowKeyDown, true)
+    return () => view.removeEventListener('keydown', onWindowKeyDown, true)
   }, [applyIndexKey, handleHorizontal])
 
   const onKeyDown = useCallback(
