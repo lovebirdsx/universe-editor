@@ -12,6 +12,7 @@ import {
   ContextKeyService,
   ICommandService,
   IDialogService,
+  INotificationService,
   IProgressService,
   IQuickInputService,
   IStorageService,
@@ -19,6 +20,7 @@ import {
   IViewsService,
   InstantiationService,
   ProgressLocation,
+  Severity,
   ServiceCollection,
   observableValue,
   type IDisposable,
@@ -138,6 +140,23 @@ function makeDialog(confirmed: boolean): IDialogService {
   } as unknown as IDialogService
 }
 
+function makeNotificationService(): {
+  service: INotificationService
+  notify: ReturnType<typeof vi.fn>
+} {
+  const notify = vi.fn(() => ({ dispose: () => {} }))
+  return {
+    service: { _serviceBrand: undefined, notify } as unknown as INotificationService,
+    notify,
+  }
+}
+
+type NotifyOptions = Parameters<INotificationService['notify']>[0]
+
+function lastNotification(notify: ReturnType<typeof vi.fn>): NotifyOptions | undefined {
+  return notify.mock.calls.at(-1)?.[0] as NotifyOptions | undefined
+}
+
 /**
  * `quickInput`: 'fake' records what the editor asked of the picker, 'real' mounts
  * the actual QuickInputPanel (so the focus/keyboard contract is exercised end to
@@ -160,6 +179,8 @@ function renderEditor(
   services.set(IScmService, makeScmService())
   const dialog = makeDialog(confirmed)
   services.set(IDialogService, dialog)
+  const notification = makeNotificationService()
+  services.set(INotificationService, notification.service)
   services.set(IProgressService, {
     _serviceBrand: undefined,
     withProgress,
@@ -192,7 +213,14 @@ function renderEditor(
       {quickInputMode === 'real' && <QuickInputPortal />}
     </ServicesContext.Provider>,
   )
-  return { executeCommand, withProgress, quickInput, dialog, ...utils }
+  return {
+    executeCommand,
+    withProgress,
+    quickInput,
+    dialog,
+    notify: notification.notify,
+    ...utils,
+  }
 }
 
 async function flush(): Promise<void> {
@@ -633,6 +661,100 @@ describe('GitGraphEditor worktree sync', () => {
     expect(screen.queryByTestId('quick-input-field')).toBeNull()
     expect(document.activeElement).toBe(scrollBody)
   })
+
+  it('reports a successful sync as a non-sticky notification instead of a dialog', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { quickInput, dialog, notify } = renderEditor(true, {
+      commands: {
+        syncResult: {
+          synced: [featureWt.name],
+          skippedDirty: [],
+          skippedUnmatchedMessages: [],
+          failed: [],
+        },
+      },
+    })
+    await flush()
+
+    openSyncPicker(quickInput).triggerOk()
+    await flush()
+
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Worktree sync to main')
+    expect(result?.message).toContain('Synced: feature')
+    expect(result?.severity).toBe(Severity.Info)
+    expect(result?.sticky).toBe(false)
+    expect(dialog.confirm).not.toHaveBeenCalled()
+  })
+
+  it('treats skipped worktrees as a successful sync', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { quickInput, notify } = renderEditor(true, {
+      commands: {
+        syncResult: {
+          synced: [],
+          skippedDirty: [featureWt.name],
+          skippedUnmatchedMessages: [],
+          failed: [],
+        },
+      },
+    })
+    await flush()
+
+    openSyncPicker(quickInput).triggerOk()
+    await flush()
+
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Skipped (uncommitted changes): feature')
+    expect(result?.severity).toBe(Severity.Info)
+    expect(result?.sticky).toBe(false)
+  })
+
+  it('reports a failed worktree reset as a sticky warning', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { quickInput, notify } = renderEditor(true, {
+      commands: {
+        syncResult: {
+          synced: [],
+          skippedDirty: [],
+          skippedUnmatchedMessages: [],
+          failed: [{ name: 'feature', error: 'boom' }],
+        },
+      },
+    })
+    await flush()
+
+    openSyncPicker(quickInput).triggerOk()
+    await flush()
+
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Failed: feature (boom)')
+    expect(result?.severity).toBe(Severity.Warning)
+    expect(result?.sticky).toBe(true)
+  })
+
+  it('reports an empty sync result with the nothing-to-do message', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { quickInput, notify } = renderEditor(true, {
+      commands: {
+        syncResult: {
+          synced: [],
+          skippedDirty: [],
+          skippedUnmatchedMessages: [],
+          failed: [],
+        },
+      },
+    })
+    await flush()
+
+    openSyncPicker(quickInput).triggerOk()
+    await flush()
+
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Nothing to do.')
+    expect(result?.severity).toBe(Severity.Info)
+    expect(result?.sticky).toBe(false)
+  })
 })
 
 describe('GitGraphEditor worktree sync and push', () => {
@@ -670,10 +792,6 @@ describe('GitGraphEditor worktree sync and push', () => {
     return picker
   }
 
-  function summaryDetail(dialog: IDialogService): string | undefined {
-    return vi.mocked(dialog.confirm).mock.calls[0]?.[0]?.detail
-  }
-
   it('offers the sync-and-push item between the plain and force sync items', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
     renderEditor()
@@ -704,7 +822,7 @@ describe('GitGraphEditor worktree sync and push', () => {
 
   it('syncs the picked worktrees first, then pushes main to origin', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand, withProgress, quickInput, dialog } = renderEditor(true, {
+    const { executeCommand, withProgress, quickInput, dialog, notify } = renderEditor(true, {
       commands: { syncResult: syncedFeature, pushResult: true },
     })
     await flush()
@@ -725,7 +843,12 @@ describe('GitGraphEditor worktree sync and push', () => {
     const options = withProgress.mock.calls[0]?.[0] as IProgressOptions
     expect(options.title).toContain('main')
     expect(options.title).toContain('push')
-    expect(summaryDetail(dialog)).toContain('Pushed main to origin.')
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Pushed main to origin.')
+    expect(result?.message).not.toContain('\n')
+    expect(result?.severity).toBe(Severity.Info)
+    expect(result?.sticky).toBe(false)
+    expect(dialog.confirm).not.toHaveBeenCalled()
   })
 
   it('pushes main even when the sync target is another branch', async () => {
@@ -758,7 +881,7 @@ describe('GitGraphEditor worktree sync and push', () => {
 
   it('still pushes when the sync skips worktrees and reports both outcomes', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand, quickInput, dialog } = renderEditor(true, {
+    const { executeCommand, quickInput, notify } = renderEditor(true, {
       commands: {
         syncResult: {
           synced: [],
@@ -775,8 +898,11 @@ describe('GitGraphEditor worktree sync and push', () => {
     await flush()
 
     expect(pushCalls(executeCommand)).toHaveLength(1)
-    expect(summaryDetail(dialog)).toContain('Skipped (uncommitted changes): feature')
-    expect(summaryDetail(dialog)).toContain('Pushed main to origin.')
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Skipped (uncommitted changes): feature')
+    expect(result?.message).toContain('Pushed main to origin.')
+    expect(result?.severity).toBe(Severity.Info)
+    expect(result?.sticky).toBe(false)
   })
 
   it('does not sync or push when the picker is cancelled or emptied', async () => {
@@ -799,7 +925,7 @@ describe('GitGraphEditor worktree sync and push', () => {
 
   it('reports a failed push without dropping the sync summary', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { quickInput, dialog } = renderEditor(true, {
+    const { quickInput, notify } = renderEditor(true, {
       commands: { syncResult: syncedFeature, pushResult: false },
     })
     await flush()
@@ -807,13 +933,16 @@ describe('GitGraphEditor worktree sync and push', () => {
     openCombinedPicker(quickInput).triggerOk()
     await flush()
 
-    expect(summaryDetail(dialog)).toContain('Synced: feature')
-    expect(summaryDetail(dialog)).toContain('Push failed: main to origin.')
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Synced: feature')
+    expect(result?.message).toContain('Push failed: main to origin.')
+    expect(result?.severity).toBe(Severity.Warning)
+    expect(result?.sticky).toBe(true)
   })
 
   it('treats a missing push result as a failure', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { quickInput, dialog } = renderEditor(true, {
+    const { quickInput, notify } = renderEditor(true, {
       commands: { syncResult: syncedFeature },
     })
     await flush()
@@ -821,12 +950,15 @@ describe('GitGraphEditor worktree sync and push', () => {
     openCombinedPicker(quickInput).triggerOk()
     await flush()
 
-    expect(summaryDetail(dialog)).toContain('Push failed: main to origin.')
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Push failed: main to origin.')
+    expect(result?.severity).toBe(Severity.Warning)
+    expect(result?.sticky).toBe(true)
   })
 
   it('keeps pushing when the sync command rejects', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand, quickInput, dialog } = renderEditor(true, {
+    const { executeCommand, quickInput, notify } = renderEditor(true, {
       commands: { syncError: new Error('sync boom'), pushResult: true },
     })
     await flush()
@@ -835,13 +967,16 @@ describe('GitGraphEditor worktree sync and push', () => {
     await flush()
 
     expect(pushCalls(executeCommand)).toHaveLength(1)
-    expect(summaryDetail(dialog)).toContain('Sync failed: sync boom')
-    expect(summaryDetail(dialog)).toContain('Pushed main to origin.')
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Sync failed: sync boom')
+    expect(result?.message).toContain('Pushed main to origin.')
+    expect(result?.severity).toBe(Severity.Warning)
+    expect(result?.sticky).toBe(true)
   })
 
   it('reports a missing sync result and still pushes', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { executeCommand, quickInput, dialog } = renderEditor(true, {
+    const { executeCommand, quickInput, notify } = renderEditor(true, {
       commands: { pushResult: true },
     })
     await flush()
@@ -850,13 +985,16 @@ describe('GitGraphEditor worktree sync and push', () => {
     await flush()
 
     expect(pushCalls(executeCommand)).toHaveLength(1)
-    expect(summaryDetail(dialog)).toContain('Sync result unavailable.')
-    expect(summaryDetail(dialog)).toContain('Pushed main to origin.')
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Sync result unavailable.')
+    expect(result?.message).toContain('Pushed main to origin.')
+    expect(result?.severity).toBe(Severity.Warning)
+    expect(result?.sticky).toBe(true)
   })
 
   it('reports a rejected push command', async () => {
     gitGraphViewState.result = makeResult([mainWt, featureWt])
-    const { quickInput, dialog } = renderEditor(true, {
+    const { quickInput, notify } = renderEditor(true, {
       commands: { syncResult: syncedFeature, pushError: new Error('push boom') },
     })
     await flush()
@@ -864,7 +1002,29 @@ describe('GitGraphEditor worktree sync and push', () => {
     openCombinedPicker(quickInput).triggerOk()
     await flush()
 
-    expect(summaryDetail(dialog)).toContain('Push failed: main to origin.')
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Push failed: main to origin.')
+    expect(result?.severity).toBe(Severity.Warning)
+    expect(result?.sticky).toBe(true)
+  })
+
+  it('treats a failed worktree reset as a warning that stays until dismissed', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { quickInput, notify } = renderEditor(true, {
+      commands: {
+        syncResult: { ...syncedFeature, synced: [], failed: [{ name: 'feature', error: 'boom' }] },
+        pushResult: true,
+      },
+    })
+    await flush()
+
+    openCombinedPicker(quickInput).triggerOk()
+    await flush()
+
+    const result = lastNotification(notify)
+    expect(result?.message).toContain('Failed: feature (boom)')
+    expect(result?.severity).toBe(Severity.Warning)
+    expect(result?.sticky).toBe(true)
   })
 })
 

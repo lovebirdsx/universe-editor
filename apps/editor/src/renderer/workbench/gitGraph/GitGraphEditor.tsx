@@ -181,6 +181,15 @@ function worktreeSyncSummaryLines(
   summary: GitGraphWorktreeSyncResult,
 ): string[] {
   const lines: string[] = []
+  // Failures lead: the toast clips at ~5 lines and this is the only segment the
+  // user must act on.
+  if (summary.failed.length > 0) {
+    lines.push(
+      localize('gitGraph.worktree.sync.summaryFailed', 'Failed: {items}', {
+        items: summary.failed.map((f) => `${f.name} (${f.error})`).join('; '),
+      }),
+    )
+  }
   if (summary.synced.length > 0) {
     lines.push(
       localize('gitGraph.worktree.sync.summarySynced', 'Synced: {names}', {
@@ -204,14 +213,16 @@ function worktreeSyncSummaryLines(
       ),
     )
   }
-  if (summary.failed.length > 0) {
-    lines.push(
-      localize('gitGraph.worktree.sync.summaryFailed', 'Failed: {items}', {
-        items: summary.failed.map((f) => `${f.name} (${f.error})`).join('; '),
-      }),
-    )
-  }
   return lines
+}
+
+/** Notifications render their message in one <p> with no white-space rule, so
+ *  newlines collapse; flatten them into a single line, title first. */
+function worktreeSyncNotificationMessage(title: string, lines: readonly string[]): string {
+  return [title, ...lines]
+    .map((line) => line.replace(/\s*\r?\n\s*/g, ' ').trim())
+    .filter((line) => line.length > 0)
+    .join(' · ')
 }
 
 function formatDate(unixSeconds: number): string {
@@ -1863,10 +1874,10 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
     [commands],
   )
 
-  // Reset the picked worktrees' branches to the target, then report a summary and
-  // reload the graph. Dirty worktrees are always skipped by the extension side;
-  // without `force` it also skips any worktree holding a commit whose subject the
-  // target lacks, while `force` discards those commits.
+  // Reset the picked worktrees' branches to the target, then report a summary
+  // notification and reload the graph. Dirty worktrees are always skipped by the
+  // extension side; without `force` it also skips any worktree holding a commit
+  // whose subject the target lacks, while `force` discards those commits.
   // The extension syncs the worktrees concurrently in one command call, so while
   // it runs we surface a sticky spinner notification instead of staying silent.
   const runWorktreeSync = useCallback(
@@ -1889,22 +1900,27 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         : await execute()
       revalidate()
       if (!summary) return
-      await dialog.confirm({
-        message: localize('gitGraph.worktree.sync.summaryTitle', 'Worktree sync to {branch}', {
-          branch: targetBranch,
-        }),
-        detail:
-          worktreeSyncSummaryLines(targetBranch, summary).join('\n') ||
-          localize('gitGraph.worktree.sync.summaryNone', 'Nothing to do.'),
-        primaryButton: localize('common.ok', 'OK'),
+      const lines = worktreeSyncSummaryLines(targetBranch, summary)
+      const failed = summary.failed.length > 0
+      notification.notify({
+        severity: failed ? Severity.Warning : Severity.Info,
+        message: worktreeSyncNotificationMessage(
+          localize('gitGraph.worktree.sync.summaryTitle', 'Worktree sync to {branch}', {
+            branch: targetBranch,
+          }),
+          lines.length > 0
+            ? lines
+            : [localize('gitGraph.worktree.sync.summaryNone', 'Nothing to do.')],
+        ),
+        sticky: failed,
       })
     },
-    [dialog, executeWorktreeSync, progressService, revalidate, worktreeSyncRefs],
+    [executeWorktreeSync, notification, progressService, revalidate, worktreeSyncRefs],
   )
 
   // Sync the picked worktrees, then always push the fixed branch: the sync's
   // per-worktree skips and failures must not block the push. Both steps share one
-  // progress notification and one result dialog.
+  // progress notification and one result notification.
   const runWorktreeSyncAndPush = useCallback(
     async (targetBranch: string, selectedPaths: string[]): Promise<void> => {
       const refs = worktreeSyncRefs(selectedPaths)
@@ -1952,9 +1968,12 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           )
         : await execute()
       revalidate()
-      const lines = outcome.summary ? worktreeSyncSummaryLines(targetBranch, outcome.summary) : []
+      const failureLines: string[] = []
+      const detailLines = outcome.summary
+        ? worktreeSyncSummaryLines(targetBranch, outcome.summary)
+        : []
       if (outcome.syncFailed) {
-        lines.push(
+        failureLines.push(
           localize('gitGraph.worktree.syncAndPush.syncFailed', 'Sync failed: {error}', {
             error:
               outcome.syncError instanceof Error
@@ -1963,34 +1982,45 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
           }),
         )
       } else if (!outcome.summary) {
-        lines.push(
+        failureLines.push(
           localize('gitGraph.worktree.syncAndPush.syncUnavailable', 'Sync result unavailable.'),
         )
       }
-      lines.push(
-        outcome.pushed
-          ? localize(
-              'gitGraph.worktree.syncAndPush.pushSucceeded',
-              'Pushed {branch} to {remote}.',
-              { branch: WORKTREE_SYNC_PUSH_BRANCH, remote: WORKTREE_SYNC_PUSH_REMOTE },
-            )
-          : localize(
-              'gitGraph.worktree.syncAndPush.pushFailed',
-              'Push failed: {branch} to {remote}.',
-              { branch: WORKTREE_SYNC_PUSH_BRANCH, remote: WORKTREE_SYNC_PUSH_REMOTE },
-            ),
-      )
-      await dialog.confirm({
-        message: localize(
-          'gitGraph.worktree.syncAndPush.summaryTitle',
-          'Worktree sync to {branch} and push main',
-          { branch: targetBranch },
+      if (outcome.pushed) {
+        detailLines.push(
+          localize('gitGraph.worktree.syncAndPush.pushSucceeded', 'Pushed {branch} to {remote}.', {
+            branch: WORKTREE_SYNC_PUSH_BRANCH,
+            remote: WORKTREE_SYNC_PUSH_REMOTE,
+          }),
+        )
+      } else {
+        failureLines.push(
+          localize(
+            'gitGraph.worktree.syncAndPush.pushFailed',
+            'Push failed: {branch} to {remote}.',
+            { branch: WORKTREE_SYNC_PUSH_BRANCH, remote: WORKTREE_SYNC_PUSH_REMOTE },
+          ),
+        )
+      }
+      const failed =
+        outcome.syncFailed ||
+        !outcome.summary ||
+        !outcome.pushed ||
+        (outcome.summary?.failed.length ?? 0) > 0
+      notification.notify({
+        severity: failed ? Severity.Warning : Severity.Info,
+        message: worktreeSyncNotificationMessage(
+          localize(
+            'gitGraph.worktree.syncAndPush.summaryTitle',
+            'Worktree sync to {branch} and push main',
+            { branch: targetBranch },
+          ),
+          [...failureLines, ...detailLines],
         ),
-        detail: lines.join('\n'),
-        primaryButton: localize('common.ok', 'OK'),
+        sticky: failed,
       })
     },
-    [commands, dialog, executeWorktreeSync, progressService, revalidate, worktreeSyncRefs],
+    [commands, executeWorktreeSync, notification, progressService, revalidate, worktreeSyncRefs],
   )
 
   // Prompt for the worktrees to sync, then run the sync. The picker opens
