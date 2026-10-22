@@ -23,7 +23,7 @@
  *  real SDK wire — guarding against schema drift.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   NoopTelemetryService,
@@ -200,6 +200,8 @@ interface StubAgentOptions {
   readonly initializeError?: { code: number; message: string }
   /** Throw an error from deleteSession. */
   readonly deleteError?: { code: number; message: string }
+  /** Resolve before answering `session/list` — models a sweep captured mid-flight. */
+  readonly listGate?: Promise<void>
 }
 
 class StubAgent implements Agent {
@@ -224,6 +226,7 @@ class StubAgent implements Agent {
 
   async listSessions(params: ListSessionsRequest): Promise<ListSessionsResponse> {
     this.listCalls.push(params)
+    if (this._opts.listGate) await this._opts.listGate
     if (this._opts.listError) {
       throw new RequestError(this._opts.listError.code, this._opts.listError.message)
     }
@@ -1331,20 +1334,6 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
     coordinator = undefined
   })
 
-  async function seedAgentCaps(
-    built: BuildResult,
-    caps: AgentCapabilities | undefined,
-  ): Promise<void> {
-    if (caps !== undefined) {
-      built.client.agentOptions.set('fake', { capabilities: caps })
-    }
-    // Trigger hydrate so `_agentCaps` gets populated. Without this, deleteOnAgent
-    // can't tell whether `delete` is supported and returns 'unsupported'.
-    built.coordinator.start()
-    built.coordinator.requestHydrate()
-    await new Promise<void>((r) => setTimeout(r, 30))
-  }
-
   it('returns unknown when the history entry does not exist', async () => {
     const built = build({ agentIds: [] })
     coordinator = built.coordinator
@@ -1362,12 +1351,19 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
       sessionIdOnAgent: 'agent-x',
       title: 'x',
     })
-    await seedAgentCaps(built, { sessionCapabilities: { list: {} } } as AgentCapabilities)
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+    })
     const result = await coordinator.deleteOnAgent(entry.id)
     expect(result).toBe('unsupported')
+    const agent = built.client.agents[0]
+    expect(agent?.deleteCalls).toEqual([])
   })
 
-  it('returns ok and dispatches session/delete when delete capability is present', async () => {
+  it('connects and deletes when no hydrate has populated the cap cache yet', async () => {
+    // The bug: unknown caps were treated as "unsupported", so deleting a side
+    // task before ever opening the Sessions view silently skipped the
+    // agent-side delete and a later sweep rebuilt the row.
     const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
     coordinator = built.coordinator
     await built.history.initialize()
@@ -1376,18 +1372,17 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
       sessionIdOnAgent: 'agent-x',
       title: 'x',
     })
-    await seedAgentCaps(built, {
-      sessionCapabilities: { delete: {} },
-    } as unknown as AgentCapabilities)
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { delete: {} } } as unknown as AgentCapabilities,
+    })
     const result = await coordinator.deleteOnAgent(entry.id)
     expect(result).toBe('ok')
-    // The second connect is the delete call; the first was hydrate.
-    expect(built.client.connectCalls.length).toBeGreaterThanOrEqual(2)
+    expect(built.client.connectCalls).toHaveLength(1)
     // Best-effort background calls must never surface a spawn-failure toast.
     expect(built.client.connectCalls.every((c) => c.silent === true)).toBe(true)
     const deleteAgent = built.client.agents[built.client.agents.length - 1]
     expect(deleteAgent?.deleteCalls).toEqual([{ sessionId: 'agent-x' }])
-    // Both connections disposed.
+    // The connection used for the delete was disposed.
     expect(built.client.disposed.every((d) => d)).toBe(true)
   })
 
@@ -1400,11 +1395,6 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
       sessionIdOnAgent: 'agent-x',
       title: 'x',
     })
-    // Hydrate first to register capabilities.
-    await seedAgentCaps(built, {
-      sessionCapabilities: { delete: {} },
-    } as unknown as AgentCapabilities)
-    // Reconfigure so the next connect returns an agent that throws from delete.
     built.client.agentOptions.set('fake', {
       capabilities: { sessionCapabilities: { delete: {} } } as unknown as AgentCapabilities,
       deleteError: { code: -32603, message: 'cant delete' },
@@ -1413,6 +1403,39 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
     expect(result).toBe('error')
     // The connection used for the failing delete was still disposed.
     expect(built.client.disposed[built.client.disposed.length - 1]).toBe(true)
+  })
+
+  it('keeps a user-deleted session out of a sweep that was already in flight', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    coordinator = built.coordinator
+    await built.history.initialize()
+    const entry = built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'side-1',
+      title: 'side',
+      cwd: 'C:/ws',
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: {
+        sessionCapabilities: { list: {}, delete: {} },
+      } as unknown as AgentCapabilities,
+      listGate: gate,
+      listPages: [[{ sessionId: 'side-1', cwd: 'C:/ws', title: 'side', updatedAt: null }]],
+    })
+
+    // The sweep has already asked for `session/list` when the delete lands —
+    // exactly the confirmDelete=false race.
+    const sweep = coordinator.refresh()
+    await vi.waitFor(() => expect(built.client.agents[0]?.listCalls).toHaveLength(1))
+    built.history.removeDeleted(entry.id)
+    release()
+    await sweep
+
+    expect(built.history.get('side-1')).toBeUndefined()
   })
 })
 

@@ -966,7 +966,7 @@ export function SessionListBody({
                 // session is the whole delete.
                 if (isPending) return
                 await service.deleteOnAgent(entry.id)
-                history.remove(entry.id)
+                history.removeDeleted(entry.id)
               })()
             }
             // A live session has no transcriptPath on its history row until the

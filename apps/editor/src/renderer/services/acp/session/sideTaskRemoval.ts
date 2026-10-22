@@ -57,8 +57,9 @@ export async function confirmSideTaskRemoval(
  * Delete `ids` one by one, root first. A failing close/delete must not strand
  * the rest of the subtree, which is exactly the orphan state this cascade
  * prevents; the local row goes regardless, so an agent that cannot delete
- * server-side never leaves the side task undeletable here. Dropping the durable
- * link too keeps a failed `deleteOnAgent` from being rebuilt by a later sweep.
+ * server-side never leaves the side task undeletable here. `removeDeleted`
+ * tombstones the id, so a sweep that captured `session/list` before the delete
+ * cannot recreate the row as a plain session.
  */
 export async function deleteSideTasks(
   ids: readonly string[],
@@ -75,7 +76,6 @@ export async function deleteSideTasks(
     } catch (err) {
       console.warn(`[side-task] delete failed for ${id}, dropping the local row anyway`, err)
     }
-    history.remove(id)
-    history.forgetSideTask(id)
+    history.removeDeleted(id)
   }
 }

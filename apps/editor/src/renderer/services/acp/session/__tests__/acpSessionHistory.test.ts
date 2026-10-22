@@ -415,8 +415,76 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(5)
+    expect(persisted.schemaVersion).toBe(6)
     expect(persisted.entries).toHaveLength(1)
+  })
+
+  it('persists deletion tombstones and keeps them across a restart', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'gone', title: 't', cwd: '/work' })
+    svc.removeDeleted('gone')
+    await flushWrite()
+    const persisted = storage.setCalls.at(-1)!.value as { deleted?: readonly string[] }
+    expect(persisted.deleted).toEqual(['gone'])
+
+    const restarted = makeService({ storage }).svc
+    try {
+      await restarted.initialize()
+      restarted.bulkMergeFromAgent(
+        'fake',
+        [{ sessionId: 'gone', cwd: '/work', title: 't', updatedAt: null }],
+        '/work',
+        undefined,
+        'worktree',
+      )
+      expect(restarted.get('gone')).toBeUndefined()
+    } finally {
+      restarted.dispose()
+    }
+  })
+
+  it('drops a persisted row covered by a tombstone (crash between delete and sweep)', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 6,
+      entries: [
+        {
+          id: 'gone',
+          agentId: 'a',
+          sessionIdOnAgent: 'gone',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+        },
+        {
+          id: 'kept',
+          agentId: 'a',
+          sessionIdOnAgent: 'kept',
+          title: 'k',
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      ],
+      deleted: ['gone'],
+    })
+    await svc.initialize()
+    expect(svc.get('gone')).toBeUndefined()
+    expect(svc.get('kept')).toBeDefined()
+  })
+
+  it('clear() forgets tombstones so a later sweep can re-import', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'gone', title: 't', cwd: '/work' })
+    svc.removeDeleted('gone')
+    svc.clear()
+
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 'gone', cwd: '/work', title: 't', updatedAt: null }],
+      '/work',
+      undefined,
+      'worktree',
+    )
+    expect(svc.get('gone')).toBeDefined()
   })
 
   it('coalesces a burst of writes into a single set() call', async () => {
@@ -1353,7 +1421,11 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
     expect(svc.get('side-2')?.sideTaskOf).toBe('parent-1')
   })
 
-  it('keeps a deleted side task forgettable so the sweep cannot resurrect it', async () => {
+  it('does not resurrect a user-deleted side task when a stale sweep lands afterwards', async () => {
+    // Reproduces the confirmDelete=false bug: the delete RPC races an in-flight
+    // `session/list` whose response was captured before the row was removed.
+    // Without a tombstone the stale merge recreated the fork as a plain session
+    // (no `sideTaskOf`), and opening it hit an already-deleted transcript.
     await svc.initialize()
     svc.add({
       agentId: 'fake',
@@ -1363,10 +1435,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       hasMessages: true,
       sideTaskOf: 'parent-1',
     })
-    // User deleted the side task: the local row goes AND the durable link with
-    // it, so a failed agent-side delete cannot bring it back as a side task.
-    svc.remove('side-3')
-    svc.forgetSideTask('side-3')
+    svc.removeDeleted('side-3')
 
     svc.bulkMergeFromAgent(
       'fake',
@@ -1375,7 +1444,72 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       undefined,
       'worktree',
     )
-    expect(svc.get('side-3')?.sideTaskOf).toBeUndefined()
+    expect(svc.get('side-3')).toBeUndefined()
+  })
+
+  it('does not resurrect a user-deleted plain session when a stale sweep lands afterwards', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 'plain-1', title: 'plain', cwd: '/work' })
+    svc.removeDeleted('plain-1')
+
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 'plain-1', cwd: '/work', title: 'plain', updatedAt: null }],
+      '/work',
+      undefined,
+      'worktree',
+    )
+    expect(svc.get('plain-1')).toBeUndefined()
+  })
+
+  it('does not resurrect a user-deleted session through a replace sweep', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 'side-5', title: 'side', cwd: '/work' })
+    svc.removeDeleted('side-5')
+
+    svc.replaceAgentEntries(
+      'fake',
+      [{ sessionId: 'side-5', cwd: '/work', title: 'side', updatedAt: null }],
+      '/work',
+      undefined,
+      new Set<string>(),
+      'worktree',
+    )
+    expect(svc.get('side-5')).toBeUndefined()
+  })
+
+  it('lets a genuine new session reuse a tombstoned id', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 'reused', title: 'old', cwd: '/work' })
+    svc.removeDeleted('reused')
+
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 'reused', title: 'new', cwd: '/work' })
+    expect(svc.get('reused')?.title).toBe('new')
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 'reused', cwd: '/work', title: 'new', updatedAt: null }],
+      '/work',
+      undefined,
+      'worktree',
+    )
+    expect(svc.get('reused')?.title).toBe('new')
+  })
+
+  it('clears a tombstone when a row is rekeyed onto that id', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 'old-id', title: 'side', cwd: '/work' })
+    svc.removeDeleted('new-id')
+    svc.rekey('old-id', 'new-id')
+
+    svc.remove('new-id')
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 'new-id', cwd: '/work', title: 'side', updatedAt: null }],
+      '/work',
+      undefined,
+      'worktree',
+    )
+    expect(svc.get('new-id')).toBeDefined()
   })
 
   it('moves the durable side-task link when a row is rekeyed onto a new id', async () => {
@@ -2296,6 +2430,32 @@ describe('AcpSessionHistoryService — workspace scope', () => {
       // Wait for the async _reload to finish.
       await new Promise((r) => setTimeout(r, 20))
       expect(svc.list().map((e) => e.title)).toEqual(['from-B'])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('workspace swap keeps in-memory tombstones effective', async () => {
+    const storage = new FakeStorage()
+    const workspace = new FakeWorkspaceService(makeFakeWorkspace('/work-a'))
+    const { svc } = makeService({ storage, workspace })
+    try {
+      await svc.initialize()
+      svc.add({ agentId: 'a', sessionIdOnAgent: 'gone', title: 't', cwd: '/work-a' })
+      svc.removeDeleted('gone')
+
+      storage.buckets.get(StorageScope.WORKSPACE)!.clear()
+      storage.fireWorkspaceScopeChange()
+      await new Promise((r) => setTimeout(r, 20))
+
+      svc.bulkMergeFromAgent(
+        'fake',
+        [{ sessionId: 'gone', cwd: '/work-a', title: 't', updatedAt: null }],
+        '/work-a',
+        undefined,
+        'worktree',
+      )
+      expect(svc.get('gone')).toBeUndefined()
     } finally {
       svc.dispose()
     }

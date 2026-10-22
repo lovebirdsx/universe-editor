@@ -164,8 +164,7 @@ interface SideTaskHarness {
   readonly configUpdate: ReturnType<typeof vi.fn>
   readonly closeSession: ReturnType<typeof vi.fn>
   readonly deleteOnAgent: ReturnType<typeof vi.fn>
-  readonly historyRemove: ReturnType<typeof vi.fn>
-  readonly forgetSideTask: ReturnType<typeof vi.fn>
+  readonly historyRemoveDeleted: ReturnType<typeof vi.fn>
   /** The stubbed `IEditorService.activeEditor` — the real service derives it from
    *  the groups, so tests that open a tab must set it by hand. */
   readonly activeEditor: ISettableObservable<unknown>
@@ -192,15 +191,13 @@ function makeSideTaskHarness(
 ): SideTaskHarness {
   const rows = options.rows ?? []
   const live = options.live ?? []
-  const historyRemove = vi.fn()
-  const forgetSideTask = vi.fn()
+  const historyRemoveDeleted = vi.fn()
   const history = {
     _serviceBrand: undefined,
     entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.entries', rows),
     list: () => rows,
     get: (id: string) => rows.find((row) => row.id === id),
-    remove: historyRemove,
-    forgetSideTask,
+    removeDeleted: historyRemoveDeleted,
   } as unknown as IAcpSessionHistoryService
   const closeFails = new Set(options.closeFailsFor ?? [])
   const closeSession = vi.fn(async (id: string) => {
@@ -272,8 +269,7 @@ function makeSideTaskHarness(
     configUpdate,
     closeSession,
     deleteOnAgent,
-    historyRemove,
-    forgetSideTask,
+    historyRemoveDeleted,
     activeEditor,
     activeEditorId: () => {
       const active = groups.activeGroup.activeEditor
@@ -494,8 +490,7 @@ describe('OpenSideTaskAction list removal', () => {
       detail: 'This also deletes its 1 nested side task(s).',
     })
     expect(h.closeSession).toHaveBeenCalledWith('local-side')
-    expect(h.historyRemove.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
-    expect(h.forgetSideTask.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
+    expect(h.historyRemoveDeleted.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
   })
 
   it('keeps the row when the confirmation is cancelled', async () => {
@@ -507,8 +502,7 @@ describe('OpenSideTaskAction list removal', () => {
 
     expect(await h.removeViaPicker('side-1')).toBe(false)
     expect(h.deleteOnAgent).not.toHaveBeenCalled()
-    expect(h.historyRemove).not.toHaveBeenCalled()
-    expect(h.forgetSideTask).not.toHaveBeenCalled()
+    expect(h.historyRemoveDeleted).not.toHaveBeenCalled()
   })
 
   it('skips the dialog when confirmDelete is turned off', async () => {
@@ -521,6 +515,7 @@ describe('OpenSideTaskAction list removal', () => {
     expect(await h.removeViaPicker('side-1')).toBe(true)
     expect(h.confirm).not.toHaveBeenCalled()
     await vi.waitFor(() => expect(h.deleteOnAgent).toHaveBeenCalledWith('side-1'))
+    await vi.waitFor(() => expect(h.historyRemoveDeleted).toHaveBeenCalledWith('side-1'))
   })
 
   it('persists "never ask again" into the shared session-delete setting', async () => {
@@ -552,7 +547,10 @@ describe('OpenSideTaskAction list removal', () => {
 
     await h.removeViaPicker('side-1')
     await vi.waitFor(() => {
-      expect(h.historyRemove.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
+      expect(h.historyRemoveDeleted.mock.calls.map((call) => call[0])).toEqual([
+        'side-1',
+        'grand-1',
+      ])
     })
     expect(h.deleteOnAgent.mock.calls.map((call) => call[0])).toEqual(['grand-1'])
   })
@@ -561,13 +559,12 @@ describe('OpenSideTaskAction list removal', () => {
     const h = make({ rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')] })
     await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
 
-    // A row dropped from history (LRU eviction) must still be forgotten and
+    // A row dropped from history (LRU eviction) must still be tombstoned and
     // purged on the agent, or a later sweep rebuilds it under its parent.
     expect(await h.removeViaPicker('gone')).toBe(true)
     expect(h.confirm).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(h.deleteOnAgent).toHaveBeenCalledWith('gone'))
-    expect(h.historyRemove).toHaveBeenCalledWith('gone')
-    expect(h.forgetSideTask).toHaveBeenCalledWith('gone')
+    expect(h.historyRemoveDeleted).toHaveBeenCalledWith('gone')
   })
 })
 

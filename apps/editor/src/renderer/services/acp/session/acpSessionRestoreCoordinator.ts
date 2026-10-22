@@ -265,8 +265,14 @@ export class AcpSessionRestoreCoordinator extends Disposable {
   async deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
     const entry = this._history.get(sessionId)
     if (!entry) return 'unknown'
-    const caps = this._agentCaps.get(entry.agentId)
-    if (caps?.sessionCapabilities?.delete == null) return 'unsupported'
+    const cachedCaps = this._agentCaps.get(entry.agentId)
+    // Unknown caps are not "unsupported": the first hydrate may not have run
+    // yet. Skipping the delete then would leave the agent-side transcript alive
+    // and a later sweep would rebuild the row. Only a known agent that
+    // advertises no delete support can short-circuit without connecting.
+    if (cachedCaps !== undefined && cachedCaps.sessionCapabilities?.delete == null) {
+      return 'unsupported'
+    }
     const cwd = entry.cwd
     const authority = this._entryAuthority(entry)
     let conn: IAcpClientConnection | undefined
@@ -277,7 +283,16 @@ export class AcpSessionRestoreCoordinator extends Disposable {
           ? { cwd, silent: true, ...(authority ? { authority } : {}) }
           : { silent: true, ...(authority ? { authority } : {}) },
       )
-      await withTimeout(conn.initializeResult, HYDRATE_TIMEOUT_MS, 'ACP delete initialize')
+      const init = await withTimeout(
+        conn.initializeResult,
+        HYDRATE_TIMEOUT_MS,
+        'ACP delete initialize',
+      )
+      const caps = init.agentCapabilities ?? {}
+      // Refresh the snapshot: a reconnect may land on a build with different
+      // capabilities, and the next delete should short-circuit correctly.
+      this._agentCaps.set(entry.agentId, caps)
+      if (caps.sessionCapabilities?.delete == null) return 'unsupported'
       const params: DeleteSessionRequest = { sessionId: entry.sessionIdOnAgent }
       await withTimeout(conn.conn.deleteSession(params), HYDRATE_TIMEOUT_MS, 'ACP session/delete')
       this._telemetry.publicLog('acp.session_delete_ok', { agentId: entry.agentId })

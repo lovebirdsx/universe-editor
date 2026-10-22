@@ -723,6 +723,32 @@ describe('SessionListBody — keyboard navigation', () => {
     expect(focusedRowIds()).toEqual(['a'])
   })
 
+  it('does not let a stale sweep resurrect a row deleted from the list', async () => {
+    const { history } = harness
+    addEntry(history, 'gone', 'gone session', 1000)
+
+    fireEvent.click(
+      within(screen.getByTestId('session-row-gone')).getByRole('button', {
+        name: 'Remove session',
+      }),
+    )
+    await waitFor(() => expect(rowOrder()).toEqual([]))
+    expect(history.get('gone')).toBeUndefined()
+
+    // A `session/list` response captured before the delete lands must not
+    // rebuild the row (confirmDelete=false makes this race the common case).
+    act(() => {
+      history.bulkMergeFromAgent(
+        'fake',
+        [{ sessionId: 'gone', cwd: '/work', title: 'gone session', updatedAt: null }],
+        '/work',
+        undefined,
+        'worktree',
+      )
+    })
+    expect(rowOrder()).toEqual([])
+  })
+
   it('clicking a row moves the cursor to it', () => {
     const { history } = harness
     addEntry(history, 'a', 'alpha', 1000)
@@ -873,7 +899,7 @@ describe('SessionListBody — optimistic pending rows', () => {
 
   it('deleting a pending row only closes the live session — no deleteOnAgent, no history churn', async () => {
     const { history, sessionCtl } = harness
-    const removeSpy = vi.spyOn(history, 'remove')
+    const removeSpy = vi.spyOn(history, 'removeDeleted')
     pushSession(makeFakeSession({ id: 'local-1' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove session' }))

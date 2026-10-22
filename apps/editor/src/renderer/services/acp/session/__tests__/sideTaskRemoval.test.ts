@@ -70,16 +70,13 @@ function makeSessions(
 }
 
 function makeHistory() {
-  const remove = vi.fn()
-  const forgetSideTask = vi.fn()
+  const removeDeleted = vi.fn()
   return {
     service: {
       _serviceBrand: undefined,
-      remove,
-      forgetSideTask,
+      removeDeleted,
     } as unknown as IAcpSessionHistoryService,
-    remove,
-    forgetSideTask,
+    removeDeleted,
   }
 }
 
@@ -151,8 +148,7 @@ describe('deleteSideTasks', () => {
 
     expect(sessions.closeSession).toHaveBeenCalledWith('local-side')
     expect(sessions.deleteOnAgent).toHaveBeenCalledWith('side-1')
-    expect(history.remove).toHaveBeenCalledWith('side-1')
-    expect(history.forgetSideTask).toHaveBeenCalledWith('side-1')
+    expect(history.removeDeleted).toHaveBeenCalledWith('side-1')
   })
 
   it('skips close for history-only rows', async () => {
@@ -178,8 +174,7 @@ describe('deleteSideTasks', () => {
     await deleteSideTasks(['side-1', 'grand-1'], sessions.service, history.service)
 
     expect(sessions.deleteOnAgent.mock.calls.map((call) => call[0])).toEqual(['grand-1'])
-    expect(history.remove.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
-    expect(history.forgetSideTask.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
+    expect(history.removeDeleted.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
   })
 
   it('drops the local row even when the agent cannot delete it', async () => {
@@ -189,8 +184,9 @@ describe('deleteSideTasks', () => {
 
     await deleteSideTasks(['side-1'], sessions.service, history.service)
 
-    expect(history.remove).toHaveBeenCalledWith('side-1')
-    expect(history.forgetSideTask).toHaveBeenCalledWith('side-1')
+    // The tombstone inside `removeDeleted` is what keeps a sweep from
+    // resurrecting a row the agent could not delete.
+    expect(history.removeDeleted).toHaveBeenCalledWith('side-1')
   })
 
   it('never rejects', async () => {

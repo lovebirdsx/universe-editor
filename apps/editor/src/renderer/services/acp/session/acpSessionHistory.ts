@@ -254,11 +254,13 @@ export interface IAcpSessionHistoryService {
   rekey(oldId: string, newId: string): void
   remove(id: string): void
   /**
-   * Drop a side task's durable identity link. Called when the user deletes the
-   * side task for good (SideTasksBar's cascade) so a rebuilt row cannot come
-   * back as a side task if the agent-side `session/delete` failed.
+   * User-initiated permanent delete: drop the row, forget its durable side-task
+   * link, and tombstone the id so an in-flight or stale `session/list` sweep
+   * cannot recreate it. Distinct from {@link remove} — the internal-discard path
+   * used by `_onResumeFailure`, where the agent stays authoritative and a later
+   * sweep may legitimately rebuild the row (and backfill `sideTaskOf`).
    */
-  forgetSideTask(id: string): void
+  removeDeleted(id: string): void
   clear(): void
   /**
    * Patch a single configOption value (and optional friendly label) on a
@@ -639,8 +641,14 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 5
+const SCHEMA_VERSION = 6
 const MAX_ENTRIES = 100
+/**
+ * Bound on remembered tombstones. A user-deleted session must never be rebuilt
+ * by a `session/list` sweep, but the list must not grow without limit across
+ * years of sessions; oldest-first eviction mirrors the history ceiling.
+ */
+const MAX_DELETED_IDS = 500
 
 /**
  * Cap on the persisted first-prompt text. A bound is needed because the field
@@ -653,6 +661,8 @@ export const FIRST_PROMPT_MAX_LENGTH = 4000
 interface PersistedShape {
   readonly schemaVersion: number
   readonly entries: readonly AcpSessionHistoryEntry[]
+  /** User-deleted session ids, oldest first; never rebuilt by a sweep. */
+  readonly deleted?: readonly string[]
 }
 
 export class AcpSessionHistoryService
@@ -664,6 +674,10 @@ export class AcpSessionHistoryService
   readonly entries: ISettableObservable<readonly AcpSessionHistoryEntry[]>
 
   private readonly _uriIdentity: IUriIdentityService
+  /** User-deleted session ids; no sweep may recreate them while remembered. */
+  private readonly _deleted = new Set<string>()
+  /** Tombstones read by `_deserialize`, merged into `_deleted` by `_mergeOnLoad`. */
+  private _loadedDeleted: readonly string[] | undefined
 
   constructor(
     @IStorageService storage: IStorageService,
@@ -708,6 +722,9 @@ export class AcpSessionHistoryService
     // (agentId, sessionIdOnAgent) tuple updates the existing row in-place
     // rather than producing a duplicate.
     const id = entry.sessionIdOnAgent
+    // A genuine new/forked session under this id wins over an old tombstone;
+    // agent-issued ids are unique, so this is only defensive.
+    this._deleted.delete(id)
     const existingIdx = this._state.findIndex(
       (e) => e.agentId === entry.agentId && e.sessionIdOnAgent === entry.sessionIdOnAgent,
     )
@@ -858,6 +875,7 @@ export class AcpSessionHistoryService
     // Drop the old row AND any pre-existing row already sitting on newId, so a
     // rebuild can never leave two rows describing the same session.
     this._state = [next, ...this._state.filter((e) => e.id !== oldId && e.id !== newId)]
+    this._deleted.delete(newId)
     // The durable side-task link is keyed by row id, which just moved.
     if (next.sideTaskOf !== undefined) {
       this._sideTaskIndex.forget(oldId)
@@ -876,15 +894,43 @@ export class AcpSessionHistoryService
     }
   }
 
-  forgetSideTask(id: string): void {
+  /**
+   * The local row goes regardless of the agent-side outcome: the user asked for
+   * the session to be gone, and `deleteOnAgent` is best-effort. The tombstone is
+   * what keeps an in-flight `session/list` response — captured before the delete
+   * — from recreating the row afterwards; without it a stale sweep would turn
+   * the deleted side task into a plain session in the Sessions list.
+   */
+  removeDeleted(id: string): void {
+    this.remove(id)
+    // The side-task link is gone for good too: the tombstone, not the link,
+    // blocks a rebuild, so a failed agent-side delete cannot re-attach the row
+    // to its parent.
     this._sideTaskIndex.forget(id)
+    if (this._deleted.has(id)) return
+    this._deleted.add(id)
+    this._trimDeleted()
+    // The row may have been evicted already, in which case `remove` wrote
+    // nothing; the tombstone still has to reach disk.
+    this._scheduleWrite()
   }
 
   clear(): void {
-    if (this._state.length === 0) return
+    const hadTombstones = this._deleted.size > 0
+    this._deleted.clear()
+    if (this._state.length === 0 && !hadTombstones) return
     this._state = []
     this._publish()
     this._scheduleWrite()
+  }
+
+  /** Evict oldest tombstones first; Set preserves insertion order. */
+  private _trimDeleted(): void {
+    while (this._deleted.size > MAX_DELETED_IDS) {
+      const oldest = this._deleted.values().next().value
+      if (oldest === undefined) return
+      this._deleted.delete(oldest)
+    }
   }
 
   setHistoryConfigOption(sessionId: string, configId: string, value: string, label?: string): void {
@@ -1167,6 +1213,10 @@ export class AcpSessionHistoryService
     const reportedSessionIds = new Set<string>()
     for (const info of sessions) {
       if (typeof info.sessionId !== 'string' || info.sessionId.length === 0) continue
+      // A `session/list` response captured before the user deleted this session
+      // must never recreate it. Checked before `reportedSessionIds.add` so a
+      // replace sweep also prunes any lingering row instead of protecting it.
+      if (this._deleted.has(info.sessionId)) continue
       // Defense-in-depth in `workspace` scope: skip cross-workspace entries even
       // if the agent ignored the `cwd` filter on `session/list`. A missing
       // `info.cwd` is tolerated — the agent simply did not report it; existing.cwd
@@ -1366,15 +1416,18 @@ export class AcpSessionHistoryService
   }
 
   protected override _serialize(state: AcpSessionHistoryEntry[]): PersistedShape {
-    return { schemaVersion: SCHEMA_VERSION, entries: state }
+    return { schemaVersion: SCHEMA_VERSION, entries: state, deleted: [...this._deleted] }
   }
 
   protected override _deserialize(raw: unknown): AcpSessionHistoryEntry[] | undefined {
+    // Stale side channel from a previous load must never leak into `_mergeOnLoad`.
+    this._loadedDeleted = undefined
     if (typeof raw !== 'object' || raw === null) return undefined
     const o = raw as PersistedShape
     if (!Array.isArray(o.entries)) return undefined
     if (
       o.schemaVersion !== SCHEMA_VERSION &&
+      o.schemaVersion !== 5 &&
       o.schemaVersion !== 4 &&
       o.schemaVersion !== 3 &&
       o.schemaVersion !== 2 &&
@@ -1391,8 +1444,14 @@ export class AcpSessionHistoryService
     // data migration needed.
     // v4 → v5: `derivedTitle` is optional, old rows simply carry no
     // derived-title protection — no data migration needed.
+    // v5 → v6: `deleted` is optional, old payloads simply carry no tombstones —
+    // sessions deleted before the upgrade stay re-importable, as before.
     // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
     // 否则 history.get(sessionIdOnAgent) 永远 miss。
+    this._loadedDeleted =
+      o.schemaVersion === SCHEMA_VERSION && Array.isArray(o.deleted)
+        ? o.deleted.filter((id): id is string => typeof id === 'string' && id.length > 0)
+        : []
     return o.entries
       .filter(isValidEntry)
       .map((e) => (e.id === e.sessionIdOnAgent ? e : { ...e, id: e.sessionIdOnAgent }))
@@ -1402,12 +1461,17 @@ export class AcpSessionHistoryService
     loaded: AcpSessionHistoryEntry[],
     current: AcpSessionHistoryEntry[],
   ): AcpSessionHistoryEntry[] {
+    for (const id of this._loadedDeleted ?? []) this._deleted.add(id)
+    this._loadedDeleted = undefined
+    this._trimDeleted()
+    // A row persisted before the delete (crash window) must not outlive its
+    // tombstone, in either the in-memory snapshot or the loaded payload.
+    const merged = current.filter((e) => !this._deleted.has(e.id))
     // Any entries the caller already added before load completed win over the
     // persisted row with the same id.
-    const seen = new Set(current.map((e) => e.id))
-    const merged = [...current]
+    const seen = new Set(merged.map((e) => e.id))
     for (const e of loaded) {
-      if (!seen.has(e.id)) merged.push(e)
+      if (!this._deleted.has(e.id) && !seen.has(e.id)) merged.push(e)
     }
     merged.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     return this._evictOverflow(merged)

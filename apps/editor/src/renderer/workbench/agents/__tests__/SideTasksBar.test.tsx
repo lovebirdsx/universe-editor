@@ -70,8 +70,7 @@ interface Harness {
   readonly confirm: ReturnType<typeof vi.fn>
   readonly closeSession: ReturnType<typeof vi.fn>
   readonly deleteOnAgent: ReturnType<typeof vi.fn>
-  readonly remove: ReturnType<typeof vi.fn>
-  readonly forgetSideTask: ReturnType<typeof vi.fn>
+  readonly removeDeleted: ReturnType<typeof vi.fn>
   readonly update: ReturnType<typeof vi.fn>
   readonly groups: EditorGroupsService
   /** Open the popover so the rows (and their delete buttons) are mounted. */
@@ -96,17 +95,15 @@ function renderBar(
 ): Harness {
   let entries = options.entries ?? [row('side-1', PARENT)]
   const entriesObs = observableValue<readonly AcpSessionHistoryEntry[]>('t.entries', entries)
-  const remove = vi.fn((id: string) => {
+  const removeDeleted = vi.fn((id: string) => {
     entries = entries.filter((e) => e.id !== id)
     entriesObs.set(entries, undefined)
   })
-  const forgetSideTask = vi.fn()
   const history = {
     _serviceBrand: undefined,
     entries: entriesObs,
     get: (id: string) => entries.find((e) => e.id === id),
-    remove,
-    forgetSideTask,
+    removeDeleted,
   } as unknown as IAcpSessionHistoryServiceType
 
   const liveIds = new Set(options.live ?? [])
@@ -183,8 +180,7 @@ function renderBar(
     confirm,
     closeSession,
     deleteOnAgent,
-    remove,
-    forgetSideTask,
+    removeDeleted,
     update,
     groups,
     openPopover,
@@ -298,8 +294,7 @@ describe('SideTasksBar delete button', () => {
     })
     expect(h.closeSession).toHaveBeenCalledWith('side-1')
     expect(h.deleteOnAgent).toHaveBeenCalledWith('side-1')
-    expect(h.remove).toHaveBeenCalledWith('side-1')
-    expect(h.forgetSideTask).toHaveBeenCalledWith('side-1')
+    expect(h.removeDeleted).toHaveBeenCalledWith('side-1')
   })
 
   it('cascades over nested side tasks so no row is left orphaned', async () => {
@@ -313,8 +308,7 @@ describe('SideTasksBar delete button', () => {
     await settle()
 
     expect(h.deleteOnAgent.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
-    expect(h.remove.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
-    expect(h.forgetSideTask.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
+    expect(h.removeDeleted.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
   })
 
   it('tells the user how many nested side tasks go with it', async () => {
@@ -338,8 +332,7 @@ describe('SideTasksBar delete button', () => {
 
     expect(h.closeSession).not.toHaveBeenCalled()
     expect(h.deleteOnAgent).not.toHaveBeenCalled()
-    expect(h.remove).not.toHaveBeenCalled()
-    expect(h.forgetSideTask).not.toHaveBeenCalled()
+    expect(h.removeDeleted).not.toHaveBeenCalled()
   })
 
   it('persists "never ask again" into the shared session-delete setting', async () => {
@@ -363,6 +356,7 @@ describe('SideTasksBar delete button', () => {
 
     expect(h.confirm).not.toHaveBeenCalled()
     expect(h.deleteOnAgent).toHaveBeenCalledWith('side-1')
+    expect(h.removeDeleted).toHaveBeenCalledWith('side-1')
   })
 
   it('does not open the side task in a right split when deleting it', async () => {
@@ -385,7 +379,7 @@ describe('SideTasksBar delete button', () => {
 
     // side-1 is history-only (no live instance) → nothing to close for it.
     expect(h.closeSession.mock.calls.map((c) => c[0])).toEqual(['grand-1'])
-    expect(h.remove.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
+    expect(h.removeDeleted.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
   })
 
   it('still drops the local row when the agent cannot delete server-side', async () => {
@@ -394,7 +388,7 @@ describe('SideTasksBar delete button', () => {
     fireEvent.click(h.deleteButtons()[0]!)
     await settle()
 
-    expect(h.remove).toHaveBeenCalledWith('side-1')
+    expect(h.removeDeleted).toHaveBeenCalledWith('side-1')
   })
 
   it('keeps cascading after a row fails to close', async () => {
@@ -409,11 +403,8 @@ describe('SideTasksBar delete button', () => {
 
     // side-1's close threw, so its deleteOnAgent is skipped — but its local row
     // still goes and grand-1 is processed rather than stranded.
-    expect(h.remove.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
+    expect(h.removeDeleted.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
     expect(h.deleteOnAgent.mock.calls.map((c) => c[0])).toEqual(['grand-1'])
-    // The durable link goes too — a row we could not delete server-side must not
-    // be rebuilt as a side task by a later sweep.
-    expect(h.forgetSideTask.mock.calls.map((c) => c[0])).toEqual(['side-1', 'grand-1'])
   })
 
   it('drops the whole bar once the last side task is deleted', async () => {

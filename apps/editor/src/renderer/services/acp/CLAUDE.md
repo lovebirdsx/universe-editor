@@ -91,7 +91,7 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 
 ## 持久化
 
-`AcpSessionHistory`（`key='acp.sessionHistory'`，`schemaVersion=1`）走 `PersistedStateBase` **双桶策略**：有 workspace → `WORKSPACE`（每区独立 100 条 LRU）；空窗口 → `GLOBAL` 兜底。workspace 切换由 `onDidChangeWorkspaceScope` 驱动基类 `_reload()` + `AcpSessionRestoreCoordinator.onWorkspaceSwap()` 从新桶尝试恢复 active id。`AcpAgentDefaults`、`AcpLastSessionCwd` 同样双桶。条目形状 `{ id, agentId, sessionIdOnAgent, title, cwd, createdAt, lastUsedAt, configOptions? }`。
+`AcpSessionHistory`（`key='acp.sessionHistory'`，`schemaVersion=6`）走 `PersistedStateBase` **双桶策略**：有 workspace → `WORKSPACE`（每区独立 100 条 LRU）；空窗口 → `GLOBAL` 兜底。切换由 `onDidChangeWorkspaceScope` 驱动 `_reload()` + `onWorkspaceSwap()` 恢复 active id。payload `deleted` 墓碑阻止 sweep/重载复活已删 id。`AcpAgentDefaults`、`AcpLastSessionCwd` 同样双桶。条目形状 `{ id, agentId, sessionIdOnAgent, title, cwd, createdAt, lastUsedAt, configOptions? }`。
 
 **只存字符串元数据**——无 ContentBlock / SessionUpdate 落盘；恢复时拿 `sessionIdOnAgent` 调 `loadSession` 重放历史。旧版本 GLOBAL 桶数据启动时一次性 purge（不迁移）。
 
