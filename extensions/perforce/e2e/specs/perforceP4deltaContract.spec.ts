@@ -620,9 +620,9 @@ test.describe('@p1 p4delta fake contract', () => {
 
     expect(run.code).toBe(0)
     // `<crate name> <semver>`, the crate name compiled in — the shape a real
-    // p4delta prints, and what the admission gate parses. 0.1.19 is both the
+    // p4delta prints, and what the admission gate parses. 0.1.20 is both the
     // fake's default and the floor, so every δ spec passes the gate untouched.
-    expect(run.stdout.trim()).toBe('p4delta 0.1.19')
+    expect(run.stdout.trim()).toBe('p4delta 0.1.20')
   })
 
   test('lets a spec override the version it reports', ({ p4Workspace }) => {

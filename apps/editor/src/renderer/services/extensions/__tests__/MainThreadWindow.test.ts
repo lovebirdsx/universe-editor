@@ -146,6 +146,30 @@ describe('MainThreadWindow', () => {
     )
   })
 
+  // An information message announces an outcome: the dialog acknowledges it
+  // with OK (focused), not with a "Cancel" that pretends something was aborted.
+  it('gives information dialogs an OK dismiss button as the default', async () => {
+    const dialog = fakeDialog()
+    const mt = makeWindow({ dialog: dialog.service })
+    await mt.$showMessage('info', 'p4delta 0.1.20 installed.', ['Show Log'])
+    expect(dialog.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buttons: ['Show Log'],
+        dismissButton: 'OK',
+        defaultButton: 'dismiss',
+      }),
+    )
+  })
+
+  it('keeps Cancel and the first-action focus for warnings', async () => {
+    const dialog = fakeDialog()
+    const mt = makeWindow({ dialog: dialog.service })
+    await mt.$showMessage('warning', 'heads up', ['Show Log'])
+    const opts = dialog.confirm.mock.calls[0]![0]
+    expect(opts).not.toHaveProperty('dismissButton')
+    expect(opts).not.toHaveProperty('defaultButton')
+  })
+
   // Guard for the "View Diff did nothing" bug: a two-item message used to be
   // mapped onto the primary/cancel pair, and the dialog's cancel resolve carries
   // no choiceIndex, so clicking the second item dropped the pick entirely.

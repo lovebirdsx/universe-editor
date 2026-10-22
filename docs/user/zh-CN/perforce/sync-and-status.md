@@ -138,7 +138,7 @@ Explorer 多选同样适用：先选中多个文件 / 目录再右键，选定�
 
 ## 拉取由谁执行
 
-普通拉取（**拉取最新版本**，以及**拉取指定版本**里的 changelist 档）与**强制拉取**默认交给配套的 **p4delta** 引擎执行（`perforce.p4delta.enabled` 打开、且按 `UNIVERSE_P4DELTA_PATH` → `perforce.p4delta.path` → 编辑器自装副本 → `PATH` → `%LOCALAPPDATA%\Programs\p4delta` 的顺序找到自报版本 `>= 0.1.19` 的可执行文件才启用；低于门槛或读不出版本视为不满足，见[关于 p4delta 引擎](./resolve-and-advanced.md#关于-p4delta-引擎编辑器自装副本)）。
+普通拉取（**拉取最新版本**，以及**拉取指定版本**里的 changelist 档）与**强制拉取**默认交给配套的 **p4delta** 引擎执行（`perforce.p4delta.enabled` 打开、且按 `UNIVERSE_P4DELTA_PATH` → `perforce.p4delta.path` → 编辑器自装副本 → `PATH` → `%LOCALAPPDATA%\Programs\p4delta` 的顺序找到自报版本 `>= 0.1.20` 的可执行文件才启用；低于门槛或读不出版本视为不满足，见[关于 p4delta 引擎](./resolve-and-advanced.md#关于-p4delta-引擎编辑器自装副本)）。
 
 - **普通拉取**：δ 做的事与 `p4 sync` **语义完全一致**——先向 p4 预演一次，再把候选逐个按精确修订交回 p4 下载；保护未签出的本地改动、已签出的文件照样只更新版本并挂上待合并，全由 p4 自己判定。
 - **强制拉取**：δ 在**本地**算出要修复的集合（按范围文件裁剪，排除项在生成任何 p4 规格**之前**就被剔除），再按精确修订交回 p4 覆盖。这是它与原生的关键差别：`p4 sync -f` 只能拿包含项拼出的规格，**表达不了排除项**，所以带排除的工作区范围在原生的无参强制拉取里会被整体拒绝；交给 δ 则被排除的子树一个字节都不会动。

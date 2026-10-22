@@ -28,12 +28,19 @@ export interface IConfirmOptions {
   readonly checkboxes?: IConfirmCheckbox[]
   /** Arbitrary number of buttons, replacing the primary/secondary/cancel shape
    *  when set. Array order is render order; `buttons[0]` is the primary one
-   *  (confirmed, autofocused). A dismiss button is always appended, so every
-   *  entry here is an action — the caller never has to spend one on "Cancel";
-   *  `primaryButton` / `secondaryButton` / `cancelButton` / `copyButton` are all
-   *  ignored in this shape, and the appended button uses the default label.
+   *  (confirmed, autofocused by default). A dismiss button is always appended,
+   *  so every entry here is an action — the caller never has to spend one on
+   *  "Cancel"; `primaryButton` / `secondaryButton` / `cancelButton` /
+   *  `copyButton` are all ignored in this shape.
    *  Which button was picked is reported as {@link IConfirmResult.choiceIndex}. */
   readonly buttons?: readonly string[]
+  /** Label of the dismiss button appended under {@link buttons}; defaults to
+   *  "Cancel". Informational dialogs should use "OK" — there is nothing to
+   *  cancel, only an outcome to acknowledge. */
+  readonly dismissButton?: string
+  /** Which button starts focused under {@link buttons}: the first action
+   *  (default) or the appended dismiss button. */
+  readonly defaultButton?: 'first' | 'dismiss'
 }
 
 export interface IConfirmResult {

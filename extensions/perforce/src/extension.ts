@@ -512,7 +512,7 @@ export interface P4deltaVersionRefusal {
   readonly source: P4deltaEngineSource
   /** The version the engine reported; undefined when the probe could not read one. */
   readonly version: string | undefined
-  /** The formatted admission floor, e.g. `0.1.19`. */
+  /** The formatted admission floor, e.g. `0.1.20`. */
   readonly required: string
 }
 

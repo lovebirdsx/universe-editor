@@ -1572,10 +1572,10 @@ function main() {
   const opts = parseArgv(process.argv.slice(2))
   if (opts.version) {
     // Clap's `<crate name> <version>` shape (the crate name is compiled in).
-    // The editor's admission gate reads this banner and requires >= 0.1.19;
+    // The editor's admission gate reads this banner and requires >= 0.1.20;
     // `UNIVERSE_P4DELTA_FAKE_VERSION` lets a spec model an outdated or
     // unreadable build.
-    writeOut(`p4delta ${process.env.UNIVERSE_P4DELTA_FAKE_VERSION ?? '0.1.19'}\n`)
+    writeOut(`p4delta ${process.env.UNIVERSE_P4DELTA_FAKE_VERSION ?? '0.1.20'}\n`)
     return 0
   }
   if (opts.help) {

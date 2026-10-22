@@ -56,7 +56,7 @@ describe('parseP4deltaVersionBannerStrict', () => {
 
 describe('P4DELTA_MIN_VERSION', () => {
   it('is the product decision this build drives', () => {
-    expect(P4DELTA_MIN_VERSION).toEqual([0, 1, 19])
+    expect(P4DELTA_MIN_VERSION).toEqual([0, 1, 20])
   })
 })
 

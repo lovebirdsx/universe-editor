@@ -33,6 +33,7 @@ export function ConfirmDialog({
   // An empty array carries no more information than "no buttons given", so it
   // falls back to the legacy shape rather than rendering a dismiss-only dialog.
   const buttons = opts.buttons?.length ? opts.buttons : undefined
+  const focusDismiss = buttons !== undefined && opts.defaultButton === 'dismiss'
   const [neverAskAgain, setNeverAskAgain] = useState(false)
   const [checkboxChecked, setCheckboxChecked] = useState<boolean[]>(
     opts.checkboxes?.map((c) => c.initiallyChecked ?? false) ?? [],
@@ -70,7 +71,9 @@ export function ConfirmDialog({
             e.preventDefault()
             onResolve(
               buttons
-                ? pickResult(0)
+                ? focusDismiss
+                  ? cancelResult
+                  : pickResult(0)
                 : {
                     confirmed: true,
                     choice: 'primary',
@@ -117,7 +120,7 @@ export function ConfirmDialog({
                   key={`${i}-${label}`}
                   type="button"
                   className={i === 0 ? styles['btnPrimary'] : styles['btn']}
-                  autoFocus={i === 0}
+                  autoFocus={!focusDismiss && i === 0}
                   onClick={() => onResolve(pickResult(i))}
                 >
                   {label}
@@ -167,8 +170,15 @@ export function ConfirmDialog({
             ) : null}
             {/* The dismiss button is always present: with `buttons`, every entry
                 is an action, so closing needs its own exit. */}
-            <button type="button" className={styles['btn']} onClick={() => onResolve(cancelResult)}>
-              {buttons ? localize('dialog.default.cancel', 'Cancel') : cancel}
+            <button
+              type="button"
+              className={styles['btn']}
+              autoFocus={focusDismiss}
+              onClick={() => onResolve(cancelResult)}
+            >
+              {buttons
+                ? (opts.dismissButton ?? localize('dialog.default.cancel', 'Cancel'))
+                : cancel}
             </button>
           </div>
         </div>

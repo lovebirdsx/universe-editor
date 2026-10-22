@@ -248,6 +248,42 @@ describe('ConfirmDialog buttons', () => {
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Yes' }))
   })
 
+  it('honors a custom dismiss label and focuses it when defaultButton is dismiss', () => {
+    const onResolve = vi.fn()
+    render(
+      <ConfirmDialog
+        opts={{
+          message: 'p4delta 0.1.20 installed.',
+          buttons: ['Show Log'],
+          dismissButton: 'OK',
+          defaultButton: 'dismiss',
+        }}
+        onResolve={onResolve}
+      />,
+    )
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Show Log', 'OK'])
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'OK' }))
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: false,
+      choice: 'cancel',
+      neverAskAgain: false,
+    })
+  })
+
+  it('dismisses on Enter when the dismiss button is the default', () => {
+    const onResolve = vi.fn()
+    render(
+      <ConfirmDialog
+        opts={{ message: 'Done.', buttons: ['Show Log'], defaultButton: 'dismiss' }}
+        onResolve={onResolve}
+      />,
+    )
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Enter' })
+    expect(onResolve).toHaveBeenCalledTimes(1)
+    expect(onResolve.mock.calls[0]![0]).not.toHaveProperty('choiceIndex')
+  })
+
   it('falls back to the legacy shape for an empty buttons array', () => {
     render(<ConfirmDialog opts={{ message: 'Sure?', buttons: [] }} onResolve={vi.fn()} />)
     const names = screen.getAllByRole('button').map((b) => b.textContent)

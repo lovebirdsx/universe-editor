@@ -28,6 +28,7 @@ import {
   StatusBarAlignment,
   toDisposable,
   fsPathToWorkspaceUri,
+  localize,
   type IDisposable,
   type IProgress,
   type IProgressStep,
@@ -173,8 +174,23 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     // `buttons`: mapping them onto the primary/secondary/cancel triple used to
     // both silently drop items beyond the third and lose the pick entirely
     // whenever a two-item message had its second item clicked.
+    //
+    // An information dialog reports an outcome; acknowledging it is the safe
+    // default, so its dismiss button reads "OK" and holds the initial focus.
+    // Warnings / errors keep "Cancel" and focus the first action — that action
+    // is usually the way out (open the log, force the update…).
     return this._dialog
-      .confirm({ message, type: severity, buttons: items })
+      .confirm({
+        message,
+        type: severity,
+        buttons: items,
+        ...(severity === 'info'
+          ? {
+              dismissButton: localize('dialog.default.ok', 'OK'),
+              defaultButton: 'dismiss' as const,
+            }
+          : {}),
+      })
       .then((result) => (result.choiceIndex === undefined ? undefined : items[result.choiceIndex]))
   }
 

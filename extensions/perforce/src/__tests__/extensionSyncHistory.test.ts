@@ -306,7 +306,7 @@ const clientMock = vi.hoisted(() => {
 // the host PATH cannot raise the version warning into these assertions.
 vi.mock('../p4delta/p4deltaService.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../p4delta/p4deltaService.js')>()
-  return { ...actual, probeP4deltaBuild: async () => [0, 1, 19] }
+  return { ...actual, probeP4deltaBuild: async () => [0, 1, 20] }
 })
 
 vi.mock('../client.js', () => ({
