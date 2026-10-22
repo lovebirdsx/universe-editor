@@ -9,9 +9,12 @@
 import { afterEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import {
   CommandsRegistry,
+  ConfigurationTarget,
   ContextKeyService,
   Event,
   GroupDirection,
+  IConfigurationService,
+  IDialogService,
   IEditorGroupsService,
   IEditorService,
   IInstantiationService,
@@ -157,10 +160,18 @@ interface SideTaskHarness {
   readonly pick: ReturnType<typeof vi.fn>
   readonly addGroup: MockInstance<EditorGroupsService['addGroup']>
   readonly inst: InstantiationService
+  readonly confirm: ReturnType<typeof vi.fn>
+  readonly configUpdate: ReturnType<typeof vi.fn>
+  readonly closeSession: ReturnType<typeof vi.fn>
+  readonly deleteOnAgent: ReturnType<typeof vi.fn>
+  readonly historyRemove: ReturnType<typeof vi.fn>
+  readonly forgetSideTask: ReturnType<typeof vi.fn>
   /** The stubbed `IEditorService.activeEditor` — the real service derives it from
    *  the groups, so tests that open a tab must set it by hand. */
   readonly activeEditor: ISettableObservable<unknown>
   activeEditorId(): string | undefined
+  /** Invoke the picker's remove handler the way the Quick Input panel does. */
+  removeViaPicker(id: string): Promise<boolean | void>
   run(commandId: string, arg?: unknown): Promise<void>
   dispose(): void
 }
@@ -172,25 +183,47 @@ function makeSideTaskHarness(
     readonly live?: readonly IAcpSession[]
     readonly pickResult?: { id: string } | undefined
     readonly activeEditor?: unknown
+    /** `undefined` (the default) means the confirm dialog is enabled. */
+    readonly confirmDelete?: boolean
+    readonly confirmResult?: { confirmed: boolean; neverAskAgain?: boolean }
+    /** Live session ids whose `closeSession` rejects. */
+    readonly closeFailsFor?: readonly string[]
   } = {},
 ): SideTaskHarness {
   const rows = options.rows ?? []
   const live = options.live ?? []
+  const historyRemove = vi.fn()
+  const forgetSideTask = vi.fn()
   const history = {
     _serviceBrand: undefined,
     entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.entries', rows),
     list: () => rows,
     get: (id: string) => rows.find((row) => row.id === id),
+    remove: historyRemove,
+    forgetSideTask,
   } as unknown as IAcpSessionHistoryService
+  const closeFails = new Set(options.closeFailsFor ?? [])
+  const closeSession = vi.fn(async (id: string) => {
+    if (closeFails.has(id)) throw new Error(`close failed: ${id}`)
+  })
+  const deleteOnAgent = vi.fn(async () => 'ok' as const)
   const sessions = {
     _serviceBrand: undefined,
     getById: (id: string) => live.find((s) => s.id === id || s.sessionIdOnAgent.get() === id),
     activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),
+    closeSession,
+    deleteOnAgent,
   } as unknown as IAcpSessionService
   const groups = new EditorGroupsService()
   const addGroup = vi.spyOn(groups, 'addGroup')
   const pick = vi.fn().mockResolvedValue(options.pickResult)
   const activeEditor = observableValue<unknown>('t.editor', options.activeEditor)
+  const confirm = vi.fn(async () => ({
+    confirmed: options.confirmResult?.confirmed ?? true,
+    choice: 'primary' as const,
+    neverAskAgain: options.confirmResult?.neverAskAgain ?? false,
+  }))
+  const configUpdate = vi.fn()
 
   const services = new ServiceCollection()
   services.set(IAcpSessionService, sessions)
@@ -201,6 +234,16 @@ function makeSideTaskHarness(
     _serviceBrand: undefined,
     pick,
   } as unknown as IQuickInputService)
+  services.set(IDialogService, {
+    _serviceBrand: undefined,
+    confirm,
+    prompt: vi.fn(),
+  } as unknown as IDialogService)
+  services.set(IConfigurationService, {
+    _serviceBrand: undefined,
+    get: () => options.confirmDelete,
+    update: configUpdate,
+  } as unknown as IConfigurationService)
   services.set(IAcpChatWidgetService, {
     _serviceBrand: undefined,
     register: () => ({ dispose() {} }),
@@ -225,10 +268,29 @@ function makeSideTaskHarness(
     pick,
     addGroup,
     inst,
+    confirm,
+    configUpdate,
+    closeSession,
+    deleteOnAgent,
+    historyRemove,
+    forgetSideTask,
     activeEditor,
     activeEditorId: () => {
       const active = groups.activeGroup.activeEditor
       return active instanceof AcpSessionEditorInput ? active.sessionId : undefined
+    },
+    removeViaPicker: (id) => {
+      const pickOptions = pick.mock.calls[0]?.[1] as
+        | {
+            onItemRemove?: (item: {
+              id: string
+              label: string
+            }) => boolean | void | Promise<boolean | void>
+          }
+        | undefined
+      const handler = pickOptions?.onItemRemove
+      if (!handler) throw new Error('pick() was not called with an onItemRemove handler')
+      return Promise.resolve(handler({ id, label: id }))
     },
     run: async (commandId, arg) => {
       await inst.invokeFunction((accessor) =>
@@ -387,6 +449,125 @@ describe('side-task navigation commands', () => {
 
     expect(h.pick).toHaveBeenCalledOnce()
     expect(h.pick.mock.calls[0]![0].map((item: { id: string }) => item.id)).toEqual(['side-1'])
+  })
+})
+
+describe('OpenSideTaskAction list removal', () => {
+  let harness: SideTaskHarness | undefined
+
+  const make = (options?: Parameters<typeof makeSideTaskHarness>[0]): SideTaskHarness => {
+    harness = makeSideTaskHarness(options)
+    return harness
+  }
+
+  afterEach(() => {
+    harness?.dispose()
+    harness = undefined
+  })
+
+  it('offers a remove handler on the pick', async () => {
+    const h = make({ rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')] })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.pick.mock.calls[0]![1]).toMatchObject({ onItemRemove: expect.any(Function) })
+  })
+
+  it('confirms, then cascades the delete over the subtree', async () => {
+    const h = make({
+      rows: [
+        sideTaskRow('parent-dur'),
+        sideTaskRow('side-1', 'parent-dur', 2000),
+        sideTaskRow('grand-1', 'side-1', 1000),
+        sideTaskRow('side-2', 'parent-dur', 500),
+      ],
+      live: [liveSession('local-side', 'side-1')],
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(await h.removeViaPicker('side-1')).toBe(true)
+    await vi.waitFor(() => {
+      expect(h.deleteOnAgent.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
+    })
+
+    expect(h.confirm.mock.calls[0]?.[0]).toMatchObject({
+      message: 'Delete this side task?',
+      detail: 'This also deletes its 1 nested side task(s).',
+    })
+    expect(h.closeSession).toHaveBeenCalledWith('local-side')
+    expect(h.historyRemove.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
+    expect(h.forgetSideTask.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
+  })
+
+  it('keeps the row when the confirmation is cancelled', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      confirmResult: { confirmed: false },
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(await h.removeViaPicker('side-1')).toBe(false)
+    expect(h.deleteOnAgent).not.toHaveBeenCalled()
+    expect(h.historyRemove).not.toHaveBeenCalled()
+    expect(h.forgetSideTask).not.toHaveBeenCalled()
+  })
+
+  it('skips the dialog when confirmDelete is turned off', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      confirmDelete: false,
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(await h.removeViaPicker('side-1')).toBe(true)
+    expect(h.confirm).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(h.deleteOnAgent).toHaveBeenCalledWith('side-1'))
+  })
+
+  it('persists "never ask again" into the shared session-delete setting', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      confirmResult: { confirmed: true, neverAskAgain: true },
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    await h.removeViaPicker('side-1')
+    expect(h.configUpdate).toHaveBeenCalledWith(
+      'acp.sessions.confirmDelete',
+      false,
+      ConfigurationTarget.User,
+    )
+  })
+
+  it('keeps cascading after a row fails to close', async () => {
+    const h = make({
+      rows: [
+        sideTaskRow('parent-dur'),
+        sideTaskRow('side-1', 'parent-dur', 2000),
+        sideTaskRow('grand-1', 'side-1', 1000),
+      ],
+      live: [liveSession('local-side', 'side-1'), liveSession('local-grand', 'grand-1')],
+      closeFailsFor: ['local-side'],
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    await h.removeViaPicker('side-1')
+    await vi.waitFor(() => {
+      expect(h.historyRemove.mock.calls.map((call) => call[0])).toEqual(['side-1', 'grand-1'])
+    })
+    expect(h.deleteOnAgent.mock.calls.map((call) => call[0])).toEqual(['grand-1'])
+  })
+
+  it('cascades a row that already vanished from history', async () => {
+    const h = make({ rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')] })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    // A row dropped from history (LRU eviction) must still be forgotten and
+    // purged on the agent, or a later sweep rebuilds it under its parent.
+    expect(await h.removeViaPicker('gone')).toBe(true)
+    expect(h.confirm).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(h.deleteOnAgent).toHaveBeenCalledWith('gone'))
+    expect(h.historyRemove).toHaveBeenCalledWith('gone')
+    expect(h.forgetSideTask).toHaveBeenCalledWith('gone')
   })
 })
 

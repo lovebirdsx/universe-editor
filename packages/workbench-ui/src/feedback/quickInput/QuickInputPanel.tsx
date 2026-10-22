@@ -186,6 +186,14 @@ function canRemove(item: QuickPickInput<IQuickPickItem> | undefined): item is IQ
   return isSelectable(item) && item.removable !== false
 }
 
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null &&
+    (typeof value === 'object' || typeof value === 'function') &&
+    typeof (value as { then?: unknown }).then === 'function'
+  )
+}
+
 function compareMru(a: IQuickPickItem, b: IQuickPickItem, mruIds: readonly string[]): number {
   const ai = mruIds.indexOf(a.id)
   const bi = mruIds.indexOf(b.id)
@@ -500,6 +508,22 @@ export function QuickPickPanel({
   const [unlockedFor, setUnlockedFor] = useState<QuickPickState['quickNavigate']>(undefined)
   const locked = quickNavigate !== undefined && unlockedFor !== quickNavigate
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set())
+  // Rows whose removal handler has not settled yet: a second ✕ click / Delete
+  // press must not re-run a confirmation flow that is already in flight.
+  const pendingRemoveIdsRef = useRef<Set<string>>(new Set())
+  // Identity of the pick this panel instance is rendering. An async removal may
+  // settle after the host swapped in another picker (the service resolves the
+  // old pick and React reuses this component), and its outcome must not hide a
+  // same-id row in the new list.
+  const pickStateRef = useRef(state)
+  pickStateRef.current = state
+  // A different picker owns a fresh row set — removals and in-flight requests
+  // from the previous one must not leak into it (ids repeat across invocations
+  // of the same picker).
+  useEffect(() => {
+    pendingRemoveIdsRef.current.clear()
+    setRemovedIds((prev) => (prev.size === 0 ? prev : new Set()))
+  }, [state])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   // True while an IME composition is in progress. During composition the panel
@@ -815,17 +839,52 @@ export function QuickPickPanel({
     [state, onClose],
   )
 
+  const hideRemovedItem = useCallback((id: string) => {
+    setRemovedIds((prev) => {
+      if (prev.has(id)) return prev
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [])
+
   const removeItem = useCallback(
     (item: IQuickPickItem) => {
       if (!onItemRemove || !canRemove(item)) return
-      onItemRemove(item)
-      setRemovedIds((prev) => {
-        const next = new Set(prev)
-        next.add(item.id)
-        return next
-      })
+      if (pendingRemoveIdsRef.current.has(item.id)) return
+
+      const pickState = pickStateRef.current
+      pendingRemoveIdsRef.current.add(item.id)
+
+      const settle = (removed: boolean): void => {
+        // The panel has moved on to another picker: its id bookkeeping belongs
+        // to the previous row set, which the state-change effect already reset.
+        if (pickStateRef.current !== pickState) return
+        pendingRemoveIdsRef.current.delete(item.id)
+        if (removed) hideRemovedItem(item.id)
+      }
+
+      let outcome: ReturnType<typeof onItemRemove>
+      try {
+        outcome = onItemRemove(item)
+      } catch (err) {
+        pendingRemoveIdsRef.current.delete(item.id)
+        throw err
+      }
+
+      // A promise defers the decision: the row stays visible until it settles,
+      // then disappears unless the handler answered `false`. A rejection counts
+      // as "not removed" so a failing handler can never silently drop the row.
+      if (isPromiseLike(outcome)) {
+        void Promise.resolve(outcome).then(
+          (removed) => settle(removed !== false),
+          () => settle(false),
+        )
+        return
+      }
+      settle(outcome !== false)
     },
-    [onItemRemove],
+    [onItemRemove, hideRemovedItem],
   )
 
   // Release-to-open (VSCode quick-navigate parity): while locked, letting go of the

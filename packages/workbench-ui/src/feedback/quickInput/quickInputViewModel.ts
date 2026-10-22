@@ -12,6 +12,7 @@ import type {
   IQuickPickItemButton,
   QuickPickFilterMode,
   QuickPickInput,
+  QuickPickItemRemoveResult,
   QuickPickPresentation,
 } from '@universe-editor/platform'
 
@@ -66,7 +67,7 @@ export interface QuickPickState {
    */
   autoFocusFirstItem?: boolean | undefined
   onAccept?: (items: IQuickPickItem[], mods?: IKeyMods) => void
-  onItemRemove?: ((item: IQuickPickItem) => void) | undefined
+  onItemRemove?: ((item: IQuickPickItem) => QuickPickItemRemoveResult) | undefined
   onValueChange?: (value: string) => void
   /** Fires when the focused (active) item changes; `undefined` when none. */
   onActiveChange?: (item: IQuickPickItem | undefined) => void

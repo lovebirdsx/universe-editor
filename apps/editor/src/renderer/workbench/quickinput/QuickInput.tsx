@@ -44,7 +44,15 @@ export function QuickInputPortal() {
     return () => d.dispose()
   }, [svc])
 
-  const close = () => svc.hide()
+  const close = () => {
+    // A renderer dialog stacks above the picker (e.g. a delete confirmation
+    // raised from one of its rows). Both overlays listen for Escape on the same
+    // document, and the picker's listener runs first, so without this guard the
+    // dialog's Escape would also close the list the dialog is asking about.
+    const ownerDocument = svc.currentDocument ?? document
+    if (ownerDocument.querySelector('[data-renderer-dialog]')) return
+    svc.hide()
+  }
 
   // Dismiss on backdrop click, but survive a drag whose press starts inside the
   // panel (e.g. selecting text in the path input) and releases over the backdrop.

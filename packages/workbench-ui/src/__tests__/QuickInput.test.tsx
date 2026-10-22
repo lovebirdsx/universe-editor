@@ -620,6 +620,127 @@ describe('QuickPickPanel item removal', () => {
     expect(screen.queryByText('Format Document')).toBeNull()
   })
 
+  it('keeps the row when onItemRemove returns false synchronously', () => {
+    const onItemRemove = vi.fn(() => false)
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+    fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
+  it('keeps the row until the async removal settles, then hides it', async () => {
+    let resolveRemoval!: (removed: boolean) => void
+    const onItemRemove = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveRemoval = resolve
+        }),
+    )
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+    })
+    // A confirmation dialog is still up — the row must not vanish behind it.
+    expect(screen.getByText('Format Document')).toBeTruthy()
+
+    await act(async () => {
+      resolveRemoval(true)
+      await Promise.resolve()
+    })
+    expect(screen.queryByText('Format Document')).toBeNull()
+  })
+
+  it('keeps the row when an async removal resolves false', async () => {
+    const onItemRemove = vi.fn(() => Promise.resolve(false))
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+    })
+    expect(screen.getByText('Format Document')).toBeTruthy()
+
+    // A refused removal must release the pending slot, not wedge the row.
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+    })
+    expect(onItemRemove).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the row when the removal handler rejects', async () => {
+    const onItemRemove = vi.fn(() => Promise.reject(new Error('failed')))
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+    })
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
+  it('ignores repeated remove requests while one is pending', async () => {
+    let resolveRemoval!: (removed: boolean) => void
+    const onItemRemove = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveRemoval = resolve
+        }),
+    )
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+    const button = screen.getAllByTestId('quick-input-item-remove')[0]!
+
+    await act(async () => {
+      fireEvent.click(button)
+      fireEvent.click(button)
+    })
+    expect(onItemRemove).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveRemoval(true)
+      await Promise.resolve()
+    })
+    expect(screen.queryByText('Format Document')).toBeNull()
+  })
+
+  it('does not let a previous picker settle removal of a same-id row in the next one', async () => {
+    let resolveFirst!: (removed: boolean) => void
+    const first = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveFirst = resolve
+        }),
+    )
+    const second = vi.fn()
+    const { rerender } = render(
+      <QuickPickPanel state={makeState({ onItemRemove: first })} onClose={() => undefined} />,
+    )
+    await act(async () => {
+      fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+    })
+
+    // The host swaps in another picker in place; React reuses this component.
+    rerender(
+      <QuickPickPanel state={makeState({ onItemRemove: second })} onClose={() => undefined} />,
+    )
+    await act(async () => {
+      resolveFirst(true)
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
+  it('starts a new pick with a clean removed set', () => {
+    const onItemRemove = vi.fn()
+    const { rerender } = render(
+      <QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />,
+    )
+    fireEvent.click(screen.getAllByTestId('quick-input-item-remove')[0]!)
+    expect(screen.queryByText('Format Document')).toBeNull()
+
+    rerender(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
   it('Ctrl+X on the focused item removes it in quick-navigate mode', () => {
     const onItemRemove = vi.fn()
     render(

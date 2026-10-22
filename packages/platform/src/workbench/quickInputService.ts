@@ -157,6 +157,16 @@ export interface IQuickNavigateOptions {
   readonly triggerKey?: string
 }
 
+/**
+ * Outcome of {@link IPickOptions.onItemRemove}. Returning nothing (or `true`)
+ * removes the row from the visible list; returning `false` keeps it. A promise
+ * defers the decision: the row stays visible while it is pending (further
+ * remove requests for it are ignored), then disappears unless it resolved
+ * `false`. A rejected promise keeps the row — a handler failure is treated as
+ * "not removed", never as a removal.
+ */
+export type QuickPickItemRemoveResult = boolean | void | Promise<boolean | void>
+
 export interface IPickOptions {
   readonly id?: string
   readonly placeholder?: string
@@ -197,9 +207,12 @@ export interface IPickOptions {
   /**
    * When provided, each item gains an inline remove affordance (a ✕ button and
    * the Delete key on the focused item). Invoked without closing the picker;
-   * the item is also removed from the visible list locally.
+   * the item is removed from the visible list locally unless the handler
+   * returns `false` (or a promise resolving `false`), which keeps the row —
+   * used by flows that confirm the removal first and must leave the row in
+   * place when the user cancels.
    */
-  readonly onItemRemove?: (item: IQuickPickItem) => void
+  readonly onItemRemove?: (item: IQuickPickItem) => QuickPickItemRemoveResult
   /**
    * Fires when an item-level button (`IQuickPickItem.buttons`) is triggered.
    * The picker stays open; the handler owns the lifecycle.

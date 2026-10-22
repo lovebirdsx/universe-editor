@@ -9,6 +9,7 @@ import {
   Action2,
   GroupDirection,
   IDialogService,
+  IConfigurationService,
   IEditorGroupsService,
   IEditorService,
   IFileDialogService,
@@ -40,11 +41,13 @@ import {
 import type { IAcpSession } from '../services/acp/session/acpSessionModel.js'
 import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
 import {
+  collectSideTaskDescendants,
   directSideTaskChildren,
   IAcpSessionHistoryService,
   isForeignWorkspaceSession,
   sideTaskParentOf,
 } from '../services/acp/session/acpSessionHistory.js'
+import { confirmSideTaskRemoval, deleteSideTasks } from '../services/acp/session/sideTaskRemoval.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { IAcpMessageAttachmentStore } from '../services/acp/session/acpMessageAttachmentStore.js'
@@ -1452,6 +1455,8 @@ export class OpenSideTaskAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const quickInput = accessor.get(IQuickInputService)
+    const dialogService = accessor.get(IDialogService)
+    const config = accessor.get(IConfigurationService)
 
     const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
@@ -1467,6 +1472,27 @@ export class OpenSideTaskAction extends Action2 {
     }))
     const picked = await quickInput.pick(items, {
       placeholder: localize('acp.sideTask.open.placeholder', 'Open a side task'),
+      onItemRemove: (item) => {
+        // Resolve the subtree synchronously: the confirm dialog can outlive the
+        // row set this click was based on. A row that vanished from history
+        // meanwhile still goes through the full cascade — its durable link must
+        // be forgotten, or a later sweep would rebuild it under its parent.
+        const ids = collectSideTaskDescendants(history.list(), item.id)
+        return (async () => {
+          try {
+            if (!(await confirmSideTaskRemoval(ids, dialogService, config))) return false
+          } catch (err) {
+            console.warn('[side-task] delete confirmation failed', err)
+            return false
+          }
+          // Hide the row as soon as the user confirms; the agent round-trip runs
+          // in the background so a slow delete never holds the picker open.
+          void deleteSideTasks(ids, sessions, history).catch((err) =>
+            console.warn('[side-task] delete cascade failed', err),
+          )
+          return true
+        })()
+      },
     })
     if (!picked) return
 

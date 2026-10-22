@@ -76,3 +76,25 @@ describe('QuickInputService.pick toolbar button', () => {
     await expect(picked).resolves.toBeUndefined()
   })
 })
+
+describe('QuickInputPortal escape handling', () => {
+  it('leaves the picker open while a renderer dialog is above it', async () => {
+    const svc = renderPortal()
+    await act(async () => {
+      void svc.pick([{ id: 'a', label: 'Alpha' }])
+    })
+    expect(screen.getByTestId('quick-input-field')).toBeTruthy()
+
+    // A confirmation dialog raised from a row owns Escape; the picker's own
+    // document listener runs first and must not close the list behind it.
+    const dialog = document.createElement('div')
+    dialog.setAttribute('data-renderer-dialog', '')
+    document.body.appendChild(dialog)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.getByTestId('quick-input-field')).toBeTruthy()
+
+    dialog.remove()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('quick-input-field')).toBeNull()
+  })
+})

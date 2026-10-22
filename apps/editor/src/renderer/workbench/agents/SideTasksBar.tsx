@@ -18,7 +18,6 @@
 
 import { useEffect, useRef, useState } from 'react'
 import {
-  ConfigurationTarget,
   GroupDirection,
   IConfigurationService,
   IDialogService,
@@ -46,6 +45,10 @@ import {
   revealSessionEditor,
   sessionRowTarget,
 } from '../../actions/agentSessionActions.js'
+import {
+  confirmSideTaskRemoval,
+  deleteSideTasks,
+} from '../../services/acp/session/sideTaskRemoval.js'
 import { relativeTime } from '../../relativeTime.js'
 import styles from './agents.module.css'
 
@@ -107,50 +110,8 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
     // are about to delete.
     const ids = collectSideTaskDescendants(entries, task.id)
     void (async () => {
-      if (config.get<boolean>('acp.sessions.confirmDelete') !== false) {
-        const result = await dialogService.confirm({
-          message: localize('acp.sideTask.removeConfirm', 'Delete this side task?'),
-          detail:
-            ids.length > 1
-              ? localize(
-                  'acp.sideTask.removeConfirmDetailNested',
-                  'This also deletes its {count} nested side task(s).',
-                  { count: ids.length - 1 },
-                )
-              : localize(
-                  'acp.sideTask.removeConfirmDetail',
-                  'This will delete the side task and its history.',
-                ),
-          primaryButton: localize('acp.sessions.removeConfirmOk', 'Delete'),
-          cancelButton: localize('acp.sessions.removeConfirmCancel', 'Cancel'),
-          neverAskAgainLabel: localize('acp.sessions.removeNeverAsk', "Don't ask again"),
-        })
-        if (!result.confirmed) return
-        if (result.neverAskAgain) {
-          config.update('acp.sessions.confirmDelete', false, ConfigurationTarget.User)
-        }
-      }
-      for (const id of ids) {
-        // Best-effort per row: a failing close/delete must not strand the rest of
-        // the subtree, which is exactly the orphan state this cascade prevents.
-        try {
-          // closeSession fires onDidCloseSession, which closes the side task's
-          // right-split tab through AgentsSessionEditorLifecycleContribution.
-          const live = sessions.getById(id)
-          if (live) await sessions.closeSession(live.id)
-          await sessions.deleteOnAgent(id)
-        } catch (err) {
-          console.warn(`[side-task] delete failed for ${id}, dropping the local row anyway`, err)
-        }
-        // The local row goes regardless — an agent that can't delete server-side
-        // must not leave the side task undeletable here (same call as the session
-        // list's onRemove, which likewise ignores deleteOnAgent's outcome).
-        history.remove(id)
-        // Drop the durable side-task link too: if `deleteOnAgent` failed above,
-        // a later sweep would otherwise rebuild the row from the index and the
-        // "deleted" side task would come back under its parent.
-        history.forgetSideTask(id)
-      }
+      if (!(await confirmSideTaskRemoval(ids, dialogService, config))) return
+      await deleteSideTasks(ids, sessions, history)
       // The button that was clicked has just been unmounted, dropping focus to
       // <body>. Hand it to the trigger so keyboard users stay in the popover's
       // orbit; when this was the last side task the whole bar unmounts and the
