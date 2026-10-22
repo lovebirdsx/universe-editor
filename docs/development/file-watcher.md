@@ -39,5 +39,6 @@ minidump 的手工解析方法（node 脚本走 header → streams → Exception
 ## 测试策略
 
 - client 层：`FakeTransport` + fake timers 测熔断 / 重放 / ack 匹配（`packages/node-services/src/watcher/__tests__/`）。
+- per-window 编排层：stub client + 受控事件 + fake timers 测合批窗口与路径去重；不要对真实 `fs.writeFile` 断言批次数上限，CI 负载会让写入与 native 事件投递跨越多个窗口。
 - 集成层：in-memory transport 跑**真 parcel**，含 `simulateCrash` 端到端用例（`apps/editor/src/main/services/fileWatcher/__tests__/fileWatcherMainService.test.ts:533-536`）；testing/ 下另有 `inMemoryWatcherTransport.ts` / `stubWatcherProcessClient.ts` 供上层复用。
 - 真实进程链（fork 失败、真崩溃、退出码）只由 e2e 覆盖；`@serial` 相关约定见 `apps/editor/e2e/CLAUDE.md` 与上述案例 12/16/26/44。

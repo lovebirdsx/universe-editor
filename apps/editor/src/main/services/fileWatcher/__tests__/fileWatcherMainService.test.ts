@@ -7,11 +7,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { join, sep as pathSep } from 'node:path'
-import { Emitter, URI, type IFileChangeEvent } from '@universe-editor/platform'
+import {
+  Emitter,
+  URI,
+  type IFileChangeEvent,
+  type WatcherEventsResponse,
+} from '@universe-editor/platform'
 import { FileWatcherMainService } from '../fileWatcherMainService.js'
 import { WatcherProcessClient } from '@universe-editor/node-services'
 import {
   createInMemoryWatcherTransport,
+  createStubWatcherProcessClient,
   type InMemoryWatcherTransport,
 } from '@universe-editor/node-services'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
@@ -175,26 +181,6 @@ describe('FileWatcherMainService', () => {
         expect(inside.length).toBeGreaterThan(0)
       }, WAIT)
       c.stop()
-    },
-    WATCHER_TEST_TIMEOUT,
-  )
-
-  it(
-    'debounces rapid writes into a small number of batches',
-    async () => {
-      await svc.watch(URI.file(root))
-      const target = join(root, 'rapid.txt')
-      const batches: number[] = []
-      const sub = svc.onDidChangeFiles((batch) => batches.push(batch.length))
-      for (let i = 0; i < 5; i++) {
-        await fs.writeFile(target, String(i))
-      }
-      // Poll for the debounced batch instead of relying on a fixed sleep.
-      await vi.waitFor(() => expect(batches.length).toBeGreaterThan(0), WAIT)
-      // Allow a moment for any trailing batch, then assert writes coalesced.
-      await new Promise((r) => setTimeout(r, 100))
-      sub.dispose()
-      expect(batches.length).toBeLessThanOrEqual(2)
     },
     WATCHER_TEST_TIMEOUT,
   )
@@ -552,6 +538,66 @@ describe('FileWatcherMainService', () => {
     },
     WATCHER_TEST_TIMEOUT,
   )
+})
+
+// 真实文件写入和 native 事件投递可能跨越多个窗口；合批边界必须用受控事件和时钟验证。
+describe('FileWatcherMainService event batching', () => {
+  it('coalesces events within each fixed window and keeps the latest event per path', async () => {
+    vi.useFakeTimers()
+    const fileEvents = new Emitter<WatcherEventsResponse>()
+    const host = createStubWatcherProcessClient()
+    vi.spyOn(host, 'onFileEvents').mockImplementation(fileEvents.event)
+    const svc = new FileWatcherMainService(host)
+    const batches: IFileChangeEvent[][] = []
+    const sub = svc.onDidChangeFiles((batch) => batches.push([...batch]))
+    const root = URI.file('/w/root')
+    const target = URI.file('/w/root/rapid.txt')
+    const other = URI.file('/w/root/other.txt')
+    try {
+      await svc.watch(root)
+      for (let i = 0; i < 5; i++) {
+        if (i > 0) await vi.advanceTimersByTimeAsync(10)
+        fileEvents.fire({
+          kind: 'events',
+          id: 1,
+          events: [{ path: target.fsPath, type: i === 0 ? 'create' : 'update' }],
+        })
+      }
+      fileEvents.fire({
+        kind: 'events',
+        id: 1,
+        events: [{ path: other.fsPath, type: 'create' }],
+      })
+      await vi.advanceTimersByTimeAsync(9)
+      expect(batches).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(batches).toEqual([
+        [
+          { resource: target, type: 'modified' },
+          { resource: other, type: 'added' },
+        ],
+      ])
+
+      fileEvents.fire({
+        kind: 'events',
+        id: 1,
+        events: [{ path: target.fsPath, type: 'delete' }],
+      })
+      await vi.advanceTimersByTimeAsync(49)
+      expect(batches).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(batches[1]).toEqual([{ resource: target, type: 'deleted' }])
+      await vi.advanceTimersByTimeAsync(100)
+      expect(batches).toHaveLength(2)
+    } finally {
+      sub.dispose()
+      svc.dispose()
+      fileEvents.dispose()
+      host.dispose()
+      vi.restoreAllMocks()
+      vi.useRealTimers()
+    }
+  })
 })
 
 // Re-subscribe coalescing — the guard against the win32 parcel backend crashing
