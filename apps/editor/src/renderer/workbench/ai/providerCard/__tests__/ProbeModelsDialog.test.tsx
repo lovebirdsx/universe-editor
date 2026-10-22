@@ -36,9 +36,9 @@ beforeEach(() => {
   vi.spyOn(console, 'debug').mockImplementation(() => {})
   // happy-dom has no layout engine, so every element measures 0, the virtualizer
   // windows down to zero rows, and the assertion below would pass for the wrong
-  // reason. @tanstack/react-virtual sizes its scroller from offsetWidth/Height
-  // (not getBoundingClientRect), so those are what have to answer.
-  for (const prop of ['offsetHeight', 'offsetWidth'] as const) {
+  // reason. @tanstack/react-virtual sizes its scroller from clientWidth/Height
+  // (not offset or getBoundingClientRect), so those are what have to answer.
+  for (const prop of ['clientHeight', 'clientWidth'] as const) {
     Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, get: () => 400 })
   }
 })
@@ -48,7 +48,7 @@ afterEach(() => {
   // Safe to delete rather than restore: happy-dom defines these on the prototype
   // as configurable getters, and each test file gets a fresh Window, so removing
   // the override uncovers the native descriptor again.
-  for (const prop of ['offsetHeight', 'offsetWidth'] as const) {
+  for (const prop of ['clientHeight', 'clientWidth'] as const) {
     Reflect.deleteProperty(HTMLElement.prototype, prop)
   }
   cleanup()

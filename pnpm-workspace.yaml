@@ -67,7 +67,11 @@ catalog:
   vscode-textmate: ^9.3.2
   vscode-oniguruma: ^2.0.1
   '@floating-ui/react': ^0.27.0
-  '@tanstack/react-virtual': ^3.13.0
+  # Lower bound is load-bearing: virtual-core >= 3.18.0 cancels the
+  # isScrollingResetDelay debounce on unmount (older versions leak it, which
+  # crashes tests after the DOM environment is torn down). 3.14.21 pairs with
+  # virtual-core 3.19.6. Verified with `pnpm why @tanstack/virtual-core`.
+  '@tanstack/react-virtual': ^3.14.21
   '@react-aria/focus': ^3.20.0
   # Pinned to an exact version (not a range): lazy-loaded in the markdown preview,
   # and pinning keeps the lockfile integrity check tight against supply-chain risk.

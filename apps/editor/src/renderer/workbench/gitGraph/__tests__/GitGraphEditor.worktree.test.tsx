@@ -214,16 +214,16 @@ beforeEach(() => {
   // happy-dom has no layout engine, so every element measures 0 and the quick
   // pick's virtualizer would window down to zero rows — the real-panel assertions
   // below would then pass on an empty list for the wrong reason.
-  // @tanstack/react-virtual sizes its scroller from offsetWidth/Height (not
-  // getBoundingClientRect), so those are what have to answer.
-  for (const prop of ['offsetHeight', 'offsetWidth'] as const) {
+  // @tanstack/react-virtual sizes its scroller from clientWidth/Height (not
+  // offset or getBoundingClientRect), so those are what have to answer.
+  for (const prop of ['clientHeight', 'clientWidth'] as const) {
     Object.defineProperty(HTMLElement.prototype, prop, { configurable: true, get: () => 400 })
   }
 })
 
 afterEach(() => {
   graphCommandStub.dispose()
-  for (const prop of ['offsetHeight', 'offsetWidth'] as const) {
+  for (const prop of ['clientHeight', 'clientWidth'] as const) {
     Reflect.deleteProperty(HTMLElement.prototype, prop)
   }
   gitGraphViewState.result = null

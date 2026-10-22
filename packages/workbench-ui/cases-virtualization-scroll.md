@@ -27,7 +27,14 @@
 
 否则位置活在别的元素上，断言看着过、实际没测到（变异测试才暴露）。
 
-## 5. 视口窗口回调：`onVisibleNodesChange`（几何自算，与 `windowed` 正交）
+## 5. 依赖下限与卸载清理
+
+- **`@tanstack/react-virtual` 不得低于 3.14.21**（该版本精确依赖 `@tanstack/virtual-core@3.19.6`；catalog 里有注释）。修复本身自 `virtual-core` 3.18.0 起：`debounce` 返回带 `cancel()` 的句柄，`observeElementOffset` 的 cleanup 会调用它。3.14.0 及更早的 cleanup 只摘 scroll 监听，**不取消 `isScrollingResetDelay`（150ms）定时器**。
+- 症状：测试里 `dispatchEvent(new Event('scroll'))` 后若文件在 150ms 内结束，Vitest 已销毁 happy-dom，定时器才触发 → virtualizer notify → React `dispatchReducerAction` 读 `window` → `ReferenceError: window is not defined`（CI run 39595827963）。生产侧对应组件卸载后仍向已卸载树 dispatch 一次。
+- 升级/新增虚拟化依赖后跑 `pnpm why @tanstack/virtual-core`，确认全仓唯一且 ≥ 3.19.6。回归信号：`ExplorerView.visibleHints.test.tsx`、`Tree.visibleWindow.test.tsx`。
+- **不要再用 mock `@tanstack/react-virtual` 规避这个问题**：`ChatBody.test.tsx` 的 mock 已随升级移除。测试结束前仍须保证 RTL `cleanup()` 先于环境 teardown；自写 scroll 监听若做 debounce，cleanup 必须 cancel。
+
+## 6. 视口窗口回调：`onVisibleNodesChange`（几何自算，与 `windowed` 正交）
 
 `Tree` 可选地上报「滚动视口覆盖了哪些行」——`visibleNodes` 里跨越视口的那一段，上下各加 `VISIBLE_OVERSCAN`（5）行松弛。用途是**按需工作**的副作用通道（逐行向服务声明可见性、驱动按需查询），**不是渲染输入**：在回调里 `setState` 会让每次滚动都重渲染整棵树。
 
