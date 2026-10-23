@@ -6,7 +6,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useLayoutEffect, useRef } from 'react'
-import { isElementLike, isHTMLElementLike } from '@universe-editor/workbench-ui'
+import {
+  isElementLike,
+  isHTMLElementLike,
+  isAltRemoveShortcut,
+} from '@universe-editor/workbench-ui'
 import {
   ICommandService,
   IContextKeyService,
@@ -248,12 +252,12 @@ export function useGlobalKeybindingHandler(targetDocument: Document = document):
       if (contextKeyService.get('quickInputVisible') === true) {
         clearChord()
         const key = buildKeyString(e)
-        if (isQuickInputNativeEditingKey(e) || isQuickInputOwnedKey(e)) {
+        if (isQuickInputNativeEditingKey(e) || isQuickInputOwnedKey(e) || isAltRemoveShortcut(e)) {
           if (dbg) {
             keyboardDebugService.append(
               formatGuardStop(
                 toDiagnostics(e, key),
-                'Quick Input is open and owns this key (native editing/navigation)',
+                'Quick Input is open and owns this key (native editing/navigation/row removal)',
               ),
             )
           }

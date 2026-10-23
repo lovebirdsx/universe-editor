@@ -206,12 +206,47 @@ test.describe('@p0 quick open recent targets', () => {
   test('view rows cannot be removed from the list', async ({ page, workbench }) => {
     await openSwitcherForTyping(page, workbench)
 
-    const filesRow = await selectOnlyRow(page, workbench, 'Timeline')
+    const timelineRow = await selectOnlyRow(page, workbench, 'Timeline')
 
     // Ctrl+X closes a focused editor row; a view has nothing to close, so the
     // row must survive.
     await page.keyboard.press('Control+x')
-    await expect(filesRow).toBeVisible()
+    await expect(timelineRow).toBeVisible()
+
+    // Alt+C 走同一移除入口：视图行既没有 ×，也没有可关闭的编辑器，同样不做事。
+    await page.keyboard.press('Alt+c')
+    await expect(timelineRow).toBeVisible()
+    await expect(workbench.quickInput.dialog).toBeVisible()
+
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
+  })
+
+  // Alt+C 在解锁态关闭高亮行对应的编辑器（与行尾 × 等价），而不是接受该行；
+  // 面板必须保持打开，用户可以接着切换。
+  test('Alt+C closes the highlighted non-dirty editor and keeps the switcher open', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.runCommand('workbench.action.openGlobalKeybindings')
+    await expect.poll(() => workbench.getContextKey<boolean>('inKeybindings')).toBe(true)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorCount()))
+      .toBe(1)
+
+    await openSwitcherForTyping(page, workbench)
+    await selectOnlyRow(page, workbench, 'Keyboard Shortcuts')
+
+    await page.keyboard.press('Alt+c')
+
+    // 编辑器真的被关掉：组内没有编辑器了，Keyboard Shortcuts 的上下文键也退回。
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorCount()))
+      .toBe(0)
+    await expect.poll(() => workbench.getContextKey<boolean>('inKeybindings')).toBe(false)
+    // 面板保持打开，且没有把高亮行当作接受目标。
+    await expect(workbench.quickInput.dialog).toBeVisible()
+    await expect(workbench.quickInput.input).toBeFocused()
 
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()

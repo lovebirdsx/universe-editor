@@ -6,6 +6,7 @@
  *    - gear closes the palette and opens the Keyboard Shortcuts editor filtered
  *      to `@command:<id>` (both fresh-open and tab-reuse paths)
  *    - × drops the row from the MRU history and the visible list
+ *    - 键盘站在同一行上按 Alt+C，与点 × 等价（面板保持打开）
  *--------------------------------------------------------------------------------------------*/
 
 import type { Page } from '@playwright/test'
@@ -87,48 +88,60 @@ test.describe('@p1 command palette item buttons', () => {
     await expect(searchBox(page)).toHaveValue('@command:workbench.action.showCommands')
   })
 
-  test('close button removes a recently used command from history and the list', async ({
-    page,
-    workbench,
-  }) => {
-    // Seed the MRU by running a command through the palette.
-    await openPalette(page, workbench)
-    await page.keyboard.type('newUntitledFile')
-    await page.keyboard.press('Enter')
-    await workbench.quickInput.waitForHidden()
+  // 同一语义的两条输入路径：鼠标点行尾 ×，以及键盘在高亮行上按 Alt+C。
+  // 保留鼠标用例，新增真实按键覆盖，键盘路径不能借 hover 移动光标。
+  for (const trigger of ['mouse', 'Alt+C'] as const) {
+    test(`close button removes a recently used command from history and the list (${trigger})`, async ({
+      page,
+      workbench,
+    }) => {
+      // 通过命令面板执行一次，把它种进 MRU。
+      await acceptFromPalette(
+        page,
+        workbench,
+        'workbench.action.files.newUntitledFile',
+        /File: New File/,
+      )
 
-    await openPalette(page, workbench)
-    // Filter to the row: keeps it rendered regardless of where the
-    // (asynchronously seeded) MRU ranking would place it in the virtual list.
-    await page.keyboard.type('newUntitledFile')
-    const row = page.getByRole('option', { name: /File: New File/ })
-    await row.hover()
-    const removeButton = row.locator('[data-testid="quick-input-item-button"][data-icon-id="x"]')
-    await expect(removeButton).toHaveCount(1)
-    await removeButton.click()
+      await openPalette(page, workbench)
+      // 过滤到该行：异步种下的 MRU 排序无论把它放在虚拟列表哪里都保持渲染。
+      await page.keyboard.type('newUntitledFile')
+      const row = page.getByRole('option', { name: /File: New File/ })
+      await expect(row).toBeVisible()
+      const removeButton = row.locator('[data-testid="quick-input-item-button"][data-icon-id="x"]')
+      await expect(removeButton).toHaveCount(1)
 
-    // The row leaves the visible list while the palette stays open.
-    await expect(page.getByRole('option', { name: /File: New File/ })).toHaveCount(0)
-    await expect(workbench.quickInput.input).toBeFocused()
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
+      if (trigger === 'mouse') {
+        await row.hover()
+        await removeButton.click()
+      } else {
+        // 键盘场景只依赖列表自身的高亮：先等 aria-selected 真正落在这行，再按键。
+        await expect(row).toHaveAttribute('aria-selected', 'true')
+        await page.keyboard.press('Alt+c')
+      }
 
-    // Reopening shows the row again (it is still a command) but no longer as
-    // recently used — no × button.
-    await openPalette(page, workbench)
-    await page.keyboard.type('newUntitledFile')
-    const plainRow = page.getByRole('option', { name: /File: New File/ })
-    await plainRow.hover()
-    await expect(
-      plainRow.locator('[data-testid="quick-input-item-button"][data-icon-id="x"]'),
-    ).toHaveCount(0)
-    // The gear remains.
-    await expect(
-      plainRow.locator('[data-testid="quick-input-item-button"][data-icon-id="settings-gear"]'),
-    ).toHaveCount(1)
-    await page.keyboard.press('Escape')
-    await workbench.quickInput.waitForHidden()
-  })
+      // 行从可见列表消失，面板保持打开。
+      await expect(page.getByRole('option', { name: /File: New File/ })).toHaveCount(0)
+      await expect(workbench.quickInput.input).toBeFocused()
+      await page.keyboard.press('Escape')
+      await workbench.quickInput.waitForHidden()
+
+      // 重新打开：命令仍存在（只是不再是最近使用），因此没有 ×。
+      await openPalette(page, workbench)
+      await page.keyboard.type('newUntitledFile')
+      const plainRow = page.getByRole('option', { name: /File: New File/ })
+      await expect(plainRow).toBeVisible()
+      await expect(
+        plainRow.locator('[data-testid="quick-input-item-button"][data-icon-id="x"]'),
+      ).toHaveCount(0)
+      // 齿轮仍在。
+      await expect(
+        plainRow.locator('[data-testid="quick-input-item-button"][data-icon-id="settings-gear"]'),
+      ).toHaveCount(1)
+      await page.keyboard.press('Escape')
+      await workbench.quickInput.waitForHidden()
+    })
+  }
 
   test('removing a row keeps the cursor on the row that slides up', async ({ page, workbench }) => {
     // Two MRU entries, so the palette opens on a list whose second row has a

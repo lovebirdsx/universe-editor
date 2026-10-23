@@ -73,7 +73,7 @@ export interface QuickPickState {
   onActiveChange?: (item: IQuickPickItem | undefined) => void
   /** Fires when a toolbar button is triggered. */
   onTriggerButton?: ((button: IQuickInputButton) => void) | undefined
-  /** Fires when an item-level button (`IQuickPickItem.buttons`) is clicked. */
+  /** 鼠标点击行按钮，或 Alt+C 触发标记为 role: 'remove' 的按钮时调用。 */
   onTriggerItemButton?:
     | ((item: IQuickPickItem, button: IQuickPickItemButton, mods: IKeyMods) => void)
     | undefined

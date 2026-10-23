@@ -8,7 +8,11 @@ import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-l
 import { QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
 import { BUSY_BAR_DELAY_MS } from '../feedback/quickInput/QuickInputProgress.js'
 import type { QuickPickState } from '../feedback/quickInput/quickInputViewModel.js'
-import { IQuickInputButton, type QuickPickInput } from '@universe-editor/platform'
+import {
+  IQuickInputButton,
+  type IQuickPickItem,
+  type QuickPickInput,
+} from '@universe-editor/platform'
 
 // happy-dom has no layout engine so @tanstack/react-virtual renders 0 visible items.
 // Mock it so all items are "visible" and existing text assertions continue to work.
@@ -891,6 +895,307 @@ describe('QuickPickPanel item removal', () => {
     fireEvent.keyDown(input, { key: 'x', ctrlKey: true })
     expect(onItemRemove).not.toHaveBeenCalled()
     expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+})
+
+describe('QuickPickPanel Alt+C remove shortcut', () => {
+  const fireAltC = (input: HTMLElement, init: KeyboardEventInit = {}) => {
+    const event = new KeyboardEvent('keydown', {
+      bubbles: true,
+      cancelable: true,
+      key: 'c',
+      altKey: true,
+      ...init,
+    })
+    // happy-dom 把普通 Alt 也报告为 AltGraph，这里显式模拟浏览器的修饰键状态。
+    const getModifierState = event.getModifierState.bind(event)
+    vi.spyOn(event, 'getModifierState').mockImplementation((modifier: string) =>
+      modifier === 'AltGraph' ? (init.modifierAltGraph ?? false) : getModifierState(modifier),
+    )
+    fireEvent(input, event)
+    return event
+  }
+
+  it('removes the highlighted row (not the first) and keeps the panel open', () => {
+    const onItemRemove = vi.fn()
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={makeState({ onItemRemove, onAccept })} onClose={onClose} />)
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+
+    const event = fireAltC(input)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onItemRemove).toHaveBeenCalledWith(items[1])
+    expect(screen.queryByText('Go to Line')).toBeNull()
+    expect(screen.getByText('Format Document')).toBeTruthy()
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('reuses the async removal flow: refusal keeps the row, pending is de-duplicated', async () => {
+    let resolveRemoval!: (removed: boolean) => void
+    const onItemRemove = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveRemoval = resolve
+        }),
+    )
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+
+    await act(async () => {
+      fireAltC(input)
+    })
+    expect(screen.getByText('Format Document')).toBeTruthy()
+
+    await act(async () => {
+      fireAltC(input)
+    })
+    expect(onItemRemove).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveRemoval(false)
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Format Document')).toBeTruthy()
+
+    // 取消后释放 pending，允许像点击 × 一样重试。
+    await act(async () => {
+      fireAltC(input)
+    })
+    expect(onItemRemove).toHaveBeenCalledTimes(2)
+  })
+
+  const actionableItems: IQuickPickItem[] = [
+    {
+      id: 'row.a',
+      label: 'Alpha Row',
+      buttons: [
+        { iconId: 'settings-gear', tooltip: 'Configure' },
+        { iconId: 'x', tooltip: 'Remove', role: 'remove' },
+      ],
+    },
+    {
+      id: 'row.b',
+      label: 'Bravo Row',
+      buttons: [{ iconId: 'settings-gear' }, { iconId: 'x', tooltip: 'Remove' }],
+    },
+  ]
+
+  it("routes Alt+C to the highlighted row's role:'remove' button", () => {
+    const onTriggerItemButton = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: actionableItems, onTriggerItemButton })}
+        onClose={onClose}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+
+    const event = fireAltC(input)
+
+    const row = actionableItems[0]!
+    expect(event.defaultPrevented).toBe(true)
+    expect(onTriggerItemButton).toHaveBeenCalledWith(row, row.buttons![1], {
+      ctrl: false,
+      alt: true,
+    })
+    expect(screen.getByText('Alpha Row')).toBeTruthy()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('does not trigger buttons without the remove role', () => {
+    const onTriggerItemButton = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: actionableItems, onTriggerItemButton })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+
+    const event = fireAltC(input)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onTriggerItemButton).not.toHaveBeenCalled()
+    expect(screen.getByText('Bravo Row')).toBeTruthy()
+  })
+
+  it('prefers the picker-wide remove handler over a role button on the same row', () => {
+    const onItemRemove = vi.fn()
+    const onTriggerItemButton = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: actionableItems,
+          onItemRemove,
+          onTriggerItemButton,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    fireAltC(screen.getByTestId('quick-input-field'))
+
+    expect(onItemRemove).toHaveBeenCalledWith(actionableItems[0])
+    expect(onTriggerItemButton).not.toHaveBeenCalled()
+    expect(screen.queryByText('Alpha Row')).toBeNull()
+  })
+
+  it('swallows Alt+C without side effects when the picker has no remove affordance', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={onClose} />)
+
+    const event = fireAltC(screen.getByTestId('quick-input-field'))
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(screen.getByText('Format Document')).toBeTruthy()
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('swallows Alt+C on an empty list without side effects', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: [], onItemRemove })}
+        onClose={() => undefined}
+      />,
+    )
+
+    const event = fireAltC(screen.getByTestId('quick-input-field'))
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onItemRemove).not.toHaveBeenCalled()
+  })
+
+  it('leaves a removable:false row alone even when onItemRemove is wired', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: [
+            { id: 'view.row', label: 'View Row', removable: false },
+            { id: 'editor.row', label: 'Editor Row' },
+          ],
+          onItemRemove,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    const event = fireAltC(screen.getByTestId('quick-input-field'))
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(screen.getByText('View Row')).toBeTruthy()
+  })
+
+  it.each([
+    ['plain c', { key: 'c' }],
+    ['Control+Alt+C', { key: 'c', altKey: true, ctrlKey: true }],
+    ['Meta+Alt+C', { key: 'c', altKey: true, metaKey: true }],
+    ['Shift+Alt+C', { key: 'c', altKey: true, shiftKey: true }],
+  ])('%s does not trigger row removal', (_name, init) => {
+    const onItemRemove = vi.fn()
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+
+    const event = fireAltC(input, { altKey: false, ...init })
+
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('recognizes macOS Option+C reported as ç with code KeyC', () => {
+    const onItemRemove = vi.fn()
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+
+    const event = fireAltC(screen.getByTestId('quick-input-field'), {
+      key: 'ç',
+      code: 'KeyC',
+    })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+  })
+
+  it.each(['j', 'm', '©'])('does not treat Alt+%s at physical KeyC as removal', (key) => {
+    const onItemRemove = vi.fn()
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+
+    const event = fireAltC(screen.getByTestId('quick-input-field'), { key, code: 'KeyC' })
+
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('does not remove when AltGraph is active without Control', () => {
+    const onItemRemove = vi.fn()
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    const event = fireAltC(input, { key: 'ç', code: 'KeyC', modifierAltGraph: true })
+
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('ignores Alt+C during an IME composition', () => {
+    const onItemRemove = vi.fn()
+    render(<QuickPickPanel state={makeState({ onItemRemove })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+
+    const event = fireAltC(input, { isComposing: true })
+
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('removes via Alt+C after Enter unlocks a Ctrl+Tab picker', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onItemRemove,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    const event = fireAltC(input)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+  })
+
+  it('removes via Alt+C while an Alt quick-navigate picker is still locked', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          quickNavigate: { modifier: 'alt', initialSelectionIndex: 0 },
+          onItemRemove,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    const event = fireAltC(screen.getByTestId('quick-input-field'))
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
   })
 })
 

@@ -44,6 +44,7 @@ const GEAR_BUTTON: IQuickPickItemButton = {
 const CLOSE_BUTTON: IQuickPickItemButton = {
   iconId: 'x',
   tooltip: localize('commandPalette.removeFromRecentlyUsed', 'Remove from Recently Used'),
+  role: 'remove',
 }
 
 export class CommandsQuickAccessProvider implements IQuickAccessProvider {

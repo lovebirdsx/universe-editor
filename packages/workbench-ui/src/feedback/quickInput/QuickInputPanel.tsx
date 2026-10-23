@@ -31,6 +31,7 @@ import type {
 import { localize } from '@universe-editor/platform'
 import { ctrlNavigationKey } from '../../keybinding/ctrlNavigation.js'
 import { fuzzyScore, wordMatchField } from '../../text/fuzzyMatch.js'
+import { isAltRemoveShortcut } from './removeShortcut.js'
 import type { QuickPickState } from './quickInputViewModel.js'
 import { QuickInputProgress } from './QuickInputProgress.js'
 import styles from './QuickInput.module.css'
@@ -952,6 +953,21 @@ export function QuickPickPanel({
         e.preventDefault()
         return
       }
+    }
+    if (isAltRemoveShortcut(e)) {
+      // 无可移除行时也阻止默认输入，避免 Option+C 插入字符。
+      e.preventDefault()
+      const item = sortedFiltered[focusedIdx]
+      if (!isSelectable(item)) return
+      if (onItemRemove && canRemove(item)) {
+        removeItem(item)
+        return
+      }
+      const removeButton = item.buttons?.find((button) => button.role === 'remove')
+      if (removeButton) {
+        state.onTriggerItemButton?.(item, removeButton, { ctrl: e.ctrlKey, alt: e.altKey })
+      }
+      return
     }
     if (quickNavigate && e.key === 'Tab') {
       e.preventDefault()

@@ -169,6 +169,10 @@ function runOptions(disposables: IDisposable[]): IQuickAccessProviderRunOptions 
   }
 }
 
+function itemOf(picker: FakeQuickPick<IQuickPickItem>, id: string): IQuickPickItem {
+  return picker.items.find((i): i is IQuickPickItem => !('type' in i) && i.id === id)!
+}
+
 describe('CommandsQuickAccessProvider MRU', () => {
   const menuDisposables: IDisposable[] = []
   const runDisposables: IDisposable[] = []
@@ -273,5 +277,40 @@ describe('CommandsQuickAccessProvider MRU', () => {
     // The plain command row remains, and without a stored MRU entry a reopen
     // would render it without the close button.
     expect(picker.items.some((i) => !('type' in i) && i.id === 'cmd.a')).toBe(true)
+  })
+
+  it('marks only the recently-used close button with the remove role', async () => {
+    const storage = new FakeStorageService()
+    storage.store.set(MRU_KEY, ['cmd.a', 'cmd.b'])
+    const { provider } = setup(storage)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+
+    provider.provide(picker, runOptions(runDisposables))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const gear = itemOf(picker, 'cmd.a').buttons!.find((b) => b.iconId === 'settings-gear')!
+    const close = itemOf(picker, 'cmd.a').buttons!.find((b) => b.iconId === 'x')!
+    expect(gear.role).toBeUndefined()
+    expect(close.role).toBe('remove')
+  })
+
+  it('keeps the remove role after a close refreshes the list and persists history', async () => {
+    const storage = new FakeStorageService()
+    storage.store.set(MRU_KEY, ['cmd.a', 'cmd.b'])
+    const { provider } = setup(storage)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+
+    provider.provide(picker, runOptions(runDisposables))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const bravo = itemOf(picker, 'cmd.b')
+    picker.fireItemButton(bravo.buttons!.find((b) => b.iconId === 'x')!, bravo)
+
+    expect(storage.setSpy).toHaveBeenCalledWith(MRU_KEY, ['cmd.a'])
+    expect(picker.mruIds).toEqual(['cmd.a'])
+    expect(picker.items.some((i) => !('type' in i) && i.id === 'cmd.b')).toBe(false)
+    expect(itemOf(picker, 'cmd.a').buttons!.find((b) => b.iconId === 'x')?.role).toBe('remove')
   })
 })

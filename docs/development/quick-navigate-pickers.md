@@ -34,7 +34,18 @@
 
 面板 activeItems 的焦点 effect 首行 `|| quickNavigate` 直接返回，高亮只认 `initialSelectionIndex`。所以别把「当前项」同时传成 `activeItemId` 期望额外高亮——它只会变成一句死描述。
 
+## Alt+C：键盘触发行尾移除
+
+四类带移除能力的 Quick Pick（命令面板最近使用、`Agents: 打开侧边任务…`、最近打开的工作区、`Ctrl+Tab` 编辑器行）共用一条键盘入口，语义等同高亮行的 ×：
+
+- **判定单一来源**：`packages/workbench-ui/src/feedback/quickInput/removeShortcut.ts` 的 `isAltRemoveShortcut`（经包 `index.ts` 导出），面板与宿主全局 handler 都调它，避免两处守卫漂移。只认 `Alt+C`，拒绝额外 `Ctrl`/`Meta`/`Shift` 及 `AltGraph`，避免 AltGr 误删；仅对 `key: 'ç'` 且 `code: 'KeyC'` 兜底 macOS Option+C，不把其他键盘布局的物理 KeyC 当成字符 c。
+- **面板处理顺序**：命中即 `preventDefault`（没有可移除行也吞，避免打出字符）；先走 `onItemRemove && canRemove(item)` → `removeItem`，否则找当前项 `buttons` 里 `role: 'remove'` 的按钮 → `state.onTriggerItemButton`。两者都不存在就是无副作用的 no-op：不 accept、不关闭面板、不触发齿轮。
+- **`role: 'remove'` 是显式语义标记**（platform `IQuickPickItemButton`），不要靠图标 id、tooltip 或按钮顺序猜操作；命令面板只给最近使用行的 × 标它，齿轮不标。
+- **全局按键放行**：Quick Input 可见时，`useGlobalKeybindingHandler` 必须用同一判定把 `Alt+C` 留给面板，否则用户或扩展注册的同键全局命令会先吞掉它；面板外不接管该键。
+- **locked 态不额外放宽**：`Ctrl+Tab` 按住 Ctrl 时仍用 `Ctrl+X`；先按 Enter 解锁、松开 Ctrl 后 `Alt+C` 才可用。视图行 `removable: false`，按了不做事。
+
 ## 验证
 
 - 手势只有**真实按键** e2e 守得住：`apps/editor/e2e/specs/smoke.sessionSwitcherQuickNavigate.spec.ts`。
+- `Alt+C` 的两条真实路径：`smoke.commandPaletteItemButtons.spec.ts`（鼠标 × / 键盘 Alt+C 参数化）与 `smoke.quickOpenRecentTargets.spec.ts`（视图行无操作；解锁后关闭非脏编辑器且列表保持打开）。
 - 面板侧由 `packages/workbench-ui/src/__tests__/QuickInput.test.tsx` 的 `quick navigate locked mode` describe 覆盖。

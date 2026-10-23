@@ -80,6 +80,8 @@ export interface IQuickPickItem {
 export interface IQuickPickItemButton {
   readonly iconId: string
   readonly tooltip?: string
+  /** 显式标记行移除操作，供 Alt+C 触发，避免按图标推断语义。 */
+  readonly role?: 'remove'
 }
 
 export interface IQuickPickItemButtonEvent<T extends IQuickPickItem = IQuickPickItem> {
@@ -206,8 +208,8 @@ export interface IPickOptions {
   readonly keyMods?: IKeyMods
   /**
    * When provided, each item gains an inline remove affordance (a ✕ button and
-   * the Delete key on the focused item). Invoked without closing the picker;
-   * the item is removed from the visible list locally unless the handler
+   * the Delete / Alt+C keys on the focused item). Invoked without closing the
+   * picker; the item is removed from the visible list locally unless the handler
    * returns `false` (or a promise resolving `false`), which keeps the row —
    * used by flows that confirm the removal first and must leave the row in
    * place when the user cancels.

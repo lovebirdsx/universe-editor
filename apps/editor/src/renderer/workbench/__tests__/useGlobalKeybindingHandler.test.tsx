@@ -53,6 +53,11 @@ function dispatch(opts: DispatchOpts = {}) {
   const { from, ...init } = opts
   const target = from ?? document.body
   const event = new KeyboardEvent('keydown', { cancelable: true, bubbles: true, ...init })
+  // happy-dom 把普通 Alt 也报告为 AltGraph，这里显式模拟浏览器的修饰键状态。
+  const getModifierState = event.getModifierState.bind(event)
+  vi.spyOn(event, 'getModifierState').mockImplementation((modifier: string) =>
+    modifier === 'AltGraph' ? (init.modifierAltGraph ?? false) : getModifierState(modifier),
+  )
   const preventDefault = vi.spyOn(event, 'preventDefault')
   const stopPropagation = vi.spyOn(event, 'stopPropagation')
   target.dispatchEvent(event)
@@ -614,6 +619,91 @@ describe('useGlobalKeybindingHandler — QuickInput isolation', () => {
     expect(executeCommand).not.toHaveBeenCalled()
     expect(preventDefault).not.toHaveBeenCalled()
     expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
+  it.each(['c', 'ç'])(
+    'leaves Alt+%s for the QuickPick panel even when a global binding claims it',
+    (key) => {
+      const { executeCommand, instantiation } = createHarness()
+      disposables.push(
+        KeybindingsRegistry.registerKeybinding({
+          key: `alt+${key}`,
+          command: 'test.globalRemove',
+        }),
+      )
+      disposables.push(CommandsRegistry.registerCommand('test.globalRemove', () => {}))
+      const input = showQuickInput(instantiation)
+      mountHost(instantiation)
+
+      const { preventDefault, stopPropagation } = dispatch({
+        altKey: true,
+        key,
+        code: 'KeyC',
+        from: input,
+      })
+
+      expect(executeCommand).not.toHaveBeenCalled()
+      expect(preventDefault).not.toHaveBeenCalled()
+      expect(stopPropagation).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps a global Alt+C binding working outside QuickInput', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'alt+c',
+        command: 'test.globalRemove',
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.globalRemove', () => {}))
+    mountHost(instantiation)
+
+    dispatch({ altKey: true, key: 'c' })
+
+    expect(executeCommand).toHaveBeenCalledWith('test.globalRemove')
+  })
+
+  it('does not forward Alt+Shift+C to QuickInput as the Alt+C remove gesture', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'alt+shift+c',
+        command: 'test.globalClaim',
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.globalClaim', () => {}))
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({
+      altKey: true,
+      shiftKey: true,
+      key: 'c',
+      from: input,
+    })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(stopPropagation).toHaveBeenCalledTimes(1)
+  })
+
+  // Ctrl+Alt 可能是 AltGr，现有 Quick Input 逻辑已将它留给原生输入。
+  it('leaves Ctrl+Alt+C (AltGr) entirely alone in QuickInput', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+alt+c',
+        command: 'test.globalClaim',
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.globalClaim', () => {}))
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    dispatch({ altKey: true, ctrlKey: true, key: 'c', from: input })
+
+    expect(executeCommand).not.toHaveBeenCalled()
   })
 })
 
