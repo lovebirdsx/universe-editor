@@ -267,6 +267,68 @@ describe('EditorGroupView', () => {
     expect(badges[0]!.closest('[role="tab"]')?.textContent).toContain('side chat')
   })
 
+  it('renders the side-task count only for sessions with direct children', () => {
+    const rows: AcpSessionHistoryEntry[] = [
+      {
+        id: 'parent-1',
+        agentId: 'fake',
+        sessionIdOnAgent: 'parent-1',
+        title: 'parent chat',
+        createdAt: 1,
+        lastUsedAt: 1,
+      },
+      {
+        id: 'side-1',
+        agentId: 'fake',
+        sessionIdOnAgent: 'side-1',
+        title: 'side one',
+        createdAt: 2,
+        lastUsedAt: 2,
+        sideTaskOf: 'parent-1',
+      },
+      {
+        id: 'side-2',
+        agentId: 'fake',
+        sessionIdOnAgent: 'side-2',
+        title: 'side two',
+        createdAt: 3,
+        lastUsedAt: 3,
+        sideTaskOf: 'parent-1',
+      },
+      {
+        id: 'plain-1',
+        agentId: 'fake',
+        sessionIdOnAgent: 'plain-1',
+        title: 'plain chat',
+        createdAt: 4,
+        lastUsedAt: 4,
+      },
+    ]
+    const inst = makeSessionInst(rows)
+
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(
+      inst.createInstance(AcpSessionEditorInput, 'parent-1', 'fake', 'parent'),
+    )
+    svc.activeGroup.openEditor(
+      inst.createInstance(AcpSessionEditorInput, 'plain-1', 'fake', 'plain'),
+    )
+    render(
+      <ServicesContext.Provider value={inst}>
+        <EditorGroupView
+          group={svc.activeGroup}
+          groupsService={svc}
+          resolveComponent={((k: string) => (map as Map<string, unknown>).get(k)) as never}
+        />
+      </ServicesContext.Provider>,
+    )
+
+    const badges = screen.getAllByTestId('editor-tab-side-task-count')
+    expect(badges.length).toBe(1)
+    expect(badges[0]!.textContent).toBe('2')
+    expect(badges[0]!.closest('[role="tab"]')?.textContent).toContain('parent chat')
+  })
+
   it('renders the folder badge only for a session cwd strictly inside the workspace', () => {
     const rows: AcpSessionHistoryEntry[] = [
       {

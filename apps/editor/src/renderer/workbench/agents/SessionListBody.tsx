@@ -71,6 +71,7 @@ import {
   IAcpSessionHistoryService,
   isDescendantOrEqual,
   isForeignWorkspaceSession,
+  sideTaskChildCounts,
   type AcpSessionHistoryEntry,
   type SessionHistoryScope,
 } from '../../services/acp/session/acpSessionHistory.js'
@@ -84,6 +85,7 @@ import { revealSessionEditorTab } from '../../services/acp/session/revealSession
 import { revealSessionChat } from '../../services/acp/session/revealSessionChat.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { AgentIcon } from './agentIcon.js'
+import { SideTaskCountBadge } from './SideTaskCountBadge.js'
 import { pathTail, shortenScopeLabel } from './scopeLabel.js'
 import {
   SessionRowContextMenu,
@@ -306,6 +308,7 @@ function SessionRow({
   isForeign,
   foreignStat,
   subPath,
+  sideTaskCount,
 }: {
   entry: AcpSessionHistoryEntry
   liveSession: IAcpSession | undefined
@@ -325,6 +328,8 @@ function SessionRow({
   isForeign: boolean
   foreignStat: ForeignSessionStat | undefined
   subPath: string | undefined
+  /** Direct side tasks forked off this session; 0 hides the hint. */
+  sideTaskCount: number
 }) {
   const isRunning = liveSession !== undefined
   // Foreign rows are rebuilt by the hydrate sweep without duration/cost; fall
@@ -385,6 +390,10 @@ function SessionRow({
         <span className={styles['sessionRowLabelLine']}>
           <AgentIcon agentId={entry.agentId} size={14} className={styles['sessionRowAgentIcon']} />
           <span className={styles['sessionRowLabel']}>{foreignStat?.title ?? entry.title}</span>
+          <SideTaskCountBadge
+            count={sideTaskCount}
+            testId={`session-row-${entry.id}-side-task-count`}
+          />
           {isPinned ? (
             <Pin
               size={12}
@@ -523,6 +532,9 @@ export function SessionListBody({
   const commandService = useService(ICommandService)
   const host = useService(IHostService)
   const entries = useObservable(history.entries)
+  // Count from the full snapshot: `visible` has already dropped the side-task
+  // rows themselves, so counting there would always yield zero.
+  const sideTaskCounts = useMemo(() => sideTaskChildCounts(entries), [entries])
   // Subscribe to sessions so the running indicator re-renders; the value also
   // feeds the optimistic pending rows below.
   const sessions = useObservable(service.sessions)
@@ -1068,6 +1080,7 @@ export function SessionListBody({
                 isForeign={isForeign}
                 foreignStat={foreignStats.get(entry.id)}
                 subPath={subPath}
+                sideTaskCount={sideTaskCounts.get(entry.id) ?? 0}
                 onRename={onRename}
                 onToggleArchive={onToggleArchive}
                 onTogglePin={onTogglePin}

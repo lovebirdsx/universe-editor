@@ -24,6 +24,7 @@ import {
   isDescendantOrEqual,
   isForeignWorkspaceSession,
   isTranscriptlessEmptyRow,
+  sideTaskChildCounts,
   sideTaskParentOf,
   type AcpSessionHistoryEntry,
 } from '../acpSessionHistory.js'
@@ -3124,6 +3125,48 @@ describe('directSideTaskChildren', () => {
     const entries = [row('older', 'root', 1000), row('newer', 'root', 2000), row('root')]
     directSideTaskChildren(entries, 'root')
     expect(entries.map((e) => e.id)).toEqual(['older', 'newer', 'root'])
+  })
+})
+
+describe('sideTaskChildCounts', () => {
+  const row = (id: string, sideTaskOf?: string, archived = false): AcpSessionHistoryEntry => ({
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: id,
+    createdAt: 1,
+    lastUsedAt: 1,
+    ...(sideTaskOf !== undefined ? { sideTaskOf } : {}),
+    ...(archived ? { archived: true } : {}),
+  })
+
+  it('counts direct children only and keeps a per-parent entry', () => {
+    const entries = [
+      row('root'),
+      row('older', 'root'),
+      row('newer', 'root'),
+      row('grandchild', 'older'),
+      row('other-root'),
+      row('stranger', 'other-root'),
+    ]
+    expect(sideTaskChildCounts(entries)).toEqual(
+      new Map([
+        ['root', 2],
+        ['older', 1],
+        ['other-root', 1],
+      ]),
+    )
+  })
+
+  it('ignores regular rows and returns an empty map for no entries', () => {
+    expect(sideTaskChildCounts([row('root'), row('plain')])).toEqual(new Map())
+    expect(sideTaskChildCounts([])).toEqual(new Map())
+  })
+
+  it('counts archived side tasks too, matching the parent chat popover', () => {
+    expect(sideTaskChildCounts([row('root'), row('side', 'root', true)])).toEqual(
+      new Map([['root', 1]]),
+    )
   })
 })
 

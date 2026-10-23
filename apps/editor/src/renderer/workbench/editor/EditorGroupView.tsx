@@ -93,6 +93,7 @@ import { EditorGroupContextMenu } from './EditorGroupContextMenu.js'
 import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
+import { SideTaskCountBadge } from '../agents/SideTaskCountBadge.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { ChevronLeft, ChevronRight, Folder, GitBranch, Lock, Pin } from 'lucide-react'
 import styles from './EditorArea.module.css'
@@ -105,6 +106,8 @@ const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
 const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgnoredVersion', 0)
 
 const EMPTY_SUBDIR_CWD: IObservable<boolean> = observableValue('emptySubdirCwd', false)
+
+const EMPTY_SIDE_TASK_COUNT: IObservable<number> = observableValue('emptySideTaskCount', 0)
 
 const PATH_LIKE_TOOLTIP_SCHEMES = new Set(['file', 'diff', 'merge', 'markdown-preview'])
 
@@ -361,6 +364,9 @@ const EditorTab = memo(function EditorTab({
   const hasSubdirCwd = useObservable(
     input instanceof AcpSessionEditorInput ? input.hasSubdirCwd : EMPTY_SUBDIR_CWD,
   )
+  const sideTaskCount = useObservable(
+    input instanceof AcpSessionEditorInput ? input.sideTaskCount : EMPTY_SIDE_TASK_COUNT,
+  )
   const deco = resource ? scmDecorations?.getFile(resource) : undefined
   // 无 SCM 状态装饰时，被 ignore 规则忽略的文件标签变暗（VSCode 对标，git / p4 通用）。
   // A tab is on screen by definition, so it declares itself and then reads the
@@ -484,6 +490,9 @@ const EditorTab = memo(function EditorTab({
       <span className={styles['tabLabel']} style={labelStyle}>
         {input.label}
       </span>
+      {input instanceof AcpSessionEditorInput ? (
+        <SideTaskCountBadge count={sideTaskCount} testId="editor-tab-side-task-count" />
+      ) : null}
       {isSticky ? (
         // A sticky tab has no close affordance; its close slot carries the
         // unpin button instead (VSCode parity).

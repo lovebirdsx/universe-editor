@@ -601,6 +601,21 @@ export function directSideTaskChildren(
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
 }
 
+/** Direct side-task child count per parent, keyed by the parent's durable id.
+ *  One pass because the Sessions list needs every row's count at once; its
+ *  `visible` array has already dropped the side-task rows themselves. */
+export function sideTaskChildCounts(
+  entries: readonly AcpSessionHistoryEntry[],
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>()
+  for (const entry of entries) {
+    const parentId = entry.sideTaskOf
+    if (parentId === undefined) continue
+    counts.set(parentId, (counts.get(parentId) ?? 0) + 1)
+  }
+  return counts
+}
+
 /**
  * Whether a row we created is known to hold nothing on either side: never
  * messaged locally (`hasMessages === false`) and with no agent-side transcript

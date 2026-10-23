@@ -22,7 +22,11 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService } from './acpSessionService.js'
 import { isSessionWorking } from './acpSessionStatus.js'
-import { IAcpSessionHistoryService, sessionCwdScopeRel } from './acpSessionHistory.js'
+import {
+  IAcpSessionHistoryService,
+  sessionCwdScopeRel,
+  sideTaskChildCounts,
+} from './acpSessionHistory.js'
 import { IAcpChatWidgetService } from './acpChatWidgetService.js'
 import { agentIconId } from '../acpAgentRegistry.js'
 import { resolveLiveSessionTitle, truncateSessionTitle } from './acpSessionTitle.js'
@@ -41,6 +45,9 @@ export class AcpSessionEditorInput extends EditorInput {
    *  judgement as the chat's SessionCwdPill (sessionCwdScopeRel). */
   readonly hasSubdirCwd: IObservable<boolean>
   private _cwdSub: IDisposable | undefined
+  private readonly _sideTaskCount: ISettableObservable<number>
+  /** Direct side tasks forked off this session; drives the tab's count hint. */
+  readonly sideTaskCount: IObservable<number>
 
   /**
    * `agentId` is captured at construction so a stale serialized input — left
@@ -61,6 +68,8 @@ export class AcpSessionEditorInput extends EditorInput {
     this._resource = URI.from({ scheme: 'universe', path: `/acp/session/${sessionId}` })
     this._hasSubdirCwd = observableValue<boolean>(`acpSessionCwdBadge:${sessionId}`, false)
     this.hasSubdirCwd = this._hasSubdirCwd
+    this._sideTaskCount = observableValue<number>(`acpSessionSideTaskCount:${sessionId}`, 0)
+    this.sideTaskCount = this._sideTaskCount
     this._lastTitle =
       initialTitle !== undefined && initialTitle.length > 0
         ? truncateSessionTitle(initialTitle)
@@ -120,6 +129,18 @@ export class AcpSessionEditorInput extends EditorInput {
       if (next !== this._hasSubdirCwd.get()) this._hasSubdirCwd.set(next, undefined)
     })
     this._register(this._cwdSub)
+
+    // Direct side-task count for the tab hint. `sideTaskOf` keys the durable id;
+    // a freshly created tab may still hold the local id until attach.
+    this._register(
+      autorun((r) => {
+        const entries = this._history.entries.read(r)
+        const live = this._sessions.getById(this.sessionId)
+        const durableId = live?.sessionIdOnAgent.read(r) ?? this.sessionId
+        const next = sideTaskChildCounts(entries).get(durableId) ?? 0
+        if (next !== this._sideTaskCount.get()) this._sideTaskCount.set(next, undefined)
+      }),
+    )
   }
 
   override get typeId(): string {

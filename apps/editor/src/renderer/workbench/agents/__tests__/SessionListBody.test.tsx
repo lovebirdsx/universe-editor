@@ -597,6 +597,67 @@ describe('SessionListBody — archive / pin', () => {
   })
 })
 
+describe('SessionListBody — side-task count hint', () => {
+  let harness: Harness
+  beforeEach(async () => {
+    harness = await makeHarness()
+  })
+  afterEach(() => {
+    harness.dispose()
+  })
+
+  it('counts direct children only and keeps side-task rows out of the list', () => {
+    const { history } = harness
+    addEntry(history, 'parent', 'parent', 1000)
+    addEntry(history, 'side-a', 'side a', 2000, 'fake', '/work', { sideTaskOf: 'parent' })
+    addEntry(history, 'side-b', 'side b', 3000, 'fake', '/work', { sideTaskOf: 'parent' })
+    addEntry(history, 'grandchild', 'grandchild', 4000, 'fake', '/work', {
+      sideTaskOf: 'side-a',
+    })
+
+    expect(rowOrder()).toEqual(['parent'])
+    expect(screen.getByTestId('session-row-parent-side-task-count').textContent).toBe('2')
+  })
+
+  it('omits the hint for a session without side tasks', () => {
+    addEntry(harness.history, 'plain', 'plain', 1000)
+    expect(screen.queryByTestId('session-row-plain-side-task-count')).toBeNull()
+  })
+
+  it('updates when side tasks are added and removed', () => {
+    const { history } = harness
+    addEntry(history, 'parent', 'parent', 1000)
+    expect(screen.queryByTestId('session-row-parent-side-task-count')).toBeNull()
+
+    addEntry(history, 'side-a', 'side a', 2000, 'fake', '/work', { sideTaskOf: 'parent' })
+    expect(screen.getByTestId('session-row-parent-side-task-count').textContent).toBe('1')
+
+    act(() => {
+      history.removeDeleted('side-a')
+    })
+    expect(screen.queryByTestId('session-row-parent-side-task-count')).toBeNull()
+  })
+
+  it('still activates the row when the hint is clicked', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'parent', 'parent', 1000)
+    addEntry(history, 'side-a', 'side a', 2000, 'fake', '/work', { sideTaskOf: 'parent' })
+
+    fireEvent.click(screen.getByTestId('session-row-parent-side-task-count'))
+    expect(sessionCtl.resumeSessionFn).toHaveBeenCalledWith('parent')
+  })
+
+  it('counts archived side tasks too, matching the parent chat popover', () => {
+    const { history } = harness
+    addEntry(history, 'parent', 'parent', 1000)
+    addEntry(history, 'side-a', 'side a', 2000, 'fake', '/work', { sideTaskOf: 'parent' })
+    act(() => {
+      history.setHistoryArchived('side-a', true)
+    })
+    expect(screen.getByTestId('session-row-parent-side-task-count').textContent).toBe('1')
+  })
+})
+
 describe('SessionListBody — keyboard navigation', () => {
   let harness: Harness
   beforeEach(async () => {

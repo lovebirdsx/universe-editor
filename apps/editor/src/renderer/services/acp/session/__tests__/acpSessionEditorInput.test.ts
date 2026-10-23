@@ -367,6 +367,75 @@ describe('AcpSessionEditorInput', () => {
     })
   })
 
+  describe('side task count', () => {
+    const row = (id: string, sideTaskOf?: string): AcpSessionHistoryEntry => ({
+      id,
+      agentId: 'fake',
+      sessionIdOnAgent: id,
+      title: id,
+      createdAt: 1,
+      lastUsedAt: 1,
+      ...(sideTaskOf !== undefined ? { sideTaskOf } : {}),
+    })
+
+    it('counts direct children only', () => {
+      const rows = [
+        row('parent'),
+        row('side-a', 'parent'),
+        row('side-b', 'parent'),
+        row('grandchild', 'side-a'),
+      ]
+      const { inst } = makeAccessor(rows)
+      const input = inst.createInstance(AcpSessionEditorInput, 'parent', 'fake', undefined)
+      expect(input.sideTaskCount.get()).toBe(2)
+    })
+
+    it('is zero without side tasks', () => {
+      const { inst } = makeAccessor([row('parent'), row('plain')])
+      const input = inst.createInstance(AcpSessionEditorInput, 'parent', 'fake', undefined)
+      expect(input.sideTaskCount.get()).toBe(0)
+    })
+
+    it('resolves the durable id when the tab still holds the local id', () => {
+      const durableId = observableValue<string | undefined>('t.sid', undefined)
+      const live = { id: 'local-parent', sessionIdOnAgent: durableId } as unknown as IAcpSession
+      const rows = [row('durable-parent'), row('side-a', 'durable-parent')]
+      const { inst } = makeAccessor(rows, { getById: () => live })
+      const input = inst.createInstance(AcpSessionEditorInput, 'local-parent', 'fake', undefined)
+      expect(input.sideTaskCount.get()).toBe(0)
+
+      durableId.set('durable-parent', undefined)
+      expect(input.sideTaskCount.get()).toBe(1)
+    })
+
+    it('tracks side-task additions and removals without rebuilding the input', () => {
+      const { inst, history } = makeAccessor([row('parent')])
+      const entries = history.entries as unknown as ISettableObservable<
+        readonly AcpSessionHistoryEntry[]
+      >
+      const input = inst.createInstance(AcpSessionEditorInput, 'parent', 'fake', undefined)
+      expect(input.sideTaskCount.get()).toBe(0)
+
+      entries.set([row('parent'), row('side-a', 'parent')], undefined)
+      expect(input.sideTaskCount.get()).toBe(1)
+
+      entries.set([row('parent')], undefined)
+      expect(input.sideTaskCount.get()).toBe(0)
+    })
+
+    it('does not change the tab title when the count changes', () => {
+      const { inst, history } = makeAccessor([row('parent')])
+      const entries = history.entries as unknown as ISettableObservable<
+        readonly AcpSessionHistoryEntry[]
+      >
+      const input = inst.createInstance(AcpSessionEditorInput, 'parent', 'fake', undefined)
+      const title = input.getName()
+
+      entries.set([row('parent'), row('side-a', 'parent')], undefined)
+      expect(input.getName()).toBe(title)
+    })
+  })
+
   describe('confirmClose', () => {
     function fakeSession(opts: {
       status?: AcpSessionStatus

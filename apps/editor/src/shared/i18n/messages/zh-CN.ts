@@ -3032,6 +3032,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sessions.copyTranscriptPath': '复制会话文件路径',
   'acp.sideTask.badge': '侧边任务',
   'acp.sideTask.bar': '侧边任务',
+  'acp.sideTask.count': '侧边任务（{count}）',
   'acp.sideTask.forkFailed': '创建侧边聊天失败：{message}',
   'acp.sideTask.forkUnsupported': '该 Agent 不支持创建侧边任务。',
   'acp.sideTask.modelInvalid':
