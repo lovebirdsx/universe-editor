@@ -14,7 +14,7 @@
 
 import * as fs from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Page } from '@playwright/test'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 import { test, expect } from '../fixtures/sharedApp.js'
@@ -53,31 +53,29 @@ async function openSessionWithPrompt(
 
 /** Drop `names` (resolved under `root`) as a text/uri-list, like an internal drag. */
 async function dropFiles(page: Page, root: string, names: readonly string[]): Promise<void> {
-  const rootDir = root.replace(/\\/g, '/')
-  await page.evaluate(
-    ([rootDir, names]) => {
-      const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
-      const dt = new DataTransfer()
-      dt.setData('text/uri-list', names.map((n) => `file:///${rootDir}/${n}`).join('\r\n'))
-      const fire = (type: string): void => {
-        const r = target.getBoundingClientRect()
-        target.dispatchEvent(
-          new DragEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            clientX: r.left + r.width / 2,
-            clientY: r.top + r.height / 2,
-            dataTransfer: dt,
-          }),
-        )
-      }
-      fire('dragenter')
-      fire('dragover')
-      fire('drop')
-    },
-    [rootDir, names] as const,
-  )
+  // 不用 `file:///` 拼接：POSIX 绝对路径会得到 `file:////tmp/…`，uri.path 的 `//` 前缀使标签退回绝对路径。
+  const uriList = names.map((n) => pathToFileURL(resolve(root, n)).href).join('\r\n')
+  await page.evaluate((uriList) => {
+    const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
+    const dt = new DataTransfer()
+    dt.setData('text/uri-list', uriList)
+    const fire = (type: string): void => {
+      const r = target.getBoundingClientRect()
+      target.dispatchEvent(
+        new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: r.left + r.width / 2,
+          clientY: r.top + r.height / 2,
+          dataTransfer: dt,
+        }),
+      )
+    }
+    fire('dragenter')
+    fire('dragover')
+    fire('drop')
+  }, uriList)
 }
 
 async function focusPrompt(page: Page): Promise<void> {

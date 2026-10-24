@@ -21,7 +21,7 @@
 
 import * as fs from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 import type { ElectronApplication, Page } from '@playwright/test'
 import { test, expect } from '../fixtures/sharedApp.js'
@@ -109,31 +109,29 @@ async function tryCleanup(dir: string): Promise<void> {
 
 /** Drop one file as a text/uri-list, like an internal drag from Explorer. */
 async function dropFile(page: Page, root: string, name: string): Promise<void> {
-  const rootDir = root.replace(/\\/g, '/')
-  await page.evaluate(
-    ([rootDir, name]) => {
-      const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
-      const dt = new DataTransfer()
-      dt.setData('text/uri-list', `file:///${rootDir}/${name}`)
-      const fire = (type: string): void => {
-        const r = target.getBoundingClientRect()
-        target.dispatchEvent(
-          new DragEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            composed: true,
-            clientX: r.left + r.width / 2,
-            clientY: r.top + r.height / 2,
-            dataTransfer: dt,
-          }),
-        )
-      }
-      fire('dragenter')
-      fire('dragover')
-      fire('drop')
-    },
-    [rootDir, name] as const,
-  )
+  // 同 smoke.promptUndoRef.spec.ts：用 pathToFileURL 避免 POSIX 上的四斜杠 URI。
+  const uri = pathToFileURL(resolve(root, name)).href
+  await page.evaluate((uri) => {
+    const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
+    const dt = new DataTransfer()
+    dt.setData('text/uri-list', uri)
+    const fire = (type: string): void => {
+      const r = target.getBoundingClientRect()
+      target.dispatchEvent(
+        new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: r.left + r.width / 2,
+          clientY: r.top + r.height / 2,
+          dataTransfer: dt,
+        }),
+      )
+    }
+    fire('dragenter')
+    fire('dragover')
+    fire('drop')
+  }, uri)
 }
 
 test.describe('@p1 acp paste image', () => {
