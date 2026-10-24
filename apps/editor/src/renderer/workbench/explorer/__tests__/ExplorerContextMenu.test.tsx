@@ -17,7 +17,10 @@ import {
   ServiceCollection,
   URI,
   observableValue,
+  registerAction2,
+  type IDisposable,
 } from '@universe-editor/platform'
+import { SendExplorerResourceToAgentChatAction } from '../../../actions/agentContextActions.js'
 import type { ExplorerTreeService } from '../../../services/explorer/ExplorerTreeService.js'
 import {
   IScmService,
@@ -534,6 +537,91 @@ describe('ExplorerContextMenu', () => {
     } finally {
       menuDisposable.dispose()
       cmdDisposable.dispose()
+    }
+  })
+})
+
+describe('ExplorerContextMenu — Send to Agent Chat', () => {
+  let registered: IDisposable | undefined
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+  })
+
+  it('offers the entry on file and folder rows, passing the clicked row plus selection', () => {
+    registered = registerAction2(SendExplorerResourceToAgentChatAction)
+    const commandService = new FakeCommandService()
+    const root = URI.file('/ws')
+    const file = URI.joinPath(root, 'a.txt')
+    const folder = URI.joinPath(root, 'src')
+    const contextKeyService = new ContextKeyService()
+    const tree = {
+      isRoot: () => false,
+      hasClipboard: false,
+      hasCutItems: false,
+      getContextResourceOperations: () => [
+        { resource: file },
+        { resource: folder, isDirectory: true },
+      ],
+    } as unknown as ExplorerTreeService
+
+    try {
+      for (const target of [
+        { resource: file, isDirectory: false },
+        { resource: folder, isDirectory: true },
+      ]) {
+        const { unmount } = render(
+          <ExplorerContextMenu
+            state={{ x: 0, y: 0, target }}
+            rootResource={root}
+            commandService={commandService as unknown as ICommandService}
+            contextKeyService={contextKeyService}
+            tree={tree}
+            onClose={() => {}}
+          />,
+        )
+        fireEvent.click(screen.getByText('Send to Agent Chat'))
+        unmount()
+      }
+
+      expect(commandService.calls.map((call) => call.id)).toEqual([
+        SendExplorerResourceToAgentChatAction.ID,
+        SendExplorerResourceToAgentChatAction.ID,
+      ])
+      const [primary, selection] = commandService.calls[0]?.args as [
+        { target: URI; isDirectory: boolean },
+        Array<{ resource: URI; isDirectory?: boolean }>,
+      ]
+      expect(primary.target.toString()).toBe(file.toString())
+      expect(primary.isDirectory).toBe(false)
+      expect(selection.map((entry) => entry.resource.toString())).toEqual([
+        file.toString(),
+        folder.toString(),
+      ])
+    } finally {
+      contextKeyService.dispose()
+    }
+  })
+
+  it('stays off the workspace root (the blank-area menu falls back to it)', () => {
+    registered = registerAction2(SendExplorerResourceToAgentChatAction)
+    const commandService = new FakeCommandService()
+    const root = URI.file('/ws')
+    const contextKeyService = new ContextKeyService()
+
+    try {
+      render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: null }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={contextKeyService}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.queryByText('Send to Agent Chat')).toBeNull()
+    } finally {
+      contextKeyService.dispose()
     }
   })
 })

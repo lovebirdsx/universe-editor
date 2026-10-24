@@ -16,11 +16,17 @@
 
 ## 冷挂载 drain 竞态：inbox 被消费了，setText 却静默丢弃
 
-Monaco 首载是异步的（`MonacoLoader.peek()` 未命中 → `ensureInitialized().then(mount)`），而 `PromptInput` 的三个 inbox drain effect 在 React commit 后**同步**执行——此时 `setText`/`insertRef` 内 `modelRef.current === null` 静默 return，但 `drain()` 已把 inbox 清掉 → **deposit 永久丢失**。deep link 落输入框（首个「session 未 mount 即 deposit」场景）稳定复现；同病的还有 git graph "Send to Agent Chat"、"Add Selection to Chat"、Rewind replace inbox 发到未打开 session 的场景。
+Monaco 首载是异步的（`MonacoLoader.peek()` 未命中 → `ensureInitialized().then(mount)`），而 `PromptInput` 的四个 inbox drain effect 在 React commit 后**同步**执行——此时 `setText`/`insertRef` 内 `modelRef.current === null` 静默 return，但 `drain()` 已把 inbox 清掉 → **deposit 永久丢失**。deep link 落输入框（首个「session 未 mount 即 deposit」场景）稳定复现；同病的还有 git graph "Send to Agent Chat"、"Add Selection to Chat"、Rewind replace inbox 发到未打开 session 的场景。
 
 修法：`PromptInput` 加 `editorReady` state（`onEditorReady` 时翻转），三个 drain effect 开头 `if (!editorReady) return`（**留队列不消费**）+ 依赖数组加 `editorReady`，ready 后统一 drain；「先 pull 后订阅」的既有顺序保证无缝隙。回归锁：`smoke.deepLinkAgent.spec.ts`（inbox 链路首个 e2e 覆盖）。
 
 Monaco 输入框的其余编排（变更源 `kind`、历史弹窗方向、局部键位分发）见 [cases-prompt-input-monaco.md](../cases-prompt-input-monaco.md)。
+
+## 从 Explorer / SCM 右键把资源加入输入框（"Send to Agent Chat"）
+
+`actions/agentContextActions.ts` 的两条 Action2（`sendExplorerResourceToChat` / `sendScmResourceToChat`）把选中的文件/文件夹构造成 `PromptRef`（`mentionEntryToRef`，kind `file` / `folder`），经 `AcpPromptRefInbox`（按本地 session id）投递，再由 `PromptInput` 在 `editorReady` 后逐个 `insertRef` 到当前 caret——与把文件拖进输入框的最终形态完全一致，发送时序列化为 `resource_link`。目标会话沿用 Git Graph 的 `resolveActiveOrNewSession`（当前会话，否则新建）。
+
+语义差异：Explorer 文件夹发送为**单个 folder ref**；SCM 文件夹行使用 `ScmView` 已物化的子树参数**展开为多个 file ref**（空子树 no-op）。SCM 行路径是宿主 fs-path，需经 `fsPathToWorkspaceUri(path, authority)` 还原；`noHostFile`（depot path）行被过滤，因此 `ScmResourceArg` 与 `fileNodeToArg` 必须透传该标记。图片文件不按 MIME 分流，一律作为普通 file ref。
 
 ## 发送后附件不能只依赖 agent transcript
 

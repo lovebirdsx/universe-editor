@@ -16,6 +16,9 @@ export interface ScmResourceArg {
   readonly resourceUri: string
   readonly contextValue?: string
   readonly scmResourceGroupId: string
+  /** Provider claim that `resourceUri` names no host file (a depot path), so it
+   *  cannot be opened or referenced as a file resource. */
+  readonly noHostFile?: boolean
 }
 
 /** The host fs-path carried by a row payload; undefined for anything else (a

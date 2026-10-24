@@ -88,6 +88,8 @@ import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSea
 import { AcpPromptDraftCache } from '../../../services/acp/session/acpPromptDraftCache.js'
 import { AcpPromptCancelledDraftStash } from '../../../services/acp/session/acpPromptCancelledDraftStash.js'
 import { AcpPromptReplaceInbox } from '../../../services/acp/session/acpPromptReplaceInbox.js'
+import { AcpPromptRefInbox } from '../../../services/acp/session/acpPromptRefInbox.js'
+import { mentionEntryToRef, type PlacedRef } from '../../../services/acp/promptRef.js'
 import type { SelectionContext } from '../../../services/acp/promptContext.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import type { WidgetHandle } from '../ChatBody.js'
@@ -129,6 +131,7 @@ afterEach(() => {
   AcpPromptDraftCache._resetForTests()
   AcpPromptCancelledDraftStash._resetForTests()
   AcpPromptReplaceInbox._resetForTests()
+  AcpPromptRefInbox._resetForTests()
   stubHistoryEntries.set([], undefined)
   // Only the user-guide category loaded: the # panel's docs entry stays a
   // single item in these fixtures, matching the pre-category behavior.
@@ -2124,6 +2127,79 @@ describe('PromptInput — @@ / @# file picker triggers', () => {
       },
     })
     await waitFor(() => expect(ta.value).toBe('@src/inside.ts '))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Ref inbox — Explorer / SCM "Send to Agent Chat" deposits PromptRefs keyed by
+// the local session id; the input inserts them as tracked pills (same end state
+// as a file drop). Cold-mount deposits must survive until Monaco is ready.
+// ---------------------------------------------------------------------------
+
+describe('PromptInput — ref inbox', () => {
+  const fileRef = (relPath: string): ReturnType<typeof mentionEntryToRef> =>
+    mentionEntryToRef({ uri: URI.file(`/repo/${relPath}`).toString(), relPath })
+
+  it('inserts refs deposited before mount once the editor is ready', async () => {
+    const session = makeSession({ id: 's1' })
+    AcpPromptRefInbox.deposit('s1', [fileRef('src/a.ts')])
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    await waitFor(() => expect(getTextarea().value).toBe('@src/a.ts '))
+  })
+
+  it('inserts multiple mounted deposits in order and sends them as refs', async () => {
+    const session = makeSession({ id: 's1' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    act(() => {
+      AcpPromptRefInbox.deposit('s1', [fileRef('src/a.ts'), fileRef('src/b.ts')])
+    })
+    await waitFor(() => expect(ta.value).toBe('@src/a.ts @src/b.ts '))
+
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledTimes(1)
+    const [text, refs] = session.sendPrompt.mock.calls[0]!
+    expect(text).toBe('@src/a.ts @src/b.ts ')
+    expect((refs as readonly PlacedRef[]).map((placed) => placed.ref.kind)).toEqual([
+      'file',
+      'file',
+    ])
+  })
+
+  it('preserves a folder ref kind through send', async () => {
+    const session = makeSession({ id: 's1' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    act(() => {
+      AcpPromptRefInbox.deposit('s1', [
+        mentionEntryToRef({ uri: URI.file('/repo/src').toString(), relPath: 'src' }, 'folder'),
+      ])
+    })
+    await waitFor(() => expect(ta.value).toBe('@src '))
+
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs[0]?.ref.kind).toBe('folder')
+  })
+
+  it('only drains the refs deposited for its own session', async () => {
+    const session = makeSession({ id: 's1' })
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    act(() => {
+      AcpPromptRefInbox.deposit('s2', [fileRef('src/other.ts')])
+    })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(getTextarea().value).toBe('')
   })
 })
 

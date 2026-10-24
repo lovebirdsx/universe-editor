@@ -133,6 +133,7 @@ import { AcpPromptDraftCache } from '../../services/acp/session/acpPromptDraftCa
 import { AcpPromptCancelledDraftStash } from '../../services/acp/session/acpPromptCancelledDraftStash.js'
 import { AcpPromptContextInbox } from '../../services/acp/session/acpPromptContextInbox.js'
 import { AcpPromptTextInbox } from '../../services/acp/session/acpPromptTextInbox.js'
+import { AcpPromptRefInbox } from '../../services/acp/session/acpPromptRefInbox.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
 import { IAcpPromptHistoryService } from '../../services/acp/session/acpPromptHistoryService.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
@@ -491,6 +492,31 @@ export function PromptInput({
     }
     pull()
     const sub = AcpPromptTextInbox.onDidDeposit((id) => {
+      if (id === session.id) pull()
+    })
+    return () => sub.dispose()
+  }, [session.id, editorReady, requestFrame])
+
+  // Drain refs a command (Explorer / SCM "Send to Agent Chat") deposited for
+  // this session, inserting each as a range-tracked pill at the caret — the
+  // same end state as dropping files onto the input. Gated on `editorReady`
+  // for the same cold-mount reason as the drains above.
+  useEffect(() => {
+    if (!editorReady) return
+    const pull = (): void => {
+      const incoming = AcpPromptRefInbox.drain(session.id)
+      if (incoming.length === 0) return
+      const el = editorHandleRef.current
+      if (!el) return
+      for (const ref of incoming) {
+        const at = el.getCaret()
+        el.insertRef(ref, at, at)
+      }
+      setMentionDismissed(true)
+      requestFrame(() => el.focus())
+    }
+    pull()
+    const sub = AcpPromptRefInbox.onDidDeposit((id) => {
       if (id === session.id) pull()
     })
     return () => sub.dispose()

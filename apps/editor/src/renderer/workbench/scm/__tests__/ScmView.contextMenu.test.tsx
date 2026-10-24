@@ -32,7 +32,10 @@ import {
   type IStorageService as IStorageServiceType,
 } from '@universe-editor/platform'
 import { ScmView } from '../ScmView.js'
-import { SendChangelistToAgentChatAction } from '../../../actions/agentContextActions.js'
+import {
+  SendChangelistToAgentChatAction,
+  SendScmResourceToAgentChatAction,
+} from '../../../actions/agentContextActions.js'
 import { IScmService, ScmService } from '../../../services/extensions/ScmService.js'
 import { scmViewState } from '../scmViewState.js'
 import { ServicesContext } from '../../useService.js'
@@ -353,6 +356,98 @@ describe('ScmView — drag files onto a changelist group', () => {
       expect.objectContaining({ scmResourceGroupId: 'cl:5' }),
       expect.arrayContaining([
         expect.objectContaining({ resourceUri: 'D:/repo/bar.txt', scmResourceGroupId: 'cl:5' }),
+      ]),
+    )
+  })
+})
+
+describe('ScmView — Send to Agent Chat resource entry', () => {
+  let registered: IDisposable | undefined
+  afterEach(() => {
+    registered?.dispose()
+    registered = undefined
+    scmViewState.setViewMode('list')
+  })
+
+  it('offers the entry on a host-file row and passes the row plus selection', async () => {
+    registered = registerAction2(SendScmResourceToAgentChatAction)
+    const { scm, executeCommand } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'default', 'Default Changelist')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: 'D:/repo/foo.txt', contextValue: 'E' },
+      ])
+    })
+
+    const row = (await screen.findByText('foo.txt')).closest('[role="treeitem"]') as HTMLElement
+    fireEvent.contextMenu(row)
+    fireEvent.click(await screen.findByText('Send to Agent Chat'))
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      SendScmResourceToAgentChatAction.ID,
+      expect.objectContaining({ resourceUri: 'D:/repo/foo.txt', scmResourceGroupId: 'default' }),
+      expect.arrayContaining([
+        expect.objectContaining({ resourceUri: 'D:/repo/foo.txt', scmResourceGroupId: 'default' }),
+      ]),
+    )
+  })
+
+  it('stays off a row the provider marks as having no host file', async () => {
+    registered = registerAction2(SendScmResourceToAgentChatAction)
+    // Keep a provider entry in the same menu so an empty result is visible as
+    // "this one entry is gone", not as "the row has no menu at all".
+    const filler = MenuRegistry.addMenuItem(MenuId.ScmResourceStateContext, {
+      command: 'perforce.unshelve',
+      title: 'Unshelve',
+      when: 'scmProvider == perforce',
+      group: '1_open',
+    })
+    const { scm } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'shelved:1', 'Shelved #1')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: '//depot/branch_x/a.ts', contextValue: 'S', noHostFile: true },
+      ])
+    })
+
+    try {
+      const row = (await screen.findByText('a.ts')).closest('[role="treeitem"]') as HTMLElement
+      fireEvent.contextMenu(row)
+      const menu = await screen.findByRole('menu')
+      expect(within(menu).getByText('Unshelve')).toBeTruthy()
+      expect(screen.queryByText('Send to Agent Chat')).toBeNull()
+    } finally {
+      filler.dispose()
+    }
+  })
+
+  it('feeds a folder-row click the whole subtree, preserving the noHostFile claim', async () => {
+    scmViewState.setViewMode('tree')
+    registered = registerAction2(SendScmResourceToAgentChatAction)
+    const { scm, executeCommand } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'perforce', 'Perforce', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'default', 'Default Changelist')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: 'D:/repo/src/a.txt', contextValue: 'E' },
+        { resourceUri: 'D:/repo/src/b.txt', contextValue: 'E', noHostFile: true },
+      ])
+    })
+
+    const folderRow = (await screen.findByText('src')).closest('[role="treeitem"]') as HTMLElement
+    fireEvent.contextMenu(folderRow)
+    fireEvent.click(await screen.findByText('Send to Agent Chat'))
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      SendScmResourceToAgentChatAction.ID,
+      expect.objectContaining({ isDirectory: true, scmResourceGroupId: 'default' }),
+      expect.arrayContaining([
+        expect.objectContaining({ resourceUri: 'D:/repo/src/a.txt' }),
+        // fileNodeToArg must not drop the claim, or the action would turn a
+        // depot path into a bogus file URI.
+        expect.objectContaining({ resourceUri: 'D:/repo/src/b.txt', noHostFile: true }),
       ]),
     )
   })

@@ -107,6 +107,7 @@ function fileNodeToArg(node: Extract<ScmNode, { kind: 'file' }>): ScmResourceArg
     ...(node.resource.contextValue !== undefined
       ? { contextValue: node.resource.contextValue }
       : {}),
+    ...(node.resource.noHostFile === true ? { noHostFile: true } : {}),
     scmResourceGroupId: node.groupId,
   }
 }

@@ -6,9 +6,13 @@ import {
   IEditorService,
   IInstantiationService,
   IQuickInputService,
+  IUriIdentityService,
   IWorkspaceService,
+  MenuId,
+  MenuRegistry,
   ServiceCollection,
   URI,
+  UriIdentityService,
   observableValue,
   registerAction2,
   type Action2,
@@ -22,6 +26,8 @@ import {
   SendChangelistToAgentChatAction,
   SendCommitToAgentChatAction,
   SendContextToAgentChatAction,
+  SendExplorerResourceToAgentChatAction,
+  SendScmResourceToAgentChatAction,
 } from '../agentContextActions.js'
 import {
   createChatTarget,
@@ -37,6 +43,7 @@ import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptContextInbox } from '../../services/acp/session/acpPromptContextInbox.js'
+import { AcpPromptRefInbox } from '../../services/acp/session/acpPromptRefInbox.js'
 import { AcpPromptTextInbox } from '../../services/acp/session/acpPromptTextInbox.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -57,6 +64,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   AcpPromptTextInbox._resetForTests()
   AcpPromptContextInbox._resetForTests()
+  AcpPromptRefInbox._resetForTests()
   FileEditorRegistry._resetForTests()
 })
 
@@ -622,5 +630,264 @@ describe('SendChangelistToAgentChatAction', () => {
     const executed = await runAction({ scmResourceGroupId: 'default' }, { description: 'x' })
     expect(executed).toEqual([])
     expect(AcpPromptTextInbox.drain('sess-1')).toEqual([])
+  })
+})
+
+describe('resource → Agent Chat actions', () => {
+  const workspace = URI.file('/ws')
+  const fileA = URI.file('/ws/src/a.ts')
+  const fileB = URI.file('/ws/src/b.ts')
+  const folder = URI.file('/ws/src')
+
+  function target(uri: URI, isDirectory = false) {
+    return { target: uri, resource: uri, parent: URI.joinPath(uri, '..'), isDirectory }
+  }
+
+  function resourceHarness(
+    options: {
+      readonly workspaceFolder?: URI
+      readonly activeSession?: IAcpSession
+    } = {},
+  ) {
+    const created = fakeSession({ id: 'created-1' })
+    const createSession = vi.fn(async () => created)
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, {
+      _serviceBrand: undefined,
+      current: options.workspaceFolder ? { folder: options.workspaceFolder, name: 'ws' } : null,
+    } as unknown as IWorkspaceService)
+    services.set(IUriIdentityService, new UriIdentityService('linux'))
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      activeSession: observableValue<IAcpSession | undefined>('t.active', options.activeSession),
+      createSession,
+      getById: (id: string) => (id === created.id ? created : undefined),
+    } as unknown as IAcpSessionService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId: () => 'claude',
+    } as unknown as IAcpAgentRegistry)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      focusSessionInput: vi.fn(),
+      focusSession: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    services.set(IEditorGroupsService, noopGroups())
+    services.set(IInstantiationService, {
+      _serviceBrand: undefined,
+      createInstance: vi.fn(),
+    } as unknown as IInstantiationService)
+    return {
+      createSession,
+      async run(Ctor: new () => Action2, args: readonly unknown[]): Promise<void> {
+        const accessor = { get: (id: unknown) => services.get(id as never) } as ServicesAccessor
+        await new Ctor().run(accessor, ...args)
+      },
+    }
+  }
+
+  describe('SendExplorerResourceToAgentChatAction', () => {
+    it('registers the command and its Explorer menu slot', () => {
+      disposables.push(registerAction2(SendExplorerResourceToAgentChatAction))
+      expect(CommandsRegistry.getCommand(SendExplorerResourceToAgentChatAction.ID)).toBeDefined()
+      const item = MenuRegistry.getMenuItems(MenuId.ExplorerContext).find(
+        (entry) => 'command' in entry && entry.command === SendExplorerResourceToAgentChatAction.ID,
+      )
+      expect(item).toMatchObject({ group: '7_agent', order: 2 })
+    })
+
+    it('deposits a file as a workspace-relative @-mention ref', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      await harness.run(SendExplorerResourceToAgentChatAction, [
+        target(fileA),
+        [{ resource: fileA }],
+      ])
+
+      expect(harness.createSession).not.toHaveBeenCalled()
+      expect(AcpPromptRefInbox.drain('sess-1')).toEqual([
+        expect.objectContaining({ kind: 'file', label: 'src/a.ts', uri: fileA.toString() }),
+      ])
+    })
+
+    it('deposits a folder as a single folder ref', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      await harness.run(SendExplorerResourceToAgentChatAction, [
+        target(folder, true),
+        [{ resource: folder, isDirectory: true }],
+      ])
+      expect(AcpPromptRefInbox.drain('sess-1')).toEqual([
+        expect.objectContaining({ kind: 'folder', label: 'src', uri: folder.toString() }),
+      ])
+    })
+
+    it('sends the whole multi-selection with each entry keeping its own kind', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      await harness.run(SendExplorerResourceToAgentChatAction, [
+        target(fileA),
+        [{ resource: fileA }, { resource: folder, isDirectory: true }, { resource: fileB }],
+      ])
+      expect(AcpPromptRefInbox.drain('sess-1').map((ref) => [ref.kind, ref.label])).toEqual([
+        ['file', 'src/a.ts'],
+        ['folder', 'src'],
+        ['file', 'src/b.ts'],
+      ])
+    })
+
+    it('ignores the workspace root and never creates a session for it', async () => {
+      const harness = resourceHarness({ workspaceFolder: workspace })
+      await harness.run(SendExplorerResourceToAgentChatAction, [
+        target(workspace, true),
+        [{ resource: workspace, isDirectory: true }],
+      ])
+      expect(AcpPromptRefInbox.drain('created-1')).toEqual([])
+      expect(harness.createSession).not.toHaveBeenCalled()
+    })
+
+    it('labels refs relative to a narrowed session cwd', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws/sub' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      const inside = URI.file('/ws/sub/x.ts')
+      const outside = URI.file('/ws/y.ts')
+      await harness.run(SendExplorerResourceToAgentChatAction, [
+        target(inside),
+        [{ resource: inside }, { resource: outside }],
+      ])
+      expect(AcpPromptRefInbox.drain('sess-1').map((ref) => ref.label)).toEqual([
+        'x.ts',
+        '/ws/y.ts',
+      ])
+    })
+
+    it('creates a session when none is active', async () => {
+      const harness = resourceHarness({ workspaceFolder: workspace })
+      await harness.run(SendExplorerResourceToAgentChatAction, [target(fileA)])
+      expect(harness.createSession).toHaveBeenCalledTimes(1)
+      expect(AcpPromptRefInbox.drain('created-1')).toHaveLength(1)
+    })
+
+    it('treats an image file as a plain file ref', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      const image = URI.file('/ws/assets/photo.png')
+      await harness.run(SendExplorerResourceToAgentChatAction, [target(image)])
+      expect(AcpPromptRefInbox.drain('sess-1')).toEqual([
+        expect.objectContaining({ kind: 'file', label: 'assets/photo.png' }),
+      ])
+    })
+  })
+
+  describe('SendScmResourceToAgentChatAction', () => {
+    it('registers the command on both SCM row menus', () => {
+      disposables.push(registerAction2(SendScmResourceToAgentChatAction))
+      expect(CommandsRegistry.getCommand(SendScmResourceToAgentChatAction.ID)).toBeDefined()
+      for (const menuId of [
+        MenuId.ScmResourceStateContext,
+        MenuId.ScmResourceFolderContext,
+      ] as const) {
+        const item = MenuRegistry.getMenuItems(menuId).find(
+          (entry) => 'command' in entry && entry.command === SendScmResourceToAgentChatAction.ID,
+        )
+        expect(item).toMatchObject({ group: '4_agent', order: 1 })
+      }
+    })
+
+    it('deposits a file row plus its multi-selection', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      const primary = { resourceUri: '/ws/src/a.ts', scmResourceGroupId: 'changes' }
+      await harness.run(SendScmResourceToAgentChatAction, [
+        primary,
+        [
+          { resourceUri: '/ws/src/a.ts', scmResourceGroupId: 'changes' },
+          { resourceUri: '/ws/src/b.ts', scmResourceGroupId: 'changes' },
+        ],
+      ])
+      expect(AcpPromptRefInbox.drain('sess-1').map((ref) => [ref.kind, ref.label])).toEqual([
+        ['file', 'src/a.ts'],
+        ['file', 'src/b.ts'],
+      ])
+    })
+
+    it('dedupes repeated paths', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      const arg = { resourceUri: '/ws/src/a.ts', scmResourceGroupId: 'changes' }
+      await harness.run(SendScmResourceToAgentChatAction, [arg, [arg, { ...arg }]])
+      expect(AcpPromptRefInbox.drain('sess-1')).toHaveLength(1)
+    })
+
+    it('filters rows the provider marks as having no host file', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      const depot = {
+        resourceUri: '//depot/branch_x/a.ts',
+        scmResourceGroupId: 'shelved:1',
+        noHostFile: true,
+      }
+      await harness.run(SendScmResourceToAgentChatAction, [
+        depot,
+        [depot, { resourceUri: '/ws/src/b.ts', scmResourceGroupId: 'shelved:1' }],
+      ])
+      expect(AcpPromptRefInbox.drain('sess-1')).toEqual([
+        expect.objectContaining({ label: 'src/b.ts' }),
+      ])
+    })
+
+    it('never creates a session when every row is filtered out', async () => {
+      const harness = resourceHarness({ workspaceFolder: workspace })
+      const depot = {
+        resourceUri: '//depot/branch_x/a.ts',
+        scmResourceGroupId: 'shelved:1',
+        noHostFile: true,
+      }
+      await harness.run(SendScmResourceToAgentChatAction, [depot, [depot]])
+      expect(harness.createSession).not.toHaveBeenCalled()
+      expect(AcpPromptRefInbox.drain('created-1')).toEqual([])
+    })
+
+    it('expands a folder row into its subtree files', async () => {
+      const active = fakeSession({ id: 'sess-1', cwd: '/ws' })
+      const harness = resourceHarness({ workspaceFolder: workspace, activeSession: active })
+      await harness.run(SendScmResourceToAgentChatAction, [
+        { resourceUri: '/ws/src', isDirectory: true, scmResourceGroupId: 'changes' },
+        [
+          { resourceUri: '/ws/src/a.ts', scmResourceGroupId: 'changes' },
+          { resourceUri: '/ws/src/b.ts', scmResourceGroupId: 'changes' },
+        ],
+      ])
+      expect(AcpPromptRefInbox.drain('sess-1').map((ref) => [ref.kind, ref.label])).toEqual([
+        ['file', 'src/a.ts'],
+        ['file', 'src/b.ts'],
+      ])
+    })
+
+    it('sends nothing for an empty folder row', async () => {
+      const harness = resourceHarness({ workspaceFolder: workspace })
+      await harness.run(SendScmResourceToAgentChatAction, [
+        { resourceUri: '/ws/empty', isDirectory: true, scmResourceGroupId: 'changes' },
+        [],
+      ])
+      expect(harness.createSession).not.toHaveBeenCalled()
+    })
+
+    it('reattaches a remote authority to host paths', async () => {
+      const remoteFolder = URI.parse('remote-ssh://host/repo')
+      const active = fakeSession({ id: 'sess-1', cwd: '/repo' })
+      const harness = resourceHarness({
+        workspaceFolder: remoteFolder,
+        activeSession: active,
+      })
+      const arg = { resourceUri: '/repo/src/a.ts', scmResourceGroupId: 'changes' }
+      await harness.run(SendScmResourceToAgentChatAction, [arg, [arg]])
+      expect(AcpPromptRefInbox.drain('sess-1')).toEqual([
+        expect.objectContaining({
+          label: 'src/a.ts',
+          uri: 'remote-ssh://host/repo/src/a.ts',
+        }),
+      ])
+    })
   })
 })

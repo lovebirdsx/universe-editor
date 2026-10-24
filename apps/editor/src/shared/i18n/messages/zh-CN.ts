@@ -361,6 +361,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.sendCommitToChat': '发送到 Agent 聊天',
   'action.agent.sendChangelistToChat': '发送到 Agent 聊天',
   'action.agent.sendContextToChat': '发送到 Agent 聊天',
+  'action.agent.sendExplorerResourceToChat': '发送到 Agent 聊天',
+  'action.agent.sendScmResourceToChat': '发送到 Agent 聊天',
   'action.agent.showSessionChanges': '显示会话更改',
   'action.agent.switchSession': '切换会话…',
   'action.agent.switchSessionReverse': '切换到上一个会话…',
