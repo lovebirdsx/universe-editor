@@ -14,10 +14,10 @@
  *  of duplicated. Links that carry a `:line` location, or point at non-markdown
  *  files, always open the source editor as before.
  *
- *  `toSide` (Ctrl/Cmd held) sends the target to the group to the right of the
- *  active one, created when the layout has none — the same "open to the side"
- *  every file-link surface offers. It only takes effect where an editor is
- *  actually opened: a missing file, a multi-match handoff to Go to File and a
+ *  `target` (from Ctrl/Cmd or Alt held on the click) routes the open: Ctrl/Cmd
+ *  sends it to the group to the right of the active one (created when the layout
+ *  has none), Alt to an auxiliary window. It only takes effect where an editor
+ *  is actually opened: a missing file, a multi-match handoff to Go to File and a
  *  directory target all leave the layout untouched rather than creating a group
  *  for nothing.
  *--------------------------------------------------------------------------------------------*/
@@ -32,6 +32,7 @@ import {
   IInstantiationService,
   ILifecycleService,
   INotificationService,
+  IUriIdentityService,
   IWindowsService,
   IWorkspaceService,
   localize,
@@ -44,7 +45,14 @@ import { revealSelectionInInput } from '../../services/editor/revealEditorPositi
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRegistry.js'
 import { openPreviewInGroup } from '../../services/editor/openPreviewInGroup.js'
+import {
+  openFreshInputWithTarget,
+  openPreviewWithTarget,
+  openUriWithTarget,
+} from '../../services/editor/openWithTarget.js'
 import { ensureSideGroup } from '../../services/editor/openToSide.js'
+import type { OpenTarget } from '../../services/editor/openTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
 import { stripFilePathLinkPrefix } from '../../services/acp/filePathLink.js'
@@ -66,9 +74,8 @@ type CacheEntry = { readonly resolution: Resolution; readonly expiresAt: number 
 
 /** Options carried from the click handler (which mouse modifiers were held). */
 export interface OpenMarkdownLinkOptions {
-  /** Ctrl/Cmd was held: open in the group to the right of the active one
-   *  (created when absent) instead of the active group. */
-  readonly toSide?: boolean
+  /** Where to open: active group (default), right split, or auxiliary window. */
+  readonly target?: OpenTarget
   /** Markdown heading fragment from a cross-file link (`foo.md#section`). */
   readonly fragment?: string
   /**
@@ -108,6 +115,8 @@ export function useMarkdownFileLink(
   const editorResolver = useOptionalService(IEditorResolverService)
   const groupsService = useOptionalService(IEditorGroupsService)
   const instantiation = useOptionalService(IInstantiationService)
+  const auxService = useOptionalService(IAuxiliaryEditorWindowService)
+  const uriIdentityService = useOptionalService(IUriIdentityService)
   const notificationService = useOptionalService(INotificationService)
   const windowsService = useOptionalService(IWindowsService)
   const lifecycleService = useOptionalService(ILifecycleService)
@@ -220,6 +229,7 @@ export function useMarkdownFileLink(
           return
         }
         const uri = resolution.uri
+        const target = opts?.target ?? 'default'
         // A directory can't be shown as an editor: open it as a folder. Ctrl+Alt
         // (preview only) opens it in the current window; otherwise a new window —
         // mirroring how a dropped folder is handled (openDroppedResource).
@@ -234,11 +244,31 @@ export function useMarkdownFileLink(
         }
         // A markdown→markdown link in the preview opens as another pinned
         // preview tab (the same-file one is focused instead — previews are
-        // globally unique), in the side group when Ctrl/Cmd was held. A `:line`
-        // location means the user wants the source at that line, so fall through.
+        // globally unique), in the side group or an auxiliary window when a
+        // modified click asked for it. A `:line` location means the user wants
+        // the source at that line, so fall through.
         if (previewLinks && groupsService && line === undefined && isMarkdownResource(uri)) {
           const preview = new MarkdownPreviewInput(uri)
-          const group = opts?.toSide ? ensureSideGroup(groupsService) : groupsService.activeGroup
+          if (target !== 'default' && instantiation && auxService && uriIdentityService) {
+            const result = await openPreviewWithTarget(
+              {
+                groups: groupsService,
+                aux: auxService,
+                inst: instantiation,
+                uriIdentity: uriIdentityService,
+              },
+              target,
+              preview.id,
+              () => new MarkdownPreviewInput(uri),
+              { pinned: true },
+            )
+            if (result.handled) {
+              if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
+              return
+            }
+          }
+          const group =
+            target === 'side' ? ensureSideGroup(groupsService) : groupsService.activeGroup
           openPreviewInGroup(
             groupsService,
             group,
@@ -248,10 +278,48 @@ export function useMarkdownFileLink(
           if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
           return
         }
+        // A new-window open routes through the shared helper so an already-open
+        // file is copied/moved instead of duplicated. Ctrl/Cmd+click keeps the
+        // original path: activate the side group first, then open through the
+        // resolver/editor service, which both follow `activeGroupForOpen`.
+        if (
+          target === 'newWindow' &&
+          groupsService &&
+          instantiation &&
+          auxService &&
+          uriIdentityService
+        ) {
+          const targets = {
+            groups: groupsService,
+            aux: auxService,
+            inst: instantiation,
+            uriIdentity: uriIdentityService,
+            ...(editorResolver ? { resolver: editorResolver } : {}),
+          }
+          if (line === undefined && editorResolver) {
+            const result = await openUriWithTarget(targets, uri, 'newWindow', { pinned: true })
+            if (result.handled) return
+          } else {
+            const input = instantiation.createInstance(FileEditorInput, uri)
+            const result = await openFreshInputWithTarget(targets, input, 'newWindow', {
+              pinned: true,
+            })
+            if (result.handled) {
+              if (line !== undefined && result.editor instanceof FileEditorInput) {
+                void revealSelectionInInput(result.editor, {
+                  startLineNumber: line,
+                  startColumn: col ?? 1,
+                  ...(endLine !== undefined ? { endLineNumber: endLine } : {}),
+                })
+              }
+              return
+            }
+          }
+        }
         // Ctrl/Cmd+click: everything below opens an editor, so create/activate
         // the side group first — the resolver and the editor service both route
         // a new editor through `activeGroupForOpen`, which follows it.
-        if (opts?.toSide && groupsService) ensureSideGroup(groupsService)
+        if (target === 'side' && groupsService) ensureSideGroup(groupsService)
         // A `:line` location targets the text source at that line, which only a
         // FileEditorInput can honor (the resolver carries no selection). Without
         // a line, route through the editor resolver so specialized editors win —
@@ -279,6 +347,8 @@ export function useMarkdownFileLink(
       editorResolver,
       groupsService,
       instantiation,
+      auxService,
+      uriIdentityService,
       notificationService,
       windowsService,
       workspaceService,

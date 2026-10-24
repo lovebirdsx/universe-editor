@@ -8,6 +8,9 @@
 
 import {
   autorun,
+  IEditorGroupsService,
+  IInstantiationService,
+  IUriIdentityService,
   localize,
   toDisposable,
   type IQuickAccessProvider,
@@ -24,8 +27,16 @@ import {
   type FlatSymbol,
 } from '../../languageFeatures/outlineFlatten.js'
 import { ACP_OUTLINE_LANGUAGE_ID, isAcpSubagentKind } from '../../acp/session/acpTimelineOutline.js'
+import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
 import { SYMBOL_SUBAGENT_ICON_ID, symbolIconId } from '../../../workbench/symbols/symbolIcon.js'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
+import { resolveQuickPickOpenTarget, type TargetedOpen } from '../../editor/openTarget.js'
+import {
+  openExistingInputWithTarget,
+  type OpenTargetServices,
+} from '../../editor/openWithTarget.js'
+import { revealSelectionInInput } from '../../editor/revealEditorPosition.js'
+import { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWindowService.js'
 
 /** Plural category names for '@:' separators, keyed by Monaco 0-based SymbolKind. */
 const SYMBOL_KIND_PLURAL: Record<number, string> = {
@@ -139,6 +150,10 @@ function provideFileSymbols(
     languageId: string | undefined,
     byId: Map<string, monaco.languages.DocumentSymbol>,
   ) => readonly QuickPickInput<IQuickPickItem>[],
+  openInTarget?: (
+    symbol: monaco.languages.DocumentSymbol,
+    target: TargetedOpen,
+  ) => void | Promise<void>,
 ): void {
   const { disposables } = options
   const byId = new Map<string, monaco.languages.DocumentSymbol>()
@@ -181,70 +196,135 @@ function provideFileSymbols(
   disposables.add(
     picker.onDidAccept((items) => {
       const symbol = items[0] ? byId.get(items[0].id) : undefined
+      const target = resolveQuickPickOpenTarget(picker.keyMods)
       accepted = true
-      if (symbol) outline.revealSymbol(symbol)
       picker.hide()
+      if (!symbol) return
+      if (target === 'default') outline.revealSymbol(symbol)
+      else void openInTarget?.(symbol, target)
     }),
   )
 }
 
+/** Open the active editor in a side group / auxiliary window, then reveal the
+ *  chosen symbol there. The active input is moved or cloned — never shared. */
+function openSymbolInTarget(
+  services: OpenTargetServices,
+  symbol: monaco.languages.DocumentSymbol,
+  target: TargetedOpen,
+): void {
+  const source = services.groups.activeGroup
+  const active = source.activeEditor
+  if (!active) return
+  void (async () => {
+    const result = await openExistingInputWithTarget(services, active, source, target, {
+      pinned: true,
+      // A session is globally unique: cloning it would attach the same
+      // conversation twice. Move it instead.
+      singleton: active instanceof AcpSessionEditorInput,
+    })
+    if (!result.handled || !result.editor) return
+    const range = symbol.selectionRange ?? symbol.range
+    void revealSelectionInInput(result.editor, {
+      startLineNumber: range.startLineNumber,
+      startColumn: range.startColumn,
+    })
+  })()
+}
+
 /** '@' — flat document-order symbol list with indentation showing nesting. */
 export class FileSymbolQuickAccessProvider implements IQuickAccessProvider {
-  constructor(@IOutlineService private readonly _outline: IOutlineService) {}
+  private readonly _targets: OpenTargetServices | undefined
+
+  constructor(
+    @IOutlineService private readonly _outline: IOutlineService,
+    @IEditorGroupsService groups?: IEditorGroupsService,
+    @IInstantiationService inst?: IInstantiationService,
+    @IUriIdentityService uriIdentity?: IUriIdentityService,
+    @IAuxiliaryEditorWindowService aux?: IAuxiliaryEditorWindowService,
+  ) {
+    this._targets =
+      groups && inst && uriIdentity && aux ? { groups, aux, inst, uriIdentity } : undefined
+  }
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
-    provideFileSymbols(picker, options, this._outline, (flat, languageId, byId) => {
-      const { subagents, rest } = splitSubagentSymbols(flat, languageId)
-      if (subagents.length === 0) {
-        return flat.map((entry) => {
+    const targets = this._targets
+    provideFileSymbols(
+      picker,
+      options,
+      this._outline,
+      (flat, languageId, byId) => {
+        const { subagents, rest } = splitSubagentSymbols(flat, languageId)
+        if (subagents.length === 0) {
+          return flat.map((entry) => {
+            byId.set(entry.id, entry.symbol)
+            return symbolPickItem(entry, languageId, true)
+          })
+        }
+        const rows: QuickPickInput<IQuickPickItem>[] = [subagentSectionSeparator()]
+        for (const entry of subagents) {
           byId.set(entry.id, entry.symbol)
-          return symbolPickItem(entry, languageId, true)
-        })
-      }
-      const rows: QuickPickInput<IQuickPickItem>[] = [subagentSectionSeparator()]
-      for (const entry of subagents) {
-        byId.set(entry.id, entry.symbol)
-        rows.push(symbolPickItem(entry, languageId, false))
-      }
-      // The rest section gets its own header so an empty sub-agent section can
-      // drop out during filtering without leaving a blank divider at the top.
-      rows.push(otherSectionSeparator())
-      for (const entry of rest) {
-        byId.set(entry.id, entry.symbol)
-        rows.push(symbolPickItem(entry, languageId, true))
-      }
-      return rows
-    })
+          rows.push(symbolPickItem(entry, languageId, false))
+        }
+        // The rest section gets its own header so an empty sub-agent section can
+        // drop out during filtering without leaving a blank divider at the top.
+        rows.push(otherSectionSeparator())
+        for (const entry of rest) {
+          byId.set(entry.id, entry.symbol)
+          rows.push(symbolPickItem(entry, languageId, true))
+        }
+        return rows
+      },
+      targets ? (symbol, target) => openSymbolInTarget(targets, symbol, target) : undefined,
+    )
   }
 }
 
 /** '@:' — same symbols grouped under a separator per symbol kind. */
 export class FileSymbolByCategoryQuickAccessProvider implements IQuickAccessProvider {
-  constructor(@IOutlineService private readonly _outline: IOutlineService) {}
+  private readonly _targets: OpenTargetServices | undefined
+
+  constructor(
+    @IOutlineService private readonly _outline: IOutlineService,
+    @IEditorGroupsService groups?: IEditorGroupsService,
+    @IInstantiationService inst?: IInstantiationService,
+    @IUriIdentityService uriIdentity?: IUriIdentityService,
+    @IAuxiliaryEditorWindowService aux?: IAuxiliaryEditorWindowService,
+  ) {
+    this._targets =
+      groups && inst && uriIdentity && aux ? { groups, aux, inst, uriIdentity } : undefined
+  }
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
-    provideFileSymbols(picker, options, this._outline, (flat, languageId, byId) => {
-      const { subagents, rest } = splitSubagentSymbols(flat, languageId)
-      const rows: QuickPickInput<IQuickPickItem>[] = []
-      if (subagents.length > 0) {
-        rows.push(subagentSectionSeparator())
-        for (const entry of subagents) {
-          byId.set(entry.id, entry.symbol)
-          rows.push(symbolPickItem(entry, languageId, false))
+    const targets = this._targets
+    provideFileSymbols(
+      picker,
+      options,
+      this._outline,
+      (flat, languageId, byId) => {
+        const { subagents, rest } = splitSubagentSymbols(flat, languageId)
+        const rows: QuickPickInput<IQuickPickItem>[] = []
+        if (subagents.length > 0) {
+          rows.push(subagentSectionSeparator())
+          for (const entry of subagents) {
+            byId.set(entry.id, entry.symbol)
+            rows.push(symbolPickItem(entry, languageId, false))
+          }
         }
-      }
-      for (const group of groupSymbolsByKind(rest)) {
-        rows.push({
-          type: 'separator',
-          id: `kind-${group.kind}`,
-          label: symbolKindLabel(group.kind),
-        })
-        for (const entry of group.symbols) {
-          byId.set(entry.id, entry.symbol)
-          rows.push(symbolPickItem(entry, languageId, false))
+        for (const group of groupSymbolsByKind(rest)) {
+          rows.push({
+            type: 'separator',
+            id: `kind-${group.kind}`,
+            label: symbolKindLabel(group.kind),
+          })
+          for (const entry of group.symbols) {
+            byId.set(entry.id, entry.symbol)
+            rows.push(symbolPickItem(entry, languageId, false))
+          }
         }
-      }
-      return rows
-    })
+        return rows
+      },
+      targets ? (symbol, target) => openSymbolInTarget(targets, symbol, target) : undefined,
+    )
   }
 }

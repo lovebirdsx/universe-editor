@@ -8432,7 +8432,7 @@ export class PerforceClient {
    * prints are whole-file content transfers and keep the generous command budget
    * (INTERACTIVE_CONTENT_EXEC — a 30s cap would kill a large file on a slow link).
    */
-  async openMergeEditor(localPath: string): Promise<void> {
+  async openMergeEditor(localPath: string, openTarget?: 'side' | 'newWindow'): Promise<void> {
     await this._withBusy(
       localize('perforce.busy.openMergeEditor', 'Opening Merge Editor'),
       async () => {
@@ -8488,6 +8488,7 @@ export class PerforceClient {
             command: 'perforce.acceptResolved',
             arguments: [localPath],
           },
+          ...(openTarget ? { openTarget } : {}),
         })
       },
     )
@@ -8518,6 +8519,7 @@ export class PerforceClient {
     depotFile: string,
     rev: string | undefined,
     action: P4Action,
+    openTarget?: 'side' | 'newWindow',
   ): Promise<void> {
     const isAdd = action === 'add' || action === 'branch' || action === 'import'
     const baseSpec = !isAdd && rev ? `${depotFile}#${rev}` : null
@@ -8534,6 +8536,7 @@ export class PerforceClient {
       modified,
       pinned: false,
       preserveFocus: false,
+      ...(openTarget ? { openTarget } : {}),
     })
   }
 
@@ -8674,10 +8677,15 @@ export class PerforceClient {
    * instead of silently opening the plain file, so the user knows the diff didn't
    * come up rather than mistaking "diff became a plain editor" for normal.
    */
-  async openChange(localPath: string, pinned = false, preserveFocus = false): Promise<void> {
+  async openChange(
+    localPath: string,
+    pinned = false,
+    preserveFocus = false,
+    openTarget?: 'side' | 'newWindow',
+  ): Promise<void> {
     await this._withBusy(localize('perforce.busy.openChange', 'Opening Changes'), async () => {
       if (isSpreadsheetPath(localPath)) {
-        await this._openSpreadsheetChange(localPath, pinned, preserveFocus)
+        await this._openSpreadsheetChange(localPath, pinned, preserveFocus, openTarget)
         return
       }
       const started = Date.now()
@@ -8693,7 +8701,11 @@ export class PerforceClient {
       if (baseline.content === undefined) {
         // No have revision (open-for-add / not under depot control) — opening the
         // file is the correct fallback, there's no depot side to diff against.
-        await commands.executeCommand('_workbench.openFile', localPath)
+        if (openTarget) {
+          await commands.executeCommand('_workbench.openFile', localPath, { openTarget })
+        } else {
+          await commands.executeCommand('_workbench.openFile', localPath)
+        }
         return
       }
       const readStart = Date.now()
@@ -8717,6 +8729,7 @@ export class PerforceClient {
         preserveFocus,
         openableUri: pathToFileURL(localPath).href,
         liveModified: true,
+        ...(openTarget ? { openTarget } : {}),
       })
     })
   }
@@ -8730,6 +8743,7 @@ export class PerforceClient {
     localPath: string,
     pinned = false,
     preserveFocus = false,
+    openTarget?: 'side' | 'newWindow',
   ): Promise<void> {
     const started = Date.now()
     const baseline = await this._baseline.getHaveContentBytesResult(localPath)
@@ -8743,7 +8757,11 @@ export class PerforceClient {
     }
     if (baseline.content === undefined) {
       // No have revision — open the file directly (see openChange).
-      await commands.executeCommand('_workbench.openFile', localPath)
+      if (openTarget) {
+        await commands.executeCommand('_workbench.openFile', localPath, { openTarget })
+      } else {
+        await commands.executeCommand('_workbench.openFile', localPath)
+      }
       return
     }
     let modified: Buffer
@@ -8762,6 +8780,7 @@ export class PerforceClient {
       rightBase64: modified.toString('base64'),
       pinned,
       preserveFocus,
+      ...(openTarget ? { openTarget } : {}),
     })
   }
 

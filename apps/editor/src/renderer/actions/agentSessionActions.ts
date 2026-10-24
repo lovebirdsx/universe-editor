@@ -80,7 +80,7 @@ import {
 } from '../services/acp/session/revealSessionEditorTab.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 import { computeInitialSelectionIndex } from '../services/quickInput/quickNavigateSelection.js'
-import { resolveQuickPickOpenTarget } from '../services/quickInput/quickPickOpenTarget.js'
+import { resolveQuickPickOpenTarget } from '../services/editor/openTarget.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 import { relativeTime } from '../relativeTime.js'

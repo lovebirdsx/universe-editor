@@ -46,6 +46,11 @@ import { MermaidBlock } from './MermaidBlock.js'
 import { MarkdownStreamingContext } from './markdownStreamingContext.js'
 import { useOptionalService } from '../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from './useMarkdownFileLink.js'
+import {
+  isOpenTargetEnter,
+  resolveOpenTarget,
+  type OpenTarget,
+} from '../../services/editor/openTarget.js'
 import { fileUriLinkTarget } from './markdownLinkResolve.js'
 import { findMarkdownAnchor } from './markdownAnchors.js'
 import { asPreviewResourceUri } from './resourceUri.js'
@@ -59,8 +64,9 @@ interface MarkdownViewProps {
   readonly baseUri?: URI
   /**
    * When true, links to other markdown files open as a preview (in place on
-   * click, in a new tab on Ctrl/Cmd+click) rather than their source editor.
-   * Enabled by the doc preview; off for ACP chat and other static consumers.
+   * click, in the side group on Ctrl/Cmd+click, in an auxiliary window on
+   * Alt+click) rather than their source editor. Enabled by the doc preview; off
+   * for ACP chat and other static consumers.
    */
   readonly previewLinks?: boolean
   /**
@@ -107,7 +113,7 @@ interface MarkdownViewProps {
 }
 
 /** Return true to consume the click; false lets http(s)/anchor links use the defaults. */
-export type MarkdownLinkHandler = (href: string, opts: { readonly toSide: boolean }) => boolean
+export type MarkdownLinkHandler = (href: string, opts: { readonly target: OpenTarget }) => boolean
 
 export function MarkdownView({
   text,
@@ -324,11 +330,10 @@ const FrontmatterModeContext = createContext<'table' | 'hidden' | undefined>(und
  * When provided by a parent (e.g. DocEditor), relative `.md` links are routed
  * to the handler instead of the file-system resolver. The raw href is passed
  * (e.g. `"../git/commit.md#amend"`) and the handler resolves it to a DocId.
- * `toSide` is true when Ctrl/Cmd was held, so the target opens in a new tab
- * instead of replacing the current document in place.
+ * `target` asks for the current tab (default), a right split, or a new window.
  */
 export const DocLinkContext = createContext<
-  ((href: string, opts?: { toSide?: boolean }) => void) | undefined
+  ((href: string, opts?: { target?: OpenTarget }) => void) | undefined
 >(undefined)
 
 function Block({ node }: { node: MdNode }): ReactNode {
@@ -584,13 +589,21 @@ function InlineCode({ text }: { text: string }) {
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     openFileLink(match.path, match.line, match.col, match.endLine, {
-      toSide: e.ctrlKey || e.metaKey,
+      target: resolveOpenTarget(e),
+    })
+  }
+  const onKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>): void => {
+    if (!isOpenTargetEnter(e)) return
+    e.preventDefault()
+    openFileLink(match.path, match.line, match.col, match.endLine, {
+      target: resolveOpenTarget(e),
     })
   }
   return (
     <a
       href={text}
       onClick={onClick}
+      onKeyDown={onKeyDown}
       className={`${styles['inlineCode']} ${styles['mdLink']}`}
       data-testid="md-filepath"
     >
@@ -626,28 +639,26 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   // declines; everything else belongs to the handler (or to no one).
   const isExternalUrl = /^https?:/i.test(href)
   const handlerOwnsHref = linkHandler !== undefined && !isAnchor && !isExternalUrl
-  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
-    e.preventDefault()
+  const activate = (target: OpenTarget, openFolderInCurrentWindow: boolean): void => {
     if (isAnchor) {
       scrollToAnchor(href)
       return
     }
     if (linkHandler) {
-      const toSide = e.ctrlKey || e.metaKey
-      if (linkHandler(href, { toSide })) return
+      if (linkHandler(href, { target })) return
       if (handlerOwnsHref) return
     }
     // Doc-to-doc relative link: intercept before file-path resolution.
     if (isRelativeDocLink && openDocLink) {
-      openDocLink(href, { toSide: e.ctrlKey || e.metaKey })
+      openDocLink(href, { target })
       return
     }
     if (isFilePath) {
       const { path, line, col, endLine, fragment } = splitFilePathTarget(href)
       openFileLink(path, line, col, endLine, {
-        toSide: e.ctrlKey || e.metaKey,
+        target,
         // Ctrl+Alt opens a directory target in the current window (preview only).
-        openFolderInCurrentWindow: (e.ctrlKey || e.metaKey) && e.altKey,
+        openFolderInCurrentWindow,
         ...(fragment !== undefined ? { fragment } : {}),
       })
       return
@@ -656,12 +667,12 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       // Route through the same file-link pipeline as plain path links so a
       // directory target opens as a folder window and a markdown target can
       // open as a preview — not blindly into the editor resolver.
-      const target = fileUriLinkTarget(href)
-      if (target) {
-        openFileLink(target.path, target.line, target.col, target.endLine, {
-          toSide: e.ctrlKey || e.metaKey,
-          openFolderInCurrentWindow: (e.ctrlKey || e.metaKey) && e.altKey,
-          ...(target.fragment !== undefined ? { fragment: target.fragment } : {}),
+      const fileTarget = fileUriLinkTarget(href)
+      if (fileTarget) {
+        openFileLink(fileTarget.path, fileTarget.line, fileTarget.col, fileTarget.endLine, {
+          target,
+          openFolderInCurrentWindow,
+          ...(fileTarget.fragment !== undefined ? { fragment: fileTarget.fragment } : {}),
         })
       }
       return
@@ -670,10 +681,20 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
     // the call is a no-op (better than navigating the renderer view).
     window.open(href, '_blank', 'noopener,noreferrer')
   }
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    e.preventDefault()
+    activate(resolveOpenTarget(e), (e.ctrlKey || e.metaKey) && e.altKey)
+  }
+  const onKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>): void => {
+    if (!isOpenTargetEnter(e)) return
+    e.preventDefault()
+    activate(resolveOpenTarget(e), (e.ctrlKey || e.metaKey) && e.altKey)
+  }
   return (
     <a
       href={href}
       onClick={onClick}
+      onKeyDown={onKeyDown}
       target={
         isFile || isFilePath || isAnchor || isRelativeDocLink || handlerOwnsHref
           ? undefined
@@ -711,10 +732,21 @@ function FilePathLink({
   if (insideLink || handlerOwnsLinks) return <Fragment>{label}</Fragment>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
-    openFileLink(path, line, col, endLine, { toSide: e.ctrlKey || e.metaKey })
+    openFileLink(path, line, col, endLine, { target: resolveOpenTarget(e) })
+  }
+  const onKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>): void => {
+    if (!isOpenTargetEnter(e)) return
+    e.preventDefault()
+    openFileLink(path, line, col, endLine, { target: resolveOpenTarget(e) })
   }
   return (
-    <a href={label} onClick={onClick} className={styles['mdLink']} data-testid="md-filepath">
+    <a
+      href={label}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+      className={styles['mdLink']}
+      data-testid="md-filepath"
+    >
       {label}
     </a>
   )

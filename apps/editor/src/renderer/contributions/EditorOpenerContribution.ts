@@ -39,6 +39,8 @@ import {
 } from '../services/editor/revealEditorPosition.js'
 import { isImageResource } from '../services/editor/imageFileTypes.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
+import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
+import { openUriWithTarget } from '../services/editor/openWithTarget.js'
 
 export class EditorOpenerContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -49,10 +51,11 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     @IWindowsService private readonly _windowsService: IWindowsService,
     @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
     @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
+    @IAuxiliaryEditorWindowService private readonly _aux: IAuxiliaryEditorWindowService,
   ) {
     super()
-    void MonacoLoader.registerCodeEditorOpenHandler((input, source) =>
-      this._open(input, source),
+    void MonacoLoader.registerCodeEditorOpenHandler((input, source, sideBySide) =>
+      this._open(input, source, sideBySide),
     ).then((disposable) => {
       if (this._store.isDisposed) disposable.dispose()
       else this._register(disposable)
@@ -62,6 +65,7 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
   private async _open(
     input: ICodeEditorOpenInput,
     source: monaco.editor.ICodeEditor | null,
+    sideBySide = false,
   ): Promise<monaco.editor.ICodeEditor | null> {
     const resource = input.resource
     // Same-model navigation: let monaco's default handler move the cursor inside
@@ -83,8 +87,25 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     // a text FileEditorInput would show the binary as garbled text. There is no
     // text cursor to place, so report no monaco editor.
     if (isImageResource(target)) {
-      void this._editorResolver.openEditor(target, { pinned: true })
+      if (sideBySide) await this._openSide(target)
+      else void this._editorResolver.openEditor(target, { pinned: true })
       return null
+    }
+
+    // Ctrl+Alt+click on a document link reaches us with sideBySide=true (Monaco
+    // folds the modifiers before calling the opener). Honor it instead of
+    // dropping the target into the current group.
+    if (sideBySide) {
+      const sideInput = await this._openSide(target)
+      if (sideInput) {
+        const editor = await waitForFileEditor(sideInput, this._store)
+        if (editor) {
+          applySelection(editor, input.options?.selection)
+          editor.focus()
+          return editor
+        }
+      }
+      // Side-open failed; fall through to the default path.
     }
 
     const fileInput = this._revealExistingOrOpen(target)
@@ -96,6 +117,24 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     applySelection(editor, input.options?.selection)
     editor.focus()
     return editor
+  }
+
+  /** Open a document-link target in the group to the right. Returns the
+   *  FileEditorInput when the target is a text file, undefined otherwise. */
+  private async _openSide(uri: URI): Promise<FileEditorInput | undefined> {
+    const result = await openUriWithTarget(
+      {
+        groups: this._groupsService,
+        aux: this._aux,
+        inst: this._instantiation,
+        uriIdentity: this._uriIdentity,
+        resolver: this._editorResolver,
+      },
+      uri,
+      'side',
+      { pinned: true },
+    )
+    return result.handled && result.editor instanceof FileEditorInput ? result.editor : undefined
   }
 
   private async _isDirectory(uri: URI): Promise<boolean> {

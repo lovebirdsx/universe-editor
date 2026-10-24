@@ -10,6 +10,7 @@ import {
   Action2,
   IEditorGroupsService,
   IInstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   MenuId,
   REMOTE_SCHEME,
@@ -22,7 +23,24 @@ import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { ensureSideGroup } from '../services/editor/openToSide.js'
+import type { TargetedOpen } from '../services/editor/openTarget.js'
+import {
+  openFreshInputWithTarget,
+  type OpenTargetServices,
+} from '../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
+
+function openTargetServices(accessor: ServicesAccessor): OpenTargetServices {
+  return {
+    groups: accessor.get(IEditorGroupsService),
+    aux: accessor.get(IAuxiliaryEditorWindowService),
+    inst: accessor.get(IInstantiationService),
+    uriIdentity: accessor.get(IUriIdentityService),
+  }
+}
 
 export interface OpenDiffPayload {
   readonly title: string
@@ -56,6 +74,8 @@ export interface OpenDiffPayload {
    * whose right side must stay frozen at the passed content.
    */
   readonly liveModified?: boolean
+  /** Where to open: omitted = the existing active-group path. */
+  readonly openTarget?: TargetedOpen
 }
 
 /**
@@ -86,37 +106,71 @@ export class OpenDiffAction extends Action2 {
     const folder = accessor.get(IWorkspaceService).current?.folder
     const inst = accessor.get(IInstantiationService)
     const activeGroup = groups.activeGroup
-    const id = `diff:${toWorkspaceResource(payload.originalUri, folder).toString()}`
+    const resource = toWorkspaceResource(payload.originalUri, folder)
+    const id = `diff:${resource.toString()}`
 
     const pinned = payload.pinned ?? false
     const preserveFocus = payload.preserveFocus ?? false
 
-    // Reuse an already-open diff for the same file: refresh its content in place
-    // and re-activate, instead of opening a duplicate. Revealing an existing tab
-    // stays in its group even when that group is locked.
-    const existing = activeGroup.editors.find((e) => e.id === id)
-    if (existing instanceof DiffEditorInput) {
-      existing.update(payload.original, payload.modified, payload.liveModified ?? false)
-      // Double-click (pinned=true) promotes a preview tab to permanent.
-      activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+    const createInput = (): DiffEditorInput =>
+      inst.createInstance(
+        DiffEditorInput,
+        resource,
+        payload.original,
+        payload.modified,
+        undefined,
+        payload.openableUri ? toWorkspaceResource(payload.openableUri, folder) : undefined,
+        payload.liveModified ?? false,
+      )
+
+    const openDefault = (): void => {
+      // Reuse an already-open diff for the same file: refresh its content in place
+      // and re-activate, instead of opening a duplicate. Revealing an existing tab
+      // stays in its group even when that group is locked.
+      const existing = activeGroup.editors.find((e) => e.id === id)
+      if (existing instanceof DiffEditorInput) {
+        existing.update(payload.original, payload.modified, payload.liveModified ?? false)
+        // Double-click (pinned=true) promotes a preview tab to permanent.
+        activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+        return
+      }
+
+      const input = createInput()
+      // A brand-new diff respects the group lock: route to an unlocked group and
+      // surface it (unless this is a focus-preserving preview).
+      const group = groups.activeGroupForOpen
+      // Single-click uses the preview slot; double-click opens a permanent tab.
+      group.openEditor(input, { activate: true, pinned, preserveFocus })
+      if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
+    }
+
+    const target = payload.openTarget
+    if (target === undefined) {
+      openDefault()
       return
     }
 
-    const input = inst.createInstance(
-      DiffEditorInput,
-      toWorkspaceResource(payload.originalUri, folder),
-      payload.original,
-      payload.modified,
-      undefined,
-      payload.openableUri ? toWorkspaceResource(payload.openableUri, folder) : undefined,
-      payload.liveModified ?? false,
+    if (target === 'side') {
+      const side = ensureSideGroup(groups)
+      const existing = side.editors.find((e) => e.id === id)
+      if (existing instanceof DiffEditorInput) {
+        existing.update(payload.original, payload.modified, payload.liveModified ?? false)
+        side.openEditor(existing, { activate: true, pinned, preserveFocus })
+        return
+      }
+      openInLockAwareGroup(groups, createInput(), { activate: true, pinned, preserveFocus }, side)
+      return
+    }
+
+    const services = openTargetServices(accessor)
+    const input = createInput()
+    void openFreshInputWithTarget(services, input, target, { pinned, preserveFocus }).then(
+      (result) => {
+        if (result.handled) return
+        if (!input.isDisposed) input.dispose()
+        openDefault()
+      },
     )
-    // A brand-new diff respects the group lock: route to an unlocked group and
-    // surface it (unless this is a focus-preserving preview).
-    const group = groups.activeGroupForOpen
-    // Single-click uses the preview slot; double-click opens a permanent tab.
-    group.openEditor(input, { activate: true, pinned, preserveFocus })
-    if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
   }
 }
 
@@ -149,6 +203,8 @@ export interface OpenWebviewDiffPayload {
   readonly rightBase64: string
   readonly pinned?: boolean
   readonly preserveFocus?: boolean
+  /** Where to open: omitted = the existing active-group path. */
+  readonly openTarget?: TargetedOpen
 }
 
 /** Decode base64 (from the JSON payload) back into bytes for the input. */
@@ -183,25 +239,57 @@ export class OpenWebviewDiffAction extends Action2 {
     const pinned = payload.pinned ?? false
     const preserveFocus = payload.preserveFocus ?? false
 
-    const input = new WebviewDiffInput(
-      payload.viewType,
-      leftUri,
-      rightUri,
-      fromBase64(payload.leftBase64),
-      fromBase64(payload.rightBase64),
-      payload.title,
-    )
+    const createInput = (): WebviewDiffInput =>
+      new WebviewDiffInput(
+        payload.viewType,
+        leftUri,
+        rightUri,
+        fromBase64(payload.leftBase64),
+        fromBase64(payload.rightBase64),
+        payload.title,
+      )
 
-    // Reuse an already-open diff for the same identity (viewType + both URIs):
-    // re-activate it instead of opening a duplicate.
-    const existing = activeGroup.editors.find((e) => e.id === input.id)
-    if (existing) {
-      activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+    const openDefault = (): void => {
+      const input = createInput()
+      // Reuse an already-open diff for the same identity (viewType + both URIs):
+      // re-activate it instead of opening a duplicate.
+      const existing = activeGroup.editors.find((e) => e.id === input.id)
+      if (existing) {
+        activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+        return
+      }
+      const group = groups.activeGroupForOpen
+      group.openEditor(input, { activate: true, pinned, preserveFocus })
+      if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
+    }
+
+    const target = payload.openTarget
+    if (target === undefined) {
+      openDefault()
       return
     }
-    const group = groups.activeGroupForOpen
-    group.openEditor(input, { activate: true, pinned, preserveFocus })
-    if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
+
+    if (target === 'side') {
+      const side = ensureSideGroup(groups)
+      const input = createInput()
+      const existing = side.editors.find((e) => e.id === input.id)
+      if (existing) {
+        side.openEditor(existing, { activate: true, pinned, preserveFocus })
+        return
+      }
+      openInLockAwareGroup(groups, input, { activate: true, pinned, preserveFocus }, side)
+      return
+    }
+
+    const services = openTargetServices(accessor)
+    const input = createInput()
+    void openFreshInputWithTarget(services, input, target, { pinned, preserveFocus }).then(
+      (result) => {
+        if (result.handled) return
+        if (!input.isDisposed) input.dispose()
+        openDefault()
+      },
+    )
   }
 }
 

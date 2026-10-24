@@ -18,6 +18,7 @@ import {
   IFileSearchService,
   IFileService,
   INotificationService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
@@ -37,6 +38,7 @@ import type {
 } from '../../../../shared/ipc/remoteStatusService.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
+import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import { ServicesContext } from '../../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from '../useMarkdownFileLink.js'
 
@@ -124,11 +126,30 @@ function mount(options: {
   const services = new ServiceCollection()
   services.set(IWorkspaceService, makeWorkspace() as never)
   services.set(IEditorGroupsService, groups as never)
+  const openInNewWindow = vi.fn(async (editor: unknown, _options?: unknown) => ({
+    ok: true,
+    editor,
+    window: { part: { activeGroup: {} } },
+  }))
+  services.set(IAuxiliaryEditorWindowService, {
+    _serviceBrand: undefined,
+    openEditorInNewWindow: openInNewWindow,
+  } as never)
+  services.set(IUriIdentityService, {
+    _serviceBrand: undefined,
+    isEqual: (a: URI, b: URI) => a.toString() === b.toString(),
+  } as never)
   services.set(IEditorResolverService, {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose: () => {} }),
     resolveEditors: () => [],
     openEditor,
+    createEditorInput: (resource: URI) => ({
+      id: resource.toString(),
+      resource,
+      isDisposed: false,
+      dispose: vi.fn(),
+    }),
   } as unknown as IEditorResolverServiceType)
   services.set(IEditorService, {
     _serviceBrand: undefined,
@@ -151,6 +172,7 @@ function mount(options: {
   )
   return {
     openEditor,
+    openInNewWindow,
     notify,
     groups,
     click: (href: string, opts?: OpenMarkdownLinkOptions) =>
@@ -241,7 +263,7 @@ describe('useMarkdownFileLink open to the side', () => {
   it('creates and activates the side group for a plain file', async () => {
     const { openEditor, groups, click } = mount({ exists: () => true })
 
-    click(ABS_FILE, { toSide: true })
+    click(ABS_FILE, { target: 'side' })
 
     await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
     expect(groups.count).toBe(2)
@@ -260,7 +282,7 @@ describe('useMarkdownFileLink open to the side', () => {
   it('opens the markdown preview into the side group in preview mode', async () => {
     const { groups, click } = mount({ exists: () => true, previewLinks: true })
 
-    click(ABS_MD, { toSide: true })
+    click(ABS_MD, { target: 'side' })
 
     await waitFor(() => expect(groups.count).toBe(2))
     const side = groups.getGroups()[1]!
@@ -271,7 +293,7 @@ describe('useMarkdownFileLink open to the side', () => {
   it('creates no group when the file does not exist', async () => {
     const { notify, groups, click } = mount({ exists: () => false })
 
-    click(ABS_FILE, { toSide: true })
+    click(ABS_FILE, { target: 'side' })
 
     await waitFor(() => expect(notify).toHaveBeenCalledTimes(1))
     expect(groups.count).toBe(1)
@@ -281,9 +303,37 @@ describe('useMarkdownFileLink open to the side', () => {
     const { groups, click } = mount({ exists: () => true, isDirectory: () => true })
 
     await act(async () => {
-      click(ABS_FILE, { toSide: true })
+      click(ABS_FILE, { target: 'side' })
     })
 
     expect(groups.count).toBe(1)
+  })
+})
+
+// Alt+click sends the target to an auxiliary window without touching the
+// current layout. The already-open file is copied or moved by the shared
+// helper; a fresh resource is created through the resolver.
+describe('useMarkdownFileLink open in a new window', () => {
+  const ABS_FILE = '/repo/src/a.ts'
+  const ABS_MD = '/repo/docs/readme.md'
+
+  it('opens a plain file in an auxiliary window', async () => {
+    const { openEditor, openInNewWindow, groups, click } = mount({ exists: () => true })
+
+    click(ABS_FILE, { target: 'newWindow' })
+
+    await waitFor(() => expect(openInNewWindow).toHaveBeenCalledTimes(1))
+    expect(openInNewWindow.mock.calls[0]?.[1]).toMatchObject({ mode: 'open', pinned: true })
+    expect(openEditor).not.toHaveBeenCalled()
+    expect(groups.count).toBe(1)
+  })
+
+  it('opens a markdown preview in the auxiliary window', async () => {
+    const { openInNewWindow, click } = mount({ exists: () => true, previewLinks: true })
+
+    click(ABS_MD, { target: 'newWindow' })
+
+    await waitFor(() => expect(openInNewWindow).toHaveBeenCalledTimes(1))
+    expect(openInNewWindow.mock.calls[0]?.[0]).toBeInstanceOf(MarkdownPreviewInput)
   })
 })

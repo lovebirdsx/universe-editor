@@ -30,6 +30,7 @@ import {
   IOpener,
   IOpenerOptions,
   IOpenerService,
+  ITextEditorSelection,
   IUriIdentityService,
   IWindowsService,
   registerSingleton,
@@ -40,9 +41,16 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
+import type { OpenTarget } from '../editor/openTarget.js'
+import {
+  openExistingInputWithTarget,
+  openFreshInputWithTarget,
+  openUriWithTarget,
+} from '../editor/openWithTarget.js'
 import { findExistingFileEditor, revealSelectionInInput } from '../editor/revealEditorPosition.js'
 import { splitFilePathLocation } from '../acp/filePathLink.js'
 import { isFileSystemUri } from '../files/fileSystemScheme.js'
+import { IAuxiliaryEditorWindowService } from '../windows/auxiliaryEditorWindowService.js'
 import { IWindowFocusService } from '../windows/windowFocusService.js'
 
 const EXTERNAL_SCHEMES = new Set(['http', 'https', 'mailto'])
@@ -157,11 +165,17 @@ export class FileOpener implements IOpener {
     @IWindowsService private readonly _windows: IWindowsService,
     @IEditorResolverService private readonly _resolver: IEditorResolverService,
     @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
+    @IAuxiliaryEditorWindowService private readonly _aux: IAuxiliaryEditorWindowService,
   ) {}
 
-  async open(target: URI): Promise<boolean> {
+  async open(target: URI, options?: IOpenerOptions): Promise<boolean> {
     if (!isFileSystemUri(target)) return false
     const { selection, uri } = extractSelection(target)
+    const openTarget: OpenTarget = options?.openInNewWindow
+      ? 'newWindow'
+      : options?.openToSide
+        ? 'side'
+        : 'default'
 
     // A directory can't be shown as an editor — open it in a new window (parity
     // with a dropped folder / the Monaco open handler).
@@ -170,16 +184,74 @@ export class FileOpener implements IOpener {
       return true
     }
 
+    const targets = {
+      groups: this._groups,
+      aux: this._aux,
+      inst: this._instantiation,
+      uriIdentity: this._uriIdentity,
+      resolver: this._resolver,
+    }
+
     // No selection: route through the resolver so specialized editors win — an
     // image opens in the image preview rather than as garbled binary text.
     if (!selection) {
+      if (openTarget !== 'default') {
+        const result = await openUriWithTarget(targets, uri, openTarget, { pinned: true })
+        if (result.handled) return true
+      }
       void this._resolver.openEditor(uri, { pinned: true })
       return true
     }
 
     // A selection targets the text source, which only a FileEditorInput can honor.
+    if (openTarget !== 'default') {
+      const handled = await this._openSelectionTargeted(uri, selection, openTarget, targets)
+      if (handled) return true
+    }
     const input = this._revealExistingOrOpen(uri)
     void revealSelectionInInput(input, selection)
+    return true
+  }
+
+  private async _openSelectionTargeted(
+    uri: URI,
+    selection: ITextEditorSelection,
+    target: Exclude<OpenTarget, 'default'>,
+    targets: {
+      groups: IEditorGroupsService
+      aux: IAuxiliaryEditorWindowService
+      inst: IInstantiationService
+      uriIdentity: IUriIdentityService
+      resolver: IEditorResolverService
+    },
+  ): Promise<boolean> {
+    const existing =
+      target === 'newWindow'
+        ? findExistingFileEditor(this._groups, this._uriIdentity, uri)
+        : undefined
+    if (existing) {
+      const result = await openExistingInputWithTarget(
+        targets,
+        existing.editor,
+        existing.group,
+        target,
+        { pinned: true },
+      )
+      if (!result.handled) return false
+      if (result.editor instanceof FileEditorInput) {
+        void revealSelectionInInput(result.editor, selection)
+      }
+      return true
+    }
+    const input = this._instantiation.createInstance(FileEditorInput, uri)
+    const result = await openFreshInputWithTarget(targets, input, target, { pinned: true })
+    if (!result.handled) {
+      if (!input.isDisposed) input.dispose()
+      return false
+    }
+    if (result.editor instanceof FileEditorInput) {
+      void revealSelectionInInput(result.editor, selection)
+    }
     return true
   }
 

@@ -31,8 +31,12 @@ export class SwarmReviewEditorInput extends EditorInput {
     return URI.from({ scheme: 'universe', path: `/swarmReview/${this._reviewId}` })
   }
 
+  static editorId(reviewId: string): string {
+    return `swarmReview:${reviewId}`
+  }
+
   override get id(): string {
-    return `swarmReview:${this._reviewId}`
+    return SwarmReviewEditorInput.editorId(this._reviewId)
   }
 
   override getName(): string {

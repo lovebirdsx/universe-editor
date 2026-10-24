@@ -10,6 +10,7 @@ import {
   normalizeFsPath,
   withSelection,
 } from '@universe-editor/platform'
+import type { OpenTarget } from '../../../services/editor/openTarget.js'
 import { useService } from '../../useService.js'
 
 const CACHE_TTL = 10_000
@@ -97,12 +98,13 @@ export function useOpenTerminalFile(): (
   line?: number,
   col?: number,
   endLine?: number,
+  target?: OpenTarget,
 ) => void {
   const opener = useService(IOpenerService)
 
   return useCallback(
-    (uri: URI, line?: number, col?: number, endLine?: number) => {
-      const target =
+    (uri: URI, line?: number, col?: number, endLine?: number, target: OpenTarget = 'default') => {
+      const targetUri =
         line !== undefined
           ? withSelection(uri, {
               startLineNumber: line,
@@ -110,7 +112,11 @@ export function useOpenTerminalFile(): (
               ...(endLine !== undefined ? { endLineNumber: endLine } : {}),
             })
           : uri
-      void opener.open(target, { fromUserGesture: true })
+      void opener.open(targetUri, {
+        fromUserGesture: true,
+        ...(target === 'side' ? { openToSide: true } : {}),
+        ...(target === 'newWindow' ? { openInNewWindow: true } : {}),
+      })
     },
     [opener],
   )

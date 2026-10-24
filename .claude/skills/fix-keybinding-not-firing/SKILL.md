@@ -140,7 +140,7 @@ registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它�
 - **断在**：分叉 0 的变体——主键**被替换**成另一组合成键，不是被 Monaco/OS 简单吞掉。
 - **根因**：输入法 / 按键映射工具 / 远控软件在事件到达 Electron 前把 `Ctrl+Alt+Enter` 映射成 `Shift+F10`（Windows 上下文菜单键）。全仓没有 `sendInputEvent` / `before-input-event` / menu accelerator 会产生这种转换（非 macOS 还 `Menu.setApplicationMenu(null)`）。
 - **修法**：改绑未被占用的组合（本项目 quick pick 新窗口手势已改为 `Alt+Enter`，`Ctrl+Enter` 保持侧开）；**不要**把 `Shift+F10` 接成目标命令——`isContextMenuKey` 靠它打开树/列表的右键菜单。
-- **锚点**：`packages/workbench-ui/src/tree/keyboardContextMenu.ts`（`isContextMenuKey`）、`apps/editor/src/renderer/services/quickInput/quickPickOpenTarget.ts`（手势映射）、`apps/editor/src/renderer/services/keybinding/keyboardDebugFormat.ts`（`code=''` 诊断）。
+- **锚点**：`packages/workbench-ui/src/tree/keyboardContextMenu.ts`（`isContextMenuKey`）、`apps/editor/src/renderer/services/editor/openTarget.ts`（手势映射）、`apps/editor/src/renderer/services/keybinding/keyboardDebugFormat.ts`（`code=''` 诊断）。
 
 ## 易踩坑速记
 0. **先数日志行**：组合键应有「每修饰键一行 + 主键一行」。**主键那一行整个消失** = 键没到达 document 监听器（分叉 0、案例 4）。**头号嫌疑是编辑器聚焦时 Monaco 内置默认键 `stopPropagation`**（用「点到编辑器外按同键是否出现」区分；OS/显卡热键则编辑器内外都消失）。Monaco 吃键现在可用 keybindings.json 的 `-monacoCommand` 同步解绑（案例 4）。**主键被换成另一组合成键且 `code=''`** = 输入法/按键映射/远控在应用外替换，改绑键位（案例 8）。

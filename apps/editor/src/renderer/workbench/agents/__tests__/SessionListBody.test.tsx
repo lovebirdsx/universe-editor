@@ -57,6 +57,7 @@ import {
 import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import { SessionListBody } from '../SessionListBody.js'
 import { ServicesContext } from '../../useService.js'
 import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
@@ -203,6 +204,7 @@ interface Harness {
   groups: EditorGroupsService
   inst: InstantiationService
   widgets: { focusSessionInput: ReturnType<typeof vi.fn> }
+  auxCalls: Array<{ editor: unknown; options: unknown }>
   dispose: () => void
 }
 
@@ -273,6 +275,14 @@ async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise
     executeCommand,
   } as unknown as ICommandService)
   services.set(IStorageService, storage)
+  const auxCalls: Array<{ editor: unknown; options: unknown }> = []
+  services.set(IAuxiliaryEditorWindowService, {
+    _serviceBrand: undefined,
+    openEditorInNewWindow: vi.fn(async (editor: unknown, options?: unknown) => {
+      auxCalls.push({ editor, options })
+      return { ok: true, window: { part: { activeGroup: groups.activeGroup } }, editor }
+    }),
+  } as never)
 
   const inst = new InstantiationService(services)
   render(
@@ -289,6 +299,7 @@ async function makeHarness(opts: { scope?: string; folder?: URI } = {}): Promise
     groups,
     inst,
     widgets,
+    auxCalls,
     dispose: () => {
       history.dispose()
       filterService.dispose()
@@ -1293,6 +1304,33 @@ describe('SessionListBody — activating an already-open session', () => {
     expect(group.editors).toHaveLength(1)
     expect(group.activeEditor).toBe(tab)
     expect(harness.widgets.focusSessionInput).toHaveBeenCalledWith('local-1')
+    harness.dispose()
+  })
+
+  it('Ctrl+Enter opens the chat in a side group', async () => {
+    const harness = await openHarness()
+    focusRowAt(0)
+
+    fireEvent.keyDown(list(), { key: 'Enter', ctrlKey: true })
+
+    expect(harness.groups.groups).toHaveLength(2)
+    const side = harness.groups.groups[1]!
+    expect(side.editors).toHaveLength(1)
+    expect(side.editors[0]).toBeInstanceOf(AcpSessionEditorInput)
+    expect(sessionTabs(harness.groups)).toHaveLength(1)
+    expect(harness.auxCalls).toHaveLength(0)
+    harness.dispose()
+  })
+
+  it('Alt+Enter moves the chat into a new window', async () => {
+    const harness = await openHarness()
+    focusRowAt(0)
+
+    fireEvent.keyDown(list(), { key: 'Enter', altKey: true })
+
+    await vi.waitFor(() => expect(harness.auxCalls).toHaveLength(1))
+    expect((harness.auxCalls[0]?.options as { mode?: string }).mode).toBe('open')
+    expect(harness.groups.groups).toHaveLength(1)
     harness.dispose()
   })
 })

@@ -32,6 +32,7 @@ import type {
   IWindowsService as IWindowsServiceType,
 } from '@universe-editor/platform'
 import { MarkdownView, DocLinkContext } from '../MarkdownView.js'
+import type { OpenTarget } from '../../../services/editor/openTarget.js'
 import { ServicesContext } from '../../useService.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 import {
@@ -815,7 +816,7 @@ describe('DocLinkContext', () => {
     const link = screen.getByRole('link', { name: '提交改动' })
     expect(link.getAttribute('target')).toBeNull()
     link.click()
-    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md', { toSide: false })
+    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md', { target: 'default' })
     expect(windowOpen).not.toHaveBeenCalled()
     windowOpen.mockRestore()
   })
@@ -834,7 +835,9 @@ describe('DocLinkContext', () => {
       </ServicesContext.Provider>,
     )
     screen.getByRole('link', { name: '查看 amend' }).click()
-    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md#amend-section', { toSide: false })
+    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md#amend-section', {
+      target: 'default',
+    })
   })
 
   it('falls through to window.open when DocLinkContext is absent', () => {
@@ -859,7 +862,7 @@ describe('linkHandler + extraHrefSchemes', () => {
 
   function renderWithHandler(
     text: string,
-    linkHandler: (href: string, opts: { toSide: boolean }) => boolean,
+    linkHandler: (href: string, opts: { target: OpenTarget }) => boolean,
   ) {
     const services = new ServiceCollection()
     services.set(IEditorResolverService, makeResolver())
@@ -885,17 +888,31 @@ describe('linkHandler + extraHrefSchemes', () => {
     expect(link.getAttribute('target')).toBeNull()
     link.click()
     expect(handler).toHaveBeenCalledWith('command:workbench.action.openSettings', {
-      toSide: false,
+      target: 'default',
     })
   })
 
-  it('passes toSide for ctrl/cmd clicks', () => {
+  it('passes the side target for ctrl/cmd clicks', () => {
     const handler = vi.fn(() => true)
     renderWithHandler('[文档](doc:getting-started/x)', handler)
     screen
       .getByRole('link', { name: '文档' })
       .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }))
-    expect(handler).toHaveBeenCalledWith('doc:getting-started/x', { toSide: true })
+    expect(handler).toHaveBeenCalledWith('doc:getting-started/x', { target: 'side' })
+  })
+
+  it('passes the new-window target for alt clicks, even with ctrl held', () => {
+    const handler = vi.fn(() => true)
+    renderWithHandler('[文档](doc:getting-started/x)', handler)
+    screen
+      .getByRole('link', { name: '文档' })
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }))
+    expect(handler).toHaveBeenLastCalledWith('doc:getting-started/x', { target: 'newWindow' })
+
+    screen
+      .getByRole('link', { name: '文档' })
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true, altKey: true }))
+    expect(handler).toHaveBeenLastCalledWith('doc:getting-started/x', { target: 'newWindow' })
   })
 
   it('never falls back to window.open when the handler declines', () => {
@@ -915,7 +932,7 @@ describe('linkHandler + extraHrefSchemes', () => {
     const link = screen.getByRole('link', { name: '外部' })
     expect(link.getAttribute('target')).toBe('_blank')
     link.click()
-    expect(handler).toHaveBeenCalledWith('https://example.com', { toSide: false })
+    expect(handler).toHaveBeenCalledWith('https://example.com', { target: 'default' })
     expect(windowOpen).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer')
     windowOpen.mockRestore()
   })

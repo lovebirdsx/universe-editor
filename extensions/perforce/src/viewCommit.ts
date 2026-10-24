@@ -179,7 +179,7 @@ export function revealPathForFile(
 export async function openGraphFileDiff(
   target: PerforceClient,
   req: P4GraphFileDiffRequest,
-  options?: { preserveFocus?: boolean },
+  options?: { pinned?: boolean; preserveFocus?: boolean; openTarget?: 'side' | 'newWindow' },
 ): Promise<void> {
   const { left, right } = fileDiffRevs(req.depotFile, req.status, req.rev)
   const [original, modified] = await Promise.all([
@@ -193,8 +193,9 @@ export async function openGraphFileDiff(
     originalUri: pathToFileURL(displayPath(req.depotFile)).href,
     original,
     modified,
-    pinned: false,
+    pinned: options?.pinned ?? false,
     preserveFocus: options?.preserveFocus ?? false,
     ...(req.localPath ? { openableUri: pathToFileURL(req.localPath).href } : {}),
+    ...(options?.openTarget ? { openTarget: options.openTarget } : {}),
   })
 }

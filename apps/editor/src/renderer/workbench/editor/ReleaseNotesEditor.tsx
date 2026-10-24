@@ -13,10 +13,13 @@
 
 import { useCallback, useMemo, useRef } from 'react'
 import {
+  IEditorGroupsService,
   IEditorInput,
   IEditorService,
+  IInstantiationService,
   IOpenerService,
   INotificationService,
+  IUriIdentityService,
   Severity,
   localize,
 } from '@universe-editor/platform'
@@ -29,7 +32,8 @@ import {
 } from '../../../shared/releaseNotes/linkPolicy.js'
 import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
 import { isDocId } from '../../services/editor/docRegistry.js'
-import { openDocInGroup } from '../../services/editor/openDoc.js'
+import { openDocInGroup, openDocWithTarget } from '../../services/editor/openDoc.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { ReleaseNotesInput } from '../../services/editor/ReleaseNotesInput.js'
 import { splitNoteBodySections } from '../../services/releaseNotes/releaseNotes.js'
 import { useService } from '../useService.js'
@@ -50,6 +54,14 @@ function versionAnchor(version: string): string {
 function NoteBody({ markdown, version }: { readonly markdown: string; readonly version: string }) {
   const groups = useEditorGroup()
   const editorService = useService(IEditorService)
+  const editorGroups = useService(IEditorGroupsService)
+  const inst = useService(IInstantiationService)
+  const uriIdentity = useService(IUriIdentityService)
+  const aux = useService(IAuxiliaryEditorWindowService)
+  const targets = useMemo(
+    () => ({ groups: editorGroups, inst, uriIdentity, aux }),
+    [editorGroups, inst, uriIdentity, aux],
+  )
   const opener = useService(IOpenerService)
   const notifications = useService(INotificationService)
 
@@ -85,7 +97,7 @@ function NoteBody({ markdown, version }: { readonly markdown: string; readonly v
   )
 
   const handleLink = useCallback<MarkdownLinkHandler>(
-    (href, { toSide }) => {
+    (href, { target: openTarget }) => {
       const target: ReleaseNoteHrefKind = classifyReleaseNoteHref(href)
       switch (target.kind) {
         case 'anchor':
@@ -94,9 +106,21 @@ function NoteBody({ markdown, version }: { readonly markdown: string; readonly v
           return false
         case 'doc': {
           if (isDocId(target.docId)) {
-            const doc = new DocEditorInput(target.docId)
-            if (groups) openDocInGroup(groups, doc, toSide)
-            else void editorService.openEditor(doc, { activate: true, pinned: true })
+            const createDoc = (): DocEditorInput => new DocEditorInput(target.docId)
+            const doc = createDoc()
+            if (openTarget === 'default') {
+              if (groups) openDocInGroup(groups, doc, false)
+              else void editorService.openEditor(doc, { activate: true, pinned: true })
+              return true
+            }
+            void openDocWithTarget(targets, doc, openTarget, groups ?? undefined).then((result) => {
+              if (result.handled) return
+              openDocInGroup(
+                groups ?? editorGroups.activeGroup,
+                doc.isDisposed ? createDoc() : doc,
+                false,
+              )
+            })
             return true
           }
           reportMissingDoc(target.docId)
@@ -121,7 +145,16 @@ function NoteBody({ markdown, version }: { readonly markdown: string; readonly v
           return true
       }
     },
-    [editorService, groups, notifications, openExternal, opener, reportMissingDoc],
+    [
+      editorService,
+      editorGroups,
+      groups,
+      notifications,
+      openExternal,
+      opener,
+      reportMissingDoc,
+      targets,
+    ],
   )
 
   return (

@@ -24,6 +24,8 @@ export interface ITextEditorSelection {
 export interface IOpenerOptions {
   /** Open the editor to the side of the currently active one. */
   readonly openToSide?: boolean
+  /** Open the editor in an auxiliary window instead of the active group. */
+  readonly openInNewWindow?: boolean
   /**
    * Allow `command:` URIs to run. `true` permits any command; an array is a
    * whitelist of allowed command ids; falsy (the default) blocks all commands.

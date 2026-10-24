@@ -224,8 +224,9 @@ export function createGitTimelineCommands(
   log?: (msg: string) => void,
 ): Disposable[] {
   return [
-    commands.registerCommand('git.timeline.openDiff', async (arg: unknown) => {
+    commands.registerCommand('git.timeline.openDiff', async (arg: unknown, options?: unknown) => {
       const { uri, currentHash, previousHash } = (arg ?? {}) as OpenDiffArg
+      const openTarget = (options as { openTarget?: 'side' | 'newWindow' } | undefined)?.openTarget
       if (!uri || currentHash === undefined) return
       const repo = mgr.resolveRepo({ resourceUri: uri })
       if (!repo) return
@@ -266,6 +267,7 @@ export function createGitTimelineCommands(
         // Empty currentHash means the working tree — its side tracks live edits;
         // a committed hash is a frozen blob and must not be live-synced.
         ...(currentHash === '' && { liveModified: true }),
+        ...(openTarget ? { openTarget } : {}),
       })
     }),
 

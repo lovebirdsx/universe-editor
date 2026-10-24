@@ -79,16 +79,22 @@ const openedInWhichGroup: ('main' | 'side')[] = []
 const resolvedOpens: { resource: unknown; options: unknown }[] = []
 
 interface StubGroup {
+  readonly editors: unknown[]
   readonly findEditor: () => undefined
   readonly openEditor: ReturnType<typeof vi.fn>
 }
 
 function makeStubGroup(id: 'main' | 'side'): StubGroup {
+  const editors: unknown[] = []
   return {
+    // openPreviewWithTarget scans group.editors by input id for the globally
+    // unique preview; keep the list in sync with what openEditor receives.
+    editors,
     // No preview is ever already open in these tests, so the dedupe lookup that
     // openPreviewInGroup performs always misses.
     findEditor: () => undefined,
     openEditor: vi.fn((input: unknown) => {
+      editors.push(input)
       openedInGroup.push(input)
       openedInWhichGroup.push(id)
       return Promise.resolve(undefined)

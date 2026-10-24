@@ -27,7 +27,7 @@ describe('SelectionContextChips', () => {
     render(<SelectionContextChips contexts={[CTX]} onRemove={vi.fn()} onReveal={onReveal} />)
     const chip = screen.getByText('src/a.ts:12-40')
     fireEvent.click(chip)
-    expect(onReveal).toHaveBeenCalledWith(CTX)
+    expect(onReveal).toHaveBeenCalledWith(CTX, 'default')
   })
 
   it('removes on × without triggering reveal', () => {

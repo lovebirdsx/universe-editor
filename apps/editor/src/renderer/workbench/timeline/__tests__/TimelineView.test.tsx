@@ -172,3 +172,60 @@ describe('TimelineView — inline row actions', () => {
     expect(executeCommand).toHaveBeenCalledWith('_workbench.openGitGraph', item.id)
   })
 })
+
+describe('TimelineView — targeted opens', () => {
+  async function focusCommitRow(item: ITimelineItemDto): Promise<ReturnType<typeof setup>> {
+    const ctx = setup([item])
+    await renderView(ctx.instantiation)
+    fireEvent.click(screen.getByText(item.label))
+    ctx.executeCommand.mockClear()
+    return ctx
+  }
+
+  it('Ctrl+Enter passes the side target to the item command', async () => {
+    const item = makeGitCommitItem()
+    const { executeCommand } = await focusCommitRow(item)
+
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Timeline' }), {
+      key: 'Enter',
+      ctrlKey: true,
+    })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith(
+      item.command!.command,
+      item.command!.arguments![0],
+      {
+        openTarget: 'side',
+      },
+    )
+  })
+
+  it('Alt+Enter passes the new-window target', async () => {
+    const item = makePerforceRevItem()
+    const { executeCommand } = await focusCommitRow(item)
+
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Timeline' }), {
+      key: 'Enter',
+      altKey: true,
+    })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith(
+      item.command!.command,
+      item.command!.arguments![0],
+      {
+        openTarget: 'newWindow',
+      },
+    )
+  })
+
+  it('plain Enter keeps the original argument list', async () => {
+    const item = makeGitCommitItem()
+    const { executeCommand } = await focusCommitRow(item)
+
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Timeline' }), { key: 'Enter' })
+
+    expect(executeCommand).toHaveBeenCalledWith(item.command!.command, item.command!.arguments![0])
+  })
+})

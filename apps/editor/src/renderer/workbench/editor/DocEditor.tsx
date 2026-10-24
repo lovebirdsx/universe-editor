@@ -9,16 +9,20 @@
  *  another markdown reading surface.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useContext, useRef } from 'react'
+import { useCallback, useContext, useMemo, useRef } from 'react'
 import {
   IEditorGroupsService,
   IEditorInput,
   IEditorService,
+  IInstantiationService,
+  IUriIdentityService,
   localize,
 } from '@universe-editor/platform'
 import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
 import { resolveDoc, isDocId } from '../../services/editor/docRegistry.js'
-import { openDocInGroup } from '../../services/editor/openDoc.js'
+import { openDocInGroup, openDocWithTarget } from '../../services/editor/openDoc.js'
+import type { OpenTarget } from '../../services/editor/openTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { useService } from '../useService.js'
 import { DocLinkContext, MarkdownView } from '../markdown/MarkdownView.js'
@@ -72,6 +76,13 @@ export function DocEditor({ input }: { input: IEditorInput }) {
 
   const editorService = useService(IEditorService)
   const groupsService = useService(IEditorGroupsService)
+  const inst = useService(IInstantiationService)
+  const uriIdentity = useService(IUriIdentityService)
+  const aux = useService(IAuxiliaryEditorWindowService)
+  const targets = useMemo(
+    () => ({ groups: groupsService, inst, uriIdentity, aux }),
+    [groupsService, inst, uriIdentity, aux],
+  )
   const group = useContext(EditorGroupContext)
   const rootRef = useRef<HTMLDivElement>(null)
   const activeGroup = groupsService.activeGroup
@@ -85,22 +96,34 @@ export function DocEditor({ input }: { input: IEditorInput }) {
   })
 
   const openDocLink = useCallback(
-    (href: string, opts?: { toSide?: boolean }) => {
+    (href: string, opts?: { target?: OpenTarget }) => {
       const { targetDocId, anchor } = resolveDocLink(href, docId)
       if (!isDocId(targetDocId, category)) return
-      const target = new DocEditorInput(targetDocId, category, anchor)
-      // Default: navigate in place — the new doc takes the current tab's slot and
-      // the old one closes, so a single tab walks the trail and H/L (or Alt+←/→)
-      // steps through history (mirrors the markdown preview). Ctrl/Cmd+click opens
-      // an additional tab instead. `group` is null only if this editor isn't
-      // mounted in a group (shouldn't happen for a click), so fall back to a plain open.
-      if (!opts?.toSide && group && input instanceof DocEditorInput && target.id !== input.id) {
-        openDocInGroup(group, target, false)
+      const createTarget = (): DocEditorInput => new DocEditorInput(targetDocId, category, anchor)
+      const openDefault = (targetDoc: DocEditorInput): void => {
+        // Default: navigate in place — the new doc takes the current tab's slot
+        // and the old one closes, so a single tab walks the trail and H/L (or
+        // Alt+←/→) steps through history (mirrors the markdown preview).
+        // `group` is null only if this editor isn't mounted in a group
+        // (shouldn't happen for a click), so fall back to a plain open.
+        if (group && input instanceof DocEditorInput && targetDoc.id !== input.id) {
+          openDocInGroup(group, targetDoc, false)
+          return
+        }
+        void editorService.openEditor(targetDoc, { activate: true, pinned: true })
+      }
+      const openTarget = opts?.target ?? 'default'
+      const target = createTarget()
+      if (openTarget === 'default') {
+        openDefault(target)
         return
       }
-      void editorService.openEditor(target, { activate: true, pinned: true })
+      void openDocWithTarget(targets, target, openTarget, group ?? undefined).then((result) => {
+        if (result.handled) return
+        openDefault(target.isDisposed ? createTarget() : target)
+      })
     },
-    [docId, category, editorService, group, input],
+    [docId, category, editorService, group, input, targets],
   )
 
   return (

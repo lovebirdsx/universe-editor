@@ -87,4 +87,22 @@ describe('useOpenTerminalFile', () => {
       { fromUserGesture: true },
     )
   })
+
+  it('passes side/new-window flags to the opener', () => {
+    const { opener, open } = makeOpener()
+    const { result } = setup(opener)
+    const uri = URI.file('/repo/src/foo.ts')
+
+    result.current(uri, 10, 5, undefined, 'side')
+    expect(open).toHaveBeenLastCalledWith(
+      withSelection(uri, { startLineNumber: 10, startColumn: 5 }),
+      { fromUserGesture: true, openToSide: true },
+    )
+
+    result.current(uri, 10, 5, undefined, 'newWindow')
+    expect(open).toHaveBeenLastCalledWith(
+      withSelection(uri, { startLineNumber: 10, startColumn: 5 }),
+      { fromUserGesture: true, openInNewWindow: true },
+    )
+  })
 })

@@ -186,4 +186,32 @@ describe('PerforceClient.openChange', () => {
     expect(payload.original).toBe('depot content')
     expect(payload.modified).toBe('local content')
   })
+
+  it('forwards openTarget to the diff payload', async () => {
+    const client = await makeClient()
+
+    await client.openChange(LOCAL, false, false, 'newWindow')
+
+    const openDiff = mocks.executeCommand.mock.calls.find((c) => c[0] === '_workbench.openDiff')
+    expect((openDiff![1][0] as { openTarget?: string }).openTarget).toBe('newWindow')
+  })
+
+  it('forwards openTarget to the plain-file fallback', async () => {
+    const client = await makeClient((argv) => {
+      const cmd = subcommand(argv)
+      if (isClientSpecProbe(argv)) return { stdout: DISCOVERY_SPEC }
+      if (cmd === 'info') return defaultHandler(argv)
+      if (cmd === 'fstat') {
+        return { stdout: `${JSON.stringify({ depotFile: DEPOT })}\n` }
+      }
+      return { stdout: '' }
+    })
+
+    await client.openChange(LOCAL, false, false, 'side')
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith('_workbench.openFile', [
+      LOCAL,
+      { openTarget: 'side' },
+    ])
+  })
 })

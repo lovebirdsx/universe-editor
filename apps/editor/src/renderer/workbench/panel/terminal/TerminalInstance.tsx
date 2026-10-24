@@ -7,6 +7,7 @@ import {
   type ITerminalXtermHolder,
 } from '../../../services/terminal/TerminalXtermService.js'
 import { useService } from '../../useService.js'
+import type { OpenTarget } from '../../../services/editor/openTarget.js'
 import {
   dragContainsResources,
   getOwnerResizeObserver,
@@ -29,7 +30,7 @@ export interface TerminalInstanceProps {
   cwd: string
   home: string | undefined
   resolveFile: (absolutePath: string) => Promise<URI | null>
-  openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void
+  openFile: (uri: URI, line?: number, col?: number, endLine?: number, target?: OpenTarget) => void
 }
 
 export function TerminalInstance({
@@ -70,7 +71,8 @@ export function TerminalInstance({
     holderRef.current = holder
     holder.setLinkHandlers({
       resolveFile: (p) => resolveFileRef.current(p),
-      openFile: (uri, line, col, endLine) => openFileRef.current(uri, line, col, endLine),
+      openFile: (uri, line, col, endLine, target) =>
+        openFileRef.current(uri, line, col, endLine, target),
       getCwd: () => cwdRef.current,
       getHome: () => homeRef.current,
     })

@@ -19,7 +19,7 @@
 
 ## ① platform 契约层
 
-`packages/platform/src/opener/openerService.ts`：`IOpenerService` + `IOpener.open(target: URI | string, options?): Promise<boolean>`（返回是否有 opener 处理）；`registerOpener(opener): IDisposable`。`IOpenerOptions`：openToSide? / allowCommands?: boolean | readonly string[] / fromUserGesture?。`ITextEditorSelection`（1-based，对齐 Monaco 行列约定）。
+`packages/platform/src/opener/openerService.ts`：`IOpenerService` + `IOpener.open(target: URI | string, options?): Promise<boolean>`（返回是否有 opener 处理）；`registerOpener(opener): IDisposable`。`IOpenerOptions`：openToSide? / openInNewWindow? / allowCommands?: boolean | readonly string[] / fromUserGesture?。`ITextEditorSelection`（1-based，对齐 Monaco 行列约定）。
 
 - **`withSelection(uri, selection)` / `extractSelection(uri)`**（照抄 VSCode `platform/opener/common/opener.ts`）：fragment 格式 `{起行},{起列}[-{止行}[,{止列}]]`，正则 `^L?(\d+)(?:,(\d+))?(?:-L?(\d+)(?:,(\d+))?)?`，**1-based**，`L` 前缀可选；extractSelection 解出后把 fragment 剥空返回 uri。
 - **必须**在 opener/index.ts 加 barrel 再在 platform/src/index.ts re-export，否则 index.test.ts 覆盖检查失败。改 platform 后 apps 看到 dist，非 dev 要 `pnpm --filter @universe-editor/platform build`。
@@ -30,7 +30,7 @@
 
 1. **ExternalOpener**：scheme ∈ {http, https, mailto} → `window.open(uri.toString(), '_blank')`。主进程 windowMainService 的 setWindowOpenHandler 只对 http(s) 调 shell.openExternal，其余 deny——外链实际出口。
 2. **CommandOpener**：scheme === command → path 是命令 id、query 是 `JSON.parse(decodeURIComponent(query))` 参数（数组展开为多参，非数组包成 [arg]，非 JSON 兜底为单字符串）。**信任闸门（安全红线）**：allowCommands falsy（默认）→ 静默不执行（return true 表示已处理即吞掉）；=== true → 全放行；数组 → 白名单校验 path。对齐 VSCode markdown isTrusted 三层防御，防 AI 输出等不受信内容执行任意命令。
-3. **FileOpener**：scheme === file → extractSelection 剥行列。目录 → IWindowsService.openWindow（新窗口）；无 selection → IEditorResolverService.openEditor（让图片等专用编辑器胜出，避免二进制乱码）；有 selection → 复用已开/新开 FileEditorInput 后走定位 helper。
+3. **FileOpener**：scheme === file → extractSelection 剥行列。目录 → IWindowsService.openWindow（新窗口）；无 selection → IEditorResolverService.openEditor（让图片等专用编辑器胜出，避免二进制乱码）；有 selection → 复用已开/新开 FileEditorInput 后走定位 helper。`openToSide` / `openInNewWindow`（终端 Ctrl/Alt+点击、Agent 选区 chip）改走 `openWithTarget`：side 在右侧组打开，newWindow 走辅助窗口，成功后对 `FileEditorInput` reveal selection；目标打开失败回退上面的默认路径。
 
 `parseTarget(raw)`（字符串→URI）：有 `://` scheme 或 mailto:/command: 前缀且非 Windows 盘符 → URI.parse；否则 splitFilePathLocation（复用 filePathLink.ts）剥 :line:col 折进 fragment，URI.file(path)。**parseTarget 和 CommandOpener 已 export 供单测**（信任闸门 + 解析是最该测的两块）。
 
@@ -76,7 +76,7 @@
 - **加/减命令深链白名单**：shared/deepLink.ts 的 DEEP_LINK_ALLOWED_COMMANDS。
 - **深链协议名 / 新增深链形态**：shared/deepLink.ts（parseDeepLink + deepLinkToOpenerTarget）+ main 的 routeDeepLink。
 - **深链在某入口没生效**：查三入口是否都接了（冷启动 argv / second-instance / open-url），argv 是否被 parseFileToOpen 误吞（要 isDeepLink 排除）。
-- **markdown 里点链接的分发逻辑**（相对路径解析、目录/图片/预览分流、Ctrl+点击到侧边）：**不在本案例**，在 useMarkdownFileLink.ts + MarkdownView.tsx 的 SafeLink（见 workbench/markdown/CLAUDE.md）。本案例只负责它们最终调到的「打开+定位」。
+- **markdown 里点链接的分发逻辑**（相对路径解析、目录/图片/预览分流、Ctrl/Alt+点击的侧开/新窗口）：**不在本案例**，在 useMarkdownFileLink.ts + MarkdownView.tsx 的 SafeLink（见 workbench/markdown/CLAUDE.md）。本案例只负责它们最终调到的「打开+定位」。
 
 ## 易踩坑速记
 

@@ -8,6 +8,7 @@
 import { useMemo, useState } from 'react'
 import { ArrowLeftRight } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
+import { isOpenTargetEnter, resolveOpenTarget } from '../../services/editor/openTarget.js'
 import type { OpenMarkdownLinkOptions } from '../markdown/useMarkdownFileLink.js'
 import { computeLineDiff, type DiffLine } from './lineDiff.js'
 import styles from './agents.module.css'
@@ -80,7 +81,12 @@ export function InlineDiffPreview({
             type="button"
             className={styles['inlineDiffPathButton']}
             data-tooltip={path}
-            onClick={(e) => onOpenPath({ toSide: e.ctrlKey || e.metaKey })}
+            onClick={(e) => onOpenPath({ target: resolveOpenTarget(e) })}
+            onKeyDown={(e) => {
+              if (!isOpenTargetEnter(e)) return
+              e.preventDefault()
+              onOpenPath({ target: resolveOpenTarget(e) })
+            }}
             data-testid="acp-inline-diff-path"
             {...uriAttr}
           >

@@ -55,6 +55,7 @@ function createDeps(
       logger: new NullLogger(),
       notifications: { _serviceBrand: undefined, notify: vi.fn() } as never,
       onError: vi.fn(),
+      targets: {} as never,
     },
   }
 }
@@ -79,6 +80,41 @@ describe('openSwarmFileDiff', () => {
     expect(openEditor).toHaveBeenCalledWith(existing, { pinned: true })
     expect(executeCommand).not.toHaveBeenCalled()
     expect(createInstance).not.toHaveBeenCalled()
+  })
+
+  it('fetches and opens a fresh diff in the target window instead of reusing the tab', async () => {
+    const id = swarmDiffEditorId({
+      reviewId: '1001',
+      depotFile: FILE.depotFile,
+      displayPath: FILE.path,
+      localPath: FILE.localPath,
+      leftVersion: 0,
+      rightVersion: 2,
+      leftChange: null,
+      rightChange: '2999',
+    })
+    const existing = { id } as unknown as IEditorInput
+    const { openEditor, createInstance, deps } = createDeps([existing])
+    const openEditorInNewWindow = vi.fn(
+      async (editor: IEditorInput) =>
+        ({
+          ok: true,
+          window: { part: { activeGroup: {} } },
+          editor,
+        }) as never,
+    )
+    deps.targets = {
+      groups: {},
+      aux: { openEditorInNewWindow },
+      inst: deps.inst,
+      uriIdentity: {},
+    } as never
+
+    await openSwarmFileDiff({ ...REQUEST, openTarget: 'newWindow' }, deps)
+
+    expect(openEditorInNewWindow).toHaveBeenCalledTimes(1)
+    expect(createInstance).toHaveBeenCalledTimes(1)
+    expect(openEditor).not.toHaveBeenCalled()
   })
 
   it('opens the reused tab into the preview slot without stealing focus', async () => {

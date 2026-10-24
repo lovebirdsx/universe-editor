@@ -11,13 +11,21 @@ import { FileCode, X } from 'lucide-react'
 import { IOpenerService, localize, URI, withSelection } from '@universe-editor/platform'
 import type { SelectionContext } from '../../services/acp/session/acpSessionService.js'
 import { formatSelectionLabel } from '../../services/acp/promptContext.js'
+import {
+  isOpenTargetEnter,
+  resolveOpenTarget,
+  type OpenTarget,
+} from '../../services/editor/openTarget.js'
 import { useOptionalService } from '../useService.js'
 import styles from './agents.module.css'
 
-export function useSelectionContextReveal(): (context: SelectionContext) => void {
+export function useSelectionContextReveal(): (
+  context: SelectionContext,
+  target?: OpenTarget,
+) => void {
   const openerService = useOptionalService(IOpenerService)
   return useCallback(
-    (context: SelectionContext): void => {
+    (context: SelectionContext, target: OpenTarget = 'default'): void => {
       if (!openerService) return
       let resource: URI
       try {
@@ -25,13 +33,17 @@ export function useSelectionContextReveal(): (context: SelectionContext) => void
       } catch {
         return
       }
-      const target = withSelection(resource, {
+      const targetUri = withSelection(resource, {
         startLineNumber: context.startLine,
         startColumn: 1,
         endLineNumber: context.endLine,
         endColumn: 1,
       })
-      void openerService.open(target, { fromUserGesture: true })
+      void openerService.open(targetUri, {
+        fromUserGesture: true,
+        ...(target === 'side' ? { openToSide: true } : {}),
+        ...(target === 'newWindow' ? { openInNewWindow: true } : {}),
+      })
     },
     [openerService],
   )
@@ -44,7 +56,7 @@ export function SelectionContextChips({
 }: {
   contexts: readonly SelectionContext[]
   onRemove?: (index: number) => void
-  onReveal: (ctx: SelectionContext) => void
+  onReveal: (ctx: SelectionContext, target?: OpenTarget) => void
 }) {
   if (contexts.length === 0) return null
   return (
@@ -58,7 +70,12 @@ export function SelectionContextChips({
             data-testid="acp-selection-context-chip"
             data-tooltip={`${label}\n\n${ctx.text}`}
             data-context-text={ctx.text}
-            onClick={() => onReveal(ctx)}
+            onClick={(e) => onReveal(ctx, resolveOpenTarget(e))}
+            onKeyDown={(e) => {
+              if (!isOpenTargetEnter(e)) return
+              e.preventDefault()
+              onReveal(ctx, resolveOpenTarget(e))
+            }}
           >
             <FileCode size={12} strokeWidth={1.75} aria-hidden="true" />
             <span className={styles['contextChipLabel']}>{label}</span>

@@ -44,6 +44,7 @@ import {
 } from '../../services/timeline/TimelineService.js'
 import { timelineFollowTarget } from '../../services/timeline/followTarget.js'
 import { mergeTimelineItems } from '../../services/timeline/timelineMerge.js'
+import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
@@ -268,10 +269,17 @@ export function TimelineView() {
   }, [items, hasMore, model])
 
   const runItem = useCallback(
-    (item: ITimelineItemDto) => {
+    (item: ITimelineItemDto, target: OpenTarget = 'default') => {
       const command = item.command
       if (!command) return
-      void commandService.executeCommand(command.command, ...(command.arguments ?? []))
+      const args = command.arguments ?? []
+      // Extension commands read a trailing options object; providers that don't
+      // open an editor simply ignore it.
+      if (target !== 'default') {
+        void commandService.executeCommand(command.command, ...args, { openTarget: target })
+        return
+      }
+      void commandService.executeCommand(command.command, ...args)
     },
     [commandService],
   )
@@ -327,6 +335,7 @@ export function TimelineView() {
           scrollStateKey="timeline"
           className={styles['view'] ?? ''}
           ariaLabel={localize('timeline.label', 'Timeline')}
+          modifierActivation
           renderRow={(ctx) => {
             const row = ctx.node.element
             const className = [
@@ -434,9 +443,9 @@ export function TimelineView() {
               </div>
             )
           }}
-          onActivate={(node) => {
+          onActivate={(node, opts) => {
             const row = node.element
-            if (row.item) runItem(row.item)
+            if (row.item) runItem(row.item, resolveOpenTarget(opts.modifiers))
             else void loadMore()
           }}
           onFocus={onTreeFocus}

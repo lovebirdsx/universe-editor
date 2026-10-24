@@ -24,8 +24,11 @@ import {
   ICommandService,
   IContextKeyService,
   IDialogService,
+  IEditorGroupsService,
   IEditorResolverService,
   IFileService,
+  IInstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   localize,
   markAsSingleton,
@@ -60,6 +63,9 @@ import { resolveRowDecoration } from '../../services/scm/rowDecoration.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
 import { confirmOpenFile } from '../../services/editor/largeFileGuard.js'
+import { resolveOpenTarget, type OpenModifiers } from '../../services/editor/openTarget.js'
+import { openUriWithTarget } from '../../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { importDroppedResources } from '../../services/dnd/importDroppedFiles.js'
 import { useViewFocusable } from '../useViewFocusable.js'
@@ -78,6 +84,10 @@ const EMPTY_BEHIND_VERSION: IObservable<number> = observableValue('emptyScmBehin
 
 export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
+  const editorGroupsService = useService(IEditorGroupsService)
+  const instantiationService = useService(IInstantiationService)
+  const uriIdentityService = useService(IUriIdentityService)
+  const auxiliaryWindows = useService(IAuxiliaryEditorWindowService)
   const workspaceService = useService(IWorkspaceService)
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
@@ -162,11 +172,27 @@ export function ExplorerView() {
   }, [applyVisibleWindow, decorations, ignoredVersion, hintVersion, behindVersion])
 
   const openFile = useCallback(
-    (resource: URI, options?: { preview?: boolean }) => {
+    (resource: URI, options?: { preview?: boolean; modifiers?: OpenModifiers }) => {
       void (async () => {
         if (!(await confirmOpenFile(resource, fileService, dialogService, editorResolverService)))
           return
         const preview = options?.preview === true
+        const target = resolveOpenTarget(options?.modifiers)
+        if (target !== 'default') {
+          const result = await openUriWithTarget(
+            {
+              groups: editorGroupsService,
+              aux: auxiliaryWindows,
+              inst: instantiationService,
+              uriIdentity: uriIdentityService,
+              resolver: editorResolverService,
+            },
+            resource,
+            target,
+            { pinned: !preview, preserveFocus: preview },
+          )
+          if (result.handled) return
+        }
         // Single-click / Space preview keeps focus in the Explorer so the
         // selected row stays highlighted; double-click (pinned) hands focus to
         // the editor as usual.
@@ -176,7 +202,15 @@ export function ExplorerView() {
         })
       })()
     },
-    [editorResolverService, fileService, dialogService],
+    [
+      editorResolverService,
+      editorGroupsService,
+      instantiationService,
+      uriIdentityService,
+      auxiliaryWindows,
+      fileService,
+      dialogService,
+    ],
   )
 
   const onRowContextMenu = useCallback(
@@ -310,7 +344,14 @@ export function ExplorerView() {
           virtualizationThreshold={threshold}
           renderRow={renderRow}
           onVisibleNodesChange={onVisibleNodesChange}
-          onActivate={(node, opts) => openFile(node.element.resource, { preview: opts.preview })}
+          modifierActivation
+          onActivate={(node, opts) => {
+            if (node.element.isDirectory) return
+            openFile(node.element.resource, {
+              preview: opts.preview,
+              ...(opts.modifiers ? { modifiers: opts.modifiers } : {}),
+            })
+          }}
           onFocus={() => {
             // Seeding a keyboard cursor is not a user request to jump: revealing
             // here would yank the viewport back to the root row when the user

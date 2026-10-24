@@ -92,7 +92,7 @@ import { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWind
 import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 import { createViewPickItem } from '../viewQuickPick.js'
-import { resolveQuickPickOpenTarget, type QuickPickOpenTarget } from '../quickPickOpenTarget.js'
+import { resolveOpenTarget, type OpenTarget } from '../../editor/openTarget.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
 // Above this pool size the per-keystroke scan leaves the input event and runs
@@ -394,7 +394,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
   private _open(
     uri: URI,
     label: string,
-    opts: { addRecent: boolean; pinned: boolean; target: QuickPickOpenTarget },
+    opts: { addRecent: boolean; pinned: boolean; target: OpenTarget },
   ): void {
     if (opts.addRecent) this._recentFiles.add(uri, label)
     if (opts.target === 'newWindow') {
@@ -578,7 +578,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
   private _acceptPick(
     pick: IQuickPickItem | undefined,
-    opts: { addRecent: boolean; pinned: boolean; target: QuickPickOpenTarget },
+    opts: { addRecent: boolean; pinned: boolean; target: OpenTarget },
   ): void {
     if (!pick) return
     const viewId = decodeViewPickId(pick.id)
@@ -612,11 +612,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
   /** An already-open editor row in the MRU head list. `side` moves it into the
    *  side group (copying only inputs that can be cloned safely); `newWindow`
    *  follows the same file-copy / session-move rule as the file rows. */
-  private _revealDecodedEditor(
-    group: IEditorGroup,
-    editor: EditorInput,
-    target: QuickPickOpenTarget,
-  ): void {
+  private _revealDecodedEditor(group: IEditorGroup, editor: EditorInput, target: OpenTarget): void {
     if (target === 'default') {
       activateGroupAndFocus(group, this._focusContext(), editor)
       return
@@ -1062,7 +1058,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     disposables.add(
       picker.onDidAccept((items) => {
         const pick = items[0]
-        const target = resolveQuickPickOpenTarget(picker.keyMods)
+        const target = resolveOpenTarget(picker.keyMods)
         picker.hide()
         this._acceptPick(pick, { addRecent: true, pinned: true, target })
       }),
@@ -1151,7 +1147,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     disposables.add(
       picker.onDidAccept((items) => {
         const pick = items[0]
-        const target = resolveQuickPickOpenTarget(picker.keyMods)
+        const target = resolveOpenTarget(picker.keyMods)
         picker.hide()
         this._acceptPick(pick, { addRecent: false, pinned: false, target })
       }),

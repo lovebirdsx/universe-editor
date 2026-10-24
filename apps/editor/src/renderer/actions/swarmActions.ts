@@ -275,13 +275,14 @@ export class FocusSwarmChangesAction extends Action2 {
 }
 
 /**
- * Ctrl+Enter from the Swarm Reviews tree hands keyboard focus to the Swarm
+ * Ctrl+Shift+Enter from the Swarm Reviews tree hands keyboard focus to the Swarm
  * Changes file tree — the keyboard twin of "I picked a review, now let me walk
- * its files". Scoped to the reviews view through the root `focusedView` key; the
- * weight must beat any global Ctrl+Enter binding (see
- * `docs/development/commands-and-context-keys.md`). The Tree ignores modifier-key
- * combos outright (Tree.tsx's `if (e.altKey || e.ctrlKey || e.metaKey) return`),
- * so the event reaches the global keybinding handler unconsumed.
+ * its files". Plain Ctrl+Enter is the row's side-open gesture, so this keeps a
+ * modified binding of its own. Scoped to the reviews view through the root
+ * `focusedView` key; the weight must beat any global Ctrl+Shift+Enter binding
+ * (see `docs/development/commands-and-context-keys.md`). The Tree's modifier
+ * activation deliberately excludes Shift, so the event reaches the global
+ * keybinding handler unconsumed.
  */
 export class JumpToSwarmChangesAction extends Action2 {
   static readonly ID = 'swarm.jumpToChanges'
@@ -292,7 +293,7 @@ export class JumpToSwarmChangesAction extends Action2 {
       title: localize2('action.swarm.jumpToChanges', 'Go to Swarm Changes'),
       category: CATEGORY,
       keybinding: {
-        primary: 'ctrl+enter',
+        primary: 'ctrl+shift+enter',
         when: SWARM_REVIEWS_FOCUS_WHEN,
         weight: KeybindingWeight.WorkbenchContrib + 50,
       },

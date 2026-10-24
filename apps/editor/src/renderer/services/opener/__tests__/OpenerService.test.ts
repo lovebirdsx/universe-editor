@@ -8,6 +8,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  GroupDirection,
   URI,
   extractSelection,
   withSelection,
@@ -20,6 +21,8 @@ import {
   type IWindowsService,
 } from '@universe-editor/platform'
 import { CommandOpener, FileOpener, parseTarget } from '../OpenerService.js'
+import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
+import type { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWindowService.js'
 import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
 
 // The selection branch walks the editor stack (groups / FileEditorRegistry / Monaco
@@ -140,12 +143,42 @@ describe('FileOpener scheme gate', () => {
   function makeFileOpener(): {
     opener: FileOpener
     openEditor: ReturnType<typeof vi.fn>
+    openInNewWindow: ReturnType<typeof vi.fn>
+    groups: {
+      groups: unknown[]
+      activeGroup: object
+      findGroup: ReturnType<typeof vi.fn>
+      addGroup: ReturnType<typeof vi.fn>
+      activateGroup: ReturnType<typeof vi.fn>
+    }
+    sideGroup: { editors: unknown[]; contains: () => boolean; setActive: ReturnType<typeof vi.fn> }
   } {
     const openEditor = vi.fn()
-    const groups = { groups: [] }
+    const sideGroup = { editors: [] as unknown[], contains: () => false, setActive: vi.fn() }
+    const groups = {
+      groups: [] as unknown[],
+      activeGroup: {},
+      findGroup: vi.fn(() => undefined),
+      addGroup: vi.fn(() => sideGroup),
+      activateGroup: vi.fn(),
+    }
     const uriIdentity = { isEqual: vi.fn(() => false) }
     const instantiation = {
       createInstance: vi.fn(() => ({ isDisposed: false, onWillDispose: vi.fn() })),
+    }
+    const openInNewWindow = vi.fn(async (editor: unknown) => ({
+      ok: true,
+      editor,
+      window: { part: { activeGroup: {} } },
+    }))
+    const resolver = {
+      openEditor,
+      createEditorInput: vi.fn((resource: URI) => ({
+        id: resource.toString(),
+        resource,
+        isDisposed: false,
+        dispose: vi.fn(),
+      })),
     }
     const opener = new FileOpener(
       groups as unknown as IEditorGroupsService,
@@ -153,10 +186,11 @@ describe('FileOpener scheme gate', () => {
       instantiation as unknown as IInstantiationService,
       { stat: vi.fn().mockResolvedValue({ isDirectory: false }) } as unknown as IFileService,
       { openWindow: vi.fn() } as unknown as IWindowsService,
-      { openEditor } as unknown as IEditorResolverService,
+      resolver as unknown as IEditorResolverService,
       new FakeWindowFocusService(),
+      { openEditorInNewWindow: openInNewWindow } as unknown as IAuxiliaryEditorWindowService,
     )
-    return { opener, openEditor }
+    return { opener, openEditor, openInNewWindow, groups, sideGroup }
   }
 
   it('opens a remote-ssh URI through the resolver', async () => {
@@ -186,5 +220,48 @@ describe('FileOpener scheme gate', () => {
     const uri = URI.file('/repo/a.ts')
     expect(await opener.open(uri)).toBe(true)
     expect(openEditor).toHaveBeenCalledWith(uri, { pinned: true })
+  })
+
+  it('honors openToSide by creating the right group and opening there', async () => {
+    const { opener, openEditor, groups, sideGroup } = makeFileOpener()
+    const uri = URI.file('/repo/a.ts')
+
+    expect(await opener.open(uri, { openToSide: true })).toBe(true)
+
+    expect(groups.addGroup).toHaveBeenCalledWith(groups.activeGroup, GroupDirection.Right)
+    expect(openInLockAwareGroup).toHaveBeenLastCalledWith(
+      groups,
+      expect.anything(),
+      { activate: true, pinned: true },
+      sideGroup,
+    )
+    expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('honors openInNewWindow with a fresh resolver input', async () => {
+    const { opener, openEditor, openInNewWindow } = makeFileOpener()
+    const uri = URI.file('/repo/a.ts')
+
+    expect(await opener.open(uri, { openInNewWindow: true })).toBe(true)
+
+    expect(openInNewWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: uri.toString() }),
+      expect.objectContaining({ mode: 'open', pinned: true }),
+    )
+    expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('opens a selection to the side through a fresh FileEditorInput', async () => {
+    const { opener, groups, sideGroup } = makeFileOpener()
+    const uri = withSelection(URI.file('/repo/a.ts'), { startLineNumber: 5, startColumn: 3 })
+
+    expect(await opener.open(uri, { openToSide: true })).toBe(true)
+
+    expect(openInLockAwareGroup).toHaveBeenLastCalledWith(
+      groups,
+      expect.anything(),
+      { activate: true, pinned: true },
+      sideGroup,
+    )
   })
 })

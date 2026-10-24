@@ -55,6 +55,7 @@ import {
   type SessionFileChange,
 } from '../../../services/acp/session/sessionChangeTracker.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
+import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import { sessionChangesViewState } from '../sessionChangesViewState.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -82,15 +83,22 @@ class FakeStorage {
 
 class FakeEditorGroup {
   activeEditor: unknown
+  readonly isLocked = false
   opened: Array<{ input: unknown; options: unknown }> = []
   get editors(): unknown[] {
-    return this.activeEditor ? [this.activeEditor] : []
+    return this.opened.map((o) => o.input)
+  }
+  contains(editor: unknown) {
+    return this.editors.includes(editor)
   }
   indexOf() {
     return -1
   }
   findEditor(): undefined {
     return undefined
+  }
+  setActive(editor: unknown) {
+    this.activeEditor = editor
   }
   openEditor(input: unknown, options?: unknown) {
     this.opened.push({ input, options })
@@ -101,12 +109,43 @@ class FakeEditorGroup {
 
 class FakeEditorGroups {
   declare readonly _serviceBrand: undefined
-  constructor(readonly activeGroup: FakeEditorGroup) {}
+  readonly groups: FakeEditorGroup[] = []
+  activeGroup: FakeEditorGroup
+  constructor(group: FakeEditorGroup) {
+    this.groups.push(group)
+    this.activeGroup = group
+  }
   getGroups() {
-    return [this.activeGroup]
+    return this.groups
+  }
+  get activeGroupForOpen() {
+    return this.activeGroup
+  }
+  findGroup() {
+    return undefined
+  }
+  addGroup() {
+    const group = new FakeEditorGroup()
+    this.groups.push(group)
+    return group
   }
   activateGroup(g: FakeEditorGroup) {
+    this.activeGroup = g
     return g
+  }
+}
+
+class FakeAuxiliaryWindows {
+  declare readonly _serviceBrand: undefined
+  readonly calls: Array<{ editor: unknown; options: unknown }> = []
+  constructor(private readonly _groups: FakeEditorGroups) {}
+  async openEditorInNewWindow(editor: unknown, options?: unknown) {
+    this.calls.push({ editor, options })
+    return {
+      ok: true,
+      window: { part: { activeGroup: this._groups.activeGroup } },
+      editor,
+    }
   }
 }
 
@@ -148,6 +187,8 @@ function renderView(
   const services = new ServiceCollection()
   const editor = new FakeEditor()
   const editorGroup = new FakeEditorGroup()
+  const groups = new FakeEditorGroups(editorGroup)
+  const aux = new FakeAuxiliaryWindows(groups)
   const resolver = {
     _serviceBrand: undefined,
     opened: [] as URI[],
@@ -175,10 +216,8 @@ function renderView(
     },
   }
   services.set(IEditorService, editor as unknown as IEditorService)
-  services.set(
-    IEditorGroupsService,
-    new FakeEditorGroups(editorGroup) as unknown as IEditorGroupsService,
-  )
+  services.set(IEditorGroupsService, groups as unknown as IEditorGroupsService)
+  services.set(IAuxiliaryEditorWindowService, aux as unknown as IAuxiliaryEditorWindowService)
   services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
   services.set(IWorkspaceService, new FakeWorkspace(root) as unknown as IWorkspaceService)
   services.set(IUriIdentityService, uriIdentity)
@@ -191,7 +230,7 @@ function renderView(
       <SessionChangesView />
     </ServicesContext.Provider>,
   )
-  return { ...result, editor, resolver, editorGroup, tracker, changesObs }
+  return { ...result, editor, resolver, editorGroup, groups, aux, tracker, changesObs }
 }
 
 beforeEach(() => sessionChangesViewState._resetForTests())
@@ -214,6 +253,36 @@ describe('SessionChangesView — preview vs pin', () => {
     fireEvent.doubleClick(await screen.findByText('a.ts'))
     await waitFor(() => expect(editor.opened.length).toBeGreaterThanOrEqual(1))
     expect(editor.opened.some((o) => o.options?.pinned === true)).toBe(true)
+  })
+
+  it('Ctrl+Enter opens the diff in a side group without using the default open', async () => {
+    const { editor, groups } = renderView([change('/ws/src/a.ts')])
+    fireEvent.click(await screen.findByText('a.ts'))
+    editor.opened.length = 0
+
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Changed files' }), {
+      key: 'Enter',
+      ctrlKey: true,
+    })
+
+    await waitFor(() => expect(groups.groups).toHaveLength(2))
+    expect(groups.groups[1]?.editors).toHaveLength(1)
+    expect(editor.opened).toHaveLength(0)
+  })
+
+  it('Alt+Enter opens the diff in an auxiliary window', async () => {
+    const { editor, aux } = renderView([change('/ws/src/a.ts')])
+    fireEvent.click(await screen.findByText('a.ts'))
+    editor.opened.length = 0
+
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Changed files' }), {
+      key: 'Enter',
+      altKey: true,
+    })
+
+    await waitFor(() => expect(aux.calls).toHaveLength(1))
+    expect((aux.calls[0]?.options as { mode?: string }).mode).toBe('open')
+    expect(editor.opened).toHaveLength(0)
   })
 })
 

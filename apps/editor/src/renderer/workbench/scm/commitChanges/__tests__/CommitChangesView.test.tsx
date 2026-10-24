@@ -342,6 +342,61 @@ describe('CommitChangesView', () => {
     expect(executeCommand).toHaveBeenCalledWith('git-graph.openFileDiff', { path: 'src/a.ts' })
   })
 
+  it('Ctrl+Enter opens the diff in a side group', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.click(document.querySelector('[data-row-key="file:src/a.ts"]')!)
+    executeCommand.mockClear()
+    fireEvent.keyDown(tree, { key: 'Enter', ctrlKey: true })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith(
+      'git-graph.openFileDiff',
+      { path: 'src/a.ts' },
+      { pinned: true, openTarget: 'side' },
+    )
+  })
+
+  it('Alt+Enter opens the diff in a new window', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.click(document.querySelector('[data-row-key="file:src/a.ts"]')!)
+    executeCommand.mockClear()
+    fireEvent.keyDown(tree, { key: 'Enter', altKey: true })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith(
+      'git-graph.openFileDiff',
+      { path: 'src/a.ts' },
+      { pinned: true, openTarget: 'newWindow' },
+    )
+  })
+
+  it('Ctrl+Enter on a folder row does not fold it or open a diff', () => {
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload())
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    fireEvent.click(document.querySelector('[data-row-key="folder:src"]')!)
+    // The click folded src; a targeted Enter must leave it folded (and silent).
+    expect(document.querySelector('[data-row-key="file:src/a.ts"]')).toBeNull()
+    executeCommand.mockClear()
+    fireEvent.keyDown(tree, { key: 'Enter', ctrlKey: true })
+
+    expect(document.querySelector('[data-row-key="file:src/a.ts"]')).toBeNull()
+    expect(executeCommand).not.toHaveBeenCalled()
+  })
+
   it('keeps DOM focus on the tree when a show() remount swaps it', () => {
     renderView()
     act(() => {

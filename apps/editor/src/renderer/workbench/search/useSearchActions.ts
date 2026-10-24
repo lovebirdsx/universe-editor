@@ -28,8 +28,16 @@ import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
   applyEditorSelection,
+  findExistingFileEditor,
   waitForFileEditor,
 } from '../../services/editor/revealEditorPosition.js'
+import type { OpenTarget } from '../../services/editor/openTarget.js'
+import {
+  openExistingInputWithTarget,
+  openFreshInputWithTarget,
+  type OpenTargetServices,
+} from '../../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { MonacoModelRegistry } from '../editor/monaco/MonacoModelRegistry.js'
 import { applyReplacements, type IReplaceEdit } from '../../services/search/replace.js'
 import { saveReplacedFile } from '../../services/search/saveReplacedFile.js'
@@ -40,6 +48,7 @@ export interface ISearchActions {
     match: ITextSearchMatch,
     rangeIndex: number,
     preview?: boolean,
+    target?: OpenTarget,
   ) => void
   readonly onReplaceFile: (resource: URI) => void
   readonly onReplaceMatch: (resource: URI, match: ITextSearchMatch, rangeIndex: number) => void
@@ -61,18 +70,12 @@ export function useSearchActions(
   const fileService = useService(IFileService)
   const dialogService = useService(IDialogService)
   const uriIdentity = useService(IUriIdentityService)
+  const auxiliaryWindows = useService(IAuxiliaryEditorWindowService)
 
-  const onActivateMatch = useCallback(
-    (resource: URI, match: ITextSearchMatch, rangeIndex: number, preview = true) => {
-      const input = instantiation.createInstance(FileEditorInput, resource)
-      editorService.openEditor(input, { pinned: !preview })
-      // openEditor dedupes by resource and can discard the fresh input, so reveal
-      // against the active instance that actually owns the mounted Monaco editor.
-      // Untitled results resolve to the already-open UntitledEditorInput this way.
-      const active = editorService.activeEditor.get()
-      if (!(active instanceof EditorInput)) return
+  const revealRange = useCallback(
+    (input: EditorInput, match: ITextSearchMatch, rangeIndex: number) => {
       void (async () => {
-        const editor = await waitForFileEditor(active)
+        const editor = await waitForFileEditor(input)
         const range = match.ranges[rangeIndex]
         if (!editor || !range) return
         applyEditorSelection(editor, {
@@ -83,7 +86,74 @@ export function useSearchActions(
         })
       })()
     },
-    [editorService, instantiation],
+    [],
+  )
+
+  const openInTarget = useCallback(
+    async (
+      resource: URI,
+      target: Exclude<OpenTarget, 'default'>,
+    ): Promise<EditorInput | undefined> => {
+      const services: OpenTargetServices = {
+        groups: editorGroupsService,
+        aux: auxiliaryWindows,
+        inst: instantiation,
+        uriIdentity,
+      }
+      const existing = findExistingFileEditor(editorGroupsService, uriIdentity, resource)
+      if (existing) {
+        const result = await openExistingInputWithTarget(
+          services,
+          existing.editor,
+          existing.group,
+          target,
+          { pinned: true },
+        )
+        if (result.handled) return result.editor
+        return undefined
+      }
+      const input = instantiation.createInstance(FileEditorInput, resource)
+      const result = await openFreshInputWithTarget(services, input, target, { pinned: true })
+      if (result.handled) return result.editor
+      if (!input.isDisposed) input.dispose()
+      return undefined
+    },
+    [editorGroupsService, auxiliaryWindows, instantiation, uriIdentity],
+  )
+
+  const onActivateMatch = useCallback(
+    (
+      resource: URI,
+      match: ITextSearchMatch,
+      rangeIndex: number,
+      preview = true,
+      target: OpenTarget = 'default',
+    ) => {
+      if (target !== 'default') {
+        void (async () => {
+          const opened = await openInTarget(resource, target)
+          if (opened) {
+            revealRange(opened, match, rangeIndex)
+            return
+          }
+          // Fall back to the ordinary path when the target could not be honoured.
+          const input = instantiation.createInstance(FileEditorInput, resource)
+          editorService.openEditor(input, { pinned: !preview })
+          const active = editorService.activeEditor.get()
+          if (active instanceof EditorInput) revealRange(active, match, rangeIndex)
+        })()
+        return
+      }
+      const input = instantiation.createInstance(FileEditorInput, resource)
+      editorService.openEditor(input, { pinned: !preview })
+      // openEditor dedupes by resource and can discard the fresh input, so reveal
+      // against the active instance that actually owns the mounted Monaco editor.
+      // Untitled results resolve to the already-open UntitledEditorInput this way.
+      const active = editorService.activeEditor.get()
+      if (!(active instanceof EditorInput)) return
+      revealRange(active, match, rangeIndex)
+    },
+    [editorService, instantiation, openInTarget, revealRange],
   )
 
   const replaceFile = useCallback(

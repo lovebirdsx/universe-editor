@@ -10,13 +10,24 @@ import {
   Action2,
   IEditorGroupsService,
   IInstantiationService,
+  IUriIdentityService,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { MergeEditorInput, type MergeEditorContents } from '../services/editor/MergeEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { ensureSideGroup } from '../services/editor/openToSide.js'
+import type { TargetedOpen } from '../services/editor/openTarget.js'
+import {
+  openFreshInputWithTarget,
+  type OpenTargetServices,
+} from '../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 
 export interface OpenMergeEditorPayload extends MergeEditorContents {
   readonly pinned?: boolean
+  /** Where to open: omitted = the existing active-group path. */
+  readonly openTarget?: TargetedOpen
 }
 
 export class OpenMergeEditorAction extends Action2 {
@@ -34,6 +45,7 @@ export class OpenMergeEditorAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
     const group = groups.activeGroup
     const id = `merge:${payload.path}`
+    const pinned = payload.pinned ?? true
 
     const contents: MergeEditorContents = {
       path: payload.path,
@@ -46,15 +58,48 @@ export class OpenMergeEditorAction extends Action2 {
       ...(payload.saveCommand ? { saveCommand: payload.saveCommand } : {}),
     }
 
-    const existing = group.editors.find((e) => e.id === id)
-    if (existing instanceof MergeEditorInput) {
-      existing.update(contents)
-      group.openEditor(existing, { activate: true, pinned: payload.pinned ?? true })
+    const createInput = (): MergeEditorInput => inst.createInstance(MergeEditorInput, contents)
+
+    const openDefault = (): void => {
+      const existing = group.editors.find((e) => e.id === id)
+      if (existing instanceof MergeEditorInput) {
+        existing.update(contents)
+        group.openEditor(existing, { activate: true, pinned })
+        return
+      }
+      group.openEditor(createInput(), { activate: true, pinned })
+    }
+
+    const target = payload.openTarget
+    if (target === undefined) {
+      openDefault()
       return
     }
 
-    const input = inst.createInstance(MergeEditorInput, contents)
-    group.openEditor(input, { activate: true, pinned: payload.pinned ?? true })
+    if (target === 'side') {
+      const side = ensureSideGroup(groups)
+      const existing = side.editors.find((e) => e.id === id)
+      if (existing instanceof MergeEditorInput) {
+        existing.update(contents)
+        side.openEditor(existing, { activate: true, pinned })
+        return
+      }
+      openInLockAwareGroup(groups, createInput(), { activate: true, pinned }, side)
+      return
+    }
+
+    const services: OpenTargetServices = {
+      groups,
+      aux: accessor.get(IAuxiliaryEditorWindowService),
+      inst,
+      uriIdentity: accessor.get(IUriIdentityService),
+    }
+    const input = createInput()
+    void openFreshInputWithTarget(services, input, target, { pinned }).then((result) => {
+      if (result.handled) return
+      if (!input.isDisposed) input.dispose()
+      openDefault()
+    })
   }
 }
 

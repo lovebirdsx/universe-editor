@@ -37,10 +37,7 @@ import { ensureSideGroup } from '../editor/openToSide.js'
 import { IWindowFocusService } from '../windows/windowFocusService.js'
 import { currentWorkbenchDocumentOrUndefined } from '../windows/workbenchDocuments.js'
 import { IAuxiliaryEditorWindowService } from '../windows/auxiliaryEditorWindowService.js'
-import {
-  resolveQuickPickOpenTarget,
-  type QuickPickOpenTarget,
-} from '../quickInput/quickPickOpenTarget.js'
+import { resolveOpenTarget, type OpenTarget } from '../editor/openTarget.js'
 import { requestOwnerFrame } from '@universe-editor/workbench-ui'
 
 export interface IQuickTextSearchService {
@@ -333,10 +330,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
         resolve()
       }
 
-      const openPick = async (
-        pick: QuickTextSearchPick,
-        target: QuickPickOpenTarget,
-      ): Promise<void> => {
+      const openPick = async (pick: QuickTextSearchPick, target: OpenTarget): Promise<void> => {
         if (pick.kind === 'message' || !pick.resource) return
         if (target === 'side') {
           const input = this._openFileToSide(pick.resource)
@@ -498,7 +492,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
           const pick = items[0]
           if (!pick || pick.kind === 'message') return
           accepted = true
-          void openPick(pick, resolveQuickPickOpenTarget(picker.keyMods)).finally(resolveOnce)
+          void openPick(pick, resolveOpenTarget(picker.keyMods)).finally(resolveOnce)
         }),
       )
       store.add(

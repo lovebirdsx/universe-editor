@@ -32,6 +32,7 @@ import {
   type SwarmReviewFileDto,
 } from '@universe-editor/extensions-common'
 import { ServicesContext } from '../../useService.js'
+import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import {
   swarmReviewDetailCache,
   notifyReviewMutated,
@@ -115,12 +116,20 @@ function renderView(executeCommand: ReturnType<typeof vi.fn>) {
     _serviceBrand: undefined,
     current: { folder: URI.file('X:/p4ws/main') },
   } as never)
+  const auxCalls: Array<{ editor: unknown; options: unknown }> = []
+  services.set(IAuxiliaryEditorWindowService, {
+    _serviceBrand: undefined,
+    openEditorInNewWindow: vi.fn(async (editor: unknown, options?: unknown) => {
+      auxCalls.push({ editor, options })
+      return { ok: true, window: { part: { activeGroup: {} } }, editor }
+    }),
+  } as never)
   const result = render(
     <ServicesContext.Provider value={new InstantiationService(services)}>
       <SwarmChangesView />
     </ServicesContext.Provider>,
   )
-  return { ...result, openEditor }
+  return { ...result, openEditor, auxCalls }
 }
 
 /** The view gates each fetch on waitForSwarmCommand, which reads the global
@@ -208,6 +217,25 @@ describe('SwarmChangesView', () => {
     fireEvent.doubleClick(row)
     await waitFor(() => expect(openEditor).toHaveBeenCalled())
     expect(openEditor.mock.calls.at(-1)?.[1]).toEqual({ pinned: true })
+  })
+
+  it('Alt+Enter opens the diff in a new window instead of the active group', async () => {
+    const { openEditor, auxCalls } = renderView(fakeSwarmCommands())
+    swarmChangesViewState.select('1001')
+
+    const row = (await screen.findAllByTestId('swarm-changes-row'))[0]!
+    fireEvent.click(row)
+    await waitFor(() => expect(openEditor).toHaveBeenCalled())
+    openEditor.mockClear()
+
+    fireEvent.keyDown(screen.getByRole('tree', { name: 'Changed files' }), {
+      key: 'Enter',
+      altKey: true,
+    })
+
+    await waitFor(() => expect(auxCalls).toHaveLength(1))
+    expect((auxCalls[0]?.options as { mode?: string }).mode).toBe('open')
+    expect(openEditor).not.toHaveBeenCalled()
   })
 
   it('re-fetches when the selected review mutates', async () => {

@@ -1429,4 +1429,15 @@ describe('SwarmReviewFiles list/tree mode', () => {
     fireEvent.click(screen.getByRole('button', { name: 'View as Tree' }))
     expect(onViewModeChange).toHaveBeenCalledWith('tree')
   })
+
+  it('passes the side target on Ctrl+Enter for a file row', () => {
+    const onOpenFile = vi.fn()
+    render(<SwarmReviewFiles files={FILES} viewMode="list" onOpenFile={onOpenFile} />)
+    fireEvent.click(screen.getByText('a.ts'))
+    onOpenFile.mockClear()
+
+    fireEvent.keyDown(screen.getByRole('tree'), { key: 'Enter', ctrlKey: true })
+
+    expect(onOpenFile).toHaveBeenCalledWith(FILES[0], 'side')
+  })
 })

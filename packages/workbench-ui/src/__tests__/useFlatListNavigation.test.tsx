@@ -112,6 +112,80 @@ describe('useFlatListNavigation — navigation keys', () => {
   })
 })
 
+describe('useFlatListNavigation — modifierActivation', () => {
+  it('is off by default: Ctrl+Enter never activates', () => {
+    const onActivate = vi.fn()
+    render(<Harness focusedIndex={0} onActivate={onActivate} />)
+
+    const notPrevented = fireEvent.keyDown(list(), { key: 'Enter', ctrlKey: true })
+    expect(notPrevented).toBe(true)
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+
+  it('routes Ctrl/Meta/Alt+Enter to onActivate with modifiers', () => {
+    const onActivate = vi.fn()
+    render(<Harness focusedIndex={2} onActivate={onActivate} modifierActivation />)
+
+    expect(fireEvent.keyDown(list(), { key: 'Enter', ctrlKey: true })).toBe(false)
+    expect(fireEvent.keyDown(list(), { key: 'Enter', metaKey: true })).toBe(false)
+    expect(fireEvent.keyDown(list(), { key: 'Enter', altKey: true })).toBe(false)
+
+    expect(onActivate.mock.calls.map((call) => call[0])).toEqual([2, 2, 2])
+    expect(onActivate.mock.calls.map((call) => call[1])).toEqual([
+      { preview: false, modifiers: { ctrl: true, meta: false, alt: false } },
+      { preview: false, modifiers: { ctrl: false, meta: true, alt: false } },
+      { preview: false, modifiers: { ctrl: false, meta: false, alt: true } },
+    ])
+  })
+
+  it('leaves Ctrl+Shift+Enter to the global keybinding handler', () => {
+    const onActivate = vi.fn()
+    render(<Harness focusedIndex={0} onActivate={onActivate} modifierActivation />)
+
+    const notPrevented = fireEvent.keyDown(list(), {
+      key: 'Enter',
+      ctrlKey: true,
+      shiftKey: true,
+    })
+    expect(notPrevented).toBe(true)
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+
+  it('does not swallow modified Enter without focus or an onActivate', () => {
+    render(<Harness focusedIndex={0} modifierActivation />)
+    expect(fireEvent.keyDown(list(), { key: 'Enter', ctrlKey: true })).toBe(true)
+    cleanup()
+
+    render(<Harness focusedIndex={-1} onActivate={vi.fn()} modifierActivation />)
+    expect(fireEvent.keyDown(list(), { key: 'Enter', ctrlKey: true })).toBe(true)
+  })
+
+  it('ignores modified Enter bubbling up from an inner control', () => {
+    const onActivate = vi.fn()
+    render(<Harness focusedIndex={0} withInnerInput onActivate={onActivate} modifierActivation />)
+
+    fireEvent.keyDown(screen.getByTestId('inner-input'), {
+      key: 'Enter',
+      ctrlKey: true,
+      bubbles: true,
+    })
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+
+  it('keeps plain Enter/Space activation unchanged', () => {
+    const onActivate = vi.fn()
+    render(<Harness focusedIndex={1} onActivate={onActivate} modifierActivation />)
+
+    fireEvent.keyDown(list(), { key: 'Enter' })
+    fireEvent.keyDown(list(), { key: ' ' })
+    expect(onActivate.mock.calls.map((call) => call[0])).toEqual([1, 1])
+    expect(onActivate.mock.calls.map((call) => call[1])).toEqual([
+      { preview: false },
+      { preview: true },
+    ])
+  })
+})
+
 describe('useFlatListNavigation — passthrough guards', () => {
   it('lets Alt/Ctrl/Meta combos through to the global keybinding handler', () => {
     const onFocusChange = vi.fn()

@@ -6,11 +6,11 @@
  *  back-navigation land in the same tab instead of piling up new ones.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { EditorInput, URI } from '@universe-editor/platform'
 import { EditorGroupsService } from '../EditorGroupsService.js'
 import { DocEditorInput } from '../DocEditorInput.js'
-import { openDocInGroup } from '../openDoc.js'
+import { openDocInGroup, openDocWithTarget } from '../openDoc.js'
 
 class PlainInput extends EditorInput {
   get typeId(): string {
@@ -75,5 +75,51 @@ describe('openDocInGroup', () => {
     // Same id → dedup path, no close of self.
     openDocInGroup(group, new DocEditorInput('index'), false)
     expect(group.editors).toHaveLength(1)
+  })
+})
+
+describe('openDocWithTarget', () => {
+  it('opens the doc in a newly created side group', async () => {
+    const svc = new EditorGroupsService()
+    const doc = new DocEditorInput('index')
+
+    const result = await openDocWithTarget(
+      { groups: svc, aux: {} as never, inst: {} as never, uriIdentity: {} as never },
+      doc,
+      'side',
+    )
+
+    expect(result.handled).toBe(true)
+    expect(svc.groups).toHaveLength(2)
+    expect(result.group).not.toBe(svc.getGroups()[0])
+    expect(result.group?.editors).toContain(doc)
+  })
+
+  it('opens a fresh doc in an auxiliary window', async () => {
+    const svc = new EditorGroupsService()
+    const doc = new DocEditorInput('index')
+    const openEditorInNewWindow = vi.fn(async (editor: unknown) => ({
+      ok: true,
+      editor,
+      window: { part: { activeGroup: {} } },
+    }))
+
+    const result = await openDocWithTarget(
+      {
+        groups: svc,
+        aux: { openEditorInNewWindow } as never,
+        inst: {} as never,
+        uriIdentity: {} as never,
+      },
+      doc,
+      'newWindow',
+    )
+
+    expect(result.handled).toBe(true)
+    expect(openEditorInNewWindow).toHaveBeenCalledWith(doc, {
+      mode: 'open',
+      pinned: true,
+      preferOtherDisplayFullscreen: true,
+    })
   })
 })

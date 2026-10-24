@@ -60,6 +60,7 @@ import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { isPreviewableResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
+import { resolveOpenTarget } from '../../services/editor/openTarget.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
 import type { ScmResourceArg } from '../../services/scm/scmResourceArg.js'
 import { useService, useObservable } from '../useService.js'
@@ -1314,6 +1315,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         scrollStateKey={`scm:${model.id}`}
         scrollStatePersister={scrollPersister}
         indentBase={0}
+        modifierActivation
         renderRow={renderRow}
         onActivate={(node, opts) => {
           const n = node.element
@@ -1327,12 +1329,18 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
                 preserveFocus: true,
               },
             )
-          } else {
+            return
+          }
+          const target = resolveOpenTarget(opts.modifiers)
+          if (target !== 'default') {
             void commandService.executeCommand(
               n.resource.command.command,
               ...commandArgs(n.resource),
+              { pinned: true, openTarget: target },
             )
+            return
           }
+          void commandService.executeCommand(n.resource.command.command, ...commandArgs(n.resource))
         }}
       />
 

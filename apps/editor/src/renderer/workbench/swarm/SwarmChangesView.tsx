@@ -14,11 +14,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ICommandService,
+  IEditorGroupsService,
   IEditorService,
   IInstantiationService,
   ILoggerService,
   INotificationService,
   IStorageService,
+  IUriIdentityService,
   StorageScope,
   URI,
   localize,
@@ -33,6 +35,10 @@ import {
 import { useObservable, useService } from '../useService.js'
 import { SWARM_CHANGES_VIEW_ID } from '../../actions/swarmActions.js'
 import { openSwarmFileDiff } from '../../services/swarm/openSwarmFileDiff.js'
+import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
+import type { OpenTargetServices } from '../../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
+import type { ITreeActivateModifiers } from '@universe-editor/workbench-ui'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
 import { swarmReviewDetailCache, swarmReviewEvents } from '../../services/swarm/swarmViewState.js'
 import {
@@ -95,6 +101,9 @@ function SwarmChangesContent({ reviewId }: { reviewId: string }) {
   const commands = useService(ICommandService)
   const editorService = useService(IEditorService)
   const inst = useService(IInstantiationService)
+  const groups = useService(IEditorGroupsService)
+  const uriIdentity = useService(IUriIdentityService)
+  const aux = useService(IAuxiliaryEditorWindowService)
   const loggerService = useService(ILoggerService)
   const logger = useMemo(
     () => loggerService.createLogger({ id: 'swarmChanges', name: 'Swarm Changes' }),
@@ -187,8 +196,12 @@ function SwarmChangesContent({ reviewId }: { reviewId: string }) {
   }, [])
 
   const snapshot = state.snapshot
+  const targets = useMemo<OpenTargetServices>(
+    () => ({ groups, inst, uriIdentity, aux }),
+    [groups, inst, uriIdentity, aux],
+  )
   const openDiff = useCallback(
-    (file: SwarmReviewFileDto, preview: boolean): void => {
+    (file: SwarmReviewFileDto, preview: boolean, target: OpenTarget = 'default'): void => {
       if (!snapshot) return
       void openSwarmFileDiff(
         {
@@ -203,6 +216,7 @@ function SwarmChangesContent({ reviewId }: { reviewId: string }) {
           rightImmutable: snapshot.immutable,
           leftImmutable: false,
           preview,
+          openTarget: target,
         },
         {
           commands,
@@ -211,15 +225,18 @@ function SwarmChangesContent({ reviewId }: { reviewId: string }) {
           logger,
           notifications,
           onError: (message) => setState((prev) => ({ ...prev, error: message })),
+          targets,
         },
       )
     },
-    [commands, editorService, inst, logger, notifications, reviewId, snapshot],
+    [commands, editorService, inst, logger, notifications, reviewId, snapshot, targets],
   )
 
   const onActivateFile = useCallback(
-    (file: SwarmReviewFileDto, opts: { readonly preview: boolean }): void =>
-      openDiff(file, opts.preview),
+    (
+      file: SwarmReviewFileDto,
+      opts: { readonly preview: boolean; readonly modifiers?: ITreeActivateModifiers },
+    ): void => openDiff(file, opts.preview, resolveOpenTarget(opts.modifiers)),
     [openDiff],
   )
   const onFileClick = useCallback(

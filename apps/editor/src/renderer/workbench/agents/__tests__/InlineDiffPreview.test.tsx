@@ -64,9 +64,9 @@ describe('InlineDiffPreview', () => {
     const path = screen.getByTestId('acp-inline-diff-path')
 
     fireEvent.click(path, { ctrlKey: true })
-    expect(onOpenPath).toHaveBeenLastCalledWith({ toSide: true })
+    expect(onOpenPath).toHaveBeenLastCalledWith({ target: 'side' })
 
     fireEvent.click(path)
-    expect(onOpenPath).toHaveBeenLastCalledWith({ toSide: false })
+    expect(onOpenPath).toHaveBeenLastCalledWith({ target: 'default' })
   })
 })

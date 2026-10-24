@@ -251,6 +251,60 @@ function StatefulSearchTree({ initial }: { initial: readonly IFileMatch[] }) {
 const selectedRowKey = (): string | null | undefined =>
   document.querySelector('[role="treeitem"][aria-selected="true"]')?.getAttribute('data-row-key')
 
+describe('SearchResultsTree — modifier activation', () => {
+  const tree = () => screen.getByRole('tree', { name: 'Search results' })
+
+  it('passes the side target for a match row', () => {
+    const onActivate = vi.fn()
+    render(
+      <SearchResultsTree results={[makeFile('/ws/a.ts', ['one'])]} onActivateMatch={onActivate} />,
+    )
+    fireEvent.click(screen.getByText('one'))
+    onActivate.mockClear()
+
+    fireEvent.keyDown(tree(), { key: 'Enter', ctrlKey: true })
+
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    expect(onActivate.mock.calls[0]?.[4]).toBe('side')
+  })
+
+  it('opens a file row at its first match with the new-window target', () => {
+    const onActivate = vi.fn()
+    render(
+      <SearchResultsTree
+        results={[makeFile('/ws/a.ts', ['one', 'two'])]}
+        onActivateMatch={onActivate}
+      />,
+    )
+    fireEvent.click(screen.getByText('a.ts'))
+    onActivate.mockClear()
+
+    fireEvent.keyDown(tree(), { key: 'Enter', altKey: true })
+
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    const [, match, rangeIndex, preview, target] = onActivate.mock.calls[0]!
+    expect(match.lineNumber).toBe(1)
+    expect(rangeIndex).toBe(0)
+    expect(preview).toBe(false)
+    expect(target).toBe('newWindow')
+  })
+
+  it('keeps plain Enter on a file row as expand/collapse', () => {
+    const onActivate = vi.fn()
+    render(
+      <SearchResultsTree results={[makeFile('/ws/a.ts', ['one'])]} onActivateMatch={onActivate} />,
+    )
+    fireEvent.click(screen.getByText('a.ts'))
+    onActivate.mockClear()
+    expect(screen.queryByText('one')).toBeNull()
+
+    fireEvent.keyDown(tree(), { key: 'Enter' })
+
+    expect(screen.queryByText('one')).not.toBeNull()
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+})
+
 describe('SearchResultsTree — focus recovery after Remove', () => {
   it('deletes a middle match and lands on the next match', () => {
     render(

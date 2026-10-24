@@ -41,9 +41,17 @@ import {
 
 const DEFAULT_ROW_ATTR = 'data-row-key'
 
+export interface IFlatListActivateModifiers {
+  readonly ctrl: boolean
+  readonly meta: boolean
+  readonly alt: boolean
+}
+
 export interface IFlatListActivateOptions {
   /** True for a light "preview" open (Space); false to commit (Enter). */
   readonly preview: boolean
+  /** Present only for Ctrl/Meta/Alt+Enter with `modifierActivation` enabled. */
+  readonly modifiers?: IFlatListActivateModifiers
 }
 
 export type FlatListRole = 'listbox' | 'grid'
@@ -63,6 +71,12 @@ export interface IUseFlatListNavigationOptions {
    * through Action2).
    */
   readonly onActivate?: ((index: number, opts: IFlatListActivateOptions) => void) | undefined
+  /**
+   * Opt in to Ctrl/Meta/Alt+Enter as a targeted activation (side open / new
+   * window). Without it those combos go to the global keybinding handler as
+   * before. Shift is excluded so Ctrl+Shift+Enter stays global.
+   */
+  readonly modifierActivation?: boolean | undefined
   /** Keys not handled here (Delete / F2 / …) reach the view, un-defaulted. */
   readonly onRowKeyDown?: ((e: KeyboardEvent, index: number) => void) | undefined
   /** Shift+Tab inside the list — hand focus back to a prior region (a search box). */
@@ -177,16 +191,42 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
 
   const onKeyDown = useCallback(
     (e: KeyboardEvent) => {
-      const { count, focusedIndex, onActivate, onRowKeyDown, onShiftTab, getPageSize } =
-        optionsRef.current
+      const {
+        count,
+        focusedIndex,
+        onActivate,
+        onRowKeyDown,
+        onShiftTab,
+        getPageSize,
+        modifierActivation,
+      } = optionsRef.current
 
-      // Modifier combos belong to the global keybinding handler (Tree parity) —
-      // swallowing them here would break Ctrl+P/N and friends over the list.
-      if (e.altKey || e.ctrlKey || e.metaKey) return
       // A keydown bubbling up from an inner control (an inline editor, a row
       // button) is that control's key, not the list's. VSCode draws the same
       // line with listFocus vs. whenFocus context gating.
       if (e.target !== e.currentTarget) return
+
+      if (
+        modifierActivation === true &&
+        e.key === 'Enter' &&
+        !e.shiftKey &&
+        !e.repeat &&
+        (e.ctrlKey || e.metaKey || e.altKey)
+      ) {
+        if (onActivate && focusedIndex >= 0 && focusedIndex < count) {
+          e.preventDefault()
+          e.stopPropagation()
+          onActivate(focusedIndex, {
+            preview: false,
+            modifiers: { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey },
+          })
+        }
+        return
+      }
+
+      // Modifier combos belong to the global keybinding handler (Tree parity) —
+      // swallowing them here would break Ctrl+P/N and friends over the list.
+      if (e.altKey || e.ctrlKey || e.metaKey) return
 
       if (e.key === 'Tab' && e.shiftKey && onShiftTab) {
         e.preventDefault()

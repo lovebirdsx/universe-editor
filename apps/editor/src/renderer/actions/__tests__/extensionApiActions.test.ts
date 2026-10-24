@@ -27,7 +27,9 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { CommandService } from '../../services/command/CommandService.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import {
   OpenFileAction,
   OpenFileAtAction,
@@ -217,6 +219,28 @@ describe('extensionApiActions', () => {
     expect(input?.resource.scheme).toBe(REMOTE_SCHEME)
     expect(input?.resource.authority).toBe(REMOTE_AUTHORITY)
     expect(input?.resource.path).toBe(file)
+  })
+
+  it('opens a file to the side when openTarget is given', async () => {
+    disposables.push(registerAction2(OpenFileAction))
+
+    const workspace = new WorkspaceStub()
+    workspace.current = { folder: URI.file('/home/u/repo'), name: 'repo' }
+    const groups = new EditorGroupsService()
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, workspace)
+    services.set(IEditorGroupsService, groups)
+    services.set(IUriIdentityService, new UriIdentityService('linux'))
+    services.set(IAuxiliaryEditorWindowService, {} as never)
+
+    const file = '/home/u/repo/src/a.ts'
+
+    await commandService(services).executeCommand(OpenFileAction.ID, file, {
+      openTarget: 'side',
+    })
+
+    expect(groups.count).toBe(2)
+    expect(groups.activeGroup.editors.map((editor) => editor.resource?.path)).toEqual([file])
   })
 
   it('opens a file at position with the workspace remote authority', async () => {

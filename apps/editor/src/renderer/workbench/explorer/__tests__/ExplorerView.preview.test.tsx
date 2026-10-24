@@ -13,11 +13,14 @@ import {
   IEditorService,
   IFileService,
   IFileWatcherService,
+  IInstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   ICommandService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   observableValue,
   type IConfirmResult,
   type IDialogService as IDialogServiceType,
@@ -43,6 +46,7 @@ import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
 import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocusScopeService.js'
+import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType {
   const dirs = new Map(Object.entries(initial))
@@ -173,9 +177,6 @@ function renderView(folder: URI, fs: IFileServiceType) {
     loadLayer() {},
     onDidChangeConfiguration: new Emitter<never>().event,
   } as unknown as IConfigurationService)
-  const inst = new InstantiationService(services)
-  const editorResolver = inst.createInstance(EditorResolverService)
-  services.set(IEditorResolverService, editorResolver)
   const editorGroup = new FakeEditorGroup()
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
@@ -183,6 +184,12 @@ function renderView(folder: URI, fs: IFileServiceType) {
     getGroups: () => [editorGroup],
     activateGroup: (g: unknown) => g,
   } as unknown as IEditorGroupsServiceType)
+  services.set(IUriIdentityService, new UriIdentityService('linux'))
+  const inst = new InstantiationService(services)
+  services.set(IInstantiationService, inst)
+  const editorResolver = inst.createInstance(EditorResolverService)
+  services.set(IEditorResolverService, editorResolver)
+  services.set(IAuxiliaryEditorWindowService, {} as never)
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
   const result = render(

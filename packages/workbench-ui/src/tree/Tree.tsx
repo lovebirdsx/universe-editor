@@ -69,9 +69,17 @@ const findRow = (root: HTMLElement, id: string): HTMLElement | null =>
 
 export { isKeyboardContextMenu } from './keyboardContextMenu.js'
 
+export interface ITreeActivateModifiers {
+  readonly ctrl: boolean
+  readonly meta: boolean
+  readonly alt: boolean
+}
+
 export interface ITreeActivateOptions {
   /** True for a light "preview" open (single click / Space); false to pin (Enter). */
   readonly preview: boolean
+  /** Present only for Ctrl/Meta/Alt+Enter on a tree with `modifierActivation`. */
+  readonly modifiers?: ITreeActivateModifiers
 }
 
 export interface ITreeRowRenderContext<T> {
@@ -119,6 +127,15 @@ export interface ITreeProps<T> {
    * default: Enter toggles a folder). Space still previews leaves either way.
    */
   readonly activateNonLeafOnEnter?: boolean
+  /**
+   * Opt in to Ctrl/Meta/Alt+Enter as a targeted activation of the focused row
+   * (side open / new window). Those combos normally fall through to the global
+   * keybinding handler; with this on, the tree calls `onActivate` with
+   * `modifiers` instead — including for non-leaf rows, whose guard is the
+   * view's job. Shift is deliberately excluded so Ctrl+Shift+Enter stays a
+   * global binding.
+   */
+  readonly modifierActivation?: boolean
   /** Keys not handled by built-in navigation (e.g. F2 / Delete) reach the view here. */
   readonly onRowKeyDown?: (e: ReactKeyboardEvent, node: IVisibleNode<T>) => void
   /** Shift+Tab inside the tree — lets the view hand focus back to a prior region. */
@@ -172,6 +189,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     onFocus,
     onVisibleNodesChange,
     activateNonLeafOnEnter = false,
+    modifierActivation = false,
     scrollStateKey,
     scrollStatePersister,
   } = props
@@ -432,6 +450,26 @@ export function Tree<T>(props: ITreeProps<T>) {
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        modifierActivation &&
+        e.key === 'Enter' &&
+        !e.shiftKey &&
+        !e.repeat &&
+        (e.ctrlKey || e.metaKey || e.altKey)
+      ) {
+        const vis = model.getVisibleNodes()
+        const focusedId = model.focused
+        const current = focusedId ? vis.find((n) => n.id === focusedId) : undefined
+        if (current && onActivate) {
+          e.preventDefault()
+          e.stopPropagation()
+          onActivate(current, {
+            preview: false,
+            modifiers: { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey },
+          })
+        }
+        return
+      }
       if (e.altKey || e.ctrlKey || e.metaKey) return
       if (e.key === 'Tab' && e.shiftKey && onShiftTab) {
         e.preventDefault()
@@ -519,7 +557,15 @@ export function Tree<T>(props: ITreeProps<T>) {
           return
       }
     },
-    [model, onActivate, onRowKeyDown, onShiftTab, activateNonLeafOnEnter, openKeyboardContextMenu],
+    [
+      model,
+      onActivate,
+      onRowKeyDown,
+      onShiftTab,
+      activateNonLeafOnEnter,
+      modifierActivation,
+      openKeyboardContextMenu,
+    ],
   )
 
   // The React key for every row is owned here rather than by the view. Tree holds

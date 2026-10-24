@@ -5,7 +5,9 @@
  *  contributed commands and renders it as a two-level tree (group headers →
  *  review rows) with a state badge + vote / comment / task counts. Keyboard
  *  parity with Source Control: ↑↓ move, ←→ fold groups, Space previews a review,
- *  Enter opens it pinned, Ctrl+Enter jumps to the Swarm Changes view. The focused
+ *  Enter opens it pinned, Ctrl+Enter opens it beside the active group and
+ *  Alt+Enter in a new window; Ctrl+Shift+Enter jumps to the Swarm Changes view.
+ *  The focused
  *  review drives that view through swarmChangesViewState. A keyword filter box
  *  re-queries the list. All wire logic lives behind ICommandService — this
  *  component owns no HTTP.
@@ -43,7 +45,9 @@ import {
   ICommandService,
   IConfigurationService,
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
+  IInstantiationService,
   INotificationService,
   IOpenerService,
   IQuickInputService,
@@ -89,6 +93,14 @@ import {
 } from '@universe-editor/extensions-common'
 import { relativeTime } from '../../relativeTime.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
+import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
+import {
+  findEditorById,
+  openExistingInputWithTarget,
+  openFreshInputWithTarget,
+  type OpenTargetServices,
+} from '../../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
 import { applySwarmReviewToLocal } from '../../services/swarm/swarmApplyToLocal.js'
 import {
@@ -233,6 +245,9 @@ export function SwarmReviewsView() {
   const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const groups = useService(IEditorGroupsService)
+  const inst = useService(IInstantiationService)
+  const aux = useService(IAuxiliaryEditorWindowService)
   const notifications = useService(INotificationService)
   const opener = useService(IOpenerService)
   const quickInput = useService(IQuickInputService)
@@ -549,15 +564,45 @@ export function SwarmReviewsView() {
   )
 
   const openReview = useCallback(
-    (id: string, preview = false) => {
-      // Source Control parity: single click / Space previews without stealing
-      // focus, double click / Enter pins the tab and moves focus to it.
-      void editorService.openEditor(
-        new SwarmReviewEditorInput(id),
-        preview ? { pinned: false, preserveFocus: true } : { pinned: true },
-      )
+    (id: string, preview = false, target: OpenTarget = 'default') => {
+      const openDefault = (): void => {
+        // Source Control parity: single click / Space previews without stealing
+        // focus, double click / Enter pins the tab and moves focus to it.
+        void editorService.openEditor(
+          new SwarmReviewEditorInput(id),
+          preview ? { pinned: false, preserveFocus: true } : { pinned: true },
+        )
+      }
+      if (target === 'default') {
+        openDefault()
+        return
+      }
+      const targets: OpenTargetServices = { groups, inst, uriIdentity, aux }
+      const existing = findEditorById(groups, SwarmReviewEditorInput.editorId(id))
+      void (async () => {
+        const options = { pinned: !preview, preserveFocus: preview }
+        if (existing) {
+          const result = await openExistingInputWithTarget(
+            targets,
+            existing.editor,
+            existing.group,
+            target,
+            options,
+          )
+          if (result.handled) return
+          openDefault()
+          return
+        }
+        const input = new SwarmReviewEditorInput(id)
+        const result = await openFreshInputWithTarget(targets, input, target, options)
+        if (result.handled) return
+        // The failed targeted open left the fresh input untouched; dispose it
+        // now that the default path builds its own instance.
+        if (!input.isDisposed) input.dispose()
+        openDefault()
+      })()
     },
-    [editorService],
+    [editorService, groups, inst, uriIdentity, aux],
   )
 
   const ignoreReview = useCallback((review: SwarmReviewDto) => {
@@ -1119,8 +1164,11 @@ export function SwarmReviewsView() {
           onFocus={onTreeFocus}
           onShiftTab={() => filterInputRef.current?.focus()}
           scrollStateKey="swarmReviews"
+          modifierActivation
           onActivate={(node, opts) => {
-            if (node.element.kind === 'review') openReview(node.element.review.id, opts.preview)
+            if (node.element.kind === 'review') {
+              openReview(node.element.review.id, opts.preview, resolveOpenTarget(opts.modifiers))
+            }
           }}
           // Row menus are opened by each row's own handler; this exists so the
           // Tree binds its guard, which swallows the native contextmenu Chromium

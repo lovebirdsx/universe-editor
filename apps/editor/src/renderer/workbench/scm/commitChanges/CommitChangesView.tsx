@@ -24,9 +24,11 @@ import type {
   CommitChangesFileEntry,
   ShowCommitChangesPayload,
 } from '@universe-editor/extensions-common'
+import type { ITreeActivateModifiers } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../../useService.js'
 import { useRemoteAuthority } from '../../useRemoteAuthority.js'
 import { COMMIT_CHANGES_VIEW_ID } from '../../../actions/commitChangesActions.js'
+import { resolveOpenTarget } from '../../../services/editor/openTarget.js'
 import { ActionButton } from '../scmShared.js'
 import {
   ChangesTree,
@@ -127,14 +129,25 @@ function CommitChangesContent({ payload }: { payload: ShowCommitChangesPayload }
     [commandService, payload.openExternalCommand],
   )
   const onActivateFile = useCallback(
-    (entry: CommitChangesFileEntry, opts: { readonly preview: boolean }): void => {
+    (
+      entry: CommitChangesFileEntry,
+      opts: { readonly preview: boolean; readonly modifiers?: ITreeActivateModifiers },
+    ): void => {
       if (opts.preview) {
         void commandService.executeCommand(payload.openExternalCommand, entry.args, {
           preserveFocus: true,
         })
-      } else {
-        void commandService.executeCommand(payload.openExternalCommand, entry.args)
+        return
       }
+      const target = resolveOpenTarget(opts.modifiers)
+      if (target !== 'default') {
+        void commandService.executeCommand(payload.openExternalCommand, entry.args, {
+          pinned: true,
+          openTarget: target,
+        })
+        return
+      }
+      void commandService.executeCommand(payload.openExternalCommand, entry.args)
     },
     [commandService, payload.openExternalCommand],
   )

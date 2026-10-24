@@ -344,6 +344,68 @@ describe('git-graph.openFileDiff', () => {
       expect.objectContaining({ preserveFocus: true }),
     )
   })
+
+  it('passes openTarget through for side/new-window opens', async () => {
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mockBlobContents()
+
+    await commands.get('git-graph.openFileDiff')?.(REQ, { openTarget: 'newWindow' })
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({ openTarget: 'newWindow' }),
+    )
+  })
+
+  it('passes pinned through so a targeted open does not land in the preview slot', async () => {
+    const commands = makeCommands(() => fakeRepo(ROOT))
+    mockBlobContents()
+
+    await commands.get('git-graph.openFileDiff')?.(REQ, {
+      pinned: true,
+      openTarget: 'side',
+    })
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({ pinned: true, openTarget: 'side' }),
+    )
+  })
+})
+
+describe('git open commands — openTarget forwarding', () => {
+  it('git.openChange forwards the target to Repository.openChange', async () => {
+    const openChange = vi.fn(async () => {})
+    const repo = { root: ROOT, refresh: vi.fn(), openChange } as unknown as Repository
+    const commands = makeCommands(() => repo)
+
+    await commands.get('git.openChange')?.(
+      { resourceUri: FILE },
+      { pinned: true, openTarget: 'side' },
+    )
+
+    expect(openChange).toHaveBeenCalledWith(FILE, true, false, 'side')
+  })
+
+  it('git.openMergeEditor forwards the target', async () => {
+    const openMergeEditor = vi.fn(async () => {})
+    const repo = { root: ROOT, refresh: vi.fn(), openMergeEditor } as unknown as Repository
+    const commands = makeCommands(() => repo)
+
+    await commands.get('git.openMergeEditor')?.({ resourceUri: FILE }, { openTarget: 'newWindow' })
+
+    expect(openMergeEditor).toHaveBeenCalledWith(FILE, 'newWindow')
+  })
+
+  it('git.openFile forwards the target to the renderer bridge', async () => {
+    const commands = makeCommands(() => fakeRepo(ROOT))
+
+    await commands.get('git.openFile')?.({ resourceUri: FILE }, { openTarget: 'side' })
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith('_workbench.openFile', FILE, {
+      openTarget: 'side',
+    })
+  })
 })
 
 describe('git-graph operation follow-up', () => {

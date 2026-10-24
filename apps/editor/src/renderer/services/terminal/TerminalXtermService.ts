@@ -30,6 +30,7 @@ import {
 import { ITerminalManagerService } from './TerminalManagerService.js'
 import { cancelOwnerFrame, requestOwnerFrame, type OwnerFrame } from '@universe-editor/workbench-ui'
 import { createFileLinkProvider } from '../../workbench/panel/terminal/terminalLinkProvider.js'
+import type { OpenTarget } from '../editor/openTarget.js'
 import {
   copyTerminalSelection,
   handleTerminalClipboardKey,
@@ -45,7 +46,7 @@ const DEFAULT_SCROLLBACK = 5000
 
 export interface ITerminalLinkHandlers {
   resolveFile: (absolutePath: string) => Promise<URI | null>
-  openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void
+  openFile: (uri: URI, line?: number, col?: number, endLine?: number, target?: OpenTarget) => void
   getCwd: () => string
   getHome: () => string | undefined
 }
@@ -278,7 +279,7 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     this._linkProvider = createFileLinkProvider(
       this.term,
       (absPath) => this._handlers.resolveFile(absPath),
-      (uri, line, col, endLine) => this._handlers.openFile(uri, line, col, endLine),
+      (uri, line, col, endLine, target) => this._handlers.openFile(uri, line, col, endLine, target),
       () => this._handlers.getCwd(),
       () => this._handlers.getHome(),
     )

@@ -3317,16 +3317,32 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
 
     commands.registerCommand('perforce.openFile', async (...args: unknown[]) => {
+      const [arg, options] = args as [unknown, ({ openTarget?: 'side' | 'newWindow' } | undefined)?]
       const path =
-        resourcePath(args[0]) ??
+        resourcePath(arg) ??
         (await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile'))
-      if (path) await commands.executeCommand('_workbench.openFile', path)
+      if (path) {
+        if (options?.openTarget) {
+          await commands.executeCommand('_workbench.openFile', path, {
+            openTarget: options.openTarget,
+          })
+        } else {
+          await commands.executeCommand('_workbench.openFile', path)
+        }
+      }
     }),
 
     commands.registerCommand('perforce.openChange', async (...args: unknown[]) => {
       const [arg, options] = args as [
         unknown,
-        ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
+        (
+          | {
+              pinned?: boolean
+              preserveFocus?: boolean
+              openTarget?: 'side' | 'newWindow'
+            }
+          | undefined
+        ),
       ]
       // From an SCM row: `{ resourceUri }`. From the dirty-diff host / editor
       // title: a bare path string.
@@ -3336,7 +3352,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // Space-preview asks to preserve focus. Mirrors git.openChange.
       await mgr
         .resolveClient({ resourceUri: path })
-        ?.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
+        ?.openChange(
+          path,
+          options?.pinned ?? false,
+          options?.preserveFocus ?? false,
+          options?.openTarget,
+        )
     }),
 
     // Open a diff for a shelved file (no local copy exists): shelved content vs
@@ -3347,12 +3368,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const req = args[0] as
         | { changelist?: string; depotFile?: string; rev?: string; action?: string }
         | undefined
+      const options = args[1] as { openTarget?: 'side' | 'newWindow' } | undefined
       if (!req?.changelist || !req.depotFile) return
       await mgr.active?.openShelvedFile(
         req.changelist,
         req.depotFile,
         req.rev,
         (req.action ?? 'edit') as P4Action,
+        options?.openTarget,
       )
     }),
 
@@ -4176,8 +4199,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
     // markers). Saving runs `perforce.acceptResolved` (`resolve -ay`).
     commands.registerCommand('perforce.openMergeEditor', async (...args: unknown[]) => {
       const path = resourcePath(args[0]) ?? (typeof args[0] === 'string' ? args[0] : undefined)
+      const options = args[1] as { openTarget?: 'side' | 'newWindow' } | undefined
       if (!path) return
-      await mgr.resolveClient({ resourceUri: path })?.openMergeEditor(path)
+      await mgr.resolveClient({ resourceUri: path })?.openMergeEditor(path, options?.openTarget)
     }),
 
     // Runtime command — NOT declared in contributes.commands (a declared
@@ -4576,7 +4600,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
           const req = args[0] as P4GraphFileDiffRequest
           const target = graphClientFor(req)
           if (!target) return
-          await openGraphFileDiff(target, req, args[1] as { preserveFocus?: boolean } | undefined)
+          await openGraphFileDiff(
+            target,
+            req,
+            args[1] as
+              | { pinned?: boolean; preserveFocus?: boolean; openTarget?: 'side' | 'newWindow' }
+              | undefined,
+          )
         }),
         commands.registerCommand(
           'perforce-graph.openWorkingTreeFile',

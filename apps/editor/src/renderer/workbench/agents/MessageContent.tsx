@@ -21,9 +21,23 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { memo, useContext, useMemo, type ReactNode } from 'react'
-import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
+import {
+  IEditorGroupsService,
+  IEditorResolverService,
+  IInstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
+  URI,
+} from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { parseCommandWrappers } from '../../services/acp/commandWrapper.js'
+import {
+  isOpenTargetEnter,
+  resolveOpenTarget,
+  type OpenTarget,
+} from '../../services/editor/openTarget.js'
+import { openUriWithTarget } from '../../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import {
   looksLikeFilePath,
   matchFilePathAt,
@@ -204,22 +218,35 @@ const EXTERNAL_LINK_ATTRS = { target: '_blank', rel: 'noopener noreferrer' } as 
 function PlainLink({ seg }: { seg: PlainLinkSegment }) {
   const openFileLink = useContext(FileLinkContext)
   const label = seg.text
-  const target = plainLinkTarget(seg.href)
-  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
-    e.preventDefault()
-    if (!target) {
+  const fileTarget = plainLinkTarget(seg.href)
+  const activate = (target: OpenTarget): void => {
+    if (!fileTarget) {
       // Same external-URL exit as SafeLink: Electron's window-open handler
       // routes http(s) to shell.openExternal and denies everything else.
       window.open(seg.href, '_blank', 'noopener,noreferrer')
       return
     }
-    openFileLink(target.path, target.line, target.col, target.endLine, {
-      toSide: e.ctrlKey || e.metaKey,
-      ...(target.fragment !== undefined ? { fragment: target.fragment } : {}),
+    openFileLink(fileTarget.path, fileTarget.line, fileTarget.col, fileTarget.endLine, {
+      target,
+      ...(fileTarget.fragment !== undefined ? { fragment: fileTarget.fragment } : {}),
     })
   }
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    e.preventDefault()
+    activate(resolveOpenTarget(e))
+  }
+  const onKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>): void => {
+    if (!fileTarget || !isOpenTargetEnter(e)) return
+    e.preventDefault()
+    activate(resolveOpenTarget(e))
+  }
   return (
-    <a href={seg.href} onClick={onClick} {...(target ? {} : EXTERNAL_LINK_ATTRS)}>
+    <a
+      href={seg.href}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+      {...(fileTarget ? {} : EXTERNAL_LINK_ATTRS)}
+    >
       {label}
     </a>
   )
@@ -228,14 +255,20 @@ function PlainLink({ seg }: { seg: PlainLinkSegment }) {
 function PlainFilePathLink({ seg }: { seg: PlainFilePathSegment }) {
   const openFileLink = useContext(FileLinkContext)
   const label = seg.text
+  const activate = (target: OpenTarget): void => {
+    openFileLink(seg.path, seg.line, seg.col, seg.endLine, { target })
+  }
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
-    openFileLink(seg.path, seg.line, seg.col, seg.endLine, {
-      toSide: e.ctrlKey || e.metaKey,
-    })
+    activate(resolveOpenTarget(e))
+  }
+  const onKeyDown = (e: React.KeyboardEvent<HTMLAnchorElement>): void => {
+    if (!isOpenTargetEnter(e)) return
+    e.preventDefault()
+    activate(resolveOpenTarget(e))
   }
   return (
-    <a href={label} onClick={onClick} data-testid="md-filepath">
+    <a href={label} onClick={onClick} onKeyDown={onKeyDown} data-testid="md-filepath">
       {label}
     </a>
   )
@@ -384,23 +417,47 @@ function ResourceLink({
   readonly mimeType?: string
 }) {
   const editorResolver = useService(IEditorResolverService)
+  const groups = useOptionalService(IEditorGroupsService)
+  const inst = useOptionalService(IInstantiationService)
+  const uriIdentity = useOptionalService(IUriIdentityService)
+  const aux = useOptionalService(IAuxiliaryEditorWindowService)
   const isFile = uri.startsWith('file:')
   const label = name ?? uri
-  const onClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
-    e.preventDefault()
+  const open = (target: ReturnType<typeof resolveOpenTarget>): void => {
     if (!isFile) return
     try {
       const parsed = URI.parse(uri)
-      void editorResolver.openEditor(parsed)
+      if (target === 'default' || !groups || !inst || !uriIdentity || !aux) {
+        void editorResolver.openEditor(parsed)
+        return
+      }
+      void openUriWithTarget(
+        { groups, aux, inst, uriIdentity, resolver: editorResolver },
+        parsed,
+        target,
+        { pinned: true },
+      ).then((result) => {
+        if (!result.handled) void editorResolver.openEditor(parsed)
+      })
     } catch {
       // ignored — defensive against malformed agent output
     }
+  }
+  const onClick = (e: React.MouseEvent<HTMLButtonElement>): void => {
+    e.preventDefault()
+    open(resolveOpenTarget(e))
+  }
+  const onKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>): void => {
+    if (!isOpenTargetEnter(e)) return
+    e.preventDefault()
+    open(resolveOpenTarget(e))
   }
   return (
     <button
       type="button"
       className={styles['resourceLink']}
       onClick={onClick}
+      onKeyDown={onKeyDown}
       disabled={!isFile}
       data-tooltip={description ?? uri}
       data-uri={uri}

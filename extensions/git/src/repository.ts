@@ -1016,12 +1016,17 @@ export class Repository {
   }
 
   /** Open a diff of the file's HEAD revision against its current working-tree content. */
-  async openChange(absPath: string, pinned = false, preserveFocus = false): Promise<void> {
+  async openChange(
+    absPath: string,
+    pinned = false,
+    preserveFocus = false,
+    openTarget?: 'side' | 'newWindow',
+  ): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
     // Spreadsheets can't diff as text: route them to the Excel extension's
     // webview diff (HEAD blob vs working-tree bytes), if that extension is present.
     if (isSpreadsheetPath(absPath)) {
-      await this._openSpreadsheetChange(absPath, rel, pinned, preserveFocus)
+      await this._openSpreadsheetChange(absPath, rel, pinned, preserveFocus, openTarget)
       return
     }
     const head = await gitExec(['show', `HEAD:${rel}`], this.root, this._log)
@@ -1041,6 +1046,7 @@ export class Repository {
       preserveFocus,
       openableUri: pathToFileURL(absPath).href,
       liveModified: true,
+      ...(openTarget ? { openTarget } : {}),
     })
   }
 
@@ -1054,6 +1060,7 @@ export class Repository {
     rel: string,
     pinned: boolean,
     preserveFocus: boolean,
+    openTarget?: 'side' | 'newWindow',
   ): Promise<void> {
     const head = await gitExecBinary(['show', `HEAD:${rel}`], this.root, this._log)
     const original = head.exitCode === 0 ? head.stdout : Buffer.alloc(0)
@@ -1072,6 +1079,7 @@ export class Repository {
       rightBase64: modified.toString('base64'),
       pinned,
       preserveFocus,
+      ...(openTarget ? { openTarget } : {}),
     })
   }
 
@@ -1081,7 +1089,7 @@ export class Repository {
    * working-tree content (markers intact) as the result seed, and labels the two
    * sides from the HEAD / MERGE_HEAD commit subjects.
    */
-  async openMergeEditor(absPath: string): Promise<void> {
+  async openMergeEditor(absPath: string, openTarget?: 'side' | 'newWindow'): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
     const [base, current, incoming] = await Promise.all([
       this._showStage(`:1:${rel}`),
@@ -1106,6 +1114,7 @@ export class Repository {
       merged,
       currentLabel,
       incomingLabel,
+      ...(openTarget ? { openTarget } : {}),
     })
   }
 

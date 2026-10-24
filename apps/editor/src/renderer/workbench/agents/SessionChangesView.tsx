@@ -41,6 +41,8 @@ import {
 } from '../changesTree/ChangesTree.js'
 import { useOpenDiffEditor } from '../changesTree/useOpenDiffEditor.js'
 import type { ChangesTreeItem } from '../changesTree/buildSnapshot.js'
+import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
+import type { ITreeActivateModifiers } from '@universe-editor/workbench-ui'
 import sharedStyles from '../changesTree/ChangesTree.module.css'
 import { SESSION_CHANGES_VIEW_ID } from '../../actions/agentTimelineActions.js'
 import { sessionChangesViewState, type SessionChangesViewMode } from './sessionChangesViewState.js'
@@ -185,7 +187,10 @@ export function SessionChangesView() {
   )
 
   const onActivateFile = useCallback(
-    (c: SessionFileChange, opts: { readonly preview: boolean }): void => open(c, opts.preview),
+    (
+      c: SessionFileChange,
+      opts: { readonly preview: boolean; readonly modifiers?: ITreeActivateModifiers },
+    ): void => open(c, opts.preview, resolveOpenTarget(opts.modifiers)),
     [open],
   )
   const onFileClick = useCallback((c: SessionFileChange): void => open(c, true), [open])
@@ -233,7 +238,7 @@ export function SessionChangesView() {
   )
 }
 
-function useOpenChange(): (c: SessionFileChange, preview: boolean) => void {
+function useOpenChange(): (c: SessionFileChange, preview: boolean, target?: OpenTarget) => void {
   const inst = useService(IInstantiationService)
   const createInput = useCallback(
     (c: SessionFileChange) =>

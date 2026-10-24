@@ -8,15 +8,19 @@ import {
   Emitter,
   IConfigurationService,
   IDialogService,
+  IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
   IFileService,
   IFileWatcherService,
+  IInstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   ICommandService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   observableValue,
   type IConfirmResult,
   type IDialogService as IDialogServiceType,
@@ -40,6 +44,10 @@ import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
 import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocusScopeService.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type OpenEditorInNewWindowOptions,
+} from '../../../services/windows/auxiliaryEditorWindowService.js'
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType {
   const dirs = new Map(Object.entries(initial))
@@ -117,6 +125,73 @@ class FakeCommand {
   }
 }
 
+class FakeTreeGroup {
+  readonly editors: Array<{ resource?: URI }> = []
+  readonly isLocked = false
+  constructor(readonly id: number) {}
+  contains(editor: unknown): boolean {
+    return this.editors.includes(editor as { resource?: URI })
+  }
+  findEditor(editor: unknown): unknown {
+    return this.editors.includes(editor as { resource?: URI }) ? editor : undefined
+  }
+  openEditor(editor: { resource?: URI }): void {
+    if (!this.contains(editor)) this.editors.push(editor)
+  }
+  setActive(): void {}
+  indexOf(): number {
+    return -1
+  }
+}
+
+class FakeGroups {
+  declare readonly _serviceBrand: undefined
+  readonly groups: FakeTreeGroup[] = []
+  activeGroup: FakeTreeGroup
+  activeGroupForOpen: FakeTreeGroup
+
+  constructor() {
+    const group = new FakeTreeGroup(1)
+    this.groups.push(group)
+    this.activeGroup = group
+    this.activeGroupForOpen = group
+  }
+
+  activateGroup(group: FakeTreeGroup): void {
+    this.activeGroup = group
+    this.activeGroupForOpen = group
+  }
+
+  findGroup(): undefined {
+    return undefined
+  }
+
+  addGroup(): FakeTreeGroup {
+    const group = new FakeTreeGroup(this.groups.length + 1)
+    this.groups.push(group)
+    return group
+  }
+}
+
+class FakeAuxiliaryWindows {
+  declare readonly _serviceBrand: undefined
+  readonly calls: Array<{ editor: unknown; options: OpenEditorInNewWindowOptions | undefined }> = []
+
+  constructor(private readonly _groups: FakeGroups) {}
+
+  async openEditorInNewWindow(
+    editor: unknown,
+    options?: OpenEditorInNewWindowOptions,
+  ): Promise<unknown> {
+    this.calls.push({ editor, options })
+    return {
+      ok: true,
+      window: { part: { activeGroup: this._groups.activeGroup } },
+      editor,
+    }
+  }
+}
+
 function makeNoopWatcher(): IFileWatcherServiceType {
   return {
     _serviceBrand: undefined,
@@ -155,8 +230,14 @@ function renderView(folder: URI, fs: IFileServiceType) {
     onDidChangeConfiguration: new Emitter<never>().event,
   } as unknown as IConfigurationService)
   const inst = new InstantiationService(services)
+  services.set(IInstantiationService, inst)
   const editorResolver = inst.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolver)
+  const groups = new FakeGroups()
+  services.set(IEditorGroupsService, groups as unknown as IEditorGroupsService)
+  services.set(IUriIdentityService, new UriIdentityService('linux'))
+  const aux = new FakeAuxiliaryWindows(groups)
+  services.set(IAuxiliaryEditorWindowService, aux as unknown as IAuxiliaryEditorWindowService)
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
   const result = render(
@@ -164,7 +245,7 @@ function renderView(folder: URI, fs: IFileServiceType) {
       <ExplorerView />
     </ServicesContext.Provider>,
   )
-  return { ...result, editor, command, tree }
+  return { ...result, editor, command, tree, groups, aux }
 }
 
 function getViewEl(): HTMLElement {
@@ -281,6 +362,65 @@ describe('ExplorerView — keyboard navigation', () => {
     fireEvent.keyDown(view, { key: ' ' })
     await waitFor(() => expect(editor.opened).toHaveLength(2))
     expect(editor.opened[1]?.options?.pinned).toBe(false)
+  })
+
+  it('Ctrl+Enter opens the focused file to the side without using the default path', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
+    })
+    const { editor, tree, groups } = renderView(root, fs)
+    await screen.findByText('README.md')
+    const readme = URI.joinPath(root, 'README.md')
+    await act(async () => {
+      await tree.reveal(readme)
+    })
+
+    fireEvent.keyDown(getViewEl(), { key: 'Enter', ctrlKey: true })
+
+    await waitFor(() => expect(groups.groups).toHaveLength(2))
+    const side = groups.groups[1]!
+    expect(side.editors.map((input) => input.resource?.toString())).toEqual([readme.toString()])
+    expect(editor.opened).toHaveLength(0)
+  })
+
+  it('Alt+Enter opens the focused file in an auxiliary window', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
+    })
+    const { editor, tree, groups, aux } = renderView(root, fs)
+    await screen.findByText('README.md')
+    const readme = URI.joinPath(root, 'README.md')
+    await act(async () => {
+      await tree.reveal(readme)
+    })
+
+    fireEvent.keyDown(getViewEl(), { key: 'Enter', altKey: true })
+
+    await waitFor(() => expect(aux.calls).toHaveLength(1))
+    expect((aux.calls[0]?.options as { mode?: string } | undefined)?.mode).toBe('open')
+    expect(groups.groups).toHaveLength(1)
+    expect(editor.opened).toHaveLength(0)
+  })
+
+  it('Ctrl+Enter on a directory does not open anything', async () => {
+    const root = URI.file('/ws')
+    const src = URI.joinPath(root, 'src')
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'src', isFile: false, isDirectory: true }],
+      [src.toString()]: [{ name: 'main.ts', isFile: true, isDirectory: false }],
+    })
+    const { editor, tree, groups } = renderView(root, fs)
+    await screen.findByText('src')
+    await act(async () => {
+      await tree.reveal(src)
+    })
+
+    fireEvent.keyDown(getViewEl(), { key: 'Enter', ctrlKey: true })
+
+    expect(groups.groups).toHaveLength(1)
+    expect(editor.opened).toHaveLength(0)
   })
 
   it('Home jumps to the first row; End jumps to the last', async () => {

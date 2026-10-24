@@ -22,12 +22,12 @@ describe('ToolCallLocations', () => {
     const row = screen.getByTestId('acp-toolcall-location')
 
     fireEvent.click(row, { ctrlKey: true })
-    expect(onOpen).toHaveBeenLastCalledWith(location, { toSide: true })
+    expect(onOpen).toHaveBeenLastCalledWith(location, { target: 'side' })
 
     fireEvent.click(row, { metaKey: true })
-    expect(onOpen).toHaveBeenLastCalledWith(location, { toSide: true })
+    expect(onOpen).toHaveBeenLastCalledWith(location, { target: 'side' })
 
     fireEvent.click(row)
-    expect(onOpen).toHaveBeenLastCalledWith(location, { toSide: false })
+    expect(onOpen).toHaveBeenLastCalledWith(location, { target: 'default' })
   })
 })

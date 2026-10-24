@@ -2,6 +2,7 @@ import type { Terminal, ILinkProvider, ILink } from '@xterm/xterm'
 import { expandHomeDir, type URI, normalizeFsPath } from '@universe-editor/platform'
 import { FILE_PATH_PATTERN, parseFilePathLocation } from '../../../services/acp/filePathLink.js'
 import { mapStringIndexToCell, readWrappedWindow } from './terminalBufferText.js'
+import { resolveOpenTarget, type OpenTarget } from '../../../services/editor/openTarget.js'
 
 // Reuse the same path grammar as rendered markdown so terminal and markdown
 // links recognize exactly the same set of files (extensions, location suffixes).
@@ -18,7 +19,7 @@ export function resolvePath(cwd: string, filePath: string, home: string | undefi
 export function createFileLinkProvider(
   term: Terminal,
   resolveFile: (absolutePath: string) => Promise<URI | null>,
-  openFile: (uri: URI, line?: number, col?: number, endLine?: number) => void,
+  openFile: (uri: URI, line?: number, col?: number, endLine?: number, target?: OpenTarget) => void,
   getCwd: () => string,
   getHome: () => string | undefined,
 ): ILinkProvider {
@@ -96,8 +97,9 @@ export function createFileLinkProvider(
           text: match.full,
           activate(event: MouseEvent) {
             if (event.button !== 0) return
+            const target = resolveOpenTarget(event)
             void resolvePromise.then((uri) => {
-              if (uri) openFile(uri, match.lineNum, match.colNum, match.endLineNum)
+              if (uri) openFile(uri, match.lineNum, match.colNum, match.endLineNum, target)
             })
           },
         }

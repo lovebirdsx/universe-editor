@@ -25,6 +25,7 @@ import {
   URI,
   fsPathToWorkspaceUri,
   localize2,
+  type EditorInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { writeClipboardText } from '@universe-editor/workbench-ui'
@@ -35,6 +36,13 @@ import {
   revealSelectionInInput,
 } from '../services/editor/revealEditorPosition.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import type { TargetedOpen } from '../services/editor/openTarget.js'
+import {
+  openExistingInputWithTarget,
+  openFreshInputWithTarget,
+  type OpenTargetServices,
+} from '../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { systemNotificationE2E } from '../services/extensions/systemNotificationE2E.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
@@ -152,6 +160,11 @@ export class GetActiveEditorFileAction extends Action2 {
   }
 }
 
+export interface OpenFileOptions {
+  /** Where to open: omitted = the existing active-group path. */
+  readonly openTarget?: TargetedOpen
+}
+
 /** Opens a plain file editor for the given fsPath. Backs the Git extension's git.openFile. */
 export class OpenFileAction extends Action2 {
   static readonly ID = '_workbench.openFile'
@@ -160,13 +173,45 @@ export class OpenFileAction extends Action2 {
     super({ id: OpenFileAction.ID, title: localize2('action.extensionApi.openFile', 'Open File') })
   }
 
-  override run(accessor: ServicesAccessor, fsPath: string): void {
+  override run(accessor: ServicesAccessor, fsPath: string, options?: OpenFileOptions): void {
     if (!fsPath) return
-    const group = accessor.get(IEditorGroupsService).activeGroup
-    const input = accessor
-      .get(IInstantiationService)
-      .createInstance(FileEditorInput, workspaceResourceUri(accessor, fsPath))
-    group.openEditor(input, { activate: true, pinned: true })
+    const groups = accessor.get(IEditorGroupsService)
+    const uri = workspaceResourceUri(accessor, fsPath)
+    const inst = accessor.get(IInstantiationService)
+
+    const openDefault = (): void => {
+      const input = inst.createInstance(FileEditorInput, uri)
+      groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+    }
+
+    const target = options?.openTarget
+    if (target === undefined) {
+      openDefault()
+      return
+    }
+
+    const services: OpenTargetServices = {
+      groups,
+      aux: accessor.get(IAuxiliaryEditorWindowService),
+      inst,
+      uriIdentity: accessor.get(IUriIdentityService),
+    }
+    const existing = findExistingFileEditor(groups, services.uriIdentity, uri)
+    if (existing) {
+      void openExistingInputWithTarget(services, existing.editor, existing.group, target, {
+        pinned: true,
+      }).then((result) => {
+        if (!result.handled) openDefault()
+      })
+      return
+    }
+
+    const input = inst.createInstance(FileEditorInput, uri)
+    void openFreshInputWithTarget(services, input, target, { pinned: true }).then((result) => {
+      if (result.handled) return
+      if (!input.isDisposed) input.dispose()
+      openDefault()
+    })
   }
 }
 
@@ -202,12 +247,69 @@ export class OpenFileAtAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor, fsPath: string, line: number, column = 0): void {
+  override run(
+    accessor: ServicesAccessor,
+    fsPath: string,
+    line: number,
+    column = 0,
+    options?: OpenFileOptions,
+  ): void {
     if (!fsPath) return
     const groups = accessor.get(IEditorGroupsService)
     const uri = workspaceResourceUri(accessor, fsPath)
-    const input = revealExistingOrOpen(accessor, groups, uri)
-    void revealSelectionInInput(input, { startLineNumber: line + 1, startColumn: column + 1 })
+    const selection = { startLineNumber: line + 1, startColumn: column + 1 }
+    const target = options?.openTarget
+    if (target === undefined) {
+      void revealSelectionInInput(revealExistingOrOpen(accessor, groups, uri), selection)
+      return
+    }
+
+    const inst = accessor.get(IInstantiationService)
+    const uriIdentity = accessor.get(IUriIdentityService)
+    const windowFocus = accessor.get(IWindowFocusService)
+    const services: OpenTargetServices = {
+      groups,
+      aux: accessor.get(IAuxiliaryEditorWindowService),
+      inst,
+      uriIdentity,
+    }
+    const reveal = (input: EditorInput): void => {
+      void revealSelectionInInput(input, selection)
+    }
+    const fallback = (): void => {
+      const found = findExistingFileEditor(groups, uriIdentity, uri)
+      if (found) {
+        groups.activateGroup(found.group)
+        found.group.setActive(found.editor)
+        windowFocus.focusGroup(found.group)
+        reveal(found.editor)
+        return
+      }
+      const input = inst.createInstance(FileEditorInput, uri)
+      openInLockAwareGroup(groups, input, { activate: true, pinned: true })
+      reveal(input)
+    }
+
+    const existing = findExistingFileEditor(groups, uriIdentity, uri)
+    if (existing) {
+      void openExistingInputWithTarget(services, existing.editor, existing.group, target, {
+        pinned: true,
+      }).then((result) => {
+        if (result.handled && result.editor) reveal(result.editor)
+        else fallback()
+      })
+      return
+    }
+
+    const input = inst.createInstance(FileEditorInput, uri)
+    void openFreshInputWithTarget(services, input, target, { pinned: true }).then((result) => {
+      if (result.handled) {
+        reveal(result.editor ?? input)
+        return
+      }
+      if (!input.isDisposed) input.dispose()
+      fallback()
+    })
   }
 }
 

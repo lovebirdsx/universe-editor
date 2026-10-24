@@ -10,6 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type {
+  EditorInput,
   IEditorGroup,
   IEditorGroupsService,
   IEditorResolverService,
@@ -20,6 +21,24 @@ import { HtmlPreviewInput } from '../editor/HtmlPreviewInput.js'
 import { openPreviewInGroup } from '../editor/openPreviewInGroup.js'
 import type { IWindowFocusService } from '../windows/windowFocusService.js'
 import { previewLanguageForResource } from './resourcePreviewSupport.js'
+
+/** A previewable resource's tab id + factory, for target-aware opens that must
+ *  reuse a globally unique preview instead of instantiating a second one. */
+export function resourcePreviewDescriptor(
+  resource: URI,
+): { readonly id: string; readonly create: () => EditorInput } | undefined {
+  const kind = previewLanguageForResource(resource)
+  if (kind === 'markdown') {
+    return {
+      id: MarkdownPreviewInput.idFor(resource),
+      create: () => new MarkdownPreviewInput(resource),
+    }
+  }
+  if (kind === 'html') {
+    return { id: HtmlPreviewInput.idFor(resource), create: () => new HtmlPreviewInput(resource) }
+  }
+  return undefined
+}
 
 /**
  * Open the preview of {@link resource} in {@link group}, pinned. Returns false
@@ -45,7 +64,6 @@ export function openResourcePreviewInGroup(
   }
   return false
 }
-
 /**
  * Open {@link resource} for reading in {@link group}: its rendered preview when
  * the file has one, the file itself otherwise — routed through the resolver so a

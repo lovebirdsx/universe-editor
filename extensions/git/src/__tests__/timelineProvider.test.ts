@@ -225,12 +225,14 @@ describe('GitTimelineProvider', () => {
 })
 
 describe('git.timeline commands', () => {
-  function registeredCommands(): Map<string, (arg?: unknown) => unknown> {
-    const map = new Map<string, (arg?: unknown) => unknown>()
-    mocks.registerCommand.mockImplementation((id: string, handler: (arg?: unknown) => unknown) => {
-      map.set(id, handler)
-      return { dispose: () => undefined }
-    })
+  function registeredCommands(): Map<string, (arg?: unknown, options?: unknown) => unknown> {
+    const map = new Map<string, (arg?: unknown, options?: unknown) => unknown>()
+    mocks.registerCommand.mockImplementation(
+      (id: string, handler: (arg?: unknown, options?: unknown) => unknown) => {
+        map.set(id, handler)
+        return { dispose: () => undefined }
+      },
+    )
     createGitTimelineCommands(fakeManager(fakeRepo()), { current: ROOT })
     return map
   }
@@ -256,6 +258,21 @@ describe('git.timeline commands', () => {
       preserveFocus: false,
       openableUri: FILE_URI,
     })
+  })
+
+  it('openDiff forwards a trailing openTarget option', async () => {
+    const commands = registeredCommands()
+    mocks.gitExec.mockResolvedValue(gitOk('blob'))
+
+    await commands.get('git.timeline.openDiff')?.(
+      { uri: FILE, currentHash: 'abc1234567890', previousHash: 'def0000' },
+      { openTarget: 'side' },
+    )
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({ openTarget: 'side' }),
+    )
   })
 
   it('openDiff with an empty currentHash diffs HEAD against the working tree', async () => {

@@ -40,7 +40,7 @@ import { canCloneEditorInputForSplit } from '../../editor/cloneEditorInput.js'
 import { ensureSideGroup } from '../../editor/openToSide.js'
 import { IWindowFocusService } from '../../windows/windowFocusService.js'
 import { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWindowService.js'
-import { resolveQuickPickOpenTarget, type QuickPickOpenTarget } from '../quickPickOpenTarget.js'
+import { resolveOpenTarget, type OpenTarget } from '../../editor/openTarget.js'
 import { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import {
   workspaceSymbolsToEntries,
@@ -322,7 +322,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
 
     const openSymbol = async (
       symbol: UnifiedWorkspaceSymbol,
-      target: QuickPickOpenTarget,
+      target: OpenTarget,
     ): Promise<void> => {
       const uri = symbol.uri
       const revealSymbol = (input: EditorInput): void => {
@@ -391,7 +391,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     disposables.add(
       picker.onDidAccept((items) => {
         const symbol = items[0] ? byId.get(items[0].id) : undefined
-        const target = resolveQuickPickOpenTarget(picker.keyMods)
+        const target = resolveOpenTarget(picker.keyMods)
         picker.hide()
         if (symbol) void openSymbol(symbol, target)
       }),

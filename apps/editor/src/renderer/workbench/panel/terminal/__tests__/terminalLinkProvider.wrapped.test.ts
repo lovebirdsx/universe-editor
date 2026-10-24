@@ -61,7 +61,29 @@ describe('terminal file-link provider (wrapped lines)', () => {
 
     links[0]!.activate({ button: 0 } as MouseEvent, '')
     await vi.waitFor(() => {
-      expect(openFile).toHaveBeenCalledWith(uri, undefined, undefined, undefined)
+      expect(openFile).toHaveBeenCalledWith(uri, undefined, undefined, undefined, 'default')
+    })
+  })
+
+  it('maps ctrl/alt clicks to side and new-window targets', async () => {
+    const term = fakeTerm(makeTerminalBuffer('src/a.ts', 20))
+    const uri = URI.file('/workspace/src/a.ts')
+    const openFile = vi.fn()
+
+    const links = provideLinks(
+      term,
+      1,
+      vi.fn(async () => uri),
+      openFile,
+    )
+    links[0]!.activate({ button: 0, ctrlKey: true } as MouseEvent, '')
+    await vi.waitFor(() => {
+      expect(openFile).toHaveBeenLastCalledWith(uri, undefined, undefined, undefined, 'side')
+    })
+
+    links[0]!.activate({ button: 0, altKey: true } as MouseEvent, '')
+    await vi.waitFor(() => {
+      expect(openFile).toHaveBeenLastCalledWith(uri, undefined, undefined, undefined, 'newWindow')
     })
   })
 
@@ -122,7 +144,7 @@ describe('terminal file-link provider (wrapped lines)', () => {
 
     links[0]!.activate({ button: 0 } as MouseEvent, '')
     await vi.waitFor(() => {
-      expect(openFile).toHaveBeenCalledWith(uri, 1724, 5, undefined)
+      expect(openFile).toHaveBeenCalledWith(uri, 1724, 5, undefined, 'default')
     })
   })
 

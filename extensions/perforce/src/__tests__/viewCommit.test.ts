@@ -227,6 +227,17 @@ describe('openGraphFileDiff', () => {
     )
   })
 
+  it('passes pinned through so a targeted open does not land in the preview slot', async () => {
+    const client = fakeClient()
+
+    await openGraphFileDiff(client, REQ, { pinned: true, openTarget: 'side' })
+
+    expect(mocks.executeCommand).toHaveBeenCalledWith(
+      '_workbench.openDiff',
+      expect.objectContaining({ pinned: true, openTarget: 'side' }),
+    )
+  })
+
   it('omits openableUri when the file has no local path', async () => {
     const client = fakeClient()
 

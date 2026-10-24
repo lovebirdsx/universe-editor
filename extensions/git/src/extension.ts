@@ -432,16 +432,19 @@ function registerGitCommands(
     }),
     register('git-graph.openFileDiff', async (...args: unknown[]) => {
       const req = args[0] as GitGraphFileDiffRequest
-      const options = args[1] as { preserveFocus?: boolean } | undefined
+      const options = args[1] as
+        | { pinned?: boolean; preserveFocus?: boolean; openTarget?: 'side' | 'newWindow' }
+        | undefined
       const content = await getGitGraphFileDiffContent(req.root ?? graph.current, req, log)
       await commands.executeCommand('_workbench.openDiff', {
         title: content.title,
         originalUri: pathToFileURL(content.path).href,
         original: content.original,
         modified: content.modified,
-        pinned: false,
+        pinned: options?.pinned ?? false,
         preserveFocus: options?.preserveFocus ?? false,
         openableUri: pathToFileURL(content.path).href,
+        ...(options?.openTarget ? { openTarget: options.openTarget } : {}),
       })
     }),
     register('git.viewCommit', async (...args: unknown[]) => {
@@ -683,26 +686,48 @@ function registerGitCommands(
     register('git.openChange', async (...args: unknown[]) => {
       const [arg, options] = args as [
         unknown,
-        ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
+        (
+          | {
+              pinned?: boolean
+              preserveFocus?: boolean
+              openTarget?: 'side' | 'newWindow'
+            }
+          | undefined
+        ),
       ]
       const path = resourcePath(arg)
       if (!path) return
       return mgr
         .resolveRepo(arg)
-        ?.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
+        ?.openChange(
+          path,
+          options?.pinned ?? false,
+          options?.preserveFocus ?? false,
+          options?.openTarget,
+        )
     }),
 
     register('git.openMergeEditor', async (...args: unknown[]) => {
-      const path = resourcePath(args[0])
+      const [arg, options] = args as [unknown, ({ openTarget?: 'side' | 'newWindow' } | undefined)?]
+      const path = resourcePath(arg)
       if (!path) return
-      await mgr.resolveRepo({ resourceUri: path })?.openMergeEditor(path)
+      await mgr.resolveRepo({ resourceUri: path })?.openMergeEditor(path, options?.openTarget)
     }),
 
     register('git.openFile', async (...args: unknown[]) => {
+      const [arg, options] = args as [unknown, ({ openTarget?: 'side' | 'newWindow' } | undefined)?]
       const path =
-        resourcePath(args[0]) ??
+        resourcePath(arg) ??
         (await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile'))
-      if (path) await commands.executeCommand('_workbench.openFile', path)
+      if (path) {
+        if (options?.openTarget) {
+          await commands.executeCommand('_workbench.openFile', path, {
+            openTarget: options.openTarget,
+          })
+        } else {
+          await commands.executeCommand('_workbench.openFile', path)
+        }
+      }
     }),
   )
   return registry

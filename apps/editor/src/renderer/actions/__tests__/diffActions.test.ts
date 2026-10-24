@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
@@ -6,6 +6,7 @@ import {
   IEditorGroupsService,
   IFileService,
   IInstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
@@ -21,6 +22,35 @@ import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { WebviewDiffInput } from '../../services/editor/WebviewDiffInput.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type OpenEditorInNewWindowOptions,
+  type OpenEditorInNewWindowResult,
+} from '../../services/windows/auxiliaryEditorWindowService.js'
+
+class FakeAuxiliaryEditorWindowService {
+  declare readonly _serviceBrand: undefined
+  readonly calls: Array<{
+    editor: unknown
+    options: OpenEditorInNewWindowOptions | undefined
+  }> = []
+  fail = false
+
+  constructor(private readonly _groups: EditorGroupsService) {}
+
+  async openEditorInNewWindow(
+    editor: never,
+    options?: OpenEditorInNewWindowOptions,
+  ): Promise<OpenEditorInNewWindowResult> {
+    this.calls.push({ editor, options })
+    if (this.fail) return { ok: false, reason: 'error' }
+    return {
+      ok: true,
+      window: { part: { activeGroup: this._groups.activeGroup } } as never,
+      editor,
+    }
+  }
+}
 
 function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
   const current: IWorkspace | null = folder ? { folder, name: 'workspace' } : null
@@ -38,14 +68,22 @@ function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
   } as IWorkspaceServiceType
 }
 
-function buildServices(groups: EditorGroupsService, folder?: URI): InstantiationService {
+function buildServices(
+  groups: EditorGroupsService,
+  folder?: URI,
+): InstantiationService & { aux: FakeAuxiliaryEditorWindowService } {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
   services.set(IWorkspaceService, makeWorkspaceService(folder))
   services.set(IFileService, {} as never)
+  services.set(IUriIdentityService, {
+    isEqual: (a: URI, b: URI) => a.toString() === b.toString(),
+  } as never)
+  const aux = new FakeAuxiliaryEditorWindowService(groups)
+  services.set(IAuxiliaryEditorWindowService, aux as never)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
-  return inst
+  return Object.assign(inst, { aux })
 }
 
 function payload(overrides?: Partial<OpenDiffPayload>): OpenDiffPayload {
@@ -216,6 +254,93 @@ describe('OpenDiffAction — lock-aware routing', () => {
     expect(input).toBeInstanceOf(WebviewDiffInput)
     expect((input as WebviewDiffInput).leftUri.toString()).toBe('remote-ssh://ws/home/x/a.xlsx')
     expect((input as WebviewDiffInput).rightUri.toString()).toBe('remote-ssh://ws/home/x/a.xlsx')
+  })
+})
+
+describe('OpenDiffAction — targeted opens', () => {
+  const disposables: Array<{ dispose(): void }> = []
+
+  beforeEach(() => {
+    disposables.push(registerAction2(OpenDiffAction))
+    disposables.push(registerAction2(OpenWebviewDiffAction))
+  })
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    DiffEditorRegistry._resetForTests()
+  })
+
+  it('opens a side diff in a new side group without touching the active group', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    const active = groups.activeGroup
+
+    runOpenDiff(inst, payload({ openTarget: 'side' }))
+
+    expect(groups.count).toBe(2)
+    const side = groups.groups.find((g) => g !== active)!
+    expect(side.editors.map((e) => e.id)).toContain('diff:file:///ws/a.txt')
+    expect(active.editors).toHaveLength(0)
+    expect(groups.activeGroup).toBe(side)
+  })
+
+  it('reuses an existing diff already in the side group', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    const active = groups.activeGroup
+
+    runOpenDiff(inst, payload({ openTarget: 'side' }))
+    const side = groups.activeGroup
+    groups.activateGroup(active)
+    runOpenDiff(inst, payload({ openTarget: 'side', modified: 'after-2' }))
+
+    expect(groups.count).toBe(2)
+    expect(side.editors).toHaveLength(1)
+    expect(side.editors[0]?.id).toBe('diff:file:///ws/a.txt')
+  })
+
+  it('opens a fresh diff in an auxiliary window', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+
+    runOpenDiff(inst, payload({ openTarget: 'newWindow', pinned: true }))
+
+    expect(inst.aux.calls).toHaveLength(1)
+    expect(inst.aux.calls[0]!.options).toMatchObject({ mode: 'open', pinned: true })
+    expect(groups.count).toBe(1)
+  })
+
+  it('falls back to the default path when the auxiliary window fails', async () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    inst.aux.fail = true
+
+    runOpenDiff(inst, payload({ openTarget: 'newWindow' }))
+    await vi.waitFor(() => {
+      expect(groups.activeGroup.editors.map((e) => e.id)).toContain('diff:file:///ws/a.txt')
+    })
+  })
+
+  it('opens a webview diff to the side with a fresh input', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    const cmd = CommandsRegistry.getCommand(OpenWebviewDiffAction.ID)!
+
+    inst.invokeFunction((accessor) =>
+      cmd.handler(accessor, {
+        viewType: 'test.diff',
+        title: 'a.xlsx',
+        leftUri: 'file:///ws/a.xlsx',
+        rightUri: 'file:///ws/a.xlsx',
+        leftBase64: btoa('left'),
+        rightBase64: btoa('right'),
+        openTarget: 'side',
+      }),
+    )
+
+    expect(groups.count).toBe(2)
+    const side = groups.groups[1]!
+    expect(side.editors[0]).toBeInstanceOf(WebviewDiffInput)
   })
 })
 

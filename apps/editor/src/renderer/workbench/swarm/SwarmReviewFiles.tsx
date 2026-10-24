@@ -26,6 +26,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
 import type { SwarmReviewFilesViewMode } from '../../services/swarm/swarmViewState.js'
+import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './SwarmReviewEditor.module.css'
 
@@ -134,7 +135,7 @@ export interface SwarmReviewFilesProps {
   readonly files: readonly SwarmReviewFileDto[]
   readonly viewMode: SwarmReviewFilesViewMode
   readonly onViewModeChange?: ((mode: SwarmReviewFilesViewMode) => void) | undefined
-  readonly onOpenFile: (file: SwarmReviewFileDto) => void
+  readonly onOpenFile: (file: SwarmReviewFileDto, target?: OpenTarget) => void
   /** Vertical scroll offset restored on mount (survives tab switches). */
   readonly initialScrollTop?: number | undefined
   /** Reports the file list's scroll offset so it can be persisted. */
@@ -328,9 +329,13 @@ export function SwarmReviewFiles({
         rowHeight={22}
         indentWidth={12}
         rootRef={treeRootRef}
+        modifierActivation
         renderRow={renderRow}
-        onActivate={(node) => {
-          if (node.element.kind === 'file') onOpenFile(node.element.file)
+        onActivate={(node, opts) => {
+          if (node.element.kind !== 'file') return
+          const target = resolveOpenTarget(opts.modifiers)
+          if (target === 'default') onOpenFile(node.element.file)
+          else onOpenFile(node.element.file, target)
         }}
       />
     </section>

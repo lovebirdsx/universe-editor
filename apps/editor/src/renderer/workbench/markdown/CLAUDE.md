@@ -1,6 +1,6 @@
 # apps/editor/src/renderer/workbench/markdown/CLAUDE.md
 
-markdown 子系统横跨三处：共享渲染器 MarkdownView 在本目录；语言特性插件在 `extensions/markdown/`（进程内 vscode-markdown-languageservice）；预览/成链等 renderer 增强散在 `workbench/editor/`、`contributions/`、`services/`。
+markdown 横跨三处：共享渲染器 MarkdownView 在本目录；语言插件在 `extensions/markdown/`（进程内 vscode-markdown-languageservice）；预览/成链散在 `workbench/editor/`、`contributions/`、`services/`。
 
 > ⚠️ 第一原则：先认领改动落在哪条线——① 语言特性（走插件+句柄路由，与 TS 共用同一套句柄路由/数据流，通用套路见 [extend-language-plugin]）② 预览渲染（纯 renderer，与 LSP 无关）③ 粘贴成链（拖拽/粘贴→链接，纯 renderer 编辑增强，不经插件/LSP）。三条线几乎不相交，改错线白改。
 
@@ -43,7 +43,7 @@ workbench/markdown/MarkdownView.tsx       渲染核心：parseMarkdown AST → R
 services/acp/markdownRenderer.ts          parseMarkdown —— 与 ACP 聊天共享的 AST
 ```
 
-> MarkdownView 是**共享渲染器**（ACP 聊天 + 文档预览都用它），改它要同时顾及两个消费方；image AST 节点走可注入 `renderImage?(src,alt)`（`ImageRenderContext`，默认渲染裸 `<img>`），消费方可替换图片渲染（ACP 聊天用它换成 ChatImage），见 [cases-prompt-images.md](../../services/acp/cases-prompt-images.md)。
+> MarkdownView 是**共享渲染器**（ACP 聊天 + 文档预览都用它），改它要同时顾及两个消费方；image AST 节点走可注入 `renderImage?(src,alt)`（`ImageRenderContext`，默认渲染裸 `<img>`），消费方可替换（ACP 聊天换成 ChatImage），见 [cases-prompt-images.md](../../services/acp/cases-prompt-images.md)。
 
 **页内锚点**：标题自动 slug（CJK 保留）挂 `data-anchor`；空 HTML 锚点 `<a id="x"></a>` / `<a name="x"></a>` 被 parser 白名单识别（其余 HTML 仍是字面文本），渲染为零占位 `.mdAnchor`（**CSS 必须 `vertical-align: top`**——baseline 会让 scrollIntoView 对齐文字基线、落点偏下一行，已修勿回退；回归 e2e `smoke.markdownAnchorScroll.spec.ts`）。`#frag` 点击/跨文件 `foo.md#frag` 收口 `markdownAnchors.ts::findMarkdownAnchor`：先精确匹配 id（大小写敏感），未命中再 slugify 回退。已知限制：LSP 坏链诊断只认 `id=` 不认 `name=`——锚点统一写 `<a id="..."></a>`。
 
@@ -72,7 +72,7 @@ contributions/MarkdownPasteContribution.ts / MarkdownDropContribution.ts  注册
 ## 关键架构决策
 
 - **坏链诊断是头牌特性**：`DIAGNOSTIC_OPTIONS` 开 warning，definition-hygiene 降 hint。
-- **预览不复用 markdown-it 直出 HTML**：parseMarkdown AST + React 渲染，杜绝 untrusted 注入 raw HTML（安全），与 ACP 聊天共享。
+- **预览不复用 markdown-it 直出 HTML**：parseMarkdown AST + React 渲染，杜绝 untrusted 注入 raw HTML，与 ACP 聊天共享。
 
 ## 常见任务 → 改哪里
 
@@ -94,16 +94,16 @@ contributions/MarkdownPasteContribution.ts / MarkdownDropContribution.ts  注册
 5. **esbuild vscode-uri CJS alias**：`esbuild.config.mjs` + `vitest.config.ts` 都有该 alias，动构建/测试配置别删。
 6. **打包靠自动发现**：`scripts/release/runtime-resources.mjs` 扫 `extensions/*` 自动带入，新插件不用改 electron-builder.yml。
 7. **预览 input→组件两处必同步**：`EditorArea.tsx` + `BuiltInEditorProvidersContribution.ts`，漏一处预览开不出或恢复不了。
-8. **host stdout 就是 RPC 线，禁止任何 console.log**（已修勿回退）：`protectStdout()`（`packages/extension-host/src/stdoutProtection.ts`）把 host console 重定向 stderr；升级 md LS / 改 host bootstrap 别破坏。
+8. **host stdout 就是 RPC 线，禁止任何 console.log**（已修勿回退）：`protectStdout()`（`packages/extension-host/src/stdoutProtection.ts`）把 host console 重定向 stderr。
 9. **header-fragment 链接 setSelection 崩溃**（已修勿回退）：`EditorOpenerContribution.normalizeOpenRange` 把缺省 end 补成 start，再 setSelection/reveal。
-10. **provider vs 文档同步防抖竞态**（已修勿回退）：补全 / code action / documentSymbol 等即时触发的 provider 调前先 `await PendingDocumentSync.flush(uri)`；漏掉会用宿主旧镜像算树并被版本缓存固化。
-11. **预览链接点击不走 LSP documentLink**：`MarkdownView`/`SafeLink` 自路由；`./foo.md#hello` 拆「文件路径+fragment」先开 MarkdownPreviewInput 再 `MarkdownPreviewRegistry.revealAnchor`；`@path/to/file` 是文件 mention，解析/打开前剥 `@`。别让 `#fragment`/`@` 进 `markdownLinkCandidates`。
-12. **vim 导览键吞预览内输入框字符**（已修勿回退）：容器级键盘监听开头 `if (isEditableTarget(e.target)) return`；`isEditableTarget` 已抽到共享 `renderer/workbench/domUtils.ts`。
-13. **预览本地链接 %20 空格**（已修勿回退）：decodeURIComponent 只在 `workbench/markdown/markdownLinkResolve.ts` 的文件路径候选做（解码候选优先、原样兜底并去重）；别在 parser 阶段全局 decode href、别改 `URI.file`。
+10. **provider vs 文档同步防抖竞态**（已修勿回退）：补全 / code action / documentSymbol 等 provider 调前先 `await PendingDocumentSync.flush(uri)`；漏掉会用宿主旧镜像算树并被版本缓存固化。
+11. **预览链接点击不走 LSP documentLink**：`MarkdownView`/`SafeLink` 自路由；`./foo.md#hello` 拆「文件路径+fragment」先开 MarkdownPreviewInput 再 `MarkdownPreviewRegistry.revealAnchor`；`@path` mention 解析前剥 `@`（别让 `#fragment`/`@` 进 `markdownLinkCandidates`）。链接手势（Ctrl/Alt+点击、修饰键回车）统一 `resolveOpenTarget` → `openWithTarget`（`MarkdownLinkHandler` opts 为 `{ target }`），预览唯一性只 move/fresh。
+12. **vim 导览键吞预览内输入框字符**（已修勿回退）：容器级键盘监听开头 `if (isEditableTarget(e.target)) return`；`isEditableTarget` 在共享 `renderer/workbench/domUtils.ts`。
+13. **预览本地链接 %20 空格**（已修勿回退）：decodeURIComponent 只在 `workbench/markdown/markdownLinkResolve.ts` 的文件路径候选做（解码优先、原样兜底去重）；别在 parser 阶段全局 decode href、别改 `URI.file`。
 14. **成链相对路径基准**（已修勿回退）：用 `dirname(mdUri.fsPath)`（目标文档自身目录）+ platform `relativePath`（允许 `../`）；勿回退工作区根（`relativePathUnder` 爬不出根，目标不在根目录必 404）。
 15. **`.mdAnchor` 必须 `vertical-align: top`**（已修勿回退）：见线② 锚点节；几何不可在 happy-dom 测。
-16. **跨文件锚点挂载期滚动**（已修勿回退）：预览未挂载时 `revealAnchor` 把 fragment 存 `MarkdownPreviewViewStateCache.saveRevealAnchor` one-shot（与 revealLine 互斥），restore effect 按 **anchor > revealLine > saved scrollTop** 决策；**新的挂载期滚动意图必须并入此 one-shot 通道，勿旁路**（600ms 窗口内 scroll-restore 反复 re-apply 会拉回 saved 位置）。
-17. **`~` 按 host 展开**（已修勿回退）：remote 工作区的 `~/…` 属于**远端** home（由远端进程写出），收口在 `renderer/workbench/useWorkspaceHome.ts`，点击用 `resolveHome()`；勿回退 `window.ipc.home`（客户端 home，remote 下必报 "File does not exist"）。
+16. **跨文件锚点挂载期滚动**（已修勿回退）：预览未挂载时 `revealAnchor` 把 fragment 存 `MarkdownPreviewViewStateCache.saveRevealAnchor` one-shot（与 revealLine 互斥），restore effect 按 **anchor > revealLine > saved scrollTop** 决策；**新的挂载期滚动意图必须并入此 one-shot 通道，勿旁路**（600ms 内 scroll-restore 会拉回 saved 位置）。
+17. **`~` 按 host 展开**（已修勿回退）：remote 工作区的 `~/…` 属于**远端** home，收口在 `renderer/workbench/useWorkspaceHome.ts`，点击用 `resolveHome()`；勿回退 `window.ipc.home`（客户端 home，remote 下必报 "File does not exist"）。
 
 ## 验证
 

@@ -18,6 +18,8 @@ import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { addCodeHtmlBytes, bumpHeapFlow } from '../../services/memory/heapFlowCounters.js'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
 import { resolveLanguageId } from '../editor/monaco/languageId.js'
+import { isOpenTargetEnter, resolveOpenTarget } from '../../services/editor/openTarget.js'
+import type { OpenMarkdownLinkOptions } from '../markdown/useMarkdownFileLink.js'
 import { useMarkdownStreaming } from '../markdown/markdownStreamingContext.js'
 import {
   escapeHtmlText,
@@ -40,7 +42,7 @@ interface CodeBlockProps {
     line?: number,
     col?: number,
     endLine?: number,
-    opts?: { toSide?: boolean },
+    opts?: OpenMarkdownLinkOptions,
   ) => void
 }
 
@@ -130,7 +132,18 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
     if (!target) return
     e.preventDefault()
     onOpenFilePath(target.path, target.line, target.col, target.endLine, {
-      toSide: e.ctrlKey || e.metaKey,
+      target: resolveOpenTarget(e),
+    })
+  }
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLElement>): void => {
+    if (!onOpenFilePath) return
+    if (!isOpenTargetEnter(e)) return
+    const target = resolveCodeBlockLinkClick(e.target)
+    if (!target) return
+    e.preventDefault()
+    onOpenFilePath(target.path, target.line, target.col, target.endLine, {
+      target: resolveOpenTarget(e),
     })
   }
 
@@ -151,7 +164,12 @@ export function CodeBlock({ code, lang, line, onOpenFilePath }: CodeBlockProps) 
         data-lang={lang || 'text'}
         {...(line !== undefined ? { 'data-line': line } : {})}
       >
-        <code ref={codeRef} onClick={onClick} dangerouslySetInnerHTML={innerHtmlProp} />
+        <code
+          ref={codeRef}
+          onClick={onClick}
+          onKeyDown={onKeyDown}
+          dangerouslySetInnerHTML={innerHtmlProp}
+        />
       </pre>
       <button
         type="button"

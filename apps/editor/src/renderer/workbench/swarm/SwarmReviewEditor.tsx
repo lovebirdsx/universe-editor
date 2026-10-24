@@ -13,6 +13,7 @@ import {
   ICommandService,
   IConfigurationService,
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
   IInstantiationService,
   ILoggerService,
@@ -43,6 +44,9 @@ import {
 } from '@universe-editor/extensions-common'
 import { useObservable, useService } from '../useService.js'
 import { SwarmReviewEditorInput } from '../../services/editor/SwarmReviewEditorInput.js'
+import type { OpenTarget } from '../../services/editor/openTarget.js'
+import type { OpenTargetServices } from '../../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { openSwarmFileDiff } from '../../services/swarm/openSwarmFileDiff.js'
 import { applySwarmReviewToLocal } from '../../services/swarm/swarmApplyToLocal.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
@@ -85,7 +89,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const editorService = useService(IEditorService)
+  const groups = useService(IEditorGroupsService)
   const inst = useService(IInstantiationService)
+  const aux = useService(IAuxiliaryEditorWindowService)
   const loggerService = useService(ILoggerService)
   const logger = useMemo(
     () => loggerService.createLogger({ id: 'swarmReview', name: 'Swarm Review' }),
@@ -96,6 +102,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   const storage = useService(IStorageService)
   const uriIdentity = useService(IUriIdentityService)
   const workspaceService = useService(IWorkspaceService)
+  const targets = useMemo<OpenTargetServices>(
+    () => ({ groups, inst, uriIdentity, aux }),
+    [groups, inst, uriIdentity, aux],
+  )
   const reviewId = input instanceof SwarmReviewEditorInput ? input.reviewId : ''
   const filesViewMode = useObservable(swarmReviewFilesViewState.viewMode)
 
@@ -452,7 +462,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   // stay aligned with Swarm's inline-comment coordinates. The routing / tab-reuse
   // mechanics are shared with the Swarm Changes sidebar view.
   const openFileDiff = useCallback(
-    async (file: SwarmReviewFileDto) => {
+    async (file: SwarmReviewFileDto, openTarget: OpenTarget = 'default') => {
       if (!detail) return
       const rightChange = changeForVersion(selectedVersionIdx)
       // Left defaults to the depot base (0), matching the file list — which is
@@ -477,8 +487,17 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           leftVersion,
           rightImmutable: immutableForVersion(selectedVersionIdx),
           leftImmutable: immutableForVersion(compareVersionIdx),
+          openTarget,
         },
-        { commands, editorService, inst, logger, notifications, onError: setError },
+        {
+          commands,
+          editorService,
+          inst,
+          logger,
+          notifications,
+          onError: setError,
+          targets,
+        },
       )
     },
     [
@@ -488,6 +507,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       detail,
       logger,
       notifications,
+      targets,
       selectedVersionIdx,
       compareVersionIdx,
       changeForVersion,
@@ -815,7 +835,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
               files={files}
               viewMode={filesViewMode}
               onViewModeChange={(mode) => swarmReviewFilesViewState.setViewMode(mode)}
-              onOpenFile={(file) => void openFileDiff(file)}
+              onOpenFile={(file, target) => void openFileDiff(file, target)}
               initialScrollTop={savedState?.filesScrollTop}
               onScrollTopChange={(scrollTop) =>
                 updateSwarmReviewEditorState(reviewId, { filesScrollTop: scrollTop })

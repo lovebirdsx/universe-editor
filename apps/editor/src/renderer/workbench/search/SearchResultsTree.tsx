@@ -53,6 +53,7 @@ import {
   type SearchNode,
   type SearchSnapshot,
 } from './searchTree.js'
+import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
 import {
   SearchResultsContextMenu,
   type SearchContextMenuState,
@@ -95,6 +96,7 @@ export interface SearchResultsTreeProps {
     match: ITextSearchMatch,
     rangeIndex: number,
     preview?: boolean,
+    target?: OpenTarget,
   ) => void
   onReplaceMatch?:
     | ((resource: URI, match: ITextSearchMatch, rangeIndex: number) => void)
@@ -658,12 +660,22 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           indentWidth={10}
           renderRow={renderRow}
           {...(onShiftTab ? { onShiftTab } : {})}
+          modifierActivation
           onActivate={(node, opts) => {
             const n = node.element
+            const target = resolveOpenTarget(opts.modifiers)
             if (n.kind === 'match') {
               searchSession.lastActivatedResource = n.resource.toString()
               searchSession.lastActivatedFocusId = n.id
-              onActivateMatch(n.resource, n.match, n.rangeIndex, opts.preview)
+              onActivateMatch(n.resource, n.match, n.rangeIndex, opts.preview, target)
+              return
+            }
+            if (n.kind === 'file' && opts.modifiers) {
+              const first = n.fileMatch.matches[0]
+              if (!first) return
+              searchSession.lastActivatedResource = n.resource.toString()
+              searchSession.lastActivatedFocusId = n.id
+              onActivateMatch(n.resource, first, 0, false, target)
             }
           }}
           onRowKeyDown={(e, node) => {

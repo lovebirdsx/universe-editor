@@ -40,6 +40,7 @@ import {
   IHostService,
   IWorkspaceService,
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
   IInstantiationService,
   INotificationService,
@@ -60,7 +61,11 @@ import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'luc
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
-import { useEventValue, useObservable, useService } from '../useService.js'
+import type { OpenTarget } from '../../services/editor/openTarget.js'
+import { ensureSideGroup } from '../../services/editor/openToSide.js'
+import { openFreshInputWithTarget } from '../../services/editor/openWithTarget.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
+import { useEventValue, useObservable, useOptionalService, useService } from '../useService.js'
 import type { IAcpSession, SelectionContext } from '../../services/acp/session/acpSessionService.js'
 import {
   blobToPromptImage,
@@ -338,6 +343,8 @@ export function PromptInput({
   const commandService = useService(ICommandService)
   const widgetService = useService(IAcpChatWidgetService)
   const uriIdentity = useService(IUriIdentityService)
+  const editorGroups = useOptionalService(IEditorGroupsService)
+  const auxiliaryWindows = useOptionalService(IAuxiliaryEditorWindowService)
   const workspaceRoot = workspace.current?.folder
   // A session rooted at a subdirectory suggests only that directory's files and
   // context entries, starts the `@@`/`@#` pickers there, and labels every
@@ -1332,34 +1339,63 @@ export function PromptInput({
     void session.sendPrompt(value, refs, attached, attachedImages)
   }
 
-  const revealContext = (ctx: SelectionContext): void => {
+  const revealContext = (ctx: SelectionContext, target: OpenTarget = 'default'): void => {
     let resource: URI
     try {
       resource = URI.parse(ctx.uri)
     } catch {
       return
     }
-    editorService.openEditor(instantiation.createInstance(FileEditorInput, resource), {
-      pinned: false,
-    })
-    // Reveal against the active editor input: openEditor dedupes by resource, so
-    // FileEditorRegistry may only know the pre-existing instance (see search).
-    const reveal = (): boolean => {
-      const active = editorService.activeEditor.get()
-      if (!(active instanceof FileEditorInput)) return false
-      const editor = FileEditorRegistry.get(active)
-      if (!editor) return false
-      editor.setSelection({
-        startLineNumber: ctx.startLine,
-        startColumn: 1,
-        endLineNumber: ctx.endLine,
-        endColumn: 1,
-      })
-      editor.revealLineInCenter(ctx.startLine)
-      return true
+    const createInput = (): FileEditorInput =>
+      instantiation.createInstance(FileEditorInput, resource)
+    // Reveal against the opened input when the target helper hands one back;
+    // otherwise use the active editor (openEditor dedupes by resource, so
+    // FileEditorRegistry may only know the pre-existing instance).
+    const revealSelection = (opened?: FileEditorInput): void => {
+      const apply = (): boolean => {
+        const active = opened ?? editorService.activeEditor.get()
+        if (!(active instanceof FileEditorInput)) return false
+        const editor = FileEditorRegistry.get(active)
+        if (!editor) return false
+        editor.setSelection({
+          startLineNumber: ctx.startLine,
+          startColumn: 1,
+          endLineNumber: ctx.endLine,
+          endColumn: 1,
+        })
+        editor.revealLineInCenter(ctx.startLine)
+        return true
+      }
+      if (apply()) return
+      setTimeout(apply, 50)
     }
-    if (reveal()) return
-    setTimeout(reveal, 50)
+    const openDefault = (input: FileEditorInput): void => {
+      editorService.openEditor(input, { pinned: false })
+      revealSelection()
+    }
+    if (target === 'newWindow' && editorGroups && auxiliaryWindows) {
+      const input = createInput()
+      void openFreshInputWithTarget(
+        {
+          groups: editorGroups,
+          aux: auxiliaryWindows,
+          inst: instantiation,
+          uriIdentity,
+        },
+        input,
+        target,
+        { pinned: false },
+      ).then((result) => {
+        if (result.handled) {
+          revealSelection(result.editor instanceof FileEditorInput ? result.editor : undefined)
+          return
+        }
+        openDefault(input.isDisposed ? createInput() : input)
+      })
+      return
+    }
+    if (target === 'side' && editorGroups) ensureSideGroup(editorGroups)
+    openDefault(createInput())
   }
 
   // Editor content/caret changed. For programmatic writes (history nav, accept-

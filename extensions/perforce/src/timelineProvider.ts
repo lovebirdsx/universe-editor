@@ -252,55 +252,61 @@ export function createPerforceTimelineCommands(
   syncRunner?: TimelineSyncRunner,
 ): Disposable[] {
   return [
-    commands.registerCommand('perforce.timeline.openDiff', async (arg: unknown) => {
-      const { uri, depotFile, rev, action, change, haveRev, pending } = (arg ?? {}) as OpenDiffArg
-      if (!uri || !depotFile) return
-      const client = mgr.resolveContaining(uri)
-      if (!client) return
+    commands.registerCommand(
+      'perforce.timeline.openDiff',
+      async (arg: unknown, options?: unknown) => {
+        const { uri, depotFile, rev, action, change, haveRev, pending } = (arg ?? {}) as OpenDiffArg
+        const openTarget = (options as { openTarget?: 'side' | 'newWindow' } | undefined)
+          ?.openTarget
+        if (!uri || !depotFile) return
+        const client = mgr.resolveContaining(uri)
+        if (!client) return
 
-      let original = ''
-      let modified = ''
-      let title: string
-      let live = false
-      if (pending) {
-        // Left = the have revision (an open-for-add file has none → empty);
-        // right = the working tree, tracked live. A deleted working copy just
-        // reads as empty, rendering the row as a deletion.
-        if (haveRev) original = await client.printRevision(`${depotFile}#${haveRev}`)
-        try {
-          modified = await readFile(uri, 'utf8')
-        } catch {
-          modified = ''
+        let original = ''
+        let modified = ''
+        let title: string
+        let live = false
+        if (pending) {
+          // Left = the have revision (an open-for-add file has none → empty);
+          // right = the working tree, tracked live. A deleted working copy just
+          // reads as empty, rendering the row as a deletion.
+          if (haveRev) original = await client.printRevision(`${depotFile}#${haveRev}`)
+          try {
+            modified = await readFile(uri, 'utf8')
+          } catch {
+            modified = ''
+          }
+          title = `${basename(uri)} (Working Tree)`
+          live = true
+        } else {
+          if (!rev) return
+          const { left, right } = fileDiffRevs(depotFile, statusFromAction(action ?? ''), rev)
+          ;[original, modified] = await Promise.all([
+            client.printRevision(left),
+            client.printRevision(right),
+          ])
+          title = `${basename(displayPath(depotFile))} (changelist ${change ?? rev})`
         }
-        title = `${basename(uri)} (Working Tree)`
-        live = true
-      } else {
-        if (!rev) return
-        const { left, right } = fileDiffRevs(depotFile, statusFromAction(action ?? ''), rev)
-        ;[original, modified] = await Promise.all([
-          client.printRevision(left),
-          client.printRevision(right),
-        ])
-        title = `${basename(displayPath(depotFile))} (changelist ${change ?? rev})`
-      }
 
-      const fileUrl = pathToFileURL(uri).href
-      await commands.executeCommand('_workbench.openDiff', {
-        title,
-        originalUri: fileUrl,
-        original,
-        modified,
-        pinned: false,
-        preserveFocus: false,
-        openableUri: fileUrl,
-        // The pending entry's right side is the working tree — it tracks live
-        // edits; a submitted revision is frozen and must not be live-synced.
-        ...(live && { liveModified: true }),
-      })
-      log?.(
-        `[perforce] timeline openDiff ${depotFile}${rev ? `#${rev}` : ''} (pending=${!!pending})`,
-      )
-    }),
+        const fileUrl = pathToFileURL(uri).href
+        await commands.executeCommand('_workbench.openDiff', {
+          title,
+          originalUri: fileUrl,
+          original,
+          modified,
+          pinned: false,
+          preserveFocus: false,
+          openableUri: fileUrl,
+          // The pending entry's right side is the working tree — it tracks live
+          // edits; a submitted revision is frozen and must not be live-synced.
+          ...(live && { liveModified: true }),
+          ...(openTarget ? { openTarget } : {}),
+        })
+        log?.(
+          `[perforce] timeline openDiff ${depotFile}${rev ? `#${rev}` : ''} (pending=${!!pending})`,
+        )
+      },
+    ),
 
     commands.registerCommand('perforce.timeline.copyChangelistNumber', (item: unknown) => {
       const id = (item as { id?: string } | undefined)?.id

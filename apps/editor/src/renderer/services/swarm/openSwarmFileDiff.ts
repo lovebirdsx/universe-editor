@@ -32,6 +32,8 @@ import {
 } from '../editor/SwarmDiffEditorInput.js'
 import { recordPerfPhase, recordPerfPhaseAsync } from '../performance/perfPhases.js'
 import type { OpenWebviewDiffPayload } from '../../actions/diffActions.js'
+import type { OpenTarget } from '../editor/openTarget.js'
+import { openFreshInputWithTarget, type OpenTargetServices } from '../editor/openWithTarget.js'
 
 /** Custom-editor viewType of the bundled Excel viewer/diff (mirrors the local
  *  Perforce spreadsheet diff in the perforce extension's `client.ts`). */
@@ -86,6 +88,9 @@ export interface OpenSwarmFileDiffRequest {
   /** Light open into the preview slot without stealing focus (single click /
    *  Space). Defaults to a pinned, focus-taking open. */
   readonly preview?: boolean
+  /** Ctrl+Enter / Alt+Enter: open the diff beside the current group or in an
+   *  auxiliary window. Defaults to the active group. */
+  readonly openTarget?: OpenTarget
 }
 
 export interface OpenSwarmFileDiffDeps {
@@ -96,6 +101,8 @@ export interface OpenSwarmFileDiffDeps {
   readonly notifications: INotificationService
   /** Surface a fetch/print failure in the caller's own error slot. */
   readonly onError: (message: string) => void
+  /** Services needed for side / new-window opens. */
+  readonly targets: OpenTargetServices
 }
 
 /**
@@ -107,7 +114,7 @@ export async function openSwarmFileDiff(
   request: OpenSwarmFileDiffRequest,
   deps: OpenSwarmFileDiffDeps,
 ): Promise<void> {
-  const { commands, editorService, inst, logger, notifications, onError } = deps
+  const { commands, editorService, inst, logger, notifications, onError, targets } = deps
   const {
     reviewId,
     file,
@@ -116,7 +123,9 @@ export async function openSwarmFileDiff(
     leftChange,
     leftVersion,
     preview = false,
+    openTarget = 'default',
   } = request
+  const targeted = openTarget !== 'default'
 
   const added = file.status.charAt(0) === 'A'
   const deleted = file.status.charAt(0) === 'D'
@@ -201,6 +210,7 @@ export async function openSwarmFileDiff(
           rightBase64: right.content,
           pinned: false,
           preserveFocus: preview,
+          ...(targeted ? { openTarget } : {}),
         } satisfies OpenWebviewDiffPayload)
         return
       }
@@ -252,7 +262,9 @@ export async function openSwarmFileDiff(
   // EditorService.openEditor dedupes in.
   const bothImmutable =
     (added || leftChange === null || originalImmutable) && (deleted || modifiedImmutable)
-  if (bothImmutable) {
+  // A targeted open must land in a different group/window; reusing the active
+  // group's tab would just focus it in place.
+  if (bothImmutable && !targeted) {
     const existing = editorService.openEditors
       .get()
       .find((e) => e.id === swarmDiffEditorId(context))
@@ -299,10 +311,18 @@ export async function openSwarmFileDiff(
         original = left.content
         modified = right.content
       }
-      await editorService.openEditor(
-        inst.createInstance(SwarmDiffEditorInput, context, original, modified),
-        openOptions,
-      )
+      const input = inst.createInstance(SwarmDiffEditorInput, context, original, modified)
+      if (targeted) {
+        const result = await openFreshInputWithTarget(targets, input, openTarget, {
+          pinned: !preview,
+          preserveFocus: preview,
+        })
+        if (result.handled) return
+        // The targeted open left the fresh input untouched, so it can still
+        // serve the default open below — disposing it here would hand the
+        // editor service a disposed input.
+      }
+      await editorService.openEditor(input, openOptions)
     })
   } catch (e: unknown) {
     onError(e instanceof Error ? e.message : String(e))

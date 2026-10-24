@@ -5,6 +5,7 @@ import {
   ICommandService,
   IConfigurationService,
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
   INotificationService,
   IOpenerService,
@@ -43,6 +44,8 @@ import { swarmReviewsUiStore } from '../../../services/swarm/swarmReviewsUiStore
 import { buildSwarmReviewUrl } from '../../../services/swarm/swarmReviewUrl.js'
 import { SendContextToAgentChatAction } from '../../../actions/agentContextActions.js'
 import { swarmChangesViewState } from '../swarmChangesViewState.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import { canApproveReview, swarmReviewName, SwarmReviewsView } from '../SwarmReviewsView.js'
 
 const review: SwarmReviewDto = {
@@ -75,6 +78,8 @@ interface FakeServicesResult {
   openEditor: ReturnType<typeof vi.fn>
   dialog: { confirm: ReturnType<typeof vi.fn> }
   notifications: { notify: ReturnType<typeof vi.fn> }
+  groups: EditorGroupsService
+  auxCalls: Array<{ editor: unknown; options: unknown }>
 }
 
 function createServices(
@@ -136,7 +141,24 @@ function createServices(
     setExtHost() {},
     resetSourceControls() {},
   } as never)
-  return { instantiation: new InstantiationService(services), openEditor, dialog, notifications }
+  const groups = new EditorGroupsService()
+  services.set(IEditorGroupsService, groups)
+  const auxCalls: Array<{ editor: unknown; options: unknown }> = []
+  services.set(IAuxiliaryEditorWindowService, {
+    _serviceBrand: undefined,
+    openEditorInNewWindow: vi.fn(async (editor: unknown, options?: unknown) => {
+      auxCalls.push({ editor, options })
+      return { ok: true, window: { part: { activeGroup: groups.activeGroup } }, editor }
+    }),
+  } as never)
+  return {
+    instantiation: new InstantiationService(services),
+    openEditor,
+    dialog,
+    notifications,
+    groups,
+    auxCalls,
+  }
 }
 
 /** The tree container is the keyboard target; every nav test drives it. */
@@ -571,7 +593,7 @@ describe('SwarmReviewsView keyboard', () => {
       if (command === SwarmCommands.getTransitions) return []
       return undefined
     })
-    const { instantiation, openEditor } = createServices(executeCommand)
+    const { instantiation, openEditor, groups, auxCalls } = createServices(executeCommand)
     render(
       <ServicesContext.Provider value={instantiation}>
         <SwarmReviewsView />
@@ -581,7 +603,7 @@ describe('SwarmReviewsView keyboard', () => {
     const tree = reviewsTree()
     // Landing focus seeds the cursor on the first review row.
     fireEvent.focus(tree)
-    return { tree, openEditor, executeCommand }
+    return { tree, openEditor, executeCommand, groups, auxCalls }
   }
 
   it('moves between review rows with the arrow keys', async () => {
@@ -612,6 +634,26 @@ describe('SwarmReviewsView keyboard', () => {
     fireEvent.keyDown(tree, { key: 'Enter' })
     await waitFor(() => expect(openEditor).toHaveBeenCalled())
     expect(openEditor.mock.calls.at(-1)?.[1]).toEqual({ pinned: true })
+  })
+
+  it('Ctrl+Enter opens the review in a side group', async () => {
+    const { tree, openEditor, groups } = await renderTree()
+
+    fireEvent.keyDown(tree, { key: 'Enter', ctrlKey: true })
+
+    await waitFor(() => expect(groups.groups).toHaveLength(2))
+    expect(groups.groups[1]?.editors).toHaveLength(1)
+    expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('Alt+Enter opens the review in a new window', async () => {
+    const { tree, openEditor, auxCalls } = await renderTree()
+
+    fireEvent.keyDown(tree, { key: 'Enter', altKey: true })
+
+    await waitFor(() => expect(auxCalls).toHaveLength(1))
+    expect((auxCalls[0]?.options as { mode?: string }).mode).toBe('open')
+    expect(openEditor).not.toHaveBeenCalled()
   })
 
   it('feeds the focused review to the Swarm Changes view', async () => {

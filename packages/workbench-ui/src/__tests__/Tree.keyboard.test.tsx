@@ -96,6 +96,92 @@ describe('Tree — activateNonLeafOnEnter', () => {
   })
 })
 
+describe('Tree — modifierActivation', () => {
+  it('is off by default: Ctrl+Enter never activates', () => {
+    const model = makeModel()
+    const { onActivate } = renderTree(model)
+    act(() => model.setSelection(['1'], '1'))
+
+    const notPrevented = fireEvent.keyDown(view(), { key: 'Enter', ctrlKey: true })
+    expect(notPrevented).toBe(true)
+    expect(onActivate).not.toHaveBeenCalled()
+    model.dispose()
+  })
+
+  it('routes Ctrl/Meta/Alt+Enter to onActivate with modifiers', () => {
+    const model = makeModel()
+    const { onActivate } = renderTree(model, { modifierActivation: true })
+    act(() => model.setSelection(['1'], '1'))
+
+    expect(fireEvent.keyDown(view(), { key: 'Enter', ctrlKey: true })).toBe(false)
+    expect(fireEvent.keyDown(view(), { key: 'Enter', metaKey: true })).toBe(false)
+    expect(fireEvent.keyDown(view(), { key: 'Enter', altKey: true })).toBe(false)
+
+    expect(onActivate).toHaveBeenCalledTimes(3)
+    expect(onActivate.mock.calls[0]?.[1]).toEqual({
+      preview: false,
+      modifiers: { ctrl: true, meta: false, alt: false },
+    })
+    expect(onActivate.mock.calls[1]?.[1]).toEqual({
+      preview: false,
+      modifiers: { ctrl: false, meta: true, alt: false },
+    })
+    expect(onActivate.mock.calls[2]?.[1]).toEqual({
+      preview: false,
+      modifiers: { ctrl: false, meta: false, alt: true },
+    })
+    model.dispose()
+  })
+
+  it('activates a non-leaf row without toggling it', () => {
+    const model = makeModel()
+    const { onActivate } = renderTree(model, { modifierActivation: true })
+    act(() => model.setSelection(['0'], '0'))
+
+    fireEvent.keyDown(view(), { key: 'Enter', ctrlKey: true, altKey: true })
+    expect(model.isExpanded('0')).toBe(true)
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    expect(onActivate.mock.calls[0]?.[1]?.modifiers).toEqual({
+      ctrl: true,
+      meta: false,
+      alt: true,
+    })
+    model.dispose()
+  })
+
+  it('leaves Ctrl+Shift+Enter to the global keybinding handler', () => {
+    const model = makeModel()
+    const { onActivate } = renderTree(model, { modifierActivation: true })
+    act(() => model.setSelection(['1'], '1'))
+
+    const notPrevented = fireEvent.keyDown(view(), {
+      key: 'Enter',
+      ctrlKey: true,
+      shiftKey: true,
+    })
+    expect(notPrevented).toBe(true)
+    expect(onActivate).not.toHaveBeenCalled()
+    model.dispose()
+  })
+
+  it('keeps plain Enter and Space unchanged', () => {
+    const model = makeModel()
+    const { onActivate } = renderTree(model, { modifierActivation: true })
+    act(() => model.setSelection(['0'], '0'))
+
+    fireEvent.keyDown(view(), { key: 'Enter' })
+    expect(model.isExpanded('0')).toBe(false)
+    expect(onActivate).not.toHaveBeenCalled()
+
+    act(() => model.setSelection(['1'], '1'))
+    fireEvent.keyDown(view(), { key: ' ' })
+    expect(onActivate).toHaveBeenLastCalledWith(expect.objectContaining({ id: '1' }), {
+      preview: true,
+    })
+    model.dispose()
+  })
+})
+
 describe('Tree — arrow navigation drives model.navigate', () => {
   it('Down/Up move selection, Right expands then descends, Left collapses then ascends', () => {
     const model = makeModel()

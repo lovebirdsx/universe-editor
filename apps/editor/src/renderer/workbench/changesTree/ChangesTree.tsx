@@ -27,6 +27,7 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  type ITreeActivateModifiers,
   type ITreeDataSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
@@ -78,8 +79,13 @@ export interface ChangesTreeProps<TEntry> {
   readonly collapseAllSignal: IObservable<number>
   readonly expandAllSignal: IObservable<number>
   readonly describeFile: (entry: TEntry) => ChangesTreeFileDisplay
-  /** Keyboard activation: Space = preview (keep tree focus), Enter = open. */
-  readonly onActivateFile: (entry: TEntry, opts: { readonly preview: boolean }) => void
+  /** Keyboard activation: Space = preview (keep tree focus), Enter = open.
+   *  Ctrl/Meta/Alt+Enter carries the physical modifiers for the owning view to
+   *  pick an open target. */
+  readonly onActivateFile: (
+    entry: TEntry,
+    opts: { readonly preview: boolean; readonly modifiers?: ITreeActivateModifiers },
+  ) => void
   /** Plain mouse click / double click; default to onActivateFile preview true/false. */
   readonly onFileClick?: ((entry: TEntry) => void) | undefined
   readonly onFileDoubleClick?: ((entry: TEntry) => void) | undefined
@@ -514,6 +520,7 @@ export function ChangesTree<TEntry>({
         className={styles['tree'] ?? ''}
         ariaLabel={ariaLabel}
         indentBase={0}
+        modifierActivation
         rootRef={treeRef}
         renderRow={renderRow}
         onFocus={onTreeFocus}
@@ -523,10 +530,11 @@ export function ChangesTree<TEntry>({
           // Enter opens and hands focus to the editor. A folder with children
           // keeps the Tree's built-in Enter/Space toggle; a view-collapsed
           // folder reports no children, so the Tree delegates it here and we
-          // route it back into the same toggle.
+          // route it back into the same toggle. Modifier+Enter must not fold a
+          // folder — it asks for a targeted open of the focused file only.
           const n = node.element
           if (n.kind === 'folder') {
-            toggleFolder(n)
+            if (!opts.modifiers) toggleFolder(n)
             return
           }
           callbacksRef.current.onActivateFile(n.item.entry, opts)

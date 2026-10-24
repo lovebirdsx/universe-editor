@@ -10,7 +10,14 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   CancellationTokenSource,
   DisposableStore,
+  EditorInput,
+  EditorRegistry,
   Emitter,
+  Event,
+  InstantiationService,
+  ServiceCollection,
+  URI,
+  UriIdentityService,
   constObservable,
   observableValue,
   type IKeyMods,
@@ -23,6 +30,7 @@ import {
   type QuickPickPresentation,
 } from '@universe-editor/platform'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
+import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
 import { IOutlineService, type OutlineModel } from '../../languageFeatures/OutlineService.js'
 import { timelineToOutline } from '../../acp/session/acpTimelineOutline.js'
 import type { AcpChildItem, AcpMessage, AcpToolCall } from '../../acp/session/acpSessionModel.js'
@@ -30,6 +38,37 @@ import {
   FileSymbolByCategoryQuickAccessProvider,
   FileSymbolQuickAccessProvider,
 } from '../providers/FileSymbolQuickAccessProvider.js'
+import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
+import { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWindowService.js'
+
+class PlainEditor extends EditorInput {
+  get typeId() {
+    return 'test.plain'
+  }
+  get resource() {
+    return URI.file('/ws/a.ts')
+  }
+  getName() {
+    return 'a.ts'
+  }
+}
+
+function makeSessionInput(): AcpSessionEditorInput {
+  const history = { entries: constObservable([]), get: () => undefined }
+  const sessions = { getById: () => undefined }
+  const chatWidget = { focusSession: () => true }
+  const workspace = { current: null, onDidChangeWorkspace: Event.None }
+  return new AcpSessionEditorInput(
+    'session-1',
+    undefined,
+    'Agent session',
+    sessions as never,
+    history as never,
+    chatWidget as never,
+    workspace as never,
+    new UriIdentityService('linux'),
+  )
+}
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -342,5 +381,85 @@ describe('FileSymbolQuickAccessProvider sub-agent section', () => {
 
     expect(rowLabels(picker)).toEqual(['weird'])
     expect((picker.items[0] as IQuickPickItem).iconId).toBe('symbol-kind-110')
+  })
+})
+
+describe('FileSymbolQuickAccessProvider — targeted opens', () => {
+  it('moves the active editor to a new side group on Ctrl+Enter', () => {
+    vi.useFakeTimers()
+    try {
+      const { outline, stub } = makeOutline()
+      outline.set(model([sym('target')], 1), undefined)
+      const groups = new EditorGroupsService()
+      const active = new PlainEditor()
+      groups.activeGroup.openEditor(active)
+      const provider = new FileSymbolQuickAccessProvider(
+        stub,
+        groups,
+        new InstantiationService(new ServiceCollection()),
+        new UriIdentityService('linux'),
+        {} as unknown as IAuxiliaryEditorWindowService,
+      )
+      const picker = new FakeQuickPick<IQuickPickItem>()
+      run(provider, picker)
+      picker.keyMods = { ctrl: true, alt: false }
+
+      picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+      expect(groups.groups).toHaveLength(2)
+      expect(groups.groups[1]?.contains(active)).toBe(true)
+      expect(stub.revealSymbol).not.toHaveBeenCalled()
+      groups.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('moves an ACP session into the side group instead of cloning it', () => {
+    vi.useFakeTimers()
+    try {
+      const { outline, stub } = makeOutline()
+      outline.set(model([sym('target')], 1), undefined)
+      const groups = new EditorGroupsService()
+      const session = makeSessionInput()
+      groups.activeGroup.openEditor(session)
+      // A session is cloneable in principle; register a provider so the clone
+      // path is reachable and would be caught if the provider stopped marking
+      // sessions as singletons.
+      let cloneCalls = 0
+      const registration = EditorRegistry.registerEditorProvider({
+        typeId: AcpSessionEditorInput.TYPE_ID,
+        componentKey: 'file',
+        deserialize: () => {
+          cloneCalls++
+          return new PlainEditor()
+        },
+      })
+      try {
+        const provider = new FileSymbolQuickAccessProvider(
+          stub,
+          groups,
+          new InstantiationService(new ServiceCollection()),
+          new UriIdentityService('linux'),
+          {} as unknown as IAuxiliaryEditorWindowService,
+        )
+        const picker = new FakeQuickPick<IQuickPickItem>()
+        run(provider, picker)
+        picker.keyMods = { ctrl: true, alt: false }
+
+        picker.fireAccept([picker.items[0] as IQuickPickItem])
+
+        expect(cloneCalls).toBe(0)
+        expect(groups.groups).toHaveLength(2)
+        expect(groups.groups[0]?.contains(session)).toBe(false)
+        expect(groups.groups[1]?.contains(session)).toBe(true)
+        expect(stub.revealSymbol).not.toHaveBeenCalled()
+      } finally {
+        registration.dispose()
+        groups.dispose()
+      }
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

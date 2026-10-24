@@ -9,6 +9,7 @@
 
 import { FileText } from 'lucide-react'
 import type { AcpToolCallLocation } from '../../services/acp/session/acpSessionService.js'
+import { isOpenTargetEnter, resolveOpenTarget } from '../../services/editor/openTarget.js'
 import type { OpenMarkdownLinkOptions } from '../markdown/useMarkdownFileLink.js'
 import styles from './agents.module.css'
 
@@ -42,7 +43,12 @@ export function ToolCallLocations({
             key={`${loc.path}-${i}`}
             type="button"
             className={styles['toolCallLocation']}
-            onClick={(e) => onOpen(loc, { toSide: e.ctrlKey || e.metaKey })}
+            onClick={(e) => onOpen(loc, { target: resolveOpenTarget(e) })}
+            onKeyDown={(e) => {
+              if (!isOpenTargetEnter(e)) return
+              e.preventDefault()
+              onOpen(loc, { target: resolveOpenTarget(e) })
+            }}
             data-tooltip={loc.line !== undefined ? `${loc.path}:${loc.line}` : loc.path}
             data-testid="acp-toolcall-location"
             {...(uri !== undefined ? { 'data-uri': uri } : {})}

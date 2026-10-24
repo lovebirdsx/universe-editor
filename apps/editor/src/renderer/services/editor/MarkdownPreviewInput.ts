@@ -48,8 +48,12 @@ export class MarkdownPreviewInput extends EditorInput {
   }
 
   /** Unique per source file so the same file never opens two preview tabs. */
+  static idFor(source: URI): string {
+    return `markdown-preview:${source.toString()}`
+  }
+
   override get id(): string {
-    return `markdown-preview:${this._sourceUri.toString()}`
+    return MarkdownPreviewInput.idFor(this._sourceUri)
   }
 
   override getName(): string {

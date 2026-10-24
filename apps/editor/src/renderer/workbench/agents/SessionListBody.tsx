@@ -56,11 +56,18 @@ import {
   scoreFuzzyMatch,
   useFlatListNavigation,
   useScrollRestore,
+  type IFlatListActivateOptions,
   type IFlatListRowProps,
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
+import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
+import {
+  openSessionInNewWindow,
+  openSessionInRightSplit,
+} from '../../actions/agentSessionActions.js'
 import { useSessionDisplayStatus } from './useSessionStatus.js'
 import { relativeTime } from '../../relativeTime.js'
 import {
@@ -529,6 +536,7 @@ export function SessionListBody({
   const instantiation = useService(IInstantiationService)
   const widgets = useService(IAcpChatWidgetService)
   const windowFocus = useService(IWindowFocusService)
+  const auxWindows = useService(IAuxiliaryEditorWindowService)
   const commandService = useService(ICommandService)
   const host = useService(IHostService)
   const entries = useObservable(history.entries)
@@ -680,40 +688,88 @@ export function SessionListBody({
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
 
   // Opening a row, shared by the pointer path (click) and the keyboard one
-  // (Enter/Space) so the two can never drift apart.
+  // (Enter/Space) so the two can never drift apart. Ctrl/Meta+Enter opens the
+  // session beside the active group; Alt+Enter moves it into a new window.
   const activateEntry = useCallback(
-    (entry: AcpSessionHistoryEntry) => {
+    (entry: AcpSessionHistoryEntry, target: OpenTarget = 'default') => {
       const fresh = service.getById(entry.id)
-      // Exclude read-only previews: a live read-only session must not be set
-      // active; opening it re-opens its (read-only) tab via the foreign branch
-      // below.
-      const liveNow = fresh && !fresh.readOnly && isResidentLive(fresh) ? fresh : undefined
-      if (liveNow) {
-        service.setActive(liveNow.id)
+      const openLive = (session: IAcpSession): void => {
+        service.setActive(session.id)
         // Asleep: activate instantly off the resident instance and bring its
         // process back in the background (the recovery bar reports progress).
         // Falling through to resumeSession would build a second session for the
         // same durable id.
-        if (liveNow.isDormant.get()) void liveNow.ensureAwake()
+        if (session.isDormant.get()) void session.ensureAwake()
+        if (target === 'side') {
+          openSessionInRightSplit(groups, instantiation, session)
+          return
+        }
+        if (target === 'newWindow') {
+          void openSessionInNewWindow(groups, instantiation, auxWindows, session).then((ok) => {
+            if (!ok) {
+              revealSessionChat(
+                { groups, inst: instantiation, widgets, windowFocus },
+                session.id,
+                session,
+              )
+            }
+          })
+          return
+        }
         // Switching the active session is not enough to see it: the tab may sit
         // in another group, and the activeSession autorun bails in exactly that
         // case (it must not duplicate the tab). Reveal it ourselves, then hand
         // the chat input the focus.
         revealSessionChat(
           { groups, inst: instantiation, widgets, windowFocus },
-          liveNow.id,
-          liveNow,
+          session.id,
+          session,
         )
+      }
+      const openHistoryEntry = (): void => {
+        if (target === 'side') {
+          openSessionInRightSplit(groups, instantiation, entry)
+          return
+        }
+        if (target === 'newWindow') {
+          void openSessionInNewWindow(groups, instantiation, auxWindows, entry).then((ok) => {
+            if (!ok) {
+              revealSessionEditorTab(groups, instantiation, entry.id, entry, windowFocus)
+            }
+          })
+          return
+        }
+        revealSessionEditorTab(groups, instantiation, entry.id, entry, windowFocus)
+      }
+      // Exclude read-only previews: a live read-only session must not be set
+      // active; opening it re-opens its (read-only) tab via the foreign branch
+      // below.
+      const liveNow = fresh && !fresh.readOnly && isResidentLive(fresh) ? fresh : undefined
+      if (liveNow) {
+        openLive(liveNow)
       } else if (isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
         // Foreign worktree / cross-host: don't resume (would spawn the agent
         // against another worktree or host behind this window's UI). Open a
         // read-only preview tab; the user activates from there. A subdirectory
         // row is the same workspace, so it falls through to resumeSession below.
-        revealSessionEditorTab(groups, instantiation, entry.id, entry, windowFocus)
-      } else {
+        openHistoryEntry()
+      } else if (target === 'default') {
         service.resumeSession(entry.id).catch(() => {
           // resumeSession publishes its own notification.
         })
+      } else {
+        // Resume first, then land the chat in the requested group/window; a
+        // failed resume keeps the existing notification path and opens nothing.
+        void service
+          .resumeSession(entry.id)
+          .then(() => {
+            const session = service.getById(entry.id)
+            if (session) openLive(session)
+            else openHistoryEntry()
+          })
+          .catch(() => {
+            // resumeSession publishes its own notification.
+          })
       }
       onPick?.(entry)
     },
@@ -726,6 +782,7 @@ export function SessionListBody({
       instantiation,
       widgets,
       windowFocus,
+      auxWindows,
       onPick,
     ],
   )
@@ -793,14 +850,15 @@ export function SessionListBody({
     getItemKey,
     getContainer,
     ariaLabel: localize('acp.sessions.list', 'Sessions'),
+    modifierActivation: true,
     // Enter/Space open the row under the cursor — the keyboard counterpart of a
     // click. Space is not a lighter "preview" here: a session has only one way
     // to open, so both keys take the same path.
     onActivate: useCallback(
-      (index: number) => {
+      (index: number, opts: IFlatListActivateOptions) => {
         const entry = visible[index]
         if (!entry) return
-        activateEntry(entry)
+        activateEntry(entry, resolveOpenTarget(opts.modifiers))
       },
       [visible, activateEntry],
     ),
