@@ -38,6 +38,16 @@ host 编辑器加 `automaticLayout` 会经 `getRawOptions` 渗到所有嵌入编
 - 【规范】**`editContext: true` 下编辑器子树内不再向普通 `addEventListener` 派发 paste 等输入事件**：Chromium 的 EditContext 接管输入管线，`native-edit-context` 及其 Monaco 祖先都不派发。键盘/剪贴板/输入类监听必须挂在 **Monaco DOM 之外的宿主元素**、且用 **capture 阶段**；挂 `ed.getContainerDomNode()` 在真实环境永不触发（回退逻辑本身正确，只是挂错元素）。落点范例见 `apps/editor/src/renderer/services/acp/cases-prompt-images.md`（paste 从 containerDomNode 挪到 PromptInput 的 drop-host div）。
 - 单测在 stub textarea 上合成 `fireEvent.paste` 覆盖不到这个差异（假绿）——此类行为**必须 e2e 真事件验证**。
 
+## 可撤销编辑：用户可见的编辑必须走 `pushEditOperations`，`applyEdits` 只用于清理
+
+- 【规范】`ITextModel.applyEdits` **不进撤销栈**（类型注释写死 "without adding the edits to the undo stack"）。嵌入编辑器里任何用户可见、期望 `Ctrl+Z` 能撤回的文本写入（插入引用药丸、程序化插入片段、格式操作）都必须用 `model.pushEditOperations(beforeCursorState, edits, () => null)`；`applyEdits` 只留给「清理残文」这类本就不该可撤销的收尾。
+- 撤销边界用 `pushStackElement()` 显式切分：独立操作前后各一次；批量操作（如一次拖入多个文件）用 `begin/endUndoGroup` 式的深度计数包住，整组只留两个边界。组是 model 状态，**组内不得 `await`**。
+- **撤销/重做不会自动恢复 decoration**：被逆编辑覆盖的 range 会塌缩，redo 也不会扩回。挂在编辑区间上的 decoration 必须响应 `onDidChangeModelContent` 的 `isUndoing` / `isRedoing` / `isFlush`：undo 只挂起追踪、不改文本（Monaco 已应用逆编辑，再删一次就是双重删除）；redo 按 `e.changes` 的文本重新定位并重建。
+- **相邻编辑会被压缩**：Monaco 把同一撤销元素里的相邻编辑用 `compressConsecutiveTextChanges` 合并成一个 change，redo 事件里拿到的是拼接后的整段文本（如 `@a.txt @b.txt `），不能假设一个 change 对应一次插入。`contentChanges` 按偏移降序给出，且每个 `rangeOffset` 已经是最终文本坐标（从尾向头应用），各 change 可独立处理。
+- **`forceMoveMarkers` 会把编辑点上的 marker 拖过新文本**：insertion 恰好落在某条 decoration 的边界时，传 `forceMoveMarkers: true` 会撑大该 decoration 的 range，之后基于 range 文本的校验会把新旧内容一起判死。插入用默认（false）+ 合适的 stickiness，别用 force 去「保持光标」。同理，基于 range 的追踪必须在编辑**之后**按实际插入区间挂 decoration。
+- **`setValue` 是核弹**：清空 undo/redo、销毁全部 decoration，并（在 prompt 里）触发宿主的非文本撤销栈重置。需要「替换整个 buffer」时才用，普通局部写入别用它。
+- 真实撤销语义不在单测 stub 里（stub 无 undo 栈）：单测验证契约与挂起/重建逻辑，按键路径交给 e2e。范例见 `apps/editor/src/renderer/services/acp/cases-prompt-ref-pills.md`。
+
 ## 嵌入实例的焦点桥接：用专用 context key，绝不冒充 `editorTextFocus`
 
 - `editorTextFocus` 的全局语义 = 「**活动文件编辑器**可被操作」（消费方都经 `getActiveTextEditor` 取文件编辑器）。嵌入 Monaco 冒充它 → `when` 门控命中的命令拿不到目标 → 静默吞键；且 VSCode keybindings.json 导入层以 `KeybindingWeight.User`(1000) 注册，压过任何 scoped weight（如 `ACP_SCOPED_KEY_WEIGHT=250`），用户导入的 `alt+up → findWordAtCursor` 会吞掉 timeline 导航键——User 层按设计最高，不能用 weight 对抗。

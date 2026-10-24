@@ -27,6 +27,7 @@ const rendererDomTests = [
   'src/renderer/workbench/editor/monaco/__tests__/overrideServicesInit.test.ts',
   'src/renderer/workbench/panel/terminal/__tests__/terminalClipboard.test.ts',
   'src/renderer/actions/__tests__/agentActions.test.ts',
+  'src/renderer/actions/__tests__/agentPromptActions.test.ts',
   'src/renderer/actions/__tests__/editorActions.test.ts',
   'src/renderer/actions/__tests__/scmResourceActions.test.ts',
   'src/renderer/actions/__tests__/historyActions.test.ts',

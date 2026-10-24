@@ -1190,6 +1190,19 @@ export interface E2EProbe {
    */
   getAcpPromptText(): string
   /**
+   * Reference pills currently tracked in the active session's prompt draft, with
+   * their character ranges. Read from the same draft cache as `getAcpPromptText`,
+   * so it reflects the live tracker on the next render after an edit/undo.
+   */
+  getAcpPromptRefs(): ReadonlyArray<{
+    id: string
+    kind: string
+    label: string
+    uri: string
+    start: number
+    end: number
+  }>
+  /**
    * The text actually rendered in the active session's prompt editor, read from
    * the visible Monaco view DOM (`.view-lines`). `getAcpPromptText` reads the
    * draft cache, which can diverge from what the user sees for one frame after a

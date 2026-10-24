@@ -8,7 +8,12 @@
  * old textarea (fireEvent.change / keyDown on `acp-prompt-input`).
  */
 
-type ContentChangedEvent = { changes: ReadonlyArray<unknown> }
+type ContentChangedEvent = {
+  changes: ReadonlyArray<{ rangeOffset: number; text: string }>
+  isUndoing?: boolean
+  isRedoing?: boolean
+  isFlush?: boolean
+}
 type Listener = (e: ContentChangedEvent) => void
 type LanguageListener = (e: { oldLanguage: string; newLanguage: string }) => void
 
@@ -66,9 +71,9 @@ function makeModel(initial: string, language: string, uri: unknown) {
   const decorations = new Map<string, StoredDecoration>()
   let decoSeq = 0
   const lines = () => value.split(/\r\n|\r|\n/)
-  const fire = () => {
+  const fire = (flags: Omit<ContentChangedEvent, 'changes'> = {}) => {
     versionId++
-    for (const l of listeners) l({ changes: [] })
+    for (const l of listeners) l({ changes: [], ...flags })
   }
 
   // Shift a decoration edge across a replace of [dStart,dEnd) with `insLen`
@@ -105,6 +110,49 @@ function makeModel(initial: string, language: string, uri: unknown) {
     }
   }
 
+  type StubEdit = {
+    range?: {
+      startLineNumber: number
+      startColumn: number
+      endLineNumber: number
+      endColumn: number
+    }
+    text: string
+    forceMoveMarkers?: boolean
+  }
+
+  // Shared by applyEdits and pushEditOperations. Kept off the public method so a
+  // test spying on `applyEdits` sees only genuine non-undoable writes — the
+  // undoable path must not look like it went through the other one.
+  const applyEditList = (edits: StubEdit[]): void => {
+    // Apply from the tail so earlier offsets stay valid across multiple edits.
+    const resolved = edits.map((e) => {
+      if (!e.range) {
+        return {
+          start: value.length,
+          end: value.length,
+          text: normalizeModelText(e.text),
+          force: e.forceMoveMarkers ?? false,
+        }
+      }
+      return {
+        start: positionToOffset(value, {
+          lineNumber: e.range.startLineNumber,
+          column: e.range.startColumn,
+        }),
+        end: positionToOffset(value, {
+          lineNumber: e.range.endLineNumber,
+          column: e.range.endColumn,
+        }),
+        text: normalizeModelText(e.text),
+        force: e.forceMoveMarkers ?? false,
+      }
+    })
+    resolved.sort((a, b) => b.start - a.start)
+    for (const e of resolved) applyOneEdit(e.start, e.end, e.text, e.force)
+    fire()
+  }
+
   const model = {
     uri,
     getValue: () => value,
@@ -115,7 +163,8 @@ function makeModel(initial: string, language: string, uri: unknown) {
       const normalized = normalizeModelText(next)
       if (normalized === value) return
       applyOneEdit(0, value.length, normalized)
-      fire()
+      // Real setValue destroys the undo/redo stack and reports isFlush.
+      fire({ isFlush: true })
     },
     getLanguageId: () => currentLanguage,
     getLineCount: () => lines().length,
@@ -182,65 +231,19 @@ function makeModel(initial: string, language: string, uri: unknown) {
         offsetToPosition(value, d.endOffset).column,
       )
     },
-    applyEdits: (
-      edits: Array<{
-        range?: {
-          startLineNumber: number
-          startColumn: number
-          endLineNumber: number
-          endColumn: number
-        }
-        text: string
-        forceMoveMarkers?: boolean
-      }>,
-    ) => {
-      // Apply from the tail so earlier offsets stay valid across multiple edits.
-      const resolved = edits.map((e) => {
-        if (!e.range) {
-          return {
-            start: value.length,
-            end: value.length,
-            text: normalizeModelText(e.text),
-            force: e.forceMoveMarkers ?? false,
-          }
-        }
-        return {
-          start: positionToOffset(value, {
-            lineNumber: e.range.startLineNumber,
-            column: e.range.startColumn,
-          }),
-          end: positionToOffset(value, {
-            lineNumber: e.range.endLineNumber,
-            column: e.range.endColumn,
-          }),
-          text: normalizeModelText(e.text),
-          force: e.forceMoveMarkers ?? false,
-        }
-      })
-      resolved.sort((a, b) => b.start - a.start)
-      for (const e of resolved) applyOneEdit(e.start, e.end, e.text, e.force)
-      fire()
-    },
+    applyEdits: (edits: StubEdit[]) => applyEditList(edits),
     _setValueDirect: (next: string) => {
       applyOneEdit(0, value.length, normalizeModelText(next))
       fire()
     },
-    pushEditOperations: (
-      _before: unknown,
-      edits: Array<{
-        range: {
-          startLineNumber: number
-          startColumn: number
-          endLineNumber: number
-          endColumn: number
-        }
-        text: string
-        forceMoveMarkers?: boolean
-      }>,
-    ) => {
-      model.applyEdits(edits)
+    pushEditOperations: (_before: unknown, edits: StubEdit[]) => {
+      applyEditList(edits)
       return null
     },
+    // Real Monaco uses these to delimit undo elements; the stub has no stack,
+    // but the tracker still calls them and unit tests spy on the boundaries.
+    pushStackElement: () => {},
+    popStackElement: () => {},
     isDisposed: () => disposed,
     onDidChangeContent: (cb: Listener) => {
       listeners.add(cb)
@@ -585,7 +588,7 @@ function makePromptEditor(
   ta.value = model.getValue()
   container.appendChild(ta)
 
-  const contentListeners = new Set<() => void>()
+  const contentListeners = new Set<(e: ContentChangedEvent) => void>()
   const cursorListeners = new Set<(e: { position: Position; reason: CursorChangeReason }) => void>()
   const focusListeners = new Set<() => void>()
   const blurListeners = new Set<() => void>()
@@ -596,9 +599,9 @@ function makePromptEditor(
   const widgetBlurListeners = new Set<() => void>()
   const commands = new Map<number, () => void>()
 
-  model.onDidChangeContent(() => {
+  model.onDidChangeContent((e) => {
     if (ta.value !== model.getValue()) ta.value = model.getValue()
-    for (const l of contentListeners) l()
+    for (const l of contentListeners) l(e)
   })
 
   const syncFromTextarea = (): void => {
@@ -674,6 +677,7 @@ function makePromptEditor(
       nativeEditContext.focus()
     },
     getPosition,
+    getSelections: () => null,
     setPosition: (pos: Position) => {
       const off = positionToOffset(model.getValue(), pos)
       ta.setSelectionRange(off, off)
@@ -696,7 +700,8 @@ function makePromptEditor(
       getRange: () => null,
       length: 0,
     }),
-    onDidChangeModelContent: (cb: () => void) => listen(contentListeners, cb),
+    onDidChangeModelContent: (cb: (e: ContentChangedEvent) => void) =>
+      listen(contentListeners, cb),
     onDidChangeCursorPosition: (cb: () => void) => listen(cursorListeners, cb),
     onDidChangeModelDecorations: () => noopDisposable,
     onDidFocusEditorText: (cb: () => void) => listen(focusListeners, cb),

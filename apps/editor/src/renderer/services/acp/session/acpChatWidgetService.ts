@@ -113,6 +113,13 @@ export interface AcpChatWidget {
   popoverAccept(): void
   /** Dismiss the open slash/mention popover. */
   popoverHide(): void
+  /**
+   * Undo/redo the last attached prompt images. Return whether an entry was
+   * consumed; the prompt input gates its history on the text model's version, so
+   * false also means "let Monaco's own undo handle the key".
+   */
+  undoPromptImage(): boolean
+  redoPromptImage(): boolean
   /** Open the in-session find widget (focuses its input). */
   openFind(): void
   /** Close the in-session find widget and clear highlights. */
@@ -158,6 +165,10 @@ export interface IAcpChatWidgetService {
   /** Push a widget's turn-running state; the service flips
    *  `acpChatTurnRunning` on iff the *focused* widget's session is running. */
   setTurnRunning(widget: AcpChatWidget, running: boolean): void
+  /** Push a widget's image undo/redo availability; the service flips
+   *  `acpPromptImageUndoAvailable` / `acpPromptImageRedoAvailable` on iff the
+   *  *focused* widget can consume the key. */
+  setImageUndoState(widget: AcpChatWidget, state: { canUndo: boolean; canRedo: boolean }): void
   /** Set `acpChatHasSelection` — true when text is selected at context-menu time. */
   setHasSelection(hasSelection: boolean): void
   /**
@@ -202,6 +213,8 @@ interface Entry {
   popoverOpen: boolean
   findVisible: boolean
   turnRunning: boolean
+  imageUndo: boolean
+  imageRedo: boolean
   onFocusIn: (e: FocusEvent) => void
   onFocusOut: (e: FocusEvent) => void
 }
@@ -215,6 +228,8 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _popupKey: IContextKey<boolean>
   private readonly _findKey: IContextKey<boolean>
   private readonly _runningKey: IContextKey<boolean>
+  private readonly _imageUndoKey: IContextKey<boolean>
+  private readonly _imageRedoKey: IContextKey<boolean>
   private readonly _selectionKey: IContextKey<boolean>
   private readonly _forkSupportedKey: IContextKey<boolean>
   private readonly _rewindSupportedKey: IContextKey<boolean>
@@ -246,6 +261,8 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._popupKey = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
     this._findKey = contextKeyService.createKey<boolean>('acpChatFindVisible', false)
     this._runningKey = contextKeyService.createKey<boolean>('acpChatTurnRunning', false)
+    this._imageUndoKey = contextKeyService.createKey<boolean>('acpPromptImageUndoAvailable', false)
+    this._imageRedoKey = contextKeyService.createKey<boolean>('acpPromptImageRedoAvailable', false)
     this._selectionKey = contextKeyService.createKey<boolean>('acpChatHasSelection', false)
     this._forkSupportedKey = contextKeyService.createKey<boolean>('acpChatForkSupported', false)
     this._rewindSupportedKey = contextKeyService.createKey<boolean>('acpChatRewindSupported', false)
@@ -306,6 +323,8 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       popoverOpen: false,
       findVisible: false,
       turnRunning: false,
+      imageUndo: false,
+      imageRedo: false,
       onFocusIn,
       onFocusOut,
     }
@@ -393,6 +412,15 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._recomputeRunningKey()
   }
 
+  setImageUndoState(widget: AcpChatWidget, state: { canUndo: boolean; canRedo: boolean }): void {
+    const entry = this._entries.get(widget)
+    if (!entry) return
+    if (entry.imageUndo === state.canUndo && entry.imageRedo === state.canRedo) return
+    entry.imageUndo = state.canUndo
+    entry.imageRedo = state.canRedo
+    this._recomputeImageUndoKeys()
+  }
+
   setHasSelection(hasSelection: boolean): void {
     this._selectionKey.set(hasSelection)
   }
@@ -440,6 +468,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._recomputePopupKey()
     this._recomputeFindKey()
     this._recomputeRunningKey()
+    this._recomputeImageUndoKeys()
   }
 
   private _setFocused(widget: AcpChatWidget, focused: boolean): void {
@@ -454,6 +483,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._recomputePopupKey()
     this._recomputeFindKey()
     this._recomputeRunningKey()
+    this._recomputeImageUndoKeys()
   }
 
   private _recomputeKey(): void {
@@ -498,5 +528,17 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       }
     }
     this._runningKey.set(running)
+  }
+
+  private _recomputeImageUndoKeys(): void {
+    let undo = false
+    let redo = false
+    for (const entry of this._entries.values()) {
+      if (!entry.focused) continue
+      undo ||= entry.imageUndo
+      redo ||= entry.imageRedo
+    }
+    this._imageUndoKey.set(undo)
+    this._imageRedoKey.set(redo)
   }
 }

@@ -4,11 +4,21 @@
 
 ## 变更源分类：`source`（program vs user）不够，还要 `kind`（content vs cursor）
 
+- 现状：`PromptChangeSource = 'user' | 'program' | 'undo' | 'redo'`。内容事件再按 Monaco 的 `e.isUndoing` / `e.isRedoing` 细分，并把 `isFlush` + `e.changes` 一并交给 tracker 的 `reconcile`（undo 挂起药丸、redo 重建，见 [cases-prompt-ref-pills.md](cases-prompt-ref-pills.md)）。
+- **`undo`/`redo` 绝不算用户输入**：宿主只镜像 text/caret 并重算图片撤销可用性（`alternativeVersionId` 已回到对应版本），**不得**关闭历史弹窗、触发 `@@`/`@#` 选择器或重置 popover dismiss——否则 `Ctrl+Z` 撤回 `@` 时会凭空弹出选择器。
+- **`program` 也不等于无副作用**：程序化插入/替换同样是新编辑（推高版本、丢弃 redo）。宿主对它只跳过「用户输入」副作用，但 `kind === 'content'` 时仍要 `invalidateRedo()` + 重算图片撤销 key，否则 context key 会 stale-true，抢占 `Ctrl+Z` 后内部又拒绝执行，看起来像撤销键坏了。
 - 根因链：受控 textarea 的 `onChange` 只在用户输入时触发；非受控 Monaco 每次 `model.setValue` / `applyEdits`（历史导航、接受候选、草稿恢复、tracker 自己的 insert/restore）都 fire `onDidChangeModelContent`。若把它当用户输入处理，history-nav effect 里的 `setText` 会回灌 → `if (historyOpen) setHistoryOpen(false)`，把刚开的弹窗立刻关掉。
 - 第一层解（pills 坑③ 已记）：`PromptEditorHandle` 的命令式方法用 `runProgrammatic` 计数器包裹，`onChange` 带第三参 `source: 'user' | 'program'`；`program` 时只 mirror text/caret、**跳过所有用户输入副作用**（history 关闭、`@@`/`@#` 触发、popover dismiss）。
 - **第二层解（计数器仍不够，必须再带 `kind`）**：真 Monaco 在 programmatic `setText`/`setPosition` 结算**之后**会**异步**再补发一个 `onDidChangeCursorPosition`，此时计数器已归零 → 该事件被判成 `source:'user'`，内容却没变（只是光标 settle）。历史弹窗打开后正是这个杂散事件触发 `setHistoryOpen(false)`——症状 = 按 ↑ 文本跳到上一条但**弹窗一闪即消**。
 - 解法：`onChange` 加第四参 `kind: 'content' | 'cursor'`（`onDidChangeModelContent`→content，`onDidChangeCursorPosition`→cursor）；host 侧 `kind === 'cursor'` 时只 `setCaret`、**跳过所有内容相关副作用**。
 - 测试纪律：单测 stub 的光标事件是**同步**发的（落在 `runProgrammatic` 内）→ 假绿；复现必须走真 e2e（键盘输入 → Enter 真提交 push 历史 → 真 ArrowUp 走全局键盘路由；`sendAcpPrompt` 探针直调 `sendPrompt` 绕过 submit，**不会 push 历史**）。回归：`smoke.agentsPromptHistory.spec.ts` + `PromptInput.test.tsx` 的 `keeps the history popover open when a bare cursor move fires`（stub 的 keyup→cursor 事件锁死此坑）。
+
+## `setText` 是唯一的硬重置点：`setValue` + `onDidResetHistory`
+
+- `setText` 用 `model.setValue`——Monaco 会清空 undo/redo 栈并销毁全部 decoration。因此它**不是普通编辑**：`PromptMonacoEditor` 在值真正变化时顺手 `tracker.clear()`（药丸追踪已无意义）并 fire `onDidResetHistory`，宿主（`PromptInput`）据此 `reset()` 图片撤销栈并同步可用性 key。
+- **值相同时 `setText` 是 no-op**（不 setValue、不 reset）。需要「无论文本变没变都硬重置」的场景（提交后清空上一轮历史，尤其只发图片时缓冲区本就是空串）用 `handle.clearHistory()`：它 `setValue(当前文本)` + `tracker.clear()` + `onDidResetHistory`。
+- 宿主所有 `setText` 语义的路径（历史导航、`@@` 文件选择器、inbox 投递、草稿恢复、提交清空）自动继承这一重置，**不要**在别处手动清图片历史；反过来，新增这类路径时也别指望撤销能跨越一次 `setText`。
+- `setText` 的 `runProgrammatic` 保证这次整体替换不会被当成用户输入（否则会误触发 picker/关历史）。
 
 ## 历史弹窗：浮在输入框上沿 → 列表从下往上长
 

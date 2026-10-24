@@ -995,6 +995,49 @@ describe('useGlobalKeybindingHandler — Monaco interop (capture phase)', () => 
     expect(stopPropagation).not.toHaveBeenCalled()
   })
 
+  // The prompt's image undo stack claims Ctrl+Z only while it has an entry
+  // consumable at the model's current alternative version. While it does, its
+  // binding must outrank Monaco's `undo` mirror and be executed here — otherwise
+  // Monaco would also undo text. When the `when` clause fails, the key must fall
+  // straight back to Monaco's deferred default, so plain text undo is untouched.
+  it('a prompt image-undo binding claims Ctrl+Z only while it is available', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+z',
+        command: 'undo',
+        weight: KeybindingWeight.MonacoDefault,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('undo', () => {}))
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+z',
+        command: 'workbench.action.agent.prompt.undoImage',
+        when: 'acpPromptInputFocused && acpPromptImageUndoAvailable',
+        weight: KeybindingWeight.WorkbenchContrib + 50,
+      }),
+    )
+    disposables.push(
+      CommandsRegistry.registerCommand('workbench.action.agent.prompt.undoImage', () => {}),
+    )
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey<boolean>('acpPromptInputFocused', true)
+    const available = ck.createKey<boolean>('acpPromptImageUndoAvailable', false)
+    mountHost(instantiation)
+
+    // Empty image history: the binding is filtered out, Monaco keeps the key.
+    const deferred = dispatch({ ctrlKey: true, key: 'z' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(deferred.preventDefault).not.toHaveBeenCalled()
+
+    // An image entry exists: our higher-weight binding wins and claims the key.
+    act(() => available.set(true))
+    const claimed = dispatch({ ctrlKey: true, key: 'z' })
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.agent.prompt.undoImage')
+    expect(claimed.preventDefault).toHaveBeenCalled()
+  })
+
   // A higher-weight binding (project Action2) on the same key as a Monaco
   // default outranks it: the dispatcher claims the key and runs the command,
   // even while the editor is focused. This is Bug 1's fix (alt+shift+o).

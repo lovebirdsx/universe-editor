@@ -336,6 +336,66 @@ describe('AcpChatWidgetService', () => {
     expect(cks.get('acpChatTurnRunning')).toBe(false)
   })
 
+  it('acpPromptImageUndo/RedoAvailable follow only the focused widget', () => {
+    const a = makeWidget('a')
+    const b = makeWidget('b')
+    svc.register(a.widget)
+    svc.register(b.widget)
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(false)
+
+    // Unfocused availability must not arm the key — Ctrl+Z stays with Monaco.
+    svc.setImageUndoState(a.widget, { canUndo: true, canRedo: false })
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(false)
+
+    fireFocusIn(a.child)
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(true)
+    expect(cks.get('acpPromptImageRedoAvailable')).toBe(false)
+
+    // Blur keeps the key off even though the widget still has undo history.
+    fireFocusOut(a.child)
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(false)
+  })
+
+  it('acpPromptImageUndo/RedoAvailable do not leak from another widget', () => {
+    const a = makeWidget('a')
+    const b = makeWidget('b')
+    svc.register(a.widget)
+    svc.register(b.widget)
+    svc.setImageUndoState(a.widget, { canUndo: true, canRedo: true })
+    fireFocusIn(b.child)
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(false)
+    expect(cks.get('acpPromptImageRedoAvailable')).toBe(false)
+
+    fireFocusOut(b.child, a.child)
+    fireFocusIn(a.child, b.child)
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(true)
+    expect(cks.get('acpPromptImageRedoAvailable')).toBe(true)
+  })
+
+  it('consuming the last image entry flips the key off', () => {
+    const a = makeWidget('a')
+    svc.register(a.widget)
+    fireFocusIn(a.child)
+    svc.setImageUndoState(a.widget, { canUndo: true, canRedo: false })
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(true)
+
+    svc.setImageUndoState(a.widget, { canUndo: false, canRedo: true })
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(false)
+    expect(cks.get('acpPromptImageRedoAvailable')).toBe(true)
+  })
+
+  it('unregistering the focused widget clears the image undo keys', () => {
+    const a = makeWidget('a')
+    const sub = svc.register(a.widget)
+    fireFocusIn(a.child)
+    svc.setImageUndoState(a.widget, { canUndo: true, canRedo: true })
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(true)
+
+    sub.dispose()
+    expect(cks.get('acpPromptImageUndoAvailable')).toBe(false)
+    expect(cks.get('acpPromptImageRedoAvailable')).toBe(false)
+  })
+
   it('setContextTarget flips the acpChatContext* group as a set', () => {
     expect(cks.get('acpChatContextImage')).toBe(false)
     expect(cks.get('acpChatContextPath')).toBe(false)

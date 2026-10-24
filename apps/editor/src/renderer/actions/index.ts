@@ -414,6 +414,8 @@ import {
   SelectPreviousAcpPromptSuggestionAction,
   AcceptAcpPromptSuggestionAction,
   HideAcpPromptSuggestionAction,
+  UndoPromptImageAction,
+  RedoPromptImageAction,
   ChatFindAction,
   ChatFindNextAction,
   ChatFindPreviousAction,
@@ -930,6 +932,11 @@ registerAction2(SelectNextAcpPromptSuggestionAction)
 registerAction2(SelectPreviousAcpPromptSuggestionAction)
 registerAction2(AcceptAcpPromptSuggestionAction)
 registerAction2(HideAcpPromptSuggestionAction)
+// Image undo/redo: Ctrl+Z / Ctrl+Y claim the key only while the focused prompt
+// has an image entry consumable at the current text version, so Monaco's own
+// undo/redo keeps the keys for plain text.
+registerAction2(UndoPromptImageAction)
+registerAction2(RedoPromptImageAction)
 // In-session find — its `f3` / `shift+f3` / `escape` bindings carry an explicit
 // higher weight so they win over global shortcuts whenever `acpChatFindVisible`
 // is set (`ctrl+f` to open gates on ACP_NAV_WHEN).

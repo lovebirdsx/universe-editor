@@ -80,6 +80,12 @@ export interface PromptEditorHandle {
   getText(): string
   /** Replace the whole buffer and place the caret (default: end). */
   setText(text: string, caret?: number): void
+  /**
+   * Drop Monaco's undo/redo history and every tracked pill, keeping the current
+   * text. `setText` is a no-op when the text is unchanged, so callers that need
+   * a guaranteed hard reset (submit) use this.
+   */
+  clearHistory(): void
   getCaret(): number
   setCaret(offset: number): void
   /** Textarea-compatible collapsed/selection caret set (start===end → caret). */
@@ -94,6 +100,11 @@ export interface PromptEditorHandle {
    * caret after the inserted text (past the space). No-op before the editor mounts.
    */
   insertRef(ref: PromptRef, start: number, end: number, trailingSpace?: boolean): void
+  /**
+   * Insert several refs at `at` as ONE undo step (a multi-file drop). Each pill
+   * gets its own trailing space; the caret lands after the last one.
+   */
+  insertRefs(refs: readonly PromptRef[], at?: number): void
   /** Live placed refs (range-tracked), ordered by start offset. */
   listRefs(): PlacedRef[]
   /**
@@ -107,16 +118,23 @@ export interface PromptEditorHandle {
   clearRefs(): void
   /** The live Monaco editor + monaco namespace, for the ref tracker (M2). Null pre-init. */
   peek(): { editor: monaco.editor.IStandaloneCodeEditor; ns: typeof monaco } | null
+  /**
+   * The model's alternative version id — a monotonic counter that only text
+   * edits move (and `setValue` bumps too). Undo/redo walk it back and forth, so
+   * it interleaves text history with the image-undo stack (see promptImageUndo).
+   */
+  getAlternativeVersionId(): number | undefined
 }
 
 /**
  * Origin of a content/caret change. `user` = a keystroke/IME/paste inside the
  * editor; `program` = an imperative `setText`/`replaceRange`/caret call from the
- * host. The old controlled textarea only fired onChange for user input, so the
- * host relies on this to keep programmatic writes (history nav, accept-pick,
- * draft restore) from being mistaken for typing.
+ * host; `undo`/`redo` = Monaco's own history. The old controlled textarea only
+ * fired onChange for user input, so the host relies on this to keep programmatic
+ * writes (history nav, accept-pick, draft restore) from being mistaken for
+ * typing — and to keep undo/redo from re-triggering `@@`/`@#` pickers.
  */
-export type PromptChangeSource = 'user' | 'program'
+export type PromptChangeSource = 'user' | 'program' | 'undo' | 'redo'
 
 /**
  * Whether a change event carried a genuine text edit (`content`) or was only a
@@ -151,6 +169,12 @@ export interface PromptMonacoEditorProps {
   readonly onEnter: () => boolean
   /** ArrowUp on the first line with no popover: open history. Returns true if consumed. */
   readonly onArrowUp?: () => boolean
+  /**
+   * Fired after `setText` replaced the buffer via `model.setValue`, which clears
+   * Monaco's undo/redo history outright. Hosts use it to reset non-text undo
+   * stacks (images) whose versions refer to the discarded history.
+   */
+  readonly onDidResetHistory?: () => void
   readonly onEditorReady?: (editor: monaco.editor.IStandaloneCodeEditor, ns: typeof monaco) => void
 }
 
@@ -165,6 +189,7 @@ export function PromptMonacoEditor({
   onChange,
   onEnter,
   onArrowUp,
+  onDidResetHistory,
   onEditorReady,
 }: PromptMonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -181,6 +206,8 @@ export function PromptMonacoEditor({
   onEnterRef.current = onEnter
   const onArrowUpRef = useRef(onArrowUp)
   onArrowUpRef.current = onArrowUp
+  const onDidResetHistoryRef = useRef(onDidResetHistory)
+  onDidResetHistoryRef.current = onDidResetHistory
   const onEditorReadyRef = useRef(onEditorReady)
   onEditorReadyRef.current = onEditorReady
 
@@ -205,10 +232,11 @@ export function PromptMonacoEditor({
     }
   }
 
-  const emitChange = (kind: PromptChangeKind): void => {
+  const emitChange = (kind: PromptChangeKind, sourceOverride?: PromptChangeSource): void => {
     const model = modelRef.current
     if (!model) return
-    const source: PromptChangeSource = programDepthRef.current > 0 ? 'program' : 'user'
+    const source: PromptChangeSource =
+      sourceOverride ?? (programDepthRef.current > 0 ? 'program' : 'user')
     onChangeRef.current(model.getValue(), caretOffset(), source, kind)
   }
 
@@ -227,9 +255,24 @@ export function PromptMonacoEditor({
           const ed = editorRef.current
           const model = modelRef.current
           if (!ed || !model) return
-          if (model.getValue() !== text) model.setValue(text)
+          if (model.getValue() !== text) {
+            // setValue destroys every decoration and clears Monaco's undo/redo
+            // stack, so any ref/image history keyed to the old text is dead.
+            model.setValue(text)
+            trackerRef.current?.clear()
+            onDidResetHistoryRef.current?.()
+          }
           const off = caret ?? text.length
           ed.setPosition(model.getPositionAt(off))
+        }),
+      clearHistory: () =>
+        runProgrammatic(() => {
+          const model = modelRef.current
+          if (!model) return
+          // setValue always flushes the command manager, even for the same text.
+          model.setValue(model.getValue())
+          trackerRef.current?.clear()
+          onDidResetHistoryRef.current?.()
         }),
       getCaret: caretOffset,
       setCaret: (offset) =>
@@ -269,19 +312,37 @@ export function PromptMonacoEditor({
         runProgrammatic(() => {
           const ed = editorRef.current
           const model = modelRef.current
-          const m = monacoRef.current
           const tracker = trackerRef.current
-          if (!ed || !model || !m || !tracker) return
-          let caret = tracker.insert(ref, start, end)
-          const nextChar = model.getValue().slice(caret, caret + 1)
-          if (trailingSpace && (nextChar === '' || !/\s/.test(nextChar))) {
-            const at = model.getPositionAt(caret)
-            // No forceMoveMarkers: it would override the pill decoration's
-            // NeverGrowsWhenTypingAtEdges stickiness and pull the trailing space
-            // into the tracked range, so reconcile() would later see the range
-            // text drift from its snapshot and delete the whole pill.
-            model.applyEdits([{ range: m.Range.fromPositions(at, at), text: ' ' }])
-            caret += 1
+          if (!ed || !model || !tracker) return
+          // Fold the boundary space into the SAME edit: a second applyEdits
+          // would sit outside the undo stack and split the pill from its space.
+          const nextChar = model.getValue().slice(end, end + 1)
+          const suffix = trailingSpace && (nextChar === '' || !/\s/.test(nextChar)) ? ' ' : ''
+          const caret = tracker.insert(ref, start, end, {
+            suffix,
+            beforeCursorState: ed.getSelections(),
+          })
+          ed.setPosition(model.getPositionAt(caret))
+        }),
+      insertRefs: (refs, at) =>
+        runProgrammatic(() => {
+          const ed = editorRef.current
+          const model = modelRef.current
+          const tracker = trackerRef.current
+          if (!ed || !model || !tracker || refs.length === 0) return
+          let caret = at ?? caretOffset()
+          tracker.beginUndoGroup()
+          try {
+            for (const ref of refs) {
+              const nextChar = model.getValue().slice(caret, caret + 1)
+              const suffix = nextChar === '' || !/\s/.test(nextChar) ? ' ' : ''
+              caret = tracker.insert(ref, caret, caret, {
+                suffix,
+                beforeCursorState: ed.getSelections(),
+              })
+            }
+          } finally {
+            tracker.endUndoGroup()
           }
           ed.setPosition(model.getPositionAt(caret))
         }),
@@ -302,6 +363,7 @@ export function PromptMonacoEditor({
         const ns = monacoRef.current
         return editor && ns ? { editor, ns } : null
       },
+      getAlternativeVersionId: () => modelRef.current?.getAlternativeVersionId(),
     }),
     [],
   )
@@ -373,10 +435,22 @@ export function PromptMonacoEditor({
       // On a genuine user edit, drop any pill the user broke (edited inside /
       // backspaced its edge). Skip while a programmatic write is in flight — the
       // tracker's own insert()/restore() must not be reconciled mid-operation.
+      // Undo/redo reach the tracker via flags: undo must retire a collapsed pill
+      // without deleting text (Monaco already applied the inverse edit), redo
+      // must mount its decoration back when the change carries the pill text.
       disposables.push(
-        ed.onDidChangeModelContent(() => {
-          if (programDepthRef.current === 0) tracker.reconcile()
-          emitChange('content')
+        ed.onDidChangeModelContent((e) => {
+          const isUndoing = e.isUndoing === true
+          const isRedoing = e.isRedoing === true
+          if (programDepthRef.current === 0) {
+            tracker.reconcile({
+              isUndoing,
+              isRedoing,
+              isFlush: e.isFlush === true,
+              changes: e.changes,
+            })
+          }
+          emitChange('content', isUndoing ? 'undo' : isRedoing ? 'redo' : undefined)
         }),
       )
       disposables.push(ed.onDidChangeCursorPosition(() => emitChange('cursor')))

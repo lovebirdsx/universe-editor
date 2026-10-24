@@ -102,6 +102,7 @@ import {
 } from '../../services/acp/promptRef.js'
 import type { AcpContextMenuTarget } from '../../services/acp/chatContextTarget.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import { PromptImageUndo } from '../../services/acp/promptImageUndo.js'
 import {
   collectActiveSelectionContexts,
   formatSelectionLabel,
@@ -173,6 +174,7 @@ export function PromptInput({
   autoFocus = false,
   handleRef,
   onPopoverOpenChange,
+  onImageUndoStateChange,
   topAccessory,
 }: {
   session: IAcpSession
@@ -180,6 +182,8 @@ export function PromptInput({
   autoFocus?: boolean
   handleRef?: MutableRefObject<WidgetHandle>
   onPopoverOpenChange?: (open: boolean) => void
+  /** Image undo/redo availability, pushed up so commands can gate their keys. */
+  onImageUndoStateChange?: (state: { canUndo: boolean; canRedo: boolean }) => void
   /** Optional element rendered above the composer (sibling of the selection /
    *  image chips) — the empty-session cwd pill lives here. */
   topAccessory?: ReactNode
@@ -215,6 +219,24 @@ export function PromptInput({
   const [images, setImages] = useState<readonly PromptImage[]>(
     () => AcpPromptDraftCache.load(session.id)?.images ?? [],
   )
+  // Live mirror of `images`: an attach reads the file for tens of milliseconds,
+  // and a callback that closed over the state value would append to a stale
+  // list when two attaches overlap. Every writer goes through commitImages.
+  const imagesRef = useRef<readonly PromptImage[]>(images)
+  const commitImages = useCallback(
+    (updater: (prev: readonly PromptImage[]) => readonly PromptImage[]) => {
+      const next = updater(imagesRef.current)
+      imagesRef.current = next
+      setImages(next)
+      return next
+    },
+    [],
+  )
+  const imageUndoRef = useRef<PromptImageUndo | null>(null)
+  if (imageUndoRef.current === null) imageUndoRef.current = new PromptImageUndo()
+  const imageUndo = imageUndoRef.current
+  const onImageUndoStateChangeRef = useRef(onImageUndoStateChange)
+  onImageUndoStateChangeRef.current = onImageUndoStateChange
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   // False when the warm-up walk was truncated (listing is a subset of the
@@ -233,6 +255,37 @@ export function PromptInput({
   }>({ symbol: [], scmChange: [], openEditor: [], docs: [], commit: [], chatContext: [] })
   const [hashLoading, setHashLoading] = useState(false)
   const editorHandleRef = useRef<PromptEditorHandle | null>(null)
+  // Images are React state, so their history is separate from Monaco's. The
+  // stack gates on the model's alternative version: an entry is only consumable
+  // while the text is still at the version it was attached at — otherwise
+  // Monaco's own undo runs first and our entry waits for the text to come back.
+  const syncImageUndoState = useCallback((): void => {
+    const state = imageUndo.state(
+      imagesRef.current,
+      editorHandleRef.current?.getAlternativeVersionId(),
+    )
+    onImageUndoStateChangeRef.current?.(state)
+  }, [imageUndo])
+  const undoPromptImage = useCallback((): boolean => {
+    const next = imageUndo.undo(
+      imagesRef.current,
+      editorHandleRef.current?.getAlternativeVersionId(),
+    )
+    if (next === null) return false
+    commitImages(() => next)
+    syncImageUndoState()
+    return true
+  }, [commitImages, imageUndo, syncImageUndoState])
+  const redoPromptImage = useCallback((): boolean => {
+    const next = imageUndo.redo(
+      imagesRef.current,
+      editorHandleRef.current?.getAlternativeVersionId(),
+    )
+    if (next === null) return false
+    commitImages(() => next)
+    syncImageUndoState()
+    return true
+  }, [commitImages, imageUndo, syncImageUndoState])
   // The config bar's imperative handle: Alt+<n> arrives as a command, not as a
   // DOM event, so it has to reach the bar by ref rather than by bubbling.
   const configBarRef = useRef<ConfigOptionsBarHandle | null>(null)
@@ -417,6 +470,8 @@ export function PromptInput({
       else if (s.slashOpen) setSlashDismissed(true)
     }
     ref.current.activateConfigEntry = (index) => configBarRef.current?.activateEntry(index) ?? false
+    ref.current.undoPromptImage = undoPromptImage
+    ref.current.redoPromptImage = redoPromptImage
     return () => {
       ref.current.focus = () => false
       ref.current.popoverSelectNext = () => {}
@@ -424,8 +479,10 @@ export function PromptInput({
       ref.current.popoverAccept = () => {}
       ref.current.popoverHide = () => {}
       ref.current.activateConfigEntry = () => false
+      ref.current.undoPromptImage = () => false
+      ref.current.redoPromptImage = () => false
     }
-  }, [handleRef])
+  }, [handleRef, undoPromptImage, redoPromptImage])
 
   // Auto-focus on session swap so the user can keep typing without clicking
   // the textarea. Skip the initial mount so we don't steal focus from a
@@ -508,10 +565,7 @@ export function PromptInput({
       if (incoming.length === 0) return
       const el = editorHandleRef.current
       if (!el) return
-      for (const ref of incoming) {
-        const at = el.getCaret()
-        el.insertRef(ref, at, at)
-      }
+      el.insertRefs(incoming, el.getCaret())
       setMentionDismissed(true)
       requestFrame(() => el.focus())
     }
@@ -536,7 +590,9 @@ export function PromptInput({
       el?.setText(replacement.text, replacement.text.length)
       el?.clearRefs()
       setContexts(replacement.contexts)
-      setImages([])
+      commitImages(() => [])
+      imageUndo.reset()
+      syncImageUndoState()
       requestFrame(() => el?.focus())
     }
     pull()
@@ -544,7 +600,7 @@ export function PromptInput({
       if (id === session.id) pull()
     })
     return () => sub.dispose()
-  }, [session.id, editorReady, requestFrame])
+  }, [session.id, editorReady, requestFrame, commitImages, imageUndo, syncImageUndoState])
 
   // Cancel restore (Claude Code CLI parity): a user-initiated cancel with an
   // in-flight turn fires session.onDidCancelForRestore — restore the stashed
@@ -562,11 +618,23 @@ export function PromptInput({
       el.setText(draft.text, draft.text.length)
       el.restoreRefs(draft.refs ?? [])
       setContexts(draft.contexts ?? [])
-      setImages(draft.images ?? [])
+      commitImages(() => draft.images ?? [])
+      imageUndo.reset()
+      syncImageUndoState()
       requestFrame(() => el.focus())
     })
     return () => sub.dispose()
-  }, [session, session.id, editorReady, contexts, images, requestFrame])
+  }, [
+    session,
+    session.id,
+    editorReady,
+    contexts,
+    images,
+    requestFrame,
+    commitImages,
+    imageUndo,
+    syncImageUndoState,
+  ])
 
   // On mount, restore the saved caret position into the textarea DOM so the
   // cursor lands at the right spot when the user refocuses after switching
@@ -633,6 +701,12 @@ export function PromptInput({
       }
       let rejection: ImageRejectReason | null = null
       const accepted: PromptImage[] = []
+      // Capture the text version before the async reads: the attach belongs
+      // chronologically to this moment, so text typed while the file is being
+      // read must be undone first (see promptImageUndo). The generation lets a
+      // landing attach detect that the history was wiped meanwhile.
+      const altVersion = editorHandleRef.current?.getAlternativeVersionId()
+      const undoGeneration = imageUndo.generation
       // Snapshot the count up front and grow it as we accept, so a single batch
       // that exceeds maxCount is capped correctly.
       let count = images.length
@@ -654,7 +728,9 @@ export function PromptInput({
         }
       }
       if (accepted.length > 0) {
-        setImages((prev) => [...prev, ...accepted])
+        commitImages((prev) => [...prev, ...accepted])
+        imageUndo.recordAttach(accepted, altVersion, undoGeneration)
+        syncImageUndoState()
         editorHandleRef.current?.focus()
       }
       if (rejection !== null) {
@@ -664,7 +740,15 @@ export function PromptInput({
         })
       }
     },
-    [imageSupported, images.length, imageLimits, notification],
+    [
+      imageSupported,
+      images.length,
+      imageLimits,
+      notification,
+      commitImages,
+      imageUndo,
+      syncImageUndoState,
+    ],
   )
 
   // Attach images dragged from inside the app (Explorer): an internal drag
@@ -685,6 +769,8 @@ export function PromptInput({
       }
       let rejection: ImageRejectReason | null = null
       const accepted: PromptImage[] = []
+      const altVersion = editorHandleRef.current?.getAlternativeVersionId()
+      const undoGeneration = imageUndo.generation
       let count = images.length
       for (const uri of uris) {
         const fileName = uri.path.slice(uri.path.lastIndexOf('/') + 1)
@@ -707,7 +793,9 @@ export function PromptInput({
         }
       }
       if (accepted.length > 0) {
-        setImages((prev) => [...prev, ...accepted])
+        commitImages((prev) => [...prev, ...accepted])
+        imageUndo.recordAttach(accepted, altVersion, undoGeneration)
+        syncImageUndoState()
         editorHandleRef.current?.focus()
       }
       if (rejection !== null) {
@@ -717,7 +805,16 @@ export function PromptInput({
         })
       }
     },
-    [imageSupported, images.length, imageLimits, notification, fileService],
+    [
+      imageSupported,
+      images.length,
+      imageLimits,
+      notification,
+      fileService,
+      commitImages,
+      imageUndo,
+      syncImageUndoState,
+    ],
   )
 
   // Slash popover takes precedence: a buffer that starts with `/` is a
@@ -1215,10 +1312,15 @@ export function PromptInput({
     })
     editorHandleRef.current?.clearRefs()
     editorHandleRef.current?.setText('', 0)
+    // setText is a no-op when the buffer is already empty (image-only send), but
+    // submit must still discard the previous turn's undo history.
+    editorHandleRef.current?.clearHistory()
     setText('')
     AcpPromptDraftCache.clear(session.id)
     setContexts([])
-    setImages([])
+    commitImages(() => [])
+    imageUndo.reset()
+    syncImageUndoState()
     setHistoryOpen(false)
     setSlashDismissed(false)
     setMentionDismissed(false)
@@ -1279,6 +1381,23 @@ export function PromptInput({
     if (source === 'program') {
       setText(v)
       setCaret(c)
+      // A programmatic insert (accept-pick, drop) is a real edit: it bumps the
+      // model version and closes the redo branch, so the image gate must be
+      // re-evaluated or a stale-true availability key would swallow Ctrl+Z.
+      if (kind === 'content') {
+        imageUndo.invalidateRedo()
+        syncImageUndoState()
+      }
+      return
+    }
+    if (source === 'undo' || source === 'redo') {
+      // Monaco's own history moved the text (and may have restored/retired
+      // pills). Mirror it and re-evaluate the image gate — the alternative
+      // version now sits where the image stack expects it — but never run
+      // typing side effects (history close, `@@` picker, dismissal resets).
+      setText(v)
+      setCaret(c)
+      syncImageUndoState()
       return
     }
     if (kind === 'cursor') {
@@ -1296,6 +1415,10 @@ export function PromptInput({
     }
     setText(v)
     setCaret(c)
+    // A fresh edit discards the image redo branch (standard undo semantics);
+    // already-attached images stay undoable while the text version matches.
+    imageUndo.invalidateRedo()
+    syncImageUndoState()
     if (extractSlashQuery(v, c) === null) setSlashDismissed(false)
     if (extractHashQuery(v, c) === null) setHashDismissed(false)
     if (extractMentionQuery(v, c) === null) setMentionDismissed(false)
@@ -1448,13 +1571,12 @@ export function PromptInput({
     const picks = mentionUris.map((uri) => toMentionName(uri, mentionRoot))
     const el = editorHandleRef.current
     if (!el) return
-    // Insert each dropped file as a range-tracked pill at the caret; insertRef
-    // advances the caret past the pill (+ trailing space) so the next one lands
-    // right after it.
-    for (const p of picks) {
-      const at = el.getCaret()
-      el.insertRef(mentionEntryToRef({ uri: p.uri, relPath: p.name }, 'file'), at, at)
-    }
+    // One undo group for the whole drop: the pills are one user gesture, so a
+    // single Ctrl+Z must take them all out (and Ctrl+Y restore them).
+    el.insertRefs(
+      picks.map((p) => mentionEntryToRef({ uri: p.uri, relPath: p.name }, 'file')),
+      el.getCaret(),
+    )
     setMentionDismissed(true)
     requestFrame(() => el.focus())
   }
@@ -1506,18 +1628,28 @@ export function PromptInput({
         })
         return
       }
-      setImages((prev) => [
-        ...prev,
-        {
-          id: generateUuid(),
-          mimeType: image.mimeType,
-          dataBase64: image.dataBase64,
-          byteSize: image.byteSize,
-        },
-      ])
+      const altVersion = editorHandleRef.current?.getAlternativeVersionId()
+      const undoGeneration = imageUndo.generation
+      const added: PromptImage = {
+        id: generateUuid(),
+        mimeType: image.mimeType,
+        dataBase64: image.dataBase64,
+        byteSize: image.byteSize,
+      }
+      commitImages((prev) => [...prev, added])
+      imageUndo.recordAttach([added], altVersion, undoGeneration)
+      syncImageUndoState()
       editorHandleRef.current?.focus()
     },
-    [imageSupported, images.length, imageLimits, notification],
+    [
+      imageSupported,
+      images.length,
+      imageLimits,
+      notification,
+      commitImages,
+      imageUndo,
+      syncImageUndoState,
+    ],
   )
 
   // EditContext fallback: read the clipboard image via the main-process
@@ -1595,7 +1727,14 @@ export function PromptInput({
       />
       <PromptImageChips
         images={images}
-        onRemove={(id) => setImages((prev) => prev.filter((img) => img.id !== id))}
+        onRemove={(id) => {
+          // A hand-removed chip must not come back on Ctrl+Z; it is a new edit,
+          // so the redo half of the image history dies with it.
+          imageUndo.dropEntriesFor([id])
+          imageUndo.invalidateRedo()
+          commitImages((prev) => prev.filter((img) => img.id !== id))
+          syncImageUndoState()
+        }}
       />
       <div className={styles['promptComposer']}>
         {historyOpen && historyEntries.length > 0 ? (
@@ -1653,6 +1792,12 @@ export function PromptInput({
             onChange={onEditorChange}
             onEnter={onEditorEnter}
             onArrowUp={onEditorArrowUp}
+            onDidResetHistory={() => {
+              // setValue wiped Monaco's history; image entries keyed to the old
+              // alternative versions can never line up again.
+              imageUndo.reset()
+              syncImageUndoState()
+            }}
             onEditorReady={onEditorReady}
           />
         </div>

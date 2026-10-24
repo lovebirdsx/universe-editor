@@ -412,6 +412,8 @@ function makeHandleRef(): { current: WidgetHandle } {
       popoverSelectPrev: () => {},
       popoverAccept: () => {},
       popoverHide: () => {},
+      undoPromptImage: () => false,
+      redoPromptImage: () => false,
       openFind: () => {},
       closeFind: () => {},
       findNext: () => {},
@@ -2432,6 +2434,156 @@ describe('PromptInput — draft persistence', () => {
       expect(notPrevented).toBe(false)
       // The image is read via IFileService and attached as a chip.
       expect(await screen.findByTestId('acp-prompt-image-chips')).toBeTruthy()
+    })
+
+    // Images are React state, not text, so Monaco's undo cannot reach them.
+    // The widget handle exposes a separate stack gated on the model's
+    // alternative version (see promptImageUndo.ts).
+    it('undoes and redoes a pasted image through the widget handle', async () => {
+      const session = makeSession({ imageSupported: true })
+      const handleRef = makeHandleRef()
+      const states: Array<{ canUndo: boolean; canRedo: boolean }> = []
+      renderWithServices(
+        <PromptInput
+          session={session}
+          handleRef={handleRef}
+          onImageUndoStateChange={(state) => states.push(state)}
+        />,
+      )
+      pasteImage(getTextarea(), makeImageFile())
+      await screen.findByTestId('acp-prompt-image-chips')
+      await waitFor(() => expect(states.at(-1)).toEqual({ canUndo: true, canRedo: false }))
+
+      let undone = false
+      act(() => {
+        undone = handleRef.current.undoPromptImage()
+      })
+      expect(undone).toBe(true)
+      expect(screen.queryByTestId('acp-prompt-image-chips')).toBeNull()
+      await waitFor(() => expect(states.at(-1)).toEqual({ canUndo: false, canRedo: true }))
+
+      let redone = false
+      act(() => {
+        redone = handleRef.current.redoPromptImage()
+      })
+      expect(redone).toBe(true)
+      expect(await screen.findByTestId('acp-prompt-image-chips')).toBeTruthy()
+      expect(states.at(-1)).toEqual({ canUndo: true, canRedo: false })
+    })
+
+    it('a hand-removed image cannot be brought back with Ctrl+Z', async () => {
+      const session = makeSession({ imageSupported: true })
+      const handleRef = makeHandleRef()
+      const states: Array<{ canUndo: boolean; canRedo: boolean }> = []
+      renderWithServices(
+        <PromptInput
+          session={session}
+          handleRef={handleRef}
+          onImageUndoStateChange={(state) => states.push(state)}
+        />,
+      )
+      pasteImage(getTextarea(), makeImageFile())
+      await screen.findByTestId('acp-prompt-image-chips')
+
+      fireEvent.click(screen.getByRole('button', { name: 'Remove image' }))
+      expect(screen.queryByTestId('acp-prompt-image-chips')).toBeNull()
+      await waitFor(() => expect(states.at(-1)).toEqual({ canUndo: false, canRedo: false }))
+
+      let undone = false
+      act(() => {
+        undone = handleRef.current.undoPromptImage()
+      })
+      expect(undone).toBe(false)
+      expect(screen.queryByTestId('acp-prompt-image-chips')).toBeNull()
+    })
+
+    it('a fresh text edit discards the image redo branch', async () => {
+      const session = makeSession({ imageSupported: true })
+      const handleRef = makeHandleRef()
+      renderWithServices(<PromptInput session={session} handleRef={handleRef} />)
+      pasteImage(getTextarea(), makeImageFile())
+      await screen.findByTestId('acp-prompt-image-chips')
+
+      let undone = false
+      act(() => {
+        undone = handleRef.current.undoPromptImage()
+      })
+      expect(undone).toBe(true)
+
+      fireEvent.change(getTextarea(), { target: { value: 'typing again' } })
+      let redone = false
+      act(() => {
+        redone = handleRef.current.redoPromptImage()
+      })
+      expect(redone).toBe(false)
+      expect(screen.queryByTestId('acp-prompt-image-chips')).toBeNull()
+    })
+
+    it('a programmatic ref insertion re-gates the image history', async () => {
+      const session = makeSession({ imageSupported: true })
+      const handleRef = makeHandleRef()
+      const states: Array<{ canUndo: boolean; canRedo: boolean }> = []
+      renderWithServices(
+        <PromptInput
+          session={session}
+          handleRef={handleRef}
+          onImageUndoStateChange={(state) => states.push(state)}
+        />,
+        { workspace: makeWorkspaceService(URI.file('/repo')) },
+      )
+      pasteImage(getTextarea(), makeImageFile())
+      await screen.findByTestId('acp-prompt-image-chips')
+      await waitFor(() => expect(states.at(-1)).toEqual({ canUndo: true, canRedo: false }))
+
+      fireEvent.drop(getTextarea(), {
+        dataTransfer: {
+          files: [],
+          types: ['text/uri-list'],
+          getData: (mime: string) =>
+            mime === 'text/uri-list' ? URI.file('/repo/a.ts').toString() : '',
+        },
+      })
+      await waitFor(() => expect(getTextarea().value).toBe('@a.ts '))
+
+      // The insert pushed a new undo element: the image entry now sits behind
+      // it, so Ctrl+Z must fall through to Monaco instead of claiming the key.
+      await waitFor(() => expect(states.at(-1)).toEqual({ canUndo: false, canRedo: false }))
+      let undone = false
+      act(() => {
+        undone = handleRef.current.undoPromptImage()
+      })
+      expect(undone).toBe(false)
+      expect(screen.getByTestId('acp-prompt-image-chips')).toBeTruthy()
+    })
+
+    it('drops the image history when a programmatic rewrite clears the model history', async () => {
+      const session = makeSession({ imageSupported: true, commands: COMMANDS })
+      const handleRef = makeHandleRef()
+      const states: Array<{ canUndo: boolean; canRedo: boolean }> = []
+      renderWithServices(
+        <PromptInput
+          session={session}
+          handleRef={handleRef}
+          onImageUndoStateChange={(state) => states.push(state)}
+        />,
+      )
+      pasteImage(getTextarea(), makeImageFile())
+      await screen.findByTestId('acp-prompt-image-chips')
+
+      // Accepting a slash command rewrites the buffer through setValue, which
+      // clears Monaco's undo history outright — entries keyed to old versions
+      // can never line up again, so the stack must be reset.
+      const ta = getTextarea()
+      fireEvent.change(ta, { target: { value: '/' } })
+      act(() => handleRef.current.popoverAccept())
+      expect(ta.value).toBe('/help ')
+      await waitFor(() => expect(states.at(-1)).toEqual({ canUndo: false, canRedo: false }))
+
+      let undone = false
+      act(() => {
+        undone = handleRef.current.undoPromptImage()
+      })
+      expect(undone).toBe(false)
     })
   })
 })

@@ -267,6 +267,7 @@ function makeInstantiation(
     setContextTarget: () => {},
     setPopoverOpen: () => {},
     setFindVisible: () => {},
+    setImageUndoState: () => {},
     ...overrides.widget,
   } as unknown as IAcpChatWidgetService)
   services.set(IEditorResolverService, {

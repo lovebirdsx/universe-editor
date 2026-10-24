@@ -31,6 +31,8 @@ export function makeFakeAcpChatWidget(overrides: Partial<AcpChatWidget> = {}): A
     popoverSelectPrev: vi.fn(),
     popoverAccept: vi.fn(),
     popoverHide: vi.fn(),
+    undoPromptImage: vi.fn(() => false),
+    redoPromptImage: vi.fn(() => false),
     openFind: vi.fn(),
     closeFind: vi.fn(),
     findNext: vi.fn(),

@@ -1102,6 +1102,19 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!id) return ''
       return AcpPromptDraftCache.load(id)?.text ?? ''
     },
+    getAcpPromptRefs: () => {
+      const id = services.acpSessionService.activeSessionId.get()
+      if (!id) return []
+      const refs = AcpPromptDraftCache.load(id)?.refs ?? []
+      return refs.map((placed) => ({
+        id: placed.ref.id,
+        kind: placed.ref.kind,
+        label: placed.ref.label,
+        uri: placed.ref.uri,
+        start: placed.start,
+        end: placed.end,
+      }))
+    },
     getAcpVisiblePromptText: () => {
       const host = document.querySelector('[data-testid="acp-prompt-drop-host"]')
       // Monaco renders whitespace as &nbsp; in the view DOM — normalize back.

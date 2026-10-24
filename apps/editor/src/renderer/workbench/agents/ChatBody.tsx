@@ -178,6 +178,9 @@ export interface WidgetHandle {
   popoverSelectPrev: () => void
   popoverAccept: () => void
   popoverHide: () => void
+  /** Undo/redo the last attached prompt images (keyboard routed via Action2). */
+  undoPromptImage: () => boolean
+  redoPromptImage: () => boolean
   openFind: () => void
   closeFind: () => void
   findNext: () => void
@@ -241,6 +244,8 @@ function createNoopHandle(): WidgetHandle {
     popoverSelectPrev: noop,
     popoverAccept: noop,
     popoverHide: noop,
+    undoPromptImage: () => false,
+    redoPromptImage: () => false,
     openFind: noop,
     closeFind: noop,
     findNext: noop,
@@ -391,6 +396,8 @@ function ChatSessionBody({
       popoverSelectPrev: () => handleRef.current.popoverSelectPrev(),
       popoverAccept: () => handleRef.current.popoverAccept(),
       popoverHide: () => handleRef.current.popoverHide(),
+      undoPromptImage: () => handleRef.current.undoPromptImage(),
+      redoPromptImage: () => handleRef.current.redoPromptImage(),
       openFind: () => handleRef.current.openFind(),
       closeFind: () => handleRef.current.closeFind(),
       findNext: () => handleRef.current.findNext(),
@@ -432,6 +439,18 @@ function ChatSessionBody({
     (open: boolean) => {
       const widget = widgetRef.current
       if (widget) widgetService.setPopoverOpen(widget, open)
+    },
+    [widgetService],
+  )
+
+  // Image undo availability follows the same plumbing: PromptInput pushes
+  // {canUndo, canRedo} after every image/text change, and the service flips the
+  // keys for the focused widget. The Ctrl+Z / Ctrl+Y bindings gate on them, so
+  // when no image is undoable Monaco's own undo/redo keeps the key.
+  const handleImageUndoStateChange = useCallback(
+    (state: { canUndo: boolean; canRedo: boolean }) => {
+      const widget = widgetRef.current
+      if (widget) widgetService.setImageUndoState(widget, state)
     },
     [widgetService],
   )
@@ -578,6 +597,7 @@ function ChatSessionBody({
                 isSideTask={isSideTask}
                 handleRef={handleRef}
                 onPopoverOpenChange={handlePopoverOpenChange}
+                onImageUndoStateChange={handleImageUndoStateChange}
                 // Don't claim the input on mount when the user's last focus in this
                 // session was on the timeline — the restore effect above hands focus
                 // to the timeline instead, and a mount auto-focus would fight it.

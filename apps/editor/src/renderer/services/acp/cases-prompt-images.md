@@ -4,7 +4,7 @@
 
 ## 三入口、能力降级与限额
 
-- 三入口：Ctrl+V 粘贴 / 拖拽图片文件 / 附件按钮（ImagePlus）。渲染侧本来就支持（`MessageContent` 的 ImageBlock 渲染），本功能**只补输入侧**；整条管线镜像 SelectionContext 套路。
+- 三入口：Ctrl+V 粘贴（EditContext 下由主进程剪贴板兜底 `acceptClipboardImage`）/ OS 拖入图片文件（`acceptImageFiles`）/ 应用内拖入图片 URI（`acceptImageUris`）。渲染侧本来就支持（`MessageContent` 的 ImageBlock 渲染），本功能**只补输入侧**；整条管线镜像 SelectionContext 套路。
 - 核心纯函数集中 `services/acp/promptImage.ts`：`PromptImage` / `ImageLimits` / `validateImage`（→ `ImageRejectReason`：`unsupported-type` / `too-large` / `too-many`）/ `composeImageBlocks` / `blobToPromptImage`（OS File）/ `bytesToPromptImage`（URI 读取）/ `mimeTypeForFileName` / `isSupportedImageMime`（`SUPPORTED_IMAGE_MIME`）。发送链路 `sendPrompt(text, refs, contexts, images)`。
 - 能力降级：agent `promptCapabilities.image !== true` → 三入口禁用 + Info 通知（`acp.image.unsupported`）。observable `session.imageSupported` 在 `session/acpSession.ts` 从 initialize 响应里 `caps?.image === true` 缓存。
 - 限额可配：`acp.prompt.image.maxSizeMB`（默认 5）/ `acp.prompt.image.maxCount`（默认 5），`PromptInput.tsx` 读成 `ImageLimits`（`maxBytes` / `maxCount`）。一批多文件按「接受即增长」的计数裁剪（快照起始数、逐个 accepted 增长），超限只报**一条** Warning（第一个拒绝原因），不逐条刷屏。
@@ -15,6 +15,15 @@
 - **坑 B（Explorer 内部拖拽没有 File）**：应用内拖拽只带 `text/uri-list`，`dataTransfer.files` 为空 → 必须走 `IFileService.readFile` 读字节（`acceptImageUris` + `bytesToPromptImage`）。反过来，OS 外部拖入时 `files` 里有真 File（走 `acceptImageFiles`），此时**不能再按 URI 读一遍**（会双附件）。
 - 修法（`PromptInput.tsx` 的 `onPromptDrop`）：开头先 `if (!dragContainsResources(e.dataTransfer)) return`，命中后**立即** `preventDefault() + stopPropagation()`——即便这次 drop 最终不被消费，也绝不能冒泡到编辑器组 body（打开文件）或触发浏览器 navigate-to-file 默认行为。
 - 对照：`onPromptDragOver` 只 `preventDefault()`、**刻意不 stopPropagation**——同屏托管在编辑器组里时，body 的 dragover 还要跑，好让它判断指针在输入框内并清掉「open here」高亮；两处都 stop 会两处同时发亮（该分工写在 `PromptInput.tsx` 的注释里）。
+
+## 撤销/重做：图片附件是独立撤销栈
+
+- **为什么不能靠 Monaco**：图片只活在 `PromptInput` 的 React state（`images`），从不进文本模型；`Ctrl+Z` 只动 Monaco 历史，图片 chip 分毫不动。纯逻辑栈 `services/acp/promptImageUndo.ts` 补齐：`recordAttach(added, altVersion)` / `canUndo` / `undo` / `canRedo` / `redo` / `dropEntriesFor(ids)` / `invalidateRedo` / `reset` / `state`，栈深 50。
+- **两条历史按 `alternativeVersionId` 交织**：三处 attach 在**手势发起时**读 `getAlternativeVersionId()` 记为条目版本（异步读取虽在 await 前取，但版本语义正是「贴图那一刻」，读取期间打的字必须先被撤销）；条目只在「当前版本 === 条目版本」时可消费。attach 后打字会推高版本 → `Ctrl+Z` 先让 Monaco 撤文本；撤回到 attach 时的版本后，下一次 `Ctrl+Z` 才轮到图片。`altVersion === undefined`（编辑器未就绪）或 **generation 已变**（读取期间发生过 `reset()`，如提交/`setText`）的 attach 一律不记录——否则会在栈顶留下永远不可消费的条目，堵死下面所有历史。不记录仍会清空 redo 分支。这样新旧操作按时间顺序撤销，又不必教 Monaco 认识非文本编辑。
+- **按键路由**：`AcpChatWidgetService` 按 **focused widget** 聚合 context key `acpPromptImageUndoAvailable` / `acpPromptImageRedoAvailable`；Action2 `UndoPromptImageAction` / `RedoPromptImageAction`（`ctrl+z` / `ctrl+y` + `ctrl+shift+z`，weight `ACP_SCOPED_KEY_WEIGHT`，`f1:false`，`when` 额外要求 `acpPromptInputFocused`）只在可撤/可重做时抢占。不可用时绑定不参与仲裁，`MonacoDefault` 的 `undo` 继续 defer 给 Monaco——纯文本撤销与截图前完全一致。
+- **无效化**：新 attach 清空 redo；手动点 × 删 chip → `dropEntriesFor([id])`（否则 `Ctrl+Z` 会把它复活）+ `invalidateRedo`；任何新编辑（用户键入，或 `insertRef` 这类程序化插入——它会推高版本并丢弃 redo）都 `invalidateRedo` 并重算 key；`setText` 走 `setValue` 清掉 Monaco 历史后经 `onDidResetHistory` → `reset()`（并推高 generation）；提交即使缓冲区已空也调 `handle.clearHistory()` 硬重置（`setText('')` 在等值时是 no-op）。
+- **undo/redo 不算用户输入**：`onEditorChange` 对 `source === 'undo' | 'redo'` 只镜像 text/caret + `syncImageUndoState()`，不关历史弹窗、不触发 `@@`/`@#` 选择器、不重置 popover dismiss（见 [cases-prompt-input-monaco.md](cases-prompt-input-monaco.md)）。
+- 测试：`__tests__/promptImageUndo.test.ts`（门控/批量/LIFO/prune/无效化/栈深/generation）；`PromptInput.test.tsx` 覆盖程序化插入后 key 重算；e2e `smoke.acpPasteImage.spec.ts` 的真实按键路径（I1 撤/重贴、I2 先图片后文本、I3 新编辑使 redo 失效）。`selection contexts`（`contexts` 列表）刻意未纳入撤销——其添加路径是 `setText` 语义改写，已知不一致。另外，attach 图片不会清 Monaco 的文本 redo 分支（Monaco 无公开的「只清 redo」API），但两栈按 `altVersion` 门控，不会出现顺序倒置，属可接受取舍。
 
 ## 共享控件 ChatImage：88×88 缩略图 + 锚定预览弹窗
 
@@ -56,14 +65,14 @@
 
 ## 测试与 e2e 要点
 
-- 单测：`promptImage.test.ts`（mime/限额/两种构造）、`ChatImage` 的 UI 测试、以及上节三个渲染链路测试。
-- e2e：`smoke.acpPasteImage.spec.ts`（真 Ctrl+V）、`smoke.agentsImageResume.spec.ts`（大帧/恢复耗时）、`smoke.acpFragmentCopy.spec.ts`（chip 可见性）。
+- 单测：`promptImage.test.ts`（mime/限额/两种构造）、`promptImageUndo.test.ts`（撤销栈语义）、`ChatImage` 的 UI 测试、以及上节三个渲染链路测试。
+- e2e：`smoke.acpPasteImage.spec.ts`（真 Ctrl+V + Ctrl+Z/Ctrl+Y）、`smoke.agentsImageResume.spec.ts`（大帧/恢复耗时）、`smoke.acpFragmentCopy.spec.ts`（chip 可见性）。
 - 图片 prompt 的 e2e 断言**必须 poll 到消息落地**：`sendAcpPrompt` 的 await 不等 echo 回复渲染完成（详见 skill `fix-ci-e2e-flake` 对应案例）。
 
 ## 关键参考路径
 
-- 纯函数：`promptImage.ts`；能力位：`session/acpSession.ts`（`imageSupported`）
-- 输入侧：`workbench/agents/PromptInput.tsx`（`acceptImageFiles` / `acceptImageUris` / `onPromptDrop` / drop-host paste）
+- 纯函数：`promptImage.ts`；撤销栈：`promptImageUndo.ts`；能力位：`session/acpSession.ts`（`imageSupported`）
+- 输入侧：`workbench/agents/PromptInput.tsx`（`acceptImageFiles` / `acceptImageUris` / `onPromptDrop` / drop-host paste / `undoPromptImage`）；按键：`renderer/actions/agentPromptActions.ts`
 - 展示：`workbench/agents/ChatImage.tsx` / `PromptImageChips.tsx` / `MessageContent.tsx`
 - 解析：`services/acp/markdownRenderer.ts`（`isImageDataUrl`）、`workbench/markdown/MarkdownView.tsx`（`renderImage`）
 - 红线：`services/acp/filePathLink.ts`（`SEG` 字符类）+ `__tests__/filePathLink.test.ts`
