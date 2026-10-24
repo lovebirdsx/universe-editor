@@ -23,7 +23,7 @@ const VERSION_RE = /^v?(\d+)\.(\d+)\.(\d+)$/
  * session stays on native p4 (`resolveP4deltaEngine`). Raise this only when the
  * extension starts relying on behavior a newer release introduced.
  */
-export const P4DELTA_MIN_VERSION: P4deltaVersion = [0, 1, 20]
+export const P4DELTA_MIN_VERSION: P4deltaVersion = [0, 1, 21]
 
 /** `'v0.1.10'` / `'0.1.10'` → `[0, 1, 10]`; anything else → undefined. */
 export function parseP4deltaVersion(text: string): P4deltaVersion | undefined {

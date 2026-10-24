@@ -103,7 +103,7 @@ test.describe('@p1 perforce p4delta version gate — outdated engine', () => {
   }) => {
     test.setTimeout(120_000)
     await openWithDrift(page, workbench, perforce)
-    await expectRefusedNatively(oldDeltaLog, oldP4Log, page, 'older than the required 0.1.20')
+    await expectRefusedNatively(oldDeltaLog, oldP4Log, page, 'older than the required 0.1.21')
   })
 })
 
@@ -128,7 +128,7 @@ test.describe('@p1 perforce p4delta version gate — unreadable banner', () => {
       unreadableDeltaLog,
       unreadableP4Log,
       page,
-      'did not report a supported version (>= 0.1.20)',
+      'did not report a supported version (>= 0.1.21)',
     )
   })
 })

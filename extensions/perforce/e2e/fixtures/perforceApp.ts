@@ -216,7 +216,7 @@ export interface P4deltaFixtureConfig {
   readonly fail?: string
   /**
    * What `--version` answers (`UNIVERSE_P4DELTA_FAKE_VERSION`). Defaults to the
-   * fake's own `0.1.20`, which is exactly the admission floor; a spec sets
+   * fake's own `0.1.21`, which is exactly the admission floor; a spec sets
    * `0.1.6` or a non-banner string to model a build the gate refuses.
    */
   readonly version?: string

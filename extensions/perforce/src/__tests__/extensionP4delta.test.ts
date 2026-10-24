@@ -78,14 +78,14 @@ const MANAGED_EXE =
   process.platform === 'win32'
     ? 'C:/store/p4delta/0.1.10/p4delta.exe'
     : '/store/p4delta/0.1.10/p4delta.exe'
-const REQUIRED = '0.1.20'
+const REQUIRED = '0.1.21'
 
 describe('resolveP4deltaEngine', () => {
   beforeEach(() => {
     delete process.env.UNIVERSE_P4DELTA_PATH
     fsState.existing.clear()
     p4deltaMocks.resolveP4deltaCommand.mockReset()
-    p4deltaMocks.probeP4deltaBuild.mockReset().mockResolvedValue([0, 1, 20])
+    p4deltaMocks.probeP4deltaBuild.mockReset().mockResolvedValue([0, 1, 21])
     p4Mocks.resolveP4Command.mockReset()
     p4Mocks.resolveP4Command.mockReturnValue({ command: 'p4', prefixArgs: [] })
   })
@@ -157,7 +157,7 @@ describe('resolveP4deltaEngine', () => {
   it('admits exactly the minimum and does not warn', async () => {
     p4deltaMocks.resolveP4deltaCommand.mockReturnValue({ exe: EXE, source: 'path' })
     fsState.existing.add(EXE)
-    p4deltaMocks.probeP4deltaBuild.mockResolvedValue([0, 1, 20])
+    p4deltaMocks.probeP4deltaBuild.mockResolvedValue([0, 1, 21])
     const refused = vi.fn()
 
     const engine = await resolveP4deltaEngine(
