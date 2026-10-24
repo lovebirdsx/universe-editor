@@ -268,11 +268,16 @@ function stubP4deltaRun(): void {
       for (const record of r.progress ?? []) options?.onProgress?.(record)
       if (r.hold) await r.hold
       runSeq += 1
+      // 同真实服务：不囤 file 记录的运行，它们只走 onRecord。
+      const retained =
+        options?.retainFileRecords === false
+          ? records.filter((rec) => rec['kind'] !== 'file')
+          : records
       return {
         runId: `p4d-mock-${runSeq}-1-1-aaaa`,
         startedAt: 1_700_000_000_000,
         code: r.code ?? 0,
-        records,
+        records: retained,
         progress: r.progress ?? [],
         log: r.log ?? [],
         sawNonJsonStdout: r.sawNonJsonStdout ?? false,
@@ -661,6 +666,25 @@ describe('PerforceClient.sync — δ engine', () => {
     expect(res.refusedOverwriteFiles.map((f) => f.clientFile)).toEqual([
       `${ROOT_FWD}/Content/orphan.cpp`,
     ])
+  })
+
+  // 宽范围 get 的 file 记录可达数百万条：引擎不囤，结论由 onRecord 上边收边记的账给出。
+  it('asks the engine not to retain file records and concludes from the streamed tally', async () => {
+    const client = await makeArmedClient()
+    syncReply = () => ({
+      records: [
+        deltaFile('Content/a.cpp'),
+        deltaFile('Content/b.cpp'),
+        deltaSummary({ total: 2, counts: { update: 2 } }),
+      ],
+    })
+
+    const res = await client.sync('#head')
+
+    const options = p4deltaOptions[getIndexes()[0]!]
+    expect(options?.retainFileRecords).toBe(false)
+    expect(res.ok).toBe(true)
+    expect(res.summary).toMatchObject({ applied: 2, upToDate: false, unrecognized: false })
   })
 
   it('reports an up-to-date run without refreshing', async () => {

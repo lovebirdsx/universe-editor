@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  appliedSyncFiles,
+  P4deltaSyncTally,
   readP4deltaCallCount,
   summarizeRun,
   toReconcileFiles,
@@ -930,12 +930,23 @@ describe('toSyncOutcome — force repair', () => {
   })
 })
 
-describe('appliedSyncFiles', () => {
+/** 被取消的 get 读的那部分：逐条喂进增量账后留下的 apply 段行。 */
+function applyStageOf(
+  records: Record<string, unknown>[],
+  clientRoot: string,
+  force = false,
+): unknown[] {
+  const tally = new P4deltaSyncTally(clientRoot, force)
+  for (const record of records) tally.push(record)
+  return tally.applyStage
+}
+
+describe('P4deltaSyncTally.applyStage', () => {
   // The cancelled-run reader: a killed stream has no summary by construction, so
   // only the records that already arrived can say what landed.
   it('reads the applied rows out of a summary-less stream', () => {
     expect(
-      appliedSyncFiles(
+      applyStageOf(
         [
           syncFile({ depotFile: '//depot/main/src/b.ts' }),
           // An opened file whose have moved: content untouched, so no drift row.
@@ -966,7 +977,7 @@ describe('appliedSyncFiles', () => {
   // row instead of a silent one.
   it('ignores a record that is only a preview of what the run would do', () => {
     expect(
-      appliedSyncFiles(
+      applyStageOf(
         [
           syncFile({ depotFile: '//depot/main/src/planned.ts', stage: 'preview' }),
           // No `stage` at all: a record that does not carry the apply marker is
@@ -981,7 +992,48 @@ describe('appliedSyncFiles', () => {
   // 被取消的强制修复记录里没有 `stage`，这个读取器必须什么都读不到：为一次被杀掉的修复扣漂移，
   // 只会把已被覆盖的本地改动藏起来。
   it('reads nothing out of a force repair, whose records carry no apply marker', () => {
-    expect(appliedSyncFiles([forceFile()], CLIENT_ROOT)).toEqual([])
+    expect(applyStageOf([forceFile()], CLIENT_ROOT, true)).toEqual([])
+  })
+})
+
+describe('P4deltaSyncTally — streamed get', () => {
+  // 宽范围 get 的 file 记录不进 result.records：行列表封顶，计数不封顶，结论按计数给。
+  it('caps the kept rows but keeps counting, and says the row list is partial', () => {
+    const tally = new P4deltaSyncTally(CLIENT_ROOT, false, 2)
+    const files = ['a', 'b', 'c'].map((n) => syncFile({ depotFile: `//depot/main/src/${n}.ts` }))
+    for (const record of files) tally.push(record)
+
+    const outcome = toSyncOutcome(
+      syncRun([], [], { total: 3, counts: { update: 3 } }),
+      CLIENT_ROOT,
+      true,
+      false,
+      tally,
+    )
+
+    expect(outcome?.summary.applied).toBe(3)
+    expect(outcome?.summary.upToDate).toBe(false)
+    expect(outcome?.summary.unrecognized).toBe(false)
+    expect(outcome?.appliedFiles.map((f) => f.depotFile)).toEqual([
+      '//depot/main/src/a.ts',
+      '//depot/main/src/b.ts',
+    ])
+    expect(outcome?.appliedFilesComplete).toBe(false)
+    expect(tally.applyStageCount).toBe(3)
+    expect(tally.applyStageComplete).toBe(false)
+  })
+
+  it('reports a complete row list when nothing was dropped', () => {
+    const outcome = toSyncOutcome(syncRun([syncFile()]), CLIENT_ROOT, true)
+    expect(outcome?.appliedFilesComplete).toBe(true)
+  })
+
+  it('stops reading at the first foreign record, like the batch reader', () => {
+    const tally = new P4deltaSyncTally(CLIENT_ROOT, false)
+    tally.push(syncFile({ class: 'restore' }))
+    tally.push(syncFile({ depotFile: '//depot/main/src/b.ts' }))
+    expect(tally.foreign).toBe(true)
+    expect(tally.appliedCount).toBe(0)
   })
 })
 

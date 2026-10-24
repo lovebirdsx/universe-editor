@@ -603,6 +603,38 @@ describe('P4deltaService.run', () => {
     expect(result.log.join('\n')).toMatch(/exceeded .*MB and was aborted/)
   })
 
+  // 宽范围 get：file 记录只流过 onRecord，不囤、不计入上限；其余记录照旧受上限约束。
+  it('streams file records past the byte cap when they are not retained', async () => {
+    const svc = makeService()
+    const seen: unknown[] = []
+    const p = svc.run(['--json', 'open'], {
+      maxOutputBytes: FILE_LINE.length * 2,
+      retainFileRecords: false,
+      onRecord: (record) => seen.push(record['kind']),
+    })
+    await flush()
+    child.stdout.emit('data', Buffer.from(FILE_LINE.repeat(50)))
+    child.stdout.emit('data', Buffer.from(SUMMARY_LINE))
+    expect(child.killed).toBe(false)
+    child.emit('close', 0, null)
+    const result = await p
+    expect(seen.filter((kind) => kind === 'file')).toHaveLength(50)
+    expect(result.records.map((r) => r['kind'])).toEqual(['summary'])
+    expect(result.sawSummary).toBe(true)
+  })
+
+  it('still aborts when the retained records outgrow the cap', async () => {
+    const svc = makeService()
+    const p = svc.run(['--json', 'open'], { maxOutputBytes: 64, retainFileRecords: false })
+    await flush()
+    child.stdout.emit('data', Buffer.from('x'.repeat(100) + '\n' + SUMMARY_LINE))
+    expect(child.killed).toBe(true)
+    child.emit('close', null, 'SIGTERM')
+    const result = await p
+    expect(result.sawSummary).toBe(false)
+    expect(result.log.join('\n')).toMatch(/exceeded .*MB and was aborted/)
+  })
+
   // Red line 3: a burst of background scans must not queue the user's click
   // behind them.
   it('spawns an interactive run into the gate’s reserved slot', async () => {

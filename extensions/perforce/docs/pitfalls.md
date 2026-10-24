@@ -181,6 +181,7 @@ P4D 2024.2 实测（PROBE-FINDINGS §11.5）：`p4 opened` 通篇没有 `unresol
 
 - **现防护（`p4Service.ts` `_spawn`）**：边收边计 `stdoutBytes`，超 `DEFAULT_MAX_OUTPUT_BYTES`（256MB，远低于 512MB 限）即清缓冲 + `proc.kill()`，`close` 时优雅返回 `{stdout:'', stderr:'... exceeded NMB and was aborted', exitCode:1}`；`toString` 再套 try/catch 兜底病态输入。`P4ExecOptions.maxOutputBytes` 可按命令覆写（测试用小 cap 复现）。
 - **红线**：`_spawn` 的 `close`/`data` 回调是**异步**的，里面任何 throw 都无处可接 → **必须 resolve 成失败结果，绝不让异常逃逸**。加任何新的流式/缓冲逻辑（大输出命令）都守住这条：p4 命令失败是一等公民（非零退出本就不 reject），宿主崩溃不是。
+- **δ get 同款（踩过）**：δ 每个文件一条 JSON 记录（约 380B），旧实现把记录全囤进 `result.records` 并按累计字节封顶，约 70 万文件的 get 被 256MB 上限中途 SIGTERM。现 get 以 `retainFileRecords: false` 跑：file 记录只流过 `onRecord`，由 `P4deltaSyncTally` 边收边记（计数不封顶、行列表封顶 `P4DELTA_SYNC_ROW_CAP`，超出走漂移复核），上限只计留下来的非 file 记录。
 - **诊断法**：崩溃看 `<userData>/logs/<session>/extensionHost.log`（dev = `AppData/Roaming/Universe Editor - Dev/logs`），`uncaughtException` 堆栈直指 `extension.js` 行；`Buffer.toString` + `Cannot create a string longer than` 就是这个坑。测试见 `p4Service.test.ts`（`vi.mock('node:child_process')` 注入假子进程，`exec` 经并发门须 `await flush()` 再 emit）。
 
 ## ⚠️ p4 子进程永不退出 → 宿主无限挂起（44 分钟闩锁卡死）

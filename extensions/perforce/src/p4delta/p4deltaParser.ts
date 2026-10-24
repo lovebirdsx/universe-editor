@@ -317,6 +317,8 @@ export interface P4deltaSyncOutcome {
    *  caller may subtract afterwards. `class:"resolve"` records are NOT here: an
    *  opened file's content was not touched. */
   readonly appliedFiles: readonly SyncPreviewFile[]
+  /** false：行数超过流式账的上限，{@link appliedFiles} 只是前一部分，漂移行要另行复核。 */
+  readonly appliedFilesComplete: boolean
   readonly refusedFiles: readonly SyncPreviewFile[]
   readonly refusedOverwriteFiles: readonly SyncPreviewFile[]
   /** Nothing was behind: this run had no work to do. Refusals outrank it — a
@@ -335,8 +337,10 @@ const APPLIED_FORCE_CLASSES = new Set(['update', 'revert', 'restore', 'delete', 
 
 /** What one sync run's file records say, before any conclusion is drawn. */
 interface SyncRecordTally {
-  /** Files whose content the run rewrote, in stream order. */
+  /** Files whose content the run rewrote, in stream order — at most the tally's row cap. */
   readonly applied: SyncPreviewFile[]
+  /** Every applied record, the rows dropped past the cap included. */
+  readonly appliedCount: number
   /** `class:"resolve"` records: opened files whose have moved to the target. */
   readonly resolve: number
   /** `class:"delete"` records: tracked files removed because the target revision has no
@@ -355,80 +359,114 @@ interface SyncRecordTally {
   readonly foreign: boolean
 }
 
+/**
+ * 边收边记的 sync 记录账。宽范围 get 的 file 记录可达数百万条：服务不再囤它们
+ * （`retainFileRecords: false`），由调用方在 `onRecord` 里逐条喂进来。
+ *
+ * 行列表有上限 `rowCap`，超过只计数不留行；调用方据 {@link rowsComplete} 改走漂移行复核，
+ * 不能拿残缺的行列表当作「只改了这些」。
+ */
+export class P4deltaSyncTally implements SyncRecordTally {
+  readonly applied: SyncPreviewFile[] = []
+  appliedCount = 0
+  resolve = 0
+  trackedDeleted = 0
+  untracked = 0
+  handoff = 0
+  foreign = false
+  /**
+   * `stage:"apply"` 的已落盘行，同受上限约束。给**被取消**的 get 用：没有 summary 就没有结论，
+   * 只有已经到达的记录能说明落了什么——p4 报为 applied 的文件已在盘上、与 have 一致，它们的
+   * 漂移行与正常退出时一样作废。
+   *
+   * 只认 `stage:"apply"`，刻意核对而不是假定：契约说 `-a` 只发 apply 段记录，但这是唯一一个
+   * 读错会**藏起本地改动**的读取器——把预演记录当成已落盘，会作废一个没被写过的文件的漂移行。
+   */
+  readonly applyStage: SyncPreviewFile[] = []
+  applyStageCount = 0
+  /** 流里出现过 `stage:"apply"` 的 file 记录：引擎已经开始写盘。 */
+  sawApplyRecord = false
+
+  constructor(
+    private readonly _clientRoot: string,
+    private readonly _force: boolean,
+    private readonly _rowCap = Number.POSITIVE_INFINITY,
+  ) {}
+
+  get rowsComplete(): boolean {
+    return this.applied.length === this.appliedCount
+  }
+
+  get applyStageComplete(): boolean {
+    return this.applyStage.length === this.applyStageCount
+  }
+
+  push(record: P4deltaRecord): void {
+    // 认出异类流后整份账作废，后面的记录不再读。
+    if (this.foreign) return
+    if (record['kind'] !== 'file' || record['mode'] !== 'sync') return
+    const isApply = record['stage'] === 'apply'
+    if (isApply) this.sawApplyRecord = true
+    const klass = asString(record['class'])
+    if (klass === undefined) {
+      this.foreign = true
+      return
+    }
+    if (klass === 'handoff') {
+      // handoff 字段写明这批文件交给了哪条原生命令，修复档是 `sync`；
+      // clean/reconcile 的属于别档的流，普通 get 根本不发。
+      if (!this._force || record['handoff'] !== 'sync') this.foreign = true
+      else this.handoff += 1
+      return
+    }
+    if (!this._force && klass === 'resolve') {
+      this.resolve += 1
+      return
+    }
+    if (this._force && klass === 'untracked') {
+      // 只删磁盘、不进 have：行仍进 applied（它的漂移行随文件一起消失），但单独计数，
+      // 汇总里从 applied 扣掉，历史才能把「同步了几个文件」与「删了几个未跟踪文件」分开。
+      const row = syncFileRow(record, this._clientRoot)
+      // 计数要跟着行一起成立：只计一条记不出身份的记录，会让 `applied - untrackedDeleted`
+      // 变成负数并写进历史。缺身份字段的流回答不了这个问题，按异类流处理。
+      if (row === undefined) {
+        this.foreign = true
+        return
+      }
+      this._addApplied(row, isApply)
+      this.untracked += 1
+      return
+    }
+    const allowed = this._force ? APPLIED_FORCE_CLASSES : APPLIED_SYNC_CLASSES
+    if (!allowed.has(klass)) {
+      this.foreign = true
+      return
+    }
+    const row = syncFileRow(record, this._clientRoot)
+    if (row !== undefined) {
+      this._addApplied(row, isApply)
+      // 已跟踪删除是 applied 的子集；只有真正建出行、能对上身份的才计数。
+      if (klass === 'delete') this.trackedDeleted += 1
+    }
+  }
+
+  private _addApplied(row: SyncPreviewFile, isApply: boolean): void {
+    this.appliedCount += 1
+    if (this.applied.length < this._rowCap) this.applied.push(row)
+    if (!isApply) return
+    this.applyStageCount += 1
+    if (this.applyStage.length < this._rowCap) this.applyStage.push(row)
+  }
+}
+
 function tallySyncRecords(
   records: readonly P4deltaRecord[],
   clientRoot: string,
   force: boolean,
-): SyncRecordTally {
-  const applied: SyncPreviewFile[] = []
-  let resolve = 0
-  let trackedDeleted = 0
-  let untracked = 0
-  let handoff = 0
-  for (const record of records) {
-    if (record['kind'] !== 'file' || record['mode'] !== 'sync') continue
-    const klass = asString(record['class'])
-    if (klass === undefined)
-      return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
-    if (klass === 'handoff') {
-      // handoff 字段写明这批文件交给了哪条原生命令，修复档是 `sync`；
-      // clean/reconcile 的属于别档的流，普通 get 根本不发。
-      if (!force || record['handoff'] !== 'sync')
-        return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
-      handoff += 1
-      continue
-    }
-    if (!force && klass === 'resolve') {
-      resolve += 1
-      continue
-    }
-    if (force && klass === 'untracked') {
-      // 只删磁盘、不进 have：行仍进 applied（它的漂移行随文件一起消失），但单独计数，
-      // 汇总里从 applied 扣掉，历史才能把「同步了几个文件」与「删了几个未跟踪文件」分开。
-      const row = syncFileRow(record, clientRoot)
-      // 计数要跟着行一起成立：只计一条记不出身份的记录，会让 `applied - untrackedDeleted`
-      // 变成负数并写进历史。缺身份字段的流回答不了这个问题，按异类流处理。
-      if (row === undefined)
-        return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
-      applied.push(row)
-      untracked += 1
-      continue
-    }
-    const allowed = force ? APPLIED_FORCE_CLASSES : APPLIED_SYNC_CLASSES
-    if (!allowed.has(klass))
-      return { applied, resolve, trackedDeleted, untracked, handoff, foreign: true }
-    const row = syncFileRow(record, clientRoot)
-    if (row !== undefined) {
-      applied.push(row)
-      // 已跟踪删除是 applied 的子集；只有真正建出行、能对上身份的才计数。
-      if (klass === 'delete') trackedDeleted += 1
-    }
-  }
-  return { applied, resolve, trackedDeleted, untracked, handoff, foreign: false }
-}
-
-/**
- * The files a δ sync run rewrote, from the records that arrived — for a run
- * that was CANCELLED (no summary, so {@link toSyncOutcome} has no conclusion to
- * give) but whose stream already named what landed. Whatever p4 reported as
- * applied is on disk matching its have revision, so those drift rows are stale
- * exactly as they are after a clean exit.
- *
- * Only `stage:"apply"` records count, and the check is deliberate rather than
- * assumed: the contract says an `-a` run emits apply-segment records only, but
- * this is the one reader whose mistake HIDES local work — a preview record read
- * as applied drops the drift row of a file nothing wrote — so a build that
- * reported its plan on the way in costs a stale row here, not a silent one.
- */
-export function appliedSyncFiles(
-  records: readonly P4deltaRecord[],
-  clientRoot: string,
-): SyncPreviewFile[] {
-  return tallySyncRecords(
-    records.filter((record) => record['stage'] === 'apply'),
-    clientRoot,
-    false,
-  ).applied
+): P4deltaSyncTally {
+  const tally = new P4deltaSyncTally(clientRoot, force)
+  for (const record of records) tally.push(record)
+  return tally
 }
 
 /** 结构化冲突的已知 reason → 给 UI 读的 action 文案。`delete-modified` 与原生解析器
@@ -516,19 +554,23 @@ function collectSyncConflicts(
  * or one whose count disagrees with the records — is incomplete and has no
  * conclusion. A force run emits no conflicts; records in one are a stream from
  * another mode.
+ *
+ * `streamed`：以 `retainFileRecords: false` 跑的 get，file 记录不在 `result.records` 里，
+ * 由调用方在 `onRecord` 里记好的账代替。
  */
 export function toSyncOutcome(
   result: P4deltaRunResult,
   clientRoot: string,
   applied: boolean,
   expectForce = false,
+  streamed?: P4deltaSyncTally,
 ): P4deltaSyncOutcome | undefined {
   const summary = summarizeRun(result)
   if (summary === undefined || !summary.ok) return undefined
   if (summary.mode !== 'sync' || summary.applied !== applied || summary.force !== expectForce) {
     return undefined
   }
-  const tally = tallySyncRecords(result.records, clientRoot, expectForce)
+  const tally = streamed ?? tallySyncRecords(result.records, clientRoot, expectForce)
   if (tally.foreign) return undefined
   const conflicts = collectSyncConflicts(result.records, clientRoot)
   // 强制修复不走原生那套逐文件保护，冲突记录只属于普通同步；出现了说明流串档。
@@ -556,7 +598,7 @@ export function toSyncOutcome(
   // 未跟踪删除也在 `tally.applied` 里（它的漂移行同样作废），所以这一条已覆盖它。
   const upToDate =
     summary.total === 0 &&
-    tally.applied.length === 0 &&
+    tally.appliedCount === 0 &&
     keptOpen === 0 &&
     refusedModified === 0 &&
     refusedOverwrite === 0 &&
@@ -565,7 +607,7 @@ export function toSyncOutcome(
     summary: {
       // 未跟踪删除单独计数：它删的是 depot 从不跟踪的文件，与「同步了几个文件」不是
       // 同一件事，历史里要分开显示。tally.applied 仍保留它，供漂移行作废使用。
-      applied: tally.applied.length - untrackedDeleted,
+      applied: tally.appliedCount - untrackedDeleted,
       // 已跟踪删除仍是 applied 的一部分（不扣除），只作为子集上报。
       trackedDeleted: tally.trackedDeleted,
       keptOpen,
@@ -581,13 +623,14 @@ export function toSyncOutcome(
       // this off exactly as it keeps `upToDate` off.
       unrecognized:
         !upToDate &&
-        tally.applied.length === 0 &&
+        tally.appliedCount === 0 &&
         tally.resolve === 0 &&
         refusedModified === 0 &&
         refusedOverwrite === 0 &&
         handoff === 0,
     },
     appliedFiles: tally.applied,
+    appliedFilesComplete: tally.rowsComplete,
     refusedFiles,
     refusedOverwriteFiles,
     upToDate,

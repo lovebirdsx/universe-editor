@@ -248,6 +248,12 @@ export interface P4deltaRunOptions {
    */
   readonly onRecord?: (record: P4deltaRecord) => void
   /**
+   * false：`kind:"file"` 记录只交给 {@link onRecord}，不进 `result.records`，也不计入
+   * {@link maxOutputBytes}。宽范围 get 的 file 记录可达数百万条，囤着既撑爆上限也撑爆宿主内存；
+   * 调用方自己边收边记（`P4deltaSyncTally`）。默认 true。
+   */
+  readonly retainFileRecords?: boolean
+  /**
    * The spawned child's pid, once. Same purpose as the option of that name on
    * `P4ExecOptions`: the status bar samples the process tree's IO under it. The
    * tree is what matters, so a δ run qualifies — the `p4` children doing the
@@ -853,6 +859,7 @@ export class P4deltaService {
       const runId = nextP4deltaRunId(startedAt)
       const timeoutMs = options?.timeoutMs ?? this._defaultTimeoutMs
       const maxBytes = options?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
+      const retainFiles = options?.retainFileRecords !== false
       const records: P4deltaRecord[] = []
       const progress: P4deltaRecord[] = []
       // 有界行尾：stderr 报告与终态 note 都进这里，供失败详情 / 拒绝行解析事后回读。逐行诊断
@@ -962,10 +969,20 @@ export class P4deltaService {
       }
 
       const readStdoutLine = (line: string): void => {
+        // 同一个 chunk 里越过上限之后的行不再读：进程已被判死，结论只能是 overflow。
+        if (overflowed) return
         const record = parseJsonLine(line)
+        const kind = record?.['kind']
+        if (!retainFiles && kind !== 'file') {
+          // 不囤 file 记录时只计留下来的那部分：上限守的是宿主内存，流过去的不占。
+          stdoutBytes += line.length + 1
+          if (stdoutBytes > maxBytes) {
+            overflowed = true
+            return
+          }
+        }
         if (record !== undefined) {
-          records.push(record)
-          const kind = record['kind']
+          if (retainFiles || kind !== 'file') records.push(record)
           // 每条 summary 都重算一次有界摘要（最后一条赢，同 summarizeRun 的规则）：它作为收尾
           // footer 写出，正文预算用尽也留得住命令统计。
           if (kind === 'summary') summaryFooter = formatP4deltaSummaryFooter(record)
@@ -1072,15 +1089,19 @@ export class P4deltaService {
       )
       proc.stdout.on('data', (chunk: Buffer) => {
         if (overflowed) return
-        stdoutBytes += chunk.length
-        if (stdoutBytes > maxBytes) {
-          // Same host-crash red line as p4Service's cap: abort instead of
-          // accumulating toward a string V8 cannot build.
-          overflowed = true
-          killQuietly(proc)
-          return
+        if (retainFiles) {
+          stdoutBytes += chunk.length
+          if (stdoutBytes > maxBytes) {
+            // Same host-crash red line as p4Service's cap: abort instead of
+            // accumulating toward a string V8 cannot build.
+            overflowed = true
+            killQuietly(proc)
+            return
+          }
         }
         stdoutReader.push(chunk)
+        // 不囤 file 记录时上限按行计（见 readStdoutLine），越线在这里收尾。
+        if (overflowed) killQuietly(proc)
       })
 
       const stderrReader = createP4deltaLineReader(readStderrLine, (preview) =>

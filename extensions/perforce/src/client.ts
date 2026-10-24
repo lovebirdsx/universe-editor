@@ -52,10 +52,10 @@ import {
   type P4deltaRunResult,
 } from './p4delta/p4deltaService.js'
 import {
+  P4deltaSyncTally,
   summarizeRun,
   toReconcileFiles,
   toSyncOutcome,
-  appliedSyncFiles,
   readP4deltaCallCount,
   type P4deltaSummary,
 } from './p4delta/p4deltaParser.js'
@@ -603,6 +603,9 @@ const RECONCILE_SCAN_MAX_CHECKPOINT_AGE_MS = 24 * 60 * 60 * 1000
  * out a fluke and short enough not to tax every refresh for a whole session.
  */
 const P4DELTA_MAX_CONSECUTIVE_FAILURES = 3
+
+/** δ get 留在内存里的已落盘行上限：只用于作废漂移行，超出改走漂移复核（只剩计数）。 */
+const P4DELTA_SYNC_ROW_CAP = 50_000
 
 /**
  * Steps on δ's fixed progress ladder (`start` `analyze` `digest` `report`
@@ -5790,6 +5793,8 @@ export class PerforceClient {
     // above) must not leave a "δ side missing" mark on an otherwise exact native
     // count — there is no δ side to be missing.
     let deltaSpawned = false
+    // file 记录不进 result.records（宽范围 get 可达数百万条），在这里边收边记。
+    const tally = new P4deltaSyncTally(this.root, force, P4DELTA_SYNC_ROW_CAP)
     const run = await this._cancellable((signal) => {
       // Seed the bar before anything else: the engine's own preview pass walks
       // the scope first and can run for a long time without one file record.
@@ -5800,7 +5805,9 @@ export class PerforceClient {
         // same watchdog exemption the native path takes applies here — the cancel
         // signal is the only stop.
         ...CONTENT_TRANSFER_EXEC,
+        retainFileRecords: false,
         onRecord: (record) => {
+          tally.push(record)
           const tick = syncProgressTick(record)
           if (tick === undefined) return
           done += 1
@@ -5850,7 +5857,8 @@ export class PerforceClient {
       //
       // 强制修复的记录没有 stage，看不出哪个文件真的被覆盖过，所以一个漂移行都不清，
       // 交给紧随的 refresh 用 have 重新对账。
-      this._removeDriftForSyncRun(force ? [] : appliedSyncFiles(result.records, this.root), [], [])
+      this._removeDriftForSyncRun(force ? [] : tally.applyStage, [], [])
+      if (!force && !tally.applyStageComplete) await this._revalidateDriftAfterSync()
       await this._refreshAfterMutation()
       this._clearBehindDecorations()
       return {
@@ -5862,13 +5870,13 @@ export class PerforceClient {
         error: undefined,
       }
     }
-    const outcome = toSyncOutcome(result, this.root, true, force)
+    const outcome = toSyncOutcome(result, this.root, true, force, tally)
     if (outcome === undefined) {
       const failure =
         this._p4deltaAppliedRunFailure(result, summarizeRun(result), 'sync') ?? 'no conclusion'
       // 只有普通 get 且未进 apply 才可改走原生：强制修复没有这一阶段可观察，任何失败形态
       // （含 exit 2）都可能在报错前已覆盖过文件，只能如实上报，绝不自动重跑。
-      const canFallBack = !force && !this._p4deltaSyncStarted(result)
+      const canFallBack = !force && !this._p4deltaSyncStarted(result, tally)
       // 能回退还不够，原生也得接得住这份范围：含排除项的根目标没有对应 filespec，原生跑起来
       // 必然失败。此时把 undefined 交回去，调用方只会再报一次范围错误，把 δ 的真实原因盖掉，
       // 所以改为如实上报 δ 的失败。
@@ -5938,6 +5946,13 @@ export class PerforceClient {
       outcome.refusedFiles,
       outcome.refusedOverwriteFiles,
     )
+    if (!outcome.appliedFilesComplete) {
+      // 行列表被上限截断：剩下的那些漂移行不能凭空作废，也不能留着冒充未改，同原生路径的复核。
+      this._log?.(
+        `[perforce] sync (p4delta): ${outcome.appliedFiles.length} of ${summary.applied} applied row(s) kept (cap ${P4DELTA_SYNC_ROW_CAP}); revalidating the drift rows`,
+      )
+      await this._revalidateDriftAfterSync()
+    }
     this._invalidateWorkspaceState()
     this._clearBehindDecorations()
     await this._refreshAfterMutation()
@@ -6064,8 +6079,8 @@ export class PerforceClient {
    * 强制修复档不问这个问题：它的流里没有任何能证明「没写盘」的标记（没有 apply 记录或
    * apply 阶段），问了只会得到「一个字都没写」——那正是唯一绝不能给出的答案。
    */
-  private _p4deltaSyncStarted(result: P4deltaRunResult): boolean {
-    if (result.records.some((r) => r['kind'] === 'file' && r['stage'] === 'apply')) return true
+  private _p4deltaSyncStarted(result: P4deltaRunResult, tally: P4deltaSyncTally): boolean {
+    if (tally.sawApplyRecord) return true
     return result.progress.some((r) => r['phase'] === 'apply')
   }
 
