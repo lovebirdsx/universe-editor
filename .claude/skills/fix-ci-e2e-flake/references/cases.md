@@ -675,6 +675,27 @@ g) 埋点要能回答「**哪一侧迟了**」：渲染器真相（`getConfigura
 修法：初始化脚本在编辑器挂载前包裹真实 ResizeObserver，记录 observe 的文档归属（不伪造尺寸或回调）；断言辅助编辑器被辅助 realm 观察且未被主 realm 观察。暂停守卫之后恢复调度，再验证 shrink/grow 两次布局。临时改回裸 `new ResizeObserver` 后归属断言必失败，保住原 bug 覆盖。探针不能等 popup 事件后才安装，否则与 React 挂载竞速。
 锚：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindowResize.spec.ts`；主/子 realm rAF、`getOSProcessId()` 与原生 bounds/innerWidth 对照。原实现本地单次可通过，重复/诊断暴露错误前提。
 
+**案例 110 — 菜单键盘导航按固定 ArrowDown 次数：新增菜单组插队后落点变成别的命令（确定性回归，不是环境 flake）**
+信号：`smoke.scmKeyboardContextMenu.spec.ts`（`@regression`）在新增“发送到 Agent 聊天”菜单项后 initial+retry 同形态失败，失败点 `await expect(active).toHaveText('Stage Changes')`，received `Send to Agent Chat`；同轮其余菜单/SCM 用例全绿。失败提交只新增了一个 `MenuId.ScmResourceStateContext` 菜单贡献（group `4_agent`），没有改键盘导航。
+根因：菜单按 `(group, order)` 排序（`menuRegistry.getMenuItems` 对 group 做 `localeCompare`），该菜单从 `1_open → inline` 变成 `1_open → 4_agent → inline`。用例用“按两次 ArrowDown 到 Stage Changes”把行位置当契约，一个合法的菜单新增把落点整体后移。
+修：断言“目标命令可达”而不是“目标在第 N 行”。重开后先断言 opening highlight 是首行 `Open Changes`；再用真实 `ArrowDown` 有界步进：每步读 `[role=menuitem][data-active]` 文本，未命中才按；按完 poll `aria-activedescendant` 变化再读，避免两次按键读到同一个 stale React 索引；上界是 `menu.getByRole('menuitem').count()`（`stepIndex` 会环绕，禁止无界）。Enter 前用 `toHaveText('Stage Changes')` 做安全门：步进错过时测试失败，不会误执行别的命令。另显式断言 `Send to Agent Chat` 可见；active locator 收窄到 `menu` 作用域（页面级会命中 menubar 的 `role=menuitem`，参见 `smoke.menuCtrlNavigation.spec.ts` 的同类注释）。
+教训：a) 键盘菜单导航用例应断言命令可达，不要断言行号；位置是 group/order 的派生值。b) 确实需要位置稳定时，把完整 label 序列 pin 住让漂移显式失败，不要隐式依赖步数。c) 有界步进 + 终端 label 断言同时满足“不依赖排序”和“不会执行错误命令”。
+锚：`apps/editor/e2e/specs/smoke.scmKeyboardContextMenu.spec.ts`；`apps/editor/src/renderer/actions/agentContextActions.ts`（`SendScmResourceToAgentChatAction`，group `4_agent`）；`packages/platform/src/command/menuRegistry.ts`；`packages/workbench-ui/src/contextMenu/menuModel.ts`（`stepIndex`）；`packages/workbench-ui/src/contextMenu/useMenuNavigation.ts`。
+
+**案例 111 — 门控判据正确但预算不足：异步 JSON worker 在 2 核 Windows CI 上晚于默认 10s（案例 107 的预算变体）**
+信号：`smoke.editorTextShortcuts.spec.ts` 的 “editor text shortcuts really edit the buffer” → step “Ctrl+K Ctrl+0 resolves and runs the fold-all chord”，Windows CI initial+retry 同形态失败：按键前的 `expect.poll(regionCount)` 全程 received `0`，默认 CI expect timeout 10s；同轮 Ubuntu 全绿；门控之后的 `visibleLineCount` 断言根本没开始。同文件另一处 toggle 门控（`regionAtCursor`）是同一形状。后续 `--repeat-each=3 --workers=4` 压测又暴露同 spec 的 `Shift+Alt+F formats the document`：格式化 poll 5s 恒收到原始未格式化文本，retry 秒过。
+根因：107 已把“按键前等折叠模型就绪”补对，但 folding region 与 formatting edits 都由 renderer 内置 JSON worker 异步计算；shared fixture 每个用例 reload 都会让 worker 重新冷启动，2 核 Windows runner 上首轮解析可超过 10s。门控是 test timeout 的子预算：只把 poll 放大到 20s 而不放宽 test 预算，慢机上会从“带 message 的 poll 超时”退化成 “Test timeout of 30000ms exceeded”。
+修：两处折叠门控与格式化 poll 都加 `{ timeout: 20_000 }`（模块级 `JSON_WORKER_READY_TIMEOUT_MS`，对齐同 worker 冷启动先例 `smoke.jsonOutline.spec.ts:45-52`），并给两个所属用例各加 `test.slow()`（30s→90s）；不重按、不缩短断言。全仓折叠 e2e 仅此 spec（grep `VisibleLineCount|foldAll|toggleFold|regionCount|getActiveEditorFoldingState` 确认）。
+教训：a) 107 与 111 是同一断言在慢机上的两种失败形态：前者“没门控”，后者“门控预算不足”；received 恒 0 且 retry 同形态时，先核对门控超时是否大于该子系统在 CI 的实测冷启动，再怀疑判据。b) `expect.poll` 的 timeout 是 test timeout 的子预算，两者要一起给；`test.slow()` 不参与 grep，不与 tag 体系冲突。c) 同一 worker 支撑的多个异步特性（folding / formatting）要共用同一预算常量；压测同文件其余异步断言，别只修被 CI 点到的那一处。
+锚：`apps/editor/e2e/specs/smoke.editorTextShortcuts.spec.ts`；`apps/editor/e2e/specs/smoke.jsonOutline.spec.ts:45-52`；`packages/e2e-contract/src/index.ts`（`getActiveEditorFoldingState`）；案例 107。
+
+**案例 112 — shared fixture 下 test body 删除工作区：ACP agent 子进程以 cwd 钉住目录，EBUSY retry 救不回；迁冷启 + workspaceSeeder**
+信号：`smoke.sendResourceToAgentChat.spec.ts` 用例全部断言通过，`finally` 的 `fs.rm(tmpDir, { maxRetries: 10, retryDelay: 200 })` 在 Windows CI 报 EBUSY；initial+retry 同形态（retry 救不回=结构性）。目录由 `mkTempDir('ue2-srac-')` 创建、`workbench.openWorkspace` 打开，同用例通过 `installAcpEchoAgent` + `newSession` 启动 echo agent 子进程。
+根因：shared fixture 的 Electron 跨用例存活，fixture teardown 在 test body（含 finally）之后；删除时 workspace watcher、Electron 和 ACP agent（`AcpHostMainService` 以 cwd=workspace spawn，窗口/应用退出前不释放）都还活着。`maxRetries` 只吸收瞬时锁，救不了结构性持有。77b 已记录 shared fixture 没有 scratchDir 级别的 post-close 清理点。
+修：改用 `../fixtures/electronApp.js`（冷启；ACP session 本身就是 main 进程状态，符合 fixture 选型判据），`test.use({ workspaceSeeder: { seed(dir) {...} } })` 在 launch 时 pin workspace（跳过 boot 后 openWorkspace 的双重 host 重启），删除 `mkTempDir` / `try-finally` / `fs.rm` / `sideBarVisible` 门控；清理由 `launchWorkspace` 在 closeApp 之后执行。断言与 ACP 流程原样保留；Explorer 行可见性预算对齐冷启先例（10s）。
+教训：a) 判据不是“有没有 mkdtemp”，而是“删的目录是否被 app/子进程实际持有”；持有者里有 cwd=workspace 的子进程时，test body 内删除无解。b) 需要 workspace 的冷启 spec 用 `workspaceSeeder` 而不是 `scratchDir`：前者负责 launch pin + post-close 清理，后者只解决清理。c) 同形残留（shared fixture + ACP + mkdtemp + 吞错清理）：`smoke.multiFilePromptDrag`、`smoke.promptDragHighlight`、`smoke.agentsPromptEnterLeak`；目前不失败，按 77b 的“出现同信号再迁”处理。
+锚：`apps/editor/e2e/specs/smoke.sendResourceToAgentChat.spec.ts`；`packages/e2e-harness/src/fixtures.ts`（`workspaceSeeder` / `launchWorkspace` / `teardownDir`）；`apps/editor/e2e/CLAUDE.md`（fixture 选型 + workspaceSeeder 段）；`apps/editor/e2e/specs/smoke.explorerOpenPreview.spec.ts`；`smoke.windowCloseFolderLock.spec.ts`；案例 77/77b。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

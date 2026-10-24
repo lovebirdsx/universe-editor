@@ -103,6 +103,8 @@ test.describe('@p1 scm keyboard context menu', () => {
       await expect(menu).toHaveCount(1)
       // Row-level menu, not the title overflow: the row-gated git entries are here.
       await expect(menu.getByRole('menuitem', { name: 'Stage Changes' })).toBeVisible()
+      // The workbench's own `4_agent` group between `1_open` and `inline`.
+      await expect(menu.getByRole('menuitem', { name: 'Send to Agent Chat' })).toBeVisible()
 
       // A keyboard-opened menu highlights its first entry right away (VSCode
       // parity) — there is no pointer to aim, so Enter must work immediately.
@@ -110,7 +112,7 @@ test.describe('@p1 scm keyboard context menu', () => {
       // rather than DOM focus, which would blur the tree underneath.
       // The row menu leads with the `1_open` group, so the first entry is the
       // provider's Open Changes, not the inline Stage Changes.
-      const active = page.locator('[role="menuitem"][data-active]')
+      const active = menu.locator('[role="menuitem"][data-active]')
       await expect(active).toHaveCount(1)
       await expect(active).toHaveText('Open Changes')
       await expect(menu).toHaveAttribute('aria-activedescendant', /.+/)
@@ -129,15 +131,26 @@ test.describe('@p1 scm keyboard context menu', () => {
       await page.keyboard.press('Escape')
       await expect(menu).toHaveCount(0)
 
-      // Reopen and run a row command with Enter alone. The opening highlight is
-      // now Open Changes, so step down to Stage Changes first — that keeps
-      // asserting the picked command actually reached the provider.
+      // Reopen and run a row command with Enter alone. Walk to "Stage Changes"
+      // by label instead of a fixed ArrowDown count: rows are sorted by group
+      // name, so a new contribution (the `4_agent` group) shifts every later
+      // row and a hardcoded count silently retargets the command. ArrowDown
+      // wraps (stepIndex), so bound the walk by the menu's own row count.
       await page.keyboard.press('ContextMenu')
       await expect(menu).toHaveCount(1)
-      await expect(page.locator('[role="menuitem"][data-active]')).toHaveText('Open Changes')
-      await page.keyboard.press('ArrowDown') // Open File
-      await page.keyboard.press('ArrowDown') // Stage Changes
-      await expect(page.locator('[role="menuitem"][data-active]')).toHaveText('Stage Changes')
+      await expect(active).toHaveText('Open Changes')
+      const stepCount = await menu.getByRole('menuitem').count()
+      for (let step = 0; step < stepCount; step++) {
+        if ((await active.textContent())?.trim() === 'Stage Changes') break
+        const previousId = await menu.getAttribute('aria-activedescendant')
+        await page.keyboard.press('ArrowDown')
+        // The highlight is React state; wait for the commit before reading the
+        // next label so two presses never act on the same stale index.
+        await expect.poll(() => menu.getAttribute('aria-activedescendant')).not.toBe(previousId)
+      }
+      // Safety gate: Enter only runs once the highlight is demonstrably on the
+      // target — a missed walk fails here instead of staging through another row.
+      await expect(active).toHaveText('Stage Changes')
       await page.keyboard.press('Enter')
       await expect(menu).toHaveCount(0)
 

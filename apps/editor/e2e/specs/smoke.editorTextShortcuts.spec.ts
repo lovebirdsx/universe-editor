@@ -62,6 +62,13 @@ const MONACO_DEFAULT_WEIGHT = 50
 /** `WorkbenchContrib` — what Action2 and registerKeybinding default to. */
 const WORKBENCH_CONTRIB_WEIGHT = 200
 
+/**
+ * Folding regions and formatting edits both come from the in-renderer JSON
+ * worker. On a 2-core Windows CI runner its first resolution can outlast the
+ * 10s CI expect budget, so match smoke.jsonOutline's cold-start budget.
+ */
+const JSON_WORKER_READY_TIMEOUT_MS = 20_000
+
 type DocKey = readonly [key: string, command: string]
 
 /** Single-stroke keys whose mirrored command matches what monaco really runs. */
@@ -390,6 +397,9 @@ test.describe('@p1 editor text shortcuts', () => {
     page,
     workbench,
   }) => {
+    // The folding gate below is a sub-budget of the test timeout; without this
+    // the slow-runner case degrades into "Test timeout of 30000ms exceeded".
+    test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
     await openJsonEditor(page, workbench)
@@ -463,6 +473,7 @@ test.describe('@p1 editor text shortcuts', () => {
       // yet, so one press on a cold editor can be swallowed entirely.
       await expect
         .poll(() => foldingState(page), {
+          timeout: JSON_WORKER_READY_TIMEOUT_MS,
           message: 'no foldable region at the cursor — the key press would be a silent no-op',
         })
         .toMatchObject({ regionAtCursor: true })
@@ -511,7 +522,12 @@ test.describe('@p1 editor text shortcuts', () => {
         await page.keyboard.press('Shift+Alt+f')
         // Only the json formatter produces this indentation, so the assertion
         // tells a real formatting run from a key that merely did nothing.
-        await expect.poll(() => text(page)).toContain('\n  "name": "alpha",\n')
+        await expect
+          .poll(() => text(page), {
+            timeout: JSON_WORKER_READY_TIMEOUT_MS,
+            message: 'the JSON formatter produced no edits — the worker was not ready',
+          })
+          .toContain('\n  "name": "alpha",\n')
       })
     }
   })
@@ -617,6 +633,9 @@ test.describe('@p1 editor text shortcuts', () => {
   })
 
   test('editor text shortcuts really edit the buffer', async ({ page, workbench }) => {
+    // Same JSON-worker cold start as the toggle test; fold-all resolves the
+    // folding model asynchronously too.
+    test.slow()
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()
     await openJsonEditor(page, workbench)
@@ -664,6 +683,7 @@ test.describe('@p1 editor text shortcuts', () => {
       // folding model and no-ops silently when it still has no regions.
       await expect
         .poll(async () => (await foldingState(page))?.regionCount ?? 0, {
+          timeout: JSON_WORKER_READY_TIMEOUT_MS,
           message: 'the folding model has no regions yet — fold-all would be a silent no-op',
         })
         .toBeGreaterThan(0)

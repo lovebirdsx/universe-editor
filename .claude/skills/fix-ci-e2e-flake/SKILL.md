@@ -107,6 +107,9 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 
 - 窄窗口分组后 tabBar 背景右键被相邻 `grid-leaf` 拦截=固定相对坐标超出元素宽度，按实际几何与 ownerDocument 命中背景后真实点击 → 案例 108
 - CDP 暂停主窗口后辅助 resize 偏差恰为 shrink+grow、主/子 rAF 同停=共享 renderer 的虚拟时间一起冻结；记录 RO 文档归属守护根因，恢复调度后验证真实缩放 → 案例 109
+- 菜单项按固定 ArrowDown 次数导航、产品新增菜单组后落点变成别的命令（确定性回归，非环境 flake）=把 group/order 排序当契约；改为按 `menuitem` 标签有界步进（真实按键、以 `aria-activedescendant` 变化确认每步），Enter 前断言目标高亮，另断言新菜单项可见 → 案例 110
+- 折叠门控 received 恒 0 到默认 10s、Windows CI initial+retry 同形态（门控判据本身正确）=异步 JSON worker 冷启动超出 expect 预算；两处门控 poll 加 20s + 所属用例 `test.slow()`，同 worker 的格式化 poll 一并加预算（107 的预算变体）→ 案例 111
+- shared fixture 用例断言全过、finally 删 `openWorkspace` 打开的临时目录报 EBUSY 且 retry 救不回=app + ACP agent 子进程（cwd=workspace）仍存活；迁冷启 fixture + `workspaceSeeder`，清理排在 closeApp 后 → 案例 112（77/77b 的 shared 变体）
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
