@@ -169,7 +169,7 @@ interface PopoverHandleState {
   acceptSlash: (cmd: AvailableCommand) => void
   acceptMention: (entry: MentionFileEntry, q: ActiveMentionQuery) => void
   acceptContextRef: (entry: ContextPopoverEntry, q: ActiveHashQuery) => void
-  acceptHistory: () => void
+  acceptHistory: (entry: string) => void
   restoreHistoryDraft: () => void
 }
 
@@ -451,7 +451,10 @@ export function PromptInput({
       const s = popoverStateRef.current
       if (!s) return
       if (s.historyOpen) {
-        s.acceptHistory()
+        // Match the popover's own clamp (PromptHistoryPopover rendering) so the
+        // accepted entry is exactly the highlighted one.
+        const index = Math.min(s.historyIndex, Math.max(s.historyEntries.length - 1, 0))
+        s.acceptHistory(s.historyEntries[index] ?? '')
         return
       }
       if (s.hashOpen && s.hashQuery !== null && s.hashMatches.length > 0) {
@@ -1235,13 +1238,26 @@ export function PromptInput({
     [fileDialog, mentionRoot, requestFrame],
   )
 
-  const acceptHistory = useCallback((): void => {
-    setHistoryOpen(false)
-    requestFrame(() => {
+  const acceptHistory = useCallback(
+    (entry: string): void => {
+      const draft = historyDraftRef.current
       const el = editorHandleRef.current
-      if (el) el.setSelectionRange(el.getText().length, el.getText().length)
-    })
-  }, [requestFrame])
+      if (el) {
+        // Previewing history is transient (hover/↑↓ rewrite the buffer with
+        // setText, which clears Monaco's undo stack). Commit the accepted entry
+        // as the ONE undoable step draft → entry, so a single Ctrl+Z restores
+        // the draft no matter how many previews happened.
+        el.setText(draft, draft.length)
+        el.setTextUndoable(entry, entry.length)
+      }
+      setHistoryOpen(false)
+      requestFrame(() => {
+        const handle = editorHandleRef.current
+        if (handle) handle.setSelectionRange(handle.getText().length, handle.getText().length)
+      })
+    },
+    [requestFrame],
+  )
 
   const restoreHistoryDraft = useCallback((): void => {
     const draft = historyDraftRef.current
@@ -1250,6 +1266,9 @@ export function PromptInput({
   }, [])
 
   // Push the selected history entry into the editor as the user navigates.
+  // Deliberately NOT undoable: hover/↑↓ previews must not leave undo steps.
+  // The dependencies intentionally exclude `text`, so the synchronous double
+  // write in acceptHistory cannot re-run this and wipe the committed history.
   useEffect(() => {
     if (!historyOpen) return
     const entry = historyEntries[historyIndex] ?? ''
@@ -1778,8 +1797,7 @@ export function PromptInput({
             entries={historyEntries}
             activeIndex={Math.min(historyIndex, Math.max(historyEntries.length - 1, 0))}
             onSelect={(entry) => {
-              editorHandleRef.current?.setText(entry, entry.length)
-              acceptHistory()
+              acceptHistory(entry)
             }}
             onHover={setHistoryIndex}
           />

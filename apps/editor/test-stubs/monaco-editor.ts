@@ -173,12 +173,15 @@ function makeModel(initial: string, language: string, uri: unknown) {
     getLinesContent: () => lines(),
     getOffsetAt: (pos: Position) => positionToOffset(value, pos),
     getPositionAt: (offset: number) => offsetToPosition(value, offset),
-    getFullModelRange: () => ({
-      startColumn: 1,
-      startLineNumber: 1,
-      endColumn: 1,
-      endLineNumber: 1,
-    }),
+    getFullModelRange: () => {
+      const end = offsetToPosition(value, value.length)
+      return {
+        startColumn: 1,
+        startLineNumber: 1,
+        endColumn: end.column,
+        endLineNumber: end.lineNumber,
+      }
+    },
     getValueInRange: (range: {
       startLineNumber: number
       startColumn: number

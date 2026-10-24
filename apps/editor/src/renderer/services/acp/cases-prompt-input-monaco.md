@@ -13,12 +13,17 @@
 - 解法：`onChange` 加第四参 `kind: 'content' | 'cursor'`（`onDidChangeModelContent`→content，`onDidChangeCursorPosition`→cursor）；host 侧 `kind === 'cursor'` 时只 `setCaret`、**跳过所有内容相关副作用**。
 - 测试纪律：单测 stub 的光标事件是**同步**发的（落在 `runProgrammatic` 内）→ 假绿；复现必须走真 e2e（键盘输入 → Enter 真提交 push 历史 → 真 ArrowUp 走全局键盘路由；`sendAcpPrompt` 探针直调 `sendPrompt` 绕过 submit，**不会 push 历史**）。回归：`smoke.agentsPromptHistory.spec.ts` + `PromptInput.test.tsx` 的 `keeps the history popover open when a bare cursor move fires`（stub 的 keyup→cursor 事件锁死此坑）。
 
-## `setText` 是唯一的硬重置点：`setValue` + `onDidResetHistory`
+## 硬重置点与唯一可撤销整段替换
 
 - `setText` 用 `model.setValue`——Monaco 会清空 undo/redo 栈并销毁全部 decoration。因此它**不是普通编辑**：`PromptMonacoEditor` 在值真正变化时顺手 `tracker.clear()`（药丸追踪已无意义）并 fire `onDidResetHistory`，宿主（`PromptInput`）据此 `reset()` 图片撤销栈并同步可用性 key。
 - **值相同时 `setText` 是 no-op**（不 setValue、不 reset）。需要「无论文本变没变都硬重置」的场景（提交后清空上一轮历史，尤其只发图片时缓冲区本就是空串）用 `handle.clearHistory()`：它 `setValue(当前文本)` + `tracker.clear()` + `onDidResetHistory`。
-- 宿主所有 `setText` 语义的路径（历史导航、`@@` 文件选择器、inbox 投递、草稿恢复、提交清空）自动继承这一重置，**不要**在别处手动清图片历史；反过来，新增这类路径时也别指望撤销能跨越一次 `setText`。
-- `setText` 的 `runProgrammatic` 保证这次整体替换不会被当成用户输入（否则会误触发 picker/关历史）。
+- 宿主所有 `setText` 语义的路径（`@@` 文件选择器、inbox 投递、草稿恢复、提交清空）自动继承这一重置，**不要**在别处手动清图片历史。
+- **历史导航是唯一刻意保留撤销的整段替换**，且只在「接受」时发生：
+  - 预览（↑/↓、鼠标 hover 改高亮）继续走 `setText`——每次预览都硬重置、不进撤销栈，否则一次浏览会留下一串撤销步骤；
+  - 接受（Enter/Tab/点击）走 `acceptHistory`：先 `setText(draft)` 把临时预览硬重置回打开历史前的草稿，再 `handle.setTextUndoable(entry)` 把「草稿 → 条目」记为**恰好一个**撤销元素。`setTextUndoable` 用 `pushStackElement` + `pushEditOperations` 整段替换，**不**清 undo/redo、**不** fire `onDidResetHistory`；值相同时是 no-op（避免压出空的撤销步骤）。
+  - 因此接受后一次 Ctrl+Z 回到草稿、Ctrl+Y 回到条目，与预览了多少次无关。`entry === draft` 时没有撤销步骤（本来就没有变化）。
+  - 撤销只恢复文本，不重建草稿里的 @/# 药丸 decoration；预览期间按 Ctrl+Z 仍无效（预览已用 `setValue` 清栈）。真实撤销语义只能在 e2e 验证（单测 stub 无撤销栈）。
+- `setText` / `setTextUndoable` 的 `runProgrammatic` 保证这次整体替换不会被当成用户输入（否则会误触发 picker/关历史）。
 
 ## 历史弹窗：浮在输入框上沿 → 列表从下往上长
 

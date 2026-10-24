@@ -1144,6 +1144,53 @@ describe('PromptInput — history navigation', () => {
     expect(ta.value).toBe('draft')
     expect(screen.queryByTestId('acp-history-popover')).toBeNull()
   })
+
+  it('accepting history keeps the selected entry and closes the popover', () => {
+    setPromptHistory(['previous prompt'])
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'draft' } })
+    ta.setSelectionRange(5, 5)
+
+    act(() => {
+      fireEvent.keyDown(ta, { key: 'ArrowUp' })
+    })
+    expect(ta.value).toBe('previous prompt')
+
+    // Accept rewinds the preview to the draft, then replaces it with the entry
+    // as ONE undoable edit. The stub has no undo stack, but the full-buffer
+    // pushEditOperations path still has to land the exact text.
+    act(() => handleRef.current.popoverAccept())
+
+    expect(screen.queryByTestId('acp-history-popover')).toBeNull()
+    expect(ta.value).toBe('previous prompt')
+  })
+
+  it('accepting uses the hovered row, not whichever preview landed last', () => {
+    setPromptHistory(['third', 'second', 'first'])
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'draft' } })
+    ta.setSelectionRange(5, 5)
+
+    act(() => {
+      fireEvent.keyDown(ta, { key: 'ArrowUp' })
+    })
+    expect(ta.value).toBe('third')
+
+    // Display order is oldest→newest; moving onto the top row highlights 'first'.
+    const options = screen.getAllByRole('option')
+    act(() => {
+      fireEvent.mouseMove(options[0]!)
+    })
+    expect(ta.value).toBe('first')
+
+    act(() => handleRef.current.popoverAccept())
+    expect(screen.queryByTestId('acp-history-popover')).toBeNull()
+    expect(ta.value).toBe('first')
+  })
 })
 
 // ---------------------------------------------------------------------------

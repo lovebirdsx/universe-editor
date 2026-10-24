@@ -149,4 +149,99 @@ test.describe('@p1 agents prompt history', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
       .toBe('first prompt')
   })
+
+  test('Ctrl+Z undoes a recalled history entry and Ctrl+Y restores it @regression', async ({
+    page,
+    workbench,
+  }) => {
+    // Regression: recalling history rewrote the buffer with model.setValue,
+    // which clears Monaco's undo stack, so Ctrl+Z after accepting an entry did
+    // nothing. Accepting must commit exactly ONE undoable step (draft → entry)
+    // regardless of how many preview steps the navigation produced.
+    await seedTwoHistoryEntries(page, workbench)
+
+    await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')))
+      .toBe(true)
+    await page.keyboard.type('draft in progress')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('draft in progress')
+
+    await page.keyboard.press('Control+Home')
+    await page.keyboard.press('ArrowUp')
+    const popover = page.getByTestId('acp-history-popover')
+    await expect(popover).toBeVisible({ timeout: 5000 })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('second prompt')
+
+    // Walk to the older entry so the test also proves previews collapse into a
+    // single undo step.
+    await page.keyboard.press('ArrowUp')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('first prompt')
+
+    // Enter accepts the highlight (it does not send while the popover is open).
+    await page.keyboard.press('Enter')
+    await expect(popover).toBeHidden()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('first prompt')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptPopupVisible')))
+      .toBe(false)
+
+    await page.keyboard.press('Control+Z')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('draft in progress')
+    await expect(popover).toBeHidden()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptPopupVisible')))
+      .toBe(false)
+
+    await page.keyboard.press('Control+Y')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('first prompt')
+    await expect(popover).toBeHidden()
+  })
+
+  test('Ctrl+Z clears a history entry recalled into an empty input @regression', async ({
+    page,
+    workbench,
+  }) => {
+    // The reported reproduction: empty input → ArrowUp → Enter → Ctrl+Z.
+    await seedTwoHistoryEntries(page, workbench)
+
+    await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.agent.focusInput'))
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')))
+      .toBe(true)
+    await expect.poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText())).toBe('')
+
+    await page.keyboard.press('ArrowUp')
+    const popover = page.getByTestId('acp-history-popover')
+    await expect(popover).toBeVisible({ timeout: 5000 })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('second prompt')
+
+    await page.keyboard.press('Enter')
+    await expect(popover).toBeHidden()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('second prompt')
+
+    await page.keyboard.press('Control+Z')
+    await expect.poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText())).toBe('')
+
+    await page.keyboard.press('Control+Y')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('second prompt')
+  })
 })

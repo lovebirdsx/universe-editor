@@ -81,6 +81,14 @@ export interface PromptEditorHandle {
   /** Replace the whole buffer and place the caret (default: end). */
   setText(text: string, caret?: number): void
   /**
+   * Replace the whole buffer as ONE undoable edit. Unlike `setText`, Monaco's
+   * undo/redo stack survives: Ctrl+Z restores the previous text and Ctrl+Y
+   * reapplies this one. Does NOT fire `onDidResetHistory` (image-undo versions
+   * stay valid). No-op when the text is unchanged — Monaco would otherwise push
+   * a dead undo element.
+   */
+  setTextUndoable(text: string, caret?: number): void
+  /**
    * Drop Monaco's undo/redo history and every tracked pill, keeping the current
    * text. `setText` is a no-op when the text is unchanged, so callers that need
    * a guaranteed hard reset (submit) use this.
@@ -261,6 +269,29 @@ export function PromptMonacoEditor({
             model.setValue(text)
             trackerRef.current?.clear()
             onDidResetHistoryRef.current?.()
+          }
+          const off = caret ?? text.length
+          ed.setPosition(model.getPositionAt(off))
+        }),
+      setTextUndoable: (text, caret) =>
+        runProgrammatic(() => {
+          const ed = editorRef.current
+          const model = modelRef.current
+          if (!ed || !model) return
+          if (model.getValue() !== text) {
+            // Capture the cursor after the caller's reset placed it: undo then
+            // returns to the pre-accept caret, not a mapped leftover position.
+            const selections = ed.getSelections()
+            model.pushStackElement()
+            model.pushEditOperations(
+              selections,
+              [{ range: model.getFullModelRange(), text }],
+              () => null,
+            )
+            model.pushStackElement()
+            // History entries are plain text; pills tracked against the replaced
+            // buffer are gone and must not survive as decorations.
+            trackerRef.current?.clear()
           }
           const off = caret ?? text.length
           ed.setPosition(model.getPositionAt(off))
