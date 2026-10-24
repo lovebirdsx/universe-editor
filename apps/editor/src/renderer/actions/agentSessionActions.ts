@@ -80,7 +80,9 @@ import {
 } from '../services/acp/session/revealSessionEditorTab.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 import { computeInitialSelectionIndex } from '../services/quickInput/quickNavigateSelection.js'
+import { resolveQuickPickOpenTarget } from '../services/quickInput/quickPickOpenTarget.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
+import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 import { relativeTime } from '../relativeTime.js'
 
 export class NewAgentSessionAction extends Action2 {
@@ -277,6 +279,10 @@ export class NewAgentSessionWithScopeAction extends Action2 {
     const lastSessionCwd = accessor.get(IAcpLastSessionCwdService)
     const workspace = accessor.get(IWorkspaceService)
     const uriIdentity = accessor.get(IUriIdentityService)
+    const groups = accessor.get(IEditorGroupsService)
+    const auxWindows = accessor.get(IAuxiliaryEditorWindowService)
+    // Mutable out-param: the quick pick writes the modifier state at acceptance.
+    const keyMods = { ctrl: false, alt: false }
 
     try {
       const scopes = await subProjects.getScopes()
@@ -297,6 +303,7 @@ export class NewAgentSessionWithScopeAction extends Action2 {
           'agent.newSessionWithScope.placeholder',
           'Select a working directory for the new session',
         ),
+        keyMods,
       })
       if (!picked) return
 
@@ -327,6 +334,14 @@ export class NewAgentSessionWithScopeAction extends Action2 {
       }
 
       const session = await sessions.createSession(registry.defaultAgentId(), target)
+      const openTarget = resolveQuickPickOpenTarget(keyMods)
+      if (openTarget === 'side') {
+        openSessionInRightSplit(groups, inst, session)
+        return
+      }
+      if (openTarget === 'newWindow') {
+        if (await openSessionInNewWindow(groups, inst, auxWindows, session)) return
+      }
       focusCreatedSession(session, editor, inst)
     } catch (err) {
       notification.notify({
@@ -480,6 +495,9 @@ export class ResumeAgentSessionAction extends Action2 {
     const workspace = accessor.get(IWorkspaceService)
     const uriIdentity = accessor.get(IUriIdentityService)
     const windowFocus = accessor.get(IWindowFocusService)
+    const auxWindows = accessor.get(IAuxiliaryEditorWindowService)
+    // Mutable out-param: the quick pick writes the modifier state at acceptance.
+    const keyMods = { ctrl: false, alt: false }
 
     // Side tasks stay out of the picker: they are reachable only from their
     // parent's side-task popover, same as the Sessions view (SessionListBody).
@@ -510,8 +528,10 @@ export class ResumeAgentSessionAction extends Action2 {
 
     const picked = await quickInput.pick(items, {
       placeholder: localize('agent.resumeSession.placeholder', 'Resume previous agent session'),
+      keyMods,
     })
     if (!picked || !picked.id) return
+    const openTarget = resolveQuickPickOpenTarget(keyMods)
 
     // A session whose cwd differs from the open folder — or that ran on a different
     // host (authority) — must not be resumed live: that would spawn the agent
@@ -527,12 +547,32 @@ export class ResumeAgentSessionAction extends Action2 {
     const currentAuthority =
       folder && folder.scheme === REMOTE_SCHEME ? folder.authority || undefined : undefined
     if (entry && isForeignWorkspaceSession(entry, currentCwd, currentAuthority, uriIdentity)) {
+      if (openTarget === 'side') {
+        openSessionInRightSplit(groups, inst, entry)
+        return
+      }
+      if (
+        openTarget === 'newWindow' &&
+        (await openSessionInNewWindow(groups, inst, auxWindows, entry))
+      ) {
+        return
+      }
       revealSessionEditorTab(groups, inst, entry.id, entry, windowFocus)
       return
     }
 
     try {
       const session = await sessions.resumeSession(picked.id)
+      if (openTarget === 'side') {
+        openSessionInRightSplit(groups, inst, session)
+        return
+      }
+      if (
+        openTarget === 'newWindow' &&
+        (await openSessionInNewWindow(groups, inst, auxWindows, session))
+      ) {
+        return
+      }
       revealSessionEditorTab(groups, inst, session.id, session, windowFocus)
     } catch {
       // resumeSession publishes its own notification; nothing to do.
@@ -1266,6 +1306,45 @@ export function openSessionInRightSplit(
 }
 
 /**
+ * Open (or move) a session chat into a NEW auxiliary editor window. Sessions are
+ * a single global chat, so an already-open tab is moved rather than copied — a
+ * second instance would attach the same agent session twice. After landing, any
+ * duplicate the active-session sync contribution opened in the main window while
+ * resume/create was in flight is closed. Returns false when the window could not
+ * take the editor (the caller falls back to an in-window open).
+ */
+export async function openSessionInNewWindow(
+  groups: IEditorGroupsService,
+  inst: IInstantiationService,
+  auxWindows: IAuxiliaryEditorWindowService,
+  session: { id: string; agentId: string | undefined },
+): Promise<boolean> {
+  const found = findSessionEditor(groups, session.id)
+  if (found) {
+    const result = await auxWindows.openEditorInNewWindow(found.editor, {
+      mode: 'move',
+      source: found.group,
+      preferOtherDisplayFullscreen: true,
+    })
+    if (!result.ok) return false
+    closeDuplicateSessionEditors(groups, result.window.part.activeGroup, session.id)
+    return true
+  }
+
+  const input = inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined)
+  const result = await auxWindows.openEditorInNewWindow(input, {
+    mode: 'open',
+    preferOtherDisplayFullscreen: true,
+  })
+  if (!result.ok) {
+    if (!input.isDisposed) input.dispose()
+    return false
+  }
+  closeDuplicateSessionEditors(groups, result.window.part.activeGroup, session.id)
+  return true
+}
+
+/**
  * Focus the session's existing tab wherever it already lives, and only fall back
  * to opening a split in `direction` when no tab exists. Used by the side task's
  * parent-session chip: the parent is almost always already open, and stealing it
@@ -1457,6 +1536,9 @@ export class OpenSideTaskAction extends Action2 {
     const quickInput = accessor.get(IQuickInputService)
     const dialogService = accessor.get(IDialogService)
     const config = accessor.get(IConfigurationService)
+    const auxWindows = accessor.get(IAuxiliaryEditorWindowService)
+    // Mutable out-param: the quick pick writes the modifier state at acceptance.
+    const keyMods = { ctrl: false, alt: false }
 
     const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
@@ -1472,6 +1554,7 @@ export class OpenSideTaskAction extends Action2 {
     }))
     const picked = await quickInput.pick(items, {
       placeholder: localize('acp.sideTask.open.placeholder', 'Open a side task'),
+      keyMods,
       onItemRemove: (item) => {
         // Resolve the subtree synchronously: the confirm dialog can outlive the
         // row set this click was based on. A row that vanished from history
@@ -1498,6 +1581,12 @@ export class OpenSideTaskAction extends Action2 {
 
     const target = sessionRowTarget(sessions, history, picked.id)
     if (target === undefined) return
+    if (
+      resolveQuickPickOpenTarget(keyMods) === 'newWindow' &&
+      (await openSessionInNewWindow(groups, inst, auxWindows, target))
+    ) {
+      return
+    }
     openSessionInRightSplit(groups, inst, target)
   }
 }

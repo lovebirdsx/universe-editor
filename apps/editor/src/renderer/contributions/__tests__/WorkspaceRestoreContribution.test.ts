@@ -133,6 +133,9 @@ function makeAuxWindowsStub(): IAuxiliaryEditorWindowServiceType {
     _serviceBrand: undefined,
     windows: [],
     onDidChangeWindows: Event.None,
+    async openEditorInNewWindow() {
+      return { ok: false, reason: 'error' } as const
+    },
     async createEmptyWindow() {
       return { window: undefined, reason: 'error' }
     },

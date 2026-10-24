@@ -15,6 +15,7 @@ import {
   BrowserWindow,
   screen,
   type BrowserWindowConstructorOptions,
+  type Display,
   type WindowOpenHandlerResponse,
 } from 'electron'
 import { randomBytes } from 'node:crypto'
@@ -56,6 +57,27 @@ const CASCADE_OFFSET = 28
 const DEFAULT_BACKGROUND = '#1e1e1e'
 const PREPARED_TOKEN_TTL_MS = 60_000
 const READY_TO_SHOW_TIMEOUT_MS = 4_000
+
+interface BoundsLike {
+  readonly x: number
+  readonly y: number
+  readonly width: number
+  readonly height: number
+}
+
+function sameBounds(a: BoundsLike, b: BoundsLike): boolean {
+  return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height
+}
+
+function centerOf(bounds: BoundsLike): { x: number; y: number } {
+  return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }
+}
+
+function centerDistanceSq(a: BoundsLike, b: BoundsLike): number {
+  const ca = centerOf(a)
+  const cb = centerOf(b)
+  return (ca.x - cb.x) ** 2 + (ca.y - cb.y) ** 2
+}
 
 export interface AuxiliaryWindowsMainServiceOptions {
   readonly preloadPath: string
@@ -495,6 +517,12 @@ export class AuxiliaryWindowsMainService implements IDisposable {
     cascadeIndex: number,
   ): IWindowState {
     const input = options?.geometry
+    // Explicit geometry (drag-out, workspace restore) is authoritative; the
+    // display hint must never move a window the user placed deliberately.
+    if (options?.preferOtherDisplayFullscreen === true && input === undefined) {
+      const other = this._resolveOtherDisplayFullscreen(this._placementSourceWindow(parent))
+      if (other) return other
+    }
     // Reuse the persisted-window validator: rejects malformed/off-screen restore data.
     // Raw values still go through the clamp below so the result is always reachable.
     const restored = input ? validateWindowState(input) : undefined
@@ -532,6 +560,59 @@ export class AuxiliaryWindowsMainService implements IDisposable {
       isFullscreen: restored?.isFullscreen ?? input?.isFullscreen === true,
       displayId: display.id,
       displayBounds: { ...display.bounds },
+    }
+  }
+
+  /**
+   * The window whose display counts as "current" for placement hints. Prefer the
+   * focused window when it belongs to this parent (the user may be working in an
+   * auxiliary window on another monitor); otherwise fall back to the workspace
+   * window.
+   */
+  private _placementSourceWindow(parent: BrowserWindow): BrowserWindow {
+    const focused = BrowserWindow.getFocusedWindow()
+    if (!focused || focused.isDestroyed()) return parent
+    if (focused.id === parent.id) return focused
+    return this.getParentWindowId(focused.id) === parent.id ? focused : parent
+  }
+
+  /**
+   * Fullscreen geometry on a different display, or undefined when the setup has no
+   * usable second display (single monitor, or mirrored displays sharing bounds).
+   * Mirrored displays are filtered by bounds so "another display" does not land on
+   * the same physical area.
+   */
+  private _resolveOtherDisplayFullscreen(source: BrowserWindow): IWindowState | undefined {
+    // Fullscreen/maximized windows report their restored position from
+    // getNormalBounds, which can still name the display they were on before —
+    // the user sees the current bounds instead.
+    const sourceBounds =
+      source.isMaximized() || source.isFullScreen() ? source.getBounds() : source.getNormalBounds()
+    const sourceDisplay = screen.getDisplayNearestPoint({
+      x: Math.round(sourceBounds.x + sourceBounds.width / 2),
+      y: Math.round(sourceBounds.y + sourceBounds.height / 2),
+    })
+    const candidates: Display[] = screen
+      .getAllDisplays()
+      .filter(
+        (display) =>
+          display.id !== sourceDisplay.id && !sameBounds(display.bounds, sourceDisplay.bounds),
+      )
+    if (candidates.length === 0) return undefined
+    const target = [...candidates].sort(
+      (a, b) =>
+        centerDistanceSq(a.bounds, sourceDisplay.bounds) -
+          centerDistanceSq(b.bounds, sourceDisplay.bounds) || a.id - b.id,
+    )[0]!
+    return {
+      x: target.bounds.x,
+      y: target.bounds.y,
+      width: target.bounds.width,
+      height: target.bounds.height,
+      isMaximized: false,
+      isFullscreen: true,
+      displayId: target.id,
+      displayBounds: { ...target.bounds },
     }
   }
 

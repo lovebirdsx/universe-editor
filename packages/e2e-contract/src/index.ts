@@ -1159,6 +1159,8 @@ export interface E2EProbe {
   installAcpEchoAgent(agentId: string, jsPath: string, env?: Record<string, string>): void
   /** Number of open ACP sessions. */
   getAcpSessionCount(): number
+  /** Number of durable history rows (populated at handshake, persisted later). */
+  getAcpHistoryCount(): number
   /** Active ACP session id (the local one assigned by AcpSessionService), if any. */
   getActiveAcpSessionId(): string | undefined
   /** Close and resume the active durable session, returning the resumed local id. */

@@ -144,15 +144,12 @@ export class EditorResolverService implements IEditorResolverService {
       .sort((a, b) => b.info.priority - a.info.priority)
   }
 
-  async openEditor(
-    uri: URI,
-    options?: { preferredTypeId?: string; pinned?: boolean; preserveFocus?: boolean },
-  ): Promise<void> {
+  createEditorInput(uri: URI, preferredTypeId?: string): EditorInput {
     const candidates = this.resolveEditors(uri)
 
     let chosen: IEditorResolverRegistration | undefined
-    if (options?.preferredTypeId) {
-      chosen = candidates.find((r) => r.info.typeId === options.preferredTypeId) ?? candidates[0]
+    if (preferredTypeId) {
+      chosen = candidates.find((r) => r.info.typeId === preferredTypeId) ?? candidates[0]
       // The user picked this editor type explicitly ("Reopen With..."). Remember
       // it so a later, higher-priority registration doesn't auto-upgrade the tab
       // out from under them.
@@ -168,8 +165,16 @@ export class EditorResolverService implements IEditorResolverService {
       : this._inst.createInstance(FileEditorInput, uri)
 
     this._logger.info(
-      `openEditor uri=${uri.toString()} chosen=${chosen?.info.typeId ?? 'default'} candidates=${candidates.length}`,
+      `createEditorInput uri=${uri.toString()} chosen=${chosen?.info.typeId ?? 'default'} candidates=${candidates.length}`,
     )
+    return input
+  }
+
+  async openEditor(
+    uri: URI,
+    options?: { preferredTypeId?: string; pinned?: boolean; preserveFocus?: boolean },
+  ): Promise<void> {
+    const input = this.createEditorInput(uri, options?.preferredTypeId)
     this._editor.openEditor(input, {
       pinned: options?.pinned ?? true,
       ...(options?.preserveFocus === true ? { preserveFocus: true } : {}),

@@ -30,6 +30,7 @@ import {
   type IQuickPick,
   type IQuickPickItem,
   type IWorkspace,
+  type EditorInput,
   type QuickPickInput,
   type QuickPickPresentation,
 } from '@universe-editor/platform'
@@ -37,6 +38,11 @@ import { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeature
 import type { WorkspaceSymbolEntry } from '../../languageFeatures/typescript/lspMonacoConvert.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type OpenEditorInNewWindowOptions,
+  type OpenEditorInNewWindowResult,
+} from '../../windows/auxiliaryEditorWindowService.js'
 
 vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
   MonacoLoader: { ensureInitialized: () => Promise.resolve({}) },
@@ -491,5 +497,175 @@ describe('WorkspaceSymbolQuickAccessProvider.defaultFilterValue', () => {
       }),
     })
     expect(provider.defaultFilterValue).toBeUndefined()
+  })
+})
+
+describe('WorkspaceSymbolQuickAccessProvider open targets', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    FileEditorRegistry._resetForTests()
+  })
+
+  function makeGroups() {
+    const log: Array<{ groupId: number; editor: EditorInput }> = []
+    const list: Array<{
+      id: number
+      editors: EditorInput[]
+      activeEditor: EditorInput | undefined
+      isLocked: boolean
+      openEditor(editor: EditorInput): void
+      setActive(editor: EditorInput): void
+      pinEditor(): void
+    }> = []
+    let nextId = 1
+    const makeGroup = () => {
+      const id = nextId++
+      const group = {
+        id,
+        editors: [] as EditorInput[],
+        activeEditor: undefined as EditorInput | undefined,
+        isLocked: false,
+        openEditor(editor: EditorInput) {
+          log.push({ groupId: id, editor })
+          group.editors.push(editor)
+          group.activeEditor = editor
+        },
+        setActive(editor: EditorInput) {
+          group.activeEditor = editor
+        },
+        pinEditor() {},
+      }
+      list.push(group)
+      return group
+    }
+    const main = makeGroup()
+    let active = main
+    return {
+      list,
+      log,
+      service: {
+        get groups() {
+          return list
+        },
+        get activeGroup() {
+          return active
+        },
+        get activeGroupForOpen() {
+          return active
+        },
+        activateGroup(group: { id: number }) {
+          const found = list.find((g) => g.id === group.id)
+          if (found) active = found
+        },
+        findGroup(_scope: unknown, source: { id: number }) {
+          const index = list.findIndex((g) => g.id === source.id)
+          return list[index + 1]
+        },
+        addGroup(source: { id: number }) {
+          const index = list.findIndex((g) => g.id === source.id)
+          const created = makeGroup()
+          // Keep creation order: the side group follows its source.
+          list.splice(list.indexOf(created), 1)
+          list.splice(index + 1, 0, created)
+          return created
+        },
+      },
+    }
+  }
+
+  function setupForOpen() {
+    const groups = makeGroups()
+    const openCalls: Array<{
+      editor: EditorInput
+      options: OpenEditorInNewWindowOptions | undefined
+    }> = []
+    const aux = {
+      openCalls,
+      succeed: true,
+      async openEditorInNewWindow(
+        editor: EditorInput,
+        options?: OpenEditorInNewWindowOptions,
+      ): Promise<OpenEditorInNewWindowResult> {
+        openCalls.push({ editor, options })
+        if (aux.succeed) return { ok: true, window: undefined as never, editor }
+        return { ok: false, reason: 'error' }
+      },
+    }
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, {
+      current: { folder: URI.file('/ws'), name: 'ws' } as IWorkspace,
+    } as never)
+    services.set(IEditorGroupsService, groups.service as never)
+    services.set(ILanguageFeaturesService, {
+      getWorkspaceSymbolProviders: () => [
+        { provideWorkspaceSymbols: () => Promise.resolve([entry('foo')]) },
+      ],
+    } as never)
+    services.set(IUriIdentityService, new UriIdentityService('linux'))
+    services.set(ILoggerService, { createLogger: () => new NullLogger() } as never)
+    services.set(IAuxiliaryEditorWindowService, aux as unknown as IAuxiliaryEditorWindowService)
+    const inst = new InstantiationService(services)
+    services.set(IInstantiationService, inst as unknown as IInstantiationService)
+    const provider = inst.createInstance(WorkspaceSymbolQuickAccessProvider)
+    return { provider, groups, aux }
+  }
+
+  async function acceptSymbol(
+    setup: ReturnType<typeof setupForOpen>,
+    keyMods: IKeyMods,
+  ): Promise<FakeQuickPick<IQuickPickItem>> {
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.value = '#foo'
+    run(setup.provider, picker)
+    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS)
+    expect(picker.items.length).toBeGreaterThan(0)
+    picker.keyMods = keyMods
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    await vi.advanceTimersByTimeAsync(0)
+    return picker
+  }
+
+  it('ctrl+accept opens the symbol in the side group', async () => {
+    vi.useFakeTimers()
+    const setup = setupForOpen()
+    await acceptSymbol(setup, { ctrl: true, alt: false })
+
+    expect(setup.groups.list).toHaveLength(2)
+    expect(setup.groups.log).toHaveLength(1)
+    expect(setup.groups.log[0]!.groupId).toBe(2)
+    const input = setup.groups.log[0]!.editor
+    expect(input).toBeInstanceOf(FileEditorInput)
+    expect((input as FileEditorInput).resource.toString()).toBe('file:///ws/a.ts')
+    input.dispose()
+  })
+
+  it('ctrl+alt+accept opens the symbol in an auxiliary window', async () => {
+    vi.useFakeTimers()
+    const setup = setupForOpen()
+    await acceptSymbol(setup, { ctrl: true, alt: true })
+
+    expect(setup.aux.openCalls).toHaveLength(1)
+    expect(setup.aux.openCalls[0]!.options).toMatchObject({
+      mode: 'open',
+      pinned: true,
+      preferOtherDisplayFullscreen: true,
+    })
+    expect(setup.aux.openCalls[0]!.editor).toBeInstanceOf(FileEditorInput)
+    // The main window is left untouched.
+    expect(setup.groups.list).toHaveLength(1)
+    expect(setup.groups.log).toHaveLength(0)
+    setup.aux.openCalls[0]!.editor.dispose()
+  })
+
+  it('ctrl+alt+accept falls back to the active group when the window cannot open', async () => {
+    vi.useFakeTimers()
+    const setup = setupForOpen()
+    setup.aux.succeed = false
+    await acceptSymbol(setup, { ctrl: true, alt: true })
+
+    expect(setup.aux.openCalls).toHaveLength(1)
+    expect(setup.groups.log).toHaveLength(1)
+    expect(setup.groups.log[0]!.groupId).toBe(1)
+    setup.groups.log[0]!.editor.dispose()
   })
 })

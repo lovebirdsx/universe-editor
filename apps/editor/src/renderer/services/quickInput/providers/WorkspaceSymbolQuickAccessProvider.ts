@@ -30,12 +30,17 @@ import {
   type IQuickItemHighlight,
   type IQuickPick,
   type IQuickPickItem,
+  type EditorInput,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import { revealSelectionInInput } from '../../editor/revealEditorPosition.js'
+import { canCloneEditorInputForSplit } from '../../editor/cloneEditorInput.js'
+import { ensureSideGroup } from '../../editor/openToSide.js'
 import { IWindowFocusService } from '../../windows/windowFocusService.js'
+import { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWindowService.js'
+import { resolveQuickPickOpenTarget, type QuickPickOpenTarget } from '../quickPickOpenTarget.js'
 import { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import {
   workspaceSymbolsToEntries,
@@ -118,6 +123,8 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     @ILanguageFeaturesService private readonly _langFeatures: ILanguageFeaturesService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
+    @IAuxiliaryEditorWindowService
+    private readonly _auxWindows: IAuxiliaryEditorWindowService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     this._logger = loggerService.createLogger({
@@ -313,8 +320,44 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       debounce = setTimeout(refresh, WORKSPACE_SYMBOL_DEBOUNCE_MS)
     }
 
-    const openSymbol = (symbol: UnifiedWorkspaceSymbol): void => {
+    const openSymbol = async (
+      symbol: UnifiedWorkspaceSymbol,
+      target: QuickPickOpenTarget,
+    ): Promise<void> => {
       const uri = symbol.uri
+      const revealSymbol = (input: EditorInput): void => {
+        void revealSelectionInInput(input, {
+          startLineNumber: symbol.lineNumber,
+          startColumn: symbol.column,
+        })
+      }
+      if (target === 'newWindow') {
+        const opened = await this._openSymbolInNewWindow(uri)
+        if (opened) {
+          revealSymbol(opened)
+          return
+        }
+        // Fall back to the in-window open when the auxiliary window failed.
+      }
+      if (target === 'side') {
+        const side = ensureSideGroup(this._groups)
+        const existing = side.editors.find(
+          (editor): editor is FileEditorInput =>
+            editor instanceof FileEditorInput && this._uriIdentity.isEqual(editor.resource, uri),
+        )
+        if (existing) {
+          side.setActive(existing)
+          this._windowFocus.focusGroup(side)
+          revealSymbol(existing)
+          return
+        }
+        const input = this._instantiation.createInstance(FileEditorInput, uri)
+        // ensureSideGroup activated the side group; the lock-aware helper keeps
+        // a locked group from swallowing the open.
+        openInLockAwareGroup(this._groups, input, { activate: true, pinned: true })
+        revealSymbol(input)
+        return
+      }
       let input: FileEditorInput | undefined
       for (const group of this._groups.groups) {
         for (const editor of group.editors) {
@@ -335,10 +378,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
         input = this._instantiation.createInstance(FileEditorInput, uri)
         openInLockAwareGroup(this._groups, input, { activate: true, pinned: true })
       }
-      void revealSelectionInInput(input, {
-        startLineNumber: symbol.lineNumber,
-        startColumn: symbol.column,
-      })
+      revealSymbol(input)
     }
 
     disposables.add(
@@ -351,8 +391,9 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     disposables.add(
       picker.onDidAccept((items) => {
         const symbol = items[0] ? byId.get(items[0].id) : undefined
+        const target = resolveQuickPickOpenTarget(picker.keyMods)
         picker.hide()
-        if (symbol) openSymbol(symbol)
+        if (symbol) void openSymbol(symbol, target)
       }),
     )
     disposables.add(
@@ -377,5 +418,41 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       if (currentValue.trim()) scheduleRefresh()
       else showCachedResults()
     })
+  }
+
+  /** Open the symbol's file in an auxiliary editor window. Reuses the open tab's
+   *  input as a copy when it can be cloned; otherwise opens a fresh input.
+   *  Returns undefined when the window could not take the editor. */
+  private async _openSymbolInNewWindow(uri: URI): Promise<EditorInput | undefined> {
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof FileEditorInput && this._uriIdentity.isEqual(editor.resource, uri)) {
+          try {
+            const result = await this._auxWindows.openEditorInNewWindow(editor, {
+              mode: canCloneEditorInputForSplit(editor) ? 'copy' : 'move',
+              source: group,
+              preferOtherDisplayFullscreen: true,
+            })
+            if (result.ok) return result.editor
+          } catch {
+            // fall through to the caller's in-window fallback
+          }
+          return undefined
+        }
+      }
+    }
+    const input = this._instantiation.createInstance(FileEditorInput, uri)
+    try {
+      const result = await this._auxWindows.openEditorInNewWindow(input, {
+        mode: 'open',
+        pinned: true,
+        preferOtherDisplayFullscreen: true,
+      })
+      if (result.ok) return result.editor
+    } catch {
+      // fall through to cleanup + caller fallback
+    }
+    if (!input.isDisposed) input.dispose()
+    return undefined
   }
 }

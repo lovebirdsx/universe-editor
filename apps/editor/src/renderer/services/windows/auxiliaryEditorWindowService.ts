@@ -69,10 +69,37 @@ export interface CreateAuxiliaryEditorWindowOptions {
   readonly geometry?: AuxiliaryWindowGeometry
   /** Initial placement (drag-out); clamped by the main process. */
   readonly bounds?: AuxiliaryWindowBounds
+  /** Fullscreen on a different display when one exists (see the wire contract). */
+  readonly preferOtherDisplayFullscreen?: boolean
   readonly title?: string
   /** Pre-created part (workspace restore creates + hydrates it first). */
   readonly part?: EditorPart
 }
+
+export type OpenEditorInNewWindowMode = 'open' | 'move' | 'copy'
+
+export interface OpenEditorInNewWindowOptions {
+  /** Defaults to 'open'. `move`/`copy` require `source`. */
+  readonly mode?: OpenEditorInNewWindowMode
+  /** The group currently holding `editor`; required for `move`/`copy`. */
+  readonly source?: IEditorGroup
+  /** Pin the opened editor (only used by `open`; default true). */
+  readonly pinned?: boolean
+  /** Initial placement (drag-out); clamped by the main process. */
+  readonly bounds?: AuxiliaryWindowBounds
+  readonly preferOtherDisplayFullscreen?: boolean
+  /** Activate/focus the new window (default true). */
+  readonly activate?: boolean
+}
+
+export type OpenEditorInNewWindowResult =
+  | {
+      readonly ok: true
+      readonly window: IAuxiliaryEditorWindow
+      /** The instance in the target group (the clone for `copy`). */
+      readonly editor: EditorInput
+    }
+  | { readonly ok: false; readonly reason: 'uncopyable' | 'error' }
 
 export interface AuxiliaryEditorWindowCreateResult {
   readonly window: IAuxiliaryEditorWindow | undefined
@@ -102,6 +129,17 @@ export interface IAuxiliaryEditorWindowService {
   createEmptyWindow(
     options?: CreateAuxiliaryEditorWindowOptions,
   ): Promise<AuxiliaryEditorWindowCreateResult>
+  /**
+   * Open `editor` in a new auxiliary window, or move/copy an already-open editor
+   * into it. Sharing one EditorInput instance across groups is unsafe, so `open`
+   * refuses an input that is still open elsewhere; callers pick `move`/`copy` for
+   * that case. On failure an `open` input is left untouched (the caller may fall
+   * back and owns disposal).
+   */
+  openEditorInNewWindow(
+    editor: EditorInput,
+    options?: OpenEditorInNewWindowOptions,
+  ): Promise<OpenEditorInNewWindowResult>
   moveEditorToNewWindow(
     editor: EditorInput,
     source: IEditorGroup,
@@ -276,36 +314,95 @@ export class AuxiliaryEditorWindowService
     return entry ? { window: this._toPublic(entry) } : { window: undefined, reason: 'error' }
   }
 
+  async openEditorInNewWindow(
+    editor: EditorInput,
+    options: OpenEditorInNewWindowOptions = {},
+  ): Promise<OpenEditorInNewWindowResult> {
+    const mode = options.mode ?? 'open'
+    const source = options.source
+    if (mode === 'open') {
+      // Two groups must not share one input instance: closing one would dispose
+      // the other's tab. Callers pick move/copy when the editor is already open.
+      if (this._findGroupContaining(editor)) {
+        this._logger.warn(`open in new window refused: editor already open id=${editor.id}`)
+        return { ok: false, reason: 'error' }
+      }
+    } else if (!source || !this._isMoveSourceValid(editor, source)) {
+      return { ok: false, reason: 'error' }
+    }
+
+    const sticky = mode === 'copy' && source ? source.isSticky(editor) : false
+    let clone: EditorInput | undefined
+    if (mode === 'copy') {
+      clone = this._cloneForCopy(editor)
+      if (!clone) {
+        this._notifyUncopyable([editor.label])
+        return { ok: false, reason: 'uncopyable' }
+      }
+    }
+
+    const entry = await this._createWindow({
+      activate: options.activate !== false,
+      explicitEmpty: true,
+      ...(options.bounds ? { bounds: options.bounds } : {}),
+      ...(options.preferOtherDisplayFullscreen === true
+        ? { preferOtherDisplayFullscreen: true }
+        : {}),
+    })
+    if (!entry) {
+      clone?.dispose()
+      return { ok: false, reason: 'error' }
+    }
+
+    const target = entry.part.activeGroup
+    try {
+      if (mode === 'copy') {
+        if (!source || !this._isMoveSourceValid(editor, source) || !this._isEntryOpen(entry)) {
+          clone?.dispose()
+          await this._discardFailedTarget(entry)
+          return { ok: false, reason: 'error' }
+        }
+        this._groups.copyEditor(clone!, target, { sticky })
+        entry.explicitEmpty = false
+        return { ok: true, window: this._toPublic(entry), editor: clone! }
+      }
+      if (mode === 'move') {
+        if (!source || !this._isMoveSourceValid(editor, source) || !this._isEntryOpen(entry)) {
+          await this._discardFailedTarget(entry)
+          return { ok: false, reason: 'error' }
+        }
+        this._moveEditorOrThrow(editor, target, source)
+        entry.explicitEmpty = false
+        return { ok: true, window: this._toPublic(entry), editor }
+      }
+      if (!this._isEntryOpen(entry) || editor.isDisposed) {
+        await this._discardFailedTarget(entry)
+        return { ok: false, reason: 'error' }
+      }
+      target.openEditor(editor, { activate: true, pinned: options.pinned !== false })
+      entry.explicitEmpty = false
+      return { ok: true, window: this._toPublic(entry), editor }
+    } catch (err) {
+      this._logger.warn(`${mode} editor in new window failed: ${String(err)}`)
+      // A clone that never landed is owned by this call; a moved/opened input
+      // stays reachable or belongs to the caller.
+      if (clone && !this._groups.groups.some((group) => group.contains(clone))) clone.dispose()
+      await this._discardFailedTarget(entry)
+      return { ok: false, reason: 'error' }
+    }
+  }
+
   async moveEditorToNewWindow(
     editor: EditorInput,
     source: IEditorGroup,
     bounds?: AuxiliaryWindowBounds,
   ): Promise<boolean> {
-    if (!this._isMoveSourceValid(editor, source)) return false
-    const entry = await this._createWindow({
-      activate: true,
-      explicitEmpty: true,
+    const result = await this.openEditorInNewWindow(editor, {
+      mode: 'move',
+      source,
       ...(bounds ? { bounds } : {}),
     })
-    if (!entry) return false
-    // Window creation is async: the source tab (or the whole workspace scope)
-    // may have gone away while the native window was being prepared. Re-check
-    // the same instance, not just a same-id replacement, before moving.
-    if (!this._isMoveSourceValid(editor, source) || !this._isEntryOpen(entry)) {
-      await this._discardFailedTarget(entry)
-      return false
-    }
-    try {
-      this._moveEditorOrThrow(editor, entry.part.activeGroup, source)
-      entry.explicitEmpty = false
-      return true
-    } catch (err) {
-      this._logger.warn(`move editor failed: ${String(err)}`)
-      // Never close a non-empty target on failure: the editors already moved
-      // belong to no other group anymore and would lose unsaved state.
-      await this._discardFailedTarget(entry)
-      return false
-    }
+    return result.ok
   }
 
   async copyEditorToNewWindow(
@@ -313,39 +410,12 @@ export class AuxiliaryEditorWindowService
     source: IEditorGroup,
     bounds?: AuxiliaryWindowBounds,
   ): Promise<boolean> {
-    if (!this._isMoveSourceValid(editor, source)) return false
-    const clone = this._cloneForCopy(editor)
-    if (!clone) {
-      this._notifyUncopyable([editor.label])
-      return false
-    }
-    const sticky = source.isSticky(editor)
-    const entry = await this._createWindow({
-      activate: true,
-      explicitEmpty: true,
+    const result = await this.openEditorInNewWindow(editor, {
+      mode: 'copy',
+      source,
       ...(bounds ? { bounds } : {}),
     })
-    if (!entry) {
-      clone.dispose()
-      return false
-    }
-    if (!this._isMoveSourceValid(editor, source) || !this._isEntryOpen(entry)) {
-      clone.dispose()
-      await this._discardFailedTarget(entry)
-      return false
-    }
-    try {
-      this._groups.copyEditor(clone, entry.part.activeGroup, { sticky })
-      entry.explicitEmpty = false
-      return true
-    } catch (err) {
-      this._logger.warn(`copy editor failed: ${String(err)}`)
-      // A clone that never landed in a group is owned by this call; dispose it
-      // or it leaks. Clones that did land stay reachable in the target window.
-      if (!this._groups.groups.some((group) => group.contains(clone))) clone.dispose()
-      await this._discardFailedTarget(entry)
-      return false
-    }
+    return result.ok
   }
 
   async moveGroupToNewWindow(group: IEditorGroup): Promise<boolean> {
@@ -771,6 +841,13 @@ export class AuxiliaryEditorWindowService
     return this._groups.getGroup(group.id) === group
   }
 
+  private _findGroupContaining(editor: EditorInput): IEditorGroup | undefined {
+    for (const group of this._groups.groups) {
+      if (group.contains(editor)) return group
+    }
+    return undefined
+  }
+
   private _isEntryOpen(entry: WindowEntry): boolean {
     return this._entries.includes(entry) && !entry.closing
   }
@@ -845,6 +922,9 @@ export class AuxiliaryEditorWindowService
         ...(initialGeometry ? { geometry: initialGeometry } : {}),
         ...(options.title ? { title: options.title } : {}),
         ...(themeBackground ? { backgroundColor: themeBackground } : {}),
+        ...(options.preferOtherDisplayFullscreen === true
+          ? { preferOtherDisplayFullscreen: true }
+          : {}),
       })
       token = prepared.token
       // A workspace scope swap can clear every auxiliary part while the native

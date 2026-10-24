@@ -134,7 +134,8 @@ export type QuickPickPresentation = 'default' | 'compact'
  * Modifier keys held at the moment a quick pick item is accepted. Passed as a
  * mutable out-param via `IPickOptions.keyMods`: the service writes the live
  * modifier state into it just before `pick` resolves, so callers can branch
- * (e.g. Ctrl+Enter → open in new window).
+ * (Ctrl+Enter → open to the side, Alt+Enter → open in a new auxiliary editor
+ * window; Alt wins over Ctrl, so Ctrl+Alt+Enter also opens a new window).
  */
 export interface IKeyMods {
   ctrl: boolean
@@ -337,8 +338,9 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
 
   /**
    * Modifier keys held at the most recent accept (Enter / click). Read inside an
-   * `onDidAccept` handler to branch on e.g. Ctrl+Enter. Mirrors VSCode's
-   * `picker.keyMods`. Defaults to `{ ctrl: false, alt: false }`.
+   * `onDidAccept` handler to branch on Ctrl+Enter vs Alt+Enter (Alt wins when
+   * both are held). Mirrors VSCode's `picker.keyMods`. Defaults to
+   * `{ ctrl: false, alt: false }`.
    */
   readonly keyMods: IKeyMods
 

@@ -577,6 +577,22 @@ describe('QuickPickPanel keyboard', () => {
     fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
     expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: true, alt: false })
   })
+
+  it('Alt+Enter reports alt modifier (new-window gesture)', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Enter', altKey: true })
+    expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: false, alt: true })
+  })
+
+  it('Ctrl+Alt+Enter reports both modifiers (new-window gesture)', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true, altKey: true })
+    expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: true, alt: true })
+  })
 })
 
 describe('QuickPickPanel item removal', () => {

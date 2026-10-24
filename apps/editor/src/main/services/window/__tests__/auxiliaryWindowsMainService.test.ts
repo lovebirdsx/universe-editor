@@ -288,6 +288,178 @@ describe('AuxiliaryWindowsMainService', () => {
     mac.dispose()
   })
 
+  describe('preferOtherDisplayFullscreen', () => {
+    const primary = {
+      id: 1,
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+    }
+    const secondary = {
+      id: 2,
+      bounds: { x: 1920, y: 0, width: 2560, height: 1440 },
+      workArea: { x: 1920, y: 0, width: 2560, height: 1400 },
+    }
+    const tertiary = {
+      id: 3,
+      bounds: { x: 4480, y: 0, width: 1920, height: 1080 },
+      workArea: { x: 4480, y: 0, width: 1920, height: 1040 },
+    }
+
+    function prepareWithDisplays(
+      displays: readonly (typeof primary)[],
+      parentBounds: { x: number; y: number; width: number; height: number },
+      opts: {
+        isMaximized?: boolean
+        isFullScreen?: boolean
+        normalBounds?: { x: number; y: number; width: number; height: number }
+      } = {},
+    ) {
+      vi.mocked(screen.getAllDisplays).mockReturnValue(displays as never)
+      vi.mocked(screen.getDisplayNearestPoint).mockImplementation(
+        (point) =>
+          (displays.find(
+            (d) =>
+              point.x >= d.bounds.x &&
+              point.x < d.bounds.x + d.bounds.width &&
+              point.y >= d.bounds.y &&
+              point.y < d.bounds.y + d.bounds.height,
+          ) ?? displays[0]) as never,
+      )
+      const parent = makeParent(service)
+      parent.bounds = { ...parentBounds }
+      parent.maximized = opts.isMaximized === true
+      parent.fullscreen = opts.isFullScreen === true
+      if (opts.normalBounds) parent.getNormalBounds = () => ({ ...opts.normalBounds! })
+      const prepared = service.prepareOpen(parent.id, { preferOtherDisplayFullscreen: true })
+      const response = service.handleWindowOpen(parent as never, 'about:blank', prepared.frameName)
+      expect(response?.action).toBe('allow')
+      const child = new FakeWindow(90)
+      expect(
+        service.adoptCreatedWindow(parent as never, child as never, details(prepared.frameName)),
+      ).toBe(true)
+      child.emit('ready-to-show')
+      return { options: response?.overrideBrowserWindowOptions, child }
+    }
+
+    it('opens fullscreen on the other display', () => {
+      const { options, child } = prepareWithDisplays([primary, secondary], {
+        x: 100,
+        y: 100,
+        width: 1280,
+        height: 800,
+      })
+      expect(options).toMatchObject({
+        x: secondary.bounds.x,
+        y: secondary.bounds.y,
+        width: secondary.bounds.width,
+        height: secondary.bounds.height,
+      })
+      expect(child.isFullScreen()).toBe(true)
+    })
+
+    it('uses the visible bounds, not the restored position, for a fullscreen source', () => {
+      // Fullscreen on the secondary display while getNormalBounds still reports
+      // the pre-fullscreen rect on the primary one.
+      const { options, child } = prepareWithDisplays(
+        [primary, secondary],
+        { ...secondary.bounds },
+        {
+          isFullScreen: true,
+          normalBounds: { x: 100, y: 100, width: 1280, height: 800 },
+        },
+      )
+      expect(options).toMatchObject({
+        x: primary.bounds.x,
+        y: primary.bounds.y,
+        width: primary.bounds.width,
+        height: primary.bounds.height,
+      })
+      expect(child.isFullScreen()).toBe(true)
+    })
+
+    it('uses the visible bounds for a maximized source as well', () => {
+      const { options } = prepareWithDisplays(
+        [primary, secondary],
+        { ...secondary.bounds },
+        {
+          isMaximized: true,
+          normalBounds: { x: 100, y: 100, width: 1280, height: 800 },
+        },
+      )
+      expect(options).toMatchObject({ x: primary.bounds.x, y: primary.bounds.y })
+    })
+
+    it('picks the display closest to the current one when several exist', () => {
+      const { options } = prepareWithDisplays([primary, tertiary, secondary], {
+        x: 100,
+        y: 100,
+        width: 1280,
+        height: 800,
+      })
+      expect(options).toMatchObject({
+        x: secondary.bounds.x,
+        y: secondary.bounds.y,
+      })
+    })
+
+    it('works when the source window is on a secondary display', () => {
+      const { options } = prepareWithDisplays([primary, secondary], {
+        x: 2000,
+        y: 100,
+        width: 1280,
+        height: 800,
+      })
+      expect(options).toMatchObject({
+        x: primary.bounds.x,
+        y: primary.bounds.y,
+      })
+    })
+
+    it('falls back to cascade placement (not fullscreen) with a single display', () => {
+      const { options, child } = prepareWithDisplays([primary], {
+        x: 100,
+        y: 100,
+        width: 1280,
+        height: 800,
+      })
+      expect(options).toMatchObject({ x: 128, y: 128, width: 1000, height: 640 })
+      expect(child.isFullScreen()).toBe(false)
+    })
+
+    it('treats mirrored displays as one and falls back', () => {
+      const mirror = {
+        ...primary,
+        id: 9,
+        bounds: { ...primary.bounds },
+        workArea: { ...primary.workArea },
+      }
+      const { options, child } = prepareWithDisplays([primary, mirror], {
+        x: 100,
+        y: 100,
+        width: 1280,
+        height: 800,
+      })
+      expect(options).toMatchObject({ x: 128, y: 128 })
+      expect(child.isFullScreen()).toBe(false)
+    })
+
+    it('does not override explicit geometry', () => {
+      vi.mocked(screen.getAllDisplays).mockReturnValue([primary, secondary] as never)
+      const parent = makeParent(service)
+      const prepared = service.prepareOpen(parent.id, {
+        geometry: { x: 10, y: 20, width: 300, height: 200, isFullscreen: false },
+        preferOtherDisplayFullscreen: true,
+      })
+      const response = service.handleWindowOpen(parent as never, 'about:blank', prepared.frameName)
+      expect(response?.overrideBrowserWindowOptions).toMatchObject({
+        x: 10,
+        y: 20,
+        width: 300,
+        height: 200,
+      })
+    })
+  })
+
   it('denies about:blank without a token and leaves other URLs to the caller', () => {
     const parent = makeParent(service)
     const otherParent = makeParent(service)

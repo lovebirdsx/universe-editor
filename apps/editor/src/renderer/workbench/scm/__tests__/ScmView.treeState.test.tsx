@@ -54,6 +54,9 @@ function setup(storage: IStorageServiceType) {
   const stubEditorResolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose() {} }),
+    createEditorInput: () => {
+      throw new Error('unused')
+    },
     resolveEditors: () => [],
     openEditor: () => Promise.resolve(undefined),
   }

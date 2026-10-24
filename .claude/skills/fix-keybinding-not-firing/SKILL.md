@@ -31,6 +31,7 @@ diag: registry=<N> bindings | same-key(ignoring when)=<M> | monaco bridged=<bool
 按下 `no-match` 才会打 `diag` 行——前提是**键到达了 document 监听器**。`runResolution` 对任何到达的非修饰主键都必打一行 `traceKeystroke`（哪怕 `no-match`）。所以先数日志行：组合键按下应有「每个修饰键各一行 + 主键一行」。**若主键那一行压根没出现**（例：按 `ctrl+alt+up`，只看到 `Control`、`Alt` 两行 `modifier key alone`，`ArrowUp` 一行都没有），说明主键在到达 document 监听器前就被吞了——**不属于注册期/运行期任何一层，别去查 registry/when/guard**。这正是键盘调试工具自己声明的盲区（`keyboardDebugFormat.ts:88-92`：Monaco/浏览器/OS 在到达 app 前拦截）。
 - **头号嫌疑：编辑器聚焦时被 Monaco 内部 dispatch 吃掉**。本应用 `editorFocus===true` 时 capture handler 直接 return、把优先权让给 Monaco（`useGlobalKeybindingHandler.ts:355-365`）；Monaco 若有该键的内置默认绑定，会在编辑器容器内执行并 `stopPropagation`，document 的 bubble 监听器永远收不到 → 主键整行消失。判别：**点到编辑器外**（如侧栏/资源管理器）再按同一个键；若此时主键出现在日志、编辑器内才消失，几乎可以坐实是 Monaco 吃的。`ctrl+alt+up = editor.action.insertCursorAbove` 是经典例子（与你想绑的 `editor.gotoPreviousFold` 冲突）。
 - **次要嫌疑：OS/显卡驱动全局热键**。`Ctrl+Alt+方向键` 在 Windows 上还可能是 Intel/AMD 显卡的屏幕旋转热键，OS 层就吞掉；这种情况**编辑器内外都收不到**主键。用「编辑器外也消失」与上一条区分。
+- **主键被替换成另一组合成键**：日志里物理修饰键有行，随后出现**别的**主键（如按 `Ctrl+Alt+Enter` 却只看到 `code=''` 的 `Shift` 与 `F10`，`Enter` 一行都没有）。`code=''` = 无硬件扫描码，几乎坐实是输入法 / PowerToys Keyboard Manager / AutoHotkey / 远控在到达 Electron 前用 `SendInput` 合成。判别：到记事本或最小页面按同键也能复现；关掉映射软件或换英文键盘即恢复。修法：改绑未被占用的组合，**不要**把合成键（尤其 `Shift+F10`，它是键盘右键菜单标准键）接成目标命令。见 **案例 8**。
 - **修法（Monaco 吃键）**：keybindings.json 里的 `-monacoCommand`（disable）现在会**真正同步去 Monaco 解绑**，原样配 VSCode 那两条即可——见 **案例 4**。
 - **修法（OS 吃键）**：非产品 bug，关掉显卡驱动/系统的该全局热键，或改绑到未被 OS 占用的键位。
 
@@ -133,8 +134,16 @@ registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它�
 - **锚点**：`apps/editor/src/renderer/workbench/domUtils.ts`、`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts`、`apps/editor/src/renderer/services/editor/editorFocus.ts`、`packages/workbench-ui/src/dom/domRealm.ts`。
 - 相关：辅助窗口激活后焦点被编辑器抢走，会让命令「执行了但焦点不在目标上」，见 `docs/development/auxiliary-editor-windows.md` 的“窗口激活不是编辑器聚焦意图”。
 
+### 案例 8：`Ctrl+Alt+Enter` 没反应，日志里主键变成 `Shift+F10`（外部按键映射替换）
+
+- **症状/诊断**：`Ctrl+P` 打开快速选择后按 `Ctrl+Alt+Enter` 无反应。日志只有 `ControlLeft`、`AltLeft` 两条 `modifier key alone`，接着是 `code=''` 的 `Shift` 与 `F10`（`mods=shift`），`Enter` 一行都没有；`Shift+F10` 解析为 `NO MATCH` 后被 Quick Input 接管。
+- **断在**：分叉 0 的变体——主键**被替换**成另一组合成键，不是被 Monaco/OS 简单吞掉。
+- **根因**：输入法 / 按键映射工具 / 远控软件在事件到达 Electron 前把 `Ctrl+Alt+Enter` 映射成 `Shift+F10`（Windows 上下文菜单键）。全仓没有 `sendInputEvent` / `before-input-event` / menu accelerator 会产生这种转换（非 macOS 还 `Menu.setApplicationMenu(null)`）。
+- **修法**：改绑未被占用的组合（本项目 quick pick 新窗口手势已改为 `Alt+Enter`，`Ctrl+Enter` 保持侧开）；**不要**把 `Shift+F10` 接成目标命令——`isContextMenuKey` 靠它打开树/列表的右键菜单。
+- **锚点**：`packages/workbench-ui/src/tree/keyboardContextMenu.ts`（`isContextMenuKey`）、`apps/editor/src/renderer/services/quickInput/quickPickOpenTarget.ts`（手势映射）、`apps/editor/src/renderer/services/keybinding/keyboardDebugFormat.ts`（`code=''` 诊断）。
+
 ## 易踩坑速记
-0. **先数日志行**：组合键应有「每修饰键一行 + 主键一行」。**主键那一行整个消失** = 键没到达 document 监听器（分叉 0、案例 4）。**头号嫌疑是编辑器聚焦时 Monaco 内置默认键 `stopPropagation`**（用「点到编辑器外按同键是否出现」区分；OS/显卡热键则编辑器内外都消失）。Monaco 吃键现在可用 keybindings.json 的 `-monacoCommand` 同步解绑（案例 4）。
+0. **先数日志行**：组合键应有「每修饰键一行 + 主键一行」。**主键那一行整个消失** = 键没到达 document 监听器（分叉 0、案例 4）。**头号嫌疑是编辑器聚焦时 Monaco 内置默认键 `stopPropagation`**（用「点到编辑器外按同键是否出现」区分；OS/显卡热键则编辑器内外都消失）。Monaco 吃键现在可用 keybindings.json 的 `-monacoCommand` 同步解绑（案例 4）。**主键被换成另一组合成键且 `code=''`** = 输入法/按键映射/远控在应用外替换，改绑键位（案例 8）。
 1. **`no-match` 先看 `same-key`**（前提：主键已到达、有 `traceKeystroke`）：`0` = 没注册（分叉 A）；`>0` = when/运行期问题（分叉 B/C）。别一上来就改 when。
 2. **只有 VSCode 兼容层有命令存在性过滤**，应用自己的 keybindings.json 没有——“VSCode 配的不灵、放本应用配置灵”就是这条分界。
 3. **Monaco 命令是懒注册**，启动期不存在；缺“桥接后 reload”就永久丢绑定（案例 2）。

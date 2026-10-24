@@ -64,6 +64,12 @@ import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 import { IWindowFocusService } from '../../windows/windowFocusService.js'
 import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type IAuxiliaryEditorWindowService as IAuxiliaryEditorWindowServiceType,
+  type OpenEditorInNewWindowOptions,
+  type OpenEditorInNewWindowResult,
+} from '../../windows/auxiliaryEditorWindowService.js'
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -279,6 +285,9 @@ function makeGroups(openEditors: EditorInput[] = [], sideEditors: EditorInput[] 
       openEditor(editor: EditorInput, options?: unknown) {
         openLog.push({ groupId: id, editor, options })
       },
+      contains(editor: EditorInput) {
+        return editors.includes(editor)
+      },
       setActive(editor: EditorInput) {
         setActiveLog.push(editor)
       },
@@ -313,6 +322,15 @@ function makeGroups(openEditors: EditorInput[] = [], sideEditors: EditorInput[] 
       all.push(g)
       return g
     },
+    moveEditor(editor: EditorInput, target: { id: number }, source: { id: number }) {
+      const from = all.find((g) => g.id === source.id)
+      const to = all.find((g) => g.id === target.id)
+      if (!from || !to) return false
+      const index = from.editors.indexOf(editor)
+      if (index !== -1) from.editors.splice(index, 1)
+      to.editors.push(editor)
+      return true
+    },
   } as unknown as IEditorGroupsServiceType
   return { groups, group, activatedGroupIds, setActiveLog, openLog, all }
 }
@@ -333,6 +351,11 @@ class FakeEditorInput extends EditorInput {
   }
   override getName(): string {
     return this._name
+  }
+  /** Present so `canCloneEditorInputForSplit` can be steered by registering a
+   *  `deserialize` provider for this type in new-window copy tests. */
+  serialize(): unknown {
+    return this._resource ? { resource: this._resource.toString() } : undefined
   }
 }
 
@@ -384,14 +407,40 @@ class FakeClosedEditorsService implements IClosedEditorsService {
 class FakeEditorResolverService implements IEditorResolverServiceType {
   declare readonly _serviceBrand: undefined
   readonly opened: Array<{ uri: URI; pinned: boolean | undefined }> = []
+  readonly created: URI[] = []
   registerEditor(): IDisposable {
     return { dispose() {} }
   }
   resolveEditors() {
     return []
   }
+  createEditorInput(uri: URI): EditorInput {
+    this.created.push(uri)
+    return new FakeEditorInput('file', uri, uri.path)
+  }
   async openEditor(uri: URI, options?: { preferredTypeId?: string; pinned?: boolean }) {
     this.opened.push({ uri, pinned: options?.pinned })
+    this.created.push(uri)
+  }
+}
+
+class FakeAuxiliaryEditorWindowService {
+  declare readonly _serviceBrand: undefined
+  readonly openCalls: Array<{
+    editor: EditorInput
+    options: OpenEditorInNewWindowOptions | undefined
+  }> = []
+  /** When false, openEditorInNewWindow resolves `{ok:false}` so fallbacks run. */
+  succeed = true
+  async openEditorInNewWindow(
+    editor: EditorInput,
+    options?: OpenEditorInNewWindowOptions,
+  ): Promise<OpenEditorInNewWindowResult> {
+    this.openCalls.push({ editor, options })
+    if (this.succeed) {
+      return { ok: true, window: undefined as never, editor }
+    }
+    return { ok: false, reason: 'error' }
   }
 }
 
@@ -496,6 +545,11 @@ function setup(
   services.set(IWindowFocusService, windowFocus)
   const resolver = new FakeEditorResolverService()
   services.set(IEditorResolverService, resolver)
+  const auxWindows = new FakeAuxiliaryEditorWindowService()
+  services.set(
+    IAuxiliaryEditorWindowService,
+    auxWindows as unknown as IAuxiliaryEditorWindowServiceType,
+  )
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(FileQuickAccessProvider)
@@ -508,6 +562,7 @@ function setup(
     closedEditors,
     layout,
     windowFocus,
+    auxWindows,
   }
 }
 
@@ -917,6 +972,8 @@ describe('FileQuickAccessProvider', () => {
 
     // Existing side group reused (no new group), matched editor activated in it.
     expect(groupsFake.all).toHaveLength(2)
+    // The group already exists, so the dedupe path activates it exactly once
+    // instead of hoisting an ensureSideGroup activation before the lookup.
     expect(groupsFake.activatedGroupIds).toEqual([2])
     expect(groupsFake.setActiveLog).toEqual([sideEditor])
     expect(resolver.opened).toHaveLength(0)
@@ -959,6 +1016,172 @@ describe('FileQuickAccessProvider', () => {
     expect(groupsFake.all).toHaveLength(2)
     expect(resolver.opened).toHaveLength(1)
     expect(resolver.opened[0]!.uri.toString()).toBe(remoteUri.toString())
+  })
+
+  it('ctrl+alt+accept opens a not-yet-open file in an auxiliary window, not a side group', async () => {
+    const { provider, fileSearch, resolver, groupsFake, auxWindows } = setup()
+    fileSearch.resultPaths = ['/ws/src/b.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: true }
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('b')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    await flushPromises()
+
+    expect(auxWindows.openCalls).toHaveLength(1)
+    const call = auxWindows.openCalls[0]!
+    expect(call.options).toMatchObject({
+      mode: 'open',
+      pinned: true,
+      preferOtherDisplayFullscreen: true,
+    })
+    expect(call.editor.resource?.fsPath).toBe(URI.file('/ws/src/b.ts').fsPath)
+    // The resolver only builds the input; nothing opens in the main window.
+    expect(resolver.created).toHaveLength(1)
+    expect(resolver.opened).toHaveLength(0)
+    expect(groupsFake.all).toHaveLength(1)
+    expect(groupsFake.openLog).toHaveLength(0)
+  })
+
+  it('ctrl+alt+accept on an open-editor row copies a clonable input into a new window', async () => {
+    const uri = URI.file('/ws/src/a.ts')
+    const fileEditor = new FakeEditorInput('file', uri, 'a.ts')
+    const registration = EditorRegistry.registerEditorProvider({
+      typeId: 'file',
+      componentKey: 'file',
+      deserialize: () => new FakeEditorInput('file', uri, 'a.ts'),
+    })
+    try {
+      const { provider, groupsFake, auxWindows } = setup({ openEditors: [fileEditor] })
+      const picker = new FakeQuickPick<IQuickPickItem>()
+      picker.keyMods = { ctrl: true, alt: true }
+      run(provider, picker)
+      await flushPromises()
+
+      picker.fireAccept([picker.items[0] as IQuickPickItem])
+      await flushPromises()
+
+      expect(auxWindows.openCalls).toHaveLength(1)
+      expect(auxWindows.openCalls[0]!.editor).toBe(fileEditor)
+      expect(auxWindows.openCalls[0]!.options).toMatchObject({
+        mode: 'copy',
+        source: groupsFake.all[0],
+        preferOtherDisplayFullscreen: true,
+      })
+    } finally {
+      registration.dispose()
+    }
+  })
+
+  it('ctrl+alt+accept on an agent session row moves it (sessions stay globally unique)', async () => {
+    // AcpSessionEditorInput.TYPE_ID — literal avoids importing the heavy module.
+    // Real sessions do carry a `universe:/acp/session/<id>` resource; the row
+    // must still resolve through the decoded-editor path, never as a file URI.
+    const sessionUri = URI.from({ scheme: 'universe', path: '/acp/session/s1' })
+    const session = new FakeEditorInput('acp.session', sessionUri, 'Session')
+    const { provider, groupsFake, auxWindows } = setup({ openEditors: [session] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: true }
+    run(provider, picker)
+    await flushPromises()
+
+    expect(picker.items[0]!.id).not.toBe(sessionUri.toString())
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    await flushPromises()
+
+    expect(auxWindows.openCalls).toHaveLength(1)
+    expect(auxWindows.openCalls[0]!.editor).toBe(session)
+    expect(auxWindows.openCalls[0]!.options).toMatchObject({
+      mode: 'move',
+      source: groupsFake.all[0],
+    })
+  })
+
+  it('ctrl+accept on an agent session row moves it into the side group', async () => {
+    const sessionUri = URI.from({ scheme: 'universe', path: '/acp/session/s1' })
+    const session = new FakeEditorInput('acp.session', sessionUri, 'Session')
+    const { provider, groupsFake } = setup({ openEditors: [session] })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: false }
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    await flushPromises()
+
+    expect(groupsFake.all).toHaveLength(2)
+    expect(groupsFake.all[0]!.editors).not.toContain(session)
+    expect(groupsFake.all[1]!.editors).toContain(session)
+  })
+
+  it('ctrl+accept on an unresolvable virtual row leaves no empty side group', async () => {
+    const { provider, groupsFake } = setup()
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: false }
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireAccept([{ id: 'universe:/unrestorable', label: 'Unrestorable' }])
+    await flushPromises()
+
+    // ensureSideGroup is not called until something can actually open.
+    expect(groupsFake.all).toHaveLength(1)
+    expect(groupsFake.activatedGroupIds).toEqual([])
+  })
+
+  it('ctrl+alt+accept restores a just-closed editor with its exact type in the new window', async () => {
+    const uri = URI.file('/ws/pic.png')
+    const registration = EditorRegistry.registerEditorProvider({
+      typeId: 'fake.custom.newWindow',
+      componentKey: 'fake.custom.newWindow',
+      deserialize: () => new FakeEditorInput('fake.custom.newWindow', uri, 'restored.custom'),
+    })
+    try {
+      const entry: ClosedEditorEntry = {
+        resource: uri,
+        typeId: 'fake.custom.newWindow',
+        groupId: 1,
+        serializedData: { resource: uri.toString() },
+        label: 'pic.png',
+      }
+      const { provider, resolver, groupsFake, auxWindows } = setup({ closedEntries: [entry] })
+      const picker = new FakeQuickPick<IQuickPickItem>()
+      picker.keyMods = { ctrl: true, alt: true }
+      run(provider, picker)
+      await flushPromises()
+
+      picker.fireAccept([picker.items[0] as IQuickPickItem])
+      await flushPromises()
+
+      expect(auxWindows.openCalls).toHaveLength(1)
+      expect(auxWindows.openCalls[0]!.editor.typeId).toBe('fake.custom.newWindow')
+      expect(auxWindows.openCalls[0]!.options).toMatchObject({ mode: 'open' })
+      expect(resolver.created).toHaveLength(0)
+      expect(groupsFake.openLog).toHaveLength(0)
+    } finally {
+      registration.dispose()
+    }
+  })
+
+  it('ctrl+alt+accept falls back to the active group when the new window cannot open', async () => {
+    const { provider, fileSearch, groupsFake, auxWindows } = setup()
+    auxWindows.succeed = false
+    fileSearch.resultPaths = ['/ws/src/b.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    picker.keyMods = { ctrl: true, alt: true }
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('b')
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    await flushPromises()
+
+    expect(auxWindows.openCalls).toHaveLength(1)
+    expect(groupsFake.openLog).toHaveLength(1)
+    expect(groupsFake.openLog[0]!.groupId).toBe(1)
+    expect(groupsFake.openLog[0]!.editor.resource?.fsPath).toBe(URI.file('/ws/src/b.ts').fsPath)
   })
 })
 

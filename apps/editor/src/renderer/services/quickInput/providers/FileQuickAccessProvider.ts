@@ -54,6 +54,7 @@ import {
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
   type IQuickPickItem,
+  type EditorInput,
   type IEditorGroup,
 } from '@universe-editor/platform'
 import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
@@ -80,9 +81,18 @@ import {
 } from '../../editor/RecentTargetsService.js'
 import { IClosedEditorsService } from '../../editor/ClosedEditorsService.js'
 import { activateGroupAndFocus } from '../../editor/activateGroupAndFocus.js'
+import {
+  canCloneEditorInputForSplit,
+  cloneEditorInputForSplit,
+} from '../../editor/cloneEditorInput.js'
+import { ensureSideGroup } from '../../editor/openToSide.js'
+import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
 import { IWindowFocusService } from '../../windows/windowFocusService.js'
+import { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWindowService.js'
+import { AcpSessionEditorInput } from '../../acp/session/acpSessionEditorInput.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 import { createViewPickItem } from '../viewQuickPick.js'
+import { resolveQuickPickOpenTarget, type QuickPickOpenTarget } from '../quickPickOpenTarget.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
 // Above this pool size the per-keystroke scan leaves the input event and runs
@@ -244,6 +254,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IContextKeyService private readonly _contextKeys: IContextKeyService,
     @ILoggerService loggerService: ILoggerService,
     @IFocusScopeService private readonly _focus: IFocusScopeService,
+    @IAuxiliaryEditorWindowService
+    private readonly _auxWindows: IAuxiliaryEditorWindowService,
   ) {
     this._logger = createNamedLogger(loggerService, { id: 'quickOpen', name: 'Quick Open' })
   }
@@ -284,11 +296,13 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
   /** Snapshot the currently open editors (all types, MRU order) as pick
    *  candidates, followed by recently closed editors that can be restored with
-   *  their exact type (same path as Reopen Closed Editor). Resource-backed
+   *  their exact type (same path as Reopen Closed Editor). Filesystem-backed
    *  editors reuse the resource URI as pick id so they dedupe against file
-   *  entries and activate through `_open`; purely virtual editors (Settings,
-   *  Welcome, terminals…) get an encoded (groupId, editorId) id that
-   *  `_acceptPick` resolves to a live activation. */
+   *  entries and activate through `_open`; virtual editors (sessions, previews,
+   *  Settings, Welcome, terminals…) get an encoded (groupId, editorId) id that
+   *  `_acceptPick` resolves to a live activation — parsing a virtual URI as a
+   *  file row would route sessions through the copy path and leave preview
+   *  rows unable to open to the side. */
   private _buildEditorCandidates(root: URI | undefined): EditorPickCandidate[] {
     const out: EditorPickCandidate[] = []
     const seen = new Set<string>()
@@ -298,7 +312,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       if (target.kind !== 'editor') continue
       const { editor, group } = target
       const resource = editor.resource
-      const id = resource ? resource.toString() : encodeEditorPickId(group.id, editor.id)
+      const id =
+        resource && isFileSystemUri(resource)
+          ? resource.toString()
+          : encodeEditorPickId(group.id, editor.id)
       const key = resource ? this._uriIdentity.getComparisonKey(resource) : id
       if (seen.has(key)) continue
       seen.add(key)
@@ -371,63 +388,145 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
    *  (non-file) resources never reach the resolver: it would fall back to a
    *  FileEditorInput that renders empty and is labelled by the URI basename
    *  (e.g. a session guid) — they either restore from the closed stack, activate
-   *  an already-open tab, or do nothing. With `openToSide` (Ctrl/Alt+Enter), the
-   *  target is the group to the right of the active one (created when absent)
-   *  and dedupe happens only within it, so a file already open elsewhere gets a
-   *  second copy — mirroring VSCode's SIDE_GROUP quick open semantics. */
+   *  an already-open tab, or do nothing. `target` mirrors the modifier gesture:
+   *  side uses the group to the right of the active one; newWindow uses an
+   *  auxiliary editor window (copying files, moving sessions). */
   private _open(
     uri: URI,
     label: string,
-    opts: { addRecent: boolean; pinned: boolean; openToSide: boolean },
+    opts: { addRecent: boolean; pinned: boolean; target: QuickPickOpenTarget },
   ): void {
     if (opts.addRecent) this._recentFiles.add(uri, label)
-    if (opts.openToSide) {
+    if (opts.target === 'newWindow') {
+      void this._openInNewWindow(uri, opts.pinned).catch((err) => {
+        this._logger.warn(`file quick open: new window failed: ${String(err)}`)
+        this._openInActiveGroup(uri, opts.pinned)
+      })
+      return
+    }
+    if (opts.target === 'side') {
       const active = this._groups.activeGroup
-      let side = this._groups.findGroup({ direction: GroupDirection.Right }, active, true)
-      if (!side || side === active) side = this._groups.addGroup(active, GroupDirection.Right)
-      for (const editor of side.editors) {
-        if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
-          activateGroupAndFocus(
-            side,
-            {
-              groups: this._groups,
-              contextKeyService: this._contextKeys,
-              windowFocus: this._windowFocus,
-            },
-            editor,
-          )
-          return
+      const side = this._groups.findGroup({ direction: GroupDirection.Right }, active)
+      if (side) {
+        for (const editor of side.editors) {
+          if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
+            activateGroupAndFocus(side, this._focusContext(), editor)
+            return
+          }
         }
       }
-      if (this._restoreClosed(uri, side, true)) return
-      // The resolver routes through activeGroupForOpen, so the side group must
-      // be active before a brand-new file lands there.
-      this._groups.activateGroup(side)
+      // Consume a just-closed editor before creating the split: a virtual
+      // resource that can neither restore nor resolve must not leave an empty
+      // group behind (ensureSideGroup deliberately never reclaims one).
+      const restored = this._takeClosedEditorInput(uri)
+      if (restored) {
+        const target = side ?? ensureSideGroup(this._groups)
+        target.openEditor(restored, { activate: true, pinned: true })
+        activateGroupAndFocus(target, this._focusContext(), restored)
+        return
+      }
+      if (!isFileSystemUri(uri)) {
+        this._logger.debug(`file quick open: skipping non-filesystem resource ${uri.toString()}`)
+        return
+      }
+      ensureSideGroup(this._groups)
+      // ensureSideGroup activated the side group, so the resolver's
+      // activeGroupForOpen routes the new editor there.
       this._openThroughResolver(uri, true)
       return
     }
+    this._openInActiveGroup(uri, opts.pinned)
+  }
+
+  private _openInActiveGroup(uri: URI, pinned: boolean): void {
     // Closed-first: a just-closed editor (custom/image/preview) is restored with
     // its exact type even when another editor of the same file is still open —
     // otherwise the surviving text tab would "intercept" the pick and the closed
     // image/custom tab could never be brought back through quick open.
-    if (this._restoreClosed(uri, undefined, opts.pinned)) return
-    for (const group of this._groups.groups) {
+    if (this._restoreClosed(uri, undefined, pinned)) return
+    const found = this._findOpenEditor(uri)
+    if (found) {
+      activateGroupAndFocus(found.group, this._focusContext(), found.editor)
+      return
+    }
+    this._openThroughResolver(uri, pinned)
+  }
+
+  /** Open a picked file URI in a new auxiliary window. Files are copied when
+   *  already open (both tabs stay); a just-closed editor is restored with its
+   *  exact type first, preserving the default path's closed-first rule. */
+  private async _openInNewWindow(uri: URI, pinned: boolean): Promise<void> {
+    const restored = this._takeClosedEditorInput(uri)
+    if (restored) {
+      const result = await this._auxWindows.openEditorInNewWindow(restored, {
+        mode: 'open',
+        pinned,
+        preferOtherDisplayFullscreen: true,
+      })
+      if (result.ok) return
+      // The closed entry was already consumed; land it in the active group so the
+      // pick still opens the exact editor type.
+      if (!restored.isDisposed) {
+        const group = this._groups.activeGroup
+        group.openEditor(restored, { activate: true, pinned })
+        activateGroupAndFocus(group, this._focusContext(), restored)
+      }
+      return
+    }
+
+    const found = this._findOpenEditor(uri)
+    if (found) {
+      const result = await this._auxWindows.openEditorInNewWindow(found.editor, {
+        mode: canCloneEditorInputForSplit(found.editor) ? 'copy' : 'move',
+        source: found.group,
+        preferOtherDisplayFullscreen: true,
+      })
+      if (result.ok) return
+      activateGroupAndFocus(found.group, this._focusContext(), found.editor)
+      return
+    }
+
+    if (!isFileSystemUri(uri)) {
+      this._logger.debug(`file quick open: skipping non-filesystem resource ${uri.toString()}`)
+      return
+    }
+    const input = this._editorResolver.createEditorInput(uri)
+    const result = await this._auxWindows.openEditorInNewWindow(input, {
+      mode: 'open',
+      pinned,
+      preferOtherDisplayFullscreen: true,
+    })
+    if (result.ok) return
+    if (!input.isDisposed && !this._groups.groups.some((group) => group.contains(input))) {
+      const group = this._groups.activeGroup
+      group.openEditor(input, { activate: true, pinned })
+      activateGroupAndFocus(group, this._focusContext(), input)
+    }
+  }
+
+  private _findOpenEditor(uri: URI): { group: IEditorGroup; editor: EditorInput } | undefined {
+    const active = this._groups.activeGroup
+    const ordered = [active, ...this._groups.groups.filter((group) => group !== active)]
+    for (const group of ordered) {
       for (const editor of group.editors) {
         if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
-          activateGroupAndFocus(
-            group,
-            {
-              groups: this._groups,
-              contextKeyService: this._contextKeys,
-              windowFocus: this._windowFocus,
-            },
-            editor,
-          )
-          return
+          return { group, editor }
         }
       }
     }
-    this._openThroughResolver(uri, opts.pinned)
+    return undefined
+  }
+
+  private _focusContext(): {
+    groups: IEditorGroupsService
+    contextKeyService: IContextKeyService
+    windowFocus: IWindowFocusService
+  } {
+    return {
+      groups: this._groups,
+      contextKeyService: this._contextKeys,
+      windowFocus: this._windowFocus,
+    }
   }
 
   private _openThroughResolver(uri: URI, pinned: boolean): void {
@@ -438,6 +537,18 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     void this._editorResolver.openEditor(uri, { pinned })
   }
 
+  /** Consume a just-closed editor from the stack and deserialize its exact type.
+   *  Returns undefined when nothing restorable matches (or deserialize fails). */
+  private _takeClosedEditorInput(uri: URI): EditorInput | undefined {
+    const closed = this._closedEditors.takeMostRecentMatching(uri)
+    if (!closed) return undefined
+    return (
+      this._inst.invokeFunction((accessor) =>
+        EditorRegistry.deserialize(closed.typeId, closed.serializedData, accessor),
+      ) ?? undefined
+    )
+  }
+
   /** Restore a just-closed editor with its exact typeId via the closed-editors
    *  stack (same deserialize path as Reopen Closed Editor) instead of
    *  re-guessing the type through the resolver — the resolver can pick the
@@ -445,37 +556,29 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
    *  resources (markdown-preview:…) at all. Returns false when nothing
    *  restorable matches, or when deserialize fails (the consumed entry is then
    *  dropped, mirroring ReopenClosedEditorAction).
-   *  The restored editor lands in the CURRENT active group (or openToSide's
-   *  side group): stack entries persist across restarts, so `closed.groupId`
-   *  can point at whichever group hosted the file long ago — quick open opens
-   *  where the user's focus is; replaying the recorded position is Reopen
-   *  Closed Editor's (Ctrl+Shift+T) job, not quick open's. */
+   *  The restored editor lands in the CURRENT active group (or the side group):
+   *  stack entries persist across restarts, so `closed.groupId` can point at
+   *  whichever group hosted the file long ago — quick open opens where the
+   *  user's focus is; replaying the recorded position is Reopen Closed Editor's
+   *  (Ctrl+Shift+T) job, not quick open's. */
   private _restoreClosed(
     uri: URI,
     targetGroup: IEditorGroup | undefined,
     pinned: boolean,
   ): boolean {
-    const closed = this._closedEditors.takeMostRecentMatching(uri)
-    if (!closed) return false
-    const input = this._inst.invokeFunction((accessor) =>
-      EditorRegistry.deserialize(closed.typeId, closed.serializedData, accessor),
-    )
+    const input = this._takeClosedEditorInput(uri)
     if (!input) return false
     const group = targetGroup ?? this._groups.activeGroup
     group.openEditor(input, { activate: true, pinned })
     // No explicit editor: the open above made `input` the group's active editor,
     // so the helper focuses it without an extra setActive round trip.
-    activateGroupAndFocus(group, {
-      groups: this._groups,
-      contextKeyService: this._contextKeys,
-      windowFocus: this._windowFocus,
-    })
+    activateGroupAndFocus(group, this._focusContext())
     return true
   }
 
   private _acceptPick(
     pick: IQuickPickItem | undefined,
-    opts: { addRecent: boolean; pinned: boolean; openToSide: boolean },
+    opts: { addRecent: boolean; pinned: boolean; target: QuickPickOpenTarget },
   ): void {
     if (!pick) return
     const viewId = decodeViewPickId(pick.id)
@@ -487,22 +590,75 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     }
     const decoded = decodeEditorPickId(pick.id)
     if (decoded) {
-      const group = this._groups.getGroup(decoded.groupId)
-      const editor = group?.editors.find((e) => e.id === decoded.editorId)
-      if (group && editor) {
-        activateGroupAndFocus(
-          group,
-          {
-            groups: this._groups,
-            contextKeyService: this._contextKeys,
-            windowFocus: this._windowFocus,
-          },
-          editor,
-        )
+      const recorded = this._groups.getGroup(decoded.groupId)
+      const recordedEditor = recorded?.editors.find((e) => e.id === decoded.editorId)
+      if (recorded && recordedEditor) {
+        this._revealDecodedEditor(recorded, recordedEditor, opts.target)
+        return
+      }
+      // The tab may have moved to another group while the picker was open.
+      for (const group of this._groups.groups) {
+        const editor = group.editors.find((e) => e.id === decoded.editorId)
+        if (editor) {
+          this._revealDecodedEditor(group, editor, opts.target)
+          return
+        }
       }
       return
     }
     this._open(URI.parse(pick.id), pick.label, opts)
+  }
+
+  /** An already-open editor row in the MRU head list. `side` moves it into the
+   *  side group (copying only inputs that can be cloned safely); `newWindow`
+   *  follows the same file-copy / session-move rule as the file rows. */
+  private _revealDecodedEditor(
+    group: IEditorGroup,
+    editor: EditorInput,
+    target: QuickPickOpenTarget,
+  ): void {
+    if (target === 'default') {
+      activateGroupAndFocus(group, this._focusContext(), editor)
+      return
+    }
+    if (target === 'side') {
+      const side = ensureSideGroup(this._groups)
+      if (side === group) {
+        activateGroupAndFocus(group, this._focusContext(), editor)
+        return
+      }
+      // Sessions are globally unique tabs; never clone one into a second group.
+      if (editor.typeId !== AcpSessionEditorInput.TYPE_ID && canCloneEditorInputForSplit(editor)) {
+        const clone = this._inst.invokeFunction((accessor) =>
+          cloneEditorInputForSplit(editor, accessor),
+        )
+        if (clone) {
+          openInLockAwareGroup(this._groups, clone, { activate: true, pinned: true }, side)
+          activateGroupAndFocus(this._groups.activeGroup, this._focusContext(), clone)
+          return
+        }
+      }
+      this._groups.moveEditor(editor, side, group)
+      activateGroupAndFocus(side, this._focusContext(), editor)
+      return
+    }
+    const mode: 'move' | 'copy' =
+      editor.typeId === AcpSessionEditorInput.TYPE_ID || !canCloneEditorInputForSplit(editor)
+        ? 'move'
+        : 'copy'
+    void this._auxWindows
+      .openEditorInNewWindow(editor, {
+        mode,
+        source: group,
+        preferOtherDisplayFullscreen: true,
+      })
+      .then((result) => {
+        if (!result.ok) activateGroupAndFocus(group, this._focusContext(), editor)
+      })
+      .catch((err) => {
+        this._logger.warn(`file quick open: new window failed: ${String(err)}`)
+        activateGroupAndFocus(group, this._focusContext(), editor)
+      })
   }
 
   private _provideWorkspace(
@@ -906,9 +1062,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     disposables.add(
       picker.onDidAccept((items) => {
         const pick = items[0]
-        const openToSide = picker.keyMods.ctrl || picker.keyMods.alt
+        const target = resolveQuickPickOpenTarget(picker.keyMods)
         picker.hide()
-        this._acceptPick(pick, { addRecent: true, pinned: true, openToSide })
+        this._acceptPick(pick, { addRecent: true, pinned: true, target })
       }),
     )
     disposables.add(toDisposable(() => seq++))
@@ -995,9 +1151,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     disposables.add(
       picker.onDidAccept((items) => {
         const pick = items[0]
-        const openToSide = picker.keyMods.ctrl || picker.keyMods.alt
+        const target = resolveQuickPickOpenTarget(picker.keyMods)
         picker.hide()
-        this._acceptPick(pick, { addRecent: false, pinned: false, openToSide })
+        this._acceptPick(pick, { addRecent: false, pinned: false, target })
       }),
     )
 

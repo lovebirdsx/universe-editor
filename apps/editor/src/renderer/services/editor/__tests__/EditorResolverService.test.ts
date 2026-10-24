@@ -213,6 +213,44 @@ describe('EditorResolverService', () => {
     expect(input).toBeInstanceOf(FileEditorInput)
   })
 
+  it('createEditorInput resolves the factory without opening an editor', () => {
+    const { resolver, editorService } = makeEnv()
+    const uri = URI.file('/project/src/diagram.tree')
+    const fakeInput = { typeId: 'tree', resource: uri } as unknown as EditorInput
+    const factory = vi.fn(() => fakeInput)
+
+    resolver.registerEditor('**/*.tree', { typeId: 'tree', displayName: 'Tree' }, factory)
+    const input = resolver.createEditorInput(uri)
+
+    expect(input).toBe(fakeInput)
+    expect(factory).toHaveBeenCalledWith(uri)
+    expect(editorService.openEditor).not.toHaveBeenCalled()
+  })
+
+  it('createEditorInput falls back to FileEditorInput and honors preferredTypeId', () => {
+    const { resolver, editorService } = makeEnv()
+    const uri = URI.file('/project/src/chart.ts')
+    const preferred = { typeId: 'chart', resource: uri } as unknown as EditorInput
+
+    resolver.registerEditor(
+      '**/*.ts',
+      { typeId: 'chart', displayName: 'Chart', priority: 10 },
+      () => preferred,
+    )
+    resolver.registerEditor(
+      '**/*.ts',
+      { typeId: 'text', displayName: 'Text' },
+      () => ({ typeId: 'text', resource: uri }) as unknown as EditorInput,
+    )
+
+    expect(resolver.createEditorInput(uri)).toBe(preferred)
+    expect(resolver.createEditorInput(uri, 'text')).not.toBe(preferred)
+    expect(resolver.createEditorInput(URI.file('/project/src/image.png'))).toBeInstanceOf(
+      FileEditorInput,
+    )
+    expect(editorService.openEditor).not.toHaveBeenCalled()
+  })
+
   it('duplicate registration: same (typeId, glob) is skipped with a warning', () => {
     const { resolver, logger } = makeEnv()
     const factory = () => ({}) as unknown as EditorInput

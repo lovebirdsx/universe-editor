@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   Event,
+  GroupDirection,
   IFileService,
   IInstantiationService,
   InstantiationService,
@@ -29,12 +30,78 @@ import {
   type ITextSearchService,
   type IWorkspace,
   type IWorkspaceService,
+  type EditorInput,
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import { QuickTextSearchService } from '../QuickTextSearchService.js'
 import { FakeWindowFocusService } from '../../windows/testing/fakeWindowFocusService.js'
+import {
+  type IAuxiliaryEditorWindowService,
+  type OpenEditorInNewWindowOptions,
+  type OpenEditorInNewWindowResult,
+} from '../../windows/auxiliaryEditorWindowService.js'
+
+class FakeAuxiliaryEditorWindowService implements IAuxiliaryEditorWindowService {
+  declare readonly _serviceBrand: undefined
+  readonly windows: readonly never[] = []
+  readonly onDidChangeWindows = Event.None
+  readonly openCalls: Array<{
+    editor: EditorInput
+    options: OpenEditorInNewWindowOptions | undefined
+  }> = []
+  succeed = true
+  async openEditorInNewWindow(
+    editor: EditorInput,
+    options?: OpenEditorInNewWindowOptions,
+  ): Promise<OpenEditorInNewWindowResult> {
+    this.openCalls.push({ editor, options })
+    if (this.succeed) return { ok: true, window: undefined as never, editor }
+    return { ok: false, reason: 'error' }
+  }
+  createEmptyWindow(): Promise<never> {
+    return Promise.reject(new Error('not used'))
+  }
+  moveEditorToNewWindow(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+  copyEditorToNewWindow(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+  moveGroupToNewWindow(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+  copyGroupToNewWindow(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+  requestClose(): Promise<void> {
+    return Promise.resolve()
+  }
+  closeWindow(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
+  zoomIn(): Promise<void> {
+    return Promise.resolve()
+  }
+  zoomOut(): Promise<void> {
+    return Promise.resolve()
+  }
+  resetZoom(): Promise<void> {
+    return Promise.resolve()
+  }
+  restoreAllToMainWindow(): void {}
+  discardAllWindows(): void {}
+  serialize() {
+    return { windows: [] }
+  }
+  restore(): Promise<readonly EditorInput[]> {
+    return Promise.resolve([])
+  }
+  getWindowForToken(): undefined {
+    return undefined
+  }
+}
 
 class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
@@ -247,6 +314,7 @@ function setup(root: URI | null = URI.file('/repo')) {
   services.set(IFileService, fakeFileService())
   const instantiation = new InstantiationService(services)
   services.set(IInstantiationService, instantiation)
+  const auxWindows = new FakeAuxiliaryEditorWindowService()
   const service = new QuickTextSearchService(
     quickInput,
     textSearch,
@@ -255,8 +323,9 @@ function setup(root: URI | null = URI.file('/repo')) {
     instantiation,
     new UriIdentityService('linux'),
     new FakeWindowFocusService(),
+    auxWindows,
   )
-  return { service, quickInput, textSearch, workspace, groups, instantiation, root }
+  return { service, quickInput, textSearch, workspace, groups, instantiation, root, auxWindows }
 }
 
 describe('QuickTextSearchService', () => {
@@ -373,6 +442,140 @@ describe('QuickTextSearchService', () => {
       endColumn: 13,
     })
     expect(fakeEditor.focus).toHaveBeenCalled()
+  })
+
+  it('ctrl+accept opens the match in the side group instead of the active one', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch, groups } = setup()
+    textSearch.results = [makeMatch('/repo/src/a.ts')]
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    await flushPromises()
+
+    const matchPick = picker.items.find(
+      (item) => item.label === 'const needle = true',
+    ) as IQuickPickItem
+    picker.keyMods = { ctrl: true, alt: false }
+    picker.accept(matchPick)
+    await flushPromises()
+
+    expect(groups.groups).toHaveLength(2)
+    const side = groups.groups[1]!
+    expect(
+      side.editors.some(
+        (editor) =>
+          editor instanceof FileEditorInput &&
+          editor.resource.toString() === URI.file('/repo/src/a.ts').toString(),
+      ),
+    ).toBe(true)
+    // The original group stays untouched.
+    expect(groups.groups[0]!.editors).toHaveLength(0)
+    // Do not await the reveal (it polls for a mount that never happens here).
+    void promise
+  })
+
+  it('ctrl+accept does not open into a locked side group', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch, groups } = setup()
+    textSearch.results = [makeMatch('/repo/src/a.ts')]
+    const lockedSide = groups.addGroup(groups.activeGroup, GroupDirection.Right)
+    lockedSide.lock(true)
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    await flushPromises()
+
+    const matchPick = picker.items.find(
+      (item) => item.label === 'const needle = true',
+    ) as IQuickPickItem
+    picker.keyMods = { ctrl: true, alt: false }
+    picker.accept(matchPick)
+    await flushPromises()
+
+    // Locked groups reject fresh editors: the lock-aware route falls back to an
+    // unlocked group instead of replacing the side group's contents.
+    expect(lockedSide.editors).toHaveLength(0)
+    expect(
+      groups.groups
+        .flatMap((group) => group.editors)
+        .filter(
+          (editor) =>
+            editor instanceof FileEditorInput &&
+            editor.resource.toString() === URI.file('/repo/src/a.ts').toString(),
+        ),
+    ).toHaveLength(1)
+    void promise
+  })
+
+  it('ctrl+alt+accept opens the match file in an auxiliary window, not the main groups', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch, groups, auxWindows } = setup()
+    textSearch.results = [makeMatch('/repo/src/a.ts')]
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    await flushPromises()
+
+    const matchPick = picker.items.find(
+      (item) => item.label === 'const needle = true',
+    ) as IQuickPickItem
+    picker.keyMods = { ctrl: true, alt: true }
+    picker.accept(matchPick)
+    await promise
+
+    expect(auxWindows.openCalls).toHaveLength(1)
+    expect(auxWindows.openCalls[0]!.options).toMatchObject({
+      mode: 'open',
+      pinned: false,
+      preferOtherDisplayFullscreen: true,
+    })
+    expect(auxWindows.openCalls[0]!.editor.resource?.toString()).toBe(
+      URI.file('/repo/src/a.ts').toString(),
+    )
+    expect(groups.groups).toHaveLength(1)
+    expect(groups.groups[0]!.editors).toHaveLength(0)
+    // Settle the event-driven reveal wait without waiting out its 30s timeout.
+    auxWindows.openCalls[0]!.editor.dispose()
+  })
+
+  it('ctrl+alt+accept falls back to the active group when the window cannot open', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch, groups, auxWindows } = setup()
+    auxWindows.succeed = false
+    textSearch.results = [makeMatch('/repo/src/a.ts')]
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    await flushPromises()
+
+    const matchPick = picker.items.find(
+      (item) => item.label === 'const needle = true',
+    ) as IQuickPickItem
+    picker.keyMods = { ctrl: true, alt: true }
+    picker.accept(matchPick)
+    // The fallback opens in-window and then waits for the (absent) mount.
+    await flushPromises()
+
+    expect(auxWindows.openCalls).toHaveLength(1)
+    expect(groups.groups).toHaveLength(1)
+    expect(
+      groups.activeGroup.editors.some(
+        (editor) =>
+          editor instanceof FileEditorInput &&
+          editor.resource.toString() === URI.file('/repo/src/a.ts').toString(),
+      ),
+    ).toBe(true)
+    await Promise.resolve()
+    void promise
   })
 
   it('seeds the query from the active editor selection', async () => {

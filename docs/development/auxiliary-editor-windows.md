@@ -34,6 +34,18 @@ renderer（主窗口，唯一运行时）
 
 几何解析在 main：以 `screen.getDisplayNearestPoint` 取工作区，宽度/高度做 `MIN_*` 与工作区裁剪，位置再夹到可达范围内。拖出建窗传的是 `screenX/screenY`（CSS/DIP 坐标，与 BrowserWindow bounds 同空间）。
 
+`preferOtherDisplayFullscreen` 是给「在新窗口打开」手势用的几何提示：**只在没有显式 `geometry` 时生效**（显式几何是用户/恢复决定的落点，提示不得改写）。它按建窗请求来源窗口（同父级下当前聚焦的窗口，否则父窗口）所在显示器，从 `screen.getAllDisplays()` 里排除自身与完全同 bounds 的镜像屏，按两屏中心距离最近（同距离取 `id` 小的）选一块，返回该屏 fullscreen bounds + `displayId/displayBounds`，并置 `isFullscreen: true`；没有候选（单屏或全镜像）时原样走下面的级联逻辑，`isFullscreen` 保持 false。来源显示器用窗口**当前可见** bounds 判定——最大化/全屏时 `getNormalBounds()` 返回的是还原位置，可能仍停留在上一块屏。不要把它做成 renderer 侧枚举屏幕——显示器信息只属于 main。
+
+## 在新窗口打开编辑器
+
+`IAuxiliaryEditorWindowService.openEditorInNewWindow(editor, options)` 是「把某个 `EditorInput` 放进新建辅助窗口」的统一入口，替代调用方自己拼 `_createWindow` + `openEditor`：
+
+- `mode: 'open'`（默认）：用于尚未打开的 input（新建的 `FileEditorInput`、`AcpSessionEditorInput` 等）。若该实例已属于任何组则拒绝——两个组共享同一 input 会在关闭一个时 dispose 掉另一个的标签页。失败时由调用方 dispose 自己创建的 input。
+- `mode: 'move'`：把已在 `source` 组里的编辑器移过去，source 必须仍在且确实包含它。Agent 会话用它保持全局唯一标签页。
+- `mode: 'copy'`：先 clone（要求 input 可 `serialize` 且注册了对应 `deserialize`），成功后在目标组打开 clone；clone 不可用时返回 `reason: 'uncopyable'`（已通知用户）。普通文件在新窗口打开时走这条，原标签页保留。
+
+返回值 `{ ok: true, window, editor }` 里的 `editor` 是目标组中的实例（copy 时是 clone）。建窗过程中以 `explicitEmpty: true` 防止窗口因空 part 自动关闭，落位成功后才置 false；失败统一走 `_discardFailedTarget`（空窗关闭、已有内容则保留）。`moveEditorToNewWindow` / `copyEditorToNewWindow` 只是该 API 的 boolean 薄封装，拖出建窗行为不变。
+
 ## 浮层与文档归属
 
 每个窗口有自己的 Document，所有文档级浮层必须挂到**owner document**。解析顺序统一走 `@universe-editor/workbench-ui` 的 `useOwnerDocument(explicit?)`：**显式 prop > `OwnerDocumentProvider` > 全局 `document`**。`Workbench` 根部 provide 主文档，`AuxiliaryWindowHost` 为每个辅助 portal 子树重新 provide 该窗口的 document。

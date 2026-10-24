@@ -89,7 +89,37 @@ import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpLastSessionCwdService } from '../../services/acp/session/acpLastSessionCwdService.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { EditorService } from '../../services/editor/EditorService.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type OpenEditorInNewWindowOptions,
+  type OpenEditorInNewWindowResult,
+} from '../../services/windows/auxiliaryEditorWindowService.js'
 import { Event } from '@universe-editor/platform'
+
+/** Records openEditorInNewWindow calls; the real service owns window creation. */
+class FakeAuxiliaryEditorWindowService {
+  declare readonly _serviceBrand: undefined
+  readonly openCalls: Array<{
+    editor: EditorInput
+    options: OpenEditorInNewWindowOptions | undefined
+  }> = []
+  succeed = true
+  constructor(private readonly _groups: EditorGroupsService) {}
+  async openEditorInNewWindow(
+    editor: EditorInput,
+    options?: OpenEditorInNewWindowOptions,
+  ): Promise<OpenEditorInNewWindowResult> {
+    this.openCalls.push({ editor, options })
+    if (!this.succeed) return { ok: false, reason: 'error' }
+    return {
+      ok: true,
+      window: {
+        part: { activeGroup: this._groups.activeGroup },
+      } as never,
+      editor,
+    }
+  }
+}
 
 /** AcpSessionEditorInput's cwd-badge autorun pulls these two services. */
 function registerWorkspaceServices(services: ServiceCollection): void {
@@ -1079,16 +1109,26 @@ describe('NewAgentSessionWithScopeAction', () => {
     picked: IQuickPickItem | undefined
     lastCwd?: { cwd: string; authority?: string } | undefined
     workspaceFolder?: URI
+    keyMods?: { ctrl: boolean; alt: boolean }
   }) {
     const createSession = vi.fn(async () => fakeSession('sess-1'))
     const defaultAgentId = vi.fn(() => 'claude-code')
     const getScopes = vi.fn(async () => opts.scopes)
-    const pick = vi.fn(async () => opts.picked)
+    const pick = vi.fn(
+      async (_items: IQuickPickItem[], options?: { keyMods?: { ctrl: boolean; alt: boolean } }) => {
+        if (options?.keyMods !== undefined && opts.keyMods !== undefined) {
+          Object.assign(options.keyMods, opts.keyMods)
+        }
+        return opts.picked
+      },
+    )
     const showOpenDialog = vi.fn(
       async (_options: { defaultUri?: URI }): Promise<URI[] | undefined> => undefined,
     )
     const openEditor = vi.fn()
     const notify = vi.fn()
+    const groups = new EditorGroupsService()
+    const auxWindows = new FakeAuxiliaryEditorWindowService(groups)
 
     const services = new ServiceCollection()
     services.set(IAcpSessionService, {
@@ -1127,6 +1167,11 @@ describe('NewAgentSessionWithScopeAction', () => {
       _serviceBrand: undefined,
       notify,
     } as unknown as INotificationService)
+    services.set(IEditorGroupsService, groups)
+    services.set(
+      IAuxiliaryEditorWindowService,
+      auxWindows as unknown as IAuxiliaryEditorWindowService,
+    )
     services.set(IAcpChatWidgetService, {
       _serviceBrand: undefined,
       register: vi.fn(),
@@ -1147,7 +1192,17 @@ describe('NewAgentSessionWithScopeAction', () => {
     }
     const inst = new InstantiationService(services)
     services.set(IInstantiationService, inst)
-    return { inst, createSession, getScopes, pick, showOpenDialog, openEditor, notify }
+    return {
+      inst,
+      createSession,
+      getScopes,
+      pick,
+      showOpenDialog,
+      openEditor,
+      notify,
+      groups,
+      auxWindows,
+    }
   }
 
   it('creates the session in the chosen configured scope (cwd + authority)', async () => {
@@ -1250,6 +1305,42 @@ describe('NewAgentSessionWithScopeAction', () => {
     expect(b.createSession).not.toHaveBeenCalled()
     expect(b.notify).not.toHaveBeenCalled()
   })
+
+  it('ctrl+accept opens the new session in a right split', async () => {
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '/ws', label: 'Workspace' },
+      keyMods: { ctrl: true, alt: false },
+    })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+
+    expect(b.groups.groups).toHaveLength(2)
+    const tabs = b.groups.groups[1]!.editors.filter(
+      (editor) => editor instanceof AcpSessionEditorInput,
+    )
+    expect(tabs).toHaveLength(1)
+    expect((tabs[0] as AcpSessionEditorInput).sessionId).toBe('sess-1')
+    // The default in-place open is bypassed.
+    expect(b.openEditor).not.toHaveBeenCalled()
+  })
+
+  it('ctrl+alt+accept opens the new session in an auxiliary window', async () => {
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '/ws', label: 'Workspace' },
+      keyMods: { ctrl: true, alt: true },
+    })
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+
+    expect(b.auxWindows.openCalls).toHaveLength(1)
+    expect(b.auxWindows.openCalls[0]!.options).toMatchObject({
+      mode: 'open',
+      preferOtherDisplayFullscreen: true,
+    })
+    expect(b.auxWindows.openCalls[0]!.editor).toBeInstanceOf(AcpSessionEditorInput)
+    expect(b.groups.groups).toHaveLength(1)
+    expect(b.openEditor).not.toHaveBeenCalled()
+  })
 })
 
 describe('ResumeAgentSessionAction', () => {
@@ -1272,6 +1363,7 @@ describe('ResumeAgentSessionAction', () => {
     platform?: 'win32' | 'linux'
     authority?: string
     resumeImpl?: (id: string) => Promise<IAcpSession>
+    keyMods?: { ctrl: boolean; alt: boolean }
   }) {
     const resumeSession = vi.fn(
       opts.resumeImpl ??
@@ -1295,12 +1387,16 @@ describe('ResumeAgentSessionAction', () => {
     } as unknown as IAcpSessionHistoryService
     const quickInput = {
       _serviceBrand: undefined,
-      pick: (items: IQuickPickItem[]) => {
+      pick: (items: IQuickPickItem[], options?: { keyMods?: { ctrl: boolean; alt: boolean } }) => {
         pickedItems.push(items)
+        if (options?.keyMods !== undefined && opts.keyMods !== undefined) {
+          Object.assign(options.keyMods, opts.keyMods)
+        }
         return Promise.resolve(items[opts.pickIndex])
       },
     } as unknown as IQuickInputService
     const groups = new EditorGroupsService()
+    const auxWindows = new FakeAuxiliaryEditorWindowService(groups)
     const notification = {
       _serviceBrand: undefined,
       notify,
@@ -1333,8 +1429,12 @@ describe('ResumeAgentSessionAction', () => {
       _serviceBrand: undefined,
       register: vi.fn(),
     } as unknown as IAcpChatWidgetService)
+    services.set(
+      IAuxiliaryEditorWindowService,
+      auxWindows as unknown as IAuxiliaryEditorWindowService,
+    )
     const inst = new InstantiationService(services)
-    return { inst, resumeSession, setActive, groups, notify, pickedItems }
+    return { inst, resumeSession, setActive, groups, notify, pickedItems, auxWindows }
   }
 
   /** Session tabs across every group — the reveal contract is about all of them. */
@@ -1518,6 +1618,67 @@ describe('ResumeAgentSessionAction', () => {
     expect(sessionTabs(b.groups)).toHaveLength(2)
     expect(b.groups.activeGroup).toBe(right)
     expect(right.activeEditor).toBe(existing)
+  })
+
+  it('ctrl+accept resumes the session into a right split', async () => {
+    const entry = makeEntry({ cwd: '/repo/main', title: 'Local' })
+    const b = build({
+      entries: [entry],
+      pickIndex: 0,
+      currentCwd: '/repo/main',
+      keyMods: { ctrl: true, alt: false },
+    })
+    await run(b)
+
+    expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
+    expect(b.groups.groups).toHaveLength(2)
+    const rightTabs = b.groups.groups[1]!.editors.filter(
+      (editor) => editor instanceof AcpSessionEditorInput,
+    )
+    expect(rightTabs).toHaveLength(1)
+    expect((rightTabs[0] as AcpSessionEditorInput).sessionId).toBe('live')
+    expect(b.groups.groups[0]!.editors).toHaveLength(0)
+  })
+
+  it('ctrl+alt+accept moves an already-open session tab into an auxiliary window', async () => {
+    const entry = makeEntry({ cwd: '/repo/main', title: 'Local' })
+    const b = build({
+      entries: [entry],
+      pickIndex: 0,
+      currentCwd: '/repo/main',
+      keyMods: { ctrl: true, alt: true },
+    })
+    const existing = b.inst.createInstance(AcpSessionEditorInput, 'live', 'fake', undefined)
+    b.groups.activeGroup.openEditor(existing, { activate: true, pinned: true })
+
+    await run(b)
+
+    expect(b.auxWindows.openCalls).toHaveLength(1)
+    expect(b.auxWindows.openCalls[0]!.editor).toBe(existing)
+    expect(b.auxWindows.openCalls[0]!.options).toMatchObject({
+      mode: 'move',
+      source: b.groups.activeGroup,
+      preferOtherDisplayFullscreen: true,
+    })
+  })
+
+  it('ctrl+alt+accept opens a fresh session tab in an auxiliary window', async () => {
+    const entry = makeEntry({ cwd: '/repo/main', title: 'Local' })
+    const b = build({
+      entries: [entry],
+      pickIndex: 0,
+      currentCwd: '/repo/main',
+      keyMods: { ctrl: true, alt: true },
+    })
+    await run(b)
+
+    expect(b.auxWindows.openCalls).toHaveLength(1)
+    expect(b.auxWindows.openCalls[0]!.options).toMatchObject({
+      mode: 'open',
+      preferOtherDisplayFullscreen: true,
+    })
+    expect((b.auxWindows.openCalls[0]!.editor as AcpSessionEditorInput).sessionId).toBe('live')
+    expect(sessionTabs(b.groups)).toHaveLength(0)
   })
 })
 

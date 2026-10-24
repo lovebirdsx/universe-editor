@@ -23,6 +23,7 @@ import {
   type ITextSearchMatch,
   type ITextSearchRange,
   type EditorInput,
+  type IEditorGroup,
   type QuickPickInput,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
@@ -30,9 +31,16 @@ import { UntitledEditorInput } from '../editor/UntitledEditorInput.js'
 import { getActiveTextEditor } from '../editor/activeTextEditor.js'
 import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
-import { applyEditorSelection } from '../editor/revealEditorPosition.js'
+import { applyEditorSelection, revealSelectionInInput } from '../editor/revealEditorPosition.js'
+import { canCloneEditorInputForSplit } from '../editor/cloneEditorInput.js'
+import { ensureSideGroup } from '../editor/openToSide.js'
 import { IWindowFocusService } from '../windows/windowFocusService.js'
 import { currentWorkbenchDocumentOrUndefined } from '../windows/workbenchDocuments.js'
+import { IAuxiliaryEditorWindowService } from '../windows/auxiliaryEditorWindowService.js'
+import {
+  resolveQuickPickOpenTarget,
+  type QuickPickOpenTarget,
+} from '../quickInput/quickPickOpenTarget.js'
 import { requestOwnerFrame } from '@universe-editor/workbench-ui'
 
 export interface IQuickTextSearchService {
@@ -245,6 +253,8 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
+    @IAuxiliaryEditorWindowService
+    private readonly _auxWindows: IAuxiliaryEditorWindowService,
   ) {}
 
   async show(): Promise<void> {
@@ -323,14 +333,41 @@ export class QuickTextSearchService implements IQuickTextSearchService {
         resolve()
       }
 
-      const openPick = async (pick: QuickTextSearchPick): Promise<void> => {
+      const openPick = async (
+        pick: QuickTextSearchPick,
+        target: QuickPickOpenTarget,
+      ): Promise<void> => {
         if (pick.kind === 'message' || !pick.resource) return
-        const input = this._openFile(pick.resource, false)
-        if (pick.kind === 'match' && pick.match && pick.rangeIndex !== undefined) {
-          await this._revealMatch(input, pick.match, pick.rangeIndex)
-        } else {
-          this._focusEditor(input)
+        if (target === 'side') {
+          const input = this._openFileToSide(pick.resource)
+          await this._revealOrFocus(input, pick)
+          return
         }
+        if (target === 'newWindow') {
+          const opened = await this._openFileInNewWindow(pick.resource)
+          if (opened) {
+            // A freshly created auxiliary window mounts its Monaco editor later
+            // than the in-window reveal window; the event-driven helper waits
+            // for the registry entry instead of polling a fixed delay.
+            if (pick.kind === 'match' && pick.match && pick.rangeIndex !== undefined) {
+              const range = pick.match.ranges[pick.rangeIndex]
+              if (range) {
+                void revealSelectionInInput(opened, {
+                  startLineNumber: pick.match.lineNumber,
+                  startColumn: range.startColumn,
+                  endLineNumber: pick.match.lineNumber,
+                  endColumn: range.endColumn,
+                })
+              }
+            } else {
+              this._focusEditor(opened)
+            }
+            return
+          }
+          // Fall through to the default in-window path when the window failed.
+        }
+        const input = this._openFile(pick.resource, false)
+        await this._revealOrFocus(input, pick)
       }
 
       const runSearch = async (value: string): Promise<void> => {
@@ -461,7 +498,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
           const pick = items[0]
           if (!pick || pick.kind === 'message') return
           accepted = true
-          void openPick(pick).finally(resolveOnce)
+          void openPick(pick, resolveQuickPickOpenTarget(picker.keyMods)).finally(resolveOnce)
         }),
       )
       store.add(
@@ -510,20 +547,89 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     return text.length > SEED_TEXT_MAX_LENGTH ? text.slice(0, SEED_TEXT_MAX_LENGTH) : text
   }
 
-  private _openFile(resource: URI, pinned: boolean): EditorInput {
+  private async _revealOrFocus(input: EditorInput, pick: QuickTextSearchPick): Promise<void> {
+    if (pick.kind === 'match' && pick.match && pick.rangeIndex !== undefined) {
+      await this._revealMatch(input, pick.match, pick.rangeIndex)
+    } else {
+      this._focusEditor(input)
+    }
+  }
+
+  /** Open the picked file in the side group, reusing a tab already there.
+   *  Does not dedupe against other groups — Ctrl+Enter asks for a second view. */
+  private _openFileToSide(resource: URI): EditorInput {
+    const side = ensureSideGroup(this._groups)
+    for (const editor of side.editors) {
+      if (
+        (editor instanceof FileEditorInput || editor instanceof UntitledEditorInput) &&
+        this._uriIdentity.isEqual(editor.resource, resource)
+      ) {
+        side.setActive(editor)
+        this._windowFocus.focusGroup(side)
+        return editor
+      }
+    }
+    const input = this._instantiation.createInstance(FileEditorInput, resource)
+    openInLockAwareGroup(this._groups, input, { activate: true, pinned: false }, side)
+    this._windowFocus.focusGroup(this._groups.activeGroup)
+    return input
+  }
+
+  /** Open the picked file in an auxiliary editor window. Reuses the open tab's
+   *  input as a copy when it can be cloned; otherwise opens a fresh input.
+   *  Returns undefined when the window could not open the editor. */
+  private async _openFileInNewWindow(resource: URI): Promise<EditorInput | undefined> {
+    const existing = this._findOpenFile(resource)
+    if (existing) {
+      try {
+        const result = await this._auxWindows.openEditorInNewWindow(existing.editor, {
+          mode: canCloneEditorInputForSplit(existing.editor) ? 'copy' : 'move',
+          source: existing.group,
+          preferOtherDisplayFullscreen: true,
+        })
+        if (result.ok) return result.editor
+      } catch {
+        // fall through to undefined → caller opens in the active group
+      }
+      return undefined
+    }
+    const input = this._instantiation.createInstance(FileEditorInput, resource)
+    try {
+      const result = await this._auxWindows.openEditorInNewWindow(input, {
+        mode: 'open',
+        pinned: false,
+        preferOtherDisplayFullscreen: true,
+      })
+      if (result.ok) return result.editor
+    } catch {
+      // fall through to cleanup + fallback
+    }
+    if (!input.isDisposed) input.dispose()
+    return undefined
+  }
+
+  private _findOpenFile(resource: URI): { group: IEditorGroup; editor: EditorInput } | undefined {
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        const matches =
+        if (
           (editor instanceof FileEditorInput || editor instanceof UntitledEditorInput) &&
           this._uriIdentity.isEqual(editor.resource, resource)
-        if (matches) {
-          this._groups.activateGroup(group)
-          group.setActive(editor)
-          this._windowFocus.focusGroup(group)
-          if (pinned) group.pinEditor(editor)
-          return editor
+        ) {
+          return { group, editor }
         }
       }
+    }
+    return undefined
+  }
+
+  private _openFile(resource: URI, pinned: boolean): EditorInput {
+    const existing = this._findOpenFile(resource)
+    if (existing) {
+      this._groups.activateGroup(existing.group)
+      existing.group.setActive(existing.editor)
+      this._windowFocus.focusGroup(existing.group)
+      if (pinned) existing.group.pinEditor(existing.editor)
+      return existing.editor
     }
 
     const input = this._instantiation.createInstance(FileEditorInput, resource)

@@ -57,6 +57,16 @@ export interface IEditorResolverService {
   resolveEditors(uri: URI): IEditorResolverRegistration[]
 
   /**
+   * Create the EditorInput for `uri` using the same registration/priority rules
+   * as {@link openEditor}, without opening it. Multi-window callers (quick pick →
+   * auxiliary window) need the correctly routed input before a target group exists.
+   *
+   * `preferredTypeId` has the same semantics as in `openEditor`, including the
+   * explicit-choice pin used by "Reopen With...".
+   */
+  createEditorInput(uri: URI, preferredTypeId?: string): EditorInput
+
+  /**
    * Resolve the best editor for `uri` and open it in the active editor group.
    *
    * - `preferredTypeId`: if specified, selects the matching registration over

@@ -51,6 +51,13 @@ export interface AuxiliaryWindowOpenOptions {
   }
   readonly title?: string
   readonly backgroundColor?: string
+  /**
+   * Placement hint used when no explicit geometry is supplied: on a multi-monitor
+   * setup, open fullscreen on a display other than the source window's. Falls back
+   * to the normal cascade placement (not fullscreen) when only one display exists
+   * or the displays mirror each other.
+   */
+  readonly preferOtherDisplayFullscreen?: boolean
 }
 
 export interface PreparedAuxiliaryWindow {

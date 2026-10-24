@@ -82,6 +82,7 @@ function makeResolver(typeId: string | undefined): IEditorResolverService {
   return {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose: () => {} }),
+    createEditorInput: () => ({}) as EditorInput,
     resolveEditors: () => regs,
     openEditor: async () => {},
   }

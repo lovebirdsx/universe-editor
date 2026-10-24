@@ -6,6 +6,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   EditorInput,
+  EditorRegistry,
   Emitter,
   Event,
   GroupDirection,
@@ -253,6 +254,103 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
 
     expect(await move).toBe(false)
     expect(ctx.service.windows).toHaveLength(0)
+    expect(ctx.groups.parts).toHaveLength(1)
+  })
+
+  it('opens a new input directly in the auxiliary window and forwards placement hints', async () => {
+    const input = new TestInput('/fresh')
+    const result = await ctx.service.openEditorInNewWindow(input, {
+      preferOtherDisplayFullscreen: true,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.editor).toBe(input)
+    expect(result.window.part.activeGroup.contains(input)).toBe(true)
+    expect(ctx.aux.prepareOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ preferOtherDisplayFullscreen: true }),
+    )
+    expect(ctx.service.windows).toHaveLength(1)
+    // The window must survive: explicitEmpty was cleared once the editor landed.
+    expect(result.window.explicitEmpty).toBe(false)
+  })
+
+  it('refuses open mode for an input that is still open in another group', async () => {
+    const source = ctx.groups.mainPart.activeGroup
+    const input = new TestInput('/already-open')
+    source.openEditor(input)
+
+    const result = await ctx.service.openEditorInNewWindow(input)
+    expect(result).toEqual({ ok: false, reason: 'error' })
+    expect(ctx.aux.prepareOpen).not.toHaveBeenCalled()
+    expect(ctx.service.windows).toHaveLength(0)
+    expect(source.contains(input)).toBe(true)
+  })
+
+  it('moves an already-open editor into the new window', async () => {
+    const source = ctx.groups.mainPart.activeGroup
+    const input = new TestInput('/move-me')
+    source.openEditor(input)
+
+    const result = await ctx.service.openEditorInNewWindow(input, {
+      mode: 'move',
+      source,
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(source.contains(input)).toBe(false)
+    expect(result.window.part.activeGroup.contains(input)).toBe(true)
+    expect(result.editor).toBe(input)
+  })
+
+  it('copies an already-open editor, leaving the original tab alone', async () => {
+    const registration = EditorRegistry.registerEditorProvider({
+      typeId: TestInput.TYPE_ID,
+      componentKey: TestInput.TYPE_ID,
+      deserialize: (data) => new TestInput((data as { path: string }).path),
+    })
+    try {
+      const source = ctx.groups.mainPart.activeGroup
+      const input = new TestInput('/copy-me')
+      source.openEditor(input)
+
+      const result = await ctx.service.openEditorInNewWindow(input, {
+        mode: 'copy',
+        source,
+        preferOtherDisplayFullscreen: true,
+      })
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(source.contains(input)).toBe(true)
+      expect(result.editor).not.toBe(input)
+      expect(result.window.part.activeGroup.contains(result.editor)).toBe(true)
+      expect(result.editor.resource?.toString()).toBe(input.resource?.toString())
+    } finally {
+      registration.dispose()
+    }
+  })
+
+  it('reports uncopyable inputs without creating a window', async () => {
+    const source = ctx.groups.mainPart.activeGroup
+    const input = new TestInput('/uncopyable')
+    source.openEditor(input)
+    // No EditorRegistry provider is registered for TestInput in this test.
+
+    const result = await ctx.service.openEditorInNewWindow(input, {
+      mode: 'copy',
+      source,
+    })
+    expect(result).toEqual({ ok: false, reason: 'uncopyable' })
+    expect(ctx.service.windows).toHaveLength(0)
+    expect(source.contains(input)).toBe(true)
+  })
+
+  it('leaves a caller-owned open input intact when the window cannot be created', async () => {
+    ctx.openSpy.mockReturnValueOnce(null)
+    const input = new TestInput('/blocked')
+    const result = await ctx.service.openEditorInNewWindow(input)
+    expect(result).toEqual({ ok: false, reason: 'error' })
+    expect(input.isDisposed).toBe(false)
     expect(ctx.groups.parts).toHaveLength(1)
   })
 

@@ -48,6 +48,9 @@ function makeAccessor(current: { folder: URI } | null): {
   const resolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose() {} }),
+    createEditorInput: () => {
+      throw new Error('unused')
+    },
     resolveEditors: () => [],
     openEditor,
   }

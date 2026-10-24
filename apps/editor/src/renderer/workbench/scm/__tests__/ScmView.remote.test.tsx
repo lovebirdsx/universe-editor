@@ -53,6 +53,9 @@ function setup() {
   const stubEditorResolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose() {} }),
+    createEditorInput: () => {
+      throw new Error('unused')
+    },
     resolveEditors: () => [],
     openEditor,
   }

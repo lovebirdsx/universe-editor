@@ -29,6 +29,7 @@ import {
   registerAction2,
   type IDisposable,
   type ISettableObservable,
+  type EditorInput,
 } from '@universe-editor/platform'
 import {
   GoToParentSessionAction,
@@ -53,6 +54,34 @@ import {
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
+import {
+  IAuxiliaryEditorWindowService,
+  type OpenEditorInNewWindowOptions,
+  type OpenEditorInNewWindowResult,
+} from '../../services/windows/auxiliaryEditorWindowService.js'
+
+/** Records openEditorInNewWindow calls; the real service owns window creation. */
+class FakeAuxiliaryEditorWindowService {
+  declare readonly _serviceBrand: undefined
+  readonly openCalls: Array<{
+    editor: EditorInput
+    options: OpenEditorInNewWindowOptions | undefined
+  }> = []
+  succeed = true
+  constructor(private readonly _groups: EditorGroupsService) {}
+  async openEditorInNewWindow(
+    editor: EditorInput,
+    options?: OpenEditorInNewWindowOptions,
+  ): Promise<OpenEditorInNewWindowResult> {
+    this.openCalls.push({ editor, options })
+    if (!this.succeed) return { ok: false, reason: 'error' }
+    return {
+      ok: true,
+      window: { part: { activeGroup: this._groups.activeGroup } } as never,
+      editor,
+    }
+  }
+}
 
 const AGENTS: readonly IAcpAgentDescriptor[] = [
   { id: 'claude-code', name: 'Claude Code', command: 'claude', args: [] },
@@ -165,6 +194,7 @@ interface SideTaskHarness {
   readonly closeSession: ReturnType<typeof vi.fn>
   readonly deleteOnAgent: ReturnType<typeof vi.fn>
   readonly historyRemoveDeleted: ReturnType<typeof vi.fn>
+  readonly auxWindows: FakeAuxiliaryEditorWindowService
   /** The stubbed `IEditorService.activeEditor` — the real service derives it from
    *  the groups, so tests that open a tab must set it by hand. */
   readonly activeEditor: ISettableObservable<unknown>
@@ -187,6 +217,8 @@ function makeSideTaskHarness(
     readonly confirmResult?: { confirmed: boolean; neverAskAgain?: boolean }
     /** Live session ids whose `closeSession` rejects. */
     readonly closeFailsFor?: readonly string[]
+    /** Modifier state the picker reports at acceptance. */
+    readonly keyMods?: { ctrl: boolean; alt: boolean }
   } = {},
 ): SideTaskHarness {
   const rows = options.rows ?? []
@@ -212,8 +244,16 @@ function makeSideTaskHarness(
     deleteOnAgent,
   } as unknown as IAcpSessionService
   const groups = new EditorGroupsService()
+  const auxWindows = new FakeAuxiliaryEditorWindowService(groups)
   const addGroup = vi.spyOn(groups, 'addGroup')
-  const pick = vi.fn().mockResolvedValue(options.pickResult)
+  const pick = vi.fn(
+    async (_items: unknown, pickOptions?: { keyMods?: { ctrl: boolean; alt: boolean } }) => {
+      if (pickOptions?.keyMods !== undefined && options.keyMods !== undefined) {
+        Object.assign(pickOptions.keyMods, options.keyMods)
+      }
+      return options.pickResult
+    },
+  )
   const activeEditor = observableValue<unknown>('t.editor', options.activeEditor)
   const confirm = vi.fn(async () => ({
     confirmed: options.confirmResult?.confirmed ?? true,
@@ -252,6 +292,10 @@ function makeSideTaskHarness(
     onDidChangeWorkspace: Event.None,
   } as unknown as IWorkspaceService)
   services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
+  services.set(
+    IAuxiliaryEditorWindowService,
+    auxWindows as unknown as IAuxiliaryEditorWindowService,
+  )
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
 
@@ -270,6 +314,7 @@ function makeSideTaskHarness(
     closeSession,
     deleteOnAgent,
     historyRemoveDeleted,
+    auxWindows,
     activeEditor,
     activeEditorId: () => {
       const active = groups.activeGroup.activeEditor
@@ -359,6 +404,38 @@ describe('side-task navigation commands', () => {
     })
     await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
 
+    expect(h.addGroup).toHaveBeenCalledWith(expect.anything(), GroupDirection.Right)
+    expect(h.activeEditorId()).toBe('side-1')
+  })
+
+  it('ctrl+alt+accept opens the side task in an auxiliary window', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      pickResult: { id: 'side-1' },
+      keyMods: { ctrl: true, alt: true },
+    })
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.auxWindows.openCalls).toHaveLength(1)
+    expect(h.auxWindows.openCalls[0]!.options).toMatchObject({
+      mode: 'open',
+      preferOtherDisplayFullscreen: true,
+    })
+    expect((h.auxWindows.openCalls[0]!.editor as AcpSessionEditorInput).sessionId).toBe('side-1')
+    // No right split is created when the window takes the editor.
+    expect(h.addGroup).not.toHaveBeenCalled()
+  })
+
+  it('ctrl+alt+accept falls back to the right split when the window fails', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      pickResult: { id: 'side-1' },
+      keyMods: { ctrl: true, alt: true },
+    })
+    h.auxWindows.succeed = false
+    await h.run(OpenSideTaskAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.auxWindows.openCalls).toHaveLength(1)
     expect(h.addGroup).toHaveBeenCalledWith(expect.anything(), GroupDirection.Right)
     expect(h.activeEditorId()).toBe('side-1')
   })
