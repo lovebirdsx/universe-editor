@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  DeferredPromise,
   Emitter,
   Event,
   LogLevel,
@@ -91,6 +92,10 @@ class FakeFileService implements IFileService {
   /** When > 0, readFileText holds for that long — long enough to keep a whole
    *  recompute pass in flight across macrotasks, so requests can land mid-pass. */
   readDelayMs = 0
+  /** One-shot gate: when set, the next readFileText parks after counting itself
+   *  until `release()`. A sleep can always be outrun by a delayed timer; this
+   *  holds a pass open across any number of macrotasks. */
+  private _heldRead: { entered: DeferredPromise<void>; held: DeferredPromise<void> } | undefined
   /** When set, readFileText rejects although stat() still succeeds — a transient
    *  read failure (EACCES/EMFILE) on a file that is still there. */
   failReads = false
@@ -121,11 +126,33 @@ class FakeFileService implements IFileService {
     const fsPath = URI.file(path).fsPath
     this._mtimes.set(fsPath, ++this._clock)
   }
+  /**
+   * Park the next readFileText until the returned `release()` is called.
+   * `entered` resolves once that read has counted itself and is parked, so a
+   * test can wait for a pass to be provably suspended instead of sleeping.
+   */
+  holdNextRead(): { entered: Promise<void>; release: () => void } {
+    const gate = { entered: new DeferredPromise<void>(), held: new DeferredPromise<void>() }
+    this._heldRead = gate
+    return {
+      entered: gate.entered.p,
+      release: () => {
+        if (this._heldRead === gate) this._heldRead = undefined
+        gate.held.complete(undefined)
+      },
+    }
+  }
   async readFileText(resource: URI): Promise<string> {
     this.reads++
     this._inFlight++
     this.peakInFlight = Math.max(this.peakInFlight, this._inFlight)
     try {
+      const gate = this._heldRead
+      if (gate !== undefined) {
+        this._heldRead = undefined
+        gate.entered.complete(undefined)
+        await gate.held.p
+      }
       if (this.deferReads) await Promise.resolve()
       if (this.readDelayMs > 0) await new Promise((r) => setTimeout(r, this.readDelayMs))
       if (this.failReads) throw new Error('EACCES')
@@ -233,6 +260,11 @@ function liveBytesOf(svc: SessionChangeTrackerService, sessionId: string): numbe
   return (svc as unknown as { _liveChangeBytes: Map<string, number> })._liveChangeBytes.get(
     sessionId,
   )
+}
+
+/** White-box: a recompute request delivered to a pass that is still running. */
+function hasPendingRecompute(svc: SessionChangeTrackerService, sessionId: string): boolean {
+  return (svc as unknown as { _recomputeAgain: Set<string> })._recomputeAgain.has(sessionId)
 }
 
 const SID = 'sess-1'
@@ -1131,20 +1163,34 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
     await flush()
     expect(files.reads).toBe(1)
 
-    // Hold the next pass open across macrotasks so requests land inside it, and
-    // move the mtime each time so the build cache can't answer for free — this
-    // test is about how many passes run, not how many reads they cost.
-    files.readDelayMs = 5
+    // Park the next pass inside its read. On a loaded runner a 1ms sleep can be
+    // delayed past a short read window, so scheduling the requests by sleep is a
+    // bet; the gate holds the pass open until the test lets it go.
     files.peakInFlight = 0
+    const gate = files.holdNextRead()
     files.bumpMtime('/work/a.ts')
     svc.recordWatched(SID, '/work/a.ts')
-    await new Promise((r) => setTimeout(r, 1))
+    await gate.entered
+    expect(files.reads).toBe(2)
+
+    // Both requests land while the pass is provably suspended. They coalesce in
+    // the throttle window, and each bumped the mtime past what the suspended
+    // pass already stat'ed, so its follow-up cannot answer from the cache.
     files.bumpMtime('/work/a.ts')
     svc.recordWatched(SID, '/work/a.ts')
-    await new Promise((r) => setTimeout(r, 1))
     files.bumpMtime('/work/a.ts')
     svc.recordWatched(SID, '/work/a.ts')
-    await new Promise((r) => setTimeout(r, 40))
+    // Deliver the throttled request while the pass is still parked: its 0ms
+    // deadline is earlier than this sleep's, so it runs first even if the loop
+    // stalls. Still the same pass — no eager second one started.
+    await flush()
+    expect(files.reads).toBe(2)
+    // Delivered to the running pass — not merely queued until after it ends,
+    // which would still total three reads without ever exercising the merge.
+    expect(hasPendingRecompute(svc, SID)).toBe(true)
+
+    gate.release()
+    await flush()
 
     // The throttle only coalesces *requests*; a pass outlives its window, so
     // without the single-flight guard those three would each start their own
