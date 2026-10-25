@@ -7,7 +7,6 @@
 
 import {
   Action2,
-  IEditorGroupsService,
   INotificationService,
   localize,
   localize2,
@@ -18,7 +17,11 @@ import {
 import { writeClipboardText } from '@universe-editor/workbench-ui'
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { ProcessExplorerInput } from '../services/editor/ProcessExplorerInput.js'
-import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import {
+  openPinnedSingletonEditor,
+  openTargetServicesFrom,
+} from '../services/editor/openWithTarget.js'
 
 interface IProcessContextArg {
   readonly pid: number
@@ -38,11 +41,12 @@ export class OpenProcessExplorerAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    openInLockAwareGroup(accessor.get(IEditorGroupsService), new ProcessExplorerInput(), {
-      activate: true,
-      pinned: true,
-    })
+  override run(accessor: ServicesAccessor): Promise<boolean> {
+    return openPinnedSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      () => new ProcessExplorerInput(),
+    )
   }
 }
 

@@ -6,7 +6,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useState } from 'react'
-import { ICommandService, localize } from '@universe-editor/platform'
+import { ICommandService, localize, runWithInvocationModifiers } from '@universe-editor/platform'
+import { resolveOpenTarget } from '../../services/editor/openTarget.js'
 import { ChevronDown, Filter, Plus, RefreshCw, Search } from 'lucide-react'
 import { IconButton } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
@@ -57,7 +58,17 @@ export function SessionsViewToolbar() {
       <IconButton
         label={localize('acp.newSession', 'New session')}
         command="workbench.action.agent.newSession"
-        onClick={() => void service.createSession(registry.defaultAgentId())}
+        onClick={(e) => {
+          // Plain click keeps the session in this view; Ctrl/Alt open its tab
+          // to the side / in a new window via the command.
+          if (resolveOpenTarget(e) === 'default') {
+            void service.createSession(registry.defaultAgentId())
+            return
+          }
+          void runWithInvocationModifiers(e, () =>
+            commands.executeCommand('workbench.action.agent.newSession'),
+          )
+        }}
         data-testid="acp-new-session"
       >
         <Plus size={14} strokeWidth={1.75} />

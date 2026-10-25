@@ -21,6 +21,8 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { SwarmReviewEditorInput } from '../services/editor/SwarmReviewEditorInput.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import { requestSwarmReviewsRefresh } from '../services/swarm/swarmViewState.js'
 import { driveSwarmNotificationTick } from '../services/swarm/swarmNotificationTick.js'
 import { viewFocusWhen } from './viewFocusWhen.js'
@@ -118,6 +120,8 @@ export class OpenSwarmReviewByIdAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const quickInput = accessor.get(IQuickInputService)
     const editorService = accessor.get(IEditorService)
+    const targets = openTargetServicesFrom(accessor)
+    const target = invocationOpenTarget()
     const entered = await quickInput.input({
       prompt: localize('swarm.openById.prompt', 'Enter a Swarm review id to open'),
       placeholder: localize('swarm.openById.placeholder', 'Review id, e.g. 100801'),
@@ -131,7 +135,12 @@ export class OpenSwarmReviewByIdAction extends Action2 {
     })
     const id = entered?.trim()
     if (!id || !/^\d+$/.test(id)) return
-    await editorService.openEditor(new SwarmReviewEditorInput(id))
+    await openSingletonEditor(
+      targets,
+      target,
+      () => new SwarmReviewEditorInput(id),
+      () => editorService.openEditor(new SwarmReviewEditorInput(id)),
+    )
   }
 }
 

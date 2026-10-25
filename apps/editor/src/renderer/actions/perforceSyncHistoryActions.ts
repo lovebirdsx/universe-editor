@@ -22,6 +22,8 @@ import {
   type P4SyncHistoryLoadResult,
 } from '@universe-editor/extensions-common'
 import { PerforceSyncHistoryEditorInput } from '../services/editor/PerforceSyncHistoryEditorInput.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import {
   noteSyncHistoryRecorded,
   SYNC_HISTORY_EXPORT_MAX,
@@ -43,8 +45,14 @@ export class ViewPerforceSyncHistoryAction extends Action2 {
     })
   }
 
-  override async run(accessor: ServicesAccessor): Promise<void> {
-    await accessor.get(IEditorService).openEditor(new PerforceSyncHistoryEditorInput())
+  override run(accessor: ServicesAccessor): Promise<boolean> {
+    const editorService = accessor.get(IEditorService)
+    return openSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      () => new PerforceSyncHistoryEditorInput(),
+      () => editorService.openEditor(new PerforceSyncHistoryEditorInput()),
+    )
   }
 }
 

@@ -20,7 +20,11 @@ import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { invocationOpenTarget } from '../services/editor/openTarget.js'
-import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
+import {
+  openSingletonEditor,
+  openTargetServicesFrom,
+  openUriEditor,
+} from '../services/editor/openWithTarget.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { CATEGORY } from './_agentShared.js'
 
@@ -106,9 +110,20 @@ async function openAgentConfig(
   // All services must be grabbed before the first await — the accessor is invocation-scoped.
   const editorResolver = accessor.get(IEditorResolverService)
   const workspace = accessor.get(IWorkspaceService)
+  const targets = { ...openTargetServicesFrom(accessor), resolver: editorResolver }
+  const target = invocationOpenTarget()
   const authority = currentRemoteAuthority(workspace.current)
   const path = await configService.configPath(authority)
-  await editorResolver.openEditor(fsPathToWorkspaceUri(path, authority), { pinned: true })
+  const uri = fsPathToWorkspaceUri(path, authority)
+  await openUriEditor(
+    targets,
+    target,
+    uri,
+    () => editorResolver.openEditor(uri, { pinned: true }),
+    {
+      pinned: true,
+    },
+  )
 }
 
 export class OpenCodexConfigAction extends Action2 {

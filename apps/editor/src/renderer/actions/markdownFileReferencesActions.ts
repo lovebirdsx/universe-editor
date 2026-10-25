@@ -64,6 +64,7 @@ export class FindMarkdownFileReferencesAction extends Action2 {
     if (!target || !isMarkdown(target)) return
 
     const client = accessor.get(IExtensionHostClientService)
+    const resolver = accessor.get(IEditorResolverService)
     await client.activateByEvent('onLanguage:markdown')
     const locations = (await client.executeContributedCommand(MARKDOWN_FILE_REFERENCES_COMMAND, [
       target.toString(),
@@ -71,7 +72,7 @@ export class FindMarkdownFileReferencesAction extends Action2 {
     if (!locations || locations.length === 0) return
 
     // Open the target so a code editor anchors the peek (VSCode opens it too).
-    await accessor.get(IEditorResolverService).openEditor(target, { pinned: true })
+    await resolver.openEditor(target, { pinned: true })
 
     const monacoNs = MonacoLoader.get()
     const commandService = await MonacoLoader.getCommandService()

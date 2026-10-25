@@ -245,12 +245,18 @@ export async function openExistingInputWithTarget(
   return HANDLED_NONE
 }
 
+export interface OpenUriTargetOptions extends OpenTargetOptions {
+  readonly preferredTypeId?: string
+  /** Builds the input instead of the resolver (e.g. a read-only file input). */
+  readonly createInput?: () => EditorInput
+}
+
 /** Open a resource by URI through the editor resolver. */
 export async function openUriWithTarget(
   s: OpenTargetServices,
   resource: URI,
   target: OpenTarget,
-  options: OpenTargetOptions & { readonly preferredTypeId?: string } = {},
+  options: OpenUriTargetOptions = {},
 ): Promise<TargetedOpenResult> {
   if (target === 'default') return HANDLED_NONE
 
@@ -261,8 +267,10 @@ export async function openUriWithTarget(
     }
   }
 
-  if (!s.resolver) return HANDLED_NONE
-  const input = s.resolver.createEditorInput(resource, options.preferredTypeId)
+  const input = options.createInput
+    ? options.createInput()
+    : s.resolver?.createEditorInput(resource, options.preferredTypeId)
+  if (!input) return HANDLED_NONE
 
   if (target === 'side') {
     const side = ensureSideGroup(s.groups, splitSource(s.groups, options.sourceGroup))
@@ -335,6 +343,40 @@ export async function openSingletonEditor(
     })
     // An already-open instance was moved instead; the probe only lent its id.
     if (!mounted && !input.isDisposed) input.dispose()
+    if (result.handled) return true
+  }
+  await openDefault()
+  return false
+}
+
+/** {@link openSingletonEditor} whose default path is a pinned, lock-aware open
+ *  (dedupe within the destination group only — diagnostic pages). */
+export function openPinnedSingletonEditor(
+  s: OpenTargetServices,
+  target: OpenTarget,
+  create: () => EditorInput,
+): Promise<boolean> {
+  return openSingletonEditor(s, target, create, () =>
+    openInLockAwareGroup(s.groups, create(), { activate: true, pinned: true }),
+  )
+}
+
+/**
+ * Command-style entry for a resource-backed editor (settings JSON, log files…):
+ * the counterpart of {@link openSingletonEditor} for inputs that may be copied.
+ * side/newWindow go through {@link openUriWithTarget}; `default` — or a target
+ * that could not be honoured — runs the command's own default path. Resolves
+ * true only when the side/new-window open happened.
+ */
+export async function openUriEditor(
+  s: OpenTargetServices,
+  target: OpenTarget,
+  resource: URI,
+  openDefault: () => unknown,
+  options: OpenUriTargetOptions = {},
+): Promise<boolean> {
+  if (target !== 'default') {
+    const result = await openUriWithTarget(s, resource, target, options)
     if (result.handled) return true
   }
   await openDefault()

@@ -24,10 +24,11 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
-import type { TargetedOpen } from '../services/editor/openTarget.js'
+import { invocationOpenTarget, type TargetedOpen } from '../services/editor/openTarget.js'
 import {
   openFreshInputWithTarget,
   openTargetServicesFrom,
+  openUriEditor,
 } from '../services/editor/openWithTarget.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
@@ -311,16 +312,23 @@ export class OpenDiffSourceFileAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor, arg?: unknown): void {
+  override run(accessor: ServicesAccessor, arg?: unknown): Promise<boolean> | undefined {
     const target = resolveTargetEditor(accessor, arg)
-    if (!target) return
+    if (!target) return undefined
     const group = target.group
     const active = target.editor
-    if (!(active instanceof DiffEditorInput)) return
+    if (!(active instanceof DiffEditorInput)) return undefined
     const resource = active.openableResource
-    if (!resource) return
-    const input = accessor.get(IInstantiationService).createInstance(FileEditorInput, resource)
-    group.openEditor(input, { activate: true, pinned: true })
+    if (!resource) return undefined
+    const inst = accessor.get(IInstantiationService)
+    const createInput = (): FileEditorInput => inst.createInstance(FileEditorInput, resource)
+    return openUriEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      resource,
+      () => group.openEditor(createInput(), { activate: true, pinned: true }),
+      { createInput, pinned: true, sourceGroup: group },
+    )
   }
 }
 

@@ -13,7 +13,7 @@
 
 import { memo } from 'react'
 import { GitBranch } from 'lucide-react'
-import { localize } from '@universe-editor/platform'
+import { localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/session/acpSessionService.js'
 import { ForkAgentSessionAction } from '../../actions/agentRewindActions.js'
@@ -39,7 +39,11 @@ export const ForkTipFooter = memo(function ForkTipFooter({ session }: { session:
         type="button"
         className={styles['forkTipButton']}
         aria-label={label}
-        onClick={() => void executeCommand(ForkAgentSessionAction.ID, { sessionId: session.id })}
+        onClick={(e) =>
+          void runWithInvocationModifiers(e, () =>
+            executeCommand(ForkAgentSessionAction.ID, { sessionId: session.id }),
+          )
+        }
         data-testid="acp-fork-tip"
       >
         <GitBranch size={13} strokeWidth={1.75} aria-hidden="true" />

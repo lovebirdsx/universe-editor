@@ -80,7 +80,11 @@ import {
 } from '../services/acp/session/revealSessionEditorTab.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 import { computeInitialSelectionIndex } from '../services/quickInput/quickNavigateSelection.js'
-import { resolveQuickPickOpenTarget } from '../services/editor/openTarget.js'
+import {
+  invocationOpenTarget,
+  resolveQuickPickOpenTarget,
+  type OpenTarget,
+} from '../services/editor/openTarget.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 import { relativeTime } from '../relativeTime.js'
@@ -101,10 +105,10 @@ export class NewAgentSessionAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const sessions = accessor.get(IAcpSessionService)
     const registry = accessor.get(IAcpAgentRegistry)
-    const editor = accessor.get(IEditorService)
-    const inst = accessor.get(IInstantiationService)
+    const open = createdSessionOpenServicesFrom(accessor)
+    const target = invocationOpenTarget()
     const session = await sessions.createSession(registry.defaultAgentId())
-    focusCreatedSession(session, editor, inst)
+    await openCreatedSession(open, session, target)
   }
 }
 
@@ -179,18 +183,45 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
 /** Sentinel id for the trailing "Choose Folder…" entry in the scope picker. */
 const CHOOSE_FOLDER_PICK_ID = '__chooseFolder__'
 
+export interface CreatedSessionOpenServices {
+  readonly editor: IEditorService
+  readonly inst: IInstantiationService
+  readonly groups: IEditorGroupsService
+  readonly auxWindows: IAuxiliaryEditorWindowService
+}
+
+/** Snapshot the services synchronously — call before any await in an action. */
+export function createdSessionOpenServicesFrom(
+  accessor: ServicesAccessor,
+): CreatedSessionOpenServices {
+  return {
+    editor: accessor.get(IEditorService),
+    inst: accessor.get(IInstantiationService),
+    groups: accessor.get(IEditorGroupsService),
+    auxWindows: accessor.get(IAuxiliaryEditorWindowService),
+  }
+}
+
 /**
- * Focus a freshly-created session the same way NewAgentSessionAction does: open
- * it as an editor tab. Services are passed in — never the accessor — because the
- * caller reaches this point after awaiting createSession.
+ * Land a freshly created/forked session where the user's gesture asked: the
+ * right split, a new auxiliary window (falls back in-window when the window
+ * cannot take it), or a plain tab. Services are passed in — never the accessor
+ * — because callers reach this point after awaiting createSession.
  */
-function focusCreatedSession(
-  session: IAcpSession,
-  editor: IEditorService,
-  inst: IInstantiationService,
-): void {
-  editor.openEditor(
-    inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+export async function openCreatedSession(
+  s: CreatedSessionOpenServices,
+  session: { id: string; agentId: string | undefined },
+  target: OpenTarget,
+): Promise<void> {
+  if (target === 'side') {
+    openSessionInRightSplit(s.groups, s.inst, session)
+    return
+  }
+  if (target === 'newWindow') {
+    if (await openSessionInNewWindow(s.groups, s.inst, s.auxWindows, session)) return
+  }
+  s.editor.openEditor(
+    s.inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
   )
 }
 
@@ -238,8 +269,8 @@ export class NewAgentSessionInFolderAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const sessions = accessor.get(IAcpSessionService)
     const registry = accessor.get(IAcpAgentRegistry)
-    const editor = accessor.get(IEditorService)
-    const inst = accessor.get(IInstantiationService)
+    const open = createdSessionOpenServicesFrom(accessor)
+    const target = invocationOpenTarget()
 
     const folder = resolveFolderTarget(args)
     if (!folder) return
@@ -247,7 +278,7 @@ export class NewAgentSessionInFolderAction extends Action2 {
       cwd: folder.fsPath,
       ...(folder.authority ? { authority: folder.authority } : {}),
     })
-    focusCreatedSession(session, editor, inst)
+    await openCreatedSession(open, session, target)
   }
 }
 
@@ -334,15 +365,11 @@ export class NewAgentSessionWithScopeAction extends Action2 {
       }
 
       const session = await sessions.createSession(registry.defaultAgentId(), target)
-      const openTarget = resolveQuickPickOpenTarget(keyMods)
-      if (openTarget === 'side') {
-        openSessionInRightSplit(groups, inst, session)
-        return
-      }
-      if (openTarget === 'newWindow') {
-        if (await openSessionInNewWindow(groups, inst, auxWindows, session)) return
-      }
-      focusCreatedSession(session, editor, inst)
+      await openCreatedSession(
+        { editor, inst, groups, auxWindows },
+        session,
+        resolveQuickPickOpenTarget(keyMods),
+      )
     } catch (err) {
       notification.notify({
         severity: Severity.Error,

@@ -21,6 +21,7 @@
 import type { EditorInput, IEditorGroup, IEditorGroupsService } from '@universe-editor/platform'
 import type { IWindowFocusService } from '../windows/windowFocusService.js'
 import type { FileEditorInput } from './FileEditorInput.js'
+import { ensureSideGroup } from './openToSide.js'
 import { HtmlPreviewInput } from './HtmlPreviewInput.js'
 import { MarkdownPreviewInput } from './MarkdownPreviewInput.js'
 
@@ -94,6 +95,32 @@ export function openPreviewInGroup(
   // in a background group, invisible.
   if (group !== groups.activeGroup) groups.activateGroup(group)
   opts?.windowFocus?.focusGroup(group)
+}
+
+/**
+ * "Open Preview to the Side": open {@link preview} in the group right of
+ * {@link sourceGroup}, inheriting the {@link source} tab's pin state. A preview
+ * already open anywhere is focused *before* any side group is created — a
+ * group created and then left unused would stay on screen empty.
+ */
+export function openPreviewToSide(
+  groups: IEditorGroupsService,
+  sourceGroup: IEditorGroup,
+  source: FileEditorInput,
+  preview: SourcePreviewInput,
+  windowFocus?: IWindowFocusService,
+): void {
+  const existing = findExistingPreview(groups, sourceGroup, preview)
+  if (existing) {
+    focusExistingPreview(groups, existing, preview, windowFocus)
+    return
+  }
+  // A preview-slot source (still in the source group here) yields a slot
+  // preview, a pinned one a pinned preview.
+  openPreviewInGroup(groups, ensureSideGroup(groups, sourceGroup), preview, {
+    pinned: sourceGroup.isPinned(source) || source.isDirty,
+    ...(windowFocus ? { windowFocus } : {}),
+  })
 }
 
 /**

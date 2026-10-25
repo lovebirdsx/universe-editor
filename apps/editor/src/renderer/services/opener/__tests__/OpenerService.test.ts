@@ -11,7 +11,9 @@ import {
   GroupDirection,
   URI,
   extractSelection,
+  getInvocationModifiers,
   withSelection,
+  type IInvocationModifiers,
   type ICommandService,
   type IEditorGroupsService,
   type IEditorResolverService,
@@ -136,6 +138,32 @@ describe('CommandOpener trust gate', () => {
     const query = encodeURIComponent(JSON.stringify({ a: 1 }))
     await opener.open(parseTarget(`command:foo?${query}`), { allowCommands: true })
     expect(execute).toHaveBeenCalledWith('foo', { a: 1 })
+  })
+
+  it('runs a modified link click under the matching invocation modifiers', async () => {
+    const seen: (IInvocationModifiers | undefined)[] = []
+    const commands = {
+      executeCommand: vi.fn(async () => {
+        seen.push(getInvocationModifiers())
+      }),
+    } as unknown as ICommandService
+    const opener = new CommandOpener(commands)
+
+    await opener.open(parseTarget('command:foo'), { allowCommands: true })
+    await opener.open(parseTarget('command:foo'), { allowCommands: true, openToSide: true })
+    await opener.open(parseTarget('command:foo'), { allowCommands: true, openInNewWindow: true })
+    await opener.open(parseTarget('command:foo'), {
+      allowCommands: true,
+      openToSide: true,
+      openInNewWindow: true,
+    })
+
+    expect(seen[0]).toBeUndefined()
+    expect(seen[1]).toMatchObject({ ctrlKey: true, altKey: false })
+    expect(seen[2]).toMatchObject({ altKey: true })
+    // New window wins, like Alt over Ctrl in resolveOpenTarget.
+    expect(seen[3]).toMatchObject({ altKey: true })
+    expect(seen[3]?.ctrlKey).toBeFalsy()
   })
 })
 

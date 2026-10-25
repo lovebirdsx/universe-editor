@@ -34,6 +34,7 @@ import {
   IUriIdentityService,
   IWindowsService,
   registerSingleton,
+  runWithInvocationModifiers,
   toDisposable,
   URI,
   type IDisposable,
@@ -151,7 +152,14 @@ export class CommandOpener implements IOpener {
         args = [target.query]
       }
     }
-    await this._commands.executeCommand(id, ...args)
+    // A modified link click carries its target the same way a modified button
+    // click does, so editor-opening commands land to the side / in a new window.
+    const mods = options?.openInNewWindow
+      ? { altKey: true }
+      : options?.openToSide
+        ? { ctrlKey: true }
+        : undefined
+    await runWithInvocationModifiers(mods, () => this._commands.executeCommand(id, ...args))
     return true
   }
 }

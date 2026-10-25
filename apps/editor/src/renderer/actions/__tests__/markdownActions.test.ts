@@ -18,8 +18,11 @@ import {
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
+  IUriIdentityService,
   URI,
+  UriIdentityService,
   registerAction2,
+  runWithInvocationModifiers,
   type IDisposable,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
@@ -39,6 +42,7 @@ import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput
 import { MarkdownPreviewViewStateCache } from '../../services/editor/MarkdownPreviewViewStateCache.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import {
   MarkdownPreviewRegistry,
@@ -471,6 +475,81 @@ describe('OpenMarkdownPreviewToSideAction', () => {
     expect(groups.count).toBe(2)
     expect(side.editors).toHaveLength(1)
     expect(side.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
+  })
+})
+
+describe('Markdown preview commands honour the invocation modifiers', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    MarkdownPreviewViewStateCache._resetForTests()
+    FileEditorRegistry._resetForTests()
+  })
+
+  function setupWithWindows() {
+    FileEditorRegistry._resetForTests()
+    const groups = new EditorGroupsService()
+    const openInNewWindow = vi.fn(async (editor: unknown) => ({
+      ok: true,
+      editor,
+      window: { part: { activeGroup: groups.activeGroup } },
+    }))
+    const services = new ServiceCollection(
+      [IEditorGroupsService, groups],
+      [IFileService, makeFakeFileService()],
+      [IContextKeyService, new ContextKeyService()],
+      [IWindowFocusService, new FakeWindowFocusService()],
+      [IUriIdentityService, new UriIdentityService('linux')],
+      [IAuxiliaryEditorWindowService, { openEditorInNewWindow: openInNewWindow } as never],
+    )
+    const withWindows = new InstantiationService(services)
+    services.set(IInstantiationService, withWindows)
+    const source = withWindows.createInstance(FileEditorInput, URI.file('/repo/doc.md'))
+    groups.activeGroup.openEditor(source, { activate: true, pinned: true })
+    return { groups, inst: withWindows, source, openInNewWindow }
+  }
+
+  it('Ctrl on Open Preview splits instead of replacing the source tab', async () => {
+    const { groups, inst, source } = setupWithWindows()
+    const sourceGroup = groups.activeGroup
+
+    await runWithInvocationModifiers({ ctrlKey: true }, () =>
+      runCommand(inst, OpenMarkdownPreviewAction, disposables),
+    )
+
+    expect(groups.count).toBe(2)
+    expect(sourceGroup.editors).toEqual([source])
+    expect(groups.activeGroup.activeEditor).toBeInstanceOf(MarkdownPreviewInput)
+  })
+
+  it('Alt on Open Preview to the Side opens the preview in a new window', async () => {
+    const { groups, inst, source, openInNewWindow } = setupWithWindows()
+
+    await runWithInvocationModifiers({ altKey: true }, () =>
+      runCommand(inst, OpenMarkdownPreviewToSideAction, disposables),
+    )
+
+    expect(groups.count).toBe(1)
+    expect(groups.activeGroup.editors).toEqual([source])
+    expect(openInNewWindow).toHaveBeenCalledOnce()
+    expect(openInNewWindow.mock.calls[0]?.[0]).toBeInstanceOf(MarkdownPreviewInput)
+  })
+
+  it('Ctrl with the preview already open beside the source focuses it, leaving no empty group', async () => {
+    const { groups, inst, source } = setupWithWindows()
+    const sourceGroup = groups.activeGroup
+    const preview = new MarkdownPreviewInput(source.resource)
+    sourceGroup.openEditor(preview, { activate: false, pinned: true })
+    sourceGroup.setActive(source)
+
+    await runWithInvocationModifiers({ ctrlKey: true }, () =>
+      runCommand(inst, OpenMarkdownPreviewAction, disposables),
+    )
+
+    expect(groups.count).toBe(1)
+    expect(sourceGroup.editors).toEqual([source, preview])
+    expect(sourceGroup.activeEditor).toBe(preview)
   })
 })
 

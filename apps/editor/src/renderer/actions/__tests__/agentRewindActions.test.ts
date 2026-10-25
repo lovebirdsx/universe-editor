@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   Event,
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
   IInstantiationService,
   INotificationService,
@@ -11,6 +12,7 @@ import {
   ServiceCollection,
   observableValue,
   registerAction2,
+  runWithInvocationModifiers,
   CommandsRegistry,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -22,6 +24,8 @@ import {
   type RewindFilesResult,
 } from '../../services/acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../../services/acp/session/acpPromptReplaceInbox.js'
 import type { SelectionContext } from '../../services/acp/promptContext.js'
 
@@ -84,6 +88,7 @@ interface Harness {
   readonly dialog: { confirm: ReturnType<typeof vi.fn> }
   readonly notify: ReturnType<typeof vi.fn>
   readonly openEditor: ReturnType<typeof vi.fn>
+  readonly groups: EditorGroupsService
   run(commandId: string, arg?: unknown): Promise<void>
 }
 
@@ -118,6 +123,8 @@ function makeHarness(overrides: Partial<Harness['service']> = {}): Harness {
     onDidChangeWorkspace: Event.None,
   } as unknown as IWorkspaceService)
   services.set(IUriIdentityService, { _serviceBrand: undefined } as unknown as IUriIdentityService)
+  const groups = new EditorGroupsService()
+  services.set(IEditorGroupsService, groups)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
 
@@ -126,6 +133,7 @@ function makeHarness(overrides: Partial<Harness['service']> = {}): Harness {
     dialog,
     notify,
     openEditor,
+    groups,
     run: async (commandId, arg) => {
       await inst.invokeFunction((accessor) =>
         Promise.resolve(CommandsRegistry.getCommand(commandId)!.handler(accessor, arg)),
@@ -268,6 +276,22 @@ describe('Rewind / Fork agent session commands', () => {
 
     expect(h.service.forkSession).toHaveBeenCalledWith('s1', 'mid-1')
     expect(h.openEditor).toHaveBeenCalledTimes(1)
+  })
+
+  it('fork under Ctrl (palette Ctrl+Enter / Ctrl+click) opens the fork to the right', async () => {
+    disposables.push(registerAction2(ForkAgentSessionAction))
+    const h = makeHarness()
+    disposables.push(h.groups)
+    h.service.getById.mockReturnValue(fakeSession('s1', { forkSupported: true }))
+    h.service.forkSession.mockResolvedValue(fakeSession('s2'))
+
+    await runWithInvocationModifiers({ ctrlKey: true }, () =>
+      h.run(ForkAgentSessionAction.ID, { sessionId: 's1' }),
+    )
+
+    expect(h.openEditor).not.toHaveBeenCalled()
+    expect(h.groups.count).toBe(2)
+    expect(h.groups.activeGroup.activeEditor).toBeInstanceOf(AcpSessionEditorInput)
   })
 
   it('fork without a messageId forks from the session tip', async () => {

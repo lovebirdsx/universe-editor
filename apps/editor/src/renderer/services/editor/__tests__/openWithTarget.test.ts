@@ -19,8 +19,10 @@ import type {
 import {
   openExistingInputWithTarget,
   openFreshInputWithTarget,
+  openPinnedSingletonEditor,
   openSingletonEditor,
   openSingletonWithTarget,
+  openUriEditor,
   openUriWithTarget,
   type OpenTargetServices,
 } from '../openWithTarget.js'
@@ -569,6 +571,22 @@ describe('openUriWithTarget', () => {
     expect(groups.groups).toHaveLength(1)
   })
 
+  it('builds the input through createInput instead of the resolver', async () => {
+    const groups = makeGroups()
+    const aux = new FakeAuxiliaryEditorWindowService(groups)
+    const resolver = makeResolver()
+    const uri = URI.file('X:/logs/main.log')
+    const custom = new PlainEditor(uri)
+
+    const result = await openUriWithTarget(makeServices(groups, aux, resolver), uri, 'side', {
+      createInput: () => custom,
+    })
+
+    expect(result.handled).toBe(true)
+    expect(result.editor).toBe(custom)
+    expect(resolver.created).toHaveLength(0)
+  })
+
   it('ignores the default target', async () => {
     const groups = makeGroups()
     const aux = new FakeAuxiliaryEditorWindowService(groups)
@@ -722,5 +740,100 @@ describe('openSingletonEditor', () => {
     expect(targeted).toBe(false)
     expect(openDefault).toHaveBeenCalledOnce()
     expect(probe.disposeCount).toBe(1)
+  })
+})
+
+describe('openUriEditor', () => {
+  it('runs only the default path for a plain invocation', async () => {
+    const groups = makeGroups()
+    const createInput = vi.fn(() => new PlainEditor())
+    const openDefault = vi.fn()
+
+    const targeted = await openUriEditor(
+      makeServices(groups, new FakeAuxiliaryEditorWindowService(groups)),
+      'default',
+      URI.file('X:/settings.json'),
+      openDefault,
+      { createInput },
+    )
+
+    expect(targeted).toBe(false)
+    expect(openDefault).toHaveBeenCalledOnce()
+    expect(createInput).not.toHaveBeenCalled()
+  })
+
+  it('opens a fresh copy to the side and skips the default path', async () => {
+    const groups = makeGroups()
+    const source = groups.activeGroup
+    const uri = URI.file('X:/settings.json')
+    source.openEditor(new PlainEditor(uri))
+    const openDefault = vi.fn()
+
+    const targeted = await openUriEditor(
+      makeServices(groups, new FakeAuxiliaryEditorWindowService(groups)),
+      'side',
+      uri,
+      openDefault,
+      { createInput: () => new PlainEditor(uri) },
+    )
+
+    expect(targeted).toBe(true)
+    expect(openDefault).not.toHaveBeenCalled()
+    expect(groups.groups).toHaveLength(2)
+    // A file is copied: the original tab stays where it was.
+    expect(source.editors).toHaveLength(1)
+    expect(groups.activeGroup).not.toBe(source)
+  })
+
+  it('falls back to the default path when the new window fails', async () => {
+    const groups = makeGroups()
+    const aux = new FakeAuxiliaryEditorWindowService(groups)
+    aux.failModes.add('open')
+    const input = new TrackedEditor(URI.file('X:/settings.json'))
+    const openDefault = vi.fn()
+
+    const targeted = await openUriEditor(
+      makeServices(groups, aux),
+      'newWindow',
+      URI.file('X:/settings.json'),
+      openDefault,
+      { createInput: () => input },
+    )
+
+    expect(targeted).toBe(false)
+    expect(openDefault).toHaveBeenCalledOnce()
+    expect(input.disposeCount).toBe(1)
+  })
+})
+
+describe('openPinnedSingletonEditor', () => {
+  it('opens pinned in the active group by default', async () => {
+    const groups = makeGroups()
+    const page = new TrackedEditor(URI.file('X:/perf'))
+
+    await openPinnedSingletonEditor(
+      makeServices(groups, new FakeAuxiliaryEditorWindowService(groups)),
+      'default',
+      () => page,
+    )
+
+    expect(groups.groups).toHaveLength(1)
+    expect(groups.activeGroup.activeEditor).toBe(page)
+    expect(groups.activeGroup.isPinned(page)).toBe(true)
+  })
+
+  it('moves the open page into a new window', async () => {
+    const groups = makeGroups()
+    const aux = new FakeAuxiliaryEditorWindowService(groups)
+    groups.activeGroup.openEditor(new TrackedEditor(URI.file('X:/perf')))
+
+    const targeted = await openPinnedSingletonEditor(
+      makeServices(groups, aux),
+      'newWindow',
+      () => new TrackedEditor(URI.file('X:/perf')),
+    )
+
+    expect(targeted).toBe(true)
+    expect(aux.calls[0]!.options).toMatchObject({ mode: 'move' })
   })
 })

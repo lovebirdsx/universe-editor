@@ -34,8 +34,9 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
-import { openPreviewInGroup, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
-import { ensureSideGroup } from '../services/editor/openToSide.js'
+import { openPreviewToSide, togglePreviewInGroup } from '../services/editor/openPreviewInGroup.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
@@ -49,26 +50,36 @@ const HTML_PREVIEW_MENU_WHEN = `activeEditorType == '${HtmlPreviewInput.TYPE_ID}
 function openPreview(accessor: ServicesAccessor, toSide: boolean, arg?: unknown): void {
   const groups = accessor.get(IEditorGroupsService)
   const windowFocus = accessor.get(IWindowFocusService)
+  // A Ctrl/Alt gesture overrides the command's own placement (Alt+click on
+  // "Open Preview to the Side" opens a window; Ctrl on "Open Preview" splits).
+  const gesture = invocationOpenTarget()
+  const placement = gesture !== 'default' ? gesture : toSide ? 'side' : 'default'
+  const targets = openTargetServicesFrom(accessor)
   const resolved = resolveTargetEditor(accessor, arg)
   if (!resolved) return
   const source = resolved.group
   const active = resolved.editor
   if (!(active instanceof FileEditorInput)) return
 
-  if (toSide) {
-    const target = ensureSideGroup(groups, source)
-    // The preview inherits the source tab's pin state — a preview-slot source
-    // (still in the source group here) yields a slot preview, a pinned one a
-    // pinned preview.
-    openPreviewInGroup(groups, target, new HtmlPreviewInput(active.resource), {
-      pinned: source.isPinned(active) || active.isDirty,
-      windowFocus,
-    })
-    return
-  }
-
+  const openToSide = (): void =>
+    openPreviewToSide(groups, source, active, new HtmlPreviewInput(active.resource), windowFocus)
   // Ctrl+Shift+V: replace the source tab with the preview tab in the same group.
-  togglePreviewInGroup(groups, source, new HtmlPreviewInput(active), active, windowFocus)
+  const toggle = (): void =>
+    togglePreviewInGroup(groups, source, new HtmlPreviewInput(active), active, windowFocus)
+
+  if (placement === 'newWindow') {
+    // The preview is globally unique: an open one is moved, never duplicated.
+    void openSingletonEditor(
+      targets,
+      'newWindow',
+      () => new HtmlPreviewInput(active.resource),
+      toSide ? openToSide : toggle,
+    )
+  } else if (placement === 'side') {
+    openToSide()
+  } else {
+    toggle()
+  }
 }
 
 export class OpenHtmlPreviewAction extends Action2 {

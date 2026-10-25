@@ -20,7 +20,9 @@ import {
   MenuRegistry,
   ServiceCollection,
   StorageScope,
+  getInvocationModifiers,
   type IDisposable,
+  type IInvocationModifiers,
   type IQuickAccessProviderRunOptions,
   type IKeyMods,
   type IQuickInputButton,
@@ -77,8 +79,12 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidAccept.fire(items)
   }
 
-  fireItemButton(button: IQuickPickItemButton, item: T): void {
-    this._onDidTriggerItemButton.fire({ button, item, keyMods: { ctrl: false, alt: false } })
+  fireItemButton(
+    button: IQuickPickItemButton,
+    item: T,
+    keyMods: IKeyMods = { ctrl: false, alt: false },
+  ): void {
+    this._onDidTriggerItemButton.fire({ button, item, keyMods })
   }
 
   show(): void {}
@@ -117,8 +123,11 @@ class FakeStorageService implements IStorageService {
 class FakeCommandService implements Partial<ICommandService> {
   declare readonly _serviceBrand: undefined
   readonly executed: { id: string; args: unknown[] }[] = []
+  /** Ambient click/keyboard modifiers seen by each handler, in run order. */
+  readonly modifiers: (IInvocationModifiers | undefined)[] = []
   async executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined> {
     this.executed.push({ id, args })
+    this.modifiers.push(getInvocationModifiers())
     return undefined
   }
 }
@@ -312,5 +321,66 @@ describe('CommandsQuickAccessProvider MRU', () => {
     expect(picker.mruIds).toEqual(['cmd.a'])
     expect(picker.items.some((i) => !('type' in i) && i.id === 'cmd.b')).toBe(false)
     expect(itemOf(picker, 'cmd.a').buttons!.find((b) => b.iconId === 'x')?.role).toBe('remove')
+  })
+})
+
+describe('CommandsQuickAccessProvider open target', () => {
+  const menuDisposables: IDisposable[] = []
+  const runDisposables: IDisposable[] = []
+
+  beforeEach(() => {
+    menuDisposables.push(
+      MenuRegistry.addMenuItem(MenuId.CommandPalette, { command: 'cmd.a', title: 'Alpha' }),
+    )
+  })
+
+  afterEach(() => {
+    while (menuDisposables.length > 0) menuDisposables.pop()?.dispose()
+    while (runDisposables.length > 0) runDisposables.pop()?.dispose()
+  })
+
+  async function acceptWith(keyMods: IKeyMods): Promise<FakeCommandService> {
+    const { provider, commands } = setup(new FakeStorageService())
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    provider.provide(picker, runOptions(runDisposables))
+    picker.keyMods = keyMods
+    picker.fireAccept([{ id: 'cmd.a', label: 'Alpha' }])
+    // Reset like the real service does once the panel closes: the run must use
+    // the snapshot taken at accept time.
+    picker.keyMods = { ctrl: false, alt: false }
+    await Promise.resolve()
+    return commands
+  }
+
+  it('runs the command under Ctrl for Ctrl+Enter (open to the side)', async () => {
+    const commands = await acceptWith({ ctrl: true, alt: false })
+    expect(commands.executed.map((e) => e.id)).toEqual(['cmd.a'])
+    expect(commands.modifiers[0]).toMatchObject({ ctrlKey: true, altKey: false })
+  })
+
+  it('runs the command under Alt for Alt+Enter (open in a new window)', async () => {
+    const commands = await acceptWith({ ctrl: false, alt: true })
+    expect(commands.modifiers[0]).toMatchObject({ ctrlKey: false, altKey: true })
+  })
+
+  it('plain Enter carries no modifier', async () => {
+    const commands = await acceptWith({ ctrl: false, alt: false })
+    expect(commands.modifiers).toEqual([undefined])
+    expect(getInvocationModifiers()).toBeUndefined()
+  })
+
+  it('Ctrl+click on the gear opens the keybindings editor under Ctrl', async () => {
+    const { provider, commands } = setup(new FakeStorageService())
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    provider.provide(picker, runOptions(runDisposables))
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const alpha = itemOf(picker, 'cmd.a')
+    picker.fireItemButton(alpha.buttons![0]!, alpha, { ctrl: true, alt: false })
+    await Promise.resolve()
+
+    expect(commands.executed.map((e) => e.id)).toEqual(['workbench.action.openGlobalKeybindings'])
+    expect(commands.modifiers[0]).toMatchObject({ ctrlKey: true })
   })
 })

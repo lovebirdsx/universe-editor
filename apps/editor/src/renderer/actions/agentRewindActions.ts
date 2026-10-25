@@ -22,8 +22,6 @@
 import {
   Action2,
   IDialogService,
-  IEditorService,
-  IInstantiationService,
   INotificationService,
   MenuId,
   Severity,
@@ -38,9 +36,10 @@ import {
   type RewindFilesResult,
 } from '../services/acp/session/acpSessionService.js'
 import { isSessionWorking } from '../services/acp/session/acpSessionStatus.js'
-import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { ACP_CHAT_CARD_GROUP, CATEGORY } from './_agentShared.js'
+import { createdSessionOpenServicesFrom, openCreatedSession } from './agentSessionActions.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
 
 interface RewindForkArg {
   readonly sessionId?: unknown
@@ -206,8 +205,8 @@ export class ForkAgentSessionAction extends Action2 {
   override async run(accessor: ServicesAccessor, arg?: RewindForkArg): Promise<void> {
     const sessions = accessor.get(IAcpSessionService)
     const notification = accessor.get(INotificationService)
-    const editor = accessor.get(IEditorService)
-    const inst = accessor.get(IInstantiationService)
+    const open = createdSessionOpenServicesFrom(accessor)
+    const openTarget = invocationOpenTarget()
 
     // The arg carries an explicit target (per-message hover button, timeline-end
     // footer); a bare invocation (command palette) forks the active session.
@@ -258,9 +257,7 @@ export class ForkAgentSessionAction extends Action2 {
       return
     }
 
-    editor.openEditor(
-      inst.createInstance(AcpSessionEditorInput, forked.id, forked.agentId, undefined),
-    )
+    await openCreatedSession(open, forked, openTarget)
   }
 }
 

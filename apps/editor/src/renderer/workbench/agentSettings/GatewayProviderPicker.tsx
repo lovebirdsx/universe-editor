@@ -17,6 +17,7 @@ import {
   localize,
   type AiResolvedProvider,
   type AiWireProtocol,
+  runWithInvocationModifiers,
 } from '@universe-editor/platform'
 import { Button, Select, Spinner } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
@@ -151,7 +152,9 @@ export function GatewayProviderPicker({
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => void commands.executeCommand(ManageModelsAction.ID)}
+          onClick={(e) =>
+            void runWithInvocationModifiers(e, () => commands.executeCommand(ManageModelsAction.ID))
+          }
         >
           {localize('agentSettings.auth.provider.add', 'Add a provider…')}
         </Button>
@@ -172,7 +175,9 @@ export function GatewayProviderPicker({
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => void commands.executeCommand(ManageModelsAction.ID)}
+          onClick={(e) =>
+            void runWithInvocationModifiers(e, () => commands.executeCommand(ManageModelsAction.ID))
+          }
         >
           {localize('agentSettings.auth.provider.configure', 'Open AI settings…')}
         </Button>

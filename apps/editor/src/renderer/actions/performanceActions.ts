@@ -3,15 +3,14 @@
  *  Developer actions for performance diagnostics.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  Action2,
-  IEditorGroupsService,
-  localize2,
-  type ServicesAccessor,
-} from '@universe-editor/platform'
+import { Action2, localize2, type ServicesAccessor } from '@universe-editor/platform'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
 import { InteractionPerformanceInput } from '../services/editor/InteractionPerformanceInput.js'
-import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import {
+  openPinnedSingletonEditor,
+  openTargetServicesFrom,
+} from '../services/editor/openWithTarget.js'
 
 export class ShowStartupPerformanceAction extends Action2 {
   static readonly ID = 'workbench.action.showStartupPerformance'
@@ -25,11 +24,12 @@ export class ShowStartupPerformanceAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    openInLockAwareGroup(accessor.get(IEditorGroupsService), new StartupPerformanceInput(), {
-      activate: true,
-      pinned: true,
-    })
+  override run(accessor: ServicesAccessor): Promise<boolean> {
+    return openPinnedSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      () => new StartupPerformanceInput(),
+    )
   }
 }
 
@@ -45,10 +45,11 @@ export class ShowInteractionPerformanceAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    openInLockAwareGroup(accessor.get(IEditorGroupsService), new InteractionPerformanceInput(), {
-      activate: true,
-      pinned: true,
-    })
+  override run(accessor: ServicesAccessor): Promise<boolean> {
+    return openPinnedSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      () => new InteractionPerformanceInput(),
+    )
   }
 }

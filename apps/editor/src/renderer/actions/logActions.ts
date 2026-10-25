@@ -22,11 +22,19 @@ import {
   localize,
   localize2,
   type IQuickPickItem,
+  type EditorInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/services.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
+import { invocationOpenTarget, type OpenTarget } from '../services/editor/openTarget.js'
+import {
+  openTargetServicesFrom,
+  openUriEditor,
+  type OpenTargetServices,
+} from '../services/editor/openWithTarget.js'
 import { OUTPUT_VIEW_ID, revealOutputPanel } from '../services/output/revealOutputPanel.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { sortOutputChannelNames } from '../services/output/outputChannelSort.js'
@@ -261,25 +269,14 @@ export class OpenActiveLogFileAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const logFilesService = accessor.get(ILogFilesService)
+    const services = logEditorServices(accessor)
     const outputService = accessor.get(IOutputService)
-    const groups = accessor.get(IEditorGroupsService)
-    const instantiation = accessor.get(IInstantiationService)
-    const uriIdentity = accessor.get(IUriIdentityService)
-    const windowFocus = accessor.get(IWindowFocusService)
     const currentName = activeLogChannelName(outputService)
     if (!currentName) return
-    const descriptors = await logFilesService.listLogFiles()
+    const descriptors = await services.logFiles.listLogFiles()
     const descriptor = descriptors.find((candidate) => candidate.name === currentName)
     if (!descriptor) return
-    await openLogDescriptorInEditor(
-      logFilesService,
-      groups,
-      instantiation,
-      uriIdentity,
-      windowFocus,
-      descriptor,
-    )
+    await openLogDescriptorInEditor(services, descriptor)
   }
 }
 
@@ -296,13 +293,9 @@ export class OpenLogFileAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const logFilesService = accessor.get(ILogFilesService)
+    const services = logEditorServices(accessor)
     const quickInputService = accessor.get(IQuickInputService)
-    const groups = accessor.get(IEditorGroupsService)
-    const instantiation = accessor.get(IInstantiationService)
-    const uriIdentity = accessor.get(IUriIdentityService)
-    const windowFocus = accessor.get(IWindowFocusService)
-    const descriptors = await logFilesService.listLogFiles()
+    const descriptors = await services.logFiles.listLogFiles()
     if (descriptors.length === 0) return
     const descriptor = await pickLogFileDescriptor(
       descriptors,
@@ -311,40 +304,56 @@ export class OpenLogFileAction extends Action2 {
       localize('quickInput.openLogFile.placeholder', 'Select a log file to open in the editor'),
     )
     if (!descriptor) return
-    await openLogDescriptorInEditor(
-      logFilesService,
-      groups,
-      instantiation,
-      uriIdentity,
-      windowFocus,
-      descriptor,
-    )
+    await openLogDescriptorInEditor(services, descriptor)
+  }
+}
+
+interface LogEditorServices {
+  readonly logFiles: ILogFilesService
+  readonly groups: IEditorGroupsService
+  readonly instantiation: IInstantiationService
+  readonly uriIdentity: IUriIdentityService
+  readonly windowFocus: IWindowFocusService
+  readonly targets: OpenTargetServices
+  /** Read while the command is still synchronous (before the picker/IPC awaits). */
+  readonly target: OpenTarget
+}
+
+function logEditorServices(accessor: ServicesAccessor): LogEditorServices {
+  return {
+    logFiles: accessor.get(ILogFilesService),
+    groups: accessor.get(IEditorGroupsService),
+    instantiation: accessor.get(IInstantiationService),
+    uriIdentity: accessor.get(IUriIdentityService),
+    windowFocus: accessor.get(IWindowFocusService),
+    targets: openTargetServicesFrom(accessor),
+    target: invocationOpenTarget(),
   }
 }
 
 async function openLogDescriptorInEditor(
-  logFilesService: ILogFilesService,
-  groups: IEditorGroupsService,
-  instantiation: IInstantiationService,
-  uriIdentity: IUriIdentityService,
-  windowFocus: IWindowFocusService,
+  services: LogEditorServices,
   descriptor: LogFileDescriptor,
 ): Promise<void> {
-  const fsPath = await logFilesService.resolveLogPath(descriptor.id)
+  const { groups, instantiation, uriIdentity, windowFocus } = services
+  const fsPath = await services.logFiles.resolveLogPath(descriptor.id)
   const uri = URI.file(fsPath)
+  const createInput = (): FileEditorInput =>
+    instantiation.createInstance(FileEditorInput, uri).markReadonly()
 
-  for (const group of groups.groups) {
-    for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
-        groups.activateGroup(group)
-        group.setActive(editor)
-        windowFocus.focusGroup(group)
-        return
+  await openUriEditor(
+    services.targets,
+    services.target,
+    uri,
+    () => {
+      const isOpen = (e: EditorInput): boolean =>
+        e instanceof FileEditorInput && uriIdentity.isEqual(e.resource, uri)
+      if (!revealEditorInGroups(groups, isOpen, windowFocus)) {
+        openInLockAwareGroup(groups, createInput(), { activate: true, pinned: true })
       }
-    }
-  }
-  const input = instantiation.createInstance(FileEditorInput, uri).markReadonly()
-  openInLockAwareGroup(groups, input, { activate: true, pinned: true })
+    },
+    { createInput, pinned: true },
+  )
 }
 
 export class ClearOutputAction extends Action2 {

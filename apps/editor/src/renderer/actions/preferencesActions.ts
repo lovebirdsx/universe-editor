@@ -23,6 +23,7 @@ import {
   localize,
   localize2,
   type IQuickPickItem,
+  type EditorInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import {
@@ -39,8 +40,13 @@ import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
-import { invocationOpenTarget } from '../services/editor/openTarget.js'
-import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
+import { invocationOpenTarget, type OpenTarget } from '../services/editor/openTarget.js'
+import {
+  openSingletonEditor,
+  openTargetServicesFrom,
+  openUriEditor,
+  type OpenTargetServices,
+} from '../services/editor/openWithTarget.js'
 import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import {
@@ -65,19 +71,24 @@ const UPDATE_CONFIG_JSON_TEMPLATE = `// Deployment config for auto-update (packa
 {}
 `
 
+interface UserDataFileServices {
+  readonly files: IUserDataFilesService
+  readonly groups: IEditorGroupsService
+  readonly instantiation: IInstantiationService
+  readonly uriIdentity: IUriIdentityService
+  readonly windowFocus: IWindowFocusService
+  readonly targets: OpenTargetServices
+  /** Read while the command is still synchronous (see `invocationOpenTarget`). */
+  readonly target: OpenTarget
+}
+
 async function openUserDataFile(
-  services: {
-    files: IUserDataFilesService
-    groups: IEditorGroupsService
-    instantiation: IInstantiationService
-    uriIdentity: IUriIdentityService
-    windowFocus: IWindowFocusService
-  },
+  services: UserDataFileServices,
   file: UserDataFile,
   template: string,
   options?: { readOnly?: boolean; seedTemplate?: boolean },
 ): Promise<void> {
-  const { files, groups, instantiation, uriIdentity, windowFocus } = services
+  const { files, groups, instantiation, uriIdentity, windowFocus, targets, target } = services
 
   const uri = await files.getFileUri(file)
   if (!uri) return
@@ -92,36 +103,36 @@ async function openUserDataFile(
     }
   }
 
-  // De-dupe: if already open, reactivate.
-  for (const group of groups.groups) {
-    for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
-        groups.activateGroup(group)
-        group.setActive(editor)
-        windowFocus.focusGroup(group)
-        return
-      }
-    }
+  const createInput = (): FileEditorInput => {
+    const input = instantiation.createInstance(FileEditorInput, uri)
+    if (options?.readOnly) input.markReadonly()
+    return input
   }
 
-  const input = instantiation.createInstance(FileEditorInput, uri)
-  if (options?.readOnly) input.markReadonly()
-  openInLockAwareGroup(groups, input)
+  await openUriEditor(
+    targets,
+    target,
+    uri,
+    () => {
+      const isOpen = (e: EditorInput): boolean =>
+        e instanceof FileEditorInput && uriIdentity.isEqual(e.resource, uri)
+      if (!revealEditorInGroups(groups, isOpen, windowFocus)) {
+        openInLockAwareGroup(groups, createInput())
+      }
+    },
+    { createInput },
+  )
 }
 
-function userDataFileServices(accessor: ServicesAccessor): {
-  files: IUserDataFilesService
-  groups: IEditorGroupsService
-  instantiation: IInstantiationService
-  uriIdentity: IUriIdentityService
-  windowFocus: IWindowFocusService
-} {
+function userDataFileServices(accessor: ServicesAccessor): UserDataFileServices {
   return {
     files: accessor.get(IUserDataFilesService),
     groups: accessor.get(IEditorGroupsService),
     instantiation: accessor.get(IInstantiationService),
     uriIdentity: accessor.get(IUriIdentityService),
     windowFocus: accessor.get(IWindowFocusService),
+    targets: openTargetServicesFrom(accessor),
+    target: invocationOpenTarget(),
   }
 }
 
@@ -416,27 +427,30 @@ export class OpenWorkspaceSettingsAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
+  override run(accessor: ServicesAccessor): Promise<boolean> {
     const groups = accessor.get(IEditorGroupsService)
     const windowFocus = accessor.get(IWindowFocusService)
-
-    // If Settings editor already open, activate it and switch to Workspace tab.
-    for (const group of groups.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof SettingsEditorInput) {
-          groups.activateGroup(group)
-          group.setActive(editor)
-          windowFocus.focusGroup(group)
-          dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
-          return
-        }
-      }
+    const createProjectSettings = (): SettingsEditorInput => {
+      const input = new SettingsEditorInput()
+      input.switchTarget(ConfigurationTarget.Project)
+      return input
     }
 
-    const input = new SettingsEditorInput()
-    input.switchTarget(ConfigurationTarget.Project)
-    openInLockAwareGroup(groups, input)
-    dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
+    return openSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      createProjectSettings,
+      () => {
+        // If Settings editor already open, activate it and switch to Workspace tab.
+        if (!revealEditorInGroups(groups, (e) => e instanceof SettingsEditorInput, windowFocus)) {
+          openInLockAwareGroup(groups, createProjectSettings())
+        }
+        dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
+      },
+    ).then((targeted) => {
+      if (targeted) dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
+      return targeted
+    })
   }
 }
 

@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { INotification } from '@universe-editor/platform'
-import { Severity, localize } from '@universe-editor/platform'
+import { Severity, localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { notificationSeverityClass, notificationSeverityIcon } from './severityIcon.js'
 import styles from './NotificationsToast.module.css'
 
@@ -65,7 +65,7 @@ export function NotificationsToast({
                   <button
                     key={action.label}
                     className={styles['actionBtn']}
-                    onClick={() => action.run()}
+                    onClick={(e) => runWithInvocationModifiers(e, () => action.run())}
                     type="button"
                   >
                     {action.label}

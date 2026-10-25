@@ -26,7 +26,11 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { invocationOpenTarget } from '../services/editor/openTarget.js'
-import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
+import {
+  openSingletonEditor,
+  openTargetServicesFrom,
+  openUriEditor,
+} from '../services/editor/openWithTarget.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
@@ -114,13 +118,21 @@ export class OpenAiSettingsJsonAction extends Action2 {
     const userData = accessor.get(IUserDataFilesService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
+    const targets = openTargetServicesFrom(accessor)
+    const target = invocationOpenTarget()
 
     // Materialize the file (seeds defaults when missing) so it opens with content.
     await aiModel.updateProviders(await aiModel.getProviders())
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
-    const input = inst.createInstance(FileEditorInput, uri)
-    openInLockAwareGroup(groups, input, { activate: true })
+    const createInput = (): FileEditorInput => inst.createInstance(FileEditorInput, uri)
+    await openUriEditor(
+      targets,
+      target,
+      uri,
+      () => openInLockAwareGroup(groups, createInput(), { activate: true }),
+      { createInput },
+    )
   }
 }
 

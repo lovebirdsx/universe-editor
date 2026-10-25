@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { INotification } from '@universe-editor/platform'
-import { localize } from '@universe-editor/platform'
+import { localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { notificationSeverityClass, notificationSeverityIcon } from './severityIcon.js'
 import styles from './NotificationsCenter.module.css'
 
@@ -114,7 +114,7 @@ export function NotificationsCenter({
                       <button
                         key={action.label}
                         className={styles['actionBtn']}
-                        onClick={() => action.run()}
+                        onClick={(e) => runWithInvocationModifiers(e, () => action.run())}
                         type="button"
                       >
                         {action.label}

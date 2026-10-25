@@ -20,7 +20,7 @@
 
 import { Plug } from 'lucide-react'
 import type { HTMLAttributes } from 'react'
-import { localize, ICommandService } from '@universe-editor/platform'
+import { localize, ICommandService, runWithInvocationModifiers } from '@universe-editor/platform'
 import { AnchoredSurface, useOverlayListNavigation } from '@universe-editor/workbench-ui'
 import { useObservable, useOptionalService } from '../useService.js'
 import {
@@ -395,9 +395,11 @@ function McpPickerPanelInner({
         <button
           type="button"
           data-testid="acp-mcp-picker-open-settings"
-          onClick={() => {
+          onClick={(e) => {
             onRequestClose?.()
-            void commands?.executeCommand('workbench.action.agent.openMcpSettings')
+            void runWithInvocationModifiers(e, () =>
+              commands?.executeCommand('workbench.action.agent.openMcpSettings'),
+            )
           }}
         >
           {localize('acp.mcp.picker.openSettings', 'Configure MCP servers…')}

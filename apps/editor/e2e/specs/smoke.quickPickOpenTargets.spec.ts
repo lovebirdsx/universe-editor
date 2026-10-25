@@ -1,6 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Quick pick open targets: Ctrl+Enter opens to the side, Alt+Enter opens in a
- *  new auxiliary editor window (@p1).
+ *  new auxiliary editor window (@p1). Covers file picks, session picks and the
+ *  command palette (an editor-opening command honours the accept modifiers).
  *
  *  Geometry (which display / fullscreen) is covered by the main-process unit
  *  tests; a CI box usually has one display, so the appearance assertions here
@@ -60,7 +61,75 @@ async function openResumePicker(page: Page, workbench: WorkbenchPO): Promise<voi
   await expect(workbench.quickInput.dialog.getByRole('option').first()).toBeVisible()
 }
 
+const STARTUP_PERF_URI = 'startup-performance:/'
+
+async function runFromPalette(page: Page, workbench: WorkbenchPO, keys: string): Promise<void> {
+  await page.evaluate(() => {
+    void window.__E2E__!.runCommand('workbench.action.showCommands')
+  })
+  await workbench.quickInput.waitForVisible()
+  await workbench.quickInput.input.fill('>Startup Performance')
+  await expect(
+    workbench.quickInput.dialog.getByRole('option', { name: /Startup Performance/ }).first(),
+  ).toBeVisible()
+  await page.keyboard.press(keys)
+  await workbench.quickInput.waitForHidden()
+}
+
 test.describe('@p1 quick pick open targets', () => {
+  test.describe('command palette', () => {
+    test('Ctrl+Enter opens the page to the side, again moves it instead of copying', async ({
+      page,
+      workbench,
+    }) => {
+      await workbench.waitForRestored()
+      await expect.poll(() => workbench.getEditorGroupCount()).toBe(1)
+
+      await runFromPalette(page, workbench, 'Control+Enter')
+
+      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 10_000 }).toBe(2)
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            window.__E2E__!.getEditorGroupEditorUris(String(window.__E2E__!.getActiveGroupId())),
+          ),
+        )
+        .toContain(STARTUP_PERF_URI)
+
+      await runFromPalette(page, workbench, 'Control+Enter')
+
+      await expect
+        .poll(async () =>
+          (await editorUrisInWindow(page, true)).filter((uri) => uri === STARTUP_PERF_URI),
+        )
+        .toHaveLength(1)
+      expect(await workbench.getEditorGroupCount()).toBe(2)
+    })
+
+    test('Alt+Enter opens the page in an auxiliary window', async ({ page, workbench }) => {
+      await workbench.waitForRestored()
+
+      await runFromPalette(page, workbench, 'Alt+Enter')
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAuxiliaryWindows().length), {
+          timeout: 10_000,
+        })
+        .toBe(1)
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            window
+              .__E2E__!.getAuxiliaryWindows()[0]!
+              .groups.flatMap((g) => g.editorUris)
+              .join('|'),
+          ),
+        )
+        .toContain(STARTUP_PERF_URI)
+      expect(await editorUrisInWindow(page, true)).not.toContain(STARTUP_PERF_URI)
+    })
+  })
+
   test.describe('file pick', () => {
     test.use({
       workspaceSeeder: {

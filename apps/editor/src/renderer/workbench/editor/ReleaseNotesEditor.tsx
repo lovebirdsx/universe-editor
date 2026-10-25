@@ -130,6 +130,8 @@ function NoteBody({ markdown, version }: { readonly markdown: string; readonly v
           void opener.open(`command:${target.commandId}`, {
             allowCommands: [target.commandId],
             fromUserGesture: true,
+            ...(openTarget === 'side' ? { openToSide: true } : {}),
+            ...(openTarget === 'newWindow' ? { openInNewWindow: true } : {}),
           })
           return true
         case 'external':

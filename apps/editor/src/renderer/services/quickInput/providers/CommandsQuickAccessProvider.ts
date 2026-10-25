@@ -17,6 +17,9 @@ import {
   localize,
   MenuId,
   MenuRegistry,
+  runWithInvocationModifiers,
+  type IInvocationModifiers,
+  type IKeyMods,
   type IQuickAccessProvider,
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
@@ -45,6 +48,11 @@ const CLOSE_BUTTON: IQuickPickItemButton = {
   iconId: 'x',
   tooltip: localize('commandPalette.removeFromRecentlyUsed', 'Remove from Recently Used'),
   role: 'remove',
+}
+
+// No modifier held = no gesture, matching a plain executeCommand.
+function toInvocationModifiers(mods: IKeyMods | undefined): IInvocationModifiers | undefined {
+  return mods && (mods.ctrl || mods.alt) ? { ctrlKey: mods.ctrl, altKey: mods.alt } : undefined
 }
 
 export class CommandsQuickAccessProvider implements IQuickAccessProvider {
@@ -128,15 +136,18 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
     applyItems()
 
     _options.disposables.add(
-      picker.onDidTriggerItemButton(({ button, item }) => {
+      picker.onDidTriggerItemButton(({ button, item, keyMods }) => {
         if (button === GEAR_BUTTON) {
+          const mods = toInvocationModifiers(keyMods)
           picker.hide()
           // Same deferral as the accept path below: let hide's synchronous tail
           // (service teardown) finish before opening the keybindings editor.
           queueMicrotask(() => {
-            void this._commands.executeCommand('workbench.action.openGlobalKeybindings', {
-              query: `@command:${item.id}`,
-            })
+            void runWithInvocationModifiers(mods, () =>
+              this._commands.executeCommand('workbench.action.openGlobalKeybindings', {
+                query: `@command:${item.id}`,
+              }),
+            )
           })
           return
         }
@@ -153,6 +164,9 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
     _options.disposables.add(
       picker.onDidAccept((items) => {
         const selected = items[0]
+        // Snapshot before hide/microtask: Ctrl/Alt+Enter steer where an
+        // editor-opening command lands (side group / new window).
+        const mods = toInvocationModifiers(picker.keyMods)
         picker.hide()
         if (!selected) return
         mruIds = [selected.id, ...mruIds.filter((x) => x !== selected.id)].slice(0, MRU_LIMIT)
@@ -165,7 +179,7 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
           if (isMonacoCommandItem(selected)) {
             void selected._editor.getAction(selected._actionId)?.run()
           } else {
-            void this._commands.executeCommand(selected.id)
+            void runWithInvocationModifiers(mods, () => this._commands.executeCommand(selected.id))
           }
         })
       }),

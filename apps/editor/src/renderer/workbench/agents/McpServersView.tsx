@@ -8,7 +8,7 @@
  *  or no MCP servers are involved; offers a shortcut to the settings.
  *--------------------------------------------------------------------------------------------*/
 
-import { ICommandService, localize } from '@universe-editor/platform'
+import { ICommandService, localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -89,7 +89,11 @@ function McpEmpty({ hint }: { hint: string }) {
       <button
         type="button"
         className={styles['sessionRetryButton']}
-        onClick={() => void commands.executeCommand('workbench.action.agent.openMcpSettings')}
+        onClick={(e) =>
+          void runWithInvocationModifiers(e, () =>
+            commands.executeCommand('workbench.action.agent.openMcpSettings'),
+          )
+        }
       >
         {localize('acp.mcp.openSettings', 'Configure MCP servers')}
       </button>

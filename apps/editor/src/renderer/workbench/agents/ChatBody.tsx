@@ -37,6 +37,8 @@ import {
   ICommandService,
   IContextKeyService,
   localize,
+  runWithInvocationModifiers,
+  type IInvocationModifiers,
 } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable, useService } from '../useService.js'
 import {
@@ -2044,8 +2046,8 @@ function ChatScroll({
 function EmptySessionHint() {
   const executeCommand = useExecuteCommand()
 
-  const run = (commandId: string): void => {
-    void executeCommand(commandId)
+  const run = (commandId: string, e: IInvocationModifiers): void => {
+    void runWithInvocationModifiers(e, () => executeCommand(commandId))
   }
 
   return (
@@ -2069,7 +2071,7 @@ function EmptySessionHint() {
           <button
             type="button"
             className={styles['emptyHintButton']}
-            onClick={() => run('workbench.action.agent.newSession')}
+            onClick={(e) => run('workbench.action.agent.newSession', e)}
           >
             <Plus size={14} strokeWidth={1.75} className={styles['emptyHintIcon']} />
             <span>{localize('acp.emptySession.newSession', 'New session')}</span>
@@ -2077,7 +2079,7 @@ function EmptySessionHint() {
           <button
             type="button"
             className={styles['emptyHintButton']}
-            onClick={() => run('workbench.action.agent.resumeSession')}
+            onClick={(e) => run('workbench.action.agent.resumeSession', e)}
           >
             <History size={14} strokeWidth={1.75} className={styles['emptyHintIcon']} />
             <span>{localize('acp.emptySession.resumeSession', 'Resume previous')}</span>
@@ -2085,7 +2087,7 @@ function EmptySessionHint() {
           <button
             type="button"
             className={styles['emptyHintButton']}
-            onClick={() => run('workbench.action.agent.selectAgent')}
+            onClick={(e) => run('workbench.action.agent.selectAgent', e)}
           >
             <Bot size={14} strokeWidth={1.75} className={styles['emptyHintIcon']} />
             <span>{localize('acp.emptySession.chooseAgent', 'Choose agent')}</span>

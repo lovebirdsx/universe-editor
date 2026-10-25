@@ -16,6 +16,7 @@ import {
   IUriIdentityService,
   REMOTE_SCHEME,
   localize,
+  runWithInvocationModifiers,
 } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
@@ -272,7 +273,11 @@ function AcpSessionResumer({
           <button
             type="button"
             className={styles['sessionRetryButton']}
-            onClick={() => void commands.executeCommand('workbench.action.agent.openSettings')}
+            onClick={(e) =>
+              void runWithInvocationModifiers(e, () =>
+                commands.executeCommand('workbench.action.agent.openSettings'),
+              )
+            }
             data-testid="acp-session-open-auth"
           >
             <KeyRound size={14} strokeWidth={1.75} aria-hidden="true" />

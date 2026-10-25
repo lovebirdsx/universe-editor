@@ -9,7 +9,7 @@
 
 import { memo, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, GitBranch, RotateCcw, Undo2 } from 'lucide-react'
-import { localize } from '@universe-editor/platform'
+import { localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { getOwnerResizeObserver } from '@universe-editor/workbench-ui'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
@@ -181,7 +181,9 @@ function UserMessageActions({ session, messageId }: { session: IAcpSession; mess
           className={styles['userMessageAction']}
           data-tooltip={localize('acp.userMessage.fork', 'Fork from here')}
           aria-label={localize('acp.userMessage.fork', 'Fork from here')}
-          onClick={() => void executeCommand(ForkAgentSessionAction.ID, arg)}
+          onClick={(e) =>
+            void runWithInvocationModifiers(e, () => executeCommand(ForkAgentSessionAction.ID, arg))
+          }
           data-testid="acp-user-message-fork"
         >
           <GitBranch size={13} strokeWidth={1.75} />

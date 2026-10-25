@@ -44,6 +44,7 @@ import {
   StorageScope,
   localize,
   type IEditorInput,
+  runWithInvocationModifiers,
 } from '@universe-editor/platform'
 import { Globe, History, RefreshCw } from 'lucide-react'
 import {
@@ -1869,7 +1870,11 @@ export function PerforceGraphEditor({ input }: { input: IEditorInput }) {
         <button
           type="button"
           className={styles['toolIconBtn']}
-          onClick={() => void commands.executeCommand(ViewPerforceSyncHistoryAction.ID)}
+          onClick={(e) =>
+            void runWithInvocationModifiers(e, () =>
+              commands.executeCommand(ViewPerforceSyncHistoryAction.ID),
+            )
+          }
           data-tooltip={localize('perforceGraph.syncHistory', 'Sync History')}
           aria-label={localize('perforceGraph.syncHistory', 'Sync History')}
           data-testid="perforceGraph-openSyncHistory"

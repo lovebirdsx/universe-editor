@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { IconButton } from '@universe-editor/workbench-ui'
-import { ICommandService, localize } from '@universe-editor/platform'
+import { ICommandService, localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { Plus } from 'lucide-react'
 import { useObservable, useService } from '../useService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
@@ -23,7 +23,11 @@ export function AgentSessionButtons() {
       <IconButton
         label={localize('acp.newSession', 'New session')}
         command="workbench.action.agent.newSession"
-        onClick={() => void commands.executeCommand('workbench.action.agent.newSession')}
+        onClick={(e) =>
+          void runWithInvocationModifiers(e, () =>
+            commands.executeCommand('workbench.action.agent.newSession'),
+          )
+        }
         data-testid="titlebar-new-session"
       >
         <Plus size={14} strokeWidth={1.75} />

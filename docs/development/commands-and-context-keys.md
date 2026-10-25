@@ -28,10 +28,10 @@ f1: false,
 
 参考 `apps/editor/src/renderer/actions/_agentShared.ts` 里两个常量的分工：
 
-| 常量 | 表达式 | 用途 |
-|---|---|---|
-| `ACP_EDITOR_ONLY_WHEN` | `editorAreaFocus && activeEditorTypeId == 'acp.session'` | keybinding：焦点在别处（panel / terminal）时按键不该打到身后的会话编辑器 |
-| `ACP_SESSION_EDITOR_ACTIVE_WHEN` | `activeEditorTypeId == 'acp.session'` | 菜单/面板行：只关心前台编辑器是谁 |
+| 常量                             | 表达式                                                   | 用途                                                                     |
+| -------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `ACP_EDITOR_ONLY_WHEN`           | `editorAreaFocus && activeEditorTypeId == 'acp.session'` | keybinding：焦点在别处（panel / terminal）时按键不该打到身后的会话编辑器 |
+| `ACP_SESSION_EDITOR_ACTIVE_WHEN` | `activeEditorTypeId == 'acp.session'`                    | 菜单/面板行：只关心前台编辑器是谁                                        |
 
 ## 快捷键解析：weight 优先、when 只过滤
 
@@ -81,9 +81,9 @@ f1: false,
 
 ## 点击修饰键（调用手势）
 
-状态栏 / 标题栏按钮 / 右键菜单 / 菜单栏这些通用入口只会 `executeCommand(id, 固定参数)`，不知道命令签名，所以点击的 Ctrl/Alt 以**环境值**传递：点击处用 platform 的 `runWithInvocationModifiers(e, () => executeCommand(...))` 包一层（目前接入：`StatusBar`、`ViewTitleActions`、SCM `ActionButton` 与标题栏溢出菜单、`TitleBarDropdown`、`TimelineView` 行内图谱按钮、workbench-ui 菜单行；新增的点击入口要自己包），命令里用 `invocationOpenTarget()`（`apps/editor/src/renderer/services/editor/openTarget.ts`）读出落点。
+状态栏 / 标题栏按钮 / 右键菜单 / 菜单栏这些通用入口只会 `executeCommand(id, 固定参数)`，不知道命令签名，所以点击的 Ctrl/Alt 以**环境值**传递：点击处用 platform 的 `runWithInvocationModifiers(e, () => executeCommand(...))` 包一层（目前接入：`StatusBar`、`ViewTitleActions`、SCM `ActionButton` 与标题栏溢出菜单、`TitleBarDropdown`、`TimelineView` 行内图谱按钮、workbench-ui 菜单行与通知按钮、页面内直接 `executeCommand` 的打开按钮；命令面板把 accept 时的 `picker.keyMods` 换成环境值，`command:` 链接由 `CommandOpener` 把 `openToSide` / `openInNewWindow` 换成 Ctrl / Alt；新增的点击入口要自己包），命令里用 `invocationOpenTarget()`（`apps/editor/src/renderer/services/editor/openTarget.ts`）读出落点。
 
-**与 accessor 同一条寿命**：只在 handler 同步段有效（`CommandService` 同步调用 handler），首个 `await` 前必须读完；也**不跨扩展宿主 RPC**——经扩展转发的命令改走显式 `{ openTarget }` 尾参数约定。打开单例编辑器统一走 `openWithTarget.ts` 的 `openSingletonEditor`（已开的移动、不复制）。直接拿得到事件的组件（如 `ResourcePreviewButton`）不必绕环境值，`resolveOpenTarget(e)` 即可。
+**与 accessor 同一条寿命**：只在 handler 同步段有效（`CommandService` 同步调用 handler），首个 `await` 前必须读完；也**不跨扩展宿主 RPC**——经扩展转发的命令改走显式 `{ openTarget }` 尾参数约定。打开单例编辑器统一走 `openWithTarget.ts` 的 `openSingletonEditor`（已开的移动、不复制；只需 pinned 打开的用 `openPinnedSingletonEditor`），文件类（settings.json、日志等）走 `openUriEditor`（落点打开副本，需定制 input 如只读时传 `createInput`）；两者在 `default` 或落点失败时回退调用方给的原有打开逻辑。直接拿得到事件的组件（如 `ResourcePreviewButton`）不必绕环境值，`resolveOpenTarget(e)` 即可。
 
 ## 扩展命令与 renderer Action2 的同名遮蔽
 
@@ -103,11 +103,11 @@ f1: false,
 
 命令可见性分三层，**不要混用**：
 
-| 层 | 作用 | 手段 |
-|---|---|---|
-| 引擎注册 | 命令能否被执行 | `contributes.commands` 在 renderer 注册 bootstrap proxy（宿主查不到 handler 也**不**从前端隐藏，执行时才由宿主 reject） |
+| 层       | 作用                   | 手段                                                                                                                                                                         |
+| -------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 引擎注册 | 命令能否被执行         | `contributes.commands` 在 renderer 注册 bootstrap proxy（宿主查不到 handler 也**不**从前端隐藏，执行时才由宿主 reject）                                                      |
 | 面板可见 | 命令是否出现在命令面板 | `contributes.menus.commandPalette` 的 `when`（**显式条目**才会取代翻译期的隐式无 `when` 条目）。本仓没有实现 VSCode 的 `commands[].enablement`，面板里唯一能收窄的旋钮就是它 |
-| 快捷键 | 何时触发 | `contributes.keybindings` 的 `when` |
+| 快捷键   | 何时触发               | `contributes.keybindings` 的 `when`                                                                                                                                          |
 
 「这个命令在本窗口无意义」要落在**第二层**（隐藏），只在第一层拦是拦不住的——面板照列、点了报错。反例与完整叙事见 `extensions/perforce/CLAUDE.md` 的可见性红线。
 
