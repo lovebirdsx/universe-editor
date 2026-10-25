@@ -19,7 +19,8 @@ import type {
 import {
   openExistingInputWithTarget,
   openFreshInputWithTarget,
-  openPreviewWithTarget,
+  openSingletonEditor,
+  openSingletonWithTarget,
   openUriWithTarget,
   type OpenTargetServices,
 } from '../openWithTarget.js'
@@ -584,7 +585,7 @@ describe('openUriWithTarget', () => {
   })
 })
 
-describe('openPreviewWithTarget', () => {
+describe('openSingletonWithTarget', () => {
   it('moves an already-open preview into a new window instead of copying it', async () => {
     const registration = EditorRegistry.registerEditorProvider({
       typeId: CloneableEditor.TYPE_ID,
@@ -598,7 +599,7 @@ describe('openPreviewWithTarget', () => {
     groups.activeGroup.openEditor(preview)
     const createInput = vi.fn(() => new CloneableEditor('doc', 'preview:doc'))
 
-    const result = await openPreviewWithTarget(
+    const result = await openSingletonWithTarget(
       makeServices(groups, aux),
       'newWindow',
       'preview:doc',
@@ -616,7 +617,7 @@ describe('openPreviewWithTarget', () => {
     const preview = new CloneableEditor('doc', 'preview:doc')
     const createInput = vi.fn(() => preview)
 
-    const result = await openPreviewWithTarget(
+    const result = await openSingletonWithTarget(
       makeServices(groups, aux),
       'side',
       'preview:doc',
@@ -634,7 +635,7 @@ describe('openPreviewWithTarget', () => {
     aux.failModes.add('open')
     const preview = new TrackedEditor(URI.file('X:/preview.md'))
 
-    const result = await openPreviewWithTarget(
+    const result = await openSingletonWithTarget(
       makeServices(groups, aux),
       'newWindow',
       'preview:doc',
@@ -643,5 +644,83 @@ describe('openPreviewWithTarget', () => {
 
     expect(result.handled).toBe(false)
     expect(preview.disposeCount).toBe(1)
+  })
+})
+
+describe('openSingletonEditor', () => {
+  it('runs the default path for a plain click without building an input', async () => {
+    const groups = makeGroups()
+    const create = vi.fn(() => new TrackedEditor())
+    const openDefault = vi.fn()
+
+    const targeted = await openSingletonEditor(
+      makeServices(groups, new FakeAuxiliaryEditorWindowService(groups)),
+      'default',
+      create,
+      openDefault,
+    )
+
+    expect(targeted).toBe(false)
+    expect(openDefault).toHaveBeenCalledOnce()
+    expect(create).not.toHaveBeenCalled()
+  })
+
+  it('opens a fresh instance to the side when none is open', async () => {
+    const groups = makeGroups()
+    const source = groups.activeGroup
+    const openDefault = vi.fn()
+
+    const targeted = await openSingletonEditor(
+      makeServices(groups, new FakeAuxiliaryEditorWindowService(groups)),
+      'side',
+      () => new TrackedEditor(URI.file('X:/graph')),
+      openDefault,
+    )
+
+    expect(targeted).toBe(true)
+    expect(openDefault).not.toHaveBeenCalled()
+    expect(groups.groups).toHaveLength(2)
+    expect(groups.activeGroup).not.toBe(source)
+    expect(groups.activeGroup.editors.map((e) => e.resource?.path)).toEqual(['/X:/graph'])
+  })
+
+  it('moves the open instance to the side and disposes the unused probe', async () => {
+    const groups = makeGroups()
+    const source = groups.activeGroup
+    const open = new TrackedEditor(URI.file('X:/graph'))
+    source.openEditor(open)
+    const probe = new TrackedEditor(URI.file('X:/graph'))
+
+    const targeted = await openSingletonEditor(
+      makeServices(groups, new FakeAuxiliaryEditorWindowService(groups)),
+      'side',
+      () => probe,
+      vi.fn(),
+    )
+
+    expect(targeted).toBe(true)
+    expect(source.contains(open)).toBe(false)
+    expect(groups.activeGroup.contains(open)).toBe(true)
+    expect(open.disposeCount).toBe(0)
+    expect(probe.disposeCount).toBe(1)
+  })
+
+  it('falls back to the default path when the new window fails', async () => {
+    const groups = makeGroups()
+    const aux = new FakeAuxiliaryEditorWindowService(groups)
+    aux.failModes.add('open')
+    const probe = new TrackedEditor(URI.file('X:/graph'))
+    const openDefault = vi.fn()
+
+    const targeted = await openSingletonEditor(
+      makeServices(groups, aux),
+      'newWindow',
+      () => probe,
+      openDefault,
+    )
+
+    expect(targeted).toBe(false)
+    expect(openDefault).toHaveBeenCalledOnce()
+    expect(probe.disposeCount).toBe(1)
   })
 })

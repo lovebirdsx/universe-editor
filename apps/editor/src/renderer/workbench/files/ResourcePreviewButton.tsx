@@ -10,11 +10,11 @@
 
 import { memo } from 'react'
 import { Eye } from 'lucide-react'
-import { IEditorGroupsService, localize, type URI } from '@universe-editor/platform'
+import { IInstantiationService, localize, type URI } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { resolveOpenTarget } from '../../services/editor/openTarget.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
-import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
-import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { openResourcePreview } from '../../services/resourcePreview/openResourcePreview.js'
 import styles from './ResourcePreviewButton.module.css'
 
 const TITLE = localize('resourcePreview.openPreview', 'Open Preview')
@@ -27,8 +27,7 @@ export const ResourcePreviewButton = memo(function ResourcePreviewButton({
   /** Stable hook for e2e / tests; omitted unless a caller needs one. */
   readonly testId?: string
 }) {
-  const groups = useService(IEditorGroupsService)
-  const windowFocus = useService(IWindowFocusService)
+  const inst = useService(IInstantiationService)
   if (previewLanguageForResource(resource) === undefined) return null
   return (
     <button
@@ -39,7 +38,8 @@ export const ResourcePreviewButton = memo(function ResourcePreviewButton({
       {...(testId !== undefined ? { 'data-testid': testId } : {})}
       onClick={(e) => {
         e.stopPropagation()
-        openResourcePreviewInGroup(groups, groups.activeGroup, resource, windowFocus)
+        const target = resolveOpenTarget(e)
+        inst.invokeFunction((accessor) => openResourcePreview(accessor, resource, target))
       }}
     >
       <Eye size={16} strokeWidth={1.6} />

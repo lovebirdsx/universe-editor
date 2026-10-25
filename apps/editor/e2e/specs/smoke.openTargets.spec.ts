@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  @p1 — list rows honour Ctrl/Meta+Enter (side group) and Alt+Enter (auxiliary
  *  window), covering the Explorer and the git diff entry points (SCM + Commit
- *  Changes). The quick-pick variant lives in smoke.quickPickOpenTargets.
+ *  Changes); command buttons honour Ctrl/Alt+click (SCM title Git Graph). The
+ *  quick-pick variant lives in smoke.quickPickOpenTargets.
  *
  *  Files are copied into the side group (the original tab stays); sessions and
  *  previews move instead. These specs assert the copy for plain files and that
@@ -259,6 +260,49 @@ test.describe('@p1 scm open targets', () => {
           ),
         )
         .toBe(true)
+    } finally {
+      await closeApp(app)
+    }
+  })
+
+  test('Ctrl+click on the SCM title Git Graph button opens the graph to the side', async () => {
+    test.setTimeout(120_000)
+    const { app, page } = await launchGitRepo()
+    const graphUri = 'universe:/gitGraph'
+    const graphCount = (): Promise<number> =>
+      page.evaluate(
+        (uri) =>
+          window
+            .__E2E__!.getWorkbenchWindows()
+            .flatMap((w) => w.groupIds)
+            .flatMap((id) => window.__E2E__!.getEditorGroupEditorUris(String(id)))
+            .filter((u) => u === uri).length,
+        graphUri,
+      )
+    try {
+      await page.evaluate(() => window.__E2E__!.runCommand('workbench.view.scm'))
+      const button = page.getByTestId('scm-title-action-git-graph.view').first()
+      await expect(button).toBeVisible({ timeout: 30_000 })
+
+      const beforeGroupId = await page.evaluate(() => window.__E2E__!.getActiveGroupId())
+      await button.click({ modifiers: ['Control'] })
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getEditorGroupCount()), {
+          timeout: 20_000,
+        })
+        .toBe(2)
+      expect(await page.evaluate(() => window.__E2E__!.getActiveGroupId())).not.toBe(beforeGroupId)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 20_000,
+        })
+        .toBe('gitGraph')
+
+      // A plain click reveals the one graph; Ctrl+click again keeps it single too.
+      await button.click()
+      await button.click({ modifiers: ['Control'] })
+      await expect.poll(graphCount, { timeout: 10_000 }).toBe(1)
     } finally {
       await closeApp(app)
     }

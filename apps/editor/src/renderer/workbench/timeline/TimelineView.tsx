@@ -25,6 +25,7 @@ import {
   IEditorService,
   localize,
   MenuId,
+  runWithInvocationModifiers,
   type IScopedContextKeyService,
 } from '@universe-editor/platform'
 import type { ITimelineItemDto } from '@universe-editor/extensions-common'
@@ -432,7 +433,9 @@ export function TimelineView() {
                           // Act on the row under the mouse, so it becomes the selected
                           // one (same as openRowMenu) — without firing runItem's diff.
                           model.setSelection([row.id], row.id)
-                          void commandService.executeCommand(graphTarget.command, item.id)
+                          void runWithInvocationModifiers(e, () =>
+                            commandService.executeCommand(graphTarget.command, item.id),
+                          )
                         }}
                       >
                         <Waypoints size={14} strokeWidth={1.6} />

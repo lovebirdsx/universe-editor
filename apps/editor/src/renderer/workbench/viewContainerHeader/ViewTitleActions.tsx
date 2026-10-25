@@ -11,9 +11,14 @@
  *  sits right where the user clicked.
  *--------------------------------------------------------------------------------------------*/
 
-import { useState } from 'react'
+import { useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { Loader2 } from 'lucide-react'
-import { ICommandService, IContextKeyService, MenuId } from '@universe-editor/platform'
+import {
+  ICommandService,
+  IContextKeyService,
+  MenuId,
+  runWithInvocationModifiers,
+} from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { useViewTitleActions } from './useViewTitleActions.js'
 import { resolveIcon } from '../icons/icon-map.js'
@@ -37,10 +42,9 @@ export function ViewTitleActions({ menuId, contextKeyService, group, actionArg }
   const viewId = contextKeyService.get('view')
   const arg = actionArg ?? viewId
 
-  const runAction = (command: string): void => {
+  const runAction = (command: string, e: ReactMouseEvent): void => {
     setPending((prev) => (prev.has(command) ? prev : new Set(prev).add(command)))
-    void commandService
-      .executeCommand(command, arg)
+    void runWithInvocationModifiers(e, () => commandService.executeCommand(command, arg))
       // CommandService already logs the failure; the button must recover either way.
       .catch(() => undefined)
       .finally(() =>
@@ -67,7 +71,7 @@ export function ViewTitleActions({ menuId, contextKeyService, group, actionArg }
             key={a.command}
             className={styles['actionBtn']}
             disabled={busy}
-            onClick={() => runAction(a.command)}
+            onClick={(e) => runAction(a.command, e)}
             data-tooltip={tooltip}
             aria-label={tooltip}
             data-testid={`view-title-action-${a.command}`}

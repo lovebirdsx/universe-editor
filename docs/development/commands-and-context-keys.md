@@ -79,6 +79,12 @@ f1: false,
 
 **测试陷阱**：自造的持久有效 accessor（`{get: id => collection.get(id)}`）或让 helper 在同步块内跑完的 `invokeFunction`，都**不会**复现此 bug——测试会假绿。要么在测试里模拟 await 后失效，要么（更好）让代码本身不依赖 accessor 存活。
 
+## 点击修饰键（调用手势）
+
+状态栏 / 标题栏按钮 / 右键菜单 / 菜单栏这些通用入口只会 `executeCommand(id, 固定参数)`，不知道命令签名，所以点击的 Ctrl/Alt 以**环境值**传递：点击处用 platform 的 `runWithInvocationModifiers(e, () => executeCommand(...))` 包一层（目前接入：`StatusBar`、`ViewTitleActions`、SCM `ActionButton` 与标题栏溢出菜单、`TitleBarDropdown`、`TimelineView` 行内图谱按钮、workbench-ui 菜单行；新增的点击入口要自己包），命令里用 `invocationOpenTarget()`（`apps/editor/src/renderer/services/editor/openTarget.ts`）读出落点。
+
+**与 accessor 同一条寿命**：只在 handler 同步段有效（`CommandService` 同步调用 handler），首个 `await` 前必须读完；也**不跨扩展宿主 RPC**——经扩展转发的命令改走显式 `{ openTarget }` 尾参数约定。打开单例编辑器统一走 `openWithTarget.ts` 的 `openSingletonEditor`（已开的移动、不复制）。直接拿得到事件的组件（如 `ResourcePreviewButton`）不必绕环境值，`resolveOpenTarget(e)` 即可。
+
 ## 扩展命令与 renderer Action2 的同名遮蔽
 
 内置扩展（git / perforce）贡献到 scm/title 菜单、但 handler 在 **renderer Action2** 的命令（如 `git-graph.view` / `perforce-graph.view`），**绝不能**再写进扩展 `package.json` 的 `contributes.commands`。

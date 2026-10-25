@@ -18,10 +18,11 @@ import {
   IWorkspaceService,
   REMOTE_SCHEME,
   URI,
+  runWithInvocationModifiers,
   type IEditorResolverService as IEditorResolverServiceType,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
+import { openResourcePreview } from '../../services/resourcePreview/openResourcePreview.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import { ScmOpenFileAction, ScmOpenPreviewAction } from '../scmResourceActions.js'
@@ -29,7 +30,7 @@ import { ScmOpenFileAction, ScmOpenPreviewAction } from '../scmResourceActions.j
 // The preview plumbing has its own tests (openPreviewInGroup / EditorGroups); what
 // matters here is that the action routes the row's resource into the active group.
 vi.mock('../../services/resourcePreview/openResourcePreview.js', () => ({
-  openResourcePreviewInGroup: vi.fn(() => true),
+  openResourcePreview: vi.fn(() => true),
 }))
 
 const REMOTE_AUTHORITY = 'ssh-remote+host'
@@ -76,7 +77,7 @@ const remoteFolder = (): URI =>
 const rowArg = (resourceUri: string): unknown => ({ resourceUri, scmResourceGroupId: 'changes' })
 
 beforeEach(() => {
-  vi.mocked(openResourcePreviewInGroup).mockClear()
+  vi.mocked(openResourcePreview).mockClear()
 })
 
 describe('ScmOpenFileAction', () => {
@@ -126,19 +127,25 @@ describe('ScmOpenFileAction', () => {
 })
 
 describe('ScmOpenPreviewAction', () => {
-  it('opens the row preview in the active editor group with the same URI', () => {
-    const { accessor, activeGroup, windowFocus } = makeAccessor({ folder: remoteFolder() })
+  it('opens the row preview with the same URI, honouring the click modifiers', () => {
+    const { accessor } = makeAccessor({ folder: remoteFolder() })
+    const action = new ScmOpenPreviewAction()
 
-    new ScmOpenPreviewAction().run(accessor, rowArg(ROW_PATH))
+    action.run(accessor, rowArg(ROW_PATH))
+    runWithInvocationModifiers({ ctrlKey: true }, () => action.run(accessor, rowArg(ROW_PATH)))
 
-    expect(openResourcePreviewInGroup).toHaveBeenCalledTimes(1)
-    const [groups, group, uri, focus] = vi.mocked(openResourcePreviewInGroup).mock
-      .calls[0] as unknown as [{ activeGroup: object }, object, URI, unknown]
-    expect(group).toBe(activeGroup)
-    expect(groups.activeGroup).toBe(activeGroup)
+    expect(openResourcePreview).toHaveBeenCalledTimes(2)
+    const calls = vi.mocked(openResourcePreview).mock.calls as unknown as [
+      ServicesAccessor,
+      URI,
+      string,
+    ][]
+    const [passed, uri, target] = calls[0]!
+    expect(passed).toBe(accessor)
     expect(uri.authority).toBe(REMOTE_AUTHORITY)
     expect(uri.path).toBe(ROW_PATH)
-    expect(focus).toBe(windowFocus)
+    expect(target).toBe('default')
+    expect(calls[1]![2]).toBe('side')
   })
 
   it('ignores payloads that carry no resource path', () => {
@@ -146,6 +153,6 @@ describe('ScmOpenPreviewAction', () => {
 
     new ScmOpenPreviewAction().run(accessor, {})
 
-    expect(openResourcePreviewInGroup).not.toHaveBeenCalled()
+    expect(openResourcePreview).not.toHaveBeenCalled()
   })
 })

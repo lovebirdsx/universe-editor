@@ -39,6 +39,9 @@ import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
+import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import {
   dispatchKeybindingsEditorFocusSearch,
@@ -168,26 +171,25 @@ export class OpenSettingsAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
+  override run(accessor: ServicesAccessor): Promise<void> {
     const groups = accessor.get(IEditorGroupsService)
     const windowFocus = accessor.get(IWindowFocusService)
 
-    // De-dupe: if Settings is already open in any group, reactivate it instead
-    // of opening a second copy.
-    for (const group of groups.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof SettingsEditorInput) {
-          groups.activateGroup(group)
-          group.setActive(editor)
-          windowFocus.focusGroup(group)
-          dispatchSettingsEditorFocusSearch()
-          return
+    return openSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      () => new SettingsEditorInput(),
+      () => {
+        // De-dupe: if Settings is already open in any group, reactivate it
+        // instead of opening a second copy.
+        if (!revealEditorInGroups(groups, (e) => e instanceof SettingsEditorInput, windowFocus)) {
+          openInLockAwareGroup(groups, new SettingsEditorInput())
         }
-      }
-    }
-
-    openInLockAwareGroup(groups, new SettingsEditorInput())
-    dispatchSettingsEditorFocusSearch()
+        dispatchSettingsEditorFocusSearch()
+      },
+    ).then((targeted) => {
+      if (targeted) dispatchSettingsEditorFocusSearch()
+    })
   }
 }
 
@@ -204,25 +206,26 @@ export class OpenKeybindingsEditorAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor, ...args: unknown[]): void {
+  override run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const query = (args[0] as { query?: string } | undefined)?.query
     const groups = accessor.get(IEditorGroupsService)
     const windowFocus = accessor.get(IWindowFocusService)
 
-    for (const group of groups.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof KeybindingsEditorInput) {
-          groups.activateGroup(group)
-          group.setActive(editor)
-          windowFocus.focusGroup(group)
-          dispatchKeybindingsEditorFocusSearch(query)
-          return
+    return openSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      () => new KeybindingsEditorInput(),
+      () => {
+        if (
+          !revealEditorInGroups(groups, (e) => e instanceof KeybindingsEditorInput, windowFocus)
+        ) {
+          openInLockAwareGroup(groups, new KeybindingsEditorInput())
         }
-      }
-    }
-
-    openInLockAwareGroup(groups, new KeybindingsEditorInput())
-    dispatchKeybindingsEditorFocusSearch(query)
+        dispatchKeybindingsEditorFocusSearch(query)
+      },
+    ).then((targeted) => {
+      if (targeted) dispatchKeybindingsEditorFocusSearch(query)
+    })
   }
 }
 

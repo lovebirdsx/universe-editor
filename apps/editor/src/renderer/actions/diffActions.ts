@@ -10,7 +10,6 @@ import {
   Action2,
   IEditorGroupsService,
   IInstantiationService,
-  IUriIdentityService,
   IWorkspaceService,
   MenuId,
   REMOTE_SCHEME,
@@ -28,19 +27,9 @@ import { ensureSideGroup } from '../services/editor/openToSide.js'
 import type { TargetedOpen } from '../services/editor/openTarget.js'
 import {
   openFreshInputWithTarget,
-  type OpenTargetServices,
+  openTargetServicesFrom,
 } from '../services/editor/openWithTarget.js'
-import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
-
-function openTargetServices(accessor: ServicesAccessor): OpenTargetServices {
-  return {
-    groups: accessor.get(IEditorGroupsService),
-    aux: accessor.get(IAuxiliaryEditorWindowService),
-    inst: accessor.get(IInstantiationService),
-    uriIdentity: accessor.get(IUriIdentityService),
-  }
-}
 
 export interface OpenDiffPayload {
   readonly title: string
@@ -162,7 +151,7 @@ export class OpenDiffAction extends Action2 {
       return
     }
 
-    const services = openTargetServices(accessor)
+    const services = openTargetServicesFrom(accessor)
     const input = createInput()
     void openFreshInputWithTarget(services, input, target, { pinned, preserveFocus }).then(
       (result) => {
@@ -281,7 +270,7 @@ export class OpenWebviewDiffAction extends Action2 {
       return
     }
 
-    const services = openTargetServices(accessor)
+    const services = openTargetServicesFrom(accessor)
     const input = createInput()
     void openFreshInputWithTarget(services, input, target, { pinned, preserveFocus }).then(
       (result) => {

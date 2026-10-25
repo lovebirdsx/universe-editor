@@ -4,10 +4,11 @@ import {
   ICommandService,
   localize,
   asCssVariable,
+  runWithInvocationModifiers,
 } from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
 import { Loader2, RefreshCw } from 'lucide-react'
-import type { CSSProperties, ReactNode } from 'react'
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from 'react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { resolveIcon } from '../icons/icon-map.js'
@@ -48,9 +49,10 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
     if (Comp) return <Comp entry={entry} />
   }
 
-  const handleClick = () => {
-    if (entry.command) {
-      void commandService.executeCommand(entry.command)
+  const handleClick = (e: ReactMouseEvent) => {
+    const command = entry.command
+    if (command) {
+      void runWithInvocationModifiers(e, () => commandService.executeCommand(command))
     }
   }
 

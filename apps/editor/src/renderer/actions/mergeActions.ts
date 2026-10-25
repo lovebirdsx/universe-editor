@@ -10,7 +10,6 @@ import {
   Action2,
   IEditorGroupsService,
   IInstantiationService,
-  IUriIdentityService,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -20,9 +19,8 @@ import { ensureSideGroup } from '../services/editor/openToSide.js'
 import type { TargetedOpen } from '../services/editor/openTarget.js'
 import {
   openFreshInputWithTarget,
-  type OpenTargetServices,
+  openTargetServicesFrom,
 } from '../services/editor/openWithTarget.js'
-import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 
 export interface OpenMergeEditorPayload extends MergeEditorContents {
   readonly pinned?: boolean
@@ -88,12 +86,7 @@ export class OpenMergeEditorAction extends Action2 {
       return
     }
 
-    const services: OpenTargetServices = {
-      groups,
-      aux: accessor.get(IAuxiliaryEditorWindowService),
-      inst,
-      uriIdentity: accessor.get(IUriIdentityService),
-    }
+    const services = openTargetServicesFrom(accessor)
     const input = createInput()
     void openFreshInputWithTarget(services, input, target, { pinned }).then((result) => {
       if (result.handled) return

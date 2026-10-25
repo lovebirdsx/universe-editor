@@ -25,6 +25,8 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
@@ -81,17 +83,19 @@ export class ManageModelsAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
+  override run(accessor: ServicesAccessor): Promise<unknown> {
     const groups = accessor.get(IEditorGroupsService)
-    if (
-      revealEditorInGroups(
-        groups,
-        (e) => e instanceof AiSettingsEditorInput,
-        accessor.get(IWindowFocusService),
-      )
+    const windowFocus = accessor.get(IWindowFocusService)
+    return openSingletonEditor(
+      openTargetServicesFrom(accessor),
+      invocationOpenTarget(),
+      () => new AiSettingsEditorInput(),
+      () => {
+        if (revealEditorInGroups(groups, (e) => e instanceof AiSettingsEditorInput, windowFocus))
+          return
+        openInLockAwareGroup(groups, new AiSettingsEditorInput())
+      },
     )
-      return
-    openInLockAwareGroup(groups, new AiSettingsEditorInput())
   }
 }
 

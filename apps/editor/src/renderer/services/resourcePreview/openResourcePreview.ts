@@ -14,12 +14,15 @@ import type {
   IEditorGroup,
   IEditorGroupsService,
   IEditorResolverService,
+  ServicesAccessor,
   URI,
 } from '@universe-editor/platform'
 import { MarkdownPreviewInput } from '../editor/MarkdownPreviewInput.js'
 import { HtmlPreviewInput } from '../editor/HtmlPreviewInput.js'
 import { openPreviewInGroup } from '../editor/openPreviewInGroup.js'
-import type { IWindowFocusService } from '../windows/windowFocusService.js'
+import type { OpenTarget } from '../editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../editor/openWithTarget.js'
+import { IWindowFocusService } from '../windows/windowFocusService.js'
 import { previewLanguageForResource } from './resourcePreviewSupport.js'
 
 /** A previewable resource's tab id + factory, for target-aware opens that must
@@ -64,6 +67,26 @@ export function openResourcePreviewInGroup(
   }
   return false
 }
+/**
+ * {@link openResourcePreviewInGroup} in the active group, or — for a Ctrl/Alt
+ * gesture — to the side / a new window (an open preview is moved, never
+ * duplicated). Call synchronously from the gesture: the accessor is read up front.
+ */
+export function openResourcePreview(
+  accessor: ServicesAccessor,
+  resource: URI,
+  target: OpenTarget,
+): boolean {
+  const descriptor = resourcePreviewDescriptor(resource)
+  if (!descriptor) return false
+  const services = openTargetServicesFrom(accessor)
+  const windowFocus = accessor.get(IWindowFocusService)
+  void openSingletonEditor(services, target, descriptor.create, () =>
+    openResourcePreviewInGroup(services.groups, services.groups.activeGroup, resource, windowFocus),
+  )
+  return true
+}
+
 /**
  * Open {@link resource} for reading in {@link group}: its rendered preview when
  * the file has one, the file itself otherwise — routed through the resolver so a

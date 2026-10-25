@@ -47,7 +47,7 @@ import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRe
 import { openPreviewInGroup } from '../../services/editor/openPreviewInGroup.js'
 import {
   openFreshInputWithTarget,
-  openPreviewWithTarget,
+  openSingletonWithTarget,
   openUriWithTarget,
 } from '../../services/editor/openWithTarget.js'
 import { ensureSideGroup } from '../../services/editor/openToSide.js'
@@ -250,7 +250,7 @@ export function useMarkdownFileLink(
         if (previewLinks && groupsService && line === undefined && isMarkdownResource(uri)) {
           const preview = new MarkdownPreviewInput(uri)
           if (target !== 'default' && instantiation && auxService && uriIdentityService) {
-            const result = await openPreviewWithTarget(
+            const result = await openSingletonWithTarget(
               {
                 groups: groupsService,
                 aux: auxService,

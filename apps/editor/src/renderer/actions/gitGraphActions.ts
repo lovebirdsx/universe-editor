@@ -5,7 +5,6 @@
 
 import {
   Action2,
-  IEditorGroupsService,
   IEditorService,
   KeybindingWeight,
   localize2,
@@ -16,6 +15,8 @@ import {
   type GitGraphCommitBatchDto,
 } from '@universe-editor/extensions-common'
 import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
 import { gitGraphViewState } from '../services/gitGraph/gitGraphViewState.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
@@ -25,19 +26,24 @@ const CATEGORY = localize2('command.category.gitGraph', 'Git Graph')
 /**
  * The graph is a singleton editor, so reveal the existing tab wherever it lives
  * rather than opening a second copy in the active group (openEditor only dedupes
- * within the active group).
+ * within the active group). A Ctrl/Alt click moves it to the side / a new window.
  */
-async function openGitGraph(accessor: ServicesAccessor): Promise<void> {
-  const groups = accessor.get(IEditorGroupsService)
-  if (
-    revealEditorInGroups(
-      groups,
-      (e) => e instanceof GitGraphEditorInput,
-      accessor.get(IWindowFocusService),
-    )
+function openGitGraph(accessor: ServicesAccessor): Promise<unknown> {
+  const services = openTargetServicesFrom(accessor)
+  const editorService = accessor.get(IEditorService)
+  const windowFocus = accessor.get(IWindowFocusService)
+  return openSingletonEditor(
+    services,
+    invocationOpenTarget(),
+    () => new GitGraphEditorInput(),
+    async () => {
+      if (
+        revealEditorInGroups(services.groups, (e) => e instanceof GitGraphEditorInput, windowFocus)
+      )
+        return
+      await editorService.openEditor(new GitGraphEditorInput())
+    },
   )
-    return
-  await accessor.get(IEditorService).openEditor(new GitGraphEditorInput())
 }
 
 export class ViewGitGraphAction extends Action2 {

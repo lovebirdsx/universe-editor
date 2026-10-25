@@ -13,6 +13,8 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { PerforceGraphEditorInput } from '../services/editor/PerforceGraphEditorInput.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { scmHostPath } from '../services/scm/scmHostPath.js'
@@ -26,6 +28,18 @@ import {
 } from '../services/perforceGraph/perforceGraphViewState.js'
 
 const CATEGORY = localize2('command.category.perforceGraph', 'Perforce Graph')
+
+/** Each graph (global or per scope) is one tab; a Ctrl/Alt click moves it to
+ *  the side / a new window. Must run before the action's first await. */
+function openPerforceGraph(
+  accessor: ServicesAccessor,
+  create: () => PerforceGraphEditorInput,
+): Promise<unknown> {
+  const editorService = accessor.get(IEditorService)
+  return openSingletonEditor(openTargetServicesFrom(accessor), invocationOpenTarget(), create, () =>
+    editorService.openEditor(create()),
+  )
+}
 
 function reviveScopeResource(value: unknown): URI | undefined {
   if (!URI.isUri(value)) return undefined
@@ -91,7 +105,7 @@ export class ViewPerforceGraphAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    await accessor.get(IEditorService).openEditor(new PerforceGraphEditorInput())
+    await openPerforceGraph(accessor, () => new PerforceGraphEditorInput())
   }
 }
 
@@ -136,9 +150,8 @@ export class ViewPerforceFileHistoryAction extends Action2 {
     }
     if (paths.length === 0) return
 
-    await editorService.openEditor(
-      new PerforceGraphEditorInput(normalizeGraphScopeSelection(paths)),
-    )
+    const scope = normalizeGraphScopeSelection(paths)
+    await openPerforceGraph(accessor, () => new PerforceGraphEditorInput(scope))
   }
 }
 
@@ -159,7 +172,7 @@ export class OpenPerforceGraphFromExtensionAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor, changelist?: unknown): Promise<void> {
-    await accessor.get(IEditorService).openEditor(new PerforceGraphEditorInput())
+    await openPerforceGraph(accessor, () => new PerforceGraphEditorInput())
     if (typeof changelist !== 'string' || changelist === '') return
     // Always route through the observable pendingReveal, never a directly
     // registered revealCommit — see OpenGitGraphFromExtensionAction for why

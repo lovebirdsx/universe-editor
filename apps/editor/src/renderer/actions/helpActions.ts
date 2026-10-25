@@ -39,8 +39,18 @@ import {
 } from '../services/diagnostics/diagnosisReloadSession.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import { notesUpToVersion } from '../services/releaseNotes/releaseNotes.js'
 import { runReportIssueFlow } from '../services/issueReporter/reportIssue.js'
+
+/** A Ctrl/Alt click on a Help-menu doc moves its one tab to the side / a new window. */
+function openHelpDoc(accessor: ServicesAccessor, create: () => DocEditorInput): Promise<unknown> {
+  const editorService = accessor.get(IEditorService)
+  return openSingletonEditor(openTargetServicesFrom(accessor), invocationOpenTarget(), create, () =>
+    editorService.openEditor(create()),
+  )
+}
 
 export class OpenDocsAction extends Action2 {
   static readonly ID = 'workbench.action.openDocs'
@@ -54,8 +64,8 @@ export class OpenDocsAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IEditorService).openEditor(new DocEditorInput('index'))
+  override run(accessor: ServicesAccessor): Promise<unknown> {
+    return openHelpDoc(accessor, () => new DocEditorInput('index'))
   }
 }
 
@@ -71,8 +81,8 @@ export class OpenEditorGuideAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IEditorService).openEditor(new DocEditorInput('getting-started/interface-tour'))
+  override run(accessor: ServicesAccessor): Promise<unknown> {
+    return openHelpDoc(accessor, () => new DocEditorInput('getting-started/interface-tour'))
   }
 }
 
@@ -88,8 +98,8 @@ export class OpenAgentGuideAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IEditorService).openEditor(new DocEditorInput('ai-agent/overview'))
+  override run(accessor: ServicesAccessor): Promise<unknown> {
+    return openHelpDoc(accessor, () => new DocEditorInput('ai-agent/overview'))
   }
 }
 
@@ -105,8 +115,8 @@ export class OpenExtensionDocsAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IEditorService).openEditor(new DocEditorInput('README', 'extensionDev'))
+  override run(accessor: ServicesAccessor): Promise<unknown> {
+    return openHelpDoc(accessor, () => new DocEditorInput('README', 'extensionDev'))
   }
 }
 
@@ -125,13 +135,18 @@ export class ShowReleaseNotesAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const releaseNotes = accessor.get(IReleaseNotesService)
     const groups = accessor.get(IEditorGroupsService)
+    const services = openTargetServicesFrom(accessor)
+    const target = invocationOpenTarget()
     const { currentVersion, notes } = await releaseNotes.getReleaseNotes()
-    const input = new ReleaseNotesInput(
-      notesUpToVersion(notes, currentVersion),
-      localize('releaseNotes.title', 'Release Notes'),
-      'all',
+    const create = (): ReleaseNotesInput =>
+      new ReleaseNotesInput(
+        notesUpToVersion(notes, currentVersion),
+        localize('releaseNotes.title', 'Release Notes'),
+        'all',
+      )
+    await openSingletonEditor(services, target, create, () =>
+      openInLockAwareGroup(groups, create(), { activate: true, pinned: true }),
     )
-    openInLockAwareGroup(groups, input, { activate: true, pinned: true })
   }
 }
 

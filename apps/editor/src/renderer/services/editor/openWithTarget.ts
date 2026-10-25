@@ -23,6 +23,7 @@ import {
   IUriIdentityService,
   type EditorInput,
   type IEditorGroup,
+  type ServicesAccessor,
   type URI,
 } from '@universe-editor/platform'
 import { IAuxiliaryEditorWindowService } from '../windows/auxiliaryEditorWindowService.js'
@@ -57,6 +58,16 @@ export interface TargetedOpenResult {
 }
 
 const HANDLED_NONE: TargetedOpenResult = { handled: false }
+
+/** Snapshot the services synchronously — call before any await in an action. */
+export function openTargetServicesFrom(accessor: ServicesAccessor): OpenTargetServices {
+  return {
+    groups: accessor.get(IEditorGroupsService),
+    aux: accessor.get(IAuxiliaryEditorWindowService),
+    inst: accessor.get(IInstantiationService),
+    uriIdentity: accessor.get(IUriIdentityService),
+  }
+}
 
 export function findGroupContaining(
   groups: IEditorGroupsService,
@@ -276,18 +287,19 @@ export async function openUriWithTarget(
 }
 
 /**
- * Preview inputs are globally unique. An already-open preview is moved (never
- * copied); otherwise the caller's factory builds the one instance to mount.
+ * Globally unique inputs (previews, graphs, settings): an already-open one is
+ * moved (never copied); otherwise the caller's factory builds the one instance
+ * to mount.
  */
-export async function openPreviewWithTarget(
+export async function openSingletonWithTarget(
   s: OpenTargetServices,
   target: OpenTarget,
-  previewId: string,
+  id: string,
   createInput: () => EditorInput,
   options: OpenTargetOptions = {},
 ): Promise<TargetedOpenResult> {
   if (target === 'default') return HANDLED_NONE
-  const existing = findEditorById(s.groups, previewId)
+  const existing = findEditorById(s.groups, id)
   if (existing) {
     return openExistingInputWithTarget(s, existing.editor, existing.group, target, {
       ...options,
@@ -298,4 +310,33 @@ export async function openPreviewWithTarget(
   const result = await openFreshInputWithTarget(s, input, target, options)
   if (!result.handled && !input.isDisposed && !findGroupContaining(s.groups, input)) input.dispose()
   return result
+}
+
+/**
+ * Command-style entry for a singleton editor: side/newWindow go through
+ * {@link openSingletonWithTarget}; `default` — or a target that could not be
+ * honoured — runs the command's own default path, whose reveal/dedupe rules
+ * differ per editor. `create` also lends the id, so it must be a cheap,
+ * side-effect-free constructor. Resolves true only when the side/new-window
+ * open happened.
+ */
+export async function openSingletonEditor(
+  s: OpenTargetServices,
+  target: OpenTarget,
+  create: () => EditorInput,
+  openDefault: () => unknown,
+): Promise<boolean> {
+  if (target !== 'default') {
+    const input = create()
+    let mounted = false
+    const result = await openSingletonWithTarget(s, target, input.id, () => {
+      mounted = true
+      return input
+    })
+    // An already-open instance was moved instead; the probe only lent its id.
+    if (!mounted && !input.isDisposed) input.dispose()
+    if (result.handled) return true
+  }
+  await openDefault()
+  return false
 }

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import {
   ICommandService,
   IStatusBarService,
@@ -11,6 +11,8 @@ import {
   ServiceCollection,
   StatusBarAlignment,
   constObservable,
+  getInvocationModifiers,
+  type IInvocationModifiers,
   type IStatusBarEntry,
   type IStoredStatusBarEntry,
 } from '@universe-editor/platform'
@@ -22,7 +24,10 @@ function storedEntry(id: number, entry: IStatusBarEntry): IStoredStatusBarEntry 
   return { id, entry }
 }
 
-function makeContainer(entries: readonly IStoredStatusBarEntry[]): InstantiationService {
+function makeContainer(
+  entries: readonly IStoredStatusBarEntry[],
+  executeCommand: () => Promise<unknown> = () => Promise.resolve(undefined),
+): InstantiationService {
   const sc = new ServiceCollection()
   sc.set(IStatusBarService, {
     _serviceBrand: undefined,
@@ -31,14 +36,17 @@ function makeContainer(entries: readonly IStoredStatusBarEntry[]): Instantiation
   } as unknown as IStatusBarService)
   sc.set(ICommandService, {
     _serviceBrand: undefined,
-    executeCommand: () => Promise.resolve(undefined),
+    executeCommand,
   } as unknown as ICommandService)
   return new InstantiationService(sc)
 }
 
-function renderStatusBar(entries: readonly IStoredStatusBarEntry[]): void {
+function renderStatusBar(
+  entries: readonly IStoredStatusBarEntry[],
+  executeCommand?: () => Promise<unknown>,
+): void {
   render(
-    <ServicesContext.Provider value={makeContainer(entries)}>
+    <ServicesContext.Provider value={makeContainer(entries, executeCommand)}>
       <StatusBar />
     </ServicesContext.Provider>,
   )
@@ -179,5 +187,29 @@ describe('StatusBar — inline codicons', () => {
     expect(icons[1]!.className).toContain('codicon-sync')
     expect(icons[1]!.className).toContain(spinClass)
     expect(button.textContent).toBe(' name: ')
+  })
+})
+
+describe('StatusBar — click', () => {
+  it('runs the entry command with the click modifiers as invocation modifiers', () => {
+    const seen: (IInvocationModifiers | undefined)[] = []
+    renderStatusBar(
+      [
+        storedEntry(1, {
+          id: 'graph',
+          text: 'main',
+          command: 'git-graph.view',
+          alignment: StatusBarAlignment.Left,
+          priority: 0,
+        }),
+      ],
+      () => {
+        seen.push(getInvocationModifiers())
+        return Promise.resolve(undefined)
+      },
+    )
+    fireEvent.click(screen.getByTestId('statusbar-entry-graph'), { ctrlKey: true })
+    expect(seen).toEqual([expect.objectContaining({ ctrlKey: true, altKey: false })])
+    expect(getInvocationModifiers()).toBeUndefined()
   })
 })

@@ -13,6 +13,7 @@ import {
   MenuRegistry,
   type ICommandService as ICommandServiceType,
   type IDisposable,
+  getInvocationModifiers,
   InstantiationService,
   ServiceCollection,
 } from '@universe-editor/platform'
@@ -100,5 +101,19 @@ describe('ViewTitleActions — button busy while command in flight', () => {
       await d.promise.catch(() => undefined)
     })
     expect((btn as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('forwards the click modifiers to the command as invocation modifiers', async () => {
+    let seen: unknown
+    setup(
+      vi.fn().mockImplementation(() => {
+        seen = getInvocationModifiers()
+        return Promise.resolve(undefined)
+      }),
+    )
+
+    fireEvent.click(await screen.findByTestId('view-title-action-test.refresh'), { altKey: true })
+
+    expect(seen).toMatchObject({ altKey: true, ctrlKey: false })
   })
 })

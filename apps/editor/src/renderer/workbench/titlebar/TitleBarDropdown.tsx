@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Fragment, useState } from 'react'
-import { MenuId, localize } from '@universe-editor/platform'
+import { MenuId, localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { useMenuItems, type ResolvedMenuSection } from './useTitleBarMenus.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import styles from './TitleBar.module.css'
@@ -63,7 +63,7 @@ export function DropdownContents({ sections, onExecute }: DropdownContentsProps)
               <div
                 key={`${section.group}-${itemIdx}-${item.command}`}
                 className={styles['dropdown-item']}
-                onClick={() => onExecute(item.command)}
+                onClick={(e) => runWithInvocationModifiers(e, () => onExecute(item.command))}
                 role="menuitem"
               >
                 {iconCell}

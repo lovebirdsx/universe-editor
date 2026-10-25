@@ -31,6 +31,7 @@ import {
   markAsSingleton,
   MenuId,
   MenuRegistry,
+  runWithInvocationModifiers,
   type ContextKeyExpression,
   type IContext,
 } from '@universe-editor/platform'
@@ -146,7 +147,7 @@ export function ActionButton({
       data-tooltip-command={action.command}
       aria-label={action.title}
       disabled={busy === true}
-      onClick={onRun}
+      onClick={(e) => runWithInvocationModifiers(e, () => onRun(e))}
       data-testid={`scm-title-action-${action.command}`}
     >
       {Glyph ? (
@@ -339,9 +340,9 @@ export function TitleOverflowMenu({
               className={styles['overflowItem']}
               tabIndex={-1}
               onMouseEnter={() => setOpenSub(null)}
-              onClick={() => {
+              onClick={(e) => {
                 onClose()
-                row.run?.()
+                runWithInvocationModifiers(e, () => row.run?.())
               }}
             >
               {iconEl}

@@ -43,7 +43,7 @@ import { IWindowFocusService } from '../../services/windows/windowFocusService.j
 import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { ensureSideGroup } from '../../services/editor/openToSide.js'
 import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
-import { openPreviewWithTarget, openUriWithTarget } from '../../services/editor/openWithTarget.js'
+import { openSingletonWithTarget, openUriWithTarget } from '../../services/editor/openWithTarget.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { ToolCallLocations } from './ToolCallLocations.js'
@@ -421,7 +421,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       const preview = resourcePreviewDescriptor(createdUri)
       void (async () => {
         const result = preview
-          ? await openPreviewWithTarget(
+          ? await openSingletonWithTarget(
               { groups: editorGroups, aux, inst, uriIdentity, resolver: editorResolver },
               target,
               preview.id,
@@ -449,7 +449,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       const preview = resourcePreviewDescriptor(createdUri)
       if (preview) {
         void (async () => {
-          const result = await openPreviewWithTarget(
+          const result = await openSingletonWithTarget(
             { groups: editorGroups, aux, inst, uriIdentity, resolver: editorResolver },
             target,
             preview.id,

@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useRef, type ReactNode } from 'react'
+import { runWithInvocationModifiers } from '@universe-editor/platform'
 import {
   computeSubmenuPosition,
   type IViewportSize,
@@ -127,7 +128,8 @@ export function MenuRows({
               key={row.id}
               {...common}
               className={itemClass}
-              onClick={disabled ? undefined : row.run}
+              // Ctrl/Alt on the click reaches the command (e.g. open to the side).
+              onClick={disabled ? undefined : (e) => runWithInvocationModifiers(e, row.run)}
             >
               {iconSlot}
               <span className={styles['label']}>{row.label}</span>

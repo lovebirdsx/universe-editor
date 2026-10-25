@@ -40,9 +40,8 @@ import type { TargetedOpen } from '../services/editor/openTarget.js'
 import {
   openExistingInputWithTarget,
   openFreshInputWithTarget,
-  type OpenTargetServices,
+  openTargetServicesFrom,
 } from '../services/editor/openWithTarget.js'
-import { IAuxiliaryEditorWindowService } from '../services/windows/auxiliaryEditorWindowService.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { systemNotificationE2E } from '../services/extensions/systemNotificationE2E.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
@@ -190,12 +189,7 @@ export class OpenFileAction extends Action2 {
       return
     }
 
-    const services: OpenTargetServices = {
-      groups,
-      aux: accessor.get(IAuxiliaryEditorWindowService),
-      inst,
-      uriIdentity: accessor.get(IUriIdentityService),
-    }
+    const services = openTargetServicesFrom(accessor)
     const existing = findExistingFileEditor(groups, services.uriIdentity, uri)
     if (existing) {
       void openExistingInputWithTarget(services, existing.editor, existing.group, target, {
@@ -267,12 +261,7 @@ export class OpenFileAtAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
     const uriIdentity = accessor.get(IUriIdentityService)
     const windowFocus = accessor.get(IWindowFocusService)
-    const services: OpenTargetServices = {
-      groups,
-      aux: accessor.get(IAuxiliaryEditorWindowService),
-      inst,
-      uriIdentity,
-    }
+    const services = openTargetServicesFrom(accessor)
     const reveal = (input: EditorInput): void => {
       void revealSelectionInInput(input, selection)
     }

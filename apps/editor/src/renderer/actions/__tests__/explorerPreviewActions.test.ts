@@ -9,36 +9,21 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { IEditorGroupsService, URI, type ServicesAccessor } from '@universe-editor/platform'
-import { openResourcePreviewInGroup } from '../../services/resourcePreview/openResourcePreview.js'
-import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
-import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
+import { URI, runWithInvocationModifiers, type ServicesAccessor } from '@universe-editor/platform'
+import { openResourcePreview } from '../../services/resourcePreview/openResourcePreview.js'
 import { ExplorerOpenPreviewAction } from '../explorerPreviewActions.js'
 
 vi.mock('../../services/resourcePreview/openResourcePreview.js', () => ({
-  openResourcePreviewInGroup: vi.fn(() => true),
+  openResourcePreview: vi.fn(() => true),
 }))
 
-function makeAccessor(): {
-  accessor: ServicesAccessor
-  activeGroup: object
-  windowFocus: FakeWindowFocusService
-} {
-  const activeGroup = { id: 'group' }
-  const windowFocus = new FakeWindowFocusService()
-  const byId = new Map<unknown, unknown>([
-    [IEditorGroupsService, { _serviceBrand: undefined, activeGroup }],
-    [IWindowFocusService, windowFocus],
-  ])
-  const accessor = {
-    get: (id: unknown) => {
-      const service = byId.get(id)
-      if (service === undefined) throw new Error('unexpected service lookup')
-      return service
-    },
-  } as unknown as ServicesAccessor
-  return { accessor, activeGroup, windowFocus }
+function makeAccessor(): { accessor: ServicesAccessor } {
+  return { accessor: {} as ServicesAccessor }
 }
+
+type PreviewCall = [ServicesAccessor, URI, string]
+const call = (i = 0): PreviewCall =>
+  vi.mocked(openResourcePreview).mock.calls[i] as unknown as PreviewCall
 
 /** The first arg ExplorerContextMenu builds: a `URI`, before it crosses IPC. */
 const explorerArg = (resource: URI): unknown => ({
@@ -51,22 +36,31 @@ const explorerArg = (resource: URI): unknown => ({
 const md = (): URI => URI.file('/ws/README.md')
 
 beforeEach(() => {
-  vi.mocked(openResourcePreviewInGroup).mockClear()
+  vi.mocked(openResourcePreview).mockClear()
 })
 
 describe('ExplorerOpenPreviewAction', () => {
-  it('opens the clicked resource preview in the active editor group', () => {
-    const { accessor, activeGroup, windowFocus } = makeAccessor()
+  it('opens the clicked resource preview at the default target', () => {
+    const { accessor } = makeAccessor()
 
     new ExplorerOpenPreviewAction().run(accessor, explorerArg(md()))
 
-    expect(openResourcePreviewInGroup).toHaveBeenCalledTimes(1)
-    const [groups, group, uri, focus] = vi.mocked(openResourcePreviewInGroup).mock
-      .calls[0] as unknown as [{ activeGroup: object }, object, URI, unknown]
-    expect(groups.activeGroup).toBe(activeGroup)
-    expect(group).toBe(activeGroup)
+    expect(openResourcePreview).toHaveBeenCalledTimes(1)
+    const [passed, uri, target] = call()
+    expect(passed).toBe(accessor)
     expect(uri.path).toBe('/ws/README.md')
-    expect(focus).toBe(windowFocus)
+    expect(target).toBe('default')
+  })
+
+  it('honours the Ctrl/Alt of the menu click that ran it', () => {
+    const { accessor } = makeAccessor()
+    const action = new ExplorerOpenPreviewAction()
+
+    runWithInvocationModifiers({ ctrlKey: true }, () => action.run(accessor, explorerArg(md())))
+    runWithInvocationModifiers({ altKey: true }, () => action.run(accessor, explorerArg(md())))
+
+    expect(call(0)[2]).toBe('side')
+    expect(call(1)[2]).toBe('newWindow')
   })
 
   // Explorer args come back from the command service as UriComponents, not URIs.
@@ -75,8 +69,8 @@ describe('ExplorerOpenPreviewAction', () => {
 
     new ExplorerOpenPreviewAction().run(accessor, explorerArg(md().toJSON() as unknown as URI))
 
-    expect(openResourcePreviewInGroup).toHaveBeenCalledTimes(1)
-    const [, , uri] = vi.mocked(openResourcePreviewInGroup).mock.calls[0] as [unknown, unknown, URI]
+    expect(openResourcePreview).toHaveBeenCalledTimes(1)
+    const [, uri] = call()
     expect(uri).toBeInstanceOf(URI)
     expect(uri.path).toBe('/ws/README.md')
     expect(uri.toString()).toBe('file:///ws/README.md')
@@ -92,7 +86,7 @@ describe('ExplorerOpenPreviewAction', () => {
     action.run(accessor, [])
     action.run(accessor, 'README.md')
 
-    expect(openResourcePreviewInGroup).not.toHaveBeenCalled()
+    expect(openResourcePreview).not.toHaveBeenCalled()
   })
 
   // args[1] is the Explorer selection; only the primary is previewed.
@@ -106,8 +100,8 @@ describe('ExplorerOpenPreviewAction', () => {
       { resource: other },
     ])
 
-    expect(openResourcePreviewInGroup).toHaveBeenCalledTimes(1)
-    const [, , uri] = vi.mocked(openResourcePreviewInGroup).mock.calls[0] as [unknown, unknown, URI]
+    expect(openResourcePreview).toHaveBeenCalledTimes(1)
+    const [, uri] = call()
     expect(uri.path).toBe('/ws/README.md')
   })
 })

@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   CommandsRegistry,
   MenuRegistry,
+  getInvocationModifiers,
   type ICommandService,
   type IContextKeyService,
   type MenuId,
@@ -110,6 +111,32 @@ describe('ContextMenu submenus', () => {
 
     expect(executed).toEqual([['nested.run', { resource: '/ws/a.ts' }]])
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it('runs the command with the click modifiers as invocation modifiers', () => {
+    const root = asMenuId('test.modifiers.root')
+    track(MenuRegistry.addMenuItem(root, { command: 'graph.open', title: 'Open Graph' }))
+
+    let seen: unknown
+    render(
+      <ContextMenu
+        menuId={root}
+        anchor={{ x: 0, y: 0 }}
+        commandService={
+          {
+            executeCommand: async () => {
+              seen = getInvocationModifiers()
+            },
+          } as unknown as ICommandService
+        }
+        onClose={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Open Graph'), { ctrlKey: true })
+
+    expect(seen).toMatchObject({ ctrlKey: true, altKey: false })
+    expect(getInvocationModifiers()).toBeUndefined()
   })
 
   it('drops a submenu whose children are all filtered out', () => {

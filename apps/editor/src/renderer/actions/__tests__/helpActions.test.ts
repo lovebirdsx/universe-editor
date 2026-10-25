@@ -3,15 +3,19 @@ import {
   CommandsRegistry,
   IDialogService,
   IEditorGroupsService,
+  IEditorService,
   IHostService,
   ILifecycleService,
   INotificationService,
   InstantiationService,
   MenuId,
   MenuRegistry,
+  IUriIdentityService,
   ServiceCollection,
   Severity,
+  UriIdentityService,
   registerAction2,
+  runWithInvocationModifiers,
   type IEditorInput,
   type IConfirmOptions,
   type IConfirmResult,
@@ -19,8 +23,12 @@ import {
 } from '@universe-editor/platform'
 import { IDiagnosticsService, type HeapSnapshotStatus } from '../../../shared/ipc/services.js'
 import { IReleaseNotesService, type IReleaseNote } from '../../../shared/ipc/releaseNotesService.js'
+import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { ReleaseNotesInput } from '../../services/editor/ReleaseNotesInput.js'
+import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import {
+  OpenDocsAction,
   OpenExtensionDocsAction,
   OpenHeapSnapshotsFolderAction,
   ReloadWindowForMemoryDiagnosisAction,
@@ -62,6 +70,32 @@ describe('helpActions', () => {
       group: '0_docs',
       order: 3,
     })
+  })
+
+  it('moves an open doc to the side on a Ctrl click instead of duplicating it', async () => {
+    const groups = new EditorGroupsService()
+    const openEditor = vi.fn()
+    const inst = new InstantiationService(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [IEditorService, { openEditor } as never],
+        [IUriIdentityService, new UriIdentityService('linux')],
+        [IAuxiliaryEditorWindowService, {} as never],
+      ),
+    )
+    disposables.push(groups, inst)
+    const source = groups.activeGroup
+    const open = new DocEditorInput('index')
+    source.openEditor(open)
+
+    await runWithInvocationModifiers({ ctrlKey: true }, () =>
+      inst.invokeFunction((accessor) => new OpenDocsAction().run(accessor)),
+    )
+
+    expect(openEditor).not.toHaveBeenCalled()
+    expect(source.contains(open)).toBe(false)
+    expect(groups.activeGroup.activeEditor).toBe(open)
+    expect(groups.groups.flatMap((g) => g.editors)).toEqual([open])
   })
 })
 

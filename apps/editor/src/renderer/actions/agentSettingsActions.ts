@@ -19,6 +19,8 @@ import { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
 import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openSingletonEditor, openTargetServicesFrom } from '../services/editor/openWithTarget.js'
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { CATEGORY } from './_agentShared.js'
 
@@ -47,8 +49,15 @@ export class OpenAcpMcpSettingsAction extends Action2 {
     // before the first await — the accessor is invocation-scoped.
     const storage = accessor.get(IStorageService)
     const editorService = accessor.get(IEditorService)
+    const services = openTargetServicesFrom(accessor)
+    const target = invocationOpenTarget()
     await storage.set('settings.activeItem', 'ai:mcpServers', StorageScope.GLOBAL)
-    await editorService.openEditor(new AiSettingsEditorInput(), { activate: true })
+    await openSingletonEditor(
+      services,
+      target,
+      () => new AiSettingsEditorInput(),
+      () => editorService.openEditor(new AiSettingsEditorInput(), { activate: true }),
+    )
   }
 }
 
@@ -70,12 +79,19 @@ export class OpenAgentSettingsAction extends Action2 {
     const registry = accessor.get(IAcpAgentRegistry)
     const storage = accessor.get(IStorageService)
     const editorService = accessor.get(IEditorService)
+    const services = openTargetServicesFrom(accessor)
+    const openTarget = invocationOpenTarget()
     const target =
       typeof agentId === 'string' && registry.allAgentIds().includes(agentId)
         ? agentId
         : registry.defaultAgentId()
     await storage.set('settings.activeItem', `agent:${target}`, StorageScope.GLOBAL)
-    await editorService.openEditor(new AiSettingsEditorInput(), { activate: true })
+    await openSingletonEditor(
+      services,
+      openTarget,
+      () => new AiSettingsEditorInput(),
+      () => editorService.openEditor(new AiSettingsEditorInput(), { activate: true }),
+    )
   }
 }
 

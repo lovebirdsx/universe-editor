@@ -87,7 +87,7 @@ interface StubGroup {
 function makeStubGroup(id: 'main' | 'side'): StubGroup {
   const editors: unknown[] = []
   return {
-    // openPreviewWithTarget scans group.editors by input id for the globally
+    // openSingletonWithTarget scans group.editors by input id for the globally
     // unique preview; keep the list in sync with what openEditor receives.
     editors,
     // No preview is ever already open in these tests, so the dedupe lookup that

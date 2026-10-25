@@ -9,14 +9,9 @@
  *  opening. This one takes the resource as its argument instead.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  Action2,
-  IEditorGroupsService,
-  localize2,
-  type ServicesAccessor,
-} from '@universe-editor/platform'
-import { openResourcePreviewInGroup } from '../services/resourcePreview/openResourcePreview.js'
-import { IWindowFocusService } from '../services/windows/windowFocusService.js'
+import { Action2, localize2, type ServicesAccessor } from '@universe-editor/platform'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openResourcePreview } from '../services/resourcePreview/openResourcePreview.js'
 import { resolvePrimaryTarget } from './fileActionsCommon.js'
 
 export class ExplorerOpenPreviewAction extends Action2 {
@@ -39,12 +34,6 @@ export class ExplorerOpenPreviewAction extends Action2 {
     // ScmOpenPreviewAction. resolvePrimaryTarget reads args[0] alone.
     const resource = resolvePrimaryTarget(args)
     if (!resource) return
-    const groups = accessor.get(IEditorGroupsService)
-    openResourcePreviewInGroup(
-      groups,
-      groups.activeGroup,
-      resource,
-      accessor.get(IWindowFocusService),
-    )
+    openResourcePreview(accessor, resource, invocationOpenTarget())
   }
 }

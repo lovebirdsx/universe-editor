@@ -5,7 +5,7 @@
  *  side meaning; Alt always wins so Ctrl+Alt+Enter keeps opening a window.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IKeyMods } from '@universe-editor/platform'
+import { getInvocationModifiers, type IKeyMods } from '@universe-editor/platform'
 
 export type OpenTarget = 'default' | 'side' | 'newWindow'
 
@@ -30,6 +30,12 @@ export function resolveOpenTarget(mods: OpenModifiers | undefined): OpenTarget {
   const meta = mods?.meta === true || mods?.metaKey === true
   if (ctrl || meta) return 'side'
   return 'default'
+}
+
+/** Target of the click that is running the current command (status bar,
+ *  toolbar, menu…). Read it before the command's first await. */
+export function invocationOpenTarget(): OpenTarget {
+  return resolveOpenTarget(getInvocationModifiers())
 }
 
 export interface OpenTargetEnterEvent {
