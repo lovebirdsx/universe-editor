@@ -172,9 +172,9 @@ async function auxiliaryHasSessionTab(page: Page): Promise<boolean> {
     : false
 }
 
-/** Clicking main chrome routes activation back to the main window without OS focus. */
+/** Clicking the main editor area routes activation back to the main part without OS focus. */
 async function activateMainWindow(page: Page): Promise<void> {
-  await page.locator('[data-testid="part-activitybar"]').click({ position: { x: 4, y: 4 } })
+  await page.locator('[data-testid="part-editorArea"]').click({ position: { x: 4, y: 4 } })
 }
 
 /** Asserts a native focus request went to the auxiliary window and DOM focus followed. */
@@ -549,13 +549,14 @@ test.describe('@p0 auxiliary editor windows', () => {
     await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
   })
 
-  test('pointer in the main non-editor area routes the next open back to main', async ({
+  test('main non-editor chrome keeps opens in the auxiliary window; the main editor area takes them back', async ({
     electronApp,
     workbench,
     page,
   }) => {
     await workbench.waitForRestored()
     const moved = seedFile('focus-main-moved.txt', 'moved\n')
+    const stay = seedFile('focus-main-stay.txt', 'stay\n')
     const next = seedFile('focus-main-next.txt', 'next\n')
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), moved)
     await expect(workbench.editor.monacoEditor).toBeVisible()
@@ -566,37 +567,141 @@ test.describe('@p0 auxiliary editor windows', () => {
       'workbench.action.moveEditorToNewWindow',
     )
     const token = (await auxWindows(page))[0]!.token
-    // Prove the auxiliary window really owns activation before the main click.
     await child.locator('.monaco-editor').first().click()
     await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+    const mainGroupId = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows())).find(
+      (w) => w.isMain,
+    )!.groupIds[0]!
+    const mainUris = () =>
+      page.evaluate((id) => window.__E2E__!.getEditorGroupEditorUris(String(id)), mainGroupId)
+    const auxUris = async () =>
+      (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? []
 
-    // A real pointerdown in the main document's non-editor chrome must switch
-    // the active part back without any probe-side activatePart call.
+    // Main chrome (activity bar) activates the main *window* only: the editor
+    // open target stays on the last-used auxiliary part (VSCode parity).
     await page.locator('[data-testid="part-activitybar"]').click({ position: { x: 4, y: 4 } })
     await expect
       .poll(() =>
         page.evaluate(() => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)?.active),
       )
       .toBe(true)
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), stay)
+    await expect.poll(auxUris).toContainEqual(expect.stringContaining('focus-main-stay.txt'))
+    expect(await mainUris()).not.toContainEqual(expect.stringContaining('focus-main-stay.txt'))
 
+    // Interaction inside the main editor area makes main the target again.
+    await activateMainWindow(page)
     await page.evaluate((p) => window.__E2E__!.openFileUri(p), next)
-    const mainWindow = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows())).find(
-      (w) => w.isMain,
-    )!
-    await expect
-      .poll(() =>
-        page.evaluate(
-          (id) => window.__E2E__!.getEditorGroupEditorUris(String(id)),
-          mainWindow.groupIds[0]!,
-        ),
-      )
-      .toContainEqual(expect.stringContaining('focus-main-next.txt'))
-    expect(
-      (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [],
-    ).not.toContainEqual(expect.stringContaining('focus-main-next.txt'))
+    await expect.poll(mainUris).toContainEqual(expect.stringContaining('focus-main-next.txt'))
+    expect(await auxUris()).not.toContainEqual(expect.stringContaining('focus-main-next.txt'))
 
     await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
     await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+
+  test.describe('explorer opens follow the last-used auxiliary window', () => {
+    test.use({
+      workspaceSeeder: {
+        seed(dir) {
+          for (const name of ['aux-ex-a.txt', 'aux-ex-b.txt', 'aux-ex-c.txt', 'aux-ex-d.txt']) {
+            writeFileSync(join(dir, name), `${name}\n`)
+          }
+        },
+      },
+    })
+
+    test('Ctrl+Shift+E then Enter / Ctrl+Enter open in the auxiliary window', async ({
+      electronApp,
+      workbench,
+      page,
+      launchWorkspace,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      await page.evaluate(
+        (p) => window.__E2E__!.openFileUri(p),
+        launchWorkspace!.file('aux-ex-a.txt'),
+      )
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      const token = (await auxWindows(page))[0]!.token
+      await child.locator('.monaco-editor').first().click()
+      await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+      await markDocumentUnfocused(child)
+      await installFocusProbe(electronApp)
+      await clearFocusRequests(electronApp)
+      const auxGroups = async () => (await auxWindows(page))[0]?.groups ?? []
+      const mainUris = async () => {
+        const main = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows())).find(
+          (w) => w.isMain,
+        )!
+        const lists = await Promise.all(
+          main.groupIds.map((id) =>
+            page.evaluate((g) => window.__E2E__!.getEditorGroupEditorUris(String(g)), id),
+          ),
+        )
+        return lists.flat()
+      }
+      const row = (name: string) => page.locator('[role="treeitem"]', { hasText: name })
+      const tree = page
+        .locator('[role="tree"]')
+        .filter({ has: row('aux-ex-a.txt') })
+        .first()
+      // focusView settles over frames; keys sent before the tree owns focus are lost.
+      const expectTreeFocused = () => expect(tree).toHaveAttribute('data-focused', 'true')
+
+      // Single-click preview keeps focus in Explorer and must not pull the
+      // auxiliary window forward, but still lands there.
+      await child.keyboard.press('Control+Shift+E')
+      await expect
+        .poll(() =>
+          page.evaluate(() => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)?.active),
+        )
+        .toBe(true)
+      await expectTreeFocused()
+      await row('aux-ex-b.txt').click()
+      await expect
+        .poll(async () => (await auxGroups()).flatMap((g) => g.editorUris))
+        .toContainEqual(expect.stringContaining('aux-ex-b.txt'))
+      expect((await focusRequests(electronApp)).some((r) => r.auxiliary)).toBe(false)
+      await tree.focus()
+      await expectTreeFocused()
+
+      // Enter on a not-yet-open file: lands in the auxiliary group and brings
+      // that window forward.
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('Enter')
+      await expectAuxiliaryFocus(electronApp, child, workbench, 'aux-ex-c.txt')
+      expect((await auxGroups()).flatMap((g) => g.editorUris)).toContainEqual(
+        expect.stringContaining('aux-ex-c.txt'),
+      )
+
+      // Ctrl+Enter splits inside the auxiliary window, not the main one.
+      await clearFocusRequests(electronApp)
+      await child.keyboard.press('Control+Shift+E')
+      await expect
+        .poll(() =>
+          page.evaluate(() => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)?.active),
+        )
+        .toBe(true)
+      await expectTreeFocused()
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('Control+Enter')
+      await expect.poll(async () => (await auxGroups()).length).toBe(2)
+      await expect
+        .poll(async () => (await auxGroups())[1]?.editorUris ?? [])
+        .toContainEqual(expect.stringContaining('aux-ex-d.txt'))
+      await expectAuxiliaryFocus(electronApp, child, workbench, 'aux-ex-d.txt')
+
+      expect(await mainUris()).not.toContainEqual(expect.stringMatching(/aux-ex-[bcd]\.txt/))
+
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
   })
 
   test('moving and copying an editor group targets the active group', async ({

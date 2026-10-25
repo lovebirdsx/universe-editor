@@ -888,8 +888,13 @@ export class FocusActiveEditorGroupAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    const activeEditor = accessor.get(IEditorGroupsService).activeGroup.activeEditor
-    if (activeEditor) focusEditorInput(activeEditor, accessor.get(IContextKeyService))
+    const group = accessor.get(IEditorGroupsService).activeGroup
+    const activeEditor = group.activeEditor
+    if (!activeEditor) return
+    // The active group may be the last-used auxiliary window while focus sits in
+    // the main Explorer (Ctrl+Shift+E round trip): bring that window forward too.
+    accessor.get(IWindowFocusService).focusGroup(group)
+    focusEditorInput(activeEditor, accessor.get(IContextKeyService))
   }
 }
 

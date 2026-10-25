@@ -159,6 +159,12 @@ main 进程有两处不能只看"当前窗口 id"：
 
 **`IEditorGroupsService.activateGroup` 只改 renderer 激活态，不移动原生窗口焦点。** 只调用它会出现"目标 tab 已高亮、键盘输入仍在原窗口"的现象（Alt+←/→、Ctrl+Tab、Ctrl+P 的旧 bug 即此）。
 
+**活动窗口 ≠ 活动编辑器 part（打开目标）**，二者分开跟踪（对齐 VSCode「文件打开在最后使用的编辑器窗口」）：
+
+- 活动窗口（`WorkbenchWindowService.activeWindow`，决定 overlay/dialog/快捷键归属）跟随该 document 内任意 `pointerdown/focusin/focus`。
+- 活动 part（`IEditorGroupsService.activePart`，所有打开入口——`activeGroupForOpen`、`ensureSideGroup(activeGroup)`——的目标）只跟随**编辑器表面**：辅助窗口整窗即编辑器，窗口激活即激活其 part；主窗口还承载侧栏/面板，`AuxiliaryEditorWindowService` 的 window→part 桥对主窗口直接跳过，主 part 由 `EditorArea` 根节点的 capture `pointerdown/focusin` 激活（`preserveFocus: true`）。因此「辅助窗口 → `Ctrl+Shift+E` → Explorer 打开 / `Ctrl+Enter`」落在辅助窗口；点主窗口编辑区才切回主 part。**不要**按调用点逐个改打开目标——所有入口已统一读 active part。同一 active part 也是「活动编辑器」类命令（Ctrl+W、分屏、`activeEditor*` context key、Escape 回编辑器）的目标，与 VSCode 一致；`onDidRemoveWindow` 兜底保证 active part 总有窗口（salvage 关窗保留 part 时回落主 part）。
+- 任何非 `preserveFocus` 的组激活，只要组所在窗口 ≠ 活动窗口，`EditorGroupView` 的激活聚焦 effect 都会统一请求 `focusGroup`；恢复路径（`workbenchFocusRestorer` 的回落组）因此先 `preserveFocusOnActivation(true)` 再激活。所以 Explorer Enter、侧开、搜索结果、终端/AI 链接等非预览打开都会把目标窗口带到前台；单击/Space 预览（`preserveFocus`）不抢窗口。
+
 统一入口：
 
 - `activateGroupAndFocus(group, ctx, editor?)`（`services/editor/activateGroupAndFocus.ts`）：`activateGroup` → `setActive(editor)` → focusStack push → `IWindowFocusService.focusGroup(group)` → `focusEditorInput(...)`。**用户显式 reveal**（历史导航、Ctrl+Tab、Ctrl+P、Git Graph、扩展 `showTextDocument` 等）统一走它；后台打开/`preserveFocus` 路径不请求窗口聚焦。
@@ -166,7 +172,7 @@ main 进程有两处不能只看"当前窗口 id"：
 - `LayoutService.focusView/focusPart` 只在 `source: 'command' | 'user'` 时请求窗口聚焦；`'restore'` 与未指定来源绝不抢焦点。`focusPart(PartId.EditorArea)` 按全局 `activeGroup` 解析所属窗口（编辑器组可能在辅助窗口），再走 `activateGroupAndFocus`，不硬编码主窗口。
 - `MainThreadEditor.$showTextDocument` / `WebviewService.revealHostPanel` 等扩展入口必须保留 `preserveFocus` 语义：传了 `preserveFocus: true` 就只激活组、不请求窗口聚焦。
 - 自动揭示（错误日志、扩展后台调用 `showOutputChannel`）传 `source: 'restore'`，可移动主窗口内的 DOM 焦点但绝不把窗口拉到前台。
-- **QuickInput 关闭时的焦点恢复不能抢回窗口**：`FocusScopeOverlay` 默认在卸载时把焦点还给打开前的元素，但 Ctrl+Tab 这类同步命令会在 React 卸载面板之前就完成跨窗口激活；随后这次恢复会触发主 document 的 focusin → `WorkbenchWindowService` 把 activePart 切回主窗口。`QuickInputPortal` 因此传 `shouldRestoreFocus`，仅在当前 active workbench document 仍是面板宿主 document 时才恢复。
+- **QuickInput 关闭时的焦点恢复不能抢回窗口**：`FocusScopeOverlay` 默认在卸载时把焦点还给打开前的元素，但 Ctrl+Tab 这类同步命令会在 React 卸载面板之前就完成跨窗口激活；随后这次恢复会触发主 document 的 focusin → 活动窗口被切回主窗口（落在主编辑区时活动 part 也会跟着切回）。`QuickInputPortal` 因此传 `shouldRestoreFocus`，仅在当前 active workbench document 仍是面板宿主 document 时才恢复。
 - **窗口激活不是编辑器聚焦意图**：辅助窗口被激活时 `AuxiliaryEditorWindowService` 调 `activatePart(part, { preserveFocus: true })`，平台侧落到组的 `preserveFocusOnActivation()`；`EditorGroupView` / `FileEditor` 的自动聚焦据此跳过。否则激活链路会在 `focusView` 之后把焦点抢进编辑器（表现为"命令执行了，焦点却不在目标视图"）。这是意图区分，**不要用延时规避**。
 - **后台文档的 Part 不算聚焦**：Part 容器的 `isFocused()` 读自己的 `ownerDocument.activeElement`，但失去 OS 焦点的文档会保留最后的 activeElement。凡是"当前是否聚焦在某 Part/视图"的产品判定（context key、`Ctrl+Shift+E` 等 toggle 命令）必须在 `isFocused()` 之外再要求该 Part 的 document 等于当前 active workbench document（`services/focus/partFocus.ts` 的 `isPartFocusedInActiveDocument`），否则在辅助窗口打字时主窗口会误判侧栏仍聚焦，命令执行成"关闭侧栏"而不是"显示 Explorer"。
 - **焦点竞争还来自两处细节**：`LayoutService.focusView` 的落点确认读元素自己的 `ownerDocument.activeElement`（主文档判定对辅助元素恒 false）；`_focusPart` 只在没有显式目标视图时才委派给该 Part 上次记住的视图，显式 `focusView(A)` 不能先打开/聚焦记住的视图 B。

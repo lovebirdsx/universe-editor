@@ -73,6 +73,7 @@ import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { decideTabDragOut, isCopyDragOperation } from '../../services/editor/tabDragOut.js'
 import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { IWorkbenchWindowService } from '../../services/windows/workbenchWindowService.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { openDroppedResource } from '../../services/dnd/openDroppedResource.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
@@ -561,6 +562,7 @@ export const EditorGroupView = memo(function EditorGroupView({
   const configurationService = useOptionalService(IConfigurationService)
   const workbenchWindows = useOptionalService(IWorkbenchWindowService)
   const auxiliaryWindows = useOptionalService(IAuxiliaryEditorWindowService)
+  const windowFocus = useOptionalService(IWindowFocusService)
   const host = useOptionalService(IHostService)
   const dndLogger = useMemo(
     () => loggerService?.createLogger({ id: 'editorDnd', name: 'Editor DnD' }),
@@ -985,6 +987,15 @@ export const EditorGroupView = memo(function EditorGroupView({
     const wasActive = wasActiveGroupRef.current
     wasActiveGroupRef.current = isActiveGroup
     if (!isActiveGroup || !activeEditor) return
+    const focusActivation = (editor: EditorInput): void => {
+      // An open routed here from another window (e.g. Explorer in main while an
+      // auxiliary part is the target) must bring this window forward, otherwise
+      // the editor is focused in a background document and keys stay behind.
+      if (workbenchWindows && workbenchWindows.activeWindow.part !== group.part) {
+        windowFocus?.focusGroup(group)
+      }
+      focusEditorInput(editor, contextKeyService, group.id)
+    }
     // Group just (re-)activated without an editor change → focus, unless this
     // activation asked to preserve focus (single-click preview from a list must
     // leave focus in the originating tree). Record the activation either way so
@@ -992,7 +1003,7 @@ export const EditorGroupView = memo(function EditorGroupView({
     if (!wasActive) {
       focusedActivationRef.current = activationId
       if (group.lastActivationPreservedFocus) return
-      focusEditorInput(activeEditor, contextKeyService, group.id)
+      focusActivation(activeEditor)
       return
     }
     // Already-active group: handle each activation once (dedupes StrictMode's
@@ -1002,8 +1013,16 @@ export const EditorGroupView = memo(function EditorGroupView({
     if (focusedActivationRef.current === activationId) return
     focusedActivationRef.current = activationId
     if (group.lastActivationPreservedFocus) return
-    focusEditorInput(activeEditor, contextKeyService, group.id)
-  }, [contextKeyService, group, isActiveGroup, activeEditor, activationId])
+    focusActivation(activeEditor)
+  }, [
+    contextKeyService,
+    group,
+    isActiveGroup,
+    activeEditor,
+    activationId,
+    workbenchWindows,
+    windowFocus,
+  ])
 
   const renderContent = () => {
     const active = group.activeEditor

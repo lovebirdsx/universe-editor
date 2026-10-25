@@ -10,6 +10,7 @@ import {
   type IPart,
 } from '@universe-editor/platform'
 import { GridLayout } from '@universe-editor/workbench-ui'
+import { useLayoutEffect } from 'react'
 import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { WelcomeEditor } from './WelcomeEditor.js'
@@ -27,6 +28,24 @@ export function EditorArea({
   // A workbench window renders its own part's layout; global group enumeration
   // (Save All, dirty checks) deliberately stays on `groupsService.groups`.
   const layoutPart = editorPart ?? groupsService.mainPart
+
+  // The open target follows the last-used editor surface, not window focus: the
+  // main window also hosts the sidebar/panel, so only interaction inside this
+  // area makes its part the target. Activation here is not an editor focus intent.
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const activate = (): void => {
+      if (groupsService.activePart === layoutPart) return
+      groupsService.activatePart(layoutPart, { preserveFocus: true })
+    }
+    el.addEventListener('pointerdown', activate, true)
+    el.addEventListener('focusin', activate, true)
+    return () => {
+      el.removeEventListener('pointerdown', activate, true)
+      el.removeEventListener('focusin', activate, true)
+    }
+  }, [containerRef, groupsService, layoutPart])
 
   const welcomeFallback = (
     <WelcomeEditor

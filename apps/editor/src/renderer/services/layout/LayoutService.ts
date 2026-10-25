@@ -141,6 +141,7 @@ export class LayoutService extends Disposable implements ILayoutService {
   private _passFocusToEditor(): void {
     const group = this._editorGroups.activeGroup
     const active = group.activeEditor
+    if (active) this._windowFocus.focusGroup(group)
     if (active && focusEditorInput(active, this._contextKeyService, group.id)) return
     void this.focusPart(PartId.EditorArea)
   }

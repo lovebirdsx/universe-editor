@@ -793,6 +793,21 @@ describe('FocusActiveEditorGroupAction', () => {
     expect(focus).toHaveBeenCalledOnce()
   })
 
+  it('run() brings the window owning the active group forward (aux part targeted from main)', () => {
+    const svc = new EditorGroupsService()
+    const aux = svc.createAuxiliaryPart({ activate: true })
+    const input = Object.create(FileEditorInput.prototype) as FileEditorInput
+    aux.activeGroup.openEditor(input)
+    FileEditorRegistry.register(input, { focus: vi.fn() } as never)
+    const focusGroup = vi.spyOn(FakeWindowFocusService.prototype, 'focusGroup')
+    try {
+      exec(FocusActiveEditorGroupAction, svc)
+      expect(focusGroup).toHaveBeenCalledWith(aux.activeGroup)
+    } finally {
+      focusGroup.mockRestore()
+    }
+  })
+
   it('run() focuses the surviving split editor after the other group closes', () => {
     const svc = new EditorGroupsService()
     const first = svc.activeGroup

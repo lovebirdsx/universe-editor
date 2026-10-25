@@ -450,6 +450,29 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     expect(ctx.windows.activeWindow).toBe(ctx.windows.mainWindow)
   })
 
+  it('activating the main window keeps the auxiliary part as the open target', async () => {
+    const window = (await ctx.service.createEmptyWindow({ explicitEmpty: true, activate: false }))
+      .window!
+    ctx.windows.setActiveWindow(window.window)
+    expect(ctx.groups.activePart).toBe(window.part)
+
+    // Focusing the main sidebar (Ctrl+Shift+E → focusMainWindow) only moves the
+    // active window; the main editor area activates its part on its own.
+    ctx.windows.setActiveWindow(ctx.windows.mainWindow)
+    expect(ctx.windows.activeWindow).toBe(ctx.windows.mainWindow)
+    expect(ctx.groups.activePart).toBe(window.part)
+  })
+
+  it('falls back to the main part when the active part loses its window but survives', async () => {
+    const window = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+    expect(ctx.groups.activePart).toBe(window.part)
+
+    // Salvage-close keeps a part with editors alive after its window is gone;
+    // opens must not keep targeting that invisible part.
+    ctx.windows.unregisterWindow(window.window)
+    expect(ctx.groups.activePart).toBe(ctx.groups.mainPart)
+  })
+
   it('restore-all keeps the main window multi-group layout intact', async () => {
     const first = ctx.groups.mainPart.activeGroup
     const kept = new TestInput('/kept-in-main')

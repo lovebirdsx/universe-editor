@@ -45,7 +45,11 @@ export async function restoreWorkbenchFocus(
   const editor = group?.activeEditor
 
   if (group && editor) {
-    if (editorGroupsService.activeGroup !== group) editorGroupsService.activateGroup(group)
+    if (editorGroupsService.activeGroup !== group) {
+      // Restore never pulls another window forward; focus is placed explicitly below.
+      group.preserveFocusOnActivation?.(true)
+      editorGroupsService.activateGroup(group)
+    }
     let ok = focusEditorInput(editor, contextKeyService, group.id)
     if (!ok) ok = await layoutService.focusPart(PartId.EditorArea, { source: 'restore' })
     syncEditorFocusContext(contextKeyService)

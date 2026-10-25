@@ -278,10 +278,9 @@ export class AuxiliaryEditorWindowService
     )
     this._register(
       this._groups.onDidActivePartChange((part) => {
-        // Main is a real window too: switching back to it (focus/pointer in the
-        // main document) must make the main window active, otherwise the next
-        // open still targets the auxiliary part. `getWindowForPart` enumerates
-        // the main entry as well.
+        // Main is a real window too: activating its part (interaction in the
+        // main editor area) must make the main window active as well.
+        // `getWindowForPart` enumerates the main entry.
         const window = this._workbenchWindows.getWindowForPart(part)
         if (!window) return
         this._workbenchWindows.setActiveWindow(window)
@@ -291,9 +290,20 @@ export class AuxiliaryEditorWindowService
       this._workbenchWindows.onDidChangeActiveWindow((window) => {
         // The reverse direction. Both `_setActive` and `_setActivePart` bail out
         // when the target is already current, so the two subscriptions cannot
-        // ping-pong.
+        // ping-pong. Main also hosts non-editor parts (sidebar, panel): focusing
+        // those must not retarget opens away from the last-used auxiliary part
+        // (VSCode parity) — `EditorArea` activates the main part itself.
+        if (window.isMain) return
         if (this._groups.activePart === window.part) return
         this._groups.activatePart(window.part, { preserveFocus: true })
+      }),
+    )
+    this._register(
+      this._workbenchWindows.onDidRemoveWindow((window) => {
+        // A salvage close can keep the part alive after its window is gone; the
+        // open target must never be a part without a window.
+        if (this._groups.activePart !== window.part) return
+        this._groups.activatePart(this._groups.mainPart, { preserveFocus: true })
       }),
     )
   }

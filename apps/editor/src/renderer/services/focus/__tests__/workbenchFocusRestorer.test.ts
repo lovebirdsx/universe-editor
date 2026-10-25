@@ -215,6 +215,28 @@ describe('restoreWorkbenchFocus', () => {
     expect(context.get('terminalFocus')).toBe(true)
   })
 
+  it('marks a fallback group activation as preserving focus (restore never pulls a window forward)', async () => {
+    const context = new ContextKeyService()
+    const editorTarget = document.createElement('button')
+    document.body.appendChild(editorTarget)
+    const editor = new SelfFocusingInput(editorTarget)
+    const empty = makeGroup(1)
+    const other = makeGroup(2, editor)
+    const preserve = vi.fn()
+    ;(other as unknown as { preserveFocusOnActivation: unknown }).preserveFocusOnActivation =
+      preserve
+    const groups = makeGroupsService(empty, [empty, other])
+    const { layout } = makeLayoutService()
+
+    const result = await restoreWorkbenchFocus(groups, layout, context, makeViewsService())
+
+    expect(result).toMatchObject({ target: 'editor', groupId: 2 })
+    expect(preserve).toHaveBeenCalledWith(true)
+    expect(preserve.mock.invocationCallOrder[0]!).toBeLessThan(
+      vi.mocked(groups.activateGroup).mock.invocationCallOrder[0]!,
+    )
+  })
+
   it('keeps a panel view the user already focused (e.g. the Output editor)', async () => {
     const context = new ContextKeyService()
     const panel = document.createElement('div')
