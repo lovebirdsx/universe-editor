@@ -18,6 +18,8 @@ import { mkTempDir } from '@universe-editor/e2e-harness'
 // themes map storage.type to the same value as keyword.
 const DARK_KEYWORD = 'rgb(86, 156, 214)' // #569CD6 (Universe Dark)
 const LIGHT_KEYWORD = 'rgb(0, 0, 255)' // #0000FF (Universe Light)
+// `comment.*` is #6A9955 in both built-in themes.
+const DARK_COMMENT = 'rgb(106, 153, 85)'
 // JSON: key (`support.type.property-name`) and string value (`string`) resolve
 // to distinct colors — a mismatch between the textmate colorMap and the
 // `.mtkN` stylesheet shows up here immediately.
@@ -199,6 +201,29 @@ test.describe('@p0 textmate', () => {
     await expect.poll(() => tokenColor(page, 'li'), { timeout: 15000 }).toBe(DARK_JSX_TAG)
     expect(await tokenColor(page, 'span')).toBe(DARK_JSX_TAG)
     expect(await tokenColor(page, 'Tree')).toBe(DARK_JSX_COMPONENT)
+  })
+
+  test('cpp document comments keep their color on continuation lines @regression', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    // `cpp` used to bind to source.cpp.embedded.macro — a fragment whose
+    // documentation-comment rule ends at every newline, so only the opening
+    // line stayed green. The manifest now leaves the fragment language-less
+    // and the full source.cpp grammar owns the `cpp` tokenizer.
+    const filePath = seedFile(
+      'sample.cpp',
+      ['/**', ' * alpha', ' * beta', ' */', 'int main() { return 0; }', ''].join('\n'),
+    )
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), filePath)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    await waitForTextMateTakeover(page, 'cpp')
+
+    await expect
+      .poll(() => tokenColorContaining(page, 'alpha'), { timeout: 15000 })
+      .toBe(DARK_COMMENT)
   })
 
   test('over-long lines degrade to null tokenization without blocking render', async ({

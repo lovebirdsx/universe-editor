@@ -262,7 +262,6 @@
         "path": "./syntaxes/c.tmLanguage.json"
       },
       {
-        "language": "cpp",
         "scopeName": "source.cpp.embedded.macro",
         "path": "./syntaxes/cpp.embedded.macro.tmLanguage.json"
       },

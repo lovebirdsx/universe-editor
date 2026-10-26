@@ -179,8 +179,10 @@ export interface IColorContribution {
  * `path` is relative to the extension root (e.g. `./syntaxes/ts.tmLanguage.json`);
  * the renderer resolves it against {@link IExtensionDescriptionDto.extensionLocation}.
  * Entries without `language` exist only to be injected into / included by other
- * grammars. `embeddedLanguages` maps a scope to a **language id** (the renderer
- * re-encodes it to the numeric encoded id before handing it to vscode-textmate).
+ * grammars; fragment grammars must stay language-less, otherwise they compete
+ * to become that language's tokenizer. `embeddedLanguages` maps a scope to a
+ * **language id** (the renderer re-encodes it to the numeric encoded id before
+ * handing it to vscode-textmate).
  */
 export interface IGrammarContribution {
   language?: string
