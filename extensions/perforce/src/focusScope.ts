@@ -10,13 +10,22 @@
  * `..` are dropped rather than clamped — clamping would turn a typo into "focus
  * everything".
  */
-import { collapseScopeDirs, isUnderAny } from './pathUtil.js'
+import { collapseScopeDirs, isScopeFile, isUnderAny } from './pathUtil.js'
 
-/** The subset of `workspace.focusEnabled` / `workspace.focusFolders` the
- *  reconcile scope cares about. */
+/** The subset of `workspace.focusEnabled` / `workspace.focusFolders` /
+ *  `workspace.focusShowRootFiles` the reconcile scope cares about. */
 export interface FocusScopeConfig {
   readonly enabled: boolean
   readonly folders: Readonly<Record<string, unknown>>
+  readonly showRootFiles?: boolean
+}
+
+/** A resolved focus: directory and file buckets, plus the root whose direct
+ *  files are in focus when `workspace.focusShowRootFiles` applies. */
+export interface FocusScope {
+  readonly dirs: string[]
+  readonly files: string[]
+  readonly rootFilesOf?: string
 }
 
 /**
@@ -94,12 +103,18 @@ export interface FocusEntryStat {
  * tolerates deletes, whereas guessing "it was a directory" would resurrect the
  * bad filespec this split exists to kill. Returns empty buckets when focus is
  * disabled or empty.
+ *
+ * With `showRootFiles` (the workbench's `workspace.focusShowRootFiles`) and a
+ * focus that actually narrows, the root's direct files — the ones the Explorer
+ * keeps visible — join `files` so the scan covers them, and `rootFilesOf`
+ * carries the root so files created there later are in focus too.
  */
 export async function resolveFocusScope(
   config: FocusScopeConfig,
   workspaceRoot: string,
   stat: (absolutePath: string) => Promise<FocusEntryStat | undefined>,
-): Promise<{ dirs: string[]; files: string[] }> {
+  listRootFiles?: () => Promise<readonly string[]>,
+): Promise<FocusScope> {
   if (!config.enabled) return { dirs: [], files: [] }
   const root = workspaceRoot.replace(/\\/g, '/').replace(/\/+$/, '')
   const rels: string[] = []
@@ -121,5 +136,11 @@ export async function resolveFocusScope(
   }
   const dirs = collapseDirs(dirCandidates)
   const files = fileCandidates.filter((p) => !isUnderAny(p, dirs))
-  return { dirs, files }
+  if (config.showRootFiles !== true || listRootFiles === undefined) return { dirs, files }
+  if (dirs.length === 0 && files.length === 0) return { dirs, files }
+  for (const name of await listRootFiles()) {
+    const p = `${root}/${name}`
+    if (!isScopeFile(p, files)) files.push(p)
+  }
+  return { dirs, files, rootFilesOf: root }
 }

@@ -3249,6 +3249,74 @@ describe('PerforceClient.runReconcileScan', () => {
     expect(driftFiles(client)).toEqual([])
   })
 
+  it('keeps watcher drift outside the focus out of the rendered group and its actions', async () => {
+    // Regression: the row filter used the daily-scope predicate, so a watcher
+    // event under an unfocused folder (inside the daily scope) surfaced in the
+    // group after the focused scan had settled clean.
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      {
+        reconcile: (_spec, specs) =>
+          specs.filter((s) => s.endsWith('x.txt')).map((s) => ({ rel: s.slice(LOCAL.length + 1) })),
+      },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    client.setReconcileScope([`${LOCAL}/A`])
+    await client.runReconcileScan()
+
+    wt.fire('change', `${LOCAL}/A/x.txt`)
+    wt.fire('change', `${LOCAL}/B/x.txt`)
+    await nextMacrotask()
+    await client.whenExternalFlushSettled()
+    ;(client as unknown as { _applyDriftGroup: () => void })._applyDriftGroup()
+
+    // Daily-scope drift is still tracked (the Explorer badge reads it)…
+    expect(driftFiles(client)).toEqual(
+      expect.arrayContaining([`${LOCAL}/A/x.txt`, `${LOCAL}/B/x.txt`]),
+    )
+    // …but only the focused row is displayed and reachable by group actions.
+    expect(groupRows(client)).toEqual([{ path: `${LOCAL}/A/x.txt`, letter: 'RM' }])
+    expect(client.driftGroupPaths()).toEqual([`${LOCAL}/A/x.txt`])
+  })
+
+  it('shows root-level files when the focus includes them', async () => {
+    const wt = makeFakeWatcher()
+    const client = await makeClient(
+      {
+        reconcile: (_spec, specs) =>
+          specs
+            .filter((s) => s.endsWith('README.md') || s.endsWith('x.txt'))
+            .map((s) => ({ rel: s.slice(LOCAL.length + 1) })),
+      },
+      fakeDisk(),
+      fakeClock(),
+      { createFileSystemWatcher: () => wt.watcher, watchRoot: ROOT, externalChangeDebounceMs: 0 },
+    )
+    const apply = (): void =>
+      (client as unknown as { _applyDriftGroup: () => void })._applyDriftGroup()
+    const fire = async (): Promise<void> => {
+      wt.fire('change', `${LOCAL}/README.md`)
+      wt.fire('change', `${LOCAL}/B/x.txt`)
+      await nextMacrotask()
+      await client.whenExternalFlushSettled()
+      apply()
+    }
+
+    client.setReconcileScope([`${LOCAL}/A`], [], { rootFilesOf: LOCAL })
+    await client.runReconcileScan()
+    await fire()
+    expect(groupRows(client).map((r) => r.path)).toEqual([`${LOCAL}/README.md`])
+
+    // Dropping the root-files option is a scope change: drift clears, and a
+    // fresh event for the root file is no longer displayed.
+    client.setReconcileScope([`${LOCAL}/A`], [])
+    await client.runReconcileScan()
+    await fire()
+    expect(groupRows(client)).toEqual([])
+  })
+
   it("does not treat the plugin's own mutation writes as external changes", async () => {
     const wt = makeFakeWatcher()
     const client = await makeClient(
@@ -4079,12 +4147,12 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
     client.setReconcileScope([`${LOCAL}/sub`])
     stubP4deltaRun(() => ({
       records: [
-        deltaFile('a.txt', 'edit'),
-        deltaFile('b.txt', 'add'),
+        deltaFile('sub/a.txt', 'edit'),
+        deltaFile('sub/b.txt', 'add'),
         // δ's open mode also reports the `p4 revert -a` groups (action
         // `revert`) and hands undigestable files off to native p4; neither is a
         // drift row, and all of them must stay out of the group.
-        deltaFile('c.txt', 'revert', 'revert_edit'),
+        deltaFile('sub/c.txt', 'revert', 'revert_edit'),
         deltaSummary({ total: 2, counts: { add: 1, edit: 1 } }),
       ],
       progress: [
@@ -4114,10 +4182,10 @@ describe('PerforceClient.runReconcileScan — δ engine', () => {
     expect(reconcileScans()).toEqual([])
     // Only add/edit/delete become rows — they land in the drift set and the group.
     expect(groupRows(client)).toEqual([
-      { path: `${LOCAL}/a.txt`, letter: 'RM' },
-      { path: `${LOCAL}/b.txt`, letter: 'RA' },
+      { path: `${LOCAL}/sub/a.txt`, letter: 'RM' },
+      { path: `${LOCAL}/sub/b.txt`, letter: 'RA' },
     ])
-    expect(driftFiles(client).sort()).toEqual([`${LOCAL}/a.txt`, `${LOCAL}/b.txt`])
+    expect(driftFiles(client).sort()).toEqual([`${LOCAL}/sub/a.txt`, `${LOCAL}/sub/b.txt`])
     // ONE checkpoint, keyed by the client root (a δ snapshot is whole-scope).
     expect(disk.store.size).toBe(1)
     const [key] = [...disk.store.keys()]

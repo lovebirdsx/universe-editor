@@ -99,6 +99,16 @@ export function isScopeFile(path: string, files: readonly string[]): boolean {
   return false
 }
 
+/**
+ * Whether `path` sits DIRECTLY inside `dir` (one segment below it, not deeper),
+ * using {@link scopeKey} for identity. `dir` itself does not count.
+ */
+export function isDirectChildOf(path: string, dir: string): boolean {
+  const key = scopeKey(path)
+  const cut = key.lastIndexOf('/')
+  return cut > 0 && key.slice(0, cut) === scopeKey(dir)
+}
+
 /** Convert a host-shaped file URI (scheme `file`, path like `/D:/a/b.txt` on
  *  Windows or `/a/b` on posix) to an OS filesystem path. Returns undefined for
  *  non-file URIs (e.g. an untitled or virtual document). Pure, so unit-testable

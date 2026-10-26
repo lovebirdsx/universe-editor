@@ -4,6 +4,7 @@ import {
   collapseScopeDirs,
   commonAncestorDir,
   containsAny,
+  isDirectChildOf,
   isScopeFile,
   isUnderAny,
   isUnderAnyKey,
@@ -132,6 +133,19 @@ describe('scopeKey', () => {
     } else {
       expect(scopeKey('/ws/Client/')).toBe('/ws/Client')
     }
+  })
+})
+
+describe('isDirectChildOf', () => {
+  it('matches only one segment below the directory', () => {
+    expect(isDirectChildOf('X:/ws/README.md', 'X:/ws')).toBe(true)
+    expect(isDirectChildOf('X:/ws/A/x.txt', 'X:/ws')).toBe(false)
+    expect(isDirectChildOf('X:/ws', 'X:/ws')).toBe(false)
+    expect(isDirectChildOf('X:/wsx/a.txt', 'X:/ws')).toBe(false)
+  })
+
+  it('folds separators and the drive letter', () => {
+    expect(isDirectChildOf('x:\\ws\\a.txt', 'X:/ws/')).toBe(true)
   })
 })
 

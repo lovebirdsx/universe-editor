@@ -3,7 +3,7 @@
  * longer derived from a setting here — they come from the resolved daily scope
  * (δ's `.p4delta-scope`, covered by `scope.test.ts` / `scopeConfig.test.ts`).
  */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { resolveFocusScope, resolveFocusScopeDirs } from '../focusScope.js'
 
 const ROOT = process.platform === 'win32' ? 'C:/ws' : '/ws'
@@ -165,5 +165,58 @@ describe('resolveFocusScope', () => {
     )
     expect(dirs).toEqual([])
     expect(files).toEqual([])
+  })
+})
+
+describe('resolveFocusScope — root files (focusShowRootFiles)', () => {
+  const stat = async (p: string) => (p === `${ROOT}/Client` ? { isDirectory: true } : undefined)
+  const list = async () => ['README.md', 'build.bat']
+
+  it('adds the root files and rootFilesOf when the focus narrows', async () => {
+    const scope = await resolveFocusScope(
+      { enabled: true, folders: { Client: true }, showRootFiles: true },
+      ROOT,
+      stat,
+      list,
+    )
+    expect(scope).toEqual({
+      dirs: [`${ROOT}/Client`],
+      files: [`${ROOT}/README.md`, `${ROOT}/build.bat`],
+      rootFilesOf: ROOT,
+    })
+  })
+
+  it('leaves the buckets alone when showRootFiles is off', async () => {
+    const scope = await resolveFocusScope(
+      { enabled: true, folders: { Client: true }, showRootFiles: false },
+      ROOT,
+      stat,
+      list,
+    )
+    expect(scope).toEqual({ dirs: [`${ROOT}/Client`], files: [] })
+  })
+
+  it('does not narrow to root files when the focus itself is empty', async () => {
+    // An empty focus means "the opened folder"; root files alone must not turn
+    // it into a root-files-only scope.
+    const listed = vi.fn(list)
+    const scope = await resolveFocusScope(
+      { enabled: true, folders: {}, showRootFiles: true },
+      ROOT,
+      stat,
+      listed,
+    )
+    expect(scope).toEqual({ dirs: [], files: [] })
+    expect(listed).not.toHaveBeenCalled()
+  })
+
+  it('does not duplicate a root file that is also a focus entry', async () => {
+    const scope = await resolveFocusScope(
+      { enabled: true, folders: { 'README.md': true }, showRootFiles: true },
+      ROOT,
+      async (p) => (p === `${ROOT}/README.md` ? { isDirectory: false } : undefined),
+      list,
+    )
+    expect(scope.files).toEqual([`${ROOT}/README.md`, `${ROOT}/build.bat`])
   })
 })

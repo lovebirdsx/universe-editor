@@ -127,7 +127,7 @@ import {
   syncPromptOf,
   syncSpecOf,
 } from './syncSpec.js'
-import { resolveFocusScope } from './focusScope.js'
+import { resolveFocusScope, type FocusScope } from './focusScope.js'
 import { scopeTargets, scopeTargetsWithin } from './scope.js'
 import { SCOPE_FILE_NAME } from './scopeConfig.js'
 import { registerSwarmCommands } from './swarm/swarmCommands.js'
@@ -1252,21 +1252,34 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // the filespec `<file>/...` — a no-such-file p4 answers as clean (exit 0,
   // empty) — and checkpointing that empty answer would pin the file's drift
   // verdict forever.
-  const watchReconcileScope = watchConfig<{ dirs: string[]; files: string[] }>({
+  const watchReconcileScope = watchConfig<FocusScope>({
     read: async () => {
       const scopeCfg = workspace.getConfiguration('workspace')
       const enabled = await scopeCfg.get('focusEnabled', false)
       const folders = await scopeCfg.get<Record<string, unknown>>('focusFolders', {})
-      return resolveFocusScope({ enabled, folders }, root, async (p) => {
-        try {
-          const s = await workspace.fs.stat(p)
-          return { isDirectory: s.type === FileType.Directory }
-        } catch {
-          return undefined // missing / unreadable — kept in `files` (see resolveFocusScope)
-        }
-      })
+      const showRootFiles = await scopeCfg.get('focusShowRootFiles', true)
+      return resolveFocusScope(
+        { enabled, folders, showRootFiles },
+        root,
+        async (p) => {
+          try {
+            const s = await workspace.fs.stat(p)
+            return { isDirectory: s.type === FileType.Directory }
+          } catch {
+            return undefined // missing / unreadable — kept in `files` (see resolveFocusScope)
+          }
+        },
+        async () => {
+          try {
+            const entries = await workspace.fs.readDirectory(root)
+            return entries.filter(([, type]) => type === FileType.File).map(([name]) => name)
+          } catch {
+            return []
+          }
+        },
+      )
     },
-    apply: ({ dirs, files }) => {
+    apply: ({ dirs, files, rootFilesOf }) => {
       // `scoped` is true whenever ANY focus entry survived — dirs or files. Only
       // then does the scope narrow; with zero surviving entries (focus disabled
       // or every entry dropped) fall back to the opened folder so the hint
@@ -1276,13 +1289,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // root — passing `root` here would defeat the very narrowing the user asked
       // for and re-walk the depot the focus was meant to avoid.
       const scoped = dirs.length > 0 || files.length > 0
-      for (const c of mgr.all) c.setReconcileScope(scoped ? dirs : root, scoped ? files : [])
+      for (const c of mgr.all) {
+        c.setReconcileScope(
+          scoped ? dirs : root,
+          scoped ? files : [],
+          rootFilesOf === undefined ? undefined : { rootFilesOf },
+        )
+      }
       // NOTHING else follows the focus. The default get's range is the DAILY scope
       // (opened folder ∩ `.p4delta-scope`), resolved by `PerforceClient.refreshScope`
       // — the user's get must not follow what they happen to be looking at, and a
       // focus folder outside the declared scope must not silently widen it.
       log(
         `[perforce] reconcile focus: ${dirs.length} dirs, ${files.length} files` +
+          (rootFilesOf !== undefined ? ' (+root files)' : '') +
           (dirs.length === 0 && files.length === 0 ? ' (<opened folder>)' : ''),
       )
     },
@@ -1290,7 +1310,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
       workspace.onDidChangeConfiguration((e) => {
         if (
           !e.affectsConfiguration('workspace.focusEnabled') &&
-          !e.affectsConfiguration('workspace.focusFolders')
+          !e.affectsConfiguration('workspace.focusFolders') &&
+          !e.affectsConfiguration('workspace.focusShowRootFiles')
         ) {
           return
         }

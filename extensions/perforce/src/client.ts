@@ -139,6 +139,7 @@ import {
   norm,
   isUnderAny,
   isUnderAnyKey,
+  isDirectChildOf,
   isScopeFile,
   containsAny,
   scopeKey,
@@ -1174,6 +1175,11 @@ export class PerforceClient {
    *  per-file `reconcile -n` and never checkpointed (see
    *  {@link setReconcileScope}). Empty when no focus entry is a file. */
   private _reconcileScopeFiles: readonly string[] = []
+  /** When set, files sitting DIRECTLY in this directory are in the focus too —
+   *  the workbench's `workspace.focusShowRootFiles`, so the drift group lists the
+   *  root files the Explorer shows. Only the display predicate reads it; the
+   *  existing root files reach the scan through `_reconcileScopeFiles`. */
+  private _reconcileScopeRootFilesOf: string | undefined
   /** Local directories excluded from reconcile discovery and the background
    *  scan, as ONE set: the daily scope's own directory exclusions unioned with
    *  the configured reconcile noise (`perforce.reconcile.excludeFolders`). The
@@ -1740,11 +1746,10 @@ export class PerforceClient {
     if (row.clientFile === undefined) return false
     if (this._openedPaths.has(norm(row.clientFile))) return false
     if (this._isExcluded(row.clientFile)) return false
-    // Defense in depth: a row must also be in the current scope. Both-empty
-    // (unfocused) makes `_isInReconcileScope` unconditionally true, so the
-    // whole-client behaviour is unchanged; a narrowed scope retracts rows a
-    // stale checkpoint or a cross-source merge would otherwise resurrect.
-    return this._isInReconcileScope(row.clientFile)
+    // The drift set is maintained against the DAILY scope (the watcher and the
+    // Explorer badge share it), so the focus must be applied here: otherwise a
+    // watcher event under an unfocused folder surfaces in the group.
+    return this._isInDiscoveryScope(row.clientFile)
   }
 
   /**
@@ -2186,19 +2191,24 @@ export class PerforceClient {
   setReconcileScope(
     localPaths: readonly string[] | string | undefined,
     scopeFiles?: readonly string[],
+    options?: { readonly rootFilesOf?: string },
   ): void {
     const paths = asScopeList(localPaths)
     const nextDirs = paths.length === 0 ? [] : normalizeScopeDirs(paths)
     const nextFiles =
       scopeFiles === undefined || scopeFiles.length === 0 ? [] : normalizeScopeFiles(scopeFiles)
+    const nextRootFilesOf =
+      options?.rootFilesOf === undefined ? undefined : norm(options.rootFilesOf)
     if (
       sameScopeDirs(this._reconcileScopeDirs, nextDirs) &&
-      sameScopeDirs(this._reconcileScopeFiles, nextFiles)
+      sameScopeDirs(this._reconcileScopeFiles, nextFiles) &&
+      this._reconcileScopeRootFilesOf === nextRootFilesOf
     ) {
       return
     }
     this._reconcileScopeDirs = nextDirs
     this._reconcileScopeFiles = nextFiles
+    this._reconcileScopeRootFilesOf = nextRootFilesOf
     // Every row in the drift set answers a question about the old discovery
     // range, and the checkpoint fingerprint already orphans the persisted
     // answers for the same reason. Dropping the rows keeps the panel from
@@ -2656,7 +2666,9 @@ export class PerforceClient {
     if (this._reconcileScopeDirs.length === 0 && this._reconcileScopeFiles.length === 0) return true
     return (
       isUnderAny(localPath, this._reconcileScopeDirs) ||
-      isScopeFile(localPath, this._reconcileScopeFiles)
+      isScopeFile(localPath, this._reconcileScopeFiles) ||
+      (this._reconcileScopeRootFilesOf !== undefined &&
+        isDirectChildOf(localPath, this._reconcileScopeRootFilesOf))
     )
   }
 
