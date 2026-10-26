@@ -10,6 +10,7 @@ import {
   ServiceCollection,
   URI,
   UriIdentityService,
+  runWithInvocationModifiers,
   type ICommandService as ICommandServiceType,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -432,6 +433,64 @@ describe('OpenChangesAction', () => {
       original: 'head content\n',
       modified: 'g1 buffer\n',
       originalUri: resource.toString(),
+    })
+  })
+
+  it('forwards the invocation target to the buffer-aware diff payload', async () => {
+    const groups = new EditorGroupsService()
+    const input = new FileEditorInput(URI.file('D:/repo/targeted.ts'), {} as never)
+    groups.activeGroup.openEditor(input)
+    FileEditorRegistry.register(
+      input,
+      { getModel: () => ({ getValue: () => 'buffer\n' }) } as never,
+      groups.activeGroup.id,
+    )
+
+    let payload: unknown
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string, ...args: unknown[]) => {
+        if (id === GET_HEAD) return 'head\n'
+        if (id === '_workbench.openDiff') {
+          payload = args[0]
+        }
+        return undefined
+      }) as ICommandServiceType['executeCommand'],
+    }
+    const services = new ServiceCollection(
+      [IEditorGroupsService, groups],
+      [ICommandService, commandService],
+      [IScmDecorationsService, scmDecorations(true)],
+      [IScmService, scmService()],
+      [IWorkspaceService, localWorkspace()],
+    )
+
+    await runWithInvocationModifiers({ ctrlKey: true }, () => runActionWithServices(services))
+
+    expect(payload).toMatchObject({ openTarget: 'side' })
+  })
+
+  it('forwards the invocation target when delegating to the provider', async () => {
+    const groups = new EditorGroupsService()
+    const target = URI.file('D:/repo/not-active.ts')
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => undefined) as ICommandServiceType['executeCommand'],
+    }
+    const services = new ServiceCollection(
+      [IEditorGroupsService, groups],
+      [ICommandService, commandService],
+      [IScmDecorationsService, scmDecorations(true)],
+      [IScmService, scmService()],
+      [IWorkspaceService, localWorkspace()],
+    )
+
+    await runWithInvocationModifiers({ altKey: true }, () =>
+      runActionWithServices(services, { resource: target }),
+    )
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(OPEN_CHANGE, target.fsPath, {
+      openTarget: 'newWindow',
     })
   })
 })

@@ -60,8 +60,12 @@ import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { isPreviewableResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
-import { resolveOpenTarget } from '../../services/editor/openTarget.js'
+import { invocationOpenTarget, resolveOpenTarget } from '../../services/editor/openTarget.js'
 import { scmHostPath } from '../../services/scm/scmHostPath.js'
+import {
+  SCM_TARGETED_OPEN_COMMANDS,
+  scmTargetedOpenArgs,
+} from '../../services/scm/scmRowCommands.js'
 import type { ScmResourceArg } from '../../services/scm/scmResourceArg.js'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
@@ -489,12 +493,19 @@ const ScmFileRow = memo(function ScmFileRow({
   const run = (command: string): void => {
     // The clicked row is the primary arg (kept back-compatible: it still carries
     // `resourceUri` + `contextValue`); `scmResourceGroupId` lets group-scoped file
-    // commands (e.g. unshelve a single shelved file) resolve their changelist. The
-    // second arg is the full selection so a command can act on every selected row.
+    // commands (e.g. unshelve a single shelved file) resolve their changelist.
     const primary: ScmResourceArg = { ...resource, scmResourceGroupId: node.groupId }
+    if (SCM_TARGETED_OPEN_COMMANDS.has(command)) {
+      void commandService.executeCommand(
+        command,
+        ...scmTargetedOpenArgs(resource.command?.arguments, primary, invocationOpenTarget()),
+      )
+      return
+    }
+    // The second arg is the full selection so a command can act on every selected
+    // row. Only forward a multi-selection when this row is part of it; acting on
+    // a single clicked row shouldn't sweep in an unrelated prior selection.
     const selected = getSelectedResources()
-    // Only forward a multi-selection when this row is part of it; acting on a
-    // single clicked row shouldn't sweep in an unrelated prior selection.
     const selection =
       selected.length > 1 && selected.some((s) => s.resourceUri === resource.resourceUri)
         ? selected

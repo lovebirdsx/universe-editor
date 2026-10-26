@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Window } from 'happy-dom'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { getInvocationModifiers } from '@universe-editor/platform'
 import { ListMenu, type ListMenuEntry } from '../contextMenu/ListMenu.js'
 import { OwnerDocumentProvider } from '../overlay/ownerDocumentContext.js'
 
@@ -191,6 +192,60 @@ describe('ListMenu', () => {
         fireEvent.keyDown(window, { key: 'Enter', isComposing: true })
       })
       expect(run).not.toHaveBeenCalled()
+    })
+
+    it('runs the highlighted item on Ctrl+Enter and carries the modifiers', () => {
+      let seen: unknown
+      const run = vi.fn(() => {
+        seen = getInvocationModifiers()
+      })
+      renderMenu([{ kind: 'item', label: 'A', run }], { autoFocusFirst: true })
+
+      const event = new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'Enter',
+        ctrlKey: true,
+      })
+      act(() => {
+        window.dispatchEvent(event)
+      })
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(run).toHaveBeenCalledTimes(1)
+      expect(seen).toMatchObject({ ctrlKey: true })
+      expect(getInvocationModifiers()).toBeUndefined()
+    })
+
+    it('swallows a modified Enter when the highlighted row became disabled', () => {
+      const run = vi.fn()
+      const onClose = vi.fn()
+      const view = (disabled: boolean) => (
+        <ListMenu
+          items={[{ kind: 'item', label: 'A', run, ...(disabled ? { disabled: true } : {}) }]}
+          anchor={{ x: 0, y: 0 }}
+          onClose={onClose}
+          autoFocusFirst
+        />
+      )
+      const { rerender } = render(view(false))
+      // The cursor stays on the row while the menu re-resolves under it.
+      rerender(view(true))
+
+      const event = new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'Enter',
+        altKey: true,
+      })
+      act(() => {
+        window.dispatchEvent(event)
+      })
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(run).not.toHaveBeenCalled()
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.getByRole('menu')).toBeDefined()
     })
   })
 

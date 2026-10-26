@@ -15,6 +15,11 @@ import {
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import {
+  openFreshInputWithTarget,
+  openTargetServicesFrom,
+} from '../services/editor/openWithTarget.js'
 
 export class ReopenWithAction extends Action2 {
   static readonly ID = 'workbench.action.reopenWith'
@@ -36,6 +41,8 @@ export class ReopenWithAction extends Action2 {
     const quickInput = accessor.get(IQuickInputService)
     const groups = accessor.get(IEditorGroupsService)
     const uriIdentity = accessor.get(IUriIdentityService)
+    const openTarget = invocationOpenTarget()
+    const targetServices = openTarget === 'default' ? undefined : openTargetServicesFrom(accessor)
 
     const rawResource = args?.resource
     if (!rawResource) return
@@ -61,6 +68,17 @@ export class ReopenWithAction extends Action2 {
         : undefined) ?? group.editors.find((e) => uriIdentity.isEqual(e.resource, uri))
     if (existing) group.closeEditor(existing)
 
+    // Fresh input, not openUriEditor: the user picked this type explicitly, and
+    // the new-window path must not swap in another tab of the same resource.
+    if (targetServices) {
+      const input = resolver.createEditorInput(uri, pick.id)
+      const result = await openFreshInputWithTarget(targetServices, input, openTarget, {
+        pinned: true,
+        sourceGroup: group,
+      })
+      if (result.handled) return
+      if (!input.isDisposed) input.dispose()
+    }
     await resolver.openEditor(uri, { preferredTypeId: pick.id, pinned: true })
   }
 }

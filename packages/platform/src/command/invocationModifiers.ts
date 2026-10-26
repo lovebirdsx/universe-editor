@@ -43,3 +43,28 @@ export function runWithInvocationModifiers<T>(
 export function getInvocationModifiers(): IInvocationModifiers | undefined {
   return current
 }
+
+/** Structurally compatible with DOM `KeyboardEvent`. */
+export interface IEnterKeyEvent {
+  readonly key: string
+  readonly repeat?: boolean
+  readonly shiftKey?: boolean
+  readonly ctrlKey?: boolean
+  readonly metaKey?: boolean
+  readonly altKey?: boolean
+}
+
+/** Ctrl/Meta/Alt+Enter, never with Shift. Repeat is deliberately NOT filtered:
+ *  menus must swallow a held key without re-running the row. */
+export function isModifiedEnter(e: IEnterKeyEvent): boolean {
+  return (
+    e.key === 'Enter' &&
+    e.shiftKey !== true &&
+    (e.ctrlKey === true || e.metaKey === true || e.altKey === true)
+  )
+}
+
+/** The open gesture: modified Enter ignoring auto-repeat. */
+export function isOpenTargetEnter(e: IEnterKeyEvent): boolean {
+  return e.repeat !== true && isModifiedEnter(e)
+}

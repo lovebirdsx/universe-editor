@@ -649,14 +649,134 @@ describe('ContextMenu submenus', () => {
         { key: 'p', ctrlKey: true, altKey: true },
         { key: 'p', metaKey: true },
         { key: 'ArrowDown', ctrlKey: true },
-        { key: 'Enter', ctrlKey: true },
+        { key: 'Enter', ctrlKey: true, shiftKey: true },
+        { key: 'Enter', altKey: true, shiftKey: true },
+        { key: 'Enter', metaKey: true, shiftKey: true },
       ] satisfies KeyboardEventInit[]) {
         expect(pressWith(init)).toBe(false)
       }
       expect(activeLabel(menu)).toBe('A')
     })
 
-    it('swallows an alias even when the highlighted level stops resolving', () => {
+    it.each([
+      { ctrlKey: true },
+      { altKey: true },
+      { metaKey: true },
+      { ctrlKey: true, altKey: true },
+    ])('runs the highlighted item on a modified Enter (%o) and carries the modifiers', (mods) => {
+      const root = asMenuId('test.submenu.keys.modifiedenter')
+      track(MenuRegistry.addMenuItem(root, { command: 'run.cmd', title: 'Run' }))
+
+      const executed: unknown[][] = []
+      const ambient: unknown[] = []
+      const onClose = vi.fn()
+      const commandService = {
+        executeCommand: async (...args: unknown[]) => {
+          executed.push(args)
+          ambient.push(getInvocationModifiers())
+        },
+      } as unknown as ICommandService
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={commandService}
+          onClose={onClose}
+        />,
+      )
+
+      press('ArrowDown')
+      expect(pressWith({ key: 'Enter', ...mods })).toBe(true)
+
+      expect(executed).toEqual([['run.cmd']])
+      expect(ambient[0]).toMatchObject(mods)
+      expect(onClose).toHaveBeenCalled()
+      expect(getInvocationModifiers()).toBeUndefined()
+    })
+
+    it('swallows a modified Enter with nothing highlighted, never reaching the view below', () => {
+      const root = asMenuId('test.submenu.keys.modifiedinert')
+      track(MenuRegistry.addMenuItem(root, { command: 'run.cmd', title: 'Run' }))
+
+      const executed: unknown[][] = []
+      const onClose = vi.fn()
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService(executed)}
+          onClose={onClose}
+        />,
+      )
+
+      const leaked = vi.fn()
+      document.addEventListener('keydown', leaked, true)
+      const event = new KeyboardEvent('keydown', {
+        bubbles: true,
+        cancelable: true,
+        key: 'Enter',
+        ctrlKey: true,
+      })
+      act(() => {
+        document.body.dispatchEvent(event)
+      })
+      document.removeEventListener('keydown', leaked, true)
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(leaked).not.toHaveBeenCalled()
+      expect(executed).toEqual([])
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.getByRole('menu')).toBeDefined()
+    })
+
+    it('expands a highlighted submenu on a modified Enter instead of running it', () => {
+      const root = asMenuId('test.submenu.keys.modifiedsubmenu')
+      const sub = asMenuId('test.submenu.keys.modifiedsubmenu.child')
+      track(MenuRegistry.addSubmenuItem(root, { submenu: sub, title: 'More' }))
+      track(MenuRegistry.addMenuItem(sub, { command: 'nested.cmd', title: 'Nested' }))
+
+      const onClose = vi.fn()
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService([])}
+          onClose={onClose}
+        />,
+      )
+
+      fireEvent.mouseEnter(screen.getByText('More'))
+      expect(pressWith({ key: 'Enter', ctrlKey: true })).toBe(true)
+
+      expect(screen.getByTestId('context-menu-submenu')).toBeDefined()
+      expect(screen.getByText('Nested')).toBeDefined()
+      expect(onClose).not.toHaveBeenCalled()
+    })
+
+    it('swallows an auto-repeated modified Enter without running the row', () => {
+      const root = asMenuId('test.submenu.keys.modifiedrepeat')
+      track(MenuRegistry.addMenuItem(root, { command: 'run.cmd', title: 'Run' }))
+
+      const executed: unknown[][] = []
+      const onClose = vi.fn()
+      render(
+        <ContextMenu
+          menuId={root}
+          anchor={{ x: 0, y: 0 }}
+          commandService={makeCommandService(executed)}
+          onClose={onClose}
+        />,
+      )
+
+      press('ArrowDown')
+      expect(pressWith({ key: 'Enter', ctrlKey: true, repeat: true })).toBe(true)
+
+      expect(executed).toEqual([])
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.getByRole('menu')).toBeDefined()
+    })
+
+    it('swallows an alias or a modified Enter when the highlighted level stops resolving', () => {
       const root = asMenuId('test.submenu.keys.ctrlstale')
       const sub = asMenuId('test.submenu.keys.ctrlstale.child')
       // Row 0 is a submenu while `v1` holds and a plain item once `v2` does, so
@@ -704,6 +824,9 @@ describe('ContextMenu submenus', () => {
       // a menu that is plainly still on screen.
       expect(pressWith({ key: 'ArrowDown' })).toBe(false)
       expect(pressWith({ key: 'p', ctrlKey: true })).toBe(true)
+      // The same applies to the open gesture: there is no row to run, and it
+      // must not reach the tree/list underneath.
+      expect(pressWith({ key: 'Enter', ctrlKey: true })).toBe(true)
     })
 
     it('runs the active item on Enter', () => {

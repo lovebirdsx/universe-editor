@@ -85,6 +85,8 @@ f1: false,
 
 **与 accessor 同一条寿命**：只在 handler 同步段有效（`CommandService` 同步调用 handler），首个 `await` 前必须读完；也**不跨扩展宿主 RPC**——经扩展转发的命令改走显式 `{ openTarget }` 尾参数约定。打开单例编辑器统一走 `openWithTarget.ts` 的 `openSingletonEditor`（已开的移动、不复制；只需 pinned 打开的用 `openPinnedSingletonEditor`），文件类（settings.json、日志等）走 `openUriEditor`（落点打开副本，需定制 input 如只读时传 `createInput`）；两者在 `default` 或落点失败时回退调用方给的原有打开逻辑。直接拿得到事件的组件（如 `ResourcePreviewButton`）不必绕环境值，`resolveOpenTarget(e)` 即可。
 
+**菜单里的键盘手势**：`ContextMenu` / `ListMenu` 的 `useMenuNavigation` 对 `isModifiedEnter(e)`（Ctrl/Meta/Alt+Enter，永不带 Shift）做模态处理——有高亮项时用 `runWithInvocationModifiers(e, row.run)`（与点击同义，菜单先关再执行），高亮子菜单只展开，无高亮 / 行失效 / disabled / `repeat` 一律 `preventDefault + stopPropagation` 吞掉，绝不下漏到打开菜单的树/列表。`isModifiedEnter` 与 `isOpenTargetEnter` 定义在 `packages/platform/src/command/invocationModifiers.ts`，Tree / FlatList / 菜单共用；后者额外过滤 auto-repeat（长按不重复打开）。**扩展命令跨 RPC 看不到环境值**，宿主必须显式转发：SCM 行按 `SCM_TARGETED_OPEN_COMMANDS` 白名单追加 `{ openTarget }`（不能按 `1_open` 分组推导——`perforce-graph.viewFileHistory` 同组但不收 options；p4 shelved 行用 `resource.command.arguments` 而非资源 DTO），Timeline 菜单用 `executeCommand` override 把行自己的 openDiff 命令还原成 `command.arguments[0]`，其余菜单项仍收整个 item。新增扩展打开命令若要支持落点，handler 需接受 `(arg, options)`。renderer Action2 侧已收口 `ScmOpenFileAction`、`OpenChangesAction`、`FindMarkdownFileReferencesAction`（新窗口成功时跳过跨窗口不可达的 peek）、`ReopenWithAction`（fresh input + 关闭旧 tab）、`Compare with Selected` / `Compare Selected`。
+
 ## 扩展命令与 renderer Action2 的同名遮蔽
 
 内置扩展（git / perforce）贡献到 scm/title 菜单、但 handler 在 **renderer Action2** 的命令（如 `git-graph.view` / `perforce-graph.view`），**绝不能**再写进扩展 `package.json` 的 `contributes.commands`。

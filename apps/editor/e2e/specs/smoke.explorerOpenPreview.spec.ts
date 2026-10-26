@@ -52,4 +52,31 @@ test.describe('@p1 explorer open preview', () => {
     // Dismiss the menu so teardown finds a clean overlay state.
     await page.keyboard.press('Escape')
   })
+
+  test('Ctrl+Enter on the highlighted Open Preview opens it to the side', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    const readme = page.locator('[role="treeitem"]', { hasText: 'README.md' })
+    await expect(readme).toBeVisible({ timeout: 10000 })
+
+    await readme.click({ button: 'right' })
+    const menu = page.getByRole('menu')
+    const openPreview = menu.getByRole('menuitem', { name: 'Open Preview' })
+    await expect(openPreview).toBeVisible()
+    // Mouse-opened menus start unhighlighted; hover is what "selects" the row.
+    await openPreview.hover()
+
+    await page.keyboard.press('Control+Enter')
+
+    await expect(menu).toHaveCount(0)
+    await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+        timeout: 5000,
+      })
+      .toBe('markdown.preview')
+  })
 })

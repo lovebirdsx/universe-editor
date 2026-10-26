@@ -35,7 +35,7 @@ import { VirtualList } from '../list/VirtualList.js'
 import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { useStableCallback } from '../hooks/useStableCallback.js'
-import { markAsSingleton } from '@universe-editor/platform'
+import { isOpenTargetEnter, markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
 import {
   dispatchKeyboardContextMenu,
@@ -450,13 +450,7 @@ export function Tree<T>(props: ITreeProps<T>) {
 
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (
-        modifierActivation &&
-        e.key === 'Enter' &&
-        !e.shiftKey &&
-        !e.repeat &&
-        (e.ctrlKey || e.metaKey || e.altKey)
-      ) {
+      if (modifierActivation && isOpenTargetEnter(e)) {
         const vis = model.getVisibleNodes()
         const focusedId = model.focused
         const current = focusedId ? vis.find((n) => n.id === focusedId) : undefined

@@ -7,6 +7,8 @@
 
 import { getInvocationModifiers, type IKeyMods } from '@universe-editor/platform'
 
+export { isOpenTargetEnter } from '@universe-editor/platform'
+
 export type OpenTarget = 'default' | 'side' | 'newWindow'
 
 /** The subset that crosses the extension-host boundary; undefined means default. */
@@ -36,27 +38,6 @@ export function resolveOpenTarget(mods: OpenModifiers | undefined): OpenTarget {
  *  toolbar, menu…). Read it before the command's first await. */
 export function invocationOpenTarget(): OpenTarget {
   return resolveOpenTarget(getInvocationModifiers())
-}
-
-export interface OpenTargetEnterEvent {
-  readonly key: string
-  readonly repeat?: boolean
-  readonly shiftKey?: boolean
-  readonly ctrlKey?: boolean
-  readonly metaKey?: boolean
-  readonly altKey?: boolean
-}
-
-/** Modified Enter (Ctrl/Meta/Alt, never Shift) that should open a link/target.
- *  Shift is reserved for chords such as Swarm's Ctrl+Shift+Enter; repeat is
- *  ignored so holding the key doesn't fire the open repeatedly. */
-export function isOpenTargetEnter(e: OpenTargetEnterEvent): boolean {
-  return (
-    e.key === 'Enter' &&
-    e.repeat !== true &&
-    e.shiftKey !== true &&
-    (e.ctrlKey === true || e.metaKey === true || e.altKey === true)
-  )
 }
 
 /** Quick pick accepts only physical Ctrl (platform `IKeyMods` has no Meta). */

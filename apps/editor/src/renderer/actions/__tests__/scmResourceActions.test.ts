@@ -33,6 +33,20 @@ vi.mock('../../services/resourcePreview/openResourcePreview.js', () => ({
   openResourcePreview: vi.fn(() => true),
 }))
 
+const openWithTargetMocks = vi.hoisted(() => ({
+  openUriEditor: vi.fn(
+    async (
+      _services: unknown,
+      _target: unknown,
+      _resource: unknown,
+      _openDefault: unknown,
+      _options: unknown,
+    ) => true,
+  ),
+  openTargetServicesFrom: vi.fn(() => ({ marker: 'services' })),
+}))
+vi.mock('../../services/editor/openWithTarget.js', () => openWithTargetMocks)
+
 const REMOTE_AUTHORITY = 'ssh-remote+host'
 const REMOTE_ROOT = '/home/u/repo'
 const ROW_PATH = `${REMOTE_ROOT}/src/a.ts`
@@ -78,6 +92,8 @@ const rowArg = (resourceUri: string): unknown => ({ resourceUri, scmResourceGrou
 
 beforeEach(() => {
   vi.mocked(openResourcePreview).mockClear()
+  openWithTargetMocks.openUriEditor.mockClear()
+  openWithTargetMocks.openTargetServicesFrom.mockClear()
 })
 
 describe('ScmOpenFileAction', () => {
@@ -123,6 +139,25 @@ describe('ScmOpenFileAction', () => {
     action.run(accessor, 'D:/repo/a.ts')
 
     expect(openEditor).not.toHaveBeenCalled()
+  })
+
+  it('opens to the side under Ctrl through the shared targeted-open helper', () => {
+    const { accessor, openEditor } = makeAccessor({ folder: remoteFolder() })
+
+    runWithInvocationModifiers({ ctrlKey: true }, () =>
+      new ScmOpenFileAction().run(accessor, rowArg(ROW_PATH)),
+    )
+
+    expect(openEditor).not.toHaveBeenCalled()
+    expect(openWithTargetMocks.openTargetServicesFrom).toHaveBeenCalledOnce()
+    expect(openWithTargetMocks.openUriEditor).toHaveBeenCalledOnce()
+    const [services, target, uri, openDefault, options] =
+      openWithTargetMocks.openUriEditor.mock.calls[0]!
+    expect(services).toEqual({ marker: 'services', resolver: expect.anything() })
+    expect(target).toBe('side')
+    expect((uri as URI).path).toBe(ROW_PATH)
+    expect(openDefault).toBeTypeOf('function')
+    expect(options).toEqual({ pinned: true })
   })
 })
 

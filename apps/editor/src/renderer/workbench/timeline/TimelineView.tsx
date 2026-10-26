@@ -45,7 +45,11 @@ import {
 } from '../../services/timeline/TimelineService.js'
 import { timelineFollowTarget } from '../../services/timeline/followTarget.js'
 import { mergeTimelineItems } from '../../services/timeline/timelineMerge.js'
-import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
+import {
+  invocationOpenTarget,
+  resolveOpenTarget,
+  type OpenTarget,
+} from '../../services/editor/openTarget.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveIcon } from '../icons/icon-map.js'
 import { renderMenuIcon } from '../icons/menuIcon.js'
@@ -317,6 +321,21 @@ export function TimelineView() {
     })
   }, [])
 
+  // The menu's "Open Changes" is the row's own command: it needs the inner
+  // argument (uri + revision), not the whole item DTO. Everything else on the
+  // timeline menu (copy id/message, view commit) expects the item.
+  const menuExecuteCommand = useMemo(() => {
+    if (!menu) return undefined
+    const item = menu.item
+    return (commandId: string): void => {
+      if (item.command?.command === commandId) {
+        runItem(item, invocationOpenTarget())
+        return
+      }
+      void commandService.executeCommand(commandId, item)
+    }
+  }, [menu, runItem, commandService])
+
   const memory = useContextMenuMemory()
 
   if (!uri || schemeProviders.length === 0) {
@@ -467,8 +486,8 @@ export function TimelineView() {
         <ContextMenu
           menuId={MenuId.TimelineItemContext}
           anchor={menu.anchor}
-          args={[menu.item]}
           commandService={commandService}
+          {...(menuExecuteCommand ? { executeCommand: menuExecuteCommand } : {})}
           contextKeyService={menu.scoped}
           renderIcon={renderMenuIcon}
           autoFocusFirst={menu.keyboard}

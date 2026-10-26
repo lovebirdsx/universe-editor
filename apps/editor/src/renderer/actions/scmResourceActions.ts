@@ -23,6 +23,7 @@ import {
 import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { openResourcePreview } from '../services/resourcePreview/openResourcePreview.js'
 import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openTargetServicesFrom, openUriEditor } from '../services/editor/openWithTarget.js'
 import { scmResourceArgPath } from '../services/scm/scmResourceArg.js'
 import { SCM_OPEN_FILE_COMMAND, SCM_OPEN_PREVIEW_COMMAND } from '../services/scm/scmRowCommands.js'
 
@@ -68,7 +69,21 @@ export class ScmOpenFileAction extends Action2 {
   override run(accessor: ServicesAccessor, arg?: unknown): void {
     const fsPath = scmResourceArgPath(arg)
     if (fsPath === undefined) return
-    void accessor.get(IEditorResolverService).openEditor(rowUri(accessor, fsPath), { pinned: true })
+    const uri = rowUri(accessor, fsPath)
+    const resolver = accessor.get(IEditorResolverService)
+    const openDefault = (): Promise<unknown> => resolver.openEditor(uri, { pinned: true })
+    const target = invocationOpenTarget()
+    if (target === 'default') {
+      void openDefault()
+      return
+    }
+    void openUriEditor(
+      { ...openTargetServicesFrom(accessor), resolver },
+      target,
+      uri,
+      openDefault,
+      { pinned: true },
+    )
   }
 }
 

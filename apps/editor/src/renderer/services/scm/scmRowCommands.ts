@@ -9,8 +9,10 @@
  *  so one menu contribution still backs both surfaces — the two hard-coded
  *  buttons this replaces were invisible to every context menu.
  *
- *  Zero imports on purpose: `actions/` and `workbench/scm/` both reference it.
+ *  No runtime imports on purpose: `actions/` and `workbench/scm/` both reference it.
  *--------------------------------------------------------------------------------------------*/
+
+import type { OpenTarget } from '../editor/openTarget.js'
 
 export const SCM_OPEN_FILE_COMMAND = 'workbench.action.scm.openFile'
 export const SCM_OPEN_PREVIEW_COMMAND = 'workbench.action.scm.openPreview'
@@ -22,3 +24,29 @@ export const SCM_HOVER_LEADING_COMMANDS: readonly string[] = [
   SCM_OPEN_PREVIEW_COMMAND,
   SCM_OPEN_FILE_COMMAND,
 ]
+
+/** SCM row commands owned by an extension host that accept the trailing
+ *  `{ openTarget }` options bag. Explicit whitelist: not every `1_open`
+ *  command does (`perforce-graph.viewFileHistory` shares the group but takes
+ *  no options). `git.openFile` / `perforce.openFile` accept options too, but
+ *  are not part of scm/resourceState/context today. */
+export const SCM_TARGETED_OPEN_COMMANDS: ReadonlySet<string> = new Set([
+  'git.openChange',
+  'git.openMergeEditor',
+  'perforce.openChange',
+  'perforce.openMergeEditor',
+  'perforce.openShelvedFile',
+])
+
+/** Arguments for a whitelisted row command: shelved rows bring their own
+ *  payload (changelist + depot path) instead of the resource DTO, and the
+ *  target rides last because extension hosts cannot read the renderer's
+ *  ambient modifiers. */
+export function scmTargetedOpenArgs(
+  explicit: readonly unknown[] | undefined,
+  primary: unknown,
+  openTarget: OpenTarget,
+): unknown[] {
+  const args = explicit && explicit.length > 0 ? [...explicit] : [primary]
+  return openTarget === 'default' ? args : [...args, { openTarget }]
+}

@@ -19,6 +19,8 @@ import {
 } from '@universe-editor/platform'
 import type { Location } from 'vscode-languageserver-types'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { openTargetServicesFrom, openUriEditor } from '../services/editor/openWithTarget.js'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
 import { locationToMonaco } from '../services/languageFeatures/typescript/lspMonacoConvert.js'
 
@@ -65,6 +67,9 @@ export class FindMarkdownFileReferencesAction extends Action2 {
 
     const client = accessor.get(IExtensionHostClientService)
     const resolver = accessor.get(IEditorResolverService)
+    const openTarget = invocationOpenTarget()
+    const targetServices =
+      openTarget === 'default' ? undefined : { ...openTargetServicesFrom(accessor), resolver }
     await client.activateByEvent('onLanguage:markdown')
     const locations = (await client.executeContributedCommand(MARKDOWN_FILE_REFERENCES_COMMAND, [
       target.toString(),
@@ -72,7 +77,18 @@ export class FindMarkdownFileReferencesAction extends Action2 {
     if (!locations || locations.length === 0) return
 
     // Open the target so a code editor anchors the peek (VSCode opens it too).
-    await resolver.openEditor(target, { pinned: true })
+    const openDefault = (): Promise<unknown> => resolver.openEditor(target, { pinned: true })
+    let openedViaTarget = false
+    if (targetServices) {
+      openedViaTarget = await openUriEditor(targetServices, openTarget, target, openDefault, {
+        pinned: true,
+      })
+    } else {
+      await openDefault()
+    }
+    // The auxiliary window is a different renderer/Monaco; the peek cannot
+    // follow the editor there. Side opens stay in this window and still show it.
+    if (openTarget === 'newWindow' && openedViaTarget) return
 
     const monacoNs = MonacoLoader.get()
     const commandService = await MonacoLoader.getCommandService()

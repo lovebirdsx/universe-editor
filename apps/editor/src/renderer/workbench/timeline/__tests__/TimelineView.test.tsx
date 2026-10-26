@@ -10,12 +10,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
+  ContextKeyService,
   Emitter,
   ICommandService,
   IConfigurationService,
   IContextKeyService,
   IEditorService,
   InstantiationService,
+  MenuId,
+  MenuRegistry,
   observableValue,
   ServiceCollection,
   URI,
@@ -101,8 +104,10 @@ function setup(items: ITimelineItemDto[]) {
   } as never)
   services.set(ICommandService, { _serviceBrand: undefined, executeCommand } as never)
   services.set(IConfigurationService, { _serviceBrand: undefined, get: () => undefined } as never)
-  services.set(IContextKeyService, { _serviceBrand: undefined, createScoped: vi.fn() } as never)
+  const contextKeyService = new ContextKeyService()
+  services.set(IContextKeyService, contextKeyService)
   const instantiation = new InstantiationService(services)
+  disposables.push(contextKeyService)
   return { executeCommand, instantiation }
 }
 
@@ -116,7 +121,12 @@ async function renderView(instantiation: InstantiationService): Promise<void> {
   await act(async () => {})
 }
 
-afterEach(() => cleanup())
+const disposables: Array<{ dispose(): void }> = []
+
+afterEach(() => {
+  cleanup()
+  while (disposables.length > 0) disposables.pop()?.dispose()
+})
 
 describe('TimelineView — inline row actions', () => {
   it('renders Open Commit and Open in Graph buttons on a git commit row', async () => {
@@ -227,5 +237,49 @@ describe('TimelineView — targeted opens', () => {
     fireEvent.keyDown(screen.getByRole('tree', { name: 'Timeline' }), { key: 'Enter' })
 
     expect(executeCommand).toHaveBeenCalledWith(item.command!.command, item.command!.arguments![0])
+  })
+})
+
+describe('TimelineView — context menu', () => {
+  function register(id: string, title: string): void {
+    disposables.push(
+      MenuRegistry.addMenuItem(MenuId.TimelineItemContext, {
+        command: id,
+        title,
+        group: '1_open',
+      }),
+    )
+  }
+
+  it('Ctrl+Enter on the row command passes its inner argument and the side target', async () => {
+    const item = makeGitCommitItem()
+    const { executeCommand, instantiation } = setup([item])
+    register(item.command!.command, 'Open Changes')
+    await renderView(instantiation)
+
+    fireEvent.contextMenu(screen.getByText('fix crash'))
+    fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Open Changes' }))
+    fireEvent.keyDown(window, { key: 'Enter', ctrlKey: true })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith(
+      item.command!.command,
+      item.command!.arguments![0],
+      { openTarget: 'side' },
+    )
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('other menu commands still receive the whole timeline item', async () => {
+    const item = makeGitCommitItem()
+    const { executeCommand, instantiation } = setup([item])
+    register('git.timeline.copyCommitId', 'Copy Commit ID')
+    await renderView(instantiation)
+
+    fireEvent.contextMenu(screen.getByText('fix crash'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy Commit ID' }))
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith('git.timeline.copyCommitId', item)
   })
 })

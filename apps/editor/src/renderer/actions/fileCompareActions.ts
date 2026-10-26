@@ -16,6 +16,7 @@ import {
   IInstantiationService,
   localize,
   localize2,
+  type EditorInput,
   type ServicesAccessor,
   type URI,
 } from '@universe-editor/platform'
@@ -24,6 +25,11 @@ import { ICompareService } from '../services/explorer/CompareService.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { WebviewDiffInput } from '../services/editor/WebviewDiffInput.js'
 import { confirmOpenFile } from '../services/editor/largeFileGuard.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import {
+  openFreshInputWithTarget,
+  openTargetServicesFrom,
+} from '../services/editor/openWithTarget.js'
 import { sameUri } from '../services/explorer/explorerTreeUtils.js'
 import { implicitPrimaryTarget, resolvePrimaryTarget } from './fileActionsCommon.js'
 
@@ -50,6 +56,19 @@ async function openFileDiff(accessor: ServicesAccessor, left: URI, right: URI): 
   const editorService = accessor.get(IEditorService)
   const editorResolver = accessor.get(IEditorResolverService)
   const inst = accessor.get(IInstantiationService)
+  const openTarget = invocationOpenTarget()
+  const targetServices = openTarget === 'default' ? undefined : openTargetServicesFrom(accessor)
+  const openInput = async (createInput: () => EditorInput): Promise<void> => {
+    if (targetServices) {
+      const input = createInput()
+      const result = await openFreshInputWithTarget(targetServices, input, openTarget, {
+        pinned: true,
+      })
+      if (result.handled) return
+      if (!input.isDisposed) input.dispose()
+    }
+    editorService.openEditor(createInput(), { pinned: true })
+  }
   if (sameUri(left, right)) return
   if (!(await confirmOpenFile(left, fileService, dialog, editorResolver))) return
   if (!(await confirmOpenFile(right, fileService, dialog, editorResolver))) return
@@ -57,20 +76,21 @@ async function openFileDiff(accessor: ServicesAccessor, left: URI, right: URI): 
   const custom = editorResolver.resolveEditors(right)[0]
   try {
     if (custom?.info.supportsDiff && custom.info.viewType) {
+      const viewType = custom.info.viewType
       const [leftBytes, rightBytes] = await Promise.all([
         fileService.readFile(left),
         fileService.readFile(right),
       ])
-      editorService.openEditor(
-        new WebviewDiffInput(
-          custom.info.viewType,
-          left,
-          right,
-          leftBytes,
-          rightBytes,
-          `${basenameOf(left)} ↔ ${basenameOf(right)}`,
-        ),
-        { pinned: true },
+      await openInput(
+        () =>
+          new WebviewDiffInput(
+            viewType,
+            left,
+            right,
+            leftBytes,
+            rightBytes,
+            `${basenameOf(left)} ↔ ${basenameOf(right)}`,
+          ),
       )
       return
     }
@@ -78,11 +98,8 @@ async function openFileDiff(accessor: ServicesAccessor, left: URI, right: URI): 
       fileService.readFileText(left),
       fileService.readFileText(right),
     ])
-    editorService.openEditor(
+    await openInput(() =>
       inst.createInstance(DiffEditorInput, left, leftText, rightText, right, undefined, false),
-      {
-        pinned: true,
-      },
     )
   } catch (err) {
     await dialog.confirm({

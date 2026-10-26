@@ -5,6 +5,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   getInvocationModifiers,
+  isModifiedEnter,
+  isOpenTargetEnter,
   runWithInvocationModifiers,
 } from '../../command/invocationModifiers.js'
 
@@ -46,5 +48,29 @@ describe('invocationModifiers', () => {
       expect(getInvocationModifiers()?.altKey).toBe(true)
     })
     expect(getInvocationModifiers()).toBeUndefined()
+  })
+})
+
+describe('modified Enter', () => {
+  it.each([{ ctrlKey: true }, { metaKey: true }, { altKey: true }])('accepts %o', (mods) => {
+    expect(isModifiedEnter({ key: 'Enter', ...mods })).toBe(true)
+    expect(isOpenTargetEnter({ key: 'Enter', ...mods })).toBe(true)
+  })
+
+  it.each([
+    { key: 'Enter' },
+    { key: 'Enter', shiftKey: true },
+    { key: 'Enter', ctrlKey: true, shiftKey: true },
+    { key: 'Enter', altKey: true, shiftKey: true },
+    { key: 'n', ctrlKey: true },
+  ])('rejects %o', (event) => {
+    expect(isModifiedEnter(event)).toBe(false)
+    expect(isOpenTargetEnter(event)).toBe(false)
+  })
+
+  it('lets the menu swallow auto-repeat while the open gesture ignores it', () => {
+    const event = { key: 'Enter', ctrlKey: true, repeat: true }
+    expect(isModifiedEnter(event)).toBe(true)
+    expect(isOpenTargetEnter(event)).toBe(false)
   })
 })

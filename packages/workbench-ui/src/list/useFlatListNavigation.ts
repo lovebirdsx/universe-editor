@@ -31,6 +31,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from 'react'
+import { isOpenTargetEnter } from '@universe-editor/platform'
 import { resolveIndexNavigation } from './listKeyboard.js'
 import {
   dispatchKeyboardContextMenu,
@@ -206,13 +207,7 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
       // line with listFocus vs. whenFocus context gating.
       if (e.target !== e.currentTarget) return
 
-      if (
-        modifierActivation === true &&
-        e.key === 'Enter' &&
-        !e.shiftKey &&
-        !e.repeat &&
-        (e.ctrlKey || e.metaKey || e.altKey)
-      ) {
+      if (modifierActivation === true && isOpenTargetEnter(e)) {
         if (onActivate && focusedIndex >= 0 && focusedIndex < count) {
           e.preventDefault()
           e.stopPropagation()

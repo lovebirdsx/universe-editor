@@ -11,6 +11,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { isModifiedEnter, runWithInvocationModifiers } from '@universe-editor/platform'
 import { ctrlNavigationKey, type CtrlNavigationKey } from '../keybinding/ctrlNavigation.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
@@ -249,13 +250,35 @@ export function useMenuNavigation(
     if (!enabled || !view) return
     const onKeyDown = (e: KeyboardEvent): void => {
       // Mid-composition Enter commits an IME candidate; it is not ours to take.
-      if (e.isComposing || e.altKey || e.metaKey) return
+      if (e.isComposing) return
+      if (isModifiedEnter(e)) {
+        // An open gesture, not activation: the menu owns it even when the
+        // highlighted level went stale, and it must never reach the tree/list
+        // underneath (that opens the row and leaves the menu up).
+        e.preventDefault()
+        e.stopPropagation()
+        if (e.repeat) return
+        const s = stateRef.current
+        const level = activeLevel(s)
+        const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
+        const index = s.active?.index
+        const row = index === undefined ? undefined : levelRows?.[index]
+        if (row?.kind === 'item') {
+          if (row.disabled !== true) runWithInvocationModifiers(e, row.run)
+        } else if (row?.kind === 'submenu') {
+          cancelClose()
+          expand()
+        }
+        return
+      }
+      if (e.altKey || e.metaKey) return
       // Ctrl is ours only for the four aliases. Any other Ctrl stroke —
-      // Ctrl+Left, Ctrl+Enter, the Ctrl+K chord leader — keeps its global
-      // meaning, and Alt/Meta stay out entirely so Alt+ArrowDown and Cmd+ArrowDown
-      // never fall through to the plain arrow cases below. One casualty is a
-      // chord *completing* on an alias: Ctrl+K Ctrl+L lands on a menu that wants
-      // 'l' for ArrowRight, so the stroke is swallowed and the chord times out.
+      // Ctrl+Left, the Ctrl+K chord leader — keeps its global meaning, and
+      // Alt/Meta stay out entirely so Alt+ArrowDown and Cmd+ArrowDown never
+      // fall through to the plain arrow cases below. (Modified Enter was
+      // handled above, before this guard.) One casualty is a chord *completing*
+      // on an alias: Ctrl+K Ctrl+L lands on a menu that wants 'l' for
+      // ArrowRight, so the stroke is swallowed and the chord times out.
       const alias = ctrlNavigationKey(e)
       if (e.ctrlKey && alias === undefined) return
       const key = alias === undefined ? e.key : CTRL_NAV_ARROWS[alias]

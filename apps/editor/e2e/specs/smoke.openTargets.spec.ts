@@ -307,4 +307,55 @@ test.describe('@p1 scm open targets', () => {
       await closeApp(app)
     }
   })
+
+  test('Ctrl+Enter on the highlighted SCM Open Changes opens the diff to the side', async () => {
+    test.setTimeout(120_000)
+    const { app, page } = await launchGitRepo()
+    try {
+      await page.evaluate(() => window.__E2E__!.runCommand('workbench.view.scm'))
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveViewContainerId(0)), {
+          timeout: 30_000,
+        })
+        .toBe('workbench.view.scm')
+
+      const row = page.locator('[role="treeitem"]', { hasText: 'a.ts' }).first()
+      await expect(row).toBeVisible({ timeout: 30_000 })
+      await row.click({ button: 'right' })
+
+      const menu = page.getByRole('menu')
+      const openChanges = menu.getByRole('menuitem', { name: 'Open Changes' })
+      await expect(openChanges).toBeVisible()
+      // Mouse-opened menus start unhighlighted; hover is what "selects" the row.
+      await openChanges.hover()
+
+      const beforeGroupId = await page.evaluate(() => window.__E2E__!.getActiveGroupId())
+      await page.keyboard.press('Control+Enter')
+
+      await expect(menu).toHaveCount(0)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getEditorGroupCount()), {
+          timeout: 20_000,
+        })
+        .toBe(2)
+      const activeGroupId = await page.evaluate(() => window.__E2E__!.getActiveGroupId())
+      expect(activeGroupId).not.toBe(beforeGroupId)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), {
+          timeout: 20_000,
+        })
+        .toBe('diff')
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (id) =>
+              window.__E2E__!.getEditorGroupEditorUris(id).some((uri) => uri.includes('a.ts')),
+            String(activeGroupId),
+          ),
+        )
+        .toBe(true)
+    } finally {
+      await closeApp(app)
+    }
+  })
 })

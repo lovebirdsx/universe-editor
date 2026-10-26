@@ -10,6 +10,7 @@ import {
   ServiceCollection,
   URI,
   registerAction2,
+  runWithInvocationModifiers,
 } from '@universe-editor/platform'
 import {
   CompareSelectedAction,
@@ -20,6 +21,16 @@ import { IExplorerTreeService } from '../../services/explorer/ExplorerTreeServic
 import { ICompareService } from '../../services/explorer/CompareService.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { WebviewDiffInput } from '../../services/editor/WebviewDiffInput.js'
+
+const openWithTargetMocks = vi.hoisted(() => ({
+  openFreshInputWithTarget: vi.fn(
+    async (_services: unknown, _input: unknown, _target: unknown, _options: unknown) => ({
+      handled: true,
+    }),
+  ),
+  openTargetServicesFrom: vi.fn(() => ({ marker: 'services' })),
+}))
+vi.mock('../../services/editor/openWithTarget.js', () => openWithTargetMocks)
 
 type Explorer = import('../../services/explorer/ExplorerTreeService.js').ExplorerTreeService
 
@@ -132,6 +143,9 @@ describe('fileCompareActions', () => {
     disposables.push(registerAction2(SelectForCompareAction))
     disposables.push(registerAction2(CompareWithSelectedAction))
     disposables.push(registerAction2(CompareSelectedAction))
+    openWithTargetMocks.openFreshInputWithTarget.mockClear()
+    openWithTargetMocks.openFreshInputWithTarget.mockResolvedValue({ handled: true })
+    openWithTargetMocks.openTargetServicesFrom.mockClear()
   })
 
   afterEach(() => {
@@ -260,5 +274,55 @@ describe('fileCompareActions', () => {
     const cmd = CommandsRegistry.getCommand(CompareSelectedAction.ID)!
     await inst.invokeFunction((accessor) => cmd.handler(accessor))
     expect(captured.input).toBeNull()
+  })
+
+  it('opens the diff through the targeted-open helper under Ctrl', async () => {
+    const left = URI.file('/ws/a.ts')
+    const right = URI.file('/ws/b.ts')
+    const captured: Captured = { input: null }
+    const inst = buildServices({
+      explorer: fakeExplorer(),
+      compare: fakeCompareService(left),
+      files: fakeFileService({ [left.toString()]: 'A', [right.toString()]: 'B' }),
+      captured,
+    })
+    const cmd = CommandsRegistry.getCommand(CompareWithSelectedAction.ID)!
+
+    await runWithInvocationModifiers({ ctrlKey: true }, () =>
+      inst.invokeFunction((accessor) => cmd.handler(accessor, { target: right })),
+    )
+
+    expect(captured.input).toBeNull()
+    expect(openWithTargetMocks.openTargetServicesFrom).toHaveBeenCalledOnce()
+    expect(openWithTargetMocks.openFreshInputWithTarget).toHaveBeenCalledOnce()
+    const [services, input, target, options] =
+      openWithTargetMocks.openFreshInputWithTarget.mock.calls[0]!
+    expect(services).toEqual({ marker: 'services' })
+    expect(input).toBeInstanceOf(DiffEditorInput)
+    expect(target).toBe('side')
+    expect(options).toEqual({ pinned: true })
+  })
+
+  it('opens the diff in a new window under Alt', async () => {
+    const left = URI.file('/ws/a.ts')
+    const right = URI.file('/ws/b.ts')
+    const captured: Captured = { input: null }
+    const inst = buildServices({
+      explorer: fakeExplorer(),
+      compare: fakeCompareService(left),
+      files: fakeFileService({ [left.toString()]: 'A', [right.toString()]: 'B' }),
+      captured,
+    })
+    const cmd = CommandsRegistry.getCommand(CompareWithSelectedAction.ID)!
+
+    await runWithInvocationModifiers({ altKey: true }, () =>
+      inst.invokeFunction((accessor) => cmd.handler(accessor, { target: right })),
+    )
+
+    expect(captured.input).toBeNull()
+    const [, input, target, options] = openWithTargetMocks.openFreshInputWithTarget.mock.calls[0]!
+    expect(input).toBeInstanceOf(DiffEditorInput)
+    expect(target).toBe('newWindow')
+    expect(options).toEqual({ pinned: true })
   })
 })

@@ -21,6 +21,7 @@ import {
 import { dirtyDiffCommandId } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
 import {
   IDirtyDiffNavigationService,
   findAdjacentChange,
@@ -178,9 +179,11 @@ export class OpenChangesAction extends Action2 {
       : undefined
     if (!providerId || !hostPath) return
 
+    const openTarget = invocationOpenTarget()
     const passThrough = {
       ...(options?.pinned !== undefined ? { pinned: options.pinned } : {}),
       ...(options?.preserveFocus !== undefined ? { preserveFocus: options.preserveFocus } : {}),
+      ...(openTarget !== 'default' ? { openTarget } : {}),
     }
     const delegate = (): Promise<unknown> =>
       commandService.executeCommand(
