@@ -185,7 +185,7 @@ describe('SwarmChangesView', () => {
 
     expect(await screen.findByText('a.ts')).toBeTruthy()
     expect(screen.getByText('b.ts')).toBeTruthy()
-    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, { reviewId: '1001' })
+    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, { reviewId: '1001' }, true)
     // The last version's archiveChange — not '2002' (re-shelvable) and not rev 2.
     expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
       change: '2999',
@@ -201,7 +201,11 @@ describe('SwarmChangesView', () => {
     swarmChangesViewState.select('1001')
 
     expect(await screen.findByText('a.ts')).toBeTruthy()
-    expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.getReview, expect.anything())
+    expect(executeCommand).not.toHaveBeenCalledWith(
+      SwarmCommands.getReview,
+      expect.anything(),
+      expect.anything(),
+    )
   })
 
   it('opens a diff previewed on single click and pinned on double click', async () => {

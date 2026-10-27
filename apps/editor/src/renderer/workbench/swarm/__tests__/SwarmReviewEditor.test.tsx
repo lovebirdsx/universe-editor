@@ -627,9 +627,11 @@ describe('SwarmReviewEditor restore', () => {
     const { commands } = renderReview()
 
     await act(async () => Promise.resolve())
-    expect(commands.executeCommand).not.toHaveBeenCalledWith(SwarmCommands.getReview, {
-      reviewId: '1001',
-    })
+    expect(commands.executeCommand).not.toHaveBeenCalledWith(
+      SwarmCommands.getReview,
+      { reviewId: '1001' },
+      true,
+    )
     expect(screen.queryByText('Review #1001 is unavailable.')).toBeNull()
 
     const registration = registerCommand(SwarmCommands.getReview, () => DETAIL)
@@ -667,19 +669,39 @@ describe('SwarmReviewEditor restore', () => {
     const { commands } = renderReview()
     try {
       await act(async () => Promise.resolve())
+      // Restore-driven reads are silent: failures must not toast or auto-reveal
+      // the Output panel (the editor renders its own error/empty state).
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.getReview,
+        { reviewId: '1001' },
+        true,
+      )
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.listComments,
+        { reviewId: '1001' },
+        true,
+      )
       commands.executeCommand.mockClear()
 
       fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
       await act(async () => Promise.resolve())
 
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
-        reviewId: '1001',
-        force: true,
-      })
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.listComments, {
-        reviewId: '1001',
-        force: true,
-      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.getReview,
+        {
+          reviewId: '1001',
+          force: true,
+        },
+        false,
+      )
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.listComments,
+        {
+          reviewId: '1001',
+          force: true,
+        },
+        false,
+      )
       expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.describeVersion, {
         change: '2001',
         force: true,
@@ -741,14 +763,22 @@ describe('SwarmReviewEditor restore', () => {
         await vi.advanceTimersByTimeAsync(60_000)
       })
 
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
-        reviewId: '1001',
-        force: true,
-      })
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.listComments, {
-        reviewId: '1001',
-        force: true,
-      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.getReview,
+        {
+          reviewId: '1001',
+          force: true,
+        },
+        true,
+      )
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.listComments,
+        {
+          reviewId: '1001',
+          force: true,
+        },
+        true,
+      )
 
       unmount()
       commands.executeCommand.mockClear()
@@ -780,10 +810,14 @@ describe('SwarmReviewEditor restore', () => {
       // Manual refresh is unaffected by the switch.
       fireEvent.click(screen.getByRole('button', { name: 'Refresh review' }))
       await act(async () => Promise.resolve())
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
-        reviewId: '1001',
-        force: true,
-      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.getReview,
+        {
+          reviewId: '1001',
+          force: true,
+        },
+        false,
+      )
     } finally {
       describeVersion.dispose()
       listComments.dispose()
@@ -801,14 +835,18 @@ describe('SwarmReviewEditor restore', () => {
       await act(async () => Promise.resolve())
       commands.executeCommand.mockClear()
 
-      // Enabled by default: the minute tick refreshes.
+      // Enabled by default: the minute tick refreshes (silently — background timer).
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000)
       })
-      expect(commands.executeCommand).toHaveBeenCalledWith(SwarmCommands.getReview, {
-        reviewId: '1001',
-        force: true,
-      })
+      expect(commands.executeCommand).toHaveBeenCalledWith(
+        SwarmCommands.getReview,
+        {
+          reviewId: '1001',
+          force: true,
+        },
+        true,
+      )
 
       configValues['perforce.swarm.autoRefresh.enabled'] = false
       await act(async () => {

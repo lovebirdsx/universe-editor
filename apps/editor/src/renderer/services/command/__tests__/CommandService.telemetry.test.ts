@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
+import { markExpectedCommandFailure } from '@universe-editor/extensions-common'
 import {
   CommandsRegistry,
   Event,
@@ -116,6 +117,26 @@ describe('CommandService telemetry', () => {
       await expect(svc.executeCommand('test.disposed.sync')).rejects.toBe(err)
       expect(logger.error).not.toHaveBeenCalled()
       expect(logger.warn).toHaveBeenCalledWith('command interrupted id=test.disposed.sync', err)
+    } finally {
+      disposable.dispose()
+    }
+  })
+
+  // Expected background failures (e.g. a Swarm poll timing out) must stay at
+  // warn level: an error-level command log triggers the Output panel's
+  // auto-reveal in ErrorLogAutoRevealContribution.
+  it('logs an expected CommandFailure as a warning, not an error', async () => {
+    const instantiation = new InstantiationService(new ServiceCollection())
+    const logger = makeLogger()
+    const svc = new CommandService(instantiation, undefined, logger)
+    const err = markExpectedCommandFailure(new Error('timed out after 30000ms'))
+    const disposable = CommandsRegistry.registerCommand('test.expected.failure', () =>
+      Promise.reject(err),
+    )
+    try {
+      await expect(svc.executeCommand('test.expected.failure')).rejects.toBe(err)
+      expect(logger.error).not.toHaveBeenCalled()
+      expect(logger.warn).toHaveBeenCalledWith('command interrupted id=test.expected.failure', err)
     } finally {
       disposable.dispose()
     }

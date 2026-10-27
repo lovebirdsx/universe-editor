@@ -344,6 +344,9 @@ export function SwarmReviewsView() {
         review.id,
         // Bypass the host-side TTL cache too, or it would echo the old verdict back.
         /* force */ force || stale,
+        // The view degrades a failed lookup to "verdict unknown" itself; the host
+        // must not raise a toast/log at error level for an automatic refresh.
+        /* silent */ true,
       )
       // `undefined` = the command isn't registered yet (host activation racing the
       // view's first mount). Render as "no transitions" but skip the seen-updated
@@ -490,9 +493,13 @@ export function SwarmReviewsView() {
       if (!meta || meta.description.trim()) continue
       healAttemptedRef.current.add(id)
       void commands
-        .executeCommand<SwarmReviewDetailDto | undefined>(SwarmCommands.getReview, {
-          reviewId: id,
-        } satisfies SwarmGetReviewRequest)
+        .executeCommand<SwarmReviewDetailDto | undefined>(
+          SwarmCommands.getReview,
+          { reviewId: id } satisfies SwarmGetReviewRequest,
+          // Background healing: a failure leaves the stored snapshot untouched,
+          // so it must not raise a toast or auto-reveal the Output panel.
+          true,
+        )
         .then((detail) => {
           if (detail) swarmIgnoreStore.refreshMeta(reviewDtoFromDetail(detail, meta))
         })

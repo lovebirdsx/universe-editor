@@ -218,8 +218,9 @@ describe('SwarmReviewsView', () => {
     expect(screen.getByRole('menuitem', { name: 'Copy Review Name' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Copy Review Link' })).toBeTruthy()
     expect(screen.getByRole('menuitem', { name: 'Obliterate Review' })).toBeTruthy()
-    // First fetch (nothing pinned yet): must NOT force through the host TTL cache.
-    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.getTransitions, '1001', false)
+    // First fetch (nothing pinned yet): must NOT force through the host TTL cache,
+    // and must stay silent so an automatic refresh failure never raises UI.
+    expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.getTransitions, '1001', false, true)
 
     fireEvent.click(approve)
     await waitFor(() =>
@@ -297,6 +298,12 @@ describe('SwarmReviewsView', () => {
     )
 
     expect(await screen.findByText('Healed summary')).toBeTruthy()
+    // Heal reads are background work: silent failures must not toast/reveal Output.
+    expect(executeCommand).toHaveBeenCalledWith(
+      SwarmCommands.getReview,
+      { reviewId: '100693' },
+      true,
+    )
     await waitFor(() =>
       expect(swarmIgnoreStore.getMeta('100693')?.description).toBe('Healed summary'),
     )

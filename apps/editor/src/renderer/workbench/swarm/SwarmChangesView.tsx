@@ -139,6 +139,9 @@ function SwarmChangesContent({ reviewId }: { reviewId: string }) {
           (await commands.executeCommand<SwarmReviewDetailDto | undefined>(
             SwarmCommands.getReview,
             { reviewId, ...(force ? { force: true } : {}) } satisfies SwarmGetReviewRequest,
+            // This view only auto-loads (mount + review-mutation bus); failures
+            // render as the inline error state, never as a toast/error-level log.
+            true,
           )) ?? null
         if (controller.signal.aborted) return
         if (detail) swarmReviewDetailCache.set(reviewId, detail)

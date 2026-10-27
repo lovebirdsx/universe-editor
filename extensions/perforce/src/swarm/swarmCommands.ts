@@ -12,6 +12,7 @@
  * shadowing guardrail in skill `create-extension`).
  */
 import { commands, window, workspace, type Disposable } from '@universe-editor/extension-api'
+import { markExpectedCommandFailure } from '@universe-editor/extensions-common/expected-command-failure'
 import type { SwarmCommandId, SwarmFileContentResult } from '@universe-editor/extensions-common'
 import type { ClientManager } from '../clientManager.js'
 import { changelistIdFromGroupId } from '../changelist.js'
@@ -173,7 +174,10 @@ export function registerSwarmCommands(
    *  - An error toast per failed poll tick is pure noise for a background poller.
    *  - A swallowed EMPTY dashboard reads as "zero reviews" to the renderer, wiping
    *    its notified baseline — the next healthy tick would re-fire every review as
-   *    "new". The renderer's poll catch already swallows rethrown errors quietly. */
+   *    "new". The renderer's poll catch already swallows rethrown errors quietly.
+   *  - The rethrown error carries ExpectedCommandFailure so the renderer logs it at
+   *    warn instead of error; otherwise every routine background timeout would trip
+   *    the Output panel's error auto-reveal. */
   const guard = async <T>(
     label: string,
     op: (c: SwarmClient) => Promise<T>,
@@ -201,7 +205,7 @@ export function registerSwarmCommands(
         c.invalidateCredential()
         if (opts?.silent) {
           logger.warn('cmd', `${label}: unauthorized → skipping (poll-driven, silent)`)
-          throw err
+          throw markExpectedCommandFailure(err)
         }
         logger.warn('cmd', `${label}: unauthorized → prompting p4 login`)
         const picked = await window.showErrorMessage(
@@ -216,12 +220,14 @@ export function registerSwarmCommands(
       }
       const message = err instanceof Error ? err.message : String(err)
       // Tag silent (poll-driven) failures so a background-tick failure is visibly
-      // distinct from a user-triggered one in the panel.
-      logger.error(
-        'cmd',
-        `${label}: failed in ${Date.now() - startedAt}ms${opts?.silent ? ' (silent)' : ''}: ${message}`,
-      )
-      if (opts?.silent) throw err
+      // distinct from a user-triggered one in the panel. Silent failures are
+      // expected background noise: warn (not error) and mark them so the renderer
+      // does not treat them as unexpected errors.
+      if (opts?.silent) {
+        logger.warn('cmd', `${label}: failed in ${Date.now() - startedAt}ms (silent): ${message}`)
+        throw markExpectedCommandFailure(err)
+      }
+      logger.error('cmd', `${label}: failed in ${Date.now() - startedAt}ms: ${message}`)
       await window.showErrorMessage(
         localize('perforce.swarm.error.generic', 'Swarm request failed: {0}', { 0: message }),
       )
@@ -380,7 +386,7 @@ export function registerSwarmCommands(
       ),
     ),
 
-    commands.registerCommand(Cmd.getReview, (arg: unknown) => {
+    commands.registerCommand(Cmd.getReview, (arg: unknown, silent?: unknown) => {
       const request =
         typeof arg === 'object' && arg !== null
           ? (arg as { reviewId: string; force?: boolean })
@@ -389,6 +395,7 @@ export function registerSwarmCommands(
         `getReview #${request.reviewId}`,
         (c) => c.getReview(request.reviewId, request.force),
         undefined,
+        { silent: silent === true },
       )
     }),
 
@@ -626,7 +633,10 @@ export function registerSwarmCommands(
       void statusBar.refresh()
     }),
 
-    commands.registerCommand(Cmd.listComments, (req: unknown) =>
+    // `silent` marks auto/restore-driven reads: the caller renders its own
+    // degraded state, so failures must not raise a toast or an error-level log
+    // (which would auto-reveal the Output panel).
+    commands.registerCommand(Cmd.listComments, (req: unknown, silent?: unknown) =>
       guard(
         `listComments #${(req as { reviewId?: string })?.reviewId ?? '?'}`,
         (c) => {
@@ -645,6 +655,7 @@ export function registerSwarmCommands(
           })
         },
         [],
+        { silent: silent === true },
       ),
     ),
 

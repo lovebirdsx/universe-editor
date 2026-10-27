@@ -6,6 +6,8 @@ import { commands, window, workspace } from '@universe-editor/extension-api'
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  getReview: vi.fn(),
+  listComments: vi.fn(),
   getTransitions: vi.fn(),
   obliterateReview: vi.fn(),
   printRevisionResult: vi.fn(),
@@ -74,6 +76,8 @@ vi.mock('@universe-editor/extension-api', () => ({
 
 vi.mock('../swarm/swarmClient.js', () => ({
   SwarmClient: class {
+    getReview = mocks.getReview
+    listComments = mocks.listComments
     getTransitions = mocks.getTransitions
     obliterateReview = mocks.obliterateReview
     listReviews = mocks.listReviews
@@ -85,6 +89,8 @@ vi.mock('../swarm/swarmClient.js', () => ({
 
 const { registerSwarmCommands } = await import('../swarm/swarmCommands.js')
 const { SwarmError, SwarmErrorCode } = await import('../swarm/swarmApi.js')
+const { EXPECTED_COMMAND_FAILURE_NAME } =
+  await import('@universe-editor/extensions-common/expected-command-failure')
 
 const logger = {
   debug: vi.fn(),
@@ -97,6 +103,8 @@ const logger = {
 describe('registerSwarmCommands review operations', () => {
   beforeEach(() => {
     mocks.handlers.clear()
+    mocks.getReview.mockReset()
+    mocks.listComments.mockReset()
     mocks.getTransitions.mockReset()
     mocks.obliterateReview.mockReset()
     mocks.printRevisionResult.mockReset()
@@ -146,10 +154,71 @@ describe('registerSwarmCommands review operations', () => {
   it('getTransitions with silent rethrows instead of raising UI (poll-driven path)', async () => {
     mocks.getTransitions.mockRejectedValue(new SwarmError(SwarmErrorCode.Network, 'boom'))
 
-    await expect(
-      mocks.handlers.get('perforce.swarm.getTransitions')?.('1001', false, true),
-    ).rejects.toThrow('boom')
+    const promise = mocks.handlers.get('perforce.swarm.getTransitions')?.(
+      '1001',
+      false,
+      true,
+    ) as Promise<unknown>
+    const rejection = (await promise.then(
+      () => undefined,
+      (e: unknown) => e as Error & { code?: unknown },
+    )) as (Error & { code?: unknown }) | undefined
+
+    expect(rejection?.name).toBe(EXPECTED_COMMAND_FAILURE_NAME)
+    expect(rejection?.code).toBe(SwarmErrorCode.Network)
+    expect(rejection?.message).toBe('boom')
     expect(mocks.showErrorMessage).not.toHaveBeenCalled()
+    expect(logger.error).not.toHaveBeenCalled()
+  })
+
+  it('getReview with silent rethrows the expected-failure marker (restore-driven read)', async () => {
+    mocks.getReview.mockRejectedValue(new SwarmError(SwarmErrorCode.Network, 'timed out'))
+
+    const promise = mocks.handlers.get('perforce.swarm.getReview')?.(
+      { reviewId: '1001' },
+      true,
+    ) as Promise<unknown>
+    const rejection = (await promise.then(
+      () => undefined,
+      (e: unknown) => e as Error & { code?: unknown },
+    )) as (Error & { code?: unknown }) | undefined
+
+    expect(mocks.getReview).toHaveBeenCalledWith('1001', undefined)
+    expect(rejection?.name).toBe(EXPECTED_COMMAND_FAILURE_NAME)
+    expect(rejection?.code).toBe(SwarmErrorCode.Network)
+    expect(rejection?.message).toBe('timed out')
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled()
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith('cmd', expect.stringContaining('(silent)'))
+  })
+
+  it('getReview without silent keeps the toast + fallback path', async () => {
+    mocks.getReview.mockRejectedValue(new SwarmError(SwarmErrorCode.Network, 'boom'))
+
+    const result = await mocks.handlers.get('perforce.swarm.getReview')?.({ reviewId: '1001' })
+
+    expect(result).toBeUndefined()
+    expect(mocks.showErrorMessage).toHaveBeenCalled()
+    expect(logger.error).toHaveBeenCalledWith('cmd', expect.stringContaining('getReview #1001'))
+  })
+
+  it('listComments with silent rethrows the expected-failure marker (diff-tab read)', async () => {
+    mocks.listComments.mockRejectedValue(new SwarmError(SwarmErrorCode.Network, 'timed out'))
+
+    const promise = mocks.handlers.get('perforce.swarm.listComments')?.(
+      { reviewId: '1001' },
+      true,
+    ) as Promise<unknown>
+    const rejection = (await promise.then(
+      () => undefined,
+      (e: unknown) => e as Error & { code?: unknown },
+    )) as (Error & { code?: unknown }) | undefined
+
+    expect(rejection?.name).toBe(EXPECTED_COMMAND_FAILURE_NAME)
+    expect(rejection?.code).toBe(SwarmErrorCode.Network)
+    expect(rejection?.message).toBe('timed out')
+    expect(mocks.showErrorMessage).not.toHaveBeenCalled()
+    expect(logger.error).not.toHaveBeenCalled()
   })
 
   it('forwards obliterateReview and returns true on success', async () => {
@@ -288,6 +357,7 @@ describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () =>
     mocks.dashboard.mockReset()
     mocks.showErrorMessage.mockReset()
     logger.warn.mockClear()
+    logger.error.mockClear()
 
     registerSwarmCommands(
       {
@@ -315,7 +385,8 @@ describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () =>
       new Promise((_, reject) => setTimeout(() => reject(new Error('hung on modal')), 2000)),
     ])) as unknown
 
-    expect(result).toBeInstanceOf(SwarmError)
+    expect(result).not.toBeInstanceOf(SwarmError)
+    expect((result as { name: unknown }).name).toBe(EXPECTED_COMMAND_FAILURE_NAME)
     expect((result as { code: unknown }).code).toBe(SwarmErrorCode.Unauthorized)
     expect(mocks.showErrorMessage).not.toHaveBeenCalled()
     // A 401 means the cached ticket died mid-TTL — the client must drop it so
@@ -332,10 +403,22 @@ describe('registerSwarmCommands dashboard failures (poll-driven, silent)', () =>
       new SwarmError(SwarmErrorCode.Network, 'timed out after 30000ms: GET /reviews'),
     )
 
-    await expect(
-      mocks.handlers.get('perforce.swarm.dashboard')?.({ force: true }),
-    ).rejects.toMatchObject({ code: SwarmErrorCode.Network })
+    const promise = mocks.handlers.get('perforce.swarm.dashboard')?.({
+      force: true,
+    }) as Promise<unknown>
+    const rejection = (await promise.then(
+      () => undefined,
+      (e: unknown) => e as Error & { code?: unknown },
+    )) as (Error & { code?: unknown }) | undefined
+
+    expect(rejection?.name).toBe(EXPECTED_COMMAND_FAILURE_NAME)
+    expect(rejection?.code).toBe(SwarmErrorCode.Network)
+    expect(rejection?.message).toBe('timed out after 30000ms: GET /reviews')
     expect(mocks.showErrorMessage).not.toHaveBeenCalled()
+    // Silent failures must stay below error level: an error-level command log
+    // auto-reveals the Output panel in the renderer.
+    expect(logger.error).not.toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalledWith('cmd', expect.stringContaining('dashboard: failed in'))
   })
 })
 

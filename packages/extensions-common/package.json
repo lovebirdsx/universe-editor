@@ -13,6 +13,10 @@
     "./manifest-schema": {
       "types": "./dist/protocol/manifest-schema.d.ts",
       "default": "./dist/protocol/manifest-schema.js"
+    },
+    "./expected-command-failure": {
+      "types": "./dist/protocol/expectedCommandFailure.d.ts",
+      "default": "./dist/protocol/expectedCommandFailure.js"
     }
   },
   "scripts": {

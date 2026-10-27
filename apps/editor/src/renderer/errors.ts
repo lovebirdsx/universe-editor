@@ -6,6 +6,7 @@
  *  every consumer's lib set.
  *--------------------------------------------------------------------------------------------*/
 
+import { EXPECTED_COMMAND_FAILURE_NAME } from '@universe-editor/extensions-common'
 import { IpcChannelDisposedError, onUnexpectedError } from '@universe-editor/platform'
 
 declare const window: {
@@ -55,6 +56,17 @@ export function isBenignError(error: unknown): boolean {
   if (
     error instanceof IpcChannelDisposedError ||
     (error instanceof Error && error.name === 'IpcChannelDisposedError')
+  ) {
+    return true
+  }
+
+  // Expected failures (background Swarm polls timing out, auto-refresh reads)
+  // are already surfaced by their caller's own UI. Keeping them at error level
+  // would trip ErrorLogAutoRevealContribution and pop the Output panel on every
+  // routine network blip.
+  if (
+    (error instanceof Error && error.name === EXPECTED_COMMAND_FAILURE_NAME) ||
+    errorStr.startsWith(`${EXPECTED_COMMAND_FAILURE_NAME}:`)
   ) {
     return true
   }

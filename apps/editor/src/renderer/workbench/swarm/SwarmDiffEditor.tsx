@@ -66,7 +66,13 @@ export function SwarmDiffEditor({ input }: { input: IEditorInput }) {
 
   const loadComments = useCallback(() => {
     void commands
-      .executeCommand<SwarmCommentDto[]>(SwarmCommands.listComments, { reviewId })
+      .executeCommand<SwarmCommentDto[]>(
+        SwarmCommands.listComments,
+        { reviewId },
+        // Threads are decorative for this diff tab; a failed refresh keeps the
+        // previous set and must not toast or auto-reveal the Output panel.
+        true,
+      )
       .then((all) => {
         // Only comments anchored to this file.
         const forFile = (all ?? []).filter((c) => c.context?.file === diffInput.context.depotFile)

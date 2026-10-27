@@ -195,7 +195,9 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   }, [reviewId, commentDraft])
 
   const load = useCallback(
-    (force = false) => {
+    // Restore/auto loads are silent; user-triggered refreshes keep the toast +
+    // error-state path (silent hides the host's UI and rethrows the marker).
+    (force = false, silent = true) => {
       if (!reviewId) return
       loadAbortRef.current?.abort()
       const controller = new AbortController()
@@ -219,6 +221,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         const r = await commands.executeCommand<SwarmReviewDetailDto | undefined>(
           SwarmCommands.getReview,
           (force ? { reviewId, force: true } : { reviewId }) satisfies SwarmGetReviewRequest,
+          silent,
         )
         if (controller.signal.aborted) return
         if (!r) {
@@ -275,7 +278,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         .executeCommand(SwarmCommands.vote, req)
         .then(() => {
           notifyReviewMutated(reviewId)
-          load(true)
+          load(true, false)
         })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setBusy(false))
@@ -308,7 +311,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
         .executeCommand(SwarmCommands.transition, req)
         .then(() => {
           notifyReviewMutated(reviewId)
-          load(true)
+          load(true, false)
         })
         .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
         .finally(() => setBusy(false))
@@ -325,7 +328,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       .then((ok) => {
         if (ok) {
           notifyReviewMutated(reviewId)
-          load(true)
+          load(true, false)
           setFilesRefreshGeneration((value) => value + 1)
         }
       })
@@ -516,7 +519,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
   )
 
   const loadComments = useCallback(
-    (signal?: AbortSignal, force = false) => {
+    (signal?: AbortSignal, force = false, silent = true) => {
       if (!reviewId) return
       const request = ++commentsLoadRef.current
       void (async () => {
@@ -531,6 +534,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
             reviewId,
             ...(force ? { force: true } : {}),
           } satisfies SwarmListCommentsRequest,
+          silent,
         )
         if (!signal?.aborted && request === commentsLoadRef.current) setComments(result ?? [])
       })().catch(() => {
@@ -555,8 +559,8 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
       .executeCommand(SwarmCommands.addComment, req)
       .then(() => {
         setCommentDraft('')
-        loadComments(undefined, true)
-        load(true)
+        loadComments(undefined, true, false)
+        load(true, false)
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setBusy(false))
@@ -575,15 +579,20 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
 
   useEffect(() => () => loadAbortRef.current?.abort(), [])
 
-  const refresh = useCallback(() => {
-    setFilesRefreshGeneration((value) => value + 1)
-    load(true)
-    loadComments(undefined, true)
-  }, [load, loadComments])
+  const refresh = useCallback(
+    // The minute timer is background noise and stays silent; the refresh button
+    // is a user action and keeps the toast/error path.
+    (manual = true) => {
+      setFilesRefreshGeneration((value) => value + 1)
+      load(true, !manual)
+      loadComments(undefined, true, !manual)
+    },
+    [load, loadComments],
+  )
 
   useEffect(() => {
     if (!autoRefreshEnabled) return
-    const timer = setInterval(refresh, REVIEW_REFRESH_INTERVAL_MS)
+    const timer = setInterval(() => refresh(false), REVIEW_REFRESH_INTERVAL_MS)
     return () => clearInterval(timer)
   }, [refresh, autoRefreshEnabled])
 
@@ -661,7 +670,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     return (
       <div className={styles['container']} data-testid="swarm-review-editor">
         <div className={styles['error']}>{error}</div>
-        <Button size="sm" variant="secondary" onClick={refresh}>
+        <Button size="sm" variant="secondary" onClick={() => refresh()}>
           {localize('common.refresh', 'Refresh')}
         </Button>
       </div>
@@ -701,7 +710,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
           <IconButton
             label={localize('swarm.review.refresh', 'Refresh review')}
             disabled={loading || busy}
-            onClick={refresh}
+            onClick={() => refresh()}
             data-testid="swarm-review-refresh"
           >
             <RefreshCw

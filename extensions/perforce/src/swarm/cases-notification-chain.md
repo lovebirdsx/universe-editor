@@ -26,7 +26,8 @@
 - **真实 bug（通宵零通知）**：`SwarmNotificationPoller` 每 tick 驱动 `dashboard`；Swarm ticket 过期后某次 tick 命中 401 → guard 在后台窗口弹出看不见的模态 → renderer 的 `_running` 闩锁永久 true → 之后每个 tick 都被丢弃。19:49 最后一次通知后 3.8 小时零通知；切回窗口手动刷新才恢复。
 - **次生 bug（失败 fallback 吞错）**：guard 失败时返回**空 dashboard** fallback，renderer `_notifyNew([])` 把它当「零 review」→ `_known` 基线被清空 → 恢复后下一个健康 tick 把**所有**已知 review 当新的重发一遍（幻影爆发）。
 - **修复**：`guard(label, op, fallback, { silent: true })`——poll 驱动的 `dashboard` 传 true，**任何**失败只记日志并 **rethrow**（renderer poll 的 catch 本就静默吞掉，`_known` 不动；侧栏 `load()` 的 catch 显示错误状态，比假空列表更真实）。交互命令（vote/transition/createReview 等用户当场能点确认的）保持默认弹 UI + 返回 fallback。
-- **判别准则**：凡是「定时器 / 后台 tick / 无用户在场」驱动的 Swarm 调用都传 `silent: true`；只有用户主动点按钮触发的才走默认。给新的 poll/后台数据命令接线时照此办。
+- **Output 面板自动揭示**：silent 分支 rethrow 的是 `markExpectedCommandFailure(err)`（`@universe-editor/extensions-common/expected-command-failure`，保留原 `code`），renderer `isBenignError` 识别其 `name` 后把命令日志降为 warn（`command interrupted id=...`）。否则 `CommandService` 会记 error，而 `ErrorLogAutoRevealContribution` 会把本窗口的第一条 error 日志变成「自动弹出 Output 面板」——Swarm 超时因此常抢走这次揭示机会。非 silent 失败仍记 error、仍弹 UI。
+- **判别准则**：凡是「定时器 / 后台 tick / 无用户在场」驱动的 Swarm 调用都传 `silent: true`；只有用户主动点按钮触发的才走默认。给新的 poll/后台数据命令接线时照此办。视图里自动触发的 `getTransitions`（`SwarmReviewsView.loadTransitions`）也传 silent：失败按「裁决未知」降级，不打扰用户。窗口恢复/自动加载的审核读命令同理：详情页 `getReview`/`listComments`（挂载 + 每分钟 tick）、差异页 `listComments`、`SwarmChangesView` 的 `getReview`、ignore 快照 heal 的 `getReview` 全传 silent；同一命令由用户点 Refresh 触发时仍传 `false`，保留 toast + error 态。
 - 回归单测：`__tests__/swarmCommands.test.ts`（401/Network 失败 rethrow、不弹任何 UI、立即 settle）；renderer 侧 `SwarmReviewNotificationContribution.test.ts`（dashboard reject 后 `_running` 闩锁释放、`_known` 基线保留、下一 tick 照常通知且无幻影爆发）。
 
 ### ⚠️ OS toast 的焦点门控必须考虑「人不在场」（整夜聚焦窗口零 OS 通知）

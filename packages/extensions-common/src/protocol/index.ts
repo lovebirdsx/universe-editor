@@ -8,6 +8,7 @@
 // a single import surface. Its `manifest-schema` stays off this barrel (zod
 // isolation) and is reached via the `./manifest-schema.js` passthrough.
 export * from '@universe-editor/extension-manifest'
+export * from './expectedCommandFailure.js'
 export * from './rpc.js'
 export * from './stdioProtocol.js'
 export * from './bytes.js'
