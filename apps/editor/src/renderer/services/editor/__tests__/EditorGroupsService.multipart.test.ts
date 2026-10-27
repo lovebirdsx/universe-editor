@@ -116,22 +116,52 @@ describe('EditorGroupsService — parts', () => {
     expect(aux.activeGroup.isActive).toBe(true)
     expect(mainGroup.isActive).toBe(false)
 
+    // activateGroup only retargets opens; it is not a focus move, so the
+    // auxiliary part keeps the active editor.
     svc.activateGroup(mainGroup)
+    expect(svc.activePart).toBe(aux)
+    expect(svc.activeGroup).toBe(aux.activeGroup)
+    expect(svc.openTargetGroup).toBe(mainGroup)
+    expect(partSpy).toHaveBeenCalledOnce()
+    expect(groupSpy).toHaveBeenCalledOnce()
+
+    svc.activatePart(svc.mainPart)
     expect(svc.activePart).toBe(svc.mainPart)
     expect(svc.activeGroup).toBe(mainGroup)
     expect(partSpy).toHaveBeenCalledTimes(2)
     expect(groupSpy).toHaveBeenLastCalledWith(mainGroup)
   })
 
-  it('activating a group in another part activates that part first', () => {
+  it('activating a group in another part retargets opens without moving focus', () => {
     const svc = new EditorGroupsService()
     const aux = svc.createAuxiliaryPart({ activate: false })
     const second = svc.addGroup(aux.activeGroup, GroupDirection.Right)
     expect(svc.activePart).toBe(svc.mainPart)
+    expect(svc.openTargetPart).toBe(svc.mainPart)
 
     svc.activateGroup(second)
-    expect(svc.activePart).toBe(aux)
-    expect(svc.activeGroup).toBe(second)
+    expect(svc.activePart).toBe(svc.mainPart)
+    expect(svc.activeGroup).toBe(svc.mainPart.activeGroup)
+    expect(svc.openTargetPart).toBe(aux)
+    expect(svc.openTargetGroup).toBe(second)
+  })
+
+  it('fires onDidActivateOpenTargetGroup for a group switch inside the open target part', () => {
+    const svc = new EditorGroupsService()
+    const first = svc.mainPart.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    const spy = vi.fn()
+    svc.onDidActivateOpenTargetGroup(spy)
+
+    // The part updates its own active group before notifying the host; the event
+    // must still fire (regression guard for comparing the new group to itself).
+    svc.activateGroup(second)
+    expect(spy).toHaveBeenCalledWith(second)
+    expect(svc.openTargetGroup).toBe(second)
+
+    // Already the open target: no duplicate event.
+    svc.activateGroup(second)
+    expect(spy).toHaveBeenCalledOnce()
   })
 
   it('activatePart records the focus intent for that activation and clears stale ones', () => {
@@ -256,13 +286,18 @@ describe('EditorGroupsService — parts', () => {
     const partSpy = vi.fn()
     const removePartSpy = vi.fn()
     const removeGroupSpy = vi.fn()
+    const openTargetSpy = vi.fn()
     svc.onDidActivePartChange(partSpy)
     svc.onDidRemovePart(removePartSpy)
     svc.onDidRemoveGroup(removeGroupSpy)
+    svc.onDidActivateOpenTargetGroup(openTargetSpy)
 
     expect(svc.removePart(aux)).toBe(true)
     expect(svc.parts).not.toContain(aux)
     expect(svc.activePart).toBe(svc.mainPart)
+    // Silent fallback: closing a window must not announce an open-target move.
+    expect(svc.openTargetPart).toBe(svc.mainPart)
+    expect(openTargetSpy).not.toHaveBeenCalled()
     expect(partSpy).toHaveBeenCalledWith(svc.mainPart)
     expect(removePartSpy).toHaveBeenCalledWith(aux)
     expect(removeGroupSpy).toHaveBeenCalledWith(aux.activeGroup)
@@ -411,12 +446,18 @@ describe('EditorGroupsService — cross-part editors', () => {
     disposable.dispose()
   })
 
-  it('routes activeGroupForOpen to the focused part', () => {
+  it('routes activeGroupForOpen to the open target part', () => {
     const svc = new EditorGroupsService()
     const aux = svc.createAuxiliaryPart({ activate: false })
     expect(svc.activeGroupForOpen).toBe(svc.mainPart.activeGroup)
 
+    // Focus alone does not retarget opens.
     svc.activatePart(aux)
+    expect(svc.openTargetPart).toBe(svc.mainPart)
+    expect(svc.activeGroupForOpen).toBe(svc.mainPart.activeGroup)
+
+    svc.activatePart(aux, { updateOpenTarget: true })
+    expect(svc.openTargetPart).toBe(aux)
     expect(svc.activeGroupForOpen).toBe(aux.activeGroup)
   })
 })

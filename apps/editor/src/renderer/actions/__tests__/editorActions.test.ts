@@ -201,6 +201,29 @@ describe('Built-in editor Action2s', () => {
     expect(svc.activeGroup.activeEditor).toBe(a)
   })
 
+  it('CloseActiveEditor closes the focused part editor, not the open-target editor', async () => {
+    const svc = new EditorGroupsService()
+    const main = svc.mainPart.activeGroup
+    const a = new TestEditor('a')
+    main.openEditor(a)
+
+    const aux = svc.createAuxiliaryPart()
+    const b = new TestEditor('b')
+    aux.activeGroup.openEditor(b)
+    expect(svc.activeGroup).toBe(aux.activeGroup)
+
+    // Alt+Tab back to the main window: focus moves, opens still target the
+    // auxiliary part (the original bug closed `b` instead of `a`).
+    svc.activatePart(svc.mainPart)
+    expect(svc.activePart).toBe(svc.mainPart)
+    expect(svc.openTargetPart).toBe(aux)
+
+    await exec(CloseActiveEditorAction, svc)
+    expect(main.contains(a)).toBe(false)
+    expect(aux.activeGroup.contains(b)).toBe(true)
+    expect(svc.openTargetPart).toBe(aux)
+  })
+
   it('CloseAllEditors closes all groups', async () => {
     const svc = new EditorGroupsService()
     svc.activeGroup.openEditor(new TestEditor('a'))
@@ -803,6 +826,33 @@ describe('FocusActiveEditorGroupAction', () => {
     try {
       exec(FocusActiveEditorGroupAction, svc)
       expect(focusGroup).toHaveBeenCalledWith(aux.activeGroup)
+    } finally {
+      focusGroup.mockRestore()
+    }
+  })
+
+  it('run() focuses the focused part after Alt+Tab, not the open-target part', () => {
+    const svc = new EditorGroupsService()
+    const aux = svc.createAuxiliaryPart()
+    const auxInput = Object.create(FileEditorInput.prototype) as FileEditorInput
+    aux.activeGroup.openEditor(auxInput)
+    FileEditorRegistry.register(auxInput, { focus: vi.fn() } as never)
+
+    const mainInput = Object.create(FileEditorInput.prototype) as FileEditorInput
+    svc.mainPart.activeGroup.openEditor(mainInput)
+    const mainFocus = vi.fn()
+    FileEditorRegistry.register(mainInput, { focus: mainFocus } as never)
+
+    // Alt+Tab back to main: the open target stays on the auxiliary window.
+    svc.activatePart(svc.mainPart)
+    expect(svc.openTargetPart).toBe(aux)
+
+    const focusGroup = vi.spyOn(FakeWindowFocusService.prototype, 'focusGroup')
+    try {
+      exec(FocusActiveEditorGroupAction, svc)
+      expect(mainFocus).toHaveBeenCalledOnce()
+      expect(focusGroup).toHaveBeenCalledWith(svc.mainPart.activeGroup)
+      expect(focusGroup).not.toHaveBeenCalledWith(aux.activeGroup)
     } finally {
       focusGroup.mockRestore()
     }

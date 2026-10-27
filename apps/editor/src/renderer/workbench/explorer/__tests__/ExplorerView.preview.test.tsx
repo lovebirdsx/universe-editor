@@ -181,6 +181,7 @@ function renderView(folder: URI, fs: IFileServiceType) {
   services.set(IEditorGroupsService, {
     _serviceBrand: undefined,
     activeGroup: editorGroup,
+    openTargetGroup: editorGroup,
     getGroups: () => [editorGroup],
     activateGroup: (g: unknown) => g,
   } as unknown as IEditorGroupsServiceType)

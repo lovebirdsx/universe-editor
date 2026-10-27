@@ -25,11 +25,11 @@ export function openInLockAwareGroup(
   const target =
     preferredGroup !== undefined && !preferredGroup.isLocked
       ? preferredGroup
-      : // Fall back to activeGroup for minimal test doubles that predate the
+      : // Fall back to openTargetGroup for minimal test doubles that predate the
         // lock-aware getter; production always provides activeGroupForOpen.
-        (groups.activeGroupForOpen ?? groups.activeGroup)
+        (groups.activeGroupForOpen ?? groups.openTargetGroup)
   target.openEditor(editor, options)
-  if (target !== groups.activeGroup && options?.activate !== false) {
+  if (target !== groups.openTargetGroup && options?.activate !== false) {
     groups.activateGroup(target)
   }
 }

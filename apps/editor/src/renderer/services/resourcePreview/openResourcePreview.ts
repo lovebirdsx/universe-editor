@@ -82,7 +82,12 @@ export function openResourcePreview(
   const services = openTargetServicesFrom(accessor)
   const windowFocus = accessor.get(IWindowFocusService)
   void openSingletonEditor(services, target, descriptor.create, () =>
-    openResourcePreviewInGroup(services.groups, services.groups.activeGroup, resource, windowFocus),
+    openResourcePreviewInGroup(
+      services.groups,
+      services.groups.openTargetGroup,
+      resource,
+      windowFocus,
+    ),
   )
   return true
 }

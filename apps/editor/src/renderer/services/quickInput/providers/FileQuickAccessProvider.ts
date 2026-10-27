@@ -400,13 +400,13 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     if (opts.target === 'newWindow') {
       void this._openInNewWindow(uri, opts.pinned).catch((err) => {
         this._logger.warn(`file quick open: new window failed: ${String(err)}`)
-        this._openInActiveGroup(uri, opts.pinned)
+        this._openInDefaultGroup(uri, opts.pinned)
       })
       return
     }
     if (opts.target === 'side') {
-      const active = this._groups.activeGroup
-      const side = this._groups.findGroup({ direction: GroupDirection.Right }, active)
+      const target = this._groups.openTargetGroup
+      const side = this._groups.findGroup({ direction: GroupDirection.Right }, target)
       if (side) {
         for (const editor of side.editors) {
           if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
@@ -435,10 +435,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       this._openThroughResolver(uri, true)
       return
     }
-    this._openInActiveGroup(uri, opts.pinned)
+    this._openInDefaultGroup(uri, opts.pinned)
   }
 
-  private _openInActiveGroup(uri: URI, pinned: boolean): void {
+  private _openInDefaultGroup(uri: URI, pinned: boolean): void {
     // Closed-first: a just-closed editor (custom/image/preview) is restored with
     // its exact type even when another editor of the same file is still open —
     // otherwise the surviving text tab would "intercept" the pick and the closed
@@ -464,10 +464,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         preferOtherDisplayFullscreen: true,
       })
       if (result.ok) return
-      // The closed entry was already consumed; land it in the active group so the
-      // pick still opens the exact editor type.
+      // The closed entry was already consumed; land it in the open target group
+      // so the pick still opens the exact editor type.
       if (!restored.isDisposed) {
-        const group = this._groups.activeGroup
+        const group = this._groups.openTargetGroup
         group.openEditor(restored, { activate: true, pinned })
         activateGroupAndFocus(group, this._focusContext(), restored)
       }
@@ -498,15 +498,15 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     })
     if (result.ok) return
     if (!input.isDisposed && !this._groups.groups.some((group) => group.contains(input))) {
-      const group = this._groups.activeGroup
+      const group = this._groups.openTargetGroup
       group.openEditor(input, { activate: true, pinned })
       activateGroupAndFocus(group, this._focusContext(), input)
     }
   }
 
   private _findOpenEditor(uri: URI): { group: IEditorGroup; editor: EditorInput } | undefined {
-    const active = this._groups.activeGroup
-    const ordered = [active, ...this._groups.groups.filter((group) => group !== active)]
+    const preferred = this._groups.openTargetGroup
+    const ordered = [preferred, ...this._groups.groups.filter((group) => group !== preferred)]
     for (const group of ordered) {
       for (const editor of group.editors) {
         if (editor.resource && this._uriIdentity.isEqual(editor.resource, uri)) {
@@ -556,11 +556,11 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
    *  resources (markdown-preview:…) at all. Returns false when nothing
    *  restorable matches, or when deserialize fails (the consumed entry is then
    *  dropped, mirroring ReopenClosedEditorAction).
-   *  The restored editor lands in the CURRENT active group (or the side group):
-   *  stack entries persist across restarts, so `closed.groupId` can point at
-   *  whichever group hosted the file long ago — quick open opens where the
-   *  user's focus is; replaying the recorded position is Reopen Closed Editor's
-   *  (Ctrl+Shift+T) job, not quick open's. */
+   *  The restored editor lands in the CURRENT open target group (or the side
+   *  group): stack entries persist across restarts, so `closed.groupId` can
+   *  point at whichever group hosted the file long ago — quick open opens where
+   *  the user last worked; replaying the recorded position is Reopen Closed
+   *  Editor's (Ctrl+Shift+T) job, not quick open's. */
   private _restoreClosed(
     uri: URI,
     targetGroup: IEditorGroup | undefined,
@@ -568,7 +568,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
   ): boolean {
     const input = this._takeClosedEditorInput(uri)
     if (!input) return false
-    const group = targetGroup ?? this._groups.activeGroup
+    const group = targetGroup ?? this._groups.openTargetGroup
     group.openEditor(input, { activate: true, pinned })
     // No explicit editor: the open above made `input` the group's active editor,
     // so the helper focuses it without an extra setActive round trip.
@@ -630,7 +630,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         )
         if (clone) {
           openInLockAwareGroup(this._groups, clone, { activate: true, pinned: true }, side)
-          activateGroupAndFocus(this._groups.activeGroup, this._focusContext(), clone)
+          // A locked side group reroutes the open; focus the group that actually
+          // received the clone, not the requested-but-locked one.
+          const host = this._groups.groups.find((g) => g.editors.includes(clone)) ?? side
+          activateGroupAndFocus(host, this._focusContext(), clone)
           return
         }
       }

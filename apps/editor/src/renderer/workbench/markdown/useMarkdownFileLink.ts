@@ -268,7 +268,7 @@ export function useMarkdownFileLink(
             }
           }
           const group =
-            target === 'side' ? ensureSideGroup(groupsService) : groupsService.activeGroup
+            target === 'side' ? ensureSideGroup(groupsService) : groupsService.openTargetGroup
           openPreviewInGroup(
             groupsService,
             group,

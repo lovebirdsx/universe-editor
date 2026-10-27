@@ -168,6 +168,9 @@ function makeGroupsService(opened: { editor: EditorInput; options: unknown }[]) 
     get activeGroup() {
       return group
     },
+    get openTargetGroup() {
+      return group
+    },
     get groups() {
       return [group]
     },

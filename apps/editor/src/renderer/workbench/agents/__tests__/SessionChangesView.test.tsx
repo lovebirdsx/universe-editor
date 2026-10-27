@@ -121,6 +121,9 @@ class FakeEditorGroups {
   get activeGroupForOpen() {
     return this.activeGroup
   }
+  get openTargetGroup() {
+    return this.activeGroup
+  }
   findGroup() {
     return undefined
   }

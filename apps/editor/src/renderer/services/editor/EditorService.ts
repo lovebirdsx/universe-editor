@@ -122,11 +122,11 @@ export class EditorService extends Disposable implements IEditorService {
   }
 
   openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void {
-    const activeGroup = this._groupsService.activeGroup
-    const existing = activeGroup.editors.find((e) => this._matchesExisting(e, input))
-    // A brand-new editor lands in the lock-aware target group; re-activating one
-    // already in the active group stays put.
-    const group = existing ? activeGroup : this._groupsService.activeGroupForOpen
+    const openTargetGroup = this._groupsService.openTargetGroup
+    const existing = openTargetGroup.editors.find((e) => this._matchesExisting(e, input))
+    // A brand-new editor lands in the lock-aware open target; re-activating one
+    // already in the open-target group stays put.
+    const group = existing ? openTargetGroup : this._groupsService.activeGroupForOpen
     this._suppressGroupSync++
     try {
       if (existing) {
@@ -150,11 +150,11 @@ export class EditorService extends Disposable implements IEditorService {
           input instanceof EditorInput ? input : new LegacyEditorInput(input),
           options,
         )
-        // Routed away from a locked active group: make the target active so the
+        // Routed away from a locked open target: make the target active so the
         // new editor is what the user sees — unless the caller preserves focus
         // (a Space/click preview keeps keyboard focus on the originating view).
         if (
-          group !== activeGroup &&
+          group !== openTargetGroup &&
           options?.activate !== false &&
           options?.preserveFocus !== true
         ) {

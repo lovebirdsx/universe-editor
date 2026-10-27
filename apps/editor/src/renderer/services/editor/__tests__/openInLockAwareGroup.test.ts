@@ -11,6 +11,7 @@ function makeGroups(activeGroup: IEditorGroup, activeGroupForOpen: IEditorGroup)
   const groups = {
     activeGroup,
     activeGroupForOpen,
+    openTargetGroup: activeGroup,
     activateGroup,
   } as unknown as IEditorGroupsService
   return { groups, activateGroup }

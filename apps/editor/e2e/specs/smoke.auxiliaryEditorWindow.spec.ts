@@ -704,6 +704,98 @@ test.describe('@p0 auxiliary editor windows', () => {
     })
   })
 
+  test.describe('focused window vs open target', () => {
+    test.use({
+      workspaceSeeder: {
+        seed(dir) {
+          for (const name of ['focus-a.txt', 'focus-b.txt', 'focus-c.txt']) {
+            writeFileSync(join(dir, name), `${name}\n`)
+          }
+        },
+      },
+    })
+
+    test('Ctrl+W closes the focused window editor after Alt+Tab, while opens still land in the auxiliary window @regression', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+
+      const mainUris = async () => {
+        const main = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows())).find(
+          (w) => w.isMain,
+        )!
+        const lists = await Promise.all(
+          main.groupIds.map((id) =>
+            page.evaluate((g) => window.__E2E__!.getEditorGroupEditorUris(String(g)), id),
+          ),
+        )
+        return lists.flat()
+      }
+      const auxUris = async () =>
+        (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? []
+      const windows = () => page.evaluate(() => window.__E2E__!.getWorkbenchWindows())
+
+      // 主窗口打开 a（单击 Explorer 行先在主窗口落一个预览标签）。
+      await workbench.showExplorer()
+      const rowA = page.locator('[role="treeitem"]', { hasText: 'focus-a.txt' })
+      await expect(rowA).toBeVisible({ timeout: 10_000 })
+      await rowA.click()
+      const tree = page.locator('[role="tree"]').filter({ has: rowA }).first()
+      await tree.focus()
+      await expect(tree).toHaveAttribute('data-focused', 'true')
+      await expect.poll(mainUris).toContainEqual(expect.stringContaining('focus-a.txt'))
+
+      // 选中 b，Alt+Enter 把它开进辅助窗口。
+      await page.keyboard.press('ArrowDown')
+      await expect(
+        page.locator('[role="treeitem"][aria-selected="true"]', { hasText: 'focus-b.txt' }),
+      ).toBeVisible()
+      const pagePromise = electronApp.waitForEvent('window')
+      await page.keyboard.press('Alt+Enter')
+      const child = (await pagePromise) as Page
+      await child.waitForLoadState('domcontentloaded')
+      await expect(child.locator('[data-testid="part-editorArea"]')).toBeVisible()
+      const token = (await auxWindows(page))[0]!.token
+
+      await expect.poll(auxUris).toContainEqual(expect.stringContaining('focus-b.txt'))
+      expect(await mainUris()).toContainEqual(expect.stringContaining('focus-a.txt'))
+      expect(await mainUris()).not.toContainEqual(expect.stringContaining('focus-b.txt'))
+      await expect.poll(async () => (await windows()).find((w) => !w.isMain)?.active).toBe(true)
+
+      // Alt+Tab 回主窗口：焦点切到主 part，打开落点仍是辅助窗口。
+      await page.evaluate(() => window.__E2E__!.focusMainWindow())
+      await expect.poll(async () => (await windows()).find((w) => w.isMain)?.focusedPart).toBe(true)
+      await expect
+        .poll(async () => (await windows()).find((w) => !w.isMain)?.openTargetPart)
+        .toBe(true)
+      expect((await windows()).find((w) => !w.isMain)?.focusedPart).toBe(false)
+
+      // Ctrl+W 必须关闭聚焦窗口的 a，而不是打开落点窗口的 b。
+      await page.keyboard.press('Control+w')
+      await expect.poll(mainUris).not.toContainEqual(expect.stringContaining('focus-a.txt'))
+      await expect.poll(auxUris).toContainEqual(expect.stringContaining('focus-b.txt'))
+
+      // Ctrl+W 同样不得改动打开落点：Explorer Enter 仍落辅助窗口并前置它。
+      await workbench.showExplorer()
+      await tree.focus()
+      await expect(tree).toHaveAttribute('data-focused', 'true')
+      await page.keyboard.press('End')
+      await expect(
+        page.locator('[role="treeitem"][aria-selected="true"]', { hasText: 'focus-c.txt' }),
+      ).toBeVisible()
+      await page.keyboard.press('Enter')
+      await expect.poll(auxUris).toContainEqual(expect.stringContaining('focus-c.txt'))
+      expect(await mainUris()).not.toContainEqual(expect.stringContaining('focus-c.txt'))
+      await expect.poll(async () => (await windows()).find((w) => !w.isMain)?.active).toBe(true)
+
+      await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    })
+  })
+
   test('moving and copying an editor group targets the active group', async ({
     electronApp,
     workbench,

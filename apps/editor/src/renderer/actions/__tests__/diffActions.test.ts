@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ContextKeyService,
   Emitter,
   GroupDirection,
+  IContextKeyService,
   IEditorGroupsService,
   IFileService,
   IInstantiationService,
@@ -22,11 +24,18 @@ import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { WebviewDiffInput } from '../../services/editor/WebviewDiffInput.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
+import { FakeWindowFocusService } from '../../services/windows/testing/fakeWindowFocusService.js'
 import {
   IAuxiliaryEditorWindowService,
   type OpenEditorInNewWindowOptions,
   type OpenEditorInNewWindowResult,
 } from '../../services/windows/auxiliaryEditorWindowService.js'
+
+vi.mock('../../services/editor/editorFocus.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/editor/editorFocus.js')>()),
+  focusEditorInput: vi.fn(() => true),
+}))
 
 class FakeAuxiliaryEditorWindowService {
   declare readonly _serviceBrand: undefined
@@ -71,11 +80,14 @@ function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
 function buildServices(
   groups: EditorGroupsService,
   folder?: URI,
-): InstantiationService & { aux: FakeAuxiliaryEditorWindowService } {
+): InstantiationService & { aux: FakeAuxiliaryEditorWindowService; focus: FakeWindowFocusService } {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
   services.set(IWorkspaceService, makeWorkspaceService(folder))
   services.set(IFileService, {} as never)
+  services.set(IContextKeyService, new ContextKeyService())
+  const focus = new FakeWindowFocusService()
+  services.set(IWindowFocusService, focus as never)
   services.set(IUriIdentityService, {
     isEqual: (a: URI, b: URI) => a.toString() === b.toString(),
   } as never)
@@ -83,7 +95,7 @@ function buildServices(
   services.set(IAuxiliaryEditorWindowService, aux as never)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
-  return Object.assign(inst, { aux })
+  return Object.assign(inst, { aux, focus })
 }
 
 function payload(overrides?: Partial<OpenDiffPayload>): OpenDiffPayload {
@@ -99,6 +111,21 @@ function payload(overrides?: Partial<OpenDiffPayload>): OpenDiffPayload {
 function runOpenDiff(inst: InstantiationService, p: OpenDiffPayload): void {
   const cmd = CommandsRegistry.getCommand(OpenDiffAction.ID)!
   inst.invokeFunction((accessor) => cmd.handler(accessor, p))
+}
+
+function runOpenWebviewDiff(inst: InstantiationService, overrides?: Record<string, unknown>): void {
+  const cmd = CommandsRegistry.getCommand(OpenWebviewDiffAction.ID)!
+  inst.invokeFunction((accessor) =>
+    cmd.handler(accessor, {
+      viewType: 'test.diff',
+      title: 'a.xlsx',
+      leftUri: 'file:///ws/a.xlsx',
+      rightUri: 'file:///ws/a.xlsx',
+      leftBase64: btoa('left'),
+      rightBase64: btoa('right'),
+      ...overrides,
+    }),
+  )
 }
 
 describe('OpenDiffAction — lock-aware routing', () => {
@@ -161,6 +188,39 @@ describe('OpenDiffAction — lock-aware routing', () => {
     expect(locked.editors).toHaveLength(1)
     expect(groups.count).toBe(1)
     expect(locked.activeEditor?.id).toBe('diff:file:///ws/a.txt')
+  })
+
+  it('reveals an already-open diff by focusing its group and window', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    runOpenDiff(inst, payload())
+    inst.focus.focusedGroups.length = 0
+
+    runOpenDiff(inst, payload({ modified: 'after-2' }))
+
+    expect(inst.focus.focusedGroups).toEqual([groups.activeGroup])
+  })
+
+  it('does not focus the group when reusing a diff as a preserveFocus preview', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    runOpenDiff(inst, payload())
+    inst.focus.focusedGroups.length = 0
+
+    runOpenDiff(inst, payload({ modified: 'after-2', preserveFocus: true }))
+
+    expect(inst.focus.focusedGroups).toHaveLength(0)
+  })
+
+  it('opens a diff into the group named by groupId', () => {
+    const groups = new EditorGroupsService()
+    const aux = groups.createAuxiliaryPart({ activate: false })
+    const inst = buildServices(groups)
+
+    runOpenDiff(inst, payload({ groupId: aux.activeGroup.id }))
+
+    expect(aux.activeGroup.editors.map((e) => e.id)).toContain('diff:file:///ws/a.txt')
+    expect(groups.mainPart.activeGroup.editors).toHaveLength(0)
   })
 
   it('does not activate the routed group when preserveFocus is set (SCM space-preview)', () => {
@@ -284,7 +344,7 @@ describe('OpenDiffAction — targeted opens', () => {
     expect(groups.activeGroup).toBe(side)
   })
 
-  it('reuses an existing diff already in the side group', () => {
+  it('reuses and reveals an existing diff already in the side group', () => {
     const groups = new EditorGroupsService()
     const inst = buildServices(groups)
     const active = groups.activeGroup
@@ -292,11 +352,13 @@ describe('OpenDiffAction — targeted opens', () => {
     runOpenDiff(inst, payload({ openTarget: 'side' }))
     const side = groups.activeGroup
     groups.activateGroup(active)
+    inst.focus.focusedGroups.length = 0
     runOpenDiff(inst, payload({ openTarget: 'side', modified: 'after-2' }))
 
     expect(groups.count).toBe(2)
     expect(side.editors).toHaveLength(1)
     expect(side.editors[0]?.id).toBe('diff:file:///ws/a.txt')
+    expect(inst.focus.focusedGroups).toEqual([side])
   })
 
   it('opens a fresh diff in an auxiliary window', () => {
@@ -319,6 +381,53 @@ describe('OpenDiffAction — targeted opens', () => {
     await vi.waitFor(() => {
       expect(groups.activeGroup.editors.map((e) => e.id)).toContain('diff:file:///ws/a.txt')
     })
+  })
+
+  it('reveals an existing diff when the new-window fallback runs after run() returned', async () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    runOpenDiff(inst, payload())
+    const group = groups.activeGroup
+    inst.focus.focusedGroups.length = 0
+    inst.aux.fail = true
+
+    // The async fallback runs after `run()` returned; revealing the existing
+    // tab must not go through the already-expired ServicesAccessor.
+    runOpenDiff(inst, payload({ openTarget: 'newWindow', modified: 'after-2' }))
+
+    await vi.waitFor(() => expect(inst.focus.focusedGroups).toEqual([group]))
+    expect(group.editors).toHaveLength(1)
+  })
+
+  it('reveals an existing webview diff when the new-window fallback runs after run() returned', async () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    runOpenWebviewDiff(inst)
+    const group = groups.activeGroup
+    inst.focus.focusedGroups.length = 0
+    inst.aux.fail = true
+
+    runOpenWebviewDiff(inst, { openTarget: 'newWindow' })
+
+    await vi.waitFor(() => expect(inst.focus.focusedGroups).toEqual([group]))
+    expect(group.editors).toHaveLength(1)
+  })
+
+  it('reuses and reveals an existing webview diff in the side group', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    const active = groups.activeGroup
+
+    runOpenWebviewDiff(inst, { openTarget: 'side' })
+    const side = groups.activeGroup
+    groups.activateGroup(active)
+    inst.focus.focusedGroups.length = 0
+
+    runOpenWebviewDiff(inst, { openTarget: 'side' })
+
+    expect(groups.count).toBe(2)
+    expect(side.editors).toHaveLength(1)
+    expect(inst.focus.focusedGroups).toEqual([side])
   })
 
   it('opens a webview diff to the side with a fresh input', () => {

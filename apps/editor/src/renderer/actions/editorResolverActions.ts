@@ -79,6 +79,8 @@ export class ReopenWithAction extends Action2 {
       if (result.handled) return
       if (!input.isDisposed) input.dispose()
     }
-    await resolver.openEditor(uri, { preferredTypeId: pick.id, pinned: true })
+    // Reopen where the old tab was closed — not in the open target, or the tab
+    // would jump to another window when focus and open target diverge.
+    group.openEditor(resolver.createEditorInput(uri, pick.id), { activate: true, pinned: true })
   }
 }

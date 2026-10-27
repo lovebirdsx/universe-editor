@@ -128,7 +128,12 @@ describe('executeAiFix', () => {
         defaultAgentId: () => 'claude-code',
       },
       widgets: { focusSessionInput, focusSession: vi.fn() },
-      groups: { groups: [], activeGroup: activeGroup, activeGroupForOpen: activeGroup },
+      groups: {
+        groups: [],
+        activeGroup: activeGroup,
+        activeGroupForOpen: activeGroup,
+        openTargetGroup: activeGroup,
+      },
       inst: { createInstance: vi.fn() },
     } as unknown as RevealServices
     const run: AiFixRunServices = {

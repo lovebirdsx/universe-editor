@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ContextKeyService,
   Emitter,
+  GroupDirection,
   IContextKeyService,
   IEditorGroupsService,
   IHostService,
@@ -79,6 +80,7 @@ function makeGroups(): { groups: IEditorGroupsService; openEditor: ReturnType<ty
   const groups = {
     activeGroup: group,
     activeGroupForOpen: group,
+    openTargetGroup: group,
     groups: [],
   } as unknown as IEditorGroupsService
   return { groups, openEditor }
@@ -241,6 +243,30 @@ describe('extensionApiActions', () => {
 
     expect(groups.count).toBe(2)
     expect(groups.activeGroup.editors.map((editor) => editor.resource?.path)).toEqual([file])
+  })
+
+  it('routes an open away from a locked group named by groupId', async () => {
+    disposables.push(registerAction2(OpenFileAction))
+
+    const workspace = new WorkspaceStub()
+    workspace.current = { folder: URI.file('/home/u/repo'), name: 'repo' }
+    const groups = new EditorGroupsService()
+    const locked = groups.activeGroup
+    const unlocked = groups.addGroup(locked, GroupDirection.Right)
+    groups.activateGroup(locked)
+    locked.lock(true)
+    const services = new ServiceCollection()
+    services.set(IWorkspaceService, workspace)
+    services.set(IEditorGroupsService, groups)
+
+    const file = '/home/u/repo/src/a.ts'
+    await commandService(services).executeCommand(OpenFileAction.ID, file, {
+      groupId: locked.id,
+    })
+
+    expect(locked.editors).toHaveLength(0)
+    expect(unlocked.editors.map((editor) => editor.resource?.path)).toEqual([file])
+    expect(groups.openTargetGroup).toBe(unlocked)
   })
 
   it('opens a file at position with the workspace remote authority', async () => {

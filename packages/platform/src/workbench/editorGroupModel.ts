@@ -76,6 +76,12 @@ export interface IEditorGroupModel {
   /** 最近一次激活是否要求不把键盘焦点移进编辑器；每次激活都会重写。 */
   readonly lastActivationPreservedFocus: boolean
   /**
+   * 最近一次激活是否由「打开/显式揭示」发起。关闭、分离、批量关闭后的自动
+   * 激活为 false——后台窗口里这类激活不得把窗口带到前台。可选：旧测试替身
+   * 缺省视为打开意图（与历史行为一致）。
+   */
+  readonly lastActivationWasOpenIntent?: boolean
+  /**
    * A locked group does not accept editors opened for a fresh resource: the
    * open is routed to another (unlocked) group instead. Editors already in the
    * group can still be re-activated. Mirrors VSCode's `IEditorGroup.isLocked`.
@@ -140,6 +146,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
   private _previewEditor: EditorInput | undefined = undefined
   private _activationId = 0
   private _lastActivationPreservedFocus = false
+  private _lastActivationWasOpenIntent = true
   private _locked = false
   private readonly _mru: EditorInput[] = []
   /** Index of the last sticky editor; `editors[0.._sticky]` is the sticky region. */
@@ -181,6 +188,10 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
 
   get lastActivationPreservedFocus(): boolean {
     return this._lastActivationPreservedFocus
+  }
+
+  get lastActivationWasOpenIntent(): boolean {
+    return this._lastActivationWasOpenIntent
   }
 
   get isLocked(): boolean {
@@ -321,7 +332,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       // Prefer the most-recently-used remaining editor, else the predecessor,
       // else nothing.
       const next = this._mru[0] ?? this._editors[Math.max(0, index - 1)]
-      this._setActiveInternal(next)
+      this._setActiveInternal(next, false, false)
     }
 
     this._editorStore.delete(target)
@@ -383,7 +394,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
 
     if (this._activeEditor === target) {
       const next = this._mru[0] ?? this._editors[Math.max(0, index - 1)]
-      this._setActiveInternal(next)
+      this._setActiveInternal(next, false, false)
     }
 
     this._editorStore.deleteAndLeak(target)
@@ -410,7 +421,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     }
     this._onDidChangeModel.fire({ kind: 'close', editor: undefined })
     if (this._activeEditor && !this._editors.includes(this._activeEditor)) {
-      this._setActiveInternal(this._mru[0] ?? this._editors[0])
+      this._setActiveInternal(this._mru[0] ?? this._editors[0], false, false)
     }
     for (const editor of closed) this._editorStore.delete(editor)
   }
@@ -451,6 +462,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       // focus stayed wherever it was (sidebar, quick input). Active editor
       // identity is unchanged, so `onDidActiveEditorChange` stays quiet.
       this._lastActivationPreservedFocus = preserveFocus
+      this._lastActivationWasOpenIntent = true
       this._activationId++
       this._onDidChangeModel.fire({ kind: 'active', editor: existing })
       return
@@ -527,13 +539,20 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     return this._editors.length > 0 && this._editors[this._editors.length - 1]!.matches(editor)
   }
 
-  private _setActiveInternal(editor: EditorInput | undefined, preserveFocus = false): void {
+  private _setActiveInternal(
+    editor: EditorInput | undefined,
+    preserveFocus = false,
+    openIntent = true,
+  ): void {
     if (this._activeEditor === editor) return
     this._activeEditor = editor
     this._activationId++
     // 关闭/分离/批量关闭触发的自动激活默认要把焦点交给新编辑器；窗口激活留下的
     // 意图只对当时那次激活有效，不能粘到后续激活上。
     this._lastActivationPreservedFocus = preserveFocus
+    // Auto-activation must not bring a background window forward: only an
+    // explicit open/reveal is a window-focus intent.
+    this._lastActivationWasOpenIntent = openIntent
     if (editor) {
       // Move to front of MRU.
       const idx = this._mru.indexOf(editor)

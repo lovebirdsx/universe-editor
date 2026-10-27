@@ -8,6 +8,7 @@
 
 import {
   Action2,
+  IContextKeyService,
   IEditorGroupsService,
   IInstantiationService,
   IWorkspaceService,
@@ -16,8 +17,14 @@ import {
   URI,
   absolutePathToWorkspaceUri,
   localize2,
+  type EditorInput,
+  type IEditorGroup,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import {
+  activateGroupAndFocus,
+  type ActivateGroupFocusContext,
+} from '../services/editor/activateGroupAndFocus.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -30,6 +37,7 @@ import {
   openTargetServicesFrom,
   openUriEditor,
 } from '../services/editor/openWithTarget.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
 export interface OpenDiffPayload {
@@ -64,8 +72,39 @@ export interface OpenDiffPayload {
    * whose right side must stay frozen at the passed content.
    */
   readonly liveModified?: boolean
-  /** Where to open: omitted = the existing active-group path. */
+  /**
+   * Group the diff belongs to (the group the command was invoked from). Omit for
+   * opens without a source surface — they follow the open target.
+   */
+  readonly groupId?: number
+  /** Where to open: omitted = the resolved group / open-target path. */
   readonly openTarget?: TargetedOpen
+}
+
+/**
+ * The group a diff or merge belongs to: an explicit `groupId` from the invoking
+ * surface, else the open target (diff opens are opens, not command targets).
+ */
+function resolveDiffTargetGroup(
+  groups: IEditorGroupsService,
+  groupId: number | undefined,
+): IEditorGroup {
+  return (groupId !== undefined ? groups.getGroup(groupId) : undefined) ?? groups.openTargetGroup
+}
+
+/**
+ * Reveal an already-open diff: activation alone doesn't move focus into an
+ * editor that is already active, so an explicit reveal must focus the group
+ * (and bring its window forward) itself. Callers hand in services captured
+ * synchronously — this also runs from the async new-window fallback, after the
+ * `ServicesAccessor` has expired.
+ */
+function revealExistingDiff(
+  ctx: ActivateGroupFocusContext,
+  group: IEditorGroup,
+  editor: EditorInput,
+): void {
+  activateGroupAndFocus(group, ctx, editor)
 }
 
 /**
@@ -95,7 +134,16 @@ export class OpenDiffAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const folder = accessor.get(IWorkspaceService).current?.folder
     const inst = accessor.get(IInstantiationService)
-    const activeGroup = groups.activeGroup
+    // Snapshot before any async fallback: the accessor dies at the first await,
+    // but the new-window failure path reveals through it later.
+    const focusContext: ActivateGroupFocusContext = {
+      groups,
+      contextKeyService: accessor.get(IContextKeyService),
+      windowFocus: accessor.get(IWindowFocusService),
+    }
+    const explicitGroup =
+      payload.groupId !== undefined ? groups.getGroup(payload.groupId) : undefined
+    const targetGroup = resolveDiffTargetGroup(groups, payload.groupId)
     const resource = toWorkspaceResource(payload.originalUri, folder)
     const id = `diff:${resource.toString()}`
 
@@ -117,21 +165,25 @@ export class OpenDiffAction extends Action2 {
       // Reuse an already-open diff for the same file: refresh its content in place
       // and re-activate, instead of opening a duplicate. Revealing an existing tab
       // stays in its group even when that group is locked.
-      const existing = activeGroup.editors.find((e) => e.id === id)
+      const existing = targetGroup.editors.find((e) => e.id === id)
       if (existing instanceof DiffEditorInput) {
         existing.update(payload.original, payload.modified, payload.liveModified ?? false)
         // Double-click (pinned=true) promotes a preview tab to permanent.
-        activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+        targetGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+        if (!preserveFocus) revealExistingDiff(focusContext, targetGroup, existing)
         return
       }
 
       const input = createInput()
       // A brand-new diff respects the group lock: route to an unlocked group and
       // surface it (unless this is a focus-preserving preview).
-      const group = groups.activeGroupForOpen
+      const group =
+        explicitGroup !== undefined && !explicitGroup.isLocked
+          ? explicitGroup
+          : groups.activeGroupForOpen
       // Single-click uses the preview slot; double-click opens a permanent tab.
       group.openEditor(input, { activate: true, pinned, preserveFocus })
-      if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
+      if (group !== targetGroup && !preserveFocus) groups.activateGroup(group)
     }
 
     const target = payload.openTarget
@@ -146,6 +198,7 @@ export class OpenDiffAction extends Action2 {
       if (existing instanceof DiffEditorInput) {
         existing.update(payload.original, payload.modified, payload.liveModified ?? false)
         side.openEditor(existing, { activate: true, pinned, preserveFocus })
+        if (!preserveFocus) revealExistingDiff(focusContext, side, existing)
         return
       }
       openInLockAwareGroup(groups, createInput(), { activate: true, pinned, preserveFocus }, side)
@@ -193,7 +246,9 @@ export interface OpenWebviewDiffPayload {
   readonly rightBase64: string
   readonly pinned?: boolean
   readonly preserveFocus?: boolean
-  /** Where to open: omitted = the existing active-group path. */
+  /** Group the diff belongs to; omitted = the open target. See {@link OpenDiffPayload.groupId}. */
+  readonly groupId?: number
+  /** Where to open: omitted = the resolved group / open-target path. */
   readonly openTarget?: TargetedOpen
 }
 
@@ -223,7 +278,16 @@ export class OpenWebviewDiffAction extends Action2 {
   override run(accessor: ServicesAccessor, payload: OpenWebviewDiffPayload): void {
     const groups = accessor.get(IEditorGroupsService)
     const folder = accessor.get(IWorkspaceService).current?.folder
-    const activeGroup = groups.activeGroup
+    // Snapshot before any async fallback: the accessor dies at the first await,
+    // but the new-window failure path reveals through it later.
+    const focusContext: ActivateGroupFocusContext = {
+      groups,
+      contextKeyService: accessor.get(IContextKeyService),
+      windowFocus: accessor.get(IWindowFocusService),
+    }
+    const explicitGroup =
+      payload.groupId !== undefined ? groups.getGroup(payload.groupId) : undefined
+    const targetGroup = resolveDiffTargetGroup(groups, payload.groupId)
     const leftUri = toWorkspaceResource(payload.leftUri, folder)
     const rightUri = toWorkspaceResource(payload.rightUri, folder)
     const pinned = payload.pinned ?? false
@@ -243,14 +307,18 @@ export class OpenWebviewDiffAction extends Action2 {
       const input = createInput()
       // Reuse an already-open diff for the same identity (viewType + both URIs):
       // re-activate it instead of opening a duplicate.
-      const existing = activeGroup.editors.find((e) => e.id === input.id)
+      const existing = targetGroup.editors.find((e) => e.id === input.id)
       if (existing) {
-        activeGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+        targetGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
+        if (!preserveFocus) revealExistingDiff(focusContext, targetGroup, existing)
         return
       }
-      const group = groups.activeGroupForOpen
+      const group =
+        explicitGroup !== undefined && !explicitGroup.isLocked
+          ? explicitGroup
+          : groups.activeGroupForOpen
       group.openEditor(input, { activate: true, pinned, preserveFocus })
-      if (group !== activeGroup && !preserveFocus) groups.activateGroup(group)
+      if (group !== targetGroup && !preserveFocus) groups.activateGroup(group)
     }
 
     const target = payload.openTarget
@@ -265,6 +333,7 @@ export class OpenWebviewDiffAction extends Action2 {
       const existing = side.editors.find((e) => e.id === input.id)
       if (existing) {
         side.openEditor(existing, { activate: true, pinned, preserveFocus })
+        if (!preserveFocus) revealExistingDiff(focusContext, side, existing)
         return
       }
       openInLockAwareGroup(groups, input, { activate: true, pinned, preserveFocus }, side)

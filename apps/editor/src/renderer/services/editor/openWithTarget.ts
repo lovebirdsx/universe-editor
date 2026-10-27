@@ -76,15 +76,16 @@ export function findGroupContaining(
   return groups.groups.find((group) => group.contains(editor))
 }
 
-/** The group a side-open splits from: the active group of the active part.
- *  A source group living in another part (e.g. the file is already open in an
- *  auxiliary window) must not drag the split into that invisible window. */
+/** The group a side-open splits from: the open target group (last-used editor
+ *  surface). A source group living in another part (e.g. the file is already
+ *  open in an auxiliary window) must not drag the split into that invisible
+ *  window. */
 function splitSource(
   groups: IEditorGroupsService,
   sourceGroup: IEditorGroup | undefined,
 ): IEditorGroup {
-  const active = groups.activeGroup
-  if (!sourceGroup || sourceGroup.part !== active.part) return active
+  const openTarget = groups.openTargetGroup
+  if (!sourceGroup || sourceGroup.part !== openTarget.part) return openTarget
   return sourceGroup
 }
 

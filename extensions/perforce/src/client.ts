@@ -8709,10 +8709,11 @@ export class PerforceClient {
     pinned = false,
     preserveFocus = false,
     openTarget?: 'side' | 'newWindow',
+    groupId?: number,
   ): Promise<void> {
     await this._withBusy(localize('perforce.busy.openChange', 'Opening Changes'), async () => {
       if (isSpreadsheetPath(localPath)) {
-        await this._openSpreadsheetChange(localPath, pinned, preserveFocus, openTarget)
+        await this._openSpreadsheetChange(localPath, pinned, preserveFocus, openTarget, groupId)
         return
       }
       const started = Date.now()
@@ -8729,7 +8730,12 @@ export class PerforceClient {
         // No have revision (open-for-add / not under depot control) — opening the
         // file is the correct fallback, there's no depot side to diff against.
         if (openTarget) {
-          await commands.executeCommand('_workbench.openFile', localPath, { openTarget })
+          await commands.executeCommand('_workbench.openFile', localPath, {
+            openTarget,
+            ...(groupId !== undefined ? { groupId } : {}),
+          })
+        } else if (groupId !== undefined) {
+          await commands.executeCommand('_workbench.openFile', localPath, { groupId })
         } else {
           await commands.executeCommand('_workbench.openFile', localPath)
         }
@@ -8756,6 +8762,7 @@ export class PerforceClient {
         preserveFocus,
         openableUri: pathToFileURL(localPath).href,
         liveModified: true,
+        ...(groupId !== undefined ? { groupId } : {}),
         ...(openTarget ? { openTarget } : {}),
       })
     })
@@ -8771,6 +8778,7 @@ export class PerforceClient {
     pinned = false,
     preserveFocus = false,
     openTarget?: 'side' | 'newWindow',
+    groupId?: number,
   ): Promise<void> {
     const started = Date.now()
     const baseline = await this._baseline.getHaveContentBytesResult(localPath)
@@ -8785,7 +8793,12 @@ export class PerforceClient {
     if (baseline.content === undefined) {
       // No have revision — open the file directly (see openChange).
       if (openTarget) {
-        await commands.executeCommand('_workbench.openFile', localPath, { openTarget })
+        await commands.executeCommand('_workbench.openFile', localPath, {
+          openTarget,
+          ...(groupId !== undefined ? { groupId } : {}),
+        })
+      } else if (groupId !== undefined) {
+        await commands.executeCommand('_workbench.openFile', localPath, { groupId })
       } else {
         await commands.executeCommand('_workbench.openFile', localPath)
       }
@@ -8807,6 +8820,7 @@ export class PerforceClient {
       rightBase64: modified.toString('base64'),
       pinned,
       preserveFocus,
+      ...(groupId !== undefined ? { groupId } : {}),
       ...(openTarget ? { openTarget } : {}),
     })
   }

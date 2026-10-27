@@ -310,6 +310,21 @@ function useActiveGroup(groupsService: IEditorGroupsService): IEditorGroup {
   )
 }
 
+/**
+ * Whether this group is the last-used editor surface (where opens land). The
+ * open-target activation effect uses it to bring a background window forward
+ * on a non-preview open; the active-window highlight stays on `activeGroup`.
+ */
+function useIsOpenTargetGroup(groupsService: IEditorGroupsService, group: IEditorGroup): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const d = markAsSingleton(groupsService.onDidActivateOpenTargetGroup(() => onChange()))
+      return () => d.dispose()
+    },
+    () => groupsService.openTargetGroup === group,
+  )
+}
+
 const EditorTab = memo(function EditorTab({
   input,
   isActive,
@@ -550,6 +565,8 @@ export const EditorGroupView = memo(function EditorGroupView({
   const groupVersion = useGroupVersion(group)
   const activeGroup = useActiveGroup(groupsService)
   const isActiveGroup = activeGroup === group
+  const isOpenTargetGroup = useIsOpenTargetGroup(groupsService, group)
+  const isTargetGroup = isActiveGroup || isOpenTargetGroup
   const dialogService = useService(IDialogService)
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
@@ -976,37 +993,47 @@ export const EditorGroupView = memo(function EditorGroupView({
     return () => el.removeEventListener('wheel', onWheel)
   }, [tabBarEl])
 
-  // When this group becomes active (e.g. user returns from sidebar without changing file),
-  // focus the Monaco editor so keyboard input goes to the editor immediately — unless the
-  // open explicitly asked to keep focus elsewhere (Space-preview from a list).
+  // When this group becomes the active group or the open target (e.g. user
+  // returns from sidebar without changing file), focus the Monaco editor so
+  // keyboard input goes to the editor immediately — unless the open explicitly
+  // asked to keep focus elsewhere (Space-preview from a list). The open target
+  // also covers opens routed here from another window: that window has to be
+  // brought forward, otherwise the editor is focused in a background document
+  // and keys stay behind.
   const activeEditor = group.activeEditor
   const activationId = group.activationId
   const focusedActivationRef = useRef<number>(-1)
-  const wasActiveGroupRef = useRef(false)
+  const wasTargetGroupRef = useRef(false)
   useLayoutEffect(() => {
-    const wasActive = wasActiveGroupRef.current
-    wasActiveGroupRef.current = isActiveGroup
-    if (!isActiveGroup || !activeEditor) return
+    const wasTarget = wasTargetGroupRef.current
+    wasTargetGroupRef.current = isTargetGroup
+    if (!isTargetGroup || !activeEditor) return
     const focusActivation = (editor: EditorInput): void => {
-      // An open routed here from another window (e.g. Explorer in main while an
-      // auxiliary part is the target) must bring this window forward, otherwise
-      // the editor is focused in a background document and keys stay behind.
       if (workbenchWindows && workbenchWindows.activeWindow.part !== group.part) {
+        // Closing/detaching a tab in a background window auto-activates its
+        // replacement (watcher deletes a file, a terminal process exits). That
+        // is not a window-focus intent: bringing the window forward would steal
+        // focus from whatever the user is doing elsewhere.
+        if (group.lastActivationWasOpenIntent === false) return
         windowFocus?.focusGroup(group)
+        // focusGroup activates the target part with preserveFocus (window
+        // activation is not an editor-focus intent). This path *is* an open
+        // intent, so clear the flag before a late-mounted editor reads it.
+        group.preserveFocusOnActivation?.(false)
       }
       focusEditorInput(editor, contextKeyService, group.id)
     }
-    // Group just (re-)activated without an editor change → focus, unless this
+    // Group just became a target without an editor change → focus, unless this
     // activation asked to preserve focus (single-click preview from a list must
     // leave focus in the originating tree). Record the activation either way so
     // the already-active branch below doesn't re-focus it.
-    if (!wasActive) {
+    if (!wasTarget) {
       focusedActivationRef.current = activationId
       if (group.lastActivationPreservedFocus) return
       focusActivation(activeEditor)
       return
     }
-    // Already-active group: handle each activation once (dedupes StrictMode's
+    // Already a target group: handle each activation once (dedupes StrictMode's
     // double-invoke) and honor preserveFocus. Re-activating the editor that is
     // already active bumps activationId too, so "open X" while X is already
     // showing pulls focus back into the editor.
@@ -1017,7 +1044,7 @@ export const EditorGroupView = memo(function EditorGroupView({
   }, [
     contextKeyService,
     group,
-    isActiveGroup,
+    isTargetGroup,
     activeEditor,
     activationId,
     workbenchWindows,

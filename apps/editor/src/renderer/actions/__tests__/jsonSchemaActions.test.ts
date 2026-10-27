@@ -33,8 +33,12 @@ function makeServices(activeEditor: unknown): {
   openEditor: ReturnType<typeof vi.fn>
 } {
   const openEditor = vi.fn()
+  const group = { activeEditor, openEditor }
   const groups = {
-    activeGroup: { activeEditor, openEditor },
+    activeGroup: group,
+    activeGroupForOpen: group,
+    openTargetGroup: group,
+    activateGroup: vi.fn(),
   } as unknown as IEditorGroupsService
   const loggerService = { createLogger: () => new NullLogger() } as unknown as ILoggerService
   const services = new ServiceCollection()
@@ -126,6 +130,7 @@ describe('ShowJsonSchemaAction', () => {
       groups: [g1, g2],
       getGroup: (id: number) => (id === 1 ? g1 : id === 2 ? g2 : undefined),
       activeGroupForOpen: g2,
+      openTargetGroup: g2,
       activateGroup: vi.fn(),
     }
 

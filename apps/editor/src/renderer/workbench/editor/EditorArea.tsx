@@ -31,13 +31,17 @@ export function EditorArea({
 
   // The open target follows the last-used editor surface, not window focus: the
   // main window also hosts the sidebar/panel, so only interaction inside this
-  // area makes its part the target. Activation here is not an editor focus intent.
+  // area makes its part the target. Window focus itself (Alt+Tab) changes only
+  // `activePart`, which drives commands/context keys/highlight. Activation here
+  // is not an editor focus intent.
   useLayoutEffect(() => {
     const el = containerRef.current
     if (!el) return
     const activate = (): void => {
-      if (groupsService.activePart === layoutPart) return
-      groupsService.activatePart(layoutPart, { preserveFocus: true })
+      if (groupsService.activePart === layoutPart && groupsService.openTargetPart === layoutPart) {
+        return
+      }
+      groupsService.activatePart(layoutPart, { preserveFocus: true, updateOpenTarget: true })
     }
     el.addEventListener('pointerdown', activate, true)
     el.addEventListener('focusin', activate, true)

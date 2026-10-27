@@ -437,7 +437,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         if (result.handled) return
         openResourceForRead(
           editorGroups,
-          editorGroups.activeGroup,
+          editorGroups.openTargetGroup,
           createdUri,
           editorResolver,
           windowFocus,
@@ -468,7 +468,7 @@ export const ToolCallCard = memo(function ToolCallCard({
     }
     openResourceForRead(
       editorGroups,
-      editorGroups.activeGroup,
+      editorGroups.openTargetGroup,
       createdUri,
       editorResolver,
       windowFocus,

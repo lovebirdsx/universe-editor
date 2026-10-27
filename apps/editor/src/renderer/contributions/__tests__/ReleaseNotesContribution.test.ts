@@ -72,13 +72,17 @@ function fakeGroups(): {
 } {
   const opened: IEditorInput[] = []
   const openOptions: Record<string, unknown>[] = []
-  const service = {
-    activeGroup: {
-      openEditor(input: IEditorInput, options?: Record<string, unknown>) {
-        opened.push(input)
-        openOptions.push(options ?? {})
-      },
+  const group = {
+    openEditor(input: IEditorInput, options?: Record<string, unknown>) {
+      opened.push(input)
+      openOptions.push(options ?? {})
     },
+  }
+  const service = {
+    activeGroup: group,
+    activeGroupForOpen: group,
+    openTargetGroup: group,
+    activateGroup() {},
   } as unknown as IEditorGroupsService
   return { service, opened, openOptions }
 }

@@ -155,7 +155,7 @@ export class OpenHtmlSourceAction extends Action2 {
       // the close below is a no-op.
       group.openEditor(sourceInput, { activate: true, pinned, index: previewIndex })
       group.closeEditor(active)
-      if (group !== groups.activeGroup) {
+      if (group !== groups.openTargetGroup) {
         groups.activateGroup(group)
         windowFocus.focusGroup(group)
       }
@@ -168,7 +168,7 @@ export class OpenHtmlSourceAction extends Action2 {
     const sourceInGroup = group.editors.find((e) => e.resource?.toString() === sourceUri.toString())
     if (sourceInGroup) {
       group.setActive(sourceInGroup)
-      if (group !== groups.activeGroup) {
+      if (group !== groups.openTargetGroup) {
         groups.activateGroup(group)
         windowFocus.focusGroup(group)
       }
@@ -187,7 +187,7 @@ export class OpenHtmlSourceAction extends Action2 {
     const source = inst.createInstance(FileEditorInput, sourceUri)
     group.openEditor(source, { activate: true, pinned, index: previewIndex })
     group.closeEditor(active)
-    if (group !== groups.activeGroup) {
+    if (group !== groups.openTargetGroup) {
       groups.activateGroup(group)
       windowFocus.focusGroup(group)
     }

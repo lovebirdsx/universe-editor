@@ -695,6 +695,7 @@ function makeGroup(activeEditor?: EditorInput): {
   } as unknown as FakeGroup
   const service = {
     activeGroup: group,
+    openTargetGroup: group,
     groups: [group],
     activateGroup() {},
   } as unknown as IEditorGroupsServiceType

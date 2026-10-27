@@ -56,6 +56,9 @@ class FakeEditorGroupsService {
   get activeGroup(): FakeGroup {
     return this.active
   }
+  get openTargetGroup(): FakeGroup {
+    return this.active
+  }
 }
 
 class FakeSessionService {

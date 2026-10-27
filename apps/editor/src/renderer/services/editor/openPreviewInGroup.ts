@@ -93,7 +93,7 @@ export function openPreviewInGroup(
   // Surface the tab the command just opened: a lock-routed or reopen-target
   // group may not be the active one, and without this the preview would land
   // in a background group, invisible.
-  if (group !== groups.activeGroup) groups.activateGroup(group)
+  if (group !== groups.openTargetGroup) groups.activateGroup(group)
   opts?.windowFocus?.focusGroup(group)
 }
 
@@ -162,6 +162,6 @@ export function togglePreviewInGroup(
   preview.adoptSource()
   // Surface the tab the command just created: an editor-title button may target
   // a non-active split, and without this the toggle would happen off-screen.
-  if (group !== groups.activeGroup) groups.activateGroup(group)
+  if (group !== groups.openTargetGroup) groups.activateGroup(group)
   windowFocus?.focusGroup(group)
 }

@@ -1005,7 +1005,7 @@ function openCreatedToolCallFile(accessor: ServicesAccessor, arg: unknown, toSid
   const path = createdFilePath(item.call)
   if (path === undefined) return
   const uri = toolCallPathUri(path, folder)
-  const group = toSide ? ensureSideGroup(editorGroups) : editorGroups.activeGroup
+  const group = toSide ? ensureSideGroup(editorGroups) : editorGroups.openTargetGroup
   openResourceForRead(editorGroups, group, uri, editorResolver, accessor.get(IWindowFocusService))
 }
 

@@ -119,12 +119,16 @@ describe('ShowReleaseNotesAction', () => {
   it('shows every known version up to the running app, merged sections included', async () => {
     disposables.push(registerAction2(ShowReleaseNotesAction))
     const opened: IEditorInput[] = []
-    const groups = {
-      activeGroup: {
-        openEditor(input: IEditorInput) {
-          opened.push(input)
-        },
+    const group = {
+      openEditor(input: IEditorInput) {
+        opened.push(input)
       },
+    }
+    const groups = {
+      activeGroup: group,
+      activeGroupForOpen: group,
+      openTargetGroup: group,
+      activateGroup() {},
     } as unknown as IEditorGroupsService
     const notes: IReleaseNote[] = [{ version: '0.16.0', title: '', summary: '', body: '' }, MERGED]
     const releaseNotes = {

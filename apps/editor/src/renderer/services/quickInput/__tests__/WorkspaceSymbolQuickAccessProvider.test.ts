@@ -553,6 +553,9 @@ describe('WorkspaceSymbolQuickAccessProvider open targets', () => {
         get activeGroupForOpen() {
           return active
         },
+        get openTargetGroup() {
+          return active
+        },
         activateGroup(group: { id: number }) {
           const found = list.find((g) => g.id === group.id)
           if (found) active = found

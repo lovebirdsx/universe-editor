@@ -443,6 +443,9 @@ describe('openExistingInputWithTarget', () => {
       get activeGroupForOpen() {
         return active
       },
+      get openTargetGroup() {
+        return active
+      },
       findGroup: () => undefined,
       addGroup: (source: IEditorGroup) => {
         const created = makeGroup(source.part)

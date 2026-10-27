@@ -298,6 +298,34 @@ describe('EditorGroupModel — activation focus intent', () => {
     model.closeEditor(model.activeEditor!)
     expect(model.lastActivationPreservedFocus).toBe(false)
   })
+
+  // 后台窗口关闭标签触发的自动激活不是「打开意图」，不得把窗口带到前台。
+  it('marks open/setActive activations as open intents and close-driven ones as auto', () => {
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const b = make('b')
+    model.openEditor(a)
+    expect(model.lastActivationWasOpenIntent).toBe(true)
+
+    model.openEditor(b)
+    expect(model.lastActivationWasOpenIntent).toBe(true)
+
+    model.setActive(a)
+    expect(model.lastActivationWasOpenIntent).toBe(true)
+
+    model.closeEditor(a)
+    expect(model.activeEditor).toBe(b)
+    expect(model.lastActivationWasOpenIntent).toBe(false)
+
+    model.openEditor(make('c'))
+    expect(model.lastActivationWasOpenIntent).toBe(true)
+
+    model.detachEditor(model.activeEditor!)
+    expect(model.lastActivationWasOpenIntent).toBe(false)
+
+    model.closeAllEditors()
+    expect(model.lastActivationWasOpenIntent).toBe(false)
+  })
 })
 
 describe('EditorGroupModel — move', () => {

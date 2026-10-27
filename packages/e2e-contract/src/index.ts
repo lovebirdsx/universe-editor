@@ -794,6 +794,10 @@ export interface E2EWorkbenchWindowSnapshot {
   readonly isMain: boolean
   readonly active: boolean
   readonly groupIds: readonly number[]
+  /** The window's part currently owns keyboard focus. */
+  readonly focusedPart: boolean
+  /** New editors are being opened into this window's part. */
+  readonly openTargetPart: boolean
 }
 
 export interface E2EProbe {
@@ -906,6 +910,12 @@ export interface E2EProbe {
   getWorkbenchWindows(): readonly E2EWorkbenchWindowSnapshot[]
   /** Marks an auxiliary window active without needing OS focus (offscreen E2E). */
   focusAuxiliaryWindow(token: string): Promise<void>
+  /**
+   * Marks the main window active without clicking its editor area — a click
+   * would also retarget opens, masking the focus-only window switch a real
+   * Alt+Tab performs.
+   */
+  focusMainWindow(): Promise<void>
   /** Runs the real user-close path (main-process veto + renderer transaction). */
   requestCloseAuxiliaryWindow(token: string): Promise<void>
   /**

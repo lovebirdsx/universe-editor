@@ -3361,6 +3361,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               pinned?: boolean
               preserveFocus?: boolean
               openTarget?: 'side' | 'newWindow'
+              groupId?: number
             }
           | undefined
         ),
@@ -3378,6 +3379,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
           options?.pinned ?? false,
           options?.preserveFocus ?? false,
           options?.openTarget,
+          options?.groupId,
         )
     }),
 

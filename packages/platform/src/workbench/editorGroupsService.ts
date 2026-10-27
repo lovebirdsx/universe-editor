@@ -79,7 +79,7 @@ export interface IRemoveEditorPartOptions {
 export interface IEditorGroup extends IEditorGroupModel, IGridView {
   /** The part (window) this group belongs to. */
   readonly part: IEditorPart
-  /** Whether this group is the active group of the currently active part. */
+  /** Whether this group is the active group of the focused part (window focus). */
   readonly isActive: boolean
   /** Position in the owning part's `groups` array (creation order). */
   readonly index: number
@@ -101,7 +101,7 @@ export interface IEditorGroup extends IEditorGroupModel, IGridView {
 export interface IEditorPart {
   readonly id: number
   readonly isMain: boolean
-  /** Whether this is the workbench's active (focused) part. */
+  /** Whether this is the workbench's focused part (window focus). */
   readonly isActive: boolean
   /** Whether every group in this part is empty. */
   readonly isEmpty: boolean
@@ -160,6 +160,17 @@ export interface IEditorPart {
 export interface IActivatePartOptions {
   /** 激活 part 及其活动组，但不把键盘焦点移进编辑器（窗口激活的默认语义）。 */
   readonly preserveFocus?: boolean
+  /**
+   * 同时把该 part 设为打开落点（新编辑器落点）。辅助窗口激活传 true；
+   * 主窗口激活不传（主窗口还承载侧栏/面板，焦点回主窗口不应改变落点）。
+   * 默认 false。
+   */
+  readonly updateOpenTarget?: boolean
+  /**
+   * 移动打开落点时保持静默（不触发 `onDidActivateOpenTargetGroup`）。用于
+   * 目标窗口消失后的回落——回落不得把别的窗口带到前台。默认 false。
+   */
+  readonly silentOpenTarget?: boolean
 }
 
 export interface IEditorGroupsService {
@@ -167,8 +178,14 @@ export interface IEditorGroupsService {
 
   /** The main window's part. Always present, never removable. */
   readonly mainPart: IEditorPart
-  /** The focused part. */
+  /** The focused part (window focus). Commands/context keys/UI follow this. */
   readonly activePart: IEditorPart
+  /**
+   * Where new editors land: the last-used editor surface. Equals `activePart`
+   * in the common case, but differs while focus sits in the main window's
+   * sidebar/panel/other chrome. Never a part without a window.
+   */
+  readonly openTargetPart: IEditorPart
   /** All parts in creation order; `parts[0] === mainPart`. */
   readonly parts: readonly IEditorPart[]
   /**
@@ -179,13 +196,18 @@ export interface IEditorGroupsService {
   readonly orientation: GroupOrientation
 
   /**
-   * Global active group (the active group of `activePart`). Always points at a
-   * group in the focused window.
+   * Global active group (the active group of `activePart`). Follows window
+   * focus; drives command targets, context keys and the UI highlight.
    */
   readonly activeGroup: IEditorGroup
   /**
-   * The active part's lock-aware open target. A new resource opened through
-   * `IEditorService` lands in the focused window.
+   * The active group of `openTargetPart` — the group a newly-opened editor
+   * lands in.
+   */
+  readonly openTargetGroup: IEditorGroup
+  /**
+   * `openTargetPart`'s lock-aware open target. A new resource opened through
+   * `IEditorService` lands in the last-used editor surface.
    */
   readonly activeGroupForOpen: IEditorGroup
   /**
@@ -197,6 +219,13 @@ export interface IEditorGroupsService {
   readonly count: number
 
   readonly onDidActiveGroupChange: Event<IEditorGroup>
+  /**
+   * Fires when the open target is explicitly (re)activated: a group activation
+   * routed by an open, an auxiliary-window activation, or editor-area
+   * interaction in the main window. Silent fallbacks (a part or group being
+   * removed) deliberately do not fire, so cleanup never pulls a window forward.
+   */
+  readonly onDidActivateOpenTargetGroup: Event<IEditorGroup>
   readonly onDidAddGroup: Event<IEditorGroup>
   readonly onDidRemoveGroup: Event<IEditorGroup>
   readonly onDidMoveGroup: Event<IEditorGroup>

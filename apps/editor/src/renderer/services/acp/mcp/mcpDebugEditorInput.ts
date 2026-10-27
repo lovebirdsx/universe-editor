@@ -92,7 +92,7 @@ export function revealMcpDebugEditor(
   const input = inst.createInstance(McpDebugEditorInput, key, serverName)
   const target = groups.activeGroupForOpen
   target.openEditor(input, { activate: true, pinned: true })
-  if (target !== groups.activeGroup) groups.activateGroup(target)
+  if (target !== groups.openTargetGroup) groups.activateGroup(target)
   windowFocus?.focusGroup(target)
   return input
 }

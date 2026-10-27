@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Reveal a session's editor tab, wherever it already lives.
  *
- *  IEditorService.openEditor only dedupes within the *active* group — correct
+ *  IEditorService.openEditor only dedupes within the *open target* group — correct
  *  for files (the same file may legitimately be open in two split groups) but
  *  wrong for a session, which is one chat: with the tab already open in another
  *  group, revealing it opened a second copy in the active group. Callers must
@@ -67,6 +67,6 @@ export function revealSessionEditorTab(
     inst.createInstance(AcpSessionEditorInput, sessionId, live.agentId, undefined),
     { activate: true, pinned: true },
   )
-  if (target !== groups.activeGroup) groups.activateGroup(target)
+  if (target !== groups.openTargetGroup) groups.activateGroup(target)
   windowFocus?.focusGroup(target)
 }

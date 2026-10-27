@@ -68,6 +68,9 @@ export class EditorGroup implements IEditorGroup, IGridView {
   get lastActivationPreservedFocus() {
     return this.model.lastActivationPreservedFocus
   }
+  get lastActivationWasOpenIntent() {
+    return this.model.lastActivationWasOpenIntent
+  }
   /** 窗口激活：只宣告组激活，不抢键盘焦点。 */
   preserveFocusOnActivation(preserve = true): void {
     this.model.preserveFocusOnActivation(preserve)

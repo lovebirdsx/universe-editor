@@ -76,7 +76,7 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
     } else if (input instanceof DocEditorInput) {
       // Same for the built-in guide: reuse the current doc tab so H/L (and
       // Alt+←/→) walk the trail in place instead of opening a new tab.
-      openDocInGroup(groups.activeGroup, input, false)
+      openDocInGroup(groups.openTargetGroup, input, false)
     } else {
       openInLockAwareGroup(groups, input, { activate: true, pinned: false })
     }

@@ -116,7 +116,7 @@ function NoteBody({ markdown, version }: { readonly markdown: string; readonly v
             void openDocWithTarget(targets, doc, openTarget, groups ?? undefined).then((result) => {
               if (result.handled) return
               openDocInGroup(
-                groups ?? editorGroups.activeGroup,
+                groups ?? editorGroups.openTargetGroup,
                 doc.isDisposed ? createDoc() : doc,
                 false,
               )

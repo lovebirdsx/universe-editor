@@ -288,22 +288,34 @@ export class AuxiliaryEditorWindowService
     )
     this._register(
       this._workbenchWindows.onDidChangeActiveWindow((window) => {
-        // The reverse direction. Both `_setActive` and `_setActivePart` bail out
-        // when the target is already current, so the two subscriptions cannot
-        // ping-pong. Main also hosts non-editor parts (sidebar, panel): focusing
-        // those must not retarget opens away from the last-used auxiliary part
-        // (VSCode parity) — `EditorArea` activates the main part itself.
-        if (window.isMain) return
-        if (this._groups.activePart === window.part) return
-        this._groups.activatePart(window.part, { preserveFocus: true })
+        // Window focus moves the command/context-key target (activePart) for
+        // every window. The open target only follows editor surfaces: an
+        // auxiliary window is entirely an editor surface, while the main window
+        // also hosts the sidebar/panel — `EditorArea` retargets opens itself
+        // (VSCode parity: main chrome keeps opens in the last-used editor
+        // window).
+        this._groups.activatePart(window.part, {
+          preserveFocus: true,
+          updateOpenTarget: !window.isMain,
+        })
       }),
     )
     this._register(
       this._workbenchWindows.onDidRemoveWindow((window) => {
         // A salvage close can keep the part alive after its window is gone; the
-        // open target must never be a part without a window.
-        if (this._groups.activePart !== window.part) return
-        this._groups.activatePart(this._groups.mainPart, { preserveFocus: true })
+        // open target must never be a part without a window, and neither must
+        // the command target. Fall back independently: only a removed command
+        // target moves focus, and either fallback stays silent so closing a
+        // background window never pulls another one forward.
+        const partGone = this._groups.activePart === window.part
+        const openTargetGone = this._groups.openTargetPart === window.part
+        if (!partGone && !openTargetGone) return
+        const fallback = partGone ? this._groups.mainPart : this._groups.activePart
+        this._groups.activatePart(fallback, {
+          preserveFocus: true,
+          updateOpenTarget: openTargetGone,
+          ...(openTargetGone ? { silentOpenTarget: true } : {}),
+        })
       }),
     )
   }
@@ -620,7 +632,10 @@ export class AuxiliaryEditorWindowService
       this._groups.removePart(part, { force: true })
     }
     this._workbenchWindows.setActiveWindow(this._workbenchWindows.mainWindow)
-    this._groups.activatePart(this._groups.mainPart, { preserveFocus: true })
+    this._groups.activatePart(this._groups.mainPart, {
+      preserveFocus: true,
+      updateOpenTarget: true,
+    })
     this._windowFocus.focusMainWindow()
   }
 
@@ -754,7 +769,7 @@ export class AuxiliaryEditorWindowService
 
   private _activateEntry(entry: WindowEntry): void {
     this._workbenchWindows.setActiveWindow(entry.window)
-    this._groups.activatePart(entry.part, { preserveFocus: true })
+    this._groups.activatePart(entry.part, { preserveFocus: true, updateOpenTarget: true })
   }
 
   private _cloneForCopy(editor: EditorInput): EditorInput | undefined {

@@ -50,8 +50,13 @@ import {
 
 /** Hooks the global EditorGroupsService provides back to each part. */
 export interface IEditorPartHost {
-  /** Make `part` the active part. Returns whether the active part changed. */
-  activatePart(part: IEditorPart): boolean
+  /**
+   * Explicit group activation (open/reveal intent): retarget new editors to
+   * `group` without moving window focus. `previousGroup` is the part's active
+   * group before the switch — the part updates its own state first, so the host
+   * cannot derive the change by re-reading `part.activeGroup`.
+   */
+  activateGroup(part: IEditorPart, group: IEditorGroup, previousGroup: IEditorGroup): void
   isPartActive(part: IEditorPart): boolean
 }
 
@@ -237,18 +242,19 @@ export class EditorPart extends Disposable implements IEditorPart {
   activateGroup(group: IEditorGroup | number): IEditorGroup {
     const target = this._resolve(group)
     if (!target) return this.activeGroup
-    const groupChanged = this._activeGroup.get() !== target
+    const previousGroup = this.activeGroup
+    const groupChanged = previousGroup !== target
     if (groupChanged) {
       transaction((tx) => {
         this._activeGroup.set(target, tx)
       })
       this._bumpMru(target)
     }
-    // Focus the part *after* switching its local group so listeners of
-    // `onDidActivePartChange` already observe the group they are focusing.
-    const partChanged = this._host.activatePart(this)
-    if (groupChanged || partChanged) this._onDidActiveGroupChange.fire(target)
+    // Explicit activation retargets opens; it is not a window-focus change.
+    // `_host.activateGroup` only moves the open target.
+    this._host.activateGroup(this, target, previousGroup)
     if (groupChanged) {
+      this._onDidActiveGroupChange.fire(target)
       this._logger.debug(`part ${this.id}: activateGroup id=${target.id}`)
     }
     return target

@@ -89,6 +89,7 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: st
     groups: types,
     activeGroup,
     activeGroupForOpen: activeGroup,
+    openTargetGroup: activeGroup,
   } as never
   const inst = { createInstance: vi.fn((id: string) => ({ id })) } as never
   const widgets = { focusSessionInput } as never

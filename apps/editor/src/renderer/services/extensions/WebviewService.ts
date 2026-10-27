@@ -541,13 +541,14 @@ export class WebviewService extends Disposable implements IWebviewService {
     )
     // openEditor would dedupe a same-id input and dispose ours as an orphan;
     // guard so a racing double-open can't kill the live tab's input.
-    groups.activeGroupForOpen.openEditor(input, {
+    const targetGroup = groups.activeGroupForOpen
+    targetGroup.openEditor(input, {
       pinned: true,
       activate: showOptions?.preserveFocus !== true,
       preserveFocus: showOptions?.preserveFocus === true,
     })
     if (showOptions?.preserveFocus !== true) {
-      this._getWindowFocus?.()?.focusGroup(groups.activeGroupForOpen)
+      this._getWindowFocus?.()?.focusGroup(targetGroup)
     }
     console.debug(`[webview] host panel created handle=${panelHandle} viewType=${viewType}`)
   }

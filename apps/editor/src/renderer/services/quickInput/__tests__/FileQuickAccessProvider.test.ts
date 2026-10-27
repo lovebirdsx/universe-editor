@@ -300,6 +300,9 @@ function makeGroups(openEditors: EditorInput[] = [], sideEditors: EditorInput[] 
     get activeGroup() {
       return active
     },
+    get openTargetGroup() {
+      return active
+    },
     get groups() {
       return all
     },

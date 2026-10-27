@@ -90,3 +90,40 @@ describe('IEditorService.activeEditor preserves EditorInput identity', () => {
     i2.dispose()
   })
 })
+
+describe('IEditorService — focused part vs open target', () => {
+  it('activeEditor follows the focused part after a window switch', () => {
+    const { inst, groupsService, editorService } = makeEnv()
+    const mainInput = inst.createInstance(FileEditorInput, URI.file('/ws/main.ts'))
+    editorService.openEditor(mainInput, { pinned: true })
+
+    const aux = groupsService.createAuxiliaryPart()
+    const auxInput = inst.createInstance(FileEditorInput, URI.file('/ws/aux.ts'))
+    editorService.openEditor(auxInput, { pinned: true })
+    expect(editorService.activeEditor.get()).toBe(auxInput)
+
+    // Alt+Tab back to the main window: focus moves, the open target stays.
+    groupsService.activatePart(groupsService.mainPart)
+    expect(editorService.activeEditor.get()).toBe(mainInput)
+    expect(groupsService.openTargetPart).toBe(aux)
+  })
+
+  it('openEditor lands in the open target part while focus is elsewhere', () => {
+    const { inst, groupsService, editorService } = makeEnv()
+    const mainInput = inst.createInstance(FileEditorInput, URI.file('/ws/main.ts'))
+    editorService.openEditor(mainInput, { pinned: true })
+
+    const aux = groupsService.createAuxiliaryPart()
+    const auxInput = inst.createInstance(FileEditorInput, URI.file('/ws/aux.ts'))
+    editorService.openEditor(auxInput, { pinned: true })
+
+    groupsService.activatePart(groupsService.mainPart)
+    expect(groupsService.activePart).toBe(groupsService.mainPart)
+    expect(groupsService.openTargetPart).toBe(aux)
+
+    const next = inst.createInstance(FileEditorInput, URI.file('/ws/next.ts'))
+    editorService.openEditor(next, { pinned: true })
+    expect(aux.activeGroup.contains(next)).toBe(true)
+    expect(groupsService.mainPart.activeGroup.contains(next)).toBe(false)
+  })
+})

@@ -1206,7 +1206,7 @@ function resolveEditorGroup(
       }
     }
   }
-  return groups.activeGroup
+  return groups.openTargetGroup
 }
 
 function resolveTargetSessionEditor(
@@ -1291,7 +1291,7 @@ function openSessionInSplit(
   inst: IInstantiationService,
   session: { id: string; agentId: string | undefined },
   direction: GroupDirection,
-): void {
+): IEditorGroup {
   const source = groups.activeGroup
   let target = groups.findGroup({ direction }, source) ?? source
   if (target === source) target = groups.addGroup(source, direction)
@@ -1299,6 +1299,7 @@ function openSessionInSplit(
   const input = inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined)
   openSessionEditorInGroup(target, input, undefined)
   closeDuplicateSessionEditors(groups, target, session.id)
+  return target
 }
 
 /**
@@ -1391,8 +1392,8 @@ export function revealSessionEditor(
     windowFocus?.focusGroup(found.group)
     return
   }
-  openSessionInSplit(groups, inst, session, direction)
-  windowFocus?.focusGroup(groups.activeGroup)
+  const target = openSessionInSplit(groups, inst, session, direction)
+  windowFocus?.focusGroup(target)
 }
 
 /** Hard cap for a captured selection; longer quotes are truncated (logged). */

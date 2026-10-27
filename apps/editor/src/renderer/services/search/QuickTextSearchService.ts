@@ -565,7 +565,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     }
     const input = this._instantiation.createInstance(FileEditorInput, resource)
     openInLockAwareGroup(this._groups, input, { activate: true, pinned: false }, side)
-    this._windowFocus.focusGroup(this._groups.activeGroup)
+    this._windowFocus.focusGroup(side)
     return input
   }
 

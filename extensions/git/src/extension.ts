@@ -691,6 +691,7 @@ function registerGitCommands(
               pinned?: boolean
               preserveFocus?: boolean
               openTarget?: 'side' | 'newWindow'
+              groupId?: number
             }
           | undefined
         ),
@@ -704,6 +705,7 @@ function registerGitCommands(
           options?.pinned ?? false,
           options?.preserveFocus ?? false,
           options?.openTarget,
+          options?.groupId,
         )
     }),
 

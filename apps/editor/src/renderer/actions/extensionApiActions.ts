@@ -160,7 +160,9 @@ export class GetActiveEditorFileAction extends Action2 {
 }
 
 export interface OpenFileOptions {
-  /** Where to open: omitted = the existing active-group path. */
+  /** Group the open belongs to (e.g. an Open Changes fallback); omitted = open target. */
+  readonly groupId?: number
+  /** Where to open: omitted = the resolved group / open-target path. */
   readonly openTarget?: TargetedOpen
 }
 
@@ -180,7 +182,14 @@ export class OpenFileAction extends Action2 {
 
     const openDefault = (): void => {
       const input = inst.createInstance(FileEditorInput, uri)
-      groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+      const explicit = options?.groupId !== undefined ? groups.getGroup(options.groupId) : undefined
+      const honored = explicit !== undefined && !explicit.isLocked
+      // A locked group never receives a new tab; fall back to the lock-aware open
+      // target exactly like EditorService.openEditor, surfacing the group we were
+      // routed to (an honored explicit group needs no activation).
+      const targetGroup = honored ? explicit : groups.activeGroupForOpen
+      targetGroup.openEditor(input, { activate: true, pinned: true })
+      if (!honored && targetGroup !== groups.openTargetGroup) groups.activateGroup(targetGroup)
     }
 
     const target = options?.openTarget

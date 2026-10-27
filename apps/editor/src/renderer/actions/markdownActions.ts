@@ -211,7 +211,7 @@ export class OpenMarkdownSourceAction extends Action2 {
       stashRevealLine()
       group.openEditor(sourceInput, { activate: true, pinned, index: previewIndex })
       group.closeEditor(active)
-      if (group !== groups.activeGroup) {
+      if (group !== groups.openTargetGroup) {
         groups.activateGroup(group)
         windowFocus.focusGroup(group)
       }
@@ -227,7 +227,7 @@ export class OpenMarkdownSourceAction extends Action2 {
       // An already-mounted source (side-by-side) kept its scroll synced live; no
       // reveal request — activating the existing tab must not jump it.
       group.setActive(sourceInGroup)
-      if (group !== groups.activeGroup) {
+      if (group !== groups.openTargetGroup) {
         groups.activateGroup(group)
         windowFocus.focusGroup(group)
       }
@@ -249,7 +249,7 @@ export class OpenMarkdownSourceAction extends Action2 {
     stashRevealLine()
     group.openEditor(source, { activate: true, pinned, index: previewIndex })
     group.closeEditor(active)
-    if (group !== groups.activeGroup) {
+    if (group !== groups.openTargetGroup) {
       groups.activateGroup(group)
       windowFocus.focusGroup(group)
     }

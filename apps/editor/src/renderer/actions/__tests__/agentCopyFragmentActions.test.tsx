@@ -266,6 +266,7 @@ describe('Card-targeted actions from the timeline menu', () => {
       (extra.groups ?? {
         _serviceBrand: undefined,
         activeGroup: group,
+        openTargetGroup: group,
         getGroups: () => [group],
         activateGroup: vi.fn(),
       }) as never,

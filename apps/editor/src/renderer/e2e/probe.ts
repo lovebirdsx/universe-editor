@@ -782,15 +782,24 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         isMain: entry.isMain,
         active: services.workbenchWindowService.activeWindow.id === entry.id,
         groupIds: entry.part.groups.map((group) => group.id),
+        focusedPart: services.editorGroupsService.activePart.id === entry.part.id,
+        openTargetPart: services.editorGroupsService.openTargetPart.id === entry.part.id,
       })),
     focusAuxiliaryWindow: async (token) => {
       const entry = services.auxiliaryEditorWindowService.getWindowForToken(token)
       if (!entry) return
       // Mirror real window activation (AuxiliaryEditorWindowService): activation
-      // is not an editor-focus intent, so it must not steal DOM focus.
-      services.editorGroupsService.activatePart(entry.part, { preserveFocus: true })
+      // is not an editor-focus intent, so it must not steal DOM focus — but an
+      // auxiliary window does retarget opens, unlike the main window.
+      services.editorGroupsService.activatePart(entry.part, {
+        preserveFocus: true,
+        updateOpenTarget: true,
+      })
       services.workbenchWindowService.setActiveWindow(entry.window)
       entry.window.window.focus()
+    },
+    focusMainWindow: async () => {
+      services.workbenchWindowService.setActiveWindow(services.workbenchWindowService.mainWindow)
     },
     requestCloseAuxiliaryWindow: async (token) => {
       const entry = services.auxiliaryEditorWindowService.getWindowForToken(token)

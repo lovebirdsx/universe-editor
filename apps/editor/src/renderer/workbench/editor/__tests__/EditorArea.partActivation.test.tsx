@@ -37,11 +37,13 @@ function setup() {
 }
 
 describe('EditorArea part activation', () => {
-  it('focus entering the main editor area activates the main part without a focus intent', () => {
+  it('focus entering the main editor area activates the main part and retargets opens', () => {
     const { groups, aux, area } = setup()
     expect(groups.activePart).toBe(aux)
+    expect(groups.openTargetPart).toBe(aux)
     fireEvent.focusIn(area)
     expect(groups.activePart).toBe(groups.mainPart)
+    expect(groups.openTargetPart).toBe(groups.mainPart)
     expect(groups.mainPart.activeGroup.lastActivationPreservedFocus).toBe(true)
   })
 
@@ -49,5 +51,6 @@ describe('EditorArea part activation', () => {
     const { groups, area } = setup()
     fireEvent.pointerDown(area)
     expect(groups.activePart).toBe(groups.mainPart)
+    expect(groups.openTargetPart).toBe(groups.mainPart)
   })
 })

@@ -14,6 +14,7 @@ import {
   IWorkspaceService,
   KeybindingWeight,
   MenuId,
+  URI,
   localize,
   localize2,
   type ServicesAccessor,
@@ -155,7 +156,7 @@ export class OpenChangesAction extends Action2 {
 
     // Only an editor-title invocation passes `groupId`. Explorer passes
     // `{ resource }` for a file that may not be open at all, so it must keep
-    // targeting the active group + provider path rather than being resolved
+    // targeting the open target group + provider path rather than being resolved
     // (and no-op'd) against open editors.
     const groupId = (arg as { groupId?: unknown } | undefined)?.groupId
     const hasGroupTarget = typeof groupId === 'number'
@@ -163,7 +164,12 @@ export class OpenChangesAction extends Action2 {
     // An explicit group id that no longer resolves (closed group / empty group)
     // is a no-op — never retarget the active group.
     if (hasGroupTarget && !resolved) return
-    const group = resolved?.group ?? groups.activeGroup
+    // Keybinding / command-palette calls carry no argument and target the
+    // focused group; so does the dirty-diff peek's bare URI (the peek lives in
+    // that group). Explorer's resource opens land on the open target.
+    const group =
+      resolved?.group ??
+      (arg === undefined || arg instanceof URI ? groups.activeGroup : groups.openTargetGroup)
     const active = resolved?.editor ?? group.activeEditor
     const target =
       resolveOpenChangesTarget(arg) ??
@@ -181,6 +187,9 @@ export class OpenChangesAction extends Action2 {
 
     const openTarget = invocationOpenTarget()
     const passThrough = {
+      // The provider's diff must land in the group this command resolved — a
+      // keybinding invocation resolved to the focused group, not the open target.
+      groupId: group.id,
       ...(options?.pinned !== undefined ? { pinned: options.pinned } : {}),
       ...(options?.preserveFocus !== undefined ? { preserveFocus: options.preserveFocus } : {}),
       ...(openTarget !== 'default' ? { openTarget } : {}),

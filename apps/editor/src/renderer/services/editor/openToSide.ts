@@ -23,11 +23,11 @@ import {
   type IEditorGroupsService,
 } from '@universe-editor/platform'
 
-/** The group to the right of {@link source} (default: the active group), created
- *  and activated when absent. Returns the target group. */
+/** The group to the right of {@link source} (default: the open target group),
+ *  created and activated when absent. Returns the target group. */
 export function ensureSideGroup(
   groups: IEditorGroupsService,
-  source: IEditorGroup = groups.activeGroup,
+  source: IEditorGroup = groups.openTargetGroup,
 ): IEditorGroup {
   let target = groups.findGroup({ direction: GroupDirection.Right }, source) ?? source
   if (target === source) target = groups.addGroup(source, GroupDirection.Right)

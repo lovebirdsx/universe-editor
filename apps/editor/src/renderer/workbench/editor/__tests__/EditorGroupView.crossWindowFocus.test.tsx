@@ -78,12 +78,14 @@ describe('EditorGroupView cross-window activation focus', () => {
   it('requests window focus when the activated group lives in another window', () => {
     const { groups, auxGroup, focus } = setup()
     act(() => groups.activateGroup(auxGroup))
+    expect(groups.openTargetGroup).toBe(auxGroup)
     expect(focus.focusedGroups).toEqual([auxGroup])
   })
 
-  it('does not request window focus for a preserveFocus activation', () => {
+  it('does not request window focus for a preserveFocus window activation', () => {
     const { groups, aux, focus } = setup()
-    act(() => groups.activatePart(aux, { preserveFocus: true }))
+    act(() => groups.activatePart(aux, { preserveFocus: true, updateOpenTarget: true }))
+    expect(groups.openTargetPart).toBe(aux)
     expect(focus.focusedGroups).toHaveLength(0)
   })
 
@@ -91,6 +93,21 @@ describe('EditorGroupView cross-window activation focus', () => {
     const { groups, aux, auxGroup, focus, setActiveWindowPart } = setup()
     setActiveWindowPart(aux)
     act(() => groups.activateGroup(auxGroup))
+    expect(focus.focusedGroups).toHaveLength(0)
+  })
+
+  it('does not bring a background window forward for a close-driven activation', () => {
+    const { groups, aux, auxGroup, focus } = setup()
+    const second = new FakeEditor('b')
+    // Make the auxiliary group the open target without focusing it, then add a
+    // non-active second tab so closing the active one triggers auto-activation.
+    act(() => groups.activatePart(aux, { preserveFocus: true, updateOpenTarget: true }))
+    act(() => auxGroup.openEditor(second, { activate: false }))
+    expect(groups.openTargetGroup).toBe(auxGroup)
+
+    act(() => auxGroup.closeEditor(auxGroup.activeEditor!))
+
+    expect(auxGroup.activeEditor).toBe(second)
     expect(focus.focusedGroups).toHaveLength(0)
   })
 })

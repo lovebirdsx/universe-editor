@@ -384,7 +384,17 @@ describe('git open commands — openTarget forwarding', () => {
       { pinned: true, openTarget: 'side' },
     )
 
-    expect(openChange).toHaveBeenCalledWith(FILE, true, false, 'side')
+    expect(openChange).toHaveBeenCalledWith(FILE, true, false, 'side', undefined)
+  })
+
+  it('git.openChange forwards the group the diff belongs to', async () => {
+    const openChange = vi.fn(async () => {})
+    const repo = { root: ROOT, refresh: vi.fn(), openChange } as unknown as Repository
+    const commands = makeCommands(() => repo)
+
+    await commands.get('git.openChange')?.({ resourceUri: FILE }, { groupId: 7 })
+
+    expect(openChange).toHaveBeenCalledWith(FILE, false, false, undefined, 7)
   })
 
   it('git.openMergeEditor forwards the target', async () => {

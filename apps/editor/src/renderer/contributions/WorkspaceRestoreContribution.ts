@@ -217,7 +217,7 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
         newcomers = []
         return
       }
-      const target = groups.activeGroup
+      const target = groups.mainPart.activeGroup
       for (const editor of newcomers) {
         if (!editor.isDisposed) target.openEditor(editor, { activate: false })
       }

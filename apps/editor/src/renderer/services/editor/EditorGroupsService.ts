@@ -22,6 +22,7 @@ import {
   NullLogger,
   type Grid,
   type GridAxis,
+  type IActivatePartOptions,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorPart,
@@ -46,11 +47,16 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   private readonly _mainPart: EditorPart
   private readonly _parts: EditorPart[] = []
   private _activePart: EditorPart
+  private _openTargetPart: EditorPart
   private readonly _globalMru: IEditorGroup[] = []
   private readonly _partStores = new Map<EditorPart, DisposableStore>()
 
   private readonly _onDidActiveGroupChange = this._register(new Emitter<IEditorGroup>())
   readonly onDidActiveGroupChange: Event<IEditorGroup> = this._onDidActiveGroupChange.event
+
+  private readonly _onDidActivateOpenTargetGroup = this._register(new Emitter<IEditorGroup>())
+  readonly onDidActivateOpenTargetGroup: Event<IEditorGroup> =
+    this._onDidActivateOpenTargetGroup.event
 
   private readonly _onDidAddGroup = this._register(new Emitter<IEditorGroup>())
   readonly onDidAddGroup: Event<IEditorGroup> = this._onDidAddGroup.event
@@ -71,7 +77,9 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   readonly onDidRemovePart: Event<IEditorPart> = this._onDidRemovePart.event
 
   private readonly _host = {
-    activatePart: (part: IEditorPart): boolean => this._setActivePart(part as EditorPart, false),
+    activateGroup: (part: IEditorPart, group: IEditorGroup, previousGroup: IEditorGroup): void => {
+      this._setOpenTarget(part as EditorPart, group, true, previousGroup)
+    },
     isPartActive: (part: IEditorPart): boolean => this._activePart === part,
   }
 
@@ -85,6 +93,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     )
     this._parts.push(this._mainPart)
     this._activePart = this._mainPart
+    this._openTargetPart = this._mainPart
     this._trackPart(this._mainPart)
     this._globalMru.push(this._mainPart.activeGroup)
   }
@@ -95,6 +104,10 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
 
   get activePart(): EditorPart {
     return this._activePart
+  }
+
+  get openTargetPart(): EditorPart {
+    return this._openTargetPart
   }
 
   get parts(): readonly EditorPart[] {
@@ -114,8 +127,12 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     return this._activePart.activeGroup
   }
 
+  get openTargetGroup(): IEditorGroup {
+    return this._openTargetPart.activeGroup
+  }
+
   get activeGroupForOpen(): IEditorGroup {
-    return this._activePart.activeGroupForOpen
+    return this._openTargetPart.activeGroupForOpen
   }
 
   get groups(): readonly IEditorGroup[] {
@@ -174,10 +191,16 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     return (target.part as EditorPart).activateGroup(target)
   }
 
-  activatePart(part: IEditorPart | number, options?: { preserveFocus?: boolean }): IEditorPart {
+  activatePart(part: IEditorPart | number, options?: IActivatePartOptions): IEditorPart {
     const target = this._resolvePart(part)
     if (!target) return this._activePart
-    this._setActivePart(target, true, options?.preserveFocus === true)
+    this._setActivePart(
+      target,
+      true,
+      options?.preserveFocus === true,
+      options?.updateOpenTarget === true,
+      options?.silentOpenTarget !== true,
+    )
     return target
   }
 
@@ -285,7 +308,9 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     // fire before listeners are attached; announce it now so group trackers
     // (Outline, focus restore, dirty checks) see the new part's group.
     this._onDidAddGroup.fire(part.activeGroup)
-    if (options?.activate !== false) this._setActivePart(part, true)
+    if (options?.activate !== false) {
+      this.activatePart(part, { updateOpenTarget: true })
+    }
     this._logger.info(`createAuxiliaryPart id=${part.id} activate=${options?.activate !== false}`)
     return part
   }
@@ -315,6 +340,9 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   restore(state: ISerializedEditorGroupsState, accessor?: ServicesAccessor): void {
     this._removeAuxiliaryParts()
     if (this._activePart !== this._mainPart) this._setActivePart(this._mainPart, true)
+    if (this._openTargetPart !== this._mainPart) {
+      this._setOpenTarget(this._mainPart, this._mainPart.activeGroup, false)
+    }
     this._mainPart.restore(state, accessor)
     this._rebuildGlobalMru()
   }
@@ -327,6 +355,9 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   clearAll(): void {
     this._removeAuxiliaryParts()
     if (this._activePart !== this._mainPart) this._setActivePart(this._mainPart, true)
+    if (this._openTargetPart !== this._mainPart) {
+      this._setOpenTarget(this._mainPart, this._mainPart.activeGroup, false)
+    }
     this._mainPart.clearAll()
     this._rebuildGlobalMru()
   }
@@ -355,7 +386,8 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       part.onDidActiveGroupChange((group) => {
         // A part only announces an active-group change after focusing itself,
         // so this is a global active-group change. Still guard: restore/clear
-        // may drive a background part directly.
+        // may drive a background part directly. The open target is handled by
+        // `_host.activateGroup` and is deliberately not touched here.
         if (this._activePart !== part) return
         this._bumpGlobalMru(group)
         this._onDidActiveGroupChange.fire(group)
@@ -364,28 +396,69 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     this._partStores.set(part, store)
   }
 
+  private _setOpenTarget(
+    part: EditorPart,
+    group: IEditorGroup,
+    announce: boolean,
+    previousGroup?: IEditorGroup,
+  ): void {
+    const partChanged = this._openTargetPart !== part
+    // `EditorPart.activateGroup` writes its own active group before calling us,
+    // so the old group must be supplied by the part; reading it back here would
+    // always compare the new value against itself.
+    const groupChanged =
+      previousGroup !== undefined ? previousGroup !== group : this.openTargetGroup !== group
+    if (!partChanged && !groupChanged) return
+    this._openTargetPart = part
+    this._bumpGlobalMru(group)
+    if (announce) this._onDidActivateOpenTargetGroup.fire(group)
+    this._logger.debug(`openTarget part=${part.id} group=${group.id}`)
+  }
+
   private _setActivePart(
     part: EditorPart,
     fireGroupChange: boolean,
     preserveFocus = false,
+    updateOpenTarget = false,
+    announceOpenTarget = true,
   ): boolean {
-    if (this._activePart === part) return false
-    this._activePart = part
-    this._onDidActivePartChange.fire(part)
-    if (fireGroupChange) {
-      const group = part.activeGroup
-      // 必须先标记再广播：EditorGroupView / FileEditor 在同一任务里读取该意图。
-      // 默认 false 也要写入，清掉上一次窗口激活遗留的保留焦点标志。
+    const changed = this._activePart !== part
+    const group = part.activeGroup
+    const openTargetChanged =
+      updateOpenTarget && (this._openTargetPart !== part || this.openTargetGroup !== group)
+    // Write the focus-preservation intent before announcing anything:
+    // EditorGroupView reads it synchronously in the same task. An explicit open
+    // routed into another window must not inherit a stale window-activation
+    // intent, and vice versa.
+    if ((changed && fireGroupChange) || openTargetChanged) {
       group.preserveFocusOnActivation?.(preserveFocus)
+    }
+    if (changed) {
+      this._activePart = part
+      this._onDidActivePartChange.fire(part)
+    }
+    // Must run even when `part` is already active: the probe and
+    // `_activateEntry` activate the part before the window service reports it.
+    if (updateOpenTarget) this._setOpenTarget(part, group, announceOpenTarget)
+    if (changed && fireGroupChange) {
       this._bumpGlobalMru(group)
       this._onDidActiveGroupChange.fire(group)
     }
-    this._logger.debug(`activatePart id=${part.id}${preserveFocus ? ' preserveFocus' : ''}`)
-    return true
+    if (changed || openTargetChanged) {
+      this._logger.debug(
+        `activatePart id=${part.id}${preserveFocus ? ' preserveFocus' : ''}${updateOpenTarget ? ' openTarget' : ''}`,
+      )
+    }
+    return changed
   }
 
   private _destroyPart(part: EditorPart, force: boolean): void {
     if (this._activePart === part) this._setActivePart(this._mainPart, true)
+    if (this._openTargetPart === part) {
+      // Silent fallback: closing a window must not fire an open-target event
+      // that would pull another window forward.
+      this._setOpenTarget(this._activePart, this._activePart.activeGroup, false)
+    }
     const index = this._parts.indexOf(part)
     if (index === -1) return
     this._parts.splice(index, 1)

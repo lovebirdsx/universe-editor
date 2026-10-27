@@ -1021,12 +1021,13 @@ export class Repository {
     pinned = false,
     preserveFocus = false,
     openTarget?: 'side' | 'newWindow',
+    groupId?: number,
   ): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
     // Spreadsheets can't diff as text: route them to the Excel extension's
     // webview diff (HEAD blob vs working-tree bytes), if that extension is present.
     if (isSpreadsheetPath(absPath)) {
-      await this._openSpreadsheetChange(absPath, rel, pinned, preserveFocus, openTarget)
+      await this._openSpreadsheetChange(absPath, rel, pinned, preserveFocus, openTarget, groupId)
       return
     }
     const head = await gitExec(['show', `HEAD:${rel}`], this.root, this._log)
@@ -1046,6 +1047,7 @@ export class Repository {
       preserveFocus,
       openableUri: pathToFileURL(absPath).href,
       liveModified: true,
+      ...(groupId !== undefined ? { groupId } : {}),
       ...(openTarget ? { openTarget } : {}),
     })
   }
@@ -1061,6 +1063,7 @@ export class Repository {
     pinned: boolean,
     preserveFocus: boolean,
     openTarget?: 'side' | 'newWindow',
+    groupId?: number,
   ): Promise<void> {
     const head = await gitExecBinary(['show', `HEAD:${rel}`], this.root, this._log)
     const original = head.exitCode === 0 ? head.stdout : Buffer.alloc(0)
@@ -1079,6 +1082,7 @@ export class Repository {
       rightBase64: modified.toString('base64'),
       pinned,
       preserveFocus,
+      ...(groupId !== undefined ? { groupId } : {}),
       ...(openTarget ? { openTarget } : {}),
     })
   }

@@ -30,7 +30,7 @@ const URI_FILE = URI.file('/repo/file.ts')
 function setup(): {
   groups: EditorGroupsService
   existing: FileEditorInput
-  input: { id: string; isDisposed: boolean; dispose: ReturnType<typeof vi.fn> }
+  created: FileEditorInput[]
   openEditor: ReturnType<typeof vi.fn>
   run: (mods?: { ctrlKey?: boolean; altKey?: boolean }) => Promise<void>
 } {
@@ -38,11 +38,7 @@ function setup(): {
   const existing = new FileEditorInput(URI_FILE, {} as never)
   groups.activeGroup.openEditor(existing)
 
-  const input = {
-    id: 'custom:file.ts',
-    isDisposed: false,
-    dispose: vi.fn(),
-  }
+  const created: FileEditorInput[] = []
   const openEditor = vi.fn(async () => undefined)
   const resolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
@@ -52,10 +48,14 @@ function setup(): {
         {
           glob: '**/*',
           info: { typeId: 'custom', displayName: 'Custom', priority: 100 },
-          factory: () => input as never,
+          factory: () => new FileEditorInput(URI.file('/repo/custom.ts'), {} as never),
         },
       ] as never,
-    createEditorInput: () => input as never,
+    createEditorInput: () => {
+      const input = new FileEditorInput(URI.file('/repo/custom.ts'), {} as never)
+      created.push(input)
+      return input
+    },
     openEditor,
   }
   const services = new ServiceCollection(
@@ -69,7 +69,7 @@ function setup(): {
   return {
     groups,
     existing,
-    input,
+    created,
     openEditor,
     run: async (mods) => {
       const invoke = (): Promise<void> =>
@@ -88,47 +88,43 @@ beforeEach(() => {
 })
 
 describe('ReopenWithAction', () => {
-  it('reopens in the active group on a plain run', async () => {
-    const { groups, existing, openEditor, run } = setup()
+  it('reopens in the same group, not the open target', async () => {
+    const { groups, existing, created, openEditor, run } = setup()
 
     await run()
 
     expect(groups.activeGroup.contains(existing)).toBe(false)
-    expect(openEditor).toHaveBeenCalledWith(URI_FILE, {
-      preferredTypeId: 'custom',
-      pinned: true,
-    })
+    expect(groups.activeGroup.activeEditor).toBe(created[0])
+    expect(openEditor).not.toHaveBeenCalled()
     expect(openWithTargetMocks.openFreshInputWithTarget).not.toHaveBeenCalled()
   })
 
   it('opens the picked type to the side under Ctrl', async () => {
-    const { groups, existing, input, openEditor, run } = setup()
+    const { groups, existing, created, openEditor, run } = setup()
 
     await run({ ctrlKey: true })
 
     expect(groups.activeGroup.contains(existing)).toBe(false)
     expect(openEditor).not.toHaveBeenCalled()
+    expect(created).toHaveLength(1)
     expect(openWithTargetMocks.openTargetServicesFrom).toHaveBeenCalledOnce()
     expect(openWithTargetMocks.openFreshInputWithTarget).toHaveBeenCalledOnce()
     const [services, opened, target, options] =
       openWithTargetMocks.openFreshInputWithTarget.mock.calls[0]!
     expect(services).toEqual({ marker: 'services' })
-    expect(opened).toBe(input)
+    expect(opened).toBe(created[0])
     expect(target).toBe('side')
     // The split must originate from the tab's own group, not the active one.
     expect(options).toEqual({ pinned: true, sourceGroup: groups.activeGroup })
   })
 
-  it('falls back to the resolver and disposes the fresh input when the target fails', async () => {
+  it('disposes the fresh input and reopens in the group when the target fails', async () => {
     openWithTargetMocks.openFreshInputWithTarget.mockResolvedValueOnce({ handled: false })
-    const { input, openEditor, run } = setup()
+    const { groups, created, run } = setup()
 
     await run({ altKey: true })
 
-    expect(input.dispose).toHaveBeenCalledOnce()
-    expect(openEditor).toHaveBeenCalledWith(URI_FILE, {
-      preferredTypeId: 'custom',
-      pinned: true,
-    })
+    expect(created[0]!.isDisposed).toBe(true)
+    expect(groups.activeGroup.activeEditor).toBe(created[1])
   })
 })

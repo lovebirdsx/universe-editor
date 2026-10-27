@@ -8,11 +8,17 @@
 
 import {
   Action2,
+  IContextKeyService,
   IEditorGroupsService,
   IInstantiationService,
   localize2,
+  type IEditorGroup,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import {
+  activateGroupAndFocus,
+  type ActivateGroupFocusContext,
+} from '../services/editor/activateGroupAndFocus.js'
 import { MergeEditorInput, type MergeEditorContents } from '../services/editor/MergeEditorInput.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { ensureSideGroup } from '../services/editor/openToSide.js'
@@ -21,6 +27,7 @@ import {
   openFreshInputWithTarget,
   openTargetServicesFrom,
 } from '../services/editor/openWithTarget.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 
 export interface OpenMergeEditorPayload extends MergeEditorContents {
   readonly pinned?: boolean
@@ -41,7 +48,14 @@ export class OpenMergeEditorAction extends Action2 {
   override run(accessor: ServicesAccessor, payload: OpenMergeEditorPayload): void {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
-    const group = groups.activeGroup
+    // Snapshot before any async fallback: the accessor dies at the first await,
+    // but the new-window failure path reveals through it later.
+    const focusContext: ActivateGroupFocusContext = {
+      groups,
+      contextKeyService: accessor.get(IContextKeyService),
+      windowFocus: accessor.get(IWindowFocusService),
+    }
+    const group = groups.openTargetGroup
     const id = `merge:${payload.path}`
     const pinned = payload.pinned ?? true
 
@@ -58,11 +72,18 @@ export class OpenMergeEditorAction extends Action2 {
 
     const createInput = (): MergeEditorInput => inst.createInstance(MergeEditorInput, contents)
 
+    // Re-opening an already-active merge tab doesn't bump the activation id, so
+    // an explicit open must focus the group itself (and bring its window up).
+    const revealExisting = (target: IEditorGroup, existing: MergeEditorInput): void => {
+      activateGroupAndFocus(target, focusContext)
+      target.openEditor(existing, { activate: true, pinned })
+    }
+
     const openDefault = (): void => {
       const existing = group.editors.find((e) => e.id === id)
       if (existing instanceof MergeEditorInput) {
         existing.update(contents)
-        group.openEditor(existing, { activate: true, pinned })
+        revealExisting(group, existing)
         return
       }
       group.openEditor(createInput(), { activate: true, pinned })
@@ -79,7 +100,7 @@ export class OpenMergeEditorAction extends Action2 {
       const existing = side.editors.find((e) => e.id === id)
       if (existing instanceof MergeEditorInput) {
         existing.update(contents)
-        side.openEditor(existing, { activate: true, pinned })
+        revealExisting(side, existing)
         return
       }
       openInLockAwareGroup(groups, createInput(), { activate: true, pinned }, side)

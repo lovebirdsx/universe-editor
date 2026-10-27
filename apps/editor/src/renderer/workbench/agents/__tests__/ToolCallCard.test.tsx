@@ -118,6 +118,9 @@ function makeGroupsService(): IEditorGroupsServiceType {
     get activeGroup() {
       return active
     },
+    get openTargetGroup() {
+      return active
+    },
     get groups() {
       return all()
     },

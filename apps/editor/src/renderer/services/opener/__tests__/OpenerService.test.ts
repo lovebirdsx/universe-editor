@@ -175,6 +175,7 @@ describe('FileOpener scheme gate', () => {
     groups: {
       groups: unknown[]
       activeGroup: object
+      openTargetGroup: object
       findGroup: ReturnType<typeof vi.fn>
       addGroup: ReturnType<typeof vi.fn>
       activateGroup: ReturnType<typeof vi.fn>
@@ -183,9 +184,11 @@ describe('FileOpener scheme gate', () => {
   } {
     const openEditor = vi.fn()
     const sideGroup = { editors: [] as unknown[], contains: () => false, setActive: vi.fn() }
+    const activeGroup = {}
     const groups = {
       groups: [] as unknown[],
-      activeGroup: {},
+      activeGroup,
+      openTargetGroup: activeGroup,
       findGroup: vi.fn(() => undefined),
       addGroup: vi.fn(() => sideGroup),
       activateGroup: vi.fn(),

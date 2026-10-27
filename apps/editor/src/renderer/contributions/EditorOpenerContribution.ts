@@ -157,7 +157,7 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     const input = this._instantiation.createInstance(FileEditorInput, uri)
     const target = this._groupsService.activeGroupForOpen
     target.openEditor(input, { activate: true, pinned: true })
-    if (target !== this._groupsService.activeGroup) this._groupsService.activateGroup(target)
+    if (target !== this._groupsService.openTargetGroup) this._groupsService.activateGroup(target)
     this._windowFocus.focusGroup(target)
     return input
   }

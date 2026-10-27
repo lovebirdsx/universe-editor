@@ -641,6 +641,6 @@ export class AgentsActiveSessionSyncContribution
 
   private _isSessionOpenInInactiveGroup(sessionId: string): boolean {
     const found = findSessionEditor(this._editorGroups, sessionId)
-    return found !== undefined && found.group !== this._editorGroups.activeGroup
+    return found !== undefined && found.group !== this._editorGroups.openTargetGroup
   }
 }

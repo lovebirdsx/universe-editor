@@ -183,7 +183,9 @@ describe('OpenChangesAction', () => {
     )
 
     expect(commandService.executeCommand).toHaveBeenCalledWith(GET_HEAD, resource.fsPath)
-    expect(commandService.executeCommand).toHaveBeenCalledWith(OPEN_CHANGE, resource.fsPath, {})
+    expect(commandService.executeCommand).toHaveBeenCalledWith(OPEN_CHANGE, resource.fsPath, {
+      groupId: groups.activeGroup.id,
+    })
     expect(commandService.executeCommand).not.toHaveBeenCalledWith(
       '_workbench.openDiff',
       expect.anything(),
@@ -294,6 +296,7 @@ describe('OpenChangesAction', () => {
 
     expect(commandService.executeCommand).toHaveBeenCalledTimes(1)
     expect(commandService.executeCommand).toHaveBeenCalledWith(OPEN_CHANGE, resource.fsPath, {
+      groupId: groups.activeGroup.id,
       pinned: true,
     })
     expect(commandService.executeCommand).not.toHaveBeenCalledWith(GET_HEAD, resource.fsPath)
@@ -490,7 +493,75 @@ describe('OpenChangesAction', () => {
     )
 
     expect(commandService.executeCommand).toHaveBeenCalledWith(OPEN_CHANGE, target.fsPath, {
+      groupId: groups.activeGroup.id,
       openTarget: 'newWindow',
     })
+  })
+
+  it('targets the focused group on a keybinding run even when opens follow another window', async () => {
+    const groups = new EditorGroupsService()
+    const mainInput = new FileEditorInput(URI.file('D:/repo/main.ts'), {} as never)
+    groups.activeGroup.openEditor(mainInput)
+    const aux = groups.createAuxiliaryPart({ activate: false })
+    aux.activeGroup.openEditor(new FileEditorInput(URI.file('D:/repo/aux.ts'), {} as never))
+    // Tab activation in the auxiliary window retargets opens; focus stays in main.
+    groups.activateGroup(aux.activeGroup)
+    expect(groups.activePart).toBe(groups.mainPart)
+    expect(groups.openTargetGroup).toBe(aux.activeGroup)
+
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async () => null) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(true)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+    )
+
+    // The no-argument (keybinding / command palette) run must read the focused
+    // group's editor, not the open target's.
+    expect(commandService.executeCommand).toHaveBeenCalledWith(GET_HEAD, mainInput.resource.fsPath)
+  })
+
+  it('targets the focused group for a bare-URI peek invocation', async () => {
+    const groups = new EditorGroupsService()
+    const mainInput = new FileEditorInput(URI.file('D:/repo/main.ts'), {} as never)
+    groups.activeGroup.openEditor(mainInput)
+    const aux = groups.createAuxiliaryPart({ activate: false })
+    aux.activeGroup.openEditor(new FileEditorInput(URI.file('D:/repo/aux.ts'), {} as never))
+    // Opens follow the last-used auxiliary surface; the peek itself lives in the
+    // focused (main) group, so its bare URI must resolve there.
+    groups.activateGroup(aux.activeGroup)
+    expect(groups.openTargetGroup).toBe(aux.activeGroup)
+
+    let payload: unknown
+    const commandService: ICommandServiceType = {
+      _serviceBrand: undefined,
+      executeCommand: vi.fn(async (id: string, ...args: unknown[]) => {
+        if (id === GET_HEAD) return 'head\n'
+        if (id === '_workbench.openDiff') payload = args[0]
+        return undefined
+      }) as ICommandServiceType['executeCommand'],
+    }
+
+    await runActionWithServices(
+      new ServiceCollection(
+        [IEditorGroupsService, groups],
+        [ICommandService, commandService],
+        [IScmDecorationsService, scmDecorations(true)],
+        [IScmService, scmService()],
+        [IWorkspaceService, localWorkspace()],
+      ),
+      mainInput.resource,
+    )
+
+    expect(commandService.executeCommand).toHaveBeenCalledWith(GET_HEAD, mainInput.resource.fsPath)
+    expect(payload).toMatchObject({ groupId: groups.mainPart.activeGroup.id })
   })
 })

@@ -161,11 +161,14 @@ main 进程有两处不能只看"当前窗口 id"：
 
 **`IEditorGroupsService.activateGroup` 只改 renderer 激活态，不移动原生窗口焦点。** 只调用它会出现"目标 tab 已高亮、键盘输入仍在原窗口"的现象（Alt+←/→、Ctrl+Tab、Ctrl+P 的旧 bug 即此）。
 
-**活动窗口 ≠ 活动编辑器 part（打开目标）**，二者分开跟踪（对齐 VSCode「文件打开在最后使用的编辑器窗口」）：
+**聚焦窗口与打开落点是两个独立状态**（对齐 VSCode「文件打开在最后使用的编辑器窗口」）：
 
-- 活动窗口（`WorkbenchWindowService.activeWindow`，决定 overlay/dialog/快捷键归属）跟随该 document 内任意 `pointerdown/focusin/focus`。
-- 活动 part（`IEditorGroupsService.activePart`，所有打开入口——`activeGroupForOpen`、`ensureSideGroup(activeGroup)`——的目标）只跟随**编辑器表面**：辅助窗口整窗即编辑器，窗口激活即激活其 part；主窗口还承载侧栏/面板，`AuxiliaryEditorWindowService` 的 window→part 桥对主窗口直接跳过，主 part 由 `EditorArea` 根节点的 capture `pointerdown/focusin` 激活（`preserveFocus: true`）。因此「辅助窗口 → `Ctrl+Shift+E` → Explorer 打开 / `Ctrl+Enter`」落在辅助窗口；点主窗口编辑区才切回主 part。**不要**按调用点逐个改打开目标——所有入口已统一读 active part。同一 active part 也是「活动编辑器」类命令（Ctrl+W、分屏、`activeEditor*` context key、Escape 回编辑器）的目标，与 VSCode 一致；`onDidRemoveWindow` 兜底保证 active part 总有窗口（salvage 关窗保留 part 时回落主 part）。
-- 任何非 `preserveFocus` 的组激活，只要组所在窗口 ≠ 活动窗口，`EditorGroupView` 的激活聚焦 effect 都会统一请求 `focusGroup`；恢复路径（`workbenchFocusRestorer` 的回落组）因此先 `preserveFocusOnActivation(true)` 再激活。所以 Explorer Enter、侧开、搜索结果、终端/AI 链接等非预览打开都会把目标窗口带到前台；单击/Space 预览（`preserveFocus`）不抢窗口。
+- **活动窗口**（`WorkbenchWindowService.activeWindow`，决定 overlay/dialog/窗口命令归属）跟随该 document 内任意 `pointerdown/focusin/focus`。
+- **聚焦 part / 聚焦组**（`IEditorGroupsService.activePart` / `activeGroup`）：当前拥有键盘焦点的编辑器表面。「活动编辑器」类操作全部读它——Ctrl+W、Ctrl+S、分屏、关闭组、Pin、Escape 回编辑器、`activeEditor*` context key、标题栏、Outline、组/标签高亮。它只跟随**编辑器表面**：辅助窗口整窗即编辑器，窗口获得焦点即其 part 成为 activePart；主窗口还承载侧栏/面板，因此 window→part 桥在主窗口获得焦点时只切 activePart（`updateOpenTarget: false`），主 part 也由 `EditorArea` 根节点的 capture `pointerdown/focusin` 激活（`preserveFocus: true`）。
+- **打开落点**（`openTargetPart` / `openTargetGroup`；`activeGroupForOpen` = `openTargetPart` 的锁感知组）：**最后使用的编辑器表面**，所有打开入口（`IEditorService.openEditor`、`ensureSideGroup` 默认源、预览/侧开/会话 reveal）都读它而不是 activeGroup。只有显式编辑器表面激活才移动它：辅助窗口激活、`EditorArea` 的 capture 监听传 `{ updateOpenTarget: true }`；主窗口仅因 Alt+Tab 获得焦点**不移动**（桥传 `false`）。所以「辅助窗口编辑 → 回主窗口 Explorer 打开」仍落辅助窗口，点主窗口编辑区才把落点也切回主窗口。**不要**按调用点逐个改打开目标——打开型入口统一读 open target，命令型统一读 activeGroup。
+- 落点与焦点分离后，`onDidRemoveWindow` 必须同时兜底两者（salvage 关窗保留 part 时回落主窗口）；open target 的静默回落（关窗/自动收组/恢复）**不 fire** `onDidActivateOpenTargetGroup`，否则关闭动作会把窗口拉到前台。
+
+**`activateGroup(group)` 语义**：tab 点击、Ctrl+Tab、`revealEditor` 等只更新 part 内部 activeGroup 与打开落点（`IEditorPartHost.activateGroup(part, group, previousGroup)`），**不移动聚焦 part**。窗口前置由 `EditorGroupView` 的聚焦 effect 负责：以 `isActiveGroup || isOpenTargetGroup` 触发（订阅 `onDidActivateOpenTargetGroup`，跨窗口时调用 `focusGroup` 把窗口带到前台），**跨窗口前置后**清掉 `preserveFocusOnActivation`，避免窗口激活写入的 preserve 意图让晚挂载的 `FileEditor`/`DiffEditor`/`MergeEditor` 拒绝聚焦。后台自动激活（关标签、终端退出、外部删除）不算打开意图，不前置窗口。恢复路径（`workbenchFocusRestorer` 的回落组）仍先 `preserveFocusOnActivation(true)` 再激活。所以 Explorer Enter、侧开、搜索结果、终端/AI 链接等非预览打开都会把目标窗口带到前台；单击/Space 预览（`preserveFocus`）不抢窗口。
 
 统一入口：
 
@@ -175,7 +178,7 @@ main 进程有两处不能只看"当前窗口 id"：
 - `MainThreadEditor.$showTextDocument` / `WebviewService.revealHostPanel` 等扩展入口必须保留 `preserveFocus` 语义：传了 `preserveFocus: true` 就只激活组、不请求窗口聚焦。
 - 自动揭示（错误日志、扩展后台调用 `showOutputChannel`）传 `source: 'restore'`，可移动主窗口内的 DOM 焦点但绝不把窗口拉到前台。
 - **QuickInput 关闭时的焦点恢复不能抢回窗口**：`FocusScopeOverlay` 默认在卸载时把焦点还给打开前的元素，但 Ctrl+Tab 这类同步命令会在 React 卸载面板之前就完成跨窗口激活；随后这次恢复会触发主 document 的 focusin → 活动窗口被切回主窗口（落在主编辑区时活动 part 也会跟着切回）。`QuickInputPortal` 因此传 `shouldRestoreFocus`，仅在当前 active workbench document 仍是面板宿主 document 时才恢复。
-- **窗口激活不是编辑器聚焦意图**：辅助窗口被激活时 `AuxiliaryEditorWindowService` 调 `activatePart(part, { preserveFocus: true })`，平台侧落到组的 `preserveFocusOnActivation()`；`EditorGroupView` / `FileEditor` 的自动聚焦据此跳过。否则激活链路会在 `focusView` 之后把焦点抢进编辑器（表现为"命令执行了，焦点却不在目标视图"）。这是意图区分，**不要用延时规避**。
+- **窗口激活不是编辑器聚焦意图**：辅助窗口被激活时 `AuxiliaryEditorWindowService` 调 `activatePart(part, { preserveFocus: true, updateOpenTarget: true })`，平台侧落到组的 `preserveFocusOnActivation()`；`EditorGroupView` / `FileEditor` 的自动聚焦据此跳过。否则激活链路会在 `focusView` 之后把焦点抢进编辑器（表现为"命令执行了，焦点却不在目标视图"）。这是意图区分，**不要用延时规避**。
 - **后台文档的 Part 不算聚焦**：Part 容器的 `isFocused()` 读自己的 `ownerDocument.activeElement`，但失去 OS 焦点的文档会保留最后的 activeElement。凡是"当前是否聚焦在某 Part/视图"的产品判定（context key、`Ctrl+Shift+E` 等 toggle 命令）必须在 `isFocused()` 之外再要求该 Part 的 document 等于当前 active workbench document（`services/focus/partFocus.ts` 的 `isPartFocusedInActiveDocument`），否则在辅助窗口打字时主窗口会误判侧栏仍聚焦，命令执行成"关闭侧栏"而不是"显示 Explorer"。
 - **焦点竞争还来自两处细节**：`LayoutService.focusView` 的落点确认读元素自己的 `ownerDocument.activeElement`（主文档判定对辅助元素恒 false）；`_focusPart` 只在没有显式目标视图时才委派给该 Part 上次记住的视图，显式 `focusView(A)` 不能先打开/聚焦记住的视图 B。
 
@@ -187,7 +190,7 @@ main 进程有两处不能只看"当前窗口 id"：
 
 ## 测试与已知限制
 
-- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。
+- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab）、聚焦窗口与打开落点分离（Alt+Tab 回主窗口后 Ctrl+W 关主窗口标签、打开仍落原辅助窗口）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。
 - **DevTools 属于主 renderer**：辅助窗口共享主窗口的 JS realm 与 webContents，`toggleDevTools` 只能打开主窗口的开发者工具，无法按辅助窗口分别打开。这是同 renderer 架构的直接结果，不是遗漏；要按窗口调试需等辅助窗口拥有独立 renderer。
 - **Monaco 平台容器仍以主窗口为准**：`monacoWorkbenchLayoutService.mainContainer/activeContainer` 固定返回主 `#root`（`getContainer(window)` 已按目标窗口解析）。monaco 自带的 quick input、无障碍提示等少数走 `activeContainer` 的浮层在辅助窗口中仍会挂到主窗口；编辑器内容浮层与平台 hover 不受影响。完整重构需按 window 维护多容器集合，暂未做。
 - 跨窗口焦点用例在 main 进程猴补 `BrowserWindow.prototype.focus/showInactive` 记录焦点请求，再断言最后一次请求指向辅助窗口（`about:blank`）。silent E2E 下窗口不真正抢焦点，所以断言"请求了哪个窗口"而不是 OS 焦点状态。

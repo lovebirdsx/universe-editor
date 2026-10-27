@@ -450,17 +450,19 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     expect(ctx.windows.activeWindow).toBe(ctx.windows.mainWindow)
   })
 
-  it('activating the main window keeps the auxiliary part as the open target', async () => {
+  it('window activation moves focus but only auxiliary activation retargets opens', async () => {
     const window = (await ctx.service.createEmptyWindow({ explicitEmpty: true, activate: false }))
       .window!
     ctx.windows.setActiveWindow(window.window)
     expect(ctx.groups.activePart).toBe(window.part)
+    expect(ctx.groups.openTargetPart).toBe(window.part)
 
     // Focusing the main sidebar (Ctrl+Shift+E → focusMainWindow) only moves the
-    // active window; the main editor area activates its part on its own.
+    // active window; opens keep following the last-used editor surface.
     ctx.windows.setActiveWindow(ctx.windows.mainWindow)
     expect(ctx.windows.activeWindow).toBe(ctx.windows.mainWindow)
-    expect(ctx.groups.activePart).toBe(window.part)
+    expect(ctx.groups.activePart).toBe(ctx.groups.mainPart)
+    expect(ctx.groups.openTargetPart).toBe(window.part)
   })
 
   it('falls back to the main part when the active part loses its window but survives', async () => {
@@ -471,6 +473,28 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     // opens must not keep targeting that invisible part.
     ctx.windows.unregisterWindow(window.window)
     expect(ctx.groups.activePart).toBe(ctx.groups.mainPart)
+    expect(ctx.groups.openTargetPart).toBe(ctx.groups.mainPart)
+  })
+
+  it('keeps the focused part when only the open-target window disappears', async () => {
+    const focused = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+    const target = (await ctx.service.createEmptyWindow({ explicitEmpty: true, activate: false }))
+      .window!
+    ctx.windows.setActiveWindow(focused.window)
+    // Tab activation in another window retargets opens without moving focus.
+    ctx.groups.activateGroup(target.part.activeGroup)
+    expect(ctx.groups.activePart).toBe(focused.part)
+    expect(ctx.groups.openTargetPart).toBe(target.part)
+
+    const announced: unknown[] = []
+    ctx.groups.onDidActivateOpenTargetGroup((group) => announced.push(group))
+
+    ctx.windows.unregisterWindow(target.window)
+
+    expect(ctx.groups.activePart).toBe(focused.part)
+    expect(ctx.groups.openTargetPart).toBe(focused.part)
+    // A fallback must not announce: that would bring a background window front.
+    expect(announced).toHaveLength(0)
   })
 
   it('restore-all keeps the main window multi-group layout intact', async () => {
