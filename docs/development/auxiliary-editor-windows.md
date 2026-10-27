@@ -59,6 +59,8 @@ renderer（主窗口，唯一运行时）
 
 通用规则：**浮层跟随宿主文档，不跟随全局 `document`**。新增 overlay 时先问"它渲染进哪个 document"，优先让原语从 context 解析；只有跨文档 portal 才需要显式重新 provide。
 
+**字体上下文**：主窗口的 chrome 排版来自 `.workbench`（`--workbench-ui-font-family` + `--workbench-ui-font-size`，13px）。辅助窗口的 portal 根（`AuxiliaryWindowHost.module.css` 的 `.root`）必须复用同一对变量；否则整棵 portal 树会继承 `body` 的 16px，peek 引用树、列表等继承字号在辅助窗口中比主窗口大一号。`smoke.auxiliaryWindowPeekTypography.spec.ts` 守护主/辅助窗口的字体、字号与 token 颜色 parity。
+
 ### 通知与进度：按发起文档路由
 
 VSCode 的 `INotificationService` / `IProgressService` 是每个 workbench 窗口一份。本仓库只有一个 renderer、一份服务，因此用"**发起文档**"达到等价语义：

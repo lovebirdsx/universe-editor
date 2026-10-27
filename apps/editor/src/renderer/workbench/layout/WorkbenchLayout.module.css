@@ -14,8 +14,8 @@
   overflow: hidden;
   background: var(--vscode-workbench-background, #1e1e1e);
   color: var(--vscode-foreground, #cccccc);
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 13px;
+  font-family: var(--workbench-ui-font-family, system-ui, -apple-system, sans-serif);
+  font-size: var(--workbench-ui-font-size, 13px);
 }
 
 .titlebar {

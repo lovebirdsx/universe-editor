@@ -37,6 +37,15 @@ html, body, #root {
   --font-ui: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'Cascadia Code', 'Consolas', 'Menlo', 'Courier New', monospace;
 
+  /* Workbench chrome typography (title bar, views, peek trees, dialogs). Kept
+     separate from `--font-ui`: the main window's `.workbench` uses this hardcoded
+     stack at 13px, while `--font-ui` is the user-configurable
+     `workbench.fontFamily`. Auxiliary window roots reuse this pair so inherited
+     text (peek reference trees, lists) keeps the main window's size instead of
+     falling back to the browser's 16px. */
+  --workbench-ui-font-family: system-ui, -apple-system, sans-serif;
+  --workbench-ui-font-size: 13px;
+
   /* Background of the part a view is docked in, republished as a plain custom
      property so a shared list can paint its own scroll content opaque without
      knowing which part it landed in. Each part root re-declares it with its own
