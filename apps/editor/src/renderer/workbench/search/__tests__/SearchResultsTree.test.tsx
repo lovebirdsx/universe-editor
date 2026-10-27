@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { useState } from 'react'
+import { createRef, useState } from 'react'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   IConfigurationService,
@@ -13,7 +13,7 @@ import {
   type IFileMatch,
   type ITextSearchMatch,
 } from '@universe-editor/platform'
-import { SearchResultsTree } from '../SearchResultsTree.js'
+import { SearchResultsTree, type SearchResultsTreeHandle } from '../SearchResultsTree.js'
 import { searchViewState } from '../searchViewState.js'
 import { searchSession } from '../searchSession.js'
 import { ServicesContext } from '../../useService.js'
@@ -80,10 +80,13 @@ describe('SearchResultsTree', () => {
     render(<SearchResultsTree results={results} onActivateMatch={onActivate} />)
     fireEvent.click(screen.getByText(/foo/))
     expect(onActivate).toHaveBeenCalledTimes(1)
-    const [resource, match, idx] = onActivate.mock.calls[0]!
+    const [resource, match, idx, options] = onActivate.mock.calls[0]!
     expect(resource).toBeInstanceOf(URI)
     expect(match.lineNumber).toBe(4)
     expect(idx).toBe(0)
+    // A mouse click opens the match and focuses the editor (Space is the only
+    // gesture that keeps focus in the tree).
+    expect(options).toEqual({ preview: true, target: 'default', preserveFocus: false })
   })
 
   it('clicking the file toggle button collapses the group', () => {
@@ -265,7 +268,7 @@ describe('SearchResultsTree — modifier activation', () => {
     fireEvent.keyDown(tree(), { key: 'Enter', ctrlKey: true })
 
     expect(onActivate).toHaveBeenCalledTimes(1)
-    expect(onActivate.mock.calls[0]?.[4]).toBe('side')
+    expect(onActivate.mock.calls[0]?.[3]?.target).toBe('side')
   })
 
   it('opens a file row at its first match with the new-window target', () => {
@@ -282,11 +285,12 @@ describe('SearchResultsTree — modifier activation', () => {
     fireEvent.keyDown(tree(), { key: 'Enter', altKey: true })
 
     expect(onActivate).toHaveBeenCalledTimes(1)
-    const [, match, rangeIndex, preview, target] = onActivate.mock.calls[0]!
+    const [, match, rangeIndex, options] = onActivate.mock.calls[0]!
     expect(match.lineNumber).toBe(1)
     expect(rangeIndex).toBe(0)
-    expect(preview).toBe(false)
-    expect(target).toBe('newWindow')
+    expect(options?.preview).toBe(false)
+    expect(options?.target).toBe('newWindow')
+    expect(options?.preserveFocus).toBe(false)
   })
 
   it('keeps plain Enter on a file row as expand/collapse', () => {
@@ -299,6 +303,61 @@ describe('SearchResultsTree — modifier activation', () => {
     expect(screen.queryByText('one')).toBeNull()
 
     fireEvent.keyDown(tree(), { key: 'Enter' })
+
+    expect(screen.queryByText('one')).not.toBeNull()
+    expect(onActivate).not.toHaveBeenCalled()
+  })
+})
+
+describe('SearchResultsTree — keyboard preview', () => {
+  const tree = () => screen.getByRole('tree', { name: 'Search results' })
+
+  it('Space previews the focused match and keeps focus in the tree', () => {
+    const onActivate = vi.fn()
+    render(
+      <SearchResultsTree results={[makeFile('/ws/a.ts', ['one'])]} onActivateMatch={onActivate} />,
+    )
+    fireEvent.click(screen.getByText('one'))
+    onActivate.mockClear()
+
+    fireEvent.keyDown(tree(), { key: ' ' })
+
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    expect(onActivate.mock.calls[0]?.[3]).toEqual({
+      preview: true,
+      target: 'default',
+      preserveFocus: true,
+    })
+  })
+
+  it('Enter pins the match and hands focus to the editor', () => {
+    const onActivate = vi.fn()
+    render(
+      <SearchResultsTree results={[makeFile('/ws/a.ts', ['one'])]} onActivateMatch={onActivate} />,
+    )
+    fireEvent.click(screen.getByText('one'))
+    onActivate.mockClear()
+
+    fireEvent.keyDown(tree(), { key: 'Enter' })
+
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    expect(onActivate.mock.calls[0]?.[3]).toEqual({
+      preview: false,
+      target: 'default',
+      preserveFocus: false,
+    })
+  })
+
+  it('Space on a file row toggles the group instead of previewing', () => {
+    const onActivate = vi.fn()
+    render(
+      <SearchResultsTree results={[makeFile('/ws/a.ts', ['one'])]} onActivateMatch={onActivate} />,
+    )
+    fireEvent.click(screen.getByText('a.ts'))
+    expect(screen.queryByText('one')).toBeNull()
+    onActivate.mockClear()
+
+    fireEvent.keyDown(tree(), { key: ' ' })
 
     expect(screen.queryByText('one')).not.toBeNull()
     expect(onActivate).not.toHaveBeenCalled()
@@ -395,5 +454,72 @@ describe('SearchResultsTree — focus recovery after Remove', () => {
 
     expect(screen.queryByText('two')).toBeNull()
     expect(selectedRowKey()).toBeUndefined()
+  })
+})
+
+describe('SearchResultsTree — focusResource', () => {
+  it('focuses the preferred match and returns the tree container', () => {
+    const resource = URI.file('/ws/a.ts')
+    const matchId = `match:${resource.toString()}:1`
+    const ref = createRef<SearchResultsTreeHandle>()
+    render(
+      <SearchResultsTree
+        ref={ref}
+        results={[makeFile('/ws/a.ts', ['one', 'two'])]}
+        onActivateMatch={() => {}}
+      />,
+    )
+    const tree = screen.getByRole('tree', { name: 'Search results' })
+
+    let focused: HTMLElement | null = null
+    act(() => {
+      focused = ref.current!.focusResource(resource, matchId)
+    })
+
+    // Returning the container is the contract FocusableRegistry relies on: a
+    // null here makes it fall back to the ViewBody wrapper and steal focus.
+    expect(focused).toBe(tree)
+    expect(document.activeElement).toBe(tree)
+    expect(selectedRowKey()).toBe(matchId)
+  })
+
+  it('falls back to the file row when the preferred match is in another file', () => {
+    const resource = URI.file('/ws/a.ts')
+    const other = URI.file('/ws/b.ts')
+    const ref = createRef<SearchResultsTreeHandle>()
+    render(
+      <SearchResultsTree
+        ref={ref}
+        results={[makeFile('/ws/a.ts', ['one']), makeFile('/ws/b.ts', ['two'])]}
+        onActivateMatch={() => {}}
+      />,
+    )
+
+    let focused: HTMLElement | null = null
+    act(() => {
+      focused = ref.current!.focusResource(resource, `match:${other.toString()}:0`)
+    })
+
+    expect(focused).toBe(screen.getByRole('tree', { name: 'Search results' }))
+    expect(selectedRowKey()).toBe(`file:${resource.toString()}`)
+  })
+
+  it('returns null and leaves focus alone when the file is not in the results', () => {
+    const ref = createRef<SearchResultsTreeHandle>()
+    render(
+      <SearchResultsTree
+        ref={ref}
+        results={[makeFile('/ws/a.ts', ['one'])]}
+        onActivateMatch={() => {}}
+      />,
+    )
+
+    let focused: HTMLElement | null = null
+    act(() => {
+      focused = ref.current!.focusResource(URI.file('/ws/missing.ts'), null)
+    })
+
+    expect(focused).toBeNull()
+    expect(screen.queryByRole('treeitem', { selected: true })).toBeNull()
   })
 })

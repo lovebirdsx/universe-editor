@@ -49,6 +49,7 @@ import {
   bridgeFindWidgetVisible,
   bridgeEditorColumnSelection,
   bridgeEditorFocus,
+  focusEditorNextFrame,
   focusStandaloneEditor,
   syncEditorFocusContext,
 } from '../../services/editor/editorFocus.js'
@@ -494,7 +495,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
             groupsService.activeGroup.activeEditor === fileInput &&
             !groupsService.activeGroup.lastActivationPreservedFocus
           ) {
-            focusRaf = requestOwnerFrame(containerRef.current, () => {
+            focusRaf = focusEditorNextFrame(containerRef.current, () => {
               if (cancelled) return
               // 后台窗口的帧可能晚于导航执行，必须重新核对焦点意图，避免抢回旧编辑器。
               const activeGroup = groupsService.activeGroup
@@ -570,7 +571,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     if (activeGroup.lastActivationPreservedFocus) return
     // Deferred a frame for the same reason as the model-swap focus: a sync
     // focus here on the switch frame forces a wasted relayout of a large file.
-    const raf = requestOwnerFrame(containerRef.current, () => {
+    const raf = focusEditorNextFrame(containerRef.current, () => {
       if (editorRef.current) focusStandaloneEditor(editorRef.current, contextKeyService)
     })
     return () => cancelOwnerFrame(raf)

@@ -46,6 +46,9 @@ test.describe('@p1 search', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
       .toBe(MATCH_LINE)
+    // Clicking a result hands keyboard focus to the editor; Space is the
+    // preview gesture that keeps it in the tree.
+    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
   })
 
   test('search re-runs automatically after opening a workspace from an empty window @regression', async ({
@@ -66,5 +69,75 @@ test.describe('@p1 search', () => {
     const { dir } = writeWorkspace()
     await workbench.openWorkspace(dir)
     await expect(searchView.getByText(NEEDLE)).toBeVisible({ timeout: 10000 })
+  })
+
+  test('Space previews the focused result without moving focus @p1', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+
+    const { dir, target } = writeWorkspace()
+    await workbench.openWorkspace(dir)
+    await workbench.activityBar.click(SEARCH)
+
+    const searchView = page.getByTestId('search-view')
+    await expect(searchView).toBeVisible()
+    const input = searchView.getByRole('textbox', { name: 'Search', exact: true })
+    await input.fill(NEEDLE)
+    await expect(searchView.getByText(NEEDLE)).toBeVisible({ timeout: 10000 })
+
+    await input.press('Tab')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Space')
+
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(URI.file(target).toString())
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
+      .toBe(MATCH_LINE)
+    // The preview opens into the editor but keyboard focus stays on the results.
+    await expect(searchView.getByRole('tree', { name: 'Search results' })).toBeFocused()
+    expect(await workbench.getContextKey<boolean>('editorFocus')).toBe(false)
+  })
+
+  test('Ctrl+Shift+F restores the result opened with Enter @regression', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+
+    const { dir, target } = writeWorkspace()
+    await workbench.openWorkspace(dir)
+    await workbench.activityBar.click(SEARCH)
+
+    const searchView = page.getByTestId('search-view')
+    await expect(searchView).toBeVisible()
+    const input = searchView.getByRole('textbox', { name: 'Search', exact: true })
+    await input.fill(NEEDLE)
+    await expect(searchView.getByText(NEEDLE)).toBeVisible({ timeout: 10000 })
+
+    // Tab from the query into the results tree (first row = file), move to the
+    // match row and open it — the keyboard path the user reported.
+    await input.press('Tab')
+    await page.keyboard.press('ArrowDown')
+    await page.keyboard.press('Enter')
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(URI.file(target).toString())
+    // revealRange focuses the editor once it mounts; wait for that before
+    // invoking the command, otherwise the SideBar still owns focus and the
+    // action takes its "toggle the sidebar closed" branch.
+    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+
+    await workbench.runCommand('workbench.action.findInFiles')
+
+    const tree = searchView.getByRole('tree', { name: 'Search results' })
+    await expect(tree).toBeFocused()
+    await expect(tree.getByRole('treeitem', { selected: true })).toHaveAttribute(
+      'data-row-key',
+      `match:${URI.file(target).toString()}:0`,
+    )
+    // Re-focusing must not replace the query with the editor's match selection.
+    await expect(input).toHaveValue(NEEDLE)
   })
 })

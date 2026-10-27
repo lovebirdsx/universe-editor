@@ -21,6 +21,7 @@ import {
   IUriIdentityService,
   localize,
   URI,
+  type IEditorInput,
   type IFileMatch,
   type ITextSearchMatch,
 } from '@universe-editor/platform'
@@ -42,13 +43,21 @@ import { MonacoModelRegistry } from '../editor/monaco/MonacoModelRegistry.js'
 import { applyReplacements, type IReplaceEdit } from '../../services/search/replace.js'
 import { saveReplacedFile } from '../../services/search/saveReplacedFile.js'
 
+export interface ISearchActivateMatchOptions {
+  /** Defaults to true (light preview tab); false pins the tab. */
+  readonly preview?: boolean
+  /** Side / new-window target; defaults to 'default'. */
+  readonly target?: OpenTarget
+  /** Keep DOM focus where it is (Space preview from the results tree). */
+  readonly preserveFocus?: boolean
+}
+
 export interface ISearchActions {
   readonly onActivateMatch: (
     resource: URI,
     match: ITextSearchMatch,
     rangeIndex: number,
-    preview?: boolean,
-    target?: OpenTarget,
+    options?: ISearchActivateMatchOptions,
   ) => void
   readonly onReplaceFile: (resource: URI) => void
   readonly onReplaceMatch: (resource: URI, match: ITextSearchMatch, rangeIndex: number) => void
@@ -73,20 +82,47 @@ export function useSearchActions(
   const auxiliaryWindows = useService(IAuxiliaryEditorWindowService)
 
   const revealRange = useCallback(
-    (input: EditorInput, match: ITextSearchMatch, rangeIndex: number) => {
+    (
+      input: EditorInput,
+      match: ITextSearchMatch,
+      rangeIndex: number,
+      options?: { focus?: boolean },
+    ) => {
       void (async () => {
         const editor = await waitForFileEditor(input)
         const range = match.ranges[rangeIndex]
         if (!editor || !range) return
-        applyEditorSelection(editor, {
-          startLineNumber: match.lineNumber,
-          startColumn: range.startColumn,
-          endLineNumber: match.lineNumber,
-          endColumn: range.endColumn,
-        })
+        applyEditorSelection(
+          editor,
+          {
+            startLineNumber: match.lineNumber,
+            startColumn: range.startColumn,
+            endLineNumber: match.lineNumber,
+            endColumn: range.endColumn,
+          },
+          options,
+        )
       })()
     },
     [],
+  )
+
+  // preserveFocus skips activateGroup, so `activeEditor` can still hold the
+  // locked active group's editor even though the preview landed in
+  // activeGroupForOpen. Look the opened input up in the groups that could own it.
+  const resolveEditorForReveal = useCallback(
+    (inputId: string): IEditorInput | undefined => {
+      const inActive = editorGroupsService.activeGroup.editors.find(
+        (editor) => editor.id === inputId,
+      )
+      if (inActive) return inActive
+      const openTarget = editorGroupsService.activeGroupForOpen
+      return (
+        openTarget.editors.find((editor) => editor.id === inputId) ??
+        editorService.activeEditor.get()
+      )
+    },
+    [editorGroupsService, editorService],
   )
 
   const openInTarget = useCallback(
@@ -126,10 +162,13 @@ export function useSearchActions(
       resource: URI,
       match: ITextSearchMatch,
       rangeIndex: number,
-      preview = true,
-      target: OpenTarget = 'default',
+      options: ISearchActivateMatchOptions = {},
     ) => {
+      const preview = options.preview ?? true
+      const target = options.target ?? 'default'
+      const preserveFocus = options.preserveFocus === true
       if (target !== 'default') {
+        // Modified activations (Ctrl/Alt+Enter) always pin and hand over focus.
         void (async () => {
           const opened = await openInTarget(resource, target)
           if (opened) {
@@ -145,15 +184,21 @@ export function useSearchActions(
         return
       }
       const input = instantiation.createInstance(FileEditorInput, resource)
-      editorService.openEditor(input, { pinned: !preview })
+      const inputId = input.id
+      editorService.openEditor(input, {
+        pinned: !preview,
+        ...(preserveFocus ? { preserveFocus: true } : {}),
+      })
       // openEditor dedupes by resource and can discard the fresh input, so reveal
       // against the active instance that actually owns the mounted Monaco editor.
       // Untitled results resolve to the already-open UntitledEditorInput this way.
-      const active = editorService.activeEditor.get()
+      const active = preserveFocus
+        ? resolveEditorForReveal(inputId)
+        : editorService.activeEditor.get()
       if (!(active instanceof EditorInput)) return
-      revealRange(active, match, rangeIndex)
+      revealRange(active, match, rangeIndex, { focus: !preserveFocus })
     },
-    [editorService, instantiation, openInTarget, revealRange],
+    [editorService, instantiation, openInTarget, resolveEditorForReveal, revealRange],
   )
 
   const replaceFile = useCallback(

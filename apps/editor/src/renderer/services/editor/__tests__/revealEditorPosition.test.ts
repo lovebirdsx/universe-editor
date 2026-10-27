@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DisposableStore, URI, type ITextEditorSelection } from '@universe-editor/platform'
 import {
+  applyEditorSelection,
   revealSelectionInInput,
   toRevealRange,
   waitForFileEditor,
@@ -43,6 +44,31 @@ describe('toRevealRange', () => {
       endColumn: 3,
     }
     expect(toRevealRange(full)).toEqual(full)
+  })
+})
+
+describe('applyEditorSelection', () => {
+  it('places the cursor, reveals it, and focuses by default', () => {
+    const editor = createEditorStub()
+    applyEditorSelection(editor, { startLineNumber: 5, startColumn: 2 })
+
+    expect(editor.setSelection).toHaveBeenCalledWith({
+      startLineNumber: 5,
+      startColumn: 2,
+      endLineNumber: 5,
+      endColumn: 2,
+    })
+    expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalled()
+    expect(editor.focus).toHaveBeenCalled()
+  })
+
+  it('keeps focus where it is when asked (Space preview from a list)', () => {
+    const editor = createEditorStub()
+    applyEditorSelection(editor, { startLineNumber: 5, startColumn: 2 }, { focus: false })
+
+    expect(editor.setSelection).toHaveBeenCalled()
+    expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalled()
+    expect(editor.focus).not.toHaveBeenCalled()
   })
 })
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ContextKeyService,
   Emitter,
@@ -9,6 +9,7 @@ import {
 import {
   bridgeEditorColumnSelection,
   focusEditorInput,
+  focusEditorNextFrame,
   installEditorFocusDerivation,
   syncEditorFocusContext,
 } from '../editorFocus.js'
@@ -306,6 +307,87 @@ describe('installEditorFocusDerivation', () => {
     await settleMacrotask()
 
     expect(cks.get('editorFocus')).toBe(true)
+  })
+})
+
+describe('focusEditorNextFrame', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    vi.useFakeTimers()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    document.body.innerHTML = ''
+  })
+
+  function mountPart(testId: string): HTMLElement {
+    const part = document.createElement('div')
+    part.setAttribute('data-testid', testId)
+    const target = document.createElement('div')
+    target.tabIndex = 0
+    part.appendChild(target)
+    document.body.appendChild(part)
+    return target
+  }
+
+  // Deferred focus is a perf choice (one relayout instead of two on large
+  // files). The frame can land after the user already moved elsewhere — a
+  // search result opened into the tree, a terminal, the Explorer — and must
+  // not yank the caret back into the editor.
+  it('focuses when focus stays in the editor area', async () => {
+    const host = mountPart('part-editorArea')
+    const focus = vi.fn()
+
+    focusEditorNextFrame(host, focus)
+    await vi.runAllTimersAsync()
+
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips the focus once focus moved into another part', async () => {
+    const host = mountPart('part-editorArea')
+    const focus = vi.fn()
+
+    focusEditorNextFrame(host, focus)
+    mountPart('part-sidebar').focus()
+    await vi.runAllTimersAsync()
+
+    expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('skips the focus when an overlay outside every part takes it (quick input)', async () => {
+    const host = mountPart('part-editorArea')
+    const focus = vi.fn()
+
+    focusEditorNextFrame(host, focus)
+    const quickInput = document.createElement('input')
+    document.body.appendChild(quickInput)
+    quickInput.focus()
+    await vi.runAllTimersAsync()
+
+    expect(focus).not.toHaveBeenCalled()
+  })
+
+  it('keeps the frame when focus moves within the editor area', async () => {
+    const host = mountPart('part-editorArea')
+    const focus = vi.fn()
+
+    focusEditorNextFrame(host, focus)
+    mountPart('part-editorArea').focus()
+    await vi.runAllTimersAsync()
+
+    expect(focus).toHaveBeenCalledTimes(1)
+  })
+
+  it('cancel() drops the pending focus', async () => {
+    const host = mountPart('part-editorArea')
+    const focus = vi.fn()
+
+    const frame = focusEditorNextFrame(host, focus)
+    frame.cancel()
+    await vi.runAllTimersAsync()
+
+    expect(focus).not.toHaveBeenCalled()
   })
 })
 

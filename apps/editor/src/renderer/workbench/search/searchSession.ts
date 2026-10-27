@@ -32,9 +32,10 @@ export interface SearchSessionState {
    * for a deliberate collapse when the setting later changes.
    */
   treeExpansionOverrides: ReadonlyMap<string, boolean>
-  /** Resource last opened from the results tree, so a re-focus can target it. */
-  lastActivatedResource?: string
-  /** The match node id that was focused when that file was opened. */
+  /**
+   * The node id last opened from the results tree (a match row, or a file row
+   * opened with a modifier), so a re-focus can target it.
+   */
   lastActivatedFocusId?: string
   /**
    * Set by FindInFilesAction from the active editor's selection. SearchView reads
@@ -72,7 +73,6 @@ export function resetSearchSession(): void {
   Object.assign(searchSession, emptyState())
   // Optional fields aren't part of emptyState (exactOptionalPropertyTypes), so
   // clear any carried-over value explicitly.
-  delete searchSession.lastActivatedResource
   delete searchSession.lastActivatedFocusId
   delete searchSession.seedPattern
   delete searchSession.seedIncludes

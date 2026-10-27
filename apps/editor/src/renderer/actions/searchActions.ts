@@ -7,6 +7,7 @@ import {
   Action2,
   IEditorGroupsService,
   ILayoutService,
+  IViewDescriptorService,
   IViewsService,
   IWorkspaceService,
   PartId,
@@ -25,6 +26,41 @@ import { EXPLORER_FOCUS_WHEN, resolvePrimaryTarget } from './fileActionsCommon.j
 import { isPartFocusedInActiveDocument } from '../services/focus/partFocus.js'
 
 const SEED_TEXT_MAX_LENGTH = 200
+const SEARCH_VIEW_ID = 'workbench.view.search.results'
+
+interface ISearchViewHost {
+  readonly partId: PartId
+}
+
+function partIdForLocation(location: ViewContainerLocation): PartId {
+  switch (location) {
+    case ViewContainerLocation.SideBar:
+      return PartId.SideBar
+    case ViewContainerLocation.SecondarySideBar:
+      return PartId.SecondarySideBar
+    case ViewContainerLocation.Panel:
+      return PartId.Panel
+  }
+}
+
+/**
+ * Where the Search view is currently shown, or undefined when it is hidden or
+ * another container owns its part. The container is user-movable (drag to the
+ * Panel / Secondary Side Bar), so the Side Bar cannot be assumed.
+ */
+function resolveSearchViewHost(
+  viewDescriptors: IViewDescriptorService,
+  layoutService: ILayoutService,
+  viewsService: IViewsService,
+): ISearchViewHost | undefined {
+  const containerId = viewDescriptors.getViewContainerByViewId(SEARCH_VIEW_ID)?.id
+  const location = viewDescriptors.getViewLocationById(SEARCH_VIEW_ID)
+  if (containerId === undefined || location === undefined) return undefined
+  const partId = partIdForLocation(location)
+  if (!layoutService.getVisible(partId)) return undefined
+  if (viewsService.getActiveViewContainerId(location) !== containerId) return undefined
+  return { partId }
+}
 
 /**
  * `editorFocus` covers editors outside any group (the Output panel's log editor
@@ -60,23 +96,24 @@ export class FindInFilesAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const layoutService = accessor.get(ILayoutService)
     const viewsService = accessor.get(IViewsService)
-    const seed = readEditorSelection(accessor)
-    if (seed) {
-      searchSession.seedPattern = seed
-      // A mounted SearchView won't remount, so nudge it to consume the seed.
-      searchViewState.requestSeed()
-    }
-    const sidebarVisible = layoutService.getVisible(PartId.SideBar)
-    const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
-    if (
-      sidebarVisible &&
-      activeId === 'workbench.view.search' &&
-      isPartFocusedInActiveDocument(layoutService, PartId.SideBar)
-    ) {
-      layoutService.setVisible(PartId.SideBar, false)
+    const viewDescriptors = accessor.get(IViewDescriptorService)
+    const searchHost = resolveSearchViewHost(viewDescriptors, layoutService, viewsService)
+    if (searchHost && isPartFocusedInActiveDocument(layoutService, searchHost.partId)) {
+      layoutService.setVisible(searchHost.partId, false)
       return
     }
-    await layoutService.focusView('workbench.view.search.results', { source: 'command' })
+    // Only prefill when the search view is being opened. Re-focusing an already
+    // visible Search must keep its query, results and focused row so the user
+    // can continue where they left off after opening a match.
+    if (!searchHost) {
+      const seed = readEditorSelection(accessor)
+      if (seed) {
+        searchSession.seedPattern = seed
+        // A mounted SearchView won't remount, so nudge it to consume the seed.
+        searchViewState.requestSeed()
+      }
+    }
+    await layoutService.focusView(SEARCH_VIEW_ID, { source: 'command' })
   }
 }
 
@@ -108,7 +145,7 @@ export class FindInFolderAction extends Action2 {
     // A mounted SearchView won't remount, so nudge it to consume the seed.
     searchSession.seedIncludes = includes
     searchViewState.requestSeedIncludes()
-    await layoutService.focusView('workbench.view.search.results', { source: 'command' })
+    await layoutService.focusView(SEARCH_VIEW_ID, { source: 'command' })
   }
 }
 

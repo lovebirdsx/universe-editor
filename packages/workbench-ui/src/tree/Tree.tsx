@@ -78,6 +78,11 @@ export interface ITreeActivateModifiers {
 export interface ITreeActivateOptions {
   /** True for a light "preview" open (single click / Space); false to pin (Enter). */
   readonly preview: boolean
+  /**
+   * Input that produced this activation. `preview` cannot tell a single click
+   * from Space; views that treat them differently branch on this.
+   */
+  readonly source: 'pointer' | 'keyboard'
   /** Present only for Ctrl/Meta/Alt+Enter on a tree with `modifierActivation`. */
   readonly modifiers?: ITreeActivateModifiers
 }
@@ -118,7 +123,10 @@ export interface ITreeProps<T> {
   readonly ariaLabel?: string
   /** Receives the tree container element (e.g. to register it as focusable). */
   readonly rootRef?: Ref<HTMLDivElement>
-  /** Activate a leaf (Enter / Space / plain click on a node without children). */
+  /**
+   * Activate a leaf (Enter / Space / plain click on a node without children).
+   * `opts.source` distinguishes a plain click from Enter/Space.
+   */
   readonly onActivate?: (node: IVisibleNode<T>, opts: ITreeActivateOptions) => void
   /**
    * Treat every row as activatable on Enter — including non-leaf rows, which
@@ -445,7 +453,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     }
     model.setSelection([node.id], node.id)
     if (node.hasChildren) void model.toggle(node.element)
-    else onActivate?.(node, { preview: true })
+    else onActivate?.(node, { preview: true, source: 'pointer' })
   })
 
   const onKeyDown = useCallback(
@@ -459,6 +467,7 @@ export function Tree<T>(props: ITreeProps<T>) {
           e.stopPropagation()
           onActivate(current, {
             preview: false,
+            source: 'keyboard',
             modifiers: { ctrl: e.ctrlKey, meta: e.metaKey, alt: e.altKey },
           })
         }
@@ -527,13 +536,13 @@ export function Tree<T>(props: ITreeProps<T>) {
           if (!current) return
           handled()
           if (current.hasChildren && !activateNonLeafOnEnter) void model.toggle(current.element)
-          else onActivate?.(current, { preview: false })
+          else onActivate?.(current, { preview: false, source: 'keyboard' })
           return
         case ' ':
           if (!current) return
           handled()
           if (current.hasChildren) void model.toggle(current.element)
-          else onActivate?.(current, { preview: true })
+          else onActivate?.(current, { preview: true, source: 'keyboard' })
           return
         case 'ContextMenu':
           handled()

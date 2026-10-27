@@ -1,8 +1,15 @@
 import type { EditorInput, IContextKeyService, IDisposable } from '@universe-editor/platform'
-import { autorun } from '@universe-editor/platform'
-import { isElementLike } from '@universe-editor/workbench-ui'
+import { autorun, PartId } from '@universe-editor/platform'
+import {
+  cancelOwnerFrame,
+  isElementLike,
+  isHTMLElementLike,
+  requestOwnerFrame,
+  type OwnerFrame,
+} from '@universe-editor/workbench-ui'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { installDocumentFocusReconcile } from '../focus/documentFocusReconcile.js'
+import { closestPartId } from '../focus/FocusStackService.js'
 import { getActiveWorkbenchDocument, getWorkbenchDocuments } from '../windows/workbenchDocuments.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { DiffEditorRegistry } from './DiffEditorRegistry.js'
@@ -365,4 +372,39 @@ export function focusStandaloneEditor(
   editor.focus()
   syncEditorFocusContext(contextKeyService)
   queueMicrotask(() => syncEditorFocusContext(contextKeyService))
+}
+
+/**
+ * Focus the editor on the next frame, unless keyboard focus moves out of the
+ * editor area first. Editor opens defer focus to keep a large file's mount from
+ * relaying out twice; by the time the frame lands, the user (or a command such
+ * as Find in Files) may already be in another part — focusing then would yank
+ * the caret back out of it.
+ */
+export function focusEditorNextFrame(host: HTMLElement | null, focus: () => void): OwnerFrame {
+  // Before Monaco loads the editor container is not rendered yet (host is null),
+  // but the frame is still scheduled; watch the main document so a focus move
+  // that lands while the chunk loads can still cancel it.
+  const doc = host?.ownerDocument ?? (typeof document === 'undefined' ? undefined : document)
+  let pending = true
+
+  function stop(run: boolean): void {
+    if (!pending) return
+    pending = false
+    doc?.removeEventListener('focusin', onFocusIn, true)
+    cancelOwnerFrame(frame)
+    if (run) focus()
+  }
+  function onFocusIn(e: FocusEvent): void {
+    if (!isHTMLElementLike(e.target)) return
+    // Anything outside the editor area is a deliberate move to another surface —
+    // including elements outside every part (quick input, modal dialog), which
+    // would otherwise still lose focus to the late frame.
+    if (closestPartId(e.target) === PartId.EditorArea) return
+    stop(false)
+  }
+
+  const frame = requestOwnerFrame(host, () => stop(true))
+  doc?.addEventListener('focusin', onFocusIn, true)
+  return { cancel: () => stop(false) }
 }

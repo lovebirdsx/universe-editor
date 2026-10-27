@@ -120,14 +120,17 @@ describe('Tree — modifierActivation', () => {
     expect(onActivate).toHaveBeenCalledTimes(3)
     expect(onActivate.mock.calls[0]?.[1]).toEqual({
       preview: false,
+      source: 'keyboard',
       modifiers: { ctrl: true, meta: false, alt: false },
     })
     expect(onActivate.mock.calls[1]?.[1]).toEqual({
       preview: false,
+      source: 'keyboard',
       modifiers: { ctrl: false, meta: true, alt: false },
     })
     expect(onActivate.mock.calls[2]?.[1]).toEqual({
       preview: false,
+      source: 'keyboard',
       modifiers: { ctrl: false, meta: false, alt: true },
     })
     model.dispose()
@@ -177,6 +180,26 @@ describe('Tree — modifierActivation', () => {
     fireEvent.keyDown(view(), { key: ' ' })
     expect(onActivate).toHaveBeenLastCalledWith(expect.objectContaining({ id: '1' }), {
       preview: true,
+      source: 'keyboard',
+    })
+    model.dispose()
+  })
+
+  it('reports the activation source: pointer for a click, keyboard for Space', () => {
+    const model = makeModel()
+    const { onActivate } = renderTree(model)
+
+    fireEvent.click(screen.getByText('1'))
+    expect(onActivate).toHaveBeenLastCalledWith(expect.objectContaining({ id: '1' }), {
+      preview: true,
+      source: 'pointer',
+    })
+
+    act(() => model.setSelection(['1'], '1'))
+    fireEvent.keyDown(view(), { key: ' ' })
+    expect(onActivate).toHaveBeenLastCalledWith(expect.objectContaining({ id: '1' }), {
+      preview: true,
+      source: 'keyboard',
     })
     model.dispose()
   })

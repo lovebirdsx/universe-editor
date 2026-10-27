@@ -2,19 +2,24 @@ import {
   Disposable,
   IContextKeyService,
   IEditorGroupsService,
+  IFocusTrackerService,
   ILoggerService,
   ILayoutService,
   IViewsService,
   IWorkspaceService,
   NullLogger,
+  PartId,
   autorun,
   type IDisposable,
   type IEditorGroup,
+  type IFocusChangeEvent,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
+import { isHTMLElementLike } from '@universe-editor/workbench-ui'
 import { ITerminalManagerService } from '../services/terminal/TerminalManagerService.js'
+import { closestPartId } from '../services/focus/FocusStackService.js'
 import { restoreWorkbenchFocus } from '../services/focus/workbenchFocusRestorer.js'
 
 const RESTORE_FOCUS_WINDOW_MS = 1500
@@ -37,6 +42,7 @@ export class WorkspaceFocusRestoreContribution
     @IContextKeyService private readonly _contextKeyService: IContextKeyService,
     @ITerminalManagerService terminalManagerService: ITerminalManagerService,
     @ILoggerService loggerService: ILoggerServiceType,
+    @IFocusTrackerService focusTracker: IFocusTrackerService,
   ) {
     super()
     this._logger =
@@ -46,6 +52,12 @@ export class WorkspaceFocusRestoreContribution
     for (const group of _editorGroupsService.groups) this._attachGroup(group)
 
     this._register(workspaceService.onDidChangeWorkspace(() => this._beginRestoreWindow()))
+    // A workspace switch can leave focus on a stale element, so the window above
+    // keeps re-focusing the editor area as restore work replaces it. Once the
+    // user moves focus into another part (or an overlay outside every part) they
+    // picked their target — a late restore would yank the caret back out of e.g.
+    // the search box.
+    this._register(focusTracker.onDidFocusChange((e) => this._onFocusChange(e)))
     this._register(
       _editorGroupsService.onDidAddGroup((group) => {
         this._attachGroup(group)
@@ -96,6 +108,27 @@ export class WorkspaceFocusRestoreContribution
     this._schedule('workspace-change')
   }
 
+  private _onFocusChange(e: IFocusChangeEvent): void {
+    if (Date.now() > this._restoreUntil) return
+    const el: unknown = e.current
+    if (!isHTMLElementLike(el)) return
+    // Focus outside every part (quick input, modal dialog) is a user-chosen
+    // target too; only focus that stays in the editor area keeps the restore
+    // intent alive.
+    const part = closestPartId(el)
+    if (part === PartId.EditorArea) return
+    this._logger.debug(`restore window cancelled by focus in ${part ?? 'an overlay'}`)
+    this._cancelRestoreWindow()
+  }
+
+  private _cancelRestoreWindow(): void {
+    this._restoreUntil = 0
+    if (this._restoreTimer !== undefined) {
+      clearTimeout(this._restoreTimer)
+      this._restoreTimer = undefined
+    }
+  }
+
   private _scheduleIfPending(reason: string): void {
     if (Date.now() > this._restoreUntil) return
     this._schedule(reason)
@@ -124,7 +157,7 @@ export class WorkspaceFocusRestoreContribution
   }
 
   override dispose(): void {
-    if (this._restoreTimer !== undefined) clearTimeout(this._restoreTimer)
+    this._cancelRestoreWindow()
     for (const listener of this._groupListeners.values()) listener.dispose()
     this._groupListeners.clear()
     super.dispose()

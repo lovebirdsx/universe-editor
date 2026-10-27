@@ -53,7 +53,8 @@ import {
   type SearchNode,
   type SearchSnapshot,
 } from './searchTree.js'
-import { resolveOpenTarget, type OpenTarget } from '../../services/editor/openTarget.js'
+import { resolveOpenTarget } from '../../services/editor/openTarget.js'
+import type { ISearchActivateMatchOptions } from './useSearchActions.js'
 import {
   SearchResultsContextMenu,
   type SearchContextMenuState,
@@ -95,8 +96,7 @@ export interface SearchResultsTreeProps {
     resource: URI,
     match: ITextSearchMatch,
     rangeIndex: number,
-    preview?: boolean,
-    target?: OpenTarget,
+    options?: ISearchActivateMatchOptions,
   ) => void
   onReplaceMatch?:
     | ((resource: URI, match: ITextSearchMatch, rangeIndex: number) => void)
@@ -118,10 +118,11 @@ export interface SearchResultsTreeHandle {
   focusFirst(): void
   /**
    * Focus the node for `resource`: the match node `preferMatchId` when it still
-   * exists under that file, otherwise the file node. Returns false when the
-   * file is not in the current results.
+   * exists under that file, otherwise the file node. Returns the tree container
+   * that now owns DOM focus (for FocusableRegistry to hand back verbatim), or
+   * null when the file is not in the current results.
    */
-  focusResource(resource: URI, preferMatchId: string | null): boolean
+  focusResource(resource: URI, preferMatchId: string | null): HTMLElement | null
 }
 
 function highlight(
@@ -271,7 +272,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
         focusResource(resource, preferMatchId) {
           const fileId = `file:${resource.toString()}`
           const map = nodeByIdRef.current
-          if (!map.has(fileId)) return false
+          if (!map.has(fileId)) return null
           const parentMap = snapshotRef.current.parentMap
           const useMatch =
             preferMatchId != null &&
@@ -288,8 +289,9 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           }
           if (toExpand.length > 0) model.setExpansion(toExpand)
           model.setSelection([targetId], targetId)
-          containerRef.current?.focus()
-          return true
+          const el = containerRef.current
+          el?.focus()
+          return el
         },
       }),
       [model],
@@ -620,7 +622,9 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           style={style}
           data-tooltip={n.match.preview}
           onClick={ctx.onClickRow}
-          onDoubleClick={() => onActivateMatch(n.resource, n.match, n.rangeIndex, false)}
+          onDoubleClick={() =>
+            onActivateMatch(n.resource, n.match, n.rangeIndex, { preview: false })
+          }
           onContextMenu={(e) => openRowMenu(e, n)}
           {...resourceDragProps(() => selectionDragUris(n.resource.toString(), getSelectedUris()))}
         >
@@ -665,17 +669,25 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             const n = node.element
             const target = resolveOpenTarget(opts.modifiers)
             if (n.kind === 'match') {
-              searchSession.lastActivatedResource = n.resource.toString()
               searchSession.lastActivatedFocusId = n.id
-              onActivateMatch(n.resource, n.match, n.rangeIndex, opts.preview, target)
+              onActivateMatch(n.resource, n.match, n.rangeIndex, {
+                preview: opts.preview,
+                target,
+                // Space is the only keyboard gesture yielding preview:true
+                // (Enter pins), so focus stays in the tree for Space only.
+                preserveFocus: opts.preview && opts.source === 'keyboard',
+              })
               return
             }
             if (n.kind === 'file' && opts.modifiers) {
               const first = n.fileMatch.matches[0]
               if (!first) return
-              searchSession.lastActivatedResource = n.resource.toString()
               searchSession.lastActivatedFocusId = n.id
-              onActivateMatch(n.resource, first, 0, false, target)
+              onActivateMatch(n.resource, first, 0, {
+                preview: false,
+                target,
+                preserveFocus: false,
+              })
             }
           }}
           onRowKeyDown={(e, node) => {

@@ -110,15 +110,20 @@ export function toRevealRange(selection: ITextEditorSelection): monaco.IRange {
   }
 }
 
-/** Place the cursor at {@link selection}, scroll it into view, and focus. */
+/**
+ * Place the cursor at {@link selection} and scroll it into view. Focuses the
+ * editor unless `options.focus === false` — a Space preview from a list keeps
+ * keyboard focus in the originating tree.
+ */
 export function applyEditorSelection(
   editor: monaco.editor.IStandaloneCodeEditor,
   selection: ITextEditorSelection,
+  options?: { focus?: boolean },
 ): void {
   const range = toRevealRange(selection)
   editor.setSelection(range)
   editor.revealRangeInCenterIfOutsideViewport(range)
-  editor.focus()
+  if (options?.focus !== false) editor.focus()
 }
 
 /** Wait for {@link input}'s editor to mount, then reveal {@link selection}. */

@@ -10,13 +10,16 @@ import {
   IEditorService,
   IFileService,
   IFileWatcherService,
+  IFocusableRegistry,
   IInstantiationService,
   IStatusBarService,
   ITextSearchService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   observableValue,
   type IEditorInput,
   type IFileChangeEvent,
@@ -26,12 +29,15 @@ import {
   type ITextSearchOptions,
   type ITextSearchQuery,
   type ITextSearchService as ITextSearchServiceType,
+  type HostPlatform,
   type IWorkspace,
 } from '@universe-editor/platform'
 import { SearchView } from '../SearchView.js'
 import { ServicesContext } from '../../useService.js'
-import { resetSearchSession } from '../searchSession.js'
+import { resetSearchSession, searchSession } from '../searchSession.js'
 import { searchViewState } from '../searchViewState.js'
+import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
+import { FocusableRegistry } from '../../../services/focus/FocusableRegistry.js'
 import { stubConfigurationService } from './stubConfigurationService.js'
 
 class FakeTextSearch implements ITextSearchServiceType {
@@ -70,10 +76,7 @@ class FakeEditorService {
     'fake.openEditors',
     [],
   )
-  activeEditor: IObservable<IEditorInput | null> = observableValue<IEditorInput | null>(
-    'fake.activeEditor',
-    null,
-  )
+  activeEditor = observableValue<IEditorInput | null>('fake.activeEditor', null)
   openEditor(input: IEditorInput): void {
     this.opened.push(input)
   }
@@ -130,10 +133,15 @@ const stubFile = {
   async rename() {},
 }
 
-function renderWithServices(search: FakeTextSearch, config: Record<string, unknown> = {}) {
+function renderWithServices(
+  search: FakeTextSearch,
+  config: Record<string, unknown> = {},
+  platform: HostPlatform = 'linux',
+) {
   const services = new ServiceCollection()
   const editor = new FakeEditorService()
   const status = new FakeStatusBar()
+  const registry = new FocusableRegistry()
   const watcherEmitter = new Emitter<readonly IFileChangeEvent[]>()
   const workspaceEmitter = new Emitter<IWorkspace | null>()
   const watcher = {
@@ -159,12 +167,15 @@ function renderWithServices(search: FakeTextSearch, config: Record<string, unkno
   services.set(IFileWatcherService, watcher as never)
   services.set(IWorkspaceService, workspace as never)
   services.set(IConfigurationService, stubConfigurationService(config))
+  services.set(IUriIdentityService, new UriIdentityService(platform))
+  services.set(IFocusableRegistry, registry)
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst)
   return {
     inst,
     editor,
     status,
+    registry,
     watcherEmitter,
     workspaceEmitter,
     rendered: render(
@@ -361,5 +372,94 @@ describe('SearchView', () => {
       await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
     })
     expect(search.searchCalls).toBeGreaterThan(before)
+  })
+
+  describe('focus target', () => {
+    const VIEW_ID = 'workbench.view.search.results'
+
+    async function renderWithResult(opts: { path?: string; platform?: HostPlatform } = {}) {
+      const path = opts.path ?? '/ws/a.ts'
+      const search = new FakeTextSearch()
+      search.results = [makeFileMatch(path, 1, 'foo bar')]
+      const ctx = renderWithServices(search, {}, opts.platform ?? 'linux')
+      const input = screen.getByLabelText('Search') as HTMLInputElement
+      act(() => {
+        fireEvent.change(input, { target: { value: 'foo' } })
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(PAST_DEBOUNCE_MS)
+      })
+      expect(screen.getByText(path.split('/').pop()!)).toBeTruthy()
+      return { ...ctx, input }
+    }
+
+    it('returns the tree container for the last activated match, not the ViewBody fallback', async () => {
+      const ctx = await renderWithResult()
+      const resource = URI.file('/ws/a.ts')
+      const matchId = `match:${resource.toString()}:0`
+      const active = ctx.inst.createInstance(FileEditorInput, resource)
+      ctx.editor.activeEditor.set(active, undefined)
+      searchSession.lastActivatedFocusId = matchId
+      // Registered by every real ViewBody; a primary that resolves to null would
+      // make FocusableRegistry hand this element back instead of the tree.
+      const fallback = document.createElement('div')
+      document.body.appendChild(fallback)
+      ctx.registry.register(VIEW_ID, () => fallback, { fallback: true })
+
+      const tree = screen.getByRole('tree', { name: 'Search results' })
+      let focused: unknown = null
+      act(() => {
+        focused = ctx.registry.get(VIEW_ID)!()
+      })
+
+      expect(focused).toBe(tree)
+      expect(document.activeElement).toBe(tree)
+      expect(
+        document
+          .querySelector('[role="treeitem"][aria-selected="true"]')
+          ?.getAttribute('data-row-key'),
+      ).toBe(matchId)
+      active.dispose()
+      fallback.remove()
+    })
+
+    it('matches the active editor to a result whose path only differs in case', async () => {
+      // The node id must be built from the *result's* URI: on a case-insensitive
+      // platform the editor's and the result's spellings compare equal, but only
+      // one of them names an existing tree node.
+      const ctx = await renderWithResult({ path: '/ws/A.ts', platform: 'win32' })
+      const active = ctx.inst.createInstance(FileEditorInput, URI.file('/ws/a.ts'))
+      ctx.editor.activeEditor.set(active, undefined)
+      const matchId = `match:${URI.file('/ws/A.ts').toString()}:0`
+      searchSession.lastActivatedFocusId = matchId
+
+      let focused: unknown = null
+      act(() => {
+        focused = ctx.registry.get(VIEW_ID)!()
+      })
+
+      expect(focused).toBe(screen.getByRole('tree', { name: 'Search results' }))
+      expect(
+        document
+          .querySelector('[role="treeitem"][aria-selected="true"]')
+          ?.getAttribute('data-row-key'),
+      ).toBe(matchId)
+      active.dispose()
+    })
+
+    it('falls back to the query input when the active editor is not in the results', async () => {
+      const ctx = await renderWithResult()
+      const active = ctx.inst.createInstance(FileEditorInput, URI.file('/ws/other.ts'))
+      ctx.editor.activeEditor.set(active, undefined)
+      searchSession.lastActivatedFocusId = `match:${URI.file('/ws/a.ts').toString()}:0`
+
+      let focused: unknown = null
+      act(() => {
+        focused = ctx.registry.get(VIEW_ID)!()
+      })
+
+      expect(focused).toBe(ctx.input)
+      active.dispose()
+    })
   })
 })

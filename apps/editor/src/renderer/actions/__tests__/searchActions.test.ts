@@ -9,6 +9,7 @@ import {
   IFileService,
   ILayoutService,
   IInstantiationService,
+  IViewDescriptorService,
   IViewsService,
   IWorkspaceService,
   InstantiationService,
@@ -18,6 +19,7 @@ import {
   PartId,
   ServiceCollection,
   URI,
+  ViewContainerLocation,
   registerAction2,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -38,6 +40,7 @@ import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.j
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { resetSearchSession, searchSession } from '../../workbench/search/searchSession.js'
+import { searchViewState } from '../../workbench/search/searchViewState.js'
 
 describe('FindInFilesAction', () => {
   const disposables: IDisposable[] = []
@@ -45,6 +48,8 @@ describe('FindInFilesAction', () => {
     while (disposables.length > 0) {
       disposables.pop()?.dispose()
     }
+    FileEditorRegistry._resetForTests()
+    resetSearchSession()
   })
 
   function makeLayoutService(visible: boolean, focused: boolean) {
@@ -74,6 +79,63 @@ describe('FindInFilesAction', () => {
     return { mock, openViewContainer }
   }
 
+  function makeViewDescriptorService(location: ViewContainerLocation) {
+    return {
+      _serviceBrand: undefined,
+      getViewContainerByViewId: vi.fn().mockReturnValue({ id: 'workbench.view.search' }),
+      getViewLocationById: vi.fn().mockReturnValue(location),
+    } as never
+  }
+
+  /** Mount a fake active editor whose selection reads as `selection`. */
+  function makeActiveEditor(selection: string): FileEditorInput {
+    const services = new ServiceCollection()
+    services.set(IFileService, { _serviceBrand: undefined } as never)
+    const input = new InstantiationService(services).createInstance(
+      FileEditorInput,
+      URI.file('/ws/a.ts'),
+    )
+    FileEditorRegistry.register(input, {
+      getSelection: () => ({ isEmpty: () => false }),
+      getModel: () => ({ getValueInRange: () => selection }),
+    } as never)
+    disposables.push({ dispose: () => input.dispose() })
+    return input
+  }
+
+  function setup(opts: {
+    visible: boolean
+    focused: boolean
+    activeId: string | undefined
+    selection?: string
+    location?: ViewContainerLocation
+  }) {
+    const layout = makeLayoutService(opts.visible, opts.focused)
+    const views = makeViewsService(opts.activeId)
+    const services = new ServiceCollection()
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
+    services.set(
+      IViewDescriptorService,
+      makeViewDescriptorService(opts.location ?? ViewContainerLocation.SideBar),
+    )
+    services.set(IFileService, { _serviceBrand: undefined } as never)
+    const inst = new InstantiationService(services)
+    const input = opts.selection === undefined ? null : makeActiveEditor(opts.selection)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { id: 1, activeEditor: input },
+    } as never)
+    disposables.push(registerAction2(FindInFilesAction))
+    return { inst, layout, views, input }
+  }
+
+  async function runFindInFiles(inst: InstantiationService) {
+    await inst.invokeFunction((accessor) =>
+      CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor),
+    )
+  }
+
   it('registers command, keybinding, and F1 menu entry', () => {
     disposables.push(registerAction2(FindInFilesAction))
     expect(CommandsRegistry.getCommand(FindInFilesAction.ID)).toBeDefined()
@@ -86,22 +148,9 @@ describe('FindInFilesAction', () => {
   })
 
   it('run() calls focusView when SideBar is hidden', async () => {
-    const layout = makeLayoutService(false, false)
-    const views = makeViewsService(undefined)
-    const services = new ServiceCollection()
-    services.set(ILayoutService, layout.mock)
-    services.set(IViewsService, views.mock)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: null },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(FindInFilesAction))
+    const { inst, layout } = setup({ visible: false, focused: false, activeId: undefined })
 
-    await inst.invokeFunction((accessor) => {
-      const cmd = CommandsRegistry.getCommand(FindInFilesAction.ID)!
-      return cmd.handler(accessor)
-    })
+    await runFindInFiles(inst)
 
     expect(layout.focusView).toHaveBeenCalledWith('workbench.view.search.results', {
       source: 'command',
@@ -110,21 +159,13 @@ describe('FindInFilesAction', () => {
   })
 
   it('run() calls focusView when search is visible but SideBar not focused', async () => {
-    const layout = makeLayoutService(true, false)
-    const views = makeViewsService('workbench.view.search')
-    const services = new ServiceCollection()
-    services.set(ILayoutService, layout.mock)
-    services.set(IViewsService, views.mock)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: null },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(FindInFilesAction))
-
-    await inst.invokeFunction((accessor) => {
-      return CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+    const { inst, layout } = setup({
+      visible: true,
+      focused: false,
+      activeId: 'workbench.view.search',
     })
+
+    await runFindInFiles(inst)
 
     expect(layout.focusView).toHaveBeenCalledWith('workbench.view.search.results', {
       source: 'command',
@@ -133,47 +174,98 @@ describe('FindInFilesAction', () => {
   })
 
   it('run() hides SideBar when search is active and SideBar is focused', async () => {
-    const layout = makeLayoutService(true, true)
-    const views = makeViewsService('workbench.view.search')
-    const services = new ServiceCollection()
-    services.set(ILayoutService, layout.mock)
-    services.set(IViewsService, views.mock)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: null },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(FindInFilesAction))
-
-    await inst.invokeFunction((accessor) => {
-      return CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+    const { inst, layout } = setup({
+      visible: true,
+      focused: true,
+      activeId: 'workbench.view.search',
     })
+
+    await runFindInFiles(inst)
 
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
     expect(layout.focusView).not.toHaveBeenCalled()
   })
 
-  it('run() calls focusView when a different container is active', async () => {
-    const layout = makeLayoutService(true, false)
-    const views = makeViewsService('workbench.view.explorer')
-    const services = new ServiceCollection()
-    services.set(ILayoutService, layout.mock)
-    services.set(IViewsService, views.mock)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: null },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(FindInFilesAction))
-
-    await inst.invokeFunction((accessor) => {
-      return CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+  it('hides the Panel when the Search container was moved out of the Side Bar', async () => {
+    // The Search container is user-movable; the visible/focused check must
+    // follow it instead of assuming the Side Bar.
+    const { inst, layout } = setup({
+      visible: true,
+      focused: true,
+      activeId: 'workbench.view.search',
+      location: ViewContainerLocation.Panel,
     })
+
+    await runFindInFiles(inst)
+
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, false)
+    expect(layout.focusView).not.toHaveBeenCalled()
+  })
+
+  it('run() calls focusView when a different container is active', async () => {
+    const { inst, layout } = setup({
+      visible: true,
+      focused: false,
+      activeId: 'workbench.view.explorer',
+    })
+
+    await runFindInFiles(inst)
 
     expect(layout.focusView).toHaveBeenCalledWith('workbench.view.search.results', {
       source: 'command',
     })
     expect(layout.setVisible).not.toHaveBeenCalled()
+  })
+
+  it('keeps the query when re-focusing an already visible Search, despite a selection', async () => {
+    const { inst, layout } = setup({
+      visible: true,
+      focused: false,
+      activeId: 'workbench.view.search',
+      selection: 'needle',
+    })
+    const before = searchViewState.seedSignal.get()
+
+    await runFindInFiles(inst)
+
+    expect(searchSession.seedPattern).toBeUndefined()
+    expect(searchViewState.seedSignal.get()).toBe(before)
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.search.results', {
+      source: 'command',
+    })
+  })
+
+  it('prefills from the editor selection when Search is not visible', async () => {
+    const { inst, layout } = setup({
+      visible: false,
+      focused: false,
+      activeId: 'workbench.view.search',
+      selection: 'needle',
+    })
+    const before = searchViewState.seedSignal.get()
+
+    await runFindInFiles(inst)
+
+    expect(searchSession.seedPattern).toBe('needle')
+    expect(searchViewState.seedSignal.get()).toBe(before + 1)
+    expect(layout.focusView).toHaveBeenCalled()
+  })
+
+  it('hides the SideBar without touching the query when Search is focused', async () => {
+    const { inst, layout } = setup({
+      visible: true,
+      focused: true,
+      activeId: 'workbench.view.search',
+      selection: 'needle',
+    })
+    const before = searchViewState.seedSignal.get()
+
+    await runFindInFiles(inst)
+
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
+    expect(layout.focusView).not.toHaveBeenCalled()
+    expect(searchSession.seedPattern).toBeUndefined()
+    expect(searchViewState.seedSignal.get()).toBe(before)
   })
 })
 

@@ -53,11 +53,14 @@ const fileService = {
   async rename() {},
 }
 
-function SearchActionsHarness() {
+function SearchActionsHarness({ preserveFocus = false }: { preserveFocus?: boolean }) {
   const actions = useSearchActions([], vi.fn(), '')
   return (
-    <button type="button" onClick={() => actions.onActivateMatch(resource, match, 0)}>
-      Open search result
+    <button
+      type="button"
+      onClick={() => actions.onActivateMatch(resource, match, 0, { preview: true, preserveFocus })}
+    >
+      {preserveFocus ? 'Preview search result' : 'Open search result'}
     </button>
   )
 }
@@ -76,13 +79,15 @@ describe('useSearchActions', () => {
     vi.useRealTimers()
   })
 
-  it('reveals a search match when Monaco mounts after the initial 50ms retry window', async () => {
+  function renderHarness(preserveFocus = false) {
     vi.useFakeTimers()
-    groups = new EditorGroupsService()
-    editorService = new EditorService(groups)
+    const groupsService = new EditorGroupsService()
+    const service = new EditorService(groupsService)
+    groups = groupsService
+    editorService = service
     const services = new ServiceCollection()
-    services.set(IEditorGroupsService, groups)
-    services.set(IEditorService, editorService)
+    services.set(IEditorGroupsService, groupsService)
+    services.set(IEditorService, service)
     services.set(IUriIdentityService, new UriIdentityService('linux'))
     services.set(IFileService, fileService as never)
     services.set(IDialogService, { _serviceBrand: undefined } as never)
@@ -91,39 +96,75 @@ describe('useSearchActions', () => {
 
     render(
       <ServicesContext.Provider value={instantiation}>
-        <SearchActionsHarness />
+        <SearchActionsHarness preserveFocus={preserveFocus} />
       </ServicesContext.Provider>,
     )
+    return {
+      groups: groupsService,
+      buttonName: preserveFocus ? 'Preview search result' : 'Open search result',
+    }
+  }
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open search result' }))
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(75)
-    })
-
-    const input = groups.activeGroup.activeEditor
-    expect(input).toBeInstanceOf(FileEditorInput)
+  function mountEditor(input: FileEditorInput, groupId: number) {
     const editor = {
       setSelection: vi.fn(),
       revealRangeInCenterIfOutsideViewport: vi.fn(),
       focus: vi.fn(),
     }
-    FileEditorRegistry.register(input as FileEditorInput, editor as never, groups.activeGroup.id)
+    FileEditorRegistry.register(input, editor as never, groupId)
+    return editor
+  }
+
+  const expectedRange = {
+    startLineNumber: 12,
+    startColumn: 7,
+    endLineNumber: 12,
+    endColumn: 13,
+  }
+
+  it('reveals a search match when Monaco mounts after the initial 50ms retry window', async () => {
+    const ctx = renderHarness()
+
+    fireEvent.click(screen.getByRole('button', { name: ctx.buttonName }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(75)
+    })
+
+    const input = ctx.groups.activeGroup.activeEditor
+    expect(input).toBeInstanceOf(FileEditorInput)
+    const editor = mountEditor(input as FileEditorInput, ctx.groups.activeGroup.id)
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100)
     })
 
-    expect(editor.setSelection).toHaveBeenCalledWith({
-      startLineNumber: 12,
-      startColumn: 7,
-      endLineNumber: 12,
-      endColumn: 13,
+    expect(editor.setSelection).toHaveBeenCalledWith(expectedRange)
+    expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(expectedRange)
+    // Click activation hands focus to the editor.
+    expect(editor.focus).toHaveBeenCalled()
+  })
+
+  it('keeps keyboard focus in the results tree for a Space preview', async () => {
+    const ctx = renderHarness(true)
+
+    fireEvent.click(screen.getByRole('button', { name: ctx.buttonName }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(75)
     })
-    expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith({
-      startLineNumber: 12,
-      startColumn: 7,
-      endLineNumber: 12,
-      endColumn: 13,
+
+    const input = ctx.groups.activeGroup.activeEditor
+    expect(input).toBeInstanceOf(FileEditorInput)
+    // Preview slot, not a pinned tab, and the group recorded the focus intent.
+    expect(ctx.groups.activeGroup.previewEditor).toBe(input)
+    expect(ctx.groups.activeGroup.lastActivationPreservedFocus).toBe(true)
+
+    const editor = mountEditor(input as FileEditorInput, ctx.groups.activeGroup.id)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100)
     })
+
+    expect(editor.setSelection).toHaveBeenCalledWith(expectedRange)
+    expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(expectedRange)
+    expect(editor.focus).not.toHaveBeenCalled()
   })
 })

@@ -82,7 +82,9 @@ export function SearchView() {
 
   // Focus target for FindInFilesAction: when the active editor's file is in the
   // results, focus the tree at that file (or the match last opened from it);
-  // otherwise focus the query input.
+  // otherwise focus the query input. Handing back the element that actually got
+  // focus keeps FocusableRegistry from falling back to the ViewBody wrapper and
+  // stealing focus from the tree again.
   useViewFocusable(
     'workbench.view.search.results',
     useCallback(() => {
@@ -92,16 +94,17 @@ export function SearchView() {
           ? active.resource
           : null
       const current = resultsRef.current
-      if (current.length > 0 && resource && treeRef.current) {
-        const inResults = current.some((fm) =>
-          uriIdentity.isEqual(URI.revive(fm.resource) as URI, resource),
-        )
-        if (inResults) {
-          const preferId =
-            searchSession.lastActivatedResource === resource.toString()
-              ? (searchSession.lastActivatedFocusId ?? null)
-              : null
-          if (treeRef.current.focusResource(resource, preferId)) return null
+      const tree = treeRef.current
+      if (current.length > 0 && resource && tree) {
+        for (const fm of current) {
+          // Use *its* URI for the node id: the editor's resource string can
+          // differ in spelling (case, encoding) from the one the search
+          // snapshot was built with.
+          const fileUri = URI.revive(fm.resource) as URI
+          if (!uriIdentity.isEqual(fileUri, resource)) continue
+          const focused = tree.focusResource(fileUri, searchSession.lastActivatedFocusId ?? null)
+          if (focused) return focused
+          break
         }
       }
       return inputRef.current
