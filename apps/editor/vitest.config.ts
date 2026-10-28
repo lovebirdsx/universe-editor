@@ -47,6 +47,7 @@ const rendererDomTests = [
   'src/renderer/services/editor/__tests__/DiffEditorInput.test.ts',
   'src/renderer/services/editor/__tests__/FileEditorInput.test.ts',
   'src/renderer/services/editor/__tests__/openPreviewInGroup.test.ts',
+  'src/renderer/services/editor/__tests__/activateGroupAndFocus.test.ts',
   'src/renderer/services/editor/__tests__/editorFocus.test.ts',
   'src/renderer/services/focus/__tests__/workbenchFocusRestorer.test.ts',
   'src/renderer/services/focus/__tests__/searchViewFocusLink.test.ts',

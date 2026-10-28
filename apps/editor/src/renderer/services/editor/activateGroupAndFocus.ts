@@ -34,6 +34,11 @@ export function activateGroupAndFocus(
   ctx.focusStack?.push({ partId: PartId.EditorArea, groupId: group.id })
   // Fire-and-forget: window focus is asynchronous, DOM focus is not.
   ctx.windowFocus.focusGroup(group)
+  // focusGroup → setActiveWindow → AuxiliaryEditorWindowService.activatePart(
+  // preserveFocus: true) writes the window-activation intent synchronously. This
+  // helper is an explicit reveal, so that intent must not veto the late-mounted
+  // editor's focus (same invariant as EditorGroupView's cross-window branch).
+  group.preserveFocusOnActivation?.(false)
   const active = group.activeEditor
   if (!active) return
   focusEditorInput(active, ctx.contextKeyService, group.id)

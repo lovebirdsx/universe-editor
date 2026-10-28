@@ -14,7 +14,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
 import type { ElectronApplication, Page } from '@playwright/test'
-import { mkTempDir } from '@universe-editor/e2e-harness'
+import { mkTempDir, QuickInputPO } from '@universe-editor/e2e-harness'
 
 const ECHO_AGENT_PATH = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -1141,6 +1141,106 @@ test.describe('@p0 auxiliary editor windows', () => {
       await workbench.quickInput.waitForHidden()
 
       await expectAuxiliaryFocus(electronApp, child, workbench, 'switch-aux-alpha.txt')
+    })
+
+    test('Ctrl+Tab from an auxiliary window focuses a background tab in the main window @regression', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      await workbench.waitForBootstrapFocusSettled()
+      const background = seedFile('switch-back-bg.txt', 'line one\nline two\nline three\n')
+      const mounted = seedFile('switch-back-mounted.txt', 'mounted\n')
+      const moved = seedFile('switch-back-moved.txt', 'moved\n')
+
+      for (const [file, name] of [
+        [background, 'switch-back-bg.txt'],
+        [mounted, 'switch-back-mounted.txt'],
+        [moved, 'switch-back-moved.txt'],
+      ] as const) {
+        await page.evaluate((p) => window.__E2E__!.openFileUri(p), file)
+        await expect.poll(() => workbench.getActiveEditorUri()).toContain(name)
+      }
+
+      const child = await waitForAuxWindow(
+        electronApp,
+        workbench,
+        'workbench.action.moveEditorToNewWindow',
+      )
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('switch-back-moved.txt'))
+
+      // The auxiliary window must own the active part. Clicking the main editor
+      // area first would move it back and hide the bug: the window-activation
+      // bridge only writes its preserve intent when the active part changes.
+      const token = (await auxWindows(page))[0]!.token
+      await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+      await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)?.focusedPart,
+          ),
+        )
+        .toBe(false)
+      const mainGroupId = await page.evaluate(
+        () => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)!.groupIds[0]!,
+      )
+      await expect
+        .poll(() =>
+          page.evaluate((id) => window.__E2E__!.getEditorGroupEditorUris(String(id)), mainGroupId),
+        )
+        .toEqual(
+          expect.arrayContaining([
+            expect.stringContaining('switch-back-bg.txt'),
+            expect.stringContaining('switch-back-mounted.txt'),
+          ]),
+        )
+
+      // Real gesture, entirely inside the auxiliary document: Ctrl+Tab opens the
+      // locked switcher, Enter hands the field over, and releasing Ctrl then
+      // cannot accept the highlighted row.
+      const quickInput = new QuickInputPO(child)
+      await child.keyboard.down('Control')
+      await child.keyboard.press('Tab')
+      await quickInput.waitForVisible()
+      await child.keyboard.press('Enter')
+      await expect(quickInput.input).not.toHaveAttribute('readonly', '')
+      await child.keyboard.up('Control')
+
+      await quickInput.input.fill('switch-back-bg')
+      const rows = quickInput.dialog.getByRole('option')
+      await expect.poll(() => rows.count()).toBe(1)
+      await expect(rows.first()).toHaveAttribute('aria-selected', 'true')
+      await child.keyboard.press('Enter')
+      await quickInput.waitForHidden()
+
+      // Regression: focus must land in the late-mounted Monaco of the background
+      // tab, not on the group body. The probe's setActiveEditorCursor calls
+      // monaco.focus(), so only read the cursor here — ArrowDown proves keyboard
+      // input actually reaches the editor.
+      await expect
+        .poll(() => page.evaluate(() => document.activeElement?.closest('.monaco-editor') !== null))
+        .toBe(true)
+      await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+      await expect.poll(() => workbench.getContextKey<boolean>('editorTextFocus')).toBe(true)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()))
+        .toEqual({ lineNumber: 1, column: 1 })
+      await page.keyboard.press('ArrowDown')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
+        .toBe(2)
+
+      const main = await page.evaluate(
+        () => window.__E2E__!.getWorkbenchWindows().find((w) => w.isMain)!,
+      )
+      expect(main.active).toBe(true)
+      expect(main.focusedPart).toBe(true)
+      expect(main.openTargetPart).toBe(true)
+      await expect.poll(() => workbench.getActiveEditorUri()).toContain('switch-back-bg.txt')
     })
 
     test('Ctrl+Shift+E in an auxiliary window reveals Explorer instead of hiding it', async ({
