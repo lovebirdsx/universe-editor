@@ -9,6 +9,20 @@ import { resolveOpenTarget, type OpenTarget } from '../../../services/editor/ope
 // The `u` flag is required — FILE_PATH_PATTERN embeds Unicode property classes
 // (\p{L}\p{N}) so CJK file names are recognized.
 const FILE_LINK_RE = new RegExp(FILE_PATH_PATTERN, 'gu')
+// The path grammar also matches the tail of a URL (`https://aka.ms/pscore6` in the
+// PowerShell banner); the token leading up to the match decides. Two+ letter
+// schemes only, so `C:/x` drive paths stay links.
+const URL_PREFIX_RE = /[A-Za-z][\w+.-]+:\/\S*$/
+
+/**
+ * `search: false` (hover) may only stat the exact path; the workspace-wide file
+ * search fallback is reserved for a click — on a huge tree it is a full ripgrep
+ * walk, and hovering terminal output must never start one.
+ */
+export type ResolveTerminalFile = (
+  absolutePath: string,
+  options?: { readonly search?: boolean },
+) => Promise<URI | null>
 
 export function resolvePath(cwd: string, filePath: string, home: string | undefined): string {
   const expanded = home ? (expandHomeDir(filePath, home) ?? filePath) : filePath
@@ -18,7 +32,7 @@ export function resolvePath(cwd: string, filePath: string, home: string | undefi
 
 export function createFileLinkProvider(
   term: Terminal,
-  resolveFile: (absolutePath: string) => Promise<URI | null>,
+  resolveFile: ResolveTerminalFile,
   openFile: (uri: URI, line?: number, col?: number, endLine?: number, target?: OpenTarget) => void,
   getCwd: () => string,
   getHome: () => string | undefined,
@@ -47,6 +61,11 @@ export function createFileLinkProvider(
       while ((m = FILE_LINK_RE.exec(win.text)) !== null) {
         const full = m[0] ?? ''
         const filePath = m[1] ?? ''
+        const tokenStart = Math.max(
+          win.text.lastIndexOf(' ', m.index - 1),
+          win.text.lastIndexOf('\t', m.index - 1),
+        )
+        if (URL_PREFIX_RE.test(win.text.slice(tokenStart + 1, m.index))) continue
         const { line: lineNum, col: colNum, endLine: endLineNum } = parseFilePathLocation(m)
         const start = mapStringIndexToCell(buf, win.startLineIndex, 0, m.index)
         if (!start) continue
@@ -85,10 +104,10 @@ export function createFileLinkProvider(
       }
 
       // Return links to xterm immediately so the pointer cursor appears without
-      // delay. Each activate() awaits the already-in-flight resolve promise —
-      // by click time it is almost always settled (cache hit or IPC done).
+      // delay. Hover only pre-stats the exact path (cheap); activate() awaits it
+      // and falls back to the workspace search only on a click.
       const links: ILink[] = onRow.map((match) => {
-        const resolvePromise = resolveFile(match.absPath)
+        const statPromise = resolveFile(match.absPath)
         return {
           range: {
             start: { x: match.start.x + 1, y: match.start.y + 1 },
@@ -98,9 +117,11 @@ export function createFileLinkProvider(
           activate(event: MouseEvent) {
             if (event.button !== 0) return
             const target = resolveOpenTarget(event)
-            void resolvePromise.then((uri) => {
-              if (uri) openFile(uri, match.lineNum, match.colNum, match.endLineNum, target)
-            })
+            void statPromise
+              .then((uri) => uri ?? resolveFile(match.absPath, { search: true }))
+              .then((uri) => {
+                if (uri) openFile(uri, match.lineNum, match.colNum, match.endLineNum, target)
+              })
           },
         }
       })

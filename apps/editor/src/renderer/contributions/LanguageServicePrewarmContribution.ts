@@ -34,6 +34,7 @@ import {
 import { languageActivationEvent } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { IFocusScopeService } from '../services/focus/FocusScopeService.js'
+import { IExcludeService } from '../services/exclude/ExcludeService.js'
 
 const DEFAULT_PREWARM_LANGUAGES = ['typescript', 'markdown']
 
@@ -41,6 +42,10 @@ const DEFAULT_PREWARM_LANGUAGES = ['typescript', 'markdown']
 const TSCONFIG_IGNORE_DIRS = ['node_modules', '.git', 'dist', 'out', 'build', '.next']
 /** Cap the enum so a pathological tree can't produce an unwieldy schema. */
 const MAX_TSCONFIGS = 200
+// 枚举只为 settings 补全服务：巨型工作区上宁可 enum 为空，也不让一次全树 rg
+// 跑满核几分钟（诊断包里 60s 超时 + 3 分钟后台构建就是它拉起的）。
+const TSCONFIG_SCAN_TIMEOUT_MS = 5_000
+const TSCONFIG_SCAN_MAX_DEPTH = 8
 
 export class LanguageServicePrewarmContribution
   extends Disposable
@@ -64,6 +69,7 @@ export class LanguageServicePrewarmContribution
     @IExtensionHostClientService private readonly _client: IExtensionHostClientService,
     @IFileSearchService private readonly _fileSearch: IFileSearchService,
     @IFocusScopeService private readonly _focus: IFocusScopeService,
+    @IExcludeService private readonly _exclude: IExcludeService,
   ) {
     super()
     this._register(
@@ -180,8 +186,12 @@ export class LanguageServicePrewarmContribution
           root,
           pattern: '',
           matchAll: true,
-          ignore: TSCONFIG_IGNORE_DIRS,
+          ignore: [...new Set([...TSCONFIG_IGNORE_DIRS, ...this._exclude.getDirNameIgnores()])],
+          excludes: this._exclude.getSearchExcludeGlobs(),
+          useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
           maxResults: 5000,
+          maxDepth: TSCONFIG_SCAN_MAX_DEPTH,
+          timeoutMs: TSCONFIG_SCAN_TIMEOUT_MS,
           // rg 侧先按文件名粗筛。没有它，枚举会把整个工作区读进来（十万级）
           // 再在这里过滤，还会撞上 maxResults 触发一份全盘清单的后台构建。
           // glob 是大小写不敏感的 --iglob 预筛（比后置正则宽：`tsconfig*.json` 还会

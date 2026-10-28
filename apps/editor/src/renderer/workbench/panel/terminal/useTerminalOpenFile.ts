@@ -11,7 +11,9 @@ import {
   withSelection,
 } from '@universe-editor/platform'
 import type { OpenTarget } from '../../../services/editor/openTarget.js'
-import { useService } from '../../useService.js'
+import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
+import { useOptionalService, useService } from '../../useService.js'
+import type { ResolveTerminalFile } from './terminalLinkProvider.js'
 
 const CACHE_TTL = 10_000
 
@@ -19,10 +21,12 @@ type CacheEntry = Promise<URI | null> | { uri: URI | null; expiresAt: number }
 
 /**
  * Returns a resolver that pre-warms during provideLinks and caches results for 10s.
- * Multiple callers for the same path share one in-flight promise.
+ * Multiple callers for the same path share one in-flight promise. Only a
+ * `search: true` call (a click) may fall back to the workspace file search.
  */
-export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI | null> {
+export function useResolveTerminalFile(): ResolveTerminalFile {
   const fileService = useService(IFileService)
+  const excludeService = useOptionalService(IExcludeService)
   const fileSearchService = useService(IFileSearchService)
   const workspaceService = useService(IWorkspaceService)
   const loggerService = useService(ILoggerService)
@@ -33,9 +37,11 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
   const cache = useRef(new Map<string, CacheEntry>())
 
   return useCallback(
-    (absolutePath: string): Promise<URI | null> => {
+    (absolutePath: string, options?: { readonly search?: boolean }): Promise<URI | null> => {
+      const search = options?.search === true
+      const cacheKey = `${search ? 's' : 'e'}|${absolutePath}`
       const now = Date.now()
-      const cached = cache.current.get(absolutePath)
+      const cached = cache.current.get(cacheKey)
       if (cached instanceof Promise) return cached
       if (cached !== undefined && cached.expiresAt > now) return Promise.resolve(cached.uri)
 
@@ -46,6 +52,7 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
           // scheme/authority 才能被 IFileService 按 scheme 分派到远端。
           const uri = absolutePathToWorkspaceUri(absolutePath, workspace?.folder)
           if (await fileService.exists(uri)) return uri
+          if (!search) return null
 
           if (!workspace) {
             logger.warn(`cannot resolve terminal link: ${absolutePath}`)
@@ -63,6 +70,15 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
             pattern,
             includeExactPathMatches: true,
             maxResults: 10,
+            // Same filters as Go to File, so the click shares Ctrl+P's disk listing
+            // instead of building a separate unfiltered (node_modules-included) one.
+            ...(excludeService
+              ? {
+                  excludes: excludeService.getSearchExcludeGlobs(),
+                  ignore: excludeService.getDirNameIgnores(),
+                  useIgnoreFiles: excludeService.getUseIgnoreFiles(),
+                }
+              : {}),
           })
 
           const first = 'results' in result ? result.results[0] : undefined
@@ -77,13 +93,13 @@ export function useResolveTerminalFile(): (absolutePath: string) => Promise<URI 
         }
       })()
 
-      cache.current.set(absolutePath, promise)
+      cache.current.set(cacheKey, promise)
       void promise.then((uri) => {
-        cache.current.set(absolutePath, { uri, expiresAt: Date.now() + CACHE_TTL })
+        cache.current.set(cacheKey, { uri, expiresAt: Date.now() + CACHE_TTL })
       })
       return promise
     },
-    [fileService, fileSearchService, workspaceService, logger],
+    [fileService, fileSearchService, workspaceService, excludeService, logger],
   )
 }
 

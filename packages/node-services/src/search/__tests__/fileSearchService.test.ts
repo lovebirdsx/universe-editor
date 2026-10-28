@@ -45,6 +45,52 @@ async function makeService(): Promise<FileSearchService> {
   return service
 }
 
+interface Internals {
+  _buildChain: Promise<void>
+  _entryFor(spec: unknown): { key: string; file?: { builtAt: number }; building?: unknown }
+  _build(entry: unknown, spec: unknown, claim: boolean): Promise<unknown>
+  _runBuild(...args: unknown[]): Promise<unknown>
+  _collectToFile(...args: unknown[]): Promise<unknown>
+}
+
+function internals(service: FileSearchService): Internals {
+  return service as unknown as Internals
+}
+
+function specFor(root: string, ignore: string[] = []) {
+  return {
+    rootFsPath: root,
+    excludes: [],
+    ignore,
+    maxDepth: 30,
+    scanPaths: undefined,
+    rootFilesInScope: false,
+    useIgnoreFiles: false,
+    glob: undefined,
+  }
+}
+
+/** Replace the rg walk with a budget-killed one that wrote `content`. */
+function mockBudgetKill(service: FileSearchService, content: string) {
+  return vi.spyOn(internals(service), '_collectToFile').mockImplementation(async (fh: unknown) => {
+    if (content) await (fh as { write(s: string): Promise<unknown> }).write(content)
+    return { code: null, stderr: '', budget: 'size' }
+  })
+}
+
+function buildSpy(service: FileSearchService) {
+  return vi.spyOn(
+    service as unknown as { _runBuild: (...args: unknown[]) => Promise<unknown> },
+    '_runBuild',
+  )
+}
+
+async function listingNames(cacheDir: string): Promise<string[]> {
+  // 缓存目录尚未创建 = 一份清单都没建过。
+  const names = await fs.readdir(cacheDir).catch(() => [] as string[])
+  return names.filter((n) => n.endsWith('.list'))
+}
+
 async function writeFile(root: string, relPath: string): Promise<void> {
   const target = path.join(root, relPath)
   await fs.mkdir(path.dirname(target), { recursive: true })
@@ -615,13 +661,14 @@ describe('FileSearchService', () => {
       expect(complete.limitHit).toBe(false)
     })
 
-    it('omits a timed-out listing too, and still warms the disk listing', async () => {
+    it('omits a timed-out listing too, without warming the disk listing', async () => {
       const root = await makeRoot()
       await writeFile(root, 'a.ts')
 
       const cacheDir = path.join(await makeRoot(), 'listings')
       const service = new FileSearchService(undefined, { cacheDir })
       services.push(service)
+      const build = vi.spyOn(internals(service), '_build')
 
       // timeoutMs: 0 → 走查在开跑前就超时：没有 capped，但同样没走完。
       const complete = await service.search({
@@ -636,12 +683,10 @@ describe('FileSearchService', () => {
       expect(asListing(complete).relPaths).toEqual([])
       expect(complete.stopReason).toBe('timeout')
 
-      // 超时也要预热磁盘清单：否则第一次交互式兜底搜索会在自己的调用里等完
-      // 整个构建（巨型工作区分钟级）。这里不做打分搜索，直接等清单落盘。
-      await vi.waitFor(async () => {
-        const listings = (await fs.readdir(cacheDir)).filter((n) => n.endsWith('.list'))
-        expect(listings).toHaveLength(1)
-      })
+      // 自动预热超时不得替它拉起全树构建：巨型工作区上那是分钟级的满核 rg。
+      // 等过磁盘探测那一跳，旧实现的预热就挂在它后面。
+      await new Promise((r) => setTimeout(r, 50))
+      expect(build).not.toHaveBeenCalled()
     })
 
     it('keeps the global best matches when accumulation is compacted mid-search', async () => {
@@ -897,48 +942,14 @@ describe('FileSearchService', () => {
       expect(complete.stopReason).toBe('canceled')
     })
 
-    it('does not warm the full listing cache for a capped include-filtered walk', async () => {
-      const root = await makeRoot()
-      const writes: Promise<void>[] = []
-      for (let i = 0; i < 20; i++) writes.push(writeFile(root, `gen/f${i}.json`))
-      await Promise.all(writes)
-
-      const cacheDir = path.join(await makeRoot(), 'listings')
-      const service = new FileSearchService(undefined, { cacheDir })
-      services.push(service)
-      const kick = vi.spyOn(
-        service as unknown as { _kickBackgroundBuild: (spec: unknown) => void },
-        '_kickBackgroundBuild',
-      )
-
-      const complete = await service.search({
-        root: URI.file(root),
-        pattern: '',
-        matchAll: true,
-        includeGlob: '*.json',
-        maxResults: 3,
-      })
-      expect(complete.limitHit).toBe(true)
-
-      // 过滤后的枚举命中上限只说明"匹配够多了"，不代表工作区大——为它预热一份全量
-      // 清单纯属浪费。断言的是"预热根本没被叫起"（确定性），而不是等 150ms 看有没有
-      // 落盘：后者既慢，又只在构建比等待更慢时才是证据。
-      expect(kick).not.toHaveBeenCalled()
-    })
-
-    it('still warms the listing cache for a capped walk without includeGlob', async () => {
+    it('does not build a disk listing for a capped matchAll walk', async () => {
       const root = await makeRoot()
       const writes: Promise<void>[] = []
       for (let i = 0; i < 20; i++) writes.push(writeFile(root, `gen/f${i}.ts`))
       await Promise.all(writes)
 
-      const cacheDir = path.join(await makeRoot(), 'listings')
-      const service = new FileSearchService(undefined, { cacheDir })
-      services.push(service)
-      const kick = vi.spyOn(
-        service as unknown as { _kickBackgroundBuild: (spec: unknown) => void },
-        '_kickBackgroundBuild',
-      )
+      const service = await makeService()
+      const build = buildSpy(service)
 
       const complete = await service.search({
         root: URI.file(root),
@@ -947,14 +958,215 @@ describe('FileSearchService', () => {
         maxResults: 3,
       })
       expect(complete.limitHit).toBe(true)
+      // 清单只由交互式打分查询按需构建（诊断包：预热与 tsconfig 枚举各拉一个满核 rg）。
+      expect(build).not.toHaveBeenCalled()
+    })
+  })
 
-      // 正向对照：同上一条对称，证明那条不是"预热从来就没跑过"。
-      expect(kick).toHaveBeenCalledTimes(1)
-      // 普通路径行为不变：撞上限说明工作区大，后台清单照建。
-      await vi.waitFor(async () => {
-        const listings = (await fs.readdir(cacheDir)).filter((n) => n.endsWith('.list'))
-        expect(listings).toHaveLength(1)
+  describe('listing build scheduling', () => {
+    it('runs at most one listing build at a time across keys', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'alpha.ts')
+      await writeFile(root, 'sub/beta.ts')
+
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const service = new FileSearchService(undefined, { cacheDir })
+      services.push(service)
+      const inner = service as unknown as {
+        _runBuild: (...args: unknown[]) => Promise<unknown>
+      }
+      const original = inner._runBuild.bind(service)
+      let running = 0
+      let peak = 0
+      vi.spyOn(inner, '_runBuild').mockImplementation(async (...args: unknown[]) => {
+        running++
+        peak = Math.max(peak, running)
+        try {
+          return await original(...args)
+        } finally {
+          running--
+        }
       })
+
+      // 两个不同 root（不同 key、不互相取代）同时冷启动打分查询。
+      const other = await makeRoot()
+      await writeFile(other, 'alpha.ts')
+      const results = await Promise.all([
+        service.search({ root: URI.file(root), pattern: 'alpha', maxResults: 10 }),
+        service.search({ root: URI.file(other), pattern: 'alpha', maxResults: 10 }),
+      ])
+      for (const r of results) {
+        expect(asMatches(r).results.map((m) => m.relativePath)).toEqual(['alpha.ts'])
+      }
+      expect(peak).toBe(1)
+    })
+
+    it('skips a queued build superseded by a newer claim for the same root', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'alpha.ts')
+      const service = await makeService()
+      const svc = internals(service)
+      // 卡住队头，确定性地让后面的构建全部排队（不依赖 fs 回调顺序）。
+      let release!: () => void
+      svc._buildChain = new Promise<void>((r) => (release = r))
+
+      const specA = specFor(root)
+      const specB = specFor(root, ['skip'])
+      const a = svc._build(svc._entryFor(specA), specA, true)
+      const b = svc._build(svc._entryFor(specB), specB, true)
+      // A 被再次请求：它重新成为最新，排在前面也不能被 B 挤掉。
+      const a2 = svc._build(svc._entryFor(specA), specA, true)
+      expect(a2).toBe(a)
+      release()
+
+      expect(await a).not.toBeNull()
+      expect(await b).toBeNull()
+    })
+
+    it('does not let a stale revalidation supersede a waited-for build', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'alpha.ts')
+      const service = await makeService()
+      const svc = internals(service)
+      let release!: () => void
+      svc._buildChain = new Promise<void>((r) => (release = r))
+
+      const specA = specFor(root)
+      const specB = specFor(root, ['skip'])
+      const waited = svc._build(svc._entryFor(specB), specB, true)
+      const revalidate = svc._build(svc._entryFor(specA), specA, false)
+      release()
+
+      expect(await waited).not.toBeNull()
+      // 保鲜重建不认领 root，且 root 已被别的 key 认领：放弃，不走树。
+      expect(await revalidate).toBeNull()
+    })
+
+    it('keeps an existing complete listing when a rebuild exceeds the budget', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'alpha.ts')
+      await writeFile(root, 'beta.ts')
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const service = new FileSearchService(undefined, { cacheDir })
+      services.push(service)
+      await service.search({ root: URI.file(root), pattern: 'alpha', maxResults: 5 })
+      const [complete] = await listingNames(cacheDir)
+
+      mockBudgetKill(service, 'alpha.ts\n')
+      const svc = internals(service)
+      const spec = specFor(root, [])
+      const rebuilt = (await svc._build(svc._entryFor(spec), spec, true)) as {
+        filePath: string
+        partial: boolean
+      }
+      // 旧的完整清单比新的残缺前缀更有用：保留并续期，残缺的不落盘。
+      expect(rebuilt.partial).toBe(false)
+      expect(path.basename(rebuilt.filePath)).toBe(complete)
+      expect(await listingNames(cacheDir)).toEqual([complete])
+      const again = await service.search({ root: URI.file(root), pattern: 'beta', maxResults: 5 })
+      expect(asMatches(again).results.map((r) => r.relativePath)).toEqual(['beta.ts'])
+    })
+
+    it('does not cache an empty budget-killed listing', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'alpha.ts')
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const service = new FileSearchService(undefined, { cacheDir })
+      services.push(service)
+      const collect = mockBudgetKill(service, '')
+
+      const first = await service.search({ root: URI.file(root), pattern: 'alpha', maxResults: 5 })
+      expect(first.stopReason).toBe('timeout')
+      expect(await listingNames(cacheDir)).toEqual([])
+      // 没有被当成 30 分钟的残缺缓存：下一次查询重新尝试构建。
+      collect.mockRestore()
+      const second = await service.search({ root: URI.file(root), pattern: 'alpha', maxResults: 5 })
+      expect(asMatches(second).results.map((r) => r.relativePath)).toEqual(['alpha.ts'])
+    })
+
+    it('prefers a complete listing on disk over a newer partial one', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'alpha.ts')
+      await writeFile(root, 'beta.ts')
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const first = new FileSearchService(undefined, { cacheDir })
+      services.push(first)
+      await first.search({ root: URI.file(root), pattern: 'alpha', maxResults: 5 })
+      const [complete] = await listingNames(cacheDir)
+      const key = complete!.slice(0, complete!.indexOf('-'))
+      const partial = `${key}-9999999999999.partial.list`
+      await fs.writeFile(path.join(cacheDir, partial), 'alpha.ts\n')
+
+      const second = new FileSearchService(undefined, { cacheDir })
+      services.push(second)
+      const result = await second.search({ root: URI.file(root), pattern: 'beta', maxResults: 5 })
+      expect(asMatches(result).results.map((r) => r.relativePath)).toEqual(['beta.ts'])
+      await vi.waitFor(async () => expect(await listingNames(cacheDir)).toEqual([complete]))
+    })
+
+    it('warms the disk listing only for a truncated walk that asks for it', async () => {
+      const root = await makeRoot()
+      const writes: Promise<void>[] = []
+      for (let i = 0; i < 20; i++) writes.push(writeFile(root, `gen/f${i}.ts`))
+      await Promise.all(writes)
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const service = new FileSearchService(undefined, { cacheDir })
+      services.push(service)
+
+      const base = { root: URI.file(root), pattern: '', matchAll: true, maxResults: 3 }
+      await service.search(base)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(await listingNames(cacheDir)).toEqual([])
+
+      // 用户打开 Ctrl+P（warmListing）才为击键兜底预建清单。
+      await service.search({ ...base, warmListing: true })
+      await vi.waitFor(async () => expect(await listingNames(cacheDir)).toHaveLength(1))
+    })
+
+    it('keeps a budget-truncated listing as a partial cache and reports truncation', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'd/f1.ts')
+      await writeFile(root, 'd/f2.ts')
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const service = new FileSearchService(undefined, { cacheDir })
+      services.push(service)
+      // 被 kill 时末行只写了一半（d/f2）。
+      const collect = mockBudgetKill(service, 'd/f1.ts\nd/f2')
+
+      const complete = await service.search({ root: URI.file(root), pattern: 'f', maxResults: 5 })
+      expect(asMatches(complete).results.map((r) => r.relativePath)).toEqual(['d/f1.ts'])
+      expect(complete.limitHit).toBe(true)
+      expect(complete.stopReason).toBe('maxResults')
+      const built = await listingNames(cacheDir)
+      expect(built).toHaveLength(1)
+      expect(built[0]!.endsWith('.partial.list')).toBe(true)
+      expect(await fs.readFile(path.join(cacheDir, built[0]!), 'utf8')).toBe('d/f1.ts\n')
+
+      // 残缺清单在其 TTL 内复用，不重走。
+      await service.search({ root: URI.file(root), pattern: 'f2', maxResults: 5 })
+      expect(collect).toHaveBeenCalledTimes(1)
+    })
+
+    it('adopts a partial listing left on disk by an earlier session', async () => {
+      const root = await makeRoot()
+      await writeFile(root, 'alpha.ts')
+      await writeFile(root, 'beta.ts')
+
+      const cacheDir = path.join(await makeRoot(), 'listings')
+      const first = new FileSearchService(undefined, { cacheDir })
+      services.push(first)
+      await first.search({ root: URI.file(root), pattern: 'alpha', maxResults: 5 })
+      const [name] = await listingNames(cacheDir)
+      // 伪造成上一会话超预算留下的残缺清单（只含 alpha）。
+      const partialName = name!.replace(/\.list$/, '.partial.list')
+      await fs.writeFile(path.join(cacheDir, partialName), `alpha.ts\n`)
+      await fs.unlink(path.join(cacheDir, name!))
+
+      const second = new FileSearchService(undefined, { cacheDir })
+      services.push(second)
+      const complete = await second.search({ root: URI.file(root), pattern: 'a', maxResults: 5 })
+      expect(asMatches(complete).results.map((r) => r.relativePath)).toEqual(['alpha.ts'])
+      expect(complete.limitHit).toBe(true)
     })
   })
 })

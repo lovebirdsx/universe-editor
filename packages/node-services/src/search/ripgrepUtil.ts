@@ -19,6 +19,12 @@ export function resolveSearchThreads(requested: number | undefined): number {
   return Math.max(1, os.cpus().length - 2)
 }
 
+// 后台清单构建没人在等结果，只配四分之一的核：巨型工作区上它要走几分钟，
+// 拿满核会把整机拖到 100%（诊断包里 3 个 rg × 14 线程）。
+export function resolveBackgroundThreads(): number {
+  return Math.max(1, Math.floor(os.cpus().length / 4))
+}
+
 export const rgDiskPath = resolveRipgrepDiskPath()
 
 export function escapeForRegex(value: string): string {

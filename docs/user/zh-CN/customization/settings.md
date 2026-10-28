@@ -89,7 +89,7 @@
 
 ```json
 {
-  'terminal.integrated.cwd': '${workspaceFolder}/scripts'
+  "terminal.integrated.cwd": "${workspaceFolder}/scripts"
 }
 ```
 

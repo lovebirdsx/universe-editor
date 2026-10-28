@@ -68,11 +68,11 @@ Markdown 的工作区符号打开项目后立即可用。TypeScript 不一样—
 
 ```json
 {
-  'js/ts.prewarm.projects': ['packages/core/tsconfig.json', 'apps/web/tsconfig.json']
+  "js/ts.prewarm.projects": ["packages/core/tsconfig.json", "apps/web/tsconfig.json"]
 }
 ```
 
-打开文件夹后，列出的每个 TS 项目都会在后台预热，`Ctrl+T` 随后即可搜到它们的符号。在 JSON 里编辑这一项时会**自动补全**当前工作区里真实存在的 `tsconfig.json` 路径，照着选就不会填错。
+打开文件夹后，列出的每个 TS 项目都会在后台预热，`Ctrl+T` 随后即可搜到它们的符号。在 JSON 里编辑这一项时会**自动补全**当前工作区里真实存在的 `tsconfig.json` 路径，照着选就不会填错。为保持编辑器流畅，查找只覆盖工作区前 8 层目录、且限时完成，所以超大项目或层级很深的项目可能只列出部分路径（甚至列不出来），这时手动填写完整路径同样有效。
 
 > 提示：这只影响"打开文件前"工作区符号是否就绪；无论是否预热，打开某个 `.ts` 文件后，它所属项目的符号都会正常可搜。
 

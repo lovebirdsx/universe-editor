@@ -34,7 +34,8 @@ import { IFocusScopeService } from '../services/focus/FocusScopeService.js'
 export const PREWARM_DELAY_MS = 3_000
 // 病态工作区的全盘走查是分钟级的主进程 I/O，而预热只是"让首次 Ctrl+P 少等一次"，
 // 不值这个价：超时的走查会被主进程整份丢弃（残缺子集会把"子集外"呈现成"搜不到"），
-// 之后完全由击键兜底搜索接管，主进程那边已开始后台构建磁盘清单。
+// 之后完全由击键兜底搜索接管。预热不带 warmListing，超时也不会拉起磁盘清单构建——
+// 那要等用户打开 Ctrl+P 或第一次兜底击键。
 export const PREWARM_BUDGET_MS = 5_000
 
 export class WorkspaceFileListingContribution extends Disposable implements IWorkbenchContribution {

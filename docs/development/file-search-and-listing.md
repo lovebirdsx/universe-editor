@@ -9,8 +9,18 @@
 ## 载荷形状（三条，代码注释即契约）
 
 - **DTO 判别联合**：`IFileSearchComplete = IFileSearchMatches {results} | IFileSearchListing {relPaths}`（`packages/platform/src/workbench/fileSearchService.ts:84-113`）。`matchAll` 场景只传**相对路径字符串数组**——`basename` 落末段、绝对 URI 由 join `root` 得出，不物化 match 对象。
-- **截断清单整份丢弃**：`omitTruncatedListing`（字段 doc comment `fileSearchService.ts:44-53`；实施在 `packages/node-services/src/search/fileSearchService.ts:450`）。残缺子集会把「子集外」呈现成「搜不到」，比不给更糟；renderer 因此从不持有残缺清单。注意 doc comment 里的**单向蕴含**：丢弃 ⇒ 空 `relPaths`，但 `limitHit: true` 不带该 flag 时仍返回走查到的部分。
+- **截断清单整份丢弃**：`omitTruncatedListing`（字段 doc comment `fileSearchService.ts:44-53`；实施在 `packages/node-services/src/search/fileSearchService.ts` 的 matchAll 分支）。残缺子集会把「子集外」呈现成「搜不到」，比不给更糟；renderer 因此从不持有残缺清单。注意 doc comment 里的**单向蕴含**：丢弃 ⇒ 空 `relPaths`，但 `limitHit: true` 不带该 flag 时仍返回走查到的部分。
 - **预热双常量正交**（`apps/editor/src/renderer/contributions/WorkspaceFileListingContribution.ts:30-38`）：`PREWARM_DELAY_MS = 3000`（何时开始，让首屏先稳定）/ `PREWARM_BUDGET_MS = 5000`（开始后最多走多久，到点整份丢弃由击键兜底）。当初用 `runWhenIdle` 不可靠——多窗口下新恢复的窗口几乎永远不 idle，首次 Ctrl+P 的走查全压在第一击键上。`listingWaitMs` 可注入，便于测试钳制。
+
+## 磁盘清单构建：谁能拉起、怎么限流（rg 打满 CPU 的教训）
+
+巨型工作区（UE 工程，百万级文件、无 .gitignore）曾出现 3 个 rg.exe 同时满核跑几分钟、整机 CPU 100%：自动预热与 tsconfig 枚举超时后各自拉起一份全树清单构建，终端链接悬停（PowerShell 横幅里的 `https://aka.ms/pscore6` 被当成路径）又用不带排除项的查询建了第三份 785 MB 清单。现行约束（`packages/node-services/src/search/fileSearchService.ts`，对齐 VSCode「全树走查只由用户操作触发」）：
+
+- **谁能拉起**：只有交互式打分查询（`_ensureListingForQuery`）和带 `warmListing` 的 matchAll（仅 Ctrl+P 打开时设置）。自动预热（`WorkspaceFileListingContribution`、tsconfig 枚举）超时/撞上限**不**构建清单；tsconfig 枚举自带 5s / `maxDepth 8` 预算与搜索排除项。
+- **怎么跑**：全局单槽排队（任何时刻至多一个构建）；排队中被同 root 新 key **认领**取代的构建直接放弃（保鲜重建不认领，不会挤掉有人在等的构建）；后台线程数 `cores/4` + `PRIORITY_BELOW_NORMAL`。
+- **预算**：时长 3 min / 清单 512 MB 任一超限即 kill，保留截到最后换行的前缀为 `.partial.list`（30 min TTL，查询结果报 `stopReason: 'maxResults'`）；空前缀不缓存；已有完整清单时不被残缺清单顶替（续期旧清单），磁盘探测也优先完整清单。完整清单 TTL = `max(5 min, 构建耗时 × 10)`。
+- **终端链接**：悬停只 stat，点击才走工作区兜底搜索（带与 Ctrl+P 相同的排除项，共享同一份清单 key）；`scheme:/` 前缀的 URL 尾段不出链接。
+- 排障：`fileSearch.log` 的 `listing built … queuedMs= threads=`、`partial=`、`superseded`、`exceeded budget` 行。
 
 ## 输入侧闸门与残留项
 

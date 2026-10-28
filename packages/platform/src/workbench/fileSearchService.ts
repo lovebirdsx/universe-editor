@@ -52,6 +52,13 @@ export interface IFileSearchQuery {
    */
   readonly omitTruncatedListing?: boolean
   /**
+   * `matchAll` only: when the walk is truncated (cap / timeout), start a
+   * budgeted background build of the on-disk listing so the scored fallback has
+   * it ready. Only user-gesture callers (opening Go to File) set this — an
+   * automatic prewarm must never start a full-tree walk on a huge workspace.
+   */
+  readonly warmListing?: boolean
+  /**
    * Workspace-relative paths to enumerate instead of the whole root (ripgrep
    * positional arguments — may name directories *or single files*; a focus
    * entry may be one file). Results resolve against `root`. **Absent** = not

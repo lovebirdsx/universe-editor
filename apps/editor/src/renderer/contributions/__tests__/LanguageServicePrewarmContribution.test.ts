@@ -18,12 +18,14 @@ import {
   IWorkspaceService,
   URI,
   type IFileSearchComplete,
+  type IFileSearchQuery,
   type IWorkspace,
 } from '@universe-editor/platform'
 import { type IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
 import { IExtensionHostClientService } from '../../services/extensions/ExtensionHostClientService.js'
 import { FakeFocusScopeService } from '../../services/focus/testing/fakeFocusScopeService.js'
+import { FakeExcludeService } from '../../services/exclude/testing/fakeExcludeService.js'
 
 function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
   const config = new ConfigurationService()
@@ -32,6 +34,7 @@ function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
   }
 
   const activations: string[] = []
+  const queries: IFileSearchQuery[] = []
   const onDidChangeContributions = new Emitter<readonly IExtensionDescriptionDto[]>()
   const client = {
     _serviceBrand: undefined,
@@ -52,14 +55,16 @@ function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
 
   const fileSearch = {
     _serviceBrand: undefined,
-    search: (): Promise<IFileSearchComplete> =>
-      Promise.resolve({
+    search: (query: IFileSearchQuery): Promise<IFileSearchComplete> => {
+      queries.push(query)
+      return Promise.resolve({
         relPaths: tsconfigPaths,
         limitHit: false,
         filesWalked: 0,
         directoriesWalked: 0,
         durationMs: 0,
-      }),
+      })
+    },
   } as unknown as IFileSearchService
 
   const contribution = new LanguageServicePrewarmContribution(
@@ -68,9 +73,10 @@ function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
     client,
     fileSearch,
     new FakeFocusScopeService(),
+    new FakeExcludeService(),
   )
 
-  return { contribution, activations, onDidChangeContributions, onDidChangeWorkspace }
+  return { contribution, activations, queries, onDidChangeContributions, onDidChangeWorkspace }
 }
 
 /** Read the currently-registered `js/ts.prewarm.projects` item schema. */
@@ -142,6 +148,19 @@ describe('LanguageServicePrewarmContribution', () => {
 
     const item = tsProjectsItemSchema()
     expect(item?.enum).toEqual(['packages/app/tsconfig.json', 'tsconfig.json'])
+    contribution.dispose()
+  })
+
+  // 诊断包：巨型工作区上无预算的 tsconfig 全树枚举跑了 60s，又拉起 3 分钟的后台构建。
+  it('bounds the tsconfig walk by time and depth and honours search excludes', async () => {
+    const { contribution, queries } = setup(undefined, ['tsconfig.json'])
+    await new Promise((r) => setTimeout(r, 0))
+
+    const query = queries[0]
+    expect(query?.timeoutMs).toBeGreaterThan(0)
+    expect(query?.maxDepth).toBeGreaterThan(0)
+    expect(query?.useIgnoreFiles).toBe(true)
+    expect(query?.ignore).toContain('node_modules')
     contribution.dispose()
   })
 

@@ -60,6 +60,8 @@ export interface MentionFileFilter {
    * subset is dropped main-side, see `omitTruncatedListing`).
    */
   readonly timeoutMs?: number
+  /** Forwarded as `IFileSearchQuery.warmListing` — user-gesture callers only. */
+  readonly warmListing?: boolean
 }
 
 /**
@@ -337,6 +339,7 @@ export async function loadWorkspaceFiles(
         // 丢弃后由 FileQuickAccessProvider 的击键兜底搜索接管。
         omitTruncatedListing: true,
         ...(filter?.timeoutMs !== undefined ? { timeoutMs: filter.timeoutMs } : {}),
+        ...(filter?.warmListing === true ? { warmListing: true } : {}),
         // An explicitly empty scanPaths is "focused on nothing yet" and must
         // reach the main side as [] — dropping it would re-scan the whole tree.
         ...(focus?.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),

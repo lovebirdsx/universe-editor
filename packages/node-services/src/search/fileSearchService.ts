@@ -12,12 +12,17 @@
  *      输入卡顿；现在重活全部在 rg 子进程里。
  *    - matchAll（预热清单）保持实时枚举语义：独立 `rg --files` 到 cap 即杀，不读
  *      缓存文件——renderer 侧 watcher 失效后的重载必须能看到新建文件。
+ *    - 磁盘清单构建只由交互式打分查询按需拉起（VSCode 同样不在打开工作区时全树走查）：
+ *      全局单槽排队、低优先级、少线程、限时限量，超预算保留残缺清单并长期复用。
+ *      此前 matchAll 预热/tsconfig 枚举一超时就各拉一个满核 rg，巨型工作区上
+ *      3 个 rg 同时跑几分钟，把整机 CPU 打到 100%。
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import type { FileHandle } from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
@@ -44,6 +49,7 @@ import {
   expandExcludeGlob,
   normalizeGlob,
   normalizeRel,
+  resolveBackgroundThreads,
   resolveSearchThreads,
   rgDiskPath,
 } from './ripgrepUtil.js'
@@ -60,7 +66,16 @@ const DEFAULT_SEARCH_TIMEOUT_MS = 60_000
 // 上限内候选按清单流序截断，basename 锚定那一路保证高质量命中优先存活。
 const PREFILTER_CAP = 10_000
 // 清单缓存新鲜期：过期后旧清单仍即时可用（stale-while-revalidate），后台重建。
+// 实际 TTL 随构建耗时放大（见 listingTtl）：走一次要几分钟的工作区不该每 5 分钟重走。
 const LISTING_TTL_MS = 5 * 60_000
+const LISTING_TTL_BUILD_FACTOR = 10
+// 超预算被截断的残缺清单：重走大概率再次超预算，长期复用、少重建。
+const PARTIAL_LISTING_TTL_MS = 30 * 60_000
+// 单次清单构建的预算：时长与清单字节数任一超限即 kill，保留已写出的部分。
+const DEFAULT_LISTING_BUILD_BUDGET_MS = 3 * 60_000
+const DEFAULT_LISTING_MAX_BYTES = 512 * 1024 * 1024
+const LISTING_SIZE_POLL_MS = 1_000
+const PARTIAL_SUFFIX = '.partial.list'
 const LISTING_SWEEP_AGE_MS = 7 * 24 * 60 * 60_000
 // 长驻编辑器不会重启，只在构造时扫一次等于永不回收——此前 87 份清单攒到 8 GB
 // （单份 760 MB，大工作区全量枚举）。按年龄之外再加总量上限，超了按 mtime 从旧到新淘汰。
@@ -190,9 +205,43 @@ interface RgCollectExit {
   readonly code: number | null
   readonly error?: string
   readonly stderr: string
+  /** Set when the build budget (time / bytes) killed rg — the output is a prefix. */
+  readonly budget?: 'time' | 'size'
 }
 
-function fileListArgs(spec: ListingSpec): string[] {
+/** Drops a half-written last line; returns the new size. */
+async function truncateToLastNewline(filePath: string): Promise<number> {
+  const fh = await fs.open(filePath, 'r+')
+  try {
+    const { size } = await fh.stat()
+    // 路径行远短于 64 KB：尾块里找不到换行只可能是整块都属于一行残缺垃圾，一并截掉。
+    const chunk = Buffer.alloc(Math.min(size, 64 * 1024))
+    await fh.read(chunk, 0, chunk.length, size - chunk.length)
+    const lastNl = chunk.lastIndexOf(0x0a)
+    const newSize = lastNl === -1 ? size - chunk.length : size - chunk.length + lastNl + 1
+    await fh.truncate(newSize)
+    return newSize
+  } finally {
+    await fh.close()
+  }
+}
+
+function listingTtl(file: ListingFile): number {
+  if (file.partial) return PARTIAL_LISTING_TTL_MS
+  return Math.max(LISTING_TTL_MS, file.buildMs * LISTING_TTL_BUILD_FACTOR)
+}
+
+// 后台构建与用户交互抢 CPU 时让路；失败（权限/平台不支持）不影响构建本身。
+function lowerPriority(child: ChildProcess): void {
+  if (child.pid === undefined) return
+  try {
+    os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL)
+  } catch {
+    // 进程已退出或无权限。
+  }
+}
+
+function fileListArgs(spec: ListingSpec, threads = resolveSearchThreads(undefined)): string[] {
   const args = ['--files', '--hidden', '--no-require-git']
   // See buildRgArgs: the file-name listing follows the same search.useIgnoreFiles
   // setting so Ctrl+P and text search agree on what is part of the workspace.
@@ -205,7 +254,7 @@ function fileListArgs(spec: ListingSpec): string[] {
     '--max-depth',
     String(spec.maxDepth),
     '--threads',
-    String(resolveSearchThreads(undefined)),
+    String(threads),
   )
   // 正向 glob 走 --iglob（大小写不敏感）：它是"预筛"，调用方还会再精确过滤一次
   // （如 tsconfig 的 /i 正则）——预筛比后置过滤窄就会把后置过滤救不回的文件静默丢掉
@@ -263,10 +312,15 @@ function listingKey(spec: ListingSpec): string {
 interface ListingFile {
   readonly filePath: string
   readonly builtAt: number
+  /** Build wall time; 0 when unknown (adopted from disk across a restart). */
+  readonly buildMs: number
+  /** Cut short by the build budget — a prefix of the tree, not all of it. */
+  readonly partial: boolean
 }
 
 interface ListingEntry {
   readonly key: string
+  readonly rootKey: string
   file?: ListingFile
   building?: Promise<ListingFile | null>
   diskProbed?: boolean
@@ -294,6 +348,10 @@ export interface FileSearchServiceOptions {
    * 可注入是为了让测试真正覆盖淘汰分支：真造一份超预算的清单不现实。
    */
   readonly listingCacheBudgetBytes?: number
+  /** 单次清单构建时长上限（默认 {@link DEFAULT_LISTING_BUILD_BUDGET_MS}）。 */
+  readonly listingBuildBudgetMs?: number
+  /** 单份清单字节上限（默认 {@link DEFAULT_LISTING_MAX_BYTES}）。 */
+  readonly listingMaxBytes?: number
 }
 
 export class FileSearchService extends Disposable implements IFileSearchService {
@@ -303,9 +361,16 @@ export class FileSearchService extends Disposable implements IFileSearchService 
   private readonly _cacheDir: string
   private readonly _listingWaitMs: number
   private readonly _cacheBudgetBytes: number
+  private readonly _buildBudgetMs: number
+  private readonly _maxListingBytes: number
   private readonly _listings = new Map<string, ListingEntry>()
   private readonly _procs = new Set<ChildProcess>()
   private _sweepTimer: NodeJS.Timeout | undefined
+  // 全局单槽：任意时刻至多一个清单构建在跑（不分 key / root），其余排队。
+  private _buildChain: Promise<void> = Promise.resolve()
+  private _queuedBuilds = 0
+  // 每个 root 最近一次被请求构建的 key：排队期间被同 root 新 key 取代的构建直接放弃。
+  private readonly _latestBuildKeyByRoot = new Map<string, string>()
 
   constructor(loggerService?: ILoggerServiceType, options?: FileSearchServiceOptions) {
     super()
@@ -313,6 +378,8 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     this._cacheDir = options?.cacheDir ?? path.join(getTempRoot(), 'universe-editor-file-listings')
     this._listingWaitMs = options?.listingWaitMs ?? LISTING_WAIT_MS
     this._cacheBudgetBytes = options?.listingCacheBudgetBytes ?? DEFAULT_LISTING_CACHE_BUDGET_BYTES
+    this._buildBudgetMs = options?.listingBuildBudgetMs ?? DEFAULT_LISTING_BUILD_BUDGET_MS
+    this._maxListingBytes = options?.listingMaxBytes ?? DEFAULT_LISTING_MAX_BYTES
     void this._sweepStaleListings()
     this._sweepTimer = setInterval(() => void this._sweepStaleListings(), LISTING_SWEEP_INTERVAL_MS)
     // 卫生定时器不该把 Electron 主进程钉住。
@@ -357,12 +424,6 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     if (token?.isCancellationRequested) stopReason = 'canceled'
     else if (Date.now() >= deadlineAt) stopReason = 'timeout'
     if (stopReason !== null) {
-      // 预算耗尽发生在走查之前：没有 capped，但它同样说明这是巨型工作区，
-      // 提前把磁盘清单建好（取消则不必——调用方已经不要结果了）。带 includeGlob
-      // 的枚举是 findFiles 那类"只要这一类文件"的请求，不走模糊兜底，不必预热。
-      if (matchAll && stopReason === 'timeout' && includeAccept === undefined) {
-        this._kickBackgroundBuild(spec)
-      }
       return matchAll
         ? this._completeListing(root.fsPath, [], {
             filesWalked,
@@ -402,7 +463,6 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       // 覆盖的根级文件）：主枚举整体跳过，只留根文件浅枚举，绝不能回退全量。
       let lines: string[] = []
       let scanned = 0
-      let capped = false
       if (spec.scanPaths === undefined || spec.scanPaths.length > 0) {
         const res = await this._runRgLines({
           args: fileListArgs(spec),
@@ -415,7 +475,6 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         })
         lines = res.lines
         scanned = res.scanned
-        capped = res.capped
         stopReason = res.stopReason ?? (res.capped ? 'maxResults' : null)
       }
       // 聚焦时根的直接文件在任何 scan path 之外，需要一次独立的浅层枚举补上。
@@ -431,18 +490,24 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         })
         lines = [...lines, ...rootRes.lines]
         scanned += rootRes.scanned
-        capped = capped || rootRes.capped
         stopReason = rootRes.stopReason ?? (rootRes.capped ? 'maxResults' : null)
       }
       // scanned 是扫过的行数（含被 includeGlob 过滤掉的），不是返回条数。
       filesWalked = scanned
-      // 清单没走完说明这是巨型工作区：renderer 之后的每次击键都会走打分兜底，
-      // 提前把磁盘清单建好（后台，不阻塞本次调用）。超时同样要建——否则第一次
-      // 交互式兜底搜索会自己在调用里等完整个构建（分钟级）。带 includeGlob 的
-      // 枚举例外：撞上限只说明"匹配够多了"，不代表工作区大，而这类调用方
-      //（findFiles）也不走打分兜底，为它预热全量清单纯属浪费。
-      if (includeAccept === undefined && (capped || stopReason === 'timeout')) {
-        this._kickBackgroundBuild(spec)
+      // 截断/超时的 matchAll 只在调用方声明 warmListing（用户手势：打开 Ctrl+P）时
+      // 预热磁盘清单。自动预热（打开工作区、tsconfig 枚举）替它们拉起分钟级全树走查
+      // 正是巨型工作区 CPU 打满的根因；它们的清单留给交互式打分查询按需构建。
+      if (
+        query.warmListing === true &&
+        includeAccept === undefined &&
+        stopReason !== null &&
+        stopReason !== 'canceled'
+      ) {
+        const entry = this._entryFor(spec)
+        void this._probeDisk(entry).then(() => {
+          if (entry.file && Date.now() - entry.file.builtAt < listingTtl(entry.file)) return
+          void this._build(entry, spec, true)
+        })
       }
       // 调用方用不了残缺子集时必须整份丢弃（模糊过滤会把"子集外"呈现成"搜不到"），
       // 十万条路径本来也不必跨 IPC —— 它正是巨型工作区堵住 renderer 主线程的原因。
@@ -462,9 +527,10 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         // 不打 error。清单后台继续构建，下一次击键再用。
         stopReason = listing
       } else if (listing === null) {
-        // 清单构建失败（rg 不可用等）：只剩 exact-path 探测结果，标记截断。
+        // 清单构建失败（rg 不可用、排队时被同 root 新请求取代等）：只剩 exact-path
+        // 探测结果，标记截断。
         stopReason = 'timeout'
-        this._logger.error(`fileSearch listing unavailable root=${spec.rootFsPath}`)
+        this._logger.warn(`fileSearch listing unavailable root=${spec.rootFsPath}`)
       } else {
         const piece = longestPiece(pattern)
         const runFilter = (regex: string): Promise<RgLinesResult> =>
@@ -529,7 +595,8 @@ export class FileSearchService extends Disposable implements IFileSearchService 
             scoreFloor = scored[scored.length - 1]!.score
           }
         }
-        if (prefilterCapped && stopReason === null) stopReason = 'maxResults'
+        // 残缺清单只覆盖树的一部分：结果照给，但必须报截断。
+        if ((prefilterCapped || listing.partial) && stopReason === null) stopReason = 'maxResults'
       }
     }
 
@@ -571,19 +638,13 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     const key = listingKey(spec)
     let entry = this._listings.get(key)
     if (!entry) {
-      entry = { key }
+      entry = {
+        key,
+        rootKey: getPathComparisonKey(spec.rootFsPath, normalizePlatform(process.platform)),
+      }
       this._listings.set(key, entry)
     }
     return entry
-  }
-
-  private _kickBackgroundBuild(spec: ListingSpec): void {
-    const entry = this._entryFor(spec)
-    void this._probeDisk(entry).then(() => {
-      if (entry.building) return
-      if (entry.file && Date.now() - entry.file.builtAt < LISTING_TTL_MS) return
-      void this._build(entry, spec)
-    })
   }
 
   /**
@@ -600,12 +661,13 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     const entry = this._entryFor(spec)
     await this._probeDisk(entry)
     if (entry.file) {
-      if (Date.now() - entry.file.builtAt >= LISTING_TTL_MS && !entry.building) {
-        void this._build(entry, spec)
+      // 过期重建只是保鲜：不认领 root，不能把别人正在等的构建挤掉。
+      if (Date.now() - entry.file.builtAt >= listingTtl(entry.file) && !entry.building) {
+        void this._build(entry, spec, false)
       }
       return entry.file
     }
-    const building = entry.building ?? this._build(entry, spec)
+    const building = this._build(entry, spec, true)
     // 查询等待预算取二者较小：清单等待上限 vs 本次搜索自己的 deadline。
     const waitDeadline = Math.min(deadlineAt, Date.now() + this._listingWaitMs)
     let sub: IDisposable | undefined
@@ -632,101 +694,203 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       const names = (await fs.readdir(this._cacheDir))
         .filter((n) => n.startsWith(`${entry.key}-`) && n.endsWith('.list'))
         .sort()
-      const newest = names[names.length - 1]
+      // 完整清单优先于（哪怕更新的）残缺清单。
+      const complete = names.filter((n) => !n.endsWith(PARTIAL_SUFFIX))
+      const newest = (complete.length > 0 ? complete : names).at(-1)
       if (newest === undefined) return
-      for (const old of names.slice(0, -1)) {
+      for (const old of names) {
+        if (old === newest) continue
         void fs.unlink(path.join(this._cacheDir, old)).catch(() => undefined)
       }
       const filePath = path.join(this._cacheDir, newest)
       const stat = await fs.stat(filePath)
       if (entry.file === undefined) {
-        entry.file = { filePath, builtAt: stat.mtimeMs }
+        entry.file = {
+          filePath,
+          builtAt: stat.mtimeMs,
+          buildMs: 0,
+          partial: newest.endsWith(PARTIAL_SUFFIX),
+        }
       }
     } catch {
       // 缓存目录尚不存在。
     }
   }
 
-  private _build(entry: ListingEntry, spec: ListingSpec): Promise<ListingFile | null> {
+  /**
+   * @param claim 有调用方在等这份清单（交互式查询 / warmListing）：认领该 root 的
+   *   「最新 key」，排在它前面的同 root 旧 key 构建将被放弃。保鲜重建不认领。
+   */
+  private _build(
+    entry: ListingEntry,
+    spec: ListingSpec,
+    claim: boolean,
+  ): Promise<ListingFile | null> {
+    // 已在排队的 key 被再次请求也算"最新"，否则它会被更早的另一 key 挤掉。
+    if (claim) this._latestBuildKeyByRoot.set(entry.rootKey, entry.key)
     if (entry.building) return entry.building
-    const startedAt = Date.now()
-    const promise = (async (): Promise<ListingFile | null> => {
-      try {
-        await fs.mkdir(this._cacheDir, { recursive: true })
-        const stamp = Date.now()
-        const tmpPath = path.join(this._cacheDir, `${entry.key}-${stamp}.building`)
-        const finalPath = path.join(this._cacheDir, `${entry.key}-${stamp}.list`)
-        const fh = await fs.open(tmpPath, 'w')
-        // 聚焦且 scanPaths 为空时主枚举整体跳过（聚焦但无可扫路径），清单只由
-        // 根文件浅枚举构成；undefined（未聚焦）则照常全量。
-        const exit =
-          spec.scanPaths === undefined || spec.scanPaths.length > 0
-            ? await this._collectToFile(fh, fileListArgs(spec), spec.rootFsPath)
-            : { code: 0 as number | null, stderr: '' }
-        // 聚焦时根的直接文件在任何 scan path 之外：主清单写完后追加一次浅层枚举。
-        let rootExit: RgCollectExit | undefined
-        if (
-          exit.error === undefined &&
-          exit.code !== null &&
-          spec.rootFilesInScope &&
-          spec.scanPaths !== undefined
-        ) {
-          rootExit = await this._collectToFile(
-            fh,
-            fileListArgs({ ...spec, scanPaths: [], maxDepth: 1 }),
-            spec.rootFsPath,
-          )
-        }
-        await fh.close()
-        // code === null 意味着 spawn 失败或被 kill（dispose/部分退出）——清单不完整，
-        // 绝不能当可用缓存落盘。rg 对个别不可读目录会以 code 2 退出但清单仍有效。
-        if (exit.error !== undefined || exit.code === null) {
-          await fs.unlink(tmpPath).catch(() => undefined)
-          if (exit.error !== undefined) {
-            this._logger.error(`fileSearch listing build failed: ${exit.error}`)
-          }
-          return null
-        }
-        // 根文件补扫失败只丢根直接文件（数量极少），清单主体完整，仍可落盘。
-        if (rootExit !== undefined && (rootExit.error !== undefined || rootExit.code === null)) {
-          this._logger.warn(
-            `fileSearch root-files listing partial: ${rootExit.error ?? 'killed before exit'}`,
-          )
-        }
-        await fs.rename(tmpPath, finalPath)
-        const prev = entry.file
-        entry.file = { filePath: finalPath, builtAt: Date.now() }
-        if (prev) void fs.unlink(prev.filePath).catch(() => undefined)
-        const stat = await fs.stat(finalPath).catch(() => null)
-        this._logger.info(
-          `fileSearch listing built root=${spec.rootFsPath} bytes=${stat?.size ?? -1} ` +
-            `exit=${exit.code} ms=${Date.now() - startedAt}`,
-        )
-        if (exit.code !== 0 && exit.code !== 1 && exit.stderr.trim().length > 0) {
-          this._logger.warn(
-            `fileSearch listing build partial (exit=${exit.code}): ${exit.stderr.split('\n')[0]}`,
-          )
-        }
-        return entry.file
-      } catch (err) {
-        this._logger.error(`fileSearch listing build error: ${(err as Error).message}`)
-        return null
-      } finally {
+    const queuedAt = Date.now()
+    const queuedAhead = this._queuedBuilds++
+    if (queuedAhead > 0) {
+      this._logger.info(
+        `fileSearch listing build queued root=${spec.rootFsPath} key=${entry.key} ahead=${queuedAhead}`,
+      )
+    }
+    const promise = this._buildChain
+      .then(() => this._runBuild(entry, spec, queuedAt))
+      .finally(() => {
+        this._queuedBuilds--
         delete entry.building
-      }
-    })()
+      })
+    // 链上只挂"轮到下一个"的信号，单个构建的失败不能把后面的全堵死。
+    this._buildChain = promise.then(
+      () => undefined,
+      () => undefined,
+    )
     entry.building = promise
     return promise
   }
 
+  private async _runBuild(
+    entry: ListingEntry,
+    spec: ListingSpec,
+    queuedAt: number,
+  ): Promise<ListingFile | null> {
+    if (this._store.isDisposed) return null
+    // 排队期间同 root 已被另一组参数（排除项/聚焦变了）请求：这份旧 key 的清单
+    // 不会再有人用，别为它走一遍整棵树。
+    const latest = this._latestBuildKeyByRoot.get(entry.rootKey)
+    if (latest !== undefined && latest !== entry.key) {
+      this._logger.info(`fileSearch listing build superseded root=${spec.rootFsPath}`)
+      return null
+    }
+    const startedAt = Date.now()
+    try {
+      await fs.mkdir(this._cacheDir, { recursive: true })
+      const stamp = Date.now()
+      const tmpPath = path.join(this._cacheDir, `${entry.key}-${stamp}.building`)
+      const fh = await fs.open(tmpPath, 'w')
+      const budget = {
+        deadlineAt: startedAt + this._buildBudgetMs,
+        maxBytes: this._maxListingBytes,
+      }
+      const threads = resolveBackgroundThreads()
+      // 聚焦且 scanPaths 为空时主枚举整体跳过（聚焦但无可扫路径），清单只由
+      // 根文件浅枚举构成；undefined（未聚焦）则照常全量。
+      const exit: RgCollectExit =
+        spec.scanPaths === undefined || spec.scanPaths.length > 0
+          ? await this._collectToFile(
+              fh,
+              tmpPath,
+              fileListArgs(spec, threads),
+              spec.rootFsPath,
+              budget,
+            )
+          : { code: 0, stderr: '' }
+      // 聚焦时根的直接文件在任何 scan path 之外：主清单写完后追加一次浅层枚举。
+      let rootExit: RgCollectExit | undefined
+      // 主枚举超预算被 kill 时末行可能写了一半，追加会把根文件路径粘到半行上：
+      // 残缺清单本就不完整，干脆不补扫。
+      if (
+        exit.error === undefined &&
+        exit.code !== null &&
+        spec.rootFilesInScope &&
+        spec.scanPaths !== undefined
+      ) {
+        rootExit = await this._collectToFile(
+          fh,
+          tmpPath,
+          fileListArgs({ ...spec, scanPaths: [], maxDepth: 1 }, threads),
+          spec.rootFsPath,
+          { deadlineAt: Number.POSITIVE_INFINITY, maxBytes: Number.POSITIVE_INFINITY },
+        )
+      }
+      await fh.close()
+      // code === null 且不是预算 kill，意味着 spawn 失败或被 dispose 杀掉——清单
+      // 不完整且原因不明，绝不能当可用缓存落盘。rg 对个别不可读目录会以 code 2
+      // 退出但清单仍有效。
+      if (exit.error !== undefined || (exit.code === null && exit.budget === undefined)) {
+        await fs.unlink(tmpPath).catch(() => undefined)
+        if (exit.error !== undefined) {
+          this._logger.error(`fileSearch listing build failed: ${exit.error}`)
+        }
+        return null
+      }
+      // 根文件补扫失败只丢根直接文件（数量极少），清单主体完整，仍可落盘。
+      if (rootExit !== undefined && (rootExit.error !== undefined || rootExit.code === null)) {
+        this._logger.warn(
+          `fileSearch root-files listing partial: ${rootExit.error ?? 'killed before exit'}`,
+        )
+      }
+      const partial = exit.budget !== undefined
+      const prev = entry.file
+      const buildMs = Date.now() - startedAt
+      if (partial) {
+        // 超预算被 kill 时最后一行可能只写了一半，截到最后一个换行。
+        const size = await truncateToLastNewline(tmpPath)
+        // 一行没写出来（卡住的网络盘、被饿死的机器）的空清单不缓存，下次再试；
+        // 已有完整清单时残缺的新清单也不顶替它——旧的完整清单比新的残缺前缀更有用，
+        // 续期旧清单（按本次构建耗时放大 TTL），免得马上又走一遍超预算的树。
+        if (size === 0 || (prev !== undefined && !prev.partial)) {
+          await fs.unlink(tmpPath).catch(() => undefined)
+          this._logger.warn(
+            `fileSearch listing build exceeded budget=${exit.budget} root=${spec.rootFsPath} ` +
+              `ms=${buildMs} bytes=${size}; ${prev ? 'keeping previous listing' : 'discarded'}`,
+          )
+          if (prev === undefined) return null
+          const now = new Date()
+          await fs.utimes(prev.filePath, now, now).catch(() => undefined)
+          entry.file = { ...prev, builtAt: now.getTime(), buildMs }
+          return entry.file
+        }
+      }
+      const finalPath = path.join(
+        this._cacheDir,
+        `${entry.key}-${stamp}${partial ? PARTIAL_SUFFIX : '.list'}`,
+      )
+      await fs.rename(tmpPath, finalPath)
+      entry.file = { filePath: finalPath, builtAt: Date.now(), buildMs, partial }
+      if (prev) void fs.unlink(prev.filePath).catch(() => undefined)
+      const stat = await fs.stat(finalPath).catch(() => null)
+      const summary =
+        `fileSearch listing built root=${spec.rootFsPath} bytes=${stat?.size ?? -1} ` +
+        `exit=${exit.code} ms=${buildMs} queuedMs=${startedAt - queuedAt} threads=${threads}`
+      if (partial) {
+        this._logger.warn(
+          `${summary} partial=${exit.budget} (build budget exceeded; reused for ` +
+            `${PARTIAL_LISTING_TTL_MS / 60_000}min)`,
+        )
+      } else {
+        this._logger.info(summary)
+      }
+      if (
+        exit.code !== null &&
+        exit.code !== 0 &&
+        exit.code !== 1 &&
+        exit.stderr.trim().length > 0
+      ) {
+        this._logger.warn(
+          `fileSearch listing build partial (exit=${exit.code}): ${exit.stderr.split('\n')[0]}`,
+        )
+      }
+      return entry.file
+    } catch (err) {
+      this._logger.error(`fileSearch listing build error: ${(err as Error).message}`)
+      return null
+    }
+  }
+
   private _collectToFile(
     fh: FileHandle,
+    filePath: string,
     args: readonly string[],
     cwd: string,
+    budget: { readonly deadlineAt: number; readonly maxBytes: number },
   ): Promise<RgCollectExit> {
     return new Promise((resolve) => {
       let child: ChildProcess
       let stderr = ''
+      let budgetHit: 'time' | 'size' | undefined
       try {
         child = spawn(rgDiskPath, args as string[], {
           cwd,
@@ -738,17 +902,38 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         return
       }
       this._procs.add(child)
+      lowerPriority(child)
+      const killFor = (reason: 'time' | 'size'): void => {
+        if (budgetHit !== undefined) return
+        budgetHit = reason
+        child.kill()
+      }
+      const timeLeft = budget.deadlineAt - Date.now()
+      const deadlineTimer = Number.isFinite(timeLeft)
+        ? setTimeout(() => killFor('time'), Math.max(0, timeLeft))
+        : undefined
+      // stdout 直接重定向到 fd，主进程看不到字节流——只能轮询文件大小。
+      const sizeTimer = Number.isFinite(budget.maxBytes)
+        ? setInterval(() => {
+            void fs
+              .stat(filePath)
+              .then((st) => {
+                if (st.size >= budget.maxBytes) killFor('size')
+              })
+              .catch(() => undefined)
+          }, LISTING_SIZE_POLL_MS)
+        : undefined
+      const done = (result: RgCollectExit): void => {
+        this._procs.delete(child)
+        if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
+        if (sizeTimer !== undefined) clearInterval(sizeTimer)
+        resolve(budgetHit !== undefined ? { ...result, budget: budgetHit } : result)
+      }
       child.stderr?.on('data', (data: Buffer) => {
         if (stderr.length < STDERR_LIMIT) stderr += data.toString()
       })
-      child.on('error', (err) => {
-        this._procs.delete(child)
-        resolve({ code: null, error: err.message, stderr })
-      })
-      child.on('exit', (code) => {
-        this._procs.delete(child)
-        resolve({ code, stderr })
-      })
+      child.on('error', (err) => done({ code: null, error: err.message, stderr }))
+      child.on('exit', (code) => done({ code, stderr }))
     })
   }
 

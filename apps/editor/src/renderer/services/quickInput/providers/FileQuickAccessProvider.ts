@@ -674,6 +674,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       dirNames: this._exclude.getDirNameIgnores(),
       excludeGlobs: this._exclude.getSearchExcludeGlobs(),
       useIgnoreFiles: this._exclude.getUseIgnoreFiles(),
+      // Opening the picker is a user gesture: a truncated walk may warm the disk
+      // listing that the per-keystroke fallback searches.
+      warmListing: true,
     }
 
     // Open editors (all types), views, and the slots of just-closed editors
