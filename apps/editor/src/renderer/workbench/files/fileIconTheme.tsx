@@ -40,6 +40,15 @@ for (const [path, source] of Object.entries(rawSvgs)) {
   svgByName[name] = source
 }
 
+// React 19 diffs dangerouslySetInnerHTML by object identity and rewrites
+// innerHTML whenever the object changes. Share one object per icon so a row
+// re-render (list virtualization reuses rows constantly) does not re-parse the
+// SVG and replace the glyph's DOM subtree.
+const htmlByIcon: Readonly<Record<string, { readonly __html: string }>> = Object.fromEntries(
+  Object.entries(svgByName).map(([name, svg]) => [name, { __html: svg }]),
+)
+const fallbackGlyph = { __html: svgByName[materialIconDefaults.file] ?? '' }
+
 export interface ResolveFileIconOptions {
   readonly isDirectory: boolean
   readonly expanded?: boolean | undefined
@@ -168,7 +177,6 @@ export function FileIcon({
   }
 
   const resolved = resolveFileIcon(resource, { isDirectory, expanded, languageId })
-  const svg = svgByName[resolved.icon] ?? svgByName[materialIconDefaults.file]
 
   return (
     <span
@@ -180,7 +188,7 @@ export function FileIcon({
       <span
         className={styles['glyph']}
         style={{ width: size, height: size }}
-        dangerouslySetInnerHTML={{ __html: svg ?? '' }}
+        dangerouslySetInnerHTML={htmlByIcon[resolved.icon] ?? fallbackGlyph}
       />
       {symbolicLink && (
         <span className={styles['symlinkBadge']} data-symlink-badge="true">

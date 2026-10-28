@@ -44,6 +44,16 @@
 - 监听挂在唯一 scroller `[role="tree"]` 上（第 1 节）；未传 prop 时整个 effect 早退，其余 `Tree` 使用者零开销；卸载时摘监听、断 RO、cancel rAF。
 - 守护：`src/__tests__/Tree.visibleWindow.test.tsx`（窗口与两端夹紧 / 滚动去重 / 结构变化重报 / 零高度与 RO 恢复 / `getRowHeight` 累加路径 / 未传 prop 不挂 scroll 监听 / 卸载停止 / 纯 selection 变化不回调）。
 
+## 7. 首帧测量门：布局落定前不能把 `clientHeight` 交给虚拟器
+
+视图容器切换会**卸载重挂载**视图（`PaneCompositePart` 只渲染活动容器），Explorer 每次切回都重走挂载。Allotment 的 pane 要到后续 layout tick 才定尺寸，此前 `height:100%` 的 `[role="tree"]` 解析成 `auto`，`clientHeight` 是**内容全高**。虚拟器在 layout effect 里同步 measure，会按这个高度算出「全部行都可见」并在一次 commit 里插入上万行 DOM——Explorer 大树按 Ctrl+Shift+E 卡数秒的根因；随后 RO 才把它收回视口。
+
+- 判据收口在 `list/scrollElementLayout.ts` 的 `hasTrustworthyViewport`：真实视口不可能高于窗口，`height > 0 && height <= max(innerHeight, documentElement.clientHeight)` 才可信；`documentElement.clientHeight <= 0`（无布局引擎，如 happy-dom）直接放行——那里所有测量都是 0，门控只会让窗口化列表永远空白。**元素自身的 `0` 故意不信任**——空模型先挂载、异步 children 再撑高会重演同一 bug；happy-dom 里要练门控，测试须同时 pin `documentElement.clientHeight`（见 `__tests__/VirtualList.preLayout.test.tsx`）。
+- `useTrustedScrollElement` 只在**首次 attach** 前门控；只有「非窗口化挂载时元素已可测」才置粘性放行锁（`windowed:false` 挂载在 pre-layout pane 里测到的仍是内容高度，越过阈值时必须继续门控）。阈值来回翻越时元素已可信、不再 detach/重挂载丢 offset（第 3 节）。门控期间 `getScrollElement` 返回 `null`，但 `VirtualListHandle.getScrollElement()` 仍返回原始 scroller（`useScrollRestore`/PageSize 依赖）；此时 `scrollToIndex` 记下最后一次请求、attached 后补发（reveal 调用方发出即清请求，吞掉会永久丢滚动）。RO 是主信号，rAF 兜底，另有**真实的 1s `setTimeout`** 强制放行——rAF 被窗口节流/挂起时不能指望下一次 `check` 发现超时；这是「宁可放开也不能永久空白」的取舍。
+- **门控期间绝不能调用 `virtualizer.getVirtualItems()`**：`calculateRange` 的 memo deps 会调 `getScrollOffset()`，把 restore 之前的 `scrollTop` 固化成种子；迟到 attach 时 `_willUpdate` 末尾的 `_scrollToOffset` 会把 `useScrollRestore` 写好的位置覆盖回顶部。windowed 分支因此 `ready ? getVirtualItems().map(...) : null`；spacer 高度照常读 `getTotalSize()`（`enabled:false` 会清空 measurements 让 spacer 塌陷，不能拿它当门）。
+- `Tree` 的 `onVisibleNodesChange` 用同一判据（第 6 节），否则 pre-layout 会把全树报成可见并触发全量 hint 查询；pane 定尺寸后 RO 重报自愈。
+- 守护：`__tests__/VirtualList.preLayout.test.tsx`（门控 0 行 + spacer 正确 + 门控期间 `scrollTop` 不被覆盖 + 原始 scroller 契约 + `scrollToIndex` 补发 + 非窗口化越过阈值仍需门控 + 已布局列表直接渲染）、`__tests__/Tree.preLayout.test.tsx`、`Tree.visibleWindow.test.tsx` 的 pre-layout 用例；e2e `smoke.explorerContainerSwitch`。
+
 ## 相关
 
 - 绘制三条约定 + 残影排查套路：[docs/development/scroll-lists.md](../../docs/development/scroll-lists.md)

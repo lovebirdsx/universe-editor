@@ -53,16 +53,30 @@ class FakeResizeObserver {
 }
 
 let realResizeObserver: typeof ResizeObserver | undefined
+let originalDocumentHeight: PropertyDescriptor | undefined
 
 beforeEach(() => {
   realResizeObserver = globalThis.ResizeObserver
   ;(globalThis as { ResizeObserver: unknown }).ResizeObserver = FakeResizeObserver
+  // happy-dom has no layout engine, so the realm check would always say "nothing
+  // to measure". Pin a rendered document so the pre-layout height test exercises
+  // the same predicate production uses.
+  originalDocumentHeight = Object.getOwnPropertyDescriptor(document.documentElement, 'clientHeight')
+  Object.defineProperty(document.documentElement, 'clientHeight', {
+    configurable: true,
+    value: 768,
+  })
 })
 
 afterEach(() => {
   cleanup()
   resizeCallbacks.length = 0
   if (realResizeObserver) globalThis.ResizeObserver = realResizeObserver
+  if (originalDocumentHeight) {
+    Object.defineProperty(document.documentElement, 'clientHeight', originalDocumentHeight)
+  } else {
+    delete (document.documentElement as unknown as { clientHeight?: number }).clientHeight
+  }
   vi.restoreAllMocks()
 })
 
@@ -207,6 +221,34 @@ describe('Tree — visible-window report', () => {
           cb()
         } catch {
           // the virtualizer's layout read, see above
+        }
+      }
+      await new Promise((resolve) => requestAnimationFrame(resolve))
+    })
+
+    expect(reportIds(onVisible)).toEqual(expectedRange(0, VIEWPORT_ROWS - 1 + OVERSCAN))
+  })
+
+  it('does not treat a pre-layout content height as a viewport', async () => {
+    const onVisible = vi.fn()
+    let laidOut = false
+    const { root } = renderTree(makeModel(50), { onVisible })
+    // A remounted tree reports its content height until the hosting pane is
+    // sized; reporting that as "visible rows" would query the whole tree.
+    Object.defineProperty(root, 'clientHeight', {
+      configurable: true,
+      get: () => (laidOut ? VIEWPORT : 50 * ROW_HEIGHT),
+    })
+    await flushWindow()
+    expect(reportIds(onVisible)).toEqual([])
+
+    laidOut = true
+    await act(async () => {
+      for (const cb of [...resizeCallbacks]) {
+        try {
+          cb()
+        } catch {
+          // the virtualizer's layout read, see the test above
         }
       }
       await new Promise((resolve) => requestAnimationFrame(resolve))

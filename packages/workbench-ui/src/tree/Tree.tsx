@@ -33,6 +33,7 @@ import {
 } from 'react'
 import { VirtualList } from '../list/VirtualList.js'
 import { resolveIndexNavigation } from '../list/listKeyboard.js'
+import { hasTrustworthyViewport } from '../list/scrollElementLayout.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
 import { useStableCallback } from '../hooks/useStableCallback.js'
 import { isOpenTargetEnter, markAsSingleton } from '@universe-editor/platform'
@@ -340,7 +341,10 @@ export function Tree<T>(props: ITreeProps<T>) {
     const scroller = containerRef.current
     if (!scroller) return
     const nodes = visibleRef.current
-    const viewport = scroller.clientHeight
+    // A pre-layout clientHeight spans the whole content; reporting it would tell
+    // the host that every row is visible. The existing ResizeObserver re-reports
+    // once the pane is sized.
+    const viewport = hasTrustworthyViewport(scroller) ? scroller.clientHeight : 0
     let start = 0
     let end = -1
     if (viewport > 0 && nodes.length > 0) {

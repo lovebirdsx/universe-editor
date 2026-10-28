@@ -1,7 +1,9 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
   forwardRef,
+  useCallback,
   useImperativeHandle,
+  useLayoutEffect,
   useRef,
   type CSSProperties,
   type ForwardedRef,
@@ -11,6 +13,7 @@ import {
   type Ref,
   type RefObject,
 } from 'react'
+import { useTrustedScrollElement } from './scrollElementLayout.js'
 
 export interface VirtualListProps<T> {
   items: readonly T[]
@@ -67,6 +70,11 @@ interface CachedStyle {
   style: CSSProperties
 }
 
+type PendingScroll = {
+  readonly index: number
+  readonly opts: Parameters<VirtualListHandle['scrollToIndex']>[1]
+}
+
 // Shared style for dynamic mode: positioning lives on the measuring wrapper,
 // so item roots have nothing to apply. One frozen object keeps memo intact.
 const EMPTY_STYLE: CSSProperties = Object.freeze({})
@@ -88,17 +96,32 @@ function VirtualListInner<T>(
 ) {
   const parentRef = useRef<HTMLDivElement>(null)
   const styleCacheRef = useRef<Map<number, CachedStyle>>(new Map())
-  const resolveScrollElement = (): HTMLElement | null =>
-    scrollElementRef ? scrollElementRef.current : parentRef.current
+  const resolveScrollElement = useCallback(
+    (): HTMLElement | null => (scrollElementRef ? scrollElementRef.current : parentRef.current),
+    [scrollElementRef],
+  )
+
+  // Dynamic measurement needs a ResizeObserver per rendered row, which only
+  // makes sense for a window — so it always wins over `windowed: false`.
+  const renderEveryItem = !windowed && !measureDynamically
+  // Rendering every row is cheap when the list is not windowed, so the first
+  // layout measurement only gates the virtual window. See scrollElementLayout.ts
+  // for why a pre-layout measurement must not reach the virtualizer.
+  const scrollElementReady = useTrustedScrollElement(resolveScrollElement, !renderEveryItem)
+  const scrollElementReadyRef = useRef(scrollElementReady)
+  scrollElementReadyRef.current = scrollElementReady
+  const pendingScrollRef = useRef<PendingScroll | null>(null)
 
   const virtualizer = useVirtualizer({
     count: items.length,
-    getScrollElement: resolveScrollElement,
+    getScrollElement: () => (scrollElementReadyRef.current ? resolveScrollElement() : null),
     // Read the element rather than assuming 0. The virtualizer seeds its offset
     // once, when it attaches, and then writes that value back to the DOM — so a
     // scroller already positioned by someone else (useScrollRestore on mount,
     // or an external scroller that outlives us) would otherwise be yanked to
-    // the top the moment we attach to it.
+    // the top the moment we attach to it. While the layout gate holds, the
+    // virtual items are never read, so this is still evaluated for the first
+    // time at attach — after any restore has landed.
     initialOffset: () => resolveScrollElement()?.scrollTop ?? 0,
     estimateSize,
     overscan,
@@ -109,14 +132,35 @@ function VirtualListInner<T>(
     ref,
     () => ({
       scrollToIndex(index, opts) {
+        // Before attach the virtualizer has no viewport, so this would compute
+        // against an empty range. Replay it once the gate opens instead of
+        // dropping it: reveal callers clear their request after issuing it.
+        if (!scrollElementReadyRef.current) {
+          pendingScrollRef.current = { index, opts }
+          return
+        }
+        pendingScrollRef.current = null
         virtualizer.scrollToIndex(index, opts)
       },
       getScrollElement() {
+        // Raw scroller on purpose: callers derive page sizes / scroll state from
+        // it even while the layout gate holds the virtualizer back.
         return resolveScrollElement()
       },
     }),
-    [virtualizer],
+    [virtualizer, resolveScrollElement],
   )
+
+  // Runs on every commit (no deps) so a replay also lands if the element only
+  // appears after the gate opened. The virtualizer's own layout effect is
+  // registered first, so it has attached by the time this runs.
+  useLayoutEffect(() => {
+    if (!scrollElementReady) return
+    const pending = pendingScrollRef.current
+    if (!pending || resolveScrollElement() === null) return
+    pendingScrollRef.current = null
+    virtualizer.scrollToIndex(pending.index, pending.opts)
+  })
 
   // Stable style refs per index — keeps renderItem children memoizable. A new
   // object is only allocated when an item's start/size actually changes.
@@ -141,10 +185,6 @@ function VirtualListInner<T>(
     styleCacheRef.current.set(index, { start, size, style: next })
     return next
   }
-
-  // Dynamic measurement needs a ResizeObserver per rendered row, which only
-  // makes sense for a window — so it always wins over `windowed: false`.
-  const renderEveryItem = !windowed && !measureDynamically
 
   const renderRow = (index: number, start: number, size: number, key: Key) => {
     const item = items[index]
@@ -175,11 +215,17 @@ function VirtualListInner<T>(
     body = rows
   } else {
     totalSize = virtualizer.getTotalSize()
-    body = virtualizer
-      .getVirtualItems()
-      .map((virtualItem) =>
-        renderRow(virtualItem.index, virtualItem.start, virtualItem.size, virtualItem.key),
-      )
+    // Never read the virtual items while the layout gate holds: calculateRange's
+    // memo dependencies call getScrollOffset(), which would freeze the
+    // pre-restore scrollTop into the virtualizer's offset seed. The delayed
+    // attach then writes that seed back and clobbers useScrollRestore.
+    body = scrollElementReady
+      ? virtualizer
+          .getVirtualItems()
+          .map((virtualItem) =>
+            renderRow(virtualItem.index, virtualItem.start, virtualItem.size, virtualItem.key),
+          )
+      : null
   }
 
   // `flexShrink: 0` because the caller's scroller is often a flex column: a
