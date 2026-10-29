@@ -2071,11 +2071,11 @@ describe('ChatBody — collapse', () => {
     expect(session.collapseMode.get()).toBe('hideThinking')
     expect(ariaExpanded(container, 'm:a')).toBe('true')
     act(() => {
-      widgetRef.current!.cycleCollapseMode() // lastMessage
+      widgetRef.current!.cycleCollapseMode() // onlyMessage
     })
-    expect(session.collapseMode.get()).toBe('lastMessage')
-    // Same turn with two agent replies: only the final one survives.
-    expect(container.querySelector('[data-timeline-key="m:a"]')).toBeNull()
+    expect(session.collapseMode.get()).toBe('onlyMessage')
+    // Every agent reply survives under Only Message.
+    expect(ariaExpanded(container, 'm:a')).toBe('true')
     expect(ariaExpanded(container, 'm:b')).toBe('true')
     act(() => {
       widgetRef.current!.cycleCollapseMode() // back to default
@@ -2148,7 +2148,7 @@ describe('ChatBody — display modes', () => {
     expect(container.querySelector('[data-sticky-key="t:task/m:sm"]')).not.toBeNull()
   })
 
-  it('lastMessage keeps users, the final reply and sub-agent cards, hiding ordinary tools', () => {
+  it('onlyMessage keeps users, every agent reply, sub-agent and user-decision cards', () => {
     const session = makeSession('s1', [
       roleMessage('u1', 'user', 'turn 1'),
       roleMessage('a1', 'agent', 'intermediate'),
@@ -2159,16 +2159,31 @@ describe('ChatBody — display modes', () => {
         id: 'sub',
         call: makeTaskCall('sub', [childMessage('sm', 'child')]),
       },
+      {
+        kind: 'toolCall',
+        id: 'ask',
+        call: {
+          id: 'ask',
+          title: 'Asking for your input',
+          kind: 'other',
+          status: 'completed',
+          text: '',
+          blocks: [],
+          diffs: [],
+          requiresUserDecision: true,
+        },
+      },
       roleMessage('u2', 'user', 'turn 2'),
       roleMessage('a3', 'agent', 'answer'),
     ])
     const { container } = renderChat(session)
 
-    act(() => session.setCollapseMode('lastMessage'))
-    expect(container.querySelector('[data-timeline-key="m:a1"]')).toBeNull()
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(container.querySelector('[data-timeline-key="m:a1"]')).not.toBeNull()
     expect(container.querySelector('[data-timeline-key="t:read"]')).toBeNull()
     expect(container.querySelector('[data-timeline-key="m:a2"]')).not.toBeNull()
     expect(container.querySelector('[data-timeline-key="t:sub"]')).not.toBeNull()
+    expect(container.querySelector('[data-timeline-key="t:ask"]')).not.toBeNull()
     expect(container.querySelector('[data-timeline-key="m:u2"]')).not.toBeNull()
     expect(container.querySelector('[data-timeline-key="m:a3"]')).not.toBeNull()
   })
@@ -2201,7 +2216,7 @@ describe('ChatBody — display modes', () => {
     )
     const { getByTestId } = renderChat(session)
 
-    act(() => session.setCollapseMode('lastMessage'))
+    act(() => session.setCollapseMode('onlyMessage'))
     expect(getByTestId('acp-timeline-hidden-activity').textContent).toContain('Calling a tool')
   })
 
@@ -2285,15 +2300,16 @@ describe('ChatBody — display modes', () => {
     const session = makeSession('s1', [
       roleMessage('p1', 'agent', 'prelude 1'),
       roleMessage('p2', 'agent', 'prelude 2'),
+      roleMessage('th', 'thought', 'pondering'),
       roleMessage('u', 'user', 'question'),
       roleMessage('a', 'agent', 'answer'),
     ])
     const { container } = renderChatWithWidget(session)
-    act(() => fireEvent.click(slotEl(container, 'm:p1')))
-    expect(slotEl(container, 'm:p1').className).toContain(focusedClass)
+    act(() => fireEvent.click(slotEl(container, 'm:th')))
+    expect(slotEl(container, 'm:th').className).toContain(focusedClass)
 
-    act(() => session.setCollapseMode('lastMessage'))
-    expect(container.querySelector('[data-timeline-key="m:p1"]')).toBeNull()
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(container.querySelector('[data-timeline-key="m:th"]')).toBeNull()
     expect(slotEl(container, 'm:p2').className).toContain(focusedClass)
   })
 

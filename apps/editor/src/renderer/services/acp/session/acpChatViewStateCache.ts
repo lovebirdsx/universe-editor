@@ -13,7 +13,7 @@
  *  instance renders, before the outgoing instance's unmount flush runs.
  *--------------------------------------------------------------------------------------------*/
 
-export type CollapseMode = 'default' | 'collapsed' | 'expanded' | 'hideThinking' | 'lastMessage'
+export type CollapseMode = 'default' | 'collapsed' | 'expanded' | 'hideThinking' | 'onlyMessage'
 
 export interface AcpChatCollapseState {
   /** Baseline driven by the display-mode dropdown and Ctrl+Alt+F. */

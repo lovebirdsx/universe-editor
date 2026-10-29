@@ -2720,12 +2720,12 @@ describe('AcpSessionService — rewind / fork', () => {
       const s = await svc.createSession('claude-code')
       await s.whenConnected()
       await s.sendPrompt('first turn')
-      s.setCollapseMode('lastMessage')
+      s.setCollapseMode('onlyMessage')
 
       const fork = await svc.forkSession(s.id)
 
-      expect(fork.collapseMode.get()).toBe('lastMessage')
-      expect(history.get('agent-fork-mode')?.collapseMode).toBe('lastMessage')
+      expect(fork.collapseMode.get()).toBe('onlyMessage')
+      expect(history.get('agent-fork-mode')?.collapseMode).toBe('onlyMessage')
     } finally {
       svc.dispose()
     }
@@ -2832,18 +2832,18 @@ describe('AcpSessionService — rewind / fork', () => {
     })
     const { svc, history, config } = makeServiceWithHistory(client, tracker)
     try {
-      await config.update('acp.defaultCollapseModes', { 'claude-code': 'lastMessage' })
+      await config.update('acp.defaultCollapseModes', { 'claude-code': 'onlyMessage' })
       const s = await svc.createSession('claude-code')
       await s.whenConnected()
       await s.sendPrompt('first turn')
       // Regression: the create path still seeds from the configured default.
-      expect(s.collapseMode.get()).toBe('lastMessage')
-      expect(history.get('agent-1')?.collapseMode).toBe('lastMessage')
+      expect(s.collapseMode.get()).toBe('onlyMessage')
+      expect(history.get('agent-1')?.collapseMode).toBe('onlyMessage')
 
       const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
 
-      expect(side.collapseMode.get()).toBe('lastMessage')
-      expect(history.get('agent-side-config')?.collapseMode).toBe('lastMessage')
+      expect(side.collapseMode.get()).toBe('onlyMessage')
+      expect(history.get('agent-side-config')?.collapseMode).toBe('onlyMessage')
     } finally {
       svc.dispose()
     }

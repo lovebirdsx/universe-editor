@@ -2904,6 +2904,7 @@ describe('PromptInput — timeline display picker', () => {
     expect(options).toHaveLength(5)
     expect(options[0]?.getAttribute('data-current')).toBe('true')
     expect(options[3]?.textContent).toBe('Hide thinking')
+    expect(options[4]?.textContent).toBe('Only Message')
 
     fireEvent.mouseDown(options[3]!)
     expect(setMode).toHaveBeenCalledWith('hideThinking')

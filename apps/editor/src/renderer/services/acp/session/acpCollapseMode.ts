@@ -12,7 +12,7 @@ export const COLLAPSE_MODE_ORDER = [
   'collapsed',
   'expanded',
   'hideThinking',
-  'lastMessage',
+  'onlyMessage',
 ] as const satisfies readonly CollapseMode[]
 
 const COLLAPSE_MODE_SET: ReadonlySet<string> = new Set(COLLAPSE_MODE_ORDER)
@@ -21,7 +21,7 @@ export function isCollapseMode(value: unknown): value is CollapseMode {
   return typeof value === 'string' && COLLAPSE_MODE_SET.has(value)
 }
 
-/** default → collapsed → expanded → hideThinking → lastMessage → default */
+/** default → collapsed → expanded → hideThinking → onlyMessage → default */
 export function nextCollapseMode(mode: CollapseMode): CollapseMode {
   const index = COLLAPSE_MODE_ORDER.indexOf(mode)
   return COLLAPSE_MODE_ORDER[(index + 1) % COLLAPSE_MODE_ORDER.length] ?? 'default'

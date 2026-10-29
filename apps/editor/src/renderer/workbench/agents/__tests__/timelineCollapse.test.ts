@@ -157,11 +157,11 @@ describe('defaultCollapsed', () => {
     expect(defaultCollapsed(ordinaryEdit, 'collapsed')).toBe(true)
   })
 
-  it('keeps the smart per-kind folding under hideThinking / lastMessage', () => {
+  it('keeps the smart per-kind folding under hideThinking / onlyMessage', () => {
     expect(defaultCollapsed(agentResult, 'hideThinking')).toBe(true)
     expect(defaultCollapsed(ordinaryEdit, 'hideThinking')).toBe(false)
-    expect(defaultCollapsed(agentResult, 'lastMessage')).toBe(true)
-    expect(defaultCollapsed(ordinaryEdit, 'lastMessage')).toBe(false)
+    expect(defaultCollapsed(agentResult, 'onlyMessage')).toBe(true)
+    expect(defaultCollapsed(ordinaryEdit, 'onlyMessage')).toBe(false)
   })
 })
 

@@ -89,7 +89,7 @@ function hasRenderEvidence(
  */
 async function startEchoSession(
   page: Page,
-  collapseMode?: 'default' | 'collapsed' | 'expanded' | 'hideThinking' | 'lastMessage',
+  collapseMode?: 'default' | 'collapsed' | 'expanded' | 'hideThinking' | 'onlyMessage',
   echoAgentEnv?: Record<string, string>,
 ): Promise<StreamCounters> {
   await page.evaluate(([id, p, env]) => window.__E2E__!.installAcpEchoAgent(id, p, env), [

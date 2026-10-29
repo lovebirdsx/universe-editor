@@ -13,7 +13,7 @@ describe('acpCollapseMode', () => {
       'collapsed',
       'expanded',
       'hideThinking',
-      'lastMessage',
+      'onlyMessage',
     ])
   })
 
@@ -21,8 +21,8 @@ describe('acpCollapseMode', () => {
     expect(nextCollapseMode('default')).toBe('collapsed')
     expect(nextCollapseMode('collapsed')).toBe('expanded')
     expect(nextCollapseMode('expanded')).toBe('hideThinking')
-    expect(nextCollapseMode('hideThinking')).toBe('lastMessage')
-    expect(nextCollapseMode('lastMessage')).toBe('default')
+    expect(nextCollapseMode('hideThinking')).toBe('onlyMessage')
+    expect(nextCollapseMode('onlyMessage')).toBe('default')
   })
 
   it('recognises only known mode strings', () => {

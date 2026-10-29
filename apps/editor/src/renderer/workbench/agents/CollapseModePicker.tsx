@@ -62,12 +62,12 @@ const MODE_META: Record<CollapseMode, ModeMeta> = {
       'Hide thinking content, including thinking inside sub-agent cards.',
     ),
   },
-  lastMessage: {
+  onlyMessage: {
     Icon: MessageSquare,
-    label: localize('acp.collapse.mode.lastMessage', 'Last message per turn'),
+    label: localize('acp.collapse.mode.onlyMessage', 'Only Message'),
     description: localize(
-      'acp.collapse.mode.lastMessage.description',
-      'Keep only the final reply of each turn. Tool cards are hidden; sub-agent and key status cards stay.',
+      'acp.collapse.mode.onlyMessage.description',
+      'Show every user and agent message. Thinking and ordinary tool cards are hidden; sub-agent, key status and user-input cards stay.',
     ),
   },
 }

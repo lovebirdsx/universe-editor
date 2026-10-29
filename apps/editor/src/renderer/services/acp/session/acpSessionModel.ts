@@ -164,6 +164,14 @@ export interface AcpToolCall {
    */
   readonly subagent?: true
   /**
+   * True when this tool call asked the user for a decision: Claude's
+   * `AskUserQuestion` (`_meta.claudeCode.toolName`) or any tool call an
+   * elicitation is tied to (`CreateElicitationRequest.toolCallId`). The
+   * `onlyMessage` display mode always keeps these cards so the question and the
+   * user's answer stay visible. Absent for ordinary tools.
+   */
+  readonly requiresUserDecision?: true
+  /**
    * On the synthetic top-level "Saved Explore result" card: the `toolCallId`
    * of the Agent/Task call that spawned the Explore sub-agent
    * (`_meta['_universe/exploreResultOf']`). The chat derives a spawn→result
@@ -808,7 +816,7 @@ export interface IAcpSession {
   suppressReplayToTimeline(anchorMessageId?: string): void
   /** Set the timeline display mode explicitly (dropdown selection). */
   setCollapseMode(mode: CollapseMode): void
-  /** Cycle the timeline display mode: default → collapsed → expanded → hideThinking → lastMessage → default. */
+  /** Cycle the timeline display mode: default → collapsed → expanded → hideThinking → onlyMessage → default. */
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void

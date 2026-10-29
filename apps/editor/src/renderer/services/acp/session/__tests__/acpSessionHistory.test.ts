@@ -183,10 +183,10 @@ describe('AcpSessionHistoryService — add / list', () => {
       agentId: 'a',
       sessionIdOnAgent: 'child-1',
       title: 't',
-      collapseMode: 'lastMessage',
+      collapseMode: 'onlyMessage',
     })
-    expect(entry.collapseMode).toBe('lastMessage')
-    expect(svc.get('child-1')?.collapseMode).toBe('lastMessage')
+    expect(entry.collapseMode).toBe('onlyMessage')
+    expect(svc.get('child-1')?.collapseMode).toBe('onlyMessage')
   })
 
   it('add omits collapseMode when neither the input nor the prior row supplies one', async () => {
@@ -209,9 +209,9 @@ describe('AcpSessionHistoryService — add / list', () => {
       agentId: 'a',
       sessionIdOnAgent: '1',
       title: 't2',
-      collapseMode: 'lastMessage',
+      collapseMode: 'onlyMessage',
     })
-    expect(readded.collapseMode).toBe('lastMessage')
+    expect(readded.collapseMode).toBe('onlyMessage')
   })
 
   it('truncates to the 100-entry LRU ceiling', async () => {

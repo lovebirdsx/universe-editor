@@ -378,6 +378,36 @@ describe('AcpSessionService — elicitation', () => {
     expect(s.pendingElicitation.get()).toBeUndefined()
   })
 
+  it('marks the tool call an elicitation is tied to as requiring a user decision', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    await conn.agentConn.sessionUpdate({
+      sessionId: AGENT_SESSION_ID,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'ask-1',
+        title: 'Asking for your input',
+        kind: 'other',
+        status: 'in_progress',
+        content: [],
+        locations: [],
+      },
+    })
+    await waitFor(() => s.toolCalls.get().some((t) => t.id === 'ask-1'))
+
+    const agentPromise = conn.agentConn.unstable_createElicitation({
+      ...formRequest(AGENT_SESSION_ID),
+      toolCallId: 'ask-1',
+    })
+    await waitFor(() => s.pendingElicitation.get() !== undefined)
+
+    expect(s.toolCalls.get().find((t) => t.id === 'ask-1')?.requiresUserDecision).toBe(true)
+    s.pendingElicitation.get()!.resolve({ action: 'decline' })
+    await agentPromise
+  })
+
   it('settles decline back to the agent', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

@@ -79,7 +79,7 @@ export function isMessageRendered(message: AcpMessage, nested: boolean): boolean
 }
 
 // Per-kind default under the fold modes `default` / `hideThinking` /
-// `lastMessage`: read/search / sub-agent-parent tool calls start collapsed,
+// `onlyMessage`: read/search / sub-agent-parent tool calls start collapsed,
 // everything else (thought messages included) starts expanded. No top-level
 // sub-agent card ever reaches this — {@link resolveCollapsed} decides those from
 // the designation alone. A whole-file write (Write / add file) is an `edit` card

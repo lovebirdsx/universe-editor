@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Display-mode filtering for the agent timeline: which slots actually render
- *  under `hideThinking` / `lastMessage`, which nested thoughts the card bodies
+ *  under `hideThinking` / `onlyMessage`, which nested thoughts the card bodies
  *  drop, the tail activity hint, and keyboard-focus convergence when the
  *  selected slot disappears. Pure functions — no React / DOM — so the rules
  *  stay testable and the data-layer timeline is never mutated.
@@ -39,51 +39,33 @@ function isAlwaysKept(item: TimelineItem): boolean {
   if (item.kind === 'compaction' || item.kind === 'resurrection') return true
   if (isErrorAgentMessage(item)) return true
   if (item.kind === 'toolCall') {
-    return isSubagentCard(item) || item.call.kind === 'switch_mode'
+    return (
+      isSubagentCard(item) ||
+      item.call.kind === 'switch_mode' ||
+      item.call.requiresUserDecision === true
+    )
   }
   return false
 }
 
 /**
- * Keep the user message plus the final agent reply of every turn. Sub-agent
- * cards, compaction/resurrection cards, error messages and plan-confirmation
- * (`switch_mode`) cards are always kept; ordinary tool cards (failed included),
- * thoughts and intermediate agent replies are dropped.
+ * Keep every user and agent text message. Sub-agent cards, compaction /
+ * resurrection cards, error messages, plan-confirmation (`switch_mode`) cards
+ * and user-decision cards (AskUserQuestion / elicitation-backed tools) are
+ * always kept; ordinary tool cards (failed included) and thoughts are dropped.
+ * Settled agent messages with no visible content are dropped too — a streaming
+ * first frame stays because `isMessageRendered` keeps it for the caret.
  */
-function selectLastMessage(timeline: readonly TimelineItem[]): readonly TimelineItem[] {
+function selectOnlyMessages(timeline: readonly TimelineItem[]): readonly TimelineItem[] {
   if (timeline.length === 0) return timeline
-  const keep = new Set<TimelineItem>()
-  let turn: TimelineItem[] = []
-
-  const flushTurn = (): void => {
-    if (turn.length === 0) return
-    for (const item of turn) {
-      if (isUserMessage(item) || isAlwaysKept(item)) keep.add(item)
-    }
-    // An empty settled reply must not shadow the previous real one; a streaming
-    // first frame stays because `isMessageRendered` keeps it for the caret.
-    for (let i = turn.length - 1; i >= 0; i--) {
-      const item = turn[i]
-      if (
-        item !== undefined &&
-        item.kind === 'message' &&
+  return timeline.filter(
+    (item) =>
+      isUserMessage(item) ||
+      isAlwaysKept(item) ||
+      (item.kind === 'message' &&
         item.message.role === 'agent' &&
-        !isErrorAgentMessage(item) &&
-        isMessageRendered(item.message, false)
-      ) {
-        keep.add(item)
-        break
-      }
-    }
-    turn = []
-  }
-
-  for (const item of timeline) {
-    if (isUserMessage(item)) flushTurn()
-    turn.push(item)
-  }
-  flushTurn()
-  return timeline.filter((item) => keep.has(item))
+        isMessageRendered(item.message, false)),
+  )
 }
 
 export function selectTimelineForDisplay(
@@ -97,8 +79,8 @@ export function selectTimelineForDisplay(
       return timeline
     case 'hideThinking':
       return timeline.filter((item) => !isThoughtMessage(item))
-    case 'lastMessage':
-      return selectLastMessage(timeline)
+    case 'onlyMessage':
+      return selectOnlyMessages(timeline)
   }
 }
 
@@ -186,7 +168,7 @@ export function getHiddenActivity(
     case 'expanded':
       return null
     case 'hideThinking':
-    case 'lastMessage':
+    case 'onlyMessage':
       break
   }
   if (filteredTimeline[filteredTimeline.length - 1] === tail) return null

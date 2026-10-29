@@ -103,6 +103,7 @@ import {
 } from './acpSessionContent.js'
 import {
   extractModelBreakdown,
+  isAskUserQuestionToolCall,
   isClaudeCompactionToolCall,
   readAgentToolName,
   readAgentToolNameForTelemetry,
@@ -778,6 +779,13 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _messages: AcpMessage[] = []
   private _toolCalls: AcpToolCall[] = []
   private _timeline: TimelineItem[] = []
+  /**
+   * Tool calls that asked the user for a decision (AskUserQuestion /
+   * elicitation-backed). Kept as a set so a marking that arrives before the
+   * tool card lands — or a later `tool_call_update` that rebuilds the card —
+   * still ends up with {@link AcpToolCall.requiresUserDecision}.
+   */
+  private readonly _userDecisionToolCallIds = new Set<string>()
   private _msgCounter = 0
 
   /** Abort controllers for all in-flight `session/prompt` calls (concurrent steering). */
@@ -2066,6 +2074,20 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Replace any prior pending elicitation — only one card at a time.
     this._cancelPendingElicitation()
     this.pendingElicitation.set(e, undefined)
+    this._markToolCallRequiresUserDecision(e.request)
+  }
+
+  /** An elicitation tied to a tool call marks that card as a user decision, so
+   *  the `onlyMessage` timeline keeps the question/answer record visible. */
+  private _markToolCallRequiresUserDecision(request: AcpPendingElicitation['request']): void {
+    const toolCallId = (request as { toolCallId?: unknown }).toolCallId
+    if (typeof toolCallId !== 'string' || toolCallId.length === 0) return
+    if (this._userDecisionToolCallIds.has(toolCallId)) return
+    this._userDecisionToolCallIds.add(toolCallId)
+    const existing = this._toolCalls.find((t) => t.id === toolCallId)
+    if (existing !== undefined && existing.requiresUserDecision !== true) {
+      this._upsertToolCall({ ...existing, requiresUserDecision: true })
+    }
   }
 
   private _cancelPendingPermission(): void {
@@ -2716,6 +2738,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._timeline = []
     this._orphanChildren.clear()
     this._toolCallParent.clear()
+    this._userDecisionToolCallIds.clear()
     this._terminalOutput.clear()
     this._streamingIds.clear()
     this._planSeen = false
@@ -3046,6 +3069,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._timeline = []
     this._orphanChildren.clear()
     this._toolCallParent.clear()
+    this._userDecisionToolCallIds.clear()
     this._terminalOutput.clear()
     this._residentBytes = 0
     this._setImmediate(this.messages, this._messages)
@@ -3577,6 +3601,11 @@ export class AcpSession extends Disposable implements IAcpSession {
         const subagent = readSubagent(update)
         const exploreResultOf = readExploreResultOf(update)
         const timing = readSubagentTiming(update)
+        // History replay re-emits the question card without a fresh
+        // elicitation, so the fork's tool name is the only marker left.
+        if (isAskUserQuestionToolCall(update)) {
+          this._userDecisionToolCallIds.add(update.toolCallId)
+        }
         this._upsertToolCall(
           {
             id: update.toolCallId,
@@ -4627,17 +4656,21 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   private _upsertToolCall(call: AcpToolCall, parentId?: string): void {
+    const next: AcpToolCall =
+      call.requiresUserDecision !== true && this._userDecisionToolCallIds.has(call.id)
+        ? { ...call, requiresUserDecision: true }
+        : call
     if (parentId != null) {
-      this._upsertChildOfParent(parentId, { kind: 'toolCall', id: call.id, call })
+      this._upsertChildOfParent(parentId, { kind: 'toolCall', id: next.id, call: next })
       return
     }
-    const idx = this._toolCalls.findIndex((t) => t.id === call.id)
+    const idx = this._toolCalls.findIndex((t) => t.id === next.id)
     if (idx === -1) {
-      this._toolCalls = [...this._toolCalls, call]
+      this._toolCalls = [...this._toolCalls, next]
     } else {
-      this._toolCalls = [...this._toolCalls.slice(0, idx), call, ...this._toolCalls.slice(idx + 1)]
+      this._toolCalls = [...this._toolCalls.slice(0, idx), next, ...this._toolCalls.slice(idx + 1)]
     }
-    this._upsertToolCallInTimeline(call)
+    this._upsertToolCallInTimeline(next)
     const tx = this._batchedTx()
     this.toolCalls.set(this._toolCalls, tx)
     this.timeline.set(this._timeline, tx)

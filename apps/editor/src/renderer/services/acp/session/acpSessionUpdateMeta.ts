@@ -262,6 +262,21 @@ export function isClaudeCompactionToolCall(update: {
   return readAgentToolName(update) === CLAUDE_COMPACTION_TOOL_NAME
 }
 
+/** Claude's interactive question tool — a timeline card the user must answer. */
+const CLAUDE_ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion'
+
+/**
+ * Whether this update is Claude's `AskUserQuestion` tool call. Used to keep the
+ * question/answer card under `onlyMessage` even when history replay re-emits it
+ * without a fresh elicitation (whose `toolCallId` would otherwise carry the
+ * marker).
+ */
+export function isAskUserQuestionToolCall(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): boolean {
+  return readAgentToolName(update) === CLAUDE_ASK_USER_QUESTION_TOOL_NAME
+}
+
 /**
  * Read the legacy codex compaction marker (`_meta.contextCompaction`). Older
  * fork builds sent it to plain clients; the current fork's `standardMeta`

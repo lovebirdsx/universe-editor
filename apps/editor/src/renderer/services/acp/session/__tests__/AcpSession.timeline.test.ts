@@ -467,6 +467,26 @@ describe('AcpSession.timeline', () => {
     svc.dispose()
   })
 
+  it('marks an AskUserQuestion tool call as requiring a user decision', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'ask',
+        title: 'Asking for your input',
+        kind: 'other',
+        status: 'in_progress',
+        _meta: { claudeCode: { toolName: 'AskUserQuestion' } },
+      },
+    })
+
+    expect(s.toolCalls.get().find((t) => t.id === 'ask')?.requiresUserDecision).toBe(true)
+  })
+
   it('interleaves message / tool_call slots in arrival order; plan stays off the timeline', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

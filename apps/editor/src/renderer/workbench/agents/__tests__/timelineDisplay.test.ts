@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for the display-mode filter: which slots render under hideThinking /
- *  lastMessage, nested thought removal, tail activity hints, and focus
+ *  onlyMessage, nested thought removal, tail activity hints, and focus
  *  convergence when the selected slot disappears.
  *--------------------------------------------------------------------------------------------*/
 
@@ -105,7 +105,7 @@ describe('selectTimelineForDisplay', () => {
     expect(ids(selectTimelineForDisplay(timeline, 'hideThinking'))).toEqual(['a', 'b', 'x1'])
   })
 
-  it('lastMessage keeps the user message and the final reply of each turn', () => {
+  it('onlyMessage keeps every user and agent message', () => {
     const timeline = [
       user('a'),
       agent('b'),
@@ -116,10 +116,19 @@ describe('selectTimelineForDisplay', () => {
       agent('g'),
       agent('h'),
     ]
-    expect(ids(selectTimelineForDisplay(timeline, 'lastMessage'))).toEqual(['a', 'd', 'e', 'h'])
+    expect(ids(selectTimelineForDisplay(timeline, 'onlyMessage'))).toEqual([
+      'a',
+      'b',
+      'c',
+      'd',
+      'e',
+      'f',
+      'g',
+      'h',
+    ])
   })
 
-  it('lastMessage hides ordinary tools and thoughts but keeps sub-agent cards', () => {
+  it('onlyMessage hides ordinary tools and thoughts but keeps sub-agent cards', () => {
     const subagent = toolItem({
       id: 'task',
       kind: 'execute',
@@ -134,10 +143,10 @@ describe('selectTimelineForDisplay', () => {
       subagent,
       agent('c'),
     ]
-    expect(ids(selectTimelineForDisplay(timeline, 'lastMessage'))).toEqual(['a', 'task', 'c'])
+    expect(ids(selectTimelineForDisplay(timeline, 'onlyMessage'))).toEqual(['a', 'b', 'task', 'c'])
   })
 
-  it('lastMessage keeps key status cards and errors, but not failed ordinary tools', () => {
+  it('onlyMessage keeps key status cards and errors, but not failed ordinary tools', () => {
     const timeline = [
       user('a'),
       toolItem({ id: 'failed', status: 'failed' }),
@@ -147,7 +156,7 @@ describe('selectTimelineForDisplay', () => {
       messageItem(message('err', 'agent', '[error] boom')),
       agent('b'),
     ]
-    expect(ids(selectTimelineForDisplay(timeline, 'lastMessage'))).toEqual([
+    expect(ids(selectTimelineForDisplay(timeline, 'onlyMessage'))).toEqual([
       'a',
       'comp',
       'res',
@@ -157,24 +166,35 @@ describe('selectTimelineForDisplay', () => {
     ])
   })
 
-  it('lastMessage treats the prelude before the first user message as a turn', () => {
+  it('onlyMessage keeps cards that asked the user for a decision', () => {
+    const timeline = [
+      user('a'),
+      toolItem({ id: 'ask', kind: 'other', requiresUserDecision: true }),
+      agent('b'),
+    ]
+    expect(ids(selectTimelineForDisplay(timeline, 'onlyMessage'))).toEqual(['a', 'ask', 'b'])
+  })
+
+  it('onlyMessage keeps agent messages before the first user message', () => {
     const timeline = [agent('p1'), agent('p2'), user('a'), agent('b')]
-    expect(ids(selectTimelineForDisplay(timeline, 'lastMessage'))).toEqual(['p2', 'a', 'b'])
+    expect(ids(selectTimelineForDisplay(timeline, 'onlyMessage'))).toEqual(['p1', 'p2', 'a', 'b'])
   })
 
-  it('lastMessage keeps the user message when the turn has no agent reply', () => {
+  it('onlyMessage keeps the user message when the turn has no agent reply', () => {
     const timeline = [user('a'), toolItem({ id: 'read', kind: 'read' }), user('e'), agent('f')]
-    expect(ids(selectTimelineForDisplay(timeline, 'lastMessage'))).toEqual(['a', 'e', 'f'])
+    expect(ids(selectTimelineForDisplay(timeline, 'onlyMessage'))).toEqual(['a', 'e', 'f'])
   })
 
-  it('lastMessage skips an empty settled reply in favour of the previous real one', () => {
+  it('onlyMessage drops an empty settled reply but keeps a streaming first frame', () => {
     const timeline = [user('a'), agent('real'), agent('empty', '')]
-    expect(ids(selectTimelineForDisplay(timeline, 'lastMessage'))).toEqual(['a', 'real'])
+    expect(ids(selectTimelineForDisplay(timeline, 'onlyMessage'))).toEqual(['a', 'real'])
+    const streaming = [user('a'), agent('empty', '', { streaming: true })]
+    expect(ids(selectTimelineForDisplay(streaming, 'onlyMessage'))).toEqual(['a', 'empty'])
   })
 
   it('returns an empty timeline unchanged', () => {
     const timeline: readonly TimelineItem[] = []
-    expect(selectTimelineForDisplay(timeline, 'lastMessage')).toBe(timeline)
+    expect(selectTimelineForDisplay(timeline, 'onlyMessage')).toBe(timeline)
   })
 })
 
@@ -193,7 +213,7 @@ describe('filterChildItemsForDisplay', () => {
   })
 
   it('returns the original array for other modes', () => {
-    expect(filterChildItemsForDisplay(children, 'lastMessage')).toBe(children)
+    expect(filterChildItemsForDisplay(children, 'onlyMessage')).toBe(children)
     expect(filterChildItemsForDisplay(children, 'default')).toBe(children)
   })
 })
@@ -214,7 +234,7 @@ describe('selectTimelineForOutline', () => {
     expect(outlineTask.call.children?.map((c) => c.id)).toEqual(['a'])
   })
 
-  it('does not filter inside sub-agent cards under lastMessage', () => {
+  it('does not filter inside sub-agent cards under onlyMessage', () => {
     const task = toolItem({
       id: 'task',
       subagent: true,
@@ -223,7 +243,7 @@ describe('selectTimelineForOutline', () => {
         childMessage(message('a', 'agent', 'reply')),
       ],
     })
-    const outline = selectTimelineForOutline([user('u'), task], 'lastMessage')
+    const outline = selectTimelineForOutline([user('u'), task], 'onlyMessage')
     expect(ids(outline)).toEqual(['u', 'task'])
     const outlineTask = outline[1]
     if (outlineTask?.kind !== 'toolCall') throw new Error('expected tool call')
@@ -256,32 +276,32 @@ describe('getHiddenActivity', () => {
     const running = toolItem({ id: 'read', kind: 'read', status: 'in_progress' })
     const runningTimeline = [user('a'), agent('b'), running]
     expect(
-      getHiddenActivity(filter(runningTimeline, 'lastMessage'), running, 'lastMessage', true),
+      getHiddenActivity(filter(runningTimeline, 'onlyMessage'), running, 'onlyMessage', true),
     ).toBe('tool')
     const settled = toolItem({ id: 'read', kind: 'read', status: 'completed' })
     const settledTimeline = [user('a'), agent('b'), settled]
     expect(
-      getHiddenActivity(filter(settledTimeline, 'lastMessage'), settled, 'lastMessage', true),
+      getHiddenActivity(filter(settledTimeline, 'onlyMessage'), settled, 'onlyMessage', true),
     ).toBe('thinking')
   })
 
   it('returns null when the tail itself is visible', () => {
     const visible = agent('b', '...', { streaming: true })
     const timeline = [user('a'), visible]
-    expect(getHiddenActivity(filter(timeline, 'lastMessage'), visible, 'lastMessage', true)).toBe(
+    expect(getHiddenActivity(filter(timeline, 'onlyMessage'), visible, 'onlyMessage', true)).toBe(
       null,
     )
     const task = toolItem({ id: 'task', subagent: true, status: 'in_progress' })
     const withTask = [user('a'), task]
-    expect(getHiddenActivity(filter(withTask, 'lastMessage'), task, 'lastMessage', true)).toBe(null)
+    expect(getHiddenActivity(filter(withTask, 'onlyMessage'), task, 'onlyMessage', true)).toBe(null)
   })
 })
 
 describe('convergeDisplayFocusKey', () => {
   it('moves a hidden top-level focus to the nearest visible item above it', () => {
-    const hidden = agent('b')
+    const hidden = thought('t')
     const full = [user('a'), hidden, toolItem({ id: 'x', kind: 'read' }), agent('d')]
-    const filtered = selectTimelineForDisplay(full, 'lastMessage')
+    const filtered = selectTimelineForDisplay(full, 'onlyMessage')
     const keys = new Set(filtered.map(itemSlotKey))
     expect(
       convergeDisplayFocusKey(
@@ -289,7 +309,7 @@ describe('convergeDisplayFocusKey', () => {
         filtered,
         keys,
         itemSlotKey(hidden),
-        collapseState('lastMessage'),
+        collapseState('onlyMessage'),
       ),
     ).toBe('m:a')
   })
@@ -297,7 +317,7 @@ describe('convergeDisplayFocusKey', () => {
   it('searches forward when the hidden item is first', () => {
     const hidden = toolItem({ id: 'x', kind: 'read' })
     const full = [hidden, user('a'), agent('b')]
-    const filtered = selectTimelineForDisplay(full, 'lastMessage')
+    const filtered = selectTimelineForDisplay(full, 'onlyMessage')
     const keys = new Set(filtered.map(itemSlotKey))
     expect(
       convergeDisplayFocusKey(
@@ -305,7 +325,7 @@ describe('convergeDisplayFocusKey', () => {
         filtered,
         keys,
         itemSlotKey(hidden),
-        collapseState('lastMessage'),
+        collapseState('onlyMessage'),
       ),
     ).toBe('m:a')
   })
