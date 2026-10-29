@@ -461,7 +461,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const result = await this._auxWindows.openEditorInNewWindow(restored, {
         mode: 'open',
         pinned,
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
       if (result.ok) return
       // The closed entry was already consumed; land it in the open target group
@@ -479,7 +479,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       const result = await this._auxWindows.openEditorInNewWindow(found.editor, {
         mode: canCloneEditorInputForSplit(found.editor) ? 'copy' : 'move',
         source: found.group,
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
       if (result.ok) return
       activateGroupAndFocus(found.group, this._focusContext(), found.editor)
@@ -494,7 +494,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     const result = await this._auxWindows.openEditorInNewWindow(input, {
       mode: 'open',
       pinned,
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     if (result.ok) return
     if (!input.isDisposed && !this._groups.groups.some((group) => group.contains(input))) {
@@ -649,7 +649,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       .openEditorInNewWindow(editor, {
         mode,
         source: group,
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
       .then((result) => {
         if (!result.ok) activateGroupAndFocus(group, this._focusContext(), editor)

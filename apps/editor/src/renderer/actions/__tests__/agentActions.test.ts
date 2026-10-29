@@ -1335,7 +1335,7 @@ describe('NewAgentSessionWithScopeAction', () => {
     expect(b.auxWindows.openCalls).toHaveLength(1)
     expect(b.auxWindows.openCalls[0]!.options).toMatchObject({
       mode: 'open',
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     expect(b.auxWindows.openCalls[0]!.editor).toBeInstanceOf(AcpSessionEditorInput)
     expect(b.groups.groups).toHaveLength(1)
@@ -1658,7 +1658,7 @@ describe('ResumeAgentSessionAction', () => {
     expect(b.auxWindows.openCalls[0]!.options).toMatchObject({
       mode: 'move',
       source: b.groups.activeGroup,
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
   })
 
@@ -1675,7 +1675,7 @@ describe('ResumeAgentSessionAction', () => {
     expect(b.auxWindows.openCalls).toHaveLength(1)
     expect(b.auxWindows.openCalls[0]!.options).toMatchObject({
       mode: 'open',
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     expect((b.auxWindows.openCalls[0]!.editor as AcpSessionEditorInput).sessionId).toBe('live')
     expect(sessionTabs(b.groups)).toHaveLength(0)

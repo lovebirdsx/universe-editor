@@ -69,8 +69,8 @@ export interface CreateAuxiliaryEditorWindowOptions {
   readonly geometry?: AuxiliaryWindowGeometry
   /** Initial placement (drag-out); clamped by the main process. */
   readonly bounds?: AuxiliaryWindowBounds
-  /** Fullscreen on a different display when one exists (see the wire contract). */
-  readonly preferOtherDisplayFullscreen?: boolean
+  /** Maximized on a different display when one exists (see the wire contract). */
+  readonly preferOtherDisplayMaximized?: boolean
   readonly title?: string
   /** Pre-created part (workspace restore creates + hydrates it first). */
   readonly part?: EditorPart
@@ -87,7 +87,7 @@ export interface OpenEditorInNewWindowOptions {
   readonly pinned?: boolean
   /** Initial placement (drag-out); clamped by the main process. */
   readonly bounds?: AuxiliaryWindowBounds
-  readonly preferOtherDisplayFullscreen?: boolean
+  readonly preferOtherDisplayMaximized?: boolean
   /** Activate/focus the new window (default true). */
   readonly activate?: boolean
 }
@@ -378,8 +378,8 @@ export class AuxiliaryEditorWindowService
       activate: options.activate !== false,
       explicitEmpty: true,
       ...(options.bounds ? { bounds: options.bounds } : {}),
-      ...(options.preferOtherDisplayFullscreen === true
-        ? { preferOtherDisplayFullscreen: true }
+      ...(options.preferOtherDisplayMaximized === true
+        ? { preferOtherDisplayMaximized: true }
         : {}),
     })
     if (!entry) {
@@ -1014,8 +1014,8 @@ export class AuxiliaryEditorWindowService
         ...(initialGeometry ? { geometry: initialGeometry } : {}),
         ...(options.title ? { title: options.title } : {}),
         ...(themeBackground ? { backgroundColor: themeBackground } : {}),
-        ...(options.preferOtherDisplayFullscreen === true
-          ? { preferOtherDisplayFullscreen: true }
+        ...(options.preferOtherDisplayMaximized === true
+          ? { preferOtherDisplayMaximized: true }
           : {}),
       })
       token = prepared.token

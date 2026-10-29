@@ -651,7 +651,7 @@ describe('WorkspaceSymbolQuickAccessProvider open targets', () => {
     expect(setup.aux.openCalls[0]!.options).toMatchObject({
       mode: 'open',
       pinned: true,
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     expect(setup.aux.openCalls[0]!.editor).toBeInstanceOf(FileEditorInput)
     // The main window is left untouched.

@@ -1038,7 +1038,7 @@ describe('FileQuickAccessProvider', () => {
     expect(call.options).toMatchObject({
       mode: 'open',
       pinned: true,
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     expect(call.editor.resource?.fsPath).toBe(URI.file('/ws/src/b.ts').fsPath)
     // The resolver only builds the input; nothing opens in the main window.
@@ -1071,7 +1071,7 @@ describe('FileQuickAccessProvider', () => {
       expect(auxWindows.openCalls[0]!.options).toMatchObject({
         mode: 'copy',
         source: groupsFake.all[0],
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
     } finally {
       registration.dispose()

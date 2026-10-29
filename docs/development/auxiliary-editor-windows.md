@@ -34,7 +34,9 @@ renderer（主窗口，唯一运行时）
 
 几何解析在 main：以 `screen.getDisplayNearestPoint` 取工作区，宽度/高度做 `MIN_*` 与工作区裁剪，位置再夹到可达范围内。拖出建窗传的是 `screenX/screenY`（CSS/DIP 坐标，与 BrowserWindow bounds 同空间）。
 
-`preferOtherDisplayFullscreen` 是给「在新窗口打开」手势用的几何提示：**只在没有显式 `geometry` 时生效**（显式几何是用户/恢复决定的落点，提示不得改写）。它按建窗请求来源窗口（同父级下当前聚焦的窗口，否则父窗口）所在显示器，从 `screen.getAllDisplays()` 里排除自身与完全同 bounds 的镜像屏，按两屏中心距离最近（同距离取 `id` 小的）选一块，返回该屏 fullscreen bounds + `displayId/displayBounds`，并置 `isFullscreen: true`；没有候选（单屏或全镜像）时原样走下面的级联逻辑，`isFullscreen` 保持 false。来源显示器用窗口**当前可见** bounds 判定——最大化/全屏时 `getNormalBounds()` 返回的是还原位置，可能仍停留在上一块屏。不要把它做成 renderer 侧枚举屏幕——显示器信息只属于 main。
+`preferOtherDisplayMaximized` 是给「在新窗口打开」手势用的几何提示：**只在没有显式 `geometry` 时生效**（显式几何是用户/恢复决定的落点，提示不得改写）。它按建窗请求来源窗口（同父级下当前聚焦的窗口，否则父窗口）所在显示器，从 `screen.getAllDisplays()` 里排除自身与完全同 bounds 的镜像屏，按两屏中心距离最近（同距离取 `id` 小的）选一块，返回该屏 workArea 居中的默认尺寸（`min(1000x700, 80% workArea)`）作为 normal rect + `displayId/displayBounds`，并置 `isMaximized: true`、`isFullscreen: false`；没有候选（单屏或全镜像）时原样走下面的级联逻辑，`isMaximized` 保持 false。**不要改成全屏**：原生全屏窗口不响应标题栏的 `-webkit-app-region: drag`，用户打开后无法拖动（Windows 上点一次最大化即可退出全屏并恢复可拖）；Windows 的最大化窗口可由 caption 拖动还原，macOS 的 maximize 是 zoom、可用窗口按钮还原，观感同样是铺满目标屏工作区。normal rect 不能取整块屏幕，否则「还原」或拖动最大化窗口后留下一个铺满屏幕的普通窗口。来源显示器用窗口**当前可见** bounds 判定——最大化/全屏时 `getNormalBounds()` 返回的是还原位置，可能仍停留在上一块屏。不要把它做成 renderer 侧枚举屏幕——显示器信息只属于 main。
+
+旧版本（全屏路径）已经持久化到 workspace state 的辅助窗口几何会以「normal rect 完全等于 displayBounds」为特征被 `_migrateLegacyAuxiliaryFullscreen` 迁成最大化；该迁移只在非 macOS 生效（macOS 红绿灯全屏是合法用户入口），其他形态的 fullscreen 状态原样保留。这是按几何特征识别的永久启发式（没有一次性 schema 版本门槛）：以后若给辅助窗口新增真正的全屏入口，必须同步调整该判定，否则以 displayBounds 为 normal rect 的合法全屏会被误迁。
 
 ## 在新窗口打开编辑器
 

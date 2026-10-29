@@ -431,7 +431,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
             const result = await this._auxWindows.openEditorInNewWindow(editor, {
               mode: canCloneEditorInputForSplit(editor) ? 'copy' : 'move',
               source: group,
-              preferOtherDisplayFullscreen: true,
+              preferOtherDisplayMaximized: true,
             })
             if (result.ok) return result.editor
           } catch {
@@ -446,7 +446,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       const result = await this._auxWindows.openEditorInNewWindow(input, {
         mode: 'open',
         pinned: true,
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
       if (result.ok) return result.editor
     } catch {

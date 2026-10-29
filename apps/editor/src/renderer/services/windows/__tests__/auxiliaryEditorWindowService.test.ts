@@ -261,7 +261,7 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
   it('opens a new input directly in the auxiliary window and forwards placement hints', async () => {
     const input = new TestInput('/fresh')
     const result = await ctx.service.openEditorInNewWindow(input, {
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
 
     expect(result.ok).toBe(true)
@@ -269,7 +269,7 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     expect(result.editor).toBe(input)
     expect(result.window.part.activeGroup.contains(input)).toBe(true)
     expect(ctx.aux.prepareOpen).toHaveBeenCalledWith(
-      expect.objectContaining({ preferOtherDisplayFullscreen: true }),
+      expect.objectContaining({ preferOtherDisplayMaximized: true }),
     )
     expect(ctx.service.windows).toHaveLength(1)
     // The window must survive: explicitEmpty was cleared once the editor landed.
@@ -318,7 +318,7 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
       const result = await ctx.service.openEditorInNewWindow(input, {
         mode: 'copy',
         source,
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
       expect(result.ok).toBe(true)
       if (!result.ok) return

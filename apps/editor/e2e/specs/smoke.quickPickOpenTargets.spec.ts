@@ -3,7 +3,7 @@
  *  new auxiliary editor window (@p1). Covers file picks, session picks and the
  *  command palette (an editor-opening command honours the accept modifiers).
  *
- *  Geometry (which display / fullscreen) is covered by the main-process unit
+ *  Geometry (which display / maximized) is covered by the main-process unit
  *  tests; a CI box usually has one display, so the appearance assertions here
  *  are limited to "an auxiliary window exists and owns the editor".
  *--------------------------------------------------------------------------------------------*/

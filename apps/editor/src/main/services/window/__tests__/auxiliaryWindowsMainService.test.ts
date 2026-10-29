@@ -288,7 +288,7 @@ describe('AuxiliaryWindowsMainService', () => {
     mac.dispose()
   })
 
-  describe('preferOtherDisplayFullscreen', () => {
+  describe('preferOtherDisplayMaximized', () => {
     const primary = {
       id: 1,
       bounds: { x: 0, y: 0, width: 1920, height: 1080 },
@@ -305,15 +305,11 @@ describe('AuxiliaryWindowsMainService', () => {
       workArea: { x: 4480, y: 0, width: 1920, height: 1040 },
     }
 
-    function prepareWithDisplays(
-      displays: readonly (typeof primary)[],
-      parentBounds: { x: number; y: number; width: number; height: number },
-      opts: {
-        isMaximized?: boolean
-        isFullScreen?: boolean
-        normalBounds?: { x: number; y: number; width: number; height: number }
-      } = {},
-    ) {
+    // Default restore rect: min(1000x700, 80% of the work area), centered.
+    const PRIMARY_RECT = { x: 460, y: 170, width: 1000, height: 700 }
+    const SECONDARY_RECT = { x: 2700, y: 350, width: 1000, height: 700 }
+
+    function useDisplays(displays: readonly (typeof primary)[]): void {
       vi.mocked(screen.getAllDisplays).mockReturnValue(displays as never)
       vi.mocked(screen.getDisplayNearestPoint).mockImplementation(
         (point) =>
@@ -325,36 +321,68 @@ describe('AuxiliaryWindowsMainService', () => {
               point.y < d.bounds.y + d.bounds.height,
           ) ?? displays[0]) as never,
       )
+    }
+
+    function prepareWithDisplays(
+      displays: readonly (typeof primary)[],
+      parentBounds: { x: number; y: number; width: number; height: number },
+      opts: {
+        isMaximized?: boolean
+        isFullScreen?: boolean
+        normalBounds?: { x: number; y: number; width: number; height: number }
+      } = {},
+    ) {
+      useDisplays(displays)
       const parent = makeParent(service)
       parent.bounds = { ...parentBounds }
       parent.maximized = opts.isMaximized === true
       parent.fullscreen = opts.isFullScreen === true
       if (opts.normalBounds) parent.getNormalBounds = () => ({ ...opts.normalBounds! })
-      const prepared = service.prepareOpen(parent.id, { preferOtherDisplayFullscreen: true })
+      const prepared = service.prepareOpen(parent.id, { preferOtherDisplayMaximized: true })
       const response = service.handleWindowOpen(parent as never, 'about:blank', prepared.frameName)
       expect(response?.action).toBe('allow')
+      const options = response?.overrideBrowserWindowOptions
       const child = new FakeWindow(90)
+      // A real BrowserWindow is constructed at these bounds; FakeWindow ignores
+      // constructor options, so mirror them to exercise state capture.
+      if (options) {
+        child.bounds = {
+          x: options.x ?? 0,
+          y: options.y ?? 0,
+          width: options.width ?? 0,
+          height: options.height ?? 0,
+        }
+      }
       expect(
         service.adoptCreatedWindow(parent as never, child as never, details(prepared.frameName)),
       ).toBe(true)
       child.emit('ready-to-show')
-      return { options: response?.overrideBrowserWindowOptions, child }
+      return {
+        options,
+        child,
+        state: service.getWindowState(parent.id, prepared.token),
+      }
     }
 
-    it('opens fullscreen on the other display', () => {
-      const { options, child } = prepareWithDisplays([primary, secondary], {
+    it('opens maximized on the other display', () => {
+      const { options, child, state } = prepareWithDisplays([primary, secondary], {
         x: 100,
         y: 100,
         width: 1280,
         height: 800,
       })
-      expect(options).toMatchObject({
-        x: secondary.bounds.x,
-        y: secondary.bounds.y,
-        width: secondary.bounds.width,
-        height: secondary.bounds.height,
+      expect(options).toMatchObject(SECONDARY_RECT)
+      expect(child.isMaximized()).toBe(true)
+      expect(child.isFullScreen()).toBe(false)
+      // The persisted restore rect must be the centered default window, not the
+      // display bounds: unmaximizing must not leave a screen-sized window.
+      expect(state?.geometry).toMatchObject({
+        ...SECONDARY_RECT,
+        isMaximized: true,
+        isFullscreen: false,
+        displayId: secondary.id,
+        displayBounds: secondary.bounds,
       })
-      expect(child.isFullScreen()).toBe(true)
     })
 
     it('uses the visible bounds, not the restored position, for a fullscreen source', () => {
@@ -368,13 +396,9 @@ describe('AuxiliaryWindowsMainService', () => {
           normalBounds: { x: 100, y: 100, width: 1280, height: 800 },
         },
       )
-      expect(options).toMatchObject({
-        x: primary.bounds.x,
-        y: primary.bounds.y,
-        width: primary.bounds.width,
-        height: primary.bounds.height,
-      })
-      expect(child.isFullScreen()).toBe(true)
+      expect(options).toMatchObject(PRIMARY_RECT)
+      expect(child.isMaximized()).toBe(true)
+      expect(child.isFullScreen()).toBe(false)
     })
 
     it('uses the visible bounds for a maximized source as well', () => {
@@ -386,7 +410,7 @@ describe('AuxiliaryWindowsMainService', () => {
           normalBounds: { x: 100, y: 100, width: 1280, height: 800 },
         },
       )
-      expect(options).toMatchObject({ x: primary.bounds.x, y: primary.bounds.y })
+      expect(options).toMatchObject(PRIMARY_RECT)
     })
 
     it('picks the display closest to the current one when several exist', () => {
@@ -396,10 +420,7 @@ describe('AuxiliaryWindowsMainService', () => {
         width: 1280,
         height: 800,
       })
-      expect(options).toMatchObject({
-        x: secondary.bounds.x,
-        y: secondary.bounds.y,
-      })
+      expect(options).toMatchObject(SECONDARY_RECT)
     })
 
     it('works when the source window is on a secondary display', () => {
@@ -409,13 +430,10 @@ describe('AuxiliaryWindowsMainService', () => {
         width: 1280,
         height: 800,
       })
-      expect(options).toMatchObject({
-        x: primary.bounds.x,
-        y: primary.bounds.y,
-      })
+      expect(options).toMatchObject(PRIMARY_RECT)
     })
 
-    it('falls back to cascade placement (not fullscreen) with a single display', () => {
+    it('falls back to cascade placement (not maximized) with a single display', () => {
       const { options, child } = prepareWithDisplays([primary], {
         x: 100,
         y: 100,
@@ -423,6 +441,7 @@ describe('AuxiliaryWindowsMainService', () => {
         height: 800,
       })
       expect(options).toMatchObject({ x: 128, y: 128, width: 1000, height: 640 })
+      expect(child.isMaximized()).toBe(false)
       expect(child.isFullScreen()).toBe(false)
     })
 
@@ -440,7 +459,40 @@ describe('AuxiliaryWindowsMainService', () => {
         height: 800,
       })
       expect(options).toMatchObject({ x: 128, y: 128 })
+      expect(child.isMaximized()).toBe(false)
       expect(child.isFullScreen()).toBe(false)
+    })
+
+    it('clamps the restore rect on a small display', () => {
+      const small = {
+        id: 4,
+        bounds: { x: 1920, y: 0, width: 800, height: 600 },
+        workArea: { x: 1920, y: 0, width: 800, height: 600 },
+      }
+      const { options, child } = prepareWithDisplays([primary, small], {
+        x: 100,
+        y: 100,
+        width: 1280,
+        height: 800,
+      })
+      expect(options).toMatchObject({ x: 2000, y: 60, width: 640, height: 480 })
+      expect(child.isMaximized()).toBe(true)
+    })
+
+    it('places the window on a display left of the source', () => {
+      const left = {
+        id: 5,
+        bounds: { x: -2560, y: 0, width: 2560, height: 1440 },
+        workArea: { x: -2560, y: 0, width: 2560, height: 1400 },
+      }
+      const { options, child } = prepareWithDisplays([primary, left], {
+        x: 100,
+        y: 100,
+        width: 1280,
+        height: 800,
+      })
+      expect(options).toMatchObject({ x: -1780, y: 350, width: 1000, height: 700 })
+      expect(child.isMaximized()).toBe(true)
     })
 
     it('does not override explicit geometry', () => {
@@ -448,7 +500,7 @@ describe('AuxiliaryWindowsMainService', () => {
       const parent = makeParent(service)
       const prepared = service.prepareOpen(parent.id, {
         geometry: { x: 10, y: 20, width: 300, height: 200, isFullscreen: false },
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
       const response = service.handleWindowOpen(parent as never, 'about:blank', prepared.frameName)
       expect(response?.overrideBrowserWindowOptions).toMatchObject({
@@ -456,6 +508,131 @@ describe('AuxiliaryWindowsMainService', () => {
         y: 20,
         width: 300,
         height: 200,
+      })
+    })
+
+    describe('legacy fullscreen placement migration', () => {
+      const legacyFullscreen = {
+        ...secondary.bounds,
+        isMaximized: false,
+        isFullscreen: true,
+        displayId: secondary.id,
+        displayBounds: { ...secondary.bounds },
+      }
+
+      function openLegacyFullscreen(svc: Service) {
+        const parent = makeParent(svc)
+        const prepared = svc.prepareOpen(parent.id, { geometry: legacyFullscreen })
+        const response = svc.handleWindowOpen(parent as never, 'about:blank', prepared.frameName)
+        expect(response?.action).toBe('allow')
+        const options = response?.overrideBrowserWindowOptions
+        const child = new FakeWindow(91)
+        if (options) {
+          child.bounds = {
+            x: options.x ?? 0,
+            y: options.y ?? 0,
+            width: options.width ?? 0,
+            height: options.height ?? 0,
+          }
+        }
+        expect(
+          svc.adoptCreatedWindow(parent as never, child as never, details(prepared.frameName)),
+        ).toBe(true)
+        child.emit('ready-to-show')
+        return { options, child, state: svc.getWindowState(parent.id, prepared.token) }
+      }
+
+      it('restores the old hint-created fullscreen window as maximized', () => {
+        useDisplays([primary, secondary])
+        const { options, child, state } = openLegacyFullscreen(service)
+        expect(options).toMatchObject(SECONDARY_RECT)
+        expect(child.isMaximized()).toBe(true)
+        expect(child.isFullScreen()).toBe(false)
+        expect(state?.geometry).toMatchObject({
+          ...SECONDARY_RECT,
+          isMaximized: true,
+          isFullscreen: false,
+        })
+      })
+
+      it('keeps fullscreen on macOS (traffic light is a legitimate entry)', () => {
+        useDisplays([primary, secondary])
+        const mac = createService(false, 'darwin')
+        try {
+          const { child } = openLegacyFullscreen(mac)
+          expect(child.isFullScreen()).toBe(true)
+          expect(child.isMaximized()).toBe(false)
+        } finally {
+          mac.dispose()
+        }
+      })
+
+      it('anchors the migrated rect on the display its center lands on', () => {
+        // The old display is gone: its saved bounds now span the primary and a
+        // display to its left. The migrated center lands on the primary, so the
+        // maximize target must follow the new rect, not the old top-left corner.
+        const left = {
+          id: 5,
+          bounds: { x: -1920, y: 0, width: 1920, height: 1080 },
+          workArea: { x: -1920, y: 0, width: 1920, height: 1040 },
+        }
+        useDisplays([primary, left])
+        const parent = makeParent(service)
+        const prepared = service.prepareOpen(parent.id, {
+          geometry: {
+            x: -1920,
+            y: 0,
+            width: 3840,
+            height: 1080,
+            isMaximized: false,
+            isFullscreen: true,
+            displayId: 99,
+            displayBounds: { x: -1920, y: 0, width: 3840, height: 1080 },
+          },
+        })
+        const response = service.handleWindowOpen(
+          parent as never,
+          'about:blank',
+          prepared.frameName,
+        )
+        expect(response?.overrideBrowserWindowOptions).toMatchObject(PRIMARY_RECT)
+        const child = new FakeWindow(93)
+        service.adoptCreatedWindow(parent as never, child as never, details(prepared.frameName))
+        child.emit('ready-to-show')
+        expect(child.isMaximized()).toBe(true)
+        expect(child.isFullScreen()).toBe(false)
+      })
+
+      it('keeps fullscreen when the saved rect is not a hint placement', () => {
+        useDisplays([primary, secondary])
+        const parent = makeParent(service)
+        const prepared = service.prepareOpen(parent.id, {
+          geometry: {
+            x: 100,
+            y: 100,
+            width: 1280,
+            height: 800,
+            isMaximized: false,
+            isFullscreen: true,
+            displayId: primary.id,
+            displayBounds: { ...secondary.bounds },
+          },
+        })
+        const response = service.handleWindowOpen(
+          parent as never,
+          'about:blank',
+          prepared.frameName,
+        )
+        const child = new FakeWindow(92)
+        service.adoptCreatedWindow(parent as never, child as never, details(prepared.frameName))
+        child.emit('ready-to-show')
+        expect(response?.overrideBrowserWindowOptions).toMatchObject({
+          x: 100,
+          y: 100,
+          width: 1280,
+          height: 800,
+        })
+        expect(child.isFullScreen()).toBe(true)
       })
     })
   })

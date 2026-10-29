@@ -519,17 +519,22 @@ export class AuxiliaryWindowsMainService implements IDisposable {
     const input = options?.geometry
     // Explicit geometry (drag-out, workspace restore) is authoritative; the
     // display hint must never move a window the user placed deliberately.
-    if (options?.preferOtherDisplayFullscreen === true && input === undefined) {
-      const other = this._resolveOtherDisplayFullscreen(this._placementSourceWindow(parent))
+    if (options?.preferOtherDisplayMaximized === true && input === undefined) {
+      const other = this._resolveOtherDisplayMaximized(this._placementSourceWindow(parent))
       if (other) return other
     }
     // Reuse the persisted-window validator: rejects malformed/off-screen restore data.
     // Raw values still go through the clamp below so the result is always reachable.
-    const restored = input ? validateWindowState(input) : undefined
+    const restored = input
+      ? this._migrateLegacyAuxiliaryFullscreen(validateWindowState(input))
+      : undefined
     const parentBounds = parent.getNormalBounds()
+    // Anchor on the rect we will actually use: legacy fullscreen migration
+    // re-centers it, and picking the display from the old rect's top-left could
+    // disagree with the migrated rect's center after a monitor layout change.
     const anchor = {
-      x: input?.x ?? parentBounds.x + parentBounds.width / 2,
-      y: input?.y ?? parentBounds.y + parentBounds.height / 2,
+      x: restored?.x ?? input?.x ?? parentBounds.x + parentBounds.width / 2,
+      y: restored?.y ?? input?.y ?? parentBounds.y + parentBounds.height / 2,
     }
     const display = screen.getDisplayNearestPoint({
       x: Math.round(anchor.x),
@@ -577,12 +582,16 @@ export class AuxiliaryWindowsMainService implements IDisposable {
   }
 
   /**
-   * Fullscreen geometry on a different display, or undefined when the setup has no
+   * Maximized geometry on a different display, or undefined when the setup has no
    * usable second display (single monitor, or mirrored displays sharing bounds).
    * Mirrored displays are filtered by bounds so "another display" does not land on
    * the same physical area.
+   *
+   * Deliberately maximized rather than fullscreen: a fullscreen window ignores the
+   * renderer title bar's `-webkit-app-region: drag`, which made the window
+   * impossible to move until the user toggled maximize.
    */
-  private _resolveOtherDisplayFullscreen(source: BrowserWindow): IWindowState | undefined {
+  private _resolveOtherDisplayMaximized(source: BrowserWindow): IWindowState | undefined {
     // Fullscreen/maximized windows report their restored position from
     // getNormalBounds, which can still name the display they were on before —
     // the user sees the current bounds instead.
@@ -605,14 +614,68 @@ export class AuxiliaryWindowsMainService implements IDisposable {
           centerDistanceSq(b.bounds, sourceDisplay.bounds) || a.id - b.id,
     )[0]!
     return {
-      x: target.bounds.x,
-      y: target.bounds.y,
-      width: target.bounds.width,
-      height: target.bounds.height,
-      isMaximized: false,
-      isFullscreen: true,
+      ...this._defaultRestoreRect(target.workArea),
+      isMaximized: true,
+      isFullscreen: false,
       displayId: target.id,
+      // bounds (not workArea): findTargetDisplay matches this identity exactly.
       displayBounds: { ...target.bounds },
+    }
+  }
+
+  /**
+   * Normal rect a window restores to when it leaves the maximized state. A
+   * max-restore must not be a screen-sized window, otherwise dragging the title
+   * bar or clicking "restore" leaves a window that still covers the whole display.
+   */
+  private _defaultRestoreRect(workArea: BoundsLike): {
+    x: number
+    y: number
+    width: number
+    height: number
+  } {
+    const width = clampNumber(
+      Math.min(DEFAULT_WIDTH, Math.round(workArea.width * 0.8)),
+      MIN_WIDTH,
+      workArea.width,
+    )
+    const height = clampNumber(
+      Math.min(DEFAULT_HEIGHT, Math.round(workArea.height * 0.8)),
+      MIN_HEIGHT,
+      workArea.height,
+    )
+    return {
+      x: workArea.x + Math.round((workArea.width - width) / 2),
+      y: workArea.y + Math.round((workArea.height - height) / 2),
+      width,
+      height,
+    }
+  }
+
+  /**
+   * Pre-fix builds placed hint-created windows fullscreen and persisted that
+   * state, so the saved normal rect equals the display bounds. Those windows
+   * cannot be dragged; restore them maximized instead. macOS keeps fullscreen —
+   * the traffic light is a legitimate user entry.
+   */
+  private _migrateLegacyAuxiliaryFullscreen(
+    state: IWindowState | undefined,
+  ): IWindowState | undefined {
+    if (!state?.isFullscreen) return state
+    if ((this._options.platform ?? process.platform) === 'darwin') return state
+    const displayBounds = state.displayBounds
+    if (!displayBounds) return state
+    const rect = { x: state.x, y: state.y, width: state.width, height: state.height }
+    if (!sameBounds(rect, displayBounds)) return state
+    const display = screen.getDisplayNearestPoint({
+      x: Math.round(state.x + state.width / 2),
+      y: Math.round(state.y + state.height / 2),
+    })
+    return {
+      ...state,
+      ...this._defaultRestoreRect(display.workArea),
+      isFullscreen: false,
+      isMaximized: true,
     }
   }
 

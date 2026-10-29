@@ -579,7 +579,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
         const result = await this._auxWindows.openEditorInNewWindow(existing.editor, {
           mode: canCloneEditorInputForSplit(existing.editor) ? 'copy' : 'move',
           source: existing.group,
-          preferOtherDisplayFullscreen: true,
+          preferOtherDisplayMaximized: true,
         })
         if (result.ok) return result.editor
       } catch {
@@ -592,7 +592,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
       const result = await this._auxWindows.openEditorInNewWindow(input, {
         mode: 'open',
         pinned: false,
-        preferOtherDisplayFullscreen: true,
+        preferOtherDisplayMaximized: true,
       })
       if (result.ok) return result.editor
     } catch {

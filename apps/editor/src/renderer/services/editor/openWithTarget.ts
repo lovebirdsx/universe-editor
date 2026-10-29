@@ -130,12 +130,12 @@ function groupOpenOptions(options: OpenTargetOptions): {
 function auxOptions(options: OpenTargetOptions): {
   pinned?: boolean
   activate?: boolean
-  preferOtherDisplayFullscreen: boolean
+  preferOtherDisplayMaximized: boolean
 } {
   return {
     ...(options.pinned !== undefined ? { pinned: options.pinned } : {}),
     ...(options.preserveFocus === true ? { activate: false } : {}),
-    preferOtherDisplayFullscreen: true,
+    preferOtherDisplayMaximized: true,
   }
 }
 

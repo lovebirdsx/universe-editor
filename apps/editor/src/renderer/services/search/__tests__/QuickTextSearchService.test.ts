@@ -540,7 +540,7 @@ describe('QuickTextSearchService', () => {
     expect(auxWindows.openCalls[0]!.options).toMatchObject({
       mode: 'open',
       pinned: false,
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     expect(auxWindows.openCalls[0]!.editor.resource?.toString()).toBe(
       URI.file('/repo/src/a.ts').toString(),

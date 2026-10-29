@@ -419,7 +419,7 @@ describe('side-task navigation commands', () => {
     expect(h.auxWindows.openCalls).toHaveLength(1)
     expect(h.auxWindows.openCalls[0]!.options).toMatchObject({
       mode: 'open',
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     expect((h.auxWindows.openCalls[0]!.editor as AcpSessionEditorInput).sessionId).toBe('side-1')
     // No right split is created when the window takes the editor.

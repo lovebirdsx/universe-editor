@@ -1352,7 +1352,7 @@ export async function openSessionInNewWindow(
     const result = await auxWindows.openEditorInNewWindow(found.editor, {
       mode: 'move',
       source: found.group,
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
     if (!result.ok) return false
     closeDuplicateSessionEditors(groups, result.window.part.activeGroup, session.id)
@@ -1362,7 +1362,7 @@ export async function openSessionInNewWindow(
   const input = inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined)
   const result = await auxWindows.openEditorInNewWindow(input, {
     mode: 'open',
-    preferOtherDisplayFullscreen: true,
+    preferOtherDisplayMaximized: true,
   })
   if (!result.ok) {
     if (!input.isDisposed) input.dispose()

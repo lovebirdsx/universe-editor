@@ -119,7 +119,7 @@ describe('openDocWithTarget', () => {
     expect(openEditorInNewWindow).toHaveBeenCalledWith(doc, {
       mode: 'open',
       pinned: true,
-      preferOtherDisplayFullscreen: true,
+      preferOtherDisplayMaximized: true,
     })
   })
 })
