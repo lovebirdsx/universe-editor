@@ -101,6 +101,7 @@ import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
 import { buildStickyKey, findByStickyKey, itemSlotKey, PLAN_SLOT_KEY } from './stickyScroll.js'
+import { buildExploreResultLinks, exploreResultPropsFor } from './exploreResultLinks.js'
 import {
   AcpSessionOutlineRegistry,
   type IAcpSessionOutlineController,
@@ -829,6 +830,11 @@ function ChatScroll({
   // Let persist()/the restore effect read the live mode without re-binding to it.
   const virtualizeRef = useRef(virtualize)
   virtualizeRef.current = virtualize
+
+  // Spawn card id → its synthetic Explore result card. Derived per timeline
+  // update; each slot receives only its own two primitive strings, so memoized
+  // rows don't re-render just because the index object was rebuilt.
+  const exploreResultLinks = useMemo(() => buildExploreResultLinks(timeline), [timeline])
 
   // Keep the timeline reachable from the keyboard handle without re-binding it on
   // every render (the ref read is cheap; capturing `timeline` would re-allocate
@@ -2076,6 +2082,7 @@ function ChatScroll({
                     isFocused={key === focusedKey}
                     focusedKey={focusedKey}
                     {...bookmarkProp(bookmarkedSlots, key)}
+                    {...exploreResultPropsFor(exploreResultLinks, item)}
                     collapsed={resolveCollapsed(key, item, collapse)}
                     collapse={collapse}
                     onToggleCollapse={handleToggleCollapse}
@@ -2102,6 +2109,7 @@ function ChatScroll({
                   isFocused={key === focusedKey}
                   focusedKey={focusedKey}
                   {...bookmarkProp(bookmarkedSlots, key)}
+                  {...exploreResultPropsFor(exploreResultLinks, item)}
                   collapsed={resolveCollapsed(key, item, collapse)}
                   collapse={collapse}
                   onToggleCollapse={handleToggleCollapse}
@@ -2252,6 +2260,8 @@ const TimelineSlot = memo(function TimelineSlot({
   sessionRunning,
   isFocused,
   bookmark,
+  exploreResultKey,
+  exploreResultPath,
   collapsed,
   collapse,
   onToggleCollapse,
@@ -2263,6 +2273,10 @@ const TimelineSlot = memo(function TimelineSlot({
   sessionRunning: boolean
   isFocused: boolean
   bookmark?: number
+  /** Slot key + report path of the synthetic Explore result linked to this
+   *  (spawn) card; absent for every other slot. */
+  exploreResultKey?: string
+  exploreResultPath?: string
   collapsed: boolean
   collapse: CollapseState
   onToggleCollapse: (key: string) => void
@@ -2356,6 +2370,8 @@ const TimelineSlot = memo(function TimelineSlot({
           }}
           {...(badge !== undefined ? { badge } : {})}
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
+          {...(exploreResultKey !== undefined ? { exploreResultKey } : {})}
+          {...(exploreResultPath !== undefined ? { exploreResultPath } : {})}
         />
       )
     case 'compaction':

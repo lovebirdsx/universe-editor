@@ -53,15 +53,19 @@ async function openSessionWithCards(
 }
 
 /** The card currently drawing the keyboard focus ring, or null. */
-function focusedSubagentKey(page: Page): Promise<string | null> {
-  return page.evaluate((selector) => {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+function focusedKey(page: Page, selector: string): Promise<string | null> {
+  return page.evaluate((sel) => {
+    for (const el of document.querySelectorAll<HTMLElement>(sel)) {
       if (getComputedStyle(el).outlineStyle === 'solid') {
         return el.getAttribute('data-timeline-key')
       }
     }
     return null
-  }, SUBAGENT_CARDS)
+  }, selector)
+}
+
+function focusedSubagentKey(page: Page): Promise<string | null> {
+  return focusedKey(page, SUBAGENT_CARDS)
 }
 
 /** Whether the card's own header row is expanded (null when the card is gone). */
@@ -72,6 +76,32 @@ function cardExpanded(page: Page, key: string): Promise<boolean | null> {
     const expanded = toggle?.getAttribute('aria-expanded')
     return expanded === null || expanded === undefined ? null : expanded === 'true'
   }, key)
+}
+
+/** Whether any part of the card is inside the timeline's scroll viewport. */
+function cardInTimelineViewport(page: Page, key: string): Promise<boolean> {
+  return page.evaluate((slotKey) => {
+    const card = document.querySelector(`[data-timeline-key="${CSS.escape(slotKey)}"]`)
+    const scroller = document.querySelector('[data-testid="acp-timeline"]')?.parentElement
+    if (!card || !scroller) return false
+    const rect = card.getBoundingClientRect()
+    const view = scroller.getBoundingClientRect()
+    return rect.height > 0 && rect.bottom > view.top && rect.top < view.bottom
+  }, key)
+}
+
+function timelineScrollTop(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const scroller = document.querySelector('[data-testid="acp-timeline"]')?.parentElement
+    return scroller?.scrollTop ?? 0
+  })
+}
+
+async function scrollTimelineToTop(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const scroller = document.querySelector('[data-testid="acp-timeline"]')?.parentElement
+    scroller?.scrollTo({ top: 0 })
+  })
 }
 
 /** Jumping only focuses the card header; it must never unfold the body. */
@@ -193,5 +223,68 @@ test.describe('@p1 sub-agent card navigation', () => {
 
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()
+  })
+
+  test('the Explore result back-link locates the saved report and opens it', async ({
+    page,
+    workbench,
+  }) => {
+    // Enough filler turns to push the report well below the fold, so the jump
+    // actually has to scroll rather than finding the card already on screen.
+    const keys = await openSessionWithCards(page, workbench, ['emit-explore-result:40'])
+    const spawnKey = keys[0]!
+    const resultKey = `t:explore-result-${spawnKey.slice(2)}`
+    const spawn = page.locator(`[data-timeline-key="${spawnKey}"]`)
+    const result = page.locator(`[data-timeline-key="${resultKey}"]`)
+
+    await expect(spawn.getByTestId('acp-toolcall-explore-result-jump')).toBeVisible({
+      timeout: 10000,
+    })
+    await expect(result).toHaveCount(1, { timeout: 10000 })
+
+    // Park the timeline at the spawn card so the report really starts out of
+    // view; otherwise the assertion would pass even with a no-op jump.
+    await scrollTimelineToTop(page)
+    await expect.poll(() => cardInTimelineViewport(page, spawnKey), { timeout: 5000 }).toBe(true)
+    await expect.poll(() => cardInTimelineViewport(page, resultKey), { timeout: 5000 }).toBe(false)
+    const scrollBefore = await timelineScrollTop(page)
+
+    await spawn.getByTestId('acp-toolcall-explore-result-jump').click()
+
+    await expect
+      .poll(() => focusedKey(page, `[data-timeline-key="${resultKey}"]`), { timeout: 5000 })
+      .toBe(resultKey)
+    await expect.poll(() => cardInTimelineViewport(page, resultKey), { timeout: 5000 }).toBe(true)
+    expect(await timelineScrollTop(page)).toBeGreaterThan(scrollBefore)
+    // Locating only highlights: the report card keeps its folded body.
+    expect(await cardExpanded(page, resultKey)).toBe(false)
+
+    // The second action opens the report itself — a preview over the chat for a
+    // plain click, a group beside it for Ctrl+click.
+    await spawn.getByTestId('acp-toolcall-explore-result-open').click()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 10000 })
+      .toBe('markdown.preview')
+    expect(await workbench.getEditorGroupCount()).toBe(1)
+
+    // The preview replaced the chat in the active group, so bring the chat back
+    // before exercising the side-group modifier.
+    await workbench.runCommand('workbench.action.closeActiveEditor')
+    await expect(spawn.getByTestId('acp-toolcall-explore-result-open')).toBeVisible({
+      timeout: 10000,
+    })
+
+    await spawn.getByTestId('acp-toolcall-explore-result-open').click({ modifiers: ['Control'] })
+    await expect.poll(() => workbench.getEditorGroupCount()).toBe(2)
+  })
+
+  test('a sub-agent without a saved report offers no Explore result action', async ({
+    page,
+    workbench,
+  }) => {
+    const keys = await openSessionWithCards(page, workbench, ['emit-subagent:1x1'])
+    const card = page.locator(`[data-timeline-key="${keys[0]}"]`)
+    await expect(card.getByTestId('acp-toolcall-explore-result-jump')).toHaveCount(0)
+    await expect(card.getByTestId('acp-toolcall-explore-result-open')).toHaveCount(0)
   })
 })

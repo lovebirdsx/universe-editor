@@ -10,13 +10,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { memo, useMemo, useState, type ReactNode } from 'react'
-import { Eye, FileSymlink } from 'lucide-react'
+import { Eye, FileSymlink, LocateFixed } from 'lucide-react'
 import {
   IConfigurationService,
   IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
   IInstantiationService,
+  URI,
   IUriIdentityService,
   IWorkspaceService,
   REMOTE_SCHEME,
@@ -31,6 +32,7 @@ import type {
   IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
 import { firstLineSummary, memoryTrimmedNotice } from '../../services/acp/session/acpSession.js'
+import { AcpSessionOutlineRegistry } from '../../services/acp/session/acpSessionOutlineRegistry.js'
 import { stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
@@ -129,6 +131,8 @@ export const ToolCallCard = memo(function ToolCallCard({
   onToggleCollapse,
   subtreeCollapse,
   badge,
+  exploreResultKey,
+  exploreResultPath,
 }: {
   call: AcpToolCall
   /** Owning session — needed by the MCP replay action; absent in detached previews. */
@@ -141,6 +145,13 @@ export const ToolCallCard = memo(function ToolCallCard({
   onToggleCollapse?: () => void
   subtreeCollapse?: SubtreeCollapse
   badge?: ReactNode
+  /** Slot key of the synthetic Explore result card linked to this spawn card.
+   *  ChatBody derives it from the timeline; absent when there is no report or
+   *  the card is rendered outside the chat (ToolCallList). */
+  exploreResultKey?: string
+  /** Saved report path from that result card's diff — kept even after the
+   *  result card is memory-trimmed. */
+  exploreResultPath?: string
 }) {
   const editorService = useService(IEditorService)
   const editorResolver = useService(IEditorResolverService)
@@ -419,10 +430,9 @@ export const ToolCallCard = memo(function ToolCallCard({
   // the document lands in the group to the right, matching the "open to the
   // side" every other file link in the workbench offers. Alt+click (Alt+Enter)
   // sends it to an auxiliary window instead.
-  const openCreated = (target: OpenTarget): void => {
-    if (createdUri === undefined) return
+  const openUriForRead = (uri: URI, target: OpenTarget): void => {
     if (target === 'newWindow') {
-      const preview = resourcePreviewDescriptor(createdUri)
+      const preview = resourcePreviewDescriptor(uri)
       void (async () => {
         const result = preview
           ? await openSingletonWithTarget(
@@ -434,7 +444,7 @@ export const ToolCallCard = memo(function ToolCallCard({
             )
           : await openUriWithTarget(
               { groups: editorGroups, aux, inst, uriIdentity, resolver: editorResolver },
-              createdUri,
+              uri,
               target,
               { pinned: true },
             )
@@ -442,7 +452,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         openResourceForRead(
           editorGroups,
           editorGroups.openTargetGroup,
-          createdUri,
+          uri,
           editorResolver,
           windowFocus,
         )
@@ -450,7 +460,7 @@ export const ToolCallCard = memo(function ToolCallCard({
       return
     }
     if (target === 'side') {
-      const preview = resourcePreviewDescriptor(createdUri)
+      const preview = resourcePreviewDescriptor(uri)
       if (preview) {
         void (async () => {
           const result = await openSingletonWithTarget(
@@ -462,21 +472,24 @@ export const ToolCallCard = memo(function ToolCallCard({
           )
           if (result.handled) return
           const group = ensureSideGroup(editorGroups)
-          openResourceForRead(editorGroups, group, createdUri, editorResolver, windowFocus)
+          openResourceForRead(editorGroups, group, uri, editorResolver, windowFocus)
         })()
         return
       }
       const group = ensureSideGroup(editorGroups)
-      openResourceForRead(editorGroups, group, createdUri, editorResolver, windowFocus)
+      openResourceForRead(editorGroups, group, uri, editorResolver, windowFocus)
       return
     }
     openResourceForRead(
       editorGroups,
       editorGroups.openTargetGroup,
-      createdUri,
+      uri,
       editorResolver,
       windowFocus,
     )
+  }
+  const openCreated = (target: OpenTarget): void => {
+    if (createdUri !== undefined) openUriForRead(createdUri, target)
   }
   // The header is itself a <button>; nesting one inside it is invalid HTML that
   // the browser silently re-parents, so this affordance is a span acting as one.
@@ -507,6 +520,79 @@ export const ToolCallCard = memo(function ToolCallCard({
     </span>
   )
 
+  // A sub-agent card whose Explore run produced a saved report gets two header
+  // actions: locate the synthetic result card, and open the report itself. The
+  // link comes from ChatBody (derived from the timeline), so both disappear
+  // together with the result card.
+  const exploreResultUri =
+    exploreResultPath !== undefined
+      ? toolCallPathUri(exploreResultPath, workspaceFolder)
+      : undefined
+  const exploreResultPreviewable =
+    exploreResultUri !== undefined && previewLanguageForResource(exploreResultUri) !== undefined
+  const jumpToResultLabel = localize('acp.subagent.jumpToResult', 'Jump to Explore result')
+  const openResultLabel = localize('acp.subagent.openResult', 'Open Explore result')
+  const jumpToResult = (): void => {
+    if (session === undefined || exploreResultKey === undefined) return
+    const controller = AcpSessionOutlineRegistry.get(session.id)
+    controller?.scrollToKey(exploreResultKey)
+    controller?.focus()
+  }
+  // The header is itself a <button>; nesting a real button is invalid HTML that
+  // the browser silently re-parents, so these are spans acting as buttons —
+  // the same contract as readAction above.
+  const resultActions =
+    session !== undefined && call.subagent === true && exploreResultKey !== undefined ? (
+      <span className={styles['toolCallResultActions']}>
+        <span
+          className={styles['toolCallResultAction']}
+          role="button"
+          tabIndex={0}
+          aria-label={jumpToResultLabel}
+          data-tooltip={jumpToResultLabel}
+          data-testid="acp-toolcall-explore-result-jump"
+          onClick={(e) => {
+            e.stopPropagation()
+            jumpToResult()
+          }}
+          onKeyDown={(e) => {
+            if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return
+            e.preventDefault()
+            e.stopPropagation()
+            jumpToResult()
+          }}
+        >
+          <LocateFixed size={14} strokeWidth={1.6} />
+        </span>
+        {exploreResultUri !== undefined && (
+          <span
+            className={styles['toolCallResultAction']}
+            role="button"
+            tabIndex={0}
+            aria-label={openResultLabel}
+            data-tooltip={openResultLabel}
+            data-testid="acp-toolcall-explore-result-open"
+            onClick={(e) => {
+              e.stopPropagation()
+              openUriForRead(exploreResultUri, resolveOpenTarget(e))
+            }}
+            onKeyDown={(e) => {
+              if (e.repeat || (e.key !== 'Enter' && e.key !== ' ')) return
+              e.preventDefault()
+              e.stopPropagation()
+              openUriForRead(exploreResultUri, resolveOpenTarget(e))
+            }}
+          >
+            {exploreResultPreviewable ? (
+              <Eye size={14} strokeWidth={1.6} />
+            ) : (
+              <FileSymlink size={14} strokeWidth={1.6} />
+            )}
+          </span>
+        )}
+      </span>
+    ) : undefined
+
   const titleNode = (
     <span className={styles['toolCallTitle']}>
       {display.title}
@@ -529,6 +615,7 @@ export const ToolCallCard = memo(function ToolCallCard({
         </span>
       )}
       {readAction}
+      {resultActions}
       <McpReplayAction call={call} session={session} />
       <SubagentStatsBadge call={call} />
     </span>

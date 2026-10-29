@@ -622,6 +622,57 @@ describe('AcpSession.timeline', () => {
     expect(first.call.status).toBe('completed')
   })
 
+  it('stores the Explore result back-link and carries it across updates', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'explore-result',
+        title: 'Saved Explore result: a.md',
+        kind: 'edit',
+        status: 'completed',
+        _meta: { '_universe/exploreResultOf': 'toolu_task' },
+      },
+    })
+    const call = (): { exploreResultOf?: string } => {
+      const item = s.timeline.get()[0]!
+      if (item.kind !== 'toolCall') throw new Error('expected toolCall')
+      return item.call
+    }
+    expect(call().exploreResultOf).toBe('toolu_task')
+
+    // A later update that only changes status must not erase the back-link.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'explore-result', status: 'failed' },
+    })
+    expect(call().exploreResultOf).toBe('toolu_task')
+
+    // A fresh value wins; a malformed one leaves the last good value alone.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'explore-result',
+        _meta: { '_universe/exploreResultOf': 'toolu_task_2' },
+      },
+    })
+    expect(call().exploreResultOf).toBe('toolu_task_2')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'explore-result',
+        _meta: { '_universe/exploreResultOf': 42 },
+      },
+    })
+    expect(call().exploreResultOf).toBe('toolu_task_2')
+  })
+
   it('folds codex-acp out-of-band terminal output into the execute card text', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

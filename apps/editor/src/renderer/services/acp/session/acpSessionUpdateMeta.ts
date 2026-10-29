@@ -189,6 +189,21 @@ export function readSubagent(update: SessionUpdate): boolean {
 }
 
 /**
+ * Read the fork's back-link on the synthetic top-level "Saved Explore result"
+ * card: the `tool_use` id of the Agent/Task call that spawned the Explore
+ * sub-agent (`_meta['_universe/exploreResultOf']`). This is deliberately NOT
+ * `parentToolUseId` — the result card must stay top-level; the chat uses the
+ * link to put a jump affordance on the spawn card. Returns undefined when
+ * absent or malformed.
+ */
+export function readExploreResultOf(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): string | undefined {
+  const raw = update._meta?.['_universe/exploreResultOf']
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined
+}
+
+/**
  * Read the config ids our claude fork declares as actually changed on a
  * `config_option_update` (`_meta['universe-editor/changedConfigIds']`). The
  * resume-time model reconciliation broadcasts the whole bag after correcting

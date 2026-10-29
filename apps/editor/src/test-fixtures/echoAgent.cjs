@@ -34,6 +34,9 @@
  *                                          a parent Task card
  *    - emit-subagent-mixed:<count>x<kb>  → same, with a child tool call interleaved
  *                                          at the halfway point
+ *    - emit-explore-result:<fillers>     → Explore spawn card, filler messages, then
+ *                                          the synthetic "Saved Explore result" card
+ *                                          backed by a real markdown file in tmp
  *    - report-mcp-servers / report-cwd   → echoes session/new params
  *    - elicit-form                       → sends elicitation/create (form mode),
  *                                          echoes the user's response
@@ -50,7 +53,9 @@
 
 'use strict'
 
-const { existsSync } = require('node:fs')
+const { existsSync, mkdirSync, writeFileSync } = require('node:fs')
+const { tmpdir } = require('node:os')
+const { basename, join } = require('node:path')
 
 let buffer = ''
 let nextSessionId = 1
@@ -835,6 +840,86 @@ async function runPrompt(id, params) {
         status: 'completed',
         _meta: { claudeCode: { parentToolUseId: parentId } },
       },
+    })
+    return finishTurn(id, sessionId, turn)
+  }
+
+  // "emit-explore-result:<fillers>" reproduces the claude fork's Explore flow end
+  // to end: an Agent/Task spawn card, enough unrelated messages to push the report
+  // off screen, then the synthetic top-level result card the fork sends from its
+  // SubagentStop hook — a real markdown file plus the `_universe/exploreResultOf`
+  // back-link. The report lives in tmp so nothing writes into the user's workspace.
+  const exploreDirective = /^emit-explore-result:(\d+)$/.exec(userText)
+  if (exploreDirective) {
+    const fillerCount = Number(exploreDirective[1])
+    const parentId = 'tcSubExplore' + nextSubagentId++
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: parentId,
+        title: 'Explore the repo',
+        kind: 'think',
+        status: 'in_progress',
+        _meta: { claudeCode: { subagent: true, toolName: 'Agent' } },
+      },
+    })
+    await delay(5)
+    // Each filler is its own folded card rather than another text chunk: chunks
+    // merge into one message and would not push the report off screen, which is
+    // exactly the distance the back-link has to cover.
+    for (let i = 0; i < fillerCount; i++) {
+      notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'tool_call',
+          toolCallId: `tcFiller-${parentId}-${i}`,
+          title: `Read filler ${i + 1}`,
+          kind: 'read',
+          status: 'completed',
+        },
+      })
+      await delay(5)
+    }
+    // The e2e harness overrides TEMP/TMP before spawning the agent, so tmpdir()
+    // lands inside the per-run root the harness cleans up.
+    const dir = join(tmpdir(), 'universe-editor-e2e-explore-results') // temp-root:allow
+    mkdirSync(dir, { recursive: true })
+    const filePath = join(dir, `report-${process.pid}-${parentId}.md`)
+    const report = '# Explore report\n\nA saved exploration result.\n'
+    writeFileSync(filePath, report, 'utf8')
+    const lines = report.split('\n')
+    const toolResponse = {
+      filePath,
+      type: 'create',
+      structuredPatch: [
+        {
+          oldStart: 0,
+          oldLines: 0,
+          newStart: 1,
+          newLines: lines.length,
+          lines: lines.map((line) => `+${line}`),
+        },
+      ],
+    }
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: `explore-result-${parentId}`,
+        title: `Saved Explore result: ${basename(filePath)}`,
+        kind: 'edit',
+        status: 'completed',
+        content: [{ type: 'diff', path: filePath, oldText: null, newText: report }],
+        _meta: {
+          claudeCode: { toolName: 'Write', toolResponse },
+          '_universe/exploreResultOf': parentId,
+        },
+      },
+    })
+    notify('session/update', {
+      sessionId,
+      update: { sessionUpdate: 'tool_call_update', toolCallId: parentId, status: 'completed' },
     })
     return finishTurn(id, sessionId, turn)
   }

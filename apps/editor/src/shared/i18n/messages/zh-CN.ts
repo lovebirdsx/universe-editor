@@ -2774,6 +2774,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.subagent.nextSession': '下次会话生效',
   'acp.subagent.restartNow': '立即重启',
   'acp.subagent.writeFailed': '保存子 Agent 模型失败：{0}',
+  'acp.subagent.jumpToResult': '跳转到调查报告',
+  'acp.subagent.openResult': '打开调查报告',
 
   // --- AI: debug ---
   'aiDebug.clear': '清空',

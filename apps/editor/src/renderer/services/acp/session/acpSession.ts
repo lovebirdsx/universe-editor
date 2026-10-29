@@ -108,6 +108,7 @@ import {
   readAgentToolNameForTelemetry,
   readCompactionResult,
   readContextCompaction,
+  readExploreResultOf,
   readFileChanges,
   readMcpServer,
   readMcpTool,
@@ -340,6 +341,9 @@ function trimToolCall(call: AcpToolCall): AcpToolCall {
     ...(call.mcpTool !== undefined ? { mcpTool: call.mcpTool } : {}),
     ...(call.locations !== undefined ? { locations: call.locations } : {}),
     ...(call.subagent === true ? { subagent: true } : {}),
+    // Kept so the spawn card's jump/open actions survive the result card being
+    // memory-trimmed; the diff paths below are preserved for the same reason.
+    ...(call.exploreResultOf !== undefined ? { exploreResultOf: call.exploreResultOf } : {}),
     ...(call.subagentStats !== undefined ? { subagentStats: call.subagentStats } : {}),
     // The anchor alone keeps a running sub-agent's clock alive (its card settled on the
     // wire long before the run ends); dropping it would silence the badge until the
@@ -3571,6 +3575,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const startedAt = effectiveParent == null ? Date.now() : undefined
         const stats = readSubagentStats(update)
         const subagent = readSubagent(update)
+        const exploreResultOf = readExploreResultOf(update)
         const timing = readSubagentTiming(update)
         this._upsertToolCall(
           {
@@ -3587,6 +3592,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             ...(mcpTool !== undefined ? { mcpTool } : {}),
             ...(startedAt !== undefined ? { startedAt } : {}),
             ...(subagent ? { subagent: true } : {}),
+            ...(exploreResultOf !== undefined ? { exploreResultOf } : {}),
             ...(stats !== undefined ? { subagentStats: this._priceSubagentStats(stats) } : {}),
             // The anchor of a spawn card rides its first report (a live codex spawn); a replay's
             // duration arrives later as its own `_meta`-only update. Accept both here so a fork
@@ -3636,6 +3642,9 @@ export class AcpSession extends Disposable implements IAcpSession {
         // (no `claudeCode` block), so a non-carrying read would flip the card back
         // to an ordinary tool glyph the moment the first tally lands.
         const subagent = readSubagent(update) || existing?.subagent === true
+        // The link rides the result card's first (and only) `tool_call`;
+        // carry it forward so a later `_meta`-only update cannot erase it.
+        const exploreResultOf = readExploreResultOf(update) ?? existing?.exploreResultOf
         // Carry the start timestamp forward and settle a frozen duration at the
         // terminal status. Only top-level cards carry a timer (see `tool_call`).
         const startedAt = existing?.startedAt
@@ -3686,6 +3695,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           ...(mcpServer !== undefined ? { mcpServer } : {}),
           ...(mcpTool !== undefined ? { mcpTool } : {}),
           ...(subagent ? { subagent: true } : {}),
+          ...(exploreResultOf !== undefined ? { exploreResultOf } : {}),
           ...(subagentStats !== undefined ? { subagentStats } : {}),
           ...(subagentRunStartedAt !== undefined ? { subagentRunStartedAt } : {}),
           ...(startedAt !== undefined ? { startedAt } : {}),

@@ -164,6 +164,14 @@ export interface AcpToolCall {
    */
   readonly subagent?: true
   /**
+   * On the synthetic top-level "Saved Explore result" card: the `toolCallId`
+   * of the Agent/Task call that spawned the Explore sub-agent
+   * (`_meta['_universe/exploreResultOf']`). The chat derives a spawn→result
+   * link from it and offers jump/open actions on the spawn card; this card
+   * itself stays top-level (the key is not a parent attribution).
+   */
+  readonly exploreResultOf?: string
+  /**
    * Per-sub-agent token/model/cost tally for a sub-agent-spawning tool call
    * (Task/Agent). Accumulated by the agent fork across the sub-agent's messages
    * and forwarded on the parent card via `_meta._universe/subagentStats`; the

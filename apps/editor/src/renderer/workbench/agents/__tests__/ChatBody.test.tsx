@@ -752,6 +752,77 @@ describe('ChatBody — focus surface survives an editor tab round trip', () => {
   })
 })
 
+describe('ChatBody — Explore result back-link', () => {
+  const RESULT_PATH = '/repo/.claude/explore-results/a.md'
+
+  function makeSpawnCall(): AcpToolCall {
+    return {
+      id: 'spawn',
+      title: 'Explore the repo',
+      kind: 'think',
+      status: 'completed',
+      text: '',
+      blocks: [],
+      diffs: [],
+      subagent: true,
+    }
+  }
+
+  function makeResultCall(): AcpToolCall {
+    return {
+      id: 'explore-result',
+      title: 'Saved Explore result: a.md',
+      kind: 'edit',
+      status: 'completed',
+      text: '',
+      blocks: [],
+      diffs: [{ path: RESULT_PATH, oldText: '', newText: '# Report\n' }],
+      exploreResultOf: 'spawn',
+    }
+  }
+
+  const linkedItems = (result: AcpToolCall | null = makeResultCall()): readonly TimelineItem[] => [
+    { kind: 'toolCall', id: 'spawn', call: makeSpawnCall() },
+    { kind: 'message', id: 'm1', message: makeMessage('m1', 'between') },
+    ...(result !== null ? [{ kind: 'toolCall', id: result.id, call: result } as const] : []),
+  ]
+
+  function jumpButton(container: HTMLElement): HTMLElement | null {
+    return slotEl(container, 't:spawn').querySelector<HTMLElement>(
+      '[data-testid="acp-toolcall-explore-result-jump"]',
+    )
+  }
+
+  it('offers a jump action on the spawn card when a result card exists', () => {
+    const { container } = renderChat(makeSession('s1', linkedItems()))
+    expect(jumpButton(container)).not.toBeNull()
+  })
+
+  it('offers no action when the Explore run saved no report', () => {
+    const { container } = renderChat(makeSession('s1', linkedItems(null)))
+    expect(jumpButton(container)).toBeNull()
+  })
+
+  it('focuses the result card on jump without expanding it', () => {
+    const { container } = renderChat(makeSession('s1', linkedItems()))
+    // The result card is a folded whole-file write.
+    expect(
+      collapseToggle(slotEl(container, 't:explore-result')).getAttribute('aria-expanded'),
+    ).toBe('false')
+
+    act(() => {
+      fireEvent.click(jumpButton(container)!)
+    })
+
+    expect(slotEl(container, 't:explore-result').className).toContain(focusedClass)
+    expect(slotEl(container, 't:spawn').className).not.toContain(focusedClass)
+    // Jumping only locates the card; it stays folded.
+    expect(
+      collapseToggle(slotEl(container, 't:explore-result')).getAttribute('aria-expanded'),
+    ).toBe('false')
+  })
+})
+
 describe('ChatBody — context menu fragment targets', () => {
   const CHIP_CONTEXT: SelectionContext = {
     uri: 'file:///w/src/a.ts',

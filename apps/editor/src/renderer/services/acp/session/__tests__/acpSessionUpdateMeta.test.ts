@@ -10,6 +10,7 @@ import {
   extractModelBreakdown,
   readAgentToolName,
   readAgentToolNameForTelemetry,
+  readExploreResultOf,
   readFileChanges,
   readParentToolCallId,
   readSubagent,
@@ -53,6 +54,32 @@ describe('readParentToolCallId (both forks)', () => {
       codex: { parentToolCallId: 'act-1' },
     })
     expect(readParentToolCallId(both)).toBe('toolu_task')
+  })
+})
+
+describe('readExploreResultOf (saved Explore result back-link)', () => {
+  function carrier(meta: Record<string, unknown> | null) {
+    return { _meta: meta }
+  }
+
+  it('reads the spawn tool-use id off the fork namespace', () => {
+    expect(readExploreResultOf(carrier({ '_universe/exploreResultOf': 'toolu_task' }))).toBe(
+      'toolu_task',
+    )
+  })
+
+  it('rejects empty, non-string and missing values', () => {
+    expect(readExploreResultOf(carrier({ '_universe/exploreResultOf': '' }))).toBeUndefined()
+    expect(readExploreResultOf(carrier({ '_universe/exploreResultOf': 42 }))).toBeUndefined()
+    expect(readExploreResultOf(carrier({}))).toBeUndefined()
+    expect(readExploreResultOf(carrier(null))).toBeUndefined()
+    expect(readExploreResultOf({})).toBeUndefined()
+  })
+
+  it('does not read the claudeCode namespace', () => {
+    expect(
+      readExploreResultOf(carrier({ claudeCode: { exploreResultOf: 'toolu_task' } })),
+    ).toBeUndefined()
   })
 })
 

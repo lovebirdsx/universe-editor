@@ -783,6 +783,37 @@
   color: var(--vscode-foreground, #ccc);
 }
 
+/* Explore result actions: one wrapper owns the auto margin so the two icon
+   buttons stay together and the stats badge keeps the right edge. */
+.toolCallResultActions {
+  flex: none;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolCallResultAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border-radius: 3px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  cursor: pointer;
+}
+
+.toolCallResultAction:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
+  color: var(--vscode-foreground, #ccc);
+}
+
+.toolCallReadAction + .toolCallResultActions,
+.toolCallResultActions + .mcpReplayAction,
+.toolCallResultActions + .subagentStats {
+  margin-left: 0;
+}
+
 .toolCallCommand {
   margin: 4px 0;
   padding: 6px 8px;

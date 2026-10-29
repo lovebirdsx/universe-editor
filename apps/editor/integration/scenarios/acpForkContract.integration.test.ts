@@ -220,6 +220,11 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.sessionResurrection,
     EXPECTED_METHOD_NAMES.backgroundActivity,
     EXPECTED_METHOD_NAMES.sdkMessage,
+    // Fork→editor meta on the synthetic "Saved Explore result" card: the
+    // tool_use id of the Agent/Task call that spawned the Explore sub-agent.
+    // The editor uses it to link the spawn card to the report card; a rebase
+    // that drops the stamp silently disables the jump affordance.
+    '_universe/exploreResultOf',
     // Both forks advertise universe-editor/* capabilities under the same key.
     'universe-editor/capabilities',
     'extraModels',

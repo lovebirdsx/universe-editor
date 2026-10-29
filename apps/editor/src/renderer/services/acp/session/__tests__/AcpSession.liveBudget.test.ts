@@ -385,20 +385,24 @@ describe('AcpSession — live resident budget', () => {
     expect(child?.text).toBe('sub '.repeat(100).slice(0, MESSAGE_TRIM_PREVIEW_CHARS))
   })
 
-  it('keeps a trimmed edit card’s diff path while releasing both text sides', () => {
+  it('keeps a trimmed result card’s diff path and back-link while releasing both text sides', () => {
     // The path costs nothing (it was never charged to the budget) but the card's
     // affordances read it — a sub-agent result document keyed off the diff path
     // would otherwise lose its header preview button the moment it is trimmed.
+    // The spawn back-link must survive for the same reason: it is what puts the
+    // jump button on the originating Explore card.
     session = createSession()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    session.applyUpdate(
-      editToolCall('tc-doc', '.claude/explore-results/2026-doc.md', 'd'.repeat(1200)),
-    )
+    session.applyUpdate({
+      ...editToolCall('tc-doc', '.claude/explore-results/2026-doc.md', 'd'.repeat(1200)),
+      _meta: { '_universe/exploreResultOf': 'toolu_task' },
+    } as SessionUpdate)
     session.applyUpdate(terminalToolCall('tc-newest', 'n'.repeat(800)))
 
     const doc = session.toolCalls.get().find((c) => c.id === 'tc-doc')
     expect(doc?.memoryTrimmed).toBe(true)
+    expect(doc?.exploreResultOf).toBe('toolu_task')
     expect(doc?.diffs).toHaveLength(1)
     expect(doc?.diffs[0]?.path).toBe('.claude/explore-results/2026-doc.md')
     expect(doc?.diffs[0]?.oldText).toBe('')

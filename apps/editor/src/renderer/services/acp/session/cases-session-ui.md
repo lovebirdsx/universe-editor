@@ -76,3 +76,16 @@ codex 侧曾整条缺链，症状=跨 worktree 看该 codex 会话显示**首条
 - **直接比对两个 bucket**：workspace storage 文件 = `<userData>/workspaces/<id>.json`，`id` 由 `apps/editor/src/main/storage.ts` 的 `workspaceIdFromUri(工作区 URI 字符串)` 算出（sha1 hex 前 16 位）；读其中 `acp.sessionHistory.entries`，对比两个 bucket 里同 session id 条目的 `title`/`aiTitle`。
 - **探 agent 侧真值**：用 fork 的 `@anthropic-ai/claude-agent-sdk` 的 `listSessions({ dir })`；**探针脚本必须放进 vendor 包目录内**才解析得到它的 node_modules。
 - **平台坑**：Windows 盘符大小写会生成两个 project 目录（`d--…` vs `D--…`，同一物理目录），对比时别当成两个会话。
+
+## Explore 结果卡回链（`_universe/exploreResultOf`）
+
+**链路**：claude fork 的 `SubagentStop` 钩子写盘后发一张**顶层** synthetic `tool_call`（`Saved Explore result: <file>.md`），`_meta` 里带 `_universe/exploreResultOf = <发起卡的 tool_use id>`（resolver 读 `Session.subagentSpawns`，first-wins，SendMessage 续跑仍指最初那张卡）。renderer 侧 `readExploreResultOf` → `AcpToolCall.exploreResultOf` → `ChatBody` 用 `buildExploreResultLinks(timeline)` 一次派生 `spawnToolCallId → { slotKey, path }`，只把两个原始字符串 prop 传给发起卡（**绝不把 Map 传进 memo 化的 slot**）。入口的显隐语义是「**结果卡存在即入口**」：结果卡不在时间线（没保存、恢复会话回放不出、被移出）时按钮自然消失，不存在悬空链接。
+
+**四个容易回归的点**：
+
+- `tool_call_update` 必须 `readExploreResultOf(update) ?? existing?.exploreResultOf` **carry-forward**——后续只带 status 的更新会把键擦掉。
+- `trimToolCall` 白名单必须保留 `exploreResultOf`；路径取 **`diffs[0].path`** 而不是 `createdFilePath()`（后者见 `memoryTrimmed` 即返回 undefined，而 trim 恰好保留 diff 的 `path`）。`AcpSession.liveBudget.test.ts` 已钉住两者。
+- **不要**用 `_meta.claudeCode.parentToolUseId` 做这件事：渲染侧会把它当父子归属，结果卡被嵌进子 Agent 卡片，既破坏顶层卡片形态，也不是「跳转」语义。
+- 发起卡 action 嵌在 header `<button>` 内，必须是 `<span role="button" tabIndex={0}>` + `stopPropagation`，否则浏览器重排 DOM / 点击顺带折叠卡片。
+
+**跳转**走 `AcpSessionOutlineRegistry.get(session.id)?.scrollToKey(key)` + `focus()`：复用 outline 的展开阻塞祖先、focus ring 与虚拟列表 reveal；目标卡片自身**不展开**。**打开**复用结果卡既有的预览管线（`.md` → markdown preview，否则文件），`resolveOpenTarget` 继续支持 Ctrl/Cmd 侧组与 Alt 辅助窗口。

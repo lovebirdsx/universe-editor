@@ -25,6 +25,9 @@ import type {
   AcpToolCall,
   AcpToolCallStatus,
 } from '../../../services/acp/session/acpSessionService.js'
+import type { IAcpSession } from '../../../services/acp/session/acpSessionModel.js'
+import { AcpSessionOutlineRegistry } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
+import type { IAcpSessionOutlineController } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
 import { memoryTrimmedNotice } from '../../../services/acp/session/acpSession.js'
 import { resolveChatContextTarget } from '../../../services/acp/chatContextTarget.js'
 import { ToolCallCard } from '../ToolCallCard.js'
@@ -41,6 +44,8 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
+  AcpSessionOutlineRegistry._resetForTests()
   openedInGroup.length = 0
   openedInWhichGroup.length = 0
   resolvedOpens.length = 0
@@ -140,7 +145,18 @@ function makeGroupsService(): IEditorGroupsServiceType {
   } as unknown as IEditorGroupsServiceType
 }
 
-function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
+interface CardExtras {
+  /** Session id; the card only needs `id` for the jump action. */
+  sessionId?: string
+  exploreResultKey?: string
+  exploreResultPath?: string
+}
+
+function renderCard(
+  call: AcpToolCall,
+  config: Record<string, unknown> = {},
+  extras: CardExtras = {},
+) {
   const services = new ServiceCollection()
   services.set(IEditorService, {
     _serviceBrand: undefined,
@@ -163,7 +179,18 @@ function renderCard(call: AcpToolCall, config: Record<string, unknown> = {}) {
   const view = render(
     <ServicesContext.Provider value={inst}>
       <ul>
-        <ToolCallCard call={call} />
+        <ToolCallCard
+          call={call}
+          {...(extras.sessionId !== undefined
+            ? { session: { id: extras.sessionId } as unknown as IAcpSession }
+            : {})}
+          {...(extras.exploreResultKey !== undefined
+            ? { exploreResultKey: extras.exploreResultKey }
+            : {})}
+          {...(extras.exploreResultPath !== undefined
+            ? { exploreResultPath: extras.exploreResultPath }
+            : {})}
+        />
       </ul>
     </ServicesContext.Provider>,
   )
@@ -1003,6 +1030,148 @@ describe('ToolCallCard', () => {
       expect(screen.queryByTestId('acp-toolcall-open-preview')).toBeNull()
       expect(screen.queryByTestId('acp-toolcall-open-file')).toBeNull()
     })
+  })
+})
+
+describe('ToolCallCard — Explore result actions', () => {
+  const RESULT_PATH = '/repo/.claude/explore-results/a.md'
+  const RESULT_KEY = 't:explore-result-a'
+  const LINK = {
+    sessionId: 's1',
+    exploreResultKey: RESULT_KEY,
+    exploreResultPath: RESULT_PATH,
+  }
+
+  function makeExploreCall(over: Partial<AcpToolCall> = {}): AcpToolCall {
+    return makeCall({ kind: 'think', subagent: true, title: 'Explore the repo', ...over })
+  }
+
+  function stubOutlineController() {
+    const controller = {
+      scrollToKey: vi.fn(),
+      focus: vi.fn(),
+    }
+    return controller as unknown as IAcpSessionOutlineController & {
+      scrollToKey: ReturnType<typeof vi.fn>
+      focus: ReturnType<typeof vi.fn>
+    }
+  }
+
+  it('renders both actions inside the header, never as nested buttons', () => {
+    renderCard(makeExploreCall(), {}, LINK)
+    const jump = screen.getByTestId('acp-toolcall-explore-result-jump')
+    const open = screen.getByTestId('acp-toolcall-explore-result-open')
+    const toggle = screen.getByTestId('acp-collapsible-toggle')
+
+    expect(toggle.contains(jump)).toBe(true)
+    expect(toggle.contains(open)).toBe(true)
+    for (const action of [jump, open]) {
+      expect(action.tagName).toBe('SPAN')
+      expect(action.getAttribute('role')).toBe('button')
+      expect(action.closest('button')).toBe(toggle)
+    }
+  })
+
+  it('places the actions before the stats badge', () => {
+    renderCard(makeExploreCall({ durationMs: 1200 }), {}, LINK)
+    const jump = screen.getByTestId('acp-toolcall-explore-result-jump')
+    const stats = screen.getByTestId('acp-subagent-stats')
+    expect(jump.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('jumps to the result card and focuses the chat without expanding this card', () => {
+    const controller = stubOutlineController()
+    const get = vi.spyOn(AcpSessionOutlineRegistry, 'get').mockReturnValue(controller)
+    renderCard(makeExploreCall(), {}, LINK)
+
+    fireEvent.click(screen.getByTestId('acp-toolcall-explore-result-jump'))
+
+    expect(get).toHaveBeenCalledWith('s1')
+    expect(controller.scrollToKey).toHaveBeenCalledWith(RESULT_KEY)
+    expect(controller.focus).toHaveBeenCalledTimes(1)
+    // A think card starts expanded; a click that bubbled to the header's toggle
+    // would have collapsed it. Jumping is navigation, not an expand.
+    expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('activates the jump action with Enter and Space', () => {
+    const controller = stubOutlineController()
+    vi.spyOn(AcpSessionOutlineRegistry, 'get').mockReturnValue(controller)
+    renderCard(makeExploreCall(), {}, LINK)
+    const jump = screen.getByTestId('acp-toolcall-explore-result-jump')
+
+    fireEvent.keyDown(jump, { key: 'Enter' })
+    expect(controller.scrollToKey).toHaveBeenCalledTimes(1)
+    fireEvent.keyDown(jump, { key: ' ' })
+    expect(controller.scrollToKey).toHaveBeenCalledTimes(2)
+    fireEvent.keyDown(jump, { key: 'a' })
+    expect(controller.scrollToKey).toHaveBeenCalledTimes(2)
+  })
+
+  it('opens the saved report as a markdown preview', () => {
+    renderCard(makeExploreCall(), {}, LINK)
+
+    fireEvent.click(screen.getByTestId('acp-toolcall-explore-result-open'))
+
+    expect(openedInGroup).toHaveLength(1)
+    expect((openedInGroup[0] as { typeId: string }).typeId).toBe('markdown.preview')
+    expect(openedInWhichGroup).toEqual(['main'])
+    // Opening must not toggle the card either (a think card starts expanded).
+    expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('opens the report in a side group on Ctrl+click', () => {
+    const { groups } = renderCard(makeExploreCall(), {}, LINK)
+
+    fireEvent.click(screen.getByTestId('acp-toolcall-explore-result-open'), { ctrlKey: true })
+
+    expect(groups.count).toBe(2)
+    expect(openedInWhichGroup).toEqual(['side'])
+  })
+
+  it('shows only the jump action when the result card has no path', () => {
+    renderCard(
+      makeExploreCall(),
+      {},
+      {
+        sessionId: 's1',
+        exploreResultKey: RESULT_KEY,
+      },
+    )
+
+    expect(screen.getByTestId('acp-toolcall-explore-result-jump')).toBeTruthy()
+    expect(screen.queryByTestId('acp-toolcall-explore-result-open')).toBeNull()
+  })
+
+  it('shows no actions without a linked result card', () => {
+    renderCard(makeExploreCall(), {}, { sessionId: 's1' })
+    expect(screen.queryByTestId('acp-toolcall-explore-result-jump')).toBeNull()
+    expect(screen.queryByTestId('acp-toolcall-explore-result-open')).toBeNull()
+  })
+
+  it('shows no actions without a session (detached ToolCallList)', () => {
+    renderCard(
+      makeExploreCall(),
+      {},
+      {
+        exploreResultKey: RESULT_KEY,
+        exploreResultPath: RESULT_PATH,
+      },
+    )
+    expect(screen.queryByTestId('acp-toolcall-explore-result-jump')).toBeNull()
+  })
+
+  it('shows no actions on a non-sub-agent card even when linked', () => {
+    renderCard(makeCall({ kind: 'think', title: 'Not a sub-agent' }), {}, LINK)
+    expect(screen.queryByTestId('acp-toolcall-explore-result-jump')).toBeNull()
+  })
+
+  it('does nothing when no controller is registered for the session', () => {
+    renderCard(makeExploreCall(), {}, LINK)
+
+    // No throw, and the click does not fall through to the header toggle.
+    fireEvent.click(screen.getByTestId('acp-toolcall-explore-result-jump'))
+    expect(screen.getByTestId('acp-collapsible-toggle').getAttribute('aria-expanded')).toBe('true')
   })
 })
 
