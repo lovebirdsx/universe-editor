@@ -237,7 +237,13 @@ export interface IAcpSessionHistoryService {
   initialize(): Promise<void>
   list(): readonly AcpSessionHistoryEntry[]
   get(id: string): AcpSessionHistoryEntry | undefined
-  /** Returns the new entry (caller usually only needs the id). */
+  /**
+   * Returns the new entry (caller usually only needs the id).
+   *
+   * A supplied `collapseMode` wins over the row's persisted value; omitting it
+   * keeps the existing row's mode, so a re-add on resume cannot reset the
+   * user's timeline display choice.
+   */
   add(
     entry: Omit<AcpSessionHistoryEntry, 'id' | 'createdAt' | 'lastUsedAt'>,
   ): AcpSessionHistoryEntry
@@ -758,6 +764,10 @@ export class AcpSessionHistoryService
     // And the plan snapshot — re-adding on resume must keep the restored bar.
     const carriedPlan =
       entry.plan ?? (existingIdx >= 0 ? this._state[existingIdx]!.plan : undefined)
+    // Caller-supplied mode wins (fork children seed the source's value here);
+    // omitting it keeps whatever setHistoryCollapseMode already persisted.
+    const carriedCollapseMode =
+      entry.collapseMode ?? (existingIdx >= 0 ? this._state[existingIdx]!.collapseMode : undefined)
     // Once hasMessages is true it must never revert. Input value takes
     // precedence; fall back to the existing row so resume() preserves it.
     const carriedHasMessages = (() => {
@@ -829,9 +839,7 @@ export class AcpSessionHistoryService
       ...(carriedSideTaskAnchorMessageId !== undefined
         ? { sideTaskAnchorMessageId: carriedSideTaskAnchorMessageId }
         : {}),
-      ...(existingIdx >= 0 && this._state[existingIdx]!.collapseMode !== undefined
-        ? { collapseMode: this._state[existingIdx]!.collapseMode }
-        : {}),
+      ...(carriedCollapseMode !== undefined ? { collapseMode: carriedCollapseMode } : {}),
       ...(carriedHasMessages !== undefined ? { hasMessages: carriedHasMessages } : {}),
       ...(carriedFirstPrompt !== undefined ? { firstPrompt: carriedFirstPrompt } : {}),
       ...(carriedRetractedMessageIds !== undefined

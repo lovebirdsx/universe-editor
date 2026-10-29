@@ -177,6 +177,43 @@ describe('AcpSessionHistoryService — add / list', () => {
     expect('cwd' in entry).toBe(false)
   })
 
+  it('add stores a caller-supplied collapseMode (fork children seed the source value)', async () => {
+    await svc.initialize()
+    const entry = svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'child-1',
+      title: 't',
+      collapseMode: 'lastMessage',
+    })
+    expect(entry.collapseMode).toBe('lastMessage')
+    expect(svc.get('child-1')?.collapseMode).toBe('lastMessage')
+  })
+
+  it('add omits collapseMode when neither the input nor the prior row supplies one', async () => {
+    await svc.initialize()
+    const entry = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    expect('collapseMode' in entry).toBe(false)
+  })
+
+  it('re-adding the same key without a mode carries over the persisted collapseMode', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't', collapseMode: 'expanded' })
+    const readded = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
+    expect(readded.collapseMode).toBe('expanded')
+  })
+
+  it('an explicit collapseMode on re-add overrides the carried-over value', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't', collapseMode: 'collapsed' })
+    const readded = svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: '1',
+      title: 't2',
+      collapseMode: 'lastMessage',
+    })
+    expect(readded.collapseMode).toBe('lastMessage')
+  })
+
   it('truncates to the 100-entry LRU ceiling', async () => {
     await svc.initialize()
     for (let i = 0; i < 105; i++) {
@@ -418,6 +455,20 @@ describe('AcpSessionHistoryService — persistence', () => {
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
     expect(persisted.schemaVersion).toBe(6)
     expect(persisted.entries).toHaveLength(1)
+  })
+
+  it('persists a caller-supplied collapseMode and restores it after a restart', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't', collapseMode: 'hideThinking' })
+    await flushWrite()
+
+    const restarted = makeService({ storage }).svc
+    try {
+      await restarted.initialize()
+      expect(restarted.get('s1')?.collapseMode).toBe('hideThinking')
+    } finally {
+      restarted.dispose()
+    }
   })
 
   it('persists deletion tombstones and keeps them across a restart', async () => {

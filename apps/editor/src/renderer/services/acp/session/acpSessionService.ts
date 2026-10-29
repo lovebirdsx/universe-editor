@@ -2162,6 +2162,7 @@ export class AcpSessionService
           labels: entry.configLabels ?? {},
         }
     const forkAuthority = this._entryAuthority(entry)
+    const forkCollapseMode = this._forkCollapseMode(live, entry)
     this._history.add({
       agentId: entry.agentId,
       sessionIdOnAgent: newSessionId,
@@ -2170,6 +2171,7 @@ export class AcpSessionService
       ...(forkAuthority !== undefined ? { authority: forkAuthority } : {}),
       hasMessages: true,
       ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
+      ...(forkCollapseMode !== undefined ? { collapseMode: forkCollapseMode } : {}),
       ...(Object.keys(forkConfig.values).length > 0
         ? { configOptions: forkConfig.values, configLabels: forkConfig.labels }
         : {}),
@@ -2242,6 +2244,7 @@ export class AcpSessionService
     const configOptions = { ...forkConfig.values, mode: readOnlyMode, ...sideModel.values }
     const configLabels = { ...forkConfig.labels, mode: readOnlyMode, ...sideModel.labels }
     const forkAuthority = this._entryAuthority(entry)
+    const forkCollapseMode = this._forkCollapseMode(live, entry)
     this._history.add({
       agentId: entry.agentId,
       sessionIdOnAgent: newSessionId,
@@ -2254,6 +2257,7 @@ export class AcpSessionService
       sideTaskOf: sourceAgentSessionId,
       ...(quote !== undefined ? { sideTaskQuote: quote.text } : {}),
       ...(forkMcpSelection !== null ? { mcpServerNames: [...forkMcpSelection] } : {}),
+      ...(forkCollapseMode !== undefined ? { collapseMode: forkCollapseMode } : {}),
       configOptions,
       configLabels,
     })
@@ -2289,6 +2293,20 @@ export class AcpSessionService
       : entry.mcpServerNames !== undefined
         ? entry.mcpServerNames
         : null
+  }
+
+  /**
+   * The timeline display mode a fork inherits: the live session's current value
+   * wins (the row is only its autorun-maintained mirror); a non-resident source
+   * falls back to the persisted row. Same live-over-row rule as
+   * {@link _forkMcpSelection}, so a fork reads like the conversation it copies.
+   */
+  private _forkCollapseMode(
+    live: IAcpSession | undefined,
+    entry: AcpSessionHistoryEntry,
+  ): CollapseMode | undefined {
+    if (live !== undefined) return live.collapseMode.get()
+    return isCollapseMode(entry.collapseMode) ? entry.collapseMode : undefined
   }
 
   /**

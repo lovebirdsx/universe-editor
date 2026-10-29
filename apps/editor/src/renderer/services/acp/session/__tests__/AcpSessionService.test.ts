@@ -2710,6 +2710,145 @@ describe('AcpSessionService — rewind / fork', () => {
     }
   })
 
+  it('forkSession inherits the source session’s timeline display mode', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-fork-mode' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      s.setCollapseMode('lastMessage')
+
+      const fork = await svc.forkSession(s.id)
+
+      expect(fork.collapseMode.get()).toBe('lastMessage')
+      expect(history.get('agent-fork-mode')?.collapseMode).toBe('lastMessage')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSession falls back to the source row’s display mode when the source is not resident', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-fork-away' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-away',
+        title: 'away',
+        collapseMode: 'expanded',
+      })
+
+      const fork = await svc.forkSession('agent-away')
+
+      expect(fork.collapseMode.get()).toBe('expanded')
+      expect(history.get('agent-fork-away')?.collapseMode).toBe('expanded')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask inherits the parent’s current timeline display mode', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-mode' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      s.setCollapseMode('hideThinking')
+
+      const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+
+      expect(side.collapseMode.get()).toBe('hideThinking')
+      const entry = history.get('agent-side-mode')
+      expect(entry?.collapseMode).toBe('hideThinking')
+      expect(entry?.sideTaskOf).toBe('agent-1')
+      // Side chats never steal the active session.
+      expect(svc.activeSession.get()?.id).toBe(s.id)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('a reopened side task keeps its inherited timeline display mode', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-reopen' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      s.setCollapseMode('collapsed')
+
+      const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+      await svc.closeSession(side.id)
+
+      const reopened = await svc.resumeSession('agent-side-reopen')
+
+      expect(reopened.collapseMode.get()).toBe('collapsed')
+      expect(history.get('agent-side-reopen')?.collapseMode).toBe('collapsed')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('changing the parent mode after the fork leaves the side task untouched', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-snap' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      s.setCollapseMode('collapsed')
+
+      const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+      s.setCollapseMode('expanded')
+
+      expect(side.collapseMode.get()).toBe('collapsed')
+      expect(history.get('agent-side-snap')?.collapseMode).toBe('collapsed')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSideTask inherits a parent mode seeded from acp.defaultCollapseModes', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-config' },
+    })
+    const { svc, history, config } = makeServiceWithHistory(client, tracker)
+    try {
+      await config.update('acp.defaultCollapseModes', { 'claude-code': 'lastMessage' })
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      // Regression: the create path still seeds from the configured default.
+      expect(s.collapseMode.get()).toBe('lastMessage')
+      expect(history.get('agent-1')?.collapseMode).toBe('lastMessage')
+
+      const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+
+      expect(side.collapseMode.get()).toBe('lastMessage')
+      expect(history.get('agent-side-config')?.collapseMode).toBe('lastMessage')
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('forkSession rejects when the agent does not advertise fork capability', async () => {
     const tracker = new StubSessionChangeTracker()
     const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
