@@ -26,6 +26,7 @@ import {
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
 import { WorkbenchWindowService } from '../workbenchWindowService.js'
 import { AuxiliaryEditorWindowService } from '../auxiliaryEditorWindowService.js'
+import type { IAuxiliaryEditorWindow } from '../auxiliaryEditorWindowService.js'
 import { FakeWindowFocusService } from '../testing/fakeWindowFocusService.js'
 import { getWorkbenchDocuments } from '../workbenchDocuments.js'
 
@@ -600,5 +601,177 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
     ctx.aux.closeEmitter.fire({ token: window.token })
     await expect.poll(() => ctx.service.windows.length).toBe(0)
     expect(ctx.groups.mainPart.groups.length).toBe(before)
+  })
+
+  describe('move back to the main window', () => {
+    async function moveToAuxWindow(input: TestInput): Promise<IAuxiliaryEditorWindow> {
+      const source = ctx.groups.mainPart.activeGroup
+      source.openEditor(input)
+      const result = await ctx.service.openEditorInNewWindow(input, { mode: 'move', source })
+      expect(result.ok).toBe(true)
+      if (!result.ok) throw new Error('auxiliary window creation failed')
+      return result.window
+    }
+
+    it('moves one editor into the main window and brings it forward', async () => {
+      const input = new TestInput('/move-back')
+      const window = await moveToAuxWindow(input)
+      const source = window.part.activeGroup
+      expect(ctx.groups.activePart).toBe(window.part)
+
+      expect(ctx.service.moveEditorToMainWindow(input, source)).toBe(true)
+
+      const target = ctx.groups.mainPart.activeGroup
+      expect(target.contains(input)).toBe(true)
+      expect(source.contains(input)).toBe(false)
+      expect(input.isDisposed).toBe(false)
+      expect(ctx.groups.activePart).toBe(ctx.groups.mainPart)
+      expect(ctx.windows.activeWindow).toBe(ctx.windows.mainWindow)
+      expect(ctx.windowFocus.focusMainWindowCalls).toBe(1)
+    })
+
+    it('closes the auxiliary window after its last editor leaves', async () => {
+      const input = new TestInput('/last-editor')
+      const window = await moveToAuxWindow(input)
+
+      expect(ctx.service.moveEditorToMainWindow(input, window.part.activeGroup)).toBe(true)
+      await Promise.resolve()
+      expect(ctx.aux.requestClose).toHaveBeenCalledWith(window.token)
+    })
+
+    it('keeps a non-empty auxiliary window open while the main window comes forward', async () => {
+      const first = new TestInput('/first-tab')
+      const window = await moveToAuxWindow(first)
+      const second = new TestInput('/second-tab')
+      window.part.activeGroup.openEditor(second)
+
+      expect(ctx.service.moveEditorToMainWindow(first, window.part.activeGroup)).toBe(true)
+      await Promise.resolve()
+
+      expect(ctx.service.windows).toHaveLength(1)
+      expect(window.part.activeGroup.contains(second)).toBe(true)
+      expect(ctx.aux.requestClose).not.toHaveBeenCalled()
+      expect(ctx.windows.activeWindow).toBe(ctx.windows.mainWindow)
+    })
+
+    it('skips a locked main group and lands in the most recent unlocked one', async () => {
+      const locked = ctx.groups.mainPart.activeGroup
+      const unlocked = ctx.groups.addGroup(locked, GroupDirection.Right)
+      locked.lock(true)
+      const input = new TestInput('/unlock-target')
+      const window = await moveToAuxWindow(input)
+
+      expect(ctx.service.moveEditorToMainWindow(input, window.part.activeGroup)).toBe(true)
+      expect(locked.contains(input)).toBe(false)
+      expect(unlocked.contains(input)).toBe(true)
+      expect(ctx.groups.mainPart.activeGroup).toBe(unlocked)
+    })
+
+    it('rejects main-window sources, stale sources and disposed editors without focus side effects', async () => {
+      const main = ctx.groups.mainPart.activeGroup
+      const inMain = new TestInput('/in-main')
+      main.openEditor(inMain)
+      expect(ctx.service.moveEditorToMainWindow(inMain, main)).toBe(false)
+
+      const input = new TestInput('/stale')
+      const window = await moveToAuxWindow(input)
+      const other = ctx.groups.mainPart.activeGroup
+      expect(ctx.service.moveEditorToMainWindow(input, other)).toBe(false)
+
+      input.dispose()
+      expect(ctx.service.moveEditorToMainWindow(input, window.part.activeGroup)).toBe(false)
+      expect(ctx.windowFocus.focusMainWindowCalls).toBe(0)
+    })
+
+    it('reports a silently rejected move without touching focus', async () => {
+      const input = new TestInput('/silent-noop')
+      const window = await moveToAuxWindow(input)
+      const source = window.part.activeGroup
+      const moveSpy = vi.spyOn(ctx.groups, 'moveEditor').mockImplementation(() => {})
+
+      expect(ctx.service.moveEditorToMainWindow(input, source)).toBe(false)
+      expect(source.contains(input)).toBe(true)
+      expect(ctx.windowFocus.focusMainWindowCalls).toBe(0)
+      expect(ctx.groups.activePart).toBe(window.part)
+
+      moveSpy.mockRestore()
+    })
+
+    it('moves a whole group preserving order, sticky and active editor', async () => {
+      const first = new TestInput('/group-first')
+      const window = await moveToAuxWindow(first)
+      const second = new TestInput('/group-second')
+      const source = window.part.activeGroup
+      source.openEditor(second)
+      source.stickEditor(first)
+      source.setActive(first)
+
+      expect(ctx.service.moveGroupToMainWindow(source)).toBe(true)
+
+      const target = ctx.groups.mainPart.activeGroup
+      expect(target.editors.filter((editor) => editor === first || editor === second)).toEqual([
+        first,
+        second,
+      ])
+      expect(target.isSticky(first)).toBe(true)
+      expect(target.activeEditor).toBe(first)
+      expect(source.count).toBe(0)
+      expect(ctx.windowFocus.focusMainWindowCalls).toBe(1)
+      await Promise.resolve()
+      expect(ctx.aux.requestClose).toHaveBeenCalledWith(window.token)
+    })
+
+    it('drops an emptied split while another auxiliary group keeps the window open', async () => {
+      const first = new TestInput('/split-first')
+      const window = await moveToAuxWindow(first)
+      const source = window.part.activeGroup
+      const other = ctx.groups.addGroup(source, GroupDirection.Right)
+      const kept = new TestInput('/split-kept')
+      other.openEditor(kept)
+
+      expect(ctx.service.moveGroupToMainWindow(source)).toBe(true)
+      await Promise.resolve()
+
+      expect(window.part.groups).toEqual([other])
+      expect(ctx.service.windows).toHaveLength(1)
+      expect(ctx.aux.requestClose).not.toHaveBeenCalled()
+      expect(ctx.groups.mainPart.activeGroup.contains(first)).toBe(true)
+    })
+
+    it('keeps unmoved editors in the source group when a group move fails midway', async () => {
+      const first = new TestInput('/partial-first')
+      const window = await moveToAuxWindow(first)
+      const second = new TestInput('/partial-second')
+      const source = window.part.activeGroup
+      source.openEditor(second)
+
+      const original = ctx.groups.moveEditor.bind(ctx.groups)
+      let calls = 0
+      const moveSpy = vi
+        .spyOn(ctx.groups, 'moveEditor')
+        .mockImplementation((editor, target, src) => {
+          calls++
+          if (calls === 2) throw new Error('rejected')
+          original(editor, target, src)
+        })
+
+      expect(ctx.service.moveGroupToMainWindow(source)).toBe(false)
+      expect(first.isDisposed).toBe(false)
+      expect(second.isDisposed).toBe(false)
+      expect(ctx.groups.mainPart.activeGroup.contains(first)).toBe(true)
+      expect(source.contains(second)).toBe(true)
+      expect(ctx.windowFocus.focusMainWindowCalls).toBe(0)
+
+      moveSpy.mockRestore()
+    })
+
+    it('ignores main-window and empty groups', async () => {
+      const main = ctx.groups.mainPart.activeGroup
+      expect(ctx.service.moveGroupToMainWindow(main)).toBe(false)
+
+      const window = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+      expect(ctx.service.moveGroupToMainWindow(window.part.activeGroup)).toBe(false)
+      expect(ctx.windowFocus.focusMainWindowCalls).toBe(0)
+    })
   })
 })

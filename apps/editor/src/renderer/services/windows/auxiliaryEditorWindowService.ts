@@ -152,6 +152,17 @@ export interface IAuxiliaryEditorWindowService {
   ): Promise<boolean>
   moveGroupToNewWindow(group: IEditorGroup): Promise<boolean>
   copyGroupToNewWindow(group: IEditorGroup): Promise<boolean>
+  /**
+   * Move one editor from an auxiliary window back into the main part. Returns
+   * whether the editor is now in the main part; a main-window source, a stale
+   * source or a rejected move returns false without side effects.
+   */
+  moveEditorToMainWindow(editor: EditorInput, source: IEditorGroup): boolean
+  /**
+   * Move every editor of an auxiliary-window group into the main part's
+   * migration target group. Returns whether the whole group moved.
+   */
+  moveGroupToMainWindow(group: IEditorGroup): boolean
 
   requestClose(window: IAuxiliaryEditorWindow): Promise<void>
   closeWindow(window: IAuxiliaryEditorWindow): Promise<boolean>
@@ -527,6 +538,45 @@ export class AuxiliaryEditorWindowService
     }
   }
 
+  moveEditorToMainWindow(editor: EditorInput, source: IEditorGroup): boolean {
+    if (source.part.isMain || !this._isMoveSourceValid(editor, source)) return false
+    const target = this._mainTargetGroup()
+    try {
+      this._moveEditorOrThrow(editor, target, source)
+    } catch (err) {
+      this._logger.warn(`move editor to main window failed: ${String(err)}`)
+      return false
+    }
+    this._activateMainWindowAfterMove(target)
+    return true
+  }
+
+  moveGroupToMainWindow(group: IEditorGroup): boolean {
+    if (group.part.isMain || !this._isGroupLive(group)) return false
+    const snapshot = this._snapshotGroup(group)
+    if (snapshot.editors.length === 0) return false
+    const target = this._mainTargetGroup()
+    try {
+      for (const editor of snapshot.editors) {
+        if (editor.isDisposed || group.findEditor(editor) !== editor) continue
+        this._moveEditorOrThrow(editor, target, group)
+        this._restoreSticky(target, editor, snapshot.sticky.has(editor))
+      }
+      if (snapshot.active && target.contains(snapshot.active)) target.setActive(snapshot.active)
+    } catch (err) {
+      this._logger.warn(`move group to main window failed: ${String(err)}`)
+      return false
+    }
+    // Drop the emptied split; the last group of a part stays for `_watchEmpty`
+    // to close the window. The target group's lock state belongs to the main
+    // window and is deliberately not inherited from the source group.
+    if (group.count === 0 && group.part.groups.length > 1) {
+      this._groups.removeGroup(group)
+    }
+    this._activateMainWindowAfterMove(target)
+    return true
+  }
+
   async requestClose(window: IAuxiliaryEditorWindow): Promise<void> {
     await this._aux.requestClose(window.token)
   }
@@ -819,6 +869,23 @@ export class AuxiliaryEditorWindowService
     }
     // Every group is locked: create a fresh unlocked one next to the active group.
     return main.activeGroupForOpen
+  }
+
+  /**
+   * Bring the main window forward after an editor migration. Runs synchronously
+   * before `_watchEmpty`'s microtask, so the window that is about to close can
+   * never reclaim the active state. `preserveFocus` keeps the keyboard focus out
+   * of Monaco, matching `restoreAllToMainWindow`.
+   */
+  private _activateMainWindowAfterMove(target: IEditorGroup): void {
+    // Target first: `activatePart` reads `mainPart.activeGroup` for the
+    // preserve-focus intent and the open target.
+    this._groups.activateGroup(target)
+    this._groups.activatePart(this._groups.mainPart, {
+      preserveFocus: true,
+      updateOpenTarget: true,
+    })
+    this._windowFocus.focusMainWindow()
   }
 
   /**

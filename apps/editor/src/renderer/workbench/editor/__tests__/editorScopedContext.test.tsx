@@ -143,4 +143,21 @@ describe('editorScopedContextValues', () => {
 
     expect(values['resourceScmProvider']).toBe('')
   })
+
+  it('marks groups that belong to auxiliary windows', () => {
+    const groups = groupsWith(new TestEditor('main'))
+    expect(
+      editorScopedContextValues(groups.activeGroup, groups.activeGroup.activeEditor)[
+        'isAuxiliaryEditorWindow'
+      ],
+    ).toBe(false)
+
+    const auxPart = groups.createAuxiliaryPart({ activate: false })
+    auxPart.activeGroup.openEditor(new TestEditor('aux'))
+    expect(
+      editorScopedContextValues(auxPart.activeGroup, auxPart.activeGroup.activeEditor)[
+        'isAuxiliaryEditorWindow'
+      ],
+    ).toBe(true)
+  })
 })

@@ -368,6 +368,73 @@ test.describe('@p0 auxiliary editor windows', () => {
     expect(restored).toContainEqual(expect.stringContaining('move-me-second.txt'))
   })
 
+  test('move editor back to the main window', async ({ electronApp, workbench, page }) => {
+    await workbench.waitForRestored()
+    const file = seedFile('back-to-main.txt', 'back\n')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), file)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+    const mainGroup = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows()))[0]!
+      .groupIds[0]!
+
+    await waitForAuxWindow(electronApp, workbench, 'workbench.action.moveEditorToNewWindow')
+    await expect
+      .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+      .toContainEqual(expect.stringContaining('back-to-main.txt'))
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+
+    await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.moveEditorToMainWindow'))
+
+    // The moved editor was the window's last one, so the window closes itself.
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    expect(
+      await page.evaluate((id) => window.__E2E__!.getEditorGroupEditorUris(id), String(mainGroup)),
+    ).toContainEqual(expect.stringContaining('back-to-main.txt'))
+    const main = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows())).find(
+      (w) => w.isMain,
+    )!
+    expect(main.active).toBe(true)
+    expect(main.focusedPart).toBe(true)
+  })
+
+  test('move editor group back to the main window', async ({ electronApp, workbench, page }) => {
+    await workbench.waitForRestored()
+    const first = seedFile('group-back-a.txt', 'A\n')
+    const second = seedFile('group-back-b.txt', 'B\n')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), first)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), second)
+    await expect.poll(() => workbench.getEditorGroupCount()).toBe(1)
+    const mainGroup = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows()))[0]!
+      .groupIds[0]!
+
+    await waitForAuxWindow(electronApp, workbench, 'workbench.action.moveEditorGroupToNewWindow')
+    await expect
+      .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+      .toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('group-back-a.txt'),
+          expect.stringContaining('group-back-b.txt'),
+        ]),
+      )
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+
+    await page.evaluate(() =>
+      window.__E2E__!.runCommand('workbench.action.moveEditorGroupToMainWindow'),
+    )
+
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    const restored = await page.evaluate(
+      (id) => window.__E2E__!.getEditorGroupEditorUris(id),
+      String(mainGroup),
+    )
+    expect(restored).toContainEqual(expect.stringContaining('group-back-a.txt'))
+    expect(restored).toContainEqual(expect.stringContaining('group-back-b.txt'))
+  })
+
   test('copy editor keeps one shared Monaco model and both copies go dirty', async ({
     electronApp,
     workbench,
@@ -2145,5 +2212,60 @@ test.describe('session window attribution', () => {
       })
       .toBe(true)
     expect((await flashRequests(electronApp)).filter((r) => r.flag && !r.auxiliary)).toHaveLength(0)
+  })
+})
+
+test.describe('@p1 auxiliary editor window move-back menus', () => {
+  test('main tabs hide the move-back entries while auxiliary tabs and tab bars show them', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    await workbench.waitForRestored()
+    const file = seedFile('move-back-menu.txt', 'menu\n')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), file)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    await page.getByRole('tab').first().click({ button: 'right' })
+    const mainMenu = page.locator('[role="menu"]').first()
+    await expect(mainMenu).toBeVisible()
+    await expect(mainMenu).not.toContainText(/Move Editor to Main Window/)
+    await page.keyboard.press('Escape')
+    await expect(mainMenu).toHaveCount(0)
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+
+    await child.getByRole('tab').first().click({ button: 'right' })
+    const tabMenu = child.locator('[role="menu"]').first()
+    await expect(tabMenu).toBeVisible()
+    await expect(tabMenu).toContainText(/Move Editor to Main Window/)
+    await child.keyboard.press('Escape')
+    await expect(tabMenu).toHaveCount(0)
+
+    const tabBar = child.locator('[data-testid="editor-group-tabbar"]').first()
+    const position = await tabBar.evaluate((bar) => {
+      const rect = bar.getBoundingClientRect()
+      const y = rect.top + rect.height / 2
+      for (let x = rect.right - 4; x > rect.left; x -= 4) {
+        if (bar.ownerDocument.elementFromPoint(x, y) === bar) {
+          return { x: x - rect.left, y: y - rect.top }
+        }
+      }
+      throw new Error(`No tab bar background within ${rect.width}px`)
+    })
+    await tabBar.click({ button: 'right', position })
+    const groupMenu = child.locator('[role="menu"]').first()
+    await expect(groupMenu).toBeVisible()
+    await expect(groupMenu).toContainText(/Move Group to Main Window/)
+    await child.keyboard.press('Escape')
+    await expect(groupMenu).toHaveCount(0)
+
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
   })
 })

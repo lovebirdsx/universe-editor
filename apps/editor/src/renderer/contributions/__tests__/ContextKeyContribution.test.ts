@@ -181,13 +181,18 @@ function makeGroup(index: number, editors: FakeEditor[]): FakeGroup {
 
 function makeGroupsStub(groups: FakeGroup[] = [makeGroup(0, [])]) {
   const activeGroupChange = new Emitter<unknown>()
+  const activePartChange = new Emitter<unknown>()
   const addGroup = new Emitter<unknown>()
   const removeGroup = new Emitter<unknown>()
   const moveGroup = new Emitter<unknown>()
   let active = groups[0]!
+  let activePart: { isMain: boolean } = { isMain: true }
   return {
     get activeGroup() {
       return active
+    },
+    get activePart() {
+      return activePart
     },
     get groups() {
       return groups
@@ -196,7 +201,12 @@ function makeGroupsStub(groups: FakeGroup[] = [makeGroup(0, [])]) {
       active = g
       activeGroupChange.fire(g)
     },
+    setActivePart(isMain: boolean) {
+      activePart = { isMain }
+      activePartChange.fire(activePart)
+    },
     onDidActiveGroupChange: activeGroupChange.event,
+    onDidActivePartChange: activePartChange.event,
     onDidAddGroup: addGroup.event,
     onDidRemoveGroup: removeGroup.event,
     onDidMoveGroup: moveGroup.event,
@@ -751,6 +761,29 @@ describe('ContextKeyContribution', () => {
     workspace.setCurrent(null)
     expect(ctx.get('isRemoteWorkspace')).toBe(false)
     expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
+    ctx.dispose()
+  })
+
+  it('tracks whether the focused part belongs to an auxiliary window', () => {
+    const ctx = new ContextKeyService()
+    const groups = makeGroupsStub()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('linux') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      groups as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+    )
+    expect(ctx.get('isAuxiliaryEditorWindow')).toBe(false)
+
+    groups.setActivePart(false)
+    expect(ctx.get('isAuxiliaryEditorWindow')).toBe(true)
+
+    groups.setActivePart(true)
+    expect(ctx.get('isAuxiliaryEditorWindow')).toBe(false)
     ctx.dispose()
   })
 })

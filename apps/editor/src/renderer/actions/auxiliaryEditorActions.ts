@@ -48,6 +48,18 @@ function runMoveGroup(accessor: ServicesAccessor, arg: unknown, copy: boolean): 
   void (copy ? service.copyGroupToNewWindow(group) : service.moveGroupToNewWindow(group))
 }
 
+function runMoveToMainWindow(accessor: ServicesAccessor, arg: unknown): void {
+  const target = resolveTargetEditor(accessor, arg)
+  if (!target) return
+  accessor.get(IAuxiliaryEditorWindowService).moveEditorToMainWindow(target.editor, target.group)
+}
+
+function runMoveGroupToMainWindow(accessor: ServicesAccessor, arg: unknown): void {
+  const group = resolveTargetGroup(accessor, arg)
+  if (!group) return
+  accessor.get(IAuxiliaryEditorWindowService).moveGroupToMainWindow(group)
+}
+
 const CATEGORY = localize2('command.category.view', 'View')
 
 export class MoveEditorToNewWindowAction extends Action2 {
@@ -65,6 +77,38 @@ export class MoveEditorToNewWindowAction extends Action2 {
   }
   override run(accessor: ServicesAccessor, arg?: unknown): void {
     runMoveEditor(accessor, arg, false)
+  }
+}
+
+export class MoveEditorToMainWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.moveEditorToMainWindow'
+  constructor() {
+    super({
+      id: MoveEditorToMainWindowAction.ID,
+      icon: 'arrow-left',
+      title: localize2('action.moveEditorToMainWindow.title', 'Move Editor to Main Window'),
+      category: CATEGORY,
+      // Scoped `when` (clicked tab's part) keeps the entry out of main-window
+      // tabs; the palette row reads the root key maintained by
+      // ContextKeyContribution. `precondition` is evaluated at root and would
+      // gate the tab menu against the wrong window.
+      menu: [
+        {
+          id: MenuId.EditorTabContext,
+          group: '2_newWindow',
+          order: 30,
+          when: 'isAuxiliaryEditorWindow && hasActiveEditor',
+        },
+        {
+          id: MenuId.CommandPalette,
+          when: 'isAuxiliaryEditorWindow && hasActiveEditor',
+        },
+      ],
+      f1: false,
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    runMoveToMainWindow(accessor, arg)
   }
 }
 
@@ -120,6 +164,34 @@ export class CopyEditorGroupToNewWindowAction extends Action2 {
   }
   override run(accessor: ServicesAccessor, arg?: unknown): void {
     runMoveGroup(accessor, arg, true)
+  }
+}
+
+export class MoveEditorGroupToMainWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.moveEditorGroupToMainWindow'
+  constructor() {
+    super({
+      id: MoveEditorGroupToMainWindowAction.ID,
+      icon: 'arrow-left',
+      title: localize2('action.moveEditorGroupToMainWindow.title', 'Move Group to Main Window'),
+      category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.EditorTabsBarContext,
+          group: '2_newWindow',
+          order: 30,
+          when: 'isAuxiliaryEditorWindow',
+        },
+        {
+          id: MenuId.CommandPalette,
+          when: 'isAuxiliaryEditorWindow',
+        },
+      ],
+      f1: false,
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    runMoveGroupToMainWindow(accessor, arg)
   }
 }
 

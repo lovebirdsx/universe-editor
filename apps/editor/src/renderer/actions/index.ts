@@ -98,7 +98,9 @@ import {
 import {
   CopyEditorGroupToNewWindowAction,
   CopyEditorToNewWindowAction,
+  MoveEditorGroupToMainWindowAction,
   MoveEditorGroupToNewWindowAction,
+  MoveEditorToMainWindowAction,
   MoveEditorToNewWindowAction,
   NewEmptyEditorWindowAction,
   RestoreEditorsToMainWindowAction,
@@ -498,8 +500,10 @@ registerAction2(ChangeLanguageModeAction)
 // Editor — close
 registerAction2(CloseActiveEditorAction)
 registerAction2(MoveEditorToNewWindowAction)
+registerAction2(MoveEditorToMainWindowAction)
 registerAction2(CopyEditorToNewWindowAction)
 registerAction2(MoveEditorGroupToNewWindowAction)
+registerAction2(MoveEditorGroupToMainWindowAction)
 registerAction2(CopyEditorGroupToNewWindowAction)
 registerAction2(NewEmptyEditorWindowAction)
 registerAction2(RestoreEditorsToMainWindowAction)

@@ -102,6 +102,7 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'activeEditorIsDirty',
   'activeEditorIsPinned',
   'activeEditorGroupLocked',
+  'isAuxiliaryEditorWindow',
   'workbenchReady',
   'workbenchRestored',
   // Editor group-scoped keys (useEditorGroupScopedContextKey) — per editor group,

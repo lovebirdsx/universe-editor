@@ -92,6 +92,7 @@ export function editorScopedContextValues(
   return {
     activeEditorLanguageId: editor instanceof FileEditorInput ? editor.language : '',
     hasActiveEditor: editor !== undefined,
+    isAuxiliaryEditorWindow: !group.part.isMain,
     isInDiffEditor: editor instanceof DiffEditorInput,
     diffEditorHasOpenableFile:
       editor instanceof DiffEditorInput && editor.openableResource !== undefined,

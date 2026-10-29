@@ -75,6 +75,12 @@ class FakeAuxiliaryEditorWindowService implements IAuxiliaryEditorWindowService 
   copyGroupToNewWindow(): Promise<boolean> {
     return Promise.resolve(false)
   }
+  moveEditorToMainWindow(): boolean {
+    return false
+  }
+  moveGroupToMainWindow(): boolean {
+    return false
+  }
   requestClose(): Promise<void> {
     return Promise.resolve()
   }

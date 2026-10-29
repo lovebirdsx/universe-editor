@@ -46,6 +46,18 @@ renderer（主窗口，唯一运行时）
 
 返回值 `{ ok: true, window, editor }` 里的 `editor` 是目标组中的实例（copy 时是 clone）。建窗过程中以 `explicitEmpty: true` 防止窗口因空 part 自动关闭，落位成功后才置 false；失败统一走 `_discardFailedTarget`（空窗关闭、已有内容则保留）。`moveEditorToNewWindow` / `copyEditorToNewWindow` 只是该 API 的 boolean 薄封装，拖出建窗行为不变。
 
+## 将编辑器移回主窗口
+
+`IAuxiliaryEditorWindowService.moveEditorToMainWindow(editor, source)` / `moveGroupToMainWindow(group)` 是反向迁移入口，同步返回「是否已移动」，不负责关窗：
+
+- 源校验：`source.part.isMain` 直接拒绝；单个编辑器还要过 `_isMoveSourceValid`（source 仍存活且仍含该实例），陈旧菜单参数由 `resolveTargetEditor` 先行挡掉。
+- 目标组统一用 `_mainTargetGroup()`（主窗口 MRU 中第一个未锁定组；全锁时 `activeGroupForOpen`），与关窗迁移/salvage 一致。整组移动是并入该组，**不是**在主窗口新建分屏；源组的 `locked` 不复制到目标组。
+- 落位校验必须走 `_moveEditorOrThrow`：`IEditorGroupsService.moveEditor` 对解析失败的 source/target 是静默 no-op，直接信任会把「没移动」当成成功。
+- 整组移动按源组顺序逐个 move（sticky 由 `moveEditor` 保留，循环后再 `_restoreSticky` 兜底），最后恢复源组的活动编辑器。部分失败时已落位的留在主窗口、其余留在源组，返回 false。
+- 成功后同步执行 `activateGroup(target) → activatePart(mainPart, { preserveFocus: true, updateOpenTarget: true }) → focusMainWindow()`，把主窗口带到前台但不抢 Monaco 键盘焦点。顺序不能反：`activatePart` 读取 `mainPart.activeGroup` 来写 preserve-focus 意图和 open target。这些同步逻辑先于 `_watchEmpty` 的 `queueMicrotask`，所以正在关闭的辅助窗口不会重新抢回活动状态。
+- 源组移空且 part 还有其它组时删除空源组；若是 part 唯一的组则保留，由 `_watchEmpty` 自动关窗。
+- 菜单门控用 `isAuxiliaryEditorWindow`：标签/标签栏右键走 `editorScopedContextValues` 里的 scoped 键（按被点击的 `group.part.isMain` 求值），命令面板走 `ContextKeyContribution` 维护的 root 键（跟随 `activePart.isMain`）。不要用 `precondition`：它按 root 求值并 AND 到每条菜单。
+
 ## 浮层与文档归属
 
 每个窗口有自己的 Document，所有文档级浮层必须挂到**owner document**。解析顺序统一走 `@universe-editor/workbench-ui` 的 `useOwnerDocument(explicit?)`：**显式 prop > `OwnerDocumentProvider` > 全局 `document`**。`Workbench` 根部 provide 主文档，`AuxiliaryWindowHost` 为每个辅助 portal 子树重新 provide 该窗口的 document。
@@ -190,7 +202,7 @@ main 进程有两处不能只看"当前窗口 id"：
 
 ## 测试与已知限制
 
-- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab、辅助窗口 Ctrl+Tab 回主窗口后台 tab 后光标/方向键可用）、聚焦窗口与打开落点分离（Alt+Tab 回主窗口后 Ctrl+W 关主窗口标签、打开仍落原辅助窗口）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。
+- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、单编辑器/整组移回主窗口与菜单可见性、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab、辅助窗口 Ctrl+Tab 回主窗口后台 tab 后光标/方向键可用）、聚焦窗口与打开落点分离（Alt+Tab 回主窗口后 Ctrl+W 关主窗口标签、打开仍落原辅助窗口）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。
 - **DevTools 属于主 renderer**：辅助窗口共享主窗口的 JS realm 与 webContents，`toggleDevTools` 只能打开主窗口的开发者工具，无法按辅助窗口分别打开。这是同 renderer 架构的直接结果，不是遗漏；要按窗口调试需等辅助窗口拥有独立 renderer。
 - **Monaco 平台容器仍以主窗口为准**：`monacoWorkbenchLayoutService.mainContainer/activeContainer` 固定返回主 `#root`（`getContainer(window)` 已按目标窗口解析）。monaco 自带的 quick input、无障碍提示等少数走 `activeContainer` 的浮层在辅助窗口中仍会挂到主窗口；编辑器内容浮层与平台 hover 不受影响。完整重构需按 window 维护多容器集合，暂未做。
 - 跨窗口焦点用例在 main 进程猴补 `BrowserWindow.prototype.focus/showInactive` 记录焦点请求，再断言最后一次请求指向辅助窗口（`about:blank`）。silent E2E 下窗口不真正抢焦点，所以断言"请求了哪个窗口"而不是 OS 焦点状态。

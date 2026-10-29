@@ -20,6 +20,7 @@
  *   - editorPartMultipleEditorGroups / editorIsOpen
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
  *   - activeEditorIsFirstInGroup / activeEditorIsLastInGroup / activeEditorIsDirty
+ *   - isAuxiliaryEditorWindow                                    (focused part is an auxiliary window)
  *   - workbenchReady / workbenchRestored                        (lifecycle gates)
  *
  *  The per-view key (`view`) is NOT set here — it lives on per-view scoped
@@ -296,6 +297,18 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       'activeEditorGroupLocked',
       false,
     )
+    // The per-group scoped key of the same name (editorScopedContextValues)
+    // gates tab/tab-bar menus against the clicked group; the command palette
+    // resolves `when` against this root one, which follows the focused part.
+    const isAuxiliaryEditorWindow = contextKeyService.createKey<boolean>(
+      'isAuxiliaryEditorWindow',
+      false,
+    )
+    const syncWindowKind = (): void => {
+      isAuxiliaryEditorWindow.set(!editorGroupsService.activePart.isMain)
+    }
+    this._register(editorGroupsService.onDidActivePartChange(syncWindowKind))
+    syncWindowKind()
 
     const syncGroupKeys = () => {
       const active = editorGroupsService.activeGroup
