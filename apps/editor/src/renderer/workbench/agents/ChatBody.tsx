@@ -31,6 +31,7 @@ import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/re
 import { Bot, History, Loader2, Plus } from 'lucide-react'
 import {
   autorun,
+  derived,
   Emitter,
   Event,
   IConfigurationService,
@@ -112,9 +113,16 @@ import {
   isMessageRendered,
   isSubagentSlot,
   resolveCollapsed,
-  visibleFocusKey,
   type CollapseState,
 } from './timelineCollapse.js'
+import {
+  convergeDisplayFocusKey,
+  filterChildItemsForDisplay,
+  getHiddenActivity,
+  selectTimelineForDisplay,
+  selectTimelineForOutline,
+  type HiddenActivityKind,
+} from './timelineDisplay.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { estimateWrappedLinesUpTo } from './contentOverflow.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
@@ -695,17 +703,27 @@ function ChatScroll({
   const openSubagentRef = useRef<string | null>(null)
   openSubagentRef.current = openSubagentKey
 
+  const mode = useObservable(session.collapseMode)
+  const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(saved?.collapse?.overrides ?? []),
+  )
+  const collapse: CollapseState = useMemo(
+    () => ({ mode, overrides, openSubagent: openSubagentKey }),
+    [mode, overrides, openSubagentKey],
+  )
+  const collapseRef = useRef(collapse)
+  collapseRef.current = collapse
+
+  const filteredTimeline = useMemo(() => selectTimelineForDisplay(timeline, mode), [timeline, mode])
+  const displayKeys = useMemo(() => new Set(filteredTimeline.map(itemSlotKey)), [filteredTimeline])
+
   const [focusedKey, setFocusedKey] = useState<string | null>(() => {
     const restored = saved?.focusedKey ?? null
-    // A restored composite (sub-agent) key is only reachable while every ancestor
-    // card is expanded — converge to the nearest visible ancestor otherwise.
-    if (restored === null || !restored.includes('/')) return restored
-    const restoreCollapse: CollapseState = {
-      mode: session.collapseMode.get(),
-      overrides: new Map(saved?.collapse?.overrides ?? []),
-      openSubagent: openSubagentKey,
-    }
-    return visibleFocusKey(timeline, restored, restoreCollapse)
+    // The plan bar lives outside the timeline and is always visible; a hidden
+    // slot otherwise converges to the nearest visible neighbour or a folded
+    // ancestor before anything tries to reveal it.
+    if (restored === null || restored === PLAN_SLOT_KEY) return restored
+    return convergeDisplayFocusKey(timeline, filteredTimeline, displayKeys, restored, collapse)
   })
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
@@ -733,17 +751,6 @@ function ChatScroll({
   // disposes its own subscription on detach.
   const activeSlotRef = useRef<Emitter<void> | null>(null)
   if (activeSlotRef.current === null) activeSlotRef.current = new Emitter<void>()
-
-  const mode = useObservable(session.collapseMode)
-  const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
-    () => new Map(saved?.collapse?.overrides ?? []),
-  )
-  const collapse: CollapseState = useMemo(
-    () => ({ mode, overrides, openSubagent: openSubagentKey }),
-    [mode, overrides, openSubagentKey],
-  )
-  const collapseRef = useRef(collapse)
-  collapseRef.current = collapse
 
   // Inner content-expansion (a long user message past its clamp, an execute
   // tool call's terminal output). Separate from the outer per-slot `overrides`
@@ -800,31 +807,58 @@ function ChatScroll({
   // In-session find. While the find bar is open we force the plain <ol> (below)
   // so the whole session is in the DOM — the TreeWalker, scrollIntoView reveal
   // and highlight ranges then cover messages that virtualization would unmount.
+  // Only slots the display mode keeps are searched: a hidden row has no DOM to
+  // highlight, and the find bar's count should match what the user can see.
+  const firstUserIdx = filteredTimeline.findIndex(
+    (it) => it.kind === 'message' && it.message.role === 'user',
+  )
+  const displayTimeline = useMemo(
+    () =>
+      firstUserIdx >= 0
+        ? [...filteredTimeline.slice(0, firstUserIdx), ...filteredTimeline.slice(firstUserIdx + 1)]
+        : filteredTimeline,
+    [filteredTimeline, firstUserIdx],
+  )
+  const tailSignature = tailContentSignature(displayTimeline)
   const find = useChatFind(
     containerRef,
-    `${timeline.length}:${tailContentSignature(timeline)}`,
+    `${mode}:${displayTimeline.length}:${tailSignature}`,
     onFindVisibleChange,
   )
-  const virtualize = timeline.length > threshold && !find.visible
+  const virtualize = displayTimeline.length > threshold && !find.visible
   // Let persist()/the restore effect read the live mode without re-binding to it.
   const virtualizeRef = useRef(virtualize)
   virtualizeRef.current = virtualize
-
-  const firstUserIdx = timeline.findIndex(
-    (it) => it.kind === 'message' && it.message.role === 'user',
-  )
-  const displayTimeline =
-    firstUserIdx >= 0
-      ? [...timeline.slice(0, firstUserIdx), ...timeline.slice(firstUserIdx + 1)]
-      : timeline
 
   // Keep the timeline reachable from the keyboard handle without re-binding it on
   // every render (the ref read is cheap; capturing `timeline` would re-allocate
   // the closure each render).
   const timelineRef = useRef(timeline)
   timelineRef.current = timeline
+  const filteredTimelineRef = useRef(filteredTimeline)
+  filteredTimelineRef.current = filteredTimeline
+  const displayKeysRef = useRef(displayKeys)
+  displayKeysRef.current = displayKeys
   const displayTimelineRef = useRef(displayTimeline)
   displayTimelineRef.current = displayTimeline
+
+  // A thought or tool slot the mode hides can still be the one streaming at the
+  // tail. Without a visible row the chat looks idle, so the list gets a light
+  // activity line — but never while a permission / elicitation card is waiting
+  // for the user, where the agent is blocked rather than working.
+  const pendingPermission = useObservable(session.pendingPermission)
+  const pendingElicitation = useObservable(session.pendingElicitation)
+  const timelineTail = timeline[timeline.length - 1]
+  const hiddenActivity = useMemo(
+    () =>
+      getHiddenActivity(
+        filteredTimeline,
+        timelineTail,
+        mode,
+        isRunning && pendingPermission === undefined && pendingElicitation === undefined,
+      ),
+    [filteredTimeline, timelineTail, mode, isRunning, pendingPermission, pendingElicitation],
+  )
 
   // Render-phase hookup (like timelineRef above) so the sticky first-user bar —
   // mounted before this component's effects — resolves collapse from the same
@@ -1300,14 +1334,13 @@ function ChatScroll({
   // idle, or errored → the idle reaper's 'closed' + dormant seal) OUTSIDE the
   // observed timeline element, so neither the content-growth observer nor the
   // tail signature (already settled by the last chunk) sees the ~30px it adds —
-  // without this the footer sits half below the fold at turn end.
-  const tailSignature = tailContentSignature(timeline)
-
+  // without this the footer sits half below the fold at turn end. The activity
+  // line is likewise a sibling of the observed timeline element.
   useEffect(() => {
     if (restoringRef.current) return
     if (!stickRef.current) return
     scrollToBottomStable()
-  }, [timeline.length, tailSignature, status, scrollToBottomStable])
+  }, [displayTimeline.length, tailSignature, hiddenActivity, status, scrollToBottomStable])
 
   // Re-pin when chatBody clientHeight shrinks (e.g. PermissionCard /
   // ElicitationCard appears, or the PromptInput textarea grows via
@@ -1454,17 +1487,40 @@ function ChatScroll({
   // Expose this timeline to the Outline view (full-screen session editor only):
   // it reads `timeline` to build the symbol tree and calls back to scroll/focus.
   // Mirrors MarkdownPreviewRegistry — OutlineService reaches a non-Monaco host
-  // through a controller handle rather than injecting an ACP service.
+  // through a controller handle rather than injecting an ACP service. Filtering
+  // here as well keeps rows the mode hides out of the tree: they have no DOM,
+  // so clicking one could not reveal it.
+  const outlineTimeline = useMemo(
+    () =>
+      derived((reader) =>
+        selectTimelineForOutline(session.timeline.read(reader), session.collapseMode.read(reader)),
+      ),
+    [session],
+  )
   useEffect(() => {
     const activeEmitter = (activeSlotRef.current ??= new Emitter<void>())
     const controller: IAcpSessionOutlineController = {
-      timeline: session.timeline,
+      timeline: outlineTimeline,
       // Clicking an outline row selects the matching session item (so its
       // highlight and the outline's stay in lockstep), then scrolls it in. A
       // folded card does not mount its body, so a nested target has no DOM to land
       // on — unfold its blocking ancestors first (the outline equivalent of
       // clicking a symbol inside a folded region in a code editor).
       scrollToKey: (key) => {
+        // A bookmark can point at a slot the display mode now hides (no DOM to
+        // land on). Stay a no-op instead of writing a dangling focus and
+        // dropping bottom-stick for a jump that cannot happen.
+        const top = key.split('/')[0] ?? key
+        if (!displayKeysRef.current.has(top)) return
+        const resolved = findByStickyKey(timelineRef.current, key)
+        if (
+          collapseRef.current.mode === 'hideThinking' &&
+          resolved !== undefined &&
+          resolved.kind === 'message' &&
+          resolved.message.role === 'thought'
+        ) {
+          return
+        }
         const folded = foldedAncestorKeys(timelineRef.current, key, collapseRef.current)
         if (folded.length > 0) {
           // A folded sub-agent card on the chain opens by designation (an
@@ -1501,7 +1557,7 @@ function ChatScroll({
     }
     AcpSessionOutlineRegistry.register(session.id, controller)
     return () => AcpSessionOutlineRegistry.unregister(session.id, controller)
-  }, [session.id, session.timeline, handleStickyJump, persist])
+  }, [session.id, outlineTimeline, handleStickyJump, persist])
 
   // Retrack the outline's active symbol when the keyboard selection moves
   // (Alt+Up/Down/Home/End), the other half of getActiveKey's signal. Also push
@@ -1530,19 +1586,27 @@ function ChatScroll({
     collapseBridge.emitter.fire()
   }, [collapse, collapseBridge])
 
-  // Fold convergence: when a card folds (per-item override or a Ctrl+Alt+F mode
-  // cycle) while the keyboard focus sits inside it, pull the focus back to the
-  // nearest still-visible ancestor key instead of leaving it on unmounted DOM.
+  // Display/fold convergence: when a mode change or a new turn hides the slot
+  // holding keyboard focus — or a card folds while focus sits inside it, or
+  // another surface of the same session syncs a slot this surface hides — pull
+  // the focus to the nearest still-visible key instead of leaving it on a slot
+  // with no DOM. The plan bar lives outside the timeline and is always visible.
   useEffect(() => {
     const key = focusedKeyRef.current
-    if (key === null || !key.includes('/')) return
-    const visible = visibleFocusKey(timelineRef.current, key, collapse)
+    if (key === null || key === PLAN_SLOT_KEY) return
+    const visible = convergeDisplayFocusKey(
+      timelineRef.current,
+      filteredTimeline,
+      displayKeys,
+      key,
+      collapse,
+    )
     if (visible !== key) {
       setFocusedKey(visible)
       focusedKeyRef.current = visible
       persist()
     }
-  }, [collapse, persist])
+  }, [collapse, displayKeys, filteredTimeline, focusedKey, persist])
 
   // The timeline's keyboard surface: the tabIndex={-1} scroll container Alt+J/K
   // drive and message cards are selected on. Keyboard navigation, the read-only
@@ -1586,21 +1650,23 @@ function ChatScroll({
       persist()
     }
     handle.move = (direction) => {
-      // Navigate over the FULL timeline, not displayTimeline: the first user
-      // message is sliced out of displayTimeline because the sticky bar above the
-      // scroll container renders it — but it must stay keyboard-reachable.
-      const list = timelineRef.current
+      // Navigate the filtered top-level timeline, not displayTimeline: the first
+      // user message is sliced out of displayTimeline because the sticky bar
+      // above the scroll container renders it — but it must stay keyboard-
+      // reachable — and slots the current display mode hides must not be stops.
+      const full = timelineRef.current
+      const list = filteredTimelineRef.current
       const collapse = collapseRef.current
       const current = focusedKeyRef.current
       // Visible-row navigation, the same shape as the Explorer tree: a step off
       // an expanded card lands on its first child, and a step past its last child
-      // continues at the next top-level item. A focus hidden by a fold converges
-      // to its nearest visible ancestor first; a key with no row left at all
-      // restarts the walk — `next` from the top, `prev` from the newest row. The
-      // Explorer sends both to index 0; a chat's tail is the useful end here.
-      // The pinned plan bar renders outside the scroll container too, so it joins
-      // the sequence right after the first user message — the visual stacking
-      // order of the bars above the container.
+      // continues at the next top-level item. A focus hidden by a fold or by the
+      // display mode converges to its nearest visible neighbour first; a key with
+      // no row left at all restarts the walk — `next` from the top, `prev` from
+      // the newest row. The Explorer sends both to index 0; a chat's tail is the
+      // useful end here. The pinned plan bar renders outside the scroll container
+      // too, so it joins the sequence right after the first user message — the
+      // visual stacking order of the bars above the container.
       const firstUser = list.find((it) => it.kind === 'message' && it.message.role === 'user')
       const rows = collectTimelineRows(
         list,
@@ -1613,7 +1679,12 @@ function ChatScroll({
             },
       )
       if (rows.length === 0) return
-      const visible = current === null ? null : visibleFocusKey(list, current, collapse)
+      const visible =
+        current === null
+          ? null
+          : current === PLAN_SLOT_KEY
+            ? PLAN_SLOT_KEY
+            : convergeDisplayFocusKey(full, list, displayKeysRef.current, current, collapse)
       const anchor = visible === null ? -1 : rows.findIndex((row) => row.key === visible)
       // Walk from a position to the first row the user can actually see: the
       // anchor may be a card that stopped drawing (a message that settled empty
@@ -1669,13 +1740,26 @@ function ChatScroll({
       focusAndReveal(next.key)
     }
     handle.moveLevel = (direction) => {
-      const current = focusedKeyRef.current
-      if (current === null) return
+      const raw = focusedKeyRef.current
+      if (raw === null) return
       // The plan bar keeps its fold state outside the override store — fold and
       // unfold it through its bridge, like the chevron and Alt+F do.
-      if (current === PLAN_SLOT_KEY) {
+      if (raw === PLAN_SLOT_KEY) {
         planBridge.setCollapsed(direction === 'out')
         return
+      }
+      const current = convergeDisplayFocusKey(
+        timelineRef.current,
+        filteredTimelineRef.current,
+        displayKeysRef.current,
+        raw,
+        collapseRef.current,
+      )
+      if (current === null) return
+      if (current !== raw) {
+        setFocusedKey(current)
+        focusedKeyRef.current = current
+        persist()
       }
       const item = findByStickyKey(timelineRef.current, current)
       if (!item) return
@@ -1703,11 +1787,13 @@ function ChatScroll({
         return
       }
       if (item.kind !== 'toolCall') return
-      // The first child that draws a row: stepping onto a child the card drops
-      // (an empty settled sub message) would leave the focus ring nowhere.
-      const first = (item.call.children ?? []).find(
-        (child) => child.kind !== 'message' || isMessageRendered(child.message, true),
-      )
+      // The first child that draws a row — skipping a settled empty sub message
+      // and any thought the display mode hides — would leave the focus ring
+      // nowhere.
+      const first = filterChildItemsForDisplay(
+        item.call.children ?? [],
+        collapseRef.current.mode,
+      ).find((child) => child.kind !== 'message' || isMessageRendered(child.message, true))
       if (first === undefined) return
       stickRef.current = false
       focusAndReveal(buildStickyKey(current, first))
@@ -1715,10 +1801,12 @@ function ChatScroll({
     // Jump between top-level sub-agent cards. The current position comes from the
     // shared resolver — the focused card while visible, else the viewport anchor —
     // so the pill's counter and this command cannot disagree after a manual
-    // scroll. The reveal goes through handleStickyJump so an unmounted virtual
-    // row converges onto the real header instead of a rough estimate.
+    // scroll. Sub-agent cards survive every display mode, but the list is still
+    // the filtered one so its indexes match the rows on screen. The reveal goes
+    // through handleStickyJump so an unmounted virtual row converges onto the
+    // real header instead of a rough estimate.
     handle.moveSubagent = (direction) => {
-      const list = timelineRef.current
+      const list = filteredTimelineRef.current
       const cards = topLevelSubagentCards(list)
       const currentIndex = currentSubagentIndex(
         cards,
@@ -1944,7 +2032,7 @@ function ChatScroll({
           collapse={collapse}
           onToggleCollapse={handleToggleCollapse}
           onJumpTo={handleStickyJump}
-          revision={`${virtualize}:${displayTimeline.length}:${tailSignature}`}
+          revision={`${mode}:${virtualize}:${displayTimeline.length}:${tailSignature}`}
         />
         {!hasTimelineContent ? (
           // Side-task chats start blank on purpose (the fork baseline stays
@@ -2022,6 +2110,7 @@ function ChatScroll({
             })}
           </ol>
         )}
+        {hiddenActivity !== null && <TimelineHiddenActivity kind={hiddenActivity} />}
         {hasTimelineContent && !readOnly && <ForkTipFooter session={session} />}
         {menu && (
           <AgentChatContextMenu
@@ -2040,6 +2129,23 @@ function ChatScroll({
         )}
       </div>
     </ContentExpansionProvider>
+  )
+}
+
+function TimelineHiddenActivity({ kind }: { kind: HiddenActivityKind }) {
+  return (
+    <div
+      className={styles['timelineHiddenActivity']}
+      data-testid="acp-timeline-hidden-activity"
+      role="status"
+    >
+      <Loader2 size={12} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
+      <span>
+        {kind === 'tool'
+          ? localize('acp.collapse.activity.tool', 'Calling a tool…')
+          : localize('acp.collapse.activity.thinking', 'Thinking…')}
+      </span>
+    </div>
   )
 }
 

@@ -66,6 +66,7 @@ import { roleIcon, toolCallIcon } from './timelineIcons.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { toolCallPathUri, toolCallPathUriString } from './toolCallPaths.js'
 import { isMessageRendered, resolveCollapsed, type CollapseState } from './timelineCollapse.js'
+import { filterChildItemsForDisplay } from './timelineDisplay.js'
 import styles from './agents.module.css'
 
 /** Config key controlling which MCP-card sections start expanded. */
@@ -344,7 +345,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   // Sub-agent timeline (Task tool): the spawned agent's messages / tool calls,
   // folded inside this card. CollapsibleSlot only mounts the body when expanded,
   // so this stays hidden until the user opens the card.
-  const children = call.children ?? []
+  const children = filterChildItemsForDisplay(
+    call.children ?? [],
+    subtreeCollapse?.collapse.mode ?? 'default',
+  )
   const childTimeline = children.length > 0 && (
     <ul className={styles['toolCallChildren']} data-testid="acp-subagent-timeline">
       {children.map((c) => {

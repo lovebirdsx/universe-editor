@@ -13,10 +13,10 @@
  *  instance renders, before the outgoing instance's unmount flush runs.
  *--------------------------------------------------------------------------------------------*/
 
-export type CollapseMode = 'default' | 'collapsed' | 'expanded'
+export type CollapseMode = 'default' | 'collapsed' | 'expanded' | 'hideThinking' | 'lastMessage'
 
 export interface AcpChatCollapseState {
-  /** Baseline cycled by Ctrl+Alt+F. */
+  /** Baseline driven by the display-mode dropdown and Ctrl+Alt+F. */
   mode: CollapseMode
   /** Per-item explicit overrides (Alt+F / chevron click); serialized Map. */
   overrides: ReadonlyArray<readonly [string, boolean]>

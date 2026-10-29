@@ -110,6 +110,7 @@ import { ISubProjectService } from './acpSubProjectService.js'
 import { IAcpLastSessionCwdService, rememberedCwdForWindow } from './acpLastSessionCwdService.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
+import { isCollapseMode } from './acpCollapseMode.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
 import type { AcpPromptDraft } from './acpPromptDraftCache.js'
 import { AcpElicitationDraftCache } from './acpElicitationDraftCache.js'
@@ -929,8 +930,10 @@ export class AcpSessionService
     const profile = this._createProfiler.begin(resolvedAgentId)
     const agentName = this._registry.get(resolvedAgentId).name
     const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
-    const initialCollapseMode: CollapseMode =
-      (collapseModes[resolvedAgentId] as CollapseMode | undefined) ?? 'default'
+    const configuredCollapseMode = collapseModes[resolvedAgentId]
+    const initialCollapseMode: CollapseMode = isCollapseMode(configuredCollapseMode)
+      ? configuredCollapseMode
+      : 'default'
     const cwd = options?.cwd ?? this._rememberedCwd() ?? this._currentCwd() ?? this._homeCwd()
     const authority = options?.authority ?? this._currentAuthority()
     if (cwd !== undefined) {
@@ -1432,7 +1435,7 @@ export class AcpSessionService
             : {}),
           mcpServerSelection: mcpSelection === null ? null : [...mcpSelection],
         },
-        collapseMode: entry.collapseMode ?? 'default',
+        collapseMode: isCollapseMode(entry.collapseMode) ? entry.collapseMode : 'default',
         // No title service on resume: restored sessions already carry a durable
         // title, so we must not regenerate (and overwrite) it on the next turn.
         // Side tasks are the exception — their row title is only the quote-label

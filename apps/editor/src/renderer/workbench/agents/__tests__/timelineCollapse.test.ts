@@ -20,7 +20,6 @@ import {
   isMessageRendered,
   isSubagentCard,
   isSubagentSlot,
-  nextCollapseMode,
   resolveCollapsed,
   subtreeCardKeys,
   visibleFocusKey,
@@ -157,6 +156,13 @@ describe('defaultCollapsed', () => {
     expect(defaultCollapsed(agentResult, 'expanded')).toBe(false)
     expect(defaultCollapsed(ordinaryEdit, 'collapsed')).toBe(true)
   })
+
+  it('keeps the smart per-kind folding under hideThinking / lastMessage', () => {
+    expect(defaultCollapsed(agentResult, 'hideThinking')).toBe(true)
+    expect(defaultCollapsed(ordinaryEdit, 'hideThinking')).toBe(false)
+    expect(defaultCollapsed(agentResult, 'lastMessage')).toBe(true)
+    expect(defaultCollapsed(ordinaryEdit, 'lastMessage')).toBe(false)
+  })
 })
 
 describe('resolveCollapsed', () => {
@@ -227,14 +233,6 @@ describe('sub-agent exclusivity', () => {
     expect(resolveCollapsed(key, nested, collapseState('default', [[key, false]], 't:task'))).toBe(
       false,
     )
-  })
-})
-
-describe('nextCollapseMode', () => {
-  it('cycles default → collapsed → expanded → default', () => {
-    expect(nextCollapseMode('default')).toBe('collapsed')
-    expect(nextCollapseMode('collapsed')).toBe('expanded')
-    expect(nextCollapseMode('expanded')).toBe('default')
   })
 })
 

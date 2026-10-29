@@ -1190,11 +1190,14 @@ export interface E2EProbe {
    */
   addActiveSelectionToAcpPrompt(): Promise<void>
   /**
-   * Force the active session's timeline collapse mode ('default' | 'collapsed' |
-   * 'expanded'). Lets a spec expand every card so async-height bodies (terminal
-   * output, etc.) actually mount — the scroll-jitter repro needs expanded cards.
+   * Force the active session's timeline display mode ('default' | 'collapsed' |
+   * 'expanded' | 'hideThinking' | 'lastMessage'). Lets a spec expand every card
+   * so async-height bodies (terminal output, etc.) actually mount — the
+   * scroll-jitter repro needs expanded cards — and covers the display filters.
    */
-  setAcpCollapseMode(mode: 'default' | 'collapsed' | 'expanded'): void
+  setAcpCollapseMode(
+    mode: 'default' | 'collapsed' | 'expanded' | 'hideThinking' | 'lastMessage',
+  ): void
   /**
    * Current text in the active session's prompt editor. The input is a Monaco
    * editor (no DOM `<input>`), so specs read it through this probe instead of

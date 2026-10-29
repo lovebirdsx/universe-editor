@@ -592,7 +592,7 @@ export class CycleAcpTimelineCollapseAction extends Action2 {
   constructor() {
     super({
       id: CycleAcpTimelineCollapseAction.ID,
-      title: localize2('action.agent.cycleTimelineCollapse', 'Cycle Timeline Collapse (All)'),
+      title: localize2('action.agent.cycleTimelineCollapse', 'Cycle Timeline Display Mode'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+alt+f', when: ACP_NAV_WHEN },
       precondition: ACP_NAV_WHEN,

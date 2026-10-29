@@ -217,6 +217,8 @@ Swarm 审核列表的「跳到 Swarm 更改」占用 `Ctrl+Shift+Enter`，因此
 | 会话时间线到顶 / 到底        | `a` / `e`                                         |
 | 会话时间线翻页               | `Shift+K` / `Shift+J`                             |
 | 上一张 / 下一张子 Agent 卡片 | `Alt+Shift+K` / `Alt+Shift+J`                     |
+| 折叠 / 展开当前卡片          | `Alt+F`                                           |
+| 切换时间线显示方式（循环）   | `Ctrl+Alt+F`（会话编辑器聚焦时）                  |
 | 触发内联补全                 | `Alt+\`（编辑器文本焦点）                         |
 | 采纳内联补全                 | `Tab`（幽灵文本可见时）                           |
 

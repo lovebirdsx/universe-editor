@@ -29,6 +29,7 @@ import {
   ServiceCollection,
   URI,
   localize2,
+  type ISettableObservable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import type {
@@ -39,6 +40,7 @@ import type {
 } from '@universe-editor/platform'
 import type {
   AcpMessage,
+  AcpPendingElicitation,
   AcpPendingPermission,
   AcpPlanEntry,
   AcpSessionStatus,
@@ -48,6 +50,8 @@ import type {
   SelectionContext,
   TimelineItem,
 } from '../../../services/acp/session/acpSessionService.js'
+import type { CollapseMode } from '../../../services/acp/session/acpChatViewStateCache.js'
+import { nextCollapseMode } from '../../../services/acp/session/acpCollapseMode.js'
 import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
@@ -115,10 +119,7 @@ function makeSession(
     cwd?: string
   } = {},
 ): IAcpSession {
-  const collapseMode = observableValue<'default' | 'collapsed' | 'expanded'>(
-    't.collapse',
-    'default',
-  )
+  const collapseMode = observableValue<CollapseMode>('t.collapse', 'default')
   return {
     id,
     agentId: 'fake',
@@ -149,10 +150,9 @@ function makeSession(
     rewindSupported: observableValue<boolean>('t.rewindSupported', opts.rewindSupported ?? false),
     readOnly: opts.readOnly ?? false,
     onDidCancelForRestore: Event.None,
+    setCollapseMode: (next: CollapseMode) => collapseMode.set(next, undefined),
     cycleCollapseMode: () => {
-      const cur = collapseMode.get()
-      const next = cur === 'default' ? 'collapsed' : cur === 'collapsed' ? 'expanded' : 'default'
-      collapseMode.set(next, undefined)
+      collapseMode.set(nextCollapseMode(collapseMode.get()), undefined)
     },
     presentPermission: () => {},
     recoveryState: observableValue('t.recovery', undefined),
@@ -1980,8 +1980,9 @@ describe('ChatBody — collapse', () => {
     expect(ariaExpanded(container, 'm:a')).toBe('true')
   })
 
-  it('cycleCollapseMode cycles default → all collapsed → all expanded', () => {
-    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+  it('cycleCollapseMode walks all five display modes', () => {
+    const session = makeSession('s1', items)
+    const { container, widgetRef } = renderChatWithWidget(session)
     expect(ariaExpanded(container, 'm:a')).toBe('true')
     act(() => {
       widgetRef.current!.cycleCollapseMode() // collapsed
@@ -1994,8 +1995,21 @@ describe('ChatBody — collapse', () => {
     expect(ariaExpanded(container, 'm:a')).toBe('true')
     expect(ariaExpanded(container, 'm:b')).toBe('true')
     act(() => {
+      widgetRef.current!.cycleCollapseMode() // hideThinking
+    })
+    expect(session.collapseMode.get()).toBe('hideThinking')
+    expect(ariaExpanded(container, 'm:a')).toBe('true')
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // lastMessage
+    })
+    expect(session.collapseMode.get()).toBe('lastMessage')
+    // Same turn with two agent replies: only the final one survives.
+    expect(container.querySelector('[data-timeline-key="m:a"]')).toBeNull()
+    expect(ariaExpanded(container, 'm:b')).toBe('true')
+    act(() => {
       widgetRef.current!.cycleCollapseMode() // back to default
     })
+    expect(session.collapseMode.get()).toBe('default')
     expect(ariaExpanded(container, 'm:a')).toBe('true')
   })
 
@@ -2015,6 +2029,215 @@ describe('ChatBody — collapse', () => {
     const second = renderChat(makeSession('s1', items))
     expect(ariaExpanded(second.container, 'm:b')).toBe('false')
     expect(ariaExpanded(second.container, 'm:a')).toBe('true')
+  })
+})
+
+describe('ChatBody — display modes', () => {
+  const roleMessage = (
+    id: string,
+    role: AcpMessage['role'],
+    text: string,
+    streaming = false,
+  ): Extract<TimelineItem, { kind: 'message' }> => ({
+    kind: 'message',
+    id,
+    message: { id, role, text, blocks: [{ type: 'text', text }], streaming },
+  })
+  const toolItem = (
+    id: string,
+    kind: AcpToolCall['kind'],
+    status: AcpToolCall['status'] = 'completed',
+  ): TimelineItem => ({
+    kind: 'toolCall',
+    id,
+    call: { id, title: id, kind, status, text: '', blocks: [], diffs: [] },
+  })
+
+  it('hideThinking removes top-level thoughts and thoughts inside an open sub-agent card', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: makeTaskCall('task', [
+        { kind: 'message', id: 'th', message: roleMessage('th', 'thought', 'inner').message },
+        childMessage('sm', 'inner reply'),
+      ]),
+    }
+    const session = makeSession('s1', [
+      roleMessage('u', 'user', 'question'),
+      roleMessage('t1', 'thought', 'pondering'),
+      task,
+    ])
+    const { container } = renderChat(session)
+
+    act(() => session.setCollapseMode('hideThinking'))
+    expect(container.querySelector('[data-timeline-key="m:t1"]')).toBeNull()
+    expect(container.querySelector('[data-sticky-key="t:task/m:th"]')).toBeNull()
+    act(() => fireEvent.click(collapseToggle(slotEl(container, 't:task'))))
+    expect(container.querySelector('[data-sticky-key="t:task/m:th"]')).toBeNull()
+    expect(container.querySelector('[data-sticky-key="t:task/m:sm"]')).not.toBeNull()
+  })
+
+  it('lastMessage keeps users, the final reply and sub-agent cards, hiding ordinary tools', () => {
+    const session = makeSession('s1', [
+      roleMessage('u1', 'user', 'turn 1'),
+      roleMessage('a1', 'agent', 'intermediate'),
+      toolItem('read', 'read'),
+      roleMessage('a2', 'agent', 'final reply'),
+      {
+        kind: 'toolCall',
+        id: 'sub',
+        call: makeTaskCall('sub', [childMessage('sm', 'child')]),
+      },
+      roleMessage('u2', 'user', 'turn 2'),
+      roleMessage('a3', 'agent', 'answer'),
+    ])
+    const { container } = renderChat(session)
+
+    act(() => session.setCollapseMode('lastMessage'))
+    expect(container.querySelector('[data-timeline-key="m:a1"]')).toBeNull()
+    expect(container.querySelector('[data-timeline-key="t:read"]')).toBeNull()
+    expect(container.querySelector('[data-timeline-key="m:a2"]')).not.toBeNull()
+    expect(container.querySelector('[data-timeline-key="t:sub"]')).not.toBeNull()
+    expect(container.querySelector('[data-timeline-key="m:u2"]')).not.toBeNull()
+    expect(container.querySelector('[data-timeline-key="m:a3"]')).not.toBeNull()
+  })
+
+  it('shows a tail activity line while the running streaming slot is hidden', () => {
+    const session = makeSession(
+      's1',
+      [roleMessage('u', 'user', 'question'), roleMessage('th', 'thought', '…', true)],
+      { status: 'running' },
+    )
+    const { queryByTestId, getByTestId } = renderChat(session)
+    expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
+
+    act(() => session.setCollapseMode('hideThinking'))
+    expect(getByTestId('acp-timeline-hidden-activity').textContent).toContain('Thinking')
+
+    act(() => session.setCollapseMode('default'))
+    expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
+  })
+
+  it('reports a hidden running tool as tool activity until it settles', () => {
+    const session = makeSession(
+      's1',
+      [
+        roleMessage('u', 'user', 'question'),
+        roleMessage('a', 'agent', 'working on it'),
+        toolItem('read', 'read', 'in_progress'),
+      ],
+      { status: 'running' },
+    )
+    const { getByTestId } = renderChat(session)
+
+    act(() => session.setCollapseMode('lastMessage'))
+    expect(getByTestId('acp-timeline-hidden-activity').textContent).toContain('Calling a tool')
+  })
+
+  it('suppresses the tail activity line while a permission or elicitation is pending', () => {
+    const session = makeSession(
+      's1',
+      [roleMessage('u', 'user', 'question'), roleMessage('th', 'thought', '…', true)],
+      { status: 'running' },
+    )
+    const { queryByTestId } = renderChat(session)
+    act(() => session.setCollapseMode('hideThinking'))
+    expect(queryByTestId('acp-timeline-hidden-activity')).not.toBeNull()
+    const pendingPermission = session.pendingPermission as ISettableObservable<
+      AcpPendingPermission | undefined
+    >
+    const pendingElicitation = session.pendingElicitation as ISettableObservable<
+      AcpPendingElicitation | undefined
+    >
+
+    const permission: AcpPendingPermission = {
+      toolCallId: 'read',
+      title: 'Approve read',
+      options: [],
+      resolve: () => {},
+      cancel: () => {},
+    }
+    act(() => pendingPermission.set(permission, undefined))
+    expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
+
+    const elicitation: AcpPendingElicitation = {
+      request: {
+        mode: 'form',
+        sessionId: session.id,
+        message: 'Need input',
+        requestedSchema: { type: 'object', properties: {} },
+      },
+      resolve: () => {},
+      cancel: () => {},
+    }
+    act(() => {
+      pendingPermission.set(undefined, undefined)
+      pendingElicitation.set(elicitation, undefined)
+    })
+    expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
+  })
+
+  it('keyboard navigation skips slots hidden by the display mode', () => {
+    const session = makeSession('s1', [
+      roleMessage('u', 'user', 'question'),
+      roleMessage('th', 'thought', 'pondering'),
+      roleMessage('a', 'agent', 'answer'),
+    ])
+    const { container, widgetRef } = renderChatWithWidget(session)
+    const barCard = container.querySelector<HTMLElement>('[data-testid="acp-user-bar-card"]')!
+    act(() => session.setCollapseMode('hideThinking'))
+
+    act(() => widgetRef.current!.moveTimeline('first'))
+    expect(barCard.className).toContain(focusedClass)
+    act(() => widgetRef.current!.moveTimeline('next'))
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    expect(container.querySelector('[data-timeline-key="m:th"]')).toBeNull()
+  })
+
+  it('ignores a bookmark jump to a slot the display mode hides', () => {
+    const session = makeSession('s1', [
+      roleMessage('u', 'user', 'question'),
+      roleMessage('th', 'thought', 'pondering'),
+      roleMessage('a', 'agent', 'answer'),
+    ])
+    const { container } = renderChatWithWidget(session)
+    act(() => session.setCollapseMode('hideThinking'))
+    act(() => fireEvent.click(slotEl(container, 'm:a')))
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+
+    const controller = AcpSessionOutlineRegistry.get(session.id)
+    act(() => controller!.scrollToKey('m:th'))
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+  })
+
+  it('moves keyboard focus off a slot the new display mode hides', () => {
+    const session = makeSession('s1', [
+      roleMessage('p1', 'agent', 'prelude 1'),
+      roleMessage('p2', 'agent', 'prelude 2'),
+      roleMessage('u', 'user', 'question'),
+      roleMessage('a', 'agent', 'answer'),
+    ])
+    const { container } = renderChatWithWidget(session)
+    act(() => fireEvent.click(slotEl(container, 'm:p1')))
+    expect(slotEl(container, 'm:p1').className).toContain(focusedClass)
+
+    act(() => session.setCollapseMode('lastMessage'))
+    expect(container.querySelector('[data-timeline-key="m:p1"]')).toBeNull()
+    expect(slotEl(container, 'm:p2').className).toContain(focusedClass)
+  })
+
+  it('publishes a filtered timeline to the outline', () => {
+    const session = makeSession('s1', [
+      roleMessage('u', 'user', 'question'),
+      roleMessage('th', 'thought', 'pondering'),
+      roleMessage('a', 'agent', 'answer'),
+    ])
+    renderChat(session)
+    const controller = AcpSessionOutlineRegistry.get(session.id)
+    expect(controller?.timeline.get().map((item) => item.id)).toEqual(['u', 'th', 'a'])
+
+    act(() => session.setCollapseMode('hideThinking'))
+    expect(controller?.timeline.get().map((item) => item.id)).toEqual(['u', 'a'])
   })
 })
 

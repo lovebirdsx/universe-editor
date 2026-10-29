@@ -1,0 +1,34 @@
+/*---------------------------------------------------------------------------------------------
+ *  Tests for the timeline display-mode order / validation shared by the
+ *  session view-model and the dropdown.
+ *--------------------------------------------------------------------------------------------*/
+
+import { describe, expect, it } from 'vitest'
+import { COLLAPSE_MODE_ORDER, isCollapseMode, nextCollapseMode } from '../acpCollapseMode.js'
+
+describe('acpCollapseMode', () => {
+  it('orders the five display modes', () => {
+    expect(COLLAPSE_MODE_ORDER).toEqual([
+      'default',
+      'collapsed',
+      'expanded',
+      'hideThinking',
+      'lastMessage',
+    ])
+  })
+
+  it('cycles through all five modes and wraps back to default', () => {
+    expect(nextCollapseMode('default')).toBe('collapsed')
+    expect(nextCollapseMode('collapsed')).toBe('expanded')
+    expect(nextCollapseMode('expanded')).toBe('hideThinking')
+    expect(nextCollapseMode('hideThinking')).toBe('lastMessage')
+    expect(nextCollapseMode('lastMessage')).toBe('default')
+  })
+
+  it('recognises only known mode strings', () => {
+    for (const mode of COLLAPSE_MODE_ORDER) expect(isCollapseMode(mode)).toBe(true)
+    expect(isCollapseMode('hide-thinking')).toBe(false)
+    expect(isCollapseMode(undefined)).toBe(false)
+    expect(isCollapseMode(1)).toBe(false)
+  })
+})

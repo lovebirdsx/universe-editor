@@ -57,8 +57,6 @@ import {
   requestOwnerFrame,
 } from '@universe-editor/workbench-ui'
 import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
-import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
-import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
 import type { OpenTarget } from '../../services/editor/openTarget.js'
@@ -133,6 +131,7 @@ import {
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { PromptHistoryPopover } from './PromptHistoryPopover.js'
 import { ConfigOptionsBar, type ConfigOptionsBarHandle } from './ConfigOptionsBar.js'
+import { CollapseModePicker } from './CollapseModePicker.js'
 import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/session/acpPromptDraftCache.js'
@@ -1869,7 +1868,11 @@ export function PromptInput({
         <CompactionThresholdChip session={session} />
         <SessionCostIndicator session={session} />
         <UsageIndicator session={session} />
-        <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />
+        <CollapseModePicker
+          mode={collapseMode}
+          onSelect={(next) => session.setCollapseMode(next)}
+          onFocusInput={() => editorHandleRef.current?.focus()}
+        />
         {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
         <SendButton
           session={session}
@@ -1953,34 +1956,4 @@ function mergeContexts(
     out.push(c)
   }
   return out
-}
-
-const COLLAPSE_ICON: Record<CollapseMode, LucideIcon> = {
-  default: AlignJustify,
-  collapsed: FoldVertical,
-  expanded: UnfoldVertical,
-}
-
-const COLLAPSE_TOOLTIP: Record<CollapseMode, string> = {
-  default: localize('acp.collapse.default', 'Timeline: Smart folding — click to collapse all'),
-  collapsed: localize('acp.collapse.collapsed', 'Timeline: All collapsed — click to expand all'),
-  expanded: localize(
-    'acp.collapse.expanded',
-    'Timeline: All expanded (one sub-agent card at most) — click to reset',
-  ),
-}
-
-function CollapseToggleButton({ mode, onCycle }: { mode: CollapseMode; onCycle: () => void }) {
-  const Icon = COLLAPSE_ICON[mode]
-  return (
-    <button
-      type="button"
-      className={styles['collapseToggle']}
-      onClick={onCycle}
-      data-tooltip={COLLAPSE_TOOLTIP[mode]}
-      aria-label={COLLAPSE_TOOLTIP[mode]}
-    >
-      <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
-    </button>
-  )
 }

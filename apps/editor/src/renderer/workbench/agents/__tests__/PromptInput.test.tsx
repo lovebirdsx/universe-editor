@@ -95,6 +95,7 @@ import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
+import type { CollapseMode } from '../../../services/acp/session/acpChatViewStateCache.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
 import { FakeFocusScopeService } from '../../../services/focus/testing/fakeFocusScopeService.js'
@@ -506,6 +507,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   const timeline = observableValue<readonly TimelineItem[]>('test.timeline', [])
   const permission = observableValue<AcpPendingPermission | undefined>('test.permission', undefined)
   const configOptions = observableValue<readonly SessionConfigOption[]>('test.configOptions', [])
+  const collapseMode = observableValue<CollapseMode>('test.collapseMode', 'default')
   const sendPrompt = vi.fn().mockResolvedValue(undefined)
   const cancelTurn = vi.fn().mockResolvedValue(undefined)
   const cancelRestoreEmitter = new Emitter<void>()
@@ -534,7 +536,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     availableCommands: commandsObs,
     mcpServers: observableValue('test.mcpServers', []),
     mcpServerSelection: observableValue<readonly string[] | null>('test.mcpSel', null),
-    collapseMode: observableValue('test.collapseMode', 'default' as const),
+    collapseMode,
     accumulatedRunningMs: observableValue('test.arm', 0),
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
     backgroundTaskCount: backgroundTasksObs,
@@ -552,6 +554,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     renameTitle: () => {},
     rewindTo: () => Promise.resolve(undefined),
     requestExtMethod: () => Promise.resolve(undefined),
+    setCollapseMode: (next: CollapseMode) => collapseMode.set(next, undefined),
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
     isDormant: observableValue('dormant', false),
@@ -2883,5 +2886,80 @@ describe('PromptInput — context menu', () => {
     fireEvent.contextMenu(getTextarea(), { detail: 1 })
     expect(screen.queryByRole('menu')).toBeNull()
     expect(setPromptContextTarget).not.toHaveBeenCalled()
+  })
+})
+
+describe('PromptInput — timeline display picker', () => {
+  it('opens the five-option list, marks the current mode and commits a pick', () => {
+    const session = makeSession()
+    const setMode = vi.spyOn(session, 'setCollapseMode')
+    renderWithServices(<PromptInput session={session} />)
+    const trigger = screen.getByTestId('acp-collapse-mode-trigger')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(trigger)
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+    const popover = screen.getByTestId('acp-collapse-mode-popover')
+    const options = [...popover.querySelectorAll('[role="option"]')]
+    expect(options).toHaveLength(5)
+    expect(options[0]?.getAttribute('data-current')).toBe('true')
+    expect(options[3]?.textContent).toBe('Hide thinking')
+
+    fireEvent.mouseDown(options[3]!)
+    expect(setMode).toHaveBeenCalledWith('hideThinking')
+    expect(screen.queryByTestId('acp-collapse-mode-popover')).toBeNull()
+  })
+
+  it('closes without writing when the current mode is picked again', () => {
+    const session = makeSession()
+    const setMode = vi.spyOn(session, 'setCollapseMode')
+    renderWithServices(<PromptInput session={session} />)
+    fireEvent.click(screen.getByTestId('acp-collapse-mode-trigger'))
+    const options = screen
+      .getByTestId('acp-collapse-mode-popover')
+      .querySelectorAll('[role="option"]')
+
+    fireEvent.mouseDown(options[0]!)
+    expect(setMode).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('acp-collapse-mode-popover')).toBeNull()
+  })
+
+  it('Escape closes the list and hands focus back to the trigger', async () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    const trigger = screen.getByTestId('acp-collapse-mode-trigger')
+    fireEvent.click(trigger)
+    expect(screen.getByTestId('acp-collapse-mode-popover')).toBeTruthy()
+    // The surface wires Escape on the next animation frame; flush it.
+    await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('acp-collapse-mode-popover')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('reopens with the cursor on the active mode rather than the last hovered row', async () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    const trigger = screen.getByTestId('acp-collapse-mode-trigger')
+    fireEvent.click(trigger)
+    const listbox = screen
+      .getByTestId('acp-collapse-mode-popover')
+      .querySelector('[role="listbox"]')
+    expect(listbox).not.toBeNull()
+    fireEvent.keyDown(listbox!, { key: 'ArrowDown' })
+    fireEvent.keyDown(listbox!, { key: 'ArrowDown' })
+    const moved = screen
+      .getByTestId('acp-collapse-mode-popover')
+      .querySelectorAll('[role="option"]')
+    expect(moved[2]?.getAttribute('aria-selected')).toBe('true')
+
+    await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('acp-collapse-mode-popover')).toBeNull()
+
+    fireEvent.click(trigger)
+    const reopened = screen
+      .getByTestId('acp-collapse-mode-popover')
+      .querySelectorAll('[role="option"]')
+    expect(reopened[0]?.getAttribute('aria-selected')).toBe('true')
   })
 })

@@ -127,6 +127,7 @@ function makeSession(
     imageSupported: observableValue<boolean>('t.imageSupported', false),
     forkSupported: observableValue<boolean>('t.forkSupported', false),
     onDidCancelForRestore: Event.None,
+    setCollapseMode: () => {},
     cycleCollapseMode: () => {},
   } as unknown as IAcpSession
   return { session, timeline }

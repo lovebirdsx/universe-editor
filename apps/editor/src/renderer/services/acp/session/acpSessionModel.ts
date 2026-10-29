@@ -661,7 +661,7 @@ export interface IAcpSession {
    * and converges the live connection (reload on drift).
    */
   readonly mcpServerSelection: IObservable<readonly string[] | null>
-  /** Current timeline collapse mode for this session. */
+  /** Current timeline display mode (dropdown + Ctrl+Alt+F). */
   readonly collapseMode: IObservable<CollapseMode>
   /** Cumulative milliseconds in 'running' status — does not include the current segment if still running. */
   readonly accumulatedRunningMs: IObservable<number>
@@ -798,7 +798,9 @@ export interface IAcpSession {
    * One-shot — cleared by {@link endHistoryReplay}.
    */
   suppressReplayToTimeline(anchorMessageId?: string): void
-  /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
+  /** Set the timeline display mode explicitly (dropdown selection). */
+  setCollapseMode(mode: CollapseMode): void
+  /** Cycle the timeline display mode: default → collapsed → expanded → hideThinking → lastMessage → default. */
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void

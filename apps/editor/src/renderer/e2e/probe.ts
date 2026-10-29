@@ -1104,8 +1104,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     setAcpCollapseMode: (mode) => {
       const s = services.acpSessionService.activeSession.get()
       if (!s) throw new Error('[E2E] no active ACP session')
-      // collapseMode is read-only on the model; cycle until it lands on target.
-      for (let i = 0; i < 3 && s.collapseMode.get() !== mode; i++) s.cycleCollapseMode()
+      s.setCollapseMode(mode)
+      if (s.collapseMode.get() !== mode) {
+        throw new Error(`[E2E] collapse mode did not switch to ${mode}`)
+      }
     },
     getAcpPromptText: () => {
       const id = services.acpSessionService.activeSessionId.get()

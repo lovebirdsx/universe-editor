@@ -59,6 +59,12 @@ export function isCollapsibleItem(item: TimelineItem | AcpChildItem): boolean {
   return item.kind !== 'compaction' && item.kind !== 'resurrection'
 }
 
+/** `hideThinking` removes thought rows from the visible timeline, so the
+ *  keyboard walk must not stop on them either. */
+function isHiddenThought(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
+  return mode === 'hideThinking' && item.kind === 'message' && item.message.role === 'thought'
+}
+
 /**
  * Whether a message draws a row at all — the two render sites drop a settled
  * message with no visible content (an agent's empty/whitespace thought
@@ -72,13 +78,13 @@ export function isMessageRendered(message: AcpMessage, nested: boolean): boolean
   return !nested && message.streaming
 }
 
-// Per-kind default under the `default` mode: read/search / sub-agent-parent
-// tool calls start collapsed, everything else (thought messages included)
-// starts expanded. No top-level sub-agent card ever reaches this — {@link
-// resolveCollapsed} decides those from the designation alone. A whole-file
-// write (Write / add file) is an `edit` card by shape but a new document by
-// content — folded so it does not flood the timeline; its header carries a
-// preview / open affordance instead.
+// Per-kind default under the fold modes `default` / `hideThinking` /
+// `lastMessage`: read/search / sub-agent-parent tool calls start collapsed,
+// everything else (thought messages included) starts expanded. No top-level
+// sub-agent card ever reaches this — {@link resolveCollapsed} decides those from
+// the designation alone. A whole-file write (Write / add file) is an `edit` card
+// by shape but a new document by content — folded so it does not flood the
+// timeline; its header carries a preview / open affordance instead.
 export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
   if (mode === 'collapsed') return true
   if (mode === 'expanded') return false
@@ -107,17 +113,6 @@ export function resolveCollapsed(
   if (isSubagentSlot(key, item)) return state.openSubagent !== key
   const override = state.overrides.get(key)
   return override !== undefined ? override : defaultCollapsed(item, state.mode)
-}
-
-export function nextCollapseMode(mode: CollapseMode): CollapseMode {
-  switch (mode) {
-    case 'default':
-      return 'collapsed'
-    case 'collapsed':
-      return 'expanded'
-    case 'expanded':
-      return 'default'
-  }
 }
 
 /**
@@ -240,6 +235,7 @@ export function collectTimelineRows(
 ): TimelineRow[] {
   const rows: TimelineRow[] = []
   const pushChild = (item: AcpChildItem, parentKey: string, depth: number): void => {
+    if (isHiddenThought(item, state.mode)) return
     const rendered = item.kind !== 'message' || isMessageRendered(item.message, true)
     const key = buildStickyKey(parentKey, item)
     rows.push({ key, depth, rendered })
@@ -247,6 +243,7 @@ export function collectTimelineRows(
     for (const child of item.call.children ?? []) pushChild(child, key, depth + 1)
   }
   for (const item of timeline) {
+    if (isHiddenThought(item, state.mode)) continue
     const rendered = item.kind !== 'message' || isMessageRendered(item.message, false)
     const key = itemSlotKey(item)
     rows.push({ key, depth: 0, rendered })

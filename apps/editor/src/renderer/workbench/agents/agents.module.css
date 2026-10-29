@@ -1573,10 +1573,11 @@
   font-size: calc(var(--agent-font-size, 12px) * 0.85);
 }
 
-.collapseToggle {
+.collapseMenuTrigger {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  gap: 1px;
   width: var(--acp-act-btn-sm);
   height: var(--acp-act-btn-sm);
   padding: 0;
@@ -1588,19 +1589,45 @@
   flex-shrink: 0;
 }
 
-.collapseToggle:hover {
+.collapseMenuTrigger:hover,
+.collapseMenuTrigger[aria-expanded='true'] {
   background: var(--vscode-list-hoverBackground, #2a2d2e);
   color: var(--vscode-editor-foreground, #d4d4d4);
 }
 
-.collapseToggle:focus-visible {
+.collapseMenuTrigger[aria-expanded='true'] {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+}
+
+.collapseMenuTrigger:focus-visible {
   outline: 1px solid var(--vscode-badge-progressBackground, #4fa6e2);
   outline-offset: 1px;
 }
 
-.collapseToggle svg {
+.collapseMenuTrigger > svg:first-child {
   width: var(--acp-act-icon);
   height: var(--acp-act-icon);
+}
+
+.collapseMenuChevron {
+  flex: 0 0 auto;
+  opacity: 0.7;
+}
+
+.collapseMenuItemIcon {
+  flex: 0 0 auto;
+  margin-right: 6px;
+  opacity: 0.85;
+}
+
+.timelineHiddenActivity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 0 2px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  color: var(--vscode-agent-messageRoleForeground, #888);
 }
 
 .sendButtonCircle {
