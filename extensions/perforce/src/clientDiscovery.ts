@@ -24,6 +24,7 @@
 import type { P4Connection, P4Service } from './p4Service.js'
 import { parseZtag } from './p4Output.js'
 import { norm, scopeKey } from './pathUtil.js'
+import { normalizeStreamSpec } from './streamMapping.js'
 
 /**
  * Upper bound for the discovery probes (`p4 info` / `p4 clients`). They are
@@ -91,6 +92,17 @@ export function parseClientsList(records: readonly Record<string, unknown>[]): P
     })
   }
   return out
+}
+
+/**
+ * The client spec's `Stream` field (`//depot/...`), or undefined for a classic
+ * client (no stream). Used by the cross-stream Apply-to-Local fallback: without
+ * a current stream there is no target prefix to map review files onto.
+ */
+export function parseClientStream(record: Record<string, unknown> | undefined): string | undefined {
+  const raw = fieldAnyCase(record, 'Stream')
+  if (!raw || raw.toLowerCase() === 'null') return undefined
+  return normalizeStreamSpec(raw)
 }
 
 /**

@@ -500,7 +500,10 @@ describe('SwarmReviewsView apply to local', () => {
       await waitFor(() =>
         expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
           change: '2999',
-          depotFiles: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+          files: [
+            { depotFile: '//depot/src/editor/a.ts', status: 'M' },
+            { depotFile: '//depot/src/runtime/b.ts', status: 'A' },
+          ],
           intoChangelist: true,
         }),
       )
@@ -557,10 +560,67 @@ describe('SwarmReviewsView apply to local', () => {
       await waitFor(() =>
         expect(executeCommand).toHaveBeenCalledWith(SwarmCommands.applyToLocal, {
           change: '2001',
-          depotFiles: ['//depot/src/editor/a.ts', '//depot/src/runtime/b.ts'],
+          files: [
+            { depotFile: '//depot/src/editor/a.ts', status: 'M' },
+            { depotFile: '//depot/src/runtime/b.ts', status: 'A' },
+          ],
           intoChangelist: true,
         }),
       )
+    } finally {
+      applyToLocal.dispose()
+      describeVersion.dispose()
+      getReview.dispose()
+    }
+  })
+
+  it('passes the latest version stream into the force flow', async () => {
+    const detailWithStream: SwarmReviewDetailDto = {
+      ...detailWithArchive,
+      stream: 'depot/streams/review',
+      versions: [
+        { version: 1, change: '2001', pending: true, time: 1 },
+        {
+          version: 2,
+          change: '2002',
+          archiveChange: '2999',
+          stream: '//depot/streams/review',
+          pending: true,
+          time: 2,
+        },
+      ],
+    }
+    const unmapped: SwarmReviewFileDto[] = [
+      {
+        status: 'M',
+        path: 'depot/streams/review/src/x.ts',
+        depotFile: '//depot/streams/review/src/x.ts',
+        baseRevision: '1',
+        localPath: null,
+      },
+    ]
+    const applyToLocal = registerCommand(SwarmCommands.applyToLocal, () => ({
+      applied: ['//depot/streams/review/src/x.ts'],
+      skipped: [],
+    }))
+    const describeVersion = registerCommand(SwarmCommands.describeVersion, () => unmapped)
+    const getReview = registerCommand(SwarmCommands.getReview, () => detailWithStream)
+    const executeCommand = hybridExecuteCommand()
+    try {
+      const { dialog } = await clickApplyToLocal(executeCommand)
+
+      await waitFor(() =>
+        expect(executeCommand).toHaveBeenCalledWith(
+          SwarmCommands.applyToLocal,
+          expect.objectContaining({
+            change: '2999',
+            force: true,
+            stream: '//depot/streams/review',
+            files: [{ depotFile: '//depot/streams/review/src/x.ts', status: 'M' }],
+          }),
+        ),
+      )
+      expect(dialog.confirm.mock.calls[0]?.[0]?.buttons).toEqual(['Force Apply'])
     } finally {
       applyToLocal.dispose()
       describeVersion.dispose()

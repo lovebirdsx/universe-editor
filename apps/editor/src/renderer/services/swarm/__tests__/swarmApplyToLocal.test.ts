@@ -39,6 +39,16 @@ const UNMAPPED: SwarmReviewFileDto = {
   localPath: null,
 }
 
+const UNMAPPED_STREAM: SwarmReviewFileDto = {
+  status: 'M',
+  path: 'depot/streams/review/lib/d.ts',
+  depotFile: '//depot/streams/review/lib/d.ts',
+  baseRevision: '3',
+  localPath: null,
+}
+
+const REVIEW_STREAM = '//depot/streams/review'
+
 // The flow depends on the module-singleton swarmApplyStore (its attach binds
 // the first storage it sees), so each test re-imports the whole chain fresh.
 // Severity is a const enum (unusable as a value under isolatedModules) — the
@@ -119,7 +129,7 @@ describe('applySwarmReviewToLocal', () => {
     expect(harness.notifications.notify).not.toHaveBeenCalled()
   })
 
-  it('reports the mismatch wording when every file is unmapped', async () => {
+  it('reports the mismatch wording when every file is unmapped and no stream is known', async () => {
     const { run, harness } = await makeHarness()
     await run({ reviewId: '1001', change: '2001', files: [UNMAPPED] })
     expect(harness.dialog.confirm).not.toHaveBeenCalled()
@@ -165,11 +175,155 @@ describe('applySwarmReviewToLocal', () => {
     await run({ reviewId: '1001', change: '2001', files: [IN_WS, OUTSIDE] })
     expect(harness.commands.executeCommand).toHaveBeenCalledWith('perforce.swarm.applyToLocal', {
       change: '2001',
-      depotFiles: ['//depot/src/editor/a.ts', '//other/external/c.ts'],
+      files: [
+        { depotFile: '//depot/src/editor/a.ts', status: 'M' },
+        { depotFile: '//other/external/c.ts', status: 'M' },
+      ],
       intoChangelist: false,
     })
     expect(store.includeOutside).toBe(true)
     expect(store.intoChangelist).toBe(false)
+  })
+
+  it('offers Force Apply as the only action when every file is unmapped but the stream is known', async () => {
+    const { run, harness, store } = await makeHarness()
+    harness.dialog.confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary' as const,
+      checkboxChecked: [false, true],
+    })
+    harness.commands.executeCommand.mockResolvedValueOnce({
+      applied: ['//depot/streams/review/lib/d.ts'],
+      skipped: [],
+      keptOpen: [],
+    })
+    await run({
+      reviewId: '1001',
+      change: '2001',
+      files: [UNMAPPED_STREAM],
+      stream: 'depot/streams/review',
+    })
+    const opts = harness.dialog.confirm.mock.calls[0]?.[0]
+    expect(opts).toMatchObject({
+      type: 'warning',
+      buttons: ['Force Apply'],
+      defaultButton: 'dismiss',
+      dismissButton: 'Cancel',
+    })
+    expect(opts?.detail).toContain(REVIEW_STREAM)
+    expect(harness.commands.executeCommand).toHaveBeenCalledWith('perforce.swarm.applyToLocal', {
+      change: '2001',
+      files: [{ depotFile: '//depot/streams/review/lib/d.ts', status: 'M' }],
+      intoChangelist: true,
+      force: true,
+      stream: REVIEW_STREAM,
+      includeOutside: false,
+      workspaceRoot: expect.any(String),
+    })
+    expect(store.intoChangelist).toBe(true)
+    expect(store.includeOutside).toBe(false)
+  })
+
+  it('does not send anything when the force-only dialog is dismissed', async () => {
+    const { run, harness } = await makeHarness()
+    harness.dialog.confirm.mockResolvedValueOnce({
+      confirmed: false,
+      choice: 'cancel' as const,
+      checkboxChecked: [false, true],
+    })
+    await run({
+      reviewId: '1001',
+      change: '2001',
+      files: [UNMAPPED_STREAM],
+      stream: REVIEW_STREAM,
+    })
+    expect(harness.commands.executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('adds Force Apply as the secondary action for a mixed mapped/unmapped review', async () => {
+    const { run, harness } = await makeHarness()
+    harness.dialog.confirm.mockResolvedValueOnce({
+      confirmed: false,
+      choice: 'secondary' as const,
+      checkboxChecked: [false, true],
+    })
+    harness.commands.executeCommand.mockResolvedValueOnce({
+      applied: ['//depot/src/editor/a.ts', '//depot/streams/review/lib/d.ts'],
+      skipped: [],
+      keptOpen: [],
+    })
+    await run({
+      reviewId: '1001',
+      change: '2001',
+      files: [IN_WS, UNMAPPED_STREAM],
+      stream: REVIEW_STREAM,
+    })
+    const opts = harness.dialog.confirm.mock.calls[0]?.[0]
+    expect(opts).toMatchObject({
+      primaryButton: 'Apply to Local',
+      secondaryButton: 'Force Apply',
+    })
+    expect(opts?.detail).toContain('Force Apply')
+    expect(harness.commands.executeCommand).toHaveBeenCalledWith('perforce.swarm.applyToLocal', {
+      change: '2001',
+      files: [
+        { depotFile: '//depot/src/editor/a.ts', status: 'M' },
+        { depotFile: '//depot/streams/review/lib/d.ts', status: 'M' },
+      ],
+      intoChangelist: true,
+      force: true,
+      stream: REVIEW_STREAM,
+      includeOutside: false,
+      workspaceRoot: expect.any(String),
+    })
+  })
+
+  it('keeps the primary action mapped-only even when Force Apply is available', async () => {
+    const { run, harness } = await makeHarness()
+    harness.dialog.confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary' as const,
+      checkboxChecked: [false, true],
+    })
+    await run({
+      reviewId: '1001',
+      change: '2001',
+      files: [IN_WS, UNMAPPED_STREAM],
+      stream: REVIEW_STREAM,
+    })
+    expect(harness.commands.executeCommand).toHaveBeenCalledWith('perforce.swarm.applyToLocal', {
+      change: '2001',
+      files: [{ depotFile: '//depot/src/editor/a.ts', status: 'M' }],
+      intoChangelist: true,
+    })
+  })
+
+  it('only opts into outside writes on the force path when the checkbox is checked', async () => {
+    const { run, harness } = await makeHarness()
+    harness.dialog.confirm.mockResolvedValueOnce({
+      confirmed: false,
+      choice: 'secondary' as const,
+      checkboxChecked: [true, true],
+    })
+    await run({
+      reviewId: '1001',
+      change: '2001',
+      files: [IN_WS, OUTSIDE, UNMAPPED_STREAM],
+      stream: REVIEW_STREAM,
+    })
+    expect(harness.commands.executeCommand).toHaveBeenCalledWith('perforce.swarm.applyToLocal', {
+      change: '2001',
+      files: [
+        { depotFile: '//depot/src/editor/a.ts', status: 'M' },
+        { depotFile: '//other/external/c.ts', status: 'M' },
+        { depotFile: '//depot/streams/review/lib/d.ts', status: 'M' },
+      ],
+      intoChangelist: true,
+      force: true,
+      stream: REVIEW_STREAM,
+      includeOutside: true,
+      workspaceRoot: expect.any(String),
+    })
   })
 
   it('toasts the applied-only outcome', async () => {

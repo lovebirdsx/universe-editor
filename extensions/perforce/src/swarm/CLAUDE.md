@@ -75,7 +75,7 @@ Swarm 的 comment 端点**不挂在 review 下**——写成嵌套路径会 404�
 - `getTransitions` 是列表与详情共用的服务器权威能力查询；列表里的「可 Approve」蓝色勾和右键状态操作都只能由它驱动。
 - `obliterateReview` 走 `POST reviews/{id}/obliterate`，永久删除审核；renderer 必须先做不可逆确认，服务端仍负责最终权限校验。
 - `updateReview`（详情页按钮，请求已带 reviewId）与 `updateReviewFromChangelist`（changelist 组头出发、先 QuickPick 选 review 再重新 shelve）是两条路径，别混；候选排序纯函数 `swarm/swarmReviewPick.ts`（`buildReviewPicks`）。
-- `applyToLocal`（详情页 Apply to Local 按钮）是**纯 p4 数据命令**，**不走 `guard()`**；入参 change 同样走 `archiveChange ?? change` 不可变快照铁律（renderer 传的是 `selectedChange`，别重新推导）。完整流程 → [cases-apply-to-local.md](cases-apply-to-local.md)
+- `applyToLocal`（详情页 Apply to Local 按钮）是**纯 p4 数据命令**，**不走 `guard()`**；入参 change 同样走 `archiveChange ?? change` 不可变快照铁律（renderer 传的是 `selectedChange`，别重新推导）；跨 stream 的 `force+stream` 走原生 `-S -P` → 前缀 print 兜底。完整流程 → [cases-apply-to-local.md](cases-apply-to-local.md)
 
 ### 注册套路
 

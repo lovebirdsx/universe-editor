@@ -45,7 +45,7 @@ test.describe('@p1 swarm host-driven poll tick', () => {
       })
       .toBeGreaterThan(0)
 
-    // Priming is silent: the six seeded actionable reviews must not notify.
+    // Priming is silent: the seeded actionable reviews must not notify.
     expect(await page.evaluate(() => window.__E2E__!.getSwarmNotifiedReviewIds())).toEqual([])
 
     // A brand-new review lands, requiring the e2e user's action.

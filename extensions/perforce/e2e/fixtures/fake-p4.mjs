@@ -512,6 +512,9 @@ function main() {
         Options: 'noallwrite noclobber nocompress unlocked nomodtime rmdir',
         SubmitOptions: 'submitunchanged',
         LineEnd: 'local',
+        // A stream client: the cross-stream apply reads this to translate the
+        // review's stream paths into the current stream's. Classic clients omit it.
+        ...(state.clientStream ? { Stream: state.clientStream } : {}),
       }
       const text = Object.entries(fields)
         .map(([k, v]) => `${k}: ${v}`)
@@ -776,10 +779,20 @@ function main() {
 
     case 'where': {
       const files = rest.filter((a) => !a.startsWith('-'))
+      const unmappedPrefixes = state.unmappedPrefixes ?? []
       const records = []
       for (const file of files) {
         const depotFile = toDepotFile(state, file)
         if (!depotFile.startsWith(`${state.depotPrefix}/`)) continue
+        // Another stream's files sit outside this client's view — the premise of
+        // the cross-stream apply. `-S`-scoped p4 commands can still reach them.
+        if (
+          unmappedPrefixes.some(
+            (prefix) => depotFile === prefix || depotFile.startsWith(`${prefix}/`),
+          )
+        ) {
+          continue
+        }
         records.push({
           depotFile,
           clientFile: clientSyntaxOf(state, depotFile),
@@ -1485,6 +1498,15 @@ function main() {
       // lands in `skipped`.
       const src = argAfter(rest, '-s')
       if (!src) return 1
+      // Cross-stream unshelve (`-S <review stream> [-P <current stream>]`):
+      // State.streamUnsupported models a server/client that rejects the option —
+      // the whole batch fails, so the extension must fall back to print.
+      const sourceStream = argAfter(rest, '-S')
+      const targetStream = argAfter(rest, '-P') ?? state.clientStream
+      if (sourceStream && state.streamUnsupported) {
+        process.stderr.write('Unknown option: -S.\n')
+        return 1
+      }
       // A submitted change has no shelf — real p4 refuses with "already
       // committed" (the approved-review Apply-to-Local case, which the
       // extension answers with the print fallback).
@@ -1498,8 +1520,16 @@ function main() {
         return 1
       }
       const refuse = new Set(state.unshelveRefuse ?? [])
-      // Trailing file args (no leading '-'), excluding the `-s` value.
-      const files = rest.filter((a) => !a.startsWith('-') && a !== src)
+      // Trailing file args (no leading '-'), skipping the values of options that
+      // take one — `-S`/`-P` values are streams, not files.
+      const optionValueIndexes = new Set()
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === '-s' || rest[i] === '-S' || rest[i] === '-P' || rest[i] === '-c') {
+          optionValueIndexes.add(i + 1)
+          i++
+        }
+      }
+      const files = rest.filter((a, idx) => !a.startsWith('-') && !optionValueIndexes.has(idx))
       const entries =
         files.length > 0
           ? files.map((f) => toDepotFile(state, f)).filter((f) => shelf[f])
@@ -1515,18 +1545,28 @@ function main() {
         }
         return 1
       }
+      // Stream mapping: a review-stream source lands on the same relative path
+      // in the current stream. Without `-S`/`-P` the target IS the source.
+      const targetOf = (depotFile) => {
+        if (!sourceStream || !targetStream) return depotFile
+        const prefix = `${sourceStream.replace(/\/+$/, '')}/`
+        return depotFile.startsWith(prefix)
+          ? `${targetStream.replace(/\/+$/, '')}/${depotFile.slice(prefix.length)}`
+          : depotFile
+      }
       const records = []
       for (const depotFile of entries) {
         const s = shelf[depotFile]
+        const target = targetOf(depotFile)
         if (s.content !== undefined) {
-          const abs = clientOf(state, depotFile)
+          const abs = clientOf(state, target)
           mkdirSync(dirname(abs), { recursive: true })
           writeFileSync(abs, s.content)
         }
-        state.opened[depotFile] = { action: s.action, change: 'default', rev: s.rev }
+        state.opened[target] = { action: s.action, change: 'default', rev: s.rev }
         records.push({
-          depotFile,
-          clientFile: clientSyntaxOf(state, depotFile),
+          depotFile: target,
+          clientFile: clientSyntaxOf(state, target),
           action: s.action,
           change: 'default',
         })

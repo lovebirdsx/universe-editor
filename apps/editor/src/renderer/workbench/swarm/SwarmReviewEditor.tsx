@@ -49,6 +49,7 @@ import type { OpenTargetServices } from '../../services/editor/openWithTarget.js
 import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { openSwarmFileDiff } from '../../services/swarm/openSwarmFileDiff.js'
 import { applySwarmReviewToLocal } from '../../services/swarm/swarmApplyToLocal.js'
+import { resolveReviewStream } from '../../services/swarm/swarmApplyPlan.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
 import { buildSwarmReviewUrl } from '../../services/swarm/swarmReviewUrl.js'
 import {
@@ -425,6 +426,10 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     () => changeForVersion(selectedVersionIdx),
     [changeForVersion, selectedVersionIdx],
   )
+  const selectedStream = useMemo(
+    () => resolveReviewStream(detail, selectedVersionIdx),
+    [detail, selectedVersionIdx],
+  )
 
   // Apply the selected version's files to the workspace via `p4 unshelve -f`
   // (host-side command). The immutable archive snapshot (selectedChange) is the
@@ -436,7 +441,12 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     const versionFiles = files
     if (!reviewId || busy || !change || !versionFiles?.length) return
     return applySwarmReviewToLocal(
-      { reviewId, change, files: versionFiles },
+      {
+        reviewId,
+        change,
+        files: versionFiles,
+        ...(selectedStream !== undefined ? { stream: selectedStream } : {}),
+      },
       {
         commands,
         dialog,
@@ -455,6 +465,7 @@ export function SwarmReviewEditor({ input }: { input: IEditorInput }) {
     notifications,
     reviewId,
     selectedChange,
+    selectedStream,
     storage,
     uriIdentity,
     workspaceService,

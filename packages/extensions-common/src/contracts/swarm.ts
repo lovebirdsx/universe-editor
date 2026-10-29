@@ -331,30 +331,56 @@ export interface SwarmDescribeVersionRequest {
   immutable?: boolean
 }
 
+/** One file of a review version, as sent by the renderer. */
+export interface SwarmApplyFile {
+  /** Full depot path of the review file. */
+  depotFile: string
+  /** Swarm action letter: A | M | D | R. The cross-stream path-mapping fallback
+   *  needs it to decide between edit / add / skip (deletes). */
+  status: string
+}
+
 /** Argument for `perforce.swarm.applyToLocal` — restore a review version's files
  *  into the workspace via `p4 unshelve -f`. */
 export interface SwarmApplyToLocalRequest {
   /** Immutable snapshot change of the selected version (archiveChange ?? change). */
   change: string
-  /** Depot files to restore; files outside the client view are refused by p4 and
-   *  come back in {@link SwarmApplyToLocalResult.skipped}. */
-  depotFiles: string[]
+  /** Files to restore. Files outside the client view are refused by p4 unless
+   *  `force` maps them into the current stream; they then come back in
+   *  {@link SwarmApplyToLocalResult.skipped} when mapping fails. */
+  files: SwarmApplyFile[]
   /** When false, files are restored to disk but immediately un-opened
    *  (`p4 revert -k`): content is kept, nothing lands in a changelist.
    *  Defaults to true when omitted. */
   intoChangelist?: boolean
+  /** Opt-in cross-stream apply. Only honored together with a valid `stream`;
+   *  files not mapped in the current client view are mapped natively with
+   *  `p4 unshelve -S <stream> -P <current stream>` and fall back to stream-path
+   *  rewriting + `p4 print` when p4 cannot map them. */
+  force?: boolean
+  /** The review version's stream, normalized to `//depot/...`. */
+  stream?: string
+  /** The opened workspace folder (local fs path), used by the fallback to keep
+   *  writes inside the workspace unless `includeOutside` allows otherwise. */
+  workspaceRoot?: string
+  /** Allow mapped targets outside `workspaceRoot` (the force counterpart of the
+   *  "also replace files outside the workspace" toggle). */
+  includeOutside?: boolean
 }
 
 /** Result of `perforce.swarm.applyToLocal`. */
 export interface SwarmApplyToLocalResult {
-  /** Depot files successfully restored into the default changelist. */
+  /** Source depot files successfully restored (even when a cross-stream apply
+   *  wrote the corresponding target path in the current stream). */
   applied: string[]
-  /** Files p4 refused (already opened / out-of-date base / not in client view),
-   *  with the p4 error line as the reason. */
+  /** Files that could not be applied (p4 refusal, unmappable cross-stream
+   *  target, containment check, or a print-fallback limitation), with either
+   *  the first p4 error line or the host-generated reason. */
   skipped: { depotFile: string; reason: string }[]
   /** Files that were applied to disk but could NOT be un-opened (`revert -k`
    *  failed) — they remain in the default changelist. Only meaningful when the
-   *  request had `intoChangelist: false`. */
+   *  request had `intoChangelist: false`. Cross-stream files written through the
+   *  print fallback are never opened, so they never appear here. */
   keptOpen?: { depotFile: string; reason: string }[]
 }
 
@@ -403,7 +429,9 @@ export const SwarmCommands = {
   describeVersion: 'perforce.swarm.describeVersion',
   /** Restore a review version's files into the workspace, overwriting local
    *  copies (`p4 unshelve -s <change> -f <depotFile...>`). p4-refused files
-   *  (already opened / out-of-date base) come back in `skipped`. */
+   *  (already opened / out-of-date base) come back in `skipped`. With
+   *  `force` + `stream`, unmapped files are cross-mapped into the current
+   *  stream (native `-S -P`, falling back to path rewriting + `p4 print`). */
   applyToLocal: 'perforce.swarm.applyToLocal',
   /** Renderer → host: push the sidebar group-scope "Needs My Action" count for
    *  the status bar to display. The host cannot derive it itself — the author /

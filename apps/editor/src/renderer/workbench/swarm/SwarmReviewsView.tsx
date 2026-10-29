@@ -103,6 +103,7 @@ import {
 import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { waitForSwarmCommand } from '../../services/swarm/swarmCommandReady.js'
 import { applySwarmReviewToLocal } from '../../services/swarm/swarmApplyToLocal.js'
+import { resolveReviewStream } from '../../services/swarm/swarmApplyPlan.js'
 import {
   resolveSwarmReviewsRefresh,
   swarmNeedsActionCount,
@@ -735,8 +736,14 @@ export function SwarmReviewsView() {
           })
           return
         }
+        const stream = resolveReviewStream(detail, detail.versions.length - 1)
         await applySwarmReviewToLocal(
-          { reviewId: review.id, change, files },
+          {
+            reviewId: review.id,
+            change,
+            files,
+            ...(stream !== undefined ? { stream } : {}),
+          },
           {
             commands,
             dialog,

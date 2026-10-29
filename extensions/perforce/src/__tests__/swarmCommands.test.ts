@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   obliterateReview: vi.fn(),
   printRevisionResult: vi.fn(),
   printRevisionBytesResult: vi.fn(),
+  unshelveFiles: vi.fn(),
   dashboard: vi.fn(),
   showErrorMessage: vi.fn(),
   invalidateCredential: vi.fn(),
@@ -99,6 +100,112 @@ const logger = {
   error: vi.fn(),
   isTraceEnabled: vi.fn(async () => false),
 }
+
+describe('registerSwarmCommands applyToLocal', () => {
+  beforeEach(() => {
+    mocks.handlers.clear()
+    mocks.unshelveFiles.mockReset()
+    mocks.unshelveFiles.mockResolvedValue({ applied: [], skipped: [], keptOpen: [] })
+    logger.warn.mockClear()
+    registerSwarmCommands(
+      {
+        active: {
+          user: 'devuser',
+          p4Service: {},
+          unshelveFiles: mocks.unshelveFiles,
+        },
+      } as never,
+      logger,
+    )
+  })
+
+  it('forwards the files/force/stream/workspaceRoot request to unshelveFiles', async () => {
+    const result = await mocks.handlers.get('perforce.swarm.applyToLocal')?.({
+      change: '900',
+      files: [
+        { depotFile: '//depot/streams/review/a.ts', status: 'A' },
+        { depotFile: '//depot/streams/review/b.ts', status: 'M' },
+        { depotFile: '//depot/streams/review/a.ts', status: 'D' },
+        { depotFile: '', status: 'M' },
+        '//depot/streams/review/c.ts',
+      ],
+      force: true,
+      stream: 'depot/streams/review',
+      intoChangelist: false,
+      workspaceRoot: '/ws',
+      includeOutside: true,
+    })
+
+    expect(mocks.unshelveFiles).toHaveBeenCalledWith(
+      '900',
+      [
+        { depotFile: '//depot/streams/review/a.ts', status: 'A' },
+        { depotFile: '//depot/streams/review/b.ts', status: 'M' },
+        { depotFile: '//depot/streams/review/c.ts', status: 'M' },
+      ],
+      {
+        intoChangelist: false,
+        includeOutside: true,
+        workspaceRoot: '/ws',
+        force: true,
+        stream: '//depot/streams/review',
+      },
+    )
+    expect(result).toEqual({ applied: [], skipped: [], keptOpen: [] })
+  })
+
+  it('accepts the legacy depotFiles list as status M and never forces it', async () => {
+    await mocks.handlers.get('perforce.swarm.applyToLocal')?.({
+      change: '900',
+      depotFiles: ['//depot/src/a.ts', '//depot/src/b.ts'],
+      stream: '//depot/streams/review',
+      force: true,
+    })
+
+    expect(mocks.unshelveFiles).toHaveBeenCalledWith(
+      '900',
+      [
+        { depotFile: '//depot/src/a.ts', status: 'M' },
+        { depotFile: '//depot/src/b.ts', status: 'M' },
+      ],
+      {
+        intoChangelist: true,
+        includeOutside: false,
+        force: true,
+        stream: '//depot/streams/review',
+      },
+    )
+  })
+
+  it('downgrades force when the stream spec is unusable', async () => {
+    await mocks.handlers.get('perforce.swarm.applyToLocal')?.({
+      change: '900',
+      files: [{ depotFile: '//depot/src/a.ts', status: 'M' }],
+      force: true,
+      stream: '//depot/streams/review@1',
+    })
+
+    expect(mocks.unshelveFiles).toHaveBeenCalledWith(
+      '900',
+      [{ depotFile: '//depot/src/a.ts', status: 'M' }],
+      { intoChangelist: true, includeOutside: false },
+    )
+    expect(logger.warn).toHaveBeenCalledWith(
+      'cmd',
+      expect.stringContaining('force requested without a usable review stream'),
+    )
+  })
+
+  it('returns an empty result when no file survives parsing', async () => {
+    const result = await mocks.handlers.get('perforce.swarm.applyToLocal')?.({
+      change: '900',
+      files: [{ depotFile: '', status: 'M' }, 42],
+    })
+
+    expect(result).toEqual({ applied: [], skipped: [], keptOpen: [] })
+    expect(mocks.unshelveFiles).not.toHaveBeenCalled()
+  })
+})
 
 describe('registerSwarmCommands review operations', () => {
   beforeEach(() => {

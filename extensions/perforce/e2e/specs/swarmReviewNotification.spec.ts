@@ -44,11 +44,11 @@ test.describe('@p1 swarm review notification', () => {
       )
       .toBeGreaterThan(0)
 
-    // Baseline primed off the seeded reviews → nothing notified yet, and the six
+    // Baseline primed off the seeded reviews → nothing notified yet, and the eight
     // seeded actionable reviews already show on the Swarm icon badge (#1006's three
     // re-shelved versions count as ONE review — the badge counts reviews, not versions).
     expect(await page.evaluate(() => window.__E2E__!.getSwarmNotifiedReviewIds())).toEqual([])
-    await expect(badge).toHaveText('6')
+    await expect(badge).toHaveText('8')
 
     // A brand-new review lands, requiring the e2e user's action.
     await swarm.addReview({ id: '2001', author: 'dave', description: 'Urgent hotfix' })
@@ -63,6 +63,6 @@ test.describe('@p1 swarm review notification', () => {
         timeout: 10_000,
       })
       .toEqual([['2001']])
-    await expect(badge).toHaveText('7')
+    await expect(badge).toHaveText('9')
   })
 })

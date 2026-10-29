@@ -218,4 +218,137 @@ test.describe('@p1 swarm apply to local', () => {
       'export const b = 1\n',
     )
   })
+
+  test('force-applies a file from another stream via native unshelve -S -P', async ({
+    page,
+    swarm,
+    swarmBackend,
+  }) => {
+    test.setTimeout(60_000)
+    const target = join(swarmBackend.clientRoot, 'streams', 'dev', 'src', 'cross', 'c.ts')
+    const fresh = join(swarmBackend.clientRoot, 'streams', 'dev', 'src', 'fresh', 'new.ts')
+
+    // Review #1007's files live on //depot/streams/review, outside this client's
+    // view: the only action offered is the forced cross-stream apply.
+    const review = await openReview(page, swarm, 'Cross-stream patch')
+    await expect(review.getByText('c.ts')).toBeVisible()
+    await review.getByTestId('swarm-review-apply').click()
+
+    const dialog = page.locator('[role="dialog"]')
+    await expect(dialog).toBeVisible()
+    await expect(dialog).toContainText('//depot/streams/review')
+    await expect(dialog.getByRole('button', { name: 'Apply to Local' })).toHaveCount(0)
+    await dialog.getByRole('button', { name: 'Force Apply' }).click()
+
+    await expect(page.locator('[data-testid="notification-toast-item"]')).toContainText(
+      'Applied 2 file(s)',
+    )
+    await expect
+      .poll(() => readFileSync(target, 'utf8'), { timeout: 10_000 })
+      .toBe('export const cross = 1\n')
+    await expect
+      .poll(() => readFileSync(fresh, 'utf8'), { timeout: 10_000 })
+      .toBe('export const fresh = 1\n')
+
+    // Native -S -P unshelves into the CURRENT stream's path, so that target is
+    // what lands in the default changelist (the source path is never opened).
+    const state = JSON.parse(readFileSync(swarmBackend.stateFile, 'utf8')) as {
+      opened: Record<string, { action: string; change: string }>
+    }
+    expect(state.opened['//depot/streams/dev/src/cross/c.ts']?.change).toBe('default')
+    expect(state.opened['//depot/streams/dev/src/fresh/new.ts']?.change).toBe('default')
+    expect(state.opened['//depot/streams/review/src/cross/c.ts']).toBeUndefined()
+  })
+
+  test('force-applies through the print fallback when the server rejects -S', async ({
+    page,
+    swarm,
+    swarmBackend,
+  }) => {
+    test.setTimeout(60_000)
+    const target = join(swarmBackend.clientRoot, 'streams', 'dev', 'src', 'cross', 'c.ts')
+    const fresh = join(swarmBackend.clientRoot, 'streams', 'dev', 'src', 'fresh', 'new.ts')
+    // Old server / unsupported option: the whole -S group must fall back to
+    // stream-prefix rewriting + p4 print instead of failing each file.
+    const state = JSON.parse(readFileSync(swarmBackend.stateFile, 'utf8')) as Record<
+      string,
+      unknown
+    >
+    state['streamUnsupported'] = true
+    writeFileSync(swarmBackend.stateFile, JSON.stringify(state), 'utf8')
+
+    const review = await openReview(page, swarm, 'Cross-stream patch')
+    await expect(review.getByText('c.ts')).toBeVisible()
+    await review.getByTestId('swarm-review-apply').click()
+    const dialog = page.locator('[role="dialog"]')
+    await expect(dialog).toBeVisible()
+    await dialog.getByRole('button', { name: 'Force Apply' }).click()
+
+    await expect(page.locator('[data-testid="notification-toast-item"]')).toContainText(
+      'Applied 2 file(s)',
+    )
+    await expect
+      .poll(() => readFileSync(target, 'utf8'), { timeout: 10_000 })
+      .toBe('export const cross = 1\n')
+    // The added file's parent directory did not exist in this workspace; the
+    // fallback must create it (a plain writeFile would ENOENT).
+    await expect
+      .poll(() => readFileSync(fresh, 'utf8'), { timeout: 10_000 })
+      .toBe('export const fresh = 1\n')
+
+    const finalState = JSON.parse(readFileSync(swarmBackend.stateFile, 'utf8')) as {
+      opened: Record<string, { action: string; change: string }>
+    }
+    expect(finalState.opened['//depot/streams/dev/src/cross/c.ts']?.action).toBe('edit')
+    expect(finalState.opened['//depot/streams/dev/src/fresh/new.ts']?.change).toBe('default')
+  })
+
+  test('offers Force Apply alongside the plain action for a mixed review', async ({
+    page,
+    swarm,
+    swarmBackend,
+  }) => {
+    test.setTimeout(60_000)
+    const mapped = join(swarmBackend.clientRoot, 'src', 'editor', 'a.ts')
+    const target = join(swarmBackend.clientRoot, 'streams', 'dev', 'src', 'cross', 'm.ts')
+
+    // Review #1008 mixes a file in this client's view (a.ts) with one on the
+    // review stream (m.ts) — both actions must be available.
+    const review = await openReview(page, swarm, 'Mixed stream patch')
+    await expect(review.getByText('a.ts')).toBeVisible()
+    await review.getByTestId('swarm-review-apply').click()
+    const dialog = page.locator('[role="dialog"]')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Apply to Local' })).toBeVisible()
+    await dialog.getByRole('button', { name: 'Force Apply' }).click()
+
+    await expect(page.locator('[data-testid="notification-toast-item"]')).toContainText(
+      'Applied 2 file(s)',
+    )
+    await expect
+      .poll(() => readFileSync(mapped, 'utf8'), { timeout: 10_000 })
+      .toBe('export const mixedMapped = 1\n')
+    await expect
+      .poll(() => readFileSync(target, 'utf8'), { timeout: 10_000 })
+      .toBe('export const mixed = 1\n')
+
+    const state = JSON.parse(readFileSync(swarmBackend.stateFile, 'utf8')) as {
+      opened: Record<string, { action: string; change: string }>
+    }
+    expect(state.opened['//depot/src/editor/a.ts']?.change).toBe('default')
+    expect(state.opened['//depot/streams/dev/src/cross/m.ts']?.change).toBe('default')
+  })
+
+  test('does not offer Force Apply when the review has no stream', async ({ page, swarm }) => {
+    test.setTimeout(60_000)
+    const review = await openReview(page, swarm, 'Add greeting')
+    await expect(review.getByText('a.ts')).toBeVisible()
+    await review.getByTestId('swarm-review-apply').click()
+
+    const dialog = page.locator('[role="dialog"]')
+    await expect(dialog).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Apply to Local' })).toBeVisible()
+    await expect(dialog.getByRole('button', { name: 'Force Apply' })).toHaveCount(0)
+    await dialog.getByRole('button', { name: 'Cancel' }).click()
+  })
 })

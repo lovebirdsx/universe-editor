@@ -169,9 +169,22 @@ export const test = base.extend<SwarmFixtures>({
       recursive: true,
     })
     mkdirSync(join(workspaceDir, '资源库'), { recursive: true })
+    // Local targets of the cross-stream reviews: the client stream is
+    // //depot/streams/dev, whose prefix the fake maps under <root>/streams/dev.
+    mkdirSync(join(workspaceDir, 'streams', 'dev', 'src', 'cross'), { recursive: true })
     writeFileSync(join(workspaceDir, 'hello.txt'), 'hello\n', 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'editor', 'a.ts'), baselineA, 'utf8')
     writeFileSync(join(workspaceDir, 'src', 'runtime', 'b.ts'), 'export const b = 1\n', 'utf8')
+    writeFileSync(
+      join(workspaceDir, 'streams', 'dev', 'src', 'cross', 'c.ts'),
+      'export const cross = 0\n',
+      'utf8',
+    )
+    writeFileSync(
+      join(workspaceDir, 'streams', 'dev', 'src', 'cross', 'm.ts'),
+      'export const mixed = 0\n',
+      'utf8',
+    )
     writeFileSync(join(workspaceDir, xlsxRel), xlsxShelf)
     writeFileSync(join(workspaceDir, '资源库', '资源表.ts'), cnBase, 'utf8')
     writeFileSync(join(workspaceDir, '资源库', '数据集.csv'), bigCsvBase, 'utf8')
@@ -182,10 +195,22 @@ export const test = base.extend<SwarmFixtures>({
         client: 'e2e-client',
         clientRoot: workspaceDir,
         depotPrefix: '//depot',
+        // Stream client: `p4 client -o` reports this stream, and the review
+        // streams below are deliberately outside its view.
+        clientStream: '//depot/streams/dev',
+        unmappedPrefixes: ['//depot/streams/review'],
         files: {
           '//depot/hello.txt': { rev: 1, content: 'hello\n' },
           '//depot/src/editor/a.ts': { rev: 1, content: baselineA },
           '//depot/src/runtime/b.ts': { rev: 1, content: 'export const b = 1\n' },
+          '//depot/streams/dev/src/cross/c.ts': {
+            rev: 1,
+            content: 'export const cross = 0\n',
+          },
+          '//depot/streams/dev/src/cross/m.ts': {
+            rev: 1,
+            content: 'export const mixed = 0\n',
+          },
           // A depot path OUTSIDE the client view (not under //depot, the mapped
           // prefix): `p4 where` returns no mapping and a client-bound `p4 print`
           // fails. It must still diff, because printRevision reads it with no
@@ -261,6 +286,35 @@ export const test = base.extend<SwarmFixtures>({
               action: 'add',
               rev: 1,
               content: 'export const e = 3\n',
+            },
+          },
+          // Review #1007: files on the review stream, unmapped in this client.
+          // The added file lands in a directory the workspace never synced, so
+          // the print fallback must create it.
+          '920': {
+            '//depot/streams/review/src/cross/c.ts': {
+              action: 'edit',
+              rev: 1,
+              content: 'export const cross = 1\n',
+            },
+            '//depot/streams/review/src/fresh/new.ts': {
+              action: 'add',
+              rev: 1,
+              content: 'export const fresh = 1\n',
+            },
+          },
+          // Review #1008: one mapped file plus one from the review stream, so the
+          // Apply dialog offers both the plain and the forced action.
+          '921': {
+            '//depot/src/editor/a.ts': {
+              action: 'edit',
+              rev: 1,
+              content: 'export const mixedMapped = 1\n',
+            },
+            '//depot/streams/review/src/cross/m.ts': {
+              action: 'edit',
+              rev: 1,
+              content: 'export const mixed = 1\n',
             },
           },
         },

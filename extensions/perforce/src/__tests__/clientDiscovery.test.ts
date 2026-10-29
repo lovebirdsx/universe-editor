@@ -4,6 +4,7 @@ import {
   rootContains,
   connectionFor,
   parseClientsList,
+  parseClientStream,
   DISCOVERY_PROBE_TIMEOUT_MS,
 } from '../clientDiscovery.js'
 import { parseZtag } from '../p4Output.js'
@@ -430,6 +431,21 @@ describe('parseClientsList', () => {
   it('returns an empty list for empty output', () => {
     expect(parseClientsList([])).toEqual([])
     expect(parseClientsList(parseZtag(''))).toEqual([])
+  })
+})
+
+describe('parseClientStream', () => {
+  it('reads the Stream field case-insensitively and normalizes it', () => {
+    expect(parseClientStream({ Stream: '//depot/branch_x' })).toBe('//depot/branch_x')
+    expect(parseClientStream({ stream: 'depot/branch_x' })).toBe('//depot/branch_x')
+    expect(parseClientStream({ Stream: '//depot/branch_x/' })).toBe('//depot/branch_x')
+  })
+
+  it('returns undefined for classic clients and unusable values', () => {
+    expect(parseClientStream({ Client: 'testclient', Root: 'X:/workspace' })).toBeUndefined()
+    expect(parseClientStream({ Stream: 'null' })).toBeUndefined()
+    expect(parseClientStream({ Stream: '' })).toBeUndefined()
+    expect(parseClientStream(undefined)).toBeUndefined()
   })
 })
 

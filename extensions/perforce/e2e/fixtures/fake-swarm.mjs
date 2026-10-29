@@ -118,6 +118,51 @@ const reviews = {
     openTaskCount: 0,
     testStatus: 'pass',
   },
+  1007: {
+    id: '1007',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'grace',
+    description: 'Cross-stream patch\n\nTargets a child stream.',
+    updated: 1_700_000_600,
+    // This version's files live on review stream //depot/streams/review, which
+    // the e2e client (stream //depot/streams/dev) does not map. Apply to Local
+    // must offer the forced cross-stream path.
+    versions: [
+      {
+        rev: 1,
+        change: '920',
+        stream: '//depot/streams/review',
+        pending: true,
+        time: 1_700_000_600,
+      },
+    ],
+    participants: { e2e: { vote: { value: 0 }, required: true } },
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'pass',
+  },
+  1008: {
+    id: '1008',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'heidi',
+    description: 'Mixed stream patch\n\nOne mapped file, one from the other stream.',
+    updated: 1_700_000_700,
+    versions: [
+      {
+        rev: 1,
+        change: '921',
+        stream: '//depot/streams/review',
+        pending: true,
+        time: 1_700_000_700,
+      },
+    ],
+    participants: { e2e: { vote: { value: 0 }, required: true } },
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'pass',
+  },
 }
 const comments = {}
 let nextReviewId = 1005
@@ -191,7 +236,15 @@ const server = createServer(async (req, res) => {
       author: body.author ?? 'dave',
       description: body.description ?? `Injected review ${id}`,
       updated: 1_700_000_900,
-      versions: [{ rev: 1, change: body.change ?? '0', pending: true, time: 1_700_000_900 }],
+      versions: [
+        {
+          rev: 1,
+          change: body.change ?? '0',
+          ...(body.stream ? { stream: body.stream } : {}),
+          pending: true,
+          time: 1_700_000_900,
+        },
+      ],
       // Make the e2e user a required participant so it lands in needs-my-action.
       participants: { e2e: { vote: { value: 0 }, required: true } },
       commentCount: 0,

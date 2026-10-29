@@ -30,8 +30,8 @@ import type {
 } from '@universe-editor/extensions-common'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { chmod, readFile, readdir, stat, writeFile } from 'node:fs/promises'
-import { basename, relative } from 'node:path'
+import { chmod, mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { basename, dirname, relative } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ConcurrencyGate } from './concurrency.js'
 import {
@@ -63,10 +63,16 @@ import {
   discoverClient,
   connectionFor,
   parseClientsList,
+  parseClientStream,
   type DiscoveredClient,
   type P4ClientEntry,
 } from './clientDiscovery.js'
 import { parseOpened, parsePending, filterOpenedByOthers } from './openedParser.js'
+import {
+  classifyUnshelveFailure,
+  mapDepotAcrossStreams,
+  normalizeStreamSpec,
+} from './streamMapping.js'
 import {
   createP4IoProbe,
   type P4IoProbe,
@@ -750,6 +756,26 @@ function firstStderrLine(stderr: string): string | undefined {
     .find((line) => line.length > 0)
 }
 
+/** Accept both the legacy bare depot-path list and the review-file shape, dedupe
+ *  by depot path (callers may merge mapped + unmapped groups) and default the
+ *  status to M. */
+function normalizeUnshelveTargets(
+  targets: readonly (string | UnshelveTarget)[],
+): NormalizedUnshelveTarget[] {
+  const seen = new Set<string>()
+  const out: NormalizedUnshelveTarget[] = []
+  for (const target of targets) {
+    const depotFile = typeof target === 'string' ? target : target.depotFile
+    if (!depotFile || seen.has(depotFile)) continue
+    seen.add(depotFile)
+    out.push({
+      depotFile,
+      status: typeof target === 'string' ? 'M' : (target.status ?? 'M'),
+    })
+  }
+  return out
+}
+
 /** Last non-empty line — where δ's human-readable stderr report puts its
  *  conclusion (the report itself runs above the `error: …` chain). */
 function lastNonEmptyLine(lines: readonly string[]): string | undefined {
@@ -1055,6 +1081,43 @@ export interface PerforceClientOptions {
    * rather than dropping the diagnostics.
    */
   readonly p4deltaLog?: P4deltaLogSink
+}
+
+/** One file to restore for "Apply to Local". `status` is the review action
+ *  letter (A/M/D/R); the cross-stream fallback uses it to pick edit/add/skip. */
+export interface UnshelveTarget {
+  readonly depotFile: string
+  readonly status?: string
+}
+
+export interface UnshelveFilesOptions {
+  readonly intoChangelist?: boolean
+  /** Cross-stream opt-in. Only honored together with {@link stream}. */
+  readonly force?: boolean
+  /** The review version's stream, normalized to `//depot/...`. */
+  readonly stream?: string
+  /** Opened workspace folder; fallback targets outside it are skipped unless
+   *  {@link includeOutside}. */
+  readonly workspaceRoot?: string
+  readonly includeOutside?: boolean
+}
+
+interface NormalizedUnshelveTarget {
+  readonly depotFile: string
+  readonly status: string
+}
+
+/** A cross-stream file after path mapping and `p4 where` verification. */
+interface CrossStreamEntry {
+  readonly source: string
+  readonly target: string
+  readonly local: string
+  readonly status: string
+}
+
+interface ApplyGroupResult {
+  applied: string[]
+  skipped: { depotFile: string; reason: string }[]
 }
 
 export class PerforceClient {
@@ -4942,11 +5005,16 @@ export class PerforceClient {
    * un-opened again (`p4 revert -k`): content stays on disk but nothing lands
    * in a changelist. A failed revert leaves the file open (content is never
    * lost) and is reported in `keptOpen`.
+   *
+   * With `opts.force` + `opts.stream`, files that `p4 where` cannot map are
+   * cross-mapped into the current stream instead of being refused: native
+   * `p4 unshelve -S <review stream> -P <current stream>` first, then a stream
+   * path-rewrite + `p4 print` fallback for what p4 cannot map.
    */
   async unshelveFiles(
     change: string,
-    depotFiles: readonly string[],
-    opts?: { intoChangelist?: boolean },
+    targets: readonly (string | UnshelveTarget)[],
+    opts?: UnshelveFilesOptions,
   ): Promise<{
     applied: string[]
     skipped: { depotFile: string; reason: string }[]
@@ -4957,41 +5025,404 @@ export class PerforceClient {
       skipped: { depotFile: string; reason: string }[]
       keptOpen: { depotFile: string; reason: string }[]
     } = { applied: [], skipped: [], keptOpen: [] }
-    if (!change || change === 'default' || depotFiles.length === 0) return empty
+    const normalized = normalizeUnshelveTargets(targets)
+    if (!change || change === 'default' || normalized.length === 0) return empty
     return this._withBusy(this._busyLabel('unshelve'), async () => {
-      // Unshelve is a content transfer (CONTENT_TRANSFER_EXEC): runtime scales
-      // with the bytes restored, so the watchdog is disarmed and the signal is
-      // the only stop. Wraps the batch in `_cancellable` — without it the run
-      // would be un-killable now that no timeout applies.
-      const { value: batch, cancelled } = await this._cancellable((signal) =>
-        this._p4.exec(['unshelve', '-s', change, '-f', ...depotFiles], {
-          signal,
-          ...CONTENT_TRANSFER_EXEC,
-        }),
-      )
-      if (cancelled) return empty
-      // A committed change has no shelf to unshelve (approved-and-committed
-      // reviews) — force-apply by printing the committed snapshot instead.
-      if (batch.exitCode !== 0 && /already committed/i.test(batch.stderr)) {
-        this._log?.(
-          `[perforce] unshelve -s ${change} refused (already committed) — applying via print`,
+      const force = opts?.force === true && normalizeStreamSpec(opts.stream) !== undefined
+      let mapped = normalized
+      let crossStream: NormalizedUnshelveTarget[] = []
+      if (force) {
+        // `where` is the authoritative split: mapped files keep the existing
+        // unshelve semantics (including add/delete actions), unmapped files are
+        // the only ones the cross-stream path may touch.
+        const where = await this._whereLocalPathsResult(
+          normalized.map((target) => target.depotFile),
+          INTERACTIVE_EXEC,
         )
-        return this._applyCommittedChange(change, depotFiles, opts)
+        if (!where.ok) {
+          return {
+            applied: [],
+            skipped: normalized.map((target) => ({
+              depotFile: target.depotFile,
+              reason: 'could not resolve the client view (p4 where failed)',
+            })),
+            keptOpen: [],
+          }
+        }
+        mapped = normalized.filter((target) => where.paths.has(target.depotFile))
+        crossStream = normalized.filter((target) => !where.paths.has(target.depotFile))
       }
-      const result =
-        batch.exitCode === 0
-          ? { applied: [...depotFiles], skipped: empty.skipped }
-          : await this._unshelveFilesIndividually(change, depotFiles)
-      let keptOpen = empty.keptOpen
-      if (result.applied.length > 0 && opts?.intoChangelist === false) {
-        keptOpen = await this._unopenFilesKeepContent(result.applied)
+
+      const results: {
+        applied: string[]
+        skipped: { depotFile: string; reason: string }[]
+        keptOpen: { depotFile: string; reason: string }[]
+      }[] = []
+      if (mapped.length > 0) {
+        results.push(
+          await this._unshelveMappedGroup(
+            change,
+            mapped.map((target) => target.depotFile),
+            opts,
+          ),
+        )
       }
-      if (result.applied.length > 0) {
+      if (crossStream.length > 0) {
+        const cross = await this._unshelveCrossStreamGroup(change, crossStream, opts)
+        results.push({ ...cross, keptOpen: [] })
+      }
+
+      const applied = [...new Set(results.flatMap((result) => result.applied))]
+      const appliedSet = new Set(applied)
+      const skipped: { depotFile: string; reason: string }[] = []
+      const seenSkipped = new Set<string>()
+      for (const entry of results.flatMap((result) => result.skipped)) {
+        if (appliedSet.has(entry.depotFile) || seenSkipped.has(entry.depotFile)) continue
+        seenSkipped.add(entry.depotFile)
+        skipped.push(entry)
+      }
+      const keptOpen = results.flatMap((result) => result.keptOpen)
+      if (applied.length > 0) {
         this._invalidateWorkspaceState()
         await this.refresh()
       }
-      return { ...result, keptOpen }
+      return { applied, skipped, keptOpen }
     })
+  }
+
+  /** Mapped files: the historical batch → per-file → committed-print pipeline.
+   *  Kept separate so a failure in the cross-stream group cannot discard the
+   *  result of the mapped one. */
+  private async _unshelveMappedGroup(
+    change: string,
+    depotFiles: readonly string[],
+    opts?: UnshelveFilesOptions,
+  ): Promise<{
+    applied: string[]
+    skipped: { depotFile: string; reason: string }[]
+    keptOpen: { depotFile: string; reason: string }[]
+  }> {
+    const empty = { applied: [], skipped: [], keptOpen: [] } as {
+      applied: string[]
+      skipped: { depotFile: string; reason: string }[]
+      keptOpen: { depotFile: string; reason: string }[]
+    }
+    // Unshelve is a content transfer (CONTENT_TRANSFER_EXEC): runtime scales
+    // with the bytes restored, so the watchdog is disarmed and the signal is
+    // the only stop. Wraps the batch in `_cancellable` — without it the run
+    // would be un-killable now that no timeout applies.
+    const { value: batch, cancelled } = await this._cancellable((signal) =>
+      this._p4.exec(['unshelve', '-s', change, '-f', ...depotFiles], {
+        signal,
+        ...CONTENT_TRANSFER_EXEC,
+      }),
+    )
+    if (cancelled) return empty
+    // A committed change has no shelf to unshelve (approved-and-committed
+    // reviews) — force-apply by printing the committed snapshot instead.
+    if (batch.exitCode !== 0 && /already committed/i.test(batch.stderr)) {
+      this._log?.(
+        `[perforce] unshelve -s ${change} refused (already committed) — applying via print`,
+      )
+      return this._applyCommittedChange(change, depotFiles, opts, false)
+    }
+    const result =
+      batch.exitCode === 0
+        ? { applied: [...depotFiles], skipped: empty.skipped }
+        : await this._unshelveFilesIndividually(change, depotFiles)
+    let keptOpen = empty.keptOpen
+    if (result.applied.length > 0 && opts?.intoChangelist === false) {
+      keptOpen = await this._unopenFilesKeepContent(result.applied)
+    }
+    return { ...result, keptOpen }
+  }
+
+  /** The client spec's `Stream` field, or undefined for a classic client.
+   *  Deliberately uncached: `p4 switch` changes the workspace stream without
+   *  recreating this client, and a stale stream would map writes onto the wrong
+   *  paths. One extra metadata read per forced apply is cheap. */
+  private async _resolveClientStream(): Promise<string | undefined> {
+    const { result, records } = await this._p4.execTagged(['client', '-o'], INTERACTIVE_EXEC)
+    if (result.exitCode !== 0) {
+      this._log?.(
+        `[perforce] p4 client -o failed (exit ${result.exitCode}); cross-stream apply unavailable`,
+      )
+      return undefined
+    }
+    for (const record of records) {
+      const stream = parseClientStream(record)
+      if (stream) return stream
+    }
+    this._log?.('[perforce] the client spec has no Stream; cross-stream apply unavailable')
+    return undefined
+  }
+
+  /** Files outside the client view: map each review-stream path onto the same
+   *  relative path in the current stream, verify the target is mapped, then let
+   *  p4 map natively (`-S -P`) or rewrite the content via `p4 print`. */
+  private async _unshelveCrossStreamGroup(
+    change: string,
+    targets: readonly NormalizedUnshelveTarget[],
+    opts?: UnshelveFilesOptions,
+  ): Promise<ApplyGroupResult> {
+    const reviewStream = normalizeStreamSpec(opts?.stream)
+    if (!reviewStream) {
+      return {
+        applied: [],
+        skipped: targets.map((target) => ({
+          depotFile: target.depotFile,
+          reason: 'the review has no stream; cross-stream apply is unavailable',
+        })),
+      }
+    }
+    const clientStream = await this._resolveClientStream()
+    if (!clientStream) {
+      return {
+        applied: [],
+        skipped: targets.map((target) => ({
+          depotFile: target.depotFile,
+          reason: 'the current client is not a stream client; cross-stream apply is unavailable',
+        })),
+      }
+    }
+
+    const skipped: { depotFile: string; reason: string }[] = []
+    const candidates: { source: string; target: string; status: string }[] = []
+    for (const target of targets) {
+      // Deletes stay in the native batch — p4 can unshelve them across streams.
+      // Only the print fallback (which has no delete primitive) skips them.
+      const mapped = mapDepotAcrossStreams(target.depotFile, reviewStream, clientStream)
+      if (!mapped) {
+        skipped.push({
+          depotFile: target.depotFile,
+          reason: `cannot map this path from ${reviewStream} to ${clientStream}`,
+        })
+        continue
+      }
+      candidates.push({ source: target.depotFile, target: mapped, status: target.status })
+    }
+    if (candidates.length === 0) return { applied: [], skipped }
+
+    const where = await this._whereLocalPathsResult(
+      candidates.map((candidate) => candidate.target),
+      INTERACTIVE_EXEC,
+    )
+    if (!where.ok) {
+      for (const candidate of candidates) {
+        skipped.push({
+          depotFile: candidate.source,
+          reason: 'could not resolve the target paths (p4 where failed)',
+        })
+      }
+      return { applied: [], skipped }
+    }
+    const verified: CrossStreamEntry[] = []
+    for (const candidate of candidates) {
+      const local = where.paths.get(candidate.target)
+      if (!local) {
+        skipped.push({
+          depotFile: candidate.source,
+          reason: `${candidate.target} is not mapped in the client view`,
+        })
+        continue
+      }
+      if (!isUnderAny(local, [this.root])) {
+        skipped.push({
+          depotFile: candidate.source,
+          reason: 'the mapped target is outside the client root',
+        })
+        continue
+      }
+      if (
+        opts?.includeOutside !== true &&
+        opts?.workspaceRoot !== undefined &&
+        !isUnderAny(local, [opts.workspaceRoot])
+      ) {
+        skipped.push({
+          depotFile: candidate.source,
+          reason: 'the mapped target is outside the workspace',
+        })
+        continue
+      }
+      verified.push({ ...candidate, local })
+    }
+    if (verified.length === 0) return { applied: [], skipped }
+
+    // Not opening anything is the whole point of the "don't put it in a
+    // changelist" mode; writing content directly also avoids having to know
+    // p4's own target spelling for a later revert.
+    if (opts?.intoChangelist === false) {
+      const fallback = await this._applyPrintFallback(change, verified, false)
+      return { applied: fallback.applied, skipped: [...skipped, ...fallback.skipped] }
+    }
+
+    const streamArgs = ['-S', reviewStream, '-P', clientStream]
+    const { value: batch, cancelled } = await this._cancellable((signal) =>
+      this._p4.exec(
+        ['unshelve', '-s', change, '-f', ...streamArgs, ...verified.map((entry) => entry.source)],
+        { signal, ...CONTENT_TRANSFER_EXEC },
+      ),
+    )
+    if (cancelled) return { applied: [], skipped }
+    if (batch.exitCode === 0) {
+      return { applied: verified.map((entry) => entry.source), skipped }
+    }
+    const failure = classifyUnshelveFailure(batch.stderr)
+    this._log?.(
+      `[perforce] cross-stream unshelve -s ${change} -S ${reviewStream} -P ${clientStream} failed (${failure})${batch.stderr.trim() ? `: ${firstStderrLine(batch.stderr)}` : ''}`,
+    )
+    if (failure === 'committed' || failure === 'stream-unsupported') {
+      // These fail identically for every file (no shelf / no -S support), so
+      // one fallback pass is cheaper than N doomed retries. A bad stream
+      // relationship can still be per-file after a partial batch, so it takes
+      // the retry path like any other failure.
+      const fallback = await this._applyPrintFallback(change, verified, true)
+      return { applied: fallback.applied, skipped: [...skipped, ...fallback.skipped] }
+    }
+    const applied: string[] = []
+    const needFallback: CrossStreamEntry[] = []
+    for (const entry of verified) {
+      const res = await this._p4.exec(
+        ['unshelve', '-s', change, '-f', ...streamArgs, entry.source],
+        { ...CONTENT_TRANSFER_EXEC },
+      )
+      if (res.exitCode === 0) applied.push(entry.source)
+      else needFallback.push(entry)
+    }
+    const fallback =
+      needFallback.length > 0
+        ? await this._applyPrintFallback(change, needFallback, true)
+        : { applied: [], skipped: [] as { depotFile: string; reason: string }[] }
+    return {
+      applied: [...applied, ...fallback.applied],
+      skipped: [...skipped, ...fallback.skipped],
+    }
+  }
+
+  /** `intoChangelist` false: print each review snapshot straight over the
+   *  mapped target. True: open the target first (edit, or add for a new file),
+   *  then write, so a refused open never leaves a modified-but-unopened file.
+   *  Deletes are native-only: the fallback has no way to remove the target and
+   *  reports them as skipped instead. */
+  private async _applyPrintFallback(
+    change: string,
+    entries: readonly CrossStreamEntry[],
+    intoChangelist: boolean,
+  ): Promise<ApplyGroupResult> {
+    const applied: string[] = []
+    const skipped: { depotFile: string; reason: string }[] = []
+    for (const entry of entries) {
+      if (entry.status === 'D') {
+        skipped.push({
+          depotFile: entry.source,
+          reason: 'the cross-stream path fallback cannot apply deleted files',
+        })
+        continue
+      }
+      // `@=<change>` works for a pending shelf and a committed change alike,
+      // and `noClient` lets an out-of-view source print.
+      const res = await this._p4.execBinary(['print', '-q', `${entry.source}@=${change}`], {
+        noClient: true,
+      })
+      if (res.exitCode !== 0) {
+        skipped.push({
+          depotFile: entry.source,
+          reason: firstStderrLine(res.stderr) ?? `p4 print failed (exit ${res.exitCode})`,
+        })
+        continue
+      }
+      if (!intoChangelist) {
+        const written = await this._writeApplyContent(entry.local, res.stdout)
+        if (!written.ok) {
+          skipped.push({ depotFile: entry.source, reason: written.reason })
+          continue
+        }
+        applied.push(entry.source)
+        continue
+      }
+      const opened = await this._openCrossStreamTarget(entry, res.stdout)
+      if (!opened.ok) {
+        skipped.push({ depotFile: entry.source, reason: opened.reason })
+        continue
+      }
+      if (!opened.contentWritten) {
+        const written = await this._writeApplyContent(entry.local, res.stdout)
+        if (!written.ok) {
+          // Un-open only what THIS call opened — an already-open file belongs
+          // to the user's changelist and must survive a failed overwrite.
+          if (opened.openedByUs) {
+            await this._p4.exec(['revert', '-k', entry.target]).catch(() => undefined)
+          }
+          skipped.push({ depotFile: entry.source, reason: written.reason })
+          continue
+        }
+      }
+      applied.push(entry.source)
+    }
+    return { applied, skipped }
+  }
+
+  /** Write content over a workspace file, creating missing parent directories
+   *  (a review add can land in a directory this workspace never synced) and
+   *  retrying after chmod for the read-only files p4 leaves when they are not
+   *  open. */
+  private async _writeApplyContent(
+    local: string,
+    content: Buffer,
+  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+    try {
+      await mkdir(dirname(local), { recursive: true })
+      await writeFile(local, content)
+      return { ok: true }
+    } catch {
+      try {
+        await chmod(local, 0o666)
+        await writeFile(local, content)
+        return { ok: true }
+      } catch (e: unknown) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) }
+      }
+    }
+  }
+
+  /** Open the target for the changelist. A review add (or the add half of a
+   *  move) whose target is not in the current stream yet needs the content on
+   *  disk before `p4 add`; in that case the content is written here and
+   *  reported as already written. `openedByUs` distinguishes a fresh open from
+   *  an existing user changelist entry so a failed write does not revert the
+   *  latter. */
+  private async _openCrossStreamTarget(
+    entry: CrossStreamEntry,
+    content: Buffer,
+  ): Promise<
+    { ok: true; contentWritten: boolean; openedByUs: boolean } | { ok: false; reason: string }
+  > {
+    const edit = await this._p4.exec(['edit', entry.target])
+    if (edit.exitCode === 0) return { ok: true, contentWritten: false, openedByUs: true }
+    if (/already opened/i.test(edit.stderr)) {
+      return { ok: true, contentWritten: false, openedByUs: false }
+    }
+    if (entry.status !== 'A' && entry.status !== 'R') {
+      return {
+        ok: false,
+        reason: firstStderrLine(edit.stderr) ?? `p4 edit failed (exit ${edit.exitCode})`,
+      }
+    }
+    const existed = existsSync(entry.local)
+    const written = await this._writeApplyContent(entry.local, content)
+    if (!written.ok) return written
+    const add = await this._p4.exec(['add', entry.local])
+    if (add.exitCode === 0) return { ok: true, contentWritten: true, openedByUs: true }
+    if (/already opened/i.test(add.stderr)) {
+      return { ok: true, contentWritten: true, openedByUs: false }
+    }
+    if (!existed) {
+      await unlink(entry.local).catch(() => undefined)
+    }
+    return {
+      ok: false,
+      reason: firstStderrLine(add.stderr) ?? `p4 add failed (exit ${add.exitCode})`,
+    }
   }
 
   /** Un-open files while keeping their workspace content (`p4 revert -k`).
@@ -5027,6 +5458,7 @@ export class PerforceClient {
     change: string,
     depotFiles: readonly string[],
     opts?: { intoChangelist?: boolean },
+    refresh = true,
   ): Promise<{
     applied: string[]
     skipped: { depotFile: string; reason: string }[]
@@ -5071,23 +5503,16 @@ export class PerforceClient {
         })
         continue
       }
-      try {
-        await writeFile(local, res.stdout)
-      } catch {
-        // Un-opened p4 workspace files are read-only — make writable and retry.
-        try {
-          await chmod(local, 0o666)
-          await writeFile(local, res.stdout)
-        } catch (e: unknown) {
-          skipped.push({ depotFile, reason: e instanceof Error ? e.message : String(e) })
-          continue
-        }
+      const written = await this._writeApplyContent(local, res.stdout)
+      if (!written.ok) {
+        skipped.push({ depotFile, reason: written.reason })
+        continue
       }
       applied.push(depotFile)
     }
     if (applied.length > 0) {
       this._invalidateWorkspaceState()
-      await this.refresh()
+      if (refresh) await this.refresh()
     }
     return { applied, skipped, keptOpen: [] }
   }

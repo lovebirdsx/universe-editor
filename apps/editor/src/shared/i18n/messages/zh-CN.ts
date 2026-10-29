@@ -1619,6 +1619,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Swarm ---
   'swarm.addComment': '添加评论…',
+  'swarm.apply.cancel': '取消',
   'swarm.apply.checkbox': '同时替换工作区之外的文件',
   'swarm.apply.checkbox.changelist': '在默认变更列表中打开已应用的文件',
   'swarm.apply.confirm': '将审核 #{0} 应用到本地文件？',
@@ -1626,9 +1627,19 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'swarm.apply.detail.outside': '工作区之外的 {0} 个文件将被跳过：{1}',
   'swarm.apply.detail.skippedNote': '已打开或已过期的文件将被跳过并报告。',
   'swarm.apply.detail.unmapped': '{0} 个文件属于不同的流/分支，无法应用。',
+  'swarm.apply.detail.unmappedForce':
+    '{0} 个文件属于不同的流/分支；选择“强制应用”可尝试映射到当前流。',
   'swarm.apply.done': '已将 {0} 个文件应用到工作区。',
   'swarm.apply.done.noChangelist': '已将 {0} 个文件应用到工作区（未在变更列表中打开）。',
   'swarm.apply.doneWithSkipped': '已应用 {0} 个文件；跳过 {1} 个：\n{2}{3}',
+  'swarm.apply.force': '强制应用',
+  'swarm.apply.force.confirm': '强制将审核 #{0} 应用到当前流？',
+  'swarm.apply.force.detail.count': 'Perforce 将把 {0} 个文件映射到当前流的对应路径。',
+  'swarm.apply.force.detail.limits':
+    '兜底路径会跳过删除的文件；工作区之外的文件在勾选下方开关前仍会被跳过。',
+  'swarm.apply.force.detail.native':
+    '优先使用 p4 原生 stream 映射，失败后按 stream 前缀改写路径；无法映射的文件会被跳过并报告。',
+  'swarm.apply.force.detail.stream': '该审核的目标流为 {0}，其文件未映射到当前工作区。',
   'swarm.apply.keptOpen': '{0} 个文件无法从默认变更列表中移除，仍保持打开：\n{1}{2}',
   'swarm.apply.nothing': '没有可应用的内容：该版本没有任何映射文件位于工作区内。',
   'swarm.apply.nothing.mismatch': '无法应用该审核：其文件所属的流/分支与当前工作区不同。',

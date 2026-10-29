@@ -24,6 +24,7 @@ import type { SwarmLogger } from './swarmLog.js'
 import { buildReviewPicks } from './swarmReviewPick.js'
 import { registerSwarmChatProvider } from '../chatContext.js'
 import { localize } from '../nls.js'
+import { normalizeStreamSpec } from '../streamMapping.js'
 
 /** Command ids. The wire-facing ids are declared canonically in extensions-common's
  *  `SwarmCommands`; the literal is kept here (not imported) because that constant
@@ -63,6 +64,34 @@ const Cmd = {
 type _AssertCoversWireIds = SwarmCommandId extends (typeof Cmd)[keyof typeof Cmd] ? true : never
 const _swarmWireIdCoverage: _AssertCoversWireIds = true
 void _swarmWireIdCoverage
+
+/** Normalize the applyToLocal file list: the current `files[{depotFile,status}]`
+ *  shape, the legacy `depotFiles: string[]`, and the two deduped by depot path. */
+function parseApplyFiles(
+  files: unknown,
+  depotFiles: unknown,
+): { depotFile: string; status: string }[] {
+  const seen = new Set<string>()
+  const out: { depotFile: string; status: string }[] = []
+  const push = (depotFile: unknown, status: unknown): void => {
+    if (typeof depotFile !== 'string' || !depotFile || seen.has(depotFile)) return
+    seen.add(depotFile)
+    out.push({ depotFile, status: typeof status === 'string' && status ? status : 'M' })
+  }
+  if (Array.isArray(files)) {
+    for (const entry of files) {
+      if (typeof entry === 'string') {
+        push(entry, 'M')
+      } else if (typeof entry === 'object' && entry !== null) {
+        const record = entry as { depotFile?: unknown; status?: unknown }
+        push(record.depotFile, record.status)
+      }
+    }
+  } else if (Array.isArray(depotFiles)) {
+    for (const entry of depotFiles) push(entry, 'M')
+  }
+  return out
+}
 
 export interface SwarmConfig {
   readonly url: string
@@ -726,25 +755,51 @@ export function registerSwarmCommands(
     // partial refusal (already-opened / stale-base files) is reported in-band
     // via the result's `skipped`, and the renderer owns the user-facing toast.
     commands.registerCommand(Cmd.applyToLocal, async (req: unknown) => {
-      const r = req as { change?: unknown; depotFiles?: unknown; intoChangelist?: unknown }
+      const r = req as {
+        change?: unknown
+        files?: unknown
+        depotFiles?: unknown
+        intoChangelist?: unknown
+        force?: unknown
+        stream?: unknown
+        workspaceRoot?: unknown
+        includeOutside?: unknown
+      }
       const empty: {
         applied: string[]
         skipped: { depotFile: string; reason: string }[]
         keptOpen: { depotFile: string; reason: string }[]
       } = { applied: [], skipped: [], keptOpen: [] }
       const active = mgr.active
-      if (!active || typeof r?.change !== 'string' || !Array.isArray(r?.depotFiles)) return empty
-      const depotFiles = r.depotFiles.filter((f): f is string => typeof f === 'string')
+      if (!active || typeof r?.change !== 'string') return empty
+      const files = parseApplyFiles(r.files, r.depotFiles)
+      if (files.length === 0) return empty
       const intoChangelist = r.intoChangelist !== false
+      const stream = normalizeStreamSpec(r.stream)
+      const force = r.force === true && stream !== undefined
+      if (r.force === true && stream === undefined) {
+        logger.warn(
+          'cmd',
+          'applyToLocal force requested without a usable review stream; applying mapped files only',
+        )
+      }
+      const workspaceRoot =
+        typeof r.workspaceRoot === 'string' && r.workspaceRoot ? r.workspaceRoot : undefined
+      const includeOutside = r.includeOutside === true
       logger.info(
         'cmd',
-        `applyToLocal change=${r.change} files=${depotFiles.length} intoChangelist=${intoChangelist} (p4 unshelve)`,
+        `applyToLocal change=${r.change} files=${files.length} force=${force} stream=${stream ?? '-'} intoChangelist=${intoChangelist} (p4 unshelve)`,
       )
-      const result = await active.unshelveFiles(r.change, depotFiles, { intoChangelist })
+      const result = await active.unshelveFiles(r.change, files, {
+        intoChangelist,
+        includeOutside,
+        ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
+        ...(force && stream !== undefined ? { force: true, stream } : {}),
+      })
       if (result.skipped.length > 0) {
         logger.warn(
           'cmd',
-          `applyToLocal skipped ${result.skipped.length}/${depotFiles.length}: ${result.skipped
+          `applyToLocal skipped ${result.skipped.length}/${files.length}: ${result.skipped
             .map((s) => `${s.depotFile} (${s.reason})`)
             .join('; ')}`,
         )
