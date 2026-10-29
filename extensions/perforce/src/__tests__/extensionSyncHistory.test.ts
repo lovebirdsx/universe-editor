@@ -16,6 +16,10 @@
  *  6. `openLog` resolves the run reference off the RECORD and reads it from the
  *     extension's own log directory — never a path the caller named, and never
  *     "the latest log" for a get whose δ run does not exist.
+ *  7. A get that ran re-reads the focus, so a focus folder the get just created
+ *     reaches the reconcile scan as a directory.
+ *  8. The clobber remedy asks its delete-untracked offer the way its retry
+ *     runs — with the scope override the user granted at the gate.
  */
 import { mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -112,6 +116,14 @@ const workspaceMock = vi.hoisted(() => {
       },
     ),
     registerTimelineProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    // Nothing on disk unless a test says so: a focus entry then resolves as a
+    // FILE, the way a fresh workspace's not-yet-fetched folders do.
+    fs: {
+      stat: vi.fn(async (_path: string): Promise<{ type: number }> => {
+        throw new Error('ENOENT')
+      }),
+      readDirectory: vi.fn(async (_path: string): Promise<[string, number][]> => []),
+    },
     createFileSystemWatcher: vi.fn(() => ({
       onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
       onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
@@ -341,6 +353,7 @@ import { activate } from '../extension.js'
 import { localize } from '../nls.js'
 
 const BTN_FORCE = localize('perforce.btn.forceSync', 'Force Get')
+const BTN_RUN_AS_CHOSEN = localize('perforce.scope.btn.run', 'Run as chosen')
 
 let fake: FakeClient
 let storage: string
@@ -388,6 +401,10 @@ beforeEach(async () => {
   // by this test's `activate()`.
   workspaceMock.configValues.clear()
   workspaceMock.configListeners.length = 0
+  workspaceMock.fs.stat.mockReset()
+  workspaceMock.fs.stat.mockRejectedValue(new Error('ENOENT'))
+  workspaceMock.fs.readDirectory.mockReset()
+  workspaceMock.fs.readDirectory.mockResolvedValue([])
   windowMock.showInformationMessage.mockClear()
   windowMock.showWarningMessage.mockClear()
   windowMock.showErrorMessage.mockClear()
@@ -610,6 +627,39 @@ describe('the trigger column', () => {
   })
 })
 
+describe('the clobber remedy', () => {
+  it('asks its delete-untracked offer with the override the retry carries', async () => {
+    // The retry keeps the "run as chosen" the user granted at the gate, so the
+    // offer must be asked the same way — the client's route skips a scope the
+    // override sets aside, and an offer asked without it would answer a
+    // different get than the one the button starts.
+    fake.checkScopeTargets.mockResolvedValue({
+      state: 'ready',
+      reason: undefined,
+      inside: [],
+      outside: [{ path: `${SRC}/a.cpp`, isDirectory: false }],
+    })
+    fake.sync.mockResolvedValueOnce(
+      appliedRun({
+        ok: false,
+        summary: undefined,
+        error: { kind: 'clobber', suggestion: 'local changes' },
+      }),
+    )
+    // "Run as chosen" at the gate, then dismiss the force confirmation.
+    windowMock.showWarningMessage.mockResolvedValueOnce(BTN_RUN_AS_CHOSEN)
+    windowMock.showErrorMessage.mockResolvedValue(BTN_FORCE)
+
+    await runCommand('perforce.syncLatest', { resourceUri: `${SRC}/a.cpp` })
+
+    expect(fake.sync.mock.calls[0]?.[1]).toMatchObject({ overrideScope: true })
+    expect(fake.p4deltaDeleteUntrackedReject).toHaveBeenCalledWith(
+      '#head',
+      expect.objectContaining({ overrideScope: true }),
+    )
+  })
+})
+
 describe('a get that never ran', () => {
   it('records the declined scope gate and does not spawn p4', async () => {
     fake.checkScopeTargets.mockResolvedValue({
@@ -666,6 +716,78 @@ describe('a get that never ran', () => {
     // The client already told the user why. A second toast would restate the
     // same reason under a "Get revision failed" headline, for a get that never ran.
     expect(windowMock.showErrorMessage).not.toHaveBeenCalled()
+  })
+})
+
+describe('the focus after a get', () => {
+  const NEW = `${ROOT}/src/new`
+
+  /** Focus one folder that is not on disk yet — a fresh workspace's state. */
+  async function focusOnMissingFolder(): Promise<void> {
+    workspaceMock.configValues.set('focusEnabled', true)
+    workspaceMock.configValues.set('focusFolders', { 'src/new': true })
+    for (const listener of workspaceMock.configListeners) {
+      listener({ affectsConfiguration: (k) => k === 'workspace.focusFolders' })
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  }
+
+  it('re-reads the focus once the get created a focused folder', async () => {
+    await focusOnMissingFolder()
+    // Missing on disk, so it can only be a file: the scan gets no directory.
+    expect(fake.setReconcileScope).toHaveBeenLastCalledWith([], [NEW], { rootFilesOf: ROOT })
+    // The get fetched it.
+    workspaceMock.fs.stat.mockImplementation(async (p: string) => {
+      if (p === NEW) return { type: 2 }
+      throw new Error('ENOENT')
+    })
+
+    await runCommand('perforce.syncLatest')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fake.setReconcileScope).toHaveBeenLastCalledWith([NEW], [], { rootFilesOf: ROOT })
+  })
+
+  it('logs the focus once per result, not once per get', async () => {
+    const focusLines = (): string[] =>
+      windowMock.channelsOf('Perforce').filter((l) => l.startsWith('[perforce] reconcile focus:'))
+    await focusOnMissingFolder()
+    const before = focusLines().length
+
+    await runCommand('perforce.syncLatest')
+    await runCommand('perforce.syncLatest')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // Each get re-read a focus that had not changed: nothing new to say.
+    expect(focusLines()).toHaveLength(before)
+    workspaceMock.fs.stat.mockImplementation(async (p: string) => {
+      if (p === NEW) return { type: 2 }
+      throw new Error('ENOENT')
+    })
+
+    await runCommand('perforce.syncLatest')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(focusLines()).toHaveLength(before + 1)
+    expect(focusLines().at(-1)).toContain('1 dirs, 0 files')
+  })
+
+  it('leaves the focus alone after a get that never ran', async () => {
+    await focusOnMissingFolder()
+    const before = fake.setReconcileScope.mock.calls.length
+    fake.sync.mockResolvedValue(
+      appliedRun({
+        ok: false,
+        notRun: true,
+        summary: undefined,
+        error: { kind: 'other', suggestion: 'the daily scope resolves to an empty range' },
+      }),
+    )
+
+    await runCommand('perforce.syncLatest')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fake.setReconcileScope).toHaveBeenCalledTimes(before)
   })
 })
 

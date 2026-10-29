@@ -18,7 +18,8 @@
  *   `GetProcessIoCounters`), an approximation of network receive + local disk
  *   write, NOT a strict network/disk split. Absent means no sampler was
  *   available for this run (macOS, no WMI, a sampler that died) — render
- *   "unavailable", never 0.
+ *   "unavailable", never 0. A `declined` run has no process to sample: render
+ *   "never ran" instead of blaming the platform.
  * - `diskWrites` is a LOWER BOUND from the renderer's file watcher (each push
  *   is truncated at 5000 events and `files.watcherExclude` applies), and 0 can
  *   also mean there is no watcher at all. Render it as "≥N".
@@ -27,9 +28,10 @@
  *   ones the δ engine reported spawning internally (charset `p4 set`, client /
  *   fstat / have queries, the transfer). It is NOT a count of server log lines
  *   (a `p4 set` may stay local; `--parallel` transmits over one process) and not
- *   a count of δ invocations. Absent = the record predates this field; when
- *   present, `complete: false` means at least the δ side is a LOWER BOUND (its
- *   run ended without a valid summary), so only the native number is exact.
+ *   a count of δ invocations. Absent = the record predates this field, or the
+ *   run was `declined` (nothing was started); when present, `complete: false`
+ *   means at least the δ side is a LOWER BOUND (its run ended without a valid
+ *   summary), so only the native number is exact.
  */
 
 /** Where a get was started from. */
@@ -41,7 +43,9 @@ export type P4SyncTriggerDto =
   | 'command'
   | 'recovery'
 
-/** How a get ended. `declined` = the user refused at the scope gate, so it never ran. */
+/** How a get ended. `declined` = it never ran: the user refused at the scope gate,
+ *  or the editor refused it before starting anything (no engine available could
+ *  run that range), with the reason in `error`. */
 export type P4SyncOutcomeDto =
   | 'applied'
   | 'upToDate'
@@ -162,18 +166,18 @@ export interface P4SyncRunDto {
   readonly engineFallback?: boolean
   /** `perforce.syncParallelThreads` in force for this run (0 = serial).
    *  Not applicable to δ runs — the UI should say so rather than show the
-   *  number. Absent together with `engine`: the run never spawned p4 (declined
-   *  at the scope gate). */
+   *  number. Absent together with `engine`: the run never spawned p4
+   *  (`declined`). */
   readonly parallelThreads?: number
   readonly counts?: P4SyncCountsDto
-  /** Absent = no sampler for this run; never render as 0. */
+  /** Absent = no sampler for this run (or a `declined` one); never render as 0. */
   readonly io?: { readonly readBytes: number; readonly writeBytes: number }
   /** Lower bound (watcher events); render as "≥N". Absent = nothing was
-   *  observed for this run (declined at the scope gate). */
+   *  observed for this run (`declined`). */
   readonly diskWrites?: number
   /** p4 command processes this run started, split native / δ. Absent = the
-   *  record predates the field; `complete: false` = the δ side is a lower
-   *  bound. Never render an incomplete total as exact. */
+   *  record predates the field, or the run was `declined`; `complete: false` =
+   *  the δ side is a lower bound. Never render an incomplete total as exact. */
   readonly p4Calls?: P4SyncCallCountsDto
   /**
    * The δ engine's log file for this run, as an opaque id — the record's own

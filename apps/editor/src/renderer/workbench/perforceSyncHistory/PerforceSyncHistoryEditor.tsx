@@ -54,10 +54,11 @@ import {
   countsLine,
   engineLabel,
   filesLabel,
-  formatBytes,
   formatDiskWrites,
   formatDuration,
   formatTarget,
+  ioLabel,
+  noP4CommandBreakdownLabel,
   outcomeLabel,
   p4CallsLabel,
   p4CallsRowLabel,
@@ -552,23 +553,9 @@ function RunDetail({ id }: { id: string }) {
           <dt>{localize('perforceSyncHistory.field.files', 'Files')}</dt>
           <dd data-testid="perforce-sync-history-detail-files">{filesLabel(detail)}</dd>
           <dt>{localize('perforceSyncHistory.field.read', 'Read')}</dt>
-          <dd data-testid="perforce-sync-history-detail-read">
-            {detail.io !== undefined
-              ? formatBytes(detail.io.readBytes)
-              : localize(
-                  'perforceSyncHistory.ioUnavailable',
-                  'unavailable (no sampler on this platform)',
-                )}
-          </dd>
+          <dd data-testid="perforce-sync-history-detail-read">{ioLabel(detail, 'readBytes')}</dd>
           <dt>{localize('perforceSyncHistory.field.write', 'Written')}</dt>
-          <dd data-testid="perforce-sync-history-detail-write">
-            {detail.io !== undefined
-              ? formatBytes(detail.io.writeBytes)
-              : localize(
-                  'perforceSyncHistory.ioUnavailable',
-                  'unavailable (no sampler on this platform)',
-                )}
-          </dd>
+          <dd data-testid="perforce-sync-history-detail-write">{ioLabel(detail, 'writeBytes')}</dd>
           <dt>{localize('perforceSyncHistory.field.diskWrites', 'On disk')}</dt>
           <dd data-testid="perforce-sync-history-detail-diskwrites">
             {detail.diskWrites !== undefined
@@ -629,12 +616,7 @@ function RunDetail({ id }: { id: string }) {
           <dt>{localize('perforceSyncHistory.field.p4CallsByCommand', 'Where they went')}</dt>
           <dd data-testid="perforce-sync-history-detail-p4calls-bycommand">
             {p4CommandBreakdown(detail) ?? (
-              <span className={styles['muted']}>
-                {localize(
-                  'perforceSyncHistory.p4Calls.byCommandUnavailable',
-                  'not collected (this engine does not report a per-command split)',
-                )}
-              </span>
+              <span className={styles['muted']}>{noP4CommandBreakdownLabel(detail)}</span>
             )}
           </dd>
         </dl>

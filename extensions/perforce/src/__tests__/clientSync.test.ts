@@ -411,7 +411,7 @@ describe('PerforceClient.sync', () => {
 
     expect(res.ok).toBe(false)
     expect(lastSyncArgv()).toBeUndefined()
-    expect(String(windowMock.showErrorMessage.mock.calls[0]?.[0])).toContain('exclusion')
+    expect(String(windowMock.showErrorMessage.mock.calls[0]?.[0])).toContain('covers only part of')
   })
 
   it('runs an escaped explicit target the scope covers whole', async () => {

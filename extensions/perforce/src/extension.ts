@@ -1252,6 +1252,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // the filespec `<file>/...` — a no-such-file p4 answers as clean (exit 0,
   // empty) — and checkpointing that empty answer would pin the file's drift
   // verdict forever.
+  // The focus resolves against the disk, so a get that materializes a focus
+  // folder changes it — `runSync` re-reads it after every get, and this line
+  // only speaks when the answer (or the set of clients it went to) moved.
+  let lastFocusLogKey: string | undefined
   const watchReconcileScope = watchConfig<FocusScope>({
     read: async () => {
       const scopeCfg = workspace.getConfiguration('workspace')
@@ -1300,6 +1304,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       // (opened folder ∩ `.p4delta-scope`), resolved by `PerforceClient.refreshScope`
       // — the user's get must not follow what they happen to be looking at, and a
       // focus folder outside the declared scope must not silently widen it.
+      const logKey = JSON.stringify([mgr.all.map((c) => c.root), dirs, files, rootFilesOf ?? null])
+      if (logKey === lastFocusLogKey) return
+      lastFocusLogKey = logKey
       log(
         `[perforce] reconcile focus: ${dirs.length} dirs, ${files.length} files` +
           (rootFilesOf !== undefined ? ' (+root files)' : '') +
@@ -2233,6 +2240,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
       scopeNarrowed,
       run: res,
     })
+    // A get can create the very folders the focus names — a fresh workspace's
+    // first get is the usual case. Until they exist they resolve as FILES, which
+    // hands the reconcile scan no directory (so δ never answers a round there);
+    // re-reading moves them into the directory bucket, and the client restarts
+    // the scan only when the focus really changed. A cancelled get may have
+    // landed part of the transfer, so only a refused one is skipped.
+    if (res.notRun !== true) {
+      void watchReconcileScope.refresh().catch((err: unknown) => {
+        log(`[perforce] reconcile focus: re-read after a get failed — ${String(err)}`)
+      })
+    }
     if (res.cancelled) return
     // The client refused this get before spawning anything and already said why
     // (`perforce.sync.scopeRefused`). The failure branch below would repeat that
@@ -2337,6 +2355,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
               ...(options.scopeTargets !== undefined && ledgerScope.length > 0
                 ? { scopeTargets: ledgerScope }
                 : {}),
+              ...(overrideScope ? { overrideScope: true } : {}),
             }) === undefined,
           )
           if (choice !== undefined) {

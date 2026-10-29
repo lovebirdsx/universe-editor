@@ -191,6 +191,21 @@ export function formatDiskWrites(diskWrites: number): string {
   return localize('perforceSyncHistory.diskWrites', '≥{0} file events', { 0: String(diskWrites) })
 }
 
+/** What a declined run says in place of any fact only a run could produce:
+ *  nothing was started, so no platform, record age or engine is to blame. */
+function notRunLabel(): string {
+  return localize('perforceSyncHistory.notRun', 'this get never ran')
+}
+
+/** One of the p4 process's I/O counters. Absent is "no sampler reported", never
+ *  0B — unless the run never started a process for a sampler to watch. */
+export function ioLabel(run: P4SyncRunDto, counter: 'readBytes' | 'writeBytes'): string {
+  if (run.io !== undefined) return formatBytes(run.io[counter])
+  return run.outcome === 'declined'
+    ? notRunLabel()
+    : localize('perforceSyncHistory.ioUnavailable', 'unavailable (no sampler on this platform)')
+}
+
 /**
  * The p4 command processes a run started, with its native / δ split.
  *
@@ -203,6 +218,7 @@ export function formatDiskWrites(diskWrites: number): string {
 export function p4CallsLabel(run: P4SyncRunDto): string {
   const calls = run.p4Calls
   if (calls === undefined) {
+    if (run.outcome === 'declined') return notRunLabel()
     return localize(
       'perforceSyncHistory.p4Calls.unavailable',
       'not collected (this record predates the field)',
@@ -265,6 +281,16 @@ export function p4CommandBreakdown(run: P4SyncRunDto): string | undefined {
       )
 }
 
+/** Why {@link p4CommandBreakdown} has nothing to list. */
+export function noP4CommandBreakdownLabel(run: P4SyncRunDto): string {
+  return run.outcome === 'declined'
+    ? notRunLabel()
+    : localize(
+        'perforceSyncHistory.p4Calls.byCommandUnavailable',
+        'not collected (this engine does not report a per-command split)',
+      )
+}
+
 function countsTotal(counts: P4SyncCountsDto): number {
   return (
     counts.applied +
@@ -305,7 +331,7 @@ export function filesLabel(run: P4SyncRunDto): string {
   const line = countsLine(run)
   if (line !== undefined) return line
   return run.outcome === 'declined'
-    ? localize('perforceSyncHistory.notRun', 'this get never ran')
+    ? notRunLabel()
     : localize('perforceSyncHistory.notReported', 'not reported by p4')
 }
 

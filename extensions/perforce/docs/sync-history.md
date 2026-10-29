@@ -103,7 +103,7 @@ CSV 写成 `command=count; command=count`（次数降序，同数按命令名）
 1. **落账点 A**：`const res = await window.withProgress(...)` 之后、`if (res.cancelled) return` **之前**。此刻 applied / upToDate / unrecognized / failed / cancelled 全部已定，而**任何 toast 与补救对话框都还没 await**——所以 `durationMs` 量的是拉取本身，不是你盯着弹窗读了多久。失败与取消也因此各留一条。
 2. **落账点 B**：范围门 `if (!decision.ok) return` 之前，记一条 `outcome:'declined'`（p4 一行没跑，所以没有 `facts`）。
 
-**`declined` 有两个来源**（落账点 B 的门拒绝，以及客户端预检拒绝 `SyncRunResult.notRun`），两者都满足「这次 get 没有执行」，所以不新增第 7 种结果值——原因由「错误」一行给出：`notRun` 时客户端把**真正的拒绝理由**放进 `error.suggestion`（`kind: 'other'`，不触发命令层的 clobber 补救——那条重试只会被同样拒绝一次），范围门那条则由门自己的提示说明。`buildSyncHistoryEntry` 对 `declined` 一律记 **`startedAt = at`、`durationMs = 0`、不落 facts**：这个 0 是结构性的，不是量出来的——否则它会量到用户读拒绝弹窗的时间，或者 `at` 与调用点之间的同毫秒偏差。
+**`declined` 有两个来源**（落账点 B 的门拒绝，以及客户端预检拒绝 `SyncRunResult.notRun`），两者都满足「这次 get 没有执行」，所以不新增第 7 种结果值——原因由「错误」一行给出：`notRun` 时客户端把**真正的拒绝理由**放进 `error.suggestion`（`kind: 'other'`，不触发命令层的 clobber 补救——那条重试只会被同样拒绝一次），范围门那条则由门自己的提示说明。`buildSyncHistoryEntry` 对 `declined` 一律记 **`startedAt = at`、`durationMs = 0`、不落 facts**：这个 0 是结构性的，不是量出来的——否则它会量到用户读拒绝弹窗的时间，或者 `at` 与调用点之间的同毫秒偏差。渲染侧同一口径：`declined` 的读取 / 写入 / p4 调用 / 花在哪 一律显示「这次拉取从未执行」（`syncHistoryFormat.ts` 的 `ioLabel` / `p4CallsLabel` / `noP4CommandBreakdownLabel`，与 `filesLabel` 同源）——这些字段缺席是因为没跑，「没有采样器」「记录早于该字段」「引擎不报告分类」三句都会把人引去查一个不存在的问题；CSV 导出保持空单元格（有 `outcome` 列可区分），不改。
 
 命令层在 `if (res.cancelled) return` 之后紧跟一条 `if (res.notRun === true) return`：客户端已经用 `perforce.sync.scopeRefused` 说过原因了，再走一遍失败分支只会把同一句话挂在「Get revision failed」的标题下重播。
 

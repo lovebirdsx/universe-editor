@@ -68,10 +68,11 @@ export type SyncHistoryTrigger =
   | 'recovery'
 
 /**
- * How a get ended. The first four describe a run p4 participated in; `declined`
- * is the one outcome of a call that never spawned anything (the user refused at
- * the scope gate), recorded so "I clicked get and nothing happens" leaves a
- * trace.
+ * How a get ended. All but `declined` describe a run p4 participated in;
+ * `declined` is the one outcome of a call that never spawned anything (the user
+ * refused at the scope gate, or the editor refused the range before starting
+ * anything — no engine available could run it), recorded so "I clicked get and
+ * nothing happens" leaves a trace.
  */
 export type SyncHistoryOutcome =
   | 'applied'

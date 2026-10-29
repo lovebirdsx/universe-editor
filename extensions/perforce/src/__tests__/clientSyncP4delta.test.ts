@@ -22,6 +22,10 @@
  *     强制拉取没有 apply 阶段可判断、且可能先把文件交给原生 p4，所以永不重跑、失败一律上报并计数。
  *  5. Cancel, progress callbacks and the drift subtraction all follow the native
  *     path's rules.
+ *  6. Before a scan round has proved δ (no round yet, a files-only focus, a
+ *     withdrawn verdict), a get still goes to δ when δ is the ONLY engine that
+ *     can run it — p4 cannot express the range, or the delete-untracked tier was
+ *     asked for — instead of being refused; a refusal names why δ did not take it.
  *
  * The engine seam is `P4deltaService.prototype.run`, as in
  * `clientReconcileScan.test.ts`: the client builds a real service around the exe
@@ -528,10 +532,11 @@ describe('PerforceClient.sync — δ engine', () => {
     expect(res.error).toBeUndefined()
   })
 
-  it('keeps the get on p4 until a scan round has proved the engine', async () => {
+  it('keeps a get p4 can run on p4 until a scan round has proved the engine', async () => {
     // "An engine is configured" is not the verdict a get follows: only a scan
     // round that came back from δ proves it can answer this workspace, and until
-    // that round happens the get stays native like every other question.
+    // that round happens a get p4 can express stays native like every other
+    // question. (The one exception — a range only δ can run — is below.)
     const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } })
 
     const res = await client.sync('#head')
@@ -1237,6 +1242,249 @@ describe('PerforceClient.sync — delete untracked (force repair only)', () => {
   })
 })
 
+/**
+ * The scan verdict decides which engine answers a get p4 CAN run. It must not
+ * turn into a refusal for one only δ can run: a fresh workspace whose focus
+ * folders do not exist yet never gives the scan a directory to hand δ, so the
+ * verdict stays native for the whole session — and every get over a range with
+ * an exclusion in it (the config file itself is one) used to come back "not run".
+ */
+describe('PerforceClient.sync — δ ahead of the scan verdict', () => {
+  /** A single-file get answer, `@4521` or `#head` alike. */
+  const applied = (): DeltaReply => ({ records: [deltaFile('Content/a.cpp'), deltaSummary()] })
+
+  /** δ fails after its apply phase started — the failure shape the ladder counts. */
+  const appliedFailure = (): DeltaReply => ({
+    code: 1,
+    records: [deltaFile('Content/a.cpp'), { kind: 'error', message: 'connection dropped' }],
+    log: ['   Applying the transfer with p4.', 'connection dropped'],
+  })
+
+  it('serves a scope-less get p4 cannot express from δ before any scan round', async () => {
+    const lines: string[] = []
+    const client = await makeClient(
+      { p4delta: { exe: P4DELTA_EXE }, log: (msg) => lines.push(msg) },
+      excludedScope(),
+    )
+    syncReply = applied
+
+    const res = await client.sync('@4521')
+
+    expect(getCalls()).toEqual([
+      ['--json', '--client-root', ROOT, '--sync', '--to', '4521', '-a', `${ROOT_FWD}/...`],
+    ])
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(true)
+    expect(res.notRun).toBeUndefined()
+    expect(res.facts?.engine).toBe('p4delta')
+    // The verdict itself is the scan's to give, and a get is not a scan.
+    expect(client.reconcileUsesP4delta).toBe(false)
+    expect(lines.some((l) => l.includes('ahead of the scan verdict'))).toBe(true)
+  })
+
+  it('serves an explicit root target the daily scope only partly covers from δ', async () => {
+    // The graph's shape: the client root as the one typed target, under a scope
+    // that includes only part of it. δ applies the scope it reads itself.
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } })
+    syncReply = applied
+
+    const res = await client.sync('@4521', {
+      scope: [`${ROOT_FWD}/...`],
+      scopeTargets: [{ path: ROOT_FWD, isDirectory: true }],
+    })
+
+    expect(getTargets()).toEqual([[`${ROOT_FWD}/...`]])
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(true)
+  })
+
+  it('serves it from δ when a files-only focus left the scan verdict on p4', async () => {
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } }, excludedScope())
+    // Focus entries that do not exist on disk resolve as files: the round has no
+    // directory to hand δ, so it never asks the engine at all.
+    client.setReconcileScope([], [`${CONTENT}/not-there-yet`])
+    await client.runReconcileScan()
+    expect(p4deltaCalls).toEqual([])
+    expect(client.reconcileUsesP4delta).toBe(false)
+    syncReply = applied
+
+    const res = await client.sync('#head')
+
+    expect(getCalls()).toHaveLength(1)
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(true)
+  })
+
+  it('serves it from δ after a reconfiguration withdrew the verdict', async () => {
+    const client = await makeArmedClient({}, excludedScope())
+    // The managed copy's install/upgrade path: the new binary has not scanned yet.
+    client.setP4delta(P4DELTA_EXE)
+    expect(client.reconcileUsesP4delta).toBe(false)
+    syncReply = applied
+
+    const res = await client.sync('#head')
+
+    expect(getCalls()).toHaveLength(1)
+    expect(res.ok).toBe(true)
+  })
+
+  it('reports an unverified δ that failed before applying, without counting it', async () => {
+    // Nothing was written, but p4 cannot run this range either: the user gets δ's
+    // own reason, and a failure that proves nothing about the engine is not a
+    // strike against it.
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } }, excludedScope())
+    syncReply = () => ({ code: 1, log: ['boom'] })
+
+    const res = await client.sync('#head')
+
+    expect(getCalls()).toHaveLength(1)
+    expect(nativeSyncCalls()).toEqual([])
+    expect(res.ok).toBe(false)
+    expect(res.notRun).toBeUndefined()
+    expect(res.error?.suggestion).toContain('boom')
+    expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  })
+
+  it('names why δ did not take over when it cannot run the spec either', async () => {
+    // Verified or not, a date has no δ form — and this range has no p4 form.
+    for (const client of [
+      await makeClient({ p4delta: { exe: P4DELTA_EXE } }, excludedScope()),
+      await makeArmedClient({}, excludedScope()),
+    ]) {
+      const res = await client.sync('@2026/08/01')
+
+      expect(res.notRun).toBe(true)
+      expect(res.error?.suggestion).toContain('excludes entries inside its own range')
+      expect(res.error?.suggestion).toContain('p4delta cannot run it either')
+      expect(res.error?.suggestion).toContain('@2026/08/01')
+    }
+    expect(getCalls()).toEqual([])
+    expect(nativeSyncCalls()).toEqual([])
+  })
+
+  it('names a missing engine as the reason nothing ran', async () => {
+    const client = await makeClient({}, excludedScope())
+
+    const res = await client.sync('#head')
+
+    expect(res.notRun).toBe(true)
+    expect(res.error?.suggestion).toContain('no p4delta engine is available')
+    // The toast says it too: the user sees the reason, not just the history row.
+    const errors = mocks.showMessage.mock.calls.filter((call) => call[0] === 'error')
+    expect(String(errors[0]?.[1])).toContain('no p4delta engine is available')
+  })
+
+  it('names a disarmed engine as the reason nothing ran', async () => {
+    const client = await makeArmedClient({}, excludedScope())
+    syncReply = appliedFailure
+    for (let i = 0; i < 3; i++) await client.sync('#head')
+    expect(client.p4deltaFallbackState.disarmed).toBe(true)
+    const before = getCalls().length
+
+    const res = await client.sync('#head')
+
+    expect(getCalls()).toHaveLength(before)
+    expect(res.notRun).toBe(true)
+    expect(res.error?.suggestion).toContain('disabled for this session')
+    // The force dialog asks the same route, so it offers no tier δ would not run.
+    expect(client.p4deltaDeleteUntrackedReject('#head')).toContain('disabled for this session')
+  })
+
+  it('never hands δ a scope this editor cannot use, nor blames δ for it', async () => {
+    const blocked: ScopeRead = (root) => ({
+      kind: 'error',
+      path: `${root}/.p4delta-scope`,
+      reason: 'bad config',
+    })
+    const unusable = await makeClient({ p4delta: { exe: P4DELTA_EXE } }, blocked)
+    const empty = await makeClient({ p4delta: { exe: P4DELTA_EXE } }, scopeFixture([]))
+
+    const a = await unusable.sync('#head')
+    const b = await empty.sync('#head')
+
+    expect(getCalls()).toEqual([])
+    expect(a.error?.suggestion).toBe('the daily scope is not usable (bad config)')
+    expect(b.error?.suggestion).toBe('the daily scope resolves to an empty range')
+  })
+
+  it('offers delete-untracked exactly when the run will route it to δ', async () => {
+    // A range p4 can run, but not this tier: δ is the only engine that has it,
+    // verified or not — and the dialog's offer must be the run's own answer.
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } })
+    expect(client.p4deltaDeleteUntrackedReject('#head')).toBeUndefined()
+    expect(client.p4deltaDeleteUntrackedReject('#4')).toContain('p4delta cannot run it either')
+    syncReply = () => ({
+      records: [
+        deltaForceFile('Content/junk.log', {
+          class: 'untracked',
+          action: 'deleting',
+          rev: undefined,
+        }),
+        deltaSummary({ force: true, total: 1, counts: { untracked: 1 } }),
+      ],
+    })
+
+    const res = await client.sync('#head', { force: true, deleteUntracked: true })
+
+    expect(getCalls()).toHaveLength(1)
+    expect(getCalls()[0]).toContain('--delete-untracked')
+    expect(res.ok).toBe(true)
+    expect(res.summary).toMatchObject({ untrackedDeleted: 1 })
+  })
+
+  it('does not offer delete-untracked without an engine to run it', async () => {
+    const client = await makeClient()
+
+    expect(client.p4deltaDeleteUntrackedReject('#head')).toContain('no p4delta engine is available')
+  })
+
+  it('asks a verified engine its own pre-spawn checks before offering the tier', async () => {
+    // A verified engine is handed every get, so the route alone would offer the
+    // tier for a spec δ then declines before spawning.
+    const client = await makeArmedClient()
+
+    expect(client.p4deltaDeleteUntrackedReject('#head')).toBeUndefined()
+    expect(client.p4deltaDeleteUntrackedReject('#4')).toContain('p4delta cannot run it either')
+  })
+
+  it('lets the scope override carry the offer past the config it sets aside', async () => {
+    // The clobber remedy retries with the override the user already granted, so
+    // its offer must be asked with it too — or a broken config hides a tier the
+    // retry would run.
+    const blocked: ScopeRead = (root) => ({
+      kind: 'error',
+      path: `${root}/.p4delta-scope`,
+      reason: 'bad config',
+    })
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } }, blocked)
+    await client.refreshScope()
+    const named = {
+      scope: [`${ROOT_FWD}/Content/...`],
+      scopeTargets: [{ path: `${ROOT_FWD}/Content`, isDirectory: true }],
+    }
+
+    expect(client.p4deltaDeleteUntrackedReject('#head', named)).toBe(
+      'the daily scope is not usable (bad config)',
+    )
+    expect(
+      client.p4deltaDeleteUntrackedReject('#head', { ...named, overrideScope: true }),
+    ).toBeUndefined()
+    syncReply = () => ({ records: [deltaSummary({ force: true })] })
+
+    const res = await client.sync('#head', {
+      ...named,
+      force: true,
+      deleteUntracked: true,
+      overrideScope: true,
+    })
+
+    expect(getCalls()).toHaveLength(1)
+    expect(getCalls()[0]).toContain('--no-scope-file')
+    expect(getCalls()[0]).toContain('--delete-untracked')
+    expect(res.ok).toBe(true)
+  })
+})
+
 describe('PerforceClient.previewSync — δ engine', () => {
   it('answers from the engine without -a, folding refusals in', async () => {
     const client = await makeArmedClient()
@@ -1282,6 +1530,24 @@ describe('PerforceClient.previewSync — δ engine', () => {
     expect(res.ok).toBe(true)
     // Nothing was written, so a failed preview costs nothing but the round trip.
     expect(client.p4deltaFallbackState).toEqual({ failures: 0, disarmed: false })
+  })
+
+  it('answers a range only δ can express from δ before any scan round', async () => {
+    // Same rule as the get it previews: refusing here would leave the user no way
+    // to see what the get δ is about to serve would bring in.
+    const client = await makeClient({ p4delta: { exe: P4DELTA_EXE } }, excludedScope())
+    syncReply = () => ({
+      records: [
+        deltaFile('Content/a.cpp', { stage: 'preview', applied: false }),
+        deltaSummary({ applied: false }),
+      ],
+    })
+
+    const res = await client.previewSync()
+
+    expect(getCalls()).toEqual([['--json', '--client-root', ROOT, '--sync', `${ROOT_FWD}/...`]])
+    expect(res.ok).toBe(true)
+    expect(res.files.map((f) => f.clientFile)).toEqual([`${ROOT_FWD}/Content/a.cpp`])
   })
 })
 

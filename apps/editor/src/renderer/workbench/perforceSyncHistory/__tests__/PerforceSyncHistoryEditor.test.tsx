@@ -479,6 +479,13 @@ describe('PerforceSyncHistoryEditor', () => {
     expect(screen.getByTestId('perforce-sync-history-detail-engine').textContent).toBe(
       'this get never ran',
     )
+    // Nor are the run-only measurements blamed on the platform, the record's age
+    // or the engine: there was no run to measure.
+    for (const field of ['read', 'write', 'p4calls', 'p4calls-bycommand']) {
+      expect(screen.getByTestId(`perforce-sync-history-detail-${field}`).textContent).toBe(
+        'this get never ran',
+      )
+    }
   })
 
   it('says what the page is for when nothing has been recorded', async () => {

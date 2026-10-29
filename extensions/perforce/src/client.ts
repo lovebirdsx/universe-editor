@@ -890,6 +890,31 @@ function specSuffix(spec: string): string {
   return spec === '#head' ? '' : ` ${spec}`
 }
 
+/** The parts of a get's options that decide which engine may run it. */
+interface GetRangeOptions {
+  readonly scope?: readonly string[]
+  readonly scopeTargets?: readonly SyncScopeTarget[]
+  readonly force?: boolean
+  readonly deleteUntracked?: boolean
+  readonly overrideScope?: boolean
+}
+
+/** Where a get goes when δ is the question: the engine (with the reason it was
+ *  handed the get before a scan round proved it, if it was), or why δ does not
+ *  take it — no reason at all when p4 simply runs it. */
+type P4deltaGetRoute =
+  | {
+      readonly engine: P4deltaService
+      readonly aheadOfVerdict?: string
+      readonly reason?: undefined
+    }
+  | { readonly engine?: undefined; readonly aheadOfVerdict?: undefined; readonly reason?: string }
+
+/** The half of a get refusal that says why δ did not run it instead. */
+function p4deltaCannotRunEither(reason: string): string {
+  return `p4delta cannot run it either (${reason})`
+}
+
 /**
  * δ's positional targets: ONE argv per target, a directory spelled with the
  * explicit recursive suffix and a file with its plain local path.
@@ -1610,25 +1635,28 @@ export class PerforceClient {
    * Why a force get over this spec/range cannot offer the "delete untracked
    * files" tier, or undefined when it can.
    *
-   * Read while the confirmation dialog is built, so it must never spawn: the
-   * two questions are whether this session routes gets to δ at all
-   * ({@link _p4deltaEngine}) and whether the spec and targets have an argv its
-   * contract reads ({@link _p4deltaSyncReject}). The run re-asks both; an
-   * `undefined` here is an offer, not a promise.
+   * Read while the confirmation dialog is built, so it must never spawn. It is
+   * the run's own routing ({@link _p4deltaForGet}) asked with the tier on, plus
+   * the pre-spawn checks a verified engine applies inside the run
+   * ({@link _p4deltaGetPlan}) — so the button appears exactly when the run would
+   * hand the get to δ. The run re-asks both; an `undefined` here is an offer,
+   * not a promise.
    */
   p4deltaDeleteUntrackedReject(
     spec: string,
     options?: {
       scope?: readonly string[]
       scopeTargets?: readonly SyncScopeTarget[]
+      overrideScope?: boolean
     },
   ): string | undefined {
-    if (this._p4deltaEngine() === undefined) {
-      return 'gets are not routed to p4delta in this session'
+    const tier = { ...options, force: true, deleteUntracked: true }
+    const route = this._p4deltaForGet(spec, tier)
+    if (route.engine === undefined) {
+      return route.reason ?? 'gets are not routed to p4delta in this session'
     }
-    const targets = this._p4deltaGetTargets(options)
-    if (targets === undefined) return 'the range is not expressible as local targets'
-    return this._p4deltaSyncReject(spec, targets)
+    const plan = this._p4deltaGetPlan(spec, tier)
+    return plan.targets === undefined ? p4deltaCannotRunEither(plan.rejected) : undefined
   }
 
   /**
@@ -2472,13 +2500,13 @@ export class PerforceClient {
     for (const target of targets) {
       if (!scopeCoversTarget(base, target)) {
         // Two different problems wear the same verdict: the target is not in the
-        // scope at all, or it IS in the scope but an exclusion sits inside it —
-        // the two need different answers from the user, so they are not worded
-        // the same. "Some part is in range, yet the whole is refused" is the
-        // hole case.
+        // scope at all, or only part of it is — an exclusion sits inside it, or
+        // the includes stop short of the whole target (a client root with a config
+        // file always holds one exclusion: the file itself). The two need different
+        // answers from the user, so they are not worded the same.
         const partsInRange = scopePartsWithin(base, [target]).length > 0
         return partsInRange
-          ? `the target ${target.path} contains an exclusion a native p4 call cannot apply`
+          ? `the daily scope covers only part of ${target.path}, and a native get cannot leave the rest out`
           : `the target ${target.path} is outside the daily scope`
       }
     }
@@ -3556,13 +3584,16 @@ export class PerforceClient {
    * can answer this workspace, and a second, independent health judgement
    * running alongside it would eventually disagree with the first. So before the
    * first scan round — and for the rest of the session once the ladder trips —
-   * narrow queries, writes and gets are all native, and only {@link setP4delta}
-   * (a reconfiguration) clears the latch.
+   * narrow queries, writes and the gets p4 can run are all native, and only
+   * {@link setP4delta} (a reconfiguration) clears the latch.
    *
-   * The get needs nothing further: an engine only reaches this point after
-   * answering this workspace's scan, and the sync reader keeps the contract's
-   * own guard — a stream whose summary reports a force repair is no conclusion,
-   * never an ordinary get.
+   * A get p4 CANNOT run is the one exception ({@link _p4deltaForGet}): without a
+   * verdict it still goes to δ when δ is the only engine that can run it, since
+   * refusing it would turn "not proved yet" into "not run". That is no second
+   * health judgement — it never moves a get p4 can run, the ladder counts the
+   * run like any other, and a disarmed engine takes none. The sync reader keeps
+   * the contract's own guard either way — a stream whose summary reports a force
+   * repair is no conclusion, never an ordinary get.
    */
   private _p4deltaEngine(): P4deltaService | undefined {
     if (this._p4deltaDisarmed || this._reconcileScanEngine !== 'p4delta') return undefined
@@ -5657,10 +5688,15 @@ export class PerforceClient {
       const run = await this._withBusy(localize('perforce.busy.sync', 'Syncing'), async () => {
         // 换引擎只由资格决定，强制拉取不再预先排除：普通 get 与修复是同一个请求加一个
         // `--force`，δ 读不懂的 spec（如拒绝清单点名的 `#rev`）照旧由 `_p4deltaSyncReject` 挡回原生。
-        const engine = this._p4deltaEngine()
-        if (engine !== undefined) {
+        const route = this._p4deltaForGet(spec, options)
+        if (route.engine !== undefined) {
+          if (route.aheadOfVerdict !== undefined) {
+            this._log?.(
+              `[perforce] sync${specSuffix(spec)}: ${route.aheadOfVerdict}; p4delta runs it ahead of the scan verdict`,
+            )
+          }
           deltaAttempted = true
-          const viaDelta = await this._syncViaP4delta(engine, spec, options, calls)
+          const viaDelta = await this._syncViaP4delta(route.engine, spec, options, calls)
           if (viaDelta !== undefined) {
             usedDelta = true
             return viaDelta
@@ -5669,9 +5705,7 @@ export class PerforceClient {
         // 删除未跟踪档只存在于 δ：原生没有这个能力，交给它只会静默少做一件事。
         // 因此这里绝不回退——引擎没接这份 get 时如实拒绝。
         if (deleteUntracked) {
-          const reason =
-            this.p4deltaDeleteUntrackedReject(spec, options) ??
-            'the p4delta engine is not in use for this workspace'
+          const reason = route.reason ?? 'the p4delta engine is not in use for this workspace'
           const rejection = this._deleteUntrackedNotRun(reason)
           this._log?.(
             `[perforce] sync${specSuffix(spec)}: refused — ${rejection.error?.suggestion ?? reason}`,
@@ -5683,8 +5717,9 @@ export class PerforceClient {
           )
           return rejection
         }
-        const rejected = this._nativeGetReject(options)
-        if (rejected !== undefined) {
+        const nativeRejected = this._nativeGetReject(options)
+        if (nativeRejected !== undefined) {
+          const rejected = this._withP4deltaDeclined(nativeRejected, spec, options, route)
           this._log?.(`[perforce] sync${specSuffix(spec)}: refused — ${rejected}`)
           await window.showErrorMessage(
             localize('perforce.sync.scopeRefused', 'The get was not run: {0}', { 0: rejected }),
@@ -5858,6 +5893,29 @@ export class PerforceClient {
       return undefined
     }
     return 'the get names paths this editor cannot read back as local paths, so the workspace scope cannot vouch for the range p4 would fetch'
+  }
+
+  /**
+   * A native refusal plus why δ did not run the get instead. On its own, "p4
+   * cannot express this range" reads as "nothing can", when the real answer is
+   * that the engine which can was not available or cannot carry this spec — and
+   * that is the half the user can act on. A scope this editor cannot use is left
+   * alone: that reason is the whole story, for both engines.
+   */
+  private _withP4deltaDeclined(
+    rejected: string,
+    spec: string,
+    options: GetRangeOptions | undefined,
+    route: P4deltaGetRoute,
+  ): string {
+    if (this._scopeUnusableReason() !== undefined) return rejected
+    let declined = route.reason
+    if (route.engine !== undefined) {
+      // A verified engine was handed the get and declined it before spawning.
+      const plan = this._p4deltaGetPlan(spec, options)
+      if (plan.targets === undefined) declined = p4deltaCannotRunEither(plan.rejected)
+    }
+    return declined !== undefined ? `${rejected}; ${declined}` : rejected
   }
 
   /**
@@ -6145,6 +6203,56 @@ export class PerforceClient {
   }
 
   /**
+   * Which engine runs this get when δ is the question: δ, or why it does not
+   * take the get (no reason at all when p4 simply runs it).
+   *
+   * A get p4 CAN run follows the scan's verdict ({@link _p4deltaEngine}), and a
+   * verified engine is handed every get — its own pre-spawn checks send the ones
+   * it cannot carry back to p4. The verdict does not get to turn a get ONLY δ
+   * can run into one nothing runs, though. Before the first round, for the
+   * whole of a session whose focus resolved to files alone (a fresh workspace
+   * whose focus folders are not on disk yet hands the round no directory, so it
+   * never asks δ), after a failed round and after a reconfiguration withdrew the
+   * verdict, p4 used to refuse such a range while the engine sat right there.
+   * So δ takes a get ahead of the verdict exactly when it is the only engine
+   * that can run it: p4 cannot express the range ({@link _nativeGetReject}), or
+   * the delete-untracked tier was asked for. Nothing else moves — the ladder
+   * counts the run like any other, a disarmed engine takes none, and the
+   * verdict stays the scan's to give.
+   */
+  private _p4deltaForGet(spec: string, options: GetRangeOptions | undefined): P4deltaGetRoute {
+    const verified = this._p4deltaEngine()
+    if (verified !== undefined) return { engine: verified }
+    const engine = this._p4delta
+    if (engine === undefined) return { reason: 'no p4delta engine is available to run it instead' }
+    if (this._p4deltaDisarmed) {
+      return {
+        reason: `the p4delta engine is disabled for this session after ${this._p4deltaFailures} consecutive failures`,
+      }
+    }
+    // δ reads the same `.p4delta-scope`: a config this editor found broken or
+    // empty is no range for δ either, and p4's refusal already names it. The
+    // user's scope override sets the file aside for this call (`--no-scope-file`),
+    // so its state cannot veto it; `unresolved` is no verdict about the file (the
+    // dialog's offer can be built before anything resolved it).
+    const unusable =
+      options?.overrideScope === true || this._scopeState === 'unresolved'
+        ? undefined
+        : this._scopeUnusableReason()
+    if (unusable !== undefined) return { reason: unusable }
+    const plan = this._p4deltaGetPlan(spec, options)
+    if (plan.targets === undefined) return { reason: p4deltaCannotRunEither(plan.rejected) }
+    if (options?.deleteUntracked === true && options.force === true) {
+      return { engine, aheadOfVerdict: 'only p4delta can delete untracked files' }
+    }
+    // Past the plan on purpose: a depot spelling (which δ cannot carry) never
+    // reaches the native check here, so its "run as named" line is not doubled.
+    const nativeRejected = this._nativeGetReject(options)
+    if (nativeRejected === undefined) return {}
+    return { engine, aheadOfVerdict: `p4 cannot run this get (${nativeRejected})` }
+  }
+
+  /**
    * δ 的 get：一次 `p4delta --json --sync [-a] [--force]`，记录经 {@link toSyncOutcome} 归约成与原生
    * 路径相同的 {@link SyncRunResult}；普通 get 与强制修复只差 `--force`。
    *
@@ -6171,7 +6279,6 @@ export class PerforceClient {
     const force = options?.force === true
     const deleteUntracked = options?.deleteUntracked === true && force
     const override = options?.overrideScope === true
-    const explicit = options?.scope !== undefined && options.scope.length > 0
     // A requested delete-untracked tier may not fall back to native p4 — native
     // has no such capability, and taking the fallback would silently skip the
     // deletion while reporting a completed force repair. Undefined means
@@ -6194,20 +6301,9 @@ export class PerforceClient {
       this._log?.(`[perforce] sync: p4delta skipped — ${reason}; running on p4`)
       return undefined
     }
-    // An override without an explicit scope would have to mean "the daily scope
-    // is wrong, get everything" — which is a widening nobody asked for. The
-    // command layer always carries the user's own selection with an override.
-    if (override && !explicit && options?.scopeTargets === undefined) {
-      return decline('a scope override needs the explicit targets it overrides for')
-    }
-    const targets = this._p4deltaGetTargets(options)
-    if (targets === undefined) {
-      return decline('the scope is not expressible as local targets')
-    }
-    const rejected = this._p4deltaSyncReject(spec, targets)
-    if (rejected !== undefined) {
-      return decline(rejected)
-    }
+    const plan = this._p4deltaGetPlan(spec, options)
+    if (plan.targets === undefined) return decline(plan.rejected)
+    const targets = plan.targets
     if (this._syncParallelThreads > 0 && this._p4deltaParallelNoted !== this._syncParallelThreads) {
       // δ spawns its own p4, so the native `--parallel` knob has nothing to
       // attach to. Say it rather than let a configured value look applied: a
@@ -6401,6 +6497,31 @@ export class PerforceClient {
       refusedOverwriteFiles: outcome.refusedOverwriteFiles,
       error: undefined,
     }
+  }
+
+  /**
+   * What δ would run this get over, or why it cannot carry it: every check that
+   * decides before anything spawns. The run ({@link _syncViaP4delta}), its
+   * preview and the routing ({@link _p4deltaForGet}) ask this one function, so an
+   * engine handed a get ahead of the scan verdict never declines it afterwards.
+   */
+  private _p4deltaGetPlan(
+    spec: string,
+    options: GetRangeOptions | undefined,
+  ):
+    | { readonly targets: SyncScopeTarget[]; readonly rejected?: undefined }
+    | { readonly targets?: undefined; readonly rejected: string } {
+    const explicit = options?.scope !== undefined && options.scope.length > 0
+    // An override without an explicit scope would have to mean "the daily scope
+    // is wrong, get everything" — which is a widening nobody asked for. The
+    // command layer always carries the user's own selection with an override.
+    if (options?.overrideScope === true && !explicit && options.scopeTargets === undefined) {
+      return { rejected: 'a scope override needs the explicit targets it overrides for' }
+    }
+    const targets = this._p4deltaGetTargets(options)
+    if (targets === undefined) return { rejected: 'the scope is not expressible as local targets' }
+    const rejected = this._p4deltaSyncReject(spec, targets)
+    return rejected !== undefined ? { rejected } : { targets }
   }
 
   /**
@@ -6617,11 +6738,21 @@ export class PerforceClient {
     // session or a test asks): the range check below is only meaningful with a
     // scope behind it, and refusing is what happens when there is none.
     await this._ensureScopeResolved()
-    const engine = limit === undefined ? this._p4deltaEngine() : undefined
-    if (engine !== undefined) {
-      const viaDelta = await this._p4deltaPreviewSync(engine, spec, {
-        ...(scope !== undefined ? { scope } : {}),
-        ...(options?.scopeTargets !== undefined ? { scopeTargets: options.scopeTargets } : {}),
+    // The get's own range, so the preview is routed and refused by the very rules
+    // the get it previews will be.
+    const range = {
+      ...(scope !== undefined && scope.length > 0 ? { scope } : {}),
+      ...(options?.scopeTargets !== undefined ? { scopeTargets: options.scopeTargets } : {}),
+    }
+    const route = limit === undefined ? this._p4deltaForGet(spec, range) : undefined
+    if (route?.engine !== undefined) {
+      if (route.aheadOfVerdict !== undefined) {
+        this._log?.(
+          `[perforce] sync -n${specSuffix(spec)}: ${route.aheadOfVerdict}; p4delta answers it ahead of the scan verdict`,
+        )
+      }
+      const viaDelta = await this._p4deltaPreviewSync(route.engine, spec, {
+        ...range,
         ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
       })
       if (viaDelta !== undefined) {
@@ -6634,7 +6765,7 @@ export class PerforceClient {
     // scope's exclusions would list files the get is not going to fetch — a
     // preview that lies about the range is worse than no preview. The
     // scope-less form is checked against the same implicit range the get uses.
-    const rejected = this._nativeGetReject(scope !== undefined && scope.length > 0 ? { scope } : {})
+    const rejected = this._nativeGetReject(range)
     if (rejected !== undefined) {
       this._log?.(`[perforce] sync -n: refused — ${rejected}`)
       return { ok: false, files: [], total: undefined, upToDate: false }
@@ -6745,18 +6876,12 @@ export class PerforceClient {
     | { ok: boolean; files: SyncPreviewFile[]; total: number | undefined; upToDate: boolean }
     | undefined
   > {
-    const targets = this._p4deltaGetTargets(options)
-    if (targets === undefined) {
-      this._log?.(
-        '[perforce] sync -n: p4delta skipped — the scope is not expressible as local targets; running on p4',
-      )
+    const plan = this._p4deltaGetPlan(spec, options)
+    if (plan.targets === undefined) {
+      this._log?.(`[perforce] sync -n: p4delta skipped — ${plan.rejected}; running on p4`)
       return undefined
     }
-    const rejected = this._p4deltaSyncReject(spec, targets)
-    if (rejected !== undefined) {
-      this._log?.(`[perforce] sync -n: p4delta skipped — ${rejected}; running on p4`)
-      return undefined
-    }
+    const targets = plan.targets
     const result = await engine.run(this._buildP4deltaSyncArgs(spec, targets, false), {
       ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
     })

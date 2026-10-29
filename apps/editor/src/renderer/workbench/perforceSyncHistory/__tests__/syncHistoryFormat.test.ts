@@ -20,6 +20,8 @@ import {
   formatDiskWrites,
   formatDuration,
   formatTarget,
+  ioLabel,
+  noP4CommandBreakdownLabel,
   outcomeLabel,
   p4CallsLabel,
   p4CallsRowLabel,
@@ -236,6 +238,12 @@ describe('p4CallsLabel', () => {
     expect(p4CallsLabel(run())).toBe('not collected (this record predates the field)')
   })
 
+  it('says a declined run never ran instead of blaming the record’s age', () => {
+    // A refused get has no facts at all: "predates the field" would send the
+    // reader hunting for an old record when nothing was started.
+    expect(p4CallsLabel(run({ outcome: 'declined' }))).toBe('this get never ran')
+  })
+
   it('gives the list row a compact form and no line at all when uncollected', () => {
     expect(p4CallsRowLabel(run({ p4Calls: { native: 1, p4delta: 0, complete: true } }))).toBe(
       '1 p4 calls',
@@ -315,6 +323,30 @@ describe('p4CommandBreakdown', () => {
       ),
     ).toBeUndefined()
     expect(p4CommandBreakdown(run())).toBeUndefined()
+  })
+
+  it('says why there is no split: an engine that does not report one, or no run at all', () => {
+    expect(noP4CommandBreakdownLabel(run())).toBe(
+      'not collected (this engine does not report a per-command split)',
+    )
+    expect(noP4CommandBreakdownLabel(run({ outcome: 'declined' }))).toBe('this get never ran')
+  })
+})
+
+describe('ioLabel', () => {
+  it('prints the sampled counter', () => {
+    const sampled = run({ io: { readBytes: 2048, writeBytes: 0 } })
+    expect(ioLabel(sampled, 'readBytes')).toBe(formatBytes(2048))
+    expect(ioLabel(sampled, 'writeBytes')).toBe('0B')
+  })
+
+  it('reads a missing sampler as unavailable, never as 0B', () => {
+    expect(ioLabel(run(), 'readBytes')).toBe('unavailable (no sampler on this platform)')
+  })
+
+  it('says a declined run never ran instead of blaming the platform', () => {
+    // No process was started, so there was nothing for any sampler to watch.
+    expect(ioLabel(run({ outcome: 'declined' }), 'writeBytes')).toBe('this get never ran')
   })
 })
 
