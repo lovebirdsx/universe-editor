@@ -444,12 +444,12 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     // root sweep already reported every project's sessions and a per-sub-root
     // sweep would spawn extra agents for byte-identical results.
     if (cwd !== undefined && this._callbacks.getHistoryScope() !== 'all') {
-      const configured = this._subProjects
-        .getConfiguredScopes()
-        .filter(
-          (scope) =>
-            scope.source === 'configured' && !this._uriIdentity.arePathsEqual(scope.cwd, cwd),
-        )
+      const configuredScopes = await this._subProjects.getHydratableConfiguredScopes()
+      if (myGen !== this._hydrateGen) return
+      const configured = configuredScopes.filter(
+        (scope) =>
+          scope.source === 'configured' && !this._uriIdentity.arePathsEqual(scope.cwd, cwd),
+      )
       const seen = new Set<string>([this._subRootKey(cwd, authority)])
       for (const scope of configured) {
         seen.add(this._subRootKey(scope.cwd, scope.authority))

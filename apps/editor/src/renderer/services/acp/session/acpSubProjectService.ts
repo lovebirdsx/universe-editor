@@ -45,14 +45,20 @@ export interface ISubProjectService {
   readonly _serviceBrand: undefined
   getScopes(): Promise<SubProjectScope[]>
   /**
-   * The workspace root plus every resolvable `acp.projectRoots` entry — the
-   * IO-free subset of `getScopes()`. The restore coordinator uses this instead:
-   * a `detected` root is an affordance for *creating* a session, so hydrating it
-   * would spawn an agent against a directory that has no session history (one
-   * that does is derived from history instead), and paying for the upward marker
-   * walk just to filter the result out is pure waste on every sweep.
+   * The workspace root plus every `acp.projectRoots` entry that currently
+   * resolves to an existing location on the workspace host. The restore
+   * coordinator uses this instead of `getScopes()`: a `detected` root is an
+   * affordance for *creating* a session, so hydrating it would spawn an agent
+   * against a directory with no session history (one that does is derived from
+   * history instead), and paying for the upward marker walk just to filter the
+   * result out is pure waste on every sweep.
+   *
+   * Existence is checked because spawning against a missing cwd fails
+   * asynchronously on the host and used to surface a user-facing
+   * "failed to start" toast. A provider error (remote host unreachable,
+   * transient IO) is not proof the root is gone, so it is kept.
    */
-  getConfiguredScopes(): SubProjectScope[]
+  getHydratableConfiguredScopes(): Promise<SubProjectScope[]>
   detectForResource(resource: URI): Promise<SubProjectScope | undefined>
   detectActiveProject(): Promise<SubProjectScope | undefined>
   readonly onDidChange: Event<void>
@@ -90,6 +96,8 @@ export class AcpSubProjectService extends Disposable implements ISubProjectServi
 
   private readonly _logger: ILogger
   private readonly _detectCache = new Map<string, Promise<DetectResult>>()
+  /** Comparison keys warned about since the last scope invalidation. */
+  private readonly _missingConfiguredRootsWarned = new Set<string>()
 
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
@@ -116,8 +124,33 @@ export class AcpSubProjectService extends Disposable implements ISubProjectServi
     )
   }
 
-  getConfiguredScopes(): SubProjectScope[] {
-    return this._configuredScopeList().scopes
+  async getHydratableConfiguredScopes(): Promise<SubProjectScope[]> {
+    const { scopes } = this._configuredScopeList()
+    const available: SubProjectScope[] = []
+    for (const scope of scopes) {
+      if (scope.source !== 'configured') {
+        available.push(scope)
+        continue
+      }
+      const uri = fsPathToWorkspaceUri(scope.cwd, scope.authority)
+      const key = this._uriIdentity.getComparisonKey(uri)
+      try {
+        if (await this._fileService.exists(uri)) {
+          this._missingConfiguredRootsWarned.delete(key)
+          available.push(scope)
+        } else {
+          this._warnMissingConfiguredRootOnce(scope, key)
+        }
+      } catch (err) {
+        // Remote host unreachable / transient IO — not proof the root is gone,
+        // so keep hydrating it rather than silently dropping history.
+        this._logger.debug(
+          `keeping configured root "${scope.cwd}": existence check failed: ${(err as Error).message}`,
+        )
+        available.push(scope)
+      }
+    }
+    return available
   }
 
   async getScopes(): Promise<SubProjectScope[]> {
@@ -174,8 +207,17 @@ export class AcpSubProjectService extends Disposable implements ISubProjectServi
 
   private _invalidate(reason: 'workspace' | 'config'): void {
     this._detectCache.clear()
+    this._missingConfiguredRootsWarned.clear()
     this._logger.debug(`sub-project scopes invalidated (${reason})`)
     this._onDidChange.fire()
+  }
+
+  private _warnMissingConfiguredRootOnce(scope: SubProjectScope, key: string): void {
+    if (this._missingConfiguredRootsWarned.has(key)) return
+    this._missingConfiguredRootsWarned.add(key)
+    this._logger.warn(
+      `${PROJECT_ROOTS_KEY} entry "${scope.cwd}" does not exist; skipping it for session hydrate`,
+    )
   }
 
   private _cachedDetect(resource: URI): Promise<DetectResult> {

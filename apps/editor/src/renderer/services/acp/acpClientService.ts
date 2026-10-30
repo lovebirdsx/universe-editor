@@ -159,14 +159,14 @@ export interface IAcpClientService {
    * sessionId only after `newSession()` returns, omit it here and call
    * `lease.attachSession(sessionId)` once it's known.
    *
-   * `options.silent` suppresses the user-facing error notification on spawn
-   * failure — for background/best-effort callers (hydrate sweeps, opportunistic
-   * `deleteOnAgent`) that already treat failure as non-fatal and don't want a
-   * spurious "Failed to start agent" toast for an agent the user never
-   * explicitly asked to start. The failure still throws and is still logged to
-   * telemetry; only the notification is skipped. Only takes effect when this
-   * call spawns a brand-new pool entry — a concurrent call sharing an in-flight
-   * spawn defers to whichever caller triggered the spawn first.
+   * `options.silent` suppresses the user-facing error notification on spawn or
+   * `initialize` failure — for background/best-effort callers (hydrate sweeps,
+   * opportunistic `deleteOnAgent`) that already treat failure as non-fatal and
+   * don't want a spurious "Failed to start agent" toast for an agent the user
+   * never explicitly asked to start. The failure still throws and is still
+   * logged to telemetry; only the notification is skipped. Only takes effect
+   * when this call spawns a brand-new pool entry — a concurrent call sharing an
+   * in-flight spawn defers to whichever caller triggered the spawn first.
    *
    * `options.profile` (createSession only) receives per-attempt timing steps:
    * pool hits are tagged via `markPooled()`, a fresh spawn records
@@ -917,12 +917,14 @@ export class AcpClientService extends Disposable implements IAcpClientService {
         }`,
       )
       this._telemetry.publicLogError('acp.initialize_failed', { agentId, error: reason })
-      this._notification.notify({
-        severity: Severity.Error,
-        message: `Agent "${agentId}" failed to start: ${reason}${
-          tail ? `\n${tail.split('\n').slice(-5).join('\n')}` : ''
-        }`,
-      })
+      if (!silent) {
+        this._notification.notify({
+          severity: Severity.Error,
+          message: `Agent "${agentId}" failed to start: ${reason}${
+            tail ? `\n${tail.split('\n').slice(-5).join('\n')}` : ''
+          }`,
+        })
+      }
       this._evictNow(entry)
       throw err
     })

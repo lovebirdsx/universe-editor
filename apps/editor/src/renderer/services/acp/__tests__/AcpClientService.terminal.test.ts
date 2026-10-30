@@ -751,6 +751,40 @@ describe('AcpClientService — connect handshake timeout', () => {
   })
 })
 
+describe('AcpClientService — initialize failure notifications', () => {
+  let h: Harness
+  afterEach(() => {
+    h.transport.dispose()
+  })
+
+  async function failInitializeWrites(): Promise<void> {
+    h = makeService({ autoInitialize: false })
+    vi.spyOn(h.transport.host, 'writeStdin').mockRejectedValue(
+      new Error('AcpHost: unknown or exited handle mem-1'),
+    )
+  }
+
+  it('suppresses the notification for a silent connect', async () => {
+    await failInitializeWrites()
+    await expect(h.svc.connect('fake', { cwd: CWD, silent: true })).rejects.toThrow(
+      /unknown or exited handle/,
+    )
+    // start() succeeded — the failure happened during the ACP handshake, which is
+    // exactly the background hydrate path that must never toast.
+    expect(h.transport.starts()).toBe(1)
+    expect(h.notifications.captured).toEqual([])
+  })
+
+  it('notifies once for a non-silent connect', async () => {
+    await failInitializeWrites()
+    await expect(h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })).rejects.toThrow(
+      /unknown or exited handle/,
+    )
+    expect(h.notifications.captured).toHaveLength(1)
+    expect(h.notifications.captured[0]!.message).toMatch(/Agent "fake" failed to start/)
+  })
+})
+
 describe('AcpClientService — connect profile steps', () => {
   let h: Harness
   afterEach(() => {

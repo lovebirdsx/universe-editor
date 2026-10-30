@@ -3,8 +3,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { EventEmitter } from 'node:events'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { mkTempDir } from '@universe-editor/temp-root'
 import {
   AbstractLogger,
   DisposableTracker,
@@ -327,17 +330,18 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
       ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
     )
     svc = new AcpHostMainService(spawner)
+    const cwd = process.cwd()
     await svc.start({
       command: 'agent',
       args: ['--flag'],
-      cwd: '/some/path',
+      cwd,
       env: { FOO: 'bar' },
     })
     expect(spawner).toHaveBeenCalledTimes(1)
     const call = spawner.mock.calls[0]!
     expect(call[0]).toBe('agent')
     expect(call[1]).toEqual(['--flag'])
-    expect(call[2].cwd).toBe('/some/path')
+    expect(call[2].cwd).toBe(cwd)
     expect(call[2].env?.FOO).toBe('bar')
     // Inherited env should still be present.
     expect(call[2].env?.PATH ?? call[2].env?.Path).toBeDefined()
@@ -352,6 +356,46 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     await expect(svc.start({ command: 'agent', args: [], cwd: 'relative/path' })).rejects.toThrow(
       /absolute path/,
     )
+    expect(spawner).not.toHaveBeenCalled()
+  })
+
+  it('rejects a cwd that does not exist before spawning', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    svc = new AcpHostMainService(spawner)
+    const missing = join(mkTempDir('ue-missing-'), 'does-not-exist')
+    await expect(svc.start({ command: 'agent', args: [], cwd: missing })).rejects.toThrow(
+      /cwd does not exist or is not a directory/,
+    )
+    // No handle was created and no child was spawned: the renderer never reaches
+    // the initialize write that used to fail with "unknown or exited handle".
+    expect(spawner).not.toHaveBeenCalled()
+  })
+
+  it('rejects a cwd that is a file before spawning', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    svc = new AcpHostMainService(spawner)
+    await expect(
+      svc.start({ command: 'agent', args: [], cwd: fileURLToPath(import.meta.url) }),
+    ).rejects.toThrow(/cwd does not exist or is not a directory/)
+    expect(spawner).not.toHaveBeenCalled()
+  })
+
+  it('validates cwd before the runAsNode rewrite', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    svc = new AcpHostMainService(spawner, undefined, () => '/fake/entry.js')
+    const missing = join(mkTempDir('ue-missing-'), 'does-not-exist')
+    await expect(
+      svc.start({ command: 'agent', args: [], cwd: missing, runAsNode: true }),
+    ).rejects.toThrow(/cwd does not exist or is not a directory/)
     expect(spawner).not.toHaveBeenCalled()
   })
 

@@ -5,7 +5,11 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  Emitter,
   Event,
+  LogLevel,
+  NullLogger,
+  REMOTE_SCHEME,
   URI,
   UriIdentityService,
   normalizeFsPath,
@@ -15,6 +19,8 @@ import {
   type IEditorService,
   type IFileService,
   type IFileStat,
+  type ILogger,
+  type ILoggerService,
   type IWorkspace,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -47,6 +53,40 @@ function makeConfigService(values: Record<string, unknown> = {}): IConfiguration
     get: (key: string, defaultValue?: unknown) => (key in values ? values[key] : defaultValue),
     onDidChangeConfiguration: Event.None,
   } as unknown as IConfigurationService
+}
+
+function makeMutableConfigService(values: Record<string, unknown> = {}): {
+  service: IConfigurationService
+  fireProjectRootsChanged: () => void
+} {
+  const onDidChange = new Emitter<{ affectsConfiguration(key: string): boolean }>()
+  return {
+    service: {
+      get: (key: string, defaultValue?: unknown) => (key in values ? values[key] : defaultValue),
+      onDidChangeConfiguration: onDidChange.event,
+    } as unknown as IConfigurationService,
+    fireProjectRootsChanged: () =>
+      onDidChange.fire({ affectsConfiguration: (key) => key === 'acp.projectRoots' }),
+  }
+}
+
+class CapturingLogger extends NullLogger {
+  readonly warns: string[] = []
+  override warn(message: string): void {
+    this.warns.push(message)
+  }
+}
+
+class CapturingLoggerService implements ILoggerService {
+  declare readonly _serviceBrand: undefined
+  readonly logger = new CapturingLogger()
+  createLogger(): ILogger {
+    return this.logger
+  }
+  setLevel(): void {}
+  getLevel(): LogLevel {
+    return LogLevel.Info
+  }
 }
 
 function makeFileService(
@@ -86,6 +126,7 @@ interface MakeOptions {
   config?: IConfigurationService
   fileService?: IFileService
   editor?: ReturnType<typeof makeEditorService>
+  loggerService?: ILoggerService
 }
 
 function makeService(opts: MakeOptions = {}): {
@@ -99,7 +140,7 @@ function makeService(opts: MakeOptions = {}): {
     new UriIdentityService('linux'),
     opts.config ?? makeConfigService(),
     editor.editor,
-    new StubLoggerService(),
+    opts.loggerService ?? new StubLoggerService(),
   )
   return { svc, editor }
 }
@@ -162,21 +203,100 @@ describe('AcpSubProjectService.getScopes', () => {
   })
 })
 
-describe('AcpSubProjectService.getConfiguredScopes', () => {
+describe('AcpSubProjectService.getHydratableConfiguredScopes', () => {
   let made: ReturnType<typeof makeService>
   afterEach(() => {
     made.svc.dispose()
   })
 
-  it('matches getScopes when there is no active editor', async () => {
-    made = makeService({ config: makeConfigService({ 'acp.projectRoots': ['/ws/lib'] }) })
-    expect(made.svc.getConfiguredScopes()).toEqual(await made.svc.getScopes())
+  it('matches getScopes when every configured root exists and there is no active editor', async () => {
+    made = makeService({
+      config: makeConfigService({ 'acp.projectRoots': ['/ws/lib'] }),
+      fileService: makeFileService([], ['/ws/lib']),
+    })
+    expect(await made.svc.getHydratableConfiguredScopes()).toEqual(await made.svc.getScopes())
+  })
+
+  it('drops a configured root that does not exist', async () => {
+    made = makeService({
+      config: makeConfigService({
+        'acp.projectRoots': ['legacy/missing-project'],
+      }),
+    })
+    expect(await made.svc.getHydratableConfiguredScopes()).toEqual([
+      { cwd: '/ws', source: 'workspace', label: 'Workspace' },
+    ])
+  })
+
+  it('keeps a configured root when the existence probe fails', async () => {
+    const inner = makeFileService([], ['/ws/remote'])
+    const fileService = {
+      stat: inner.stat.bind(inner),
+      exists: async (resource: URI) => {
+        if (normalizeFsPath(resource.fsPath) === normalizeFsPath('/ws/remote')) {
+          throw new Error('remote connection closed')
+        }
+        return inner.exists(resource)
+      },
+    } as unknown as IFileService
+    made = makeService({
+      config: makeConfigService({ 'acp.projectRoots': ['/ws/remote'] }),
+      fileService,
+    })
+    expect((await made.svc.getHydratableConfiguredScopes()).map((s) => s.cwd)).toEqual([
+      '/ws',
+      '/ws/remote',
+    ])
+  })
+
+  it('probes remote roots through their workspace authority', async () => {
+    const folder = URI.from({ scheme: REMOTE_SCHEME, authority: 'host', path: '/ws' })
+    const workspace = new FakeWorkspaceService({ folder, name: 'ws' })
+    const probes: URI[] = []
+    const fileService = {
+      exists: async (resource: URI) => {
+        probes.push(resource)
+        return true
+      },
+      stat: async (resource: URI): Promise<IFileStat> => ({
+        resource,
+        isDirectory: true,
+        isFile: false,
+        size: 0,
+        mtime: 0,
+      }),
+    } as unknown as IFileService
+    made = makeService({
+      workspace,
+      config: makeConfigService({ 'acp.projectRoots': ['lib'] }),
+      fileService,
+    })
+    await made.svc.getHydratableConfiguredScopes()
+    expect(probes).toHaveLength(1)
+    expect(probes[0]?.scheme).toBe(REMOTE_SCHEME)
+    expect(probes[0]?.authority).toBe('host')
+    expect(probes[0]?.path).toBe('/ws/lib')
+  })
+
+  it('warns once per missing root until the config changes', async () => {
+    const config = makeMutableConfigService({ 'acp.projectRoots': ['/ws/gone'] })
+    const loggerService = new CapturingLoggerService()
+    made = makeService({ config: config.service, loggerService })
+    await made.svc.getHydratableConfiguredScopes()
+    await made.svc.getHydratableConfiguredScopes()
+    const missingWarns = (): string[] =>
+      loggerService.logger.warns.filter((m) => m.includes('does not exist'))
+    expect(missingWarns()).toHaveLength(1)
+
+    config.fireProjectRootsChanged()
+    await made.svc.getHydratableConfiguredScopes()
+    expect(missingWarns()).toHaveLength(2)
   })
 
   // The restore coordinator reads this instead of getScopes precisely to skip
   // the upward marker walk: hydrating a detected root would spawn an agent for
   // a directory with no sessions, so paying for the probe is pure waste.
-  it('omits the detected root and performs no filesystem probing', async () => {
+  it('omits the detected root and performs no marker probing or configured-root IO', async () => {
     let probes = 0
     const inner = makeFileService(['/ws/a/package.json', '/ws/a/b/c.ts'])
     const fileService = {
@@ -189,7 +309,7 @@ describe('AcpSubProjectService.getConfiguredScopes', () => {
     made = makeService({ fileService })
     made.editor.setActive(new FileEditorInput(URI.file('/ws/a/b/c.ts'), fileService))
 
-    expect(made.svc.getConfiguredScopes()).toEqual([
+    expect(await made.svc.getHydratableConfiguredScopes()).toEqual([
       { cwd: '/ws', source: 'workspace', label: 'Workspace' },
     ])
     expect(probes).toBe(0)

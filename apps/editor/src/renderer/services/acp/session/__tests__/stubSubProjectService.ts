@@ -12,6 +12,6 @@ export function stubSubProjectService(scopes: readonly SubProjectScope[] = []): 
   return {
     _serviceBrand: undefined,
     getScopes: async () => [...scopes],
-    getConfiguredScopes: () => scopes.filter((s) => s.source !== 'detected'),
+    getHydratableConfiguredScopes: async () => scopes.filter((s) => s.source !== 'detected'),
   } as unknown as ISubProjectService
 }

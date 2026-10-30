@@ -15,6 +15,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { stat } from 'node:fs/promises'
 import * as path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import {
@@ -171,13 +172,31 @@ export class AcpHostService extends Disposable implements IAcpHostService {
     this._onSpawned = options.onSpawned
   }
 
-  start(spec: AcpLaunchSpec): Promise<AcpStartResult> {
-    const handle = randomUUID()
-    if (spec.cwd !== undefined && !path.isAbsolute(spec.cwd)) {
-      return Promise.reject(
-        new Error(`AcpHost: cwd must be an absolute path, got ${JSON.stringify(spec.cwd)}`),
-      )
+  async start(spec: AcpLaunchSpec): Promise<AcpStartResult> {
+    if (spec.cwd !== undefined) {
+      if (!path.isAbsolute(spec.cwd)) {
+        return Promise.reject(
+          new Error(`AcpHost: cwd must be an absolute path, got ${JSON.stringify(spec.cwd)}`),
+        )
+      }
+      // A missing cwd fails asynchronously in child_process.spawn (on Windows the
+      // ENOENT even names the executable), after this method has already handed
+      // the renderer a handle. Reject up front so no doomed handle is registered
+      // and the caller sees the real reason.
+      let isDirectory = false
+      try {
+        isDirectory = (await stat(spec.cwd)).isDirectory()
+      } catch {
+        // Missing or unreadable — reported below.
+      }
+      if (!isDirectory) {
+        this._logger.warn(`start rejected: cwd does not exist or is not a directory: ${spec.cwd}`)
+        return Promise.reject(
+          new Error(`AcpHost: cwd does not exist or is not a directory: ${spec.cwd}`),
+        )
+      }
     }
+    const handle = randomUUID()
     const env = buildChildEnv(process.env, spec.env ? { overrides: spec.env } : {})
     const options: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean } = { env }
     if (spec.cwd !== undefined) options.cwd = spec.cwd

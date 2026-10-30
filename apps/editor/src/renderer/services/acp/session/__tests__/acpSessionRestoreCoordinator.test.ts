@@ -378,11 +378,15 @@ interface BuildResult {
   readonly callbacks: { resumeCalls: string[] }
 }
 
-function makeSubProjects(scopes: readonly SubProjectScope[] = []): ISubProjectService {
+function makeSubProjects(
+  scopes: readonly SubProjectScope[] = [],
+  hydratable?: () => Promise<readonly SubProjectScope[]>,
+): ISubProjectService {
   return {
     _serviceBrand: undefined,
     getScopes: async () => [...scopes],
-    getConfiguredScopes: () => scopes.filter((s) => s.source !== 'detected'),
+    getHydratableConfiguredScopes:
+      hydratable ?? (async () => scopes.filter((s) => s.source !== 'detected')),
   } as unknown as ISubProjectService
 }
 
@@ -858,6 +862,58 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       'C:/ws/src/client',
       'C:/ws/lib',
     ])
+  })
+
+  it('skips configured sub-roots rejected by the existence gate', async () => {
+    const workspace = { cwd: 'C:/ws', source: 'workspace' as const, label: 'Workspace' }
+    const present = { cwd: 'C:/ws/src/client', source: 'configured' as const, label: 'src/client' }
+    const missing = { cwd: 'C:/ws/gone', source: 'configured' as const, label: 'gone' }
+    const built = build({
+      agentIds: ['fake'],
+      cwd: 'C:/ws',
+      subProjects: makeSubProjects([workspace, present, missing], async () => [workspace, present]),
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual(['C:/ws', 'C:/ws/src/client'])
+  })
+
+  it('awaits the hydratable scope list before spawning sub-root agents', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const workspace = { cwd: 'C:/ws', source: 'workspace' as const, label: 'Workspace' }
+    const present = { cwd: 'C:/ws/src/client', source: 'configured' as const, label: 'src/client' }
+    const built = build({
+      agentIds: ['fake'],
+      cwd: 'C:/ws',
+      subProjects: makeSubProjects([workspace, present], async () => {
+        await gate
+        return [workspace, present]
+      }),
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual(['C:/ws'])
+
+    release()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls.map((c) => c.cwd)).toEqual(['C:/ws', 'C:/ws/src/client'])
   })
 
   it('derives sub-root hydrates from local history subdirectory cwds', async () => {
