@@ -450,6 +450,92 @@ describe('QuickTextSearchService', () => {
     expect(fakeEditor.focus).toHaveBeenCalled()
   })
 
+  it('reveals a cold file match once Monaco mounts after the picker closes', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch, groups } = setup()
+    textSearch.results = [makeMatch('/repo/src/a.ts')]
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    await flushPromises()
+
+    const matchPick = picker.items.find(
+      (item) => item.label === 'const needle = true',
+    ) as IQuickPickItem
+    picker.accept(matchPick)
+    // Burn through the old rAF + 50ms retry budget before the cold editor has
+    // mounted; the picker must already have closed by then.
+    await vi.advanceTimersByTimeAsync(100)
+    await promise
+
+    const input = groups.activeGroup.activeEditor
+    expect(input).toBeInstanceOf(FileEditorInput)
+    if (!(input instanceof FileEditorInput)) throw new Error('expected a FileEditorInput')
+    expect(FileEditorRegistry.get(input)).toBeUndefined()
+
+    const fakeEditor = {
+      setSelection: vi.fn(),
+      revealRangeInCenterIfOutsideViewport: vi.fn(),
+      focus: vi.fn(),
+    }
+    FileEditorRegistry.register(input, fakeEditor as never, groups.activeGroup.id)
+    await flushPromises()
+
+    const expectedRange = {
+      startLineNumber: 3,
+      startColumn: 7,
+      endLineNumber: 3,
+      endColumn: 13,
+    }
+    expect(fakeEditor.setSelection).toHaveBeenCalledWith(expectedRange)
+    expect(fakeEditor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(expectedRange)
+    expect(fakeEditor.focus).toHaveBeenCalled()
+  })
+
+  it('reveals a cold side-group match once Monaco mounts after the picker closes', async () => {
+    vi.useFakeTimers()
+    const { service, quickInput, textSearch, groups } = setup()
+    textSearch.results = [makeMatch('/repo/src/a.ts')]
+
+    const promise = service.show()
+    const picker = quickInput.picker!
+    picker.fireValue('needle')
+    await vi.advanceTimersByTimeAsync(75)
+    await flushPromises()
+
+    const matchPick = picker.items.find(
+      (item) => item.label === 'const needle = true',
+    ) as IQuickPickItem
+    picker.keyMods = { ctrl: true, alt: false }
+    picker.accept(matchPick)
+    await vi.advanceTimersByTimeAsync(100)
+    await promise
+
+    const side = groups.groups[1]!
+    const input = side.activeEditor
+    expect(input).toBeInstanceOf(FileEditorInput)
+    if (!(input instanceof FileEditorInput)) throw new Error('expected a FileEditorInput')
+    expect(FileEditorRegistry.get(input)).toBeUndefined()
+
+    const fakeEditor = {
+      setSelection: vi.fn(),
+      revealRangeInCenterIfOutsideViewport: vi.fn(),
+      focus: vi.fn(),
+    }
+    FileEditorRegistry.register(input, fakeEditor as never, side.id)
+    await flushPromises()
+
+    expect(fakeEditor.setSelection).toHaveBeenCalledWith({
+      startLineNumber: 3,
+      startColumn: 7,
+      endLineNumber: 3,
+      endColumn: 13,
+    })
+    expect(fakeEditor.focus).toHaveBeenCalled()
+  })
+
   it('ctrl+accept opens the match in the side group instead of the active one', async () => {
     vi.useFakeTimers()
     const { service, quickInput, textSearch, groups } = setup()
@@ -466,7 +552,7 @@ describe('QuickTextSearchService', () => {
     ) as IQuickPickItem
     picker.keyMods = { ctrl: true, alt: false }
     picker.accept(matchPick)
-    await flushPromises()
+    await promise
 
     expect(groups.groups).toHaveLength(2)
     const side = groups.groups[1]!
@@ -479,8 +565,8 @@ describe('QuickTextSearchService', () => {
     ).toBe(true)
     // The original group stays untouched.
     expect(groups.groups[0]!.editors).toHaveLength(0)
-    // Do not await the reveal (it polls for a mount that never happens here).
-    void promise
+    // Settle the event-driven reveal wait without waiting out its 30s timeout.
+    side.editors[0]!.dispose()
   })
 
   it('ctrl+accept does not open into a locked side group', async () => {
@@ -501,7 +587,7 @@ describe('QuickTextSearchService', () => {
     ) as IQuickPickItem
     picker.keyMods = { ctrl: true, alt: false }
     picker.accept(matchPick)
-    await flushPromises()
+    await promise
 
     // Locked groups reject fresh editors: the lock-aware route falls back to an
     // unlocked group instead of replacing the side group's contents.
@@ -515,7 +601,11 @@ describe('QuickTextSearchService', () => {
             editor.resource.toString() === URI.file('/repo/src/a.ts').toString(),
         ),
     ).toHaveLength(1)
-    void promise
+    // Settle the event-driven reveal wait without waiting out its 30s timeout.
+    groups.groups
+      .flatMap((group) => group.editors)
+      .find((editor): editor is FileEditorInput => editor instanceof FileEditorInput)
+      ?.dispose()
   })
 
   it('ctrl+alt+accept opens the match file in an auxiliary window, not the main groups', async () => {
@@ -568,8 +658,7 @@ describe('QuickTextSearchService', () => {
     ) as IQuickPickItem
     picker.keyMods = { ctrl: true, alt: true }
     picker.accept(matchPick)
-    // The fallback opens in-window and then waits for the (absent) mount.
-    await flushPromises()
+    await promise
 
     expect(auxWindows.openCalls).toHaveLength(1)
     expect(groups.groups).toHaveLength(1)
@@ -580,8 +669,10 @@ describe('QuickTextSearchService', () => {
           editor.resource.toString() === URI.file('/repo/src/a.ts').toString(),
       ),
     ).toBe(true)
-    await Promise.resolve()
-    void promise
+    // Settle the event-driven reveal wait without waiting out its 30s timeout.
+    groups.activeGroup.editors
+      .find((editor): editor is FileEditorInput => editor instanceof FileEditorInput)
+      ?.dispose()
   })
 
   it('seeds the query from the active editor selection', async () => {

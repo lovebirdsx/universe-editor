@@ -22,6 +22,7 @@ import {
   type IQuickPickSeparator,
   type ITextSearchMatch,
   type ITextSearchRange,
+  type ITextEditorSelection,
   type EditorInput,
   type IEditorGroup,
   type QuickPickInput,
@@ -31,14 +32,12 @@ import { UntitledEditorInput } from '../editor/UntitledEditorInput.js'
 import { getActiveTextEditor } from '../editor/activeTextEditor.js'
 import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
-import { applyEditorSelection, revealSelectionInInput } from '../editor/revealEditorPosition.js'
+import { revealSelectionInInput } from '../editor/revealEditorPosition.js'
 import { canCloneEditorInputForSplit } from '../editor/cloneEditorInput.js'
 import { ensureSideGroup } from '../editor/openToSide.js'
 import { IWindowFocusService } from '../windows/windowFocusService.js'
-import { currentWorkbenchDocumentOrUndefined } from '../windows/workbenchDocuments.js'
 import { IAuxiliaryEditorWindowService } from '../windows/auxiliaryEditorWindowService.js'
 import { resolveOpenTarget, type OpenTarget } from '../editor/openTarget.js'
-import { requestOwnerFrame } from '@universe-editor/workbench-ui'
 
 export interface IQuickTextSearchService {
   readonly _serviceBrand: undefined
@@ -134,6 +133,20 @@ function previewForMatch(
   return highlight ? { label, highlights: { label: [highlight] } } : { label }
 }
 
+function selectionForMatch(
+  match: ITextSearchMatch,
+  rangeIndex: number,
+): ITextEditorSelection | undefined {
+  const range = match.ranges[rangeIndex]
+  if (!range) return undefined
+  return {
+    startLineNumber: match.lineNumber,
+    startColumn: range.startColumn,
+    endLineNumber: match.lineNumber,
+    endColumn: range.endColumn,
+  }
+}
+
 function sortFileMatches(
   matches: readonly IFileMatch[],
   activeResource: URI | undefined,
@@ -215,15 +228,6 @@ function toPicks(
   return picks
 }
 
-function nextFrame(node: Node | null | undefined): Promise<void> {
-  if (typeof requestAnimationFrame === 'function') {
-    // The quick input (and the editor it reveals into) may be in an auxiliary
-    // window; the main window's frame loop can be throttled while it is behind.
-    return new Promise((resolve) => requestOwnerFrame(node, () => resolve()))
-  }
-  return Promise.resolve()
-}
-
 function findPickById(
   picks: readonly QuickTextSearchInput[],
   id: string | undefined,
@@ -233,10 +237,6 @@ function findPickById(
     if (!('type' in pick) && pick.id === id) return pick
   }
   return undefined
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export class QuickTextSearchService implements IQuickTextSearchService {
@@ -333,35 +333,18 @@ export class QuickTextSearchService implements IQuickTextSearchService {
       const openPick = async (pick: QuickTextSearchPick, target: OpenTarget): Promise<void> => {
         if (pick.kind === 'message' || !pick.resource) return
         if (target === 'side') {
-          const input = this._openFileToSide(pick.resource)
-          await this._revealOrFocus(input, pick)
+          this._revealOrFocus(this._openFileToSide(pick.resource), pick)
           return
         }
         if (target === 'newWindow') {
           const opened = await this._openFileInNewWindow(pick.resource)
           if (opened) {
-            // A freshly created auxiliary window mounts its Monaco editor later
-            // than the in-window reveal window; the event-driven helper waits
-            // for the registry entry instead of polling a fixed delay.
-            if (pick.kind === 'match' && pick.match && pick.rangeIndex !== undefined) {
-              const range = pick.match.ranges[pick.rangeIndex]
-              if (range) {
-                void revealSelectionInInput(opened, {
-                  startLineNumber: pick.match.lineNumber,
-                  startColumn: range.startColumn,
-                  endLineNumber: pick.match.lineNumber,
-                  endColumn: range.endColumn,
-                })
-              }
-            } else {
-              this._focusEditor(opened)
-            }
+            this._revealOrFocus(opened, pick)
             return
           }
           // Fall through to the default in-window path when the window failed.
         }
-        const input = this._openFile(pick.resource, false)
-        await this._revealOrFocus(input, pick)
+        this._revealOrFocus(this._openFile(pick.resource, false), pick)
       }
 
       const runSearch = async (value: string): Promise<void> => {
@@ -541,9 +524,17 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     return text.length > SEED_TEXT_MAX_LENGTH ? text.slice(0, SEED_TEXT_MAX_LENGTH) : text
   }
 
-  private async _revealOrFocus(input: EditorInput, pick: QuickTextSearchPick): Promise<void> {
-    if (pick.kind === 'match' && pick.match && pick.rangeIndex !== undefined) {
-      await this._revealMatch(input, pick.match, pick.rangeIndex)
+  private _revealOrFocus(input: EditorInput, pick: QuickTextSearchPick): void {
+    const selection =
+      pick.kind === 'match' && pick.match && pick.rangeIndex !== undefined
+        ? selectionForMatch(pick.match, pick.rangeIndex)
+        : undefined
+    if (selection) {
+      // A cold file's Monaco editor mounts only after its model resolves — disk
+      // read + model creation + React render can take seconds. Hand the reveal
+      // to the event-driven helper and return so the picker closes now, not when
+      // the mount happens (same contract as the new-window path).
+      void revealSelectionInInput(input, selection)
     } else {
       this._focusEditor(input)
     }
@@ -633,31 +624,6 @@ export class QuickTextSearchService implements IQuickTextSearchService {
 
   private _focusEditor(input: EditorInput): void {
     FileEditorRegistry.get(input)?.focus()
-  }
-
-  private async _revealMatch(
-    input: EditorInput,
-    match: ITextSearchMatch,
-    rangeIndex: number,
-  ): Promise<void> {
-    const reveal = (): boolean => {
-      const editor = FileEditorRegistry.get(input)
-      const range = match.ranges[rangeIndex]
-      if (!editor || !range) return false
-      applyEditorSelection(editor, {
-        startLineNumber: match.lineNumber,
-        startColumn: range.startColumn,
-        endLineNumber: match.lineNumber,
-        endColumn: range.endColumn,
-      })
-      return true
-    }
-
-    if (reveal()) return
-    await nextFrame(currentWorkbenchDocumentOrUndefined())
-    if (reveal()) return
-    await delay(50)
-    reveal()
   }
 }
 
