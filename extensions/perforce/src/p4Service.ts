@@ -16,6 +16,12 @@ import { unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getTempRoot } from '@universe-editor/temp-root'
 import type { ConcurrencyGate, P4Priority } from './concurrency.js'
+import {
+  killProcessTree,
+  killQuietly,
+  type KillableProcess,
+  type ProcessKiller,
+} from './killProcessTree.js'
 import { parseMarshalJson, parseZtag, parseZtagAsMarshal, type P4Record } from './p4Output.js'
 
 export interface P4ExecResult {
@@ -242,16 +248,17 @@ class SpawnWatchdog {
   private readonly _timer: ReturnType<typeof setTimeout> | undefined
 
   constructor(
-    proc: { kill: () => unknown },
+    proc: KillableProcess,
     private readonly _timeoutMs: number,
     private readonly _label: string,
+    private readonly _killProcess: ProcessKiller,
     private readonly _log?: (msg: string) => void,
   ) {
     if (Number.isFinite(_timeoutMs) && _timeoutMs > 0) {
       this._timer = setTimeout(() => {
         this._timedOut = true
         this._log?.(`  ${this._label} timed out after ${this._timeoutMs}ms; killing`)
-        proc.kill()
+        killQuietly(proc, this._killProcess)
       }, _timeoutMs)
       // Never let a watchdog hold the host process open on its own.
       this._timer.unref?.()
@@ -529,13 +536,21 @@ export class P4Service {
    */
   private readonly _collapsedSubcommands = new Set<string>()
 
+  // 默认 killer 带上本服务的日志出口：taskkill 回退是「取消后仍有残留」的唯一现场证据。
+  private readonly _killProcess: ProcessKiller
+
   constructor(
     private readonly _cwd: string,
     private readonly _gate: ConcurrencyGate,
     private _connection: P4Connection | undefined,
     private readonly _log?: (msg: string) => void,
     private readonly _defaultTimeoutMs: number = moduleDefaultTimeoutMs,
-  ) {}
+    killProcess?: ProcessKiller,
+  ) {
+    const log = this._log
+    this._killProcess =
+      killProcess ?? (log ? (proc) => killProcessTree(proc, { log }) : killProcessTree)
+  }
 
   setConnection(conn: P4Connection | undefined): void {
     this._connection = conn
@@ -731,6 +746,7 @@ export class P4Service {
             proc,
             options?.timeoutMs ?? this._defaultTimeoutMs,
             `p4 ${args[0] ?? ''}`,
+            this._killProcess,
             this._log,
           )
           const stdout: Buffer[] = []
@@ -826,6 +842,7 @@ export class P4Service {
         proc,
         options?.timeoutMs ?? this._defaultTimeoutMs,
         `p4 ${args[0] ?? ''}`,
+        this._killProcess,
         this._log,
       )
       const stdout: Buffer[] = []
@@ -848,7 +865,7 @@ export class P4Service {
       const onAbort = (): void => {
         cancelled = true
         this._log?.(`  p4 ${args[0] ?? ''} cancelled; killing`)
-        proc.kill()
+        killQuietly(proc, this._killProcess)
       }
       if (signal) {
         if (signal.aborted) onAbort()
@@ -870,7 +887,7 @@ export class P4Service {
             overflowed = true
             stdout.length = 0
             carry = ''
-            proc.kill()
+            killQuietly(proc, this._killProcess)
             return
           }
           stdout.push(chunk)

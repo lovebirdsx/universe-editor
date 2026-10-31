@@ -3,6 +3,7 @@ import { writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { KillableProcess, ProcessKiller } from '../killProcessTree.js'
 import type { P4deltaLogSink, P4deltaRunEnd, P4deltaRunStart } from '../p4delta/p4deltaService.js'
 
 // `resolveP4deltaCommand` only ever asks the filesystem whether a candidate
@@ -58,10 +59,17 @@ interface Connection {
   readonly client?: string
 }
 
+// 测试里默认注入「直接 proc.kill()」的 killer：保留既有的 `child.killed` 断言，
+// 又不让服务测试依赖 killProcessTree 在 mock 环境下的回退路径（那条路径另有单测）。
+function killDirectly(proc: KillableProcess): void {
+  proc.kill()
+}
+
 function makeService(
   connection?: Connection,
   log?: (msg: string) => void,
   sink?: P4deltaLogSink,
+  killProcess: ProcessKiller = killDirectly,
 ): InstanceType<typeof P4deltaService> {
   return new P4deltaService(
     '/ws/main',
@@ -73,6 +81,7 @@ function makeService(
     undefined,
     {},
     sink,
+    killProcess,
   )
 }
 
@@ -588,6 +597,72 @@ describe('P4deltaService.run', () => {
     expect(result.records).toHaveLength(1)
     // Partial records without a summary are not a conclusion.
     expect(result.sawSummary).toBe(false)
+  })
+
+  it('delegates the cancel kill to the injected process killer', async () => {
+    const killed: KillableProcess[] = []
+    const killProcess = vi.fn((proc: KillableProcess) => {
+      killed.push(proc)
+    })
+    const svc = makeService(undefined, undefined, undefined, killProcess)
+    const controller = new AbortController()
+    const p = svc.run(['--json', 'open'], { signal: controller.signal })
+    await flush()
+    controller.abort()
+    expect(killed).toEqual([child])
+    // 树杀完全交给注入的 killer；服务层不再自己补一刀 proc.kill()。
+    expect(child.killed).toBe(false)
+    child.emit('close', null, 'SIGTERM')
+    const result = await p
+    expect(result.log.join('\n')).toMatch(/was cancelled/)
+  })
+
+  it('delegates the watchdog kill to the injected process killer', async () => {
+    const killed: KillableProcess[] = []
+    const killProcess = vi.fn((proc: KillableProcess) => {
+      killed.push(proc)
+    })
+    const svc = makeService(undefined, undefined, undefined, killProcess)
+    const p = svc.run(['--json', 'open'], { timeoutMs: 50 })
+    await flush()
+    await new Promise((r) => setTimeout(r, 80))
+    expect(killed).toEqual([child])
+    expect(child.killed).toBe(false)
+    child.emit('close', null, 'SIGTERM')
+    const result = await p
+    expect(result.log.join('\n')).toMatch(/timed out after 50ms/)
+  })
+
+  it('delegates the stdout byte-cap kill to the injected process killer', async () => {
+    const killed: KillableProcess[] = []
+    const killProcess = vi.fn((proc: KillableProcess) => {
+      killed.push(proc)
+    })
+    const svc = makeService(undefined, undefined, undefined, killProcess)
+    const p = svc.run(['--json', 'open'], { maxOutputBytes: 64 })
+    await flush()
+    child.stdout.emit('data', Buffer.from('x'.repeat(100) + '\n'))
+    expect(killed).toEqual([child])
+    expect(child.killed).toBe(false)
+    child.emit('close', null, 'SIGTERM')
+    const result = await p
+    expect(result.log.join('\n')).toMatch(/exceeded .*MB and was aborted/)
+  })
+
+  it('delegates the non-retained line-cap kill to the injected process killer', async () => {
+    const killed: KillableProcess[] = []
+    const killProcess = vi.fn((proc: KillableProcess) => {
+      killed.push(proc)
+    })
+    const svc = makeService(undefined, undefined, undefined, killProcess)
+    const p = svc.run(['--json', 'open'], { maxOutputBytes: 64, retainFileRecords: false })
+    await flush()
+    child.stdout.emit('data', Buffer.from('x'.repeat(100) + '\n' + SUMMARY_LINE))
+    expect(killed).toEqual([child])
+    expect(child.killed).toBe(false)
+    child.emit('close', null, 'SIGTERM')
+    const result = await p
+    expect(result.log.join('\n')).toMatch(/exceeded .*MB and was aborted/)
   })
 
   it('aborts an oversized stdout instead of growing it toward the string cap', async () => {

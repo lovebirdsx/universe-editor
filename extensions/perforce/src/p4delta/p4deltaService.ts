@@ -38,6 +38,7 @@ import { existsSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import type { ConcurrencyGate, P4Priority } from '../concurrency.js'
+import { killProcessTree, killQuietly, type ProcessKiller } from '../killProcessTree.js'
 import {
   DEFAULT_MAX_OUTPUT_BYTES,
   DEFAULT_P4_COMMAND_TIMEOUT_MS,
@@ -382,7 +383,7 @@ function runP4deltaVersionProbe(exe: string, timeoutMs: number): Promise<string 
     proc.stdout?.on('data', collect)
     proc.stderr?.on('data', collect)
     const timer = setTimeout(() => {
-      killQuietly(proc)
+      killQuietly(proc, killProcessTree)
       // 不依赖 kill 之后的 close（Windows 上未必立刻到）：超时就是没有答案。
       settle(undefined)
     }, timeoutMs)
@@ -642,14 +643,6 @@ function describeError(err: unknown): string {
   return code ? `${code} — ${err.message}` : err.message
 }
 
-function killQuietly(proc: { kill: () => unknown }): void {
-  try {
-    proc.kill()
-  } catch {
-    // Already gone — the close handler resolves the result either way.
-  }
-}
-
 function parseJsonLine(line: string): P4deltaRecord | undefined {
   try {
     const value = JSON.parse(line) as unknown
@@ -789,6 +782,9 @@ export class P4deltaService {
    * 详细诊断退回 `_log`**（Perforce 频道）而不是凭空消失：注入方在测试里可以缺席，但
    * 「诊断丢了」不能是一种静默的失败模式。
    */
+  // 默认 killer 带上本服务的日志出口：taskkill 回退是「取消后仍有残留」的唯一现场证据。
+  private readonly _killProcess: ProcessKiller
+
   constructor(
     private readonly _cwd: string,
     private readonly _gate: ConcurrencyGate,
@@ -799,7 +795,11 @@ export class P4deltaService {
     private readonly _defaultTimeoutMs: number = DEFAULT_P4_COMMAND_TIMEOUT_MS,
     private readonly _extraEnv: Readonly<Record<string, string>> = {},
     private readonly _sink?: P4deltaLogSink,
-  ) {}
+    killProcess?: ProcessKiller,
+  ) {
+    this._killProcess =
+      killProcess ?? ((proc) => killProcessTree(proc, { log: (message) => this._logSafe(message) }))
+  }
 
   /**
    * Run `<exe> <args>` and resolve with the parsed record stream. `args` is the
@@ -1056,7 +1056,7 @@ export class P4deltaService {
           ? setTimeout(() => {
               timedOut = true
               this._logSafe(`  p4delta ${command} timed out after ${timeoutMs}ms; killing`)
-              killQuietly(proc)
+              killQuietly(proc, this._killProcess)
             }, timeoutMs)
           : undefined
       timer?.unref?.()
@@ -1074,7 +1074,7 @@ export class P4deltaService {
       const onAbort = (): void => {
         cancelled = true
         this._logSafe(`  p4delta ${command} cancelled; killing`)
-        killQuietly(proc)
+        killQuietly(proc, this._killProcess)
       }
       if (abortSignal) {
         if (abortSignal.aborted) onAbort()
@@ -1095,13 +1095,13 @@ export class P4deltaService {
             // Same host-crash red line as p4Service's cap: abort instead of
             // accumulating toward a string V8 cannot build.
             overflowed = true
-            killQuietly(proc)
+            killQuietly(proc, this._killProcess)
             return
           }
         }
         stdoutReader.push(chunk)
         // 不囤 file 记录时上限按行计（见 readStdoutLine），越线在这里收尾。
-        if (overflowed) killQuietly(proc)
+        if (overflowed) killQuietly(proc, this._killProcess)
       })
 
       const stderrReader = createP4deltaLineReader(readStderrLine, (preview) =>

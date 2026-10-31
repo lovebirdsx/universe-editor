@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { existsSync, readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { KillableProcess, ProcessKiller } from '../killProcessTree.js'
 import { MAX_PATH_ARGS_CHARS, resolveP4Command, splitArgsForArgfile } from '../p4Service.js'
 
 const ORIGINAL = process.env.UNIVERSE_P4_PATH
@@ -80,8 +81,21 @@ const {
 } = await import('../p4Service.js')
 const { ConcurrencyGate } = await import('../concurrency.js')
 
-function makeService() {
-  return new P4Service('/repo', new ConcurrencyGate(4), undefined)
+// 测试里默认注入「直接 proc.kill()」的 killer：保留既有的 `child.killed` 断言，
+// 又不让服务测试依赖 killProcessTree 在 mock 环境下的回退路径（那条路径另有单测）。
+function killDirectly(proc: KillableProcess): void {
+  proc.kill()
+}
+
+function makeService(killProcess: ProcessKiller = killDirectly) {
+  return new P4Service(
+    '/repo',
+    new ConcurrencyGate(4),
+    undefined,
+    undefined,
+    undefined,
+    killProcess,
+  )
 }
 
 // `exec` awaits the concurrency gate before spawning, so the child is created a
@@ -122,6 +136,24 @@ describe('P4Service._spawn output cap', () => {
     const result = await p
     expect(result.exitCode).toBe(1)
     expect(result.stdout).toBe('')
+    expect(result.stderr).toMatch(/exceeded .*MB and was aborted/)
+  })
+
+  it('delegates the stdout-cap kill to the injected process killer', async () => {
+    const killed: KillableProcess[] = []
+    const killProcess = vi.fn((proc: KillableProcess) => {
+      killed.push(proc)
+    })
+    const svc = makeService(killProcess)
+    const p = svc.exec(['print', '//depot/huge'], { maxOutputBytes: 1024 })
+    await flush()
+    child.stdout.emit('data', Buffer.alloc(600))
+    child.stdout.emit('data', Buffer.alloc(600)) // crosses the cap → kill
+    expect(killed).toEqual([child])
+    // 树杀完全交给注入的 killer；服务层不再自己补一刀 proc.kill()。
+    expect(child.killed).toBe(false)
+    child.emit('close', 1)
+    const result = await p
     expect(result.stderr).toMatch(/exceeded .*MB and was aborted/)
   })
 
@@ -557,6 +589,22 @@ describe('P4Service._spawn command timeout', () => {
     expect(result.stderr).toMatch(/timed out after 50ms/)
   })
 
+  it('delegates the watchdog kill to the injected process killer', async () => {
+    const killed: KillableProcess[] = []
+    const killProcess = vi.fn((proc: KillableProcess) => {
+      killed.push(proc)
+    })
+    const svc = makeService(killProcess)
+    const p = svc.exec(['login', '-s'], { timeoutMs: 50 })
+    await flush()
+    await new Promise((r) => setTimeout(r, 80))
+    expect(killed).toEqual([child])
+    expect(child.killed).toBe(false)
+    child.emit('close', null)
+    const result = await p
+    expect(result.stderr).toMatch(/timed out after 50ms/)
+  })
+
   it('a fast command is unaffected by the timeout', async () => {
     const svc = makeService()
     const p = svc.exec(['tickets'], { timeoutMs: 1000 })
@@ -570,7 +618,14 @@ describe('P4Service._spawn command timeout', () => {
   })
 
   it('applies the default timeout when no per-call override is given', async () => {
-    const svc = new P4Service('/repo', new ConcurrencyGate(4), undefined, undefined, 50)
+    const svc = new P4Service(
+      '/repo',
+      new ConcurrencyGate(4),
+      undefined,
+      undefined,
+      50,
+      killDirectly,
+    )
     const p = svc.exec(['info'])
     await flush()
     await new Promise((r) => setTimeout(r, 80))
@@ -582,7 +637,7 @@ describe('P4Service._spawn command timeout', () => {
 
   it('a killed slot frees the concurrency gate for queued commands', async () => {
     const gate = new ConcurrencyGate(1)
-    const svc = new P4Service('/repo', gate, undefined)
+    const svc = new P4Service('/repo', gate, undefined, undefined, undefined, killDirectly)
     const hung = svc.exec(['opened'], { timeoutMs: 50 })
     await flush()
     // Second command queues behind the hung one (gate of 1).
@@ -631,6 +686,25 @@ describe('P4Service._spawn cancellation via AbortSignal', () => {
     const result = await p
     expect(result.exitCode).toBe(1)
     expect(result.stdout).toBe('')
+    expect(result.stderr).toMatch(/was cancelled/)
+  })
+
+  it('delegates the cancel kill to the injected process killer', async () => {
+    const killed: KillableProcess[] = []
+    const killProcess = vi.fn((proc: KillableProcess) => {
+      killed.push(proc)
+    })
+    const svc = makeService(killProcess)
+    const source = new AbortController()
+    const p = svc.exec(['reconcile', '-n', '-a', '-e', '-d', '/repo/a.txt'], {
+      signal: source.signal,
+    })
+    await flush()
+    source.abort()
+    expect(killed).toEqual([child])
+    expect(child.killed).toBe(false)
+    child.emit('close', null)
+    const result = await p
     expect(result.stderr).toMatch(/was cancelled/)
   })
 
