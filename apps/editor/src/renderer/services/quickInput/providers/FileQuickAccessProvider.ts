@@ -14,9 +14,15 @@
  *  list — the target the user just worked in (file OR view) outranks everything
  *  else, mirroring Ctrl+Tab's MRU. Both kinds also join fuzzy matching while
  *  typing; fuzzy-equal view rows keep their MRU order rather than falling back
- *  to alphabetical. With no workspace the picker falls back to the recent files
- *  list. Mirrors VSCode's file quick access, whose cached-listing fast path is
- *  what keeps typing responsive on large trees.
+ *  to alphabetical. While typing, files the user recently opened get their own
+ *  top "Recently Opened" section (open/closed editors and recent files, in MRU
+ *  order) above the ordinary fuzzy results — mirroring VSCode's history fast
+ *  picks. History matches are stricter than file search: contiguous characters,
+ *  and label-only unless the query contains a path separator. A recent item
+ *  that only matches loosely stays findable in the ordinary section. With no
+ *  workspace the picker falls back to the recent files list. Mirrors VSCode's
+ *  file quick access, whose cached-listing fast path is what keeps typing
+ *  responsive on large trees.
  *
  *  Identity: two notions, because the two places they are used have opposite
  *  cost budgets. The small collections (open editors, views, recent files, the
@@ -54,13 +60,15 @@ import {
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
   type IQuickPickItem,
+  type IQuickPickSeparator,
+  type QuickPickInput,
   type EditorInput,
   type IEditorGroup,
 } from '@universe-editor/platform'
 import { compareByScoreThenPath, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { recordPerfPhase, recordPerfPhaseAsync } from '../../performance/perfPhases.js'
 import { isFileSystemUri } from '../../files/fileSystemScheme.js'
-import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
+import { IRecentFilesService, type IRecentFile } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import {
   loadWorkspaceFiles,
@@ -120,12 +128,21 @@ interface ScoredRow {
   /** Set only on view rows: index within `getRecentViews()`. Tie-breaker when
    *  two view rows score equally so MRU order survives the fuzzy sort. */
   readonly viewRank?: number
+  /** MRU position in the "Recently Opened" section; undefined means an ordinary
+   *  fuzzy result. Recent rows always rank above ordinary ones, and among
+   *  themselves keep the recency order they were seeded with. */
+  readonly recentRank?: number
 }
 
-/** Fuzzy-row comparator. Score first; when two view rows tie, prefer the one
- *  more recently used (lower `viewRank`); otherwise fall back to the standard
- *  path comparator. */
+/** Fuzzy-row comparator. Recent rows form the top section, in MRU order; the
+ *  ordinary section keeps score first, then view MRU, then the standard path
+ *  comparator. */
 function compareScoredRows(a: ScoredRow, b: ScoredRow): number {
+  if (a.recentRank !== undefined || b.recentRank !== undefined) {
+    if (a.recentRank === undefined) return 1
+    if (b.recentRank === undefined) return -1
+    if (a.recentRank !== b.recentRank) return a.recentRank - b.recentRank
+  }
   if (a.score !== b.score) return b.score - a.score
   if (a.viewRank !== undefined && b.viewRank !== undefined) return a.viewRank - b.viewRank
   return compareByScoreThenPath(a.score, b.score, a.path, b.path)
@@ -173,6 +190,16 @@ function hasPathSeparator(value: string): boolean {
   return value.includes('/') || value.includes('\\')
 }
 
+/** Whitespace-split query pieces, with backslashes folded to `/` so Windows
+ *  path-shaped input matches the listing's separators. */
+function queryPieces(pattern: string): string[] {
+  return pattern
+    .trim()
+    .replace(/\\/g, '/')
+    .split(/\s+/)
+    .filter((piece) => piece.length > 0)
+}
+
 /**
  * Score a file against the query. Whitespace splits the query into pieces that
  * must all match; a basename hit outranks a path-only hit (the +2000 tier). This
@@ -180,11 +207,7 @@ function hasPathSeparator(value: string): boolean {
  * same way now that filtering happens in the renderer over the cached listing.
  */
 function scoreFileMatch(basename: string, relativePath: string, pattern: string): number {
-  const pieces = pattern
-    .trim()
-    .replace(/\\/g, '/')
-    .split(/\s+/)
-    .filter((piece) => piece.length > 0)
+  const pieces = queryPieces(pattern)
   if (pieces.length === 0) return -1
 
   let total = 0
@@ -199,6 +222,60 @@ function scoreFileMatch(basename: string, relativePath: string, pattern: string)
     total += score
   }
   return total
+}
+
+/** Contiguous (substring) scoring. `scoreFuzzyMatch` is subsequence-based, so a
+ *  long target can score negative even though it contains the piece verbatim —
+ *  the `Math.max` keeps a genuine contiguous hit alive. */
+function scoreContiguousMatch(text: string, piece: string): number {
+  if (!text.toLowerCase().includes(piece.toLowerCase())) return -1
+  return Math.max(1, scoreFuzzyMatch(text, piece))
+}
+
+/**
+ * Strict matcher for the "Recently Opened" section, mirroring VSCode's history
+ * picks: every query piece must match contiguously, and without a path
+ * separator only the label (basename) is considered. Recent items that fail
+ * here still fall back to the ordinary fuzzy section.
+ */
+function scoreRecentMatch(name: string, path: string, pattern: string): number {
+  const pieces = queryPieces(pattern)
+  if (pieces.length === 0) return -1
+  const pathAware = pieces.some((piece) => piece.includes('/'))
+
+  let total = 0
+  for (const piece of pieces) {
+    const nameScore = scoreContiguousMatch(name, piece)
+    if (!pathAware) {
+      if (nameScore < 0) return -1
+      total += nameScore
+      continue
+    }
+    const pathScore = scoreContiguousMatch(path, piece)
+    const score = Math.max(nameScore >= 0 ? nameScore + 2000 : -1, pathScore)
+    if (score < 0) return -1
+    total += score
+  }
+  return total
+}
+
+const RECENT_SECTION_ID = 'quickOpen.recentlyOpened'
+const OTHER_SECTION_ID = 'quickOpen.otherResults'
+
+function recentSectionSeparator(): IQuickPickSeparator {
+  return {
+    type: 'separator',
+    id: RECENT_SECTION_ID,
+    label: localize('quickInput.goToFile.recentlyOpened', 'Recently Opened'),
+  }
+}
+
+function otherSectionSeparator(): IQuickPickSeparator {
+  return {
+    type: 'separator',
+    id: OTHER_SECTION_ID,
+    label: localize('quickInput.goToFile.otherResults', 'Other Results'),
+  }
 }
 
 function entryToPick(entry: MentionFileEntry): IQuickPickItem {
@@ -380,6 +457,37 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         viewRank: index,
       }
     })
+  }
+
+  /** Recently opened files (persisted MRU, newest first) as filter candidates.
+   *  Open/closed editors win over the plain file row for the same resource, so
+   *  their restore/closed-first semantics survive. Registering the workspace
+   *  relative path lets the listing scan skip the duplicate row at string-hash
+   *  cost. */
+  private _buildRecentFileCandidates(
+    root: URI,
+    recent: readonly IRecentFile[],
+    editorCandidateKeys: ReadonlySet<string>,
+    poolRelPathByPickId: Map<string, string>,
+  ): EditorPickCandidate[] {
+    const out: EditorPickCandidate[] = []
+    const seen = new Set(editorCandidateKeys)
+    for (const file of recent) {
+      const key = this._uriIdentity.getComparisonKey(file.uri)
+      if (seen.has(key)) continue
+      seen.add(key)
+      const pick = this._createFilePick(root, file.uri, file.name)
+      const poolRelPath = this._relativePathUnderRoot(root, file.uri)
+      if (poolRelPath !== undefined) poolRelPathByPickId.set(pick.id, poolRelPath)
+      out.push({
+        pick,
+        name: file.name,
+        path: pick.description ?? file.name,
+        key,
+        ...(poolRelPath !== undefined ? { poolRelPath } : {}),
+      })
+    }
+    return out
   }
 
   /** Activate the editor if already open in any group, else open it via the
@@ -701,7 +809,29 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       if (c.poolRelPath !== undefined) poolRelPathByPickId.set(c.pick.id, c.poolRelPath)
     }
 
-    let recentFileItems: readonly IQuickPickItem[] = []
+    // Recency ranking for the filtered list: the same order the empty-query head
+    // uses (open editors / recently closed slots / recent files, views excluded),
+    // so typing only filters this order instead of introducing a second recency
+    // notion. Views keep their existing `viewRank` tie-breaker.
+    const editorCandidateKeys = new Set(editorCandidates.map((c) => c.key))
+    const recentRankByKey = new Map<string, number>()
+    const seedRecentRank = (key: string): void => {
+      if (!editorCandidateKeys.has(key) || recentRankByKey.has(key)) return
+      recentRankByKey.set(key, recentRankByKey.size)
+    }
+    for (const target of this._recentTargets.getRecentTargets({
+      includeClosedEditors: true,
+    })) {
+      if (target.kind === 'view') continue
+      seedRecentRank(recentTargetKey(this._uriIdentity, target))
+    }
+    for (const c of editorCandidates) seedRecentRank(c.key)
+
+    // Recently opened files that are not already open/closed editor candidates.
+    // They join the filter candidates themselves so files outside the workspace
+    // (or outside a truncated cached listing) remain findable while typing.
+    let recentFileCandidates: readonly EditorPickCandidate[] = []
+
     const emptyQueryItems = (): IQuickPickItem[] => {
       const headKeys = new Set<string>()
       const head: IQuickPickItem[] = []
@@ -721,10 +851,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       for (const c of matchCandidates) {
         if (!headKeys.has(c.key)) head.push(c.pick)
       }
-      return [
-        ...head,
-        ...recentFileItems.filter((it) => !headKeys.has(identityKey(this._uriIdentity, it.id))),
-      ].slice(0, GO_TO_FILE_MAX_RESULTS)
+      return [...head, ...recentFileCandidates.map((c) => c.pick)].slice(0, GO_TO_FILE_MAX_RESULTS)
     }
     // The cached full file listing (loaded once when the picker opens). Filtering
     // then runs in-memory on every keystroke — no per-keystroke disk walk.
@@ -740,21 +867,55 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     // it. Reset whenever a fresh listing lands.
     let lastCompleted: { pattern: string; entries: readonly MentionFileEntry[] } | undefined
 
-    // Fuzzy match over the open-editor and view candidates only — used both as
-    // the non-file tier of the full filter and as the cold-cache fallback list.
-    const matchEditors = (pattern: string): ScoredRow[] => {
-      const hits: ScoredRow[] = []
-      for (const cand of matchCandidates) {
+    // Match open editors, recently closed slots, recent files and views. Rows
+    // that satisfy the stricter recency matcher form the top section (MRU order);
+    // everything else — including recent items that only match loosely — falls
+    // into the ordinary fuzzy section. Only *matched* candidates suppress their
+    // listing row: an open editor that does not match the query must not hide its
+    // file. The editor row has to win, not the listing row: `_acceptPick` routes
+    // it through `_restoreClosed` / the resolver, which is what preserves a
+    // custom editor type (markdown preview, PDF) that a plain file row would lose.
+    const matchCandidateRows = (
+      pattern: string,
+    ): { recentRows: ScoredRow[]; otherRows: ScoredRow[]; excludedRelPaths: Set<string> } => {
+      const recentRows: ScoredRow[] = []
+      const otherRows: ScoredRow[] = []
+      const excludedRelPaths = new Set<string>()
+      const consider = (cand: EditorPickCandidate): void => {
+        const rank = recentRankByKey.get(cand.key)
+        if (rank !== undefined) {
+          const recentScore = scoreRecentMatch(cand.name, cand.path, pattern)
+          if (recentScore >= 0) {
+            recentRows.push({
+              pick: cand.pick,
+              score: recentScore,
+              path: cand.path,
+              recentRank: rank,
+              ...(cand.viewRank !== undefined ? { viewRank: cand.viewRank } : {}),
+            })
+            if (cand.poolRelPath !== undefined) excludedRelPaths.add(cand.poolRelPath)
+            return
+          }
+        }
         const score = scoreFileMatch(cand.name, cand.path, pattern)
-        if (score < 0) continue
-        hits.push({
+        if (score < 0) return
+        otherRows.push({
           pick: cand.pick,
           score,
           path: cand.path,
           ...(cand.viewRank !== undefined ? { viewRank: cand.viewRank } : {}),
         })
+        if (cand.poolRelPath !== undefined) excludedRelPaths.add(cand.poolRelPath)
       }
-      return hits
+      for (const cand of editorCandidates) consider(cand)
+      for (const cand of recentFileCandidates) consider(cand)
+      for (const cand of viewCandidates) consider(cand)
+      return { recentRows, otherRows, excludedRelPaths }
+    }
+
+    const candidateRows = (pattern: string): ScoredRow[] => {
+      const { recentRows, otherRows } = matchCandidateRows(pattern)
+      return [...recentRows, ...otherRows]
     }
 
     // In-memory fuzzy filter over the candidate pool. Whitespace-separated pieces
@@ -764,25 +925,43 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     const sortRows = (rows: ScoredRow[]): void => {
       rows.sort(compareScoredRows)
     }
-    const finalizeRows = (rows: ScoredRow[]): IQuickPickItem[] => {
-      sortRows(rows)
-      return rows.slice(0, GO_TO_FILE_MAX_RESULTS).map((r) => r.pick ?? entryToPick(r.entry!))
-    }
-    // Matched editor/view rows plus the listing-relative paths they already
-    // represent. Only *matched* candidates suppress their listing row — an open
-    // editor that does not match the query must not hide its file. The editor
-    // row has to win, not the listing row: `_acceptPick` routes it through
-    // `_restoreClosed` / the resolver, which is what preserves a custom editor
-    // type (markdown preview, PDF) that a plain file row would lose.
-    const editorRows = (pattern: string): { rows: ScoredRow[]; excludedRelPaths: Set<string> } => {
-      const rows = matchEditors(pattern)
-      const excludedRelPaths = new Set<string>()
-      for (const r of rows) {
-        if (!r.pick) continue
-        const rel = poolRelPathByPickId.get(r.pick.id)
-        if (rel !== undefined) excludedRelPaths.add(rel)
+    const rowPick = (row: ScoredRow): IQuickPickItem => row.pick ?? entryToPick(row.entry!)
+    const rowIdentity = (row: ScoredRow): string => (row.entry ? row.entry.uri : row.pick!.id)
+    // Emit the two sections in display order. Returns selectable rows only once
+    // (the 512 budget excludes separators); an exact-path pick stays above both
+    // sections and is removed from them so it cannot appear twice.
+    const finalizeRows = (
+      rows: readonly ScoredRow[],
+      exactPick?: IQuickPickItem,
+    ): QuickPickInput<IQuickPickItem>[] => {
+      const exactKey = exactPick ? identityKey(this._uriIdentity, exactPick.id) : undefined
+      const all =
+        exactKey === undefined
+          ? [...rows]
+          : rows.filter((row) => identityKey(this._uriIdentity, rowIdentity(row)) !== exactKey)
+      all.sort(compareScoredRows)
+
+      const budget = GO_TO_FILE_MAX_RESULTS - (exactPick ? 1 : 0)
+      const recent: ScoredRow[] = []
+      const other: ScoredRow[] = []
+      for (const row of all) {
+        if (row.recentRank !== undefined) {
+          if (recent.length < budget) recent.push(row)
+        } else if (recent.length + other.length < budget) {
+          other.push(row)
+        }
       }
-      return { rows, excludedRelPaths }
+
+      const out: QuickPickInput<IQuickPickItem>[] = []
+      if (exactPick) out.push(exactPick)
+      if (recent.length > 0) {
+        out.push(recentSectionSeparator(), ...recent.map(rowPick))
+      }
+      if (other.length > 0) {
+        if (recent.length > 0) out.push(otherSectionSeparator())
+        out.push(...other.map(rowPick))
+      }
+      return out
     }
     // Score `pool` from index `from` into rows/matched; stops once past
     // `deadline` (checked every 1024 entries). Returns the resume index.
@@ -821,7 +1000,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         : (allFiles ?? [])
 
     const filterPoolSync = (pattern: string, pool: readonly MentionFileEntry[]): ScoredRow[] => {
-      const { rows, excludedRelPaths } = editorRows(pattern)
+      const { recentRows, otherRows, excludedRelPaths } = matchCandidateRows(pattern)
+      const rows = [...recentRows, ...otherRows]
       const matched: MentionFileEntry[] = []
       scanPool(pool, 0, pattern, excludedRelPaths, rows, matched)
       lastCompleted = { pattern, entries: matched }
@@ -835,7 +1015,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       pool: readonly MentionFileEntry[],
       mySeq: number,
     ): Promise<ScoredRow[] | undefined> => {
-      const { rows, excludedRelPaths } = editorRows(pattern)
+      const { recentRows, otherRows, excludedRelPaths } = matchCandidateRows(pattern)
+      const rows = [...recentRows, ...otherRows]
       const matched: MentionFileEntry[] = []
       let next = scanPool(
         pool,
@@ -884,6 +1065,18 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       }),
     )
 
+    // Rows backing the currently published list, plus the exact-path pick that
+    // outranks both sections. Keeping them lets a late exact-path probe republish
+    // without having to thread separator-aware arrays through the call chain.
+    let renderedRows: readonly ScoredRow[] = []
+    let exactPick: IQuickPickItem | undefined
+
+    const publishRows = (rows: readonly ScoredRow[], mySeq: number): void => {
+      if (mySeq !== seq || token.isCancellationRequested) return
+      renderedRows = rows
+      picker.items = finalizeRows(rows, exactPick)
+    }
+
     const renderMerged = (pattern: string, mySeq: number): void => {
       if (mySeq !== seq || token.isCancellationRequested || localRows === undefined) return
       let rows = localRows
@@ -904,10 +1097,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         const seen = new Set(rows.flatMap(rowKeys))
         rows = [...rows, ...fallbackRows.filter((r) => rowKeys(r).every((k) => !seen.has(k)))]
       }
-      const items = finalizeRows([...rows])
-      picker.items = items
+      publishRows(rows, mySeq)
       picker.busy = fallbackPending
-      void prependExactPathMatch(pattern, mySeq, items)
+      void prependExactPathMatch(pattern, mySeq)
     }
 
     // 兜底搜索只在停顿闸门（runSearch 入口）过去之后才被调用，这里直接启动。
@@ -952,12 +1144,10 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
     // When the query looks like a path (contains a separator), probe the exact
     // file so `foo/bar.ts` opens even if it's outside the cached listing (mirrors
-    // the previous includeExactPathMatches behaviour). Prepended above fuzzy hits.
-    const prependExactPathMatch = async (
-      pattern: string,
-      mySeq: number,
-      items: IQuickPickItem[],
-    ): Promise<void> => {
+    // the previous includeExactPathMatches behaviour). The probe outranks both
+    // sections; `finalizeRows` removes the duplicate row it would otherwise leave
+    // behind.
+    const prependExactPathMatch = async (pattern: string, mySeq: number): Promise<void> => {
       if (!hasPathSeparator(pattern)) return
       const normalized = pattern.replace(/\\/g, '/')
       const target =
@@ -966,14 +1156,12 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
           : URI.joinPath(root, normalized)
       const exists = await this._fileService.exists(target).catch(() => false)
       if (!exists || mySeq !== seq || token.isCancellationRequested) return
-      const pick = this._createFilePick(root, target)
       // The typed path and the row it duplicates need not be spelled the same
       // (the probe keeps the user's casing, the listing keeps the root's), so
-      // match on resource identity rather than on the id string. Off the
-      // keystroke path — this runs after the exists() round-trip.
-      const pickKey = identityKey(this._uriIdentity, pick.id)
-      const rest = items.filter((it) => identityKey(this._uriIdentity, it.id) !== pickKey)
-      picker.items = [pick, ...rest].slice(0, GO_TO_FILE_MAX_RESULTS)
+      // `finalizeRows` matches on resource identity rather than on the id string.
+      // Off the keystroke path — this runs after the exists() round-trip.
+      exactPick = this._createFilePick(root, target)
+      picker.items = finalizeRows(renderedRows, exactPick)
     }
 
     // 真正执行一次搜索：窄池 → 兜底搜索 → 同步/分块过滤。被 runSearch 在停顿
@@ -1012,6 +1200,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       localRows = undefined
       fallbackRows = undefined
       fallbackPending = false
+      renderedRows = []
+      exactPick = undefined
       const pattern = value.trim()
       if (pattern.length === 0) {
         picker.busy = false
@@ -1024,12 +1214,8 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
         // is probed with a single stat (the warm-up below re-runs the current
         // query once files land, superseding these interim results).
         picker.busy = true
-        const editorOnly = matchEditors(pattern)
-          .sort(compareScoredRows)
-          .slice(0, GO_TO_FILE_MAX_RESULTS)
-          .flatMap((h) => (h.pick ? [h.pick] : []))
-        picker.items = editorOnly
-        void prependExactPathMatch(pattern, mySeq, editorOnly)
+        publishRows(candidateRows(pattern), mySeq)
+        void prependExactPathMatch(pattern, mySeq)
         return
       }
       // 便宜路径零延迟：同步内存过滤是微秒级，是这个 picker 的核心体验。注意
@@ -1048,11 +1234,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       // 上轮结果：input 列表按"这份清单就是这个 query 的现状"理解，静默拖旧
       // 结果比显示空更误导。
       picker.busy = true
-      const editorOnly = matchEditors(pattern)
-        .sort(compareScoredRows)
-        .slice(0, GO_TO_FILE_MAX_RESULTS)
-        .flatMap((h) => (h.pick ? [h.pick] : []))
-      picker.items = editorOnly
+      publishRows(candidateRows(pattern), mySeq)
       searchTimer = setTimeout(() => {
         searchTimer = undefined
         if (mySeq !== seq || token.isCancellationRequested) return
@@ -1099,14 +1281,33 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       // Closing the picker cancels the walk — rejection is the normal path.
       .catch(() => undefined)
 
-    void this._recentFiles.getAll().then((recent) => {
-      if (token.isCancellationRequested) return
-      // Show all recent files (in-workspace shown by relative path, others by
-      // full fsPath) so this picker fully subsumes "Open Recent File…".
-      recentFileItems = recent.map((f) => this._createFilePick(root, f.uri, f.name))
-      // Only seed the list if the user hasn't started typing a query yet.
-      if (picker.value.trim().length === 0) picker.items = emptyQueryItems()
-    })
+    void this._recentFiles
+      .getAll()
+      .then((recent) => {
+        if (token.isCancellationRequested) return
+        // Show all recent files (in-workspace shown by relative path, others by
+        // full fsPath) so this picker fully subsumes "Open Recent File…". The
+        // same candidates also participate in filtering, so recents outside the
+        // workspace or outside a truncated listing stay findable by name.
+        const candidates = this._buildRecentFileCandidates(
+          root,
+          recent,
+          editorCandidateKeys,
+          poolRelPathByPickId,
+        )
+        for (const cand of candidates) {
+          recentRankByKey.set(cand.key, recentRankByKey.size)
+        }
+        recentFileCandidates = candidates
+        if (picker.value.trim().length === 0) {
+          picker.items = emptyQueryItems()
+        } else if (candidates.length > 0) {
+          // Ranks changed after the first filter pass; re-run the live query so
+          // the just-arrived recents join the top section.
+          runSearch(picker.value)
+        }
+      })
+      .catch(() => undefined)
   }
 
   private _provideRecentOnly(

@@ -254,10 +254,21 @@ function makeFileSearch(root: URI): FakeFileSearch {
 
 class FakeRecentFilesService implements IRecentFilesService {
   declare readonly _serviceBrand: undefined
-  constructor(private readonly _items: readonly IRecentFile[] = []) {}
+  private _resolve: (() => void) | undefined
+  constructor(
+    private readonly _items: readonly IRecentFile[] = [],
+    private readonly _deferred = false,
+  ) {}
   add(): void {}
-  async getAll(): Promise<readonly IRecentFile[]> {
-    return this._items
+  getAll(): Promise<readonly IRecentFile[]> {
+    if (!this._deferred) return Promise.resolve(this._items)
+    return new Promise((resolve) => {
+      this._resolve = () => resolve(this._items)
+    })
+  }
+  resolveAll(): void {
+    this._resolve?.()
+    this._resolve = undefined
   }
   clear(): void {}
 }
@@ -490,6 +501,8 @@ function setup(
   opts: {
     root?: URI | null
     recent?: readonly IRecentFile[]
+    /** Keep `getAll()` pending until `resolveAll()` to exercise late-arriving history. */
+    recentDeferred?: boolean
     exclude?: IExcludeService
     focus?: IFocusScopeService
     existingFiles?: Iterable<string>
@@ -508,7 +521,7 @@ function setup(
   const root = opts.root === undefined ? URI.file('/ws') : opts.root
   const workspace = new FakeWorkspaceService(root)
   const fileSearch = makeFileSearch(root ?? URI.file('/ws'))
-  const recent = new FakeRecentFilesService(opts.recent ?? [])
+  const recent = new FakeRecentFilesService(opts.recent ?? [], opts.recentDeferred ?? false)
   const groupsFake = makeGroups(opts.openEditors ?? [], opts.sideEditors ?? [])
   const closedEditors = new FakeClosedEditorsService([...(opts.closedEntries ?? [])])
   const recentTargets = new FakeRecentTargetsService(
@@ -560,6 +573,7 @@ function setup(
     provider,
     fileSearch,
     workspace,
+    recent,
     resolver,
     groupsFake,
     closedEditors,
@@ -567,6 +581,18 @@ function setup(
     windowFocus,
     auxWindows,
   }
+}
+
+/** Selectable rows only: the filtered list interleaves section separators. */
+function pickItems(picker: FakeQuickPick<IQuickPickItem>): IQuickPickItem[] {
+  return picker.items.filter((item): item is IQuickPickItem => !('type' in item))
+}
+
+/** Labels of the section separators currently rendered, in display order. */
+function separatorLabels(picker: FakeQuickPick<IQuickPickItem>): string[] {
+  return picker.items.flatMap((item) =>
+    'type' in item && item.type === 'separator' ? [item.label ?? ''] : [],
+  )
 }
 
 function run(
@@ -820,7 +846,7 @@ describe('FileQuickAccessProvider', () => {
     picker.fireValue('doc')
     expect(picker.items).toHaveLength(1)
 
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(resolver.opened).toHaveLength(1)
     expect(resolver.opened[0]!.uri.fsPath).toBe(URI.file('/ws/doc.pdf').fsPath)
@@ -866,7 +892,8 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     picker.fireValue('sett')
-    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['Settings'])
+    expect(separatorLabels(picker)).toEqual(['Recently Opened'])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['Settings'])
   })
 
   it('accepting a virtual editor pick activates the live editor instead of resolving', async () => {
@@ -877,7 +904,7 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     expect(picker.items[0]).toMatchObject({ label: 'Settings' })
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(groupsFake.activatedGroupIds).toEqual([1])
     expect(groupsFake.setActiveLog).toEqual([settings])
@@ -891,7 +918,7 @@ describe('FileQuickAccessProvider', () => {
     run(provider, picker)
     await flushPromises()
 
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(groupsFake.setActiveLog).toEqual([fileEditor])
     expect(resolver.opened).toHaveLength(0)
@@ -923,7 +950,7 @@ describe('FileQuickAccessProvider', () => {
     run(provider, picker)
     await flushPromises()
 
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     const owningGroup = groupsFake.all[1]!
     expect(groupsFake.setActiveLog).toEqual([settings])
@@ -951,7 +978,7 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     picker.fireValue('b')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     // addGroup appended a second group and it became the active (side) target.
     expect(groupsFake.all).toHaveLength(2)
@@ -971,7 +998,7 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     picker.fireValue('b')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     // Existing side group reused (no new group), matched editor activated in it.
     expect(groupsFake.all).toHaveLength(2)
@@ -1030,7 +1057,7 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     picker.fireValue('b')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
     await flushPromises()
 
     expect(auxWindows.openCalls).toHaveLength(1)
@@ -1063,7 +1090,7 @@ describe('FileQuickAccessProvider', () => {
       run(provider, picker)
       await flushPromises()
 
-      picker.fireAccept([picker.items[0] as IQuickPickItem])
+      picker.fireAccept([pickItems(picker)[0]!])
       await flushPromises()
 
       expect(auxWindows.openCalls).toHaveLength(1)
@@ -1091,7 +1118,7 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     expect(picker.items[0]!.id).not.toBe(sessionUri.toString())
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
     await flushPromises()
 
     expect(auxWindows.openCalls).toHaveLength(1)
@@ -1111,7 +1138,7 @@ describe('FileQuickAccessProvider', () => {
     run(provider, picker)
     await flushPromises()
 
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
     await flushPromises()
 
     expect(groupsFake.all).toHaveLength(2)
@@ -1155,7 +1182,7 @@ describe('FileQuickAccessProvider', () => {
       run(provider, picker)
       await flushPromises()
 
-      picker.fireAccept([picker.items[0] as IQuickPickItem])
+      picker.fireAccept([pickItems(picker)[0]!])
       await flushPromises()
 
       expect(auxWindows.openCalls).toHaveLength(1)
@@ -1178,13 +1205,233 @@ describe('FileQuickAccessProvider', () => {
     await flushPromises()
 
     picker.fireValue('b')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
     await flushPromises()
 
     expect(auxWindows.openCalls).toHaveLength(1)
     expect(groupsFake.openLog).toHaveLength(1)
     expect(groupsFake.openLog[0]!.groupId).toBe(1)
     expect(groupsFake.openLog[0]!.editor.resource?.fsPath).toBe(URI.file('/ws/src/b.ts').fsPath)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Recently opened: matched history forms a top section, in MRU order
+// ---------------------------------------------------------------------------
+
+describe('FileQuickAccessProvider — recently opened section', () => {
+  beforeEach(() => {
+    invalidateMentionFileCache()
+  })
+  afterEach(() => {
+    invalidateMentionFileCache()
+  })
+
+  it('puts matching recent files above ordinary matches, with section headers', async () => {
+    const { provider, fileSearch } = setup({
+      recent: [{ uri: URI.file('/ws/deep/recent.ts'), name: 'recent.ts', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = ['/ws/src/recent.ts', '/ws/src/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('recent')
+    expect(separatorLabels(picker)).toEqual(['Recently Opened', 'Other Results'])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['recent.ts', 'recent.ts'])
+    expect(pickItems(picker).map((i) => i.description)).toEqual(['deep/recent.ts', 'src/recent.ts'])
+  })
+
+  it('orders the recent section by MRU instead of fuzzy score', async () => {
+    const { provider } = setup({
+      recent: [
+        { uri: URI.file('/ws/verylongname.ts'), name: 'verylongname.ts', lastOpened: 2 },
+        { uri: URI.file('/ws/a.ts'), name: 'a.ts', lastOpened: 1 },
+      ],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    // 'a.ts' would win on fuzzy score (shorter target), but the longer name is
+    // the more recent file and therefore ranks first.
+    picker.fireValue('t')
+    expect(separatorLabels(picker)).toEqual(['Recently Opened'])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['verylongname.ts', 'a.ts'])
+  })
+
+  it('adds no section headers when only ordinary matches exist', async () => {
+    const { provider, fileSearch } = setup()
+    fileSearch.resultPaths = ['/ws/src/a.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('a')
+    expect(separatorLabels(picker)).toEqual([])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['a.ts'])
+  })
+
+  it('finds a recent file outside the workspace by name while typing', async () => {
+    const outside = URI.file('/elsewhere/notes.md')
+    const { provider, fileSearch } = setup({
+      recent: [{ uri: outside, name: 'notes.md', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('notes')
+    expect(separatorLabels(picker)).toEqual(['Recently Opened'])
+    expect(pickItems(picker)).toHaveLength(1)
+    expect(pickItems(picker)[0]).toMatchObject({
+      label: 'notes.md',
+      description: outside.fsPath,
+    })
+  })
+
+  it('re-runs the live query when the recent files list arrives late', async () => {
+    const { provider, fileSearch, recent } = setup({
+      recent: [{ uri: URI.file('/elsewhere/notes.md'), name: 'notes.md', lastOpened: 1 }],
+      recentDeferred: true,
+    })
+    fileSearch.resultPaths = ['/ws/other.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('notes')
+    expect(pickItems(picker)).toHaveLength(0)
+    expect(separatorLabels(picker)).toEqual([])
+
+    recent.resolveAll()
+    await vi.waitFor(() => expect(separatorLabels(picker)).toEqual(['Recently Opened']))
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['notes.md'])
+  })
+
+  it('matches the recent section on the file name only when the query has no separator', async () => {
+    const uri = URI.file('/ws/src/components/alpha.ts')
+    const { provider, fileSearch } = setup({
+      recent: [{ uri, name: 'alpha.ts', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = [uri.fsPath]
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    // The directory name matches only through the path, so the row stays in the
+    // ordinary section (and the listing duplicate stays suppressed).
+    picker.fireValue('components')
+    expect(separatorLabels(picker)).toEqual([])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['alpha.ts'])
+  })
+
+  it('matches the recent section through the path when the query has a separator', async () => {
+    const uri = URI.file('/ws/src/components/alpha.ts')
+    const { provider, fileSearch } = setup({
+      recent: [{ uri, name: 'alpha.ts', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = [uri.fsPath]
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('components/alpha')
+    expect(separatorLabels(picker)).toEqual(['Recently Opened'])
+    expect(pickItems(picker)).toHaveLength(1)
+    expect(pickItems(picker)[0]).toMatchObject({
+      label: 'alpha.ts',
+      description: 'src/components/alpha.ts',
+    })
+  })
+
+  it('does not duplicate a recent file that also comes back from the fallback search', async () => {
+    const uri = URI.file('/ws/src/a.ts')
+    const { provider, fileSearch } = setup({
+      recent: [{ uri, name: 'a.ts', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = [uri.fsPath, '/ws/src/b.ts']
+    // Truncation drops the cached listing whole, forcing the main-process
+    // fallback to produce a row for the same resource.
+    fileSearch.truncateAt = 1
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('a.ts')
+    await vi.waitFor(() => expect(fileSearch.calls.filter((c) => !c.matchAll)).toHaveLength(1))
+    await vi.waitFor(() => expect(picker.busy).toBe(false))
+
+    expect(separatorLabels(picker)).toEqual(['Recently Opened'])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['a.ts'])
+  })
+
+  it('keeps the exact-path pick above the sections without leaving an empty header', async () => {
+    const uri = URI.file('/ws/src/a.ts')
+    const { provider, fileSearch } = setup({
+      recent: [{ uri, name: 'a.ts', lastOpened: 1 }],
+      existingFiles: [uri.fsPath],
+    })
+    fileSearch.resultPaths = [uri.fsPath]
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('src/a.ts')
+    expect(separatorLabels(picker)).toEqual(['Recently Opened'])
+
+    // The probe finds the same resource: it moves to the top, the recent row is
+    // removed as a duplicate, and the now-empty section header disappears.
+    await vi.waitFor(() => expect(separatorLabels(picker)).toEqual([]))
+    expect(pickItems(picker)).toHaveLength(1)
+    expect(pickItems(picker)[0]).toMatchObject({ label: 'a.ts', description: 'src/a.ts' })
+  })
+
+  it('caps selectable rows at 512 while separators are not counted', async () => {
+    const { provider, fileSearch } = setup({
+      recent: [{ uri: URI.file('/ws/recent-x.ts'), name: 'recent-x.ts', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = Array.from({ length: 600 }, (_, i) => `/ws/x${i}.ts`)
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('x')
+    await vi.waitFor(() => expect(pickItems(picker)).toHaveLength(512))
+    expect(picker.items).toHaveLength(514)
+    expect(separatorLabels(picker)).toEqual(['Recently Opened', 'Other Results'])
+    expect(pickItems(picker)[0]).toMatchObject({ label: 'recent-x.ts' })
+  })
+
+  it('restores the plain MRU list without headers when the query is cleared', async () => {
+    const { provider, fileSearch } = setup({
+      recent: [{ uri: URI.file('/ws/recent-a.ts'), name: 'recent-a.ts', lastOpened: 1 }],
+    })
+    fileSearch.resultPaths = ['/ws/src/zzz.ts']
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('a')
+    expect(separatorLabels(picker)).toEqual(['Recently Opened'])
+
+    picker.fireValue('')
+    expect(separatorLabels(picker)).toEqual([])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['recent-a.ts'])
+  })
+
+  it('keeps views out of the recent section', async () => {
+    const { provider } = setup({
+      views: [makeView('workbench.view.terminal.main', 'Terminal')],
+    })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    picker.fireValue('term')
+    expect(separatorLabels(picker)).toEqual([])
+    expect(pickItems(picker).map((i) => i.label)).toEqual(['Terminal'])
   })
 })
 
@@ -1717,8 +1964,8 @@ describe('FileQuickAccessProvider — Windows drive-letter case', () => {
     await vi.waitFor(() => expect(fileSearch.calls).toHaveLength(2))
     await vi.waitFor(() => expect(picker.busy).toBe(false))
 
-    expect(picker.items).toHaveLength(1)
-    expect(picker.items[0]).toMatchObject({
+    expect(pickItems(picker)).toHaveLength(1)
+    expect(pickItems(picker)[0]).toMatchObject({
       id: EDITOR_RESOURCE.toString(),
       description: REL,
     })
@@ -1738,8 +1985,8 @@ describe('FileQuickAccessProvider — Windows drive-letter case', () => {
     // would carry the same string here, so assert the description as well —
     // losing the editor row would route activation away from the closed-stack
     // restore path used for custom editors.
-    expect(picker.items).toHaveLength(1)
-    expect(picker.items[0]).toMatchObject({
+    expect(pickItems(picker)).toHaveLength(1)
+    expect(pickItems(picker)[0]).toMatchObject({
       id: URI.file('/ws/src/a.ts').toString(),
       description: 'src/a.ts',
     })
@@ -1878,7 +2125,7 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     await flushPromises()
 
     picker.fireValue('doc')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(closedEditors.takeCalls.map((u) => u.toString())).toEqual([uri.toString()])
     expect(groupsFake.openLog).toHaveLength(1)
@@ -1965,7 +2212,7 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     // accepting it restores the closed editor type (closed-first), it does not
     // merely activate the surviving text tab.
     expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual(['pic.png'])
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(closedEditors.takeCalls).toHaveLength(1)
     expect(groupsFake.openLog).toHaveLength(1)
@@ -1990,7 +2237,7 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     await flushPromises()
 
     picker.fireValue('doc')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(groupsFake.openLog).toHaveLength(0)
     expect(resolver.opened).toHaveLength(1)
@@ -2059,7 +2306,7 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     await flushPromises()
 
     picker.fireValue('doc')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(groupsFake.openLog).toHaveLength(1)
     expect(groupsFake.openLog[0]!.groupId).toBe(1)
@@ -2082,7 +2329,7 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     await flushPromises()
 
     picker.fireValue('doc')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     expect(groupsFake.openLog).toHaveLength(1)
     expect(groupsFake.openLog[0]!.groupId).toBe(2)
@@ -2124,7 +2371,7 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
     await flushPromises()
 
     picker.fireValue('doc')
-    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    picker.fireAccept([pickItems(picker)[0]!])
 
     // A new side group was created and received the restored editor.
     expect(closedEditors.takeCalls).toHaveLength(1)
@@ -2140,9 +2387,8 @@ describe('FileQuickAccessProvider — closed editor restore', () => {
 describe('FileQuickAccessProvider — views as switch targets', () => {
   beforeEach(() => invalidateMentionFileCache())
 
-  /** Narrow away the separator half of QuickPickInput; this picker emits none. */
-  const rows = (picker: FakeQuickPick<IQuickPickItem>): IQuickPickItem[] =>
-    picker.items.filter((i): i is IQuickPickItem => 'label' in i && i.label !== undefined)
+  /** Selectable rows only — section separators also carry a label. */
+  const rows = (picker: FakeQuickPick<IQuickPickItem>): IQuickPickItem[] => pickItems(picker)
 
   it('seeds views into the empty-query list between editors and recent files', async () => {
     const { provider, fileSearch } = setup({
