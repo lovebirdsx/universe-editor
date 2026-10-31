@@ -40,6 +40,12 @@ async function openSessionWithCards(
   await expect
     .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
     .toBe(1)
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+    .toBe('acp.session')
+  // The Explore result card is an ordinary edit card, hidden under the shipped
+  // onlyMessage default; pin the old mode so the back-link test can see it.
+  await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('default'))
 
   // Prompts are dispatched; the wait below is on the rendered cards, not on the
   // dispatch promise (ACP streaming keeps the turn alive after sendPrompt).

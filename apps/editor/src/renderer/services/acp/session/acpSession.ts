@@ -38,7 +38,7 @@ import { isPromptEchoTitle } from './acpSessionTitleEcho.js'
 import type { IAcpCompactionStatsService } from './acpCompactionStats.js'
 import type { IAcpMessageAttachmentStore } from './acpMessageAttachmentStore.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
-import { isCollapseMode, nextCollapseMode } from './acpCollapseMode.js'
+import { DEFAULT_COLLAPSE_MODE, isCollapseMode, nextCollapseMode } from './acpCollapseMode.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { AcpConnectionError } from './acpErrors.js'
@@ -1175,7 +1175,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     readonly title: string,
     private readonly _telemetry: ITelemetryService,
     initState?: IAcpSessionInitState,
-    initialCollapseMode: CollapseMode = 'default',
+    initialCollapseMode: CollapseMode = DEFAULT_COLLAPSE_MODE,
     private readonly _history?: IAcpSessionHistoryService,
     private readonly _agentDefaults?: IAcpAgentDefaultsService,
     private readonly _changeTracker?: ISessionChangeTrackerService,
@@ -1267,7 +1267,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     )
     this.collapseMode = observableValue<CollapseMode>(
       `acp.session.collapseMode.${id}`,
-      isCollapseMode(initialCollapseMode) ? initialCollapseMode : 'default',
+      isCollapseMode(initialCollapseMode) ? initialCollapseMode : DEFAULT_COLLAPSE_MODE,
     )
     this.accumulatedRunningMs = observableValue<number>(`acp.session.accumulatedRunningMs.${id}`, 0)
     this.runningStartedAt = observableValue<number | undefined>(

@@ -2849,6 +2849,37 @@ describe('AcpSessionService — rewind / fork', () => {
     }
   })
 
+  it('createSession defaults an agent missing from acp.defaultCollapseModes to onlyMessage', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithHistory(client, new StubSessionChangeTracker())
+    try {
+      const s = await svc.createSession('fake')
+      await s.whenConnected()
+
+      expect(s.collapseMode.get()).toBe('onlyMessage')
+      expect(history.get('agent-1')?.collapseMode).toBe('onlyMessage')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('forkSession defaults to onlyMessage when the source row records no display mode', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-fork-legacy' },
+    })
+    const { svc, history } = makeServiceWithHistory(client, new StubSessionChangeTracker())
+    try {
+      history.add({ agentId: 'fake', sessionIdOnAgent: 'agent-legacy', title: 'legacy' })
+
+      const fork = await svc.forkSession('agent-legacy')
+
+      expect(fork.collapseMode.get()).toBe('onlyMessage')
+      expect(history.get('agent-fork-legacy')?.collapseMode).toBe('onlyMessage')
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('forkSession rejects when the agent does not advertise fork capability', async () => {
     const tracker = new StubSessionChangeTracker()
     const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })

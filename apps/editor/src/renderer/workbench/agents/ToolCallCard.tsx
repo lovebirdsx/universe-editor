@@ -34,6 +34,7 @@ import type {
 import { firstLineSummary, memoryTrimmedNotice } from '../../services/acp/session/acpSession.js'
 import { AcpSessionOutlineRegistry } from '../../services/acp/session/acpSessionOutlineRegistry.js'
 import { stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
+import { DEFAULT_COLLAPSE_MODE } from '../../services/acp/session/acpCollapseMode.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
@@ -358,7 +359,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   // so this stays hidden until the user opens the card.
   const children = filterChildItemsForDisplay(
     call.children ?? [],
-    subtreeCollapse?.collapse.mode ?? 'default',
+    subtreeCollapse?.collapse.mode ?? DEFAULT_COLLAPSE_MODE,
   )
   const childTimeline = children.length > 0 && (
     <ul className={styles['toolCallChildren']} data-testid="acp-subagent-timeline">

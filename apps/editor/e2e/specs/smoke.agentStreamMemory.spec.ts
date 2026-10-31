@@ -421,7 +421,8 @@ test.describe('@p1 acp streaming render accounting', () => {
   test('a sealable thought storm re-parses only its tail', async ({ page, workbench }) => {
     await workbench.waitForRestored()
     const gate = makeTurnEndGate()
-    const baseline = await startEchoSession(page, undefined, gate.env)
+    // Thought messages are filtered out under the shipped onlyMessage default.
+    const baseline = await startEchoSession(page, 'default', gate.env)
 
     const COUNT = 300
     const expected = streamedText(COUNT, CHUNK, false)
@@ -459,7 +460,8 @@ test.describe('@p1 acp streaming render accounting', () => {
   }) => {
     await workbench.waitForRestored()
     const gate = makeTurnEndGate()
-    const baseline = await startEchoSession(page, undefined, gate.env)
+    // Thought messages are filtered out under the shipped onlyMessage default.
+    const baseline = await startEchoSession(page, 'default', gate.env)
 
     // The fence opens on the first chunk and is never closed, so no blank line is ever
     // outside it: nothing seals and the whole message stays one growing tail. That is

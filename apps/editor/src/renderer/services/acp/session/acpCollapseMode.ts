@@ -15,6 +15,9 @@ export const COLLAPSE_MODE_ORDER = [
   'onlyMessage',
 ] as const satisfies readonly CollapseMode[]
 
+/** Shipped default for new sessions and for rows resumed without a recorded mode. */
+export const DEFAULT_COLLAPSE_MODE: CollapseMode = 'onlyMessage'
+
 const COLLAPSE_MODE_SET: ReadonlySet<string> = new Set(COLLAPSE_MODE_ORDER)
 
 export function isCollapseMode(value: unknown): value is CollapseMode {
@@ -24,5 +27,5 @@ export function isCollapseMode(value: unknown): value is CollapseMode {
 /** default → collapsed → expanded → hideThinking → onlyMessage → default */
 export function nextCollapseMode(mode: CollapseMode): CollapseMode {
   const index = COLLAPSE_MODE_ORDER.indexOf(mode)
-  return COLLAPSE_MODE_ORDER[(index + 1) % COLLAPSE_MODE_ORDER.length] ?? 'default'
+  return COLLAPSE_MODE_ORDER[(index + 1) % COLLAPSE_MODE_ORDER.length] ?? DEFAULT_COLLAPSE_MODE
 }

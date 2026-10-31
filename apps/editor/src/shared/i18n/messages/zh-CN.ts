@@ -832,7 +832,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.acp.sideTask.models':
     '新建侧边任务使用的模型，按 Agent ID 分键（如 { "claude-code": "haiku", "codex": "gpt-5-codex-mini" }）。侧边任务继承父会话的 Agent，因此生效的是父会话 Agent 对应的那一项。值是该 Agent 的模型选项值——不是编辑器 AI 设置里的模型 ID——请通过「配置侧边任务模型」命令选择。未配置该 Agent、或值不是该 Agent 可选项时，跟随父会话的模型。',
   'settings.acp.defaultCollapseModes':
-    '按 Agent ID 设置新会话的默认时间线显示方式。可选值："default"（按类型智能折叠）、"collapsed"（全部折叠）、"expanded"（全部展开，但子 Agent 卡片最多保留一张展开）、"hideThinking"（隐藏思考，包括子 Agent 内部的思考）、"onlyMessage"（仅消息：保留你与 Agent 的全部文本消息；思考与普通工具卡隐藏，子 Agent 卡片、关键状态卡与提问卡保留）。示例：{ "claude-code": "default", "codex": "collapsed" }。',
+    '按 Agent ID 设置新会话的默认时间线显示方式，默认使用 "onlyMessage"（仅消息）；未列出的 Agent 也回退到 "onlyMessage"。可选值："default"（按类型智能折叠）、"collapsed"（全部折叠）、"expanded"（全部展开，但子 Agent 卡片最多保留一张展开）、"hideThinking"（隐藏思考，包括子 Agent 内部的思考）、"onlyMessage"（仅消息：保留你与 Agent 的全部文本消息；思考与普通工具卡隐藏，子 Agent 卡片、关键状态卡与提问卡保留）。示例：{ "claude-code": "default", "codex": "collapsed" }。',
   'settings.acp.mcpCard.defaultExpanded':
     'MCP 工具调用卡片默认展开哪些区域："both"（输入和输出）、"output"（仅输出）或 "none"（全部折叠）。',
   'settings.acp.fontFamily': '控制 Agent 聊天面板的字体。留空则继承工作台 UI 字体。',

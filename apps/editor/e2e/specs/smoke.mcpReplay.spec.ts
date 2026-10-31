@@ -59,6 +59,8 @@ test.describe('@p1 mcp tool replay', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
       .toBe('acp.session')
+    // The MCP card is an ordinary tool card, hidden under the shipped onlyMessage default.
+    await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('default'))
     await page.evaluate(() => window.__E2E__!.sendAcpPrompt('go'))
 
     // 3. 卡片顶栏的重放按钮。

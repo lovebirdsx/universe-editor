@@ -4,7 +4,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { COLLAPSE_MODE_ORDER, isCollapseMode, nextCollapseMode } from '../acpCollapseMode.js'
+import {
+  COLLAPSE_MODE_ORDER,
+  DEFAULT_COLLAPSE_MODE,
+  isCollapseMode,
+  nextCollapseMode,
+} from '../acpCollapseMode.js'
 
 describe('acpCollapseMode', () => {
   it('orders the five display modes', () => {
@@ -30,5 +35,10 @@ describe('acpCollapseMode', () => {
     expect(isCollapseMode('hide-thinking')).toBe(false)
     expect(isCollapseMode(undefined)).toBe(false)
     expect(isCollapseMode(1)).toBe(false)
+  })
+
+  it('defaults new sessions to onlyMessage', () => {
+    expect(DEFAULT_COLLAPSE_MODE).toBe('onlyMessage')
+    expect(COLLAPSE_MODE_ORDER).toContain(DEFAULT_COLLAPSE_MODE)
   })
 })

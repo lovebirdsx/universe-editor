@@ -17,6 +17,7 @@ import {
 import { AcpSession } from './acpSession.js'
 import type { IAcpSessionInitState } from './acpSessionModel.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
+import { DEFAULT_COLLAPSE_MODE } from './acpCollapseMode.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { ISessionChangeTrackerService } from './sessionChangeTracker.js'
@@ -122,7 +123,7 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       opts.title,
       this._telemetry,
       opts.initState,
-      opts.collapseMode ?? 'default',
+      opts.collapseMode ?? DEFAULT_COLLAPSE_MODE,
       this._history,
       this._agentDefaults,
       this._changeTracker,

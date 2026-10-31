@@ -754,6 +754,18 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(resumed.configOptions.get()).toEqual([])
   })
 
+  it('defaults a resumed row without a recorded display mode to onlyMessage', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({ agentId: 'fake', sessionIdOnAgent: 'legacy-no-mode', title: 'legacy' })
+
+    const resumed = await svc.resumeSession('legacy-no-mode')
+
+    expect(resumed.collapseMode.get()).toBe('onlyMessage')
+    expect(built.history.get('legacy-no-mode')?.collapseMode).toBe('onlyMessage')
+  })
+
   it('seeds the usage arc from the persisted snapshot on resume', async () => {
     const built = buildService({ loadSessionResult: {} })
     svc = built.svc

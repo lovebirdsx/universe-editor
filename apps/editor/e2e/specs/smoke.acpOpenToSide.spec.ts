@@ -43,6 +43,9 @@ async function startSessionWithCard(page: Page, directive: 'createmd' | 'createt
     .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
     .toBe('acp.session')
 
+  // Write cards are ordinary tool cards, hidden under the shipped onlyMessage default.
+  await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('default'))
+
   await page.evaluate((d) => window.__E2E__!.sendAcpPrompt(d), directive)
   const key = directive === 'createmd' ? 't:sd-create-md' : 't:sd-create-txt'
   const card = page.locator(`[data-timeline-key^="${key}"]`).first()
