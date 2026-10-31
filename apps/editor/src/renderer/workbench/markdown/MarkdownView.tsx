@@ -2,9 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  MarkdownView — render a markdown string as React elements via the shared
  *  `parseMarkdown` AST. No raw HTML is emitted from user text (React escapes
- *  text nodes); only Monaco-colorized code (trusted, escaped) uses innerHTML,
- *  inside CodeBlock. Font size / colour are inherited from the container so the
- *  same component fits both the compact ACP chat and the roomier doc preview.
+ *  text nodes); only Monaco-colorized code (trusted, escaped) and KaTeX math
+ *  output (trusted, see mathRenderer.ts) use innerHTML. Font size / colour are
+ *  inherited from the container so the same component fits both the compact ACP
+ *  chat and the roomier doc preview.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -15,9 +16,10 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ReactNode,
 } from 'react'
-import { IWorkspaceService, URI } from '@universe-editor/platform'
+import { IConfigurationService, IWorkspaceService, URI } from '@universe-editor/platform'
 import { IResourceAccessService } from '../../../shared/ipc/resourceAccessService.js'
 import {
   inlineToText,
@@ -43,6 +45,8 @@ import {
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { registerHeapView, unregisterHeapView } from '../../services/memory/heapFlowCounters.js'
 import { MermaidBlock } from './MermaidBlock.js'
+import { MathBlockNode, MathInlineNode, MathOptionsContext } from './MathNode.js'
+import { EMPTY_MATH_MACROS, sanitizeMathMacros } from './mathOptions.js'
 import { MarkdownStreamingContext } from './markdownStreamingContext.js'
 import { useOptionalService } from '../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from './useMarkdownFileLink.js'
@@ -97,6 +101,18 @@ interface MarkdownViewProps {
    */
   readonly frontmatter?: 'table' | 'hidden'
   /**
+   * Whether LaTeX math is rendered. Omitted = enabled, so chat/docs/release
+   * notes opt in by default; only the file preview turns it off, driven by
+   * `markdown.math.enabled`.
+   */
+  readonly math?: boolean
+  /**
+   * User-defined KaTeX macros (`markdown.math.macros`). MarkdownView reads the
+   * live setting itself so chat/docs/preview all agree; passing this prop
+   * overrides the setting for tests and embedders outside the workbench.
+   */
+  readonly mathMacros?: Readonly<Record<string, string>>
+  /**
    * Additional explicit-link schemes (`[label](doc:x)`) this consumer accepts.
    * Empty by default: ACP chat, docs and previews keep treating unknown schemes
    * as literal text.
@@ -125,6 +141,8 @@ export function MarkdownView({
   initialAnchor,
   renderImage,
   frontmatter,
+  math,
+  mathMacros,
   extraHrefSchemes,
   linkHandler,
 }: MarkdownViewProps) {
@@ -132,11 +150,15 @@ export function MarkdownView({
   // usually an inline literal, so comparing references would re-parse forever.
   const schemesKey =
     extraHrefSchemes !== undefined && extraHrefSchemes.length > 0 ? extraHrefSchemes.join(',') : ''
+  const mathEnabled = math !== false
+  const macros = useMathMacros(mathMacros)
+  const mathOptions = useMemo(() => ({ enabled: mathEnabled, macros }), [mathEnabled, macros])
   const { nodes, sealedNodes, tailChars } = useMarkdownNodes(
     text,
     streaming ?? false,
     frontmatter !== undefined,
     schemesKey,
+    mathEnabled,
   )
   // Absolute readings for the heap report: node counts are what move when a growing
   // message re-renders, and they are invisible to the V8 heap number. Registered
@@ -190,39 +212,74 @@ export function MarkdownView({
   }, [scrollToAnchor])
 
   return (
-    <FileLinkContext.Provider value={openFileLink}>
-      <AnchorScrollContext.Provider value={scrollToAnchor}>
-        <BaseUriContext.Provider value={baseUri}>
-          <InlineCodeMarkdownLinkContext.Provider value={previewLinks ?? false}>
-            <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
-              <FrontmatterModeContext.Provider value={frontmatter}>
-                <LinkHandlerContext.Provider value={linkHandler}>
-                  <div
-                    ref={rootRef}
-                    className={
-                      className ? `${styles['markdown']} ${className}` : styles['markdown']
-                    }
-                    {...(testId !== undefined ? { 'data-testid': testId } : {})}
-                  >
-                    {streaming ? (
-                      <>
-                        <SealedNodes nodes={sealedNodes} />
-                        <MarkdownStreamingContext.Provider value={true}>
-                          <TailNodes nodes={nodes} from={sealedNodes.length} />
-                        </MarkdownStreamingContext.Provider>
-                      </>
-                    ) : (
-                      nodes.map((node, i) => <MemoBlock key={i} node={node} />)
-                    )}
-                  </div>
-                </LinkHandlerContext.Provider>
-              </FrontmatterModeContext.Provider>
-            </ImageRenderContext.Provider>
-          </InlineCodeMarkdownLinkContext.Provider>
-        </BaseUriContext.Provider>
-      </AnchorScrollContext.Provider>
-    </FileLinkContext.Provider>
+    <MathOptionsContext.Provider value={mathOptions}>
+      <FileLinkContext.Provider value={openFileLink}>
+        <AnchorScrollContext.Provider value={scrollToAnchor}>
+          <BaseUriContext.Provider value={baseUri}>
+            <InlineCodeMarkdownLinkContext.Provider value={previewLinks ?? false}>
+              <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
+                <FrontmatterModeContext.Provider value={frontmatter}>
+                  <LinkHandlerContext.Provider value={linkHandler}>
+                    <div
+                      ref={rootRef}
+                      className={
+                        className ? `${styles['markdown']} ${className}` : styles['markdown']
+                      }
+                      {...(testId !== undefined ? { 'data-testid': testId } : {})}
+                    >
+                      {streaming ? (
+                        <>
+                          <SealedNodes nodes={sealedNodes} />
+                          <MarkdownStreamingContext.Provider value={true}>
+                            <TailNodes nodes={nodes} from={sealedNodes.length} />
+                          </MarkdownStreamingContext.Provider>
+                        </>
+                      ) : (
+                        nodes.map((node, i) => <MemoBlock key={i} node={node} />)
+                      )}
+                    </div>
+                  </LinkHandlerContext.Provider>
+                </FrontmatterModeContext.Provider>
+              </ImageRenderContext.Provider>
+            </InlineCodeMarkdownLinkContext.Provider>
+          </BaseUriContext.Provider>
+        </AnchorScrollContext.Provider>
+      </FileLinkContext.Provider>
+    </MathOptionsContext.Provider>
   )
+}
+
+function readConfiguredMathMacros(
+  config: IConfigurationService | undefined,
+): Readonly<Record<string, string>> {
+  // Partial IConfigurationService stubs exist in tests; treat them as "no
+  // macros" rather than crashing every MarkdownView consumer.
+  if (!config || typeof config.get !== 'function') return EMPTY_MATH_MACROS
+  return sanitizeMathMacros(config.get<unknown>('markdown.math.macros'))
+}
+
+/**
+ * `markdown.math.macros` is a global setting: resolve it here so every
+ * MarkdownView consumer (preview, ACP chat, doc centre, release notes) renders
+ * formulas with the same macros. A prop still wins for tests/embedders.
+ */
+function useMathMacros(
+  override: Readonly<Record<string, string>> | undefined,
+): Readonly<Record<string, string>> {
+  const config = useOptionalService(IConfigurationService)
+  const [configured, setConfigured] = useState(() => readConfiguredMathMacros(config))
+  useEffect(() => {
+    if (!config || override !== undefined) return
+    setConfigured(readConfiguredMathMacros(config))
+    if (typeof config.onDidChangeConfiguration !== 'function') return
+    const subscription = config.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('markdown.math.macros')) {
+        setConfigured(readConfiguredMathMacros(config))
+      }
+    })
+    return () => subscription?.dispose()
+  }, [config, override])
+  return override ?? configured
 }
 
 /**
@@ -245,29 +302,39 @@ function useMarkdownNodes(
   streaming: boolean,
   frontmatter: boolean,
   schemesKey: string,
+  mathEnabled: boolean,
 ): {
   readonly nodes: readonly MdNode[]
   readonly sealedNodes: readonly MdNode[]
   /** Characters still unsealed — the part every batch has to re-parse and re-render. */
   readonly tailChars: number
 } {
+  const parseOptions = useMemo<ParseMarkdownOptions | undefined>(() => {
+    const schemes =
+      schemesKey === '' ? [] : schemesKey.split(',').filter((scheme) => scheme.length > 0)
+    if (!frontmatter && mathEnabled && schemes.length === 0) return undefined
+    return {
+      ...(frontmatter ? { frontmatter: true } : {}),
+      ...(mathEnabled ? {} : { math: false }),
+      ...(schemes.length > 0 ? { extraHrefSchemes: schemes } : {}),
+    }
+  }, [frontmatter, mathEnabled, schemesKey])
+  // A sealed prefix is only reusable under the same parse options: switching
+  // frontmatter/math/schemes after sealing would otherwise mix ASTs parsed with
+  // different rules. Keying the cache on those options starts a fresh one.
+  const optionKey = `${frontmatter ? '1' : '0'}:${mathEnabled ? '1' : '0'}:${schemesKey}`
   const cacheRef = useRef(createMarkdownStreamCache())
-  const parseOptions = useMemo<ParseMarkdownOptions | undefined>(
-    () =>
-      schemesKey === ''
-        ? undefined
-        : { extraHrefSchemes: schemesKey.split(',').filter((scheme) => scheme.length > 0) },
-    [schemesKey],
-  )
-  const staticNodes = useMemo(
-    () => (streaming ? undefined : parseMarkdown(text, { frontmatter, ...(parseOptions ?? {}) })),
-    [text, streaming, frontmatter, parseOptions],
-  )
-  const parse = useMemo(
-    () => (input: string) => parseMarkdown(input, { frontmatter, ...(parseOptions ?? {}) }),
-    [frontmatter, parseOptions],
-  )
+  const cacheKeyRef = useRef(optionKey)
+  if (cacheKeyRef.current !== optionKey) {
+    cacheKeyRef.current = optionKey
+    cacheRef.current = createMarkdownStreamCache()
+  }
   const cache = cacheRef.current
+  const staticNodes = useMemo(
+    () => (streaming ? undefined : parseMarkdown(text, parseOptions)),
+    [text, streaming, parseOptions],
+  )
+  const parse = useMemo(() => (input: string) => parseMarkdown(input, parseOptions), [parseOptions])
   if (staticNodes !== undefined) {
     return {
       nodes: staticNodes,
@@ -275,7 +342,7 @@ function useMarkdownNodes(
       tailChars: text.length - cache.sealedText.length,
     }
   }
-  const nodes = parseMarkdownStreaming(text, cache, parse)
+  const nodes = parseMarkdownStreaming(text, cache, parse, mathEnabled)
   return { nodes, sealedNodes: cache.sealedNodes, tailChars: text.length - cache.sealedText.length }
 }
 
@@ -337,6 +404,7 @@ export const DocLinkContext = createContext<
 >(undefined)
 
 function Block({ node }: { node: MdNode }): ReactNode {
+  const mathOptions = useContext(MathOptionsContext)
   const lineAttr = node.line !== undefined ? { 'data-line': node.line } : {}
   switch (node.type) {
     case 'paragraph':
@@ -350,11 +418,22 @@ function Block({ node }: { node: MdNode }): ReactNode {
         </Tag>
       )
     }
-    case 'code_fence':
-      return node.lang?.toLowerCase() === 'mermaid' ? (
-        <MermaidBlock code={node.code} />
-      ) : (
-        <CodeFenceBlock node={node} />
+    case 'code_fence': {
+      const lang = node.lang?.toLowerCase()
+      if (lang === 'mermaid') return <MermaidBlock code={node.code} />
+      if (lang === 'math' && mathOptions.enabled) {
+        return (
+          <MathBlockNode
+            tex={node.code}
+            {...(node.line !== undefined ? { line: node.line } : {})}
+          />
+        )
+      }
+      return <CodeFenceBlock node={node} />
+    }
+    case 'math_block':
+      return (
+        <MathBlockNode tex={node.tex} {...(node.line !== undefined ? { line: node.line } : {})} />
       )
     case 'list':
       return node.ordered ? (
@@ -554,6 +633,8 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
       // (no slugify) so exact id matching works; the slug fallback lives in
       // findMarkdownAnchor.
       return <span data-anchor={node.id} className={styles['mdAnchor']} />
+    case 'math_inline':
+      return <MathInlineNode tex={node.tex} display={node.display} />
   }
 }
 

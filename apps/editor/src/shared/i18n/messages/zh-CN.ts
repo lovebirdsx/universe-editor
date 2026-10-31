@@ -1099,6 +1099,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.languageServices.prewarm':
     '工作区空闲后预热的语言 id，使打开该语言的首个文件时没有启动延迟。设为 [] 可禁用。',
   'settings.markdown': 'Markdown',
+  'settings.markdown.math.enabled':
+    '在 markdown 预览中渲染 LaTeX 数学公式（`$…$`、`$$…$$` 和 ```math 代码块）。',
+  'settings.markdown.math.macros':
+    '对所有公式生效的自定义 KaTeX 宏，键为宏名（如 \\RR），值为宏定义（如 \\mathbb{R}）。',
   'settings.markdown.preview.renderYamlFrontmatter':
     '在 markdown 预览中将 YAML frontmatter（文件顶部的 `---` 块）渲染为表格。关闭时 frontmatter 会被隐藏。',
   'settings.workbench.editor': '编辑器',

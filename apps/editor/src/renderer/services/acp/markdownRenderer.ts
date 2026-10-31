@@ -12,6 +12,7 @@
  *    - ordered       `1. ` (any positive integer + `.`)
  *    - hr            `---` / `***` / `___`
  *    - table         GFM pipe table (`| a | b |` + `| --- | :-: |` row)
+ *    - math block    `$$ ... $$` (unterminated runs to EOF for streaming)
  *    - paragraph     anything else (joined runs of non-blank lines)
  *
  *  Supported inline tokens:
@@ -19,6 +20,7 @@
  *    - *italic*, _italic_
  *    - ~~strikethrough~~
  *    - `inline code`
+ *    - $inline math$ and mid-paragraph $$display math$$
  *    - [label](url)
  *    - [label](scheme:target)  (only schemes the consumer opted into via `extraHrefSchemes`)
  *    - ![alt](url)       (image — https/file only)
@@ -67,6 +69,13 @@ export type MdNode =
       readonly line?: number
     }
   | { readonly type: 'hr'; readonly line?: number }
+  | {
+      readonly type: 'math_block'
+      /** Raw TeX without the `$$` delimiters. */
+      readonly tex: string
+      readonly display: true
+      readonly line?: number
+    }
 
 export type TableAlign = 'left' | 'center' | 'right'
 
@@ -99,6 +108,13 @@ export type MdInline =
     }
   | { readonly type: 'image'; readonly src: string; readonly alt: string }
   | { readonly type: 'anchor'; readonly id: string }
+  | {
+      readonly type: 'math_inline'
+      /** Raw TeX without the `$` / `$$` delimiters. */
+      readonly tex: string
+      /** `$$…$$` mid-paragraph renders in KaTeX display mode. */
+      readonly display: boolean
+    }
   | { readonly type: 'softbreak' }
 
 /** The subset of options nested blocks inherit (see `parseMarkdown`). */
@@ -106,7 +122,12 @@ function toChildOptions(
   options: ParseMarkdownOptions | undefined,
 ): ParseMarkdownOptions | undefined {
   const schemes = options?.extraHrefSchemes
-  return schemes !== undefined && schemes.length > 0 ? { extraHrefSchemes: schemes } : undefined
+  const mathOff = options?.math === false
+  if ((schemes === undefined || schemes.length === 0) && !mathOff) return undefined
+  return {
+    ...(schemes !== undefined && schemes.length > 0 ? { extraHrefSchemes: schemes } : {}),
+    ...(mathOff ? { math: false } : {}),
+  }
 }
 
 /**
@@ -124,6 +145,12 @@ function toChildOptions(
 export interface ParseMarkdownOptions {
   readonly frontmatter?: boolean
   readonly extraHrefSchemes?: readonly string[]
+  /**
+   * LaTeX math (`$…$`, `$$…$$`, and ` ```math ` fences at render time).
+   * Omitted = enabled; only an explicit `false` disables it. Opt-out keeps the
+   * default `parseMarkdown(text)` call sites (ACP chat and docs) math-aware.
+   */
+  readonly math?: boolean
 }
 
 /**
@@ -150,6 +177,7 @@ export function parseMarkdown(
   // Inline/container blocks inherit the extra link schemes, never `frontmatter`:
   // a `---` inside a nested block is an hr, not a second preamble.
   const childOptions = toChildOptions(options)
+  const mathEnabled = options?.math !== false
 
   // YAML frontmatter: a `---` on the first line closed by a later `---`/`...`.
   // Emitted as one node the preview renders as a table; skipped otherwise.
@@ -199,6 +227,39 @@ export function parseMarkdown(
         lang: fence.lang,
         code: codeLines.join('\n'),
         line: blockStart + lineOffset,
+      })
+      continue
+    }
+
+    // Block math (`$$…$$`). Recognized only at the start of a line; the raw TeX
+    // is preserved (no inline markdown inside) and handed to KaTeX by the
+    // renderer. An unterminated block runs to EOF so a streaming message shows
+    // its partial formula instead of falling back to text.
+    const mathStart = mathEnabled ? matchMathBlockStart(line) : null
+    if (mathStart) {
+      i++
+      const mathLine = blockStart + lineOffset
+      if (mathStart.kind === 'single') {
+        out.push({ type: 'math_block', tex: mathStart.tex, display: true, line: mathLine })
+        continue
+      }
+      const parts: string[] = [mathStart.first]
+      while (i < lines.length) {
+        const cur = lines[i] ?? ''
+        const closeAt = matchMathBlockClose(cur)
+        if (closeAt !== null) {
+          parts.push(cur.slice(0, closeAt))
+          i++
+          break
+        }
+        parts.push(cur)
+        i++
+      }
+      out.push({
+        type: 'math_block',
+        tex: parts.join('\n').trim(),
+        display: true,
+        line: mathLine,
       })
       continue
     }
@@ -275,14 +336,21 @@ export function parseMarkdown(
         const marker = markerRe.exec(rest)![1] ?? ''
         // Content column = marker prefix width; child blocks indent to here.
         const markerWidth = baseIndent + marker.length
+        const itemLine = i
         const firstLine = rest.slice(marker.length)
         i++
+        const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(firstLine)
+        const itemLeadingText = taskMatch ? (taskMatch[2] ?? '') : firstLine
+        // A multi-line `$$` opening on the item's own line belongs to the item's
+        // block content, not its inline text: everything after it is TeX until
+        // the closing `$$`. (A single-line `- $$x$$` stays inline display math.)
+        const mathAsChild = mathEnabled && matchMathBlockStart(itemLeadingText)?.kind === 'multi'
         const continuationLines: string[] = []
-        const childLines: string[] = []
+        const childLines: string[] = mathAsChild ? [itemLeadingText] : []
         // Original source line (0-based, within this parse's input) of the first
         // child block; childLines[k] corresponds to source line childStart + k.
-        let childStart = -1
-        let sawChild = false
+        let childStart = mathAsChild ? itemLine : -1
+        let sawChild = mathAsChild
         while (i < lines.length) {
           const nextLine = lines[i] ?? ''
           if (nextLine.trim() === '') {
@@ -309,7 +377,7 @@ export function parseMarkdown(
           // Dedented line: a sibling item or an outer block ends this item.
           if (isSibling(nextLine)) break
           if (isListItemStart(nextLine)) break
-          if (isTopLevelBlockStart(nextLine, lines[i + 1] ?? '')) break
+          if (isTopLevelBlockStart(nextLine, lines[i + 1] ?? '', mathEnabled)) break
           // Lazy continuation of the leading text — only before any child block.
           if (sawChild) break
           continuationLines.push(nextLine)
@@ -318,8 +386,7 @@ export function parseMarkdown(
         const children = childLines.some((l) => l.trim() !== '')
           ? parseMarkdown(childLines.join('\n'), childOptions, lineOffset + childStart)
           : undefined
-        const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(firstLine)
-        const leadingText = taskMatch ? (taskMatch[2] ?? '') : firstLine
+        const leadingText = mathAsChild ? '' : itemLeadingText
         const itemText = [leadingText, ...continuationLines].join('\n')
         items.push({
           inline: [...parseInline(itemText, childOptions)],
@@ -363,6 +430,7 @@ export function parseMarkdown(
       const cur = lines[i] ?? ''
       if (cur.trim() === '') break
       if (matchCodeFenceStart(cur)) break
+      if (mathEnabled && matchMathBlockStart(cur) !== null) break
       if (/^#{1,6}\s/.test(cur)) break
       if (/^\s*>/.test(cur)) break
       if (/^\s*[-*+]\s+/.test(cur)) break
@@ -412,20 +480,197 @@ function isCodeFenceEnd(line: string, marker: string): boolean {
   return m !== null && (m[1] ?? '').length >= marker.length
 }
 
+/** How a line opening a block-level `$$` is consumed. */
+type MathBlockStart =
+  | { readonly kind: 'single'; readonly tex: string }
+  | { readonly kind: 'multi'; readonly first: string }
+
 /**
- * Fence state of each line, for consumers that only need to know whether a line
- * sits inside a code block (the incremental parser's split-point search).
+ * Opening `$$` of a block-level formula. A line start (0–3 spaces) plus `$$`
+ * starts a block unless it is a longer dollar run or contains more than one
+ * `$$` pair; those stay inline so a stray `$$$` cannot swallow the rest of a
+ * streaming message. The closing `$$` may be on the same line (single) or a
+ * later line (multi).
  */
-export function codeFenceMask(lines: readonly string[]): boolean[] {
-  const inside: boolean[] = new Array(lines.length)
-  let openMarker: string | undefined
+function matchMathBlockStart(line: string): MathBlockStart | null {
+  const m = /^ {0,3}\$\$/.exec(line)
+  if (!m) return null
+  const after = line.slice(m[0].length)
+  // `$$$…` is not a math block. Treating it as one would consume everything
+  // after it until a closing run that a partial stream may never produce.
+  if (after.startsWith('$')) return null
+  const pairs = dollarPairPositions(after)
+  if (pairs.length > 1) return null
+  if (pairs.length === 1) {
+    const at = pairs[0]!
+    if (after.slice(at + 2).trim() === '') {
+      return { kind: 'single', tex: after.slice(0, at).trim() }
+    }
+  }
+  return { kind: 'multi', first: after }
+}
+
+/** Positions of each `$$` pair in a line. Delimiters are not escape-aware here. */
+function dollarPairPositions(text: string): number[] {
+  const positions: number[] = []
+  let at = text.indexOf('$$')
+  while (at !== -1) {
+    positions.push(at)
+    at = text.indexOf('$$', at + 2)
+  }
+  return positions
+}
+
+/**
+ * Index of the `$$` closing an open block math on {@link line}, or null.
+ * Prefers a line-final pair (so the line before the close may carry TeX) and
+ * falls back to an inline pair; text after the close is discarded, mirroring
+ * markdown-it-katex.
+ */
+function matchMathBlockClose(line: string): number | null {
+  const end = line.trimEnd()
+  if (end.endsWith('$$')) return end.lastIndexOf('$$')
+  const first = line.indexOf('$$')
+  return first === -1 ? null : first
+}
+
+/** The block math a mask scan is currently inside, with the scope that ends it. */
+type MathMaskState =
+  | { readonly kind: 'top' }
+  | { readonly kind: 'indented'; readonly indent: number }
+  | { readonly kind: 'list'; readonly contentCol: number }
+
+type MathLineVerdict = 'inside' | 'closed' | 'restart' | 'uncertain'
+
+/**
+ * A mask line can never be classified as math-only when the parser might have
+ * left the math block before it. List-scoped math is the hard case: the block
+ * ends when the item ends (a dedent or a blank not followed by indented
+ * content), even without a closing `$$`. A dedented line is processed afresh by
+ * the parser, so the scan can restart there; an indented opener, by contrast,
+ * may belong to the root or to a list item, and a dedent cannot tell which —
+ * keep every remaining line masked ("uncertain"), which only costs split
+ * opportunities and can never produce a wrong render.
+ */
+function classifyMathLine(
+  state: MathMaskState,
+  line: string,
+  lines: readonly string[],
+  index: number,
+): MathLineVerdict {
+  if (state.kind === 'top') {
+    return matchMathBlockClose(line) !== null ? 'closed' : 'inside'
+  }
+  const indent = indentOf(line)
+  if (state.kind === 'indented') {
+    if (matchMathBlockClose(line) !== null) {
+      return indent >= state.indent ? 'closed' : 'uncertain'
+    }
+    return line.trim() !== '' && indent < state.indent ? 'uncertain' : 'inside'
+  }
+  if (line.trim() === '') {
+    // Mirrors the parser's item loop: a blank stays in the item only when more
+    // indented content follows it; otherwise the item (and its math) ends here.
+    // EOF is *not* evidence that the item ended — a later chunk may still add
+    // indented content — so keep trailing blanks masked.
+    let next = index + 1
+    while (next < lines.length && (lines[next] ?? '').trim() === '') next++
+    if (next >= lines.length) return 'inside'
+    return indentOf(lines[next] ?? '') >= state.contentCol ? 'inside' : 'restart'
+  }
+  if (indent < state.contentCol) return 'restart'
+  return matchMathBlockClose(line) !== null ? 'closed' : 'inside'
+}
+
+/**
+ * Line masks for the incremental parser's safe-split search. Math takes
+ * priority over fences: a ``` inside `$$…$$` is TeX, and `$$` inside a fence is
+ * code. Used by `lastSafeSplit` to keep blank lines inside either region from
+ * becoming split points. Pass `math: false` when the caller parses with math
+ * disabled, so `$$` lines are plain text there.
+ */
+export function mathBlockMask(
+  lines: readonly string[],
+  math = true,
+): {
+  readonly insideMath: readonly boolean[]
+  readonly insideFence: readonly boolean[]
+} {
+  const insideMath: boolean[] = new Array(lines.length)
+  const insideFence: boolean[] = new Array(lines.length)
+  let fenceMarker: string | undefined
+  let mathState: MathMaskState | undefined
+  let uncertain = false
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i] ?? ''
-    inside[i] = openMarker !== undefined
-    if (openMarker === undefined) openMarker = matchCodeFenceStart(line)?.marker
-    else if (isCodeFenceEnd(line, openMarker)) openMarker = undefined
+    if (uncertain) {
+      insideMath[i] = true
+      insideFence[i] = false
+      continue
+    }
+    if (mathState !== undefined) {
+      const verdict = classifyMathLine(mathState, line, lines, i)
+      if (verdict === 'restart') {
+        // The list item ended before this line; classify it as an ordinary line.
+        mathState = undefined
+      } else {
+        insideMath[i] = true
+        insideFence[i] = false
+        if (verdict === 'inside') continue
+        mathState = undefined
+        if (verdict === 'closed') continue
+        uncertain = true
+        continue
+      }
+    }
+    insideMath[i] = false
+    insideFence[i] = fenceMarker !== undefined
+    if (fenceMarker !== undefined) {
+      if (isCodeFenceEnd(line, fenceMarker)) fenceMarker = undefined
+      continue
+    }
+    const fence = matchCodeFenceStart(line)
+    if (fence !== undefined) {
+      fenceMarker = fence.marker
+      continue
+    }
+    if (!math) continue
+    const listStart = matchListMathBlockStart(line)
+    if (listStart !== null) {
+      if (listStart.start.kind === 'multi') {
+        insideMath[i] = true
+        mathState = { kind: 'list', contentCol: listStart.contentCol }
+      }
+      continue
+    }
+    const start = matchMathBlockStart(line)
+    if (start?.kind === 'multi') {
+      insideMath[i] = true
+      const indent = indentOf(line)
+      mathState = indent === 0 ? { kind: 'top' } : { kind: 'indented', indent }
+    }
   }
-  return inside
+  return { insideMath, insideFence }
+}
+
+/**
+ * A multi-line block opened on a list item's own line (`- $$`). The item line
+ * itself carries the list marker, so {@link matchMathBlockStart} cannot see it,
+ * yet the parser moves the rest of that line into the item's child block — the
+ * mask has to follow suit or a blank line inside the formula would look like a
+ * safe split point. `contentCol` is the parser's `markerWidth`, the indentation
+ * a line needs to stay inside the item.
+ */
+function matchListMathBlockStart(
+  line: string,
+): { readonly start: MathBlockStart; readonly contentCol: number } | null {
+  const baseIndent = indentOf(line)
+  const rest = line.slice(baseIndent)
+  const marker = /^(?:[-*+]|\d+\.)\s+/.exec(rest)
+  if (!marker) return null
+  const content = rest.slice(marker[0].length).replace(/^\[[ xX]\]\s+/, '')
+  const start = matchMathBlockStart(content)
+  return start === null ? null : { start, contentCol: baseIndent + marker[0].length }
 }
 
 /**
@@ -457,8 +702,9 @@ function indentOf(line: string): number {
   return n
 }
 
-function isTopLevelBlockStart(line: string, nextLine: string): boolean {
+function isTopLevelBlockStart(line: string, nextLine: string, mathEnabled: boolean): boolean {
   return (
+    (mathEnabled && matchMathBlockStart(line) !== null) ||
     matchCodeFenceStart(line) !== undefined ||
     /^#{1,6}\s/.test(line) ||
     /^\s*>/.test(line) ||
@@ -474,6 +720,7 @@ function isTopLevelBlockStart(line: string, nextLine: string): boolean {
  */
 export function parseInline(text: string, options?: ParseMarkdownOptions): readonly MdInline[] {
   const out: MdInline[] = []
+  const mathEnabled = options?.math !== false
   let buf = ''
   const flush = (): void => {
     if (buf.length > 0) {
@@ -486,7 +733,7 @@ export function parseInline(text: string, options?: ParseMarkdownOptions): reado
     const ch = text[i]!
 
     // Escapes: `\X` emits X verbatim when X is punctuation.
-    if (ch === '\\' && i + 1 < text.length && /[\\`*_{}[\]()#+\-.!<>]/.test(text[i + 1]!)) {
+    if (ch === '\\' && i + 1 < text.length && /[\\`*_{}[\]()#+\-.!<>$]/.test(text[i + 1]!)) {
       buf += text[i + 1]
       i += 2
       continue
@@ -496,6 +743,33 @@ export function parseInline(text: string, options?: ParseMarkdownOptions): reado
     if (ch === '\n') {
       flush()
       out.push({ type: 'softbreak' })
+      i++
+      continue
+    }
+
+    // Inline math. Checked before code spans/emphasis because once `$` opens a
+    // formula the content is TeX, not markdown. `$$` is display mode.
+    if (mathEnabled && ch === '$') {
+      if (text[i + 1] === '$') {
+        const displayMath = matchInlineDisplayMath(text, i)
+        if (displayMath) {
+          flush()
+          out.push({ type: 'math_inline', tex: displayMath.tex, display: true })
+          i = displayMath.end
+          continue
+        }
+        buf += '$$'
+        i += 2
+        continue
+      }
+      const inlineMath = matchInlineMath(text, i)
+      if (inlineMath) {
+        flush()
+        out.push({ type: 'math_inline', tex: inlineMath.tex, display: false })
+        i = inlineMath.end
+        continue
+      }
+      buf += '$'
       i++
       continue
     }
@@ -657,6 +931,80 @@ export function parseInline(text: string, options?: ParseMarkdownOptions): reado
   }
   flush()
   return out
+}
+
+// ---------------------------------------------------------------------------
+// Inline math
+// ---------------------------------------------------------------------------
+
+// ASCII letters/digits/underscore only: CJK next to `$` must still open/close a
+// formula, matching @vscode/markdown-it-katex's word boundary.
+const MATH_WORD_CHAR_RE = /[A-Za-z0-9_]/
+
+function isEscapedAt(text: string, index: number): boolean {
+  let backslashes = 0
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) backslashes++
+  return backslashes % 2 === 1
+}
+
+function canOpenInlineMath(text: string, index: number): boolean {
+  const prev = index > 0 ? text[index - 1] : undefined
+  if (prev === '$' || prev === '\\') return false
+  return prev === undefined || /\s/.test(prev) || !MATH_WORD_CHAR_RE.test(prev)
+}
+
+function canCloseInlineMath(text: string, index: number): boolean {
+  const next = index + 1 < text.length ? text[index + 1] : undefined
+  if (next === '$') return false
+  return next === undefined || /\s/.test(next) || !MATH_WORD_CHAR_RE.test(next)
+}
+
+/**
+ * `$…$` at {@link index}. Mirrors markdown-it-katex: only the first unescaped
+ * `$` is considered as the closer, so `$a$b$c$` stays literal instead of
+ * stretching to the last dollar.
+ */
+function matchInlineMath(
+  text: string,
+  index: number,
+): { readonly tex: string; readonly end: number } | null {
+  if (!canOpenInlineMath(text, index)) return null
+  for (let j = index + 1; j < text.length; j++) {
+    if (text[j] !== '$' || isEscapedAt(text, j)) continue
+    if (!canCloseInlineMath(text, j)) return null
+    return { tex: text.slice(index + 1, j), end: j + 1 }
+  }
+  return null
+}
+
+/** Mid-paragraph `$$…$$` (KaTeX display mode). */
+function matchInlineDisplayMath(
+  text: string,
+  index: number,
+): { readonly tex: string; readonly end: number } | null {
+  const prev = index > 0 ? text[index - 1] : undefined
+  if (prev === '$' || prev === '\\') return null
+  // A third `$` is a longer run, not a display opener.
+  if (text[index + 2] === '$') return null
+  let j = index + 2
+  while (j < text.length - 1) {
+    if (text[j] !== '$' || text[j + 1] !== '$') {
+      j++
+      continue
+    }
+    if (isEscapedAt(text, j)) {
+      j += 2
+      continue
+    }
+    const prevClose = text[j - 1]
+    // The plugin considers only the first unescaped `$$` candidate; when its
+    // boundaries are invalid the whole run stays literal (`$$a$$$ b$$` is text,
+    // not the formula `a$$$ b`).
+    if (prevClose === '$' || prevClose === '\\') return null
+    if (text[j + 2] === '$') return null
+    return { tex: text.slice(index + 2, j), end: j + 2 }
+  }
+  return null
 }
 
 /** An explicit markdown link `[label](href)` matched at some index. */
@@ -881,6 +1229,9 @@ export function inlineToText(nodes: readonly MdInline[]): string {
       case 'text':
       case 'code':
         out += n.text
+        break
+      case 'math_inline':
+        out += n.tex
         break
       case 'bold':
       case 'italic':

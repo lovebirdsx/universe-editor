@@ -162,6 +162,7 @@ export default defineConfig({
         '@xterm/xterm',
         'allotment',
         'jsonc-parser',
+        'katex',
         'lucide-react',
         'mermaid',
         'vscode-oniguruma',

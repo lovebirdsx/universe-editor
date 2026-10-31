@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Registers the markdown.* settings. Currently the preview's YAML frontmatter
- *  rendering toggle, read by MarkdownPreviewEditor.
+ *  Registers the markdown.* settings: the preview's YAML frontmatter toggle and
+ *  LaTeX math rendering, read by MarkdownPreviewEditor.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -28,6 +28,23 @@ export class MarkdownConfigurationContribution
             description: localize(
               'settings.markdown.preview.renderYamlFrontmatter',
               'Render YAML frontmatter (the `---` block at the top of a file) as a table in the markdown preview. When off, the frontmatter is hidden.',
+            ),
+          },
+          'markdown.math.enabled': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.markdown.math.enabled',
+              'Render LaTeX math (`$…$`, `$$…$$` and ```math fences) in the markdown preview.',
+            ),
+          },
+          'markdown.math.macros': {
+            type: 'object',
+            default: {},
+            additionalProperties: { type: 'string' },
+            description: localize(
+              'settings.markdown.math.macros',
+              'Custom KaTeX macros available to every formula, keyed by macro name (e.g. { "\\RR": "\\mathbb{R}" }).',
             ),
           },
         },

@@ -237,6 +237,52 @@
   height: auto;
 }
 
+/* KaTeX formulas: undo the paragraph's pre-wrap/break-word so a formula stays a
+   single unbroken line; long formulas scroll instead of wrapping. */
+.mathInline {
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
+}
+
+.mathDisplayInline {
+  display: block;
+  margin: 0.35em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: normal;
+  word-break: normal;
+}
+
+.mathDisplayInline :global(.katex-display),
+.mathBlock :global(.katex-display) {
+  margin: 0;
+}
+
+.mathBlock {
+  margin: 0.25em 0;
+  padding: 0.15em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: normal;
+  word-break: normal;
+}
+
+.mathBlockContent {
+  display: inline-block;
+  min-width: 100%;
+}
+
+/* Shown while the lazy KaTeX chunk loads, when math is disabled, or when the
+   formula failed to render. Raw TeX, monospaced and wrapping. */
+.mathFallback {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+}
+
 .markdown del {
   text-decoration: line-through;
   color: var(--vscode-descriptionForeground, #b0b0bc);

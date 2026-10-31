@@ -129,6 +129,9 @@ catalogs:
     jsonc-parser:
       specifier: ^3.3.1
       version: 3.3.1
+    katex:
+      specifier: 0.16.47
+      version: 0.16.47
     lucide-react:
       specifier: ^0.460.0
       version: 0.460.0
@@ -412,6 +415,9 @@ importers:
       happy-dom:
         specifier: 'catalog:'
         version: 17.6.3
+      katex:
+        specifier: 'catalog:'
+        version: 0.16.47
       lucide-react:
         specifier: 'catalog:'
         version: 0.460.0(react@19.2.5)

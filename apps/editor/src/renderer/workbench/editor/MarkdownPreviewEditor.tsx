@@ -44,6 +44,9 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const [renderFrontmatter, setRenderFrontmatter] = useState(
     () => configService.get<boolean>('markdown.preview.renderYamlFrontmatter') ?? true,
   )
+  const [mathEnabled, setMathEnabled] = useState(
+    () => configService.get<boolean>('markdown.math.enabled') ?? true,
+  )
   const rootRef = useRef<HTMLDivElement>(null)
   const activeGroup = groupsService.activeGroup
   const isActiveEditor = activeGroup === group && activeGroup.activeEditor === input
@@ -63,6 +66,9 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
           setRenderFrontmatter(
             configService.get<boolean>('markdown.preview.renderYamlFrontmatter') ?? true,
           )
+        }
+        if (e.affectsConfiguration('markdown.math.enabled')) {
+          setMathEnabled(configService.get<boolean>('markdown.math.enabled') ?? true)
         }
       }),
     )
@@ -136,6 +142,7 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
         baseUri={URI.joinPath(sourceUri, '..')}
         previewLinks
         frontmatter={renderFrontmatter ? 'table' : 'hidden'}
+        math={mathEnabled}
       />
       {helpVisible && <MarkdownPreviewHelp onClose={closeHelp} />}
     </div>

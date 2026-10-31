@@ -76,6 +76,10 @@ catalog:
   # Pinned to an exact version (not a range): lazy-loaded in the markdown preview,
   # and pinning keeps the lockfile integrity check tight against supply-chain risk.
   mermaid: 11.15.0
+  # Must stay aligned with mermaid's transitive katex (both resolve to 0.16.47) so
+  # the renderer bundles one copy. Math rendering is security-sensitive (it emits
+  # HTML), so pin it exactly rather than taking a range.
+  katex: 0.16.47
 
   # JSON with comments (settings.json / keybindings.json)
   jsonc-parser: ^3.3.1

@@ -93,6 +93,7 @@
     "electron-vite": "catalog:",
     "eslint": "catalog:",
     "happy-dom": "catalog:",
+    "katex": "catalog:",
     "lucide-react": "catalog:",
     "material-icon-theme": "catalog:",
     "mermaid": "catalog:",
