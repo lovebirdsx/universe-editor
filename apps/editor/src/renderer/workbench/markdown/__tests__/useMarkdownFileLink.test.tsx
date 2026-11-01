@@ -27,7 +27,6 @@ import {
 import type {
   IEditorResolverService as IEditorResolverServiceType,
   IEditorService as IEditorServiceType,
-  IFileSearchMatch as IFileSearchMatchType,
   IFileSearchQuery as IFileSearchQueryType,
   IFileSearchService as IFileSearchServiceType,
   IFileService as IFileServiceType,
@@ -40,6 +39,9 @@ import type {
 } from '../../../../shared/ipc/remoteStatusService.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
+import { IFocusScopeService } from '../../../services/focus/FocusScopeService.js'
+import { IQuickAccessController } from '../../../services/quickInput/QuickAccessController.js'
+import { IRecentFilesService } from '../../../services/recentFiles/recentFilesService.js'
 import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import { ServicesContext } from '../../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from '../useMarkdownFileLink.js'
@@ -110,7 +112,8 @@ function makeFileService(
 }
 
 function makeFileSearch(
-  results: readonly unknown[] = [],
+  relPaths: readonly string[] = [],
+  limitHit = false,
 ): IFileSearchServiceType & { queries: IFileSearchQueryType[] } {
   const queries: IFileSearchQueryType[] = []
   return {
@@ -119,9 +122,9 @@ function makeFileSearch(
     search: (query: IFileSearchQueryType) => {
       queries.push(query)
       return Promise.resolve({
-        results,
-        limitHit: false,
-        filesWalked: results.length,
+        relPaths,
+        limitHit,
+        filesWalked: relPaths.length,
         directoriesWalked: 0,
         durationMs: 0,
       })
@@ -135,9 +138,17 @@ function mount(options: {
   previewLinks?: boolean
   isDirectory?: (uri: URI) => boolean
   fileSearch?: IFileSearchServiceType & { queries: IFileSearchQueryType[] }
+  recentFiles?: readonly { uri: URI; name: string }[]
+  focus?: {
+    active: boolean
+    scanPaths: readonly string[]
+    rootFilesInScope: boolean
+    fingerprint: string
+  }
 }) {
   const openEditor = vi.fn().mockResolvedValue(undefined)
   const notify = vi.fn()
+  const showQuickAccess = vi.fn()
   const groups = new EditorGroupsService()
   const services = new ServiceCollection()
   services.set(IWorkspaceService, makeWorkspace() as never)
@@ -154,6 +165,27 @@ function mount(options: {
   services.set(IUriIdentityService, {
     _serviceBrand: undefined,
     isEqual: (a: URI, b: URI) => a.toString() === b.toString(),
+    isCaseSensitive: () => true,
+    getComparisonKey: (uri: URI) => uri.toString(),
+    relativePath: (from: URI, to: URI) => {
+      const base = from.path.endsWith('/') ? from.path.slice(0, -1) : from.path
+      if (to.path === base) return ''
+      if (!to.path.startsWith(`${base}/`)) return null
+      return to.path.slice(base.length + 1)
+    },
+  } as never)
+  services.set(IRecentFilesService, {
+    _serviceBrand: undefined,
+    getAll: async () => options.recentFiles ?? [],
+    add: () => {},
+    clear: () => {},
+  } as never)
+  if (options.focus) {
+    services.set(IFocusScopeService, { _serviceBrand: undefined, ...options.focus } as never)
+  }
+  services.set(IQuickAccessController, {
+    _serviceBrand: undefined,
+    show: showQuickAccess,
   } as never)
   services.set(IEditorResolverService, {
     _serviceBrand: undefined,
@@ -191,6 +223,7 @@ function mount(options: {
     openEditor,
     openInNewWindow,
     notify,
+    showQuickAccess,
     groups,
     click: (href: string, opts?: OpenMarkdownLinkOptions) =>
       result.current(href, undefined, undefined, undefined, opts),
@@ -269,72 +302,173 @@ describe('useMarkdownFileLink remote ~ expansion', () => {
   })
 })
 
-// A workspace listing built before a file was created must not turn into a
-// definitive "File does not exist": a zero-hit fast search retries once with
-// `requireFreshListing`, which waits for the listing rebuild.
-describe('useMarkdownFileLink workspace search fallback', () => {
+// A path that misses every concrete candidate is resolved by a live,
+// suffix-targeted enumeration. The walk never reads the on-disk listing, so a
+// file created after that listing was built is still found, and a truncated
+// walk never turns into a definitive "file does not exist".
+describe('useMarkdownFileLink workspace suffix fallback', () => {
   const TARGET = URI.joinPath(REMOTE_ROOT, 'open-file/foo/bar/test.md')
-  const MATCH: IFileSearchMatchType = {
-    resource: TARGET,
-    fsPath: TARGET.fsPath,
-    relativePath: 'open-file/foo/bar/test.md',
-    basename: 'test.md',
-    score: 100,
-  }
 
-  function makeStaleThenFreshSearch(): IFileSearchServiceType & {
-    queries: IFileSearchQueryType[]
-  } {
-    const queries: IFileSearchQueryType[] = []
-    return {
-      _serviceBrand: undefined,
-      queries,
-      search: (query: IFileSearchQueryType) => {
-        queries.push(query)
-        const results = query.requireFreshListing === true ? [MATCH] : []
-        return Promise.resolve({
-          results,
-          limitHit: false,
-          filesWalked: results.length,
-          directoriesWalked: 0,
-          durationMs: 0,
-        })
-      },
-    } as unknown as IFileSearchServiceType & { queries: IFileSearchQueryType[] }
-  }
-
-  it('retries with a fresh listing and opens the single hit', async () => {
-    const fileSearch = makeStaleThenFreshSearch()
+  it('opens the single suffix match from the live walk', async () => {
+    const fileSearch = makeFileSearch(['open-file/foo/bar/test.md'])
     const { openEditor, notify, click } = mount({ exists: () => false, fileSearch })
 
     click('bar/test.md')
 
     await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
     expect(openEditor.mock.calls[0]?.[0]?.toString()).toBe(TARGET.toString())
-    expect(fileSearch.queries.map((query) => query.requireFreshListing)).toEqual([undefined, true])
     expect(notify).not.toHaveBeenCalled()
+    expect(fileSearch.queries).toHaveLength(1)
+    expect(fileSearch.queries[0]).toMatchObject({
+      matchAll: true,
+      pattern: '',
+      glob: ['**/bar/test.md'],
+      omitTruncatedListing: true,
+      timeoutMs: 10_000,
+    })
   })
 
-  it('does not retry when the fast search already hit', async () => {
-    const fileSearch = makeFileSearch([MATCH])
-    const { openEditor, click } = mount({ exists: () => false, fileSearch })
+  it('opens a recent suffix match without walking the workspace', async () => {
+    const recentUri = URI.joinPath(REMOTE_ROOT, 'open-file/foo/bar/test.md')
+    const fileSearch = makeFileSearch()
+    const { openEditor, notify, click } = mount({
+      exists: (uri) => uri.toString() === recentUri.toString(),
+      fileSearch,
+      recentFiles: [{ uri: recentUri, name: 'test.md' }],
+    })
 
     click('bar/test.md')
 
     await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
-    expect(fileSearch.queries).toHaveLength(1)
-    expect(fileSearch.queries[0]?.requireFreshListing).toBeUndefined()
+    expect(openEditor.mock.calls[0]?.[0]?.toString()).toBe(recentUri.toString())
+    expect(fileSearch.queries).toHaveLength(0)
+    expect(notify).not.toHaveBeenCalled()
   })
 
-  it('reports missing only after the fresh retry found nothing', async () => {
+  it('hands several recent suffix matches to Go to File', async () => {
+    const first = URI.joinPath(REMOTE_ROOT, 'a/bar/test.md')
+    const second = URI.joinPath(REMOTE_ROOT, 'b/bar/test.md')
     const fileSearch = makeFileSearch()
+    const { openEditor, showQuickAccess, click } = mount({
+      exists: (uri) => uri.toString() === first.toString() || uri.toString() === second.toString(),
+      fileSearch,
+      recentFiles: [
+        { uri: first, name: 'test.md' },
+        { uri: second, name: 'test.md' },
+      ],
+    })
+
+    click('bar/test.md')
+
+    await waitFor(() => expect(showQuickAccess).toHaveBeenCalledWith('bar/test.md'))
+    expect(openEditor).not.toHaveBeenCalled()
+    expect(fileSearch.queries).toHaveLength(0)
+  })
+
+  it('ignores a stale recent entry and falls back to the live walk', async () => {
+    const stale = URI.joinPath(REMOTE_ROOT, 'stale/bar/test.md')
+    const fileSearch = makeFileSearch(['live/bar/test.md'])
+    const { openEditor, click } = mount({
+      exists: () => false,
+      fileSearch,
+      recentFiles: [{ uri: stale, name: 'test.md' }],
+    })
+
+    click('bar/test.md')
+
+    await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
+    expect(openEditor.mock.calls[0]?.[0]?.toString()).toBe(
+      URI.joinPath(REMOTE_ROOT, 'live/bar/test.md').toString(),
+    )
+    expect(fileSearch.queries).toHaveLength(1)
+  })
+
+  it('narrows the live walk to the focus scope', async () => {
+    const fileSearch = makeFileSearch(['focus/bar/test.md'])
+    const { openEditor, click } = mount({
+      exists: () => false,
+      fileSearch,
+      focus: {
+        active: true,
+        scanPaths: ['focus'],
+        rootFilesInScope: false,
+        fingerprint: 'focus:test',
+      },
+    })
+
+    click('bar/test.md')
+
+    await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
+    expect(fileSearch.queries[0]).toMatchObject({
+      matchAll: true,
+      scanPaths: ['focus'],
+    })
+    expect(fileSearch.queries[0]).not.toHaveProperty('rootFilesInScope')
+  })
+
+  it('reports unavailable, not missing, when the focus-scoped walk finds nothing', async () => {
+    const fileSearch = makeFileSearch([], false)
+    const { notify, click } = mount({
+      exists: () => false,
+      fileSearch,
+      focus: {
+        active: true,
+        scanPaths: ['focus'],
+        rootFilesInScope: false,
+        fingerprint: 'focus:test',
+      },
+    })
+
+    click('bar/test.md')
+
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1))
+    expect(notify.mock.calls[0]?.[0]?.message).toContain('Unable to confirm')
+  })
+
+  it('hands several suffix matches to Go to File', async () => {
+    const fileSearch = makeFileSearch(['a/bar/test.md', 'b/bar/test.md'])
+    const { openEditor, notify, showQuickAccess, click } = mount({
+      exists: () => false,
+      fileSearch,
+    })
+
+    click('bar/test.md')
+
+    await waitFor(() => expect(showQuickAccess).toHaveBeenCalledWith('bar/test.md'))
+    expect(openEditor).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('reports unavailable, not missing, when the walk is truncated', async () => {
+    const fileSearch = makeFileSearch([], true)
     const { notify, click } = mount({ exists: () => false, fileSearch })
 
     click('bar/test.md')
 
     await waitFor(() => expect(notify).toHaveBeenCalledTimes(1))
-    expect(fileSearch.queries).toHaveLength(2)
-    expect(fileSearch.queries[1]?.requireFreshListing).toBe(true)
+    expect(notify.mock.calls[0]?.[0]?.message).toContain('Unable to confirm')
+    expect(fileSearch.queries).toHaveLength(1)
+  })
+
+  it('does not cache unavailable results so a retry walks again', async () => {
+    const fileSearch = makeFileSearch([], true)
+    const { notify, click } = mount({ exists: () => false, fileSearch })
+
+    click('bar/test.md')
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1))
+    click('bar/test.md')
+    await waitFor(() => expect(fileSearch.queries).toHaveLength(2))
+  })
+
+  it('reports missing only after a complete walk found no suffix match', async () => {
+    const fileSearch = makeFileSearch(['other/test.md'])
+    const { notify, click } = mount({ exists: () => false, fileSearch })
+
+    click('bar/test.md')
+
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1))
+    expect(notify.mock.calls[0]?.[0]?.message).toContain('File does not exist')
+    expect(fileSearch.queries).toHaveLength(1)
   })
 })
 

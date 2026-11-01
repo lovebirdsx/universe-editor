@@ -83,7 +83,7 @@ export function markdownLinkCandidates(
 }
 
 /**
- * Search pattern for the fuzzy fallback / Go to File prefill: the path with
+ * Search pattern for the live enumeration / Go to File prefill: the path with
  * leading `./` and `../` segments stripped (they don't help a name search) and
  * separators normalized to `/`.
  */
@@ -92,6 +92,41 @@ export function searchPatternFor(rawPath: string): string {
     .split(/[/\\]/)
     .filter((s) => s.length > 0 && s !== '.' && s !== '..')
     .join('/')
+}
+
+function escapeGlob(value: string): string {
+  return value.replace(/[*?[\]{}]/g, '\\$&')
+}
+
+/**
+ * ripgrep glob for a workspace-wide suffix enumeration: `**\/<path>` matches
+ * the path at any depth. The pattern is glob-escaped so a literal `[`/`{` in a
+ * filename stays literal. rg globs are case-insensitive (`--iglob`); callers
+ * still re-check the result with {@link isLinkSuffixMatch}.
+ */
+export function searchGlobFor(pattern: string): string {
+  return `**/${escapeGlob(pattern)}`
+}
+
+/**
+ * True when a workspace-relative path ends with the clicked path (or equals it).
+ * This is the definitive check after the case-insensitive rg prefilter: a
+ * query for `Client/TypeScript/package.json` must not accept
+ * `Client/TypeScript/package-lock.json`.
+ */
+export function isLinkSuffixMatch(
+  relPath: string,
+  pattern: string,
+  caseSensitive: boolean,
+): boolean {
+  const rel = relPath.replace(/\\/g, '/')
+  const target = pattern.replace(/\\/g, '/')
+  if (!caseSensitive) {
+    const a = rel.toLowerCase()
+    const b = target.toLowerCase()
+    return a === b || a.endsWith(`/${b}`)
+  }
+  return rel === target || rel.endsWith(`/${target}`)
 }
 
 export interface FileUriLinkTarget {

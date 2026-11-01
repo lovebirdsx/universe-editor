@@ -35,3 +35,11 @@
 - **组件**：`MathInlineNode` 永远是 `<span>`（即使 `$$` display 模式）——`<div>` 不能出现在 `<p>` 里；`MathBlockNode` 是 `<div data-testid="md-math-block" data-line>`，承接预览滚动同步。`MathOptionsContext` 由 `MarkdownView` 提供 `{ enabled, macros }`；`markdown.math.macros` 经 `mathOptions.ts` 的 `sanitizeMathMacros` 清洗（丢非字符串值/空 key）。
 - **配置**：`contributions/MarkdownConfigurationContribution.ts` 注册 `markdown.math.enabled`（boolean，默认 true）与 `markdown.math.macros`（object，additionalProperties string）。`markdown.math.enabled` 只由 `MarkdownPreviewEditor` 用**精确 key** 的 `affectsConfiguration` 订阅（平台配置服务不做前缀匹配）并作为 `math` prop 传入；`markdown.math.macros` 由 `MarkdownView` 自己订阅配置，因此预览、ACP 聊天、文档中心、发行说明拿到同一套宏，`mathMacros` prop 仅作测试/嵌入方覆盖。
 - **测试**：`markdownRenderer.math.test.ts`（块级/行内/边界/mask，含 `- $$` 后 dedent `$$`、缩进 opener 作用域、`math:false` 掩码与 `$$a$$$ b$$` 首个候选失败）、`markdownIncremental.math.test.ts`（逐字符前缀等价 + 不封存公式内空行 + 列表作用域回归 + `math:false` 掩码参数）、`mathRenderer.test.ts`（trust:false 注入面、宏不泄漏、错误不抛异常、sanitize）、`MarkdownView.math.test.tsx`（span/div 形态、`math={false}`、宏透传、配置宏热更新、懒加载、流式行号、选项切换重建 cache）；e2e `apps/editor/e2e/specs/smoke.markdownMath.spec.ts` 验证三种语法、货币文本、KaTeX FontFace 真实 loaded 和 `markdown.math.enabled` 热切换。
+
+## 点击链接找不到文件时的兜底解析
+
+`useMarkdownFileLink` 在精确候选（绝对 / 文档目录 / 工作区根）全部 miss 后的顺序是：**最近打开文件**（`IRecentFilesService`，与 Ctrl+P 的 Recently Opened 同源；`relativePath` + `isLinkSuffixMatch` + `exists` 校验）→ **实时后缀枚举**（`IFileSearchService.search({ matchAll: true, glob: '**/<pattern>', timeoutMs: 10s })`，开启焦点模式时带 `scanPaths`）。唯一命中打开、多命中转 Go to File、`limitHit` 或焦点范围受限 → “无法确认”，否则“不存在”。
+
+- **为什么不回到 scored 搜索**：scored 依赖磁盘全量清单；巨型工作区的清单几百 MB 且会陈旧，链接点击在 5s 内等不到重建，会把已存在的文件报成“不存在”（c9ca84ec 修的正是这个，但旧方案仍留了 scored 兜底）。实时枚举不读清单。
+- **性能基线（664 万文件的工作区）**：全工作区 `rg --files` 75s，`Source/Client` 65s；焦点目录 429ms、全部焦点目录 1.6s。所以焦点模式的 `scanPaths` 是这条链路可用的前提。无焦点模式的巨型工作区会诚实超时 → “无法确认”，不要改回依赖清单。
+- **路径后缀过滤必须精确**：`isLinkSuffixMatch` 只认 `rel === pattern` 或以 `/pattern` 结尾；scored 的子序列匹配曾让 `package-lock.json` 命中 `package.json` 的查询，导致多命中弹 Go to File。

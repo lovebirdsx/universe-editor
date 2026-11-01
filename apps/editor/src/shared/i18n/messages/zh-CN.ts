@@ -3701,6 +3701,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'markdown.updateLinks.dontUpdate': '不更新',
   'markdown.updateLinks.neverAskAgain': '始终如此（不再询问）',
   'markdown.linkFileNotFound': '文件不存在：{path}',
+  'markdown.linkSearchUnavailable': '无法确认文件是否存在：{path}，请重试',
   'markdownPreview.help.title': '键盘快捷键',
   'markdownPreview.help.linkHintsCurrent': '链接提示（在当前页打开）',
   'markdownPreview.help.linkHintsSide': '链接提示（在侧边打开）',

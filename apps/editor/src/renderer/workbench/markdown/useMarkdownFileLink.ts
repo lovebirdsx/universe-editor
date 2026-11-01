@@ -1,12 +1,20 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  useMarkdownFileLink — resolve and open a file path clicked inside rendered
+ *  `useMarkdownFileLink` — resolve and open a file path clicked inside rendered
  *  markdown. Concrete candidates (absolute, relative to the markdown source dir,
  *  relative to the workspace root) are probed first and opened on the first hit —
  *  no search, so an existing path opens instantly. Only when none exist do we
- *  fall back to a workspace file search: a single hit opens directly, several
- *  hits hand off to Go to File (prefilled with the path) so the user picks the
- *  intended target, and zero hits surfaces a "file not found" notification.
+ *  fall back to a suffix-targeted resolution: first the recently opened files
+ *  (the same MRU list Ctrl+P shows as "Recently Opened", so a file the user just
+ *  worked in opens without a disk walk), then a live workspace enumeration (rg
+ *  via the file search service), narrowed to the focus folders when focus mode
+ *  is on — mirroring Ctrl+P, this keeps a giant workspace responsive. A single
+ *  hit opens directly, several hits hand off to Go to File (prefilled with the
+ *  path) so the user picks the intended target, and zero hits surfaces either
+ *  "file not found" or, when the enumeration was truncated/timed out or limited
+ *  to the focus scope, an "unable to confirm" notification. The live walk never
+ *  reads the on-disk listing, so a file created after that listing was built is
+ *  still found, and a giant workspace cannot stale it into a false "missing".
  *
  *  In `previewLinks` mode (the doc preview) a link to another markdown file opens
  *  as a *preview* rather than its source: the preview tab is opened pinned and
@@ -54,21 +62,31 @@ import { ensureSideGroup } from '../../services/editor/openToSide.js'
 import type { OpenTarget } from '../../services/editor/openTarget.js'
 import { IAuxiliaryEditorWindowService } from '../../services/windows/auxiliaryEditorWindowService.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
+import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
+import { focusScopeForMention } from '../../services/acp/mentionFileSearch.js'
+import { IRecentFilesService } from '../../services/recentFiles/recentFilesService.js'
 import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
 import { stripFilePathLinkPrefix } from '../../services/acp/filePathLink.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { useOptionalService } from '../useService.js'
 import { useWorkspaceHome } from '../useWorkspaceHome.js'
-import { markdownLinkCandidates, searchPatternFor } from './markdownLinkResolve.js'
+import {
+  isLinkSuffixMatch,
+  markdownLinkCandidates,
+  searchGlobFor,
+  searchPatternFor,
+} from './markdownLinkResolve.js'
 
 const CACHE_TTL = 10_000
-const SEARCH_MAX_RESULTS = 10
+const SEARCH_MAX_RESULTS = 50
+const SEARCH_TIMEOUT_MS = 10_000
 
-/** Outcome of resolving a clicked path: open it, let the user pick, or report it missing. */
+/** Outcome of resolving a clicked path: open it, let the user pick, or report it. */
 type Resolution =
   | { readonly kind: 'open'; readonly uri: URI }
   | { readonly kind: 'pick'; readonly pattern: string }
   | { readonly kind: 'missing' }
+  | { readonly kind: 'unavailable' }
 
 type CacheEntry = { readonly resolution: Resolution; readonly expiresAt: number }
 
@@ -89,6 +107,45 @@ export interface OpenMarkdownLinkOptions {
 function isMarkdownResource(uri: URI): boolean {
   const p = uri.path.toLowerCase()
   return p.endsWith('.md') || p.endsWith('.markdown') || p.endsWith('.mdx')
+}
+
+/** Client platform, used only when the URI identity service cannot answer. */
+function isWindowsClient(): boolean {
+  return typeof window !== 'undefined' && window.ipc?.platform === 'win32'
+}
+
+/**
+ * Recently opened files whose workspace-relative path equals or ends with
+ * `pattern`, limited to files that still exist. This is the same MRU list
+ * Ctrl+P renders as "Recently Opened": matching it first resolves the common
+ * case (clicking a link to a file just worked in) without any disk walk.
+ * Outside-workspace entries are skipped — a bare suffix is not an identity
+ * there, and the concrete candidates already covered absolute paths.
+ */
+async function findRecentSuffixMatches(
+  recentFilesService: IRecentFilesService,
+  fileService: IFileService,
+  workspaceRoot: URI,
+  identity: IUriIdentityService,
+  pattern: string,
+  caseSensitive: boolean,
+): Promise<URI[]> {
+  const recent = await recentFilesService.getAll().catch(() => [])
+  const matches: URI[] = []
+  const seen = new Set<string>()
+  for (const file of recent) {
+    const rel = identity.relativePath(workspaceRoot, file.uri)
+    if (rel === null || rel === '' || !isLinkSuffixMatch(rel, pattern, caseSensitive)) continue
+    const key = identity.getComparisonKey(file.uri)
+    if (seen.has(key)) continue
+    seen.add(key)
+    matches.push(file.uri)
+  }
+  if (matches.length === 0) return []
+  const existing = await Promise.all(
+    matches.map(async (uri) => ((await fileService.exists(uri)) ? uri : undefined)),
+  )
+  return existing.filter((uri): uri is URI => uri !== undefined)
 }
 
 /**
@@ -121,6 +178,8 @@ export function useMarkdownFileLink(
   const windowsService = useOptionalService(IWindowsService)
   const lifecycleService = useOptionalService(ILifecycleService)
   const excludeService = useOptionalService(IExcludeService)
+  const recentFilesService = useOptionalService(IRecentFilesService)
+  const focusScopeService = useOptionalService(IFocusScopeService)
   const quickAccess = useOptionalService(IQuickAccessController)
   const windowFocus = useOptionalService(IWindowFocusService)
   const cache = useRef(new Map<string, CacheEntry>())
@@ -156,36 +215,68 @@ export function useMarkdownFileLink(
           if (await fileService.exists(candidate)) return { kind: 'open', uri: candidate }
         }
 
-        // 2. Fuzzy fallback over the workspace, honoring the same excludes as Go
-        //    to File so we never walk node_modules/dist/.git (the old slow path).
-        if (!workspaceRoot || !fileSearchService) return { kind: 'missing' }
+        // 2. Recently opened files first — the same MRU list Ctrl+P shows as
+        //    "Recently Opened". Clicking a link to a file the user just worked
+        //    in is the common case, and it resolves without touching the disk.
         const pattern = searchPatternFor(normalizedRawPath)
         if (pattern.length === 0) return { kind: 'missing' }
-        const runSearch = async (requireFreshListing: boolean) => {
-          const result = await fileSearchService.search({
-            root: workspaceRoot,
+        if (!workspaceRoot) return { kind: 'missing' }
+        const caseSensitive =
+          uriIdentityService?.isCaseSensitive(workspaceRoot) ?? !isWindowsClient()
+        if (recentFilesService && uriIdentityService) {
+          const recentHits = await findRecentSuffixMatches(
+            recentFilesService,
+            fileService,
+            workspaceRoot,
+            uriIdentityService,
             pattern,
-            includeExactPathMatches: true,
-            maxResults: SEARCH_MAX_RESULTS,
-            ...(requireFreshListing ? { requireFreshListing: true } : {}),
-            ...(excludeService
-              ? {
-                  excludes: excludeService.getSearchExcludeGlobs(),
-                  ignore: excludeService.getDirNameIgnores(),
-                  useIgnoreFiles: excludeService.getUseIgnoreFiles(),
-                }
-              : {}),
-          })
-          return 'results' in result ? result.results : []
+            caseSensitive,
+          )
+          if (recentHits.length === 1) return { kind: 'open', uri: recentHits[0]! }
+          if (recentHits.length > 1) return { kind: 'pick', pattern }
         }
-        // Fast path: answer from the cached listing. Only a miss asks for a
-        // listing that includes recent file changes — otherwise a link to a
-        // file created after the listing was built stays "missing" for the
-        // rest of the TTL, even though it exists on disk.
-        let hits = await runSearch(false)
-        if (hits.length === 0) hits = await runSearch(true)
-        if (hits.length === 0) return { kind: 'missing' }
-        if (hits.length === 1) return { kind: 'open', uri: URI.revive(hits[0]!.resource) as URI }
+
+        // 3. Live suffix enumeration over the workspace. Unlike a scored search
+        //    this never reads the on-disk listing, so it sees files created
+        //    after that listing was built and cannot be defeated by a huge,
+        //    stale or partial listing. rg does the prefilter; the suffix check
+        //    below is the definitive one. Focus mode narrows the walk to its
+        //    folders (mirroring Ctrl+P), which is what keeps a multi-million-file
+        //    workspace from turning the click into a minute-long scan.
+        if (!fileSearchService) return { kind: 'missing' }
+        const focus = focusScopeService ? focusScopeForMention(focusScopeService) : undefined
+        const result = await fileSearchService.search({
+          root: workspaceRoot,
+          pattern: '',
+          matchAll: true,
+          glob: [searchGlobFor(pattern)],
+          maxResults: SEARCH_MAX_RESULTS,
+          omitTruncatedListing: true,
+          timeoutMs: SEARCH_TIMEOUT_MS,
+          ...(focus?.scanPaths !== undefined ? { scanPaths: focus.scanPaths } : {}),
+          ...(focus?.rootFilesInScope === true ? { rootFilesInScope: true } : {}),
+          ...(excludeService
+            ? {
+                excludes: excludeService.getSearchExcludeGlobs(),
+                ignore: excludeService.getDirNameIgnores(),
+                useIgnoreFiles: excludeService.getUseIgnoreFiles(),
+              }
+            : {}),
+        })
+        const hits = ('relPaths' in result ? result.relPaths : []).filter((rel) =>
+          isLinkSuffixMatch(rel, pattern, caseSensitive),
+        )
+        // A truncated walk (timeout / cap / partial listing) cannot support a
+        // definitive "not found". Neither can a walk limited to the focus
+        // scope: the file may simply live outside it.
+        if (hits.length === 0) {
+          return result.limitHit || focus?.scanPaths !== undefined
+            ? { kind: 'unavailable' }
+            : { kind: 'missing' }
+        }
+        if (hits.length === 1) {
+          return { kind: 'open', uri: URI.joinPath(workspaceRoot, hits[0]!) }
+        }
         // Several matches: let the user disambiguate in Go to File, prefilled.
         return { kind: 'pick', pattern }
       })()
@@ -193,9 +284,9 @@ export function useMarkdownFileLink(
       inflight.current.set(normalizedRawPath, promise)
       void promise.then((resolution) => {
         inflight.current.delete(normalizedRawPath)
-        // Only cache stable outcomes; a transient 'missing' (services not ready)
-        // shouldn't be pinned for 10s.
-        if (resolution.kind !== 'missing') {
+        // Only cache stable outcomes; 'missing'/'unavailable' are transient
+        // (services not ready, walk truncated) and must not be pinned for 10s.
+        if (resolution.kind === 'open' || resolution.kind === 'pick') {
           cache.current.set(normalizedRawPath, { resolution, expiresAt: Date.now() + CACHE_TTL })
         }
       })
@@ -206,6 +297,9 @@ export function useMarkdownFileLink(
       fileSearchService,
       workspaceService,
       excludeService,
+      recentFilesService,
+      focusScopeService,
+      uriIdentityService,
       baseUri,
       homeDir,
       resolveHome,
@@ -228,6 +322,17 @@ export function useMarkdownFileLink(
             message: localize('markdown.linkFileNotFound', 'File does not exist: {path}', {
               path: stripFilePathLinkPrefix(rawPath),
             }),
+          })
+          return
+        }
+        if (resolution.kind === 'unavailable') {
+          notificationService?.notify({
+            severity: Severity.Warning,
+            message: localize(
+              'markdown.linkSearchUnavailable',
+              'Unable to confirm whether the file exists: {path}. Try again.',
+              { path: stripFilePathLinkPrefix(rawPath) },
+            ),
           })
           return
         }

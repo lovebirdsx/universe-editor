@@ -8,7 +8,9 @@ import { URI } from '@universe-editor/platform'
 import {
   fileUriLinkTarget,
   isAbsolutePath,
+  isLinkSuffixMatch,
   markdownLinkCandidates,
+  searchGlobFor,
   searchPatternFor,
 } from '../markdownLinkResolve.js'
 
@@ -180,6 +182,41 @@ describe('searchPatternFor', () => {
 
   it('is empty for a path of only relative segments', () => {
     expect(searchPatternFor('../..')).toBe('')
+  })
+})
+
+describe('searchGlobFor', () => {
+  it('anchors the path at any depth', () => {
+    expect(searchGlobFor('src/a.ts')).toBe('**/src/a.ts')
+  })
+
+  it('escapes glob metacharacters so filenames stay literal', () => {
+    expect(searchGlobFor('a[1]/b{2}.ts')).toBe('**/a\\[1\\]/b\\{2\\}.ts')
+  })
+})
+
+describe('isLinkSuffixMatch', () => {
+  it('matches the exact relative path or a path suffix', () => {
+    expect(isLinkSuffixMatch('a/b/c.ts', 'a/b/c.ts', true)).toBe(true)
+    expect(isLinkSuffixMatch('x/a/b/c.ts', 'a/b/c.ts', true)).toBe(true)
+    expect(isLinkSuffixMatch('x/a/b/c.tsx', 'a/b/c.ts', true)).toBe(false)
+  })
+
+  it('rejects weaker fuzzy matches', () => {
+    expect(isLinkSuffixMatch('repo/src/app/package-lock.json', 'src/app/package.json', true)).toBe(
+      false,
+    )
+  })
+
+  it('folds case only when the host filesystem does', () => {
+    expect(isLinkSuffixMatch('repo/src/app/package.json', 'src/App/package.json', true)).toBe(false)
+    expect(isLinkSuffixMatch('repo/src/app/package.json', 'src/App/package.json', false)).toBe(true)
+  })
+
+  it('normalizes backslashes from the host walk', () => {
+    expect(isLinkSuffixMatch('repo\\src\\app\\package.json', 'src/app/package.json', true)).toBe(
+      true,
+    )
   })
 })
 
