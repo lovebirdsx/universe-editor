@@ -161,20 +161,29 @@ export function useMarkdownFileLink(
         if (!workspaceRoot || !fileSearchService) return { kind: 'missing' }
         const pattern = searchPatternFor(normalizedRawPath)
         if (pattern.length === 0) return { kind: 'missing' }
-        const result = await fileSearchService.search({
-          root: workspaceRoot,
-          pattern,
-          includeExactPathMatches: true,
-          maxResults: SEARCH_MAX_RESULTS,
-          ...(excludeService
-            ? {
-                excludes: excludeService.getSearchExcludeGlobs(),
-                ignore: excludeService.getDirNameIgnores(),
-                useIgnoreFiles: excludeService.getUseIgnoreFiles(),
-              }
-            : {}),
-        })
-        const hits = 'results' in result ? result.results : []
+        const runSearch = async (requireFreshListing: boolean) => {
+          const result = await fileSearchService.search({
+            root: workspaceRoot,
+            pattern,
+            includeExactPathMatches: true,
+            maxResults: SEARCH_MAX_RESULTS,
+            ...(requireFreshListing ? { requireFreshListing: true } : {}),
+            ...(excludeService
+              ? {
+                  excludes: excludeService.getSearchExcludeGlobs(),
+                  ignore: excludeService.getDirNameIgnores(),
+                  useIgnoreFiles: excludeService.getUseIgnoreFiles(),
+                }
+              : {}),
+          })
+          return 'results' in result ? result.results : []
+        }
+        // Fast path: answer from the cached listing. Only a miss asks for a
+        // listing that includes recent file changes — otherwise a link to a
+        // file created after the listing was built stays "missing" for the
+        // rest of the TTL, even though it exists on disk.
+        let hits = await runSearch(false)
+        if (hits.length === 0) hits = await runSearch(true)
         if (hits.length === 0) return { kind: 'missing' }
         if (hits.length === 1) return { kind: 'open', uri: URI.revive(hits[0]!.resource) as URI }
         // Several matches: let the user disambiguate in Go to File, prefilled.

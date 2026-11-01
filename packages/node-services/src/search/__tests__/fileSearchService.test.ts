@@ -174,6 +174,91 @@ describe('FileSearchService', () => {
     expect(listings).toHaveLength(1)
   })
 
+  it('keeps answering from the previous listing when a file appears within the TTL', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'src/foo.ts')
+    const service = await makeService()
+
+    const first = await service.search({
+      root: URI.file(root),
+      pattern: 'foo',
+      includeExactPathMatches: false,
+      maxResults: 10,
+    })
+    expect(asMatches(first).results.map((r) => r.relativePath)).toEqual(['src/foo.ts'])
+
+    await writeFile(root, 'open-file/foo/bar/test.md')
+
+    // 复现 markdown 链接误报：清单在目标文件创建前已建好，未收到失效信号时，
+    // TTL 内继续用旧快照回答 —— 磁盘上存在的文件被判定为「不存在」。
+    const stale = await service.search({
+      root: URI.file(root),
+      pattern: 'bar/test.md',
+      includeExactPathMatches: false,
+      maxResults: 10,
+    })
+    expect(asMatches(stale).results).toEqual([])
+  })
+
+  it('finds a file created after the listing was built once the listing is invalidated', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'src/foo.ts')
+    const service = await makeService()
+
+    await service.search({
+      root: URI.file(root),
+      pattern: 'foo',
+      includeExactPathMatches: false,
+      maxResults: 10,
+    })
+
+    await writeFile(root, 'open-file/foo/bar/test.md')
+    service.invalidateListing(URI.file(root))
+
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: 'bar/test.md',
+      includeExactPathMatches: false,
+      requireFreshListing: true,
+      maxResults: 10,
+    })
+    expect(asMatches(complete).results.map((r) => r.relativePath)).toEqual([
+      'open-file/foo/bar/test.md',
+    ])
+  })
+
+  it('does not adopt a disk listing that predates an invalidation from another session', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'src/foo.ts')
+    const cacheDir = path.join(await makeRoot(), 'listings')
+    const first = new FileSearchService(undefined, { cacheDir })
+    services.push(first)
+    await first.search({
+      root: URI.file(root),
+      pattern: 'foo',
+      includeExactPathMatches: false,
+      maxResults: 10,
+    })
+
+    await writeFile(root, 'open-file/foo/bar/test.md')
+
+    // 新会话（模拟编辑器重启）仍然采纳旧清单给普通查询用，但失效水位让
+    // requireFreshListing 的查询知道它早于变更，必须重建后再回答。
+    const second = new FileSearchService(undefined, { cacheDir })
+    services.push(second)
+    second.invalidateListing(URI.file(root))
+    const complete = await second.search({
+      root: URI.file(root),
+      pattern: 'bar/test.md',
+      includeExactPathMatches: false,
+      requireFreshListing: true,
+      maxResults: 10,
+    })
+    expect(asMatches(complete).results.map((r) => r.relativePath)).toEqual([
+      'open-file/foo/bar/test.md',
+    ])
+  })
+
   it('uses a distinct listing cache key per scan-path set', async () => {
     const root = await makeRoot()
     await writeFile(root, 'Client/a.ts')

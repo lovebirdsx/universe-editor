@@ -68,10 +68,14 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * gain the version policy — an older daemon ignores it and keeps honouring the
  * host's `.active` pointer, so a client that locked the binary to its pin would
  * silently keep spawning whatever version a user picked by hand.
- * Remote-workspace users must restart the daemon after upgrading: an old
- * daemon fails the handshake with `protocol version 13 != 14`.
+ * v14 → v15: the fileSearch channel gains `invalidateListing` and
+ * `IFileSearchQuery.requireFreshListing` — an older daemon ignores the freshness
+ * flag and answers a link click from a listing built before the file was
+ * created ("File does not exist" for an existing file), and rejects the unknown
+ * method. Restart the daemon after upgrading: an old daemon fails the handshake
+ * with `protocol version 14 != 15`.
  */
-export const REMOTE_PROTOCOL_VERSION = 14
+export const REMOTE_PROTOCOL_VERSION = 15
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'

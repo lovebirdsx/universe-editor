@@ -18,6 +18,7 @@ import {
   IFileWatcherService,
   IWorkspaceService,
   toDisposable,
+  URI,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import {
@@ -66,13 +67,30 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
       }),
     )
     this._register(
-      this._watcher.onDidChangeFiles(() =>
-        invalidateMentionFileCache(this._workspace.current?.folder),
-      ),
+      this._watcher.onDidChangeFiles((events) => {
+        const root = this._workspace.current?.folder
+        if (!root) return
+        invalidateMentionFileCache(root)
+        // 文件内容修改不改变文件集合；只有新增/删除才推进失效水位，避免每次
+        // 保存都让下一次「必须给确定结论」的搜索等一次重建。
+        if (events.some((event) => event.type !== 'modified')) this._invalidateListing(root)
+      }),
     )
     // Events during a watcher crash gap are lost — rebuild from scratch.
     this._register(
-      this._watcher.onDidRestart(() => invalidateMentionFileCache(this._workspace.current?.folder)),
+      this._watcher.onDidRestart(() => {
+        const root = this._workspace.current?.folder
+        if (!root) return
+        invalidateMentionFileCache(root)
+        this._invalidateListing(root)
+      }),
+    )
+    // A session that ends with files created while the editor was closed never
+    // sees a watcher event for them; the on-disk listing may also predate them.
+    this._register(
+      this._workspace.onDidChangeWorkspace((workspace) => {
+        if (workspace?.folder) this._invalidateListing(workspace.folder)
+      }),
     )
     // A focus-scope change partitions the cache; stale listings for the old
     // scope must not survive it.
@@ -84,9 +102,27 @@ export class WorkspaceFileListingContribution extends Disposable implements IWor
     void this._schedulePrewarm(prewarmDelayMs).catch(() => undefined)
   }
 
+  /**
+   * Mark the shared on-disk search listing stale. Fire-and-forget: invalidation
+   * is a hint and must never reject out of a watcher callback (an unreachable
+   * remote daemon or a disposed service may fail here).
+   */
+  private _invalidateListing(root: URI | undefined): void {
+    if (!root) return
+    try {
+      void Promise.resolve(this._fileSearch.invalidateListing?.(root)).catch(() => undefined)
+    } catch {
+      // A disposed channel may throw synchronously; invalidation is only a hint.
+    }
+  }
+
   private async _schedulePrewarm(delayMs: number): Promise<void> {
     await this._workspace.whenReady
     if (this._store.isDisposed) return
+    // A disk listing adopted from an earlier session may predate files created
+    // while the editor was closed (no watcher event exists for them). Mark it
+    // stale; only searches that must give a definitive answer wait for the rebuild.
+    this._invalidateListing(this._workspace.current?.folder)
     this._prewarmTimer = setTimeout(() => {
       this._prewarmTimer = undefined
       void this._prewarm()

@@ -49,6 +49,20 @@ export class FileSearchMainService extends FileSearchService {
     return this._remoteService(authority).search({ ...query, root }, token)
   }
 
+  override invalidateListing(root: URI): void {
+    const uri = reviveUri(root)
+    if (uri.scheme !== REMOTE_SCHEME) {
+      super.invalidateListing(uri)
+      return
+    }
+    try {
+      const service = this._remoteService(uri.authority)
+      void Promise.resolve(service.invalidateListing?.(uri)).catch(() => undefined)
+    } catch {
+      // 远端未连接时失效只是提示：daemon 侧清单会按自己的 TTL 重建。
+    }
+  }
+
   private _remoteService(authority: string): IFileSearchService {
     if (!this._connections) {
       throw new Error('fileSearch: remote connection service not available')

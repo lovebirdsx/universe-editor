@@ -65,7 +65,7 @@ export function useResolveTerminalFile(): ResolveTerminalFile {
             ? norm.slice(root.length + 1)
             : (norm.split('/').pop() ?? norm)
 
-          const result = await fileSearchService.search({
+          const query = {
             root: workspace.folder,
             pattern,
             includeExactPathMatches: true,
@@ -79,9 +79,20 @@ export function useResolveTerminalFile(): ResolveTerminalFile {
                   useIgnoreFiles: excludeService.getUseIgnoreFiles(),
                 }
               : {}),
-          })
+          }
+          const runSearch = async (requireFreshListing: boolean) => {
+            const result = await fileSearchService.search({
+              ...query,
+              ...(requireFreshListing ? { requireFreshListing: true } : {}),
+            })
+            return 'results' in result ? result.results[0] : undefined
+          }
 
-          const first = 'results' in result ? result.results[0] : undefined
+          // Fast path first; only a miss asks for a listing that includes recent
+          // file changes, so a newly created file is not reported missing for
+          // the rest of the listing TTL.
+          let first = await runSearch(false)
+          if (!first) first = await runSearch(true)
           if (first) return URI.revive(first.resource) as URI
           logger.warn(`cannot resolve terminal link: ${absolutePath}`)
           return null

@@ -78,6 +78,20 @@ export interface IFileSearchQuery {
    * listing cache key, so flipping it never serves a stale listing.
    */
   readonly useIgnoreFiles?: boolean
+  /**
+   * Scored searches only. When the cached listing is known stale — a file
+   * watcher called {@link IFileSearchService.invalidateListing}, or the TTL
+   * expired — wait for the rebuild (bounded by the listing wait budget and the
+   * query deadline) before scoring, instead of answering from the previous
+   * snapshot. This is a freshness requirement, not a forced rebuild: an
+   * already-clean listing is used as is, and `matchAll` ignores it.
+   *
+   * Deliberately opt-in: keystroke-driven searches (Go to File fallback) must
+   * keep stale-while-revalidate so typing never blocks on a full tree walk.
+   * Callers that report a definitive "not found" (markdown / terminal links)
+   * set it once their fast search missed.
+   */
+  readonly requireFreshListing?: boolean
 }
 
 export interface IFileSearchMatch {
@@ -122,6 +136,16 @@ export type IFileSearchComplete = IFileSearchMatches | IFileSearchListing
 export interface IFileSearchService {
   readonly _serviceBrand: undefined
   search(query: IFileSearchQuery, token?: CancellationToken): Promise<IFileSearchComplete>
+  /**
+   * Mark the cached listing(s) for `root` (and roots nested under it) stale.
+   * File watchers call this when the set of workspace files may have changed;
+   * the next scored search rebuilds in the background, or waits for the rebuild
+   * when it sets {@link IFileSearchQuery.requireFreshListing}. Non-fresh
+   * callers keep receiving the previous snapshot, so this is only a hint.
+   *
+   * Optional so lightweight test stubs need not implement it.
+   */
+  invalidateListing?(root: URI): void | Promise<void>
 }
 
 export const IFileSearchService = createDecorator<IFileSearchService>('fileSearchService')

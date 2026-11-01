@@ -405,6 +405,49 @@ describe('FileSearchMainService remote routing', () => {
       h.cleanup()
     }
   })
+
+  it('forwards invalidateListing for a remote root to the server channel', async () => {
+    const received: URI[] = []
+    const stub: Partial<IFileSearchService> = {
+      invalidateListing(root: URI) {
+        received.push(root)
+      },
+    }
+    const h = makeHarness({ [RemoteChannels.FileSearch]: stub })
+    try {
+      const svc = new FileSearchMainService(undefined, h.connService)
+      svc.invalidateListing(remote('host', '/home/user'))
+      await flushMicrotasks()
+      expect(received).toHaveLength(1)
+      expect(received[0]!.scheme).toBe('file')
+      expect(received[0]!.path).toBe('/home/user')
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('does not forward invalidateListing for a local root to the remote channel', async () => {
+    const received: URI[] = []
+    const stub: Partial<IFileSearchService> = {
+      invalidateListing(root: URI) {
+        received.push(root)
+      },
+    }
+    const h = makeHarness({ [RemoteChannels.FileSearch]: stub })
+    try {
+      const svc = new FileSearchMainService(undefined, h.connService)
+      svc.invalidateListing(URI.file('/tmp/local-ws'))
+      await flushMicrotasks()
+      expect(received).toHaveLength(0)
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('swallows invalidation when no remote connection service is available', () => {
+    const svc = new FileSearchMainService(undefined, undefined)
+    expect(() => svc.invalidateListing(remote('host', '/home/user'))).not.toThrow()
+  })
 })
 
 describe('TextSearchMainService remote routing', () => {

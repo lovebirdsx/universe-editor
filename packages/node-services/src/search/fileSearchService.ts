@@ -32,6 +32,7 @@ import {
   getPathComparisonKey,
   IFileSearchService,
   normalizePlatform,
+  relativePathUnder,
   URI,
   type CancellationToken,
   type IDisposable,
@@ -318,12 +319,26 @@ interface ListingFile {
   readonly partial: boolean
 }
 
+/** One watcher-driven invalidation; a listing built from `seq` on reflects it. */
+interface RootWatermark {
+  readonly seq: number
+  readonly at: number
+  readonly rootFsPath: string
+}
+
 interface ListingEntry {
   readonly key: string
   readonly rootKey: string
+  readonly rootFsPath: string
   file?: ListingFile
   building?: Promise<ListingFile | null>
   diskProbed?: boolean
+  /**
+   * `_invalidationSeq` captured when the current listing build started.
+   * `builtSeq < targetSeq` means the listing predates an invalidation the
+   * query knows about. Adopted disk listings carry the watermark they satisfy.
+   */
+  builtSeq: number
 }
 
 interface RgLinesResult {
@@ -371,6 +386,11 @@ export class FileSearchService extends Disposable implements IFileSearchService 
   private _queuedBuilds = 0
   // 每个 root 最近一次被请求构建的 key：排队期间被同 root 新 key 取代的构建直接放弃。
   private readonly _latestBuildKeyByRoot = new Map<string, string>()
+  // Watcher 失效水位：按 root 记录，一个工作区的变化会让其下所有清单参数失效。
+  // 查询进入时捕获适用水位，只要求一次「启动水位 >= target」的构建，避免持续
+  // 写盘让等待方永远追不上最新一次失效。
+  private _invalidationSeq = 0
+  private readonly _watermarks = new Map<string, RootWatermark>()
 
   constructor(loggerService?: ILoggerServiceType, options?: FileSearchServiceOptions) {
     super()
@@ -384,6 +404,46 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     this._sweepTimer = setInterval(() => void this._sweepStaleListings(), LISTING_SWEEP_INTERVAL_MS)
     // 卫生定时器不该把 Electron 主进程钉住。
     this._sweepTimer.unref()
+  }
+
+  /**
+   * Watcher 提示：`root` 下的文件集合可能变了。所有以它或其子目录为根的清单
+   * 都对该变化之前的快照失效；普通击键查询仍可用旧快照（stale-while-revalidate），
+   * 只有 `requireFreshListing` 的查询会等待重建。
+   */
+  invalidateListing(root: URI): void {
+    const uri = reviveUri(root as RawUri)
+    // 远端 root 由 FileSearchMainService 转发到对应 daemon；本引擎只处理本地清单。
+    if (uri.scheme !== 'file') return
+    const rootKey = getPathComparisonKey(uri.fsPath, normalizePlatform(process.platform))
+    this._watermarks.set(rootKey, {
+      seq: ++this._invalidationSeq,
+      at: Date.now(),
+      rootFsPath: uri.fsPath,
+    })
+  }
+
+  /** 适用于 `rootFsPath`（祖先或自身）的最高失效水位。 */
+  private _watermarkFor(rootFsPath: string): number {
+    const platform = normalizePlatform(process.platform)
+    let target = 0
+    for (const watermark of this._watermarks.values()) {
+      if (relativePathUnder(watermark.rootFsPath, rootFsPath, platform) !== null) {
+        target = Math.max(target, watermark.seq)
+      }
+    }
+    return target
+  }
+
+  /** 适用于 `rootFsPath` 的最新失效时间，用来判断跨会话磁盘清单是否过期。 */
+  private _watermarkAt(rootFsPath: string): number | undefined {
+    const platform = normalizePlatform(process.platform)
+    let newest: number | undefined
+    for (const watermark of this._watermarks.values()) {
+      if (relativePathUnder(watermark.rootFsPath, rootFsPath, platform) === null) continue
+      newest = newest === undefined ? watermark.at : Math.max(newest, watermark.at)
+    }
+    return newest
   }
 
   async search(query: IFileSearchQuery, token?: CancellationToken): Promise<IFileSearchComplete> {
@@ -521,7 +581,12 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       })
     }
     if (pattern.length > 0) {
-      const listing = await this._ensureListingForQuery(spec, token, deadlineAt)
+      const listing = await this._ensureListingForQuery(
+        spec,
+        token,
+        deadlineAt,
+        query.requireFreshListing === true,
+      )
       if (listing === 'canceled' || listing === 'timeout') {
         // timeout 这里两种来源：构建失败(null 已被排除)或清单等待超时——后者只是慢，
         // 不打 error。清单后台继续构建，下一次击键再用。
@@ -641,6 +706,8 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       entry = {
         key,
         rootKey: getPathComparisonKey(spec.rootFsPath, normalizePlatform(process.platform)),
+        rootFsPath: spec.rootFsPath,
+        builtSeq: 0,
       }
       this._listings.set(key, entry)
     }
@@ -652,24 +719,73 @@ export class FileSearchService extends Disposable implements IFileSearchService 
    * 后台重建；完全没有时后台立即起构建，但本次查询最多等 {@link FileSearchServiceOptions.listingWaitMs}——
    * 大工作区首次构建要 30s+，把每次击键的兜底搜索都绑在这个等待上会把输入
    * 延迟放大到秒级。等不到就返回 'timeout' 让调用方走「清单不可用」降级。
+   *
+   * `requireFresh` 是「结果要给出确定结论」的调用方（链接点击）用的：已知过期
+   * （watcher 失效 / TTL）时等一次重建再打分，而不是拿旧快照误报不存在。
    */
   private async _ensureListingForQuery(
     spec: ListingSpec,
     token: CancellationToken | undefined,
     deadlineAt: number,
+    requireFresh: boolean,
   ): Promise<ListingFile | null | 'canceled' | 'timeout'> {
     const entry = this._entryFor(spec)
     await this._probeDisk(entry)
+    // 查询进入时捕获水位：查询开始后的新变更留给下一次查询，持续写盘不会
+    // 让等待方永远追不上最新一次失效。
+    const targetSeq = this._watermarkFor(spec.rootFsPath)
     if (entry.file) {
-      // 过期重建只是保鲜：不认领 root，不能把别人正在等的构建挤掉。
-      if (Date.now() - entry.file.builtAt >= listingTtl(entry.file) && !entry.building) {
-        void this._build(entry, spec, false)
+      const needsRefresh =
+        entry.builtSeq < targetSeq || Date.now() - entry.file.builtAt >= listingTtl(entry.file)
+      if (!needsRefresh) return entry.file
+      if (!requireFresh) {
+        // 保鲜重建只是让后续查询受益：不认领 root，也不让本次查询等待。
+        if (!entry.building) void this._build(entry, spec, false)
+        return entry.file
       }
+      // 调用方要给出确定答案：等到一次启动水位 >= target 的构建；重建失败/超时
+      // 就回退旧快照（尽力而为，不把慢清单变成错误）。
+      const refreshed = await this._refreshForQuery(entry, spec, targetSeq, token, deadlineAt)
+      if (refreshed === 'canceled') return 'canceled'
+      if (refreshed !== 'timeout' && refreshed !== null) return refreshed
       return entry.file
     }
-    const building = this._build(entry, spec, true)
-    // 查询等待预算取二者较小：清单等待上限 vs 本次搜索自己的 deadline。
     const waitDeadline = Math.min(deadlineAt, Date.now() + this._listingWaitMs)
+    return this._awaitBuild(this._build(entry, spec, true), token, waitDeadline)
+  }
+
+  /**
+   * 等到一份「启动水位 >= targetSeq」的清单。复用到进行中的构建可能早于查询
+   * 已知的失效，等它结束后若水位仍不够，再起一轮（次数与时间双重有界）。
+   */
+  private async _refreshForQuery(
+    entry: ListingEntry,
+    spec: ListingSpec,
+    targetSeq: number,
+    token: CancellationToken | undefined,
+    deadlineAt: number,
+  ): Promise<ListingFile | null | 'canceled' | 'timeout'> {
+    const waitDeadline = Math.min(deadlineAt, Date.now() + this._listingWaitMs)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      // claim=true：等待型构建不能被同 root 其它 key 的认领挤掉。
+      const building = entry.building ?? this._build(entry, spec, true)
+      const result = await this._awaitBuild(building, token, waitDeadline)
+      if (result === 'canceled' || result === 'timeout' || result === null) return result
+      if (entry.builtSeq >= targetSeq) return result
+      if (Date.now() >= waitDeadline) return 'timeout'
+    }
+    return 'timeout'
+  }
+
+  /**
+   * 等清单构建，预算取「清单等待上限」与查询 deadline 的较小者。`timeout`
+   * 表示构建仍在后台继续；`null` 表示构建失败。
+   */
+  private async _awaitBuild(
+    building: Promise<ListingFile | null>,
+    token: CancellationToken | undefined,
+    waitDeadline: number,
+  ): Promise<ListingFile | null | 'canceled' | 'timeout'> {
     let sub: IDisposable | undefined
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
@@ -705,12 +821,18 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       const filePath = path.join(this._cacheDir, newest)
       const stat = await fs.stat(filePath)
       if (entry.file === undefined) {
+        const targetSeq = this._watermarkFor(entry.rootFsPath)
+        const invalidatedAt = this._watermarkAt(entry.rootFsPath)
+        // mtime 是构建完成时间：早于最近一次失效的清单不能保证包含那次变化。
+        // 仍然采纳（普通查询立刻有快照可用），只是它不算「新鲜」。
+        const stale = invalidatedAt !== undefined && stat.mtimeMs < invalidatedAt
         entry.file = {
           filePath,
           builtAt: stat.mtimeMs,
           buildMs: 0,
           partial: newest.endsWith(PARTIAL_SUFFIX),
         }
+        entry.builtSeq = stale ? Math.max(0, targetSeq - 1) : targetSeq
       }
     } catch {
       // 缓存目录尚不存在。
@@ -765,6 +887,9 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       return null
     }
     const startedAt = Date.now()
+    // 本次走查开始时的失效水位：构建期间的新变更会推进 _invalidationSeq，
+    // 使发布出去的清单自动被下一次查询视为旧快照。
+    const builtSeq = this._invalidationSeq
     try {
       await fs.mkdir(this._cacheDir, { recursive: true })
       const stamp = Date.now()
@@ -840,6 +965,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
           if (prev === undefined) return null
           const now = new Date()
           await fs.utimes(prev.filePath, now, now).catch(() => undefined)
+          // 续期的是变更前的旧快照，builtSeq 保持不变：它不能冒充新鲜清单。
           entry.file = { ...prev, builtAt: now.getTime(), buildMs }
           return entry.file
         }
@@ -850,6 +976,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
       )
       await fs.rename(tmpPath, finalPath)
       entry.file = { filePath: finalPath, builtAt: Date.now(), buildMs, partial }
+      entry.builtSeq = builtSeq
       if (prev) void fs.unlink(prev.filePath).catch(() => undefined)
       const stat = await fs.stat(finalPath).catch(() => null)
       const summary =

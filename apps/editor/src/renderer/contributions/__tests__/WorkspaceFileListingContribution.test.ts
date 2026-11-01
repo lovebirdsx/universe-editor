@@ -28,7 +28,8 @@ import {
 
 class FakeWorkspaceService implements IWorkspaceServiceType {
   declare readonly _serviceBrand: undefined
-  readonly onDidChangeWorkspace = new Emitter<IWorkspace | null>().event
+  readonly workspaceChanges = new Emitter<IWorkspace | null>()
+  readonly onDidChangeWorkspace = this.workspaceChanges.event
   readonly onDidChangeRecent = new Emitter<readonly never[]>().event
   readonly current: IWorkspace | null = { folder: URI.file('/ws'), name: 'ws' }
   readonly recent = [] as never[]
@@ -57,11 +58,13 @@ class FakeFileWatcherService implements IFileWatcherServiceType {
 function makeFileSearch(): IFileSearchServiceType & {
   calls: number
   queries: Array<{ timeoutMs: number | undefined }>
+  invalidatedRoots: URI[]
 } {
   const svc = {
     _serviceBrand: undefined,
     calls: 0,
     queries: [] as Array<{ timeoutMs: number | undefined }>,
+    invalidatedRoots: [] as URI[],
     // matchAll 清单的真实线形是 relPaths（不是 results）——预热走的就是这条路，
     // fake 必须如实模拟，否则 loadWorkspaceFiles 拿到的 entries 永远是空而测试照样绿。
     async search(query: { timeoutMs?: number }) {
@@ -75,26 +78,31 @@ function makeFileSearch(): IFileSearchServiceType & {
         durationMs: 0,
       }
     },
+    invalidateListing(root: URI) {
+      svc.invalidatedRoots.push(root)
+    },
   } satisfies IFileSearchServiceType & {
     calls: number
     queries: Array<{ timeoutMs: number | undefined }>
+    invalidatedRoots: URI[]
   }
   return svc
 }
 
 function setup(fileSearch: ReturnType<typeof makeFileSearch> = makeFileSearch()) {
   const watcher = new FakeFileWatcherService()
+  const workspace = new FakeWorkspaceService()
   // Bypass DI for the trailing optional delay param — createInstance does not
   // forward extra args to optional constructor params.
   const contribution = new WorkspaceFileListingContribution(
-    new FakeWorkspaceService(),
+    workspace,
     watcher,
     fileSearch,
     new FakeExcludeService(),
     new FakeFocusScopeService(),
     0,
   )
-  return { contribution, fileSearch, watcher }
+  return { contribution, fileSearch, watcher, workspace }
 }
 
 function flush(ticks = 20): Promise<void> {
@@ -160,6 +168,77 @@ describe('WorkspaceFileListingContribution', () => {
 
     await loadWorkspaceFiles(URI.file('/ws'), fileSearch, { dirNames: [] })
     expect(fileSearch.calls).toBe(2)
+    contribution.dispose()
+  })
+
+  // The renderer-side mention cache and the on-disk listing are different
+  // snapshots: the listing survives across sessions and is only rebuilt on
+  // demand, so file-set changes must advance its root watermark as well.
+  it('marks the on-disk listing stale once the workspace is ready', async () => {
+    const { contribution, fileSearch } = setup()
+    await flush()
+    expect(fileSearch.invalidatedRoots.map((root) => root.toString())).toEqual([
+      URI.file('/ws').toString(),
+    ])
+    contribution.dispose()
+  })
+
+  it('invalidates the on-disk listing on added/deleted but not modified-only batches', async () => {
+    const { contribution, fileSearch, watcher } = setup()
+    await flush()
+    fileSearch.invalidatedRoots.length = 0
+
+    watcher.changes.fire([{ type: 'modified', resource: URI.file('/ws/a.ts') }])
+    expect(fileSearch.invalidatedRoots).toHaveLength(0)
+
+    watcher.changes.fire([
+      { type: 'modified', resource: URI.file('/ws/a.ts') },
+      { type: 'added', resource: URI.file('/ws/b.ts') },
+    ])
+    expect(fileSearch.invalidatedRoots.map((root) => root.toString())).toEqual([
+      URI.file('/ws').toString(),
+    ])
+
+    watcher.changes.fire([{ type: 'deleted', resource: URI.file('/ws/b.ts') }])
+    expect(fileSearch.invalidatedRoots).toHaveLength(2)
+    contribution.dispose()
+  })
+
+  it('invalidates the on-disk listing when the watcher restarts', async () => {
+    const { contribution, fileSearch, watcher } = setup()
+    await flush()
+    fileSearch.invalidatedRoots.length = 0
+
+    watcher.restarts.fire()
+
+    expect(fileSearch.invalidatedRoots.map((root) => root.toString())).toEqual([
+      URI.file('/ws').toString(),
+    ])
+    contribution.dispose()
+  })
+
+  it('invalidates the new folder when the workspace changes', async () => {
+    const { contribution, fileSearch, workspace } = setup()
+    await flush()
+    fileSearch.invalidatedRoots.length = 0
+
+    workspace.workspaceChanges.fire({ folder: URI.file('/ws2'), name: 'ws2' })
+
+    expect(fileSearch.invalidatedRoots.map((root) => root.toString())).toEqual([
+      URI.file('/ws2').toString(),
+    ])
+    contribution.dispose()
+  })
+
+  it('swallows a failing invalidation (a hint must never break a watcher callback)', async () => {
+    const fileSearch = makeFileSearch()
+    fileSearch.invalidateListing = () => {
+      throw new Error('channel closed')
+    }
+    const { contribution, watcher } = setup(fileSearch)
+    await flush()
+
+    expect(() => watcher.restarts.fire()).not.toThrow()
     contribution.dispose()
   })
 
