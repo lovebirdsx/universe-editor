@@ -21,11 +21,14 @@ export function ConfirmDialog({
   opts,
   onResolve,
   targetDocument,
+  shouldRestoreFocus,
 }: {
   opts: IConfirmOptions
   onResolve: (r: IConfirmResult) => void
   /** Owner document when the dialog is portaled into an auxiliary window. */
   targetDocument?: Document | undefined
+  /** Gate for the unmount focus restore; see FocusScopeOverlay. */
+  shouldRestoreFocus?: (() => boolean) | undefined
 }) {
   const primary = opts.primaryButton ?? localize('dialog.default.ok', 'OK')
   const cancel = opts.cancelButton ?? localize('dialog.default.cancel', 'Cancel')
@@ -59,6 +62,7 @@ export function ConfirmDialog({
       visible
       onEscape={() => onResolve(cancelResult)}
       targetDocument={targetDocument}
+      shouldRestoreFocus={shouldRestoreFocus}
     >
       <div
         className={styles['backdrop']}
@@ -191,11 +195,14 @@ export function PromptDialog({
   opts,
   onResolve,
   targetDocument,
+  shouldRestoreFocus,
 }: {
   opts: IPromptOptions
   onResolve: (v: string | undefined) => void
   /** 对话框 portal 进辅助窗口时所在的 document。 */
   targetDocument?: Document | undefined
+  /** Gate for the unmount focus restore; see FocusScopeOverlay. */
+  shouldRestoreFocus?: (() => boolean) | undefined
 }) {
   let inputEl: HTMLInputElement | null = null
   return (
@@ -203,6 +210,7 @@ export function PromptDialog({
       visible
       onEscape={() => onResolve(undefined)}
       targetDocument={targetDocument}
+      shouldRestoreFocus={shouldRestoreFocus}
     >
       <div
         className={styles['backdrop']}

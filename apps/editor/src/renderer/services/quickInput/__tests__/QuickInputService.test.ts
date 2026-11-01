@@ -36,13 +36,30 @@ class FakeStorage implements IStorageService {
   }
 }
 
-function createService(): {
+class PendingStorage extends FakeStorage {
+  private readonly _pending: Promise<unknown>
+  private _resolve!: (value: unknown) => void
+  constructor() {
+    super()
+    this._pending = new Promise((resolve) => {
+      this._resolve = resolve
+    })
+  }
+  override async get<T = unknown>(): Promise<T | undefined> {
+    return (await this._pending) as T | undefined
+  }
+  release(value: unknown): void {
+    this._resolve(value)
+  }
+}
+
+function createService(storage: IStorageService = new FakeStorage()): {
   svc: QuickInputService
   ctx: ContextKeyService
 } {
   const ctx = new ContextKeyService()
   const services = new ServiceCollection()
-  services.set(IStorageService, new FakeStorage())
+  services.set(IStorageService, storage)
   services.set(IContextKeyService, ctx)
   const instantiation = new InstantiationService(services)
   const svc = instantiation.createInstance(QuickInputService)
@@ -293,6 +310,55 @@ describe('QuickInputService — document origin', () => {
     expect(svc.currentState).toBeNull()
     expect(svc.currentDocument).toBeUndefined()
     svc.dispose()
+  })
+
+  it('keeps the invoking window when the active document changes during the storage read', async () => {
+    const auxDocument = { name: 'aux' } as unknown as Document
+    const mainDocument = { name: 'main' } as unknown as Document
+    const auxRegistration = registerWorkbenchDocument(auxDocument)
+    const mainRegistration = registerWorkbenchDocument(mainDocument)
+    setActiveWorkbenchDocument(auxDocument)
+    const storage = new PendingStorage()
+    const { svc } = createService(storage)
+
+    try {
+      const promise = svc.pick([{ id: 'a', label: 'A' }], { id: 'recent' })
+      setActiveWorkbenchDocument(mainDocument)
+      storage.release([])
+      await vi.waitFor(() => expect(svc.currentState).not.toBeNull())
+
+      expect(svc.currentDocument).toBe(auxDocument)
+      svc.hide()
+      await expect(promise).resolves.toBeUndefined()
+    } finally {
+      svc.dispose()
+      mainRegistration.dispose()
+      auxRegistration.dispose()
+    }
+  })
+
+  it('falls back to the main window when the origin window closes during the storage read', async () => {
+    const auxDocument = { name: 'aux' } as unknown as Document
+    const auxRegistration = registerWorkbenchDocument(auxDocument)
+    setActiveWorkbenchDocument(auxDocument)
+    const globalDocument = { name: 'main-global' } as unknown as Document
+    vi.stubGlobal('document', globalDocument)
+    const storage = new PendingStorage()
+    const { svc } = createService(storage)
+
+    try {
+      const promise = svc.input({ id: 'recent' })
+      auxRegistration.dispose()
+      storage.release('')
+      await vi.waitFor(() => expect(svc.currentState).not.toBeNull())
+
+      expect(svc.currentDocument).toBe(globalDocument)
+      svc.hide()
+      await expect(promise).resolves.toBeUndefined()
+    } finally {
+      svc.dispose()
+      vi.unstubAllGlobals()
+    }
   })
 })
 

@@ -6,7 +6,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Event } from '@universe-editor/platform'
-import { currentWorkbenchDocumentOrUndefined } from '../../../services/windows/workbenchDocuments.js'
+import {
+  currentWorkbenchDocumentOrUndefined,
+  getWorkbenchDocuments,
+} from '../../../services/windows/workbenchDocuments.js'
 
 // ---------------------------------------------------------------------------
 // Why this exists (monaco-editor 0.55.1)
@@ -25,6 +28,16 @@ import { currentWorkbenchDocumentOrUndefined } from '../../../services/windows/w
 // the window's client area), and every consumer of monaco's ILayoutService —
 // hover service, context-view service (editor context menus), action widget,
 // quick input — now renders unclipped, same as vscode.
+//
+// Multi-window: auxiliary editor windows are separate Documents in the same
+// renderer. `activeContainer` must follow the focused workbench document —
+// monaco's QuickInputController.shows re-parents its widget to
+// `layoutService.activeContainer` whenever the widget's window differs from
+// the container's window, so a fixed main-window container sent Go to Line
+// (and every other platform quick input) to the main window. `mainContainer`
+// stays on the main document on purpose: it anchors monaco's global
+// accessibility/clipboard listeners and is the fallback reparent target when
+// a window unregisters.
 // ---------------------------------------------------------------------------
 
 /** Decorator id string of monaco's ILayoutService (`createDecorator('layoutService')`). */
@@ -34,30 +47,49 @@ interface IMonacoWindowLike {
   document: Document
 }
 
+function rootOfDocument(doc: Document | undefined): HTMLElement | undefined {
+  if (doc === undefined) return undefined
+  return doc.getElementById('root') ?? doc.body
+}
+
 class WorkbenchLayoutService {
-  private get _root(): HTMLElement {
-    return document.getElementById('root') ?? document.body
+  private get _mainDocument(): Document | undefined {
+    return typeof document === 'undefined' ? undefined : document
+  }
+
+  private get _mainRoot(): HTMLElement {
+    const root = rootOfDocument(this._mainDocument)
+    if (root === undefined) {
+      throw new Error('[monacoWorkbenchLayoutService] mainContainer requires a DOM')
+    }
+    return root
   }
 
   get mainContainer(): HTMLElement {
-    return this._root
+    return this._mainRoot
   }
 
   get activeContainer(): HTMLElement {
-    return this._root
+    // Follows the focused workbench window; before any auxiliary window is
+    // registered this resolves to the main document, same as the old behavior.
+    return rootOfDocument(currentWorkbenchDocumentOrUndefined()) ?? this._mainRoot
   }
 
   get containers(): readonly HTMLElement[] {
-    return [this._root]
+    const roots = getWorkbenchDocuments()
+      .map((doc) => rootOfDocument(doc))
+      .filter((root): root is HTMLElement => root !== undefined)
+    return roots.length > 0 ? roots : [this._mainRoot]
   }
 
   get mainContainerDimension(): { width: number; height: number } {
-    const rect = this._root.getBoundingClientRect()
+    const rect = this._mainRoot.getBoundingClientRect()
     return { width: rect.width, height: rect.height }
   }
 
   get activeContainerDimension(): { width: number; height: number } {
-    return this.mainContainerDimension
+    const rect = this.activeContainer.getBoundingClientRect()
+    return { width: rect.width, height: rect.height }
   }
 
   get mainContainerOffset(): { top: number; quickPickTop: number } {
@@ -73,16 +105,20 @@ class WorkbenchLayoutService {
     // service does this explicitly "to enable aux window support"). An
     // auxiliary window's overlays must mount into that window's root, not the
     // main window's — the two are different documents.
-    const doc = monacoWindow.document
-    return doc.getElementById('root') ?? doc.body
+    return rootOfDocument(monacoWindow.document) ?? monacoWindow.document.body
   }
 
   whenContainerStylesLoaded(): undefined {
     return undefined
   }
 
-  // Single-window app: every container-lifecycle event never fires, matching
-  // StandaloneLayoutService's `Event.None` shape.
+  // Container-lifecycle events stay inert. Monaco 0.55.1's standalone layout
+  // service declares all five as Event.None too: the context-view service
+  // subscribes to onDidLayoutContainer, which is a no-op on a never-firing
+  // event; the clipboard listener is Safari-gated and seeded from
+  // mainContainer; the quick-input relays subscribe to their editor-scoped
+  // host, not this root. The active container is read lazily on every
+  // quick-input show, so a getter is enough.
   readonly onDidLayoutMainContainer = Event.None
   readonly onDidLayoutActiveContainer = Event.None
   readonly onDidLayoutContainer = Event.None

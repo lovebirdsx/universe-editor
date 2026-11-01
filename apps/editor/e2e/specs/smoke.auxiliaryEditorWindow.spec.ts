@@ -535,6 +535,152 @@ test.describe('@p0 auxiliary editor windows', () => {
     await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
   })
 
+  test('monaco quick input opens in the focused auxiliary document', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    test.skip(process.platform === 'darwin', 'this spec uses the Windows/Linux Control bindings')
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    const file = seedFile('goto-line-aux.txt', 'one\ntwo\nthree\nfour\nfive\n')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), file)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+    await child.locator('.monaco-editor').first().click()
+
+    // Go to Line is monaco's own platform quick input. When it was re-parented
+    // to the main window its input received no keyboard focus, so this '4' landed
+    // in the auxiliary editor and Enter moved the cursor one line down instead.
+    await child.keyboard.press('Control+g')
+    await child.keyboard.type('4')
+    await child.keyboard.press('Enter')
+
+    // Behavioural proof that the keystrokes went into the quick input: the goto
+    // accepted line 4 and the document text stayed intact. Asserting monaco's
+    // internal quick-input DOM is disallowed (see e2e/CLAUDE.md).
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
+      .toBe(4)
+    expect(await page.evaluate(() => window.__E2E__!.getActiveEditorText())).toBe(
+      'one\ntwo\nthree\nfour\nfive\n',
+    )
+
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+
+  test('monaco quick input from the command palette works in the auxiliary document', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    test.skip(
+      process.platform === 'darwin',
+      'auxiliary window controls are hidden on macOS and this spec uses Control bindings',
+    )
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    const file = seedFile('palette-goto-line-aux.txt', 'one\ntwo\nthree\nfour\nfive\n')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), file)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+    // Let the post-move delayed focus frames land (FileEditor focuses a frame
+    // after mount).
+    await child.waitForTimeout(300)
+
+    // Park focus on a real focusable control outside the editor. Clicking the
+    // editor tab or title bar does not work: the tab refocuses the editor, and
+    // the title bar is a drag region. Blurring to <body> is undone as well —
+    // FileEditor re-focuses the editor whenever it loses focus to the body. A
+    // window-control button keeps focus outside monaco for real, so when the
+    // palette closes it restores focus there and Go to Line resolves the
+    // quick-input service through getFocusedCodeEditor() with no focused
+    // editor, throwing "Quick input service needs a focused editor to work."
+    // unless the action focuses its target editor first.
+    await child.locator('[data-testid="auxiliary-titlebar"] button').first().focus()
+    // If a delayed focus frame (FileEditor focuses a frame after mount) wins
+    // the race, the palette restores focus to the editor and the assertions
+    // below would pass even without the fix. Prove focus really left the
+    // editor before opening the palette.
+    await expect
+      .poll(() =>
+        child.evaluate(() => {
+          const active = document.activeElement
+          return active !== null && active.closest('[data-testid="auxiliary-titlebar"]') !== null
+        }),
+      )
+      .toBe(true)
+    await child.keyboard.press('Control+Shift+P')
+    await expect(child.locator('[data-testid="quick-input-overlay"]')).toBeVisible()
+    await child.keyboard.type('Go to Line')
+    await child.keyboard.press('Enter')
+    await child.keyboard.type('3')
+    await child.keyboard.press('Enter')
+
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber))
+      .toBe(3)
+    expect(await page.evaluate(() => window.__E2E__!.getActiveEditorText())).toBe(
+      'one\ntwo\nthree\nfour\nfive\n',
+    )
+
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+
+  test('closing an auxiliary window settles its queued dialog and does not block later dialogs', async ({
+    electronApp,
+    workbench,
+    page,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.newEmptyEditorWindow',
+    )
+    const token = (await auxWindows(page))[0]!.token
+    await page.evaluate((t) => window.__E2E__!.focusAuxiliaryWindow(t), token)
+
+    // The command resolves only after its confirm() is answered. Keep the
+    // promise so closing the window can be shown to settle it, not strand it.
+    const commandSettled = page.evaluate(() =>
+      window.__E2E__!.runCommand('workbench.action.startHeapSnapshotDiagnostics').then(() => true),
+    )
+    await expect(child.locator('[data-renderer-dialog]')).toBeVisible()
+
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+    await commandSettled
+    await expect(page.locator('[data-renderer-dialog]')).toHaveCount(0)
+
+    // The dead entry must also leave the queue, otherwise the next dialog in
+    // the main window would wait behind an invisible head forever.
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.startHeapSnapshotDiagnostics')
+    })
+    const dialog = page.locator('[data-renderer-dialog]')
+    await expect(dialog).toBeVisible()
+    await page.keyboard.press('Escape')
+    await expect(dialog).toHaveCount(0)
+  })
+
   test('theme and tab context menu are owned by the auxiliary document', async ({
     electronApp,
     workbench,

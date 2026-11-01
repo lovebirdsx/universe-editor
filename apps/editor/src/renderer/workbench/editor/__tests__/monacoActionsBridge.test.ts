@@ -414,7 +414,9 @@ describe('bridgeMonacoActionsForTests', () => {
     }
 
     function setup(activeEditor: EditorInput | null) {
-      const trigger = vi.fn()
+      const calls: string[] = []
+      const trigger = vi.fn(() => calls.push('trigger'))
+      const focus = vi.fn(() => calls.push('focus'))
       const status = vi.fn()
       const services = new ServiceCollection()
       services.set(IEditorGroupsService, {
@@ -423,25 +425,29 @@ describe('bridgeMonacoActionsForTests', () => {
       } as never)
       services.set(INotificationService, { _serviceBrand: undefined, status } as never)
       const inst = new InstantiationService(services)
-      return { inst, trigger, status }
+      return { inst, calls, trigger, focus, status }
     }
 
     afterEach(() => {
       FileEditorRegistry._resetForTests()
     })
 
-    it('dispatches to a mounted editor even when the active input is not a FileEditorInput', () => {
+    it('focuses the mounted editor before dispatching, even for non-FileEditorInput inputs', () => {
       registered = bridge(
         makeRegistry([{ id: 'editor.action.insertCursorBelow', label: 'Add Cursor Below' }]),
         [],
       )
       const input = new FakeTextInput()
-      const { inst, trigger } = setup(input)
-      FileEditorRegistry.register(input, { trigger } as never, 1)
+      const { inst, calls, trigger, focus } = setup(input)
+      FileEditorRegistry.register(input, { trigger, focus } as never, 1)
 
       inst.invokeFunction((accessor) => {
         CommandsRegistry.getCommand('editor.action.insertCursorBelow')!.handler(accessor)
       })
+      // Focus first: actions that open monaco's standalone quick input (Go to
+      // Line / Symbol) resolve it through getFocusedCodeEditor().
+      expect(calls).toEqual(['focus', 'trigger'])
+      expect(focus).toHaveBeenCalledTimes(1)
       expect(trigger).toHaveBeenCalledWith('', 'editor.action.insertCursorBelow', {})
     })
 

@@ -177,6 +177,13 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
         // prompt) would otherwise be torn down the instant it appears.
         queueMicrotask(() => {
           if (isMonacoCommandItem(selected)) {
+            // The palette has taken DOM focus off the editor by run time, and
+            // monaco actions that open a platform quick input (Go to Line /
+            // Symbol) resolve it through `getFocusedCodeEditor()` — without a
+            // focused editor they throw "Quick input service needs a focused
+            // editor to work." Focus the editor the item was collected for
+            // first, same as the navigation Action2 wrappers do.
+            selected._editor.focus()
             void selected._editor.getAction(selected._actionId)?.run()
           } else {
             void runWithInvocationModifiers(mods, () => this._commands.executeCommand(selected.id))

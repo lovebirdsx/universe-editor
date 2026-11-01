@@ -13,9 +13,26 @@ import {
   type IDialogService,
   type IPromptOptions,
 } from '@universe-editor/platform'
-import { getActiveWorkbenchDocument } from '../windows/workbenchDocuments.js'
+import {
+  getActiveWorkbenchDocument,
+  onDidRemoveWorkbenchDocument,
+} from '../windows/workbenchDocuments.js'
 
 type Resolver<T> = (value: T) => void
+
+/** Result of a confirm dialog whose origin window closed before the user answered. */
+function cancelForClosedDocument(opts: IConfirmOptions): IConfirmResult {
+  return {
+    confirmed: false,
+    choice: 'cancel',
+    neverAskAgain: false,
+    // `checkboxChecked` is echoed on every exit path; the dialog's local state
+    // died with its window, so the initial states are the only ones we have.
+    ...(opts.checkboxes?.length
+      ? { checkboxChecked: opts.checkboxes.map((checkbox) => checkbox.initiallyChecked ?? false) }
+      : {}),
+  }
+}
 
 export interface ConfirmEntry {
   /** 入队时分配，服务实例内单调递增；DialogHost 用它作为 React key。 */
@@ -49,6 +66,27 @@ export class RendererDialogService extends Disposable implements IDialogService 
   /** Snapshot of the current queue for the host component. */
   get queue(): readonly DialogEntry[] {
     return this._queue
+  }
+
+  constructor() {
+    super()
+    // The dialog is portalled into the document captured when it was enqueued.
+    // If that window closes first the dialog is unreachable: settle every entry
+    // it owns (the callers' promises would otherwise hang) and drop them from
+    // the queue, which is head-ordered — one dead head would block every later
+    // dialog forever.
+    this._register(onDidRemoveWorkbenchDocument((doc) => this._forgetDocument(doc)))
+  }
+
+  private _forgetDocument(doc: Document): void {
+    for (const entry of [...this._queue]) {
+      if (entry.document !== doc || entry.settled === true) continue
+      if (entry.kind === 'confirm') {
+        this._resolveEntry(entry, cancelForClosedDocument(entry.opts))
+      } else {
+        this._resolveEntry(entry, undefined)
+      }
+    }
   }
 
   confirm(opts: IConfirmOptions): Promise<IConfirmResult> {

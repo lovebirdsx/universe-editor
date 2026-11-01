@@ -69,7 +69,7 @@ renderer（主窗口，唯一运行时）
 - `FloatingPortal` 的 `root` 必须是 owner document 的 `body`，window capture 监听挂 owner document 的 `defaultView`；只改 portal 不改监听，会出现"菜单画在辅助窗口、方向键却由主窗口处理"。
 - 直接 portal 的浮层（`ChatImage` 预览、`WhenInputCell`、`PerforceGraphSyncDialog`）自己解析 owner document，并用所选窗口的 `innerWidth/innerHeight` 做视口夹取。
 - `DialogHost` 仍把发起时捕获的 Document 传给 `ConfirmDialog` → `FocusScopeOverlay targetDocument`；`RendererDialogService` 在**发起操作时**捕获活跃窗口的 Document，而不是在服务构造时固定；`QuickInput` 同理。
-- Monaco 编辑器内容浮层（hover / suggest / find 详情）由编辑器自身创建，落在编辑器所在文档；`monacoWorkbenchLayoutService.getContainer(window)` 按目标窗口解析该窗口的 `#root`，平台级 hover 同样跟随目标文档。`mainContainer` / `activeContainer` 仍固定主窗口，只作无目标容器时的兜底（见 [overlay-layers.md](overlay-layers.md)）。
+- Monaco 编辑器内容浮层（hover / suggest / find 详情）由编辑器自身创建，落在编辑器所在文档；`monacoWorkbenchLayoutService.getContainer(window)` 按目标窗口解析该窗口的 `#root`，平台级 hover 同样跟随目标文档。`activeContainer` 跟随当前活跃 workbench 文档（monaco 平台级 quick input / 无显式容器的 context view 因此在焦点窗口打开），`mainContainer` 固定主窗口，作全局无障碍/剪贴板锚点与辅助窗口关闭时的兜底（见 [overlay-layers.md](overlay-layers.md)）。
 
 通用规则：**浮层跟随宿主文档，不跟随全局 `document`**。新增 overlay 时先问"它渲染进哪个 document"，优先让原语从 context 解析；只有跨文档 portal 才需要显式重新 provide。
 
@@ -82,7 +82,7 @@ VSCode 的 `INotificationService` / `IProgressService` 是每个 workbench 窗�
 - `NotificationService.notify()` 在调用时捕获 `currentWorkbenchDocumentOrUndefined()`；真正需要指定窗口的调用方用 `notifyWithOrigin(origin, opts)`。origin 只存在于 renderer 内存（`notificationOrigins` observable），**绝不进入 platform 的 `INotification` 或持久化 JSON**；恢复的通知没有 origin，自然回落主窗口。
 - `NotificationsToast` 按 `workbenchDocumentOrMain(origin)` 分组，每组 `createPortal` 到目标文档；每窗口最多 5 条。通知中心在 `toggleCenter()` 打开时捕获 `centerDocument`，关闭/文档注销时清空。
 - 文档关闭后 origin 被清理，尚未处理的条目回落主窗口（`workbenchDocumentOrMain`）；通知**不会**跟着之后切换的活跃窗口漂移。
-- `ProgressService.withProgress()` 在**进入时**捕获 origin（不是延迟 mount 时），notification 走 `notifyWithOrigin`，dialog 同时发布 `dialogDocument`；`ProgressDialogHost` portal 到该文档。来源文档注销时服务立即清空 `dialogDocument`，宿主回落主窗口；`QuickInputService` 在来源文档注销时直接 `hide()`，让挂起的 `pick()` / `input()` 结算，避免继续 portal 到死文档。
+- `ProgressService.withProgress()` 在**进入时**捕获 origin（不是延迟 mount 时），notification 走 `notifyWithOrigin`，dialog 同时发布 `dialogDocument`；`ProgressDialogHost` portal 到该文档。来源文档注销时服务立即清空 `dialogDocument`，宿主回落主窗口；`QuickInputService` 在来源文档注销时直接 `hide()`，让挂起的 `pick()` / `input()` 结算，避免继续 portal 到死文档；`pick()` / `input()` 还在 storage 读取的 await 之前捕获 origin，读取期间切窗口不会把面板挪到新窗口。`RendererDialogService` 对来源文档注销的排队对话框以取消值 settle 并出队（死 entry 会永久阻塞后续对话框），`DialogHost` 再按 `workbenchDocumentOrMain` 兜底目标文档，并给对话框的 `FocusScopeOverlay` 传 `shouldRestoreFocus`：仅当 active workbench document 仍是目标文档、且焦点已随对话框卸载回落到 body 时才恢复，避免决议动作跨窗口激活或同窗口主动移焦后又被抢回。
 - 通知的已读状态、`unreadCount`、清空/全部已读仍是应用级全局状态——只有"画在哪个窗口"按 origin 路由。
 - **OS 桌面通知按来源窗口归属**：辅助窗口共享父 renderer 的 `IHostService`，`notify()` 的焦点门控、任务栏闪烁与点击聚焦默认会落在父工作区窗口。`ISystemNotificationOptions.originWindow` 三态声明归属：`workspace` 钉在主窗口、`auxiliary` 携带 token（主进程经 `AuxiliaryWindowsMainService.getWindowForToken` 解析为真实 BrowserWindow，并在点击时重新解析、窗口已关则回落主窗口），缺省跟随本 workspace 当前聚焦窗口。Agent 通知在 renderer 用 `findSessionEditor` 定位 session tab 所在 part 后传 token（tab 用 durable id 时再按 `sessionIdOnAgent` 查一次）；没有打开 tab 的后台会话显式钉主窗口，避免归属到用户碰巧聚焦的辅助窗口。macOS 的 `app.dock.bounce` 是进程级 API，无法按窗口。
 - **主窗口标题只反映主 part**：`WindowTitleContribution` 读 `IEditorGroupsService.mainPart.activeGroup.activeEditor`，不读全局 `activeSession`——后者随焦点跨窗口漂移，会把辅助窗口的会话标题写进主窗口（Alt+Tab 里看起来像是主窗口的会话）。辅助窗口标题由 `AuxiliaryTitleBar` 按自己的 active editor 维护。
@@ -196,7 +196,6 @@ main 进程有两处不能只看"当前窗口 id"：
 - **后台文档的 Part 不算聚焦**：Part 容器的 `isFocused()` 读自己的 `ownerDocument.activeElement`，但失去 OS 焦点的文档会保留最后的 activeElement。凡是"当前是否聚焦在某 Part/视图"的产品判定（context key、`Ctrl+Shift+E` 等 toggle 命令）必须在 `isFocused()` 之外再要求该 Part 的 document 等于当前 active workbench document（`services/focus/partFocus.ts` 的 `isPartFocusedInActiveDocument`），否则在辅助窗口打字时主窗口会误判侧栏仍聚焦，命令执行成"关闭侧栏"而不是"显示 Explorer"。
 - **焦点竞争还来自两处细节**：`LayoutService.focusView` 的落点确认读元素自己的 `ownerDocument.activeElement`（主文档判定对辅助元素恒 false）；`_focusPart` 只在没有显式目标视图时才委派给该 Part 上次记住的视图，显式 `focusView(A)` 不能先打开/聚焦记住的视图 B。
 
-
 两个关键细节：
 
 - **判定"已有焦点"只读目标 `document.hasFocus()`**，不能读 `WorkbenchWindowService.activeWindow`——pointerdown/focusin 会把 activeWindow 提前写成目标窗口，但原生焦点未必已过去；读错会在 Windows 上触发 always-on-top 窗口闪烁。
@@ -206,7 +205,8 @@ main 进程有两处不能只看"当前窗口 id"：
 
 - 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、单编辑器/整组移回主窗口与菜单可见性、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab、辅助窗口 Ctrl+Tab 回主窗口后台 tab 后光标/方向键可用）、聚焦窗口与打开落点分离（Alt+Tab 回主窗口后 Ctrl+W 关主窗口标签、打开仍落原辅助窗口）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。
 - **DevTools 属于主 renderer**：辅助窗口共享主窗口的 JS realm 与 webContents，`toggleDevTools` 只能打开主窗口的开发者工具，无法按辅助窗口分别打开。这是同 renderer 架构的直接结果，不是遗漏；要按窗口调试需等辅助窗口拥有独立 renderer。
-- **Monaco 平台容器仍以主窗口为准**：`monacoWorkbenchLayoutService.mainContainer/activeContainer` 固定返回主 `#root`（`getContainer(window)` 已按目标窗口解析）。monaco 自带的 quick input、无障碍提示等少数走 `activeContainer` 的浮层在辅助窗口中仍会挂到主窗口；编辑器内容浮层与平台 hover 不受影响。完整重构需按 window 维护多容器集合，暂未做。
+- **Monaco 平台容器按活跃窗口解析**：`monacoWorkbenchLayoutService.activeContainer` 跟随当前活跃 workbench 文档，`containers` 汇总各窗口的 `#root`；monaco 自带的 quick input（Go to Line / Go to Symbol / Go to Match、change tab size 等）与无显式容器的 context view 因此在焦点窗口打开并持有输入焦点。`mainContainer` 仍固定主窗口——它是 monaco 全局无障碍类名与剪贴板兜底监听的锚点，也是辅助窗口 unregister 时 quick input 的兜底 reparent 目标。新增依赖 `activeContainer` 的平台浮层不再假设主窗口。
+- **直接运行 Monaco action 前必须聚焦目标编辑器**：standalone quick input 的 `activeService` 只认 `getFocusedCodeEditor()`，焦点在窗口控件、树等非编辑器元素上时，`editor.action.gotoLine` / `editor.action.quickOutline` 会抛 "Quick input service needs a focused editor to work."。本仓有两类绕过 VSCode `EditorAction` 包装的入口：命令面板的 monaco 项（`CommandsQuickAccessProvider` → `editor.getAction().run()`）和 `CommandsRegistry` 镜像命令（`monacoActionsBridge` → `editor.trigger()`）。二者都不会碰焦点，执行入口必须像 `gotoLocationActions` 一样先 `editor.focus()`；`getFocusedCodeEditor() || getActiveCodeEditor()` 只解析目标编辑器、不改变焦点，兜不了底。
 - 跨窗口焦点用例在 main 进程猴补 `BrowserWindow.prototype.focus/showInactive` 记录焦点请求，再断言最后一次请求指向辅助窗口（`about:blank`）。silent E2E 下窗口不真正抢焦点，所以断言"请求了哪个窗口"而不是 OS 焦点状态。
 - Playwright/CDP 不能发起跨两个 BrowserWindow 的原生 OS 拖拽。跨窗口 DnD 用例把 `DragEvent` 合成进真实 React 树：处理器、共享 DragSession、screen 几何、IPC 建窗与编辑器迁移都真实执行，但**不是**原生 OS 拖拽测试；没有用探针直接调 `moveEditorToNewWindow` 冒充拖拽。
 - 拖出建窗的落点断言按 main 侧同样的"工作区可达范围"公式校验，避免把窗口管理器的边缘裁剪误判为产品错误。

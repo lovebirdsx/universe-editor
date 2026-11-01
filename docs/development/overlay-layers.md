@@ -27,7 +27,7 @@ C 曾经是缺口：monaco 的编辑器内容浮层不走 `ILayoutService`，默
 - 直接 `createPortal` 的浮层自己解析目标文档并用该窗口的 `innerWidth/innerHeight` 夹取；`RendererDialogService` 在 `confirm()` / `prompt()` **被调用的那一刻**记录活跃文档，`QuickInput` 同理。
 - `TooltipProvider`、`useDragSessionDocument` 在辅助窗口挂载时显式传 `entry.window.document`；拖放终结事件（drop / dragend / Escape）不会回到主 document。
 - 通知 toast 按 `notify()` 发起时的文档分组，每窗口一个 portal；通知中心在打开时捕获 `centerDocument`，进度对话框用 `dialogDocument`。文档关闭后回落主窗口。语义见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)。
-- Monaco 编辑器内容浮层（hover / suggest / 内容 widget）由编辑器自身创建，DOM 落在编辑器所在文档；`monacoWorkbenchLayoutService.getContainer(window)` 也按传入窗口解析该窗口的 `#root`，平台级 hover 因此跟随目标文档。`mainContainer` / `activeContainer` 仍固定主窗口，只在没有目标容器时兜底——依赖它们的 monaco 平台浮层落到主窗口是已知限制。
+- Monaco 编辑器内容浮层（hover / suggest / 内容 widget）由编辑器自身创建，DOM 落在编辑器所在文档；`monacoWorkbenchLayoutService.getContainer(window)` 也按传入窗口解析该窗口的 `#root`，平台级 hover 因此跟随目标文档。`activeContainer` 跟随当前活跃 workbench 文档、`containers` 汇总各窗口 `#root`——monaco 平台级 quick input 与无显式容器的 context view 落在焦点窗口；`mainContainer` 固定主窗口，只作全局无障碍/剪贴板锚点与窗口关闭时的兜底。
 
 判据：新增任何 `document.addEventListener`、`createPortal`、focus trap 时，先确认"宿主的 document 是哪一个"——优先让原语从 context 解析，跨文档 portal 则显式重新 provide。完整架构见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)。
 

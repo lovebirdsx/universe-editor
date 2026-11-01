@@ -7,6 +7,10 @@ import { act, render, screen, fireEvent, cleanup } from '@testing-library/react'
 import type { IConfirmOptions, IConfirmResult } from '@universe-editor/platform'
 import { DialogHost } from '../DialogHost.js'
 import { RendererDialogService } from '../../../services/dialog/RendererDialogService.js'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../../services/windows/workbenchDocuments.js'
 
 afterEach(() => cleanup())
 
@@ -155,5 +159,57 @@ describe('DialogHost dialog identity', () => {
     await expect(first).resolves.toEqual(CANCEL_RESULT)
     svc._resolveEntry(svc.queue[0]!, CANCEL_RESULT)
     await expect(second).resolves.toEqual(CANCEL_RESULT)
+  })
+})
+
+describe('DialogHost focus restore', () => {
+  it('restores focus to the trigger when the dialog closes in the active window', async () => {
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+
+    const svc = new RendererDialogService()
+    render(<DialogHost service={svc} />)
+    const promise = svc.confirm({ message: 'Stay?' })
+    fireEvent.click(await screen.findByRole('button', { name: 'OK' }))
+    await promise
+
+    expect(document.activeElement).toBe(trigger)
+    svc.dispose()
+    trigger.remove()
+  })
+
+  it('does not yank activation back when another window became active before resolving', async () => {
+    const trigger = document.createElement('button')
+    document.body.appendChild(trigger)
+    trigger.focus()
+    expect(document.activeElement).toBe(trigger)
+
+    const svc = new RendererDialogService()
+    render(<DialogHost service={svc} />)
+    const promise = svc.confirm({ message: 'Move away?' })
+    await screen.findByRole('button', { name: 'OK' })
+
+    // A resolving action can reveal an editor in another workbench window before
+    // React unmounts the dialog; restoring focus here would activate this window
+    // again. Switch the active document first, like that cross-window reveal.
+    const aux = { body: {} } as unknown as Document
+    const registration = registerWorkbenchDocument(aux)
+    try {
+      setActiveWorkbenchDocument(aux)
+      fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+      await promise
+      // react-aria schedules its own restore in rAF; without the gate the Old
+      // behaviour would hand focus back after this frame, so wait it out.
+      await act(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+      })
+
+      expect(document.activeElement).not.toBe(trigger)
+    } finally {
+      svc.dispose()
+      registration.dispose()
+      trigger.remove()
+    }
   })
 })

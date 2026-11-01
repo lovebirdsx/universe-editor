@@ -30,6 +30,7 @@ import type { QuickPickState } from '@universe-editor/workbench-ui'
 import {
   currentWorkbenchDocumentOrUndefined,
   onDidRemoveWorkbenchDocument,
+  workbenchDocumentOrMain,
 } from '../windows/workbenchDocuments.js'
 
 export type { QuickPickState }
@@ -80,9 +81,16 @@ export class QuickInputService extends Disposable implements IQuickInputService 
     return this._currentDocument
   }
 
-  private _setState(state: QuickPickState | null): void {
+  private _setState(state: QuickPickState | null, ownerDocument?: Document): void {
     if (state !== null && this._currentState === null) {
-      this._currentDocument = currentWorkbenchDocumentOrUndefined()
+      // `pick()`/`input()` capture the owner before their storage await so a
+      // window switch during that await cannot move the panel. Resolve it again
+      // here: a window that closed meanwhile must fall back to the main one
+      // instead of portalling into a dead document.
+      this._currentDocument =
+        ownerDocument === undefined
+          ? currentWorkbenchDocumentOrUndefined()
+          : workbenchDocumentOrMain(ownerDocument)
     } else if (state === null) {
       this._currentDocument = undefined
     }
@@ -406,6 +414,7 @@ export class QuickInputService extends Disposable implements IQuickInputService 
     items: readonly QuickPickInput<T>[],
     options?: IPickOptions,
   ): Promise<T | undefined> {
+    const ownerDocument = currentWorkbenchDocumentOrUndefined()
     const id = options?.id
     let mruIds: string[] = []
     if (id) {
@@ -415,54 +424,58 @@ export class QuickInputService extends Disposable implements IQuickInputService 
     return new Promise((resolve) => {
       const owner = {}
       this._claim(owner, () => resolve(undefined))
-      this._setState({
-        type: 'pick',
-        items,
-        mruIds,
-        placeholder: options?.placeholder,
-        activeItems: options?.activeItemId
-          ? items.filter((it): it is T => !('type' in it) && it.id === options.activeItemId)
-          : undefined,
-        prefix: options?.prefix,
-        matchOnDescription: options?.matchOnDescription,
-        matchOnDetail: options?.matchOnDetail,
-        filterMode: options?.filterMode,
-        presentation: options?.presentation,
-        quickNavigate: options?.quickNavigate,
-        busy: options?.busy,
-        onItemRemove: options?.onItemRemove,
-        onTriggerItemButton: options?.onDidTriggerItemButton
-          ? (item, button, mods) =>
-              options.onDidTriggerItemButton?.({ item, button, keyMods: mods })
-          : undefined,
-        buttons: options?.buttons,
-        onTriggerButton: options?.onDidTriggerButton
-          ? (button) => {
-              this._release(owner)
-              this._setState(null)
-              resolve(undefined)
-              options.onDidTriggerButton?.(button)
+      this._setState(
+        {
+          type: 'pick',
+          items,
+          mruIds,
+          placeholder: options?.placeholder,
+          activeItems: options?.activeItemId
+            ? items.filter((it): it is T => !('type' in it) && it.id === options.activeItemId)
+            : undefined,
+          prefix: options?.prefix,
+          matchOnDescription: options?.matchOnDescription,
+          matchOnDetail: options?.matchOnDetail,
+          filterMode: options?.filterMode,
+          presentation: options?.presentation,
+          quickNavigate: options?.quickNavigate,
+          busy: options?.busy,
+          onItemRemove: options?.onItemRemove,
+          onTriggerItemButton: options?.onDidTriggerItemButton
+            ? (item, button, mods) =>
+                options.onDidTriggerItemButton?.({ item, button, keyMods: mods })
+            : undefined,
+          buttons: options?.buttons,
+          onTriggerButton: options?.onDidTriggerButton
+            ? (button) => {
+                this._release(owner)
+                this._setState(null)
+                resolve(undefined)
+                options.onDidTriggerButton?.(button)
+              }
+            : undefined,
+          onAccept: (selected, mods) => {
+            this._release(owner)
+            this._setState(null)
+            if (options?.keyMods && mods) {
+              options.keyMods.ctrl = mods.ctrl
+              options.keyMods.alt = mods.alt
             }
-          : undefined,
-        onAccept: (selected, mods) => {
-          this._release(owner)
-          this._setState(null)
-          if (options?.keyMods && mods) {
-            options.keyMods.ctrl = mods.ctrl
-            options.keyMods.alt = mods.alt
-          }
-          const item = selected[0] as T | undefined
-          if (id && item?.id) {
-            const newMru = [item.id, ...mruIds.filter((x) => x !== item.id)].slice(0, 20)
-            void this._storage.set(`quickinput.mru.${id}`, newMru)
-          }
-          resolve(item)
+            const item = selected[0] as T | undefined
+            if (id && item?.id) {
+              const newMru = [item.id, ...mruIds.filter((x) => x !== item.id)].slice(0, 20)
+              void this._storage.set(`quickinput.mru.${id}`, newMru)
+            }
+            resolve(item)
+          },
         },
-      })
+        ownerDocument,
+      )
     })
   }
 
   async input(options?: IInputOptions): Promise<string | undefined> {
+    const ownerDocument = currentWorkbenchDocumentOrUndefined()
     const id = options?.id
     let storedValue: string | undefined
     if (id) {
@@ -472,19 +485,22 @@ export class QuickInputService extends Disposable implements IQuickInputService 
     return new Promise((resolve) => {
       const owner = {}
       this._claim(owner, () => resolve(undefined))
-      this._setState({
-        type: 'input',
-        placeholder: options?.placeholder,
-        inputPrompt: options?.prompt,
-        inputValue: options?.value ?? storedValue ?? '',
-        validateInput: options?.validateInput,
-        onInput: (value) => {
-          this._release(owner)
-          this._setState(null)
-          if (id) void this._storage.set(`quickinput.lastValue.${id}`, value)
-          resolve(value)
+      this._setState(
+        {
+          type: 'input',
+          placeholder: options?.placeholder,
+          inputPrompt: options?.prompt,
+          inputValue: options?.value ?? storedValue ?? '',
+          validateInput: options?.validateInput,
+          onInput: (value) => {
+            this._release(owner)
+            this._setState(null)
+            if (id) void this._storage.set(`quickinput.lastValue.${id}`, value)
+            resolve(value)
+          },
         },
-      })
+        ownerDocument,
+      )
     })
   }
 }

@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Window } from 'happy-dom'
 import type { ReactElement } from 'react'
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup, act } from '@testing-library/react'
 import { ProgressDialog } from '../feedback/progress/ProgressDialog.js'
 import { ConfirmDialog, PromptDialog } from '../feedback/dialog/Dialogs.js'
 
@@ -349,5 +349,76 @@ describe('dialogs in an auxiliary document realm', () => {
       }) as unknown as Event,
     )
     expect(onResolve).toHaveBeenCalledWith(undefined)
+  })
+})
+
+describe('dialog focus restore gate', () => {
+  function focusOutside(): HTMLButtonElement {
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    outside.focus()
+    return outside
+  }
+
+  /**
+   * The custom gate restores focus synchronously in the unmount effect, while
+   * react-aria schedules its own restore in rAF. Waiting one frame makes the two
+   * paths observable: the allowed case is asserted before (synchronous custom
+   * restore), the blocked case after (react-aria would have restored by then).
+   */
+  async function nextFrame(): Promise<void> {
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+    })
+  }
+
+  it('ConfirmDialog restores focus only when the gate allows it', async () => {
+    const blockedFocus = focusOutside()
+    const blocked = render(
+      <ConfirmDialog
+        opts={{ message: 'Sure?' }}
+        onResolve={vi.fn()}
+        shouldRestoreFocus={() => false}
+      />,
+    )
+    blocked.unmount()
+    await nextFrame()
+    expect(document.activeElement).not.toBe(blockedFocus)
+    blockedFocus.remove()
+
+    const allowedFocus = focusOutside()
+    const allowed = render(
+      <ConfirmDialog
+        opts={{ message: 'Sure?' }}
+        onResolve={vi.fn()}
+        shouldRestoreFocus={() => true}
+      />,
+    )
+    allowed.unmount()
+    expect(document.activeElement).toBe(allowedFocus)
+    allowedFocus.remove()
+  })
+
+  it('PromptDialog restores focus only when the gate allows it', async () => {
+    const blockedFocus = focusOutside()
+    const blocked = render(
+      <PromptDialog
+        opts={{ title: 'Name' }}
+        onResolve={vi.fn()}
+        shouldRestoreFocus={() => false}
+      />,
+    )
+    blocked.unmount()
+    await nextFrame()
+    expect(document.activeElement).not.toBe(blockedFocus)
+    blockedFocus.remove()
+
+    const allowedFocus = focusOutside()
+    const allowed = render(
+      <PromptDialog opts={{ title: 'Name' }} onResolve={vi.fn()} shouldRestoreFocus={() => true} />,
+    )
+    allowed.unmount()
+    expect(document.activeElement).toBe(allowedFocus)
+    allowedFocus.remove()
   })
 })

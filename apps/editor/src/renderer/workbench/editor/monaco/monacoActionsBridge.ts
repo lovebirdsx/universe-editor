@@ -187,15 +187,20 @@ function makeHandler(commandId: string) {
     // actions like multicursor / find must work on them.
     const editor = activeInput ? FileEditorRegistry.get(activeInput) : undefined
     if (!editor) {
-      // The mirrored editor.action.* commands are always listed in the command
-      // palette (CommandsQuickAccessProvider enumerates CommandsRegistry without
-      // when-filtering), so a user can pick one with no active text editor. Tell
-      // them why nothing happened instead of returning silently.
+      // Extensions and user keybindings can invoke a mirrored editor action
+      // while no text editor is mounted; tell them why nothing happened
+      // instead of returning silently.
       accessor
         .get(INotificationService)
         .status(localize('monaco.needsActiveEditor', 'This command requires an active text editor'))
       return
     }
+    // The invocation may come from an extension or a user keybinding while DOM
+    // focus is elsewhere (Explorer, title bar, ...). Monaco's standalone quick
+    // input resolves its host through getFocusedCodeEditor(), so actions that
+    // open it (Go to Line / Go to Symbol) throw without a focused editor.
+    // Focus the target editor first, same as gotoLocationActions does.
+    editor.focus()
     editor.trigger('', commandId, args[0] ?? {})
   }
 }

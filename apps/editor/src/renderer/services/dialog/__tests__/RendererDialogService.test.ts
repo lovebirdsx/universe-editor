@@ -8,7 +8,10 @@
 import { describe, expect, it } from 'vitest'
 import type { IConfirmResult } from '@universe-editor/platform'
 import { RendererDialogService } from '../RendererDialogService.js'
-import { registerWorkbenchDocument } from '../../windows/workbenchDocuments.js'
+import {
+  registerWorkbenchDocument,
+  setActiveWorkbenchDocument,
+} from '../../windows/workbenchDocuments.js'
 
 function withDocument(): { dispose(): void } {
   // Node 环境：服务只按活动 workbench document 落 stamp，注册表条目就够了。
@@ -88,5 +91,72 @@ describe('RendererDialogService', () => {
     await expect(third).resolves.toBe(SECOND)
     svc.dispose()
     registration.dispose()
+  })
+})
+
+describe('RendererDialogService — origin window closed', () => {
+  it('cancels every queued dialog owned by the closed document', async () => {
+    const doc = { body: {} } as unknown as Document
+    const registration = registerWorkbenchDocument(doc)
+    setActiveWorkbenchDocument(doc)
+    const svc = new RendererDialogService()
+    const confirmed = svc.confirm({ message: 'confirm' })
+    const prompted = svc.prompt({ title: 'prompt' })
+    expect(svc.queue).toHaveLength(2)
+
+    registration.dispose()
+
+    await expect(confirmed).resolves.toEqual(SECOND)
+    await expect(prompted).resolves.toBeUndefined()
+    expect(svc.queue).toEqual([])
+    svc.dispose()
+  })
+
+  it('echoes checkbox state and returns a fresh result per cancelled entry', async () => {
+    const doc = { body: {} } as unknown as Document
+    const registration = registerWorkbenchDocument(doc)
+    setActiveWorkbenchDocument(doc)
+    const svc = new RendererDialogService()
+    const withCheckboxes = svc.confirm({
+      message: 'checked',
+      checkboxes: [{ label: 'a', initiallyChecked: true }, { label: 'b' }],
+    })
+    const plain = svc.confirm({ message: 'plain' })
+
+    registration.dispose()
+
+    const first = await withCheckboxes
+    expect(first).toEqual({
+      confirmed: false,
+      choice: 'cancel',
+      neverAskAgain: false,
+      checkboxChecked: [true, false],
+    })
+    // Callers own the result; a shared constant would let one mutate the next.
+    expect(await plain).not.toBe(first)
+    svc.dispose()
+  })
+
+  it('leaves dialogs owned by other documents queued and resolvable', async () => {
+    const main = { body: {} } as unknown as Document
+    const aux = { body: {} } as unknown as Document
+    const mainRegistration = registerWorkbenchDocument(main)
+    const auxRegistration = registerWorkbenchDocument(aux)
+    setActiveWorkbenchDocument(main)
+    const svc = new RendererDialogService()
+    const first = svc.confirm({ message: 'main' })
+
+    setActiveWorkbenchDocument(aux)
+    const second = svc.confirm({ message: 'aux' })
+    expect(svc.queue).toHaveLength(2)
+
+    auxRegistration.dispose()
+
+    await expect(second).resolves.toEqual(SECOND)
+    expect(svc.queue).toHaveLength(1)
+    svc._resolveEntry(svc.queue[0]!, FIRST)
+    await expect(first).resolves.toBe(FIRST)
+    svc.dispose()
+    mainRegistration.dispose()
   })
 })

@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for CommandsQuickAccessProvider's MRU wiring: the provider must seed the
- *  picker with the stored recently-used order and persist the accepted command
- *  back to storage so the next open surfaces it first. Regression coverage for the
- *  command palette losing its "recently used" sort after the QuickAccess refactor.
+ *  Tests for CommandsQuickAccessProvider: MRU seeding/persistence, modifiers on
+ *  accept, and the monaco-action accept path (focus the target editor before
+ *  running the action). Regression coverage for the command palette losing its
+ *  "recently used" sort after the QuickAccess refactor and for monaco actions
+ *  throwing "Quick input service needs a focused editor to work.".
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -382,5 +383,37 @@ describe('CommandsQuickAccessProvider open target', () => {
 
     expect(commands.executed.map((e) => e.id)).toEqual(['workbench.action.openGlobalKeybindings'])
     expect(commands.modifiers[0]).toMatchObject({ ctrlKey: true })
+  })
+})
+
+describe('CommandsQuickAccessProvider monaco actions', () => {
+  const runDisposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (runDisposables.length > 0) runDisposables.pop()?.dispose()
+  })
+
+  it('focuses the target editor before running a monaco action', async () => {
+    const { provider } = setup(new FakeStorageService())
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    provider.provide(picker, runOptions(runDisposables))
+
+    const calls: string[] = []
+    // Go to Line resolves its platform quick input through
+    // getFocusedCodeEditor(); the palette still owns focus when the deferred run
+    // starts, so the action must focus its target editor first.
+    const item = {
+      id: 'editor.action.gotoLine',
+      label: 'Go to Line/Column...',
+      _monaco: true,
+      _actionId: 'editor.action.gotoLine',
+      _editor: {
+        focus: () => calls.push('focus'),
+        getAction: () => ({ run: () => calls.push('run') }),
+      },
+    } as unknown as IQuickPickItem
+
+    picker.fireAccept([item])
+    await vi.waitFor(() => expect(calls).toEqual(['focus', 'run']))
   })
 })
