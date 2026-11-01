@@ -2,14 +2,23 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Display-mode filtering for the agent timeline: which slots actually render
  *  under `hideThinking` / `onlyMessage`, which nested thoughts the card bodies
- *  drop, the tail activity hint, and keyboard-focus convergence when the
- *  selected slot disappears. Pure functions — no React / DOM — so the rules
- *  stay testable and the data-layer timeline is never mutated.
+ *  drop, the tail activity hint (with its tool / thought summary), and
+ *  keyboard-focus convergence when the selected slot disappears. Pure
+ *  functions — no React / DOM — so the rules stay testable and the data-layer
+ *  timeline is never mutated.
  *--------------------------------------------------------------------------------------------*/
 
+import { localize } from '@universe-editor/platform'
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
-import type { AcpChildItem, TimelineItem } from '../../services/acp/session/acpSession.js'
+import type {
+  AcpChildItem,
+  AcpMessage,
+  AcpToolCall,
+  TimelineItem,
+} from '../../services/acp/session/acpSession.js'
+import { firstLineSummary, stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
 import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
+import { deriveToolCallDisplay, isSyntheticDenial } from './toolCallDisplay.js'
 import {
   isMessageRendered,
   isSubagentCard,
@@ -17,7 +26,36 @@ import {
   type CollapseState,
 } from './timelineCollapse.js'
 
-export type HiddenActivityKind = 'thinking' | 'tool'
+/** The last settled hidden tool behind a still-running agent. */
+export interface HiddenPreviousTool {
+  readonly title: string
+  readonly status: 'completed' | 'failed' | 'cancelled'
+  /** Short failure / settlement reason, already localized where fixed. */
+  readonly reason?: string
+  /** Frozen span at settle; shown as a secondary clue when available. */
+  readonly durationMs?: number
+}
+
+/** Display-ready tail activity for the modes that can hide the streaming slot. */
+export type HiddenActivity =
+  | {
+      readonly kind: 'thinking'
+      /** First non-empty line of the thought (only surfaced by `onlyMessage`). */
+      readonly detail?: string
+    }
+  | {
+      readonly kind: 'tool'
+      readonly title: string
+      /** Command / target path / MCP server behind the title. */
+      readonly detail?: string
+      /** Epoch ms start for the live stopwatch. */
+      readonly startedAt?: number
+      readonly durationMs?: number
+    }
+  | {
+      readonly kind: 'settledTool'
+      readonly tool: HiddenPreviousTool
+    }
 
 function isUserMessage(item: TimelineItem): boolean {
   return item.kind === 'message' && item.message.role === 'user'
@@ -146,19 +184,68 @@ export function filterChildItemsForDisplay(
   return changed ? out : children
 }
 
+function firstNonEmptyLine(text: string): string {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed.length > 0) return trimmed
+  }
+  return ''
+}
+
+function thoughtSummary(message: AcpMessage): string | undefined {
+  const line = firstNonEmptyLine(message.text)
+  return line.length > 0 ? firstLineSummary(line) : undefined
+}
+
+function toolDisplayTitle(call: AcpToolCall, fallback: string): string {
+  const title = deriveToolCallDisplay(call).title.trim()
+  return title.length > 0 ? title : fallback
+}
+
+/** Command / argument fragment first, then the target the tool acts on. */
+function runningToolDetail(call: AcpToolCall, subtitle: string | undefined): string | undefined {
+  const trimmedSubtitle = subtitle?.trim()
+  if (trimmedSubtitle !== undefined && trimmedSubtitle.length > 0) return trimmedSubtitle
+  const location = call.locations?.[0]
+  if (location !== undefined) {
+    return location.line !== undefined ? `${location.path}:${location.line}` : location.path
+  }
+  const diff = call.diffs[0]
+  if (diff !== undefined) return diff.path
+  if (call.mcpServer !== undefined) {
+    return localize('acp.collapse.activity.mcpServer', 'MCP · {server}', {
+      server: call.mcpServer,
+    })
+  }
+  return undefined
+}
+
+function settledReason(call: AcpToolCall): string | undefined {
+  if (call.settleReason !== undefined && call.settleReason.length > 0) return call.settleReason
+  if (call.status !== 'failed') return undefined
+  // A synthetic denial's `text` is the misleading "user rejected" line the CLI
+  // fabricated; the badge wording is the only safe thing to surface.
+  if (isSyntheticDenial(call)) {
+    return localize('acp.syntheticDenial.badge', 'Upstream interruption')
+  }
+  const line = firstNonEmptyLine(stripCodeFence(call.text).trim())
+  return line.length > 0 ? firstLineSummary(line) : undefined
+}
+
 /**
  * Tail activity hint for the modes that can hide the slot currently streaming.
  * Only fires while the tail is genuinely hidden and the agent is still working;
  * visible tails (agent reply, sub-agent card, status card) and old folding
  * modes return null, so the row never flickers next to content that is already
- * on screen.
+ * on screen. The returned object carries the detail the row can show without
+ * touching the session model again.
  */
 export function getHiddenActivity(
   filteredTimeline: readonly TimelineItem[],
   tail: TimelineItem | undefined,
   mode: CollapseMode,
   active: boolean,
-): HiddenActivityKind | null {
+): HiddenActivity | null {
   if (!active || tail === undefined) return null
   // Old folding modes never remove a slot, so the hint can only come from a
   // display filter; spell that out instead of relying on array identity.
@@ -173,12 +260,36 @@ export function getHiddenActivity(
   }
   if (filteredTimeline[filteredTimeline.length - 1] === tail) return null
   if (tail.kind === 'message') {
-    return tail.message.role === 'thought' ? 'thinking' : null
+    if (tail.message.role !== 'thought') return null
+    // `hideThinking` must not leak the thought it exists to hide; only
+    // `onlyMessage` promotes the first line into the hint.
+    const detail = mode === 'onlyMessage' ? thoughtSummary(tail.message) : undefined
+    return detail === undefined ? { kind: 'thinking' } : { kind: 'thinking', detail }
   }
   if (tail.kind === 'toolCall') {
-    return tail.call.status === 'pending' || tail.call.status === 'in_progress'
-      ? 'tool'
-      : 'thinking'
+    const call = tail.call
+    if (call.status === 'pending' || call.status === 'in_progress') {
+      const display = deriveToolCallDisplay(call)
+      const detail = runningToolDetail(call, display.subtitle)
+      const title = display.title.trim()
+      return {
+        kind: 'tool',
+        title: title.length > 0 ? title : localize('acp.collapse.activity.tool', 'Calling a tool…'),
+        ...(detail !== undefined ? { detail } : {}),
+        ...(call.startedAt !== undefined ? { startedAt: call.startedAt } : {}),
+        ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
+      }
+    }
+    const reason = settledReason(call)
+    return {
+      kind: 'settledTool',
+      tool: {
+        title: toolDisplayTitle(call, call.kind),
+        status: call.status,
+        ...(reason !== undefined ? { reason } : {}),
+        ...(call.durationMs !== undefined ? { durationMs: call.durationMs } : {}),
+      },
+    }
   }
   return null
 }

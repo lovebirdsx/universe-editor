@@ -97,6 +97,7 @@ import { ToolCallCard } from './ToolCallCard.js'
 import { CompactionCard } from './CompactionCard.js'
 import { ResurrectionCard } from './ResurrectionCard.js'
 import { roleIcon } from './timelineIcons.js'
+import { useElapsedTime } from './elapsedTime.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
@@ -122,7 +123,7 @@ import {
   getHiddenActivity,
   selectTimelineForDisplay,
   selectTimelineForOutline,
-  type HiddenActivityKind,
+  type HiddenActivity,
 } from './timelineDisplay.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { estimateWrappedLinesUpTo } from './contentOverflow.js'
@@ -2118,7 +2119,7 @@ function ChatScroll({
             })}
           </ol>
         )}
-        {hiddenActivity !== null && <TimelineHiddenActivity kind={hiddenActivity} />}
+        {hiddenActivity !== null && <TimelineHiddenActivity activity={hiddenActivity} />}
         {hasTimelineContent && !readOnly && <ForkTipFooter session={session} />}
         {menu && (
           <AgentChatContextMenu
@@ -2140,19 +2141,78 @@ function ChatScroll({
   )
 }
 
-function TimelineHiddenActivity({ kind }: { kind: HiddenActivityKind }) {
+function joinActivityParts(...parts: readonly (string | null | undefined)[]): string | undefined {
+  const kept = parts.filter(
+    (part): part is string => part !== undefined && part !== null && part.length > 0,
+  )
+  return kept.length > 0 ? kept.join(' · ') : undefined
+}
+
+function hiddenActivityDetail(
+  activity: HiddenActivity,
+  elapsed: string | null,
+): string | undefined {
+  if (activity.kind === 'thinking') return activity.detail
+  if (activity.kind === 'tool') return joinActivityParts(activity.detail, elapsed)
+  const { tool } = activity
+  const previous = localize('acp.collapse.activity.previous', 'Previous: {title}', {
+    title: tool.title,
+  })
+  const status =
+    tool.status === 'failed'
+      ? tool.reason !== undefined && tool.reason.length > 0
+        ? localize('acp.collapse.activity.failedWithReason', 'failed: {reason}', {
+            reason: tool.reason,
+          })
+        : localize('acp.collapse.activity.failed', 'failed')
+      : tool.status === 'cancelled' && (tool.reason === undefined || tool.reason.length === 0)
+        ? localize('acp.collapse.activity.cancelled', 'cancelled')
+        : tool.reason
+  return joinActivityParts(previous, status, elapsed)
+}
+
+function TimelineHiddenActivity({ activity }: { activity: HiddenActivity }) {
+  const elapsed = useElapsedTime(
+    activity.kind === 'tool',
+    activity.kind === 'tool' ? activity.startedAt : undefined,
+    activity.kind === 'tool'
+      ? activity.durationMs
+      : activity.kind === 'settledTool'
+        ? activity.tool.durationMs
+        : undefined,
+  )
+  const primary =
+    activity.kind === 'tool'
+      ? activity.title
+      : localize('acp.collapse.activity.thinking', 'Thinking…')
+  const secondary = hiddenActivityDetail(activity, elapsed)
+
   return (
     <div
       className={styles['timelineHiddenActivity']}
       data-testid="acp-timeline-hidden-activity"
       role="status"
+      aria-atomic="false"
     >
       <Loader2 size={12} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
-      <span>
-        {kind === 'tool'
-          ? localize('acp.collapse.activity.tool', 'Calling a tool…')
-          : localize('acp.collapse.activity.thinking', 'Thinking…')}
-      </span>
+      <div className={styles['timelineHiddenActivityBody']}>
+        <span
+          className={styles['timelineHiddenActivityPrimary']}
+          data-testid="acp-timeline-hidden-activity-primary"
+          data-tooltip={primary}
+        >
+          {primary}
+        </span>
+        {secondary !== undefined && (
+          <span
+            className={styles['timelineHiddenActivityDetail']}
+            data-testid="acp-timeline-hidden-activity-detail"
+            data-tooltip={secondary}
+          >
+            {secondary}
+          </span>
+        )}
+      </div>
     </div>
   )
 }

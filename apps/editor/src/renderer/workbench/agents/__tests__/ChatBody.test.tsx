@@ -2118,10 +2118,11 @@ describe('ChatBody — display modes', () => {
     id: string,
     kind: AcpToolCall['kind'],
     status: AcpToolCall['status'] = 'completed',
+    overrides: Partial<AcpToolCall> = {},
   ): TimelineItem => ({
     kind: 'toolCall',
     id,
-    call: { id, title: id, kind, status, text: '', blocks: [], diffs: [] },
+    call: { id, title: id, kind, status, text: '', blocks: [], diffs: [], ...overrides },
   })
 
   it('hideThinking removes top-level thoughts and thoughts inside an open sub-agent card', () => {
@@ -2198,7 +2199,11 @@ describe('ChatBody — display modes', () => {
     expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
 
     act(() => session.setCollapseMode('hideThinking'))
-    expect(getByTestId('acp-timeline-hidden-activity').textContent).toContain('Thinking')
+    expect(getByTestId('acp-timeline-hidden-activity-primary').textContent).toBe('Thinking…')
+    expect(queryByTestId('acp-timeline-hidden-activity-detail')).toBeNull()
+
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe('…')
 
     act(() => session.setCollapseMode('default'))
     expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
@@ -2217,7 +2222,95 @@ describe('ChatBody — display modes', () => {
     const { getByTestId } = renderChat(session)
 
     act(() => session.setCollapseMode('onlyMessage'))
-    expect(getByTestId('acp-timeline-hidden-activity').textContent).toContain('Calling a tool')
+    expect(getByTestId('acp-timeline-hidden-activity-primary').textContent).toBe('read')
+
+    const settled = toolItem('read', 'read', 'completed', { durationMs: 1200 })
+    act(() =>
+      (session.timeline as ISettableObservable<readonly TimelineItem[]>).set(
+        [roleMessage('u', 'user', 'question'), roleMessage('a', 'agent', 'working on it'), settled],
+        undefined,
+      ),
+    )
+    expect(getByTestId('acp-timeline-hidden-activity-primary').textContent).toBe('Thinking…')
+    expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe(
+      'Previous: read · 1s',
+    )
+  })
+
+  it('shows the command and live elapsed time for a hidden running execute tool', () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
+    try {
+      vi.setSystemTime(1_000_000)
+      const running = toolItem('exec', 'execute', 'in_progress', {
+        title: 'pnpm test',
+        rawInput: { description: 'Run tests', command: 'pnpm test' },
+        startedAt: Date.now() - 5000,
+      })
+      const session = makeSession('s1', [roleMessage('u', 'user', 'question'), running], {
+        status: 'running',
+      })
+      const { getByTestId } = renderChat(session)
+
+      act(() => session.setCollapseMode('onlyMessage'))
+      expect(getByTestId('acp-timeline-hidden-activity-primary').textContent).toBe('Run tests')
+      expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe('pnpm test · 5s')
+
+      act(() => vi.advanceTimersByTime(3000))
+      expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe('pnpm test · 8s')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('omits elapsed time when a running tool has no start anchor', () => {
+    const running = toolItem('exec', 'execute', 'in_progress', {
+      title: 'pnpm test',
+      rawInput: { description: 'Run tests', command: 'pnpm test' },
+    })
+    const session = makeSession('s1', [roleMessage('u', 'user', 'question'), running], {
+      status: 'running',
+    })
+    const { getByTestId } = renderChat(session)
+
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe('pnpm test')
+  })
+
+  it('shows the previous tool and its failure reason after a hidden tool settles', () => {
+    const failed = toolItem('exec', 'execute', 'failed', {
+      title: 'pnpm test',
+      rawInput: { description: 'Run tests', command: 'pnpm test' },
+      text: '```\nboom\n```',
+    })
+    const session = makeSession('s1', [roleMessage('u', 'user', 'question'), failed], {
+      status: 'running',
+    })
+    const { getByTestId } = renderChat(session)
+
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(getByTestId('acp-timeline-hidden-activity-primary').textContent).toBe('Thinking…')
+    expect(getByTestId('acp-timeline-hidden-activity-detail').textContent).toBe(
+      'Previous: Run tests · failed: boom',
+    )
+  })
+
+  it('uses the synthetic-denial wording instead of its misleading text', () => {
+    const synthetic = toolItem('exec', 'execute', 'failed', {
+      title: 'pnpm test',
+      rawInput: { description: 'Run tests', command: 'pnpm test' },
+      syntheticDenial: true,
+      text: 'User rejected request',
+    })
+    const session = makeSession('s1', [roleMessage('u', 'user', 'question'), synthetic], {
+      status: 'running',
+    })
+    const { getByTestId } = renderChat(session)
+
+    act(() => session.setCollapseMode('onlyMessage'))
+    const detail = getByTestId('acp-timeline-hidden-activity-detail').textContent ?? ''
+    expect(detail).toContain('Previous: Run tests')
+    expect(detail).toContain('Upstream interruption')
+    expect(detail).not.toContain('User rejected request')
   })
 
   it('suppresses the tail activity line while a permission or elicitation is pending', () => {

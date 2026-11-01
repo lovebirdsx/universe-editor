@@ -252,48 +252,186 @@ describe('selectTimelineForOutline', () => {
 })
 
 describe('getHiddenActivity', () => {
-  const tail = thought('th')
   const filter = (timeline: readonly TimelineItem[], mode: CollapseMode) =>
     selectTimelineForDisplay(timeline, mode)
 
+  const hidden = (timeline: readonly TimelineItem[], item: TimelineItem, mode: CollapseMode) =>
+    getHiddenActivity(filter(timeline, mode), item, mode, true)
+
   it('returns null when the turn is not active or the mode does not hide', () => {
-    const timeline = [user('a'), tail]
+    const tail = thought('a')
+    const timeline = [user('u'), tail]
     expect(getHiddenActivity(filter(timeline, 'hideThinking'), tail, 'hideThinking', false)).toBe(
       null,
     )
     expect(getHiddenActivity(filter(timeline, 'default'), tail, 'default', true)).toBe(null)
   })
 
-  it('reports thinking when a streaming thought is hidden', () => {
-    const streaming = thought('th', '...', { streaming: true })
-    const timeline = [user('a'), streaming]
-    expect(
-      getHiddenActivity(filter(timeline, 'hideThinking'), streaming, 'hideThinking', true),
-    ).toBe('thinking')
-  })
-
-  it('reports tool while the hidden tail tool is still running, thinking after it settles', () => {
-    const running = toolItem({ id: 'read', kind: 'read', status: 'in_progress' })
-    const runningTimeline = [user('a'), agent('b'), running]
-    expect(
-      getHiddenActivity(filter(runningTimeline, 'onlyMessage'), running, 'onlyMessage', true),
-    ).toBe('tool')
-    const settled = toolItem({ id: 'read', kind: 'read', status: 'completed' })
-    const settledTimeline = [user('a'), agent('b'), settled]
-    expect(
-      getHiddenActivity(filter(settledTimeline, 'onlyMessage'), settled, 'onlyMessage', true),
-    ).toBe('thinking')
-  })
-
   it('returns null when the tail itself is visible', () => {
     const visible = agent('b', '...', { streaming: true })
-    const timeline = [user('a'), visible]
-    expect(getHiddenActivity(filter(timeline, 'onlyMessage'), visible, 'onlyMessage', true)).toBe(
-      null,
-    )
+    expect(hidden([user('a'), visible], visible, 'onlyMessage')).toBe(null)
     const task = toolItem({ id: 'task', subagent: true, status: 'in_progress' })
-    const withTask = [user('a'), task]
-    expect(getHiddenActivity(filter(withTask, 'onlyMessage'), task, 'onlyMessage', true)).toBe(null)
+    expect(hidden([user('a'), task], task, 'onlyMessage')).toBe(null)
+  })
+
+  it('summarizes the first non-empty line of a hidden thought under onlyMessage', () => {
+    const streaming = thought('th', '\n\n  first line  \nsecond line', { streaming: true })
+    expect(hidden([user('a'), streaming], streaming, 'onlyMessage')).toEqual({
+      kind: 'thinking',
+      detail: 'first line',
+    })
+  })
+
+  it('does not leak thought content under hideThinking', () => {
+    const streaming = thought('th', 'secret plan', { streaming: true })
+    expect(hidden([user('a'), streaming], streaming, 'hideThinking')).toEqual({ kind: 'thinking' })
+  })
+
+  it('omits the detail when the thought has no visible text', () => {
+    const blank = thought('th', '   \n  ', { streaming: true })
+    expect(hidden([user('a'), blank], blank, 'onlyMessage')).toEqual({ kind: 'thinking' })
+  })
+
+  it('reports a running execute tool with its description, command and start anchor', () => {
+    const running = toolItem({
+      id: 'exec',
+      title: 'pnpm test',
+      kind: 'execute',
+      status: 'in_progress',
+      rawInput: { description: 'Run tests', command: 'pnpm test' },
+      startedAt: 1000,
+    })
+    expect(hidden([user('a'), agent('b'), running], running, 'onlyMessage')).toEqual({
+      kind: 'tool',
+      title: 'Run tests',
+      detail: 'pnpm test',
+      startedAt: 1000,
+    })
+  })
+
+  it('falls back to a search fragment, target location, diff path, then MCP server', () => {
+    const search = toolItem({
+      id: 'search',
+      title: 'grep foo',
+      kind: 'search',
+      status: 'in_progress',
+      rawInput: { pattern: 'foo' },
+    })
+    expect(hidden([user('a'), search], search, 'onlyMessage')).toMatchObject({
+      kind: 'tool',
+      title: 'Search “foo”',
+      detail: 'grep foo',
+    })
+
+    const read = toolItem({
+      id: 'read',
+      title: 'Read file',
+      kind: 'read',
+      status: 'in_progress',
+      locations: [{ path: 'src/a.ts', line: 12 }],
+    })
+    expect(hidden([user('a'), read], read, 'onlyMessage')).toMatchObject({
+      kind: 'tool',
+      detail: 'src/a.ts:12',
+    })
+
+    const edit = toolItem({
+      id: 'edit',
+      title: 'Edit file',
+      kind: 'edit',
+      status: 'in_progress',
+      diffs: [{ path: 'src/b.ts', oldText: '', newText: 'next' }],
+    })
+    expect(hidden([user('a'), edit], edit, 'onlyMessage')).toMatchObject({
+      kind: 'tool',
+      detail: 'src/b.ts',
+    })
+
+    const mcp = toolItem({
+      id: 'mcp',
+      title: 'read_object',
+      kind: 'other',
+      status: 'in_progress',
+      mcpServer: 'acp',
+      mcpTool: 'read_object',
+    })
+    expect(hidden([user('a'), mcp], mcp, 'onlyMessage')).toMatchObject({
+      kind: 'tool',
+      title: 'Read Object',
+      detail: 'MCP · acp',
+    })
+  })
+
+  it('omits the detail when a running tool exposes no secondary clue', () => {
+    const running = toolItem({ id: 'plain', title: 'Plain tool', kind: 'other', status: 'pending' })
+    const activity = hidden([user('a'), running], running, 'onlyMessage')
+    expect(activity).toEqual({ kind: 'tool', title: 'Plain tool' })
+    expect(activity).not.toHaveProperty('detail')
+  })
+
+  it('reports a settled tool as the previous step with its frozen duration', () => {
+    const settled = toolItem({
+      id: 'read',
+      title: 'Read file',
+      kind: 'read',
+      status: 'completed',
+      durationMs: 1500,
+    })
+    expect(hidden([user('a'), agent('b'), settled], settled, 'onlyMessage')).toEqual({
+      kind: 'settledTool',
+      tool: { title: 'Read file', status: 'completed', durationMs: 1500 },
+    })
+  })
+
+  it('prefers settleReason, then synthetic-denial wording, then failed output', () => {
+    const cancelled = toolItem({
+      id: 'c',
+      title: 'Run',
+      kind: 'execute',
+      status: 'cancelled',
+      settleReason: 'Interrupted',
+    })
+    expect(hidden([user('a'), cancelled], cancelled, 'onlyMessage')).toMatchObject({
+      kind: 'settledTool',
+      tool: { status: 'cancelled', reason: 'Interrupted' },
+    })
+
+    const synthetic = toolItem({
+      id: 'd',
+      title: 'Run',
+      kind: 'execute',
+      status: 'failed',
+      syntheticDenial: true,
+      text: 'User rejected request',
+    })
+    expect(hidden([user('a'), synthetic], synthetic, 'onlyMessage')).toMatchObject({
+      kind: 'settledTool',
+      tool: { status: 'failed', reason: 'Upstream interruption' },
+    })
+
+    const failed = toolItem({
+      id: 'e',
+      title: 'Run',
+      kind: 'execute',
+      status: 'failed',
+      text: '```\nboom\nstack\n```',
+    })
+    expect(hidden([user('a'), failed], failed, 'onlyMessage')).toMatchObject({
+      kind: 'settledTool',
+      tool: { status: 'failed', reason: 'boom' },
+    })
+
+    const blank = toolItem({ id: 'f', title: 'Run', kind: 'execute', status: 'failed' })
+    const blankActivity = hidden([user('a'), blank], blank, 'onlyMessage')
+    expect(blankActivity).toMatchObject({ kind: 'settledTool', tool: { status: 'failed' } })
+    if (blankActivity?.kind === 'settledTool') {
+      expect(blankActivity.tool).not.toHaveProperty('reason')
+    }
+  })
+
+  it('keeps a visible tool tail out of the hint under hideThinking', () => {
+    const running = toolItem({ id: 'read', kind: 'read', status: 'in_progress' })
+    expect(hidden([user('a'), running], running, 'hideThinking')).toBe(null)
   })
 })
 
