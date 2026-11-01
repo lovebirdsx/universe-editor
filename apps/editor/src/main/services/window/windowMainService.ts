@@ -526,7 +526,7 @@ export class WindowMainService implements IWindowMainService {
     // Per-window services — each window gets its own workspace stack so opening
     // a folder in one window does not affect the others. GLOBAL state (state.json,
     // recent list) stays shared via the app-singleton backends.
-    const { disposables, workspace, windowStorage, rendererLifecycle } =
+    const { disposables, workspace, windowStorage, sessionChangesStore, rendererLifecycle } =
       await createWindowScopedServices({
         win,
         appServices,
@@ -579,7 +579,7 @@ export class WindowMainService implements IWindowMainService {
       if (this._allowClose.has(win.id)) {
         // Cleared: flush pending workspace writes before teardown, otherwise
         // debounced persistence (e.g. editor-group state) can be lost on close.
-        const tasks: Promise<void>[] = [windowStorage.flush()]
+        const tasks: Promise<void>[] = [windowStorage.flush(), sessionChangesStore.flushAll()]
         // Capture this window's FINAL geometry into the session now, while it is
         // still live and registered. `close` is the last synchronous moment the
         // window's bounds/fullscreen state are readable (captureWindowState fails

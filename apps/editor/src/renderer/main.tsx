@@ -1139,6 +1139,9 @@ async function bootstrapWorkbench(): Promise<void> {
     storageService: instantiation.invokeFunction((a) => a.get(IStorageService)),
     acpSessionService,
     acpSessionHistoryService: instantiation.invokeFunction((a) => a.get(IAcpSessionHistoryService)),
+    sessionChangeTrackerService: instantiation.invokeFunction((a) =>
+      a.get(ISessionChangeTrackerService),
+    ),
     bugRecorderClient: bugRecorder,
     mcpServerEnablementService,
     extensionMcpServersService,

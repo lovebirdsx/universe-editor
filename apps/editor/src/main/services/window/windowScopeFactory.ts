@@ -13,7 +13,7 @@
  *  assembly function with no back-reference to the service.
  *--------------------------------------------------------------------------------------------*/
 
-import type { BrowserWindow } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import { DisposableStore } from '@universe-editor/platform'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { readFile } from 'node:fs/promises'
@@ -26,6 +26,7 @@ import { MainLogChannelService } from '../log/mainLogChannelService.js'
 import { LogFilesMainService } from '../log/logFilesMainService.js'
 import type { LogMainService } from '../log/logMainService.js'
 import { MainStorageService } from '../storage/storageMainService.js'
+import { SessionChangesStoreMainService } from '../storage/sessionChangesStoreMainService.js'
 import { WorkspaceMainService } from '../workspace/workspaceMainService.js'
 import { UserDataMainService } from '../userData/userDataMainService.js'
 import { TerminalMainService } from '../terminal/terminalMainService.js'
@@ -60,6 +61,7 @@ export interface WindowScopeResult {
   readonly disposables: DisposableStore
   readonly workspace: WorkspaceMainService
   readonly windowStorage: MainStorageService
+  readonly sessionChangesStore: SessionChangesStoreMainService
   readonly rendererLifecycle: IRendererLifecycleService
 }
 
@@ -112,6 +114,11 @@ export async function createWindowScopedServices(opts: {
 
   const disposables = new DisposableStore()
   const windowStorage = disposables.add(new MainStorageService(getDefaultStorage()))
+  const sessionChangesStore = disposables.add(
+    new SessionChangesStoreMainService(windowStorage, logService, {
+      userDataDir: app.getPath('userData'),
+    }),
+  )
   const folderDialog = new ElectronFolderDialog(win, (fallback) =>
     auxiliaryWindows.getDialogParent(win.id, fallback),
   )
@@ -172,6 +179,7 @@ export async function createWindowScopedServices(opts: {
     logChannel,
     logFiles,
     storage: windowStorage,
+    sessionChangesStore,
     workspace,
     userData,
     terminal,
@@ -193,5 +201,11 @@ export async function createWindowScopedServices(opts: {
     focus: () => callbacks.focusWindow(win.id),
   })
 
-  return { disposables, workspace, windowStorage, rendererLifecycle: ipc.rendererLifecycle }
+  return {
+    disposables,
+    workspace,
+    windowStorage,
+    sessionChangesStore,
+    rendererLifecycle: ipc.rendererLifecycle,
+  }
 }

@@ -7,21 +7,19 @@ import {
   IpcService,
   formatIpcFrameAlert,
   frameTarget,
-  setIpcEncodeInstrument,
+  setIpcEncodeObserver,
   setIpcFrameDiagnostics,
   type ILogger,
   type IpcDecodeObservation,
+  type IpcEncodeObservation,
+  type IpcFrameObservation,
 } from '@universe-editor/platform'
 import type { IpcBridge } from '../../preload/index.js'
-import {
-  formatBytes,
-  pushPerfPhaseSample,
-  slowPhaseInstrument,
-} from '../services/performance/perfPhases.js'
+import { formatBytes, pushPerfPhaseSample } from '../services/performance/perfPhases.js'
 import { RendererElectronProtocol } from './electronProtocol.js'
 
-/** A single frame's decode must block the main thread at least this long to be recorded. */
-const DECODE_SLOW_MS = 5
+/** A single frame's encode/decode must block the main thread at least this long to be recorded. */
+const FRAME_SLOW_MS = 5
 
 // 大帧即使解码很快也独立记录：此前约 18.5MiB 的消息未触及 32MiB 告警线，
 // 且日志缺少通道，无法确定载荷来源。此诊断阈值不改变帧闸门的拒绝策略。
@@ -58,7 +56,7 @@ export function admitLargeFrameLog(key: string, now: number): boolean {
   return true
 }
 
-const describeFrame = (info: IpcDecodeObservation): string =>
+const describeFrame = (info: IpcFrameObservation): string =>
   `${frameTarget(info.type, info.channel, info.name, info.id)}, ${formatBytes(info.bytes)}`
 
 /**
@@ -72,11 +70,11 @@ const describeFrame = (info: IpcDecodeObservation): string =>
  * Only the frame's shape is ever written: the observation carries no body and no args.
  */
 export function recordInboundDecode(info: IpcDecodeObservation): void {
-  if (info.durationMs >= DECODE_SLOW_MS) {
+  if (info.durationMs >= FRAME_SLOW_MS) {
     pushPerfPhaseSample(`ipc.decode (${describeFrame(info)})`, info.startTime, info.durationMs)
   }
   if (info.bytes < LARGE_FRAME_LOG_BYTES) return
-  const key = `${info.type}|${info.channel}|${info.name}`
+  const key = `in|${info.type}|${info.channel}|${info.name}`
   if (!admitLargeFrameLog(key, Date.now())) return
   const size = formatIpcFrameAlert({
     bytes: info.bytes,
@@ -87,6 +85,81 @@ export function recordInboundDecode(info: IpcDecodeObservation): void {
     id: info.id,
   })
   emitFrameAlert('warn', `[ipc] ${size}, decode ${info.durationMs.toFixed(1)}ms`)
+}
+
+/** Cumulative outbound-encode diagnostics (E2E probe / crash reports). */
+export interface IpcEncodeStats {
+  readonly count: number
+  readonly largeCount: number
+  readonly slowCount: number
+  readonly largestBytes: number
+  readonly largest: IpcEncodeObservation | null
+  readonly recent: readonly IpcEncodeObservation[]
+}
+
+const ENCODE_RECENT_MAX = 32
+let encodeCount = 0
+let encodeLargeCount = 0
+let encodeSlowCount = 0
+let encodeLargestBytes = 0
+let encodeLargest: IpcEncodeObservation | null = null
+let encodeRecent: IpcEncodeObservation[] = []
+
+export function resetIpcEncodeStats(): void {
+  encodeCount = 0
+  encodeLargeCount = 0
+  encodeSlowCount = 0
+  encodeLargestBytes = 0
+  encodeLargest = null
+  encodeRecent = []
+}
+
+export function getIpcEncodeStats(): IpcEncodeStats {
+  return {
+    count: encodeCount,
+    largeCount: encodeLargeCount,
+    slowCount: encodeSlowCount,
+    largestBytes: encodeLargestBytes,
+    largest: encodeLargest,
+    recent: encodeRecent,
+  }
+}
+
+/**
+ * Sink for the platform's outbound-encode observation. An encode is the sender's
+ * half of the same stall: a multi-MB request serializes synchronously before it
+ * can be sent. A slow one becomes an `ipc.encode` phase naming kind, channel,
+ * method, id and size; a ≥4MiB one also warns through the same per-target limiter
+ * as inbound frames (with an `out` key so the two directions do not mask each
+ * other). The body is never observed or logged.
+ */
+export function recordOutboundEncode(info: IpcEncodeObservation): void {
+  encodeCount++
+  if (info.bytes >= LARGE_FRAME_LOG_BYTES) encodeLargeCount++
+  if (info.durationMs >= FRAME_SLOW_MS) encodeSlowCount++
+  if (info.bytes > encodeLargestBytes) {
+    encodeLargestBytes = info.bytes
+    encodeLargest = info
+  }
+  encodeRecent.push(info)
+  if (encodeRecent.length > ENCODE_RECENT_MAX) {
+    encodeRecent.splice(0, encodeRecent.length - ENCODE_RECENT_MAX)
+  }
+  if (info.durationMs >= FRAME_SLOW_MS) {
+    pushPerfPhaseSample(`ipc.encode (${describeFrame(info)})`, info.startTime, info.durationMs)
+  }
+  if (info.bytes < LARGE_FRAME_LOG_BYTES) return
+  const key = `out|${info.type}|${info.channel}|${info.name}`
+  if (!admitLargeFrameLog(key, Date.now())) return
+  const size = formatIpcFrameAlert({
+    bytes: info.bytes,
+    direction: 'out',
+    type: info.type,
+    channel: info.channel,
+    name: info.name,
+    id: info.id,
+  })
+  emitFrameAlert('warn', `[ipc] ${size}, encode ${info.durationMs.toFixed(1)}ms`)
 }
 
 type FrameLogSink = Pick<ILogger, 'warn' | 'error'>
@@ -116,7 +189,7 @@ function emitFrameAlert(level: 'warn' | 'error', message: string): void {
 export function createRendererIpcService(bridge: IpcBridge = window.ipc): IpcService {
   // Attribute slow frame encodes; decoding is attributed from the observation below, which
   // additionally knows what the frame turned out to be.
-  setIpcEncodeInstrument(slowPhaseInstrument('ipc.encode'))
+  setIpcEncodeObserver(recordOutboundEncode)
   // Surface what the frame guard refuses. Silently dropping an over-limit frame would
   // turn a size problem into an unexplained "this file will not open", and the whole
   // point of the guard is that the next crash report can name the payload.

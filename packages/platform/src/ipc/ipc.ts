@@ -232,18 +232,23 @@ function reviver(_key: string, value: unknown): unknown {
   return value
 }
 
-let encodeInstrument: (<T>(run: () => T) => T) | undefined
+let encodeObserver: ((observation: IpcEncodeObservation) => void) | undefined
 
-/** Optional hook wrapping every outgoing-message encode in this process, so the
- *  embedder can attribute slow serializations (multi-MB payloads stringify on the
- *  main thread) instead of them showing up as anonymous long tasks. */
-export function setIpcEncodeInstrument(instrument: (<T>(run: () => T) => T) | undefined): void {
-  encodeInstrument = instrument
+/**
+ * Observe every outbound frame the codec successfully encoded. The platform
+ * measures the encode itself so the embedder cannot end up timing one pass and
+ * reporting another, and the observation carries only the frame's shape (kind,
+ * channel, name, id, size) — never the body. Runs isolated from the transport:
+ * a throw here is swallowed so diagnostics can never drop a frame.
+ */
+export function setIpcEncodeObserver(
+  observer: ((observation: IpcEncodeObservation) => void) | undefined,
+): void {
+  encodeObserver = observer
 }
 
 function encode(msg: IpcMessage): Uint8Array {
-  const run = () => new TextEncoder().encode(JSON.stringify(msg, replacer))
-  const data = encodeInstrument ? encodeInstrument(run) : run()
+  const data = new TextEncoder().encode(JSON.stringify(msg, replacer))
   // Refuse on the way out as well as on the way in. A peer that cannot decode the
   // frame would die holding it, and the sender is the only side that still has the
   // context to name what it was.
@@ -326,15 +331,9 @@ export interface IpcFrameTarget {
   readonly name: string
 }
 
-/**
- * One inbound frame that made it through the codec, as attributed by the receiver.
- *
- * Delivered only for frames that decoded: a refused or malformed frame never becomes an
- * observation (the frame guard reports the refusal instead). A response is named by the
- * pending request it answers — the only handle on the payload — so this arrives after
- * that lookup, one frame per decode.
- */
-export interface IpcDecodeObservation {
+/** Shape shared by inbound and outbound frame observations. The payload itself is
+ *  deliberately absent — only enough to name the transfer is carried. */
+export interface IpcFrameObservation {
   /** Message kind: `request` / `response` / `event` / `subscribe` / `unsubscribe` / `cancel`. */
   readonly type: string
   /** Channel the frame belongs to; empty when unknown (an unresolved response). */
@@ -343,14 +342,29 @@ export interface IpcDecodeObservation {
   readonly name: string
   /** Request id, or `0` for frames that carry none (events). */
   readonly id: number
-  /** Raw frame size on the wire. The payload itself is deliberately absent. */
+  /** Raw frame size on the wire. */
   readonly bytes: number
-  /** `performance.now()` timebase, taken at the start of the synchronous decode. */
+  /** `performance.now()` timebase, taken at the start of the synchronous codec call. */
   readonly startTime: number
-  /** Wall time of the codec decode alone (TextDecoder + JSON.parse + revival),
-   *  measured inside the timed run so an instrument wrapper is never counted. */
+  /** Wall time of the codec call alone (serialization for outbound, parse for inbound). */
   readonly durationMs: number
 }
+
+/**
+ * One inbound frame that made it through the codec, as attributed by the receiver.
+ *
+ * Delivered only for frames that decoded: a refused or malformed frame never becomes an
+ * observation (the frame guard reports the refusal instead). A response is named by the
+ * pending request it answers — the only handle on the payload — so this arrives after
+ * that lookup, one frame per decode.
+ */
+export type IpcDecodeObservation = IpcFrameObservation
+
+/**
+ * One outbound frame that the codec successfully encoded, attributed by the sender.
+ * Refused frames are reported by the frame guard instead.
+ */
+export type IpcEncodeObservation = IpcFrameObservation
 
 /**
  * How an embedder instruments inbound decoding for one `ChannelPair` / `IpcService`.
@@ -472,6 +486,7 @@ function encodeOutbound(
   channel: string,
   name: string,
 ): Uint8Array | IpcFrameTooLargeError {
+  const startTime = performance.now()
   let frame: Uint8Array
   try {
     frame = codec.encode(msg)
@@ -479,6 +494,23 @@ function encodeOutbound(
     if (!(err instanceof IpcFrameTooLargeError)) throw err
     reportIpcFrame('out', err.bytes, msg.type, channel, name, frameId(msg))
     return err
+  }
+  const durationMs = performance.now() - startTime
+  // Same seam as inbound decoding: one measurement, delivered after the frame exists
+  // so it can carry the real byte length. Isolated because an embedder's observation
+  // must never drop a frame that was already encoded successfully.
+  try {
+    encodeObserver?.({
+      type: msg.type,
+      channel,
+      name,
+      id: frameId(msg),
+      bytes: frame.byteLength,
+      startTime,
+      durationMs,
+    })
+  } catch {
+    /* diagnostics must not fail the transport */
   }
   // Successful sends have to be recorded here too, or the question "what is the largest
   // frame this process ever put on the wire" is answered only for the frames the peer

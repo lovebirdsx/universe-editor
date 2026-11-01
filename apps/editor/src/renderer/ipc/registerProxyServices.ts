@@ -55,6 +55,7 @@ import { IEnvironmentSnapshotService } from '../../shared/ipc/environmentSnapsho
 import { IProcessMonitorService } from '../../shared/ipc/processMonitorService.js'
 import { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import { IAuxiliaryWindowsService } from '../../shared/ipc/auxiliaryWindowService.js'
+import { ISessionChangesStoreService } from '../../shared/ipc/sessionChangesStoreService.js'
 
 interface ProxyServiceBinding {
   readonly id: ServiceIdentifier<object>
@@ -75,6 +76,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
     properties: (platform) => new Map<string, unknown>([['platform', platform]]),
   },
   { id: IStorageService, channel: ServiceChannels.Storage },
+  { id: ISessionChangesStoreService, channel: ServiceChannels.SessionChangesStore },
   { id: IPingService, channel: ServiceChannels.Ping },
   { id: IFileService, channel: ServiceChannels.FileSystem },
   { id: IFileSearchService, channel: ServiceChannels.FileSearch },

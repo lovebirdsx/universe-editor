@@ -55,6 +55,8 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import type { ISessionChangeTrackerService } from '../services/acp/session/sessionChangeTracker.js'
+import { getIpcEncodeStats, resetIpcEncodeStats } from '../ipc/bootstrap.js'
 import {
   readCodeHtmlBytes,
   readHeapFlowTotals,
@@ -122,6 +124,9 @@ import {
   type E2EExtensionUpdate,
   type E2EFindWidgetState,
   type E2EGcControlState,
+  type E2EIpcEncodeStats,
+  type E2ESessionChangeHunk,
+  type E2ESessionChangesSnapshot,
   type E2EInstalledExtension,
   type E2EKeybindingEntry,
   type E2EKeybindingTrace,
@@ -185,6 +190,7 @@ export interface E2EProbeServices {
   readonly storageService: IStorageService
   readonly acpSessionService: IAcpSessionService
   readonly acpSessionHistoryService: IAcpSessionHistoryService
+  readonly sessionChangeTrackerService: ISessionChangeTrackerService
   readonly bugRecorderClient: BugRecorderClient
   readonly mcpServerEnablementService: IMcpServerEnablementService
   readonly extensionMcpServersService: IExtensionMcpServersService
@@ -1226,6 +1232,61 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return services.acpSessionHistoryService.get(durableId)?.authority
     },
     getAcpSessionCreateProfiles: () => services.acpSessionService.getSessionCreateProfiles(),
+    sessionChangesRecord: (
+      sessionId: string,
+      path: string,
+      toolCallId: string,
+      hunks: readonly E2ESessionChangeHunk[],
+      opts?: { readonly created?: boolean; readonly baseline?: string | null },
+    ) => {
+      services.sessionChangeTrackerService.record(sessionId, path, toolCallId, hunks, opts)
+    },
+    // Reads the service's in-memory records rather than `changesFor`: the
+    // observable is rebuilt asynchronously from disk and deliberately drops the
+    // rollback batches, while this probe has to prove what the shard holds.
+    sessionChangesRead: (sessionId: string): E2ESessionChangesSnapshot => {
+      const tracker = services.sessionChangeTrackerService as unknown as {
+        readonly _state: Map<
+          string,
+          Map<
+            string,
+            {
+              readonly path: string
+              readonly batches: readonly unknown[]
+              readonly origin: string
+              readonly baseline?: unknown
+              readonly baselineSource?: string
+              readonly created?: boolean
+              readonly ignored?: boolean
+            }
+          >
+        >
+        readonly _sessionBytes: Map<string, number>
+      }
+      const files = tracker._state.get(sessionId)
+      return {
+        sessionId,
+        bytes: tracker._sessionBytes.get(sessionId) ?? 0,
+        files: files
+          ? [...files.values()].map((rec) => ({
+              path: rec.path,
+              origin: rec.origin === 'watched' ? 'watched' : ('agent' as const),
+              batchCount: rec.batches.length,
+              hasBaseline: rec.baseline !== undefined,
+              ...(rec.baselineSource === 'reported' || rec.baselineSource === 'git'
+                ? { baselineSource: rec.baselineSource }
+                : {}),
+              created: rec.created === true,
+              ignored: rec.ignored === true,
+            }))
+          : [],
+      }
+    },
+    sessionChangesPreviewRestore: (sessionId, toolCallIds) =>
+      services.sessionChangeTrackerService.previewRestore(sessionId, toolCallIds),
+    sessionChangesFlush: () => services.sessionChangeTrackerService.flush(),
+    resetIpcEncodeStats,
+    getIpcEncodeStats: (): E2EIpcEncodeStats => getIpcEncodeStats(),
     getAcpPendingElicitation: () => {
       const s = services.acpSessionService.activeSession.get()
       const e = s?.pendingElicitation.get()

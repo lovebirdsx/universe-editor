@@ -33,6 +33,7 @@ import {
   IWorkspaceService,
   ITelemetryService,
   ILoggerService,
+  StorageScope,
   absolutePathToWorkspaceUri,
   type IObservable,
   type ISettableObservable,
@@ -42,6 +43,10 @@ import { probeIsBinary } from '../../files/binaryDetection.js'
 import { IMemoryPressureService } from '../../memory/memoryPressureService.js'
 import { MemoryPressureLevel } from '../../memory/memoryPressureLevels.js'
 import { reconstructBaseline, type DiffBatch, type DiffHunk } from './sessionDiffReconstruct.js'
+import {
+  ISessionChangesStoreService,
+  type SessionChangesShardMeta,
+} from '../../../../shared/ipc/sessionChangesStoreService.js'
 
 export type SessionFileChangeStatus = 'added' | 'modified' | 'deleted' | 'degraded'
 
@@ -135,6 +140,8 @@ export interface ISessionChangeTrackerService {
    * accurate. Returns the same impact shape as {@link previewRestore}.
    */
   restore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact>
+  /** Drain the debounce, any in-flight write and every dirty shard. */
+  flush(): Promise<void>
   /**
    * Bytes the tracker is holding across every session, for the heap report's
    * `holders` line — this service has no other reading, and it once climbed from
@@ -299,6 +306,22 @@ interface PersistedShape {
   }>
 }
 
+/** One session's shard payload; the store never sees the other sessions. */
+interface PersistedShard {
+  readonly schemaVersion: number
+  readonly sessionId: string
+  readonly files: readonly PersistedFile[]
+}
+
+/** One session's pending store write. `rev` gates clearing on completion: a
+ *  newer mutation replaces the revision, so an older completion cannot drop the
+ *  newer state. `payload` is present only for a write retired with an old
+ *  bucket, where the in-memory state it came from is already gone. */
+interface DirtyWrite {
+  readonly rev: number
+  readonly payload?: PersistedShard
+}
+
 /** Canonicalize a file path for display (separators only — casing is preserved;
  *  identity is the comparison key's job). Non-file URIs pass through; POSIX
  *  absolute paths pass through unchanged (they are remote host paths — folding
@@ -359,6 +382,50 @@ export class SessionChangeTrackerService
   /** Set by _deserialize when it pruned over-budget entries → persist the slimmed state. */
   private _prunedOnLoad = false
 
+  /**
+   * Shard cleanup decided while reading a bucket, applied only when that load is
+   * accepted. A reload superseded mid-read must not enqueue writes/removals for
+   * a state the base is about to discard (their payloads would target sectors
+   * that never entered `_state`).
+   */
+  private _pendingLoadMutations: { dirty: string[]; removed: string[]; pruned: boolean } | undefined
+
+  /** Bucket handle captured at load time. Every write goes through this handle,
+   *  so a workspace swap cannot redirect an in-flight/tail write into the new
+   *  workspace's bucket. */
+  private _bucket: string | undefined
+
+  /** Sessions whose latest snapshot still has to reach the store. */
+  private readonly _dirtyWrites = new Map<string, DirtyWrite>()
+
+  /** Sessions removed since the last successful store write. The value is the
+   *  same revision counter used by writes: a session removed and re-added
+   *  during one write keeps the newer side. */
+  private readonly _dirtyRemovals = new Map<string, number>()
+
+  /** Monotonic revision used to tell a stale completion from a newer mutation. */
+  private _dirtyRev = 0
+
+  /**
+   * Writes that belonged to a bucket the window switched away from. They are
+   * retried against their own handle; they must never be replayed through the
+   * newly bound bucket.
+   */
+  private readonly _retiredBuckets = new Map<
+    string,
+    { writes: Map<string, DirtyWrite>; removals: Map<string, number> }
+  >()
+
+  /** Set when a shard could not be read/parsed: the session is skipped, never
+   *  treated as an empty session eligible for deletion. */
+  private _loadHadErrors = false
+
+  /**
+   * Yield between shard writes so a large dirty set doesn't serialize/encode
+   * synchronously in one task. Overridable in tests.
+   */
+  yieldBetweenPersists: () => Promise<void> = () => new Promise((resolve) => setTimeout(resolve, 0))
+
   /** Sessions with a recompute pending inside the current throttle window. */
   private readonly _pendingRecompute = new Map<string, ReturnType<typeof setTimeout>>()
 
@@ -393,6 +460,7 @@ export class SessionChangeTrackerService
     @IFileService private readonly _files: IFileService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IMemoryPressureService memoryPressure: IMemoryPressureService,
+    @ISessionChangesStoreService private readonly _changesStore: ISessionChangesStoreService,
   ) {
     super(storage, workspace, telemetry, loggerService, {
       storageKey: STORAGE_KEY,
@@ -437,6 +505,10 @@ export class SessionChangeTrackerService
   }
 
   override dispose(): void {
+    // Fire-and-forget final drain: the window lifecycle flushes this service
+    // through its shutdown participant, but a direct dispose (tests, reload
+    // paths) should still try to land the last shard.
+    void this.flush().catch(() => undefined)
     for (const timer of this._pendingRecompute.values()) clearTimeout(timer)
     this._pendingRecompute.clear()
     this._recomputeRunning.clear()
@@ -450,23 +522,343 @@ export class SessionChangeTrackerService
     return new Map()
   }
 
+  private _serializeFile(rec: FileRecord): PersistedFile {
+    return {
+      path: rec.path,
+      batches: rec.batches,
+      batchCount: rec.batchCount,
+      origin: rec.origin,
+      ...(rec.baseline !== undefined ? { baseline: rec.baseline } : {}),
+      ...(rec.baselineSource !== undefined ? { baselineSource: rec.baselineSource } : {}),
+      ...(rec.created ? { created: true } : {}),
+      ...(rec.ignored ? { ignored: true } : {}),
+    }
+  }
+
+  private _serializeSession(sessionId: string, files: Map<string, FileRecord>): PersistedShard {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      sessionId,
+      files: [...files.values()].map((rec) => this._serializeFile(rec)),
+    }
+  }
+
   protected _serialize(state: TrackerState): PersistedShape {
     return {
       schemaVersion: SCHEMA_VERSION,
       sessions: [...state.entries()].map(([sessionId, files]) => ({
         sessionId,
-        files: [...files.values()].map((rec) => ({
-          path: rec.path,
-          batches: rec.batches,
-          batchCount: rec.batchCount,
-          origin: rec.origin,
-          ...(rec.baseline !== undefined ? { baseline: rec.baseline } : {}),
-          ...(rec.baselineSource !== undefined ? { baselineSource: rec.baselineSource } : {}),
-          ...(rec.created ? { created: true } : {}),
-          ...(rec.ignored ? { ignored: true } : {}),
-        })),
+        files: [...files.values()].map((rec) => this._serializeFile(rec)),
       })),
     }
+  }
+
+  // -- sharded persistence hooks --------------------------------------
+
+  /**
+   * Load one session shard at a time from the bucket the store binds now.
+   *
+   * A read/parse failure is reported and the session is skipped — it is NOT
+   * removed from the bucket and NOT treated as an empty session. Only sessions
+   * this pass parsed successfully can be pruned by the size budgets.
+   */
+  protected override async _loadFromStorage(
+    scope: StorageScope,
+  ): Promise<TrackerState | undefined> {
+    const pending = { dirty: [] as string[], removed: [] as string[], pruned: false }
+    this._pendingLoadMutations = pending
+    let bucket: string
+    try {
+      const opened = await this._changesStore.openBucket()
+      bucket = opened.handle
+      if (opened.importWarning !== undefined) {
+        this._logger.warn(
+          `session changes bucket ${opened.label}: ${opened.importWarning}; legacy data kept`,
+        )
+      }
+    } catch (err) {
+      // No handle means no safe way to write either. Keep the (empty) in-memory
+      // state, report, and let a later reload retry; never prune anything.
+      this._logger.warn(`failed to open session changes bucket: ${(err as Error).message}`)
+      return undefined
+    }
+    this._bucket = bucket
+    this._loadHadErrors = false
+
+    let metas: readonly SessionChangesShardMeta[]
+    try {
+      metas = await this._changesStore.list(bucket)
+    } catch (err) {
+      this._logger.warn(`failed to list session change shards: ${(err as Error).message}`)
+      this._loadHadErrors = true
+      return undefined
+    }
+
+    this._sessionBytes.clear()
+    const state: TrackerState = new Map()
+    let total = 0
+    let pruned = false
+    for (const meta of metas) {
+      const read = await this._changesStore.read(bucket, meta.sessionId)
+      if (read.status !== 'ok') {
+        // Missing or unreadable: leave whatever is on disk alone. It stays
+        // invisible for this run rather than being deleted as "empty".
+        this._loadHadErrors = true
+        this._logger.warn(
+          `skipping session change shard ${meta.sessionId}: ${
+            read.status === 'missing' ? 'missing file' : read.error
+          }`,
+        )
+        continue
+      }
+      const parsed = this._parseShard(read.payload, meta.sessionId)
+      if (parsed === undefined) {
+        this._loadHadErrors = true
+        this._logger.warn(`skipping session change shard ${meta.sessionId}: unrecognized payload`)
+        continue
+      }
+      const shrunk = this._shrinkSession(meta.sessionId, parsed.files, parsed.bytes)
+      if (shrunk === 'drop') {
+        pruned = true
+        pending.removed.push(meta.sessionId)
+        continue
+      }
+      if (shrunk.slimmed) {
+        // The session body was slimmed in memory; the shard on disk still holds
+        // the dropped batches. `_state` has not been published yet, so this
+        // cannot use `_markDirty`'s published-state guard — but without a dirty
+        // entry the follow-up write drains nothing and the old body survives.
+        pruned = true
+        pending.dirty.push(meta.sessionId)
+      }
+      state.set(meta.sessionId, shrunk.files)
+      this._sessionBytes.set(meta.sessionId, shrunk.bytes)
+      total += shrunk.bytes
+    }
+    if (this._enforceLoadBudgets(state, total, this._sessionBytes, pending)) pruned = true
+    if (this._loadHadErrors) {
+      this._logger.warn('some session change shards could not be read; they were kept untouched')
+    }
+    if (pruned) {
+      pending.pruned = true
+      this._logger.warn(
+        'pruned session changes to fit the size budgets; slimmed shards will be written',
+      )
+    }
+    void scope
+    return state
+  }
+
+  protected override async _persistToStorage(): Promise<void> {
+    // Retired buckets first: they belong to a workspace the window already left
+    // and must never be replayed through the current handle.
+    await this._drainRetiredBuckets()
+    if (this._bucket !== undefined) await this._drainBucket(this._bucket)
+  }
+
+  protected override async _onBeforeScopeChange(): Promise<void> {
+    const bucket = this._bucket
+    if (bucket !== undefined) {
+      await this._drainBucket(bucket)
+      if (this._dirtyWrites.size > 0 || this._dirtyRemovals.size > 0) {
+        // The old write failed. Snapshot its payload and pin it to the old
+        // handle so the next scope's writes cannot carry it into the new bucket.
+        const writes = new Map<string, DirtyWrite>()
+        for (const [sessionId, entry] of this._dirtyWrites) {
+          const files = this._state.get(sessionId)
+          writes.set(sessionId, {
+            rev: entry.rev,
+            ...(files !== undefined
+              ? { payload: entry.payload ?? this._serializeSession(sessionId, files) }
+              : {}),
+          })
+        }
+        this._retiredBuckets.set(bucket, {
+          writes,
+          removals: new Map(this._dirtyRemovals),
+        })
+      } else {
+        // Everything landed; nothing needs this handle anymore, so let main
+        // evict the bucket's cached bodies instead of keeping every visited
+        // workspace resident until the window closes.
+        await this._closeBucket(bucket)
+      }
+    }
+    this._dirtyWrites.clear()
+    this._dirtyRemovals.clear()
+    this._bucket = undefined
+  }
+
+  protected override _onAfterScopeChange(): void {
+    // Writes scheduled during the swap (merged pre-load edits, a failed drain
+    // pinned to the old bucket) were suppressed; retry them now.
+    if (
+      this._dirtyWrites.size > 0 ||
+      this._dirtyRemovals.size > 0 ||
+      this._retiredBuckets.size > 0
+    ) {
+      this._scheduleWrite()
+    }
+  }
+
+  /**
+   * Merge pre-load edits (records made before `initialize` resolved) with the
+   * loaded state. In-memory records win on first-touch fields; the session is
+   * moved to the LRU tail and marked dirty so the merge reaches the shard.
+   */
+  protected override _mergeOnLoad(loaded: TrackerState, current: TrackerState): TrackerState {
+    // This hook runs only for an accepted load, so cleanup decided while reading
+    // the shards is safe to enqueue now — a superseded read never reaches here.
+    const pending = this._pendingLoadMutations
+    this._pendingLoadMutations = undefined
+    if (pending !== undefined) {
+      for (const sessionId of pending.dirty) this._markLoadedDirty(sessionId)
+      for (const sessionId of pending.removed) this._markRemoved(sessionId)
+      if (pending.pruned) this._prunedOnLoad = true
+    }
+    if (current.size === 0) return loaded
+    for (const [sessionId, incoming] of current) {
+      const existing = loaded.get(sessionId)
+      if (existing === undefined) {
+        loaded.set(sessionId, incoming)
+      } else {
+        for (const [key, rec] of incoming) {
+          const prev = existing.get(key)
+          if (prev === undefined) {
+            existing.set(key, rec)
+            continue
+          }
+          if (prev.baseline === undefined && rec.baseline !== undefined) {
+            prev.baseline = rec.baseline
+            if (rec.baselineSource !== undefined) prev.baselineSource = rec.baselineSource
+          }
+          if (rec.origin === 'agent') {
+            prev.origin = 'agent'
+            delete prev.ignored
+          }
+          if (rec.created) prev.created = true
+          const known = new Set(prev.batches.map((b) => b.toolCallId))
+          for (const batch of rec.batches) {
+            if (batch.toolCallId !== undefined && known.has(batch.toolCallId)) {
+              const index = prev.batches.findIndex((b) => b.toolCallId === batch.toolCallId)
+              if (index >= 0) prev.batches[index] = batch
+            } else {
+              prev.batches.push(batch)
+              prev.batchCount++
+            }
+          }
+          prev.rev++
+          delete prev.lastBuilt
+        }
+        // The in-memory session is the most recently active one.
+        loaded.delete(sessionId)
+        loaded.set(sessionId, existing)
+      }
+      let bytes = 0
+      for (const rec of loaded.get(sessionId)!.values()) bytes += recordBytes(rec)
+      this._sessionBytes.set(sessionId, bytes)
+      this._markDirty(sessionId)
+    }
+    return loaded
+  }
+
+  /** Parse a shard payload; unknown schema/version is reported by the caller. */
+  private _parseShard(
+    payload: unknown,
+    expectedSessionId: string,
+  ): { files: Map<string, FileRecord>; bytes: number } | undefined {
+    if (payload === null || typeof payload !== 'object') return undefined
+    const shard = payload as Partial<PersistedShard>
+    if (shard.schemaVersion !== SCHEMA_VERSION) return undefined
+    if (shard.sessionId !== expectedSessionId) return undefined
+    if (!Array.isArray(shard.files)) return undefined
+    const parsed = this._parseSession({ sessionId: expectedSessionId, files: shard.files })
+    return parsed === undefined ? undefined : { files: parsed.files, bytes: parsed.bytes }
+  }
+
+  private _parseSession(s: unknown): { files: Map<string, FileRecord>; bytes: number } | undefined {
+    if (!s || typeof s !== 'object') return undefined
+    const session = s as { sessionId?: unknown; files?: unknown }
+    if (typeof session.sessionId !== 'string' || !Array.isArray(session.files)) return undefined
+    const files = new Map<string, FileRecord>()
+    let bytes = 0
+    for (const f of session.files) {
+      if (!f || typeof f !== 'object') continue
+      const pf = f as PersistedFile
+      const batches = Array.isArray(pf.batches) ? [...pf.batches] : []
+      const rec: FileRecord = {
+        path: pf.path,
+        batches,
+        batchCount: typeof pf.batchCount === 'number' ? pf.batchCount : batches.length,
+        origin: pf.origin === 'watched' ? 'watched' : 'agent',
+        rev: 0,
+        ...(pf.baseline !== undefined ? { baseline: pf.baseline } : {}),
+        ...(pf.baselineSource === 'reported' || pf.baselineSource === 'git'
+          ? { baselineSource: pf.baselineSource }
+          : {}),
+        ...(pf.created ? { created: true } : {}),
+        ...(pf.ignored ? { ignored: true } : {}),
+      }
+      const key = this._pathKey(pf.path)
+      const existing = files.get(key)
+      if (existing) {
+        // Stores written before comparison-key tracking may list the same
+        // file twice under different casings — fold them into one record.
+        existing.batches.push(...rec.batches)
+        existing.batchCount += rec.batchCount
+        if (rec.origin === 'agent') {
+          existing.origin = 'agent'
+          delete existing.ignored
+        }
+        if (existing.baseline === undefined && rec.baseline !== undefined) {
+          existing.baseline = rec.baseline
+          if (rec.baselineSource !== undefined) existing.baselineSource = rec.baselineSource
+        }
+        if (rec.created) existing.created = true
+      } else {
+        files.set(key, rec)
+      }
+      bytes += recordBytes(rec)
+    }
+    return { files, bytes }
+  }
+
+  private _shrinkSession(
+    sessionId: string,
+    files: Map<string, FileRecord>,
+    bytes: number,
+  ): { files: Map<string, FileRecord>; bytes: number; slimmed: boolean } | 'drop' {
+    if (bytes <= this.maxSessionBytes) return { files, bytes, slimmed: false }
+    // Try the graceful degradation first: batches are rollback data only.
+    for (const rec of files.values()) rec.batches = []
+    let slimmed = 0
+    for (const rec of files.values()) slimmed += recordBytes(rec)
+    if (slimmed <= this.maxSessionBytes) return { files, bytes: slimmed, slimmed: true }
+    this._logger.warn(
+      `pruning session ${sessionId} on load — ${(slimmed / 1024 / 1024).toFixed(1)}MB exceeds the per-session budget`,
+    )
+    return 'drop'
+  }
+
+  private _enforceLoadBudgets(
+    state: TrackerState,
+    total: number,
+    sessionBytes: Map<string, number>,
+    pending?: { removed: string[] },
+  ): boolean {
+    let pruned = false
+    // Serialized order is append order (oldest first) — evict from the front.
+    while (state.size > this.maxTrackedSessions || total > this.maxTotalBytes) {
+      const oldest = state.keys().next().value
+      if (oldest === undefined) break
+      total -= sessionBytes.get(oldest) ?? 0
+      state.delete(oldest)
+      sessionBytes.delete(oldest)
+      if (pending !== undefined) pending.removed.push(oldest)
+      else this._markRemoved(oldest)
+      pruned = true
+    }
+    return pruned
   }
 
   protected _deserialize(raw: unknown): TrackerState | undefined {
@@ -483,75 +875,26 @@ export class SessionChangeTrackerService
     let pruned = false
     for (const s of shape.sessions) {
       // Per-entry isolation: one malformed session must not nuke the rest.
-      if (!s || typeof s.sessionId !== 'string' || !Array.isArray(s.files)) {
+      const parsed = this._parseSession(s)
+      if (parsed === undefined) {
         pruned = true
         continue
       }
-      const files = new Map<string, FileRecord>()
-      let bytes = 0
-      for (const f of s.files) {
-        const batches = Array.isArray(f.batches) ? [...f.batches] : []
-        const rec: FileRecord = {
-          path: f.path,
-          batches,
-          batchCount: typeof f.batchCount === 'number' ? f.batchCount : batches.length,
-          origin: f.origin === 'watched' ? 'watched' : 'agent',
-          rev: 0,
-          ...(f.baseline !== undefined ? { baseline: f.baseline } : {}),
-          ...(f.baselineSource === 'reported' || f.baselineSource === 'git'
-            ? { baselineSource: f.baselineSource }
-            : {}),
-          ...(f.created ? { created: true } : {}),
-          ...(f.ignored ? { ignored: true } : {}),
-        }
-        const key = this._pathKey(f.path)
-        const existing = files.get(key)
-        if (existing) {
-          // Stores written before comparison-key tracking may list the same
-          // file twice under different casings — fold them into one record.
-          existing.batches.push(...rec.batches)
-          existing.batchCount += rec.batchCount
-          if (rec.origin === 'agent') {
-            existing.origin = 'agent'
-            delete existing.ignored
-          }
-          if (existing.baseline === undefined && rec.baseline !== undefined) {
-            existing.baseline = rec.baseline
-            if (rec.baselineSource !== undefined) existing.baselineSource = rec.baselineSource
-          }
-          if (rec.created) existing.created = true
-        } else {
-          files.set(key, rec)
-        }
-        bytes += recordBytes(rec)
-      }
-      if (bytes > this.maxSessionBytes) {
-        // Try the graceful degradation first: batches are rollback data only.
-        for (const rec of files.values()) rec.batches = []
-        bytes = 0
-        for (const rec of files.values()) bytes += recordBytes(rec)
-        pruned = true
-      }
-      if (bytes > this.maxSessionBytes) {
-        this._logger.warn(
-          `pruning session ${s.sessionId} on load — ${(bytes / 1024 / 1024).toFixed(1)}MB exceeds the per-session budget`,
-        )
+      const sessionId = (s as { sessionId: string }).sessionId
+      const shrunk = this._shrinkSession(sessionId, parsed.files, parsed.bytes)
+      if (shrunk === 'drop') {
         pruned = true
         continue
       }
-      state.set(s.sessionId, files)
-      this._sessionBytes.set(s.sessionId, bytes)
-      total += bytes
+      if (shrunk.slimmed) {
+        pruned = true
+        this._markLoadedDirty(sessionId)
+      }
+      state.set(sessionId, shrunk.files)
+      this._sessionBytes.set(sessionId, shrunk.bytes)
+      total += shrunk.bytes
     }
-    // Serialized order is append order (oldest first) — evict from the front.
-    while (state.size > this.maxTrackedSessions || total > this.maxTotalBytes) {
-      const oldest = state.keys().next().value
-      if (oldest === undefined) break
-      total -= this._sessionBytes.get(oldest) ?? 0
-      state.delete(oldest)
-      this._sessionBytes.delete(oldest)
-      pruned = true
-    }
+    if (this._enforceLoadBudgets(state, total, this._sessionBytes)) pruned = true
     if (pruned) {
       this._prunedOnLoad = true
       this._logger.warn(
@@ -572,6 +915,8 @@ export class SessionChangeTrackerService
       this._prunedOnLoad = false
       this._scheduleWrite()
     }
+    // Pre-load edits merged in, or a write that had no bucket yet.
+    if (this._dirtyWrites.size > 0 || this._dirtyRemovals.size > 0) this._scheduleWrite()
   }
 
   // -- public API -----------------------------------------------------
@@ -676,6 +1021,7 @@ export class SessionChangeTrackerService
     }
     this._sessionBytes.set(sessionId, bytes)
     this._touchLru(sessionId, files)
+    this._markDirty(sessionId)
     this._scheduleWrite()
     this._invalidateBuilt(rec)
     this._scheduleRecompute(sessionId)
@@ -712,6 +1058,7 @@ export class SessionChangeTrackerService
     files.set(key, rec)
     this._sessionBytes.set(sessionId, (this._sessionBytes.get(sessionId) ?? 0) + recordBytes(rec))
     this._touchLru(sessionId, files)
+    this._markDirty(sessionId)
     this._scheduleWrite()
     this._scheduleRecompute(sessionId)
   }
@@ -721,6 +1068,7 @@ export class SessionChangeTrackerService
     const rec = files?.get(this._pathKey(path))
     if (!rec || rec.origin !== 'watched' || rec.ignored) return
     rec.ignored = true
+    this._markDirty(sessionId)
     this._scheduleWrite()
     this._invalidateBuilt(rec)
     this._scheduleRecompute(sessionId)
@@ -744,6 +1092,7 @@ export class SessionChangeTrackerService
     if (!this._state.delete(sessionId)) return
     this._sessionBytes.delete(sessionId)
     this._liveChangeBytes.delete(sessionId)
+    this._markRemoved(sessionId)
     this._scheduleWrite()
     this._observables.get(sessionId)?.set([], undefined)
   }
@@ -801,6 +1150,103 @@ export class SessionChangeTrackerService
     return files
   }
 
+  /** Snapshot one session for the next store write. Only dirty sessions are
+   *  serialized/sent — never the whole state; the payload itself is built
+   *  immediately before that session's write, not here. */
+  private _markDirty(sessionId: string): void {
+    if (!this._state.has(sessionId)) return
+    this._markLoadedDirty(sessionId)
+  }
+
+  /**
+   * Mark a session for the next drain without the published-state check above:
+   * load-time pruning decides the slimmed shape while `_state` still holds the
+   * previous scope's map, so the session is not there yet.
+   */
+  private _markLoadedDirty(sessionId: string): void {
+    this._dirtyRev++
+    this._dirtyRemovals.delete(sessionId)
+    this._dirtyWrites.set(sessionId, { rev: this._dirtyRev })
+  }
+
+  private _markRemoved(sessionId: string): void {
+    this._dirtyRev++
+    this._dirtyWrites.delete(sessionId)
+    this._dirtyRemovals.set(sessionId, this._dirtyRev)
+  }
+
+  private async _drainBucket(bucket: string): Promise<void> {
+    await this._drainEntries(bucket, this._dirtyWrites, this._dirtyRemovals)
+  }
+
+  /**
+   * Write/remove everything in the given maps through `bucket`, one session at
+   * a time with a yield in between. Entries mutated while a write is in flight
+   * carry a newer revision and stay behind for the follow-up write; a failure
+   * also stays behind. Neither case can ever be cleared by a stale completion.
+   */
+  private async _drainEntries(
+    bucket: string,
+    writes: Map<string, DirtyWrite>,
+    removals: Map<string, number>,
+  ): Promise<void> {
+    for (const [sessionId, rev] of [...removals]) {
+      if (removals.get(sessionId) !== rev) continue
+      try {
+        await this._changesStore.remove(bucket, sessionId)
+      } catch (err) {
+        this._logger.warn(
+          `failed to remove session change shard ${sessionId}: ${(err as Error).message}`,
+        )
+        continue
+      }
+      if (removals.get(sessionId) === rev) removals.delete(sessionId)
+      await this.yieldBetweenPersists()
+    }
+    for (const [sessionId, entry] of [...writes]) {
+      // Superseded by a newer mutation while this drain was running.
+      if (writes.get(sessionId) !== entry) continue
+      const files = this._state.get(sessionId)
+      const payload =
+        entry.payload ??
+        (files === undefined ? undefined : this._serializeSession(sessionId, files))
+      if (payload === undefined) continue
+      let ok = false
+      try {
+        const result = await this._changesStore.write(bucket, sessionId, payload)
+        ok = result.ok
+        if (!result.ok) {
+          this._logger.warn(`failed to persist session change shard ${sessionId}: ${result.error}`)
+        }
+      } catch (err) {
+        this._logger.warn(
+          `failed to persist session change shard ${sessionId}: ${(err as Error).message}`,
+        )
+      }
+      if (ok && writes.get(sessionId) === entry) writes.delete(sessionId)
+      await this.yieldBetweenPersists()
+    }
+  }
+
+  private async _drainRetiredBuckets(): Promise<void> {
+    for (const [bucket, entries] of [...this._retiredBuckets]) {
+      await this._drainEntries(bucket, entries.writes, entries.removals)
+      if (entries.writes.size === 0 && entries.removals.size === 0) {
+        this._retiredBuckets.delete(bucket)
+        await this._closeBucket(bucket)
+      }
+    }
+  }
+
+  /** Best-effort: the store releases the bucket's cached bodies on last close. */
+  private async _closeBucket(bucket: string): Promise<void> {
+    try {
+      await this._changesStore.closeBucket(bucket)
+    } catch (err) {
+      this._logger.warn(`failed to close session changes bucket: ${(err as Error).message}`)
+    }
+  }
+
   /** Refresh LRU recency (most-recently-recorded session sits at the end) and
    *  evict least-recently-used sessions until the global budgets hold. */
   private _touchLru(sessionId: string, files: Map<string, FileRecord>): void {
@@ -821,6 +1267,7 @@ export class SessionChangeTrackerService
       this._state.delete(oldest)
       this._sessionBytes.delete(oldest)
       this._liveChangeBytes.delete(oldest)
+      this._markRemoved(oldest)
       this._observables.get(oldest)?.set([], undefined)
     }
   }
@@ -906,6 +1353,7 @@ export class SessionChangeTrackerService
         else bytes += recordBytes(rec)
       }
       this._sessionBytes.set(sessionId, bytes)
+      this._markDirty(sessionId)
       this._scheduleWrite()
       this._requestRecompute(sessionId)
     }

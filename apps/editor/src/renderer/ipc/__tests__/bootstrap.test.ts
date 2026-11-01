@@ -9,7 +9,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { defaultCodec, type IpcDecodeObservation } from '@universe-editor/platform'
+import {
+  defaultCodec,
+  type IpcDecodeObservation,
+  type IpcEncodeObservation,
+} from '@universe-editor/platform'
 import type { IpcBridge } from '../../../preload/index.js'
 import {
   _resetPerfPhasesForTests,
@@ -21,6 +25,7 @@ import {
   createRendererIpcService,
   LARGE_FRAME_LOG_BYTES,
   recordInboundDecode,
+  recordOutboundEncode,
   resetIpcDecodeDiagnosticsForTests,
 } from '../bootstrap.js'
 
@@ -171,5 +176,62 @@ describe('large frame log limiter', () => {
     // The cap evicted the oldest targets — if the map grew without bound, this key would
     // still be inside its window and the admit would be refused.
     expect(admitLargeFrameLog('k0', 1000)).toBe(true)
+  })
+})
+
+const encodeObservation = (over: Partial<IpcEncodeObservation> = {}): IpcEncodeObservation => ({
+  type: 'request',
+  channel: 'fileSearch',
+  name: 'findFiles',
+  id: 42,
+  bytes: 8 * MIB,
+  startTime: 2000,
+  durationMs: 1,
+  ...over,
+})
+
+describe('slow encode phase', () => {
+  it('records one sample naming kind, channel, method, id and size', () => {
+    recordOutboundEncode(encodeObservation({ durationMs: 615, bytes: 5 * MIB }))
+
+    expect(getRecordedPhases()).toHaveLength(1)
+    expect(getRecordedPhases()[0]).toMatchObject({
+      name: 'ipc.encode (request fileSearch.findFiles #42, 5.0MB)',
+      startTime: 2000,
+      duration: 615,
+    })
+  })
+
+  it('records nothing below the slow threshold, at any size', () => {
+    recordOutboundEncode(encodeObservation({ durationMs: 4.9, bytes: 5 * MIB }))
+    expect(getRecordedPhases()).toHaveLength(0)
+  })
+})
+
+describe('large outbound frame log', () => {
+  it('warns for a large request even when its encode was fast, without its body', () => {
+    recordOutboundEncode(encodeObservation({ bytes: LARGE_FRAME_LOG_BYTES, durationMs: 0.2 }))
+
+    expect(warn).toHaveBeenCalledTimes(1)
+    const line = String(warn.mock.calls[0]?.[0])
+    expect(line).toContain('large outbound ipc frame')
+    expect(line).toContain('(request fileSearch.findFiles #42)')
+    expect(line).toContain('encode 0.2ms')
+    expect(line).not.toContain('payload')
+  })
+
+  it('does not let an inbound frame mask the same outbound target', () => {
+    recordInboundDecode(observation({ bytes: LARGE_FRAME_LOG_BYTES }))
+    recordOutboundEncode(encodeObservation({ bytes: LARGE_FRAME_LOG_BYTES }))
+    expect(warn).toHaveBeenCalledTimes(2)
+    expect(String(warn.mock.calls[0]?.[0])).toContain('inbound')
+    expect(String(warn.mock.calls[1]?.[0])).toContain('outbound')
+  })
+
+  it('folds repeats of one outbound target into a single line per window', () => {
+    for (let id = 1; id <= 30; id++) {
+      recordOutboundEncode(encodeObservation({ id, bytes: LARGE_FRAME_LOG_BYTES }))
+    }
+    expect(warn).toHaveBeenCalledTimes(1)
   })
 })

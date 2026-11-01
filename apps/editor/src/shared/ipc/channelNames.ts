@@ -10,6 +10,7 @@ export const IPC_PROTOCOL_CHANNEL = 'ue:ipc'
 export const ServiceChannels = {
   Host: 'host',
   Storage: 'storage',
+  SessionChangesStore: 'sessionChangesStore',
   Ping: 'ping',
   FileSystem: 'fileSystem',
   FileSearch: 'fileSearch',

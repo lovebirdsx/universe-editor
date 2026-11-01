@@ -53,6 +53,10 @@ export function bootstrapWindowIpc(
 
   server.registerChannel(ServiceChannels.Host, ProxyChannel.fromService(window.host))
   server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(window.storage))
+  server.registerChannel(
+    ServiceChannels.SessionChangesStore,
+    ProxyChannel.fromService(window.sessionChangesStore),
+  )
   server.registerChannel(ServiceChannels.Ping, ProxyChannel.fromService(app.ping))
   server.registerChannel(ServiceChannels.FileSystem, ProxyChannel.fromService(app.fileSystem))
   server.registerChannel(ServiceChannels.FileClipboard, ProxyChannel.fromService(app.fileClipboard))

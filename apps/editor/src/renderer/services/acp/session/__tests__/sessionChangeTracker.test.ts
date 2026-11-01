@@ -49,6 +49,11 @@ class FakeStorage implements IStorageService {
   async remove(key: string, scope: StorageScope = StorageScope.GLOBAL): Promise<void> {
     this.buckets.get(scope)!.delete(key)
   }
+  /** Simulate the renderer's workspace-scope event (the main process fires it
+   *  after switching the active workspace backend). */
+  fireWorkspaceScope(): void {
+    this._onDidChangeWorkspaceScope.fire()
+  }
 }
 
 class FakeWorkspaceService implements IWorkspaceService {
@@ -65,6 +70,116 @@ class FakeWorkspaceService implements IWorkspaceService {
   async closeFolder(): Promise<void> {}
   async clearRecent(): Promise<void> {}
   async removeRecent(): Promise<void> {}
+}
+
+/**
+ * In-memory stand-in for the main-process shard store. One `bucket` per scope
+ * key (`w1`, `w2`, …), with a handle pinning the bucket it was opened on so a
+ * workspace-switch test can prove a tail write stays on the old one.
+ */
+class FakeSessionChangesStore {
+  declare readonly _serviceBrand: undefined
+  scopeKey = 'w1'
+  private handleCounter = 0
+  readonly handles = new Map<string, string>()
+  readonly buckets = new Map<string, { order: string[]; shards: Map<string, unknown> }>()
+  readonly writes: { handle: string; scopeKey: string; sessionId: string; payload: unknown }[] = []
+  readonly removals: { handle: string; scopeKey: string; sessionId: string }[] = []
+  readonly closedHandles: string[] = []
+  /** When set, every write behaves as a rejected IPC call. */
+  failWrites = false
+  /** When set, writes park until release. */
+  private _writeGate: DeferredPromise<void> | undefined
+  private _writeEntered: DeferredPromise<void> | undefined
+
+  private _bucket(key: string): { order: string[]; shards: Map<string, unknown> } {
+    let bucket = this.buckets.get(key)
+    if (!bucket) {
+      bucket = { order: [], shards: new Map() }
+      this.buckets.set(key, bucket)
+    }
+    return bucket
+  }
+
+  seed(scopeKey: string, sessionId: string, payload: unknown): void {
+    const bucket = this._bucket(scopeKey)
+    bucket.shards.set(sessionId, payload)
+    bucket.order.push(sessionId)
+  }
+
+  order(scopeKey = this.scopeKey): string[] {
+    return [...this._bucket(scopeKey).order]
+  }
+
+  holdNextWrite(): { entered: Promise<void>; release: () => void } {
+    this._writeGate = new DeferredPromise<void>()
+    this._writeEntered = new DeferredPromise<void>()
+    return {
+      entered: this._writeEntered.p,
+      release: () => {
+        this._writeGate?.complete(undefined)
+        this._writeGate = undefined
+      },
+    }
+  }
+
+  async openBucket() {
+    const key = this.scopeKey
+    this._bucket(key)
+    const handle = `h${++this.handleCounter}`
+    this.handles.set(handle, key)
+    return { handle, scope: StorageScope.WORKSPACE, label: key }
+  }
+
+  private _key(handle: string): string {
+    const key = this.handles.get(handle)
+    if (!key) throw new Error('unknown handle')
+    return key
+  }
+
+  async list(handle: string) {
+    const bucket = this._bucket(this._key(handle))
+    return bucket.order.map((sessionId) => ({
+      sessionId,
+      bytes: JSON.stringify(bucket.shards.get(sessionId))?.length ?? 0,
+    }))
+  }
+
+  async read(handle: string, sessionId: string) {
+    const bucket = this._bucket(this._key(handle))
+    if (!bucket.shards.has(sessionId)) return { status: 'missing' as const }
+    return { status: 'ok' as const, payload: bucket.shards.get(sessionId) }
+  }
+
+  async write(handle: string, sessionId: string, payload: unknown) {
+    const scopeKey = this._key(handle)
+    this.writes.push({ handle, scopeKey, sessionId, payload })
+    if (this._writeGate) {
+      this._writeEntered?.complete(undefined)
+      await this._writeGate.p
+    }
+    if (this.failWrites) return { ok: false as const, error: 'ipc down' }
+    const bucket = this._bucket(scopeKey)
+    bucket.shards.set(sessionId, payload)
+    bucket.order = bucket.order.filter((id) => id !== sessionId)
+    bucket.order.push(sessionId)
+    return { ok: true as const }
+  }
+
+  async remove(handle: string, sessionId: string) {
+    const scopeKey = this._key(handle)
+    this.removals.push({ handle, scopeKey, sessionId })
+    const bucket = this._bucket(scopeKey)
+    bucket.shards.delete(sessionId)
+    bucket.order = bucket.order.filter((id) => id !== sessionId)
+  }
+
+  async flush(): Promise<void> {}
+
+  async closeBucket(handle: string): Promise<void> {
+    this.closedHandles.push(handle)
+    this.handles.delete(handle)
+  }
 }
 
 /** Minimal IFileService: only readFileText/stat are exercised by the tracker. */
@@ -213,8 +328,10 @@ function makePressure(): MemoryPressureService {
 function makeService(platform: HostPlatform = 'linux'): {
   svc: SessionChangeTrackerService
   files: FakeFileService
+  store: FakeSessionChangesStore
 } {
   const files = new FakeFileService()
+  const store = new FakeSessionChangesStore()
   const svc = new SessionChangeTrackerService(
     new FakeStorage(),
     new FakeWorkspaceService(),
@@ -223,9 +340,11 @@ function makeService(platform: HostPlatform = 'linux'): {
     files,
     new UriIdentityService(platform),
     makePressure(),
+    store,
   )
   svc.recomputeThrottleMs = 0 // no throttle in tests — the 5ms flush settles it
-  return { svc, files }
+  svc.yieldBetweenPersists = async () => {}
+  return { svc, files, store }
 }
 
 /** Let the async _recompute (reads file off disk) settle. */
@@ -428,6 +547,9 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
         info: (msg: string) => {
           infos.push(msg)
         },
+        warn: (msg: string) => {
+          infos.push(msg)
+        },
       } as unknown as ILogger
     }
     setLevel(): void {}
@@ -441,9 +563,16 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     maxSessionBytes?: number
     maxTotalBytes?: number
     storage?: FakeStorage
+    store?: FakeSessionChangesStore
     loggerService?: ILoggerService
-  }): { svc: SessionChangeTrackerService; files: FakeFileService; storage: FakeStorage } {
+  }): {
+    svc: SessionChangeTrackerService
+    files: FakeFileService
+    storage: FakeStorage
+    store: FakeSessionChangesStore
+  } {
     const storage = overrides.storage ?? new FakeStorage()
+    const store = overrides.store ?? new FakeSessionChangesStore()
     const files = new FakeFileService()
     const svc = new SessionChangeTrackerService(
       storage,
@@ -453,21 +582,20 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
       files,
       new UriIdentityService('linux'),
       makePressure(),
+      store,
     )
     svc.recomputeThrottleMs = 0
+    svc.yieldBetweenPersists = async () => {}
     if (overrides.maxTrackedSessions !== undefined) {
       svc.maxTrackedSessions = overrides.maxTrackedSessions
     }
     if (overrides.maxSessionBytes !== undefined) svc.maxSessionBytes = overrides.maxSessionBytes
     if (overrides.maxTotalBytes !== undefined) svc.maxTotalBytes = overrides.maxTotalBytes
-    return { svc, files, storage }
+    return { svc, files, storage, store }
   }
 
-  function persistedSessionIds(storage: FakeStorage): string[] {
-    const raw = storage.buckets.get(StorageScope.WORKSPACE)?.get('acp.sessionChanges') as
-      | { sessions: { sessionId: string }[] }
-      | undefined
-    return (raw?.sessions ?? []).map((s) => s.sessionId)
+  function persistedSessionIds(store: FakeSessionChangesStore): string[] {
+    return store.order()
   }
 
   /** ~100-byte batch, comfortably below the small budgets used here. */
@@ -478,16 +606,25 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     }
   }
 
+  function shard(
+    sessionId: string,
+    files: readonly unknown[],
+    schemaVersion = 3,
+  ): { schemaVersion: number; sessionId: string; files: readonly unknown[] } {
+    return { schemaVersion, sessionId, files }
+  }
+
   it('skips a single batch that alone exceeds the per-session budget', async () => {
-    const { svc, files, storage } = makeBudgeted({ maxSessionBytes: 64 })
+    const { svc, files, store } = makeBudgeted({ maxSessionBytes: 64 })
     await svc.initialize()
     files.set('/work/big.ts', 'x'.repeat(500))
     const obs = svc.changesFor(SID)
     svc.record(SID, '/work/big.ts', 'tc-big', [createHunk(['x'.repeat(500)])], { created: true })
     await flush()
     expect(obs.get()).toHaveLength(0)
+    await svc.flush()
     svc.dispose()
-    expect(storage.buckets.get(StorageScope.WORKSPACE)?.has('acp.sessionChanges')).toBe(false)
+    expect(store.order()).toEqual([])
   })
 
   it('over-budget hunks drop rollback batches but keep the pinned-baseline diff', async () => {
@@ -532,72 +669,69 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
   })
 
   it('evicts the least-recently-recorded session beyond the count cap', async () => {
-    const { svc, files, storage } = makeBudgeted({ maxTrackedSessions: 3 })
+    const { svc, files, store } = makeBudgeted({ maxTrackedSessions: 3 })
     await svc.initialize()
     for (const s of ['s1', 's2', 's3', 's4']) {
       files.set(`/work/${s}.ts`, 'v')
       svc.record(s, `/work/${s}.ts`, 'tc-1', [createHunk(['v'])], { created: true })
     }
-    svc.dispose() // flush the debounced write
-    expect(persistedSessionIds(storage)).toEqual(['s2', 's3', 's4'])
+    await svc.flush()
+    svc.dispose()
+    expect(persistedSessionIds(store)).toEqual(['s2', 's3', 's4'])
   })
 
-  it('prunes over-budget and malformed sessions on load, persisting the slimmed state', async () => {
-    const storage = new FakeStorage()
-    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
-      schemaVersion: 3,
-      sessions: [
-        {
-          // Baselines alone exceed the budget — batch-clearing can't save this
-          // session, so it is dropped whole on load.
-          sessionId: 'huge',
-          files: [{ path: '/work/h.ts', batches: [], baseline: 'x'.repeat(1000) }],
-        },
-        { sessionId: 'small', files: [{ path: '/work/s.ts', batches: [smallEdit('tc-1')] }] },
-        { bogus: true },
-      ],
-    })
-    const { svc, files } = makeBudgeted({ maxSessionBytes: 512, storage })
+  it('prunes over-budget and malformed sessions on load, persisting the slimmed shards', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed(
+      'w1',
+      'huge',
+      shard('huge', [{ path: '/work/h.ts', batches: [], baseline: 'x'.repeat(1000) }]),
+    )
+    store.seed(
+      'w1',
+      'small',
+      shard('small', [{ path: '/work/s.ts', batches: [smallEdit('tc-1')] }]),
+    )
+    // Unreadable/unknown payload: kept on disk, never treated as an empty session.
+    store.seed('w1', 'bogus', { schemaVersion: 3, sessionId: 'bogus', files: 'nope' })
+    const { svc, files } = makeBudgeted({ maxSessionBytes: 512, store })
     await svc.initialize()
     files.set('/work/s.ts', 'b')
     const obs = svc.changesFor('small')
     await flush()
     expect(obs.get()).toHaveLength(1) // the healthy session survives pruning
-    svc.dispose() // flush the pruned-state write
-    expect(persistedSessionIds(storage)).toEqual(['small'])
+    await svc.flush()
+    svc.dispose()
+    expect(persistedSessionIds(store)).toEqual(['small', 'bogus'])
   })
 
   it('clears batches but keeps the session when only the batches blow the budget on load', async () => {
-    const storage = new FakeStorage()
-    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
-      schemaVersion: 3,
-      sessions: [
+    const store = new FakeSessionChangesStore()
+    store.seed(
+      'w1',
+      'bulky',
+      shard('bulky', [
         {
-          sessionId: 'bulky',
-          files: [
+          path: '/work/h.ts',
+          baseline: 'a',
+          batches: [
             {
-              path: '/work/h.ts',
-              baseline: 'a',
-              batches: [
+              toolCallId: 'tc-9',
+              hunks: [
                 {
-                  toolCallId: 'tc-9',
-                  hunks: [
-                    {
-                      oldStart: 1,
-                      oldLines: 0,
-                      newStart: 1,
-                      newLines: 1,
-                      lines: [`+${'x'.repeat(1000)}`],
-                    },
-                  ],
+                  oldStart: 1,
+                  oldLines: 0,
+                  newStart: 1,
+                  newLines: 1,
+                  lines: [`+${'x'.repeat(1000)}`],
                 },
               ],
             },
           ],
         },
-      ],
-    })
-    const { svc, files } = makeBudgeted({ maxSessionBytes: 512, storage })
+      ]),
+    )
+    const { svc, files } = makeBudgeted({ maxSessionBytes: 512, store })
     await svc.initialize()
     files.set('/work/h.ts', 'b')
     const obs = svc.changesFor('bulky')
@@ -605,37 +739,42 @@ describe('SessionChangeTrackerService — size budgets (OOM guard)', () => {
     const list = obs.get()
     expect(list).toHaveLength(1)
     expect(list[0]?.baseline).toBe('a')
+    await svc.flush()
     svc.dispose()
-    expect(persistedSessionIds(storage)).toEqual(['bulky'])
+    expect(persistedSessionIds(store)).toEqual(['bulky'])
+    // Pruning on load must reach disk: the slimmed shard is not just an
+    // in-memory view, or a restart reloads the same over-budget batches.
+    expect(store.writes.map((w) => w.sessionId)).toEqual(['bulky'])
+    const persisted = store.buckets.get('w1')?.shards.get('bulky') as {
+      files: { batches: unknown[] }[]
+    }
+    expect(persisted.files[0]?.batches).toEqual([])
   })
 
-  it('discards pre-v3 persisted data instead of migrating it', async () => {
-    const storage = new FakeStorage()
-    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
-      schemaVersion: 2,
-      sessions: [
-        { sessionId: 'legacy', files: [{ path: '/work/a.ts', batches: [smallEdit('tc-1')] }] },
-      ],
-    })
-    const { svc, files } = makeBudgeted({ storage })
+  it('keeps an unknown-schema shard untouched instead of deleting it', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed(
+      'w1',
+      'legacy',
+      shard('legacy', [{ path: '/work/a.ts', batches: [smallEdit('tc-1')] }], 2),
+    )
+    const { svc, files } = makeBudgeted({ store })
     await svc.initialize()
     files.set('/work/a.ts', 'b')
     const obs = svc.changesFor('legacy')
     await flush()
     expect(obs.get()).toHaveLength(0)
+    await svc.flush()
     svc.dispose()
+    expect(store.order()).toEqual(['legacy'])
+    expect(store.removals).toEqual([])
   })
 
   it('logs a bounded summary instead of the full state on load', async () => {
-    const storage = new FakeStorage()
-    storage.buckets.get(StorageScope.WORKSPACE)?.set('acp.sessionChanges', {
-      schemaVersion: 3,
-      sessions: [
-        { sessionId: 's1', files: [{ path: '/work/a.ts', batches: [smallEdit('tc-1')] }] },
-      ],
-    })
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 's1', shard('s1', [{ path: '/work/a.ts', batches: [smallEdit('tc-1')] }]))
     const loggers = new CapturingLoggerService()
-    const { svc } = makeBudgeted({ storage, loggerService: loggers })
+    const { svc } = makeBudgeted({ store, loggerService: loggers })
     await svc.initialize()
     const loadLine = loggers.infos.find((m) => m.includes('loaded from'))
     expect(loadLine).toBeDefined()
@@ -1048,6 +1187,7 @@ describe('SessionChangeTrackerService — remote workspace (bare POSIX paths inh
       files,
       new UriIdentityService('linux'),
       makePressure(),
+      new FakeSessionChangesStore(),
     )
     svc.recomputeThrottleMs = 0
     return { svc, files }
@@ -1109,6 +1249,7 @@ describe('SessionChangeTrackerService — edit-storm resilience (EMFILE guard)',
       files,
       new UriIdentityService('linux'),
       makePressure(),
+      new FakeSessionChangesStore(),
     )
     svc.recomputeThrottleMs = throttleMs
     return { svc, files }
@@ -1627,6 +1768,7 @@ describe('SessionChangeTrackerService — memory pressure releaser', () => {
       files,
       new UriIdentityService('linux'),
       pressure,
+      new FakeSessionChangesStore(),
     )
     svc.recomputeThrottleMs = 0
     return { svc, files, pressure }
@@ -1694,6 +1836,269 @@ describe('SessionChangeTrackerService — memory pressure releaser', () => {
   it('reports nothing when there are no live texts to give back', () => {
     const { svc, pressure } = makeWithPressure()
     expect(pressure.release(MemoryPressureLevel.Critical)).toEqual([])
+    svc.dispose()
+  })
+})
+
+describe('SessionChangeTrackerService — sharded persistence', () => {
+  function shardOf(
+    sessionId: string,
+    files: readonly unknown[],
+    schemaVersion = 3,
+  ): { schemaVersion: number; sessionId: string; files: readonly unknown[] } {
+    return { schemaVersion, sessionId, files }
+  }
+
+  function persistedFile(path: string, baseline: string): unknown {
+    return { path, batches: [], batchCount: 0, origin: 'agent', baseline }
+  }
+
+  function shardIn(
+    store: FakeSessionChangesStore,
+    sessionId: string,
+    scopeKey = store.scopeKey,
+  ): { files: { path: string; batches: unknown[] }[] } | undefined {
+    return store.buckets.get(scopeKey)?.shards.get(sessionId) as
+      | { files: { path: string; batches: unknown[] }[] }
+      | undefined
+  }
+
+  function makeTracker(overrides: {
+    store?: FakeSessionChangesStore
+    storage?: FakeStorage
+    maxTrackedSessions?: number
+  }): {
+    svc: SessionChangeTrackerService
+    files: FakeFileService
+    storage: FakeStorage
+    store: FakeSessionChangesStore
+  } {
+    const storage = overrides.storage ?? new FakeStorage()
+    const store = overrides.store ?? new FakeSessionChangesStore()
+    const files = new FakeFileService()
+    const svc = new SessionChangeTrackerService(
+      storage,
+      new FakeWorkspaceService(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+      files,
+      new UriIdentityService('linux'),
+      makePressure(),
+      store,
+    )
+    svc.recomputeThrottleMs = 0
+    svc.yieldBetweenPersists = async () => {}
+    if (overrides.maxTrackedSessions !== undefined) {
+      svc.maxTrackedSessions = overrides.maxTrackedSessions
+    }
+    return { svc, files, storage, store }
+  }
+
+  it('sends only the dirty session, never the other sessions bodies', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed(
+      'w1',
+      'cold',
+      shardOf('cold', [persistedFile('/work/cold.ts', 'cold-only-baseline')]),
+    )
+    store.seed('w1', 'hot', shardOf('hot', []))
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+
+    files.set('/work/hot.ts', 'b')
+    svc.record('hot', '/work/hot.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+
+    expect(store.writes).toHaveLength(1)
+    const write = store.writes[0]!
+    expect(write.sessionId).toBe('hot')
+    expect(JSON.stringify(write.payload)).not.toContain('cold-only-baseline')
+    expect(JSON.stringify(write.payload)).toContain('/work/hot.ts')
+    svc.dispose()
+  })
+
+  it('keeps a mutation made while its write is in flight', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+
+    const gate = store.holdNextWrite()
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    const firstFlush = svc.flush()
+    await gate.entered
+    svc.record('s1', '/work/a.ts', 'tc-2', [createHunk(['c'])])
+    gate.release()
+    await firstFlush
+
+    await svc.flush()
+    expect(store.writes).toHaveLength(2)
+    expect(shardIn(store, 's1')?.files[0]?.batches).toHaveLength(2)
+    svc.dispose()
+  })
+
+  it('retains a failed write and retries it on the next mutation', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+
+    store.failWrites = true
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+    expect(store.writes).toHaveLength(1)
+    expect(shardIn(store, 's1')).toBeUndefined()
+
+    store.failWrites = false
+    svc.record('s1', '/work/a.ts', 'tc-2', [createHunk(['c'])])
+    await svc.flush()
+
+    expect(store.writes).toHaveLength(2)
+    expect(shardIn(store, 's1')?.files[0]?.batches).toHaveLength(2)
+    svc.dispose()
+  })
+
+  it('removes the shard when a session is cleared', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+    svc.record('s1', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+
+    svc.clear('s1')
+    await svc.flush()
+
+    expect(store.removals.map((r) => r.sessionId)).toEqual(['s1'])
+    expect(store.order()).not.toContain('s1')
+    svc.dispose()
+  })
+
+  it('persists the post-rewind batches instead of the rolled-back ones', async () => {
+    const store = new FakeSessionChangesStore()
+    const { svc, files } = makeTracker({ store })
+    await svc.initialize()
+    files.set('/work/f.ts', ['a', 'TWO', 'c'].join('\n'))
+    svc.record('s1', '/work/f.ts', 'tc-1', [
+      { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-A', '+a'] },
+    ])
+    svc.record('s1', '/work/f.ts', 'tc-2', [
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1, lines: ['-ONE', '+TWO'] },
+    ])
+    await svc.flush()
+
+    await svc.restore('s1', ['tc-2'])
+    await svc.flush()
+
+    const batches = shardIn(store, 's1')?.files[0]?.batches as { toolCallId: string }[] | undefined
+    expect(batches?.map((b) => b.toolCallId)).toEqual(['tc-1'])
+    svc.dispose()
+  })
+
+  it('drops load-pruned sessions from the store, not just memory', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 'old', shardOf('old', [persistedFile('/work/old.ts', 'o')]))
+    store.seed('w1', 'new', shardOf('new', [persistedFile('/work/new.ts', 'n')]))
+    const { svc } = makeTracker({ store, maxTrackedSessions: 1 })
+    await svc.initialize()
+    await svc.flush()
+
+    expect(svc.hasEntry('old', '/work/old.ts')).toBe(false)
+    expect(svc.hasEntry('new', '/work/new.ts')).toBe(true)
+    expect(store.removals.map((r) => r.sessionId)).toEqual(['old'])
+    expect(store.order()).toEqual(['new'])
+    svc.dispose()
+  })
+
+  it('skips an unreadable shard without deleting or treating it as empty', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 'good', shardOf('good', [persistedFile('/work/g.ts', 'g')]))
+    store.seed('w1', 'unknown', shardOf('unknown', [], 99))
+    const { svc } = makeTracker({ store })
+    await svc.initialize()
+    await svc.flush()
+
+    expect(svc.hasEntry('good', '/work/g.ts')).toBe(true)
+    expect(svc.hasEntry('unknown', '/work/u.ts')).toBe(false)
+    expect(store.removals).toEqual([])
+    expect(store.order()).toContain('unknown')
+    svc.dispose()
+  })
+
+  it('merges edits made before initialize finished into the loaded shard', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 'old', shardOf('old', []))
+    const { svc, files } = makeTracker({ store })
+    files.set('/work/a.ts', 'b')
+    svc.record('old', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+
+    await svc.initialize()
+    await svc.flush()
+
+    const filesOnDisk = shardIn(store, 'old')?.files
+    expect(filesOnDisk).toHaveLength(1)
+    expect(filesOnDisk?.[0]?.path).toBe('/work/a.ts')
+    expect(filesOnDisk?.[0]?.batches).toHaveLength(1)
+    svc.dispose()
+  })
+
+  it('keeps a tail write on the outgoing bucket after a workspace switch', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 'old', shardOf('old', []))
+    const storage = new FakeStorage()
+    const { svc, files } = makeTracker({ store, storage })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+
+    const gate = store.holdNextWrite()
+    svc.record('old', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    const firstFlush = svc.flush()
+    await gate.entered
+    svc.record('old', '/work/a.ts', 'tc-2', [createHunk(['c'])])
+
+    store.scopeKey = 'w2'
+    storage.fireWorkspaceScope()
+    gate.release()
+    await firstFlush
+
+    await expect
+      .poll(() => [...store.handles.values()].includes('w2'), { timeout: 1000 })
+      .toBe(true)
+    await svc.flush()
+
+    expect(store.writes.every((w) => w.scopeKey === 'w1')).toBe(true)
+    expect(store.buckets.get('w2')?.shards.size ?? 0).toBe(0)
+    expect(svc.hasEntry('old', '/work/a.ts')).toBe(false)
+    svc.dispose()
+  })
+
+  it('retries a failed outgoing-bucket drain through its own handle after the swap', async () => {
+    const store = new FakeSessionChangesStore()
+    store.seed('w1', 'old', shardOf('old', []))
+    const storage = new FakeStorage()
+    const { svc, files } = makeTracker({ store, storage })
+    await svc.initialize()
+    files.set('/work/a.ts', 'b')
+
+    store.failWrites = true
+    svc.record('old', '/work/a.ts', 'tc-1', [createHunk(['b'])], { baseline: 'a' })
+    await svc.flush()
+    expect(shardIn(store, 'old', 'w1')?.files).toHaveLength(0)
+
+    const gate = store.holdNextWrite()
+    store.scopeKey = 'w2'
+    storage.fireWorkspaceScope()
+    await gate.entered
+    gate.release()
+    await expect
+      .poll(() => [...store.handles.values()].includes('w2'), { timeout: 1000 })
+      .toBe(true)
+
+    store.failWrites = false
+    await svc.flush()
+    expect(shardIn(store, 'old', 'w1')?.files[0]?.batches).toHaveLength(1)
+    expect(store.writes.filter((w) => w.scopeKey === 'w2')).toHaveLength(0)
+    expect(svc.hasEntry('old', '/work/a.ts')).toBe(false)
     svc.dispose()
   })
 })

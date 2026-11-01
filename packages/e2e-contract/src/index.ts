@@ -362,6 +362,64 @@ export interface E2EAcpSessionCreateProfile {
   readonly pooledConnection: boolean
 }
 
+/** One hunk as the change tracker records it (same shape as `DiffHunk`). */
+export interface E2ESessionChangeHunk {
+  readonly oldStart: number
+  readonly oldLines: number
+  readonly newStart: number
+  readonly newLines: number
+  readonly lines: readonly string[]
+}
+
+/** One tracked file in a session's change shard, as held in memory. */
+export interface E2ESessionChangeFile {
+  readonly path: string
+  readonly origin: 'agent' | 'watched'
+  /** Rollback batches currently retained (0 after a rewind or a load prune). */
+  readonly batchCount: number
+  readonly hasBaseline: boolean
+  readonly baselineSource?: 'reported' | 'git'
+  readonly created: boolean
+  readonly ignored: boolean
+}
+
+export interface E2ESessionChangesSnapshot {
+  readonly sessionId: string
+  readonly files: readonly E2ESessionChangeFile[]
+  /** Serialized bytes the tracker attributes to this session. */
+  readonly bytes: number
+}
+
+export interface E2ESessionChangeImpact {
+  readonly filesChanged: readonly string[]
+  readonly insertions: number
+  readonly deletions: number
+}
+
+/** One outbound frame observed by the renderer IPC bootstrap (shape only, never a body). */
+export interface E2EIpcFrameObservation {
+  readonly type: string
+  readonly channel: string
+  readonly name: string
+  readonly id: number
+  readonly bytes: number
+  readonly startTime: number
+  readonly durationMs: number
+}
+
+/** Cumulative outbound-encode diagnostics since the last reset. */
+export interface E2EIpcEncodeStats {
+  readonly count: number
+  /** Frames at or above the 4MiB large-frame line. */
+  readonly largeCount: number
+  /** Frames whose synchronous encode took at least 5ms. */
+  readonly slowCount: number
+  readonly largestBytes: number
+  readonly largest: E2EIpcFrameObservation | null
+  /** Most recent observations, newest last (bounded ring). */
+  readonly recent: readonly E2EIpcFrameObservation[]
+}
+
 /** One recorded slow interaction (≥ warn threshold) with its decomposition and
  *  attribution — the rows of the Interaction Performance report's slowest table. */
 export interface E2EInteractionPerfSlowEntry {
@@ -1302,6 +1360,33 @@ export interface E2EProbe {
    * without scraping the Output channel.
    */
   getAcpSessionCreateProfiles(): readonly E2EAcpSessionCreateProfile[]
+  // -- Session change shards (main-owned persistence) ----------------------
+  /**
+   * Record a tool-call edit exactly as the agent bridge would. Flush it with
+   * `sessionChangesFlush` before reading it back.
+   */
+  sessionChangesRecord(
+    sessionId: string,
+    path: string,
+    toolCallId: string,
+    hunks: readonly E2ESessionChangeHunk[],
+    opts?: { readonly created?: boolean; readonly baseline?: string | null },
+  ): void
+  /** In-memory view of one session's tracked files and retained bytes. */
+  sessionChangesRead(sessionId: string): E2ESessionChangesSnapshot
+  /** Preview (without touching disk) the impact of un-applying these tool calls. */
+  sessionChangesPreviewRestore(
+    sessionId: string,
+    toolCallIds: readonly string[],
+  ): Promise<E2ESessionChangeImpact>
+  /** Drain every dirty shard and the debounce; resolves once main has them. */
+  sessionChangesFlush(): Promise<void>
+  /**
+   * Outbound-encode counters. Reset it immediately before a scenario and read it
+   * after, so the assertion covers only the operation under test.
+   */
+  resetIpcEncodeStats(): void
+  getIpcEncodeStats(): E2EIpcEncodeStats
   /**
    * Snapshot of the active session's pending elicitation (form mode), or
    * undefined when none is awaiting an answer. `fields` lists the normalized

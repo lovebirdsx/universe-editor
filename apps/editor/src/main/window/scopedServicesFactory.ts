@@ -56,6 +56,7 @@ import type { IRemoteConnectionService } from '../services/remote/remoteConnecti
 import type { RemoteStatusMainService } from '../services/remoteStatus/remoteStatusMainService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { IAuxiliaryWindowsService } from '../../shared/ipc/auxiliaryWindowService.js'
+import type { ISessionChangesStoreService } from '../../shared/ipc/sessionChangesStoreService.js'
 
 /** Services shared across all windows. Instantiated once at app startup. */
 export interface ApplicationServices {
@@ -154,6 +155,7 @@ export interface WindowScopedServices {
   readonly logChannel: ILogChannelService
   readonly logFiles: ILogFilesService
   readonly storage: IStorageService
+  readonly sessionChangesStore: ISessionChangesStoreService
   readonly workspace: IWorkspaceServiceWire
   readonly userData: IUserDataFilesService
   readonly terminal: ITerminalService

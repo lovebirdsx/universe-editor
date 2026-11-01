@@ -8,7 +8,7 @@
 
 ## 预算降级与持久化版本
 
-超 per-session 预算时先**丢 batches 保 baseline**（diff 存活，rewind 回滚降级），baselines 单独仍超限才丢整个会话（`sessionChangeTracker.ts:160/455/477`）。持久化 `SCHEMA_VERSION = 3`：v1/v2 的数据**直接丢弃不迁移**。会话级活行内存降级与预算读数另见 [cases-memory-budget.md](cases-memory-budget.md) 与 `docs/development/memory-pressure.md`。
+超 per-session 预算时先**丢 batches 保 baseline**（diff 存活，rewind 回滚降级），baselines 单独仍超限才丢整个会话（`sessionChangeTracker.ts:160/455/477`）。持久化 `SCHEMA_VERSION = 3`：v1/v2 的数据**直接丢弃不迁移**。**落盘不再是单个 `acp.sessionChanges` value**：main 的 `sessionChangesStoreMainService` 按 `<userData>/session-changes/<workspaceId|global>/sessions/<sha256(sessionId)>.json` 分片（每片 `{schemaVersion, sessionId, files}`），manifest 只存 id/bytes/LRU；tracker 经 `ISessionChangesStoreService` 只写脏会话，句柄钉住打开时的 bucket，工作区切换的尾写不会串桶；旧桶排空（或重试清空）后释放句柄，main 按引用计数在最后一个句柄释放时淘汰该 bucket 的 manifest/分片内存缓存（GLOBAL 与多窗口共享不受影响），窗口 dispose 兜底释放本窗口全部句柄。legacy 单 blob 由 main 在首次打开 bucket 时逐片导入、读回校验、全部成功才删 key；失败/未知 shape 保留 legacy，manifest 读不懂时按分片重建列表而不覆盖它。单分片读/解析失败只跳过该会话并保留原文件，绝不当空会话删除。会话级活行内存降级与预算读数另见 [cases-memory-budget.md](cases-memory-budget.md) 与 `docs/development/memory-pressure.md`。
 
 ## fs-watch 兜底链路（`SessionWatchedChangesContribution`）
 
@@ -55,7 +55,7 @@ watched 行显「推测」徽标（`acp-changes-inferred`）+ hover EyeOff 忽�
 
 ## 测试清单与三个坑
 
-单测：`sessionChangeTracker.test.ts`（pinned baseline / watched / 预算降级 / v3 持久化 / 跨 casing 去重）、`acpSessionUpdateMeta.test.ts`（`readFileChanges` claude/codex 两路）、`SessionWatchedChangesContribution.test.ts`（含 gitignore 过滤与降级）、`SessionChangesView.test.tsx`（含徽标/忽略/casing 相对化）、git 扩展 `extensions/git/src/__tests__/repository.test.ts`（`checkIgnore`，真实 temp repo）；e2e `smoke.sessionChanges.spec.ts`（@p1 全链路）。
+单测：`sessionChangeTracker.test.ts`（pinned baseline / watched / 预算降级 / v3 持久化 / 跨 casing 去重 / `sharded persistence` 组：只写脏会话、在途与失败重试、clear/LRU/rewind、启动前合并、切区尾写归旧桶、读坏分片不删除）、加载预算裁剪后 `flush` 会把 slim 分片写回（`bulky` 用例断言 batches 为空）、`main/services/storage/__tests__/sessionChangesStoreMainService.test.ts`（分片 CRUD、sessionId 不逃逸目录、legacy 导入成功/失败保留、未知 shape、未知 manifest 按分片恢复、真实 createStorage manifest 回读、句柄钉桶/复用/引用计数淘汰、多窗口共享）、`persistedStateBase.test.ts`（切区先排空在途写、加载抛错不覆盖状态、flush 排空在途编辑写入、失败不无限重试、切区串行化不发布过期 load、初始化与切区重叠）、`acpSessionUpdateMeta.test.ts`（`readFileChanges` claude/codex 两路）、`SessionWatchedChangesContribution.test.ts`（含 gitignore 过滤与降级）、`SessionChangesView.test.tsx`（含徽标/忽略/casing 相对化）、git 扩展 `extensions/git/src/__tests__/repository.test.ts`（`checkIgnore`，真实 temp repo）；e2e `smoke.sessionChanges.spec.ts`（@p1 全链路）与 `smoke.acpSessionChangesShards.spec.ts`（legacy 分片迁移/单会话写/重启恢复）。
 
 坑：① `makeScm` 测试桩的默认参数用 `string | null`——显式传 `undefined` 会命中默认值；② `toolResponse.type: 'create'` 与 `originalFile: null` 都是 created 信号；③ **Bash 工具的改动不上报**——这正是 watcher 兜底链路存在的原因。
 

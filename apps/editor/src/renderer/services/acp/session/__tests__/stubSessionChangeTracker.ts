@@ -38,6 +38,9 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   initialize(): Promise<void> {
     return Promise.resolve()
   }
+  flush(): Promise<void> {
+    return Promise.resolve()
+  }
   record(
     sessionId: string,
     path: string,

@@ -65,6 +65,26 @@ export class MainStorageService implements IStorageService {
     this.whenReady = this._purgeLegacyWorkspaceKeys()
   }
 
+  /** The app-singleton GLOBAL backend (state.json). Main-only. */
+  get globalStorage(): Storage {
+    return this._global
+  }
+
+  /** Id of the workspace bucket currently bound, or null for an empty window. */
+  get workspaceId(): string | null {
+    return this._workspaceId
+  }
+
+  /**
+   * Storage instance for the workspace bucket currently bound. It stays valid
+   * after a switch (the instance is simply no longer the active writer), which
+   * is what lets a first-open legacy import finish against the bucket it
+   * started on instead of the newly active one.
+   */
+  get workspaceStorage(): Storage | null {
+    return this._workspace
+  }
+
   async get<T = unknown>(
     key: string,
     scope: StorageScope = StorageScope.GLOBAL,

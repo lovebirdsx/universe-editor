@@ -57,13 +57,14 @@ describe('WindowScopedServices type', () => {
       logChannel: {} as WindowScopedServices['logChannel'],
       logFiles: {} as WindowScopedServices['logFiles'],
       storage: {} as WindowScopedServices['storage'],
+      sessionChangesStore: {} as WindowScopedServices['sessionChangesStore'],
       workspace: {} as WindowScopedServices['workspace'],
       userData: {} as WindowScopedServices['userData'],
       terminal: {} as WindowScopedServices['terminal'],
       fileWatcher: {} as WindowScopedServices['fileWatcher'],
       auxiliaryWindows: {} as WindowScopedServices['auxiliaryWindows'],
     }
-    expect(Object.keys(svc)).toHaveLength(9)
+    expect(Object.keys(svc)).toHaveLength(10)
   })
 })
 
