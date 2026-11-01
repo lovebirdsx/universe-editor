@@ -959,7 +959,13 @@ export function GitGraphEditor({ input }: { input: IEditorInput }) {
         const previous = resultRef.current
         const next =
           shallow && previous
-            ? { ...r, commits: mergeShallowRefresh(previous.commits, r.commits) }
+            ? {
+                ...r,
+                commits: mergeShallowRefresh(previous.commits, r.commits),
+                // The flag describes this first-page query, not the merged list:
+                // a finished Load all already holds the whole history.
+                moreAvailable: previous.moreAvailable,
+              }
             : r
         setResult(next)
         setSelection((prev) => {

@@ -393,7 +393,9 @@ describe('GitGraphEditor load all', () => {
 
   it('shallow-refreshes a fully loaded list instead of dropping the tail', async () => {
     let fresh = resultWith([C1, C2, C3], true)
-    const { executeCommand } = renderEditor({ getCommits: () => fresh })
+    const { executeCommand, getByTestId, queryByTestId } = renderEditor({
+      getCommits: () => fresh,
+    })
     await flush()
     await act(async () => {
       gitGraphViewState.loadAll?.()
@@ -403,7 +405,9 @@ describe('GitGraphEditor load all', () => {
     expect(gitGraphViewState.loadMode).toBe('full')
 
     // A background refresh only fetches the first page; older commits survive.
-    fresh = resultWith([C1], false)
+    // The page still reports more history than it returned (a repo larger than
+    // one page), which must not mark the fully loaded list as incomplete.
+    fresh = { ...resultWith([C1], true), headName: 'release' }
     await act(async () => {
       gitGraphViewState.refresh?.()
     })
@@ -420,5 +424,34 @@ describe('GitGraphEditor load all', () => {
       C2.hash,
       C3.hash,
     ])
+    expect(gitGraphViewState.result?.moreAvailable).toBe(false)
+    expect(gitGraphViewState.result?.headName).toBe('release')
+    const count = getByTestId('gitGraph-commitCount')
+    expect(count.textContent).toContain('3 commits')
+    expect(count.textContent).not.toContain('+')
+    expect(queryByTestId('gitGraph-loadAll')).toBeNull()
+    expect(queryByTestId('gitGraph-loadMore')).toBeNull()
+  })
+
+  it('keeps the partial marker when a shallow page looks complete', async () => {
+    let fresh = resultWith([C1, C2, C3], true)
+    const { executeCommand, getByTestId } = renderEditor({ getCommits: () => fresh })
+    await flush()
+    await act(async () => {
+      gitGraphViewState.loadAll?.()
+    })
+    await flush()
+    await feed(batch(streamIdOf(executeCommand), [C1, C2, C3], { done: true, moreAvailable: true }))
+    expect(gitGraphViewState.loadMode).toBe('partial')
+
+    fresh = resultWith([C1], false)
+    await act(async () => {
+      gitGraphViewState.refresh?.()
+    })
+    await flush()
+
+    expect(gitGraphViewState.result?.moreAvailable).toBe(true)
+    expect(gitGraphViewState.loadMode).toBe('partial')
+    expect(getByTestId('gitGraph-loadAll')).toBeTruthy()
   })
 })
