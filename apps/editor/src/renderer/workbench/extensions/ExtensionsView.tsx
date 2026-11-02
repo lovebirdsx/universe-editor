@@ -35,7 +35,7 @@ import {
   type IFlatListNavigation,
   type IFlatListRowProps,
 } from '@universe-editor/workbench-ui'
-import { useEventValue, useService } from '../useService.js'
+import { useEventValue, useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import {
@@ -53,6 +53,7 @@ import { ExtensionIcon } from './ExtensionIcon.js'
 import { InstallInRemoteButton } from './InstallInRemoteButton.js'
 import { ExtensionsViewNotification } from './ExtensionsViewNotification.js'
 import { ExtensionActionsMenu, type ExtensionActionsMenuState } from './ExtensionActionsMenu.js'
+import { extensionsViewState } from './extensionsViewState.js'
 import styles from './ExtensionsView.module.css'
 
 const SEARCH_DEBOUNCE_MS = 300
@@ -154,13 +155,12 @@ export function ExtensionsView() {
   )
 
   const [marketplaceEnabled, setMarketplaceEnabled] = useState(false)
-  const [query, setQuery] = useState('')
+  const query = useObservable(extensionsViewState.query)
   const listQuery = parseExtensionListQuery(query)
   const [dropActive, setDropActive] = useState(false)
   const [menu, setMenu] = useState<ExtensionActionsMenuState | undefined>(undefined)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   const [focusedKey, setFocusedKey] = useState<string | undefined>(undefined)
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const getContainer = useCallback(() => scrollRef.current, [])
@@ -180,28 +180,30 @@ export function ExtensionsView() {
     void service.refreshInstalled()
   }, [service])
 
-  const onQueryChange = useCallback(
-    (value: string) => {
-      setQuery(value)
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-      debounceRef.current = setTimeout(() => {
-        // Local queries (@builtin / @updates / plain text over the installed
-        // list) never hit the marketplace.
-        const local = parseExtensionListQuery(value)
-        if (local.builtin || local.outdated) return
-        if (value.trim()) void service.search(value)
-        else void service.loadFeatured()
-      }, SEARCH_DEBOUNCE_MS)
-    },
-    [service],
-  )
+  const onQueryChange = useCallback((value: string) => {
+    extensionsViewState.setQuery(value)
+  }, [])
 
-  useEffect(
-    () => () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    },
-    [],
-  )
+  // The title-bar menu writes the same store, so both entry points share one
+  // debounce/marketplace path. The ref skips the initial run: mounting already
+  // loads the featured list.
+  const previousQueryRef = useRef(query)
+  useEffect(() => {
+    if (previousQueryRef.current === query) return
+    previousQueryRef.current = query
+    const timer = setTimeout(() => {
+      // Local-only queries (@builtin / @updates) never hit the marketplace.
+      const local = parseExtensionListQuery(query)
+      if (local.builtin || local.outdated) return
+      if (query.trim()) void service.search(query)
+      else void service.loadFeatured()
+    }, SEARCH_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [query, service])
+
+  // Preserve component-state semantics: a rebuilt view starts with an empty
+  // search box (and this also keeps tests isolated from the module-level store).
+  useEffect(() => () => extensionsViewState.reset(), [])
 
   const openDetail = useCallback(
     (entry: IExtensionEntry) => {

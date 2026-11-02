@@ -16,16 +16,38 @@ export interface IExtensionListQuery {
   readonly text: string
 }
 
+export type ExtensionListFilter = 'builtin' | 'updates'
+
+const BUILTIN_TOKEN = /@builtin/i
+// VSCode's user-facing filter is `@updates`; `@outdated` is accepted as an alias.
+const UPDATES_TOKEN = /@(updates|outdated)\b/i
+
 export function parseExtensionListQuery(value: string): IExtensionListQuery {
-  const builtin = /@builtin/i.test(value)
-  // VSCode's user-facing filter is `@updates`; `@outdated` is accepted as an alias.
-  const outdated = /@(updates|outdated)\b/i.test(value)
+  const builtin = BUILTIN_TOKEN.test(value)
+  const outdated = UPDATES_TOKEN.test(value)
   const text = value
     .replaceAll(/@builtin/gi, '')
     .replaceAll(/@(updates|outdated)\b/gi, '')
     .trim()
     .toLowerCase()
   return { builtin, outdated, text }
+}
+
+/**
+ * Toggle one filter token while keeping the query the single source of truth.
+ * Tokens are re-emitted first in a fixed order so the search box stays readable
+ * when the menu toggles them; the user's remaining text is preserved.
+ */
+export function toggleExtensionListFilter(value: string, filter: ExtensionListFilter): string {
+  const parsed = parseExtensionListQuery(value)
+  const builtin = filter === 'builtin' ? !parsed.builtin : parsed.builtin
+  const outdated = filter === 'updates' ? !parsed.outdated : parsed.outdated
+  const text = value
+    .replaceAll(/@builtin/gi, ' ')
+    .replaceAll(/@(updates|outdated)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return [builtin ? '@builtin' : '', outdated ? '@updates' : '', text].filter(Boolean).join(' ')
 }
 
 export function filterExtensionEntries(

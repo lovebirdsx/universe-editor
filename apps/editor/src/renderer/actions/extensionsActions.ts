@@ -12,7 +12,6 @@ import {
   ILayoutService,
   INotificationService,
   IQuickInputService,
-  MenuId,
   Severity,
   localize,
   localize2,
@@ -26,10 +25,7 @@ import {
 } from '../services/extensions/ExtensionEnablementService.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { IExtensionsWorkbenchService } from '../services/extensionsWorkbench/ExtensionsWorkbenchService.js'
-import {
-  EXTENSIONS_HAS_UPDATES_KEY,
-  EXTENSIONS_VIEW_ID,
-} from '../services/extensionsWorkbench/extensionsViewIds.js'
+import { EXTENSIONS_HAS_UPDATES_KEY } from '../services/extensionsWorkbench/extensionsViewIds.js'
 
 const CATEGORY = localize2('command.category.extensions', 'Extensions')
 
@@ -227,14 +223,8 @@ export class UpdateAllExtensionsAction extends Action2 {
       // activity-bar badge shows.
       precondition: EXTENSIONS_HAS_UPDATES_KEY,
       f1: true,
-      menu: [
-        {
-          id: MenuId.ViewTitle,
-          when: `view == ${EXTENSIONS_VIEW_ID}`,
-          group: 'navigation',
-          order: 1,
-        },
-      ],
+      // The view entry lives in the Extensions title-bar `…` menu
+      // (ExtensionsViewToolbar); this command keeps the palette entry.
     })
   }
 

@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { EnablementState, type IExtensionEntry } from '../ExtensionsWorkbenchService.js'
-import { filterExtensionEntries, parseExtensionListQuery } from '../extensionListQuery.js'
+import {
+  filterExtensionEntries,
+  parseExtensionListQuery,
+  toggleExtensionListFilter,
+} from '../extensionListQuery.js'
 
 function entry(
   id: string,
@@ -80,6 +84,60 @@ describe('parseExtensionListQuery', () => {
       builtin: false,
       outdated: false,
       text: '@updatesonly',
+    })
+  })
+})
+
+describe('toggleExtensionListFilter', () => {
+  it('adds a token to an empty query and removes it again', () => {
+    expect(toggleExtensionListFilter('', 'builtin')).toBe('@builtin')
+    expect(toggleExtensionListFilter('@builtin', 'builtin')).toBe('')
+  })
+
+  it('removes the token case-insensitively and keeps the remaining text', () => {
+    expect(toggleExtensionListFilter('@BUILTIN monokai', 'builtin')).toBe('monokai')
+  })
+
+  it('removes the @outdated alias when toggling updates off', () => {
+    expect(toggleExtensionListFilter('acme @OUTDATED', 'updates')).toBe('acme')
+  })
+
+  it('toggles each filter independently when both are on', () => {
+    expect(toggleExtensionListFilter('@builtin @updates', 'builtin')).toBe('@updates')
+    expect(toggleExtensionListFilter('@builtin @updates', 'updates')).toBe('@builtin')
+  })
+
+  it('prepends the canonical token order and preserves text', () => {
+    expect(toggleExtensionListFilter('monokai', 'updates')).toBe('@updates monokai')
+    expect(toggleExtensionListFilter('@builtin monokai', 'updates')).toBe(
+      '@builtin @updates monokai',
+    )
+  })
+
+  it('normalizes whitespace left behind by removed tokens', () => {
+    expect(toggleExtensionListFilter('  @builtin   foo   bar  ', 'builtin')).toBe('foo bar')
+  })
+
+  it('does not treat a word merely starting with updates as the filter', () => {
+    const toggled = toggleExtensionListFilter('@updatesonly', 'updates')
+    expect(toggled).toBe('@updates @updatesonly')
+    expect(parseExtensionListQuery(toggled)).toEqual({
+      builtin: false,
+      outdated: true,
+      text: '@updatesonly',
+    })
+  })
+
+  it('produces a query both filters parse back to', () => {
+    const toggled = toggleExtensionListFilter(
+      toggleExtensionListFilter('monokai', 'builtin'),
+      'updates',
+    )
+    expect(toggled).toBe('@builtin @updates monokai')
+    expect(parseExtensionListQuery(toggled)).toEqual({
+      builtin: true,
+      outdated: true,
+      text: 'monokai',
     })
   })
 })

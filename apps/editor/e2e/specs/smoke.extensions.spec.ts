@@ -179,6 +179,48 @@ test.describe('@p1 extensions', () => {
     await searchBox.fill('')
     await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(0)
   })
+  test('title-bar menu toggles the built-in and updates filters', async ({ workbench }) => {
+    const { activityBar, sideBar, page } = workbench
+    await workbench.waitForBootstrapFocusSettled()
+
+    await activityBar.click(EXTENSIONS_CONTAINER)
+    await expect(sideBar.root).toHaveAttribute('data-active-view-container', EXTENSIONS_CONTAINER)
+
+    const searchBox = page.getByLabel('Search Extensions')
+    const rows = page.getByTestId('extension-row')
+    await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(0)
+
+    await page.getByTestId('extensions-more-actions').click()
+    const menu = page.getByTestId('extensions-more-menu')
+    await expect(menu).toBeVisible()
+
+    const builtinItem = page.getByTestId('extensions-filter-builtin')
+    await builtinItem.click()
+    await expect(builtinItem).toHaveAttribute('aria-checked', 'true')
+    await expect(searchBox).toHaveValue('@builtin')
+    await expect(
+      page.getByTestId('extension-section-header').filter({ hasText: 'Built-in' }),
+    ).toBeVisible()
+    await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(1)
+    // Filter clicks leave the menu open so both filters can be toggled.
+    await expect(menu).toBeVisible()
+
+    // The e2e baseline has no outdated extensions, so combining with @updates
+    // empties the built-in pool.
+    const updatesItem = page.getByTestId('extensions-filter-updates')
+    await updatesItem.click()
+    await expect(searchBox).toHaveValue('@builtin @updates')
+    await expect(rows).toHaveCount(0)
+
+    await builtinItem.click()
+    await expect(searchBox).toHaveValue('@updates')
+    await updatesItem.click()
+    await expect(searchBox).toHaveValue('')
+    await expect(rows.filter({ hasText: 'Monokai Theme' })).toHaveCount(0)
+
+    await expect(page.getByTestId('extensions-menu-check-for-updates')).toBeVisible()
+    await expect(page.getByTestId('extensions-menu-update-all')).toHaveCount(0)
+  })
 })
 
 /**

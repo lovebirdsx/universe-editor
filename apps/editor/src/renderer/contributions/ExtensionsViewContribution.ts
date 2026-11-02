@@ -18,6 +18,7 @@ import {
   EXTENSIONS_VIEW_ID,
 } from '../services/extensionsWorkbench/extensionsViewIds.js'
 import { ExtensionsView } from '../workbench/extensions/ExtensionsView.js'
+import { ExtensionsViewToolbar } from '../workbench/extensions/ExtensionsViewToolbar.js'
 
 export class ExtensionsViewContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -43,6 +44,7 @@ export class ExtensionsViewContribution extends Disposable implements IWorkbench
           order: 1,
         },
         ExtensionsView,
+        ExtensionsViewToolbar,
       ),
     )
   }
