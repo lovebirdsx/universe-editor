@@ -52,6 +52,13 @@ interface NodeState {
   expanded: boolean
   loading: boolean
   error: string | null
+  /** expand() 与可见行按需拉取共用的在途读取。 */
+  pending: Promise<void> | null
+  /**
+   * 当前展开态是否已经尝试过一次结构拉取。失败后不再随每次渲染重试；
+   * 显式 expand()（用户手势）会清掉它重来。
+   */
+  autoLoadAttempted: boolean
 }
 
 function dedupeStrings(ids: readonly string[]): string[] {
@@ -162,14 +169,6 @@ export class TreeModel<T> extends Disposable {
     if (!state && hasChildren && this._defaultExpanded?.(element, depth)) {
       state = this._ensureState(id)
       state.expanded = true
-      // A default-expanded node renders open, so a lazy source must have its
-      // children pulled now — explicit expand() is the only other trigger.
-      // One-shot per materialisation (collapse → re-expand retries through
-      // expand()); on settle the structure event lets the view re-collect,
-      // which cascades into nested default-expanded levels.
-      if (this._dataSource.getChildren(element) === null) {
-        void this._pullChildren(element, state).then(() => this._emitStructure())
-      }
     }
     const expanded = hasChildren ? (state?.expanded ?? false) : false
     acc.push({
@@ -183,7 +182,12 @@ export class TreeModel<T> extends Disposable {
     })
     if (!hasChildren || !expanded) return
     const children = this._dataSource.getChildren(element)
-    if (!children) return
+    if (!children) {
+      // 展开但没有子项：恢复出来的隐藏折叠刚变可见，或数据源失效了缓存。
+      // 这里主动拉取，避免渲染成没有子行的空壳。
+      if (state) this._autoLoad(element, state)
+      return
+    }
     for (const child of children) {
       this._collect(child, depth + 1, acc)
     }
@@ -213,14 +217,22 @@ export class TreeModel<T> extends Disposable {
     const id = this._dataSource.getId(element)
     const state = this._ensureState(id)
     const wasExpanded = state.expanded
+    // 用户手势总是重试之前失败的拉取。
+    state.autoLoadAttempted = false
     state.expanded = true
     if (!wasExpanded) this._onDidChangeExpansion.fire({ element, expanded: true })
     if (this._dataSource.getChildren(element) === null) {
-      await this._pullChildren(element, state)
+      await this._loadForExpansion(element, state, this._selectionEpoch)
+      return
     }
-    if (!wasExpanded || this._dataSource.getChildren(element) !== null) {
-      this._emitStructure()
+    // 无操作分支保持同步：键盘导航依赖 expand() 在下次按键前已发布结构。
+    const resolve = this._dataSource.resolveExpandedElement
+    if (!resolve || this._dataSource.getId(resolve(element)) === id) {
+      if (!this.isDisposed) this._emitStructure()
+      return
     }
+    await this._resolveAndRemap(element, state, this._selectionEpoch)
+    if (!this.isDisposed) this._emitStructure()
   }
 
   collapse(element: T): void {
@@ -655,25 +667,137 @@ export class TreeModel<T> extends Disposable {
 
   // --- internals -----------------------------------------------------------
 
-  /** Shared children pull for expand() and default-expansion materialisation. */
-  private async _pullChildren(element: T, state: NodeState): Promise<void> {
+  /** expand() 与可见行按需拉取共用的子项拉取。 */
+  private _pullChildren(element: T, state: NodeState): Promise<void> {
     const loadChildren = this._dataSource.loadChildren
-    if (!loadChildren || state.loading) return
+    if (!loadChildren) return Promise.resolve()
+    // 同一行的并发 expand() 共享一次拉取，避免第二个提前返回而跳过链尾迁移。
+    if (state.pending) return state.pending
     state.loading = true
     state.error = null
-    try {
-      await loadChildren(element)
-    } catch (err) {
-      state.error = err instanceof Error ? err.message : String(err)
-    } finally {
-      state.loading = false
+    // 先发布 pending 再运行加载体：loadChildren 同步抛出时，finally 会在赋值前
+    // 把 pending 清空，随后留下一个已结束的 promise，后续重试被永远合并掉。
+    let settle!: () => void
+    const pending = new Promise<void>((resolve) => {
+      settle = resolve
+    })
+    state.pending = pending
+    void (async () => {
+      try {
+        await loadChildren(element)
+      } catch (err) {
+        state.error = err instanceof Error ? err.message : String(err)
+      } finally {
+        state.loading = false
+        state.pending = null
+        settle()
+      }
+    })()
+    return pending
+  }
+
+  /** 拉取一个可见的展开行（无缓存子项），每个展开态最多一次。 */
+  private _autoLoad(element: T, state: NodeState): void {
+    if (!this._dataSource.loadChildren || state.loading || state.autoLoadAttempted) return
+    state.autoLoadAttempted = true
+    void this._loadForExpansion(element, state, this._selectionEpoch)
+  }
+
+  private async _loadForExpansion(element: T, state: NodeState, epoch: number): Promise<void> {
+    const id = this._dataSource.getId(element)
+    await this._pullChildren(element, state)
+    if (this.isDisposed) return
+    // 拉取期间发生折叠 / collapseAll / reset（或节点状态被替换）时用户意图优先。
+    if (this._state.get(id) !== state || !state.expanded) return
+    // 成功拉到子项后解除一次性守卫：再次失效并重新可见时仍能自动重读；
+    // 失败（children 仍为 null）则守住本次尝试，等显式 expand 再重试。
+    state.autoLoadAttempted = this._dataSource.getChildren(element) === null
+    await this._resolveAndRemap(element, state, epoch)
+    if (!this.isDisposed) this._emitStructure()
+  }
+
+  /**
+   * 把展开态（以及用户期间未改动时的选择/焦点/锚点）交给真正拥有该行身份
+   * 的元素——compact 链尾。否则压缩后的行会渲染成折叠态、需要再点一次，
+   * 行 id 也会与选择脱节。
+   */
+  private async _resolveAndRemap(element: T, state: NodeState, epoch: number): Promise<void> {
+    if (this.isDisposed) return
+    const id = this._dataSource.getId(element)
+    if (this._state.get(id) !== state || !state.expanded) return
+    const resolve = this._dataSource.resolveExpandedElement
+    if (!resolve) return
+    let resolved = resolve(element)
+    let resolvedId = this._dataSource.getId(resolved)
+    if (resolvedId === id) return
+    let resolvedState = this._ensureState(resolvedId)
+    if (this._dataSource.getChildren(resolved) === null) {
+      await this._pullChildren(resolved, resolvedState)
+      if (this.isDisposed) return
+      // 读取期间用户折叠/重置（或状态被替换）优先：既不迁移也不再展开。
+      if (this._state.get(id) !== state || !state.expanded) return
+      // 读取可能补出更长的链，按最新缓存重新解析行身份。
+      const after = resolve(element)
+      const afterId = this._dataSource.getId(after)
+      if (afterId === id) return
+      if (afterId !== resolvedId) {
+        if (
+          this._state.get(resolvedId) === resolvedState &&
+          !resolvedState.expanded &&
+          resolvedState.error === null
+        ) {
+          this._state.delete(resolvedId)
+        }
+        resolved = after
+        resolvedId = afterId
+        resolvedState = this._ensureState(resolvedId)
+      }
     }
+    resolvedState.expanded = true
+    // 守卫必须按最终落点的加载结果设：链头拉取成功不代表链尾成功，复制旧
+    // 元素的 false 会让失败尾行在下一次渲染时再自动重试一轮。
+    resolvedState.autoLoadAttempted = this._dataSource.getChildren(resolved) === null
+    if (this._state.get(id) === state) this._state.delete(id)
+    this._remapIds(id, resolvedId, epoch)
+  }
+
+  /**
+   * 把指向压缩前行的 id 迁到接替它的行上。用户期间改动过选择时整体跳过，
+   * epoch 表明他们的新意图优先于这里的恢复。
+   */
+  private _remapIds(fromId: string, toId: string, epoch: number): void {
+    if (this._selectionEpoch !== epoch) return
+    let changed = false
+    const mapped = this._selection.map((id) => {
+      if (id !== fromId) return id
+      changed = true
+      return toId
+    })
+    const selection = dedupeStrings(mapped)
+    if (selection.length !== mapped.length) changed = true
+    if (this._focused === fromId) {
+      this._focused = toId
+      changed = true
+    }
+    if (this._anchor === fromId) {
+      this._anchor = toId
+      changed = true
+    }
+    if (!changed) return
+    this._replaceSelection(selection)
+    this._emitSelection()
   }
 
   private _ensureState(id: string): NodeState {
     let state = this._state.get(id)
     if (!state) {
-      state = { expanded: false, loading: false, error: null }
+      state = {
+        expanded: false,
+        loading: false,
+        error: null,
+        pending: null,
+        autoLoadAttempted: false,
+      }
       this._state.set(id, state)
     }
     return state

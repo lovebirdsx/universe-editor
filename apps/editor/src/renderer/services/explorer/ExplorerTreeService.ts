@@ -99,11 +99,25 @@ interface NodeState {
   children: IExplorerEntry[] | null
   loading: boolean
   error: string | null
-  /** 在途读取；expand / compact 预取 / refresh 共用，同一目录不并发 list。 */
+  /** 在途读取；expand / 链续读 / refresh 共用，同一目录不并发 list。 */
   pending: Promise<void> | null
   /** 在途期间到达的请求由此标记再读一轮：一轮内的多次刷新合并，尾读期间来的再赢得一轮。 */
   trailing: boolean
   source: LoadSource
+  /**
+   * 缓存仍可用于显示折叠行的标签/身份，但不能再回答一次新的展开：期间文件系统
+   * 可能已经变化。折叠/隐藏后只标脏不读，重新展开时从链头按需重读。
+   */
+  stale: boolean
+  /** 每次失效递增：在途 list 提交时版本变了，就不能把这次失效清掉。 */
+  invalidationVersion: number
+  /**
+   * 本次展开请求开始时的显示链头。行 id 是链尾，重读可能让链伸缩甚至上移
+   * （`config/raw/tables` 里 `raw` 冒出兄弟后行变成 `config/raw`），此时不能
+   * 只从旧链尾向下找新链尾——旧链尾已经藏在新的折叠行下面。只属于发起读取
+   * 的那个节点，随节点缓存丢弃/下次读取覆盖，不是第二套全局身份缓存。
+   */
+  expansionChainHead: URI | null
 }
 
 function basename(resource: URI): string {
@@ -148,21 +162,39 @@ export class ExplorerTreeService extends Disposable {
     getId: (e) => e.resource.toString(),
     hasChildren: (e) => e.isDirectory,
     getChildren: (e) => {
-      const raw = this._nodes.get(e.resource.toString())?.children ?? null
-      if (!raw) return null
-      // A directory child whose chain is only half-cached would render plain
-      // now and compact later — and compacting moves the row id to the chain
-      // tail, which silently drops selection and focus. Reporting "not ready"
-      // routes expand() through loadChildren, which completes the chains first.
-      if (raw.some((c) => c.isDirectory && !this._compactChainReady(c.resource))) return null
-      return this._computeCompactChildren(raw)
+      const node = this._nodes.get(e.resource.toString())
+      if (!node || node.children === null || node.stale) return null
+      // 读取失败对模型等同于“未加载”：显式展开或可见行拉取会重试，模型的一次性
+      // 守卫阻止渲染循环。
+      if (node.error !== null) return null
+      // 行 id 若是 compact 链尾，链上任一中间节点失效都意味着身份未验证：交给
+      // loadChildren 从链头重读，别用旧缓存回答一次新展开。
+      if (!this._isCompactChainFresh(e.resource)) return null
+      return this._computeCompactChildren(node.children)
     },
     loadChildren: async (e) => {
       const generation = this._generation
-      await this._ensureChildrenLoaded(e.resource, 'expand')
-      // 读取期间换根会作废本次将触碰的全部节点；继续走会把旧根目录 _ensureNode 回新树。
-      if (generation !== this._generation) return
-      await this._ensureCompactChainsFor(this._ensureNode(e.resource).children ?? [], generation)
+      // 只为被请求的目录建立唯一目录链；分叉子目录保持普通行，等用户展开。
+      await this._loadChain(e.resource, 'expand', generation, true)
+    },
+    resolveExpandedElement: (e) => {
+      if (this._root && sameUri(e.resource, this._root)) return e
+      if (!e.isDirectory) return e
+      // 链尾是行的真实身份：展开链头后在同一事务里迁移到链尾，避免二次点击。
+      // 从本次读取记录的链头重新解析，而不是从旧链尾向下——重读后链可能缩短，
+      // 旧链尾会藏进新的折叠行里（不能上移就会把焦点/选区留在隐藏行上）。
+      const requestedHead = this._nodes.get(e.resource.toString())?.expansionChainHead
+      if (requestedHead) {
+        const tail = this._compactChainTail(requestedHead)
+        // 尾目录读取失败时它只是错误行，不是新的行身份：留在旧行等用户显式
+        // 重试，避免把一次失败变成对同一目录的第二轮自动读取。
+        if (this._nodes.get(tail.toString())?.error != null) return e
+        if (sameUri(tail, e.resource)) return e
+        return { resource: tail, name: basename(tail), isDirectory: true }
+      }
+      const tail = this._compactChainTail(e.resource)
+      if (sameUri(tail, e.resource)) return e
+      return { resource: tail, name: basename(tail), isDirectory: true }
     },
     getRoots: () => (this._root ? [this._rootEntry(this._root)] : []),
     getParent: (e) => {
@@ -508,19 +540,13 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
-  /** 重读目录；显式递归刷新只覆盖已加载的后代，保留展开状态。 */
+  /** 重读目录；显式递归刷新只覆盖根与当前实际可见的展开层，不遍历隐藏缓存。 */
   async refresh(resource: URI, recursive = false): Promise<void> {
-    const resources = [resource]
+    const resources = recursive ? this._collectRefreshTargets(resource) : [resource]
     if (recursive) {
-      for (const [key, node] of this._nodes) {
-        const child = URI.parse(key)
-        if (node.children !== null && !sameUri(resource, child) && isDescendant(resource, child)) {
-          resources.push(child)
-        }
-      }
       this._logger.debug(`refresh subtree ${resource.toString()} directories=${resources.length}`)
     }
-    await this._reloadNodes(resources)
+    await this._reloadNodes(resources, resource)
   }
 
   /**
@@ -898,28 +924,107 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
-  /** Re-read every already-loaded directory (expansion state preserved) and refresh the model. */
-  private _refreshLoadedNodes(): void {
-    const loaded: URI[] = []
-    for (const [key, node] of this._nodes) {
-      if (node.children !== null) loaded.push(URI.parse(key))
-    }
-    void this._reloadNodes(loaded)
+  /**
+   * 重同步：从根与当前可见的展开行（含 compact 链路径）构造读取集合。隐藏的
+   * 已加载节点只标脏，等重新可见/展开时按需读取。
+   *
+   * 过滤变更（exclude/focus）额外传入 `includeVisibleCompactAncestors`：折叠的
+   * compact 行没有自己的子行，链形状由链上至多各一个子项的中间目录决定；重读
+   * 它们让父层过滤立即正确。折叠链尾（可能是巨型目录）绝不在这里读取——链形状
+   * 若真因过滤而变，等重新展开时从链头按需确认。
+   */
+  private _refreshLoadedNodes(includeVisibleCompactAncestors = false): void {
+    if (!this._root) return
+    const resources = this._collectRefreshTargets(this._root, includeVisibleCompactAncestors)
+    void this._reloadNodes(resources, null)
   }
 
-  private async _reloadNodes(resources: readonly URI[]): Promise<void> {
+  /**
+   * 刷新 scope 下的可见层并发布结构变化：
+   * - scope 为 null 时失效全树缓存（冷启动 catch-up / exclude-focus / watcher 重启）；
+   * - 否则只失效 scope 子树内的缓存（watcher / CRUD 的局部刷新）。
+   * 读取集合之外已缓存的节点标 stale：保留折叠行标签与行身份，重新展开时再读。
+   */
+  private async _reloadNodes(
+    resources: readonly URI[],
+    invalidateScope: URI | null,
+  ): Promise<void> {
     const generation = this._generation
     const compactState = this._captureCompactAnchors()
-    await Promise.all(resources.map((resource) => this._reloadNode(resource, generation)))
-    if (generation !== this._generation) return
-    await Promise.all(
-      resources.map((resource) =>
-        this._ensureCompactChainsFor(this._ensureNode(resource).children ?? [], generation),
-      ),
+    this._markStaleExcept(
+      new Set(resources.map((r) => normalizeUri(r).toString())),
+      invalidateScope,
     )
+    await Promise.all(resources.map((resource) => this._reloadNode(resource, generation)))
     if (generation !== this._generation) return
     this._model.refreshWithFocusRecovery()
     this._remapSelectionToCompact(compactState)
+    this._remapExpansionToCompact(compactState)
+  }
+
+  /**
+   * 可见行的读取集合：根/scope + 每个可见展开行及其 compact 链路径。
+   *
+   * `includeVisibleCompactAncestors` 只影响可见的折叠 compact 行：把链上（不含
+   * 链尾）的中间目录加入读取集合，让过滤变更后的链形状/标签立即正确；链尾可能
+   * 是巨型目录，始终留给重新展开时的链头驱动读取。
+   */
+  private _collectRefreshTargets(scope: URI, includeVisibleCompactAncestors = false): URI[] {
+    const out = new Map<string, URI>()
+    const add = (resource: URI): void => {
+      const normalized = normalizeUri(resource)
+      out.set(normalized.toString(), normalized)
+    }
+    const inScope = (resource: URI): boolean =>
+      sameUri(scope, resource) || isDescendant(scope, resource)
+    add(scope)
+    for (const node of this._model.getVisibleNodes()) {
+      const entry = node.element
+      if (!inScope(entry.resource)) continue
+      if (node.expanded) {
+        for (const chainNode of this._compactChainPath(entry.resource)) {
+          if (inScope(chainNode)) add(chainNode)
+        }
+        continue
+      }
+      if (!includeVisibleCompactAncestors || entry.compactRoot === undefined) continue
+      const chain = this._compactChainPath(entry.resource)
+      for (let i = 1; i < chain.length; i++) {
+        const chainNode = chain[i]!
+        if (inScope(chainNode)) add(chainNode)
+      }
+    }
+    return [...out.values()]
+  }
+
+  private _markStale(node: NodeState): void {
+    node.stale = true
+    node.invalidationVersion++
+    // 读取在途时再补一轮：否则本轮提交的旧结果虽保留失效标记，却没人再读，
+    // 可见的展开行会空着等用户手动重开。
+    if (node.pending) node.trailing = true
+  }
+
+  private _markStaleExcept(keep: ReadonlySet<string>, scope: URI | null): void {
+    // 可见展开行（及 compact 链路径）属于当前视图，保持新鲜才不会让一次浅刷新
+    // 级联重读已加载后代。隐藏/折叠的缓存才可能在背后变化。
+    const visibleExpandedChain = new Set<string>()
+    for (const node of this._model.getVisibleNodes()) {
+      if (!node.expanded) continue
+      for (const chainNode of this._compactChainPath(node.element.resource)) {
+        visibleExpandedChain.add(chainNode.toString())
+      }
+    }
+    for (const [key, node] of this._nodes) {
+      if (keep.has(key) || visibleExpandedChain.has(key)) continue
+      if (scope !== null) {
+        const resource = URI.parse(key)
+        if (!sameUri(scope, resource) && !isDescendant(scope, resource)) continue
+      }
+      // 在途首读（children === null）同样要记失效版本，否则提交时会把这次
+      // 失效当成旧结果清掉。
+      this._markStale(node)
+    }
   }
 
   /**
@@ -931,7 +1036,7 @@ export class ExplorerTreeService extends Disposable {
     if (this._root) {
       void this._watcher.setExcludes(this._exclude.currentWatcherGlobs).catch(() => {})
     }
-    this._refreshLoadedNodes()
+    this._refreshLoadedNodes(true)
   }
 
   /**
@@ -940,7 +1045,7 @@ export class ExplorerTreeService extends Disposable {
    */
   private _onFocusChange(): void {
     if (this._watchStarted) this._syncWatch(this._root)
-    this._refreshLoadedNodes()
+    this._refreshLoadedNodes(true)
     // Re-restore: a directory filtered out of the first restore by the previous
     // focus set may now be visible. The hasState guard keeps this a no-op for
     // everything already expanded, so a plain focus flip never collapses
@@ -957,9 +1062,15 @@ export class ExplorerTreeService extends Disposable {
     const rootKey = root.toString()
     // Exclude the root (it always auto-expands — never stored) and any node
     // whose children failed to load (persisting those would wed them open).
-    const ids = this._model
-      .getExpandedIds()
-      .filter((id) => id !== rootKey && this._nodes.get(id)?.error == null)
+    // 行 id 是链尾；持久化链头，恢复时才能从用户展开的目录重新解析整条链。
+    const ids = [
+      ...new Set(
+        this._model
+          .getExpandedIds()
+          .filter((id) => id !== rootKey && this._nodes.get(id)?.error == null)
+          .map((id) => this._compactChainHead(URI.parse(id)).toString()),
+      ),
+    ]
     if (flush) flushExpandedIdsWrite(storage, key, ids)
     else persistExpandedIds(storage, key, ids)
   }
@@ -967,6 +1078,17 @@ export class ExplorerTreeService extends Disposable {
   /** Test/e2e hook: synchronously flush any pending debounced expansion write. */
   flushExpansionState(): void {
     this._persistExpansion(true)
+  }
+
+  /**
+   * 持久化以链头记录，行 id 却是链尾；展开迁移后模型里只剩尾行 state。恢复
+   * 目标是链头时，只要尾行已有 state（本会话展开过或用户刚折叠），尾行才是
+   * 当前意图——不能再用头 id 展开一次，否则 scope 重灌会复活刚折叠的尾行。
+   * 链尚未加载（尾==头）时返回 false，让正常恢复流程继续。
+   */
+  private _isExpansionOwnedByChainTail(resource: URI): boolean {
+    const tail = this._compactChainTail(resource)
+    return !sameUri(tail, resource) && this._model.hasState(tail.toString())
   }
 
   /**
@@ -1028,8 +1150,14 @@ export class ExplorerTreeService extends Disposable {
     }
     const depth = (u: URI): number => u.path.split('/').length
     targets.sort((a, b) => depth(a) - depth(b))
+    // 先把折叠目标全部设为展开态：隐藏的展开目录在重新可见前不能被读取。
+    // 可见目标随后逐个展开，由展开流程解析 compact 链并落到真实行 id。
+    if (targets.length > 0) {
+      this._model.setExpansion(targets.map((uri) => [uri.toString(), true] as const))
+    }
     this._restoring = true
     let abandoned = false
+    const attempted = new Set<string>()
     try {
       for (const uri of targets) {
         if (
@@ -1040,7 +1168,18 @@ export class ExplorerTreeService extends Disposable {
           abandoned = true
           break
         }
-        if (this._model.hasState(uri.toString())) continue
+        // 恢复期间用户折叠过的目录以用户意图为准。
+        if (!this._model.isExpanded(uri.toString())) continue
+        // 链已加载且尾行有 state：用户意图由尾行表达。批量 setExpansion 给
+        // 链头补的是合成态，撤掉它，避免尾行的折叠被头的持久化记录复活。
+        // 记为“已尝试”让自愈按尾行健康度决定是否继续持久化这个头 id。
+        if (this._isExpansionOwnedByChainTail(uri)) {
+          this._model.setExpansion([[uri.toString(), false]])
+          attempted.add(uri.toString())
+          continue
+        }
+        if (!this._isRestoreTargetReachable(uri, root)) continue
+        attempted.add(uri.toString())
         await this._model.expand(this._dirEntry(uri))
       }
     } finally {
@@ -1052,40 +1191,126 @@ export class ExplorerTreeService extends Disposable {
     // absent). Flushing that converged set drops the stale id; an unchanged
     // set is left alone so a plain reload never churns a write.
     if (abandoned || this._root === null || !sameUri(this._root, root)) return
-    // Self-heal the persisted set: drop a target that failed to actually expand
-    // (a deleted directory rejects its load, so `isExpanded` stays false and
-    // the node carries an error). Ids we did NOT attempt this pass — filtered
-    // out by the current focus set — are kept verbatim: focus is a transient
-    // view, not a reason to forget the expansion. Only a real "was expanded
-    // before, now won't open" is pruned.
-    const attempted = new Set(targets.map((u) => u.toString()))
+    // 自愈：只剔除本次真正尝试展开、却没能打开的目录（读取失败会留下 error）。
+    // 没尝试的 id——被当前 focus 过滤掉、或藏在折叠祖先之下——原样保留：
+    // focus 与折叠是临时视图，不该因此忘掉持久化的展开。
     const healed = raw
       .filter((id): id is string => typeof id === 'string')
       .filter((id) => {
         if (id === rootKey) return false
-        if (!attempted.has(id)) return true // not attempted (e.g. out of focus) — keep
-        return this._model.isExpanded(id) && this._nodes.get(id)?.error == null
+        if (!attempted.has(id)) return true // 未尝试（隐藏/不在 focus）——保留
+        return this._isRestoredExpansionHealthy(URI.parse(id))
       })
     const accepted = lastAcceptedExpandedIds(storageKeyForRoot(root))
     if (accepted !== undefined && sameIds(accepted, healed)) return
     flushExpandedIdsWrite(storage, storageKeyForRoot(root), healed)
   }
 
+  /** `uri` 的每个祖先都处于打开状态（可能被折进已展开的链尾行）。 */
+  private _isRestoreTargetReachable(uri: URI, root: URI): boolean {
+    let cursor = parentOf(uri)
+    while (cursor !== null && !sameUri(cursor, root)) {
+      if (this._model.isExpanded(cursor.toString())) {
+        cursor = parentOf(cursor)
+        continue
+      }
+      // 祖先可能被压缩进 id=链尾 的展开行：链尾展开时整条链都是可见的，
+      // 无自己行的中间节点不能被当成折叠。
+      const head = this._compactChainHead(cursor)
+      const tail = this._compactChainTail(head)
+      if (sameUri(tail, cursor) || !this._model.isExpanded(tail.toString())) return false
+      cursor = parentOf(head)
+    }
+    return cursor !== null
+  }
+
+  /**
+   * 一次尝试展开的恢复目标是否真的打开：compact 链把展开态挪到链尾，链头
+   * 未展开没关系，链尾打开即可；链上任一读取失败则视为不健康。
+   */
+  private _isRestoredExpansionHealthy(uri: URI): boolean {
+    if (this._chainHasError(uri)) return false
+    const id = uri.toString()
+    if (this._model.isExpanded(id)) return true
+    const tail = this._compactChainTail(uri)
+    return (
+      tail.toString() !== id &&
+      this._model.isExpanded(tail.toString()) &&
+      !this._chainHasError(tail)
+    )
+  }
+
+  private _chainHasError(resource: URI): boolean {
+    let current = resource
+    for (let depth = 0; depth < 20; depth++) {
+      const node = this._nodes.get(current.toString())
+      if (!node) return false
+      if (node.error !== null) return true
+      const children = node.children
+      if (!children || children.length !== 1) return false
+      const next = children[0]
+      if (!next || !next.isDirectory) return false
+      current = next.resource
+    }
+    return false
+  }
+
   private _onWatcherEvents(events: readonly IFileChangeEvent[]): void {
     if (!this._root || events.length === 0) return
+    const necessary = this._collectVisibleChainIds()
     const seen = new Set<string>()
+    let staleOnly = 0
     for (const ev of events) {
       const resource = normalizeUri(ev.resource)
       const parent = parentOf(resource)
       if (!parent) continue
       const key = parent.toString()
       if (seen.has(key)) continue
-      if (!this._nodes.has(key)) continue
+      if (!this._nodes.has(key) && !necessary.has(key)) continue
       seen.add(key)
-      void this.refresh(parent)
+      if (necessary.has(key)) {
+        void this.refresh(parent)
+      } else {
+        // 已加载但看不见的目录：只失效，不读取；重新可见/展开时按需刷新。
+        this._invalidateSubtree(parent)
+        staleOnly++
+      }
     }
     if (seen.size > 0) {
-      this._logger.debug(`watcher refresh parents=${seen.size} events=${events.length}`)
+      this._logger.debug(
+        `watcher refresh parents=${seen.size - staleOnly} stale=${staleOnly} events=${events.length}`,
+      )
+    }
+  }
+
+  /** 当前可见行涉及的必要目录 id。 */
+  private _collectVisibleChainIds(): Set<string> {
+    const ids = new Set<string>()
+    for (const node of this._model.getVisibleNodes()) {
+      const entry = node.element
+      if (node.expanded) {
+        for (const chainNode of this._compactChainPath(entry.resource)) {
+          ids.add(chainNode.toString())
+        }
+        ids.add(node.id)
+        continue
+      }
+      if (entry.compactRoot === undefined) continue
+      // 折叠 compact 行只验证身份链的中间节点；链尾（可能是巨型目录）的事件
+      // 只失效不读取，避免每来一次 watcher 就整目录 list。
+      const chain = this._compactChainPath(entry.resource)
+      for (let i = 1; i < chain.length; i++) ids.add(chain[i]!.toString())
+    }
+    return ids
+  }
+
+  private _invalidateSubtree(resource: URI): void {
+    const normalized = normalizeUri(resource)
+    for (const [key, node] of this._nodes) {
+      const nodeResource = URI.parse(key)
+      if (sameUri(nodeResource, normalized) || isDescendant(normalized, nodeResource)) {
+        this._markStale(node)
+      }
     }
   }
 
@@ -1100,6 +1325,9 @@ export class ExplorerTreeService extends Disposable {
         pending: null,
         trailing: false,
         source: 'expand',
+        stale: false,
+        invalidationVersion: 0,
+        expansionChainHead: null,
       }
       this._nodes.set(key, node)
     }
@@ -1229,6 +1457,8 @@ export class ExplorerTreeService extends Disposable {
     readonly anchor: string | null
     readonly selectionEpoch: number
     readonly visibleIds: ReadonlySet<string>
+    readonly expandedIds: readonly string[]
+    readonly expandedAnchors: ReadonlyMap<string, string>
   } {
     const anchors = new Map<string, string>()
     const ids = [...this._model.selection]
@@ -1237,6 +1467,14 @@ export class ExplorerTreeService extends Disposable {
     for (const id of ids) {
       if (!anchors.has(id)) anchors.set(id, this._compactChainHead(URI.parse(id)).toString())
     }
+    // 展开状态同样以链头保存：重读后链伸缩时行 id 会变，映射到新的可见链尾。
+    const expandedAnchors = new Map<string, string>()
+    const expandedIds = this._model.getExpandedIds()
+    for (const id of expandedIds) {
+      if (!expandedAnchors.has(id)) {
+        expandedAnchors.set(id, this._compactChainHead(URI.parse(id)).toString())
+      }
+    }
     return {
       anchors,
       selection: [...this._model.selection],
@@ -1244,6 +1482,8 @@ export class ExplorerTreeService extends Disposable {
       anchor: this._model.anchor,
       selectionEpoch: this._model.selectionEpoch,
       visibleIds: new Set(this._model.getVisibleNodes().map((node) => node.id)),
+      expandedIds,
+      expandedAnchors,
     }
   }
 
@@ -1263,6 +1503,8 @@ export class ExplorerTreeService extends Disposable {
     readonly anchor: string | null
     readonly selectionEpoch: number
     readonly visibleIds: ReadonlySet<string>
+    readonly expandedIds: readonly string[]
+    readonly expandedAnchors: ReadonlyMap<string, string>
   }): void {
     const model = this._model
     const {
@@ -1305,10 +1547,10 @@ export class ExplorerTreeService extends Disposable {
     const remappedAnchor = previousAnchor === null ? null : keepPrevious(previousAnchor)
 
     const remappedPreviousFocus = previousFocused === null ? null : remap(previousFocused)
-    // The old focus row survived under a new chain id: recovery guessed a
-    // successor because the old id vanished, but the row itself is still there,
-    // so that guess (and its selection seat) has to be discarded.
+    // 旧焦点行换了新链 id：恢复逻辑因旧 id 消失而猜的后继行及其选区座位要丢弃；
+    // 仅限用户期间没有改选，否则以用户的实时选择为准。
     const focusReshaped =
+      anchorSnapshotCurrent &&
       remappedPreviousFocus !== null &&
       visible.has(remappedPreviousFocus) &&
       remappedPreviousFocus !== previousFocused
@@ -1319,11 +1561,18 @@ export class ExplorerTreeService extends Disposable {
     }
     if (focusReshaped) {
       for (const id of previousSelection) push(keepPrevious(id))
-    } else {
+    } else if (anchorSnapshotCurrent) {
       for (const id of model.selection) push(remap(id))
       for (const id of previousSelection) push(keepPrevious(id))
+    } else {
+      // 用户在重读期间改选：只映射实时选区，不恢复旧快照里的行。
+      for (const id of model.selection) push(remap(id))
     }
-    const focused = focusReshaped ? remappedPreviousFocus : model.focused
+    const focused = focusReshaped
+      ? remappedPreviousFocus
+      : model.focused === null
+        ? null
+        : remap(model.focused)
     const changed =
       selection.length !== model.selection.length ||
       focused !== model.focused ||
@@ -1334,6 +1583,35 @@ export class ExplorerTreeService extends Disposable {
         ...(anchorSnapshotCurrent ? { anchor: remappedAnchor } : {}),
       })
     }
+  }
+
+  /**
+   * compact 链伸缩让可见行换了 id 时，把原来的展开态迁到接替它的行上
+   * （例如中间节点冒出兄弟目录，行 id 从链尾退回该中间节点）。只处理重读前
+   * 在屏幕上的 id；藏在折叠祖先下的展开后代不归这里管。
+   */
+  private _remapExpansionToCompact(state: {
+    readonly expandedIds: readonly string[]
+    readonly expandedAnchors: ReadonlyMap<string, string>
+    readonly visibleIds: ReadonlySet<string>
+  }): void {
+    const model = this._model
+    if (state.expandedIds.length === 0) return
+    const visible = new Set(model.getVisibleNodes().map((node) => node.id))
+    const updates: Array<readonly [string, boolean]> = []
+    for (const id of state.expandedIds) {
+      // 用户在重读期间折叠了旧行：这是更新的意图，不能把展开态搬到新行上。
+      if (!model.isExpanded(id)) continue
+      if (!state.visibleIds.has(id) || visible.has(id)) continue
+      const head = state.expandedAnchors.get(id)
+      if (head === undefined) continue
+      const tail = this._compactChainTail(URI.parse(head)).toString()
+      if (tail === id || !visible.has(tail)) continue
+      if (!model.isExpanded(tail)) updates.push([tail, true])
+      // 旧 id 不再对应任何行；保持折叠，避免链以后再变长时复活用户没设过的展开。
+      updates.push([id, false])
+    }
+    if (updates.length > 0) model.setExpansion(updates)
   }
 
   private _computeCompactChildren(raw: readonly IExplorerEntry[]): readonly IExplorerEntry[] {
@@ -1359,26 +1637,67 @@ export class ExplorerTreeService extends Disposable {
   }
 
   /**
-   * True once the whole single-directory chain under `resource` is cached, so
-   * `_computeCompactChildren` would produce its final shape. Unlike
-   * `_isSingleDirChild` this distinguishes "known not to be a chain" (ready)
-   * from "not loaded yet" (not ready) — collapsing the two is what let a row
-   * paint plain and compact later.
+   * 按需解析单目录链：读取 `resource`（展开时从链头开始，避免绕过中间节点的
+   * 变化），然后仅当过滤后的子项恰好是一个目录时继续。遇分叉立即停止——绝不
+   * 扫描分叉子树。链续读沿用 compact 日志标签。
    */
-  private _compactChainReady(resource: URI): boolean {
-    let current = resource
-    for (let d = 0; d < 20; d++) {
-      const ch = this._nodes.get(current.toString())?.children
-      if (!ch) return false
-      if (ch.length !== 1 || !(ch[0]?.isDirectory ?? false)) return true
-      current = ch[0]!.resource
+  private async _loadChain(
+    resource: URI,
+    source: LoadSource,
+    generation: number,
+    walkToHead: boolean,
+  ): Promise<void> {
+    // 先记下本次请求开始时的显示链头：读取会让链形变化，事后再从旧链尾向上
+    // 走就找不到原来的链头了（中间目录可能已经折进新的行里）。
+    const head = walkToHead ? this._compactChainHead(resource) : resource
+    this._ensureNode(resource).expansionChainHead = head
+    let current = head
+    let currentSource: LoadSource = sameUri(current, resource) ? source : 'compact'
+    for (let depth = 0; depth < 20; depth++) {
+      if (generation !== this._generation) return
+      const node = this._ensureNode(current)
+      const needsRead = node.stale || node.children === null
+      const force = node.stale || node.error !== null
+      if (needsRead || node.error !== null) {
+        await this._scheduleLoad(current, force, currentSource, generation)
+        if (generation !== this._generation) return
+      }
+      const children = node.children
+      if (!children || children.length !== 1) return
+      const next = children[0]
+      if (!next || !next.isDirectory) return
+      current = next.resource
+      currentSource = 'compact'
     }
-    return true
   }
 
-  /** List only when children are unknown; concurrent callers share one IPC. */
-  private _ensureChildrenLoaded(resource: URI, source: LoadSource = 'expand'): Promise<void> {
-    return this._scheduleLoad(resource, false, source, this._generation)
+  /** `resource` 到其 compact 链头的目录路径（含两端）。 */
+  private _compactChainPath(resource: URI): URI[] {
+    const chain = [resource]
+    let cursor = resource
+    for (let depth = 0; depth < 20; depth++) {
+      const parent = this.getParent(cursor)
+      if (parent === null || !this._isSingleDirChild(parent)) break
+      chain.push(parent)
+      cursor = parent
+    }
+    return chain
+  }
+
+  /** 行 id 所在的 compact 链（向上到链头）是否都还能回答一次新展开。 */
+  private _isCompactChainFresh(resource: URI): boolean {
+    let cursor = resource
+    for (let depth = 0; depth < 20; depth++) {
+      const parent = this.getParent(cursor)
+      if (parent === null) return true
+      const parentNode = this._nodes.get(parent.toString())
+      if (!parentNode) return true
+      // 父节点失效时它的单子目录判断也不可信，整条链按未验证处理。
+      if (parentNode.stale || parentNode.children === null) return false
+      if (!this._isSingleDirChild(parent)) return true
+      cursor = parent
+    }
+    return true
   }
 
   /** Re-read regardless of what is cached. */
@@ -1418,33 +1737,7 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
-  /** 补链只在加载或刷新后渲染前执行；不可从 _loadChildren 调用，否则会重置深度并递归整棵树。 */
-  private async _ensureCompactChainsFor(
-    children: readonly IExplorerEntry[],
-    generation = this._generation,
-  ): Promise<void> {
-    await Promise.all(
-      children
-        .filter((c) => c.isDirectory)
-        .map((c) => this._eagerLoadForCompact(c.resource, 0, generation)),
-    )
-  }
-
-  private async _eagerLoadForCompact(
-    resource: URI,
-    depth = 0,
-    generation = this._generation,
-  ): Promise<void> {
-    if (depth >= 20) return
-    if (generation !== this._generation) return
-    await this._ensureChildrenLoaded(resource, 'compact')
-    if (generation !== this._generation) return
-    const ch = this._ensureNode(resource).children
-    if (ch && ch.length === 1 && (ch[0]?.isDirectory ?? false)) {
-      await this._eagerLoadForCompact(ch[0]!.resource, depth + 1, generation)
-    }
-  }
-
+  /** 单链续读只在加载/刷新后执行；不可从 _loadChildren 调用，否则会递归整棵树。 */
   private async _loadChildren(
     resource: URI,
     node: NodeState,
@@ -1454,6 +1747,9 @@ export class ExplorerTreeService extends Disposable {
     const key = resource.toString()
     node.loading = true
     node.error = null
+    // list 期间到达的失效必须先记下版本：提交时版本变了就不能把 stale 清掉，
+    // 否则这次读取的旧结果会被当成最新内容。
+    const invalidationAtStart = node.invalidationVersion
     const readStart = performance.now()
     let readWall = 0
     let processStart = readStart
@@ -1480,6 +1776,7 @@ export class ExplorerTreeService extends Disposable {
       processWall = performance.now() - processStart
       if (!this._isLiveLoad(key, node, generation)) return
       node.children = children
+      if (node.invalidationVersion === invalidationAtStart) node.stale = false
       this._logger.debug(`loadChildren ${key} entries=${children.length}`)
       this._reportDirectoryRead({
         resource,
@@ -1497,6 +1794,7 @@ export class ExplorerTreeService extends Disposable {
       if (!this._isLiveLoad(key, node, generation)) return
       node.children = []
       node.error = err instanceof Error ? err.message : String(err)
+      if (node.invalidationVersion === invalidationAtStart) node.stale = false
       this._logger.warn(`loadChildren failed ${key}`, node.error)
     } finally {
       node.loading = false

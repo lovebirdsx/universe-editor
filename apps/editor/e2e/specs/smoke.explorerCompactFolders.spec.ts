@@ -1,105 +1,116 @@
 /*---------------------------------------------------------------------------------------------
- *  Smoke spec: Explorer compact folders (P1).
- *
- *  Two regressions this guards:
- *   A) A single-directory chain one level below an already-cached directory used
- *      to render as a plain row and only compact on the next ArrowRight. Because
- *      a compact row is keyed by its chain *tail*, compacting late moves the row
- *      id out from under the model's focus/selection and the highlight silently
- *      disappears. The chain must be compacted on the first frame the parent is
- *      expanded, so pressing ArrowRight only expands — the id never moves.
- *   B) When a chain shortens because a sibling appears mid-chain, the row id
- *      moves up to the new tail; focus must follow it rather than go dark.
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  守护按需紧凑链：一次展开完成身份迁移，链缩短与折叠后刷新不丢焦点。
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { test, expect } from '../fixtures/electronApp.js'
 
+test.use({
+  workspaceSeeder: {
+    seed(dir) {
+      const leaf = path.join(dir, 'source', 'config', 'raw', 'tables')
+      mkdirSync(leaf, { recursive: true })
+      writeFileSync(path.join(leaf, 'data.json'), '{}')
+      writeFileSync(path.join(dir, 'source', 'a.txt'), 'a')
+    },
+  },
+})
+
 test.describe('@p1 explorer compact folders', () => {
-  test('a chain under a cached parent is compact before any keypress @regression', async ({
+  test('a chain forms on demand with one expansion and keeps focus @regression', async ({
     workbench,
     page,
-    scratchDir,
   }) => {
-    const tmpDir = scratchDir('ue2-compact-')
-    // `source` itself is not a chain (two children), so the root's own prefetch
-    // stops there — `config`'s chain is the one that has to form on expand.
-    const leafDir = path.join(tmpDir, 'source', 'config', 'raw', 'tables')
-    await fs.mkdir(leafDir, { recursive: true })
-    await fs.writeFile(path.join(leafDir, 'data.json'), '{}')
-    await fs.writeFile(path.join(tmpDir, 'source', 'a.txt'), 'a')
-
     await workbench.waitForRestored()
-    await workbench.openWorkspace(tmpDir)
+    await workbench.waitForBootstrapFocusSettled()
 
-    await expect
-      .poll(() => workbench.getContextKey<boolean>('sideBarVisible'), { timeout: 5000 })
-      .toBe(true)
-
-    const sourceRow = page.locator('[role="treeitem"]', { hasText: 'source' }).first()
-    await expect(sourceRow).toBeVisible({ timeout: 5000 })
+    const sourceRow = page.getByRole('treeitem').filter({ hasText: /^source$/ })
+    await expect(sourceRow).toBeVisible()
     await sourceRow.click()
 
-    // The whole chain renders as one row on the first frame…
-    const chainRow = page.locator('[role="treeitem"]', { hasText: 'config/raw/tables' })
-    await expect(chainRow).toBeVisible({ timeout: 5000 })
-    // …and there is no plain `config` row. Anchor the regex: a bare 'config'
-    // filter would also match the compact row's own text.
-    await expect(page.locator('[role="treeitem"]', { hasText: /^config$/ })).toHaveCount(0)
+    const configRow = page.getByRole('treeitem').filter({ hasText: /^config$/ })
+    const chainRow = page.getByRole('treeitem').filter({ hasText: /^config\/raw\/tables$/ })
+    await expect(configRow).toBeVisible()
+    await expect(chainRow).toHaveCount(0)
+    await configRow.click()
 
-    await chainRow.click()
+    await expect(chainRow).toBeVisible()
     await expect(chainRow).toHaveAttribute('aria-selected', 'true')
+    await expect(chainRow).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByRole('treeitem').filter({ hasText: /^data.json$/ })).toBeVisible()
+    await expect(configRow).toHaveCount(0)
 
-    // Clicking a directory toggles it; collapse so ArrowRight is the press that
-    // expands rather than the one that steps into the first child.
     await page.keyboard.press('ArrowLeft')
-    await expect(page.locator('[role="treeitem"]', { hasText: 'data.json' })).toHaveCount(0)
-
+    await expect(chainRow).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByRole('treeitem').filter({ hasText: /^data.json$/ })).toHaveCount(0)
     await page.keyboard.press('ArrowRight')
-
-    await expect(page.locator('[role="treeitem"]', { hasText: 'data.json' })).toBeVisible({
-      timeout: 5000,
-    })
-    // Same row, still selected — expanding did not move the id.
+    await expect(page.getByRole('treeitem').filter({ hasText: /^data.json$/ })).toBeVisible()
     await expect(chainRow).toHaveAttribute('aria-selected', 'true')
   })
 
   test('focus follows the row when a chain shortens @regression', async ({
     workbench,
     page,
-    scratchDir,
+    launchWorkspace,
   }) => {
-    const tmpDir = scratchDir('ue2-compact-shrink-')
-    const rawDir = path.join(tmpDir, 'source', 'config', 'raw')
-    await fs.mkdir(path.join(rawDir, 'tables'), { recursive: true })
-    await fs.writeFile(path.join(rawDir, 'tables', 'data.json'), '{}')
-    await fs.writeFile(path.join(tmpDir, 'source', 'a.txt'), 'a')
-
     await workbench.waitForRestored()
-    await workbench.openWorkspace(tmpDir)
+    await workbench.waitForBootstrapFocusSettled()
+    await page
+      .getByRole('treeitem')
+      .filter({ hasText: /^source$/ })
+      .click()
+    await page
+      .getByRole('treeitem')
+      .filter({ hasText: /^config$/ })
+      .click()
 
-    await expect
-      .poll(() => workbench.getContextKey<boolean>('sideBarVisible'), { timeout: 5000 })
-      .toBe(true)
-
-    const sourceRow = page.locator('[role="treeitem"]', { hasText: 'source' }).first()
-    await expect(sourceRow).toBeVisible({ timeout: 5000 })
-    await sourceRow.click()
-
-    const chainRow = page.locator('[role="treeitem"]', { hasText: 'config/raw/tables' })
-    await expect(chainRow).toBeVisible({ timeout: 5000 })
-    await chainRow.click()
+    const chainRow = page.getByRole('treeitem').filter({ hasText: /^config\/raw\/tables$/ })
     await expect(chainRow).toHaveAttribute('aria-selected', 'true')
+    await expect.poll(() => page.evaluate(() => window.__E2E__!.isWorkspaceWatchArmed())).toBe(true)
+    await fs.mkdir(path.join(launchWorkspace!.dir, 'source', 'config', 'raw', 'extra'))
 
-    // A sibling appears mid-chain: the chain now ends at `raw`, so the row id
-    // moves up from `tables` to `raw`.
-    await fs.mkdir(path.join(rawDir, 'extra'))
-
-    // Anchored: `config/raw` as a substring also matches the *old* long row, so
-    // a loose filter would pass without the chain ever having shortened.
-    const shortRow = page.locator('[role="treeitem"]', { hasText: /^config\/raw$/ })
+    const shortRow = page.getByRole('treeitem').filter({ hasText: /^config\/raw$/ })
     await expect(shortRow).toBeVisible({ timeout: 8000 })
-    await expect(shortRow).toHaveAttribute('aria-selected', 'true', { timeout: 8000 })
+    await expect(shortRow).toHaveAttribute('aria-selected', 'true')
+    await expect(shortRow).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  test('a collapsed chain survives repeated refresh and reloads on expansion @regression', async ({
+    workbench,
+    page,
+    launchWorkspace,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await page
+      .getByRole('treeitem')
+      .filter({ hasText: /^source$/ })
+      .click()
+    await page
+      .getByRole('treeitem')
+      .filter({ hasText: /^config$/ })
+      .click()
+
+    const chainRow = page.getByRole('treeitem').filter({ hasText: /^config\/raw\/tables$/ })
+    await expect(chainRow).toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('ArrowLeft')
+    await expect(chainRow).toHaveAttribute('aria-expanded', 'false')
+    await fs.writeFile(
+      path.join(launchWorkspace!.dir, 'source', 'config', 'raw', 'tables', 'new.txt'),
+      'new',
+    )
+    for (let i = 0; i < 3; i++) {
+      await workbench.runCommand('workbench.files.action.refresh')
+    }
+    await expect(chainRow).toHaveAttribute('aria-expanded', 'false')
+    await expect(chainRow).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByRole('treeitem').filter({ hasText: /^new.txt$/ })).toHaveCount(0)
+
+    await page.keyboard.press('ArrowRight')
+    await expect(page.getByRole('treeitem').filter({ hasText: /^new.txt$/ })).toBeVisible()
+    await expect(chainRow).toHaveAttribute('aria-selected', 'true')
   })
 })

@@ -30,6 +30,13 @@ export interface ITreeDataSource<T> {
   /** Lazy sources only: populate children so a subsequent `getChildren` is non-null. */
   loadChildren?(element: T): Promise<void>
 
+  /**
+   * 可选：子项拉取后代表 `element` 的那一行。会把单目录链折成一行的懒加载源
+   * （compact 文件夹）返回链尾，让展开态/选择/焦点/Shift 锚点在同一个事务里
+   * 迁到真正渲染的行上；不压缩的源省略即可。
+   */
+  resolveExpandedElement?(element: T): T
+
   /** Top-level elements (the virtual root's direct children). */
   getRoots(): readonly T[]
 

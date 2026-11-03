@@ -11,12 +11,12 @@ explorer（文件资源管理器）是主侧栏的文件树视图：把「文件
 
 `services/explorer/ExplorerTreeService.ts`，DI 注册在 `renderer/main.tsx`。
 
-- **树状态委托 workbench-ui `TreeModel`**；懒加载：`_dataSource.loadChildren` 读目录 + 为 compact 预取一层孙目录，`getChildren` 经 `_computeCompactChildren` 把单子目录链 `a/b/c` 折成一行。本 service 只做 URI 适配 + 文件系统特化（CRUD、watcher 刷新、exclude 过滤）。
+- **树状态委托 workbench-ui `TreeModel`**；懒加载：根或用户展开目录时 `_loadChain` 沿单子目录链续读（`source=compact`），`getChildren` 经 `_computeCompactChildren` 把 `a/b/c` 折成一行；未展开/分叉目录不预读。只做 URI 适配 + 文件系统特化（CRUD、watcher 刷新、exclude 过滤）。
 - **选择模型（命令目标解析依赖它）**：`selection`（选区）/ `focused`（焦点行）/ `selectedResource` = focused ?? selection[0]。**`getContextResources(primary?)` / `getContextResourceOperations(primary?)` 是多选语义唯一裁决点**：primary 在选区内 → 返回整个选区；否则 `[primary]`。后者每项带 `isDirectory`，命令层都用这个。
 - **文件 CRUD**：createFile/createFolder/rename/delete/duplicate/copyResources/moveResources（`_dedupeOperations` + `_assertCanPlace` 防「文件夹放进自己」+ 自增名）。都会 refresh 受影响父目录；rename/move fire `onDidRunFileOperation`。
 - **剪贴板**：本地镜像（权威在 main 侧 `IFileClipboardService`，见 `main/services/clipboard/CLAUDE.md`）。`adoptClipboard` 只写本地，**绝不可回写 shared**（ProxyChannel 广播含发起窗口 → 死循环）。cut 项被 rename/delete/move 时自动 `clearClipboard`（连带清 shared）。
 - **展开状态持久化**：`_setRoot` 切 workspace 时 clear+reset（选择/焦点/滚动丢弃），随后从 WORKSPACE 存储（key `explorer/treeState/<root>`，实现见 `explorerTreeState.ts`）回灌展开集合。**`_setRoot` 刻意不动剪贴板**（易踩坑 8）。机制细节见 `cases-tree-state.md`。
-- **watcher / exclude**：冷启动延迟 arm（idle phase `startWatching()`；漏报由 `_refreshLoadedNodes` 补全量重读）。`_onWatcherEvents` 只刷新已加载的受影响父目录；`_onExcludeChange` 重读 + 重设 watcher globs。
+- **watcher / exclude**：冷启动延迟 arm（idle phase `startWatching()`），漏报补读可见展开层；隐藏缓存标 stale，展开再读。watcher/过滤变更只更新可见必要层，细则见 `cases-tree-state.md`。
 
 ## 撤销编排层：ExplorerFileOperationService
 
@@ -90,7 +90,7 @@ contributions/index.ts / actions/index.ts            注册以上
 - **改新建/重命名的输入交互**：对应 action + `IDialogService.prompt`。
 - **改右键菜单项/顺序/可见条件**：`ExplorerMenuContribution.ts`；新 context key 在 `ExplorerContextMenu.tsx`（行属性类）或 `ExplorerClipboardContextContribution.ts`（剪贴板类）里 set。
 - **改树的懒加载/刷新/watcher/exclude**：`ExplorerTreeService` 的 `_loadChildren`/`refresh`/`_onWatcherEvents`/`_onExcludeChange`/`_syncWatch`。
-- **改 compact 折叠**：`_computeCompactChildren`/`_isSingleDirChild`/`_eagerLoadForCompact`（service）+ ExplorerTreeNode 的 segments。红线：补链只挂 dataSource.loadChildren 和刷新共用的 _reloadNodes，**绝不下沉进 `_loadChildren`**（闭环递归）；链成形由 `_compactChainReady` 守（行 id 是链尾，晚成形静默丢焦点）。论证见 `cases-tree-state.md`。
+- **改 compact 折叠**：`_loadChain`/`_compactChainHead`/`_compactChainTail`/`_computeCompactChildren`/`_isSingleDirChild` + ExplorerTreeNode 的 segments。红线：链续读只由 `loadChildren` 驱动，**绝不下沉进 `_loadChildren`**（闭环递归），不预读分叉/未展开目录；行 id 是链尾，靠 `resolveExpandedElement` 在同一次展开里迁移焦点/选区/展开态。论证见 `cases-tree-state.md`。
 - **改自动 reveal / active-editor 标记**：`ExplorerAutoRevealContribution.ts`。
 - **rename/move 后要联动别的**：监听 `onDidRunFileOperation`。
 
@@ -98,7 +98,7 @@ contributions/index.ts / actions/index.ts            注册以上
 
 1. **多选命令误用单目标解析**（delete、copy-path 已修勿回退）：作用于「一批」的命令必须 resolveContextOperations，否则多选只生效焦点一个。
 2. **切 workspace 只回灌展开集合**：选择/焦点/滚动仍丢弃；要记住别的树状态得扩展 `explorerTreeState.ts` 同一套机制。
-3. **watcher 冷启动窗口不监听**：startWatching() 前外部改动可能漏报，startWatching/_refreshLoadedNodes 会补全量重读——别把「没收到事件」当 bug。
+3. **watcher 冷启动窗口不监听**：startWatching() 前外部改动可能漏报，startWatching/_refreshLoadedNodes 会补读可见展开层——别把「没收到事件」当 bug。
 4. **cut 项被操作后要清剪贴板**：rename/delete/move 命中 cut 项时已自动 clearClipboard；新增移动/删除文件路径记得保持。
 5. **IPC 来的参数是 UriComponents**：先 reviveUri 再用。
 6. **命令层写操作在第一个 await 前取完 service**：accessor 遇 await 即失效，`accessor.get(IExplorerFileOperationService)` 必须在任何 await（prompt/confirm/showOpenDialog）前同步取（见 `docs/development/commands-and-context-keys.md`）。

@@ -180,6 +180,330 @@ describe('TreeModel', () => {
     })
   })
 
+  describe('resolveExpandedElement', () => {
+    /**
+     * A lazy source whose rows can be re-keyed after a load (compact chain
+     * tails): `resolveExpandedElement(a)` returns `b`, `b` returns itself.
+     */
+    function lazySource(options: {
+      resolve?: (n: N) => N
+      load?: (n: N, set: (children: N[]) => void) => Promise<void>
+    }) {
+      const loaded = new Map<string, N[]>()
+      const loadChildren = vi.fn((n: N) => {
+        if (options.load) return options.load(n, (children) => loaded.set(n.id, children))
+        loaded.set(n.id, n.children ?? [])
+        return Promise.resolve()
+      })
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: (n) => n.children !== undefined,
+        getChildren: (n) => (loaded.has(n.id) ? loaded.get(n.id)! : null),
+        loadChildren,
+        getRoots: () => roots,
+        ...(options.resolve ? { resolveExpandedElement: options.resolve } : {}),
+      }
+      const roots: N[] = []
+      return { source, roots, loadChildren, loaded }
+    }
+
+    function deferred(): { promise: Promise<void>; resolve: () => void } {
+      let resolve!: () => void
+      const promise = new Promise<void>((r) => (resolve = r))
+      return { promise, resolve }
+    }
+
+    it('moves expansion, selection, focus and the anchor to the resolved row', async () => {
+      const a: N = { id: 'a', children: [{ id: 'b' }] }
+      const b: N = { id: 'b', children: [{ id: 'leaf' }] }
+      const { source, roots } = lazySource({
+        resolve: (n) => (n.id === 'a' ? b : n),
+        load: async (n, set) => set(n.id === 'a' ? [b] : [{ id: 'leaf' }]),
+      })
+      roots.push(a)
+      const model = new TreeModel({ dataSource: source })
+      model.setSelection(['a'], 'a')
+      const structures = vi.fn()
+      model.onDidChangeStructure(structures)
+
+      await model.expand(a)
+
+      expect(model.isExpanded('b')).toBe(true)
+      expect(model.isExpanded('a')).toBe(false)
+      expect(model.selection).toEqual(['b'])
+      expect(model.focused).toBe('b')
+      expect(model.anchor).toBe('b')
+      expect(structures).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not overwrite a selection the user made while the pull was in flight', async () => {
+      const a: N = { id: 'a' }
+      const b: N = { id: 'b' }
+      const gate = deferred()
+      const { source, roots } = lazySource({
+        resolve: (n) => (n.id === 'a' ? b : n),
+        load: async (n, set) => {
+          await gate.promise
+          set([{ id: 'child' }])
+        },
+      })
+      roots.push(a, { id: 'c' })
+      const model = new TreeModel({ dataSource: source })
+      model.setSelection(['a'], 'a')
+      const expanding = model.expand(a)
+      await Promise.resolve()
+      model.setSelection(['c'], 'c')
+      gate.resolve()
+      await expanding
+
+      // Expansion still lands on the resolved row; only user intent is kept.
+      expect(model.isExpanded('b')).toBe(true)
+      expect(model.selection).toEqual(['c'])
+      expect(model.focused).toBe('c')
+      expect(model.anchor).toBe('c')
+    })
+
+    it('lets a collapse during the pull win (no re-expand, no migration)', async () => {
+      const a: N = { id: 'a' }
+      const gate = deferred()
+      let resolveCalls = 0
+      const { source, roots } = lazySource({
+        resolve: () => {
+          resolveCalls++
+          return { id: 'b' }
+        },
+        load: async (_n, set) => {
+          await gate.promise
+          set([{ id: 'child' }])
+        },
+      })
+      roots.push(a)
+      const model = new TreeModel({ dataSource: source })
+      model.setSelection(['a'], 'a')
+      const expanding = model.expand(a)
+      await Promise.resolve()
+      model.collapse(a)
+      gate.resolve()
+      await expanding
+
+      expect(model.isExpanded('a')).toBe(false)
+      expect(model.isExpanded('b')).toBe(false)
+      expect(model.selection).toEqual(['a'])
+      expect(resolveCalls).toBe(0)
+    })
+
+    it('abandons the migration when the model is reset during the pull', async () => {
+      const a: N = { id: 'a' }
+      const gate = deferred()
+      const { source, roots } = lazySource({
+        resolve: () => ({ id: 'b' }),
+        load: async (_n, set) => {
+          await gate.promise
+          set([{ id: 'child' }])
+        },
+      })
+      roots.push(a)
+      const model = new TreeModel({ dataSource: source })
+      model.setSelection(['a'], 'a')
+      const expanding = model.expand(a)
+      await Promise.resolve()
+      model.reset()
+      gate.resolve()
+      await expanding
+
+      expect(model.isExpanded('a')).toBe(false)
+      expect(model.isExpanded('b')).toBe(false)
+      expect(model.selection).toEqual([])
+      expect(model.focused).toBeNull()
+    })
+
+    it('shares one pull across repeated expands and migrates once', async () => {
+      const a: N = { id: 'a' }
+      const b: N = { id: 'b', children: [{ id: 'leaf' }] }
+      const gate = deferred()
+      const { source, roots, loadChildren } = lazySource({
+        resolve: (n) => (n.id === 'a' ? b : n),
+        load: async (n, set) => {
+          await gate.promise
+          set(n.id === 'a' ? [b] : (b.children ?? []))
+        },
+      })
+      roots.push(a)
+      const model = new TreeModel({ dataSource: source })
+      const first = model.expand(a)
+      const second = model.expand(a)
+      await Promise.resolve()
+      expect(loadChildren).toHaveBeenCalledTimes(1)
+      gate.resolve()
+      await Promise.all([first, second])
+
+      expect(model.isExpanded('b')).toBe(true)
+      expect(model.isExpanded('a')).toBe(false)
+      // The pull landed once and the chain-tail state was not duplicated.
+      expect(model.getExpandedIds()).toEqual(['b'])
+    })
+
+    it('pulls an expanded row that becomes visible with no cached children, once on failure', async () => {
+      const p: N = { id: 'p', children: [{ id: 'c', children: [{ id: 'leaf' }] }] }
+      const loaded = new Map<string, N[]>()
+      const loadChildren = vi.fn(async (n: N) => {
+        if (n.id === 'c' && !loaded.has('c')) throw new Error('fetch exploded')
+        loaded.set(n.id, n.children ?? [])
+      })
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: (n) => n.children !== undefined,
+        getChildren: (n) => (loaded.has(n.id) ? loaded.get(n.id)! : null),
+        loadChildren,
+        getRoots: () => [p],
+      }
+      const model = new TreeModel({ dataSource: source })
+      // A restored fold: p and c are expanded, but nothing has been pulled yet.
+      model.setExpansion([
+        ['p', true],
+        ['c', true],
+      ])
+
+      expect(model.getVisibleNodes().map((n) => n.id)).toEqual(['p'])
+      await vi.waitFor(() => expect(model.getVisibleNodes().map((n) => n.id)).toEqual(['p', 'c']))
+      await vi.waitFor(() => expect(model.getVisibleNodes()[1]!.error).toBe('fetch exploded'))
+      model.getVisibleNodes()
+      model.getVisibleNodes()
+      expect(loadChildren).toHaveBeenCalledTimes(2) // p once, c once
+
+      // The explicit gesture retries the failed visible row.
+      await model.expand(p.children![0]!)
+      expect(loadChildren).toHaveBeenCalledTimes(3)
+    })
+
+    it('arms the failure guard from the resolved tail, not the loaded head', async () => {
+      const p: N = { id: 'p' }
+      const a: N = { id: 'a' }
+      const b: N = { id: 'b' }
+      const loaded = new Map<string, N[]>([['p', [a]]])
+      const loadChildren = vi.fn(async (n: N) => {
+        if (n.id === 'a') {
+          // The head loads fine and the row identity moves to the tail, whose
+          // own pull then fails.
+          loaded.set('a', [b])
+          loaded.set('p', [b])
+          return
+        }
+        throw new Error('tail exploded')
+      })
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: () => true,
+        getChildren: (n) => (loaded.has(n.id) ? loaded.get(n.id)! : null),
+        loadChildren,
+        getRoots: () => [p],
+        resolveExpandedElement: (n) => (n.id === 'a' ? b : n),
+      }
+      const model = new TreeModel({ dataSource: source })
+      model.setExpansion([['p', true]])
+      expect(ids(model)).toEqual(['p', 'a'])
+      model.setSelection(['a'], 'a')
+
+      await model.expand(a)
+
+      expect(ids(model)).toEqual(['p', 'b'])
+      expect(model.getVisibleNodes().find((n) => n.id === 'b')?.error).toBe('tail exploded')
+      const calls = loadChildren.mock.calls.length
+      model.getVisibleNodes()
+      model.getVisibleNodes()
+      // The tail is visible + expanded with no children, but its failed pull
+      // already consumed the one-shot auto-load guard: no per-render retry.
+      expect(loadChildren).toHaveBeenCalledTimes(calls)
+    })
+  })
+
+  describe('on-demand pull lifecycle', () => {
+    function deferred(): { promise: Promise<void>; resolve: () => void } {
+      let resolve!: () => void
+      const promise = new Promise<void>((r) => (resolve = r))
+      return { promise, resolve }
+    }
+
+    it('re-arms the one-shot pull after a successful load is invalidated', async () => {
+      const p: N = { id: 'p', children: [{ id: 'c' }] }
+      let loaded = false
+      const loadChildren = vi.fn(async () => {
+        loaded = true
+      })
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: (n) => n.children !== undefined,
+        getChildren: (n) => (loaded ? (n.children ?? []) : null),
+        loadChildren,
+        getRoots: () => [p],
+      }
+      const model = new TreeModel({ dataSource: source })
+      model.setExpansion([['p', true]])
+
+      await vi.waitFor(() => expect(ids(model)).toEqual(['p', 'c']))
+      expect(loadChildren).toHaveBeenCalledTimes(1)
+
+      // The source drops its cache while the row stays visible.
+      loaded = false
+      model.refresh()
+      await vi.waitFor(() => expect(ids(model)).toEqual(['p', 'c']))
+
+      expect(loadChildren).toHaveBeenCalledTimes(2)
+    })
+
+    it('still retries an explicit expand after loadChildren threw synchronously', async () => {
+      const a: N = { id: 'a', children: [{ id: 'c' }] }
+      const loadChildren = vi.fn((): Promise<void> => {
+        throw new Error('sync boom')
+      })
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: (n) => n.children !== undefined,
+        getChildren: () => null,
+        loadChildren,
+        getRoots: () => [a],
+      }
+      const model = new TreeModel({ dataSource: source })
+
+      await model.expand(a)
+      expect(model.getVisibleNodes()[0]!.error).toBe('sync boom')
+
+      await model.expand(a)
+      expect(loadChildren).toHaveBeenCalledTimes(2)
+    })
+
+    it('lets a collapse during the resolved row pull win', async () => {
+      const a: N = { id: 'a', children: [{ id: 'b' }] }
+      const b: N = { id: 'b', children: [{ id: 'leaf' }] }
+      const gate = deferred()
+      const loaded = new Map<string, N[]>([['a', [b]]])
+      const source: ITreeDataSource<N> = {
+        getId: (n) => n.id,
+        hasChildren: (n) => n.children !== undefined,
+        getChildren: (n) => (loaded.has(n.id) ? loaded.get(n.id)! : null),
+        loadChildren: async (n) => {
+          await gate.promise
+          loaded.set(n.id, n.children ?? [])
+        },
+        resolveExpandedElement: (n) => (n.id === 'a' ? b : n),
+        getRoots: () => [a],
+      }
+      const model = new TreeModel({ dataSource: source })
+      model.setSelection(['a'], 'a')
+
+      const expanding = model.expand(a)
+      await Promise.resolve()
+      model.collapse(a)
+      gate.resolve()
+      await expanding
+
+      expect(model.isExpanded('a')).toBe(false)
+      expect(model.isExpanded('b')).toBe(false)
+      expect(model.selection).toEqual(['a'])
+      expect(model.focused).toBe('a')
+    })
+  })
+
   it('selectRange selects the inclusive range in visible order', async () => {
     const root: N = { id: 'a', children: [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }] }
     const model = new TreeModel({ dataSource: eagerSource([root]) })

@@ -116,7 +116,7 @@ describe('Explorer 显式刷新', () => {
     expect(fs.calls.list).not.toContain(sibling.toString())
   })
 
-  it('保留 compact 预取，但不遍历未加载分支的整棵子树', async () => {
+  it('递归刷新只读可见展开层与链路径，不遍历未展开分支', async () => {
     const { root, packages, fs, tree } = await setup()
     const other = URI.joinPath(root, 'other')
     const branch = URI.joinPath(other, 'branch')
@@ -132,8 +132,10 @@ describe('Explorer 显式刷新', () => {
 
     await tree.refresh(root, true)
 
+    expect(fs.calls.list).toContain(root.toString())
     expect(fs.calls.list).toContain(packages.toString())
-    expect(fs.calls.list).toContain(branch.toString())
+    expect(fs.calls.list).not.toContain(other.toString())
+    expect(fs.calls.list).not.toContain(branch.toString())
     expect(fs.calls.list).not.toContain(deep.toString())
     expect(tree.isExpanded(other)).toBe(false)
   })
@@ -144,7 +146,8 @@ describe('Explorer 显式刷新', () => {
     await fs.delete(URI.joinPath(platform, 'index.ts'))
     await fs.createDirectory(leaf)
     await fs.writeFile(URI.joinPath(leaf, 'index.ts'), new Uint8Array())
-    await tree.refresh(packages, true)
+    // 用户展开普通目录 platform，单目录链当场形成（platform/leaf）。
+    await tree.expand(platform)
     tree.setSelection([leaf], leaf)
     expect(
       tree.getVisibleEntries().find((entry) => entry.resource.toString() === leaf.toString())
@@ -170,7 +173,7 @@ describe('Explorer 显式刷新', () => {
     await fs.delete(URI.joinPath(platform, 'index.ts'))
     await fs.createDirectory(leaf)
     await fs.writeFile(URI.joinPath(leaf, 'index.ts'), new Uint8Array())
-    await tree.refresh(packages, true)
+    await tree.expand(platform)
     // The compact row is keyed by the chain tail, so the refresh below re-keys
     // it from `leaf` to `platform` — recovery prunes the old id, and the remap
     // must still bring the selection entry back.
@@ -555,6 +558,128 @@ describe('Explorer 目录读取调度', () => {
     } finally {
       joinPath.mockRestore()
     }
+  })
+})
+
+/*
+ * 按需加载回归：compact 链只在被展开/可见时形成，不能为了预取把所有分叉
+ * 子目录（乃至每次刷新的下一层）都读一遍。这里的断言是读取路径集合而不是
+ * 耗时，旧实现会为每个直接子目录预取一条链并在每次递归刷新时继续下沉。
+ */
+describe('Explorer 按需加载回归', () => {
+  const root = URI.file('/ws')
+
+  function forkFs() {
+    const alpha = URI.joinPath(root, 'alpha')
+    const alphaInner = URI.joinPath(alpha, 'inner')
+    const beta = URI.joinPath(root, 'beta')
+    const betaInner = URI.joinPath(beta, 'inner')
+    const fs = makeFs({
+      [root.toString()]: [directory('alpha'), directory('beta'), file('README.md')],
+      [alpha.toString()]: [directory('inner')],
+      [alphaInner.toString()]: [file('a.txt')],
+      [beta.toString()]: [directory('inner')],
+      [betaInner.toString()]: [file('b.txt')],
+    })
+    return { fs, alpha, alphaInner, beta, betaInner }
+  }
+
+  it('初次展开根分叉时不读取各子目录', async () => {
+    const { fs, alpha, beta } = forkFs()
+    const inst = disposables.add(makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher()))
+    const tree = disposables.add(inst.createInstance(ExplorerTreeService))
+    await flush()
+
+    expect(fs.calls.list).toEqual([root.toString()])
+    expect(
+      tree
+        .getVisibleEntries()
+        .filter((entry) => entry.name !== '')
+        .map((entry) => entry.name),
+    ).toEqual(['alpha', 'beta', 'README.md'])
+    expect(tree.getVisibleEntries().find((entry) => entry.name === 'alpha')?.compactName).toBe(
+      undefined,
+    )
+    expect(tree.isExpanded(alpha)).toBe(false)
+    expect(tree.isExpanded(beta)).toBe(false)
+  })
+
+  it('连续递归刷新不向未展开分支扩大读取', async () => {
+    const pkgA = URI.joinPath(root, 'pkgA')
+    const pkgB = URI.joinPath(root, 'pkgB')
+    const a1 = URI.joinPath(pkgA, 'a1')
+    const a2 = URI.joinPath(pkgA, 'a2')
+    const a1x = URI.joinPath(a1, 'x')
+    const a1y = URI.joinPath(a1, 'y')
+    const b1 = URI.joinPath(pkgB, 'b1')
+    const b2 = URI.joinPath(pkgB, 'b2')
+    const fs = makeFs({
+      [root.toString()]: [directory('pkgA'), directory('pkgB'), file('README.md')],
+      [pkgA.toString()]: [directory('a1'), directory('a2'), file('a.txt')],
+      [pkgB.toString()]: [directory('b1'), directory('b2'), file('b.txt')],
+      [a1.toString()]: [directory('x'), directory('y')],
+      [a2.toString()]: [file('a2.txt')],
+      [a1x.toString()]: [file('x.txt')],
+      [a1y.toString()]: [file('y.txt')],
+      [b1.toString()]: [directory('deep')],
+      [b2.toString()]: [file('b2.txt')],
+      [URI.joinPath(b1, 'deep').toString()]: [file('deep.txt')],
+    })
+    const inst = disposables.add(makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher()))
+    const tree = disposables.add(inst.createInstance(ExplorerTreeService))
+    await flush()
+    await tree.expand(pkgA)
+
+    expect(fs.calls.list).not.toContain(pkgB.toString())
+    expect(fs.calls.list).not.toContain(a1.toString())
+
+    const perRefresh: string[][] = []
+    for (let i = 0; i < 3; i++) {
+      fs.calls.list.length = 0
+      await tree.refresh(root, true)
+      perRefresh.push([...new Set(fs.calls.list)].sort())
+    }
+
+    for (const reads of perRefresh) {
+      expect(reads).not.toContain(pkgB.toString())
+      expect(reads).not.toContain(a1.toString())
+      expect(reads).not.toContain(a1x.toString())
+      expect(reads).not.toContain(b1.toString())
+    }
+    expect(perRefresh[1]).toEqual(perRefresh[0])
+    expect(perRefresh[2]).toEqual(perRefresh[0])
+  })
+
+  it('一次点击链头即展开链尾内容，焦点/选择随行 id 迁移', async () => {
+    const src = URI.joinPath(root, 'src')
+    const other = URI.joinPath(root, 'other')
+    const lib = URI.joinPath(src, 'lib')
+    const index = URI.joinPath(lib, 'index.ts')
+    const fs = makeFs({
+      [root.toString()]: [directory('src'), directory('other')],
+      [src.toString()]: [directory('lib')],
+      [other.toString()]: [],
+      [lib.toString()]: [file('index.ts')],
+    })
+    const inst = disposables.add(makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher()))
+    const tree = disposables.add(inst.createInstance(ExplorerTreeService))
+    await flush()
+
+    // 分叉下先显示普通目录名，不提前读取。
+    const initialRows = tree.getVisibleEntries().filter((entry) => entry.name !== '')
+    expect(initialRows.map((entry) => entry.name).sort()).toEqual(['other', 'src'])
+    expect(initialRows.find((entry) => entry.name === 'src')?.compactName).toBe(undefined)
+
+    tree.setSelection([src], src)
+    await tree.toggle(src)
+
+    const rows = tree.getVisibleEntries()
+    const compact = rows.find((entry) => entry.compactName === 'src/lib')
+    expect(compact?.resource.toString()).toBe(lib.toString())
+    expect(rows.some((entry) => entry.resource.toString() === index.toString())).toBe(true)
+    expect(tree.isExpanded(lib)).toBe(true)
+    expect(tree.focused?.toString()).toBe(lib.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([lib.toString()])
   })
 })
 

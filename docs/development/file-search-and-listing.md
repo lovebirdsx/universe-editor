@@ -6,6 +6,12 @@
 
 `ipc.decode` 同步 `JSON.parse` 一份 40MB 载荷要 **418–695ms**；10 万条 `IFileSearchMatch` 每条把 resource / fsPath / relativePath / basename 重复三遍。所以**真正的杠杆是把载荷从线上拿掉，不是把 parse 挪快**——当年的弯路正是「优化业务逻辑」（扫描、排序、评分）找错层次。度量入口：`renderer/ipc/bootstrap.ts:119` 的具名慢解码相位（`ipc.decode (response fileSearch.findFiles #42, 18.4MB)`）+ ≥4MiB 帧告警，读法见 [memory-pressure.md](memory-pressure.md) 的 IPC 帧闸门一节。
 
+## 资源管理器的目录列举：按需展开 ≠ 小载荷
+
+资源管理器不为提前计算 compact 而预读每个子目录：从根或用户展开的目录开始，只沿单子目录链续读（`source=compact`），遇分叉即停止；折叠/隐藏目录在普通刷新时只标脏、不读取（过滤变更会重读可见 compact 行的中间节点，折叠链尾仍不读）。这减少的是**未展开分支**的 `list` 次数，不是单次目录列举的载荷。
+
+显式展开一个超大目录仍然一次 `IFileService.list` 全量返回，再过滤 + 构造 + 排序（`processDirectoryEntries`，>5000 条才分片 yield）；协议没有 limit/分页，别把按需加载理解成「恒定小载荷」保障。日志示例：19 万条目的列表响应约 18.4MB，单次同步 IPC 解码约 429ms；这与包含 IPC 等待的 list 墙钟不是同一指标。慢/超大目录会打 `explorer.listReadWall` / `explorer.processWall` / `explorer.sortEntries` 三相（`source=expand|compact|refresh`），归因读法见 [cases-tree-state.md](../../apps/editor/src/renderer/services/explorer/cases-tree-state.md)「大目录处理」。
+
 ## 载荷形状（三条，代码注释即契约）
 
 - **DTO 判别联合**：`IFileSearchComplete = IFileSearchMatches {results} | IFileSearchListing {relPaths}`（`packages/platform/src/workbench/fileSearchService.ts:84-113`）。`matchAll` 场景只传**相对路径字符串数组**——`basename` 落末段、绝对 URI 由 join `root` 得出，不物化 match 对象。

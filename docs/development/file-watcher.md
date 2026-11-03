@@ -14,7 +14,7 @@
 | transport | `apps/editor/src/main/services/fileWatcher/watcherUtilityTransport.ts` | 唯一 electron-coupled 的一层：`utilityProcess.fork` + pid 角色登记 |
 | per-window 编排 | `.../fileWatcherMainService.ts` | root/exclude dedupe、re-subscribe 合并、event debounce、out-of-workspace 的 `node:fs.watch`（无 native addon，留进程内安全） |
 
-**崩溃恢复链**：utility process exit → 重启 → 按 desired state 重放订阅 → `onDidRestart`（`fileWatcherMainService.ts:192` 透传 → ProxyChannel 桥到 renderer）→ `ExplorerTreeService.ts:241` 重扫已加载目录，补上崩溃窗口内漏掉的 fs 事件。
+**崩溃恢复链**：utility process exit → 重启 → 按 desired state 重放订阅 → `onDidRestart`（`fileWatcherMainService.ts:192` 透传 → ProxyChannel 桥到 renderer）→ `ExplorerTreeService` 的 `onDidRestart` 订阅重同步可见展开层，其余已缓存目录标 stale（展开时再读），补上崩溃窗口内漏掉的 fs 事件。
 
 `WatcherHost` 还**显式固定 parcel backend**（`PARCEL_BACKEND`：win32=windows / darwin=fs-events / linux=inotify）：默认 backend 在 Windows 上会先 shell 出 `watchman` 探测（每次重订阅都打印一句 `'watchman' is not recognized`）再回落，点名 backend 直接跳过。
 

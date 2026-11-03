@@ -3,7 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { beforeEach, describe, expect, it } from 'vitest'
-import { InstantiationService, URI, type UriComponents } from '@universe-editor/platform'
+import {
+  InstantiationService,
+  URI,
+  type IDirectoryEntry,
+  type UriComponents,
+} from '@universe-editor/platform'
 import { ExplorerTreeService } from '../ExplorerTreeService.js'
 import { incrementFileName } from '../explorerFileOperations.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
@@ -751,17 +756,27 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     return tree.getVisibleEntries().find((e) => e.resource.toString() === resource.toString())
   }
 
-  it('expanding the parent renders the chain compacted on the first frame', async () => {
+  it('expanding a branch child first shows it plain, then one click opens its chain tail', async () => {
     const inst = makeInst(makeNestedFs(), new FakeWorkspaceService(root), new FakeWatcher())
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
 
+    // `source` is a fork (config + a.txt): its children stay plain until the
+    // chain head itself is expanded.
+    expect(rowFor(tree, config)?.compactName).toBeUndefined()
+    expect(rowFor(tree, leaf)).toBeUndefined()
+
+    tree.setSelection([config], config)
+    await tree.toggle(config)
+
     expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
     expect(rowFor(tree, leaf)?.compactRoot?.toString()).toBe(config.toString())
-    // The plain `config` row is the bug: it only compacts once expanded, and
-    // compacting changes the row id, which silently drops focus.
+    // The row the user clicked was renamed to the chain tail: no `config` row
+    // is left behind and the focus followed the id in the same transaction.
     expect(rowFor(tree, config)).toBeUndefined()
+    expect(tree.focused?.toString()).toBe(leaf.toString())
+    expect(tree.isExpanded(leaf)).toBe(true)
   })
 
   it('keeps the chain compacted across a refresh of the parent', async () => {
@@ -769,6 +784,7 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
+    await tree.expand(config)
     await tree.refresh(source)
 
     expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
@@ -781,10 +797,17 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
+    await tree.expand(config)
 
     tree.forgetSubtree(config)
     await tree.refresh(source)
 
+    // The chain caches are gone, so the row falls back to the plain directory
+    // and is re-resolved only when the user opens it again (never eagerly).
+    expect(rowFor(tree, config)).toBeDefined()
+    expect(rowFor(tree, leaf)).toBeUndefined()
+
+    await tree.expand(config)
     expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
   })
 
@@ -794,6 +817,7 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
+    await tree.expand(config)
     const before = fs.calls.list.length
 
     tree.startWatching()
@@ -801,18 +825,19 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     await flush()
 
     expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
-    // The catch-up re-reads each loaded directory once; the chain prefetch adds
-    // nothing on top because every directory in it is already cached.
+    // The catch-up re-reads the visible expanded layer and its compact chain
+    // path, but never scans the sibling file or an unopened branch.
     expect(fs.calls.list.length).toBeGreaterThan(before)
     expect(fs.calls.list.filter((p) => p === config.toString())).toHaveLength(2)
   })
 
-  it('compacts a chain that first appears during the cold-start catch-up', async () => {
+  it('compacts a chain that first appears after the cold-start catch-up', async () => {
     const fs = makeNestedFs()
     const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
+    await tree.expand(config)
 
     // A whole chain lands on disk while the watcher was not yet armed; the
     // catch-up re-read is the only thing that will ever see it.
@@ -830,18 +855,23 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     await flush()
     await flush()
 
+    expect(rowFor(tree, added)?.compactName).toBeUndefined()
+    await tree.expand(added)
     expect(rowFor(tree, addedInner)?.compactName).toBe('added/inner')
     expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
   })
 
-  it('shares one listing between concurrent expands of the same parent', async () => {
+  it('shares one listing between concurrent expands of the same chain head', async () => {
     const fs = makeNestedFs()
     const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
-    await Promise.all([tree.expand(source), tree.expand(source)])
+    await tree.expand(source)
+
+    await Promise.all([tree.expand(config), tree.expand(config)])
 
     expect(fs.calls.list.filter((p) => p === config.toString())).toHaveLength(1)
+    expect(rowFor(tree, leaf)?.compactName).toBe(CHAIN)
   })
 
   it('keeps an in-progress Shift anchor when the chain shortens', async () => {
@@ -850,6 +880,10 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
+    await tree.expand(config)
+    // Keep the compact row collapsed so the Shift range only spans rows that
+    // survive the reshape.
+    tree.collapse(leaf)
     const a = URI.joinPath(source, 'a.txt')
     // Visible rows: root, source, leaf (compact chain), a.txt.
     tree.setSelection([leaf], leaf)
@@ -875,6 +909,7 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
+    await tree.expand(config)
     const a = URI.joinPath(source, 'a.txt')
     tree.setSelection([leaf], leaf)
     tree.extendSelectionTo(a)
@@ -918,6 +953,7 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     const tree = inst.createInstance(ExplorerTreeService)
     await flush()
     await tree.expand(source)
+    await tree.expand(config)
     tree.setSelection([leaf], leaf)
 
     // A sibling appears under `raw`, so the chain stops there and the row id
@@ -933,6 +969,144 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     expect(rowFor(tree, raw)?.compactName).toBe('config/raw')
     expect(tree.focused?.toString()).toBe(raw.toString())
     expect(tree.selection.map((u) => u.toString())).toEqual([raw.toString()])
+  })
+
+  it('re-resolves a folded chain expansion onto the shortened tail', async () => {
+    const localRoot = URI.file('/nested-folded')
+    const localSource = URI.joinPath(localRoot, 'source')
+    const localConfig = URI.joinPath(localSource, 'config')
+    const localRaw = URI.joinPath(localConfig, 'raw')
+    const localTables = URI.joinPath(localRaw, 'tables')
+    const fs = makeFs({
+      [localRoot.toString()]: [
+        { name: 'source', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [localSource.toString()]: [
+        { name: 'config', isFile: false, isDirectory: true },
+        { name: 'a.txt', isFile: true, isDirectory: false },
+      ],
+      [localConfig.toString()]: [{ name: 'raw', isFile: false, isDirectory: true }],
+      [localRaw.toString()]: [{ name: 'tables', isFile: false, isDirectory: true }],
+      [localTables.toString()]: [{ name: 'data.json', isFile: true, isDirectory: false }],
+    })
+    const inst = makeInst(fs, new FakeWorkspaceService(localRoot), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(localSource)
+    await tree.expand(localConfig)
+    expect(rowFor(tree, localTables)?.compactName).toBe('config/raw/tables')
+    tree.setSelection([localTables], localTables)
+    tree.collapse(localTables)
+
+    // A sibling lands under `raw`, but the collapsed chain's watcher event is
+    // lost: only the explicit refresh may notice, and it only marks the folded
+    // chain stale — it must not read the tail to paper over the identity.
+    const extra = URI.joinPath(localRaw, 'extra')
+    fs.dirs.set(localRaw.toString(), [
+      { name: 'tables', isFile: false, isDirectory: true },
+      { name: 'extra', isFile: false, isDirectory: true },
+    ])
+    fs.dirs.set(extra.toString(), [])
+    fs.calls.list.length = 0
+    await tree.refresh(localRoot, true)
+    expect(fs.calls.list).not.toContain(localRaw.toString())
+
+    // Expanding the old tail re-reads from the chain head, discovers the fork
+    // at `raw`, and migrates the row (and focus/selection) up to the new tail.
+    await tree.expand(localTables)
+
+    expect(rowFor(tree, localRaw)?.compactName).toBe('config/raw')
+    expect(tree.isExpanded(localRaw)).toBe(true)
+    expect(tree.isExpanded(localTables)).toBe(false)
+    expect(tree.focused?.toString()).toBe(localRaw.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([localRaw.toString()])
+    // `tables` is now a plain child row of the expanded `raw` row, not the row
+    // identity itself.
+    expect(tree.getVisibleEntries().filter((e) => e.name === 'tables')).toHaveLength(1)
+    expect(fs.calls.list).toContain(localConfig.toString())
+    expect(fs.calls.list).toContain(localRaw.toString())
+    expect(fs.calls.list).not.toContain(localTables.toString())
+  })
+
+  it('keeps a user selection made while a chain reshape was in flight', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+    await tree.expand(config)
+    const a = URI.joinPath(source, 'a.txt')
+    tree.setSelection([leaf], leaf)
+
+    let releaseList!: () => void
+    let markListStarted!: () => void
+    const listGate = new Promise<void>((resolve) => (releaseList = resolve))
+    const listStarted = new Promise<void>((resolve) => (markListStarted = resolve))
+    const list = fs.list.bind(fs)
+    fs.list = async (resource: URI) => {
+      if (resource.toString() === raw.toString()) {
+        markListStarted()
+        await listGate
+      }
+      return list(resource)
+    }
+
+    fs.dirs.set(raw.toString(), [
+      { name: 'tables', isFile: false, isDirectory: true },
+      { name: 'extra', isFile: false, isDirectory: true },
+    ])
+    fs.dirs.set(URI.joinPath(raw, 'extra').toString(), [])
+    const refresh = tree.refresh(raw)
+    await listStarted
+
+    // The user picks another row while the reshape is still pending; that
+    // choice must survive, not be replaced by the remapped old focus.
+    tree.setSelection([a], a)
+    releaseList()
+    await refresh
+
+    expect(tree.focused?.toString()).toBe(a.toString())
+    expect(tree.selection.map((u) => u.toString())).toEqual([a.toString()])
+  })
+
+  it('does not re-expand a row the user collapsed while the reload was in flight', async () => {
+    const fs = makeNestedFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(source)
+    await tree.expand(config)
+    expect(tree.isExpanded(leaf)).toBe(true)
+
+    let releaseList!: () => void
+    let markListStarted!: () => void
+    const listGate = new Promise<void>((resolve) => (releaseList = resolve))
+    const listStarted = new Promise<void>((resolve) => (markListStarted = resolve))
+    const list = fs.list.bind(fs)
+    fs.list = async (resource: URI) => {
+      if (resource.toString() === raw.toString()) {
+        markListStarted()
+        await listGate
+      }
+      return list(resource)
+    }
+
+    fs.dirs.set(raw.toString(), [
+      { name: 'tables', isFile: false, isDirectory: true },
+      { name: 'extra', isFile: false, isDirectory: true },
+    ])
+    fs.dirs.set(URI.joinPath(raw, 'extra').toString(), [])
+    const refresh = tree.refresh(raw)
+    await listStarted
+
+    tree.collapse(leaf)
+    releaseList()
+    await refresh
+
+    // The chain reshape must not carry the collapsed state onto its new row.
+    expect(tree.isExpanded(leaf)).toBe(false)
+    expect(tree.isExpanded(raw)).toBe(false)
   })
 
   it('leaves focus alone when it still matches a row, or when the row is gone', async () => {
@@ -953,6 +1127,344 @@ describe('ExplorerTreeService — compact folders below a cached parent', () => 
     tree.setSelection([gone], gone)
     await tree.refresh(source)
     expect(tree.focused?.toString()).toBe(gone.toString())
+  })
+})
+
+describe('ExplorerTreeService — on-demand invalidation and identity', () => {
+  const root = URI.file('/ws')
+
+  function makeTree(initial: Record<string, IDirectoryEntry[]>) {
+    const fs = makeFs(initial)
+    const watcher = new FakeWatcher()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), watcher)
+    const tree = inst.createInstance(ExplorerTreeService)
+    return { fs, watcher, tree }
+  }
+
+  function rowFor(tree: ExplorerTreeService, resource: URI) {
+    return tree
+      .getVisibleEntries()
+      .find((entry) => entry.resource.toString() === resource.toString())
+  }
+
+  it('watcher on a compact intermediate refreshes that chain and migrates the row id', async () => {
+    const src = URI.joinPath(root, 'src')
+    const lib = URI.joinPath(src, 'lib')
+    const other = URI.joinPath(root, 'other')
+    const { fs, watcher, tree } = makeTree({
+      [root.toString()]: [
+        { name: 'src', isFile: false, isDirectory: true },
+        { name: 'other', isFile: false, isDirectory: true },
+      ],
+      [src.toString()]: [{ name: 'lib', isFile: false, isDirectory: true }],
+      [lib.toString()]: [{ name: 'x.txt', isFile: true, isDirectory: false }],
+      [other.toString()]: [],
+    })
+    await flush()
+    await tree.expand(src)
+    tree.setSelection([lib], lib)
+    expect(rowFor(tree, lib)?.compactName).toBe('src/lib')
+
+    // A sibling lands in the intermediate `src`: the chain stops there, so the
+    // visible row id moves from the tail (lib) back to src.
+    await fs.writeFile(URI.joinPath(src, 'new.txt'), new Uint8Array())
+    watcher.fire([{ type: 'added', resource: URI.joinPath(src, 'new.txt') }])
+    await flush()
+
+    expect(rowFor(tree, src)).toBeDefined()
+    expect(rowFor(tree, src)?.compactName).toBeUndefined()
+    expect(rowFor(tree, lib)).toBeDefined() // now a plain child of the expanded src
+    expect(tree.focused?.toString()).toBe(src.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([src.toString()])
+    expect(tree.isExpanded(src)).toBe(true)
+    expect(fs.calls.list).not.toContain(other.toString())
+  })
+
+  it('pulls a hidden expanded chain on demand when it becomes visible again', async () => {
+    const a = URI.joinPath(root, 'a')
+    const x = URI.joinPath(a, 'x')
+    const y = URI.joinPath(a, 'y')
+    const deep = URI.joinPath(x, 'deep')
+    const { fs, tree } = makeTree({
+      [root.toString()]: [
+        { name: 'a', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [a.toString()]: [
+        { name: 'x', isFile: false, isDirectory: true },
+        { name: 'y', isFile: false, isDirectory: true },
+      ],
+      [x.toString()]: [{ name: 'deep', isFile: false, isDirectory: true }],
+      [y.toString()]: [],
+      [deep.toString()]: [{ name: 'f.txt', isFile: true, isDirectory: false }],
+    })
+    await flush()
+    await tree.expand(a)
+    await tree.expand(x)
+    expect(rowFor(tree, deep)?.compactName).toBe('x/deep')
+    tree.collapse(a)
+
+    // Catch-up only touches the visible layer; the hidden chain is marked
+    // stale, not read.
+    fs.calls.list.length = 0
+    tree.startWatching()
+    await flush()
+    await flush()
+    expect(fs.calls.list).not.toContain(x.toString())
+    expect(fs.calls.list).not.toContain(deep.toString())
+
+    fs.calls.list.length = 0
+    await tree.expand(a)
+    tree.getVisibleEntries() // collect → the expanded x/deep row pulls itself
+    await flush()
+    await flush()
+
+    expect(fs.calls.list).toContain(x.toString())
+    expect(fs.calls.list).toContain(deep.toString())
+    expect(rowFor(tree, deep)?.compactName).toBe('x/deep')
+    expect(tree.getChildren(deep)?.map((entry) => entry.name)).toEqual(['f.txt'])
+
+    const reads = fs.calls.list.length
+    tree.getVisibleEntries()
+    tree.getVisibleEntries()
+    await flush()
+    expect(fs.calls.list.length).toBe(reads)
+  })
+
+  it('retries a failed hidden-chain pull only on the next user expand', async () => {
+    const a = URI.joinPath(root, 'a')
+    const x = URI.joinPath(a, 'x')
+    const deep = URI.joinPath(x, 'deep')
+    const { fs, tree } = makeTree({
+      [root.toString()]: [
+        { name: 'a', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [a.toString()]: [
+        { name: 'x', isFile: false, isDirectory: true },
+        { name: 'y', isFile: false, isDirectory: true },
+      ],
+      [x.toString()]: [{ name: 'deep', isFile: false, isDirectory: true }],
+      [deep.toString()]: [{ name: 'f.txt', isFile: true, isDirectory: false }],
+    })
+    await flush()
+    await tree.expand(a)
+    await tree.expand(x)
+    tree.collapse(a)
+    tree.startWatching()
+    await flush()
+    await flush()
+
+    const original = fs.list.bind(fs)
+    let fail = true
+    fs.list = async (resource: URI) => {
+      if (fail && resource.toString() === x.toString()) {
+        fs.calls.list.push(resource.toString())
+        throw new Error('boom')
+      }
+      return original(resource)
+    }
+    fs.calls.list.length = 0
+
+    await tree.expand(a)
+    tree.getVisibleEntries()
+    await flush()
+    await flush()
+
+    expect(tree.getNode(x).error).toBe('boom')
+    const failedReads = fs.calls.list.filter((p) => p === x.toString()).length
+    expect(failedReads).toBe(1)
+    tree.getVisibleEntries()
+    tree.getVisibleEntries()
+    await flush()
+    expect(fs.calls.list.filter((p) => p === x.toString())).toHaveLength(1)
+
+    // The explicit gesture retries and the chain compacts again.
+    fail = false
+    await tree.expand(x)
+    expect(tree.getNode(x).error).toBeNull()
+    expect(rowFor(tree, deep)?.compactName).toBe('x/deep')
+  })
+
+  it('CRUD inside an intermediate directory shortens the chain and keeps selection', async () => {
+    const src = URI.joinPath(root, 'src')
+    const lib = URI.joinPath(src, 'lib')
+    const other = URI.joinPath(root, 'other')
+    const { fs, tree } = makeTree({
+      [root.toString()]: [
+        { name: 'src', isFile: false, isDirectory: true },
+        { name: 'other', isFile: false, isDirectory: true },
+      ],
+      [src.toString()]: [{ name: 'lib', isFile: false, isDirectory: true }],
+      [lib.toString()]: [{ name: 'x.txt', isFile: true, isDirectory: false }],
+      [other.toString()]: [],
+    })
+    await flush()
+    await tree.expand(src)
+    tree.setSelection([lib], lib)
+    expect(rowFor(tree, lib)?.compactName).toBe('src/lib')
+
+    await tree.createFile(src, 'new.txt')
+
+    expect(rowFor(tree, src)?.compactName).toBeUndefined()
+    expect(tree.focused?.toString()).toBe(src.toString())
+    expect(tree.selection.map((resource) => resource.toString())).toEqual([src.toString()])
+    expect(tree.isExpanded(src)).toBe(true)
+    expect(rowFor(tree, lib)).toBeDefined()
+    expect(fs.calls.list).not.toContain(other.toString())
+  })
+
+  it('keeps an invalidation that lands while the first list is in flight', async () => {
+    const a = URI.joinPath(root, 'a')
+    const x = URI.joinPath(a, 'x')
+    const y = URI.joinPath(a, 'y')
+    const { fs, watcher, tree } = makeTree({
+      [root.toString()]: [
+        { name: 'a', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [a.toString()]: [
+        { name: 'x', isFile: false, isDirectory: true },
+        { name: 'y', isFile: false, isDirectory: true },
+      ],
+      [x.toString()]: [{ name: 'v1.txt', isFile: true, isDirectory: false }],
+      [y.toString()]: [],
+    })
+    await flush()
+    await tree.expand(a)
+
+    let release!: () => void
+    let markStarted!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const started = new Promise<void>((resolve) => (markStarted = resolve))
+    const list = fs.list.bind(fs)
+    fs.list = async (resource: URI) => {
+      if (resource.toString() === x.toString()) {
+        markStarted()
+        await gate
+      }
+      return list(resource)
+    }
+    fs.calls.list.length = 0
+
+    const expanding = tree.expand(x)
+    await started
+    // The row is hidden while its first read is still in flight, and the
+    // watcher says the directory changed underneath it.
+    tree.collapse(a)
+    watcher.fire([{ type: 'added', resource: URI.joinPath(x, 'new.txt') }])
+    release()
+    await expanding
+    await flush()
+
+    // The stale result must not be published as fresh: the invalidation wins a
+    // second read instead of being cleared by the first one's commit.
+    expect(fs.calls.list.filter((p) => p === x.toString())).toHaveLength(2)
+
+    fs.calls.list.length = 0
+    await tree.expand(a)
+    await tree.expand(x)
+    await flush()
+    expect(fs.calls.list.filter((p) => p === x.toString())).toHaveLength(0)
+  })
+})
+
+describe('ExplorerTreeService — collapsed chains stay unread', () => {
+  const root = URI.file('/ws')
+
+  function makeTree() {
+    const src = URI.joinPath(root, 'src')
+    const lib = URI.joinPath(src, 'lib')
+    const fs = makeFs({
+      [root.toString()]: [
+        { name: 'src', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [src.toString()]: [{ name: 'lib', isFile: false, isDirectory: true }],
+      [lib.toString()]: [{ name: 'v1.txt', isFile: true, isDirectory: false }],
+    })
+    const watcher = new FakeWatcher()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), watcher)
+    const tree = inst.createInstance(ExplorerTreeService)
+    return { fs, watcher, tree, src, lib }
+  }
+
+  function rowFor(tree: ExplorerTreeService, resource: URI) {
+    return tree
+      .getVisibleEntries()
+      .find((entry) => entry.resource.toString() === resource.toString())
+  }
+
+  it('recursive refresh does not read a collapsed compact chain', async () => {
+    const { fs, tree, src, lib } = makeTree()
+    await flush()
+    await tree.expand(src)
+    expect(rowFor(tree, lib)?.compactName).toBe('src/lib')
+    tree.collapse(lib)
+
+    fs.calls.list.length = 0
+    await tree.refresh(root, true)
+
+    expect(fs.calls.list).not.toContain(src.toString())
+    expect(fs.calls.list).not.toContain(lib.toString())
+
+    // Opening it again re-reads from the chain head on demand.
+    fs.calls.list.length = 0
+    await tree.expand(lib)
+    expect(fs.calls.list).toContain(src.toString())
+    expect(fs.calls.list).toContain(lib.toString())
+  })
+
+  it('re-expands a chain refreshed while collapsed with the new directory contents', async () => {
+    const { fs, tree, src, lib } = makeTree()
+    await flush()
+    await tree.expand(src)
+    expect(rowFor(tree, lib)?.compactName).toBe('src/lib')
+    tree.collapse(lib)
+
+    // External write while folded: the refresh must remember that the cached
+    // tail listing is no longer trustworthy, without reading it eagerly.
+    await fs.writeFile(URI.joinPath(lib, 'new.txt'), new Uint8Array())
+    fs.calls.list.length = 0
+    await tree.refresh(root, true)
+    expect(fs.calls.list).not.toContain(lib.toString())
+    expect(rowFor(tree, lib)?.compactName).toBe('src/lib')
+
+    await tree.expand(lib)
+    expect(tree.getChildren(lib)?.map((child) => child.name)).toContain('new.txt')
+    expect(rowFor(tree, URI.joinPath(lib, 'new.txt'))?.name).toBe('new.txt')
+  })
+
+  it('a watcher event inside a collapsed chain tail only invalidates it', async () => {
+    const { fs, watcher, tree, src, lib } = makeTree()
+    await flush()
+    await tree.expand(src)
+    tree.collapse(lib)
+
+    fs.calls.list.length = 0
+    const added = URI.joinPath(lib, 'new.txt')
+    await fs.writeFile(added, new Uint8Array())
+    watcher.fire([{ type: 'added', resource: added }])
+    await flush()
+
+    expect(fs.calls.list).not.toContain(lib.toString())
+    expect(fs.calls.list).not.toContain(src.toString())
+  })
+
+  it('a watcher event on a chain intermediate verifies identity without reading the tail', async () => {
+    const { fs, watcher, tree, src, lib } = makeTree()
+    await flush()
+    await tree.expand(src)
+    tree.collapse(lib)
+
+    fs.calls.list.length = 0
+    const ghost = URI.joinPath(src, 'ghost.txt')
+    watcher.fire([{ type: 'added', resource: ghost }])
+    await flush()
+
+    expect(fs.calls.list).toContain(src.toString())
+    expect(fs.calls.list).not.toContain(lib.toString())
+    expect(rowFor(tree, lib)?.compactName).toBe('src/lib')
   })
 })
 
@@ -1069,5 +1581,159 @@ describe('ExplorerTreeService — focus folders', () => {
     focus.fireChange()
     await flush()
     expect(fs.calls.list).toContain(root.toString())
+  })
+})
+
+/*
+ * 过滤变更（exclude/focus）只重读根与可见层，绝不为了重算旧过滤而全量重读
+ * 隐藏缓存：折叠后的巨型目录只标脏，重新展开时从链头按需应用新过滤。
+ */
+describe('ExplorerTreeService — 过滤变更按需重读', () => {
+  const root = URI.file('/ws')
+
+  function makeBigFs() {
+    const big = URI.joinPath(root, 'big')
+    const fs = makeFs({
+      [root.toString()]: [
+        { name: 'big', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [big.toString()]: [
+        { name: 'keep.ts', isFile: true, isDirectory: false },
+        { name: 'drop.ts', isFile: true, isDirectory: false },
+        { name: 'other.ts', isFile: true, isDirectory: false },
+      ],
+    })
+    return { fs, big }
+  }
+
+  it('exclude 变更不重读折叠目录，重新展开时才按新过滤读取', async () => {
+    const { fs, big } = makeBigFs()
+    const excluded = new Set<string>()
+    const exclude = new FakeExcludeService(excluded)
+    const inst = makeInst(
+      fs,
+      new FakeWorkspaceService(root),
+      new FakeWatcher(),
+      undefined,
+      undefined,
+      undefined,
+      exclude,
+    )
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(big)
+    expect(fs.calls.list).toContain(big.toString())
+    tree.collapse(big)
+
+    fs.calls.list.length = 0
+    excluded.add('big/drop.ts')
+    exclude.fireChange()
+    await flush()
+
+    expect(fs.calls.list).toContain(root.toString())
+    expect(fs.calls.list).not.toContain(big.toString())
+
+    await tree.expand(big)
+
+    expect(fs.calls.list).toContain(big.toString())
+    expect((tree.getChildren(big) ?? []).map((entry) => entry.name)).toEqual([
+      'keep.ts',
+      'other.ts',
+    ])
+  })
+
+  it('focus 变更不重读折叠目录，重新展开时才按新过滤读取', async () => {
+    const { fs, big } = makeBigFs()
+    const sub = URI.joinPath(big, 'sub')
+    fs.dirs.set(big.toString(), [
+      { name: 'sub', isFile: false, isDirectory: true },
+      { name: 'keep.ts', isFile: true, isDirectory: false },
+      { name: 'drop.ts', isFile: true, isDirectory: false },
+    ])
+    fs.dirs.set(sub.toString(), [{ name: 'sub.txt', isFile: true, isDirectory: false }])
+    const focus = new FakeFocusScopeService(['big'], root)
+    const inst = makeInst(
+      fs,
+      new FakeWorkspaceService(root),
+      new FakeWatcher(),
+      undefined,
+      undefined,
+      focus,
+    )
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(big)
+    tree.collapse(big)
+
+    fs.calls.list.length = 0
+    await focus.setFolders(['big/sub'])
+    await flush()
+
+    expect(fs.calls.list).toContain(root.toString())
+    expect(fs.calls.list).not.toContain(big.toString())
+
+    await tree.expand(big)
+
+    expect(fs.calls.list).toContain(big.toString())
+    // big 成了 focus 目标的骨架目录：自身文件隐藏，只剩通往 sub 的目录。
+    expect((tree.getChildren(big) ?? []).map((entry) => entry.name)).toEqual(['sub'])
+  })
+
+  it('折叠 compact 链时只重读中间节点，链尾等重新展开再读取', async () => {
+    const pkg = URI.joinPath(root, 'pkg')
+    const a = URI.joinPath(pkg, 'a')
+    const b = URI.joinPath(a, 'b')
+    const big = URI.joinPath(b, 'big')
+    const fs = makeFs({
+      [root.toString()]: [
+        { name: 'pkg', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [pkg.toString()]: [
+        { name: 'a', isFile: false, isDirectory: true },
+        { name: 'sibling.txt', isFile: true, isDirectory: false },
+      ],
+      [a.toString()]: [{ name: 'b', isFile: false, isDirectory: true }],
+      [b.toString()]: [{ name: 'big', isFile: false, isDirectory: true }],
+      [big.toString()]: [
+        { name: 'keep.ts', isFile: true, isDirectory: false },
+        { name: 'drop.ts', isFile: true, isDirectory: false },
+      ],
+    })
+    const excluded = new Set<string>()
+    const exclude = new FakeExcludeService(excluded)
+    const inst = makeInst(
+      fs,
+      new FakeWorkspaceService(root),
+      new FakeWatcher(),
+      undefined,
+      undefined,
+      undefined,
+      exclude,
+    )
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(pkg)
+    await tree.expand(a)
+    expect(tree.isExpanded(big)).toBe(true)
+    tree.collapse(big)
+    expect(tree.getVisibleEntries().some((entry) => entry.compactName === 'a/b/big')).toBe(true)
+
+    fs.calls.list.length = 0
+    excluded.add('pkg/a/b/big/drop.ts')
+    exclude.fireChange()
+    await flush()
+
+    // 中间节点至多各有一个子项，重读它们让折叠行标签立即正确；链尾可能是
+    // 巨型目录，只标脏不读取。
+    expect(fs.calls.list).toContain(a.toString())
+    expect(fs.calls.list).toContain(b.toString())
+    expect(fs.calls.list).not.toContain(big.toString())
+
+    await tree.expand(big)
+
+    expect(fs.calls.list).toContain(big.toString())
+    expect((tree.getChildren(big) ?? []).map((entry) => entry.name)).toEqual(['keep.ts'])
   })
 })

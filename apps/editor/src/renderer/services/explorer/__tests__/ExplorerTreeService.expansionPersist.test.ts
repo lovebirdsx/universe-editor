@@ -221,6 +221,49 @@ describe('ExplorerTreeService — expansion persistence', () => {
     expect(persistedIds(storage, other)).toEqual([])
   })
 
+  it('restores a descendant below a compact chain whose ancestors have no own row', async () => {
+    const top = URI.joinPath(root, 'top')
+    const chain = URI.joinPath(top, 'chain')
+    const mid = URI.joinPath(chain, 'mid')
+    const tail = URI.joinPath(mid, 'tail')
+    const y = URI.joinPath(tail, 'y')
+    fs.dirs.set(root.toString(), [{ name: 'top', isFile: false, isDirectory: true }])
+    fs.dirs.set(top.toString(), [
+      { name: 'chain', isFile: false, isDirectory: true },
+      { name: 'sibling.txt', isFile: true, isDirectory: false },
+    ])
+    fs.dirs.set(chain.toString(), [{ name: 'mid', isFile: false, isDirectory: true }])
+    fs.dirs.set(mid.toString(), [{ name: 'tail', isFile: false, isDirectory: true }])
+    fs.dirs.set(tail.toString(), [
+      { name: 'x.txt', isFile: true, isDirectory: false },
+      { name: 'y', isFile: false, isDirectory: true },
+    ])
+    fs.dirs.set(y.toString(), [{ name: 'z.txt', isFile: true, isDirectory: false }])
+
+    const tree1 = makeTree()
+    await flush()
+    await tree1.expand(top)
+    await tree1.expand(chain)
+    await tree1.expand(y)
+    tree1.flushExpansionState()
+    expect(persistedIds(storage, root)).toEqual(
+      expect.arrayContaining([top.toString(), chain.toString(), y.toString()]),
+    )
+    expect(persistedIds(storage, root)).not.toContain(tail.toString())
+    tree1.dispose()
+
+    const tree2 = makeTree()
+    await flush()
+    await flush()
+
+    // `mid` and `chain` are folded into the expanded `tail` row, so the raw
+    // ancestor walk must not read them as collapsed.
+    expect(tree2.isExpanded(tail)).toBe(true)
+    expect(tree2.isExpanded(y)).toBe(true)
+    expect(tree2.getChildren(y)).not.toBeNull()
+    expect(tree2.getChildren(y)?.some((entry) => entry.name === 'z.txt')).toBe(true)
+  })
+
   it('does not clobber a directory the user collapsed after restore', async () => {
     const tree1 = makeTree()
     await flush()
@@ -240,5 +283,49 @@ describe('ExplorerTreeService — expansion persistence', () => {
     await flush()
 
     expect(tree2.isExpanded(a)).toBe(false)
+  })
+
+  it('does not resurrect a collapsed compact tail when its persisted chain head is re-restored', async () => {
+    const source = URI.joinPath(root, 'source')
+    const config = URI.joinPath(source, 'config')
+    const raw = URI.joinPath(config, 'raw')
+    const tables = URI.joinPath(raw, 'tables')
+    fs.dirs.set(root.toString(), [
+      { name: 'source', isFile: false, isDirectory: true },
+      { name: 'README.md', isFile: true, isDirectory: false },
+    ])
+    fs.dirs.set(source.toString(), [
+      { name: 'config', isFile: false, isDirectory: true },
+      { name: 'a.txt', isFile: true, isDirectory: false },
+    ])
+    fs.dirs.set(config.toString(), [{ name: 'raw', isFile: false, isDirectory: true }])
+    fs.dirs.set(raw.toString(), [{ name: 'tables', isFile: false, isDirectory: true }])
+    fs.dirs.set(tables.toString(), [{ name: 'data.json', isFile: true, isDirectory: false }])
+
+    const tree = makeTree()
+    await flush()
+    await tree.expand(source)
+    await tree.expand(config) // the row id migrates to the chain tail `tables`
+    tree.flushExpansionState()
+    // Persistence records the chain HEAD; the model's head state is gone after
+    // the migration, so only the tail state can express user intent.
+    expect(persistedIds(storage, root)).toEqual(
+      expect.arrayContaining([source.toString(), config.toString()]),
+    )
+    expect(persistedIds(storage, root)).not.toContain(tables.toString())
+
+    tree.collapse(tables)
+    // The scope rehydration lands inside the 300ms persist debounce window, so
+    // storage still holds the chain head that used to describe the open row.
+    storage.fireWorkspaceScopeChange()
+    await flush()
+    await flush()
+
+    expect(tree.isExpanded(tables)).toBe(false)
+    expect(tree.isExpanded(config)).toBe(false)
+    const row = tree
+      .getVisibleEntries()
+      .find((entry) => entry.resource.toString() === tables.toString())
+    expect(row?.compactName).toBe('config/raw/tables')
   })
 })

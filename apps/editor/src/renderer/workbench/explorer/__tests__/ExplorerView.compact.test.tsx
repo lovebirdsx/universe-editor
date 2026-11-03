@@ -260,7 +260,12 @@ describe('ExplorerView — compact folders', () => {
       [src.toString()]: [{ name: 'lib', isFile: false, isDirectory: true }],
       [lib.toString()]: [],
     })
-    const { container, getByText, fs: mockFs } = renderView({ folder: root, fs })
+    const { container, getByText, fs: mockFs, tree } = renderView({ folder: root, fs })
+    // The fork keeps `src` plain until the user opens it; opening resolves the
+    // single-directory chain into the compact `src/lib` row.
+    await act(async () => {
+      await tree.expand(src)
+    })
 
     const row = await waitFor(() => {
       const r = container.querySelector<HTMLElement>(`[data-row-key="${lib.toString()}"]`)
@@ -303,7 +308,10 @@ describe('ExplorerView — compact folders segment targeting', () => {
       [src.toString()]: [{ name: 'lib', isFile: false, isDirectory: true }],
       [lib.toString()]: [],
     })
-    const { container, getByText, fs: mockFs } = renderView({ folder: root, fs })
+    const { container, getByText, fs: mockFs, tree } = renderView({ folder: root, fs })
+    await act(async () => {
+      await tree.expand(src)
+    })
 
     // Wait for the compact node to render its per-segment spans.
     const srcSeg = await waitFor(() => {
@@ -383,10 +391,9 @@ describe('ExplorerView — compact folders segment targeting', () => {
 })
 
 /*
- * A chain one level below a directory whose own children the root prefetch has
- * already cached. Expanding that directory used to short-circuit the prefetch,
- * so the chain rendered plain and only compacted on the next ArrowRight — which
- * moves the row id to the chain tail and silently drops the selection.
+ * A chain under a directory the root's own load already cached. Expanding the
+ * fork child resolves the single-directory chain and moves the row id to the
+ * chain tail; the click that opened it must keep the row selected.
  */
 describe('ExplorerView — compact chain below a cached parent', () => {
   const root = URI.file('/ws')
@@ -395,7 +402,7 @@ describe('ExplorerView — compact chain below a cached parent', () => {
   const raw = URI.joinPath(config, 'raw')
   const leaf = URI.joinPath(raw, 'data.json')
 
-  it('keeps the row selected when ArrowRight expands the compact chain', async () => {
+  it('keeps the row selected when clicking the chain head expands the compact chain', async () => {
     const fs = makeFs({
       [root.toString()]: [{ name: 'source', isFile: false, isDirectory: true }],
       [source.toString()]: [
@@ -412,17 +419,25 @@ describe('ExplorerView — compact chain below a cached parent', () => {
       await tree.expand(source)
     })
 
-    // The chain is compacted on the first frame: one row keyed by the tail, no
-    // separate `config` row to press ArrowRight on.
+    // `source` is a fork, so the chain head renders plain first.
+    const configRow = await waitFor(() => {
+      const r = container.querySelector<HTMLElement>(`[data-row-key="${config.toString()}"]`)
+      expect(r).toBeTruthy()
+      return r!
+    })
+
+    fireEvent.click(configRow)
+
+    // One click resolves config → raw and the row key moves to the tail in the
+    // same transaction: no second press, and the selection came along.
     const row = await waitFor(() => {
       const r = container.querySelector<HTMLElement>(`[data-row-key="${raw.toString()}"]`)
       expect(r).toBeTruthy()
       return r!
     })
     expect(container.querySelector(`[data-row-key="${config.toString()}"]`)).toBeNull()
+    expect(row.getAttribute('aria-selected')).toBe('true')
 
-    fireEvent.click(row)
-    await waitFor(() => expect(row.getAttribute('aria-selected')).toBe('true'))
     // Clicking a directory also toggles it; collapse again so ArrowRight is the
     // press that expands rather than the one that steps into the first child.
     act(() => tree.collapse(raw))
