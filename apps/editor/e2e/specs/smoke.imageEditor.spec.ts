@@ -5,7 +5,7 @@
  *  并可通过 "Reopen With..." 回退到文本编辑器（typeId='file'）。
  *--------------------------------------------------------------------------------------------*/
 
-import { writeFileSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
 import { mkTempDir } from '@universe-editor/e2e-harness'
@@ -13,6 +13,23 @@ import { mkTempDir } from '@universe-editor/e2e-harness'
 // A minimal valid 1x1 transparent PNG.
 const PNG_1X1_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+/** 最新 session 的 main console 日志（Error 级条目即时 flush）。 */
+function readNewestConsoleLog(userData: string): string {
+  let sessions: string[]
+  try {
+    sessions = readdirSync(join(userData, 'logs')).sort()
+  } catch {
+    return ''
+  }
+  const newest = sessions.at(-1)
+  if (!newest) return ''
+  try {
+    return readFileSync(join(userData, 'logs', newest, 'console.log'), 'utf8')
+  } catch {
+    return ''
+  }
+}
 
 test.describe('@p1 image editor', () => {
   test('opens a .png as the image editor', async ({ page, workbench }) => {
@@ -70,5 +87,34 @@ test.describe('@p1 image editor', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
       .toBe('file')
+  })
+
+  test('a missing image shows the failure message without logging ERR_FILE_NOT_FOUND', async ({
+    electronApp,
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    const userData = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+    const before = readNewestConsoleLog(userData)
+
+    // 不创建文件：EditorResolverService 只按扩展名路由，仍会打开图片编辑器。
+    const tmpDir = mkTempDir('universe-editor-e2e-image-missing-')
+    const missingFsPath = join(tmpDir, 'missing.png').replace(/\\/g, '/')
+
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), missingFsPath)
+
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('image')
+    await expect(page.getByText('Cannot display this image.')).toBeVisible()
+    // stat 失败后不渲染 <img>，因此不会发出 ue-file 请求。
+    await expect(page.locator('[data-testid="image-editor"] img')).toHaveCount(0)
+
+    // Error 级日志立即 flush；给修复前的回归留出落盘时间再读增量。
+    await page.waitForTimeout(500)
+    const appended = readNewestConsoleLog(userData).slice(before.length)
+    expect(appended).not.toContain('ERR_FILE_NOT_FOUND')
   })
 })

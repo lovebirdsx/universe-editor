@@ -65,6 +65,10 @@ export function ImageEditor({ input }: { input: IEditorInput }) {
 
   const [natural, setNatural] = useState<NaturalSize | null>(null)
   const [byteSize, setByteSize] = useState<number | null>(null)
+  // null = stat has not answered yet. Render <img> only after the file is known
+  // to exist; a restored tab whose image was deleted would otherwise fire a
+  // `ue-file:` request on the first frame and log net::ERR_FILE_NOT_FOUND.
+  const [available, setAvailable] = useState<boolean | null>(null)
   const [error, setError] = useState(false)
   // `null` scale means "fit to viewport"; a number is an explicit zoom factor.
   const [scale, setScale] = useState<number | null>(null)
@@ -74,12 +78,22 @@ export function ImageEditor({ input }: { input: IEditorInput }) {
 
   useEffect(() => {
     let cancelled = false
+    setAvailable(null)
+    setNatural(null)
+    setByteSize(null)
+    setError(false)
     void fileService
       .stat(resource)
       .then((stat) => {
-        if (!cancelled) setByteSize(stat.size)
+        if (cancelled) return
+        setByteSize(stat.size)
+        setAvailable(true)
       })
-      .catch(() => {})
+      .catch(() => {
+        if (cancelled) return
+        setAvailable(false)
+        setError(true)
+      })
     return () => {
       cancelled = true
     }
@@ -196,7 +210,7 @@ export function ImageEditor({ input }: { input: IEditorInput }) {
         <div className={styles['imageEditorMessage']}>
           {localize('image.load.failed', 'Cannot display this image.')}
         </div>
-      ) : (
+      ) : available === true ? (
         <div className={styles['imageEditorStage']}>
           <img
             src={src}
@@ -209,7 +223,7 @@ export function ImageEditor({ input }: { input: IEditorInput }) {
             {...(imgStyle ? { style: imgStyle } : {})}
           />
         </div>
-      )}
+      ) : null}
     </div>
   )
 }

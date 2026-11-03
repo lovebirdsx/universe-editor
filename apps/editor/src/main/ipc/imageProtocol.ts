@@ -39,7 +39,16 @@ export const IMAGE_SCHEME_PRIVILEGE: Electron.CustomScheme = {
  * Wire up the protocol handler. MUST run after `app.whenReady()`.
  */
 export function installImageProtocol(): void {
-  protocol.handle(IMAGE_PROTOCOL_SCHEME, (request) =>
-    net.fetch(imageRequestUrlToFileUrl(request.url)),
-  )
+  protocol.handle(IMAGE_PROTOCOL_SCHEME, async (request) => {
+    const fileUrl = imageRequestUrlToFileUrl(request.url)
+    try {
+      return await net.fetch(fileUrl)
+    } catch (err) {
+      // A missing image (deleted/renamed while its tab was restored) is an
+      // expected user state, not an app error: answer 404 ourselves so Electron
+      // does not log `net::ERR_FILE_NOT_FOUND` at error level.
+      console.warn(`[imageProtocol] cannot read ${fileUrl}: ${String(err)}`)
+      return new Response('Not Found', { status: 404 })
+    }
+  })
 }
