@@ -38,6 +38,7 @@ import type {
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSession, CONTINUE_PROMPT_TEXT, recoveryContinuePromptText } from '../acpSession.js'
+import type { IAcpSession } from '../acpSessionModel.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
@@ -45,6 +46,11 @@ import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { AcpAuthGuidanceService } from '../acpAuthGuidanceService.js'
 import { stubAcpCodexAutoReviewGuard } from './stubAcpCodexAutoReviewGuard.js'
 import { AcpSessionFactory } from '../acpSessionFactory.js'
+import {
+  InMemoryAcpMessageAttachmentStore,
+  type IAcpMessageAttachmentStore,
+} from '../acpMessageAttachmentStore.js'
+import type { SelectionContext } from '../../promptContext.js'
 import {
   __setRecoveryBackoffForTests,
   MAX_RECOVERY_ATTEMPTS,
@@ -203,6 +209,14 @@ interface Script {
    * startup failure, not an idle reclaim.
    */
   abortOnConnect?: number
+  /**
+   * Faithful CLI messageId dedup (confirmed with the real fork): a prompt whose
+   * `_meta.messageId` the agent has already received is skipped — no model
+   * request, the turn goes idle, and the fork rejects with `no_result`. Seen
+   * ids survive reconnects because the transcript does; this is exactly the
+   * failure mode that made every same-uuid retry return immediately.
+   */
+  dedupMessageIds?: boolean
 }
 
 class ScriptedClient implements IAcpClientService {
@@ -227,6 +241,8 @@ class ScriptedClient implements IAcpClientService {
     cwd: string | undefined
     authority: string | undefined
   }> = []
+  /** Wire messageIds the (single) agent transcript has already accepted. */
+  private readonly _seenMessageIds = new Set<string>()
 
   constructor(readonly script: Script) {}
 
@@ -298,6 +314,13 @@ class ScriptedClient implements IAcpClientService {
       prompt: (req: PromptRequest): Promise<PromptResponse> => {
         promptCalls.push(req)
         events.push('prompt')
+        const messageId = req._meta?.messageId
+        if (this.script.dedupMessageIds === true && typeof messageId === 'string') {
+          // Dedup BEFORE consuming the scripted outcome: a repeated id never
+          // reaches the model (0 API requests in the live repro).
+          if (this._seenMessageIds.has(messageId)) return Promise.reject(noResultError())
+          this._seenMessageIds.add(messageId)
+        }
         const next = this.script.promptResults.shift()
         if (!next) return Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)
         return next(req)
@@ -383,6 +406,7 @@ function makeService(
   config: ConfigurationService,
   candidates: IAcpModelCandidateService = stubAcpModelCandidateService(),
   history: AcpSessionHistoryService = makeHistory(),
+  attachments: IAcpMessageAttachmentStore = new InMemoryAcpMessageAttachmentStore(),
 ): AcpSessionService {
   const notification = new StubNotificationService()
   const telemetry = new NoopTelemetryService() as ITelemetryService
@@ -419,6 +443,7 @@ function makeService(
         new NoopTelemetryService(),
         new StubLoggerService(),
       ),
+      attachments,
     ),
     new StubFileService(),
     new StubExtensionMcpServersService(),
@@ -435,6 +460,20 @@ function makeService(
 
 function transientError(): Error {
   return Object.assign(new Error('overloaded'), { data: { errorKind: 'overloaded' } })
+}
+
+/**
+ * What the real fork returns when the CLI skipped a prompt whose messageId was
+ * already in its transcript: the turn goes idle without a result. Classified
+ * transient, so pre-fix the editor retried the same id and stayed stuck.
+ */
+function noResultError(): Error {
+  return Object.assign(
+    new Error(
+      'Internal error: The turn ended without a result: the agent went idle while this prompt was still in flight (e.g. the model stream dropped mid-turn). Any partial output may be incomplete; please retry.',
+    ),
+    { code: -32603, data: { errorKind: 'no_result' } },
+  )
 }
 
 /**
@@ -502,12 +541,674 @@ describe('AcpSession auto-recovery', () => {
     // A retry episode surfaces, then clears once the second attempt lands.
     await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
     expect(client.connections[0]!.promptCalls.length).toBe(2)
-    // No duplicate user message: both attempts reuse the same messageId (zero output).
-    expect(client.connections[0]!.promptCalls[0]!._meta?.messageId).toBe(
+    // No duplicate user message: one bubble, anchored on the retried wire uuid.
+    expect(client.connections[0]!.promptCalls[0]!._meta?.messageId).not.toBe(
       client.connections[0]!.promptCalls[1]!._meta?.messageId,
     )
     // No [error] on the timeline for a recovered turn.
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+  })
+
+  describe('messageId rotation (CLI dedup)', () => {
+    const userMessages = (s: IAcpSession) => s.messages.get().filter((m) => m.role === 'user')
+
+    it('retries a deduping agent with a fresh wire UUID', async () => {
+      // Repro of the 502/empty-response field failure: the CLI records the
+      // first prompt's uuid, skips the same uuid on retry (no model request),
+      // and the fork rejects with no_result. A fresh uuid per attempt is the
+      // only way through.
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+      const calls = client.connections[0]!.promptCalls
+      expect(calls).toHaveLength(2)
+      const ids = calls.map((c) => c._meta?.messageId)
+      expect(ids[0]).toBeTruthy()
+      expect(ids[1]).not.toBe(ids[0])
+      // One user bubble, anchored on the id that actually reached the agent.
+      const own = userMessages(s).filter((m) => m.text === 'do it')
+      expect(own).toHaveLength(1)
+      expect(own[0]!.messageId).toBe(ids[1])
+      expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(false)
+    })
+
+    it('gives every automatic retry its own UUID', async () => {
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(ids).toHaveLength(3)
+      expect(new Set(ids).size).toBe(3)
+      const own = userMessages(s).filter((m) => m.text === 'do it')
+      expect(own).toHaveLength(1)
+      expect(own[0]!.messageId).toBe(ids[2])
+    })
+
+    it('rotates the UUID on a manual retry after exhaustion', async () => {
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          // The manual retry lands on a fresh uuid.
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+      expect(client.connections[0]!.promptCalls).toHaveLength(MAX_RECOVERY_ATTEMPTS)
+
+      await s.retryRecovery()
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+      const calls = client.connections[0]!.promptCalls
+      expect(calls).toHaveLength(MAX_RECOVERY_ATTEMPTS + 1)
+      const ids = calls.map((c) => c._meta?.messageId)
+      expect(new Set(ids).size).toBe(ids.length)
+      const own = userMessages(s).filter((m) => m.text === 'do it')
+      expect(own).toHaveLength(1)
+      expect(own[0]!.messageId).toBe(ids[ids.length - 1])
+    })
+
+    it('手动重试保留最后一次失败才开始输出的原始锚点', async () => {
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'partial on final attempt' },
+            })
+            return Promise.reject(transientError())
+          },
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      svc = makeService(client, new ConfigurationService())
+      const s = await svc.createSession()
+      await s.whenConnected()
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+      const originalId = userMessages(s).find((m) => m.text === 'do it')?.messageId
+
+      await s.retryRecovery()
+      await waitFor(s.status, (v) => v === 'idle')
+      const retried = client.connections[0]!.promptCalls[3]!
+      expect(retried.prompt).toEqual([{ type: 'text', text: CONTINUE_PROMPT_TEXT }])
+      expect(userMessages(s).find((m) => m.text === 'do it')?.messageId).toBe(originalId)
+      expect(userMessages(s).find((m) => m.text === CONTINUE_PROMPT_TEXT)?.messageId).toBe(
+        retried._meta?.messageId,
+      )
+    })
+
+    it('resends after a reconnect with a fresh UUID', async () => {
+      let resolveResent: (() => void) | undefined
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => new Promise<PromptResponse>(() => {}),
+          () =>
+            new Promise<PromptResponse>((resolve) => {
+              resolveResent = () => resolve({ stopReason: 'end_turn' } as PromptResponse)
+            }),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      void s.sendPrompt('run something')
+      await waitFor(s.status, (v) => v === 'running')
+      const firstId = client.connections[0]!.promptCalls[0]!._meta?.messageId
+
+      client.killConnection(0)
+      await waitFor(s.recoveryState, (v) => v === undefined)
+      expect(client.connections.length).toBe(2)
+      await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+      const resent = client.connections[1]!.promptCalls[0]!
+      expect(resent._meta?.messageId).not.toBe(firstId)
+      expect(resent.prompt.some((b) => b.type === 'text' && b.text === 'run something')).toBe(true)
+      resolveResent?.()
+      await waitFor(s.status, (v) => v === 'idle')
+      // Still one bubble; the retried attempt replaced the anchor in place.
+      expect(userMessages(s).filter((m) => m.text === 'run something')).toHaveLength(1)
+    })
+
+    it('never reuses a continuation UUID across retries', async () => {
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'partial' },
+            })
+            return Promise.reject(transientError())
+          },
+          () => Promise.reject(transientError()),
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+      const calls = client.connections[0]!.promptCalls
+      expect(calls).toHaveLength(3)
+      const ids = calls.map((c) => c._meta?.messageId)
+      expect(new Set(ids).size).toBe(3)
+      // Every retry keeps the continuation semantics (text, not the original
+      // prompt) while rotating the wire uuid.
+      for (const call of calls.slice(1)) {
+        expect(call.prompt.some((b) => b.type === 'text' && b.text === CONTINUE_PROMPT_TEXT)).toBe(
+          true,
+        )
+      }
+      const continuations = userMessages(s).filter((m) => m.text === CONTINUE_PROMPT_TEXT)
+      expect(continuations).toHaveLength(1)
+      expect(continuations[0]!.messageId).toBe(ids[2])
+    })
+
+    it('keeps the anchor of a continuation that already produced output', async () => {
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'first partial' },
+            })
+            return Promise.reject(transientError())
+          },
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'second partial' },
+            })
+            return Promise.reject(transientError())
+          },
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(ids).toHaveLength(3)
+      expect(new Set(ids).size).toBe(3)
+      // The first continuation produced output, so its anchor must stay: a new
+      // continuation turn is appended for the next attempt instead.
+      expect(userMessages(s).find((m) => m.text === 'do it')?.messageId).toBe(ids[0])
+      const continuations = userMessages(s).filter((m) => m.text === CONTINUE_PROMPT_TEXT)
+      expect(continuations.map((m) => m.messageId)).toEqual([ids[1], ids[2]])
+    })
+
+    it('reuses a no-output continuation bubble after a reconnect', async () => {
+      let resolveResent: (() => void) | undefined
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'partial' },
+            })
+            return Promise.reject(transientError())
+          },
+          // The continuation hangs until the process dies.
+          () => new Promise<PromptResponse>(() => {}),
+          // The post-reconnect resend.
+          () =>
+            new Promise<PromptResponse>((resolve) => {
+              resolveResent = () => resolve({ stopReason: 'end_turn' } as PromptResponse)
+            }),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      void s.sendPrompt('do it')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 2)
+      const originalId = client.connections[0]!.promptCalls[0]!._meta?.messageId
+      const continuationId = client.connections[0]!.promptCalls[1]!._meta?.messageId
+      expect(continuationId).not.toBe(originalId)
+
+      client.killConnection(0)
+      await waitFor(s.recoveryState, (v) => v === undefined)
+      await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+      const resentId = client.connections[1]!.promptCalls[0]!._meta?.messageId
+      expect(resentId).not.toBe(continuationId)
+      // One continuation bubble, re-anchored on the uuid that went out; the
+      // original prompt anchor is untouched.
+      const continuations = userMessages(s).filter((m) => m.text === CONTINUE_PROMPT_TEXT)
+      expect(continuations).toHaveLength(1)
+      expect(continuations[0]!.messageId).toBe(resentId)
+      expect(userMessages(s).find((m) => m.text === 'do it')?.messageId).toBe(originalId)
+      resolveResent?.()
+      await waitFor(s.status, (v) => v === 'idle')
+    })
+
+    it('keeps a continuation anchor that produced output before a reconnect', async () => {
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'first partial' },
+            })
+            return Promise.reject(transientError())
+          },
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'second partial' },
+            })
+            return new Promise<PromptResponse>(() => {})
+          },
+          // The post-reconnect continuation.
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      void s.sendPrompt('do it')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 2)
+      const firstContinuationId = client.connections[0]!.promptCalls[1]!._meta?.messageId
+
+      client.killConnection(0)
+      await waitFor(s.recoveryState, (v) => v === undefined)
+      await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+      const resentId = client.connections[1]!.promptCalls[0]!._meta?.messageId
+      expect(resentId).not.toBe(firstContinuationId)
+      // The first continuation's output stays anchored where it began: a new
+      // continuation turn is appended instead of rewriting it.
+      const continuations = userMessages(s).filter((m) => m.text === CONTINUE_PROMPT_TEXT)
+      expect(continuations.map((m) => m.messageId)).toEqual([firstContinuationId, resentId])
+      await waitFor(s.status, (v) => v === 'idle')
+    })
+
+    it('treats a stop during a continuation retry as a normal interruption', async () => {
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => {
+            client.emit(0, {
+              sessionUpdate: 'agent_message_chunk',
+              content: { type: 'text', text: 'partial' },
+            })
+            return Promise.reject(transientError())
+          },
+          // The continuation dispatch hangs until cancelled.
+          () => new Promise<PromptResponse>(() => {}),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+
+      let restoreFires = 0
+      const sub = s.onDidCancelForRestore(() => restoreFires++)
+      void s.sendPrompt('do it')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 2)
+      const continuationId = client.connections[0]!.promptCalls[1]!._meta?.messageId
+
+      await s.cancelTurn()
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+      // Partial output is a normal interruption: everything stays, no draft
+      // restore, no retraction — including the continuation bubble that was
+      // actually sent.
+      expect(restoreFires).toBe(0)
+      expect(userMessages(s).find((m) => m.text === 'do it')).toBeDefined()
+      expect(userMessages(s).find((m) => m.text === CONTINUE_PROMPT_TEXT)?.messageId).toBe(
+        continuationId,
+      )
+      expect(userMessages(s).some((m) => m.text === '[Request interrupted by user]')).toBe(true)
+      expect(history.get(sid)?.retractedMessageIds).toBeUndefined()
+      sub.dispose()
+    })
+
+    it('keeps one bubble and re-anchors attachments on the live UUID', async () => {
+      const attachments = new InMemoryAcpMessageAttachmentStore()
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history, attachments)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+
+      const selection: SelectionContext = {
+        uri: 'file:///workspace/a.ts',
+        relPath: 'a.ts',
+        text: 'const a = 1',
+        startLine: 1,
+        endLine: 1,
+      }
+      await s.sendPrompt('do it', undefined, [selection])
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(ids).toHaveLength(2)
+      // The zero-output resend keeps the original attachment blocks on the wire.
+      expect(
+        JSON.stringify(client.connections[0]!.promptCalls[1]!.prompt).includes('const a = 1'),
+      ).toBe(true)
+      // The anchor moved; the old id no longer owns the snapshot.
+      expect(attachments.getSelections(sid, ids[1] as string)).toHaveLength(1)
+      expect(attachments.getSelections(sid, ids[0] as string)).toHaveLength(0)
+      // The superseded attempt is recorded as retracted so a resume replay
+      // cannot resurrect it as a second user row.
+      expect(history.get(sid)?.retractedMessageIds).toContain(ids[0])
+    })
+
+    it('only rotates the dispatch that is retrying when a steering prompt is newer', async () => {
+      let rejectFirst: ((err: Error) => void) | undefined
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () =>
+            new Promise<PromptResponse>((_, reject) => {
+              rejectFirst = reject
+            }),
+          // Steering prompt B hangs until the cancel below aborts it.
+          () => new Promise<PromptResponse>(() => {}),
+          // A's retry shares the same script entry shape: it also hangs, so the
+          // test can cancel with both turns in flight.
+          () => new Promise<PromptResponse>(() => {}),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config)
+      const s = await svc.createSession()
+      await s.whenConnected()
+
+      const first = s.sendPrompt('prompt A')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 1)
+      const second = s.sendPrompt('prompt B')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 2)
+
+      // A fails after B became the latest dispatch, then retries on a fresh id.
+      rejectFirst?.(transientError())
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 3)
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(ids[2]).not.toBe(ids[0])
+      expect(userMessages(s).find((m) => m.text === 'prompt A')?.messageId).toBe(ids[2])
+      expect(userMessages(s).find((m) => m.text === 'prompt B')).toBeDefined()
+
+      await s.cancelTurn()
+      await Promise.allSettled([first, second])
+      // Last-wins retraction still targets B: A's retry must not have replaced
+      // the session's last-dispatch snapshot.
+      expect(userMessages(s).find((m) => m.text === 'prompt A')).toBeDefined()
+      expect(userMessages(s).find((m) => m.text === 'prompt B')).toBeUndefined()
+    })
+
+    it('does not rotate the anchor when the user cancels during backoff', async () => {
+      __setRecoveryBackoffForTests(() => 500)
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+
+      void s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v?.phase === 'retrying')
+      const firstId = client.connections[0]!.promptCalls[0]!._meta?.messageId
+      // Still the id that actually went out; the next attempt was never sent.
+      expect(userMessages(s).find((m) => m.text === 'do it')?.messageId).toBe(firstId)
+
+      await s.cancelTurn()
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+      expect(client.connections[0]!.promptCalls).toHaveLength(1)
+      // Cancelled before the resend: the original prompt is retracted (draft
+      // restore), not a rotated anchor that never reached the agent.
+      expect(userMessages(s).find((m) => m.text === 'do it')).toBeUndefined()
+      expect(history.get(sid)?.retractedMessageIds).toEqual([firstId])
+    })
+
+    it('retracts the rotated anchor when the user stops an in-flight retry', async () => {
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        dedupMessageIds: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => new Promise<PromptResponse>(() => {}),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+
+      void s.sendPrompt('do it')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 2)
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(ids[1]).not.toBe(ids[0])
+
+      await s.cancelTurn()
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+      expect(userMessages(s).find((m) => m.text === 'do it')).toBeUndefined()
+      // The live anchor (the retry that was actually sent) is the persisted one;
+      // the superseded attempt is also hidden from replay.
+      expect(history.get(sid)?.retractedMessageIds).toContain(ids[1])
+      expect(history.get(sid)?.retractedMessageIds).toContain(ids[0])
+    })
+
+    it('keeps the last-dispatch anchor in sync across consecutive retries (cancel)', async () => {
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          // Third attempt hangs until cancelled.
+          () => new Promise<PromptResponse>(() => {}),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+
+      void s.sendPrompt('do it')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 3)
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(new Set(ids).size).toBe(3)
+
+      await s.cancelTurn()
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+      // The stale first-rotation anchor used to survive the second rotation, so
+      // cancel found no bubble and left the prompt on the timeline.
+      expect(userMessages(s).find((m) => m.text === 'do it')).toBeUndefined()
+      expect(history.get(sid)?.retractedMessageIds).toContain(ids[2])
+    })
+
+    it('reconnects onto the bubble anchor after consecutive retries', async () => {
+      let resolveResent: (() => void) | undefined
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          () => new Promise<PromptResponse>(() => {}),
+          () =>
+            new Promise<PromptResponse>((resolve) => {
+              resolveResent = () => resolve({ stopReason: 'end_turn' } as PromptResponse)
+            }),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+
+      void s.sendPrompt('do it')
+      await waitFor({ get: () => client.connections[0]!.promptCalls.length }, (n) => n === 3)
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(new Set(ids).size).toBe(3)
+
+      client.killConnection(0)
+      await waitFor(s.recoveryState, (v) => v === undefined)
+      await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+      const resentId = client.connections[1]!.promptCalls[0]!._meta?.messageId
+      expect(resentId).not.toBe(ids[2])
+      // The resume must rotate the bubble that is actually on the wire, not the
+      // anchor from the first rotation.
+      expect(userMessages(s).find((m) => m.text === 'do it')?.messageId).toBe(resentId)
+      expect(history.get(sid)?.retractedMessageIds).toContain(ids[2])
+      resolveResent?.()
+      await waitFor(s.status, (v) => v === 'idle')
+    })
+
+    it('retries an exhausted dead-connection session on the bubble anchor', async () => {
+      let resolveResent: (() => void) | undefined
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          () => Promise.reject(transientError()),
+          () =>
+            new Promise<PromptResponse>((resolve) => {
+              resolveResent = () => resolve({ stopReason: 'end_turn' } as PromptResponse)
+            }),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v?.phase === 'exhausted')
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(new Set(ids).size).toBe(MAX_RECOVERY_ATTEMPTS)
+
+      client.killConnection(0)
+      await waitFor(s.status, (v) => v === 'closed')
+
+      await s.retryRecovery()
+      await waitFor({ get: () => client.connections[1]?.promptCalls.length ?? 0 }, (n) => n === 1)
+      const resentId = client.connections[1]!.promptCalls[0]!._meta?.messageId
+      expect(resentId).not.toBe(ids[ids.length - 1])
+      expect(userMessages(s).find((m) => m.text === 'do it')?.messageId).toBe(resentId)
+      expect(history.get(sid)?.retractedMessageIds).toContain(ids[ids.length - 1])
+      resolveResent?.()
+      await waitFor(s.status, (v) => v === 'idle')
+    })
+
+    it('migrates the side-task replay anchor when the first prompt rotates', async () => {
+      const history = makeHistory()
+      client = new ScriptedClient({
+        loadSession: true,
+        promptResults: [
+          () => Promise.reject(transientError()),
+          () => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse),
+        ],
+      })
+      const config = new ConfigurationService()
+      svc = makeService(client, config, undefined, history)
+      const s = await svc.createSession()
+      await s.whenConnected()
+      const sid = s.sessionIdOnAgent.get()!
+      history.add({
+        agentId: 'fake',
+        sessionIdOnAgent: sid,
+        title: 'side chat',
+        sideTaskOf: 'agent-parent',
+      })
+
+      await s.sendPrompt('do it')
+      await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
+
+      const ids = client.connections[0]!.promptCalls.map((c) => c._meta?.messageId)
+      expect(ids).toHaveLength(2)
+      // The write-once pin was the first uuid; it must follow the live anchor or
+      // a resume would suppress the side task's entire replay.
+      expect(history.get(sid)?.sideTaskAnchorMessageId).toBe(ids[1])
+      expect(history.get(sid)?.sideTaskOf).toBe('agent-parent')
+    })
   })
 
   it('retries an unknown-kind turn failure whose message text is transient', async () => {
@@ -582,21 +1283,23 @@ describe('AcpSession auto-recovery', () => {
     const errors = s.messages.get().filter((m) => m.text.startsWith('[error]'))
     expect(errors).toHaveLength(1)
     expect(errors[0]!.text).toBe('[error] Internal error')
-    // Zero-output turn: the retry reused the same messageId (no 继续 bubble).
+    // Zero-output turn: the retry kept the original text but rotated the uuid
+    // (no 继续 bubble).
     expect(client.connections[0]!.promptCalls.length).toBe(2)
-    expect(client.connections[0]!.promptCalls[0]!._meta?.messageId).toBe(
+    expect(client.connections[0]!.promptCalls[0]!._meta?.messageId).not.toBe(
       client.connections[0]!.promptCalls[1]!._meta?.messageId,
     )
     expect(s.messages.get().some((m) => m.role === 'user' && m.text === CONTINUE_PROMPT_TEXT)).toBe(
       false,
     )
 
-    // The manual retry clears the exhausted state and re-dispatches verbatim.
+    // The manual retry clears the exhausted state and re-dispatches verbatim
+    // on yet another fresh uuid.
     await s.retryRecovery()
     await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
     expect(client.connections[0]!.promptCalls.length).toBe(3)
-    expect(client.connections[0]!.promptCalls[2]!._meta?.messageId).toBe(
-      client.connections[0]!.promptCalls[0]!._meta?.messageId,
+    expect(client.connections[0]!.promptCalls[2]!._meta?.messageId).not.toBe(
+      client.connections[0]!.promptCalls[1]!._meta?.messageId,
     )
   })
 
@@ -712,8 +1415,13 @@ describe('AcpSession auto-recovery', () => {
     expect(s.recoveryState.get()).toBeUndefined()
     expect(client.connections[0]!.promptCalls.length).toBe(2)
     expect(client.connections[1]!.promptCalls.length).toBe(1)
-    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(
+    // The resumed turn goes out on a fresh uuid — the crashed attempt's id is
+    // in the CLI transcript and would be deduped.
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).not.toBe(
       client.connections[0]!.promptCalls[0]!._meta?.messageId,
+    )
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).not.toBe(
+      client.connections[0]!.promptCalls[1]!._meta?.messageId,
     )
     // The crash message stays on the timeline for context.
     expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
@@ -745,12 +1453,12 @@ describe('AcpSession auto-recovery', () => {
 
     await s.sendPrompt('do it')
     // The crash diverts to the reconnect tier: a fresh spawn + session/resume,
-    // then the zero-output turn is resent verbatim on the new connection.
+    // then the zero-output turn is resent verbatim on a fresh wire uuid.
     await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
     expect(client.connections.length).toBe(2)
     expect(client.connections[0]!.promptCalls.length).toBe(1)
     expect(client.connections[1]!.promptCalls.length).toBe(1)
-    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).not.toBe(
       client.connections[0]!.promptCalls[0]!._meta?.messageId,
     )
     // The crash message stays on the timeline for context, but the session
@@ -1173,9 +1881,9 @@ describe('AcpSession auto-recovery', () => {
     await s.retryRecovery()
     await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
     expect(client.connections.length).toBe(2)
-    // The zero-output turn is resent verbatim (same messageId) on the new connection.
+    // The zero-output turn is resent verbatim on a fresh uuid on the new connection.
     expect(client.connections[1]!.promptCalls.length).toBe(1)
-    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(failedMessageId)
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).not.toBe(failedMessageId)
     // Only the original exhaustion [error] is on the timeline — the retry
     // itself recovered silently.
     expect(s.messages.get().filter((m) => m.text.startsWith('[error]')).length).toBe(1)
@@ -1229,7 +1937,7 @@ describe('AcpSession auto-recovery', () => {
     await vi.advanceTimersByTimeAsync(50)
     expect(client.connections.length).toBe(2)
     expect(client.connections[1]!.promptCalls.length).toBe(1)
-    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).toBe(failedMessageId)
+    expect(client.connections[1]!.promptCalls[0]!._meta?.messageId).not.toBe(failedMessageId)
     expect(s.recoveryState.get()).toBeUndefined()
     expect(s.status.get()).toBe('idle')
   })
@@ -1456,10 +2164,13 @@ describe('AcpSession auto-recovery', () => {
 
     await s.retryRecovery()
     await waitFor(s.recoveryState, (v) => v === undefined && s.status.get() === 'idle')
-    // Re-dispatch only: the timeline still holds exactly one continuation bubble.
+    // Re-dispatch only: the timeline still holds exactly one continuation
+    // bubble, now carrying the manual retry's fresh uuid.
     expect(continuations()).toHaveLength(1)
     expect(client.connections[0]!.promptCalls.length).toBe(4)
-    expect(client.connections[0]!.promptCalls[3]!._meta?.messageId).toBe(continueMessageId)
+    const retriedId = client.connections[0]!.promptCalls[3]!._meta?.messageId
+    expect(retriedId).not.toBe(continueMessageId)
+    expect(continuations()[0]!.messageId).toBe(retriedId)
   })
 
   it('restarts the agent process on request: evicts the pooled connection, then resumes with extraModels and resumeModel', async () => {

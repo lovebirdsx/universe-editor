@@ -297,6 +297,37 @@ async function runPrompt(id, params) {
   const turn = { cancelled: false }
   activeTurns.set(sessionId, turn)
 
+  // 模拟 CLI：失败消息已接收，同 UUID 重试只会进入 idle，不执行新 turn。
+  const retryDirective = /^retry-dedup:(\d+)$/.exec(userText)
+  if (retryDirective) {
+    const matching = promptHistory.filter((p) =>
+      p.prompt.some((b) => b.type === 'text' && b.text === userText),
+    )
+    const duplicate = promptHistory
+      .slice(0, -1)
+      .some((p) => p.messageId === params._meta?.messageId)
+    activeTurns.delete(sessionId)
+    if (duplicate || matching.length <= Number(retryDirective[1])) {
+      return send({
+        jsonrpc: '2.0',
+        id,
+        error: {
+          code: -32603,
+          message: 'Internal error',
+          data: { errorKind: duplicate ? 'no_result' : 'server_error' },
+        },
+      })
+    }
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'retry-dedup recovered' },
+      },
+    })
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Test directive: "emit-image:<count>x<kb>" makes the agent stream <count>
   // image chunks of ~<kb> KB base64 each. This reproduces the resume path where
   // session/load replays stored images as full-base64 stdout lines — the case

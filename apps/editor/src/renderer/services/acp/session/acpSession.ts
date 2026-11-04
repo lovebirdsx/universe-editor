@@ -616,6 +616,12 @@ interface PromptSnapshot {
    * echoes a few of those, and they don't answer the user's prompt.
    */
   readonly outputBaseline: number
+  /** 恢复用的 `继续` turn；重试沿用 continuation 文本，不回落原文。 */
+  readonly continuation?: boolean
+  /** 本次锚点发出后已有可见输出：不可再改锚点（Fork/Rewind 指向这段输出）。 */
+  readonly anchorProducedOutput?: boolean
+  /** 本次发包前的 `_agentOutputCount`，区分 episode 与单次 attempt 的零输出。 */
+  readonly attemptBaseline?: number
 }
 
 /**
@@ -1112,11 +1118,12 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _suppressAnchorMessageId: string | undefined
 
   /**
-   * Anchor ids of user prompts retracted by {@link cancelTurn}'s restore. The
-   * retraction is local-only — the agent transcript keeps the turn — so a
-   * resume replay would resurface it. Replayed user chunks carrying one of
-   * these ids are dropped instead (see the `user_message_chunk` case).
-   * Hydrated from the history row on resume; appended on every retraction.
+   * Anchor ids of user prompts retracted by {@link cancelTurn}'s restore, plus
+   * ids superseded when a retry rotated to a fresh wire uuid. The retraction is
+   * local-only — the agent transcript keeps the turn — so a resume replay would
+   * resurface it. Replayed user chunks carrying one of these ids are dropped
+   * instead (see the `user_message_chunk` case). Hydrated from the history row
+   * on resume; appended on every retraction / rotation.
    */
   private readonly _retractedMessageIds = new Set<string>()
 
@@ -1742,13 +1749,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     await this._configOptions.flushPendingPushes()
   }
 
-  /**
-   * Service-driven, after a successful reattach: resume the turn that was
-   * in-flight when the connection died. Zero-output turns resend the original
-   * prompt verbatim (nothing reached the agent's transcript, or the model
-   * never saw it); turns with partial output get a continuation prompt so the
-   * agent transcript isn't polluted with a duplicate user message.
-   */
+  /** 重连后衔接中断轮次：零输出保留原文/附件，有输出发 continuation，两者都使用新 UUID。 */
   async continueInterruptedTurn(): Promise<void> {
     if (!this._turnInterrupted) return
     this._turnInterrupted = false
@@ -1757,16 +1758,38 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.status.get() === 'closed') return
     const last = this._lastDispatch
     if (last !== undefined && this._agentOutputCount === last.outputBaseline) {
-      await this._dispatchPrompt(last.text, last.refs, last.contexts, last.images, last.messageId)
+      // 零输出：原文/附件原样重发，但换新 wire uuid（CLI 按 messageId 去重，重复会 no_result）。
+      const nextId = this._rotateRetryAnchor(last.messageId)
+      await this._dispatchPrompt(
+        last.text,
+        last.refs,
+        last.contexts,
+        last.images,
+        nextId,
+        undefined,
+        last.continuation === true,
+      )
       return
     }
     // A pending question/permission was settled as cancelled by the disconnect;
     // a bare "继续" reads as "the user skipped it", so tell the agent the card
     // was aborted by the interruption and it should re-ask instead.
     const text = withPendingInteraction ? recoveryContinuePromptText() : CONTINUE_PROMPT_TEXT
+    // continuation 零输出：换 uuid 复用原气泡，不再叠一条「继续」。
+    // 若它已产出输出，锚点标记输出起点，不能改指（Fork/Rewind），改为新开一轮 continuation。
+    if (
+      last !== undefined &&
+      last.continuation === true &&
+      last.text === text &&
+      this._agentOutputCount === (last.attemptBaseline ?? last.outputBaseline)
+    ) {
+      const nextId = this._rotateRetryAnchor(last.messageId)
+      await this._dispatchPrompt(text, [], [], [], nextId, undefined, true)
+      return
+    }
     const messageId = generateUuid()
     this._appendMessage('user', text, [], messageId, { autoRetry: true })
-    await this._dispatchPrompt(text, [], [], [], messageId)
+    await this._dispatchPrompt(text, [], [], [], messageId, undefined, true)
   }
 
   /**
@@ -1823,8 +1846,8 @@ export class AcpSession extends Disposable implements IAcpSession {
       // (idle seal keeps the dead lease bound, phase still 'connected').
       // Re-dispatching onto it would reproduce the same dead-end this manual
       // retry was meant to escape, so hot-reconnect instead; the failed
-      // prompt is `_lastDispatch`, and continueInterruptedTurn re-sends it
-      // (same messageId when the turn produced no output).
+      // prompt is `_lastDispatch`, and continueInterruptedTurn re-sends it on
+      // a fresh wire uuid.
       if (this._connection.phase === 'connected' && this._conn?.conn.signal.aborted === true) {
         this._failedPrompt = undefined
         this.recovery.clear()
@@ -1837,13 +1860,24 @@ export class AcpSession extends Disposable implements IAcpSession {
       const failed = this._failedPrompt
       this._failedPrompt = undefined
       this.recovery.clear()
-      await this._dispatchPrompt(
-        failed.text,
-        failed.refs,
-        failed.contexts,
-        failed.images,
-        failed.messageId,
-      )
+      // CLI 已见过失败那次的 uuid，manual retry 也必须换锚点。
+      // 已产出输出的 continuation 保留锚点（Fork/Rewind），另起一条 continuation。
+      if (failed.anchorProducedOutput === true) {
+        const nextId = generateUuid()
+        this._appendMessage('user', failed.text, [], nextId, { autoRetry: true })
+        await this._dispatchPrompt(failed.text, [], [], [], nextId, undefined, true)
+      } else {
+        const nextId = this._rotateRetryAnchor(failed.messageId)
+        await this._dispatchPrompt(
+          failed.text,
+          failed.refs,
+          failed.contexts,
+          failed.images,
+          nextId,
+          undefined,
+          failed.continuation === true,
+        )
+      }
       return
     }
     this.recovery.clear()
@@ -2197,6 +2231,8 @@ export class AcpSession extends Disposable implements IAcpSession {
    * shown in the UI — used to slip the side-task role prompt into its first
    * turn (see SIDE_TASK_ROLE_PROMPT). Left undefined for ordinary prompts and
    * for the auto-continue / queue-flush paths.
+   *
+   * `continuation` 标记恢复用的 `继续` turn：重试必须继续保持 continuation，不能回落原文。
    */
   private async _dispatchPrompt(
     text: string,
@@ -2205,6 +2241,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     images: readonly PromptImage[],
     messageId: string,
     hiddenLeadBlock?: string,
+    continuation = false,
   ): Promise<void> {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
@@ -2275,6 +2312,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       messageId,
       sentMessageId: messageId,
       outputBaseline: this._agentOutputCount,
+      ...(continuation ? { continuation: true as const } : {}),
     }
     this._lastDispatch = snapshot
     try {
@@ -2302,9 +2340,10 @@ export class AcpSession extends Disposable implements IAcpSession {
    * keeps `running`) and the recovery state counts down for the UI. A turn that
    * produced partial output is continued (`继续`) rather than resent, so the
    * agent transcript never duplicates the user turn; a zero-output turn is
-   * resent verbatim with the same messageId. An agent-internal crash
-   * (`agent_crash`) cannot be retried in place — it diverts to the hot-reconnect
-   * path, which resumes this turn after reattach. Non-retryable errors and
+   * resent verbatim with fresh attachments. Every actual attempt gets a fresh
+   * wire messageId — the CLI dedups by it and answers a repeat with no_result.
+   * An agent-internal crash (`agent_crash`) cannot be retried in place — it
+   * diverts to the hot-reconnect path, which resumes this turn after reattach. Non-retryable errors and
    * exhausted retries fall back to the classic `[error]` timeline message
    * (+ `errored` status), keeping the prompt snapshot for the UI's manual-retry
    * affordance.
@@ -2322,8 +2361,16 @@ export class AcpSession extends Disposable implements IAcpSession {
       else abort.signal.addEventListener('abort', onAbort, { once: true })
     })
     let attempt = 1
-    let continued = false
+    let continued = snapshot.continuation === true
+    let continuationText = continued ? snapshot.text : CONTINUE_PROMPT_TEXT
     let currentMessageId = snapshot.messageId
+    let sentMessageId = snapshot.sentMessageId
+    /** 当前在途 attempt 发包前的 `_agentOutputCount`。 */
+    let attemptBaseline = snapshot.outputBaseline
+    // 每次同步都会换新对象，不能用 `_lastDispatch === snapshot` 判所有权；
+    // 由局部引用跟随自己的更新，被更新的 steering prompt 抢走时即放弃。
+    let ownedSnapshot: PromptSnapshot | undefined =
+      this._lastDispatch === snapshot ? snapshot : undefined
     for (;;) {
       let failure: Error | undefined
       try {
@@ -2371,17 +2418,6 @@ export class AcpSession extends Disposable implements IAcpSession {
         !this._reconnecting
       if (retryable) {
         attempt++
-        if (!continued && this._agentOutputCount !== snapshot.outputBaseline) {
-          continued = true
-          const continueId = generateUuid()
-          currentMessageId = continueId
-          this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], continueId, { autoRetry: true })
-          params = {
-            sessionId: sid,
-            _meta: { messageId: continueId },
-            prompt: [{ type: 'text', text: CONTINUE_PROMPT_TEXT }],
-          }
-        }
         const delay = recoveryBackoffMs(attempt, budget.profile)
         this.recovery.set({
           phase: 'retrying',
@@ -2411,6 +2447,78 @@ export class AcpSession extends Disposable implements IAcpSession {
             if (this.recovery.state.get()?.phase === 'retrying') this.recovery.clear()
           }
           return
+        }
+        // 退避结束后才轮换：取消时尚未发包，锚点保持不动；
+        // 每次真正发包都必须换新 uuid（CLI 去重，重复会静默 no_result）。
+        const episodeHasOutput = this._agentOutputCount !== snapshot.outputBaseline
+        const attemptHasOutput = this._agentOutputCount !== attemptBaseline
+        if (episodeHasOutput && !continued) {
+          // 首次 continuation：已有输出属于原 turn，保留原锚点，只给「继续」气泡新 uuid。
+          continued = true
+          continuationText = CONTINUE_PROMPT_TEXT
+          currentMessageId = generateUuid()
+          this._appendMessage('user', CONTINUE_PROMPT_TEXT, [], currentMessageId, {
+            autoRetry: true,
+          })
+          params = {
+            sessionId: sid,
+            _meta: { messageId: currentMessageId },
+            prompt: [{ type: 'text', text: CONTINUE_PROMPT_TEXT }],
+          }
+        } else if (continued && attemptHasOutput) {
+          // continuation 自身已有输出：改锚会改指其输出（Fork/Rewind），另起一条同文 continuation。
+          const previousId = currentMessageId
+          currentMessageId = generateUuid()
+          this._appendMessage('user', continuationText, [], currentMessageId, {
+            autoRetry: true,
+          })
+          if (sentMessageId === previousId) sentMessageId = currentMessageId
+          params = {
+            ...params,
+            _meta: { ...(params._meta ?? {}), messageId: currentMessageId },
+          }
+        } else {
+          // 当前锚点下零输出：原文/附件保持不变，只轮换 UUID。
+          const previousId = currentMessageId
+          currentMessageId = this._rotateRetryAnchor(currentMessageId)
+          if (sentMessageId === previousId) sentMessageId = currentMessageId
+          params = {
+            ...params,
+            _meta: { ...(params._meta ?? {}), messageId: currentMessageId },
+          }
+        }
+        attemptBaseline = this._agentOutputCount
+        // 调试只输出非敏感形态，绝不带 prompt 文本或 id。
+        console.debug('[acp-prompt] retry dispatch', {
+          sessionId: sid,
+          attempt,
+          mode: continued ? 'continuation' : 'resend',
+        })
+        // 只在快照仍归本次 dispatch 时同步：否则更新的 steering prompt 已接管，
+        // 旧 turn 的重试不能抢走 cancel 目标。
+        if (ownedSnapshot !== undefined) {
+          if (this._lastDispatch === ownedSnapshot) {
+            // 同步到当前实际发包的气泡；continuation 切换后 text/附件也要换。
+            ownedSnapshot = {
+              ...snapshot,
+              messageId: currentMessageId,
+              sentMessageId,
+              attemptBaseline,
+              ...(continued
+                ? {
+                    text: continuationText,
+                    refs: [],
+                    contexts: [],
+                    images: [],
+                    continuation: true as const,
+                  }
+                : {}),
+            }
+            this._lastDispatch = ownedSnapshot
+          } else {
+            // 更新的 steering prompt 已接管，后续重试不再碰快照。
+            ownedSnapshot = undefined
+          }
         }
         continue
       }
@@ -2449,14 +2557,21 @@ export class AcpSession extends Disposable implements IAcpSession {
       if (!this._reconnecting && (attempt > 1 || budget !== undefined)) {
         // Retries exhausted — keep the (possibly continuation-switched) prompt
         // so the UI can offer a manual retry from the recovery bar.
+        // 最后一次尝试也可能才开始输出，耗尽后的手动重试同样必须改为续跑。
+        const continueOnRetry = continued || this._agentOutputCount !== snapshot.outputBaseline
         this._failedPrompt = {
-          text: continued ? CONTINUE_PROMPT_TEXT : snapshot.text,
-          refs: continued ? [] : snapshot.refs,
-          contexts: continued ? [] : snapshot.contexts,
-          images: continued ? [] : snapshot.images,
+          text: continueOnRetry ? continuationText : snapshot.text,
+          refs: continueOnRetry ? [] : snapshot.refs,
+          contexts: continueOnRetry ? [] : snapshot.contexts,
+          images: continueOnRetry ? [] : snapshot.images,
           messageId: currentMessageId,
-          sentMessageId: snapshot.sentMessageId,
+          sentMessageId,
           outputBaseline: this._agentOutputCount,
+          attemptBaseline,
+          ...(continueOnRetry ? { continuation: true as const } : {}),
+          ...(this._agentOutputCount !== attemptBaseline
+            ? { anchorProducedOutput: true as const }
+            : {}),
         }
         this.recovery.set({
           phase: 'exhausted',
@@ -3988,17 +4103,74 @@ export class AcpSession extends Disposable implements IAcpSession {
     // pass it through `_meta` (which the schema preserves untouched).
     const echoed = (response._meta as { userMessageId?: unknown } | null | undefined)?.userMessageId
     if (typeof echoed !== 'string' || echoed === sentId) return
-    const idx = this._messages.findIndex((m) => m.role === 'user' && m.messageId === sentId)
-    if (idx === -1) return
-    const prev = this._messages[idx]
-    if (prev === undefined) return
-    const next: AcpMessage = { ...prev, messageId: echoed }
+    if (!this._replaceUserMessageAnchor(sentId, echoed)) return
+    this._syncSnapshotAnchor(sentId, echoed)
+  }
+
+  /**
+   * 重试换锚。CLI 会记录收到的每个 messageId 并跳过重复（不请求模型 → no_result），
+   * 所以每次真正发包都要新 uuid。本地气泡原地改写、不复制，附件快照随之迁移。
+   * 旧 id 记入撤回集：transcript 仍保留失败行，resume 重放不能复活成第二条。
+   */
+  private _rotateRetryAnchor(oldId: string): string {
+    const newId = generateUuid()
+    if (!this._replaceUserMessageAnchor(oldId, newId)) return newId
+    if (!this._retractedMessageIds.has(oldId)) {
+      this._retractedMessageIds.add(oldId)
+      const sid = this.sessionIdOnAgent.get()
+      if (sid !== undefined) this._history?.addRetractedMessageId(sid, oldId)
+    }
+    return newId
+  }
+
+  /**
+   * 原地改写本地 user 消息的锚点 id（timeline 槽位不变），附件快照一并迁移。
+   * 没有消息携带 `oldId` 时返回 false。
+   */
+  private _replaceUserMessageAnchor(oldId: string, newId: string): boolean {
+    if (oldId === newId) return true
+    const idx = this._messages.findIndex((m) => m.role === 'user' && m.messageId === oldId)
+    const prev = idx === -1 ? undefined : this._messages[idx]
+    if (prev === undefined) return false
+    const next: AcpMessage = { ...prev, messageId: newId }
     this._messages = [...this._messages.slice(0, idx), next, ...this._messages.slice(idx + 1)]
     this._upsertMessageInTimeline(next)
     const tx = this._batchedTx()
     this.messages.set(this._messages, tx)
     this.timeline.set(this._timeline, tx)
     this._commitBatchedTx()
+    const sid = this.sessionIdOnAgent.get()
+    if (sid !== undefined) {
+      // side-task 回放边界是首发 uuid 的 write-once pin；不同步就会在 resume
+      // 时匹配不到任何重放 user chunk，整段历史被抑制。
+      this._history?.replaceSideTaskAnchorMessageId(sid, oldId, newId)
+      if (this._suppressAnchorMessageId === oldId) this._suppressAnchorMessageId = newId
+    }
+    if (sid !== undefined && this._messageAttachments !== undefined) {
+      const stored = this._messageAttachments.getSelections(sid, oldId)
+      // store 中没有时退回内存消息快照（如 store 出现前创建的会话）。
+      this._messageAttachments.saveSelections(
+        sid,
+        newId,
+        stored.length > 0 ? stored : (prev.selectionContexts ?? []),
+      )
+      this._messageAttachments.removeMessages(sid, [oldId])
+    }
+    return true
+  }
+
+  /** 跟随锚点改写，保持 retry / cancel 依赖的快照一致。 */
+  private _syncSnapshotAnchor(oldId: string, newId: string): void {
+    const sync = (snap: PromptSnapshot | undefined): PromptSnapshot | undefined =>
+      snap?.messageId === oldId
+        ? {
+            ...snap,
+            messageId: newId,
+            ...(snap.sentMessageId === oldId ? { sentMessageId: newId } : {}),
+          }
+        : snap
+    this._lastDispatch = sync(this._lastDispatch)
+    this._failedPrompt = sync(this._failedPrompt)
   }
 
   /**

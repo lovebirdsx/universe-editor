@@ -64,8 +64,8 @@ export interface AcpErrorVerdict {
 const CLAUDE_TRANSIENT_KINDS: ReadonlySet<string> = new Set([
   'overloaded',
   'server_error',
-  // The SDK declared the turn over without ever emitting its result (fork-side
-  // issue #825): nothing was persisted for the turn, so a retry is safe.
+  // SDK 未发 result 就结束本轮（fork issue #825）：可继续，但必须换新
+  // messageId —— CLI 会按已记录的 messageId 去重并直接跳过重复。
   'no_result',
 ])
 

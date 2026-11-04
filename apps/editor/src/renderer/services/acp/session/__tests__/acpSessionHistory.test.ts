@@ -312,6 +312,33 @@ describe('AcpSessionHistoryService — add / list', () => {
     expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBeUndefined()
   })
 
+  it('replaceSideTaskAnchorMessageId migrates only the matching pinned id', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'child-1',
+      title: 'quote summary',
+      sideTaskOf: 'parent-1',
+    })
+    svc.setSideTaskAnchorMessageId('child-1', 'anchor-1')
+
+    // A non-matching old id must not overwrite the pin.
+    svc.replaceSideTaskAnchorMessageId('child-1', 'other', 'anchor-x')
+    expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBe('anchor-1')
+
+    // Compare-and-replace follows a retry's fresh wire uuid.
+    svc.replaceSideTaskAnchorMessageId('child-1', 'anchor-1', 'anchor-2')
+    expect(svc.get('child-1')?.sideTaskAnchorMessageId).toBe('anchor-2')
+
+    // Unknown session is a no-op.
+    svc.replaceSideTaskAnchorMessageId('nope', 'anchor-2', 'anchor-3')
+    expect(svc.get('nope')).toBeUndefined()
+
+    // The migrated anchor survives re-add like the original pin.
+    const readded = svc.add({ agentId: 'a', sessionIdOnAgent: 'child-1', title: 'new title' })
+    expect(readded.sideTaskAnchorMessageId).toBe('anchor-2')
+  })
+
   it('addRetractedMessageId appends, dedupes, and survives re-add', async () => {
     await svc.initialize()
     svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })

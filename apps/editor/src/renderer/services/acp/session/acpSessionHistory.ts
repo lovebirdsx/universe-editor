@@ -216,9 +216,10 @@ export interface AcpSessionHistoryEntry {
   readonly sideTaskAnchorMessageId?: string
   /**
    * Anchor ids of user prompts retracted by cancelTurn's restore (the draft
-   * went back to the input box). They stay in the agent transcript, so the
-   * resume replay filters them — and the trailing
-   * `[Request interrupted by user]` marker — back out of the timeline.
+   * went back to the input box) or superseded by a retry's fresh wire uuid.
+   * They stay in the agent transcript, so the resume replay filters them — and
+   * the trailing `[Request interrupted by user]` marker — back out of the
+   * timeline.
    */
   readonly retractedMessageIds?: readonly string[]
   /**
@@ -320,6 +321,11 @@ export interface IAcpSessionHistoryService {
    */
   setSideTaskAnchorMessageId(sessionId: string, messageId: string): void
   /**
+   * 仅当行上仍钉着 `oldId` 时把 side-task 回放边界迁到 `newId`（重试换了 wire
+   * uuid）。不匹配即 no-op，避免覆盖别处重新钉的边界。
+   */
+  replaceSideTaskAnchorMessageId(sessionId: string, oldId: string, newId: string): void
+  /**
    * Drop a side task's replay anchor. Called by `AcpSession.rewindTo` once the
    * agent confirmed a truncation that removed the anchor turn itself: the pin
    * can never match a replay again, and would suppress every later turn on the
@@ -328,7 +334,8 @@ export interface IAcpSessionHistoryService {
    */
   clearSideTaskAnchorMessageId(sessionId: string): void
   /**
-   * Record a user prompt retracted by cancelTurn's restore (see
+   * Record a retracted user prompt (cancelTurn's restore, or an anchor a retry
+   * superseded with a fresh wire uuid — see
    * {@link AcpSessionHistoryEntry.retractedMessageIds}). Deduped; no-op if the
    * id is unknown.
    */
@@ -1062,6 +1069,18 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.sideTaskAnchorMessageId !== undefined) return
     const next: AcpSessionHistoryEntry = { ...cur, sideTaskAnchorMessageId: messageId }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  replaceSideTaskAnchorMessageId(sessionId: string, oldId: string, newId: string): void {
+    if (oldId === newId) return
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.sideTaskAnchorMessageId !== oldId) return
+    const next: AcpSessionHistoryEntry = { ...cur, sideTaskAnchorMessageId: newId }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
