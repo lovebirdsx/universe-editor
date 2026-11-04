@@ -67,6 +67,9 @@ export class LspWorkspace implements IWorkspace {
     const open = this._store.get(key)
     if (open) return open
     const text = await this._client.$readFile(key)
+    // LS 内部也会读链接目标；读盘期间打开的 overlay 必须优先。
+    const current = this._store.get(key)
+    if (current) return current
     if (text === undefined) return undefined
     return makeDoc(key, 0, text)
   }

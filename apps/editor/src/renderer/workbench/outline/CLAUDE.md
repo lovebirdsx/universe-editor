@@ -26,7 +26,7 @@ OutlineView (Tree) 读 outlineViewState（排序/过滤/折叠/跟随光标）
 
 - **`EditorOutlineTracker`**：对外即 `IOutlineScope`（`outline` / `activeSymbol` / `sourceKind` 三条 observable + `revealSymbol` / `captureViewState` / `previewSymbol` / `restoreViewState`）。构造参数 `{ groupId, activeEditor, languageFeatures, logger, cache }`——`activeEditor` 是**它那一组**的，`groupId` 供 `FileEditorRegistry.get(input, groupId)` 消歧。
 - **`OutlineService` 门面**：注入 `IEditorGroupsService`，每 group 一个 tracker（`onDidAddGroup`/`onDidRemoveGroup` 建销、`onDidActiveGroupChange` 切 `_activeGroupId`）；自身三条 observable = `derived(活动组 tracker)`，四个方法委托活动 tracker——**OutlineView / @ / @: / e2e 探针看到的仍是活动组**。`forGroup(groupId)` 取某组 tracker；取不到（组已移除那一帧）返回**空 scope**，绝不回退活动组。
-- **`OutlineSymbolCache`（跨 tracker 共享）**：LRU 符号树（键 `uri@version`，上限 8）+ **in-flight pull 池**（同键只发一次），分屏同开一个文件只拉一次 RPC。
+- **`OutlineSymbolCache`（跨 tracker 共享）**：LRU 按 URI 留 8 棵树，校验 `modelId/version/language`；**in-flight pull 池**按四维去重，同模型分屏只拉一次 RPC。
 - **唯一类型分支** `_attachActiveEditor()`：file `FileEditorRegistry.get(input, groupId)` + cursor 事件；preview `MonacoModelRegistry.peek(sourceUri)` 拿**源文件共享 model**（预览无 Monaco）+ `controller.getTopVisibleLine()`/`onDidScroll`；session `AcpSessionOutlineRegistry`；graph `GraphOutlineRegistry.get(kind, instanceKey)`（instanceKey = input 的 `resource.toString()`，多实例按实例路由）。
 - **`revealSymbol` 两分支必须对称**：file `setPosition + revealLineInCenterIfOutsideViewport + focus`；preview `scrollToLine + focus`。**漏 focus 就是「点了大纲焦点不回编辑器」的 bug**（已修勿回退）。
 - **冷启动重试退避**（per-tracker）：`_attachGeneration` 计数 + 指数退避（250→2000ms，预算 180s）；切文件 generation 递增作废旧链；`onDidChangeMarkers`（诊断到达≈LS 就绪）也触发重拉；generation 各自独立，切组不打断背景组的重试链。

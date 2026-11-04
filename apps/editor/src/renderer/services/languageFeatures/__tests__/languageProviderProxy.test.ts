@@ -23,8 +23,9 @@ vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
   MonacoLoader: { get: () => ({}), peek: () => undefined },
 }))
 
-function makeModel(uri: string, versionId = 1): monaco.editor.ITextModel {
+function makeModel(uri: string, versionId = 1, id = `model:${uri}`): monaco.editor.ITextModel {
   return {
+    id,
     uri: { toString: () => uri },
     getVersionId: () => versionId,
   } as unknown as monaco.editor.ITextModel
@@ -190,6 +191,42 @@ describe('createDocumentSymbolProxy pull cache', () => {
     expect(pull).toHaveBeenCalledTimes(2)
   })
 
+  it('re-pulls for a recreated model at the same URI and version', async () => {
+    const pull = vi.fn().mockResolvedValue([lspSymbol])
+    const proxy = createDocumentSymbolProxy(1, {
+      $provideDocumentSymbols: pull,
+    } as unknown as IExtHostLanguages)
+
+    await proxy.provideDocumentSymbols(makeModel('file:///a.ts', 1, 'model:first'), null as never)
+    await proxy.provideDocumentSymbols(makeModel('file:///a.ts', 1, 'model:second'), null as never)
+    expect(pull).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not coalesce in-flight pulls from different model instances', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const pull = vi.fn(async () => {
+      await gate
+      return [lspSymbol]
+    })
+    const proxy = createDocumentSymbolProxy(1, {
+      $provideDocumentSymbols: pull,
+    } as unknown as IExtHostLanguages)
+
+    const first = proxy.provideDocumentSymbols(
+      makeModel('file:///a.ts', 1, 'model:first'),
+      null as never,
+    )
+    const second = proxy.provideDocumentSymbols(
+      makeModel('file:///a.ts', 1, 'model:second'),
+      null as never,
+    )
+    expect(second).not.toBe(first)
+    release()
+    await Promise.all([first, second])
+    expect(pull).toHaveBeenCalledTimes(2)
+  })
+
   it('coalesces concurrent pulls for the same version onto one wire call', async () => {
     // 拉取前有 flush 闸门（未跟踪的 URI 也让出一个微任务），所以线上调用不再发生在
     // 同一 tick 内——合并的证据改成「两次调用拿到同一个 promise」，调用次数在两侧落地后核对。
@@ -343,6 +380,48 @@ describe('createCodeLensProxy pull cache', () => {
     // the host signals it via onDidChange and the cache must drop.
     changeEmitter.fire()
     await proxy.provideCodeLenses(model, null as never)
+    expect(pull).toHaveBeenCalledTimes(2)
+  })
+
+  it('re-pulls for a recreated model at the same URI and version', async () => {
+    const pull = vi.fn().mockResolvedValue([lspLens])
+    const proxy = createCodeLensProxy(
+      1,
+      { $provideCodeLenses: pull } as unknown as IExtHostLanguages,
+      new Emitter<void>().event,
+      new DisposableStore(),
+    )
+
+    await proxy.provideCodeLenses(makeModel('file:///a.ts', 1, 'model:first'), null as never)
+    await proxy.provideCodeLenses(makeModel('file:///a.ts', 1, 'model:second'), null as never)
+    expect(pull).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not coalesce in-flight lens pulls from different model instances', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const pull = vi.fn(async () => {
+      await gate
+      return [lspLens]
+    })
+    const proxy = createCodeLensProxy(
+      1,
+      { $provideCodeLenses: pull } as unknown as IExtHostLanguages,
+      new Emitter<void>().event,
+      new DisposableStore(),
+    )
+
+    const first = proxy.provideCodeLenses(
+      makeModel('file:///a.ts', 1, 'model:first'),
+      null as never,
+    )
+    const second = proxy.provideCodeLenses(
+      makeModel('file:///a.ts', 1, 'model:second'),
+      null as never,
+    )
+    expect(second).not.toBe(first)
+    release()
+    await Promise.all([first, second])
     expect(pull).toHaveBeenCalledTimes(2)
   })
 })

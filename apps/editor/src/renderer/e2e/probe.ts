@@ -1633,6 +1633,13 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       walk(symbols as readonly { name: string; children?: readonly unknown[] }[])
       return names
     },
+    getTextModelIdentity: async (
+      fsPath: string,
+    ): Promise<{ id: string; versionId: number } | undefined> => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.file(fsPath))
+      return model ? { id: model.id, versionId: model.getVersionId() } : undefined
+    },
     queryMarkdownWorkspaceSymbols: async (query: string): Promise<readonly string[]> => {
       const providers = services.languageFeaturesService.getWorkspaceSymbolProviders()
       const names: string[] = []

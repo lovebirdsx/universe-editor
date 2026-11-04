@@ -29,6 +29,8 @@ const INDEX_MD = '# Index\n\n[q](./questions.md)\n'
 const QUESTIONS_V1 = '# Waiting\n\n## Q-0311 old\n\nbody\n'
 /** 重写后的版本：多了 Q-0312（用户现场缺的那条）。 */
 const QUESTIONS_V2 = '# Waiting\n\n## Q-0311 old\n\nbody\n\n## Q-0312 new\n\nbody\n'
+/** 切走释放 model 之后的外部重写：整篇换掉标题树。 */
+const QUESTIONS_V3 = '# Rewritten\n\n## Q-0400 after release\n\nbody\n'
 
 const PREVIEW = '[data-testid="markdown-preview"]'
 /** 冷启 + LSP warmup 后还要等一次外部改写 + 两层防抖，CI 上给足窗口。 */
@@ -112,5 +114,101 @@ test.describe('outline follows an external rewrite of an isolated preview', () =
         timeout: RELOAD_TIMEOUT_MS,
       })
       .toContain('## Q-0312 new')
+  })
+
+  test('a preview that released its model rebuilds it from disk after an external rewrite @regression', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    test.slow()
+    if (!launchWorkspace) throw new Error('workspaceSeeder 未生效')
+    const questions = launchWorkspace.file('questions.md')
+
+    await workbench.waitForRestored()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.isWorkspaceWatchArmed()), { timeout: 30_000 })
+      .toBe(true)
+
+    // 孤立预览：index.md 预览里点链接跳到 questions.md，源文件没有 file: 标签。
+    await page.evaluate(
+      (fsPath) => window.__E2E__!.openFileUri(fsPath),
+      launchWorkspace.file('index.md'),
+    )
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .toBe('markdown.preview')
+
+    const link = page.locator(`${PREVIEW} a`).first()
+    await expect(link).toBeVisible()
+    await link.click()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), { timeout: 10_000 })
+      .toEqual(expect.stringContaining('questions.md'))
+
+    // 改盘前大纲是活的（旧 model 的树已被两层缓存按 URI@version 吃下）。
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), {
+        timeout: RELOAD_TIMEOUT_MS,
+      })
+      .toContain('## Q-0311 old')
+
+    const oldIdentity = await page.evaluate(
+      (fsPath) => window.__E2E__!.getTextModelIdentity(fsPath),
+      questions,
+    )
+    expect(oldIdentity).toBeDefined()
+
+    // 切到 untitled：同组只渲染 activeEditor，预览卸载并 release 它的按需 model。
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .not.toBe('markdown.preview')
+    await expect
+      .poll(
+        () => page.evaluate((fsPath) => window.__E2E__!.getTextModelIdentity(fsPath), questions),
+        { timeout: 10_000 },
+      )
+      .toBeUndefined()
+
+    // model 不在时外部整篇重写：切回时预览会重新从磁盘 acquire，新 model 又从
+    // version 1 开始 —— 与旧 model 的版本号相同，只有 id 不同。
+    writeFileSync(questions, QUESTIONS_V3)
+
+    await workbench.runCommand('workbench.action.previousEditor')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .toBe('markdown.preview')
+
+    // 正文先更新（新 model 从盘上读入）。
+    await expect
+      .poll(() => page.locator(PREVIEW).first().innerText(), { timeout: RELOAD_TIMEOUT_MS })
+      .toContain('Q-0400 after release')
+
+    await expect
+      .poll(
+        () => page.evaluate((fsPath) => window.__E2E__!.getTextModelIdentity(fsPath), questions),
+        { timeout: 10_000 },
+      )
+      .not.toBeUndefined()
+    const newIdentity = await page.evaluate(
+      (fsPath) => window.__E2E__!.getTextModelIdentity(fsPath),
+      questions,
+    )
+    expect(newIdentity).toBeDefined()
+    // 复现形状钉死：同一 URI、同一 version、不同 model id。
+    expect(newIdentity!.versionId).toBe(oldIdentity!.versionId)
+    expect(newIdentity!.id).not.toBe(oldIdentity!.id)
+
+    // 核心断言：重建的 model 不能被旧 URI@version 缓存命中，大纲必须重新拉取。
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), {
+        timeout: RELOAD_TIMEOUT_MS,
+      })
+      .toContain('## Q-0400 after release')
   })
 })

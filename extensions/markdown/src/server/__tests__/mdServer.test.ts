@@ -308,3 +308,144 @@ describe('createMdServer — $didChangeFiles refreshes stale caches', () => {
     expect(await server.$computeDiagnostics(A)).toEqual([])
   })
 })
+
+function headingNames(symbols: readonly { name?: unknown }[]): string[] {
+  return symbols.map((s) => String(s.name))
+}
+
+describe('createMdServer — closed documents and the language-service cache', () => {
+  // LS 按 URI 缓存 TOC，闭态重新读盘后不能继续返回关闭前的树。
+  it('resets the heading cache with the fresh disk text after a close', async () => {
+    const files: Record<string, string> = { [URI_A]: '# Old\n' }
+    const server = createMdServer(memoryClient(files), URI.file('/ws')).server
+
+    await server.$didOpen({ uri: URI_A, version: 1, text: files[URI_A]! })
+    expect(headingNames(await server.$provideDocumentSymbols(URI_A))).toEqual(['# Old'])
+
+    await server.$didClose(URI_A)
+    files[URI_A] = '# New\n'
+
+    expect(headingNames(await server.$provideDocumentSymbols(URI_A))).toEqual(['# New'])
+  })
+
+  // 重开必须使旧 TOC 失效，随后磁盘通知不能覆盖 overlay。
+  it('applies a newer overlay when the document opens after a disk change', async () => {
+    const files: Record<string, string> = { [URI_A]: '# Old\n' }
+    const server = createMdServer(memoryClient(files), URI.file('/ws')).server
+
+    await server.$didOpen({ uri: URI_A, version: 1, text: files[URI_A]! })
+    expect(headingNames(await server.$provideDocumentSymbols(URI_A))).toEqual(['# Old'])
+    await server.$didClose(URI_A)
+
+    // 闭态磁盘通知先更新缓存，随后打开的 overlay 仍须覆盖它。
+    files[URI_A] = '# Disk\n'
+    await server.$didChangeFiles([URI_A])
+
+    await server.$didOpen({ uri: URI_A, version: 2, text: '# Overlay\n' })
+    expect(headingNames(await server.$provideDocumentSymbols(URI_A))).toEqual(['# Overlay'])
+  })
+
+  it('invalidates the old heading cache when reopening at the same version', async () => {
+    const files: Record<string, string> = { [URI_A]: '# Old\n' }
+    const { client, reads } = recordingClient(files)
+    const server = createMdServer(client, URI.file('/ws')).server
+
+    await server.$didOpen({ uri: URI_A, version: 1, text: files[URI_A]! })
+    await server.$provideDocumentSymbols(URI_A)
+    await server.$didClose(URI_A)
+
+    await server.$didOpen({ uri: URI_A, version: 1, text: '# Overlay\n' })
+    files[URI_A] = '# Disk\n'
+    await server.$didChangeFiles([URI_A])
+
+    expect(reads).toEqual([])
+    expect(headingNames(await server.$provideDocumentSymbols(URI_A))).toEqual(['# Overlay'])
+  })
+
+  it('prefers an overlay that opens while a closed document is being read', async () => {
+    const files: Record<string, string> = { [URI_A]: '# Old\n' }
+    const base = memoryClient(files)
+    let resolveRead!: (text: string) => void
+    const client: IMdClient = {
+      ...base,
+      $readFile: (uri) =>
+        uri === URI_A
+          ? new Promise<string>((resolve) => (resolveRead = resolve))
+          : base.$readFile(uri),
+    }
+    const server = createMdServer(client, URI.file('/ws')).server
+
+    // 首次拉取尚无缓存，在磁盘返回前打开 overlay。
+    const pending = server.$provideDocumentSymbols(URI_A)
+    expect(resolveRead).toBeDefined()
+
+    await server.$didOpen({ uri: URI_A, version: 1, text: '# Overlay\n' })
+    resolveRead('# Disk\n')
+
+    expect(headingNames(await pending)).toEqual(['# Overlay'])
+  })
+
+  it('prefers an overlay opened during a linked document read inside the language service', async () => {
+    const target = 'file:///ws/target.md'
+    const base = memoryClient({ [URI_A]: '# Source\n', [target]: '# Disk\n' })
+    let resolveRead!: (text: string) => void
+    let markReading!: () => void
+    const reading = new Promise<void>((resolve) => (markReading = resolve))
+    const client: IMdClient = {
+      ...base,
+      $readFile: (uri) => {
+        if (uri !== target) return base.$readFile(uri)
+        return new Promise<string>((resolve) => {
+          resolveRead = resolve
+          markReading()
+        })
+      },
+    }
+    const server = createMdServer(client, URI.file('/ws')).server
+    await server.$didOpen({
+      uri: URI_A,
+      version: 1,
+      text: '# Source\n\n[target](./target.md#overlay)\n',
+    })
+
+    // 链接诊断从 LS 内部读目标文件，不经过 mdServer.resolveDoc。
+    const pending = server.$computeDiagnostics(URI_A)
+    await reading
+    await server.$didOpen({ uri: target, version: 1, text: '# Overlay\n' })
+    resolveRead('# Disk\n')
+
+    expect(await pending).toEqual([])
+    expect(headingNames(await server.$provideDocumentSymbols(target))).toEqual(['# Overlay'])
+  })
+
+  it('does not overwrite an overlay opened during a $didChangeFiles disk read', async () => {
+    const files: Record<string, string> = { [URI_A]: '# Old\n' }
+    const base = memoryClient(files)
+    let resolveRead!: (text: string) => void
+    let deferred = false
+    const client: IMdClient = {
+      ...base,
+      $readFile: (uri) =>
+        uri === URI_A && deferred
+          ? new Promise<string>((resolve) => (resolveRead = resolve))
+          : base.$readFile(uri),
+    }
+    const server = createMdServer(client, URI.file('/ws')).server
+
+    await server.$didOpen({ uri: URI_A, version: 1, text: files[URI_A]! })
+    expect(headingNames(await server.$provideDocumentSymbols(URI_A))).toEqual(['# Old'])
+    await server.$didClose(URI_A)
+
+    files[URI_A] = '# Disk\n'
+    deferred = true
+    const notifying = server.$didChangeFiles([URI_A])
+    expect(resolveRead).toBeDefined()
+
+    // 文件在磁盘通知尚未读完时打开。
+    await server.$didOpen({ uri: URI_A, version: 2, text: '# Overlay\n' })
+    resolveRead('# Disk\n')
+    await notifying
+
+    expect(headingNames(await server.$provideDocumentSymbols(URI_A))).toEqual(['# Overlay'])
+  })
+})

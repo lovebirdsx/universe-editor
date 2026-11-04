@@ -137,7 +137,17 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
 
   const resolveDoc = async (uri: string) => {
     const key = canonicalKey(uri)
-    return store.get(key) ?? (await workspace.openMarkdownDocument(URI.parse(key)))
+    const open = store.get(key)
+    if (open) return open
+    const doc = await workspace.openMarkdownDocument(URI.parse(key))
+    // await 让出期间可能出现新 overlay，不能用磁盘快照覆盖它的缓存。
+    const raced = store.get(key)
+    if (raced) return raced
+    if (doc) {
+      // 闭态按需读盘时刷新 LS 的 URI 缓存，避免沿用关闭前的标题和链接。
+      store.notifyDiskChange(doc)
+    }
+    return doc
   }
 
   const server: IMdServer = {
@@ -160,6 +170,8 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
         // Open documents sync via $didChange; their overlay is the source of truth.
         if (store.has(key)) continue
         const text = await client.$readFile(key)
+        // 通知读盘期间可能打开文档，旧磁盘内容不得覆盖新 overlay 的缓存。
+        if (store.has(key)) continue
         if (text === undefined) {
           store.notifyDiskDelete(URI.parse(key))
         } else {

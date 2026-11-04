@@ -153,10 +153,13 @@ function makeSymbol(
   }
 }
 
-function makeFakeEditor(languageId: string) {
+let fakeModelId = 0
+
+function makeFakeEditor(languageId: string, modelId = 'model:file:///x.md') {
   let position: monaco.Position = { lineNumber: 1, column: 1 } as monaco.Position
   let cursorCb: (() => void) | undefined
   const model = {
+    id: modelId,
     uri: { toString: () => 'file:///x.md' },
     getLanguageId: () => languageId,
     getValue: () => '',
@@ -188,7 +191,7 @@ function makeFakeEditor(languageId: string) {
 
 /** Editor whose model carries a given URI; `getModel()` returns null once disposed.
  *  Records cursor moves / reveals so per-group routing can be asserted. */
-function makeFakeEditorFor(uri: string, languageId = 'markdown') {
+function makeFakeEditorFor(uri: string, languageId = 'markdown', modelId = `model:${uri}`) {
   let disposed = false
   let version = 1
   let position: monaco.Position = { lineNumber: 1, column: 1 } as monaco.Position
@@ -196,6 +199,7 @@ function makeFakeEditorFor(uri: string, languageId = 'markdown') {
   const revealed: number[] = []
   let focusCount = 0
   const model = {
+    id: modelId,
     uri: { toString: () => uri },
     getLanguageId: () => languageId,
     getValue: () => '',
@@ -418,6 +422,135 @@ describe('OutlineService', () => {
     activeEditor.set(inputA, undefined)
     await flush()
     expect(callsByUri.get(uriA.toString())).toBe(2)
+    svc.dispose()
+  })
+
+  // 预览卸载后源模型会重建，版本又从 1 开始；缓存和在途请求都须区分实例。
+  it('re-pulls when the same URI is backed by a new model at the same version', async () => {
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs())
+    const inst = new InstantiationService(services)
+    const uriA = URI.file('/ws/a.md')
+    const uriB = URI.file('/ws/b.md')
+    const inputA = inst.createInstance(FileEditorInput, uriA)
+    const inputB = inst.createInstance(FileEditorInput, uriB)
+
+    let heading = 'Old'
+    let callsA = 0
+    const provider = {
+      provideDocumentSymbols: (model: monaco.editor.ITextModel) => {
+        if (model.uri.toString() === uriA.toString()) {
+          callsA++
+          return [makeSymbol(heading, 1, 3)]
+        }
+        return [makeSymbol('Beta', 1, 3)]
+      },
+    } as unknown as monaco.languages.DocumentSymbolProvider
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+    } as unknown as ILanguageFeaturesService
+
+    const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
+
+    FileEditorRegistry.register(
+      inputA,
+      makeFakeEditorFor(uriA.toString(), 'markdown', 'model:a:first').editor,
+      SINGLE_GROUP_ID,
+    )
+    FileEditorRegistry.register(
+      inputB,
+      makeFakeEditorFor(uriB.toString(), 'markdown', 'model:b').editor,
+      SINGLE_GROUP_ID,
+    )
+
+    activeEditor.set(inputA, undefined)
+    await flush()
+    expect(svc.outline.get()?.roots.map((s) => s.name)).toEqual(['Old'])
+    expect(callsA).toBe(1)
+
+    // 模拟预览切走，源模型不再挂载。
+    activeEditor.set(inputB, undefined)
+    await flush()
+
+    // 切回同 URI 的新实例，版本不变而磁盘正文已更新。
+    heading = 'New'
+    FileEditorRegistry.register(
+      inputA,
+      makeFakeEditorFor(uriA.toString(), 'markdown', 'model:a:second').editor,
+      SINGLE_GROUP_ID,
+    )
+    activeEditor.set(inputA, undefined)
+    await flush()
+
+    expect(callsA).toBe(2)
+    expect(svc.outline.get()?.roots.map((s) => s.name)).toEqual(['New'])
+    svc.dispose()
+  })
+
+  it('does not join an in-flight pull that belongs to a replaced model', async () => {
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs())
+    const inst = new InstantiationService(services)
+    const uriA = URI.file('/ws/a.md')
+    const uriB = URI.file('/ws/b.md')
+    const inputA = inst.createInstance(FileEditorInput, uriA)
+    const inputB = inst.createInstance(FileEditorInput, uriB)
+
+    const resolvers: Array<(symbols: monaco.languages.DocumentSymbol[]) => void> = []
+    const provider = {
+      provideDocumentSymbols: (model: monaco.editor.ITextModel) =>
+        model.uri.toString() === uriA.toString()
+          ? new Promise<monaco.languages.DocumentSymbol[]>((resolve) => resolvers.push(resolve))
+          : Promise.resolve([makeSymbol('Beta', 1, 3)]),
+    } as unknown as monaco.languages.DocumentSymbolProvider
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+    } as unknown as ILanguageFeaturesService
+
+    const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
+    const svc = new OutlineService(makeEditorGroups(activeEditor), facade, undefined as never)
+
+    FileEditorRegistry.register(
+      inputA,
+      makeFakeEditorFor(uriA.toString(), 'markdown', 'model:a:first').editor,
+      SINGLE_GROUP_ID,
+    )
+    FileEditorRegistry.register(
+      inputB,
+      makeFakeEditorFor(uriB.toString(), 'markdown', 'model:b').editor,
+      SINGLE_GROUP_ID,
+    )
+
+    activeEditor.set(inputA, undefined)
+    await flush()
+    expect(resolvers).toHaveLength(1)
+
+    // 旧模型的请求尚在途时切走，再挂载同 URI 的新模型。
+    activeEditor.set(inputB, undefined)
+    await flush()
+    FileEditorRegistry.register(
+      inputA,
+      makeFakeEditorFor(uriA.toString(), 'markdown', 'model:a:second').editor,
+      SINGLE_GROUP_ID,
+    )
+    activeEditor.set(inputA, undefined)
+    await flush()
+
+    // 新实例独立拉取，不能等待旧请求。
+    expect(resolvers).toHaveLength(2)
+    resolvers[1]!([makeSymbol('New', 1, 3)])
+    await flush()
+    await flush()
+    expect(svc.outline.get()?.roots.map((s) => s.name)).toEqual(['New'])
+
+    // 旧请求晚返回也不能覆盖新树。
+    resolvers[0]!([makeSymbol('Old', 1, 3)])
+    await flush()
+    await flush()
+    expect(svc.outline.get()?.roots.map((s) => s.name)).toEqual(['New'])
     svc.dispose()
   })
 
@@ -805,6 +938,7 @@ describe('OutlineService', () => {
     const editor = {
       getModel: () =>
         ({
+          id: 'model:preview-state',
           uri: { toString: () => 'file:///ws/x.md' },
           getLanguageId: () => 'markdown',
           getVersionId: () => 1,
@@ -847,6 +981,7 @@ describe('OutlineService', () => {
     const editor = {
       getModel: () =>
         ({
+          id: 'model:preview-state',
           uri: { toString: () => 'file:///ws/x.md' },
           getLanguageId: () => 'markdown',
           getVersionId: () => 1,
@@ -893,6 +1028,7 @@ describe('OutlineService', () => {
   function setupPreview(symbols: monaco.languages.DocumentSymbol[]) {
     const sourceUri = URI.file('/ws/x.md')
     const model = {
+      id: `model:preview:${++fakeModelId}`,
       uri: { toString: () => sourceUri.toString() },
       getLanguageId: () => 'markdown',
       getValue: () => '',
@@ -1003,6 +1139,7 @@ describe('OutlineService', () => {
     // The preview component acquires the source model from disk (async); the
     // registry's onDidAddModel must drive a re-pull that fills the outline.
     const model = {
+      id: `model:preview:${++fakeModelId}`,
       uri: { toString: () => sourceUri.toString() },
       getLanguageId: () => 'markdown',
       getValue: () => '',
@@ -1990,6 +2127,21 @@ describe('OutlineService', () => {
   describe('OutlineSymbolCache', () => {
     /** Shorthand for the pull result the cache hands back. */
     type Pull = { roots: monaco.languages.DocumentSymbol[] | null | undefined; pullMs: number }
+
+    it('validates a cached tree against the model id, not just URI and version', () => {
+      const cache = new OutlineSymbolCache()
+      const roots = [makeSymbol('Old', 1, 2)]
+      cache.put('file:///ws/a.md', {
+        modelId: 'model:first',
+        modelVersionId: 1,
+        languageId: 'markdown',
+        roots,
+      })
+
+      // 模型重建后版本仍是 1，只有 id 不同。
+      expect(cache.get('file:///ws/a.md', 'model:second', 1, 'markdown')).toBeUndefined()
+      expect(cache.get('file:///ws/a.md', 'model:first', 1, 'markdown')?.roots).toBe(roots)
+    })
 
     it('joins a pull only for the same uri, version AND language', async () => {
       const cache = new OutlineSymbolCache()

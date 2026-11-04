@@ -131,6 +131,8 @@ const NONE_TOKEN = {
 const SYMBOL_CACHE_MAX = 8
 
 export interface CachedSymbols {
+  /** 模型重建会重置版本号，必须用实例身份区分同 URI 的新旧树。 */
+  readonly modelId: string
   readonly modelVersionId: number
   readonly languageId: string
   readonly roots: readonly monaco.languages.DocumentSymbol[]
@@ -154,9 +156,19 @@ export class OutlineSymbolCache {
   private _epoch = 0
 
   /** The tree for an unchanged model, or undefined when it must be (re)pulled. */
-  get(uri: string, modelVersionId: number, languageId: string): CachedSymbols | undefined {
+  get(
+    uri: string,
+    modelId: string,
+    modelVersionId: number,
+    languageId: string,
+  ): CachedSymbols | undefined {
     const cached = this._trees.get(uri)
-    if (!cached || cached.modelVersionId !== modelVersionId || cached.languageId !== languageId) {
+    if (
+      !cached ||
+      cached.modelId !== modelId ||
+      cached.modelVersionId !== modelVersionId ||
+      cached.languageId !== languageId
+    ) {
       return undefined
     }
     this._trees.delete(uri)
@@ -185,9 +197,7 @@ export class OutlineSymbolCache {
    * settle — `pullWithTimeout` guarantees that — so a stuck pull can't wedge
    * every tracker waiting on it.
    *
-   * `key` must carry every dimension the cached tree is validated against
-   * (see `get`): a language switch keeps the model version, so a key of
-   * `uri@version` alone would hand a joiner the previous language's tree.
+   * key 必须包含 get 校验的所有维度：语言切换不改版本，模型重建会重置版本。
    *
    * The bookkeeping is a second handler on the SAME promise rather than
    * `.finally()`: `finally` resolves one microtask later, which would push a
@@ -676,13 +686,14 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
     if (this._disposed || !model || model.isDisposed()) return
 
     const uri = model.uri.toString()
+    const modelId = model.id
     const languageId = model.getLanguageId()
     const versionId = model.getVersionId()
 
     // Unchanged model with a known tree: republish from cache, no wire pull.
     // Only non-empty trees are cached, so the cold-server fill-in paths (retry
     // chain, marker-driven recompute) still re-pull until symbols exist.
-    const cached = this._cache.get(uri, versionId, languageId)
+    const cached = this._cache.get(uri, modelId, versionId, languageId)
     if (cached) {
       const current = this._outline.get()
       if (!current || current.uri !== uri || current.roots !== cached.roots) {
@@ -709,8 +720,8 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
     // Coalesce concurrent triggers for the same model state: the attach autorun,
     // the editor-mount re-attach and the marker-driven recompute can all fire
     // within one switch, and each duplicated pull is a full-size RPC round trip.
-    // The language is part of the key because a language switch keeps the version.
-    const pullKey = `${uri}@${versionId}@${languageId}`
+    // 与缓存校验一致，语言切换和模型重建都不能加入旧的在途请求。
+    const pullKey = `${modelId}@${uri}@${versionId}@${languageId}`
     if (this._pullInFlightKey === pullKey) return
     this._pullInFlightKey = pullKey
 
@@ -719,7 +730,14 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
       .then((pull) => {
         if (this._pullInFlightKey === pullKey) this._pullInFlightKey = undefined
         // Discard if the model was swapped or disposed while we awaited.
-        if (this._currentModel !== model || model.isDisposed()) return
+        if (this._currentModel !== model || model.isDisposed()) {
+          this._logger.debug(
+            `discarding document-symbol pull for ${uri}: model identity ${modelId} is no longer current (now ${
+              this._currentModel?.id ?? 'none'
+            })`,
+          )
+          return
+        }
         const roots = pull.roots ?? []
         if (pull.pullMs > 500) {
           this._logger.info(
@@ -731,7 +749,7 @@ export class EditorOutlineTracker extends Disposable implements IOutlineScope {
         // Cache only a non-empty tree, and only if the model didn't change while
         // the pull was in flight (the result describes the pre-edit content).
         if (roots.length > 0 && model.getVersionId() === versionId) {
-          this._cache.put(uri, { modelVersionId: versionId, languageId, roots })
+          this._cache.put(uri, { modelId, modelVersionId: versionId, languageId, roots })
         }
         this._outline.set({ uri, roots, languageId, version: ++this._version }, undefined)
         this._recomputeActiveSymbol()

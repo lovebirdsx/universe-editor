@@ -33,7 +33,9 @@ export class DocumentStore {
     const existed = this._docs.has(uri)
     const doc = makeDoc(uri, version, text)
     this._docs.set(uri, doc)
-    ;(existed ? this._onDidChange : this._onDidCreate).fire(doc)
+    // LS 的文档缓存不监听 create，首次打开也须通过 change 替换旧磁盘缓存。
+    if (!existed) this._onDidCreate.fire(doc)
+    this._onDidChange.fire(doc)
   }
 
   change(uri: string, version: number, text: string): void {
@@ -47,13 +49,7 @@ export class DocumentStore {
     this._docs.delete(uri)
   }
 
-  /**
-   * Signal that a file the editor does NOT have open changed on disk out-of-band
-   * (e.g. a bulk edit rewrote a closed file's links). We have no filesystem
-   * watcher, so the language-service caches would otherwise keep the stale text;
-   * firing change/delete here refreshes them. These do NOT touch the overlay —
-   * the file stays "closed".
-   */
+  /** 外部变更或闭态按需读盘后刷新 LS 缓存，不创建 overlay。 */
   notifyDiskChange(doc: ITextDocument): void {
     this._onDidChange.fire(doc)
   }

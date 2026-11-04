@@ -1843,6 +1843,10 @@ export interface E2EProbe {
    * selection change moves the outline highlight" spec.
    */
   getOutlineActiveSymbol(): string | undefined
+  /** 只读模型身份；不存在时返回 undefined，用于验证释放重建后的版本号复用。 */
+  getTextModelIdentity(
+    fsPath: string,
+  ): Promise<{ readonly id: string; readonly versionId: number } | undefined>
   /**
    * 开始用弱引用记录此后每一个 `IOutlineService.outline` 取值（每代都是视图随后要渲染
    * 的一棵新树）及其首个符号。重复调用无效果；每轮记录有上限，探针自身有界。**每次

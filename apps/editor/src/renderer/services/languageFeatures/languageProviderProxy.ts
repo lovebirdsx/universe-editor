@@ -172,30 +172,23 @@ export function createSignatureHelpProxy(
 
 const PULL_CACHE_MAX_URIS = 8
 
-/**
- * Version-keyed pull cache at the wire boundary. Symbol/lens payloads for a
- * large file are multi-MB JSON frames, and every consumer that re-attaches a
- * model (tab switch → sticky scroll, outline, breadcrumbs, codelens) re-pulls
- * them — decoding the same frame repeatedly stalls the renderer main thread.
- * Sharing one in-flight/settled promise per (uri, model version) makes a
- * switch back to an unchanged file wire-free. Empty and rejected results are
- * never cached: providers legitimately return [] while their backing server
- * is still starting, and consumers retry expecting a fresh pull.
- */
+/** 同实例、同版本的消费者共享符号/lens 请求，避免重复解码大帧；空结果和失败不缓存。 */
 function createVersionedPullCache<T>(isEmpty: (value: T) => boolean) {
-  const cache = new Map<string, { versionId: number; promise: Promise<T> }>()
+  // 预览切走后模型可能释放，重建又从版本 1 开始；同 URI 还须校验实例身份。
+  const cache = new Map<string, { modelId: string; versionId: number; promise: Promise<T> }>()
   const pull = (model: monaco.editor.ITextModel, run: () => Promise<T>): Promise<T> => {
     const key = model.uri.toString()
+    const modelId = model.id
     const versionId = model.getVersionId()
     const hit = cache.get(key)
-    if (hit && hit.versionId === versionId) {
+    if (hit && hit.modelId === modelId && hit.versionId === versionId) {
       cache.delete(key)
       cache.set(key, hit)
       return hit.promise
     }
     const promise = run()
     cache.delete(key)
-    cache.set(key, { versionId, promise })
+    cache.set(key, { modelId, versionId, promise })
     promise.then(
       (value) => {
         if (isEmpty(value) && cache.get(key)?.promise === promise) cache.delete(key)
