@@ -20,10 +20,28 @@
  * dispose. The `candidate` is always the root dir (''), since the non-recursive
  * watch reports `.git` as a bare filename.
  */
-import { watch, type FSWatcher } from 'node:fs'
+import { statSync, watch, type FSWatcher } from 'node:fs'
 import { sep } from 'node:path'
 
 export const POSSIBLE_REPO_DEBOUNCE_MS = 500
+
+/** A deleted root keeps emitting watch events on Windows; check at most once a
+ *  second so the escape stays cheap during the storm. */
+const ROOT_EXISTS_CHECK_MS = 1_000
+
+export type RootState = 'present' | 'missing' | 'unknown'
+
+/** Only ENOENT/ENOTDIR prove the root is gone. Other errors (EACCES, a network
+ *  drive blip) must not disable late detection for the rest of the session. */
+function statRootState(path: string): RootState {
+  try {
+    statSync(path)
+    return 'present'
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? 'missing' : 'unknown'
+  }
+}
 
 /** Pure for tests: a root-level `.git` entry → the root dir (''); else undefined. */
 export function repoCandidateFromPath(filename: string): string | undefined {
@@ -36,11 +54,13 @@ export class PossibleRepoWatcher {
   private readonly _pending = new Set<string>()
   private _timer: ReturnType<typeof setTimeout> | undefined
   private _disposed = false
+  private _lastRootCheckAt = Number.NEGATIVE_INFINITY
 
   constructor(
     private readonly _root: string,
     private readonly _onCandidates: (dirs: readonly string[]) => void,
     private readonly _log?: (msg: string) => void,
+    private readonly _probeRoot: (path: string) => RootState = statRootState,
   ) {}
 
   /** Non-recursive watch of the root; on failure log and stay inert. */
@@ -48,6 +68,8 @@ export class PossibleRepoWatcher {
     let watcher: FSWatcher
     try {
       watcher = watch(this._root, (_event, filename) => {
+        if (this._disposed) return
+        if (this._closeIfRootGone()) return
         if (filename == null) return
         const candidate = repoCandidateFromPath(filename.toString())
         if (candidate === undefined) return
@@ -67,6 +89,21 @@ export class PossibleRepoWatcher {
       }
     })
     this._watcher = watcher
+  }
+
+  /** Windows keeps firing events for a deleted watched directory (the callback
+   *  then runs until the host quits). Close the watcher once the root is gone
+   *  instead of burning a core in it. */
+  private _closeIfRootGone(): boolean {
+    const now = Date.now()
+    const sinceLast = now - this._lastRootCheckAt
+    // A backwards clock jump must not suppress the escape until the clock catches up.
+    if (sinceLast >= 0 && sinceLast < ROOT_EXISTS_CHECK_MS) return false
+    this._lastRootCheckAt = now
+    if (this._probeRoot(this._root) !== 'missing') return false
+    this._log?.('[git] workspace root disappeared; closing watch')
+    this.dispose()
+    return true
   }
 
   private _schedule(): void {

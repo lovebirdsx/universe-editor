@@ -243,8 +243,10 @@ describe('ExtensionHostMainService — window-scoped reclaim', () => {
 
   class CapturingLogger extends AbstractLogger {
     readonly warns: string[] = []
+    readonly infos: string[] = []
     protected override _log(level: LogLevel, message: string): void {
       if (level === LogLevel.Warning) this.warns.push(message)
+      else if (level === LogLevel.Info) this.infos.push(message)
     }
   }
 
@@ -320,11 +322,12 @@ describe('ExtensionHostMainService — window-scoped reclaim', () => {
     expect(procA.stdin.endCalls).toBe(1)
     expect(procB.stdin.endCalls).toBe(1)
     expect(procC.stdin.endCalls).toBe(0)
-    expect(logger.warns).toEqual(['stopAllForWindow windowId=1 killed=2'])
+    expect(logger.infos).toContain('stopAllForWindow windowId=1 killed=2')
+    const reclaimLogs = () => logger.infos.filter((m) => m.startsWith('stopAllForWindow'))
 
     // A second call is a no-op: the window's handles were already reclaimed.
     await realSvc.stopAllForWindow(1)
-    expect(logger.warns).toHaveLength(1)
+    expect(reclaimLogs()).toHaveLength(1)
   })
 
   it('clears a handle from the window map when its host exits (stopAllForWindow becomes a no-op)', async () => {

@@ -68,17 +68,17 @@ export interface ApplicationServices {
   readonly recentWorkspaces: RecentWorkspacesMainService
   /**
    * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
-   * crashes, which is main-internal and not on the wire contract.
+   * crashes or its window closes, which is main-internal and not on the wire contract.
    */
   readonly acpHost: AcpHostMainService
   /**
    * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
-   * crashes, which is main-internal and not on the wire contract.
+   * crashes or its window closes, which is main-internal and not on the wire contract.
    */
   readonly mcpClient: McpClientMainService
   /**
    * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
-   * crashes, which is main-internal and not on the wire contract.
+   * crashes or its window closes, which is main-internal and not on the wire contract.
    */
   readonly extensionHost: ExtensionHostMainService
   readonly extensionManagement: IExtensionManagementService

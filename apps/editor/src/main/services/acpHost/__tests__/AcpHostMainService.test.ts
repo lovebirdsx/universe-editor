@@ -792,8 +792,10 @@ describe('AcpHostMainService — window-scoped reclaim', () => {
 
   class CapturingLogger extends AbstractLogger {
     readonly warns: string[] = []
+    readonly infos: string[] = []
     protected override _log(level: LogLevel, message: string): void {
       if (level === LogLevel.Warning) this.warns.push(message)
+      else if (level === LogLevel.Info) this.infos.push(message)
     }
   }
 
@@ -824,11 +826,39 @@ describe('AcpHostMainService — window-scoped reclaim', () => {
     expect(procA.killCalls).toBe(1)
     expect(procB.killCalls).toBe(1)
     expect(procC.killCalls).toBe(0)
-    expect(logger.warns).toEqual(['stopAllForWindow windowId=1 killed=2'])
+    expect(logger.infos).toContain('stopAllForWindow windowId=1 killed=2')
+    const reclaimLogs = () => logger.infos.filter((m) => m.startsWith('stopAllForWindow'))
 
     // A second call is a no-op: the window's handles were already reclaimed.
     await realSvc.stopAllForWindow(1)
-    expect(logger.warns).toHaveLength(1)
+    expect(reclaimLogs()).toHaveLength(1)
+  })
+
+  it('stops an agent that finishes starting after the window was retired', async () => {
+    const logger = markAsSingleton(new CapturingLogger())
+    const proc = new FakeProc()
+    const otherProc = new FakeProc()
+    const realSvc = new AcpHostMainService(
+      fakeSpawnerWith([proc, otherProc]),
+      undefined,
+      undefined,
+      { createLogger: () => logger } as unknown as ConstructorParameters<
+        typeof AcpHostMainService
+      >[3],
+    )
+    svc = realSvc
+    realSvc.retireWindow(1)
+
+    // `start` resolves after the close already snapshotted the window map.
+    const win1 = createWindowScopedAcpHost(realSvc, 1)
+    await win1.start({ command: 'a', args: [] })
+    expect(proc.killCalls).toBe(1)
+    expect(logger.infos.some((m) => m.includes('retired windowId=1'))).toBe(true)
+
+    // A window that opens afterwards is unaffected.
+    const win2 = createWindowScopedAcpHost(realSvc, 2)
+    await win2.start({ command: 'b', args: [] })
+    expect(otherProc.killCalls).toBe(0)
   })
 
   it('stopAllForWindow leaves remote (server-managed) handles untouched', async () => {

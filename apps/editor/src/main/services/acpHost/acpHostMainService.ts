@@ -78,6 +78,8 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
   private readonly _remoteByHandle = new Map<string, string>()
   /** handle → windowId for local handles, so a window crash can reclaim its agents. */
   private readonly _windowByHandle = new Map<string, number>()
+  /** Window ids closed for good; a `start` still in flight must stop itself. */
+  private readonly _retiredWindows = new Set<number>()
 
   constructor(
     spawn?: AcpSpawner,
@@ -165,14 +167,38 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
    */
   async startForWindow(spec: AcpLaunchSpec, windowId: number): Promise<AcpStartResult> {
     const result = await this.start(spec)
-    if (!spec.authority) this._windowByHandle.set(result.handle, windowId)
+    if (!spec.authority) {
+      if (this._retiredWindows.has(windowId)) {
+        // The window closed while `start` was in flight, so `stopAllForWindow`
+        // snapshotted the map before this handle existed — stop it here instead
+        // of registering it against a window that will never reclaim again.
+        this._logger.info(`start for retired windowId=${windowId}; stopping ${result.handle}`)
+        try {
+          await this.stop(result.handle)
+        } catch (err) {
+          this._logger.warn(
+            `start for retired windowId=${windowId} could not stop ${result.handle}: ${String(err)}`,
+          )
+        }
+        return result
+      }
+      this._windowByHandle.set(result.handle, windowId)
+    }
     return result
   }
 
   /**
-   * Reclaim every local agent a window spawned (renderer crash / reload). Remote
-   * handles stay with the server's own lifecycle. Logs a warn so the diagnostics
-   * package can tie orphaned processes back to the window that leaked them.
+   * Main-internal: mark a window as closed for good. Reloads must NOT retire —
+   * the reloaded renderer starts fresh agents under the same window id.
+   */
+  retireWindow(windowId: number): void {
+    this._retiredWindows.add(windowId)
+  }
+
+  /**
+   * Reclaim every local agent a window spawned (renderer crash / reload / close).
+   * Remote handles stay with the server's own lifecycle. Logs the count so the
+   * diagnostics package can tie reclaimed processes back to the window.
    */
   async stopAllForWindow(windowId: number): Promise<void> {
     const handles = [...this._windowByHandle.entries()]
@@ -180,7 +206,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       .map(([handle]) => handle)
     for (const handle of handles) await this.stop(handle)
     if (handles.length > 0) {
-      this._logger.warn(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
+      this._logger.info(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
     }
   }
 

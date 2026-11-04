@@ -513,9 +513,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   }
 
   /**
-   * Reclaim every local host a window spawned (renderer crash / reload). Remote
-   * handles stay with the server's own lifecycle. Logs a warn so the diagnostics
-   * package can tie orphaned processes back to the window that leaked them.
+   * Reclaim every local host a window spawned (renderer crash / reload / close).
+   * Remote handles stay with the server's own lifecycle. Logs the count so the
+   * diagnostics package can tie reclaimed processes back to the window.
    */
   async stopAllForWindow(windowId: number): Promise<void> {
     const handles = [...this._windowByHandle.entries()]
@@ -523,7 +523,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       .map(([handle]) => handle)
     for (const handle of handles) await this.stop(handle)
     if (handles.length > 0) {
-      this._logger.warn(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
+      this._logger.info(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
     }
   }
 

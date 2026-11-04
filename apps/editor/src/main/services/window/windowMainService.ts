@@ -398,9 +398,7 @@ export class WindowMainService implements IWindowMainService {
       // reached us — its agent and extension-host processes would otherwise
       // orphan (the host's tsserver tree keeps running too). Reclaim exactly
       // this window's local processes.
-      void appServices.acpHost.stopAllForWindow(win.id)
-      void appServices.mcpClient.stopAllForWindow(win.id)
-      void appServices.extensionHost.stopAllForWindow(win.id)
+      this._reclaimWindowProcesses(appServices, win.id, 'renderer-gone')
       if (e2eEnabled) return
       if (this._crashHandled.has(win.id)) return
       this._crashHandled.add(win.id)
@@ -497,9 +495,7 @@ export class WindowMainService implements IWindowMainService {
       // documents cannot survive it.
       this._auxiliaryWindows.disposeParent(win.id, 'parent-reload')
       appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-reloaded')
-      void appServices.acpHost.stopAllForWindow(win.id)
-      void appServices.mcpClient.stopAllForWindow(win.id)
-      void appServices.extensionHost.stopAllForWindow(win.id)
+      this._reclaimWindowProcesses(appServices, win.id, 'window-reloaded')
     })
 
     // Assigned after loadURL below; read by showWindow's cleanup. Declaration
@@ -621,6 +617,14 @@ export class WindowMainService implements IWindowMainService {
       // 趁状态还读得到，先结束这个窗口的堆快照轮次：已经没人会读它了，而还在跑的抓取属于
       // 一个正在被拆掉的进程。
       appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-closed')
+      // A normal close never disposes the renderer's services, and its
+      // beforeunload `stop` is best-effort — routinely lost when the frame tears
+      // down first. Retire the window before reclaiming: a `start` still in
+      // flight registers its handle after the reclaim snapshot and must stop
+      // itself. Without this backstop every closed window leaks its extension
+      // host (plus tsserver) until the app quits.
+      appServices.acpHost.retireWindow(win.id)
+      this._reclaimWindowProcesses(appServices, win.id, 'window-closed')
       // The top window fell to the fallback chain; let pending consumers re-check.
       if (this._lastFocusedWindowId === win.id) {
         this._lastFocusedWindowId = undefined
@@ -744,6 +748,32 @@ export class WindowMainService implements IWindowMainService {
       else entry.win.focus()
       this._opts.logService.createLogger({ id: 'window', name: 'Window' }).debug(`focus id=${id}`)
     }
+  }
+
+  /**
+   * Reclaim this window's local child processes. A renderer crash or reload
+   * never runs the renderer's own stop, and a normal close loses its
+   * beforeunload stop when the frame tears down first — without this backstop
+   * each path leaks an extension host (plus tsserver) until the app quits.
+   */
+  private _reclaimWindowProcesses(
+    appServices: ApplicationServices,
+    windowId: number,
+    reason: 'renderer-gone' | 'window-reloaded' | 'window-closed',
+  ): void {
+    void Promise.allSettled([
+      appServices.acpHost.stopAllForWindow(windowId),
+      appServices.mcpClient.stopAllForWindow(windowId),
+      appServices.extensionHost.stopAllForWindow(windowId),
+    ]).then((results) => {
+      const errors = results.flatMap((r) => (r.status === 'rejected' ? [String(r.reason)] : []))
+      if (errors.length === 0) return
+      this._opts.logService
+        .createLogger({ id: 'window', name: 'Window' })
+        .warn(
+          `reclaim windowId=${windowId} reason=${reason} failed=${errors.length}: ${errors.join(' | ')}`,
+        )
+    })
   }
 
   private _noteFocused(id: number): void {

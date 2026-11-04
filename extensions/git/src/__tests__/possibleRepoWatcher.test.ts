@@ -6,11 +6,14 @@ import {
   joinCandidate,
   POSSIBLE_REPO_DEBOUNCE_MS,
   repoCandidateFromPath,
+  type RootState,
 } from '../possibleRepoWatcher.js'
 
 vi.mock('node:fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs')>()
-  return { ...actual, watch: vi.fn() }
+  // Fake workspace roots don't exist on disk; default to "present" so the
+  // disappeared-root escape only runs in the tests that opt into it.
+  return { ...actual, watch: vi.fn(), statSync: vi.fn(() => ({})) }
 })
 
 const watchMock = vi.mocked(watch)
@@ -141,5 +144,73 @@ describe('PossibleRepoWatcher', () => {
     controller.listener?.('rename', '.git')
     vi.advanceTimersByTime(POSSIBLE_REPO_DEBOUNCE_MS)
     expect(batches).toHaveLength(0)
+  })
+
+  it('closes the watch once the workspace root disappears', () => {
+    // Windows keeps firing events for a deleted watched directory; without this
+    // escape the callback runs (and burns a core) until the host quits.
+    const controller = installWatcher()
+    let rootState: RootState = 'present'
+    const log = vi.fn()
+    const batches: string[][] = []
+    const watcher = new PossibleRepoWatcher(
+      '/root',
+      (dirs) => batches.push([...dirs]),
+      log,
+      () => rootState,
+    )
+    watcher.start()
+    controller.listener?.('rename', 'plain.txt') // primes the root check
+    rootState = 'missing'
+    vi.advanceTimersByTime(1_000)
+    controller.listener?.('rename', 'plain.txt')
+
+    expect(controller.close).toHaveBeenCalled()
+    expect(log).toHaveBeenCalledWith('[git] workspace root disappeared; closing watch')
+    expect(batches).toHaveLength(0)
+    watcher.dispose()
+  })
+
+  it('keeps watching when the root is only temporarily unreachable', () => {
+    // EACCES / a network-drive blip must not disable late detection for the rest
+    // of the session; only a proven-missing root closes the watch.
+    const controller = installWatcher()
+    const batches: string[][] = []
+    const watcher = new PossibleRepoWatcher(
+      '/root',
+      (dirs) => batches.push([...dirs]),
+      undefined,
+      () => 'unknown',
+    )
+    watcher.start()
+    controller.listener?.('rename', 'plain.txt')
+    controller.listener?.('rename', '.git')
+    vi.advanceTimersByTime(POSSIBLE_REPO_DEBOUNCE_MS)
+
+    expect(controller.close).not.toHaveBeenCalled()
+    expect(batches).toEqual([['']])
+    watcher.dispose()
+  })
+
+  it('drops a candidate that was queued before dispose', () => {
+    const controller = installWatcher()
+    const batches: string[][] = []
+    const watcher = new PossibleRepoWatcher('/root', (dirs) => batches.push([...dirs]))
+    watcher.start()
+    controller.listener?.('rename', '.git')
+    watcher.dispose()
+    vi.advanceTimersByTime(POSSIBLE_REPO_DEBOUNCE_MS)
+    expect(batches).toHaveLength(0)
+  })
+
+  it('throttles the root check instead of probing on every event', () => {
+    const controller = installWatcher()
+    const probeRoot = vi.fn((): RootState => 'present')
+    const watcher = new PossibleRepoWatcher('/root', () => {}, undefined, probeRoot)
+    watcher.start()
+    for (let i = 0; i < 100; i++) controller.listener?.('rename', 'plain.txt')
+    // Only the first event is allowed to hit the filesystem.
+    expect(probeRoot).toHaveBeenCalledTimes(1)
+    watcher.dispose()
   })
 })

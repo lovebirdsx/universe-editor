@@ -203,7 +203,7 @@ function makeOpts() {
       textSearch: {} as never,
       fileWatcher: {} as never,
       recentWorkspaces: {} as never,
-      acpHost: { stopAllForWindow: () => Promise.resolve() } as never,
+      acpHost: { retireWindow: () => {}, stopAllForWindow: () => Promise.resolve() } as never,
       mcpClient: { stopAllForWindow: () => Promise.resolve() } as never,
       acpTerminal: {} as never,
       extensionHost: { stopAllForWindow: () => Promise.resolve() } as never,
@@ -518,6 +518,30 @@ describe('WindowMainService', () => {
         // reload past the backoff.
         expect(win.reload).toHaveBeenCalledTimes(2)
       })
+    })
+  })
+
+  describe('window-close reclaim', () => {
+    it("reclaims the closed window's agents, MCP servers and extension host", async () => {
+      // A normal close is the common case: the renderer's beforeunload stop is
+      // best-effort and leaks the host when the frame goes away first.
+      const opts = makeOpts()
+      const retire = vi.fn()
+      const acpStopAll = vi.fn(() => Promise.resolve())
+      const mcpStopAll = vi.fn(() => Promise.resolve())
+      const extHostStopAll = vi.fn(() => Promise.resolve())
+      opts.appServices.acpHost = { retireWindow: retire, stopAllForWindow: acpStopAll } as never
+      opts.appServices.mcpClient = { stopAllForWindow: mcpStopAll } as never
+      opts.appServices.extensionHost = { stopAllForWindow: extHostStopAll } as never
+      const svc = makeService(opts)
+      const id = await svc.createWindow()
+      grabWindowClosedHandler()()
+      // Retire before the reclaim snapshot so a start still in flight stops itself.
+      expect(retire).toHaveBeenCalledWith(id)
+      expect(retire).toHaveBeenCalledBefore(acpStopAll)
+      expect(acpStopAll).toHaveBeenCalledWith(id)
+      expect(mcpStopAll).toHaveBeenCalledWith(id)
+      expect(extHostStopAll).toHaveBeenCalledWith(id)
     })
   })
 
