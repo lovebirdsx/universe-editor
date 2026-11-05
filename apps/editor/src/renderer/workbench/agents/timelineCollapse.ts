@@ -79,12 +79,16 @@ export function isMessageRendered(message: AcpMessage, nested: boolean): boolean
 }
 
 // Per-kind default under the fold modes `default` / `hideThinking` /
-// `onlyMessage`: read/search / sub-agent-parent tool calls start collapsed,
-// everything else (thought messages included) starts expanded. No top-level
-// sub-agent card ever reaches this — {@link resolveCollapsed} decides those from
-// the designation alone. A whole-file write (Write / add file) is an `edit` card
-// by shape but a new document by content — folded so it does not flood the
-// timeline; its header carries a preview / open affordance instead.
+// `onlyMessage`: message cards and `edit` / `switch_mode` tool calls start
+// expanded; every other tool call (read / search / execute / …) starts
+// collapsed. No top-level sub-agent card ever reaches this —
+// {@link resolveCollapsed} decides those from the designation alone. A
+// whole-file write (Write / add file) is an `edit` card by shape but a new
+// document by content — folded so it does not flood the timeline; its header
+// carries a preview / open affordance instead. A user-decision card
+// (AskUserQuestion / elicitation-backed tool) records the question and the
+// user's answer, so it opens by default and only an explicit "Collapse all"
+// folds it.
 export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
   if (mode === 'collapsed') return true
   if (mode === 'expanded') return false
@@ -92,6 +96,7 @@ export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: Collap
     case 'message':
       return false
     case 'toolCall':
+      if (item.call.requiresUserDecision === true) return false
       if (createdFilePath(item.call) !== undefined) return true
       return item.call.kind !== 'edit' && item.call.kind !== 'switch_mode'
     case 'compaction':

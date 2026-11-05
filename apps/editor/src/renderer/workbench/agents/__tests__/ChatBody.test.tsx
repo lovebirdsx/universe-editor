@@ -2038,6 +2038,33 @@ describe('ChatBody — collapse', () => {
     expect(ariaExpanded(container, 'm:c')).toBe('true')
   })
 
+  it('starts a user-decision (question) card expanded and follows explicit modes', () => {
+    const question: TimelineItem = {
+      kind: 'toolCall',
+      id: 'ask',
+      call: {
+        id: 'ask',
+        title: 'Asking for your input',
+        kind: 'other',
+        status: 'completed',
+        text: 'Pick a color',
+        blocks: [{ type: 'text', text: 'Pick a color' }],
+        diffs: [],
+        requiresUserDecision: true,
+      },
+    }
+    const session = makeSession('s1', [question])
+    const { container } = renderChat(session)
+    const expanded = (): string | null =>
+      collapseToggle(slotEl(container, 't:ask')).getAttribute('aria-expanded')
+
+    expect(expanded()).toBe('true')
+    act(() => session.setCollapseMode('collapsed'))
+    expect(expanded()).toBe('false')
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(expanded()).toBe('true')
+  })
+
   it('toggleCollapse flips the focused item', () => {
     const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
     act(() => {

@@ -88,6 +88,17 @@ const ordinaryEdit = toolCallItem(
   }),
 )
 
+// AskUserQuestion / elicitation-backed record: the question and the user's
+// answer live in the body, so the card opens by default.
+const questionCard = toolCallItem(
+  makeCall({
+    id: 'ask',
+    title: 'Asking for your input',
+    kind: 'other',
+    requiresUserDecision: true,
+  }),
+)
+
 // A sub-agent chain two levels deep, the shape the ancestor-walking helpers are
 // tested against: a user message, then a Task card whose sub-agent timeline holds
 // a message and a nested Task card. Every Task card is kind 'other', so it is
@@ -152,6 +163,17 @@ describe('defaultCollapsed', () => {
     expect(defaultCollapsed(toolCallItem(makeCall({ kind: 'search' })), 'default')).toBe(true)
   })
 
+  it('keeps a user-decision (question) card expanded under the smart fold modes', () => {
+    expect(defaultCollapsed(questionCard, 'default')).toBe(false)
+    expect(defaultCollapsed(questionCard, 'hideThinking')).toBe(false)
+    expect(defaultCollapsed(questionCard, 'onlyMessage')).toBe(false)
+  })
+
+  it('lets the explicit modes win over the question card default too', () => {
+    expect(defaultCollapsed(questionCard, 'collapsed')).toBe(true)
+    expect(defaultCollapsed(questionCard, 'expanded')).toBe(false)
+  })
+
   it('lets the explicit modes win over every per-kind default', () => {
     expect(defaultCollapsed(agentResult, 'expanded')).toBe(false)
     expect(defaultCollapsed(ordinaryEdit, 'collapsed')).toBe(true)
@@ -174,6 +196,13 @@ describe('resolveCollapsed', () => {
   it('falls back to the default when no override exists for the key', () => {
     const state = collapseState('default')
     expect(resolveCollapsed('t:t1', agentResult, state)).toBe(true)
+  })
+
+  it('keeps a manually folded question card folded', () => {
+    expect(resolveCollapsed('t:ask', questionCard, collapseState('default'))).toBe(false)
+    expect(
+      resolveCollapsed('t:ask', questionCard, collapseState('default', [['t:ask', true]])),
+    ).toBe(true)
   })
 })
 
