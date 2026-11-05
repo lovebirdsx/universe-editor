@@ -127,11 +127,31 @@ function makeWorkspaceStub() {
   }
 }
 
+function makeWorkbenchWindowsStub(initialCount = 1) {
+  const addWindow = new Emitter<unknown>()
+  const removeWindow = new Emitter<unknown>()
+  let windows: unknown[] = Array.from({ length: initialCount }, () => ({}))
+  return {
+    get windows() {
+      return windows
+    },
+    onDidAddWindow: addWindow.event,
+    onDidRemoveWindow: removeWindow.event,
+    add() {
+      windows = [...windows, {}]
+      addWindow.fire({})
+    },
+    remove() {
+      windows = windows.slice(0, -1)
+      removeWindow.fire({})
+    },
+  }
+}
+
 interface FakeEditor {
   id: string
   isDirty?: boolean
 }
-
 interface FakeGroup {
   index: number
   count: number
@@ -235,6 +255,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isWindows')).toBe(false)
     expect(ctx.get('isMac')).toBe(true)
@@ -253,6 +274,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('activityBarVisible')).toBe(true)
     expect(ctx.get('sideBarVisible')).toBe(true)
@@ -272,6 +294,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('activityBarVisible')).toBe(true)
     layout.visible.set({ ...layout.visible.get(), [PartId.ActivityBar]: false }, undefined)
@@ -291,6 +314,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('sideBarVisible')).toBe(true)
     layout.visible.set({ ...layout.visible.get(), [PartId.SideBar]: false }, undefined)
@@ -310,6 +334,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('hasActiveEditor')).toBe(false)
     expect(ctx.get('activeEditorId')).toBeUndefined()
@@ -334,6 +359,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('diffEditorHasOpenableFile')).toBe(false)
 
@@ -361,6 +387,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
 
     const blob = URI.parse('perforce://depot/a.ts@3')
@@ -389,6 +416,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('editorTextFocus')).toBe(false)
     expect(ctx.get('editorLangId')).toBe('')
@@ -415,6 +443,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     editor.activeEditor.set(input, undefined)
     expect(ctx.get('editorLangId')).toBe('markdown')
@@ -441,6 +470,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     editor.activeEditor.set(first, undefined)
     editor.activeEditor.set(second, undefined)
@@ -467,6 +497,7 @@ describe('ContextKeyContribution', () => {
       lifecycle,
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('workbenchReady')).toBe(false)
     lifecycle.setPhase(LifecyclePhase.Ready)
@@ -487,6 +518,7 @@ describe('ContextKeyContribution', () => {
       lifecycle,
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('workbenchRestored')).toBe(false)
     lifecycle.setPhase(LifecyclePhase.Restored)
@@ -510,6 +542,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('editorPartMultipleEditorGroups')).toBe(false)
     groups.groups.push(makeGroup(1, []))
@@ -531,6 +564,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('editorIsOpen')).toBe(false)
     g0.editors.push({ id: 'a' })
@@ -552,6 +586,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('groupEditorsCount')).toBe(2)
     ctx.dispose()
@@ -571,6 +606,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('activeEditorGroupIndex')).toBe(0)
     groups.setActive(g1)
@@ -592,6 +628,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('activeEditorIsFirstInGroup')).toBe(true)
     expect(ctx.get('activeEditorIsLastInGroup')).toBe(true)
@@ -612,6 +649,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('activeEditorIsDirty')).toBe(true)
     ctx.dispose()
@@ -633,6 +671,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     // a is active and sticky.
     expect(ctx.get('activeEditorIsPinned')).toBe(true)
@@ -657,6 +696,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       workspace as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isRemoteWorkspace')).toBe(false)
     expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
@@ -674,6 +714,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isRemoteWorkspace')).toBe(false)
     expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
@@ -693,6 +734,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       workspace as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isRemoteWorkspace')).toBe(true)
     expect(ctx.get('remoteRevealInOsSupported')).toBe(true)
@@ -712,6 +754,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       workspace as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isRemoteWorkspace')).toBe(true)
     expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
@@ -731,6 +774,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       workspace as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isRemoteWorkspace')).toBe(true)
     expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
@@ -750,6 +794,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       workspace as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isRemoteWorkspace')).toBe(false)
     expect(ctx.get('remoteRevealInOsSupported')).toBe(false)
@@ -776,6 +821,7 @@ describe('ContextKeyContribution', () => {
       new LifecycleService(),
       makeLanguageFeaturesStub() as never,
       makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
     )
     expect(ctx.get('isAuxiliaryEditorWindow')).toBe(false)
 
@@ -784,6 +830,30 @@ describe('ContextKeyContribution', () => {
 
     groups.setActivePart(true)
     expect(ctx.get('isAuxiliaryEditorWindow')).toBe(false)
+    ctx.dispose()
+  })
+
+  it('tracks whether another workbench window exists', () => {
+    const ctx = new ContextKeyService()
+    const windows = makeWorkbenchWindowsStub()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('linux') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+      windows as never,
+    )
+    expect(ctx.get('hasOtherEditorWindows')).toBe(false)
+
+    windows.add()
+    expect(ctx.get('hasOtherEditorWindows')).toBe(true)
+
+    windows.remove()
+    expect(ctx.get('hasOtherEditorWindows')).toBe(false)
     ctx.dispose()
   })
 })

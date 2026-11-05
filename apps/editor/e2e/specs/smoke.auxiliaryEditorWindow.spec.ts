@@ -435,6 +435,172 @@ test.describe('@p0 auxiliary editor windows', () => {
     expect(restored).toContainEqual(expect.stringContaining('group-back-b.txt'))
   })
 
+  test.describe('move/copy into an open window', () => {
+    test('moves an editor into an already-open auxiliary window', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      const first = seedFile('pick-into-a.txt', 'A\n')
+      const second = seedFile('pick-into-b.txt', 'B\n')
+
+      // The main window has no other window yet: the entry is gated off.
+      expect(
+        await page.evaluate(() => window.__E2E__!.getContextKey('hasOtherEditorWindows')),
+      ).toBe(false)
+
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), first)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      const mainGroup = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows()))[0]!
+        .groupIds[0]!
+      await waitForAuxWindow(electronApp, workbench, 'workbench.action.moveEditorToNewWindow')
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('pick-into-a.txt'))
+      expect(
+        await page.evaluate(() => window.__E2E__!.getContextKey('hasOtherEditorWindows')),
+      ).toBe(true)
+
+      // Open B in the main window: focus the main part first, or the open target
+      // stays on the last-used auxiliary editor surface.
+      await page.evaluate(() => window.__E2E__!.focusMainWindow())
+      await activateMainWindow(page)
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), second)
+      await expect
+        .poll(() =>
+          page.evaluate((id) => window.__E2E__!.getEditorGroupEditorUris(id), String(mainGroup)),
+        )
+        .toContainEqual(expect.stringContaining('pick-into-b.txt'))
+
+      // Fire-and-forget: the command awaits the picker.
+      await page.evaluate((id) => {
+        void window.__E2E__!.runCommand('workbench.action.moveEditorToWindow', { groupId: id })
+      }, mainGroup)
+      await workbench.quickInput.waitForVisible()
+
+      const options = workbench.quickInput.dialog.getByRole('option')
+      await expect(options).toHaveCount(1)
+      await expect(options.first()).toContainText(/Editor Window|编辑器窗口/)
+      await expect(workbench.quickInput.dialog).not.toContainText('Main Window')
+      await options.first().click()
+      await workbench.quickInput.waitForHidden()
+
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('pick-into-b.txt'))
+      expect(
+        await page.evaluate(
+          (id) => window.__E2E__!.getEditorGroupEditorUris(id),
+          String(mainGroup),
+        ),
+      ).not.toContainEqual(expect.stringContaining('pick-into-b.txt'))
+
+      const destination = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows())).find(
+        (candidate) => !candidate.isMain,
+      )!
+      expect(destination.active).toBe(true)
+      expect(destination.focusedPart).toBe(true)
+    })
+
+    test('copies an editor into an already-open auxiliary window', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      const source = seedFile('pick-copy-source.txt', 'S\n')
+      const copied = seedFile('pick-copy-target.txt', 'T\n')
+
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), source)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      const mainGroup = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows()))[0]!
+        .groupIds[0]!
+      await waitForAuxWindow(electronApp, workbench, 'workbench.action.moveEditorToNewWindow')
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('pick-copy-source.txt'))
+
+      await page.evaluate(() => window.__E2E__!.focusMainWindow())
+      await activateMainWindow(page)
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), copied)
+      await expect
+        .poll(() =>
+          page.evaluate((id) => window.__E2E__!.getEditorGroupEditorUris(id), String(mainGroup)),
+        )
+        .toContainEqual(expect.stringContaining('pick-copy-target.txt'))
+
+      await page.evaluate((id) => {
+        void window.__E2E__!.runCommand('workbench.action.copyEditorToWindow', { groupId: id })
+      }, mainGroup)
+      await workbench.quickInput.waitForVisible()
+      await workbench.quickInput.dialog.getByRole('option').first().click()
+      await workbench.quickInput.waitForHidden()
+
+      // Both windows keep a tab: the copy is a separate editor instance.
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toContainEqual(expect.stringContaining('pick-copy-target.txt'))
+      expect(
+        await page.evaluate(
+          (id) => window.__E2E__!.getEditorGroupEditorUris(id),
+          String(mainGroup),
+        ),
+      ).toContainEqual(expect.stringContaining('pick-copy-target.txt'))
+    })
+
+    test('moves a whole group into an empty auxiliary window', async ({
+      electronApp,
+      workbench,
+      page,
+    }) => {
+      await workbench.waitForRestored()
+      const first = seedFile('pick-group-a.txt', 'A\n')
+      const second = seedFile('pick-group-b.txt', 'B\n')
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), first)
+      await expect(workbench.editor.monacoEditor).toBeVisible()
+      await page.evaluate((p) => window.__E2E__!.openFileUri(p), second)
+      const mainGroup = (await page.evaluate(() => window.__E2E__!.getWorkbenchWindows()))[0]!
+        .groupIds[0]!
+
+      await waitForAuxWindow(electronApp, workbench, 'workbench.action.newEmptyEditorWindow')
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toEqual([])
+
+      await page.evaluate(() => window.__E2E__!.focusMainWindow())
+      await activateMainWindow(page)
+      await page.evaluate((id) => {
+        void window.__E2E__!.runCommand('workbench.action.moveEditorGroupToWindow', {
+          groupId: id,
+        })
+      }, mainGroup)
+      await workbench.quickInput.waitForVisible()
+      const options = workbench.quickInput.dialog.getByRole('option')
+      await expect(options).toHaveCount(1)
+      await expect(options.first()).toContainText(/Editor Window|编辑器窗口/)
+      await options.first().click()
+      await workbench.quickInput.waitForHidden()
+
+      await expect
+        .poll(async () => (await auxWindows(page))[0]?.groups.flatMap((g) => g.editorUris) ?? [])
+        .toEqual(
+          expect.arrayContaining([
+            expect.stringContaining('pick-group-a.txt'),
+            expect.stringContaining('pick-group-b.txt'),
+          ]),
+        )
+      expect(
+        await page.evaluate(
+          (id) => window.__E2E__!.getEditorGroupEditorUris(id),
+          String(mainGroup),
+        ),
+      ).toEqual([])
+      // Landing content clears the explicit-empty keep-alive.
+      await expect.poll(async () => (await auxWindows(page))[0]?.explicitEmpty).toBe(false)
+    })
+  })
+
   test('copy editor keeps one shared Monaco model and both copies go dirty', async ({
     electronApp,
     workbench,

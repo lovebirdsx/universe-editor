@@ -66,6 +66,7 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'panelVisible',
   'activeEditorId',
   'hasActiveEditor',
+  'hasOtherEditorWindows',
   'activeEditorLanguageId',
   'activeEditorTypeId',
   'isInDiffEditor',

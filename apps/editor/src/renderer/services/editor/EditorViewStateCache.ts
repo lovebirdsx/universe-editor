@@ -104,6 +104,27 @@ class EditorViewStateCacheImpl {
     this._map.set(this._cursorKey(groupId, toUri), value)
   }
 
+  /**
+   * Copy every cached entry for a resource (view state, shared cursor, one-shot
+   * reveal line) into another group. A cross-window move lands in a group with a
+   * different id; copying before the move lets the target mount restore the
+   * cursor/scroll the source was showing. Copy rather than move: a copy keeps
+   * both sides, and a failed move leaves the source untouched.
+   */
+  copyGroupEntries(fromGroupId: number, toGroupId: number, resourceUri: string): void {
+    if (fromGroupId === toGroupId) return
+    const pairs: [string, string][] = [
+      [this._key(fromGroupId, resourceUri), this._key(toGroupId, resourceUri)],
+      [this._cursorKey(fromGroupId, resourceUri), this._cursorKey(toGroupId, resourceUri)],
+      [this._revealKey(fromGroupId, resourceUri), this._revealKey(toGroupId, resourceUri)],
+    ]
+    for (const [from, to] of pairs) {
+      const value = this._map.get(from)
+      if (value === undefined) continue
+      this._map.set(to, value)
+    }
+  }
+
   /** Bulk-load states for one group from persisted data (restore phase). */
   restoreGroup(groupId: number, states: Readonly<Record<string, unknown>>): void {
     for (const [uri, state] of Object.entries(states)) {

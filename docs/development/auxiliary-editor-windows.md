@@ -60,6 +60,17 @@ renderer（主窗口，唯一运行时）
 - 源组移空且 part 还有其它组时删除空源组；若是 part 唯一的组则保留，由 `_watchEmpty` 自动关窗。
 - 菜单门控用 `isAuxiliaryEditorWindow`：标签/标签栏右键走 `editorScopedContextValues` 里的 scoped 键（按被点击的 `group.part.isMain` 求值），命令面板走 `ContextKeyContribution` 维护的 root 键（跟随 `activePart.isMain`）。不要用 `precondition`：它按 root 求值并 AND 到每条菜单。
 
+## 将编辑器 / 组移动到已打开的窗口
+
+`openEditorInWindow(editor, source, target, { mode })` / `openGroupInWindow(group, target, { mode })` 把编辑器送到一个**已存在**的 `IWorkbenchWindow`（主窗口或辅助窗口）。与 `*ToNewWindow` 不同，这两个 API 是**同步**的：不建窗，没有 await 竞态；`mode` 默认 `'move'`，copy 走 `_cloneForCopy`。它们不替代 `moveEditorToMainWindow` —— move 到主窗口仍委托给后者以保持既有语义，copy 到主窗口才走通用路径。
+
+- 目标组解析 `_targetGroupForWindow`：主窗口 `_mainTargetGroup()`；辅助窗口用该 part 的 `activeGroupForOpen`（锁感知，必要时新建组）。目标窗口被排除在源 part 之外，服务层还会复核 `getEntry(token)` + `_isEntryOpen`（选择器打开期间窗口可能已关）。
+- 落位仍走 `_moveEditorOrThrow`；失败只记日志并返回 false，**绝不** `_discardFailedTarget`——目标窗口是用户的，不能被失败清理关掉。组 copy 先 clone 全部 input，不可复制时统一提示并全部 dispose，目标不会出现半组内容。
+- 成功后的激活顺序 `activateGroup(target) → activatePart(target.part, { preserveFocus: true, updateOpenTarget: true }) → focusWindow/focusMainWindow`，与「移回主窗口」同源；同步执行，早于 `_watchEmpty` 的 microtask。目标窗口的 `explicitEmpty` 不需要手动清：内容落入后 `_watchEmpty` 自动清。
+- 跨组移动前调用 `_copyViewState` → `EditorViewStateCache.copyGroupEntries(fromGroupId, toGroupId, resource)`：目标组 id 与源组不同，不复制就会丢光标/滚动。只复制 input 自身 `resource` 对应的键（DiffEditor 的 viewState 也挂在 `diffInput.resource`），刻意不复制 diff 的 `originalUri` 共享光标键。该调用已接入所有跨窗口迁移路径（新窗口、回主窗口、关窗迁移/salvage）。目标组已含同一 id 的编辑器时不复制——`openEditor` 会用目标实例做 `migrateFrom`，目标窗口自己的光标/滚动不应被源窗口覆盖。
+- 入口是四个 Action2 + 窗口 Quick Pick：`workbench.action.{move,copy}Editor{,Group}ToWindow`。窗口清单取 `IWorkbenchWindowService.windows`（含主窗口，按 part 身份排除源窗口），标签文本实时读 `document.title`。菜单门控用 root 键 `hasOtherEditorWindows`（`ContextKeyContribution` 订阅窗口增减，`windows.length > 1`），它同时满足命令面板与 per-tab scoped 菜单；编辑器命令的 `precondition` 另加 `hasActiveEditor`，整组命令在空组上直接返回（不弹选择器）。新增键必须同步 `knownContextKeys.ts` 的镜像表。
+- 标签与标签栏的 `2_newWindow` 组顺序：`10 移到新窗口 / 20 移到窗口… / 30 移到主窗口 / 40 复制到新窗口 / 50 复制到窗口…`。
+
 ## 浮层与文档归属
 
 每个窗口有自己的 Document，所有文档级浮层必须挂到**owner document**。解析顺序统一走 `@universe-editor/workbench-ui` 的 `useOwnerDocument(explicit?)`：**显式 prop > `OwnerDocumentProvider` > 全局 `document`**。`Workbench` 根部 provide 主文档，`AuxiliaryWindowHost` 为每个辅助 portal 子树重新 provide 该窗口的 document。
@@ -203,7 +214,7 @@ main 进程有两处不能只看"当前窗口 id"：
 
 ## 测试与已知限制
 
-- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、单编辑器/整组移回主窗口与菜单可见性、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab、辅助窗口 Ctrl+Tab 回主窗口后台 tab 后光标/方向键可用）、聚焦窗口与打开落点分离（Alt+Tab 回主窗口后 Ctrl+W 关主窗口标签、打开仍落原辅助窗口）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。
+- 核心 E2E：`apps/editor/e2e/specs/smoke.auxiliaryEditorWindow.spec.ts` 覆盖建窗、移动/复制、单编辑器/整组移回主窗口与菜单可见性、关闭、恢复、菜单归属、dialog 归属、ACP 会话菜单/图片预览/通知归属、窗口命令、标题栏主题跟随、跨窗口焦点（Ctrl+P / Alt+← / Ctrl+Tab、辅助窗口 Ctrl+Tab 回主窗口后台 tab 后光标/方向键可用）、聚焦窗口与打开落点分离（Alt+Tab 回主窗口后 Ctrl+W 关主窗口标签、打开仍落原辅助窗口）、辅助窗口内 `Ctrl+Shift+E` 不误关侧栏、quick-navigate 的改键释放与 `Ctrl+N/P` 归属、原生标题随编辑器更新，以及 DnD；`move/copy into an open window` 覆盖移到/复制到已打开的辅助窗口、整组移到空窗口与 `explicitEmpty` 清理、`hasOtherEditorWindows` 门控；`smoke.auxiliaryEditorWindow.monaco.spec.ts` 用真实 tsserver 验证 hover 落在辅助文档；`smoke.auxiliaryEditorWindow.realm.spec.ts` 用真实辅助窗口守护跨 realm 判定（tooltip、markdown Shift-drop、prompt drop overlay、配置浮层文档归属与焦点交还、代码块文件链接、代码块复制绕过失焦的 `navigator.clipboard` 走主进程剪贴板、webview iframe 消息桥在窗口间移动后仍双向可达）。owner-window 与 clipboard helper 的单测在 `packages/workbench-ui/src/__tests__/`；find 高亮写入 owner registry 的单测在 `useFindInContainer.test.tsx`。服务层单测在 `services/windows/__tests__/auxiliaryEditorWindowService.test.ts`（含 `move/copy into an existing window` 的拒绝矩阵与 view-state 迁移），`EditorViewStateCache.test.ts` 守护跨组复制，`actions/__tests__/auxiliaryEditorActions.test.ts` 守护菜单门控与选择器过滤。
 - **DevTools 属于主 renderer**：辅助窗口共享主窗口的 JS realm 与 webContents，`toggleDevTools` 只能打开主窗口的开发者工具，无法按辅助窗口分别打开。这是同 renderer 架构的直接结果，不是遗漏；要按窗口调试需等辅助窗口拥有独立 renderer。
 - **Monaco 平台容器按活跃窗口解析**：`monacoWorkbenchLayoutService.activeContainer` 跟随当前活跃 workbench 文档，`containers` 汇总各窗口的 `#root`；monaco 自带的 quick input（Go to Line / Go to Symbol / Go to Match、change tab size 等）与无显式容器的 context view 因此在焦点窗口打开并持有输入焦点。`mainContainer` 仍固定主窗口——它是 monaco 全局无障碍类名与剪贴板兜底监听的锚点，也是辅助窗口 unregister 时 quick input 的兜底 reparent 目标。新增依赖 `activeContainer` 的平台浮层不再假设主窗口。
 - **直接运行 Monaco action 前必须聚焦目标编辑器**：standalone quick input 的 `activeService` 只认 `getFocusedCodeEditor()`，焦点在窗口控件、树等非编辑器元素上时，`editor.action.gotoLine` / `editor.action.quickOutline` 会抛 "Quick input service needs a focused editor to work."。本仓有两类绕过 VSCode `EditorAction` 包装的入口：命令面板的 monaco 项（`CommandsQuickAccessProvider` → `editor.getAction().run()`）和 `CommandsRegistry` 镜像命令（`monacoActionsBridge` → `editor.trigger()`）。二者都不会碰焦点，执行入口必须像 `gotoLocationActions` 一样先 `editor.focus()`；`getFocusedCodeEditor() || getActiveCodeEditor()` 只解析目标编辑器、不改变焦点，兜不了底。

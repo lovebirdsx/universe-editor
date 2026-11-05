@@ -24,6 +24,7 @@ import {
   type PreparedAuxiliaryWindow,
 } from '../../../../shared/ipc/auxiliaryWindowService.js'
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
+import { EditorViewStateCache } from '../../editor/EditorViewStateCache.js'
 import { WorkbenchWindowService } from '../workbenchWindowService.js'
 import { AuxiliaryEditorWindowService } from '../auxiliaryEditorWindowService.js'
 import type { IAuxiliaryEditorWindow } from '../auxiliaryEditorWindowService.js'
@@ -772,6 +773,264 @@ describe('AuxiliaryEditorWindowService failure paths', () => {
       const window = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
       expect(ctx.service.moveGroupToMainWindow(window.part.activeGroup)).toBe(false)
       expect(ctx.windowFocus.focusMainWindowCalls).toBe(0)
+    })
+  })
+
+  describe('move/copy into an existing window', () => {
+    afterEach(() => EditorViewStateCache._resetForTests())
+
+    async function openAux(input: TestInput): Promise<IAuxiliaryEditorWindow> {
+      const source = ctx.groups.mainPart.activeGroup
+      source.openEditor(input)
+      const result = await ctx.service.openEditorInNewWindow(input, { mode: 'move', source })
+      expect(result.ok).toBe(true)
+      if (!result.ok) throw new Error('auxiliary window creation failed')
+      return result.window
+    }
+
+    function registerCloneableType() {
+      return EditorRegistry.registerEditorProvider({
+        typeId: TestInput.TYPE_ID,
+        componentKey: TestInput.TYPE_ID,
+        deserialize: (data) => new TestInput((data as { path: string }).path),
+      })
+    }
+
+    it('moves one editor into another auxiliary window and brings it forward', async () => {
+      const input = new TestInput('/to-window')
+      const sourceWindow = await openAux(input)
+      const destination = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+      const source = sourceWindow.part.activeGroup
+
+      expect(ctx.service.openEditorInWindow(input, source, destination.window)).toBe(true)
+
+      expect(destination.part.activeGroup.contains(input)).toBe(true)
+      expect(destination.part.activeGroup.activeEditor).toBe(input)
+      expect(source.contains(input)).toBe(false)
+      expect(ctx.groups.activePart).toBe(destination.part)
+      expect(ctx.windows.activeWindow).toBe(destination.window)
+      expect(ctx.windowFocus.focusedWindows).toContain(destination.window)
+      await Promise.resolve()
+      expect(ctx.aux.requestClose).toHaveBeenCalledWith(sourceWindow.token)
+    })
+
+    it('copies one editor into another auxiliary window and keeps the source tab', async () => {
+      const registration = registerCloneableType()
+      try {
+        const input = new TestInput('/copy-to-window')
+        const sourceWindow = await openAux(input)
+        const destination = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+        const source = sourceWindow.part.activeGroup
+        source.stickEditor(input)
+
+        expect(
+          ctx.service.openEditorInWindow(input, source, destination.window, { mode: 'copy' }),
+        ).toBe(true)
+
+        expect(source.contains(input)).toBe(true)
+        const clones = destination.part.activeGroup.editors.filter(
+          (candidate) => candidate.resource?.toString() === input.resource?.toString(),
+        )
+        expect(clones).toHaveLength(1)
+        expect(clones[0]).not.toBe(input)
+        expect(destination.part.activeGroup.isSticky(clones[0]!)).toBe(true)
+        expect(ctx.windows.activeWindow).toBe(destination.window)
+      } finally {
+        registration.dispose()
+      }
+    })
+
+    it('copies one editor from an auxiliary window back into the main window', async () => {
+      const registration = registerCloneableType()
+      try {
+        const input = new TestInput('/copy-to-main')
+        const window = await openAux(input)
+        const source = window.part.activeGroup
+
+        expect(
+          ctx.service.openEditorInWindow(input, source, ctx.windows.mainWindow, { mode: 'copy' }),
+        ).toBe(true)
+
+        expect(source.contains(input)).toBe(true)
+        expect(
+          ctx.groups.mainPart.activeGroup.editors.some(
+            (candidate) =>
+              candidate !== input && candidate.resource?.toString() === input.resource.toString(),
+          ),
+        ).toBe(true)
+        expect(ctx.windows.activeWindow).toBe(ctx.windows.mainWindow)
+        expect(ctx.windowFocus.focusMainWindowCalls).toBe(1)
+      } finally {
+        registration.dispose()
+      }
+    })
+
+    it('reports uncopyable editors without touching the destination', async () => {
+      const input = new TestInput('/uncopyable-window')
+      const sourceWindow = await openAux(input)
+      const destination = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+
+      expect(
+        ctx.service.openEditorInWindow(input, sourceWindow.part.activeGroup, destination.window, {
+          mode: 'copy',
+        }),
+      ).toBe(false)
+      expect(ctx.notifications.notify).toHaveBeenCalled()
+      expect(destination.part.isEmpty).toBe(true)
+      expect(sourceWindow.part.activeGroup.contains(input)).toBe(true)
+    })
+
+    it('moves a whole group into another auxiliary window preserving order, sticky and active', async () => {
+      const first = new TestInput('/window-group-first')
+      const sourceWindow = await openAux(first)
+      const second = new TestInput('/window-group-second')
+      const source = sourceWindow.part.activeGroup
+      source.openEditor(second)
+      source.stickEditor(first)
+      source.setActive(first)
+      const destination = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+
+      expect(ctx.service.openGroupInWindow(source, destination.window)).toBe(true)
+
+      const target = destination.part.activeGroup
+      expect(target.editors.filter((editor) => editor === first || editor === second)).toEqual([
+        first,
+        second,
+      ])
+      expect(target.isSticky(first)).toBe(true)
+      expect(target.activeEditor).toBe(first)
+      expect(source.count).toBe(0)
+      expect(ctx.windows.activeWindow).toBe(destination.window)
+      expect(ctx.windowFocus.focusedWindows).toContain(destination.window)
+    })
+
+    it('carries cursor/view state into the destination group', async () => {
+      const input = new TestInput('/view-state')
+      const sourceWindow = await openAux(input)
+      const source = sourceWindow.part.activeGroup
+      const destination = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+      const uri = input.resource.toString()
+      EditorViewStateCache.save(source.id, uri, { kind: 'state' })
+      EditorViewStateCache.saveCursor(source.id, uri, { lineNumber: 12, column: 4 })
+
+      expect(ctx.service.openEditorInWindow(input, source, destination.window)).toBe(true)
+
+      const target = destination.part.activeGroup
+      expect(EditorViewStateCache.load(target.id, uri)).toEqual({ kind: 'state' })
+      expect(EditorViewStateCache.loadCursor(target.id, uri)).toEqual({
+        lineNumber: 12,
+        column: 4,
+      })
+    })
+
+    it('copies a whole group into another auxiliary window', async () => {
+      const registration = registerCloneableType()
+      try {
+        const first = new TestInput('/copy-group-first')
+        const sourceWindow = await openAux(first)
+        const second = new TestInput('/copy-group-second')
+        const source = sourceWindow.part.activeGroup
+        source.openEditor(second)
+        source.stickEditor(first)
+        const destination = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+
+        expect(ctx.service.openGroupInWindow(source, destination.window, { mode: 'copy' })).toBe(
+          true,
+        )
+
+        const target = destination.part.activeGroup
+        const copies = target.editors.filter((editor) => editor !== first && editor !== second)
+        expect(copies.map((editor) => editor.resource?.toString())).toEqual([
+          first.resource?.toString(),
+          second.resource?.toString(),
+        ])
+        expect(target.isSticky(copies[0]!)).toBe(true)
+        expect(target.activeEditor).toBe(copies[1])
+        expect(source.contains(first)).toBe(true)
+        expect(source.contains(second)).toBe(true)
+        expect(ctx.windows.activeWindow).toBe(destination.window)
+      } finally {
+        registration.dispose()
+      }
+    })
+
+    it('moves an editor back into the main window through the shared API', async () => {
+      const input = new TestInput('/api-to-main')
+      const window = await openAux(input)
+      const source = window.part.activeGroup
+
+      expect(ctx.service.openEditorInWindow(input, source, ctx.windows.mainWindow)).toBe(true)
+
+      expect(ctx.groups.mainPart.activeGroup.contains(input)).toBe(true)
+      expect(source.contains(input)).toBe(false)
+      expect(ctx.windowFocus.focusMainWindowCalls).toBe(1)
+    })
+
+    it('keeps the destination view state when the editor is already open there', async () => {
+      const registration = registerCloneableType()
+      try {
+        const input = new TestInput('/already-open')
+        const mainGroup = ctx.groups.mainPart.activeGroup
+        mainGroup.openEditor(input)
+        const result = await ctx.service.openEditorInNewWindow(input, {
+          mode: 'copy',
+          source: mainGroup,
+        })
+        expect(result.ok).toBe(true)
+        if (!result.ok) throw new Error('auxiliary window creation failed')
+        const source = result.window.part.activeGroup
+        const sourceEditor = source.activeEditor!
+        expect(sourceEditor).not.toBe(input)
+        const uri = input.resource.toString()
+        EditorViewStateCache.saveCursor(mainGroup.id, uri, { lineNumber: 99, column: 1 })
+        EditorViewStateCache.saveCursor(source.id, uri, { lineNumber: 12, column: 4 })
+
+        expect(ctx.service.openEditorInWindow(sourceEditor, source, ctx.windows.mainWindow)).toBe(
+          true,
+        )
+
+        // Same id → destination instance wins; its cursor must not be replaced
+        // by the position the source window was showing.
+        expect(EditorViewStateCache.loadCursor(mainGroup.id, uri)).toEqual({
+          lineNumber: 99,
+          column: 1,
+        })
+      } finally {
+        registration.dispose()
+      }
+    })
+
+    it('rejects a destination that closed before the transfer ran', async () => {
+      const input = new TestInput('/destination-closed')
+      const sourceWindow = await openAux(input)
+      const destination = (await ctx.service.createEmptyWindow({ explicitEmpty: true })).window!
+      expect(await ctx.service.closeWindow(destination)).toBe(true)
+      const activePartBefore = ctx.groups.activePart
+      const focusedBefore = ctx.windowFocus.focusedWindows.length
+
+      expect(
+        ctx.service.openEditorInWindow(input, sourceWindow.part.activeGroup, destination.window),
+      ).toBe(false)
+      expect(sourceWindow.part.activeGroup.contains(input)).toBe(true)
+      expect(ctx.groups.activePart).toBe(activePartBefore)
+      expect(ctx.windowFocus.focusedWindows).toHaveLength(focusedBefore)
+    })
+
+    it('rejects same-window targets, stale sources and disposed editors without focus side effects', async () => {
+      const input = new TestInput('/reject-window')
+      const window = await openAux(input)
+      const source = window.part.activeGroup
+      const focusedBefore = ctx.windowFocus.focusedWindows.length
+
+      expect(ctx.service.openEditorInWindow(input, source, window.window)).toBe(false)
+      expect(
+        ctx.service.openEditorInWindow(input, ctx.groups.mainPart.activeGroup, window.window),
+      ).toBe(false)
+
+      input.dispose()
+      expect(ctx.service.openEditorInWindow(input, source, ctx.windows.mainWindow)).toBe(false)
+      expect(ctx.windowFocus.focusedWindows).toHaveLength(focusedBefore)
+      expect(ctx.groups.activePart).toBe(window.part)
     })
   })
 })

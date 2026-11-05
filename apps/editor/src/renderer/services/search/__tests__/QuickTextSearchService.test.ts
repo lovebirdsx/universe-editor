@@ -81,6 +81,12 @@ class FakeAuxiliaryEditorWindowService implements IAuxiliaryEditorWindowService 
   moveGroupToMainWindow(): boolean {
     return false
   }
+  openEditorInWindow(): boolean {
+    return false
+  }
+  openGroupInWindow(): boolean {
+    return false
+  }
   requestClose(): Promise<void> {
     return Promise.resolve()
   }

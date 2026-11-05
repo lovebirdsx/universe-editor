@@ -31,6 +31,7 @@ import {
 } from '@universe-editor/platform'
 import { cloneEditorInputForSplit } from '../editor/cloneEditorInput.js'
 import type { EditorPart } from '../editor/EditorPart.js'
+import { EditorViewStateCache } from '../editor/EditorViewStateCache.js'
 import type { ISerializedEditorGroupsState } from '../editor/editorGroupsPersistence.js'
 import {
   type AuxiliaryWindowBounds,
@@ -77,6 +78,13 @@ export interface CreateAuxiliaryEditorWindowOptions {
 }
 
 export type OpenEditorInNewWindowMode = 'open' | 'move' | 'copy'
+
+export type EditorWindowTransferMode = 'move' | 'copy'
+
+export interface EditorWindowTransferOptions {
+  /** Defaults to 'move'. */
+  readonly mode?: EditorWindowTransferMode
+}
 
 export interface OpenEditorInNewWindowOptions {
   /** Defaults to 'open'. `move`/`copy` require `source`. */
@@ -163,6 +171,30 @@ export interface IAuxiliaryEditorWindowService {
    * migration target group. Returns whether the whole group moved.
    */
   moveGroupToMainWindow(group: IEditorGroup): boolean
+
+  /**
+   * Move/copy one editor into an already-open workbench window (`target` may be
+   * the main window). Synchronous: no window is created, so there is no
+   * mid-operation race. The destination is never closed on failure. Returns
+   * whether the editor (the clone for copy) is now in the destination group.
+   */
+  openEditorInWindow(
+    editor: EditorInput,
+    source: IEditorGroup,
+    target: IWorkbenchWindow,
+    options?: EditorWindowTransferOptions,
+  ): boolean
+
+  /**
+   * Move/copy every editor of `group` into an already-open workbench window.
+   * Preserves order, sticky state and the active editor; copy is all-or-nothing
+   * for editors that cannot be cloned.
+   */
+  openGroupInWindow(
+    group: IEditorGroup,
+    target: IWorkbenchWindow,
+    options?: EditorWindowTransferOptions,
+  ): boolean
 
   requestClose(window: IAuxiliaryEditorWindow): Promise<void>
   closeWindow(window: IAuxiliaryEditorWindow): Promise<boolean>
@@ -395,6 +427,7 @@ export class AuxiliaryEditorWindowService
           await this._discardFailedTarget(entry)
           return { ok: false, reason: 'error' }
         }
+        this._copyViewState(editor, source, target)
         this._groups.copyEditor(clone!, target, { sticky })
         entry.explicitEmpty = false
         return { ok: true, window: this._toPublic(entry), editor: clone! }
@@ -404,6 +437,7 @@ export class AuxiliaryEditorWindowService
           await this._discardFailedTarget(entry)
           return { ok: false, reason: 'error' }
         }
+        this._copyViewState(editor, source, target)
         this._moveEditorOrThrow(editor, target, source)
         entry.explicitEmpty = false
         return { ok: true, window: this._toPublic(entry), editor }
@@ -464,6 +498,7 @@ export class AuxiliaryEditorWindowService
       for (const editor of snapshot.editors) {
         // The source group may have lost an editor while the window opened.
         if (editor.isDisposed || group.findEditor(editor) !== editor) continue
+        this._copyViewState(editor, group, target)
         this._moveEditorOrThrow(editor, target, group)
         this._restoreSticky(target, editor, snapshot.sticky.has(editor))
       }
@@ -516,6 +551,7 @@ export class AuxiliaryEditorWindowService
     try {
       for (let i = 0; i < clones.length; i++) {
         const source = snapshot.editors[i]
+        if (source) this._copyViewState(source, group, target)
         this._groups.copyEditor(clones[i]!, target, {
           sticky: source ? snapshot.sticky.has(source) : false,
         })
@@ -542,6 +578,7 @@ export class AuxiliaryEditorWindowService
     if (source.part.isMain || !this._isMoveSourceValid(editor, source)) return false
     const target = this._mainTargetGroup()
     try {
+      this._copyViewState(editor, source, target)
       this._moveEditorOrThrow(editor, target, source)
     } catch (err) {
       this._logger.warn(`move editor to main window failed: ${String(err)}`)
@@ -559,6 +596,7 @@ export class AuxiliaryEditorWindowService
     try {
       for (const editor of snapshot.editors) {
         if (editor.isDisposed || group.findEditor(editor) !== editor) continue
+        this._copyViewState(editor, group, target)
         this._moveEditorOrThrow(editor, target, group)
         this._restoreSticky(target, editor, snapshot.sticky.has(editor))
       }
@@ -574,6 +612,130 @@ export class AuxiliaryEditorWindowService
       this._groups.removeGroup(group)
     }
     this._activateMainWindowAfterMove(target)
+    return true
+  }
+
+  openEditorInWindow(
+    editor: EditorInput,
+    source: IEditorGroup,
+    target: IWorkbenchWindow,
+    options: EditorWindowTransferOptions = {},
+  ): boolean {
+    const mode = options.mode ?? 'move'
+    if (target.part === source.part) return false
+    if (!this._isMoveSourceValid(editor, source)) return false
+    // Main-window move keeps its dedicated migration semantics (MRU target
+    // group, main-window activation); copy to main is new and uses the generic
+    // copy path below.
+    if (mode === 'move' && target.isMain) return this.moveEditorToMainWindow(editor, source)
+
+    const targetGroup = this._targetGroupForWindow(target)
+    if (!targetGroup) return false
+
+    if (mode === 'copy') {
+      const sticky = source.isSticky(editor)
+      const clone = this._cloneForCopy(editor)
+      if (!clone) {
+        this._notifyUncopyable([editor.label])
+        return false
+      }
+      try {
+        this._copyViewState(editor, source, targetGroup)
+        this._groups.copyEditor(clone, targetGroup, { sticky })
+      } catch (err) {
+        this._logger.warn(`copy editor into window failed: ${String(err)}`)
+        if (!this._groups.groups.some((group) => group.contains(clone))) clone.dispose()
+        return false
+      }
+      this._activateWindowAfterMove(target, targetGroup, clone)
+      return true
+    }
+
+    try {
+      this._copyViewState(editor, source, targetGroup)
+      this._moveEditorOrThrow(editor, targetGroup, source)
+    } catch (err) {
+      this._logger.warn(`move editor into window failed: ${String(err)}`)
+      return false
+    }
+    this._activateWindowAfterMove(target, targetGroup, editor)
+    return true
+  }
+
+  openGroupInWindow(
+    group: IEditorGroup,
+    target: IWorkbenchWindow,
+    options: EditorWindowTransferOptions = {},
+  ): boolean {
+    const mode = options.mode ?? 'move'
+    if (target.part === group.part) return false
+    if (!this._isGroupLive(group)) return false
+    const snapshot = this._snapshotGroup(group)
+    if (snapshot.editors.length === 0) return false
+    if (mode === 'move' && target.isMain) return this.moveGroupToMainWindow(group)
+
+    const targetGroup = this._targetGroupForWindow(target)
+    if (!targetGroup) return false
+
+    if (mode === 'copy') {
+      // Clone everything before touching the destination: a partially copied
+      // group would be worse than no copy at all.
+      const clones: EditorInput[] = []
+      const uncopyable: string[] = []
+      for (const editor of snapshot.editors) {
+        const clone = this._cloneForCopy(editor)
+        if (clone) clones.push(clone)
+        else uncopyable.push(editor.label)
+      }
+      if (uncopyable.length > 0) {
+        for (const clone of clones) clone.dispose()
+        this._notifyUncopyable(uncopyable)
+        return false
+      }
+      try {
+        for (let i = 0; i < clones.length; i++) {
+          const source = snapshot.editors[i]!
+          this._copyViewState(source, group, targetGroup)
+          this._groups.copyEditor(clones[i]!, targetGroup, {
+            sticky: snapshot.sticky.has(source),
+          })
+        }
+        const activeIndex = snapshot.active ? snapshot.editors.indexOf(snapshot.active) : -1
+        const activeClone = activeIndex >= 0 ? clones[activeIndex] : undefined
+        if (activeClone) targetGroup.setActive(activeClone)
+      } catch (err) {
+        this._logger.warn(`copy group into window failed: ${String(err)}`)
+        for (const clone of clones) {
+          if (!this._groups.groups.some((candidate) => candidate.contains(clone))) {
+            clone.dispose()
+          }
+        }
+        return false
+      }
+      this._activateWindowAfterMove(target, targetGroup)
+      return true
+    }
+
+    try {
+      for (const editor of snapshot.editors) {
+        if (editor.isDisposed || group.findEditor(editor) !== editor) continue
+        this._copyViewState(editor, group, targetGroup)
+        this._moveEditorOrThrow(editor, targetGroup, group)
+        this._restoreSticky(targetGroup, editor, snapshot.sticky.has(editor))
+      }
+      if (snapshot.active && targetGroup.contains(snapshot.active)) {
+        targetGroup.setActive(snapshot.active)
+      }
+    } catch (err) {
+      this._logger.warn(`move group into window failed: ${String(err)}`)
+      return false
+    }
+    // Same cleanup as moveGroupToMainWindow: drop an emptied split, never the
+    // last group (that one lets `_watchEmpty` close the window).
+    if (group.count === 0 && group.part.groups.length > 1) {
+      this._groups.removeGroup(group)
+    }
+    this._activateWindowAfterMove(target, targetGroup)
     return true
   }
 
@@ -624,6 +786,7 @@ export class AuxiliaryEditorWindowService
         // A no-op move here would let the loop below close a dirty tab as
         // "clean". Verify the editor actually left the auxiliary group and
         // landed in the main target (same-id migration still counts).
+        this._copyViewState(editor, group, target!)
         this._moveEditorOrThrow(editor, target!, group)
       }
       // Everything left is clean (or was just migrated). Close without prompts.
@@ -833,7 +996,7 @@ export class AuxiliaryEditorWindowService
       severity: Severity.Warning,
       message: localize(
         'auxiliaryWindow.copyUnsupported',
-        'This editor cannot be copied to a new window: {label}',
+        'This editor cannot be copied to another window: {label}',
         { label: labels.join(', ') },
       ),
     })
@@ -878,14 +1041,52 @@ export class AuxiliaryEditorWindowService
    * of Monaco, matching `restoreAllToMainWindow`.
    */
   private _activateMainWindowAfterMove(target: IEditorGroup): void {
-    // Target first: `activatePart` reads `mainPart.activeGroup` for the
-    // preserve-focus intent and the open target.
-    this._groups.activateGroup(target)
-    this._groups.activatePart(this._groups.mainPart, {
+    this._activateWindowAfterMove(this._workbenchWindows.mainWindow, target)
+  }
+
+  /**
+   * Bring a workbench window forward after a transfer. Order cannot change:
+   * `activatePart` reads the part's active group for the preserve-focus intent
+   * and the open target.
+   */
+  private _activateWindowAfterMove(
+    target: IWorkbenchWindow,
+    targetGroup: IEditorGroup,
+    editor?: EditorInput,
+  ): void {
+    if (editor && targetGroup.contains(editor)) targetGroup.setActive(editor)
+    this._groups.activateGroup(targetGroup)
+    this._groups.activatePart(target.part, {
       preserveFocus: true,
       updateOpenTarget: true,
     })
-    this._windowFocus.focusMainWindow()
+    if (target.isMain) this._windowFocus.focusMainWindow()
+    else this._windowFocus.focusWindow(target)
+  }
+
+  /**
+   * Destination group of an existing window. The main window follows the same
+   * MRU/unlocked rule as every other migration; an auxiliary window uses its
+   * lock-aware open target (creating a fresh group when all are locked).
+   */
+  private _targetGroupForWindow(target: IWorkbenchWindow): IEditorGroup | undefined {
+    if (target.isMain) return this._mainTargetGroup()
+    if (target.token === undefined) return undefined
+    const entry = this.getEntry(target.token)
+    if (!entry || !this._isEntryOpen(entry)) return undefined
+    return entry.part.activeGroupForOpen
+  }
+
+  /**
+   * Carry cursor/scroll across a group move: the target group id differs, so
+   * the target mount can only restore what was copied under its own id.
+   * When the destination already shows this editor, `openEditor` keeps its
+   * instance via `migrateFrom`; the destination's own state must win.
+   */
+  private _copyViewState(editor: EditorInput, source: IEditorGroup, target: IEditorGroup): void {
+    if (target.contains(editor)) return
+    const uri = editor.resource?.toString()
+    if (uri) EditorViewStateCache.copyGroupEntries(source.id, target.id, uri)
   }
 
   /**
@@ -901,6 +1102,7 @@ export class AuxiliaryEditorWindowService
     for (const group of [...part.groups]) {
       for (const editor of [...group.editors]) {
         try {
+          this._copyViewState(editor, group, target)
           this._moveEditorOrThrow(editor, target, group)
           continue
         } catch (err) {
@@ -910,6 +1112,7 @@ export class AuxiliaryEditorWindowService
         }
         fallback ??= this._groups.addGroup(this._groups.mainPart.activeGroup, GroupDirection.Right)
         try {
+          this._copyViewState(editor, group, fallback)
           this._moveEditorOrThrow(editor, fallback, group)
         } catch (err) {
           this._logger.error(

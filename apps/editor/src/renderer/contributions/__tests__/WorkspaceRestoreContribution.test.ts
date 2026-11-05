@@ -157,6 +157,12 @@ function makeAuxWindowsStub(): IAuxiliaryEditorWindowServiceType {
     moveGroupToMainWindow() {
       return false
     },
+    openEditorInWindow() {
+      return false
+    },
+    openGroupInWindow() {
+      return false
+    },
     async requestClose() {},
     async closeWindow() {
       return false

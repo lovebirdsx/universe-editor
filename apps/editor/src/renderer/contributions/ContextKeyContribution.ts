@@ -21,6 +21,7 @@
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
  *   - activeEditorIsFirstInGroup / activeEditorIsLastInGroup / activeEditorIsDirty
  *   - isAuxiliaryEditorWindow                                    (focused part is an auxiliary window)
+ *   - hasOtherEditorWindows                                      (a second workbench window exists)
  *   - workbenchReady / workbenchRestored                        (lifecycle gates)
  *
  *  The per-view key (`view`) is NOT set here — it lives on per-view scoped
@@ -51,6 +52,7 @@ import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInpu
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { MergeEditorInput } from '../services/editor/MergeEditorInput.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
+import { IWorkbenchWindowService } from '../services/windows/workbenchWindowService.js'
 
 export class ContextKeyContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -62,6 +64,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     @ILifecycleService lifecycleService: ILifecycleService,
     @ILanguageFeaturesService languageFeaturesService: ILanguageFeaturesService,
     @IWorkspaceService workspaceService: IWorkspaceService,
+    @IWorkbenchWindowService workbenchWindowService: IWorkbenchWindowService,
   ) {
     super()
 
@@ -309,6 +312,19 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     }
     this._register(editorGroupsService.onDidActivePartChange(syncWindowKind))
     syncWindowKind()
+
+    // Global fact (not a per-tab one): another window exists, so "move/copy
+    // into window…" has a destination besides the source window.
+    const hasOtherEditorWindows = contextKeyService.createKey<boolean>(
+      'hasOtherEditorWindows',
+      false,
+    )
+    const syncWindowCount = (): void => {
+      hasOtherEditorWindows.set(workbenchWindowService.windows.length > 1)
+    }
+    this._register(workbenchWindowService.onDidAddWindow(syncWindowCount))
+    this._register(workbenchWindowService.onDidRemoveWindow(syncWindowCount))
+    syncWindowCount()
 
     const syncGroupKeys = () => {
       const active = editorGroupsService.activeGroup
