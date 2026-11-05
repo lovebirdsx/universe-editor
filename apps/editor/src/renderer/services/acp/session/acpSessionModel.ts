@@ -459,8 +459,12 @@ export const LIVENESS_PING_METHOD = ACP_EXT_METHODS.livenessPing
  * autonomousTurn }`). A turn that ends with `run_in_background` tasks in flight
  * settles its prompt RPC while work continues — without this signal the editor
  * would mark the session idle (and "finished") while e.g. a robocopy mirror is
- * still running. Shared verbatim with the fork's `acp-agent.ts`
- * (`BACKGROUND_ACTIVITY_METHOD`) — keep both in sync.
+ * still running. `autonomousTurn` covers cycles no ACP prompt accounts for
+ * (task-notification followups, peer/coordinator messages), and ambient
+ * housekeeping tasks are excluded from the count. Only the claude fork emits
+ * this: codex has no equivalent liveness signal (known gap). Shared verbatim
+ * with the fork's `acp-agent.ts` (`BACKGROUND_ACTIVITY_METHOD`) — keep both in
+ * sync.
  */
 export const BACKGROUND_ACTIVITY_METHOD = ACP_EXT_METHODS.backgroundActivity
 

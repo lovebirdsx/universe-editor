@@ -39,6 +39,7 @@ import type {
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSession, CONTINUE_PROMPT_TEXT, recoveryContinuePromptText } from '../acpSession.js'
 import type { IAcpSession } from '../acpSessionModel.js'
+import { computeSessionDisplayStatus } from '../acpSessionStatus.js'
 import { AcpCompactionStatsService } from '../acpCompactionStats.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpSideTaskIndexService } from '../acpSideTaskIndex.js'
@@ -217,6 +218,13 @@ interface Script {
    * failure mode that made every same-uuid retry return immediately.
    */
   dedupMessageIds?: boolean
+  /**
+   * Runs inside `attachSession`, i.e. after the agent-side handshake returned
+   * but before the renderer session attaches the connection. Notifications the
+   * agent forces out on `session/resume` (background activity) land in exactly
+   * this window.
+   */
+  onAttach?: () => void
 }
 
 class ScriptedClient implements IAcpClientService {
@@ -378,6 +386,7 @@ class ScriptedClient implements IAcpClientService {
           delete this.script.attachSessionErrorOnConnect
           throw new Error('attach failed')
         }
+        this.script.onAttach?.()
       },
       dispose: (): void => {},
       // Expose which connect this was for assertions.
@@ -1513,6 +1522,40 @@ describe('AcpSession auto-recovery', () => {
     await waitFor(s.status, (v) => v === 'idle')
     // A zero-output resend never appends the continuation bubble.
     expect(s.messages.get().some((m) => m.role === 'user' && m.text === '继续')).toBe(false)
+  })
+
+  it('keeps an autonomous turn running when the resume snapshot lands before attach', async () => {
+    // The fork force-pushes `_universe/background_activity` on session/resume,
+    // so the snapshot can land while the renderer is still reconnecting. That
+    // path stores the flag but `_recomputeStatus` no-ops mid-reconnect, and
+    // attach used to settle straight to idle — leaving an autonomous turn
+    // invisible for its whole duration.
+    client = new ScriptedClient({
+      loadSession: true,
+      promptResults: [() => Promise.resolve({ stopReason: 'end_turn' } as PromptResponse)],
+    })
+    const config = new ConfigurationService()
+    svc = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    // A messaged session takes the resume path, like the real fork.
+    await s.sendPrompt('do it')
+
+    client.script.onAttach = () => {
+      svc.onExtNotification('_universe/background_activity', {
+        sessionId: s.sessionIdOnAgent.get(),
+        backgroundTasks: 0,
+        autonomousTurn: true,
+      })
+    }
+
+    s.requestProcessRestart()
+    await waitFor(s.recoveryState, (v) => v === undefined)
+
+    expect((s as AcpSession).autonomousTurnActive).toBe(true)
+    expect(s.status.get()).toBe('running')
+    expect(computeSessionDisplayStatus(s)).toBe('running')
+    expect(s.runningStartedAt.get()).toBeTypeOf('number')
   })
 
   it('resends the original prompt after reconnect when only metadata updates arrived', async () => {

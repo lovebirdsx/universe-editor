@@ -1419,9 +1419,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._register({
       dispose: () => conn.conn.signal.removeEventListener('abort', onAbort),
     })
-    // Leave a terminal status (closed) untouched; otherwise settle to idle and
-    // drain the queue.
-    if (this.status.get() === 'connecting') this.status.set('idle', undefined)
+    // Leave a terminal status (closed) untouched; otherwise re-derive the
+    // status and drain the queue. A `_universe/background_activity` snapshot
+    // can land while the session is still reconnecting — `applyBackgroundActivity`
+    // stores it, but `_recomputeStatus` no-ops under `_reconnecting` — so
+    // settling straight to idle here would hide an autonomous turn for its
+    // whole duration. `_recomputeStatus` falls back to idle when no snapshot
+    // says otherwise, so the ordinary handshake path is unchanged.
+    if (this.status.get() === 'connecting') this._recomputeStatus()
     // Re-apply any title derived while connecting now that the history row exists.
     if (this._pendingTitle !== undefined) {
       this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleKind)

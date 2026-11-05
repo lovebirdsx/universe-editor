@@ -39,6 +39,15 @@ import {
 
 type NotifyKind = 'permission' | 'question' | 'completed' | 'errored'
 
+/**
+ * Delay before a completion toast is announced. The status derivation folds
+ * several signals (core status, background tasks, autonomous activity) that
+ * arrive as separate pushes, and the fork's level snapshot can land one tick
+ * after the edge — a transient `running → idle → running` would otherwise
+ * report a completion that never happened. Short enough to stay invisible.
+ */
+const COMPLETION_ANNOUNCE_DELAY_MS = 250
+
 export class AgentNotificationContribution extends Disposable implements IWorkbenchContribution {
   private readonly _perSession = new Map<string, IDisposable>()
 
@@ -93,8 +102,15 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     let permissionLatched = session.pendingPermission.get() !== undefined
     let elicitationLatched = session.pendingElicitation.get() !== undefined
     let completionAnnounced = false
+    let pendingCompletion: ReturnType<typeof setTimeout> | undefined
 
-    return autorun((r) => {
+    const cancelPendingCompletion = (): void => {
+      if (pendingCompletion === undefined) return
+      clearTimeout(pendingCompletion)
+      pendingCompletion = undefined
+    }
+
+    const watcher = autorun((r) => {
       const display = computeSessionDisplayStatus(session, r)
       const permission = session.pendingPermission.read(r)
       const elicitation = session.pendingElicitation.read(r)
@@ -130,16 +146,38 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
       // The edge is a TURN edge, not a "was busy" edge: 'connecting' settles
       // straight to 'idle' on every new, resumed or woken session, so counting
       // it as the prior state announces a completion for work that never ran.
+      //
+      // Announce only after a short quiet window: the level signals behind the
+      // display status arrive separately, so a late idle can be followed by
+      // the wake that keeps the same turn alive. Returning to work cancels the
+      // toast; the latch was re-armed above.
       const turnFinished = display === 'idle' && isTurnDisplayStatus(prevDisplay)
       if (turnFinished && !completionAnnounced) {
         completionAnnounced = true
-        this._fire('completed', session)
+        cancelPendingCompletion()
+        pendingCompletion = setTimeout(() => {
+          pendingCompletion = undefined
+          this._fire('completed', session)
+        }, COMPLETION_ANNOUNCE_DELAY_MS)
+      } else if (display !== 'idle') {
+        cancelPendingCompletion()
       }
 
       if (display === 'errored' && prevDisplay !== 'errored') this._fire('errored', session)
 
       prevDisplay = display
     })
+
+    // Plain literal, not `toDisposable`: this watcher lives as long as the
+    // session row (the contribution disposes it on removal/teardown), and the
+    // dev leak tracker counts a tracked wrapper that outlives its creator's
+    // autorun as a leak.
+    return {
+      dispose: () => {
+        cancelPendingCompletion()
+        watcher.dispose()
+      },
+    }
   }
 
   private _fire(kind: NotifyKind, session: IAcpSession): void {

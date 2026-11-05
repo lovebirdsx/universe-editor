@@ -4,7 +4,7 @@
  *  turn, respect the enable flag, and jump to the session when clicked.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   observableValue,
   type ISettableObservable,
@@ -147,14 +147,27 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: st
 describe('AgentNotificationContribution', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // Completion toasts are debounced; drive them explicitly.
+    vi.useFakeTimers()
   })
 
-  it('fires a completion notification when status goes running → idle', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** Advances past the completion debounce and flushes its microtasks. */
+  const settleCompletion = async (): Promise<void> => {
+    await vi.advanceTimersByTimeAsync(250)
+  }
+
+  it('fires a completion notification when status goes running → idle', async () => {
     const t = setup()
     const s = makeSession('a')
     t.addSession(s)
     s.status.set('running', undefined)
     s.status.set('idle', undefined)
+    expect(t.notify).not.toHaveBeenCalled()
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'a' })
   })
@@ -178,7 +191,7 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
-  it('skips the permission notification when the plan card auto-executes', () => {
+  it('skips the permission notification when the plan card auto-executes', async () => {
     const t = setup()
     const s = makeSession('a')
     t.addSession(s)
@@ -199,6 +212,7 @@ describe('AgentNotificationContribution', () => {
     // 自动继续后回 idle 仍照常通知任务完成。
     s.pendingPermission.set(undefined, undefined)
     s.status.set('idle', undefined)
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
@@ -221,7 +235,7 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
-  it('de-dupes completion: plan all-complete while running does not fire; idle fires only once', () => {
+  it('de-dupes completion: plan all-complete while running does not fire; idle fires only once', async () => {
     const t = setup()
     const s = makeSession('a')
     t.addSession(s)
@@ -231,10 +245,11 @@ describe('AgentNotificationContribution', () => {
     // Plan check-off lands mid-turn; only the idle edge announces completion.
     expect(t.notify).not.toHaveBeenCalled()
     s.status.set('idle', undefined)
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
-  it('does not fire completion while the plan is all-complete but the turn is still running', () => {
+  it('does not fire completion while the plan is all-complete but the turn is still running', async () => {
     const t = setup()
     const s = makeSession('a')
     t.addSession(s)
@@ -242,15 +257,17 @@ describe('AgentNotificationContribution', () => {
     s.plan.set([planEntry('completed')], undefined)
     expect(t.notify).not.toHaveBeenCalled()
     s.status.set('idle', undefined)
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(1)
   })
 
-  it('does not notify when acp.notifications.enabled is false', () => {
+  it('does not notify when acp.notifications.enabled is false', async () => {
     const t = setup({ enabled: false })
     const s = makeSession('a')
     t.addSession(s)
     s.status.set('running', undefined)
     s.status.set('idle', undefined)
+    await settleCompletion()
     expect(t.notify).not.toHaveBeenCalled()
   })
 
@@ -260,9 +277,8 @@ describe('AgentNotificationContribution', () => {
     t.addSession(s)
     s.status.set('running', undefined)
     s.status.set('idle', undefined)
-    // Let the notify promise resolve and the click handler run.
-    await Promise.resolve()
-    await Promise.resolve()
+    // Let the debounced notify promise resolve and the click handler run.
+    await settleCompletion()
     // Window focus happens main-side inside the click handler, not here.
     expect(t.setActive).toHaveBeenCalledWith('a')
     expect(t.focusSessionInput).toHaveBeenCalledWith('a')
@@ -270,18 +286,19 @@ describe('AgentNotificationContribution', () => {
     expect(t.openEditor).toHaveBeenCalledTimes(1)
   })
 
-  it('includes the workspace folder name on a second body line when a folder is open', () => {
+  it('includes the workspace folder name on a second body line when a folder is open', async () => {
     const t = setup({ workspaceName: 'universe-editor4' })
     const s = makeSession('a', 'fix the login spinner')
     t.addSession(s)
     s.status.set('running', undefined)
     s.status.set('idle', undefined)
+    await settleCompletion()
     expect(t.notify.mock.calls[0]![0]).toMatchObject({
       body: 'fix the login spinner\nuniverse-editor4',
     })
   })
 
-  it('does not announce completion while background tasks outlive the turn', () => {
+  it('does not announce completion while background tasks outlive the turn', async () => {
     const t = setup()
     const s = makeSession('a')
     t.addSession(s)
@@ -290,9 +307,11 @@ describe('AgentNotificationContribution', () => {
     // （核心状态落到 idle），但派生状态是 'background' —— 报"已完成"是假信号。
     s.backgroundTaskCount.set(1, undefined)
     s.status.set('idle', undefined)
+    await settleCompletion()
     expect(t.notify).not.toHaveBeenCalled()
     // 后台任务真正跑完，此刻才算完成——旧逻辑在这里反而一声不吭。
     s.backgroundTaskCount.set(0, undefined)
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(1)
     expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: 'a' })
   })
@@ -310,7 +329,26 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).not.toHaveBeenCalled()
   })
 
-  it('re-arms the completion latch for a background task started after the turn settled', () => {
+  // The fork's level snapshot can trail the turn edge: a late idle from the
+  // previous cycle lands just before the wake that keeps the same turn alive.
+  // Announcing on the raw edge reports a completion that never happened.
+  it('coalesces a transient idle back into the same turn', async () => {
+    const t = setup()
+    const s = makeSession('a')
+    t.addSession(s)
+    s.status.set('running', undefined)
+    s.status.set('idle', undefined)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(t.notify).not.toHaveBeenCalled()
+    s.status.set('running', undefined)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(t.notify).not.toHaveBeenCalled()
+    s.status.set('idle', undefined)
+    await settleCompletion()
+    expect(t.notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('re-arms the completion latch for a background task started after the turn settled', async () => {
     // Defensive rather than a real timeline: a background task is reported by
     // the agent as it starts, so its count is already 1 by the time the prompt
     // RPC settles (that path is the test above). This pins the latch re-arming
@@ -320,12 +358,15 @@ describe('AgentNotificationContribution', () => {
     t.addSession(s)
     s.status.set('running', undefined)
     s.status.set('idle', undefined)
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(1)
     // A later background task keeps the session working; its finish is the next
     // completion edge, not a second announcement of the same turn.
     s.backgroundTaskCount.set(1, undefined)
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(1)
     s.backgroundTaskCount.set(0, undefined)
+    await settleCompletion()
     expect(t.notify).toHaveBeenCalledTimes(2)
   })
 
@@ -339,47 +380,61 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).not.toHaveBeenCalled()
   })
 
+  it('cancels a pending completion toast when the session leaves the list', async () => {
+    const t = setup()
+    const s = makeSession('a')
+    t.addSession(s)
+    s.status.set('running', undefined)
+    s.status.set('idle', undefined)
+    t.sessionsObs.set([], undefined)
+    await settleCompletion()
+    expect(t.notify).not.toHaveBeenCalled()
+  })
+
   // The alert must light up the window that actually holds the session's tab;
   // auxiliary windows share this renderer and its host service, so without an
   // explicit origin every toast would be attributed to the parent workspace
   // window in Alt+Tab.
   describe('origin window', () => {
-    it('attributes the notification to the auxiliary window holding the session tab', () => {
+    it('attributes the notification to the auxiliary window holding the session tab', async () => {
       const t = setup()
       const s = makeSession('a')
       t.addSession(s)
       t.placeTab('a', false)
       s.status.set('running', undefined)
       s.status.set('idle', undefined)
+      await settleCompletion()
       expect(t.notify.mock.calls[0]![0]).toMatchObject({
         originWindow: { kind: 'auxiliary', token: 'aux-token' },
       })
     })
 
-    it('attributes to the workspace window when the tab lives in the main part', () => {
+    it('attributes to the workspace window when the tab lives in the main part', async () => {
       const t = setup()
       const s = makeSession('a')
       t.addSession(s)
       t.placeTab('a', true)
       s.status.set('running', undefined)
       s.status.set('idle', undefined)
+      await settleCompletion()
       expect(t.notify.mock.calls[0]![0]).toMatchObject({
         originWindow: { kind: 'workspace' },
       })
     })
 
-    it('attributes to the workspace window when the session has no open tab', () => {
+    it('attributes to the workspace window when the session has no open tab', async () => {
       const t = setup()
       const s = makeSession('a')
       t.addSession(s)
       s.status.set('running', undefined)
       s.status.set('idle', undefined)
+      await settleCompletion()
       expect(t.notify.mock.calls[0]![0]).toMatchObject({
         originWindow: { kind: 'workspace' },
       })
     })
 
-    it('finds the tab by its durable agent session id', () => {
+    it('finds the tab by its durable agent session id', async () => {
       const t = setup()
       const s = makeSession('local-id')
       s.sessionIdOnAgent.set('durable-id', undefined)
@@ -387,6 +442,7 @@ describe('AgentNotificationContribution', () => {
       t.placeTab('durable-id', false)
       s.status.set('running', undefined)
       s.status.set('idle', undefined)
+      await settleCompletion()
       expect(t.notify.mock.calls[0]![0]).toMatchObject({
         originWindow: { kind: 'auxiliary', token: 'aux-token' },
       })
@@ -395,13 +451,14 @@ describe('AgentNotificationContribution', () => {
     // Hot reconnect issues a new agent session id while an already-open tab
     // still carries the old one; getById resolves the alias, so the toast must
     // still find the auxiliary window instead of falling back to the main one.
-    it('finds a tab opened with a prior agent session id', () => {
+    it('finds a tab opened with a prior agent session id', async () => {
       const t = setup()
       const s = makeSession('a')
       t.addSession(s, ['prior-agent-id'])
       t.placeTab('prior-agent-id', false)
       s.status.set('running', undefined)
       s.status.set('idle', undefined)
+      await settleCompletion()
       expect(t.notify.mock.calls[0]![0]).toMatchObject({
         originWindow: { kind: 'auxiliary', token: 'aux-token' },
       })

@@ -55,6 +55,7 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 | CT-EXT-METHODS | editor 常量表与约定 wire 名一致；dist 包含被测扩展名；选定方法可路由且校验参数 | `acp-agent.ts`（method 常量与路由） | `tools.test.ts` | `apps/editor/integration/scenarios/acpForkContract.integration.test.ts`（消费 `acpExtMethods.ts`） | 离线常量 + dist 字符串检查/握手 + 真实 CLI 部分路由；不等同于所有扩展的行为覆盖 |
 | CT-COST-USAGE | turn 中途 `usage_update` 携带成本明细；订阅额度用量运行时特性探测 | `session-cost.ts`、`usage.ts` | `session-cost.test.ts`、`usage.test.ts` | — | 离线 |
 | CT-LEGACY-AIR | 旧 AIR capability 输入不再启用专属协议：`initialize` 不回显、不广告 AIR；fork 忽略 AIR 的 fork 锚点，退回无锚点 tip fork | `acp-agent.ts`（`initialize` 应答、`unstable_forkSession` 锚点解析）、`tool-calls/client-capabilities.ts` | `session-contract-guards.test.ts`（「旧 AIR capability 输入不再启用专属协议」） | — | 离线 |
+| CT-BACKGROUND-ACTIVITY | `_universe/background_activity` 快照只反映真实活动：非 ambient 后台任务计数 + 无 prompt 的自主轮次；`idle` 不清自主标志（迟到/周期 idle 不得截断 followup）；占位自主 result 不清标志、真实 result 才清；被折进用户轮的自主 result、取消、流结束清标志；resume 已结算子 agent 必须补发计数；ambient 任务不计且不置位（level 可双向翻转）；发送失败后同值快照可重试、发送串行化；load\|resume 强制补发 | `acp-agent.ts`（`Session.autonomousTurn*` / `noteAutonomousWake` / `noteAutonomousFollowupActivity` / `handleAutonomousTurnTimeout` / `emitBackgroundActivity`）、`query-resources.ts`（计时器释放） | `acp-agent.test.ts`（`background activity notification` describe 14 例：迟到 idle / 占位 result / 周期 idle / ambient 过滤与翻转 / resume 补发 / 失败重试 / 宽限兜底 / 取消清理 / 证据排除等） | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.recovery.integration.test.ts`（重连期间快照不丢失）、`apps/editor/src/renderer/contributions/__tests__/AgentNotificationContribution.test.ts`（瞬时 idle 合并） | 离线；真实后台任务/真实 CLI 端到端未验证（需真实 CLI 手工复验） |
 
 契约清单可增长：新增行为先加行、再加走生产入口的测试。主仓拥有一部分独立验收契约，不能为适配 fork 输出退化而同步放宽断言。
 
@@ -184,6 +185,18 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 **测试与负向验证**：`acp-agent.test.ts` 新增 6 例——心跳折叠（三个不同 uuid 只出 `[start, success]`）、同 turn 两轮压缩各发一条 start（防过度去重）、无 result 结束后下一次 start 不被吞、`permissionMode` 帧不当作结束、`requesting` 帧（每 turn 的 `stream_request_start`）不当作结束、`compact_boundary` 不清标记（防后人"顺手补上"）。改动前跑红 2 例（心跳折叠用例收到 `[start, start, start, success]`、permissionMode 用例收到 `[start, start, success]`，即复现证据），修后全绿；四条判据各有负向验证：只做去重不加兜底 → 第 3 例红；兜底漏 `permissionMode` 守卫 → 第 4 例红；兜底漏 `status === null` 检查（写成无条件 else）→ 第 4、5 例同时红；在 boundary 分支补清标记 → 第 6 例红。fork 全量 **2495 通过 / 31 跳过 / 0 失败**（含本批新增 6 例；须按维护原则剥离 `ANTHROPIC_BASE_URL` 等网关环境变量后运行），`typecheck` / `lint` / `format:check` 通过。
 
 **已知限制（勿写成"彻底解决"）**：① 若存在只发 `compacting`、不发任何终结帧的 CLI 路径（本 build 的站点枚举里没有），标记陈旧到下一次 turn 激活，代价是该 turn 后续压缩不开新卡；② precompute 与 retry 心跳真并发时可能多一次秒表重开（该 build 不可达）；③ 新 turn 的 `resetTurnScratch()` 在交错时序下可能清掉刚置的标记（一次重开，不改 turn 机制）。**未验证**：真实 CLI 的 >30s 长压缩（心跳实测）需真实凭据，未执行。
+
+## P2 第五批：后台活跃度与自主轮次标志（修复）
+
+**症状**：任务通知唤醒的自主 followup 在编辑器里显示「已停止」。真实日志时序：`task_notification` 推送 `{backgroundTasks:0, autonomousTurn:true}` 后，**上一个处理周期迟到的 `idle`** 紧跟到达并被旧实现当作 backstop 清掉标志 → 后续 5 分钟内模型调用、文件修改、`pnpm check` 全部真实执行，编辑器全程显示 idle（`LiveSessionStatus` 在 idle 时返回 null）；`running → idle` 边沿还会误报一次「已完成」。
+
+**根因（同类缺口一并修）**：① `idle` 无周期身份且 SDK 不保证它相对下一次 wake 的顺序，不能作为清除信号；② CLI 2.1.274+ 批量通知的占位 autonomous result（`num_turns:0`）在共享 followup 之前就把标志清掉；③ `resumeLiveTask` 把已结算子 agent 放回 live 集却不发快照（0→1 不可见）；④ SDK `ambient` 任务被当成活动计入（假 running/background）；⑤ 快照在发送**前**就写 `lastBackgroundActivity`，失败后同值永不重试；⑥ 编辑器热重连的 `attachConnection` 直接把 `connecting` 置 idle，重连窗口内到达的 resume 补发快照被 `_reconnecting` 早退吞掉；⑦ 通知在原始边沿立即触发，瞬时 idle 会误报完成。
+
+**修法**：fork 侧改 `Session.autonomousTurnActive` 为带状态的标志（`Pending` / `LastEvidenceAt` / `FirstPendingAt` + 单计时器）：wake arm 60s 宽限（新的 pending 窗口重新计 `FirstPendingAt`，避免前一段的长工具耗尽后一段预算），顶层证据帧（`assistant`/`stream_event`/`tool_progress`，排除 subagent/replay 帧、`assistant` 还排除 `<synthetic>`、排除活跃用户轮）改 arm 30min 沉默租约（只在 grace→silence 换租时 arm，逐 token 事件不反复清建计时器），真实 result 或「自主 origin 但作答用户 prompt」（折进用户轮）才清；`idle` 只记录 `lastSessionState`。占位 result 按 wake 重新 arm；取消（`cancelTurns`）与流结束（consumer done / stream error）都立即清标志；ambient 不入计数且不置位（level 是 ambient 翻转权威）；resume 补发快照；快照串行发送且成功后才写去重基线，失败置 `backgroundActivityNeedsResync` 让同值快照继续重试，首次全零快照跳过。编辑器侧 `attachConnection` 改调 `_recomputeStatus()`；完成通知加 250ms 防抖（回到 turn 状态或 watcher dispose 即取消）。状态机细节见 fork `cases-session.md`，契约见 CT-BACKGROUND-ACTIVITY。
+
+**测试与负向验证**：fork `acp-agent.test.ts` 的 `background activity notification` describe 共 14 例（迟到 idle 后标志仍真且 false 只在真实 result 后 / 占位 result 不清 / 周期间 idle 不清 / ambient 不计且不置位 / ambient 双向翻转 / resume 补发 0→1 / 发送失败重试 / 60s 宽限到期兜底 / 取消清理 / replay·子 agent·synthetic 帧不算证据 / 活跃用户轮帧不算证据），其中本次事故的回归用例在修复前为红；编辑器新增重连快照不丢失（修复前 `status === 'idle'` 实收）与瞬时 idle 合并（修复前立即误报）两例。**本机校验**：fork 定向 **14/14 通过**；fork 全量相对 pristine HEAD 基线无新增失败（Windows 检出下 41 条既存的路径/换行/golden 失败 + 1 条 `acp-v2` EBUSY 临时目录清理 flake，二者在 pristine 同样复现）；`typecheck` / `lint` 通过，`format:check` 因本机 `core.autocrlf=true` 对全部 159 个文件报 CRLF（非本批引入；本批 3 个文件用 `prettier --end-of-line auto` 校验通过）。`pnpm agent:build` 后跨仓契约 **51/51 通过**；主仓 `pnpm check` **2551 通过**；`pnpm e2e:smoke` **152 通过**（1 条 `openRecentMissing` flaky，与本次无关，重试通过；首跑暴露的 7 条失败为本批 `_watchSession` 用 `toDisposable` 包装 watcher 被泄漏追踪器判为 leak，改为普通字面量 disposal 后全绿）。**未验证**：真实 CLI 的后台任务/长 followup 端到端（需真实凭据与手工观察日志），不据此宣称「彻底解决」。
+
+**codex 缺口（本次仅记录，未实现）**：`vendor/codex-acp` 没有 `_universe/background_activity`；prompt 返回 `end_turn` 后后台 terminal / goal 自治周期 / 非原生子 Agent 仍可能在跑，编辑器会显示已停止。需另立任务（含后台 terminal 轮询 reconcile），契约对齐 CT-BACKGROUND-ACTIVITY。
 
 ## 后续范围
 
