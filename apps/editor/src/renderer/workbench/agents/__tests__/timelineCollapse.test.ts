@@ -16,6 +16,7 @@ import {
   collectTimelineRows,
   defaultCollapsed,
   foldedAncestorKeys,
+  isChildItemVisible,
   isCollapsibleItem,
   isMessageRendered,
   isSubagentCard,
@@ -398,6 +399,59 @@ describe('isMessageRendered', () => {
   })
 })
 
+describe('isChildItemVisible', () => {
+  const thoughtChild: AcpChildItem = {
+    kind: 'message',
+    id: 'th',
+    message: {
+      id: 'th',
+      role: 'thought',
+      text: 'thinking',
+      blocks: [{ type: 'text', text: 'thinking' }],
+      streaming: false,
+    },
+  }
+  const errorChild: AcpChildItem = {
+    kind: 'message',
+    id: 'err',
+    message: {
+      id: 'err',
+      role: 'agent',
+      text: '[error] boom',
+      blocks: [{ type: 'text', text: '[error] boom' }],
+      streaming: false,
+    },
+  }
+  const tool = (id: string, overrides: Partial<AcpToolCall> = {}): AcpChildItem => ({
+    kind: 'toolCall',
+    id,
+    call: makeCall({ id, ...overrides }),
+  })
+
+  it('hides thought children only under hideThinking', () => {
+    expect(isChildItemVisible(thoughtChild, 'hideThinking')).toBe(false)
+    expect(isChildItemVisible(thoughtChild, 'default')).toBe(true)
+    expect(isChildItemVisible(tool('read', { kind: 'read' }), 'hideThinking')).toBe(true)
+  })
+
+  it('hides thoughts, ordinary tools and empty messages under onlyMessage', () => {
+    const failed = tool('read', { kind: 'read', status: 'failed' })
+    expect(isChildItemVisible(thoughtChild, 'onlyMessage')).toBe(false)
+    expect(isChildItemVisible(failed, 'onlyMessage')).toBe(false)
+    expect(isChildItemVisible(childMessage('empty'), 'onlyMessage')).toBe(false)
+    expect(isChildItemVisible(visibleChild('sm'), 'onlyMessage')).toBe(true)
+  })
+
+  it('keeps key cards and sub-agent cards under onlyMessage', () => {
+    expect(isChildItemVisible(tool('plan', { kind: 'switch_mode' }), 'onlyMessage')).toBe(true)
+    expect(isChildItemVisible(tool('ask', { requiresUserDecision: true }), 'onlyMessage')).toBe(
+      true,
+    )
+    expect(isChildItemVisible(nestedTask('sub', [visibleChild('deep')]), 'onlyMessage')).toBe(true)
+    expect(isChildItemVisible(errorChild, 'onlyMessage')).toBe(true)
+  })
+})
+
 describe('collectTimelineRows', () => {
   // A task card holding a rendered message, an empty one, and a nested task card
   // — every card folded unless an override says otherwise.
@@ -509,5 +563,39 @@ describe('collectTimelineRows', () => {
 
   it('returns an empty sequence for an empty timeline', () => {
     expect(collectTimelineRows([], folded)).toEqual([])
+  })
+
+  it('skips nested items the onlyMessage mode hides', () => {
+    const task = toolCallItem(
+      makeCall({
+        id: 'task',
+        kind: 'other',
+        children: [
+          visibleChild('sm'),
+          {
+            kind: 'message',
+            id: 'th',
+            message: {
+              id: 'th',
+              role: 'thought',
+              text: 'thinking',
+              blocks: [{ type: 'text', text: 'thinking' }],
+              streaming: false,
+            },
+          },
+          { kind: 'toolCall', id: 'read', call: makeCall({ id: 'read', kind: 'read' }) },
+          nestedTask('sub', [visibleChild('deep')]),
+          { kind: 'toolCall', id: 'plan', call: makeCall({ id: 'plan', kind: 'switch_mode' }) },
+          childMessage('empty'),
+        ],
+      }),
+    )
+    const state = collapseState('onlyMessage', [], 't:task')
+    expect(collectTimelineRows([task], state).map((row) => row.key)).toEqual([
+      't:task',
+      't:task/m:sm',
+      't:task/t:sub',
+      't:task/t:plan',
+    ])
   })
 })

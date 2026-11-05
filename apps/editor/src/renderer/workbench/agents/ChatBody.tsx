@@ -122,6 +122,7 @@ import {
   convergeDisplayFocusKey,
   filterChildItemsForDisplay,
   getHiddenActivity,
+  isStickyKeyHiddenByDisplayMode,
   selectTimelineForDisplay,
   selectTimelineForOutline,
   type HiddenActivity,
@@ -1520,13 +1521,7 @@ function ChatScroll({
         // dropping bottom-stick for a jump that cannot happen.
         const top = key.split('/')[0] ?? key
         if (!displayKeysRef.current.has(top)) return
-        const resolved = findByStickyKey(timelineRef.current, key)
-        if (
-          collapseRef.current.mode === 'hideThinking' &&
-          resolved !== undefined &&
-          resolved.kind === 'message' &&
-          resolved.message.role === 'thought'
-        ) {
+        if (isStickyKeyHiddenByDisplayMode(timelineRef.current, key, collapseRef.current.mode)) {
           return
         }
         const folded = foldedAncestorKeys(timelineRef.current, key, collapseRef.current)

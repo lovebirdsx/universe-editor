@@ -26,6 +26,7 @@ import type {
   AcpToolCallStatus,
 } from '../../../services/acp/session/acpSessionService.js'
 import type { IAcpSession } from '../../../services/acp/session/acpSessionModel.js'
+import type { CollapseMode } from '../../../services/acp/session/acpChatViewStateCache.js'
 import { AcpSessionOutlineRegistry } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
 import type { IAcpSessionOutlineController } from '../../../services/acp/session/acpSessionOutlineRegistry.js'
 import { memoryTrimmedNotice } from '../../../services/acp/session/acpSession.js'
@@ -150,6 +151,8 @@ interface CardExtras {
   sessionId?: string
   exploreResultKey?: string
   exploreResultPath?: string
+  /** Drives the shared collapse store, as ChatBody does. */
+  collapseMode?: CollapseMode
 }
 
 function renderCard(
@@ -189,6 +192,20 @@ function renderCard(
             : {})}
           {...(extras.exploreResultPath !== undefined
             ? { exploreResultPath: extras.exploreResultPath }
+            : {})}
+          {...(extras.collapseMode !== undefined
+            ? {
+                subtreeCollapse: {
+                  stickyKey: `t:${call.id}`,
+                  depth: 0,
+                  collapse: {
+                    mode: extras.collapseMode,
+                    overrides: new Map<string, boolean>(),
+                    openSubagent: null,
+                  },
+                  toggle: () => {},
+                },
+              }
             : {})}
         />
       </ul>
@@ -376,6 +393,43 @@ describe('ToolCallCard', () => {
     )
     expect(container.querySelector('[data-sticky-key="t:t1/m:sm1"]')).not.toBeNull()
     expect(container.querySelector('[data-sticky-key="t:t1/t:sc1"]')).not.toBeNull()
+  })
+
+  it('filters sub-agent children by the display mode when controlled', () => {
+    const { view } = renderCard(
+      makeCall({
+        kind: 'other',
+        blocks: [{ type: 'text', text: 'final result' }],
+        children: [
+          { kind: 'message', id: 'sm-agent', message: makeChildMessage('kept') },
+          {
+            kind: 'message',
+            id: 'sm-thought',
+            message: { ...makeChildMessage('hidden'), role: 'thought' },
+          },
+          {
+            kind: 'toolCall',
+            id: 'sc-read',
+            call: makeCall({ id: 'sc-read', kind: 'read', title: 'Read' }),
+          },
+          {
+            kind: 'toolCall',
+            id: 'sc-plan',
+            call: makeCall({ id: 'sc-plan', kind: 'switch_mode', title: 'Plan' }),
+          },
+        ],
+      }),
+      {},
+      { collapseMode: 'onlyMessage' },
+    )
+    expect(view.container.querySelector('[data-sticky-key="t:t1/m:sm-agent"]')).not.toBeNull()
+    expect(view.container.querySelector('[data-sticky-key="t:t1/m:sm-thought"]')).toBeNull()
+    expect(view.container.querySelector('[data-sticky-key="t:t1/t:sc-read"]')).toBeNull()
+    expect(view.container.querySelector('[data-sticky-key="t:t1/t:sc-plan"]')).not.toBeNull()
+    // The card body is message content, not a child card, so it stays visible.
+    expect(
+      screen.getAllByTestId('acp-markdown').some((el) => el.textContent?.includes('final result')),
+    ).toBe(true)
   })
 
   it('hides the sub-agent timeline while the parent card is collapsed', () => {

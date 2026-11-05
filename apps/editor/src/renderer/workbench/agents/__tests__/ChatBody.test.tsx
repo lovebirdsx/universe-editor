@@ -2247,6 +2247,97 @@ describe('ChatBody — display modes', () => {
     expect(container.querySelector('[data-timeline-key="m:a3"]')).not.toBeNull()
   })
 
+  it('onlyMessage filters the inside of an open sub-agent card too', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: makeTaskCall('task', [
+        childMessage('sm', 'kept'),
+        { kind: 'message', id: 'th', message: roleMessage('th', 'thought', 'hidden').message },
+        childToolCall('read', 'Read'),
+        {
+          kind: 'toolCall',
+          id: 'plan',
+          call: {
+            id: 'plan',
+            title: 'Plan',
+            kind: 'switch_mode',
+            status: 'completed',
+            text: '',
+            blocks: [],
+            diffs: [],
+          },
+        },
+        {
+          kind: 'message',
+          id: 'empty',
+          message: { id: 'empty', role: 'agent', text: '', blocks: [], streaming: false },
+        },
+      ]),
+    }
+    const session = makeSession('s1', [roleMessage('u', 'user', 'go'), task])
+    const { container } = renderChat(session)
+
+    act(() => session.setCollapseMode('onlyMessage'))
+    toggleCard(container, 't:task')
+    expect(container.querySelector('[data-sticky-key="t:task/m:sm"]')).not.toBeNull()
+    expect(container.querySelector('[data-sticky-key="t:task/m:th"]')).toBeNull()
+    expect(container.querySelector('[data-sticky-key="t:task/t:read"]')).toBeNull()
+    expect(container.querySelector('[data-sticky-key="t:task/t:plan"]')).not.toBeNull()
+    expect(container.querySelector('[data-sticky-key="t:task/m:empty"]')).toBeNull()
+    expect(slotEl(container, 't:task')).toBeTruthy()
+  })
+
+  it('moves focus off a nested slot onlyMessage hides', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: makeTaskCall('task', [childToolCall('read', 'Read'), childMessage('sm', 'kept')]),
+    }
+    const session = makeSession('s1', [roleMessage('u', 'user', 'go'), task])
+    const { container } = renderChatWithWidget(session)
+    toggleCard(container, 't:task')
+    act(() => fireEvent.click(stickyEl(container, 't:task/t:read')))
+    expect(stickyEl(container, 't:task/t:read').className).toContain(focusedClass)
+
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(container.querySelector('[data-sticky-key="t:task/t:read"]')).toBeNull()
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+  })
+
+  it('keyboard navigation skips nested slots onlyMessage hides', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: makeTaskCall('task', [childToolCall('read', 'Read'), childMessage('sm', 'kept')]),
+    }
+    const session = makeSession('s1', [roleMessage('u', 'user', 'go'), task])
+    const { container, widgetRef } = renderChatWithWidget(session)
+    act(() => session.setCollapseMode('onlyMessage'))
+    toggleCard(container, 't:task')
+    act(() => fireEvent.click(slotEl(container, 't:task')))
+    act(() => widgetRef.current!.moveTimeline('next'))
+    expect(stickyEl(container, 't:task/m:sm').className).toContain(focusedClass)
+    expect(container.querySelector('[data-sticky-key="t:task/t:read"]')).toBeNull()
+  })
+
+  it('ignores an outline jump to a nested slot onlyMessage hides', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: makeTaskCall('task', [childToolCall('read', 'Read'), childMessage('sm', 'kept')]),
+    }
+    const session = makeSession('s1', [roleMessage('u', 'user', 'go'), task])
+    const { container } = renderChatWithWidget(session)
+    act(() => session.setCollapseMode('onlyMessage'))
+    act(() => fireEvent.click(slotEl(container, 't:task')))
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+
+    const controller = AcpSessionOutlineRegistry.get(session.id)
+    act(() => controller!.scrollToKey('t:task/t:read'))
+    expect(slotEl(container, 't:task').className).toContain(focusedClass)
+  })
+
   it('shows a tail activity line while the running streaming slot is hidden', () => {
     const session = makeSession(
       's1',

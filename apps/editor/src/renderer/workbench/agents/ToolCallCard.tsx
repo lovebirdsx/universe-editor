@@ -34,7 +34,6 @@ import type {
 import { firstLineSummary, memoryTrimmedNotice } from '../../services/acp/session/acpSession.js'
 import { AcpSessionOutlineRegistry } from '../../services/acp/session/acpSessionOutlineRegistry.js'
 import { stripCodeFence } from '../../services/acp/session/acpSessionContent.js'
-import { DEFAULT_COLLAPSE_MODE } from '../../services/acp/session/acpCollapseMode.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { useMarkdownFileLink } from '../markdown/useMarkdownFileLink.js'
 import { previewLanguageForResource } from '../../services/resourcePreview/resourcePreviewSupport.js'
@@ -357,10 +356,10 @@ export const ToolCallCard = memo(function ToolCallCard({
   // Sub-agent timeline (Task tool): the spawned agent's messages / tool calls,
   // folded inside this card. CollapsibleSlot only mounts the body when expanded,
   // so this stays hidden until the user opens the card.
-  const children = filterChildItemsForDisplay(
-    call.children ?? [],
-    subtreeCollapse?.collapse.mode ?? DEFAULT_COLLAPSE_MODE,
-  )
+  // Standalone ToolCallList has no display mode, so its children stay unfiltered.
+  const children = subtreeCollapse
+    ? filterChildItemsForDisplay(call.children ?? [], subtreeCollapse.collapse.mode)
+    : (call.children ?? [])
   const childTimeline = children.length > 0 && (
     <ul className={styles['toolCallChildren']} data-testid="acp-subagent-timeline">
       {children.map((c) => {

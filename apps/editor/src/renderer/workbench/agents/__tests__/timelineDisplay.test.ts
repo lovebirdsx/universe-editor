@@ -18,6 +18,7 @@ import {
   convergeDisplayFocusKey,
   filterChildItemsForDisplay,
   getHiddenActivity,
+  isStickyKeyHiddenByDisplayMode,
   selectTimelineForDisplay,
   selectTimelineForOutline,
 } from '../timelineDisplay.js'
@@ -212,9 +213,28 @@ describe('filterChildItemsForDisplay', () => {
     ])
   })
 
-  it('returns the original array for other modes', () => {
-    expect(filterChildItemsForDisplay(children, 'onlyMessage')).toBe(children)
+  it('drops thoughts, ordinary tools and empty agent messages under onlyMessage', () => {
+    const withEmpty = [...children, childMessage(message('empty', 'agent', ''))]
+    expect(filterChildItemsForDisplay(withEmpty, 'onlyMessage').map((c) => c.id)).toEqual(['a'])
+  })
+
+  it('keeps key cards and nested sub-agent cards under onlyMessage', () => {
+    const kept: readonly AcpChildItem[] = [
+      childMessage(message('err', 'agent', '[error] boom')),
+      { kind: 'toolCall', id: 'plan', call: call({ id: 'plan', kind: 'switch_mode' }) },
+      { kind: 'toolCall', id: 'ask', call: call({ id: 'ask', requiresUserDecision: true }) },
+      { kind: 'toolCall', id: 'nested', call: call({ id: 'nested', subagent: true }) },
+    ]
+    expect(filterChildItemsForDisplay(kept, 'onlyMessage')).toBe(kept)
+  })
+
+  it('returns the original array for the folding modes and when nothing is hidden', () => {
     expect(filterChildItemsForDisplay(children, 'default')).toBe(children)
+    expect(filterChildItemsForDisplay(children, 'collapsed')).toBe(children)
+    expect(filterChildItemsForDisplay(children, 'expanded')).toBe(children)
+    const visibleOnly = [childMessage(message('a', 'agent', 'reply'))]
+    expect(filterChildItemsForDisplay(visibleOnly, 'onlyMessage')).toBe(visibleOnly)
+    expect(filterChildItemsForDisplay(visibleOnly, 'hideThinking')).toBe(visibleOnly)
   })
 })
 
@@ -234,20 +254,44 @@ describe('selectTimelineForOutline', () => {
     expect(outlineTask.call.children?.map((c) => c.id)).toEqual(['a'])
   })
 
-  it('does not filter inside sub-agent cards under onlyMessage', () => {
+  it('filters hidden nested content under onlyMessage', () => {
     const task = toolItem({
       id: 'task',
       subagent: true,
       children: [
         childMessage(message('th', 'thought', 'thinking')),
         childMessage(message('a', 'agent', 'reply')),
+        { kind: 'toolCall', id: 'read', call: call({ id: 'read', kind: 'read' }) },
+        { kind: 'toolCall', id: 'plan', call: call({ id: 'plan', kind: 'switch_mode' }) },
       ],
     })
     const outline = selectTimelineForOutline([user('u'), task], 'onlyMessage')
     expect(ids(outline)).toEqual(['u', 'task'])
     const outlineTask = outline[1]
     if (outlineTask?.kind !== 'toolCall') throw new Error('expected tool call')
-    expect(outlineTask.call.children?.map((c) => c.id)).toEqual(['th', 'a'])
+    expect(outlineTask.call.children?.map((c) => c.id)).toEqual(['a', 'plan'])
+  })
+
+  it('recurses into a kept nested sub-agent card under onlyMessage', () => {
+    const nested: AcpChildItem = {
+      kind: 'toolCall',
+      id: 'nested',
+      call: call({
+        id: 'nested',
+        subagent: true,
+        children: [
+          { kind: 'toolCall', id: 'deep-read', call: call({ id: 'deep-read', kind: 'read' }) },
+          childMessage(message('deep-msg', 'agent', 'kept')),
+        ],
+      }),
+    }
+    const task = toolItem({ id: 'task', subagent: true, children: [nested] })
+    const [outlineTask] = selectTimelineForOutline([task], 'onlyMessage')
+    if (outlineTask?.kind !== 'toolCall') throw new Error('expected tool call')
+    const outlineNested = outlineTask.call.children?.[0]
+    expect(outlineNested?.id).toBe('nested')
+    if (outlineNested?.kind !== 'toolCall') throw new Error('expected nested tool call')
+    expect(outlineNested.call.children?.map((c) => c.id)).toEqual(['deep-msg'])
   })
 })
 
@@ -271,6 +315,19 @@ describe('getHiddenActivity', () => {
     const visible = agent('b', '...', { streaming: true })
     expect(hidden([user('a'), visible], visible, 'onlyMessage')).toBe(null)
     const task = toolItem({ id: 'task', subagent: true, status: 'in_progress' })
+    expect(hidden([user('a'), task], task, 'onlyMessage')).toBe(null)
+  })
+
+  it('returns null when a kept sub-agent tail has only hidden children', () => {
+    const task = toolItem({
+      id: 'task',
+      subagent: true,
+      status: 'in_progress',
+      children: [
+        childMessage(message('th', 'thought', 'thinking')),
+        { kind: 'toolCall', id: 'read', call: call({ id: 'read', kind: 'read' }) },
+      ],
+    })
     expect(hidden([user('a'), task], task, 'onlyMessage')).toBe(null)
   })
 
@@ -435,6 +492,39 @@ describe('getHiddenActivity', () => {
   })
 })
 
+describe('isStickyKeyHiddenByDisplayMode', () => {
+  const task = toolItem({
+    id: 'task',
+    subagent: true,
+    children: [
+      childMessage(message('th', 'thought', 'thinking')),
+      childMessage(message('a', 'agent', 'reply')),
+      { kind: 'toolCall', id: 'read', call: call({ id: 'read', kind: 'read' }) },
+      { kind: 'toolCall', id: 'plan', call: call({ id: 'plan', kind: 'switch_mode' }) },
+    ],
+  })
+  const timeline = [user('u'), task]
+
+  it('ignores top-level keys and the folding modes', () => {
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task', 'onlyMessage')).toBe(false)
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/m:th', 'default')).toBe(false)
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/t:read', 'expanded')).toBe(false)
+  })
+
+  it('reports nested items each hiding mode removes', () => {
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/m:th', 'hideThinking')).toBe(true)
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/m:th', 'onlyMessage')).toBe(true)
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/t:read', 'onlyMessage')).toBe(true)
+  })
+
+  it('keeps visible nested items and ignores stale paths', () => {
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/m:a', 'onlyMessage')).toBe(false)
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/t:plan', 'onlyMessage')).toBe(false)
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:task/m:missing', 'onlyMessage')).toBe(false)
+    expect(isStickyKeyHiddenByDisplayMode(timeline, 't:gone/m:a', 'onlyMessage')).toBe(false)
+  })
+})
+
 describe('convergeDisplayFocusKey', () => {
   it('moves a hidden top-level focus to the nearest visible item above it', () => {
     const hidden = thought('t')
@@ -479,6 +569,62 @@ describe('convergeDisplayFocusKey', () => {
     const keys = new Set(filtered.map(itemSlotKey))
     expect(
       convergeDisplayFocusKey(full, filtered, keys, 't:task/m:th', collapseState('hideThinking')),
+    ).toBe('t:task')
+  })
+
+  it('moves hidden nested tools and empty messages to the parent card under onlyMessage', () => {
+    const task = toolItem({
+      id: 'task',
+      subagent: true,
+      children: [
+        { kind: 'toolCall', id: 'read', call: call({ id: 'read', kind: 'read' }) },
+        childMessage(message('empty', 'agent', '')),
+        childMessage(message('a', 'agent', 'reply')),
+      ],
+    })
+    const full = [user('u'), task]
+    const filtered = selectTimelineForDisplay(full, 'onlyMessage')
+    const keys = new Set(filtered.map(itemSlotKey))
+    expect(
+      convergeDisplayFocusKey(full, filtered, keys, 't:task/t:read', collapseState('onlyMessage')),
+    ).toBe('t:task')
+    expect(
+      convergeDisplayFocusKey(full, filtered, keys, 't:task/m:empty', collapseState('onlyMessage')),
+    ).toBe('t:task')
+    expect(
+      convergeDisplayFocusKey(
+        full,
+        filtered,
+        keys,
+        't:task/m:a',
+        collapseState('onlyMessage', [], 't:task'),
+      ),
+    ).toBe('t:task/m:a')
+  })
+
+  it('climbs past every hidden ancestor under onlyMessage', () => {
+    const deep: AcpChildItem = {
+      kind: 'toolCall',
+      id: 'deep',
+      call: call({ id: 'deep', kind: 'read' }),
+    }
+    const mid: AcpChildItem = {
+      kind: 'toolCall',
+      id: 'mid',
+      call: call({ id: 'mid', kind: 'read', children: [deep] }),
+    }
+    const task = toolItem({ id: 'task', subagent: true, children: [mid] })
+    const full = [user('u'), task]
+    const filtered = selectTimelineForDisplay(full, 'onlyMessage')
+    const keys = new Set(filtered.map(itemSlotKey))
+    expect(
+      convergeDisplayFocusKey(
+        full,
+        filtered,
+        keys,
+        't:task/t:mid/t:deep',
+        collapseState('onlyMessage'),
+      ),
     ).toBe('t:task')
   })
 

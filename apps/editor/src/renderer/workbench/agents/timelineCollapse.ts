@@ -12,6 +12,7 @@ import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCa
 import type {
   AcpChildItem,
   AcpMessage,
+  AcpToolCall,
   TimelineItem,
 } from '../../services/acp/session/acpSession.js'
 import { hasVisibleMessageContent } from '../../services/acp/session/acpSession.js'
@@ -31,16 +32,22 @@ export interface CollapseState {
 }
 
 /**
- * Whether this card owns a sub-agent timeline. The fork stamps `subagent` on the
- * spawning tool call, but a card that only carries children counts too — history
- * replay of an older session may omit the stamp, and children are what actually
- * fold inside the card.
+ * The fork stamps `subagent` on the spawning tool call, but a call that only
+ * carries children counts too — history replay of an older session may omit the
+ * stamp, and children are what actually fold inside the card.
  */
+export function isSubagentCall(call: AcpToolCall): boolean {
+  return call.subagent === true || (call.children?.length ?? 0) > 0
+}
+
+/** Whether this card owns a sub-agent timeline. */
 export function isSubagentCard(item: TimelineItem | AcpChildItem): boolean {
-  return (
-    item.kind === 'toolCall' &&
-    (item.call.subagent === true || (item.call.children?.length ?? 0) > 0)
-  )
+  return item.kind === 'toolCall' && isSubagentCall(item.call)
+}
+
+/** Cards `onlyMessage` keeps regardless of kind — the same set at every depth. */
+export function isAlwaysKeptToolCall(call: AcpToolCall): boolean {
+  return isSubagentCall(call) || call.kind === 'switch_mode' || call.requiresUserDecision === true
 }
 
 /**
@@ -59,8 +66,9 @@ export function isCollapsibleItem(item: TimelineItem | AcpChildItem): boolean {
   return item.kind !== 'compaction' && item.kind !== 'resurrection'
 }
 
-/** `hideThinking` removes thought rows from the visible timeline, so the
- *  keyboard walk must not stop on them either. */
+/** `hideThinking` removes top-level thought rows from the visible timeline, so
+ *  the keyboard walk must not stop on them either. Nested rows go through
+ *  {@link isChildItemVisible}. */
 function isHiddenThought(item: TimelineItem | AcpChildItem, mode: CollapseMode): boolean {
   return mode === 'hideThinking' && item.kind === 'message' && item.message.role === 'thought'
 }
@@ -76,6 +84,41 @@ export function isMessageRendered(message: AcpMessage, nested: boolean): boolean
   if (message.role === 'user') return true
   if (hasVisibleMessageContent(message.blocks)) return true
   return !nested && message.streaming
+}
+
+export function isErrorMessage(message: AcpMessage): boolean {
+  return message.role === 'agent' && message.text.trimStart().startsWith('[error]')
+}
+
+/** Whether `mode` removes any card *inside* a sub-agent timeline. */
+export function hidesNestedContent(mode: CollapseMode): boolean {
+  return mode === 'hideThinking' || mode === 'onlyMessage'
+}
+
+/**
+ * Whether a sub-agent child draws a row under `mode` — the nesting-depth half of
+ * the display policy. Shared by rendering, keyboard rows, outline, and focus
+ * convergence so none of them can drift; the top-level equivalent is
+ * `selectTimelineForDisplay` in timelineDisplay.ts.
+ */
+export function isChildItemVisible(item: AcpChildItem, mode: CollapseMode): boolean {
+  switch (mode) {
+    case 'default':
+    case 'collapsed':
+    case 'expanded':
+      return true
+    case 'hideThinking':
+      return item.kind !== 'message' || item.message.role !== 'thought'
+    case 'onlyMessage':
+      if (item.kind === 'message') {
+        if (item.message.role === 'thought') return false
+        if (isErrorMessage(item.message)) return true
+        // No caret is drawn inside a sub-agent card, so a streaming first frame
+        // gets no exception here (see isMessageRendered).
+        return isMessageRendered(item.message, true)
+      }
+      return isAlwaysKeptToolCall(item.call)
+  }
 }
 
 // Per-kind default under the fold modes `default` / `hideThinking` /
@@ -240,7 +283,7 @@ export function collectTimelineRows(
 ): TimelineRow[] {
   const rows: TimelineRow[] = []
   const pushChild = (item: AcpChildItem, parentKey: string, depth: number): void => {
-    if (isHiddenThought(item, state.mode)) return
+    if (!isChildItemVisible(item, state.mode)) return
     const rendered = item.kind !== 'message' || isMessageRendered(item.message, true)
     const key = buildStickyKey(parentKey, item)
     rows.push({ key, depth, rendered })

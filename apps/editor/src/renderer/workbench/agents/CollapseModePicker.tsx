@@ -67,7 +67,7 @@ const MODE_META: Record<CollapseMode, ModeMeta> = {
     label: localize('acp.collapse.mode.onlyMessage', 'Only Message'),
     description: localize(
       'acp.collapse.mode.onlyMessage.description',
-      'Show every user and agent message. Thinking and ordinary tool cards are hidden; sub-agent, key status and user-input cards stay.',
+      'Show every user and agent message, including inside sub-agent cards. Thinking and ordinary tool cards are hidden; sub-agent, key status and user-input cards stay.',
     ),
   },
 }

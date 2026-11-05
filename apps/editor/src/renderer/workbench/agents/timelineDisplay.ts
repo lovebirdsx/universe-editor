@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Display-mode filtering for the agent timeline: which slots actually render
- *  under `hideThinking` / `onlyMessage`, which nested thoughts the card bodies
+ *  under `hideThinking` / `onlyMessage`, which nested content the card bodies
  *  drop, the tail activity hint (with its tool / thought summary), and
  *  keyboard-focus convergence when the selected slot disappears. Pure
  *  functions — no React / DOM — so the rules stay testable and the data-layer
@@ -20,8 +20,11 @@ import { firstLineSummary, stripCodeFence } from '../../services/acp/session/acp
 import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
 import { deriveToolCallDisplay, isSyntheticDenial } from './toolCallDisplay.js'
 import {
+  hidesNestedContent,
+  isAlwaysKeptToolCall,
+  isChildItemVisible,
+  isErrorMessage,
   isMessageRendered,
-  isSubagentCard,
   visibleFocusKey,
   type CollapseState,
 } from './timelineCollapse.js'
@@ -65,25 +68,10 @@ function isThoughtMessage(item: TimelineItem | AcpChildItem): boolean {
   return item.kind === 'message' && item.message.role === 'thought'
 }
 
-function isErrorAgentMessage(item: TimelineItem): boolean {
-  return (
-    item.kind === 'message' &&
-    item.message.role === 'agent' &&
-    item.message.text.trimStart().startsWith('[error]')
-  )
-}
-
 function isAlwaysKept(item: TimelineItem): boolean {
   if (item.kind === 'compaction' || item.kind === 'resurrection') return true
-  if (isErrorAgentMessage(item)) return true
-  if (item.kind === 'toolCall') {
-    return (
-      isSubagentCard(item) ||
-      item.call.kind === 'switch_mode' ||
-      item.call.requiresUserDecision === true
-    )
-  }
-  return false
+  if (item.kind === 'message') return isErrorMessage(item.message)
+  return isAlwaysKeptToolCall(item.call)
 }
 
 /**
@@ -122,18 +110,22 @@ export function selectTimelineForDisplay(
   }
 }
 
-function filterChildItemsDeep(children: readonly AcpChildItem[]): readonly AcpChildItem[] {
+function filterChildItemsDeep(
+  children: readonly AcpChildItem[],
+  mode: CollapseMode,
+): readonly AcpChildItem[] {
+  if (!hidesNestedContent(mode) || children.length === 0) return children
   let changed = false
   const out: AcpChildItem[] = []
   for (const child of children) {
-    if (isThoughtMessage(child)) {
+    if (!isChildItemVisible(child, mode)) {
       changed = true
       continue
     }
     if (child.kind === 'toolCall') {
       const nested = child.call.children
       if (nested !== undefined && nested.length > 0) {
-        const filteredNested = filterChildItemsDeep(nested)
+        const filteredNested = filterChildItemsDeep(nested, mode)
         if (filteredNested !== nested) {
           changed = true
           out.push({ ...child, call: { ...child.call, children: filteredNested } })
@@ -147,21 +139,21 @@ function filterChildItemsDeep(children: readonly AcpChildItem[]): readonly AcpCh
 }
 
 function filterTimelineItemChildren(item: TimelineItem, mode: CollapseMode): TimelineItem {
-  if (mode !== 'hideThinking' || item.kind !== 'toolCall') return item
+  if (!hidesNestedContent(mode) || item.kind !== 'toolCall') return item
   const children = item.call.children
   if (children === undefined || children.length === 0) return item
-  const filtered = filterChildItemsDeep(children)
+  const filtered = filterChildItemsDeep(children, mode)
   return filtered === children ? item : { ...item, call: { ...item.call, children: filtered } }
 }
 
-/** Outline-visible timeline: top-level filtering plus nested-thought removal
- *  under `hideThinking`, so the tree never lists a row with no render target. */
+/** Outline-visible timeline: top-level filtering plus removal of hidden nested
+ *  content, so the tree never lists a row with no render target. */
 export function selectTimelineForOutline(
   timeline: readonly TimelineItem[],
   mode: CollapseMode,
 ): readonly TimelineItem[] {
   const visible = selectTimelineForDisplay(timeline, mode)
-  if (mode !== 'hideThinking') return visible
+  if (!hidesNestedContent(mode)) return visible
   return visible.map((item) => filterTimelineItemChildren(item, mode))
 }
 
@@ -171,11 +163,11 @@ export function filterChildItemsForDisplay(
   children: readonly AcpChildItem[],
   mode: CollapseMode,
 ): readonly AcpChildItem[] {
-  if (mode !== 'hideThinking' || children.length === 0) return children
+  if (!hidesNestedContent(mode) || children.length === 0) return children
   let changed = false
   const out: AcpChildItem[] = []
   for (const child of children) {
-    if (isThoughtMessage(child)) {
+    if (!isChildItemVisible(child, mode)) {
       changed = true
       continue
     }
@@ -318,9 +310,36 @@ function nearestVisibleKey(
   return null
 }
 
+/**
+ * Whether a composite sticky key resolves to a nested item the display mode
+ * hides. Top-level keys return false — their visibility is decided by
+ * `displayKeys`. Stale paths return false so the existing stale-key fallbacks
+ * still own that case.
+ */
+export function isStickyKeyHiddenByDisplayMode(
+  timeline: readonly TimelineItem[],
+  key: string,
+  mode: CollapseMode,
+): boolean {
+  if (!hidesNestedContent(mode) || !key.includes('/')) return false
+  const segments = key.split('/')
+  let list: readonly (TimelineItem | AcpChildItem)[] = timeline
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i]
+    if (segment === undefined) return false
+    const item = list.find((it) => itemSlotKey(it) === segment)
+    if (item === undefined) return false
+    if (item.kind === 'compaction' || item.kind === 'resurrection') return false
+    if (i > 0 && !isChildItemVisible(item, mode)) return true
+    list = item.kind === 'toolCall' ? (item.call.children ?? []) : []
+  }
+  return false
+}
+
 /** Pull a keyboard focus off a slot the current display mode no longer renders:
- *  nested hidden thoughts converge to their parent card, hidden top-level slots
- *  to the nearest visible neighbour, and anything unresolvable to `null`. */
+ *  nested hidden items converge to their nearest visible ancestor, hidden
+ *  top-level slots to the nearest visible neighbour, and anything unresolvable
+ *  to `null`. */
 export function convergeDisplayFocusKey(
   fullTimeline: readonly TimelineItem[],
   filteredTimeline: readonly TimelineItem[],
@@ -332,12 +351,15 @@ export function convergeDisplayFocusKey(
   if (!displayKeys.has(top)) {
     return nearestVisibleKey(fullTimeline, filteredTimeline, displayKeys, top, collapse)
   }
-  if (collapse.mode === 'hideThinking' && key.includes('/')) {
-    const item = findByStickyKey(fullTimeline, key)
-    if (item !== undefined && isThoughtMessage(item)) {
-      const parent = key.slice(0, key.lastIndexOf('/'))
-      return visibleFocusKey(filteredTimeline, parent.length > 0 ? parent : top, collapse)
+  if (key.includes('/') && isStickyKeyHiddenByDisplayMode(fullTimeline, key, collapse.mode)) {
+    let parent = key.slice(0, key.lastIndexOf('/'))
+    while (
+      parent.includes('/') &&
+      isStickyKeyHiddenByDisplayMode(fullTimeline, parent, collapse.mode)
+    ) {
+      parent = parent.slice(0, parent.lastIndexOf('/'))
     }
+    return visibleFocusKey(filteredTimeline, parent.length > 0 ? parent : top, collapse)
   }
   if (findByStickyKey(filteredTimeline, key) === undefined) {
     const parent = key.includes('/') ? key.slice(0, key.lastIndexOf('/')) : null

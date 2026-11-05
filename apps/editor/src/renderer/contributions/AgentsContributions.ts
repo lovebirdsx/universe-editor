@@ -265,7 +265,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             },
             description: localize(
               'settings.acp.defaultCollapseModes',
-              'Default timeline display mode for new sessions per agent ID. "onlyMessage" is the default, and agents not listed here fall back to it as well. Possible values: "default" (smart per-kind folding), "collapsed" (all folded), "expanded" (all unfolded, except that at most one sub-agent card stays open), "hideThinking" (hide thought cards, smart folding otherwise), "onlyMessage" (keep every user and agent message; thinking and ordinary tool cards hidden, sub-agent cards, key status cards and user-input cards always kept). Example: { "claude-code": "default", "codex": "collapsed" }.',
+              'Default timeline display mode for new sessions per agent ID. "onlyMessage" is the default, and agents not listed here fall back to it as well. Possible values: "default" (smart per-kind folding), "collapsed" (all folded), "expanded" (all unfolded, except that at most one sub-agent card stays open), "hideThinking" (hide thought cards, smart folding otherwise), "onlyMessage" (keep every user and agent message, including inside sub-agent cards; thinking and ordinary tool cards hidden, sub-agent cards, key status cards and user-input cards always kept). Example: { "claude-code": "default", "codex": "collapsed" }.',
             ),
           },
           'acp.mcpCard.defaultExpanded': {

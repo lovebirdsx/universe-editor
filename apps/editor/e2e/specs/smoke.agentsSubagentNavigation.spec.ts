@@ -293,4 +293,32 @@ test.describe('@p1 sub-agent card navigation', () => {
     await expect(card.getByTestId('acp-toolcall-explore-result-jump')).toHaveCount(0)
     await expect(card.getByTestId('acp-toolcall-explore-result-open')).toHaveCount(0)
   })
+
+  test('the display mode filters inside an open sub-agent card', async ({ page, workbench }) => {
+    // The mixed fixture streams two sub-agent messages with a read call between
+    // them and a bash call after the last chunk, so the card holds both kinds.
+    const keys = await openSessionWithCards(page, workbench, ['emit-subagent-mixed:2x1'])
+    const key = keys[0]!
+    const card = page.locator(`[data-timeline-key="${key}"]`)
+    // Nested cards carry data-sticky-key only; data-timeline-key is top-level.
+    const childTools = page.locator(`[data-sticky-key^="${key}/t:"]`)
+
+    await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('onlyMessage'))
+    await card.getByTestId('acp-collapsible-toggle').click()
+    await expect.poll(() => cardExpanded(page, key), { timeout: 5000 }).toBe(true)
+
+    // Messages stay; both child tool cards (read + bash) are filtered out.
+    await expect(card.getByTestId('acp-subagent-message')).toHaveCount(2, { timeout: 10000 })
+    await expect(childTools).toHaveCount(0)
+
+    // Smart folding restores the tool cards and leaves the card open: the mode
+    // only filters content, it never drives the card's own fold state.
+    await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('default'))
+    await expect(childTools).toHaveCount(2, { timeout: 10000 })
+    expect(await cardExpanded(page, key)).toBe(true)
+
+    await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('onlyMessage'))
+    await expect(childTools).toHaveCount(0)
+    expect(await cardExpanded(page, key)).toBe(true)
+  })
 })
