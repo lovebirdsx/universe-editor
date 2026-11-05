@@ -242,6 +242,10 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     EXPECTED_METHOD_NAMES.subscriptionUsage,
     EXPECTED_METHOD_NAMES.consumeResetCredit,
     EXPECTED_METHOD_NAMES.livenessPing,
+    // Background activity snapshot: keeps the editor from showing a session as
+    // stopped when a background terminal, an autonomous goal turn, or a
+    // non-native sub-agent outlives the prompt RPC.
+    EXPECTED_METHOD_NAMES.backgroundActivity,
     // MCP startup outcome notification — flips the editor MCP panel's
     // config-seeded "pending" rows (claude covers this via sdkMessage instead).
     EXPECTED_METHOD_NAMES.mcpServerStatus,

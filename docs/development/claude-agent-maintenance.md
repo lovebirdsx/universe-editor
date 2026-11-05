@@ -251,6 +251,22 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 
 该次运行的发布尝试失败，但 workflow 仍是继承来的自动发布入口。本地这次删除尚未推送；**推送前复核护栏在 CI 里确实执行**，不要把「远端曾失败」当成已退役。
 
+## 跨 fork：codex 后台活跃度通知
+
+**契约**：`_universe/background_activity` 的 params 固定为 `{sessionId, backgroundTasks, autonomousTurn}`，与 claude fork 的 wire 形状一致。编辑器 `AcpSessionService.onExtNotification` 只做字段类型校验后 `applyBackgroundActivity`；`autonomousTurn=true` 把会话拉成 running，`backgroundTasks>0` 在 core `idle` 时显示 background。本批只改 codex fork，编辑器逻辑不动（父仓仅契约测试的名字表增加该常量）。
+
+**codex 实现**：仅对非 AIR 客户端启用（`!clientCapabilities.airClient`；AIR 已有 async task 卡片，通知集合与 golden 不变）。新增 `src/BackgroundActivity.ts` 维护 `backgroundTasks = 已发布且 running|stopping 的后台 terminal + live 非原生直接子 agent`、`autonomousTurn = latch || autonomousPrompt 数`；`turn/completed` 只按 turn id 命中才启动 5s grace，迟到完成不误清新 turn；子 agent run end 后的尾部输出不再计回存活（只有新 `item/started` 解除，防止永久卡 background）；后台任务自然结束会 latch（可能是 followup 的唤醒），用户 stop / 进程退出不 latch。`session/load` / `session/resume` 在 `asyncTasks.reconcile()` 后强制补发；发送失败不更新去重基线并有 3×1s 有界重试；有 live terminal 时每 5s reconcile，会话关闭/provider 重启/进程退出清理定时器，进程退出在 reset 后强制补发清零快照。细节与已知缺口见 `vendor/codex-acp/cases-session.md`「后台活跃度通知」。
+
+**验证结果（2026-11，Windows 工作树）**：
+
+- fork `env -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN npx vitest run`：后台活跃度相关的三个测试文件 53/53 通过（含子 agent 迟到输出回归）；全量 1337 passed / 19 failed。19 个失败均为既有 Windows 路径差异（路径分隔符、`E:/workspace` URI、临时目录写进 AIR golden 的 diff），与本批无关；本批相关的 AIR golden 中没有 `_universe/background_activity`，plain/zed 基线由 `withoutForkAdditions` 过滤，新增的 load force 快照已更新。
+- fork `npm run typecheck`：通过（含 examples）。
+- 父仓 `pnpm agent:build`：通过；dist 含 `_universe/background_activity`。
+- `UNIVERSE_FORK_CONTRACT=1 pnpm --filter @universe-editor/editor test:integration acpForkContract`：52/52 通过。
+- `pnpm check`：通过。
+- `pnpm claude-md:check`：通过（codex fork CLAUDE.md 14995 bytes）。
+- `pnpm e2e:smoke`：152 passed，1 flaky（`openRecentMissing`，与本批无关）。
+
 ## 验证入口
 
 ```bash
