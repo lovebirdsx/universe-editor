@@ -2008,6 +2008,37 @@ describe('ChatBody — scroll position persistence', () => {
     expect(AcpChatViewStateCache.load('s1')?.scrollTop).toBe(150)
     expect(AcpChatViewStateCache.load('s1')?.stuck).toBe(false)
   })
+
+  it('focusTimeline leaves scrollTop, focused key, and stuck state untouched', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    Object.defineProperty(scroll, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 200
+    act(() => {
+      fireEvent.scroll(scroll)
+    })
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:b'))
+    })
+
+    const before = AcpChatViewStateCache.load('s1')
+    expect(before?.scrollTop).toBe(200)
+    expect(before?.focusedKey).toBe('m:b')
+    expect(before?.stuck).toBe(false)
+
+    act(() => {
+      widgetRef.current!.focusTimeline()
+    })
+
+    expect(document.activeElement).toBe(scroll)
+    expect(scroll.scrollTop).toBe(200)
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+    const after = AcpChatViewStateCache.load('s1')
+    expect(after?.scrollTop).toBe(200)
+    expect(after?.focusedKey).toBe('m:b')
+    expect(after?.stuck).toBe(false)
+  })
 })
 
 describe('ChatBody — collapse', () => {

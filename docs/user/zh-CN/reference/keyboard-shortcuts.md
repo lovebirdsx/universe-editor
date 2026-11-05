@@ -207,7 +207,9 @@ Swarm 审核列表的「跳到 Swarm 更改」占用 `Ctrl+Shift+Enter`，因此
 | 操作                         | 快捷键                                            |
 | ---------------------------- | ------------------------------------------------- |
 | 新建 Agent 会话              | `Ctrl+Alt+N`                                      |
-| 聚焦 Agent 输入框            | `Ctrl+Alt+I`                                      |
+| 在 Agent 输入框与时间线之间切换焦点 | `Ctrl+Alt+I`                              |
+| 聚焦 Agent 输入框（固定）    | 无（可在[自定义快捷键](../customization/keybindings.md)里绑定） |
+| 聚焦 Agent 时间线（固定）    | 无（可在[自定义快捷键](../customization/keybindings.md)里绑定） |
 | 取消 Agent 回合              | `Ctrl+Shift+Escape`；会话聚焦时也可按 `Shift+Esc` |
 | 将选区添加到已有 Agent 聊天  | `Ctrl+K Ctrl+L`                                   |
 | 恢复 Agent 会话…             | `Ctrl+Shift+H`                                    |
@@ -223,6 +225,8 @@ Swarm 审核列表的「跳到 Swarm 更改」占用 `Ctrl+Shift+Enter`，因此
 | 采纳内联补全                 | `Tab`（幽灵文本可见时）                           |
 
 > 会话内的字体缩放、时间线导航、查找等按键**仅在聊天获得焦点时**生效；配置栏的 `Alt+1` ~ `Alt+8` 不同，它要求**会话编辑器（编辑区）获得焦点**。详见 [AI Agent · 管理会话](../ai-agent/managing-sessions.md)。
+>
+> `Ctrl+Alt+I` 是**切换**：焦点在输入框时切到消息时间线，焦点在时间线卡片、时间线空白处或聊天区外时则回到输入框。切到时间线只移动键盘焦点，不滚动时间线、也不改变当前选中的消息卡片。若想固定跳到某一侧，使用命令面板里的「聚焦 Agent 输入框」或「聚焦 Agent 时间线」——这两条命令默认没有快捷键。
 >
 > 配置栏浮层打开期间，四个 `Ctrl` 别名（`Ctrl+P` `Ctrl+N` `Ctrl+H` `Ctrl+L`）与 `↑` `↓` `←` `→` 作用相同——规则与上面的[菜单内键盘操作](#菜单内键盘操作)一致，浮层关掉即恢复原义。
 

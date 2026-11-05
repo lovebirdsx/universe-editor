@@ -11,8 +11,9 @@
  *
  *  Keyboard navigation: ChatBody registers itself as an AcpChatWidget on
  *  mount. The widget service drives the `acpChatFocused` contextKey from
- *  focusin/focusout on this container, so Alt+J / Alt+K (and Ctrl+Alt+I) only
- *  target whichever ChatBody currently holds DOM focus.
+ *  focusin/focusout on this container, so Alt+J / Alt+K target whichever
+ *  ChatBody currently holds DOM focus. Ctrl+Alt+I toggles between this chat's
+ *  timeline and its prompt input.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -2278,7 +2279,7 @@ function EmptySessionHint() {
           <HintItem keys={['#']} label={localize('acp.emptySession.context', 'Add context')} />
           <HintItem
             keys={['Ctrl+Alt+I']}
-            label={localize('acp.emptySession.focusInput', 'Focus input')}
+            label={localize('acp.emptySession.toggleFocus', 'Toggle input / timeline focus')}
           />
           <HintItem
             keys={['Alt+Up/Down']}

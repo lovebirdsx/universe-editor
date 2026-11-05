@@ -14,6 +14,7 @@ import {
   Event,
   GroupDirection,
   IConfigurationService,
+  IContextKeyService,
   IDialogService,
   IEditorGroupsService,
   IEditorService,
@@ -32,11 +33,14 @@ import {
   type EditorInput,
 } from '@universe-editor/platform'
 import {
+  FocusAgentInputAction,
+  FocusAgentTimelineAction,
   GoToParentSessionAction,
   OpenSideTaskAction,
   SelectAgentAction,
   SwitchSessionAction,
   SwitchSessionReverseAction,
+  ToggleAgentFocusAction,
 } from '../agentSessionActions.js'
 import {
   ISessionSwitcherService,
@@ -51,7 +55,10 @@ import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/session/acpSessionHistory.js'
-import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import {
+  IAcpChatWidgetService,
+  type AcpChatWidget,
+} from '../../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import {
@@ -833,5 +840,164 @@ describe('SwitchSessionAction', () => {
       h.dispose()
       harness = undefined
     }
+  })
+})
+
+function makeFocusWidget(): AcpChatWidget {
+  return {
+    container: {} as HTMLElement,
+    focusInput: vi.fn(() => true),
+    focusTimeline: vi.fn(() => true),
+  } as unknown as AcpChatWidget
+}
+
+interface FocusHarness {
+  readonly context: ContextKeyService
+  run(commandId: string): Promise<void>
+  dispose(): void
+}
+
+function makeFocusHarness(
+  options: {
+    readonly promptFocused?: boolean
+    readonly activeSessionId?: string
+    readonly lastFocusedWidget?: AcpChatWidget
+    readonly sessionWidgets?: Readonly<Record<string, AcpChatWidget>>
+  } = {},
+): FocusHarness {
+  const context = new ContextKeyService()
+  context.set('acpPromptInputFocused', options.promptFocused ?? false)
+  const activeEditor =
+    options.activeSessionId === undefined
+      ? undefined
+      : Object.setPrototypeOf(
+          { sessionId: options.activeSessionId },
+          AcpSessionEditorInput.prototype,
+        )
+  const services = new ServiceCollection()
+  services.set(IContextKeyService, context)
+  services.set(IAcpChatWidgetService, {
+    _serviceBrand: undefined,
+    lastFocusedWidget: options.lastFocusedWidget,
+    register: vi.fn(),
+    widgetForSession: (id: string) => options.sessionWidgets?.[id],
+  } as unknown as IAcpChatWidgetService)
+  services.set(IEditorService, {
+    _serviceBrand: undefined,
+    activeEditor: observableValue<unknown>('t.focus.activeEditor', activeEditor),
+  } as unknown as IEditorService)
+  const inst = new InstantiationService(services)
+  const disposables: IDisposable[] = [
+    registerAction2(FocusAgentInputAction),
+    registerAction2(FocusAgentTimelineAction),
+    registerAction2(ToggleAgentFocusAction),
+  ]
+  return {
+    context,
+    run: async (commandId) => {
+      await inst.invokeFunction((accessor) =>
+        Promise.resolve(CommandsRegistry.getCommand(commandId)!.handler(accessor)),
+      )
+    },
+    dispose: () => {
+      while (disposables.length > 0) disposables.pop()?.dispose()
+    },
+  }
+}
+
+describe('agent focus commands', () => {
+  let harness: FocusHarness | undefined
+
+  const make = (options?: Parameters<typeof makeFocusHarness>[0]): FocusHarness => {
+    harness = makeFocusHarness(options)
+    return harness
+  }
+
+  afterEach(() => {
+    harness?.dispose()
+    harness = undefined
+  })
+
+  it('binds Ctrl+Alt+I to the toggle command with no when-clause', () => {
+    const h = make()
+    const bindings = KeybindingsRegistry.getBindingsForKey('ctrl+alt+i')
+    const toggle = bindings.find((item) => item.command === ToggleAgentFocusAction.ID)
+    expect(toggle).toBeDefined()
+    expect(toggle?.when).toBeUndefined()
+    expect(bindings.some((item) => item.command === FocusAgentInputAction.ID)).toBe(false)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+i', h.context)).toBe(
+      ToggleAgentFocusAction.ID,
+    )
+  })
+
+  it('keeps the fixed focus-input command even while the prompt already has focus', async () => {
+    const widget = makeFocusWidget()
+    const h = make({ promptFocused: true, lastFocusedWidget: widget })
+    await h.run(FocusAgentInputAction.ID)
+
+    expect(widget.focusInput).toHaveBeenCalledOnce()
+    expect(widget.focusTimeline).not.toHaveBeenCalled()
+  })
+
+  it('focuses the timeline through the fixed command regardless of prompt focus', async () => {
+    const widget = makeFocusWidget()
+    const h = make({ promptFocused: true, lastFocusedWidget: widget })
+    await h.run(FocusAgentTimelineAction.ID)
+
+    expect(widget.focusTimeline).toHaveBeenCalledOnce()
+    expect(widget.focusInput).not.toHaveBeenCalled()
+  })
+
+  it('toggles to the timeline when the prompt input really holds Monaco focus', async () => {
+    const widget = makeFocusWidget()
+    const h = make({ promptFocused: true, lastFocusedWidget: widget })
+    await h.run(ToggleAgentFocusAction.ID)
+
+    expect(widget.focusTimeline).toHaveBeenCalledOnce()
+    expect(widget.focusInput).not.toHaveBeenCalled()
+  })
+
+  it('toggles to the prompt input when focus is anywhere else', async () => {
+    const widget = makeFocusWidget()
+    const h = make({ promptFocused: false, lastFocusedWidget: widget })
+    await h.run(ToggleAgentFocusAction.ID)
+
+    expect(widget.focusInput).toHaveBeenCalledOnce()
+    expect(widget.focusTimeline).not.toHaveBeenCalled()
+  })
+
+  it('leaves the focused prompt in its own widget and keeps fixed commands on the active editor', async () => {
+    const active = makeFocusWidget()
+    const lastFocused = makeFocusWidget()
+    const h = make({
+      promptFocused: true,
+      activeSessionId: 's-active',
+      lastFocusedWidget: lastFocused,
+      sessionWidgets: { 's-active': active },
+    })
+
+    await h.run(ToggleAgentFocusAction.ID)
+    expect(lastFocused.focusTimeline).toHaveBeenCalledOnce()
+    expect(active.focusTimeline).not.toHaveBeenCalled()
+
+    await h.run(FocusAgentInputAction.ID)
+    expect(active.focusInput).toHaveBeenCalledOnce()
+    expect(lastFocused.focusInput).not.toHaveBeenCalled()
+
+    await h.run(FocusAgentTimelineAction.ID)
+    expect(active.focusTimeline).toHaveBeenCalledOnce()
+    expect(lastFocused.focusTimeline).toHaveBeenCalledOnce()
+
+    h.context.set('acpPromptInputFocused', false)
+    await h.run(ToggleAgentFocusAction.ID)
+    expect(active.focusInput).toHaveBeenCalledTimes(2)
+    expect(lastFocused.focusInput).not.toHaveBeenCalled()
+  })
+
+  it('is a silent no-op when no chat widget can be resolved', async () => {
+    const h = make()
+    await expect(h.run(ToggleAgentFocusAction.ID)).resolves.toBeUndefined()
+    await expect(h.run(FocusAgentInputAction.ID)).resolves.toBeUndefined()
+    await expect(h.run(FocusAgentTimelineAction.ID)).resolves.toBeUndefined()
   })
 })

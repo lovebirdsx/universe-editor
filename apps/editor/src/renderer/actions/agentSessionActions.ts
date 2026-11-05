@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Agent session lifecycle commands: new / cancel / open-view / focus-input /
- *  select-agent / resume / clear-history / refresh / switch-session /
- *  side-task navigation.
+ *  focus-timeline / toggle-focus / select-agent / resume / clear-history / refresh /
+ *  switch-session / side-task navigation.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -10,6 +10,7 @@ import {
   GroupDirection,
   IDialogService,
   IConfigurationService,
+  IContextKeyService,
   IEditorGroupsService,
   IEditorService,
   IFileDialogService,
@@ -40,6 +41,7 @@ import {
 } from '../services/acp/session/acpSessionService.js'
 import type { IAcpSession } from '../services/acp/session/acpSessionModel.js'
 import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
+import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import {
   collectSideTaskDescendants,
   directSideTaskChildren,
@@ -436,11 +438,50 @@ export class FocusAgentInputAction extends Action2 {
       id: FocusAgentInputAction.ID,
       title: localize2('action.agent.focusInput', 'Focus Agent Input'),
       category: CATEGORY,
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resolveNavWidget(accessor)?.focusInput()
+  }
+}
+
+export class FocusAgentTimelineAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusTimeline'
+  constructor() {
+    super({
+      id: FocusAgentTimelineAction.ID,
+      title: localize2('action.agent.focusTimeline', 'Focus Agent Timeline'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resolveNavWidget(accessor)?.focusTimeline()
+  }
+}
+
+export class ToggleAgentFocusAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.toggleFocus'
+  constructor() {
+    super({
+      id: ToggleAgentFocusAction.ID,
+      title: localize2('action.agent.toggleFocus', 'Toggle Focus Between Agent Input and Timeline'),
+      category: CATEGORY,
       keybinding: { primary: 'ctrl+alt+i' },
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
+    const promptInputFocused =
+      accessor.get(IContextKeyService).get('acpPromptInputFocused') === true
+    if (promptInputFocused) {
+      // 输入框实际所在的分屏可能与活动编辑器不同。
+      const target =
+        accessor.get(IAcpChatWidgetService).lastFocusedWidget ?? resolveNavWidget(accessor)
+      target?.focusTimeline()
+      return
+    }
     resolveNavWidget(accessor)?.focusInput()
   }
 }

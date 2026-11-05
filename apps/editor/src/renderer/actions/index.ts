@@ -350,6 +350,7 @@ import {
   ClearAgentSessionHistoryAction,
   CopyAgentSessionPathAction,
   FocusAgentInputAction,
+  FocusAgentTimelineAction,
   FocusNextAcpTimelineItemAction,
   FocusNextSubagentCardAction,
   FocusPreviousAcpTimelineItemAction,
@@ -398,6 +399,7 @@ import {
   ConfigureSideTaskModelAction,
   ToggleAcpTimelineItemCollapseAction,
   ToggleAcpTimelineCardSubtreeAction,
+  ToggleAgentFocusAction,
   CycleAcpTimelineCollapseAction,
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
@@ -864,6 +866,8 @@ registerAction2(NewAgentSessionWithScopeAction)
 registerAction2(CancelAgentTurnAction)
 registerAction2(OpenAgentViewAction)
 registerAction2(FocusAgentInputAction)
+registerAction2(FocusAgentTimelineAction)
+registerAction2(ToggleAgentFocusAction)
 registerAction2(SelectAgentAction)
 registerAction2(OpenAcpMcpSettingsAction)
 registerAction2(OpenAgentSettingsAction)
