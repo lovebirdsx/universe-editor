@@ -12,6 +12,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const addonPath = join(root, 'build', 'Release', 'process_job.node')
 const runnable = process.platform === 'win32' && existsSync(addonPath)
 const addon = runnable ? createRequire(import.meta.url)(addonPath) : undefined
+// A worktree pulled before `pnpm --filter @universe-editor/process-job build` still has the
+// old binary; only the snapshot cases need the new export.
+const hasSnapshot = typeof addon?.listProcesses === 'function'
+const needsSnapshot = { skip: !hasSnapshot && 'addon predates listProcesses; rebuild it' }
 
 const SLEEPER = 'setInterval(() => {}, 1000)'
 // 等 stdin 的 "go" 再生孙进程：保证测试先把本进程 assign 进 job，孙进程才会继承。
@@ -46,6 +50,23 @@ function spawnNode(script) {
   return spawn(process.execPath, ['-e', script], { stdio: ['pipe', 'pipe', 'inherit'] })
 }
 
+// Node 在 Windows 上给子进程建 per-process job，父进程退出时连带清理；要构造
+// “父死子活”的孤儿，中间进程必须不是 Node（用 PowerShell 的 Process.Start）。
+function spawnOrphanMaker() {
+  const script = [
+    '$psi = New-Object System.Diagnostics.ProcessStartInfo',
+    `$psi.FileName = '${process.execPath.replace(/'/g, "''")}'`,
+    `$psi.Arguments = '-e "setInterval(()=>{},1000)"'`,
+    '$psi.UseShellExecute = $false',
+    '$psi.CreateNoWindow = $true',
+    '$p = [System.Diagnostics.Process]::Start($psi)',
+    "Write-Output ('grandchild=' + $p.Id)",
+  ].join('; ')
+  return spawn('powershell.exe', ['-NoProfile', '-Command', script], {
+    stdio: ['ignore', 'pipe', 'inherit'],
+  })
+}
+
 function readLine(child, prefix) {
   return new Promise((resolve, reject) => {
     let buf = ''
@@ -59,6 +80,48 @@ function readLine(child, prefix) {
 }
 
 describe('process_job addon', { skip: !runnable && 'win32 + built addon only' }, () => {
+  it('lists the whole machine with pid -> ppid pairs', needsSnapshot, async () => {
+    const child = spawnNode(SLEEPER)
+    try {
+      assert.ok(
+        await waitUntil(() => addon.listProcesses().some((p) => p.pid === child.pid)),
+        'spawned child must be visible in the snapshot',
+      )
+      const rows = addon.listProcesses()
+      // 全量枚举，不能像 @vscode/windows-process-tree 那样截断在 1024 条。
+      assert.ok(rows.length > 1)
+      assert.equal(rows.find((p) => p.pid === process.pid)?.ppid, process.ppid)
+      assert.equal(rows.find((p) => p.pid === child.pid)?.ppid, process.pid)
+      // 重复调用必须释放快照句柄，不报错（不比较条数：机器上并发的进程出生/退出会让它变化）。
+      assert.ok(addon.listProcesses().some((p) => p.pid === child.pid))
+    } finally {
+      child.kill()
+    }
+  })
+
+  it('keeps the dead parent pid on the surviving child (orphan signal)', needsSnapshot, async () => {
+    const parent = spawnOrphanMaker()
+    let grandchild
+    try {
+      const exited = new Promise((resolve) => parent.once('exit', resolve))
+      grandchild = await readLine(parent, 'grandchild')
+      await exited
+      assert.ok(
+        await waitUntil(() => {
+          const rows = addon.listProcesses()
+          const alive = new Set(rows.map((p) => p.pid))
+          const survivor = rows.find((p) => p.pid === grandchild)
+          return survivor !== undefined && !alive.has(survivor.ppid)
+        }),
+        'child must stay visible with its exited parent still recorded as ppid',
+      )
+    } finally {
+      try {
+        process.kill(grandchild)
+      } catch {}
+    }
+  })
+
   it('assigns a spawned child (already in the inherited launch job) and terminates it', async () => {
     const job = addon.createJob()
     const child = spawnNode(SLEEPER)

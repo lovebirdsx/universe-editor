@@ -51,6 +51,10 @@ export function loadJobBackend(
       return undefined
     }
     log?.info(`process job addon loaded from ${addonPath}`)
+    if (typeof mod.listProcesses !== 'function') {
+      // Older addons keep full containment; only the orphan sweep needs the snapshot.
+      log?.warn('process job addon has no listProcesses — orphan sweep disabled')
+    }
     return mod as JobBackend
   } catch (err) {
     log?.warn(`process job addon failed to load: ${String(err)} — falling back to tree-kill`)

@@ -12,7 +12,7 @@
 import { readFileSync, existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/processLifecycleApp.js'
 import { evaluateWhenRestored, waitForProbeServiceable } from '../pages/WorkbenchPO.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -130,5 +130,39 @@ test.describe('process lifecycle binding', () => {
 
     await expect.poll(() => isAlive(pids.agent), { timeout: 15000 }).toBe(false)
     await expect.poll(() => isAlive(pids.grandchild), { timeout: 15000 }).toBe(false)
+  })
+
+  test('an agent exiting on its own reaps its tree at release @regression', async ({
+    page,
+    workbench,
+    scratchDir,
+  }) => {
+    test.skip(process.platform !== 'win32', 'PowerShell wrapper fixture is Windows-only')
+    await workbench.waitForRestored()
+    const folder = scratchDir('universe-editor-e2e-life-release-')
+    const pidFile = join(folder, 'agent.pids')
+
+    await workbench.openWorkspace(folder)
+    await page.evaluate(
+      ([id, p, pidFileArg]) =>
+        window.__E2E__!.installAcpEchoAgent(id, p, {
+          ECHO_AGENT_PID_FILE: pidFileArg,
+          // 孙进程走 PowerShell wrapper：它不在 Node 给自己的子进程建的 per-process job
+          // 里，agent 退出不会连带杀掉它——只有编辑器的释放回收能清掉。
+          ECHO_AGENT_TREE_VIA_WRAPPER: '1',
+          ECHO_AGENT_EXIT_AFTER_MS: '3000',
+        }),
+      ['echo', ECHO_AGENT_PATH, pidFile] as const,
+    )
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect.poll(() => readPids(pidFile), { timeout: 15000 }).toBeDefined()
+    const pids = readPids(pidFile)!
+    expect(isAlive(pids.grandchild)).toBe(true)
+
+    await expect.poll(() => isAlive(pids.agent), { timeout: 15000 }).toBe(false)
+    // 默认 sweep 是 30s，这个窗口只有释放时的 terminate+close 能解释。
+    await expect.poll(() => isAlive(pids.grandchild), { timeout: 12000 }).toBe(false)
   })
 })

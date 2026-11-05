@@ -101,7 +101,11 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
         runAsNodeEnv: () => ({ ELECTRON_RUN_AS_NODE: '1' }),
         ...(loggerService !== undefined ? { logger: loggerService } : {}),
         onSpawned: (pid, label) => processRoleRegistry.register(pid, { role: 'acp-agent', label }),
-        lifecycle: { registry: processLifecycle, role: 'acp-agent' },
+        lifecycle: {
+          registry: processLifecycle,
+          role: 'acp-agent',
+          reapDescendantsOnRelease: true,
+        },
       }),
     )
     this._register(this._local.onStdout((e) => this._onStdout.fire(e)))

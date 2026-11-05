@@ -10,6 +10,7 @@ import { Emitter } from '@universe-editor/platform'
 import { ManagedChildProcess } from '../managedChildProcess.js'
 import {
   APP_OWNER,
+  DEFAULT_ORPHAN_SWEEP_MS,
   ProcessLifecycleRegistry,
   processGroupSpawnOptions,
   windowOwner,
@@ -26,6 +27,10 @@ class FakeBackend implements JobBackend {
   assignStatus = 0
   createThrows = false
   terminateResult = true
+  terminateThrows = false
+  /** Whole-machine snapshot served by listProcesses(); tests set this directly. */
+  processTable: Array<{ pid: number; ppid: number }> = []
+  listProcessesCalls = 0
 
   createJob(): bigint {
     if (this.createThrows) throw new Error('create failed')
@@ -41,6 +46,7 @@ class FakeBackend implements JobBackend {
   }
   terminate(job: bigint): boolean {
     this.calls.push(`terminate:${job}`)
+    if (this.terminateThrows) throw new Error('terminate failed')
     return this.terminateResult
   }
   close(job: bigint): boolean {
@@ -52,6 +58,29 @@ class FakeBackend implements JobBackend {
     // Mirrors the real addon: querying a closed handle throws.
     if (this.closed.has(job)) throw new Error(`job ${job} is closed`)
     return [...(this.members.get(job) ?? [])]
+  }
+  listProcesses(): ReadonlyArray<{ pid: number; ppid: number }> {
+    this.listProcessesCalls++
+    return this.processTable
+  }
+}
+
+/** A pre-P1 addon: containment works, but the orphan sweep has no snapshot source. */
+class LegacyBackend implements JobBackend {
+  createJob(): bigint {
+    return 100n
+  }
+  assign(): number {
+    return 0
+  }
+  terminate(): boolean {
+    return true
+  }
+  close(): boolean {
+    return true
+  }
+  listPids(): number[] {
+    return []
   }
 }
 
@@ -385,6 +414,118 @@ describe('ProcessLifecycleRegistry (win32 job backend)', () => {
     })
   })
 
+  describe('reapDescendantsOnRelease', () => {
+    beforeEach(() => vi.useFakeTimers())
+    afterEach(() => vi.useRealTimers())
+
+    it('terminates and closes the job even when descendants outlive the agent', () => {
+      const backend = new FakeBackend()
+      const registry = winRegistry(backend)
+      const lease = registry.track({
+        pid: 10,
+        owner: APP_OWNER,
+        role: 'acp-agent',
+        label: 'agent',
+        reapDescendantsOnRelease: true,
+      })
+      backend.members.get(100n)!.push(11)
+
+      lease.dispose()
+
+      expect(backend.calls.slice(-2)).toEqual(['terminate:100', 'close:100'])
+      expect(backend.closed.has(100n)).toBe(true)
+      expect(registry.listJobPids(APP_OWNER)).toEqual([])
+    })
+
+    it('is unconditional: an empty tree is terminated and closed too', () => {
+      const backend = new FakeBackend()
+      const registry = winRegistry(backend)
+      registry
+        .track({
+          pid: 10,
+          owner: APP_OWNER,
+          role: 'acp-agent',
+          label: 'agent',
+          reapDescendantsOnRelease: true,
+        })
+        .dispose()
+
+      expect(backend.calls.slice(-2)).toEqual(['terminate:100', 'close:100'])
+    })
+
+    it('closes the job even when terminate reports failure', () => {
+      const backend = new FakeBackend()
+      backend.terminateResult = false
+      const registry = winRegistry(backend)
+      registry
+        .track({
+          pid: 10,
+          owner: APP_OWNER,
+          role: 'acp-agent',
+          label: 'agent',
+          reapDescendantsOnRelease: true,
+        })
+        .dispose()
+
+      expect(backend.calls.slice(-2)).toEqual(['terminate:100', 'close:100'])
+      expect(backend.closed.has(100n)).toBe(true)
+    })
+
+    it('closes the job even when terminate throws', () => {
+      const backend = new FakeBackend()
+      backend.terminateThrows = true
+      const registry = winRegistry(backend)
+      registry
+        .track({
+          pid: 10,
+          owner: APP_OWNER,
+          role: 'acp-agent',
+          label: 'agent',
+          reapDescendantsOnRelease: true,
+        })
+        .dispose()
+
+      expect(backend.calls.slice(-2)).toEqual(['terminate:100', 'close:100'])
+      expect(backend.closed.has(100n)).toBe(true)
+    })
+
+    it('leaves the job alone by default (pty keeps user background programs)', () => {
+      const backend = new FakeBackend()
+      const registry = winRegistry(backend)
+      const lease = registry.track({ pid: 10, owner: APP_OWNER, role: 'pty', label: 'shell' })
+      backend.members.get(100n)!.push(11)
+
+      lease.dispose()
+
+      expect(backend.calls).not.toContain('close:100')
+      expect(backend.closed.has(100n)).toBe(false)
+    })
+
+    it('ignores the late exit after reclaim already closed the job (use-after-close)', async () => {
+      const backend = new FakeBackend()
+      const registry = winRegistry(backend)
+      const stubborn = new FakeTarget()
+      stubborn.cooperative = false
+      const lease = registry.track({
+        pid: 10,
+        owner: windowOwner(1),
+        role: 'acp-agent',
+        label: 'agent',
+        reapDescendantsOnRelease: true,
+        target: stubborn,
+      })
+
+      const pending = registry.reclaimOwner(windowOwner(1), { reason: 'x', graceMs: 100 })
+      await vi.advanceTimersByTimeAsync(100)
+      await pending
+      const callsAfterReclaim = backend.calls.length
+
+      stubborn.exit()
+      lease.dispose()
+      expect(backend.calls.length).toBe(callsAfterReclaim)
+    })
+  })
+
   it('dispose terminates every job synchronously and rejects later tracking', () => {
     const backend = new FakeBackend()
     const registry = winRegistry(backend)
@@ -396,6 +537,280 @@ describe('ProcessLifecycleRegistry (win32 job backend)', () => {
       'terminate:101',
     ])
     expect(registry.track({ pid: 12, owner: APP_OWNER, role: 'r', label: 'l' }).rejected).toBe(true)
+  })
+})
+
+describe('ProcessLifecycleRegistry orphan sweep (win32)', () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllEnvs()
+  })
+
+  function sweepRegistry(backend: JobBackend, killPid = vi.fn<(pid: number) => void>()) {
+    return {
+      killPid,
+      registry: new ProcessLifecycleRegistry({
+        backend,
+        platform: 'win32',
+        selfPid: 1,
+        killPid,
+      }),
+    }
+  }
+
+  function trackReap(registry: ProcessLifecycleRegistry, pid = 10) {
+    return registry.track({
+      pid,
+      owner: APP_OWNER,
+      role: 'acp-agent',
+      label: 'agent',
+      reapDescendantsOnRelease: true,
+    })
+  }
+
+  it('does not snapshot the machine when there is no reap job', () => {
+    const backend = new FakeBackend()
+    const { registry } = sweepRegistry(backend)
+    registry.track({ pid: 10, owner: APP_OWNER, role: 'pty', label: 'shell' })
+
+    registry.sweepOrphans()
+
+    expect(backend.listProcessesCalls).toBe(0)
+  })
+
+  it('kills dead-parent descendants only, skipping roots, self and live parents', () => {
+    const backend = new FakeBackend()
+    const { registry, killPid } = sweepRegistry(backend)
+    trackReap(registry)
+    backend.members.set(100n, [10, 11, 12, 13])
+    backend.processTable = [
+      { pid: 5, ppid: 0 },
+      { pid: 10, ppid: 5 },
+      { pid: 12, ppid: 15 },
+      { pid: 15, ppid: 5 },
+      { pid: 11, ppid: 98 },
+      { pid: 13, ppid: 99 },
+    ]
+
+    registry.sweepOrphans()
+
+    expect(killPid.mock.calls.map((c) => c[0]).sort()).toEqual([11, 13])
+  })
+
+  it('never kills the registry process itself', () => {
+    const backend = new FakeBackend()
+    const killPid = vi.fn<(pid: number) => void>()
+    const registry = new ProcessLifecycleRegistry({
+      backend,
+      platform: 'win32',
+      selfPid: 11,
+      killPid,
+    })
+    trackReap(registry)
+    backend.members.set(100n, [10, 11])
+    backend.processTable = [
+      { pid: 10, ppid: 5 },
+      { pid: 11, ppid: 99 },
+    ]
+
+    registry.sweepOrphans()
+
+    expect(killPid).not.toHaveBeenCalled()
+  })
+
+  it('skips non-reap jobs even when their parent is gone', () => {
+    const backend = new FakeBackend()
+    const { registry, killPid } = sweepRegistry(backend)
+    trackReap(registry) // job 100
+    registry.track({ pid: 20, owner: APP_OWNER, role: 'pty', label: 'shell' }) // job 101
+    backend.members.set(100n, [10])
+    backend.members.set(101n, [20, 21])
+    backend.processTable = [
+      { pid: 10, ppid: 5 },
+      { pid: 20, ppid: 5 },
+      { pid: 21, ppid: 99 },
+    ]
+
+    registry.sweepOrphans()
+
+    expect(killPid).not.toHaveBeenCalled()
+  })
+
+  it('closes the job after the last orphan is killed and the root is already gone', () => {
+    const backend = new FakeBackend()
+    const killPid = vi.fn((pid: number) => {
+      for (const [job, pids] of backend.members) {
+        backend.members.set(
+          job,
+          pids.filter((p) => p !== pid),
+        )
+      }
+    })
+    const { registry } = sweepRegistry(backend, killPid)
+    trackReap(registry)
+    backend.members.set(100n, [11]) // root 10 already exited
+    backend.processTable = [{ pid: 11, ppid: 99 }]
+
+    registry.sweepOrphans()
+
+    expect(killPid).toHaveBeenCalledWith(11)
+    expect(backend.closed.has(100n)).toBe(true)
+    expect(registry.listJobPids(APP_OWNER)).toEqual([])
+  })
+
+  it('keeps an emptied job alive while its root is still running', () => {
+    const backend = new FakeBackend()
+    const killPid = vi.fn((pid: number) => {
+      for (const [job, pids] of backend.members) {
+        backend.members.set(
+          job,
+          pids.filter((p) => p !== pid),
+        )
+      }
+    })
+    const { registry } = sweepRegistry(backend, killPid)
+    trackReap(registry)
+    backend.members.set(100n, [10, 11])
+    backend.processTable = [
+      { pid: 10, ppid: 5 },
+      { pid: 11, ppid: 99 },
+    ]
+
+    registry.sweepOrphans()
+
+    expect(killPid).toHaveBeenCalledWith(11)
+    expect(backend.closed.has(100n)).toBe(false)
+  })
+
+  it('survives a kill failure and keeps the job for the next pass', () => {
+    const backend = new FakeBackend()
+    const killPid = vi.fn(() => {
+      throw new Error('taskkill failed')
+    })
+    const { registry } = sweepRegistry(backend, killPid)
+    trackReap(registry)
+    backend.members.set(100n, [10, 11])
+    backend.processTable = [
+      { pid: 10, ppid: 5 },
+      { pid: 11, ppid: 99 },
+    ]
+
+    expect(() => registry.sweepOrphans()).not.toThrow()
+
+    expect(killPid).toHaveBeenCalledWith(11)
+    expect(backend.closed.has(100n)).toBe(false)
+  })
+
+  it('survives a snapshot failure and a per-job listPids failure', () => {
+    const backend = new FakeBackend()
+    const { registry, killPid } = sweepRegistry(backend)
+    trackReap(registry)
+    backend.members.set(100n, [10, 11])
+    backend.processTable = [
+      { pid: 10, ppid: 5 },
+      { pid: 11, ppid: 99 },
+    ]
+    vi.spyOn(backend, 'listProcesses').mockImplementation(() => {
+      throw new Error('snapshot failed')
+    })
+
+    expect(() => registry.sweepOrphans()).not.toThrow()
+    expect(killPid).not.toHaveBeenCalled()
+
+    vi.restoreAllMocks()
+    vi.spyOn(backend, 'listPids').mockImplementation(() => {
+      throw new Error('closed')
+    })
+    expect(() => registry.sweepOrphans()).not.toThrow()
+    expect(killPid).not.toHaveBeenCalled()
+  })
+
+  it('is a no-op without a backend, on POSIX, or with an old addon', () => {
+    const win = new ProcessLifecycleRegistry({ platform: 'win32', selfPid: 1 })
+    win.startOrphanSweep()
+    expect(vi.getTimerCount()).toBe(0)
+
+    const posix = new ProcessLifecycleRegistry({ platform: 'linux', selfPid: 1 })
+    posix.startOrphanSweep()
+    expect(vi.getTimerCount()).toBe(0)
+
+    const legacy = new ProcessLifecycleRegistry({
+      backend: new LegacyBackend(),
+      platform: 'win32',
+      selfPid: 1,
+    })
+    legacy.startOrphanSweep()
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('runs on the configured interval, is idempotent and stops on dispose', () => {
+    const backend = new FakeBackend()
+    const { registry } = sweepRegistry(backend)
+    trackReap(registry)
+    backend.processTable = [{ pid: 10, ppid: 5 }]
+
+    registry.startOrphanSweep(1000)
+    registry.startOrphanSweep(1000)
+    expect(vi.getTimerCount()).toBe(1)
+
+    vi.advanceTimersByTime(999)
+    expect(backend.listProcessesCalls).toBe(0)
+    vi.advanceTimersByTime(1)
+    expect(backend.listProcessesCalls).toBe(1)
+
+    registry.dispose()
+    vi.advanceTimersByTime(10_000)
+    expect(backend.listProcessesCalls).toBe(1)
+  })
+
+  it('honours UNIVERSE_ORPHAN_SWEEP_MS and falls back on invalid values', () => {
+    const backend = new FakeBackend()
+    const { registry } = sweepRegistry(backend)
+    trackReap(registry)
+    backend.processTable = [{ pid: 10, ppid: 5 }]
+
+    vi.stubEnv('UNIVERSE_ORPHAN_SWEEP_MS', '250')
+    registry.startOrphanSweep()
+    vi.advanceTimersByTime(250)
+    expect(backend.listProcessesCalls).toBe(1)
+
+    registry.dispose()
+    vi.unstubAllEnvs()
+
+    const invalidBackend = new FakeBackend()
+    const second = sweepRegistry(invalidBackend)
+    trackReap(second.registry)
+    invalidBackend.processTable = [{ pid: 10, ppid: 5 }]
+    vi.stubEnv('UNIVERSE_ORPHAN_SWEEP_MS', 'nope')
+    second.registry.startOrphanSweep()
+    vi.advanceTimersByTime(DEFAULT_ORPHAN_SWEEP_MS - 1)
+    expect(invalidBackend.listProcessesCalls).toBe(0)
+    vi.advanceTimersByTime(1)
+    expect(invalidBackend.listProcessesCalls).toBe(1)
+    second.registry.dispose()
+
+    // Node clamps delays above 2^31-1 down to 1ms; such a value must not become a busy loop.
+    const hugeBackend = new FakeBackend()
+    const third = sweepRegistry(hugeBackend)
+    trackReap(third.registry)
+    hugeBackend.processTable = [{ pid: 10, ppid: 5 }]
+    vi.stubEnv('UNIVERSE_ORPHAN_SWEEP_MS', '3000000000')
+    third.registry.startOrphanSweep()
+    vi.advanceTimersByTime(10)
+    expect(hugeBackend.listProcessesCalls).toBe(0)
+    vi.advanceTimersByTime(DEFAULT_ORPHAN_SWEEP_MS - 10)
+    expect(hugeBackend.listProcessesCalls).toBe(1)
+    third.registry.dispose()
+  })
+
+  it('can be disabled with UNIVERSE_DISABLE_ORPHAN_SWEEP=1', () => {
+    const backend = new FakeBackend()
+    const { registry } = sweepRegistry(backend)
+    trackReap(registry)
+    vi.stubEnv('UNIVERSE_DISABLE_ORPHAN_SWEEP', '1')
+    registry.startOrphanSweep()
+    expect(vi.getTimerCount()).toBe(0)
   })
 })
 
@@ -600,6 +1015,24 @@ describe('loadJobBackend', () => {
     const loaded = loadJobBackend('x', { platform: 'win32', load: () => backend })
     expect(loaded).toBe(backend)
   })
+
+  it('keeps an old addon without listProcesses and only disables the orphan sweep', () => {
+    const legacy = new LegacyBackend()
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+      error: vi.fn(),
+      trace: vi.fn(),
+    }
+    const loaded = loadJobBackend('x', {
+      platform: 'win32',
+      load: () => legacy,
+      logger: logger as never,
+    })
+    expect(loaded).toBe(legacy)
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no listProcesses'))
+  })
 })
 
 // --- ManagedChildProcess integration ----------------------------------------------------
@@ -651,6 +1084,28 @@ describe('ManagedChildProcess lifecycle binding', () => {
     expect(managed.contained).toBe(true)
     child.emit('exit', 0, null)
     expect(registry.snapshot()).toEqual([])
+    managed.dispose()
+  })
+
+  it('reaps descendants on exit when the lifecycle opts in', () => {
+    const backend = new FakeBackend()
+    const registry = winRegistry(backend)
+    const child = new FakeChild()
+    const managed = new ManagedChildProcess(child.asChild(), {
+      lifecycle: {
+        registry,
+        owner: windowOwner(1),
+        role: 'acp-agent',
+        reapDescendantsOnRelease: true,
+      },
+      label: 'agent',
+    })
+    backend.members.get(100n)!.push(11)
+
+    child.emit('exit', 0, null)
+
+    expect(backend.calls.slice(-2)).toEqual(['terminate:100', 'close:100'])
+    expect(backend.closed.has(100n)).toBe(true)
     managed.dispose()
   })
 

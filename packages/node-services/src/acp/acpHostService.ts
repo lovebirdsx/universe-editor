@@ -101,7 +101,12 @@ export interface AcpHostOptions {
    */
   readonly onSpawned?: (pid: number, label: string) => IDisposable | undefined
   /** Local editor only: bind every agent to an owner in the OS-level lifecycle registry. */
-  readonly lifecycle?: { readonly registry: ProcessLifecycleRegistry; readonly role: string }
+  readonly lifecycle?: {
+    readonly registry: ProcessLifecycleRegistry
+    readonly role: string
+    /** ACP agents: reap descendant processes when the agent exits (not the MCP default). */
+    readonly reapDescendantsOnRelease?: boolean
+  }
 }
 
 const defaultSpawner: AcpSpawner = (command, args, options) => {
@@ -262,6 +267,9 @@ export class AcpHostService extends Disposable implements IAcpHostService {
                 registry: this._lifecycle.registry,
                 owner: ctx.owner ?? APP_OWNER,
                 role: this._lifecycle.role,
+                ...(this._lifecycle.reapDescendantsOnRelease === true
+                  ? { reapDescendantsOnRelease: true }
+                  : {}),
               },
             }
           : {}),

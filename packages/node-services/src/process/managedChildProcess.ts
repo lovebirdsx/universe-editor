@@ -125,6 +125,8 @@ export interface ManagedLifecycleOptions {
    * loss, e.g. the extension host reaping tsserver); `kill` (default) is {@link kill}.
    */
   readonly stop?: 'kill' | 'stdin-eof'
+  /** Terminate the job's descendants when this child exits (ACP agents; off by default). */
+  readonly reapDescendantsOnRelease?: boolean
 }
 
 /**
@@ -213,6 +215,7 @@ export class ManagedChildProcess extends Disposable implements StoppableProcess 
         role: lifecycle.role,
         label: this._label,
         processGroup: this._processGroup,
+        ...(lifecycle.reapDescendantsOnRelease === true ? { reapDescendantsOnRelease: true } : {}),
         target: this,
       })
     } catch (err) {

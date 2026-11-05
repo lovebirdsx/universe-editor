@@ -55,6 +55,13 @@ export interface JobBackend {
   terminate(job: bigint, exitCode: number): boolean
   close(job: bigint): boolean
   listPids(job: bigint): number[]
+  /** Whole-machine pid -> ppid snapshot; absent on older addons (orphan sweep disabled). */
+  listProcesses?(): ReadonlyArray<ProcessIdPair>
+}
+
+export interface ProcessIdPair {
+  readonly pid: number
+  readonly ppid: number
 }
 
 /** What the registry needs from a tracked process in order to stop it gracefully. */
@@ -74,6 +81,12 @@ export interface TrackProcessSpec {
   readonly label: string
   /** The child was spawned `detached` on POSIX, so `pid` is also its process-group id. */
   readonly processGroup?: boolean
+  /**
+   * On lease release, terminate + close the job even when descendants survive, instead of
+   * keeping it for owner reclaim. ACP agents opt in: their bash/MCP descendants must not
+   * outlive the agent. Default false — pty keeps user background programs on purpose.
+   */
+  readonly reapDescendantsOnRelease?: boolean
   readonly target?: StoppableProcess
 }
 
@@ -117,6 +130,18 @@ export interface ProcessLifecycleRegistryOptions {
 }
 
 export const DEFAULT_RECLAIM_GRACE_MS = 2500
+export const DEFAULT_ORPHAN_SWEEP_MS = 30_000
+// Node clamps timer delays above 2^31-1 to 1ms; accepting such a value would turn the
+// sweep into a busy loop that takes a system snapshot and runs taskkill on every tick.
+const MAX_SWEEP_INTERVAL_MS = 0x7fffffff
+
+function parseSweepInterval(raw: string | undefined): number {
+  if (raw === undefined) return DEFAULT_ORPHAN_SWEEP_MS
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= MAX_SWEEP_INTERVAL_MS
+    ? parsed
+    : DEFAULT_ORPHAN_SWEEP_MS
+}
 
 interface Entry {
   readonly spec: TrackProcessSpec
@@ -137,6 +162,8 @@ interface Slot {
    * does not.
    */
   readonly jobs: Set<bigint>
+  /** Root pid + reap policy per job, so orphan sweeps can skip roots and non-reap trees. */
+  readonly jobRoots: Map<bigint, { readonly pid: number; readonly reap: boolean }>
   jobFailed: boolean
   readonly entries: Set<Entry>
   /** Process-group ids kept after the leader exits: orphans may still be in the group. */
@@ -211,6 +238,7 @@ export class ProcessLifecycleRegistry implements IDisposable {
   private readonly _pendingWaits = new Set<() => void>()
   private readonly _byPid = new Map<number, Entry>()
   private readonly _retired = new Set<string>()
+  private _orphanSweepTimer: ReturnType<typeof setInterval> | undefined
   private _disposed = false
 
   constructor(options: ProcessLifecycleRegistryOptions = {}) {
@@ -265,6 +293,106 @@ export class ProcessLifecycleRegistry implements IDisposable {
     return [...pids]
   }
 
+  /**
+   * Periodically reap descendants that outlived their parent inside a reap-enabled job
+   * (ACP agents). The Claude CLI's TaskStop can leave a grandchild behind on Windows; the
+   * job still contains it, but without this it would survive until owner reclaim.
+   */
+  startOrphanSweep(intervalMs?: number): void {
+    if (this._disposed || this._orphanSweepTimer !== undefined) return
+    const backend = this._backend
+    if (this._platform !== 'win32' || !backend || typeof backend.listProcesses !== 'function') {
+      return
+    }
+    if (process.env['UNIVERSE_DISABLE_ORPHAN_SWEEP'] === '1') return
+    const interval = intervalMs ?? parseSweepInterval(process.env['UNIVERSE_ORPHAN_SWEEP_MS'])
+    this._orphanSweepTimer = setInterval(() => {
+      try {
+        this.sweepOrphans()
+      } catch (err) {
+        this._logger?.warn(`orphan sweep failed: ${String(err)}`)
+      }
+    }, interval)
+    this._orphanSweepTimer.unref?.()
+  }
+
+  /** One orphan pass over reap-enabled jobs. Public for tests and diagnostics. */
+  sweepOrphans(): void {
+    if (this._disposed || this._platform !== 'win32') return
+    const backend = this._backend
+    if (!backend) return
+    const listProcesses = backend.listProcesses
+    if (typeof listProcesses !== 'function') return
+
+    // Cheap pre-check: most apps have no ACP agent tree, so never take a system snapshot.
+    let hasReapJob = false
+    for (const slot of this._slots.values()) {
+      for (const job of slot.jobs) {
+        if (slot.jobRoots.get(job)?.reap === true) {
+          hasReapJob = true
+          break
+        }
+      }
+      if (hasReapJob) break
+    }
+    if (!hasReapJob) return
+
+    let rows: ReadonlyArray<ProcessIdPair>
+    try {
+      rows = listProcesses.call(backend)
+    } catch (err) {
+      this._logger?.warn(`orphan sweep snapshot failed: ${String(err)}`)
+      return
+    }
+    const alive = new Set<number>()
+    const parentOf = new Map<number, number>()
+    for (const row of rows) {
+      if (!Number.isInteger(row.pid) || row.pid <= 0) continue
+      alive.add(row.pid)
+      if (Number.isInteger(row.ppid)) parentOf.set(row.pid, row.ppid)
+    }
+
+    for (const slot of this._slots.values()) {
+      for (const job of [...slot.jobs]) {
+        const root = slot.jobRoots.get(job)
+        if (root?.reap !== true) continue
+        let members: number[]
+        try {
+          members = backend.listPids(job)
+        } catch {
+          continue
+        }
+        const killed: number[] = []
+        for (const pid of members) {
+          if (pid <= 0 || pid === this._selfPid || pid === root.pid) continue
+          const ppid = parentOf.get(pid)
+          // Missing snapshot entry / missing parent / live parent: not an orphan. A reused
+          // parent pid reads as live and is left alone — owner reclaim still covers it.
+          if (ppid === undefined || ppid <= 0 || alive.has(ppid)) continue
+          try {
+            this._killPid(pid)
+            killed.push(pid)
+          } catch (err) {
+            this._logger?.warn(`orphan kill failed pid=${pid}: ${String(err)}`)
+          }
+        }
+        if (killed.length === 0) continue
+        this._logger?.info(`orphan sweep owner=${slot.key} killedPids=[${killed.join(',')}]`)
+        try {
+          // Close an emptied job only when its root is gone too: listPids can come back
+          // empty on error, and closing a job with a live root would kill the agent.
+          if (backend.listPids(job).length === 0 && !alive.has(root.pid)) {
+            slot.jobs.delete(job)
+            slot.jobRoots.delete(job)
+            this._closeJob(job)
+          }
+        } catch {
+          // Membership cannot be re-checked now; owner reclaim remains the fallback.
+        }
+      }
+    }
+  }
+
   track(spec: TrackProcessSpec): ProcessLease {
     const key = ownerKey(spec.owner)
     const tag = `${spec.role}:${spec.label} pid=${spec.pid} owner=${key}`
@@ -300,6 +428,12 @@ export class ProcessLifecycleRegistry implements IDisposable {
       const assigned = this._assignToJob(slot, spec, tag)
       entry.contained = assigned.contained
       entry.job = assigned.job
+      if (assigned.job !== undefined) {
+        slot.jobRoots.set(assigned.job, {
+          pid: spec.pid,
+          reap: spec.reapDescendantsOnRelease === true,
+        })
+      }
     } else if (spec.processGroup === true && this._platform !== 'win32') {
       // pid is the group leader (spawned detached) — group kill at reclaim covers descendants.
       slot.groups.add(spec.pid)
@@ -382,6 +516,10 @@ export class ProcessLifecycleRegistry implements IDisposable {
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
+    if (this._orphanSweepTimer !== undefined) {
+      clearInterval(this._orphanSweepTimer)
+      this._orphanSweepTimer = undefined
+    }
     // Settle in-flight grace waits first: they hold exit-event subscriptions and their
     // timer is unref'd, so quitting mid-wait would otherwise leak those subscriptions
     // past `process.on('exit')` (the main-process tracker reports there).
@@ -405,7 +543,14 @@ export class ProcessLifecycleRegistry implements IDisposable {
   private _slotFor(key: string): Slot {
     let slot = this._slots.get(key)
     if (!slot) {
-      slot = { key, jobs: new Set(), jobFailed: false, entries: new Set(), groups: new Set() }
+      slot = {
+        key,
+        jobs: new Set(),
+        jobRoots: new Map(),
+        jobFailed: false,
+        entries: new Set(),
+        groups: new Set(),
+      }
       this._slots.set(key, slot)
     }
     return slot
@@ -497,8 +642,9 @@ export class ProcessLifecycleRegistry implements IDisposable {
   /**
    * Close the entry's job once its tree is empty. A job that still holds descendants is
    * kept for reclaim: closing it early would kill them at release time, which is the
-   * owner's decision, not the releasing child's. Such jobs get one delayed re-check so an
-   * app-owned tree that empties out later does not pin its handle until app quit.
+   * owner's decision, not the releasing child's. `reapDescendantsOnRelease` is the explicit
+   * exception (ACP agents): their descendants must die with the agent, so the job is
+   * terminated and closed here instead of waiting for owner reclaim.
    */
   private _releaseJob(entry: Entry): void {
     const job = entry.job
@@ -509,6 +655,21 @@ export class ProcessLifecycleRegistry implements IDisposable {
     // lands here later). Touching the handle now could close a REUSED handle of another
     // job — KILL_ON_JOB_CLOSE would then take down the wrong process tree.
     if (!slot.jobs.has(job)) return
+    const root = slot.jobRoots.get(job)
+    if (root?.reap === true) {
+      slot.jobs.delete(job)
+      slot.jobRoots.delete(job)
+      try {
+        if (this._backend?.terminate(job, 1) === false) {
+          this._logger?.warn(`job terminate on release returned false handle=${String(job)}`)
+        }
+      } catch (err) {
+        this._logger?.warn(`job terminate on release failed: ${String(err)}`)
+      }
+      // terminate is best effort; closing the job is the actual guarantee (KILL_ON_JOB_CLOSE).
+      this._closeJob(job)
+      return
+    }
     let survivors: number[]
     try {
       survivors = this._backend?.listPids(job) ?? []
@@ -522,6 +683,7 @@ export class ProcessLifecycleRegistry implements IDisposable {
       return
     }
     slot.jobs.delete(job)
+    slot.jobRoots.delete(job)
     this._closeJob(job)
   }
 
@@ -537,6 +699,7 @@ export class ProcessLifecycleRegistry implements IDisposable {
       }
       if (survivors.some((pid) => pid !== ownPid)) return
       slot.jobs.delete(job)
+      slot.jobRoots.delete(job)
       this._closeJob(job)
     }, ORPHAN_JOB_SWEEP_MS)
     timer.unref?.()
@@ -615,6 +778,7 @@ export class ProcessLifecycleRegistry implements IDisposable {
       entry.job = undefined
     }
     if (this._backend) slot.jobs.clear()
+    slot.jobRoots.clear()
     for (const pgid of slot.groups) {
       if (pgid > 1 && pgid !== this._selfPid) {
         if (this._groupAlive(pgid)) killed.add(pgid)

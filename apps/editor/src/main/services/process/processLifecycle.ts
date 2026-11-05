@@ -27,5 +27,6 @@ export function resolveProcessJobAddonPath(): string {
 export function initProcessLifecycle(logger: ILogger): void {
   const backend = loadJobBackend(resolveProcessJobAddonPath(), { logger })
   processLifecycle.configure({ backend, logger })
+  processLifecycle.startOrphanSweep()
   logger.info(`process lifecycle ready jobBackend=${backend !== undefined}`)
 }

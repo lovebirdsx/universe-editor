@@ -7,9 +7,11 @@
 // handle after close(), so no finalizer/external is needed.
 #include <node_api.h>
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -158,6 +160,50 @@ napi_value ListPids(napi_env env, napi_callback_info cbinfo) {
   }
 }
 
+// Whole-machine pid -> ppid snapshot. The orphan sweep needs it because a process whose
+// parent exited is no longer reachable from getProcessList(root): the link is gone, not
+// the process. Deliberately has no fixed capacity: truncating the snapshot would make a
+// still-alive parent look dead and turn its children into false orphans.
+napi_value ListProcesses(napi_env env, napi_callback_info) {
+  HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snapshot == INVALID_HANDLE_VALUE) {
+    return ThrowWin32(env, "CreateToolhelp32Snapshot", GetLastError());
+  }
+
+  PROCESSENTRY32W entry = {};
+  entry.dwSize = sizeof(entry);
+  std::vector<std::pair<uint32_t, uint32_t>> rows;
+  if (!Process32FirstW(snapshot, &entry)) {
+    DWORD err = GetLastError();
+    CloseHandle(snapshot);
+    return ThrowWin32(env, "Process32FirstW", err);
+  }
+  do {
+    if (entry.th32ProcessID != 0) {
+      rows.emplace_back(entry.th32ProcessID, entry.th32ParentProcessID);
+    }
+  } while (Process32NextW(snapshot, &entry));
+  DWORD err = GetLastError();
+  CloseHandle(snapshot);
+  // Process32NextW reports the normal end of enumeration this way.
+  if (err != ERROR_NO_MORE_FILES) return ThrowWin32(env, "Process32NextW", err);
+
+  napi_value array;
+  napi_create_array_with_length(env, rows.size(), &array);
+  for (size_t i = 0; i < rows.size(); i++) {
+    napi_value item;
+    napi_create_object(env, &item);
+    napi_value pid;
+    napi_create_uint32(env, rows[i].first, &pid);
+    napi_set_named_property(env, item, "pid", pid);
+    napi_value ppid;
+    napi_create_uint32(env, rows[i].second, &ppid);
+    napi_set_named_property(env, item, "ppid", ppid);
+    napi_set_element(env, array, static_cast<uint32_t>(i), item);
+  }
+  return array;
+}
+
 napi_value Init(napi_env env, napi_value exports) {
   napi_property_descriptor props[] = {
       {"createJob", nullptr, CreateJob, nullptr, nullptr, nullptr, napi_default, nullptr},
@@ -165,6 +211,7 @@ napi_value Init(napi_env env, napi_value exports) {
       {"terminate", nullptr, Terminate, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"close", nullptr, Close, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"listPids", nullptr, ListPids, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"listProcesses", nullptr, ListProcesses, nullptr, nullptr, nullptr, napi_default, nullptr},
   };
   napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
   return exports;

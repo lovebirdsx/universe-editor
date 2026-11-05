@@ -20,6 +20,8 @@
  *  used by E2E to exercise the editor's optimistic "connecting" session row.
  *  ECHO_AGENT_TURN_END_GATE=<path>: 流式指令改等 <path> 出现再收尾（未设＝固定 500ms）。
  *  ECHO_AGENT_STREAM_CONTINUE_GATE=<path>: emit-subagent 发完首块再等 <path> 才继续。
+ *  ECHO_AGENT_PID_FILE / ECHO_AGENT_ORPHAN_FILE / ECHO_AGENT_TREE_VIA_WRAPPER /
+ *  ECHO_AGENT_EXIT_AFTER_MS：进程树夹具，见下方 spawn 块的注释。
  *    - session/prompt                    → emits two session/update chunks and
  *                                          a tool_call cycle, then resolves
  *                                          with stopReason='end_turn'
@@ -53,6 +55,7 @@
 
 'use strict'
 
+const { spawn } = require('node:child_process')
 const { existsSync, mkdirSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
 const { basename, join } = require('node:path')
@@ -75,13 +78,68 @@ const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
 
 // ECHO_AGENT_PID_FILE=<path>: write this agent's pid plus a freshly spawned grandchild's pid
 // ("<agent> <grandchild>") — lets E2E assert the whole tree dies with its window / the editor.
-if (process.env.ECHO_AGENT_PID_FILE) {
-  const grandchild = require('node:child_process').spawn(
-    process.execPath,
-    ['-e', 'setInterval(() => {}, 1000)'],
-    { stdio: 'ignore', windowsHide: true },
-  )
-  writeFileSync(process.env.ECHO_AGENT_PID_FILE, `${process.pid} ${grandchild.pid}`, 'utf8')
+// ECHO_AGENT_ORPHAN_FILE=<path>: spawn a grandchild through a short-lived PowerShell wrapper
+// and write its pid — the wrapper exits immediately, leaving "ppid already gone" inside the
+// editor's job for the orphan sweep. Only meaningful on Windows.
+// ECHO_AGENT_TREE_VIA_WRAPPER=1: the ECHO_AGENT_PID_FILE grandchild also goes through that
+// wrapper. Node puts its own children in a per-process job and reaps them on exit, so a plain
+// `spawn` grandchild would die with the agent for reasons unrelated to the editor's job and
+// hide a broken release-time reap. Wrapper children stay only in the editor's job.
+// ECHO_AGENT_EXIT_AFTER_MS=<ms>: exit this agent once the pid file is written (P0 release reap).
+const WRAPPER_SCRIPT = [
+  '$psi = New-Object System.Diagnostics.ProcessStartInfo',
+  `$psi.FileName = '${process.execPath.replace(/'/g, "''")}'`,
+  `$psi.Arguments = '-e "setInterval(()=>{},1000)"'`,
+  '$psi.UseShellExecute = $false',
+  '$psi.CreateNoWindow = $true',
+  '$p = [System.Diagnostics.Process]::Start($psi)',
+  "Write-Output ('child=' + $p.Id)",
+  // Keep the parent alive long enough for a spec to observe the child while the parent is
+  // still there; it exits afterwards and the child becomes the dead-parent orphan.
+  'Start-Sleep -Milliseconds 3000',
+].join('; ')
+
+function spawnThroughWrapper(onPid) {
+  const wrapper = spawn('powershell.exe', ['-NoProfile', '-Command', WRAPPER_SCRIPT], {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  })
+  let buffer = ''
+  let reported = false
+  wrapper.stdout.on('data', (chunk) => {
+    buffer += chunk
+    if (reported) return
+    const match = /child=(\d+)\r?\n/.exec(buffer)
+    if (match) {
+      reported = true
+      onPid(Number(match[1]))
+    }
+  })
+  return wrapper
+}
+
+const pidFile = process.env.ECHO_AGENT_PID_FILE
+if (pidFile) {
+  const exitAfterMs = Number(process.env.ECHO_AGENT_EXIT_AFTER_MS ?? 0)
+  const onGrandchildPid = (grandchildPid) => {
+    writeFileSync(pidFile, `${process.pid} ${grandchildPid}`, 'utf8')
+    if (exitAfterMs > 0) setTimeout(() => process.exit(0), exitAfterMs)
+  }
+  if (process.env.ECHO_AGENT_TREE_VIA_WRAPPER === '1') {
+    spawnThroughWrapper(onGrandchildPid)
+  } else {
+    const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    })
+    onGrandchildPid(grandchild.pid)
+  }
+}
+
+if (process.env.ECHO_AGENT_ORPHAN_FILE) {
+  spawnThroughWrapper((orphanPid) => {
+    writeFileSync(process.env.ECHO_AGENT_ORPHAN_FILE, String(orphanPid), 'utf8')
+  })
 }
 const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
 
