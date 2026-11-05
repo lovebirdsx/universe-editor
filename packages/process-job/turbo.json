@@ -1,0 +1,13 @@
+{
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "inputs": ["native/**", "binding.gyp", "scripts/**", "package.json"],
+      "outputs": ["build/Release/process_job.node"]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "inputs": ["test/**", "native/**", "binding.gyp", "scripts/**", "package.json"]
+    }
+  }
+}

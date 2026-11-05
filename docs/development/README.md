@@ -16,6 +16,7 @@
 ## 构建与发布
 
 - [构建与工具链](build-tooling.md) — turbo 依赖图（跨包引源码/dist 必须声明 workspace 依赖，缺边=CI-only 竞态）、子进程 spawn 三坑（交互 CLI stdin 挂起 / win32 cmd caret 转义 / 转义为何单测测不到）、tsgo 类型检查（WSL 时钟漂移幽灵报错与仓库侧守卫 / tsgo·tsc 跨平台分歧的 tsc 复现法）、electron-builder 打包与 pnpm 安装、`check` 与 `check:full` 的组成差异（非超集）。
+- [本地子进程 OS 级生命周期绑定](process-lifecycle.md) — Windows Job Object / POSIX 进程组保证窗口关闭与 main 强杀后不残留子进程树；嵌套 job 分析、降级矩阵、回收顺序、取舍（pty 内 GUI 程序随窗口死）与排障开关。
 - [发布外部扩展](publishing-extensions.md) — `pnpm ext:release` 把 `extensions-external/*` 自动打包成 `.vsix` 并发布进市场（自动发现、增量跳过）。
 - [发布扩展 SDK（npm）](publishing-sdk.md) — `@universe-editor/extension-api` 等发布集合发公开 npm 的手动流程 + 内网 tarball 托管 fallback。
 - [配置扩展市场服务器](marketplace-server.md) — 自建市场后端：`/extensionquery` 协议、registry 格式、部署与联调。

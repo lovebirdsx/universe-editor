@@ -27,6 +27,7 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { ManagedChildProcess } from '../process/managedChildProcess.js'
+import { APP_OWNER, type ProcessLifecycleRegistry } from '../process/processLifecycle.js'
 import {
   escapeForRegex,
   expandExcludeGlob,
@@ -245,6 +246,11 @@ export function rgErrorMsgForDisplay(msg: string): string | undefined {
   return undefined
 }
 
+export interface TextSearchServiceOptions {
+  /** Local editor only: bind every rg child to the app owner in the OS-level lifecycle registry. */
+  readonly lifecycle?: { readonly registry: ProcessLifecycleRegistry }
+}
+
 export class TextSearchService extends Disposable implements ITextSearchMainService {
   declare readonly _serviceBrand: undefined
 
@@ -259,9 +265,12 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
   )
   readonly onDidSearchResults = this._onDidSearchResults.event
 
-  constructor(loggerService?: ILoggerServiceType) {
+  private readonly _lifecycle: TextSearchServiceOptions['lifecycle']
+
+  constructor(loggerService?: ILoggerServiceType, options: TextSearchServiceOptions = {}) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'textSearch', name: 'Text Search' })
+    this._lifecycle = options.lifecycle
   }
 
   async search(query: ITextSearchMainQuery): Promise<ITextSearchMainComplete> {
@@ -427,6 +436,15 @@ export class TextSearchService extends Disposable implements ITextSearchMainServ
           {
             logger: this._logger,
             label: `${query.sessionId}:${label}`,
+            ...(this._lifecycle
+              ? {
+                  lifecycle: {
+                    registry: this._lifecycle.registry,
+                    owner: APP_OWNER,
+                    role: 'ripgrep',
+                  },
+                }
+              : {}),
           },
         )
         running.processes.add(child)

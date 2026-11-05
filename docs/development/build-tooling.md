@@ -70,6 +70,8 @@ tsc 报错即真错。噪音识别：tsc 与 tsgo 的 DOM lib 有已知差异（
 
 在 `electron-builder.yml` 的 `asarUnpack` 加 `**/node_modules/<pkg>/**`（带子包的原生模块连 `**/node_modules/<pkg>-*/**` 一起加，现有条目可照抄：`@parcel/watcher`、`@vscode/ripgrep`、`@lydell/node-pty`、`@vscode/windows-process-tree`），并保持 `npmRebuild: false`——这些都是 prebuilt N-API，无需重编。
 
+**自编原生 addon（`packages/process-job`）**不走 npm prebuilt：win32 上 `install` 阶段 node-gyp 构建，经 `.runtime-resources` → `resources/process-job/process_job.node` 打包（`runtime-resources.mjs` stage + verify，缺失即失败）；非 win32 跳过。机制见 [process-lifecycle.md](process-lifecycle.md)。
+
 ### 4.3 本机验证
 
 ```bash

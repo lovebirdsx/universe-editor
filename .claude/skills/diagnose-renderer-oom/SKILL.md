@@ -13,7 +13,7 @@ renderer OOM 是「堆在被压垮之前没有观测」的那类事故：rendere
 
 1. **`processMetrics.log` 的 renderer 内存曲线**。两条线分开读：main 每 30s（有进程超 2GB 时 10s）写 `pid=… type=Tab mem=…MB cpu=…%`（`app.getAppMetrics()` 的 OS 工作集，看不到 V8 堆膨胀）+ renderer 自报的 `renderer-heap window=… used=…MB limit=…MB usedPct=… level=… holders=…`（`apps/editor/src/renderer/services/memory/rendererHeapReporter.ts`）。判据优先于数值：`used` 涨而 `holders` 不涨 = **元凶不在已知持有者里**（`unexplained=` 就是那个差值）；`level=critical` 在线上方停了多久 = releaser 是否有效。诊断包里 `memory.txt` 另存曲线尾部 32 条——日志尾部有 512KiB 截断，会恰好丢掉慢速爬升最早的那几条。
 2. **`acpSessionRestore.log` 的 `skipping auto-restore of session <id>: recent OOM crash in this window`**（`apps/editor/src/renderer/services/acp/session/acpSessionRestoreCoordinator.ts:250`，通道 id `acpSessionRestore` 在同文件 `:151`）。这行是**判决书**：出现即本窗口刚发生过被判定为 OOM 的崩溃，且自动恢复已被保护性跳过——别把「重启后会话没回来」再当独立 bug 查。
-3. **`processes.txt` 里同一 session 的多个 `--resume` 命令行**（如 3 个 `claude.exe --resume=<同一 session>`）。renderer 崩溃后旧 agent 进程无人回收，crash reload 又 spawn 一个新的：这些孤儿还在后台读扫，放大下一轮压力。修法（`AcpHostMainService`/`ExtensionHostMainService` 的 `stopAllForWindow`）与计数器口径见 `docs/development/memory-pressure.md`「崩溃恢复链路」。
+3. **`processes.txt` 里同一 session 的多个 `--resume` 命令行**（如 3 个 `claude.exe --resume=<同一 session>`）。renderer 崩溃后旧 agent 进程无人回收，crash reload 又 spawn 一个新的：这些孤儿还在后台读扫，放大下一轮压力。修法（`windowMainService` 调 `processLifecycle.reclaimOwner(windowOwner(id), …)`，见 `docs/development/process-lifecycle.md`）与计数器口径见 `docs/development/memory-pressure.md`「崩溃恢复链路」。
 
 **旁证**：`sessionWatchedChanges.log`（通道 id `sessionWatchedChanges`，`apps/editor/src/renderer/contributions/SessionWatchedChangesContribution.ts:105`）的 watched-change storm = 大规模工具活动正在发生，用于解释「为什么这个会话在长」；它本身不是死因。
 

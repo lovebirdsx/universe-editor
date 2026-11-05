@@ -15,6 +15,7 @@
 
 import { app, type BrowserWindow } from 'electron'
 import { DisposableStore } from '@universe-editor/platform'
+import { windowOwner } from '@universe-editor/node-services'
 import { parse as parseJsonc } from 'jsonc-parser'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -165,7 +166,13 @@ export async function createWindowScopedServices(opts: {
   const logChannel = new MainLogChannelService(logService, win.id)
   const logFiles = new LogFilesMainService(logService, win.id)
   const terminal = disposables.add(
-    new TerminalMainService(undefined, logService, appServices.remoteConnection),
+    new TerminalMainService(
+      undefined,
+      logService,
+      appServices.remoteConnection,
+      undefined,
+      windowOwner(win.id),
+    ),
   )
   const fileWatcher = disposables.add(
     new FileWatcherMainService(

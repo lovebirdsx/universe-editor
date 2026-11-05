@@ -147,6 +147,9 @@ catalogs:
     monaco-editor:
       specifier: ^0.55.0
       version: 0.55.1
+    node-gyp:
+      specifier: 12.4.0
+      version: 12.4.0
     pixelmatch:
       specifier: ^5.3.0
       version: 5.3.0
@@ -367,6 +370,9 @@ importers:
       '@universe-editor/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      '@universe-editor/process-job':
+        specifier: workspace:*
+        version: link:../../packages/process-job
       '@universe-editor/temp-root':
         specifier: workspace:*
         version: link:../../packages/temp-root
@@ -1066,6 +1072,12 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.33.0)
+
+  packages/process-job:
+    devDependencies:
+      node-gyp:
+        specifier: 'catalog:'
+        version: 12.4.0
 
   packages/remote-server:
     dependencies:

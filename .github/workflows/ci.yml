@@ -451,6 +451,18 @@ jobs:
           TURBO_CONCURRENCY: ${{ runner.os == 'Windows' && 2 || 10 }}
         run: pnpm build
 
+      # The Job Object addon's real-OS tests self-skip everywhere but Windows, so the
+      # Linux `ci` job can never cover them. This is the Windows leg that runs on every
+      # PR touching core packages — gate the addon here (shard 2 would be a duplicate).
+      # The existence check keeps the gate honest: the spec file skips itself when the
+      # addon is missing, which would otherwise turn a silently-broken build green.
+      - name: Process Job addon tests (Windows)
+        if: runner.os == 'Windows' && matrix.shard == 1
+        shell: bash
+        run: |
+          test -f packages/process-job/build/Release/process_job.node
+          pnpm --filter @universe-editor/process-job test
+
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2

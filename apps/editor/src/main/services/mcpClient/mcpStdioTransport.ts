@@ -13,6 +13,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { DisposableStore, type Event } from '@universe-editor/platform'
+import type { AcpStartContext } from '@universe-editor/node-services'
 import type {
   AcpExitEvent,
   AcpLaunchSpec,
@@ -37,7 +38,7 @@ export const MCP_MAX_BUFFER_CHARS = 8 * 1024 * 1024
  * hand over a fake with three methods and three emitters.
  */
 export interface McpStdioHost {
-  start(spec: AcpLaunchSpec): Promise<AcpStartResult>
+  start(spec: AcpLaunchSpec, ctx?: AcpStartContext): Promise<AcpStartResult>
   writeStdin(handle: string, data: string): Promise<void>
   stop(handle: string): Promise<void>
   readonly onStdout: Event<AcpStdioChunk>
@@ -74,10 +75,12 @@ export class McpStdioTransport implements McpTransport {
   constructor(
     private readonly _host: McpStdioHost,
     private readonly _spec: AcpLaunchSpec,
+    /** Lifecycle owner of the spawned server (its window); omitted for unscoped/test use. */
+    private readonly _ctx?: AcpStartContext,
   ) {}
 
   async start(): Promise<void> {
-    const result = await this._host.start(this._spec)
+    const result = await this._host.start(this._spec, this._ctx)
     if (this._closing || this._closed) {
       await this._host.stop(result.handle).catch(() => undefined)
       return

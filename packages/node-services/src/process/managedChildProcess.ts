@@ -15,6 +15,12 @@
 
 import { execFile, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
+import type {
+  ProcessLease,
+  ProcessLifecycleRegistry,
+  ProcessOwner,
+  StoppableProcess,
+} from './processLifecycle.js'
 
 export const DEFAULT_KILL_TIMEOUT_MS = 2000
 
@@ -98,6 +104,27 @@ export interface ManagedChildOptions {
   readonly killTree?: TreeKiller
   /** Host-side hook bracketing a synchronous kill (e.g. shutdown trace marks). */
   readonly shutdownMark?: (label: string) => void
+  /**
+   * The child was spawned `detached` on POSIX (see `processGroupSpawnOptions`), so it leads
+   * its own process group: signals go to the whole group and descendants die with it.
+   * Ignored on Windows, where containment is a Job Object (see `lifecycle`).
+   */
+  readonly processGroup?: boolean
+  /** Bind the child to an owner so the OS-level container reaps its whole tree. */
+  readonly lifecycle?: ManagedLifecycleOptions
+}
+
+export interface ManagedLifecycleOptions {
+  readonly registry: ProcessLifecycleRegistry
+  readonly owner: ProcessOwner
+  /** Diagnostic role (`extension-host`, `acp-agent`, …). */
+  readonly role: string
+  /**
+   * How an owner reclaim first asks this child to stop, before the hard kill:
+   * `stdin-eof` closes its stdin (children that run their own shutdown cascade on parent
+   * loss, e.g. the extension host reaping tsserver); `kill` (default) is {@link kill}.
+   */
+  readonly stop?: 'kill' | 'stdin-eof'
 }
 
 /**
@@ -105,7 +132,7 @@ export interface ManagedChildOptions {
  * buffers and exactly one {@link ManagedExit} (whether the child exited, errored
  * on spawn, or was force-killed).
  */
-export class ManagedChildProcess extends Disposable {
+export class ManagedChildProcess extends Disposable implements StoppableProcess {
   private readonly _onStdout = this._register(new Emitter<Buffer>())
   readonly onStdout = this._onStdout.event
 
@@ -121,6 +148,10 @@ export class ManagedChildProcess extends Disposable {
   private readonly _treeKill: boolean
   private readonly _killTree: TreeKiller
   private readonly _shutdownMark: ((label: string) => void) | undefined
+  private readonly _processGroup: boolean
+  private readonly _lifecycle: ManagedLifecycleOptions | undefined
+  private _lease: ProcessLease | undefined
+  private _stopTimer: ReturnType<typeof setTimeout> | undefined
 
   private _exited = false
   private _forced = false
@@ -155,12 +186,49 @@ export class ManagedChildProcess extends Disposable {
     this._treeKill = options.treeKill ?? false
     this._killTree = options.killTree ?? defaultTreeKiller
     this._shutdownMark = options.shutdownMark
+    this._processGroup = options.processGroup === true && process.platform !== 'win32'
+    this._lifecycle = options.lifecycle
 
     _child.stdout.on('data', this._onStdoutData)
     _child.stderr.on('data', this._onStderrData)
     _child.stdin.on('error', this._onStdinError)
     _child.on('error', this._onChildError)
     _child.on('exit', this._onChildExit)
+    this._bindLifecycle()
+  }
+
+  /**
+   * Assign right after spawn, in the same tick: a grandchild forked before the assign would
+   * not be in the container. Never throws and never blocks the spawn — a failed assign just
+   * leaves the child uncontained (reclaim then falls back to {@link hardKill}).
+   */
+  private _bindLifecycle(): void {
+    const lifecycle = this._lifecycle
+    const pid = this._child.pid
+    if (!lifecycle || pid === undefined) return
+    try {
+      this._lease = lifecycle.registry.track({
+        pid,
+        owner: lifecycle.owner,
+        role: lifecycle.role,
+        label: this._label,
+        processGroup: this._processGroup,
+        target: this,
+      })
+    } catch (err) {
+      this._logger?.warn(
+        `ManagedChildProcess(${this._label}): lifecycle track failed: ${(err as Error).message}`,
+      )
+      return
+    }
+    if (this._lease.rejected) {
+      // The owner (a closed window) is gone: a spawn that was in flight when it was
+      // reclaimed must not outlive it.
+      this._logger?.warn(
+        `ManagedChildProcess(${this._label}): owner already reclaimed — killing immediately`,
+      )
+      this.kill()
+    }
   }
 
   private readonly _onStdoutData = (data: Buffer): void => this._onStdout.fire(data)
@@ -206,6 +274,11 @@ export class ManagedChildProcess extends Disposable {
 
   get exited(): boolean {
     return this._exited
+  }
+
+  /** True when the kernel (job / process group) guarantees the tree dies with its owner. */
+  get contained(): boolean {
+    return this._lease?.contained ?? false
   }
 
   writeStdin(data: string): Promise<void> {
@@ -317,6 +390,33 @@ export class ManagedChildProcess extends Disposable {
     }, this._killTimeoutMs)
   }
 
+  /**
+   * Owner-reclaim entry point: the graceful half of the two-phase stop (the registry
+   * hard-kills whatever is left afterwards). Idempotent.
+   */
+  requestStop(): void {
+    if (this._exited) return
+    if (this._lifecycle?.stop === 'stdin-eof') {
+      this.endStdin()
+      if (this._stopTimer) return
+      this._stopTimer = setTimeout(() => {
+        this._stopTimer = undefined
+        if (!this._exited) this.kill()
+      }, this._killTimeoutMs)
+      this._stopTimer.unref?.()
+      return
+    }
+    this.kill()
+  }
+
+  /** Unconditional forced termination (tree on Windows, group on POSIX); skips grace timers. */
+  hardKill(): void {
+    if (this._exited) return
+    this._forced = true
+    if (this._shouldTreeKill()) this._killTreeNow()
+    else this._send('SIGKILL')
+  }
+
   private _shouldTreeKill(): boolean {
     return this._treeKill && process.platform === 'win32' && this._child.pid !== undefined
   }
@@ -336,6 +436,16 @@ export class ManagedChildProcess extends Disposable {
   }
 
   private _send(signal: NodeJS.Signals): void {
+    const pid = this._child.pid
+    if (this._processGroup && pid !== undefined) {
+      try {
+        process.kill(-pid, signal)
+        return
+      } catch {
+        // Not actually a group leader (spawned without `detached`) or already gone —
+        // fall through to signalling the direct child.
+      }
+    }
     try {
       this._child.kill(signal)
     } catch (err) {
@@ -356,10 +466,19 @@ export class ManagedChildProcess extends Disposable {
       clearTimeout(this._killTimer)
       this._killTimer = undefined
     }
+    this._clearStopTimer()
+    this._lease?.dispose()
     const exit: ManagedExit = partial.error
       ? { ...partial, forced: this._forced, error: partial.error }
       : { ...partial, forced: this._forced }
     this._onDidExit.fire(exit)
+  }
+
+  private _clearStopTimer(): void {
+    if (this._stopTimer) {
+      clearTimeout(this._stopTimer)
+      this._stopTimer = undefined
+    }
   }
 
   override dispose(): void {
@@ -368,6 +487,7 @@ export class ManagedChildProcess extends Disposable {
       clearTimeout(this._killTimer)
       this._killTimer = undefined
     }
+    this._clearStopTimer()
     // Detach before killing: a SIGKILL reaping the child can still deliver a final
     // stdout flush or exit, and firing into a disposed emitter is noise at best.
     // stdin's `'error'` is the exception — it stays attached. An `'error'` with no
@@ -391,6 +511,7 @@ export class ManagedChildProcess extends Disposable {
       else this._send('SIGKILL')
       this._shutdownMark?.(`kill.end:${this._label}`)
     }
+    this._lease?.dispose()
     super.dispose()
   }
 }

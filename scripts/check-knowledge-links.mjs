@@ -14,8 +14,8 @@
  *  (apps/ packages/ extensions/ vendor/ scripts/ docs/ .claude/) or skill-relative
  *  `references/` paths. `[[slug]]` wikilink residue from the retired memory layer
  *  is flagged too. Templates containing < > * { } … or ... are ignored, as are
- *  build artifacts (out/ dist/ node_modules/). `.js` suffixes also match
- *  `.ts`/`.tsx` sources.
+ *  build artifacts (out/ dist/ node_modules/, plus node-gyp's
+ *  packages/process-job/build/). `.js` suffixes also match `.ts`/`.tsx` sources.
  *
  *  Usage:
  *    node scripts/check-knowledge-links.mjs           # report only, exit 0
@@ -151,6 +151,8 @@ function pathExists(candidate, baseDir) {
   const cleaned = candidate.replace(/[:#].*$/, '').replace(/\/+$/, '')
   if (!cleaned) return true
   if (/(^|\/)(out|dist|node_modules)(\/|$)/.test(cleaned)) return true
+  // node-gyp 产物目录（gitignore，非 Windows 上根本不会生成）——无法在源码检出中核验
+  if (cleaned.startsWith('packages/process-job/build/')) return true
   // vendor/* 是 submodule，CI 的 checkout 不拉子模块（fork 内部本就在豁免扫描之列），
   // 此时 fork 内部路径无从核验——跳过而不是误报；拉了的机器上照常校验。
   const vendorName = cleaned.startsWith('vendor/') ? cleaned.split('/')[1] : undefined

@@ -12,6 +12,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { AbstractLogger, Emitter, LogLevel, markAsSingleton } from '@universe-editor/platform'
 import type { IDisposable } from '@universe-editor/platform'
+import { windowOwner } from '@universe-editor/node-services'
+import { processLifecycle } from '../../process/processLifecycle.js'
 import {
   ExtensionHostMainService,
   createWindowScopedExtensionHost,
@@ -56,6 +58,9 @@ class FakeStdinStream extends EventEmitter {
 }
 
 class FakeProc extends EventEmitter {
+  constructor(readonly pid?: number) {
+    super()
+  }
   readonly stdout = new FakeStdStream()
   readonly stderr = new FakeStdStream()
   readonly stdin = new FakeStdinStream()
@@ -302,51 +307,44 @@ describe('ExtensionHostMainService — window-scoped reclaim', () => {
     dispose(): void {}
   }
 
-  it("startForWindow reclaims only that window's local hosts and logs the count", async () => {
+  it('registers each window-scoped host under its window owner and stdin-eof stop mode', async () => {
     const logger = markAsSingleton(new CapturingLogger())
-    const procA = new FakeProc()
-    const procB = new FakeProc()
-    const procC = new FakeProc()
-    const realSvc = makeScopedService([procA, procB, procC], logger)
+    const procA = new FakeProc(9301)
+    const procB = new FakeProc(9302)
+    const realSvc = makeScopedService([procA, procB], logger)
     svc = realSvc
 
-    const win1 = createWindowScopedExtensionHost(realSvc, 1)
-    const win2 = createWindowScopedExtensionHost(realSvc, 2)
+    await createWindowScopedExtensionHost(realSvc, 1).start()
+    await createWindowScopedExtensionHost(realSvc, 2).start()
 
-    await win1.start()
-    await win1.start()
-    await win2.start()
+    const mine = processLifecycle.snapshot().filter((e) => e.pid === 9301 || e.pid === 9302)
+    expect(mine.map((e) => [e.pid, e.owner, e.role])).toEqual([
+      [9301, 'window:1', 'extension-host'],
+      [9302, 'window:2', 'extension-host'],
+    ])
 
-    await realSvc.stopAllForWindow(1)
-
+    // Reclaiming window 1 closes ONLY its host's stdin first (graceful cascade), never window 2's.
+    const reclaim = processLifecycle.reclaimOwner(windowOwner(1), { reason: 'test', graceMs: 50 })
     expect(procA.stdin.endCalls).toBe(1)
-    expect(procB.stdin.endCalls).toBe(1)
-    expect(procC.stdin.endCalls).toBe(0)
-    expect(logger.infos).toContain('stopAllForWindow windowId=1 killed=2')
-    const reclaimLogs = () => logger.infos.filter((m) => m.startsWith('stopAllForWindow'))
-
-    // A second call is a no-op: the window's handles were already reclaimed.
-    await realSvc.stopAllForWindow(1)
-    expect(reclaimLogs()).toHaveLength(1)
+    expect(procB.stdin.endCalls).toBe(0)
+    procA.emitExit(0, null)
+    await reclaim
+    procB.emitExit(0, null)
   })
 
-  it('clears a handle from the window map when its host exits (stopAllForWindow becomes a no-op)', async () => {
+  it('clears the registration when a host exits on its own', async () => {
     const logger = markAsSingleton(new CapturingLogger())
-    const proc = new FakeProc()
-    const realSvc = makeScopedService([proc], logger)
-    svc = realSvc
+    const proc = new FakeProc(9311)
+    svc = makeScopedService([proc], logger)
 
-    const win1 = createWindowScopedExtensionHost(realSvc, 1)
-    await win1.start()
+    await createWindowScopedExtensionHost(svc, 1).start()
     proc.emitExit(0, null)
 
-    await realSvc.stopAllForWindow(1)
-
+    expect(processLifecycle.snapshot().some((e) => e.pid === 9311)).toBe(false)
     expect(logger.warns).toEqual([])
-    expect(proc.stdin.endCalls).toBe(0)
   })
 
-  it('stopAllForWindow leaves remote (server-managed) hosts untouched', async () => {
+  it('does not own remote (server-managed) hosts locally', async () => {
     const remote = new FakeRemoteHost()
     svc = new ExtensionHostMainService(
       () => {
@@ -362,10 +360,7 @@ describe('ExtensionHostMainService — window-scoped reclaim', () => {
       remote,
     )
 
-    const win1 = createWindowScopedExtensionHost(svc, 1)
-    await win1.start({ authority: 'host' })
-
-    await svc.stopAllForWindow(1)
+    await createWindowScopedExtensionHost(svc, 1).start({ authority: 'host' })
 
     expect(remote.stops).toEqual([])
   })

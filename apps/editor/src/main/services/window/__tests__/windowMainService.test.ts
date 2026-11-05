@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { join } from 'node:path'
 import { combinedDisposable, ShutdownReason, URI } from '@universe-editor/platform'
 import { getTempRoot } from '@universe-editor/temp-root'
+import { windowOwner } from '@universe-editor/node-services'
+import { processLifecycle } from '../../process/processLifecycle.js'
 import type { IWorkspaceFolderOpenGuard } from '../../workspace/folderOpenGuard.js'
 
 // --- Mock IPC bootstrap ---
@@ -203,10 +205,10 @@ function makeOpts() {
       textSearch: {} as never,
       fileWatcher: {} as never,
       recentWorkspaces: {} as never,
-      acpHost: { retireWindow: () => {}, stopAllForWindow: () => Promise.resolve() } as never,
+      acpHost: {} as never,
       mcpClient: { stopAllForWindow: () => Promise.resolve() } as never,
       acpTerminal: {} as never,
-      extensionHost: { stopAllForWindow: () => Promise.resolve() } as never,
+      extensionHost: {} as never,
       extensionManagement: {} as never,
       extensionGallery: {} as never,
       typescriptLanguage: {} as never,
@@ -331,20 +333,20 @@ describe('WindowMainService', () => {
       })
     })
 
-    it("reclaims the crashed window's agents, MCP servers and extension host via stopAllForWindow", async () => {
+    it("reclaims the crashed window's MCP servers and process tree through the lifecycle registry", async () => {
       const opts = makeOpts()
-      const acpStopAll = vi.fn(() => Promise.resolve())
       const mcpStopAll = vi.fn(() => Promise.resolve())
-      const extHostStopAll = vi.fn(() => Promise.resolve())
-      opts.appServices.acpHost = { stopAllForWindow: acpStopAll } as never
       opts.appServices.mcpClient = { stopAllForWindow: mcpStopAll } as never
-      opts.appServices.extensionHost = { stopAllForWindow: extHostStopAll } as never
+      const reclaim = vi.spyOn(processLifecycle, 'reclaimOwner')
       const svc = makeService(opts)
       const id = await svc.createWindow()
       grabRenderProcessGoneHandler()(undefined, { reason: 'oom' })
-      expect(acpStopAll).toHaveBeenCalledWith(id)
       expect(mcpStopAll).toHaveBeenCalledWith(id)
-      expect(extHostStopAll).toHaveBeenCalledWith(id)
+      // A crashed window may be reloaded under the same id, so it must not be retired.
+      expect(reclaim).toHaveBeenCalledWith(windowOwner(id), {
+        reason: 'renderer-gone',
+        retire: false,
+      })
     })
 
     describe('renderer generation', () => {
@@ -522,26 +524,22 @@ describe('WindowMainService', () => {
   })
 
   describe('window-close reclaim', () => {
-    it("reclaims the closed window's agents, MCP servers and extension host", async () => {
+    it("reclaims the closed window's MCP servers and process tree, retiring the window id", async () => {
       // A normal close is the common case: the renderer's beforeunload stop is
       // best-effort and leaks the host when the frame goes away first.
       const opts = makeOpts()
-      const retire = vi.fn()
-      const acpStopAll = vi.fn(() => Promise.resolve())
       const mcpStopAll = vi.fn(() => Promise.resolve())
-      const extHostStopAll = vi.fn(() => Promise.resolve())
-      opts.appServices.acpHost = { retireWindow: retire, stopAllForWindow: acpStopAll } as never
       opts.appServices.mcpClient = { stopAllForWindow: mcpStopAll } as never
-      opts.appServices.extensionHost = { stopAllForWindow: extHostStopAll } as never
+      const reclaim = vi.spyOn(processLifecycle, 'reclaimOwner')
       const svc = makeService(opts)
       const id = await svc.createWindow()
       grabWindowClosedHandler()()
-      // Retire before the reclaim snapshot so a start still in flight stops itself.
-      expect(retire).toHaveBeenCalledWith(id)
-      expect(retire).toHaveBeenCalledBefore(acpStopAll)
-      expect(acpStopAll).toHaveBeenCalledWith(id)
       expect(mcpStopAll).toHaveBeenCalledWith(id)
-      expect(extHostStopAll).toHaveBeenCalledWith(id)
+      // Retired: a spawn still in flight for this window is rejected and stops itself.
+      expect(reclaim).toHaveBeenCalledWith(windowOwner(id), {
+        reason: 'window-closed',
+        retire: true,
+      })
     })
   })
 

@@ -72,6 +72,17 @@ const sessionCwds = new Map() // sessionId -> cwd from session/new
 const messagedSessions = new Set()
 const sessionPrompts = new Map() // sessionId -> [{ messageId, prompt }]
 const loadSessionEnabled = process.env.ECHO_AGENT_LOAD_SESSION === '1'
+
+// ECHO_AGENT_PID_FILE=<path>: write this agent's pid plus a freshly spawned grandchild's pid
+// ("<agent> <grandchild>") — lets E2E assert the whole tree dies with its window / the editor.
+if (process.env.ECHO_AGENT_PID_FILE) {
+  const grandchild = require('node:child_process').spawn(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    { stdio: 'ignore', windowsHide: true },
+  )
+  writeFileSync(process.env.ECHO_AGENT_PID_FILE, `${process.pid} ${grandchild.pid}`, 'utf8')
+}
 const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
 
 // How long the streaming directives keep their turn open after the final chunk when no
@@ -1115,4 +1126,10 @@ process.stdin.on('data', (chunk) => {
   }
 })
 
-process.stdin.on('end', () => process.exit(0))
+// ECHO_AGENT_IGNORE_STDIN_EOF=1: stay alive after the editor dies (a stand-in for an agent that
+// does not honour stdin EOF), so only an OS-level mechanism can reap it.
+if (process.env.ECHO_AGENT_IGNORE_STDIN_EOF === '1') {
+  process.stdin.on('end', () => setInterval(() => {}, 1000))
+} else {
+  process.stdin.on('end', () => process.exit(0))
+}

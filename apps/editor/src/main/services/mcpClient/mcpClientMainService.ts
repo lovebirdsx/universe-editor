@@ -26,7 +26,7 @@ import {
   type ILogger,
   type ILoggerService,
 } from '@universe-editor/platform'
-import { AcpHostService } from '@universe-editor/node-services'
+import { AcpHostService, windowOwner } from '@universe-editor/node-services'
 import type { AcpLaunchSpec } from '@universe-editor/platform'
 import {
   Client,
@@ -39,6 +39,7 @@ import {
 import { McpStdioTransport, type McpStdioHost } from './mcpStdioTransport.js'
 import { redactTargetForLog, stripSecretLike } from './mcpTargetSafety.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
+import { processLifecycle } from '../process/processLifecycle.js'
 import type {
   IMcpClientService,
   McpCallResultDto,
@@ -70,7 +71,7 @@ export interface McpClientMainServiceOptions {
   readonly clientVersion?: string
   readonly idleTtlMs?: number
   /** Injectable for tests: build the transport for a target (defaults to stdio/http/sse). */
-  readonly createTransport?: (target: McpConnectTargetDto) => McpTransport
+  readonly createTransport?: (target: McpConnectTargetDto, windowId?: number) => McpTransport
   /** Injectable for tests: the stdio process host backing the default transport. */
   readonly stdioHost?: McpStdioHost
 }
@@ -86,7 +87,10 @@ export class McpClientMainService extends Disposable implements IMcpClientServic
   private readonly _logger: ILogger
   private readonly _clientVersion: string
   private readonly _idleTtlMs: number
-  private readonly _createTransport: (target: McpConnectTargetDto) => McpTransport
+  private readonly _createTransport: (
+    target: McpConnectTargetDto,
+    windowId?: number,
+  ) => McpTransport
 
   constructor(loggerService?: ILoggerService, options: McpClientMainServiceOptions = {}) {
     super()
@@ -96,8 +100,14 @@ export class McpClientMainService extends Disposable implements IMcpClientServic
     const host = options.stdioHost ?? this._register(createDefaultStdioHost(loggerService))
     this._createTransport =
       options.createTransport ??
-      ((target) => {
-        if (target.kind === 'stdio') return new McpStdioTransport(host, stdioLaunchSpec(target))
+      ((target, windowId) => {
+        if (target.kind === 'stdio') {
+          return new McpStdioTransport(
+            host,
+            stdioLaunchSpec(target),
+            windowId !== undefined ? { owner: windowOwner(windowId) } : undefined,
+          )
+        }
         return createHttpTransport(target.kind, target.url, target.headers)
       })
   }
@@ -123,7 +133,7 @@ export class McpClientMainService extends Disposable implements IMcpClientServic
     let transport: McpTransport | undefined
     let entry: ConnEntry | undefined
     try {
-      transport = this._createTransport(target)
+      transport = this._createTransport(target, requestingWindowId)
       const client = new Client(
         { name: CLIENT_NAME, version: this._clientVersion },
         { capabilities: {} },
@@ -412,6 +422,7 @@ function createDefaultStdioHost(loggerService: ILoggerService | undefined): AcpH
   return new AcpHostService({
     ...(loggerService !== undefined ? { logger: loggerService } : {}),
     onSpawned: (pid, label) => processRoleRegistry.register(pid, { role: 'mcp-server', label }),
+    lifecycle: { registry: processLifecycle, role: 'mcp-server' },
   })
 }
 

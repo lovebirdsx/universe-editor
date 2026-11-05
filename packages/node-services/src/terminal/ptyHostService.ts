@@ -38,6 +38,13 @@ import {
 } from '@universe-editor/platform'
 import type { IPty } from '@lydell/node-pty'
 import { buildChildEnv } from '../process/env.js'
+import {
+  APP_OWNER,
+  killProcessTree,
+  type ProcessLifecycleRegistry,
+  type ProcessOwner,
+  type StoppableProcess,
+} from '../process/processLifecycle.js'
 import { detectAvailableProfiles, type ITerminalProfilesDeps } from './terminalProfiles.js'
 
 export type PtySpawner = (
@@ -92,6 +99,12 @@ export interface PtyHostServiceOptions {
    * The local editor wires this to its process-role registry; the server omits it.
    */
   readonly onPtySpawned?: (pid: number, label: string) => IDisposable | undefined
+  /** Local editor only: bind every pty to an owner in the OS-level lifecycle registry. */
+  readonly lifecycle?: {
+    readonly registry: ProcessLifecycleRegistry
+    readonly owner?: ProcessOwner
+    readonly role: string
+  }
 }
 
 const requireFromHere = createRequire(import.meta.url)
@@ -256,6 +269,7 @@ export class PtyHostService extends Disposable implements IPtyHostService {
   private readonly _onPtySpawned:
     | ((pid: number, label: string) => IDisposable | undefined)
     | undefined
+  private readonly _lifecycle: PtyHostServiceOptions['lifecycle']
 
   private readonly _onData = this._register(new Emitter<ITerminalDataEvent>())
   readonly onData: Event<ITerminalDataEvent> = this._onData.event
@@ -275,6 +289,52 @@ export class PtyHostService extends Disposable implements IPtyHostService {
     this._osRelease = options.osRelease ?? osRelease
     this._profileDeps = options.profileDeps
     this._onPtySpawned = options.onPtySpawned
+    this._lifecycle = options.lifecycle
+  }
+
+  /** Process-role hook + OS lifecycle lease, released together on exit / release / dispose. */
+  private _registerHost(pty: IPty, label: string): IDisposable | undefined {
+    const role = this._onPtySpawned?.(pty.pid, label)
+    const lifecycle = this._lifecycle
+    if (!lifecycle) return role
+    let exited = false
+    const exitSub = pty.onExit(() => {
+      exited = true
+    })
+    // On POSIX node-pty forks into its own session, so the pty pid leads a process group.
+    const target: StoppableProcess = {
+      get exited() {
+        return exited
+      },
+      onDidExit: (listener) => {
+        const sub = pty.onExit(() => listener(undefined))
+        return { dispose: () => sub.dispose() }
+      },
+      requestStop: () => {
+        try {
+          pty.kill()
+        } catch {
+          // already gone
+        }
+      },
+      hardKill: () => killProcessTree(pty.pid, { group: this._platform !== 'win32' }),
+    }
+    const lease = lifecycle.registry.track({
+      pid: pty.pid,
+      owner: lifecycle.owner ?? APP_OWNER,
+      role: lifecycle.role,
+      label,
+      processGroup: this._platform !== 'win32',
+      target,
+    })
+    if (lease.rejected) target.requestStop()
+    return {
+      dispose: () => {
+        role?.dispose()
+        exitSub.dispose()
+        lease.dispose()
+      },
+    }
   }
 
   create(spec: IPtySpawnSpec): Promise<ITerminalCreatedInfo> {
@@ -317,8 +377,9 @@ export class PtyHostService extends Disposable implements IPtyHostService {
     const entry: TerminalEntry = {
       pty,
       info,
-      hostRegistration: this._onPtySpawned?.(pty.pid, info.name),
+      hostRegistration: undefined,
     }
+    entry.hostRegistration = this._registerHost(pty, info.name)
     this._entries.set(id, entry)
 
     pty.onData((data) => this._onData.fire({ id, data }))

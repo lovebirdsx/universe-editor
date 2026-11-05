@@ -38,8 +38,9 @@ import {
   type ITerminalTitleEvent,
   type UriComponents,
 } from '@universe-editor/platform'
-import { PtyHostService, type PtySpawner } from '@universe-editor/node-services'
+import { PtyHostService, type ProcessOwner, type PtySpawner } from '@universe-editor/node-services'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
+import { processLifecycle } from '../process/processLifecycle.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
 /** A remote terminal endpoint: the service plus its permanent-close signal. */
@@ -95,6 +96,8 @@ export class TerminalMainService extends Disposable implements ITerminalService 
     @ILoggerService loggerService?: ILoggerService,
     @IRemoteConnectionService private readonly _connections?: IRemoteConnectionService,
     remoteTerminalFactory?: RemoteTerminalFactory,
+    /** Window whose lifecycle owns the local ptys (their trees die with it); app-owned when omitted. */
+    lifecycleOwner?: ProcessOwner,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'terminal', name: 'Terminal' })
@@ -118,6 +121,11 @@ export class TerminalMainService extends Disposable implements ITerminalService 
         ...(this._spawn !== undefined ? { spawn: this._spawn } : {}),
         ...(loggerService !== undefined ? { logger: loggerService } : {}),
         onPtySpawned: (pid, label) => processRoleRegistry.register(pid, { role: 'pty', label }),
+        lifecycle: {
+          registry: processLifecycle,
+          ...(lifecycleOwner !== undefined ? { owner: lifecycleOwner } : {}),
+          role: 'pty',
+        },
       }),
     )
     this._register(this._local.onData((e) => this._onData.fire(e)))

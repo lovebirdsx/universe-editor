@@ -24,7 +24,11 @@ import {
   type ILogger,
   type ISocket,
 } from '@universe-editor/platform'
-import { buildChildEnv } from '@universe-editor/node-services'
+import {
+  buildChildEnv,
+  killProcessTree,
+  processGroupSpawnOptions,
+} from '@universe-editor/node-services'
 import { resolveExtensionGlobalStorageDir, resolveUserExtensionsDir } from './serverPaths.js'
 
 /** Grace period after the host's stdin EOF before the child is force-killed. */
@@ -234,6 +238,8 @@ export class ExtensionHostConnection extends Disposable {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
         shell: false,
+        // POSIX: lead a process group so the backstop kill reaches tsserver & co.
+        ...processGroupSpawnOptions(),
       })
     } catch (err) {
       opts.logger.warn(
@@ -300,13 +306,12 @@ export class ExtensionHostConnection extends Disposable {
     const grace = setTimeout(() => {
       if (!this._childExited) {
         this._logger.warn(
-          `[remote:${this.authority}] extension-host graceful stop timed out; SIGKILL`,
+          `[remote:${this.authority}] extension-host graceful stop timed out; killing process tree pid=${child.pid}`,
         )
-        try {
-          child.kill('SIGKILL')
-        } catch {
-          // already exited
-        }
+        // Tree, not just the host: a plain SIGKILL would orphan tsserver (see local
+        // ExtensionHostMainService). Windows: taskkill /T; POSIX: the host's own group.
+        if (child.pid !== undefined) killProcessTree(child.pid, { group: true })
+        else child.kill('SIGKILL')
       }
     }, EXT_HOST_GRACEFUL_STOP_MS)
     grace.unref?.()

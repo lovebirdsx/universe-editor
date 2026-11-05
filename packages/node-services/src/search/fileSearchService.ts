@@ -55,6 +55,11 @@ import {
   rgDiskPath,
 } from './ripgrepUtil.js'
 import { RgLineCollector } from './rgLineCollector.js'
+import {
+  APP_OWNER,
+  type ProcessLifecycleRegistry,
+  type ProcessLease,
+} from '../process/processLifecycle.js'
 import { getTempRoot } from '@universe-editor/temp-root'
 
 type RawUri = URI | UriComponents | string
@@ -367,6 +372,8 @@ export interface FileSearchServiceOptions {
   readonly listingBuildBudgetMs?: number
   /** 单份清单字节上限（默认 {@link DEFAULT_LISTING_MAX_BYTES}）。 */
   readonly listingMaxBytes?: number
+  /** Local editor only: bind every rg child to the app owner in the OS-level lifecycle registry. */
+  readonly lifecycle?: { readonly registry: ProcessLifecycleRegistry }
 }
 
 export class FileSearchService extends Disposable implements IFileSearchService {
@@ -380,6 +387,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
   private readonly _maxListingBytes: number
   private readonly _listings = new Map<string, ListingEntry>()
   private readonly _procs = new Set<ChildProcess>()
+  private readonly _lifecycle: FileSearchServiceOptions['lifecycle']
   private _sweepTimer: NodeJS.Timeout | undefined
   // 全局单槽：任意时刻至多一个清单构建在跑（不分 key / root），其余排队。
   private _buildChain: Promise<void> = Promise.resolve()
@@ -400,10 +408,25 @@ export class FileSearchService extends Disposable implements IFileSearchService 
     this._cacheBudgetBytes = options?.listingCacheBudgetBytes ?? DEFAULT_LISTING_CACHE_BUDGET_BYTES
     this._buildBudgetMs = options?.listingBuildBudgetMs ?? DEFAULT_LISTING_BUILD_BUDGET_MS
     this._maxListingBytes = options?.listingMaxBytes ?? DEFAULT_LISTING_MAX_BYTES
+    this._lifecycle = options?.lifecycle
     void this._sweepStaleListings()
     this._sweepTimer = setInterval(() => void this._sweepStaleListings(), LISTING_SWEEP_INTERVAL_MS)
     // 卫生定时器不该把 Electron 主进程钉住。
     this._sweepTimer.unref()
+  }
+
+  private _trackRg(child: ChildProcess, label: string): ProcessLease | undefined {
+    if (!this._lifecycle || child.pid === undefined) return undefined
+    const lease = this._lifecycle.registry.track({
+      pid: child.pid,
+      owner: APP_OWNER,
+      role: 'ripgrep',
+      label,
+    })
+    // The process may exit without our `done` ever running (spawn error path); release on exit too.
+    child.once('exit', () => lease.dispose())
+    if (lease.rejected) child.kill()
+    return lease
   }
 
   /**
@@ -1029,6 +1052,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         return
       }
       this._procs.add(child)
+      const lease = this._trackRg(child, 'listing')
       lowerPriority(child)
       const killFor = (reason: 'time' | 'size'): void => {
         if (budgetHit !== undefined) return
@@ -1052,6 +1076,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         : undefined
       const done = (result: RgCollectExit): void => {
         this._procs.delete(child)
+        lease?.dispose()
         if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
         if (sizeTimer !== undefined) clearInterval(sizeTimer)
         resolve(budgetHit !== undefined ? { ...result, budget: budgetHit } : result)
@@ -1138,6 +1163,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         return
       }
       this._procs.add(child)
+      const lease = this._trackRg(child, label)
       const decoder = new StringDecoder('utf8')
       const collector = new RgLineCollector(cap, accept)
       let stderr = ''
@@ -1162,6 +1188,7 @@ export class FileSearchService extends Disposable implements IFileSearchService 
         if (stopReason === null) collector.end(decoder.end())
         settled = true
         this._procs.delete(child)
+        lease?.dispose()
         tokenSub?.dispose()
         clearTimeout(timer)
         resolve({

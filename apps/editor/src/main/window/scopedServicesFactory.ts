@@ -28,11 +28,11 @@ import type { UpdateMainService } from '../services/update/updateMainService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IDocsService } from '../../shared/ipc/docsService.js'
 import type { AcpHostMainService } from '../services/acpHost/acpHostMainService.js'
+import type { AcpTerminalMainService } from '../services/acpTerminal/acpTerminalMainService.js'
 import type { McpClientMainService } from '../services/mcpClient/mcpClientMainService.js'
 import type { ExtensionHostMainService } from '../services/extensionHost/extensionHostMainService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
 import type { IExtensionGalleryService } from '../../shared/ipc/extensionGalleryService.js'
-import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import type { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
@@ -66,24 +66,14 @@ export interface ApplicationServices {
   readonly fileSearch: IFileSearchService
   readonly textSearch: ITextSearchMainService
   readonly recentWorkspaces: RecentWorkspacesMainService
-  /**
-   * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
-   * crashes or its window closes, which is main-internal and not on the wire contract.
-   */
+  /** Concrete types below: the createWindowScoped* wrappers need the main-internal start-for-window entry points. */
   readonly acpHost: AcpHostMainService
-  /**
-   * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
-   * crashes or its window closes, which is main-internal and not on the wire contract.
-   */
+  /** Also called with stopAllForWindow by WindowMainService when a renderer crashes or its window closes. */
   readonly mcpClient: McpClientMainService
-  /**
-   * Concrete type: WindowMainService calls stopAllForWindow on it when a renderer
-   * crashes or its window closes, which is main-internal and not on the wire contract.
-   */
   readonly extensionHost: ExtensionHostMainService
   readonly extensionManagement: IExtensionManagementService
   readonly extensionGallery: IExtensionGalleryService
-  readonly acpTerminal: IAcpTerminalService
+  readonly acpTerminal: AcpTerminalMainService
   readonly claudeBinary: IClaudeBinaryService
   readonly claudeConfig: IClaudeConfigService
   readonly codexBinary: ICodexBinaryService

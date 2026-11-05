@@ -35,6 +35,12 @@ import {
 import { buildChildEnv } from '../process/env.js'
 import { spawnViaCmd } from '../process/cmdSpawn.js'
 import { ManagedChildProcess } from '../process/managedChildProcess.js'
+import {
+  APP_OWNER,
+  processGroupSpawnOptions,
+  type ProcessLifecycleRegistry,
+  type ProcessOwner,
+} from '../process/processLifecycle.js'
 
 export type AcpTerminalSpawner = (
   command: string,
@@ -42,8 +48,15 @@ export type AcpTerminalSpawner = (
   options: {
     cwd?: string
     env?: NodeJS.ProcessEnv
+    /** Lead a new POSIX process group so the lifecycle registry can group-kill the tree. */
+    processGroup?: boolean
   },
 ) => ChildProcessWithoutNullStreams
+
+/** Who owns a created terminal; the lifecycle registry reclaims by owner. Defaults to the app. */
+export interface AcpTerminalCreateContext {
+  readonly owner?: ProcessOwner
+}
 
 export interface AcpTerminalOptions {
   readonly spawn?: AcpTerminalSpawner
@@ -55,6 +68,12 @@ export interface AcpTerminalOptions {
    * server omits it.
    */
   readonly onSpawned?: (pid: number, label: string) => IDisposable | undefined
+  /** Local editor only: bind every terminal process to an owner in the OS-level lifecycle registry. */
+  readonly lifecycle?: {
+    readonly registry: ProcessLifecycleRegistry
+    readonly owner?: ProcessOwner
+    readonly role: string
+  }
 }
 
 const defaultSpawner: AcpTerminalSpawner = (command, args, options) => {
@@ -71,6 +90,7 @@ const defaultSpawner: AcpTerminalSpawner = (command, args, options) => {
     env: options.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    ...(options.processGroup === true ? processGroupSpawnOptions() : {}),
   })
 }
 
@@ -121,15 +141,22 @@ export class AcpTerminalService extends Disposable implements IAcpTerminalServic
   private readonly _logger: ILogger
   private readonly _spawn: AcpTerminalSpawner
   private readonly _onSpawned: ((pid: number, label: string) => IDisposable | undefined) | undefined
+  private readonly _lifecycle: AcpTerminalOptions['lifecycle']
+  private readonly _usesDefaultSpawner: boolean
 
   constructor(options: AcpTerminalOptions = {}) {
     super()
     this._logger = createNamedLogger(options.logger, { id: 'acpTerminal', name: 'ACP Terminal' })
     this._spawn = options.spawn ?? defaultSpawner
     this._onSpawned = options.onSpawned
+    this._lifecycle = options.lifecycle
+    this._usesDefaultSpawner = options.spawn === undefined
   }
 
-  create(spec: AcpTerminalCreateSpec): Promise<AcpTerminalCreatedInfo> {
+  create(
+    spec: AcpTerminalCreateSpec,
+    ctx: AcpTerminalCreateContext = {},
+  ): Promise<AcpTerminalCreatedInfo> {
     if (typeof spec.command !== 'string' || spec.command.length === 0) {
       return Promise.reject(new Error('AcpTerminal: command must be a non-empty string'))
     }
@@ -139,8 +166,12 @@ export class AcpTerminalService extends Disposable implements IAcpTerminalServic
       )
     }
     const env = buildChildEnv(process.env, { overrides: envArrayToRecord(spec.env) })
-    const options: { cwd?: string; env?: NodeJS.ProcessEnv } = { env }
+    const options: { cwd?: string; env?: NodeJS.ProcessEnv; processGroup?: boolean } = { env }
     if (spec.cwd != null) options.cwd = spec.cwd
+    // Only the default spawner understands `processGroup`; a custom spawner's child is not ours to group.
+    const processGroup =
+      this._lifecycle !== undefined && this._usesDefaultSpawner && process.platform !== 'win32'
+    if (processGroup) options.processGroup = true
 
     const id = randomUUID()
     let proc: ManagedChildProcess
@@ -149,6 +180,16 @@ export class AcpTerminalService extends Disposable implements IAcpTerminalServic
         logger: this._logger,
         label: id,
         treeKill: process.platform === 'win32',
+        ...(processGroup ? { processGroup: true } : {}),
+        ...(this._lifecycle
+          ? {
+              lifecycle: {
+                registry: this._lifecycle.registry,
+                owner: ctx.owner ?? this._lifecycle.owner ?? APP_OWNER,
+                role: this._lifecycle.role,
+              },
+            }
+          : {}),
       })
     } catch (err) {
       this._logger.warn(`spawn failed command=${spec.command}: ${(err as Error).message}`)

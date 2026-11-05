@@ -52,6 +52,8 @@ import { WindowSessionStore } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
 import { AuxiliaryWindowsMainService } from './auxiliaryWindowsMainService.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
+import { processLifecycle } from '../process/processLifecycle.js'
+import { windowOwner } from '@universe-editor/node-services'
 import type { ApplicationServices } from '../../window/scopedServicesFactory.js'
 
 export interface ICreateWindowOptions {
@@ -619,11 +621,10 @@ export class WindowMainService implements IWindowMainService {
       appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-closed')
       // A normal close never disposes the renderer's services, and its
       // beforeunload `stop` is best-effort — routinely lost when the frame tears
-      // down first. Retire the window before reclaiming: a `start` still in
-      // flight registers its handle after the reclaim snapshot and must stop
-      // itself. Without this backstop every closed window leaks its extension
-      // host (plus tsserver) until the app quits.
-      appServices.acpHost.retireWindow(win.id)
+      // down first. The reclaim also retires the window id: a `start` still in
+      // flight registers after the reclaim and is rejected by the lifecycle
+      // registry, so it stops itself. Without this backstop every closed window
+      // leaks its extension host (plus tsserver) until the app quits.
       this._reclaimWindowProcesses(appServices, win.id, 'window-closed')
       // The top window fell to the fallback chain; let pending consumers re-check.
       if (this._lastFocusedWindowId === win.id) {
@@ -755,24 +756,30 @@ export class WindowMainService implements IWindowMainService {
    * never runs the renderer's own stop, and a normal close loses its
    * beforeunload stop when the frame tears down first — without this backstop
    * each path leaks an extension host (plus tsserver) until the app quits.
+   *
+   * The OS-level registry owns the actual reclaim (graceful stop first, then the
+   * Job Object / process-group kill of the whole tree); MCP connections are only
+   * released logically first so their idle timers and window index are cleaned.
    */
   private _reclaimWindowProcesses(
     appServices: ApplicationServices,
     windowId: number,
     reason: 'renderer-gone' | 'window-reloaded' | 'window-closed',
   ): void {
+    const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
     void Promise.allSettled([
-      appServices.acpHost.stopAllForWindow(windowId),
       appServices.mcpClient.stopAllForWindow(windowId),
-      appServices.extensionHost.stopAllForWindow(windowId),
+      processLifecycle.reclaimOwner(windowOwner(windowId), {
+        reason,
+        // Only a closed window is gone for good; a reloaded renderer reuses the id.
+        retire: reason === 'window-closed',
+      }),
     ]).then((results) => {
       const errors = results.flatMap((r) => (r.status === 'rejected' ? [String(r.reason)] : []))
       if (errors.length === 0) return
-      this._opts.logService
-        .createLogger({ id: 'window', name: 'Window' })
-        .warn(
-          `reclaim windowId=${windowId} reason=${reason} failed=${errors.length}: ${errors.join(' | ')}`,
-        )
+      logger.warn(
+        `reclaim windowId=${windowId} reason=${reason} failed=${errors.length}: ${errors.join(' | ')}`,
+      )
     })
   }
 

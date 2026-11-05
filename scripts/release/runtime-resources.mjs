@@ -269,6 +269,19 @@ export function hasReleaseNotesSources() {
   return existsSync(notesSourceDir)
 }
 
+// Windows Job Object addon (packages/process-job). Windows-only: other platforms ship no
+// addon and the lifecycle registry runs on process groups. Missing on win32 means a packaged
+// build that silently loses grandchild containment, so it is a hard failure there.
+const PROCESS_JOB_ADDON = {
+  label: 'process job addon',
+  source: join(repoRoot, 'packages/process-job/build/Release/process_job.node'),
+  packaged: 'process-job/process_job.node',
+}
+
+export function requiresProcessJobAddon(platform = process.platform) {
+  return platform === 'win32'
+}
+
 function assertPackagedFile(root, relativePath, label) {
   assertExists(join(root, ...relativePath.split('/')), label)
 }
@@ -280,6 +293,7 @@ function assertSourceFile(relativeRoot, relativePath, label) {
 export function verifySourceRuntimeResources() {
   const notes = releaseNotesSource()
   assertExists(notes.source, notes.label)
+  if (requiresProcessJobAddon()) assertExists(PROCESS_JOB_ADDON.source, PROCESS_JOB_ADDON.label)
   for (const required of REQUIRED_SOURCE_FILES) {
     assertExists(required.source, required.label)
   }
@@ -306,6 +320,9 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   copyPath(join(repoRoot, 'vendor/claude-agent-acp/dist'), join(stageDir, 'claude-agent-acp/dist'))
   copyPath(join(repoRoot, 'vendor/codex-acp/dist'), join(stageDir, 'codex-acp/dist'))
   copyPath(join(repoRoot, 'packages/extension-host/dist'), join(stageDir, 'extension-host/dist'))
+  if (requiresProcessJobAddon()) {
+    copyPath(PROCESS_JOB_ADDON.source, join(stageDir, PROCESS_JOB_ADDON.packaged))
+  }
   // The TS/JS language server is a prebuilt third-party CLI that needs its own
   // node_modules at runtime (typescript-language-server + tsserver). Stage the
   // whole tree — do NOT prune `typescript`, tsserver lives inside it.
@@ -373,6 +390,9 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
 export function verifyPackagedRuntimeResources(resourcesRoot = releaseResourcesRoot) {
   for (const required of REQUIRED_SOURCE_FILES) {
     assertPackagedFile(resourcesRoot, required.packaged, required.label)
+  }
+  if (requiresProcessJobAddon()) {
+    assertPackagedFile(resourcesRoot, PROCESS_JOB_ADDON.packaged, PROCESS_JOB_ADDON.label)
   }
 
   // Remote server deploy bundle. Not in REQUIRED_SOURCE_FILES (whose source side

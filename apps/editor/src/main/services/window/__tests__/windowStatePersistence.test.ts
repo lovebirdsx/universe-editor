@@ -124,9 +124,9 @@ function makeOpts() {
     appServices: {
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} },
       // Closing a window reclaims its local child processes; these tests spawn none.
-      acpHost: { retireWindow: () => {}, stopAllForWindow: () => Promise.resolve() },
+      acpHost: {},
       mcpClient: { stopAllForWindow: () => Promise.resolve() },
-      extensionHost: { stopAllForWindow: () => Promise.resolve() },
+      extensionHost: {},
       configLocation: { onDidChangeConfigDir: () => ({ dispose: () => {} }), currentDir: '' },
       // Closing a window ends its heap-snapshot round; these tests never start one.
       diagnostics: { invalidateWindowRenderer: () => {} },

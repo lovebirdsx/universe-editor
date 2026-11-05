@@ -8,7 +8,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, ILoggerService, RemoteChannels } from '@universe-editor/platform'
-import { AcpTerminalService, type AcpTerminalSpawner } from '@universe-editor/node-services'
+import {
+  AcpTerminalService,
+  windowOwner,
+  type AcpTerminalCreateContext,
+  type AcpTerminalSpawner,
+} from '@universe-editor/node-services'
 import type {
   AcpTerminalCreatedInfo,
   AcpTerminalCreateSpec,
@@ -18,6 +23,7 @@ import type {
 } from '@universe-editor/platform'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
+import { processLifecycle } from '../process/processLifecycle.js'
 
 export type { AcpTerminalSpawner }
 
@@ -41,11 +47,15 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
         ...(loggerService !== undefined ? { logger: loggerService } : {}),
         onSpawned: (pid, label) =>
           processRoleRegistry.register(pid, { role: 'acp-terminal', label }),
+        lifecycle: { registry: processLifecycle, role: 'acp-terminal' },
       }),
     )
   }
 
-  async create(spec: AcpTerminalCreateSpec): Promise<AcpTerminalCreatedInfo> {
+  async create(
+    spec: AcpTerminalCreateSpec,
+    ctx: AcpTerminalCreateContext = {},
+  ): Promise<AcpTerminalCreatedInfo> {
     if (spec.authority) {
       const service = this._remoteService(spec.authority)
       const { authority: _authority, ...rest } = spec
@@ -53,7 +63,12 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
       this._remoteByTerminal.set(result.terminalId, spec.authority)
       return result
     }
-    return this._local.create(spec)
+    return this._local.create(spec, ctx)
+  }
+
+  /** Main-internal: a local terminal owned by a window, reclaimed with it (see WindowMainService). */
+  createForWindow(spec: AcpTerminalCreateSpec, windowId: number): Promise<AcpTerminalCreatedInfo> {
+    return this.create(spec, { owner: windowOwner(windowId) })
   }
 
   output(terminalId: string): Promise<AcpTerminalOutput> {
@@ -96,5 +111,24 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
       authority,
       RemoteChannels.AcpTerminal,
     )
+  }
+}
+
+/**
+ * Bind the application acpTerminal singleton to the BrowserWindow serving one IPC
+ * channel, stamping the windowId onto every `create` so closing/reloading that window
+ * reclaims the terminals its agents started (mirrors createWindowScopedAcpHost).
+ */
+export function createWindowScopedAcpTerminal(
+  terminal: AcpTerminalMainService,
+  windowId: number,
+): IAcpTerminalService {
+  return {
+    _serviceBrand: undefined,
+    create: (spec) => terminal.createForWindow(spec, windowId),
+    output: (terminalId) => terminal.output(terminalId),
+    waitForExit: (terminalId) => terminal.waitForExit(terminalId),
+    kill: (terminalId) => terminal.kill(terminalId),
+    release: (terminalId) => terminal.release(terminalId),
   }
 }

@@ -8,9 +8,14 @@
 
 import { utilityProcess } from 'electron'
 import { Emitter, type IDisposable, type ILogger } from '@universe-editor/platform'
-import type { IWatcherTransport, WatcherTransportFactory } from '@universe-editor/node-services'
+import {
+  APP_OWNER,
+  type IWatcherTransport,
+  type WatcherTransportFactory,
+} from '@universe-editor/node-services'
 import type { WatcherHostRequest, WatcherHostResponse } from '@universe-editor/platform'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
+import { processLifecycle } from '../process/processLifecycle.js'
 
 export function createWatcherUtilityTransportFactory(
   entryPath: string,
@@ -25,10 +30,24 @@ export function createWatcherUtilityTransportFactory(
     let roleRegistration: IDisposable | undefined
     const registerRole = (): void => {
       if (roleRegistration !== undefined || child.pid === undefined) return
-      roleRegistration = processRoleRegistry.register(child.pid, {
+      const role = processRoleRegistry.register(child.pid, {
         role: 'utility',
         label: 'file-watcher',
       })
+      // Chromium may already hold this process in its own job; the lease then reports
+      // uncontained and the watcher keeps relying on child.kill() + its parent-exit exit.
+      const lease = processLifecycle.track({
+        pid: child.pid,
+        owner: APP_OWNER,
+        role: 'utility',
+        label: 'file-watcher',
+      })
+      roleRegistration = {
+        dispose: () => {
+          role.dispose()
+          lease.dispose()
+        },
+      }
     }
     registerRole()
     child.once('spawn', registerRole)

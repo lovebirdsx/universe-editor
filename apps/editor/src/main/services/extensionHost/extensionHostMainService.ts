@@ -25,9 +25,16 @@ import {
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
+import {
+  APP_OWNER,
+  processGroupSpawnOptions,
+  windowOwner,
+  type ProcessOwner,
+} from '@universe-editor/node-services'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
+import { processLifecycle } from '../process/processLifecycle.js'
 import {
   CHILD_PROCESS_EXITED_CODE,
   CHILD_STDIN_NOT_WRITABLE_CODE,
@@ -53,7 +60,7 @@ const EXT_HOST_GRACEFUL_STOP_MS = 2000
 export type ExtHostSpawner = (
   command: string,
   args: readonly string[],
-  options: { env?: NodeJS.ProcessEnv },
+  options: { env?: NodeJS.ProcessEnv; processGroup?: boolean },
 ) => ChildProcessWithoutNullStreams
 
 /** Resolves the bundled extension-host bootstrap entry. Injectable for tests. */
@@ -95,6 +102,8 @@ const defaultSpawner: ExtHostSpawner = (command, args, options) =>
     // process.execPath is a real binary (its path may contain spaces), so a
     // shell wrapper would mis-quote it. Always off, like AcpHost's runAsNode.
     shell: false,
+    // POSIX: lead a process group so the lifecycle registry can group-kill tsserver & co.
+    ...(options.processGroup === true ? processGroupSpawnOptions() : {}),
   })
 
 /** Bootstrap entry relative to the repo root in the dev tree. */
@@ -146,9 +155,6 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   /** Handles owned by the remote implementation (routed by spec authority). */
   private readonly _remoteHandles = new Set<string>()
 
-  /** handle → windowId for local handles, so a window crash can reclaim its host. */
-  private readonly _windowByHandle = new Map<string, number>()
-
   private readonly _logger: ILogger
 
   /** Set once the first host process spawns, so the perf mark fires only once. */
@@ -189,7 +195,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     }
   }
 
-  start(spec?: ExtHostStartSpec): Promise<ExtHostStartResult> {
+  start(spec?: ExtHostStartSpec, ctx: { owner?: ProcessOwner } = {}): Promise<ExtHostStartResult> {
     // Remote workspace: delegate to the remote host (forked on the server, bytes
     // pumped over the ExtensionHost tunnel). Local spawn stays the default.
     if (spec?.authority !== undefined) {
@@ -271,6 +277,10 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     }
     args.push(entry)
 
+    // Only the default spawner understands `processGroup`; an injected one owns its own children.
+    const processGroup = this._spawn === defaultSpawner && process.platform !== 'win32'
+    const spawnOptions = processGroup ? { env, processGroup: true } : { env }
+
     let proc: ManagedChildProcess
     try {
       // The host forks grandchildren — the `typescript` built-in plugin spawns
@@ -282,10 +292,20 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       // orphan tsserver — it survives app quit holding pipes open, blocking
       // Playwright teardown and leaking a stray electron.exe for real users — so
       // termination recurses the PID tree instead. No-op off Windows.
-      proc = new ManagedChildProcess(this._spawn(command, args, { env }), {
+      proc = new ManagedChildProcess(this._spawn(command, args, spawnOptions), {
         logger: this._logger,
         label: handle,
         treeKill: true,
+        killTimeoutMs: EXT_HOST_GRACEFUL_STOP_MS,
+        ...(processGroup ? { processGroup: true } : {}),
+        // Window close/reload/crash reclaim goes through the registry: stdin EOF first (the
+        // shutdown cascade reaps tsserver), then the job/group kill for whatever survives.
+        lifecycle: {
+          registry: processLifecycle,
+          owner: ctx.owner ?? APP_OWNER,
+          role: 'extension-host',
+          stop: 'stdin-eof',
+        },
       })
     } catch (err) {
       this._logger.warn(`spawn failed handle=${handle} entry=${entry}: ${(err as Error).message}`)
@@ -346,7 +366,6 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
           }
           this._onExit.fire({ handle, code: exit.code, signal: exit.signal })
         }
-        this._windowByHandle.delete(handle)
         this._procs.delete(handle)
         store.dispose()
       }),
@@ -418,7 +437,6 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       this._remoteHandles.delete(handle)
       return this._remoteService!.stop(handle)
     }
-    this._windowByHandle.delete(handle)
     const entry = this._procs.get(handle)
     if (!entry || entry.exited) {
       return Promise.resolve()
@@ -499,32 +517,16 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   }
 
   /**
-   * Main-internal: start a host and associate its handle with the calling window
-   * so a renderer crash can reclaim exactly that window's processes. Remote
-   * launches (`spec.authority`) are server-managed and never tracked here.
+   * Main-internal: start a host owned by a window. The OS-level lifecycle registry reclaims
+   * it (and its whole process tree) when that window closes, reloads or crashes — see
+   * WindowMainService._reclaimWindowProcesses. Remote launches (`spec.authority`) are
+   * server-managed and carry no local owner.
    */
-  async startForWindow(
+  startForWindow(
     spec: ExtHostStartSpec | undefined,
     windowId: number,
   ): Promise<ExtHostStartResult> {
-    const result = await this.start(spec)
-    if (spec?.authority === undefined) this._windowByHandle.set(result.handle, windowId)
-    return result
-  }
-
-  /**
-   * Reclaim every local host a window spawned (renderer crash / reload / close).
-   * Remote handles stay with the server's own lifecycle. Logs the count so the
-   * diagnostics package can tie reclaimed processes back to the window.
-   */
-  async stopAllForWindow(windowId: number): Promise<void> {
-    const handles = [...this._windowByHandle.entries()]
-      .filter(([, w]) => w === windowId)
-      .map(([handle]) => handle)
-    for (const handle of handles) await this.stop(handle)
-    if (handles.length > 0) {
-      this._logger.info(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
-    }
+    return this.start(spec, { owner: windowOwner(windowId) })
   }
 
   override dispose(): void {
@@ -535,7 +537,6 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       }
     }
     this._procs.clear()
-    this._windowByHandle.clear()
     super.dispose()
   }
 }

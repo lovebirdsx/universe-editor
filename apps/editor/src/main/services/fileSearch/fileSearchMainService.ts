@@ -20,6 +20,7 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
+import { processLifecycle } from '../process/processLifecycle.js'
 
 function reviveUri(value: URI | UriComponents): URI {
   if (value instanceof URI) return value
@@ -32,7 +33,7 @@ export class FileSearchMainService extends FileSearchService {
     @IRemoteConnectionService private readonly _connections?: IRemoteConnectionService,
     options?: FileSearchServiceOptions,
   ) {
-    super(loggerService, options)
+    super(loggerService, { lifecycle: { registry: processLifecycle }, ...options })
   }
 
   override async search(

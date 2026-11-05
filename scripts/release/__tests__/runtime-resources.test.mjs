@@ -13,6 +13,7 @@ import {
   discoverBuiltinExtensions,
   extensionPackageFiles,
   releaseNotesSource,
+  requiresProcessJobAddon,
   resolveStagedProductJson,
   verifyReleaseNotesArtifacts,
 } from '../runtime-resources.mjs'
@@ -315,4 +316,10 @@ test('releaseNotesSource picks the snapshot, refuses a stale tree, and degrades 
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
+})
+
+test('process job addon is required on Windows only', () => {
+  assert.equal(requiresProcessJobAddon('win32'), true)
+  assert.equal(requiresProcessJobAddon('linux'), false)
+  assert.equal(requiresProcessJobAddon('darwin'), false)
 })

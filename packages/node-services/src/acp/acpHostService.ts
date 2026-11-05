@@ -40,6 +40,12 @@ import {
   CHILD_STDIN_NOT_WRITABLE_CODE,
   ManagedChildProcess,
 } from '../process/managedChildProcess.js'
+import {
+  APP_OWNER,
+  processGroupSpawnOptions,
+  type ProcessLifecycleRegistry,
+  type ProcessOwner,
+} from '../process/processLifecycle.js'
 
 /**
  * Spawner abstraction — injectable for tests so we don't have to launch real
@@ -58,8 +64,15 @@ export type AcpSpawner = (
      * shell wrapper would mis-quote it.
      */
     shell?: boolean
+    /** Lead a new POSIX process group so the lifecycle registry can group-kill the tree. */
+    processGroup?: boolean
   },
 ) => ChildProcessWithoutNullStreams
+
+/** Who owns a started agent; the lifecycle registry reclaims by owner. Defaults to the app. */
+export interface AcpStartContext {
+  readonly owner?: ProcessOwner
+}
 
 /** Resolves a bundled agent entry file for the `runAsNode` launch. */
 export type NodeEntryResolver = (entry: 'claude' | 'codex') => string
@@ -87,6 +100,8 @@ export interface AcpHostOptions {
    * The local editor wires this to its process-role registry; the server omits it.
    */
   readonly onSpawned?: (pid: number, label: string) => IDisposable | undefined
+  /** Local editor only: bind every agent to an owner in the OS-level lifecycle registry. */
+  readonly lifecycle?: { readonly registry: ProcessLifecycleRegistry; readonly role: string }
 }
 
 const defaultSpawner: AcpSpawner = (command, args, options) => {
@@ -104,6 +119,7 @@ const defaultSpawner: AcpSpawner = (command, args, options) => {
     env: options.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    ...(options.processGroup === true ? processGroupSpawnOptions() : {}),
   })
 }
 
@@ -161,6 +177,8 @@ export class AcpHostService extends Disposable implements IAcpHostService {
   private readonly _resolveNodeEntry: NodeEntryResolver
   private readonly _runAsNodeEnv: RunAsNodeEnv
   private readonly _onSpawned: ((pid: number, label: string) => IDisposable | undefined) | undefined
+  private readonly _lifecycle: AcpHostOptions['lifecycle']
+  private readonly _usesDefaultSpawner: boolean
 
   constructor(options: AcpHostOptions = {}) {
     super()
@@ -170,9 +188,11 @@ export class AcpHostService extends Disposable implements IAcpHostService {
     this._resolveNodeEntry = options.resolveNodeEntry ?? (() => '')
     this._runAsNodeEnv = options.runAsNodeEnv ?? defaultRunAsNodeEnv
     this._onSpawned = options.onSpawned
+    this._lifecycle = options.lifecycle
+    this._usesDefaultSpawner = options.spawn === undefined
   }
 
-  async start(spec: AcpLaunchSpec): Promise<AcpStartResult> {
+  async start(spec: AcpLaunchSpec, ctx: AcpStartContext = {}): Promise<AcpStartResult> {
     if (spec.cwd !== undefined) {
       if (!path.isAbsolute(spec.cwd)) {
         return Promise.reject(
@@ -198,7 +218,16 @@ export class AcpHostService extends Disposable implements IAcpHostService {
     }
     const handle = randomUUID()
     const env = buildChildEnv(process.env, spec.env ? { overrides: spec.env } : {})
-    const options: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean } = { env }
+    const options: {
+      cwd?: string
+      env?: NodeJS.ProcessEnv
+      shell?: boolean
+      processGroup?: boolean
+    } = { env }
+    // Only the default spawner understands `processGroup`; a custom spawner's child is not ours to group.
+    const processGroup =
+      this._lifecycle !== undefined && this._usesDefaultSpawner && process.platform !== 'win32'
+    if (processGroup) options.processGroup = true
     if (spec.cwd !== undefined) options.cwd = spec.cwd
     if (spec.shell !== undefined) options.shell = spec.shell
 
@@ -226,6 +255,16 @@ export class AcpHostService extends Disposable implements IAcpHostService {
         // that actually owns the agent's stdio pipes (cmd wrapper or the
         // runAsNode re-spawned grandchild).
         treeKill: usesShell || spec.runAsNode === true,
+        ...(processGroup ? { processGroup: true } : {}),
+        ...(this._lifecycle
+          ? {
+              lifecycle: {
+                registry: this._lifecycle.registry,
+                owner: ctx.owner ?? APP_OWNER,
+                role: this._lifecycle.role,
+              },
+            }
+          : {}),
       })
     } catch (err) {
       this._logger.warn(

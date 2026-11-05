@@ -27,6 +27,8 @@ import {
 } from '@universe-editor/platform'
 import {
   AcpHostService,
+  windowOwner,
+  type AcpStartContext,
   type AcpCommandLookup,
   type AcpSpawner,
   type NodeEntryResolver,
@@ -39,6 +41,7 @@ import type {
   IAcpHostService,
 } from '@universe-editor/platform'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
+import { processLifecycle } from '../process/processLifecycle.js'
 import { resolveFromRepo } from '../../repoPaths.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 
@@ -76,10 +79,6 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
   private readonly _remoteSubs = new Map<string, IDisposable[]>()
   /** handle → authority (remote handles only). */
   private readonly _remoteByHandle = new Map<string, string>()
-  /** handle → windowId for local handles, so a window crash can reclaim its agents. */
-  private readonly _windowByHandle = new Map<string, number>()
-  /** Window ids closed for good; a `start` still in flight must stop itself. */
-  private readonly _retiredWindows = new Set<number>()
 
   constructor(
     spawn?: AcpSpawner,
@@ -102,19 +101,15 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
         runAsNodeEnv: () => ({ ELECTRON_RUN_AS_NODE: '1' }),
         ...(loggerService !== undefined ? { logger: loggerService } : {}),
         onSpawned: (pid, label) => processRoleRegistry.register(pid, { role: 'acp-agent', label }),
+        lifecycle: { registry: processLifecycle, role: 'acp-agent' },
       }),
     )
     this._register(this._local.onStdout((e) => this._onStdout.fire(e)))
     this._register(this._local.onStderr((e) => this._onStderr.fire(e)))
-    this._register(
-      this._local.onExit((e) => {
-        this._windowByHandle.delete(e.handle)
-        this._onExit.fire(e)
-      }),
-    )
+    this._register(this._local.onExit((e) => this._onExit.fire(e)))
   }
 
-  async start(spec: AcpLaunchSpec): Promise<AcpStartResult> {
+  async start(spec: AcpLaunchSpec, ctx?: AcpStartContext): Promise<AcpStartResult> {
     if (spec.authority) {
       const service = await this._remoteService(spec.authority)
       const { authority: _authority, ...rest } = spec
@@ -129,7 +124,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
         `acpHost start: POSIX cwd '${spec.cwd}' reached the local spawn — a remote session likely lost its authority`,
       )
     }
-    return this._local.start(spec)
+    return this._local.start(spec, ctx)
   }
 
   writeStdin(handle: string, data: string): Promise<void> {
@@ -150,7 +145,6 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       const service = this._remoteServices.get(authority)
       return service ? service.stop(handle) : Promise.resolve()
     }
-    this._windowByHandle.delete(handle)
     return this._local.stop(handle)
   }
 
@@ -161,53 +155,13 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
   }
 
   /**
-   * Main-internal: start an agent and associate its handle with the calling
-   * window so a renderer crash can reclaim exactly that window's processes.
-   * Remote launches (`spec.authority`) are server-managed and never tracked here.
+   * Main-internal: start an agent owned by a window. The OS-level lifecycle registry
+   * reclaims it (and its whole process tree) when that window closes, reloads or crashes —
+   * see WindowMainService._reclaimWindowProcesses. Remote launches (`spec.authority`) are
+   * server-managed and carry no local owner.
    */
-  async startForWindow(spec: AcpLaunchSpec, windowId: number): Promise<AcpStartResult> {
-    const result = await this.start(spec)
-    if (!spec.authority) {
-      if (this._retiredWindows.has(windowId)) {
-        // The window closed while `start` was in flight, so `stopAllForWindow`
-        // snapshotted the map before this handle existed — stop it here instead
-        // of registering it against a window that will never reclaim again.
-        this._logger.info(`start for retired windowId=${windowId}; stopping ${result.handle}`)
-        try {
-          await this.stop(result.handle)
-        } catch (err) {
-          this._logger.warn(
-            `start for retired windowId=${windowId} could not stop ${result.handle}: ${String(err)}`,
-          )
-        }
-        return result
-      }
-      this._windowByHandle.set(result.handle, windowId)
-    }
-    return result
-  }
-
-  /**
-   * Main-internal: mark a window as closed for good. Reloads must NOT retire —
-   * the reloaded renderer starts fresh agents under the same window id.
-   */
-  retireWindow(windowId: number): void {
-    this._retiredWindows.add(windowId)
-  }
-
-  /**
-   * Reclaim every local agent a window spawned (renderer crash / reload / close).
-   * Remote handles stay with the server's own lifecycle. Logs the count so the
-   * diagnostics package can tie reclaimed processes back to the window.
-   */
-  async stopAllForWindow(windowId: number): Promise<void> {
-    const handles = [...this._windowByHandle.entries()]
-      .filter(([, w]) => w === windowId)
-      .map(([handle]) => handle)
-    for (const handle of handles) await this.stop(handle)
-    if (handles.length > 0) {
-      this._logger.info(`stopAllForWindow windowId=${windowId} killed=${handles.length}`)
-    }
+  startForWindow(spec: AcpLaunchSpec, windowId: number): Promise<AcpStartResult> {
+    return this.start(spec, { owner: windowOwner(windowId) })
   }
 
   override dispose(): void {

@@ -50,10 +50,12 @@ import {
   type IRemoteExtensionHostStartArgs,
 } from '@universe-editor/platform'
 import {
+  APP_OWNER,
   ManagedChildProcess,
   connectNodeSocket,
   type ManagedExit,
 } from '@universe-editor/node-services'
+import { processLifecycle } from '../process/processLifecycle.js'
 import { buildChildEnv } from '../process/env.js'
 import { decodeDiagnostic } from '../process/decode.js'
 import {
@@ -631,7 +633,11 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       this._spawn(command, [...args, 'serve', '--data-dir', dataDir], {
         env: buildChildEnv(process.env),
       }),
-      { logger: this._logger, label: `remote-direct:${entry.authority}` },
+      {
+        logger: this._logger,
+        label: `remote-direct:${entry.authority}`,
+        lifecycle: { registry: processLifecycle, owner: APP_OWNER, role: 'remote-direct' },
+      },
     )
     entry.directProcess = proc
     const directSubs = new DisposableStore()

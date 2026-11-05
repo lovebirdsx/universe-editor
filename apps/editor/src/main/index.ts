@@ -78,6 +78,7 @@ import {
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IMcpClientService } from '../shared/ipc/mcpClientService.js'
 import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
+import type { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainService.js'
 import { McpClientMainService } from './services/mcpClient/mcpClientMainService.js'
 import { IExtensionHostService } from '../shared/ipc/extensionHostService.js'
 import { ExtensionHostMainService } from './services/extensionHost/extensionHostMainService.js'
@@ -128,6 +129,7 @@ import {
   readShutdownTrace,
   recordShutdownMark,
 } from './services/update/updateShutdownTrace.js'
+import { initProcessLifecycle, processLifecycle } from './services/process/processLifecycle.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 // Side-effect: registers all application-singleton main services with registerSingleton.
 import './services/main-services.js'
@@ -355,6 +357,10 @@ const consoleInterceptor = installConsoleInterceptor({
 })
 
 installChildProcessGoneLogging(mainLogger, (event, error) => errorSink.recordLocal(event, error))
+// Before any child process can be spawned: binds the Windows Job Object addon (if present).
+initProcessLifecycle(
+  logMainService.createLogger({ id: 'processLifecycle', name: 'Process Lifecycle' }),
+)
 // System commit/physical readings, shared by the metrics log below and (later)
 // heap-snapshot admission. Started here, and never awaited: the first reading is a
 // spawned PowerShell query that must not sit on the startup path. Logged on the metrics
@@ -583,7 +589,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       extensionHost: accessor.get(IExtensionHostService) as ExtensionHostMainService,
       extensionManagement: accessor.get(IExtensionManagementService),
       extensionGallery: accessor.get(IExtensionGalleryService),
-      acpTerminal: accessor.get(IAcpTerminalService),
+      acpTerminal: accessor.get(IAcpTerminalService) as AcpTerminalMainService,
       claudeBinary: accessor.get(IClaudeBinaryService),
       claudeConfig: accessor.get(IClaudeConfigService),
       codexBinary: accessor.get(ICodexBinaryService),
@@ -902,6 +908,8 @@ app.on('will-quit', () => {
   // Disposes every materialized application service (acpHost kills child
   // processes, recentWorkspaces flushes its writes, update tears down, etc.).
   rootInstantiation?.dispose()
+  // After the services' own kills: terminates any job still holding grandchildren (tsserver…).
+  processLifecycle.dispose()
   errorSink.dispose()
   // Synchronous: Electron does not wait for promises in will-quit, so a
   // fire-and-forget flush() could be truncated by process exit. flushSync writes

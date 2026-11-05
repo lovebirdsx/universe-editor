@@ -14,7 +14,12 @@ import type {
   IAcpTerminalService,
   IRemoteEnvironment,
 } from '@universe-editor/platform'
-import { AcpTerminalMainService, type AcpTerminalSpawner } from '../acpTerminalMainService.js'
+import {
+  AcpTerminalMainService,
+  createWindowScopedAcpTerminal,
+  type AcpTerminalSpawner,
+} from '../acpTerminalMainService.js'
+import { processLifecycle } from '../../process/processLifecycle.js'
 import type {
   IRemoteConnection,
   IRemoteConnectionService,
@@ -34,6 +39,9 @@ class FakeStdinStream extends EventEmitter {
 }
 
 class FakeProc extends EventEmitter {
+  constructor(readonly pid?: number) {
+    super()
+  }
   readonly stdout = new FakeStdStream()
   readonly stderr = new FakeStdStream()
   readonly stdin = new FakeStdinStream()
@@ -85,6 +93,22 @@ describe('AcpTerminalMainService — basics', () => {
     expect(snap.output).toBe('hello world\n')
     expect(snap.truncated).toBe(false)
     expect(snap.exitStatus).toBeUndefined()
+  })
+
+  it('owns window-created terminals by window and releases them on exit', async () => {
+    const proc = new FakeProc(9301)
+    svc = makeService(spawnerWith([proc]))
+    await createWindowScopedAcpTerminal(svc, 4).create({ command: 'npm', args: ['run', 'dev'] })
+
+    expect(
+      processLifecycle
+        .snapshot()
+        .filter((e) => e.pid === 9301)
+        .map((e) => [e.owner, e.role]),
+    ).toEqual([['window:4', 'acp-terminal']])
+
+    proc.emitExit(0, null)
+    expect(processLifecycle.snapshot().some((e) => e.pid === 9301)).toBe(false)
   })
 
   it('returns exitStatus on output() once the proc exits', async () => {

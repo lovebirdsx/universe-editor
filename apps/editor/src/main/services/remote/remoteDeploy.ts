@@ -29,7 +29,8 @@ import { pipeline } from 'node:stream/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomBytes } from 'node:crypto'
-import { ManagedChildProcess } from '@universe-editor/node-services'
+import { APP_OWNER, ManagedChildProcess } from '@universe-editor/node-services'
+import { processLifecycle } from '../process/processLifecycle.js'
 import { getTempRoot } from '@universe-editor/temp-root'
 import {
   NullLogger,
@@ -1080,7 +1081,11 @@ export class RemoteDeployer {
       this._spawner('ssh', forwardArgs(authority, localPort, remotePort), {
         env: buildChildEnv(process.env),
       }),
-      { logger: log, label: `remote-forward:${authority}` },
+      {
+        logger: log,
+        label: `remote-forward:${authority}`,
+        lifecycle: { registry: processLifecycle, owner: APP_OWNER, role: 'ssh-forward' },
+      },
     )
     const stderrSub = proc.onStderr((chunk) => {
       log.info(`[remote:${authority}] ssh forward: ${decodeDiagnostic(chunk).trim()}`)
