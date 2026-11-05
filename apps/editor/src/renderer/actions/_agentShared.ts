@@ -16,6 +16,7 @@ import {
   IAcpChatWidgetService,
   type AcpChatWidget,
 } from '../services/acp/session/acpChatWidgetService.js'
+import type { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 import { hasTabActionTarget, resolveTargetEditor } from './editorActionHelpers.js'
@@ -122,4 +123,47 @@ export function resolveSessionWidget(
 ): AcpChatWidget | undefined {
   if (sessionId === undefined) return resolveNavWidget(accessor, arg)
   return accessor.get(IAcpChatWidgetService).widgetForSession(sessionId)
+}
+
+/** Extract the session id from an AcpSessionEditorInput resource: `universe:/acp/session/<id>`. */
+export function sessionIdFromResource(resource: unknown): string | undefined {
+  const path =
+    typeof resource === 'object' && resource !== null
+      ? (resource as { path?: unknown }).path
+      : undefined
+  if (typeof path !== 'string') return undefined
+  const m = /^\/acp\/session\/(.+)$/.exec(path)
+  return m ? m[1] : undefined
+}
+
+/**
+ * The session id a *context-menu* host passed in its args, if any. Menu hosts
+ * always name the session they were raised on; the command palette invokes the
+ * command bare. Several decisions key off that difference (which session to
+ * target, and whether the DOM selection belongs to this command at all), so the
+ * test lives here rather than being re-spelled at each call site.
+ */
+export function menuSessionArg(arg: { sessionId?: unknown } | undefined): string | undefined {
+  return typeof arg?.sessionId === 'string' && arg.sessionId.length > 0 ? arg.sessionId : undefined
+}
+
+/**
+ * Resolve the session a command should operate on:
+ *  1. explicit `{ sessionId }` arg (session list / chat context menu),
+ *  2. the `{ resource }` arg from the editor tab context menu,
+ *  3. the active AcpSessionEditorInput (editor focused),
+ *  4. the active session (command palette / keybinding).
+ */
+export function resolveSessionTargetId(
+  arg: { sessionId?: unknown; resource?: unknown } | undefined,
+  editor: IEditorService,
+  sessions: IAcpSessionService,
+): string | undefined {
+  const fromMenu = menuSessionArg(arg)
+  if (fromMenu !== undefined) return fromMenu
+  const fromResource = sessionIdFromResource(arg?.resource)
+  if (fromResource !== undefined) return fromResource
+  const active = editor.activeEditor.get()
+  if (active instanceof AcpSessionEditorInput) return active.sessionId
+  return sessions.activeSession.get()?.id
 }

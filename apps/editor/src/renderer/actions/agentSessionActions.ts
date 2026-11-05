@@ -73,7 +73,9 @@ import {
   ACP_SCOPED_KEY_WEIGHT,
   ACP_SESSION_EDITOR_ACTIVE_WHEN,
   CATEGORY,
+  menuSessionArg,
   resolveNavWidget,
+  resolveSessionTargetId,
   sessionDirectoryName,
 } from './_agentShared.js'
 import {
@@ -1142,17 +1144,6 @@ export class UnpinAgentSessionAction extends BaseSessionFlagAction {
   }
 }
 
-/** Extract the session id from an AcpSessionEditorInput resource: `universe:/acp/session/<id>`. */
-function sessionIdFromResource(resource: unknown): string | undefined {
-  const path =
-    typeof resource === 'object' && resource !== null
-      ? (resource as { path?: unknown }).path
-      : undefined
-  if (typeof path !== 'string') return undefined
-  const m = /^\/acp\/session\/(.+)$/.exec(path)
-  return m ? m[1] : undefined
-}
-
 /** Start the folder picker at the remembered session cwd when it still
  *  belongs to this window (same host + inside the open folder). Delegates the
  *  gate to the shared `rememberedCwdForWindow` so it cannot drift from the
@@ -1169,31 +1160,6 @@ function rememberedSessionCwdUri(
   )
   if (cwd === undefined) return undefined
   return rememberedCwdUri(cwd, authorityForFolder(workspace.current?.folder))
-}
-
-/**
- * The session id a *context-menu* host passed in its args, if any. Menu hosts
- * always name the session they were raised on; the command palette invokes the
- * command bare. Several decisions key off that difference (which session to
- * target, and whether the DOM selection belongs to this command at all), so the
- * test lives here rather than being re-spelled at each call site.
- */
-function menuSessionArg(arg: { sessionId?: unknown } | undefined): string | undefined {
-  return typeof arg?.sessionId === 'string' && arg.sessionId.length > 0 ? arg.sessionId : undefined
-}
-
-function resolveSessionTargetId(
-  arg: { sessionId?: unknown; resource?: unknown } | undefined,
-  editor: IEditorService,
-  sessions: IAcpSessionService,
-): string | undefined {
-  const fromMenu = menuSessionArg(arg)
-  if (fromMenu !== undefined) return fromMenu
-  const fromResource = sessionIdFromResource(arg?.resource)
-  if (fromResource !== undefined) return fromResource
-  const active = editor.activeEditor.get()
-  if (active instanceof AcpSessionEditorInput) return active.sessionId
-  return sessions.activeSession.get()?.id
 }
 
 /**

@@ -91,6 +91,10 @@ import {
 import { revealSessionEditorTab } from '../../services/acp/session/revealSessionEditorTab.js'
 import { revealSessionChat } from '../../services/acp/session/revealSessionChat.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
+import {
+  ForkAgentSessionAction,
+  RewindAgentSessionAction,
+} from '../../actions/agentRewindActions.js'
 import { AgentIcon } from './agentIcon.js'
 import { SideTaskCountBadge } from './SideTaskCountBadge.js'
 import { pathTail, shortenScopeLabel } from './scopeLabel.js'
@@ -1088,6 +1092,49 @@ export function SessionListBody({
                     icon: 'edit',
                     label: localize('acp.sessions.renameMenu', 'Rename Session'),
                     run: onRename,
+                  })
+                }
+                // A history-only row has no local message list; forking it from
+                // the tip is still valid (session/fork reads the durable
+                // transcript). Rewind needs a resident session to preview and
+                // acknowledge the truncation, so it stays hidden until opened.
+                const canFork =
+                  !isPending &&
+                  !isForeign &&
+                  live?.readOnly !== true &&
+                  (liveSession === undefined || liveSession.forkSupported.get())
+                if (canFork) {
+                  items.push({
+                    kind: 'item',
+                    id: 'fork',
+                    icon: 'checkout',
+                    label: localize('acp.sessions.forkMenu', 'Fork Session…'),
+                    run: () => {
+                      void commandService.executeCommand(
+                        ForkAgentSessionAction.ID,
+                        liveSession === undefined
+                          ? { sessionId: entry.id, fromTip: true }
+                          : { sessionId: entry.id },
+                      )
+                    },
+                  })
+                }
+                const canRewind =
+                  !isPending &&
+                  !isForeign &&
+                  liveSession !== undefined &&
+                  liveSession.rewindSupported.get()
+                if (canRewind) {
+                  items.push({
+                    kind: 'item',
+                    id: 'rewind',
+                    icon: 'discard',
+                    label: localize('acp.sessions.rewindMenu', 'Rewind Session…'),
+                    run: () => {
+                      void commandService.executeCommand(RewindAgentSessionAction.ID, {
+                        sessionId: entry.id,
+                      })
+                    },
                   })
                 }
                 items.push({

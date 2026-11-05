@@ -18,6 +18,10 @@
  *  used by E2E to drive the config bar's overflow panel.
  *  ECHO_AGENT_SESSION_NEW_DELAY_MS=<ms> delays every session/new response —
  *  used by E2E to exercise the editor's optimistic "connecting" session row.
+ *  ECHO_AGENT_FORK=1: initialize advertises `sessionCapabilities.fork`, and
+ *  ECHO_AGENT_REWIND=1: initialize advertises the `universe-editor/capabilities`
+ *  rewind block — both only light up the editor's fork/rewind entry points; the
+ *  fixture implements neither RPC (specs open the picker and dismiss it).
  *  ECHO_AGENT_TURN_END_GATE=<path>: 流式指令改等 <path> 出现再收尾（未设＝固定 500ms）。
  *  ECHO_AGENT_STREAM_CONTINUE_GATE=<path>: emit-subagent 发完首块再等 <path> 才继续。
  *  ECHO_AGENT_PID_FILE / ECHO_AGENT_ORPHAN_FILE / ECHO_AGENT_TREE_VIA_WRAPPER /
@@ -142,6 +146,8 @@ if (process.env.ECHO_AGENT_ORPHAN_FILE) {
   })
 }
 const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
+const forkCapabilityEnabled = process.env.ECHO_AGENT_FORK === '1'
+const rewindCapabilityEnabled = process.env.ECHO_AGENT_REWIND === '1'
 
 // How long the streaming directives keep their turn open after the final chunk when no
 // gate is set. A spec reads the renderer's live counters inside this window; the message
@@ -1106,6 +1112,16 @@ function handle(msg) {
         agentCapabilities: {
           promptCapabilities,
           ...(loadSessionEnabled ? { loadSession: true } : {}),
+          ...(forkCapabilityEnabled ? { sessionCapabilities: { fork: {} } } : {}),
+          ...(rewindCapabilityEnabled
+            ? {
+                _meta: {
+                  'universe-editor/capabilities': {
+                    rewind: { filesRolledBackByAgent: true },
+                  },
+                },
+              }
+            : {}),
         },
       })
     }

@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for ForkTipFooter's visibility gating (the turn has settled — 'idle',
  *  or the idle reaper's 'closed' + dormant seal — plus fork capability and
- *  non-readOnly) and its command delegation with a sessionId-only arg
+ *  non-readOnly) and its command delegation with an explicit `fromTip` arg
  *  (fork-from-tip semantics).
  *--------------------------------------------------------------------------------------------*/
 
@@ -75,13 +75,16 @@ const footer = (container: HTMLElement): Element | null =>
   container.querySelector('[data-testid="acp-fork-tip-footer"]')
 
 describe('ForkTipFooter', () => {
-  it('shows on an idle fork-capable session and delegates with sessionId only', () => {
+  it('shows on an idle fork-capable session and delegates with an explicit fromTip', () => {
     const { execute, container } = renderFooter(fakeSession({}))
     const button = container.querySelector('[data-testid="acp-fork-tip"]')
     expect(button).not.toBeNull()
 
     fireEvent.click(button!)
-    expect(execute).toHaveBeenCalledWith(ForkAgentSessionAction.ID, { sessionId: 's1' })
+    expect(execute).toHaveBeenCalledWith(ForkAgentSessionAction.ID, {
+      sessionId: 's1',
+      fromTip: true,
+    })
   })
 
   it('hides while the session is running', () => {
@@ -120,7 +123,10 @@ describe('ForkTipFooter', () => {
     expect(button).not.toBeNull()
 
     fireEvent.click(button!)
-    expect(execute).toHaveBeenCalledWith(ForkAgentSessionAction.ID, { sessionId: 's1' })
+    expect(execute).toHaveBeenCalledWith(ForkAgentSessionAction.ID, {
+      sessionId: 's1',
+      fromTip: true,
+    })
   })
 
   it('hides for a session the user really closed', () => {

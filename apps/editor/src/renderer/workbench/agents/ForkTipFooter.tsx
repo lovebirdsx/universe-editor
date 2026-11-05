@@ -41,7 +41,10 @@ export const ForkTipFooter = memo(function ForkTipFooter({ session }: { session:
         aria-label={label}
         onClick={(e) =>
           void runWithInvocationModifiers(e, () =>
-            executeCommand(ForkAgentSessionAction.ID, { sessionId: session.id }),
+            executeCommand(ForkAgentSessionAction.ID, {
+              sessionId: session.id,
+              fromTip: true,
+            }),
           )
         }
         data-testid="acp-fork-tip"

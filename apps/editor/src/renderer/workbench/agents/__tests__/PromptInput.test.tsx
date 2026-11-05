@@ -109,6 +109,10 @@ import {
   CopyAcpImageAction,
   CopyAcpReferenceAction,
 } from '../../../actions/agentTimelineActions.js'
+import {
+  ForkAgentSessionAction,
+  RewindAgentSessionAction,
+} from '../../../actions/agentRewindActions.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
 import { initUserDocsForTests } from '../../../services/editor/docRegistry.js'
 import styles from '../agents.module.css'
@@ -483,6 +487,9 @@ interface FakeSessionOptions {
   readonly usage?: AcpUsage
   readonly imageSupported?: boolean
   readonly cwd?: string
+  readonly readOnly?: boolean
+  readonly forkSupported?: boolean
+  readonly rewindSupported?: boolean
 }
 
 interface FakeSession extends IAcpSession {
@@ -516,7 +523,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     agentId: 'fake',
     authority: undefined,
     cwd: opts.cwd,
-    readOnly: false,
+    readOnly: opts.readOnly ?? false,
     sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', opts.id ?? 's1'),
     title: 'Fake',
     messages,
@@ -541,8 +548,11 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
     backgroundTaskCount: backgroundTasksObs,
     imageSupported: observableValue<boolean>('test.imageSupported', opts.imageSupported ?? false),
-    forkSupported: observableValue<boolean>('test.forkSupported', false),
-    rewindSupported: observableValue<boolean>('test.rewindSupported', false),
+    forkSupported: observableValue<boolean>('test.forkSupported', opts.forkSupported ?? false),
+    rewindSupported: observableValue<boolean>(
+      'test.rewindSupported',
+      opts.rewindSupported ?? false,
+    ),
     onDidRequireAuth: Event.None,
     onDidCancelForRestore: cancelRestoreEmitter.event,
     presentPermission: () => {},
@@ -902,6 +912,128 @@ describe('PromptInput — submit and cancel', () => {
       session.commandsObs.set(COMMANDS, undefined)
     })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+  })
+})
+
+describe('PromptInput — editor-local slash commands', () => {
+  function renderLocal(
+    opts: {
+      executeCommand?: ReturnType<typeof vi.fn>
+      agentCommands?: readonly AvailableCommand[]
+      readOnly?: boolean
+      forkSupported?: boolean
+      rewindSupported?: boolean
+    } = {},
+  ) {
+    const handleRef = makeHandleRef()
+    const session = makeSession({
+      forkSupported: opts.forkSupported ?? true,
+      rewindSupported: opts.rewindSupported ?? true,
+      ...(opts.agentCommands !== undefined ? { commands: opts.agentCommands } : {}),
+      ...(opts.readOnly !== undefined ? { readOnly: opts.readOnly } : {}),
+    })
+    const executeCommand = opts.executeCommand ?? vi.fn().mockResolvedValue(true)
+    renderWithServices(<PromptInput session={session} handleRef={handleRef} />, {
+      commands: {
+        _serviceBrand: undefined,
+        executeCommand,
+      } as unknown as ICommandServiceType,
+    })
+    return { session, handleRef, executeCommand, ta: getTextarea() }
+  }
+
+  /** The popover owns the first Enter (accept); hide it as Escape would. */
+  function dismissPopover(handleRef: { current: WidgetHandle }): void {
+    act(() => handleRef.current.popoverHide())
+  }
+
+  it('lists /fork and /rewind when the session supports them', () => {
+    renderLocal()
+    fireEvent.change(getTextarea(), { target: { value: '/' } })
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(2)
+    expect(options[0]?.textContent).toContain('/fork')
+    expect(options[1]?.textContent).toContain('/rewind')
+  })
+
+  it('hides local commands for a read-only session', () => {
+    renderLocal({ readOnly: true })
+    fireEvent.change(getTextarea(), { target: { value: '/' } })
+    expect(screen.queryByTestId('acp-slash-popover')).toBeNull()
+  })
+
+  it('merges an agent-advertised command with the same name into the local one', () => {
+    renderLocal({ agentCommands: [{ name: 'fork', description: 'agent-supplied fork' }] })
+    fireEvent.change(getTextarea(), { target: { value: '/fork' } })
+    expect(screen.getAllByRole('option')).toHaveLength(1)
+  })
+
+  it('submits /fork through the command instead of sending it as a prompt', async () => {
+    const { session, handleRef, executeCommand, ta } = renderLocal()
+    fireEvent.change(ta, { target: { value: '/fork' } })
+    dismissPopover(handleRef)
+    fireEvent.keyDown(ta, { key: 'Enter' })
+
+    await waitFor(() => expect(executeCommand).toHaveBeenCalledWith(ForkAgentSessionAction.ID))
+    expect(session.sendPrompt).not.toHaveBeenCalled()
+    expect(ta.value).toBe('')
+  })
+
+  it('submits /rewind through the command instead of sending it as a prompt', async () => {
+    const { session, handleRef, executeCommand, ta } = renderLocal()
+    fireEvent.change(ta, { target: { value: '/rewind' } })
+    dismissPopover(handleRef)
+    fireEvent.keyDown(ta, { key: 'Enter' })
+
+    await waitFor(() => expect(executeCommand).toHaveBeenCalledWith(RewindAgentSessionAction.ID))
+    expect(session.sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('restores the typed command when the action did not complete', async () => {
+    const executeCommand = vi.fn().mockResolvedValue(false)
+    const { session, handleRef, ta } = renderLocal({ executeCommand })
+    fireEvent.change(ta, { target: { value: '/fork' } })
+    dismissPopover(handleRef)
+    fireEvent.keyDown(ta, { key: 'Enter' })
+
+    await waitFor(() => expect(ta.value).toBe('/fork'))
+    expect(session.sendPrompt).not.toHaveBeenCalled()
+  })
+
+  it('sends /fork with arguments as a normal prompt', () => {
+    const { session, executeCommand, ta } = renderLocal()
+    fireEvent.change(ta, { target: { value: '/fork explain this' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(session.sendPrompt).toHaveBeenCalledWith('/fork explain this', [], [], [])
+  })
+
+  it('sends /fork as a prompt when the agent does not support forking', () => {
+    const { session, executeCommand, ta } = renderLocal({
+      forkSupported: false,
+      rewindSupported: false,
+    })
+    fireEvent.change(ta, { target: { value: '/fork' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(session.sendPrompt).toHaveBeenCalledWith('/fork', [], [], [])
+  })
+
+  it('lets the rewind backfill survive the command hand-off', async () => {
+    const executeCommand = vi.fn(async (id: string) => {
+      if (id === RewindAgentSessionAction.ID) {
+        AcpPromptReplaceInbox.deposit('s1', { text: 'rewound turn', contexts: [] })
+      }
+      return true
+    })
+    const { handleRef, ta } = renderLocal({ executeCommand })
+    fireEvent.change(ta, { target: { value: '/rewind' } })
+    dismissPopover(handleRef)
+    fireEvent.keyDown(ta, { key: 'Enter' })
+
+    await waitFor(() => expect(ta.value).toBe('rewound turn'))
   })
 })
 

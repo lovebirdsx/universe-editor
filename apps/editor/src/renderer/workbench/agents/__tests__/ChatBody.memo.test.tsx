@@ -129,6 +129,7 @@ function makeSession(
     runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
     imageSupported: observableValue<boolean>('t.imageSupported', false),
     forkSupported: observableValue<boolean>('t.forkSupported', false),
+    rewindSupported: observableValue<boolean>('t.rewindSupported', false),
     onDidCancelForRestore: Event.None,
     setCollapseMode: () => {},
     cycleCollapseMode: () => {},

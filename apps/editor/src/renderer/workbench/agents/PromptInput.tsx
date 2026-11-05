@@ -129,6 +129,11 @@ import {
   type PromptChangeKind,
 } from './PromptMonacoEditor.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
+import {
+  buildLocalSlashCommands,
+  matchLocalSlashCommand,
+  mergeSlashCommands,
+} from './localSlashCommands.js'
 import { PromptHistoryPopover } from './PromptHistoryPopover.js'
 import { ConfigOptionsBar, type ConfigOptionsBarHandle } from './ConfigOptionsBar.js'
 import { CollapseModePicker } from './CollapseModePicker.js'
@@ -369,6 +374,21 @@ export function PromptInput({
   // no turn to stop yet, and `cancelTurn()` is a no-op until it attaches.
   const running = useTurnInFlight(session)
   const commands = useObservable(session.availableCommands)
+  const forkSupported = useObservable(session.forkSupported)
+  const rewindSupported = useObservable(session.rewindSupported)
+  const localSlashCommands = useMemo(
+    () =>
+      buildLocalSlashCommands({
+        forkSupported,
+        rewindSupported,
+        readOnly: session.readOnly,
+      }),
+    [forkSupported, rewindSupported, session.readOnly],
+  )
+  const slashCommands = useMemo(
+    () => mergeSlashCommands(commands, localSlashCommands),
+    [commands, localSlashCommands],
+  )
   const timeline = useObservable(session.timeline)
   const historyEntries = useObservable(historyService.entries)
   const imageSupported = useObservable(session.imageSupported)
@@ -681,8 +701,8 @@ export function PromptInput({
 
   const slashQuery = useMemo(() => extractSlashQuery(text, caret), [text, caret])
   const slashMatches = useMemo<readonly AvailableCommand[]>(
-    () => (slashQuery === null ? [] : filterCommands(commands, slashQuery)),
-    [commands, slashQuery],
+    () => (slashQuery === null ? [] : filterCommands(slashCommands, slashQuery)),
+    [slashCommands, slashQuery],
   )
   const imageLimits = useMemo<ImageLimits>(
     () => ({
@@ -829,7 +849,7 @@ export function PromptInput({
   // Slash popover takes precedence: a buffer that starts with `/` is a
   // slash command, even if it also contains `@`. The mention parser is
   // caret-aware so it only fires when the user is actively typing `@…`.
-  const slashOpen = slashQuery !== null && !slashDismissed && commands.length > 0
+  const slashOpen = slashQuery !== null && !slashDismissed && slashCommands.length > 0
 
   // `#` context popover: same slash-precedence rule, checked ahead of `@`
   // mentions (a `#`/`@` token in the same buffer can't both be active, but
@@ -1300,6 +1320,38 @@ export function PromptInput({
     e?.preventDefault()
     // Allow an image-only prompt (no text) as long as something is attached.
     if (!text.trim() && images.length === 0) return
+
+    // Local slash commands are editor actions, not prompts. Intercept only an
+    // exact single-token command and only when no refs/context/images would be
+    // silently dropped. Clear FIRST: Rewind deposits its backfill while the
+    // command runs, and a later clear would erase it.
+    const commandRefs = editorHandleRef.current?.listRefs() ?? []
+    if (commandRefs.length === 0 && contexts.length === 0 && images.length === 0) {
+      const local = matchLocalSlashCommand(text, localSlashCommands)
+      if (local !== undefined) {
+        const commandText = text
+        setSlashDismissed(true)
+        setSlashIndex(0)
+        editorHandleRef.current?.setText('', 0)
+        editorHandleRef.current?.clearHistory()
+        setText('')
+        AcpPromptDraftCache.clear(session.id)
+        let handled = false
+        try {
+          handled = (await commandService.executeCommand<boolean>(local.actionId)) === true
+        } catch {
+          handled = false
+        }
+        if (!handled) {
+          // Cancelled picker / unsupported target: restore what the user typed.
+          editorHandleRef.current?.setText(commandText, commandText.length)
+          setText(commandText)
+          editorHandleRef.current?.clearHistory()
+          requestFrame(() => editorHandleRef.current?.focus())
+        }
+        return
+      }
+    }
 
     const minLen = config.get<number>('acp.prompt.confirmShortFirstMessageLength') ?? 0
     if (

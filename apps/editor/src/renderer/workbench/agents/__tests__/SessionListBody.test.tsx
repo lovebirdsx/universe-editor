@@ -59,6 +59,10 @@ import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionE
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import { SessionListBody } from '../SessionListBody.js'
+import {
+  ForkAgentSessionAction,
+  RewindAgentSessionAction,
+} from '../../../actions/agentRewindActions.js'
 import { ServicesContext } from '../../useService.js'
 import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
@@ -157,6 +161,8 @@ function makeFakeSession(opts: {
   status?: 'connecting' | 'idle' | 'running' | 'errored' | 'closed'
   sessionIdOnAgent?: string
   dormant?: boolean
+  forkSupported?: boolean
+  rewindSupported?: boolean
 }): IAcpSession & {
   status: ISettableObservable<AcpSessionStatus>
   sessionIdOnAgent: ISettableObservable<string | undefined>
@@ -192,6 +198,8 @@ function makeFakeSession(opts: {
     backgroundTaskCount: observableValue<number>('test.session.btc', 0),
     pendingElicitation: observableValue('test.session.pe', undefined),
     pendingPermission: observableValue('test.session.pp', undefined),
+    forkSupported: observableValue<boolean>('test.session.fork', opts.forkSupported ?? false),
+    rewindSupported: observableValue<boolean>('test.session.rewind', opts.rewindSupported ?? false),
   } as never
 }
 
@@ -517,6 +525,89 @@ describe('SessionListBody — archive / pin', () => {
     expect(executeCommand).toHaveBeenCalledWith('workbench.action.agent.copySessionPath', {
       sessionId: 'a',
     })
+  })
+
+  it('history-only rows offer Fork Session from the tip but not Rewind', () => {
+    const { history, executeCommand } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 1 })
+    expect(screen.queryByText('Rewind Session…')).toBeNull()
+    fireEvent.click(screen.getByText('Fork Session…'))
+    expect(executeCommand).toHaveBeenCalledWith(ForkAgentSessionAction.ID, {
+      sessionId: 'a',
+      fromTip: true,
+    })
+  })
+
+  it('live rows open the shared pickers for Fork and Rewind', () => {
+    const { history, sessionCtl, executeCommand } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    const session = makeFakeSession({
+      id: 'a',
+      status: 'idle',
+      sessionIdOnAgent: 'a',
+      forkSupported: true,
+      rewindSupported: true,
+    })
+    act(() => {
+      sessionCtl.liveById.set('a', session)
+      sessionCtl.sessions.set([...sessionCtl.sessions.get(), session], undefined)
+    })
+
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 1 })
+    fireEvent.click(screen.getByText('Fork Session…'))
+    expect(executeCommand).toHaveBeenCalledWith(ForkAgentSessionAction.ID, {
+      sessionId: 'a',
+    })
+
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 1 })
+    fireEvent.click(screen.getByText('Rewind Session…'))
+    expect(executeCommand).toHaveBeenCalledWith(RewindAgentSessionAction.ID, {
+      sessionId: 'a',
+    })
+  })
+
+  it('hides Fork / Rewind when the agent advertises neither capability', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    const session = makeFakeSession({ id: 'a', status: 'idle', sessionIdOnAgent: 'a' })
+    act(() => {
+      sessionCtl.liveById.set('a', session)
+      sessionCtl.sessions.set([...sessionCtl.sessions.get(), session], undefined)
+    })
+
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 1 })
+    expect(screen.queryByText('Fork Session…')).toBeNull()
+    expect(screen.queryByText('Rewind Session…')).toBeNull()
+  })
+
+  it('hides Fork / Rewind for a read-only preview', () => {
+    const { history, sessionCtl } = harness
+    addEntry(history, 'a', 'alpha', 1000)
+    const session = makeFakeSession({
+      id: 'a',
+      status: 'idle',
+      sessionIdOnAgent: 'a',
+      readOnly: true,
+      forkSupported: true,
+      rewindSupported: true,
+    })
+    act(() => {
+      sessionCtl.liveById.set('a', session)
+      sessionCtl.sessions.set([...sessionCtl.sessions.get(), session], undefined)
+    })
+
+    fireEvent.contextMenu(screen.getByTestId('session-row-a'), { detail: 1 })
+    expect(screen.queryByText('Fork Session…')).toBeNull()
+    expect(screen.queryByText('Rewind Session…')).toBeNull()
+  })
+
+  it('hides Fork / Rewind for a foreign-worktree row', () => {
+    const { history } = harness
+    addEntry(history, 'f', 'foreign', 1000, 'fake', '/other')
+    fireEvent.contextMenu(screen.getByTestId('session-row-f'), { detail: 1 })
+    expect(screen.queryByText('Fork Session…')).toBeNull()
+    expect(screen.queryByText('Rewind Session…')).toBeNull()
   })
 
   it('keeps Copy Session File Path enabled on a remote row where reveal is disabled', () => {

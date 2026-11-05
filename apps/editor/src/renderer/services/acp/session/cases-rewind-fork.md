@@ -96,13 +96,34 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 
 | 文件 | 职责 |
 |---|---|
-| `actions/agentRewindActions.ts` | `RewindAgentSessionAction`（dryRun 预览→三/单按钮确认→rewind→回填）+ `ForkAgentSessionAction`（fork→开 editor tab 或 setActive）。rewind `f1:false`、arg 须带 `{sessionId,messageId}`；fork 的 messageId 可省（=从 tip 分叉完整对话），`f1:true` 无参时回退 active session，running 中拒绝 |
+| `actions/agentRewindActions.ts` | `RewindAgentSessionAction`（dryRun 预览→三/单按钮确认→rewind→回填）+ `ForkAgentSessionAction`（fork→开 editor tab 或 setActive）。两者支持 `{sessionId, messageId}`、`{sessionId, fromTip:true}`、无锚点弹选择器三种形态；`run` 返回 `Promise<boolean>`（本地斜杠命令据此恢复输入）。Rewind 的命令面板行显式用 `ACP_SESSION_EDITOR_ACTIVE_WHEN`，`f1:false`；快捷键 `Ctrl+Alt+Shift+Z` / `Ctrl+Alt+Shift+F` 均挂 `ACP_EDITOR_ONLY_WHEN` |
+| `actions/agentRewindPickItems.ts` | 消息选择器纯 helper：过滤可用 user 锚点、Fork 排除首条用户消息并插入 `FORK_TIP_ITEM_ID` 末尾项、摘要折叠/截断 |
+| `workbench/agents/localSlashCommands.ts` | 本地 `/fork` `/rewind`：按能力位/readOnly 生成、与 agent 广告命令合并去重、整条消息精确匹配 |
 | `actions/index.ts` | `registerAction2` 两个 action；`agentActions.ts` barrel re-export |
 | `workbench/agents/UserMessageItem.tsx` | hover 显 Rewind（`Undo2`）/Fork（`GitBranch`）按钮，`useObservable(rewindSupported)`+`useObservable(forkSupported)` 各自门控；抽 `UserMessageActions` 子组件避免条件 hooks |
-| `workbench/agents/ForkTipFooter.tsx` | 时间线末尾「从此处分叉」footer：idle + forkSupported + 非 readOnly 才显示（running 隐藏防半截 turn），arg 只带 `{sessionId}` |
+| `workbench/agents/ForkTipFooter.tsx` | 时间线末尾「从此处分叉」footer：idle + forkSupported + 非 readOnly 才显示（running 隐藏防半截 turn），arg 带 `{sessionId, fromTip:true}`（显式 tip，避免走选择器） |
 | `workbench/agents/ChatBody.tsx` | `TimelineSlot` memo 加 `session` prop 透传给 UserMessageItem，带 `messageId` |
-| `PromptInput.tsx` | drain `AcpPromptReplaceInbox`：`setText(replace)`+清 contexts/images+focus |
+| `PromptInput.tsx` | 合并本地斜杠命令到 `/` 补全；整条消息恰为 `/fork` `/rewind` 时先清空再 `executeCommand<boolean>`（false/异常恢复文本）；drain `AcpPromptReplaceInbox`：`setText(replace)`+清 contexts/images+focus |
+| `workbench/agents/SessionListBody.tsx` | 行右键菜单：history-only 行提供「分叉会话…」（`fromTip:true`），live 行提供两项（无锚点 → 选择器）；readOnly/foreign/不支持时不显示 |
 | `workbench/agents/agents.module.css` | `.userMessageWrap`(relative)+`.userMessageActions`(hover 才 opacity:1) |
+
+### renderer 命令入口与消息选择器
+
+两个 action 同时服务消息悬停按钮、聊天右键、时间线末尾、编辑器标签页右键、命令面板、快捷键和输入框斜杠命令。arg 契约：
+
+| 形态 | arg | 行为 |
+|---|---|---|
+| 显式消息锚点 | `{sessionId, messageId}` / `{resource, messageId}` | 直接执行 |
+| 显式末尾 | `{sessionId, fromTip:true}` | Fork 从 tip（完整历史）；Rewind 忽略 `fromTip`，仍弹选择器 |
+| 无锚点 | `{sessionId}` / `{resource}` / `{}` | 解析目标会话后弹消息选择器 |
+
+- `resource` 来自编辑器标签页右键（`{groupId, editorId, resource}`），其 `path` 形如 `/acp/session/<id>`。目标解析优先级：显式 `sessionId` → `resource` → 前台 `AcpSessionEditorInput` → `sessions.activeSession`，收口在 `_agentShared.resolveSessionTargetId`（会话列表相关 action 共用）。
+- `run` 返回 `Promise<boolean>`，`true` 仅表示真正完成。本地斜杠命令据此决定成功（保持清空 / Rewind 回填生效）还是失败（恢复 `/fork` 文本）。
+- 选择器 helper 在 `actions/agentRewindPickItems.ts`（纯函数，独立单测）：只列 `role==='user' && messageId 非空 && autoRetry !== true`；Fork 排除整段对话的首条 user 消息（没有前驱，vendor 必然报错），并在首项插入 `FORK_TIP_ITEM_ID` 的「从对话末尾分叉」。摘要折叠空白/控制字符、按 code point 截断 120。
+- Rewind 只对 live 会话开放；history-only 行提示先打开。Fork 对 history-only 行直接 `fromTip`，不弹空选择器。只读会话两者都拒绝。
+- 回填与揭示：`runRewindFlow` 用 **`session.id`（本地 id）** deposit `AcpPromptReplaceInbox`，再 `revealSessionChat({groups,inst,widgets}, session.id, {agentId})`——从会话列表/标签页触发时聊天可能尚未挂载，先 deposit 后 reveal，挂载即 drain。dry-run 或真正 rewind 返回 `undefined` 一律视为失败（旧实现会误报成功）。
+- 菜单红线：`AcpChatContext` 保留 `Rewind to Here`/`Fork from Here`；`EditorTabContext` 各一行（`activeEditorType == 'acp.session'`）；Rewind 的命令面板行显式挂 `ACP_SESSION_EDITOR_ACTIVE_WHEN`——**不能用**带 `editorAreaFocus` 的 keybinding 条件（面板打开即失焦），也**不要加 `precondition`**（会 AND 进聊天右键菜单，让卡片项静默消失）。
+- 本地斜杠命令：`workbench/agents/localSlashCommands.ts` 按 `forkSupported`/`rewindSupported`/`readOnly` 生成 `/fork` `/rewind`，合并到 agent 广告列表前部（同名本地优先）；`PromptInput.submit` 只在**整条消息恰为单个命令 token**、且无 refs/contexts/images 时拦截：先清输入框与 draft cache，再 `executeCommand<boolean>`，返回 false/抛错则恢复命令文本。
 
 ### 已修 bug 的根因（复用时对照自查）
 
@@ -146,6 +167,9 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 10. **命令三按钮读 `result.choice` 非 `confirmed`**：有文件改动走三按钮（primary=撤销/secondary=保留/cancel），测试 dialog mock 要带 `choice` 字段。
 11. **accessor 首个 await 后失效**：命令 async run 里 await 前先同步取完所有 service（见 `docs/development/commands-and-context-keys.md`）。
 12. **side task 的 rewind 三红线**：① arm 的锚点只能来自 history 行（`sendPrompt` 的 write-once pin），别用 rewind 目标硬 pin；② 锚点判序必须在 `_resetForReplay()` **之前**读 timeline（reset 之后一律 `-1`，死锚点会静默复活）；③ 清死锚点必须挂在 agent 确认截断成功之后（`canRewind !== false`，失败路径转录没截断，提前清 = 下次重开把子会话自己的轮次全抑掉）。
+13. **斜杠命令清空顺序**：`PromptInput.submit` 必须先清空输入框/触发 action，再根据返回值决定是否恢复。反过来「先执行后清空」会把 Rewind 通过 `AcpPromptReplaceInbox` 写回的内容立刻抹掉。
+14. **显式 tip 必须传 `fromTip`**：任何「从末尾分叉」按钮（如 `ForkTipFooter`）都要传 `{fromTip:true}`；只给 `sessionId` 会走无锚点分支弹选择器。
+15. **history-only 行的 Fork 与 Rewind 不对称**：Fork 可直接从 tip 读持久化 transcript；Rewind 要 live 会话做 dry-run/确认/timeline 重置，必须先在编辑器打开。
 
 ### 测试套路
 
@@ -154,7 +178,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
   - fork describe：`vi.mock` 加 `forkSession`(vi.fn) + `getSessionMessages`（默认 `vi.fn(actual.getSessionMessages)` 保真实现，新测试 `mockResolvedValueOnce` 覆盖），验证 upToMessageId=前驱；另有 **非 resident（不 inject session，磁盘兜底）**、**折叠 prompt**（`vi.spyOn(agent as any,"readTranscriptEntries")` 喂带 `attachment.source_uuid` 的 attachment 行）、**解析失败/锚点为首条 → reject 且 `forkSession` 未被调**四类用例守护新语义。
   - truncate describe：**真实 tmp 文件**建在 `CLAUDE_CONFIG_DIR/projects/__rewind_trunc_test_<uuid>/`，afterEach 清理；验证删锚点及之后/首行清空/锚点不存在原样/文件不存在 no-throw。`CLAUDE_CONFIG_DIR` 已 export。
   - **2 个既有 Windows 反斜杠路径失败**（`toDisplayPath`/`Read src\main.ts`）与本功能无关，CI 上绿。
-- **renderer**：`AcpSessionService.test.ts`（rewind 发对 messageId+clear tracker、dryRun 不 cancel、rewindFiles:false 透传+不清 tracker、非 claude no-op、fork `_meta.rewindTo`+setActive、**side task 四条**：重新 arm 后基线不落时间线 / 死锚点被清且下一条 prompt 重 pin / 拒绝回退（`canRewind:false`）不动锚点 / 普通会话仍整段重放——桩的 `rewindSessionUpdates` 在 ext-method 内流式重放模拟 fork）；`agentRewindActions.test.ts`（预览+三按钮各分支+回填、无能力 no-op、fork 开 editor/foreign 提示）；`UserMessageItem.test.tsx`（按钮可见性+委托 arg）。stub 见坑 #9。
+- **renderer**：`AcpSessionService.test.ts`（rewind 发对 messageId+clear tracker、dryRun 不 cancel、rewindFiles:false 透传+不清 tracker、非 claude no-op、fork `_meta.rewindTo`+setActive、**side task 四条**：重新 arm 后基线不落时间线 / 死锚点被清且下一条 prompt 重 pin / 拒绝回退（`canRewind:false`）不动锚点 / 普通会话仍整段重放——桩的 `rewindSessionUpdates` 在 ext-method 内流式重放模拟 fork）；`agentRewindActions.test.ts`（预览+三按钮各分支+回填、无能力 no-op、fork 开 editor/foreign 提示、**选择器/first-tip/返回值/菜单与快捷键/resource 解析**）；`agentRewindPickItems.test.ts`（过滤与摘要）；`localSlashCommands.test.ts`（能力过滤/去重/精确匹配）；`PromptInput.test.tsx`（本地命令弹窗、提交拦截、失败恢复、带参数不拦截、Rewind 回填存活）；`SessionListBody.test.tsx`（history-only/live/readOnly/foreign 菜单项与派发参数）；`UserMessageItem.test.tsx`（按钮可见性+委托 arg）。stub 见坑 #9。
 
 ### 验证
 
