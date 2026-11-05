@@ -32,6 +32,7 @@ import {
   releaseMentionFileCache,
 } from '../services/acp/mentionFileSearch.js'
 import { sharedResidentBudget } from '../services/acp/session/acpResidentBudget.js'
+import { releaseMarkdownParseCache } from '../services/acp/markdownParseCache.js'
 
 /**
  * How much each cache keeps at each level. Elevated is a warning shot that drops only
@@ -82,7 +83,17 @@ export class MemoryPressureContribution extends Disposable implements IWorkbench
     const cacheKeep = (level: MemoryPressureLevel): number =>
       level === MemoryPressureLevel.Critical ? CRITICAL_KEEP_FRACTION : ELEVATED_KEEP_FRACTION
 
-    // One-shot stashes first: pressing cancel restores one of these, so losing it
+    // Parsed ASTs are fully derived from text the live session still holds: rebuilding
+    // them costs a parse, never user data. That makes this the cheapest thing to give
+    // back, so it runs before every content cache below.
+    this._register(
+      pressure.registerReleaser({
+        id: 'markdown.parseCache',
+        priority: -20,
+        release: () => releaseMarkdownParseCache(),
+      }),
+    )
+    // One-shot stashes next: pressing cancel restores one of these, so losing it
     // costs the user their prompt text — but it is also the smallest thing here, so
     // it is the cheapest to give up.
     this._register(

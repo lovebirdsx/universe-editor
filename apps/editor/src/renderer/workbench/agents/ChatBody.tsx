@@ -32,17 +32,19 @@ import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/re
 import { Bot, History, Loader2, Plus } from 'lucide-react'
 import {
   autorun,
+  createNamedLogger,
   derived,
   Emitter,
   Event,
   IConfigurationService,
   ICommandService,
   IContextKeyService,
+  ILoggerService,
   localize,
   runWithInvocationModifiers,
   type IInvocationModifiers,
 } from '@universe-editor/platform'
-import { useExecuteCommand, useObservable, useService } from '../useService.js'
+import { useExecuteCommand, useObservable, useOptionalService, useService } from '../useService.js'
 import {
   IAcpSessionService,
   type IAcpSession,
@@ -130,6 +132,11 @@ import {
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { estimateWrappedLinesUpTo } from './contentOverflow.js'
 import { shouldAdjustTimelineScrollOnSizeChange } from './timelineVirtualScroll.js'
+import {
+  CHAT_VIRTUALIZATION_CONTENT_BUDGET,
+  estimateTimelineContentVolume,
+  resolveTimelineVirtualization,
+} from './timelineContentVolume.js'
 import {
   adjacentSubagentFromCardIndex,
   currentSubagentIndex,
@@ -801,10 +808,11 @@ function ChatScroll({
     }
   }
 
-  // Virtualize only past a threshold so short conversations keep the plain DOM
-  // list (cheaper, and what the tests exercise). The scroll element is the same
-  // chatBody container in both modes, so bottom-pin / restore that drive
-  // `containerRef.scrollTop` need no branching — only keyboard reveal does.
+  // Virtualize past the item-count threshold OR the content budget so short
+  // conversations keep the plain DOM list (cheaper, and what the tests exercise).
+  // The scroll element is the same chatBody container in both modes, so
+  // bottom-pin / restore that drive `containerRef.scrollTop` need no branching —
+  // only keyboard reveal does.
   const configService = useService(IConfigurationService)
   const threshold = configService.get<number>('workbench.chat.virtualizationThreshold')!
 
@@ -829,10 +837,47 @@ function ChatScroll({
     `${mode}:${displayTimeline.length}:${tailSignature}`,
     onFindVisibleChange,
   )
-  const virtualize = displayTimeline.length > threshold && !find.visible
+  const contentVolume = useMemo(
+    () => estimateTimelineContentVolume(displayTimeline),
+    [displayTimeline],
+  )
+  // One-way latch for the content budget: once this surface's rendered volume
+  // crosses it, stay virtual even if the body later shrinks (a collapse-mode
+  // change or a live trim). Flipping back would rebuild every row into the plain
+  // <ol> at once mid-session — the scroll jump this estimate exists to avoid.
+  // The item-count condition keeps its existing unlatched semantics.
+  const contentHeavyRef = useRef(false)
+  if (contentVolume.volume >= CHAT_VIRTUALIZATION_CONTENT_BUDGET) contentHeavyRef.current = true
+  const { virtualize, reason: virtualizationReason } = resolveTimelineVirtualization({
+    itemCount: displayTimeline.length,
+    itemThreshold: threshold,
+    contentHeavy: contentHeavyRef.current,
+    findOpen: find.visible,
+  })
   // Let persist()/the restore effect read the live mode without re-binding to it.
   const virtualizeRef = useRef(virtualize)
   virtualizeRef.current = virtualize
+
+  // One line per decision change (not per render, not per streaming chunk) — the
+  // numbers are what answers "why did this short chat virtualize?" in a report.
+  const loggerService = useOptionalService(ILoggerService)
+  const virtualizeLogger = useMemo(
+    () =>
+      createNamedLogger(loggerService, {
+        id: 'acp.chatVirtualization',
+        name: 'ACP Chat Virtualization',
+      }),
+    [loggerService],
+  )
+  const lastVirtualizationRef = useRef<string | null>(null)
+  useEffect(() => {
+    const signature = `${virtualize}:${virtualizationReason}`
+    if (lastVirtualizationRef.current === signature) return
+    lastVirtualizationRef.current = signature
+    virtualizeLogger.debug(
+      `[acp-virtual] virtualize=${virtualize} reason=${virtualizationReason} items=${displayTimeline.length} chars=${contentVolume.chars} markdownBlocks=${contentVolume.markdownBlocks} volume=${contentVolume.volume}`,
+    )
+  }, [virtualize, virtualizationReason, displayTimeline.length, contentVolume, virtualizeLogger])
 
   // Spawn card id → its synthetic Explore result card. Derived per timeline
   // update; each slot receives only its own two primitive strings, so memoized

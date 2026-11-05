@@ -155,8 +155,8 @@ export interface ParseMarkdownOptions {
 
 /**
  * Parse a markdown string into an array of block-level nodes. Pure — no React,
- * no DOM. Safe to call repeatedly; results can be cached upstream by message
- * id since the AST is stable for a stable input.
+ * no DOM. The AST is stable for a stable input; static consumers should call
+ * `parseMarkdownCached` (markdownParseCache.ts) so remounts reuse it.
  *
  * `lineOffset` is internal: container blocks (blockquote / list items) re-parse
  * their dedented body with the body's 0-based start line in the ORIGINAL source

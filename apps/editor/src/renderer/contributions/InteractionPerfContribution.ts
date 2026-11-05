@@ -20,6 +20,7 @@ import {
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { IInteractionPerfService } from '../services/performance/InteractionPerfService.js'
+import type { SlowInteractionReport } from '../services/performance/interactionPerf.js'
 import {
   RESPONSIVENESS_ENABLED_KEY,
   RESPONSIVENESS_STATUS_WARNING_ENABLED_KEY,
@@ -33,11 +34,21 @@ import { ShowInteractionPerformanceAction } from '../actions/performanceActions.
 const STATUS_WARNING_WINDOW_MS = 60_000
 const STATUS_WARNING_MIN_SLOW = 5
 const STATUS_WARNING_DECAY_TICK_MS = 30_000
+// Same-frame events can be a few milliseconds apart; anything inside this gap
+// is still one jank frame, not a second stall.
+const STALL_MERGE_TOLERANCE_MS = 5
+
+interface SlowStall {
+  /** Wall-clock arrival, used only for the sliding window. */
+  readonly arrivedAt: number
+  /** End of the stall on the performance timeline; extended as reports merge. */
+  endTime: number
+}
 
 export class InteractionPerfContribution extends Disposable implements IWorkbenchContribution {
   private _running = false
   private _entry: IStatusBarEntryAccessor | undefined
-  private readonly _slowTimestamps: number[] = []
+  private readonly _slowStalls: SlowStall[] = []
 
   constructor(
     @IConfigurationService private readonly _configuration: IConfigurationService,
@@ -47,8 +58,8 @@ export class InteractionPerfContribution extends Disposable implements IWorkbenc
     super()
     this._register({ dispose: () => this._entry?.dispose() })
     this._register(
-      this._interactionPerf.onDidRecordSlowInteraction(() => {
-        this._slowTimestamps.push(Date.now())
+      this._interactionPerf.onDidRecordSlowInteraction((report) => {
+        this._recordSlowReport(report)
         this._evaluateStatusWarning()
       }),
     )
@@ -88,26 +99,42 @@ export class InteractionPerfContribution extends Disposable implements IWorkbenc
     }
   }
 
+  /**
+   * One jank frame produces several Event Timing entries (pointerdown, mouseup,
+   * pointerover, …) whose windows overlap or touch. Fold those into the stall
+   * already on the books instead of counting each report.
+   */
+  private _recordSlowReport(report: SlowInteractionReport): void {
+    const endTime = report.startTime + report.durationMs
+    const last = this._slowStalls[this._slowStalls.length - 1]
+    if (last && report.startTime <= last.endTime + STALL_MERGE_TOLERANCE_MS) {
+      last.endTime = Math.max(last.endTime, endTime)
+    } else {
+      // startTime lives on the performance timeline; the window needs wall clock.
+      this._slowStalls.push({ arrivedAt: Date.now(), endTime })
+    }
+  }
+
   private _evaluateStatusWarning(): void {
     if (!responsivenessStatusWarningEnabled(this._configuration)) {
       this._hideStatusWarning()
       return
     }
     const cutoff = Date.now() - STATUS_WARNING_WINDOW_MS
-    while (this._slowTimestamps.length > 0 && this._slowTimestamps[0]! < cutoff) {
-      this._slowTimestamps.shift()
+    while (this._slowStalls.length > 0 && this._slowStalls[0]!.arrivedAt < cutoff) {
+      this._slowStalls.shift()
     }
-    if (this._slowTimestamps.length < STATUS_WARNING_MIN_SLOW) {
+    if (this._slowStalls.length < STATUS_WARNING_MIN_SLOW) {
       this._hideStatusWarning()
       return
     }
-    const count = this._slowTimestamps.length
+    const count = this._slowStalls.length
     const entry: IStatusBarEntry = {
       text: `$(pulse) ${count}`,
       kind: 'prominent',
       tooltip: localize(
         'performance.responsiveness.statusbar.tooltip',
-        '{count} slow interactions in the last minute — click to view the report',
+        '{count} slow responses in the last minute — click to view the report',
         { count },
       ),
       command: ShowInteractionPerformanceAction.ID,

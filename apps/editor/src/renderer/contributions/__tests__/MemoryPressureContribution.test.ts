@@ -18,6 +18,12 @@ import type {
   IMemoryReleaser,
 } from '../../services/memory/memoryPressureService.js'
 import { sharedResidentBudget } from '../../services/acp/session/acpResidentBudget.js'
+import {
+  MARKDOWN_PARSE_MIN_CHARS,
+  releaseMarkdownParseCache,
+  markdownParseCacheStats,
+  parseMarkdownCached,
+} from '../../services/acp/markdownParseCache.js'
 import { StubLoggerService } from '../../__tests__/_helpers/stubLoggerService.js'
 
 const MIB = 1024 * 1024
@@ -57,7 +63,7 @@ describe('MemoryPressureContribution — acp.residentBudget releaser', () => {
     vi.restoreAllMocks()
   })
 
-  function acpReleaser(): IMemoryReleaser {
+  function makeReleasers(): IMemoryReleaser[] {
     const releasers: IMemoryReleaser[] = []
     const pressure = {
       registerReleaser: (r: IMemoryReleaser) => {
@@ -70,10 +76,27 @@ describe('MemoryPressureContribution — acp.residentBudget releaser', () => {
       stop: () => {},
     } as unknown as IMemoryPressureService
     contributions.push(new MemoryPressureContribution(pressure, new StubLoggerService()))
-    const found = releasers.find((r) => r.id === 'acp.residentBudget')
+    return releasers
+  }
+
+  function acpReleaser(): IMemoryReleaser {
+    const found = makeReleasers().find((r) => r.id === 'acp.residentBudget')
     if (!found) throw new Error('acp.residentBudget releaser not registered')
     return found
   }
+
+  it('registers a markdown parse cache releaser that clears the cache', () => {
+    const releaser = makeReleasers().find((r) => r.id === 'markdown.parseCache')
+    if (!releaser) throw new Error('markdown.parseCache releaser not registered')
+
+    releaseMarkdownParseCache()
+    parseMarkdownCached('z'.repeat(MARKDOWN_PARSE_MIN_CHARS))
+    const cached = markdownParseCacheStats()
+    expect(cached.entries).toBe(1)
+
+    expect(releaser.release(MemoryPressureLevel.Elevated, { used: 0 })).toBe(cached.bytes)
+    expect(markdownParseCacheStats().entries).toBe(0)
+  })
 
   it('does not touch the transcripts when they cannot matter to the heap', () => {
     vi.spyOn(sharedResidentBudget, 'totalBytes').mockReturnValue(3 * MIB)

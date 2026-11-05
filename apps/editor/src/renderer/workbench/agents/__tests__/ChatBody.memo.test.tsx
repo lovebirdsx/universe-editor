@@ -43,7 +43,10 @@ import {
   type AcpSessionHistoryEntry,
 } from '../../../services/acp/session/acpSessionHistory.js'
 import { IAcpAgentRegistry } from '../../../services/acp/acpAgentRegistry.js'
-import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
+import {
+  IAcpChatWidgetService,
+  type AcpChatWidget,
+} from '../../../services/acp/session/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../../services/acp/session/acpChatViewStateCache.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import type { SessionConfigOption, ContentBlock } from '@agentclientprotocol/sdk'
@@ -161,7 +164,7 @@ const stubWorkspaceService = {
   onDidChangeRecent: Event.None,
 } as unknown as IWorkspaceServiceType
 
-function makeInstantiation(threshold?: number) {
+function makeInstantiation(threshold?: number, onRegisterWidget?: (widget: AcpChatWidget) => void) {
   const services = new ServiceCollection()
   services.set(IContextKeyService, new ContextKeyService())
   services.set(IAcpSessionService, {
@@ -183,7 +186,12 @@ function makeInstantiation(threshold?: number) {
   services.set(IAcpChatWidgetService, {
     _serviceBrand: undefined,
     lastFocusedWidget: undefined,
-    register: () => ({ dispose() {} }),
+    register: (widget: AcpChatWidget) => {
+      onRegisterWidget?.(widget)
+      return { dispose() {} }
+    },
+    setTurnRunning: () => {},
+    setFindVisible: () => {},
   } as unknown as IAcpChatWidgetService)
   services.set(IFileService, stubFileService)
   services.set(IFileSearchService, stubFileSearch)
@@ -213,8 +221,12 @@ function makeInstantiation(threshold?: number) {
   return new InstantiationService(services)
 }
 
-function renderChat(session: IAcpSession, threshold?: number) {
-  const inst = makeInstantiation(threshold)
+function renderChat(
+  session: IAcpSession,
+  threshold?: number,
+  onRegisterWidget?: (widget: AcpChatWidget) => void,
+) {
+  const inst = makeInstantiation(threshold, onRegisterWidget)
   return render(
     <ServicesContext.Provider value={inst}>
       <ChatBody session={session} />
@@ -282,5 +294,44 @@ describe('ChatBody — virtualization threshold', () => {
     const { container } = renderChat(session, 5)
     const list = container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!
     expect(list.tagName).toBe('OL')
+  })
+})
+
+describe('ChatBody — content-volume virtualization', () => {
+  it('virtualizes a timeline below the item threshold when its text volume is large', () => {
+    const items = [makeAgentMessage('a', 'x'.repeat(50_000)), makeAgentMessage('b', 'short')]
+    const { session } = makeSession('s1', items)
+    const { container } = renderChat(session, 50)
+
+    const list = container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!
+    expect(list.tagName).toBe('DIV')
+    expect(list.style.position).toBe('relative')
+  })
+
+  it('keeps the plain <ol> when both the item count and the content volume are small', () => {
+    const items = [makeAgentMessage('a', 'msg-a'), makeAgentMessage('b', 'msg-b')]
+    const { session } = makeSession('s1', items)
+    const { container } = renderChat(session, 50)
+
+    expect(container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!.tagName).toBe('OL')
+  })
+
+  it('forces the plain <ol> while in-session find is open, then restores virtualization', () => {
+    let widget: AcpChatWidget | undefined
+    const items = [makeAgentMessage('a', 'x'.repeat(50_000)), makeAgentMessage('b', 'short')]
+    const { session } = makeSession('s1', items)
+    const { container } = renderChat(session, 50, (registered) => {
+      widget = registered
+    })
+    const list = (): HTMLElement =>
+      container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!
+
+    expect(list().tagName).toBe('DIV')
+
+    act(() => widget!.openFind())
+    expect(list().tagName).toBe('OL')
+
+    act(() => widget!.closeFind())
+    expect(list().tagName).toBe('DIV')
   })
 })

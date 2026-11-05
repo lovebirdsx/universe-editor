@@ -37,6 +37,7 @@ import {
   createMarkdownStreamCache,
   parseMarkdownStreaming,
 } from '../../services/acp/markdownIncremental.js'
+import { parseMarkdownCached } from '../../services/acp/markdownParseCache.js'
 import {
   looksLikeFilePath,
   matchFullFilePath,
@@ -330,8 +331,10 @@ function useMarkdownNodes(
     cacheRef.current = createMarkdownStreamCache()
   }
   const cache = cacheRef.current
+  // Settled messages are stable per text, and a tab switch remounts the whole timeline;
+  // the bounded cache is what keeps that remount from re-parsing every message.
   const staticNodes = useMemo(
-    () => (streaming ? undefined : parseMarkdown(text, parseOptions)),
+    () => (streaming ? undefined : parseMarkdownCached(text, parseOptions)),
     [text, streaming, parseOptions],
   )
   const parse = useMemo(() => (input: string) => parseMarkdown(input, parseOptions), [parseOptions])

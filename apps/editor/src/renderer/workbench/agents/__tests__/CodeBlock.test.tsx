@@ -8,6 +8,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { setClipboardHost } from '@universe-editor/workbench-ui'
 import { CodeBlock } from '../CodeBlock.js'
 import { MarkdownStreamingContext } from '../../markdown/markdownStreamingContext.js'
+import { readHeapFlowTotals } from '../../../services/memory/heapFlowCounters.js'
 
 const mocks = vi.hoisted(() => ({ colorize: vi.fn() }))
 
@@ -142,3 +143,203 @@ describe('CodeBlock streaming gate', () => {
     expect(container.querySelector('code')?.innerHTML).toBe('const a = 1')
   })
 })
+
+describe('CodeBlock viewport gate', () => {
+  const HIGHLIGHTED = '<span class="tok">const</span> a = 1'
+
+  class FakeIntersectionObserver {
+    static instances: FakeIntersectionObserver[] = []
+    readonly root: Element | Document | null = null
+    readonly rootMargin: string
+    readonly thresholds: readonly number[] = []
+    disconnected = false
+    private readonly targets: Element[] = []
+    private readonly callback: IntersectionObserverCallback
+
+    constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+      this.callback = callback
+      this.rootMargin = options?.rootMargin ?? '0px'
+      FakeIntersectionObserver.instances.push(this)
+    }
+
+    observe(target: Element): void {
+      this.targets.push(target)
+    }
+
+    unobserve(target: Element): void {
+      const index = this.targets.indexOf(target)
+      if (index >= 0) this.targets.splice(index, 1)
+    }
+
+    disconnect(): void {
+      this.disconnected = true
+    }
+
+    takeRecords(): IntersectionObserverEntry[] {
+      return []
+    }
+
+    emit(isIntersecting: boolean): void {
+      const target = this.targets[0]
+      if (!target) return
+      this.callback(
+        [
+          {
+            isIntersecting,
+            target,
+            intersectionRatio: isIntersecting ? 1 : 0,
+          } as IntersectionObserverEntry,
+        ],
+        this as unknown as IntersectionObserver,
+      )
+    }
+  }
+
+  let originalClientHeight: PropertyDescriptor | undefined
+  let originalObserver: PropertyDescriptor | undefined
+  let view: Window
+
+  beforeEach(() => {
+    mocks.colorize.mockReset()
+    mocks.colorize.mockResolvedValue(HIGHLIGHTED)
+    FakeIntersectionObserver.instances = []
+    view = document.defaultView as Window
+    originalClientHeight = Object.getOwnPropertyDescriptor(document.documentElement, 'clientHeight')
+    originalObserver = Object.getOwnPropertyDescriptor(view, 'IntersectionObserver')
+    // happy-dom exposes an observer that never reports and has no layout viewport.
+    // Give this suite both so the lazy path (not the layout-less fallback) is tested.
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      configurable: true,
+      value: 800,
+    })
+    Object.defineProperty(view, 'IntersectionObserver', {
+      configurable: true,
+      value: FakeIntersectionObserver,
+    })
+  })
+
+  afterEach(() => {
+    if (originalClientHeight) {
+      Object.defineProperty(document.documentElement, 'clientHeight', originalClientHeight)
+    } else {
+      delete (document.documentElement as { clientHeight?: number }).clientHeight
+    }
+    if (originalObserver) {
+      Object.defineProperty(view, 'IntersectionObserver', originalObserver)
+    } else {
+      delete (view as { IntersectionObserver?: unknown }).IntersectionObserver
+    }
+  })
+
+  const block = (streaming = false) => (
+    <MarkdownStreamingContext.Provider value={streaming}>
+      <CodeBlock code="const a = 1" lang="ts" />
+    </MarkdownStreamingContext.Provider>
+  )
+
+  async function flushColorize(): Promise<void> {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+  }
+
+  it('leaves a block outside the viewport as plain text', async () => {
+    const { container } = render(block())
+    await flushColorize()
+
+    expect(FakeIntersectionObserver.instances).toHaveLength(1)
+    // Plain text keeps every code character, so in-chat find still has something to hit.
+    expect(container.querySelector('code')?.textContent).toBe('const a = 1')
+    expect(mocks.colorize).not.toHaveBeenCalled()
+  })
+
+  it('renders the same trailing line as Monaco for a fence body ending in a newline', async () => {
+    // Monaco splits on line breaks and emits a <br/> per line, so a body ending
+    // with "\n" gets one extra empty line; without the trailing break the block
+    // would grow by a line when the highlight lands (measured in Chromium).
+    const { container } = render(
+      <MarkdownStreamingContext.Provider value={false}>
+        <CodeBlock code={'const a = 1\n'} lang="ts" />
+      </MarkdownStreamingContext.Provider>,
+    )
+    await flushColorize()
+
+    expect(container.querySelector('code')?.innerHTML).toBe('const a = 1\n<br>')
+
+    // Nothing will ever colorize a language-less fence, so it keeps the plain shape.
+    const plain = render(<CodeBlock code={'const a = 1\n'} />)
+    expect(plain.container.querySelector('code')?.innerHTML).toBe('const a = 1\n')
+  })
+
+  it('colorizes after the block enters range and disconnects the observer', async () => {
+    const { container } = render(block())
+    await flushColorize()
+
+    act(() => {
+      FakeIntersectionObserver.instances[0]?.emit(true)
+    })
+    await flushColorize()
+
+    expect(mocks.colorize).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('code')?.innerHTML).toBe(HIGHLIGHTED)
+    expect(FakeIntersectionObserver.instances[0]?.disconnected).toBe(true)
+  })
+
+  it('does not revert a highlighted block when it leaves the viewport again', async () => {
+    const { container, rerender } = render(block())
+    await flushColorize()
+    act(() => {
+      FakeIntersectionObserver.instances[0]?.emit(true)
+    })
+    await flushColorize()
+
+    act(() => {
+      FakeIntersectionObserver.instances[0]?.emit(false)
+    })
+    rerender(block())
+    await flushColorize()
+
+    expect(container.querySelector('code')?.innerHTML).toBe(HIGHLIGHTED)
+    expect(mocks.colorize).toHaveBeenCalledTimes(1)
+  })
+
+  it('disconnects on unmount while still waiting for the viewport', async () => {
+    const { unmount } = render(block())
+    await flushColorize()
+
+    unmount()
+    expect(FakeIntersectionObserver.instances[0]?.disconnected).toBe(true)
+  })
+
+  it('falls back to an immediate highlight where IntersectionObserver is unavailable', async () => {
+    Object.defineProperty(view, 'IntersectionObserver', { configurable: true, value: undefined })
+
+    const { container } = render(block())
+    await act(async () => {})
+
+    expect(mocks.colorize).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('code')?.innerHTML).toBe(HIGHLIGHTED)
+  })
+
+  it('keeps the streaming gate even when the block is already in range', async () => {
+    const before = readHeapFlowTotals()
+    render(block(true))
+    await flushColorize()
+    act(() => {
+      FakeIntersectionObserver.instances[0]?.emit(true)
+    })
+    await flushColorize()
+
+    expect(mocks.colorize).not.toHaveBeenCalled()
+    expect(flowCharsSince(before, 'colorize.skip')).toBe('const a = 1'.length)
+  })
+})
+
+function flowCharsSince(
+  before: ReturnType<typeof readHeapFlowTotals>,
+  name: 'colorize' | 'colorize.skip',
+): number {
+  const read = (snapshots: ReturnType<typeof readHeapFlowTotals>): number =>
+    snapshots.find((snapshot) => snapshot.name === name)?.chars ?? 0
+  return read(readHeapFlowTotals()) - read(before)
+}

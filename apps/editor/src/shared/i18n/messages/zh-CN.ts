@@ -1012,7 +1012,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '交互耗时超过此毫秒数时记录警告日志。',
   'settings.performance.responsiveness.statusWarning.enabled.description':
     '当慢交互频繁发生时在状态栏显示警告。',
-  'performance.responsiveness.statusbar.tooltip': '最近一分钟发生 {count} 次慢交互——点击查看报告',
+  'performance.responsiveness.statusbar.tooltip': '最近一分钟发生 {count} 次卡顿——点击查看报告',
   'settings.readonly': '在表单视图中不可编辑',
   'settings.search': '搜索',
   'settings.search.exclude.description':

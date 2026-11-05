@@ -106,6 +106,7 @@ import { readCodeHtmlBytes } from './services/memory/heapFlowCounters.js'
 import { RENDERER_INCARNATION } from './services/memory/rendererIncarnation.js'
 import { createRendererHeapReporter } from './services/memory/rendererHeapReporter.js'
 import { sharedResidentBudget } from './services/acp/session/acpResidentBudget.js'
+import { markdownParseCacheStats } from './services/acp/markdownParseCache.js'
 import { ISessionChangeTrackerService } from './services/acp/session/sessionChangeTracker.js'
 import {
   DocumentSyncStats,
@@ -317,6 +318,16 @@ function measureCodeHtml(): { bytes: number } | undefined {
   return bytes > 0 ? { bytes } : undefined
 }
 
+/**
+ * ASTs held for settled messages. Source text only (UTF-16, the same scale as the monaco
+ * holder), so this is a floor for what the cache really keeps; the trend against the
+ * heap is what it is read for.
+ */
+function measureMarkdownParseCache(): { bytes: number; count: number } | undefined {
+  const { entries, bytes } = markdownParseCacheStats()
+  return entries > 0 ? { bytes, count: entries } : undefined
+}
+
 async function bootstrapWorkbench(): Promise<void> {
   mark(PerfMarks.rendererWillStartBootstrap)
   const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
@@ -487,6 +498,7 @@ async function bootstrapWorkbench(): Promise<void> {
             { name: 'acp', measure: () => ({ bytes: sharedResidentBudget.totalBytes() }) },
             { name: 'monaco', measure: measureMonacoModels },
             { name: 'codehtml', measure: measureCodeHtml },
+            { name: 'mdast', measure: measureMarkdownParseCache },
             // Both sources below resolve their service at sample time: the services
             // are constructed later in this function, and the first sample is 30s
             // away. Without them a repeat of the 2026-09-12 crash is unattributable
