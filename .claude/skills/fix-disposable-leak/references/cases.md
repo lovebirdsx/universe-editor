@@ -34,3 +34,9 @@ re-mount 后 ref 仍指向**已 dispose 的 E1**，`.fire()` 落死对象，订�
 修法：`_panels = this._register(new DisposableMap<number, WebviewPanelModel>())`；close/reset 用 `deleteAndDispose`，服务销毁走注册容器级联释放；reset 同时清理 input dispose 订阅。不改全局快照、不标记 panel 单例、不在 E2E 末尾补 closeAll 掩盖。
 复现：对单例服务创建仍打开的 custom/host-created panel，两条 tracker 测试修前失败、修后通过；另测 service/input 销毁的级联释放。此处必须在服务存活时检查父链，仅测最终 dispose 抓不住遗漏。
 锚：`apps/editor/src/renderer/services/extensions/WebviewService.ts` 与同目录 `__tests__/WebviewService.test.ts`；外部 PDF、Excel suite 各两项通过泄漏门禁。
+
+**案例 5 — 主进程退出时在飞的「优雅回收宽限等待」订阅**
+信号：主进程泄漏报告只有两条（或 2×N 条）连续 idx，堆栈是 `toDisposable ← ManagedChildProcess.onDidExit ← ProcessLifecycleRegistry._waitForExit ← reclaimOwner ← WindowMainService._reclaimWindowProcesses ← BrowserWindow 'closed'`；每对对应一个被回收的子进程。
+根因：`_waitForExit` 在宽限期内订阅每个目标的 `onDidExit`，只在「全部退出」或「grace 定时器到期」时 dispose。窗口关闭后应用随即退出（最后一个窗口 → `window-all-closed` → `app.quit()`），`will-quit` 里 `ProcessLifecycleRegistry.dispose()` 只强杀 Job/进程组，**不收尾在飞等待**；定时器是 `unref` 的，`process.on('exit')` 快照前不会触发 → 订阅被判泄漏（即使目标进程已被杀，tracker 也只看订阅 disposable 是否 dispose）。
+修法：registry 持有 `_pendingWaits: Set<() => void>`（每个等待的 `done`：清定时器 + 从集合移除 + dispose 订阅 + resolve，幂等），`dispose()` 开头同步调用全部 `finish()`。resolve 后 `reclaimOwner` 的续体会再跑一次 `_hardKill`，对已清空的 slot 是 no-op，安全。
+回归：`packages/node-services/src/process/__tests__/processLifecycle.test.ts`「dispose settles the in-flight grace wait so its exit subscriptions are released」——FakeTarget 的 Emitter 用 `onDidAddListener`/`onWillRemoveListener` 计数，`reclaimOwner` 后断言 1、`dispose()` 后断言 0；移除 dispose 里的收尾循环即失败。属 SKILL.md 坑 10 的同族：**只靠异步事件/定时器释放的 disposable，退出路径必须补一条同步摘除**。

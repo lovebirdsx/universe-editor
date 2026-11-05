@@ -69,7 +69,16 @@ class InheritedJobBackend extends FakeBackend {
 class FakeTarget implements StoppableProcess {
   exited = false
   readonly stops: string[] = []
-  private readonly _exit = new Emitter<unknown>()
+  /** Live onDidExit subscriptions — the registry must not leave these behind. */
+  subscriptions = 0
+  private readonly _exit = new Emitter<unknown>({
+    onDidAddListener: () => {
+      this.subscriptions++
+    },
+    onWillRemoveListener: () => {
+      this.subscriptions--
+    },
+  })
   readonly onDidExit = this._exit.event
   /** When true, requestStop() makes the process exit by itself (cooperative child). */
   cooperative = true
@@ -518,6 +527,27 @@ describe('ProcessLifecycleRegistry (POSIX process groups)', () => {
     registry.dispose()
     expect(killGroup).toHaveBeenCalledWith(4400)
     await vi.advanceTimersByTimeAsync(1000)
+    await pending
+  })
+
+  it('dispose settles the in-flight grace wait so its exit subscriptions are released', async () => {
+    // The wait's timer is unref'd and cannot fire before process exit, where the main
+    // tracker snapshots leaks — quitting mid-reclaim must unsubscribe synchronously.
+    const registry = new ProcessLifecycleRegistry({ platform: 'linux', selfPid: 1 })
+    const stubborn = new FakeTarget()
+    stubborn.cooperative = false
+    registry.track({
+      pid: 4401,
+      owner: windowOwner(1),
+      role: 'r',
+      label: 'l',
+      processGroup: true,
+      target: stubborn,
+    })
+    const pending = registry.reclaimOwner(windowOwner(1), { reason: 'x', graceMs: 1000 })
+    expect(stubborn.subscriptions).toBe(1)
+    registry.dispose()
+    expect(stubborn.subscriptions).toBe(0)
     await pending
   })
 

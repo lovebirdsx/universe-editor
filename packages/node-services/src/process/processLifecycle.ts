@@ -204,6 +204,11 @@ export class ProcessLifecycleRegistry implements IDisposable {
   private readonly _slots = new Map<string, Slot>()
   /** Slots detached by an in-flight reclaim; dispose() must still hard-kill them. */
   private readonly _reclaiming = new Set<Slot>()
+  /**
+   * Grace waits still listening for child exits. Their unref'd timer never fires before
+   * `exit`, where the main-process leak tracker reports, so dispose() must settle them.
+   */
+  private readonly _pendingWaits = new Set<() => void>()
   private readonly _byPid = new Map<number, Entry>()
   private readonly _retired = new Set<string>()
   private _disposed = false
@@ -377,6 +382,11 @@ export class ProcessLifecycleRegistry implements IDisposable {
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
+    // Settle in-flight grace waits first: they hold exit-event subscriptions and their
+    // timer is unref'd, so quitting mid-wait would otherwise leak those subscriptions
+    // past `process.on('exit')` (the main-process tracker reports there).
+    for (const finish of [...this._pendingWaits]) finish()
+    this._pendingWaits.clear()
     // In-flight reclaims already detached their slot; their grace wait will never finish
     // once the process exits, so hard-kill them here too.
     for (const slot of this._reclaiming) {
@@ -542,13 +552,18 @@ export class ProcessLifecycleRegistry implements IDisposable {
     if (pending.size === 0) return Promise.resolve()
     return new Promise<void>((resolve) => {
       const subs: IDisposable[] = []
-      const timer = setTimeout(done, graceMs)
-      timer.unref?.()
-      function done(): void {
+      let settled = false
+      const done = (): void => {
+        if (settled) return
+        settled = true
         clearTimeout(timer)
+        this._pendingWaits.delete(done)
         for (const s of subs) s.dispose()
         resolve()
       }
+      const timer = setTimeout(done, graceMs)
+      timer.unref?.()
+      this._pendingWaits.add(done)
       for (const target of pending) {
         subs.push(
           target.onDidExit(() => {
