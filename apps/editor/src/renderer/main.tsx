@@ -124,6 +124,10 @@ import { BugRecorderClient, IBugRecorderClient } from './services/bugRecording/b
 import { EditorService } from './services/editor/EditorService.js'
 import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
 import {
+  EditorViewTargetService,
+  IEditorViewTargetService,
+} from './services/editor/EditorViewTargetService.js'
+import {
   IWorkbenchWindowService,
   WorkbenchWindowService,
 } from './services/windows/workbenchWindowService.js'
@@ -758,6 +762,13 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(ICommandService, commandService)
   services.set(IEditorGroupsService, editorGroupsService)
   services.set(IEditorService, editorService)
+  // Information views (Outline/Timeline/Explorer/@) follow the last-used editor
+  // surface, not the focused window. Registered right after the groups service
+  // so scoped consumers can resolve it during bootstrap.
+  const editorViewTargetService = workbenchStore.add(
+    instantiation.createInstance(EditorViewTargetService),
+  )
+  services.set(IEditorViewTargetService, editorViewTargetService)
   // WebviewService is an Eager singleton (circular with IEditorGroupsService via
   // EditorResolverService, so no constructor injection); hand it a late lookup so
   // host-owned webview panels (window.createWebviewPanel) can open/reveal/close
@@ -1170,6 +1181,7 @@ async function bootstrapWorkbench(): Promise<void> {
     recentTargetsService,
     languageFeaturesService: instantiation.invokeFunction((a) => a.get(ILanguageFeaturesService)),
     outlineService,
+    editorViewTargetService,
     timelineService: instantiation.invokeFunction((a) => a.get(ITimelineService)),
     treeViewsService: instantiation.invokeFunction((a) => a.get(ITreeViewsService)),
     aiDebugService: services.get(IAiDebugService) as IAiDebugService,

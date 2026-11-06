@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for AgentsActiveSessionSyncContribution — the activeSession ⇄ focused
- *  session editor sync. Focusing a tab retargets IAcpSessionService.activeSession
- *  so session-scoped UI (Session Changes, status bar) tracks the editor in front
- *  of the user; moving activeSession brings that session's chat tab to the front.
+ *  Tests for AgentsActiveSessionSyncContribution — the activeSession ⇄ view
+ *  target session editor sync. The last-used editor surface becoming a session
+ *  editor retargets IAcpSessionService.activeSession so session-scoped UI
+ *  (Session Changes, status bar) tracks that session; moving activeSession
+ *  brings that session's chat tab to the front.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -20,6 +21,7 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { AgentsActiveSessionSyncContribution } from '../AgentsContributions.js'
+import { IEditorViewTargetService } from '../../services/editor/EditorViewTargetService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import {
   IAcpSessionService,
@@ -34,14 +36,19 @@ import {
 
 class FakeEditorService {
   declare readonly _serviceBrand: undefined
-  readonly activeEditor: ISettableObservable<IEditorInput | undefined> = observableValue(
-    'fake.activeEditor',
-    undefined,
-  )
   readonly openEditorCalls: IEditorInput[] = []
   openEditor(input: IEditorInput): void {
     this.openEditorCalls.push(input)
   }
+}
+
+class FakeViewTargetService {
+  declare readonly _serviceBrand: undefined
+  readonly targetGroup = observableValue('fake.targetGroup', { id: 1 })
+  readonly targetEditor: ISettableObservable<IEditorInput | undefined> = observableValue(
+    'fake.targetEditor',
+    undefined,
+  )
 }
 
 interface FakeGroup {
@@ -101,6 +108,7 @@ function openedSessionIds(editor: FakeEditorService): (string | undefined)[] {
 
 function makeHarness() {
   const editor = new FakeEditorService()
+  const viewTarget = new FakeViewTargetService()
   const editorGroups = new FakeEditorGroupsService()
   const sessions = new FakeSessionService()
   const history = {
@@ -122,18 +130,19 @@ function makeHarness() {
   const inst = new InstantiationService(services)
   const contrib = new AgentsActiveSessionSyncContribution(
     editor as unknown as IEditorService,
+    viewTarget as unknown as IEditorViewTargetService,
     editorGroups as unknown as IEditorGroupsService,
     inst,
     sessions as unknown as IAcpSessionServiceType,
   )
-  return { editor, editorGroups, sessions, inst, contrib }
+  return { editor, viewTarget, editorGroups, sessions, inst, contrib }
 }
 
 describe('AgentsActiveSessionSyncContribution', () => {
   it('retargets activeSession when a live session editor is focused', () => {
     const h = makeHarness()
     h.sessions.register('s2')
-    h.editor.activeEditor.set(makeInput(h.inst, 's2'), undefined)
+    h.viewTarget.targetEditor.set(makeInput(h.inst, 's2'), undefined)
     expect(h.sessions.setActiveCalls).toEqual(['s2'])
     h.contrib.dispose()
   })
@@ -142,15 +151,15 @@ describe('AgentsActiveSessionSyncContribution', () => {
     const h = makeHarness()
     h.sessions.register('s1')
     h.sessions.register('s2')
-    h.editor.activeEditor.set(makeInput(h.inst, 's1'), undefined)
-    h.editor.activeEditor.set(makeInput(h.inst, 's2'), undefined)
+    h.viewTarget.targetEditor.set(makeInput(h.inst, 's1'), undefined)
+    h.viewTarget.targetEditor.set(makeInput(h.inst, 's2'), undefined)
     expect(h.sessions.setActiveCalls).toEqual(['s1', 's2'])
     h.contrib.dispose()
   })
 
   it('ignores non-session editors', () => {
     const h = makeHarness()
-    h.editor.activeEditor.set({ id: 'file:foo' } as unknown as IEditorInput, undefined)
+    h.viewTarget.targetEditor.set({ id: 'file:foo' } as unknown as IEditorInput, undefined)
     expect(h.sessions.setActiveCalls).toEqual([])
     h.contrib.dispose()
   })
@@ -158,7 +167,7 @@ describe('AgentsActiveSessionSyncContribution', () => {
   it('leaves the pointer alone for a not-yet-resumed session', () => {
     const h = makeHarness()
     // No register() — session is not live yet.
-    h.editor.activeEditor.set(makeInput(h.inst, 's-pending'), undefined)
+    h.viewTarget.targetEditor.set(makeInput(h.inst, 's-pending'), undefined)
     expect(h.sessions.setActiveCalls).toEqual([])
     h.contrib.dispose()
   })
@@ -167,24 +176,24 @@ describe('AgentsActiveSessionSyncContribution', () => {
     const h = makeHarness()
     h.sessions.register('s1')
     h.sessions.activeSessionId.set('s1', undefined)
-    h.editor.activeEditor.set(makeInput(h.inst, 's1'), undefined)
+    h.viewTarget.targetEditor.set(makeInput(h.inst, 's1'), undefined)
     expect(h.sessions.setActiveCalls).toEqual([])
     h.contrib.dispose()
   })
 
   it('does not revert activeSessionId when setActive is called externally while editor stays on the previous tab', () => {
     // Regression: autorun subscribed to activeSessionId.read(r) which caused it
-    // to re-run on every setActive call, see activeEditor still pointing at the
+    // to re-run on every setActive call, see targetEditor still pointing at the
     // old tab, and call setActive back — undoing the switch on first click.
     const h = makeHarness()
     h.sessions.register('s1')
     h.sessions.register('s2')
     // Focus s1 — autorun fires and syncs activeSessionId to s1.
-    h.editor.activeEditor.set(makeInput(h.inst, 's1'), undefined)
+    h.viewTarget.targetEditor.set(makeInput(h.inst, 's1'), undefined)
     expect(h.sessions.activeSessionId.get()).toBe('s1')
 
     // Sessions panel click: setActive('s2') must not be reverted by the autorun
-    // seeing activeEditor still on s1 and calling setActive('s1') again.
+    // seeing targetEditor still on s1 and calling setActive('s1') again.
     h.sessions.setActive('s2')
     expect(h.sessions.activeSessionId.get()).toBe('s2')
     expect(h.sessions.setActiveCalls).toEqual(['s1', 's2'])

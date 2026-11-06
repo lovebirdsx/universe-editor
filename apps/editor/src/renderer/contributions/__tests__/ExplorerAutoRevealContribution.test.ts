@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for ExplorerAutoRevealContribution — verifies that activeEditor changes
- *  are reflected in ExplorerTreeService.setActiveEditorResource and that
+ *  Tests for ExplorerAutoRevealContribution — verifies that view target editor
+ *  changes are reflected in ExplorerTreeService.setActiveEditorResource and that
  *  reveal() is gated on the explorer.autoReveal setting.
  *--------------------------------------------------------------------------------------------*/
 
@@ -10,7 +10,6 @@ import {
   ConfigurationService,
   ConfigurationTarget,
   IConfigurationService,
-  IEditorService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -18,6 +17,7 @@ import {
   type IEditorInput,
 } from '@universe-editor/platform'
 import { ExplorerAutoRevealContribution } from '../ExplorerAutoRevealContribution.js'
+import { IEditorViewTargetService } from '../../services/editor/EditorViewTargetService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
   ExplorerTreeService,
@@ -53,16 +53,12 @@ function setup(autoReveal: boolean | undefined = undefined) {
     },
   })
   const services = new ServiceCollection()
-  const active = observableValue<IEditorInput | undefined>('test.active', undefined)
-  services.set(IEditorService, {
+  const target = observableValue<IEditorInput | undefined>('test.target', undefined)
+  services.set(IEditorViewTargetService, {
     _serviceBrand: undefined,
-    openEditor() {},
-    closeEditor() {},
-    closeAllEditors() {},
-    openEditors: observableValue<readonly IEditorInput[]>('test.open', []),
-    activeEditorId: observableValue<string | undefined>('test.activeId', undefined),
-    activeEditor: active,
-  } as unknown as IEditorService)
+    targetGroup: observableValue('test.targetGroup', { id: 1 } as never),
+    targetEditor: target,
+  } as unknown as IEditorViewTargetService)
   const tree = new FakeTree()
   services.set(IExplorerTreeService, tree as unknown as ExplorerTreeService)
   const config = new ConfigurationService()
@@ -72,7 +68,7 @@ function setup(autoReveal: boolean | undefined = undefined) {
   services.set(IConfigurationService, config)
   const inst = new InstantiationService(services)
   const contrib = inst.createInstance(ExplorerAutoRevealContribution)
-  return { active, tree, config, inst, contrib, reg }
+  return { target, tree, config, inst, contrib, reg }
 }
 
 const wsRoot = URI.file('/ws')
@@ -84,41 +80,41 @@ describe('ExplorerAutoRevealContribution', () => {
   })
 
   it('mirrors a file editor as the tree active resource', () => {
-    const { active, tree, inst, contrib, reg } = setup()
+    const { target, tree, inst, contrib, reg } = setup()
     disposables.push(contrib, reg)
     const input = inst.createInstance(FileEditorInput, URI.joinPath(wsRoot, 'a.txt'))
-    active.set(input, undefined)
+    target.set(input, undefined)
     expect(tree.activeEditorResource?.toString()).toBe(URI.joinPath(wsRoot, 'a.txt').toString())
   })
 
   it('reveals the file when explorer.autoReveal defaults to true', () => {
-    const { active, tree, inst, contrib, reg } = setup()
+    const { target, tree, inst, contrib, reg } = setup()
     disposables.push(contrib, reg)
     const input = inst.createInstance(FileEditorInput, URI.joinPath(wsRoot, 'a.txt'))
-    active.set(input, undefined)
+    target.set(input, undefined)
     expect(tree.revealCalls).toEqual([URI.joinPath(wsRoot, 'a.txt').toString()])
   })
 
   it('updates the active marker but does not reveal when autoReveal is false', () => {
-    const { active, tree, inst, contrib, reg } = setup(false)
+    const { target, tree, inst, contrib, reg } = setup(false)
     disposables.push(contrib, reg)
     const input = inst.createInstance(FileEditorInput, URI.joinPath(wsRoot, 'a.txt'))
-    active.set(input, undefined)
+    target.set(input, undefined)
     expect(tree.activeEditorResource?.toString()).toBe(URI.joinPath(wsRoot, 'a.txt').toString())
     expect(tree.revealCalls).toEqual([])
   })
 
   it('clears the active marker when there is no active file editor', () => {
-    const { active, tree, inst, contrib, reg } = setup()
+    const { target, tree, inst, contrib, reg } = setup()
     disposables.push(contrib, reg)
     const input = inst.createInstance(FileEditorInput, URI.joinPath(wsRoot, 'a.txt'))
-    active.set(input, undefined)
-    active.set(undefined, undefined)
+    target.set(input, undefined)
+    target.set(undefined, undefined)
     expect(tree.activeEditorResource).toBeNull()
   })
 
   it('ignores non-file scheme editors', () => {
-    const { active, tree, contrib, reg } = setup()
+    const { target, tree, contrib, reg } = setup()
     disposables.push(contrib, reg)
     const fake: IEditorInput = {
       id: 'untitled:foo',
@@ -127,7 +123,7 @@ describe('ExplorerAutoRevealContribution', () => {
       resolve: () => undefined,
       matches: () => false,
     } as unknown as IEditorInput
-    active.set(fake, undefined)
+    target.set(fake, undefined)
     expect(tree.activeEditorResource).toBeNull()
     expect(tree.revealCalls).toEqual([])
   })

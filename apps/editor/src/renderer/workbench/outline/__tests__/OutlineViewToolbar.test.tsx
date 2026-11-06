@@ -9,6 +9,15 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import {
+  InstantiationService,
+  ServiceCollection,
+  observableValue,
+  type EditorInput,
+  type IEditorGroup,
+} from '@universe-editor/platform'
+import { ServicesContext } from '../../useService.js'
+import { IEditorViewTargetService } from '../../../services/editor/EditorViewTargetService.js'
 import { OutlineViewToolbar } from '../OutlineViewToolbar.js'
 import { outlineViewState } from '../outlineViewState.js'
 
@@ -21,13 +30,50 @@ beforeEach(() => {
   outlineViewState.setAllCollapsed(false)
 })
 
+function makeGroup(id: number, isMain: boolean): IEditorGroup {
+  return { id, part: { isMain } } as unknown as IEditorGroup
+}
+
+function renderToolbar(options?: { isMain?: boolean; name?: string }): void {
+  const targetGroup = observableValue<IEditorGroup>(
+    'test.targetGroup',
+    makeGroup(1, options?.isMain ?? true),
+  )
+  const targetEditor = observableValue<EditorInput | undefined>(
+    'test.targetEditor',
+    options?.name ? ({ getName: () => options.name } as unknown as EditorInput) : undefined,
+  )
+  const services = new ServiceCollection()
+  services.set(IEditorViewTargetService, {
+    _serviceBrand: undefined,
+    targetGroup,
+    targetEditor,
+  } as never)
+  const instantiation = new InstantiationService(services)
+  render(
+    <ServicesContext.Provider value={instantiation}>
+      <OutlineViewToolbar />
+    </ServicesContext.Provider>,
+  )
+}
+
 function openOverflow(): void {
   fireEvent.click(screen.getByRole('button', { name: 'More Actions...' }))
 }
 
 describe('OutlineViewToolbar', () => {
+  it('shows the target badge only when following an auxiliary window editor', () => {
+    renderToolbar({ isMain: true, name: 'a.ts' })
+    expect(screen.queryByTestId('outline-target-badge')).toBeNull()
+    cleanup()
+
+    renderToolbar({ isMain: false, name: 'b.ts' })
+    expect(screen.getByTestId('outline-target-badge')).toBeTruthy()
+    expect(screen.getByText('b.ts')).toBeTruthy()
+  })
+
   it('requests collapse-all then expand-all as allCollapsed flips', () => {
-    render(<OutlineViewToolbar />)
+    renderToolbar()
 
     const before = outlineViewState.collapseAllSignal.get()
     fireEvent.click(screen.getByRole('button', { name: 'Collapse All' }))
@@ -42,7 +88,7 @@ describe('OutlineViewToolbar', () => {
   })
 
   it('toggles Follow Cursor and Filter on Type from the overflow menu', () => {
-    render(<OutlineViewToolbar />)
+    renderToolbar()
     openOverflow()
 
     fireEvent.click(screen.getByText('Follow Cursor'))
@@ -53,7 +99,7 @@ describe('OutlineViewToolbar', () => {
   })
 
   it('selects a sort order from the overflow menu', () => {
-    render(<OutlineViewToolbar />)
+    renderToolbar()
     openOverflow()
 
     fireEvent.click(screen.getByText('Sort By: Name'))

@@ -10,9 +10,10 @@
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronsDownUp, ChevronsUpDown, MoreHorizontal } from 'lucide-react'
+import { AppWindow, Check, ChevronsDownUp, ChevronsUpDown, MoreHorizontal } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import { useObservable } from '../useService.js'
+import { useObservable, useService } from '../useService.js'
+import { IEditorViewTargetService } from '../../services/editor/EditorViewTargetService.js'
 import { outlineViewState, type OutlineSortOrder } from './outlineViewState.js'
 import styles from './OutlineViewToolbar.module.css'
 
@@ -23,6 +24,9 @@ const SORT_OPTIONS: ReadonlyArray<{ id: OutlineSortOrder; label: string }> = [
 ]
 
 export function OutlineViewToolbar() {
+  const viewTarget = useService(IEditorViewTargetService)
+  const targetGroup = useObservable(viewTarget.targetGroup)
+  const targetEditor = useObservable(viewTarget.targetEditor)
   const allCollapsed = useObservable(outlineViewState.allCollapsed)
   const followCursor = useObservable(outlineViewState.followCursor)
   const filterOnType = useObservable(outlineViewState.filterOnType)
@@ -34,8 +38,26 @@ export function OutlineViewToolbar() {
     setOverflow({ x: rect.right - 200, y: rect.bottom + 2 })
   }
 
+  const targetName = targetEditor?.getName()
+  const targetTooltip = targetName
+    ? localize('outline.followingOtherWindow', 'Following {0} in another window', {
+        0: targetName,
+      })
+    : localize('outline.followingOtherWindowNoFile', 'Following an editor in another window')
+
   return (
     <>
+      {!targetGroup.part.isMain && (
+        <span
+          className={styles['targetBadge']}
+          data-testid="outline-target-badge"
+          data-tooltip={targetTooltip}
+          aria-label={targetTooltip}
+        >
+          <AppWindow size={13} strokeWidth={1.75} aria-hidden="true" />
+          {targetName && <span className={styles['targetBadgeLabel']}>{targetName}</span>}
+        </span>
+      )}
       <button
         type="button"
         className={styles['toolbarBtn']}

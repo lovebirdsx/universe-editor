@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Go to Symbol in Editor quick access: '@' (flat, document order) and '@:'
- *  (grouped by symbol kind). Both list the active editor's document symbols from
+ *  (grouped by symbol kind). Both list the view target's document symbols
+ *  (IEditorViewTargetService, defaulting to the last-used editor surface) from
  *  IOutlineService with live preview, mirroring VSCode's gotoSymbol quick access.
  *  Panel-side fuzzy filtering against the query (prefix stripped by the panel).
  *--------------------------------------------------------------------------------------------*/
@@ -13,6 +14,7 @@ import {
   IUriIdentityService,
   localize,
   toDisposable,
+  type IEditorGroup,
   type IQuickAccessProvider,
   type IQuickAccessProviderRunOptions,
   type IQuickPick,
@@ -20,7 +22,9 @@ import {
   type IQuickPickSeparator,
   type QuickPickInput,
 } from '@universe-editor/platform'
-import { IOutlineService } from '../../languageFeatures/OutlineService.js'
+import { IOutlineService, type IOutlineScope } from '../../languageFeatures/OutlineService.js'
+import { IEditorViewTargetService } from '../../editor/EditorViewTargetService.js'
+import { IWindowFocusService } from '../../windows/windowFocusService.js'
 import {
   flattenOutline,
   groupSymbolsByKind,
@@ -144,7 +148,7 @@ function otherSectionSeparator(): IQuickPickSeparator {
 function provideFileSymbols(
   picker: IQuickPick<IQuickPickItem>,
   options: IQuickAccessProviderRunOptions,
-  outline: IOutlineService,
+  outline: IOutlineScope,
   buildItems: (
     flat: readonly FlatSymbol[],
     languageId: string | undefined,
@@ -154,6 +158,7 @@ function provideFileSymbols(
     symbol: monaco.languages.DocumentSymbol,
     target: TargetedOpen,
   ) => void | Promise<void>,
+  revealInPlace?: (symbol: monaco.languages.DocumentSymbol) => void,
 ): void {
   const { disposables } = options
   const byId = new Map<string, monaco.languages.DocumentSymbol>()
@@ -200,24 +205,26 @@ function provideFileSymbols(
       accepted = true
       picker.hide()
       if (!symbol) return
-      if (target === 'default') outline.revealSymbol(symbol)
-      else void openInTarget?.(symbol, target)
+      if (target === 'default') {
+        if (revealInPlace) revealInPlace(symbol)
+        else outline.revealSymbol(symbol)
+      } else void openInTarget?.(symbol, target)
     }),
   )
 }
 
-/** Open the active editor in a side group / auxiliary window, then reveal the
- *  chosen symbol there. The active input is moved or cloned — never shared. */
+/** Open the target editor in a side group / auxiliary window, then reveal the
+ *  chosen symbol there. The source input is moved or cloned — never shared. */
 function openSymbolInTarget(
   services: OpenTargetServices,
   symbol: monaco.languages.DocumentSymbol,
   target: TargetedOpen,
+  sourceGroup: IEditorGroup,
 ): void {
-  const source = services.groups.activeGroup
-  const active = source.activeEditor
+  const active = sourceGroup.activeEditor
   if (!active) return
   void (async () => {
-    const result = await openExistingInputWithTarget(services, active, source, target, {
+    const result = await openExistingInputWithTarget(services, active, sourceGroup, target, {
       pinned: true,
       // A session is globally unique: cloning it would attach the same
       // conversation twice. Move it instead.
@@ -242,6 +249,8 @@ export class FileSymbolQuickAccessProvider implements IQuickAccessProvider {
     @IInstantiationService inst?: IInstantiationService,
     @IUriIdentityService uriIdentity?: IUriIdentityService,
     @IAuxiliaryEditorWindowService aux?: IAuxiliaryEditorWindowService,
+    @IEditorViewTargetService private readonly _viewTarget?: IEditorViewTargetService,
+    @IWindowFocusService private readonly _windowFocus?: IWindowFocusService,
   ) {
     this._targets =
       groups && inst && uriIdentity && aux ? { groups, aux, inst, uriIdentity } : undefined
@@ -249,10 +258,17 @@ export class FileSymbolQuickAccessProvider implements IQuickAccessProvider {
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
     const targets = this._targets
+    const targetGroup = this._viewTarget?.targetGroup.get()
+    const scope = targetGroup ? this._outline.forGroup(targetGroup.id) : this._outline
+    const sourceGroup = targetGroup ?? targets?.groups.activeGroup
+    const revealInPlace = (symbol: monaco.languages.DocumentSymbol): void => {
+      if (targetGroup) this._windowFocus?.focusGroup(targetGroup)
+      scope.revealSymbol(symbol)
+    }
     provideFileSymbols(
       picker,
       options,
-      this._outline,
+      scope,
       (flat, languageId, byId) => {
         const { subagents, rest } = splitSubagentSymbols(flat, languageId)
         if (subagents.length === 0) {
@@ -275,7 +291,10 @@ export class FileSymbolQuickAccessProvider implements IQuickAccessProvider {
         }
         return rows
       },
-      targets ? (symbol, target) => openSymbolInTarget(targets, symbol, target) : undefined,
+      targets && sourceGroup
+        ? (symbol, target) => openSymbolInTarget(targets, symbol, target, sourceGroup)
+        : undefined,
+      revealInPlace,
     )
   }
 }
@@ -290,6 +309,8 @@ export class FileSymbolByCategoryQuickAccessProvider implements IQuickAccessProv
     @IInstantiationService inst?: IInstantiationService,
     @IUriIdentityService uriIdentity?: IUriIdentityService,
     @IAuxiliaryEditorWindowService aux?: IAuxiliaryEditorWindowService,
+    @IEditorViewTargetService private readonly _viewTarget?: IEditorViewTargetService,
+    @IWindowFocusService private readonly _windowFocus?: IWindowFocusService,
   ) {
     this._targets =
       groups && inst && uriIdentity && aux ? { groups, aux, inst, uriIdentity } : undefined
@@ -297,10 +318,17 @@ export class FileSymbolByCategoryQuickAccessProvider implements IQuickAccessProv
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
     const targets = this._targets
+    const targetGroup = this._viewTarget?.targetGroup.get()
+    const scope = targetGroup ? this._outline.forGroup(targetGroup.id) : this._outline
+    const sourceGroup = targetGroup ?? targets?.groups.activeGroup
+    const revealInPlace = (symbol: monaco.languages.DocumentSymbol): void => {
+      if (targetGroup) this._windowFocus?.focusGroup(targetGroup)
+      scope.revealSymbol(symbol)
+    }
     provideFileSymbols(
       picker,
       options,
-      this._outline,
+      scope,
       (flat, languageId, byId) => {
         const { subagents, rest } = splitSubagentSymbols(flat, languageId)
         const rows: QuickPickInput<IQuickPickItem>[] = []
@@ -324,7 +352,10 @@ export class FileSymbolByCategoryQuickAccessProvider implements IQuickAccessProv
         }
         return rows
       },
-      targets ? (symbol, target) => openSymbolInTarget(targets, symbol, target) : undefined,
+      targets && sourceGroup
+        ? (symbol, target) => openSymbolInTarget(targets, symbol, target, sourceGroup)
+        : undefined,
+      revealInPlace,
     )
   }
 }

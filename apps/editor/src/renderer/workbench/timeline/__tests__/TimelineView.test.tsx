@@ -15,16 +15,18 @@ import {
   ICommandService,
   IConfigurationService,
   IContextKeyService,
-  IEditorService,
   InstantiationService,
   MenuId,
   MenuRegistry,
   observableValue,
   ServiceCollection,
   URI,
+  type IEditorInput,
 } from '@universe-editor/platform'
 import type { ITimelineDto, ITimelineItemDto } from '@universe-editor/extensions-common'
 import { ServicesContext } from '../../useService.js'
+import { IEditorViewTargetService } from '../../../services/editor/EditorViewTargetService.js'
+import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import {
   ITimelineService,
   type ITimelineProviderModel,
@@ -84,23 +86,26 @@ function setup(items: ITimelineItemDto[]) {
     label: 'Git History',
     schemes: ['file'],
   }
+  const pinnedUri = observableValue<URI | undefined>('t.pinned', undefined)
   const timelineService = {
     _serviceBrand: undefined,
     providers: observableValue<readonly ITimelineProviderModel[]>('t.providers', [provider]),
     onDidChangeTimeline: new Emitter<never>().event,
     uri: observableValue<URI | undefined>('t.uri', FILE_URI),
-    pinnedUri: observableValue<URI | undefined>('t.pinned', undefined),
+    pinnedUri,
     followUri: vi.fn(),
     getTimeline: vi.fn(
       async (): Promise<ITimelineDto> => ({ source: provider.id, items: [...items] }),
     ),
   }
   const executeCommand = vi.fn()
+  const targetEditor = observableValue<IEditorInput | undefined>('t.targetEditor', undefined)
   const services = new ServiceCollection()
   services.set(ITimelineService, timelineService as unknown as ITimelineServiceType)
-  services.set(IEditorService, {
+  services.set(IEditorViewTargetService, {
     _serviceBrand: undefined,
-    activeEditor: observableValue('t.activeEditor', undefined),
+    targetGroup: observableValue('t.targetGroup', { id: 1 } as never),
+    targetEditor,
   } as never)
   services.set(ICommandService, { _serviceBrand: undefined, executeCommand } as never)
   services.set(IConfigurationService, { _serviceBrand: undefined, get: () => undefined } as never)
@@ -108,7 +113,7 @@ function setup(items: ITimelineItemDto[]) {
   services.set(IContextKeyService, contextKeyService)
   const instantiation = new InstantiationService(services)
   disposables.push(contextKeyService)
-  return { executeCommand, instantiation }
+  return { executeCommand, instantiation, timelineService, targetEditor }
 }
 
 async function renderView(instantiation: InstantiationService): Promise<void> {
@@ -180,6 +185,32 @@ describe('TimelineView — inline row actions', () => {
 
     expect(executeCommand).toHaveBeenCalledTimes(1)
     expect(executeCommand).toHaveBeenCalledWith('_workbench.openGitGraph', item.id)
+  })
+})
+
+describe('TimelineView — view target', () => {
+  it('re-points followUri when the view target editor changes', async () => {
+    const { instantiation, timelineService, targetEditor } = setup([makeGitCommitItem()])
+    await renderView(instantiation)
+    timelineService.followUri.mockClear()
+
+    const input = instantiation.createInstance(FileEditorInput, URI.file('/repo/other.txt'))
+    act(() => targetEditor.set(input, undefined))
+
+    expect(timelineService.followUri).toHaveBeenCalledTimes(1)
+    expect(timelineService.followUri).toHaveBeenCalledWith(input.resource)
+  })
+
+  it('ignores target changes while pinned', async () => {
+    const { instantiation, timelineService, targetEditor } = setup([makeGitCommitItem()])
+    timelineService.pinnedUri.set(FILE_URI, undefined)
+    await renderView(instantiation)
+    timelineService.followUri.mockClear()
+
+    const input = instantiation.createInstance(FileEditorInput, URI.file('/repo/other.txt'))
+    act(() => targetEditor.set(input, undefined))
+
+    expect(timelineService.followUri).not.toHaveBeenCalled()
   })
 })
 

@@ -1,6 +1,6 @@
 # apps/editor/src/renderer/workbench/outline/CLAUDE.md
 
-outline（大纲）子系统的视图层在本目录（OutlineView/OutlineViewToolbar/outlineViewState），服务主干 EditorOutlineTracker/OutlineService 在 `services/languageFeatures/`（语言无关，与 symbolTree 等纯函数同域）。本文是 outline 子系统的上下文地图（处理相关任务前通读）。
+outline（大纲）子系统的视图层在本目录（OutlineView/OutlineViewToolbar/outlineViewState），服务主干 EditorOutlineTracker/OutlineService 在 `services/languageFeatures/`（语言无关，与 symbolTree 等纯函数同域）。
 
 outline 是**语言无关**功能：从活跃编辑器的 **DocumentSymbol 树**派生侧栏树视图，并跟踪「光标/视口当前所在符号」。符号来自任意 `DocumentSymbolProvider`（TS/JSON/markdown 内置插件…），那是 [extend-language-plugin] 的事。
 
@@ -17,15 +17,15 @@ DocumentSymbolProvider(任意语言) → ILanguageFeaturesService.getDocumentSym
 EditorOutlineTracker（**每个 editor group 一个**：outline / activeSymbol / sourceKind 三条 observable，主干）
   ↓ ① 定位编辑器（唯一类型分支：FileEditorRegistry(带 groupId 消歧) / MarkdownPreview / AcpSessionOutline / GraphOutline）
 OutlineService（门面：每 group 一个 tracker，自身 observable = **活动组**那个）
-OutlineView (Tree) 读 outlineViewState（排序/过滤/折叠/跟随光标）
-  点击/回车 → revealSymbol → 分支回写（各分支见下）
-姊妹消费者（同数据但不渲染大纲）：Breadcrumbs.tsx（`forGroup(本组 id)`）、FileSymbolQuickAccessProvider（@ / @:，走活动组）
+OutlineView (Tree) 读视图目标 scope（`IEditorViewTargetService`，默认 openTargetPart）+ outlineViewState
+  点击/回车 → 先 focusGroup(目标) 再 revealSymbol → 分支回写（各分支见下）
+姊妹消费者：Breadcrumbs.tsx（`forGroup(本组 id)`）、FileSymbolQuickAccessProvider（@ / @:，走视图目标）
 ```
 
 ## 核心服务：EditorOutlineTracker + OutlineService（`services/languageFeatures/`）
 
 - **`EditorOutlineTracker`**：对外即 `IOutlineScope`（`outline` / `activeSymbol` / `sourceKind` 三条 observable + `revealSymbol` / `captureViewState` / `previewSymbol` / `restoreViewState`）。构造参数 `{ groupId, activeEditor, languageFeatures, logger, cache }`——`activeEditor` 是**它那一组**的，`groupId` 供 `FileEditorRegistry.get(input, groupId)` 消歧。
-- **`OutlineService` 门面**：注入 `IEditorGroupsService`，每 group 一个 tracker（`onDidAddGroup`/`onDidRemoveGroup` 建销、`onDidActiveGroupChange` 切 `_activeGroupId`）；自身三条 observable = `derived(活动组 tracker)`，四个方法委托活动 tracker——**OutlineView / @ / @: / e2e 探针看到的仍是活动组**。`forGroup(groupId)` 取某组 tracker；取不到（组已移除那一帧）返回**空 scope**，绝不回退活动组。
+- **`OutlineService` 门面**：注入 `IEditorGroupsService`，每 group 一个 tracker（`onDidAddGroup`/`onDidRemoveGroup` 建销、`onDidActiveGroupChange` 切 `_activeGroupId`）；自身三条 observable = `derived(活动组 tracker)`（命令型语义）；**信息型消费者（OutlineView / @ / @: / e2e 探针）读 `IEditorViewTargetService` 的 `forGroup`**。`forGroup(groupId)` 取某组 tracker；取不到（组已移除那一帧）返回**空 scope**，绝不回退活动组。
 - **`OutlineSymbolCache`（跨 tracker 共享）**：LRU 按 URI 留 8 棵树，校验 `modelId/version/language`；**in-flight pull 池**按四维去重，同模型分屏只拉一次 RPC。
 - **唯一类型分支** `_attachActiveEditor()`：file `FileEditorRegistry.get(input, groupId)` + cursor 事件；preview `MonacoModelRegistry.peek(sourceUri)` 拿**源文件共享 model**（预览无 Monaco）+ `controller.getTopVisibleLine()`/`onDidScroll`；session `AcpSessionOutlineRegistry`；graph `GraphOutlineRegistry.get(kind, instanceKey)`（instanceKey = input 的 `resource.toString()`，多实例按实例路由）。
 - **`revealSymbol` 两分支必须对称**：file `setPosition + revealLineInCenterIfOutsideViewport + focus`；preview `scrollToLine + focus`。**漏 focus 就是「点了大纲焦点不回编辑器」的 bug**（已修勿回退）。
@@ -45,7 +45,7 @@ outlineViewState.ts      模块级 observable 单例：followCursor / filterOnTy
 
 ## 注册接入点（加 View 两步 + 状态持久化）
 
-- 两步：`BuiltInViewContainersContribution.ts`（Container `workbench.view.outline` 在 SecondarySideBar）+ `BuiltInViewsContribution.ts`（`registerViewWithComponent` 绑 View `workbench.view.outline.main` ↔ OutlineView）——即 apps/editor/CLAUDE.md 套路 B。
+- 两步：`BuiltInViewContainersContribution.ts`（Container `workbench.view.outline` 在 SecondarySideBar）+ `BuiltInViewsContribution.ts`（`registerViewWithComponent` 绑 View `workbench.view.outline.main` ↔ OutlineView）——套路 B。
 - 持久化：`contributions/OutlineViewStateContribution.ts` 存 GLOBAL storage（key `outline.viewState`，只存 followCursor/filterOnType/sortBy），启动 hydrate。
 
 ## 命令 / 快捷键
@@ -75,7 +75,7 @@ workbench/editor/previewScrollMap.ts            纯函数：源行号↔预览�
 
 ## 关键架构决策
 
-- **tracker per editor group，门面只做分发**：分屏时每组各渲染一个 FileEditor（各一条面包屑），**每组必须跟随自己的 activeEditor**——全局单例只跟 `IEditorService.activeEditor`（活动组镜像）时，背景组面包屑会显示聚焦组的路径。OutlineView / @ / @: 仍要活动组，故门面留活动组语义 + `forGroup(groupId)` 给面包屑。
+- **tracker per editor group，门面只做分发**：分屏时每组各渲染一个 FileEditor（各一条面包屑），**每组必须跟随自己的 activeEditor**——全局单例只跟 `IEditorService.activeEditor`（活动组镜像）时，背景组面包屑会显示聚焦组的路径。OutlineView / @ / @: 用视图目标组的 `forGroup`（默认 openTargetPart），面包屑用本组。
 - **分支收敛在三处**：`_attach*` / `revealSymbol` / `_recomputeActiveSymbol`（现全在 `editorOutlineTracker.ts`），其余全主干——「给预览加大纲」当初只加一个分支，没动主干。
 - **预览用 controller 句柄而非直连**：预览是纯 React div 没有 Monaco API，`IMarkdownPreviewController` 抽象「滚到某行/顶部是第几行/聚焦/滚动事件」，让两分支对称。
 - **冷启动重试**：DocumentSymbol 依赖 LS，冷启动有延迟；指数退避 + generation 作废，避免「打开文件大纲一直空」又不无限重试（e2e `smoke.outline.spec.ts` 用 `test.slow()` + 轮询的原因）。
@@ -86,7 +86,7 @@ workbench/editor/previewScrollMap.ts            纯函数：源行号↔预览�
 - **改排序/过滤/折叠/跟随光标行为或 UI**：`OutlineView.tsx` + `OutlineViewToolbar.tsx` + `outlineViewState.ts`（新偏好加 observable+setter）；可持久化偏好别忘 `OutlineViewStateContribution.ts` 的 hydrate/写回。
 - **改大纲项点击/回车跳转**：`EditorOutlineTracker.revealSymbol`——**三个分支都要改**（file/preview/session），保持对称（尤其 focus）。
 - **改活动符号判定**：`EditorOutlineTracker._recomputeActiveSymbol` + `symbolTree.findSymbolAtLine`（面包屑同源）。
-- **改「哪个组的 outline」**：`OutlineService`（建/销 tracker、`forGroup`、活动组派生）+ `Breadcrumbs.tsx`（读 `useEditorGroup()` 的本组 scope）。
+- **改「哪个组的 outline」**：`OutlineService`（建/销 tracker、`forGroup`）+ `IEditorViewTargetService`（OutlineView / @ / @: 的目标组）+ `Breadcrumbs.tsx`（本组 scope）。
 - **新增一类编辑器的大纲支持**：仿预览/会话分支——建 Registry + controller 接口，`_attachActiveEditor`/`revealSymbol`/`_recomputeActiveSymbol` 加分支，主干不动。
 - **AI 会话大纲**（`AcpSessionEditorInput`）：`AcpSessionOutlineRegistry` + `IAcpSessionOutlineController`（controller 暴露 `session.timeline`；OutlineService **不注入 ACP service**——避开 DI 顺序）。纯函数 `acpTimelineOutline.ts::timelineToOutline` 按 DFS 分配**伪行号** + `keyByLine`/`lineByKey` 双向映射；languageId `acp.session`；reveal 落 `ChatBody.scrollToKey`（先展开折叠祖先），ChatBody 挂载时 register controller。细节见 `services/acp/session/CLAUDE.md`。
 - **Git/P4 图谱大纲**（`GitGraphEditorInput`/`PerforceGraphEditorInput`）：`GraphOutlineRegistry` + `IGraphOutlineController`（`services/gitGraph/graphOutline.ts`，两图谱共用）。`graphCommitsToOutline` 合成扁平树：伪行号=序号+1，`keyByLine`/`lineByKey` 桥接；kind 哨兵 `GRAPH_COMMIT_KIND=200`/`GRAPH_PENDING_KIND=201`（git uncommitted/p4 pending），`symbolIcon.tsx` 按哨兵画图标。reveal：行→hash→`controller.selectCommit`；preview：`scrollToCommit` 只滚动；active：`getSelectedHash`→line→`findSymbolAtLine`。Go to Symbol（ctrl+r）在图谱里列提交即走这条。

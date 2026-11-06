@@ -22,7 +22,6 @@ import {
   ICommandService,
   IConfigurationService,
   IContextKeyService,
-  IEditorService,
   localize,
   MenuId,
   runWithInvocationModifiers,
@@ -39,6 +38,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
+import { IEditorViewTargetService } from '../../services/editor/EditorViewTargetService.js'
 import {
   ITimelineService,
   type ITimelineProviderModel,
@@ -131,7 +131,7 @@ interface TimelineMenuState {
 
 export function TimelineView() {
   const timelineService = useService(ITimelineService)
-  const editorService = useService(IEditorService)
+  const viewTarget = useService(IEditorViewTargetService)
   const commandService = useService(ICommandService)
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
@@ -140,7 +140,7 @@ export function TimelineView() {
   const pinnedUri = useObservable(timelineService.pinnedUri)
   const providers = useObservable(timelineService.providers)
   const excluded = useObservable(timelineViewState.excludedSources)
-  const activeEditor = useObservable(editorService.activeEditor)
+  const targetEditor = useObservable(viewTarget.targetEditor)
 
   const [items, setItems] = useState<ITimelineItemDto[]>([])
   const [hasMore, setHasMore] = useState(false)
@@ -154,16 +154,17 @@ export function TimelineView() {
   // Dropped responses from a superseded load (uri / providers changed mid-flight).
   const loadGenerationRef = useRef(0)
 
-  // Follow the active editor unless pinned. Depending on pinnedUri re-points the
-  // view at the active editor right after an unpin. timelineFollowTarget keeps the
-  // view on the last file while a diff/merge or a virtual editor (graph, settings)
-  // is active (VSCode parity), so opening a timeline entry's diff or jumping to a
-  // commit in the graph doesn't blank the view.
+  // Follow the view target (last-used editor surface) unless pinned. Depending
+  // on pinnedUri re-points the view at the target editor right after an unpin.
+  // timelineFollowTarget keeps the view on the last file while a diff/merge or a
+  // virtual editor (graph, settings) is active (VSCode parity), so opening a
+  // timeline entry's diff or jumping to a commit in the graph doesn't blank the
+  // view.
   useEffect(() => {
     if (pinnedUri !== undefined) return
-    const target = timelineFollowTarget(activeEditor)
+    const target = timelineFollowTarget(targetEditor)
     if (target !== 'keep') timelineService.followUri(target)
-  }, [activeEditor, pinnedUri, timelineService])
+  }, [targetEditor, pinnedUri, timelineService])
 
   const activeProviders = useMemo<readonly ITimelineProviderModel[]>(() => {
     if (!uri) return []

@@ -20,6 +20,7 @@ import {
   UriIdentityService,
   constObservable,
   observableValue,
+  type IEditorGroup,
   type IKeyMods,
   type IQuickInputButton,
   type IQuickPickItemButtonEvent,
@@ -39,6 +40,8 @@ import {
   FileSymbolQuickAccessProvider,
 } from '../providers/FileSymbolQuickAccessProvider.js'
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
+import { IEditorViewTargetService } from '../../editor/EditorViewTargetService.js'
+import { IWindowFocusService } from '../../windows/windowFocusService.js'
 import { IAuxiliaryEditorWindowService } from '../../windows/auxiliaryEditorWindowService.js'
 
 class PlainEditor extends EditorInput {
@@ -162,9 +165,11 @@ function model(
   return { uri: 'acp-session://1', roots, languageId, version }
 }
 
-function makeOutline() {
-  const outline = observableValue<OutlineModel | undefined>('outline', undefined)
-  const stub = {
+type OutlineStub = ReturnType<typeof makeScope>
+
+function makeScope(initial?: OutlineModel) {
+  const outline = observableValue<OutlineModel | undefined>('outline', initial)
+  return {
     outline,
     activeSymbol: constObservable(undefined),
     sourceKind: constObservable(undefined),
@@ -173,7 +178,33 @@ function makeOutline() {
     previewSymbol: vi.fn(),
     restoreViewState: vi.fn(),
   }
-  return { outline, stub: stub as unknown as IOutlineService }
+}
+
+function makeOutline() {
+  const stub = makeScope()
+  const scopes = new Map<number, OutlineStub>()
+  const service = {
+    ...stub,
+    forGroup: vi.fn((groupId: number) => scopes.get(groupId) ?? stub),
+  }
+  return {
+    outline: stub.outline,
+    stub: service as unknown as IOutlineService,
+    scopes,
+  }
+}
+
+function makeViewTarget(group: IEditorGroup): {
+  service: IEditorViewTargetService
+  windowFocus: IWindowFocusService
+} {
+  const service = {
+    _serviceBrand: undefined,
+    targetGroup: constObservable(group),
+    targetEditor: constObservable(undefined),
+  } as unknown as IEditorViewTargetService
+  const windowFocus = { focusGroup: vi.fn() } as unknown as IWindowFocusService
+  return { service, windowFocus }
 }
 
 function labels(picker: FakeQuickPick<IQuickPickItem>): string[] {
@@ -282,6 +313,33 @@ describe('FileSymbolQuickAccessProvider', () => {
 
     expect(stub.revealSymbol).toHaveBeenCalledWith(s2)
     expect(picker.hidden).toBe(true)
+  })
+
+  it('uses the view target scope when it differs from the active group', () => {
+    const group = { id: 2 } as IEditorGroup
+    const { stub, scopes } = makeOutline()
+    const targetScope = makeScope(model([sym('aux symbol')], 1))
+    scopes.set(group.id, targetScope)
+    const { service, windowFocus } = makeViewTarget(group)
+    const provider = new FileSymbolQuickAccessProvider(
+      stub,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      service,
+      windowFocus,
+    )
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+
+    expect(labels(picker)).toEqual(['aux symbol'])
+    picker.fireAccept([picker.items[0] as IQuickPickItem])
+    expect(windowFocus.focusGroup).toHaveBeenCalledWith(group)
+    expect(targetScope.revealSymbol).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'aux symbol' }),
+    )
+    expect(stub.revealSymbol).not.toHaveBeenCalled()
   })
 
   it('surfaces a symbol detail as description + keyword (graph commits search by hash/author)', () => {

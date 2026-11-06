@@ -1,9 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  OutlineView — sidebar tree of the active editor's document symbols. Data comes
- *  from IOutlineService (which pulls from the language features facade); the
- *  generic <Tree> handles virtualization / keyboard nav. Clicking a row jumps to
- *  the symbol; the symbol under the cursor is highlighted (follow-cursor).
+ *  OutlineView — sidebar tree of the target editor's document symbols. The target
+ *  is the last-used editor surface (IEditorViewTargetService, defaulting to the
+ *  auxiliary window when it was used last), so focusing the main window's
+ *  sidebar does not switch the tree back to the main editor. Data comes from
+ *  IOutlineService (which pulls from the language features facade); the generic
+ *  <Tree> handles virtualization / keyboard nav. Clicking a row jumps to the
+ *  symbol; the symbol under the cursor is highlighted (follow-cursor).
  *
  *  Title-bar driven behaviour (state in outlineViewState):
  *   - Sort By Position / Name / Category — re-sorts each level before building.
@@ -37,6 +40,8 @@ import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { type monaco } from '../editor/monaco/MonacoLoader.js'
 import { IOutlineService } from '../../services/languageFeatures/OutlineService.js'
+import { IEditorViewTargetService } from '../../services/editor/EditorViewTargetService.js'
+import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { SymbolIcon } from '../symbols/symbolIcon.js'
 import { outlineViewState, type OutlineSortOrder } from './outlineViewState.js'
 import { OutlineNavigatorRegistry } from './outlineNavigatorRegistry.js'
@@ -162,15 +167,36 @@ function collectMatchedIds(
 
 export function OutlineView() {
   const outlineService = useService(IOutlineService)
+  const viewTarget = useService(IEditorViewTargetService)
+  const windowFocus = useService(IWindowFocusService)
   const commandService = useService(ICommandService)
-  const outline = useObservable(outlineService.outline)
-  const activeSymbol = useObservable(outlineService.activeSymbol)
-  const sourceKind = useObservable(outlineService.sourceKind)
+  const targetGroup = useObservable(viewTarget.targetGroup)
+  // `forGroup` returns a stable scope per group; switching the target re-selects
+  // the scope and re-subscribes the three outline observables below.
+  const scope = useMemo(
+    () => outlineService.forGroup(targetGroup.id),
+    [outlineService, targetGroup.id],
+  )
+  const outline = useObservable(scope.outline)
+  const activeSymbol = useObservable(scope.activeSymbol)
+  const sourceKind = useObservable(scope.sourceKind)
   const sortBy = useObservable(outlineViewState.sortBy)
   const followCursor = useObservable(outlineViewState.followCursor)
   const filterOnType = useObservable(outlineViewState.filterOnType)
   const collapseSignal = useObservable(outlineViewState.collapseAllSignal)
   const expandSignal = useObservable(outlineViewState.expandAllSignal)
+
+  // Reveal into the view target, not the focused group: clicking the Outline is
+  // exactly the interaction that moves focus back to the main window, so the
+  // target must be captured before the click changes `activeGroup`. Bringing the
+  // target window forward first makes the reveal observable to the user.
+  const revealSymbol = useCallback(
+    (symbol: monaco.languages.DocumentSymbol) => {
+      windowFocus.focusGroup(targetGroup)
+      scope.revealSymbol(symbol)
+    },
+    [windowFocus, targetGroup, scope],
+  )
 
   const [findActive, setFindActive] = useState(false)
   const [filterText, setFilterText] = useState('')
@@ -316,7 +342,7 @@ export function OutlineView() {
       const nav =
         (commandId: string): (() => void) =>
         () => {
-          outlineService.revealSymbol(symbol)
+          revealSymbol(symbol)
           void commandService.executeCommand(commandId)
         }
       return [
@@ -325,7 +351,7 @@ export function OutlineView() {
           id: 'goToSymbol',
           icon: 'go-to-file',
           label: localize('outline.goToSymbol', 'Go to Symbol'),
-          run: () => outlineService.revealSymbol(symbol),
+          run: () => revealSymbol(symbol),
         },
         { kind: 'sep' },
         {
@@ -362,7 +388,7 @@ export function OutlineView() {
         },
       ]
     },
-    [sourceKind, outlineService, commandService],
+    [sourceKind, revealSymbol, commandService],
   )
 
   const openRowMenu = useCallback(
@@ -539,7 +565,7 @@ export function OutlineView() {
               } else {
                 model.setSelection([node.id], node.id)
               }
-              outlineService.revealSymbol(node.element.symbol)
+              revealSymbol(node.element.symbol)
             }
             return (
               <div
@@ -585,7 +611,7 @@ export function OutlineView() {
               </div>
             )
           }}
-          onActivate={(node) => outlineService.revealSymbol(node.element.symbol)}
+          onActivate={(node) => revealSymbol(node.element.symbol)}
           onFocus={onTreeFocus}
           onContextMenu={(e, node) => {
             if (node) openRowMenu(e, node.element)

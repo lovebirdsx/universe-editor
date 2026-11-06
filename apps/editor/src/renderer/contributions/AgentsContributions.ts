@@ -23,6 +23,7 @@ import {
 } from '@universe-editor/platform'
 import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
 import { registerEditorWithComponent } from '../services/editor/EditorComponentRegistry.js'
+import { IEditorViewTargetService } from '../services/editor/EditorViewTargetService.js'
 import { SessionListPanel } from '../workbench/agents/SessionListPanel.js'
 import { SessionsViewToolbar } from '../workbench/agents/SessionsViewToolbar.js'
 import { McpServersView } from '../workbench/agents/McpServersView.js'
@@ -585,15 +586,16 @@ export class AgentsSessionEditorLifecycleContribution
 }
 
 /**
- * Keeps `IAcpSessionService.activeSession` and the focused session editor in
- * sync, in both directions. Multiple session editors can be open at once;
- * whichever tab the user focuses should become the active session so
- * session-scoped UI (the Session Changes view, the status-bar MCP summary, …)
- * tracks the editor in front of them. Without this, `activeSession` only moves
- * on explicit list/new actions and stale-looks when the user clicks between
- * session tabs. Conversely, when something else moves `activeSession` (session
- * list click, new/resumed session, deep link), its chat must come to the front
- * as a tab.
+ * Keeps `IAcpSessionService.activeSession` and the session editor in the view
+ * target (the last-used editor surface, so an auxiliary window's session stays
+ * active while the user works in the main window) in sync, in both directions.
+ * Multiple session editors can be open at once; whichever session editor the
+ * user last interacted with should become the active session so session-scoped
+ * UI (the Session Changes view, the status-bar MCP summary, …) tracks it.
+ * Without this, `activeSession` only moves on explicit list/new actions and
+ * stale-looks when the user clicks between session tabs. Conversely, when
+ * something else moves `activeSession` (session list click, new/resumed
+ * session, deep link), its chat must come to the front as a tab.
  *
  * The forward direction opens a tab in the ACTIVE group only when the session
  * is not already showing in some other group — `openEditor`'s dedup is scoped
@@ -609,6 +611,7 @@ export class AgentsActiveSessionSyncContribution
 {
   constructor(
     @IEditorService private readonly _editor: IEditorService,
+    @IEditorViewTargetService private readonly _viewTarget: IEditorViewTargetService,
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @IInstantiationService private readonly _inst: IInstantiationService,
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
@@ -616,7 +619,7 @@ export class AgentsActiveSessionSyncContribution
     super()
     this._register(
       autorun((r) => {
-        const active = this._editor.activeEditor.read(r)
+        const active = this._viewTarget.targetEditor.read(r)
         if (!(active instanceof AcpSessionEditorInput)) return
         if (this._sessions.activeSessionId.get() === active.sessionId) return
         // Only retarget to a live session; a not-yet-resumed editor leaves the

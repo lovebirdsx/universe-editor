@@ -40,6 +40,7 @@ import {
 } from '../../../services/explorer/ExplorerTreeService.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { ExplorerAutoRevealContribution } from '../../../contributions/ExplorerAutoRevealContribution.js'
+import { IEditorViewTargetService } from '../../../services/editor/EditorViewTargetService.js'
 import { ServicesContext } from '../../useService.js'
 import styles from '../ExplorerView.module.css'
 import { EditorResolverService } from '../../../services/editor/EditorResolverService.js'
@@ -166,6 +167,13 @@ function setup(opts: { autoReveal?: boolean } = {}) {
   services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IWorkspaceService, ws)
   services.set(IEditorService, editor as unknown as IEditorService)
+  // The auto-reveal contribution follows the view target (last-used editor
+  // surface); mirror the fake editor's active input into it.
+  services.set(IEditorViewTargetService, {
+    _serviceBrand: undefined,
+    targetGroup: observableValue('fake.targetGroup', { id: 1 }),
+    targetEditor: editor.activeEditor,
+  } as unknown as IEditorViewTargetService)
   services.set(ICommandService, command as unknown as ICommandService)
   services.set(IDialogService, dialog)
   services.set(IConfigurationService, config)

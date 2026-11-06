@@ -212,7 +212,7 @@ test.describe('@p0 my thing', () => {
 1. 在 `services/languageFeatures/<lang>/` 写 provider（实现 `monaco.languages.DocumentSymbolProvider` 等）。
 2. 在 `contributions/LanguageFeaturesContribution.ts` 的 `MonacoLoader.ensureInitialized().then(...)` 里 `this._register(langFeatures.registerXxxProvider('<lang>', new XxxProvider()))`。**必须等 Monaco 就绪**。
 
-Outline 数据由 `IOutlineService` 产出（**分屏每组一个 tracker**）：`OutlineView` / @ 看活动组，面包屑走 `forGroup(本组 id)`；跳转走 `revealSymbol`。
+Outline 数据由 `IOutlineService` 产出（**分屏每组一个 tracker**）：`OutlineView` / @ 看视图目标（`IEditorViewTargetService`），面包屑走 `forGroup(本组 id)`；跳转走 `revealSymbol`。
 
 ## 套路 I：加一个 AI provider（协议）
 

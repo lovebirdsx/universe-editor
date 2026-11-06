@@ -1843,6 +1843,16 @@ export interface E2EProbe {
    * selection change moves the outline highlight" spec.
    */
   getOutlineActiveSymbol(): string | undefined
+  /**
+   * The editor surface the information views (Outline/Timeline/Explorer/@) are
+   * following — the last-used editor surface, which can live in an auxiliary
+   * window while the main window has focus.
+   */
+  getViewTargetGroup(): {
+    readonly groupId: number
+    readonly partId: number
+    readonly isMain: boolean
+  }
   /** 只读模型身份；不存在时返回 undefined，用于验证释放重建后的版本号复用。 */
   getTextModelIdentity(
     fsPath: string,

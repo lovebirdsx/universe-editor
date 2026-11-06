@@ -13,6 +13,24 @@
   flex-shrink: 0;
 }
 
+.targetBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 140px;
+  padding: 0 4px;
+  color: var(--vscode-descriptionForeground, #8a8a92);
+  font-size: 11px;
+  flex-shrink: 1;
+}
+
+.targetBadgeLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .toolbarBtn:hover:not(:disabled) {
   background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.06));
   color: var(--vscode-foreground, #c8c8c8);

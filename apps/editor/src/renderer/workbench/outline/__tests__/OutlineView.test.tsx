@@ -15,17 +15,22 @@ import {
   IWorkspaceService,
   ServiceCollection,
   observableValue,
+  type EditorInput,
+  type IEditorGroup,
   type IObservable,
 } from '@universe-editor/platform'
 import { ICommandService } from '@universe-editor/platform'
-import { makeEditorGroups } from '../../../__tests__/_helpers/fakeEditorGroups.js'
+import { makeEditorGroups, SINGLE_GROUP_ID } from '../../../__tests__/_helpers/fakeEditorGroups.js'
 import type { monaco } from '../../editor/monaco/MonacoLoader.js'
 import {
   IOutlineService,
   OutlineService,
+  type IOutlineScope,
   type OutlineModel,
   type OutlineSourceKind,
 } from '../../../services/languageFeatures/OutlineService.js'
+import { IEditorViewTargetService } from '../../../services/editor/EditorViewTargetService.js'
+import { IWindowFocusService } from '../../../services/windows/windowFocusService.js'
 import {
   Emitter,
   IEditorService,
@@ -75,6 +80,10 @@ function makeSymbol(
   }
 }
 
+function makeGroup(id: number, isMain: boolean): IEditorGroup {
+  return { id, part: { isMain } } as unknown as IEditorGroup
+}
+
 function setup(initial: OutlineModel | undefined, sourceKindValue: OutlineSourceKind = 'file') {
   const outline = observableValue<OutlineModel | undefined>('test.outline', initial)
   const activeSymbol = observableValue<monaco.languages.DocumentSymbol | undefined>(
@@ -86,8 +95,7 @@ function setup(initial: OutlineModel | undefined, sourceKindValue: OutlineSource
     sourceKindValue,
   )
   const revealSymbol = vi.fn()
-  const outlineService = {
-    _serviceBrand: undefined,
+  const scope: IOutlineScope = {
     outline: outline as IObservable<OutlineModel | undefined>,
     activeSymbol,
     sourceKind,
@@ -96,13 +104,37 @@ function setup(initial: OutlineModel | undefined, sourceKindValue: OutlineSource
     previewSymbol: () => {},
     restoreViewState: () => {},
   }
+  const scopes = new Map<number, IOutlineScope>([[1, scope]])
+  const forGroup = vi.fn((groupId: number) => scopes.get(groupId) ?? scope)
+  const outlineService = { _serviceBrand: undefined, ...scope, forGroup }
+
+  const targetGroup = observableValue<IEditorGroup>('test.targetGroup', makeGroup(1, true))
+  const targetEditor = observableValue<EditorInput | undefined>('test.targetEditor', undefined)
+  const focusGroup = vi.fn()
+  const viewTarget = { _serviceBrand: undefined, targetGroup, targetEditor }
+  const windowFocus = { _serviceBrand: undefined, focusGroup }
+
   const executeCommand = vi.fn()
   const commandService = { _serviceBrand: undefined, executeCommand } as never
   const services = new ServiceCollection()
   services.set(IOutlineService, outlineService as never)
+  services.set(IEditorViewTargetService, viewTarget as never)
+  services.set(IWindowFocusService, windowFocus as never)
   services.set(ICommandService, commandService)
   const instantiation = new InstantiationService(services)
-  return { outline, activeSymbol, sourceKind, revealSymbol, executeCommand, instantiation }
+  return {
+    outline,
+    activeSymbol,
+    sourceKind,
+    revealSymbol,
+    executeCommand,
+    instantiation,
+    scopes,
+    forGroup,
+    targetGroup,
+    targetEditor,
+    focusGroup,
+  }
 }
 
 afterEach(() => cleanup())
@@ -130,6 +162,36 @@ function rowLabels(): string[] {
 }
 
 describe('OutlineView', () => {
+  it('switches to the view target group scope and reveals there', () => {
+    const ctx = setup(undefined)
+    const auxReveal = vi.fn()
+    ctx.scopes.set(2, {
+      outline: observableValue<OutlineModel | undefined>('test.aux.outline', {
+        uri: 'file:///aux.ts',
+        roots: [makeSymbol('AuxSymbol')],
+        languageId: 'typescript',
+        version: 1,
+      }),
+      activeSymbol: observableValue<monaco.languages.DocumentSymbol | undefined>(
+        'test.aux.activeSymbol',
+        undefined,
+      ),
+      sourceKind: observableValue<OutlineSourceKind | undefined>('test.aux.sourceKind', 'file'),
+      revealSymbol: auxReveal,
+      captureViewState: () => undefined,
+      previewSymbol: () => {},
+      restoreViewState: () => {},
+    })
+
+    act(() => ctx.targetGroup.set(makeGroup(2, false), undefined))
+    renderView(ctx.instantiation)
+
+    expect(rowLabels()).toEqual(['AuxSymbol'])
+    fireEvent.click(screen.getByText('AuxSymbol'))
+    expect(auxReveal).toHaveBeenCalledTimes(1)
+    expect(ctx.focusGroup).toHaveBeenCalledWith(ctx.targetGroup.get())
+  })
+
   it('renders symbols that arrive after mount with an initially empty outline', () => {
     const { outline, instantiation } = setup(undefined)
 
@@ -725,6 +787,15 @@ describe('OutlineView — agent session active-slot sync (end-to-end)', () => {
     const services = new ServiceCollection()
     services.set(IEditorService, editorService as never)
     services.set(IOutlineService, svc as never)
+    services.set(IEditorViewTargetService, {
+      _serviceBrand: undefined,
+      targetGroup: observableValue<IEditorGroup>('t.targetGroup', makeGroup(SINGLE_GROUP_ID, true)),
+      targetEditor: activeEditor,
+    } as never)
+    services.set(IWindowFocusService, {
+      _serviceBrand: undefined,
+      focusGroup: vi.fn(),
+    } as never)
     services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
     const instantiation = new InstantiationService(services)
     return { svc, activeEditor, instantiation }

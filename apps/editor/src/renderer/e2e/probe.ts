@@ -89,6 +89,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DocumentSyncStats } from '../services/extensions/documentSyncStats.js'
 import { getActiveTextEditor } from '../services/editor/activeTextEditor.js'
+import type { IEditorViewTargetService } from '../services/editor/EditorViewTargetService.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
@@ -176,6 +177,7 @@ export interface E2EProbeServices {
   readonly lifecycleService: ILifecycleService
   readonly editorService: IEditorService
   readonly editorGroupsService: IEditorGroupsService
+  readonly editorViewTargetService: IEditorViewTargetService
   readonly auxiliaryEditorWindowService: IAuxiliaryEditorWindowService
   readonly workbenchWindowService: IWorkbenchWindowService
   readonly editorResolverService: IEditorResolverService
@@ -589,6 +591,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
   let outlineRetentionSeen = new WeakSet<object>()
   let outlineRetentionSub: IDisposable | undefined
   let gcControl: WeakRef<object> | undefined
+
+  // Information views follow the last-used editor surface, which can be an
+  // auxiliary window's group; the probes must read the same scope the Outline
+  // view renders, not the active-group facade.
+  const targetOutlineScope = () =>
+    services.outlineService.forGroup(services.editorViewTargetService.targetGroup.get().id)
 
   const startOutlineRetentionProbe = (): void => {
     if (outlineRetentionSub) return
@@ -2311,7 +2319,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return { text: model.getValue(), selected }
     },
     getOutlineSymbols: (): readonly string[] => {
-      const roots = services.outlineService.outline.get()?.roots ?? []
+      const roots = targetOutlineScope().outline.get()?.roots ?? []
       const names: string[] = []
       const walk = (list: readonly { name: string; children?: readonly unknown[] }[]): void => {
         for (const s of list) {
@@ -2322,9 +2330,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       walk(roots as readonly { name: string; children?: readonly unknown[] }[])
       return names
     },
-    getOutlineUri: (): string | undefined => services.outlineService.outline.get()?.uri,
-    getOutlineActiveSymbol: (): string | undefined =>
-      services.outlineService.activeSymbol.get()?.name,
+    getOutlineUri: (): string | undefined => targetOutlineScope().outline.get()?.uri,
+    getOutlineActiveSymbol: (): string | undefined => targetOutlineScope().activeSymbol.get()?.name,
+    getViewTargetGroup: () => {
+      const group = services.editorViewTargetService.targetGroup.get()
+      return { groupId: group.id, partId: group.part.id, isMain: group.part.isMain }
+    },
     startOutlineRetentionProbe,
     stopOutlineRetentionProbe,
     getOutlineRetentionStats,
