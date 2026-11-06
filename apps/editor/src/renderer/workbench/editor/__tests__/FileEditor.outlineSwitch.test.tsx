@@ -75,6 +75,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
           revealPositionInCenter: () => {},
           onDidChangeCursorPosition: () => disposable(),
           onDidScrollChange: () => disposable(),
+          onKeyDown: () => disposable(),
           onDidFocusEditorWidget: () => disposable(),
           onDidBlurEditorWidget: () => disposable(),
           onDidFocusEditorText: () => disposable(),

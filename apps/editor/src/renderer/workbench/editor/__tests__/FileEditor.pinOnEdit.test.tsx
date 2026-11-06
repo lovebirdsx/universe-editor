@@ -76,6 +76,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
           restoreViewState: () => {},
           onDidChangeCursorPosition: () => ({ dispose: () => {} }),
           onDidScrollChange: () => ({ dispose: () => {} }),
+          onKeyDown: () => ({ dispose: () => {} }),
           onDidFocusEditorWidget: () => ({ dispose: () => {} }),
           onDidBlurEditorWidget: () => ({ dispose: () => {} }),
           onDidFocusEditorText: () => ({ dispose: () => {} }),

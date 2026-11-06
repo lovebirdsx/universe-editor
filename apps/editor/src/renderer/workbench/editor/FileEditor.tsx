@@ -14,7 +14,12 @@
 
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { IDisposable, IEditorInput } from '@universe-editor/platform'
-import { cancelOwnerFrame, requestOwnerFrame, type OwnerFrame } from '@universe-editor/workbench-ui'
+import {
+  cancelOwnerFrame,
+  isKeyupContextMenuSupplement,
+  requestOwnerFrame,
+  type OwnerFrame,
+} from '@universe-editor/workbench-ui'
 import {
   ICommandService,
   IConfigurationService,
@@ -29,6 +34,10 @@ import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { createWorkbenchEditor } from './monaco/workbenchEditorFactory.js'
+import {
+  computeEditorContextMenuAnchor,
+  isEditorContextMenuKey,
+} from './monaco/editorContextMenuKeyboard.js'
 import {
   affectsBridgedEditorOption,
   buildBridgedEditorOptions,
@@ -270,6 +279,28 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // the correct state; no reset is needed (a later dragover or model swap
     // restores the OFF baseline).
     const dropContainer = ed.getContainerDomNode()
+    // Keyboard parity with mouse right-click. Monaco's standalone keybinding
+    // service listens on this container's bubble phase and owns Shift+F10
+    // (`editor.action.showContextMenu`): it preventDefaults + stopPropagation()s,
+    // then its action no-ops because `contextmenu: false` above — so the browser
+    // never dispatches the native contextmenu this host used to open from.
+    // editor.onKeyDown runs at the text input (target phase, earlier), letting us
+    // claim the key and anchor the MenuRegistry menu under the caret, like
+    // VSCode's ContextMenuController. isEditorContextMenuKey also keeps
+    // Ctrl+Shift+F10 (Monaco's Linux Peek Definition) out.
+    const contextMenuKeySub = ed.onKeyDown((e) => {
+      const native = e.browserEvent
+      if (!isEditorContextMenuKey(native)) return
+      // IME composition owns its keystrokes until it commits.
+      if (native.isComposing || native.keyCode === 229) return
+      // If Monaco's native menu is ever re-enabled, it owns this key.
+      if (ed.getOption(monacoNs.editor.EditorOption.contextmenu)) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (native.repeat) return
+      const anchor = computeEditorContextMenuAnchor(ed, monacoNs.editor.ScrollType.Immediate)
+      if (anchor) setContextMenu({ ...anchor, keyboard: true })
+    })
     const armDropIntoEditorOnShift = (e: DragEvent) => {
       const isMarkdown = ed.getModel()?.getLanguageId() === 'markdown'
       ed.updateOptions({
@@ -277,15 +308,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       })
     }
     dropContainer.addEventListener('dragover', armDropIntoEditorOnShift, true)
-    // Right-click opens the MenuRegistry-driven context menu instead of Monaco's
-    // native one (`contextmenu: false` above). clientX/clientY are viewport
-    // coordinates, matching the other ContextMenu consumers.
-    // detail 0 means the browser raised this itself from the ContextMenu key /
-    // Shift+F10 rather than from a mouse button — a keyboard user has no pointer
-    // to aim, so the menu opens with its first entry highlighted. (Note the
-    // inversion vs the tree lists: their synthetic events fake detail 1.)
+    // The mouse path. Keyboard-raised menus come from onKeyDown above. Chromium
+    // still re-dispatches a contextmenu on keyup after the ContextMenu key /
+    // Shift+F10 (detail 0, button -1) and keydown's preventDefault cannot cancel
+    // it — swallow it, or it would re-anchor the menu at the focused element's
+    // centre. detail 0 on what remains still means a keyboard-origin event that
+    // bypassed onKeyDown, so it opens with the first entry highlighted.
     const onContextMenu = (e: MouseEvent) => {
       e.preventDefault()
+      if (isKeyupContextMenuSupplement(e)) return
       setContextMenu({ x: e.clientX, y: e.clientY, keyboard: e.detail === 0 })
     }
     dropContainer.addEventListener('contextmenu', onContextMenu)
@@ -294,6 +325,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     return () => {
       dropContainer.removeEventListener('dragover', armDropIntoEditorOnShift, true)
       dropContainer.removeEventListener('contextmenu', onContextMenu)
+      contextMenuKeySub.dispose()
       hoverGuard.dispose()
       editorFocusSub.dispose()
       textFocusSub.dispose()
