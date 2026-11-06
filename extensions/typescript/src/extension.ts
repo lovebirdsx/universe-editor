@@ -15,6 +15,7 @@ import {
   workspace,
   FileType,
   StatusBarAlignment,
+  Uri as ApiUri,
   type CompletionContext,
   type ExtensionContext,
   type ReferenceContext,
@@ -24,6 +25,7 @@ import {
 } from '@universe-editor/extension-api'
 import { URI } from 'vscode-uri'
 import { Emitter } from 'vscode-jsonrpc'
+import type { Location } from 'vscode-languageserver-types'
 import {
   LspClient,
   type CodeLensSettings,
@@ -121,6 +123,42 @@ function uriComponents(uri: string): UriComponents {
   }
 }
 
+/**
+ * Resolve the files that import/reference `input` (VSCode's
+ * `typescript.findAllFileReferences`). The renderer hosts the references peek;
+ * this only returns locations, in the same shape as the markdown equivalent.
+ */
+export async function getFileReferences(
+  client: Pick<LspClient, 'didOpen' | 'provideFileReferences'>,
+  serverKind: TsServerSpec['kind'],
+  input: unknown,
+): Promise<Location[]> {
+  if (typeof input !== 'string') return []
+  const uri = ApiUri.parse(input)
+  if (uri.scheme !== 'file') return []
+  if (serverKind !== 'tsls') {
+    void window.showWarningMessage(
+      localize(
+        'ts.fileReferences.unsupported',
+        'Find File References requires typescript-language-server; the current server (tsgo) does not support it.',
+      ),
+    )
+    return []
+  }
+  const doc = await workspace.openTextDocument(uri)
+  if (!isServerBackedDocument(doc)) return []
+  const docUri = uriString(doc.uri)
+  // TSLS only rewrites `fileReferences.file` when the document is open; this
+  // also forces tsserver to load the project that owns it.
+  await client.didOpen(
+    docUri,
+    doc.languageId,
+    () => doc.version,
+    () => doc.getText(),
+  )
+  return (await client.provideFileReferences(docUri)) ?? []
+}
+
 /** Read which server the main process provisioned for us (see lspClient.ts). */
 function resolveServerSpec(log: TsLogger): TsServerSpec | undefined {
   const version = process.env.UNIVERSE_TS_SERVER_VERSION ?? 'unknown'
@@ -205,7 +243,12 @@ export function activate(context: ExtensionContext): void {
   )
 
   const spec = resolveServerSpec(logger)
-  if (!spec) return
+  if (!spec) {
+    // The renderer's Find File References command still routes here even when
+    // activation found no server; answer empty instead of rejecting the call.
+    context.subscriptions.push(commands.registerCommand('typescript.getFileReferences', () => []))
+    return
+  }
 
   const diagnostics = languages.createDiagnosticCollection('typescript')
   const client = new LspClient(
@@ -255,6 +298,21 @@ export function activate(context: ExtensionContext): void {
             { message: (err as Error).message },
           ),
         )
+      }
+    }),
+    // Invoked by the renderer (command palette / tab / Explorer), which hosts
+    // the references peek; here we only resolve the locations.
+    commands.registerCommand('typescript.getFileReferences', async (input: unknown) => {
+      try {
+        return await getFileReferences(client, spec.kind, input)
+      } catch (err) {
+        logger.error(`getFileReferences failed: ${(err as Error).message}`)
+        void window.showErrorMessage(
+          localize('ts.fileReferences.failed', 'Failed to find file references: {message}', {
+            message: (err as Error).message,
+          }),
+        )
+        return []
       }
     }),
   )

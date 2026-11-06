@@ -195,6 +195,7 @@ Swarm 审核列表的「跳到 Swarm 更改」占用 `Ctrl+Shift+Enter`，因此
 | 转到定义                                       | `F12`             |
 | 速览定义                                       | `Alt+F12`         |
 | 转到引用                                       | `Shift+F12`       |
+| 查找文件引用（TypeScript / JavaScript）        | `Ctrl+K Ctrl+R`   |
 
 > 查找类快捷键作用于**当前聚焦的编辑器**（文件编辑器或输出面板日志区），见 [单文件内查找与替换](../search-navigation/find-in-file.md)。
 >

@@ -22,7 +22,8 @@
     "onLanguage:typescriptreact",
     "onLanguage:javascriptreact",
     "onCommand:typescript.restartTsServer",
-    "onCommand:typescript.openTsServerLog"
+    "onCommand:typescript.openTsServerLog",
+    "onCommand:typescript.getFileReferences"
   ],
   "contributes": {
     "commands": [

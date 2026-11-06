@@ -10,6 +10,9 @@ const ZH_CN: Readonly<Record<string, string>> = {
     'TypeScript 语言服务内存不足（上限 {limitMb} MB）。请在设置中调大 "js/ts.tsserver.maxMemory"。',
   'ts.btn.openLog': '打开 TypeScript 日志',
   'ts.restart.failed': '重启 TypeScript 语言服务失败：{message}',
+  'ts.fileReferences.unsupported':
+    '查找文件引用需要 typescript-language-server；当前使用的是 tsgo，暂不支持该命令。',
+  'ts.fileReferences.failed': '查找文件引用失败：{message}',
 }
 
 const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')

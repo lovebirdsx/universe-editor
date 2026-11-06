@@ -804,6 +804,39 @@ export class LspClient {
     })
   }
 
+  /** VSCode's `fileReferences` request: every file that imports/references the
+   *  whole `uri` (not a symbol inside it). TSLS exposes it only through the
+   *  tsserver passthrough command; tsgo has no such command. tsserver reports
+   *  1-based line/offset spans, LSP `Location`s are 0-based. */
+  async provideFileReferences(uri: string): Promise<Location[] | null> {
+    if (this._spec.kind !== 'tsls') return null
+    const conn = await this._ready()
+    const response = await this._requestOrNoProject<TsserverFileReferencesResponse>(
+      conn,
+      'workspace/executeCommand',
+      uri,
+      {
+        command: 'typescript.tsserverRequest',
+        arguments: ['fileReferences', { file: uri }],
+      },
+    )
+    const refs = response?.body?.refs
+    if (!Array.isArray(refs)) return null
+    return refs.map((ref) => ({
+      uri: URI.file(ref.file).toString(),
+      range: {
+        start: {
+          line: Math.max(0, ref.start.line - 1),
+          character: Math.max(0, ref.start.offset - 1),
+        },
+        end: {
+          line: Math.max(0, ref.end.line - 1),
+          character: Math.max(0, ref.end.offset - 1),
+        },
+      },
+    }))
+  }
+
   async provideImplementation(
     uri: string,
     position: Position,
@@ -1557,4 +1590,16 @@ interface InitializeResult {
 interface FullDocumentDiagnosticReport {
   kind: 'full'
   items: Diagnostic[]
+}
+
+/** Raw tsserver response for the `fileReferences` command, reached through
+ *  TSLS's `typescript.tsserverRequest` passthrough. */
+interface TsserverFileReferencesResponse {
+  body?: {
+    refs?: Array<{
+      file: string
+      start: { line: number; offset: number }
+      end: { line: number; offset: number }
+    }>
+  } | null
 }

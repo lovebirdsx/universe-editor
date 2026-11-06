@@ -851,3 +851,87 @@ describe('LspClient no-project degrade', () => {
     expect(degradeLines(logs)).toHaveLength(0)
   })
 })
+
+describe('LspClient file references (tsls-only)', () => {
+  interface FileReferencesInternals {
+    _ready(): Promise<unknown>
+    _request<T>(conn: unknown, method: string, params: unknown, token?: unknown): Promise<T>
+  }
+
+  const silentLogger = {
+    error: () => {},
+    info: () => {},
+    verbose: () => {},
+  }
+
+  function makeFileReferencesClient(kind: 'tsls' | 'native' = 'tsls') {
+    const client = new LspClient(
+      kind === 'tsls'
+        ? { kind: 'tsls', cli: 'cli', tsserver: 'tsserver', version: '5.9.3' }
+        : { kind: 'native', binary: 'tsgo', version: '7.0.0' },
+      '/ws',
+      () => {},
+      { logger: silentLogger },
+    )
+    const internals = client as unknown as FileReferencesInternals
+    const ready = vi.fn(async () => ({}))
+    internals._ready = ready
+    return { client, internals, ready }
+  }
+
+  it('sends the tsserver passthrough and converts 1-based spans to LSP locations', async () => {
+    const { client, internals } = makeFileReferencesClient()
+    const request = vi.fn(async () => ({
+      type: 'response',
+      body: {
+        refs: [
+          { file: '/ws/use.ts', start: { line: 3, offset: 10 }, end: { line: 3, offset: 13 } },
+        ],
+        symbolName: '/ws/lib',
+      },
+    }))
+    internals._request = request as never
+
+    const locations = await client.provideFileReferences('file:///ws/lib.ts')
+
+    expect(request).toHaveBeenCalledOnce()
+    expect(request.mock.calls[0]).toEqual([
+      {},
+      'workspace/executeCommand',
+      {
+        command: 'typescript.tsserverRequest',
+        arguments: ['fileReferences', { file: 'file:///ws/lib.ts' }],
+      },
+      undefined,
+    ])
+    expect(locations).toEqual([
+      {
+        uri: 'file:///ws/use.ts',
+        range: { start: { line: 2, character: 9 }, end: { line: 2, character: 12 } },
+      },
+    ])
+  })
+
+  it('returns null without touching the server on the native implementation', async () => {
+    const { client, ready } = makeFileReferencesClient('native')
+
+    await expect(client.provideFileReferences('file:///ws/lib.ts')).resolves.toBeNull()
+    expect(ready).not.toHaveBeenCalled()
+  })
+
+  it('degrades a no-project error to null', async () => {
+    const { client, internals } = makeFileReferencesClient()
+    internals._request = vi.fn(async () => {
+      throw new Error('No Project.')
+    }) as never
+
+    await expect(client.provideFileReferences('file:///ws/lib.ts')).resolves.toBeNull()
+  })
+
+  it('returns null when the response has no refs array', async () => {
+    const { client, internals } = makeFileReferencesClient()
+    internals._request = vi.fn(async () => ({ type: 'response', body: {} })) as never
+
+    await expect(client.provideFileReferences('file:///ws/lib.ts')).resolves.toBeNull()
+  })
+})

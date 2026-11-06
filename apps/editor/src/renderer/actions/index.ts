@@ -324,6 +324,7 @@ import {
   OpenHtmlSourceAction,
 } from './htmlPreviewActions.js'
 import { FindMarkdownFileReferencesAction } from './markdownFileReferencesActions.js'
+import { FindTypeScriptFileReferencesAction } from './typescriptFileReferencesActions.js'
 import { ShowJsonSchemaAction } from './jsonSchemaActions.js'
 import {
   CheckForUpdatesAction,
@@ -802,6 +803,7 @@ registerAction2(OpenHtmlPreviewAction)
 registerAction2(OpenHtmlPreviewToSideAction)
 registerAction2(OpenHtmlSourceAction)
 registerAction2(FindMarkdownFileReferencesAction)
+registerAction2(FindTypeScriptFileReferencesAction)
 
 registerAction2(ShowJsonSchemaAction)
 
