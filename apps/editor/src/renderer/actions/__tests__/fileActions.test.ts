@@ -21,6 +21,7 @@ import {
   IFileSearchService,
   IFileService,
   IFileWatcherService,
+  IHistoryService,
   IHostService,
   IInstantiationService,
   ILoggerService,
@@ -30,9 +31,11 @@ import {
   IWorkspaceService,
   InstantiationService,
   NullLogger,
+  REMOTE_SCHEME,
   ServiceCollection,
   UndoRedoService,
   URI,
+  UriIdentityService,
   makeExcludeMatcher,
   registerAction2,
   type EditorInput,
@@ -99,6 +102,7 @@ import { IFocusScopeService } from '../../services/focus/FocusScopeService.js'
 import { FakeFocusScopeService } from '../../services/focus/testing/fakeFocusScopeService.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { HistoryService } from '../../services/history/HistoryService.js'
 import {
   IRecentFilesService,
   type IRecentFile,
@@ -721,15 +725,17 @@ interface Harness {
   quickInput: FakeQuickInputService
   fileSearch: ReturnType<typeof makeFileSearch>
   recentFiles: FakeRecentFilesService
+  history: HistoryService
   contextKeys: ContextKeyService
 }
 
 function makeHarness(
-  opts: { root?: URI; activeEditor?: EditorInput; exclude?: IExcludeService } = {},
+  opts: { root?: URI | null; activeEditor?: EditorInput; exclude?: IExcludeService } = {},
 ): Harness {
-  const root = opts.root ?? URI.file('/ws')
-  const fs = makeFs({ [root.toString()]: [] })
+  const root = opts.root === undefined ? URI.file('/ws') : opts.root
+  const fs = makeFs(root ? { [root.toString()]: [] } : {})
   const ws = new FakeWorkspaceService(root)
+  const history = new HistoryService(new UriIdentityService('linux'))
   const dialog = new FakeDialogService()
   const host = new FakeHostService()
   const fileDialog = new FakeFileDialogService()
@@ -748,6 +754,7 @@ function makeHarness(
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IFocusScopeService, new FakeFocusScopeService())
   services.set(IWorkspaceService, ws)
+  services.set(IHistoryService, history)
   services.set(IDialogService, dialog)
   services.set(IHostService, host)
   services.set(IFileDialogService, fileDialog)
@@ -815,6 +822,7 @@ function makeHarness(
     quickInput,
     fileSearch,
     recentFiles,
+    history,
     contextKeys,
   }
 }
@@ -903,6 +911,93 @@ describe('fileActions', () => {
       h.fileDialog.openResult = undefined
       await run(h, OpenFileAction.ID)
       expect(h.group.opened).toHaveLength(0)
+    })
+
+    it('starts in the last active file directory', async () => {
+      const h = makeHarness()
+      h.history.record({ resource: URI.file('/ws/src/main.ts') })
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(URI.file('/ws/src').toString())
+    })
+
+    it('skips non-file history entries', async () => {
+      const h = makeHarness()
+      h.history.record({ resource: URI.file('/ws/src/notes.md') })
+      h.history.record({ resource: URI.from({ scheme: 'universe', path: '/settings' }) })
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(URI.file('/ws/src').toString())
+    })
+
+    it('uses the active editor directory when history is empty', async () => {
+      const active = new FileEditorInput(URI.file('/ws/childdir/note.txt'), {} as never)
+      const h = makeHarness({ activeEditor: active })
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(
+        URI.file('/ws/childdir').toString(),
+      )
+    })
+
+    it('resolves a top-level file to the filesystem root', async () => {
+      const active = new FileEditorInput(URI.file('/a.txt'), {} as never)
+      const h = makeHarness({ activeEditor: active })
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.path).toBe('/')
+    })
+
+    it('falls back to the workspace folder without any file reference', async () => {
+      const h = makeHarness()
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(URI.file('/ws').toString())
+    })
+
+    it('filters history to the remote workspace scheme and authority', async () => {
+      const root = URI.from({
+        scheme: REMOTE_SCHEME,
+        authority: 'wsl+ubuntu-24.04',
+        path: '/home/u/ws',
+      })
+      const h = makeHarness({ root })
+      h.history.record({ resource: URI.file('/local/notes.md') })
+      h.history.record({
+        resource: URI.from({
+          scheme: REMOTE_SCHEME,
+          authority: 'other-host',
+          path: '/srv/other.ts',
+        }),
+      })
+      h.history.record({
+        resource: URI.from({
+          scheme: REMOTE_SCHEME,
+          authority: 'wsl+ubuntu-24.04',
+          path: '/home/u/ws/src/a.ts',
+        }),
+      })
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(
+        URI.from({
+          scheme: REMOTE_SCHEME,
+          authority: 'wsl+ubuntu-24.04',
+          path: '/home/u/ws/src',
+        }).toString(),
+      )
+    })
+
+    it('falls back to the remote workspace root when no history entry matches', async () => {
+      const root = URI.from({
+        scheme: REMOTE_SCHEME,
+        authority: 'wsl+ubuntu-24.04',
+        path: '/home/u/ws',
+      })
+      const h = makeHarness({ root })
+      h.history.record({ resource: URI.file('/local/notes.md') })
+      await run(h, OpenFileAction.ID)
+      expect(h.fileDialog.openCalls[0]?.defaultUri?.toString()).toBe(root.toString())
+    })
+
+    it('leaves defaultUri unset without a workspace or file reference', async () => {
+      const h = makeHarness({ root: null })
+      await run(h, OpenFileAction.ID)
+      expect('defaultUri' in (h.fileDialog.openCalls[0] ?? {})).toBe(false)
     })
   })
 

@@ -11,6 +11,7 @@ import {
   IEditorService,
   IFileDialogService,
   IFileService,
+  IHistoryService,
   IHostService,
   IInstantiationService,
   ILayoutService,
@@ -19,17 +20,23 @@ import {
   IViewsService,
   IWorkspaceService,
   MenuId,
+  REMOTE_SCHEME,
   Severity,
+  URI,
   localize,
   localize2,
   localRevealFsPath,
+  normalizeRemoteAuthority,
   PartId,
+  type IEditorInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { getOriginalResource } from '../services/editor/editorResourceAccessor.js'
+import { currentRemoteAuthority } from '../services/remote/windowRemoteAuthority.js'
 import { ITimelineService } from '../services/timeline/TimelineService.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { confirmOpenFile } from '../services/editor/largeFileGuard.js'
@@ -57,14 +64,20 @@ export class OpenFileAction extends Action2 {
     const dialog = accessor.get(IDialogService)
     const resolver = accessor.get(IEditorResolverService)
     const fileDialog = accessor.get(IFileDialogService)
+    const history = accessor.get(IHistoryService)
 
+    const defaultUri = resolveOpenFileDefaultUri(
+      workspace,
+      history,
+      groups.activeGroup.activeEditor,
+    )
     const picked = await fileDialog.showOpenDialog({
       title: localize('fileDialog.openFile.title', 'Open File'),
       canSelectFiles: true,
       canSelectFolders: false,
       canSelectMany: false,
       openLabel: localize('fileDialog.open', 'Open'),
-      ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
+      ...(defaultUri !== undefined ? { defaultUri } : {}),
     })
     if (!picked || picked.length === 0) return
     for (const uri of picked) {
@@ -74,6 +87,55 @@ export class OpenFileAction extends Action2 {
       openInLockAwareGroup(groups, input, { activate: true })
     }
   }
+}
+
+/**
+ * Starting folder for the Open File dialog, mirroring VSCode's
+ * `AbstractFileDialogService.defaultFilePath()`: the active file's directory,
+ * else the most recent file in editor history, else the workspace folder. The
+ * dialog falls back to home (simple dialog) or the OS default (native dialog)
+ * when this returns undefined.
+ */
+export function resolveOpenFileDefaultUri(
+  workspace: IWorkspaceService,
+  history: IHistoryService,
+  activeEditor: IEditorInput | undefined,
+): URI | undefined {
+  const folder = workspace.current?.folder
+  const remoteAuthority = currentRemoteAuthority(workspace.current)
+  const scheme = folder?.scheme ?? (remoteAuthority ? REMOTE_SCHEME : 'file')
+  // Local windows don't filter authority (VSCode parity); remote windows must.
+  const matches = (resource: URI): boolean =>
+    resource.scheme === scheme &&
+    (!remoteAuthority || normalizeRemoteAuthority(resource.authority) === remoteAuthority)
+
+  const active = getOriginalResource(activeEditor)
+  if (active && matches(active)) {
+    const parent = parentDirectoryOf(active)
+    if (parent) return parent
+  }
+
+  // getBackStack() is oldest-first; the current editor is at the end.
+  const back = history.getBackStack()
+  for (let i = back.length - 1; i >= 0; i--) {
+    const resource = back[i]?.resource
+    if (resource && matches(resource)) {
+      const parent = parentDirectoryOf(resource)
+      if (parent) return parent
+    }
+  }
+
+  return folder
+}
+
+/**
+ * URI.joinPath instead of the Explorer's parentOf: keeps scheme/authority
+ * (remote stays remote) and resolves a top-level file to the filesystem root.
+ */
+function parentDirectoryOf(resource: URI): URI | undefined {
+  if (!resource.path) return undefined
+  const parent = URI.joinPath(resource, '..')
+  return parent.path === resource.path ? undefined : parent
 }
 
 export class ClearRecentFilesAction extends Action2 {

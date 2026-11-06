@@ -5,8 +5,9 @@
  *  目录浏览器. 这里验证真实交互: 回车/点击文件夹进入目录而不是关闭浮层, 选中文件
  *  打开编辑器, 选中文件夹切换工作区, 以及切换隐藏文件按钮.
  *
- *  起始目录取自 workspace.current.folder, 所以每个用例先 openWorkspace 到一个自建
- *  的确定性临时目录树. 命令内部 await pick, 触发必须 fire-and-forget 以避免死锁.
+ *  起始目录优先取最近活动文件所在目录（对标 VSCode defaultFilePath), 否则取
+ *  workspace 根; 所以每个用例先 openWorkspace 到一个自建的确定性临时目录树.
+ *  命令内部 await pick, 触发必须 fire-and-forget 以避免死锁.
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
@@ -92,6 +93,18 @@ test.describe('@p1 simple file dialog', () => {
     await note.click()
     await workbench.quickInput.waitForHidden()
     await expect.poll(() => workbench.getActiveEditorUri()).toContain('note.txt')
+
+    // Re-opening starts in the active file's folder (VSCode defaultFilePath
+    // parity), not the workspace root.
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.files.openFile')
+    })
+    await workbench.quickInput.waitForVisible()
+    await expect(workbench.quickInput.input).toHaveValue(/childdir[\\/]$/)
+    await expect(page.getByRole('option').filter({ hasText: 'note.txt' })).toBeVisible()
+    await expect(page.getByRole('option').filter({ hasText: 'top.txt' })).toHaveCount(0)
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
   })
 
   test('the toggle button reveals hidden dotfiles', async ({ page, workbench }) => {
