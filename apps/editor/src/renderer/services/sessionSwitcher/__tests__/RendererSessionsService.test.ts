@@ -42,7 +42,7 @@ class FakeSessionService {
   readonly activeSession = observableValue<IAcpSession | undefined>('test.activeSession', undefined)
   readonly onDidCloseSession = Event.None
   readonly setActive = vi.fn((sessionId: string) => {
-    const session = this._sessions.get(sessionId)
+    const session = this.getById(sessionId)
     if (!session) return
     this.activeSessionId.set(session.id, undefined)
     this.activeSession.set(session, undefined)
@@ -65,7 +65,14 @@ class FakeSessionService {
     throw new Error('not implemented')
   }
   getById(sessionId: string): IAcpSession | undefined {
-    return this._sessions.get(sessionId)
+    const direct = this._sessions.get(sessionId)
+    if (direct) return direct
+    // Mirrors AcpSessionService._findSession: both the local id and the
+    // agent-issued id resolve to the same session.
+    for (const session of this._sessions.values()) {
+      if (session.sessionIdOnAgent.get() === sessionId) return session
+    }
+    return undefined
   }
   tryRestoreActiveSession(): Promise<void> {
     return Promise.resolve()
@@ -89,20 +96,45 @@ class FakeChatWidgetService {
   }
 }
 
-function makeHistory(): IAcpSessionHistoryServiceType {
+function makeHistory(
+  initial: readonly AcpSessionHistoryEntry[] = [],
+): IAcpSessionHistoryServiceType {
+  const entries = observableValue<readonly AcpSessionHistoryEntry[]>('test.history', initial)
   return {
     _serviceBrand: undefined,
-    entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', []),
-    get: () => undefined,
-    list: () => [],
+    entries,
+    get: (id: string) => entries.get().find((entry) => entry.id === id),
+    list: () => entries.get(),
     initialize: () => Promise.resolve(),
   } as unknown as IAcpSessionHistoryServiceType
 }
 
+function makeHistoryEntry(
+  id: string,
+  overrides: Partial<AcpSessionHistoryEntry> = {},
+): AcpSessionHistoryEntry {
+  return {
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: `History ${id}`,
+    createdAt: 0,
+    lastUsedAt: 0,
+    ...overrides,
+  }
+}
+
 function makeSession(
   id: string,
-  opts: { agentId?: string; status?: AcpSessionStatus; dormant?: boolean } = {},
+  opts: {
+    agentId?: string
+    status?: AcpSessionStatus
+    dormant?: boolean
+    /** `null` = the handshake has not issued a durable id yet. */
+    durableId?: string | null
+  } = {},
 ): IAcpSession {
+  const durableId = opts.durableId === null ? undefined : (opts.durableId ?? id)
   return {
     id,
     agentId: opts.agentId ?? 'fake',
@@ -112,7 +144,7 @@ function makeSession(
     pendingElicitation: observableValue<unknown>('test.elicitation', undefined),
     pendingPermission: observableValue<unknown>('test.permission', undefined),
     backgroundTaskCount: observableValue<number>('test.btc', 0),
-    sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
+    sessionIdOnAgent: observableValue<string | undefined>('test.sid', durableId),
     ensureAwake: vi.fn(() => Promise.resolve('ready')),
   } as unknown as IAcpSession
 }
@@ -120,14 +152,15 @@ function makeSession(
 interface Harness {
   svc: RendererSessionsService
   sessions: FakeSessionService
+  history: IAcpSessionHistoryServiceType
   groups: EditorGroupsService
   widgets: FakeChatWidgetService
   instantiation: IInstantiationService
 }
 
-function makeHarness(): Harness {
+function makeHarness(historyEntries: readonly AcpSessionHistoryEntry[] = []): Harness {
   const sessions = new FakeSessionService()
-  const history = makeHistory()
+  const history = makeHistory(historyEntries)
   const groups = new EditorGroupsService()
   const widgets = new FakeChatWidgetService()
   const services = new ServiceCollection()
@@ -149,7 +182,7 @@ function makeHarness(): Harness {
     widgets as unknown as IAcpChatWidgetServiceType,
     new FakeWindowFocusService(),
   )
-  return { svc, sessions, groups, widgets, instantiation }
+  return { svc, sessions, history, groups, widgets, instantiation }
 }
 
 /** Open a real session tab in `group`, as the workbench would. */
@@ -195,6 +228,38 @@ describe('RendererSessionsService', () => {
 
     expect(h.sessions.setActive).not.toHaveBeenCalled()
     expect(sessionTabs(h.groups)).toHaveLength(0)
+  })
+
+  it('reveal opens a history-backed tab when no live session exists', async () => {
+    const h = makeHarness([
+      makeHistoryEntry('durable-1', { agentId: 'helper', title: 'Restored chat' }),
+    ])
+    h.sessions.setActive.mockClear()
+
+    await h.svc.reveal('durable-1')
+
+    expect(h.sessions.setActive).not.toHaveBeenCalled()
+    const tabs = sessionTabs(h.groups)
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0]!.sessionId).toBe('durable-1')
+    expect(tabs[0]!.agentId).toBe('helper')
+    expect(tabs[0]!.getName()).toBe('Restored chat')
+    expect(h.groups.activeGroup.activeEditor).toBe(tabs[0])
+    expect(h.widgets.focusSessionInput).toHaveBeenCalledWith('durable-1')
+  })
+
+  it('reveal activates the group holding a restored tab without duplicating it', async () => {
+    const h = makeHarness([makeHistoryEntry('durable-1')])
+    const left = h.groups.activeGroup
+    const right = h.groups.addGroup(left, GroupDirection.Right)
+    const tab = openSessionTab(h, right, 'durable-1')
+    h.groups.activateGroup(left)
+
+    await h.svc.reveal('durable-1')
+
+    expect(h.groups.activeGroup).toBe(right)
+    expect(right.activeEditor).toBe(tab)
+    expect(sessionTabs(h.groups)).toHaveLength(1)
   })
 
   it('reveal wakes a dormant session in the background', async () => {
@@ -336,6 +401,49 @@ describe('RendererSessionsService', () => {
 
       expect(list.map((s) => s.sessionId)).toEqual(['live'])
       expect(list[0]!.status).toBe('running')
+    })
+
+    it('lists a restored tab that has no live session as dormant', async () => {
+      const h = makeHarness([makeHistoryEntry('durable-1', { title: 'Restored chat' })])
+      openSessionTab(h, h.groups.activeGroup, 'durable-1')
+
+      const list = await h.svc.listSessions()
+
+      expect(list).toEqual([
+        { sessionId: 'durable-1', title: 'Restored chat', status: 'dormant', agentId: 'fake' },
+      ])
+    })
+
+    it('does not list a live session twice through its history row', async () => {
+      const h = makeHarness([makeHistoryEntry('durable-1', { title: 'History title' })])
+      h.sessions.add(makeSession('local-1', { durableId: 'durable-1', status: 'running' }))
+      openSessionTab(h, h.groups.activeGroup, 'local-1')
+
+      const list = await h.svc.listSessions()
+
+      expect(list).toHaveLength(1)
+      expect(list[0]).toMatchObject({ sessionId: 'local-1', status: 'running' })
+      expect(list[0]!.title).toBe('History title')
+    })
+
+    it('lists a connecting session once before it has a durable id', async () => {
+      const h = makeHarness()
+      h.sessions.add(makeSession('local-1', { durableId: null, status: 'connecting' }))
+      openSessionTab(h, h.groups.activeGroup, 'local-1')
+
+      const list = await h.svc.listSessions()
+
+      expect(list.map((s) => s.sessionId)).toEqual(['local-1'])
+    })
+
+    it('does not resurface a just-closed session through its still-open tab', async () => {
+      const h = makeHarness([makeHistoryEntry('s1')])
+      h.sessions.add(makeSession('s1', { status: 'closed' }))
+      openSessionTab(h, h.groups.activeGroup, 's1')
+
+      const list = await h.svc.listSessions()
+
+      expect(list).toEqual([])
     })
   })
 })

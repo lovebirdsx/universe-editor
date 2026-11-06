@@ -1229,6 +1229,8 @@ export interface E2EProbe {
   getAcpSessionCount(): number
   /** Number of durable history rows (populated at handshake, persisted later). */
   getAcpHistoryCount(): number
+  /** Drain the history write debounce so a following reload sees every row. */
+  flushAcpSessionHistory(): Promise<void>
   /** Active ACP session id (the local one assigned by AcpSessionService), if any. */
   getActiveAcpSessionId(): string | undefined
   /** Close and resume the active durable session, returning the resumed local id. */

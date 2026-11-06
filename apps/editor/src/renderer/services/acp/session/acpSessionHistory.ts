@@ -236,6 +236,8 @@ export interface IAcpSessionHistoryService {
   readonly entries: IObservable<readonly AcpSessionHistoryEntry[]>
   /** Idempotent: safe to call multiple times. main.tsx fire-and-forgets. */
   initialize(): Promise<void>
+  /** Drain the debounced write queue; resolves once the latest state is on disk. */
+  flush(): Promise<void>
   list(): readonly AcpSessionHistoryEntry[]
   get(id: string): AcpSessionHistoryEntry | undefined
   /**

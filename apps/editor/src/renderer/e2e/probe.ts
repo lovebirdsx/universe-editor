@@ -1094,6 +1094,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     getAcpSessionCount: () => services.acpSessionService.sessions.get().length,
     getAcpHistoryCount: () => services.acpSessionHistoryService.list().length,
+    flushAcpSessionHistory: () => services.acpSessionHistoryService.flush(),
     getActiveAcpSessionId: () => services.acpSessionService.activeSessionId.get(),
     reloadActiveAcpSession: async () => {
       const session = services.acpSessionService.activeSession.get()
