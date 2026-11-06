@@ -349,6 +349,30 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'Foreground color of breadcrumb items.',
     'color-breadcrumb-fg',
   ),
+  d(
+    'breadcrumb.background',
+    'editor.background',
+    'editor.background',
+    'Background color of the breadcrumb bar.',
+  ),
+  d(
+    'breadcrumb.focusForeground',
+    'editor.foreground',
+    'editor.foreground',
+    'Foreground color of the focused breadcrumb item.',
+  ),
+  d(
+    'breadcrumb.activeSelectionForeground',
+    'editor.foreground',
+    'editor.foreground',
+    'Foreground color of the active breadcrumb item.',
+  ),
+  d(
+    'breadcrumbPicker.background',
+    'editorWidget.background',
+    'editorWidget.background',
+    'Background color of the breadcrumb picker.',
+  ),
   d('editor.lineHighlightBackground', null, null, 'Background color of the editor line highlight.'),
   d('editor.lineHighlightBorder', null, null, 'Border color of the editor line highlight.'),
   d(

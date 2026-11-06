@@ -43,7 +43,17 @@ import { IOutlineService } from '../../services/languageFeatures/OutlineService.
 import { IEditorViewTargetService } from '../../services/editor/EditorViewTargetService.js'
 import { IWindowFocusService } from '../../services/windows/windowFocusService.js'
 import { SymbolIcon } from '../symbols/symbolIcon.js'
-import { outlineViewState, type OutlineSortOrder } from './outlineViewState.js'
+import { outlineViewState } from './outlineViewState.js'
+import {
+  buildOutlineNodes,
+  collectOutlineExpandableIds,
+  collectOutlineMatchedIds,
+  displaySymbolName,
+  indexOutlineNodes,
+  outlineAncestorIds,
+  pruneOutlineTree,
+  type OutlineNode,
+} from './outlineTree.js'
 import { OutlineNavigatorRegistry } from './outlineNavigatorRegistry.js'
 import {
   OutlineContextMenu,
@@ -52,117 +62,12 @@ import {
 } from './OutlineContextMenu.js'
 import styles from './OutlineView.module.css'
 
-interface OutlineNode {
-  readonly id: string
-  readonly symbol: monaco.languages.DocumentSymbol
-  readonly children: OutlineNode[]
-}
-
 interface DisplayOutline {
   readonly roots: OutlineNode[]
   readonly idBySymbol: Map<monaco.languages.DocumentSymbol, string>
   readonly matchedIds: Set<string>
   /** Ids whose expansion must be forced to true after a refresh (filter/highlight). */
   readonly expandToIds: string[]
-}
-
-function comparePosition(
-  a: monaco.languages.DocumentSymbol,
-  b: monaco.languages.DocumentSymbol,
-): number {
-  return (
-    a.range.startLineNumber - b.range.startLineNumber || a.range.startColumn - b.range.startColumn
-  )
-}
-
-function compareSymbols(
-  a: monaco.languages.DocumentSymbol,
-  b: monaco.languages.DocumentSymbol,
-  order: OutlineSortOrder,
-): number {
-  if (order === 'name') return a.name.localeCompare(b.name) || comparePosition(a, b)
-  if (order === 'kind') return a.kind - b.kind || a.name.localeCompare(b.name)
-  return comparePosition(a, b)
-}
-
-// Markdown heading symbols keep their `#` markup in the name (e.g. `## Title`).
-// The outline renders a `#` glyph for headings, so the leading markup is
-// redundant — strip it for display only, leaving the underlying symbol intact.
-function displaySymbolName(name: string, languageId: string | undefined): string {
-  return languageId === 'markdown' ? name.replace(/^#{1,6}\s+/, '') : name
-}
-
-function buildNodes(
-  roots: readonly monaco.languages.DocumentSymbol[],
-  order: OutlineSortOrder,
-): { roots: OutlineNode[]; idBySymbol: Map<monaco.languages.DocumentSymbol, string> } {
-  const idBySymbol = new Map<monaco.languages.DocumentSymbol, string>()
-  const build = (
-    symbols: readonly monaco.languages.DocumentSymbol[],
-    prefix: string,
-  ): OutlineNode[] =>
-    [...symbols]
-      .sort((a, b) => compareSymbols(a, b, order))
-      .map((symbol, i) => {
-        const id = prefix === '' ? `${i}` : `${prefix}/${i}`
-        idBySymbol.set(symbol, id)
-        return { id, symbol, children: build(symbol.children ?? [], id) }
-      })
-  return { roots: build(roots, ''), idBySymbol }
-}
-
-function ancestorIds(id: string): string[] {
-  const parts = id.split('/')
-  const out: string[] = []
-  for (let i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join('/'))
-  return out
-}
-
-function collectExpandableIds(nodes: readonly OutlineNode[], acc: string[] = []): string[] {
-  for (const n of nodes) {
-    if (n.children.length > 0) {
-      acc.push(n.id)
-      collectExpandableIds(n.children, acc)
-    }
-  }
-  return acc
-}
-
-/** Flatten the tree into an id → node map (for the parent-link lookup). */
-function indexById(
-  nodes: readonly OutlineNode[],
-  acc: Map<string, OutlineNode> = new Map(),
-): Map<string, OutlineNode> {
-  for (const n of nodes) {
-    acc.set(n.id, n)
-    indexById(n.children, acc)
-  }
-  return acc
-}
-
-/** Prune the tree to nodes that match `q` or have a matching descendant. */
-function pruneTree(nodes: readonly OutlineNode[], q: string): OutlineNode[] {
-  const out: OutlineNode[] = []
-  for (const n of nodes) {
-    const children = pruneTree(n.children, q)
-    if (n.symbol.name.toLowerCase().includes(q) || children.length > 0) {
-      out.push({ id: n.id, symbol: n.symbol, children })
-    }
-  }
-  return out
-}
-
-/** Collect ids of every node whose name matches `q`. */
-function collectMatchedIds(
-  nodes: readonly OutlineNode[],
-  q: string,
-  acc: Set<string> = new Set(),
-): Set<string> {
-  for (const n of nodes) {
-    if (n.symbol.name.toLowerCase().includes(q)) acc.add(n.id)
-    collectMatchedIds(n.children, q, acc)
-  }
-  return acc
 }
 
 export function OutlineView() {
@@ -244,7 +149,7 @@ export function OutlineView() {
   // Build the display tree: sort, then (when filtering) prune to matches +
   // ancestors or collect the matches to highlight in place.
   const display = useMemo<DisplayOutline>(() => {
-    const built = buildNodes(outline?.roots ?? [], sortBy)
+    const built = buildOutlineNodes(outline?.roots ?? [], sortBy)
     if (query === '') {
       return {
         roots: built.roots,
@@ -253,19 +158,19 @@ export function OutlineView() {
         expandToIds: [],
       }
     }
-    const matchedIds = collectMatchedIds(built.roots, query)
+    const matchedIds = collectOutlineMatchedIds(built.roots, query)
     if (filterOnType) {
-      const pruned = pruneTree(built.roots, query)
+      const pruned = pruneOutlineTree(built.roots, query)
       return {
         roots: pruned,
         idBySymbol: built.idBySymbol,
         matchedIds,
-        expandToIds: collectExpandableIds(pruned),
+        expandToIds: collectOutlineExpandableIds(pruned),
       }
     }
     // Highlight mode: keep the full tree, expand ancestors of every match.
     const expand = new Set<string>()
-    for (const id of matchedIds) for (const a of ancestorIds(id)) expand.add(a)
+    for (const id of matchedIds) for (const a of outlineAncestorIds(id)) expand.add(a)
     return {
       roots: built.roots,
       idBySymbol: built.idBySymbol,
@@ -277,7 +182,7 @@ export function OutlineView() {
   // Apply the freshly built tree to the model, then force any required expansion.
   useEffect(() => {
     rootsRef.current = display.roots
-    nodeByIdRef.current = indexById(display.roots)
+    nodeByIdRef.current = indexOutlineNodes(display.roots)
     idBySymbolRef.current = display.idBySymbol
     model.refresh()
     if (display.expandToIds.length > 0) {
@@ -312,7 +217,9 @@ export function OutlineView() {
   useEffect(() => {
     if (expandSignal === lastExpand.current) return
     lastExpand.current = expandSignal
-    model.setExpansion(collectExpandableIds(rootsRef.current).map((id) => [id, true] as const))
+    model.setExpansion(
+      collectOutlineExpandableIds(rootsRef.current).map((id) => [id, true] as const),
+    )
   }, [expandSignal, model])
 
   // When the tree gains focus without a (still-visible) focused row — e.g. via
@@ -400,7 +307,7 @@ export function OutlineView() {
       if (node.children.length > 0) {
         const expanded = model.isExpanded(node.id)
         const setSubtree = (value: boolean): void =>
-          model.setExpansion(collectExpandableIds([node]).map((id) => [id, value] as const))
+          model.setExpansion(collectOutlineExpandableIds([node]).map((id) => [id, value] as const))
         items.push({
           kind: 'item',
           id: expanded ? 'collapse' : 'expand',
@@ -476,7 +383,7 @@ export function OutlineView() {
   // Follow cursor: expand to + select + scroll the active symbol into view.
   useEffect(() => {
     if (!followCursor || query !== '' || !activeId) return
-    const ancestors = ancestorIds(activeId)
+    const ancestors = outlineAncestorIds(activeId)
     if (ancestors.length > 0) model.setExpansion(ancestors.map((id) => [id, true] as const))
     model.setSelection([activeId], activeId)
   }, [followCursor, query, activeId, model])

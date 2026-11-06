@@ -445,6 +445,16 @@ import {
   OutlineNavigateRightAction,
 } from './outlineActions.js'
 import {
+  BreadcrumbsFocusAction,
+  BreadcrumbsFocusAndSelectAction,
+  BreadcrumbsFocusNextAction,
+  BreadcrumbsFocusPreviousAction,
+  BreadcrumbsRevealFocusedAction,
+  BreadcrumbsSelectEditorAction,
+  BreadcrumbsSelectFocusedAction,
+  BreadcrumbsToggleAction,
+} from './breadcrumbsActions.js'
+import {
   UndoExplorerFileOperationAction,
   RedoExplorerFileOperationAction,
 } from './explorerUndoActions.js'
@@ -978,6 +988,18 @@ registerAction2(OutlineNavigateUpAction)
 registerAction2(OutlineNavigateDownAction)
 registerAction2(OutlineNavigateLeftAction)
 registerAction2(OutlineNavigateRightAction)
+
+// Breadcrumbs — focus/navigate/open the editor breadcrumb bar. Scoped bindings
+// carry an explicit higher weight so they beat the global arrows/Escape while
+// `breadcrumbsActive` holds, regardless of registration order.
+registerAction2(BreadcrumbsFocusAndSelectAction)
+registerAction2(BreadcrumbsFocusAction)
+registerAction2(BreadcrumbsFocusNextAction)
+registerAction2(BreadcrumbsFocusPreviousAction)
+registerAction2(BreadcrumbsSelectFocusedAction)
+registerAction2(BreadcrumbsRevealFocusedAction)
+registerAction2(BreadcrumbsSelectEditorAction)
+registerAction2(BreadcrumbsToggleAction)
 
 // Explorer undo/redo — Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z carry an explicit higher
 // weight so they beat Monaco's global undo/redo whenever the Explorer tree is

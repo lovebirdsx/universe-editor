@@ -197,6 +197,10 @@ import {
   InlineCompletionService,
 } from './services/ai/InlineCompletionService.js'
 import { IOutlineService, OutlineService } from './services/languageFeatures/OutlineService.js'
+import {
+  BreadcrumbsService,
+  IBreadcrumbsService,
+} from './services/breadcrumbs/BreadcrumbsService.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/session/acpSessionService.js'
@@ -806,6 +810,11 @@ async function bootstrapWorkbench(): Promise<void> {
   // ILanguageFeaturesService, both set above.
   const outlineService = workbenchStore.add(instantiation.createInstance(OutlineService))
   services.set(IOutlineService, outlineService)
+
+  // BreadcrumbsService: per-group controllers registered by the breadcrumb bars,
+  // plus the root context keys the navigation commands are gated on.
+  const breadcrumbsService = workbenchStore.add(instantiation.createInstance(BreadcrumbsService))
+  services.set(IBreadcrumbsService, breadcrumbsService)
 
   // Services with @IStorageService dependencies go through DI.
   const viewDescriptorService = workbenchStore.add(

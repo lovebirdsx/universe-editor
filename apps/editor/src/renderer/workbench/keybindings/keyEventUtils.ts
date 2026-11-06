@@ -6,9 +6,10 @@ export const DOM_KEY_MAP: Record<string, string> = {
   arrowdown: 'down',
 }
 
-// Shift mutates `e.key` for the number row (e.g. 5 → %, ` → ~), so those keys
-// would build as `ctrl+shift+%` and never match a `ctrl+shift+5` binding.
-// Resolve them from the layout-independent `e.code` instead.
+// Shift mutates `e.key` for the number row and punctuation (5 → %, . → >, ; → :),
+// so those keys would build as `ctrl+shift+%` / `ctrl+shift+>` and never match a
+// binding written as `ctrl+shift+5` / `ctrl+shift+.`. Resolve them from the
+// layout-independent `e.code` instead.
 export const CODE_KEY_MAP: Record<string, string> = {
   Digit0: '0',
   Digit1: '1',
@@ -21,6 +22,16 @@ export const CODE_KEY_MAP: Record<string, string> = {
   Digit8: '8',
   Digit9: '9',
   Backquote: '`',
+  Minus: '-',
+  Equal: '=',
+  BracketLeft: '[',
+  BracketRight: ']',
+  Backslash: '\\',
+  Semicolon: ';',
+  Quote: "'",
+  Comma: ',',
+  Period: '.',
+  Space: 'space',
 }
 
 export function buildKeyString(e: KeyboardEvent): string {

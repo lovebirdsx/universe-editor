@@ -9,7 +9,8 @@ import {
   InstantiationService,
   observableValue,
   ServiceCollection,
-  type IEditorInput,
+  URI,
+  type EditorInput,
 } from '@universe-editor/platform'
 import type { monaco } from '../monaco/MonacoLoader.js'
 import { ServicesContext } from '../../useService.js'
@@ -35,8 +36,11 @@ function makeSymbol(name: string): monaco.languages.DocumentSymbol {
   }
 }
 
-function makeInput(name: string): IEditorInput {
-  return { getName: () => name } as unknown as IEditorInput
+function makeInput(name: string): EditorInput {
+  return {
+    getName: () => name,
+    resource: URI.file(`/ws/${name}`),
+  } as unknown as EditorInput
 }
 
 /** A group's outline: one symbol, which is also the caret's symbol. */
@@ -56,8 +60,8 @@ function makeScope(symbolName: string) {
     sourceKind: observableValue<OutlineSourceKind | undefined>('test.sourceKind', 'file'),
     revealSymbol: vi.fn(),
     captureViewState: () => undefined,
-    previewSymbol: () => {},
-    restoreViewState: () => {},
+    previewSymbol: vi.fn(),
+    restoreViewState: vi.fn(),
   }
   return { scope, symbol, reveal: scope.revealSymbol as ReturnType<typeof vi.fn> }
 }
@@ -113,7 +117,7 @@ function renderSplitView() {
 }
 
 describe('Breadcrumbs', () => {
-  it("shows each group's own symbol path, not the focused group's", () => {
+  it("shows each group's own path and symbol path, not the focused group's", () => {
     const { left } = renderSplitView()
     const crumbs = screen.getAllByTestId('editor-breadcrumbs')
     expect(crumbs.length).toBe(2)
@@ -130,11 +134,14 @@ describe('Breadcrumbs', () => {
     expect(left.reveal).not.toHaveBeenCalled()
   })
 
-  it('reveals through the scope of the group whose segment was clicked', () => {
+  it('opens the symbol picker of the clicked group and reveals through its scope', () => {
     const { left, right } = renderSplitView()
     const leftCrumb = screen.getAllByTestId('editor-breadcrumbs')[0]!
 
     fireEvent.click(within(leftCrumb).getByText('AlphaSymbol'))
+
+    const picker = screen.getByTestId('breadcrumbs-symbol-picker')
+    fireEvent.click(within(picker).getByText('AlphaSymbol'))
 
     expect(left.reveal).toHaveBeenCalledWith(left.symbol)
     expect(right.reveal).not.toHaveBeenCalled()
@@ -148,6 +155,9 @@ describe('Breadcrumbs', () => {
     expect(within(crumb).getByText('AlphaSymbol')).toBeTruthy()
 
     fireEvent.click(within(crumb).getByText('AlphaSymbol'))
+    fireEvent.click(
+      within(screen.getByTestId('breadcrumbs-symbol-picker')).getByText('AlphaSymbol'),
+    )
     expect(active.reveal).toHaveBeenCalledWith(active.symbol)
   })
 })

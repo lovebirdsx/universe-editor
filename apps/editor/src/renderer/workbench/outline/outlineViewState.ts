@@ -9,8 +9,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { observableValue, type IObservable } from '@universe-editor/platform'
+import type { OutlineSortOrder } from './outlineTree.js'
 
-export type OutlineSortOrder = 'position' | 'name' | 'kind'
+export type { OutlineSortOrder } from './outlineTree.js'
 
 const _followCursor = observableValue<boolean>('outline.followCursor', true)
 const _filterOnType = observableValue<boolean>('outline.filterOnType', true)

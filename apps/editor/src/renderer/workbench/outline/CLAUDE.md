@@ -19,7 +19,7 @@ EditorOutlineTracker（**每个 editor group 一个**：outline / activeSymbol /
 OutlineService（门面：每 group 一个 tracker，自身 observable = **活动组**那个）
 OutlineView (Tree) 读视图目标 scope（`IEditorViewTargetService`，默认 openTargetPart）+ outlineViewState
   点击/回车 → 先 focusGroup(目标) 再 revealSymbol → 分支回写（各分支见下）
-姊妹消费者：Breadcrumbs.tsx（`forGroup(本组 id)`）、FileSymbolQuickAccessProvider（@ / @:，走视图目标）
+姊妹消费者：面包屑（`workbench/editor/breadcrumbs/`，本组 `forGroup`；细节 [cases-breadcrumbs.md](cases-breadcrumbs.md)）、FileSymbolQuickAccessProvider（@ / @:，走视图目标）
 ```
 
 ## 核心服务：EditorOutlineTracker + OutlineService（`services/languageFeatures/`）
@@ -66,7 +66,7 @@ workbench/editor/previewScrollMap.ts            纯函数：源行号↔预览�
 ## 符号数据来源 & 图标 & 同源消费者
 
 - **符号来源**：`ILanguageFeaturesService.registerDocumentSymbolProvider` 注册的任意 provider；大纲只**枚举消费**。markdown 由内置插件 `extensions/markdown` 提供（标题 kind=String，特例渲染成 `#`）。新语言要出现在大纲 → 加 DocumentSymbolProvider（[extend-language-plugin]）。
-- **纯函数树工具**（`services/languageFeatures/`，无 Monaco 依赖）：`symbolTree.ts`——`findSymbolAtLine`（活动符号）/ `symbolAncestryPath`（展开祖先），**Breadcrumbs.tsx 也用它**；`outlineFlatten.ts`——`flattenOutline`（@ 前序）/ `groupSymbolsByKind`（@: 分组）。
+- **纯函数树工具**（`services/languageFeatures/`，无 Monaco 依赖）：`symbolTree.ts`——`findSymbolAtLine`（活动符号）/ `symbolAncestryPath`（展开祖先），**面包屑也用它**；`outlineFlatten.ts`——`flattenOutline`（@ 前序）/ `groupSymbolsByKind`（@: 分组）。
 - **图标**：`workbench/symbols/symbolIcon.tsx`——按 kind+languageId 映射 codicon + 语义色；markdown 标题特例。
 
 ## @ / @: 符号快速选择（复用大纲的 reveal/preview 三连）
@@ -121,7 +121,3 @@ cd extensions/markdown && pnpm e2e -- specs/markdownPreview.spec.ts    # 切预�
 ```
 
 e2e 探针（`renderer/e2e/probe.ts`）：`getOutlineSymbols()` / `getOutlineUri()` / `getActiveEditorTypeId()`。
-
-## 其它
-
-- 后续用本文，发现新经验，需同步更新本文件

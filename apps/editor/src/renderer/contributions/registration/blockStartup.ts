@@ -32,6 +32,7 @@ import { MarkdownConfigurationContribution } from '../MarkdownConfigurationContr
 import { ExtensionsConfigurationContribution } from '../ExtensionsConfigurationContribution.js'
 import { WindowZoomConfigurationContribution } from '../WindowZoomConfigurationContribution.js'
 import { EditorWindowConfigurationContribution } from '../EditorWindowConfigurationContribution.js'
+import { BreadcrumbsConfigurationContribution } from '../BreadcrumbsConfigurationContribution.js'
 import { ScmConfigurationContribution } from '../ScmConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
 import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
@@ -266,6 +267,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.editorWindowConfiguration',
   EditorWindowConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// breadcrumbs.* settings. BlockStartup so the Settings editor shows the schema
+// before the first FileEditor renders its breadcrumb bar.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.breadcrumbsConfiguration',
+  BreadcrumbsConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 
