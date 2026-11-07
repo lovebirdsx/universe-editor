@@ -50,6 +50,11 @@ import {
   sideTaskParentOf,
 } from '../services/acp/session/acpSessionHistory.js'
 import { confirmSideTaskRemoval, deleteSideTasks } from '../services/acp/session/sideTaskRemoval.js'
+import {
+  confirmSessionRemoval,
+  deleteSessionPlan,
+  planSessionRemoval,
+} from '../services/acp/session/sessionRemoval.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { AcpPromptReplaceInbox } from '../services/acp/session/acpPromptReplaceInbox.js'
 import { IAcpMessageAttachmentStore } from '../services/acp/session/acpMessageAttachmentStore.js'
@@ -68,6 +73,7 @@ import {
 } from '../services/acp/session/acpLastSessionCwdService.js'
 import {
   ACP_CHAT_CARD_GROUP,
+  ACP_CHAT_DANGER_GROUP,
   ACP_CHAT_SESSION_GROUP,
   ACP_CHAT_SWITCH_GROUP,
   ACP_SCOPED_KEY_WEIGHT,
@@ -1065,21 +1071,27 @@ export class CopyAgentSessionPathAction extends Action2 {
 }
 
 /**
- * Shared base for the session-list flag actions (archive / pin). Target
- * resolution: explicit `{ sessionId }` arg (list row button / context menu /
- * Del key), else the active session (command palette). The flag write is a
- * pure history-layer marker — it never touches the live session.
+ * Shared base for the session flag actions (archive / pin). Target resolution
+ * goes through the same priority chain as the other session commands, so the
+ * list row (`{ sessionId }`), the session tab (`{ resource }`) and the command
+ * palette (active session editor or active session) all work. The flag write is
+ * a pure history-layer marker — it never touches the live session.
+ *
+ * History rows are keyed by the agent-issued durable id while a fresh session is
+ * still addressed by its local uuid, so the target must be mapped before the
+ * write; otherwise pin/archive on a new session would silently no-op.
  */
 abstract class BaseSessionFlagAction extends Action2 {
-  override run(accessor: ServicesAccessor, arg?: { sessionId?: unknown }): void {
+  override run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): void {
     const sessions = accessor.get(IAcpSessionService)
     const history = accessor.get(IAcpSessionHistoryService)
-    const sessionId =
-      arg && typeof arg.sessionId === 'string' && arg.sessionId.length > 0
-        ? arg.sessionId
-        : sessions.activeSession.get()?.id
+    const editor = accessor.get(IEditorService)
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
     if (sessionId === undefined) return
-    this.applyFlag(history, sessionId)
+    this.applyFlag(history, durableSessionId(sessions, sessionId))
   }
   protected abstract applyFlag(history: IAcpSessionHistoryService, sessionId: string): void
 }
@@ -1089,8 +1101,18 @@ export class ArchiveAgentSessionAction extends BaseSessionFlagAction {
   constructor() {
     super({
       id: ArchiveAgentSessionAction.ID,
+      icon: 'archive',
       title: localize2('action.agent.archiveSession', 'Archive Agent Session'),
       category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && !acpSessionArchived`,
+          group: '1_session',
+          order: 0.5,
+          title: localize2('acp.sessions.archiveMenu', 'Archive Session'),
+        },
+      ],
       f1: true,
     })
   }
@@ -1104,8 +1126,18 @@ export class UnarchiveAgentSessionAction extends BaseSessionFlagAction {
   constructor() {
     super({
       id: UnarchiveAgentSessionAction.ID,
+      icon: 'archive-restore',
       title: localize2('action.agent.unarchiveSession', 'Unarchive Agent Session'),
       category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && acpSessionArchived`,
+          group: '1_session',
+          order: 0.5,
+          title: localize2('acp.sessions.unarchiveMenu', 'Unarchive Session'),
+        },
+      ],
       f1: true,
     })
   }
@@ -1119,8 +1151,18 @@ export class PinAgentSessionAction extends BaseSessionFlagAction {
   constructor() {
     super({
       id: PinAgentSessionAction.ID,
+      icon: 'pin',
       title: localize2('action.agent.pinSession', 'Pin Agent Session'),
       category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && !acpSessionPinned`,
+          group: '1_session',
+          order: 0,
+          title: localize2('acp.sessions.pinMenu', 'Pin Session'),
+        },
+      ],
       f1: true,
     })
   }
@@ -1134,13 +1176,95 @@ export class UnpinAgentSessionAction extends BaseSessionFlagAction {
   constructor() {
     super({
       id: UnpinAgentSessionAction.ID,
+      icon: 'pin-off',
       title: localize2('action.agent.unpinSession', 'Unpin Agent Session'),
       category: CATEGORY,
+      menu: [
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && acpSessionPinned`,
+          group: '1_session',
+          order: 0,
+          title: localize2('acp.sessions.unpinMenu', 'Unpin Session'),
+        },
+      ],
       f1: true,
     })
   }
   protected override applyFlag(history: IAcpSessionHistoryService, sessionId: string): void {
     history.setHistoryPinned(sessionId, false)
+  }
+}
+
+/**
+ * Delete a session (and, when it has any, its whole side-task subtree).
+ *
+ * Targets: the session tab's `{ resource }`, the chat context menu's
+ * `{ sessionId }`, or the active session editor / active session from the
+ * command palette. The destructive payload is agent-side, so the confirmation
+ * honors `acp.sessions.confirmDelete` and its "Don't ask again" checkbox.
+ *
+ * `f1: false` + an explicit CommandPalette row (instead of `f1: true`): a
+ * precondition would also AND into the tab-context row, whose `when` is
+ * evaluated in the clicked group's scoped context, not the root one — a
+ * non-active session tab would silently lose its Delete row.
+ */
+export class DeleteAgentSessionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.deleteSession'
+  constructor() {
+    super({
+      id: DeleteAgentSessionAction.ID,
+      icon: 'trash',
+      title: localize2('action.agent.deleteSession', 'Delete Agent Session'),
+      category: CATEGORY,
+      f1: false,
+      menu: [
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: '9_danger',
+          order: 1,
+          title: localize2('acp.sessions.removeMenu', 'Delete Session'),
+        },
+        {
+          id: MenuId.AcpChatContext,
+          group: ACP_CHAT_DANGER_GROUP,
+          order: 1,
+          title: localize2('acp.sessions.removeMenu', 'Delete Session'),
+        },
+        { id: MenuId.CommandPalette, when: ACP_SESSION_EDITOR_ACTIVE_WHEN },
+      ],
+    })
+  }
+
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): Promise<void> {
+    // Snapshot every service synchronously — the accessor dies at the first
+    // await (the confirmation dialog is arbitrary).
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const editor = accessor.get(IEditorService)
+    const groups = accessor.get(IEditorGroupsService)
+    const dialog = accessor.get(IDialogService)
+    const config = accessor.get(IConfigurationService)
+
+    const sessionId = resolveSessionTargetId(arg, editor, sessions)
+    if (sessionId === undefined) return
+
+    // Snapshot the subtree now: the dialog can outlive the row/tab set.
+    const plan = planSessionRemoval(sessions, history, sessionId)
+    let confirmed: boolean
+    try {
+      confirmed = await confirmSessionRemoval(plan, dialog, config)
+    } catch (err) {
+      console.warn('[acp] delete confirmation failed', err)
+      return
+    }
+    if (!confirmed) return
+
+    await deleteSessionPlan(plan, sessions, history, groups)
   }
 }
 
@@ -1605,7 +1729,7 @@ export class OpenSideTaskAction extends Action2 {
           }
           // Hide the row as soon as the user confirms; the agent round-trip runs
           // in the background so a slow delete never holds the picker open.
-          void deleteSideTasks(ids, sessions, history).catch((err) =>
+          void deleteSideTasks(ids, sessions, history, groups).catch((err) =>
             console.warn('[side-task] delete cascade failed', err),
           )
           return true

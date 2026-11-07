@@ -24,6 +24,8 @@ import {
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
+  MenuId,
+  MenuRegistry,
   ServiceCollection,
   constObservable,
   observableValue,
@@ -33,14 +35,19 @@ import {
   type EditorInput,
 } from '@universe-editor/platform'
 import {
+  ArchiveAgentSessionAction,
+  DeleteAgentSessionAction,
   FocusAgentInputAction,
   FocusAgentTimelineAction,
   GoToParentSessionAction,
   OpenSideTaskAction,
+  PinAgentSessionAction,
   SelectAgentAction,
   SwitchSessionAction,
   SwitchSessionReverseAction,
   ToggleAgentFocusAction,
+  UnarchiveAgentSessionAction,
+  UnpinAgentSessionAction,
 } from '../agentSessionActions.js'
 import {
   ISessionSwitcherService,
@@ -60,6 +67,7 @@ import {
   type AcpChatWidget,
 } from '../../services/acp/session/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
+import { ACP_SESSION_EDITOR_ACTIVE_WHEN } from '../_agentShared.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import {
   IAuxiliaryEditorWindowService,
@@ -201,6 +209,8 @@ interface SideTaskHarness {
   readonly closeSession: ReturnType<typeof vi.fn>
   readonly deleteOnAgent: ReturnType<typeof vi.fn>
   readonly historyRemoveDeleted: ReturnType<typeof vi.fn>
+  readonly setHistoryPinned: ReturnType<typeof vi.fn>
+  readonly setHistoryArchived: ReturnType<typeof vi.fn>
   readonly auxWindows: FakeAuxiliaryEditorWindowService
   /** The stubbed `IEditorService.activeEditor` — the real service derives it from
    *  the groups, so tests that open a tab must set it by hand. */
@@ -231,12 +241,16 @@ function makeSideTaskHarness(
   const rows = options.rows ?? []
   const live = options.live ?? []
   const historyRemoveDeleted = vi.fn()
+  const setHistoryPinned = vi.fn()
+  const setHistoryArchived = vi.fn()
   const history = {
     _serviceBrand: undefined,
     entries: observableValue<readonly AcpSessionHistoryEntry[]>('t.entries', rows),
     list: () => rows,
     get: (id: string) => rows.find((row) => row.id === id),
     removeDeleted: historyRemoveDeleted,
+    setHistoryPinned,
+    setHistoryArchived,
   } as unknown as IAcpSessionHistoryService
   const closeFails = new Set(options.closeFailsFor ?? [])
   const closeSession = vi.fn(async (id: string) => {
@@ -309,6 +323,11 @@ function makeSideTaskHarness(
   const disposables: IDisposable[] = [
     registerAction2(OpenSideTaskAction),
     registerAction2(GoToParentSessionAction),
+    registerAction2(DeleteAgentSessionAction),
+    registerAction2(PinAgentSessionAction),
+    registerAction2(UnpinAgentSessionAction),
+    registerAction2(ArchiveAgentSessionAction),
+    registerAction2(UnarchiveAgentSessionAction),
   ]
 
   return {
@@ -321,6 +340,8 @@ function makeSideTaskHarness(
     closeSession,
     deleteOnAgent,
     historyRemoveDeleted,
+    setHistoryPinned,
+    setHistoryArchived,
     auxWindows,
     activeEditor,
     activeEditorId: () => {
@@ -649,6 +670,232 @@ describe('OpenSideTaskAction list removal', () => {
     expect(h.confirm).toHaveBeenCalledTimes(1)
     await vi.waitFor(() => expect(h.deleteOnAgent).toHaveBeenCalledWith('gone'))
     expect(h.historyRemoveDeleted).toHaveBeenCalledWith('gone')
+  })
+})
+
+describe('DeleteAgentSessionAction', () => {
+  let harness: SideTaskHarness | undefined
+
+  const make = (options?: Parameters<typeof makeSideTaskHarness>[0]): SideTaskHarness => {
+    harness = makeSideTaskHarness(options)
+    return harness
+  }
+
+  afterEach(() => {
+    harness?.dispose()
+    harness = undefined
+  })
+
+  it('deletes a dormant session addressed by the tab resource', async () => {
+    const h = make({ rows: [sideTaskRow('durable-1')] })
+
+    await h.run(DeleteAgentSessionAction.ID, { resource: { path: '/acp/session/durable-1' } })
+
+    expect(h.confirm.mock.calls[0]?.[0]).toMatchObject({
+      message: 'Delete this session?',
+      detail: 'This will delete the session and its history.',
+    })
+    expect(h.deleteOnAgent).toHaveBeenCalledWith('durable-1')
+    expect(h.historyRemoveDeleted).toHaveBeenCalledWith('durable-1')
+    expect(h.closeSession).not.toHaveBeenCalled()
+  })
+
+  it('closes the live session by local id, then deletes the durable one', async () => {
+    const h = make({
+      rows: [sideTaskRow('durable-1')],
+      live: [liveSession('local-1', 'durable-1')],
+    })
+
+    await h.run(DeleteAgentSessionAction.ID, { sessionId: 'local-1' })
+
+    expect(h.closeSession).toHaveBeenCalledWith('local-1')
+    expect(h.deleteOnAgent).toHaveBeenCalledWith('durable-1')
+    expect(h.historyRemoveDeleted).toHaveBeenCalledWith('durable-1')
+  })
+
+  it('only closes a pending session — it has no agent id and no history row', async () => {
+    const h = make({ live: [liveSession('local-1')] })
+
+    await h.run(DeleteAgentSessionAction.ID, { sessionId: 'local-1' })
+
+    expect(h.confirm.mock.calls[0]?.[0]).toMatchObject({
+      detail: 'This will delete the session and its history.',
+    })
+    expect(h.closeSession).toHaveBeenCalledWith('local-1')
+    expect(h.deleteOnAgent).not.toHaveBeenCalled()
+    expect(h.historyRemoveDeleted).not.toHaveBeenCalled()
+  })
+
+  it('does nothing when the confirmation is cancelled', async () => {
+    const h = make({ rows: [sideTaskRow('durable-1')], confirmResult: { confirmed: false } })
+
+    await h.run(DeleteAgentSessionAction.ID, { sessionId: 'durable-1' })
+
+    expect(h.closeSession).not.toHaveBeenCalled()
+    expect(h.deleteOnAgent).not.toHaveBeenCalled()
+    expect(h.historyRemoveDeleted).not.toHaveBeenCalled()
+    expect(h.configUpdate).not.toHaveBeenCalled()
+  })
+
+  it('deletes the whole side-task subtree and closes every matching tab', async () => {
+    const h = make({
+      rows: [sideTaskRow('parent-dur'), sideTaskRow('side-1', 'parent-dur')],
+      live: [liveSession('local-side', 'side-1')],
+    })
+    const parentTab = h.inst.createInstance(AcpSessionEditorInput, 'parent-dur', 'fake', undefined)
+    const sideTab = h.inst.createInstance(AcpSessionEditorInput, 'local-side', 'fake', undefined)
+    h.groups.activeGroup.openEditor(parentTab, { activate: true, pinned: true })
+    h.groups.activeGroup.openEditor(sideTab, { activate: true, pinned: true })
+
+    await h.run(DeleteAgentSessionAction.ID, { sessionId: 'parent-dur' })
+
+    expect(h.confirm.mock.calls[0]?.[0]).toMatchObject({
+      detail: 'This also deletes its 1 side task(s) and their history.',
+    })
+    expect(h.deleteOnAgent.mock.calls.map((call) => call[0])).toEqual(['parent-dur', 'side-1'])
+    expect(h.closeSession).toHaveBeenCalledWith('local-side')
+    expect(h.groups.activeGroup.editors).toHaveLength(0)
+  })
+
+  it('targets the active session editor from the command palette', async () => {
+    const h = make({ rows: [sideTaskRow('durable-1')] })
+    const tab = h.inst.createInstance(AcpSessionEditorInput, 'durable-1', 'fake', undefined)
+    h.groups.activeGroup.openEditor(tab, { activate: true, pinned: true })
+    h.activeEditor.set(tab, undefined)
+
+    await h.run(DeleteAgentSessionAction.ID)
+
+    expect(h.deleteOnAgent).toHaveBeenCalledWith('durable-1')
+  })
+
+  it('does nothing when no session can be resolved', async () => {
+    const h = make()
+
+    await h.run(DeleteAgentSessionAction.ID)
+
+    expect(h.confirm).not.toHaveBeenCalled()
+    expect(h.deleteOnAgent).not.toHaveBeenCalled()
+  })
+})
+
+describe('session flag commands', () => {
+  let harness: SideTaskHarness | undefined
+
+  const make = (options?: Parameters<typeof makeSideTaskHarness>[0]): SideTaskHarness => {
+    harness = makeSideTaskHarness(options)
+    return harness
+  }
+
+  afterEach(() => {
+    harness?.dispose()
+    harness = undefined
+  })
+
+  it('maps a fresh session local id onto its durable history id before pinning', async () => {
+    // Regression guard: history rows are keyed by the agent-issued id; writing
+    // the local uuid would silently no-op on a session created this window.
+    const h = make({
+      rows: [sideTaskRow('durable-1')],
+      live: [liveSession('local-1', 'durable-1')],
+    })
+
+    await h.run(PinAgentSessionAction.ID, { sessionId: 'local-1' })
+
+    expect(h.setHistoryPinned).toHaveBeenCalledWith('durable-1', true)
+  })
+
+  it('unpins the session addressed by the tab resource', async () => {
+    const h = make({ rows: [sideTaskRow('durable-1')] })
+
+    await h.run(UnpinAgentSessionAction.ID, { resource: { path: '/acp/session/durable-1' } })
+
+    expect(h.setHistoryPinned).toHaveBeenCalledWith('durable-1', false)
+  })
+
+  it('archives and unarchives the active session from the command palette', async () => {
+    const h = make({
+      rows: [sideTaskRow('durable-1')],
+      live: [liveSession('local-1', 'durable-1')],
+    })
+    h.inst.invokeFunction((accessor) => {
+      const sessions = accessor.get(IAcpSessionService) as unknown as {
+        activeSession: ISettableObservable<IAcpSession | undefined>
+      }
+      sessions.activeSession.set(liveSession('local-1', 'durable-1'), undefined)
+    })
+
+    await h.run(ArchiveAgentSessionAction.ID)
+    await h.run(UnarchiveAgentSessionAction.ID)
+
+    expect(h.setHistoryArchived.mock.calls).toEqual([
+      ['durable-1', true],
+      ['durable-1', false],
+    ])
+  })
+})
+
+describe('session command menu registration', () => {
+  let harness: SideTaskHarness | undefined
+
+  afterEach(() => {
+    harness?.dispose()
+    harness = undefined
+  })
+
+  function whenOf(menuId: MenuId, command: string): string | undefined {
+    harness ??= makeSideTaskHarness()
+    const item = MenuRegistry.getMenuItems(menuId).find(
+      (entry) => 'command' in entry && entry.command === command,
+    )
+    const when = item?.when
+    return typeof when === 'string' ? when : when?.serialize()
+  }
+
+  const SESSION_TAB_WHEN = `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`
+
+  it('lists Delete only while a session editor is active in the palette', () => {
+    expect(whenOf(MenuId.CommandPalette, DeleteAgentSessionAction.ID)).toBe(
+      ACP_SESSION_EDITOR_ACTIVE_WHEN,
+    )
+  })
+
+  it('puts Delete at the end of the session tab menu, in its own danger group', () => {
+    harness = makeSideTaskHarness()
+    const item = MenuRegistry.getMenuItems(MenuId.EditorTabContext).find(
+      (entry) => 'command' in entry && entry.command === DeleteAgentSessionAction.ID,
+    )
+
+    expect(item).toMatchObject({ group: '9_danger', order: 1 })
+    expect(whenOf(MenuId.EditorTabContext, DeleteAgentSessionAction.ID)).toBe(SESSION_TAB_WHEN)
+  })
+
+  it('puts Delete at the end of the chat context menu, in the danger group', () => {
+    harness = makeSideTaskHarness()
+    const item = MenuRegistry.getMenuItems(MenuId.AcpChatContext).find(
+      (entry) => 'command' in entry && entry.command === DeleteAgentSessionAction.ID,
+    )
+
+    expect(item).toMatchObject({ group: '5_danger', order: 1 })
+  })
+
+  it('offers pin/archive as mutually exclusive tab rows', () => {
+    // The registry re-serializes the parsed expression, so a negated key can
+    // move to the front — assert on the conjuncts, not the spelling order.
+    const pinWhen = whenOf(MenuId.EditorTabContext, PinAgentSessionAction.ID) ?? ''
+    const unpinWhen = whenOf(MenuId.EditorTabContext, UnpinAgentSessionAction.ID) ?? ''
+    const archiveWhen = whenOf(MenuId.EditorTabContext, ArchiveAgentSessionAction.ID) ?? ''
+    const unarchiveWhen = whenOf(MenuId.EditorTabContext, UnarchiveAgentSessionAction.ID) ?? ''
+
+    expect(pinWhen).toContain(SESSION_TAB_WHEN)
+    expect(pinWhen).toContain('!acpSessionPinned')
+    expect(unpinWhen).toContain(SESSION_TAB_WHEN)
+    expect(unpinWhen).toContain('acpSessionPinned')
+    expect(unpinWhen).not.toContain('!acpSessionPinned')
+    expect(archiveWhen).toContain(SESSION_TAB_WHEN)
+    expect(archiveWhen).toContain('!acpSessionArchived')
+    expect(unarchiveWhen).toContain(SESSION_TAB_WHEN)
+    expect(unarchiveWhen).toContain('acpSessionArchived')
+    expect(unarchiveWhen).not.toContain('!acpSessionArchived')
   })
 })
 

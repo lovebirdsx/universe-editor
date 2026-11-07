@@ -383,6 +383,7 @@ import {
   RevealAgentSessionInOSAction,
   RewindAgentSessionAction,
   ArchiveAgentSessionAction,
+  DeleteAgentSessionAction,
   UnarchiveAgentSessionAction,
   PinAgentSessionAction,
   UnpinAgentSessionAction,
@@ -909,6 +910,7 @@ registerAction2(ArchiveAgentSessionAction)
 registerAction2(UnarchiveAgentSessionAction)
 registerAction2(PinAgentSessionAction)
 registerAction2(UnpinAgentSessionAction)
+registerAction2(DeleteAgentSessionAction)
 registerAction2(RewindAgentSessionAction)
 registerAction2(ForkAgentSessionAction)
 // Side-task commands — create one from the active session, then keyboard access

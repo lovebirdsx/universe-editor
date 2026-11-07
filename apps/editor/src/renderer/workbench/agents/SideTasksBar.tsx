@@ -111,7 +111,7 @@ export function SideTasksBar({ session }: { session: IAcpSession }) {
     const ids = collectSideTaskDescendants(entries, task.id)
     void (async () => {
       if (!(await confirmSideTaskRemoval(ids, dialogService, config))) return
-      await deleteSideTasks(ids, sessions, history)
+      await deleteSideTasks(ids, sessions, history, groups)
       // The button that was clicked has just been unmounted, dropping focus to
       // <body>. Hand it to the trigger so keyboard users stay in the popover's
       // orbit; when this was the last side task the whole bar unmounts and the

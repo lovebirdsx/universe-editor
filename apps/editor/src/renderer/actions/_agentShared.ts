@@ -35,6 +35,9 @@ export const ACP_COPY_GROUP = '1_copy'
 export const ACP_CHAT_CARD_GROUP = '2_card'
 export const ACP_CHAT_SESSION_GROUP = '3_session'
 export const ACP_CHAT_SWITCH_GROUP = '4_switch'
+// Destructive session rows (Delete Session) go last, in their own group so the
+// renderer inserts a separator before them.
+export const ACP_CHAT_DANGER_GROUP = '5_danger'
 
 /** Trailing segment of a session's cwd, for disambiguating same-titled rows. */
 export function sessionDirectoryName(cwd: string | undefined): string | undefined {

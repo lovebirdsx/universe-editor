@@ -106,7 +106,8 @@ function makeSessionService() {
     )
   })
   const deleteOnAgentFn = vi.fn(
-    async (): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> => 'unsupported',
+    async (_sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> =>
+      'unsupported',
   )
   const resumeSessionFn = vi.fn().mockRejectedValue(new Error('not implemented')) as never
   const service = {
@@ -1073,6 +1074,33 @@ describe('SessionListBody — optimistic pending rows', () => {
     expect(sessionCtl.deleteOnAgentFn).not.toHaveBeenCalled()
     expect(removeSpy).not.toHaveBeenCalled()
     expect(rowOrder()).toEqual([])
+  })
+
+  it('deleting a parent row cascades its side tasks and closes their tabs', async () => {
+    const { history, sessionCtl, groups, inst, confirm } = harness
+    addEntry(history, 'parent', 'parent session', 2000)
+    addEntry(history, 'child', 'side task', 1000, 'fake', '/work', { sideTaskOf: 'parent' })
+    groups.activeGroup.openEditor(
+      inst.createInstance(AcpSessionEditorInput, 'parent', 'fake', undefined),
+      { activate: true, pinned: true },
+    )
+    groups.activeGroup.openEditor(
+      inst.createInstance(AcpSessionEditorInput, 'child', 'fake', undefined),
+      { activate: true, pinned: true },
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove session' }))
+    await waitFor(() => expect(rowOrder()).toEqual([]))
+
+    expect(confirm.mock.calls[0]?.[0]).toMatchObject({
+      detail: 'This also deletes its 1 side task(s) and their history.',
+    })
+    expect(sessionCtl.deleteOnAgentFn.mock.calls.map((call) => call[0])).toEqual([
+      'parent',
+      'child',
+    ])
+    expect(history.get('child')).toBeUndefined()
+    expect(sessionTabs(groups)).toHaveLength(0)
   })
 
   it('activates the pending session on click with its local id', () => {

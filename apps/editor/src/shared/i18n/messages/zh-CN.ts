@@ -309,6 +309,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.agent.copySessionPath': '复制会话记录文件路径',
   'action.agent.copySubAgentTranscript': '复制子 Agent 记录',
   'action.agent.cycleTimelineCollapse': '循环切换时间线显示方式',
+  'action.agent.deleteSession': '删除 Agent 会话',
   'action.agent.expandCard': '展开卡片',
   'action.agent.expandCardSubtree': '展开卡片及子项',
   'action.agent.find': '在会话中查找',
@@ -3112,6 +3113,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.sessions.remove': '移除会话',
   'acp.sessions.removeConfirm': '删除这个会话？',
   'acp.sessions.removeConfirmDetail': '这将删除该会话及其历史记录。',
+  'acp.sessions.removeConfirmDetailWithSideTasks':
+    '这将删除该会话及其历史记录，同时会删除它的 {count} 个侧边任务。',
   'acp.sessions.removeConfirmOk': '删除',
   'acp.sessions.removeConfirmCancel': '取消',
   'acp.sessions.removeNeverAsk': '不再询问',

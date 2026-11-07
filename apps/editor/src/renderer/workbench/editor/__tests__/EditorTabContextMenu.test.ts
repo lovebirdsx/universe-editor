@@ -31,9 +31,14 @@ import {
   UnpinEditorAction,
 } from '../../../actions/editorActions.js'
 import {
+  ArchiveAgentSessionAction,
   CopyAgentSessionPathAction,
+  DeleteAgentSessionAction,
+  PinAgentSessionAction,
   RenameAgentSessionAction,
   RevealAgentSessionInOSAction,
+  UnarchiveAgentSessionAction,
+  UnpinAgentSessionAction,
 } from '../../../actions/agentSessionActions.js'
 import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
@@ -51,6 +56,11 @@ function register(): void {
     registerAction2(RenameAgentSessionAction),
     registerAction2(RevealAgentSessionInOSAction),
     registerAction2(CopyAgentSessionPathAction),
+    registerAction2(PinAgentSessionAction),
+    registerAction2(UnpinAgentSessionAction),
+    registerAction2(ArchiveAgentSessionAction),
+    registerAction2(UnarchiveAgentSessionAction),
+    registerAction2(DeleteAgentSessionAction),
     // "Reopen With…" is registered as a bare MenuRegistry item (not via the
     // ReopenWithAction's own menu), mirroring BuiltInEditorBindingsContribution.
     MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
@@ -168,6 +178,53 @@ describe('EditorTabContext menu — per-tab gating', () => {
     const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
     expect(commands).not.toContain(RevealAgentSessionInOSAction.ID)
     expect(commands).not.toContain(CopyAgentSessionPathAction.ID)
+  })
+})
+
+describe('EditorTabContext menu — session lifecycle rows', () => {
+  const SESSION_CTX = {
+    resourceScheme: 'universe',
+    activeEditorType: AcpSessionEditorInput.TYPE_ID,
+  }
+
+  it('offers pin/archive/delete on a session tab, keyed by the tab state', () => {
+    register()
+    const groups = new Map(
+      menuGroupsFor({ ...SESSION_CTX, acpSessionPinned: false, acpSessionArchived: false }),
+    )
+
+    expect(groups.get(PinAgentSessionAction.ID)).toBe('1_session')
+    expect(groups.has(UnpinAgentSessionAction.ID)).toBe(false)
+    expect(groups.get(ArchiveAgentSessionAction.ID)).toBe('1_session')
+    expect(groups.has(UnarchiveAgentSessionAction.ID)).toBe(false)
+    expect(groups.get(DeleteAgentSessionAction.ID)).toBe('9_danger')
+  })
+
+  it('flips to unpin/unarchive when the tab is pinned and archived', () => {
+    register()
+    const groups = new Map(
+      menuGroupsFor({ ...SESSION_CTX, acpSessionPinned: true, acpSessionArchived: true }),
+    )
+
+    expect(groups.has(PinAgentSessionAction.ID)).toBe(false)
+    expect(groups.get(UnpinAgentSessionAction.ID)).toBe('1_session')
+    expect(groups.has(ArchiveAgentSessionAction.ID)).toBe(false)
+    expect(groups.get(UnarchiveAgentSessionAction.ID)).toBe('1_session')
+  })
+
+  it('hides every lifecycle row on a non-session tab', () => {
+    register()
+    const commands = menuCommandsFor({ resourceScheme: 'file', activeEditorType: 'file' })
+
+    for (const id of [
+      PinAgentSessionAction.ID,
+      UnpinAgentSessionAction.ID,
+      ArchiveAgentSessionAction.ID,
+      UnarchiveAgentSessionAction.ID,
+      DeleteAgentSessionAction.ID,
+    ]) {
+      expect(commands).not.toContain(id)
+    }
   })
 })
 

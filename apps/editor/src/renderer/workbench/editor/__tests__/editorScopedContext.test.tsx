@@ -1,8 +1,26 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { EditorInput, URI, UriIdentityService, type IDisposable } from '@universe-editor/platform'
+import {
+  EditorInput,
+  Event,
+  InstantiationService,
+  IUriIdentityService,
+  IWorkspaceService,
+  ServiceCollection,
+  URI,
+  UriIdentityService,
+  observableValue,
+  type IDisposable,
+} from '@universe-editor/platform'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { editorScopedContextValues } from '../editorScopedContext.js'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
+import { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+} from '../../../services/acp/session/acpSessionHistory.js'
+import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 
 class TestEditor extends EditorInput {
   private readonly _name: string
@@ -160,4 +178,61 @@ describe('editorScopedContextValues', () => {
       ],
     ).toBe(true)
   })
+
+  it('seeds the session pin/archive flags as false for non-session editors', () => {
+    const groups = groupsWith(new TestEditor('a'))
+    const values = editorScopedContextValues(groups.activeGroup, groups.activeGroup.activeEditor)
+
+    expect(values['acpSessionPinned']).toBe(false)
+    expect(values['acpSessionArchived']).toBe(false)
+  })
+
+  it('reads the pin/archive flags from the session history row', () => {
+    const entry: AcpSessionHistoryEntry = {
+      id: 'durable-1',
+      agentId: 'fake',
+      sessionIdOnAgent: 'durable-1',
+      title: 'session',
+      createdAt: 1,
+      lastUsedAt: 1,
+      pinned: true,
+      archived: true,
+    }
+    const input = makeSessionInput(entry)
+    disposables.push(input)
+    const groups = groupsWith(input)
+
+    const values = editorScopedContextValues(groups.activeGroup, input)
+
+    expect(values['acpSessionPinned']).toBe(true)
+    expect(values['acpSessionArchived']).toBe(true)
+  })
 })
+
+function makeSessionInput(entry: AcpSessionHistoryEntry | undefined): AcpSessionEditorInput {
+  const history = {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', []),
+    get: () => entry,
+  } as unknown as IAcpSessionHistoryService
+  const sessions = {
+    _serviceBrand: undefined,
+    getById: () => undefined,
+  } as unknown as IAcpSessionService
+  const chatWidget = {
+    _serviceBrand: undefined,
+    focusSession: () => false,
+  } as unknown as IAcpChatWidgetService
+  const services = new ServiceCollection()
+  services.set(IAcpSessionService, sessions)
+  services.set(IAcpSessionHistoryService, history)
+  services.set(IAcpChatWidgetService, chatWidget)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  } as never)
+  services.set(IUriIdentityService, { _serviceBrand: undefined, platform: 'linux' } as never)
+  const inst = new InstantiationService(services)
+  return inst.createInstance(AcpSessionEditorInput, 'durable-1', 'fake', undefined)
+}

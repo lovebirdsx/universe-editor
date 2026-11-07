@@ -23,7 +23,6 @@ import {
   localize,
   IDialogService,
   IConfigurationService,
-  ConfigurationTarget,
   IWorkspaceService,
   IEditorGroupsService,
   IInstantiationService,
@@ -90,6 +89,11 @@ import {
 } from '../../services/acp/session/acpSessionStatus.js'
 import { revealSessionEditorTab } from '../../services/acp/session/revealSessionEditorTab.js'
 import { revealSessionChat } from '../../services/acp/session/revealSessionChat.js'
+import {
+  confirmSessionRemoval,
+  deleteSessionPlan,
+  planSessionRemoval,
+} from '../../services/acp/session/sessionRemoval.js'
 import { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 import {
   ForkAgentSessionAction,
@@ -1017,30 +1021,19 @@ export function SessionListBody({
                 }
             const onRemove = () => {
               void (async () => {
-                if (config.get<boolean>('acp.sessions.confirmDelete') !== false) {
-                  const result = await dialogService.confirm({
-                    message: localize('acp.sessions.removeConfirm', 'Delete this session?'),
-                    detail: localize(
-                      'acp.sessions.removeConfirmDetail',
-                      'This will delete the session and its history.',
-                    ),
-                    primaryButton: localize('acp.sessions.removeConfirmOk', 'Delete'),
-                    cancelButton: localize('acp.sessions.removeConfirmCancel', 'Cancel'),
-                    neverAskAgainLabel: localize('acp.sessions.removeNeverAsk', "Don't ask again"),
-                  })
-                  if (!result.confirmed) return
-                  if (result.neverAskAgain) {
-                    config.update('acp.sessions.confirmDelete', false, ConfigurationTarget.User)
-                  }
+                // Snapshot the subtree before the confirmation dialog: it can
+                // outlive the row set this click was based on.
+                const plan = planSessionRemoval(service, history, entry.id)
+                let confirmed: boolean
+                try {
+                  confirmed = await confirmSessionRemoval(plan, dialogService, config)
+                } catch (err) {
+                  console.warn('[acp] delete confirmation failed', err)
+                  return
                 }
+                if (!confirmed) return
                 rememberRemoval(entry.id)
-                if (liveSession) await service.closeSession(liveSession.id)
-                // A pending row has no agent-side session yet (session/new may
-                // still be in flight) and no history row — closing the live
-                // session is the whole delete.
-                if (isPending) return
-                await service.deleteOnAgent(entry.id)
-                history.removeDeleted(entry.id)
+                await deleteSessionPlan(plan, service, history, groups)
               })()
             }
             // A live session has no transcriptPath on its history row until the

@@ -164,6 +164,21 @@ export class AcpSessionEditorInput extends EditorInput {
     return this._isSideTask
   }
 
+  /** Snapshot of the history row's pinned flag, for the tab context-menu `when`. */
+  get isPinned(): boolean {
+    return this._history.get(this._durableSessionId())?.pinned === true
+  }
+
+  /** Snapshot of the history row's archived flag, for the tab context-menu `when`. */
+  get isArchived(): boolean {
+    return this._history.get(this._durableSessionId())?.archived === true
+  }
+
+  /** A fresh session still holds its local uuid; history is keyed by the agent id. */
+  private _durableSessionId(): string {
+    return this._sessions.getById(this.sessionId)?.sessionIdOnAgent.get() ?? this.sessionId
+  }
+
   override focus(): boolean {
     // `sessionId` may be the durable agent-issued id — a split clone round-trips
     // through serialize/deserialize, which stores sessionIdOnAgent for restart

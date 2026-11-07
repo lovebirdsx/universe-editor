@@ -15,6 +15,7 @@ import {
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import {
   encodeScmProviderIds,
   resolveScmProviderIds,
@@ -114,5 +115,9 @@ export function editorScopedContextValues(
     activeEditorIsFirstInGroup: editor !== undefined && group.isFirst(editor),
     activeEditorIsLastInGroup: editor !== undefined && group.isLast(editor),
     activeEditorIsDirty: editor?.isDirty === true,
+    // Session-tab flags for the tab context menu's pin/archive toggle rows.
+    // Seeded unconditionally so the scoped key set never varies.
+    acpSessionPinned: editor instanceof AcpSessionEditorInput ? editor.isPinned : false,
+    acpSessionArchived: editor instanceof AcpSessionEditorInput ? editor.isArchived : false,
   }
 }
