@@ -59,6 +59,13 @@ export const strings = {
   sessionDisplayFull: '完整显示',
   sessionDisplayHint: '仅消息会隐藏思考与普通工具调用，保留对话内容和关键卡片。',
 
+  fullscreenSection: '全屏显示',
+  fullscreenEnter: '进入全屏',
+  fullscreenExit: '退出全屏',
+  fullscreenHint: '隐藏浏览器的地址栏与工具栏；按 Esc 或点击「退出全屏」可恢复。',
+  fullscreenUnsupported:
+    '当前浏览器不支持网页全屏。iPhone 或旧版 iPad 请用 Safari 的「分享 → 添加到主屏幕」，从主屏幕打开即可隐藏浏览器界面。',
+
   notificationsSection: '通知',
   notificationsHint: '通知只包含会话标题与提醒类别，经 Apple / Google 推送服务转发。',
   notificationsEnable: '开启通知',

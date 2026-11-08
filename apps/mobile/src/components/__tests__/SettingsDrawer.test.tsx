@@ -78,4 +78,14 @@ describe('SettingsDrawer preferences', () => {
     fireEvent.click(screen.getByTestId('session-display-onlyMessage'))
     expect(localStorage.getItem(SESSION_DISPLAY_STORAGE_KEY)).toBe('onlyMessage')
   })
+
+  it('explains fullscreen availability when the browser cannot go fullscreen', () => {
+    Object.defineProperty(document, 'fullscreenEnabled', { configurable: true, value: false })
+    renderDrawer()
+
+    expect(screen.getByTestId('fullscreen-unsupported')).toBeTruthy()
+    expect(screen.queryByTestId('fullscreen-toggle')).toBeNull()
+
+    delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled
+  })
 })

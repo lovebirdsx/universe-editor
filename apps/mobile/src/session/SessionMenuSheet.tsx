@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet.js'
+import { FullscreenButton } from '../components/FullscreenButton.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { commandErrorText, strings } from '../strings.js'
 
@@ -146,6 +147,11 @@ export function SessionMenuSheet({
       expandKey="menu"
     >
       <div className="sheet-options">
+        <FullscreenButton
+          className="sheet-option sheet-option--neutral"
+          testId="session-fullscreen"
+          onToggled={onClose}
+        />
         <button
           type="button"
           className="sheet-option sheet-option--neutral"

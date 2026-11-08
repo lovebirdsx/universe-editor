@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MobileAttentionKind, MobileNotificationPrefs } from '@universe-editor/mobile-protocol'
 import type { StoredCredentials } from '../credentials.js'
+import { isFullscreenSupported } from '../fullscreen.js'
 import {
   detectNotificationCapability,
   enablePushNotifications,
@@ -8,6 +9,7 @@ import {
   type NotificationCapability,
   type PushRegistrationLike,
 } from '../notifications/pushNotifications.js'
+import { FullscreenButton } from './FullscreenButton.js'
 import {
   readSessionDisplayPreference,
   setSessionDisplayPreference,
@@ -56,6 +58,7 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
   const [display, setDisplay] = useState<SessionDisplayPreference>(() =>
     readSessionDisplayPreference(),
   )
+  const [fullscreenSupported] = useState(isFullscreenSupported)
   const [error, setError] = useState<string | undefined>(undefined)
   const mountedRef = useRef(true)
 
@@ -252,6 +255,24 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
             ))}
           </div>
           <p className="drawer__hint">{strings.sessionDisplayHint}</p>
+        </section>
+
+        <section className="drawer__section" data-testid="fullscreen-settings">
+          <h3 className="drawer__sectionTitle">{strings.fullscreenSection}</h3>
+          {fullscreenSupported ? (
+            <>
+              <FullscreenButton
+                className="button button--secondary"
+                testId="fullscreen-toggle"
+                onToggled={onClose}
+              />
+              <p className="drawer__hint">{strings.fullscreenHint}</p>
+            </>
+          ) : (
+            <p className="drawer__hint" data-testid="fullscreen-unsupported">
+              {strings.fullscreenUnsupported}
+            </p>
+          )}
         </section>
 
         <section className="drawer__section" data-testid="notification-settings">
