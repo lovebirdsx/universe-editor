@@ -13,6 +13,7 @@
     "lint:fix": "eslint --fix src vite.config.ts vitest.config.ts"
   },
   "dependencies": {
+    "@universe-editor/acp-view-model": "workspace:*",
     "@universe-editor/mobile-protocol": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:"

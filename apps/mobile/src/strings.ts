@@ -45,10 +45,11 @@ export const strings = {
   settingsUnpairHint: '解除后需要重新扫码配对才能继续使用。',
 
   inboxTitle: '收件箱',
-  inboxEmpty: '暂无会话（会话镜像将在后续版本提供）',
+  inboxEmpty: 'PC 上暂无进行中的 Agent 会话',
   inboxLoading: '正在连接 PC…',
   inboxWaitingSnapshot: '已连接，正在获取会话…',
   inboxReconnecting: '离线·重连中，正在尝试重新连接…',
+  inboxOfflineBanner: '与 PC 的连接已断开，正在重连。列表可能不是最新。',
   inboxVersionMismatch: '手机端与 PC 版本不一致，请刷新页面。',
   inboxRefresh: '刷新页面',
 
@@ -68,6 +69,59 @@ export const strings = {
   workspaceLabel: '工作区',
   sessionUpdatedJustNow: '刚刚',
   sessionUpdatedMinutesAgo: (minutes: number): string => `${minutes} 分钟前`,
+  sessionUpdatedHoursAgo: (hours: number): string => `${hours} 小时前`,
+  sessionUpdatedDaysAgo: (days: number): string => `${days} 天前`,
+
+  badgePermission: '待审批',
+  badgeElicitation: '待提问',
+  badgeRemote: '远程',
+  badgeReadOnly: '只读',
+  badgeBackgroundTasks: (count: number): string => `后台任务 ${count}`,
+
+  sessionBack: '返回',
+  sessionBackToInbox: '返回收件箱',
+  sessionLoading: '正在获取会话…',
+  sessionRunning: '运行中',
+  sessionTruncated: '时间线较早的内容已省略',
+  sessionRemovedTitle: '会话已在 PC 上关闭',
+  sessionRemovedBody: '这个会话已经结束，返回收件箱查看其他会话。',
+
+  planTitle: (completed: number, total: number): string => `计划 ${completed}/${total}`,
+  planExpand: '展开计划',
+  planCollapse: '收起计划',
+  planStatusPending: '待处理',
+  planStatusInProgress: '进行中',
+  planStatusCompleted: '已完成',
+
+  thoughtTitle: '思考',
+  thoughtExpand: '展开思考',
+  thoughtCollapse: '收起思考',
+
+  toolCallGroupTitle: (count: number): string => `执行了 ${count} 个操作`,
+  toolCallExpand: '展开操作',
+  toolCallCollapse: '收起操作',
+  toolCallDetailLoading: '正在获取详情…',
+  toolCallDetailError: '详情获取失败，请重试。',
+  toolCallDetailRetry: '重试',
+  toolCallDiffStats: (added: number, removed: number): string => `+${added} −${removed}`,
+  memoryTrimmed: '内容已在 PC 端释放',
+  messageNonText: '[包含附件]',
+
+  noticeCompaction: '上下文已压缩',
+  noticeResurrection: '会话已恢复',
+  noticeDefault: '系统通知',
+
+  pendingPermissionTitle: (title: string): string => `等待在 PC 上处理：${title}`,
+  pendingElicitationTitle: (title: string | undefined): string =>
+    title === undefined || title === '' ? '等待在 PC 上回答提问' : `等待在 PC 上处理：${title}`,
+  pendingOptionsLabel: '可选操作',
+  pendingReadOnlyHint: '手机审批将在后续版本提供',
+
+  composerPlaceholder: '手机输入将在后续版本提供',
+  jumpToLatest: '↓ 新消息',
+  loadEarlier: '加载更早的',
+  markdownImage: (alt: string | undefined): string =>
+    alt === undefined ? '[图片]' : `[图片：${alt}]`,
 } as const
 
 const PAIR_ERRORS: Readonly<Record<string, string>> = {

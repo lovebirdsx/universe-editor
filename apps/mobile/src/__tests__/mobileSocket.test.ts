@@ -102,7 +102,7 @@ describe('MobileSocket handshake', () => {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       token: 'secret-token',
       clientVersion: MOBILE_CLIENT_VERSION,
-      capabilities: ['inbox'],
+      capabilities: ['inbox', 'session'],
     })
 
     socket.serverSend(helloOk())

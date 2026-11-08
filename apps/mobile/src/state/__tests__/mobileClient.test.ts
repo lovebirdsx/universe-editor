@@ -1,0 +1,125 @@
+import { MOBILE_PROTOCOL_VERSION, type HelloOkFrame } from '@universe-editor/mobile-protocol'
+import { describe, expect, it } from 'vitest'
+import type { StoredCredentials } from '../../credentials.js'
+import { RECONNECT_BASE_MS } from '../../socket/mobileSocket.js'
+import { FakeTimers, FakeWebSocket, sentFrames } from '../../test/fakes.js'
+import { sessionRef, sessionSummary } from '../../test/protocolFixtures.js'
+import { MobileClient } from '../mobileClient.js'
+
+const credentials: StoredCredentials = {
+  deviceId: 'device-1',
+  token: 'token-1',
+  pcName: 'PC-A',
+  deviceName: 'Phone',
+  platform: 'other',
+  protocolVersion: MOBILE_PROTOCOL_VERSION,
+}
+
+function helloOkFrame(): HelloOkFrame {
+  return {
+    type: 'hello_ok',
+    protocolVersion: MOBILE_PROTOCOL_VERSION,
+    serverVersion: '0.0.0-test',
+    deviceId: 'device-1',
+    serverTime: 1,
+    capabilities: ['inbox', 'session'],
+  }
+}
+
+function createHarness(): {
+  readonly client: MobileClient
+  readonly sockets: FakeWebSocket[]
+  readonly timers: FakeTimers
+} {
+  const timers = new FakeTimers()
+  const sockets: FakeWebSocket[] = []
+  const client = new MobileClient({
+    credentials,
+    url: 'ws://pc.example.com/ws',
+    createWebSocket: (url) => {
+      const socket = new FakeWebSocket(url)
+      sockets.push(socket)
+      return socket
+    },
+    timers,
+    random: () => 0.5,
+  })
+  client.start()
+  const first = sockets[0]!
+  first.serverOpen()
+  first.serverSend(helloOkFrame())
+  return { client, sockets, timers }
+}
+
+function frameTypes(socket: FakeWebSocket): string[] {
+  return sentFrames(socket).map((frame) =>
+    typeof frame === 'object' && frame !== null
+      ? String((frame as Record<string, unknown>)['type'])
+      : '',
+  )
+}
+
+describe('MobileClient session subscription', () => {
+  it('resolves a durable route key from the inbox and subscribes once', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('durable-1')
+    expect(frameTypes(socket)).not.toContain('subscribe_session')
+
+    socket.serverSend({
+      type: 'inbox_delta',
+      seq: 2,
+      upserts: [sessionSummary('s1', { ref: sessionRef('s1', 1, 'durable-1') })],
+      removes: [],
+    })
+    // No snapshot yet: the delta is rejected and a resubscribe is requested.
+    expect(frameTypes(socket)).toContain('subscribe_inbox')
+
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 3,
+      sessions: [sessionSummary('s1', { ref: sessionRef('s1', 1, 'durable-1') })],
+    })
+    const subscribe = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'subscribe_session',
+    )
+    expect(subscribe).toMatchObject({
+      type: 'subscribe_session',
+      ref: sessionRef('s1', 1, 'durable-1'),
+    })
+  })
+
+  it('marks an unknown durable route as removed once the inbox snapshot arrives', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('closed-session')
+    socket.serverSend({ type: 'inbox_snapshot', seq: 1, sessions: [] })
+    expect(client.getSessionStore().getState().removed).toBe(true)
+  })
+
+  it('re-subscribes the inbox and the open session after a reconnect', () => {
+    const { client, sockets, timers } = createHarness()
+    const first = sockets[0]!
+    first.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1')],
+    })
+    client.openSession('1:s1')
+    expect(frameTypes(first).filter((type) => type === 'subscribe_session')).toHaveLength(1)
+
+    first.serverClose(1006)
+    timers.advance(RECONNECT_BASE_MS)
+    const second = sockets[1]
+    expect(second).toBeDefined()
+    second!.serverOpen()
+    second!.serverSend(helloOkFrame())
+
+    const types = frameTypes(second!)
+    expect(types).toContain('subscribe_inbox')
+    expect(types.filter((type) => type === 'subscribe_session')).toHaveLength(1)
+  })
+})

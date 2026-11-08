@@ -14,7 +14,7 @@ export type SocketState =
   | 'invalid'
   | 'protocol_mismatch'
 
-export const MOBILE_CLIENT_VERSION = '0.0.0-m1'
+export const MOBILE_CLIENT_VERSION = '0.0.0-m2'
 
 export const RECONNECT_BASE_MS = 1_000
 export const RECONNECT_MAX_MS = 30_000
@@ -135,6 +135,11 @@ export class MobileSocket {
     this._connect()
   }
 
+  /** Queue a client frame; ignored while the socket is not open. */
+  send(frame: ClientFrame): void {
+    this._send(frame)
+  }
+
   stop(): void {
     if (this._stopped) return
     this._stopped = true
@@ -184,7 +189,7 @@ export class MobileSocket {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       token: this._token,
       clientVersion: this._clientVersion,
-      capabilities: ['inbox'],
+      capabilities: ['inbox', 'session'],
     })
   }
 
@@ -208,8 +213,15 @@ export class MobileSocket {
         break
       case 'device_revoked':
         this._handleRevoked()
+        this._onFrame?.(frame)
         break
       case 'inbox_snapshot':
+      case 'inbox_delta':
+      case 'session_snapshot':
+      case 'session_delta':
+      case 'session_removed':
+      case 'command_result':
+      case 'resync_required':
       case 'server_error':
         this._onFrame?.(frame)
         break

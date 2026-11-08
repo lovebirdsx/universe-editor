@@ -158,7 +158,7 @@ test.describe('mobile gateway', () => {
   }) => {
     const { browser, context, phone } = await pairPhone(page, workbench)
     try {
-      await expect(phone.getByText('暂无会话（会话镜像将在后续版本提供）')).toBeVisible()
+      await expect(phone.getByText('PC 上暂无进行中的 Agent 会话')).toBeVisible()
       await expect(phone.getByText('已连接', { exact: true })).toBeVisible()
 
       const deviceRow = page.locator('li[data-testid^="mobile-device-"]')
@@ -209,6 +209,46 @@ test.describe('mobile gateway', () => {
       await expect(phone.getByText('配对码无效或已过期，请在 PC 上重新生成。')).toBeVisible()
       // A failed attempt must not add a device on the PC.
       await expect(page.locator('li[data-testid^="mobile-device-"]')).toHaveCount(0)
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@p0 opens a mirrored session from the phone inbox and shows the conversation', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10_000 })
+      .toBe(1)
+
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('hello'))
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
+      .toEqual([
+        { role: 'user', text: 'hello', streaming: false },
+        { role: 'agent', text: 'echo: hello', streaming: false },
+      ])
+
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      const row = phone.getByTestId('inbox-session-row').first()
+      await expect(row).toBeVisible()
+      await row.click()
+
+      await expect(phone).toHaveURL(/\/s\//)
+      await expect(phone.getByTestId('user-message')).toContainText('hello')
+      await expect(phone.getByTestId('agent-message')).toContainText('echo: hello')
     } finally {
       await context.close()
       await browser.close()

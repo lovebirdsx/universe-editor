@@ -21,7 +21,9 @@ export function groupSessions(sessions: readonly MobileSessionSummary[]): InboxG
   return MOBILE_SESSION_BUCKETS.map((bucket) => ({
     bucket,
     label: BUCKET_LABELS[bucket] ?? bucket,
-    sessions: sessions.filter((session) => session.bucket === bucket),
+    sessions: sessions
+      .filter((session) => session.bucket === bucket)
+      .sort((a, b) => b.updatedAt - a.updatedAt),
   })).filter((group) => group.sessions.length > 0)
 }
 
@@ -29,6 +31,10 @@ export function formatUpdatedAt(updatedAt: number, now = Date.now()): string {
   const elapsedMinutes = Math.max(0, Math.floor((now - updatedAt) / 60_000))
   if (elapsedMinutes < 1) return strings.sessionUpdatedJustNow
   if (elapsedMinutes < 60) return strings.sessionUpdatedMinutesAgo(elapsedMinutes)
+  const elapsedHours = Math.floor(elapsedMinutes / 60)
+  if (elapsedHours < 24) return strings.sessionUpdatedHoursAgo(elapsedHours)
+  const elapsedDays = Math.floor(elapsedHours / 24)
+  if (elapsedDays < 7) return strings.sessionUpdatedDaysAgo(elapsedDays)
   return new Intl.DateTimeFormat('zh-CN', {
     month: 'numeric',
     day: 'numeric',

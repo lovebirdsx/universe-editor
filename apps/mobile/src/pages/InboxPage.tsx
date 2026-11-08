@@ -1,115 +1,39 @@
-import type { MobileSessionSummary } from '@universe-editor/mobile-protocol'
-import { useEffect, useState } from 'react'
+import type { StoredCredentials } from '../credentials.js'
+import { InboxGroups } from '../inbox/InboxGroups.js'
+import type { MobileClient } from '../state/mobileClient.js'
+import { useStore } from '../state/useStore.js'
+import { NoticeBar } from '../components/NoticeBar.js'
 import { Spinner } from '../components/Spinner.js'
 import { SettingsDrawer } from '../components/SettingsDrawer.js'
 import { StatusBar } from '../components/StatusBar.js'
-import type { CredentialStore, StoredCredentials } from '../credentials.js'
-import { InboxGroups } from '../inbox/InboxGroups.js'
-import {
-  MobileSocket,
-  websocketUrlForLocation,
-  type SocketState,
-  type WebSocketLike,
-} from '../socket/mobileSocket.js'
 import { strings } from '../strings.js'
+import { useState } from 'react'
 
 export interface InboxPageProps {
-  readonly store: CredentialStore
-  readonly reloadKey: number
+  readonly client: MobileClient
+  readonly credentials: StoredCredentials
   readonly notice?: string | undefined
   readonly onDismissNotice: () => void
+  readonly onOpenSession: (sessionKey: string) => void
+  readonly onUnpair: () => void
 }
 
-interface LoadedState {
-  readonly loading: boolean
-  readonly credentials: StoredCredentials | undefined
-}
-
-export function InboxPage({ store, reloadKey, notice, onDismissNotice }: InboxPageProps) {
-  const [loaded, setLoaded] = useState<LoadedState>({ loading: true, credentials: undefined })
-  const [socketState, setSocketState] = useState<SocketState>('connecting')
-  const [sessions, setSessions] = useState<readonly MobileSessionSummary[]>([])
-  const [hasSnapshot, setHasSnapshot] = useState(false)
+export function InboxPage({
+  client,
+  credentials,
+  notice,
+  onDismissNotice,
+  onOpenSession,
+  onUnpair,
+}: InboxPageProps) {
+  const inbox = useStore(client.getInboxStore())
+  const socketState = useStore(client.getSocketStateStore())
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [eventNotice, setEventNotice] = useState<string | undefined>(undefined)
-
-  useEffect(() => {
-    let cancelled = false
-    setLoaded((previous) => ({ ...previous, loading: true }))
-    void store.load().then((credentials) => {
-      if (cancelled) return
-      setLoaded({ loading: false, credentials })
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [store, reloadKey])
-
-  const credentials = loaded.credentials
-
-  useEffect(() => {
-    if (credentials === undefined) return
-    setSessions([])
-    setHasSnapshot(false)
-    setSocketState('connecting')
-
-    const socket = new MobileSocket({
-      url: websocketUrlForLocation(window.location),
-      token: credentials.token,
-      createWebSocket: (url) => new WebSocket(url) as unknown as WebSocketLike,
-      onStateChange: (state) => setSocketState(state),
-      onFrame: (frame) => {
-        if (frame.type === 'inbox_snapshot') {
-          setSessions(frame.sessions)
-          setHasSnapshot(true)
-        }
-      },
-      onCredentialsInvalid: () => {
-        setEventNotice(strings.credentialsInvalid)
-        void store.clear()
-        setLoaded({ loading: false, credentials: undefined })
-      },
-      onProtocolMismatch: () => {
-        setEventNotice(strings.inboxVersionMismatch)
-      },
-    })
-    socket.start()
-    return () => socket.stop()
-  }, [credentials, store])
-
-  const dismissNotice = (): void => {
-    setEventNotice(undefined)
-    onDismissNotice()
-  }
-  const shownNotice = eventNotice ?? notice
-
-  if (loaded.loading) {
-    return (
-      <main className="centered-page">
-        <Spinner />
-        <p className="muted">{strings.statusConnecting}</p>
-      </main>
-    )
-  }
-
-  if (credentials === undefined) {
-    return (
-      <main className="guide-page">
-        {shownNotice !== undefined && <NoticeBar text={shownNotice} onDismiss={dismissNotice} />}
-        <span className="guide-page__logo" aria-hidden="true" />
-        <h1 className="guide-page__title">{strings.guideTitle}</h1>
-        <p className="guide-page__body">{strings.guideBody}</p>
-        <p className="guide-page__hint">{strings.guideHint}</p>
-      </main>
-    )
-  }
 
   const unpair = (): void => {
     setSettingsOpen(false)
-    setEventNotice(undefined)
     onDismissNotice()
-    void store.clear()
-    setLoaded({ loading: false, credentials: undefined })
+    onUnpair()
   }
 
   return (
@@ -120,7 +44,13 @@ export function InboxPage({ store, reloadKey, notice, onDismissNotice }: InboxPa
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="inbox-page__body">
-        {shownNotice !== undefined && <NoticeBar text={shownNotice} onDismiss={dismissNotice} />}
+        {notice !== undefined && <NoticeBar text={notice} onDismiss={onDismissNotice} />}
+        {inbox.hasSnapshot && socketState !== 'connected' && (
+          <div className="offline-banner" role="status">
+            <span className="offline-banner__dot" aria-hidden="true" />
+            <span>{strings.inboxOfflineBanner}</span>
+          </div>
+        )}
         {renderBody()}
       </main>
       {settingsOpen && (
@@ -149,15 +79,21 @@ export function InboxPage({ store, reloadKey, notice, onDismissNotice }: InboxPa
       )
     }
 
-    if (hasSnapshot) {
-      if (sessions.length === 0) {
+    if (inbox.hasSnapshot) {
+      if (inbox.sessions.length === 0) {
         return (
           <div className="state-card">
             <p>{strings.inboxEmpty}</p>
           </div>
         )
       }
-      return <InboxGroups sessions={sessions} />
+      return (
+        <InboxGroups
+          sessions={inbox.sessions}
+          onOpenSession={onOpenSession}
+          stale={socketState !== 'connected'}
+        />
+      )
     }
 
     if (socketState === 'reconnecting') {
@@ -185,20 +121,4 @@ export function InboxPage({ store, reloadKey, notice, onDismissNotice }: InboxPa
       </div>
     )
   }
-}
-
-interface NoticeBarProps {
-  readonly text: string
-  readonly onDismiss: () => void
-}
-
-function NoticeBar({ text, onDismiss }: NoticeBarProps) {
-  return (
-    <div className="notice" role="status">
-      <span>{text}</span>
-      <button type="button" className="notice__dismiss" onClick={onDismiss}>
-        {strings.noticeDismiss}
-      </button>
-    </div>
-  )
 }
