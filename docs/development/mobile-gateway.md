@@ -1,7 +1,7 @@
 # 手机网关（Mobile Gateway）
 
-> 状态：**设计已定稿，未实现**（定稿日期 2026-11-08）。
-> 本文是实现依据，描述目标形态与已确认的取舍，不代表仓库中已有对应代码。
+> 状态：**M1 已落地**（协议包、main 网关与配对、PC 设置页、手机 PWA 骨架）；
+> 会话镜像、交互与通知仍按下文里程碑推进。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -366,7 +366,7 @@ e2e 环境约束见 [wsl-e2e.md](wsl-e2e.md)。
 
 **构建与打包**：
 
-1. `pnpm --filter mobile build` 产出 `apps/mobile/dist`。
+1. `pnpm --filter @universe-editor/mobile build` 产出 `apps/mobile/dist`。
 2. `scripts/release/runtime-resources.mjs` 将其 stage 到 `.runtime-resources/mobile`。
 3. `apps/editor/electron-builder.yml` 的 `extraResources`（`.runtime-resources` → `.`）带入
    `resources/mobile`。
@@ -374,9 +374,10 @@ e2e 环境约束见 [wsl-e2e.md](wsl-e2e.md)。
 5. 生产从 `process.resourcesPath/mobile` 托管；开发从 `apps/mobile/dist` 或
    `UNIVERSE_MOBILE_ASSETS_DIR`。
 
-**样式**：`packages/workbench-ui` 增加 `./atoms` 子路径导出（`src/atoms/`），手机只引原子组件，
-避免把带 `platform` 依赖的主入口带进 PWA。手机侧自带 `mobile.css`（触控目标 44px、正文 15–16px），
-**不改桌面 token**。
+**样式**：`packages/workbench-ui` 的原子组件目前经 `Spinner` 传递依赖 `@universe-editor/platform`，
+直接引主入口或 `./atoms` 都会把编辑器内核带进 PWA。M1 手机侧自写少量控件（按钮 / 输入 / 加载态）
+并使用自带 `mobile.css`（触控目标 44px、正文 15–16px），**不改桌面 token**；待 atoms 剥离 platform
+依赖后再评估复用。
 
 **环境变量**
 

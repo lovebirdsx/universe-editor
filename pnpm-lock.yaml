@@ -189,6 +189,9 @@ catalogs:
     typescript-eslint:
       specifier: ^8.0.0
       version: 8.58.2
+    vite:
+      specifier: ^7.0.0
+      version: 7.3.2
     vitest:
       specifier: ^3.0.0
       version: 3.2.6
@@ -502,6 +505,55 @@ importers:
       zod:
         specifier: 'catalog:'
         version: 3.25.76
+
+  apps/mobile:
+    dependencies:
+      '@universe-editor/mobile-protocol':
+        specifier: workspace:*
+        version: link:../../packages/mobile-protocol
+      react:
+        specifier: 'catalog:'
+        version: 19.2.5
+      react-dom:
+        specifier: 'catalog:'
+        version: 19.2.5(react@19.2.5)
+    devDependencies:
+      '@testing-library/react':
+        specifier: 'catalog:'
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@types/node':
+        specifier: 'catalog:'
+        version: 22.19.17
+      '@types/react':
+        specifier: 'catalog:'
+        version: 19.2.14
+      '@types/react-dom':
+        specifier: 'catalog:'
+        version: 19.2.3(@types/react@19.2.14)
+      '@universe-editor/config-eslint':
+        specifier: workspace:*
+        version: link:../../packages/config-eslint
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../../packages/config-ts
+      '@vitejs/plugin-react':
+        specifier: 'catalog:'
+        version: 5.2.0(vite@7.3.2(@types/node@22.19.17)(jiti@2.7.0)(lightningcss@1.33.0))
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4(jiti@2.7.0)
+      happy-dom:
+        specifier: 'catalog:'
+        version: 17.6.3
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vite:
+        specifier: 'catalog:'
+        version: 7.3.2(@types/node@22.19.17)(jiti@2.7.0)(lightningcss@1.33.0)
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.33.0)
 
   extensions/ai:
     devDependencies:
@@ -6886,6 +6938,18 @@ snapshots:
       '@types/babel__core': 7.20.5
       react-refresh: 0.18.0
       vite: rolldown-vite@7.3.1(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@22.19.17)(esbuild@0.27.7)(jiti@2.7.0)
+    transitivePeerDependencies:
+      - supports-color
+
+  '@vitejs/plugin-react@5.2.0(vite@7.3.2(@types/node@22.19.17)(jiti@2.7.0)(lightningcss@1.33.0))':
+    dependencies:
+      '@babel/core': 7.29.0
+      '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.29.0)
+      '@babel/plugin-transform-react-jsx-source': 7.27.1(@babel/core@7.29.0)
+      '@rolldown/pluginutils': 1.0.0-rc.3
+      '@types/babel__core': 7.20.5
+      react-refresh: 0.18.0
+      vite: 7.3.2(@types/node@22.19.17)(jiti@2.7.0)(lightningcss@1.33.0)
     transitivePeerDependencies:
       - supports-color
 

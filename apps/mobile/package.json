@@ -1,0 +1,34 @@
+{
+  "name": "@universe-editor/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phone PWA remote control for the editor's mobile gateway.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite build --watch",
+    "build": "pnpm typecheck && vite build",
+    "typecheck": "tsgo --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src vite.config.ts vitest.config.ts --cache --cache-strategy content",
+    "lint:fix": "eslint --fix src vite.config.ts vitest.config.ts"
+  },
+  "dependencies": {
+    "@universe-editor/mobile-protocol": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@testing-library/react": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@universe-editor/config-eslint": "workspace:*",
+    "@universe-editor/config-ts": "workspace:*",
+    "@vitejs/plugin-react": "catalog:",
+    "eslint": "catalog:",
+    "happy-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  }
+}
