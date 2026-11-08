@@ -14,8 +14,14 @@ function session(
     ref: { windowId: 1, localId },
     agentId: 'claude',
     title,
+    status: 'running',
+    displayStatus: bucket === 'in_progress' ? 'working' : bucket,
     bucket,
     workspaceName: 'demo-workspace',
+    readOnly: false,
+    hasPendingPermission: false,
+    hasPendingElicitation: false,
+    backgroundTaskCount: 0,
     updatedAt: Date.now(),
   }
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ClientFrame, ParseErrorCode, Result, ServerFrame } from '../index.js'
 import {
   MAX_CLIENT_FRAME_BYTES,
+  MAX_SERVER_FRAME_BYTES,
   MAX_TOKEN_LENGTH,
   MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL_VERSION,
@@ -39,6 +40,90 @@ function helloOkJson(overrides: Record<string, unknown> = {}): string {
   })
 }
 
+const REF = { windowId: 3, localId: 'local-1' }
+const DURABLE_REF = { windowId: 3, localId: 'local-1', durableId: 'durable-1' }
+
+function summaryJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ref: REF,
+    agentId: 'claude',
+    agentName: 'Claude',
+    title: 'Fix the tests',
+    status: 'running',
+    displayStatus: 'working',
+    bucket: 'in_progress',
+    workspaceName: 'universe-editor',
+    cwd: '/workspace/universe-editor',
+    authority: 'local',
+    readOnly: false,
+    hasPendingPermission: false,
+    hasPendingElicitation: false,
+    backgroundTaskCount: 0,
+    updatedAt: 1_700_000_000_000,
+    ...overrides,
+  }
+}
+
+function snapshotJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    seq: 2,
+    summary: summaryJson(),
+    timeline: [
+      {
+        kind: 'message',
+        id: 'msg-1',
+        role: 'user',
+        text: 'hello',
+        streaming: false,
+      },
+      {
+        kind: 'toolCall',
+        id: 'tool-1',
+        title: 'Edit file',
+        toolKind: 'edit',
+        status: 'completed',
+        preview: 'diff --git',
+        hasDetail: true,
+        diffs: [{ path: '/workspace/a.ts', added: 2, removed: 1 }],
+        locations: [{ path: '/workspace/a.ts', line: 4 }],
+      },
+      {
+        kind: 'notice',
+        id: 'notice-1',
+        noticeKind: 'compaction',
+        phase: 'success',
+        text: 'compacted',
+      },
+    ],
+    plan: [{ content: 'Write tests', status: 'in_progress', priority: 'high' }],
+    configOptions: [
+      {
+        id: 'model',
+        name: 'Model',
+        category: 'model',
+        type: 'select',
+        currentValue: 'Claude',
+      },
+    ],
+    usage: { used: 100, size: 1000, cost: { amount: 0.02, currency: 'USD' }, costEstimated: true },
+    pendingPermission: {
+      toolCallId: 'tool-2',
+      title: 'Run command',
+      kind: 'execute',
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+      autoResolve: { optionId: 'allow', deadlineAt: 1_700_000_100_000 },
+    },
+    pendingElicitation: {
+      mode: 'form',
+      message: 'Pick a value',
+      title: 'Configure',
+      toolCallId: 'tool-2',
+    },
+    isReplayingHistory: false,
+    ...overrides,
+  }
+}
+
 describe('parseClientFrame', () => {
   it('parses hello', () => {
     const payload = {
@@ -58,7 +143,7 @@ describe('parseClientFrame', () => {
     })
   })
 
-  it('parses subscribe_inbox with and without afterSeq', () => {
+  it('parses inbox subscription frames', () => {
     expect(parseClientFrame('{"type":"subscribe_inbox"}')).toStrictEqual({
       ok: true,
       value: { type: 'subscribe_inbox' },
@@ -67,13 +152,51 @@ describe('parseClientFrame', () => {
       ok: true,
       value: { type: 'subscribe_inbox', afterSeq: 0 },
     })
-  })
-
-  it('parses unsubscribe_inbox', () => {
     expect(parseClientFrame('{"type":"unsubscribe_inbox"}')).toStrictEqual({
       ok: true,
       value: { type: 'unsubscribe_inbox' },
     })
+  })
+
+  it('parses session subscription frames', () => {
+    expect(
+      parseClientFrame(
+        JSON.stringify({ type: 'subscribe_session', ref: DURABLE_REF, afterSeq: 4 }),
+      ),
+    ).toStrictEqual({
+      ok: true,
+      value: { type: 'subscribe_session', ref: DURABLE_REF, afterSeq: 4 },
+    })
+    expect(parseClientFrame(JSON.stringify({ type: 'subscribe_session', ref: REF }))).toStrictEqual(
+      {
+        ok: true,
+        value: { type: 'subscribe_session', ref: REF },
+      },
+    )
+    expect(
+      parseClientFrame(JSON.stringify({ type: 'unsubscribe_session', ref: REF })),
+    ).toStrictEqual({
+      ok: true,
+      value: { type: 'unsubscribe_session', ref: REF },
+    })
+  })
+
+  it('parses command frames, keeping unknown kinds for not_supported replies', () => {
+    const payload = {
+      type: 'command',
+      requestId: 'req-1',
+      kind: 'getToolCallDetail',
+      payload: { ref: REF, toolCallId: 'tool-1' },
+    }
+    expect(parseClientFrame(JSON.stringify(payload))).toStrictEqual({ ok: true, value: payload })
+
+    const unknown = {
+      type: 'command',
+      requestId: 'req-2',
+      kind: 'futureCommand',
+      payload: { anything: true },
+    }
+    expect(parseClientFrame(JSON.stringify(unknown))).toStrictEqual({ ok: true, value: unknown })
   })
 
   it('rejects non-JSON and non-object payloads', () => {
@@ -90,7 +213,9 @@ describe('parseClientFrame', () => {
   })
 
   it('reports protocol mismatch separately from malformed fields', () => {
-    expect(errorCode(parseClientFrame(helloJson({ protocolVersion: 2 })))).toBe('protocol_mismatch')
+    expect(
+      errorCode(parseClientFrame(helloJson({ protocolVersion: MOBILE_PROTOCOL_VERSION + 1 }))),
+    ).toBe('protocol_mismatch')
     expect(errorCode(parseClientFrame(helloJson({ protocolVersion: '1' })))).toBe('bad_request')
     expect(errorCode(parseClientFrame(helloJson({ protocolVersion: -1 })))).toBe('bad_request')
   })
@@ -116,7 +241,7 @@ describe('parseClientFrame', () => {
     ).toBe('bad_request')
   })
 
-  it('validates ping and subscribe_inbox fields', () => {
+  it('validates ping and subscription fields', () => {
     expect(errorCode(parseClientFrame('{"type":"ping","t":"1"}'))).toBe('bad_request')
     expect(errorCode(parseClientFrame('{"type":"subscribe_inbox","afterSeq":-1}'))).toBe(
       'bad_request',
@@ -124,9 +249,50 @@ describe('parseClientFrame', () => {
     expect(errorCode(parseClientFrame('{"type":"subscribe_inbox","afterSeq":1.5}'))).toBe(
       'bad_request',
     )
-    expect(errorCode(parseClientFrame('{"type":"subscribe_inbox","afterSeq":"1"}'))).toBe(
+    expect(errorCode(parseClientFrame('{"type":"subscribe_session","ref":{"windowId":1}}'))).toBe(
       'bad_request',
     )
+    expect(
+      errorCode(
+        parseClientFrame(
+          JSON.stringify({ type: 'subscribe_session', ref: { windowId: 1, localId: '' } }),
+        ),
+      ),
+    ).toBe('bad_request')
+  })
+
+  it('validates command fields', () => {
+    expect(
+      errorCode(
+        parseClientFrame(
+          JSON.stringify({ type: 'command', requestId: '', kind: 'getToolCallDetail' }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseClientFrame(
+          JSON.stringify({
+            type: 'command',
+            requestId: 'r',
+            kind: 'getToolCallDetail',
+            payload: { ref: REF },
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseClientFrame(
+          JSON.stringify({
+            type: 'command',
+            requestId: 'r',
+            kind: 'getToolCallDetail',
+            payload: { ref: REF, toolCallId: '' },
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
   })
 
   it('rejects frames larger than the client limit', () => {
@@ -158,27 +324,126 @@ describe('parseServerFrame', () => {
     })
   })
 
-  it('parses inbox_snapshot with empty and populated sessions', () => {
-    expect(parseServerFrame('{"type":"inbox_snapshot","seq":0,"sessions":[]}')).toStrictEqual({
+  it('parses inbox snapshots and deltas', () => {
+    const snapshot = {
+      type: 'inbox_snapshot',
+      seq: 7,
+      sessions: [summaryJson(), summaryJson({ ref: DURABLE_REF, bucket: 'completed' })],
+    }
+    expect(parseServerFrame(JSON.stringify(snapshot))).toStrictEqual({
       ok: true,
-      value: { type: 'inbox_snapshot', seq: 0, sessions: [] },
+      value: snapshot,
     })
 
-    const withoutDurable = {
-      ref: { windowId: 3, localId: 'local-1' },
-      agentId: 'claude',
-      title: 'Fix the tests',
-      bucket: 'input_needed',
-      workspaceName: 'universe-editor',
-      updatedAt: 1_700_000_000_000,
+    const delta = {
+      type: 'inbox_delta',
+      seq: 8,
+      upserts: [summaryJson({ title: 'Renamed' })],
+      removes: [DURABLE_REF],
     }
-    const withDurable = {
-      ...withoutDurable,
-      ref: { windowId: 3, localId: 'local-1', durableId: 'durable-1' },
-      bucket: 'in_progress',
-    }
-    const frame = { type: 'inbox_snapshot', seq: 7, sessions: [withoutDurable, withDurable] }
+    expect(parseServerFrame(JSON.stringify(delta))).toStrictEqual({ ok: true, value: delta })
+  })
+
+  it('parses a full session snapshot', () => {
+    const frame = { type: 'session_snapshot', seq: 2, session: snapshotJson() }
     expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+  })
+
+  it('parses a minimal session snapshot without optional fields', () => {
+    const session = snapshotJson({
+      timeline: [],
+      plan: [],
+      configOptions: [],
+      usage: undefined,
+      pendingPermission: undefined,
+      pendingElicitation: undefined,
+      truncated: true,
+    })
+    const frame = { type: 'session_snapshot', seq: 2, session }
+    const expected = JSON.parse(JSON.stringify(frame)) as unknown
+    expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: expected })
+  })
+
+  it('parses every session delta event kind', () => {
+    const events = [
+      {
+        type: 'message_upsert',
+        id: 'msg-1',
+        role: 'agent',
+        textAppend: ' world',
+        streaming: true,
+      },
+      {
+        type: 'tool_call_upsert',
+        item: {
+          kind: 'toolCall',
+          id: 'tool-1',
+          title: 'Edit file',
+          toolKind: 'edit',
+          status: 'in_progress',
+          hasDetail: true,
+        },
+      },
+      {
+        type: 'timeline_item_added',
+        item: { kind: 'message', id: 'msg-2', role: 'user', text: 'hi', streaming: false },
+      },
+      { type: 'timeline_item_removed', id: 'msg-2' },
+      { type: 'plan_snapshot', plan: [{ content: 'Step', status: 'completed' }] },
+      {
+        type: 'config_options_snapshot',
+        options: [{ id: 'model', name: 'Model', type: 'boolean', currentValue: 'On' }],
+      },
+      { type: 'summary_changed', summary: summaryJson({ bucket: 'input_needed' }) },
+      {
+        type: 'permission_upsert',
+        permission: {
+          toolCallId: 'tool-1',
+          title: 'Run',
+          options: [{ optionId: 'yes', name: 'Yes' }],
+        },
+      },
+      { type: 'permission_cleared' },
+      {
+        type: 'elicitation_upsert',
+        elicitation: { mode: 'url', message: 'Open this', title: 'Auth' },
+      },
+      { type: 'elicitation_cleared' },
+    ]
+    const frame = { type: 'session_delta', seq: 9, ref: DURABLE_REF, events }
+    expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+  })
+
+  it('parses session_removed, command_result and resync_required', () => {
+    expect(
+      parseServerFrame(JSON.stringify({ type: 'session_removed', ref: DURABLE_REF })),
+    ).toStrictEqual({
+      ok: true,
+      value: { type: 'session_removed', ref: DURABLE_REF },
+    })
+
+    const result = {
+      type: 'command_result',
+      requestId: 'req-1',
+      ok: true,
+      result: {
+        id: 'tool-1',
+        title: 'Edit file',
+        kind: 'edit',
+        status: 'completed',
+        text: 'done',
+        diffs: [{ path: '/workspace/a.ts', oldText: 'a', newText: 'b' }],
+      },
+    }
+    expect(parseServerFrame(JSON.stringify(result))).toStrictEqual({ ok: true, value: result })
+
+    const resync = {
+      type: 'resync_required',
+      scope: 'session',
+      reason: 'backpressure',
+      ref: DURABLE_REF,
+    }
+    expect(parseServerFrame(JSON.stringify(resync))).toStrictEqual({ ok: true, value: resync })
   })
 
   it('parses server_error', () => {
@@ -192,9 +457,9 @@ describe('parseServerFrame', () => {
   })
 
   it('reports server protocol mismatch', () => {
-    expect(errorCode(parseServerFrame(helloOkJson({ protocolVersion: 2 })))).toBe(
-      'protocol_mismatch',
-    )
+    expect(
+      errorCode(parseServerFrame(helloOkJson({ protocolVersion: MOBILE_PROTOCOL_VERSION + 1 }))),
+    ).toBe('protocol_mismatch')
     expect(errorCode(parseServerFrame(helloOkJson({ protocolVersion: '1' })))).toBe('bad_request')
   })
 
@@ -207,7 +472,7 @@ describe('parseServerFrame', () => {
     expect(errorCode(parseServerFrame(helloOkJson({ capabilities: [1] })))).toBe('bad_request')
   })
 
-  it('rejects malformed pong and snapshots', () => {
+  it('rejects malformed pong and inbox frames', () => {
     expect(errorCode(parseServerFrame('{"type":"pong","t":"1"}'))).toBe('bad_request')
     expect(errorCode(parseServerFrame('{"type":"inbox_snapshot","seq":-1,"sessions":[]}'))).toBe(
       'bad_request',
@@ -216,22 +481,20 @@ describe('parseServerFrame', () => {
     expect(errorCode(parseServerFrame('{"type":"inbox_snapshot","seq":0,"sessions":[1]}'))).toBe(
       'bad_request',
     )
+    expect(errorCode(parseServerFrame('{"type":"inbox_delta","seq":1,"upserts":[]}'))).toBe(
+      'bad_request',
+    )
+    expect(
+      errorCode(parseServerFrame('{"type":"inbox_delta","seq":1,"upserts":[],"removes":[1]}')),
+    ).toBe('bad_request')
   })
 
   it('validates session summary fields', () => {
-    const summary = {
-      ref: { windowId: 3, localId: 'local-1' },
-      agentId: 'claude',
-      title: 'Fix the tests',
-      bucket: 'in_progress',
-      workspaceName: 'universe-editor',
-      updatedAt: 1_700_000_000_000,
-    }
     const withSummary = (overrides: Record<string, unknown>): string =>
       JSON.stringify({
         type: 'inbox_snapshot',
         seq: 1,
-        sessions: [{ ...summary, ...overrides }],
+        sessions: [summaryJson(overrides)],
       })
 
     expect(errorCode(parseServerFrame(withSummary({ bucket: 'unknown' })))).toBe('bad_request')
@@ -246,6 +509,67 @@ describe('parseServerFrame', () => {
     expect(
       errorCode(
         parseServerFrame(withSummary({ ref: { windowId: 1, localId: 'x', durableId: 5 } })),
+      ),
+    ).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ readOnly: 'no' })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ hasPendingPermission: 'no' })))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withSummary({ backgroundTaskCount: -1 })))).toBe(
+      'bad_request',
+    )
+  })
+
+  it('rejects malformed snapshots and delta events', () => {
+    const withSnapshot = (overrides: Record<string, unknown>): string =>
+      JSON.stringify({ type: 'session_snapshot', seq: 1, session: snapshotJson(overrides) })
+
+    expect(errorCode(parseServerFrame(withSnapshot({ timeline: 'nope' })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSnapshot({ timeline: [{ kind: 'unknown' }] })))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withSnapshot({ plan: [{ content: 1 }] })))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withSnapshot({ configOptions: [{ id: 'x' }] })))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withSnapshot({ isReplayingHistory: 'no' })))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withSnapshot({ usage: { used: -1, size: 1 } })))).toBe(
+      'bad_request',
+    )
+    expect(
+      errorCode(
+        parseServerFrame(withSnapshot({ pendingPermission: { toolCallId: 't', title: 'x' } })),
+      ),
+    ).toBe('bad_request')
+
+    const withDelta = (events: unknown[]): string =>
+      JSON.stringify({ type: 'session_delta', seq: 1, ref: REF, events })
+    expect(errorCode(parseServerFrame(withDelta([{ type: 'unknown' }])))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withDelta([{ type: 'message_upsert', id: '' }])))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withDelta([{ type: 'tool_call_upsert', item: {} }])))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withDelta([{ type: 'permission_upsert' }])))).toBe(
+      'bad_request',
+    )
+  })
+
+  it('validates resync and command_result fields', () => {
+    expect(
+      errorCode(parseServerFrame('{"type":"resync_required","scope":"everything","reason":"x"}')),
+    ).toBe('bad_request')
+    expect(
+      errorCode(parseServerFrame('{"type":"command_result","requestId":"r","ok":"yes"}')),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame('{"type":"command_result","requestId":"r","ok":false,"error":"nope"}'),
       ),
     ).toBe('bad_request')
   })
@@ -266,16 +590,31 @@ describe('parseServerFrame', () => {
     expect(errorCode(parseServerFrame('{"type":"unknown"}'))).toBe('bad_request')
     expect(errorCode(parseServerFrame('[]'))).toBe('bad_request')
   })
+
+  it('exposes a server frame soft limit above the client limit', () => {
+    expect(MAX_SERVER_FRAME_BYTES).toBe(1024 * 1024)
+    expect(MAX_SERVER_FRAME_BYTES).toBeGreaterThan(MAX_CLIENT_FRAME_BYTES)
+  })
 })
 
 describe('serializeFrame', () => {
   it('round-trips client and server frames', () => {
-    const clientFrame: ClientFrame = { type: 'ping', t: 42 }
+    const clientFrame: ClientFrame = {
+      type: 'command',
+      requestId: 'r',
+      kind: 'getToolCallDetail',
+      payload: { ref: REF, toolCallId: 'tool-1' },
+    }
     expect(parseClientFrame(serializeFrame(clientFrame))).toStrictEqual({
       ok: true,
       value: clientFrame,
     })
-    const serverFrame: ServerFrame = { type: 'pong', t: 42 }
+    const serverFrame: ServerFrame = {
+      type: 'session_delta',
+      seq: 3,
+      ref: REF,
+      events: [{ type: 'permission_cleared' }],
+    }
     expect(parseServerFrame(serializeFrame(serverFrame))).toStrictEqual({
       ok: true,
       value: serverFrame,

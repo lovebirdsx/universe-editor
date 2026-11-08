@@ -58,6 +58,7 @@ import {
   HELLO_TIMEOUT_MS,
   MobileGatewayServer,
 } from './mobileGatewayServer.js'
+import { MobileGatewayHub } from './mobileGatewayHub.js'
 import { PairingService } from './pairingService.js'
 
 const MAX_AUDIT_LIMIT = 200
@@ -76,6 +77,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   readonly onDidChangeDevices: Event<readonly MobileDeviceInfo[]> = this._onDidChangeDevices.event
 
   private readonly _windowBridges = new Map<number, IMobileBridgeService>()
+  private readonly _hub: MobileGatewayHub
 
   private _config: MobileGatewayConfig = DEFAULT_MOBILE_GATEWAY_CONFIG
   private _state: MobileGatewayState = 'stopped'
@@ -98,6 +100,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       id: 'mobileGateway',
       name: 'Mobile Gateway',
     })
+    this._hub = new MobileGatewayHub(this._logger)
 
     const mobileDir = join(app.getPath('userData'), 'mobile')
     this._deviceStore = new DeviceStore(join(mobileDir, 'devices.json'), {
@@ -173,12 +176,18 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     return this._enqueue(() => this._applyConfig(config))
   }
 
-  registerWindowBridge(windowId: number, bridge: IMobileBridgeService): void {
+  registerWindowBridge(
+    windowId: number,
+    bridge: IMobileBridgeService,
+    workspaceName: () => string = () => '',
+  ): void {
     this._windowBridges.set(windowId, bridge)
+    this._hub.registerWindow(windowId, bridge, workspaceName)
   }
 
   unregisterWindowBridge(windowId: number): void {
     this._windowBridges.delete(windowId)
+    this._hub.unregisterWindow(windowId)
   }
 
   /** M2 uses this to fan the inbox projection out to every window. */
@@ -189,6 +198,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   override dispose(): void {
     this._disposed = true
     this._pairing.cancel()
+    this._hub.dispose()
     const server = this._server
     this._server = undefined
     if (server !== undefined) void server.stop()
@@ -269,6 +279,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
       onConnectionsChanged: () => this._handleConnectionsChanged(),
+      hub: this._hub,
     })
     try {
       const { port } = await server.start()

@@ -210,7 +210,11 @@ export async function createWindowScopedServices(opts: {
 
   // Give the mobile gateway this window's reverse channel. Window close calls
   // unregisterWindowBridge alongside sessionSwitcher.unregisterWindow.
-  appServices.mobileGateway.registerWindowBridge(win.id, ipc.rendererMobileBridge)
+  appServices.mobileGateway.registerWindowBridge(
+    win.id,
+    ipc.rendererMobileBridge,
+    () => workspace.current?.name ?? '',
+  )
 
   return {
     disposables,

@@ -1,6 +1,8 @@
 # 手机网关（Mobile Gateway）
 
 > 状态：**M1 已落地**（协议包、main 网关与配对、PC 设置页、手机 PWA 骨架）；
+> **M2 只读镜像后端已落地**（协议 v2、每窗口会话桥、main 侧收件箱/会话聚合、`acp-view-model`
+> 抽取），手机端会话界面仍待后续任务。
 > 会话镜像、交互与通知仍按下文里程碑推进。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
@@ -104,16 +106,16 @@ main 侧不直接读 `AcpSession`。
 |---|---|---|
 | 会话状态 | 已有 16ms / 64ms 批次 | 重负载流使用 64ms（`acpSession.ts` 的 `STREAM_BATCH_MS` / `STREAM_HEAVY_BATCH_MS`） |
 | 桥合帧 | 约 50ms 一帧 | 重流（replay / 大量 append）放宽到约 100ms |
-| 单帧体量 | < 1MB | IPC 帧 32MB 警告、128MB 上限（`packages/platform/src/ipc/ipcFrameGuard.ts`） |
-| 出站队列 | 每连接有上限 | 超限不发快照，回 `resync_required`，让客户端重新拉取 |
+| 单帧体量 | < 1MB | `MAX_SERVER_FRAME_BYTES`；超限快照丢弃最早 timeline 项并标记 `truncated` |
+| 出站队列 | 每连接 1MB | `ws.bufferedAmount` 超限时丢弃中间增量，回 `resync_required{scope:'session'}` |
 
 **大内容裁剪**：
 
 | 内容 | 主列表下发 | 详情按需 |
 |---|---|---|
-| 工具调用 | preview + `hasDetail` + diff 增删行数 | `getToolCallDetail`，上限复用 `session/acpContentLimits.ts` |
-| 消息 | preview + `hasDetail` | `getMessageDetail` |
-| diff | 统计信息 | `getDiffDetail` |
+| 工具调用 | preview（≤1KB）+ `hasDetail` + diff 增删行数 | `getToolCallDetail`，上限复用 `acpContentLimits.ts` |
+| 消息 | 正文 + `hasNonText`；`memoryTrimmed: true` 时无正文 | M2 无消息详情命令 |
+| diff | 统计信息 | M2 无 diff 详情命令 |
 | 图片 | 占位符 | 第一期不下发原图 |
 | 已被内存裁剪的内容 | `memoryTrimmed: true` | 显示「内容已释放」，不重新拉取 |
 
@@ -124,7 +126,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 1`。WS 建立后第一帧必须是
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 2`（v2 增加会话镜像帧）。WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime }`。**token 不放 URL query**，避免进入访问日志与 Referer。
 
@@ -135,11 +137,16 @@ main 侧不直接读 `AcpSession`。
 | `hello` | 协议版本、设备 token、客户端版本、能力 |
 | `subscribe_inbox` / `unsubscribe_inbox` | 订阅或退订收件箱 |
 | `subscribe_session` / `unsubscribe_session` | `{ ref, afterSeq? }`，订阅单个会话 |
-| `command` | `{ requestId, kind, payload, idempotencyKey? }` |
+| `command` | `{ requestId, kind, payload }` |
 | `push_subscribe` / `push_unsubscribe` | 注册或注销 Web Push 订阅 |
 | `ping` | 心跳，服务端回 `pong` |
 
 **命令 kind**：
+
+M2 只实现 `getToolCallDetail`（payload `{ ref, toolCallId }`）；其余 kind 一律回
+`command_result { ok: false, error: 'not_supported' }`，未知 kind 不会导致解析错误。
+
+后续里程碑：
 
 - 会话：`sendPrompt`（第一期仅纯文本）、`cancelTurn`
 - 审批：`resolvePermission`、`cancelPermission`、`resolveElicitation`
@@ -165,11 +172,29 @@ main 侧不直接读 `AcpSession`。
 
 **seq 与会话 key**：
 
-- 每个 scope（收件箱 / 每个会话）各自单调递增 `seq`。
-- 服务端保留环形缓冲（约 1000 条或 5 分钟，取先到者）。
-- **重连一律先拉快照**，`afterSeq` 只是减少传输的优化，不是正确性前提。
-- 会话 key 优先 `durableId`（`sessionIdOnAgent`）；尚未 attach 时用 `{ windowId, localId }`。
-  attach 后发 `session_rekeyed`，客户端把本地状态迁移到 durable key。
+- 每个 scope（收件箱 / 每个会话订阅）各自单调递增 `seq`；快照带当前 seq。
+- **M2 不留环形缓冲**：订阅/重连一律回全量快照，`afterSeq` 被忽略；增量只在订阅建立后转发。
+  订阅时若快照生成期间已有增量，网关先暂存、快照发出后再补发。
+- 连接 `bufferedAmount` 超过 1MB 时丢弃中间增量并回 `resync_required{scope:'session', ref}`；
+  该订阅随后停止转发，客户端重新 `subscribe_session` 即恢复。
+- 会话 key 优先 `durableId`（`sessionIdOnAgent`）；`ref` 始终带 `windowId + localId`，
+  `durableId` 可选。**没有 `session_rekeyed` 帧**；会话消失时发 `session_removed`。
+- 快照超 1MB 时从最早 timeline 项开始丢弃，并带 `truncated: true`。
+
+**M2 快照与增量事件**：
+
+- `MobileSessionSnapshot { seq, summary, timeline, plan, configOptions, usage?,
+  pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
+- `summary` 含 `ref / agentId / agentName? / title / status / displayStatus / bucket /
+  workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
+  hasPendingElicitation / backgroundTaskCount / updatedAt`。
+- `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`）/ `toolCall`
+  （`toolKind`、`status`、preview、diff 增删行数）/ `notice`（compaction / resurrection）。
+- `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、
+  `tool_call_upsert`、`timeline_item_added/removed`、`plan_snapshot`、
+  `config_options_snapshot`、`summary_changed`、`permission_upsert/cleared`、
+  `elicitation_upsert/cleared`。
+- `summary_changed` 比较时忽略 `updatedAt`，避免每次合帧都发；`usage` 只在快照下发。
 
 **错误码**
 
@@ -351,16 +376,20 @@ e2e 环境约束见 [wsl-e2e.md](wsl-e2e.md)。
 | `packages/mobile-protocol` | WS 消息、命令/事件 DTO、错误码、版本常量；运行时零依赖 |
 | `packages/acp-view-model` | 纯逻辑：`ansi`、diff、文件路径链接、markdown 渲染、内容上限等 |
 
-`acp-view-model` 的源文件当前散落在：
+**M2 已抽取 `packages/acp-view-model`**（运行时零依赖，SDK 仅 `import type`）：
 
-- `apps/editor/src/renderer/services/acp/ansi.ts`
-- `apps/editor/src/renderer/services/acp/filePathLink.ts`
-- `apps/editor/src/renderer/services/acp/markdownRenderer.ts`
-- `apps/editor/src/renderer/services/acp/session/acpContentLimits.ts`
-- `apps/editor/src/renderer/workbench/agents/lineDiff.ts`（注意：在 `workbench/agents/`，不在 `services/acp/`）
+| 模块 | 来源 |
+|---|---|
+| `ansi` | `apps/editor/src/renderer/services/acp/ansi.ts` |
+| `filePathLink` | `apps/editor/src/renderer/services/acp/filePathLink.ts` |
+| `markdownRenderer` | `apps/editor/src/renderer/services/acp/markdownRenderer.ts` |
+| `contentLimits` | `apps/editor/src/renderer/services/acp/session/acpContentLimits.ts` |
+| `terminalOutput` | 从 `session/acpSessionUpdateMeta.ts` 拆出的纯函数 `readTerminalOutput` |
+| `lineDiff` | `apps/editor/src/renderer/workbench/agents/lineDiff.ts` |
 
-迁移后 editor 原位置保留 re-export，避免大范围改 import。`acpSessionModel` 的类型拆分留到第二期；
-第一期用映射函数 + 编译期检查（双方类型都引用同一 DTO，字段缺失/改名时 typecheck 报错）防漂移。
+editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余函数仍留在 editor：
+它们依赖 `DiffHunk`、`AcpModelCost`、`parseMcpToolName` 等编辑器模型类型，不属于纯 view-model。
+`acpSessionModel` 的类型拆分仍留到第二期；M2 用映射函数 + 编译期检查防漂移。
 
 **新应用 `apps/mobile`**：Vite + React，自带 `manifest` 与 `sw`。
 

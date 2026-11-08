@@ -7,6 +7,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator, type Event } from '@universe-editor/platform'
+import type {
+  MobileSessionBucket,
+  MobileSessionEvent,
+  MobileSessionSnapshot,
+  MobileToolCallDetail,
+} from '@universe-editor/mobile-protocol'
 
 export const MOBILE_GATEWAY_DEFAULT_PORT = 47321
 
@@ -105,10 +111,101 @@ export interface IMobileGatewayService {
 
 export const IMobileGatewayService = createDecorator<IMobileGatewayService>('mobileGatewayService')
 
-/** Reverse channel: implemented in each renderer, called from main. M2 extends it. */
+/**
+ * Renderer-side session reference. A renderer cannot know its own window id, so
+ * the main gateway fills `windowId` (and `workspaceName`) when it converts these
+ * DTOs into protocol frames.
+ */
+export interface MobileBridgeSessionRef {
+  readonly localId: string
+  readonly durableId?: string
+}
+
+/**
+ * Inbox row as produced by one renderer. Same fields as the wire summary minus
+ * the main-owned `ref.windowId` / `workspaceName`.
+ */
+export interface MobileBridgeSessionSummary {
+  readonly localId: string
+  readonly durableId?: string
+  readonly agentId: string
+  readonly agentName?: string
+  readonly title: string
+  /** Raw `AcpSessionStatus`. */
+  readonly status: string
+  /** `computeSessionDisplayStatus` result. */
+  readonly displayStatus: string
+  readonly bucket: MobileSessionBucket
+  readonly cwd?: string
+  readonly authority?: string
+  readonly readOnly: boolean
+  readonly hasPendingPermission: boolean
+  readonly hasPendingElicitation: boolean
+  readonly backgroundTaskCount: number
+  readonly updatedAt: number
+}
+
+export interface MobileBridgeSessionSnapshot extends Omit<
+  MobileSessionSnapshot,
+  'seq' | 'summary'
+> {
+  readonly summary: MobileBridgeSessionSummary
+}
+
+/**
+ * `summary_changed` carries the renderer projection; every other delta event is
+ * already window-independent and travels unchanged.
+ */
+export type MobileBridgeSessionEvent =
+  | Exclude<MobileSessionEvent, { type: 'summary_changed' }>
+  | { readonly type: 'summary_changed'; readonly summary: MobileBridgeSessionSummary }
+
+export interface MobileBridgeInboxChange {
+  readonly kind: 'inbox'
+  readonly upserts: readonly MobileBridgeSessionSummary[]
+  readonly removes: readonly MobileBridgeSessionRef[]
+}
+
+export interface MobileBridgeSessionDelta {
+  readonly kind: 'session_delta'
+  readonly localId: string
+  readonly events: readonly MobileBridgeSessionEvent[]
+}
+
+export type MobileBridgeEvent = MobileBridgeInboxChange | MobileBridgeSessionDelta
+
+/** Reverse channel: implemented in each renderer, called from main. */
 export interface IMobileBridgeService {
   readonly _serviceBrand: undefined
+
+  /** Cheap liveness probe kept from M1. */
   ping(): Promise<'pong'>
+
+  /** Current inbox rows for this window (no streaming state required). */
+  listSessions(): Promise<readonly MobileBridgeSessionSummary[]>
+
+  /** Full read-only state for one session. */
+  getSnapshot(localId: string): Promise<MobileBridgeSessionSnapshot | undefined>
+
+  /**
+   * Begin observing sessions. Until this is called the bridge performs no
+   * serialization at all, so a PC without a paired phone pays zero cost.
+   * Idempotent; main calls it when the first phone subscribes to the inbox.
+   */
+  startStreaming(): Promise<void>
+
+  /** Stop observing and release every watcher (last phone unsubscribed). */
+  stopStreaming(): Promise<void>
+
+  /** Full tool-call body; undefined when the session/tool call is gone. */
+  getToolCallDetail(localId: string, toolCallId: string): Promise<MobileToolCallDetail | undefined>
+
+  /**
+   * Inbox deltas and per-session delta batches. Per-session text is coalesced
+   * (~50ms; ~100ms while a single message grows by more than 64K chars) and
+   * deltas carry only suffixes.
+   */
+  readonly onDidChange: Event<MobileBridgeEvent>
 }
 
 export const IMobileBridgeService = createDecorator<IMobileBridgeService>('mobileBridgeService')

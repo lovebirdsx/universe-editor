@@ -28,6 +28,7 @@ import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { AuditLog } from './auditLog.js'
 import type { DeviceStore } from './deviceStore.js'
 import { HelloFailureLimiter } from './helloFailureLimiter.js'
+import type { MobileGatewayHub, MobileGatewayHubConnection } from './mobileGatewayHub.js'
 import type { PairingService } from './pairingService.js'
 import { checkRequestHeaders } from './requestSecurity.js'
 import {
@@ -62,6 +63,8 @@ export interface MobileGatewayServerOptions {
   readonly heartbeatTimeoutMs?: number
   readonly helloFailureLimiter?: HelloFailureLimiter
   readonly onConnectionsChanged?: () => void
+  /** M2 aggregation; absent in M1-only tests, which keep the empty inbox answer. */
+  readonly hub?: MobileGatewayHub
 }
 
 interface ConnectionState {
@@ -73,6 +76,7 @@ interface ConnectionState {
   helloInFlight: boolean
   helloTimer: ReturnType<typeof setTimeout> | undefined
   lastPongAt: number
+  readonly hubConnection: MobileGatewayHubConnection | undefined
 }
 
 export class MobileGatewayServer {
@@ -407,6 +411,13 @@ export class MobileGatewayServer {
   }
 
   private _handleConnection(ws: WebSocket, req: IncomingMessage): void {
+    const hubConnection =
+      this._options.hub === undefined
+        ? undefined
+        : {
+            send: (frame: ServerFrame) => this._sendFrame(ws, frame),
+            bufferedAmount: () => ws.bufferedAmount,
+          }
     const connection: ConnectionState = {
       ws,
       remoteAddress: req.socket.remoteAddress ?? '',
@@ -416,7 +427,9 @@ export class MobileGatewayServer {
       helloInFlight: false,
       helloTimer: undefined,
       lastPongAt: Date.now(),
+      hubConnection,
     }
+    if (hubConnection !== undefined) this._options.hub?.addConnection(hubConnection)
     this._connections.add(connection)
     const timeout = this._options.helloTimeoutMs ?? HELLO_TIMEOUT_MS
     connection.helloTimer = setTimeout(() => {
@@ -473,10 +486,46 @@ export class MobileGatewayServer {
         this._sendFrame(connection.ws, { type: 'pong', t: parsed.value.t })
         break
       case 'subscribe_inbox':
-        // M1 has no session mirror; the empty snapshot is the honest answer.
-        this._sendFrame(connection.ws, { type: 'inbox_snapshot', seq: 0, sessions: [] })
+        if (connection.hubConnection === undefined) {
+          this._sendFrame(connection.ws, { type: 'inbox_snapshot', seq: 0, sessions: [] })
+        } else {
+          this._options.hub?.subscribeInbox(connection.hubConnection)
+        }
         break
       case 'unsubscribe_inbox':
+        if (connection.hubConnection !== undefined) {
+          this._options.hub?.unsubscribeInbox(connection.hubConnection)
+        }
+        break
+      case 'subscribe_session':
+        if (connection.hubConnection === undefined) {
+          this._sendServerError(connection.ws, 'not_supported', 'session mirroring is unavailable')
+        } else {
+          void this._options.hub
+            ?.subscribeSession(connection.hubConnection, parsed.value.ref)
+            .catch((err) =>
+              this._options.logger.warn(`mobile session subscribe failed: ${String(err)}`),
+            )
+        }
+        break
+      case 'unsubscribe_session':
+        if (connection.hubConnection !== undefined) {
+          this._options.hub?.unsubscribeSession(connection.hubConnection, parsed.value.ref)
+        }
+        break
+      case 'command':
+        if (connection.hubConnection === undefined) {
+          this._sendFrame(connection.ws, {
+            type: 'command_result',
+            requestId: parsed.value.requestId,
+            ok: false,
+            error: 'not_supported',
+          })
+        } else {
+          void this._options.hub
+            ?.handleCommand(connection.hubConnection, parsed.value)
+            .catch((err) => this._options.logger.warn(`mobile command failed: ${String(err)}`))
+        }
         break
       default:
         this._sendServerError(connection.ws, 'not_supported', 'frame is not supported yet')
@@ -550,6 +599,9 @@ export class MobileGatewayServer {
       connection.helloTimer = undefined
     }
     this._connections.delete(connection)
+    if (connection.hubConnection !== undefined) {
+      this._options.hub?.removeConnection(connection.hubConnection)
+    }
     if (connection.deviceId !== undefined) {
       this._options.logger.info(`device disconnected id=${connection.deviceId}`)
       this._options.onConnectionsChanged?.()

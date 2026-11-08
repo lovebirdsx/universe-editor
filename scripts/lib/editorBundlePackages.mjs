@@ -26,6 +26,7 @@ export const EDITOR_BUNDLE_PACKAGES = [
   { pkg: '@universe-editor/platform', main: 'src', renderer: 'src' },
   { pkg: '@universe-editor/node-services', main: 'src' },
   { pkg: '@universe-editor/mobile-protocol', main: 'src' },
+  { pkg: '@universe-editor/acp-view-model', renderer: 'src' },
   { pkg: '@universe-editor/workbench-ui', renderer: 'src' },
   { pkg: '@universe-editor/extensions-common', main: 'dist', renderer: 'src' },
   { pkg: '@universe-editor/extension-api', main: 'dist' },

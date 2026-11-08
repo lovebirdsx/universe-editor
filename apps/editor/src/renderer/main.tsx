@@ -1002,10 +1002,11 @@ async function bootstrapWorkbench(): Promise<void> {
   )
 
   // Reverse channel: main's mobile gateway calls into this window (M2 projects
-  // ACP sessions through it). M1 only answers ping to prove the wiring.
+  // ACP sessions through it). Created through DI so it can observe the session
+  // service and history; it does no work until a phone subscribes.
   ipcService.registerChannel(
     ServiceChannels.MobileBridge,
-    ProxyChannel.fromService(new MobileBridgeService()),
+    ProxyChannel.fromService(instantiation.createInstance(MobileBridgeService)),
   )
 
   // Extension host client: owns the extension-host subprocess + RPC. Created here

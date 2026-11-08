@@ -1,19 +1,57 @@
 import { isMobileErrorCode } from './errors.js'
 import type {
   ClientFrame,
+  CommandFrame,
   HelloFrame,
   HelloOkFrame,
+  InboxDeltaFrame,
   InboxSnapshotFrame,
+  MobileConfigOption,
+  MobileConfigOptionType,
+  MobileMessageRole,
+  MobileNoticeKind,
+  MobileNoticePhase,
+  MobilePendingElicitation,
+  MobilePendingPermission,
+  MobilePermissionOption,
+  MobilePlanEntry,
+  MobilePlanEntryStatus,
+  MobileResyncScope,
   MobileSessionBucket,
+  MobileSessionEvent,
   MobileSessionRef,
+  MobileSessionSnapshot,
   MobileSessionSummary,
+  MobileTimelineItem,
+  MobileTimelineItemKind,
+  MobileTimelineMessageItem,
+  MobileTimelineNoticeItem,
+  MobileTimelineToolCallItem,
+  MobileToolCallDiffStat,
+  MobileToolCallLocation,
+  MobileUsage,
   PingFrame,
   PongFrame,
+  ResyncRequiredFrame,
   ServerErrorFrame,
   ServerFrame,
+  SessionDeltaFrame,
+  SessionRemovedFrame,
+  SessionSnapshotFrame,
   SubscribeInboxFrame,
+  SubscribeSessionFrame,
+  UnsubscribeSessionFrame,
 } from './frames.js'
-import { MOBILE_SESSION_BUCKETS } from './frames.js'
+import {
+  MOBILE_CONFIG_OPTION_TYPES,
+  MOBILE_MESSAGE_ROLES,
+  MOBILE_NOTICE_KINDS,
+  MOBILE_NOTICE_PHASES,
+  MOBILE_PLAN_ENTRY_STATUSES,
+  MOBILE_RESYNC_SCOPES,
+  MOBILE_SESSION_BUCKETS,
+  MOBILE_TIMELINE_ITEM_KINDS,
+} from './frames.js'
 import type { PairDevicePlatform, PairRequest } from './pairing.js'
 import { isValidPairCodeShape, normalizePairCode, PAIR_DEVICE_PLATFORMS } from './pairing.js'
 import { MOBILE_PROTOCOL_VERSION } from './version.js'
@@ -25,6 +63,11 @@ import { MOBILE_PROTOCOL_VERSION } from './version.js'
  * the rejection outcome.
  */
 export const MAX_CLIENT_FRAME_BYTES = 64 * 1024
+/**
+ * Soft ceiling for one server → client frame. The gateway trims oversized
+ * snapshots (oldest timeline items first) rather than dropping the frame.
+ */
+export const MAX_SERVER_FRAME_BYTES = 1024 * 1024
 export const MAX_TOKEN_LENGTH = 128
 export const MAX_DEVICE_NAME_LENGTH = 64
 export const MAX_CLIENT_VERSION_LENGTH = 64
@@ -33,6 +76,18 @@ export const MAX_CAPABILITIES = 32
 export const MAX_ID_LENGTH = 128
 export const MAX_TITLE_LENGTH = 512
 export const MAX_WORKSPACE_NAME_LENGTH = 256
+export const MAX_STATUS_LENGTH = 64
+export const MAX_TEXT_LENGTH = MAX_SERVER_FRAME_BYTES
+export const MAX_PREVIEW_LENGTH = 4096
+export const MAX_TIMELINE_ITEMS = 20_000
+export const MAX_EVENTS_PER_DELTA = 5_000
+export const MAX_PLAN_ENTRIES = 500
+export const MAX_CONFIG_OPTIONS = 200
+export const MAX_PERMISSION_OPTIONS = 64
+export const MAX_TOOL_CALL_DIFFS = 256
+export const MAX_TOOL_CALL_LOCATIONS = 256
+export const MAX_REASON_LENGTH = 1024
+export const MAX_REQUEST_ID_LENGTH = 128
 
 export type ParseErrorCode = 'bad_request' | 'protocol_mismatch'
 
@@ -115,6 +170,12 @@ export function parseClientFrame(text: string): Result<ClientFrame> {
       return parseSubscribeInboxFrame(frame)
     case 'unsubscribe_inbox':
       return ok({ type: 'unsubscribe_inbox' })
+    case 'subscribe_session':
+      return parseSubscribeSessionFrame(frame)
+    case 'unsubscribe_session':
+      return parseUnsubscribeSessionFrame(frame)
+    case 'command':
+      return parseCommandFrame(frame)
     default:
       return fail('bad_request', `unknown client frame type: ${type}`)
   }
@@ -133,6 +194,18 @@ export function parseServerFrame(text: string): Result<ServerFrame> {
       return parsePongFrame(frame)
     case 'inbox_snapshot':
       return parseInboxSnapshotFrame(frame)
+    case 'inbox_delta':
+      return parseInboxDeltaFrame(frame)
+    case 'session_snapshot':
+      return parseSessionSnapshotFrame(frame)
+    case 'session_delta':
+      return parseSessionDeltaFrame(frame)
+    case 'session_removed':
+      return parseSessionRemovedFrame(frame)
+    case 'command_result':
+      return parseCommandResultFrame(frame)
+    case 'resync_required':
+      return parseResyncRequiredFrame(frame)
     case 'server_error':
       return parseServerErrorFrame(frame)
     case 'device_revoked':
@@ -205,6 +278,58 @@ function parseSubscribeInboxFrame(frame: Record<string, unknown>): Result<Subscr
   return ok({ type: 'subscribe_inbox', afterSeq })
 }
 
+function parseSubscribeSessionFrame(frame: Record<string, unknown>): Result<SubscribeSessionFrame> {
+  const ref = parseSessionRef(frame.ref)
+  if (!ref.ok) return ref
+  const afterSeq = frame.afterSeq
+  if (afterSeq === undefined) return ok({ type: 'subscribe_session', ref: ref.value })
+  if (!isNonNegativeInteger(afterSeq)) {
+    return fail('bad_request', 'subscribe_session.afterSeq must be a non-negative integer')
+  }
+  return ok({ type: 'subscribe_session', ref: ref.value, afterSeq })
+}
+
+function parseUnsubscribeSessionFrame(
+  frame: Record<string, unknown>,
+): Result<UnsubscribeSessionFrame> {
+  const ref = parseSessionRef(frame.ref)
+  if (!ref.ok) return ref
+  return ok({ type: 'unsubscribe_session', ref: ref.value })
+}
+
+function parseCommandFrame(frame: Record<string, unknown>): Result<CommandFrame> {
+  const requestId = frame.requestId
+  if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+    return fail('bad_request', `command.requestId must be 1–${MAX_REQUEST_ID_LENGTH} characters`)
+  }
+  const kind = frame.kind
+  if (!isNonEmptyBoundedString(kind, MAX_ID_LENGTH)) {
+    return fail('bad_request', `command.kind must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  const payload = frame.payload
+  if (kind === 'getToolCallDetail') {
+    const parsed = parseGetToolCallDetailPayload(payload)
+    if (!parsed.ok) return parsed
+    return ok({ type: 'command', requestId, kind, payload: parsed.value })
+  }
+  return ok({ type: 'command', requestId, kind, payload })
+}
+
+function parseGetToolCallDetailPayload(
+  value: unknown,
+): Result<{ ref: MobileSessionRef; toolCallId: string }> {
+  if (!isRecord(value)) {
+    return fail('bad_request', 'getToolCallDetail.payload must be an object')
+  }
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const toolCallId = value.toolCallId
+  if (!isNonEmptyBoundedString(toolCallId, MAX_ID_LENGTH)) {
+    return fail('bad_request', 'getToolCallDetail.toolCallId must be 1–128 characters')
+  }
+  return ok({ ref: ref.value, toolCallId })
+}
+
 function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame> {
   const protocolVersion = frame.protocolVersion
   if (!isNonNegativeInteger(protocolVersion)) {
@@ -264,9 +389,95 @@ function parseInboxSnapshotFrame(frame: Record<string, unknown>): Result<InboxSn
   return ok({ type: 'inbox_snapshot', seq, sessions })
 }
 
+function parseInboxDeltaFrame(frame: Record<string, unknown>): Result<InboxDeltaFrame> {
+  const seq = frame.seq
+  if (!isNonNegativeInteger(seq)) {
+    return fail('bad_request', 'inbox_delta.seq must be a non-negative integer')
+  }
+  const rawUpserts = frame.upserts
+  if (!Array.isArray(rawUpserts)) {
+    return fail('bad_request', 'inbox_delta.upserts must be an array')
+  }
+  const upserts: MobileSessionSummary[] = []
+  for (const raw of rawUpserts) {
+    const session = parseSessionSummary(raw)
+    if (!session.ok) return session
+    upserts.push(session.value)
+  }
+  const rawRemoves = frame.removes
+  if (!Array.isArray(rawRemoves)) {
+    return fail('bad_request', 'inbox_delta.removes must be an array')
+  }
+  const removes: MobileSessionRef[] = []
+  for (const raw of rawRemoves) {
+    const ref = parseSessionRef(raw)
+    if (!ref.ok) return ref
+    removes.push(ref.value)
+  }
+  return ok({ type: 'inbox_delta', seq, upserts, removes })
+}
+
+function parseSessionSnapshotFrame(frame: Record<string, unknown>): Result<SessionSnapshotFrame> {
+  const seq = frame.seq
+  if (!isNonNegativeInteger(seq)) {
+    return fail('bad_request', 'session_snapshot.seq must be a non-negative integer')
+  }
+  const snapshot = parseSessionSnapshot(frame.session)
+  if (!snapshot.ok) return snapshot
+  return ok({ type: 'session_snapshot', seq, session: snapshot.value })
+}
+
+function parseSessionSnapshot(value: unknown): Result<MobileSessionSnapshot> {
+  if (!isRecord(value)) {
+    return fail('bad_request', 'session_snapshot.session must be an object')
+  }
+  const seq = value.seq
+  if (!isNonNegativeInteger(seq)) {
+    return fail('bad_request', 'session.seq must be a non-negative integer')
+  }
+  const summary = parseSessionSummary(value.summary)
+  if (!summary.ok) return summary
+  const timeline = parseTimeline(value.timeline)
+  if (!timeline.ok) return timeline
+  const plan = parsePlan(value.plan)
+  if (!plan.ok) return plan
+  const configOptions = parseConfigOptions(value.configOptions)
+  if (!configOptions.ok) return configOptions
+  const isReplayingHistory = value.isReplayingHistory
+  if (typeof isReplayingHistory !== 'boolean') {
+    return fail('bad_request', 'session.isReplayingHistory must be a boolean')
+  }
+  const usage = parseOptional(value.usage, parseUsage)
+  if (!usage.ok) return usage
+  const pendingPermission = parseOptional(value.pendingPermission, parsePendingPermission)
+  if (!pendingPermission.ok) return pendingPermission
+  const pendingElicitation = parseOptional(value.pendingElicitation, parsePendingElicitation)
+  if (!pendingElicitation.ok) return pendingElicitation
+  const truncated = value.truncated
+  if (truncated !== undefined && typeof truncated !== 'boolean') {
+    return fail('bad_request', 'session.truncated must be a boolean')
+  }
+  return ok({
+    seq,
+    summary: summary.value,
+    timeline: timeline.value,
+    plan: plan.value,
+    configOptions: configOptions.value,
+    isReplayingHistory,
+    ...(usage.value !== undefined ? { usage: usage.value } : {}),
+    ...(pendingPermission.value !== undefined
+      ? { pendingPermission: pendingPermission.value }
+      : {}),
+    ...(pendingElicitation.value !== undefined
+      ? { pendingElicitation: pendingElicitation.value }
+      : {}),
+    ...(truncated !== undefined ? { truncated } : {}),
+  })
+}
+
 function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
   if (!isRecord(value)) {
-    return fail('bad_request', 'inbox_snapshot.sessions entries must be objects')
+    return fail('bad_request', 'session summary entries must be objects')
   }
   const ref = parseSessionRef(value.ref)
   if (!ref.ok) return ref
@@ -274,9 +485,22 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
   if (!isNonEmptyBoundedString(agentId, MAX_ID_LENGTH)) {
     return fail('bad_request', `session.agentId must be 1–${MAX_ID_LENGTH} characters`)
   }
+  const agentName = parseOptionalString(value.agentName, MAX_TITLE_LENGTH, 'session.agentName')
+  if (!agentName.ok) return agentName
   const title = value.title
   if (!isBoundedString(title, MAX_TITLE_LENGTH)) {
     return fail('bad_request', `session.title must be at most ${MAX_TITLE_LENGTH} characters`)
+  }
+  const status = value.status
+  if (!isBoundedString(status, MAX_STATUS_LENGTH)) {
+    return fail('bad_request', `session.status must be at most ${MAX_STATUS_LENGTH} characters`)
+  }
+  const displayStatus = value.displayStatus
+  if (!isBoundedString(displayStatus, MAX_STATUS_LENGTH)) {
+    return fail(
+      'bad_request',
+      `session.displayStatus must be at most ${MAX_STATUS_LENGTH} characters`,
+    )
   }
   const bucket = value.bucket
   if (typeof bucket !== 'string' || !isMobileSessionBucket(bucket)) {
@@ -289,11 +513,51 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
       `session.workspaceName must be at most ${MAX_WORKSPACE_NAME_LENGTH} characters`,
     )
   }
+  const cwd = parseOptionalString(value.cwd, MAX_WORKSPACE_NAME_LENGTH, 'session.cwd')
+  if (!cwd.ok) return cwd
+  const authority = parseOptionalString(
+    value.authority,
+    MAX_WORKSPACE_NAME_LENGTH,
+    'session.authority',
+  )
+  if (!authority.ok) return authority
+  const readOnly = value.readOnly
+  if (typeof readOnly !== 'boolean') {
+    return fail('bad_request', 'session.readOnly must be a boolean')
+  }
+  const hasPendingPermission = value.hasPendingPermission
+  if (typeof hasPendingPermission !== 'boolean') {
+    return fail('bad_request', 'session.hasPendingPermission must be a boolean')
+  }
+  const hasPendingElicitation = value.hasPendingElicitation
+  if (typeof hasPendingElicitation !== 'boolean') {
+    return fail('bad_request', 'session.hasPendingElicitation must be a boolean')
+  }
+  const backgroundTaskCount = value.backgroundTaskCount
+  if (!isNonNegativeInteger(backgroundTaskCount)) {
+    return fail('bad_request', 'session.backgroundTaskCount must be a non-negative integer')
+  }
   const updatedAt = value.updatedAt
   if (!isFiniteNumber(updatedAt)) {
     return fail('bad_request', 'session.updatedAt must be a finite number')
   }
-  return ok({ ref: ref.value, agentId, title, bucket, workspaceName, updatedAt })
+  return ok({
+    ref: ref.value,
+    agentId,
+    ...(agentName.value !== undefined ? { agentName: agentName.value } : {}),
+    title,
+    status,
+    displayStatus,
+    bucket,
+    workspaceName,
+    ...(cwd.value !== undefined ? { cwd: cwd.value } : {}),
+    ...(authority.value !== undefined ? { authority: authority.value } : {}),
+    readOnly,
+    hasPendingPermission,
+    hasPendingElicitation,
+    backgroundTaskCount,
+    updatedAt,
+  })
 }
 
 function parseSessionRef(value: unknown): Result<MobileSessionRef> {
@@ -314,6 +578,548 @@ function parseSessionRef(value: unknown): Result<MobileSessionRef> {
   return ok({ windowId, localId, durableId })
 }
 
+function parseTimeline(value: unknown): Result<MobileTimelineItem[]> {
+  if (!Array.isArray(value)) {
+    return fail('bad_request', 'session.timeline must be an array')
+  }
+  if (value.length > MAX_TIMELINE_ITEMS) {
+    return fail('bad_request', `session.timeline must contain at most ${MAX_TIMELINE_ITEMS} items`)
+  }
+  const items: MobileTimelineItem[] = []
+  for (const raw of value) {
+    const item = parseTimelineItem(raw)
+    if (!item.ok) return item
+    items.push(item.value)
+  }
+  return ok(items)
+}
+
+function parseTimelineItem(value: unknown): Result<MobileTimelineItem> {
+  if (!isRecord(value)) return fail('bad_request', 'timeline item must be an object')
+  const kind = value.kind
+  if (typeof kind !== 'string' || !isTimelineItemKind(kind)) {
+    return fail('bad_request', 'timeline item kind is not known')
+  }
+  switch (kind) {
+    case 'message':
+      return parseTimelineMessage(value)
+    case 'toolCall':
+      return parseTimelineToolCall(value)
+    case 'notice':
+      return parseTimelineNotice(value)
+  }
+  return fail('bad_request', 'timeline item kind is not known')
+}
+
+function parseTimelineMessage(value: Record<string, unknown>): Result<MobileTimelineMessageItem> {
+  const id = value.id
+  if (!isNonEmptyBoundedString(id, MAX_ID_LENGTH)) {
+    return fail('bad_request', 'message.id must be 1–128 characters')
+  }
+  const role = value.role
+  if (typeof role !== 'string' || !isMessageRole(role)) {
+    return fail('bad_request', 'message.role is not known')
+  }
+  const text = value.text
+  if (!isBoundedString(text, MAX_TEXT_LENGTH)) {
+    return fail('bad_request', 'message.text is too large')
+  }
+  const streaming = value.streaming
+  if (typeof streaming !== 'boolean') {
+    return fail('bad_request', 'message.streaming must be a boolean')
+  }
+  const memoryTrimmed = parseOptionalBoolean(value.memoryTrimmed, 'message.memoryTrimmed')
+  if (!memoryTrimmed.ok) return memoryTrimmed
+  const hasNonText = parseOptionalBoolean(value.hasNonText, 'message.hasNonText')
+  if (!hasNonText.ok) return hasNonText
+  return ok({
+    kind: 'message',
+    id,
+    role,
+    text,
+    streaming,
+    ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
+    ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
+  })
+}
+
+function parseTimelineToolCall(value: Record<string, unknown>): Result<MobileTimelineToolCallItem> {
+  const id = value.id
+  if (!isNonEmptyBoundedString(id, MAX_ID_LENGTH)) {
+    return fail('bad_request', 'toolCall.id must be 1–128 characters')
+  }
+  const title = value.title
+  if (!isBoundedString(title, MAX_TITLE_LENGTH)) {
+    return fail('bad_request', 'toolCall.title is too large')
+  }
+  const toolKind = value.toolKind
+  if (!isBoundedString(toolKind, MAX_STATUS_LENGTH)) {
+    return fail('bad_request', 'toolCall.toolKind is too large')
+  }
+  const status = value.status
+  if (!isNonEmptyBoundedString(status, MAX_STATUS_LENGTH)) {
+    return fail('bad_request', 'toolCall.status must be 1–64 characters')
+  }
+  const preview = parseOptionalString(value.preview, MAX_PREVIEW_LENGTH, 'toolCall.preview')
+  if (!preview.ok) return preview
+  const hasDetail = value.hasDetail
+  if (typeof hasDetail !== 'boolean') {
+    return fail('bad_request', 'toolCall.hasDetail must be a boolean')
+  }
+  const diffs = parseOptional(value.diffs, parseDiffStats)
+  if (!diffs.ok) return diffs
+  const locations = parseOptional(value.locations, parseLocations)
+  if (!locations.ok) return locations
+  const memoryTrimmed = parseOptionalBoolean(value.memoryTrimmed, 'toolCall.memoryTrimmed')
+  if (!memoryTrimmed.ok) return memoryTrimmed
+  return ok({
+    kind: 'toolCall',
+    id,
+    title,
+    toolKind,
+    status,
+    hasDetail,
+    ...(preview.value !== undefined ? { preview: preview.value } : {}),
+    ...(diffs.value !== undefined ? { diffs: diffs.value } : {}),
+    ...(locations.value !== undefined ? { locations: locations.value } : {}),
+    ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
+  })
+}
+
+function parseTimelineNotice(value: Record<string, unknown>): Result<MobileTimelineNoticeItem> {
+  const id = value.id
+  if (!isNonEmptyBoundedString(id, MAX_ID_LENGTH)) {
+    return fail('bad_request', 'notice.id must be 1–128 characters')
+  }
+  const noticeKind = value.noticeKind
+  if (typeof noticeKind !== 'string' || !isNoticeKind(noticeKind)) {
+    return fail('bad_request', 'notice.noticeKind is not known')
+  }
+  const phase = value.phase
+  if (typeof phase !== 'string' || !isNoticePhase(phase)) {
+    return fail('bad_request', 'notice.phase is not known')
+  }
+  const text = parseOptionalString(value.text, MAX_TITLE_LENGTH, 'notice.text')
+  if (!text.ok) return text
+  return ok({
+    kind: 'notice',
+    id,
+    noticeKind,
+    phase,
+    ...(text.value !== undefined ? { text: text.value } : {}),
+  })
+}
+
+function parseDiffStats(value: unknown): Result<MobileToolCallDiffStat[]> {
+  if (!Array.isArray(value) || value.length > MAX_TOOL_CALL_DIFFS) {
+    return fail('bad_request', `toolCall.diffs must be an array of at most ${MAX_TOOL_CALL_DIFFS}`)
+  }
+  const diffs: MobileToolCallDiffStat[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) return fail('bad_request', 'toolCall.diffs entries must be objects')
+    const path = raw.path
+    if (!isBoundedString(path, MAX_WORKSPACE_NAME_LENGTH)) {
+      return fail('bad_request', 'toolCall.diffs.path is too large')
+    }
+    const added = raw.added
+    const removed = raw.removed
+    if (!isNonNegativeInteger(added) || !isNonNegativeInteger(removed)) {
+      return fail('bad_request', 'toolCall.diffs.added/removed must be non-negative integers')
+    }
+    diffs.push({ path, added, removed })
+  }
+  return ok(diffs)
+}
+
+function parseLocations(value: unknown): Result<MobileToolCallLocation[]> {
+  if (!Array.isArray(value) || value.length > MAX_TOOL_CALL_LOCATIONS) {
+    return fail(
+      'bad_request',
+      `toolCall.locations must be an array of at most ${MAX_TOOL_CALL_LOCATIONS}`,
+    )
+  }
+  const locations: MobileToolCallLocation[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) return fail('bad_request', 'toolCall.locations entries must be objects')
+    const path = raw.path
+    if (!isBoundedString(path, MAX_WORKSPACE_NAME_LENGTH)) {
+      return fail('bad_request', 'toolCall.locations.path is too large')
+    }
+    const line = raw.line
+    if (line !== undefined && !isNonNegativeInteger(line)) {
+      return fail('bad_request', 'toolCall.locations.line must be a non-negative integer')
+    }
+    locations.push({ path, ...(line !== undefined ? { line } : {}) })
+  }
+  return ok(locations)
+}
+
+function parsePlan(value: unknown): Result<MobilePlanEntry[]> {
+  if (!Array.isArray(value) || value.length > MAX_PLAN_ENTRIES) {
+    return fail('bad_request', `session.plan must be an array of at most ${MAX_PLAN_ENTRIES}`)
+  }
+  const plan: MobilePlanEntry[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) return fail('bad_request', 'plan entries must be objects')
+    const content = raw.content
+    if (!isBoundedString(content, MAX_TEXT_LENGTH)) {
+      return fail('bad_request', 'plan.content is too large')
+    }
+    const status = raw.status
+    if (typeof status !== 'string' || !isPlanEntryStatus(status)) {
+      return fail('bad_request', 'plan.status is not known')
+    }
+    const priority = parseOptionalString(raw.priority, MAX_STATUS_LENGTH, 'plan.priority')
+    if (!priority.ok) return priority
+    plan.push({
+      content,
+      status,
+      ...(priority.value !== undefined ? { priority: priority.value } : {}),
+    })
+  }
+  return ok(plan)
+}
+
+function parseConfigOptions(value: unknown): Result<MobileConfigOption[]> {
+  if (!Array.isArray(value) || value.length > MAX_CONFIG_OPTIONS) {
+    return fail(
+      'bad_request',
+      `session.configOptions must be an array of at most ${MAX_CONFIG_OPTIONS}`,
+    )
+  }
+  const options: MobileConfigOption[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) return fail('bad_request', 'config option entries must be objects')
+    const id = raw.id
+    if (!isNonEmptyBoundedString(id, MAX_ID_LENGTH)) {
+      return fail('bad_request', 'configOption.id must be 1–128 characters')
+    }
+    const name = raw.name
+    if (!isBoundedString(name, MAX_TITLE_LENGTH)) {
+      return fail('bad_request', 'configOption.name is too large')
+    }
+    const category = parseOptionalString(raw.category, MAX_STATUS_LENGTH, 'configOption.category')
+    if (!category.ok) return category
+    const type = raw.type
+    if (typeof type !== 'string' || !isConfigOptionType(type)) {
+      return fail('bad_request', 'configOption.type is not known')
+    }
+    const currentValue = raw.currentValue
+    if (!isBoundedString(currentValue, MAX_TITLE_LENGTH)) {
+      return fail('bad_request', 'configOption.currentValue is too large')
+    }
+    options.push({
+      id,
+      name,
+      type,
+      currentValue,
+      ...(category.value !== undefined ? { category: category.value } : {}),
+    })
+  }
+  return ok(options)
+}
+
+function parseUsage(value: unknown): Result<MobileUsage> {
+  if (!isRecord(value)) return fail('bad_request', 'session.usage must be an object')
+  const used = value.used
+  const size = value.size
+  if (!isNonNegativeInteger(used) || !isNonNegativeInteger(size)) {
+    return fail('bad_request', 'session.usage.used/size must be non-negative integers')
+  }
+  let cost: { amount: number; currency: string } | undefined
+  if (value.cost !== undefined) {
+    if (!isRecord(value.cost)) return fail('bad_request', 'session.usage.cost must be an object')
+    const amount = value.cost.amount
+    const currency = value.cost.currency
+    if (!isFiniteNumber(amount) || !isNonEmptyBoundedString(currency, 16)) {
+      return fail('bad_request', 'session.usage.cost is malformed')
+    }
+    cost = { amount, currency }
+  }
+  const costEstimated = parseOptionalBoolean(value.costEstimated, 'session.usage.costEstimated')
+  if (!costEstimated.ok) return costEstimated
+  return ok({
+    used,
+    size,
+    ...(cost !== undefined ? { cost } : {}),
+    ...(costEstimated.value !== undefined ? { costEstimated: costEstimated.value } : {}),
+  })
+}
+
+function parsePendingPermission(value: unknown): Result<MobilePendingPermission> {
+  if (!isRecord(value)) return fail('bad_request', 'session.pendingPermission must be an object')
+  const requestId = parseOptionalString(
+    value.requestId,
+    MAX_REQUEST_ID_LENGTH,
+    'permission.requestId',
+  )
+  if (!requestId.ok) return requestId
+  const toolCallId = value.toolCallId
+  if (!isNonEmptyBoundedString(toolCallId, MAX_ID_LENGTH)) {
+    return fail('bad_request', 'permission.toolCallId must be 1–128 characters')
+  }
+  const title = value.title
+  if (!isBoundedString(title, MAX_TITLE_LENGTH)) {
+    return fail('bad_request', 'permission.title is too large')
+  }
+  const kind = parseOptionalString(value.kind, MAX_STATUS_LENGTH, 'permission.kind')
+  if (!kind.ok) return kind
+  if (!Array.isArray(value.options) || value.options.length > MAX_PERMISSION_OPTIONS) {
+    return fail(
+      'bad_request',
+      `permission.options must be an array of at most ${MAX_PERMISSION_OPTIONS}`,
+    )
+  }
+  const options: MobilePermissionOption[] = []
+  for (const raw of value.options) {
+    if (!isRecord(raw)) return fail('bad_request', 'permission.options entries must be objects')
+    const optionId = raw.optionId
+    if (!isNonEmptyBoundedString(optionId, MAX_ID_LENGTH)) {
+      return fail('bad_request', 'permission.options.optionId must be 1–128 characters')
+    }
+    const name = raw.name
+    if (!isBoundedString(name, MAX_TITLE_LENGTH)) {
+      return fail('bad_request', 'permission.options.name is too large')
+    }
+    const optionKind = parseOptionalString(raw.kind, MAX_STATUS_LENGTH, 'permission.options.kind')
+    if (!optionKind.ok) return optionKind
+    options.push({
+      optionId,
+      name,
+      ...(optionKind.value !== undefined ? { kind: optionKind.value } : {}),
+    })
+  }
+  let autoResolve: { optionId: string; deadlineAt?: number } | undefined
+  if (value.autoResolve !== undefined) {
+    if (!isRecord(value.autoResolve)) {
+      return fail('bad_request', 'permission.autoResolve must be an object')
+    }
+    const optionId = value.autoResolve.optionId
+    if (!isNonEmptyBoundedString(optionId, MAX_ID_LENGTH)) {
+      return fail('bad_request', 'permission.autoResolve.optionId must be 1–128 characters')
+    }
+    const deadlineAt = value.autoResolve.deadlineAt
+    if (deadlineAt !== undefined && !isFiniteNumber(deadlineAt)) {
+      return fail('bad_request', 'permission.autoResolve.deadlineAt must be finite')
+    }
+    autoResolve = { optionId, ...(deadlineAt !== undefined ? { deadlineAt } : {}) }
+  }
+  return ok({
+    toolCallId,
+    title,
+    options,
+    ...(requestId.value !== undefined ? { requestId: requestId.value } : {}),
+    ...(kind.value !== undefined ? { kind: kind.value } : {}),
+    ...(autoResolve !== undefined ? { autoResolve } : {}),
+  })
+}
+
+function parsePendingElicitation(value: unknown): Result<MobilePendingElicitation> {
+  if (!isRecord(value)) return fail('bad_request', 'session.pendingElicitation must be an object')
+  const requestId = parseOptionalString(
+    value.requestId,
+    MAX_REQUEST_ID_LENGTH,
+    'elicitation.requestId',
+  )
+  if (!requestId.ok) return requestId
+  const mode = value.mode
+  if (!isNonEmptyBoundedString(mode, MAX_STATUS_LENGTH)) {
+    return fail('bad_request', 'elicitation.mode must be 1–64 characters')
+  }
+  const message = value.message
+  if (!isBoundedString(message, MAX_TEXT_LENGTH)) {
+    return fail('bad_request', 'elicitation.message is too large')
+  }
+  const title = parseOptionalString(value.title, MAX_TITLE_LENGTH, 'elicitation.title')
+  if (!title.ok) return title
+  const toolCallId = parseOptionalString(value.toolCallId, MAX_ID_LENGTH, 'elicitation.toolCallId')
+  if (!toolCallId.ok) return toolCallId
+  return ok({
+    mode,
+    message,
+    ...(requestId.value !== undefined ? { requestId: requestId.value } : {}),
+    ...(title.value !== undefined ? { title: title.value } : {}),
+    ...(toolCallId.value !== undefined ? { toolCallId: toolCallId.value } : {}),
+  })
+}
+
+function parseSessionDeltaFrame(frame: Record<string, unknown>): Result<SessionDeltaFrame> {
+  const seq = frame.seq
+  if (!isNonNegativeInteger(seq)) {
+    return fail('bad_request', 'session_delta.seq must be a non-negative integer')
+  }
+  const ref = parseSessionRef(frame.ref)
+  if (!ref.ok) return ref
+  const rawEvents = frame.events
+  if (!Array.isArray(rawEvents)) {
+    return fail('bad_request', 'session_delta.events must be an array')
+  }
+  if (rawEvents.length > MAX_EVENTS_PER_DELTA) {
+    return fail(
+      'bad_request',
+      `session_delta.events must contain at most ${MAX_EVENTS_PER_DELTA} entries`,
+    )
+  }
+  const events: MobileSessionEvent[] = []
+  for (const raw of rawEvents) {
+    const event = parseSessionEvent(raw)
+    if (!event.ok) return event
+    events.push(event.value)
+  }
+  return ok({ type: 'session_delta', seq, ref: ref.value, events })
+}
+
+function parseSessionEvent(value: unknown): Result<MobileSessionEvent> {
+  if (!isRecord(value)) return fail('bad_request', 'session event must be an object')
+  const type = value.type
+  if (typeof type !== 'string') {
+    return fail('bad_request', 'session event.type must be a string')
+  }
+  switch (type) {
+    case 'message_upsert':
+      return parseMessageUpsertEvent(value)
+    case 'tool_call_upsert': {
+      if (!isRecord(value.item)) {
+        return fail('bad_request', 'tool_call_upsert.item must be an object')
+      }
+      const item = parseTimelineToolCall(value.item)
+      if (!item.ok) return item
+      return ok({ type: 'tool_call_upsert', item: item.value })
+    }
+    case 'timeline_item_added': {
+      const item = parseTimelineItem(value.item)
+      if (!item.ok) return item
+      return ok({ type: 'timeline_item_added', item: item.value })
+    }
+    case 'timeline_item_removed': {
+      const id = value.id
+      if (!isNonEmptyBoundedString(id, MAX_ID_LENGTH)) {
+        return fail('bad_request', 'timeline_item_removed.id must be 1–128 characters')
+      }
+      return ok({ type: 'timeline_item_removed', id })
+    }
+    case 'plan_snapshot': {
+      const plan = parsePlan(value.plan)
+      if (!plan.ok) return plan
+      return ok({ type: 'plan_snapshot', plan: plan.value })
+    }
+    case 'config_options_snapshot': {
+      const options = parseConfigOptions(value.options)
+      if (!options.ok) return options
+      return ok({ type: 'config_options_snapshot', options: options.value })
+    }
+    case 'summary_changed': {
+      const summary = parseSessionSummary(value.summary)
+      if (!summary.ok) return summary
+      return ok({ type: 'summary_changed', summary: summary.value })
+    }
+    case 'permission_upsert': {
+      const permission = parsePendingPermission(value.permission)
+      if (!permission.ok) return permission
+      return ok({ type: 'permission_upsert', permission: permission.value })
+    }
+    case 'permission_cleared':
+      return ok({ type: 'permission_cleared' })
+    case 'elicitation_upsert': {
+      const elicitation = parsePendingElicitation(value.elicitation)
+      if (!elicitation.ok) return elicitation
+      return ok({ type: 'elicitation_upsert', elicitation: elicitation.value })
+    }
+    case 'elicitation_cleared':
+      return ok({ type: 'elicitation_cleared' })
+    default:
+      return fail('bad_request', `unknown session event type: ${type}`)
+  }
+}
+
+function parseMessageUpsertEvent(value: Record<string, unknown>): Result<MobileSessionEvent> {
+  const id = value.id
+  if (!isNonEmptyBoundedString(id, MAX_ID_LENGTH)) {
+    return fail('bad_request', 'message_upsert.id must be 1–128 characters')
+  }
+  const role = value.role
+  if (typeof role !== 'string' || !isMessageRole(role)) {
+    return fail('bad_request', 'message_upsert.role is not known')
+  }
+  const textAppend = parseOptionalString(
+    value.textAppend,
+    MAX_TEXT_LENGTH,
+    'message_upsert.textAppend',
+  )
+  if (!textAppend.ok) return textAppend
+  const textReplace = parseOptionalString(
+    value.textReplace,
+    MAX_TEXT_LENGTH,
+    'message_upsert.textReplace',
+  )
+  if (!textReplace.ok) return textReplace
+  const streaming = value.streaming
+  if (typeof streaming !== 'boolean') {
+    return fail('bad_request', 'message_upsert.streaming must be a boolean')
+  }
+  const memoryTrimmed = parseOptionalBoolean(value.memoryTrimmed, 'message_upsert.memoryTrimmed')
+  if (!memoryTrimmed.ok) return memoryTrimmed
+  const hasNonText = parseOptionalBoolean(value.hasNonText, 'message_upsert.hasNonText')
+  if (!hasNonText.ok) return hasNonText
+  return ok({
+    type: 'message_upsert',
+    id,
+    role,
+    streaming,
+    ...(textAppend.value !== undefined ? { textAppend: textAppend.value } : {}),
+    ...(textReplace.value !== undefined ? { textReplace: textReplace.value } : {}),
+    ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
+    ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
+  })
+}
+
+function parseSessionRemovedFrame(frame: Record<string, unknown>): Result<SessionRemovedFrame> {
+  const ref = parseSessionRef(frame.ref)
+  if (!ref.ok) return ref
+  return ok({ type: 'session_removed', ref: ref.value })
+}
+
+function parseCommandResultFrame(frame: Record<string, unknown>): Result<ServerFrame> {
+  const requestId = frame.requestId
+  if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+    return fail('bad_request', 'command_result.requestId must be 1–128 characters')
+  }
+  const success = frame.ok
+  if (typeof success !== 'boolean') {
+    return fail('bad_request', 'command_result.ok must be a boolean')
+  }
+  const error = frame.error
+  if (error !== undefined && !isMobileErrorCode(error)) {
+    return fail('bad_request', 'command_result.error is not a known code')
+  }
+  return ok({
+    type: 'command_result',
+    requestId,
+    ok: success,
+    ...(frame.result !== undefined ? { result: frame.result } : {}),
+    ...(error !== undefined ? { error } : {}),
+  })
+}
+
+function parseResyncRequiredFrame(frame: Record<string, unknown>): Result<ResyncRequiredFrame> {
+  const scope = frame.scope
+  if (typeof scope !== 'string' || !isResyncScope(scope)) {
+    return fail('bad_request', 'resync_required.scope is not known')
+  }
+  const reason = frame.reason
+  if (!isBoundedString(reason, MAX_REASON_LENGTH)) {
+    return fail('bad_request', 'resync_required.reason is too large')
+  }
+  const ref = frame.ref === undefined ? undefined : parseSessionRef(frame.ref)
+  if (ref !== undefined && !ref.ok) return ref
+  return ok({
+    type: 'resync_required',
+    scope,
+    reason,
+    ...(ref !== undefined && ref.ok ? { ref: ref.value } : {}),
+  })
+}
+
 function parseServerErrorFrame(frame: Record<string, unknown>): Result<ServerErrorFrame> {
   const code = frame.code
   if (!isMobileErrorCode(code)) return fail('bad_request', 'server_error.code is not known')
@@ -328,10 +1134,78 @@ function parseServerErrorFrame(frame: Record<string, unknown>): Result<ServerErr
   return ok({ type: 'server_error', code, message, retryable })
 }
 
+function parseOptional<T>(
+  value: unknown,
+  parser: (value: unknown) => Result<T>,
+): Result<T | undefined> {
+  if (value === undefined) return ok(undefined)
+  return parser(value)
+}
+
+function parseOptionalString(
+  value: unknown,
+  maxLength: number,
+  field: string,
+): Result<string | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!isBoundedString(value, maxLength)) {
+    return fail('bad_request', `${field} must be at most ${maxLength} characters`)
+  }
+  return ok(value)
+}
+
+function parseOptionalBoolean(value: unknown, field: string): Result<boolean | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (typeof value !== 'boolean') return fail('bad_request', `${field} must be a boolean`)
+  return ok(value)
+}
+
 const MOBILE_SESSION_BUCKET_SET: ReadonlySet<string> = new Set(MOBILE_SESSION_BUCKETS)
 
 function isMobileSessionBucket(value: unknown): value is MobileSessionBucket {
   return typeof value === 'string' && MOBILE_SESSION_BUCKET_SET.has(value)
+}
+
+const MESSAGE_ROLE_SET: ReadonlySet<string> = new Set(MOBILE_MESSAGE_ROLES)
+
+function isMessageRole(value: unknown): value is MobileMessageRole {
+  return typeof value === 'string' && MESSAGE_ROLE_SET.has(value)
+}
+
+const TIMELINE_ITEM_KIND_SET: ReadonlySet<string> = new Set(MOBILE_TIMELINE_ITEM_KINDS)
+
+function isTimelineItemKind(value: unknown): value is MobileTimelineItemKind {
+  return typeof value === 'string' && TIMELINE_ITEM_KIND_SET.has(value)
+}
+
+const NOTICE_KIND_SET: ReadonlySet<string> = new Set(MOBILE_NOTICE_KINDS)
+
+function isNoticeKind(value: unknown): value is MobileNoticeKind {
+  return typeof value === 'string' && NOTICE_KIND_SET.has(value)
+}
+
+const NOTICE_PHASE_SET: ReadonlySet<string> = new Set(MOBILE_NOTICE_PHASES)
+
+function isNoticePhase(value: unknown): value is MobileNoticePhase {
+  return typeof value === 'string' && NOTICE_PHASE_SET.has(value)
+}
+
+const PLAN_ENTRY_STATUS_SET: ReadonlySet<string> = new Set(MOBILE_PLAN_ENTRY_STATUSES)
+
+function isPlanEntryStatus(value: unknown): value is MobilePlanEntryStatus {
+  return typeof value === 'string' && PLAN_ENTRY_STATUS_SET.has(value)
+}
+
+const CONFIG_OPTION_TYPE_SET: ReadonlySet<string> = new Set(MOBILE_CONFIG_OPTION_TYPES)
+
+function isConfigOptionType(value: unknown): value is MobileConfigOptionType {
+  return typeof value === 'string' && CONFIG_OPTION_TYPE_SET.has(value)
+}
+
+const RESYNC_SCOPE_SET: ReadonlySet<string> = new Set(MOBILE_RESYNC_SCOPES)
+
+function isResyncScope(value: unknown): value is MobileResyncScope {
+  return typeof value === 'string' && RESYNC_SCOPE_SET.has(value)
 }
 
 const PAIR_DEVICE_PLATFORM_SET: ReadonlySet<string> = new Set(PAIR_DEVICE_PLATFORMS)

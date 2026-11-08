@@ -58,9 +58,14 @@ test('src 模式项的 src/index.ts 存在', () => {
   }
 })
 
-test('inputDirsFor: main 吃 8 项、renderer 吃 5 项（含 extension-gallery/dist）', () => {
+test('inputDirsFor: main 吃 8 项、renderer 吃 6 项（含 extension-gallery/dist）', () => {
   assert.deepEqual(
-    inputDirsFor('main').map((p) => p.slice(REPO_ROOT.length + 1).split(sep).join('/')),
+    inputDirsFor('main').map((p) =>
+      p
+        .slice(REPO_ROOT.length + 1)
+        .split(sep)
+        .join('/'),
+    ),
     [
       'packages/primitives/src',
       'packages/platform/src',
@@ -73,10 +78,16 @@ test('inputDirsFor: main 吃 8 项、renderer 吃 5 项（含 extension-gallery/
     ],
   )
   assert.deepEqual(
-    inputDirsFor('renderer').map((p) => p.slice(REPO_ROOT.length + 1).split(sep).join('/')),
+    inputDirsFor('renderer').map((p) =>
+      p
+        .slice(REPO_ROOT.length + 1)
+        .split(sep)
+        .join('/'),
+    ),
     [
       'packages/primitives/src',
       'packages/platform/src',
+      'packages/acp-view-model/src',
       'packages/workbench-ui/src',
       'packages/extensions-common/src',
       'packages/extension-gallery/dist',
@@ -93,12 +104,16 @@ test('aliasMapFor / externExcludesFor / optimizeExcludesFor 输出快照', () =>
     '@universe-editor/mobile-protocol',
   ])
   for (const target of Object.values(mainAlias)) {
-    assert.ok(target.endsWith(`${sep}src${sep}index.ts`), `alias target not src/index.ts: ${target}`)
+    assert.ok(
+      target.endsWith(`${sep}src${sep}index.ts`),
+      `alias target not src/index.ts: ${target}`,
+    )
   }
   const rendererAlias = aliasMapFor('renderer')
   assert.deepEqual(Object.keys(rendererAlias), [
     '@universe-editor/primitives',
     '@universe-editor/platform',
+    '@universe-editor/acp-view-model',
     '@universe-editor/workbench-ui',
     '@universe-editor/extensions-common',
   ])
@@ -115,6 +130,7 @@ test('aliasMapFor / externExcludesFor / optimizeExcludesFor 输出快照', () =>
   assert.deepEqual(optimizeExcludesFor('renderer'), [
     '@universe-editor/primitives',
     '@universe-editor/platform',
+    '@universe-editor/acp-view-model',
     '@universe-editor/workbench-ui',
     '@universe-editor/extensions-common',
   ])
@@ -137,7 +153,9 @@ test('packagesRequiringDist: 除 workbench-ui 外的 8 项', () => {
 })
 
 test('tokensCssFile 指向 workbench-ui 的 tokens.css 且文件存在', () => {
-  assert.ok(tokensCssFile().endsWith('packages/workbench-ui/src/theme/tokens.css'.split('/').join(sep)))
+  assert.ok(
+    tokensCssFile().endsWith('packages/workbench-ui/src/theme/tokens.css'.split('/').join(sep)),
+  )
   assert.ok(existsSync(tokensCssFile()))
 })
 
@@ -146,9 +164,13 @@ test('反漂移守卫：config 与 dev-run 不再手写清单', () => {
   // 剥掉行注释：注释里允许提及 @universe-editor/ 包名（如本 config 解释 tokens.css 排序），不计入手写清单。
   const code = config.replace(/^\s*\/\/.*$/gm, '')
   const occurrences = code.match(/@universe-editor\//g) ?? []
-  assert.equal(occurrences.length, 1, 'config 里 @universe-editor/ 应只剩 tokens.css 文件粒度 alias 一处')
+  assert.equal(
+    occurrences.length,
+    1,
+    'config 里 @universe-editor/ 应只剩 tokens.css 文件粒度 alias 一处',
+  )
   assert.ok(
-    code.includes("@universe-editor/workbench-ui/tokens.css"),
+    code.includes('@universe-editor/workbench-ui/tokens.css'),
     '唯一保留的字面量应是 workbench-ui/tokens.css',
   )
   const devRun = readFileSync(resolve(REPO_ROOT, 'apps/editor/scripts/dev-run.mjs'), 'utf8')

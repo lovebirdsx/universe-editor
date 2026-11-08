@@ -1,0 +1,1356 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Tiny safe markdown parser for ACP agent output. Produces an AST that a
+ *  React renderer consumes; no raw HTML is ever emitted from user-supplied
+ *  text — escaping is React's job (text nodes are escaped automatically).
+ *
+ *  Supported block tokens:
+ *    - heading       `#` ... `######`
+ *    - code fence    ```lang\n...\n```
+ *    - blockquote    `> ...`
+ *    - unordered     `- ` / `* ` / `+ `
+ *    - ordered       `1. ` (any positive integer + `.`)
+ *    - hr            `---` / `***` / `___`
+ *    - table         GFM pipe table (`| a | b |` + `| --- | :-: |` row)
+ *    - math block    `$$ ... $$` (unterminated runs to EOF for streaming)
+ *    - paragraph     anything else (joined runs of non-blank lines)
+ *
+ *  Supported inline tokens:
+ *    - **bold**, __bold__
+ *    - *italic*, _italic_
+ *    - ~~strikethrough~~
+ *    - `inline code`
+ *    - $inline math$ and mid-paragraph $$display math$$
+ *    - [label](url)
+ *    - [label](scheme:target)  (only schemes the consumer opted into via `extraHrefSchemes`)
+ *    - ![alt](url)       (image — https/file only)
+ *    - <url>           (autolink — http/https/file only)
+ *    - <a id="x"></a> / <a name="x"></a> (empty in-document anchor target)
+ *    - bare http(s)://… / file://…
+ *    - `\\` escapes the next punctuation char
+ *--------------------------------------------------------------------------------------------*/
+
+import { looksLikeFilePath, matchFilePathAt } from './filePathLink.js'
+
+export type MdNode =
+  | { readonly type: 'paragraph'; readonly children: readonly MdInline[]; readonly line?: number }
+  | {
+      readonly type: 'heading'
+      readonly level: 1 | 2 | 3 | 4 | 5 | 6
+      readonly children: readonly MdInline[]
+      readonly line?: number
+    }
+  | {
+      readonly type: 'code_fence'
+      readonly lang: string
+      readonly code: string
+      readonly line?: number
+    }
+  | {
+      readonly type: 'list'
+      readonly ordered: boolean
+      // First item's number for ordered lists (a separated `2. …` list keeps its
+      // start); omitted for unordered lists.
+      readonly start?: number
+      readonly items: readonly MdListItem[]
+      readonly line?: number
+    }
+  | { readonly type: 'blockquote'; readonly children: readonly MdNode[]; readonly line?: number }
+  | {
+      readonly type: 'frontmatter'
+      readonly entries: readonly (readonly [key: string, value: string])[]
+      readonly line?: number
+    }
+  | {
+      readonly type: 'table'
+      readonly align: readonly (TableAlign | null)[]
+      readonly header: readonly (readonly MdInline[])[]
+      readonly rows: readonly (readonly (readonly MdInline[])[])[]
+      readonly line?: number
+    }
+  | { readonly type: 'hr'; readonly line?: number }
+  | {
+      readonly type: 'math_block'
+      /** Raw TeX without the `$$` delimiters. */
+      readonly tex: string
+      readonly display: true
+      readonly line?: number
+    }
+
+export type TableAlign = 'left' | 'center' | 'right'
+
+/**
+ * One item of a list. `inline` is the item's own leading text (first line plus
+ * any lazy top-level continuation lines), rendered directly inside the `<li>`.
+ * `children` holds indented block content (nested lists, code fences, extra
+ * paragraphs, blockquotes …) and is omitted entirely when the item has none, so
+ * plain items keep their simple shape.
+ */
+export type MdListItem = {
+  readonly inline: readonly MdInline[]
+  readonly checked: boolean | null
+  readonly children?: readonly MdNode[]
+}
+
+export type MdInline =
+  | { readonly type: 'text'; readonly text: string }
+  | { readonly type: 'bold'; readonly children: readonly MdInline[] }
+  | { readonly type: 'italic'; readonly children: readonly MdInline[] }
+  | { readonly type: 'strike'; readonly children: readonly MdInline[] }
+  | { readonly type: 'code'; readonly text: string }
+  | { readonly type: 'link'; readonly href: string; readonly children: readonly MdInline[] }
+  | {
+      readonly type: 'filepath'
+      readonly path: string
+      readonly line?: number
+      readonly col?: number
+      readonly endLine?: number
+    }
+  | { readonly type: 'image'; readonly src: string; readonly alt: string }
+  | { readonly type: 'anchor'; readonly id: string }
+  | {
+      readonly type: 'math_inline'
+      /** Raw TeX without the `$` / `$$` delimiters. */
+      readonly tex: string
+      /** `$$…$$` mid-paragraph renders in KaTeX display mode. */
+      readonly display: boolean
+    }
+  | { readonly type: 'softbreak' }
+
+/** The subset of options nested blocks inherit (see `parseMarkdown`). */
+function toChildOptions(
+  options: ParseMarkdownOptions | undefined,
+): ParseMarkdownOptions | undefined {
+  const schemes = options?.extraHrefSchemes
+  const mathOff = options?.math === false
+  if ((schemes === undefined || schemes.length === 0) && !mathOff) return undefined
+  return {
+    ...(schemes !== undefined && schemes.length > 0 ? { extraHrefSchemes: schemes } : {}),
+    ...(mathOff ? { math: false } : {}),
+  }
+}
+
+/**
+ * Options for {@link parseMarkdown}. `frontmatter` enables YAML preamble
+ * handling: when set, a `---`-fenced block at the very start of the document
+ * becomes a single `frontmatter` node instead of an `hr` + paragraph. Off by
+ * default so the ACP chat and other streaming consumers treat `---` as an `hr`.
+ *
+ * `extraHrefSchemes` opts specific consumers into additional explicit-link
+ * schemes (`[label](doc:x)`) — the release-notes view passes its policy's
+ * `doc:`/`command:` so those targets survive as link nodes instead of degrading
+ * to literal text. Empty by default: ACP chat, docs and previews keep treating
+ * every unknown scheme as literal text.
+ */
+export interface ParseMarkdownOptions {
+  readonly frontmatter?: boolean
+  readonly extraHrefSchemes?: readonly string[]
+  /**
+   * LaTeX math (`$…$`, `$$…$$`, and ` ```math ` fences at render time).
+   * Omitted = enabled; only an explicit `false` disables it. Opt-out keeps the
+   * default `parseMarkdown(text)` call sites (ACP chat and docs) math-aware.
+   */
+  readonly math?: boolean
+}
+
+/**
+ * Parse a markdown string into an array of block-level nodes. Pure — no React,
+ * no DOM. The AST is stable for a stable input; static consumers should call
+ * `parseMarkdownCached` (markdownParseCache.ts) so remounts reuse it.
+ *
+ * `lineOffset` is internal: container blocks (blockquote / list items) re-parse
+ * their dedented body with the body's 0-based start line in the ORIGINAL source
+ * so every nested block keeps an ABSOLUTE source `line`. External callers leave
+ * it at 0. This matters because the preview's scroll map interpolates between
+ * `data-line` control points and assumes they grow monotonically with pixel
+ * position — a nested block carrying a small relative line would be a backwards
+ * control point and break the Outline's active-heading tracking.
+ */
+export function parseMarkdown(
+  input: string,
+  options?: ParseMarkdownOptions,
+  lineOffset = 0,
+): readonly MdNode[] {
+  const lines = input.replace(/\r\n?/g, '\n').split('\n')
+  const out: MdNode[] = []
+  let i = 0
+  // Inline/container blocks inherit the extra link schemes, never `frontmatter`:
+  // a `---` inside a nested block is an hr, not a second preamble.
+  const childOptions = toChildOptions(options)
+  const mathEnabled = options?.math !== false
+
+  // YAML frontmatter: a `---` on the first line closed by a later `---`/`...`.
+  // Emitted as one node the preview renders as a table; skipped otherwise.
+  if (options?.frontmatter === true && /^---[ \t]*$/.test(lines[0] ?? '')) {
+    for (let j = 1; j < lines.length; j++) {
+      if (/^(?:---|\.\.\.)[ \t]*$/.test(lines[j] ?? '')) {
+        out.push({
+          type: 'frontmatter',
+          entries: parseFrontmatterEntries(lines.slice(1, j)),
+          line: lineOffset,
+        })
+        i = j + 1
+        break
+      }
+    }
+  }
+
+  while (i < lines.length) {
+    const line = lines[i] ?? ''
+
+    // Skip blank lines between blocks.
+    if (line.trim() === '') {
+      i++
+      continue
+    }
+
+    // Source line of this block (0-based, = monaco lineNumber - 1). Consumed by
+    // the markdown preview for scroll sync; ACP chat ignores it.
+    const blockStart = i
+
+    // Fenced code block. The opening fence carries the marker (3+ backticks or
+    // tildes); the block ends at the first line closing that same marker, or at
+    // EOF for a partial stream.
+    const fence = matchCodeFenceStart(line)
+    if (fence) {
+      i++
+      const codeLines: string[] = []
+      while (i < lines.length && !isCodeFenceEnd(lines[i] ?? '', fence.marker)) {
+        codeLines.push(lines[i] ?? '')
+        i++
+      }
+      // Consume the closing fence if present; an unterminated fence still
+      // produces a code block ending at EOF (defensive against partial streams).
+      if (i < lines.length) i++
+      out.push({
+        type: 'code_fence',
+        lang: fence.lang,
+        code: codeLines.join('\n'),
+        line: blockStart + lineOffset,
+      })
+      continue
+    }
+
+    // Block math (`$$…$$`). Recognized only at the start of a line; the raw TeX
+    // is preserved (no inline markdown inside) and handed to KaTeX by the
+    // renderer. An unterminated block runs to EOF so a streaming message shows
+    // its partial formula instead of falling back to text.
+    const mathStart = mathEnabled ? matchMathBlockStart(line) : null
+    if (mathStart) {
+      i++
+      const mathLine = blockStart + lineOffset
+      if (mathStart.kind === 'single') {
+        out.push({ type: 'math_block', tex: mathStart.tex, display: true, line: mathLine })
+        continue
+      }
+      const parts: string[] = [mathStart.first]
+      while (i < lines.length) {
+        const cur = lines[i] ?? ''
+        const closeAt = matchMathBlockClose(cur)
+        if (closeAt !== null) {
+          parts.push(cur.slice(0, closeAt))
+          i++
+          break
+        }
+        parts.push(cur)
+        i++
+      }
+      out.push({
+        type: 'math_block',
+        tex: parts.join('\n').trim(),
+        display: true,
+        line: mathLine,
+      })
+      continue
+    }
+
+    // ATX heading: 1–6 leading hashes, then a space, then the text.
+    const heading = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line)
+    if (heading) {
+      const level = heading[1]!.length as 1 | 2 | 3 | 4 | 5 | 6
+      out.push({
+        type: 'heading',
+        level,
+        children: parseInline(heading[2] ?? '', childOptions),
+        line: blockStart + lineOffset,
+      })
+      i++
+      continue
+    }
+
+    // Horizontal rule — three or more of the same char, optional spaces.
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      out.push({ type: 'hr', line: blockStart + lineOffset })
+      i++
+      continue
+    }
+
+    // Blockquote — a container block: collect consecutive `> ` lines, strip the
+    // marker, and parse the body recursively so `>` blank lines split paragraphs
+    // and `> - ` opens a list (CommonMark §5.1). Nested quotes re-match here on
+    // the next recursion level.
+    if (/^\s*>/.test(line)) {
+      const buf: string[] = []
+      while (i < lines.length && /^\s*>/.test(lines[i] ?? '')) {
+        buf.push((lines[i] ?? '').replace(/^\s*>\s?/, ''))
+        i++
+      }
+      out.push({
+        type: 'blockquote',
+        children: parseMarkdown(buf.join('\n'), childOptions, lineOffset + blockStart),
+        line: blockStart + lineOffset,
+      })
+      continue
+    }
+
+    // Lists — homogeneous run of `- ` / `* ` / `+ ` (unordered) or `<n>. `
+    // (ordered) lines. A sibling item sits at the list's base indent; a plain
+    // top-level line before any child is lazy continuation of the item's text;
+    // lines indented past the marker are the item's child blocks (nested lists,
+    // code fences, extra paragraphs …), dedented and parsed recursively. Blank
+    // lines between same-kind items make a loose list.
+    const ul = /^\s*[-*+]\s+/.test(line)
+    const ol = /^\s*\d+\.\s+/.test(line)
+    if (ul || ol) {
+      const ordered = ol
+      const markerRe = ordered ? /^(\d+\.\s+)/ : /^([-*+]\s+)/
+      const startMatch = ordered ? /^\s*(\d+)\./.exec(line) : null
+      const baseIndent = indentOf(line)
+      const isSibling = (l: string): boolean =>
+        indentOf(l) === baseIndent && markerRe.test(l.slice(baseIndent))
+      const items: MdListItem[] = []
+      while (i < lines.length) {
+        const cur = lines[i] ?? ''
+        if (cur.trim() === '') {
+          // Loose list: a blank between two same-kind siblings stays one list.
+          let next = i + 1
+          while (next < lines.length && (lines[next] ?? '').trim() === '') next++
+          if (next < lines.length && isSibling(lines[next] ?? '')) {
+            i = next
+            continue
+          }
+          break
+        }
+        if (!isSibling(cur)) break
+        const rest = cur.slice(baseIndent)
+        const marker = markerRe.exec(rest)![1] ?? ''
+        // Content column = marker prefix width; child blocks indent to here.
+        const markerWidth = baseIndent + marker.length
+        const itemLine = i
+        const firstLine = rest.slice(marker.length)
+        i++
+        const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(firstLine)
+        const itemLeadingText = taskMatch ? (taskMatch[2] ?? '') : firstLine
+        // A multi-line `$$` opening on the item's own line belongs to the item's
+        // block content, not its inline text: everything after it is TeX until
+        // the closing `$$`. (A single-line `- $$x$$` stays inline display math.)
+        const mathAsChild = mathEnabled && matchMathBlockStart(itemLeadingText)?.kind === 'multi'
+        const continuationLines: string[] = []
+        const childLines: string[] = mathAsChild ? [itemLeadingText] : []
+        // Original source line (0-based, within this parse's input) of the first
+        // child block; childLines[k] corresponds to source line childStart + k.
+        let childStart = mathAsChild ? itemLine : -1
+        let sawChild = mathAsChild
+        while (i < lines.length) {
+          const nextLine = lines[i] ?? ''
+          if (nextLine.trim() === '') {
+            // A blank belongs to this item only when more-indented child content
+            // follows it; otherwise it ends the item (the outer loop decides
+            // whether a sibling continues the list).
+            let j = i + 1
+            while (j < lines.length && (lines[j] ?? '').trim() === '') j++
+            if (j < lines.length && indentOf(lines[j] ?? '') >= markerWidth) {
+              if (childStart === -1) childStart = i
+              for (; i < j; i++) childLines.push('')
+              sawChild = true
+              continue
+            }
+            break
+          }
+          if (indentOf(nextLine) >= markerWidth) {
+            if (childStart === -1) childStart = i
+            childLines.push(nextLine.slice(markerWidth))
+            sawChild = true
+            i++
+            continue
+          }
+          // Dedented line: a sibling item or an outer block ends this item.
+          if (isSibling(nextLine)) break
+          if (isListItemStart(nextLine)) break
+          if (isTopLevelBlockStart(nextLine, lines[i + 1] ?? '', mathEnabled)) break
+          // Lazy continuation of the leading text — only before any child block.
+          if (sawChild) break
+          continuationLines.push(nextLine)
+          i++
+        }
+        const children = childLines.some((l) => l.trim() !== '')
+          ? parseMarkdown(childLines.join('\n'), childOptions, lineOffset + childStart)
+          : undefined
+        const leadingText = mathAsChild ? '' : itemLeadingText
+        const itemText = [leadingText, ...continuationLines].join('\n')
+        items.push({
+          inline: [...parseInline(itemText, childOptions)],
+          checked: taskMatch ? taskMatch[1] !== ' ' : null,
+          ...(children !== undefined ? { children } : {}),
+        })
+      }
+      out.push({
+        type: 'list',
+        ordered,
+        ...(startMatch ? { start: Number(startMatch[1]) } : {}),
+        items,
+        line: blockStart + lineOffset,
+      })
+      continue
+    }
+
+    // GFM pipe table — a header row containing a `|`, immediately followed by
+    // a delimiter row (`| --- | :-: |`). Data rows are the following lines that
+    // still contain a `|`; a blank line (or a non-pipe line) ends the table.
+    if (line.includes('|') && isTableDelimiterRow(lines[i + 1] ?? '')) {
+      const align = parseTableDelimiter(lines[i + 1] ?? '')
+      const cols = align.length
+      const header = splitTableRow(line, cols, childOptions)
+      i += 2
+      const rows: MdInline[][][] = []
+      while (i < lines.length) {
+        const cur = lines[i] ?? ''
+        if (cur.trim() === '' || !cur.includes('|')) break
+        rows.push(splitTableRow(cur, cols, childOptions))
+        i++
+      }
+      out.push({ type: 'table', align, header, rows, line: blockStart + lineOffset })
+      continue
+    }
+
+    // Paragraph — accumulate non-blank, non-block-start lines.
+    const para: string[] = [line]
+    i++
+    while (i < lines.length) {
+      const cur = lines[i] ?? ''
+      if (cur.trim() === '') break
+      if (matchCodeFenceStart(cur)) break
+      if (mathEnabled && matchMathBlockStart(cur) !== null) break
+      if (/^#{1,6}\s/.test(cur)) break
+      if (/^\s*>/.test(cur)) break
+      if (/^\s*[-*+]\s+/.test(cur)) break
+      if (/^\s*\d+\.\s+/.test(cur)) break
+      if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(cur)) break
+      // A table starting on the next line (header + delimiter) ends the paragraph.
+      if (cur.includes('|') && isTableDelimiterRow(lines[i + 1] ?? '')) break
+      para.push(cur)
+      i++
+    }
+    out.push({
+      type: 'paragraph',
+      children: parseInline(para.join('\n'), childOptions),
+      line: blockStart + lineOffset,
+    })
+  }
+  return out
+}
+
+function isListItemStart(line: string): boolean {
+  return /^\s*(?:[-*+]|\d+\.)\s+/.test(line)
+}
+
+const FENCE_START_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*(.*)$/
+const BACKTICK_FENCE_END_RE = /^ {0,3}(`{3,})[ \t]*$/
+const TILDE_FENCE_END_RE = /^ {0,3}(~{3,})[ \t]*$/
+
+/**
+ * Opening fence of a code block (CommonMark §4.5): up to 3 leading spaces, 3+
+ * backticks or tildes, then an optional info string whose first word is the
+ * language. The whitespace before the info string is allowed — ` ``` json `
+ * opens a json block just like ` ```json `. A backtick fence may not carry a
+ * backtick in its info string, which keeps inline `` `code` `` runs out.
+ */
+function matchCodeFenceStart(line: string): { marker: string; lang: string } | undefined {
+  const m = FENCE_START_RE.exec(line)
+  if (!m) return undefined
+  const marker = m[1] ?? ''
+  const info = (m[2] ?? '').trim()
+  if (marker.startsWith('`') && info.includes('`')) return undefined
+  return { marker, lang: info.split(/\s+/)[0] ?? '' }
+}
+
+/** Closing fence: same character as `marker`, at least as long, nothing else on the line. */
+function isCodeFenceEnd(line: string, marker: string): boolean {
+  const m = (marker.startsWith('`') ? BACKTICK_FENCE_END_RE : TILDE_FENCE_END_RE).exec(line)
+  return m !== null && (m[1] ?? '').length >= marker.length
+}
+
+/** How a line opening a block-level `$$` is consumed. */
+type MathBlockStart =
+  | { readonly kind: 'single'; readonly tex: string }
+  | { readonly kind: 'multi'; readonly first: string }
+
+/**
+ * Opening `$$` of a block-level formula. A line start (0–3 spaces) plus `$$`
+ * starts a block unless it is a longer dollar run or contains more than one
+ * `$$` pair; those stay inline so a stray `$$$` cannot swallow the rest of a
+ * streaming message. The closing `$$` may be on the same line (single) or a
+ * later line (multi).
+ */
+function matchMathBlockStart(line: string): MathBlockStart | null {
+  const m = /^ {0,3}\$\$/.exec(line)
+  if (!m) return null
+  const after = line.slice(m[0].length)
+  // `$$$…` is not a math block. Treating it as one would consume everything
+  // after it until a closing run that a partial stream may never produce.
+  if (after.startsWith('$')) return null
+  const pairs = dollarPairPositions(after)
+  if (pairs.length > 1) return null
+  if (pairs.length === 1) {
+    const at = pairs[0]!
+    if (after.slice(at + 2).trim() === '') {
+      return { kind: 'single', tex: after.slice(0, at).trim() }
+    }
+  }
+  return { kind: 'multi', first: after }
+}
+
+/** Positions of each `$$` pair in a line. Delimiters are not escape-aware here. */
+function dollarPairPositions(text: string): number[] {
+  const positions: number[] = []
+  let at = text.indexOf('$$')
+  while (at !== -1) {
+    positions.push(at)
+    at = text.indexOf('$$', at + 2)
+  }
+  return positions
+}
+
+/**
+ * Index of the `$$` closing an open block math on {@link line}, or null.
+ * Prefers a line-final pair (so the line before the close may carry TeX) and
+ * falls back to an inline pair; text after the close is discarded, mirroring
+ * markdown-it-katex.
+ */
+function matchMathBlockClose(line: string): number | null {
+  const end = line.trimEnd()
+  if (end.endsWith('$$')) return end.lastIndexOf('$$')
+  const first = line.indexOf('$$')
+  return first === -1 ? null : first
+}
+
+/** The block math a mask scan is currently inside, with the scope that ends it. */
+type MathMaskState =
+  | { readonly kind: 'top' }
+  | { readonly kind: 'indented'; readonly indent: number }
+  | { readonly kind: 'list'; readonly contentCol: number }
+
+type MathLineVerdict = 'inside' | 'closed' | 'restart' | 'uncertain'
+
+/**
+ * A mask line can never be classified as math-only when the parser might have
+ * left the math block before it. List-scoped math is the hard case: the block
+ * ends when the item ends (a dedent or a blank not followed by indented
+ * content), even without a closing `$$`. A dedented line is processed afresh by
+ * the parser, so the scan can restart there; an indented opener, by contrast,
+ * may belong to the root or to a list item, and a dedent cannot tell which —
+ * keep every remaining line masked ("uncertain"), which only costs split
+ * opportunities and can never produce a wrong render.
+ */
+function classifyMathLine(
+  state: MathMaskState,
+  line: string,
+  lines: readonly string[],
+  index: number,
+): MathLineVerdict {
+  if (state.kind === 'top') {
+    return matchMathBlockClose(line) !== null ? 'closed' : 'inside'
+  }
+  const indent = indentOf(line)
+  if (state.kind === 'indented') {
+    if (matchMathBlockClose(line) !== null) {
+      return indent >= state.indent ? 'closed' : 'uncertain'
+    }
+    return line.trim() !== '' && indent < state.indent ? 'uncertain' : 'inside'
+  }
+  if (line.trim() === '') {
+    // Mirrors the parser's item loop: a blank stays in the item only when more
+    // indented content follows it; otherwise the item (and its math) ends here.
+    // EOF is *not* evidence that the item ended — a later chunk may still add
+    // indented content — so keep trailing blanks masked.
+    let next = index + 1
+    while (next < lines.length && (lines[next] ?? '').trim() === '') next++
+    if (next >= lines.length) return 'inside'
+    return indentOf(lines[next] ?? '') >= state.contentCol ? 'inside' : 'restart'
+  }
+  if (indent < state.contentCol) return 'restart'
+  return matchMathBlockClose(line) !== null ? 'closed' : 'inside'
+}
+
+/**
+ * Line masks for the incremental parser's safe-split search. Math takes
+ * priority over fences: a ``` inside `$$…$$` is TeX, and `$$` inside a fence is
+ * code. Used by `lastSafeSplit` to keep blank lines inside either region from
+ * becoming split points. Pass `math: false` when the caller parses with math
+ * disabled, so `$$` lines are plain text there.
+ */
+export function mathBlockMask(
+  lines: readonly string[],
+  math = true,
+): {
+  readonly insideMath: readonly boolean[]
+  readonly insideFence: readonly boolean[]
+} {
+  const insideMath: boolean[] = new Array(lines.length)
+  const insideFence: boolean[] = new Array(lines.length)
+  let fenceMarker: string | undefined
+  let mathState: MathMaskState | undefined
+  let uncertain = false
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    if (uncertain) {
+      insideMath[i] = true
+      insideFence[i] = false
+      continue
+    }
+    if (mathState !== undefined) {
+      const verdict = classifyMathLine(mathState, line, lines, i)
+      if (verdict === 'restart') {
+        // The list item ended before this line; classify it as an ordinary line.
+        mathState = undefined
+      } else {
+        insideMath[i] = true
+        insideFence[i] = false
+        if (verdict === 'inside') continue
+        mathState = undefined
+        if (verdict === 'closed') continue
+        uncertain = true
+        continue
+      }
+    }
+    insideMath[i] = false
+    insideFence[i] = fenceMarker !== undefined
+    if (fenceMarker !== undefined) {
+      if (isCodeFenceEnd(line, fenceMarker)) fenceMarker = undefined
+      continue
+    }
+    const fence = matchCodeFenceStart(line)
+    if (fence !== undefined) {
+      fenceMarker = fence.marker
+      continue
+    }
+    if (!math) continue
+    const listStart = matchListMathBlockStart(line)
+    if (listStart !== null) {
+      if (listStart.start.kind === 'multi') {
+        insideMath[i] = true
+        mathState = { kind: 'list', contentCol: listStart.contentCol }
+      }
+      continue
+    }
+    const start = matchMathBlockStart(line)
+    if (start?.kind === 'multi') {
+      insideMath[i] = true
+      const indent = indentOf(line)
+      mathState = indent === 0 ? { kind: 'top' } : { kind: 'indented', indent }
+    }
+  }
+  return { insideMath, insideFence }
+}
+
+/**
+ * A multi-line block opened on a list item's own line (`- $$`). The item line
+ * itself carries the list marker, so {@link matchMathBlockStart} cannot see it,
+ * yet the parser moves the rest of that line into the item's child block — the
+ * mask has to follow suit or a blank line inside the formula would look like a
+ * safe split point. `contentCol` is the parser's `markerWidth`, the indentation
+ * a line needs to stay inside the item.
+ */
+function matchListMathBlockStart(
+  line: string,
+): { readonly start: MathBlockStart; readonly contentCol: number } | null {
+  const baseIndent = indentOf(line)
+  const rest = line.slice(baseIndent)
+  const marker = /^(?:[-*+]|\d+\.)\s+/.exec(rest)
+  if (!marker) return null
+  const content = rest.slice(marker[0].length).replace(/^\[[ xX]\]\s+/, '')
+  const start = matchMathBlockStart(content)
+  return start === null ? null : { start, contentCol: baseIndent + marker[0].length }
+}
+
+/**
+ * Parse frontmatter body lines into `[key, value]` pairs for the preview table.
+ * Deliberately minimal (no YAML dependency): only top-level `key: value` lines
+ * are split; nested/indented lines and block scalars are appended to the current
+ * key's value verbatim so nothing is lost. Comment lines (`#`) are skipped.
+ */
+function parseFrontmatterEntries(lines: readonly string[]): (readonly [string, string])[] {
+  const entries: [string, string][] = []
+  for (const raw of lines) {
+    if (raw.trim() === '' || /^\s*#/.test(raw)) continue
+    const topLevel = /^([^\s:#][^:]*?):(?:\s+(.*))?$/.exec(raw)
+    if (topLevel && !/^\s/.test(raw)) {
+      entries.push([topLevel[1] ?? '', (topLevel[2] ?? '').trim()])
+      continue
+    }
+    // Continuation of the previous key (nested map / list item / block scalar).
+    const last = entries[entries.length - 1]
+    if (last) last[1] = last[1] === '' ? raw.trim() : `${last[1]}\n${raw.trim()}`
+  }
+  return entries
+}
+
+/** Number of leading space characters (tabs count as one; agents emit spaces). */
+function indentOf(line: string): number {
+  let n = 0
+  while (n < line.length && (line[n] === ' ' || line[n] === '\t')) n++
+  return n
+}
+
+function isTopLevelBlockStart(line: string, nextLine: string, mathEnabled: boolean): boolean {
+  return (
+    (mathEnabled && matchMathBlockStart(line) !== null) ||
+    matchCodeFenceStart(line) !== undefined ||
+    /^#{1,6}\s/.test(line) ||
+    /^\s*>/.test(line) ||
+    /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
+    (line.includes('|') && isTableDelimiterRow(nextLine))
+  )
+}
+
+/**
+ * Inline parser. Scans left-to-right, building a flat list of {@link MdInline}
+ * nodes. We accept only http/https/file URLs for autolinks and bare URLs to
+ * keep the renderer's attack surface small.
+ */
+export function parseInline(text: string, options?: ParseMarkdownOptions): readonly MdInline[] {
+  const out: MdInline[] = []
+  const mathEnabled = options?.math !== false
+  let buf = ''
+  const flush = (): void => {
+    if (buf.length > 0) {
+      out.push({ type: 'text', text: buf })
+      buf = ''
+    }
+  }
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]!
+
+    // Escapes: `\X` emits X verbatim when X is punctuation.
+    if (ch === '\\' && i + 1 < text.length && /[\\`*_{}[\]()#+\-.!<>$]/.test(text[i + 1]!)) {
+      buf += text[i + 1]
+      i += 2
+      continue
+    }
+
+    // Soft break — a `\n` becomes a softbreak inline node.
+    if (ch === '\n') {
+      flush()
+      out.push({ type: 'softbreak' })
+      i++
+      continue
+    }
+
+    // Inline math. Checked before code spans/emphasis because once `$` opens a
+    // formula the content is TeX, not markdown. `$$` is display mode.
+    if (mathEnabled && ch === '$') {
+      if (text[i + 1] === '$') {
+        const displayMath = matchInlineDisplayMath(text, i)
+        if (displayMath) {
+          flush()
+          out.push({ type: 'math_inline', tex: displayMath.tex, display: true })
+          i = displayMath.end
+          continue
+        }
+        buf += '$$'
+        i += 2
+        continue
+      }
+      const inlineMath = matchInlineMath(text, i)
+      if (inlineMath) {
+        flush()
+        out.push({ type: 'math_inline', tex: inlineMath.tex, display: false })
+        i = inlineMath.end
+        continue
+      }
+      buf += '$'
+      i++
+      continue
+    }
+
+    // Inline code: `...`, or `` `...` `` when the content itself contains
+    // single backticks. Closing delimiter must use the same backtick-run length.
+    if (ch === '`') {
+      const tickCount = countBacktickRun(text, i)
+      const close = findClosingBacktickRun(text, i + tickCount, tickCount)
+      if (close !== -1) {
+        flush()
+        out.push({
+          type: 'code',
+          text: normalizeCodeSpanText(text.slice(i + tickCount, close)),
+        })
+        i = close + tickCount
+        continue
+      }
+      buf += text.slice(i, i + tickCount)
+      i += tickCount
+      continue
+    }
+
+    // Strikethrough: ~~text~~
+    if (ch === '~' && text[i + 1] === '~') {
+      const closeIdx = text.indexOf('~~', i + 2)
+      if (closeIdx !== -1 && closeIdx > i + 2) {
+        flush()
+        out.push({ type: 'strike', children: parseInline(text.slice(i + 2, closeIdx), options) })
+        i = closeIdx + 2
+        continue
+      }
+    }
+
+    // Image: ![alt](url) — must be checked before link since `!` precedes `[`.
+    if (ch === '!' && text[i + 1] === '[') {
+      const labelEnd = findMatching(text, i + 1, '[', ']')
+      if (labelEnd !== -1 && text[labelEnd + 1] === '(') {
+        const urlEnd = findMatching(text, labelEnd + 1, '(', ')')
+        if (urlEnd !== -1) {
+          const alt = text.slice(i + 2, labelEnd)
+          const src = text.slice(labelEnd + 2, urlEnd).trim()
+          if (isImageSrc(src)) {
+            flush()
+            out.push({ type: 'image', src, alt })
+            i = urlEnd + 1
+            continue
+          }
+        }
+      }
+    }
+
+    // Strong (** or __). Look for a matching pair of identical delimiters that
+    // isn't part of a triple (`***` is bold+italic, handled by the recursion).
+    // `_` does not open mid-word (GFM intraword rule), so `foo__bar__` stays literal.
+    if (
+      (ch === '*' || ch === '_') &&
+      text[i + 1] === ch &&
+      !(ch === '_' && isWordChar(text[i - 1]))
+    ) {
+      const end = findBoldClose(text, i + 2, ch)
+      if (end !== -1 && end > i + 2) {
+        flush()
+        out.push({ type: 'bold', children: parseInline(text.slice(i + 2, end), options) })
+        i = end + 2
+        continue
+      }
+    }
+
+    // Emphasis (* or _). Find the next *single* delimiter — skip over `**`
+    // sequences so `*a **b** c*` parses to italic(a, bold(b), c) rather than
+    // grabbing the inner `**` as the closing delimiter. `_` does not open
+    // mid-word (GFM intraword rule), so `foo_bar_1` keeps its underscores.
+    if ((ch === '*' || ch === '_') && !(ch === '_' && isWordChar(text[i - 1]))) {
+      const end = findItalicClose(text, i + 1, ch)
+      if (end !== -1 && end > i + 1) {
+        flush()
+        out.push({ type: 'italic', children: parseInline(text.slice(i + 1, end), options) })
+        i = end + 1
+        continue
+      }
+    }
+
+    // Link: [label](url) — [label] must be non-empty and the parens balanced.
+    // An image embedded as a plain link — e.g. `[@image](data:image/..)`, how
+    // agents without an ACP image block carry a picture — renders as a real
+    // image (the label becomes its alt text). Anything the href predicate
+    // rejects stays literal text: the scan falls through to the bare-URL /
+    // bare-path probes one character later.
+    const link = matchMarkdownLinkAt(text, i, options)
+    if (link) {
+      flush()
+      out.push(
+        link.image
+          ? { type: 'image', src: link.href, alt: link.label }
+          : { type: 'link', href: link.href, children: parseInline(link.label, options) },
+      )
+      i = link.end
+      continue
+    }
+
+    // Autolink: <url> where url is http(s) or file; also accept explicit
+    // angle-wrapped file paths so Windows install paths with spaces stay intact.
+    if (ch === '<') {
+      // Empty HTML anchor: `<a id="x"></a>` / `<a name="x"></a>` — the only raw-HTML
+      // shape we recognize; everything else stays literal text (or an autolink below).
+      const anchor = EMPTY_ANCHOR_RE.exec(text.slice(i))
+      if (anchor) {
+        flush()
+        out.push({ type: 'anchor', id: anchor[1]! })
+        i += anchor[0].length
+        continue
+      }
+      const close = text.indexOf('>', i + 1)
+      if (close !== -1) {
+        const candidate = text.slice(i + 1, close).trim()
+        // '/'-initial candidates are XML closing tags (`</summary>`), not
+        // angle-wrapped paths — keep the angle brackets visible.
+        if (isSafeHref(candidate) || (!candidate.startsWith('/') && looksLikeFilePath(candidate))) {
+          flush()
+          out.push({
+            type: 'link',
+            href: candidate,
+            children: [{ type: 'text', text: candidate }],
+          })
+          i = close + 1
+          continue
+        }
+      }
+    }
+
+    // Bare URL autolink.
+    const url = matchBareUrl(text, i)
+    if (url) {
+      flush()
+      out.push({ type: 'link', href: url, children: [{ type: 'text', text: url }] })
+      i += url.length
+      continue
+    }
+
+    // Bare file path: `src/foo/bar.ts:10:5`. Requires a dir separator (see
+    // filePathLink) so plain words aren't mistaken for links.
+    const fp = matchFilePathAt(text, i)
+    if (fp) {
+      flush()
+      out.push({
+        type: 'filepath',
+        path: fp.path,
+        ...(fp.line !== undefined ? { line: fp.line } : {}),
+        ...(fp.col !== undefined ? { col: fp.col } : {}),
+        ...(fp.endLine !== undefined ? { endLine: fp.endLine } : {}),
+      })
+      i += fp.full.length
+      continue
+    }
+
+    buf += ch
+    i++
+  }
+  flush()
+  return out
+}
+
+// ---------------------------------------------------------------------------
+// Inline math
+// ---------------------------------------------------------------------------
+
+// ASCII letters/digits/underscore only: CJK next to `$` must still open/close a
+// formula, matching @vscode/markdown-it-katex's word boundary.
+const MATH_WORD_CHAR_RE = /[A-Za-z0-9_]/
+
+function isEscapedAt(text: string, index: number): boolean {
+  let backslashes = 0
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) backslashes++
+  return backslashes % 2 === 1
+}
+
+function canOpenInlineMath(text: string, index: number): boolean {
+  const prev = index > 0 ? text[index - 1] : undefined
+  if (prev === '$' || prev === '\\') return false
+  return prev === undefined || /\s/.test(prev) || !MATH_WORD_CHAR_RE.test(prev)
+}
+
+function canCloseInlineMath(text: string, index: number): boolean {
+  const next = index + 1 < text.length ? text[index + 1] : undefined
+  if (next === '$') return false
+  return next === undefined || /\s/.test(next) || !MATH_WORD_CHAR_RE.test(next)
+}
+
+/**
+ * `$…$` at {@link index}. Mirrors markdown-it-katex: only the first unescaped
+ * `$` is considered as the closer, so `$a$b$c$` stays literal instead of
+ * stretching to the last dollar.
+ */
+function matchInlineMath(
+  text: string,
+  index: number,
+): { readonly tex: string; readonly end: number } | null {
+  if (!canOpenInlineMath(text, index)) return null
+  for (let j = index + 1; j < text.length; j++) {
+    if (text[j] !== '$' || isEscapedAt(text, j)) continue
+    if (!canCloseInlineMath(text, j)) return null
+    return { tex: text.slice(index + 1, j), end: j + 1 }
+  }
+  return null
+}
+
+/** Mid-paragraph `$$…$$` (KaTeX display mode). */
+function matchInlineDisplayMath(
+  text: string,
+  index: number,
+): { readonly tex: string; readonly end: number } | null {
+  const prev = index > 0 ? text[index - 1] : undefined
+  if (prev === '$' || prev === '\\') return null
+  // A third `$` is a longer run, not a display opener.
+  if (text[index + 2] === '$') return null
+  let j = index + 2
+  while (j < text.length - 1) {
+    if (text[j] !== '$' || text[j + 1] !== '$') {
+      j++
+      continue
+    }
+    if (isEscapedAt(text, j)) {
+      j += 2
+      continue
+    }
+    const prevClose = text[j - 1]
+    // The plugin considers only the first unescaped `$$` candidate; when its
+    // boundaries are invalid the whole run stays literal (`$$a$$$ b$$` is text,
+    // not the formula `a$$$ b`).
+    if (prevClose === '$' || prevClose === '\\') return null
+    if (text[j + 2] === '$') return null
+    return { tex: text.slice(index + 2, j), end: j + 2 }
+  }
+  return null
+}
+
+/** An explicit markdown link `[label](href)` matched at some index. */
+export interface MarkdownLinkMatch {
+  /** Link text, verbatim (callers parse it for inline formatting or render it as-is). */
+  readonly label: string
+  readonly href: string
+  /** Index just past the closing `)` — the cursor position after the link. */
+  readonly end: number
+  /** `href` is an inline base64 image data URL; the caller decides image vs text. */
+  readonly image: boolean
+}
+
+/**
+ * Match an explicit markdown link `[label](href)` anchored at index {@link i}.
+ * Shared by the inline parser and the plain-text scanner (user prompts render
+ * verbatim, but links must stay clickable), so both agree on what a link is.
+ *
+ * Callers decide what to do with the match: `parseInline` turns `image` hrefs
+ * into pictures, while the plain scanner keeps those — and same-document
+ * anchors (`#x`), which have no target there — literal. Anything the href
+ * predicate rejects returns null, leaving the text to the character-by-character
+ * scan (`[x](javascript:alert(1))` stays literal). `options.extraHrefSchemes`
+ * widens the predicate for explicit links only (see {@link ParseMarkdownOptions}).
+ */
+export function matchMarkdownLinkAt(
+  text: string,
+  i: number,
+  options?: ParseMarkdownOptions,
+): MarkdownLinkMatch | null {
+  if (text[i] !== '[') return null
+  const labelEnd = findMatching(text, i, '[', ']')
+  if (labelEnd === -1 || text[labelEnd + 1] !== '(') return null
+  const urlEnd = findMatching(text, labelEnd + 1, '(', ')')
+  if (urlEnd === -1) return null
+  const label = text.slice(i + 1, labelEnd)
+  // An empty label would render as a zero-width anchor, hiding the text it
+  // swallowed — `[](file:///x)` stays literal.
+  if (label.trim().length === 0) return null
+  const href = text.slice(labelEnd + 2, urlEnd).trim()
+  const isImage = isImageDataUrl(href)
+  const accepted =
+    isImage ||
+    isSafeHref(href) ||
+    looksLikeFilePath(href) ||
+    isAnchorHref(href) ||
+    hasExtraHrefScheme(href, options) ||
+    // A `path#fragment` href: the path portion is what decides (pitfall 11 in
+    // the markdown subsystem map: the fragment is split off by the opener).
+    (href.includes('#') &&
+      !href.startsWith('#') &&
+      looksLikeFilePath(href.slice(0, href.indexOf('#'))))
+  return accepted ? { label, href, end: urlEnd + 1, image: isImage } : null
+}
+
+/**
+ * True when the href uses one of the consumer-opted-in schemes. Only an explicit
+ * `[label](scheme:target)` can reach this: bare-URL and autolink scanning stay
+ * restricted to http(s)/file, so opting in never makes arbitrary text clickable.
+ */
+function hasExtraHrefScheme(href: string, options: ParseMarkdownOptions | undefined): boolean {
+  const schemes = options?.extraHrefSchemes
+  if (schemes === undefined || schemes.length === 0) return false
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(href)?.[1]?.toLowerCase()
+  return scheme !== undefined && schemes.includes(scheme)
+}
+
+/**
+ * Find the index of the matching closing delimiter for an opening one at
+ * {@link start}, accounting for nested same-kind pairs. Returns -1 if the
+ * input runs out before finding a balanced match.
+ */
+function findMatching(text: string, start: number, open: string, close: string): number {
+  let depth = 0
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i]!
+    if (ch === '\\') {
+      i++
+      continue
+    }
+    if (ch === open) depth++
+    else if (ch === close) {
+      depth--
+      if (depth === 0) return i
+    }
+  }
+  return -1
+}
+
+function countBacktickRun(text: string, start: number): number {
+  let count = 0
+  while (text[start + count] === '`') count++
+  return count
+}
+
+function findClosingBacktickRun(text: string, start: number, tickCount: number): number {
+  let i = start
+  while (i < text.length) {
+    if (text[i] !== '`') {
+      i++
+      continue
+    }
+    const runLength = countBacktickRun(text, i)
+    if (runLength === tickCount) return i
+    i += runLength
+  }
+  return -1
+}
+
+function normalizeCodeSpanText(text: string): string {
+  const normalized = text.replace(/\r\n?|\n/g, ' ')
+  if (normalized.startsWith(' ') && normalized.endsWith(' ') && /[^ ]/.test(normalized)) {
+    return normalized.slice(1, -1)
+  }
+  return normalized
+}
+
+/**
+ * Scan forward for the closing `**` (or `__`) bold delimiter, skipping
+ * escaped chars. Returns the index of the first `delim` char of the closing
+ * pair, or -1 if none found. For `_`, the closing pair must not be followed by
+ * a word char (GFM intraword rule).
+ */
+function findBoldClose(text: string, start: number, delim: string): number {
+  let j = start
+  while (j < text.length - 1) {
+    const cj = text[j]
+    if (cj === '\\') {
+      j += 2
+      continue
+    }
+    if (cj === delim && text[j + 1] === delim) {
+      if (delim === '_' && isWordChar(text[j + 2])) {
+        j += 2
+        continue
+      }
+      return j
+    }
+    j++
+  }
+  return -1
+}
+
+/**
+ * Scan forward for the closing single-char italic delimiter. Skip over `**`
+ * sequences so they bind to the bold parser instead of getting swallowed as
+ * the italic boundary. For `_`, the closing delimiter must not be followed by
+ * a word char (GFM intraword rule).
+ */
+function findItalicClose(text: string, start: number, delim: string): number {
+  let j = start
+  while (j < text.length) {
+    const cj = text[j]
+    if (cj === '\\') {
+      j += 2
+      continue
+    }
+    if (cj === delim) {
+      if (text[j + 1] === delim) {
+        j += 2
+        continue
+      }
+      if (delim === '_' && isWordChar(text[j + 1])) {
+        j++
+        continue
+      }
+      return j
+    }
+    j++
+  }
+  return -1
+}
+
+/** A word char for GFM intraword emphasis: ASCII letters, digits, underscore. */
+function isWordChar(ch: string | undefined): boolean {
+  return ch !== undefined && /[A-Za-z0-9_]/.test(ch)
+}
+
+/** Allow only http(s) and file URLs. */
+export function isSafeHref(href: string): boolean {
+  return /^(?:https?:|file:)/i.test(href)
+}
+
+/**
+ * True for an inline base64 image data URL (`data:image/png;base64,...`). Only
+ * `image/*` is allowed — never arbitrary `data:` (which could carry scripts).
+ * Agents that lack an ACP image content block sometimes embed a picture as a
+ * markdown link/image with such a URL; we render those as real images instead of
+ * leaking a multi-KB string into the text.
+ */
+export function isImageDataUrl(href: string): boolean {
+  return /^data:image\/[a-z0-9.+-]+;base64,/i.test(href)
+}
+
+/**
+ * True for an image `src` we are willing to render. Allows http(s), file:,
+ * `data:image` and plain local paths (relative or absolute) — the latter are
+ * resolved to a loadable `universe-app://` URL at render time
+ * ({@link asPreviewResourceUri}). Rejects other schemes (`javascript:`,
+ * `vbscript:`, non-image `data:`) so untrusted markdown can't smuggle a script.
+ */
+export function isImageSrc(src: string): boolean {
+  if (isSafeHref(src) || isImageDataUrl(src)) return true
+  if (src.startsWith('data:')) return false
+  // A URI with some other scheme (e.g. `javascript:`) — refuse. A Windows drive
+  // path like `C:\a.png` is not a scheme (single-letter + backslash), so exclude
+  // that shape from the scheme test.
+  if (/^[a-z][a-z0-9.+-]*:/i.test(src) && !/^[a-z]:[\\/]/i.test(src)) return false
+  return src.length > 0
+}
+
+/** True for a same-document anchor link like `#section` (fragment only). */
+export function isAnchorHref(href: string): boolean {
+  return href.length > 1 && href.startsWith('#')
+}
+
+/** Flatten inline nodes to their visible text (e.g. for a heading's slug or name). */
+export function inlineToText(nodes: readonly MdInline[]): string {
+  let out = ''
+  for (const n of nodes) {
+    switch (n.type) {
+      case 'text':
+      case 'code':
+        out += n.text
+        break
+      case 'math_inline':
+        out += n.tex
+        break
+      case 'bold':
+      case 'italic':
+      case 'strike':
+      case 'link':
+        out += inlineToText(n.children)
+        break
+      case 'filepath':
+        out += n.path
+        break
+      case 'anchor':
+        break // zero-width: contributes nothing to the visible text of its line
+    }
+  }
+  return out
+}
+
+/**
+ * Slugify heading text into a GitHub-style fragment id: lowercased, spaces to
+ * hyphens, punctuation stripped, non-ASCII (incl. CJK) kept verbatim. This must
+ * match how `#anchor` links are written, so `## 子结构：ITalkItem` becomes
+ * `子结构italkitem` — the same slug an author would target with `(#子结构italkitem)`.
+ */
+export function slugifyHeading(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\p{L}\p{N}-]/gu, '')
+}
+
+// ---------------------------------------------------------------------------
+// GFM tables
+// ---------------------------------------------------------------------------
+
+const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+/** True when a line is a GFM table delimiter row (`| --- | :-: | ---: |`). */
+function isTableDelimiterRow(line: string): boolean {
+  return line.includes('-') && TABLE_DELIMITER_RE.test(line)
+}
+
+/** Parse a delimiter row into per-column alignments. */
+function parseTableDelimiter(line: string): (TableAlign | null)[] {
+  return splitPipes(line).map((cell) => {
+    const c = cell.trim()
+    const left = c.startsWith(':')
+    const right = c.endsWith(':')
+    if (left && right) return 'center'
+    if (right) return 'right'
+    if (left) return 'left'
+    return null
+  })
+}
+
+/**
+ * Split a table row into exactly {@link cols} cells of parsed inline content.
+ * Extra cells are dropped and missing cells padded with empty content, matching
+ * GFM's column-count normalization against the header.
+ */
+function splitTableRow(line: string, cols: number, options?: ParseMarkdownOptions): MdInline[][] {
+  const cells = splitPipes(line).map((cell) => [...parseInline(cell.trim(), options)])
+  while (cells.length < cols) cells.push([])
+  cells.length = cols
+  return cells
+}
+
+/**
+ * Split a pipe-delimited row into raw cell strings. Strips one optional leading
+ * and trailing `|`, then splits on unescaped `|` (so `\|` stays a literal pipe).
+ */
+function splitPipes(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  const cells: string[] = []
+  let buf = ''
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!
+    if (ch === '\\' && i + 1 < s.length) {
+      buf += s[i + 1] === '|' ? '|' : ch + s[i + 1]
+      i++
+      continue
+    }
+    if (ch === '|') {
+      cells.push(buf)
+      buf = ''
+      continue
+    }
+    buf += ch
+  }
+  cells.push(buf)
+  return cells
+}
+
+/**
+ * An empty HTML anchor tag: `<a id="x"></a>` or `<a name="x"></a>`.
+ * Whitelisted shape only — a single id/name attribute, no href, no content.
+ * Double quotes required; the id value may not contain `"` or `<`.
+ * Anything richer stays literal text (the renderer emits no raw HTML).
+ */
+const EMPTY_ANCHOR_RE = /^<a\s+(?:id|name)\s*=\s*"([^"<]+)"\s*><\/a\s*>/i
+
+// Bare-URL characters are printable ASCII, excluding whitespace and the
+// bracket delimiters <>() — every non-ASCII char (full-width punctuation like
+// （）， CJK prose, emoji) terminates the URL. Chinese prose commonly follows a
+// URL with no intervening space (`http://x.com（备注` / `…下载`), so letting any
+// non-ASCII through would swallow the trailing prose into the link. `file://` is
+// included because agents and users write host file URIs bare
+// (`file:///E:/x/a.md`): consuming the whole URI up front also keeps its drive
+// tail from being picked up as a `/x/a.md`-style path right after.
+const BARE_URL_RE = /^((?:https?|file):\/\/[^\s<>()\u007f-\uffff]*[^\s<>().,;:!?\u007f-\uffff])/i
+
+// Also exported for plaintext linkification (user-prompt rendering in
+// MessageContent variant="plain"), so both renderers agree on bare links.
+export function matchBareUrl(text: string, i: number): string | null {
+  // Avoid matching mid-word like `foohttp://...`
+  if (i > 0 && /[A-Za-z0-9_/.~%-]/.test(text[i - 1] ?? '')) return null
+  const slice = text.slice(i)
+  const m = BARE_URL_RE.exec(slice)
+  return m ? (m[1] ?? null) : null
+}
