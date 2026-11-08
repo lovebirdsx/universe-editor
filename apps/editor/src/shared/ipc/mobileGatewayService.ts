@@ -8,10 +8,15 @@
 
 import { createDecorator, type Event } from '@universe-editor/platform'
 import type {
+  MobileAgentCandidate,
+  MobileElicitationAction,
+  MobileElicitationContentValue,
+  MobileErrorCode,
   MobileSessionBucket,
   MobileSessionEvent,
   MobileSessionSnapshot,
   MobileToolCallDetail,
+  MobileWorkspaceCandidate,
 } from '@universe-editor/mobile-protocol'
 
 export const MOBILE_GATEWAY_DEFAULT_PORT = 47321
@@ -174,6 +179,33 @@ export interface MobileBridgeSessionDelta {
 
 export type MobileBridgeEvent = MobileBridgeInboxChange | MobileBridgeSessionDelta
 
+/** Bridge-level command failure. `code` is the protocol error code sent back to the phone. */
+export interface MobileBridgeCommandError {
+  readonly ok: false
+  readonly code: MobileErrorCode
+  readonly message: string
+}
+
+/**
+ * Result of a mutating command. Validation happens twice: the bridge rejects
+ * first (read-only / stale / high-risk), and the gateway re-checks what it can
+ * before routing. Renderer exceptions are folded into `internal` by the bridge.
+ */
+export type MobileBridgeResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | MobileBridgeCommandError
+
+export interface MobileBridgeNewSessionResult {
+  readonly localId: string
+  readonly durableId?: string
+}
+
+export interface MobileBridgeNewSessionWorkspace {
+  /** Workspace folder as a URI string; the bridge stores it as the session cwd. */
+  readonly folder: string
+  readonly authority?: string
+}
+
 /** Reverse channel: implemented in each renderer, called from main. */
 export interface IMobileBridgeService {
   readonly _serviceBrand: undefined
@@ -199,6 +231,55 @@ export interface IMobileBridgeService {
 
   /** Full tool-call body; undefined when the session/tool call is gone. */
   getToolCallDetail(localId: string, toolCallId: string): Promise<MobileToolCallDetail | undefined>
+
+  // ---- Mutating commands (M3) -------------------------------------------------
+
+  sendPrompt(localId: string, text: string): Promise<MobileBridgeResult<void>>
+
+  cancelTurn(localId: string): Promise<MobileBridgeResult<void>>
+
+  resolvePermission(
+    localId: string,
+    requestId: string,
+    optionId: string,
+    feedback?: string,
+  ): Promise<MobileBridgeResult<void>>
+
+  cancelPermission(localId: string, requestId: string): Promise<MobileBridgeResult<void>>
+
+  resolveElicitation(
+    localId: string,
+    requestId: string,
+    action: MobileElicitationAction,
+    content?: Record<string, MobileElicitationContentValue>,
+  ): Promise<MobileBridgeResult<void>>
+
+  setConfigOption(
+    localId: string,
+    configId: string,
+    value: string | boolean,
+  ): Promise<MobileBridgeResult<void>>
+
+  pauseAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>>
+
+  resumeAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>>
+
+  newSession(
+    agentId: string,
+    workspace: MobileBridgeNewSessionWorkspace,
+    initialPrompt?: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>
+
+  renameSession(localId: string, title: string): Promise<MobileBridgeResult<void>>
+
+  /** Runs the same plan/execute path as the PC "Delete Agent Session" command. */
+  deleteSession(localId: string): Promise<MobileBridgeResult<void>>
+
+  /** This window's open workspace (main merges it with recent workspaces). */
+  listWorkspaces(): Promise<readonly MobileWorkspaceCandidate[]>
+
+  /** Agents this window can start a session with. */
+  listAgents(): Promise<readonly MobileAgentCandidate[]>
 
   /**
    * Inbox deltas and per-session delta batches. Per-session text is coalesced

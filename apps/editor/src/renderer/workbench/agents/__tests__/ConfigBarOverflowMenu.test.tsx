@@ -224,6 +224,8 @@ function makeSession(
     rewindSupported: observableValue<boolean>('rewindSupported', false),
     onDidRequireAuth: Event.None,
     onDidCancelForRestore: Event.None,
+    onDidSettlePermission: Event.None,
+    onDidSettleElicitation: Event.None,
     presentPermission: () => {},
     presentElicitation: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined) as never,

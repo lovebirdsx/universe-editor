@@ -1,13 +1,20 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import {
+  Emitter,
+  Event,
   observableValue,
+  URI,
+  type IEditorGroupsService,
   type ILogger,
   type ILoggerService,
   type ISettableObservable,
+  type IWorkspaceService,
 } from '@universe-editor/platform'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
   AcpMessage,
+  AcpPendingElicitation,
+  AcpPermissionSettledEvent,
   AcpPendingPermission,
   AcpPlanEntry,
   AcpToolCall,
@@ -44,7 +51,8 @@ interface FakeSessionHarness {
   configOptions: ISettableObservable<readonly SessionConfigOption[]>
   usage: ISettableObservable<AcpUsage | undefined>
   pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
-  pendingElicitation: ISettableObservable<undefined>
+  pendingElicitation: ISettableObservable<AcpPendingElicitation | undefined>
+  settlePermission: (event: AcpPermissionSettledEvent) => void
   status: ISettableObservable<'idle' | 'connecting' | 'running' | 'errored' | 'closed'>
   isDormant: ISettableObservable<boolean>
   backgroundTaskCount: ISettableObservable<number>
@@ -54,7 +62,7 @@ interface FakeSessionHarness {
 
 function makeSession(
   id: string,
-  options: { durableId?: string; title?: string } = {},
+  options: { durableId?: string; title?: string; readOnly?: boolean } = {},
 ): FakeSessionHarness {
   const timeline = observableValue<readonly TimelineItem[]>('test.timeline', [])
   const toolCalls = observableValue<readonly AcpToolCall[]>('test.toolCalls', [])
@@ -65,7 +73,10 @@ function makeSession(
     'test.permission',
     undefined,
   )
-  const pendingElicitation = observableValue<undefined>('test.elicitation', undefined)
+  const pendingElicitation = observableValue<AcpPendingElicitation | undefined>(
+    'test.elicitation',
+    undefined,
+  )
   const status = observableValue<'idle' | 'connecting' | 'running' | 'errored' | 'closed'>(
     'test.status',
     'idle',
@@ -74,13 +85,14 @@ function makeSession(
   const backgroundTaskCount = observableValue<number>('test.bg', 0)
   const isReplayingHistory = observableValue<boolean>('test.replay', false)
   const sessionIdOnAgent = observableValue<string | undefined>('test.durable', options.durableId)
+  const settleEmitter = new Emitter<AcpPermissionSettledEvent>()
   const session = {
     id,
     agentId: 'fake',
     title: options.title ?? `Session ${id}`,
     cwd: '/workspace/demo',
     authority: undefined,
-    readOnly: false,
+    readOnly: options.readOnly ?? false,
     timeline,
     toolCalls,
     plan,
@@ -88,11 +100,18 @@ function makeSession(
     usage,
     pendingPermission,
     pendingElicitation,
+    settlePermission: (event: AcpPermissionSettledEvent) => settleEmitter.fire(event),
     status,
     isDormant,
     backgroundTaskCount,
     isReplayingHistory,
     sessionIdOnAgent,
+    onDidSettlePermission: settleEmitter.event,
+    onDidSettleElicitation: Event.None,
+    sendPrompt: vi.fn(async () => {}),
+    cancelTurn: vi.fn(async () => {}),
+    setConfigOption: vi.fn(async () => {}),
+    renameTitle: vi.fn(),
   } as unknown as IAcpSession
   return {
     session,
@@ -103,6 +122,7 @@ function makeSession(
     usage,
     pendingPermission,
     pendingElicitation,
+    settlePermission: (event: AcpPermissionSettledEvent) => settleEmitter.fire(event),
     status,
     isDormant,
     backgroundTaskCount,
@@ -137,22 +157,53 @@ function makeHarness(): {
   sessions: ISettableObservable<readonly IAcpSession[]>
   history: ISettableObservable<readonly AcpSessionHistoryEntry[]>
   events: MobileBridgeEvent[]
+  created: ReturnType<typeof vi.fn>
+  sessionService: IAcpSessionService
+  workspace: { current: { folder: URI; name: string } | null }
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
   const sessions = observableValue<readonly IAcpSession[]>('test.sessions', [])
   const history = observableValue<readonly AcpSessionHistoryEntry[]>('test.history', [])
   const live = new Map<string, IAcpSession>()
+  const created = vi.fn()
   const sessionService = {
     sessions,
     getById: (id: string) => live.get(id),
+    createSession: vi.fn(async () => created()),
+    closeSession: vi.fn(async () => {}),
+    deleteOnAgent: vi.fn(async () => {}),
   } as unknown as IAcpSessionService
-  const historyService = { entries: history } as unknown as IAcpSessionHistoryService
+  const historyService = {
+    entries: history,
+    get: () => undefined,
+    list: () => [],
+    removeDeleted: vi.fn(),
+  } as unknown as IAcpSessionHistoryService
   const registry = {
-    get: () => ({ id: 'fake', name: 'Fake Agent' }),
+    get: (id: string) => {
+      if (id !== 'fake' && id !== 'other') throw new Error('unknown agent')
+      return { id, name: id === 'fake' ? 'Fake Agent' : 'Other Agent' }
+    },
+    list: () => [
+      { id: 'fake', name: 'Fake Agent' },
+      { id: 'other', name: 'Other Agent' },
+    ],
+    defaultAgentId: () => 'fake',
   } as unknown as IAcpAgentRegistry
   const loggerService = { createLogger: () => NULL_LOGGER } as unknown as ILoggerService
-  const service = new MobileBridgeService(sessionService, historyService, registry, loggerService)
+  const workspace = { current: null } as unknown as IWorkspaceService & {
+    current: { folder: URI; name: string } | null
+  }
+  const editorGroups = { groups: [] } as unknown as IEditorGroupsService
+  const service = new MobileBridgeService(
+    sessionService,
+    historyService,
+    registry,
+    workspace,
+    editorGroups,
+    loggerService,
+  )
   const events: MobileBridgeEvent[] = []
   service.onDidChange((event) => events.push(event))
   return {
@@ -160,6 +211,9 @@ function makeHarness(): {
     sessions,
     history,
     events,
+    created,
+    sessionService,
+    workspace: workspace as unknown as { current: { folder: URI; name: string } | null },
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -273,7 +327,14 @@ describe('MobileBridgeService', () => {
     })
     expect(snapshot?.plan).toStrictEqual([{ content: 'Step', status: 'in_progress' }])
     expect(snapshot?.configOptions).toStrictEqual([
-      { id: 'model', name: 'Model', type: 'select', currentValue: 'Model One' },
+      {
+        id: 'model',
+        name: 'Model',
+        type: 'select',
+        currentValue: 'Model One',
+        allowedOnMobile: true,
+        options: [{ value: 'm1', label: 'Model One', allowedOnMobile: true }],
+      },
     ])
     expect(snapshot?.usage).toStrictEqual({
       used: 10,
@@ -410,11 +471,14 @@ describe('MobileBridgeService', () => {
     harness.events.length = 0
 
     const permission: AcpPendingPermission = {
+      requestId: 'req-1',
       toolCallId: 'tool-1',
       title: 'Run command',
       options: [{ optionId: 'allow', name: 'Allow' }],
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     }
     first.pendingPermission.set(permission, undefined)
     await flush()
@@ -439,7 +503,12 @@ describe('MobileBridgeService', () => {
           event.kind === 'session_delta',
       )
       .flatMap((event) => event.events)
-    expect(cleared[0]).toStrictEqual({ type: 'permission_cleared' })
+    expect(cleared[0]).toStrictEqual({
+      type: 'permission_cleared',
+      requestId: 'req-1',
+      reason: 'cancelled',
+      source: 'pc',
+    })
   })
 
   it('coalesces rapid updates into one delta batch', async () => {
@@ -528,5 +597,401 @@ describe('MobileBridgeService', () => {
     })
     await expect(harness.service.getToolCallDetail('s1', 'missing')).resolves.toBeUndefined()
     await expect(harness.service.getToolCallDetail('missing', 'tool-1')).resolves.toBeUndefined()
+  })
+})
+
+describe('MobileBridgeService commands', () => {
+  function makePermission(
+    requestId: string,
+    options: AcpPendingPermission['options'],
+    extra: Partial<AcpPendingPermission> = {},
+  ): AcpPendingPermission {
+    return {
+      requestId,
+      toolCallId: 'tool-1',
+      title: 'Run command',
+      options,
+      resolve: vi.fn(),
+      cancel: vi.fn(),
+      resolveWithSource: vi.fn(),
+      cancelWithSource: vi.fn(),
+      ...extra,
+    }
+  }
+
+  function makeElicitation(requestId: string): AcpPendingElicitation {
+    return {
+      requestId,
+      request: {
+        message: 'Name?',
+        requestedSchema: { type: 'object', properties: {} },
+      } as unknown as AcpPendingElicitation['request'],
+      resolve: vi.fn(),
+      cancel: vi.fn(),
+      resolveWithSource: vi.fn(),
+      cancelWithSource: vi.fn(),
+    }
+  }
+
+  function callSpy<T extends (...args: never[]) => unknown>(session: IAcpSession, name: string): T {
+    return (session as unknown as Record<string, T>)[name]!
+  }
+
+  it('forwards prompt, cancel, rename and config commands to the session', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    first.configOptions.set(
+      [
+        {
+          id: 'mode',
+          name: 'Mode',
+          type: 'select',
+          currentValue: 'ask',
+          options: [
+            { value: 'ask', name: 'Ask' },
+            { value: 'code', name: 'Code' },
+          ],
+        },
+        { id: 'fast', name: 'Fast', type: 'boolean', currentValue: false },
+      ] as unknown as SessionConfigOption[],
+      undefined,
+    )
+
+    await expect(harness.service.sendPrompt('s1', 'hello')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(callSpy<(...a: unknown[]) => unknown>(first.session, 'sendPrompt')).toHaveBeenCalledWith(
+      'hello',
+    )
+
+    await expect(harness.service.cancelTurn('s1')).resolves.toEqual({ ok: true, value: undefined })
+    expect(callSpy(first.session, 'cancelTurn')).toHaveBeenCalled()
+
+    await expect(harness.service.renameSession('s1', 'New title')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(callSpy(first.session, 'renameTitle')).toHaveBeenCalledWith('New title')
+
+    await expect(harness.service.setConfigOption('s1', 'mode', 'code')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    await expect(harness.service.setConfigOption('s1', 'fast', true)).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(callSpy(first.session, 'setConfigOption')).toHaveBeenNthCalledWith(1, 'mode', 'code')
+    expect(callSpy(first.session, 'setConfigOption')).toHaveBeenNthCalledWith(2, 'fast', true)
+  })
+
+  it('rejects unknown sessions, read-only sessions and unknown ids', async () => {
+    const harness = makeHarness()
+    const readOnly = makeSession('ro', { readOnly: true })
+    harness.add(readOnly)
+
+    await expect(harness.service.sendPrompt('missing', 'x')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+    await expect(harness.service.sendPrompt('ro', 'x')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_read_only',
+    })
+    await expect(harness.service.resolvePermission('ro', 'r1', 'allow')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_read_only',
+    })
+    await expect(harness.service.renameSession('missing', 'x')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+  })
+
+  it('settles a permission once with the mobile source and rejects stale or high-risk options', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    const pending = makePermission('req-1', [
+      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'allow-always', name: 'Always', kind: 'allow_always' },
+    ])
+    first.pendingPermission.set(pending, undefined)
+
+    await expect(
+      harness.service.resolvePermission('s1', 'stale', 'allow-once'),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'stale_request',
+    })
+    await expect(
+      harness.service.resolvePermission('s1', 'req-1', 'missing'),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'bad_request',
+    })
+    await expect(
+      harness.service.resolvePermission('s1', 'req-1', 'allow-always'),
+    ).resolves.toMatchObject({ ok: false, code: 'forbidden_operation' })
+    expect(pending.resolveWithSource).not.toHaveBeenCalled()
+
+    await expect(
+      harness.service.resolvePermission('s1', 'req-1', 'allow-once', 'looks good'),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(pending.resolveWithSource).toHaveBeenCalledWith('allow-once', 'mobile', 'looks good')
+  })
+
+  it('cancels a permission with the mobile source and rejects stale requests', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    const pending = makePermission('req-1', [{ optionId: 'allow-once', name: 'Allow' }])
+    first.pendingPermission.set(pending, undefined)
+
+    await expect(harness.service.cancelPermission('s1', 'other')).resolves.toMatchObject({
+      ok: false,
+      code: 'stale_request',
+    })
+    await expect(harness.service.cancelPermission('s1', 'req-1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(pending.cancelWithSource).toHaveBeenCalledWith('mobile', 'cancelled')
+  })
+
+  it('resolves an elicitation with the mobile source and rejects stale requests', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    const pending = makeElicitation('e1')
+    first.pendingElicitation.set(pending, undefined)
+
+    await expect(
+      harness.service.resolveElicitation('s1', 'stale', 'decline'),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'stale_request',
+    })
+    await expect(
+      harness.service.resolveElicitation('s1', 'e1', 'accept', { name: 'Ada' }),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(pending.resolveWithSource).toHaveBeenCalledWith(
+      { action: 'accept', content: { name: 'Ada' } },
+      'mobile',
+    )
+    await expect(harness.service.resolveElicitation('s1', 'nope', 'cancel')).resolves.toMatchObject(
+      {
+        ok: false,
+        code: 'stale_request',
+      },
+    )
+  })
+
+  it('rejects high-risk config values before asking the session', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    first.configOptions.set(
+      [
+        {
+          id: 'approval',
+          name: 'Approval',
+          type: 'select',
+          currentValue: 'ask',
+          options: [
+            { value: 'ask', name: 'Ask' },
+            { value: 'bypassPermissions', name: 'Bypass' },
+          ],
+        },
+        { id: 'fast', name: 'Fast', type: 'boolean', currentValue: false },
+      ] as unknown as SessionConfigOption[],
+      undefined,
+    )
+
+    await expect(
+      harness.service.setConfigOption('s1', 'approval', 'bypassPermissions'),
+    ).resolves.toMatchObject({ ok: false, code: 'forbidden_operation' })
+    await expect(
+      harness.service.setConfigOption('s1', 'approval', 'missing'),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'bad_request',
+    })
+    await expect(harness.service.setConfigOption('s1', 'missing', 'ask')).resolves.toMatchObject({
+      ok: false,
+      code: 'bad_request',
+    })
+    await expect(harness.service.setConfigOption('s1', 'fast', 'true')).resolves.toMatchObject({
+      ok: false,
+      code: 'bad_request',
+    })
+    expect(callSpy(first.session, 'setConfigOption')).not.toHaveBeenCalled()
+  })
+
+  it('forwards auto-resolve pause and resume, rejecting stale countdowns', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    const pause = vi.fn()
+    const resume = vi.fn()
+    const pending = makePermission('req-1', [{ optionId: 'execute', name: 'Execute' }], {
+      autoResolve: {
+        optionId: 'execute',
+        delayMs: 3000,
+        state: observableValue('test.auto', {
+          paused: false,
+          remainingMs: 3000,
+          cancelled: false,
+        }),
+        pause,
+        resume,
+        cancel: vi.fn(),
+      },
+    })
+    first.pendingPermission.set(pending, undefined)
+
+    await expect(harness.service.pauseAutoResolve('s1', 'stale')).resolves.toMatchObject({
+      ok: false,
+      code: 'stale_request',
+    })
+    await expect(harness.service.pauseAutoResolve('s1', 'req-1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    await expect(harness.service.resumeAutoResolve('s1', 'req-1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(pause).toHaveBeenCalled()
+    expect(resume).toHaveBeenCalled()
+  })
+
+  it('creates a session for a known agent and forwards the initial prompt', async () => {
+    const harness = makeHarness()
+    const created = makeSession('new-1', { durableId: 'd-new' })
+    harness.created.mockReturnValue(created.session)
+
+    await expect(
+      harness.service.newSession('fake', { folder: 'file:///workspace/demo' }, 'start here'),
+    ).resolves.toEqual({ ok: true, value: { localId: 'new-1', durableId: 'd-new' } })
+    expect(harness.sessionService.createSession).toHaveBeenCalledWith('fake', {
+      cwd: '/workspace/demo',
+    })
+    expect(callSpy(created.session, 'sendPrompt')).toHaveBeenCalledWith('start here')
+
+    await expect(
+      harness.service.newSession('unknown', { folder: 'file:///workspace/demo' }),
+    ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+    await expect(
+      harness.service.newSession('fake', { folder: 'not a uri' }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: 'bad_request',
+    })
+  })
+
+  it('deletes a session through the shared removal pipeline', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+
+    await expect(harness.service.deleteSession('s1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.sessionService.closeSession).toHaveBeenCalledWith('s1')
+  })
+
+  it('lists this window workspace and the visible agents', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+
+    await expect(harness.service.listWorkspaces()).resolves.toStrictEqual([
+      { folder: 'file:///workspace/demo', name: 'demo', isOpen: true },
+    ])
+    await expect(harness.service.listAgents()).resolves.toStrictEqual([
+      { id: 'fake', name: 'Fake Agent', isDefault: true },
+      { id: 'other', name: 'Other Agent', isDefault: false },
+    ])
+  })
+})
+
+describe('MobileBridgeService permission supersede', () => {
+  it('clears the replaced request before broadcasting the new one', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      const first = makeSession('s1')
+      harness.add(first)
+      await harness.service.startStreaming()
+      first.pendingPermission.set(
+        {
+          requestId: 'req-1',
+          toolCallId: 'tool-1',
+          title: 'First',
+          options: [{ optionId: 'allow-once', name: 'Allow' }],
+          resolve: () => {},
+          cancel: () => {},
+          resolveWithSource: () => {},
+          cancelWithSource: () => {},
+        },
+        undefined,
+      )
+      await flush()
+      harness.events.length = 0
+
+      // Mirrors presentPermission(): clear the old card, settle it as
+      // superseded, then present the replacement.
+      first.pendingPermission.set(undefined, undefined)
+      first.settlePermission({
+        requestId: 'req-1',
+        outcome: 'cancelled',
+        source: 'pc',
+        reason: 'superseded',
+      })
+      first.pendingPermission.set(
+        {
+          requestId: 'req-2',
+          toolCallId: 'tool-2',
+          title: 'Second',
+          options: [{ optionId: 'allow-once', name: 'Allow' }],
+          resolve: () => {},
+          cancel: () => {},
+          resolveWithSource: () => {},
+          cancelWithSource: () => {},
+        },
+        undefined,
+      )
+      await flush()
+
+      const events = harness.events
+        .filter(
+          (event): event is Extract<MobileBridgeEvent, { kind: 'session_delta' }> =>
+            event.kind === 'session_delta',
+        )
+        .flatMap((event) => event.events)
+        .filter(
+          (event) => event.type === 'permission_cleared' || event.type === 'permission_upsert',
+        )
+      expect(events).toStrictEqual([
+        {
+          type: 'permission_cleared',
+          requestId: 'req-1',
+          reason: 'superseded',
+          source: 'pc',
+        },
+        expect.objectContaining({
+          type: 'permission_upsert',
+          permission: expect.objectContaining({ requestId: 'req-2' }),
+        }),
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

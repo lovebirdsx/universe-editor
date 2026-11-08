@@ -90,6 +90,7 @@ function makePending(request: CreateElicitationRequest): Harness {
     cancelled: false,
   } as Harness
   harness.pending = {
+    requestId: 'req-1',
     request,
     resolve: (result) => {
       harness.resolved.push(result)
@@ -97,6 +98,8 @@ function makePending(request: CreateElicitationRequest): Harness {
     cancel: () => {
       harness.cancelled = true
     },
+    resolveWithSource: () => {},
+    cancelWithSource: () => {},
   }
   return harness
 }
@@ -634,6 +637,7 @@ describe('ElicitationCard — url mode', () => {
       urlState: observableValue<AcpUrlElicitationState>('test.urlState', 'consent'),
     } as UrlHarness
     harness.pending = {
+      requestId: 'req-url',
       request: {
         sessionId: 'agent-1',
         mode: 'url',
@@ -649,6 +653,8 @@ describe('ElicitationCard — url mode', () => {
       cancel: () => {
         harness.cancelled = true
       },
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
       dismiss: () => {
         harness.dismissed = true
       },

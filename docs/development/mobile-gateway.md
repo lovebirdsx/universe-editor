@@ -2,8 +2,8 @@
 
 > 状态：**M1 已落地**（协议包、main 网关与配对、PC 设置页、手机 PWA 骨架）；
 > **M2 只读镜像后端已落地**（协议 v2、每窗口会话桥、main 侧收件箱/会话聚合、`acp-view-model`
-> 抽取），手机端会话界面仍待后续任务。
-> 会话镜像、交互与通知仍按下文里程碑推进。
+> 抽取）；**M3 交互后端已落地**（协议 v3：命令路由、审批仲裁、倒计时下沉、新建会话、高风险限制、
+> 幂等与审计）。手机端交互界面仍由后续任务补齐；通知仍按 M4 推进。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -126,9 +126,12 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 2`（v2 增加会话镜像帧）。WS 建立后第一帧必须是
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 3`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+`allowedOnMobile`、`permission_cleared` 元数据与命令幂等）。WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime }`。**token 不放 URL query**，避免进入访问日志与 Referer。
+`hello_ok { ..., serverTime, capabilities }`；v3 的 `hello_ok.capabilities` 为
+`['inbox', 'commands']`，旧客户端可以只看 `inbox`。**token 不放 URL query**，避免进入访问日志与
+Referer。
 
 **客户端 → 服务端**
 
@@ -137,24 +140,37 @@ main 侧不直接读 `AcpSession`。
 | `hello` | 协议版本、设备 token、客户端版本、能力 |
 | `subscribe_inbox` / `unsubscribe_inbox` | 订阅或退订收件箱 |
 | `subscribe_session` / `unsubscribe_session` | `{ ref, afterSeq? }`，订阅单个会话 |
-| `command` | `{ requestId, kind, payload }` |
+| `command` | `{ requestId, kind, payload, idempotencyKey? }` |
 | `push_subscribe` / `push_unsubscribe` | 注册或注销 Web Push 订阅 |
 | `ping` | 心跳，服务端回 `pong` |
 
-**命令 kind**：
+**命令 kind（v3 已实现）**：
 
-M2 只实现 `getToolCallDetail`（payload `{ ref, toolCallId }`）；其余 kind 一律回
-`command_result { ok: false, error: 'not_supported' }`，未知 kind 不会导致解析错误。
+| 分类 | kind | payload | 说明 |
+|---|---|---|---|
+| 详情 | `getToolCallDetail` | `{ ref, toolCallId }` | 工具调用详情按需拉取 |
+| 会话 | `sendPrompt` | `{ ref, text }` | 第一期仅纯文本；桥在 prompt 被接受后立即返回 |
+| 会话 | `cancelTurn` | `{ ref }` | 停止当前 turn |
+| 审批 | `resolvePermission` | `{ ref, requestId, optionId, feedback? }` | 高风险选项被拒 |
+| 审批 | `cancelPermission` | `{ ref, requestId }` | 取消/关闭待审批卡片 |
+| 审批 | `resolveElicitation` | `{ ref, requestId, action, content? }` | `accept` / `decline` / `cancel` |
+| 配置 | `setConfigOption` | `{ ref, configId, value }` | `string`（select）或 `boolean` |
+| 自动执行 | `pauseAutoResolve` / `resumeAutoResolve` | `{ ref, requestId }` | 暂停 / 继续 plan 倒计时 |
+| 会话管理 | `newSession` | `{ agentId, workspace, initialPrompt? }` | 见 §6 |
+| 会话管理 | `renameSession` | `{ ref, title }` | 会话标题 |
+| 会话管理 | `deleteSession` | `{ ref }` | 复用 PC「Delete Agent Session」的 plan → 执行链路 |
+| 枚举 | `listWorkspaces` | `{}` | 打开窗口 ∪ 最近工作区，带 `isOpen` |
+| 枚举 | `listAgents` | `{}` | 由第一个已注册窗口桥返回 |
 
-后续里程碑：
+未知 kind 仍回 `command_result { ok: false, error: 'not_supported' }`，不会导致解析错误。
 
-- 会话：`sendPrompt`（第一期仅纯文本）、`cancelTurn`
-- 审批：`resolvePermission`、`cancelPermission`、`resolveElicitation`
-- 配置：`setConfigOption`
-- 会话管理：`newSession`、`renameSession`、`deleteSession`
-- 详情：`getToolCallDetail`、`getMessageDetail`、`getDiffDetail`
-- 自动执行：`pauseAutoResolve` / `resumeAutoResolve`
-- 枚举：`listWorkspaces`、`listAgents`
+**幂等**：会修改状态的命令可带 `idempotencyKey`。网关在内存中缓存首个结果 5 分钟
+（`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
+只读命令（如 `getToolCallDetail`）不缓存。客户端重试不会重复发 prompt 或重复建会话。
+
+**超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` / `cancelTurn` 5s；
+审批、配置、自动执行、重命名 10s；`deleteSession` / `newSession` 30s。超时回
+`command_result { ok: false, error: 'internal' }`。
 
 **服务端 → 客户端**
 
@@ -194,6 +210,9 @@ M2 只实现 `getToolCallDetail`（payload `{ ref, toolCallId }`）；其余 kin
   `tool_call_upsert`、`timeline_item_added/removed`、`plan_snapshot`、
   `config_options_snapshot`、`summary_changed`、`permission_upsert/cleared`、
   `elicitation_upsert/cleared`。
+- v3 的 `MobilePendingPermission` 带 `requestId`、每个选项带 `allowedOnMobile`，并可能带
+  `autoResolve { optionId, deadlineAt?, paused }`；`permission_cleared` 带
+  `{ requestId, reason, source }`，让手机区分 PC / 手机 / 自动执行与「被新请求取代」。
 - `summary_changed` 比较时忽略 `updatedAt`，避免每次合帧都发；`usage` 只在快照下发。
 
 **错误码**
@@ -204,41 +223,50 @@ M2 只实现 `getToolCallDetail`（payload `{ ref, toolCallId }`）；其余 kin
 | `forbidden_operation` | 高风险操作被策略拒绝 |
 | `session_not_found` | 会话不存在或已关闭 |
 | `session_read_only` | 只读预览会话不能写 |
-| `stale_request` | 请求基于过期快照；审批场景按成功处理 |
+| `stale_request` | `requestId` 已不在等待中（重复点击 / 另一端先处理） |
 | `workspace_not_open` | 目标工作区没有打开窗口且不能自动开窗 |
 | `not_supported` | 当前档位/版本不支持该命令 |
 | `rate_limited` | 触发速率限制 |
 | `internal` | 未分类的服务端错误 |
 
-`stale_request` 在审批场景特殊处理：客户端点的是旧卡片，但请求可能已被另一端处理。
-此时按成功返回，由随后的快照/增量收敛 UI，不向用户报错。
+`stale_request` 表示这次点击基于过期卡片：请求可能已被 PC 或另一端处理。客户端应直接按
+快照/增量收敛 UI（卡片消失），不要把它显示成操作失败，也不要自动重发。
 
 ## 5. 审批仲裁
 
-**现状缺陷**：`onRequestPermission`（`apps/editor/src/renderer/services/acp/session/acpSessionService.ts`）
-的 `resolve` / `cancel` 没有 settled 守卫；重复调用会重复触发副作用（如 `persistAllow`、telemetry）。
-elicitation 侧已有 `settled` 布尔守卫，权限侧需要补齐：**首个 resolve / cancel 生效，其余 no-op**。
+**已实现**：`onRequestPermission` / `onCreateElicitation`
+（`apps/editor/src/renderer/services/acp/session/acpSessionService.ts`）都带 `settled` 守卫，
+**首个 resolve / cancel 生效，后续调用整体 no-op**。重复点击、PC 与手机竞速、手动与自动同刻
+都只结算一次，`persistAllow` 与 telemetry 不会重复落。
 
-**DTO 变化**：
+**DTO 与事件**：
 
-- `AcpPendingPermission` / `AcpPendingElicitation` 增加 `requestId`。
-- 结算时记录来源：`pc` / `mobile` / `auto`。
-- 结算后广播 `cleared { reason: selected | cancelled | superseded | auto }`。
+- `AcpPendingPermission` / `AcpPendingElicitation` 带稳定 `requestId`。
+- 结算 API 记录来源：`resolveWithSource(optionId, 'pc' | 'mobile' | 'auto', feedback?)`、
+  `cancelWithSource(source, reason?)`；旧的 `resolve` / `cancel` 等价于 `'pc'`。
+- service 发出 `onDidSettlePermission { requestId, outcome, optionId?, source, reason }` 与
+  `onDidSettleElicitation`；被新请求取代时 `reason: 'superseded'`。
+- 桥把结算元数据附到 `permission_cleared { requestId, reason, source }` 广播；手机据此区分
+  「自己在另一端点过」「PC 处理」「自动执行」。
 
 **双端行为**：
 
 - PC 与手机订阅同一个 observable；任一端处理后，另一端卡片自然消失。
 - 手机重连靠快照恢复待审批卡片；不在内存里重放旧请求。
 - renderer 重载导致的取消显示「请求已失效」，不显示为用户取消。
+- 手机通过未匹配当前 `requestId` 的请求时回 `stale_request`（见 §4 错误码）。
 
-**已确认的行为变更：plan 自动执行倒计时下沉**：
+**plan 自动执行倒计时已下沉到 service**：
 
-- 现状：倒计时定时器在 `apps/editor/src/renderer/workbench/agents/PermissionCard.tsx` 组件内，
-  依赖卡片挂载；会话 tab 未打开时不会自动执行。
-- 目标：定时器移到 service 层持有，服务端提供 `deadlineAt` 与 `pause` / `resume`；
-  PC 卡片的 hover / focus 改为调用 `pause` / `resume`。
-- 后果：**会话 tab 未打开时 plan 也会按时自动执行**。这是已确认的语义修正，
-  实现时需同步更新相关测试与 `docs/user/` 用户文档。
+- `AcpPendingPermission.autoResolve` 由 `AcpSessionService` 创建并持有定时器，状态为
+  observable：`{ deadlineAt?, paused, remainingMs, cancelled }`。
+- 暴露 `pause()` / `resume()` / `cancel()`；`resume()` 从剩余时间重新计时。
+- `PermissionCard` 不再自己 `setTimeout`，只读状态并在 hover / focus 时暂停、离开时恢复，
+  取消勾选调用 `cancel()`。
+- 到点由 service 以 source `'auto'` 结算；**会话 tab / 卡片未挂载时也照常执行**。
+- 手动选择与自动到点的竞速由 §5 的 `settled` 守卫收敛为一次结算。
+- 倒计时相关逻辑有单测覆盖（service 层，不依赖 UI）；行为变更已同步到
+  `docs/user/zh-CN/ai-agent/modes-and-thinking.md`。
 
 **通知抑制**：带 `autoResolve` 的审批不产生手机通知，与现有
 `apps/editor/src/renderer/contributions/AgentNotificationContribution.ts` 的边沿保持一致。
@@ -247,21 +275,25 @@ elicitation 侧已有 `settled` 布尔守卫，权限侧需要补齐：**首个 
 
 **工作区候选**：已打开窗口（`IWindowMainService.getOpenWindowInfos`）∪ 最近工作区
 （`IRecentWorkspacesService`，`apps/editor/src/main/services/workspace/recentWorkspacesMainService.ts`）。
-按 canonical folder 去重，走仓库规定的路径身份比较（`IUriIdentityService` / `arePathsEqual` /
-`getPathComparisonKey`），**不手写 `fsPath.toLowerCase()`**。远程工作区标记 authority。
+按 canonical folder 去重，路径身份走 `hub` 的 `isSameWorkspace`（scheme / authority 相等 +
+`arePathsEqual(fsPath, fsPath, normalizePlatform(process.platform))`），**不手写
+`fsPath.toLowerCase()` / 反斜杠折叠**。远程工作区标记 authority。
 
-**三种路径**：
+**三种路径**（`MobileGatewayHub._newSession`）：
 
 | 目标工作区状态 | 行为 |
 |---|---|
-| 已有匹配窗口 | 在该窗口调用 `createSession` |
-| 仅在最近列表 | `openWindowForFolder` 自动开窗（会把窗口带到前台，已接受），等桥就绪后创建 |
-| 都不在 | 返回 `workspace_not_open` |
+| 已有匹配窗口 | 直接调用该窗口桥的 `newSession`（不等待） |
+| 仅在最近列表 | `openWindowForFolder` 自动开窗（会把窗口带到前台，已接受），随后轮询等桥注册，上限 30s |
+| 都不在 / 等待桥超时 | 返回 `workspace_not_open` |
 
-**远程**：已有远程会话可以镜像到手机；新建远程会话要求对应远程窗口已打开，不因手机请求而新建远程连接。
+**远程**：已有远程会话可以镜像到手机；新建远程会话要求对应远程窗口已打开，不因手机请求而新建远程连接
+（`isRemoteWorkspace`：带 authority 或 scheme 为 `remote-ssh`）。仅最近列表里的远程工作区同样回
+`workspace_not_open`。
 
-**时序**：`createSession` 同步返回，初始 prompt 先入队；客户端可以立即 `sendPrompt`，由桥保证在会话
-ready 后按顺序投递。
+**时序**：`createSession` 同步返回；桥立即回 `{ localId, durableId? }`，初始 prompt 先入队，
+客户端可以立即 `sendPrompt`，由会话保证在 ready 后按顺序投递。`listWorkspaces` 返回
+`{ folder, name, authority?, isOpen }`；`listAgents` 返回 `{ id, name, isDefault }`。
 
 ## 7. 配对与安全
 
@@ -292,15 +324,30 @@ ready 后按顺序投递。
 - 静态页与 WS 响应加 CSP 等安全头。
 - 吊销立即断开所有该设备连接并发 `device_revoked`。
 
-**已确认：高风险操作第一期默认禁止**：
+**高风险操作第一期默认禁止（v3 已实现）**：唯一的策略真相在
+`packages/mobile-protocol/src/policy.ts`（`isHighRiskPermissionOption` /
+`isConfigValueAllowedOnMobile`），桥与网关共用，UI 只用投影出的 `allowedOnMobile` 隐藏。
 
-- 手机不能选 `allow_always`；
-- 手机不能切 `bypassPermissions`；
-- 手机不能修改自动批准 / 自动执行策略。
-- **网关与桥双重校验**，不依赖 UI 隐藏。第二期可在 PC 上把设备升级为「受信设备」后放开。
+| 类别 | 判定 |
+|---|---|
+| 权限选项 | 任何 `kind === 'allow_always'` 一律禁止；作用域化持久规则同样禁止：`allow-with-updates`、`allow-skill-exact`、`allow-skill-prefix`、`exit-plan-bypass` |
+| 配置值 | 值形如 `bypasspermissions` / `bypass` / `dangerously-skip-permissions` / `agent-full-access` / `danger-full-access` / `full-access` / `full_access` 一律禁止（大小写、连字符/下划线归一后匹配） |
+| 自动批准 / 自动执行策略 | 手机没有修改入口；`setConfigOption` 命中的策略值同样被上面的配置值规则拦截 |
+
+**双重校验**：
+
+1. **桥**（`MobileBridgeService`）：会话只读回 `session_read_only`；`requestId` 不匹配回
+   `stale_request`；未知选项/值回 `bad_request`；高风险回 `forbidden_operation`。
+2. **网关**（`MobileGatewayHub`）：从 `permission_upsert` / 快照缓存每个 request 的
+   `allowedOnMobile`，`resolvePermission` 只路由能证明「本次确实提供过且允许」的选项，
+   缓存缺失或不符回 `forbidden_operation`；`setConfigOption` 用同一值谓词再校验一次。
+   第二期可在 PC 上把设备升级为「受信设备」后放开。
 
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录
-`ts` / `device` / `remoteAddress` / `action` / `result` / `sessionRef`；**不记 prompt 正文与 token**。
+`ts` / `device` / `remoteAddress` / `action` / `result` / `detail`。所有会修改状态的命令
+（`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、删除）都记一条；
+`detail` 只含 `window=` / `local=` / `agent=` / `error=` 等定位信息，**绝不记 prompt 正文、
+feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents`）不审计。
 
 **PC 设置页**：新增 Mobile Devices 编辑器。
 
@@ -444,8 +491,12 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
 2. **手机高风险操作第一期默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验。
 3. **plan 自动执行倒计时下沉到 service**：接受「会话 tab 未打开也会自动执行」的行为变化，并同步测试与用户文档。
+   实现见 §5：`AcpPendingPermission.autoResolve` 由 service 持有，状态 observable，PC 卡片只转发
+   pause / resume / cancel。
 4. **手机新建会话允许自动开窗**：窗口会被带到前台，已接受。
 5. **默认值**：PC 聚焦时不发任何手机通知；远程会话可镜像、新建远程会话需远程窗口已打开；详情按需拉取。
+6. **协议 v3 的幂等与超时**：会修改状态的命令支持 `idempotencyKey`（结果缓存 5 分钟、并发去重）；
+   网关按命令设 5s / 10s / 30s 三档超时，超时回 `internal`，不让一次坏调用挂住连接。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。

@@ -187,14 +187,20 @@ describe('SessionPage snapshot rendering', () => {
       harness.socket,
       sessionSnapshotFrame(1, {
         pendingPermission: {
+          requestId: 'req-1',
           toolCallId: 't1',
           title: 'Run the command',
           options: [
-            { optionId: 'allow', name: '允许一次' },
-            { optionId: 'deny', name: '拒绝' },
+            { optionId: 'allow', name: '允许一次', allowedOnMobile: true },
+            { optionId: 'deny', name: '拒绝', allowedOnMobile: true },
           ],
         },
-        pendingElicitation: { mode: 'text', message: 'Which branch?', title: 'Choose branch' },
+        pendingElicitation: {
+          requestId: 'elicit-1',
+          mode: 'text',
+          message: 'Which branch?',
+          title: 'Choose branch',
+        },
       }),
     )
 

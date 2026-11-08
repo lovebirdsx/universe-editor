@@ -5,10 +5,11 @@
  *  session doesn't block traffic on another.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
-import { localize } from '@universe-editor/platform'
+import { useEffect, useState } from 'react'
+import { localize, observableValue } from '@universe-editor/platform'
 import { useObservable } from '../useService.js'
 import type {
+  AcpAutoResolveState,
   AcpPendingPermission,
   IAcpSession,
 } from '../../services/acp/session/acpSessionService.js'
@@ -16,11 +17,17 @@ import { supportsPlanReviewFeedback } from '../../services/acp/session/planAutoE
 import { PlanAutoExecuteToggle } from './PlanAutoExecuteToggle.js'
 import styles from './agents.module.css'
 
+/** Placeholder for cards without a countdown; keeps the hook call unconditional. */
+const NO_AUTO_RESOLVE_STATE = observableValue<AcpAutoResolveState>(
+  'acp.permission.autoResolve.none',
+  { paused: false, remainingMs: 0, cancelled: true },
+)
+
 export function PermissionCard({ session }: { session: IAcpSession }) {
   const pending = useObservable(session.pendingPermission)
   if (!pending) return null
-  // key 强制每个新请求整体重挂载：倒计时与开关镜像 state 以单个请求为生命周期。
-  return <ActivePermissionCard key={pending.toolCallId} pending={pending} />
+  // key 强制每个新请求整体重挂载：steering 输入框以单个请求为生命周期。
+  return <ActivePermissionCard key={pending.requestId} pending={pending} />
 }
 
 function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
@@ -41,31 +48,38 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
   // codex 的计划审查卡只认 optionId、不读 `_meta.feedback`：意见会被静默丢弃，不渲染输入框。
   const showSteer = isPlanReview && supportsPlanReviewFeedback(pending.options)
 
-  // 本次请求的自动执行倒计时（service 按设置附加 autoResolve；选项缺席时为 undefined）。
-  // hover / 聚焦卡片即暂停，取消勾选开关同时作废本次倒计时。
+  // 倒计时归 service 所有（会话 tab 未挂载也照常执行）；卡片只读取快照并
+  // 在 hover / 聚焦时暂停、取消勾选时作废，绝不再自己 setTimeout 结算。
   const auto = pending.autoResolve
-  const [autoCancelled, setAutoCancelled] = useState(false)
-  const autoActive = !!auto && !autoCancelled
+  const autoState = useObservable(auto?.state ?? NO_AUTO_RESOLVE_STATE)
+  const autoActive = !!auto && !autoState.cancelled
   const [hovered, setHovered] = useState(false)
   const [focused, setFocused] = useState(false)
   const paused = hovered || focused
-  const [displayMs, setDisplayMs] = useState(auto?.delayMs ?? 0)
-  const remainingRef = useRef(auto?.delayMs ?? 0)
+  const [displayMs, setDisplayMs] = useState(0)
 
   useEffect(() => {
-    if (!auto || !autoActive || paused) return
-    const deadline = Date.now() + remainingRef.current
-    const timer = setTimeout(() => pending.resolve(auto.optionId), remainingRef.current)
-    const ticker = setInterval(() => {
-      remainingRef.current = Math.max(0, deadline - Date.now())
-      setDisplayMs(remainingRef.current)
-    }, 200)
-    return () => {
-      clearTimeout(timer)
-      clearInterval(ticker)
-      remainingRef.current = Math.max(0, deadline - Date.now())
+    if (!auto) return
+    if (paused) auto.pause()
+    else auto.resume()
+    // Unmounting the card (session tab switched away) must not leave the timer
+    // paused — the countdown keeps running in the service.
+    return () => auto.resume()
+  }, [auto, paused])
+
+  useEffect(() => {
+    const update = (): void => {
+      setDisplayMs(
+        autoState.deadlineAt !== undefined
+          ? Math.max(0, autoState.deadlineAt - Date.now())
+          : autoState.remainingMs,
+      )
     }
-  }, [auto, autoActive, paused, pending])
+    update()
+    if (autoState.cancelled || autoState.deadlineAt === undefined) return
+    const ticker = setInterval(update, 200)
+    return () => clearInterval(ticker)
+  }, [autoState])
 
   const submitSteer = (): void => {
     const text = steer.trim()
@@ -125,7 +139,7 @@ function ActivePermissionCard({ pending }: { pending: AcpPendingPermission }) {
       </div>
       {isPlanReview && (
         <div className={styles['permissionAuto']}>
-          <PlanAutoExecuteToggle onUnchecked={() => setAutoCancelled(true)} />
+          <PlanAutoExecuteToggle onUnchecked={() => auto?.cancel()} />
           {autoActive && auto && (
             <span
               className={styles['permissionAutoCountdown']}

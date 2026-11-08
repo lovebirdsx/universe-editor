@@ -513,20 +513,48 @@ export class MobileGatewayServer {
           this._options.hub?.unsubscribeSession(connection.hubConnection, parsed.value.ref)
         }
         break
-      case 'command':
+      case 'command': {
+        const command = parsed.value
         if (connection.hubConnection === undefined) {
           this._sendFrame(connection.ws, {
             type: 'command_result',
-            requestId: parsed.value.requestId,
+            requestId: command.requestId,
             ok: false,
             error: 'not_supported',
           })
         } else {
           void this._options.hub
-            ?.handleCommand(connection.hubConnection, parsed.value)
-            .catch((err) => this._options.logger.warn(`mobile command failed: ${String(err)}`))
+            ?.handleCommand(connection.hubConnection, command, {
+              record: (action, result, detail) => {
+                void this._options.audit
+                  .append({
+                    ...(connection.deviceId !== undefined ? { deviceId: connection.deviceId } : {}),
+                    ...(connection.deviceName !== undefined
+                      ? { deviceName: connection.deviceName }
+                      : {}),
+                    remoteAddress: connection.remoteAddress,
+                    action,
+                    result,
+                    ...(detail !== undefined ? { detail } : {}),
+                  })
+                  .catch((err) =>
+                    this._options.logger.warn(`mobile command audit failed: ${String(err)}`),
+                  )
+              },
+            })
+            .catch((err) => {
+              // A hub exception must not leave the phone waiting forever.
+              this._options.logger.warn(`mobile command failed: ${String(err)}`)
+              this._sendFrame(connection.ws, {
+                type: 'command_result',
+                requestId: command.requestId,
+                ok: false,
+                error: 'internal',
+              })
+            })
         }
         break
+      }
       default:
         this._sendServerError(connection.ws, 'not_supported', 'frame is not supported yet')
         break
@@ -578,7 +606,7 @@ export class MobileGatewayServer {
       serverVersion: this._options.serverVersion,
       deviceId: device.deviceId,
       serverTime: Date.now(),
-      capabilities: ['inbox'],
+      capabilities: ['inbox', 'commands'],
     })
     await this._options.audit.append({
       deviceId: device.deviceId,

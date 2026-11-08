@@ -1911,6 +1911,85 @@ describe('AcpSessionService', () => {
     await expect(promise).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
   })
 
+  describe('permission settlement arbitration', () => {
+    function permissionRequest(): RequestPermissionRequest {
+      return {
+        sessionId: 'agent-1',
+        toolCall: { toolCallId: 'tc-settle', kind: 'edit', title: 'Edit src/foo.ts' },
+        options: [
+          { optionId: 'once', name: 'Allow', kind: 'allow_once' },
+          { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
+          { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+        ],
+      } as RequestPermissionRequest
+    }
+
+    it('applies the first settlement only (repeated resolve/cancel are no-ops)', async () => {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const resolved = vi.fn()
+      session.onDidSettlePermission(resolved)
+      const publicLog = vi.spyOn(NoopTelemetryService.prototype, 'publicLog')
+      try {
+        const promise = svc.onRequestPermission(permissionRequest())
+        const pending = session.pendingPermission.get()!
+        pending.resolve('always')
+        // Bug repro: these used to run persistAllow + telemetry a second time.
+        pending.resolve('always')
+        pending.cancel()
+
+        await expect(promise).resolves.toEqual({
+          outcome: { outcome: 'selected', optionId: 'always' },
+        })
+        expect(permission.persisted).toEqual(['edit'])
+        expect(resolved).toHaveBeenCalledTimes(1)
+        expect(
+          publicLog.mock.calls.filter(([name]) => name === 'acp.permission_resolved'),
+        ).toHaveLength(1)
+      } finally {
+        publicLog.mockRestore()
+      }
+    })
+
+    it('records the settle source and request id on the session event', async () => {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const resolved = vi.fn()
+      session.onDidSettlePermission(resolved)
+      const promise = svc.onRequestPermission(permissionRequest())
+      const pending = session.pendingPermission.get()!
+      expect(pending.requestId).toEqual(expect.any(String))
+      pending.resolveWithSource('once', 'mobile')
+      await expect(promise).resolves.toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+      expect(resolved).toHaveBeenCalledWith({
+        requestId: pending.requestId,
+        outcome: 'selected',
+        optionId: 'once',
+        source: 'mobile',
+        reason: 'selected',
+      })
+    })
+
+    it('reports a superseded old request when a new one replaces it', async () => {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const resolved = vi.fn()
+      session.onDidSettlePermission(resolved)
+      const first = svc.onRequestPermission(permissionRequest())
+      const firstPending = session.pendingPermission.get()!
+      const second = svc.onRequestPermission(permissionRequest())
+      await expect(first).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
+      expect(resolved).toHaveBeenCalledWith({
+        requestId: firstPending.requestId,
+        outcome: 'cancelled',
+        source: 'pc',
+        reason: 'superseded',
+      })
+      session.pendingPermission.get()!.cancel()
+      await second
+    })
+  })
+
   it('cancels a pending permission card when the session closes', async () => {
     const b = await svc.createSession()
     await b.whenConnected()
@@ -1969,6 +2048,128 @@ describe('AcpSessionService', () => {
       })
     }
 
+    it('fires the plan auto-execute from the service timer, even with no card mounted', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+      vi.useFakeTimers()
+      try {
+        const settled = vi.fn()
+        s.onDidSettlePermission(settled)
+        const promise = requestPlanReview('agent-1')
+        // No PermissionCard / React effect exists in this test — the service owns
+        // the countdown, which is the whole point of the relocation.
+        const pending = s.pendingPermission.get()!
+        expect(pending.autoResolve?.state.get()).toMatchObject({
+          paused: false,
+          cancelled: false,
+          remainingMs: PLAN_AUTO_EXECUTE_DELAY_MS,
+        })
+        expect(pending.autoResolve?.state.get().deadlineAt).toEqual(expect.any(Number))
+
+        await vi.advanceTimersByTimeAsync(PLAN_AUTO_EXECUTE_DELAY_MS)
+        await expect(promise).resolves.toEqual({
+          outcome: { outcome: 'selected', optionId: 'exit-plan-auto' },
+        })
+        expect(settled).toHaveBeenCalledTimes(1)
+        expect(settled).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requestId: pending.requestId,
+            optionId: 'exit-plan-auto',
+            source: 'auto',
+            reason: 'auto',
+          }),
+        )
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('pausing keeps the remaining time and resuming restarts the countdown', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+      vi.useFakeTimers()
+      try {
+        const promise = requestPlanReview('agent-1')
+        const autoResolve = s.pendingPermission.get()!.autoResolve!
+        let resolved = false
+        void promise.then(() => {
+          resolved = true
+        })
+
+        await vi.advanceTimersByTimeAsync(1000)
+        autoResolve.pause()
+        const paused = autoResolve.state.get()
+        expect(paused).toMatchObject({ paused: true, remainingMs: 2000, cancelled: false })
+        expect(paused.deadlineAt).toBeUndefined()
+
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(resolved).toBe(false)
+
+        autoResolve.resume()
+        expect(autoResolve.state.get()).toMatchObject({ paused: false, remainingMs: 2000 })
+        expect(autoResolve.state.get().deadlineAt).toEqual(expect.any(Number))
+        await vi.advanceTimersByTimeAsync(1999)
+        expect(resolved).toBe(false)
+        await vi.advanceTimersByTimeAsync(1)
+        await expect(promise).resolves.toEqual({
+          outcome: { outcome: 'selected', optionId: 'exit-plan-auto' },
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('cancelling the countdown leaves the request for the user', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+      vi.useFakeTimers()
+      try {
+        const promise = requestPlanReview('agent-1')
+        const pending = s.pendingPermission.get()!
+        pending.autoResolve!.cancel()
+        expect(pending.autoResolve!.state.get()).toMatchObject({
+          paused: false,
+          cancelled: true,
+        })
+        let resolved = false
+        void promise.then(() => {
+          resolved = true
+        })
+        await vi.advanceTimersByTimeAsync(10_000)
+        expect(resolved).toBe(false)
+        pending.resolve('reject')
+        await expect(promise).resolves.toEqual({
+          outcome: { outcome: 'selected', optionId: 'reject' },
+        })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('manual and automatic settlement race settles exactly once', async () => {
+      const s = await svc.createSession()
+      await s.whenConnected()
+      config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+      vi.useFakeTimers()
+      try {
+        const settled = vi.fn()
+        s.onDidSettlePermission(settled)
+        const promise = requestPlanReview('agent-1')
+        const pending = s.pendingPermission.get()!
+        await vi.advanceTimersByTimeAsync(PLAN_AUTO_EXECUTE_DELAY_MS)
+        await expect(promise).resolves.toEqual({
+          outcome: { outcome: 'selected', optionId: 'exit-plan-auto' },
+        })
+        pending.resolve('exit-plan-default')
+        expect(settled).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
     it.each([
       ['bypassPermissions', 'exit-plan-bypass'],
       ['auto', 'exit-plan-auto'],
@@ -1989,7 +2190,7 @@ describe('AcpSessionService', () => {
       await new Promise((r) => setTimeout(r, 0))
       const pending = s.pendingPermission.get()
       try {
-        expect(pending?.autoResolve).toEqual({
+        expect(pending?.autoResolve).toMatchObject({
           optionId,
           delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
         })
@@ -2101,7 +2302,7 @@ describe('AcpSessionService', () => {
         await new Promise((r) => setTimeout(r, 0))
         const pending = s.pendingPermission.get()
         try {
-          expect(pending?.autoResolve).toEqual({
+          expect(pending?.autoResolve).toMatchObject({
             optionId: 'implement_plan',
             delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
           })
@@ -2157,7 +2358,7 @@ describe('AcpSessionService', () => {
       config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
       const promise = requestPlanReview('agent-1', [...planOptions, ...codexPlanOptions])
       await new Promise((r) => setTimeout(r, 0))
-      expect(s.pendingPermission.get()?.autoResolve).toEqual({
+      expect(s.pendingPermission.get()?.autoResolve).toMatchObject({
         optionId: 'exit-plan-auto',
         delayMs: PLAN_AUTO_EXECUTE_DELAY_MS,
       })
@@ -6462,8 +6663,11 @@ describe('AcpSessionService — stall watchdog', () => {
   function pendingElicitation(): AcpPendingElicitation {
     return {
       request: {},
+      requestId: 'req-test',
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     } as unknown as AcpPendingElicitation
   }
 
@@ -6472,8 +6676,11 @@ describe('AcpSessionService — stall watchdog', () => {
       toolCallId: 'tc-1',
       title: 'run command',
       options: [{ optionId: 'allow', name: 'Allow' }],
+      requestId: 'req-test',
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     }
   }
 
@@ -6940,8 +7147,11 @@ describe('AcpSessionService — idle process reaper', () => {
       toolCallId: 'tc-1',
       title: 'run command',
       options: [{ optionId: 'allow', name: 'Allow' }],
+      requestId: 'req-test',
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     }
   }
 
@@ -7797,8 +8007,11 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
       toolCallId: 'tc-1',
       title: 'run command',
       options: [{ optionId: 'allow', name: 'Allow' }],
+      requestId: 'req-test',
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     })
     await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
 
@@ -7955,8 +8168,11 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
         requestedSchema: { type: 'object', properties: { lang: { type: 'string' } }, required: [] },
         sessionId: 'agent-1',
       },
+      requestId: 'req-test',
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     })
     await vi.advanceTimersByTimeAsync(SWEEP_GRACE_MS + 100)
 

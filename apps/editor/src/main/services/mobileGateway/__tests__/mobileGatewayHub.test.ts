@@ -1,5 +1,9 @@
 import { Emitter, type ILogger } from '@universe-editor/platform'
-import type { MobileSessionRef, ServerFrame } from '@universe-editor/mobile-protocol'
+import type {
+  MobileAgentCandidate,
+  MobileSessionRef,
+  ServerFrame,
+} from '@universe-editor/mobile-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   IMobileBridgeService,
@@ -9,8 +13,11 @@ import type {
   MobileBridgeSessionSummary,
 } from '../../../../shared/ipc/mobileGatewayService.js'
 import {
+  COMMAND_IDEMPOTENCY_TTL_MS,
   MAX_BUFFERED_SESSION_BYTES,
   MobileGatewayHub,
+  type MobileCommandAudit,
+  type MobileGatewayHost,
   type MobileGatewayHubConnection,
 } from '../mobileGatewayHub.js'
 
@@ -30,6 +37,22 @@ class FakeBridge implements IMobileBridgeService {
   readonly getSnapshot = vi.fn(async (localId: string) => this.snapshots.get(localId))
   readonly getToolCallDetail = vi.fn(async () => this.detail)
   readonly ping = vi.fn(async () => 'pong' as const)
+  readonly sendPrompt = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly cancelTurn = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly resolvePermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly cancelPermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly resolveElicitation = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly setConfigOption = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly pauseAutoResolve = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly resumeAutoResolve = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly newSession = vi.fn(async () => ({
+    ok: true as const,
+    value: { localId: 'new-local' },
+  }))
+  readonly renameSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly deleteSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly listWorkspaces = vi.fn(async () => [])
+  readonly listAgents = vi.fn(async (): Promise<readonly MobileAgentCandidate[]> => [])
 
   sessions: MobileBridgeSessionSummary[] = []
   snapshots = new Map<string, MobileBridgeSessionSnapshot>()
@@ -240,7 +263,13 @@ describe('MobileGatewayHub', () => {
     hub.addConnection(connection)
 
     const subscribing = hub.subscribeSession(connection, { windowId: 1, localId: 's1' })
-    bridge.emit(event({ events: [{ type: 'permission_cleared' }] }))
+    bridge.emit(
+      event({
+        events: [
+          { type: 'permission_cleared', requestId: 'req-1', reason: 'selected', source: 'mobile' },
+        ],
+      }),
+    )
     release?.()
     await subscribing
 
@@ -248,7 +277,9 @@ describe('MobileGatewayHub', () => {
     const deltas = framesOf(connection, 'session_delta')
     expect(deltas).toHaveLength(1)
     expect(deltas[0]?.seq).toBe(2)
-    expect(deltas[0]?.events).toStrictEqual([{ type: 'permission_cleared' }])
+    expect(deltas[0]?.events).toStrictEqual([
+      { type: 'permission_cleared', requestId: 'req-1', reason: 'selected', source: 'mobile' },
+    ])
   })
 
   it('sends session_removed when the referenced session is gone', async () => {
@@ -438,5 +469,515 @@ describe('MobileGatewayHub protocol events', () => {
         title: 'Renamed',
       },
     })
+  })
+})
+
+describe('MobileGatewayHub commands', () => {
+  const ref: MobileSessionRef = { windowId: 1, localId: 's1', durableId: 'd1' }
+
+  function makeHost(overrides: Partial<MobileGatewayHost> = {}): MobileGatewayHost & {
+    listOpenWorkspaces: ReturnType<typeof vi.fn>
+    listRecentWorkspaces: ReturnType<typeof vi.fn>
+    openWorkspace: ReturnType<typeof vi.fn>
+    waitForBridge: ReturnType<typeof vi.fn>
+  } {
+    return {
+      listOpenWorkspaces: vi.fn(() => []),
+      listRecentWorkspaces: vi.fn(async () => []),
+      openWorkspace: vi.fn(async () => {}),
+      waitForBridge: vi.fn(async () => undefined),
+      ...overrides,
+    } as MobileGatewayHost & {
+      listOpenWorkspaces: ReturnType<typeof vi.fn>
+      listRecentWorkspaces: ReturnType<typeof vi.fn>
+      openWorkspace: ReturnType<typeof vi.fn>
+      waitForBridge: ReturnType<typeof vi.fn>
+    }
+  }
+
+  async function subscribeWithPermission(
+    hub: MobileGatewayHub,
+    bridge: FakeBridge,
+    connection: FakeConnection,
+    options: Array<{ optionId: string; allowedOnMobile: boolean }>,
+  ): Promise<void> {
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set(
+      's1',
+      snapshot('s1', {
+        summary: summary('s1', { durableId: 'd1' }),
+        pendingPermission: {
+          requestId: 'req-1',
+          toolCallId: 'tool-1',
+          title: 'Run command',
+          options: options.map((option) => ({ ...option, name: option.optionId })),
+        },
+      }),
+    )
+    hub.registerWindow(1, bridge)
+    hub.addConnection(connection)
+    await hub.subscribeSession(connection, ref)
+    connection.frames.length = 0
+  }
+
+  it('routes every session command to its bridge method', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    const cases: Array<[string, unknown, ReturnType<typeof vi.fn>]> = [
+      ['sendPrompt', { ref, text: 'hello' }, bridge.sendPrompt],
+      ['cancelTurn', { ref }, bridge.cancelTurn],
+      ['cancelPermission', { ref, requestId: 'req-1' }, bridge.cancelPermission],
+      [
+        'resolveElicitation',
+        { ref, requestId: 'e1', action: 'accept', content: { name: 'Ada' } },
+        bridge.resolveElicitation,
+      ],
+      ['setConfigOption', { ref, configId: 'mode', value: 'code' }, bridge.setConfigOption],
+      ['pauseAutoResolve', { ref, requestId: 'req-1' }, bridge.pauseAutoResolve],
+      ['resumeAutoResolve', { ref, requestId: 'req-1' }, bridge.resumeAutoResolve],
+      ['renameSession', { ref, title: 'Renamed' }, bridge.renameSession],
+      ['deleteSession', { ref }, bridge.deleteSession],
+    ]
+    for (const [kind, payload, spy] of cases) {
+      await hub.handleCommand(connection, { type: 'command', requestId: kind, kind, payload })
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(connection.frames.at(-1)).toStrictEqual({
+        type: 'command_result',
+        requestId: kind,
+        ok: true,
+      })
+    }
+    expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', 'hello')
+    expect(bridge.resolveElicitation).toHaveBeenCalledWith('s1', 'e1', 'accept', { name: 'Ada' })
+  })
+
+  it('rejects a permission option the gateway cannot prove was offered', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    const connection = makeConnection()
+    await subscribeWithPermission(hub, bridge, connection, [
+      { optionId: 'allow-once', allowedOnMobile: true },
+      { optionId: 'allow-always', allowedOnMobile: false },
+    ])
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'unknown-request',
+      kind: 'resolvePermission',
+      payload: { ref, requestId: 'missing', optionId: 'allow-once' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'forbidden_operation' })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'high-risk',
+      kind: 'resolvePermission',
+      payload: { ref, requestId: 'req-1', optionId: 'allow-always' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'forbidden_operation' })
+    expect(bridge.resolvePermission).not.toHaveBeenCalled()
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'allowed',
+      kind: 'resolvePermission',
+      payload: { ref, requestId: 'req-1', optionId: 'allow-once', feedback: 'ok' },
+    })
+    expect(bridge.resolvePermission).toHaveBeenCalledWith('s1', 'req-1', 'allow-once', 'ok')
+    expect(connection.frames.at(-1)).toMatchObject({ ok: true })
+  })
+
+  it('re-checks high-risk config values before routing', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'bypass',
+      kind: 'setConfigOption',
+      payload: { ref, configId: 'approval', value: 'bypassPermissions' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'forbidden_operation' })
+    expect(bridge.setConfigOption).not.toHaveBeenCalled()
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'mode',
+      kind: 'setConfigOption',
+      payload: { ref, configId: 'mode', value: 'code' },
+    })
+    expect(bridge.setConfigOption).toHaveBeenCalledWith('s1', 'mode', 'code')
+  })
+
+  it('creates a session in an open window', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n1',
+      kind: 'newSession',
+      payload: {
+        agentId: 'fake',
+        workspace: { folder: 'file:///workspace/demo' },
+        initialPrompt: 'go',
+      },
+    })
+
+    expect(host.listRecentWorkspaces).toHaveBeenCalled()
+    expect(host.openWorkspace).not.toHaveBeenCalled()
+    expect(host.waitForBridge).not.toHaveBeenCalled()
+    expect(bridge.newSession).toHaveBeenCalledWith(
+      'fake',
+      { folder: 'file:///workspace/demo' },
+      'go',
+    )
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'n1',
+      ok: true,
+      result: { ref: { windowId: 1, localId: 'new-local' } },
+    })
+  })
+
+  it('opens a recent-only workspace and waits for its bridge', async () => {
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/recent', name: 'recent' },
+      ]),
+      waitForBridge: vi.fn(async () => 5),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    bridge.newSession.mockResolvedValueOnce({ ok: true, value: { localId: 'fresh' } })
+    hub.registerWindow(5, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n2',
+      kind: 'newSession',
+      payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/recent' } },
+    })
+
+    expect(host.openWorkspace).toHaveBeenCalledWith('file:///workspace/recent', undefined)
+    expect(host.waitForBridge).toHaveBeenCalledWith('file:///workspace/recent', undefined, 30_000)
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'n2',
+      ok: true,
+      result: { ref: { windowId: 5, localId: 'fresh' } },
+    })
+  })
+
+  it('reports workspace_not_open when the recent window never produces a bridge', async () => {
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/recent', name: 'recent' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n3',
+      kind: 'newSession',
+      payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/recent' } },
+    })
+    expect(host.openWorkspace).toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'workspace_not_open' })
+
+    const remoteHost = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        {
+          folder: 'remote-ssh://host/workspace',
+          name: 'remote',
+          authority: 'host',
+        },
+      ]),
+    })
+    const remoteHub = new MobileGatewayHub(NULL_LOGGER, remoteHost)
+    const remoteConnection = makeConnection()
+    remoteHub.addConnection(remoteConnection)
+    await remoteHub.handleCommand(remoteConnection, {
+      type: 'command',
+      requestId: 'n4',
+      kind: 'newSession',
+      payload: {
+        agentId: 'fake',
+        workspace: { folder: 'remote-ssh://host/workspace', authority: 'host' },
+      },
+    })
+    expect(remoteHost.openWorkspace).not.toHaveBeenCalled()
+    expect(remoteConnection.frames.at(-1)).toMatchObject({
+      ok: false,
+      error: 'workspace_not_open',
+    })
+  })
+
+  it('rejects workspaces that are neither open nor recent, or have no host', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER, makeHost())
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n5',
+      kind: 'newSession',
+      payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/elsewhere' } },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'workspace_not_open' })
+
+    const noHost = new MobileGatewayHub(NULL_LOGGER)
+    noHost.addConnection(connection)
+    await noHost.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n6',
+      kind: 'newSession',
+      payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/demo' } },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'workspace_not_open' })
+  })
+
+  it('lists open and recent workspaces without duplicating either', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/open', name: 'open' },
+      ]),
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/open', name: 'open' },
+        { folder: 'file:///workspace/older', name: 'older' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'w1',
+      kind: 'listWorkspaces',
+      payload: {},
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'w1',
+      ok: true,
+      result: [
+        { folder: 'file:///workspace/open', name: 'open', isOpen: true },
+        { folder: 'file:///workspace/older', name: 'older', isOpen: false },
+      ],
+    })
+  })
+
+  it('lists agents through the first registered bridge', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'a0',
+      kind: 'listAgents',
+      payload: {},
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'a0',
+      ok: true,
+      result: [],
+    })
+
+    const bridge = new FakeBridge()
+    bridge.listAgents.mockResolvedValueOnce([{ id: 'fake', name: 'Fake', isDefault: true }])
+    hub.registerWindow(1, bridge)
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'a1',
+      kind: 'listAgents',
+      payload: {},
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'a1',
+      ok: true,
+      result: [{ id: 'fake', name: 'Fake', isDefault: true }],
+    })
+  })
+
+  it('audits mutating commands without prompt or feedback bodies', async () => {
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'p1',
+        kind: 'sendPrompt',
+        payload: { ref, text: 'secret prompt body' },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenCalledWith('sendPrompt', 'success', 'window=1 local=s1')
+    expect(JSON.stringify(vi.mocked(audit.record).mock.calls)).not.toContain('secret prompt body')
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'p2',
+        kind: 'newSession',
+        payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/demo' } },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenLastCalledWith(
+      'newSession',
+      'failure',
+      'agent=fake error=workspace_not_open',
+    )
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'p3',
+        kind: 'getToolCallDetail',
+        payload: { ref, toolCallId: 'tool-1' },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenCalledTimes(2)
+  })
+
+  it('deduplicates repeated idempotency keys and shares in-flight commands', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    let release: ((result: { ok: true; value: undefined }) => void) | undefined
+    bridge.sendPrompt.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    const frame = {
+      type: 'command' as const,
+      requestId: 'i1',
+      kind: 'sendPrompt',
+      payload: { ref, text: 'hello' },
+      idempotencyKey: 'key-1',
+    }
+    const first = hub.handleCommand(connection, frame)
+    const second = hub.handleCommand(connection, { ...frame, requestId: 'i2' })
+    release?.({ ok: true, value: undefined })
+    await Promise.all([first, second])
+    expect(bridge.sendPrompt).toHaveBeenCalledTimes(1)
+
+    await hub.handleCommand(connection, { ...frame, requestId: 'i3' })
+    expect(bridge.sendPrompt).toHaveBeenCalledTimes(1)
+    expect(framesOf(connection, 'command_result').map((result) => result.requestId)).toEqual([
+      'i1',
+      'i2',
+      'i3',
+    ])
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'i4',
+      kind: 'getToolCallDetail',
+      payload: { ref, toolCallId: 'tool-1' },
+      idempotencyKey: 'key-2',
+    })
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'i5',
+      kind: 'getToolCallDetail',
+      payload: { ref, toolCallId: 'tool-1' },
+      idempotencyKey: 'key-2',
+    })
+    expect(bridge.getToolCallDetail).toHaveBeenCalledTimes(2)
+  })
+
+  it('times out a command that never settles', async () => {
+    vi.useFakeTimers()
+    try {
+      const hub = new MobileGatewayHub(NULL_LOGGER)
+      const bridge = new FakeBridge()
+      bridge.sendPrompt.mockImplementationOnce(() => new Promise(() => {}))
+      hub.registerWindow(1, bridge)
+      const connection = makeConnection()
+      hub.addConnection(connection)
+
+      const pending = hub.handleCommand(connection, {
+        type: 'command',
+        requestId: 't1',
+        kind: 'sendPrompt',
+        payload: { ref, text: 'hello' },
+      })
+      await vi.advanceTimersByTimeAsync(5001)
+      await pending
+      expect(connection.frames.at(-1)).toStrictEqual({
+        type: 'command_result',
+        requestId: 't1',
+        ok: false,
+        error: 'internal',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('expires cached idempotent results after the TTL', async () => {
+    vi.useFakeTimers()
+    try {
+      const hub = new MobileGatewayHub(NULL_LOGGER)
+      const bridge = new FakeBridge()
+      hub.registerWindow(1, bridge)
+      const connection = makeConnection()
+      hub.addConnection(connection)
+      const frame = {
+        type: 'command' as const,
+        requestId: 'e1',
+        kind: 'sendPrompt',
+        payload: { ref, text: 'hello' },
+        idempotencyKey: 'expiring',
+      }
+
+      await hub.handleCommand(connection, frame)
+      await vi.advanceTimersByTimeAsync(COMMAND_IDEMPOTENCY_TTL_MS + 1)
+      await hub.handleCommand(connection, { ...frame, requestId: 'e2' })
+      expect(bridge.sendPrompt).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

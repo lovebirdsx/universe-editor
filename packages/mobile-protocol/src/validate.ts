@@ -8,9 +8,17 @@ import type {
   InboxSnapshotFrame,
   MobileConfigOption,
   MobileConfigOptionType,
+  MobileConfigOptionValue,
+  MobileElicitationAction,
+  MobileElicitationContentValue,
+  MobileElicitationEnumOption,
+  MobileElicitationField,
+  MobileElicitationFieldKind,
   MobileMessageRole,
   MobileNoticeKind,
   MobileNoticePhase,
+  MobilePermissionSettleReason,
+  MobilePermissionSettleSource,
   MobilePendingElicitation,
   MobilePendingPermission,
   MobilePermissionOption,
@@ -44,9 +52,13 @@ import type {
 } from './frames.js'
 import {
   MOBILE_CONFIG_OPTION_TYPES,
+  MOBILE_ELICITATION_ACTIONS,
+  MOBILE_ELICITATION_FIELD_KINDS,
   MOBILE_MESSAGE_ROLES,
   MOBILE_NOTICE_KINDS,
   MOBILE_NOTICE_PHASES,
+  MOBILE_PERMISSION_SETTLE_REASONS,
+  MOBILE_PERMISSION_SETTLE_SOURCES,
   MOBILE_PLAN_ENTRY_STATUSES,
   MOBILE_RESYNC_SCOPES,
   MOBILE_SESSION_BUCKETS,
@@ -88,6 +100,10 @@ export const MAX_TOOL_CALL_DIFFS = 256
 export const MAX_TOOL_CALL_LOCATIONS = 256
 export const MAX_REASON_LENGTH = 1024
 export const MAX_REQUEST_ID_LENGTH = 128
+/** Phone prompt cap; also applies to a new session's initial prompt. */
+export const MAX_PROMPT_LENGTH = 32 * 1024
+export const MAX_FEEDBACK_LENGTH = 8 * 1024
+export const MAX_ELICITATION_CONTENT_KEYS = 128
 
 export type ParseErrorCode = 'bad_request' | 'protocol_mismatch'
 
@@ -306,13 +322,274 @@ function parseCommandFrame(frame: Record<string, unknown>): Result<CommandFrame>
   if (!isNonEmptyBoundedString(kind, MAX_ID_LENGTH)) {
     return fail('bad_request', `command.kind must be 1–${MAX_ID_LENGTH} characters`)
   }
+  const idempotencyKey = parseOptionalString(
+    frame.idempotencyKey,
+    MAX_REQUEST_ID_LENGTH,
+    'command.idempotencyKey',
+  )
+  if (!idempotencyKey.ok) return idempotencyKey
   const payload = frame.payload
-  if (kind === 'getToolCallDetail') {
-    const parsed = parseGetToolCallDetailPayload(payload)
-    if (!parsed.ok) return parsed
-    return ok({ type: 'command', requestId, kind, payload: parsed.value })
+  const parsed = parseCommandPayload(kind, payload)
+  if (!parsed.ok) return parsed
+  return ok({
+    type: 'command',
+    requestId,
+    kind,
+    payload: parsed.value,
+    ...(idempotencyKey.value !== undefined ? { idempotencyKey: idempotencyKey.value } : {}),
+  })
+}
+
+/**
+ * Unknown kinds pass their payload through untouched so a newer client gets
+ * `not_supported` from the command handler rather than a parse error.
+ */
+function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
+  switch (kind) {
+    case 'getToolCallDetail':
+      return parseGetToolCallDetailPayload(value)
+    case 'sendPrompt':
+      return parseSendPromptPayload(value)
+    case 'cancelTurn':
+      return parseRefOnlyPayload(value, 'cancelTurn')
+    case 'resolvePermission':
+      return parseResolvePermissionPayload(value)
+    case 'cancelPermission':
+      return parseRequestRefPayload(value, 'cancelPermission')
+    case 'resolveElicitation':
+      return parseResolveElicitationPayload(value)
+    case 'setConfigOption':
+      return parseSetConfigOptionPayload(value)
+    case 'pauseAutoResolve':
+    case 'resumeAutoResolve':
+      return parseRequestRefPayload(value, kind)
+    case 'newSession':
+      return parseNewSessionPayload(value)
+    case 'renameSession':
+      return parseRenameSessionPayload(value)
+    case 'deleteSession':
+      return parseRefOnlyPayload(value, 'deleteSession')
+    case 'listWorkspaces':
+    case 'listAgents':
+      return parseEmptyPayload(value, kind)
+    default:
+      return ok(value)
   }
-  return ok({ type: 'command', requestId, kind, payload })
+}
+
+function parseRefOnlyPayload(value: unknown, kind: string): Result<{ ref: MobileSessionRef }> {
+  if (!isRecord(value)) return fail('bad_request', `${kind}.payload must be an object`)
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  return ok({ ref: ref.value })
+}
+
+function parseRequestRefPayload(
+  value: unknown,
+  kind: string,
+): Result<{ ref: MobileSessionRef; requestId: string }> {
+  if (!isRecord(value)) return fail('bad_request', `${kind}.payload must be an object`)
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const requestId = value.requestId
+  if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+    return fail('bad_request', `${kind}.requestId must be 1–${MAX_REQUEST_ID_LENGTH} characters`)
+  }
+  return ok({ ref: ref.value, requestId })
+}
+
+function parseEmptyPayload(value: unknown, kind: string): Result<Record<string, never>> {
+  if (value !== undefined && !isRecord(value)) {
+    return fail('bad_request', `${kind}.payload must be an object`)
+  }
+  return ok({})
+}
+
+function parseSendPromptPayload(value: unknown): Result<{ ref: MobileSessionRef; text: string }> {
+  if (!isRecord(value)) return fail('bad_request', 'sendPrompt.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const text = value.text
+  if (!isBoundedString(text, MAX_PROMPT_LENGTH)) {
+    return fail('bad_request', `sendPrompt.text must be at most ${MAX_PROMPT_LENGTH} characters`)
+  }
+  return ok({ ref: ref.value, text })
+}
+
+function parseResolvePermissionPayload(value: unknown): Result<{
+  ref: MobileSessionRef
+  requestId: string
+  optionId: string
+  feedback?: string
+}> {
+  if (!isRecord(value)) return fail('bad_request', 'resolvePermission.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const requestId = value.requestId
+  if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+    return fail(
+      'bad_request',
+      `resolvePermission.requestId must be 1–${MAX_REQUEST_ID_LENGTH} characters`,
+    )
+  }
+  const optionId = value.optionId
+  if (!isNonEmptyBoundedString(optionId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `resolvePermission.optionId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  const feedback = parseOptionalString(
+    value.feedback,
+    MAX_FEEDBACK_LENGTH,
+    'resolvePermission.feedback',
+  )
+  if (!feedback.ok) return feedback
+  return ok({
+    ref: ref.value,
+    requestId,
+    optionId,
+    ...(feedback.value !== undefined ? { feedback: feedback.value } : {}),
+  })
+}
+
+function parseResolveElicitationPayload(value: unknown): Result<{
+  ref: MobileSessionRef
+  requestId: string
+  action: MobileElicitationAction
+  content?: Record<string, MobileElicitationContentValue>
+}> {
+  if (!isRecord(value)) {
+    return fail('bad_request', 'resolveElicitation.payload must be an object')
+  }
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const requestId = value.requestId
+  if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+    return fail(
+      'bad_request',
+      `resolveElicitation.requestId must be 1–${MAX_REQUEST_ID_LENGTH} characters`,
+    )
+  }
+  const action = value.action
+  if (typeof action !== 'string' || !isElicitationAction(action)) {
+    return fail('bad_request', 'resolveElicitation.action must be accept, decline, or cancel')
+  }
+  const content = parseElicitationContent(value.content)
+  if (!content.ok) return content
+  return ok({
+    ref: ref.value,
+    requestId,
+    action,
+    ...(content.value !== undefined ? { content: content.value } : {}),
+  })
+}
+
+function parseElicitationContent(
+  value: unknown,
+): Result<Record<string, MobileElicitationContentValue> | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!isRecord(value)) return fail('bad_request', 'resolveElicitation.content must be an object')
+  const keys = Object.keys(value)
+  if (keys.length > MAX_ELICITATION_CONTENT_KEYS) {
+    return fail(
+      'bad_request',
+      `resolveElicitation.content must have at most ${MAX_ELICITATION_CONTENT_KEYS} keys`,
+    )
+  }
+  const content: Record<string, MobileElicitationContentValue> = {}
+  for (const [key, raw] of Object.entries(value)) {
+    if (isValidElicitationContentValue(raw)) {
+      content[key] = raw
+      continue
+    }
+    return fail('bad_request', `resolveElicitation.content.${key} has an unsupported value`)
+  }
+  return ok(content)
+}
+
+function isValidElicitationContentValue(value: unknown): value is MobileElicitationContentValue {
+  if (typeof value === 'string') return value.length <= MAX_TEXT_LENGTH
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (typeof value === 'boolean') return true
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_ELICITATION_CONTENT_KEYS &&
+    value.every((entry) => typeof entry === 'string' && entry.length <= MAX_TEXT_LENGTH)
+  )
+}
+
+function parseSetConfigOptionPayload(value: unknown): Result<{
+  ref: MobileSessionRef
+  configId: string
+  value: string | boolean
+}> {
+  if (!isRecord(value)) return fail('bad_request', 'setConfigOption.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const configId = value.configId
+  if (!isNonEmptyBoundedString(configId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `setConfigOption.configId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  const configValue = value.value
+  if (typeof configValue === 'boolean') {
+    return ok({ ref: ref.value, configId, value: configValue })
+  }
+  if (!isNonEmptyBoundedString(configValue, MAX_TITLE_LENGTH)) {
+    return fail('bad_request', 'setConfigOption.value must be a boolean or a short string')
+  }
+  return ok({ ref: ref.value, configId, value: configValue })
+}
+
+function parseNewSessionPayload(value: unknown): Result<{
+  agentId: string
+  workspace: { folder: string; authority?: string }
+  initialPrompt?: string
+}> {
+  if (!isRecord(value)) return fail('bad_request', 'newSession.payload must be an object')
+  const agentId = value.agentId
+  if (!isNonEmptyBoundedString(agentId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `newSession.agentId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  const workspace = value.workspace
+  if (!isRecord(workspace)) {
+    return fail('bad_request', 'newSession.workspace must be an object')
+  }
+  const folder = workspace.folder
+  if (!isNonEmptyBoundedString(folder, MAX_TEXT_LENGTH)) {
+    return fail('bad_request', 'newSession.workspace.folder must be a URI string')
+  }
+  const authority = parseOptionalString(
+    workspace.authority,
+    MAX_WORKSPACE_NAME_LENGTH,
+    'newSession.workspace.authority',
+  )
+  if (!authority.ok) return authority
+  const initialPrompt = parseOptionalString(
+    value.initialPrompt,
+    MAX_PROMPT_LENGTH,
+    'newSession.initialPrompt',
+  )
+  if (!initialPrompt.ok) return initialPrompt
+  return ok({
+    agentId,
+    workspace: {
+      folder,
+      ...(authority.value !== undefined ? { authority: authority.value } : {}),
+    },
+    ...(initialPrompt.value !== undefined ? { initialPrompt: initialPrompt.value } : {}),
+  })
+}
+
+function parseRenameSessionPayload(value: unknown): Result<{
+  ref: MobileSessionRef
+  title: string
+}> {
+  if (!isRecord(value)) return fail('bad_request', 'renameSession.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const title = value.title
+  if (!isNonEmptyBoundedString(title, MAX_TITLE_LENGTH)) {
+    return fail('bad_request', `renameSession.title must be 1–${MAX_TITLE_LENGTH} characters`)
+  }
+  return ok({ ref: ref.value, title })
 }
 
 function parseGetToolCallDetailPayload(
@@ -808,13 +1085,45 @@ function parseConfigOptions(value: unknown): Result<MobileConfigOption[]> {
     if (!isBoundedString(currentValue, MAX_TITLE_LENGTH)) {
       return fail('bad_request', 'configOption.currentValue is too large')
     }
+    if (typeof raw.allowedOnMobile !== 'boolean') {
+      return fail('bad_request', 'configOption.allowedOnMobile must be a boolean')
+    }
+    const values = parseOptional(raw.options, parseConfigOptionValues)
+    if (!values.ok) return values
     options.push({
       id,
       name,
       type,
       currentValue,
+      allowedOnMobile: raw.allowedOnMobile,
       ...(category.value !== undefined ? { category: category.value } : {}),
+      ...(values.value !== undefined ? { options: values.value } : {}),
     })
+  }
+  return ok(options)
+}
+
+function parseConfigOptionValues(value: unknown): Result<MobileConfigOptionValue[]> {
+  if (!Array.isArray(value) || value.length > MAX_CONFIG_OPTIONS) {
+    return fail('bad_request', 'configOption.options must be a bounded array')
+  }
+  const options: MobileConfigOptionValue[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) {
+      return fail('bad_request', 'configOption.options entries must be objects')
+    }
+    const optionValue = raw.value
+    if (!isNonEmptyBoundedString(optionValue, MAX_TITLE_LENGTH)) {
+      return fail('bad_request', 'configOption.options.value is too large')
+    }
+    const label = raw.label
+    if (!isBoundedString(label, MAX_TITLE_LENGTH)) {
+      return fail('bad_request', 'configOption.options.label is too large')
+    }
+    if (typeof raw.allowedOnMobile !== 'boolean') {
+      return fail('bad_request', 'configOption.options.allowedOnMobile must be a boolean')
+    }
+    options.push({ value: optionValue, label, allowedOnMobile: raw.allowedOnMobile })
   }
   return ok(options)
 }
@@ -848,12 +1157,10 @@ function parseUsage(value: unknown): Result<MobileUsage> {
 
 function parsePendingPermission(value: unknown): Result<MobilePendingPermission> {
   if (!isRecord(value)) return fail('bad_request', 'session.pendingPermission must be an object')
-  const requestId = parseOptionalString(
-    value.requestId,
-    MAX_REQUEST_ID_LENGTH,
-    'permission.requestId',
-  )
-  if (!requestId.ok) return requestId
+  const requestId = value.requestId
+  if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+    return fail('bad_request', 'permission.requestId must be 1–128 characters')
+  }
   const toolCallId = value.toolCallId
   if (!isNonEmptyBoundedString(toolCallId, MAX_ID_LENGTH)) {
     return fail('bad_request', 'permission.toolCallId must be 1–128 characters')
@@ -883,13 +1190,17 @@ function parsePendingPermission(value: unknown): Result<MobilePendingPermission>
     }
     const optionKind = parseOptionalString(raw.kind, MAX_STATUS_LENGTH, 'permission.options.kind')
     if (!optionKind.ok) return optionKind
+    if (typeof raw.allowedOnMobile !== 'boolean') {
+      return fail('bad_request', 'permission.options.allowedOnMobile must be a boolean')
+    }
     options.push({
       optionId,
       name,
       ...(optionKind.value !== undefined ? { kind: optionKind.value } : {}),
+      allowedOnMobile: raw.allowedOnMobile,
     })
   }
-  let autoResolve: { optionId: string; deadlineAt?: number } | undefined
+  let autoResolve: { optionId: string; deadlineAt?: number; paused: boolean } | undefined
   if (value.autoResolve !== undefined) {
     if (!isRecord(value.autoResolve)) {
       return fail('bad_request', 'permission.autoResolve must be an object')
@@ -902,13 +1213,20 @@ function parsePendingPermission(value: unknown): Result<MobilePendingPermission>
     if (deadlineAt !== undefined && !isFiniteNumber(deadlineAt)) {
       return fail('bad_request', 'permission.autoResolve.deadlineAt must be finite')
     }
-    autoResolve = { optionId, ...(deadlineAt !== undefined ? { deadlineAt } : {}) }
+    if (typeof value.autoResolve.paused !== 'boolean') {
+      return fail('bad_request', 'permission.autoResolve.paused must be a boolean')
+    }
+    autoResolve = {
+      optionId,
+      paused: value.autoResolve.paused,
+      ...(deadlineAt !== undefined ? { deadlineAt } : {}),
+    }
   }
   return ok({
+    requestId,
     toolCallId,
     title,
     options,
-    ...(requestId.value !== undefined ? { requestId: requestId.value } : {}),
     ...(kind.value !== undefined ? { kind: kind.value } : {}),
     ...(autoResolve !== undefined ? { autoResolve } : {}),
   })
@@ -916,12 +1234,10 @@ function parsePendingPermission(value: unknown): Result<MobilePendingPermission>
 
 function parsePendingElicitation(value: unknown): Result<MobilePendingElicitation> {
   if (!isRecord(value)) return fail('bad_request', 'session.pendingElicitation must be an object')
-  const requestId = parseOptionalString(
-    value.requestId,
-    MAX_REQUEST_ID_LENGTH,
-    'elicitation.requestId',
-  )
-  if (!requestId.ok) return requestId
+  const requestId = value.requestId
+  if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+    return fail('bad_request', 'elicitation.requestId must be 1–128 characters')
+  }
   const mode = value.mode
   if (!isNonEmptyBoundedString(mode, MAX_STATUS_LENGTH)) {
     return fail('bad_request', 'elicitation.mode must be 1–64 characters')
@@ -934,13 +1250,141 @@ function parsePendingElicitation(value: unknown): Result<MobilePendingElicitatio
   if (!title.ok) return title
   const toolCallId = parseOptionalString(value.toolCallId, MAX_ID_LENGTH, 'elicitation.toolCallId')
   if (!toolCallId.ok) return toolCallId
+  const url = parseOptionalString(value.url, MAX_TEXT_LENGTH, 'elicitation.url')
+  if (!url.ok) return url
+  const fields = parseOptional(value.fields, parseElicitationFields)
+  if (!fields.ok) return fields
   return ok({
+    requestId,
     mode,
     message,
-    ...(requestId.value !== undefined ? { requestId: requestId.value } : {}),
     ...(title.value !== undefined ? { title: title.value } : {}),
     ...(toolCallId.value !== undefined ? { toolCallId: toolCallId.value } : {}),
+    ...(url.value !== undefined ? { url: url.value } : {}),
+    ...(fields.value !== undefined ? { fields: fields.value } : {}),
   })
+}
+
+function parseElicitationFields(value: unknown): Result<MobileElicitationField[]> {
+  if (!Array.isArray(value) || value.length > MAX_CONFIG_OPTIONS) {
+    return fail('bad_request', 'elicitation.fields must be an array of bounded length')
+  }
+  const fields: MobileElicitationField[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) return fail('bad_request', 'elicitation.fields entries must be objects')
+    const name = raw.name
+    if (!isNonEmptyBoundedString(name, MAX_ID_LENGTH)) {
+      return fail('bad_request', 'elicitation.fields.name must be 1–128 characters')
+    }
+    const kind = raw.kind
+    if (typeof kind !== 'string' || !isElicitationFieldKind(kind)) {
+      return fail('bad_request', 'elicitation.fields.kind is not known')
+    }
+    if (typeof raw.required !== 'boolean') {
+      return fail('bad_request', 'elicitation.fields.required must be a boolean')
+    }
+    const title = parseOptionalString(raw.title, MAX_TITLE_LENGTH, 'elicitation.fields.title')
+    if (!title.ok) return title
+    const description = parseOptionalString(
+      raw.description,
+      MAX_TEXT_LENGTH,
+      'elicitation.fields.description',
+    )
+    if (!description.ok) return description
+    const minLength = parseOptionalInteger(raw.minLength, 'elicitation.fields.minLength')
+    if (!minLength.ok) return minLength
+    const maxLength = parseOptionalInteger(raw.maxLength, 'elicitation.fields.maxLength')
+    if (!maxLength.ok) return maxLength
+    const pattern = parseOptionalString(raw.pattern, MAX_TEXT_LENGTH, 'elicitation.fields.pattern')
+    if (!pattern.ok) return pattern
+    const format = parseOptionalString(raw.format, MAX_STATUS_LENGTH, 'elicitation.fields.format')
+    if (!format.ok) return format
+    const integer = parseOptionalBoolean(raw.integer, 'elicitation.fields.integer')
+    if (!integer.ok) return integer
+    const minimum = parseOptionalNumber(raw.minimum, 'elicitation.fields.minimum')
+    if (!minimum.ok) return minimum
+    const maximum = parseOptionalNumber(raw.maximum, 'elicitation.fields.maximum')
+    if (!maximum.ok) return maximum
+    const minItems = parseOptionalInteger(raw.minItems, 'elicitation.fields.minItems')
+    if (!minItems.ok) return minItems
+    const maxItems = parseOptionalInteger(raw.maxItems, 'elicitation.fields.maxItems')
+    if (!maxItems.ok) return maxItems
+    const def = parseElicitationFieldDefault(raw.default)
+    if (!def.ok) return def
+    const options = parseOptional(raw.options, parseElicitationEnumOptions)
+    if (!options.ok) return options
+    fields.push({
+      name,
+      kind,
+      required: raw.required,
+      ...(title.value !== undefined ? { title: title.value } : {}),
+      ...(description.value !== undefined ? { description: description.value } : {}),
+      ...(minLength.value !== undefined ? { minLength: minLength.value } : {}),
+      ...(maxLength.value !== undefined ? { maxLength: maxLength.value } : {}),
+      ...(pattern.value !== undefined ? { pattern: pattern.value } : {}),
+      ...(format.value !== undefined ? { format: format.value } : {}),
+      ...(integer.value !== undefined ? { integer: integer.value } : {}),
+      ...(minimum.value !== undefined ? { minimum: minimum.value } : {}),
+      ...(maximum.value !== undefined ? { maximum: maximum.value } : {}),
+      ...(options.value !== undefined ? { options: options.value } : {}),
+      ...(minItems.value !== undefined ? { minItems: minItems.value } : {}),
+      ...(maxItems.value !== undefined ? { maxItems: maxItems.value } : {}),
+      ...(def.value !== undefined ? { default: def.value } : {}),
+    })
+  }
+  return ok(fields)
+}
+
+function parseElicitationEnumOptions(value: unknown): Result<MobileElicitationEnumOption[]> {
+  if (!Array.isArray(value) || value.length > MAX_CONFIG_OPTIONS) {
+    return fail('bad_request', 'elicitation.fields.options must be a bounded array')
+  }
+  const options: MobileElicitationEnumOption[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) {
+      return fail('bad_request', 'elicitation.fields.options entries must be objects')
+    }
+    const optionValue = raw.value
+    if (!isNonEmptyBoundedString(optionValue, MAX_TITLE_LENGTH)) {
+      return fail('bad_request', 'elicitation.fields.options.value is too large')
+    }
+    const title = raw.title
+    if (!isBoundedString(title, MAX_TITLE_LENGTH)) {
+      return fail('bad_request', 'elicitation.fields.options.title is too large')
+    }
+    const description = parseOptionalString(
+      raw.description,
+      MAX_TEXT_LENGTH,
+      'elicitation.fields.options.description',
+    )
+    if (!description.ok) return description
+    options.push({
+      value: optionValue,
+      title,
+      ...(description.value !== undefined ? { description: description.value } : {}),
+    })
+  }
+  return ok(options)
+}
+
+function parseElicitationFieldDefault(
+  value: unknown,
+): Result<string | number | boolean | readonly string[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (isValidElicitationContentValue(value)) return ok(value)
+  return fail('bad_request', 'elicitation.fields.default has an unsupported value')
+}
+
+function parseOptionalInteger(value: unknown, field: string): Result<number | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!isNonNegativeInteger(value)) return fail('bad_request', `${field} must be an integer`)
+  return ok(value)
+}
+
+function parseOptionalNumber(value: unknown, field: string): Result<number | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!isFiniteNumber(value)) return fail('bad_request', `${field} must be finite`)
+  return ok(value)
 }
 
 function parseSessionDeltaFrame(frame: Record<string, unknown>): Result<SessionDeltaFrame> {
@@ -1018,8 +1462,21 @@ function parseSessionEvent(value: unknown): Result<MobileSessionEvent> {
       if (!permission.ok) return permission
       return ok({ type: 'permission_upsert', permission: permission.value })
     }
-    case 'permission_cleared':
-      return ok({ type: 'permission_cleared' })
+    case 'permission_cleared': {
+      const requestId = value.requestId
+      if (!isNonEmptyBoundedString(requestId, MAX_REQUEST_ID_LENGTH)) {
+        return fail('bad_request', 'permission_cleared.requestId must be 1–128 characters')
+      }
+      const reason = value.reason
+      if (typeof reason !== 'string' || !isPermissionSettleReason(reason)) {
+        return fail('bad_request', 'permission_cleared.reason is not known')
+      }
+      const source = value.source
+      if (typeof source !== 'string' || !isPermissionSettleSource(source)) {
+        return fail('bad_request', 'permission_cleared.source is not known')
+      }
+      return ok({ type: 'permission_cleared', requestId, reason, source })
+    }
     case 'elicitation_upsert': {
       const elicitation = parsePendingElicitation(value.elicitation)
       if (!elicitation.ok) return elicitation
@@ -1212,4 +1669,28 @@ const PAIR_DEVICE_PLATFORM_SET: ReadonlySet<string> = new Set(PAIR_DEVICE_PLATFO
 
 function isPairDevicePlatform(value: unknown): value is PairDevicePlatform {
   return typeof value === 'string' && PAIR_DEVICE_PLATFORM_SET.has(value)
+}
+
+const ELICITATION_ACTION_SET: ReadonlySet<string> = new Set(MOBILE_ELICITATION_ACTIONS)
+
+function isElicitationAction(value: unknown): value is MobileElicitationAction {
+  return typeof value === 'string' && ELICITATION_ACTION_SET.has(value)
+}
+
+const ELICITATION_FIELD_KIND_SET: ReadonlySet<string> = new Set(MOBILE_ELICITATION_FIELD_KINDS)
+
+function isElicitationFieldKind(value: unknown): value is MobileElicitationFieldKind {
+  return typeof value === 'string' && ELICITATION_FIELD_KIND_SET.has(value)
+}
+
+const PERMISSION_SETTLE_REASON_SET: ReadonlySet<string> = new Set(MOBILE_PERMISSION_SETTLE_REASONS)
+
+function isPermissionSettleReason(value: unknown): value is MobilePermissionSettleReason {
+  return typeof value === 'string' && PERMISSION_SETTLE_REASON_SET.has(value)
+}
+
+const PERMISSION_SETTLE_SOURCE_SET: ReadonlySet<string> = new Set(MOBILE_PERMISSION_SETTLE_SOURCES)
+
+function isPermissionSettleSource(value: unknown): value is MobilePermissionSettleSource {
+  return typeof value === 'string' && PERMISSION_SETTLE_SOURCE_SET.has(value)
 }

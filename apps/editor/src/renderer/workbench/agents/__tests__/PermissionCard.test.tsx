@@ -19,6 +19,8 @@ import {
   type IConfigurationChangeEvent,
 } from '@universe-editor/platform'
 import type {
+  AcpAutoResolve,
+  AcpAutoResolveState,
   AcpPendingPermission,
   IAcpSession,
 } from '../../../services/acp/session/acpSessionService.js'
@@ -32,6 +34,7 @@ afterEach(() => {
 
 function planPermission(overrides?: Partial<AcpPendingPermission>): AcpPendingPermission {
   return {
+    requestId: 'req-1',
     toolCallId: 't1',
     title: 'Ready to code?',
     kind: 'switch_mode',
@@ -45,8 +48,44 @@ function planPermission(overrides?: Partial<AcpPendingPermission>): AcpPendingPe
     ],
     resolve: () => {},
     cancel: () => {},
+    resolveWithSource: () => {},
+    cancelWithSource: () => {},
     ...overrides,
   }
+}
+
+/**
+ * Service-owned countdown stub: the timer itself is covered by the
+ * AcpSessionService tests; here we only verify the card follows its state and
+ * forwards pause/resume/cancel.
+ */
+function makeAutoResolve(
+  optionId = 'exit-plan-bypass',
+  delayMs = 100,
+): AcpAutoResolve & {
+  pause: ReturnType<typeof vi.fn>
+  resume: ReturnType<typeof vi.fn>
+  cancel: ReturnType<typeof vi.fn>
+} {
+  const state = observableValue<AcpAutoResolveState>(`auto:${optionId}`, {
+    paused: false,
+    remainingMs: delayMs,
+    cancelled: false,
+    deadlineAt: Date.now() + delayMs,
+  })
+  const pause = vi.fn(() => {
+    state.set({ paused: true, remainingMs: delayMs, cancelled: false }, undefined)
+  })
+  const resume = vi.fn(() => {
+    state.set(
+      { paused: false, remainingMs: delayMs, cancelled: false, deadlineAt: Date.now() + delayMs },
+      undefined,
+    )
+  })
+  const cancel = vi.fn(() => {
+    state.set({ paused: false, remainingMs: 0, cancelled: true }, undefined)
+  })
+  return { optionId, delayMs, state, pause, resume, cancel }
 }
 
 function forkPlanOptions(): AcpPendingPermission['options'] {
@@ -76,6 +115,7 @@ function codexPlanOptions(): AcpPendingPermission['options'] {
 
 function bashPermission(): AcpPendingPermission {
   return {
+    requestId: 'req-2',
     toolCallId: 't2',
     title: 'Run `ls`',
     kind: 'execute',
@@ -85,6 +125,8 @@ function bashPermission(): AcpPendingPermission {
     ],
     resolve: () => {},
     cancel: () => {},
+    resolveWithSource: () => {},
+    cancelWithSource: () => {},
   }
 }
 
@@ -109,7 +151,7 @@ function makeConfig(initial?: Record<string, unknown>): {
 function renderCard(
   pending: AcpPendingPermission,
   initialConfig?: Record<string, unknown>,
-): { store: Map<string, unknown> } {
+): { store: Map<string, unknown>; unmount: () => void } {
   const { config, store } = makeConfig(initialConfig)
   const services = new ServiceCollection()
   services.set(IConfigurationService, config)
@@ -135,12 +177,12 @@ function renderCard(
     pendingPermission: obs,
     sendPrompt: vi.fn(() => Promise.resolve()),
   } as unknown as IAcpSession
-  render(
+  const view = render(
     <ServicesContext.Provider value={inst}>
       <PermissionCard session={session} />
     </ServicesContext.Provider>,
   )
-  return { store }
+  return { store, unmount: view.unmount }
 }
 
 function toggle(): HTMLInputElement {
@@ -188,11 +230,14 @@ describe('PermissionCard steering (ExitPlanMode)', () => {
 })
 
 describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
-  function autoPending(resolve: ReturnType<typeof vi.fn>): AcpPendingPermission {
+  function autoPending(
+    resolve: ReturnType<typeof vi.fn>,
+    autoResolve: AcpAutoResolve = makeAutoResolve(),
+  ): AcpPendingPermission {
     return planPermission({
       resolve,
       options: forkPlanOptions(),
-      autoResolve: { optionId: 'exit-plan-bypass', delayMs: 100 },
+      autoResolve,
     })
   }
 
@@ -219,68 +264,92 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
     expect(buttons[1]!.textContent).toBe('Reject')
   })
 
-  it('auto-resolves the configured option once the countdown elapses', () => {
+  it('renders the countdown from the service deadline without settling on its own', () => {
     vi.useFakeTimers()
     const resolve = vi.fn()
-    renderCard(autoPending(resolve), { 'acp.plan.autoExecute': 'bypassPermissions' })
+    const auto = makeAutoResolve('exit-plan-bypass', 100)
+    renderCard(autoPending(resolve, auto), { 'acp.plan.autoExecute': 'bypassPermissions' })
 
-    expect(resolve).not.toHaveBeenCalled()
+    expect(screen.getByTestId('acp-permission-auto-countdown').textContent).toContain('1s')
     act(() => {
       vi.advanceTimersByTime(150)
     })
-    expect(resolve).toHaveBeenCalledWith('exit-plan-bypass')
+    // The service owns the timer; the card must never resolve by itself.
+    expect(resolve).not.toHaveBeenCalled()
+    expect(auto.pause).not.toHaveBeenCalled()
   })
 
-  it('pauses the countdown while the card is hovered', () => {
-    vi.useFakeTimers()
+  it('pauses the service countdown while the card is hovered', () => {
     const resolve = vi.fn()
-    renderCard(autoPending(resolve), { 'acp.plan.autoExecute': 'bypassPermissions' })
+    const auto = makeAutoResolve()
+    renderCard(autoPending(resolve, auto), { 'acp.plan.autoExecute': 'bypassPermissions' })
 
     const card = screen.getByTestId('acp-permission-card')
     fireEvent.mouseEnter(card)
-    act(() => {
-      vi.advanceTimersByTime(200)
-    })
-    expect(resolve).not.toHaveBeenCalled()
+    expect(auto.pause).toHaveBeenCalled()
 
+    auto.pause.mockClear()
+    auto.resume.mockClear()
     fireEvent.mouseLeave(card)
-    act(() => {
-      vi.advanceTimersByTime(150)
-    })
-    expect(resolve).toHaveBeenCalledWith('exit-plan-bypass')
+    expect(auto.resume).toHaveBeenCalled()
+    expect(auto.pause).not.toHaveBeenCalled()
   })
 
   it('聚焦卡片时暂停，失焦后继续倒计时', () => {
-    vi.useFakeTimers()
     const resolve = vi.fn()
-    renderCard(autoPending(resolve), { 'acp.plan.autoExecute': 'bypassPermissions' })
+    const auto = makeAutoResolve()
+    renderCard(autoPending(resolve, auto), { 'acp.plan.autoExecute': 'bypassPermissions' })
     const input = screen.getByTestId('acp-permission-steer-input')
     fireEvent.focusIn(input)
-    act(() => vi.advanceTimersByTime(200))
-    expect(resolve).not.toHaveBeenCalled()
+    expect(auto.pause).toHaveBeenCalled()
+    auto.pause.mockClear()
+    auto.resume.mockClear()
     fireEvent.focusOut(input, { relatedTarget: null })
-    act(() => vi.advanceTimersByTime(150))
-    expect(resolve).toHaveBeenCalledExactlyOnceWith('exit-plan-bypass')
+    expect(auto.resume).toHaveBeenCalled()
+    expect(auto.pause).not.toHaveBeenCalled()
+  })
+
+  it('unmounting the card resumes a countdown paused by hover', () => {
+    const auto = makeAutoResolve()
+    const { unmount } = renderCard(autoPending(vi.fn(), auto), {
+      'acp.plan.autoExecute': 'bypassPermissions',
+    })
+    fireEvent.mouseEnter(screen.getByTestId('acp-permission-card'))
+    expect(auto.pause).toHaveBeenCalledOnce()
+    unmount()
+    expect(auto.resume).toHaveBeenCalled()
+  })
+
+  it('hides the countdown when the service state is cancelled', () => {
+    const auto = makeAutoResolve()
+    renderCard(autoPending(vi.fn(), auto), { 'acp.plan.autoExecute': 'bypassPermissions' })
+    act(() => auto.cancel())
+    expect(screen.queryByTestId('acp-permission-auto-countdown')).toBeNull()
   })
 
   it('Dismiss 取消请求并清理倒计时', () => {
-    vi.useFakeTimers()
     const resolve = vi.fn()
     const cancel = vi.fn()
-    renderCard({ ...autoPending(resolve), cancel }, { 'acp.plan.autoExecute': 'bypassPermissions' })
+    const auto = makeAutoResolve()
+    renderCard(
+      { ...autoPending(resolve, auto), cancel },
+      {
+        'acp.plan.autoExecute': 'bypassPermissions',
+      },
+    )
     fireEvent.click(screen.getByTestId('acp-permission-cancel'))
-    act(() => vi.advanceTimersByTime(500))
     expect(cancel).toHaveBeenCalledOnce()
     expect(resolve).not.toHaveBeenCalled()
   })
 
-  it('does not auto-resolve again after a manual choice settles the card', () => {
-    vi.useFakeTimers()
+  it('does not settle again after a manual choice', () => {
     const resolve = vi.fn()
-    renderCard(autoPending(resolve), { 'acp.plan.autoExecute': 'bypassPermissions' })
+    const auto = makeAutoResolve()
+    renderCard(autoPending(resolve, auto), { 'acp.plan.autoExecute': 'bypassPermissions' })
 
     fireEvent.click(screen.getByTestId('acp-permission-deny'))
     expect(resolve).toHaveBeenCalledWith('reject')
+    vi.useFakeTimers()
     act(() => {
       vi.advanceTimersByTime(500)
     })
@@ -301,18 +370,16 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
     expect(toggle().checked).toBe(true)
   })
 
-  it('unchecking the toggle writes off and cancels the in-flight countdown', () => {
-    vi.useFakeTimers()
+  it('unchecking the toggle writes off and cancels the service countdown', () => {
     const resolve = vi.fn()
-    const { store } = renderCard(autoPending(resolve), {
+    const auto = makeAutoResolve()
+    const { store } = renderCard(autoPending(resolve, auto), {
       'acp.plan.autoExecute': 'bypassPermissions',
     })
 
     fireEvent.click(toggle())
     expect(store.get('acp.plan.autoExecute')).toBe('off')
-    act(() => {
-      vi.advanceTimersByTime(500)
-    })
+    expect(auto.cancel).toHaveBeenCalledOnce()
     expect(resolve).not.toHaveBeenCalled()
   })
 
@@ -327,7 +394,7 @@ describe('PermissionCard auto-execute (acp.plan.autoExecute)', () => {
       planPermission({
         resolve,
         options: codexPlanOptions(),
-        autoResolve: { optionId: 'implement_plan', delayMs: 100 },
+        autoResolve: makeAutoResolve('implement_plan'),
       }),
       { 'acp.plan.autoExecute': 'bypassPermissions' },
     )

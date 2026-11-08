@@ -132,6 +132,8 @@ import {
   type AcpMcpServerStatus,
   type AcpMessage,
   type AcpMessageRole,
+  type AcpElicitationSettledEvent,
+  type AcpPermissionSettledEvent,
   type AcpPendingPermission,
   type AcpPendingElicitation,
   type AcpPlanEntry,
@@ -168,12 +170,18 @@ export type {
   AcpChildItem,
   AcpCompaction,
   AcpCompactionPhase,
+  AcpAutoResolve,
+  AcpAutoResolveState,
+  AcpElicitationSettledEvent,
   AcpMcpServerStatus,
   AcpMessage,
   AcpMessageRole,
   AcpModelCost,
+  AcpPermissionSettledEvent,
   AcpPendingPermission,
   AcpPendingElicitation,
+  AcpSettleReason,
+  AcpSettleSource,
   AcpUrlElicitationState,
   AcpPlanEntry,
   AcpPlanEntryStatus,
@@ -799,6 +807,16 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private readonly _onDidCancelForRestore = this._register(new Emitter<void>())
   readonly onDidCancelForRestore: Event<void> = this._onDidCancelForRestore.event
+
+  private readonly _onDidSettlePermission = this._register(new Emitter<AcpPermissionSettledEvent>())
+  readonly onDidSettlePermission: Event<AcpPermissionSettledEvent> =
+    this._onDidSettlePermission.event
+
+  private readonly _onDidSettleElicitation = this._register(
+    new Emitter<AcpElicitationSettledEvent>(),
+  )
+  readonly onDidSettleElicitation: Event<AcpElicitationSettledEvent> =
+    this._onDidSettleElicitation.event
 
   private readonly _configOptions: ConfigOptionStateMachine
 
@@ -2160,11 +2178,21 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
+  /** Called by AcpSessionService once a request settles (single settle point). */
+  notifyPermissionSettled(event: AcpPermissionSettledEvent): void {
+    this._onDidSettlePermission.fire(event)
+  }
+
+  /** Called by AcpSessionService once an elicitation settles. */
+  notifyElicitationSettled(event: AcpElicitationSettledEvent): void {
+    this._onDidSettleElicitation.fire(event)
+  }
+
   private _cancelPendingPermission(): void {
     const cur = this.pendingPermission.get()
     if (cur) {
       this.pendingPermission.set(undefined, undefined)
-      cur.cancel()
+      cur.cancelWithSource('pc', 'superseded')
     }
   }
 
@@ -2172,7 +2200,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     const cur = this.pendingElicitation.get()
     if (cur) {
       this.pendingElicitation.set(undefined, undefined)
-      cur.cancel()
+      cur.cancelWithSource('pc', 'superseded')
     }
   }
 
@@ -4139,7 +4167,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
-  async setConfigOption(configId: string, value: string): Promise<void> {
+  async setConfigOption(configId: string, value: string | boolean): Promise<void> {
     // Read-only preview: never mutate the foreign session's agent-side config.
     if (this.readOnly) return
     // Switching model / mode / thought-level is an RPC, so a dormant session

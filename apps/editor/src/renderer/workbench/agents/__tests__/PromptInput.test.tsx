@@ -555,6 +555,8 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     ),
     onDidRequireAuth: Event.None,
     onDidCancelForRestore: cancelRestoreEmitter.event,
+    onDidSettlePermission: Event.None,
+    onDidSettleElicitation: Event.None,
     presentPermission: () => {},
     presentElicitation: () => {},
     sendPrompt: sendPrompt as never,

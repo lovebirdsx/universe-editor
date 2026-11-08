@@ -287,7 +287,9 @@ export class ConfigOptionStateMachine {
     })
   }
 
-  async setConfigOption(configId: string, value: string): Promise<void> {
+  async setConfigOption(configId: string, value: string | boolean): Promise<void> {
+    // Persistence buckets are string-only; booleans round-trip as 'true'/'false'.
+    const persisted = typeof value === 'boolean' ? (value ? 'true' : 'false') : value
     const conn = this._deps.getConn()
     const sessionId = this._deps.sessionInfo.getSessionId()
     // Connection not yet attached (session still connecting). The config bar now
@@ -299,15 +301,14 @@ export class ConfigOptionStateMachine {
       this._applyLocalValue(configId, value)
       const { agentId } = this._deps.sessionInfo
       if (this._deps.suppressDefaults !== true) {
-        this._deps.defaults?.setDefault(agentId, configId, value)
+        this._deps.defaults?.setDefault(agentId, configId, persisted)
       }
       return
     }
-    const params: SetSessionConfigOptionRequest = {
-      sessionId,
-      configId,
-      value,
-    }
+    const params: SetSessionConfigOptionRequest =
+      typeof value === 'boolean'
+        ? { sessionId, configId, value, type: 'boolean' }
+        : { sessionId, configId, value }
     // Apply the value locally *before* the RPC round-trip, mirroring the
     // disconnected path, so the bar reflects the pick immediately. Echoes for
     // this id are suppressed via `_pendingPushes` while the RPC is in flight; on
@@ -336,11 +337,11 @@ export class ConfigOptionStateMachine {
       this._deps.history?.setHistoryConfigOption(
         sessionId,
         configId,
-        value,
+        persisted,
         this._labelOf(configId, value),
       )
       if (this._deps.suppressDefaults !== true) {
-        this._deps.defaults?.setDefault(agentId, configId, value)
+        this._deps.defaults?.setDefault(agentId, configId, persisted)
       }
       this._deps.telemetry.publicLog('acp.config_option_set', { sessionId, configId })
     } catch (err) {
@@ -352,26 +353,34 @@ export class ConfigOptionStateMachine {
     }
   }
 
-  private _currentValueOf(configId: string): string | undefined {
+  private _currentValueOf(configId: string): string | boolean | undefined {
     const opt = this.configOptions.get().find((o) => o.id === configId)
-    return opt && opt.type === 'select' ? opt.currentValue : undefined
+    return opt?.currentValue
   }
 
   /** Friendly display name for a value within an option, or undefined when the option/value is unknown. */
-  private _labelOf(configId: string, value: string): string | undefined {
+  private _labelOf(configId: string, value: string | boolean): string | undefined {
+    if (typeof value === 'boolean') return value ? 'On' : 'Off'
     const opt = this.configOptions.get().find((o) => o.id === configId)
     if (!opt || opt.type !== 'select') return undefined
     return findConfigOptionLabel(opt.options, value)
   }
 
   /** Optimistically flip a select option's `currentValue` in the local observable. */
-  private _applyLocalValue(configId: string, value: string): void {
+  private _applyLocalValue(configId: string, value: string | boolean): void {
     const cur = this.configOptions.get()
     let changed = false
     const next = cur.map((o) => {
-      if (o.id !== configId || o.type !== 'select' || o.currentValue === value) return o
-      changed = true
-      return { ...o, currentValue: value }
+      if (o.id !== configId || o.currentValue === value) return o
+      if (o.type === 'select' && typeof value === 'string') {
+        changed = true
+        return { ...o, currentValue: value }
+      }
+      if (o.type === 'boolean' && typeof value === 'boolean') {
+        changed = true
+        return { ...o, currentValue: value }
+      }
+      return o
     })
     if (changed) this.configOptions.set(next, undefined)
   }

@@ -223,7 +223,7 @@ describe('mobile gateway server integration', () => {
       type: 'hello_ok',
       deviceId: paired.deviceId,
       serverVersion: '0.0.0-test',
-      capabilities: ['inbox'],
+      capabilities: ['inbox', 'commands'],
     })
     expect(ok.type === 'hello_ok' ? ok.serverTime : 0).toBeGreaterThan(0)
 

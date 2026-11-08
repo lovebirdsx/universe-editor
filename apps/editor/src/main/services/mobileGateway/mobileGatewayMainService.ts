@@ -13,8 +13,10 @@ import { join, resolve } from 'node:path'
 import {
   Disposable,
   Emitter,
+  URI,
   type Event,
   type ILogger,
+  type IOpenWindowInfo,
   ILoggerService,
   createNamedLogger,
 } from '@universe-editor/platform'
@@ -37,6 +39,8 @@ import type {
 } from '../../../shared/ipc/mobileGatewayService.js'
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import type { ConfigLocationMainService } from '../configLocation/configLocationMainService.js'
+import { IRecentWorkspacesService } from '../workspace/recentWorkspacesMainService.js'
+import type { RecentWorkspacesMainService } from '../workspace/recentWorkspacesMainService.js'
 import { getAppVersion } from '../../appVersion.js'
 import { resolveFromRepo } from '../../repoPaths.js'
 import { AuditLog, type AuditInput } from './auditLog.js'
@@ -58,10 +62,18 @@ import {
   HELLO_TIMEOUT_MS,
   MobileGatewayServer,
 } from './mobileGatewayServer.js'
-import { MobileGatewayHub } from './mobileGatewayHub.js'
+import { MobileGatewayHub, isSameWorkspace } from './mobileGatewayHub.js'
 import { PairingService } from './pairingService.js'
 
 const MAX_AUDIT_LIMIT = 200
+
+/** Subset of `WindowMainService` the gateway needs; set after windows are constructed. */
+export interface MobileGatewayWindowProvider {
+  getOpenWindowInfos(): readonly IOpenWindowInfo[]
+  openWindowForFolder(folder?: URI): Promise<void>
+}
+
+const BRIDGE_WAIT_INTERVAL_MS = 100
 
 export class MobileGatewayMainService extends Disposable implements IMobileGatewayService {
   declare readonly _serviceBrand: undefined
@@ -78,6 +90,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
 
   private readonly _windowBridges = new Map<number, IMobileBridgeService>()
   private readonly _hub: MobileGatewayHub
+  private _windows: MobileGatewayWindowProvider | undefined
 
   private _config: MobileGatewayConfig = DEFAULT_MOBILE_GATEWAY_CONFIG
   private _state: MobileGatewayState = 'stopped'
@@ -93,6 +106,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
 
   constructor(
     @IConfigLocationService private readonly _configLocation: ConfigLocationMainService,
+    @IRecentWorkspacesService private readonly _recent: RecentWorkspacesMainService,
     @ILoggerService loggerService?: ILoggerService,
   ) {
     super()
@@ -100,7 +114,19 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       id: 'mobileGateway',
       name: 'Mobile Gateway',
     })
-    this._hub = new MobileGatewayHub(this._logger)
+    this._hub = new MobileGatewayHub(this._logger, {
+      listOpenWorkspaces: () => this._openWorkspaces(),
+      listRecentWorkspaces: async () =>
+        (await this._recent.getRecent()).map((entry) => ({
+          folder: entry.folder.toString(),
+          name: entry.name,
+          ...(entry.folder.authority ? { authority: entry.folder.authority } : {}),
+        })),
+      openWorkspace: (folder) =>
+        this._windows?.openWindowForFolder(URI.parse(folder)) ?? Promise.resolve(),
+      waitForBridge: (folder, authority, timeoutMs) =>
+        this._waitForBridge(folder, authority, timeoutMs),
+    })
 
     const mobileDir = join(app.getPath('userData'), 'mobile')
     this._deviceStore = new DeviceStore(join(mobileDir, 'devices.json'), {
@@ -188,6 +214,61 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   unregisterWindowBridge(windowId: number): void {
     this._windowBridges.delete(windowId)
     this._hub.unregisterWindow(windowId)
+  }
+
+  /**
+   * WindowMainService is built after the root DI container (it needs the app
+   * services), so the gateway receives it through this setter. `newSession`
+   * needs it to open a window for a recent-only workspace.
+   */
+  setWindowProvider(provider: MobileGatewayWindowProvider): void {
+    this._windows = provider
+  }
+
+  private _openWorkspaces(): readonly {
+    windowId: number
+    folder: string
+    name: string
+    authority?: string
+  }[] {
+    const infos = this._windows?.getOpenWindowInfos() ?? []
+    const result: {
+      windowId: number
+      folder: string
+      name: string
+      authority?: string
+    }[] = []
+    for (const info of infos) {
+      if (info.folder === null) continue
+      const folder = URI.from(info.folder)
+      result.push({
+        windowId: info.id,
+        folder: folder.toString(),
+        name: info.name ?? folder.fsPath,
+        ...(info.remoteAuthority !== undefined
+          ? { authority: info.remoteAuthority }
+          : folder.authority
+            ? { authority: folder.authority }
+            : {}),
+      })
+    }
+    return result
+  }
+
+  private async _waitForBridge(
+    folder: string,
+    authority: string | undefined,
+    timeoutMs: number,
+  ): Promise<number | undefined> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      const match = this._openWorkspaces().find((workspace) =>
+        isSameWorkspace(workspace, { folder, ...(authority !== undefined ? { authority } : {}) }),
+      )
+      if (match !== undefined && this._windowBridges.has(match.windowId)) return match.windowId
+      await new Promise((resolve) => setTimeout(resolve, BRIDGE_WAIT_INTERVAL_MS))
+    }
+    return undefined
   }
 
   /** M2 uses this to fan the inbox projection out to every window. */

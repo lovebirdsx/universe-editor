@@ -639,6 +639,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     // Without this, electron-updater spawns the installer before before-quit can
     // veto, so a cancelled confirm still installs. confirmQuit polls every window.
     const windows = windowMainService
+    applicationServices.mobileGateway.setWindowProvider(windows)
     applicationServices.update.setQuitConfirmer((requestingWindowId) =>
       windows.confirmQuit(requestingWindowId),
     )

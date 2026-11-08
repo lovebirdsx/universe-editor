@@ -369,7 +369,55 @@ export interface AcpCompaction {
   readonly postTokens?: number
 }
 
+/** Who settled a pending request. Mirrors the mobile wire's settle sources. */
+export type AcpSettleSource = 'pc' | 'mobile' | 'auto'
+
+/** Why a request left the pending slot. */
+export type AcpSettleReason = 'selected' | 'cancelled' | 'superseded' | 'auto'
+
+export interface AcpPermissionSettledEvent {
+  readonly requestId: string
+  readonly outcome: 'selected' | 'cancelled'
+  readonly optionId?: string
+  readonly source: AcpSettleSource
+  readonly reason: AcpSettleReason
+}
+
+export interface AcpElicitationSettledEvent {
+  readonly requestId: string
+  readonly action: 'accept' | 'decline' | 'cancel'
+  readonly source: AcpSettleSource
+  readonly reason: 'resolved' | 'superseded'
+}
+
+/**
+ * Snapshot of the plan auto-execute countdown. The timer lives in
+ * `AcpSessionService`, not in a React effect, so it keeps running while the
+ * session tab is not mounted.
+ */
+export interface AcpAutoResolveState {
+  /** Epoch ms the auto action fires; absent while paused or cancelled. */
+  readonly deadlineAt?: number
+  readonly paused: boolean
+  /** Time left when the state was captured; used for the paused display. */
+  readonly remainingMs: number
+  readonly cancelled: boolean
+}
+
+export interface AcpAutoResolve {
+  readonly optionId: string
+  readonly delayMs: number
+  /** Observable so both PermissionCard and the mobile bridge can follow it. */
+  readonly state: IObservable<AcpAutoResolveState>
+  pause(): void
+  resume(): void
+  /** User unchecked "auto-execute" for this request; stops the countdown for good. */
+  cancel(): void
+}
+
 export interface AcpPendingPermission {
+  /** Stable id for this request, used by the phone to target the right card. */
+  readonly requestId: string
   readonly toolCallId: string
   readonly title: string
   readonly kind?: string
@@ -385,15 +433,16 @@ export interface AcpPendingPermission {
    */
   resolve(optionId: string, feedback?: string): void
   cancel(): void
+  /** Same as resolve, but records which endpoint settled the request. */
+  resolveWithSource(optionId: string, source: AcpSettleSource, feedback?: string): void
+  /** Same as cancel; `reason` distinguishes a user cancel from a supersede. */
+  cancelWithSource(source: AcpSettleSource, reason?: AcpSettleReason): void
   /**
    * ExitPlanMode 的自动执行（`acp.plan.autoExecute` 非 off 时由 service 附加）：
-   * 卡片在该 option 对应的按钮上显示可打断倒计时，到点视同用户点了它。
-   * 设置值不在本次 options 里时不附加（正常弹卡）。
+   * service 持有倒计时，即使会话 tab 未挂载也会到点执行。设置值不在本次 options
+   * 里时不附加（正常弹卡）。
    */
-  readonly autoResolve?: {
-    readonly optionId: string
-    readonly delayMs: number
-  }
+  readonly autoResolve?: AcpAutoResolve
 }
 
 /** plan 审查卡自动执行前的可打断倒计时时长。 */
@@ -502,11 +551,17 @@ export type AcpUrlElicitationState = 'consent' | 'waiting' | 'done'
  * newer elicitation) and settles as `{ action: 'cancel' }`.
  */
 export interface AcpPendingElicitation {
+  /** Stable id for this request, used by the phone to target the right card. */
+  readonly requestId: string
   readonly request: CreateElicitationRequest
   /** url mode only — drives the consent → waiting → done card transition. */
   readonly urlState?: ISettableObservable<AcpUrlElicitationState>
   resolve(result: CreateElicitationResponse): void
   cancel(): void
+  /** Same as resolve, but records which endpoint settled the request. */
+  resolveWithSource(result: CreateElicitationResponse, source: AcpSettleSource): void
+  /** Same as cancel; `reason` distinguishes a user cancel from a supersede. */
+  cancelWithSource(source: AcpSettleSource, reason?: 'resolved' | 'superseded'): void
   /**
    * url mode only, after accept: tear the waiting/done card down locally. The
    * protocol exchange is already settled, so this carries no wire effect.
@@ -661,6 +716,14 @@ export interface IAcpSession {
   /** Latest context-window usage reported by the agent, or undefined if never reported. */
   readonly usage: IObservable<AcpUsage | undefined>
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
+  /**
+   * Fires once when a permission request leaves the pending slot, no matter
+   * which endpoint (PC card, phone, or the plan auto-execute timer) settled it.
+   * The mobile bridge turns this into a `permission_cleared` delta.
+   */
+  readonly onDidSettlePermission: Event<AcpPermissionSettledEvent>
+  /** Same as {@link onDidSettlePermission}, for elicitations. */
+  readonly onDidSettleElicitation: Event<AcpElicitationSettledEvent>
   /** Active elicitation (form card / URL consent) awaiting the user's response, if any. */
   readonly pendingElicitation: IObservable<AcpPendingElicitation | undefined>
   /** Configuration options the agent has advertised for this session. */
@@ -859,7 +922,7 @@ export interface IAcpSession {
   cancelTurn(options?: { readonly restorePrompt?: boolean }): Promise<void>
   close(): Promise<void>
   /** Change one configuration option via `session/set_config_option`. */
-  setConfigOption(configId: string, value: string): Promise<void>
+  setConfigOption(configId: string, value: string | boolean): Promise<void>
   /**
    * Manually rename the session. Ranks above the auto-generated (first-prompt /
    * AI) title: it is persisted with a `manualTitle` flag that protects it from

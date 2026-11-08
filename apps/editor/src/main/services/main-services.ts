@@ -280,6 +280,7 @@ registerSingletonFactory(
   (acc) =>
     new MobileGatewayMainService(
       acc.get(IConfigLocationService) as ConfigLocationMainService,
+      acc.get(IRecentWorkspacesService),
       acc.get(ILoggerService),
     ),
 )

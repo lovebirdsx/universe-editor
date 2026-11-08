@@ -123,8 +123,12 @@ import {
   PLAN_AUTO_EXECUTE_DELAY_MS,
   RESURRECTION_METHOD,
   type AcpConnectionLostEvent,
+  type AcpAutoResolve,
+  type AcpAutoResolveState,
   type AcpPendingElicitation,
   type AcpPendingPermission,
+  type AcpSettleReason,
+  type AcpSettleSource,
   type AcpUrlElicitationState,
   type IAcpSession,
   type IAcpSessionInitState,
@@ -168,6 +172,12 @@ export {
   type AcpPlanEntryStatus,
   type AcpPendingPermission,
   type AcpPendingElicitation,
+  type AcpAutoResolve,
+  type AcpAutoResolveState,
+  type AcpPermissionSettledEvent,
+  type AcpElicitationSettledEvent,
+  type AcpSettleReason,
+  type AcpSettleSource,
   type AcpUrlElicitationState,
   type AcpRecoveryState,
   type AcpSessionStatus,
@@ -2612,15 +2622,87 @@ export class AcpSessionService
     const allowAlways = params.options.find((o) => o.kind === 'allow_always')
     // plan 审查的自动执行：设置非 off 且目标选项确实在本次 options 里才附加
     // （例如 ALLOW_BYPASS 关闭时 bypassPermissions 缺席，降级为普通弹卡）。
-    const autoResolve = this._planAutoResolve(params)
+    const autoResolveSpec = this._planAutoResolve(params)
+    const requestId = generateUuid()
     return await new Promise<RequestPermissionResponse>((resolve) => {
-      const settle = (result: RequestPermissionResponse): void => {
+      let settled = false
+      let stopAutoResolve: (() => void) | undefined
+      const settle = (
+        result: RequestPermissionResponse,
+        source: AcpSettleSource,
+        reason: AcpSettleReason,
+        optionId?: string,
+      ): void => {
+        // 首次结算生效，后续调用（重复点击 / PC 与手机竞速 / 自动执行与手动
+        // 同刻）必须整体 no-op，否则 persistAllow 与 telemetry 会重复落。
+        if (settled) return
+        settled = true
+        stopAutoResolve?.()
         if (session.pendingPermission.get() === pending) {
           session.pendingPermission.set(undefined, undefined)
         }
+        session.notifyPermissionSettled({
+          requestId,
+          outcome: result.outcome.outcome === 'selected' ? 'selected' : 'cancelled',
+          ...(optionId !== undefined ? { optionId } : {}),
+          source,
+          reason,
+        })
         resolve(result)
       }
+      const settleSelected = (
+        optionId: string,
+        source: AcpSettleSource,
+        reason: AcpSettleReason,
+        feedback?: string,
+      ): void => {
+        if (settled) return
+        if (
+          allowAlways &&
+          optionId === allowAlways.optionId &&
+          params.toolCall.kind &&
+          params.toolCall.kind !== 'switch_mode' &&
+          // 作用域化选项自带规则（CLI 会应用 updatedPermissions），把它当成
+          // 「整个 kind 永久批准」会远超选项标签承诺的范围。
+          !SCOPED_ALLOW_ALWAYS_OPTION_IDS.has(optionId)
+        ) {
+          this._permission.persistAllow(params.toolCall.kind)
+        }
+        this._telemetry.publicLog('acp.permission_resolved', { optionId, source })
+        const trimmed = feedback?.trim()
+        settle(
+          {
+            outcome: {
+              outcome: 'selected',
+              optionId,
+              // ExitPlanMode 的「继续规划」意见走 ACP `_meta` 透传给 fork，由其作为
+              // deny message 反馈给 agent（fork 端读 `_meta.feedback`）。
+              ...(trimmed ? { _meta: { feedback: trimmed } } : {}),
+            },
+          },
+          source,
+          reason,
+          optionId,
+        )
+      }
+      const settleCancelled = (source: AcpSettleSource, reason: AcpSettleReason): void => {
+        if (settled) return
+        this._telemetry.publicLog('acp.permission_cancelled', { source })
+        settle({ outcome: { outcome: 'cancelled' } }, source, reason)
+      }
+      const autoResolve =
+        autoResolveSpec !== undefined
+          ? this._createAutoResolve(
+              session,
+              requestId,
+              autoResolveSpec.optionId,
+              autoResolveSpec.delayMs,
+              () => settleSelected(autoResolveSpec.optionId, 'auto', 'auto'),
+            )
+          : undefined
+      if (autoResolve !== undefined) stopAutoResolve = () => autoResolve.cancel()
       const pending: AcpPendingPermission = {
+        requestId,
         toolCallId: params.toolCall.toolCallId,
         title: params.toolCall.title ?? params.toolCall.toolCallId,
         ...(params.toolCall.kind != null ? { kind: params.toolCall.kind } : {}),
@@ -2629,38 +2711,93 @@ export class AcpSessionService
           name: o.name,
           ...(o.kind !== undefined ? { kind: o.kind } : {}),
         })),
-        ...(autoResolve ? { autoResolve } : {}),
-        resolve: (optionId, feedback) => {
-          if (
-            allowAlways &&
-            optionId === allowAlways.optionId &&
-            params.toolCall.kind &&
-            params.toolCall.kind !== 'switch_mode' &&
-            // 作用域化选项自带规则（CLI 会应用 updatedPermissions），把它当成
-            // 「整个 kind 永久批准」会远超选项标签承诺的范围。
-            !SCOPED_ALLOW_ALWAYS_OPTION_IDS.has(optionId)
-          ) {
-            this._permission.persistAllow(params.toolCall.kind)
-          }
-          this._telemetry.publicLog('acp.permission_resolved', { optionId })
-          const trimmed = feedback?.trim()
-          settle({
-            outcome: {
-              outcome: 'selected',
-              optionId,
-              // ExitPlanMode 的「继续规划」意见走 ACP `_meta` 透传给 fork，由其作为
-              // deny message 反馈给 agent（fork 端读 `_meta.feedback`）。
-              ...(trimmed ? { _meta: { feedback: trimmed } } : {}),
-            },
-          })
-        },
-        cancel: () => {
-          this._telemetry.publicLog('acp.permission_cancelled', {})
-          settle({ outcome: { outcome: 'cancelled' } })
-        },
+        ...(autoResolve !== undefined ? { autoResolve } : {}),
+        resolve: (optionId, feedback) => settleSelected(optionId, 'pc', 'selected', feedback),
+        cancel: () => settleCancelled('pc', 'cancelled'),
+        resolveWithSource: (optionId, source, feedback) =>
+          settleSelected(optionId, source, 'selected', feedback),
+        cancelWithSource: (source, reason) => settleCancelled(source, reason ?? 'cancelled'),
       }
       session.presentPermission(pending)
     })
+  }
+
+  /**
+   * Owns the plan auto-execute countdown. Deliberately lives here (not in
+   * PermissionCard) so it keeps running while the session tab is unmounted and
+   * the phone can pause/resume it through the bridge.
+   */
+  private _createAutoResolve(
+    session: AcpSession,
+    requestId: string,
+    optionId: string,
+    delayMs: number,
+    fire: () => void,
+  ): AcpAutoResolve {
+    const state = observableValue<AcpAutoResolveState>(
+      `acp.permission.autoResolve.${session.id}.${requestId}`,
+      { paused: false, remainingMs: delayMs, cancelled: false },
+    )
+    let deadlineAt = Date.now() + delayMs
+    let remainingMs = delayMs
+    let paused = false
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const publish = (): void => {
+      state.set(
+        {
+          ...(paused || cancelled ? {} : { deadlineAt }),
+          paused,
+          remainingMs,
+          cancelled,
+        },
+        undefined,
+      )
+    }
+    const clear = (): void => {
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+    }
+    const schedule = (): void => {
+      clear()
+      deadlineAt = Date.now() + remainingMs
+      timer = setTimeout(() => {
+        timer = undefined
+        if (paused || cancelled) return
+        cancelled = true
+        remainingMs = 0
+        publish()
+        fire()
+      }, remainingMs)
+    }
+    schedule()
+    publish()
+    return {
+      optionId,
+      delayMs,
+      state,
+      pause: () => {
+        if (paused || cancelled) return
+        remainingMs = Math.max(0, deadlineAt - Date.now())
+        paused = true
+        clear()
+        publish()
+      },
+      resume: () => {
+        if (!paused || cancelled) return
+        paused = false
+        schedule()
+        publish()
+      },
+      cancel: () => {
+        if (cancelled) return
+        cancelled = true
+        clear()
+        publish()
+      },
+    }
   }
 
   /**
@@ -2755,6 +2892,7 @@ export class AcpSessionService
     })
     return await new Promise<CreateElicitationResponse>((resolve) => {
       let settled = false
+      const requestId = generateUuid()
       const urlState = isUrl
         ? observableValue<AcpUrlElicitationState>(
             `acp.elicitation.urlState.${session.id}`,
@@ -2767,13 +2905,18 @@ export class AcpSessionService
         }
         if (elicitationId !== undefined) this._pendingUrlElicitations.delete(elicitationId)
       }
-      const settle = (result: CreateElicitationResponse): void => {
+      const settle = (
+        result: CreateElicitationResponse,
+        source: AcpSettleSource,
+        reason: 'resolved' | 'superseded',
+      ): void => {
         if (settled) return
         settled = true
         this._telemetry.publicLog('acp.elicitation_resolved', {
           sessionId,
           mode: params.mode,
           action: typeof result.action === 'string' ? result.action : 'unknown',
+          source,
         })
         // url accept keeps the card up in the waiting state until the agent's
         // elicitation/complete arrives (or the user dismisses it); every other
@@ -2783,18 +2926,27 @@ export class AcpSessionService
         } else {
           teardown()
         }
+        const action: 'accept' | 'decline' | 'cancel' =
+          result.action === 'accept' ? 'accept' : result.action === 'decline' ? 'decline' : 'cancel'
+        session.notifyElicitationSettled({ requestId, action, source, reason })
         resolve(result)
       }
       const pending: AcpPendingElicitation = {
+        requestId,
         request: params,
         ...(urlState ? { urlState } : {}),
-        resolve: (result) => settle(result),
+        resolve: (result) => settle(result, 'pc', 'resolved'),
         cancel: () => {
           // Always tear the card down — after a url accept the promise is
           // already settled (a late cancel is a wire no-op) but session close /
           // supersede must still unregister the elicitationId and clear the card.
           teardown()
-          settle({ action: 'cancel' })
+          settle({ action: 'cancel' }, 'pc', 'resolved')
+        },
+        resolveWithSource: (result, source) => settle(result, source, 'resolved'),
+        cancelWithSource: (source, reason) => {
+          teardown()
+          settle({ action: 'cancel' }, source, reason ?? 'resolved')
         },
         ...(urlState ? { dismiss: () => teardown() } : {}),
       }

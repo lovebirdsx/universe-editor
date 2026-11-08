@@ -26,12 +26,21 @@ describe('SessionStore snapshot', () => {
         summary,
         timeline: [userMessage('m1', 'hi')],
         plan: [{ content: 'step', status: 'in_progress' }],
-        configOptions: [{ id: 'model', name: 'Model', type: 'select', currentValue: 'Sonnet' }],
+        configOptions: [
+          {
+            id: 'model',
+            name: 'Model',
+            type: 'select',
+            currentValue: 'Sonnet',
+            allowedOnMobile: true,
+          },
+        ],
         usage: { used: 10, size: 100 },
         pendingPermission: {
+          requestId: 'req-1',
           toolCallId: 't1',
           title: 'Run',
-          options: [{ optionId: 'allow', name: 'Allow' }],
+          options: [{ optionId: 'allow', name: 'Allow', allowedOnMobile: true }],
         },
         isReplayingHistory: true,
         truncated: true,
@@ -143,20 +152,34 @@ describe('SessionStore other events', () => {
       { type: 'plan_snapshot', plan: [{ content: 'do it', status: 'completed' }] },
       {
         type: 'config_options_snapshot',
-        options: [{ id: 'model', name: 'Model', type: 'select', currentValue: 'Opus' }],
+        options: [
+          {
+            id: 'model',
+            name: 'Model',
+            type: 'select',
+            currentValue: 'Opus',
+            allowedOnMobile: true,
+          },
+        ],
       },
       { type: 'summary_changed', summary },
       {
         type: 'permission_upsert',
         permission: {
+          requestId: 'req-1',
           toolCallId: 't1',
           title: 'Run',
-          options: [{ optionId: 'allow', name: 'Allow' }],
+          options: [{ optionId: 'allow', name: 'Allow', allowedOnMobile: true }],
         },
       },
       {
         type: 'elicitation_upsert',
-        elicitation: { mode: 'text', message: 'Which one?', title: 'Choose' },
+        elicitation: {
+          requestId: 'elicit-1',
+          mode: 'text',
+          message: 'Which one?',
+          title: 'Choose',
+        },
       },
     ]
 
@@ -170,7 +193,10 @@ describe('SessionStore other events', () => {
     expect(state.pendingElicitation?.message).toBe('Which one?')
 
     store.applyDelta(
-      sessionDeltaFrame(3, [{ type: 'permission_cleared' }, { type: 'elicitation_cleared' }]),
+      sessionDeltaFrame(3, [
+        { type: 'permission_cleared', requestId: 'req-1', reason: 'selected', source: 'pc' },
+        { type: 'elicitation_cleared' },
+      ]),
     )
     expect(store.getState().pendingPermission).toBeUndefined()
     expect(store.getState().pendingElicitation).toBeUndefined()

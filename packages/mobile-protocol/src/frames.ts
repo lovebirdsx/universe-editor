@@ -123,6 +123,19 @@ export interface MobileConfigOption {
   type: MobileConfigOptionType
   /** Human-readable label of the current value (never the raw value for selects). */
   currentValue: string
+  /**
+   * False when every value of a select would trip the high-risk policy (the
+   * phone cannot change the option at all). Boolean options are always true.
+   */
+  allowedOnMobile: boolean
+  /** Select values, with the label the phone renders and whether it may pick it. */
+  options?: readonly MobileConfigOptionValue[]
+}
+
+export interface MobileConfigOptionValue {
+  value: string
+  label: string
+  allowedOnMobile: boolean
 }
 
 /** Session usage, pruned to what a phone header needs. */
@@ -137,26 +150,76 @@ export interface MobilePermissionOption {
   optionId: string
   name: string
   kind?: string
+  /** False for `allow_always` and other durable / bypass grants (§7). */
+  allowedOnMobile: boolean
+}
+
+export interface MobileAutoResolve {
+  optionId: string
+  /** Epoch milliseconds while the countdown runs; absent when paused/cancelled. */
+  deadlineAt?: number
+  paused: boolean
 }
 
 export interface MobilePendingPermission {
-  /** Reserved for M3; absent until ACP exposes a request id. */
-  requestId?: string
+  requestId: string
   toolCallId: string
   title: string
   kind?: string
   options: readonly MobilePermissionOption[]
-  autoResolve?: { optionId: string; deadlineAt?: number }
+  autoResolve?: MobileAutoResolve
 }
 
-/** Display projection of a pending elicitation (M2 is read-only). */
+export const MOBILE_ELICITATION_FIELD_KINDS = [
+  'string',
+  'number',
+  'boolean',
+  'enum',
+  'enum-multi',
+] as const
+export type MobileElicitationFieldKind = (typeof MOBILE_ELICITATION_FIELD_KINDS)[number]
+
+export interface MobileElicitationEnumOption {
+  value: string
+  title: string
+  description?: string
+}
+
+/**
+ * Flat, serializable subset of an ACP elicitation form. Mirrors
+ * `acpElicitationForm.ts`'s supported property kinds so the phone can render the
+ * same inputs without shipping the editor's schema normalizer.
+ */
+export interface MobileElicitationField {
+  name: string
+  title?: string
+  description?: string
+  required: boolean
+  kind: MobileElicitationFieldKind
+  minLength?: number
+  maxLength?: number
+  pattern?: string
+  format?: string
+  integer?: boolean
+  minimum?: number
+  maximum?: number
+  options?: readonly MobileElicitationEnumOption[]
+  minItems?: number
+  maxItems?: number
+  default?: string | number | boolean | readonly string[]
+}
+
+/** Display projection of a pending elicitation. */
 export interface MobilePendingElicitation {
-  /** Reserved for M3; absent until ACP exposes a request id. */
-  requestId?: string
+  requestId: string
   mode: string
   message: string
   title?: string
   toolCallId?: string
+  /** Form mode only. */
+  fields?: readonly MobileElicitationField[]
+  /** URL mode only. */
+  url?: string
 }
 
 /** Full read-only session snapshot. `seq` is the session scope sequence. */
@@ -233,9 +296,23 @@ export interface UnsubscribeSessionFrame {
 /**
  * Commands travel as one frame shape so a newer client can ask for a kind this
  * server does not implement and receive `not_supported` rather than a parse error.
- * M2 only implements `getToolCallDetail`.
  */
-export const MOBILE_COMMAND_KINDS = ['getToolCallDetail'] as const
+export const MOBILE_COMMAND_KINDS = [
+  'getToolCallDetail',
+  'sendPrompt',
+  'cancelTurn',
+  'resolvePermission',
+  'cancelPermission',
+  'resolveElicitation',
+  'setConfigOption',
+  'pauseAutoResolve',
+  'resumeAutoResolve',
+  'newSession',
+  'renameSession',
+  'deleteSession',
+  'listWorkspaces',
+  'listAgents',
+] as const
 export type MobileCommandKind = (typeof MOBILE_COMMAND_KINDS)[number]
 
 export interface GetToolCallDetailPayload {
@@ -243,11 +320,101 @@ export interface GetToolCallDetailPayload {
   toolCallId: string
 }
 
+export interface SendPromptPayload {
+  ref: MobileSessionRef
+  /** Plain text only in the first release; capped by MAX_PROMPT_LENGTH. */
+  text: string
+}
+
+export interface CancelTurnPayload {
+  ref: MobileSessionRef
+}
+
+export interface ResolvePermissionPayload {
+  ref: MobileSessionRef
+  requestId: string
+  optionId: string
+  feedback?: string
+}
+
+export interface CancelPermissionPayload {
+  ref: MobileSessionRef
+  requestId: string
+}
+
+export const MOBILE_ELICITATION_ACTIONS = ['accept', 'decline', 'cancel'] as const
+export type MobileElicitationAction = (typeof MOBILE_ELICITATION_ACTIONS)[number]
+
+export type MobileElicitationContentValue = string | number | boolean | string[]
+
+export interface ResolveElicitationPayload {
+  ref: MobileSessionRef
+  requestId: string
+  action: MobileElicitationAction
+  content?: Record<string, MobileElicitationContentValue>
+}
+
+export interface SetConfigOptionPayload {
+  ref: MobileSessionRef
+  configId: string
+  value: string | boolean
+}
+
+export interface AutoResolveControlPayload {
+  ref: MobileSessionRef
+  requestId: string
+}
+
+export interface NewSessionWorkspace {
+  /** Workspace folder as a URI string (`file:///…` / `remote-ssh://…`). */
+  folder: string
+  authority?: string
+}
+
+export interface NewSessionPayload {
+  agentId: string
+  workspace: NewSessionWorkspace
+  initialPrompt?: string
+}
+
+export interface RenameSessionPayload {
+  ref: MobileSessionRef
+  title: string
+}
+
+export interface DeleteSessionPayload {
+  ref: MobileSessionRef
+}
+
 export interface CommandFrame {
   type: 'command'
   requestId: string
   kind: string
   payload: unknown
+  /**
+   * Optional retry key for mutating commands. The gateway returns the first
+   * result for five minutes so a client that lost the response cannot send a
+   * prompt or create a session twice.
+   */
+  idempotencyKey?: string
+}
+
+/** Result of `newSession`. */
+export interface MobileNewSessionResult {
+  ref: MobileSessionRef
+}
+
+export interface MobileWorkspaceCandidate {
+  folder: string
+  name: string
+  authority?: string
+  isOpen: boolean
+}
+
+export interface MobileAgentCandidate {
+  id: string
+  name: string
+  isDefault: boolean
 }
 
 export type ClientFrame =
@@ -343,8 +510,22 @@ export interface MobilePermissionUpsertEvent {
   permission: MobilePendingPermission
 }
 
+export const MOBILE_PERMISSION_SETTLE_SOURCES = ['pc', 'mobile', 'auto'] as const
+export type MobilePermissionSettleSource = (typeof MOBILE_PERMISSION_SETTLE_SOURCES)[number]
+
+export const MOBILE_PERMISSION_SETTLE_REASONS = [
+  'selected',
+  'cancelled',
+  'superseded',
+  'auto',
+] as const
+export type MobilePermissionSettleReason = (typeof MOBILE_PERMISSION_SETTLE_REASONS)[number]
+
 export interface MobilePermissionClearedEvent {
   type: 'permission_cleared'
+  requestId: string
+  reason: MobilePermissionSettleReason
+  source: MobilePermissionSettleSource
 }
 
 export interface MobileElicitationUpsertEvent {

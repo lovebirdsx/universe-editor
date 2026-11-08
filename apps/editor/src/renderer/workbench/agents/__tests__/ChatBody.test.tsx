@@ -2479,16 +2479,20 @@ describe('ChatBody — display modes', () => {
     >
 
     const permission: AcpPendingPermission = {
+      requestId: 'req-perm',
       toolCallId: 'read',
       title: 'Approve read',
       options: [],
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     }
     act(() => pendingPermission.set(permission, undefined))
     expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
 
     const elicitation: AcpPendingElicitation = {
+      requestId: 'req-eli',
       request: {
         mode: 'form',
         sessionId: session.id,
@@ -2497,6 +2501,8 @@ describe('ChatBody — display modes', () => {
       },
       resolve: () => {},
       cancel: () => {},
+      resolveWithSource: () => {},
+      cancelWithSource: () => {},
     }
     act(() => {
       pendingPermission.set(undefined, undefined)

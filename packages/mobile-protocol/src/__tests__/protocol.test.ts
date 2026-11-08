@@ -103,21 +103,39 @@ function snapshotJson(overrides: Record<string, unknown> = {}): Record<string, u
         category: 'model',
         type: 'select',
         currentValue: 'Claude',
+        allowedOnMobile: true,
+        options: [
+          { value: 'sonnet', label: 'Claude', allowedOnMobile: true },
+          { value: 'bypassPermissions', label: 'Bypass', allowedOnMobile: false },
+        ],
       },
     ],
     usage: { used: 100, size: 1000, cost: { amount: 0.02, currency: 'USD' }, costEstimated: true },
     pendingPermission: {
+      requestId: 'perm-1',
       toolCallId: 'tool-2',
       title: 'Run command',
       kind: 'execute',
-      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
-      autoResolve: { optionId: 'allow', deadlineAt: 1_700_000_100_000 },
+      options: [
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once', allowedOnMobile: true },
+        { optionId: 'allow-always', name: 'Always', kind: 'allow_always', allowedOnMobile: false },
+      ],
+      autoResolve: { optionId: 'allow', deadlineAt: 1_700_000_100_000, paused: false },
     },
     pendingElicitation: {
+      requestId: 'elic-1',
       mode: 'form',
       message: 'Pick a value',
       title: 'Configure',
       toolCallId: 'tool-2',
+      fields: [
+        {
+          name: 'choice',
+          kind: 'enum',
+          required: true,
+          options: [{ value: 'a', title: 'A' }],
+        },
+      ],
     },
     isReplayingHistory: false,
     ...overrides,
@@ -197,6 +215,79 @@ describe('parseClientFrame', () => {
       payload: { anything: true },
     }
     expect(parseClientFrame(JSON.stringify(unknown))).toStrictEqual({ ok: true, value: unknown })
+  })
+
+  it('validates M3 command payloads and the idempotency key', () => {
+    const commands: Array<Record<string, unknown>> = [
+      { kind: 'sendPrompt', payload: { ref: REF, text: 'hello' } },
+      { kind: 'cancelTurn', payload: { ref: REF } },
+      {
+        kind: 'resolvePermission',
+        payload: { ref: REF, requestId: 'perm-1', optionId: 'allow-once', feedback: 'go' },
+      },
+      { kind: 'cancelPermission', payload: { ref: REF, requestId: 'perm-1' } },
+      {
+        kind: 'resolveElicitation',
+        payload: {
+          ref: REF,
+          requestId: 'elic-1',
+          action: 'accept',
+          content: { answer: 'yes', count: 2, ok: true, tags: ['a'] },
+        },
+      },
+      { kind: 'setConfigOption', payload: { ref: REF, configId: 'mode', value: 'plan' } },
+      { kind: 'setConfigOption', payload: { ref: REF, configId: 'flag', value: true } },
+      { kind: 'pauseAutoResolve', payload: { ref: REF, requestId: 'perm-1' } },
+      { kind: 'resumeAutoResolve', payload: { ref: REF, requestId: 'perm-1' } },
+      {
+        kind: 'newSession',
+        payload: {
+          agentId: 'claude-code',
+          workspace: { folder: 'file:///workspace/demo', authority: 'host' },
+          initialPrompt: 'start',
+        },
+      },
+      { kind: 'renameSession', payload: { ref: REF, title: 'Renamed' } },
+      { kind: 'deleteSession', payload: { ref: REF } },
+      { kind: 'listWorkspaces', payload: {} },
+      { kind: 'listAgents', payload: {} },
+    ]
+    for (const command of commands) {
+      const frame = {
+        type: 'command',
+        requestId: 'req',
+        idempotencyKey: 'idem-1',
+        ...command,
+      }
+      expect(parseClientFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+    }
+  })
+
+  it('rejects malformed M3 command payloads', () => {
+    const bad: Array<Record<string, unknown>> = [
+      { kind: 'sendPrompt', payload: { ref: REF, text: 'x'.repeat(32 * 1024 + 1) } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: 3 } },
+      { kind: 'resolvePermission', payload: { ref: REF, optionId: 'allow' } },
+      {
+        kind: 'resolveElicitation',
+        payload: { ref: REF, requestId: 'e', action: 'maybe' },
+      },
+      {
+        kind: 'resolveElicitation',
+        payload: { ref: REF, requestId: 'e', action: 'accept', content: { a: { nested: true } } },
+      },
+      { kind: 'setConfigOption', payload: { ref: REF, configId: 'mode', value: {} } },
+      { kind: 'newSession', payload: { agentId: '', workspace: { folder: '' } } },
+      { kind: 'renameSession', payload: { ref: REF, title: '' } },
+      { kind: 'listWorkspaces', payload: 'nope' },
+    ]
+    for (const command of bad) {
+      expect(
+        errorCode(
+          parseClientFrame(JSON.stringify({ type: 'command', requestId: 'r', ...command })),
+        ),
+      ).toBe('bad_request')
+    }
   })
 
   it('rejects non-JSON and non-object payloads', () => {
@@ -392,21 +483,35 @@ describe('parseServerFrame', () => {
       { type: 'plan_snapshot', plan: [{ content: 'Step', status: 'completed' }] },
       {
         type: 'config_options_snapshot',
-        options: [{ id: 'model', name: 'Model', type: 'boolean', currentValue: 'On' }],
+        options: [
+          {
+            id: 'model',
+            name: 'Model',
+            type: 'boolean',
+            currentValue: 'On',
+            allowedOnMobile: true,
+          },
+        ],
       },
       { type: 'summary_changed', summary: summaryJson({ bucket: 'input_needed' }) },
       {
         type: 'permission_upsert',
         permission: {
+          requestId: 'perm-1',
           toolCallId: 'tool-1',
           title: 'Run',
-          options: [{ optionId: 'yes', name: 'Yes' }],
+          options: [{ optionId: 'yes', name: 'Yes', allowedOnMobile: true }],
         },
       },
-      { type: 'permission_cleared' },
+      {
+        type: 'permission_cleared',
+        requestId: 'perm-1',
+        reason: 'selected',
+        source: 'mobile',
+      },
       {
         type: 'elicitation_upsert',
-        elicitation: { mode: 'url', message: 'Open this', title: 'Auth' },
+        elicitation: { requestId: 'elic-1', mode: 'url', message: 'Open this', title: 'Auth' },
       },
       { type: 'elicitation_cleared' },
     ]
@@ -613,7 +718,9 @@ describe('serializeFrame', () => {
       type: 'session_delta',
       seq: 3,
       ref: REF,
-      events: [{ type: 'permission_cleared' }],
+      events: [
+        { type: 'permission_cleared', requestId: 'perm-1', reason: 'cancelled', source: 'pc' },
+      ],
     }
     expect(parseServerFrame(serializeFrame(serverFrame))).toStrictEqual({
       ok: true,

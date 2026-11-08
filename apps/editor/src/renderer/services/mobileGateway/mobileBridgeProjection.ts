@@ -6,21 +6,27 @@
  *  diff statistics, notice replacement) are unit-testable in isolation.
  *--------------------------------------------------------------------------------------------*/
 
-import type { SessionConfigOption } from '@agentclientprotocol/sdk'
+import type { ElicitationSchema, SessionConfigOption } from '@agentclientprotocol/sdk'
 import type { IObservable, IReader } from '@universe-editor/platform'
-import type {
-  MobileConfigOption,
-  MobileMessageUpsertEvent,
-  MobilePendingElicitation,
-  MobilePendingPermission,
-  MobilePlanEntry,
-  MobileSessionEvent,
-  MobileTimelineItem,
-  MobileTimelineMessageItem,
-  MobileTimelineToolCallItem,
-  MobileToolCallDiffStat,
-  MobileToolCallUpsertEvent,
-  MobileUsage,
+import {
+  isConfigValueAllowedOnMobile,
+  isPermissionOptionAllowedOnMobile,
+  type MobileAutoResolve,
+  type MobileConfigOption,
+  type MobileElicitationField,
+  type MobileMessageUpsertEvent,
+  type MobilePendingElicitation,
+  type MobilePendingPermission,
+  type MobilePermissionSettleReason,
+  type MobilePermissionSettleSource,
+  type MobilePlanEntry,
+  type MobileSessionEvent,
+  type MobileTimelineItem,
+  type MobileTimelineMessageItem,
+  type MobileTimelineToolCallItem,
+  type MobileToolCallDiffStat,
+  type MobileToolCallUpsertEvent,
+  type MobileUsage,
 } from '@universe-editor/mobile-protocol'
 import { computeLineDiff } from '@universe-editor/acp-view-model'
 import type {
@@ -33,6 +39,7 @@ import type {
   IAcpSession,
   TimelineItem,
 } from '../acp/session/acpSession.js'
+import { normalizeElicitationForm } from '../acp/acpElicitationForm.js'
 import { statusBucketFor } from '../acp/session/acpSessionFilterService.js'
 import { computeSessionDisplayStatus } from '../acp/session/acpSessionStatus.js'
 import { findConfigOptionLabel } from '../acp/configOptionLabel.js'
@@ -81,7 +88,7 @@ export function toBridgeSnapshot(
   r?: IReader,
 ): MobileBridgeSessionSnapshot {
   const usage = projectUsage(readObservable(session.usage, r))
-  const permission = projectPendingPermission(readObservable(session.pendingPermission, r))
+  const permission = projectPendingPermission(readObservable(session.pendingPermission, r), r)
   const elicitation = projectPendingElicitation(readObservable(session.pendingElicitation, r))
   return {
     summary: toBridgeSummary(session, options, r),
@@ -173,18 +180,41 @@ export function projectPlanEntry(entry: AcpPlanEntry): MobilePlanEntry {
 
 export function projectConfigOption(option: SessionConfigOption): MobileConfigOption {
   const category = option.category ?? undefined
+  if (option.type === 'boolean') {
+    return {
+      id: option.id,
+      name: option.name,
+      ...(category !== undefined ? { category } : {}),
+      type: 'boolean',
+      currentValue: option.currentValue ? 'On' : 'Off',
+      allowedOnMobile: true,
+    }
+  }
+  const values = flattenSelectOptions(option.options).map((value) => ({
+    value: value.value,
+    label: value.name,
+    allowedOnMobile: isConfigValueAllowedOnMobile(value.value),
+  }))
   return {
     id: option.id,
     name: option.name,
     ...(category !== undefined ? { category } : {}),
-    type: option.type,
-    currentValue:
-      option.type === 'select'
-        ? findConfigOptionLabel(option.options, option.currentValue)
-        : option.currentValue
-          ? 'On'
-          : 'Off',
+    type: 'select',
+    currentValue: findConfigOptionLabel(option.options, option.currentValue),
+    allowedOnMobile: values.some((value) => value.allowedOnMobile),
+    ...(values.length > 0 ? { options: values } : {}),
   }
+}
+
+function flattenSelectOptions(
+  options: Extract<SessionConfigOption, { type: 'select' }>['options'],
+): Array<{ value: string; name: string }> {
+  const flattened: Array<{ value: string; name: string }> = []
+  for (const entry of options) {
+    if ('group' in entry) flattened.push(...entry.options)
+    else flattened.push(entry)
+  }
+  return flattened
 }
 
 export function projectUsage(usage: AcpUsage | undefined): MobileUsage | undefined {
@@ -201,10 +231,27 @@ export function projectUsage(usage: AcpUsage | undefined): MobileUsage | undefin
 
 export function projectPendingPermission(
   permission: AcpPendingPermission | undefined,
-  autoResolveDeadlineAt?: number,
+  r?: IReader,
 ): MobilePendingPermission | undefined {
   if (permission === undefined) return undefined
+  const auto = permission.autoResolve
+  const autoState = auto ? readObservable(auto.state, r) : undefined
+  const autoResolve: MobileAutoResolve | undefined =
+    auto !== undefined && autoState !== undefined
+      ? {
+          optionId: auto.optionId,
+          paused: autoState.paused,
+          ...(autoState.cancelled
+            ? {}
+            : autoState.paused
+              ? { deadlineAt: Date.now() + autoState.remainingMs }
+              : autoState.deadlineAt !== undefined
+                ? { deadlineAt: autoState.deadlineAt }
+                : {}),
+        }
+      : undefined
   return {
+    requestId: permission.requestId,
     toolCallId: permission.toolCallId,
     title: permission.title,
     ...(permission.kind !== undefined ? { kind: permission.kind } : {}),
@@ -212,15 +259,9 @@ export function projectPendingPermission(
       optionId: option.optionId,
       name: option.name,
       ...(option.kind !== undefined ? { kind: option.kind } : {}),
+      allowedOnMobile: isPermissionOptionAllowedOnMobile(option),
     })),
-    ...(permission.autoResolve !== undefined
-      ? {
-          autoResolve: {
-            optionId: permission.autoResolve.optionId,
-            ...(autoResolveDeadlineAt !== undefined ? { deadlineAt: autoResolveDeadlineAt } : {}),
-          },
-        }
-      : {}),
+    ...(autoResolve !== undefined ? { autoResolve } : {}),
   }
 }
 
@@ -234,11 +275,85 @@ export function projectPendingElicitation(
     'toolCallId' in request && typeof request.toolCallId === 'string'
       ? request.toolCallId
       : undefined
+  const url = 'url' in request && typeof request.url === 'string' ? request.url : undefined
+  const fields =
+    request.mode === 'form'
+      ? projectElicitationFields(request.requestedSchema as ElicitationSchema)
+      : undefined
   return {
+    requestId: elicitation.requestId,
     mode: request.mode,
     message: request.message,
     ...(title !== undefined ? { title } : {}),
     ...(toolCallId !== undefined ? { toolCallId } : {}),
+    ...(fields !== undefined && fields.length > 0 ? { fields } : {}),
+    ...(url !== undefined ? { url } : {}),
+  }
+}
+
+function projectElicitationFields(schema: ElicitationSchema): MobileElicitationField[] {
+  return normalizeElicitationForm(schema).map((field) => {
+    const base = {
+      name: field.name,
+      ...(field.title !== undefined ? { title: field.title } : {}),
+      ...(field.description !== undefined ? { description: field.description } : {}),
+      required: field.required,
+    }
+    switch (field.kind) {
+      case 'string':
+        return {
+          ...base,
+          kind: 'string',
+          ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
+          ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
+          ...(field.pattern !== undefined ? { pattern: field.pattern } : {}),
+          ...(field.format !== undefined ? { format: field.format } : {}),
+          ...(field.default !== undefined ? { default: field.default } : {}),
+        }
+      case 'number':
+        return {
+          ...base,
+          kind: 'number',
+          integer: field.integer,
+          ...(field.minimum !== undefined ? { minimum: field.minimum } : {}),
+          ...(field.maximum !== undefined ? { maximum: field.maximum } : {}),
+          ...(field.default !== undefined ? { default: field.default } : {}),
+        }
+      case 'boolean':
+        return {
+          ...base,
+          kind: 'boolean',
+          ...(field.default !== undefined ? { default: field.default } : {}),
+        }
+      case 'enum':
+        return {
+          ...base,
+          kind: 'enum',
+          options: field.options.map(projectElicitationEnumOption),
+          ...(field.default !== undefined ? { default: field.default } : {}),
+        }
+      case 'enum-multi':
+        return {
+          ...base,
+          kind: 'enum-multi',
+          options: field.options.map(projectElicitationEnumOption),
+          ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
+          ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
+          ...(field.default !== undefined ? { default: [...field.default] } : {}),
+        }
+    }
+  })
+}
+
+function projectElicitationEnumOption(option: {
+  value: string
+  title: string
+  description?: string
+}): { value: string; title: string; description?: string } {
+  return {
+    value: option.value,
+    title: option.title,
+    ...(option.description !== undefined ? { description: option.description } : {}),
   }
 }
 
@@ -364,13 +479,37 @@ export function summaryChanged(
   return !sameJson({ ...previous, updatedAt: 0 }, { ...next, updatedAt: 0 })
 }
 
+export interface PermissionClearMetadata {
+  readonly requestId: string
+  readonly reason: MobilePermissionSettleReason
+  readonly source: MobilePermissionSettleSource
+}
+
+/**
+ * A superseded request replaces the previous one before a flush runs, so the
+ * old request must still get its `permission_cleared` (phone-side cache and UI
+ * key off `requestId`). Returns zero, one, or two events in wire order.
+ */
 export function diffPermission(
   previous: MobilePendingPermission | undefined,
   next: MobilePendingPermission | undefined,
-): NonSummarySessionEvent | undefined {
-  if (next === undefined) return previous === undefined ? undefined : { type: 'permission_cleared' }
-  if (previous !== undefined && sameJson(previous, next)) return undefined
-  return { type: 'permission_upsert', permission: next }
+  cleared?: PermissionClearMetadata,
+): NonSummarySessionEvent[] {
+  const events: NonSummarySessionEvent[] = []
+  const replaced = previous !== undefined && next?.requestId !== previous.requestId
+  if (previous !== undefined && replaced) {
+    const metadata = cleared?.requestId === previous.requestId ? cleared : undefined
+    events.push({
+      type: 'permission_cleared',
+      requestId: previous.requestId,
+      reason: metadata?.reason ?? 'cancelled',
+      source: metadata?.source ?? 'pc',
+    })
+  }
+  if (next !== undefined && (previous === undefined || replaced || !sameJson(previous, next))) {
+    events.push({ type: 'permission_upsert', permission: next })
+  }
+  return events
 }
 
 export function diffElicitation(

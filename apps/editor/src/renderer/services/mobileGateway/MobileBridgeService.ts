@@ -10,15 +10,30 @@
 import {
   autorun,
   Emitter,
+  IEditorGroupsService,
   ILoggerService,
+  IWorkspaceService,
+  REMOTE_SCHEME,
+  URI,
   type IDisposable,
   type ILogger,
   type IReader,
 } from '@universe-editor/platform'
-import type { MobileToolCallDetail } from '@universe-editor/mobile-protocol'
+import {
+  isConfigValueAllowedOnMobile,
+  isHighRiskPermissionOption,
+  type MobileAgentCandidate,
+  type MobileElicitationAction,
+  type MobileElicitationContentValue,
+  type MobileWorkspaceCandidate,
+  type MobileToolCallDetail,
+} from '@universe-editor/mobile-protocol'
 import { truncateDiffSideText, truncateToolTextBlock } from '@universe-editor/acp-view-model'
 import type {
+  MobileBridgeCommandError,
   MobileBridgeEvent,
+  MobileBridgeNewSessionResult,
+  MobileBridgeResult,
   MobileBridgeSessionDelta,
   MobileBridgeSessionEvent,
   MobileBridgeSessionSnapshot,
@@ -28,8 +43,18 @@ import type {
 import { IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
 import { isResidentLive } from '../acp/session/acpSessionStatus.js'
-import type { IAcpSession } from '../acp/session/acpSession.js'
+import type {
+  AcpPendingPermission,
+  AcpPendingElicitation,
+  IAcpSession,
+} from '../acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../acp/acpAgentRegistry.js'
+import { selectOptionHasValue } from '../acp/configOptionLabel.js'
+import { deleteSessionPlan, planSessionRemoval } from '../acp/session/sessionRemoval.js'
+import type {
+  MobilePermissionSettleReason,
+  MobilePermissionSettleSource,
+} from '@universe-editor/mobile-protocol'
 import {
   diffConfigOptions,
   diffElicitation,
@@ -38,6 +63,7 @@ import {
   diffTimeline,
   summaryChanged,
   toBridgeSnapshot,
+  type PermissionClearMetadata,
 } from './mobileBridgeProjection.js'
 
 /** Coalescing window for ordinary session updates. */
@@ -61,6 +87,9 @@ interface SessionStream {
   publishedElicitation: MobileBridgeSessionSnapshot['pendingElicitation']
   publishedSummary: MobileBridgeSessionSummary | undefined
   publishedMessageChars: number
+  /** Most recent settle of a permission request, attached to `permission_cleared`. */
+  lastPermissionSettle: PermissionClearMetadata | undefined
+  settleWatcher: IDisposable | undefined
 }
 
 export class MobileBridgeService implements IMobileBridgeService, IDisposable {
@@ -82,6 +111,8 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IAcpAgentRegistry private readonly _agents: IAcpAgentRegistry,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     this._logger = loggerService.createLogger({ id: 'mobileBridge', name: 'Mobile Bridge' })
@@ -162,11 +193,242 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     }
   }
 
+  async sendPrompt(localId: string, text: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    // Return once the prompt is accepted by the session (append + queue); the
+    // actual agent round-trip is intentionally not awaited.
+    void session.sendPrompt(text).catch((err: unknown) => {
+      this._logger.warn(`mobile sendPrompt failed: ${String(err)}`)
+    })
+    return ok(undefined)
+  }
+
+  async cancelTurn(localId: string): Promise<MobileBridgeResult<void>> {
+    return this._run(localId, (session) => session.cancelTurn())
+  }
+
+  async resolvePermission(
+    localId: string,
+    requestId: string,
+    optionId: string,
+    feedback?: string,
+  ): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const pending = this._pendingPermission(session, requestId)
+    if (pending === undefined)
+      return fail('stale_request', 'permission request is no longer pending')
+    const option = pending.options.find((candidate) => candidate.optionId === optionId)
+    if (option === undefined) return fail('bad_request', 'unknown permission option')
+    if (isHighRiskPermissionOption(option)) {
+      return fail('forbidden_operation', 'durable permission grants are not allowed from mobile')
+    }
+    pending.resolveWithSource(optionId, 'mobile', feedback)
+    return ok(undefined)
+  }
+
+  async cancelPermission(localId: string, requestId: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const pending = this._pendingPermission(session, requestId)
+    if (pending === undefined)
+      return fail('stale_request', 'permission request is no longer pending')
+    pending.cancelWithSource('mobile', 'cancelled')
+    return ok(undefined)
+  }
+
+  async resolveElicitation(
+    localId: string,
+    requestId: string,
+    action: MobileElicitationAction,
+    content?: Record<string, MobileElicitationContentValue>,
+  ): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const pending = this._pendingElicitation(session, requestId)
+    if (pending === undefined) return fail('stale_request', 'elicitation is no longer pending')
+    pending.resolveWithSource(
+      action === 'accept' ? { action: 'accept', ...(content ? { content } : {}) } : { action },
+      'mobile',
+    )
+    return ok(undefined)
+  }
+
+  async setConfigOption(
+    localId: string,
+    configId: string,
+    value: string | boolean,
+  ): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (!isConfigValueAllowedOnMobile(value)) {
+      return fail('forbidden_operation', 'bypass permissions cannot be enabled from mobile')
+    }
+    const option = session.configOptions.get().find((candidate) => candidate.id === configId)
+    if (option === undefined) return fail('bad_request', 'unknown config option')
+    if (option.type === 'boolean' && typeof value !== 'boolean') {
+      return fail('bad_request', 'boolean config option needs a boolean value')
+    }
+    if (option.type === 'select') {
+      if (typeof value !== 'string' || !selectOptionHasValue(option, value)) {
+        return fail('bad_request', 'unknown config value')
+      }
+    }
+    return this._run(localId, (live) => live.setConfigOption(configId, value))
+  }
+
+  async pauseAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const pending = this._pendingPermission(session, requestId)
+    if (pending?.autoResolve === undefined) {
+      return fail('stale_request', 'auto-execute countdown is no longer running')
+    }
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    pending.autoResolve.pause()
+    return ok(undefined)
+  }
+
+  async resumeAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const pending = this._pendingPermission(session, requestId)
+    if (pending?.autoResolve === undefined) {
+      return fail('stale_request', 'auto-execute countdown is no longer running')
+    }
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    pending.autoResolve.resume()
+    return ok(undefined)
+  }
+
+  async newSession(
+    agentId: string,
+    workspace: { folder: string; authority?: string },
+    initialPrompt?: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> {
+    try {
+      this._agents.get(agentId)
+    } catch {
+      return fail('bad_request', 'unknown agent')
+    }
+    let folder: URI
+    try {
+      folder = URI.parse(workspace.folder)
+    } catch {
+      return fail('bad_request', 'invalid workspace folder')
+    }
+    if (!folder.scheme) return fail('bad_request', 'invalid workspace folder')
+    const authority =
+      workspace.authority ??
+      (folder.scheme === REMOTE_SCHEME && folder.authority ? folder.authority : undefined)
+    try {
+      const session = await this._sessions.createSession(agentId, {
+        cwd: folder.fsPath,
+        ...(authority !== undefined ? { authority } : {}),
+      })
+      if (initialPrompt !== undefined && initialPrompt.length > 0) {
+        void session.sendPrompt(initialPrompt).catch((err: unknown) => {
+          this._logger.warn(`mobile newSession initial prompt failed: ${String(err)}`)
+        })
+      }
+      const durableId = session.sessionIdOnAgent.get()
+      return ok({
+        localId: session.id,
+        ...(durableId !== undefined ? { durableId } : {}),
+      })
+    } catch (err) {
+      return fail('internal', `failed to create session: ${String(err)}`)
+    }
+  }
+
+  async renameSession(localId: string, title: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    session.renameTitle(title)
+    return ok(undefined)
+  }
+
+  async deleteSession(localId: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    // Same plan → execute pipeline as the PC "Delete Agent Session" command;
+    // the phone already confirmed, so only the execution half runs here.
+    const plan = planSessionRemoval(this._sessions, this._history, localId)
+    await deleteSessionPlan(plan, this._sessions, this._history, this._editorGroups)
+    return ok(undefined)
+  }
+
+  async listWorkspaces(): Promise<readonly MobileWorkspaceCandidate[]> {
+    const current = this._workspace.current
+    if (current === null) return []
+    return [
+      {
+        folder: current.folder.toString(),
+        name: current.name,
+        ...(current.folder.authority ? { authority: current.folder.authority } : {}),
+        isOpen: true,
+      },
+    ]
+  }
+
+  async listAgents(): Promise<readonly MobileAgentCandidate[]> {
+    const defaultId = this._agents.defaultAgentId()
+    return this._agents.list().map((agent) => ({
+      id: agent.id,
+      name: agent.name,
+      isDefault: agent.id === defaultId,
+    }))
+  }
+
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
     void this.stopStreaming()
     this._onDidChange.dispose()
+  }
+
+  private _liveSession(localId: string): IAcpSession | undefined {
+    const session = this._sessions.getById(localId)
+    return session !== undefined && isResidentLive(session) ? session : undefined
+  }
+
+  private _pendingPermission(
+    session: IAcpSession,
+    requestId: string,
+  ): AcpPendingPermission | undefined {
+    const pending = session.pendingPermission.get()
+    return pending !== undefined && pending.requestId === requestId ? pending : undefined
+  }
+
+  private _pendingElicitation(
+    session: IAcpSession,
+    requestId: string,
+  ): AcpPendingElicitation | undefined {
+    const pending = session.pendingElicitation.get()
+    return pending !== undefined && pending.requestId === requestId ? pending : undefined
+  }
+
+  private async _run(
+    localId: string,
+    action: (session: IAcpSession) => Promise<void>,
+  ): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    try {
+      await action(session)
+      return ok(undefined)
+    } catch (err) {
+      return fail('internal', String(err))
+    }
   }
 
   private _scheduleSync(): void {
@@ -222,15 +484,39 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
       publishedElicitation: undefined,
       publishedSummary: undefined,
       publishedMessageChars: 0,
+      lastPermissionSettle: undefined,
+      settleWatcher: undefined,
     }
     this._streams.set(session.id, stream)
     stream.watcher = autorun((r) => {
       if (stream.disposed) return
       const snapshot = toBridgeSnapshot(session, this._projectionOptions(session, r), r)
+      if (snapshot.pendingPermission !== undefined) this._ensureSettleWatcher(stream)
       stream.pending = snapshot
       this._scheduleFlush(stream, snapshot)
     })
     if (stream.pending !== undefined) this._scheduleFlush(stream, stream.pending)
+  }
+
+  /**
+   * Subscribe to settlement events only while a permission is pending: the
+   * cleared event needs the reason/source, but an always-on subscription is a
+   * disposable the bridge would otherwise keep for the whole session lifetime.
+   */
+  private _ensureSettleWatcher(stream: SessionStream): void {
+    if (stream.settleWatcher !== undefined) return
+    stream.settleWatcher = stream.session.onDidSettlePermission((event) => {
+      stream.lastPermissionSettle = {
+        requestId: event.requestId,
+        reason: event.reason as MobilePermissionSettleReason,
+        source: event.source as MobilePermissionSettleSource,
+      }
+    })
+  }
+
+  private _dropSettleWatcher(stream: SessionStream): void {
+    stream.settleWatcher?.dispose()
+    stream.settleWatcher = undefined
   }
 
   private _scheduleFlush(stream: SessionStream, snapshot: MobileBridgeSessionSnapshot): void {
@@ -272,8 +558,19 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     if (planEvent !== undefined) events.push(planEvent)
     const configEvent = diffConfigOptions(stream.publishedConfigOptions, next.configOptions)
     if (configEvent !== undefined) events.push(configEvent)
-    const permissionEvent = diffPermission(stream.publishedPermission, next.pendingPermission)
-    if (permissionEvent !== undefined) events.push(permissionEvent)
+    const previousPermission = stream.publishedPermission
+    const permissionCleared =
+      previousPermission !== undefined &&
+      next.pendingPermission?.requestId !== previousPermission.requestId &&
+      stream.lastPermissionSettle?.requestId === previousPermission.requestId
+        ? stream.lastPermissionSettle
+        : undefined
+    events.push(...diffPermission(previousPermission, next.pendingPermission, permissionCleared))
+    if (permissionCleared !== undefined) stream.lastPermissionSettle = undefined
+    if (next.pendingPermission === undefined) {
+      stream.lastPermissionSettle = undefined
+      this._dropSettleWatcher(stream)
+    }
     const elicitationEvent = diffElicitation(stream.publishedElicitation, next.pendingElicitation)
     if (elicitationEvent !== undefined) events.push(elicitationEvent)
     const summaryChangedNow =
@@ -317,6 +614,7 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     }
     stream.watcher?.dispose()
     stream.watcher = undefined
+    this._dropSettleWatcher(stream)
     stream.pending = undefined
   }
 
@@ -358,4 +656,12 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     this._agentNames.set(agentId, name)
     return name
   }
+}
+
+function ok<T>(value: T): MobileBridgeResult<T> {
+  return { ok: true, value }
+}
+
+function fail(code: MobileBridgeCommandError['code'], message: string): MobileBridgeCommandError {
+  return { ok: false, code, message }
 }
