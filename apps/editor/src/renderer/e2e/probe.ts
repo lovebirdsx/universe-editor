@@ -156,6 +156,7 @@ import type { IScmBehindHintService } from '../services/scm/ScmBehindHintService
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { IDiagnosticsService } from '../../shared/ipc/services.js'
+import type { IMobileGatewayService } from '../../shared/ipc/mobileGatewayService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { EditorGroupsService } from '../services/editor/EditorGroupsService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
@@ -234,6 +235,7 @@ export interface E2EProbeServices {
   readonly userSettingsSync: IUserSettingsSyncService
   readonly themeService: WorkbenchThemeService
   readonly fileClipboardService: IFileClipboardService
+  readonly mobileGatewayService: IMobileGatewayService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -2907,6 +2909,15 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         })),
         isCut: snap.isCut,
         source: snap.source,
+      }
+    },
+    getMobileGatewayStatus: async () => {
+      const status = await services.mobileGatewayService.getStatus()
+      return {
+        state: status.state,
+        origins: [...status.origins],
+        connectedDeviceCount: status.connectedDeviceCount,
+        ...(status.listenAddress !== undefined ? { listenAddress: status.listenAddress } : {}),
       }
     },
   }

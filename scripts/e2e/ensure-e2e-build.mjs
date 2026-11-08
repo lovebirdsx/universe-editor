@@ -75,20 +75,24 @@ try {
   process.exit(1)
 }
 
+const buildFilters = [
+  '--filter=@universe-editor/editor...',
+  `--filter=${selfPackage}...`,
+  // remote-server's dist/bootstrap.js is spawned by the remote specs via
+  // UNIVERSE_REMOTE_SERVER_CMD; it is not a dependency of the editor, so pull
+  // its build in explicitly (the root turbo `e2e` task already does the same).
+  '--filter=@universe-editor/remote-server...',
+]
+// The editor-level mobile gateway e2e serves the PWA from apps/mobile/dist.
+// Mobile is not a dependency of the editor, so build it explicitly — but only
+// for the editor suite; extension suites don't touch the gateway.
+if (selfPackage === '@universe-editor/editor') {
+  buildFilters.push('--filter=@universe-editor/mobile...')
+}
+
 const result = spawnSync(
   'pnpm',
-  [
-    'exec',
-    'turbo',
-    'run',
-    'build',
-    '--filter=@universe-editor/editor...',
-    `--filter=${selfPackage}...`,
-    // remote-server's dist/bootstrap.js is spawned by the remote specs via
-    // UNIVERSE_REMOTE_SERVER_CMD; it is not a dependency of the editor, so pull
-    // its build in explicitly (the root turbo `e2e` task already does the same).
-    '--filter=@universe-editor/remote-server...',
-  ],
+  ['exec', 'turbo', 'run', 'build', ...buildFilters],
   { stdio: 'inherit', shell: process.platform === 'win32' },
 )
 

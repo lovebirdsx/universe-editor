@@ -858,6 +858,13 @@ export interface E2EWorkbenchWindowSnapshot {
   readonly openTargetPart: boolean
 }
 
+export interface E2EMobileGatewayStatus {
+  readonly state: 'stopped' | 'starting' | 'running' | 'error'
+  readonly listenAddress?: string
+  readonly origins: readonly string[]
+  readonly connectedDeviceCount: number
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -2242,6 +2249,13 @@ export interface E2EProbe {
    * about source/isCut/URIs without touching the OS clipboard state directly.
    */
   readClipboardSnapshot(): Promise<E2EFileClipboardSnapshot>
+  // -- Mobile gateway probe ------------------------------------------------
+  /**
+   * Live phone-gateway state from the main process. `listenAddress` is the
+   * actual `host:port` after binding (the configured port may be an ephemeral
+   * one in e2e), and `origins[0]` is the loopback origin the PWA is served at.
+   */
+  getMobileGatewayStatus(): Promise<E2EMobileGatewayStatus>
 }
 
 declare global {

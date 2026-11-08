@@ -39,7 +39,7 @@ import { IConfigLocationService } from '../../../shared/ipc/configLocationServic
 import type { ConfigLocationMainService } from '../configLocation/configLocationMainService.js'
 import { getAppVersion } from '../../appVersion.js'
 import { resolveFromRepo } from '../../repoPaths.js'
-import { AuditLog } from './auditLog.js'
+import { AuditLog, type AuditInput } from './auditLog.js'
 import { DeviceStore } from './deviceStore.js'
 import {
   buildOrigins,
@@ -121,7 +121,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   startPairing(): Promise<MobilePairingSession> {
     const session = this._pairing.start()
     const code = formatPairCode(session.code)
-    void this._audit.append({ action: 'pairing_started', result: 'success' })
+    this._recordAudit({ action: 'pairing_started', result: 'success' })
     return Promise.resolve({
       code,
       expiresAt: session.expiresAt,
@@ -131,7 +131,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
 
   cancelPairing(): Promise<void> {
     this._pairing.cancel()
-    void this._audit.append({ action: 'pairing_cancelled', result: 'success' })
+    this._recordAudit({ action: 'pairing_cancelled', result: 'success' })
     return Promise.resolve()
   }
 
@@ -234,7 +234,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       await this._teardown()
       this._logger.warn(`mobile gateway unavailable: ${runtime.error}`)
       this._setError(runtime.error)
-      void this._audit.append({ action: 'gateway_error', result: 'failure', detail: runtime.error })
+      this._recordAudit({ action: 'gateway_error', result: 'failure', detail: runtime.error })
       return
     }
 
@@ -268,7 +268,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       helloTimeoutMs: HELLO_TIMEOUT_MS,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
-      onConnectionsChanged: () => void this._emitDevices(),
+      onConnectionsChanged: () => this._handleConnectionsChanged(),
     })
     try {
       const { port } = await server.start()
@@ -291,7 +291,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       this._logger.info(
         `started bind=${runtime.bind} address=${this._listenAddress} insecure=${runtime.insecure}`,
       )
-      void this._audit.append({
+      this._recordAudit({
         action: 'gateway_start',
         result: 'success',
         detail: `${runtime.bind} ${this._listenAddress}`,
@@ -303,7 +303,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       this._listenAddress = undefined
       this._origins = []
       this._setError(message)
-      void this._audit.append({ action: 'gateway_error', result: 'failure', detail: message })
+      this._recordAudit({ action: 'gateway_error', result: 'failure', detail: message })
     }
   }
 
@@ -317,7 +317,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     if (server === undefined) return
     await server.stop()
     this._logger.info('stopped')
-    void this._audit.append({ action: 'gateway_stop', result: 'success' })
+    this._recordAudit({ action: 'gateway_stop', result: 'success' })
   }
 
   private _setState(state: MobileGatewayState): void {
@@ -355,6 +355,19 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     } catch (err) {
       this._logger.warn(`failed to list devices: ${String(err)}`)
     }
+  }
+
+  /** Fire-and-forget audit write; a failed write must never become an unhandled rejection. */
+  private _recordAudit(input: AuditInput): void {
+    void this._audit.append(input).catch((err) => {
+      this._logger.warn(`audit append failed: ${String(err)}`)
+    })
+  }
+
+  /** Connection churn changes both the device rows (online flag) and the count in status. */
+  private _handleConnectionsChanged(): void {
+    this._emitStatus()
+    void this._emitDevices()
   }
 }
 

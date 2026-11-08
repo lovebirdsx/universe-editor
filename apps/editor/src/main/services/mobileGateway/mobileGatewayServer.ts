@@ -427,7 +427,11 @@ export class MobileGatewayServer {
     connection.helloTimer.unref?.()
 
     ws.on('message', (data, isBinary) => {
-      void this._handleMessage(connection, data, isBinary)
+      void this._handleMessage(connection, data, isBinary).catch((err) => {
+        // An audit/store write can fail (disk full, userData removed); letting it
+        // reject unhandled would take down the main process.
+        this._options.logger.error('mobile gateway message handler failed', err)
+      })
     })
     ws.on('pong', () => {
       connection.lastPongAt = Date.now()
