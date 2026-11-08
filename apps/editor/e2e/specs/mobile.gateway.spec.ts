@@ -317,6 +317,27 @@ async function openFirstPhoneSession(phone: Page): Promise<void> {
   await expect(phone.getByTestId('composer')).toBeVisible()
 }
 
+/** Real touch pan (CDP), since mobile scrolling is a compositor gesture, not a wheel event. */
+async function swipeUp(phone: Page, x: number, fromY: number, toY: number): Promise<void> {
+  const cdp = await phone.context().newCDPSession(phone)
+  try {
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x, y: fromY }],
+    })
+    for (let step = 1; step <= 10; step += 1) {
+      await cdp.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [{ x, y: fromY + ((toY - fromY) * step) / 10 }],
+      })
+      await phone.waitForTimeout(16)
+    }
+  } finally {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await cdp.detach()
+  }
+}
+
 /**
  * Read the bearer token the paired PWA persisted. The token never leaves the
  * phone; e2e uses a second socket on the same device to flip notification prefs
@@ -1051,6 +1072,76 @@ test.describe('mobile gateway in a workspace', () => {
           timeout: 15_000,
         })
         .toBe(1)
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  /**
+   * The workspace picker is a modal overlay; a pan on it used to scroll the page
+   * behind (visible through the dim backdrop) instead of the sheet list.
+   */
+  test('@p1 workspace picker keeps the page behind it still while panning', async ({
+    page,
+    workbench,
+  }) => {
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      // A short viewport keeps the new-session page itself scrollable.
+      await phone.setViewportSize({ width: 390, height: 480 })
+      await phone.getByTestId('new-session-fab').click()
+      const trigger = phone.getByTestId('new-session-workspace-trigger')
+      await expect(trigger).toContainText('已打开', { timeout: 10_000 })
+      await trigger.click()
+
+      const sheet = phone.getByTestId('new-session-workspace-sheet')
+      await expect(sheet).toBeVisible()
+      const sheetBox = await sheet.boundingBox()
+      expect(sheetBox).not.toBeNull()
+      expect(await phone.evaluate(() => window.scrollY)).toBe(0)
+      expect(
+        await phone.evaluate(() => document.documentElement.scrollHeight > window.innerHeight),
+      ).toBe(true)
+
+      // Pan the dim backdrop above the sheet: the page behind must not move.
+      await swipeUp(phone, 195, Math.max(20, sheetBox!.y - 40), 20)
+      await expect.poll(() => phone.evaluate(() => window.scrollY)).toBe(0)
+
+      // A long list must scroll inside the sheet, never by moving the page.
+      // The fixture exposes a single workspace, so clone rows to model the real
+      // list (open windows + recent workspaces) that overflows the 80dvh cap.
+      await phone.evaluate(() => {
+        const list = document.querySelector(
+          '[data-testid="new-session-workspace-sheet"] .choice-list',
+        )
+        const first = list?.firstElementChild
+        if (list === null || first === null || first === undefined) {
+          throw new Error('workspace list is empty')
+        }
+        for (let index = 0; index < 30; index += 1) {
+          const clone = first.cloneNode(true) as HTMLElement
+          clone.setAttribute('data-testid', 'injected-workspace')
+          clone.textContent = `Injected workspace ${index}`
+          list.append(clone)
+        }
+      })
+      const content = phone.locator('[data-testid="new-session-workspace-sheet"] .sheet__content')
+      const contentBox = await content.boundingBox()
+      expect(contentBox).not.toBeNull()
+      const { clientHeight, scrollHeight } = await content.evaluate((node) => ({
+        clientHeight: node.clientHeight,
+        scrollHeight: node.scrollHeight,
+      }))
+      expect(scrollHeight).toBeGreaterThan(clientHeight)
+
+      await swipeUp(phone, 195, contentBox!.y + contentBox!.height - 30, contentBox!.y + 30)
+      await expect.poll(() => content.evaluate((node) => node.scrollTop)).toBeGreaterThan(0)
+      expect(await phone.evaluate(() => window.scrollY)).toBe(0)
     } finally {
       await context.close()
       await browser.close()

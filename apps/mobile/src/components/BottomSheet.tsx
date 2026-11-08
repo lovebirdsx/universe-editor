@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { strings } from '../strings.js'
+import { useDocumentScrollLock } from './useDocumentScrollLock.js'
 
 export interface BottomSheetProps {
   readonly title: string
@@ -37,6 +38,8 @@ export function BottomSheet({
 }: BottomSheetProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const dragStart = useRef<number | undefined>(undefined)
+
+  useDocumentScrollLock(overlay)
 
   useEffect(() => {
     setCollapsed(false)

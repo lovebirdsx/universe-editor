@@ -44,6 +44,13 @@ body {
   min-height: 100%;
 }
 
+/* Modal overlays freeze the page so a pan cannot scroll content behind them. */
+html.is-scroll-locked,
+html.is-scroll-locked body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 body {
   background: var(--bg);
   color: var(--text);
@@ -1393,6 +1400,11 @@ input:focus-visible {
   border-radius: 18px 18px 0 0;
   padding-bottom: env(safe-area-inset-bottom);
   box-shadow: var(--shadow);
+}
+
+.sheet--overlay .sheet__body {
+  /* Shrink below content height, otherwise max-height clips the list instead of scrolling it. */
+  min-height: 0;
 }
 
 .sheet--overlay .sheet__content {

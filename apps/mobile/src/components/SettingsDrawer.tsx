@@ -10,6 +10,7 @@ import {
   type PushRegistrationLike,
 } from '../notifications/pushNotifications.js'
 import { FullscreenButton } from './FullscreenButton.js'
+import { useDocumentScrollLock } from './useDocumentScrollLock.js'
 import {
   readSessionDisplayPreference,
   setSessionDisplayPreference,
@@ -49,6 +50,7 @@ const DISPLAY_OPTIONS: readonly { value: SessionDisplayPreference; label: string
 type PushState = 'unknown' | 'disabled' | 'enabled'
 
 export function SettingsDrawer({ client, credentials, onClose, onUnpair }: SettingsDrawerProps) {
+  useDocumentScrollLock(true)
   const [capability] = useState<NotificationCapability>(() => detectNotificationCapability())
   const [pushState, setPushState] = useState<PushState>('unknown')
   const [busy, setBusy] = useState(false)
