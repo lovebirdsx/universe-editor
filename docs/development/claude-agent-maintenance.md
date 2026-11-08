@@ -56,7 +56,7 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 | CT-EXT-METHODS | editor 常量表与约定 wire 名一致；dist 包含被测扩展名；选定方法可路由且校验参数 | `acp-agent.ts`（method 常量与路由） | `tools.test.ts` | `apps/editor/integration/scenarios/acpForkContract.integration.test.ts`（消费 `acpExtMethods.ts`） | 离线常量 + dist 字符串检查/握手 + 真实 CLI 部分路由；不等同于所有扩展的行为覆盖 |
 | CT-COST-USAGE | turn 中途 `usage_update` 携带成本明细；订阅额度用量运行时特性探测 | `session-cost.ts`、`usage.ts` | `session-cost.test.ts`、`usage.test.ts` | — | 离线 |
 | CT-LEGACY-AIR | 旧 AIR capability 输入不再启用专属协议：`initialize` 不回显、不广告 AIR；fork 忽略 AIR 的 fork 锚点，退回无锚点 tip fork | `acp-agent.ts`（`initialize` 应答、`unstable_forkSession` 锚点解析）、`tool-calls/client-capabilities.ts` | `session-contract-guards.test.ts`（「旧 AIR capability 输入不再启用专属协议」） | — | 离线 |
-| CT-BACKGROUND-ACTIVITY | `_universe/background_activity` 快照只反映真实活动：非 ambient 后台任务计数 + 无 prompt 的自主轮次；`idle` 不清自主标志（迟到/周期 idle 不得截断 followup）；占位自主 result 不清标志、真实 result 才清；被折进用户轮的自主 result、取消、流结束清标志；resume 已结算子 agent 必须补发计数；ambient 任务不计且不置位（level 可双向翻转）；发送失败后同值快照可重试、发送串行化；load\|resume 强制补发 | `acp-agent.ts`（`Session.autonomousTurn*` / `noteAutonomousWake` / `noteAutonomousFollowupActivity` / `handleAutonomousTurnTimeout` / `emitBackgroundActivity`）、`query-resources.ts`（计时器释放） | `acp-agent.test.ts`（`background activity notification` describe 14 例：迟到 idle / 占位 result / 周期 idle / ambient 过滤与翻转 / resume 补发 / 失败重试 / 宽限兜底 / 取消清理 / 证据排除等） | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.recovery.integration.test.ts`（重连期间快照不丢失）、`apps/editor/src/renderer/contributions/__tests__/AgentNotificationContribution.test.ts`（瞬时 idle 合并） | 离线；真实后台任务/真实 CLI 端到端未验证（需真实 CLI 手工复验） |
+| CT-BACKGROUND-ACTIVITY | `_universe/background_activity` 快照只反映真实活动：非 ambient 后台任务计数 + 无 prompt 的自主轮次；`idle` 不清自主标志（迟到/周期 idle 不得截断 followup）；占位自主 result 不清标志、真实 result 才清；被折进用户轮的自主 result、取消、流结束清标志；取消时对 live 非 ambient 后台任务逐个 `stopTask`（不 await）、interrupt 带 `cancel_queued`、取消后 `task_notification`/自主 user message 不再置位、无用户轮归属的流式输出不投递；resume 已结算子 agent 必须补发计数；ambient 任务不计且不置位（level 可双向翻转）；发送失败后同值快照可重试、发送串行化；load\|resume 强制补发 | `acp-agent.ts`（`Session.autonomousTurn*` / `noteAutonomousWake` / `noteAutonomousFollowupActivity` / `handleAutonomousTurnTimeout` / `emitBackgroundActivity`）、`query-resources.ts`（计时器释放） | `acp-agent.test.ts`（`background activity notification` describe 19 例：迟到 idle / 占位 result / 周期 idle / ambient 过滤与翻转 / resume 补发 / 失败重试 / 宽限兜底 / 取消清理 / stopTask 过滤与顺序 / cancel_queued / 取消后通知不唤醒 / 取消后输出抑制与尾部放行 / 证据排除等） | `apps/editor/src/renderer/services/acp/session/__tests__/AcpSession.recovery.integration.test.ts`（重连期间快照不丢失）、`apps/editor/src/renderer/contributions/__tests__/AgentNotificationContribution.test.ts`（瞬时 idle 合并） | 离线；真实后台任务/真实 CLI 端到端未验证（需真实 CLI 手工复验） |
 
 契约清单可增长：新增行为先加行、再加走生产入口的测试。主仓拥有一部分独立验收契约，不能为适配 fork 输出退化而同步放宽断言。
 
@@ -212,6 +212,18 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 - vendor 全量：2490 passed / 41 failed；失败均为既有 Windows 路径/快照（acp-agent 9 条在 HEAD 基线复现一致；permission-options / diff-patch / acp-scenarios 未被本批改动触碰）。
 - 父仓：`pnpm agent:build` 通过（dist 已用新源码重建）；`pnpm check` 通过（docs / sensitive / skills / knowledge / claude-md 护栏 + lint / typecheck + 按变更选测）；跨仓契约 `UNIVERSE_FORK_CONTRACT=1 pnpm --filter @universe-editor/editor test:integration acpForkContract` 全部通过（含真实 dist 的 `rewind_session` 未知 messageId 结构化错误腿）；定向 e2e `pnpm e2e specs/smoke.acpRewindForkEntrypoints.spec.ts` 3 例通过（`test-results/.last-run.json`：`status: passed`）。
 - 未执行：真实 CLI 手工重连回归（预览 / 确认 / 截断持久化 / 重开不回弹）——需真实用户会话与文件 checkpoint，留待用户环境验收。
+
+## P2 第七批：取消停止后台任务与自主唤醒（修复）
+
+**症状**：用户在 AI 面板点击停止按钮后，agent 仍被一个 `run_in_background` 后台 Bash 任务在完成时唤醒，继续执行一整轮工具调用并输出最终消息。Session `3543347f-...` 的时间线：03:55:49 最终报告（`end_turn`）→ 用户点停止 → 03:56:36 后台任务完成、`task-notification` 入队 → 03:56:38–03:56:47 自主回合执行 Read/Bash/PowerShell 并输出最终消息。
+
+**根因**：① `cancelTurns` 不调用 `query.stopTask()`，后台 shell 继续运行；② `interrupt()` 不带 `cancel_queued`，停止瞬间仍在 CLI 队列里的 uuid-less task notification 幸存；③ `task_notification` 与自主 origin user message 的 `noteAutonomousWake` 在 `session.cancelled` 守卫之前执行，取消后的通知仍把 `autonomousTurn` 置 true；④ 取消后的自主 `result` 在 result 的 cancelled 守卫处提前 break，`clearAutonomousTurn` 不可达，且 `stream_event`/`tool_progress` 无 cancelled 守卫，新回合输出继续送达编辑器。
+
+**修法**（fork `acp-agent.ts`）：cancel 末尾在 `dropQueuedMessages` 前、interrupt 前，对 `liveBackgroundTasks` 中 `ambient !== true && endedPerLevel === undefined` 的任务同步 fire-and-forget `stopTask`（SDK 按调用顺序写 control request，stop 先于 interrupt；不声明 `perTaskStopAffordance`）；`query.interrupt({cancelQueued:true})`（运行时支持、`.d.ts` 未声明；老 CLI 忽略）；两处 wake 加 `!session.cancelled` 守卫（settle/计数照常）；`stream_event`/`tool_progress` 在 `cancelled && activeTurn == null && firstUnsettledQueuedTurn() == null` 时跳过，放行被取消 turn 的尾部与新 prompt 的 pre-echo delta。状态机与残余风险见 fork `cases-session.md`。
+
+**测试与负向验证**：`acp-agent.test.ts` 的 `background activity notification` describe 14 → 19 例。先在未修复代码上跑红 4 例（cancel 后通知仍置位 / stopTask 未被调用 / interrupt 无参 / 迟到自主 stream 被转发），第 5 例（被取消 turn 尾部仍转发）在修复前后均绿，用于防止守卫写成无条件抑制；修复后 19/19 通过。fork 全量 2494 passed / 42 failed（41 条既有 Windows 路径/换行/golden + 1 条 `acp-v2` EBUSY flake，均与改动无关），`typecheck` / `lint` 通过。
+
+**未验证**：真实 CLI 的端到端行为（需真实凭据与模型触发 `run_in_background`）；输出守卫不能阻止 CLI 已开始的工具副作用，源头阻止依赖 stopTask + cancel_queued，两者都漏的窄窗口无法从 adapter 侧封死。
 
 ## 后续范围
 
