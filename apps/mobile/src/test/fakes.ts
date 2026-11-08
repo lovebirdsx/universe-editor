@@ -1,3 +1,7 @@
+import type { PairRequest } from '@universe-editor/mobile-protocol'
+import { vi } from 'vitest'
+import type { CredentialStore, StoredCredentials } from '../credentials.js'
+import type { PairRequestResult } from '../pairing.js'
 import type { TimerApi, TimerHandle, WebSocketLike } from '../socket/mobileSocket.js'
 
 interface TimeoutEntry {
@@ -135,4 +139,55 @@ export class FakeWebSocket implements WebSocketLike {
 
 export function sentFrames(socket: FakeWebSocket): unknown[] {
   return socket.sent.map((text) => JSON.parse(text) as unknown)
+}
+
+export interface PairingStoreHarness {
+  readonly store: CredentialStore
+  readonly saved: () => StoredCredentials | undefined
+  readonly saveCalls: () => number
+}
+
+export function createPairingStoreHarness(
+  options: { readonly persisted?: boolean } = {},
+): PairingStoreHarness {
+  let stored: StoredCredentials | undefined
+  let saves = 0
+  const persisted = options.persisted ?? true
+  return {
+    store: {
+      async load() {
+        return stored
+      },
+      async save(credentials) {
+        stored = credentials
+        saves += 1
+        return { persisted }
+      },
+      async clear() {
+        stored = undefined
+      },
+    },
+    saved: () => stored,
+    saveCalls: () => saves,
+  }
+}
+
+export function successfulPairRequester() {
+  return vi.fn(
+    async (_input: PairRequest): Promise<PairRequestResult> => ({
+      ok: true,
+      response: {
+        deviceId: 'device-12345678',
+        token: 'token-value',
+        pcName: 'PC-A',
+        protocolVersion: 1,
+      },
+    }),
+  )
+}
+
+export function failingPairRequester(code: string, network = false) {
+  return vi.fn(
+    async (_input: PairRequest): Promise<PairRequestResult> => ({ ok: false, code, network }),
+  )
 }

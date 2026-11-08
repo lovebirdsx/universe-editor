@@ -1,52 +1,13 @@
-import type { PairRequest } from '@universe-editor/mobile-protocol'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { CredentialStore, StoredCredentials } from '../credentials.js'
-import { guessDevice, type PairRequestResult } from '../pairing.js'
+import { guessDevice } from '../pairing.js'
 import { PairPage } from '../pages/PairPage.js'
 import { strings } from '../strings.js'
-
-interface StoreHarness {
-  readonly store: CredentialStore
-  readonly saved: () => StoredCredentials | undefined
-  readonly saveCalls: () => number
-}
-
-function createStore(): StoreHarness {
-  let stored: StoredCredentials | undefined
-  let saves = 0
-  return {
-    store: {
-      async load() {
-        return stored
-      },
-      async save(credentials) {
-        stored = credentials
-        saves += 1
-        return { persisted: true }
-      },
-      async clear() {
-        stored = undefined
-      },
-    },
-    saved: () => stored,
-    saveCalls: () => saves,
-  }
-}
-
-function successfulRequester() {
-  return vi.fn(
-    async (_input: PairRequest): Promise<PairRequestResult> => ({
-      ok: true,
-      response: {
-        deviceId: 'device-12345678',
-        token: 'token-value',
-        pcName: 'PC-A',
-        protocolVersion: 1,
-      },
-    }),
-  )
-}
+import {
+  createPairingStoreHarness,
+  failingPairRequester,
+  successfulPairRequester,
+} from '../test/fakes.js'
 
 beforeEach(() => {
   window.history.replaceState(null, '', '/pair')
@@ -55,9 +16,9 @@ beforeEach(() => {
 describe('PairPage', () => {
   it('reads the code from the fragment, pairs, and clears the hash', async () => {
     window.history.replaceState(null, '', '/pair#code=ABCD2345')
-    const store = createStore()
+    const store = createPairingStoreHarness()
     const onPaired = vi.fn()
-    const requester = successfulRequester()
+    const requester = successfulPairRequester()
 
     render(<PairPage store={store.store} onPaired={onPaired} pairRequest={requester} />)
 
@@ -65,6 +26,7 @@ describe('PairPage', () => {
     const nameInput = screen.getByLabelText(strings.pairDeviceNameLabel) as HTMLInputElement
     expect(codeInput.value).toBe('ABCD2345')
     expect(nameInput.value).not.toBe('')
+    expect(screen.queryByText(strings.pairCodeHint)).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: strings.pairSubmit }))
 
@@ -86,12 +48,13 @@ describe('PairPage', () => {
   })
 
   it('accepts a manually typed code', async () => {
-    const store = createStore()
+    const store = createPairingStoreHarness()
     const onPaired = vi.fn()
-    const requester = successfulRequester()
+    const requester = successfulPairRequester()
 
     render(<PairPage store={store.store} onPaired={onPaired} pairRequest={requester} />)
 
+    expect(screen.getByText(strings.pairCodeHint)).toBeDefined()
     fireEvent.change(screen.getByLabelText(strings.pairCodeLabel), {
       target: { value: 'abcd-2345' },
     })
@@ -112,7 +75,13 @@ describe('PairPage', () => {
     const fingerprint = '00112233445566778899aabbccddeeff'.repeat(2)
     window.history.replaceState(null, '', `/pair#code=ABCD2345&fp=${fingerprint}`)
 
-    render(<PairPage store={createStore().store} onPaired={vi.fn()} pairRequest={vi.fn()} />)
+    render(
+      <PairPage
+        store={createPairingStoreHarness().store}
+        onPaired={vi.fn()}
+        pairRequest={vi.fn()}
+      />,
+    )
 
     const block = screen.getByTestId('pair-certificate')
     expect(block.textContent).toContain(strings.pairCertTitle)
@@ -121,13 +90,19 @@ describe('PairPage', () => {
 
   it('does not show a certificate block when the link has no fingerprint', () => {
     window.history.replaceState(null, '', '/pair#code=ABCD2345')
-    render(<PairPage store={createStore().store} onPaired={vi.fn()} pairRequest={vi.fn()} />)
+    render(
+      <PairPage
+        store={createPairingStoreHarness().store}
+        onPaired={vi.fn()}
+        pairRequest={vi.fn()}
+      />,
+    )
     expect(screen.queryByTestId('pair-certificate')).toBeNull()
   })
 
   it('rejects a malformed code before calling the gateway', async () => {
-    const store = createStore()
-    const requester = successfulRequester()
+    const store = createPairingStoreHarness()
+    const requester = successfulPairRequester()
 
     render(<PairPage store={store.store} onPaired={vi.fn()} pairRequest={requester} />)
 
@@ -143,14 +118,8 @@ describe('PairPage', () => {
 
   it('maps gateway failures to Chinese copy', async () => {
     window.history.replaceState(null, '', '/pair#code=ABCD2345')
-    const store = createStore()
-    const requester = vi.fn(
-      async (_input: PairRequest): Promise<PairRequestResult> => ({
-        ok: false,
-        code: 'rate_limited',
-        network: false,
-      }),
-    )
+    const store = createPairingStoreHarness()
+    const requester = failingPairRequester('rate_limited')
 
     render(<PairPage store={store.store} onPaired={vi.fn()} pairRequest={requester} />)
     fireEvent.click(screen.getByRole('button', { name: strings.pairSubmit }))

@@ -426,6 +426,30 @@ test.describe('mobile gateway', () => {
     }
   })
 
+  test('@p1 pairs from the unpaired inbox guide page', async ({ page, workbench }) => {
+    await openSettings(page, workbench)
+    const origin = await waitForRunning(page)
+    await startPairing(page)
+
+    const browser = await chromium.launch()
+    const context = await browser.newContext({ ...devices['iPhone 13'] })
+    try {
+      const phone = await context.newPage()
+      await phone.goto(`${origin}/`)
+      await expect(phone.getByText('还没有配对')).toBeVisible()
+      await phone.getByLabel('配对码').fill(MOBILE_E2E_CODE)
+      await phone.getByRole('button', { name: '开始配对' }).click()
+      await expect(phone.getByText('已连接', { exact: true })).toBeVisible()
+
+      const deviceRow = page.locator('li[data-testid^="mobile-device-"]')
+      await expect(deviceRow).toHaveCount(1)
+      await expect(deviceRow).toContainText('Online')
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
   test('@p1 revoking the device disconnects the phone and asks it to pair again', async ({
     page,
     workbench,

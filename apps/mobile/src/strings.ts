@@ -110,8 +110,9 @@ export const strings = {
   inboxRefresh: '刷新页面',
 
   guideTitle: '还没有配对',
-  guideBody: '在 PC 上打开「手机设备」设置，扫描二维码即可配对。',
+  guideBody: '在 PC 上打开「手机设备」设置，扫描二维码即可配对；也可以在下方手动输入配对码。',
   guideHint: '手机与 PC 需要能够互相访问（局域网或 Tailscale）。',
+  guidePairTitle: '手动输入配对码',
 
   credentialsInvalid: '此设备已被吊销或凭据失效，请重新配对。',
   noticeDismiss: '知道了',

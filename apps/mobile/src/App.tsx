@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { NoticeBar } from './components/NoticeBar.js'
 import { NotificationToast } from './components/NotificationToast.js'
 import { Spinner } from './components/Spinner.js'
 import {
@@ -7,6 +6,7 @@ import {
   type SaveCredentialsResult,
   type StoredCredentials,
 } from './credentials.js'
+import { GuidePage } from './pages/GuidePage.js'
 import { InboxPage } from './pages/InboxPage.js'
 import { NewSessionPage } from './pages/NewSessionPage.js'
 import { PairPage } from './pages/PairPage.js'
@@ -105,6 +105,7 @@ export function App() {
 
   const handlePaired = (_credentials: StoredCredentials, result: SaveCredentialsResult): void => {
     setNotice(result.persisted ? undefined : strings.pairStorageUnavailable)
+    setLoaded({ loading: true, credentials: undefined })
     setReloadKey((value) => value + 1)
     setRoute({ name: 'inbox' })
   }
@@ -148,13 +149,12 @@ export function App() {
 
   if (credentials === undefined) {
     return (
-      <main className="guide-page">
-        {notice !== undefined && <NoticeBar text={notice} onDismiss={() => setNotice(undefined)} />}
-        <span className="guide-page__logo" aria-hidden="true" />
-        <h1 className="guide-page__title">{strings.guideTitle}</h1>
-        <p className="guide-page__body">{strings.guideBody}</p>
-        <p className="guide-page__hint">{strings.guideHint}</p>
-      </main>
+      <GuidePage
+        store={store}
+        onPaired={handlePaired}
+        notice={notice}
+        onDismissNotice={() => setNotice(undefined)}
+      />
     )
   }
 

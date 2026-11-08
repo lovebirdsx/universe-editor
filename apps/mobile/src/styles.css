@@ -292,7 +292,7 @@ input:focus-visible {
   min-height: 100dvh;
   max-width: 520px;
   margin: 0 auto;
-  padding: calc(env(safe-area-inset-top) + 72px) 24px calc(env(safe-area-inset-bottom) + 32px);
+  padding: calc(env(safe-area-inset-top) + 32px) 24px calc(env(safe-area-inset-bottom) + 32px);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -314,6 +314,16 @@ input:focus-visible {
 .guide-page__hint {
   color: var(--muted);
   font-size: 14px;
+}
+
+.guide-page__pair {
+  align-self: stretch;
+  margin-top: 6px;
+}
+
+.guide-page__pair-title {
+  font-size: 20px;
+  line-height: 1.3;
 }
 
 /* Status bar -------------------------------------------------------------- */
@@ -2102,7 +2112,6 @@ input:focus-visible {
   min-height: 48px;
 }
 
-
 .jump-button {
   position: absolute;
   left: 50%;
@@ -2328,7 +2337,6 @@ input:focus-visible {
   --acp-ansi-bright-cyan: #67e8f9;
   --acp-ansi-bright-white: #f3f4f6;
 }
-
 
 /* Foreground notifications ------------------------------------------------- */
 
