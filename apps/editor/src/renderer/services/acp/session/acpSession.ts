@@ -700,12 +700,16 @@ const STREAM_HEAVY_CHARS = 64 * 1024
  */
 const MAX_PRIOR_AGENT_SESSION_IDS = 4
 
-// Built-in slash commands the agent handles locally (mirrors
-// BUILT_IN_COMMANDS in vendor/claude-agent-acp/src/acp-agent.ts). Their args
-// are command parameters (`/model opus`), not user prose, so a prompt that is
-// one of these carries no title-worthy content. Custom skills like
-// `/fix-ci-e2e-flake <the real task>` are NOT in this set — their args are the
-// user's actual prompt and make perfectly good titles.
+// Built-in slash commands whose args are command parameters (`/model opus`),
+// not user prose, so a prompt that is one of these carries no title-worthy
+// content. Custom skills like `/fix-ci-e2e-flake <the real task>` are NOT in
+// this set — their args are the user's actual prompt and make perfectly good
+// titles.
+//
+// Mostly mirrors BUILT_IN_COMMANDS in vendor/claude-agent-acp/src/acp-agent.ts,
+// but `/rename`/`/name` are deliberately editor-only: their arg is a title, not
+// prose, yet the fork must keep replaying them verbatim — its BUILT_IN_COMMANDS
+// strips `<command-args>`, which would drop the name from the replayed turn.
 const LOCAL_COMMAND_NAMES: ReadonlySet<string> = new Set([
   '/model',
   '/compact',
@@ -716,12 +720,28 @@ const LOCAL_COMMAND_NAMES: ReadonlySet<string> = new Set([
   '/context',
   '/heapdump',
   '/extra-usage',
+  '/rename',
+  '/name',
 ])
 
 /** True when the prompt is exactly an invocation of a locally-handled built-in command. */
 function isLocalCommandPrompt(text: string): boolean {
   const m = /^\s*(\/\S+)/.exec(text)
   return m !== null && LOCAL_COMMAND_NAMES.has(m[1]!)
+}
+
+/**
+ * Parse a prompt that invokes the CLI's built-in rename command (`/name` is its
+ * alias). `title` is the name the user typed; undefined means a bare `/rename`,
+ * whose name the CLI generates from the conversation.
+ */
+function parseRenameCommandPrompt(
+  text: string,
+): { readonly title: string | undefined } | undefined {
+  const m = /^\s*\/(?:rename|name)(?:\s+|$)/.exec(text)
+  if (m === null) return undefined
+  const rest = text.slice(m[0].length).trim()
+  return { title: rest.length > 0 ? rest : undefined }
 }
 
 /**
@@ -863,6 +883,17 @@ export class AcpSession extends Disposable implements IAcpSession {
    * choice on subsequent prompts.
    */
   private _titleLocked = false
+
+  /**
+   * Set when the just-dispatched prompt is the agent CLI's `/rename` (or
+   * `/name`). Its turn-end `session_info_update` then carries a name the user
+   * chose, which outranks the local AI/derived titles. `title` is the name typed
+   * after the command (undefined for a bare `/rename`, which the CLI names).
+   * Cleared when the matching report arrives, by an explicit
+   * {@link renameTitle}, and on dispose — never by a prompt response or an
+   * unrelated title (the report lands after `result`, at turn-end `idle`).
+   */
+  private _pendingAgentRename: { readonly title: string | undefined } | undefined
 
   /** Latched once a first-prompt-derived title has been written. */
   private _titleDerived = false
@@ -2164,6 +2195,14 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._failedPrompt = undefined
       this.recovery.clear()
     }
+    const rename = parseRenameCommandPrompt(text)
+    if (rename !== undefined) {
+      this._pendingAgentRename = rename
+      // The user named the session: stop an in-flight (or the next) AI title
+      // from clobbering the CLI's rename while its turn finishes.
+      this._titleGenerated = true
+      this._titleLocked = true
+    }
     this._maybeDeriveTitleFromPrompt(text)
     this._maybeRecordFirstPrompt(text)
     this._rememberDispatchedPrompt(text)
@@ -2975,10 +3014,48 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.readOnly) return
     const trimmed = title.trim().replace(/\s+/g, ' ')
     if (trimmed.length === 0) return
+    // A later explicit rename supersedes a /rename prompt whose report has not
+    // landed yet — the stale name must not win.
+    this._pendingAgentRename = undefined
+    this._renameTitle(trimmed, true)
+  }
+
+  /**
+   * Shared manual-title write. `pushToAgent` is false when the agent itself just
+   * persisted the name (a `/rename` report): pushing it back would only append a
+   * duplicate `custom-title` record.
+   */
+  private _renameTitle(title: string, pushToAgent: boolean): void {
+    if (this.readOnly) return
+    const trimmed = title.trim().replace(/\s+/g, ' ')
+    if (trimmed.length === 0) return
     // Stop any (in-flight or future) auto title from clobbering the user's choice.
     this._titleGenerated = true
     this._titleLocked = true
-    this._setHistoryTitle(trimmed, 'manual')
+    this._setHistoryTitle(trimmed, 'manual', pushToAgent)
+  }
+
+  /**
+   * Adopt an agent-reported title as a user rename when it matches a `/rename`
+   * prompt this session just sent. Returns true when adopted — the caller must
+   * not also write it through the protected agent-report path.
+   */
+  private _maybeAdoptAgentRename(reported: string): boolean {
+    const pending = this._pendingAgentRename
+    if (pending === undefined || this.readOnly) return false
+    // With an explicit name only that name counts. `isPromptEchoTitle` gives us
+    // the same whitespace normalization + `…` truncation tolerance the echo
+    // guard uses (the fork sanitizes titles before publishing them).
+    if (pending.title !== undefined && !isPromptEchoTitle(reported, [pending.title])) {
+      console.debug(
+        `[acp-title] /rename pending, ignored unrelated agent title: ${reported.slice(0, 60)}`,
+      )
+      return false
+    }
+    this._pendingAgentRename = undefined
+    this._renameTitle(reported, false)
+    console.debug(`[acp-title] adopted agent-reported rename: ${reported.slice(0, 60)}`)
+    return true
   }
 
   /**
@@ -2991,18 +3068,24 @@ export class AcpSession extends Disposable implements IAcpSession {
    * (user rename) are authoritative: they are flagged on the history row (so the
    * hydrate sweep won't clobber them with the agent's `summary`) and pushed back
    * to the agent via the set-title ext-method, so the title survives `/compact`
-   * and the next `session/list`. `'derived'` (first prompt) is flagged locally
+   * and the next `session/list` (unless `pushToAgent` is false because the agent
+   * itself just persisted it). `'derived'` (first prompt) is flagged locally
    * only — never pushed (see {@link _applyHistoryTitle}).
    */
-  private _setHistoryTitle(title: string, kind: TitleKind): void {
+  private _setHistoryTitle(title: string, kind: TitleKind, pushToAgent = true): void {
     this._pendingTitle = title
     this._pendingTitleKind = kind
     const sid = this.sessionIdOnAgent.get()
-    if (sid !== undefined) this._applyHistoryTitle(sid, title, kind)
+    if (sid !== undefined) this._applyHistoryTitle(sid, title, kind, pushToAgent)
   }
 
   /** Write the title to the history row and, for AI/manual titles, push it to the agent. */
-  private _applyHistoryTitle(sessionIdOnAgent: string, title: string, kind: TitleKind): void {
+  private _applyHistoryTitle(
+    sessionIdOnAgent: string,
+    title: string,
+    kind: TitleKind,
+    pushToAgent = true,
+  ): void {
     // AI / manual titles are authoritative — they must land even on rows already
     // flagged aiTitle/manualTitle/derivedTitle (e.g. a rename after the AI title).
     // A derived title is not: it never overwrites a protected row.
@@ -3010,10 +3093,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._history?.updateInfo(sessionIdOnAgent, { title }, { overwriteProtectedTitle })
     if (kind === 'ai') {
       this._history?.setHistoryAiTitle(sessionIdOnAgent)
-      this._pushTitleToAgent(sessionIdOnAgent, title)
+      if (pushToAgent) this._pushTitleToAgent(sessionIdOnAgent, title)
     } else if (kind === 'manual') {
       this._history?.setHistoryManualTitle(sessionIdOnAgent)
-      this._pushTitleToAgent(sessionIdOnAgent, title)
+      if (pushToAgent) this._pushTitleToAgent(sessionIdOnAgent, title)
     } else if (kind === 'derived') {
       // Local flag only: pushing a 30-char prompt slice as the agent's
       // `customTitle` would impersonate a user rename and, since customTitle
@@ -3119,6 +3202,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   override dispose(): void {
     this._cancelOrphanToolCallSweep()
+    this._pendingAgentRename = undefined
     super.dispose()
   }
 
@@ -3135,6 +3219,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private async _maybeGenerateTitle(userText: string): Promise<void> {
     if (this._titleGenerated) return
+    if (this._titleLocked) return
     if (!this._history || !this._titleService) return
     if (isLocalCommandPrompt(userText)) return
     const source = stripLeadingBlockquote(userText)
@@ -3159,6 +3244,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._titleGenerated = false
       return
     }
+    // The user renamed while this generation was in flight: the late AI title
+    // must not overwrite the manual one.
+    if (this._titleLocked) return
     if (this.status.get() === 'closed') return
     this._setHistoryTitle(title, 'ai')
   }
@@ -3928,7 +4016,7 @@ export class AcpSession extends Disposable implements IAcpSession {
               console.debug(
                 `[acp-title] dropped session_info_update echoing a dispatched prompt: ${update.title.slice(0, 60)}`,
               )
-            } else {
+            } else if (!this._maybeAdoptAgentRename(update.title)) {
               patch.title = update.title
             }
           }

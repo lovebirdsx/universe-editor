@@ -5679,6 +5679,213 @@ describe('AcpSessionService — AI session title push-back', () => {
     }
   })
 
+  it('adopts the title the agent reports after an input /rename', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('Fix login bug'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      await session.sendPrompt('how do I fix the broken login page?')
+      await new Promise((r) => setTimeout(r, 0))
+      const sid = session.sessionIdOnAgent.get()!
+      expect(history.get(sid)?.aiTitle).toBe(true)
+
+      // The CLI's built-in /rename writes a custom title; the fork reports it
+      // back at turn end. A name the user typed outranks the generated AI title.
+      await session.sendPrompt('/rename 统一host')
+      await new Promise((r) => setTimeout(r, 0))
+      const updatedAt = Date.now() + 60_000
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sid,
+        update: {
+          sessionUpdate: 'session_info_update',
+          title: '统一host',
+          updatedAt: new Date(updatedAt).toISOString(),
+        },
+      })
+
+      expect(history.get(sid)?.title).toBe('统一host')
+      expect(history.get(sid)?.manualTitle).toBe(true)
+      expect(history.get(sid)?.lastUsedAt).toBe(updatedAt)
+      // The agent already persisted the name itself; pushing it back would only
+      // append a duplicate custom-title record.
+      const agent = client.connected[0]!.agent
+      expect(
+        agent.extMethodCalls.filter(
+          (call) =>
+            call.method === 'universe-editor/set_session_title' &&
+            (call.params as { title?: string }).title === '统一host',
+        ),
+      ).toHaveLength(0)
+
+      // A later prompt must not let the AI title overwrite the user's rename.
+      await session.sendPrompt('continue')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.title).toBe('统一host')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not derive/generate a title from a /rename prompt', async () => {
+    const client = new FakeAcpClientService()
+    let titleCalls = 0
+    const titleService: IAcpSessionTitleService = {
+      _serviceBrand: undefined,
+      generateTitle: () => {
+        titleCalls += 1
+        return Promise.resolve('AI Title')
+      },
+    }
+    const { svc, history } = makeServiceWithTitle(client, titleService)
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+      const placeholder = history.get(sid)?.title
+
+      await session.sendPrompt('/rename Manual Name')
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(titleCalls).toBe(0)
+      expect(history.get(sid)?.derivedTitle).not.toBe(true)
+      expect(history.get(sid)?.firstPrompt).toBeUndefined()
+      expect(history.get(sid)?.title).toBe(placeholder)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('treats /name as the rename alias', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('AI Title'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      await session.sendPrompt('/name Alias Name')
+      await new Promise((r) => setTimeout(r, 0))
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sid,
+        update: { sessionUpdate: 'session_info_update', title: 'Alias Name' },
+      })
+
+      expect(history.get(sid)?.title).toBe('Alias Name')
+      expect(history.get(sid)?.manualTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('adopts a CLI-generated title for a bare /rename', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('AI Title'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      await session.sendPrompt('/rename')
+      await new Promise((r) => setTimeout(r, 0))
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sid,
+        update: { sessionUpdate: 'session_info_update', title: 'Auto Generated' },
+      })
+
+      expect(history.get(sid)?.title).toBe('Auto Generated')
+      expect(history.get(sid)?.manualTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('keeps a pending /rename when the agent reports an unrelated title', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('AI Title'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      await session.sendPrompt('first real prompt')
+      await new Promise((r) => setTimeout(r, 0))
+      const sid = session.sessionIdOnAgent.get()!
+      expect(history.get(sid)?.title).toBe('AI Title')
+
+      await session.sendPrompt('/rename Expected Name')
+      await new Promise((r) => setTimeout(r, 0))
+      const sink = client.connected[0]!.sink
+      sink.onSessionUpdate({
+        sessionId: sid,
+        update: { sessionUpdate: 'session_info_update', title: 'Something Else' },
+      })
+      expect(history.get(sid)?.title).toBe('AI Title')
+      expect(history.get(sid)?.manualTitle).not.toBe(true)
+
+      // The pending rename survives the unrelated report and still lands.
+      sink.onSessionUpdate({
+        sessionId: sid,
+        update: { sessionUpdate: 'session_info_update', title: 'Expected Name' },
+      })
+      expect(history.get(sid)?.title).toBe('Expected Name')
+      expect(history.get(sid)?.manualTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not let an in-flight AI title overwrite a manual rename', async () => {
+    const client = new FakeAcpClientService()
+    let resolveTitle!: (title: string | undefined) => void
+    const deferred: IAcpSessionTitleService = {
+      _serviceBrand: undefined,
+      generateTitle: () =>
+        new Promise<string | undefined>((resolve) => {
+          resolveTitle = resolve
+        }),
+    }
+    const { svc, history } = makeServiceWithTitle(client, deferred)
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+      await session.sendPrompt('first prompt')
+      await new Promise((r) => setTimeout(r, 0))
+
+      svc.renameSession(session.id, 'Manual Name')
+      await new Promise((r) => setTimeout(r, 0))
+      resolveTitle('Late AI Title')
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(history.get(sid)?.title).toBe('Manual Name')
+      expect(history.get(sid)?.manualTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('lets an explicit rename supersede a pending /rename report', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('AI Title'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+      await session.sendPrompt('/rename First Name')
+      await new Promise((r) => setTimeout(r, 0))
+
+      expect(svc.renameSession(session.id, 'Second Name')).toBe(true)
+      await new Promise((r) => setTimeout(r, 0))
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sid,
+        update: { sessionUpdate: 'session_info_update', title: 'First Name' },
+      })
+
+      expect(history.get(sid)?.title).toBe('Second Name')
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('does not spend title derivation/generation on a local built-in command prompt', async () => {
     const client = new FakeAcpClientService()
     const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('Real Task Title'))
