@@ -108,6 +108,7 @@ export const MAX_TOOL_CALL_DIFFS = 256
 export const MAX_TOOL_CALL_LOCATIONS = 256
 export const MAX_REASON_LENGTH = 1024
 export const MAX_REQUEST_ID_LENGTH = 128
+export const MAX_CURRENCY_LENGTH = 16
 /** Phone prompt cap; also applies to a new session's initial prompt. */
 export const MAX_PROMPT_LENGTH = 32 * 1024
 export const MAX_FEEDBACK_LENGTH = 8 * 1024
@@ -1308,7 +1309,7 @@ function parseUsage(value: unknown): Result<MobileUsage> {
     if (!isRecord(value.cost)) return fail('bad_request', 'session.usage.cost must be an object')
     const amount = value.cost.amount
     const currency = value.cost.currency
-    if (!isFiniteNumber(amount) || !isNonEmptyBoundedString(currency, 16)) {
+    if (!isFiniteNumber(amount) || !isNonEmptyBoundedString(currency, MAX_CURRENCY_LENGTH)) {
       return fail('bad_request', 'session.usage.cost is malformed')
     }
     cost = { amount, currency }

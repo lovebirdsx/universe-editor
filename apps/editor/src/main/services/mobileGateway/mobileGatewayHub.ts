@@ -15,7 +15,14 @@ import {
 } from '@universe-editor/platform'
 import {
   MAX_SERVER_FRAME_BYTES,
+  MAX_ID_LENGTH,
+  MAX_STATUS_LENGTH,
+  MAX_TITLE_LENGTH,
+  MAX_WORKSPACE_NAME_LENGTH,
+  clampText,
   isConfigValueAllowedOnMobile,
+  parseServerFrame,
+  serializeFrame,
   type CommandFrame,
   type MobileAgentCandidate,
   type MobileAttentionKind,
@@ -202,7 +209,11 @@ export class MobileGatewayHub {
       for (const [key, subscription] of state.sessions) {
         if (subscription.windowId !== windowId) continue
         state.sessions.delete(key)
-        state.connection.send({ type: 'session_removed', ref: subscription.ref })
+        this._send(
+          state.connection,
+          { type: 'session_removed', ref: subscription.ref },
+          subscription.localId,
+        )
       }
     }
     if (removes.length > 0) this._broadcastInboxDelta([], removes)
@@ -282,7 +293,7 @@ export class MobileGatewayHub {
     if (state === undefined) return
     const resolved = this._resolveSession(ref)
     if (resolved === undefined) {
-      connection.send({ type: 'session_removed', ref })
+      this._send(connection, { type: 'session_removed', ref }, ref.localId)
       return
     }
     const key = sessionKey(resolved.windowId, resolved.localId)
@@ -311,7 +322,7 @@ export class MobileGatewayHub {
     const entry = this._windows.get(resolved.windowId)
     if (entry === undefined) {
       state.sessions.delete(key)
-      connection.send({ type: 'session_removed', ref })
+      this._send(connection, { type: 'session_removed', ref }, ref.localId)
       return
     }
     let snapshot: Awaited<ReturnType<IMobileBridgeService['getSnapshot']>>
@@ -324,7 +335,7 @@ export class MobileGatewayHub {
     if (subscription.cancelled) return
     if (snapshot === undefined) {
       state.sessions.delete(key)
-      connection.send({ type: 'session_removed', ref })
+      this._send(connection, { type: 'session_removed', ref }, ref.localId)
       return
     }
 
@@ -343,7 +354,7 @@ export class MobileGatewayHub {
         summary,
       }),
     }
-    connection.send(frame)
+    this._send(connection, frame, resolved.localId)
     subscription.snapshotPending = false
     const buffered = subscription.buffered
     subscription.buffered = []
@@ -419,14 +430,14 @@ export class MobileGatewayHub {
     }
 
     if (outcome.ok) {
-      connection.send({
+      this._send(connection, {
         type: 'command_result',
         requestId: frame.requestId,
         ok: true,
         ...(outcome.result !== undefined ? { result: outcome.result } : {}),
       })
     } else {
-      connection.send({
+      this._send(connection, {
         type: 'command_result',
         requestId: frame.requestId,
         ok: false,
@@ -764,6 +775,26 @@ export class MobileGatewayHub {
     }
   }
 
+  /**
+   * Single outbound exit: a frame the protocol validator would reject must never
+   * reach the phone, because the client drops the whole frame (including a
+   * snapshot) and would otherwise wait forever.
+   */
+  private _send(
+    connection: MobileGatewayHubConnection,
+    frame: ServerFrame,
+    sessionId?: string,
+  ): void {
+    const parsed = parseServerFrame(serializeFrame(frame))
+    if (!parsed.ok) {
+      this._logger.error(
+        `mobile gateway dropped invalid frame type=${frame.type} session=${sessionId ?? '-'}: ${parsed.error.message}`,
+      )
+      return
+    }
+    connection.send(frame)
+  }
+
   private _sendSessionEvents(
     state: HubConnectionState,
     subscription: SessionSubscription,
@@ -772,21 +803,29 @@ export class MobileGatewayHub {
     if (events.length === 0 || subscription.desynced) return
     if (state.connection.bufferedAmount() > MAX_BUFFERED_SESSION_BYTES) {
       subscription.desynced = true
-      state.connection.send({
-        type: 'resync_required',
-        scope: 'session',
-        reason: 'backpressure',
-        ref: subscription.ref,
-      })
+      this._send(
+        state.connection,
+        {
+          type: 'resync_required',
+          scope: 'session',
+          reason: 'backpressure',
+          ref: subscription.ref,
+        },
+        subscription.localId,
+      )
       return
     }
     subscription.seq += 1
-    state.connection.send({
-      type: 'session_delta',
-      seq: subscription.seq,
-      ref: subscription.ref,
-      events,
-    })
+    this._send(
+      state.connection,
+      {
+        type: 'session_delta',
+        seq: subscription.seq,
+        ref: subscription.ref,
+        events,
+      },
+      subscription.localId,
+    )
   }
 
   private _broadcastInboxDelta(
@@ -800,7 +839,7 @@ export class MobileGatewayHub {
         state.bufferedInbox.push({ upserts, removes })
         continue
       }
-      state.connection.send({
+      this._send(state.connection, {
         type: 'inbox_delta',
         seq: ++this._inboxSeq,
         upserts,
@@ -837,12 +876,12 @@ export class MobileGatewayHub {
         summary,
       })
     }
-    state.connection.send({ type: 'inbox_snapshot', seq: ++this._inboxSeq, sessions })
+    this._send(state.connection, { type: 'inbox_snapshot', seq: ++this._inboxSeq, sessions })
     state.inboxSnapshotPending = false
     const buffered = state.bufferedInbox
     state.bufferedInbox = []
     for (const delta of buffered) {
-      state.connection.send({
+      this._send(state.connection, {
         type: 'inbox_delta',
         seq: ++this._inboxSeq,
         upserts: delta.upserts,
@@ -884,15 +923,21 @@ export class MobileGatewayHub {
         localId: summary.localId,
         ...(summary.durableId !== undefined ? { durableId: summary.durableId } : {}),
       },
-      agentId: summary.agentId,
-      ...(summary.agentName !== undefined ? { agentName: summary.agentName } : {}),
-      title: summary.title,
-      status: summary.status,
-      displayStatus: summary.displayStatus,
+      agentId: clampText(summary.agentId, MAX_ID_LENGTH),
+      ...(summary.agentName !== undefined
+        ? { agentName: clampText(summary.agentName, MAX_TITLE_LENGTH) }
+        : {}),
+      title: clampText(summary.title, MAX_TITLE_LENGTH),
+      status: clampText(summary.status, MAX_STATUS_LENGTH),
+      displayStatus: clampText(summary.displayStatus, MAX_STATUS_LENGTH),
       bucket: summary.bucket,
       workspaceName: this._workspaceName(entry),
-      ...(summary.cwd !== undefined ? { cwd: summary.cwd } : {}),
-      ...(summary.authority !== undefined ? { authority: summary.authority } : {}),
+      ...(summary.cwd !== undefined
+        ? { cwd: clampText(summary.cwd, MAX_WORKSPACE_NAME_LENGTH) }
+        : {}),
+      ...(summary.authority !== undefined
+        ? { authority: clampText(summary.authority, MAX_WORKSPACE_NAME_LENGTH) }
+        : {}),
       readOnly: summary.readOnly,
       hasPendingPermission: summary.hasPendingPermission,
       hasPendingElicitation: summary.hasPendingElicitation,
@@ -913,7 +958,7 @@ export class MobileGatewayHub {
 
   private _workspaceName(entry: WindowEntry): string {
     try {
-      return entry.workspaceName()
+      return clampText(entry.workspaceName(), MAX_WORKSPACE_NAME_LENGTH)
     } catch {
       return ''
     }

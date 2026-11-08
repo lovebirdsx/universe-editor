@@ -2,6 +2,7 @@ import {
   MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL_VERSION,
   type HelloOkFrame,
+  type ParseError,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
 import { describe, expect, it, vi } from 'vitest'
@@ -22,6 +23,7 @@ interface SocketHarness {
   readonly sockets: FakeWebSocket[]
   readonly states: SocketState[]
   readonly frames: ServerFrame[]
+  readonly invalidFrames: ParseError[]
   readonly onCredentialsInvalid: ReturnType<typeof vi.fn>
   readonly onProtocolMismatch: ReturnType<typeof vi.fn>
   readonly logger: { warn: ReturnType<typeof vi.fn> }
@@ -32,6 +34,7 @@ function createHarness(): SocketHarness {
   const sockets: FakeWebSocket[] = []
   const states: SocketState[] = []
   const frames: ServerFrame[] = []
+  const invalidFrames: ParseError[] = []
   const onCredentialsInvalid = vi.fn()
   const onProtocolMismatch = vi.fn()
   const logger = { warn: vi.fn() }
@@ -47,6 +50,7 @@ function createHarness(): SocketHarness {
     random: () => 0.5,
     onStateChange: (state) => states.push(state),
     onFrame: (frame) => frames.push(frame),
+    onInvalidFrame: (error) => invalidFrames.push(error),
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -57,6 +61,7 @@ function createHarness(): SocketHarness {
     sockets,
     states,
     frames,
+    invalidFrames,
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -119,12 +124,18 @@ describe('MobileSocket handshake', () => {
     expect(harness.frames).toEqual([{ type: 'inbox_snapshot', seq: 0, sessions: [] }])
   })
 
-  it('warns and ignores malformed or non-text frames', () => {
+  it('warns and reports malformed or non-text frames without forwarding them', () => {
     const harness = createHarness()
     const socket = connect(harness)
     socket.serverSend('{not json')
     socket.serverSendRaw(new ArrayBuffer(2))
     expect(harness.logger.warn).toHaveBeenCalledTimes(2)
+    expect(harness.invalidFrames).toHaveLength(2)
+    expect(harness.invalidFrames[0]).toMatchObject({ code: 'bad_request' })
+    expect(harness.invalidFrames[1]).toMatchObject({
+      code: 'bad_request',
+      message: 'frame is not text',
+    })
     expect(harness.socket.state).toBe('connected')
     expect(harness.frames).toEqual([])
   })

@@ -17,6 +17,7 @@ import { Timeline } from './Timeline.js'
 import { useVisualViewportHeight } from './useVisualViewport.js'
 
 const TOAST_MS = 3_000
+export const SESSION_LOAD_TIMEOUT_MS = 15_000
 
 export interface SessionPageProps {
   readonly client: MobileClient
@@ -34,6 +35,7 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
 
   const state = useStore(client.getSessionStore())
   const socketState = useStore(client.getSocketStateStore())
+  const invalidFrame = useStore(client.getInvalidFrameStore())
   const viewportHeight = useVisualViewportHeight()
   const online = socketState === 'connected'
   const activeSessionKey = state.ref === undefined ? sessionKey : sessionRouteKey(state.ref)
@@ -43,6 +45,8 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
   const [menuOpen, setMenuOpen] = useState(false)
   const [configSheetId, setConfigSheetId] = useState<string | undefined>(undefined)
   const [busyConfigId, setBusyConfigId] = useState<string | undefined>(undefined)
+  const [loadTimedOut, setLoadTimedOut] = useState(false)
+  const [retryToken, setRetryToken] = useState(0)
   const handledCleared = useRef<PermissionClearedInfo | undefined>(undefined)
   const footerRef = useRef<HTMLDivElement | null>(null)
 
@@ -55,6 +59,15 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
     const timer = setTimeout(() => setToast(undefined), TOAST_MS)
     return () => clearTimeout(timer)
   }, [toast])
+
+  // A snapshot that never arrives (or a frame the gateway failed to shape) used
+  // to spin forever; surface it instead of leaving the user waiting.
+  const waitingForSnapshot = state.summary === undefined && !state.removed
+  useEffect(() => {
+    if (!waitingForSnapshot) return
+    const timer = setTimeout(() => setLoadTimedOut(true), SESSION_LOAD_TIMEOUT_MS)
+    return () => clearTimeout(timer)
+  }, [waitingForSnapshot, sessionKey, retryToken])
 
   // `permission_cleared` lands after the sheet has already unmounted; the
   // source tells us whether the phone acted or the request was handled elsewhere.
@@ -88,6 +101,12 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
     }
   }
 
+  const retrySession = (): void => {
+    setLoadTimedOut(false)
+    setRetryToken((value) => value + 1)
+    client.refreshSession()
+  }
+
   const style = viewportHeight === undefined ? undefined : { height: `${viewportHeight}px` }
 
   if (state.removed) {
@@ -117,6 +136,7 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
   const elicitation = state.pendingElicitation
   const readOnly = state.summary?.readOnly ?? false
   const running = state.summary?.bucket === 'in_progress'
+  const loadFailed = waitingForSnapshot && (loadTimedOut || invalidFrame !== undefined)
 
   return (
     <div className="session-page" style={style}>
@@ -132,10 +152,20 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
         onOpenMenu={() => setMenuOpen(true)}
       />
       {state.summary === undefined ? (
-        <main className="session-loading">
-          <Spinner />
-          <p className="muted">{strings.sessionLoading}</p>
-        </main>
+        loadFailed ? (
+          <main className="session-loading" data-testid="session-load-failed">
+            <h2 className="session-removed__title">{strings.sessionLoadFailedTitle}</h2>
+            <p className="muted">{strings.sessionLoadFailedBody}</p>
+            <button type="button" className="button button--primary" onClick={retrySession}>
+              {strings.sessionRetry}
+            </button>
+          </main>
+        ) : (
+          <main className="session-loading">
+            <Spinner />
+            <p className="muted">{strings.sessionLoading}</p>
+          </main>
+        )
       ) : (
         <>
           <PlanPanel plan={state.plan} />

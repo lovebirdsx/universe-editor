@@ -19,7 +19,7 @@ import {
 } from '../../test/protocolFixtures.js'
 import { strings } from '../../strings.js'
 import { SESSION_DISPLAY_STORAGE_KEY } from '../sessionDisplay.js'
-import { SessionPage } from '../SessionPage.js'
+import { SessionPage, SESSION_LOAD_TIMEOUT_MS } from '../SessionPage.js'
 
 const credentials: StoredCredentials = {
   deviceId: 'device-1',
@@ -423,6 +423,44 @@ describe('SessionPage snapshot rendering', () => {
       (frame) => frameType(frame) === 'subscribe_session',
     ).length
     expect(after).toBe(before + 1)
+  })
+
+  it('shows an error with retry after the snapshot timeout, and retry resubscribes', () => {
+    vi.useFakeTimers()
+    try {
+      const { harness } = openPage()
+      expect(screen.queryByTestId('session-load-failed')).toBeNull()
+
+      act(() => {
+        vi.advanceTimersByTime(SESSION_LOAD_TIMEOUT_MS)
+      })
+      expect(screen.getByTestId('session-load-failed')).toBeTruthy()
+      expect(screen.getByText(strings.sessionLoadFailedTitle)).toBeTruthy()
+
+      const before = sentFrames(harness.socket).filter(
+        (frame) => frameType(frame) === 'subscribe_session',
+      ).length
+      fireEvent.click(screen.getByRole('button', { name: strings.sessionRetry }))
+
+      const after = sentFrames(harness.socket).filter(
+        (frame) => frameType(frame) === 'subscribe_session',
+      ).length
+      expect(after).toBe(before + 1)
+      expect(screen.queryByTestId('session-load-failed')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows the load error as soon as the gateway sends an invalid frame', () => {
+    const { harness } = openPage()
+
+    act(() => {
+      harness.socket.serverSend('{not json')
+    })
+
+    expect(screen.getByTestId('session-load-failed')).toBeTruthy()
+    expect(screen.getByRole('button', { name: strings.sessionRetry })).toBeTruthy()
   })
 })
 

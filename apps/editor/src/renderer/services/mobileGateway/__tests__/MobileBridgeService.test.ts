@@ -1,5 +1,11 @@
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import {
+  MAX_TITLE_LENGTH,
+  parseServerFrame,
+  serializeFrame,
+  type SessionSnapshotFrame,
+} from '@universe-editor/mobile-protocol'
+import {
   Emitter,
   Event,
   observableValue,
@@ -341,6 +347,42 @@ describe('MobileBridgeService', () => {
       size: 100,
       cost: { amount: 0.1, currency: 'USD' },
     })
+  })
+
+  it('clamps oversized projected fields so the snapshot passes protocol validation', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    const long = 'x'.repeat(2_000)
+    const call = toolCall({ title: long, text: long })
+    first.timeline.set([{ kind: 'toolCall', id: call.id, call }], undefined)
+
+    const snapshot = await harness.service.getSnapshot('s1')
+    const item = snapshot?.timeline[0]
+    expect(item?.kind).toBe('toolCall')
+    if (item?.kind !== 'toolCall') throw new Error('expected a tool call')
+    expect(item.title.length).toBe(MAX_TITLE_LENGTH)
+
+    const { localId, durableId, ...wireSummary } = snapshot!.summary
+    const frame: SessionSnapshotFrame = {
+      type: 'session_snapshot',
+      seq: 1,
+      session: {
+        seq: 1,
+        ...snapshot!,
+        summary: {
+          ...wireSummary,
+          ref: {
+            windowId: 1,
+            localId,
+            ...(durableId !== undefined ? { durableId } : {}),
+          },
+          workspaceName: 'demo',
+        },
+      },
+    }
+    const parsed = parseServerFrame(serializeFrame(frame))
+    expect(parsed.ok ? 'ok' : parsed.error.message).toBe('ok')
   })
 
   it('streams a new timeline item and suffix-only message updates', async () => {

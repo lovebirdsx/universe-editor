@@ -9,8 +9,23 @@
 import type { ElicitationSchema, SessionConfigOption } from '@agentclientprotocol/sdk'
 import type { IObservable, IReader } from '@universe-editor/platform'
 import {
+  clampText,
   isConfigValueAllowedOnMobile,
   isPermissionOptionAllowedOnMobile,
+  MAX_CONFIG_OPTIONS,
+  MAX_CURRENCY_LENGTH,
+  MAX_ELICITATION_CONTENT_KEYS,
+  MAX_ID_LENGTH,
+  MAX_PERMISSION_OPTIONS,
+  MAX_PLAN_ENTRIES,
+  MAX_REQUEST_ID_LENGTH,
+  MAX_STATUS_LENGTH,
+  MAX_TEXT_LENGTH,
+  MAX_TIMELINE_ITEMS,
+  MAX_TITLE_LENGTH,
+  MAX_TOOL_CALL_DIFFS,
+  MAX_TOOL_CALL_LOCATIONS,
+  MAX_WORKSPACE_NAME_LENGTH,
   type MobileAutoResolve,
   type MobileConfigOption,
   type MobileElicitationField,
@@ -64,16 +79,22 @@ export function toBridgeSummary(
   const pendingPermission = readObservable(session.pendingPermission, r)
   const pendingElicitation = readObservable(session.pendingElicitation, r)
   return {
-    localId: session.id,
-    ...(durableId !== undefined ? { durableId } : {}),
-    agentId: session.agentId,
-    ...(options.agentName !== undefined ? { agentName: options.agentName } : {}),
-    title: options.title,
-    status: readObservable(session.status, r),
-    displayStatus,
+    localId: clampText(session.id, MAX_ID_LENGTH),
+    ...(durableId !== undefined ? { durableId: clampText(durableId, MAX_ID_LENGTH) } : {}),
+    agentId: clampText(session.agentId, MAX_ID_LENGTH),
+    ...(options.agentName !== undefined
+      ? { agentName: clampText(options.agentName, MAX_TITLE_LENGTH) }
+      : {}),
+    title: clampText(options.title, MAX_TITLE_LENGTH),
+    status: clampText(readObservable(session.status, r), MAX_STATUS_LENGTH),
+    displayStatus: clampText(displayStatus, MAX_STATUS_LENGTH),
     bucket: statusBucketFor(displayStatus),
-    ...(session.cwd !== undefined ? { cwd: session.cwd } : {}),
-    ...(session.authority !== undefined ? { authority: session.authority } : {}),
+    ...(session.cwd !== undefined
+      ? { cwd: clampText(session.cwd, MAX_WORKSPACE_NAME_LENGTH) }
+      : {}),
+    ...(session.authority !== undefined
+      ? { authority: clampText(session.authority, MAX_WORKSPACE_NAME_LENGTH) }
+      : {}),
     readOnly: session.readOnly,
     hasPendingPermission: pendingPermission !== undefined,
     hasPendingElicitation: pendingElicitation !== undefined,
@@ -92,9 +113,13 @@ export function toBridgeSnapshot(
   const elicitation = projectPendingElicitation(readObservable(session.pendingElicitation, r))
   return {
     summary: toBridgeSummary(session, options, r),
-    timeline: readObservable(session.timeline, r).map(projectTimelineItem),
-    plan: readObservable(session.plan, r).map(projectPlanEntry),
-    configOptions: readObservable(session.configOptions, r).map(projectConfigOption),
+    timeline: readObservable(session.timeline, r)
+      .slice(0, MAX_TIMELINE_ITEMS)
+      .map(projectTimelineItem),
+    plan: readObservable(session.plan, r).slice(0, MAX_PLAN_ENTRIES).map(projectPlanEntry),
+    configOptions: readObservable(session.configOptions, r)
+      .slice(0, MAX_CONFIG_OPTIONS)
+      .map(projectConfigOption),
     isReplayingHistory: readObservable(session.isReplayingHistory, r),
     ...(usage !== undefined ? { usage } : {}),
     ...(permission !== undefined ? { pendingPermission: permission } : {}),
@@ -111,18 +136,22 @@ export function projectTimelineItem(item: TimelineItem): MobileTimelineItem {
     case 'compaction':
       return {
         kind: 'notice',
-        id: item.id,
+        id: clampText(item.id, MAX_ID_LENGTH),
         noticeKind: 'compaction',
         phase: item.compaction.phase,
-        ...(item.compaction.reason !== undefined ? { text: item.compaction.reason } : {}),
+        ...(item.compaction.reason !== undefined
+          ? { text: clampText(item.compaction.reason, MAX_TITLE_LENGTH) }
+          : {}),
       }
     case 'resurrection':
       return {
         kind: 'notice',
-        id: item.id,
+        id: clampText(item.id, MAX_ID_LENGTH),
         noticeKind: 'resurrection',
         phase: item.resurrection.phase,
-        ...(item.resurrection.reason !== undefined ? { text: item.resurrection.reason } : {}),
+        ...(item.resurrection.reason !== undefined
+          ? { text: clampText(item.resurrection.reason, MAX_TITLE_LENGTH) }
+          : {}),
       }
   }
 }
@@ -130,9 +159,9 @@ export function projectTimelineItem(item: TimelineItem): MobileTimelineItem {
 export function projectMessage(message: AcpMessage): MobileTimelineMessageItem {
   return {
     kind: 'message',
-    id: message.id,
+    id: clampText(message.id, MAX_ID_LENGTH),
     role: message.role,
-    text: message.text,
+    text: clampText(message.text, MAX_TEXT_LENGTH),
     streaming: message.streaming,
     ...(message.memoryTrimmed ? { memoryTrimmed: true } : {}),
     ...(message.blocks.some((block) => block.type !== 'text') ? { hasNonText: true } : {}),
@@ -140,8 +169,8 @@ export function projectMessage(message: AcpMessage): MobileTimelineMessageItem {
 }
 
 const TOOL_PREVIEW_CHARS = 1024
-const MAX_PROJECTED_DIFFS = 256
-const MAX_PROJECTED_LOCATIONS = 256
+const MAX_PROJECTED_DIFFS = MAX_TOOL_CALL_DIFFS
+const MAX_PROJECTED_LOCATIONS = MAX_TOOL_CALL_LOCATIONS
 
 export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
   const diffs = call.diffs.slice(0, MAX_PROJECTED_DIFFS).map(projectDiffStat)
@@ -150,10 +179,10 @@ export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
   const subagent = call.subagent === true || (call.children?.length ?? 0) > 0
   return {
     kind: 'toolCall',
-    id: call.id,
-    title: call.title,
-    toolKind: call.kind,
-    status: call.status,
+    id: clampText(call.id, MAX_ID_LENGTH),
+    title: clampText(call.title, MAX_TITLE_LENGTH),
+    toolKind: clampText(call.kind, MAX_STATUS_LENGTH),
+    status: clampText(call.status, MAX_STATUS_LENGTH),
     ...(call.text.length > 0 ? { preview: call.text.slice(0, TOOL_PREVIEW_CHARS) } : {}),
     hasDetail: call.text.length > 0 || call.blocks.length > 0 || call.diffs.length > 0,
     ...(diffs.length > 0 ? { diffs } : {}),
@@ -171,40 +200,48 @@ function projectDiffStat(diff: AcpToolCall['diffs'][number]): MobileToolCallDiff
     if (line.kind === 'add') added++
     else if (line.kind === 'del') removed++
   }
-  return { path: diff.path, added, removed }
+  return { path: clampText(diff.path, MAX_WORKSPACE_NAME_LENGTH), added, removed }
 }
 
 export function projectPlanEntry(entry: AcpPlanEntry): MobilePlanEntry {
   return {
-    content: entry.content,
+    content: clampText(entry.content, MAX_TEXT_LENGTH),
     status: entry.status,
-    ...(entry.priority !== undefined ? { priority: entry.priority } : {}),
+    ...(entry.priority !== undefined
+      ? { priority: clampText(entry.priority, MAX_STATUS_LENGTH) }
+      : {}),
   }
 }
 
 export function projectConfigOption(option: SessionConfigOption): MobileConfigOption {
-  const category = option.category ?? undefined
+  const category =
+    option.category != null ? clampText(option.category, MAX_STATUS_LENGTH) : undefined
   if (option.type === 'boolean') {
     return {
-      id: option.id,
-      name: option.name,
+      id: clampText(option.id, MAX_ID_LENGTH),
+      name: clampText(option.name, MAX_TITLE_LENGTH),
       ...(category !== undefined ? { category } : {}),
       type: 'boolean',
       currentValue: option.currentValue ? 'On' : 'Off',
       allowedOnMobile: true,
     }
   }
-  const values = flattenSelectOptions(option.options).map((value) => ({
-    value: value.value,
-    label: value.name,
-    allowedOnMobile: isConfigValueAllowedOnMobile(value.value),
-  }))
+  const values = flattenSelectOptions(option.options)
+    .slice(0, MAX_CONFIG_OPTIONS)
+    .map((value) => ({
+      value: clampText(value.value, MAX_TITLE_LENGTH),
+      label: clampText(value.name, MAX_TITLE_LENGTH),
+      allowedOnMobile: isConfigValueAllowedOnMobile(value.value),
+    }))
   return {
-    id: option.id,
-    name: option.name,
+    id: clampText(option.id, MAX_ID_LENGTH),
+    name: clampText(option.name, MAX_TITLE_LENGTH),
     ...(category !== undefined ? { category } : {}),
     type: 'select',
-    currentValue: findConfigOptionLabel(option.options, option.currentValue),
+    currentValue: clampText(
+      findConfigOptionLabel(option.options, option.currentValue),
+      MAX_TITLE_LENGTH,
+    ),
     allowedOnMobile: values.some((value) => value.allowedOnMobile),
     ...(values.length > 0 ? { options: values } : {}),
   }
@@ -227,7 +264,12 @@ export function projectUsage(usage: AcpUsage | undefined): MobileUsage | undefin
     used: usage.used,
     size: usage.size,
     ...(usage.cost !== undefined
-      ? { cost: { amount: usage.cost.amount, currency: usage.cost.currency } }
+      ? {
+          cost: {
+            amount: usage.cost.amount,
+            currency: clampText(usage.cost.currency, MAX_CURRENCY_LENGTH),
+          },
+        }
       : {}),
     ...(usage.costEstimated !== undefined ? { costEstimated: usage.costEstimated } : {}),
   }
@@ -243,7 +285,7 @@ export function projectPendingPermission(
   const autoResolve: MobileAutoResolve | undefined =
     auto !== undefined && autoState !== undefined
       ? {
-          optionId: auto.optionId,
+          optionId: clampText(auto.optionId, MAX_ID_LENGTH),
           paused: autoState.paused,
           ...(autoState.cancelled
             ? {}
@@ -255,14 +297,16 @@ export function projectPendingPermission(
         }
       : undefined
   return {
-    requestId: permission.requestId,
-    toolCallId: permission.toolCallId,
-    title: permission.title,
-    ...(permission.kind !== undefined ? { kind: permission.kind } : {}),
-    options: permission.options.map((option) => ({
-      optionId: option.optionId,
-      name: option.name,
-      ...(option.kind !== undefined ? { kind: option.kind } : {}),
+    requestId: clampText(permission.requestId, MAX_REQUEST_ID_LENGTH),
+    toolCallId: clampText(permission.toolCallId, MAX_ID_LENGTH),
+    title: clampText(permission.title, MAX_TITLE_LENGTH),
+    ...(permission.kind !== undefined
+      ? { kind: clampText(permission.kind, MAX_STATUS_LENGTH) }
+      : {}),
+    options: permission.options.slice(0, MAX_PERMISSION_OPTIONS).map((option) => ({
+      optionId: clampText(option.optionId, MAX_ID_LENGTH),
+      name: clampText(option.name, MAX_TITLE_LENGTH),
+      ...(option.kind !== undefined ? { kind: clampText(option.kind, MAX_STATUS_LENGTH) } : {}),
       allowedOnMobile: isPermissionOptionAllowedOnMobile(option),
     })),
     ...(autoResolve !== undefined ? { autoResolve } : {}),
@@ -282,25 +326,30 @@ export function projectPendingElicitation(
   const url = 'url' in request && typeof request.url === 'string' ? request.url : undefined
   const fields =
     request.mode === 'form'
-      ? projectElicitationFields(request.requestedSchema as ElicitationSchema)
+      ? projectElicitationFields(request.requestedSchema as ElicitationSchema).slice(
+          0,
+          MAX_CONFIG_OPTIONS,
+        )
       : undefined
   return {
-    requestId: elicitation.requestId,
-    mode: request.mode,
-    message: request.message,
-    ...(title !== undefined ? { title } : {}),
-    ...(toolCallId !== undefined ? { toolCallId } : {}),
+    requestId: clampText(elicitation.requestId, MAX_REQUEST_ID_LENGTH),
+    mode: clampText(request.mode, MAX_STATUS_LENGTH),
+    message: clampText(request.message, MAX_TEXT_LENGTH),
+    ...(title !== undefined ? { title: clampText(title, MAX_TITLE_LENGTH) } : {}),
+    ...(toolCallId !== undefined ? { toolCallId: clampText(toolCallId, MAX_ID_LENGTH) } : {}),
     ...(fields !== undefined && fields.length > 0 ? { fields } : {}),
-    ...(url !== undefined ? { url } : {}),
+    ...(url !== undefined ? { url: clampText(url, MAX_TEXT_LENGTH) } : {}),
   }
 }
 
 function projectElicitationFields(schema: ElicitationSchema): MobileElicitationField[] {
   return normalizeElicitationForm(schema).map((field) => {
     const base = {
-      name: field.name,
-      ...(field.title !== undefined ? { title: field.title } : {}),
-      ...(field.description !== undefined ? { description: field.description } : {}),
+      name: clampText(field.name, MAX_ID_LENGTH),
+      ...(field.title !== undefined ? { title: clampText(field.title, MAX_TITLE_LENGTH) } : {}),
+      ...(field.description !== undefined
+        ? { description: clampText(field.description, MAX_TEXT_LENGTH) }
+        : {}),
       required: field.required,
     }
     switch (field.kind) {
@@ -310,9 +359,15 @@ function projectElicitationFields(schema: ElicitationSchema): MobileElicitationF
           kind: 'string',
           ...(field.minLength !== undefined ? { minLength: field.minLength } : {}),
           ...(field.maxLength !== undefined ? { maxLength: field.maxLength } : {}),
-          ...(field.pattern !== undefined ? { pattern: field.pattern } : {}),
-          ...(field.format !== undefined ? { format: field.format } : {}),
-          ...(field.default !== undefined ? { default: field.default } : {}),
+          ...(field.pattern !== undefined
+            ? { pattern: clampText(field.pattern, MAX_TEXT_LENGTH) }
+            : {}),
+          ...(field.format !== undefined
+            ? { format: clampText(field.format, MAX_STATUS_LENGTH) }
+            : {}),
+          ...(field.default !== undefined
+            ? { default: clampText(field.default, MAX_TEXT_LENGTH) }
+            : {}),
         }
       case 'number':
         return {
@@ -333,17 +388,25 @@ function projectElicitationFields(schema: ElicitationSchema): MobileElicitationF
         return {
           ...base,
           kind: 'enum',
-          options: field.options.map(projectElicitationEnumOption),
-          ...(field.default !== undefined ? { default: field.default } : {}),
+          options: field.options.slice(0, MAX_CONFIG_OPTIONS).map(projectElicitationEnumOption),
+          ...(field.default !== undefined
+            ? { default: clampText(field.default, MAX_TITLE_LENGTH) }
+            : {}),
         }
       case 'enum-multi':
         return {
           ...base,
           kind: 'enum-multi',
-          options: field.options.map(projectElicitationEnumOption),
+          options: field.options.slice(0, MAX_CONFIG_OPTIONS).map(projectElicitationEnumOption),
           ...(field.minItems !== undefined ? { minItems: field.minItems } : {}),
           ...(field.maxItems !== undefined ? { maxItems: field.maxItems } : {}),
-          ...(field.default !== undefined ? { default: [...field.default] } : {}),
+          ...(field.default !== undefined
+            ? {
+                default: [...field.default]
+                  .slice(0, MAX_ELICITATION_CONTENT_KEYS)
+                  .map((entry) => clampText(entry, MAX_TEXT_LENGTH)),
+              }
+            : {}),
         }
     }
   })
@@ -355,9 +418,11 @@ function projectElicitationEnumOption(option: {
   description?: string
 }): { value: string; title: string; description?: string } {
   return {
-    value: option.value,
-    title: option.title,
-    ...(option.description !== undefined ? { description: option.description } : {}),
+    value: clampText(option.value, MAX_TITLE_LENGTH),
+    title: clampText(option.title, MAX_TITLE_LENGTH),
+    ...(option.description !== undefined
+      ? { description: clampText(option.description, MAX_TEXT_LENGTH) }
+      : {}),
   }
 }
 

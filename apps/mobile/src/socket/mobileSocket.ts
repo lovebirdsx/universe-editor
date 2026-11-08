@@ -4,6 +4,7 @@ import {
   parseServerFrame,
   serializeFrame,
   type ClientFrame,
+  type ParseError,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
 
@@ -55,6 +56,8 @@ export interface MobileSocketOptions {
   readonly random?: (() => number) | undefined
   readonly onStateChange?: ((state: SocketState) => void) | undefined
   readonly onFrame?: ((frame: ServerFrame) => void) | undefined
+  /** A frame the protocol validator rejected; the caller may surface it to the UI. */
+  readonly onInvalidFrame?: ((error: ParseError) => void) | undefined
   /** Server clock from `hello_ok`; the phone corrects countdown deadlines with it. */
   readonly onServerTime?: ((serverTime: number) => void) | undefined
   /** VAPID public key advertised by the gateway, when Web Push is available. */
@@ -91,6 +94,7 @@ export class MobileSocket {
   private readonly _logger: Pick<Console, 'warn'>
   private readonly _onStateChange: ((state: SocketState) => void) | undefined
   private readonly _onFrame: ((frame: ServerFrame) => void) | undefined
+  private readonly _onInvalidFrame: ((error: ParseError) => void) | undefined
   private readonly _onServerTime: ((serverTime: number) => void) | undefined
   private readonly _onVapidPublicKey: ((key: string | undefined) => void) | undefined
   private readonly _onVisibilityChange: ((visible: boolean) => void) | undefined
@@ -128,6 +132,7 @@ export class MobileSocket {
     this._logger = options.logger ?? console
     this._onStateChange = options.onStateChange
     this._onFrame = options.onFrame
+    this._onInvalidFrame = options.onInvalidFrame
     this._onServerTime = options.onServerTime
     this._onVapidPublicKey = options.onVapidPublicKey
     this._onVisibilityChange = options.onVisibilityChange
@@ -211,11 +216,13 @@ export class MobileSocket {
   private _handleMessage(data: unknown): void {
     if (typeof data !== 'string') {
       this._logger.warn('mobile socket: ignored non-text frame')
+      this._onInvalidFrame?.({ code: 'bad_request', message: 'frame is not text' })
       return
     }
     const parsed = parseServerFrame(data)
     if (!parsed.ok) {
       this._logger.warn(`mobile socket: ignored invalid frame (${parsed.error.message})`)
+      this._onInvalidFrame?.(parsed.error)
       return
     }
     const frame = parsed.value

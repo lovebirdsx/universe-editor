@@ -13,6 +13,7 @@ import type {
   MobileToolCallDetail,
   MobileWorkspaceCandidate,
   NotificationFrame,
+  ParseError,
   ServerFrame,
   SessionSnapshotFrame,
 } from '@universe-editor/mobile-protocol'
@@ -57,6 +58,7 @@ export class MobileClient {
   private readonly _commands: CommandClient
   private readonly _detail: ToolCallDetailClient
   private readonly _notification = new Store<NotificationFrame | undefined>(undefined)
+  private readonly _invalidFrame = new Store<ParseError | undefined>(undefined)
   private readonly _logger: Pick<Console, 'warn'>
   private _currentRef: MobileSessionRef | undefined
   private _routeKey: string | undefined
@@ -81,6 +83,7 @@ export class MobileClient {
       logger: this._logger,
       onStateChange: (state) => this._handleState(state),
       onFrame: (frame) => this._handleFrame(frame),
+      onInvalidFrame: (error) => this._invalidFrame.setState(error),
       onServerTime: (serverTime) => {
         this._serverTimeOffsetMs = serverTime - Date.now()
       },
@@ -110,6 +113,11 @@ export class MobileClient {
 
   getNotificationStore(): Store<NotificationFrame | undefined> {
     return this._notification
+  }
+
+  /** Last frame the gateway sent that failed protocol validation, if any. */
+  getInvalidFrameStore(): Store<ParseError | undefined> {
+    return this._invalidFrame
   }
 
   /** VAPID public key from `hello_ok`; undefined when the gateway has no push. */
@@ -180,6 +188,7 @@ export class MobileClient {
       return
     }
     this._routeKey = routeKey
+    this._invalidFrame.setState(undefined)
     this._session.reset()
     this._detail.clear()
     this._currentRef = this._resolveRouteKey(routeKey)
@@ -197,12 +206,20 @@ export class MobileClient {
     }
     this._routeKey = undefined
     this._currentRef = undefined
+    this._invalidFrame.setState(undefined)
     this._session.reset()
     this._detail.clear()
   }
 
   /** Re-pull the open session's snapshot (fallback after an unacknowledged approval). */
   refreshSession(): void {
+    this._invalidFrame.setState(undefined)
+    if (this._currentRef === undefined) {
+      // A durable-id route keeps `_currentRef` unresolved until the inbox
+      // snapshot names it; re-ask for that snapshot instead of doing nothing.
+      this._resubscribeInbox()
+      return
+    }
     this._subscribeCurrentSession()
   }
 
@@ -405,6 +422,7 @@ export class MobileClient {
     if (this._currentRef !== undefined && !refMatches(this._currentRef, ref)) return
     this._currentRef = ref
     this._session.applySnapshot(frame)
+    this._invalidFrame.setState(undefined)
     const state = this._session.getState()
     if (state.ref !== undefined) this._currentRef = state.ref
   }

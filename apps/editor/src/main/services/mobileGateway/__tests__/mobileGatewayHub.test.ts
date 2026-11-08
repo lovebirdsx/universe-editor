@@ -248,6 +248,40 @@ describe('MobileGatewayHub', () => {
     expect(deltas[0]?.ref).toStrictEqual({ windowId: 1, localId: 's1', durableId: 'd1' })
   })
 
+  it('drops frames that fail protocol validation and logs the failure', async () => {
+    const error = vi.fn()
+    const logger = { ...NULL_LOGGER, error } as unknown as ILogger
+    const hub = new MobileGatewayHub(logger)
+    const bridge = new FakeBridge()
+    bridge.snapshots.set(
+      's1',
+      snapshot('s1', {
+        timeline: [
+          {
+            kind: 'toolCall',
+            id: 'tool-1',
+            title: 'x'.repeat(2_000),
+            toolKind: 'execute',
+            status: 'completed',
+            hasDetail: false,
+          },
+        ],
+      }),
+    )
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.subscribeSession(connection, { windowId: 1, localId: 's1' })
+
+    expect(framesOf(connection, 'session_snapshot')).toHaveLength(0)
+    expect(error).toHaveBeenCalledTimes(1)
+    const message = error.mock.calls[0]?.[0] as string
+    expect(message).toContain('session_snapshot')
+    expect(message).toContain('s1')
+    expect(message).not.toContain('x'.repeat(10))
+  })
+
   it('buffers session deltas while the snapshot is in flight', async () => {
     const hub = new MobileGatewayHub(NULL_LOGGER)
     const bridge = new FakeBridge()
