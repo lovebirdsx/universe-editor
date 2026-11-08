@@ -993,6 +993,21 @@ importers:
         specifier: 'catalog:'
         version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.33.0)
 
+  packages/mobile-protocol:
+    devDependencies:
+      '@universe-editor/config-ts':
+        specifier: workspace:*
+        version: link:../config-ts
+      eslint:
+        specifier: 'catalog:'
+        version: 9.39.4(jiti@2.7.0)
+      typescript:
+        specifier: 'catalog:'
+        version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@24.13.3)(happy-dom@17.6.3)(jiti@2.7.0)(lightningcss@1.33.0)
+
   packages/node-services:
     dependencies:
       '@lydell/node-pty':

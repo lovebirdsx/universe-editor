@@ -51,6 +51,8 @@ const IGNORE = new Set([
   'apps/editor/release/', // electron-builder 打包产物目录，与 out/ dist/ 同类，构建前不存在
   'vendor/group/model', // AI 模型标识符三段格式说明，非路径
   '.claude/settings.local.json', // 本机私有配置（gitignore），vendor fork 文档提及
+  'packages/acp-view-model', // mobile-gateway 设计稿的规划包，尚未创建
+  'apps/mobile', // 同上，手机 PWA 尚未创建
 ])
 
 function fmt(p) {

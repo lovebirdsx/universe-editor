@@ -1,0 +1,33 @@
+{
+  "name": "@universe-editor/mobile-protocol",
+  "version": "0.0.0",
+  "description": "Wire protocol shared by the editor's mobile gateway and the phone PWA: pairing, WebSocket frames, error and close codes. Internal package — zero runtime dependencies.",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsgo --build",
+    "typecheck": "tsgo --build",
+    "test": "vitest run",
+    "lint": "eslint src --cache --cache-strategy content",
+    "lint:fix": "eslint --fix src",
+    "dev": "tsgo --build --watch",
+    "clean": "tsgo --build --clean"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}
