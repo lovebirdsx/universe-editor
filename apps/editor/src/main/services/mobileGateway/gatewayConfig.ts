@@ -1,15 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  `mobileGateway.*` configuration parsing and runtime resolution. Main reads
- *  settings.json directly (there is no main-side IConfigurationService; update
- *  and AI services do the same), while the renderer pushes live changes through
- *  applyConfig. Environment variables outrank the settings file.
+ *  Runtime resolution for the machine-local gateway config: environment
+ *  overrides, bind/port/address resolution and allowed origins. File parsing
+ *  lives in gatewayConfigFile.ts; environment variables outrank gateway.json.
  *--------------------------------------------------------------------------------------------*/
 
-import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
 import { networkInterfaces, type NetworkInterfaceInfo } from 'node:os'
-import { parse } from 'jsonc-parser'
 import type {
   MobileGatewayBindMode,
   MobileGatewayConfig,
@@ -18,46 +14,7 @@ import { MOBILE_GATEWAY_DEFAULT_PORT } from '../../../shared/ipc/mobileGatewaySe
 import { normalizeHostEntry } from './requestSecurity.js'
 
 export { MOBILE_GATEWAY_DEFAULT_PORT }
-export const MAX_ALLOWED_HOSTS = 16
-
-export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
-  enabled: false,
-  bind: 'loopback',
-  lanAddress: '',
-  port: MOBILE_GATEWAY_DEFAULT_PORT,
-  allowedHosts: [],
-  // Placeholder per the repository's public-value policy. Override with a real
-  // `mailto:` or `https:` URL before relying on push in the field.
-  vapidSubject: 'https://universe-editor.example.com',
-}
-
-export function parseMobileGatewayConfig(raw: unknown): MobileGatewayConfig {
-  if (!isRecord(raw)) return DEFAULT_MOBILE_GATEWAY_CONFIG
-  const enabled = raw['mobileGateway.enabled']
-  const bind = raw['mobileGateway.bind']
-  const lanAddress = raw['mobileGateway.lanAddress']
-  const port = raw['mobileGateway.port']
-  const allowedHosts = raw['mobileGateway.allowedHosts']
-  const vapidSubject = raw['mobileGateway.vapidSubject']
-
-  return {
-    enabled: typeof enabled === 'boolean' ? enabled : DEFAULT_MOBILE_GATEWAY_CONFIG.enabled,
-    bind: bind === 'lan' || bind === 'loopback' ? bind : DEFAULT_MOBILE_GATEWAY_CONFIG.bind,
-    lanAddress: typeof lanAddress === 'string' ? lanAddress.trim() : '',
-    port: isPort(port) ? port : DEFAULT_MOBILE_GATEWAY_CONFIG.port,
-    allowedHosts: Array.isArray(allowedHosts)
-      ? allowedHosts
-          .filter((value): value is string => typeof value === 'string')
-          .map((value) => value.trim())
-          .filter((value) => value !== '')
-          .slice(0, MAX_ALLOWED_HOSTS)
-      : [],
-    vapidSubject:
-      typeof vapidSubject === 'string' && isValidVapidSubject(vapidSubject.trim())
-        ? vapidSubject.trim()
-        : DEFAULT_MOBILE_GATEWAY_CONFIG.vapidSubject,
-  }
-}
+export { DEFAULT_MOBILE_GATEWAY_CONFIG } from '../../../shared/ipc/mobileGatewayService.js'
 
 /** Web Push requires a `mailto:` address or an `https:` URL as the VAPID subject. */
 export function isValidVapidSubject(value: string): boolean {
@@ -69,21 +26,6 @@ export function isValidVapidSubject(value: string): boolean {
   } catch {
     return false
   }
-}
-
-/**
- * Read the same settings.json the renderer writes. A missing or unparseable
- * file yields defaults (the gateway stays off, which is the safe direction).
- */
-export async function readMobileGatewayConfig(configDir: string): Promise<MobileGatewayConfig> {
-  let text: string
-  try {
-    text = await readFile(join(configDir, 'settings.json'), 'utf8')
-  } catch {
-    return DEFAULT_MOBILE_GATEWAY_CONFIG
-  }
-  if (text.trim() === '') return DEFAULT_MOBILE_GATEWAY_CONFIG
-  return parseMobileGatewayConfig(parse(text, [], { allowTrailingComma: true }))
 }
 
 export interface GatewayEnvironment {
@@ -231,8 +173,4 @@ function isPort(value: unknown, allowZero = false): value is number {
     value >= (allowZero ? 0 : 1) &&
     value <= 65535
   )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

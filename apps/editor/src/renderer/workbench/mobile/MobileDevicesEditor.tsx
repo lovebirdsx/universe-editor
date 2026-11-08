@@ -17,7 +17,6 @@ import {
 } from 'lucide-react'
 import {
   ICommandService,
-  IConfigurationService,
   IDialogService,
   IOpenerService,
   localize,
@@ -33,6 +32,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { formatPairCode } from '@universe-editor/mobile-protocol'
 import {
+  DEFAULT_MOBILE_GATEWAY_CONFIG,
   IMobileGatewayService,
   type MobileDeviceInfo,
   type MobileGatewayBindMode,
@@ -52,12 +52,10 @@ import {
 import {
   useGatewayDevices,
   useGatewayStatus,
-  useMobileGatewaySettings,
+  useMobileGatewayConfig,
   usePairingSession,
   useQrCodeDataUrl,
   useRecentAudit,
-  writeMobileGatewayBind,
-  writeMobileGatewayEnabled,
 } from './mobileDevicesHooks.js'
 import styles from './MobileDevicesEditor.module.css'
 
@@ -90,12 +88,12 @@ function capabilityLabel(available: boolean): string {
 
 export function MobileDevicesEditor() {
   const gateway = useService(IMobileGatewayService)
-  const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const commands = useService(ICommandService)
   const opener = useService(IOpenerService)
 
-  const settings = useMobileGatewaySettings(configuration)
+  const config = useMobileGatewayConfig(gateway)
+  const settings = config.state?.config ?? DEFAULT_MOBILE_GATEWAY_CONFIG
   const status = useGatewayStatus(gateway)
   const devices = useGatewayDevices(gateway)
   const pairing = usePairingSession(gateway, devices)
@@ -111,8 +109,8 @@ export function MobileDevicesEditor() {
     status?.state === 'running' ? chooseDesktopOrigin(status.origins) : undefined
   const selectedPairUrl = pairing.selectedUrl
 
-  const openSettingsJson = useCallback(() => {
-    void commands.executeCommand('workbench.action.openSettingsJson')
+  const openConfigJson = useCallback(() => {
+    void commands.executeCommand('workbench.action.mobile.openGatewayConfigJson')
   }, [commands])
 
   const openExternal = useCallback(
@@ -193,11 +191,22 @@ export function MobileDevicesEditor() {
               </div>
               <Toggle
                 checked={settings.enabled}
-                onChange={(checked) => writeMobileGatewayEnabled(configuration, checked)}
+                onChange={(checked) => void config.update({ enabled: checked })}
+                disabled={config.state === undefined}
                 data-testid="mobile-gateway-enabled"
                 aria-label={localize('mobileDevices.gateway.enable', 'Enable phone gateway')}
               />
             </div>
+
+            {config.error !== undefined && (
+              <div className={styles['errorText']} data-testid="mobile-gateway-config-error">
+                {localize(
+                  'mobileDevices.gateway.configError',
+                  'Gateway configuration error: {error}',
+                  { error: config.error },
+                )}
+              </div>
+            )}
 
             {status === undefined ? (
               <div className={styles['loading']}>
@@ -316,7 +325,7 @@ export function MobileDevicesEditor() {
                           )
                         : localize(
                             'mobileDevices.gateway.pushRequiresHttps',
-                            'Push requires an HTTPS address. Add the Tailscale host name to mobileGateway.allowedHosts.',
+                            'Push requires an HTTPS address. Add the Tailscale host name to allowedHosts in the gateway config.',
                           )}
                     </p>
                   </div>
@@ -349,7 +358,8 @@ export function MobileDevicesEditor() {
               <Select
                 value={settings.bind}
                 options={BIND_OPTIONS}
-                onChange={(bind) => writeMobileGatewayBind(configuration, bind)}
+                onChange={(bind) => void config.update({ bind })}
+                disabled={config.state === undefined}
                 data-testid="mobile-gateway-bind"
                 aria-label={localize('mobileDevices.bind.label', 'Where the gateway listens')}
               />
@@ -367,20 +377,17 @@ export function MobileDevicesEditor() {
                 <p className={styles['description']}>
                   {localize(
                     'mobileDevices.bind.tailscaleHint',
-                    'Add the Tailscale host name (for example pc.tailnet-name.ts.net) to mobileGateway.allowedHosts so pairing links use HTTPS and the phone app can be installed.',
+                    'Add the Tailscale host name (for example pc.tailnet-name.ts.net) to allowedHosts in the gateway config so pairing links use HTTPS and the phone app can be installed.',
                   )}
                 </p>
                 <Button
                   size="sm"
                   variant="secondary"
-                  onClick={openSettingsJson}
-                  data-testid="mobile-gateway-open-settings-json"
+                  onClick={openConfigJson}
+                  data-testid="mobile-gateway-open-config-json"
                 >
                   <FileJson size={14} strokeWidth={1.75} className={styles['buttonIcon']} />
-                  {localize(
-                    'mobileDevices.bind.editAllowedHosts',
-                    'Edit allowedHosts in settings.json',
-                  )}
+                  {localize('mobileDevices.bind.editAllowedHosts', 'Edit gateway config (JSON)')}
                 </Button>
               </div>
             ) : (
@@ -393,6 +400,12 @@ export function MobileDevicesEditor() {
                 </p>
               </div>
             )}
+            <p className={styles['hint']} data-testid="mobile-gateway-config-local-only">
+              {localize(
+                'mobileDevices.bind.localOnlyHint',
+                'This configuration stays on this computer and is not synced with settings.json.',
+              )}
+            </p>
           </div>
         </section>
 
@@ -478,7 +491,7 @@ export function MobileDevicesEditor() {
                       <span>
                         {localize(
                           'mobileDevices.pairing.noOrigins',
-                          'No address is available. Add a Tailscale host name to mobileGateway.allowedHosts.',
+                          'No address is available. Add a Tailscale host name to allowedHosts in the gateway config.',
                         )}
                       </span>
                     </div>

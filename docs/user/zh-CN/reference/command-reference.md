@@ -163,6 +163,7 @@ Markdown 的格式命令由内置 markdown 扩展提供，扩展清单尚未带�
 | 打开设置              | 打开图形化设置编辑器                                                      | `Ctrl+,`        |
 | 打开设置 (JSON)       | 直接编辑 settings.json                                                    | 无              |
 | 打开更新配置 (JSON)   | 编辑 update-config.json，覆盖自动更新服务器地址（仅打包版生效）           | 无              |
+| 打开手机网关配置 (JSON) | 编辑手机网关的机器本地配置 `gateway.json`；只对当前电脑生效，不随 settings.json 同步 | 无 |
 | 打开键盘快捷方式      | 打开快捷键编辑器                                                          | `Ctrl+K Ctrl+S` |
 | 颜色主题              | 切换颜色主题（Universe Dark / Light）                                     | `Ctrl+K Ctrl+T` |
 | 文件图标主题          | 切换文件/文件夹图标主题（默认 Universe Material，内置彩色 Material 图标） | 无              |

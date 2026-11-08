@@ -375,7 +375,23 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
   `chooseDesktopOrigin` 选择（优先回环 HTTP，其次 `https://`，最后 `origins[0]`）；配对入口直接
   使用当前选中的 `pairing.selectedUrl`，一次性码仍保留在 fragment。WSLg 下
   `shell.openExternal` 不保证拉起 Windows 浏览器，UI 与用户文档保留手动打开地址的兜底。
-- 配置组：`mobileGateway.*`。
+**配置持久化（机器本地）**：`enabled` / `bind` / `lanAddress` / `port` / `allowedHosts` /
+`vapidSubject` 存 `<userData>/mobile/gateway.json`（`0600`、原子写入），**不进 `settings.json`、
+不跟随 configDir 重定位**，因此多台机器共享 configDir 时各自独立。旧 `settings.json` 里的
+`mobileGateway.*` 不读取、不迁移、不清理——做一次性迁移会把 A 机器的值带给首次运行的 B 机器，
+正是要避免的事。main 独占读写，renderer 经 `IMobileGatewayService` 的 `getConfig` /
+`updateConfig` / `onDidChangeConfig`；`UNIVERSE_MOBILE_*` 环境变量仍优先于文件。
+
+| 场景 | 行为 |
+|---|---|
+| 文件缺失 | 默认配置（网关关闭）；启动不创建文件，执行「打开网关配置 (JSON)」或首次保存时才创建 |
+| 空文件 | 等价于默认配置 |
+| 启动时 JSON / 已知字段非法 | 默认配置 + `error`（网关保持关闭），设置页显示原因 |
+| 运行中外部编辑非法 | 保留上一次有效配置并广播 `error`；文件被删除则回到默认关闭 |
+| 未知字段 | 忽略（便于降级回旧版本）；已知字段类型 / 范围非法则整体拒绝 |
+
+文件是嵌套 camelCase，支持 JSONC 注释与尾逗号；保存时整文件重写，不保留注释。补全与校验的
+JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()` 注册。
 
 ## 8. 传输档位与证书
 
@@ -390,7 +406,7 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
 - 首次启用局域网档时生成，存 `<userData>/mobile/tls/{cert.pem,key.pem}`（`0600`，原子写入）。
   Node 内置 `crypto` 只能解析 X.509、不能签发，因此用 `selfsigned`（v5，基于 WebCrypto /
   `@peculiar/x509`，无 native addon；见 catalog）。私钥为 EC P-256，签名 SHA-256。
-- SAN = 当前监听地址 + `os.hostname()`；如果 `mobileGateway.lanAddress` 或
+- SAN = 当前监听地址 + `os.hostname()`；如果 `gateway.json` 的 `lanAddress` 或
   `UNIVERSE_MOBILE_LAN_ADDRESS` 改变，下次启动重新签发。
 - 有效期 365 天；剩余不足 30 天时自动续签。证书与私钥不匹配、文件损坏或读不出时同样重签。
 - 指纹是 DER 证书的 SHA-256（小写十六进制）。`MobileGatewayStatus.certificate` 携带
@@ -407,7 +423,7 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
   `netsh interface portproxy` 转发到 WSL IP（并放行防火墙），要么改用 mirrored 网络模式。
 - 推荐 Tailscale 与 Electron 都装在 Windows 宿主；WSL 内开发时同样需要 portproxy / mirrored。
 - 证书 SAN 只含 WSL 内看到的地址；通过 portproxy 访问时手机连接的是 Windows 地址，需把
-  `mobileGateway.lanAddress` 设为该地址并确认证书 SAN 覆盖它（否则浏览器报名称不匹配）。
+  `gateway.json` 的 `lanAddress` 设为该地址并确认证书 SAN 覆盖它（否则浏览器报名称不匹配）。
 - e2e 环境约束见 [wsl-e2e.md](wsl-e2e.md)。
 
 **Tailscale 注意事项**：
@@ -439,7 +455,7 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
 - 网关只对「通知开关打开且 kind 未被过滤」的设备发送；`kinds` 缺省表示四类全收。
 - 有前台连接时优先走 WS；发送失败或无前台连接时回落到 Web Push。
 - VAPID 密钥对存 `<userData>/mobile/vapid.json`（`0600`，原子写入），依赖 `web-push`；
-  `mobileGateway.vapidSubject` 缺省 `https://universe-editor.example.com`（须为 `mailto:` 或 `https:`）。
+  `gateway.json` 的 `vapidSubject` 缺省 `https://universe-editor.example.com`（须为 `mailto:` 或 `https:`）。
 - 推送 TTL 1 小时；`permission` / `question` 用 `urgency: high`，其余 `normal`；载荷上限 4KB。
 - 推送载荷只有 `{ id, kind, title, body, url, tag, at }`：标题 = 会话标题（缺失时 Agent 名），
   正文 = 固定的中文类别（`等待审批：<工具标题>` / `Agent 提问` / `已完成` / `出错`）。
@@ -521,6 +537,17 @@ localStorage，不走协议。
 | `apps/mobile/src/notifications/pushNotifications.ts` | 能力探测、用户手势授权、`PushManager.subscribe` |
 | `apps/mobile/public/sw.js` | `push` 展示与 `notificationclick` 深链 |
 
+**机器本地配置实现位置**：
+
+| 位置 | 职责 |
+|---|---|
+| `apps/editor/src/shared/ipc/mobileGatewayService.ts` | 配置 DTO、默认值、patch / state / result 类型与 `IMobileGatewayService` 契约 |
+| `apps/editor/src/main/services/mobileGateway/gatewayConfigFile.ts` | `gateway.json` 解析、patch 校验、合并与序列化（纯函数） |
+| `apps/editor/src/main/services/mobileGateway/gatewayConfigStore.ts` | 串行读写队列、原子写、`fs.watch` 外部变更与自写抑制 |
+| `apps/editor/src/main/services/mobileGateway/gatewayConfig.ts` | 运行时解析：环境变量优先级、绑定地址、allowed origins |
+| `apps/editor/src/renderer/contributions/MobileGatewayContributions.ts` | `gateway.json` 的 JSON schema 注册 |
+| `apps/editor/src/renderer/actions/mobileActions.ts` | `workbench.action.mobile.openGatewayConfigJson` |
+
 **构建与打包**（M5 已落地）：
 
 1. `runtime:stage` 先跑 `pnpm --filter @universe-editor/mobile build`，产出 `apps/mobile/dist`
@@ -588,7 +615,7 @@ localStorage，不走协议。
 | M5 | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地） | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
 ## 12. 已确认的决策记录
 
-日期均为 **2026-11-08**。
+日期：第 1–7 条为 **2026-11-08**，第 8 条为 **2026-11-09**。
 
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
 2. **手机高风险操作第一期默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验。
@@ -602,6 +629,10 @@ localStorage，不走协议。
 7. **局域网档用自签 HTTPS + 指纹核对**：证书由网关本地签发（`selfsigned` 5.x，基于 WebCrypto），
    有效期 365 天、剩余 30 天或 SAN/IP 变化时轮换，存 `userData/mobile/tls`（`0600`）；
    完整 PWA 安装与推送仍限 Tailscale 档，自签证书下 SW 不可用属预期。
+8. **网关配置存机器本地**：六个 `mobileGateway.*` 键迁到 `<userData>/mobile/gateway.json`，
+   `settings.json` 旧键不再读取、不迁移、不清理。原因是 configDir 常被重定位到云盘做多机共享，
+   机器相关配置会互相覆盖；不一次性迁移，避免把 A 机器的值带到首次运行的 B 机器。文件非法时
+   启动用默认值、运行中保留上一次有效配置，并在设置页显示错误。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。
@@ -620,3 +651,4 @@ localStorage，不走协议。
 | `selfsigned` / `@peculiar/x509` 供应链 | 本地签发失败导致局域网档不可用 | 仅 main 运行时使用；固定 catalog 版本；失败回 `gateway_error` 并在 UI 显示原因；单测覆盖生成与续签 |
 | 安全：DNS rebinding、token 泄漏、审计 PII | 未授权访问/隐私外泄 | Host+Origin 校验、token 只存哈希、审计脱敏、默认关闭 |
 | `web-push` 新依赖 | 供应链与升级成本 | 仅网关侧使用，锁定版本，推送失败可降级为前台 WS 通知 |
+| `userData` 被外部工具整体同步 | 机器相关配置再次跨机共享 | `gateway.json` 固定在 `<userData>/mobile`、不随 configDir 迁移；文档注明该边界，需要跨机共享的设置只放 configDir |

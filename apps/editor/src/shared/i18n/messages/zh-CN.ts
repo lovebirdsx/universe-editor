@@ -14,6 +14,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Mobile devices ---
   'action.mobile.openSettings': '打开手机设备设置',
+  'action.mobile.openGatewayConfigJson': '打开手机网关配置 (JSON)',
   'mobileDevices.audit.action': '动作',
   'mobileDevices.audit.action.deviceConnected': '设备已连接',
   'mobileDevices.audit.action.deviceRevoked': '设备已吊销',
@@ -33,17 +34,18 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.audit.section': '最近活动',
   'mobileDevices.audit.success': '成功',
   'mobileDevices.audit.time': '时间',
-  'mobileDevices.bind.editAllowedHosts': '在 settings.json 中编辑 allowedHosts',
+  'mobileDevices.bind.editAllowedHosts': '编辑网关配置 (JSON)',
   'mobileDevices.bind.label': '网关监听位置',
+  'mobileDevices.bind.localOnlyHint': '此配置只保存在这台电脑上，不随 settings.json 同步。',
   'mobileDevices.bind.lan': '局域网地址',
   'mobileDevices.bind.lanDescription':
-    '直接绑定局域网地址。首个版本尚未实现 HTTPS，因此打包版不可用；开发构建需要设置 UNIVERSE_MOBILE_INSECURE=1。',
+    '直接绑定局域网地址，并使用本机生成的自签名 HTTPS 证书。手机需要先在配对页确认证书指纹；在信任该证书之前，无法安装应用或使用 Web Push。',
   'mobileDevices.bind.loopback': '回环（推荐）',
   'mobileDevices.bind.loopbackDescription': '只监听 127.0.0.1。用 Tailscale Serve 以 HTTPS 暴露：',
   'mobileDevices.bind.portDescription': '配对、手机网页与 WebSocket 均使用端口 {port}。',
   'mobileDevices.bind.section': '监听模式',
   'mobileDevices.bind.tailscaleHint':
-    '把 Tailscale 主机名（例如 pc.tailnet-name.ts.net）加入 mobileGateway.allowedHosts，配对链接才会使用 HTTPS，手机也可以把网页安装为应用。',
+    '把 Tailscale 主机名（例如 pc.tailnet-name.ts.net）加入网关配置的 allowedHosts，配对链接才会使用 HTTPS，手机也可以把网页安装为应用。',
   'mobileDevices.devices.empty': '还没有已配对设备。',
   'mobileDevices.devices.emptyHint': '在上方配对手机后即可在这里看到。',
   'mobileDevices.devices.lastSeen': '最近连接 {time}',
@@ -69,10 +71,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.gateway.certificate': '证书指纹',
   'mobileDevices.gateway.certificateExpires': '到期时间 {date}',
   'mobileDevices.gateway.certificateHint': '请在手机浏览器的证书详情中核对该指纹后再配对。',
+  'mobileDevices.gateway.configError': '网关配置错误：{error}',
   'mobileDevices.gateway.pushRelayHint':
     '推送经 Apple / Google 推送服务器转发，PC 需要能访问公网。',
   'mobileDevices.gateway.pushRequiresHttps':
-    '推送需要 HTTPS 地址。请把 Tailscale 主机名加入 mobileGateway.allowedHosts。',
+    '推送需要 HTTPS 地址。请把 Tailscale 主机名加入网关配置的 allowedHosts。',
   'mobileDevices.gateway.connectedDevices': '已连接 {count} 台',
   'mobileDevices.gateway.enable': '启用手机网关',
   'mobileDevices.gateway.enableDescription': '监听已配对手机的连接并提供手机网页。默认关闭。',
@@ -95,7 +98,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.pairing.expires': '配对码将在 {time} 后过期',
   'mobileDevices.pairing.fixedExpiry': '该配对码不会过期（测试模式）。',
   'mobileDevices.pairing.noOrigins':
-    '没有可用地址。请把 Tailscale 主机名加入 mobileGateway.allowedHosts。',
+    '没有可用地址。请把 Tailscale 主机名加入网关配置的 allowedHosts。',
   'mobileDevices.pairing.openInBrowser': '在电脑浏览器中打开配对页',
   'mobileDevices.pairing.openInBrowserHint':
     '用系统默认浏览器打开所选地址，配对码会自动填入；在页面上点「开始配对」确认。',
@@ -1235,7 +1238,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.mobileGateway.allowedHosts':
     'Host 头中额外接受的宿主名，并作为 HTTPS 源提供，例如 Tailscale Serve 名 "pc.tailnet-name.ts.net"。回环地址和绑定地址始终被接受。',
   'settings.mobileGateway.bind':
-    '网关监听的位置。"loopback" 是推荐的 Tailscale 模式：网关监听 127.0.0.1，由 Tailscale Serve 以 HTTPS 对外提供。"lan" 直接绑定局域网地址，在自签名 HTTPS 落地前仅限开发使用。',
+    '网关监听的位置。"loopback" 是推荐的 Tailscale 模式：网关监听 127.0.0.1，由 Tailscale Serve 以 HTTPS 对外提供。"lan" 直接绑定局域网地址，并使用本机生成的自签名 HTTPS 证书。',
   'settings.mobileGateway.enabled':
     '在这台电脑上提供手机 PWA 并从已配对的手机接受连接。默认关闭；请在“手机设备”设置页配对设备。',
   'settings.mobileGateway.lanAddress':

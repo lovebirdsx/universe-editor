@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Wire contracts for the phone gateway. The main process owns the HTTP/WS
- *  server; the renderer only reads status, pairs devices and revokes them.
+ *  server and the machine-local `gateway.json`; the renderer reads status,
+ *  updates the config, pairs devices and revokes them.
  *  `IMobileBridgeService` is the reverse channel M2 extends to project ACP
  *  sessions out of each window's renderer.
  *--------------------------------------------------------------------------------------------*/
@@ -26,7 +27,11 @@ export type MobileGatewayState = 'stopped' | 'starting' | 'running' | 'error'
 
 export type MobileGatewayBindMode = 'loopback' | 'lan'
 
-/** Settings mirrored from the renderer's `mobileGateway.*` configuration. */
+/**
+ * Machine-local gateway configuration persisted to `<userData>/mobile/gateway.json`.
+ * It deliberately stays out of settings.json: the config directory may be shared
+ * across machines, while gateway settings must differ per machine.
+ */
 export interface MobileGatewayConfig {
   readonly enabled: boolean
   readonly bind: MobileGatewayBindMode
@@ -38,6 +43,44 @@ export interface MobileGatewayConfig {
   /** VAPID `sub` claim: a `mailto:` address or an `https:` URL. */
   readonly vapidSubject: string
 }
+
+export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
+  enabled: false,
+  bind: 'loopback',
+  lanAddress: '',
+  port: MOBILE_GATEWAY_DEFAULT_PORT,
+  allowedHosts: [],
+  // Placeholder per the repository's public-value policy. Override with a real
+  // `mailto:` or `https:` URL before relying on push in the field.
+  vapidSubject: 'https://universe-editor.example.com',
+}
+
+/** Field-level update. `allowedHosts` replaces the whole list. */
+export interface MobileGatewayConfigPatch {
+  readonly enabled?: boolean
+  readonly bind?: MobileGatewayBindMode
+  readonly lanAddress?: string
+  readonly port?: number
+  readonly allowedHosts?: readonly string[]
+  readonly vapidSubject?: string
+}
+
+/**
+ * `config` is the last valid configuration. `error` is set when the file exists
+ * but cannot be parsed or validated; the running gateway keeps using `config`.
+ */
+export interface MobileGatewayConfigState {
+  readonly config: MobileGatewayConfig
+  readonly error?: string
+}
+
+export type MobileGatewayConfigUpdateResult =
+  | { readonly ok: true; readonly state: MobileGatewayConfigState }
+  | {
+      readonly ok: false
+      readonly state: MobileGatewayConfigState
+      readonly errors: readonly string[]
+    }
 
 export interface MobileGatewayCapabilities {
   /** True when a trusted HTTPS origin exists (Service Worker / installability). */
@@ -122,12 +165,22 @@ export interface IMobileGatewayService {
 
   getRecentAudit(limit: number): Promise<readonly MobileAuditEntry[]>
 
+  /** Persisted machine-local config (not the environment-overridden runtime values). */
+  getConfig(): Promise<MobileGatewayConfigState>
+
   /**
-   * Push the current `mobileGateway.*` settings. Main reads settings.json at
-   * startup; the renderer calls this on every relevant configuration change so
-   * toggling the feature takes effect without a restart.
+   * Merge a field-level patch into the persisted config, validate it, write
+   * `gateway.json` atomically and apply the result at runtime.
    */
-  applyConfig(config: MobileGatewayConfig): Promise<void>
+  updateConfig(patch: MobileGatewayConfigPatch): Promise<MobileGatewayConfigUpdateResult>
+
+  readonly onDidChangeConfig: Event<MobileGatewayConfigState>
+
+  /** `file:` URI of `<userData>/mobile/gateway.json`; does not create the file. */
+  getConfigFileUri(): Promise<string>
+
+  /** Create the config file with defaults when missing, then return its URI. */
+  ensureConfigFile(): Promise<string>
 }
 
 export const IMobileGatewayService = createDecorator<IMobileGatewayService>('mobileGatewayService')

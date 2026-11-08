@@ -43,16 +43,18 @@ tailscale serve --bg 47321
 
 然后：
 
-1. 用 **首选项: 打开设置 (JSON)** 打开用户 `settings.json`。
-2. 把 Tailscale 给出的主机名加入 `mobileGateway.allowedHosts`，例如：
+1. 执行 **首选项: 打开手机网关配置 (JSON)**（也可以在「手机设备设置」页的「监听模式」一节点击 **编辑网关配置 (JSON)**）。
+2. 把 Tailscale 给出的主机名加入 `allowedHosts`，例如：
 
 ```json
 {
-  "mobileGateway.allowedHosts": ["pc.tailnet-name.ts.net"]
+  "allowedHosts": ["pc.tailnet-name.ts.net"]
 }
 ```
 
 保存后设置会立即生效。回到设置页，「能力」一节中的「可安装为应用」和「推送通知」应变为「可用」，配对地址也会以 `https://` 开头。
+
+> 手机网关的配置保存在这台电脑的用户数据目录（`<userData>/mobile/gateway.json`），不会写入 `settings.json`，也不随 `settings.json` 同步到其他电脑。这样同一账号在不同电脑上可以各自使用不同的监听方式。
 
 > Tailscale 的 `*.ts.net` 主机名会出现在公开的证书透明度（CT）日志中。这是 Tailscale 签发证书的工作方式，请勿使用包含敏感信息的主机名。
 

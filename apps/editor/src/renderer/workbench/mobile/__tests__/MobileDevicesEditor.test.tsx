@@ -8,20 +8,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
-  ConfigurationTarget,
   Emitter,
   ICommandService,
-  IConfigurationService,
   IDialogService,
   IOpenerService,
   InstantiationService,
   ServiceCollection,
-  type IConfigurationChangeEvent,
 } from '@universe-editor/platform'
 import {
+  DEFAULT_MOBILE_GATEWAY_CONFIG,
   IMobileGatewayService,
   type MobileAuditEntry,
   type MobileDeviceInfo,
+  type MobileGatewayConfigPatch,
+  type MobileGatewayConfigState,
+  type MobileGatewayConfigUpdateResult,
   type MobileGatewayStatus,
   type MobilePairingSession,
 } from '../../../../shared/ipc/mobileGatewayService.js'
@@ -77,23 +78,6 @@ const PAIRING: MobilePairingSession = {
   ],
 }
 
-class FakeConfigurationService {
-  private readonly _onDidChange = new Emitter<IConfigurationChangeEvent>()
-  readonly onDidChangeConfiguration = this._onDidChange.event
-  readonly values: Record<string, unknown> = {
-    'mobileGateway.enabled': false,
-    'mobileGateway.bind': 'loopback',
-    'mobileGateway.port': 47321,
-  }
-
-  get = vi.fn(<T,>(key: string): T | undefined => this.values[key] as T | undefined)
-
-  update = vi.fn((key: string, value: unknown): void => {
-    this.values[key] = value
-    this._onDidChange.fire({ keys: [key], affectsConfiguration: (k: string) => k === key })
-  })
-}
-
 class FakeMobileGatewayService {
   declare readonly _serviceBrand: undefined
 
@@ -101,11 +85,14 @@ class FakeMobileGatewayService {
   devices: readonly MobileDeviceInfo[] = []
   audit: readonly MobileAuditEntry[] = []
   pairing: MobilePairingSession = PAIRING
+  configState: MobileGatewayConfigState = { config: { ...DEFAULT_MOBILE_GATEWAY_CONFIG } }
 
   private readonly _onDidChangeStatus = new Emitter<MobileGatewayStatus>()
   private readonly _onDidChangeDevices = new Emitter<readonly MobileDeviceInfo[]>()
+  private readonly _onDidChangeConfig = new Emitter<MobileGatewayConfigState>()
   readonly onDidChangeStatus = this._onDidChangeStatus.event
   readonly onDidChangeDevices = this._onDidChangeDevices.event
+  readonly onDidChangeConfig = this._onDidChangeConfig.event
 
   getStatus = vi.fn(async () => this.status)
   startPairing = vi.fn(async () => this.pairing)
@@ -113,11 +100,32 @@ class FakeMobileGatewayService {
   listDevices = vi.fn(async () => this.devices)
   revokeDevice = vi.fn(async () => undefined)
   getRecentAudit = vi.fn(async () => this.audit)
-  applyConfig = vi.fn(async () => undefined)
+
+  getConfig = vi.fn(async () => this.configState)
+
+  updateConfig = vi.fn(
+    async (patch: MobileGatewayConfigPatch): Promise<MobileGatewayConfigUpdateResult> => {
+      const state: MobileGatewayConfigState = {
+        config: { ...this.configState.config, ...patch },
+        ...(this.configState.error !== undefined ? { error: this.configState.error } : {}),
+      }
+      this.configState = state
+      this._onDidChangeConfig.fire(state)
+      return { ok: true, state }
+    },
+  )
+
+  getConfigFileUri = vi.fn(async () => 'file:///tmp/userData/mobile/gateway.json')
+  ensureConfigFile = vi.fn(async () => 'file:///tmp/userData/mobile/gateway.json')
 
   emitDevices(next: readonly MobileDeviceInfo[]): void {
     this.devices = next
     this._onDidChangeDevices.fire(next)
+  }
+
+  emitConfig(next: MobileGatewayConfigState): void {
+    this.configState = next
+    this._onDidChangeConfig.fire(next)
   }
 }
 
@@ -126,14 +134,15 @@ function renderEditor(
     status?: MobileGatewayStatus
     devices?: readonly MobileDeviceInfo[]
     audit?: readonly MobileAuditEntry[]
+    config?: MobileGatewayConfigState
   } = {},
 ) {
   const gateway = new FakeMobileGatewayService()
   gateway.status = options.status ?? RUNNING_STATUS
   gateway.devices = options.devices ?? []
   gateway.audit = options.audit ?? []
+  gateway.configState = options.config ?? { config: { ...DEFAULT_MOBILE_GATEWAY_CONFIG } }
 
-  const config = new FakeConfigurationService()
   const dialog = { confirm: vi.fn(async () => ({ confirmed: true })) }
   const commands = { executeCommand: vi.fn(async () => undefined) }
   const open = vi.fn(async () => true)
@@ -145,7 +154,6 @@ function renderEditor(
 
   const services = new ServiceCollection()
   services.set(IMobileGatewayService, gateway as unknown as IMobileGatewayService)
-  services.set(IConfigurationService, config as unknown as IConfigurationService)
   services.set(IDialogService, dialog as unknown as IDialogService)
   services.set(ICommandService, commands as unknown as ICommandService)
   services.set(IOpenerService, opener)
@@ -157,7 +165,7 @@ function renderEditor(
     ),
   })
 
-  return { ...utils, gateway, config, dialog, commands, open }
+  return { ...utils, gateway, dialog, commands, open }
 }
 
 async function flush(): Promise<void> {
@@ -209,19 +217,69 @@ describe('MobileDevicesEditor', () => {
     expect(screen.getByTestId('mobile-gateway-insecure')).toBeTruthy()
   })
 
-  it('writes mobileGateway.enabled to the user settings layer', async () => {
-    const { config } = renderEditor()
+  it('updates the gateway config through the service', async () => {
+    const { gateway } = renderEditor()
     await screen.findByTestId('mobile-gateway-state')
+    await flush()
 
     fireEvent.click(screen.getByTestId('mobile-gateway-enabled'))
 
-    expect(config.update).toHaveBeenCalledWith(
-      'mobileGateway.enabled',
-      true,
-      ConfigurationTarget.User,
-    )
-    expect(config.values['mobileGateway.enabled']).toBe(true)
+    expect(gateway.updateConfig).toHaveBeenCalledWith({ enabled: true })
+    await flush()
     expect(screen.getByTestId('mobile-gateway-enabled').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('updates the bind mode through the service', async () => {
+    const { gateway } = renderEditor()
+    await screen.findByTestId('mobile-gateway-state')
+    await flush()
+
+    fireEvent.click(screen.getByTestId('mobile-gateway-bind'))
+    fireEvent.click(await screen.findByRole('option', { name: 'LAN address' }))
+
+    expect(gateway.updateConfig).toHaveBeenCalledWith({ bind: 'lan' })
+  })
+
+  it('rolls back and shows an error when saving the config fails', async () => {
+    const { gateway } = renderEditor()
+    await screen.findByTestId('mobile-gateway-state')
+    await flush()
+    gateway.updateConfig.mockResolvedValueOnce({
+      ok: false,
+      state: gateway.configState,
+      errors: ['"port" must be an integer between 1 and 65535'],
+    })
+
+    fireEvent.click(screen.getByTestId('mobile-gateway-enabled'))
+    await flush()
+
+    expect(await screen.findByTestId('mobile-gateway-config-error')).toBeTruthy()
+    expect(screen.getByTestId('mobile-gateway-enabled').getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('surfaces a gateway config file parse error', async () => {
+    renderEditor({
+      config: {
+        config: { ...DEFAULT_MOBILE_GATEWAY_CONFIG },
+        error: 'gateway.json is not valid JSON (offset 3)',
+      },
+    })
+    await screen.findByTestId('mobile-gateway-state')
+
+    const error = await screen.findByTestId('mobile-gateway-config-error')
+    expect(error.textContent).toContain('gateway.json is not valid JSON')
+  })
+
+  it('opens the gateway config JSON command', async () => {
+    const { commands } = renderEditor()
+    await screen.findByTestId('mobile-gateway-state')
+    await flush()
+
+    fireEvent.click(screen.getByTestId('mobile-gateway-open-config-json'))
+
+    expect(commands.executeCommand).toHaveBeenCalledWith(
+      'workbench.action.mobile.openGatewayConfigJson',
+    )
   })
 
   it('pairs a device, then collapses the QR when the new device appears', async () => {

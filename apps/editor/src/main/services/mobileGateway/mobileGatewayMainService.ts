@@ -1,9 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Application-singleton owner of the phone gateway. Resolves `mobileGateway.*`
- *  from settings.json at startup (main has no IConfigurationService; update and
- *  AI read the file directly too) and accepts `applyConfig` from the renderer
- *  for live changes. Owns the HTTP/WS server lifecycle through the
+ *  Application-singleton owner of the phone gateway. Persists `gateway.json` in
+ *  the machine-local `<userData>/mobile` directory (never the shared config
+ *  directory) and owns the HTTP/WS server lifecycle through the
  *  stopped/starting/running/error state machine.
  *--------------------------------------------------------------------------------------------*/
 
@@ -33,12 +32,14 @@ import type {
   MobileDeviceInfo,
   MobileGatewayBindMode,
   MobileGatewayConfig,
+  MobileGatewayConfigPatch,
+  MobileGatewayConfigState,
+  MobileGatewayConfigUpdateResult,
   MobileGatewayStatus,
   MobileGatewayState,
   MobilePairingSession,
 } from '../../../shared/ipc/mobileGatewayService.js'
-import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
-import type { ConfigLocationMainService } from '../configLocation/configLocationMainService.js'
+import { DEFAULT_MOBILE_GATEWAY_CONFIG } from '../../../shared/ipc/mobileGatewayService.js'
 import { IRecentWorkspacesService } from '../workspace/recentWorkspacesMainService.js'
 import type { RecentWorkspacesMainService } from '../workspace/recentWorkspacesMainService.js'
 import { getAppVersion } from '../../appVersion.js'
@@ -48,14 +49,13 @@ import { DeviceStore } from './deviceStore.js'
 import {
   buildOrigins,
   capabilitiesForOrigins,
-  DEFAULT_MOBILE_GATEWAY_CONFIG,
   gatewayEnvironmentFromProcess,
   isMobileGatewayEnabled,
-  parseMobileGatewayConfig,
-  readMobileGatewayConfig,
   resolveGatewayRuntime,
   type GatewayOrigins,
 } from './gatewayConfig.js'
+import { MOBILE_GATEWAY_CONFIG_FILE } from './gatewayConfigFile.js'
+import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
 import { ensureLanCertificate, type LanCertificate } from './lanCertificate.js'
 import { buildAllowedHosts } from './requestSecurity.js'
 import {
@@ -93,16 +93,24 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private readonly _audit: AuditLog
   private readonly _assetsDir: string
   private readonly _mobileDir: string
+  private readonly _configFile: string
+  private readonly _configStore: MobileGatewayConfigStore
   private readonly _onDidChangeStatus = this._register(new Emitter<MobileGatewayStatus>())
   readonly onDidChangeStatus: Event<MobileGatewayStatus> = this._onDidChangeStatus.event
   private readonly _onDidChangeDevices = this._register(new Emitter<readonly MobileDeviceInfo[]>())
   readonly onDidChangeDevices: Event<readonly MobileDeviceInfo[]> = this._onDidChangeDevices.event
+  private readonly _onDidChangeConfig = this._register(new Emitter<MobileGatewayConfigState>())
+  readonly onDidChangeConfig: Event<MobileGatewayConfigState> = this._onDidChangeConfig.event
 
   private readonly _windowBridges = new Map<number, IMobileBridgeService>()
   private readonly _hub: MobileGatewayHub
   private _windows: MobileGatewayWindowProvider | undefined
 
   private _config: MobileGatewayConfig = DEFAULT_MOBILE_GATEWAY_CONFIG
+  private _configState: MobileGatewayConfigState = {
+    config: { ...DEFAULT_MOBILE_GATEWAY_CONFIG },
+  }
+  private _ready: Promise<void>
   private _state: MobileGatewayState = 'stopped'
   private _error: string | undefined
   private _bind: MobileGatewayBindMode = 'loopback'
@@ -121,7 +129,6 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _disposed = false
 
   constructor(
-    @IConfigLocationService private readonly _configLocation: ConfigLocationMainService,
     @IRecentWorkspacesService private readonly _recent: RecentWorkspacesMainService,
     @ILoggerService loggerService?: ILoggerService,
   ) {
@@ -168,13 +175,35 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._pairing = new PairingService(fixedCode === undefined ? {} : { fixedCode })
     this._assetsDir = resolveMobileAssetsDir()
 
-    this._register(this._configLocation.onDidChangeConfigDir(() => void this._reloadFromDisk()))
+    this._configFile = join(mobileDir, MOBILE_GATEWAY_CONFIG_FILE)
+    this._configStore = this._register(
+      new MobileGatewayConfigStore({
+        file: this._configFile,
+        logger: this._logger,
+        onChmodError: (error) =>
+          this._logger.warn(`gateway.json chmod 0600 failed: ${error.message}`),
+      }),
+    )
+    this._ready = this._enqueue(async () => {
+      const state = await this._configStore.load()
+      this._configState = state
+      await this._applyConfig(state.config)
+    })
+    this._register(
+      this._configStore.onDidChangeExternal((state) => {
+        void this._enqueue(async () => {
+          this._configState = state
+          await this._applyConfig(state.config)
+          this._onDidChangeConfig.fire(state)
+        })
+      }),
+    )
     void this._refreshAttentionState()
-    void this._reloadFromDisk()
   }
 
-  getStatus(): Promise<MobileGatewayStatus> {
-    return Promise.resolve(this._status())
+  async getStatus(): Promise<MobileGatewayStatus> {
+    await this._ready.catch(() => undefined)
+    return this._status()
   }
 
   startPairing(): Promise<MobilePairingSession> {
@@ -235,9 +264,37 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     return this._audit.recent(bounded)
   }
 
-  applyConfig(config: MobileGatewayConfig): Promise<void> {
-    if (this._disposed) return Promise.resolve()
-    return this._enqueue(() => this._applyConfig(config))
+  async getConfig(): Promise<MobileGatewayConfigState> {
+    await this._ready.catch(() => undefined)
+    return this._configState
+  }
+
+  updateConfig(patch: MobileGatewayConfigPatch): Promise<MobileGatewayConfigUpdateResult> {
+    if (this._disposed) {
+      return Promise.resolve({
+        ok: false,
+        state: this._configState,
+        errors: ['mobile gateway service is disposed'],
+      })
+    }
+    return this._enqueue(async () => {
+      const result = await this._configStore.update(patch)
+      if (!result.ok) return result
+      this._configState = result.state
+      await this._applyConfig(result.state.config)
+      this._onDidChangeConfig.fire(result.state)
+      return result
+    })
+  }
+
+  getConfigFileUri(): Promise<string> {
+    return Promise.resolve(URI.file(this._configFile).toString())
+  }
+
+  async ensureConfigFile(): Promise<string> {
+    await this._ready.catch(() => undefined)
+    await this._configStore.ensureFile()
+    return URI.file(this._configFile).toString()
   }
 
   registerWindowBridge(
@@ -324,7 +381,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     super.dispose()
   }
 
-  private _enqueue(task: () => Promise<void>): Promise<void> {
+  private _enqueue<T>(task: () => Promise<T>): Promise<T> {
     const run = this._serial.then(task, task)
     this._serial = run.then(
       () => undefined,
@@ -333,17 +390,8 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     return run
   }
 
-  private async _reloadFromDisk(): Promise<void> {
-    try {
-      const config = await readMobileGatewayConfig(this._configLocation.currentDir)
-      await this.applyConfig(config)
-    } catch (err) {
-      this._logger.warn(`failed to read mobile gateway settings: ${String(err)}`)
-    }
-  }
-
   private async _applyConfig(config: MobileGatewayConfig): Promise<void> {
-    this._config = normalizeConfig(config)
+    this._config = config
     this._bind = this._config.bind
 
     const env = gatewayEnvironmentFromProcess()
@@ -585,19 +633,6 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._emitStatus()
     void this._emitDevices()
   }
-}
-
-function normalizeConfig(config: MobileGatewayConfig): MobileGatewayConfig {
-  const parsed = parseMobileGatewayConfig({
-    'mobileGateway.enabled': config.enabled,
-    'mobileGateway.bind': config.bind,
-    'mobileGateway.lanAddress': config.lanAddress,
-    'mobileGateway.port': config.port,
-    'mobileGateway.allowedHosts': config.allowedHosts,
-    'mobileGateway.vapidSubject': config.vapidSubject,
-  })
-  // A renderer omission must not silently enable the gateway.
-  return parsed
 }
 
 function resolveE2ePairCode(logger: ILogger): string | undefined {

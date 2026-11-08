@@ -7,17 +7,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import QRCode from 'qrcode'
-import { ConfigurationTarget, type IConfigurationService } from '@universe-editor/platform'
 import {
-  MOBILE_GATEWAY_DEFAULT_PORT,
   type IMobileGatewayService,
   type MobileAuditEntry,
   type MobileDeviceInfo,
-  type MobileGatewayBindMode,
+  type MobileGatewayConfigPatch,
+  type MobileGatewayConfigState,
   type MobileGatewayStatus,
   type MobilePairingSession,
 } from '../../../shared/ipc/mobileGatewayService.js'
-import { useEventValue } from '../useService.js'
 import {
   findNewDevice,
   isFixedPairingExpiry,
@@ -25,40 +23,68 @@ import {
   preferredPairUrlIndex,
 } from './mobileDevicesModel.js'
 
-export interface MobileGatewaySettings {
-  readonly enabled: boolean
-  readonly bind: MobileGatewayBindMode
-  readonly port: number
+export interface MobileGatewayConfigController {
+  readonly state: MobileGatewayConfigState | undefined
+  /** Local save failure or the file's parse error, whichever is current. */
+  readonly error: string | undefined
+  readonly update: (patch: MobileGatewayConfigPatch) => Promise<void>
 }
 
-export function readMobileGatewaySettings(config: IConfigurationService): MobileGatewaySettings {
-  const enabled = config.get<boolean>('mobileGateway.enabled')
-  const bind = config.get<string>('mobileGateway.bind')
-  const port = config.get<number>('mobileGateway.port')
-  return {
-    enabled: enabled === true,
-    bind: bind === 'lan' ? 'lan' : 'loopback',
-    port:
-      typeof port === 'number' && Number.isInteger(port) && port >= 1 && port <= 65535
-        ? port
-        : MOBILE_GATEWAY_DEFAULT_PORT,
-  }
-}
+export function useMobileGatewayConfig(
+  gateway: IMobileGatewayService,
+): MobileGatewayConfigController {
+  const [state, setState] = useState<MobileGatewayConfigState | undefined>(undefined)
+  const [error, setError] = useState<string | undefined>(undefined)
 
-export function useMobileGatewaySettings(config: IConfigurationService): MobileGatewaySettings {
-  const read = useCallback(() => readMobileGatewaySettings(config), [config])
-  return useEventValue(config.onDidChangeConfiguration, read)
-}
+  useEffect(() => {
+    let active = true
+    // Subscribe before the initial read so an edit landing in between is not lost.
+    const subscription = gateway.onDidChangeConfig((next) => {
+      if (!active) return
+      setState(next)
+      setError(undefined)
+    })
+    void gateway
+      .getConfig()
+      .then((next) => {
+        if (active) setState(next)
+      })
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      active = false
+      subscription.dispose()
+    }
+  }, [gateway])
 
-export function writeMobileGatewayEnabled(config: IConfigurationService, enabled: boolean): void {
-  config.update('mobileGateway.enabled', enabled, ConfigurationTarget.User)
-}
+  const update = useCallback(
+    async (patch: MobileGatewayConfigPatch) => {
+      setError(undefined)
+      setState((previous) => {
+        if (previous === undefined) return previous
+        return {
+          config: { ...previous.config, ...patch },
+          ...(previous.error !== undefined ? { error: previous.error } : {}),
+        }
+      })
+      try {
+        const result = await gateway.updateConfig(patch)
+        if (result.ok) {
+          setState(result.state)
+          return
+        }
+        setError(result.errors.join('; '))
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err))
+      }
+      const current = await gateway.getConfig().catch(() => undefined)
+      if (current !== undefined) setState(current)
+    },
+    [gateway],
+  )
 
-export function writeMobileGatewayBind(
-  config: IConfigurationService,
-  bind: MobileGatewayBindMode,
-): void {
-  config.update('mobileGateway.bind', bind, ConfigurationTarget.User)
+  return { state, error: error ?? state?.error, update }
 }
 
 export function useGatewayStatus(gateway: IMobileGatewayService): MobileGatewayStatus | undefined {
