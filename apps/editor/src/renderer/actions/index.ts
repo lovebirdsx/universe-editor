@@ -129,6 +129,7 @@ import {
   ResetConfigLocationAction,
   SetConfigLocationAction,
 } from './configLocationActions.js'
+import { OpenMobileDevicesSettingsAction } from './mobileActions.js'
 import { keybindingsEditorActions } from './keybindingsEditorActions.js'
 import {
   AboutAction,
@@ -613,6 +614,9 @@ registerAction2(SelectProductIconThemeAction)
 registerAction2(SetConfigLocationAction)
 registerAction2(OpenConfigLocationFolderAction)
 registerAction2(ResetConfigLocationAction)
+
+// Mobile gateway
+registerAction2(OpenMobileDevicesSettingsAction)
 
 // Keyboard Shortcuts editor — in-editor commands (enter/delete/ctrl+c/escape/
 // ctrl+f/ctrl+down/alt+k/alt+p, chords ctrl+k ctrl+a|ctrl+e). Their explicit

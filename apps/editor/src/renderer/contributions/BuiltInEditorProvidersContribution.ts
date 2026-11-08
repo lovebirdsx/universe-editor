@@ -27,6 +27,7 @@ import { ImageEditorInput } from '../services/editor/ImageEditorInput.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
+import { MobileDevicesEditorInput } from '../services/editor/MobileDevicesEditorInput.js'
 import { ExtensionEditorInput } from '../services/editor/ExtensionEditorInput.js'
 import { CustomEditorInput } from '../services/editor/CustomEditorInput.js'
 import { WebviewPanelInput } from '../services/editor/WebviewPanelInput.js'
@@ -46,6 +47,7 @@ import { SwarmDiffEditorInput } from '../services/editor/SwarmDiffEditorInput.js
 import { type EditorComponent } from '../services/editor/EditorComponentRegistry.js'
 import { SettingsEditor } from '../workbench/preferences/SettingsEditor.js'
 import { AiSettingsEditor } from '../workbench/ai/AiSettingsEditor.js'
+import { MobileDevicesEditor } from '../workbench/mobile/MobileDevicesEditor.js'
 import { KeybindingsEditor } from '../workbench/keybindings/KeybindingsEditor.js'
 import { WelcomeEditor } from '../workbench/editor/WelcomeEditor.js'
 import { FileEditor } from '../workbench/editor/FileEditor.js'
@@ -101,6 +103,15 @@ export class BuiltInEditorProvidersContribution
           deserialize: () => AiSettingsEditorInput.deserialize(),
         },
         asEditor(AiSettingsEditor),
+      ),
+    )
+    this._register(
+      registerEditorWithComponent(
+        {
+          typeId: MobileDevicesEditorInput.TYPE_ID,
+          deserialize: () => MobileDevicesEditorInput.deserialize(),
+        },
+        asEditor(MobileDevicesEditor),
       ),
     )
     this._register(

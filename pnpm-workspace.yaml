@@ -56,6 +56,11 @@ catalog:
   # UI
   allotment: ^1.20.0
   lucide-react: ^0.460.0
+  # QR rendering for the Mobile Devices settings page. Only the SVG renderer is
+  # used (`toString(..., { type: 'svg' })`), so neither the renderer nor the test
+  # environment needs a canvas.
+  qrcode: ^1.5.4
+  '@types/qrcode': ^1.5.6
   '@vscode/codicons': ^0.0.45
   # Build-time only: source of the Material file-icon SVGs + mapping manifest.
   # Consumed by apps/editor/scripts/import-material-icons.mjs; the generated SVGs

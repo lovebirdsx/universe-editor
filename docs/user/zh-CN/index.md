@@ -35,6 +35,7 @@
 - [技能、记忆与 MCP](./ai-agent/skills-memory-mcp.md)
 - [模式与思考等级](./ai-agent/modes-and-thinking.md)
 - [会话管理](./ai-agent/managing-sessions.md)
+- [手机遥控（手机设备）](./ai-agent/mobile.md)
 
 ## 编辑与文件
 
