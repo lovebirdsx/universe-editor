@@ -14,7 +14,8 @@ export interface InboxPageProps {
   readonly credentials: StoredCredentials
   readonly notice?: string | undefined
   readonly onDismissNotice: () => void
-  readonly onOpenSession: (sessionKey: string) => void
+  readonly onOpenSession: (sessionKey: string, focusPending: boolean) => void
+  readonly onNewSession: () => void
   readonly onUnpair: () => void
 }
 
@@ -24,6 +25,7 @@ export function InboxPage({
   notice,
   onDismissNotice,
   onOpenSession,
+  onNewSession,
   onUnpair,
 }: InboxPageProps) {
   const inbox = useStore(client.getInboxStore())
@@ -53,6 +55,16 @@ export function InboxPage({
         )}
         {renderBody()}
       </main>
+      <button
+        type="button"
+        className="fab"
+        data-testid="new-session-fab"
+        aria-label={strings.newSessionAdd}
+        disabled={socketState !== 'connected'}
+        onClick={onNewSession}
+      >
+        +
+      </button>
       {settingsOpen && (
         <SettingsDrawer
           credentials={credentials}

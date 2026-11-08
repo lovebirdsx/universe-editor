@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { leaveSession, navigateToSession, readRoute, sessionPath } from '../routing.js'
+import {
+  leaveSession,
+  navigateToNewSession,
+  navigateToSession,
+  readRoute,
+  sessionPath,
+} from '../routing.js'
 
 describe('readRoute', () => {
   it.each([
     ['/', { name: 'inbox' }],
     ['/pair', { name: 'pair' }],
+    ['/new', { name: 'new-session' }],
     ['/s/', { name: 'inbox' }],
     ['/s/1%3As1', { name: 'session', sessionKey: '1:s1' }],
     ['/s/durable%2Fid%20x', { name: 'session', sessionKey: 'durable/id x' }],
@@ -28,6 +35,12 @@ describe('navigation', () => {
     const pushState = vi.fn()
     navigateToSession('a:b', { pushState })
     expect(pushState).toHaveBeenCalledWith({ mobile: true }, '', '/s/a%3Ab')
+  })
+
+  it('pushes the new-session path', () => {
+    const pushState = vi.fn()
+    navigateToNewSession({ pushState })
+    expect(pushState).toHaveBeenCalledWith({ mobile: true }, '', '/new')
   })
 
   it('goes back when the current entry was opened in-app', () => {

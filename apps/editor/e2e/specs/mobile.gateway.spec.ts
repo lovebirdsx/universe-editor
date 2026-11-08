@@ -256,6 +256,15 @@ async function pairPhone(page: Page, workbench: WorkbenchPO): Promise<PairedPhon
   return { browser, context, phone, origin }
 }
 
+/** Open the single inbox row and wait for the interactive session page. */
+async function openFirstPhoneSession(phone: Page): Promise<void> {
+  const row = phone.getByTestId('inbox-session-row').first()
+  await expect(row).toBeVisible()
+  await row.click()
+  await expect(phone).toHaveURL(/\/s\//)
+  await expect(phone.getByTestId('composer')).toBeVisible()
+}
+
 test.describe('mobile gateway', () => {
   test.describe.configure({ mode: 'default' })
 
@@ -624,6 +633,74 @@ test.describe('mobile gateway', () => {
       ws.close()
     }
   })
+
+  test('@p0 sends a prompt from the phone UI and mirrors the reply', async ({
+    page,
+    workbench,
+  }) => {
+    await startEchoSession(page, workbench)
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+
+      await phone.getByTestId('composer-input').fill('phone hello')
+      await phone.getByTestId('composer-send').click()
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
+        .toEqual([
+          { role: 'user', text: 'phone hello', streaming: false },
+          { role: 'agent', text: 'echo: phone hello', streaming: false },
+        ])
+      await expect(phone.getByTestId('user-message').last()).toContainText('phone hello')
+      await expect(phone.getByTestId('agent-message').last()).toContainText('echo: phone hello')
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@p1 approves a pending permission from the phone UI and clears the PC card', async ({
+    page,
+    workbench,
+  }) => {
+    // Pair first: starting a session switches the PC to the ACP view, and pairing
+    // is cancelled when the settings editor loses focus.
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await startEchoSession(page, workbench)
+      await openFirstPhoneSession(phone)
+
+      await page.evaluate(() => {
+        void window.__E2E__!.sendAcpPrompt('approve-shell')
+      })
+      await expect(page.getByTestId('acp-permission-card')).toBeVisible({ timeout: 10_000 })
+
+      const sheet = phone.getByTestId('permission-sheet')
+      await expect(sheet).toBeVisible({ timeout: 10_000 })
+      // The durable "allow access" option is PC-only and must not be offered.
+      await expect(phone.locator('[data-option-id="allow-with-updates"]')).toHaveCount(0)
+      await expect(phone.getByText('部分选项需在 PC 上操作')).toBeVisible()
+
+      await phone.locator('[data-option-id="allow-once"]').click()
+
+      await expect(page.getByTestId('acp-permission-card')).toBeHidden({ timeout: 10_000 })
+      await expect(phone.getByTestId('permission-sheet')).toBeHidden()
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: 'agent',
+              text: expect.stringContaining('approve-shell result:'),
+            }),
+          ]),
+        )
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
 })
 
 /**
@@ -683,6 +760,36 @@ test.describe('mobile gateway in a workspace', () => {
       expect(missing).toMatchObject({ ok: false, error: 'workspace_not_open' })
     } finally {
       ws.close()
+    }
+  })
+
+  test('@p1 creates a session from the phone new-session page', async ({ page, workbench }) => {
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await phone.getByTestId('new-session-fab').click()
+      await expect(phone).toHaveURL(/\/new$/)
+
+      await expect(phone.getByTestId('new-session-agent').first()).toBeVisible({ timeout: 10_000 })
+      const selected = phone.locator('[data-testid="new-session-workspace"][aria-selected="true"]')
+      await expect(selected).toContainText('已打开')
+      await expect(phone.getByTestId('new-session-submit')).toBeEnabled()
+
+      await phone.getByTestId('new-session-submit').click()
+
+      await expect(phone).toHaveURL(/\/s\//, { timeout: 15_000 })
+      await expect(phone.getByTestId('composer')).toBeVisible()
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), {
+          timeout: 15_000,
+        })
+        .toBe(1)
+    } finally {
+      await context.close()
+      await browser.close()
     }
   })
 })

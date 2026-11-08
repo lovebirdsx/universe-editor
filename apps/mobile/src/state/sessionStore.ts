@@ -3,6 +3,8 @@ import type {
   MobileMessageUpsertEvent,
   MobilePendingElicitation,
   MobilePendingPermission,
+  MobilePermissionSettleReason,
+  MobilePermissionSettleSource,
   MobilePlanEntry,
   MobileSessionEvent,
   MobileSessionRef,
@@ -17,6 +19,13 @@ import type {
 import { refMatches } from './refs.js'
 import { Store } from './store.js'
 
+/** Metadata carried by the most recent `permission_cleared` event. */
+export interface PermissionClearedInfo {
+  readonly requestId: string
+  readonly reason: MobilePermissionSettleReason
+  readonly source: MobilePermissionSettleSource
+}
+
 export interface SessionState {
   readonly ref: MobileSessionRef | undefined
   readonly summary: MobileSessionSummary | undefined
@@ -26,6 +35,7 @@ export interface SessionState {
   readonly usage: MobileUsage | undefined
   readonly pendingPermission: MobilePendingPermission | undefined
   readonly pendingElicitation: MobilePendingElicitation | undefined
+  readonly permissionCleared: PermissionClearedInfo | undefined
   readonly isReplayingHistory: boolean
   readonly truncated: boolean
   readonly seq: number | undefined
@@ -49,6 +59,7 @@ const EMPTY: SessionState = {
   usage: undefined,
   pendingPermission: undefined,
   pendingElicitation: undefined,
+  permissionCleared: undefined,
   isReplayingHistory: false,
   truncated: false,
   seq: undefined,
@@ -82,6 +93,7 @@ export class SessionStore extends Store<SessionState> {
       usage: snapshot.usage,
       pendingPermission: snapshot.pendingPermission,
       pendingElicitation: snapshot.pendingElicitation,
+      permissionCleared: undefined,
       isReplayingHistory: snapshot.isReplayingHistory,
       truncated: snapshot.truncated === true,
       seq: frame.seq,
@@ -150,9 +162,17 @@ function applyEvent(
     case 'summary_changed':
       return { ...state, summary: event.summary, ref: event.summary.ref }
     case 'permission_upsert':
-      return { ...state, pendingPermission: event.permission }
+      return { ...state, pendingPermission: event.permission, permissionCleared: undefined }
     case 'permission_cleared':
-      return { ...state, pendingPermission: undefined }
+      return {
+        ...state,
+        pendingPermission: undefined,
+        permissionCleared: {
+          requestId: event.requestId,
+          reason: event.reason,
+          source: event.source,
+        },
+      }
     case 'elicitation_upsert':
       return { ...state, pendingElicitation: event.elicitation }
     case 'elicitation_cleared':

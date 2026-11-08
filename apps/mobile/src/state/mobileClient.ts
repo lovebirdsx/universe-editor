@@ -1,6 +1,14 @@
 import type {
   ClientFrame,
+  CommandFrame,
+  MobileAgentCandidate,
+  MobileCommandKind,
+  MobileElicitationAction,
+  MobileElicitationContentValue,
+  MobileNewSessionResult,
   MobileSessionRef,
+  MobileToolCallDetail,
+  MobileWorkspaceCandidate,
   ServerFrame,
   SessionSnapshotFrame,
 } from '@universe-editor/mobile-protocol'
@@ -11,11 +19,12 @@ import {
   type TimerApi,
   type WebSocketLike,
 } from '../socket/mobileSocket.js'
+import { CommandClient, CommandError, type CommandRequestOptions } from './commandClient.js'
 import { InboxStore, type InboxApplyResult } from './inboxStore.js'
 import { parseSessionRouteKey, refMatches, sessionRouteKey } from './refs.js'
 import { SessionStore } from './sessionStore.js'
 import { Store } from './store.js'
-import { ToolCallDetailClient, ToolCallDetailError } from './toolCallDetailClient.js'
+import { ToolCallDetailClient } from './toolCallDetailClient.js'
 
 export interface MobileClientOptions {
   readonly credentials: StoredCredentials
@@ -32,19 +41,29 @@ export interface MobileClientOptions {
  * Owns the one WebSocket the phone uses for both the inbox and the currently
  * open session. Frames are folded into pure stores; navigation only changes
  * which session is subscribed, never the connection.
+ *
+ * Commands all go through the shared {@link CommandClient}; the client-level
+ * methods only bind the currently open session's `ref` to the payload.
  */
 export class MobileClient {
   private readonly _socket: MobileSocket
   private readonly _socketState = new Store<SocketState>('connecting')
   private readonly _inbox = new InboxStore()
   private readonly _session = new SessionStore()
+  private readonly _commands: CommandClient
   private readonly _detail: ToolCallDetailClient
   private readonly _logger: Pick<Console, 'warn'>
   private _currentRef: MobileSessionRef | undefined
   private _routeKey: string | undefined
+  private _serverTimeOffsetMs = 0
 
   constructor(options: MobileClientOptions) {
     this._logger = options.logger ?? console
+    this._commands = new CommandClient({
+      send: (frame) => this._sendCommand(frame),
+      timers: options.timers,
+    })
+    this._detail = new ToolCallDetailClient(this._commands)
     this._socket = new MobileSocket({
       url: options.url,
       token: options.credentials.token,
@@ -54,16 +73,15 @@ export class MobileClient {
       logger: this._logger,
       onStateChange: (state) => this._handleState(state),
       onFrame: (frame) => this._handleFrame(frame),
+      onServerTime: (serverTime) => {
+        this._serverTimeOffsetMs = serverTime - Date.now()
+      },
       onCredentialsInvalid: () => {
         this._inbox.reset()
         this._session.reset()
         options.onCredentialsInvalid?.()
       },
       onProtocolMismatch: options.onProtocolMismatch,
-    })
-    this._detail = new ToolCallDetailClient({
-      send: (frame) => this._socket.send(frame),
-      timers: options.timers,
     })
   }
 
@@ -79,12 +97,22 @@ export class MobileClient {
     return this._socketState
   }
 
+  /** PC clock (`hello_ok.serverTime` corrected) so countdown deadlines line up. */
+  serverNow(): number {
+    return Date.now() + this._serverTimeOffsetMs
+  }
+
+  getServerTimeOffsetMs(): number {
+    return this._serverTimeOffsetMs
+  }
+
   start(): void {
     this._socket.start()
   }
 
   stop(): void {
     this._socket.stop()
+    this._commands.clear()
     this._detail.clear()
   }
 
@@ -116,19 +144,138 @@ export class MobileClient {
     this._detail.clear()
   }
 
-  requestToolCallDetail(toolCallId: string): ReturnType<ToolCallDetailClient['request']> {
+  /** Re-pull the open session's snapshot (fallback after an unacknowledged approval). */
+  refreshSession(): void {
+    this._subscribeCurrentSession()
+  }
+
+  requestToolCallDetail(toolCallId: string): Promise<MobileToolCallDetail> {
     const ref = this._currentRef
     if (ref === undefined) {
       return Promise.reject(
-        new ToolCallDetailError('session_not_found', 'no session is open on the phone'),
+        new CommandError('session_not_found', 'no session is open on the phone'),
       )
     }
     return this._detail.request(ref, toolCallId)
   }
 
+  sendPrompt(text: string): Promise<void> {
+    return this._sessionCommand('sendPrompt', (ref) => ({ ref, text }))
+  }
+
+  cancelTurn(): Promise<void> {
+    return this._sessionCommand('cancelTurn', (ref) => ({ ref }))
+  }
+
+  resolvePermission(requestId: string, optionId: string, feedback?: string): Promise<void> {
+    return this._sessionCommand(
+      'resolvePermission',
+      (ref) => ({
+        ref,
+        requestId,
+        optionId,
+        ...(feedback !== undefined && feedback !== '' ? { feedback } : {}),
+      }),
+      { treatStaleAsSuccess: true },
+    )
+  }
+
+  cancelPermission(requestId: string): Promise<void> {
+    return this._sessionCommand('cancelPermission', (ref) => ({ ref, requestId }), {
+      treatStaleAsSuccess: true,
+    })
+  }
+
+  resolveElicitation(
+    requestId: string,
+    action: MobileElicitationAction,
+    content?: Record<string, MobileElicitationContentValue>,
+  ): Promise<void> {
+    return this._sessionCommand(
+      'resolveElicitation',
+      (ref) => ({ ref, requestId, action, ...(content !== undefined ? { content } : {}) }),
+      { treatStaleAsSuccess: true },
+    )
+  }
+
+  setConfigOption(configId: string, value: string | boolean): Promise<void> {
+    return this._sessionCommand('setConfigOption', (ref) => ({ ref, configId, value }))
+  }
+
+  pauseAutoResolve(requestId: string): Promise<void> {
+    return this._sessionCommand('pauseAutoResolve', (ref) => ({ ref, requestId }), {
+      treatStaleAsSuccess: true,
+    })
+  }
+
+  resumeAutoResolve(requestId: string): Promise<void> {
+    return this._sessionCommand('resumeAutoResolve', (ref) => ({ ref, requestId }), {
+      treatStaleAsSuccess: true,
+    })
+  }
+
+  renameSession(title: string): Promise<void> {
+    return this._sessionCommand('renameSession', (ref) => ({ ref, title }))
+  }
+
+  deleteSession(): Promise<void> {
+    return this._sessionCommand('deleteSession', (ref) => ({ ref }))
+  }
+
+  async newSession(
+    agentId: string,
+    workspace: { folder: string; authority?: string },
+    initialPrompt?: string,
+  ): Promise<MobileNewSessionResult> {
+    return this._commands.request<MobileNewSessionResult>('newSession', {
+      agentId,
+      workspace,
+      ...(initialPrompt !== undefined && initialPrompt !== '' ? { initialPrompt } : {}),
+    })
+  }
+
+  async listAgents(): Promise<readonly MobileAgentCandidate[]> {
+    return this._commands.request<readonly MobileAgentCandidate[]>(
+      'listAgents',
+      {},
+      {
+        validateResult: (value) => Array.isArray(value),
+      },
+    )
+  }
+
+  async listWorkspaces(): Promise<readonly MobileWorkspaceCandidate[]> {
+    return this._commands.request<readonly MobileWorkspaceCandidate[]>(
+      'listWorkspaces',
+      {},
+      {
+        validateResult: (value) => Array.isArray(value),
+      },
+    )
+  }
+
+  private _sessionCommand(
+    kind: MobileCommandKind,
+    payloadFor: (ref: MobileSessionRef) => unknown,
+    options?: CommandRequestOptions,
+  ): Promise<void> {
+    const ref = this._currentRef
+    if (ref === undefined) {
+      return Promise.reject(
+        new CommandError('session_not_found', 'no session is open on the phone'),
+      )
+    }
+    return this._commands.request<void>(kind, payloadFor(ref), options)
+  }
+
   private _handleState(state: SocketState): void {
     this._socketState.setState(state)
-    if (state === 'connected') this._subscribeCurrentSession()
+    if (state === 'connected') {
+      // Reconnect: commands whose response was lost are retried verbatim; the
+      // gateway answers mutating duplicates from its idempotency cache.
+      this._commands.resendPending()
+      this._subscribeCurrentSession()
+    }
   }
 
   private _handleFrame(frame: ServerFrame): void {
@@ -162,7 +309,7 @@ export class MobileClient {
         }
         break
       case 'command_result':
-        this._detail.handleResult(frame)
+        this._commands.handleResult(frame)
         break
       case 'resync_required':
         if (frame.scope === 'inbox') {
@@ -208,6 +355,18 @@ export class MobileClient {
   }
 
   private _send(frame: ClientFrame): void {
+    this._socket.send(frame)
+  }
+
+  /**
+   * Commands are only sent while the gateway handshake is complete. A closed
+   * socket rejects up front (`network`) instead of leaving the caller waiting
+   * the full timeout for a frame that was silently dropped.
+   */
+  private _sendCommand(frame: CommandFrame): void {
+    if (this._socket.state !== 'connected') {
+      throw new CommandError('network', 'mobile gateway is not connected')
+    }
     this._socket.send(frame)
   }
 

@@ -55,6 +55,8 @@ export interface MobileSocketOptions {
   readonly random?: (() => number) | undefined
   readonly onStateChange?: ((state: SocketState) => void) | undefined
   readonly onFrame?: ((frame: ServerFrame) => void) | undefined
+  /** Server clock from `hello_ok`; the phone corrects countdown deadlines with it. */
+  readonly onServerTime?: ((serverTime: number) => void) | undefined
   /** Revoked / unauthorized credentials: the caller must clear local state. */
   readonly onCredentialsInvalid?: (() => void) | undefined
   readonly onProtocolMismatch?: (() => void) | undefined
@@ -85,6 +87,7 @@ export class MobileSocket {
   private readonly _logger: Pick<Console, 'warn'>
   private readonly _onStateChange: ((state: SocketState) => void) | undefined
   private readonly _onFrame: ((frame: ServerFrame) => void) | undefined
+  private readonly _onServerTime: ((serverTime: number) => void) | undefined
   private readonly _onCredentialsInvalid: (() => void) | undefined
   private readonly _onProtocolMismatch: (() => void) | undefined
 
@@ -116,6 +119,7 @@ export class MobileSocket {
     this._logger = options.logger ?? console
     this._onStateChange = options.onStateChange
     this._onFrame = options.onFrame
+    this._onServerTime = options.onServerTime
     this._onCredentialsInvalid = options.onCredentialsInvalid
     this._onProtocolMismatch = options.onProtocolMismatch
   }
@@ -206,6 +210,7 @@ export class MobileSocket {
     const frame = parsed.value
     switch (frame.type) {
       case 'hello_ok':
+        this._onServerTime?.(frame.serverTime)
         this._handleHelloOk()
         break
       case 'pong':

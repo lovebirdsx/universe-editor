@@ -7,8 +7,15 @@ import {
   type StoredCredentials,
 } from './credentials.js'
 import { InboxPage } from './pages/InboxPage.js'
+import { NewSessionPage } from './pages/NewSessionPage.js'
 import { PairPage } from './pages/PairPage.js'
-import { leaveSession, navigateToSession, readRoute, type Route } from './routing.js'
+import {
+  leaveSession,
+  navigateToNewSession,
+  navigateToSession,
+  readRoute,
+  type Route,
+} from './routing.js'
 import { SessionPage } from './session/SessionPage.js'
 import { websocketUrlForLocation, type WebSocketLike } from './socket/mobileSocket.js'
 import { MobileClient } from './state/mobileClient.js'
@@ -24,6 +31,7 @@ export function App() {
   const [loaded, setLoaded] = useState<LoadedState>({ loading: true, credentials: undefined })
   const [reloadKey, setReloadKey] = useState(0)
   const [route, setRoute] = useState<Route>(() => readRoute(window.location.pathname))
+  const [focusPending, setFocusPending] = useState(false)
   const [notice, setNotice] = useState<string | undefined>(undefined)
 
   useEffect(() => {
@@ -72,13 +80,21 @@ export function App() {
     setRoute({ name: 'inbox' })
   }
 
-  const openSession = (sessionKey: string): void => {
+  const openSession = (sessionKey: string, pending = false): void => {
     navigateToSession(sessionKey)
+    setFocusPending(pending)
+    setRoute(readRoute(window.location.pathname))
+  }
+
+  const openNewSession = (): void => {
+    navigateToNewSession()
+    setFocusPending(false)
     setRoute(readRoute(window.location.pathname))
   }
 
   const backToInbox = (): void => {
     leaveSession()
+    setFocusPending(false)
     setRoute({ name: 'inbox' })
   }
 
@@ -123,7 +139,27 @@ export function App() {
   }
 
   if (route.name === 'session') {
-    return <SessionPage client={client} sessionKey={route.sessionKey} onBack={backToInbox} />
+    return (
+      <SessionPage
+        client={client}
+        sessionKey={route.sessionKey}
+        focusPending={focusPending}
+        onBack={backToInbox}
+      />
+    )
+  }
+
+  if (route.name === 'new-session') {
+    return (
+      <NewSessionPage
+        client={client}
+        onBack={backToInbox}
+        onCreated={(sessionKey) => {
+          setFocusPending(false)
+          setRoute({ name: 'session', sessionKey })
+        }}
+      />
+    )
   }
 
   return (
@@ -133,6 +169,7 @@ export function App() {
       notice={notice}
       onDismissNotice={() => setNotice(undefined)}
       onOpenSession={openSession}
+      onNewSession={openNewSession}
       onUnpair={unpair}
     />
   )

@@ -6,6 +6,7 @@ import {
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
+import { CLEARED_FALLBACK_MS } from '../PermissionSheet.js'
 import { MobileClient } from '../../state/mobileClient.js'
 import { FakeTimers, FakeWebSocket, sentFrames } from '../../test/fakes.js'
 import {
@@ -181,7 +182,7 @@ describe('SessionPage snapshot rendering', () => {
     ).toHaveLength(1)
   })
 
-  it('shows a read-only approval card with inert option names', () => {
+  it('renders interactive approval and elicitation sheets', () => {
     const { harness } = openPage()
     feed(
       harness.socket,
@@ -204,12 +205,137 @@ describe('SessionPage snapshot rendering', () => {
       }),
     )
 
-    expect(screen.getByText('等待在 PC 上处理：Run the command')).toBeTruthy()
+    expect(screen.getByText('等待你的审批')).toBeTruthy()
+    expect(screen.getByText('Run the command')).toBeTruthy()
     expect(screen.getByText('Which branch?')).toBeTruthy()
-    const option = screen.getByText('允许一次')
-    expect(option.closest('button')).toBeNull()
-    expect(screen.getAllByText(strings.pendingReadOnlyHint)).toHaveLength(2)
-    expect(screen.getAllByTestId('pending-action-slot')).toHaveLength(2)
+    expect(screen.getByTestId('permission-sheet')).toBeTruthy()
+    expect(screen.getByTestId('elicitation-sheet')).toBeTruthy()
+    expect(screen.getAllByTestId('permission-option')).toHaveLength(2)
+    expect(screen.getByText('允许一次').closest('button')).not.toBeNull()
+  })
+
+  it('closes the approval sheet when permission_cleared arrives', () => {
+    const { harness } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { pendingPermission: pendingPermission() }))
+
+    fireEvent.click(screen.getAllByTestId('permission-option')[0]!)
+    const command = sentFrames(harness.socket).find((frame) => frameType(frame) === 'command') as
+      | { requestId: string; kind: string; payload: unknown }
+      | undefined
+    expect(command).toMatchObject({ kind: 'resolvePermission', payload: { requestId: 'req-1' } })
+    expect(screen.getByText(strings.pendingSubmitting)).toBeTruthy()
+
+    feed(harness.socket, {
+      type: 'session_delta',
+      seq: 2,
+      ref: sessionRef('s1'),
+      events: [
+        { type: 'permission_cleared', requestId: 'req-1', reason: 'selected', source: 'mobile' },
+      ],
+    })
+
+    expect(screen.queryByTestId('permission-sheet')).toBeNull()
+  })
+
+  it('toasts when the request was handled on the PC', () => {
+    const { harness } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { pendingPermission: pendingPermission() }))
+
+    feed(harness.socket, {
+      type: 'session_delta',
+      seq: 2,
+      ref: sessionRef('s1'),
+      events: [
+        { type: 'permission_cleared', requestId: 'req-1', reason: 'selected', source: 'pc' },
+      ],
+    })
+
+    expect(screen.queryByTestId('permission-sheet')).toBeNull()
+    expect(screen.getByTestId('session-toast').textContent).toBe(strings.pendingResolvedElsewhere)
+  })
+
+  it('falls back to a fresh snapshot 3s after a tap without permission_cleared', async () => {
+    vi.useFakeTimers()
+    try {
+      const { harness } = openPage()
+      feed(harness.socket, sessionSnapshotFrame(1, { pendingPermission: pendingPermission() }))
+
+      fireEvent.click(screen.getAllByTestId('permission-option')[0]!)
+      const command = sentFrames(harness.socket).find((frame) => frameType(frame) === 'command') as
+        | { requestId: string }
+        | undefined
+      feed(harness.socket, {
+        type: 'command_result',
+        requestId: command!.requestId,
+        ok: true,
+      })
+      await act(async () => undefined)
+
+      const before = sentFrames(harness.socket).filter(
+        (frame) => frameType(frame) === 'subscribe_session',
+      ).length
+      act(() => {
+        vi.advanceTimersByTime(CLEARED_FALLBACK_MS)
+      })
+
+      expect(screen.queryByTestId('permission-sheet')).toBeNull()
+      const after = sentFrames(harness.socket).filter(
+        (frame) => frameType(frame) === 'subscribe_session',
+      ).length
+      expect(after).toBe(before + 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('drives config chips, boolean switches and the high-risk picker', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        configOptions: [
+          {
+            id: 'mode',
+            name: '模式',
+            type: 'select',
+            currentValue: '默认',
+            allowedOnMobile: true,
+            options: [
+              { value: 'default', label: '默认', allowedOnMobile: true },
+              { value: 'bypassPermissions', label: '完全访问', allowedOnMobile: false },
+            ],
+          },
+          {
+            id: 'web',
+            name: '联网',
+            type: 'boolean',
+            currentValue: 'On',
+            allowedOnMobile: true,
+          },
+        ],
+      }),
+    )
+
+    expect(screen.getByTestId('config-chip').textContent).toContain('默认')
+    const toggle = screen.getByTestId('config-switch')
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(toggle)
+
+    const command = sentFrames(harness.socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['kind'] === 'setConfigOption',
+    ) as { payload: unknown } | undefined
+    expect(command?.payload).toMatchObject({ configId: 'web', value: false })
+
+    fireEvent.click(screen.getByTestId('config-chip'))
+    expect(screen.getByTestId('config-sheet')).toBeTruthy()
+    const bypass = screen
+      .getAllByTestId('config-value')
+      .find((value) => value.getAttribute('data-value') === 'bypassPermissions')!
+    expect((bypass as HTMLButtonElement).disabled).toBe(true)
+    expect(bypass.textContent).toContain(strings.configNeedsPc)
   })
 
   it('renders a removed session and lets the user go back', () => {
@@ -260,6 +386,23 @@ describe('SessionPage snapshot rendering', () => {
     expect(after).toBe(before + 1)
   })
 })
+
+function pendingPermission() {
+  return {
+    requestId: 'req-1',
+    toolCallId: 't1',
+    title: 'Run the command',
+    options: [
+      { optionId: 'allow-once', name: '允许一次', kind: 'allow_once', allowedOnMobile: true },
+      {
+        optionId: 'allow-with-updates',
+        name: '总是允许',
+        kind: 'allow_always',
+        allowedOnMobile: false,
+      },
+    ],
+  }
+}
 
 function frameType(frame: unknown): string | undefined {
   if (typeof frame !== 'object' || frame === null) return undefined

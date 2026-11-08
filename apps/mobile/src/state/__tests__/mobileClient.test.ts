@@ -122,4 +122,56 @@ describe('MobileClient session subscription', () => {
     expect(types).toContain('subscribe_inbox')
     expect(types.filter((type) => type === 'subscribe_session')).toHaveLength(1)
   })
+
+  it('corrects the PC clock from hello_ok', () => {
+    const { client } = createHarness()
+    expect(Math.abs(client.serverNow() - 1)).toBeLessThan(1_000)
+  })
+
+  it('sends session commands with the open ref and resolves stale as success', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    const resolved = client.resolvePermission('req-1', 'allow-once')
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { requestId: string; kind: string; payload: unknown; idempotencyKey?: string }
+    expect(command).toMatchObject({
+      kind: 'resolvePermission',
+      payload: { ref: { windowId: 1, localId: 's1' }, requestId: 'req-1', optionId: 'allow-once' },
+    })
+    expect(command.idempotencyKey).toBeTruthy()
+
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: false,
+      error: 'stale_request',
+    })
+    await expect(resolved).resolves.toBeUndefined()
+  })
+
+  it('rejects commands while the gateway is not connected', async () => {
+    const { client, sockets } = createHarness()
+    client.openSession('1:s1')
+    sockets[0]!.serverClose(1006)
+    await expect(client.sendPrompt('hello')).rejects.toMatchObject({ code: 'network' })
+  })
+
+  it('auto-generates an idempotency key for newSession', () => {
+    const { client, sockets } = createHarness()
+    void client.newSession('echo', { folder: 'file:///work' }).catch(() => undefined)
+    const command = sentFrames(sockets[0]!).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { kind: string; idempotencyKey?: string }
+    expect(command.kind).toBe('newSession')
+    expect(command.idempotencyKey).toBeTruthy()
+  })
 })

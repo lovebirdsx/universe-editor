@@ -4,8 +4,10 @@ export type Route =
   | { readonly name: 'pair' }
   | { readonly name: 'inbox' }
   | { readonly name: 'session'; readonly sessionKey: string }
+  | { readonly name: 'new-session' }
 
 export const SESSION_ROUTE_PREFIX = '/s/'
+export const NEW_SESSION_PATH = '/new'
 
 export function sessionPath(sessionKey: string): string {
   return `${SESSION_ROUTE_PREFIX}${encodeURIComponent(sessionKey)}`
@@ -13,6 +15,7 @@ export function sessionPath(sessionKey: string): string {
 
 export function readRoute(pathname: string): Route {
   if (pathname === MOBILE_PAIR_PAGE_PATH) return { name: 'pair' }
+  if (pathname === NEW_SESSION_PATH) return { name: 'new-session' }
   if (pathname.startsWith(SESSION_ROUTE_PREFIX)) {
     const raw = pathname.slice(SESSION_ROUTE_PREFIX.length)
     if (raw !== '') {
@@ -36,6 +39,10 @@ export function navigateToSession(
   history: Pick<History, 'pushState'> = window.history,
 ): void {
   history.pushState({ mobile: true }, '', sessionPath(sessionKey))
+}
+
+export function navigateToNewSession(history: Pick<History, 'pushState'> = window.history): void {
+  history.pushState({ mobile: true }, '', NEW_SESSION_PATH)
 }
 
 export function navigateToInbox(history: Pick<History, 'pushState'> = window.history): void {

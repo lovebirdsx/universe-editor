@@ -5,7 +5,7 @@ import { formatUpdatedAt, groupSessions } from './groupSessions.js'
 
 export interface InboxGroupsProps {
   readonly sessions: readonly MobileSessionSummary[]
-  readonly onOpenSession?: ((sessionKey: string) => void) | undefined
+  readonly onOpenSession?: ((sessionKey: string, focusPending: boolean) => void) | undefined
   /** The PC is offline / reconnecting: keep the list visible but de-emphasised. */
   readonly stale?: boolean | undefined
 }
@@ -45,12 +45,15 @@ export function InboxGroups({ sessions, onOpenSession, stale }: InboxGroupsProps
 
 interface SessionRowProps {
   readonly session: MobileSessionSummary
-  readonly onOpenSession?: ((sessionKey: string) => void) | undefined
+  readonly onOpenSession?: ((sessionKey: string, focusPending: boolean) => void) | undefined
   readonly disabled: boolean
 }
 
 function SessionRow({ session, onOpenSession, disabled }: SessionRowProps) {
   const routeKey = sessionRouteKey(session.ref)
+  const focusPending =
+    session.bucket === 'input_needed' &&
+    (session.hasPendingPermission || session.hasPendingElicitation)
   const agent = session.agentName ?? session.agentId
   const badges: string[] = []
   if (session.hasPendingPermission) badges.push(strings.badgePermission)
@@ -68,7 +71,7 @@ function SessionRow({ session, onOpenSession, disabled }: SessionRowProps) {
       data-testid="inbox-session-row"
       data-session-key={routeKey}
       disabled={disabled}
-      onClick={() => onOpenSession?.(routeKey)}
+      onClick={() => onOpenSession?.(routeKey, focusPending)}
     >
       <span
         className={`session-card__dot session-card__dot--${session.bucket}`}

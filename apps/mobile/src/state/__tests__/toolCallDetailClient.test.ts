@@ -2,11 +2,8 @@ import type { CommandFrame, MobileToolCallDetail } from '@universe-editor/mobile
 import { describe, expect, it } from 'vitest'
 import { FakeTimers } from '../../test/fakes.js'
 import { sessionRef } from '../../test/protocolFixtures.js'
-import {
-  TOOL_CALL_DETAIL_TIMEOUT_MS,
-  ToolCallDetailClient,
-  ToolCallDetailError,
-} from '../toolCallDetailClient.js'
+import { CommandClient, CommandError } from '../commandClient.js'
+import { TOOL_CALL_DETAIL_TIMEOUT_MS, ToolCallDetailClient } from '../toolCallDetailClient.js'
 
 function detail(id = 't1'): MobileToolCallDetail {
   return {
@@ -21,21 +18,25 @@ function detail(id = 't1'): MobileToolCallDetail {
 
 function createClient(): {
   readonly client: ToolCallDetailClient
+  readonly commands: CommandClient
   readonly sent: CommandFrame[]
   readonly timers: FakeTimers
 } {
   const sent: CommandFrame[] = []
   const timers = new FakeTimers()
-  const client = new ToolCallDetailClient({
+  let sequence = 0
+  const commands = new CommandClient({
     send: (frame) => sent.push(frame),
     timers,
+    createRequestId: () => `request-${++sequence}`,
   })
-  return { client, sent, timers }
+  const client = new ToolCallDetailClient(commands)
+  return { client, commands, sent, timers }
 }
 
 describe('ToolCallDetailClient', () => {
   it('correlates a command_result with the pending request', async () => {
-    const { client, sent } = createClient()
+    const { client, commands, sent } = createClient()
     const promise = client.request(sessionRef('s1'), 't1')
 
     expect(sent).toHaveLength(1)
@@ -47,7 +48,7 @@ describe('ToolCallDetailClient', () => {
     })
 
     expect(
-      client.handleResult({
+      commands.handleResult({
         type: 'command_result',
         requestId: frame.requestId,
         ok: true,
@@ -66,15 +67,15 @@ describe('ToolCallDetailClient', () => {
 
     timers.advance(1)
     const error = await outcome
-    expect(error).toBeInstanceOf(ToolCallDetailError)
+    expect(error).toBeInstanceOf(CommandError)
     expect(error).toMatchObject({ code: 'timeout' })
   })
 
   it('rejects with the gateway error code', async () => {
-    const { client, sent } = createClient()
+    const { client, commands, sent } = createClient()
     const promise = client.request(sessionRef('s1'), 't1')
     const rejection = expect(promise).rejects.toMatchObject({ code: 'session_not_found' })
-    client.handleResult({
+    commands.handleResult({
       type: 'command_result',
       requestId: sent[0]!.requestId,
       ok: false,
@@ -84,9 +85,9 @@ describe('ToolCallDetailClient', () => {
   })
 
   it('caches a successful result per tool call until invalidated', async () => {
-    const { client, sent } = createClient()
+    const { client, commands, sent } = createClient()
     const first = client.request(sessionRef('s1'), 't1')
-    client.handleResult({
+    commands.handleResult({
       type: 'command_result',
       requestId: sent[0]!.requestId,
       ok: true,
@@ -101,7 +102,7 @@ describe('ToolCallDetailClient', () => {
     const third = client.request(sessionRef('s1'), 't1')
     expect(sent).toHaveLength(2)
     expect(
-      client.handleResult({
+      commands.handleResult({
         type: 'command_result',
         requestId: sent[1]!.requestId,
         ok: true,
@@ -112,17 +113,17 @@ describe('ToolCallDetailClient', () => {
   })
 
   it('rejects pending requests when cleared', async () => {
-    const { client } = createClient()
+    const { client, commands } = createClient()
     const promise = client.request(sessionRef('s1'), 't1')
     const rejection = expect(promise).rejects.toMatchObject({ code: 'cancelled' })
-    client.clear()
+    commands.clear()
     await rejection
   })
 
   it('ignores results that match no pending request', () => {
-    const { client } = createClient()
+    const { commands } = createClient()
     expect(
-      client.handleResult({
+      commands.handleResult({
         type: 'command_result',
         requestId: 'missing',
         ok: true,
