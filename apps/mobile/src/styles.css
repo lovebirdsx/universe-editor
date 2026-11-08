@@ -224,6 +224,23 @@ input:focus-visible {
   font-size: 15px;
 }
 
+.pair-page__fingerprint {
+  margin-top: 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.pair-page__fingerprint-value {
+  display: block;
+  margin-top: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
 .pair-form {
   margin-top: 22px;
   display: flex;

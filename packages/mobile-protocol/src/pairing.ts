@@ -80,9 +80,28 @@ export function formatPairCode(input: string): string {
 }
 
 /** The one-time code lives in the fragment so it never reaches server logs or Referer. */
-export function buildPairUrl(origin: string, code: string): string {
+export function buildPairUrl(origin: string, code: string, fingerprint?: string): string {
   const base = origin.replace(/\/+$/, '')
-  return `${base}${MOBILE_PAIR_PAGE_PATH}#code=${encodeURIComponent(normalizePairCode(code))}`
+  const normalizedFingerprint =
+    fingerprint === undefined ? undefined : normalizeCertFingerprint(fingerprint)
+  const params = [`code=${encodeURIComponent(normalizePairCode(code))}`]
+  if (normalizedFingerprint !== undefined) params.push(`fp=${normalizedFingerprint}`)
+  return `${base}${MOBILE_PAIR_PAGE_PATH}#${params.join('&')}`
+}
+
+/**
+ * SHA-256 certificate fingerprints travel as lowercase hex without separators;
+ * browsers display the same bytes as uppercase colon-separated pairs.
+ */
+export function normalizeCertFingerprint(input: string): string | undefined {
+  const hex = input.replace(/[:\s]/gu, '').toLowerCase()
+  return /^[0-9a-f]{64}$/u.test(hex) ? hex : undefined
+}
+
+export function formatCertFingerprint(input: string): string {
+  const hex = normalizeCertFingerprint(input)
+  if (hex === undefined) return input
+  return (hex.match(/.{2}/gu) ?? []).join(':').toUpperCase()
 }
 
 /**
@@ -96,4 +115,13 @@ export function parsePairFragment(hash: string): string | undefined {
   if (code === null) return undefined
   const normalized = normalizePairCode(code)
   return normalized === '' ? undefined : normalized
+}
+
+/** Extracts the self-signed certificate fingerprint when the link carries one. */
+export function parsePairFingerprint(hash: string): string | undefined {
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash
+  if (raw === '') return undefined
+  const fingerprint = new URLSearchParams(raw).get('fp')
+  if (fingerprint === null) return undefined
+  return normalizeCertFingerprint(fingerprint)
 }

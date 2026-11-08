@@ -10,6 +10,7 @@ import { appendFile, mkdir, readFile, rename, rm, stat } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export const AUDIT_ROTATE_BYTES = 1024 * 1024
+export const AUDIT_ROTATED_FILES = 3
 
 export interface AuditEntry {
   readonly ts: number
@@ -26,11 +27,14 @@ export type AuditInput = Omit<AuditEntry, 'ts'> & { readonly ts?: number }
 export interface AuditLogOptions {
   readonly now?: () => number
   readonly maxBytes?: number
+  /** Number of rotated generations kept (`audit.jsonl.1` … `.N`). */
+  readonly maxFiles?: number
 }
 
 export class AuditLog {
   private readonly _now: () => number
   private readonly _maxBytes: number
+  private readonly _maxFiles: number
   private _queue: Promise<unknown> = Promise.resolve()
 
   constructor(
@@ -39,6 +43,7 @@ export class AuditLog {
   ) {
     this._now = options.now ?? Date.now
     this._maxBytes = options.maxBytes ?? AUDIT_ROTATE_BYTES
+    this._maxFiles = Math.max(1, options.maxFiles ?? AUDIT_ROTATED_FILES)
   }
 
   append(input: AuditInput): Promise<void> {
@@ -56,13 +61,11 @@ export class AuditLog {
     return this._enqueue(async () => {
       const max = Math.max(1, Math.floor(limit))
       const lines: string[] = []
-      for (const file of [`${this._file}.1`, this._file]) {
-        try {
-          lines.push(...(await readFile(file, 'utf8')).split('\n'))
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-        }
+      // Oldest generation first, so a final slice(-max) is chronological.
+      for (let index = this._maxFiles; index >= 1; index -= 1) {
+        lines.push(...(await this._readLines(`${this._file}.${index}`)))
       }
+      lines.push(...(await this._readLines(this._file)))
       const entries: AuditEntry[] = []
       for (const line of lines) {
         if (line.trim() === '') continue
@@ -77,6 +80,15 @@ export class AuditLog {
     })
   }
 
+  private async _readLines(file: string): Promise<string[]> {
+    try {
+      return (await readFile(file, 'utf8')).split('\n')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      return []
+    }
+  }
+
   private async _rotateIfNeeded(incomingBytes: number): Promise<void> {
     let size = 0
     try {
@@ -86,9 +98,12 @@ export class AuditLog {
       return
     }
     if (size === 0 || size + incomingBytes <= this._maxBytes) return
-    const rotated = `${this._file}.1`
-    await rm(rotated, { force: true })
-    await rename(this._file, rotated)
+
+    await rm(`${this._file}.${this._maxFiles}`, { force: true })
+    for (let index = this._maxFiles - 1; index >= 1; index -= 1) {
+      await moveIfExists(`${this._file}.${index}`, `${this._file}.${index + 1}`)
+    }
+    await rename(this._file, `${this._file}.1`)
   }
 
   private _enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -98,6 +113,15 @@ export class AuditLog {
       () => undefined,
     )
     return run
+  }
+}
+
+async function moveIfExists(from: string, to: string): Promise<void> {
+  try {
+    await rename(from, to)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw err
   }
 }
 

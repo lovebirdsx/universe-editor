@@ -17,6 +17,9 @@ export const strings = {
   pairSubmitting: '配对中…',
   pairInvalidCode: '请输入 8 位配对码（形如 XXXX-XXXX）。',
   pairMissingDeviceName: '请输入设备名称。',
+  pairCertTitle: '期望的证书指纹',
+  pairCertHint:
+    '本页无法读取实际证书。请打开浏览器的证书详情（接受「不安全」提示时可查看），确认其 SHA-256 指纹与此处及 PC 设置页一致；不一致时不要配对。',
 
   pairErrorUnauthorized: '配对码无效或已过期，请在 PC 上重新生成。',
   pairErrorRateLimited: '尝试次数过多，请稍后再试。',

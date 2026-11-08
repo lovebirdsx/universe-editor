@@ -6,11 +6,14 @@ import {
   PAIR_CODE_ALPHABET,
   PAIR_CODE_LENGTH,
   buildPairUrl,
+  formatCertFingerprint,
   formatPairCode,
   generatePairCode,
   isValidPairCodeShape,
+  normalizeCertFingerprint,
   normalizePairCode,
   parsePairFragment,
+  parsePairFingerprint,
 } from '../index.js'
 
 describe('pairing paths', () => {
@@ -121,5 +124,35 @@ describe('pair URL round trip', () => {
     expect(parsePairFragment('#')).toBeUndefined()
     expect(parsePairFragment('#foo=bar')).toBeUndefined()
     expect(parsePairFragment('#code=')).toBeUndefined()
+  })
+})
+
+describe('certificate fingerprint in pairing links', () => {
+  const fingerprint = '00112233445566778899aabbccddeeff'.repeat(2)
+
+  it('appends the fingerprint next to the code and parses it back', () => {
+    const url = buildPairUrl('https://192.0.2.10:8443', 'ABCD2345', fingerprint)
+    expect(url).toBe(`https://192.0.2.10:8443/pair#code=ABCD2345&fp=${fingerprint}`)
+    expect(parsePairFragment(new URL(url).hash)).toBe('ABCD2345')
+    expect(parsePairFingerprint(new URL(url).hash)).toBe(fingerprint)
+  })
+
+  it('accepts browser-style uppercase colon-separated fingerprints', () => {
+    const display = formatCertFingerprint(fingerprint)
+    expect(display).toMatch(/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/u)
+    expect(normalizeCertFingerprint(display)).toBe(fingerprint)
+    const url = buildPairUrl('https://192.0.2.10:8443', 'ABCD2345', display)
+    expect(url.endsWith(`&fp=${fingerprint}`)).toBe(true)
+  })
+
+  it('omits the fingerprint when absent or malformed', () => {
+    expect(buildPairUrl('https://pc.example.com', 'ABCD2345')).toBe(
+      'https://pc.example.com/pair#code=ABCD2345',
+    )
+    expect(buildPairUrl('https://pc.example.com', 'ABCD2345', 'not-a-fingerprint')).toBe(
+      'https://pc.example.com/pair#code=ABCD2345',
+    )
+    expect(parsePairFingerprint('#code=ABCD2345&fp=bogus')).toBeUndefined()
+    expect(parsePairFingerprint('#code=ABCD2345')).toBeUndefined()
   })
 })

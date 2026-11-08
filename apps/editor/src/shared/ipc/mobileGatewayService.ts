@@ -40,10 +40,19 @@ export interface MobileGatewayConfig {
 }
 
 export interface MobileGatewayCapabilities {
-  /** True when at least one origin is HTTPS (service worker / installability). */
+  /** True when a trusted HTTPS origin exists (Service Worker / installability). */
   readonly installable: boolean
-  /** True when at least one origin is HTTPS (Web Push requires a secure context). */
+  /** True when a trusted HTTPS origin exists (Web Push requires a secure context). */
   readonly push: boolean
+}
+
+export interface MobileGatewayCertificateInfo {
+  /** Lowercase hex SHA-256; the pairing link and phone pair page show it. */
+  readonly fingerprint: string
+  /** SAN entries: the bound LAN address and the PC host name. */
+  readonly addresses: readonly string[]
+  /** Epoch milliseconds. */
+  readonly expiresAt: number
 }
 
 export interface MobileGatewayStatus {
@@ -58,6 +67,8 @@ export interface MobileGatewayStatus {
   readonly bind: MobileGatewayBindMode
   readonly capabilities: MobileGatewayCapabilities
   readonly connectedDeviceCount: number
+  /** Present on the LAN tier while its self-signed certificate is loaded. */
+  readonly certificate?: MobileGatewayCertificateInfo
 }
 
 export interface MobileDeviceInfo {

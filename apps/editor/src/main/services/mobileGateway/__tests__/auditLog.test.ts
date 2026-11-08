@@ -51,6 +51,25 @@ describe('AuditLog', () => {
     expect(recent.at(-1)?.deviceId).toBe('device-7')
   })
 
+  it('keeps a bounded number of rotated generations', async () => {
+    const log = new AuditLog(file, { now: () => 1_000, maxBytes: 200, maxFiles: 2 })
+    for (let index = 0; index < 30; index += 1) {
+      await log.append({
+        deviceId: `device-${index}`,
+        action: 'device_connected',
+        result: 'success',
+      })
+    }
+    await expect(fs.stat(`${file}.1`)).resolves.toBeDefined()
+    await expect(fs.stat(`${file}.2`)).resolves.toBeDefined()
+    await expect(fs.stat(`${file}.3`)).rejects.toMatchObject({ code: 'ENOENT' })
+
+    const recent = await log.recent(200)
+    expect(recent.at(-1)?.deviceId).toBe('device-29')
+    const ids = recent.map((entry) => entry.deviceId)
+    expect(new Set(ids).size).toBe(ids.length)
+  })
+
   it('skips malformed lines instead of failing reads', async () => {
     const log = new AuditLog(file)
     await log.append({ action: 'gateway_start', result: 'success' })

@@ -131,6 +131,11 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'product.json',
   },
   {
+    label: 'mobile PWA shell',
+    source: join(repoRoot, 'apps/mobile/dist/index.html'),
+    packaged: 'mobile/index.html',
+  },
+  {
     label: 'user guide docs',
     source: join(repoRoot, 'docs/user/zh-CN/index.md'),
     packaged: 'docs/user/zh-CN/index.md',
@@ -348,6 +353,10 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   // Extension-author docs ship the same way and load through the same
   // IDocsService pipeline, as a separate doc category.
   copyPath(join(repoRoot, 'docs/extension-dev'), join(stageDir, 'docs/extension-dev'))
+
+  // Phone PWA. The gateway serves these files from <resources>/mobile in a
+  // packaged build and from apps/mobile/dist during development.
+  copyPath(join(repoRoot, 'apps/mobile/dist'), join(stageDir, 'mobile'))
 
   // Built-in agent skills (`.claude/skills/<name>/SKILL.md` tree) ship beside
   // app.asar; the renderer passes this root to every local ACP session as an

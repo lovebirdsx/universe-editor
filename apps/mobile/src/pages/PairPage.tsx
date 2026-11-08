@@ -1,7 +1,9 @@
 import {
+  formatCertFingerprint,
   isValidPairCodeShape,
   normalizePairCode,
   parsePairFragment,
+  parsePairFingerprint,
 } from '@universe-editor/mobile-protocol'
 import { useState, type FormEvent } from 'react'
 import type { CredentialStore, SaveCredentialsResult, StoredCredentials } from '../credentials.js'
@@ -17,6 +19,7 @@ export interface PairPageProps {
 export function PairPage({ store, onPaired, pairRequest }: PairPageProps) {
   const [guess] = useState(() => guessDevice(navigator.userAgent))
   const [code, setCode] = useState(() => parsePairFragment(window.location.hash) ?? '')
+  const [fingerprint] = useState(() => parsePairFingerprint(window.location.hash))
   const [deviceName, setDeviceName] = useState(guess.deviceName)
   const [busy, setBusy] = useState(false)
   const [errorText, setErrorText] = useState<string | undefined>(undefined)
@@ -85,6 +88,16 @@ export function PairPage({ store, onPaired, pairRequest }: PairPageProps) {
       <section className="card">
         <h1 className="pair-page__title">{strings.pairTitle}</h1>
         <p className="pair-page__intro">{strings.pairIntro}</p>
+
+        {fingerprint !== undefined && (
+          <div className="pair-page__fingerprint" data-testid="pair-certificate">
+            <div className="field__label">{strings.pairCertTitle}</div>
+            <code className="pair-page__fingerprint-value">
+              {formatCertFingerprint(fingerprint)}
+            </code>
+            <p className="field__hint">{strings.pairCertHint}</p>
+          </div>
+        )}
 
         <form className="pair-form" onSubmit={(event) => void submit(event)}>
           <div className="field">

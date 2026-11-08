@@ -19,6 +19,15 @@ import { writeJsonAtomic } from './atomicFile.js'
 
 const FILE_VERSION = 2
 const TOKEN_BYTES = 32
+/** Paired-device cap; each device can hold up to MAX_CONNECTIONS_PER_DEVICE sockets. */
+export const MAX_PAIRED_DEVICES = 32
+
+export class DeviceLimitError extends Error {
+  constructor() {
+    super(`paired device limit reached (${MAX_PAIRED_DEVICES})`)
+    this.name = 'DeviceLimitError'
+  }
+}
 
 export interface MobileNotificationPrefsRecord {
   readonly enabled: boolean
@@ -100,6 +109,7 @@ export class DeviceStore {
   add(input: { name: string; platform: string }): Promise<AddedMobileDevice> {
     return this._enqueue(async () => {
       const file = await this._load()
+      if (file.devices.length >= MAX_PAIRED_DEVICES) throw new DeviceLimitError()
       const createdAt = this._now()
       const token = randomBytes(TOKEN_BYTES).toString('base64url')
       const device: MobileDeviceRecord = {

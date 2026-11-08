@@ -20,9 +20,17 @@ export async function writeJsonAtomic(
   value: unknown,
   onChmodError?: (error: Error) => void,
 ): Promise<void> {
+  await writeFileAtomic(path, `${JSON.stringify(value, null, 2)}\n`, onChmodError)
+}
+
+export async function writeFileAtomic(
+  path: string,
+  content: string,
+  onChmodError?: (error: Error) => void,
+): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
   const tmp = `${path}.${process.pid}.${tmpSeq++}.tmp`
-  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  await writeFile(tmp, content, { encoding: 'utf8', mode: 0o600 })
   await renameWithRetries(tmp, path)
   await chmodPrivate(path, onChmodError)
 }

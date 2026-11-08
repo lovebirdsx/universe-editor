@@ -9,6 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { existsSync } from 'node:fs'
+import { request as httpsRequest } from 'node:https'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { chromium, devices, type Browser, type BrowserContext, type Page } from '@playwright/test'
@@ -30,6 +31,7 @@ import {
   expect,
   test,
 } from '../fixtures/mobileApp.js'
+import { TLS_MOBILE_E2E_CODE, tlsTest } from '../fixtures/mobileAppTls.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
@@ -232,6 +234,56 @@ function openSocket(origin: string): Promise<WebSocket> {
   })
 }
 
+function openTlsSocket(origin: string): Promise<WebSocket> {
+  const ws = new WebSocket(`${origin.replace(/^http/, 'ws')}/ws`, {
+    origin,
+    rejectUnauthorized: false,
+  })
+  return new Promise((resolveSocket, reject) => {
+    ws.once('open', () => resolveSocket(ws))
+    ws.once('error', reject)
+  })
+}
+
+interface TlsResponse {
+  readonly status: number
+  readonly headers: Record<string, string | string[] | undefined>
+  readonly body: string
+}
+
+function tlsRequest(
+  origin: string,
+  path: string,
+  init: { method?: string; body?: string } = {},
+): Promise<TlsResponse> {
+  const url = new URL(path, origin)
+  return new Promise((resolveResponse, reject) => {
+    const request = httpsRequest(
+      {
+        host: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        method: init.method ?? 'GET',
+        headers: init.body === undefined ? undefined : { 'content-type': 'application/json' },
+        rejectUnauthorized: false,
+      },
+      (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk: Buffer) => chunks.push(chunk))
+        response.on('end', () =>
+          resolveResponse({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          }),
+        )
+      },
+    )
+    request.on('error', reject)
+    request.end(init.body)
+  })
+}
+
 /** Pair an iPhone 13 browser context through the PWA and wait for the PC to see it online. */
 async function pairPhone(page: Page, workbench: WorkbenchPO): Promise<PairedPhone> {
   await openSettings(page, workbench)
@@ -340,6 +392,19 @@ test.describe('mobile gateway', () => {
     expect(origin).toBe(EXPECTED_ORIGIN)
 
     await expect(page.getByTestId('mobile-gateway-listen')).toHaveText(EXPECTED_LISTEN_ADDRESS)
+  })
+
+  test('@p0 pairs a raw phone, completes hello and receives the inbox snapshot', async ({
+    page,
+    workbench,
+  }) => {
+    const { ws } = await connectRawPhone(page, workbench)
+    try {
+      const snapshot = await subscribeInbox(ws)
+      expect(snapshot.sessions).toEqual([])
+    } finally {
+      ws.close()
+    }
   })
 
   test('@p0 pairs an iPhone and shows the empty inbox plus an online device', async ({
@@ -905,4 +970,59 @@ test.describe('mobile gateway in a workspace', () => {
       await browser.close()
     }
   })
+})
+
+tlsTest.describe('mobile gateway LAN HTTPS', () => {
+  tlsTest.describe.configure({ mode: 'default' })
+
+  tlsTest(
+    '@p1 serves the LAN tier over self-signed HTTPS and pairs a phone',
+    async ({ page, workbench }) => {
+      await openSettings(page, workbench)
+      await expect.poll(async () => (await gatewayStatus(page)).state).toBe('running')
+
+      const status = await gatewayStatus(page)
+      const origin = status.origins[0]
+      expect(origin).toMatch(/^https:\/\/127\.0\.0\.1:\d+$/u)
+      expect(status.certificate?.fingerprint).toMatch(/^[0-9a-f]{64}$/u)
+      expect(status.certificate?.addresses).toContain('127.0.0.1')
+      expect(status.capabilities).toEqual({ installable: false, push: false })
+
+      const shell = await tlsRequest(origin!, '/pair')
+      expect(shell.status).toBe(200)
+      expect(shell.body).toContain('<!doctype html>')
+      expect(shell.headers['strict-transport-security']).toBe('max-age=31536000')
+      expect(shell.headers['content-security-policy']).toContain("frame-ancestors 'none'")
+
+      await startPairing(page)
+      const paired = await tlsRequest(origin!, '/api/pair', {
+        method: 'POST',
+        body: JSON.stringify({
+          code: TLS_MOBILE_E2E_CODE,
+          deviceName: 'TLS Phone',
+          platform: 'other',
+        }),
+      })
+      expect(paired.status).toBe(200)
+      const { token } = JSON.parse(paired.body) as { token: string }
+
+      const ws = await openTlsSocket(origin!)
+      try {
+        const helloPromise = nextFrameOfType(ws, 'hello_ok')
+        ws.send(
+          serializeFrame({
+            type: 'hello',
+            protocolVersion: MOBILE_PROTOCOL_VERSION,
+            token,
+            clientVersion: 'e2e-tls',
+            capabilities: ['inbox'],
+          }),
+        )
+        expect((await helloPromise).capabilities).toContain('inbox')
+        expect((await subscribeInbox(ws)).sessions).toEqual([])
+      } finally {
+        ws.close()
+      }
+    },
+  )
 })

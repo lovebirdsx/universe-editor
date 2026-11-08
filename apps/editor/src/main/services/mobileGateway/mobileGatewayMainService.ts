@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { BrowserWindow, app } from 'electron'
-import { networkInterfaces } from 'node:os'
+import { hostname, networkInterfaces } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
   Disposable,
@@ -54,7 +54,9 @@ import {
   parseMobileGatewayConfig,
   readMobileGatewayConfig,
   resolveGatewayRuntime,
+  type GatewayOrigins,
 } from './gatewayConfig.js'
+import { ensureLanCertificate, type LanCertificate } from './lanCertificate.js'
 import { buildAllowedHosts } from './requestSecurity.js'
 import {
   HEARTBEAT_INTERVAL_MS,
@@ -90,6 +92,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private readonly _pairing: PairingService
   private readonly _audit: AuditLog
   private readonly _assetsDir: string
+  private readonly _mobileDir: string
   private readonly _onDidChangeStatus = this._register(new Emitter<MobileGatewayStatus>())
   readonly onDidChangeStatus: Event<MobileGatewayStatus> = this._onDidChangeStatus.event
   private readonly _onDidChangeDevices = this._register(new Emitter<readonly MobileDeviceInfo[]>())
@@ -106,6 +109,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _insecure = false
   private _listenAddress: string | undefined
   private _origins: readonly string[] = []
+  private _originsInfo: GatewayOrigins = { urls: [], trustedSecure: false }
+  private _certificate: LanCertificate | undefined
+  private _lanOrigin: string | undefined
   private _server: MobileGatewayServer | undefined
   private _router: MobileNotificationRouter | undefined
   private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
@@ -144,6 +150,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     )
 
     const mobileDir = join(app.getPath('userData'), 'mobile')
+    this._mobileDir = mobileDir
     this._deviceStore = new DeviceStore(join(mobileDir, 'devices.json'), {
       onCorrupt: (error) => this._logger.warn(`devices.json is unreadable: ${error.message}`),
       onChmodError: (error) =>
@@ -177,7 +184,13 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     return Promise.resolve({
       code,
       expiresAt: session.expiresAt,
-      pairUrls: this._origins.map((origin) => buildPairUrl(origin, session.code)),
+      pairUrls: this._origins.map((origin) =>
+        buildPairUrl(
+          origin,
+          session.code,
+          origin === this._lanOrigin ? this._certificate?.fingerprint : undefined,
+        ),
+      ),
     })
   }
 
@@ -361,10 +374,32 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       port: runtime.port,
       extraHosts: this._config.allowedHosts,
     })
+
+    let certificate: LanCertificate | undefined
+    if (runtime.secure) {
+      try {
+        certificate = await ensureLanCertificate({
+          dir: join(this._mobileDir, 'tls'),
+          addresses: lanCertificateAddresses(runtime.host),
+          onChmodError: (error) =>
+            this._logger.warn(`mobile TLS key chmod 0600 failed: ${error.message}`),
+        })
+      } catch (err) {
+        await this._teardown()
+        const message = `无法为局域网档生成 HTTPS 证书：${err instanceof Error ? err.message : String(err)}`
+        this._logger.error(message)
+        this._setError(message)
+        this._recordAudit({ action: 'gateway_error', result: 'failure', detail: message })
+        return
+      }
+    }
+
     const vapid = await this._vapidPromise
     const runningKey = JSON.stringify({
       host: runtime.host,
       port: runtime.port,
+      secure: runtime.secure,
+      tlsFingerprint: certificate?.fingerprint,
       allowedHosts,
       assetsDir: this._assetsDir,
       vapidSubject: this._config.vapidSubject,
@@ -383,6 +418,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       audit: this._audit,
       logger: this._logger,
       serverVersion: getAppVersion(),
+      ...(certificate !== undefined
+        ? { tls: { cert: certificate.cert, key: certificate.key } }
+        : {}),
       helloTimeoutMs: HELLO_TIMEOUT_MS,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
@@ -417,23 +455,28 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       })
       void this._refreshAttentionState()
       this._listenAddress = `${runtime.host}:${port}`
-      this._origins = buildOrigins({
+      this._originsInfo = buildOrigins({
         bind: runtime.bind,
         host: runtime.host,
         port,
+        secure: runtime.secure,
         allowedHosts: this._config.allowedHosts,
       })
+      this._origins = this._originsInfo.urls
+      this._certificate = certificate
+      this._lanOrigin =
+        runtime.bind === 'lan' && runtime.secure ? `https://${runtime.host}:${port}` : undefined
       this._runningKey = runningKey
       this._state = 'running'
       this._error = undefined
       this._emitStatus()
       this._logger.info(
-        `started bind=${runtime.bind} address=${this._listenAddress} insecure=${runtime.insecure}`,
+        `started bind=${runtime.bind} address=${this._listenAddress} secure=${runtime.secure} insecure=${runtime.insecure}`,
       )
       this._recordAudit({
         action: 'gateway_start',
         result: 'success',
-        detail: `${runtime.bind} ${this._listenAddress}`,
+        detail: `${runtime.bind} ${this._listenAddress}${runtime.secure ? ' https' : ''}`,
       })
     } catch (err) {
       const message = describeListenError(err, runtime.host, runtime.port)
@@ -441,6 +484,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       this._server = undefined
       this._listenAddress = undefined
       this._origins = []
+      this._originsInfo = { urls: [], trustedSecure: false }
+      this._certificate = undefined
+      this._lanOrigin = undefined
       this._setError(message)
       this._recordAudit({ action: 'gateway_error', result: 'failure', detail: message })
     }
@@ -453,6 +499,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._runningKey = undefined
     this._listenAddress = undefined
     this._origins = []
+    this._originsInfo = { urls: [], trustedSecure: false }
+    this._certificate = undefined
+    this._lanOrigin = undefined
     this._insecure = false
     if (server === undefined) return
     await server.stop()
@@ -502,8 +551,17 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       origins: this._origins,
       insecure: this._insecure,
       bind: this._bind,
-      capabilities: capabilitiesForOrigins(this._origins),
+      capabilities: capabilitiesForOrigins(this._originsInfo),
       connectedDeviceCount: this._server?.getConnectedDeviceCount() ?? 0,
+      ...(this._certificate !== undefined
+        ? {
+            certificate: {
+              fingerprint: this._certificate.fingerprint,
+              addresses: this._certificate.addresses,
+              expiresAt: this._certificate.expiresAt,
+            },
+          }
+        : {}),
     }
   }
 
@@ -559,6 +617,14 @@ function resolveMobileAssetsDir(): string {
   if (override !== undefined && override !== '') return resolve(override)
   if (app.isPackaged) return join(process.resourcesPath, 'mobile')
   return resolveFromRepo('apps/mobile/dist')
+}
+
+/** Cover the bound address and the PC host name so both URLs validate. */
+function lanCertificateAddresses(host: string): string[] {
+  const addresses = [host]
+  const name = hostname().trim()
+  if (name !== '' && !addresses.includes(name)) addresses.push(name)
+  return addresses
 }
 
 function describeListenError(err: unknown, host: string, port: number): string {

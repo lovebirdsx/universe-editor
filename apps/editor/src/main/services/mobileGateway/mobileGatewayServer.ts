@@ -8,6 +8,7 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
@@ -28,7 +29,7 @@ import {
 } from '@universe-editor/mobile-protocol'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { AuditLog } from './auditLog.js'
-import type { DeviceStore } from './deviceStore.js'
+import { DeviceLimitError, type DeviceStore } from './deviceStore.js'
 import { HelloFailureLimiter } from './helloFailureLimiter.js'
 import type { MobileGatewayHub, MobileGatewayHubConnection } from './mobileGatewayHub.js'
 import type { PairingService } from './pairingService.js'
@@ -45,11 +46,19 @@ export const HELLO_TIMEOUT_MS = 5_000
 export const HEARTBEAT_INTERVAL_MS = 25_000
 export const HEARTBEAT_TIMEOUT_MS = 60_000
 export const MAX_CONNECTIONS_PER_DEVICE = 4
+/** Global socket cap, independent of which devices are connected. */
+export const MAX_TOTAL_CONNECTIONS = 64
 export const MAX_PAIR_BODY_BYTES = 4 * 1024
 
 const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'"
+  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 const POLICY_VIOLATION_CLOSE = 1008
+const HSTS_VALUE = 'max-age=31536000'
+
+export interface MobileGatewayTlsOptions {
+  readonly cert: string
+  readonly key: string
+}
 
 export interface MobileGatewayServerOptions {
   readonly host: string
@@ -61,9 +70,13 @@ export interface MobileGatewayServerOptions {
   readonly audit: AuditLog
   readonly logger: ILogger
   readonly serverVersion: string
+  /** LAN tier: serve HTTPS with the gateway-managed self-signed pair. */
+  readonly tls?: MobileGatewayTlsOptions
   readonly helloTimeoutMs?: number
   readonly heartbeatIntervalMs?: number
   readonly heartbeatTimeoutMs?: number
+  /** Overridable for tests; defaults to MAX_TOTAL_CONNECTIONS. */
+  readonly maxTotalConnections?: number
   readonly helloFailureLimiter?: HelloFailureLimiter
   readonly onConnectionsChanged?: () => void
   /** Fired after push subscription / notification preference changes. */
@@ -91,7 +104,7 @@ interface ConnectionState {
 }
 
 export class MobileGatewayServer {
-  private _httpServer: Server | undefined
+  private _httpServer: Server | HttpsServer | undefined
   private _wss: WebSocketServer | undefined
   private _heartbeat: ReturnType<typeof setInterval> | undefined
   private readonly _connections = new Set<ConnectionState>()
@@ -155,13 +168,18 @@ export class MobileGatewayServer {
   async start(): Promise<{ readonly port: number }> {
     if (this._httpServer !== undefined) throw new Error('mobile gateway server already started')
 
-    const httpServer = createServer((req, res) => {
+    const requestHandler = (req: IncomingMessage, res: ServerResponse): void => {
       void this._handleHttp(req, res).catch((err) => {
         this._options.logger.error('mobile gateway HTTP handler failed', err)
         if (!res.headersSent) this._sendText(res, 500, 'Internal Server Error')
         else res.end()
       })
-    })
+    }
+    const tls = this._options.tls
+    const httpServer: Server | HttpsServer =
+      tls === undefined
+        ? createServer(requestHandler)
+        : createHttpsServer({ cert: tls.cert, key: tls.key, minVersion: 'TLSv1.2' }, requestHandler)
     const wss = new WebSocketServer({
       noServer: true,
       maxPayload: MAX_CLIENT_FRAME_BYTES,
@@ -217,7 +235,7 @@ export class MobileGatewayServer {
     this._heartbeat = setInterval(() => this._heartbeatTick(), interval)
     this._heartbeat.unref?.()
     this._options.logger.info(
-      `listening on ${this._options.host}:${this._port} allowedHosts=${this._options.allowedHosts.join(',')}`,
+      `listening on ${this._options.tls === undefined ? 'http' : 'https'}://${this._options.host}:${this._port} allowedHosts=${this._options.allowedHosts.join(',')}`,
     )
     return { port: this._port }
   }
@@ -356,6 +374,11 @@ export class MobileGatewayServer {
         `paired device id=${deviceId} name=${added.device.name} platform=${added.device.platform}`,
       )
     } catch (err) {
+      if (err instanceof DeviceLimitError) {
+        await this._audit(remoteAddress, 'pair_attempt', 'failure', 'paired device limit reached')
+        this._sendJson(res, 429, { code: 'rate_limited', message: 'paired device limit reached' })
+        return
+      }
       this._options.logger.error('failed to persist paired device', err)
       await this._audit(remoteAddress, 'pair_attempt', 'failure', 'device store write failed')
       this._sendJson(res, 500, { code: 'internal', message: 'failed to store device' })
@@ -434,6 +457,10 @@ export class MobileGatewayServer {
       return
     }
     // Reject before the upgrade handshake so a blocked address never gets a socket.
+    if (this._connections.size >= (this._options.maxTotalConnections ?? MAX_TOTAL_CONNECTIONS)) {
+      rejectUpgrade(socket, 503, 'Too Many Connections')
+      return
+    }
     if (this._helloFailures.isBlocked(req.socket.remoteAddress ?? '')) {
       rejectUpgrade(socket, 429, 'Too Many Requests')
       return
@@ -849,8 +876,12 @@ export class MobileGatewayServer {
   private _applySecurityHeaders(res: ServerResponse, cacheControl: string): void {
     res.setHeader('Content-Security-Policy', CONTENT_SECURITY_POLICY)
     res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('X-Frame-Options', 'DENY')
     res.setHeader('Referrer-Policy', 'no-referrer')
     res.setHeader('Cache-Control', cacheControl)
+    if (this._options.tls !== undefined) {
+      res.setHeader('Strict-Transport-Security', HSTS_VALUE)
+    }
   }
 
   /**

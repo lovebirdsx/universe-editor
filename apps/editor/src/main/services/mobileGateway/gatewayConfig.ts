@@ -90,6 +90,7 @@ export interface GatewayEnvironment {
   readonly mobileGateway: string | undefined
   readonly mobilePort: string | undefined
   readonly mobileBind: string | undefined
+  readonly mobileLanAddress: string | undefined
   readonly mobileInsecure: string | undefined
 }
 
@@ -98,6 +99,7 @@ export function gatewayEnvironmentFromProcess(): GatewayEnvironment {
     mobileGateway: process.env['UNIVERSE_MOBILE_GATEWAY'],
     mobilePort: process.env['UNIVERSE_MOBILE_PORT'],
     mobileBind: process.env['UNIVERSE_MOBILE_BIND'],
+    mobileLanAddress: process.env['UNIVERSE_MOBILE_LAN_ADDRESS'],
     mobileInsecure: process.env['UNIVERSE_MOBILE_INSECURE'],
   }
 }
@@ -115,6 +117,9 @@ export type GatewayRuntimeResolution =
       readonly bind: MobileGatewayBindMode
       readonly host: string
       readonly port: number
+      /** HTTPS with the gateway-managed self-signed certificate. */
+      readonly secure: boolean
+      /** Clear-text HTTP bound to a non-loopback address (development only). */
       readonly insecure: boolean
     }
   | { readonly ok: false; readonly error: string }
@@ -134,32 +139,29 @@ export function resolveGatewayRuntime(
       ? options.env.mobileBind
       : undefined
   const bind = envBind ?? options.config.bind
-  const port = parseIntPort(options.env.mobilePort) ?? options.config.port
+  // Port 0 is accepted from the environment only: tests need an ephemeral port,
+  // while a persisted settings value of 0 would silently change every restart.
+  const port = parseIntPort(options.env.mobilePort, true) ?? options.config.port
 
   if (bind === 'loopback') {
-    return { ok: true, bind, host: '127.0.0.1', port, insecure: false }
+    return { ok: true, bind, host: '127.0.0.1', port, secure: false, insecure: false }
   }
 
-  // M1 ships HTTP only, so the LAN tier would expose bearer tokens in clear
-  // text. Production refuses the tier outright until the self-signed HTTPS
-  // work lands; development must opt in explicitly and the status flags it.
-  if (options.isPackaged) {
-    return { ok: false, error: '局域网档需要 HTTPS，尚未实现' }
-  }
-  if (options.env.mobileInsecure !== '1') {
-    return {
-      ok: false,
-      error: '局域网档需要 HTTPS；开发构建请设置 UNIVERSE_MOBILE_INSECURE=1',
-    }
-  }
+  const configured = options.env.mobileLanAddress?.trim() || options.config.lanAddress.trim()
   const host =
-    options.config.lanAddress.trim() !== ''
-      ? options.config.lanAddress.trim()
-      : pickLanAddress(options.interfaces ?? networkInterfaces())
+    configured !== '' ? configured : pickLanAddress(options.interfaces ?? networkInterfaces())
   if (host === undefined) {
     return { ok: false, error: '未找到可用的局域网 IPv4 地址' }
   }
-  return { ok: true, bind, host, port, insecure: true }
+
+  // Plain HTTP on a LAN interface would expose bearer tokens in clear text.
+  // Production always uses the self-signed HTTPS tier; development may opt into
+  // clear text for debugging, but the status flags it.
+  const insecure = options.env.mobileInsecure === '1'
+  if (insecure && options.isPackaged) {
+    return { ok: false, error: '打包版不允许明文局域网 HTTP；请关闭 UNIVERSE_MOBILE_INSECURE' }
+  }
+  return { ok: true, bind, host, port, secure: !insecure, insecure }
 }
 
 /** First non-internal IPv4 address, or undefined when the machine has none. */
@@ -174,42 +176,61 @@ export function pickLanAddress(
   return undefined
 }
 
+export interface GatewayOrigins {
+  readonly urls: readonly string[]
+  /**
+   * At least one configured extra Host (the Tailscale tier) yields an HTTPS
+   * origin whose certificate is assumed trusted by the phone. The LAN tier's
+   * self-signed origin does not count: Service Worker and Push are unavailable
+   * until the phone trusts the certificate.
+   */
+  readonly trustedSecure: boolean
+}
+
 export function buildOrigins(options: {
   readonly bind: MobileGatewayBindMode
   readonly host: string
   readonly port: number
+  readonly secure: boolean
   readonly allowedHosts: readonly string[]
-}): string[] {
-  const origins = new Set<string>()
+}): GatewayOrigins {
+  const urls = new Set<string>()
   if (options.bind === 'loopback') {
-    origins.add(`http://127.0.0.1:${options.port}`)
-    origins.add(`http://localhost:${options.port}`)
+    urls.add(`http://127.0.0.1:${options.port}`)
+    urls.add(`http://localhost:${options.port}`)
   } else {
-    origins.add(`http://${options.host}:${options.port}`)
+    urls.add(`${options.secure ? 'https' : 'http'}://${options.host}:${options.port}`)
   }
+  let trustedSecure = false
   for (const raw of options.allowedHosts) {
     const host = normalizeHostEntry(raw)
-    if (host !== undefined) origins.add(`https://${host}`)
+    if (host === undefined) continue
+    urls.add(`https://${host}`)
+    trustedSecure = true
   }
-  return [...origins]
+  return { urls: [...urls], trustedSecure }
 }
 
-export function capabilitiesForOrigins(origins: readonly string[]): {
+export function capabilitiesForOrigins(origins: GatewayOrigins): {
   readonly installable: boolean
   readonly push: boolean
 } {
-  const secure = origins.some((origin) => origin.startsWith('https://'))
-  return { installable: secure, push: secure }
+  return { installable: origins.trustedSecure, push: origins.trustedSecure }
 }
 
-function parseIntPort(value: string | undefined): number | undefined {
+function parseIntPort(value: string | undefined, allowZero = false): number | undefined {
   if (value === undefined || value.trim() === '') return undefined
   const parsed = Number(value)
-  return isPort(parsed) ? parsed : undefined
+  return isPort(parsed, allowZero) ? parsed : undefined
 }
 
-function isPort(value: unknown): value is number {
-  return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535
+function isPort(value: unknown, allowZero = false): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= (allowZero ? 0 : 1) &&
+    value <= 65535
+  )
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -17,6 +17,12 @@ allowedDeprecatedVersions:
   lodash.isequal: 4.5.0
   rimraf: 2.6.3
 
+overrides:
+  # selfsigned 5.5 pulls @peculiar/x509, whose asn1-schema range resolved to
+  # 2.8.0 while its sibling asn1 packages are 2.11.1; 2.8.0 lacks the new
+  # decorators and certificate generation throws. Keep the x509 graph aligned.
+  '@peculiar/x509>@peculiar/asn1-schema': 2.11.1
+
 catalog:
   # Core
   '@agentclientprotocol/sdk': 1.2.1
@@ -131,6 +137,9 @@ catalog:
   # the browser's built-in PushManager and never imports this.
   web-push: ^4.0.0
   '@types/web-push': ^3.6.4
+  # Mobile gateway LAN tier: self-signed X.509 issuance. v5 uses native WebCrypto
+  # (no node-forge), so the packaged runtime keeps one small dependency graph.
+  selfsigned: ^5.5.0
   tsx: ^4.19.0
   turbo: ^2.11.9
   typescript: ^5.8.0

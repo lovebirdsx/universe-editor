@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { request as httpRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
 import { join } from 'node:path'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { NullLogger } from '@universe-editor/platform'
@@ -15,6 +16,7 @@ import { WebSocket } from 'ws'
 import { AuditLog } from '../auditLog.js'
 import { DeviceStore } from '../deviceStore.js'
 import { HelloFailureLimiter, MAX_HELLO_FAILURES_PER_ADDRESS } from '../helloFailureLimiter.js'
+import { ensureLanCertificate } from '../lanCertificate.js'
 import { MobileGatewayServer, type MobileGatewayServerOptions } from '../mobileGatewayServer.js'
 import { PairingService } from '../pairingService.js'
 
@@ -92,6 +94,34 @@ function connectWs(base: string, origin?: string): Promise<WebSocket> {
     const ws = new WebSocket(url, origin === undefined ? {} : { origin })
     ws.once('open', () => resolve(ws))
     ws.once('error', reject)
+  })
+}
+
+function httpsGet(
+  port: number,
+  path: string,
+): Promise<{
+  status: number
+  headers: Record<string, string | string[] | undefined>
+  body: string
+}> {
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest(
+      { host: '127.0.0.1', port, path, method: 'GET', rejectUnauthorized: false },
+      (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk: Buffer) => chunks.push(chunk))
+        response.on('end', () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString('utf8'),
+          }),
+        )
+      },
+    )
+    request.on('error', reject)
+    request.end()
   })
 }
 
@@ -300,8 +330,11 @@ describe('mobile gateway server integration', () => {
     expect(index.status).toBe(200)
     expect(await index.text()).toContain('mobile shell')
     expect(index.headers.get('content-security-policy')).toContain("default-src 'self'")
+    expect(index.headers.get('content-security-policy')).toContain("frame-ancestors 'none'")
     expect(index.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(index.headers.get('x-frame-options')).toBe('DENY')
     expect(index.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(index.headers.get('strict-transport-security')).toBeNull()
     expect(index.headers.get('cache-control')).toBe('no-cache')
     expect(index.headers.get('access-control-allow-origin')).toBeNull()
 
@@ -318,6 +351,52 @@ describe('mobile gateway server integration', () => {
       const response = await rawRequest(gateway.base, path)
       expect(response.status, path).toBe(403)
     }
+  })
+
+  it('serves the LAN tier over HTTPS with HSTS', async () => {
+    const tlsDir = mkTempDir('ue-mobile-tls-')
+    cleanup.push(() => {
+      removeDirWithRetry(tlsDir)
+    })
+    const certificate = await ensureLanCertificate({
+      dir: tlsDir,
+      addresses: ['127.0.0.1'],
+    })
+    const gateway = await startGateway({
+      tls: { cert: certificate.cert, key: certificate.key },
+    })
+
+    const index = await httpsGet(gateway.server.port, '/')
+    expect(index.status).toBe(200)
+    expect(index.body).toContain('mobile shell')
+    expect(index.headers['strict-transport-security']).toBe('max-age=31536000')
+
+    const pairResponse = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const request = httpsRequest(
+        {
+          host: '127.0.0.1',
+          port: gateway.server.port,
+          path: '/api/pair',
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          rejectUnauthorized: false,
+        },
+        (response) => {
+          const chunks: Buffer[] = []
+          response.on('data', (chunk: Buffer) => chunks.push(chunk))
+          response.on('end', () =>
+            resolve({
+              status: response.statusCode ?? 0,
+              body: Buffer.concat(chunks).toString('utf8'),
+            }),
+          )
+        },
+      )
+      request.on('error', reject)
+      request.end(JSON.stringify({ code: 'ABCD2345', deviceName: 'Pixel', platform: 'android' }))
+    })
+    expect(pairResponse.status).toBe(200)
+    expect(JSON.parse(pairResponse.body)).toMatchObject({ pcName: expect.any(String) })
   })
 
   it('rejects foreign Host headers and cross-origin requests', async () => {
@@ -375,6 +454,19 @@ describe('mobile gateway server integration', () => {
     const frame = await hello(extra, paired.token)
     expect(frame).toMatchObject({ type: 'server_error', code: 'rate_limited' })
     expect((await closed).code).toBe(1008)
+  })
+
+  it('caps the total number of sockets', async () => {
+    const gateway = await startGateway({ maxTotalConnections: 1 })
+    const first = await connectWs(gateway.base)
+    cleanup.push(() => first.terminate())
+    await expect(connectWs(gateway.base)).rejects.toThrow(/503/u)
+
+    const closed = waitClose(first)
+    first.close()
+    await closed
+    const next = await connectWs(gateway.base)
+    cleanup.push(() => next.terminate())
   })
 
   it('rejects upgrades with HTTP 429 after repeated failed hellos', async () => {

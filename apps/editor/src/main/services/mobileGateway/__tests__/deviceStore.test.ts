@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
-import { DeviceStore } from '../deviceStore.js'
+import { DeviceLimitError, DeviceStore, MAX_PAIRED_DEVICES } from '../deviceStore.js'
 
 function sha256(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('base64url')
@@ -59,6 +59,16 @@ describe('DeviceStore', () => {
     expect(await store.verify(added.token)).toBeUndefined()
     expect(await store.list()).toEqual([])
     expect(await store.revoke(added.device.deviceId)).toBe(false)
+  })
+
+  it('caps the number of paired devices', async () => {
+    for (let index = 0; index < MAX_PAIRED_DEVICES; index += 1) {
+      await store.add({ name: `Phone ${index}`, platform: 'other' })
+    }
+    await expect(store.add({ name: 'One too many', platform: 'other' })).rejects.toBeInstanceOf(
+      DeviceLimitError,
+    )
+    expect(await store.list()).toHaveLength(MAX_PAIRED_DEVICES)
   })
 
   it('tolerates a corrupt devices.json', async () => {

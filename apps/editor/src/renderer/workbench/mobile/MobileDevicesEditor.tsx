@@ -36,6 +36,7 @@ import {
   auditDeviceLabel,
   devicePlatformLabel,
   formatCountdown,
+  formatFingerprint,
   formatTimestamp,
   pairUrlLabel,
 } from './mobileDevicesModel.js'
@@ -220,6 +221,28 @@ export function MobileDevicesEditor() {
                   </div>
                 )}
 
+                {status.certificate !== undefined && (
+                  <div className={styles['certificate']} data-testid="mobile-gateway-certificate">
+                    <span className={styles['fieldLabel']}>
+                      {localize('mobileDevices.gateway.certificate', 'Certificate fingerprint')}
+                    </span>
+                    <code className={styles['inlineCode']}>
+                      {formatFingerprint(status.certificate.fingerprint)}
+                    </code>
+                    <span className={styles['statusMeta']}>
+                      {localize('mobileDevices.gateway.certificateExpires', 'Expires {date}', {
+                        date: formatTimestamp(status.certificate.expiresAt),
+                      })}
+                    </span>
+                    <span className={styles['description']}>
+                      {localize(
+                        'mobileDevices.gateway.certificateHint',
+                        'Compare this with the fingerprint shown on the phone pairing page before you pair.',
+                      )}
+                    </span>
+                  </div>
+                )}
+
                 {status.state === 'running' && (
                   <div className={styles['capabilities']}>
                     <span className={styles['fieldLabel']}>
@@ -317,14 +340,13 @@ export function MobileDevicesEditor() {
                 </Button>
               </div>
             ) : (
-              <div className={styles['warning']}>
-                <TriangleAlert size={14} strokeWidth={1.75} />
-                <span>
+              <div className={styles['bindDetails']}>
+                <p className={styles['description']}>
                   {localize(
                     'mobileDevices.bind.lanDescription',
-                    'Binds a LAN address directly. Not available in packaged builds yet because the first release has no HTTPS; development builds require UNIVERSE_MOBILE_INSECURE=1.',
+                    'Binds a LAN address and serves HTTPS with a certificate generated on this PC. The phone must confirm the certificate fingerprint shown on the pairing page; installing the app and Web Push stay unavailable until the certificate is trusted.',
                   )}
-                </span>
+                </p>
               </div>
             )}
           </div>

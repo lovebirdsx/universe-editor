@@ -66,6 +66,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.gateway.capability.installable': '可安装为应用',
   'mobileDevices.gateway.capability.push': '推送通知',
   'mobileDevices.gateway.capability.unavailable': '不可用',
+  'mobileDevices.gateway.certificate': '证书指纹',
+  'mobileDevices.gateway.certificateExpires': '到期时间 {date}',
+  'mobileDevices.gateway.certificateHint': '请在手机浏览器的证书详情中核对该指纹后再配对。',
   'mobileDevices.gateway.pushRelayHint':
     '推送经 Apple / Google 推送服务器转发，PC 需要能访问公网。',
   'mobileDevices.gateway.pushRequiresHttps':

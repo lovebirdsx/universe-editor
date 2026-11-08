@@ -48,6 +48,12 @@ export function formatCountdown(remainingMs: number): string {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
+/** Browser-style SHA-256 display: uppercase, colon-separated byte pairs. */
+export function formatFingerprint(fingerprint: string): string {
+  const pairs = fingerprint.toLowerCase().match(/.{2}/gu)
+  return pairs === null ? fingerprint : pairs.join(':').toUpperCase()
+}
+
 /** Local wall-clock timestamp, deterministic regardless of locale. */
 export function formatTimestamp(ts: number): string {
   if (!Number.isFinite(ts) || ts <= 0) return '—'

@@ -4,7 +4,8 @@
 > **M2 只读镜像后端已落地**（协议 v2、每窗口会话桥、main 侧收件箱/会话聚合、`acp-view-model`
 > 抽取）；**M3 交互后端已落地**（协议 v3：命令路由、审批仲裁、倒计时下沉、新建会话、高风险限制、
 > 幂等与审计）；**M4 通知已落地**（协议 v4：共享 attention 信号、前台 WS 通知、Web Push / VAPID、
-> PC 焦点抑制、通知偏好与深链）。
+> PC 焦点抑制、通知偏好与深链）；**M5 打包与加固已落地**（`resources/mobile`、局域网自签
+> HTTPS / 证书轮换与指纹、CSP / 审计轮转 / 连接与设备上限、Tailscale / WSL 文档与冒烟）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -305,10 +306,12 @@ Referer。
 
 **开关**：网关默认关闭，必须在 PC 设置页显式开启。
 
-**二维码**：`https://<host>/pair#<一次性码>`。
+**二维码**：`https://<host>/pair#code=<一次性码>`。
 
 - 一次性码放在 fragment，不进服务器日志与 Referer。
-- 自签证书场景附带证书指纹与 PC 名。
+- 局域网自签证书档位附带 `&fp=<SHA-256>`（小写十六进制），与 code 同在 fragment；手机配对页
+  把它格式化为大写冒号分组，仅作「期望值」参照——页面 JS 读不到实际 TLS 证书，显示值必然与二维码
+  一致，不构成验证；真正的核对是用户在浏览器证书警告/详情里比对实际指纹。Tailscale 档位不附带（证书由 Tailscale 信任）。
 - 一次性码 TTL 2 分钟、单次使用、限速、常量时间比较、内存只存哈希。
 
 **设备凭据**：
@@ -369,8 +372,33 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
 | 档位 | 监听 | 证书 | 能力 |
 |---|---|---|---|
 | Tailscale（主推） | 网关只监听 `127.0.0.1` HTTP；由 `tailscale serve` 暴露 `https://<机器名>.ts.net` | Tailscale 自动签发与续期 | 安装 + SW + Web Push + 麦克风；iOS / Android 都完整 |
-| 局域网 | 监听用户选定网卡 IP（非 `0.0.0.0` 默认） | 自签证书，SAN 含 IP，指纹进二维码 | 保证遥控 + 加密；安装 / 推送需手机信任 CA，iOS 推送不保证 |
-| 开发 / e2e | `127.0.0.1` HTTP | 无 | localhost 是安全上下文，SW 可用，无推送 |
+| 局域网 | 监听用户选定网卡 IP（非 `0.0.0.0` 默认），`https.createServer` | 网关自签证书，SAN 含当前 LAN IP + PC 主机名，SHA-256 指纹进二维码 | 保证遥控 + 加密；安装 / 推送需手机信任证书，iOS 推送不保证 |
+| 开发 / e2e | `127.0.0.1` HTTP；或显式 `UNIVERSE_MOBILE_INSECURE=1` 的局域网明文 | 无 | localhost 是安全上下文，SW 可用，无推送 |
+
+**局域网自签证书（M5）**：
+
+- 首次启用局域网档时生成，存 `<userData>/mobile/tls/{cert.pem,key.pem}`（`0600`，原子写入）。
+  Node 内置 `crypto` 只能解析 X.509、不能签发，因此用 `selfsigned`（v5，基于 WebCrypto /
+  `@peculiar/x509`，无 native addon；见 catalog）。私钥为 EC P-256，签名 SHA-256。
+- SAN = 当前监听地址 + `os.hostname()`；如果 `mobileGateway.lanAddress` 或
+  `UNIVERSE_MOBILE_LAN_ADDRESS` 改变，下次启动重新签发。
+- 有效期 365 天；剩余不足 30 天时自动续签。证书与私钥不匹配、文件损坏或读不出时同样重签。
+- 指纹是 DER 证书的 SHA-256（小写十六进制）。`MobileGatewayStatus.certificate` 携带
+  `{ fingerprint, addresses, expiresAt }`，PC 设置页展示格式化指纹；配对 URL 的 `fp` 与
+  手机配对页展示同一值。
+- `capabilities.installable/push` 只认 `allowedHosts` 提供的受信任 HTTPS 源；局域网自签名
+  源不算（浏览器不把绕过证书错误的自签 HTTPS 视为安全上下文，Service Worker 不可用属预期）。
+- 生产构建允许局域网档 HTTPS；仍拒绝非回环明文 HTTP。开发调试可设
+  `UNIVERSE_MOBILE_INSECURE=1` 退回明文（状态与 UI 显示警告），打包版忽略该值并报错。
+
+**WSL2**：
+
+- WSL2 默认 NAT，Windows 侧访问不到 WSL 内的局域网监听地址。要么在 Windows 上
+  `netsh interface portproxy` 转发到 WSL IP（并放行防火墙），要么改用 mirrored 网络模式。
+- 推荐 Tailscale 与 Electron 都装在 Windows 宿主；WSL 内开发时同样需要 portproxy / mirrored。
+- 证书 SAN 只含 WSL 内看到的地址；通过 portproxy 访问时手机连接的是 Windows 地址，需把
+  `mobileGateway.lanAddress` 设为该地址并确认证书 SAN 覆盖它（否则浏览器报名称不匹配）。
+- e2e 环境约束见 [wsl-e2e.md](wsl-e2e.md)。
 
 **Tailscale 注意事项**：
 
@@ -381,14 +409,8 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
 **局域网档注意事项**：
 
 - Windows 首次监听非回环地址会弹防火墙授权。
-- iOS 有本地网络隐私提示。
+- iOS 有本地网络隐私提示；自签证书还需在系统里接受/信任，否则 Service Worker 与推送不可用。
 - iOS 26 对裸 IP 的 `ws` 有失败报告，优先建议用主机名 + 受信任证书。
-
-**WSL2**：推荐 Tailscale 与 Electron 都跑在 Windows 侧；在 WSL 内开发需要 portproxy 或 mirrored 网络，
-e2e 环境约束见 [wsl-e2e.md](wsl-e2e.md)。
-
-**生产防护**：不允许 HTTP 绑定非回环地址。开发需要时用
-`UNIVERSE_MOBILE_INSECURE` 显式开启，并在 UI / 日志显示醒目警告。
 
 ## 9. 通知
 
@@ -482,15 +504,19 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 | `apps/mobile/src/notifications/pushNotifications.ts` | 能力探测、用户手势授权、`PushManager.subscribe` |
 | `apps/mobile/public/sw.js` | `push` 展示与 `notificationclick` 深链 |
 
-**构建与打包**：
+**构建与打包**（M5 已落地）：
 
-1. `pnpm --filter @universe-editor/mobile build` 产出 `apps/mobile/dist`。
-2. `scripts/release/runtime-resources.mjs` 将其 stage 到 `.runtime-resources/mobile`。
+1. `runtime:stage` 先跑 `pnpm --filter @universe-editor/mobile build`，产出 `apps/mobile/dist`
+   （`apps/mobile` 用 `vite build --watch` 供开发）。
+2. `scripts/release/runtime-resources.mjs` 将其 stage 到 `.runtime-resources/mobile`，
+   `REQUIRED_SOURCE_FILES` 以 `mobile/index.html` 为哨兵；缺失时 `verify-source` /
+   `verify-packaged` 直接失败。
 3. `apps/editor/electron-builder.yml` 的 `extraResources`（`.runtime-resources` → `.`）带入
    `resources/mobile`。
-4. 把 mobile 产物加入 `runtime-resources.mjs` 的 runtime verify 必需文件列表。
-5. 生产从 `process.resourcesPath/mobile` 托管；开发从 `apps/mobile/dist` 或
-   `UNIVERSE_MOBILE_ASSETS_DIR`。
+4. 生产从 `process.resourcesPath/mobile` 托管；开发从 `apps/mobile/dist`；
+   `UNIVERSE_MOBILE_ASSETS_DIR` 覆盖两者。
+5. `apps/editor/e2e/fixtures/mobileAppTls.ts` 用 `UNIVERSE_MOBILE_BIND=lan` +
+   `UNIVERSE_MOBILE_PORT=0` 在回环地址上验证自签 HTTPS、证书状态与 WSS 配对链路。
 
 **样式**：`packages/workbench-ui` 的原子组件目前经 `Spinner` 传递依赖 `@universe-editor/platform`，
 直接引主入口或 `./atoms` 都会把编辑器内核带进 PWA。M1 手机侧自写少量控件（按钮 / 输入 / 加载态）
@@ -504,9 +530,21 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 | `UNIVERSE_MOBILE_GATEWAY` | 强制开启网关（开发/测试） |
 | `UNIVERSE_MOBILE_PORT` | 监听端口 |
 | `UNIVERSE_MOBILE_BIND` | 绑定地址 |
-| `UNIVERSE_MOBILE_INSECURE` | 允许非回环 HTTP（开发专用） |
+| `UNIVERSE_MOBILE_LAN_ADDRESS` | 局域网档绑定/证书地址（测试与开发；覆盖设置） |
+| `UNIVERSE_MOBILE_INSECURE` | 允许非回环明文 HTTP（开发专用；打包版拒绝） |
 | `UNIVERSE_MOBILE_ASSETS_DIR` | 覆盖静态资源目录 |
 | `UNIVERSE_MOBILE_E2E_CODE` | e2e 用固定一次性码 |
+
+`UNIVERSE_MOBILE_PORT=0` 仅从环境变量接受（测试用临时端口）；设置文件里的端口仍要求 1–65535。
+
+**加固（M5）**：
+
+- CSP 加 `base-uri 'self'` / `form-action 'self'` / `frame-ancestors 'none'`；补
+  `X-Frame-Options: DENY`；HTTPS 档位加 `Strict-Transport-Security`。
+- 页面上限复用协议常量：客户端帧 64KB、服务端帧 1MB、会话出站队列 1MB、prompt 32KB。
+- 连接上限：每设备 4 条、全局 64 条；配对设备上限 32 台；配对码同时只有一个、2 分钟过期、
+  每 IP 每分钟 5 次尝试、连续 10 次失败作废。
+- 审计 `audit.jsonl` 按大小轮转，保留 3 份历史（`audit.jsonl.1..3`），读取时按旧→新拼接。
 
 **测试**：
 
@@ -515,6 +553,11 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
   配对 → 收件箱 → prompt → 审批全链路；前台通知用例经第二条同设备 WS 打开通知偏好，断言
   `notification` 帧落到 toast 并可跳转。**Web Push 不在 e2e 覆盖**（headless Chromium 无可用推送服务），
   由 `mobileNotificationRouter` / `webPushSender` / `vapidKeys` 单测兜底。
+- 局域网 HTTPS：`mobile.gateway.spec.ts` 的 TLS 用例用独立冷启 fixture（`mobileAppTls.ts`）验证
+  `https` 源、证书指纹、HSTS、配对与 WSS 收件箱；证书续签判定、指纹、审计轮转、设备/连接上限
+  由单测覆盖。
+- 冒烟：`@p0` 覆盖网关启动、原生 WS「配对 → hello → 收件箱快照」与手机 PWA 配对路径，纳入
+  `pnpm e2e:smoke`。
 - 协议负向测试：未授权、超长帧、坏 JSON、越权命令、非允许列表的 push endpoint。
 
 ## 11. 里程碑
@@ -525,8 +568,7 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 | M2 | 只读镜像：收件箱聚合、会话快照/增量、摘要与详情、抽 `acp-view-model` | 多窗口会话状态与 PC 一致；流式不卡；重连一致 |
 | M3 | 交互：prompt / 停止 / 模式模型、审批仲裁、倒计时下沉、新建会话（含自动开窗）、高风险限制、审计 | 双端审批只生效一次；重连恢复卡片；tab 未开倒计时照常执行 |
 | M4 | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制（已落地） | 两端边沿一致；不重复；点击直达会话 |
-| M5 | 打包、Tailscale / WSL 文档、安全加固、用户文档（`docs/user/zh-CN` 新页）与开发文档、纳入冒烟 | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
-
+| M5 | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地） | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
 ## 12. 已确认的决策记录
 
 日期均为 **2026-11-08**。
@@ -540,6 +582,9 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 5. **默认值**：PC 聚焦时不发任何手机通知；远程会话可镜像、新建远程会话需远程窗口已打开；详情按需拉取。
 6. **协议 v3 的幂等与超时**：会修改状态的命令支持 `idempotencyKey`（结果缓存 5 分钟、并发去重）；
    网关按命令设 5s / 10s / 30s 三档超时，超时回 `internal`，不让一次坏调用挂住连接。
+7. **局域网档用自签 HTTPS + 指纹核对**：证书由网关本地签发（`selfsigned` 5.x，基于 WebCrypto），
+   有效期 365 天、剩余 30 天或 SAN/IP 变化时轮换，存 `userData/mobile/tls`（`0600`）；
+   完整 PWA 安装与推送仍限 Tailscale 档，自签证书下 SW 不可用属预期。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。
@@ -555,5 +600,6 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 | 权限 Promise 生命周期 | 审批悬挂或重复结算 | settled 守卫 + `requestId` + 广播 `cleared` |
 | Tailscale Serve 的 WS 稳定性 | 断连、丢消息 | 心跳、首帧 token、自动重连、先快照后增量；备选自管 HTTPS |
 | 自签证书在 iOS 上的限制 | 无法安装 PWA / 推送 | 局域网档明确只保证遥控；主推 Tailscale |
+| `selfsigned` / `@peculiar/x509` 供应链 | 本地签发失败导致局域网档不可用 | 仅 main 运行时使用；固定 catalog 版本；失败回 `gateway_error` 并在 UI 显示原因；单测覆盖生成与续签 |
 | 安全：DNS rebinding、token 泄漏、审计 PII | 未授权访问/隐私外泄 | Host+Origin 校验、token 只存哈希、审计脱敏、默认关闭 |
 | `web-push` 新依赖 | 供应链与升级成本 | 仅网关侧使用，锁定版本，推送失败可降级为前台 WS 通知 |

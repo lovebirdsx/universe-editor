@@ -46,6 +46,7 @@
     "adm-zip": "catalog:",
     "electron-updater": "^6.3.0",
     "jsonc-parser": "catalog:",
+    "selfsigned": "catalog:",
     "smol-toml": "catalog:",
     "tar": "catalog:",
     "web-push": "catalog:",

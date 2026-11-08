@@ -108,6 +108,23 @@ describe('PairPage', () => {
     })
   })
 
+  it('shows the certificate fingerprint from the pairing link', () => {
+    const fingerprint = '00112233445566778899aabbccddeeff'.repeat(2)
+    window.history.replaceState(null, '', `/pair#code=ABCD2345&fp=${fingerprint}`)
+
+    render(<PairPage store={createStore().store} onPaired={vi.fn()} pairRequest={vi.fn()} />)
+
+    const block = screen.getByTestId('pair-certificate')
+    expect(block.textContent).toContain(strings.pairCertTitle)
+    expect(block.textContent).toContain('00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF')
+  })
+
+  it('does not show a certificate block when the link has no fingerprint', () => {
+    window.history.replaceState(null, '', '/pair#code=ABCD2345')
+    render(<PairPage store={createStore().store} onPaired={vi.fn()} pairRequest={vi.fn()} />)
+    expect(screen.queryByTestId('pair-certificate')).toBeNull()
+  })
+
   it('rejects a malformed code before calling the gateway', async () => {
     const store = createStore()
     const requester = successfulRequester()

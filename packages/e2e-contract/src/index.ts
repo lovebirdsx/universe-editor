@@ -863,6 +863,12 @@ export interface E2EMobileGatewayStatus {
   readonly listenAddress?: string
   readonly origins: readonly string[]
   readonly connectedDeviceCount: number
+  readonly capabilities?: { readonly installable: boolean; readonly push: boolean }
+  readonly certificate?: {
+    readonly fingerprint: string
+    readonly addresses: readonly string[]
+    readonly expiresAt: number
+  }
 }
 
 export interface E2EMobileDevice {

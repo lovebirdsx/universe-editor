@@ -2917,7 +2917,20 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         state: status.state,
         origins: [...status.origins],
         connectedDeviceCount: status.connectedDeviceCount,
+        capabilities: {
+          installable: status.capabilities.installable,
+          push: status.capabilities.push,
+        },
         ...(status.listenAddress !== undefined ? { listenAddress: status.listenAddress } : {}),
+        ...(status.certificate !== undefined
+          ? {
+              certificate: {
+                fingerprint: status.certificate.fingerprint,
+                addresses: [...status.certificate.addresses],
+                expiresAt: status.certificate.expiresAt,
+              },
+            }
+          : {}),
       }
     },
     listMobileDevices: async () => {
