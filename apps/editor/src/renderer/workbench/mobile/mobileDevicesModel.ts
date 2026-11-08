@@ -19,6 +19,16 @@ export function choosePairUrl(urls: readonly string[]): string | undefined {
   return urls.find((url) => url.startsWith('https://')) ?? urls[0]
 }
 
+/** Origin to hand to this computer's own browser: loopback HTTP first, then HTTPS. */
+export function chooseDesktopOrigin(origins: readonly string[]): string | undefined {
+  return (
+    origins.find((url) => url.startsWith('http://127.0.0.1:')) ??
+    origins.find((url) => url.startsWith('http://localhost:')) ??
+    origins.find((url) => url.startsWith('https://')) ??
+    origins[0]
+  )
+}
+
 /** Index of the preferred pairing URL; 0 when none is HTTPS. */
 export function preferredPairUrlIndex(urls: readonly string[]): number {
   const index = urls.findIndex((url) => url.startsWith('https://'))

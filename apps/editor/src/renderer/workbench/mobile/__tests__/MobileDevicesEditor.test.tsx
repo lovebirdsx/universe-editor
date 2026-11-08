@@ -13,6 +13,7 @@ import {
   ICommandService,
   IConfigurationService,
   IDialogService,
+  IOpenerService,
   InstantiationService,
   ServiceCollection,
   type IConfigurationChangeEvent,
@@ -135,12 +136,19 @@ function renderEditor(
   const config = new FakeConfigurationService()
   const dialog = { confirm: vi.fn(async () => ({ confirmed: true })) }
   const commands = { executeCommand: vi.fn(async () => undefined) }
+  const open = vi.fn(async () => true)
+  const opener = {
+    _serviceBrand: undefined,
+    registerOpener: vi.fn(() => ({ dispose: (): void => undefined })),
+    open,
+  } as unknown as IOpenerService
 
   const services = new ServiceCollection()
   services.set(IMobileGatewayService, gateway as unknown as IMobileGatewayService)
   services.set(IConfigurationService, config as unknown as IConfigurationService)
   services.set(IDialogService, dialog as unknown as IDialogService)
   services.set(ICommandService, commands as unknown as ICommandService)
+  services.set(IOpenerService, opener)
   const container = new InstantiationService(services)
 
   const utils = render(<MobileDevicesEditor />, {
@@ -149,7 +157,7 @@ function renderEditor(
     ),
   })
 
-  return { ...utils, gateway, config, dialog, commands }
+  return { ...utils, gateway, config, dialog, commands, open }
 }
 
 async function flush(): Promise<void> {
@@ -166,6 +174,31 @@ describe('MobileDevicesEditor', () => {
     expect(screen.getByTestId('mobile-gateway-connected').textContent).toContain('1 connected')
     expect(screen.queryByTestId('mobile-gateway-insecure')).toBeNull()
     expect(screen.getAllByText('Available')).toHaveLength(2)
+  })
+
+  it('opens the loopback origin in the PC browser from the gateway section', async () => {
+    const { open } = renderEditor()
+    await screen.findByTestId('mobile-gateway-state')
+
+    fireEvent.click(screen.getByTestId('mobile-gateway-open-browser'))
+
+    expect(open).toHaveBeenCalledWith('http://127.0.0.1:47321', { fromUserGesture: true })
+  })
+
+  it('opens the LAN HTTPS origin when the gateway is bound to a LAN address', async () => {
+    const { open } = renderEditor({
+      status: {
+        ...RUNNING_STATUS,
+        bind: 'lan',
+        listenAddress: '192.0.2.20:47321',
+        origins: ['https://192.0.2.20:47321'],
+      },
+    })
+    await screen.findByTestId('mobile-gateway-state')
+
+    fireEvent.click(screen.getByTestId('mobile-gateway-open-browser'))
+
+    expect(open).toHaveBeenCalledWith('https://192.0.2.20:47321', { fromUserGesture: true })
   })
 
   it('flags a clear-text non-loopback binding', async () => {
@@ -214,6 +247,26 @@ describe('MobileDevicesEditor', () => {
     expect(await screen.findByTestId('mobile-pairing-success')).toBeTruthy()
     expect(screen.queryByTestId('mobile-pairing-qr')).toBeNull()
     expect(screen.getByTestId('mobile-device-d1')).toBeTruthy()
+  })
+
+  it('opens the selected pairing URL in the PC browser and follows the origin switch', async () => {
+    const { open } = renderEditor()
+    await screen.findByTestId('mobile-gateway-state')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mobile-pairing-start'))
+    })
+
+    fireEvent.click(screen.getByTestId('mobile-pairing-open-browser'))
+    expect(open).toHaveBeenLastCalledWith('https://pc.example.ts.net/pair#code=ABCD2345', {
+      fromUserGesture: true,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'http://127.0.0.1:47321' }))
+    fireEvent.click(screen.getByTestId('mobile-pairing-open-browser'))
+    expect(open).toHaveBeenLastCalledWith('http://127.0.0.1:47321/pair#code=ABCD2345', {
+      fromUserGesture: true,
+    })
   })
 
   it('expires a pairing code and regenerates it', async () => {
@@ -277,6 +330,7 @@ describe('MobileDevicesEditor', () => {
 
     const button = screen.getByTestId('mobile-pairing-start') as HTMLButtonElement
     expect(button.disabled).toBe(true)
+    expect(screen.queryByTestId('mobile-gateway-open-browser')).toBeNull()
     expect(screen.getByText('Turn on the gateway before pairing a device.')).toBeTruthy()
   })
 

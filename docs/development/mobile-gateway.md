@@ -365,6 +365,13 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
   `registerEditorWithComponent` 注册；动作照
   `apps/editor/src/renderer/actions/agentSettingsActions.ts` 的 `OpenAgentSettingsAction`。
 - 内容：开关、监听模式、二维码、设备列表 / 吊销、能力状态（可安装 / 可推送）、最近审计、通知开关。
+- 本机浏览器体验入口：网关运行中时状态区提供「在电脑浏览器中打开手机版」，配对 active 时提供
+  「在电脑浏览器中打开配对页」。两者都经 renderer 的
+  `IOpenerService.open(url, { fromUserGesture: true })` → main `setWindowOpenHandler` →
+  `shell.openExternal`，不新增 IPC，也不改网关协议 / 鉴权。手机版入口的 origin 由
+  `chooseDesktopOrigin` 选择（优先回环 HTTP，其次 `https://`，最后 `origins[0]`）；配对入口直接
+  使用当前选中的 `pairing.selectedUrl`，一次性码仍保留在 fragment。WSLg 下
+  `shell.openExternal` 不保证拉起 Windows 浏览器，UI 与用户文档保留手动打开地址的兜底。
 - 配置组：`mobileGateway.*`。
 
 ## 8. 传输档位与证书

@@ -80,6 +80,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '明文 HTTP 已绑定到非回环地址，网络中的任何人都能读取设备凭据。仅限开发使用。',
   'mobileDevices.gateway.listenAddress': '正在监听',
   'mobileDevices.gateway.loading': '正在读取状态…',
+  'mobileDevices.gateway.openInBrowser': '在电脑浏览器中打开手机版',
+  'mobileDevices.gateway.openInBrowserHint':
+    '用系统默认浏览器打开手机网页。若没有自动打开（例如在 WSL 中），请手动打开上方地址。',
   'mobileDevices.gateway.section': '网关',
   'mobileDevices.gateway.state.error': '错误',
   'mobileDevices.gateway.state.running': '运行中',
@@ -93,6 +96,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.pairing.fixedExpiry': '该配对码不会过期（测试模式）。',
   'mobileDevices.pairing.noOrigins':
     '没有可用地址。请把 Tailscale 主机名加入 mobileGateway.allowedHosts。',
+  'mobileDevices.pairing.openInBrowser': '在电脑浏览器中打开配对页',
+  'mobileDevices.pairing.openInBrowserHint':
+    '用系统默认浏览器打开所选地址，配对码会自动填入；在页面上点「开始配对」确认。',
   'mobileDevices.pairing.origin': '地址',
   'mobileDevices.pairing.pair': '配对新设备',
   'mobileDevices.pairing.pairAnother': '配对另一台设备',

@@ -7,11 +7,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useState } from 'react'
-import { ChevronDown, ChevronRight, FileJson, Smartphone, TriangleAlert } from 'lucide-react'
+import {
+  ChevronDown,
+  ChevronRight,
+  ExternalLink,
+  FileJson,
+  Smartphone,
+  TriangleAlert,
+} from 'lucide-react'
 import {
   ICommandService,
   IConfigurationService,
   IDialogService,
+  IOpenerService,
   localize,
 } from '@universe-editor/platform'
 import {
@@ -34,6 +42,7 @@ import { useService } from '../useService.js'
 import {
   auditActionLabel,
   auditDeviceLabel,
+  chooseDesktopOrigin,
   devicePlatformLabel,
   formatCountdown,
   formatFingerprint,
@@ -84,6 +93,7 @@ export function MobileDevicesEditor() {
   const configuration = useService(IConfigurationService)
   const dialog = useService(IDialogService)
   const commands = useService(ICommandService)
+  const opener = useService(IOpenerService)
 
   const settings = useMobileGatewaySettings(configuration)
   const status = useGatewayStatus(gateway)
@@ -97,9 +107,20 @@ export function MobileDevicesEditor() {
   const canPair = status?.state === 'running'
   const qr = useQrCodeDataUrl(pairing.phase === 'active' ? pairing.selectedUrl : undefined)
 
+  const browserOrigin =
+    status?.state === 'running' ? chooseDesktopOrigin(status.origins) : undefined
+  const selectedPairUrl = pairing.selectedUrl
+
   const openSettingsJson = useCallback(() => {
     void commands.executeCommand('workbench.action.openSettingsJson')
   }, [commands])
+
+  const openExternal = useCallback(
+    (url: string) => {
+      void opener.open(url, { fromUserGesture: true })
+    },
+    [opener],
+  )
 
   const revoke = useCallback(
     async (device: MobileDeviceInfo) => {
@@ -202,6 +223,29 @@ export function MobileDevicesEditor() {
                     </span>
                   )}
                 </div>
+
+                {status.state === 'running' && browserOrigin !== undefined && (
+                  <div className={styles['actionRow']}>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => openExternal(browserOrigin)}
+                      data-testid="mobile-gateway-open-browser"
+                    >
+                      <ExternalLink size={14} strokeWidth={1.75} className={styles['buttonIcon']} />
+                      {localize(
+                        'mobileDevices.gateway.openInBrowser',
+                        'Open phone app in your PC browser',
+                      )}
+                    </Button>
+                    <span className={styles['hint']}>
+                      {localize(
+                        'mobileDevices.gateway.openInBrowserHint',
+                        'Opens the phone web app in your default browser. If nothing opens (for example under WSL), open the address above manually.',
+                      )}
+                    </span>
+                  </div>
+                )}
 
                 {status.state === 'error' && status.error !== undefined && (
                   <div className={styles['errorText']} data-testid="mobile-gateway-error">
@@ -479,7 +523,25 @@ export function MobileDevicesEditor() {
                     )}
                   </p>
 
-                  <div>
+                  <div className={styles['actionRow']}>
+                    {selectedPairUrl !== undefined && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => openExternal(selectedPairUrl)}
+                        data-testid="mobile-pairing-open-browser"
+                      >
+                        <ExternalLink
+                          size={14}
+                          strokeWidth={1.75}
+                          className={styles['buttonIcon']}
+                        />
+                        {localize(
+                          'mobileDevices.pairing.openInBrowser',
+                          'Open pairing page in your PC browser',
+                        )}
+                      </Button>
+                    )}
                     <Button
                       variant="secondary"
                       size="sm"
@@ -489,6 +551,15 @@ export function MobileDevicesEditor() {
                       {localize('mobileDevices.pairing.cancel', 'Cancel')}
                     </Button>
                   </div>
+
+                  {selectedPairUrl !== undefined && (
+                    <p className={styles['hint']}>
+                      {localize(
+                        'mobileDevices.pairing.openInBrowserHint',
+                        'Opens the selected address with the pairing code filled in. Confirm with Start pairing on the page.',
+                      )}
+                    </p>
+                  )}
                 </div>
               </div>
             )}
