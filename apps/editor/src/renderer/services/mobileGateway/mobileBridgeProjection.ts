@@ -146,6 +146,8 @@ const MAX_PROJECTED_LOCATIONS = 256
 export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
   const diffs = call.diffs.slice(0, MAX_PROJECTED_DIFFS).map(projectDiffStat)
   const locations = call.locations?.slice(0, MAX_PROJECTED_LOCATIONS)
+  // Mirrors the desktop only-message keep-set predicates in timelineCollapse.ts.
+  const subagent = call.subagent === true || (call.children?.length ?? 0) > 0
   return {
     kind: 'toolCall',
     id: call.id,
@@ -157,6 +159,8 @@ export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
     ...(diffs.length > 0 ? { diffs } : {}),
     ...(locations !== undefined && locations.length > 0 ? { locations } : {}),
     ...(call.memoryTrimmed ? { memoryTrimmed: true } : {}),
+    ...(subagent ? { subagent: true } : {}),
+    ...(call.requiresUserDecision === true ? { requiresUserDecision: true } : {}),
   }
 }
 

@@ -1,5 +1,6 @@
+/* `data-theme` is set by public/theme-boot.js before the first paint. */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
   --bg: #f3f4f6;
   --surface: #ffffff;
   --surface-muted: #f9fafb;
@@ -16,22 +17,21 @@
   --radius: 14px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0b1120;
-    --surface: #111827;
-    --surface-muted: #1f2937;
-    --text: #f3f4f6;
-    --muted: #9ca3af;
-    --border: #374151;
-    --accent: #3b82f6;
-    --accent-strong: #60a5fa;
-    --on-accent: #ffffff;
-    --danger: #f87171;
-    --success: #4ade80;
-    --warning: #fbbf24;
-    --shadow: 0 8px 24px rgb(0 0 0 / 40%);
-  }
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b1120;
+  --surface: #111827;
+  --surface-muted: #1f2937;
+  --text: #f3f4f6;
+  --muted: #9ca3af;
+  --border: #374151;
+  --accent: #3b82f6;
+  --accent-strong: #60a5fa;
+  --on-accent: #ffffff;
+  --danger: #f87171;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --shadow: 0 8px 24px rgb(0 0 0 / 40%);
 }
 
 * {
@@ -2233,25 +2233,23 @@ input:focus-visible {
   --acp-ansi-bright-white: #111827;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --acp-ansi-black: #9ca3af;
-    --acp-ansi-red: #f87171;
-    --acp-ansi-green: #4ade80;
-    --acp-ansi-yellow: #fbbf24;
-    --acp-ansi-blue: #60a5fa;
-    --acp-ansi-magenta: #e879f9;
-    --acp-ansi-cyan: #22d3ee;
-    --acp-ansi-white: #d1d5db;
-    --acp-ansi-bright-black: #6b7280;
-    --acp-ansi-bright-red: #fca5a5;
-    --acp-ansi-bright-green: #86efac;
-    --acp-ansi-bright-yellow: #fde047;
-    --acp-ansi-bright-blue: #93c5fd;
-    --acp-ansi-bright-magenta: #f0abfc;
-    --acp-ansi-bright-cyan: #67e8f9;
-    --acp-ansi-bright-white: #f3f4f6;
-  }
+:root[data-theme='dark'] {
+  --acp-ansi-black: #9ca3af;
+  --acp-ansi-red: #f87171;
+  --acp-ansi-green: #4ade80;
+  --acp-ansi-yellow: #fbbf24;
+  --acp-ansi-blue: #60a5fa;
+  --acp-ansi-magenta: #e879f9;
+  --acp-ansi-cyan: #22d3ee;
+  --acp-ansi-white: #d1d5db;
+  --acp-ansi-bright-black: #6b7280;
+  --acp-ansi-bright-red: #fca5a5;
+  --acp-ansi-bright-green: #86efac;
+  --acp-ansi-bright-yellow: #fde047;
+  --acp-ansi-bright-blue: #93c5fd;
+  --acp-ansi-bright-magenta: #f0abfc;
+  --acp-ansi-bright-cyan: #67e8f9;
+  --acp-ansi-bright-white: #f3f4f6;
 }
 
 
@@ -2319,19 +2317,22 @@ input:focus-visible {
   color: var(--muted);
 }
 
-.drawer__kinds {
+.drawer__kinds,
+.drawer__choices {
   display: grid;
   gap: 8px;
 }
 
-.drawer__checkbox {
+.drawer__checkbox,
+.drawer__radio {
   display: flex;
   align-items: center;
   gap: 10px;
   font-size: 15px;
 }
 
-.drawer__checkbox input {
+.drawer__checkbox input,
+.drawer__radio input {
   width: 20px;
   height: 20px;
 }

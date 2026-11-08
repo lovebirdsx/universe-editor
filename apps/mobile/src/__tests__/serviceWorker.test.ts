@@ -82,6 +82,10 @@ function dispatchClick(
 }
 
 describe('mobile service worker push handling', () => {
+  it('pre-caches the first-paint theme boot script', () => {
+    expect(SOURCE).toContain("'/theme-boot.js'")
+  })
+
   it('shows an approval notification that stays on screen', async () => {
     const worker = loadWorker()
     await dispatchPush(worker.listeners, {

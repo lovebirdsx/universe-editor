@@ -1,10 +1,11 @@
 /* Mobile service worker: shell network-first, static assets cache-first, plus
  * Web Push display and notification-click deep links.
  * Never cache /api/ or /ws — credentials and live frames must not be replayed
- * from a stale cache. */
-const CACHE_NAME = 'universe-mobile-v2'
+ * from a stale cache. Bump CACHE_NAME whenever theme-boot.js changes. */
+const CACHE_NAME = 'universe-mobile-v3'
 const SHELL_URLS = [
   '/',
+  '/theme-boot.js',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',

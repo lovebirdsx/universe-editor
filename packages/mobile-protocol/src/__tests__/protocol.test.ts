@@ -519,6 +519,62 @@ describe('parseServerFrame', () => {
     expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
   })
 
+  it('parses only-message flags on tool calls', () => {
+    const toolCall = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      kind: 'toolCall',
+      id: 'tool-1',
+      title: 'Task',
+      toolKind: 'think',
+      status: 'completed',
+      hasDetail: true,
+      ...overrides,
+    })
+    const snapshot = (item: Record<string, unknown>): string =>
+      JSON.stringify({
+        type: 'session_snapshot',
+        seq: 1,
+        session: snapshotJson({ timeline: [item] }),
+      })
+
+    const parsed = parseServerFrame(
+      snapshot(toolCall({ subagent: true, requiresUserDecision: true })),
+    )
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) {
+      expect(parsed.value).toMatchObject({
+        type: 'session_snapshot',
+        session: {
+          timeline: [{ kind: 'toolCall', subagent: true, requiresUserDecision: true }],
+        },
+      })
+    }
+
+    const delta = {
+      type: 'session_delta',
+      seq: 1,
+      ref: REF,
+      events: [{ type: 'tool_call_upsert', item: toolCall({ subagent: true }) }],
+    }
+    expect(parseServerFrame(JSON.stringify(delta))).toStrictEqual({ ok: true, value: delta })
+
+    const plain = parseServerFrame(snapshot(toolCall()))
+    expect(plain.ok).toBe(true)
+    if (plain.ok) {
+      const timeline = (
+        plain.value as unknown as {
+          session: { timeline: Array<Record<string, unknown>> }
+        }
+      ).session.timeline
+      expect(timeline[0]).not.toHaveProperty('subagent')
+      expect(timeline[0]).not.toHaveProperty('requiresUserDecision')
+    }
+
+    expect(errorCode(parseServerFrame(snapshot(toolCall({ subagent: 'yes' }))))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(snapshot(toolCall({ requiresUserDecision: 1 }))))).toBe(
+      'bad_request',
+    )
+  })
+
   it('parses session_removed, command_result and resync_required', () => {
     expect(
       parseServerFrame(JSON.stringify({ type: 'session_removed', ref: DURABLE_REF })),

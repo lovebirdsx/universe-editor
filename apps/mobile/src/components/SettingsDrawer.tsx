@@ -8,8 +8,14 @@ import {
   type NotificationCapability,
   type PushRegistrationLike,
 } from '../notifications/pushNotifications.js'
+import {
+  readSessionDisplayPreference,
+  setSessionDisplayPreference,
+  type SessionDisplayPreference,
+} from '../session/sessionDisplay.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { strings } from '../strings.js'
+import { readThemePreference, setThemePreference, type ThemePreference } from '../theme.js'
 
 export interface SettingsDrawerProps {
   readonly client: MobileClient
@@ -27,6 +33,17 @@ const KIND_LABELS: Readonly<Record<MobileAttentionKind, string>> = {
   errored: strings.notificationsKindErrored,
 }
 
+const THEME_OPTIONS: readonly { value: ThemePreference; label: string }[] = [
+  { value: 'system', label: strings.appearanceThemeSystem },
+  { value: 'light', label: strings.appearanceThemeLight },
+  { value: 'dark', label: strings.appearanceThemeDark },
+]
+
+const DISPLAY_OPTIONS: readonly { value: SessionDisplayPreference; label: string }[] = [
+  { value: 'onlyMessage', label: strings.sessionDisplayOnlyMessage },
+  { value: 'full', label: strings.sessionDisplayFull },
+]
+
 type PushState = 'unknown' | 'disabled' | 'enabled'
 
 export function SettingsDrawer({ client, credentials, onClose, onUnpair }: SettingsDrawerProps) {
@@ -35,6 +52,10 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
   const [busy, setBusy] = useState(false)
   const [kinds, setKinds] = useState<readonly MobileAttentionKind[]>(ALL_KINDS)
   const [alwaysNotify, setAlwaysNotify] = useState(false)
+  const [theme, setTheme] = useState<ThemePreference>(() => readThemePreference())
+  const [display, setDisplay] = useState<SessionDisplayPreference>(() =>
+    readSessionDisplayPreference(),
+  )
   const [error, setError] = useState<string | undefined>(undefined)
   const mountedRef = useRef(true)
 
@@ -150,6 +171,16 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
     if (pushState === 'enabled') client.setNotificationPrefs(true, kinds, next)
   }
 
+  const updateTheme = (next: ThemePreference): void => {
+    setTheme(next)
+    setThemePreference(next)
+  }
+
+  const updateDisplay = (next: SessionDisplayPreference): void => {
+    setDisplay(next)
+    setSessionDisplayPreference(next)
+  }
+
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside
@@ -174,6 +205,54 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
         <button type="button" className="button button--danger" onClick={onUnpair}>
           {strings.settingsUnpair}
         </button>
+
+        <section className="drawer__section" data-testid="appearance-settings">
+          <h3 className="drawer__sectionTitle">{strings.appearanceSection}</h3>
+          <div
+            className="drawer__choices"
+            role="radiogroup"
+            aria-label={strings.appearanceThemeLabel}
+          >
+            {THEME_OPTIONS.map((option) => (
+              <label key={option.value} className="drawer__radio">
+                <input
+                  type="radio"
+                  name="theme"
+                  value={option.value}
+                  checked={theme === option.value}
+                  onChange={() => updateTheme(option.value)}
+                  data-testid={`theme-${option.value}`}
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </div>
+          <p className="drawer__hint">{strings.appearanceThemeHint}</p>
+        </section>
+
+        <section className="drawer__section" data-testid="session-display-settings">
+          <h3 className="drawer__sectionTitle">{strings.sessionDisplaySection}</h3>
+          <div
+            className="drawer__choices"
+            role="radiogroup"
+            aria-label={strings.sessionDisplaySection}
+          >
+            {DISPLAY_OPTIONS.map((option) => (
+              <label key={option.value} className="drawer__radio">
+                <input
+                  type="radio"
+                  name="session-display"
+                  value={option.value}
+                  checked={display === option.value}
+                  onChange={() => updateDisplay(option.value)}
+                  data-testid={`session-display-${option.value}`}
+                />
+                <span>{option.label}</span>
+              </label>
+            ))}
+          </div>
+          <p className="drawer__hint">{strings.sessionDisplayHint}</p>
+        </section>
 
         <section className="drawer__section" data-testid="notification-settings">
           <h3 className="drawer__sectionTitle">{strings.notificationsSection}</h3>

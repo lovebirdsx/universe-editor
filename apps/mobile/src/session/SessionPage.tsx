@@ -12,6 +12,7 @@ import { PermissionSheet } from './PermissionSheet.js'
 import { PlanPanel } from './PlanPanel.js'
 import { SessionHeader } from './SessionHeader.js'
 import { SessionMenuSheet } from './SessionMenuSheet.js'
+import { readSessionDisplayPreference, type SessionDisplayPreference } from './sessionDisplay.js'
 import { Timeline } from './Timeline.js'
 import { useVisualViewportHeight } from './useVisualViewport.js'
 
@@ -36,6 +37,7 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
   const viewportHeight = useVisualViewportHeight()
   const online = socketState === 'connected'
   const activeSessionKey = state.ref === undefined ? sessionKey : sessionRouteKey(state.ref)
+  const [displayMode] = useState<SessionDisplayPreference>(() => readSessionDisplayPreference())
 
   const [toast, setToast] = useState<string | undefined>(undefined)
   const [menuOpen, setMenuOpen] = useState(false)
@@ -140,6 +142,7 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
           <Timeline
             sessionKey={activeSessionKey}
             timeline={state.timeline}
+            displayMode={displayMode}
             truncated={state.truncated}
             client={client}
           />

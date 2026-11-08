@@ -88,6 +88,10 @@ export interface MobileTimelineToolCallItem {
   diffs?: readonly MobileToolCallDiffStat[]
   locations?: readonly MobileToolCallLocation[]
   memoryTrimmed?: boolean
+  /** This call spawned a sub-agent timeline. Kept by the phone's only-message mode. */
+  subagent?: boolean
+  /** This call asked the user for a decision. Kept by the phone's only-message mode. */
+  requiresUserDecision?: boolean
 }
 
 export interface MobileTimelineNoticeItem {

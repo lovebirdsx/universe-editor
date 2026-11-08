@@ -82,10 +82,10 @@ export function contentTypeFor(filePath: string): string {
   return CONTENT_TYPES[extname(filePath).toLowerCase()] ?? 'application/octet-stream'
 }
 
-/** The shell and the service worker must never be served from a stale cache. */
+/** The shell, the service worker, and the first-paint theme boot must never be stale. */
 export function isNoCacheAsset(filePath: string): boolean {
   const name = basename(filePath).toLowerCase()
-  return name === 'index.html' || name === 'sw.js'
+  return name === 'index.html' || name === 'sw.js' || name === 'theme-boot.js'
 }
 
 export const NOT_BUILT_PAGE = `<!doctype html>

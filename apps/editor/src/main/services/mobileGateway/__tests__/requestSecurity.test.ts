@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { buildAllowedHosts, checkRequestHeaders, normalizeHostEntry } from '../requestSecurity.js'
 import { contentTypeFor, isNoCacheAsset, resolveStaticPath } from '../staticAssets.js'
@@ -69,12 +69,13 @@ describe('resolveStaticPath', () => {
   const root = join('/srv', 'mobile')
 
   it('resolves ordinary files under the root', () => {
+    // resolveStaticPath absolutizes the root; join() would stay drive-relative on Windows.
     expect(resolveStaticPath(root, '/assets/app.js')).toEqual({
       kind: 'file',
-      path: join(root, 'assets', 'app.js'),
+      path: resolve(root, 'assets', 'app.js'),
     })
     expect(resolveStaticPath(root, '/')).toEqual({ kind: 'fallback' })
-    expect(resolveStaticPath(root, '/pair')).toEqual({ kind: 'file', path: join(root, 'pair') })
+    expect(resolveStaticPath(root, '/pair')).toEqual({ kind: 'file', path: resolve(root, 'pair') })
   })
 
   it('rejects traversal in plain and encoded forms', () => {
@@ -111,6 +112,7 @@ describe('asset metadata', () => {
     expect(contentTypeFor('/srv/mobile/blob.bin')).toBe('application/octet-stream')
     expect(isNoCacheAsset('/srv/mobile/index.html')).toBe(true)
     expect(isNoCacheAsset('/srv/mobile/sw.js')).toBe(true)
+    expect(isNoCacheAsset('/srv/mobile/theme-boot.js')).toBe(true)
     expect(isNoCacheAsset('/srv/mobile/app.js')).toBe(false)
   })
 })

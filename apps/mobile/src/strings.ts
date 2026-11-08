@@ -47,6 +47,18 @@ export const strings = {
   settingsUnpair: '解除配对',
   settingsUnpairHint: '解除后需要重新扫码配对才能继续使用。',
 
+  appearanceSection: '外观',
+  appearanceThemeLabel: '主题',
+  appearanceThemeSystem: '跟随系统',
+  appearanceThemeLight: '浅色',
+  appearanceThemeDark: '深色',
+  appearanceThemeHint: '默认跟随手机系统的深色 / 浅色外观。',
+
+  sessionDisplaySection: '会话显示',
+  sessionDisplayOnlyMessage: '仅消息',
+  sessionDisplayFull: '完整显示',
+  sessionDisplayHint: '仅消息会隐藏思考与普通工具调用，保留对话内容和关键卡片。',
+
   notificationsSection: '通知',
   notificationsHint: '通知只包含会话标题与提醒类别，经 Apple / Google 推送服务转发。',
   notificationsEnable: '开启通知',

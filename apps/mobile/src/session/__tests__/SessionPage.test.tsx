@@ -18,6 +18,7 @@ import {
   userMessage,
 } from '../../test/protocolFixtures.js'
 import { strings } from '../../strings.js'
+import { SESSION_DISPLAY_STORAGE_KEY } from '../sessionDisplay.js'
 import { SessionPage } from '../SessionPage.js'
 
 const credentials: StoredCredentials = {
@@ -105,6 +106,43 @@ describe('SessionPage snapshot rendering', () => {
     expect(screen.getByTestId('agent-markdown')).toBeTruthy()
   })
 
+  it('defaults to only-message: hides thoughts and ordinary tool calls', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        timeline: [
+          userMessage('m1', 'hello'),
+          { kind: 'message', id: 'th1', role: 'thought', text: 'thinking', streaming: false },
+          toolCall('tool-1'),
+          agentMessage('a1', 'answer'),
+        ],
+      }),
+    )
+
+    expect(screen.getByTestId('user-message')).toBeTruthy()
+    expect(screen.getByTestId('agent-message')).toBeTruthy()
+    expect(screen.queryByTestId('thought-item')).toBeNull()
+    expect(screen.queryByTestId('tool-call-row')).toBeNull()
+  })
+
+  it('keeps key tool cards ungrouped in only-message mode', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        timeline: [
+          toolCall('d1', { requiresUserDecision: true }),
+          toolCall('d2', { requiresUserDecision: true }),
+          toolCall('d3', { toolKind: 'switch_mode' }),
+        ],
+      }),
+    )
+
+    expect(screen.getAllByTestId('tool-call-row')).toHaveLength(3)
+    expect(screen.queryByTestId('tool-call-group')).toBeNull()
+  })
+
   it('appends streaming text and drops the cursor when the stream settles', () => {
     const { harness } = openPage()
     feed(
@@ -133,6 +171,7 @@ describe('SessionPage snapshot rendering', () => {
   })
 
   it('collapses consecutive tool calls and fetches a detail on expand (cached)', async () => {
+    localStorage.setItem(SESSION_DISPLAY_STORAGE_KEY, 'full')
     const { harness } = openPage()
     feed(
       harness.socket,

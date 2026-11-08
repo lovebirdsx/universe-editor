@@ -128,9 +128,10 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 4`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 5`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
-订阅、`client_state` 可见性与通知偏好）。WS 建立后第一帧必须是
+订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
+供手机端「仅消息」过滤对齐桌面语义）。WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v4 的 `hello_ok.capabilities` 为
 `['inbox', 'commands', 'notifications']`，旧客户端可以只看 `inbox`。`vapidPublicKey` 只在网关可推送
@@ -212,7 +213,9 @@ Referer。
   workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
   hasPendingElicitation / backgroundTaskCount / updatedAt`。
 - `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`）/ `toolCall`
-  （`toolKind`、`status`、preview、diff 增删行数）/ `notice`（compaction / resurrection）。
+  （`toolKind`、`status`、preview、diff 增删行数；可带 `subagent` / `requiresUserDecision`
+  标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片）/ `notice`
+  （compaction / resurrection）。
 - `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、
   `tool_call_upsert`、`timeline_item_added/removed`、`plan_snapshot`、
   `config_options_snapshot`、`summary_changed`、`permission_upsert/cleared`、
@@ -497,6 +500,13 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 `acpSessionModel` 的类型拆分仍留到第二期；M2 用映射函数 + 编译期检查防漂移。
 
 **新应用 `apps/mobile`**：Vite + React，自带 `manifest` 与 `sw`。
+
+**首屏主题**：网关 CSP 是 `default-src 'self'`，`index.html` 不能内联脚本。主题偏好在
+`apps/mobile/public/theme-boot.js`（同源外部同步脚本）里于首帧前读取 localStorage 并写入
+`<html data-theme>` / `meta[theme-color]`；`src/theme.ts` 负责后续切换与系统监听。该文件被
+`sw.js` 预缓存（修改其内容必须 bump `CACHE_NAME`），并由网关按 `no-cache` 提供。主题与
+会话显示偏好（`universe.mobile.theme` / `universe.mobile.sessionDisplay`）都是手机本地
+localStorage，不走协议。
 
 **M4 通知实现位置**：
 

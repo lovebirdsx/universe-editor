@@ -4,10 +4,11 @@ import type {
   MobileTimelineNoticeItem,
   MobileTimelineToolCallItem,
 } from '@universe-editor/mobile-protocol'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { MarkdownView } from '../markdown/MarkdownView.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { strings } from '../strings.js'
+import { selectTimelineForDisplay, type SessionDisplayPreference } from './sessionDisplay.js'
 import { ToolCallGroup } from './ToolCallGroup.js'
 
 const INITIAL_VISIBLE_ITEMS = 200
@@ -17,6 +18,7 @@ const BOTTOM_THRESHOLD_PX = 80
 export interface TimelineProps {
   readonly sessionKey: string
   readonly timeline: readonly MobileTimelineItem[]
+  readonly displayMode: SessionDisplayPreference
   readonly truncated: boolean
   readonly client: Pick<MobileClient, 'requestToolCallDetail'>
 }
@@ -25,17 +27,21 @@ type TimelineGroup =
   | { readonly type: 'item'; readonly item: MobileTimelineItem }
   | { readonly type: 'tools'; readonly items: readonly MobileTimelineToolCallItem[] }
 
-export function Timeline({ sessionKey, timeline, truncated, client }: TimelineProps) {
+export function Timeline({ sessionKey, timeline, displayMode, truncated, client }: TimelineProps) {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ITEMS)
   const [showJump, setShowJump] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
+  const displayTimeline = useMemo(
+    () => selectTimelineForDisplay(timeline, displayMode),
+    [timeline, displayMode],
+  )
 
   useEffect(() => {
     setVisibleCount(INITIAL_VISIBLE_ITEMS)
     atBottomRef.current = true
     setShowJump(false)
-  }, [sessionKey])
+  }, [sessionKey, displayMode])
 
   useEffect(() => {
     const element = scrollRef.current
@@ -65,8 +71,8 @@ export function Timeline({ sessionKey, timeline, truncated, client }: TimelinePr
     setShowJump(false)
   }
 
-  const visible = timeline.slice(Math.max(0, timeline.length - visibleCount))
-  const groups = groupTimeline(visible)
+  const visible = displayTimeline.slice(Math.max(0, displayTimeline.length - visibleCount))
+  const groups = groupTimeline(visible, displayMode === 'full')
 
   return (
     <div className="timeline-wrap">
@@ -76,7 +82,7 @@ export function Timeline({ sessionKey, timeline, truncated, client }: TimelinePr
         onScroll={handleScroll}
         data-testid="session-timeline"
       >
-        {timeline.length > visibleCount && (
+        {displayTimeline.length > visibleCount && (
           <button
             type="button"
             className="timeline-load-earlier"
@@ -111,7 +117,7 @@ export function Timeline({ sessionKey, timeline, truncated, client }: TimelinePr
   )
 }
 
-function groupTimeline(items: readonly MobileTimelineItem[]): TimelineGroup[] {
+function groupTimeline(items: readonly MobileTimelineItem[], groupTools: boolean): TimelineGroup[] {
   const groups: TimelineGroup[] = []
   let pendingTools: MobileTimelineToolCallItem[] = []
   const flushTools = (): void => {
@@ -120,7 +126,7 @@ function groupTimeline(items: readonly MobileTimelineItem[]): TimelineGroup[] {
     pendingTools = []
   }
   for (const item of items) {
-    if (item.kind === 'toolCall') {
+    if (groupTools && item.kind === 'toolCall') {
       pendingTools.push(item)
       continue
     }

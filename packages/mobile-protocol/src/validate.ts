@@ -1106,6 +1106,13 @@ function parseTimelineToolCall(value: Record<string, unknown>): Result<MobileTim
   if (!locations.ok) return locations
   const memoryTrimmed = parseOptionalBoolean(value.memoryTrimmed, 'toolCall.memoryTrimmed')
   if (!memoryTrimmed.ok) return memoryTrimmed
+  const subagent = parseOptionalBoolean(value.subagent, 'toolCall.subagent')
+  if (!subagent.ok) return subagent
+  const requiresUserDecision = parseOptionalBoolean(
+    value.requiresUserDecision,
+    'toolCall.requiresUserDecision',
+  )
+  if (!requiresUserDecision.ok) return requiresUserDecision
   return ok({
     kind: 'toolCall',
     id,
@@ -1117,6 +1124,10 @@ function parseTimelineToolCall(value: Record<string, unknown>): Result<MobileTim
     ...(diffs.value !== undefined ? { diffs: diffs.value } : {}),
     ...(locations.value !== undefined ? { locations: locations.value } : {}),
     ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
+    ...(subagent.value !== undefined ? { subagent: subagent.value } : {}),
+    ...(requiresUserDecision.value !== undefined
+      ? { requiresUserDecision: requiresUserDecision.value }
+      : {}),
   })
 }
 
