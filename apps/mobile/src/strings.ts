@@ -251,6 +251,11 @@ export const strings = {
   newSessionFailed: '创建会话失败，请重试。',
   newSessionAdd: '新建会话',
   newSessionRequired: '请选择 Agent 和工作区。',
+  newSessionSearchLabel: '搜索工作区',
+  newSessionSearchPlaceholder: '搜索名称或路径',
+  newSessionGroupOpen: '已打开',
+  newSessionGroupRecent: '最近',
+  newSessionNoMatch: '没有找到匹配的工作区',
 
   jumpToLatest: '↓ 新消息',
   loadEarlier: '加载更早的',

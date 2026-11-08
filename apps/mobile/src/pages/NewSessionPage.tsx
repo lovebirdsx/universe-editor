@@ -10,6 +10,11 @@ import type { MobileClient } from '../state/mobileClient.js'
 import { sessionRouteKey } from '../state/refs.js'
 import { useStore } from '../state/useStore.js'
 import { commandErrorText, strings } from '../strings.js'
+import {
+  AgentPickerSheet,
+  isRemoteWorkspace,
+  WorkspacePickerSheet,
+} from './NewSessionPickerSheet.js'
 
 export type NewSessionClient = Pick<
   MobileClient,
@@ -21,6 +26,8 @@ export interface NewSessionPageProps {
   readonly onBack: () => void
   readonly onCreated: (sessionKey: string) => void
 }
+
+type PickerKind = 'agent' | 'workspace'
 
 export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProps) {
   const socketState = useStore(client.getSocketStateStore())
@@ -34,8 +41,10 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
   const [error, setError] = useState<string | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
+  const [picker, setPicker] = useState<PickerKind | undefined>(undefined)
 
   useEffect(() => {
+    setPicker(undefined)
     if (!online) {
       setLoading(false)
       return
@@ -51,13 +60,15 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
           (a, b) => Number(b.isOpen) - Number(a.isOpen) || a.name.localeCompare(b.name),
         )
         setWorkspaces(sorted)
-        setAgentId(
-          (current) =>
-            current ?? nextAgents.find((agent) => agent.isDefault)?.id ?? nextAgents[0]?.id,
+        setAgentId((current) =>
+          current !== undefined && nextAgents.some((agent) => agent.id === current)
+            ? current
+            : (nextAgents.find((agent) => agent.isDefault)?.id ?? nextAgents[0]?.id),
         )
-        setFolder(
-          (current) =>
-            current ?? sorted.find((workspace) => workspace.isOpen)?.folder ?? sorted[0]?.folder,
+        setFolder((current) =>
+          current !== undefined && sorted.some((workspace) => workspace.folder === current)
+            ? current
+            : (sorted.find((workspace) => workspace.isOpen)?.folder ?? sorted[0]?.folder),
         )
         setLoading(false)
       })
@@ -108,6 +119,7 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
   }
 
   const selectedWorkspace = workspaces.find((candidate) => candidate.folder === folder)
+  const selectedAgent = agents.find((agent) => agent.id === agentId)
   const disabled = !online || submitting || loading
 
   return (
@@ -143,73 +155,87 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
         ) : (
           <>
             <section className="new-session-section">
-              <h2 className="new-session-label">{strings.newSessionAgentLabel}</h2>
-              {agents.length === 0 ? (
+              <h2 className="new-session-label" id="new-session-agent-heading">
+                {strings.newSessionAgentLabel}
+              </h2>
+              {selectedAgent === undefined ? (
                 <p className="muted">{strings.newSessionNoAgents}</p>
               ) : (
-                <div
-                  className="choice-list"
-                  role="listbox"
-                  aria-label={strings.newSessionAgentLabel}
-                >
-                  {agents.map((agent) => (
-                    <button
-                      key={agent.id}
-                      type="button"
-                      role="option"
-                      aria-selected={agent.id === agentId}
-                      className={`choice${agent.id === agentId ? ' choice--selected' : ''}`}
-                      data-testid="new-session-agent"
-                      data-agent-id={agent.id}
+                <>
+                  <button
+                    type="button"
+                    className="choice new-session-select"
+                    data-testid="new-session-agent-trigger"
+                    aria-haspopup="dialog"
+                    aria-expanded={picker === 'agent'}
+                    aria-labelledby="new-session-agent-heading new-session-agent-value"
+                    disabled={disabled}
+                    onClick={() => setPicker('agent')}
+                  >
+                    <span className="new-session-select__text" id="new-session-agent-value">
+                      <span className="new-session-select__name">{selectedAgent.name}</span>
+                    </span>
+                    {selectedAgent.isDefault && (
+                      <span className="session-badge">{strings.configCurrent}</span>
+                    )}
+                    <span className="new-session-select__chevron" aria-hidden="true">
+                      ›
+                    </span>
+                  </button>
+                  {picker === 'agent' && (
+                    <AgentPickerSheet
+                      agents={agents}
+                      selectedId={agentId}
                       disabled={disabled}
-                      onClick={() => setAgentId(agent.id)}
-                    >
-                      <span className="choice__label">{agent.name}</span>
-                      {agent.isDefault && (
-                        <span className="session-badge">{strings.configCurrent}</span>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                      onSelect={setAgentId}
+                      onClose={() => setPicker(undefined)}
+                    />
+                  )}
+                </>
               )}
             </section>
             <section className="new-session-section">
-              <h2 className="new-session-label">{strings.newSessionWorkspaceLabel}</h2>
-              {workspaces.length === 0 ? (
+              <h2 className="new-session-label" id="new-session-workspace-heading">
+                {strings.newSessionWorkspaceLabel}
+              </h2>
+              {selectedWorkspace === undefined ? (
                 <p className="muted">{strings.newSessionNoWorkspaces}</p>
               ) : (
-                <div
-                  className="choice-list"
-                  role="listbox"
-                  aria-label={strings.newSessionWorkspaceLabel}
-                >
-                  {workspaces.map((workspace) => {
-                    const remote =
-                      workspace.authority !== undefined ||
-                      workspace.folder.startsWith('remote-ssh:')
-                    return (
-                      <button
-                        key={workspace.folder}
-                        type="button"
-                        role="option"
-                        aria-selected={workspace.folder === folder}
-                        className={`choice${workspace.folder === folder ? ' choice--selected' : ''}`}
-                        data-testid="new-session-workspace"
-                        data-folder={workspace.folder}
-                        disabled={disabled}
-                        onClick={() => setFolder(workspace.folder)}
-                      >
-                        <span className="choice__label">{workspace.name}</span>
-                        {workspace.isOpen && (
-                          <span className="session-badge">{strings.newSessionWorkspaceOpen}</span>
-                        )}
-                        {remote && (
-                          <span className="session-badge">{strings.newSessionWorkspaceRemote}</span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
+                <>
+                  <button
+                    type="button"
+                    className="choice new-session-select"
+                    data-testid="new-session-workspace-trigger"
+                    aria-haspopup="dialog"
+                    aria-expanded={picker === 'workspace'}
+                    aria-labelledby="new-session-workspace-heading new-session-workspace-value"
+                    disabled={disabled}
+                    onClick={() => setPicker('workspace')}
+                  >
+                    <span className="new-session-select__text" id="new-session-workspace-value">
+                      <span className="new-session-select__name">{selectedWorkspace.name}</span>
+                      <span className="new-session-select__detail">{selectedWorkspace.folder}</span>
+                    </span>
+                    {selectedWorkspace.isOpen && (
+                      <span className="session-badge">{strings.newSessionWorkspaceOpen}</span>
+                    )}
+                    {isRemoteWorkspace(selectedWorkspace) && (
+                      <span className="session-badge">{strings.newSessionWorkspaceRemote}</span>
+                    )}
+                    <span className="new-session-select__chevron" aria-hidden="true">
+                      ›
+                    </span>
+                  </button>
+                  {picker === 'workspace' && (
+                    <WorkspacePickerSheet
+                      workspaces={workspaces}
+                      selectedFolder={folder}
+                      disabled={disabled}
+                      onSelect={setFolder}
+                      onClose={() => setPicker(undefined)}
+                    />
+                  )}
+                </>
               )}
               {selectedWorkspace !== undefined && !selectedWorkspace.isOpen && (
                 <p className="sheet__hint" data-testid="new-session-open-hint">

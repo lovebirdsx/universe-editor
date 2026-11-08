@@ -998,9 +998,24 @@ test.describe('mobile gateway in a workspace', () => {
       await phone.getByTestId('new-session-fab').click()
       await expect(phone).toHaveURL(/\/new$/)
 
-      await expect(phone.getByTestId('new-session-agent').first()).toBeVisible({ timeout: 10_000 })
-      const selected = phone.locator('[data-testid="new-session-workspace"][aria-selected="true"]')
+      await expect(phone.getByTestId('new-session-agent-trigger')).toContainText('Echo Agent', {
+        timeout: 10_000,
+      })
+      const workspaceTrigger = phone.getByTestId('new-session-workspace-trigger')
+      await expect(workspaceTrigger).toContainText('已打开')
+
+      await workspaceTrigger.click()
+      const workspaceSheet = phone.getByTestId('new-session-workspace-sheet')
+      await expect(workspaceSheet).toBeVisible()
+      await expect(workspaceSheet.getByTestId('new-session-workspace-search')).toBeVisible()
+
+      const selected = workspaceSheet.locator(
+        '[data-testid="new-session-workspace"][aria-selected="true"]',
+      )
       await expect(selected).toContainText('已打开')
+      await selected.click()
+      await expect(workspaceSheet).toHaveCount(0)
+
       await expect(phone.getByTestId('new-session-submit')).toBeEnabled()
 
       await phone.getByTestId('new-session-submit').click()

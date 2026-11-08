@@ -2,7 +2,7 @@ import type {
   MobileAgentCandidate,
   MobileWorkspaceCandidate,
 } from '@universe-editor/mobile-protocol'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { NewSessionPage, type NewSessionClient } from '../NewSessionPage.js'
 import type { SocketState } from '../../socket/mobileSocket.js'
@@ -51,15 +51,32 @@ function createClient(
   return { client, newSession, socketState }
 }
 
+function workspaceOption(folder: string): HTMLElement {
+  const option = screen
+    .getAllByTestId('new-session-workspace')
+    .find((element) => element.getAttribute('data-folder') === folder)
+  if (option === undefined) throw new Error(`missing workspace option: ${folder}`)
+  return option
+}
+
+async function renderLoaded(client: NewSessionClient): Promise<void> {
+  render(<NewSessionPage client={client} onBack={vi.fn()} onCreated={vi.fn()} />)
+  await waitFor(() => expect(screen.getByTestId('new-session-agent-trigger')).toBeTruthy())
+}
+
 describe('NewSessionPage', () => {
-  it('loads agents / workspaces, preselects the defaults and creates a session', async () => {
+  it('shows summary rows with the defaults and creates a session', async () => {
     const { client, newSession } = createClient()
     const onCreated = vi.fn()
     render(<NewSessionPage client={client} onBack={vi.fn()} onCreated={onCreated} />)
 
-    await waitFor(() => expect(screen.getByText('Echo')).toBeTruthy())
-    expect(screen.getAllByText(strings.newSessionWorkspaceOpen).length).toBeGreaterThan(0)
-    expect(screen.getAllByText(strings.newSessionWorkspaceRemote).length).toBeGreaterThan(0)
+    await waitFor(() => expect(screen.getByTestId('new-session-agent-trigger')).toBeTruthy())
+    expect(screen.getByTestId('new-session-agent-trigger').textContent).toContain('Echo')
+    const workspaceTrigger = screen.getByTestId('new-session-workspace-trigger')
+    expect(workspaceTrigger.textContent).toContain('open')
+    expect(workspaceTrigger.textContent).toContain(strings.newSessionWorkspaceOpen)
+    expect(screen.queryByTestId('new-session-agent')).toBeNull()
+    expect(screen.queryByTestId('new-session-workspace')).toBeNull()
 
     fireEvent.click(screen.getByTestId('new-session-submit'))
 
@@ -69,12 +86,27 @@ describe('NewSessionPage', () => {
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith('1:s9'))
   })
 
+  it('picks an agent from the overlay sheet and closes it', async () => {
+    const { client } = createClient()
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-agent-trigger'))
+    expect(screen.getByTestId('new-session-agent-sheet')).toBeTruthy()
+
+    fireEvent.click(screen.getByText('Claude'))
+
+    expect(screen.queryByTestId('new-session-agent-sheet')).toBeNull()
+    expect(screen.getByTestId('new-session-agent-trigger').textContent).toContain('Claude')
+  })
+
   it('passes the chosen agent, workspace and initial prompt', async () => {
     const { client, newSession } = createClient()
-    render(<NewSessionPage client={client} onBack={vi.fn()} onCreated={vi.fn()} />)
+    await renderLoaded(client)
 
-    await waitFor(() => expect(screen.getByText('Claude')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('new-session-agent-trigger'))
     fireEvent.click(screen.getByText('Claude'))
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(screen.getByText('recent'))
     fireEvent.change(screen.getByTestId('new-session-prompt'), {
       target: { value: 'fix the build' },
     })
@@ -83,7 +115,7 @@ describe('NewSessionPage', () => {
     await waitFor(() =>
       expect(newSession).toHaveBeenCalledWith(
         'claude',
-        { folder: 'file:///open' },
+        { folder: 'file:///recent' },
         'fix the build',
       ),
     )
@@ -91,20 +123,94 @@ describe('NewSessionPage', () => {
 
   it('warns before opening a workspace that is not open on the PC', async () => {
     const { client } = createClient()
-    render(<NewSessionPage client={client} onBack={vi.fn()} onCreated={vi.fn()} />)
+    await renderLoaded(client)
 
-    await waitFor(() => expect(screen.getByText('recent')).toBeTruthy())
+    expect(screen.queryByTestId('new-session-open-hint')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
     fireEvent.click(screen.getByText('recent'))
+
     expect(screen.getByTestId('new-session-open-hint').textContent).toContain(
       strings.newSessionWorkspaceWillOpen,
     )
   })
 
+  it('filters workspaces by name and folder path case-insensitively', async () => {
+    const { client } = createClient()
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    const search = screen.getByTestId('new-session-workspace-search')
+
+    fireEvent.change(search, { target: { value: 'BUILD-HOST' } })
+    expect(
+      screen.getAllByTestId('new-session-workspace').map((el) => el.getAttribute('data-folder')),
+    ).toEqual(['remote-ssh://build-host/work'])
+    expect(screen.getByTestId('new-session-workspace-group-open')).toBeTruthy()
+    expect(screen.queryByTestId('new-session-workspace-group-recent')).toBeNull()
+
+    fireEvent.change(search, { target: { value: 'recent' } })
+    expect(
+      screen.getAllByTestId('new-session-workspace').map((el) => el.getAttribute('data-folder')),
+    ).toEqual(['file:///recent'])
+    expect(screen.queryByTestId('new-session-workspace-group-open')).toBeNull()
+    expect(screen.getByTestId('new-session-workspace-group-recent')).toBeTruthy()
+  })
+
+  it('shows an empty state when no workspace matches the search', async () => {
+    const { client } = createClient()
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.change(screen.getByTestId('new-session-workspace-search'), {
+      target: { value: 'zzz' },
+    })
+
+    expect(screen.getByTestId('new-session-workspace-empty').textContent).toContain(
+      strings.newSessionNoMatch,
+    )
+    expect(screen.queryAllByTestId('new-session-workspace')).toHaveLength(0)
+  })
+
+  it('groups open workspaces above recent ones and marks the current selection', async () => {
+    const { client } = createClient()
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+
+    expect(
+      screen.getAllByTestId('new-session-workspace').map((el) => el.getAttribute('data-folder')),
+    ).toEqual(['file:///open', 'remote-ssh://build-host/work', 'file:///recent'])
+    expect(workspaceOption('file:///open').getAttribute('aria-selected')).toBe('true')
+    expect(workspaceOption('file:///recent').getAttribute('aria-selected')).toBe('false')
+  })
+
+  it('closes the picker when the current option is tapped', async () => {
+    const { client } = createClient()
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(workspaceOption('file:///open'))
+
+    expect(screen.queryByTestId('new-session-workspace-sheet')).toBeNull()
+  })
+
+  it('dismisses the picker with Escape', async () => {
+    const { client } = createClient()
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-agent-trigger'))
+    expect(screen.getByTestId('new-session-agent-sheet')).toBeTruthy()
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+
+    expect(screen.queryByTestId('new-session-agent-sheet')).toBeNull()
+  })
+
   it('maps workspace_not_open to a Chinese error', async () => {
     const { client } = createClient({ createError: { code: 'workspace_not_open' } })
-    render(<NewSessionPage client={client} onBack={vi.fn()} onCreated={vi.fn()} />)
+    await renderLoaded(client)
 
-    await waitFor(() => expect(screen.getByText('Echo')).toBeTruthy())
     fireEvent.click(screen.getByTestId('new-session-submit'))
 
     await waitFor(() =>
@@ -118,6 +224,53 @@ describe('NewSessionPage', () => {
 
     await waitFor(() =>
       expect((screen.getByTestId('new-session-submit') as HTMLButtonElement).disabled).toBe(true),
+    )
+  })
+
+  it('disables the pickers when the connection drops', async () => {
+    const { client, socketState } = createClient()
+    await renderLoaded(client)
+
+    act(() => socketState.setState('reconnecting'))
+
+    await waitFor(() => {
+      expect((screen.getByTestId('new-session-agent-trigger') as HTMLButtonElement).disabled).toBe(
+        true,
+      )
+      expect(
+        (screen.getByTestId('new-session-workspace-trigger') as HTMLButtonElement).disabled,
+      ).toBe(true)
+      expect((screen.getByTestId('new-session-submit') as HTMLButtonElement).disabled).toBe(true)
+    })
+  })
+
+  it('falls back to another workspace when the selected one disappears after a reload', async () => {
+    const first = createClient()
+    const { rerender } = render(
+      <NewSessionPage client={first.client} onBack={vi.fn()} onCreated={vi.fn()} />,
+    )
+    await waitFor(() => expect(screen.getByTestId('new-session-workspace-trigger')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(screen.getByText('recent'))
+    expect(screen.getByTestId('new-session-workspace-trigger').textContent).toContain('recent')
+
+    const second = createClient({
+      workspaces: [{ folder: 'file:///other', name: 'other', isOpen: true }],
+    })
+    rerender(<NewSessionPage client={second.client} onBack={vi.fn()} onCreated={vi.fn()} />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('new-session-workspace-trigger').textContent).toContain('other'),
+    )
+
+    fireEvent.click(screen.getByTestId('new-session-submit'))
+    await waitFor(() =>
+      expect(second.newSession).toHaveBeenCalledWith(
+        'echo',
+        { folder: 'file:///other' },
+        undefined,
+      ),
     )
   })
 })

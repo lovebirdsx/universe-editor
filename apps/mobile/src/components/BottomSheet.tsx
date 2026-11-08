@@ -42,6 +42,15 @@ export function BottomSheet({
     setCollapsed(false)
   }, [expandKey])
 
+  useEffect(() => {
+    if (!overlay || onDismiss === undefined) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onDismiss()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [overlay, onDismiss])
+
   const onPointerDown = (event: React.PointerEvent<HTMLButtonElement>): void => {
     dragStart.current = event.clientY
     event.currentTarget.setPointerCapture(event.pointerId)
@@ -78,6 +87,8 @@ export function BottomSheet({
         }`}
         data-testid={testId}
         aria-label={title}
+        role={overlay ? 'dialog' : undefined}
+        aria-modal={overlay ? true : undefined}
       >
         <button
           type="button"
