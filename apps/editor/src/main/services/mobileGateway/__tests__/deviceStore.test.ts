@@ -114,4 +114,108 @@ describe('DeviceStore', () => {
     const stat = await fs.stat(join(dir, 'mobile', 'devices.json'))
     expect(stat.mode & 0o777).toBe(0o600)
   })
+
+  it('stores notification preferences and lists only enabled devices', async () => {
+    const first = await store.add({ name: 'Pixel', platform: 'android' })
+    const second = await store.add({ name: 'iPhone', platform: 'ios' })
+
+    expect(
+      await store.setNotificationPrefs(first.device.deviceId, {
+        enabled: true,
+        kinds: ['permission', 'question'],
+        alwaysNotify: true,
+      }),
+    ).toBe(true)
+    expect(
+      await store.setNotificationPrefs(second.device.deviceId, {
+        enabled: false,
+        alwaysNotify: false,
+      }),
+    ).toBe(true)
+    // Unknown device id changes nothing.
+    expect(
+      await store.setNotificationPrefs('missing', { enabled: true, alwaysNotify: false }),
+    ).toBe(false)
+
+    const listed = await store.get(first.device.deviceId)
+    expect(listed?.notifications).toEqual({
+      enabled: true,
+      kinds: ['permission', 'question'],
+      alwaysNotify: true,
+    })
+
+    const targets = await store.listNotifyTargets()
+    expect(targets).toHaveLength(1)
+    expect(targets[0]).toMatchObject({
+      deviceId: first.device.deviceId,
+      notifications: { enabled: true, alwaysNotify: true },
+    })
+  })
+
+  it('stores and removes a push subscription', async () => {
+    const added = await store.add({ name: 'Pixel', platform: 'android' })
+    const deviceId = added.device.deviceId
+    const subscription = {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/abc',
+      keys: { p256dh: 'p256dh', auth: 'auth' },
+    }
+
+    expect(await store.setPushSubscription(deviceId, subscription)).toBe(true)
+    await store.setNotificationPrefs(deviceId, { enabled: true, alwaysNotify: false })
+    const stored = await store.get(deviceId)
+    expect(stored?.push).toEqual({
+      endpoint: subscription.endpoint,
+      keys: subscription.keys,
+      updatedAt: 1_700_000_000_000,
+    })
+
+    const targets = await store.listNotifyTargets()
+    expect(targets[0]?.push?.endpoint).toBe(subscription.endpoint)
+
+    expect(await store.removePushSubscription(deviceId)).toBe(true)
+    expect((await store.get(deviceId))?.push).toBeUndefined()
+    expect(await store.removePushSubscription(deviceId)).toBe(false)
+    expect(await store.removePushSubscription('missing')).toBe(false)
+  })
+
+  it('drops malformed notification and push records on load', async () => {
+    await fs.mkdir(join(dir, 'mobile'), { recursive: true })
+    const file = join(dir, 'mobile', 'devices.json')
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        version: 2,
+        devices: [
+          {
+            deviceId: 'bad',
+            name: 'Bad',
+            platform: 'ios',
+            tokenHash: 'hash',
+            createdAt: 1,
+            lastSeenAt: 1,
+            notifications: { enabled: 'yes' },
+          },
+          {
+            deviceId: 'good',
+            name: 'Good',
+            platform: 'ios',
+            tokenHash: 'hash',
+            createdAt: 1,
+            lastSeenAt: 1,
+            notifications: { enabled: true, alwaysNotify: false },
+            push: {
+              endpoint: 'https://fcm.googleapis.com/x',
+              keys: { p256dh: 'p', auth: 'a' },
+              updatedAt: 1,
+            },
+          },
+        ],
+      }),
+      'utf8',
+    )
+
+    const tolerant = new DeviceStore(file)
+    const listed = await tolerant.list()
+    expect(listed.map((device) => device.deviceId)).toEqual(['good'])
+  })
 })

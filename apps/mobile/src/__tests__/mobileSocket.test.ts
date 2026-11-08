@@ -102,12 +102,14 @@ describe('MobileSocket handshake', () => {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       token: 'secret-token',
       clientVersion: MOBILE_CLIENT_VERSION,
-      capabilities: ['inbox', 'session'],
+      capabilities: ['inbox', 'session', 'notifications'],
     })
 
     socket.serverSend(helloOk())
     expect(harness.socket.state).toBe('connected')
-    expect(sentFrames(socket)[1]).toEqual({ type: 'subscribe_inbox' })
+    const afterHello = sentFrames(socket).slice(1) as Array<Record<string, unknown>>
+    expect(afterHello[0]!).toMatchObject({ type: 'client_state', visible: expect.any(Boolean) })
+    expect(afterHello[1]).toEqual({ type: 'subscribe_inbox' })
   })
 
   it('forwards inbox snapshots after subscribe', () => {

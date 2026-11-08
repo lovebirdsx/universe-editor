@@ -14,7 +14,7 @@ export type SocketState =
   | 'invalid'
   | 'protocol_mismatch'
 
-export const MOBILE_CLIENT_VERSION = '0.0.0-m2'
+export const MOBILE_CLIENT_VERSION = '0.0.0-m4'
 
 export const RECONNECT_BASE_MS = 1_000
 export const RECONNECT_MAX_MS = 30_000
@@ -57,6 +57,10 @@ export interface MobileSocketOptions {
   readonly onFrame?: ((frame: ServerFrame) => void) | undefined
   /** Server clock from `hello_ok`; the phone corrects countdown deadlines with it. */
   readonly onServerTime?: ((serverTime: number) => void) | undefined
+  /** VAPID public key advertised by the gateway, when Web Push is available. */
+  readonly onVapidPublicKey?: ((key: string | undefined) => void) | undefined
+  /** Foreground/background transitions, mirrored to the gateway as `client_state`. */
+  readonly onVisibilityChange?: ((visible: boolean) => void) | undefined
   /** Revoked / unauthorized credentials: the caller must clear local state. */
   readonly onCredentialsInvalid?: (() => void) | undefined
   readonly onProtocolMismatch?: (() => void) | undefined
@@ -88,6 +92,8 @@ export class MobileSocket {
   private readonly _onStateChange: ((state: SocketState) => void) | undefined
   private readonly _onFrame: ((frame: ServerFrame) => void) | undefined
   private readonly _onServerTime: ((serverTime: number) => void) | undefined
+  private readonly _onVapidPublicKey: ((key: string | undefined) => void) | undefined
+  private readonly _onVisibilityChange: ((visible: boolean) => void) | undefined
   private readonly _onCredentialsInvalid: (() => void) | undefined
   private readonly _onProtocolMismatch: (() => void) | undefined
 
@@ -100,9 +106,12 @@ export class MobileSocket {
   private _reconnectAttempt = 0
   private _lastPongAt = 0
 
-  private readonly _onVisibilityChange = (): void => {
+  private readonly _handleVisibilityChange = (): void => {
     if (typeof document === 'undefined') return
-    if (document.visibilityState === 'visible') this._retryNow()
+    const visible = document.visibilityState === 'visible'
+    this._onVisibilityChange?.(visible)
+    this._sendClientState(visible)
+    if (visible) this._retryNow()
   }
 
   private readonly _onOnline = (): void => {
@@ -120,6 +129,8 @@ export class MobileSocket {
     this._onStateChange = options.onStateChange
     this._onFrame = options.onFrame
     this._onServerTime = options.onServerTime
+    this._onVapidPublicKey = options.onVapidPublicKey
+    this._onVisibilityChange = options.onVisibilityChange
     this._onCredentialsInvalid = options.onCredentialsInvalid
     this._onProtocolMismatch = options.onProtocolMismatch
   }
@@ -193,7 +204,7 @@ export class MobileSocket {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       token: this._token,
       clientVersion: this._clientVersion,
-      capabilities: ['inbox', 'session'],
+      capabilities: ['inbox', 'session', 'notifications'],
     })
   }
 
@@ -211,6 +222,7 @@ export class MobileSocket {
     switch (frame.type) {
       case 'hello_ok':
         this._onServerTime?.(frame.serverTime)
+        this._onVapidPublicKey?.(frame.vapidPublicKey)
         this._handleHelloOk()
         break
       case 'pong':
@@ -226,6 +238,7 @@ export class MobileSocket {
       case 'session_delta':
       case 'session_removed':
       case 'command_result':
+      case 'notification':
       case 'resync_required':
       case 'server_error':
         this._onFrame?.(frame)
@@ -237,7 +250,12 @@ export class MobileSocket {
     this._reconnectAttempt = 0
     this._startHeartbeat()
     this._setState('connected')
+    this._sendClientState(typeof document === 'undefined' || document.visibilityState === 'visible')
     this._send({ type: 'subscribe_inbox' })
+  }
+
+  private _sendClientState(visible: boolean): void {
+    this._send({ type: 'client_state', visible })
   }
 
   private _handleRevoked(): void {
@@ -374,7 +392,7 @@ export class MobileSocket {
 
   private _attachGlobalListeners(): void {
     if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', this._onVisibilityChange)
+      document.addEventListener('visibilitychange', this._handleVisibilityChange)
     }
     if (typeof window !== 'undefined') {
       window.addEventListener('online', this._onOnline)
@@ -383,7 +401,7 @@ export class MobileSocket {
 
   private _detachGlobalListeners(): void {
     if (typeof document !== 'undefined') {
-      document.removeEventListener('visibilitychange', this._onVisibilityChange)
+      document.removeEventListener('visibilitychange', this._handleVisibilityChange)
     }
     if (typeof window !== 'undefined') {
       window.removeEventListener('online', this._onOnline)

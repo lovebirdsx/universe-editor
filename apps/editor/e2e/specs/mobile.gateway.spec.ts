@@ -265,6 +265,54 @@ async function openFirstPhoneSession(phone: Page): Promise<void> {
   await expect(phone.getByTestId('composer')).toBeVisible()
 }
 
+/**
+ * Read the bearer token the paired PWA persisted. The token never leaves the
+ * phone; e2e uses a second socket on the same device to flip notification prefs
+ * (Web Push itself cannot be exercised in headless Chromium).
+ */
+async function readPhoneToken(phone: Page): Promise<string> {
+  const token = await phone.evaluate(async () => {
+    const request = indexedDB.open('universe-mobile', 1)
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    try {
+      return await new Promise<string | undefined>((resolve, reject) => {
+        const transaction = db.transaction('credentials', 'readonly')
+        const get = transaction.objectStore('credentials').get('device')
+        get.onsuccess = () => {
+          const record = get.result as { token?: unknown } | undefined
+          resolve(typeof record?.token === 'string' ? record.token : undefined)
+        }
+        get.onerror = () => reject(get.error)
+      })
+    } finally {
+      db.close()
+    }
+  })
+  expect(token).toBeTruthy()
+  return token!
+}
+
+/** Same device, second socket: enable notifications with alwaysNotify. */
+async function enableDeviceNotifications(origin: string, token: string): Promise<WebSocket> {
+  const ws = await openSocket(origin)
+  const helloPromise = nextFrameOfType(ws, 'hello_ok')
+  ws.send(
+    serializeFrame({
+      type: 'hello',
+      protocolVersion: MOBILE_PROTOCOL_VERSION,
+      token,
+      clientVersion: 'e2e',
+      capabilities: ['notifications'],
+    }),
+  )
+  await helloPromise
+  ws.send(serializeFrame({ type: 'set_notification_prefs', enabled: true, alwaysNotify: true }))
+  return ws
+}
+
 test.describe('mobile gateway', () => {
   test.describe.configure({ mode: 'default' })
 
@@ -655,6 +703,71 @@ test.describe('mobile gateway', () => {
       await expect(phone.getByTestId('user-message').last()).toContainText('phone hello')
       await expect(phone.getByTestId('agent-message').last()).toContainText('echo: phone hello')
     } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@p1 shows a foreground notification for a permission and routes the toast', async ({
+    page,
+    workbench,
+  }) => {
+    // Web Push is not exercised here: headless Chromium has no usable push
+    // service. The phone stays foregrounded, so the gateway sends an in-app
+    // `notification` frame over its visible WebSocket instead.
+    const { browser, context, phone, origin } = await pairPhone(page, workbench)
+    let prefsSocket: WebSocket | undefined
+    try {
+      const token = await readPhoneToken(phone)
+      prefsSocket = await enableDeviceNotifications(origin, token)
+      await expect
+        .poll(
+          async () =>
+            (await page.evaluate(() => window.__E2E__!.listMobileDevices()))[0]
+              ?.notificationsEnabled,
+          { timeout: 10_000 },
+        )
+        .toBe(true)
+      await expect(page.locator('[data-testid^="mobile-device-notifications-"]')).toContainText(
+        'Notifications: on',
+      )
+
+      await startEchoSession(page, workbench)
+      await expect(phone.getByTestId('inbox-session-row').first()).toBeVisible({
+        timeout: 10_000,
+      })
+
+      await page.evaluate(() => {
+        void window.__E2E__!.sendAcpPrompt('approve-shell')
+      })
+      await expect(page.getByTestId('acp-permission-card')).toBeVisible({ timeout: 10_000 })
+
+      const toast = phone.getByTestId('notification-toast')
+      await expect(toast).toBeVisible({ timeout: 10_000 })
+      await expect(toast).toContainText('等待审批：ls -la ~/.codex/sessions')
+
+      await toast.getByRole('button').first().click()
+      await expect(phone).toHaveURL(/\/s\//)
+      await expect(phone.getByTestId('permission-sheet')).toBeVisible({ timeout: 10_000 })
+      // The prompt is still pending on the PC; the phone only navigated.
+      await expect(page.getByTestId('acp-permission-card')).toBeVisible()
+    } finally {
+      if (prefsSocket !== undefined && prefsSocket.readyState === WebSocket.OPEN) {
+        // Turn notifications off before teardown: the gateway then stops the
+        // attention-only bridge and drops its event subscription, so the
+        // window does not report a leftover Disposable at the leak gate.
+        prefsSocket.send(serializeFrame({ type: 'set_notification_prefs', enabled: false }))
+        await expect
+          .poll(
+            async () =>
+              (await page.evaluate(() => window.__E2E__!.listMobileDevices()))[0]
+                ?.notificationsEnabled,
+            { timeout: 10_000 },
+          )
+          .toBe(false)
+        await page.waitForTimeout(200)
+      }
+      prefsSocket?.close()
       await context.close()
       await browser.close()
     }

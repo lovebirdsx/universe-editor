@@ -26,6 +26,9 @@ export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
   lanAddress: '',
   port: MOBILE_GATEWAY_DEFAULT_PORT,
   allowedHosts: [],
+  // Placeholder per the repository's public-value policy. Override with a real
+  // `mailto:` or `https:` URL before relying on push in the field.
+  vapidSubject: 'https://universe-editor.example.com',
 }
 
 export function parseMobileGatewayConfig(raw: unknown): MobileGatewayConfig {
@@ -35,6 +38,7 @@ export function parseMobileGatewayConfig(raw: unknown): MobileGatewayConfig {
   const lanAddress = raw['mobileGateway.lanAddress']
   const port = raw['mobileGateway.port']
   const allowedHosts = raw['mobileGateway.allowedHosts']
+  const vapidSubject = raw['mobileGateway.vapidSubject']
 
   return {
     enabled: typeof enabled === 'boolean' ? enabled : DEFAULT_MOBILE_GATEWAY_CONFIG.enabled,
@@ -48,6 +52,22 @@ export function parseMobileGatewayConfig(raw: unknown): MobileGatewayConfig {
           .filter((value) => value !== '')
           .slice(0, MAX_ALLOWED_HOSTS)
       : [],
+    vapidSubject:
+      typeof vapidSubject === 'string' && isValidVapidSubject(vapidSubject.trim())
+        ? vapidSubject.trim()
+        : DEFAULT_MOBILE_GATEWAY_CONFIG.vapidSubject,
+  }
+}
+
+/** Web Push requires a `mailto:` address or an `https:` URL as the VAPID subject. */
+export function isValidVapidSubject(value: string): boolean {
+  if (value.startsWith('mailto:')) return value.length > 'mailto:'.length
+  if (!value.startsWith('https://')) return false
+  try {
+    new URL(value)
+    return true
+  } catch {
+    return false
   }
 }
 

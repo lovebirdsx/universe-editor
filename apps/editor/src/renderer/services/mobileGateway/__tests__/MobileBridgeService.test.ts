@@ -995,3 +995,82 @@ describe('MobileBridgeService permission supersede', () => {
     }
   })
 })
+
+describe('MobileBridgeService attention', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('emits attention edges without starting the streaming pipeline', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { title: 'Parsed title', durableId: 'd1' })
+    harness.add(first)
+
+    await harness.service.startAttention()
+    first.status.set('running', undefined)
+    first.pendingPermission.set(
+      {
+        requestId: 'r1',
+        toolCallId: 't1',
+        title: 'Run shell command',
+        options: [],
+      } as unknown as AcpPendingPermission,
+      undefined,
+    )
+    first.status.set('idle', undefined)
+
+    expect(harness.events).toEqual([
+      {
+        kind: 'attention',
+        localId: 's1',
+        durableId: 'd1',
+        attentionKind: 'permission',
+        title: 'Parsed title',
+        agentName: 'Fake Agent',
+        permissionTitle: 'Run shell command',
+      },
+    ])
+    expect(first.timeline.get()).toEqual([])
+  })
+
+  it('debounces completion and stops after stopAttention', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    await harness.service.startAttention()
+
+    first.status.set('running', undefined)
+    first.status.set('idle', undefined)
+    expect(harness.events).toHaveLength(0)
+    await vi.advanceTimersByTimeAsync(300)
+    expect(harness.events).toEqual([
+      {
+        kind: 'attention',
+        localId: 's1',
+        attentionKind: 'completed',
+        title: 'Session s1',
+        agentName: 'Fake Agent',
+      },
+    ])
+
+    await harness.service.stopAttention()
+    harness.events.length = 0
+    first.pendingElicitation.set({ request: {} } as unknown as AcpPendingElicitation, undefined)
+    expect(harness.events).toHaveLength(0)
+  })
+
+  it('stops attention when the bridge is disposed', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    await harness.service.startAttention()
+
+    harness.service.dispose()
+    first.pendingElicitation.set({ request: {} } as unknown as AcpPendingElicitation, undefined)
+    expect(harness.events).toHaveLength(0)
+  })
+})

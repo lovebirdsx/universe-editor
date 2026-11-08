@@ -175,3 +175,83 @@ describe('MobileClient session subscription', () => {
     expect(command.idempotencyKey).toBeTruthy()
   })
 })
+
+describe('MobileClient notifications', () => {
+  it('captures the VAPID key and re-registers push after a reconnect', () => {
+    const { client, sockets, timers } = createHarness()
+    const first = sockets[0]!
+    first.serverSend({ ...helloOkFrame(), vapidPublicKey: 'vapid-public-key' })
+    expect(client.getVapidPublicKey()).toBe('vapid-public-key')
+
+    const subscription = {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/token',
+      keys: { p256dh: 'p256dh', auth: 'auth' },
+    }
+    client.subscribePush(subscription, {
+      enabled: true,
+      kinds: ['permission'],
+      alwaysNotify: true,
+    })
+    expect(sentFrames(first)).toContainEqual({
+      type: 'push_subscribe',
+      subscription,
+      prefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+
+    first.serverClose(1006)
+    timers.advance(RECONNECT_BASE_MS)
+    const second = sockets[1]!
+    second.serverOpen()
+    second.serverSend(helloOkFrame())
+
+    expect(sentFrames(second)).toContainEqual({
+      type: 'push_subscribe',
+      subscription,
+      prefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+  })
+
+  it('stores a notification only when its session is not open', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    const frame = {
+      type: 'notification' as const,
+      id: 'n1',
+      kind: 'permission' as const,
+      ref: sessionRef('s1', 1, 'durable-1'),
+      title: 'Fix the parser',
+      body: '等待审批：Run shell command',
+      at: 1,
+    }
+
+    socket.serverSend(frame)
+    expect(client.getNotificationStore().getState()).toEqual(frame)
+    client.dismissNotification()
+    expect(client.getNotificationStore().getState()).toBeUndefined()
+
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1', { ref: sessionRef('s1', 1, 'durable-1') })],
+    })
+    client.openSession('durable-1')
+    socket.serverSend({ ...frame, id: 'n2' })
+    expect(client.getNotificationStore().getState()).toBeUndefined()
+  })
+
+  it('sends preference updates and unsubscribes', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+
+    client.setNotificationPrefs(true, ['question', 'completed'], true)
+    expect(sentFrames(socket)).toContainEqual({
+      type: 'set_notification_prefs',
+      enabled: true,
+      kinds: ['question', 'completed'],
+      alwaysNotify: true,
+    })
+
+    client.unsubscribePush()
+    expect(sentFrames(socket)).toContainEqual({ type: 'push_unsubscribe' })
+  })
+})

@@ -3,12 +3,16 @@ import type {
   CommandFrame,
   MobileAgentCandidate,
   MobileCommandKind,
+  MobileAttentionKind,
   MobileElicitationAction,
   MobileElicitationContentValue,
   MobileNewSessionResult,
+  MobileNotificationPrefs,
+  MobilePushSubscription,
   MobileSessionRef,
   MobileToolCallDetail,
   MobileWorkspaceCandidate,
+  NotificationFrame,
   ServerFrame,
   SessionSnapshotFrame,
 } from '@universe-editor/mobile-protocol'
@@ -52,10 +56,14 @@ export class MobileClient {
   private readonly _session = new SessionStore()
   private readonly _commands: CommandClient
   private readonly _detail: ToolCallDetailClient
+  private readonly _notification = new Store<NotificationFrame | undefined>(undefined)
   private readonly _logger: Pick<Console, 'warn'>
   private _currentRef: MobileSessionRef | undefined
   private _routeKey: string | undefined
   private _serverTimeOffsetMs = 0
+  private _vapidPublicKey: string | undefined
+  private _pushSubscription: MobilePushSubscription | undefined
+  private _notificationPrefs: MobileNotificationPrefs | undefined
 
   constructor(options: MobileClientOptions) {
     this._logger = options.logger ?? console
@@ -75,6 +83,9 @@ export class MobileClient {
       onFrame: (frame) => this._handleFrame(frame),
       onServerTime: (serverTime) => {
         this._serverTimeOffsetMs = serverTime - Date.now()
+      },
+      onVapidPublicKey: (key) => {
+        this._vapidPublicKey = key
       },
       onCredentialsInvalid: () => {
         this._inbox.reset()
@@ -97,6 +108,19 @@ export class MobileClient {
     return this._socketState
   }
 
+  getNotificationStore(): Store<NotificationFrame | undefined> {
+    return this._notification
+  }
+
+  /** VAPID public key from `hello_ok`; undefined when the gateway has no push. */
+  getVapidPublicKey(): string | undefined {
+    return this._vapidPublicKey
+  }
+
+  dismissNotification(): void {
+    this._notification.setState(undefined)
+  }
+
   /** PC clock (`hello_ok.serverTime` corrected) so countdown deadlines line up. */
   serverNow(): number {
     return Date.now() + this._serverTimeOffsetMs
@@ -108,6 +132,39 @@ export class MobileClient {
 
   start(): void {
     this._socket.start()
+  }
+
+  subscribePush(subscription: MobilePushSubscription, prefs?: MobileNotificationPrefs): void {
+    this._pushSubscription = subscription
+    if (prefs !== undefined) this._notificationPrefs = prefs
+    this._send({
+      type: 'push_subscribe',
+      subscription,
+      ...(prefs !== undefined ? { prefs } : {}),
+    })
+  }
+
+  unsubscribePush(): void {
+    this._pushSubscription = undefined
+    this._send({ type: 'push_unsubscribe' })
+  }
+
+  setNotificationPrefs(
+    enabled: boolean,
+    kinds: readonly MobileAttentionKind[] | undefined,
+    alwaysNotify: boolean,
+  ): void {
+    this._notificationPrefs = {
+      enabled,
+      ...(kinds !== undefined ? { kinds } : {}),
+      alwaysNotify,
+    }
+    this._send({
+      type: 'set_notification_prefs',
+      enabled,
+      ...(kinds !== undefined ? { kinds } : {}),
+      alwaysNotify,
+    })
   }
 
   stop(): void {
@@ -275,6 +332,14 @@ export class MobileClient {
       // gateway answers mutating duplicates from its idempotency cache.
       this._commands.resendPending()
       this._subscribeCurrentSession()
+      // Re-register a push subscription the server may have lost with the socket.
+      if (this._pushSubscription !== undefined) {
+        this._send({
+          type: 'push_subscribe',
+          subscription: this._pushSubscription,
+          ...(this._notificationPrefs !== undefined ? { prefs: this._notificationPrefs } : {}),
+        })
+      }
     }
   }
 
@@ -306,6 +371,13 @@ export class MobileClient {
       case 'session_removed':
         if (this._currentRef !== undefined && refMatches(this._currentRef, frame.ref)) {
           this._session.applyRemoved(frame.ref)
+        }
+        break
+      case 'notification':
+        // The session page already surfaces a pending card or the reply; only
+        // toast when the user is looking at something else.
+        if (this._currentRef === undefined || !refMatches(this._currentRef, frame.ref)) {
+          this._notification.setState(frame)
         }
         break
       case 'command_result':

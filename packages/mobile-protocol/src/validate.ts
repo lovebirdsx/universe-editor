@@ -1,11 +1,13 @@
 import { isMobileErrorCode } from './errors.js'
 import type {
   ClientFrame,
+  ClientStateFrame,
   CommandFrame,
   HelloFrame,
   HelloOkFrame,
   InboxDeltaFrame,
   InboxSnapshotFrame,
+  MobileAttentionKind,
   MobileConfigOption,
   MobileConfigOptionType,
   MobileConfigOptionValue,
@@ -17,6 +19,7 @@ import type {
   MobileMessageRole,
   MobileNoticeKind,
   MobileNoticePhase,
+  MobileNotificationPrefs,
   MobilePermissionSettleReason,
   MobilePermissionSettleSource,
   MobilePendingElicitation,
@@ -24,6 +27,7 @@ import type {
   MobilePermissionOption,
   MobilePlanEntry,
   MobilePlanEntryStatus,
+  MobilePushSubscription,
   MobileResyncScope,
   MobileSessionBucket,
   MobileSessionEvent,
@@ -38,19 +42,23 @@ import type {
   MobileToolCallDiffStat,
   MobileToolCallLocation,
   MobileUsage,
+  NotificationFrame,
   PingFrame,
   PongFrame,
+  PushSubscribeFrame,
   ResyncRequiredFrame,
   ServerErrorFrame,
   ServerFrame,
   SessionDeltaFrame,
   SessionRemovedFrame,
   SessionSnapshotFrame,
+  SetNotificationPrefsFrame,
   SubscribeInboxFrame,
   SubscribeSessionFrame,
   UnsubscribeSessionFrame,
 } from './frames.js'
 import {
+  MOBILE_ATTENTION_KINDS,
   MOBILE_CONFIG_OPTION_TYPES,
   MOBILE_ELICITATION_ACTIONS,
   MOBILE_ELICITATION_FIELD_KINDS,
@@ -104,6 +112,10 @@ export const MAX_REQUEST_ID_LENGTH = 128
 export const MAX_PROMPT_LENGTH = 32 * 1024
 export const MAX_FEEDBACK_LENGTH = 8 * 1024
 export const MAX_ELICITATION_CONTENT_KEYS = 128
+export const MAX_PUSH_ENDPOINT_LENGTH = 2048
+export const MAX_PUSH_KEY_LENGTH = 256
+export const MAX_NOTIFICATION_ID_LENGTH = 128
+export const MAX_NOTIFICATION_BODY_LENGTH = 1024
 
 export type ParseErrorCode = 'bad_request' | 'protocol_mismatch'
 
@@ -192,6 +204,14 @@ export function parseClientFrame(text: string): Result<ClientFrame> {
       return parseUnsubscribeSessionFrame(frame)
     case 'command':
       return parseCommandFrame(frame)
+    case 'push_subscribe':
+      return parsePushSubscribeFrame(frame)
+    case 'push_unsubscribe':
+      return ok({ type: 'push_unsubscribe' })
+    case 'set_notification_prefs':
+      return parseSetNotificationPrefsFrame(frame)
+    case 'client_state':
+      return parseClientStateFrame(frame)
     default:
       return fail('bad_request', `unknown client frame type: ${type}`)
   }
@@ -220,6 +240,8 @@ export function parseServerFrame(text: string): Result<ServerFrame> {
       return parseSessionRemovedFrame(frame)
     case 'command_result':
       return parseCommandResultFrame(frame)
+    case 'notification':
+      return parseNotificationFrame(frame)
     case 'resync_required':
       return parseResyncRequiredFrame(frame)
     case 'server_error':
@@ -311,6 +333,134 @@ function parseUnsubscribeSessionFrame(
   const ref = parseSessionRef(frame.ref)
   if (!ref.ok) return ref
   return ok({ type: 'unsubscribe_session', ref: ref.value })
+}
+
+function parsePushSubscribeFrame(frame: Record<string, unknown>): Result<PushSubscribeFrame> {
+  const subscription = parsePushSubscription(frame.subscription)
+  if (!subscription.ok) return subscription
+  if (frame.prefs === undefined) {
+    return ok({ type: 'push_subscribe', subscription: subscription.value })
+  }
+  const prefs = parseNotificationPrefs(frame.prefs, 'push_subscribe.prefs')
+  if (!prefs.ok) return prefs
+  return ok({ type: 'push_subscribe', subscription: subscription.value, prefs: prefs.value })
+}
+
+function parseSetNotificationPrefsFrame(
+  frame: Record<string, unknown>,
+): Result<SetNotificationPrefsFrame> {
+  const prefs = parseNotificationPrefs(frame, 'set_notification_prefs')
+  if (!prefs.ok) return prefs
+  return ok({
+    type: 'set_notification_prefs',
+    enabled: prefs.value.enabled,
+    ...(prefs.value.kinds !== undefined ? { kinds: prefs.value.kinds } : {}),
+    alwaysNotify: prefs.value.alwaysNotify,
+  })
+}
+
+function parseClientStateFrame(frame: Record<string, unknown>): Result<ClientStateFrame> {
+  const visible = frame.visible
+  if (typeof visible !== 'boolean') {
+    return fail('bad_request', 'client_state.visible must be a boolean')
+  }
+  return ok({ type: 'client_state', visible })
+}
+
+function parsePushSubscription(value: unknown): Result<MobilePushSubscription> {
+  if (!isRecord(value)) return fail('bad_request', 'push subscription must be an object')
+  const endpoint = value['endpoint']
+  if (!isNonEmptyBoundedString(endpoint, MAX_PUSH_ENDPOINT_LENGTH)) {
+    return fail(
+      'bad_request',
+      `push subscription endpoint must be 1–${MAX_PUSH_ENDPOINT_LENGTH} characters`,
+    )
+  }
+  let url: URL
+  try {
+    url = new URL(endpoint)
+  } catch {
+    return fail('bad_request', 'push subscription endpoint must be a URL')
+  }
+  // Push services are HTTPS only; the gateway forwards to this URL, so anything
+  // else would turn it into an SSRF gadget.
+  if (url.protocol !== 'https:') {
+    return fail('bad_request', 'push subscription endpoint must use https')
+  }
+  if (url.username !== '' || url.password !== '') {
+    return fail('bad_request', 'push subscription endpoint must not carry credentials')
+  }
+  const keys = value['keys']
+  if (!isRecord(keys)) return fail('bad_request', 'push subscription keys must be an object')
+  const p256dh = keys['p256dh']
+  const auth = keys['auth']
+  if (!isNonEmptyBoundedString(p256dh, MAX_PUSH_KEY_LENGTH)) {
+    return fail('bad_request', `push subscription keys.p256dh must be 1–${MAX_PUSH_KEY_LENGTH}`)
+  }
+  if (!isNonEmptyBoundedString(auth, MAX_PUSH_KEY_LENGTH)) {
+    return fail('bad_request', `push subscription keys.auth must be 1–${MAX_PUSH_KEY_LENGTH}`)
+  }
+  return ok({ endpoint, keys: { p256dh, auth } })
+}
+
+function parseNotificationPrefs(value: unknown, field: string): Result<MobileNotificationPrefs> {
+  if (!isRecord(value)) return fail('bad_request', `${field} must be an object`)
+  const enabled = value['enabled']
+  if (typeof enabled !== 'boolean') {
+    return fail('bad_request', `${field}.enabled must be a boolean`)
+  }
+  const kinds = parseOptionalAttentionKinds(value['kinds'], `${field}.kinds`)
+  if (!kinds.ok) return kinds
+  const rawAlwaysNotify = value['alwaysNotify']
+  if (rawAlwaysNotify !== undefined && typeof rawAlwaysNotify !== 'boolean') {
+    return fail('bad_request', `${field}.alwaysNotify must be a boolean`)
+  }
+  return ok({
+    enabled,
+    ...(kinds.value !== undefined ? { kinds: kinds.value } : {}),
+    alwaysNotify: rawAlwaysNotify === true,
+  })
+}
+
+function parseOptionalAttentionKinds(
+  value: unknown,
+  field: string,
+): Result<MobileAttentionKind[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', `${field} must be an array`)
+  if (value.length > MOBILE_ATTENTION_KINDS.length) {
+    return fail('bad_request', `${field} has too many entries`)
+  }
+  const kinds: MobileAttentionKind[] = []
+  for (const entry of value) {
+    if (!isAttentionKind(entry)) {
+      return fail('bad_request', `${field} contains an unknown kind`)
+    }
+    if (!kinds.includes(entry)) kinds.push(entry)
+  }
+  return ok(kinds)
+}
+
+function parseNotificationFrame(frame: Record<string, unknown>): Result<NotificationFrame> {
+  const id = frame['id']
+  if (!isNonEmptyBoundedString(id, MAX_NOTIFICATION_ID_LENGTH)) {
+    return fail('bad_request', `notification.id must be 1–${MAX_NOTIFICATION_ID_LENGTH}`)
+  }
+  const kind = frame['kind']
+  if (!isAttentionKind(kind)) return fail('bad_request', 'notification.kind is unknown')
+  const ref = parseSessionRef(frame['ref'])
+  if (!ref.ok) return ref
+  const title = frame['title']
+  if (!isBoundedString(title, MAX_TITLE_LENGTH)) {
+    return fail('bad_request', `notification.title must be at most ${MAX_TITLE_LENGTH}`)
+  }
+  const body = frame['body']
+  if (!isBoundedString(body, MAX_NOTIFICATION_BODY_LENGTH)) {
+    return fail('bad_request', `notification.body must be at most ${MAX_NOTIFICATION_BODY_LENGTH}`)
+  }
+  const at = frame['at']
+  if (!isFiniteNumber(at)) return fail('bad_request', 'notification.at must be a finite number')
+  return ok({ type: 'notification', id, kind, ref: ref.value, title, body, at })
 }
 
 function parseCommandFrame(frame: Record<string, unknown>): Result<CommandFrame> {
@@ -632,6 +782,12 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
   }
   const capabilities = parseCapabilities(frame.capabilities)
   if (!capabilities.ok) return capabilities
+  const vapidPublicKey = parseOptionalString(
+    frame.vapidPublicKey,
+    MAX_PUSH_KEY_LENGTH,
+    'hello_ok.vapidPublicKey',
+  )
+  if (!vapidPublicKey.ok) return vapidPublicKey
   return ok({
     type: 'hello_ok',
     protocolVersion,
@@ -639,6 +795,7 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
     deviceId,
     serverTime,
     capabilities: capabilities.value,
+    ...(vapidPublicKey.value !== undefined ? { vapidPublicKey: vapidPublicKey.value } : {}),
   })
 }
 
@@ -1693,4 +1850,10 @@ const PERMISSION_SETTLE_SOURCE_SET: ReadonlySet<string> = new Set(MOBILE_PERMISS
 
 function isPermissionSettleSource(value: unknown): value is MobilePermissionSettleSource {
   return typeof value === 'string' && PERMISSION_SETTLE_SOURCE_SET.has(value)
+}
+
+const ATTENTION_KIND_SET: ReadonlySet<string> = new Set(MOBILE_ATTENTION_KINDS)
+
+function isAttentionKind(value: unknown): value is MobileAttentionKind {
+  return typeof value === 'string' && ATTENTION_KIND_SET.has(value)
 }

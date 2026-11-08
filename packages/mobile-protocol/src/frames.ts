@@ -255,6 +255,26 @@ export interface MobileToolCallDetail {
   memoryTrimmed?: boolean
 }
 
+export const MOBILE_ATTENTION_KINDS = ['permission', 'question', 'completed', 'errored'] as const
+export type MobileAttentionKind = (typeof MOBILE_ATTENTION_KINDS)[number]
+
+/** Browser PushSubscription, flattened for the wire. */
+export interface MobilePushSubscription {
+  endpoint: string
+  keys: {
+    p256dh: string
+    auth: string
+  }
+}
+
+/** Per-device notification preferences. Kinds absent means "all four". */
+export interface MobileNotificationPrefs {
+  enabled: boolean
+  kinds?: readonly MobileAttentionKind[]
+  /** Also notify while a PC window is focused. */
+  alwaysNotify: boolean
+}
+
 // Client → server
 
 export interface HelloFrame {
@@ -399,6 +419,31 @@ export interface CommandFrame {
   idempotencyKey?: string
 }
 
+export interface PushSubscribeFrame {
+  type: 'push_subscribe'
+  subscription: MobilePushSubscription
+  /** Absent keeps the previously stored preferences. */
+  prefs?: MobileNotificationPrefs
+}
+
+export interface PushUnsubscribeFrame {
+  type: 'push_unsubscribe'
+}
+
+export interface SetNotificationPrefsFrame {
+  type: 'set_notification_prefs'
+  enabled: boolean
+  /** Absent means "all four kinds". */
+  kinds?: readonly MobileAttentionKind[]
+  alwaysNotify?: boolean
+}
+
+/** Foreground declaration; Web Push is only used when no visible socket exists. */
+export interface ClientStateFrame {
+  type: 'client_state'
+  visible: boolean
+}
+
 /** Result of `newSession`. */
 export interface MobileNewSessionResult {
   ref: MobileSessionRef
@@ -425,6 +470,10 @@ export type ClientFrame =
   | SubscribeSessionFrame
   | UnsubscribeSessionFrame
   | CommandFrame
+  | PushSubscribeFrame
+  | PushUnsubscribeFrame
+  | SetNotificationPrefsFrame
+  | ClientStateFrame
 export type ClientFrameType = ClientFrame['type']
 
 // Server → client
@@ -436,6 +485,8 @@ export interface HelloOkFrame {
   deviceId: string
   serverTime: number
   capabilities: string[]
+  /** VAPID public key (`base64url`), present when Web Push is configured. */
+  vapidPublicKey?: string
 }
 
 export interface PongFrame {
@@ -592,6 +643,21 @@ export interface DeviceRevokedFrame {
   type: 'device_revoked'
 }
 
+/**
+ * Foreground in-app notification. The body is built by the gateway and never
+ * carries prompt text or tool output; Web Push uses the same fields.
+ */
+export interface NotificationFrame {
+  type: 'notification'
+  id: string
+  kind: MobileAttentionKind
+  ref: MobileSessionRef
+  title: string
+  body: string
+  /** Epoch milliseconds. */
+  at: number
+}
+
 export type ServerFrame =
   | HelloOkFrame
   | PongFrame
@@ -601,6 +667,7 @@ export type ServerFrame =
   | SessionDeltaFrame
   | SessionRemovedFrame
   | CommandResultFrame
+  | NotificationFrame
   | ResyncRequiredFrame
   | ServerErrorFrame
   | DeviceRevokedFrame

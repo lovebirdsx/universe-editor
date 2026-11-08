@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { NoticeBar } from './components/NoticeBar.js'
+import { NotificationToast } from './components/NotificationToast.js'
 import { Spinner } from './components/Spinner.js'
 import {
   createCredentialStore,
@@ -31,7 +32,9 @@ export function App() {
   const [loaded, setLoaded] = useState<LoadedState>({ loading: true, credentials: undefined })
   const [reloadKey, setReloadKey] = useState(0)
   const [route, setRoute] = useState<Route>(() => readRoute(window.location.pathname))
-  const [focusPending, setFocusPending] = useState(false)
+  const [focusPending, setFocusPending] = useState(
+    () => new URLSearchParams(window.location.search).get('focus') === 'pending',
+  )
   const [notice, setNotice] = useState<string | undefined>(undefined)
 
   useEffect(() => {
@@ -47,9 +50,35 @@ export function App() {
   }, [store, reloadKey])
 
   useEffect(() => {
-    const onPopState = (): void => setRoute(readRoute(window.location.pathname))
+    const onPopState = (): void => {
+      setRoute(readRoute(window.location.pathname))
+      setFocusPending(new URLSearchParams(window.location.search).get('focus') === 'pending')
+    }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
+  }, [])
+
+  // A notification click either focuses this window and posts the deep link, or
+  // (cold start) opens it directly; both land on the same `/s/<ref>` route.
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return
+    const onMessage = (event: MessageEvent): void => {
+      const data = event.data as { type?: unknown; url?: unknown } | null
+      if (data?.type !== 'mobile-navigate' || typeof data.url !== 'string') return
+      let url: URL
+      try {
+        url = new URL(data.url, window.location.origin)
+      } catch {
+        return
+      }
+      const next = readRoute(url.pathname)
+      if (next.name !== 'session') return
+      window.history.replaceState({ mobile: true }, '', `${url.pathname}${url.search}`)
+      setFocusPending(url.searchParams.get('focus') === 'pending')
+      setRoute(next)
+    }
+    navigator.serviceWorker.addEventListener('message', onMessage)
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage)
   }, [])
 
   const credentials = loaded.credentials
@@ -138,39 +167,59 @@ export function App() {
     )
   }
 
+  const overlay = (
+    <NotificationToast
+      client={client}
+      onOpen={(sessionKey, pending) => {
+        setFocusPending(pending)
+        navigateToSession(sessionKey)
+        setRoute(readRoute(window.location.pathname))
+      }}
+    />
+  )
+
   if (route.name === 'session') {
     return (
-      <SessionPage
-        client={client}
-        sessionKey={route.sessionKey}
-        focusPending={focusPending}
-        onBack={backToInbox}
-      />
+      <>
+        {overlay}
+        <SessionPage
+          client={client}
+          sessionKey={route.sessionKey}
+          focusPending={focusPending}
+          onBack={backToInbox}
+        />
+      </>
     )
   }
 
   if (route.name === 'new-session') {
     return (
-      <NewSessionPage
-        client={client}
-        onBack={backToInbox}
-        onCreated={(sessionKey) => {
-          setFocusPending(false)
-          setRoute({ name: 'session', sessionKey })
-        }}
-      />
+      <>
+        {overlay}
+        <NewSessionPage
+          client={client}
+          onBack={backToInbox}
+          onCreated={(sessionKey) => {
+            setFocusPending(false)
+            setRoute({ name: 'session', sessionKey })
+          }}
+        />
+      </>
     )
   }
 
   return (
-    <InboxPage
-      client={client}
-      credentials={credentials}
-      notice={notice}
-      onDismissNotice={() => setNotice(undefined)}
-      onOpenSession={openSession}
-      onNewSession={openNewSession}
-      onUnpair={unpair}
-    />
+    <>
+      {overlay}
+      <InboxPage
+        client={client}
+        credentials={credentials}
+        notice={notice}
+        onDismissNotice={() => setNotice(undefined)}
+        onOpenSession={openSession}
+        onNewSession={openNewSession}
+        onUnpair={unpair}
+      />
+    </>
   )
 }

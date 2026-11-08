@@ -16,15 +16,14 @@ import {
   IWorkspaceService,
   autorun,
   localize,
-  toDisposable,
-  type IDisposable,
   type SystemNotificationOrigin,
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/session/acpSessionService.js'
 import {
-  computeSessionDisplayStatus,
-  isTurnDisplayStatus,
-} from '../services/acp/session/acpSessionStatus.js'
+  createAgentAttentionSignal,
+  type AgentAttentionEvent,
+  type AgentAttentionSignal,
+} from '../services/acp/session/agentAttentionSignal.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { revealSessionChat } from '../services/acp/session/revealSessionChat.js'
 import type { FoundSessionEditor } from '../services/acp/session/revealSessionEditorTab.js'
@@ -37,20 +36,9 @@ import {
   primeAgentNotificationIcon,
 } from '../services/acp/agentNotificationIcon.js'
 
-type NotifyKind = 'permission' | 'question' | 'completed' | 'errored'
-
-/**
- * Delay before a completion toast is announced. The status derivation folds
- * several signals (core status, background tasks, autonomous activity) that
- * arrive as separate pushes, and the fork's level snapshot can land one tick
- * after the edge — a transient `running → idle → running` would otherwise
- * report a completion that never happened. Short enough to stay invisible.
- */
-const COMPLETION_ANNOUNCE_DELAY_MS = 250
+type NotifyKind = AgentAttentionEvent['kind']
 
 export class AgentNotificationContribution extends Disposable implements IWorkbenchContribution {
-  private readonly _perSession = new Map<string, IDisposable>()
-
   constructor(
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IHostService private readonly _host: IHostService,
@@ -64,124 +52,28 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
   ) {
     super()
 
+    // Icons rasterize asynchronously; warm them as sessions appear so the
+    // cache is ready when an edge fires.
     this._register(
       autorun((r) => {
-        const list = this._sessions.sessions.read(r)
-        const present = new Set(list.map((s) => s.id))
-        for (const session of list) {
-          if (!this._perSession.has(session.id)) {
-            this._perSession.set(session.id, this._watchSession(session))
-          }
-        }
-        for (const [id, watcher] of this._perSession) {
-          if (!present.has(id)) {
-            watcher.dispose()
-            this._perSession.delete(id)
-          }
+        for (const session of this._sessions.sessions.read(r)) {
+          primeAgentNotificationIcon(session.agentId)
         }
       }),
     )
 
-    this._register(
-      toDisposable(() => {
-        for (const watcher of this._perSession.values()) watcher.dispose()
-        this._perSession.clear()
-      }),
-    )
+    const signal: AgentAttentionSignal = createAgentAttentionSignal(this._sessions.sessions)
+    this._register(signal)
+    this._register(signal.onDidAttention((event) => this._fire(event)))
   }
 
   private _enabled(): boolean {
     return this._config.get<boolean>('acp.notifications.enabled') ?? true
   }
 
-  private _watchSession(session: IAcpSession): IDisposable {
-    // Warm the notification icon so it's ready synchronously when an edge fires.
-    primeAgentNotificationIcon(session.agentId)
-
-    let prevDisplay = computeSessionDisplayStatus(session)
-    let permissionLatched = session.pendingPermission.get() !== undefined
-    let elicitationLatched = session.pendingElicitation.get() !== undefined
-    let completionAnnounced = false
-    let pendingCompletion: ReturnType<typeof setTimeout> | undefined
-
-    const cancelPendingCompletion = (): void => {
-      if (pendingCompletion === undefined) return
-      clearTimeout(pendingCompletion)
-      pendingCompletion = undefined
-    }
-
-    const watcher = autorun((r) => {
-      const display = computeSessionDisplayStatus(session, r)
-      const permission = session.pendingPermission.read(r)
-      const elicitation = session.pendingElicitation.read(r)
-
-      // Permission request — rising edge only. A card the service marked as
-      // auto-resolving (`acp.plan.autoExecute` non-off) needs no attention: it
-      // counts down and continues on its own, so pulling the user back to the
-      // window would be noise.
-      if (permission !== undefined && !permissionLatched && permission.autoResolve === undefined) {
-        this._fire('permission', session)
-      }
-      permissionLatched = permission !== undefined
-
-      // Agent elicitation — rising edge only.
-      if (elicitation !== undefined && !elicitationLatched) this._fire('question', session)
-      elicitationLatched = elicitation !== undefined
-
-      // Work is in flight again (a new turn, a background task the settled turn
-      // left behind, or a turn parked on the user): re-arm the per-turn
-      // completion latch.
-      if (isTurnDisplayStatus(display)) {
-        completionAnnounced = false
-      }
-
-      // "Completed" fires at most once per turn, and only once the session is
-      // GENUINELY settled — the prompt RPC having returned is not enough, since
-      // `run_in_background` tasks outlive it (the derived status stays
-      // 'background' until they finish). Announcing on the core status instead
-      // both fired early and swallowed the real finish. The plan flipping to
-      // all-complete is not a signal either: the agent checks off its last todo
-      // mid-turn while it still streams the summary text.
-      //
-      // The edge is a TURN edge, not a "was busy" edge: 'connecting' settles
-      // straight to 'idle' on every new, resumed or woken session, so counting
-      // it as the prior state announces a completion for work that never ran.
-      //
-      // Announce only after a short quiet window: the level signals behind the
-      // display status arrive separately, so a late idle can be followed by
-      // the wake that keeps the same turn alive. Returning to work cancels the
-      // toast; the latch was re-armed above.
-      const turnFinished = display === 'idle' && isTurnDisplayStatus(prevDisplay)
-      if (turnFinished && !completionAnnounced) {
-        completionAnnounced = true
-        cancelPendingCompletion()
-        pendingCompletion = setTimeout(() => {
-          pendingCompletion = undefined
-          this._fire('completed', session)
-        }, COMPLETION_ANNOUNCE_DELAY_MS)
-      } else if (display !== 'idle') {
-        cancelPendingCompletion()
-      }
-
-      if (display === 'errored' && prevDisplay !== 'errored') this._fire('errored', session)
-
-      prevDisplay = display
-    })
-
-    // Plain literal, not `toDisposable`: this watcher lives as long as the
-    // session row (the contribution disposes it on removal/teardown), and the
-    // dev leak tracker counts a tracked wrapper that outlives its creator's
-    // autorun as a leak.
-    return {
-      dispose: () => {
-        cancelPendingCompletion()
-        watcher.dispose()
-      },
-    }
-  }
-
-  private _fire(kind: NotifyKind, session: IAcpSession): void {
+  private _fire(event: AgentAttentionEvent): void {
     if (!this._enabled()) return
+    const { kind, session } = event
     const title = titleFor(kind)
     const lines = [truncateTitle(session.title)]
     const workspaceName = this._workspace.current?.name

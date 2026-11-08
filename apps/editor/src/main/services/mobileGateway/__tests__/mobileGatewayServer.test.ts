@@ -223,7 +223,7 @@ describe('mobile gateway server integration', () => {
       type: 'hello_ok',
       deviceId: paired.deviceId,
       serverVersion: '0.0.0-test',
-      capabilities: ['inbox', 'commands'],
+      capabilities: ['inbox', 'commands', 'notifications'],
     })
     expect(ok.type === 'hello_ok' ? ok.serverTime : 0).toBeGreaterThan(0)
 
@@ -414,5 +414,133 @@ describe('mobile gateway server integration', () => {
     entries = (await gateway.audit.recent(50)).filter((entry) => entry.action === 'hello_failed')
     expect(entries).toHaveLength(2)
     expect(entries[1]?.detail).toContain(`suppressed=${MAX_HELLO_FAILURES_PER_ADDRESS - 2}`)
+  })
+
+  it('advertises the VAPID public key and the notifications capability', async () => {
+    const gateway = await startGateway({ vapidPublicKey: 'vapid-public-key' })
+    const paired = await pair(gateway.base)
+    const ws = await connectWs(gateway.base)
+    cleanup.push(() => ws.terminate())
+
+    const ok = await hello(ws, paired.token)
+    expect(ok).toMatchObject({
+      type: 'hello_ok',
+      capabilities: ['inbox', 'commands', 'notifications'],
+      vapidPublicKey: 'vapid-public-key',
+    })
+  })
+
+  it('stores push subscriptions and notification preferences for the paired device', async () => {
+    const changes: number[] = []
+    const gateway = await startGateway({ onNotificationStateChanged: () => changes.push(1) })
+    const paired = await pair(gateway.base)
+    const ws = await connectWs(gateway.base)
+    cleanup.push(() => ws.terminate())
+    await hello(ws, paired.token)
+
+    ws.send(
+      JSON.stringify({
+        type: 'push_subscribe',
+        subscription: {
+          endpoint: 'https://fcm.googleapis.com/fcm/send/device-token',
+          keys: { p256dh: 'p256dh-key', auth: 'auth-key' },
+        },
+        prefs: { enabled: true, kinds: ['permission', 'completed'], alwaysNotify: true },
+      }),
+    )
+    await expect
+      .poll(async () => (await gateway.store.get(paired.deviceId))?.push?.endpoint)
+      .toBe('https://fcm.googleapis.com/fcm/send/device-token')
+
+    const stored = await gateway.store.get(paired.deviceId)
+    expect(stored?.notifications).toEqual({
+      enabled: true,
+      kinds: ['permission', 'completed'],
+      alwaysNotify: true,
+    })
+    expect(stored?.push?.keys).toEqual({ p256dh: 'p256dh-key', auth: 'auth-key' })
+    expect(changes.length).toBeGreaterThan(0)
+
+    const audit = await gateway.audit.recent(50)
+    const subscribe = audit.find((entry) => entry.action === 'push_subscribe')
+    expect(subscribe?.result).toBe('success')
+    expect(subscribe?.detail).toBe('host=fcm.googleapis.com')
+    expect(JSON.stringify(audit)).not.toContain('device-token')
+
+    ws.send(JSON.stringify({ type: 'push_unsubscribe' }))
+    await expect.poll(async () => (await gateway.store.get(paired.deviceId))?.push).toBeUndefined()
+    const unsubscribe = (await gateway.audit.recent(50)).find(
+      (entry) => entry.action === 'push_unsubscribe',
+    )
+    expect(unsubscribe?.result).toBe('success')
+  })
+
+  it('rejects push endpoints outside the known push services', async () => {
+    const gateway = await startGateway()
+    const paired = await pair(gateway.base)
+    const ws = await connectWs(gateway.base)
+    cleanup.push(() => ws.terminate())
+    await hello(ws, paired.token)
+
+    const error = nextFrame(ws)
+    ws.send(
+      JSON.stringify({
+        type: 'push_subscribe',
+        subscription: {
+          endpoint: 'https://192.0.2.5/push',
+          keys: { p256dh: 'p256dh-key', auth: 'auth-key' },
+        },
+      }),
+    )
+    expect(await error).toMatchObject({
+      type: 'server_error',
+      code: 'bad_request',
+      message: 'push endpoint is not allowed',
+    })
+
+    expect((await gateway.store.get(paired.deviceId))?.push).toBeUndefined()
+    const audit = await gateway.audit.recent(50)
+    expect(
+      audit.some(
+        (entry) =>
+          entry.action === 'push_subscribe' &&
+          entry.result === 'failure' &&
+          entry.detail?.includes('not an allowed push service'),
+      ),
+    ).toBe(true)
+  })
+
+  it('updates notification preferences without a subscription', async () => {
+    const gateway = await startGateway()
+    const paired = await pair(gateway.base)
+    const ws = await connectWs(gateway.base)
+    cleanup.push(() => ws.terminate())
+    await hello(ws, paired.token)
+
+    ws.send(
+      JSON.stringify({
+        type: 'set_notification_prefs',
+        enabled: true,
+        kinds: ['question'],
+        alwaysNotify: false,
+      }),
+    )
+    await expect
+      .poll(async () => (await gateway.store.get(paired.deviceId))?.notifications)
+      .toEqual({ enabled: true, kinds: ['question'], alwaysNotify: false })
+  })
+
+  it('tracks the foreground visibility declared by client_state', async () => {
+    const gateway = await startGateway()
+    const paired = await pair(gateway.base)
+    const ws = await connectWs(gateway.base)
+    cleanup.push(() => ws.terminate())
+    await hello(ws, paired.token)
+
+    ws.send(JSON.stringify({ type: 'client_state', visible: true }))
+    await expect.poll(() => gateway.server.isDeviceVisible(paired.deviceId)).toBe(true)
+
+    ws.send(JSON.stringify({ type: 'client_state', visible: false }))
+    await expect.poll(() => gateway.server.isDeviceVisible(paired.deviceId)).toBe(false)
   })
 })

@@ -24,6 +24,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.audit.action.pairAttempt': '配对尝试',
   'mobileDevices.audit.action.pairingCancelled': '取消配对',
   'mobileDevices.audit.action.pairingStarted': '开始配对',
+  'mobileDevices.audit.action.pushSubscribe': '已开启推送通知',
+  'mobileDevices.audit.action.pushUnsubscribe': '已关闭推送通知',
   'mobileDevices.audit.device': '设备',
   'mobileDevices.audit.empty': '还没有活动记录。',
   'mobileDevices.audit.failure': '失败',
@@ -45,6 +47,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.devices.empty': '还没有已配对设备。',
   'mobileDevices.devices.emptyHint': '在上方配对手机后即可在这里看到。',
   'mobileDevices.devices.lastSeen': '最近连接 {time}',
+  'mobileDevices.devices.notificationsOff': '通知：未开启',
+  'mobileDevices.devices.notificationsOn': '通知：已开启',
   'mobileDevices.devices.offline': '离线',
   'mobileDevices.devices.online': '在线',
   'mobileDevices.devices.pairedAt': '配对于 {time}',
@@ -62,6 +66,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.gateway.capability.installable': '可安装为应用',
   'mobileDevices.gateway.capability.push': '推送通知',
   'mobileDevices.gateway.capability.unavailable': '不可用',
+  'mobileDevices.gateway.pushRelayHint':
+    '推送经 Apple / Google 推送服务器转发，PC 需要能访问公网。',
+  'mobileDevices.gateway.pushRequiresHttps':
+    '推送需要 HTTPS 地址。请把 Tailscale 主机名加入 mobileGateway.allowedHosts。',
   'mobileDevices.gateway.connectedDevices': '已连接 {count} 台',
   'mobileDevices.gateway.enable': '启用手机网关',
   'mobileDevices.gateway.enableDescription': '监听已配对手机的连接并提供手机网页。默认关闭。',
@@ -1225,6 +1233,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '"lan" 模式下绑定的 IPv4 地址。留空则使用第一个非内部 IPv4 地址。',
   'settings.mobileGateway.port':
     '网关的 TCP 端口（配对 API、PWA 资源与 WebSocket）。环境变量 UNIVERSE_MOBILE_PORT 会覆盖此值。',
+  'settings.mobileGateway.vapidSubject':
+    'Web Push VAPID 声明中嵌入的联系地址。推送服务要求 https URL 或 mailto: 地址；默认值只是占位，正式推送请改为真实地址。',
   'settings.markdown': 'Markdown',
   'settings.markdown.math.enabled':
     '在 markdown 预览中渲染 LaTeX 数学公式（`$…$`、`$$…$$` 和 ```math 代码块）。',

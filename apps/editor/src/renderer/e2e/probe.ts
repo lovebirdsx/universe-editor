@@ -2920,6 +2920,16 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         ...(status.listenAddress !== undefined ? { listenAddress: status.listenAddress } : {}),
       }
     },
+    listMobileDevices: async () => {
+      const devices = await services.mobileGatewayService.listDevices()
+      return devices.map((device) => ({
+        deviceId: device.deviceId,
+        name: device.name,
+        platform: device.platform,
+        connected: device.connected,
+        notificationsEnabled: device.notificationsEnabled,
+      }))
+    },
   }
 
   window[E2E_PROBE_KEY] = probe

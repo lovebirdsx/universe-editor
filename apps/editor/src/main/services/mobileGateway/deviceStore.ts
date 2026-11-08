@@ -10,10 +10,30 @@
 
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
+import type {
+  MobileAttentionKind,
+  MobileNotificationPrefs,
+  MobilePushSubscription,
+} from '@universe-editor/mobile-protocol'
 import { writeJsonAtomic } from './atomicFile.js'
 
 const FILE_VERSION = 2
 const TOKEN_BYTES = 32
+
+export interface MobileNotificationPrefsRecord {
+  readonly enabled: boolean
+  readonly kinds?: readonly MobileAttentionKind[]
+  readonly alwaysNotify: boolean
+}
+
+export interface MobilePushSubscriptionRecord {
+  readonly endpoint: string
+  readonly keys: {
+    readonly p256dh: string
+    readonly auth: string
+  }
+  readonly updatedAt: number
+}
 
 export interface MobileDeviceRecord {
   readonly deviceId: string
@@ -22,6 +42,15 @@ export interface MobileDeviceRecord {
   readonly tokenHash: string
   readonly createdAt: number
   readonly lastSeenAt: number
+  readonly notifications?: MobileNotificationPrefsRecord
+  readonly push?: MobilePushSubscriptionRecord
+}
+
+/** What the notification router needs per device. */
+export interface MobileNotifyTarget {
+  readonly deviceId: string
+  readonly notifications: MobileNotificationPrefsRecord
+  readonly push?: MobilePushSubscriptionRecord
 }
 
 export interface AddedMobileDevice {
@@ -114,6 +143,78 @@ export class DeviceStore {
     })
   }
 
+  /** Replace the device's notification preferences. Returns false when it is gone. */
+  setNotificationPrefs(deviceId: string, prefs: MobileNotificationPrefs): Promise<boolean> {
+    return this._enqueue(async () => {
+      const file = await this._load()
+      const index = file.devices.findIndex((device) => device.deviceId === deviceId)
+      if (index < 0) return false
+      const device = file.devices[index]!
+      file.devices[index] = {
+        ...device,
+        notifications: {
+          enabled: prefs.enabled,
+          ...(prefs.kinds !== undefined ? { kinds: [...prefs.kinds] } : {}),
+          alwaysNotify: prefs.alwaysNotify,
+        },
+      }
+      await this._save(file)
+      return true
+    })
+  }
+
+  /** Store (or replace) the Web Push subscription for a device. */
+  setPushSubscription(deviceId: string, subscription: MobilePushSubscription): Promise<boolean> {
+    return this._enqueue(async () => {
+      const file = await this._load()
+      const index = file.devices.findIndex((device) => device.deviceId === deviceId)
+      if (index < 0) return false
+      const device = file.devices[index]!
+      file.devices[index] = {
+        ...device,
+        push: {
+          endpoint: subscription.endpoint,
+          keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
+          updatedAt: this._now(),
+        },
+      }
+      await this._save(file)
+      return true
+    })
+  }
+
+  removePushSubscription(deviceId: string): Promise<boolean> {
+    return this._enqueue(async () => {
+      const file = await this._load()
+      const index = file.devices.findIndex((device) => device.deviceId === deviceId)
+      if (index < 0) return false
+      const device = file.devices[index]!
+      if (device.push === undefined) return false
+      const next = { ...device }
+      delete next.push
+      file.devices[index] = next
+      await this._save(file)
+      return true
+    })
+  }
+
+  /** Devices that turned notifications on; the hub uses this to start attention. */
+  listNotifyTargets(): Promise<MobileNotifyTarget[]> {
+    return this._enqueue(async () => {
+      const file = await this._load()
+      const targets: MobileNotifyTarget[] = []
+      for (const device of file.devices) {
+        if (device.notifications?.enabled !== true) continue
+        targets.push({
+          deviceId: device.deviceId,
+          notifications: device.notifications,
+          ...(device.push !== undefined ? { push: device.push } : {}),
+        })
+      }
+      return targets
+    })
+  }
+
   touch(deviceId: string, at = this._now()): Promise<void> {
     return this._enqueue(async () => {
       const file = await this._load()
@@ -187,8 +288,29 @@ function isDeviceRecord(value: unknown): value is MobileDeviceRecord {
     typeof value['platform'] === 'string' &&
     typeof value['tokenHash'] === 'string' &&
     typeof value['createdAt'] === 'number' &&
-    typeof value['lastSeenAt'] === 'number'
+    typeof value['lastSeenAt'] === 'number' &&
+    (value['notifications'] === undefined || isNotificationPrefs(value['notifications'])) &&
+    (value['push'] === undefined || isPushSubscription(value['push']))
   )
+}
+
+function isNotificationPrefs(value: unknown): value is MobileNotificationPrefsRecord {
+  if (!isRecord(value)) return false
+  if (typeof value['enabled'] !== 'boolean') return false
+  if (typeof value['alwaysNotify'] !== 'boolean') return false
+  const kinds = value['kinds']
+  return (
+    kinds === undefined || (Array.isArray(kinds) && kinds.every((kind) => typeof kind === 'string'))
+  )
+}
+
+function isPushSubscription(value: unknown): value is MobilePushSubscriptionRecord {
+  if (!isRecord(value)) return false
+  if (typeof value['endpoint'] !== 'string') return false
+  if (typeof value['updatedAt'] !== 'number') return false
+  const keys = value['keys']
+  if (!isRecord(keys)) return false
+  return typeof keys['p256dh'] === 'string' && typeof keys['auth'] === 'string'
 }
 
 function toError(value: unknown): Error {

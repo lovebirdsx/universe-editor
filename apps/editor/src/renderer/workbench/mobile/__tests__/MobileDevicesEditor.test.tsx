@@ -64,6 +64,7 @@ const DEVICE: MobileDeviceInfo = {
   createdAt: Date.UTC(2026, 0, 2, 10, 30),
   lastSeenAt: Date.UTC(2026, 0, 3, 9, 0),
   connected: true,
+  notificationsEnabled: false,
 }
 
 const PAIRING: MobilePairingSession = {

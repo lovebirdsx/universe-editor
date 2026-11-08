@@ -865,6 +865,14 @@ export interface E2EMobileGatewayStatus {
   readonly connectedDeviceCount: number
 }
 
+export interface E2EMobileDevice {
+  readonly deviceId: string
+  readonly name: string
+  readonly platform: string
+  readonly connected: boolean
+  readonly notificationsEnabled: boolean
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -2256,6 +2264,8 @@ export interface E2EProbe {
    * one in e2e), and `origins[0]` is the loopback origin the PWA is served at.
    */
   getMobileGatewayStatus(): Promise<E2EMobileGatewayStatus>
+  /** Paired devices with their live notification switch (no tokens leave main). */
+  listMobileDevices(): Promise<readonly E2EMobileDevice[]>
 }
 
 declare global {

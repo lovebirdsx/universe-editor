@@ -241,6 +241,17 @@ export function MobileDevicesEditor() {
                         {capabilityLabel(status.capabilities.push)}
                       </Badge>
                     </div>
+                    <p className={styles['description']} data-testid="mobile-gateway-push-hint">
+                      {status.capabilities.push
+                        ? localize(
+                            'mobileDevices.gateway.pushRelayHint',
+                            'Delivered through Apple / Google push servers; this computer must be able to reach the public internet.',
+                          )
+                        : localize(
+                            'mobileDevices.gateway.pushRequiresHttps',
+                            'Push requires an HTTPS address. Add the Tailscale host name to mobileGateway.allowedHosts.',
+                          )}
+                    </p>
                   </div>
                 )}
               </>
@@ -537,6 +548,14 @@ export function MobileDevicesEditor() {
                           {localize('mobileDevices.devices.lastSeen', 'Last seen {time}', {
                             time: formatTimestamp(device.lastSeenAt),
                           })}
+                        </span>
+                        <span data-testid={`mobile-device-notifications-${device.deviceId}`}>
+                          {device.notificationsEnabled
+                            ? localize('mobileDevices.devices.notificationsOn', 'Notifications: on')
+                            : localize(
+                                'mobileDevices.devices.notificationsOff',
+                                'Notifications: off',
+                              )}
                         </span>
                       </div>
                     </div>

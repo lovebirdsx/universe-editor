@@ -127,6 +127,10 @@ catalog:
   # Mobile gateway WebSocket server (noServer mode on the same HTTP port).
   ws: ^8.18.0
   '@types/ws': ^8.5.13
+  # Mobile gateway Web Push (VAPID) sender. Gateway-side only; the PWA uses
+  # the browser's built-in PushManager and never imports this.
+  web-push: ^4.0.0
+  '@types/web-push': ^3.6.4
   tsx: ^4.19.0
   turbo: ^2.11.9
   typescript: ^5.8.0

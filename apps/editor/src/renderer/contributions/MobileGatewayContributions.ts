@@ -27,6 +27,7 @@ export const MOBILE_GATEWAY_CONFIG_KEYS = [
   'mobileGateway.lanAddress',
   'mobileGateway.port',
   'mobileGateway.allowedHosts',
+  'mobileGateway.vapidSubject',
 ] as const
 
 export class MobileGatewayConfigurationContribution
@@ -73,6 +74,14 @@ export class MobileGatewayConfigurationContribution
             description: localize(
               'settings.mobileGateway.port',
               'TCP port for the gateway (pairing API, PWA assets and WebSocket). The UNIVERSE_MOBILE_PORT environment variable overrides this.',
+            ),
+          },
+          'mobileGateway.vapidSubject': {
+            type: 'string',
+            default: 'https://universe-editor.example.com',
+            description: localize(
+              'settings.mobileGateway.vapidSubject',
+              'Contact address embedded in Web Push VAPID claims. Push services require either an https URL or a mailto: address. The default is a placeholder; set a real one for production push.',
             ),
           },
           'mobileGateway.allowedHosts': {
@@ -122,6 +131,13 @@ export class MobileGatewayConfigSyncContribution
     void this._gateway.applyConfig(this._readConfig()).catch(() => undefined)
   }
 
+  private _readVapidSubject(): string {
+    const value = this._configuration.get<string>('mobileGateway.vapidSubject')
+    return typeof value === 'string' && value.trim() !== ''
+      ? value.trim()
+      : 'https://universe-editor.example.com'
+  }
+
   private _readConfig(): MobileGatewayConfig {
     const bind = this._configuration.get<string>('mobileGateway.bind')
     const lanAddress = this._configuration.get<string>('mobileGateway.lanAddress')
@@ -139,6 +155,7 @@ export class MobileGatewayConfigSyncContribution
       allowedHosts: Array.isArray(allowedHosts)
         ? allowedHosts.filter((value): value is string => typeof value === 'string')
         : [],
+      vapidSubject: this._readVapidSubject(),
     }
   }
 }

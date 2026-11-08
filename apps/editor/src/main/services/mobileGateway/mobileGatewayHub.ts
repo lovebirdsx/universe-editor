@@ -18,6 +18,7 @@ import {
   isConfigValueAllowedOnMobile,
   type CommandFrame,
   type MobileAgentCandidate,
+  type MobileAttentionKind,
   type MobileErrorCode,
   type MobileNewSessionResult,
   type MobileSessionEvent,
@@ -30,6 +31,7 @@ import {
 } from '@universe-editor/mobile-protocol'
 import type {
   IMobileBridgeService,
+  MobileBridgeAttentionEvent,
   MobileBridgeEvent,
   MobileBridgeResult,
   MobileBridgeSessionEvent,
@@ -50,8 +52,19 @@ interface WindowEntry {
   readonly windowId: number
   readonly bridge: IMobileBridgeService
   readonly workspaceName: () => string
-  /** Subscribed lazily in `_startBridge`: the renderer channel may not exist yet. */
+  /** Subscribed lazily: the renderer channel may not exist yet. */
   subscription: { dispose(): void } | undefined
+  streaming: boolean
+  attention: boolean
+}
+
+/** Main-owned attention fact, resolved from a bridge event and the inbox cache. */
+export interface MobileGatewayAttention {
+  readonly kind: MobileAttentionKind
+  readonly ref: MobileSessionRef
+  readonly title: string
+  readonly agentName?: string
+  readonly permissionTitle?: string
 }
 
 interface SessionSubscription {
@@ -147,10 +160,12 @@ export class MobileGatewayHub {
   private readonly _inflightCommands = new Map<string, Promise<CommandOutcome>>()
   private _inboxSeq = 0
   private _streaming = false
+  private _attention = false
 
   constructor(
     private readonly _logger: ILogger,
     private readonly _host?: MobileGatewayHost,
+    private readonly _onAttention?: (attention: MobileGatewayAttention) => void,
   ) {}
 
   registerWindow(
@@ -159,18 +174,23 @@ export class MobileGatewayHub {
     workspaceName: () => string = () => '',
   ): void {
     this.unregisterWindow(windowId)
-    const entry: WindowEntry = { windowId, bridge, workspaceName, subscription: undefined }
-    this._windows.set(windowId, entry)
-    if (this._hasSubscribers()) {
-      void this._startBridge(entry)
+    const entry: WindowEntry = {
+      windowId,
+      bridge,
+      workspaceName,
+      subscription: undefined,
+      streaming: false,
+      attention: false,
     }
+    this._windows.set(windowId, entry)
+    this._syncWindow(entry)
   }
 
   unregisterWindow(windowId: number): void {
     const entry = this._windows.get(windowId)
     if (entry === undefined) return
     this._windows.delete(windowId)
-    this._stopBridge(entry)
+    this._disposeWindowWatch(entry)
 
     const removes: MobileSessionRef[] = []
     for (const [key, value] of this._inboxState) {
@@ -191,12 +211,25 @@ export class MobileGatewayHub {
 
   dispose(): void {
     for (const entry of this._windows.values()) {
-      this._stopBridge(entry)
+      this._disposeWindowWatch(entry)
     }
     this._windows.clear()
     this._connections.clear()
     this._inboxState.clear()
     this._streaming = false
+    this._attention = false
+  }
+
+  /**
+   * Attention-only listening is cheap: no timeline serialization, no inbox
+   * snapshots, just the shared edge signal. Main turns it on while at least one
+   * paired device has notifications enabled — the phone may be in the
+   * background with no inbox subscriber at all.
+   */
+  setAttentionNeeded(needed: boolean): void {
+    if (this._attention === needed) return
+    this._attention = needed
+    for (const entry of this._windows.values()) this._syncWindow(entry)
   }
 
   addConnection(connection: MobileGatewayHubConnection): void {
@@ -684,6 +717,10 @@ export class MobileGatewayHub {
   private _handleBridgeEvent(windowId: number, event: MobileBridgeEvent): void {
     const entry = this._windows.get(windowId)
     if (entry === undefined) return
+    if (event.kind === 'attention') {
+      this._handleAttention(windowId, event)
+      return
+    }
     if (event.kind === 'inbox') {
       const upserts = event.upserts.map((summary) => this._toProtocolSummary(entry, summary))
       for (const summary of upserts) {
@@ -899,6 +936,23 @@ export class MobileGatewayHub {
     return truncated
   }
 
+  private _handleAttention(windowId: number, event: MobileBridgeAttentionEvent): void {
+    const cached = this._inboxState.get(sessionKey(windowId, event.localId))?.summary
+    this._onAttention?.({
+      kind: event.attentionKind,
+      ref: {
+        windowId,
+        localId: event.localId,
+        ...(event.durableId !== undefined ? { durableId: event.durableId } : {}),
+      },
+      title: cached?.title ?? event.title,
+      ...(cached?.agentName !== undefined || event.agentName !== undefined
+        ? { agentName: cached?.agentName ?? event.agentName }
+        : {}),
+      ...(event.permissionTitle !== undefined ? { permissionTitle: event.permissionTitle } : {}),
+    })
+  }
+
   private _hasSubscribers(): boolean {
     for (const state of this._connections) {
       if (state.inbox || state.sessions.size > 0) return true
@@ -911,32 +965,55 @@ export class MobileGatewayHub {
     if (shouldStream === this._streaming) return
     this._streaming = shouldStream
     if (!shouldStream) this._inboxState.clear()
-    for (const entry of this._windows.values()) {
-      if (shouldStream) void this._startBridge(entry)
-      else this._stopBridge(entry)
+    for (const entry of this._windows.values()) this._syncWindow(entry)
+  }
+
+  /** Bring one window's bridge subscriptions in line with the two flags. */
+  private _syncWindow(entry: WindowEntry): void {
+    const active = this._streaming || this._attention
+    if (active) {
+      // Subscribe only when first needed, not at registerWindow: main registers
+      // the window before the renderer has registered its IPC channel.
+      entry.subscription ??= entry.bridge.onDidChange((event) =>
+        this._handleBridgeEvent(entry.windowId, event),
+      )
+    } else if (entry.subscription !== undefined) {
+      entry.subscription.dispose()
+      entry.subscription = undefined
+    }
+
+    if (entry.streaming !== this._streaming) {
+      entry.streaming = this._streaming
+      const call = this._streaming ? entry.bridge.startStreaming() : entry.bridge.stopStreaming()
+      void call.catch((err) => {
+        this._logger.warn(`mobile bridge streaming toggle failed: ${String(err)}`)
+      })
+    }
+
+    if (entry.attention !== this._attention) {
+      entry.attention = this._attention
+      const call = this._attention ? entry.bridge.startAttention() : entry.bridge.stopAttention()
+      void call.catch((err) => {
+        this._logger.warn(`mobile bridge attention toggle failed: ${String(err)}`)
+      })
     }
   }
 
-  private async _startBridge(entry: WindowEntry): Promise<void> {
-    // Subscribe only now, not at registerWindow: main registers the window
-    // before the renderer has registered its IPC channel, and an early
-    // `listen` would be dropped without retry.
-    entry.subscription ??= entry.bridge.onDidChange((event) =>
-      this._handleBridgeEvent(entry.windowId, event),
-    )
-    try {
-      await entry.bridge.startStreaming()
-    } catch (err) {
-      this._logger.warn(`mobile bridge start failed: ${String(err)}`)
-    }
-  }
-
-  private _stopBridge(entry: WindowEntry): void {
+  private _disposeWindowWatch(entry: WindowEntry): void {
     entry.subscription?.dispose()
     entry.subscription = undefined
-    void entry.bridge.stopStreaming().catch((err) => {
-      this._logger.debug(`mobile bridge stop failed: ${String(err)}`)
-    })
+    if (entry.streaming) {
+      entry.streaming = false
+      void entry.bridge.stopStreaming().catch((err) => {
+        this._logger.debug(`mobile bridge stop failed: ${String(err)}`)
+      })
+    }
+    if (entry.attention) {
+      entry.attention = false
+      void entry.bridge.stopAttention().catch((err) => {
+        this._logger.debug(`mobile bridge attention stop failed: ${String(err)}`)
+      })
+    }
   }
 }
 

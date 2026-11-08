@@ -3,7 +3,8 @@
 > 状态：**M1 已落地**（协议包、main 网关与配对、PC 设置页、手机 PWA 骨架）；
 > **M2 只读镜像后端已落地**（协议 v2、每窗口会话桥、main 侧收件箱/会话聚合、`acp-view-model`
 > 抽取）；**M3 交互后端已落地**（协议 v3：命令路由、审批仲裁、倒计时下沉、新建会话、高风险限制、
-> 幂等与审计）。手机端交互界面仍由后续任务补齐；通知仍按 M4 推进。
+> 幂等与审计）；**M4 通知已落地**（协议 v4：共享 attention 信号、前台 WS 通知、Web Push / VAPID、
+> PC 焦点抑制、通知偏好与深链）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -126,11 +127,13 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 3`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
-`allowedOnMobile`、`permission_cleared` 元数据与命令幂等）。WS 建立后第一帧必须是
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 4`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+`allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
+订阅、`client_state` 可见性与通知偏好）。WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities }`；v3 的 `hello_ok.capabilities` 为
-`['inbox', 'commands']`，旧客户端可以只看 `inbox`。**token 不放 URL query**，避免进入访问日志与
+`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v4 的 `hello_ok.capabilities` 为
+`['inbox', 'commands', 'notifications']`，旧客户端可以只看 `inbox`。`vapidPublicKey` 只在网关可推送
+时出现，VAPID 公钥走握手而不是额外 HTTP 端点。**token 不放 URL query**，避免进入访问日志与
 Referer。
 
 **客户端 → 服务端**
@@ -141,7 +144,10 @@ Referer。
 | `subscribe_inbox` / `unsubscribe_inbox` | 订阅或退订收件箱 |
 | `subscribe_session` / `unsubscribe_session` | `{ ref, afterSeq? }`，订阅单个会话 |
 | `command` | `{ requestId, kind, payload, idempotencyKey? }` |
-| `push_subscribe` / `push_unsubscribe` | 注册或注销 Web Push 订阅 |
+| `push_subscribe` | `{ subscription:{endpoint,keys}, prefs? }`，注册 Web Push（端点必须命中推送服务允许列表） |
+| `push_unsubscribe` | 注销本设备的 Web Push 订阅 |
+| `set_notification_prefs` | `{ enabled, kinds?, alwaysNotify? }`，按设备保存通知偏好 |
+| `client_state` | `{ visible }`，前台 / 后台声明；前台连接优先收 WS 通知 |
 | `ping` | 心跳，服务端回 `pong` |
 
 **命令 kind（v3 已实现）**：
@@ -395,24 +401,47 @@ e2e 环境约束见 [wsl-e2e.md](wsl-e2e.md)。
 
 | 场景 | 通道 |
 |---|---|
-| 手机在前台 | WS `notification` |
-| 手机在后台 | Web Push（VAPID） |
+| 手机有前台连接（`client_state visible`） | WS `notification` |
+| 手机无前台连接 | Web Push（VAPID） |
 
-- VAPID 私钥存 `<userData>/mobile/vapid.json`（`0600`），依赖 `web-push`。
-- 推送返回 404 / 410 时删除对应订阅。
+- 网关只对「通知开关打开且 kind 未被过滤」的设备发送；`kinds` 缺省表示四类全收。
+- 有前台连接时优先走 WS；发送失败或无前台连接时回落到 Web Push。
+- VAPID 密钥对存 `<userData>/mobile/vapid.json`（`0600`，原子写入），依赖 `web-push`；
+  `mobileGateway.vapidSubject` 缺省 `https://universe-editor.example.com`（须为 `mailto:` 或 `https:`）。
+- 推送 TTL 1 小时；`permission` / `question` 用 `urgency: high`，其余 `normal`；载荷上限 4KB。
+- 推送载荷只有 `{ id, kind, title, body, url, tag, at }`：标题 = 会话标题（缺失时 Agent 名），
+  正文 = 固定的中文类别（`等待审批：<工具标题>` / `Agent 提问` / `已完成` / `出错`）。
+  **绝不携带 prompt、工具输出或用户反馈**。
+- endpoint 只接受 HTTPS 且主机命中已知推送服务允许列表（`fcm.googleapis.com`、
+  `web.push.apple.com`、`*.push.apple.com`、`*.notify.windows.com` 等），否则回
+  `server_error{bad_request}`；审计只记录主机名，不记录带能力 token 的完整 endpoint。
+- 推送返回 404 / 410 时删除该设备的订阅；其他失败只记日志，不向调用方抛出。
+- `push_subscribe` / `push_unsubscribe` 写审计；逐条推送不写审计。
 
 **限制**：
 
 - 推送经 Apple / FCM，PC 需能访问公网。
-- iOS 需 16.4+、添加到主屏幕、由用户手势授权通知。
-- iOS 通知不支持 action 按钮 → 点通知直达审批卡片。
+- iOS 需 16.4+、添加到主屏幕、由用户手势授权通知；iOS 不使用通知 action 按钮。
 - SW 不能在后台保持 WS；后台只能靠推送。
 - 载荷约 4KB，不允许静默推送。
 
-**焦点抑制**：PC 有窗口聚焦时，手机推送与前台 WS 通知都不发；每设备可单独设「始终通知」。
-带 `autoResolve` 的审批不发通知（见 §5）。
+**抑制矩阵**：
 
-**深链**：用 `durableId` + `workspace` 定位会话；不要在通知里放 renderer 本地 id。
+| 设备通知开关 | kind 命中 | PC 有窗口聚焦 | `alwaysNotify` | 结果 |
+|---|---|---|---|---|
+| 关 | — | — | — | 不发 |
+| 开 | 否 | — | — | 不发 |
+| 开 | 是 | 是 | 否 | 不发 |
+| 开 | 是 | 是 | 是 | 发（前台 WS 优先，否则推送） |
+| 开 | 是 | 否 | — | 发（前台 WS 优先，否则推送） |
+
+`notifications.enabled=false` 的设备不会让 renderer 进入 attention-only 模式；只要至少一台设备
+打开通知，hub 就在没有收件箱订阅者时也保持 `startAttention()`。带 `autoResolve` 的审批不发通知
+（见 §5）。
+
+**深链**：`/s/<durableId || windowId:localId>`；审批类附加 `?focus=pending`，打开会话后定位到底部
+待处理卡片。SW 收到 `notificationclick` 时优先 `focus()` 现有窗口并 `postMessage`
+（`{ type:'mobile-navigate', url }`），否则 `openWindow`。
 
 ## 10. 工程结构
 
@@ -439,6 +468,19 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 `acpSessionModel` 的类型拆分仍留到第二期；M2 用映射函数 + 编译期检查防漂移。
 
 **新应用 `apps/mobile`**：Vite + React，自带 `manifest` 与 `sw`。
+
+**M4 通知实现位置**：
+
+| 位置 | 职责 |
+|---|---|
+| `apps/editor/src/renderer/services/acp/session/agentAttentionSignal.ts` | 四类边沿的共享信号（无配置依赖） |
+| `apps/editor/src/renderer/services/mobileGateway/MobileBridgeService.ts` | `startStreaming` 内转发 attention；`startAttention` / `stopAttention` 轻量模式 |
+| `apps/editor/src/main/services/mobileGateway/mobileNotificationRouter.ts` | 抑制矩阵、正文构造、WS / 推送抉择、4KB 限制、404/410 清理 |
+| `apps/editor/src/main/services/mobileGateway/webPushSender.ts` | `web-push` 的可注入薄包装（测试不发网络） |
+| `apps/editor/src/main/services/mobileGateway/vapidKeys.ts` | VAPID 持久化（`0600`） |
+| `apps/editor/src/main/services/mobileGateway/pushEndpoint.ts` | 推送服务主机允许列表 |
+| `apps/mobile/src/notifications/pushNotifications.ts` | 能力探测、用户手势授权、`PushManager.subscribe` |
+| `apps/mobile/public/sw.js` | `push` 展示与 `notificationclick` 深链 |
 
 **构建与打包**：
 
@@ -468,11 +510,12 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 
 **测试**：
 
-- `apps/mobile`：Playwright 移动视口，对假网关测 UI。
+- `apps/mobile`：Playwright 移动视口，对假网关测 UI；推送能力 / SW handler 用 happy-dom + `node:vm` 假 `self`。
 - `apps/editor` e2e：冷启动 Electron + 第二个移动视口 context，走通
-  配对 → 收件箱 → prompt → 审批全链路。
-- Web Push / SW handler / VAPID 用单测。
-- 协议负向测试：未授权、超长帧、坏 JSON、越权命令。
+  配对 → 收件箱 → prompt → 审批全链路；前台通知用例经第二条同设备 WS 打开通知偏好，断言
+  `notification` 帧落到 toast 并可跳转。**Web Push 不在 e2e 覆盖**（headless Chromium 无可用推送服务），
+  由 `mobileNotificationRouter` / `webPushSender` / `vapidKeys` 单测兜底。
+- 协议负向测试：未授权、超长帧、坏 JSON、越权命令、非允许列表的 push endpoint。
 
 ## 11. 里程碑
 
@@ -481,7 +524,7 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 | M1 | 协议包、网关骨架、配对、设备管理、PC 设置页、手机配对页 + 空收件箱 | 默认关闭；扫码配对成功；吊销即断；未授权被拒 |
 | M2 | 只读镜像：收件箱聚合、会话快照/增量、摘要与详情、抽 `acp-view-model` | 多窗口会话状态与 PC 一致；流式不卡；重连一致 |
 | M3 | 交互：prompt / 停止 / 模式模型、审批仲裁、倒计时下沉、新建会话（含自动开窗）、高风险限制、审计 | 双端审批只生效一次；重连恢复卡片；tab 未开倒计时照常执行 |
-| M4 | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制 | 两端边沿一致；不重复；点击直达会话 |
+| M4 | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制（已落地） | 两端边沿一致；不重复；点击直达会话 |
 | M5 | 打包、Tailscale / WSL 文档、安全加固、用户文档（`docs/user/zh-CN` 新页）与开发文档、纳入冒烟 | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
 
 ## 12. 已确认的决策记录

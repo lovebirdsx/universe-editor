@@ -1006,7 +1006,7 @@ async function bootstrapWorkbench(): Promise<void> {
   // service and history; it does no work until a phone subscribes.
   ipcService.registerChannel(
     ServiceChannels.MobileBridge,
-    ProxyChannel.fromService(instantiation.createInstance(MobileBridgeService)),
+    ProxyChannel.fromService(workbenchStore.add(instantiation.createInstance(MobileBridgeService))),
   )
 
   // Extension host client: owns the extension-host subprocess + RPC. Created here

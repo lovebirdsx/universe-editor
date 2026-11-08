@@ -17,6 +17,7 @@ import {
   MAX_BUFFERED_SESSION_BYTES,
   MobileGatewayHub,
   type MobileCommandAudit,
+  type MobileGatewayAttention,
   type MobileGatewayHost,
   type MobileGatewayHubConnection,
 } from '../mobileGatewayHub.js'
@@ -33,6 +34,8 @@ class FakeBridge implements IMobileBridgeService {
   declare readonly _serviceBrand: undefined
   readonly startStreaming = vi.fn(async () => {})
   readonly stopStreaming = vi.fn(async () => {})
+  readonly startAttention = vi.fn(async () => {})
+  readonly stopAttention = vi.fn(async () => {})
   readonly listSessions = vi.fn(async () => this.sessions)
   readonly getSnapshot = vi.fn(async (localId: string) => this.snapshots.get(localId))
   readonly getToolCallDetail = vi.fn(async () => this.detail)
@@ -979,5 +982,103 @@ describe('MobileGatewayHub commands', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('MobileGatewayHub attention mode', () => {
+  it('listens for edges without starting the streaming pipeline', async () => {
+    const seen: MobileGatewayAttention[] = []
+    const hub = new MobileGatewayHub(NULL_LOGGER, undefined, (attention) => seen.push(attention))
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+
+    hub.setAttentionNeeded(true)
+    await tick()
+    expect(bridge.startAttention).toHaveBeenCalledTimes(1)
+    expect(bridge.startStreaming).not.toHaveBeenCalled()
+
+    bridge.emit({
+      kind: 'attention',
+      localId: 's1',
+      durableId: 'd1',
+      attentionKind: 'permission',
+      title: 'Session s1',
+      agentName: 'Fake Agent',
+      permissionTitle: 'Run shell command',
+    })
+    expect(seen).toEqual([
+      {
+        kind: 'permission',
+        ref: { windowId: 1, localId: 's1', durableId: 'd1' },
+        title: 'Session s1',
+        agentName: 'Fake Agent',
+        permissionTitle: 'Run shell command',
+      },
+    ])
+
+    hub.setAttentionNeeded(false)
+    await tick()
+    expect(bridge.stopAttention).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps streaming when only attention is switched off', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+
+    hub.setAttentionNeeded(true)
+    await tick()
+    expect(bridge.startAttention).toHaveBeenCalledTimes(1)
+
+    hub.setAttentionNeeded(false)
+    await tick()
+    expect(bridge.stopAttention).toHaveBeenCalledTimes(1)
+    expect(bridge.stopStreaming).not.toHaveBeenCalled()
+
+    hub.removeConnection(connection)
+    await tick()
+    expect(bridge.stopStreaming).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefers the cached inbox title but forwards the bridge details', async () => {
+    const seen: MobileGatewayAttention[] = []
+    const hub = new MobileGatewayHub(NULL_LOGGER, undefined, (attention) => seen.push(attention))
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { title: 'Inbox title', agentName: 'Inbox Agent' })]
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+
+    bridge.emit({
+      kind: 'attention',
+      localId: 's1',
+      durableId: 'd1',
+      attentionKind: 'completed',
+      title: 'Bridge title',
+      agentName: 'Bridge Agent',
+    })
+    expect(seen[0]).toMatchObject({
+      title: 'Inbox title',
+      agentName: 'Inbox Agent',
+      ref: { windowId: 1, localId: 's1', durableId: 'd1' },
+    })
+  })
+
+  it('stops attention when the window closes', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    hub.setAttentionNeeded(true)
+    await tick()
+
+    hub.unregisterWindow(1)
+    await tick()
+    expect(bridge.stopAttention).toHaveBeenCalledTimes(1)
   })
 })

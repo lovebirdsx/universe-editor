@@ -9,6 +9,7 @@
 import { createDecorator, type Event } from '@universe-editor/platform'
 import type {
   MobileAgentCandidate,
+  MobileAttentionKind,
   MobileElicitationAction,
   MobileElicitationContentValue,
   MobileErrorCode,
@@ -34,6 +35,8 @@ export interface MobileGatewayConfig {
   readonly port: number
   /** Extra Host values accepted on top of the bind address / loopback. */
   readonly allowedHosts: readonly string[]
+  /** VAPID `sub` claim: a `mailto:` address or an `https:` URL. */
+  readonly vapidSubject: string
 }
 
 export interface MobileGatewayCapabilities {
@@ -67,6 +70,8 @@ export interface MobileDeviceInfo {
   readonly lastSeenAt: number
   /** Whether this device currently has at least one WebSocket connection. */
   readonly connected: boolean
+  /** Whether the phone turned on notifications for this device. */
+  readonly notificationsEnabled: boolean
 }
 
 export interface MobilePairingSession {
@@ -177,7 +182,26 @@ export interface MobileBridgeSessionDelta {
   readonly events: readonly MobileBridgeSessionEvent[]
 }
 
-export type MobileBridgeEvent = MobileBridgeInboxChange | MobileBridgeSessionDelta
+/**
+ * A session needs attention: permission / question / completion / error edge.
+ * `title` / `agentName` / `permissionTitle` let main build a push payload even
+ * when no inbox subscriber ever asked for the session (attention-only mode).
+ * Never carries prompt text or tool output.
+ */
+export interface MobileBridgeAttentionEvent {
+  readonly kind: 'attention'
+  readonly localId: string
+  readonly durableId?: string
+  readonly attentionKind: MobileAttentionKind
+  readonly title: string
+  readonly agentName?: string
+  readonly permissionTitle?: string
+}
+
+export type MobileBridgeEvent =
+  | MobileBridgeInboxChange
+  | MobileBridgeSessionDelta
+  | MobileBridgeAttentionEvent
 
 /** Bridge-level command failure. `code` is the protocol error code sent back to the phone. */
 export interface MobileBridgeCommandError {
@@ -228,6 +252,16 @@ export interface IMobileBridgeService {
 
   /** Stop observing and release every watcher (last phone unsubscribed). */
   stopStreaming(): Promise<void>
+
+  /**
+   * Lightweight attention-only watch. Runs while any paired device has
+   * notifications enabled, even with no inbox/session subscriber, so a phone in
+   * the background can still receive Web Push. Idempotent and independent of
+   * `startStreaming()`.
+   */
+  startAttention(): Promise<void>
+
+  stopAttention(): Promise<void>
 
   /** Full tool-call body; undefined when the session/tool call is gone. */
   getToolCallDetail(localId: string, toolCallId: string): Promise<MobileToolCallDetail | undefined>

@@ -67,6 +67,7 @@ export function InboxPage({
       </button>
       {settingsOpen && (
         <SettingsDrawer
+          client={client}
           credentials={credentials}
           onClose={() => setSettingsOpen(false)}
           onUnpair={unpair}

@@ -9,6 +9,7 @@
 
 import {
   autorun,
+  Disposable,
   Emitter,
   IEditorGroupsService,
   ILoggerService,
@@ -30,6 +31,7 @@ import {
 } from '@universe-editor/mobile-protocol'
 import { truncateDiffSideText, truncateToolTextBlock } from '@universe-editor/acp-view-model'
 import type {
+  MobileBridgeAttentionEvent,
   MobileBridgeCommandError,
   MobileBridgeEvent,
   MobileBridgeNewSessionResult,
@@ -43,6 +45,10 @@ import type {
 import { IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
 import { isResidentLive } from '../acp/session/acpSessionStatus.js'
+import {
+  createAgentAttentionSignal,
+  type AgentAttentionSignal,
+} from '../acp/session/agentAttentionSignal.js'
 import type {
   AcpPendingPermission,
   AcpPendingElicitation,
@@ -92,7 +98,7 @@ interface SessionStream {
   settleWatcher: IDisposable | undefined
 }
 
-export class MobileBridgeService implements IMobileBridgeService, IDisposable {
+export class MobileBridgeService extends Disposable implements IMobileBridgeService {
   declare readonly _serviceBrand: undefined
 
   private readonly _onDidChange = new Emitter<MobileBridgeEvent>()
@@ -100,11 +106,13 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
 
   private readonly _logger: ILogger
   private _streaming = false
+  private _attention: AgentAttentionSignal | undefined
   private _rootWatcher: IDisposable | undefined
   private _syncScheduled = false
   private _syncHandle: ReturnType<typeof setTimeout> | undefined
   private readonly _streams = new Map<string, SessionStream>()
   private readonly _agentNames = new Map<string, string | undefined>()
+  private _attentionSubscription: IDisposable | undefined
   private _disposed = false
 
   constructor(
@@ -115,6 +123,7 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @ILoggerService loggerService: ILoggerService,
   ) {
+    super()
     this._logger = loggerService.createLogger({ id: 'mobileBridge', name: 'Mobile Bridge' })
   }
 
@@ -145,10 +154,12 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     if (this._disposed || this._streaming) return
     this._streaming = true
     this._logger.debug('mobile bridge streaming started')
-    this._rootWatcher = autorun((r) => {
-      void this._sessions.sessions.read(r)
-      this._scheduleSync()
-    })
+    this._rootWatcher = this._register(
+      autorun((r) => {
+        void this._sessions.sessions.read(r)
+        this._scheduleSync()
+      }),
+    )
     this._syncNow()
   }
 
@@ -165,6 +176,27 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     this._syncScheduled = false
     for (const stream of this._streams.values()) this._disposeStream(stream)
     this._streams.clear()
+  }
+
+  async startAttention(): Promise<void> {
+    if (this._disposed || this._attention !== undefined) return
+    const signal = createAgentAttentionSignal(this._sessions.sessions)
+    this._attention = signal
+    this._logger.debug('mobile bridge attention started')
+    this._attentionSubscription = this._register(
+      signal.onDidAttention((event) => {
+        this._emit(this._attentionEventFor(event.session, event.kind))
+      }),
+    )
+  }
+
+  async stopAttention(): Promise<void> {
+    if (this._attention === undefined) return
+    this._logger.debug('mobile bridge attention stopped')
+    this._attentionSubscription?.dispose()
+    this._attentionSubscription = undefined
+    this._attention.dispose()
+    this._attention = undefined
   }
 
   async getToolCallDetail(
@@ -392,7 +424,27 @@ export class MobileBridgeService implements IMobileBridgeService, IDisposable {
     if (this._disposed) return
     this._disposed = true
     void this.stopStreaming()
+    void this.stopAttention()
     this._onDidChange.dispose()
+    super.dispose()
+  }
+
+  private _attentionEventFor(
+    session: IAcpSession,
+    attentionKind: MobileBridgeAttentionEvent['attentionKind'],
+  ): MobileBridgeAttentionEvent {
+    const durableId = session.sessionIdOnAgent.get()
+    const agentName = this._agentNameFor(session.agentId)
+    const permissionTitle = session.pendingPermission.get()?.title
+    return {
+      kind: 'attention',
+      localId: session.id,
+      ...(durableId !== undefined ? { durableId } : {}),
+      attentionKind,
+      title: this._titleFor(session),
+      ...(agentName !== undefined ? { agentName } : {}),
+      ...(permissionTitle !== undefined && permissionTitle !== '' ? { permissionTitle } : {}),
+    }
   }
 
   private _liveSession(localId: string): IAcpSession | undefined {

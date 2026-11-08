@@ -22,7 +22,9 @@ import {
   parsePairRequest,
   serializeFrame,
   type PairResponse,
+  type PushSubscribeFrame,
   type ServerFrame,
+  type SetNotificationPrefsFrame,
 } from '@universe-editor/mobile-protocol'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { AuditLog } from './auditLog.js'
@@ -30,6 +32,7 @@ import type { DeviceStore } from './deviceStore.js'
 import { HelloFailureLimiter } from './helloFailureLimiter.js'
 import type { MobileGatewayHub, MobileGatewayHubConnection } from './mobileGatewayHub.js'
 import type { PairingService } from './pairingService.js'
+import { isAllowedPushEndpoint } from './pushEndpoint.js'
 import { checkRequestHeaders } from './requestSecurity.js'
 import {
   contentTypeFor,
@@ -63,6 +66,12 @@ export interface MobileGatewayServerOptions {
   readonly heartbeatTimeoutMs?: number
   readonly helloFailureLimiter?: HelloFailureLimiter
   readonly onConnectionsChanged?: () => void
+  /** Fired after push subscription / notification preference changes. */
+  readonly onNotificationStateChanged?: () => void
+  /** VAPID public key advertised in `hello_ok`; omitted when push is unavailable. */
+  readonly vapidPublicKey?: string
+  /** Overridable for tests; defaults to the built-in push-service allow-list. */
+  readonly isPushEndpointAllowed?: (endpoint: string) => boolean
   /** M2 aggregation; absent in M1-only tests, which keep the empty inbox answer. */
   readonly hub?: MobileGatewayHub
 }
@@ -72,6 +81,8 @@ interface ConnectionState {
   readonly remoteAddress: string
   deviceId: string | undefined
   deviceName: string | undefined
+  /** Declared by the client on `visibilitychange`; gates in-app notifications. */
+  visible: boolean
   helloReceived: boolean
   helloInFlight: boolean
   helloTimer: ReturnType<typeof setTimeout> | undefined
@@ -112,6 +123,33 @@ export class MobileGatewayServer {
 
   getConnectedDeviceCount(): number {
     return this.getConnectedDeviceIds().size
+  }
+
+  /** True when this device has at least one foreground-declaring connection. */
+  isDeviceVisible(deviceId: string): boolean {
+    for (const connection of this._connections) {
+      if (connection.deviceId === deviceId && connection.helloReceived && connection.visible) {
+        return true
+      }
+    }
+    return false
+  }
+
+  /**
+   * Send a foreground notification to every visible connection of the device.
+   * Returns false when the device has no visible connection (the router then
+   * falls back to Web Push).
+   */
+  sendToVisibleDevices(deviceId: string, frame: ServerFrame): boolean {
+    let sent = false
+    for (const connection of this._connections) {
+      if (connection.deviceId !== deviceId || !connection.helloReceived || !connection.visible) {
+        continue
+      }
+      this._sendFrame(connection.ws, frame)
+      sent = true
+    }
+    return sent
   }
 
   async start(): Promise<{ readonly port: number }> {
@@ -423,6 +461,7 @@ export class MobileGatewayServer {
       remoteAddress: req.socket.remoteAddress ?? '',
       deviceId: undefined,
       deviceName: undefined,
+      visible: false,
       helloReceived: false,
       helloInFlight: false,
       helloTimer: undefined,
@@ -512,6 +551,18 @@ export class MobileGatewayServer {
         if (connection.hubConnection !== undefined) {
           this._options.hub?.unsubscribeSession(connection.hubConnection, parsed.value.ref)
         }
+        break
+      case 'client_state':
+        connection.visible = parsed.value.visible
+        break
+      case 'push_subscribe':
+        await this._handlePushSubscribe(connection, parsed.value)
+        break
+      case 'push_unsubscribe':
+        await this._handlePushUnsubscribe(connection)
+        break
+      case 'set_notification_prefs':
+        await this._handleSetNotificationPrefs(connection, parsed.value)
         break
       case 'command': {
         const command = parsed.value
@@ -606,7 +657,10 @@ export class MobileGatewayServer {
       serverVersion: this._options.serverVersion,
       deviceId: device.deviceId,
       serverTime: Date.now(),
-      capabilities: ['inbox', 'commands'],
+      capabilities: ['inbox', 'commands', 'notifications'],
+      ...(this._options.vapidPublicKey !== undefined
+        ? { vapidPublicKey: this._options.vapidPublicKey }
+        : {}),
     })
     await this._options.audit.append({
       deviceId: device.deviceId,
@@ -619,6 +673,72 @@ export class MobileGatewayServer {
       `device connected id=${device.deviceId} name=${device.name} remote=${connection.remoteAddress}`,
     )
     this._options.onConnectionsChanged?.()
+  }
+
+  private async _handlePushSubscribe(
+    connection: ConnectionState,
+    frame: PushSubscribeFrame,
+  ): Promise<void> {
+    const deviceId = connection.deviceId
+    if (deviceId === undefined) return
+    const allow = this._options.isPushEndpointAllowed ?? isAllowedPushEndpoint
+    if (!allow(frame.subscription.endpoint)) {
+      await this._auditDevice(
+        connection,
+        'push_subscribe',
+        'failure',
+        'endpoint host is not an allowed push service',
+      )
+      this._sendServerError(connection.ws, 'bad_request', 'push endpoint is not allowed')
+      return
+    }
+    const stored = await this._options.store.setPushSubscription(deviceId, frame.subscription)
+    if (!stored) {
+      this._sendServerError(connection.ws, 'unauthorized', 'device is not paired')
+      return
+    }
+    if (frame.prefs !== undefined) {
+      await this._options.store.setNotificationPrefs(deviceId, frame.prefs)
+    }
+    // Audit the host, never the endpoint: push endpoints carry a capability token.
+    await this._auditDevice(
+      connection,
+      'push_subscribe',
+      'success',
+      `host=${safeHost(frame.subscription.endpoint)}`,
+    )
+    this._options.onNotificationStateChanged?.()
+  }
+
+  private async _handlePushUnsubscribe(connection: ConnectionState): Promise<void> {
+    const deviceId = connection.deviceId
+    if (deviceId === undefined) return
+    const removed = await this._options.store.removePushSubscription(deviceId)
+    await this._auditDevice(
+      connection,
+      'push_unsubscribe',
+      removed ? 'success' : 'failure',
+      removed ? undefined : 'no stored subscription',
+    )
+    this._options.onNotificationStateChanged?.()
+  }
+
+  private async _handleSetNotificationPrefs(
+    connection: ConnectionState,
+    frame: SetNotificationPrefsFrame,
+  ): Promise<void> {
+    const deviceId = connection.deviceId
+    if (deviceId === undefined) return
+    const stored = await this._options.store.setNotificationPrefs(deviceId, {
+      enabled: frame.enabled,
+      ...(frame.kinds !== undefined ? { kinds: frame.kinds } : {}),
+      alwaysNotify: frame.alwaysNotify ?? false,
+    })
+    if (!stored) {
+      this._sendServerError(connection.ws, 'unauthorized', 'device is not paired')
+      return
+    }
+    this._options.onNotificationStateChanged?.()
   }
 
   private _handleClose(connection: ConnectionState): void {
@@ -681,7 +801,7 @@ export class MobileGatewayServer {
 
   private _sendServerError(
     ws: WebSocket,
-    code: 'bad_request' | 'not_supported' | 'rate_limited',
+    code: 'bad_request' | 'not_supported' | 'rate_limited' | 'unauthorized',
     message: string,
   ): void {
     this._sendFrame(ws, { type: 'server_error', code, message, retryable: false })
@@ -755,6 +875,30 @@ export class MobileGatewayServer {
     detail: string,
   ): Promise<void> {
     return this._options.audit.append({ remoteAddress, action, result, detail })
+  }
+
+  private _auditDevice(
+    connection: ConnectionState,
+    action: string,
+    result: 'success' | 'failure',
+    detail: string | undefined,
+  ): Promise<void> {
+    return this._options.audit.append({
+      ...(connection.deviceId !== undefined ? { deviceId: connection.deviceId } : {}),
+      ...(connection.deviceName !== undefined ? { deviceName: connection.deviceName } : {}),
+      remoteAddress: connection.remoteAddress,
+      action,
+      result,
+      ...(detail !== undefined ? { detail } : {}),
+    })
+  }
+}
+
+function safeHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host
+  } catch {
+    return 'invalid'
   }
 }
 

@@ -7,7 +7,7 @@
  *  stopped/starting/running/error state machine.
  *--------------------------------------------------------------------------------------------*/
 
-import { app } from 'electron'
+import { BrowserWindow, app } from 'electron'
 import { networkInterfaces } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -62,8 +62,15 @@ import {
   HELLO_TIMEOUT_MS,
   MobileGatewayServer,
 } from './mobileGatewayServer.js'
-import { MobileGatewayHub, isSameWorkspace } from './mobileGatewayHub.js'
+import {
+  MobileGatewayHub,
+  isSameWorkspace,
+  type MobileGatewayAttention,
+} from './mobileGatewayHub.js'
+import { MobileNotificationRouter } from './mobileNotificationRouter.js'
 import { PairingService } from './pairingService.js'
+import { loadOrCreateVapidKeys, type VapidKeyPair } from './vapidKeys.js'
+import { createWebPushSender, type WebPushSender } from './webPushSender.js'
 
 const MAX_AUDIT_LIMIT = 200
 
@@ -100,6 +107,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _listenAddress: string | undefined
   private _origins: readonly string[] = []
   private _server: MobileGatewayServer | undefined
+  private _router: MobileNotificationRouter | undefined
+  private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
+  private readonly _pushSender: WebPushSender
   private _runningKey: string | undefined
   private _serial: Promise<void> = Promise.resolve()
   private _disposed = false
@@ -114,19 +124,24 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       id: 'mobileGateway',
       name: 'Mobile Gateway',
     })
-    this._hub = new MobileGatewayHub(this._logger, {
-      listOpenWorkspaces: () => this._openWorkspaces(),
-      listRecentWorkspaces: async () =>
-        (await this._recent.getRecent()).map((entry) => ({
-          folder: entry.folder.toString(),
-          name: entry.name,
-          ...(entry.folder.authority ? { authority: entry.folder.authority } : {}),
-        })),
-      openWorkspace: (folder) =>
-        this._windows?.openWindowForFolder(URI.parse(folder)) ?? Promise.resolve(),
-      waitForBridge: (folder, authority, timeoutMs) =>
-        this._waitForBridge(folder, authority, timeoutMs),
-    })
+    this._pushSender = createWebPushSender()
+    this._hub = new MobileGatewayHub(
+      this._logger,
+      {
+        listOpenWorkspaces: () => this._openWorkspaces(),
+        listRecentWorkspaces: async () =>
+          (await this._recent.getRecent()).map((entry) => ({
+            folder: entry.folder.toString(),
+            name: entry.name,
+            ...(entry.folder.authority ? { authority: entry.folder.authority } : {}),
+          })),
+        openWorkspace: (folder) =>
+          this._windows?.openWindowForFolder(URI.parse(folder)) ?? Promise.resolve(),
+        waitForBridge: (folder, authority, timeoutMs) =>
+          this._waitForBridge(folder, authority, timeoutMs),
+      },
+      (attention) => this._handleAttention(attention),
+    )
 
     const mobileDir = join(app.getPath('userData'), 'mobile')
     this._deviceStore = new DeviceStore(join(mobileDir, 'devices.json'), {
@@ -135,11 +150,19 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
         this._logger.warn(`devices.json chmod 0600 failed: ${error.message}`),
     })
     this._audit = new AuditLog(join(mobileDir, 'audit.jsonl'))
+    this._vapidPromise = loadOrCreateVapidKeys(join(mobileDir, 'vapid.json'), {
+      onCorrupt: (error) => this._logger.warn(`vapid.json is unreadable: ${error.message}`),
+      onChmodError: (error) => this._logger.warn(`vapid.json chmod 0600 failed: ${error.message}`),
+    }).catch((err) => {
+      this._logger.warn(`Web Push is unavailable (VAPID setup failed): ${String(err)}`)
+      return undefined
+    })
     const fixedCode = resolveE2ePairCode(this._logger)
     this._pairing = new PairingService(fixedCode === undefined ? {} : { fixedCode })
     this._assetsDir = resolveMobileAssetsDir()
 
     this._register(this._configLocation.onDidChangeConfigDir(() => void this._reloadFromDisk()))
+    void this._refreshAttentionState()
     void this._reloadFromDisk()
   }
 
@@ -174,6 +197,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       createdAt: device.createdAt,
       lastSeenAt: device.lastSeenAt,
       connected: connected.has(device.deviceId),
+      notificationsEnabled: device.notifications?.enabled === true,
     }))
   }
 
@@ -187,6 +211,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       ...(removed ? {} : { detail: 'device not found' }),
     })
     this._logger.info(`revoke device id=${deviceId} removed=${removed}`)
+    await this._refreshAttentionState()
     await this._emitDevices()
   }
 
@@ -336,11 +361,13 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       port: runtime.port,
       extraHosts: this._config.allowedHosts,
     })
+    const vapid = await this._vapidPromise
     const runningKey = JSON.stringify({
       host: runtime.host,
       port: runtime.port,
       allowedHosts,
       assetsDir: this._assetsDir,
+      vapidSubject: this._config.vapidSubject,
     })
     if (this._state === 'running' && runningKey === this._runningKey) return
 
@@ -360,6 +387,11 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
       onConnectionsChanged: () => this._handleConnectionsChanged(),
+      onNotificationStateChanged: () => {
+        void this._refreshAttentionState()
+        void this._emitDevices()
+      },
+      ...(vapid !== undefined ? { vapidPublicKey: vapid.publicKey } : {}),
       hub: this._hub,
     })
     try {
@@ -369,6 +401,21 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
         return
       }
       this._server = server
+      this._router = new MobileNotificationRouter({
+        logger: this._logger,
+        listTargets: () => this._deviceStore.listNotifyTargets(),
+        isPcFocused: () => BrowserWindow.getFocusedWindow() !== null,
+        isDeviceVisible: (deviceId) => server.isDeviceVisible(deviceId),
+        sendToVisibleDevices: (deviceId, frame) => server.sendToVisibleDevices(deviceId, frame),
+        pushSender: this._pushSender,
+        ...(vapid !== undefined ? { vapid } : {}),
+        subject: this._config.vapidSubject,
+        onPushSubscriptionGone: async (deviceId) => {
+          await this._deviceStore.removePushSubscription(deviceId)
+          await this._refreshAttentionState()
+        },
+      })
+      void this._refreshAttentionState()
       this._listenAddress = `${runtime.host}:${port}`
       this._origins = buildOrigins({
         bind: runtime.bind,
@@ -402,6 +449,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private async _teardown(): Promise<void> {
     const server = this._server
     this._server = undefined
+    this._router = undefined
     this._runningKey = undefined
     this._listenAddress = undefined
     this._origins = []
@@ -410,6 +458,24 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     await server.stop()
     this._logger.info('stopped')
     this._recordAudit({ action: 'gateway_stop', result: 'success' })
+  }
+
+  private _handleAttention(attention: MobileGatewayAttention): void {
+    const router = this._router
+    if (router === undefined) return
+    void router.notify(attention).catch((err) => {
+      this._logger.warn(`mobile notification routing failed: ${String(err)}`)
+    })
+  }
+
+  /** Hub attention-only mode follows the set of devices with notifications on. */
+  private async _refreshAttentionState(): Promise<void> {
+    try {
+      const targets = await this._deviceStore.listNotifyTargets()
+      this._hub.setAttentionNeeded(targets.length > 0)
+    } catch (err) {
+      this._logger.warn(`failed to read notification devices: ${String(err)}`)
+    }
   }
 
   private _setState(state: MobileGatewayState): void {
@@ -470,6 +536,7 @@ function normalizeConfig(config: MobileGatewayConfig): MobileGatewayConfig {
     'mobileGateway.lanAddress': config.lanAddress,
     'mobileGateway.port': config.port,
     'mobileGateway.allowedHosts': config.allowedHosts,
+    'mobileGateway.vapidSubject': config.vapidSubject,
   })
   // A renderer omission must not silently enable the gateway.
   return parsed
