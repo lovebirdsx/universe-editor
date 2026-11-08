@@ -37,6 +37,7 @@ import {
   type MobileDeviceInfo,
   type MobileGatewayBindMode,
   type MobileGatewayState,
+  type MobileGatewayStatus,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import { useService } from '../useService.js'
 import {
@@ -66,6 +67,24 @@ const BIND_OPTIONS: readonly SelectOption<MobileGatewayBindMode>[] = [
   },
   { value: 'lan', label: localize('mobileDevices.bind.lan', 'LAN address') },
 ]
+
+function lanAddressOptions(
+  status: MobileGatewayStatus | undefined,
+  selected: string,
+): readonly SelectOption<string>[] {
+  const candidates = status?.lanAddresses ?? []
+  const autoLabel =
+    candidates[0] === undefined
+      ? localize('mobileDevices.bind.lanAddressAuto', 'Automatic')
+      : `${localize('mobileDevices.bind.lanAddressAuto', 'Automatic')} (${candidates[0]})`
+  const options: SelectOption<string>[] = [{ value: '', label: autoLabel }]
+  // A hand-edited address (WSL portproxy, for example) may not be enumerated
+  // locally; keep it selectable instead of dropping the trigger's label.
+  const values = new Set(candidates)
+  if (selected !== '') values.add(selected)
+  for (const address of values) options.push({ value: address, label: address })
+  return options
+}
 
 function gatewayStateLabel(state: MobileGatewayState): string {
   switch (state) {
@@ -392,6 +411,27 @@ export function MobileDevicesEditor() {
               </div>
             ) : (
               <div className={styles['bindDetails']}>
+                <div className={cx(styles['settingRow'], styles['bindAddressRow'])}>
+                  <div className={styles['settingText']}>
+                    <div className={styles['label']}>
+                      {localize('mobileDevices.bind.lanAddressLabel', 'LAN address')}
+                    </div>
+                    <div className={styles['description']}>
+                      {localize(
+                        'mobileDevices.bind.lanAddressDescription',
+                        'Automatic prefers a private address on a physical adapter and ignores link-local (169.254.x.x) adapters. Pick one when this PC has several networks.',
+                      )}
+                    </div>
+                  </div>
+                  <Select
+                    value={settings.lanAddress}
+                    options={lanAddressOptions(status, settings.lanAddress)}
+                    onChange={(lanAddress) => void config.update({ lanAddress })}
+                    disabled={config.state === undefined}
+                    data-testid="mobile-gateway-lan-address"
+                    aria-label={localize('mobileDevices.bind.lanAddressLabel', 'LAN address')}
+                  />
+                </div>
                 <p className={styles['description']}>
                   {localize(
                     'mobileDevices.bind.lanDescription',

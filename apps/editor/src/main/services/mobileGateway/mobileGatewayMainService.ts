@@ -51,6 +51,7 @@ import {
   capabilitiesForOrigins,
   gatewayEnvironmentFromProcess,
   isMobileGatewayEnabled,
+  listLanAddresses,
   resolveGatewayRuntime,
   type GatewayOrigins,
 } from './gatewayConfig.js'
@@ -596,6 +597,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       state: this._state,
       ...(this._error !== undefined ? { error: this._error } : {}),
       ...(this._listenAddress !== undefined ? { listenAddress: this._listenAddress } : {}),
+      lanAddresses: listLanAddresses(),
       origins: this._origins,
       insecure: this._insecure,
       bind: this._bind,

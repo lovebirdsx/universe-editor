@@ -434,6 +434,9 @@ JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()
 
 **局域网档注意事项**：
 
+- `lanAddress` 留空时按「私网地址优先、物理网卡优先」排序，`169.254.0.0/16` 链路本地地址直接排除
+  （Windows 会给未拿到 DHCP 租约的虚拟网卡/断开的 VPN 分配它）；候选列表随
+  `MobileGatewayStatus.lanAddresses` 下发，设置页的地址下拉由它渲染。
 - Windows 首次监听非回环地址会弹防火墙授权。
 - iOS 有本地网络隐私提示；自签证书还需在系统里接受/信任，否则 Service Worker 与推送不可用。
 - iOS 26 对裸 IP 的 `ws` 有失败报告，优先建议用主机名 + 受信任证书。

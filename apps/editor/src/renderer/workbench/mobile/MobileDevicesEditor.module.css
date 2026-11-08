@@ -256,6 +256,10 @@
   gap: var(--spacing-3);
 }
 
+.bindAddressRow {
+  align-self: stretch;
+}
+
 /* -- pairing ------------------------------------------------------------- */
 
 .pairingIdle {

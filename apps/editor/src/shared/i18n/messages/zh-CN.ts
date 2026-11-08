@@ -38,6 +38,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.bind.label': '网关监听位置',
   'mobileDevices.bind.localOnlyHint': '此配置只保存在这台电脑上，不随 settings.json 同步。',
   'mobileDevices.bind.lan': '局域网地址',
+  'mobileDevices.bind.lanAddressAuto': '自动',
+  'mobileDevices.bind.lanAddressDescription':
+    '自动会选择物理网卡的私有地址，并忽略 169.254 开头的链路本地地址；这台电脑有多个网络时请手动选择。',
+  'mobileDevices.bind.lanAddressLabel': '局域网地址',
   'mobileDevices.bind.lanDescription':
     '直接绑定局域网地址，并使用本机生成的自签名 HTTPS 证书。手机需要先在配对页确认证书指纹；在信任该证书之前，无法安装应用或使用 Web Push。',
   'mobileDevices.bind.loopback': '回环（推荐）',
@@ -1242,7 +1246,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.mobileGateway.enabled':
     '在这台电脑上提供手机 PWA 并从已配对的手机接受连接。默认关闭；请在“手机设备”设置页配对设备。',
   'settings.mobileGateway.lanAddress':
-    '"lan" 模式下绑定的 IPv4 地址。留空则使用第一个非内部 IPv4 地址。',
+    '"lan" 模式下绑定的 IPv4 地址。留空则自动选择最合适的局域网网卡：优先私有地址与物理网卡，忽略 169.254 开头的链路本地地址。',
   'settings.mobileGateway.port':
     '网关的 TCP 端口（配对 API、PWA 资源与 WebSocket）。环境变量 UNIVERSE_MOBILE_PORT 会覆盖此值。',
   'settings.mobileGateway.vapidSubject':

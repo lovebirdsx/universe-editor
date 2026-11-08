@@ -43,7 +43,7 @@ const MOBILE_GATEWAY_SCHEMA: IJSONSchema = {
       default: 'loopback',
       description: localize(
         'settings.mobileGateway.bind',
-        'Where the gateway listens. "loopback" is the recommended Tailscale mode: the gateway listens on 127.0.0.1 and Tailscale Serve exposes it over HTTPS. "lan" binds a LAN address directly and is development-only until self-signed HTTPS ships.',
+        'Where the gateway listens. "loopback" is the recommended Tailscale mode: the gateway listens on 127.0.0.1 and Tailscale Serve exposes it over HTTPS. "lan" binds a LAN address directly and serves HTTPS with a certificate generated on this PC.',
       ),
     },
     lanAddress: {
@@ -51,7 +51,7 @@ const MOBILE_GATEWAY_SCHEMA: IJSONSchema = {
       default: '',
       description: localize(
         'settings.mobileGateway.lanAddress',
-        'IPv4 address to bind in "lan" mode. Leave empty to use the first non-internal IPv4 address.',
+        'IPv4 address to bind in "lan" mode. Leave empty to auto-pick the best LAN adapter: private ranges first, physical adapters over virtual ones, and link-local 169.254.x.x addresses are ignored.',
       ),
     },
     port: {

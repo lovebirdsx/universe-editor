@@ -40,9 +40,14 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
+// Generic RFC 1918 fixtures for the LAN address picker; not this machine's network.
+const LAN_ADDRESS = '192.168.1.20' // sensitive-strings:allow
+const ALT_LAN_ADDRESS = '10.0.0.5' // sensitive-strings:allow
+
 const RUNNING_STATUS: MobileGatewayStatus = {
   state: 'running',
   listenAddress: '127.0.0.1:47321',
+  lanAddresses: [LAN_ADDRESS],
   origins: ['http://127.0.0.1:47321', 'https://pc.example.ts.net'],
   insecure: false,
   bind: 'loopback',
@@ -52,6 +57,7 @@ const RUNNING_STATUS: MobileGatewayStatus = {
 
 const STOPPED_STATUS: MobileGatewayStatus = {
   state: 'stopped',
+  lanAddresses: [LAN_ADDRESS],
   origins: [],
   insecure: false,
   bind: 'loopback',
@@ -238,6 +244,28 @@ describe('MobileDevicesEditor', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'LAN address' }))
 
     expect(gateway.updateConfig).toHaveBeenCalledWith({ bind: 'lan' })
+  })
+
+  it('picks a specific LAN address from the detected candidates', async () => {
+    const { gateway } = renderEditor({
+      status: {
+        ...RUNNING_STATUS,
+        bind: 'lan',
+        listenAddress: `${LAN_ADDRESS}:47321`,
+        lanAddresses: [LAN_ADDRESS, ALT_LAN_ADDRESS],
+      },
+      config: { config: { ...DEFAULT_MOBILE_GATEWAY_CONFIG, bind: 'lan' } },
+    })
+    await screen.findByTestId('mobile-gateway-state')
+    await flush()
+
+    expect(screen.getByTestId('mobile-gateway-lan-address').textContent).toContain(
+      `Automatic (${LAN_ADDRESS})`,
+    )
+    fireEvent.click(screen.getByTestId('mobile-gateway-lan-address'))
+    fireEvent.click(await screen.findByRole('option', { name: ALT_LAN_ADDRESS }))
+
+    expect(gateway.updateConfig).toHaveBeenCalledWith({ lanAddress: ALT_LAN_ADDRESS })
   })
 
   it('rolls back and shows an error when saving the config fails', async () => {

@@ -106,16 +106,80 @@ export function resolveGatewayRuntime(
   return { ok: true, bind, host, port, secure: !insecure, insecure }
 }
 
-/** First non-internal IPv4 address, or undefined when the machine has none. */
+/**
+ * IPv4 addresses a phone could plausibly reach, best first.
+ *
+ * Link-local (169.254.0.0/16) entries are dropped entirely: Windows assigns
+ * them to adapters that never got a DHCP lease (disconnected VPNs, idle
+ * virtual switches) and no other device can reach them. Private ranges outrank
+ * public ones, and physical adapters outrank virtual switches/VPNs, because a
+ * multi-homed machine usually enumerates the virtual adapter first.
+ */
+export function listLanAddresses(
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces(),
+): string[] {
+  const candidates: { readonly address: string; readonly score: number }[] = []
+  for (const [name, entries] of Object.entries(interfaces)) {
+    for (const entry of entries ?? []) {
+      if (entry.family !== 'IPv4' || entry.internal) continue
+      const score = lanAddressScore(name, entry.address)
+      // Ties keep OS enumeration order (Array#sort is stable), so a machine
+      // without virtual adapters behaves exactly like the old first-match rule.
+      if (score !== undefined) candidates.push({ address: entry.address, score })
+    }
+  }
+  candidates.sort((a, b) => b.score - a.score)
+  return candidates.map((candidate) => candidate.address)
+}
+
+/** Best LAN address, or undefined when every candidate is unusable. */
 export function pickLanAddress(
   interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces(),
 ): string | undefined {
-  for (const entries of Object.values(interfaces)) {
-    for (const entry of entries ?? []) {
-      if (entry.family === 'IPv4' && !entry.internal) return entry.address
-    }
+  return listLanAddresses(interfaces)[0]
+}
+
+const VIRTUAL_INTERFACE_PREFIXES = ['br-', 'tap', 'tun', 'utun', 'veth', 'virbr', 'wg']
+const VIRTUAL_INTERFACE_NAMES = [
+  'docker',
+  'hyper-v',
+  'tailscale',
+  'vethernet',
+  'virtualbox',
+  'vmnet',
+  'wireguard',
+  'wsl',
+  'zerotier',
+]
+
+function lanAddressScore(name: string, address: string): number | undefined {
+  const octets = parseIpv4(address)
+  if (octets === undefined) return undefined
+  const [a, b] = octets
+  if (a === 169 && b === 254) return undefined
+  const privateRange = a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+  const score = privateRange ? 2 : 1
+  return isVirtualInterfaceName(name) ? score - 2 : score
+}
+
+function isVirtualInterfaceName(name: string): boolean {
+  const normalized = name.toLowerCase()
+  return (
+    VIRTUAL_INTERFACE_PREFIXES.some((prefix) => normalized.startsWith(prefix)) ||
+    VIRTUAL_INTERFACE_NAMES.some((token) => normalized.includes(token))
+  )
+}
+
+function parseIpv4(address: string): readonly [number, number, number, number] | undefined {
+  const parts = address.split('.')
+  if (parts.length !== 4) return undefined
+  const octets = parts.map(Number)
+  const [a, b, c, d] = octets
+  if (a === undefined || b === undefined || c === undefined || d === undefined) return undefined
+  if (!octets.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)) {
+    return undefined
   }
-  return undefined
+  return [a, b, c, d]
 }
 
 export interface GatewayOrigins {

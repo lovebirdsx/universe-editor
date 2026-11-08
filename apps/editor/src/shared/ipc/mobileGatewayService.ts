@@ -35,7 +35,7 @@ export type MobileGatewayBindMode = 'loopback' | 'lan'
 export interface MobileGatewayConfig {
   readonly enabled: boolean
   readonly bind: MobileGatewayBindMode
-  /** LAN address to bind in `lan` mode; empty means the first non-internal IPv4. */
+  /** LAN address to bind in `lan` mode; empty means the best auto-detected adapter. */
   readonly lanAddress: string
   readonly port: number
   /** Extra Host values accepted on top of the bind address / loopback. */
@@ -103,6 +103,11 @@ export interface MobileGatewayStatus {
   readonly error?: string
   /** Actual `host:port` while listening. */
   readonly listenAddress?: string
+  /**
+   * Usable IPv4 candidates for `lan` mode, best first. Link-local (169.254/16)
+   * addresses are already excluded; the settings page uses this as the picker.
+   */
+  readonly lanAddresses: readonly string[]
   /** URL origins the phone can open, ordered loopback/lan first, then allowed hosts. */
   readonly origins: readonly string[]
   /** True when HTTP is bound to a non-loopback address (development only). */
