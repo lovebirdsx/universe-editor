@@ -425,12 +425,17 @@ jobs:
           restore-keys: |
             turbo-${{ runner.os }}-
 
-      # Playwright bundles its own browsers — for `_electron` tests we only need
-      # the Linux system libs (libnss3, libgtk, etc). On Windows nothing extra
-      # is needed.
+      # Playwright ships no browser binaries in npm — `install-deps` only pulls the
+      # Linux system libs (libnss3, libgtk, etc) for `_electron` suites. The
+      # mobile-gateway specs drive the phone PWA in a real Chromium, so the
+      # headless shell they launch (never headed) must be downloaded on both
+      # runners.
       - name: Install Playwright system dependencies (Linux)
         if: runner.os == 'Linux'
         run: pnpm --filter @universe-editor/editor exec playwright install-deps
+
+      - name: Install Playwright browser (Chromium headless shell)
+        run: pnpm --filter @universe-editor/editor exec playwright install --only-shell chromium
 
       # The core suite's scoped fixtures (smoke.peekPreview / smoke.outline) drive
       # a real tsserver via the typescript extension, whose vendored

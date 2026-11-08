@@ -8,7 +8,8 @@
 #    bash scripts/wsl/bootstrap.sh
 #
 #  步骤与 .github/workflows/ci.yml 的 e2e job、docs/development/wsl-e2e.md 保持一致：
-#  守卫 → xvfb → corepack/pnpm → pnpm install → playwright install-deps → tsserver vendor
+#  守卫 → xvfb → corepack/pnpm → pnpm install → playwright install-deps
+#  → playwright install --only-shell chromium → tsserver vendor
 #  → AppArmor userns 检测 → 打印下一步。
 #----------------------------------------------------------------------------------------------
 set -euo pipefail
@@ -76,6 +77,10 @@ pnpm install --frozen-lockfile
 # --- Playwright 系统依赖（libnss3/libgtk 等；内部走 sudo 装 apt 包，与 CI 同款） ---
 warn "playwright install-deps 内部会用 sudo 装 apt 包，可能提示输入密码"
 pnpm --filter @universe-editor/editor exec playwright install-deps
+
+# --- Playwright 浏览器二进制（install-deps 只装系统库；mobile.gateway.spec.ts 的 chromium.launch() 需要） ---
+info "playwright install --only-shell chromium"
+pnpm --filter @universe-editor/editor exec playwright install --only-shell chromium
 
 # --- tsserver vendor（peek/outline 的 coreTypescriptApp fixture 需要，与 CI 一致） ---
 info "npm --prefix vendor/typescript-language-server ci"

@@ -28,6 +28,7 @@
     "e2e:headed": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && cross-env UNIVERSE_E2E_SHOW=1 playwright test -c e2e/playwright.config.ts --headed",
     "e2e:ui": "node ../../scripts/e2e/ensure-e2e-build.mjs @universe-editor/editor && cross-env UNIVERSE_E2E_SHOW=1 playwright test -c e2e/playwright.config.ts --ui",
     "e2e:install": "playwright install-deps",
+    "e2e:install:browsers": "playwright install --only-shell chromium",
     "lint": "eslint src bench integration e2e --cache --cache-strategy content",
     "lint:fix": "eslint --fix src bench integration e2e",
     "clean": "tsgo --build --clean",

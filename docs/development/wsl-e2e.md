@@ -35,7 +35,11 @@ pnpm install --frozen-lockfile
 # 4) Playwright 系统依赖（libnss3/libgtk 等；内部走 sudo 装 apt 包，与 CI 同款）
 pnpm --filter @universe-editor/editor exec playwright install-deps
 
-# 5) tsserver vendor（peek/outline 的 coreTypescriptApp fixture 需要，与 CI 一致）
+# 5) Playwright 浏览器二进制（install-deps 只装系统库；mobile.gateway.spec.ts 的
+#    chromium.launch() 需要真实浏览器。只装 headless shell：该 spec 始终 headless）
+pnpm --filter @universe-editor/editor exec playwright install --only-shell chromium
+
+# 6) tsserver vendor（peek/outline 的 coreTypescriptApp fixture 需要，与 CI 一致）
 #    可选：ensure-e2e-build.mjs 检测缺失会自动装（见下文「构建无需手动做」），
 #    保留此步骤可避免首次 e2e 的安装耗时。
 npm --prefix vendor/typescript-language-server ci
@@ -47,7 +51,7 @@ npm --prefix vendor/typescript-language-server ci
 bash scripts/wsl/bootstrap.sh
 ```
 
-构建无需手动做：`pnpm e2e:smoke` / `pnpm e2e` 等 e2e 脚本前置了 `scripts/e2e/ensure-e2e-build.mjs`，会自动 `turbo run build --filter=@universe-editor/editor...`。首次运行会全量构建，之后命中 turbo 缓存秒过。同一脚本也自动保障 tsserver vendor（缺失时 `npm ci`，已有安装则幂等应用仓库的 TSLS 补丁），新 clone / worktree 无需手动执行上一步骤 5。
+构建无需手动做：`pnpm e2e:smoke` / `pnpm e2e` 等 e2e 脚本前置了 `scripts/e2e/ensure-e2e-build.mjs`，会自动 `turbo run build --filter=@universe-editor/editor...`。首次运行会全量构建，之后命中 turbo 缓存秒过。同一脚本也自动保障 tsserver vendor（缺失时 `npm ci`，已有安装则幂等应用仓库的 TSLS 补丁），新 clone / worktree 无需手动执行上一步骤 6。
 
 > **e2e 不需要 submodule 和 `pnpm agent:build`**。核心 e2e 的 ACP/agents 用例走 echo agent 源码 fixture（`apps/editor/src/test-fixtures/echoAgent.cjs`），不 spawn 真实 fork；CI 的 core e2e job 也不 checkout submodule。`vendor/claude-agent-acp` submodule + `pnpm agent:build` 只在 `pnpm --filter @universe-editor/editor test:integration acpForkContract` 和 `package:win` 打包时才需要。
 
