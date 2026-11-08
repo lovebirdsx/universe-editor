@@ -45,6 +45,7 @@ renderer 命令 dryRun 预览 → 确认框（有文件改动=三按钮：撤销
     → 本地 _resetForReplay() + beginHistoryReplay() + 侧边任务按 history 行 sideTaskOf 重新 arm 抑制（清空 timeline 等 replay 重填）
     → conn.extMethod(REWIND_SESSION_METHOD, {sessionId, messageId, [dryRun], [rewindFiles:false]})
       ⟨vendor rewindSession⟩:
+        0. 锚点解析：live `messageIdToUuid` 命中→直接用；miss（休眠唤醒 session/resume 后的新进程）→ `resolveRewindAnchor` 读磁盘有效链 / 折叠 prompt 兜底
         1. rewindFiles(uuid) 回滚文件（rewindFiles!==false 才做；canRewind:false 短路）
         2. truncateTranscriptBefore(sid, uuid, cwd) —— 物理截断磁盘 JSONL（删锚点行及之后）★持久化关键
         3. teardown + createSession(resume, resumeSessionAt=前驱uuid) + replaySessionHistory({stopBeforeUuid:uuid})
@@ -69,11 +70,12 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 | `REWIND_SESSION_METHOD = 'universe-editor/rewind_session'` | 自定义 ext-method 名，与 renderer `acpSessionModel.ts` 保持同步 |
 | `prompt()` | 从 `_meta.messageId` 读 client uuid 当 SDK uuid + eager 记 `messageIdToUuid` |
 | `RewindSessionRequest` | `{sessionId, messageId, dryRun?, rewindFiles?}`（rewindFiles 默认 true=回滚） |
-| `rewindSession()` | 三步 rewind：rewindFiles + truncateTranscriptBefore + teardown/resume/replay |
+| `rewindSession()` | 三步 rewind：锚点解析（live → 磁盘兜底）+ rewindFiles + truncateTranscriptBefore + teardown/resume/replay |
 | `unstable_forkSession()` | 读 `_meta.rewindTo` → 前驱 → `sdkForkSession({upToMessageId})` 写新文件；无锚点=整份复制 |
 | `forkSliceBefore(sid,msgId,dir?)` | 薄壳：注入真实依赖（live 表 / `getSessionMessages` / `readTranscriptEntries` / `messageIdForGrouping`）后调 `resolveForkAnchor`，其余编排（SDK `forkSession`、日志）留在 `unstable_forkSession` |
 | `resolveForkAnchor(deps)`（vendor `session-anchor.ts`） | 锚点解析 + 校验（**唯一入口**）：live 映射 → 磁盘 `getSessionMessages` 匹配 → 折叠 prompt 兜底（复用 `transcript-history.ts` 的 `findFoldedPromptParent`）；解析不到 / 锚点是首条 → 抛 `RequestError.invalidParams`。依赖全部注入，不反向依赖 agent |
-| `resolveMessageUuid(sid,msgId)` | ACP messageId → SDK uuid（只查 `messageIdToUuid`，**仅 live 进程有效**） |
+| `resolveMessageUuid(sid,msgId)` | ACP messageId → SDK uuid（只查 `messageIdToUuid`；**仅 live 进程有效**，rewind miss 时由 `resolveRewindAnchor` 磁盘兜底） |
+| `resolveRewindAnchor(deps)`（vendor `session-anchor.ts`） | 回退锚点解析（**live 表 miss 时**）：有效链按 `messageIdForGrouping` 匹配 → 折叠 prompt 用 attachment `uuid` + `parentUuid` 兜底；返回 `{anchorUuid, previousUuid, resolution}`；**首条消息合法**（previous=undefined）；未找到返回 undefined |
 | `messageUuidBefore(sid,targetUuid,dir?)` | 找 target 的**前驱** uuid（inclusive API 排除锚点用）；首条返 undefined。现只服务 rewind |
 | `truncateTranscriptBefore(sid,anchorUuid,dir?)` | **物理截断磁盘 JSONL**：定位文件→删 `uuid===anchor` 行及之后→tmp+rename 原子写。best-effort（找不到只 log 不抛） |
 | `findTranscriptFile(sid,dir?)` | 先试 encoded-cwd 路径，兜底扫 `CLAUDE_CONFIG_DIR/projects/*/<sid>.jsonl` |
@@ -127,7 +129,7 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 
 ### 已修 bug 的根因（复用时对照自查）
 
-1. **rewind 报 `Unknown messageId`**：SDK 1.1.0 zod strip 顶层 messageId。→ 走 `_meta.messageId`。
+1. **rewind 报 `Unknown messageId`**：SDK 1.1.0 zod strip 顶层 messageId。→ 走 `_meta.messageId`。（另见 #12：症状同为 Unknown messageId，但根因是冷进程 live 表为空，与 zod 无关。）
 2. **fork 无历史（显示空会话）**：旧实现用内存态 resumeSessionAt fork **不落盘**，session/load replay 读磁盘=空。→ 用 `sdkForkSession()` 写新文件。
 3. **fork 含被点消息本身 / rewind 消息列表不变 / rewind 关闭重开回弹**：三个都源于 **inclusive 语义 + 只改内存不改磁盘**。→ fork/rewind 都 key 在**前驱**；rewind 加 `replaySessionHistory({stopBeforeUuid})`（内存）**和** `truncateTranscriptBefore`（磁盘物理截断，持久化）。
 4. **rewind/fork 后运行期 model/effort 丢失回落默认**（claude 专属，codex 无因 thread 存活）：claude rewind teardown+`createSession` 重建 Query 时用的是**最初** `newSessionParams`，effort 又从 settings.json 重新 seed——运行期 `setConfigOption` 改的 model/effort/fast/agent 从未写回。→ vendor `rewindSession` teardown **前** `snapshotRuntimeConfig(session)`（从 live `configOptions` 读 model/mode/effort/fast/agent，model 优先序），重建后 `reapplyRuntimeConfig` 按序走 `setSessionConfigOption`（复用 model→effort 级联），逐项 best-effort（失败只 log）。fork 侧不重建进程但**新 history 行没继承源配置**→ renderer `forkSession` 注册行时带 `snapshotConfigSelections(live.configOptions.get())` 的 `configOptions`/`configLabels`，resume 的 `setConfigDesired` 借现成 flush 机制 push 回 fork 线程（fork 侧零新增 push 逻辑）。
@@ -139,6 +141,8 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 10. **回退到 side task 首条自有消息后，重开变成空会话**（死锚点）：rewind 会把锚点那行从 transcript 物理删掉，而行上 `sideTaskAnchorMessageId` 是 write-once → 该 id 永远不再命中 replay，抑制永不解除，重开时连子会话自己的后续轮次也一起被抑。修法：`_beginRewindReplay` 在 reset 前比对锚点与回退目标在 timeline 上的次序，`anchorIdx >= targetIdx` 判为「锚点被截掉」→ 用 `undefined` arm（整段抑制，符合此刻转录的真实内容），并在 agent **确认截断成功**（`canRewind !== false`）后 `clearSideTaskAnchorMessageId(sid)`，下一条自有 prompt 由 `sendPrompt` 的 write-once 逻辑重新 pin。**判序必须保守**（两个 id 都在 timeline 上才算，锚点被 cancel 撤回时 transcript 里其实还在）；**清锚点绝不能提前到 RPC 之前**（`canRewind:false` / ext-method 抛错时转录没被截断，提前清会让下次重开把子会话自己的轮次全抑掉）。
 
 11. **重启后部分 side task 出现在 Sessions 视图 / Ctrl+Shift+H 恢复会话**：side task 的**唯一身份标记是本地 history 行的 `sideTaskOf`**，而 agent 协议（`session/list`）里没有任何 fork/side-task 标记——fork 产物是 agent 侧真实持久的转录文件，sweep 会**持续报告**它。行一旦被 `MAX_ENTRIES` 按 `lastUsedAt` 淘汰（side task 用完即闲置，最容易被挤掉），`_mergeOrReplace` 的 create 分支就为它新建一条**无标记**的行 → 过滤条件 `entry.sideTaskOf !== undefined` 失效，它以普通会话现形。**与某次提交无关**：机制自 5 月起就在（git blame 可证 merge/truncate/上限都是老代码），触发条件只是"行被淘汰 **且** agent 仍报告该 session"——积累到桶满才暴露，所以看起来像"最近改坏的"。修法=身份与行解耦：新增 `AcpSideTaskIndexService`（`acpSideTaskIndex.ts`）持久记 `child→parent`+quote，`history.add()` 写入、`_mergeOrReplace` 重建行时回填。**删除另有一层权威**：`removeDeleted()` 在清索引的同时把 id 记进 history payload 的 `deleted` 墓碑（schema 6），`_mergeOrReplace` / `_mergeOnLoad` 一律跳过被墓碑标记的 id——没有墓碑时，删除瞬间在途的 `session/list` 响应（`confirmDelete=false` 直接开删，最易撞上）会在删除落地后重建出一条无 `sideTaskOf` 的普通行，点开就撞已删除转录并自动关 tab。三条硬约束：(a) 索引必须在 hydrate sweep 之前加载（`AcpSessionHistoryService.initialize()` 里与 super 一起 `Promise.all`，调用方只 await 一个）；(b) **删除时清索引并记墓碑**，且内部丢弃（`_onResumeFailure`）只能走 `remove()`——`deleteOnAgent` 是 best-effort，若失败又不清索引/不记墓碑，下次 sweep 会把"已删除"的 side task 原样重建回父会话下；(c) 恢复会话的 picker（`ResumeAgentSessionAction`）自己 filter 掉 `sideTaskOf` 行——侧边任务只能从父会话的侧边任务弹层进入。**别把身份再挂回行本身**。残差：本次修复前就已被淘汰、索引尚未记录的历史行信息不可恢复（需用户从 Sessions 列表手动删除，删除会连带 `deleteOnAgent` 清 agent 侧文件）。
+
+12. **休眠唤醒后 Rewind 报 `Unknown messageId`**：`messageIdToUuid` 是**进程内存表**；空闲回收 / 崩溃 / fingerprint 重建后走 `session/resume`，新 `Session` 的表为空且不 replay，而编辑器 timeline 仍持有旧 messageId → `rewindSession` 解析失败（新发的消息却正常）。fork 早已有磁盘兜底（#7），rewind 漏了。修=`session-anchor.ts` 新增 `resolveRewindAnchor`：live 快路径 miss 时读 `getSessionMessages` 有效链，折叠 prompt 用 attachment `uuid` + `parentUuid` 兜底；`rewindFiles`/截断/replay 用 anchorUuid，`resumeSessionAt` 用 previousUuid。三条红线：**首条消息合法**（与 fork 有意不同）、**不写回 `messageIdToUuid`**（不省 IO、混淆不变量）、**折叠 prompt 无文件 checkpoint**（只保证对话截断）。残差：压缩前锚点在冷 resume 后仍解析不到。
 
 已知残差（本次未修，改了这块别以为是新 bug）：① ext-method **静默挂起**（既不 resolve 也不 reject）时抑制闸门会一直开着，靠 idle 回收杀掉 lease → RPC reject → `finally` 兜底，窗口分钟级（`session/load` 回放期间进程死掉同理，既有形态）；② `canRewind:false` 时 `_resetForReplay()` 已清空 timeline 且无回填——既有缺陷，与「清锚点必须挂成功」同源；③ `beginHistoryReplay()` 清 `_suppressedToolCallIds` 与越窗到达的 `restampReplayedSubagentStats` 之间有一个窄窗口，理论上仍可冒孤儿卡（FIFO 已有界）。
 
@@ -170,14 +174,16 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 13. **斜杠命令清空顺序**：`PromptInput.submit` 必须先清空输入框/触发 action，再根据返回值决定是否恢复。反过来「先执行后清空」会把 Rewind 通过 `AcpPromptReplaceInbox` 写回的内容立刻抹掉。
 14. **显式 tip 必须传 `fromTip`**：任何「从末尾分叉」按钮（如 `ForkTipFooter`）都要传 `{fromTip:true}`；只给 `sessionId` 会走无锚点分支弹选择器。
 15. **history-only 行的 Fork 与 Rewind 不对称**：Fork 可直接从 tip 读持久化 transcript；Rewind 要 live 会话做 dry-run/确认/timeline 重置，必须先在编辑器打开。
+16. **rewind 锚点磁盘兜底三红线**：首条消息合法（不要复用 fork 的拒绝语义）；不要写回 `messageIdToUuid`；折叠 prompt 的 `rewindFiles` 通常 `canRewind:false`，只保证对话截断——别把文件回滚改到父轮。
 
 ### 测试套路
 
 - **vendor**（`src/tests/acp-agent.test.ts`）：
-  - rewind describe：dryRun 预览 / canRewind:false 短路（都在 step2 前，可不 spawn 真 Query）/ rewindFiles:false（`vi.spyOn` 隔离 teardown/createSession/replay/truncateTranscriptBefore，验证跳过 rewindFiles 仍截断）/ 运行期配置 reapply（mock `createSession` 装一个 seed 成默认值的 recreated session，断言 setModel/setPermissionMode 被调 + 最终 configOptions）/ reapply 后 `config_option_update` 通知（client mock 的 `sessionUpdate` 用 `vi.fn` 捕获再过滤）。
+  - rewind describe：dryRun 预览 / canRewind:false 短路（都在 step2 前，可不 spawn 真 Query）/ rewindFiles:false（`vi.spyOn` 隔离 teardown/createSession/replay/truncateTranscriptBefore，验证跳过 rewindFiles 仍截断）/ 运行期配置 reapply（mock `createSession` 装一个 seed 成默认值的 recreated session，断言 setModel/setPermissionMode 被调 + 最终 configOptions）/ reapply 后 `config_option_update` 通知（client mock 的 `sessionUpdate` 用 `vi.fn` 捕获再过滤）/ **冷表磁盘兜底**（空 `messageIdToUuid` + `getSessionMessages` 合成链 → 解析；另覆盖 dryRun 只预览 / live 快路径优先 / 折叠 prompt / 首条无 `resumeSessionAt` / 未知仍 -32602）。
+  - `session-anchor.test.ts`：`resolveForkAnchor` 10 例 + `resolveRewindAnchor` 8 例（active / assistant API id / 首条 / folded / folded parent 不在链上 / 未找到 / raw undefined / dir）；`transcript-history.test.ts` 的 `findFoldedPromptAnchor` 与 `findFoldedPromptParent` 包装一致性。
   - fork describe：`vi.mock` 加 `forkSession`(vi.fn) + `getSessionMessages`（默认 `vi.fn(actual.getSessionMessages)` 保真实现，新测试 `mockResolvedValueOnce` 覆盖），验证 upToMessageId=前驱；另有 **非 resident（不 inject session，磁盘兜底）**、**折叠 prompt**（`vi.spyOn(agent as any,"readTranscriptEntries")` 喂带 `attachment.source_uuid` 的 attachment 行）、**解析失败/锚点为首条 → reject 且 `forkSession` 未被调**四类用例守护新语义。
   - truncate describe：**真实 tmp 文件**建在 `CLAUDE_CONFIG_DIR/projects/__rewind_trunc_test_<uuid>/`，afterEach 清理；验证删锚点及之后/首行清空/锚点不存在原样/文件不存在 no-throw。`CLAUDE_CONFIG_DIR` 已 export。
-  - **2 个既有 Windows 反斜杠路径失败**（`toDisplayPath`/`Read src\main.ts`）与本功能无关，CI 上绿。
+  - **本机 Windows 既有失败**：acp-agent 全量 9 条（`toDisplayPath` / `Read src\main.ts` 及 streamEvent 文件路径标题）+ permission-options / diff-patch / acp-scenarios 快照类，均为路径分隔符/快照环境问题；改动前后基线一致，与本功能无关，CI Linux 上绿。
 - **renderer**：`AcpSessionService.test.ts`（rewind 发对 messageId+clear tracker、dryRun 不 cancel、rewindFiles:false 透传+不清 tracker、非 claude no-op、fork `_meta.rewindTo`+setActive、**side task 四条**：重新 arm 后基线不落时间线 / 死锚点被清且下一条 prompt 重 pin / 拒绝回退（`canRewind:false`）不动锚点 / 普通会话仍整段重放——桩的 `rewindSessionUpdates` 在 ext-method 内流式重放模拟 fork）；`agentRewindActions.test.ts`（预览+三按钮各分支+回填、无能力 no-op、fork 开 editor/foreign 提示、**选择器/first-tip/返回值/菜单与快捷键/resource 解析**）；`agentRewindPickItems.test.ts`（过滤与摘要）；`localSlashCommands.test.ts`（能力过滤/去重/精确匹配）；`PromptInput.test.tsx`（本地命令弹窗、提交拦截、失败恢复、带参数不拦截、Rewind 回填存活）；`SessionListBody.test.tsx`（history-only/live/readOnly/foreign 菜单项与派发参数）；`UserMessageItem.test.tsx`（按钮可见性+委托 arg）。stub 见坑 #9。
 
 ### 验证
@@ -186,6 +192,8 @@ renderer forkSession(sid, messageId?) → conn.unstable_forkSession({sessionId, 
 # vendor
 cd vendor/claude-agent-acp && npx vitest run src/tests/acp-agent.test.ts -t "rewind"   # rewind + truncate
 cd vendor/claude-agent-acp && npx vitest run src/tests/acp-agent.test.ts -t "fork"      # fork point
+cd vendor/claude-agent-acp && npx vitest run src/tests/session-anchor.test.ts src/tests/transcript-history.test.ts
+cd vendor/claude-agent-acp && npm run typecheck && npm run check                        # 类型 + lint/format
 pnpm agent:build          # ★改 vendor 后必重建 dist（esbuild，非 tsc）
 # renderer
 pnpm check                # lint+typecheck+test（含 docs:check），仅看错误
@@ -195,7 +203,7 @@ pnpm check                # lint+typecheck+test（含 docs:check），仅看错�
 
 ### 关键参考路径
 
-- **vendor 核心**：`vendor/claude-agent-acp/src/acp-agent.ts`（`rewindSession`/`unstable_forkSession`/`truncateTranscriptBefore`/`messageUuidBefore`/`prompt`）
+- **vendor 核心**：`vendor/claude-agent-acp/src/acp-agent.ts`（`rewindSession`/`unstable_forkSession`/`truncateTranscriptBefore`/`messageUuidBefore`/`prompt`）、`session-anchor.ts`（`resolveForkAnchor`/`resolveRewindAnchor`）、`transcript-history.ts`（`findFoldedPromptAnchor`/`findFoldedPromptParent`）
 - **renderer service**：`acpSession.ts`（`rewindTo`/能力位/`_appendChunk`）、`acpSessionService.ts`（facade）、`acpSessionModel.ts`（接口+`REWIND_SESSION_METHOD`）、`acpSessionUpdateMeta.ts`（`readMessageId`）、`acpPromptReplaceInbox.ts`
 - **命令+UI**：`actions/agentRewindActions.ts`、`workbench/agents/UserMessageItem.tsx` + `ChatBody.tsx`
 - **文档**：`docs/user/zh-CN/ai-agent/managing-sessions.md`
