@@ -166,7 +166,7 @@ class Foo {
 
 ## EditorInput.updateFrom 契约（tab 复用时的内容刷新）
 
-凡「**内容随时间变、id 稳定复用同一 tab**」的 `EditorInput` 都应实现可选钩子 `updateFrom?(other)`（基类定义在 `src/workbench/editorService.ts:129`）：去重命中已打开 tab 时，必须先 `existing.updateFrom?.(editor)` 再 dispose 新 input（`src/workbench/editorGroupModel.ts:219`）——不实现则携带新内容的 input 被丢弃、旧实例一直持旧快照（应用侧同理：`apps/editor/src/renderer/services/editor/EditorService.ts:145` 命中同 id 时先 `updateFrom` 再 dispose；`apps/editor/src/renderer/services/editor/DiffEditorInput.ts:308` 的 `updateFrom` 调自己的 `update()`）。回归 `src/__tests__/workbench/editorGroupModel.test.ts`（「lets the existing input absorb newer state via updateFrom before disposing the orphan」）。
+凡「**内容随时间变、id 稳定复用同一 tab**」的 `EditorInput` 都应实现可选钩子 `updateFrom?(other)`（基类定义在 `src/workbench/editorService.ts:129`）：去重命中已打开 tab 时，必须先 `existing.updateFrom?.(editor)` 再 dispose 新 input（`src/workbench/editorGroupModel.ts:219`）——不实现则携带新内容的 input 被丢弃、旧实例一直持旧快照（应用侧同理：`apps/editor/src/renderer/services/editor/EditorService.ts:146` 命中同 id 时先 `updateFrom` 再 dispose；`apps/editor/src/renderer/services/editor/DiffEditorInput.ts:308` 的 `updateFrom` 调自己的 `update()`）。回归 `src/__tests__/workbench/editorGroupModel.test.ts`（「lets the existing input absorb newer state via updateFrom before disposing the orphan」）。
 
 ## 测试
 

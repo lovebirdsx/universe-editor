@@ -25,6 +25,14 @@ describe('EditorService', () => {
     expect(svc.activeEditorId.get()).toBe('a')
   })
 
+  it('openEditor returns the instance behind a legacy duplicate', () => {
+    const svc = new EditorService()
+    const first = makeInput('a')
+    const second = makeInput('a')
+    expect(svc.openEditor(first)).toBe(first)
+    expect(svc.openEditor(second)).toBe(first)
+  })
+
   it('openEditor fires exactly one reaction per call (transaction batching)', () => {
     const svc = new EditorService()
     const spy = vi.fn()

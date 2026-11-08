@@ -12,7 +12,6 @@
 
 import { useCallback } from 'react'
 import {
-  EditorInput,
   IDialogService,
   IEditorGroupsService,
   IEditorService,
@@ -21,16 +20,17 @@ import {
   IUriIdentityService,
   localize,
   URI,
-  type IEditorInput,
+  type EditorInput,
   type IFileMatch,
+  type ITextEditorSelection,
   type ITextSearchMatch,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
-  applyEditorSelection,
   findExistingFileEditor,
-  waitForFileEditor,
+  openEditorAndReveal,
+  revealSelectionInInput,
 } from '../../services/editor/revealEditorPosition.js'
 import type { OpenTarget } from '../../services/editor/openTarget.js'
 import {
@@ -68,6 +68,20 @@ export interface ISearchActions {
   readonly dismissFile: (resource: URI) => void
 }
 
+function selectionForMatch(
+  match: ITextSearchMatch,
+  rangeIndex: number,
+): ITextEditorSelection | undefined {
+  const range = match.ranges[rangeIndex]
+  if (!range) return undefined
+  return {
+    startLineNumber: match.lineNumber,
+    startColumn: range.startColumn,
+    endLineNumber: match.lineNumber,
+    endColumn: range.endColumn,
+  }
+}
+
 export function useSearchActions(
   results: readonly IFileMatch[],
   setResults: React.Dispatch<React.SetStateAction<readonly IFileMatch[]>>,
@@ -80,50 +94,6 @@ export function useSearchActions(
   const dialogService = useService(IDialogService)
   const uriIdentity = useService(IUriIdentityService)
   const auxiliaryWindows = useService(IAuxiliaryEditorWindowService)
-
-  const revealRange = useCallback(
-    (
-      input: EditorInput,
-      match: ITextSearchMatch,
-      rangeIndex: number,
-      options?: { focus?: boolean },
-    ) => {
-      void (async () => {
-        const editor = await waitForFileEditor(input)
-        const range = match.ranges[rangeIndex]
-        if (!editor || !range) return
-        applyEditorSelection(
-          editor,
-          {
-            startLineNumber: match.lineNumber,
-            startColumn: range.startColumn,
-            endLineNumber: match.lineNumber,
-            endColumn: range.endColumn,
-          },
-          options,
-        )
-      })()
-    },
-    [],
-  )
-
-  // preserveFocus skips activateGroup, so `activeEditor` can still hold the
-  // locked active group's editor even though the preview landed in
-  // activeGroupForOpen. Look the opened input up in the groups that could own it.
-  const resolveEditorForReveal = useCallback(
-    (inputId: string): IEditorInput | undefined => {
-      const inActive = editorGroupsService.activeGroup.editors.find(
-        (editor) => editor.id === inputId,
-      )
-      if (inActive) return inActive
-      const openTarget = editorGroupsService.activeGroupForOpen
-      return (
-        openTarget.editors.find((editor) => editor.id === inputId) ??
-        editorService.activeEditor.get()
-      )
-    },
-    [editorGroupsService, editorService],
-  )
 
   const openInTarget = useCallback(
     async (
@@ -167,38 +137,43 @@ export function useSearchActions(
       const preview = options.preview ?? true
       const target = options.target ?? 'default'
       const preserveFocus = options.preserveFocus === true
+      const selection = selectionForMatch(match, rangeIndex)
       if (target !== 'default') {
         // Modified activations (Ctrl/Alt+Enter) always pin and hand over focus.
         void (async () => {
           const opened = await openInTarget(resource, target)
           if (opened) {
-            revealRange(opened, match, rangeIndex)
+            if (selection) void revealSelectionInInput(opened, selection)
             return
           }
           // Fall back to the ordinary path when the target could not be honoured.
           const input = instantiation.createInstance(FileEditorInput, resource)
-          editorService.openEditor(input, { pinned: !preview })
-          const active = editorService.activeEditor.get()
-          if (active instanceof EditorInput) revealRange(active, match, rangeIndex)
+          if (selection) {
+            openEditorAndReveal(editorService, input, selection, { pinned: !preview })
+          } else {
+            editorService.openEditor(input, { pinned: !preview })
+          }
         })()
         return
       }
       const input = instantiation.createInstance(FileEditorInput, resource)
-      const inputId = input.id
-      editorService.openEditor(input, {
-        pinned: !preview,
-        ...(preserveFocus ? { preserveFocus: true } : {}),
-      })
       // openEditor dedupes by resource and can discard the fresh input, so reveal
-      // against the active instance that actually owns the mounted Monaco editor.
-      // Untitled results resolve to the already-open UntitledEditorInput this way.
-      const active = preserveFocus
-        ? resolveEditorForReveal(inputId)
-        : editorService.activeEditor.get()
-      if (!(active instanceof EditorInput)) return
-      revealRange(active, match, rangeIndex, { focus: !preserveFocus })
+      // against the instance it returns (the real tab owner), never activeEditor:
+      // the latter follows the focused part and may be in another window.
+      if (selection) {
+        openEditorAndReveal(editorService, input, selection, {
+          pinned: !preview,
+          ...(preserveFocus ? { preserveFocus: true } : {}),
+          focus: !preserveFocus,
+        })
+      } else {
+        editorService.openEditor(input, {
+          pinned: !preview,
+          ...(preserveFocus ? { preserveFocus: true } : {}),
+        })
+      }
     },
-    [editorService, instantiation, openInTarget, resolveEditorForReveal, revealRange],
+    [editorService, instantiation, openInTarget],
   )
 
   const replaceFile = useCallback(

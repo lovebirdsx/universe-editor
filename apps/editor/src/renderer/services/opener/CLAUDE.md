@@ -37,11 +37,12 @@
 **统一定位 helper（revealEditorPosition.ts）**——把散在 3 处各自重复的「等 Monaco 挂载→setSelection/reveal/focus」「跨组找已开 FileEditorInput」收敛为单一实现：
 
 - `findExistingFileEditor(groups, uriIdentity, uri)`：跨所有 group 按 uriIdentity.isEqual 找 FileEditorInput。
-- `waitForFileEditor(input)`：FileEditorRegistry.get 拿不到时 rAF + [50,100,200]ms 重试（Monaco 挂载是异步的，openEditor 不同步 mount）。
+- `waitForFileEditor(input, disposables?)`：事件驱动等待 Monaco 挂载（订阅 `FileEditorRegistry.onDidChange` + 30s 安全超时；`openEditor` 不同步 mount）；input 已 dispose 或超时 resolve undefined。
 - `toRevealRange(selection)`：把单点 selection（#L5,1 无 end 字段）补全成合法 IRange（end 缺省填 start），否则 setSelection 抛 Invalid arguments。**取代**原 EditorOpenerContribution.normalizeOpenRange。
-- `applyEditorSelection` / `revealSelectionInInput(input, selection)`：等挂载 + reveal 的组合入口。
+- `applyEditorSelection` / `revealSelectionInInput(input, selection, disposables?, { focus? })`：等挂载 + reveal 的组合入口。
+- `openEditorAndReveal(editorService, input, selection, options?)`：**打开并定位的统一入口**。reveal 打在 `openEditor` 的返回值上——去重命中时调用方 input 已被 dispose、真正挂载的是已有实例（见 `services/editor/CLAUDE.md`）；`focus` 只控制挂载后是否把焦点放进 Monaco，不透传给 openEditor。
 
-三个消费方都改调它（纯重构，行为不变）：extensionApiActions.ts（_workbench.openFileAt）、EditorOpenerContribution.ts（Monaco 跨文件跳转/peek）、useMarkdownFileLink.ts（markdown 链接打开）。
+`openEditorAndReveal` 消费方：useSearchActions.ts（搜索结果 Enter）、useMarkdownFileLink.ts（markdown 链接）、PromptInput.tsx（Agent 链接）。其余 helper 消费方：extensionApiActions.ts（_workbench.openFileAt）、EditorOpenerContribution.ts（Monaco 跨文件跳转/peek）、MainThreadEditor.ts（扩展 showTextDocument）。
 
 **注册**：OpenerService.ts 末尾 registerSingleton(IOpenerService, OpenerService, InstantiationType.Delayed)；main.tsx 加副作用 import 让 getSingletonServiceDescriptors() 快照拾取。
 

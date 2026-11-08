@@ -353,9 +353,13 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
         }
         const input = this._instantiation.createInstance(FileEditorInput, uri)
         // ensureSideGroup activated the side group; the lock-aware helper keeps
-        // a locked group from swallowing the open.
-        openInLockAwareGroup(this._groups, input, { activate: true, pinned: true })
-        revealSymbol(input)
+        // a locked group from swallowing the open. When routed elsewhere it may
+        // dedupe to a tab that already owns this file and dispose `input`.
+        const opened = openInLockAwareGroup(this._groups, input, {
+          activate: true,
+          pinned: true,
+        })
+        revealSymbol(opened)
         return
       }
       let input: FileEditorInput | undefined

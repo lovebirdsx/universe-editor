@@ -75,7 +75,10 @@ import {
   type PromptImage,
 } from '../../services/acp/promptImage.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import {
+  openEditorAndReveal,
+  revealSelectionInInput,
+} from '../../services/editor/revealEditorPosition.js'
 import { URI } from '@universe-editor/platform'
 import type { WidgetHandle } from './ChatBody.js'
 import { useTurnInFlight } from './useSessionStatus.js'
@@ -1416,32 +1419,18 @@ export function PromptInput({
     } catch {
       return
     }
+    const selection = {
+      startLineNumber: ctx.startLine,
+      startColumn: 1,
+      endLineNumber: ctx.endLine,
+      endColumn: 1,
+    }
     const createInput = (): FileEditorInput =>
       instantiation.createInstance(FileEditorInput, resource)
-    // Reveal against the opened input when the target helper hands one back;
-    // otherwise use the active editor (openEditor dedupes by resource, so
-    // FileEditorRegistry may only know the pre-existing instance).
-    const revealSelection = (opened?: FileEditorInput): void => {
-      const apply = (): boolean => {
-        const active = opened ?? editorService.activeEditor.get()
-        if (!(active instanceof FileEditorInput)) return false
-        const editor = FileEditorRegistry.get(active)
-        if (!editor) return false
-        editor.setSelection({
-          startLineNumber: ctx.startLine,
-          startColumn: 1,
-          endLineNumber: ctx.endLine,
-          endColumn: 1,
-        })
-        editor.revealLineInCenter(ctx.startLine)
-        return true
-      }
-      if (apply()) return
-      setTimeout(apply, 50)
-    }
     const openDefault = (input: FileEditorInput): void => {
-      editorService.openEditor(input, { pinned: false })
-      revealSelection()
+      // openEditor can dedupe to an existing tab (possibly in another window)
+      // and dispose `input`; reveal against the instance it returns.
+      openEditorAndReveal(editorService, input, selection, { pinned: false, focus: false })
     }
     if (target === 'newWindow' && editorGroups && auxiliaryWindows) {
       const input = createInput()
@@ -1457,7 +1446,9 @@ export function PromptInput({
         { pinned: false },
       ).then((result) => {
         if (result.handled) {
-          revealSelection(result.editor instanceof FileEditorInput ? result.editor : undefined)
+          if (result.editor instanceof FileEditorInput) {
+            void revealSelectionInInput(result.editor, selection, undefined, { focus: false })
+          }
           return
         }
         openDefault(input.isDisposed ? createInput() : input)

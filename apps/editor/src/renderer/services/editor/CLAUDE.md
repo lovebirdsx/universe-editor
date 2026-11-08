@@ -7,7 +7,7 @@ renderer 编辑器运行时的家：`EditorInput` 家族（本目录 27 个 `*In
 ## 🔴 EditorInput 身份红线
 
 - 基类身份 = `get id()`（`packages/platform/src/workbench/editorService.ts:39`，默认 `resource.toString()`），**去重全走 id / `matches()`**；`matches` 只比 id——曾有的「resource 相同即相等」短路会绕过覆写的 id，已删。
-- 去重命中已打开 tab 时：先 `existing.updateFrom?.(editor)` 再 dispose 新 input（`EditorService.ts:145`，机制与基类契约见 `packages/platform/CLAUDE.md`「EditorInput.updateFrom 契约」节）。
+- 去重命中已打开 tab 时：先 `existing.updateFrom?.(editor)` 再 dispose 新 input（`EditorService.ts:146`，机制与基类契约见 `packages/platform/CLAUDE.md`「EditorInput.updateFrom 契约」节）。`openEditor` **返回实际拥有 tab 的实例**（命中去重时是已有实例）；打开后的 reveal/聚焦必须用返回值——`activeEditor` 跟随聚焦 part，在「辅助窗口是落点、主窗口是焦点」时会指向另一个窗口。统一入口 `openEditorAndReveal`（`revealEditorPosition.ts`）；锁感知打开入口 `openInLockAwareGroup` 同样返回实际实例。
 - 两派覆写手法：**虚拟 scheme 派**（`diff:` / `markdown-preview:` / `merge:`，额外暴露 `sourceUri` 给视图拿真路径）vs **仅覆写 id 派**（`image:${uri}`，`ImageEditorInput.ts:39`——图片要真实 `file:` resource 供 tab 图标 / SCM 装饰 / `ue-file` 加载）。选型与代价见 cases 文件。
 - 用无歧义命名空间，别让两个不同视图撞成同一串：`swarmDiff:{reviewId}:{depotFile}:{left}-{right}`、`universe:/extension/<id>`、`inmemory://prompt/<id>`。
 
@@ -22,7 +22,7 @@ renderer 编辑器运行时的家：`EditorInput` 家族（本目录 27 个 `*In
 
 ## 文件 → 职责
 
-- `EditorService.ts` / `EditorGroupsService.ts` / `EditorGroup.ts` —— `IEditorService` 实现、分组模型、去重（`EditorService.ts:145`）。
+- `EditorService.ts` / `EditorGroupsService.ts` / `EditorGroup.ts` —— `IEditorService` 实现、分组模型、去重（`EditorService.ts:146`）。
 - `EditorResolverService.ts` + `FileEditorRegistry.ts` + `EditorComponentRegistry.ts` —— 扩展名/scheme → `EditorInput` 与挂载组件的注册表。
 - `FileEditorInput.ts` / `UntitledEditorInput.ts` —— 源文件与未命名；`EditorViewStateCache.ts` / `MarkdownPreviewViewStateCache.ts` —— 每 input 的视图状态快照。
 - 各视图 input：`DiffEditorInput.ts` / `MergeEditorInput.ts` / `MarkdownPreviewInput.ts` / `HtmlPreviewInput.ts` / `ImageEditorInput.ts` / `DocEditorInput.ts` / `WebviewDiffInput.ts` / `WebviewPanelInput.ts` / `CustomEditorInput.ts` / `SettingsEditorInput.ts` / `KeybindingsEditorInput.ts` / `WelcomeEditorInput.ts` / `ReleaseNotesInput.ts` / `SchemaViewerInput.ts` / `TerminalEditorInput.ts` / `GitGraphEditorInput.ts` / `PerforceGraphEditorInput.ts` / `SwarmReviewEditorInput.ts` / `SwarmDiffEditorInput.ts` / `ProcessExplorerInput.ts` / `AiSettingsEditorInput.ts` / `StartupPerformanceInput.ts` / `InteractionPerformanceInput.ts`。

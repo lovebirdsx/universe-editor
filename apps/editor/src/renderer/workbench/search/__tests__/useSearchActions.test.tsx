@@ -53,12 +53,18 @@ const fileService = {
   async rename() {},
 }
 
-function SearchActionsHarness({ preserveFocus = false }: { preserveFocus?: boolean }) {
+function SearchActionsHarness({
+  preserveFocus = false,
+  preview = true,
+}: {
+  preserveFocus?: boolean
+  preview?: boolean
+}) {
   const actions = useSearchActions([], vi.fn(), '')
   return (
     <button
       type="button"
-      onClick={() => actions.onActivateMatch(resource, match, 0, { preview: true, preserveFocus })}
+      onClick={() => actions.onActivateMatch(resource, match, 0, { preview, preserveFocus })}
     >
       {preserveFocus ? 'Preview search result' : 'Open search result'}
     </button>
@@ -79,7 +85,7 @@ describe('useSearchActions', () => {
     vi.useRealTimers()
   })
 
-  function renderHarness(preserveFocus = false) {
+  function renderHarness(options: { preserveFocus?: boolean; preview?: boolean } = {}) {
     vi.useFakeTimers()
     const groupsService = new EditorGroupsService()
     const service = new EditorService(groupsService)
@@ -96,12 +102,17 @@ describe('useSearchActions', () => {
 
     render(
       <ServicesContext.Provider value={instantiation}>
-        <SearchActionsHarness preserveFocus={preserveFocus} />
+        <SearchActionsHarness
+          preserveFocus={options.preserveFocus === true}
+          preview={options.preview !== false}
+        />
       </ServicesContext.Provider>,
     )
     return {
       groups: groupsService,
-      buttonName: preserveFocus ? 'Preview search result' : 'Open search result',
+      editorService: service,
+      instantiation,
+      buttonName: options.preserveFocus === true ? 'Preview search result' : 'Open search result',
     }
   }
 
@@ -122,7 +133,7 @@ describe('useSearchActions', () => {
     endColumn: 13,
   }
 
-  it('reveals a search match when Monaco mounts after the initial 50ms retry window', async () => {
+  it('reveals a search match when Monaco mounts after the search activation', async () => {
     const ctx = renderHarness()
 
     fireEvent.click(screen.getByRole('button', { name: ctx.buttonName }))
@@ -145,7 +156,7 @@ describe('useSearchActions', () => {
   })
 
   it('keeps keyboard focus in the results tree for a Space preview', async () => {
-    const ctx = renderHarness(true)
+    const ctx = renderHarness({ preserveFocus: true })
 
     fireEvent.click(screen.getByRole('button', { name: ctx.buttonName }))
     await act(async () => {
@@ -166,5 +177,85 @@ describe('useSearchActions', () => {
     expect(editor.setSelection).toHaveBeenCalledWith(expectedRange)
     expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(expectedRange)
     expect(editor.focus).not.toHaveBeenCalled()
+  })
+
+  it('reveals a match in an auxiliary-window editor while the main part has focus', async () => {
+    const ctx = renderHarness({ preview: false })
+    const aux = ctx.groups.createAuxiliaryPart()
+    const auxInput = ctx.instantiation.createInstance(FileEditorInput, resource)
+    ctx.editorService.openEditor(auxInput, { pinned: true })
+    const auxEditor = mountEditor(auxInput, aux.activeGroup.id)
+
+    // Alt+Tab back to the main window: focus moves, the open target stays aux.
+    ctx.groups.activatePart(ctx.groups.mainPart, { preserveFocus: true })
+    const mainInput = ctx.instantiation.createInstance(
+      FileEditorInput,
+      URI.file('/workspace/main.ts'),
+    )
+    ctx.groups.mainPart.activeGroup.openEditor(mainInput, { activate: true, pinned: true })
+    const mainEditor = mountEditor(mainInput, ctx.groups.mainPart.activeGroup.id)
+
+    fireEvent.click(screen.getByRole('button', { name: ctx.buttonName }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(auxEditor.setSelection).toHaveBeenCalledWith(expectedRange)
+    expect(auxEditor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(expectedRange)
+    expect(auxEditor.focus).toHaveBeenCalled()
+    expect(mainEditor.setSelection).not.toHaveBeenCalled()
+    expect(mainEditor.revealRangeInCenterIfOutsideViewport).not.toHaveBeenCalled()
+  })
+
+  it('reveals a not-yet-open result that opens into the auxiliary part', async () => {
+    const ctx = renderHarness({ preview: false })
+    const aux = ctx.groups.createAuxiliaryPart()
+    ctx.groups.activatePart(ctx.groups.mainPart, { preserveFocus: true })
+    const mainInput = ctx.instantiation.createInstance(
+      FileEditorInput,
+      URI.file('/workspace/main.ts'),
+    )
+    ctx.groups.mainPart.activeGroup.openEditor(mainInput, { activate: true, pinned: true })
+    const mainEditor = mountEditor(mainInput, ctx.groups.mainPart.activeGroup.id)
+
+    fireEvent.click(screen.getByRole('button', { name: ctx.buttonName }))
+
+    const opened = aux.activeGroup.activeEditor
+    expect(opened).toBeInstanceOf(FileEditorInput)
+    const auxEditor = mountEditor(opened as FileEditorInput, aux.activeGroup.id)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(auxEditor.setSelection).toHaveBeenCalledWith(expectedRange)
+    expect(auxEditor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(expectedRange)
+    expect(auxEditor.focus).toHaveBeenCalled()
+    expect(mainEditor.setSelection).not.toHaveBeenCalled()
+  })
+
+  it('reveals a Space preview in the auxiliary editor without focusing it', async () => {
+    const ctx = renderHarness({ preserveFocus: true })
+    const aux = ctx.groups.createAuxiliaryPart()
+    const auxInput = ctx.instantiation.createInstance(FileEditorInput, resource)
+    ctx.editorService.openEditor(auxInput, { pinned: true })
+    const auxEditor = mountEditor(auxInput, aux.activeGroup.id)
+
+    ctx.groups.activatePart(ctx.groups.mainPart, { preserveFocus: true })
+    const mainInput = ctx.instantiation.createInstance(
+      FileEditorInput,
+      URI.file('/workspace/main.ts'),
+    )
+    ctx.groups.mainPart.activeGroup.openEditor(mainInput, { activate: true, pinned: true })
+    const mainEditor = mountEditor(mainInput, ctx.groups.mainPart.activeGroup.id)
+
+    fireEvent.click(screen.getByRole('button', { name: ctx.buttonName }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(auxEditor.setSelection).toHaveBeenCalledWith(expectedRange)
+    expect(auxEditor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(expectedRange)
+    expect(auxEditor.focus).not.toHaveBeenCalled()
+    expect(mainEditor.setSelection).not.toHaveBeenCalled()
   })
 })

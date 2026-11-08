@@ -141,7 +141,7 @@ function makeFakeEditorService(): {
   const activeEditorId = derived((reader) => activeEditor.read(reader)?.id)
   const service: IEditorServiceType = {
     _serviceBrand: undefined,
-    openEditor: () => {},
+    openEditor: (input) => input,
     closeEditor: () => {},
     closeAllEditors: () => {},
     openEditors,

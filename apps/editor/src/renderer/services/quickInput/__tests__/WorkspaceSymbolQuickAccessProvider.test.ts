@@ -514,6 +514,7 @@ describe('WorkspaceSymbolQuickAccessProvider open targets', () => {
       activeEditor: EditorInput | undefined
       isLocked: boolean
       openEditor(editor: EditorInput): void
+      findEditor(editor: EditorInput): EditorInput | undefined
       setActive(editor: EditorInput): void
       pinEditor(): void
     }> = []
@@ -529,6 +530,9 @@ describe('WorkspaceSymbolQuickAccessProvider open targets', () => {
           log.push({ groupId: id, editor })
           group.editors.push(editor)
           group.activeEditor = editor
+        },
+        findEditor(editor: EditorInput) {
+          return group.editors.find((existing) => existing.id === editor.id)
         },
         setActive(editor: EditorInput) {
           group.activeEditor = editor

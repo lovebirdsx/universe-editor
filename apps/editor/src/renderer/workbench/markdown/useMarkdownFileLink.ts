@@ -49,7 +49,10 @@ import {
   URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import { revealSelectionInInput } from '../../services/editor/revealEditorPosition.js'
+import {
+  openEditorAndReveal,
+  revealSelectionInInput,
+} from '../../services/editor/revealEditorPosition.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRegistry.js'
 import { openPreviewInGroup } from '../../services/editor/openPreviewInGroup.js'
@@ -444,13 +447,21 @@ export function useMarkdownFileLink(
           return
         }
         const input = instantiation.createInstance(FileEditorInput, uri)
-        editorService.openEditor(input, { pinned: true })
         if (line !== undefined) {
-          void revealSelectionInInput(input, {
-            startLineNumber: line,
-            startColumn: col ?? 1,
-            ...(endLine !== undefined ? { endLineNumber: endLine } : {}),
-          })
+          // openEditor dedupes to an already-open tab and disposes `input`, so
+          // reveal against the instance it returns (it may live in another window).
+          openEditorAndReveal(
+            editorService,
+            input,
+            {
+              startLineNumber: line,
+              startColumn: col ?? 1,
+              ...(endLine !== undefined ? { endLineNumber: endLine } : {}),
+            },
+            { pinned: true },
+          )
+        } else {
+          editorService.openEditor(input, { pinned: true })
         }
       })
     },

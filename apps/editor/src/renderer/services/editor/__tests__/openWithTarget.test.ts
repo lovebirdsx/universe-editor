@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   EditorInput,
   EditorRegistry,
+  GroupDirection,
   IEditorResolverService,
   InstantiationService,
   ServiceCollection,
@@ -170,6 +171,25 @@ describe('openFreshInputWithTarget', () => {
     expect(result.group).toBe(side)
     expect(result.editor).toBe(input)
     expect(aux.calls).toHaveLength(0)
+  })
+
+  it('returns the mounted tab when a locked side group routes into an existing editor', async () => {
+    const groups = makeGroups()
+    const aux = new FakeAuxiliaryEditorWindowService(groups)
+    const main = groups.activeGroup
+    const existing = new PlainEditor()
+    main.openEditor(existing, { pinned: true })
+    const side = groups.addGroup(main, GroupDirection.Right)
+    side.lock(true)
+    groups.activateGroup(main)
+    // Same id as `existing`: the lock-aware route lands in main and dedupes.
+    const input = new PlainEditor()
+
+    const result = await openFreshInputWithTarget(makeServices(groups, aux), input, 'side')
+
+    expect(result.handled).toBe(true)
+    expect(result.editor).toBe(existing)
+    expect(input.isDisposed).toBe(true)
   })
 
   it('opens into a new window with mode open', async () => {

@@ -159,9 +159,8 @@ export async function openFreshInputWithTarget(
 
   if (target === 'side') {
     const side = ensureSideGroup(s.groups, splitSource(s.groups, options.sourceGroup))
-    openInLockAwareGroup(s.groups, input, groupOpenOptions(options), side)
-    const actual = side.editors.find((editor) => editor.id === input.id) ?? input
-    return { handled: true, editor: actual, group: side }
+    const opened = openInLockAwareGroup(s.groups, input, groupOpenOptions(options), side)
+    return { handled: true, editor: opened, group: side }
   }
 
   try {
@@ -203,14 +202,14 @@ export async function openExistingInputWithTarget(
     if (!options.singleton && canCloneEditorInputForSplit(input)) {
       const clone = s.inst.invokeFunction((accessor) => cloneEditorInputForSplit(input, accessor))
       if (clone) {
-        openInLockAwareGroup(s.groups, clone, groupOpenOptions(options), side)
-        return { handled: true, editor: clone, group: side }
+        const opened = openInLockAwareGroup(s.groups, clone, groupOpenOptions(options), side)
+        return { handled: true, editor: opened, group: side }
       }
     }
     const fresh = options.createFresh?.()
     if (fresh) {
-      openInLockAwareGroup(s.groups, fresh, groupOpenOptions(options), side)
-      return { handled: true, editor: fresh, group: side }
+      const opened = openInLockAwareGroup(s.groups, fresh, groupOpenOptions(options), side)
+      return { handled: true, editor: opened, group: side }
     }
     // Locked groups reject new tabs; move into the lock-aware destination
     // instead of dropping the editor into a group the user froze.
@@ -275,9 +274,8 @@ export async function openUriWithTarget(
 
   if (target === 'side') {
     const side = ensureSideGroup(s.groups, splitSource(s.groups, options.sourceGroup))
-    openInLockAwareGroup(s.groups, input, groupOpenOptions(options), side)
-    const actual = side.editors.find((editor) => editor.id === input.id) ?? input
-    return { handled: true, editor: actual, group: side }
+    const opened = openInLockAwareGroup(s.groups, input, groupOpenOptions(options), side)
+    return { handled: true, editor: opened, group: side }
   }
 
   try {

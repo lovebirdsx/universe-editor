@@ -15,13 +15,16 @@
 
 import {
   DisposableStore,
+  EditorInput,
   IEditorGroup,
   IEditorGroupsService,
+  IEditorService,
   IUriIdentityService,
   ITextEditorSelection,
   URI,
   toDisposable,
-  type EditorInput,
+  type IEditorInput,
+  type IOpenEditorServiceOptions,
 } from '@universe-editor/platform'
 import { type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from './FileEditorInput.js'
@@ -118,7 +121,7 @@ export function toRevealRange(selection: ITextEditorSelection): monaco.IRange {
 export function applyEditorSelection(
   editor: monaco.editor.IStandaloneCodeEditor,
   selection: ITextEditorSelection,
-  options?: { focus?: boolean },
+  options?: RevealSelectionOptions,
 ): void {
   const range = toRevealRange(selection)
   editor.setSelection(range)
@@ -131,7 +134,44 @@ export async function revealSelectionInInput(
   input: EditorInput,
   selection: ITextEditorSelection,
   disposables?: DisposableStore,
+  options?: RevealSelectionOptions,
 ): Promise<void> {
   const editor = await waitForFileEditor(input, disposables)
-  if (editor) applyEditorSelection(editor, selection)
+  if (editor) applyEditorSelection(editor, selection, options)
+}
+
+export interface RevealSelectionOptions {
+  /** Move keyboard focus into the mounted editor (default true). */
+  readonly focus?: boolean
+}
+
+export type OpenEditorAndRevealOptions = IOpenEditorServiceOptions & RevealSelectionOptions
+
+/**
+ * Open `input` through IEditorService and reveal {@link selection} in the
+ * instance that actually owns the tab. openEditor may dedupe to an existing
+ * input (e.g. one mounted in an auxiliary window while the main part has focus)
+ * and dispose the caller's fresh duplicate; revealing against `activeEditor`
+ * would target the wrong file or window.
+ *
+ * `preserveFocus` (open layer) and `focus` (post-mount DOM focus) are separate
+ * concerns: call sites that want the editor not to take focus must set both.
+ */
+export function openEditorAndReveal(
+  editorService: IEditorService,
+  input: EditorInput,
+  selection: ITextEditorSelection,
+  options?: OpenEditorAndRevealOptions,
+): IEditorInput {
+  const { focus, ...openOptions } = options ?? {}
+  const opened = editorService.openEditor(input, openOptions)
+  if (opened instanceof EditorInput && !opened.isDisposed) {
+    void revealSelectionInInput(
+      opened,
+      selection,
+      undefined,
+      focus === undefined ? undefined : { focus },
+    )
+  }
+  return opened
 }

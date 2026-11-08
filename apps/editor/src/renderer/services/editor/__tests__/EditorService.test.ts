@@ -9,6 +9,7 @@
 import { describe, expect, it, afterEach } from 'vitest'
 import {
   EditorInput,
+  GroupDirection,
   IFileService,
   InstantiationService,
   ServiceCollection,
@@ -126,6 +127,43 @@ describe('EditorService.openEditor with FileEditorInput', () => {
     input2.dispose()
   })
 
+  it('openEditor 返回真正拥有 tab 的实例（去重命中已有实例）', () => {
+    const { inst, groupsService, editorService } = makeEnv()
+    const resource = URI.file('/ws/return.ts')
+    const input1 = inst.createInstance(FileEditorInput, resource)
+    const input2 = inst.createInstance(FileEditorInput, resource)
+
+    expect(editorService.openEditor(input1, { pinned: true })).toBe(input1)
+    expect(editorService.openEditor(input2, { pinned: true })).toBe(input1)
+    expect(input2.isDisposed).toBe(true)
+    expect(groupsService.activeGroup.activeEditor).toBe(input1)
+
+    input1.dispose()
+  })
+
+  it('openTarget 锁定时路由到已有同 id 的组，仍返回挂载中的实例', () => {
+    const { inst, groupsService, editorService } = makeEnv()
+    const locked = groupsService.activeGroup
+    const other = groupsService.addGroup(locked, GroupDirection.Right)
+    groupsService.activateGroup(locked)
+    locked.lock(true)
+
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/locked-route.ts'))
+    // preserveFocus keeps the open target on the locked (empty) group.
+    expect(editorService.openEditor(input, { preserveFocus: true })).toBe(input)
+
+    // The second open is routed to `other`, which already owns the identity:
+    // the group-level dedupe disposes the duplicate.
+    const duplicate = inst.createInstance(FileEditorInput, URI.file('/ws/locked-route.ts'))
+    const opened = editorService.openEditor(duplicate)
+    expect(opened).toBe(input)
+    expect(input.isDisposed).toBe(false)
+    expect(duplicate.isDisposed).toBe(true)
+    expect(other.contains(input)).toBe(true)
+
+    input.dispose()
+  })
+
   it('打开两个不同文件，group 中有两个独立 FileEditorInput', () => {
     const { inst, groupsService, editorService } = makeEnv()
     const r1 = URI.file('/ws/a.ts')
@@ -187,6 +225,18 @@ describe('EditorService.openEditor 盘符大小写去重', () => {
 
     input1.dispose()
     input2.dispose()
+  })
+
+  it('去重命中时返回已有实例（win32 大小写等价）', () => {
+    const { inst, editorService } = makeEnvWithUriIdentity('win32')
+    const input1 = inst.createInstance(FileEditorInput, URI.file('e:/ws/src/common/ICommonBt.ts'))
+    const input2 = inst.createInstance(FileEditorInput, URI.file('E:/ws/src/common/ICommonBt.ts'))
+
+    expect(editorService.openEditor(input1, { pinned: true })).toBe(input1)
+    expect(editorService.openEditor(input2, { pinned: true })).toBe(input1)
+    expect(input2.isDisposed).toBe(true)
+
+    input1.dispose()
   })
 
   it('防回归: linux 下大小写不同仍视为两个文件', () => {

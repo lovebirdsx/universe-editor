@@ -555,9 +555,14 @@ export class QuickTextSearchService implements IQuickTextSearchService {
       }
     }
     const input = this._instantiation.createInstance(FileEditorInput, resource)
-    openInLockAwareGroup(this._groups, input, { activate: true, pinned: false }, side)
+    const opened = openInLockAwareGroup(
+      this._groups,
+      input,
+      { activate: true, pinned: false },
+      side,
+    )
     this._windowFocus.focusGroup(side)
-    return input
+    return opened
   }
 
   /** Open the picked file in an auxiliary editor window. Reuses the open tab's
@@ -618,8 +623,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     }
 
     const input = this._instantiation.createInstance(FileEditorInput, resource)
-    openInLockAwareGroup(this._groups, input, { activate: true, pinned })
-    return input
+    return openInLockAwareGroup(this._groups, input, { activate: true, pinned })
   }
 
   private _focusEditor(input: EditorInput): void {

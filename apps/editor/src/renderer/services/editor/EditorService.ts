@@ -121,12 +121,13 @@ export class EditorService extends Disposable implements IEditorService {
     })
   }
 
-  openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void {
+  openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): IEditorInput {
     const openTargetGroup = this._groupsService.openTargetGroup
     const existing = openTargetGroup.editors.find((e) => this._matchesExisting(e, input))
     // A brand-new editor lands in the lock-aware open target; re-activating one
     // already in the open-target group stays put.
     const group = existing ? openTargetGroup : this._groupsService.activeGroupForOpen
+    let opened: IEditorInput = input
     this._suppressGroupSync++
     try {
       if (existing) {
@@ -145,11 +146,14 @@ export class EditorService extends Disposable implements IEditorService {
           if (existing instanceof EditorInput) existing.migrateFrom(input)
           input.dispose()
         }
+        opened = toLegacy(existing)!
       } else {
-        group.openEditor(
-          input instanceof EditorInput ? input : new LegacyEditorInput(input),
-          options,
-        )
+        const actual = input instanceof EditorInput ? input : new LegacyEditorInput(input)
+        group.openEditor(actual, options)
+        // The group may dedupe again (e.g. the open target was locked and the
+        // lock-aware group already owns the same identity), disposing `actual`.
+        // Report the instance that really owns the tab.
+        opened = toLegacy(group.findEditor(actual) ?? actual)!
         // Routed away from a locked open target: make the target active so the
         // new editor is what the user sees — unless the caller preserves focus
         // (a Space/click preview keeps keyboard focus on the originating view).
@@ -165,10 +169,11 @@ export class EditorService extends Disposable implements IEditorService {
       this._suppressGroupSync--
     }
     this._sync()
-    this._telemetry?.publicLog('editorOpened', { typeId: input.type })
+    this._telemetry?.publicLog('editorOpened', { typeId: opened.type })
     this._logger.info(
-      `openEditor id=${input.id} type=${input.type} reused=${existing !== undefined} pinned=${options?.pinned ?? true} activate=${options?.activate !== false}`,
+      `openEditor id=${opened.id} type=${opened.type} reused=${existing !== undefined} pinned=${options?.pinned ?? true} activate=${options?.activate !== false}`,
     )
+    return opened
   }
 
   closeEditor(id: string): void {

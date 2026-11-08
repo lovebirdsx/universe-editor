@@ -126,4 +126,21 @@ describe('IEditorService — focused part vs open target', () => {
     expect(aux.activeGroup.contains(next)).toBe(true)
     expect(groupsService.mainPart.activeGroup.contains(next)).toBe(false)
   })
+
+  it('openEditor returns the dedupe winner in the open target part', () => {
+    const { inst, groupsService, editorService } = makeEnv()
+    const aux = groupsService.createAuxiliaryPart()
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/aux-return.ts'))
+    expect(editorService.openEditor(input, { pinned: true })).toBe(input)
+
+    // Alt+Tab back to the main window: focus moves, the open target stays.
+    groupsService.activatePart(groupsService.mainPart)
+    const duplicate = inst.createInstance(FileEditorInput, URI.file('/ws/aux-return.ts'))
+    expect(editorService.openEditor(duplicate, { pinned: true })).toBe(input)
+    expect(duplicate.isDisposed).toBe(true)
+    expect(aux.activeGroup.activeEditor).toBe(input)
+    expect(groupsService.activeGroup).toBe(groupsService.mainPart.activeGroup)
+
+    input.dispose()
+  })
 })

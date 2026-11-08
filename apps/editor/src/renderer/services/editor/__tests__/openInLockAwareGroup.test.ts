@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { IEditorGroup, IEditorGroupsService } from '@universe-editor/platform'
+import type { EditorInput, IEditorGroup, IEditorGroupsService } from '@universe-editor/platform'
 import { openInLockAwareGroup } from '../openInLockAwareGroup.js'
 
-function makeGroup(isLocked = false) {
-  return { isLocked, openEditor: vi.fn() } as unknown as IEditorGroup
+function makeGroup(isLocked = false, existing?: EditorInput) {
+  return {
+    isLocked,
+    openEditor: vi.fn(),
+    findEditor: vi.fn(() => existing),
+  } as unknown as IEditorGroup
 }
 
 function makeGroups(activeGroup: IEditorGroup, activeGroupForOpen: IEditorGroup) {
@@ -64,5 +68,23 @@ describe('openInLockAwareGroup — preferred group', () => {
 
     expect(active.openEditor).toHaveBeenCalledTimes(1)
     expect(activateGroup).not.toHaveBeenCalled()
+  })
+})
+
+describe('openInLockAwareGroup — dedupe winner', () => {
+  it('returns the caller input when the target opens it as a new tab', () => {
+    const active = makeGroup()
+    const { groups } = makeGroups(active, active)
+
+    expect(openInLockAwareGroup(groups, editor)).toBe(editor)
+  })
+
+  it('returns the existing instance when the target group dedupes the input', () => {
+    const active = makeGroup()
+    const existing = {} as EditorInput
+    const unlocked = makeGroup(false, existing)
+    const { groups } = makeGroups(active, unlocked)
+
+    expect(openInLockAwareGroup(groups, editor)).toBe(existing)
   })
 })

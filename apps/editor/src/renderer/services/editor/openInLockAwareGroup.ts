@@ -1,10 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Opens a fresh editor into the lock-aware target group (see
+ *  Opens an editor into the lock-aware target group (see
  *  IEditorGroupsService.activeGroupForOpen). When the active group is locked the
  *  open is routed to another (unlocked) group, which is then activated so the
- *  editor is what the user sees. Call sites that reveal an already-open editor
- *  should keep using activeGroup directly.
+ *  editor is what the user sees. Returns the instance that actually owns the tab
+ *  — the group dedupes by identity and disposes the caller's fresh duplicate, so
+ *  callers that reveal/focus afterwards must use the return value.
  *--------------------------------------------------------------------------------------------*/
 
 import type {
@@ -19,7 +20,7 @@ export function openInLockAwareGroup(
   editor: EditorInput,
   options?: IOpenEditorOptions,
   preferredGroup?: IEditorGroup,
-): void {
+): EditorInput {
   // A caller that names its owning group (e.g. an editor-title button on a
   // non-active split) opens there unless that group is locked.
   const target =
@@ -32,4 +33,8 @@ export function openInLockAwareGroup(
   if (target !== groups.openTargetGroup && options?.activate !== false) {
     groups.activateGroup(target)
   }
+  // The target group may already own the same identity; findEditor matches by
+  // id even after dedupe disposed the duplicate. Minimal test doubles predate
+  // findEditor (same as the activeGroupForOpen fallback above).
+  return target.findEditor?.(editor) ?? editor
 }

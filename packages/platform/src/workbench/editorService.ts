@@ -254,7 +254,15 @@ export interface IOpenEditorServiceOptions {
 export interface IEditorService {
   readonly _serviceBrand: undefined
 
-  openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void
+  /**
+   * Open `input` and return the instance that actually owns the resulting tab.
+   * When an input with the same identity is already open in the open-target
+   * group, that existing instance wins: it absorbs the duplicate (migrateFrom)
+   * and the duplicate is disposed. Callers that reveal/focus after opening MUST
+   * use the return value, not `activeEditor` — the latter follows the focused
+   * part and may point at another window.
+   */
+  openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): IEditorInput
   closeEditor(id: string): void
   closeAllEditors(): void
 

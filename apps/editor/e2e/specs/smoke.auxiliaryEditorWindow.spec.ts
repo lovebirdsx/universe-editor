@@ -2497,3 +2497,105 @@ test.describe('@p1 auxiliary editor window move-back menus', () => {
     await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
   })
 })
+
+test.describe('search reveals matches in auxiliary windows', () => {
+  const SEARCH = 'workbench.view.search'
+  const OPEN_NEEDLE = 'search-aux-open-needle'
+  const OPEN_LINE = 137
+  const FRESH_NEEDLE = 'search-aux-fresh-needle'
+  const FRESH_LINE = 57
+
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        const lines = (matchLine: number, needle: string): string =>
+          Array.from({ length: 200 }, (_, index) =>
+            index + 1 === matchLine ? needle : `line ${index + 1}`,
+          ).join('\n')
+        writeFileSync(join(dir, 'search-aux-open.txt'), lines(OPEN_LINE, OPEN_NEEDLE), 'utf8')
+        writeFileSync(join(dir, 'search-aux-fresh.txt'), lines(FRESH_LINE, FRESH_NEEDLE), 'utf8')
+      },
+    },
+  })
+
+  test('Enter jumps to the match in an already-open auxiliary editor and a fresh one @regression', async ({
+    electronApp,
+    workbench,
+    page,
+    launchWorkspace,
+  }) => {
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+
+    const openedPath = launchWorkspace!.file('search-aux-open.txt')
+    await page.evaluate((p) => window.__E2E__!.openFileUri(p), openedPath)
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    const child = await waitForAuxWindow(
+      electronApp,
+      workbench,
+      'workbench.action.moveEditorToNewWindow',
+    )
+    const token = (await auxWindows(page))[0]!.token
+    await child.locator('.monaco-editor').first().click()
+    await expect.poll(async () => (await auxWindows(page))[0]?.active ?? false).toBe(true)
+    // Start the cursor somewhere other than the match so a missing reveal is observable.
+    await page.evaluate((line) => window.__E2E__!.setActiveEditorCursor(line, 1), 1)
+
+    // Alt+Tab back to the main window: focus moves, the open target stays aux.
+    await markDocumentUnfocused(child)
+    await installFocusProbe(electronApp)
+    await clearFocusRequests(electronApp)
+    await page.evaluate(() => window.__E2E__!.focusMainWindow())
+    const windows = () => page.evaluate(() => window.__E2E__!.getWorkbenchWindows())
+    await expect.poll(async () => (await windows()).find((w) => w.isMain)?.focusedPart).toBe(true)
+    await expect
+      .poll(async () => (await windows()).find((w) => !w.isMain)?.openTargetPart)
+      .toBe(true)
+
+    const searchView = page.getByTestId('search-view')
+    const searchInput = searchView.getByRole('textbox', { name: 'Search', exact: true })
+    await workbench.activityBar.click(SEARCH)
+    await expect(searchView).toBeVisible()
+    const search = async (needle: string): Promise<void> => {
+      await searchInput.fill(needle)
+      await expect(searchView.getByText(needle)).toBeVisible({ timeout: 10_000 })
+      await searchInput.press('Tab')
+      await page.keyboard.press('ArrowDown')
+      await page.keyboard.press('Enter')
+    }
+    const selection = () => page.evaluate(() => window.__E2E__!.getActiveEditorSelection())
+
+    // 1) The file is already open in the auxiliary window.
+    await search(OPEN_NEEDLE)
+    await expectAuxiliaryFocus(electronApp, child, workbench, 'search-aux-open.txt')
+    await expect.poll(selection).toEqual({
+      startLineNumber: OPEN_LINE,
+      startColumn: 1,
+      endLineNumber: OPEN_LINE,
+      endColumn: OPEN_NEEDLE.length + 1,
+    })
+    await expect
+      .poll(async () => {
+        const first = await page.evaluate(() => window.__E2E__!.getActiveEditorFirstVisibleLine())
+        const last = await page.evaluate(() => window.__E2E__!.getActiveEditorLastVisibleLine())
+        return first !== undefined && last !== undefined && first <= OPEN_LINE && OPEN_LINE <= last
+      })
+      .toBe(true)
+
+    // 2) A result that is not open yet opens directly into the auxiliary window.
+    await page.evaluate(() => window.__E2E__!.focusMainWindow())
+    await clearFocusRequests(electronApp)
+    await search(FRESH_NEEDLE)
+    await expectAuxiliaryFocus(electronApp, child, workbench, 'search-aux-fresh.txt')
+    await expect.poll(selection).toEqual({
+      startLineNumber: FRESH_LINE,
+      startColumn: 1,
+      endLineNumber: FRESH_LINE,
+      endColumn: FRESH_NEEDLE.length + 1,
+    })
+
+    await page.evaluate((t) => window.__E2E__!.requestCloseAuxiliaryWindow(t), token)
+    await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
+  })
+})

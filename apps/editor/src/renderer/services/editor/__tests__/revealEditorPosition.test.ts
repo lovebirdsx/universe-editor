@@ -5,9 +5,15 @@
  * valid IRange so `setSelection` doesn't throw "Invalid arguments".
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DisposableStore, URI, type ITextEditorSelection } from '@universe-editor/platform'
+import {
+  DisposableStore,
+  URI,
+  type IEditorService,
+  type ITextEditorSelection,
+} from '@universe-editor/platform'
 import {
   applyEditorSelection,
+  openEditorAndReveal,
   revealSelectionInInput,
   toRevealRange,
   waitForFileEditor,
@@ -178,5 +184,64 @@ describe('revealSelectionInInput', () => {
     expect(editor.setSelection).toHaveBeenCalledWith(range)
     expect(editor.revealRangeInCenterIfOutsideViewport).toHaveBeenCalledWith(range)
     expect(editor.focus).toHaveBeenCalled()
+  })
+})
+
+describe('openEditorAndReveal', () => {
+  afterEach(() => {
+    FileEditorRegistry._resetForTests()
+  })
+
+  it('reveals on the instance openEditor returns, not the caller input', async () => {
+    const mounted = new FileEditorInput(URI.file('D:/dedupe.ts'), {} as never)
+    const duplicate = new FileEditorInput(URI.file('D:/dedupe.ts'), {} as never)
+    const editor = createEditorStub()
+    FileEditorRegistry.register(mounted, editor)
+
+    const openEditor = vi.fn(() => mounted)
+    const editorService = { openEditor } as unknown as IEditorService
+
+    const opened = openEditorAndReveal(
+      editorService,
+      duplicate,
+      { startLineNumber: 5, startColumn: 2 },
+      { focus: false },
+    )
+
+    expect(opened).toBe(mounted)
+    // `focus` is a reveal concern, not an open option.
+    expect(openEditor).toHaveBeenCalledWith(duplicate, {})
+    await vi.waitFor(() => expect(editor.setSelection).toHaveBeenCalled())
+    expect(editor.setSelection).toHaveBeenCalledWith({
+      startLineNumber: 5,
+      startColumn: 2,
+      endLineNumber: 5,
+      endColumn: 2,
+    })
+    expect(editor.focus).not.toHaveBeenCalled()
+  })
+
+  it('forwards pinned/preserveFocus to openEditor while keeping focus local', async () => {
+    const input = new FileEditorInput(URI.file('D:/options.ts'), {} as never)
+    const editor = createEditorStub()
+    FileEditorRegistry.register(input, editor)
+
+    const openEditor = vi.fn(() => input)
+    const editorService = { openEditor } as unknown as IEditorService
+
+    openEditorAndReveal(
+      editorService,
+      input,
+      { startLineNumber: 1, startColumn: 1 },
+      {
+        pinned: true,
+        preserveFocus: true,
+        focus: false,
+      },
+    )
+
+    expect(openEditor).toHaveBeenCalledWith(input, { pinned: true, preserveFocus: true })
+    await vi.waitFor(() => expect(editor.setSelection).toHaveBeenCalled())
+    expect(editor.focus).not.toHaveBeenCalled()
   })
 })
