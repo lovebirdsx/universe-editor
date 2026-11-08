@@ -952,6 +952,11 @@ input:focus-visible {
   scroll-behavior: smooth;
 }
 
+/* Flex items default to shrink; cards with overflow:hidden would collapse to their borders. */
+.timeline-scroll > * {
+  flex-shrink: 0;
+}
+
 .timeline-load-earlier {
   align-self: center;
   min-height: 40px;

@@ -510,6 +510,53 @@ test.describe('mobile gateway', () => {
     }
   })
 
+  test('@regression keeps thought cards readable when the timeline overflows', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10_000 })
+      .toBe(1)
+
+    await page.evaluate(() => window.__E2E__!.sendAcpPrompt('emit-thought:2x1'))
+    const longPrompt = Array.from({ length: 200 }, (_, index) => `line ${index}`).join('\n')
+    await page.evaluate((text) => window.__E2E__!.sendAcpPrompt(text), longPrompt)
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() =>
+            window
+              .__E2E__!.getAcpMessages()
+              .some((message) => message.role === 'agent' && message.text.startsWith('echo: ')),
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true)
+
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+      const thought = phone.getByTestId('thought-item').first()
+      await expect(thought).toBeAttached()
+      // The timeline is taller than the phone viewport. Flex items default to
+      // flex-shrink:1; a card with overflow:hidden would collapse to its borders.
+      const box = await thought.boundingBox()
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44)
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
   test('@p1 mirrors a live ACP session through subscribe_session + session_delta', async ({
     page,
     workbench,
