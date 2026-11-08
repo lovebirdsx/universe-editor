@@ -251,15 +251,19 @@ ready 后按顺序投递。
 **设备凭据**：
 
 - 配对成功签发每设备 token（32 字节随机）。
-- PC 只存哈希到 `<userData>/mobile/devices.json`（权限 `0600`），记录
-  `name` / `platform` / `createdAt` / `lastSeenAt`。
+- token 是高熵随机值（32 字节 CSPRNG），不需要抗暴力破解的慢哈希；PC 端只存
+  `SHA-256(token)`（base64url），校验时一次哈希后与记录做常量时间比较。scrypt 之类慢哈希
+  只对低熵口令有意义，且会让未鉴权连接反复发 `hello` 时耗尽 CPU。
+- PC 只存哈希到 `<userData>/mobile/devices.json`（权限 `0600`，当前文件版本 2；旧版记录直接丢弃），
+  记录 `name` / `platform` / `createdAt` / `lastSeenAt`。
 - 手机存 IndexedDB；每次 WS 在 `hello` 帧携带 token。
 
 **防护**：
 
 - Host 与 Origin 校验（防 DNS rebinding）。
 - 不发 CORS 通配。
-- 每设备连接数上限与速率限制。
+- 每设备连接数上限与速率限制；`hello` 鉴权失败按 `remoteAddress` 滑动窗口限速，
+  超限后的 upgrade 直接以 HTTP 429 拒绝，审计按窗口合并避免刷盘。
 - 静态页与 WS 响应加 CSP 等安全头。
 - 吊销立即断开所有该设备连接并发 `device_revoked`。
 

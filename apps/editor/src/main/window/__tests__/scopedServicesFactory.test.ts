@@ -45,8 +45,9 @@ describe('ApplicationServices type', () => {
       watcherProcess: {} as ApplicationServices['watcherProcess'],
       remoteConnection: {} as ApplicationServices['remoteConnection'],
       remoteStatus: {} as ApplicationServices['remoteStatus'],
+      mobileGateway: {} as ApplicationServices['mobileGateway'],
     }
-    expect(Object.keys(svc)).toHaveLength(37)
+    expect(Object.keys(svc)).toHaveLength(38)
   })
 })
 

@@ -1130,6 +1130,17 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.languageServices': '语言服务',
   'settings.languageServices.prewarm':
     '工作区空闲后预热的语言 id，使打开该语言的首个文件时没有启动延迟。设为 [] 可禁用。',
+  'settings.mobileGateway': '手机网关',
+  'settings.mobileGateway.allowedHosts':
+    'Host 头中额外接受的宿主名，并作为 HTTPS 源提供，例如 Tailscale Serve 名 "pc.tailnet-name.ts.net"。回环地址和绑定地址始终被接受。',
+  'settings.mobileGateway.bind':
+    '网关监听的位置。"loopback" 是推荐的 Tailscale 模式：网关监听 127.0.0.1，由 Tailscale Serve 以 HTTPS 对外提供。"lan" 直接绑定局域网地址，在自签名 HTTPS 落地前仅限开发使用。',
+  'settings.mobileGateway.enabled':
+    '在这台电脑上提供手机 PWA 并从已配对的手机接受连接。默认关闭；请在“手机设备”设置页配对设备。',
+  'settings.mobileGateway.lanAddress':
+    '"lan" 模式下绑定的 IPv4 地址。留空则使用第一个非内部 IPv4 地址。',
+  'settings.mobileGateway.port':
+    '网关的 TCP 端口（配对 API、PWA 资源与 WebSocket）。环境变量 UNIVERSE_MOBILE_PORT 会覆盖此值。',
   'settings.markdown': 'Markdown',
   'settings.markdown.math.enabled':
     '在 markdown 预览中渲染 LaTeX 数学公式（`$…$`、`$$…$$` 和 ```math 代码块）。',

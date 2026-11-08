@@ -284,6 +284,7 @@ import {
 } from './services/disposableLeak/DisposableLeakService.js'
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
+import { MobileBridgeService } from './services/mobileGateway/MobileBridgeService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import { ITerminalXtermService } from './services/terminal/TerminalXtermService.js'
 import {
@@ -997,6 +998,13 @@ async function bootstrapWorkbench(): Promise<void> {
   ipcService.registerChannel(
     ServiceChannels.RendererSessions,
     ProxyChannel.fromService(instantiation.createInstance(RendererSessionsService)),
+  )
+
+  // Reverse channel: main's mobile gateway calls into this window (M2 projects
+  // ACP sessions through it). M1 only answers ping to prove the wiring.
+  ipcService.registerChannel(
+    ServiceChannels.MobileBridge,
+    ProxyChannel.fromService(new MobileBridgeService()),
   )
 
   // Extension host client: owns the extension-host subprocess + RPC. Created here

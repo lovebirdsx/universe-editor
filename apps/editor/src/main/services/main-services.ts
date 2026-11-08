@@ -52,6 +52,8 @@ import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { IDocsService } from '../../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
+import { IMobileGatewayService } from '../../shared/ipc/mobileGatewayService.js'
+import { MobileGatewayMainService } from './mobileGateway/mobileGatewayMainService.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
@@ -272,6 +274,14 @@ registerSingleton(
 registerSingleton(
   IConfigLocationService,
   new SyncDescriptor<IConfigLocationService>(ConfigLocationMainService, [], false),
+)
+registerSingletonFactory(
+  IMobileGatewayService,
+  (acc) =>
+    new MobileGatewayMainService(
+      acc.get(IConfigLocationService) as ConfigLocationMainService,
+      acc.get(ILoggerService),
+    ),
 )
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))
 registerSingleton(

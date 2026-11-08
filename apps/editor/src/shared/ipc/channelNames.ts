@@ -55,6 +55,8 @@ export const ServiceChannels = {
   ProcessMonitor: 'processMonitor',
   FileClipboard: 'fileClipboard',
   BugRecorder: 'bugRecorder',
+  MobileGateway: 'mobileGateway',
+  MobileBridge: 'mobileBridge',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

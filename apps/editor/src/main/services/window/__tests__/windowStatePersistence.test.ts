@@ -123,6 +123,7 @@ function makeOpts() {
   return {
     appServices: {
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} },
+      mobileGateway: { registerWindowBridge: () => {}, unregisterWindowBridge: () => {} },
       // Closing a window reclaims its local child processes; these tests spawn none.
       acpHost: {},
       mcpClient: { stopAllForWindow: () => Promise.resolve() },

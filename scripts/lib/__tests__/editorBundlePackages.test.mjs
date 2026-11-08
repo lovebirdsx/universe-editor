@@ -58,13 +58,14 @@ test('src 模式项的 src/index.ts 存在', () => {
   }
 })
 
-test('inputDirsFor: main 吃 7 项、renderer 吃 5 项（含 extension-gallery/dist）', () => {
+test('inputDirsFor: main 吃 8 项、renderer 吃 5 项（含 extension-gallery/dist）', () => {
   assert.deepEqual(
     inputDirsFor('main').map((p) => p.slice(REPO_ROOT.length + 1).split(sep).join('/')),
     [
       'packages/primitives/src',
       'packages/platform/src',
       'packages/node-services/src',
+      'packages/mobile-protocol/src',
       'packages/extensions-common/dist',
       'packages/extension-api/dist',
       'packages/extension-gallery/dist',
@@ -89,6 +90,7 @@ test('aliasMapFor / externExcludesFor / optimizeExcludesFor 输出快照', () =>
     '@universe-editor/primitives',
     '@universe-editor/platform',
     '@universe-editor/node-services',
+    '@universe-editor/mobile-protocol',
   ])
   for (const target of Object.values(mainAlias)) {
     assert.ok(target.endsWith(`${sep}src${sep}index.ts`), `alias target not src/index.ts: ${target}`)
@@ -104,6 +106,7 @@ test('aliasMapFor / externExcludesFor / optimizeExcludesFor 输出快照', () =>
     '@universe-editor/primitives',
     '@universe-editor/platform',
     '@universe-editor/node-services',
+    '@universe-editor/mobile-protocol',
     '@universe-editor/extensions-common',
     '@universe-editor/extension-api',
     '@universe-editor/extension-gallery',
@@ -117,13 +120,14 @@ test('aliasMapFor / externExcludesFor / optimizeExcludesFor 输出快照', () =>
   ])
 })
 
-test('packagesRequiringDist: 除 workbench-ui 外的 7 项', () => {
+test('packagesRequiringDist: 除 workbench-ui 外的 8 项', () => {
   assert.deepEqual(
     packagesRequiringDist().map((e) => e.pkg),
     [
       '@universe-editor/primitives',
       '@universe-editor/platform',
       '@universe-editor/node-services',
+      '@universe-editor/mobile-protocol',
       '@universe-editor/extensions-common',
       '@universe-editor/extension-api',
       '@universe-editor/extension-gallery',

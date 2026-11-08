@@ -54,6 +54,7 @@ import type { ConfigLocationMainService } from '../services/configLocation/confi
 import type { WatcherProcessClient } from '@universe-editor/node-services'
 import type { IRemoteConnectionService } from '../services/remote/remoteConnectionMainService.js'
 import type { RemoteStatusMainService } from '../services/remoteStatus/remoteStatusMainService.js'
+import type { MobileGatewayMainService } from '../services/mobileGateway/mobileGatewayMainService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { IAuxiliaryWindowsService } from '../../shared/ipc/auxiliaryWindowService.js'
 import type { ISessionChangesStoreService } from '../../shared/ipc/sessionChangesStoreService.js'
@@ -130,6 +131,11 @@ export interface ApplicationServices {
   readonly remoteConnection: IRemoteConnectionService
   /** Wire facade over `remoteConnection`, exposing connection state to the renderer. */
   readonly remoteStatus: RemoteStatusMainService
+  /**
+   * Concrete type: window IPC bootstrap registers each window's reverse bridge
+   * with it, and window close unregisters it (M2 uses the bridges).
+   */
+  readonly mobileGateway: MobileGatewayMainService
 }
 
 /**

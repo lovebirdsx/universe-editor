@@ -241,6 +241,10 @@ function makeOpts() {
       watcherProcess: createStubWatcherProcessClient(),
       remoteConnection: {} as never,
       remoteStatus: {} as never,
+      mobileGateway: {
+        registerWindowBridge: () => {},
+        unregisterWindowBridge: () => {},
+      } as never,
     },
     logService,
     e2eEnabled: false,
@@ -630,11 +634,13 @@ describe('WindowMainService', () => {
         disposable: combinedDisposable(),
         rendererLifecycle: backgroundLifecycle,
         rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
       }))
       .mockImplementationOnce(() => ({
         disposable: combinedDisposable(),
         rendererLifecycle: requestingLifecycle,
         rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
       }))
     const opts = makeOpts()
     const getAllSessions = vi.fn().mockResolvedValue([
@@ -890,6 +896,7 @@ describe('WindowMainService', () => {
       disposable: combinedDisposable(),
       rendererLifecycle: wedgedLifecycle,
       rendererSessions: {} as never,
+      rendererMobileBridge: {} as never,
     }))
     const svc = makeService()
     await svc.createWindow()
@@ -1096,6 +1103,7 @@ describe('WindowMainService', () => {
         disposable: combinedDisposable(),
         rendererLifecycle: vetoingLifecycle,
         rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
       }))
       const svc = makeService()
       await svc.createWindow({ remoteAuthority: 'myhost' })

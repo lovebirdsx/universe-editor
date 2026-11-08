@@ -93,6 +93,8 @@ import { IUpdateService } from '../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
 import { IDocsService } from '../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
+import { IMobileGatewayService } from '../shared/ipc/mobileGatewayService.js'
+import type { MobileGatewayMainService } from './services/mobileGateway/mobileGatewayMainService.js'
 import { ITextSearchMainService } from '@universe-editor/platform'
 import { installMainErrorHandlers } from './errors.js'
 import {
@@ -615,6 +617,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       watcherProcess: accessor.get(IWatcherProcessService),
       remoteConnection: accessor.get(IRemoteConnectionService),
       remoteStatus: accessor.get(IRemoteStatusService) as RemoteStatusMainService,
+      mobileGateway: accessor.get(IMobileGatewayService) as MobileGatewayMainService,
     }))
   }
   if (!windowMainService) {

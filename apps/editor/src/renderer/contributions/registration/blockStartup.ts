@@ -23,6 +23,10 @@ import { SettingsContribution } from '../SettingsContribution.js'
 import { ThemesContribution } from '../ThemesContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
 import { UpdateConfigurationContribution } from '../UpdateConfigurationContribution.js'
+import {
+  MobileGatewayConfigSyncContribution,
+  MobileGatewayConfigurationContribution,
+} from '../MobileGatewayContributions.js'
 import { WorkbenchFontContribution } from '../WorkbenchFontContribution.js'
 import { AgentFontContribution } from '../AgentFontContribution.js'
 import { JsonSchemaBridgeContribution } from '../JsonSchemaBridgeContribution.js'
@@ -196,6 +200,19 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.updateConfiguration',
   UpdateConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Phone gateway settings + live forwarding. Main reads settings.json at startup;
+// this contribution keeps a running gateway in sync with runtime edits.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.mobileGatewayConfiguration',
+  MobileGatewayConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.mobileGatewayConfigSync',
+  MobileGatewayConfigSyncContribution,
   WorkbenchPhase.BlockStartup,
 )
 

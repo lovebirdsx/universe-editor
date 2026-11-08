@@ -119,6 +119,9 @@ catalog:
 
   # Node runtime
   '@parcel/watcher': ^2.6.0
+  # Mobile gateway WebSocket server (noServer mode on the same HTTP port).
+  ws: ^8.18.0
+  '@types/ws': ^8.5.13
   tsx: ^4.19.0
   turbo: ^2.11.9
   typescript: ^5.8.0

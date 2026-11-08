@@ -31,6 +31,7 @@ export const TEMP_PREFIXES: readonly string[] = [
   'ues-',
   // 编辑器 / 各包 / scripts 的 vitest 与 node:test
   'ue-',
+  'ue-mobile-gateway-',
   'cmdspawn-',
   // AI 服务测试
   'ai-settings-test-',
