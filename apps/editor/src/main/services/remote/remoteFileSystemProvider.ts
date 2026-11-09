@@ -282,6 +282,13 @@ export class RemoteFileSystemProvider extends Disposable implements IFileSystemP
     return svc.realpath!(resource)
   }
 
+  async listDrives(resource?: URI): Promise<string[]> {
+    // Drives belong to one host; without a resource there is no authority to ask.
+    if (resource === undefined) return []
+    const svc = await this._service(resource.authority)
+    return (await svc.listDrives?.()) ?? []
+  }
+
   async createDirectory(resource: URI): Promise<void> {
     const svc = await this._service(resource.authority)
     return svc.createDirectory(resource)

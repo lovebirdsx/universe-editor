@@ -81,11 +81,12 @@ export interface IFileService {
   realpath?(resource: URI): Promise<URI>
 
   /**
-   * Enumerates the available drive roots (e.g. `['C:', 'D:']`) on Windows. On
-   * other platforms there is a single filesystem root, so this returns `[]`.
+   * Enumerates the available drive roots (e.g. `['C:', 'D:']`) of the host
+   * backing `resource`. Without a resource it keeps the historic local behavior
+   * (the `file:` provider). Hosts without drive letters return `[]`.
    * Optional: filesystems without the notion of drives may omit it.
    */
-  listDrives?(): Promise<string[]>
+  listDrives?(resource?: URI): Promise<string[]>
 
   /**
    * Reports what the provider backing `resource`'s scheme can do — most

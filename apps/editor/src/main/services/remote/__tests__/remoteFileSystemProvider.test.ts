@@ -140,17 +140,20 @@ function makeStreamService(
     stat?: (resource: URI) => Promise<IFileStat>
     listRecursive?: (root: URI) => Promise<URI[]>
     realpath?: (resource: URI) => Promise<URI>
+    listDrives?: () => Promise<string[]>
   } = {},
 ): {
   service: IRemoteFileStreamService
   startCalls: URI[]
   acks: Array<{ streamId: number; seq: number }>
   cancels: number[]
+  listDrivesCalls: () => number
 } {
   const emitter = new Emitter<IRemoteFileStreamEvent>()
   const startCalls: URI[] = []
   const acks: Array<{ streamId: number; seq: number }> = []
   const cancels: number[] = []
+  let listDrivesCalls = 0
   let nextId = 1
   const fire = (e: IRemoteFileStreamEvent): void => emitter.fire(e)
 
@@ -194,7 +197,8 @@ function makeStreamService(
       return opts.realpath?.(resource) ?? resource
     },
     async listDrives() {
-      return []
+      listDrivesCalls++
+      return opts.listDrives ? opts.listDrives() : []
     },
     async createDirectory() {},
     async delete() {},
@@ -204,7 +208,7 @@ function makeStreamService(
       return opts.listRecursive?.(root) ?? []
     },
   }
-  return { service, startCalls, acks, cancels }
+  return { service, startCalls, acks, cancels, listDrivesCalls: () => listDrivesCalls }
 }
 
 describe('RemoteFileSystemProvider', () => {
@@ -249,6 +253,27 @@ describe('RemoteFileSystemProvider', () => {
       const real = await provider.realpath(remote('host', '/home/user/file.txt'))
       expect(real.scheme).toBe(REMOTE_SCHEME)
       expect(real.authority).toBe('host')
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  it('forwards listDrives to the authority channel, without a resource', async () => {
+    const { service, listDrivesCalls } = makeStreamService({
+      listDrives: async () => ['C:', 'D:'],
+    })
+    const h = makeHarness({ [RemoteChannels.FileSystem]: service })
+    try {
+      const provider = new RemoteFileSystemProvider(h.connService, undefined)
+
+      expect(await provider.listDrives(remote('host', '/'))).toEqual(['C:', 'D:'])
+      expect(listDrivesCalls()).toBe(1)
+      expect(h.getConnectionCalls()).toBe(1)
+
+      // Drives belong to one host; without a resource there is nobody to ask.
+      expect(await provider.listDrives()).toEqual([])
+      expect(listDrivesCalls()).toBe(1)
+      expect(h.getConnectionCalls()).toBe(1)
     } finally {
       h.cleanup()
     }

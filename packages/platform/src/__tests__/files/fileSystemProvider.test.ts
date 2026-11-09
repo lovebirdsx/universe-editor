@@ -17,14 +17,17 @@ class RecordingProvider implements IFileSystemProvider {
   readonly seen: URI[] = []
 
   realpath?: (resource: URI) => Promise<URI>
-  listDrives?: () => Promise<string[]>
+  listDrives?: (resource?: URI) => Promise<string[]>
 
   constructor(withOptionals = true) {
     // Assigned in the body, not as field initializers: a filesystem without
     // symlink or drive semantics simply omits these members.
     if (withOptionals) {
       this.realpath = async (resource) => resource
-      this.listDrives = async () => ['C:']
+      this.listDrives = async (resource) => {
+        if (resource) this.seen.push(resource)
+        return ['C:']
+      }
     }
   }
 
@@ -229,6 +232,19 @@ describe('FileService scheme dispatch', () => {
     const svc = new FileService()
     svc.providers.register('file', new RecordingProvider(false))
     expect(await svc.listDrives()).toEqual([])
+  })
+
+  it('routes listDrives(resource) to that resource provider', async () => {
+    const { svc, remoteProvider } = setup()
+    const drives = await svc.listDrives(remote('/C:/'))
+    expect(drives).toEqual(['C:'])
+    expect(remoteProvider.seen.map((u) => u.toString())).toEqual(['remote-ssh://host/C:/'])
+  })
+
+  it('listDrives(resource) returns empty when that provider omits it', async () => {
+    const svc = new FileService()
+    svc.providers.register('remote-ssh', new RecordingProvider(false))
+    expect(await svc.listDrives(remote('/C:/'))).toEqual([])
   })
 
   it('rejects realpath for a provider without symlink semantics', async () => {

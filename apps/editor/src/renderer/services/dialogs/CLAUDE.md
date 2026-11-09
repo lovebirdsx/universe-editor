@@ -42,7 +42,7 @@ platform IQuickPick<T> 契约（value/items/activeItems/selectedItems + onDid* �
 - **[C] 上下键 + 路径补全 + 回车定型**：onActiveChange 把高亮项补全成 `display(folder)+sep+label`，valueSelection 选中用户未输入部分。
 - **[D] 结尾分隔符回车直接确认目录**：acceptValue 里 endsWithSeparator + 目录 + canSelectFolders → 直接 finish。
 - **`~` 展开**：`expandTilde` 在 onValueChange 最前处理（`~`/`~/`/`~\` → home+sep）。
-- **浏览上下文 `_ctx()` 按目标解析**（`_show` 开头按 start.folder 结算）：`file:` 用客户端 sep/home；`remote-ssh:` 经 `IRemoteStatusService.getEnvironment(authority)` 取远程 os/homeDir 驱动分隔符与 ~ 展开，未知退化 POSIX `/`（远程 Windows 盘符列表不支持，driveList=false）。**分隔符/home/盘符按浏览目标解析，非客户端平台**。
+- **浏览上下文 `_ctx()` 按目标解析**（`_show` 开头按 start.folder 结算）：`file:` 用客户端 sep/home；`remote-ssh:` 经 `IRemoteStatusService.getEnvironment(authority)` 取远程 os/homeDir 驱动分隔符与 ~ 展开，未知退化 POSIX `/`（远程 Windows 同样启用盘符列表）。**分隔符/home/盘符按浏览目标解析，非客户端平台**。
 
 ### 多选（canSelectMany）与过滤（filters）
 
@@ -51,14 +51,14 @@ platform IQuickPick<T> 契约（value/items/activeItems/selectedItems + onDid* �
 - **filters 只在 open 且 allowFiles 时生效**：`collectFilterExtensions` 把 {name, extensions[]}[] 压成小写扩展名并集（含 `*` 则不过滤）。两处守卫：列表渲染（prepareEntries 的 fileExts）+ typed-path 提交（acceptValue/onAccept 拒绝残留高亮里扩展名不在集合内的文件）。目录永远显示。
 - **Space toggle 在 panel 侧 gate 于 `!filterExternally`**：文件对话框输入框是路径数据（空格必须可输入），所以文件对话框里 Space 不 toggle。
 
-### Windows 盘符处理（仅本机 win32 file 浏览，ctx.driveList）
+### Windows 盘符处理（浏览主机为 win32：本机或远程，ctx.driveList）
 
-helper：`_driveListRoot()`（=URI.file('/') 合成根）、`_isDriveListRoot(uri)`、`_displayWithSep(uri)`（幂等加单分隔符——盘根 fsPath 自带尾斜杠，别手动 +sep 造成 `C:\\`）。
+helper：`_driveListRoot()`（返回 `ctx.driveListRoot`：本机 `URI.file('/')`，远程 `remote-ssh://<authority>/`）、`_isDriveListRoot(uri)`（按 scheme/authority/path 与 root 比对）、`_displayWithSep(uri)`（幂等加单分隔符——盘根 fsPath 自带尾斜杠，别手动 +sep 造成 `C:\\`）。
 
-- **输入盘符切盘**：`D:\` → `_uriFromInput` 把裸盘符 `D:` 补斜杠成 `D:/`（裸 `D:` 指盘的工作目录非根，必须补斜杠），经 [A] 分支 stat + updateItems 切到 D 盘根。
-- **裸片段 → 盘符列表**：onValueChange 里 `dir === '' && win32` → 切到盘符列表（updateItems(driveListRoot)），用输入字母前缀高亮盘符（输入 f → 高亮 F:）。修了「全选后输入单字母被错误补全成 当前路径\匹配项」和「输入盘符字母不出盘符列表」两个 bug。空输入是子集（只列盘符不高亮）。
-- **盘符列表态**：updateItems 在 _isDriveListRoot(folder) 时改为 `fileService.listDrives()`（无 `..`）；setInputToFolder / onActiveChange 的 prefix 在该态为空串；从盘根按 `..` 上行（其父正是 /）回到盘符列表。
-- **跨进程 `IFileService.listDrives?()`**（可选方法）：main 端 FileSystemMainService 在 win32 探测 A–Z 盘根，非 win32 返回 []。**可选**是因为大量测试 fake 全量实现 IFileService，必填会全炸；调用处 `(await this._fileService.listDrives?.()) ?? []`。新写 IFileService fake 不需要实现它。
+- **输入盘符切盘**：`D:\` → `_uriFromInput` 把裸盘符 `D:` 补斜杠成 `D:/`（裸 `D:` 指盘的工作目录非根，必须补斜杠），经 [A] 分支 stat + updateItems 切到 D 盘根。裸单字母 `D` 在 Windows 目标下同样补成 `D:/`——否则会变成无盘符的 `/D`，被 Win32 按服务端当前盘解析成 `C:\D`。
+- **裸片段 → 盘符列表**：onValueChange 里 `dir === '' && ctx.driveList`（本机 Windows 与远程 Windows）→ 切到盘符列表（updateItems(driveListRoot)），用输入字母前缀高亮盘符（输入 f → 高亮 F:）。修了「全选后输入单字母被错误补全成 当前路径\匹配项」和「输入盘符字母不出盘符列表」两个 bug。空输入是子集（只列盘符不高亮）。
+- **盘符列表态**：updateItems 在 _isDriveListRoot(folder) 时改为 `fileService.listDrives?.(folder)`（无 `..`；传盘符列表根，让 FileService 按 scheme 路由到本机或远端 provider）；盘符项 URI 用 `_uriFromInput(drive, folder)` 继承 authority；setInputToFolder / onActiveChange 的 prefix 在该态为空串；从盘根按 `..` 上行（其父正是 /）回到盘符列表。
+- **跨进程 `IFileService.listDrives?(resource?)`**（可选方法）：无 resource 时保持旧语义（问本地 `file:` provider，Windows 探测 A–Z）；有 resource 时按 scheme 路由——`RemoteFileSystemProvider` 按 authority 从连接 channel 转发到远端 server 的同名探测。**可选**是因为大量测试 fake 全量实现 IFileService，必填会全炸；调用处 `(await this._fileService.listDrives?.(folder)) ?? []`。新写 IFileService fake 不需要实现它。
 
 ## 纯函数 helper（无副作用，易单测）
 
@@ -87,10 +87,10 @@ helper：`_driveListRoot()`（=URI.file('/') 合成根）、`_isDriveListRoot(ur
 2. **resetInput 用错**：导航（进目录/上行）用 true，手动改路径触发的刷新用 false，否则把用户正敲的字 clobber 回旧目录路径（历史 bug A 根因）。
 3. **裸盘符丢斜杠**：`D:`（无斜杠）= D 盘工作目录 ≠ `D:\` 根；_uriFromInput 必须补回斜杠。
 4. **盘根 fsPath 自带尾斜杠**：`URI.file('C:/').fsPath === 'C:/'`，普通目录无尾斜杠。拼输入值用 _displayWithSep，别手动 +sep 造成 `C:\\`。
-5. **分隔符/home/盘符按浏览目标解析，非客户端平台**：_ctx() 按 start.folder 结算——file: 用客户端事实；remote: 经 getEnvironment(authority) 取远程 os/homeDir，未知退化 POSIX。盘符逻辑 gate 到 ctx.driveList（仅本机 win32 file 浏览），远程浏览禁用。
+5. **分隔符/home/盘符按浏览目标解析，非客户端平台**：_ctx() 按 start.folder 结算——file: 用客户端事实；remote: 经 getEnvironment(authority) 取远程 os/homeDir，未知退化 POSIX。盘符逻辑 gate 到 ctx.driveList（浏览主机为 win32：本机或远程 Windows），POSIX/未知远程禁用。
 6. **autoFocusFirstItem=false 必须配合 panel 关 hover**：否则导航后鼠标静止悬停新项 → onMouseMove 乱触发补全（历史 e2e 失败根因）。
 7. **host 单测设 activeItems 不自动补全**：FakeQuickPick 不 fire onActiveChange，测补全要 qp.fireActive(item)。
-8. **listDrives 是可选方法**：调用必带 `?.()`；新写 IFileService fake 不需要实现它。
+8. **listDrives 是可选方法**：调用必带 `?.()` 并传盘符列表根 URI（按 scheme 路由）；新写 IFileService fake 不需要实现它。
 9. **测试环境**：host 单测在 renderer-node（无 DOM），测试内 `globalThis.window = { ipc: { platform, home } }` 切平台；panel 单测在 workbench-ui happy-dom。
 
 ## 验证
@@ -112,7 +112,7 @@ pnpm --filter @universe-editor/editor e2eg "simple file dialog"
 - `services/dialogs/SimpleFileDialog.ts` —— 交互主逻辑（onValueChange/onActiveChange/onAccept/updateItems/acceptValue + 盘符 helper）
 - `services/dialogs/simpleFileDialogUtil.ts` —— 纯函数 helper；`__tests__/SimpleFileDialog.test.ts` —— host 单测
 - `packages/platform/src/dialog/fileDialogService.ts` —— 契约；`packages/platform/src/files/fileService.ts` —— IFileService（含可选 listDrives?()）
-- `main/services/files/fileSystemMainService.ts` —— main 实现（listDrives 探测 A–Z）
+- `main/services/files/fileSystemMainService.ts` —— extends FileService；盘符探测在 node-services，远端经 RemoteFileSystemProvider 转发
 - `packages/platform/src/workbench/quickInputService.ts` —— IQuickPick 接口；`services/quickInput/QuickInputService.ts` —— 实现
 - `packages/workbench-ui/src/feedback/quickInput/{quickInputViewModel.ts,QuickInputPanel.tsx,QuickInput.module.css}`
 - e2e：`apps/editor/e2e/specs/smoke.simpleFileDialog.spec.ts`

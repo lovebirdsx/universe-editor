@@ -1412,6 +1412,100 @@ describe('SimpleFileDialog win32 remote target browsing', () => {
     return { dialog, quickInput }
   }
 
+  const remoteUri = (path: string): URI =>
+    URI.from({ scheme: REMOTE_SCHEME, authority: 'winhost', path })
+
+  // Windows remote host layout. `/C:/` intentionally contains `D`: it reproduces
+  // the folder this bug used to create on the server's current drive.
+  const WIN_REMOTE_DIRS = new Map<string, string[]>([
+    ['/C:/', ['D', 'Users']],
+    ['/C:/D', []],
+    ['/C:/Users', ['dev']],
+    ['/C:/Users/dev', ['Documents', 'proj']],
+    ['/C:/Users/dev/Documents', []],
+    ['/C:/Users/dev/proj', []],
+    ['/D:/', ['data']],
+    ['/D:/data', []],
+  ])
+
+  class WinRemoteFakeFileService implements Partial<IFileService> {
+    declare readonly _serviceBrand: undefined
+    readonly createdDirs: string[] = []
+    readonly listDrivesResources: URI[] = []
+
+    constructor(
+      private readonly drives: readonly string[] = ['C:', 'D:'],
+      private readonly dirs: ReadonlyMap<string, string[]> = WIN_REMOTE_DIRS,
+    ) {}
+
+    async list(resource: URI): Promise<IDirectoryEntry[]> {
+      const names = this.dirs.get(resource.path)
+      if (!names) throw new Error(`ENOENT ${resource.path}`)
+      const base = resource.path.endsWith('/') ? resource.path.slice(0, -1) : resource.path
+      return names.map((name) => {
+        const childPath = `${base}/${name}`
+        return { name, isDirectory: this.dirs.has(childPath), isFile: false }
+      })
+    }
+
+    async stat(resource: URI): Promise<IFileStat> {
+      if (this.dirs.has(resource.path)) {
+        return { resource, isDirectory: true, isFile: false, size: 0, mtime: 0 }
+      }
+      throw new Error(`ENOENT ${resource.path}`)
+    }
+
+    async exists(resource: URI): Promise<boolean> {
+      return this.dirs.has(resource.path)
+    }
+
+    async createDirectory(resource: URI): Promise<void> {
+      this.createdDirs.push(resource.path)
+    }
+
+    async listDrives(resource?: URI): Promise<string[]> {
+      if (resource) this.listDrivesResources.push(resource)
+      return [...this.drives]
+    }
+  }
+
+  const createWinRemoteDialog = (
+    fileService: Partial<IFileService>,
+  ): { dialog: SimpleFileDialog; quickInput: FakeQuickInputService } => {
+    const quickInput = new FakeQuickInputService()
+    const dialog = new SimpleFileDialog(
+      quickInput as never,
+      fileService as never,
+      fakeWorkspace,
+      fakeDialog,
+      new FakeStorageService() as never,
+      new FakeConfigService() as unknown as IConfigurationService,
+      new FakeHostService() as unknown as IHostService,
+      fakeLoggerService,
+      { getEnvironment: async () => WIN_REMOTE_ENV } as never,
+    )
+    return { dialog, quickInput }
+  }
+
+  const openWinRemote = async (
+    fileService: Partial<IFileService>,
+    startPath: string,
+  ): Promise<{
+    dialog: SimpleFileDialog
+    qp: FakeQuickPick
+    result: Promise<URI[] | undefined>
+  }> => {
+    const { dialog, quickInput } = createWinRemoteDialog(fileService)
+    const result = dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: remoteUri(startPath),
+    })
+    await flush()
+    return { dialog, qp: quickInput.lastPick, result }
+  }
+
   beforeEach(() => {
     // Empty remote window pointed at a Windows remote host (direct-mode).
     ;(globalThis as { window?: unknown }).window = {
@@ -1471,5 +1565,90 @@ describe('SimpleFileDialog win32 remote target browsing', () => {
     await flush()
 
     expect(qp.value).toBe('C:\\Users\\dev\\')
+  })
+
+  it('typing a bare drive letter lists drives instead of completing C:\\D', async () => {
+    const fileService = new WinRemoteFakeFileService()
+    const { qp } = await openWinRemote(fileService, '/C:/Users/dev')
+    expect(qp.value).toBe('C:\\Users\\dev\\')
+
+    // Backspacing the whole address bar walks currentFolder up to the drive root.
+    qp.type('C:\\Users\\')
+    await flush()
+    qp.type('C:\\')
+    await flush()
+    expect(labels(qp)).toEqual(['..', 'D', 'Users'])
+
+    qp.type('')
+    await flush()
+    qp.type('D')
+    await flush()
+
+    // The poisoned C:\D folder must not be autocompleted; a bare letter is a drive.
+    expect(qp.value).not.toBe('C:\\D')
+    expect(labels(qp)).toEqual(['C:', 'D:'])
+    expect(qp.activeItems.map((it) => it.label)).toEqual(['D:'])
+    qp.fireActive(qp.activeItems[0]!)
+    expect(qp.value).toBe('D:')
+    expect(fileService.createdDirs).toEqual([])
+    expect(fileService.listDrivesResources.map((u) => u.toString())).toEqual([
+      'remote-ssh://winhost/',
+    ])
+  })
+
+  it('enters a drive selected from the remote drive list', async () => {
+    const fileService = new WinRemoteFakeFileService()
+    const { qp } = await openWinRemote(fileService, '/C:/Users/dev')
+
+    qp.type('d')
+    await flush()
+
+    const driveD = qp.items.find((it) => it.label === 'D:')!
+    expect(driveD.id).toBe('remote-ssh://winhost/D:/')
+    qp.fireActive(driveD)
+    expect(qp.value).toBe('D:')
+    qp.activeItems = [driveD]
+    qp.accept()
+    await flush()
+
+    expect(qp.value).toBe('D:\\')
+    expect(labels(qp)).toEqual(['..', 'data'])
+  })
+
+  it('typing a bare drive letter with no drive enumeration still resolves to the drive root', async () => {
+    const fileService = new WinRemoteFakeFileService(['C:'])
+    const { qp, result } = await openWinRemote(fileService, '/C:/Users/dev')
+
+    qp.type('D')
+    await flush()
+
+    expect(qp.value).toBe('D')
+    expect(qp.activeItems).toEqual([])
+    qp.accept()
+    await flush()
+
+    const picked = await result
+    expect(picked?.[0]?.scheme).toBe(REMOTE_SCHEME)
+    expect(picked?.[0]?.authority).toBe('winhost')
+    expect(picked?.[0]?.path).toBe('/D:/')
+    expect(fileService.createdDirs).toEqual([])
+  })
+
+  it('offers to create a missing drive at its root, never on the current drive', async () => {
+    const dirs = new Map(WIN_REMOTE_DIRS)
+    dirs.delete('/D:/')
+    dirs.delete('/D:/data')
+    const fileService = new WinRemoteFakeFileService(['C:'], dirs)
+    const { qp, result } = await openWinRemote(fileService, '/C:/Users/dev')
+
+    qp.type('D')
+    await flush()
+    expect(qp.activeItems).toEqual([])
+    qp.accept()
+    await flush()
+
+    const picked = await result
+    expect(picked?.[0]?.path).toBe('/D:/')
+    expect(fileService.createdDirs).toEqual(['/D:/'])
   })
 })

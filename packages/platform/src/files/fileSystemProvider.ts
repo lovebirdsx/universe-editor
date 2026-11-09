@@ -60,8 +60,8 @@ export interface IFileSystemProvider {
 
   /** See `IFileService.realpath`. Omit when the filesystem has no symlink semantics. */
   realpath?(resource: URI): Promise<URI>
-  /** See `IFileService.listDrives`. Only meaningful for the local Windows filesystem. */
-  listDrives?(): Promise<string[]>
+  /** See `IFileService.listDrives`. The resource selects this provider's host. */
+  listDrives?(resource?: URI): Promise<string[]>
 
   createDirectory(resource: URI): Promise<void>
   delete(resource: URI, opts?: { recursive?: boolean; useTrash?: boolean }): Promise<void>
@@ -176,11 +176,19 @@ export class FileService extends Disposable implements IFileService {
     return provider.realpath(uri)
   }
 
-  /** Drive roots are a local-Windows notion; routed to the `file:` provider. */
-  async listDrives(): Promise<string[]> {
-    const local = this.providers.get('file')
-    if (!local?.listDrives) return []
-    return local.listDrives()
+  /**
+   * With a resource, routes to the provider registered for its scheme so a
+   * remote host's drives can be listed through the same gateway. Without one,
+   * drive roots remain a local-Windows notion: ask the `file:` provider.
+   */
+  async listDrives(resource?: URI): Promise<string[]> {
+    if (resource === undefined) {
+      const local = this.providers.get('file')
+      if (!local?.listDrives) return []
+      return local.listDrives()
+    }
+    const { provider, uri } = this._resolve(resource)
+    return (await provider.listDrives?.(uri)) ?? []
   }
 
   async createDirectory(resource: URI): Promise<void> {
