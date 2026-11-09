@@ -4,6 +4,7 @@ import { BottomSheet } from '../components/BottomSheet.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
+import { useAutoGrowTextarea } from './useAutoGrowTextarea.js'
 
 export type PermissionCommandClient = Pick<
   MobileClient,
@@ -26,12 +27,15 @@ export interface PermissionSheetProps {
 export const CLEARED_FALLBACK_MS = 3_000
 const COUNTDOWN_TICK_MS = 500
 const CODEX_IMPLEMENT_PLAN_OPTION_ID = 'implement_plan'
+/** Kept in sync with `.sheet__textarea--autogrow` (6 x 24px line-height + 20px box). */
+export const FEEDBACK_MAX_HEIGHT_PX = 6 * 24 + 20
 
 export function PermissionSheet({ client, permission, online, onNotice }: PermissionSheetProps) {
   const [busyOption, setBusyOption] = useState<string | undefined>(undefined)
   const [busyAuto, setBusyAuto] = useState<'pause' | 'resume' | undefined>(undefined)
   const [hidden, setHidden] = useState(false)
   const [feedback, setFeedback] = useState('')
+  const feedbackRef = useAutoGrowTextarea(feedback, { maxHeightPx: FEEDBACK_MAX_HEIGHT_PX })
   const fallbackTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const requestId = permission.requestId
 
@@ -166,8 +170,9 @@ export function PermissionSheet({ client, permission, online, onNotice }: Permis
             {strings.pendingFeedbackLabel}
           </label>
           <textarea
+            ref={feedbackRef}
             id="permission-feedback"
-            className="sheet__textarea"
+            className="sheet__textarea sheet__textarea--autogrow"
             data-testid="permission-feedback"
             rows={2}
             value={feedback}

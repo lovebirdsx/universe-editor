@@ -102,3 +102,30 @@ test('codex 计划只提供 revise_plan 时回退人工确认 @regression', asyn
     .click()
   await expectSelection(page, 'revise_plan')
 })
+
+test('计划反馈框随内容增高并在六行封顶 @regression', async ({ page }) => {
+  await requestPlan(page, 'off')
+  const input = page.getByTestId('acp-permission-steer-input')
+  await expect(input).toHaveCount(1)
+
+  const singleHeight = await input.evaluate((element) => element.clientHeight)
+
+  await input.fill(Array.from({ length: 8 }, (_, index) => `line ${index}`).join('\n'))
+  const grown = await input.evaluate((element) => {
+    const style = getComputedStyle(element)
+    return {
+      clientHeight: element.clientHeight,
+      scrollHeight: element.scrollHeight,
+      maxHeight: Number.parseFloat(style.maxHeight),
+      lineHeight: Number.parseFloat(style.lineHeight),
+    }
+  })
+
+  expect(grown.maxHeight).toBeCloseTo(grown.lineHeight * 6 + 8, 0)
+  expect(grown.clientHeight).toBeLessThanOrEqual(grown.maxHeight + 1)
+  expect(grown.clientHeight).toBeGreaterThan(singleHeight + grown.lineHeight * 3)
+  expect(grown.scrollHeight).toBeGreaterThan(grown.clientHeight)
+
+  await input.fill('single line')
+  expect(await input.evaluate((element) => element.clientHeight)).toBeLessThan(grown.clientHeight)
+})

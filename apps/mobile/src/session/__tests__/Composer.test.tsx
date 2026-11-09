@@ -136,6 +136,19 @@ describe('Composer', () => {
     expect(screen.getByTestId('attachment-files')).toBeTruthy()
   })
 
+  it('auto-grows with the content and shrinks back', () => {
+    renderComposer()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+    Object.defineProperty(input, 'scrollHeight', { configurable: true, value: 400 })
+    fireEvent.change(input, { target: { value: 'one\ntwo\nthree\nfour\nfive\nsix' } })
+    expect(input.style.height).toBe('132px')
+
+    Object.defineProperty(input, 'scrollHeight', { configurable: true, value: 60 })
+    fireEvent.change(input, { target: { value: 'one' } })
+    expect(input.style.height).toBe('60px')
+  })
+
   it('restores and saves the per-session draft', () => {
     sessionStorage.setItem(draftKey('1:s1'), 'unfinished')
     renderComposer()

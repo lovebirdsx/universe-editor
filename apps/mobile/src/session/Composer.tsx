@@ -13,6 +13,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { errorCode } from '../errors.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { AttachmentSheet, type AttachmentPick } from './AttachmentSheet.js'
+import { useAutoGrowTextarea } from './useAutoGrowTextarea.js'
 
 const MAX_ROWS = 6
 const LINE_HEIGHT_PX = 22
@@ -74,7 +75,7 @@ export function Composer({
   const [stopping, setStopping] = useState(false)
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const textareaRef = useAutoGrowTextarea(value, { maxHeightPx: MAX_HEIGHT_PX })
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
   const photosInputRef = useRef<HTMLInputElement | null>(null)
   const filesInputRef = useRef<HTMLInputElement | null>(null)
@@ -95,14 +96,7 @@ export function Composer({
     if (prefill === undefined || prefill.sessionKey !== sessionKey) return
     setValue(prefill.text)
     textareaRef.current?.focus()
-  }, [prefill, sessionKey])
-
-  useEffect(() => {
-    const element = textareaRef.current
-    if (element === null) return
-    element.style.height = 'auto'
-    element.style.height = `${Math.min(element.scrollHeight, MAX_HEIGHT_PX)}px`
-  }, [value])
+  }, [prefill, sessionKey, textareaRef])
 
   const disabled = !online || readOnly
   const attaching = attachments.some((attachment) => attachment.status === 'uploading')

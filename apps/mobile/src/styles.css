@@ -1533,6 +1533,12 @@ input:focus-visible {
   overflow-y: auto;
 }
 
+/* Content overflow must scroll the footer instead of squashing the sheet:
+   .sheet has overflow:hidden, so a shrunk sheet silently clips its content. */
+.session-footer > * {
+  flex-shrink: 0;
+}
+
 .sheet-slot {
   display: flex;
   flex-direction: column;
@@ -1913,6 +1919,14 @@ input:focus-visible {
 .sheet__textarea {
   resize: vertical;
   line-height: 1.5;
+}
+
+/* Keep in sync with FEEDBACK_MAX_HEIGHT_PX (PermissionSheet.tsx). */
+.sheet__textarea--autogrow {
+  min-height: calc(2 * 1.5em + 20px);
+  max-height: calc(6 * 1.5em + 20px);
+  resize: none;
+  overflow-y: auto;
 }
 
 .sheet__input:focus-visible,

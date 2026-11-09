@@ -2788,7 +2788,7 @@
 
 .permissionSteer .questionFreeform {
   flex: 1 1 auto;
-  resize: vertical;
+  resize: none;
 }
 
 .permissionSteer .permissionAllow:disabled {
@@ -3141,6 +3141,11 @@
   border-radius: 3px;
   background: var(--vscode-agent-questionInputBackground, #1e1e1e);
   color: inherit;
+  /* Grow with the content between one and six lines; Electron 43 has field-sizing. */
+  field-sizing: content;
+  min-height: calc(1.4em + 8px);
+  max-height: calc(1.4em * 6 + 8px);
+  overflow-y: auto;
 }
 
 .questionFreeform:focus {

@@ -2,7 +2,11 @@ import type { MobilePendingPermission } from '@universe-editor/mobile-protocol'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { strings } from '../../strings.js'
-import { PermissionSheet, type PermissionCommandClient } from '../PermissionSheet.js'
+import {
+  FEEDBACK_MAX_HEIGHT_PX,
+  PermissionSheet,
+  type PermissionCommandClient,
+} from '../PermissionSheet.js'
 
 function createClient() {
   return {
@@ -112,6 +116,22 @@ describe('PermissionSheet', () => {
     await waitFor(() =>
       expect(client.resolvePermission).toHaveBeenCalledWith('req-1', 'reject', '先补测试'),
     )
+  })
+
+  it('grows the feedback box with the content and stops at six lines', () => {
+    render(
+      <PermissionSheet
+        client={createClient()}
+        permission={permission({ kind: 'switch_mode' })}
+        online
+        onNotice={vi.fn()}
+      />,
+    )
+
+    const input = screen.getByTestId('permission-feedback') as HTMLTextAreaElement
+    Object.defineProperty(input, 'scrollHeight', { configurable: true, value: 400 })
+    fireEvent.change(input, { target: { value: 'one\ntwo\nthree\nfour' } })
+    expect(input.style.height).toBe(`${FEEDBACK_MAX_HEIGHT_PX}px`)
   })
 
   it('does not render feedback for codex plan review (implement_plan contract)', () => {

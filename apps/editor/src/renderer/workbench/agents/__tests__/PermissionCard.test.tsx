@@ -212,6 +212,17 @@ describe('PermissionCard steering (ExitPlanMode)', () => {
     expect(resolve).toHaveBeenCalledWith('reject', 'rethink the schema')
   })
 
+  it('keeps a newline on Shift+Enter instead of submitting', () => {
+    const resolve = vi.fn()
+    renderCard(planPermission({ resolve }))
+
+    const input = screen.getByTestId('acp-permission-steer-input')
+    fireEvent.change(input, { target: { value: 'rethink the schema' } })
+
+    expect(fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })).toBe(true)
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
   it('does not submit empty / whitespace-only input', () => {
     const resolve = vi.fn()
     renderCard(planPermission({ resolve }))
