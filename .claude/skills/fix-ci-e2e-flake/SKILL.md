@@ -110,6 +110,8 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 菜单项按固定 ArrowDown 次数导航、产品新增菜单组后落点变成别的命令（确定性回归，非环境 flake）=把 group/order 排序当契约；改为按 `menuitem` 标签有界步进（真实按键、以 `aria-activedescendant` 变化确认每步），Enter 前断言目标高亮，另断言新菜单项可见 → 案例 110
 - 折叠门控 received 恒 0 到默认 10s、Windows CI initial+retry 同形态（门控判据本身正确）=异步 JSON worker 冷启动超出 expect 预算；两处门控 poll 加 20s + 所属用例 `test.slow()`，同 worker 的格式化 poll 一并加预算（107 的预算变体）→ 案例 111
 - shared fixture 用例断言全过、finally 删 `openWorkspace` 打开的临时目录报 EBUSY 且 retry 救不回=app + ACP agent 子进程（cwd=workspace）仍存活；迁冷启 fixture + `workspaceSeeder`，清理排在 closeApp 后 → 案例 112（77/77b 的 shared 变体）
+- 诊断断言查有界 ring（`stats.recent` 仅 32 条）、产品链路实际已同步观测到 write、慢 runner 上 initial+retry 同形态=false 的是「ring 被其它出站帧挤掉」而非「没发写」；改用累计 per-target 计数并保留原强度 → 案例 113
+- 重复审批在 `permission_cleared` 先/后到达时拿到 `stale_request` / `forbidden_operation` 两种码（initial+retry 同形态）=两层校验的缓存最终一致，不是测试放宽；网关按「缓存缺失=stale / 选项不允许=forbidden」区分 → 案例 114
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

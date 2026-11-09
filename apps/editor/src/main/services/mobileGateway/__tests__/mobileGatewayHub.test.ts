@@ -1211,13 +1211,12 @@ describe('MobileGatewayHub commands', () => {
     expect(result[0]?.title).toHaveLength(512)
   })
 
-  it('rejects a permission option the gateway cannot prove was offered', async () => {
+  it('answers a request the gateway never cached as stale_request', async () => {
     const hub = new MobileGatewayHub(NULL_LOGGER)
     const bridge = new FakeBridge()
     const connection = makeConnection()
     await subscribeWithPermission(hub, bridge, connection, [
       { optionId: 'allow-once', allowedOnMobile: true },
-      { optionId: 'allow-always', allowedOnMobile: false },
     ])
 
     await hub.handleCommand(connection, {
@@ -1226,7 +1225,46 @@ describe('MobileGatewayHub commands', () => {
       kind: 'resolvePermission',
       payload: { ref, requestId: 'missing', optionId: 'allow-once' },
     })
-    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'forbidden_operation' })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'stale_request' })
+    expect(bridge.resolvePermission).not.toHaveBeenCalled()
+  })
+
+  it('answers a repeated resolve after permission_cleared as stale_request', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    const connection = makeConnection()
+    await subscribeWithPermission(hub, bridge, connection, [
+      { optionId: 'allow-once', allowedOnMobile: true },
+    ])
+    // The bridge's throttled flush delivers permission_cleared later than the first
+    // resolve settles; once it reaches the gateway the cache entry is gone. A
+    // duplicate tap must still read as "already handled", never as a policy denial.
+    bridge.emit(
+      event({
+        events: [
+          { type: 'permission_cleared', requestId: 'req-1', reason: 'selected', source: 'mobile' },
+        ],
+      }),
+    )
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'repeat',
+      kind: 'resolvePermission',
+      payload: { ref, requestId: 'req-1', optionId: 'allow-once' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'stale_request' })
+    expect(bridge.resolvePermission).not.toHaveBeenCalled()
+  })
+
+  it('rejects a permission option the gateway cannot prove was offered', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    const connection = makeConnection()
+    await subscribeWithPermission(hub, bridge, connection, [
+      { optionId: 'allow-once', allowedOnMobile: true },
+      { optionId: 'allow-always', allowedOnMobile: false },
+    ])
 
     await hub.handleCommand(connection, {
       type: 'command',

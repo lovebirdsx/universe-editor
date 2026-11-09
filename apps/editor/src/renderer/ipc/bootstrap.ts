@@ -94,6 +94,12 @@ export interface IpcEncodeStats {
   readonly slowCount: number
   readonly largestBytes: number
   readonly largest: IpcEncodeObservation | null
+  /**
+   * Successful encodes by frame kind and target, keyed `${type}:${channel}:${name}`
+   * (e.g. `request:sessionChangesStore:write`). Cumulative since the last reset and
+   * never evicted, unlike `recent`.
+   */
+  readonly countByTarget: Readonly<Record<string, number>>
   readonly recent: readonly IpcEncodeObservation[]
 }
 
@@ -103,6 +109,10 @@ let encodeLargeCount = 0
 let encodeSlowCount = 0
 let encodeLargestBytes = 0
 let encodeLargest: IpcEncodeObservation | null = null
+// Per-target totals never evict, so a spec can prove a call crossed the wire even
+// after the bounded `recent` ring rolled over. Keys are code-defined IPC targets,
+// not payload data, so the key space stays bounded by the IPC surface.
+const encodeCountByTarget = new Map<string, number>()
 let encodeRecent: IpcEncodeObservation[] = []
 
 export function resetIpcEncodeStats(): void {
@@ -111,6 +121,7 @@ export function resetIpcEncodeStats(): void {
   encodeSlowCount = 0
   encodeLargestBytes = 0
   encodeLargest = null
+  encodeCountByTarget.clear()
   encodeRecent = []
 }
 
@@ -121,6 +132,7 @@ export function getIpcEncodeStats(): IpcEncodeStats {
     slowCount: encodeSlowCount,
     largestBytes: encodeLargestBytes,
     largest: encodeLargest,
+    countByTarget: Object.fromEntries(encodeCountByTarget),
     recent: encodeRecent,
   }
 }
@@ -135,6 +147,8 @@ export function getIpcEncodeStats(): IpcEncodeStats {
  */
 export function recordOutboundEncode(info: IpcEncodeObservation): void {
   encodeCount++
+  const target = `${info.type}:${info.channel}:${info.name}`
+  encodeCountByTarget.set(target, (encodeCountByTarget.get(target) ?? 0) + 1)
   if (info.bytes >= LARGE_FRAME_LOG_BYTES) encodeLargeCount++
   if (info.durationMs >= FRAME_SLOW_MS) encodeSlowCount++
   if (info.bytes > encodeLargestBytes) {

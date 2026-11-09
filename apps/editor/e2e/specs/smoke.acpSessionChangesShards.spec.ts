@@ -213,9 +213,11 @@ test.describe('@p1 acp session change shards', () => {
       const stats = await first.page.evaluate(() => window.__E2E__!.getIpcEncodeStats())
       expect(stats.largeCount).toBe(0)
       expect(stats.largestBytes).toBeLessThan(FOUR_MIB)
-      expect(
-        stats.recent.some((o) => o.channel === 'sessionChangesStore' && o.name === 'write'),
-      ).toBe(true)
+      // Cumulative per-target totals are never evicted, unlike the bounded `recent`
+      // ring: a slow main-process shard write cannot age the observation out before
+      // this snapshot is taken.
+      const writeCount = stats.countByTarget['request:sessionChangesStore:write'] ?? 0
+      expect(writeCount, `ipc encode stats: ${JSON.stringify(stats)}`).toBeGreaterThanOrEqual(1)
 
       // Only the edited session's shard changed; the other seven are byte-identical.
       const after = shardTexts(userDataDir)

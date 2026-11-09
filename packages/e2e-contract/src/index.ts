@@ -416,6 +416,13 @@ export interface E2EIpcEncodeStats {
   readonly slowCount: number
   readonly largestBytes: number
   readonly largest: E2EIpcFrameObservation | null
+  /**
+   * Successful encodes by frame kind and target, keyed `${type}:${channel}:${name}`
+   * (e.g. `request:sessionChangesStore:write`). Cumulative since the last reset and
+   * never evicted, unlike `recent`, so it can prove a call crossed the wire after
+   * the ring rolled over.
+   */
+  readonly countByTarget: Readonly<Record<string, number>>
   /** Most recent observations, newest last (bounded ring). */
   readonly recent: readonly E2EIpcFrameObservation[]
 }

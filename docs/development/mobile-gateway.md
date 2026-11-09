@@ -513,8 +513,11 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 1. **桥**（`MobileBridgeService`）：会话只读回 `session_read_only`；`requestId` 不匹配回
    `stale_request`；未知选项/值回 `bad_request`；高风险回 `forbidden_operation`。
 2. **网关**（`MobileGatewayHub`）：从 `permission_upsert` / 快照缓存每个 request 的
-   `allowedOnMobile`，`resolvePermission` 只路由能证明「本次确实提供过且允许」的选项，
-   缓存缺失或不符回 `forbidden_operation`；`setConfigOption` 用同一值谓词再校验一次。
+   `allowedOnMobile`，`resolvePermission` 只路由能证明「本次确实提供过且允许」的选项：
+   缓存中没有该 `requestId`（已结算/已清除，或从未下发）回 `stale_request`；缓存存在但
+   该选项未标记为允许回 `forbidden_operation`。缓存缺失不是策略拒绝——手机只可能从网关
+   自己发出的 `permission_upsert` / 快照得知 `requestId`，而网关先写缓存再发帧，所以缺失
+   只可能是请求已不在等待中（见 §4 错误码）。`setConfigOption` 用同一值谓词再校验一次。
    第二期可在 PC 上把设备升级为「受信设备」后放开。
 
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录

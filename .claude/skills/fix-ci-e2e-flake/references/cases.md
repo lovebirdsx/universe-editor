@@ -696,6 +696,24 @@ g) 埋点要能回答「**哪一侧迟了**」：渲染器真相（`getConfigura
 教训：a) 判据不是“有没有 mkdtemp”，而是“删的目录是否被 app/子进程实际持有”；持有者里有 cwd=workspace 的子进程时，test body 内删除无解。b) 需要 workspace 的冷启 spec 用 `workspaceSeeder` 而不是 `scratchDir`：前者负责 launch pin + post-close 清理，后者只解决清理。c) 同形残留（shared fixture + ACP + mkdtemp + 吞错清理）：`smoke.multiFilePromptDrag`、`smoke.promptDragHighlight`、`smoke.agentsPromptEnterLeak`；目前不失败，按 77b 的“出现同信号再迁”处理。
 锚：`apps/editor/e2e/specs/smoke.sendResourceToAgentChat.spec.ts`；`packages/e2e-harness/src/fixtures.ts`（`workspaceSeeder` / `launchWorkspace` / `teardownDir`）；`apps/editor/e2e/CLAUDE.md`（fixture 选型 + workspaceSeeder 段）；`apps/editor/e2e/specs/smoke.explorerOpenPreview.spec.ts`；`smoke.windowCloseFolderLock.spec.ts`；案例 77/77b。
 
+**案例 113 — 诊断断言查有界环：`stats.recent` 只有 32 条，慢 runner 上 write 观测被无关出站帧挤出**
+信号：`smoke.acpSessionChangesShards.spec.ts` 在 **Windows CI** initial + retry 同形态失败，失败点：
+```ts
+expect(stats.recent.some((o) => o.channel === 'sessionChangesStore' && o.name === 'write')).toBe(true)
+```
+`Expected: true / Received: false`；同 run ubuntu 通过；失败前 hydration、legacy 迁移、8 个 shard 文件断言全过；失败后的产品效果断言（只有 legacy-0 分片变化）没执行到。本机不复发，后续同 shard 另一轮本用例通过但别的无关用例挂。
+根因：`IpcEncodeStats.recent` 是容量 **32** 的环形缓冲（`renderer/ipc/bootstrap.ts`）。`sessionChangesFlush()` await 的 write 请求在 Promise executor 内**同步 encode 并观测**，早于 flush resolve，所以「产品没写」不是唯一解释；Windows runner 落 800KB shard 的窗口里，renderer 的其它出站帧（请求+响应都计数）可能把 write 观测挤出 32 条环。此时 `largeCount===0`、`largestBytes===0<4MiB` 仍会**空真通过**，只有 `recent` 断言失败——形态上无法区分「没发 write」与「发了但被淘汰」。
+修：给 `IpcEncodeStats` 加**累计 per-target 计数** `countByTarget`，key 为 `${type}:${channel}:${name}`（如 `request:sessionChangesStore:write`），reset 清零、永不淘汰；`packages/e2e-contract` 的 `E2EIpcEncodeStats` 同步（probe 直接透传，不改）。spec 改断言 `countByTarget['request:sessionChangesStore:write'] ?? 0 >= 1`，失败消息带 `JSON.stringify(stats)`；`largeCount`/`largestBytes` 与产品效果断言原样保留。bootstrap 单测直接复现淘汰：1 条 write + 39 条无关小帧 → `recent` 已不含 write，但计数仍为 1。
+教训：a) **诊断断言不要依赖有界 ring**——「这条调用是否跨过 wire」应查累计计数；ring 只适合看「最近帧的形状」。b) `largeCount/largestBytes` 在零观测时会空真通过，不能单独作为「已观测」的证明。c) 失败输出必须能区分「没发」与「被淘汰」：断言消息里 dump 全量 stats，`count===0` 才回产品链路查 `flush` 的 `_loaded`/bucket。d) 同形态扫描：全仓 `stats.recent` 断言仅此一处。
+锚：`apps/editor/e2e/specs/smoke.acpSessionChangesShards.spec.ts`；`apps/editor/src/renderer/ipc/bootstrap.ts`（`ENCODE_RECENT_MAX` / `recordOutboundEncode` / `countByTarget`）；`apps/editor/src/renderer/ipc/__tests__/bootstrap.test.ts`；`packages/e2e-contract/src/index.ts`（`E2EIpcEncodeStats`）；`apps/editor/src/renderer/e2e/probe.ts`（`getIpcEncodeStats`）。
+
+**案例 114 — 重复审批的错误码取决于异步 `permission_cleared` 到达先后：两层校验的缓存最终一致（产品语义，不是测试放宽）**
+信号：`mobile.gateway.spec.ts:770` 在 **ubuntu CI** initial + retry 同形态失败：同一 `ref`/`requestId`/`optionId:'allow-once'` 第一次 resolve 返回 `ok:true`，紧接着重复提交期望 `{ ok:false, error:'stale_request' }`，实际 `forbidden_operation`。首次 resolve 后只等了 PC 卡片隐藏与 agent 回复，没有等 `permission_cleared`。
+根因：renderer 桥在结算瞬间清空 `pendingPermission`，但 `permission_cleared` 由 **50ms 节流 flush** 后才到 main 并删除 `_permissionOptions` 缓存；main 网关与 renderer 桥是最终一致的。旧代码在网关把「缓存缺失」和「选项不被证明允许」合并成 `allowed?.get(optionId) !== true → forbidden_operation`：重复点击先到 → 缓存命中 → 路由到桥 → 桥发现 pending 已空 → `stale_request`；`permission_cleared` 先到 → 缓存缺失 → 网关直接 `forbidden_operation`。手机客户端把 `stale_request` 当成功收敛，`forbidden_operation` 会弹「该操作不允许在手机上执行」——用户重复点审批随机看到错误提示。对照 `cancelPermission` 在网关无缓存校验，重复 cancel 恒 stale。
+修：网关区分原因——`allowed === undefined` → `stale_request`；`allowed.get(optionId) !== true` → `forbidden_operation`。依据：网关先写缓存再发 `permission_upsert`/快照，手机只可能从网关自己发出的帧得知 `requestId`，缺失只可能是请求已不在等待中；缺失时不路由，安全边界不变。单测拆成「未缓存 → stale」「高风险选项 → forbidden」「允许选项 → 路由」并新增「`permission_cleared` 后重复 resolve → stale 且未调桥」回归；文档同步「双重校验」措辞，不 bump 协议版本。**不改 e2e 去先等 `permission_cleared`**——那会固化错误语义并掩盖手机端 UX bug。
+教训：a) 两层校验 + 异步复制状态时，同一用户动作会因到达顺序命中不同层；错误码若在客户端有不同 UX 含义，必须按**原因**映射，不能按「任一校验失败」。b) 用兄弟命令（cancel）的语义做对照，是发现不一致最快的方法。c) `expect.poll` 默认 100ms 重试间隔 > 桥 50ms 节流窗口，慢/快 runner 会稳定落在不同侧，表现为「只在一个平台挂、retry 同形态」。d) 修产品后测试无需放宽：两种到达顺序都收敛到同一错误码。
+锚：`apps/editor/src/main/services/mobileGateway/mobileGatewayHub.ts`（`resolvePermission` / `_permissionOptions` / `_cachePermission` / `_clearPermission`）；`apps/editor/src/main/services/mobileGateway/__tests__/mobileGatewayHub.test.ts`；`apps/editor/src/renderer/services/mobileGateway/MobileBridgeService.ts`（50ms flush / `resolvePermission` 的 `stale_request`）；`apps/editor/e2e/specs/mobile.gateway.spec.ts`；`docs/development/mobile-gateway.md`（§4 错误码 / §8 双重校验）。
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。

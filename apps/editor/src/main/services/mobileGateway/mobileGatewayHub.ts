@@ -623,10 +623,14 @@ export class MobileGatewayHub {
         const allowed = this._permissionOptions.get(
           permissionKey(resolved.windowId, resolved.localId, p.requestId),
         )
+        // A missing entry means the request is no longer pending here: it was settled
+        // and cleared, or was never announced to a phone. That is a stale click, not a
+        // policy denial; the bridge would answer `stale_request` for it too, and the
+        // phone treats that as "already handled" instead of showing an error.
+        if (allowed === undefined) return failOutcome('stale_request')
         // Second line of defence: the bridge also rejects high-risk options, but
         // the gateway must not route an option it cannot prove was offered.
-        const allowedForOption = allowed?.get(p.optionId)
-        if (allowedForOption !== true) return failOutcome('forbidden_operation')
+        if (allowed.get(p.optionId) !== true) return failOutcome('forbidden_operation')
         return this._withBridge(resolved, 10_000, (bridge) =>
           bridge.resolvePermission(resolved.localId, p.requestId, p.optionId, p.feedback),
         )

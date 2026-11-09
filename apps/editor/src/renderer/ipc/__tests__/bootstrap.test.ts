@@ -23,10 +23,12 @@ import {
   admitLargeFrameLog,
   bindIpcFrameLog,
   createRendererIpcService,
+  getIpcEncodeStats,
   LARGE_FRAME_LOG_BYTES,
   recordInboundDecode,
   recordOutboundEncode,
   resetIpcDecodeDiagnosticsForTests,
+  resetIpcEncodeStats,
 } from '../bootstrap.js'
 
 const MIB = 1024 * 1024
@@ -72,6 +74,7 @@ beforeEach(() => {
   error = vi.fn()
   bindIpcFrameLog({ warn, error })
   resetIpcDecodeDiagnosticsForTests()
+  resetIpcEncodeStats()
   _resetPerfPhasesForTests()
 })
 
@@ -233,5 +236,44 @@ describe('large outbound frame log', () => {
       recordOutboundEncode(encodeObservation({ id, bytes: LARGE_FRAME_LOG_BYTES }))
     }
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('outbound encode counters', () => {
+  it('counts successful encodes per frame target and survives ring eviction', () => {
+    recordOutboundEncode(
+      encodeObservation({
+        channel: 'sessionChangesStore',
+        name: 'write',
+        bytes: 1024,
+      }),
+    )
+    for (let id = 2; id <= 40; id++) {
+      recordOutboundEncode(encodeObservation({ id, bytes: 16 }))
+    }
+
+    const stats = getIpcEncodeStats()
+    // 39 unrelated frames rolled the 32-entry ring past the write...
+    expect(
+      stats.recent.some((o) => o.channel === 'sessionChangesStore' && o.name === 'write'),
+    ).toBe(false)
+    // ...but the cumulative per-target counter cannot be evicted.
+    expect(stats.countByTarget['request:sessionChangesStore:write']).toBe(1)
+    expect(stats.count).toBe(40)
+  })
+
+  it('keys request and response frames separately', () => {
+    recordOutboundEncode(encodeObservation({ type: 'request', bytes: 16 }))
+    recordOutboundEncode(encodeObservation({ type: 'response', bytes: 16 }))
+    expect(getIpcEncodeStats().countByTarget).toEqual({
+      'request:fileSearch:findFiles': 1,
+      'response:fileSearch:findFiles': 1,
+    })
+  })
+
+  it('clears the per-target counters on reset', () => {
+    recordOutboundEncode(encodeObservation({ bytes: 16 }))
+    resetIpcEncodeStats()
+    expect(getIpcEncodeStats()).toMatchObject({ count: 0, countByTarget: {} })
   })
 })
