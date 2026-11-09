@@ -21,11 +21,18 @@ import {
   type IReader,
 } from '@universe-editor/platform'
 import {
+  clampText,
   isConfigValueAllowedOnMobile,
   isHighRiskPermissionOption,
+  MAX_SIDE_TASK_QUOTE_LENGTH,
+  MAX_TEXT_LENGTH,
+  MAX_TITLE_LENGTH,
   type MobileAgentCandidate,
   type MobileElicitationAction,
   type MobileElicitationContentValue,
+  type MobileRewindPreview,
+  type MobileRewindResult,
+  type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
   type MobileToolCallDetail,
 } from '@universe-editor/mobile-protocol'
@@ -43,14 +50,22 @@ import type {
   MobileBridgeSessionSummary,
   IMobileBridgeService,
 } from '../../../shared/ipc/mobileGatewayService.js'
-import { IAcpSessionService } from '../acp/session/acpSessionService.js'
-import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
-import { isResidentLive } from '../acp/session/acpSessionStatus.js'
+import {
+  AcpForeignWorktreeError,
+  IAcpSessionService,
+} from '../acp/session/acpSessionService.js'
+import {
+  collectSideTaskDescendants,
+  directSideTaskChildren,
+  IAcpSessionHistoryService,
+} from '../acp/session/acpSessionHistory.js'
+import { isResidentLive, isSessionWorking } from '../acp/session/acpSessionStatus.js'
 import {
   createAgentAttentionSignal,
   type AgentAttentionSignal,
 } from '../acp/session/agentAttentionSignal.js'
 import type {
+  AcpMessage,
   AcpPendingPermission,
   AcpPendingElicitation,
   IAcpSession,
@@ -60,6 +75,7 @@ import type { PromptImage } from '../acp/promptImage.js'
 import type { PromptFileAttachment } from '../acp/promptAttachment.js'
 import { selectOptionHasValue } from '../acp/configOptionLabel.js'
 import { deleteSessionPlan, planSessionRemoval } from '../acp/session/sessionRemoval.js'
+import { deleteSideTasks } from '../acp/session/sideTaskRemoval.js'
 import type {
   MobilePermissionSettleReason,
   MobilePermissionSettleSource,
@@ -73,6 +89,7 @@ import {
   summaryChanged,
   toBridgeSnapshot,
   type PermissionClearMetadata,
+  type SessionProjectionOptions,
 } from './mobileBridgeProjection.js'
 
 /** Coalescing window for ordinary session updates. */
@@ -135,6 +152,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   }
 
   async listSessions(): Promise<readonly MobileBridgeSessionSummary[]> {
+    await this._ensureHistory()
     const summaries: MobileBridgeSessionSummary[] = []
     for (const session of this._sessions.sessions.get()) {
       if (!isResidentLive(session)) continue
@@ -144,6 +162,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   }
 
   async getSnapshot(localId: string): Promise<MobileBridgeSessionSnapshot | undefined> {
+    await this._ensureHistory()
     const session = this._sessions.getById(localId)
     if (session === undefined || !isResidentLive(session)) return undefined
     // Emit any coalesced delta first so the caller cannot receive an event that
@@ -156,6 +175,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   async startStreaming(): Promise<void> {
     if (this._disposed || this._streaming) return
     this._streaming = true
+    void this._ensureHistory()
     this._logger.debug('mobile bridge streaming started')
     this._rootWatcher = this._register(
       autorun((r) => {
@@ -440,6 +460,179 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return ok(undefined)
   }
 
+  async forkSession(
+    localId: string,
+    messageId?: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> {
+    await this._ensureHistory()
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (!session.forkSupported.get()) {
+      return fail('unsupported_by_agent', 'agent does not support forking')
+    }
+    if (isSessionWorking(session)) return fail('session_busy', 'session is running')
+    if (messageId !== undefined) {
+      const messages = session.messages.get()
+      const anchor = findUserAnchor(messages, messageId)
+      if (anchor === undefined) return fail('invalid_anchor', 'message is not a user-turn anchor')
+      if (anchor.id === firstUserMessage(messages)?.id) {
+        return fail('invalid_anchor', 'cannot fork before the first user turn')
+      }
+    }
+    try {
+      const forked = await this._sessions.forkSession(session.id, messageId, { activate: false })
+      return ok(toNewSessionResult(forked))
+    } catch (err) {
+      return this._commandFailure(err, 'forkSession')
+    }
+  }
+
+  async previewRewind(
+    localId: string,
+    messageId: string,
+  ): Promise<MobileBridgeResult<MobileRewindPreview>> {
+    await this._ensureHistory()
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (!session.rewindSupported.get()) {
+      return fail('unsupported_by_agent', 'agent does not support rewinding')
+    }
+    if (findUserAnchor(session.messages.get(), messageId) === undefined) {
+      return fail('invalid_anchor', 'message is not a user-turn anchor')
+    }
+    try {
+      const result = await this._sessions.rewindSession(session.id, messageId, { dryRun: true })
+      if (result === undefined) return fail('internal', 'rewind preview is unavailable')
+      return ok({
+        canRewind: result.canRewind,
+        ...(result.error !== undefined
+          ? { error: clampText(result.error, MAX_TEXT_LENGTH) }
+          : {}),
+        filesChanged: result.filesChanged?.length ?? 0,
+        ...(result.insertions !== undefined ? { insertions: result.insertions } : {}),
+        ...(result.deletions !== undefined ? { deletions: result.deletions } : {}),
+      })
+    } catch (err) {
+      return this._commandFailure(err, 'previewRewind')
+    }
+  }
+
+  async rewindSession(
+    localId: string,
+    messageId: string,
+    rewindFiles?: boolean,
+  ): Promise<MobileBridgeResult<MobileRewindResult>> {
+    await this._ensureHistory()
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (!session.rewindSupported.get()) {
+      return fail('unsupported_by_agent', 'agent does not support rewinding')
+    }
+    const anchor = findUserAnchor(session.messages.get(), messageId)
+    if (anchor === undefined) return fail('invalid_anchor', 'message is not a user-turn anchor')
+    try {
+      const result = await this._sessions.rewindSession(
+        session.id,
+        messageId,
+        rewindFiles === false ? { rewindFiles: false } : {},
+      )
+      if (result === undefined) return fail('internal', 'rewind is unavailable')
+      return ok({
+        canRewind: result.canRewind,
+        ...(result.error !== undefined
+          ? { error: clampText(result.error, MAX_TEXT_LENGTH) }
+          : {}),
+        // Returned only for the phone-side composer backfill; it is never
+        // written to the PC inbox (the desktop keeps its own draft).
+        ...(result.canRewind ? { text: clampText(anchor.text, MAX_TEXT_LENGTH) } : {}),
+      })
+    } catch (err) {
+      return this._commandFailure(err, 'rewindSession')
+    }
+  }
+
+  async createSideTask(
+    localId: string,
+    quote?: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> {
+    await this._ensureHistory()
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (!session.forkSupported.get()) {
+      return fail('unsupported_by_agent', 'agent does not support side tasks')
+    }
+    try {
+      const side = await this._sessions.forkSideTask(session.id, prepareSideTaskQuote(quote))
+      return ok(toNewSessionResult(side))
+    } catch (err) {
+      return this._commandFailure(err, 'createSideTask')
+    }
+  }
+
+  async listSideTasks(
+    localId: string,
+  ): Promise<MobileBridgeResult<readonly MobileSideTaskSummary[]>> {
+    await this._ensureHistory()
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const parentId = session.sessionIdOnAgent.get()
+    if (parentId === undefined) return ok([])
+    const summaries = directSideTaskChildren(this._history.list(), parentId).map((row) => ({
+      id: row.id,
+      title: clampText(row.title, MAX_TITLE_LENGTH),
+      lastUsedAt: row.lastUsedAt,
+      live: isResidentLiveSession(this._sessions.getById(row.id)),
+    }))
+    return ok(summaries)
+  }
+
+  async openSideTask(
+    localId: string,
+    sideTaskId: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> {
+    await this._ensureHistory()
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const parentId = session.sessionIdOnAgent.get()
+    if (parentId === undefined) return fail('invalid_anchor', 'session has no durable id')
+    const entry = this._history.get(sideTaskId)
+    if (entry === undefined || entry.sideTaskOf !== parentId) {
+      return fail('invalid_anchor', 'side task does not belong to this session')
+    }
+    try {
+      // Never activates: opening from the phone must not steal the PC focus.
+      const side = await this._sessions.resumeSession(sideTaskId, { activate: false })
+      return ok(toNewSessionResult(side))
+    } catch (err) {
+      return this._commandFailure(err, 'openSideTask')
+    }
+  }
+
+  async deleteSideTask(localId: string, sideTaskId: string): Promise<MobileBridgeResult<void>> {
+    await this._ensureHistory()
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const parentId = session.sessionIdOnAgent.get()
+    if (parentId === undefined) return fail('invalid_anchor', 'session has no durable id')
+    const entry = this._history.get(sideTaskId)
+    if (entry === undefined || entry.sideTaskOf !== parentId) {
+      return fail('invalid_anchor', 'side task does not belong to this session')
+    }
+    const ids = collectSideTaskDescendants(this._history.list(), sideTaskId)
+    try {
+      await deleteSideTasks(ids, this._sessions, this._history, this._editorGroups)
+      return ok(undefined)
+    } catch (err) {
+      return this._commandFailure(err, 'deleteSideTask')
+    }
+  }
+
   async listWorkspaces(): Promise<readonly MobileWorkspaceCandidate[]> {
     const current = this._workspace.current
     if (current === null) return []
@@ -720,13 +913,41 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return toBridgeSnapshot(session, this._projectionOptions(session)).summary
   }
 
-  private _projectionOptions(
-    session: IAcpSession,
-    r?: IReader,
-  ): { title: string; agentName?: string } {
+  private async _ensureHistory(): Promise<void> {
+    try {
+      await this._history.initialize()
+    } catch (err) {
+      this._logger.warn(`mobile bridge history initialization failed: ${String(err)}`)
+    }
+  }
+
+  private _commandFailure(err: unknown, action: string): MobileBridgeCommandError {
+    const message = err instanceof Error ? err.message : String(err)
+    this._logger.warn(`mobile ${action} failed: ${message}`)
+    if (err instanceof AcpForeignWorktreeError) {
+      return fail('forbidden_operation', 'open the session in its own worktree first')
+    }
+    return fail('internal', `${action} failed`)
+  }
+
+  private _projectionOptions(session: IAcpSession, r?: IReader): SessionProjectionOptions {
     const title = this._titleFor(session, r)
     const agentName = this._agentNameFor(session.agentId)
-    return { title, ...(agentName !== undefined ? { agentName } : {}) }
+    const durableId = r ? session.sessionIdOnAgent.read(r) : session.sessionIdOnAgent.get()
+    const entries = r ? this._history.entries.read(r) : this._history.entries.get()
+    const entry = durableId !== undefined ? entries.find((row) => row.id === durableId) : undefined
+    let childCount = 0
+    if (durableId !== undefined) {
+      for (const row of entries) {
+        if (row.sideTaskOf === durableId) childCount++
+      }
+    }
+    return {
+      title,
+      ...(agentName !== undefined ? { agentName } : {}),
+      ...(entry?.sideTaskOf !== undefined ? { sideTaskOf: entry.sideTaskOf } : {}),
+      ...(childCount > 0 ? { sideTaskChildCount: childCount } : {}),
+    }
   }
 
   private _titleFor(session: IAcpSession, r?: IReader): string {
@@ -758,4 +979,41 @@ function ok<T>(value: T): MobileBridgeResult<T> {
 
 function fail(code: MobileBridgeCommandError['code'], message: string): MobileBridgeCommandError {
   return { ok: false, code, message }
+}
+
+/** Mirrors agentRewindPickItems.ts: user turns only, auto-retry turns excluded. */
+function findUserAnchor(
+  messages: readonly AcpMessage[],
+  messageId: string,
+): AcpMessage | undefined {
+  return messages.find(
+    (message) =>
+      message.role === 'user' && message.autoRetry !== true && message.messageId === messageId,
+  )
+}
+
+function firstUserMessage(messages: readonly AcpMessage[]): AcpMessage | undefined {
+  return messages.find((message) => message.role === 'user')
+}
+
+function toNewSessionResult(session: IAcpSession): MobileBridgeNewSessionResult {
+  const durableId = session.sessionIdOnAgent.get()
+  return { localId: session.id, ...(durableId !== undefined ? { durableId } : {}) }
+}
+
+/** Same trim / 8000-char clip / 60-char label as the desktop side-task command. */
+function prepareSideTaskQuote(
+  quote: string | undefined,
+): { text: string; label: string } | undefined {
+  const trimmed = quote?.trim() ?? ''
+  if (trimmed.length === 0) return undefined
+  const clipped =
+    trimmed.length > MAX_SIDE_TASK_QUOTE_LENGTH
+      ? `${trimmed.slice(0, MAX_SIDE_TASK_QUOTE_LENGTH)}…`
+      : trimmed
+  return { text: clipped, label: clipped.replace(/\s+/g, ' ').slice(0, 60) }
+}
+
+function isResidentLiveSession(session: IAcpSession | undefined): boolean {
+  return session !== undefined && isResidentLive(session)
 }

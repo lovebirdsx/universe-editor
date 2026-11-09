@@ -2,12 +2,15 @@ import { Emitter, type ILogger } from '@universe-editor/platform'
 import type {
   MobileAgentCandidate,
   MobileSessionRef,
+  MobileSideTaskSummary,
   ServerFrame,
 } from '@universe-editor/mobile-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   IMobileBridgeService,
   MobileBridgeEvent,
+  MobileBridgeNewSessionResult,
+  MobileBridgeResult,
   MobileBridgeSessionEvent,
   MobileBridgeSessionSnapshot,
   MobileBridgeSessionSummary,
@@ -56,6 +59,39 @@ class FakeBridge implements IMobileBridgeService {
   }))
   readonly renameSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly deleteSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly forkSession = vi.fn(
+    async (): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> => ({
+      ok: true,
+      value: { localId: 'fork-local', durableId: 'fork-durable' },
+    }),
+  )
+  readonly previewRewind = vi.fn(async () => ({
+    ok: true as const,
+    value: { canRewind: true, filesChanged: 0 },
+  }))
+  readonly rewindSession = vi.fn(async () => ({
+    ok: true as const,
+    value: { canRewind: true },
+  }))
+  readonly createSideTask = vi.fn(
+    async (): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> => ({
+      ok: true,
+      value: { localId: 'side-local', durableId: 'side-durable' },
+    }),
+  )
+  readonly listSideTasks = vi.fn(
+    async (): Promise<{ ok: true; value: readonly MobileSideTaskSummary[] }> => ({
+      ok: true,
+      value: [],
+    }),
+  )
+  readonly openSideTask = vi.fn(
+    async (): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> => ({
+      ok: true,
+      value: { localId: 'side-local', durableId: 'side-durable' },
+    }),
+  )
+  readonly deleteSideTask = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly listWorkspaces = vi.fn(async () => [])
   readonly listAgents = vi.fn(async (): Promise<readonly MobileAgentCandidate[]> => [])
 
@@ -181,6 +217,35 @@ describe('MobileGatewayHub', () => {
         workspaceName: 'workspace-b',
       }),
     ])
+  })
+
+  it('forwards fork/rewind capabilities and clamped side-task fields', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [
+      summary('s1', {
+        durableId: 'd1',
+        forkSupported: true,
+        rewindSupported: true,
+        sideTaskOf: 'parent-durable',
+        sideTaskChildCount: 2,
+      }),
+      summary('s2', { sideTaskChildCount: -1 }),
+    ]
+    hub.registerWindow(1, bridge, () => 'workspace-a')
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+
+    const sessions = framesOf(connection, 'inbox_snapshot')[0]?.sessions ?? []
+    expect(sessions[0]).toMatchObject({
+      forkSupported: true,
+      rewindSupported: true,
+      sideTaskOf: 'parent-durable',
+      sideTaskChildCount: 2,
+    })
+    expect(sessions[1]).not.toHaveProperty('sideTaskChildCount')
   })
 
   it('broadcasts inbox deltas and removes sessions when a window closes', async () => {
@@ -596,6 +661,151 @@ describe('MobileGatewayHub commands', () => {
     expect(bridge.resolveElicitation).toHaveBeenCalledWith('s1', 'e1', 'accept', { name: 'Ada' })
   })
 
+  it('routes fork, rewind and side-task commands and stamps created refs', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    const localRef: MobileSessionRef = { windowId: 7, localId: 's1' }
+    hub.registerWindow(7, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'fork',
+      kind: 'forkSession',
+      payload: { ref: localRef, messageId: 'msg-1' },
+    })
+    expect(bridge.forkSession).toHaveBeenCalledWith('s1', 'msg-1')
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'fork',
+      ok: true,
+      result: { ref: { windowId: 7, localId: 'fork-local', durableId: 'fork-durable' } },
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'preview',
+      kind: 'previewRewind',
+      payload: { ref: localRef, messageId: 'msg-1' },
+    })
+    expect(bridge.previewRewind).toHaveBeenCalledWith('s1', 'msg-1')
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'preview',
+      ok: true,
+      result: { canRewind: true, filesChanged: 0 },
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'rewind',
+      kind: 'rewindSession',
+      payload: { ref: localRef, messageId: 'msg-1', rewindFiles: false },
+    })
+    expect(bridge.rewindSession).toHaveBeenCalledWith('s1', 'msg-1', false)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'side',
+      kind: 'createSideTask',
+      payload: { ref: localRef, quote: 'why?' },
+    })
+    expect(bridge.createSideTask).toHaveBeenCalledWith('s1', 'why?')
+    expect(connection.frames.at(-1)).toMatchObject({
+      ok: true,
+      result: { ref: { windowId: 7, localId: 'side-local', durableId: 'side-durable' } },
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'list',
+      kind: 'listSideTasks',
+      payload: { ref: localRef },
+    })
+    expect(bridge.listSideTasks).toHaveBeenCalledWith('s1')
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'list',
+      ok: true,
+      result: [],
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open',
+      kind: 'openSideTask',
+      payload: { ref: localRef, sideTaskId: 'side-durable' },
+    })
+    expect(bridge.openSideTask).toHaveBeenCalledWith('s1', 'side-durable')
+    expect(connection.frames.at(-1)).toMatchObject({
+      ok: true,
+      result: { ref: { windowId: 7, localId: 'side-local', durableId: 'side-durable' } },
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'delete',
+      kind: 'deleteSideTask',
+      payload: { ref: localRef, sideTaskId: 'side-durable' },
+    })
+    expect(bridge.deleteSideTask).toHaveBeenCalledWith('s1', 'side-durable')
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'delete',
+      ok: true,
+    })
+  })
+
+  it('rejects a malformed created session ref from the renderer', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.createSideTask.mockResolvedValueOnce({ ok: true, value: { localId: '' } })
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'bad',
+      kind: 'createSideTask',
+      payload: { ref: { windowId: 1, localId: 's1' } },
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'bad',
+      ok: false,
+      error: 'internal',
+    })
+  })
+
+  it('clamps malformed side-task rows from the renderer', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.listSideTasks.mockResolvedValueOnce({
+      ok: true,
+      value: [
+        { id: 'side-1', title: 'x'.repeat(600), lastUsedAt: Number.NaN, live: 'yes' },
+        { id: '', title: 'dropped', lastUsedAt: 1, live: true },
+        'junk',
+      ],
+    } as unknown as { ok: true; value: readonly MobileSideTaskSummary[] })
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'list',
+      kind: 'listSideTasks',
+      payload: { ref: { windowId: 1, localId: 's1' } },
+    })
+    const result = framesOf(connection, 'command_result').at(-1)?.result as MobileSideTaskSummary[]
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ id: 'side-1', lastUsedAt: 0, live: false })
+    expect(result[0]?.title).toHaveLength(512)
+  })
+
   it('rejects a permission option the gateway cannot prove was offered', async () => {
     const hub = new MobileGatewayHub(NULL_LOGGER)
     const bridge = new FakeBridge()
@@ -912,6 +1122,82 @@ describe('MobileGatewayHub commands', () => {
       audit,
     )
     expect(audit.record).toHaveBeenCalledTimes(2)
+  })
+
+  it('never audits anchor ids, side-task ids or quotes', async () => {
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'f1',
+        kind: 'forkSession',
+        payload: { ref, messageId: 'secret-anchor' },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenLastCalledWith('forkSession', 'success', 'window=1 local=s1')
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 's1',
+        kind: 'createSideTask',
+        payload: { ref, quote: 'secret quote' },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenLastCalledWith('createSideTask', 'success', 'window=1 local=s1')
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'd1',
+        kind: 'deleteSideTask',
+        payload: { ref, sideTaskId: 'secret-side' },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenLastCalledWith('deleteSideTask', 'success', 'window=1 local=s1')
+
+    const audited = JSON.stringify(vi.mocked(audit.record).mock.calls)
+    expect(audited).not.toContain('secret-anchor')
+    expect(audited).not.toContain('secret quote')
+    expect(audited).not.toContain('secret-side')
+  })
+
+  it('does not audit read-only rewind previews or side-task listings', async () => {
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'p1',
+        kind: 'previewRewind',
+        payload: { ref, messageId: 'msg-1' },
+      },
+      audit,
+    )
+    await hub.handleCommand(
+      connection,
+      { type: 'command', requestId: 'l1', kind: 'listSideTasks', payload: { ref } },
+      audit,
+    )
+    expect(audit.record).not.toHaveBeenCalled()
   })
 
   it('deduplicates repeated idempotency keys and shares in-flight commands', async () => {

@@ -52,6 +52,7 @@ const NULL_LOGGER: ILogger = {
 interface FakeSessionHarness {
   session: IAcpSession
   timeline: ISettableObservable<readonly TimelineItem[]>
+  messages: ISettableObservable<readonly AcpMessage[]>
   toolCalls: ISettableObservable<readonly AcpToolCall[]>
   plan: ISettableObservable<readonly AcpPlanEntry[]>
   configOptions: ISettableObservable<readonly SessionConfigOption[]>
@@ -65,6 +66,8 @@ interface FakeSessionHarness {
   isReplayingHistory: ISettableObservable<boolean>
   sessionIdOnAgent: ISettableObservable<string | undefined>
   imageSupported: ISettableObservable<boolean>
+  forkSupported: ISettableObservable<boolean>
+  rewindSupported: ISettableObservable<boolean>
 }
 
 function makeSession(
@@ -74,9 +77,12 @@ function makeSession(
     title?: string
     readOnly?: boolean
     authority?: string
+    forkSupported?: boolean
+    rewindSupported?: boolean
   } = {},
 ): FakeSessionHarness {
   const timeline = observableValue<readonly TimelineItem[]>('test.timeline', [])
+  const messages = observableValue<readonly AcpMessage[]>('test.messages', [])
   const toolCalls = observableValue<readonly AcpToolCall[]>('test.toolCalls', [])
   const plan = observableValue<readonly AcpPlanEntry[]>('test.plan', [])
   const configOptions = observableValue<readonly SessionConfigOption[]>('test.config', [])
@@ -98,6 +104,8 @@ function makeSession(
   const isReplayingHistory = observableValue<boolean>('test.replay', false)
   const sessionIdOnAgent = observableValue<string | undefined>('test.durable', options.durableId)
   const imageSupported = observableValue<boolean>('test.imageSupported', true)
+  const forkSupported = observableValue<boolean>('test.fork', options.forkSupported ?? false)
+  const rewindSupported = observableValue<boolean>('test.rewind', options.rewindSupported ?? false)
   const settleEmitter = new Emitter<AcpPermissionSettledEvent>()
   const session = {
     id,
@@ -107,6 +115,7 @@ function makeSession(
     authority: options.authority,
     readOnly: options.readOnly ?? false,
     timeline,
+    messages,
     toolCalls,
     plan,
     configOptions,
@@ -120,6 +129,8 @@ function makeSession(
     isReplayingHistory,
     sessionIdOnAgent,
     imageSupported,
+    forkSupported,
+    rewindSupported,
     onDidSettlePermission: settleEmitter.event,
     onDidSettleElicitation: Event.None,
     sendPrompt: vi.fn(async () => {}),
@@ -130,6 +141,7 @@ function makeSession(
   return {
     session,
     timeline,
+    messages,
     toolCalls,
     plan,
     configOptions,
@@ -143,11 +155,30 @@ function makeSession(
     isReplayingHistory,
     sessionIdOnAgent,
     imageSupported,
+    forkSupported,
+    rewindSupported,
   }
 }
 
 function message(id: string, text: string, streaming = false): AcpMessage {
   return { id, role: 'agent', text, blocks: [{ type: 'text', text }], streaming }
+}
+
+function userMessage(
+  id: string,
+  messageId: string,
+  text: string,
+  options: { autoRetry?: boolean } = {},
+): AcpMessage {
+  return {
+    id,
+    role: 'user',
+    text,
+    blocks: [{ type: 'text', text }],
+    streaming: false,
+    messageId,
+    ...(options.autoRetry === true ? { autoRetry: true as const } : {}),
+  }
 }
 
 function messageItem(id: string, text: string, streaming = false): TimelineItem {
@@ -174,6 +205,11 @@ function makeHarness(): {
   events: MobileBridgeEvent[]
   created: ReturnType<typeof vi.fn>
   sessionService: IAcpSessionService
+  historyService: IAcpSessionHistoryService
+  forkSession: ReturnType<typeof vi.fn>
+  rewindSession: ReturnType<typeof vi.fn>
+  forkSideTask: ReturnType<typeof vi.fn>
+  resumeSession: ReturnType<typeof vi.fn>
   workspace: { current: { folder: URI; name: string } | null }
   add(session: FakeSessionHarness): void
   remove(id: string): void
@@ -182,17 +218,26 @@ function makeHarness(): {
   const history = observableValue<readonly AcpSessionHistoryEntry[]>('test.history', [])
   const live = new Map<string, IAcpSession>()
   const created = vi.fn()
+  const forkSession = vi.fn()
+  const rewindSession = vi.fn()
+  const forkSideTask = vi.fn()
+  const resumeSession = vi.fn()
   const sessionService = {
     sessions,
     getById: (id: string) => live.get(id),
     createSession: vi.fn(async () => created()),
     closeSession: vi.fn(async () => {}),
     deleteOnAgent: vi.fn(async () => {}),
+    forkSession,
+    rewindSession,
+    forkSideTask,
+    resumeSession,
   } as unknown as IAcpSessionService
   const historyService = {
     entries: history,
-    get: () => undefined,
-    list: () => [],
+    initialize: vi.fn(async () => {}),
+    get: (id: string) => history.get().find((entry) => entry.id === id),
+    list: () => history.get(),
     removeDeleted: vi.fn(),
   } as unknown as IAcpSessionHistoryService
   const registry = {
@@ -228,6 +273,11 @@ function makeHarness(): {
     events,
     created,
     sessionService,
+    historyService,
+    forkSession,
+    rewindSession,
+    forkSideTask,
+    resumeSession,
     workspace: workspace as unknown as { current: { folder: URI; name: string } | null },
     add(session) {
       live.set(session.session.id, session.session)
@@ -1061,6 +1111,343 @@ describe('MobileBridgeService commands', () => {
       { id: 'fake', name: 'Fake Agent', isDefault: true },
       { id: 'other', name: 'Other Agent', isDefault: false },
     ])
+  })
+})
+
+describe('MobileBridgeService fork / rewind / side tasks', () => {
+  function fakeResultSession(id: string, durableId?: string): IAcpSession {
+    return {
+      id,
+      sessionIdOnAgent: observableValue<string | undefined>('test.result', durableId),
+    } as unknown as IAcpSession
+  }
+
+  function historyEntry(
+    id: string,
+    overrides: Partial<AcpSessionHistoryEntry> = {},
+  ): AcpSessionHistoryEntry {
+    return {
+      id,
+      agentId: 'fake',
+      sessionIdOnAgent: id,
+      title: `Session ${id}`,
+      createdAt: 1,
+      lastUsedAt: 1,
+      ...overrides,
+    } as unknown as AcpSessionHistoryEntry
+  }
+
+  it('projects fork/rewind capabilities and side-task links onto summaries', async () => {
+    const harness = makeHarness()
+    const parent = makeSession('s1', {
+      durableId: 'd1',
+      forkSupported: true,
+      rewindSupported: true,
+    })
+    harness.add(parent)
+    harness.history.set(
+      [
+        historyEntry('d1', { title: 'Parent' }),
+        historyEntry('side-1', { title: 'Side', sideTaskOf: 'd1', lastUsedAt: 5 }),
+      ],
+      undefined,
+    )
+
+    await expect(harness.service.getSnapshot('s1')).resolves.toMatchObject({
+      summary: {
+        localId: 's1',
+        durableId: 'd1',
+        forkSupported: true,
+        rewindSupported: true,
+        sideTaskChildCount: 1,
+      },
+    })
+    const summaries = await harness.service.listSessions()
+    expect(summaries[0]).not.toHaveProperty('sideTaskOf')
+
+    const side = makeSession('side-1', { durableId: 'side-1' })
+    harness.add(side)
+    await expect(harness.service.getSnapshot('side-1')).resolves.toMatchObject({
+      summary: { sideTaskOf: 'd1' },
+    })
+  })
+
+  it('projects message anchors and first-turn fork eligibility', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { durableId: 'd1', forkSupported: true })
+    harness.add(first)
+    const firstTurn = userMessage('m1', 'msg-1', 'first')
+    const secondTurn = userMessage('m2', 'msg-2', 'second')
+    first.messages.set([firstTurn, secondTurn], undefined)
+    first.timeline.set(
+      [
+        { kind: 'message', id: 'm1', message: firstTurn },
+        { kind: 'message', id: 'm2', message: secondTurn },
+      ],
+      undefined,
+    )
+
+    const snapshot = await harness.service.getSnapshot('s1')
+    expect(snapshot?.timeline[0]).toMatchObject({ messageId: 'msg-1', canFork: false })
+    expect(snapshot?.timeline[1]).toMatchObject({ messageId: 'msg-2', canFork: true })
+  })
+
+  it('forks without activating and refuses invalid anchors or a busy session', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { durableId: 'd1', forkSupported: true })
+    harness.add(first)
+    const firstTurn = userMessage('m1', 'msg-1', 'first')
+    const retryTurn = userMessage('m2', 'msg-2', 'continue', { autoRetry: true })
+    first.messages.set([firstTurn, retryTurn], undefined)
+
+    await expect(harness.service.forkSession('missing')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+    await expect(harness.service.forkSession('s1', 'nope')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
+    await expect(harness.service.forkSession('s1', 'msg-1')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
+    await expect(harness.service.forkSession('s1', 'msg-2')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
+
+    first.status.set('running', undefined)
+    await expect(harness.service.forkSession('s1')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_busy',
+    })
+    first.status.set('idle', undefined)
+
+    harness.forkSession.mockResolvedValueOnce(fakeResultSession('forked', 'fork-durable'))
+    await expect(harness.service.forkSession('s1')).resolves.toEqual({
+      ok: true,
+      value: { localId: 'forked', durableId: 'fork-durable' },
+    })
+    expect(harness.forkSession).toHaveBeenCalledWith('s1', undefined, { activate: false })
+  })
+
+  it('rejects fork when the agent or session does not allow it', async () => {
+    const harness = makeHarness()
+    const readOnly = makeSession('ro', { readOnly: true, forkSupported: true })
+    const unsupported = makeSession('plain')
+    harness.add(readOnly)
+    harness.add(unsupported)
+
+    await expect(harness.service.forkSession('ro')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_read_only',
+    })
+    await expect(harness.service.forkSession('plain')).resolves.toMatchObject({
+      ok: false,
+      code: 'unsupported_by_agent',
+    })
+    expect(harness.forkSession).not.toHaveBeenCalled()
+  })
+
+  it('previews a rewind without mutating and treats canRewind:false as a result', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { durableId: 'd1', rewindSupported: true })
+    harness.add(first)
+    first.messages.set([userMessage('m1', 'msg-1', 'first')], undefined)
+
+    harness.rewindSession.mockResolvedValueOnce({
+      canRewind: true,
+      filesChanged: ['/workspace/a.ts', '/workspace/b.ts'],
+      insertions: 2,
+      deletions: 1,
+    })
+    await expect(harness.service.previewRewind('s1', 'msg-1')).resolves.toEqual({
+      ok: true,
+      value: { canRewind: true, filesChanged: 2, insertions: 2, deletions: 1 },
+    })
+    expect(harness.rewindSession).toHaveBeenCalledWith('s1', 'msg-1', { dryRun: true })
+
+    harness.rewindSession.mockResolvedValueOnce({ canRewind: false, error: 'no checkpoint' })
+    await expect(harness.service.previewRewind('s1', 'msg-1')).resolves.toEqual({
+      ok: true,
+      value: { canRewind: false, error: 'no checkpoint', filesChanged: 0 },
+    })
+  })
+
+  it('validates rewind anchors and capability before delegating', async () => {
+    const harness = makeHarness()
+    const plain = makeSession('plain')
+    const rewound = makeSession('s1', { durableId: 'd1', rewindSupported: true })
+    harness.add(plain)
+    harness.add(rewound)
+    rewound.messages.set([userMessage('m1', 'msg-1', 'first')], undefined)
+
+    await expect(harness.service.previewRewind('plain', 'msg-1')).resolves.toMatchObject({
+      ok: false,
+      code: 'unsupported_by_agent',
+    })
+    await expect(harness.service.previewRewind('s1', 'nope')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
+    await expect(harness.service.rewindSession('s1', 'nope')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
+    expect(harness.rewindSession).not.toHaveBeenCalled()
+  })
+
+  it('captures the anchor text before rewinding and maps the file option', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { durableId: 'd1', rewindSupported: true })
+    harness.add(first)
+    first.messages.set([userMessage('m1', 'msg-1', 'original prompt')], undefined)
+
+    harness.rewindSession.mockImplementationOnce(async () => {
+      first.messages.set([], undefined)
+      return { canRewind: true }
+    })
+    await expect(harness.service.rewindSession('s1', 'msg-1', false)).resolves.toEqual({
+      ok: true,
+      value: { canRewind: true, text: 'original prompt' },
+    })
+    expect(harness.rewindSession).toHaveBeenCalledWith('s1', 'msg-1', { rewindFiles: false })
+
+    harness.rewindSession.mockResolvedValueOnce({ canRewind: true })
+    first.messages.set([userMessage('m1', 'msg-1', 'original prompt')], undefined)
+    await harness.service.rewindSession('s1', 'msg-1')
+    expect(harness.rewindSession).toHaveBeenLastCalledWith('s1', 'msg-1', {})
+
+    harness.rewindSession.mockResolvedValueOnce({ canRewind: false, error: 'locked' })
+    first.messages.set([userMessage('m1', 'msg-1', 'original prompt')], undefined)
+    await expect(harness.service.rewindSession('s1', 'msg-1')).resolves.toEqual({
+      ok: true,
+      value: { canRewind: false, error: 'locked' },
+    })
+  })
+
+  it('creates side tasks with a clipped quote and rejects unsupported agents', async () => {
+    const harness = makeHarness()
+    const parent = makeSession('s1', { durableId: 'd1', forkSupported: true })
+    const plain = makeSession('plain')
+    harness.add(parent)
+    harness.add(plain)
+    harness.forkSideTask.mockResolvedValue(fakeResultSession('side', 'side-durable'))
+
+    await expect(harness.service.createSideTask('s1', '  hello   world  ')).resolves.toEqual({
+      ok: true,
+      value: { localId: 'side', durableId: 'side-durable' },
+    })
+    expect(harness.forkSideTask).toHaveBeenLastCalledWith('s1', {
+      text: 'hello   world',
+      label: 'hello world',
+    })
+
+    await harness.service.createSideTask('s1', '   ')
+    expect(harness.forkSideTask).toHaveBeenLastCalledWith('s1', undefined)
+
+    const long = 'x'.repeat(8001)
+    await harness.service.createSideTask('s1', long)
+    const [parentId, quote] = harness.forkSideTask.mock.calls.at(-1) as [
+      string,
+      { text: string; label: string },
+    ]
+    expect(parentId).toBe('s1')
+    expect(quote.text).toHaveLength(8001)
+    expect(quote.text.endsWith('…')).toBe(true)
+    expect(quote.label).toHaveLength(60)
+
+    await expect(harness.service.createSideTask('plain', 'why?')).resolves.toMatchObject({
+      ok: false,
+      code: 'unsupported_by_agent',
+    })
+  })
+
+  it('lists direct side tasks, most recently used first, with live flags', async () => {
+    const harness = makeHarness()
+    const parent = makeSession('s1', { durableId: 'd1' })
+    harness.add(parent)
+    const liveChild = makeSession('side-1', { durableId: 'side-1' })
+    harness.add(liveChild)
+    harness.history.set(
+      [
+        historyEntry('side-1', { sideTaskOf: 'd1', lastUsedAt: 10 }),
+        historyEntry('side-2', { sideTaskOf: 'd1', lastUsedAt: 20 }),
+        historyEntry('side-1a', { sideTaskOf: 'side-1', lastUsedAt: 30 }),
+        historyEntry('other', { sideTaskOf: 'd9', lastUsedAt: 40 }),
+      ],
+      undefined,
+    )
+
+    await expect(harness.service.listSideTasks('s1')).resolves.toEqual({
+      ok: true,
+      value: [
+        { id: 'side-2', title: 'Session side-2', lastUsedAt: 20, live: false },
+        { id: 'side-1', title: 'Session side-1', lastUsedAt: 10, live: true },
+      ],
+    })
+  })
+
+  it('opens a side task without activating it and rejects foreign rows', async () => {
+    const harness = makeHarness()
+    const parent = makeSession('s1', { durableId: 'd1' })
+    harness.add(parent)
+    harness.history.set(
+      [
+        historyEntry('side-1', { sideTaskOf: 'd1' }),
+        historyEntry('other', { sideTaskOf: 'd9' }),
+      ],
+      undefined,
+    )
+    harness.resumeSession.mockResolvedValueOnce(fakeResultSession('side-1', 'side-1'))
+
+    await expect(harness.service.openSideTask('s1', 'side-1')).resolves.toEqual({
+      ok: true,
+      value: { localId: 'side-1', durableId: 'side-1' },
+    })
+    expect(harness.resumeSession).toHaveBeenCalledWith('side-1', { activate: false })
+
+    await expect(harness.service.openSideTask('s1', 'other')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
+    await expect(harness.service.openSideTask('s1', 'missing')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
+  })
+
+  it('deletes a side task with its whole subtree and rejects foreign rows', async () => {
+    const harness = makeHarness()
+    const parent = makeSession('s1', { durableId: 'd1' })
+    harness.add(parent)
+    const liveChild = makeSession('side-1', { durableId: 'side-1' })
+    harness.add(liveChild)
+    harness.history.set(
+      [
+        historyEntry('side-1', { sideTaskOf: 'd1' }),
+        historyEntry('side-1a', { sideTaskOf: 'side-1' }),
+        historyEntry('other', { sideTaskOf: 'd9' }),
+      ],
+      undefined,
+    )
+
+    await expect(harness.service.deleteSideTask('s1', 'side-1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.historyService.removeDeleted).toHaveBeenCalledWith('side-1')
+    expect(harness.historyService.removeDeleted).toHaveBeenCalledWith('side-1a')
+    expect(harness.sessionService.closeSession).toHaveBeenCalledWith('side-1')
+    expect(harness.sessionService.deleteOnAgent).toHaveBeenCalledWith('side-1')
+    expect(harness.sessionService.deleteOnAgent).toHaveBeenCalledWith('side-1a')
+    expect(harness.sessionService.deleteOnAgent).not.toHaveBeenCalledWith('other')
+
+    await expect(harness.service.deleteSideTask('s1', 'other')).resolves.toMatchObject({
+      ok: false,
+      code: 'invalid_anchor',
+    })
   })
 })
 

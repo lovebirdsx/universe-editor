@@ -24,11 +24,26 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<MobileCommandKind, number>> = {
   newSession: 30_000,
   renameSession: 10_000,
   deleteSession: 30_000,
+  forkSession: 120_000,
+  previewRewind: 30_000,
+  rewindSession: 120_000,
+  createSideTask: 120_000,
+  listSideTasks: 10_000,
+  openSideTask: 120_000,
+  deleteSideTask: 120_000,
   listWorkspaces: 10_000,
   listAgents: 10_000,
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000
+
+/**
+ * The gateway owns the per-command deadline. Mutating commands wait slightly
+ * longer so a long fork / side task never gets abandoned (and retried under a
+ * new idempotency key) right as the gateway is about to answer. Read-only
+ * commands keep the exact deadline: giving up early cannot duplicate work.
+ */
+export const COMMAND_TIMEOUT_GRACE_MS = 5_000
 
 /** Commands that change state: they carry an idempotency key and may be resent. */
 export const MUTATING_COMMAND_KINDS: ReadonlySet<MobileCommandKind> = new Set([
@@ -43,6 +58,11 @@ export const MUTATING_COMMAND_KINDS: ReadonlySet<MobileCommandKind> = new Set([
   'newSession',
   'renameSession',
   'deleteSession',
+  'forkSession',
+  'rewindSession',
+  'createSideTask',
+  'openSideTask',
+  'deleteSideTask',
 ])
 
 export type CommandErrorCode =
@@ -247,8 +267,10 @@ export class CommandClient {
   }
 
   private _armTimeout(pending: PendingCommand): void {
+    const grace = MUTATING_COMMAND_KINDS.has(pending.kind) ? COMMAND_TIMEOUT_GRACE_MS : 0
     const delay =
-      pending.options.timeoutMs ?? COMMAND_TIMEOUT_MS[pending.kind] ?? this._defaultTimeoutMs
+      pending.options.timeoutMs ??
+      (COMMAND_TIMEOUT_MS[pending.kind] ?? this._defaultTimeoutMs) + grace
     pending.timer = this._timers.setTimeout(() => {
       this._remove(pending)
       pending.reject(new CommandError('timeout', `command timed out: ${pending.kind}`))

@@ -70,6 +70,21 @@ export interface SessionProjectionOptions {
   readonly title: string
   readonly agentName?: string
   readonly now?: number
+  /** Durable id of the parent session when this row is a side task. */
+  readonly sideTaskOf?: string
+  /** Number of direct side-task children (parent rows only). */
+  readonly sideTaskChildCount?: number
+}
+
+/**
+ * Extra facts a timeline item needs to decide its rewind / fork affordances.
+ * `firstUserId` is the local `AcpMessage.id` of the first user turn: it can be
+ * rewound to, but not forked from (there is no predecessor to slice at).
+ */
+export interface TimelineProjectionContext {
+  readonly firstUserId?: string
+  readonly forkSupported: boolean
+  readonly readOnly: boolean
 }
 
 export function toBridgeSummary(
@@ -103,6 +118,14 @@ export function toBridgeSummary(
     hasPendingElicitation: pendingElicitation !== undefined,
     backgroundTaskCount: readObservable(session.backgroundTaskCount, r),
     imageSupported: readObservable(session.imageSupported, r),
+    ...(readObservable(session.forkSupported, r) ? { forkSupported: true } : {}),
+    ...(readObservable(session.rewindSupported, r) ? { rewindSupported: true } : {}),
+    ...(options.sideTaskOf !== undefined
+      ? { sideTaskOf: clampText(options.sideTaskOf, MAX_ID_LENGTH) }
+      : {}),
+    ...(options.sideTaskChildCount !== undefined && options.sideTaskChildCount > 0
+      ? { sideTaskChildCount: options.sideTaskChildCount }
+      : {}),
     updatedAt: options.now ?? Date.now(),
   }
 }
@@ -115,11 +138,18 @@ export function toBridgeSnapshot(
   const usage = projectUsage(readObservable(session.usage, r))
   const permission = projectPendingPermission(readObservable(session.pendingPermission, r), r)
   const elicitation = projectPendingElicitation(readObservable(session.pendingElicitation, r))
+  const messages = readObservable(session.messages, r)
+  const firstUserId = messages.find((message) => message.role === 'user')?.id
+  const context: TimelineProjectionContext = {
+    ...(firstUserId !== undefined ? { firstUserId } : {}),
+    forkSupported: readObservable(session.forkSupported, r),
+    readOnly: session.readOnly,
+  }
   return {
     summary: toBridgeSummary(session, options, r),
     timeline: readObservable(session.timeline, r)
       .slice(0, MAX_TIMELINE_ITEMS)
-      .map(projectTimelineItem),
+      .map((item) => projectTimelineItem(item, context)),
     plan: readObservable(session.plan, r).slice(0, MAX_PLAN_ENTRIES).map(projectPlanEntry),
     configOptions: readObservable(session.configOptions, r)
       .slice(0, MAX_CONFIG_OPTIONS)
@@ -131,10 +161,13 @@ export function toBridgeSnapshot(
   }
 }
 
-export function projectTimelineItem(item: TimelineItem): MobileTimelineItem {
+export function projectTimelineItem(
+  item: TimelineItem,
+  context?: TimelineProjectionContext,
+): MobileTimelineItem {
   switch (item.kind) {
     case 'message':
-      return projectMessage(item.message)
+      return projectMessage(item.message, context)
     case 'toolCall':
       return projectToolCall(item.call)
     case 'compaction':
@@ -160,7 +193,15 @@ export function projectTimelineItem(item: TimelineItem): MobileTimelineItem {
   }
 }
 
-export function projectMessage(message: AcpMessage): MobileTimelineMessageItem {
+export function projectMessage(
+  message: AcpMessage,
+  context?: TimelineProjectionContext,
+): MobileTimelineMessageItem {
+  // Mirrors agentRewindPickItems.ts: only user turns with a client messageId are
+  // anchors, and auto-retry "continue" turns are never user-authored.
+  const anchorMessageId =
+    message.role === 'user' && message.autoRetry !== true ? message.messageId : undefined
+  const anchored = anchorMessageId !== undefined && anchorMessageId.length > 0
   const attachments: MobileMessageAttachment[] = []
   let hasNonText = false
   for (const block of message.blocks) {
@@ -183,6 +224,15 @@ export function projectMessage(message: AcpMessage): MobileTimelineMessageItem {
     ...(message.memoryTrimmed ? { memoryTrimmed: true } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(hasNonText ? { hasNonText: true } : {}),
+    ...(anchored ? { messageId: clampText(anchorMessageId, MAX_ID_LENGTH) } : {}),
+    ...(anchored && context !== undefined
+      ? {
+          canFork:
+            context.forkSupported &&
+            !context.readOnly &&
+            message.id !== context.firstUserId,
+        }
+      : {}),
   }
 }
 
@@ -513,7 +563,9 @@ export function diffMessage(
     previous.streaming !== next.streaming ||
     previous.memoryTrimmed !== next.memoryTrimmed ||
     previous.hasNonText !== next.hasNonText ||
-    attachmentsChanged
+    attachmentsChanged ||
+    previous.messageId !== next.messageId ||
+    previous.canFork !== next.canFork
   if (!textChanged && !metadataChanged) return undefined
   const textAppend = sameAppend && textChanged ? next.text.slice(previous.text.length) : undefined
   const textReplace = textChanged && !sameAppend ? next.text : undefined
@@ -528,6 +580,8 @@ export function diffMessage(
     ...(next.attachments !== undefined ? { attachments: next.attachments } : {}),
     ...(attachmentsChanged && next.attachments === undefined ? { attachments: [] } : {}),
     ...(next.hasNonText !== undefined ? { hasNonText: next.hasNonText } : {}),
+    ...(next.messageId !== undefined ? { messageId: next.messageId } : {}),
+    ...(next.canFork !== undefined ? { canFork: next.canFork } : {}),
   }
 }
 

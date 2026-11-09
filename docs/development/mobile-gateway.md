@@ -7,7 +7,8 @@
 > PC 焦点抑制、通知偏好与深链）；**M5 打包与加固已落地**（`resources/mobile`、局域网自签
 > HTTPS / 证书轮换与指纹、CSP / 审计轮转 / 连接与设备上限、Tailscale / WSL 文档与冒烟）；
 > **M6 会话附件已落地**（协议 v6：图片 / 文件附件经 HTTP 上传到 PC 临时目录，图片走 ACP
-> `image`、文件走 `resource_link`，时间线展示缩略图与文件卡）。
+> `image`、文件走 `resource_link`，时间线展示缩略图与文件卡）；**M7 Fork / Rewind / 侧边任务已落地**
+> （协议 v6：非激活分叉与恢复、回退 dry-run 预览、侧边任务列表 / 打开 / 级联删除）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -134,8 +135,9 @@ main 侧不直接读 `AcpSession`。
 **版本与握手**：`MOBILE_PROTOCOL_VERSION = 6`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
-供手机端「仅消息」过滤对齐桌面语义；v6 增加附件：`sendPrompt.attachmentIds`、消息
-`attachments`、`summary.imageSupported` 与 `attachment_not_found`）。WS 建立后第一帧必须是
+供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
+`attachments`、`summary.imageSupported`、`attachment_not_found`）与 fork / rewind / 侧边任务
+（对应命令、agent 能力位、消息锚点与侧边任务关系字段））。WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v6 的 `hello_ok.capabilities` 为
 `['inbox', 'commands', 'notifications', 'attachments']`，旧客户端可以只看 `inbox`。`vapidPublicKey` 只在网关可推送
@@ -171,17 +173,32 @@ Referer。
 | 会话管理 | `newSession` | `{ agentId, workspace, initialPrompt? }` | 见 §6 |
 | 会话管理 | `renameSession` | `{ ref, title }` | 会话标题 |
 | 会话管理 | `deleteSession` | `{ ref }` | 复用 PC「Delete Agent Session」的 plan → 执行链路 |
+| 分叉 / 回退 | `forkSession` | `{ ref, messageId? }` | 从锚点之前或末尾创建新会话；**不激活 PC** |
+| 分叉 / 回退 | `previewRewind` | `{ ref, messageId }` | 回退 dry-run：只返回文件影响，不修改会话 |
+| 分叉 / 回退 | `rewindSession` | `{ ref, messageId, rewindFiles? }` | 截断到锚点之前；`rewindFiles:false` 保留文件 |
+| 侧边任务 | `createSideTask` | `{ ref, quote? }` | 以父会话历史为上下文创建只读侧边任务 |
+| 侧边任务 | `listSideTasks` | `{ ref }` | 直接子任务（含历史行），只读 |
+| 侧边任务 | `openSideTask` | `{ ref, sideTaskId }` | 非激活恢复；历史行也可打开 |
+| 侧边任务 | `deleteSideTask` | `{ ref, sideTaskId }` | 级联删除该任务及其子树（含历史行） |
 | 枚举 | `listWorkspaces` | `{}` | 打开窗口 ∪ 最近工作区，带 `isOpen` |
 | 枚举 | `listAgents` | `{}` | 由第一个已注册窗口桥返回 |
+
+`forkSession` / `previewRewind` / `rewindSession` 的 `messageId` 是 **SDK 消息锚点**
+（`AcpMessage.messageId`，仅 user 消息会有），不是本地的 `AcpMessage.id`；首条用户消息可回退、
+但不可用于 fork。`forkSession` 省略 `messageId` 表示从末尾分叉。
 
 未知 kind 仍回 `command_result { ok: false, error: 'not_supported' }`，不会导致解析错误。
 
 **幂等**：会修改状态的命令可带 `idempotencyKey`。网关在内存中缓存首个结果 5 分钟
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
-只读命令（如 `getToolCallDetail`）不缓存。客户端重试不会重复发 prompt 或重复建会话。
+只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`）不缓存。客户端重试不会重复发
+prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
+`deleteSideTask` 都按可修改状态命令处理。
 
 **超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
-`cancelTurn` 5s；审批、配置、自动执行、重命名 10s；`deleteSession` / `newSession` 30s。超时回
+`cancelTurn` 5s；审批、配置、自动执行、重命名 10s；`deleteSession` / `newSession` /
+`previewRewind` 30s；`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
+`deleteSideTask` 120s（要等 agent fork RPC 与 resume），`listSideTasks` 10s。超时回
 `command_result { ok: false, error: 'internal' }`。手机端 `sendPrompt` 同样是 15s，避免手机先超时重发。
 
 **服务端 → 客户端**
@@ -215,11 +232,15 @@ Referer。
   pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
 - `summary` 含 `ref / agentId / agentName? / title / status / displayStatus / bucket /
   workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
-  hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`。
-- `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`、`attachments?`）/ `toolCall`
+  hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`；v6 增加可选
+  `forkSupported / rewindSupported`（agent 能力位）与 `sideTaskOf`（父会话 durable id）/
+  `sideTaskChildCount`（直接子任务数）。
+- `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`、`attachments?`；v6 对 user
+  消息额外带 SDK 锚点 `messageId` 与 `canFork`）/ `toolCall`
   （`toolKind`、`status`、preview、diff 增删行数；可带 `subagent` / `requiresUserDecision`
   标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片）/ `notice`
-  （compaction / resurrection）。
+  （compaction / resurrection）。`canFork` 在首条用户消息、只读会话或 agent 不支持 fork 时为
+  false；`messageId` 只在 user 且非 autoRetry 时出现。
 - `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、
   `tool_call_upsert`、`timeline_item_added/removed`、`plan_snapshot`、
   `config_options_snapshot`、`summary_changed`、`permission_upsert/cleared`、
@@ -242,12 +263,18 @@ Referer。
 | `stale_request` | `requestId` 已不在等待中（重复点击 / 另一端先处理） |
 | `workspace_not_open` | 目标工作区没有打开窗口且不能自动开窗 |
 | `not_supported` | 当前档位/版本不支持该命令 |
+| `unsupported_by_agent` | 当前 agent 未声明 fork / rewind 能力 |
+| `invalid_anchor` | 消息锚点不存在、已回退，或不能用于该操作（如首条用户消息用于 fork） |
+| `session_busy` | 会话正在运行，fork 被拒绝 |
 | `rate_limited` | 触发速率限制（含附件配额已满） |
 | `attachment_not_found` | 附件不存在、已过期或属于其他设备 |
 | `internal` | 未分类的服务端错误 |
 
 `stale_request` 表示这次点击基于过期卡片：请求可能已被 PC 或另一端处理。客户端应直接按
 快照/增量收敛 UI（卡片消失），不要把它显示成操作失败，也不要自动重发。
+
+`canRewind:false` 不是错误：`previewRewind` / `rewindSession` 正常返回 `ok:true` 并带 agent 的
+`error` 说明，手机只展示原因、不提供应用按钮。
 
 ## 5. 审批仲裁
 
@@ -311,6 +338,32 @@ Referer。
 **时序**：`createSession` 同步返回；桥立即回 `{ localId, durableId? }`，初始 prompt 先入队，
 客户端可以立即 `sendPrompt`，由会话保证在 ready 后按顺序投递。`listWorkspaces` 返回
 `{ folder, name, authority?, isOpen }`；`listAgents` 返回 `{ id, name, isDefault }`。
+
+## 6b. Fork / Rewind / 侧边任务（v6）
+
+三项能力都复用桌面 `IAcpSessionService` 的既有实现，桥只做守卫、参数归一与结果裁剪，不复制算法。
+
+| 命令 | 关键行为 |
+|---|---|
+| `forkSession` | `sessions.forkSession(id, messageId, { activate:false })`；运行中回 `session_busy`；首条用户消息回 `invalid_anchor`；手机分叉不抢 PC 焦点 |
+| `previewRewind` | `rewindSession(..., { dryRun:true })`；只回 `canRewind / error / filesChanged 数量 / insertions / deletions`，**不把文件路径发给手机** |
+| `rewindSession` | 默认回滚文件，`rewindFiles:false` 保留文件；成功后把锚点原文放进响应 `text`，只用于手机输入框回填，**不写 PC 的 `AcpPromptReplaceInbox`** |
+| `createSideTask` | `forkSideTask` 以父会话完整历史为上下文、抑制 replay 基线、强制只读；quote trim 后截到 8000 字符，标题取折叠空白后的前 60 字符 |
+| `listSideTasks` | 按父会话 durable id 列直接子任务；含历史行；`live` 只表示当前窗口已 resident，不是正确性信号 |
+| `openSideTask` | 历史行走 `resumeSession(id, { activate:false })`；已 resident 直接返回 ref；只允许直接子任务 |
+| `deleteSideTask` | `collectSideTaskDescendants` + `deleteSideTasks` 级联删除子树（含历史行） |
+
+**焦点**：`resumeSession` / `forkSession` 增加可选 `activate`，手机一律传 `false`。`resumeSession`
+的 in-flight 去重（`_resumingBySessionId`）在 await 之后按 `wantActive` 补 `setActive`，否则手机先发起的
+非激活 resume 会让 PC 后到的主动 resume 无法成为 active。
+
+**history 初始化**：所有新命令（以及 `startStreaming` / `listSessions` / `getSnapshot`）先
+`await _ensureHistory()`；`IAcpSessionHistoryService.initialize()` 失败只 warn，不阻塞 live 操作。
+side task 字段与列表依赖 history，未初始化时表现为字段缺失 / 空列表。
+
+**失败映射**：`AcpForeignWorktreeError` → `forbidden_operation`；能力位缺失 →
+`unsupported_by_agent`；锚点不存在 / 非 user / autoRetry / 首条用户消息用于 fork → `invalid_anchor`；
+运行中 fork → `session_busy`；其他 → `internal`（日志只记错误消息，不记 prompt / quote / 正文）。
 
 ## 7. 会话附件（协议 v6）
 
@@ -404,9 +457,11 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录
 `ts` / `device` / `remoteAddress` / `action` / `result` / `detail`。所有会修改状态的命令
-（`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、删除）都记一条；
-`detail` 只含 `window=` / `local=` / `agent=` / `error=` 等定位信息，**绝不记 prompt 正文、
-feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents`）不审计。
+（`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、删除、
+fork / rewind / 侧边任务）都记一条；`detail` 只含 `window=` / `local=` / `agent=` / `error=` 等
+定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
+`sideTaskId` 或文件路径**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents` /
+`previewRewind` / `listSideTasks`）不审计。
 
 **PC 设置页**：新增 Mobile Devices 编辑器。
 
@@ -667,9 +722,11 @@ localStorage，不走协议。
 | M4 | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制（已落地） | 两端边沿一致；不重复；点击直达会话 |
 | M5 | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地） | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
 | M6 | 会话附件：HTTP 上传/下载、设备隔离与 TTL、ACP image / resource_link、手机附件 UI 与时间线展示（已落地） | 图片与文件经手机发出后 agent 收到正确 block；时间线显示缩略图 / 文件卡；限额与越权用例覆盖 |
+| M7 | Fork / Rewind / 侧边任务：协议 v6、非激活分叉与恢复、回退 dry-run、侧边任务列表 / 打开 / 级联删除（已落地） | 手机分叉与打开侧边任务不抢 PC 焦点；回退先预览再执行；首条用户消息 / 运行中 / 能力位边界正确 |
+
 ## 13. 已确认的决策记录
 
-日期：第 1–7 条为 **2026-11-08**，第 8 条为 **2026-11-09**。
+日期：第 1–7 条为 **2026-11-08**，第 8–10 条为 **2026-11-09**。
 
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
 2. **手机高风险操作第一期默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验。
@@ -691,6 +748,10 @@ localStorage，不走协议。
    PC 临时目录，网关启动清空，pending 1 小时 / sent 7 天。图片走 ACP `image`，普通文件走
    `resource_link`（PC 本机 `file:` URI）；远程会话不能发文件。时间线只下发附件元数据，手机按 id
    懒加载。
+10. **手机 fork / rewind / 侧边任务的边界**：协议 v6 同时纳入这批能力（旧 PWA 以 4400 断开，
+    需刷新页面）；手机 fork 与打开侧边任务一律 `activate:false`，不抢 PC 焦点；rewind 原文只回填
+    手机输入框，不写 PC 的 `AcpPromptReplaceInbox`；回退先 dry-run 预览，再给「丢弃 / 保留文件改动」
+    两个执行按钮；侧边任务列表包含历史行，删除级联子树。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。
@@ -700,6 +761,7 @@ localStorage，不走协议。
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 协议与 view-model 漂移 | 字段静默错位 | DTO 单一来源 + 映射函数 + 编译期检查；详情按需接口收窄面 |
+| 协议 v6 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
 | renderer 重载与会话 rekey | 连接指向旧会话/旧 epoch | 网关按 windowId + renderer epoch 失效桥；客户端靠快照恢复 |
 | IPC 帧成本 | 大内容卡顿/超限 | 50ms 合帧、<1MB 单帧、队列超限 `resync_required` |
 | 无手机订阅时空转 | 常驻开销 | 按订阅启停，无订阅不序列化 |

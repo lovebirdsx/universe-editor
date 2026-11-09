@@ -10,6 +10,13 @@ export interface SessionMenuSheetProps {
   readonly client: Pick<MobileClient, 'renameSession' | 'deleteSession'>
   readonly title: string
   readonly online: boolean
+  readonly forkSupported?: boolean | undefined
+  readonly readOnly?: boolean | undefined
+  readonly running?: boolean | undefined
+  readonly sideTaskChildCount?: number | undefined
+  readonly onForkTip?: (() => Promise<void> | void) | undefined
+  readonly onNewSideTask?: (() => Promise<void> | void) | undefined
+  readonly onOpenSideTasks?: (() => void) | undefined
   readonly onClose: () => void
   readonly onNotice: (text: string) => void
 }
@@ -20,6 +27,13 @@ export function SessionMenuSheet({
   client,
   title,
   online,
+  forkSupported,
+  readOnly,
+  running,
+  sideTaskChildCount,
+  onForkTip,
+  onNewSideTask,
+  onOpenSideTasks,
   onClose,
   onNotice,
 }: SessionMenuSheetProps) {
@@ -28,7 +42,7 @@ export function SessionMenuSheet({
   const [error, setError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
 
-  const run = async (action: () => Promise<void>): Promise<void> => {
+  const run = async (action: () => Promise<void> | void): Promise<void> => {
     if (busy) return
     setBusy(true)
     setError(undefined)
@@ -161,6 +175,42 @@ export function SessionMenuSheet({
         >
           {strings.sessionRename}
         </button>
+        {forkSupported === true && readOnly !== true && onForkTip !== undefined && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="session-fork-tip"
+            disabled={!online || running === true || busy}
+            title={running === true ? strings.forkBusy : undefined}
+            onClick={() => void run(onForkTip)}
+          >
+            {strings.sessionForkTip}
+          </button>
+        )}
+        {forkSupported === true && readOnly !== true && onNewSideTask !== undefined && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="session-new-side-task"
+            disabled={!online || busy}
+            onClick={() => void run(onNewSideTask)}
+          >
+            {busy ? strings.pendingSubmitting : strings.sideTasksNew}
+          </button>
+        )}
+        {sideTaskChildCount !== undefined &&
+          sideTaskChildCount > 0 &&
+          onOpenSideTasks !== undefined && (
+            <button
+              type="button"
+              className="sheet-option sheet-option--neutral"
+              data-testid="session-side-tasks"
+              disabled={!online}
+              onClick={onOpenSideTasks}
+            >
+              {`${strings.sideTasksMenu} (${sideTaskChildCount})`}
+            </button>
+          )}
         <button
           type="button"
           className="sheet-option sheet-option--danger"

@@ -10,6 +10,9 @@ export interface SessionHeaderProps {
   readonly socketState: SocketState
   readonly online: boolean
   readonly busyConfigId?: string | undefined
+  /** Parent session title when this session is a side task. */
+  readonly parentTitle?: string | undefined
+  readonly onOpenParent?: (() => void) | undefined
   readonly onBack: () => void
   readonly onOpenConfig: (configOptionId: string) => void
   readonly onToggleBoolean: (option: MobileConfigOption) => void
@@ -22,6 +25,8 @@ export function SessionHeader({
   socketState,
   online,
   busyConfigId,
+  parentTitle,
+  onOpenParent,
   onBack,
   onOpenConfig,
   onToggleBoolean,
@@ -68,6 +73,16 @@ export function SessionHeader({
               )}
               {summary.readOnly && (
                 <span className="session-header__badge">{strings.badgeReadOnly}</span>
+              )}
+              {parentTitle !== undefined && (
+                <button
+                  type="button"
+                  className="session-parent-chip"
+                  data-testid="session-parent-chip"
+                  onClick={onOpenParent}
+                >
+                  {strings.sideTaskParent(parentTitle)}
+                </button>
               )}
             </>
           )}

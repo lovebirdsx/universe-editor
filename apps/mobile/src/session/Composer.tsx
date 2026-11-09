@@ -29,6 +29,14 @@ export interface ComposerAttachment {
   readonly id?: string
 }
 
+export interface ComposerPrefill {
+  /** Bumped for every backfill so repeating the same text still applies. */
+  readonly token: number
+  /** The session that deposited the text; a switched session must not inherit it. */
+  readonly sessionKey: string
+  readonly text: string
+}
+
 export interface ComposerProps {
   readonly sessionKey: string
   readonly readOnly: boolean
@@ -40,6 +48,8 @@ export interface ComposerProps {
     file: File,
     kind: MobileAttachmentKind,
   ) => Promise<MobileAttachmentUploadResult>
+  /** One-shot backfill (rewind text / side-task quote) owned by the session page. */
+  readonly prefill?: ComposerPrefill | undefined
   readonly onSend: (text: string, attachmentIds: readonly string[]) => Promise<void>
   readonly onStop: () => Promise<void>
   readonly onNotice: (text: string) => void
@@ -53,6 +63,7 @@ export function Composer({
   imageSupported,
   fileSupported,
   onUploadAttachment,
+  prefill,
   onSend,
   onStop,
   onNotice,
@@ -78,6 +89,12 @@ export function Composer({
   useEffect(() => {
     writeDraft(sessionKey, value)
   }, [sessionKey, value])
+
+  useEffect(() => {
+    if (prefill === undefined || prefill.sessionKey !== sessionKey) return
+    setValue(prefill.text)
+    textareaRef.current?.focus()
+  }, [prefill, sessionKey])
 
   useEffect(() => {
     const element = textareaRef.current

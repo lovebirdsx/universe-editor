@@ -22,13 +22,27 @@ export interface TimelineProps {
   readonly displayMode: SessionDisplayPreference
   readonly truncated: boolean
   readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob'>
+  /** The agent supports rewind, so user messages with an anchor offer it. */
+  readonly rewindAvailable?: boolean | undefined
+  /** Side tasks can be created from any message with text. */
+  readonly sideTaskAvailable?: boolean | undefined
+  readonly onOpenMessageActions?: ((item: MobileTimelineMessageItem) => void) | undefined
 }
 
 type TimelineGroup =
   | { readonly type: 'item'; readonly item: MobileTimelineItem }
   | { readonly type: 'tools'; readonly items: readonly MobileTimelineToolCallItem[] }
 
-export function Timeline({ sessionKey, timeline, displayMode, truncated, client }: TimelineProps) {
+export function Timeline({
+  sessionKey,
+  timeline,
+  displayMode,
+  truncated,
+  client,
+  rewindAvailable = false,
+  sideTaskAvailable = false,
+  onOpenMessageActions,
+}: TimelineProps) {
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ITEMS)
   const [showJump, setShowJump] = useState(false)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -105,6 +119,9 @@ export function Timeline({ sessionKey, timeline, displayMode, truncated, client 
               key={`${group.item.kind}:${group.item.id}`}
               item={group.item}
               client={client}
+              rewindAvailable={rewindAvailable}
+              sideTaskAvailable={sideTaskAvailable}
+              onOpenMessageActions={onOpenMessageActions}
             />
           ),
         )}
@@ -141,13 +158,27 @@ function groupTimeline(items: readonly MobileTimelineItem[], groupTools: boolean
 function TimelineItem({
   item,
   client,
+  rewindAvailable,
+  sideTaskAvailable,
+  onOpenMessageActions,
 }: {
   readonly item: MobileTimelineItem
   readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob'>
+  readonly rewindAvailable: boolean
+  readonly sideTaskAvailable: boolean
+  readonly onOpenMessageActions: ((item: MobileTimelineMessageItem) => void) | undefined
 }) {
   switch (item.kind) {
     case 'message':
-      return <MessageItem item={item} client={client} />
+      return (
+        <MessageItem
+          item={item}
+          client={client}
+          rewindAvailable={rewindAvailable}
+          sideTaskAvailable={sideTaskAvailable}
+          onOpenMessageActions={onOpenMessageActions}
+        />
+      )
     case 'notice':
       return <NoticeItem item={item} />
     case 'toolCall':
@@ -158,14 +189,25 @@ function TimelineItem({
 function MessageItem({
   item,
   client,
+  rewindAvailable,
+  sideTaskAvailable,
+  onOpenMessageActions,
 }: {
   readonly item: MobileTimelineMessageItem
   readonly client: Pick<MobileClient, 'fetchAttachmentBlob'>
+  readonly rewindAvailable: boolean
+  readonly sideTaskAvailable: boolean
+  readonly onOpenMessageActions: ((item: MobileTimelineMessageItem) => void) | undefined
 }) {
   if (item.memoryTrimmed === true) {
     return <div className="timeline-notice">{strings.memoryTrimmed}</div>
   }
   if (item.role === 'user') {
+    const showActions =
+      onOpenMessageActions !== undefined &&
+      (item.canFork === true ||
+        (item.messageId !== undefined && rewindAvailable) ||
+        sideTaskAvailable)
     return (
       <div className="message message--user" data-testid="user-message">
         {item.attachments !== undefined && item.attachments.length > 0 && (
@@ -173,16 +215,53 @@ function MessageItem({
         )}
         {item.text !== '' && <p className="message__text">{item.text}</p>}
         {item.hasNonText === true && <p className="muted-note">{strings.messageNonText}</p>}
+        {showActions && (
+          <MessageActionsButton
+            testId="user-message-actions"
+            onClick={() => onOpenMessageActions?.(item)}
+          />
+        )}
       </div>
     )
   }
   if (item.role === 'thought') return <ThoughtItem item={item} />
+  const showActions =
+    onOpenMessageActions !== undefined &&
+    sideTaskAvailable &&
+    item.streaming !== true &&
+    item.text.trim() !== ''
   return (
     <div className="message message--agent" data-testid="agent-message">
       <MarkdownView text={item.text} testId="agent-markdown" />
       {item.hasNonText === true && <p className="muted-note">{strings.messageNonText}</p>}
       {item.streaming && <span className="streaming-cursor" aria-hidden="true" />}
+      {showActions && (
+        <MessageActionsButton
+          testId="agent-message-actions"
+          onClick={() => onOpenMessageActions?.(item)}
+        />
+      )}
     </div>
+  )
+}
+
+function MessageActionsButton({
+  testId,
+  onClick,
+}: {
+  readonly testId: string
+  readonly onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      className="message__actions"
+      data-testid={testId}
+      aria-label={strings.messageActionsTitle}
+      onClick={onClick}
+    >
+      ⋯
+    </button>
   )
 }
 

@@ -40,6 +40,14 @@ export interface MobileSessionSummary {
   backgroundTaskCount: number
   /** Whether the agent accepts `image` content blocks for prompts. */
   imageSupported?: boolean
+  /** Agent advertised `sessionCapabilities.fork`. */
+  forkSupported?: boolean
+  /** Agent advertised the universe rewind ext-method capability. */
+  rewindSupported?: boolean
+  /** Durable id of the parent session when this row is a side task. */
+  sideTaskOf?: string
+  /** Number of direct side-task children (parent rows only). */
+  sideTaskChildCount?: number
   /** Epoch milliseconds. */
   updatedAt: number
 }
@@ -78,6 +86,10 @@ export interface MobileTimelineMessageItem {
   attachments?: readonly MobileMessageAttachment[]
   /** True when the message carries a non-text block not represented by `attachments`. */
   hasNonText?: boolean
+  /** Agent-side user-turn anchor; only user messages with a client messageId. */
+  messageId?: string
+  /** Whether fork may target this turn (first user turn is rewind-only). */
+  canFork?: boolean
 }
 
 export interface MobileTimelineToolCallItem {
@@ -339,6 +351,13 @@ export const MOBILE_COMMAND_KINDS = [
   'newSession',
   'renameSession',
   'deleteSession',
+  'forkSession',
+  'previewRewind',
+  'rewindSession',
+  'createSideTask',
+  'listSideTasks',
+  'openSideTask',
+  'deleteSideTask',
   'listWorkspaces',
   'listAgents',
 ] as const
@@ -417,6 +436,44 @@ export interface DeleteSessionPayload {
   ref: MobileSessionRef
 }
 
+export interface ForkSessionPayload {
+  ref: MobileSessionRef
+  /** User-turn anchor; omit to fork from the conversation tip. */
+  messageId?: string
+}
+
+export interface PreviewRewindPayload {
+  ref: MobileSessionRef
+  messageId: string
+}
+
+export interface RewindSessionPayload {
+  ref: MobileSessionRef
+  messageId: string
+  /** false keeps the agent-edited files; omitted/true rolls them back. */
+  rewindFiles?: boolean
+}
+
+export interface CreateSideTaskPayload {
+  ref: MobileSessionRef
+  /** Whole-message quote; omitted for a blank side task. */
+  quote?: string
+}
+
+export interface ListSideTasksPayload {
+  ref: MobileSessionRef
+}
+
+export interface OpenSideTaskPayload {
+  ref: MobileSessionRef
+  sideTaskId: string
+}
+
+export interface DeleteSideTaskPayload {
+  ref: MobileSessionRef
+  sideTaskId: string
+}
+
 export interface CommandFrame {
   type: 'command'
   requestId: string
@@ -458,6 +515,35 @@ export interface ClientStateFrame {
 /** Result of `newSession`. */
 export interface MobileNewSessionResult {
   ref: MobileSessionRef
+}
+
+/** Result of `forkSession` / `createSideTask` / `openSideTask`. */
+export type MobileSessionRefResult = MobileNewSessionResult
+
+export interface MobileRewindPreview {
+  canRewind: boolean
+  error?: string
+  /** Number of files the agent would touch; paths stay on the PC. */
+  filesChanged: number
+  insertions?: number
+  deletions?: number
+}
+
+export interface MobileRewindResult {
+  canRewind: boolean
+  error?: string
+  /** Original user text, returned only for the phone-side composer backfill. */
+  text?: string
+}
+
+export interface MobileSideTaskSummary {
+  /** Durable session id of the side task. */
+  id: string
+  title: string
+  /** Epoch milliseconds. */
+  lastUsedAt: number
+  /** Resident in the owning window's session registry. */
+  live: boolean
 }
 
 export interface MobileWorkspaceCandidate {
@@ -537,6 +623,8 @@ export interface MobileMessageUpsertEvent {
   /** Full replacement; omitted means unchanged, `[]` clears. */
   attachments?: readonly MobileMessageAttachment[]
   hasNonText?: boolean
+  messageId?: string
+  canFork?: boolean
 }
 
 export interface MobileToolCallUpsertEvent {

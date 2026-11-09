@@ -16,6 +16,17 @@ export interface InboxGroup {
   readonly sessions: readonly MobileSessionSummary[]
 }
 
+/**
+ * The inbox lists normal sessions only. Side-task rows stay in the store so
+ * notifications / deep links / snapshots still resolve, but their entry point
+ * is the parent's side-task list.
+ */
+export function selectInboxSessions(
+  sessions: readonly MobileSessionSummary[],
+): readonly MobileSessionSummary[] {
+  return sessions.filter((session) => session.sideTaskOf === undefined)
+}
+
 /** Ordered by urgency; empty buckets are omitted so the first screen stays short. */
 export function groupSessions(sessions: readonly MobileSessionSummary[]): InboxGroup[] {
   return MOBILE_SESSION_BUCKETS.map((bucket) => ({

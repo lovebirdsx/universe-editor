@@ -20,8 +20,12 @@
  *  used by E2E to exercise the editor's optimistic "connecting" session row.
  *  ECHO_AGENT_FORK=1: initialize advertises `sessionCapabilities.fork`, and
  *  ECHO_AGENT_REWIND=1: initialize advertises the `universe-editor/capabilities`
- *  rewind block — both only light up the editor's fork/rewind entry points; the
- *  fixture implements neither RPC (specs open the picker and dismiss it).
+ *  rewind block — both only light up the editor's fork/rewind entry points.
+ *  ECHO_AGENT_FORK_RPC=1 / ECHO_AGENT_REWIND_RPC=1 additionally implement the
+ *  `session/fork` and `universe-editor/rewind_session` RPCs against the fixture's
+ *  in-memory prompt history (fork slices before `_meta.rewindTo`; rewind
+ *  truncates and replays the surviving user turns). The flags are independent so
+ *  negative-path specs keep the RPC-less default.
  *  ECHO_AGENT_TURN_END_GATE=<path>: 流式指令改等 <path> 出现再收尾（未设＝固定 500ms）。
  *  ECHO_AGENT_STREAM_CONTINUE_GATE=<path>: emit-subagent 发完首块再等 <path> 才继续。
  *  ECHO_AGENT_PID_FILE / ECHO_AGENT_ORPHAN_FILE / ECHO_AGENT_TREE_VIA_WRAPPER /
@@ -148,6 +152,8 @@ if (process.env.ECHO_AGENT_ORPHAN_FILE) {
 const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
 const forkCapabilityEnabled = process.env.ECHO_AGENT_FORK === '1'
 const rewindCapabilityEnabled = process.env.ECHO_AGENT_REWIND === '1'
+const forkRpcEnabled = process.env.ECHO_AGENT_FORK_RPC === '1'
+const rewindRpcEnabled = process.env.ECHO_AGENT_REWIND_RPC === '1'
 
 // How long the streaming directives keep their turn open after the final chunk when no
 // gate is set. A spec reads the renderer's live counters inside this window; the message
@@ -1119,6 +1125,78 @@ async function runPrompt(id, params) {
   reply(id, { stopReason: 'end_turn' })
 }
 
+function anchorIndex(history, messageId) {
+  if (typeof messageId !== 'string') return -1
+  return history.findIndex((turn) => turn.messageId === messageId)
+}
+
+function replayUserTurns(sessionId, history) {
+  for (const turn of history) {
+    for (const content of turn.prompt) {
+      notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'user_message_chunk',
+          content,
+          ...(turn.messageId ? { messageId: turn.messageId } : {}),
+        },
+      })
+    }
+  }
+}
+
+/** `session/fork`: slice the in-memory prompt history before `_meta.rewindTo`. */
+function forkSession(id, params) {
+  if (!forkRpcEnabled) return fail(id, -32601, 'Method not found: session/fork')
+  const history = sessionPrompts.get(params.sessionId) ?? []
+  let kept = history
+  const rewindTo = params._meta?.rewindTo
+  if (rewindTo !== undefined) {
+    const index = anchorIndex(history, rewindTo)
+    // Like the real fork: an unresolvable anchor is refused, never a full copy.
+    if (index < 0) return fail(id, -32602, 'fork anchor not found: ' + rewindTo)
+    kept = history.slice(0, index)
+  }
+  const sessionId = 'echo-' + nextSessionId++
+  sessionMcpServers.set(sessionId, params.mcpServers ?? [])
+  sessionCwds.set(sessionId, params.cwd ?? '')
+  if (kept.length > 0) {
+    sessionPrompts.set(
+      sessionId,
+      kept.map((turn) => ({ ...turn })),
+    )
+    messagedSessions.add(sessionId)
+  }
+  return reply(id, { sessionId })
+}
+
+/** `universe-editor/rewind_session`: truncate before the anchor, then replay. */
+function rewindSession(id, params) {
+  if (!rewindRpcEnabled) {
+    return fail(id, -32601, 'Method not found: universe-editor/rewind_session')
+  }
+  const sessionId = params.sessionId
+  const history = sessionPrompts.get(sessionId) ?? []
+  const index = anchorIndex(history, params.messageId)
+  if (index < 0) return reply(id, { canRewind: false, error: 'rewind anchor not found' })
+  if (params.dryRun === true) {
+    return reply(id, {
+      canRewind: true,
+      filesChanged: ['src/a.ts'],
+      insertions: 2,
+      deletions: 1,
+    })
+  }
+  sessionPrompts.set(sessionId, history.slice(0, index))
+  replayUserTurns(sessionId, history.slice(0, index))
+  return reply(id, {
+    canRewind: true,
+    filesChanged: ['src/a.ts'],
+    insertions: 2,
+    deletions: 1,
+  })
+}
+
 function handle(msg) {
   // Response to an agent-initiated request (no method)?
   if (msg.method === undefined) {
@@ -1215,6 +1293,10 @@ function handle(msg) {
     }
     case 'session/prompt':
       return void runPrompt(msg.id, msg.params || {})
+    case 'session/fork':
+      return forkSession(msg.id, msg.params || {})
+    case 'universe-editor/rewind_session':
+      return rewindSession(msg.id, msg.params || {})
     default:
       return fail(msg.id, -32601, 'Method not found: ' + msg.method)
   }

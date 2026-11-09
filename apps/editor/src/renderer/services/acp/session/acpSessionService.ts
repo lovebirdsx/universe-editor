@@ -272,9 +272,10 @@ export interface IAcpSessionService {
    * replays the conversation via `session/load`, and registers the session
    * before issuing the load so streaming `session/update` notifications during
    * replay are routed correctly. Concurrent calls for the same sessionId
-   * dedupe onto a single in-flight promise.
+   * dedupe onto a single in-flight promise. `activate` defaults to true; mobile
+   * callers pass false so resuming a session does not steal PC focus.
    */
-  resumeSession(sessionId: string): Promise<IAcpSession>
+  resumeSession(sessionId: string, options?: { activate?: boolean }): Promise<IAcpSession>
   /**
    * Resume a session that belongs to a DIFFERENT worktree as a read-only
    * preview: spawns the agent against the session's own cwd and replays the
@@ -344,10 +345,15 @@ export interface IAcpSessionService {
    * `session/fork` (Claude only for now, gated on
    * `sessionCapabilities.fork`): the fork is created resident on the agent, then
    * resumed here via `session/load` so its truncated history replays into a fresh
-   * live session that is registered and made active. Rejects if the agent does
-   * not advertise fork support. Returns the new session.
+   * live session that is registered and made active. `activate` defaults to true;
+   * mobile callers pass false. Rejects if the agent does not advertise fork
+   * support. Returns the new session.
    */
-  forkSession(sessionId: string, messageId?: string): Promise<IAcpSession>
+  forkSession(
+    sessionId: string,
+    messageId?: string,
+    options?: { activate?: boolean },
+  ): Promise<IAcpSession>
   /**
    * Fork a LIVE session into a **side task** (侧边任务): a read-only-mode child
    * chat that inherits the parent's full conversation as agent-side context but
@@ -1283,17 +1289,28 @@ export class AcpSessionService
     this._sessionStore.setActive(sessionId)
   }
 
-  async resumeSession(sessionId: string): Promise<IAcpSession> {
+  async resumeSession(
+    sessionId: string,
+    options?: { activate?: boolean },
+  ): Promise<IAcpSession> {
+    const activate = options?.activate !== false
     // Concurrent callers (e.g. AcpSessionEditor's useEffect + a sidebar click
     // landing in the same frame) must dedupe — otherwise both race past the
     // existing-session check and we spawn two agent subprocesses, the second
     // of which overwrites the first in _sessions and corrupts the routing
     // map. The in-flight promise is settled before being removed.
     const inflight = this._resumingBySessionId.get(sessionId)
-    if (inflight) return inflight
+    if (inflight) {
+      // The first caller's activation choice must not leak to later callers: a
+      // non-activating mobile resume can win the race, and the PC caller that
+      // joins it still expects the session to become active.
+      const resumed = await inflight
+      if (activate) this.setActive(resumed.id)
+      return resumed
+    }
     const existing = this._findSession(sessionId)
     if (existing && isResidentLive(existing)) {
-      this.setActive(existing.id)
+      if (activate) this.setActive(existing.id)
       // Dormant: the session object, its timeline and its tab are all intact —
       // only the agent process is gone. Wake it in place rather than building a
       // SECOND session for the same durable id: a session created in this run
@@ -1305,7 +1322,10 @@ export class AcpSessionService
       if (existing.isDormant.get()) void existing.ensureAwake()
       return existing
     }
-    const promise = this._resumeSessionInner(sessionId, { readOnly: false }).finally(() => {
+    const promise = this._resumeSessionInner(sessionId, {
+      readOnly: false,
+      activate,
+    }).finally(() => {
       this._resumingBySessionId.delete(sessionId)
     })
     this._resumingBySessionId.set(sessionId, promise)
@@ -2138,7 +2158,11 @@ export class AcpSessionService
     return true
   }
 
-  async forkSession(sessionId: string, messageId?: string): Promise<IAcpSession> {
+  async forkSession(
+    sessionId: string,
+    messageId?: string,
+    options?: { activate?: boolean },
+  ): Promise<IAcpSession> {
     // Resolve the source session's durable coordinates. A live session carries
     // its agent-issued id; otherwise fall back to the persisted history row.
     const live = this._findSession(sessionId)
@@ -2202,9 +2226,10 @@ export class AcpSessionService
       agentId: entry.agentId,
       fromMessage: messageId !== undefined,
     })
-    // Load + replay the fork's (truncated) history into a fresh live session and
-    // make it active — resumeSession handles the session/load replay.
-    return this.resumeSession(newSessionId)
+    // Load + replay the fork's (truncated) history into a fresh live session.
+    // Desktop callers keep the default (activate); mobile passes false so a
+    // phone-initiated fork cannot replace the PC's active session.
+    return this.resumeSession(newSessionId, { activate: options?.activate ?? true })
   }
 
   async forkSideTask(

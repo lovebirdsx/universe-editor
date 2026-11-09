@@ -14,9 +14,12 @@ import type {
   MobileElicitationAction,
   MobileElicitationContentValue,
   MobileErrorCode,
+  MobileRewindPreview,
+  MobileRewindResult,
   MobileSessionBucket,
   MobileSessionEvent,
   MobileSessionSnapshot,
+  MobileSideTaskSummary,
   MobileToolCallDetail,
   MobileWorkspaceCandidate,
 } from '@universe-editor/mobile-protocol'
@@ -223,6 +226,14 @@ export interface MobileBridgeSessionSummary {
   readonly backgroundTaskCount: number
   /** Whether the agent accepts prompt images; absent until the handshake reports it. */
   readonly imageSupported?: boolean
+  /** Agent advertised `sessionCapabilities.fork`. */
+  readonly forkSupported?: boolean
+  /** Agent advertised the universe rewind ext-method capability. */
+  readonly rewindSupported?: boolean
+  /** Durable id of the parent session when this row is a side task. */
+  readonly sideTaskOf?: string
+  /** Number of direct side-task children (parent rows only). */
+  readonly sideTaskChildCount?: number
   readonly updatedAt: number
 }
 
@@ -406,6 +417,53 @@ export interface IMobileBridgeService {
 
   /** Runs the same plan/execute path as the PC "Delete Agent Session" command. */
   deleteSession(localId: string): Promise<MobileBridgeResult<void>>
+
+  // ---- Fork / rewind / side task -------------------------------------------------
+
+  /**
+   * Fork the session into a new independent session (from the tip when
+   * `messageId` is omitted). The child is never made active — a phone command
+   * must not steal the PC window's focus.
+   */
+  forkSession(
+    localId: string,
+    messageId?: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>
+
+  /** Dry-run file-impact preview for a rewind anchor. */
+  previewRewind(
+    localId: string,
+    messageId: string,
+  ): Promise<MobileBridgeResult<MobileRewindPreview>>
+
+  /**
+   * Truncate the conversation at a user-turn anchor and optionally roll back
+   * the agent-edited files. The anchor's original text is returned for the
+   * phone-side composer backfill; it is never written to the PC inbox.
+   */
+  rewindSession(
+    localId: string,
+    messageId: string,
+    rewindFiles?: boolean,
+  ): Promise<MobileBridgeResult<MobileRewindResult>>
+
+  /** Fork the parent into a read-only-mode side task; `quote` is the pulled-aside text. */
+  createSideTask(
+    localId: string,
+    quote?: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>
+
+  /** Direct side-task children of the parent, most recently used first. */
+  listSideTasks(localId: string): Promise<MobileBridgeResult<readonly MobileSideTaskSummary[]>>
+
+  /** Open an existing (live or history-only) side task without activating it. */
+  openSideTask(
+    localId: string,
+    sideTaskId: string,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>
+
+  /** Delete a side task and its whole descendant subtree. */
+  deleteSideTask(localId: string, sideTaskId: string): Promise<MobileBridgeResult<void>>
 
   /** This window's open workspace (main merges it with recent workspaces). */
   listWorkspaces(): Promise<readonly MobileWorkspaceCandidate[]>

@@ -120,6 +120,8 @@ export const MAX_REQUEST_ID_LENGTH = 128
 export const MAX_CURRENCY_LENGTH = 16
 /** Phone prompt cap; also applies to a new session's initial prompt. */
 export const MAX_PROMPT_LENGTH = 32 * 1024
+/** Whole-message quote cap for side tasks; mirrors the desktop selection cap. */
+export const MAX_SIDE_TASK_QUOTE_LENGTH = 8000
 export const MAX_FEEDBACK_LENGTH = 8 * 1024
 export const MAX_ELICITATION_CONTENT_KEYS = 128
 export const MAX_PUSH_ENDPOINT_LENGTH = 2048
@@ -529,6 +531,20 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseRenameSessionPayload(value)
     case 'deleteSession':
       return parseRefOnlyPayload(value, 'deleteSession')
+    case 'forkSession':
+      return parseForkSessionPayload(value)
+    case 'previewRewind':
+      return parseRewindPayload(value, 'previewRewind', false)
+    case 'rewindSession':
+      return parseRewindPayload(value, 'rewindSession', true)
+    case 'createSideTask':
+      return parseCreateSideTaskPayload(value)
+    case 'listSideTasks':
+      return parseRefOnlyPayload(value, 'listSideTasks')
+    case 'openSideTask':
+      return parseSideTaskIdPayload(value, 'openSideTask')
+    case 'deleteSideTask':
+      return parseSideTaskIdPayload(value, 'deleteSideTask')
     case 'listWorkspaces':
     case 'listAgents':
       return parseEmptyPayload(value, kind)
@@ -556,6 +572,75 @@ function parseRequestRefPayload(
     return fail('bad_request', `${kind}.requestId must be 1–${MAX_REQUEST_ID_LENGTH} characters`)
   }
   return ok({ ref: ref.value, requestId })
+}
+
+function parseForkSessionPayload(
+  value: unknown,
+): Result<{ ref: MobileSessionRef; messageId?: string }> {
+  if (!isRecord(value)) return fail('bad_request', 'forkSession.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const messageId = parseOptionalNonEmptyString(
+    value.messageId,
+    MAX_ID_LENGTH,
+    'forkSession.messageId',
+  )
+  if (!messageId.ok) return messageId
+  return ok({
+    ref: ref.value,
+    ...(messageId.value !== undefined ? { messageId: messageId.value } : {}),
+  })
+}
+
+function parseRewindPayload(
+  value: unknown,
+  kind: string,
+  withRewindFiles: boolean,
+): Result<{ ref: MobileSessionRef; messageId: string; rewindFiles?: boolean }> {
+  if (!isRecord(value)) return fail('bad_request', `${kind}.payload must be an object`)
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const messageId = value.messageId
+  if (!isNonEmptyBoundedString(messageId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `${kind}.messageId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  const rewindFiles = parseOptionalBoolean(value.rewindFiles, `${kind}.rewindFiles`)
+  if (!rewindFiles.ok) return rewindFiles
+  return ok({
+    ref: ref.value,
+    messageId,
+    ...(withRewindFiles && rewindFiles.value !== undefined
+      ? { rewindFiles: rewindFiles.value }
+      : {}),
+  })
+}
+
+function parseCreateSideTaskPayload(
+  value: unknown,
+): Result<{ ref: MobileSessionRef; quote?: string }> {
+  if (!isRecord(value)) return fail('bad_request', 'createSideTask.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const quote = parseOptionalString(value.quote, MAX_SIDE_TASK_QUOTE_LENGTH, 'createSideTask.quote')
+  if (!quote.ok) return quote
+  return ok({
+    ref: ref.value,
+    ...(quote.value !== undefined ? { quote: quote.value } : {}),
+  })
+}
+
+function parseSideTaskIdPayload(
+  value: unknown,
+  kind: string,
+): Result<{ ref: MobileSessionRef; sideTaskId: string }> {
+  if (!isRecord(value)) return fail('bad_request', `${kind}.payload must be an object`)
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const sideTaskId = value.sideTaskId
+  if (!isNonEmptyBoundedString(sideTaskId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `${kind}.sideTaskId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  return ok({ ref: ref.value, sideTaskId })
 }
 
 function parseEmptyPayload(value: unknown, kind: string): Result<Record<string, never>> {
@@ -1021,6 +1106,21 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
   }
   const imageSupported = parseOptionalBoolean(value.imageSupported, 'session.imageSupported')
   if (!imageSupported.ok) return imageSupported
+  const forkSupported = parseOptionalBoolean(value.forkSupported, 'session.forkSupported')
+  if (!forkSupported.ok) return forkSupported
+  const rewindSupported = parseOptionalBoolean(value.rewindSupported, 'session.rewindSupported')
+  if (!rewindSupported.ok) return rewindSupported
+  const sideTaskOf = parseOptionalNonEmptyString(
+    value.sideTaskOf,
+    MAX_ID_LENGTH,
+    'session.sideTaskOf',
+  )
+  if (!sideTaskOf.ok) return sideTaskOf
+  const sideTaskChildCount = parseOptionalNonNegativeInteger(
+    value.sideTaskChildCount,
+    'session.sideTaskChildCount',
+  )
+  if (!sideTaskChildCount.ok) return sideTaskChildCount
   const updatedAt = value.updatedAt
   if (!isFiniteNumber(updatedAt)) {
     return fail('bad_request', 'session.updatedAt must be a finite number')
@@ -1041,6 +1141,12 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
     hasPendingElicitation,
     backgroundTaskCount,
     ...(imageSupported.value !== undefined ? { imageSupported: imageSupported.value } : {}),
+    ...(forkSupported.value !== undefined ? { forkSupported: forkSupported.value } : {}),
+    ...(rewindSupported.value !== undefined ? { rewindSupported: rewindSupported.value } : {}),
+    ...(sideTaskOf.value !== undefined ? { sideTaskOf: sideTaskOf.value } : {}),
+    ...(sideTaskChildCount.value !== undefined
+      ? { sideTaskChildCount: sideTaskChildCount.value }
+      : {}),
     updatedAt,
   })
 }
@@ -1172,6 +1278,10 @@ function parseTimelineMessage(value: Record<string, unknown>): Result<MobileTime
   if (!hasNonText.ok) return hasNonText
   const attachments = parseAttachments(value.attachments, 'message.attachments')
   if (!attachments.ok) return attachments
+  const messageId = parseOptionalNonEmptyString(value.messageId, MAX_ID_LENGTH, 'message.messageId')
+  if (!messageId.ok) return messageId
+  const canFork = parseOptionalBoolean(value.canFork, 'message.canFork')
+  if (!canFork.ok) return canFork
   return ok({
     kind: 'message',
     id,
@@ -1181,6 +1291,8 @@ function parseTimelineMessage(value: Record<string, unknown>): Result<MobileTime
     ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
     ...(attachments.value !== undefined ? { attachments: attachments.value } : {}),
     ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
+    ...(messageId.value !== undefined ? { messageId: messageId.value } : {}),
+    ...(canFork.value !== undefined ? { canFork: canFork.value } : {}),
   })
 }
 
@@ -1795,6 +1907,14 @@ function parseMessageUpsertEvent(value: Record<string, unknown>): Result<MobileS
   if (!hasNonText.ok) return hasNonText
   const attachments = parseAttachments(value.attachments, 'message_upsert.attachments')
   if (!attachments.ok) return attachments
+  const messageId = parseOptionalNonEmptyString(
+    value.messageId,
+    MAX_ID_LENGTH,
+    'message_upsert.messageId',
+  )
+  if (!messageId.ok) return messageId
+  const canFork = parseOptionalBoolean(value.canFork, 'message_upsert.canFork')
+  if (!canFork.ok) return canFork
   return ok({
     type: 'message_upsert',
     id,
@@ -1805,6 +1925,8 @@ function parseMessageUpsertEvent(value: Record<string, unknown>): Result<MobileS
     ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
     ...(attachments.value !== undefined ? { attachments: attachments.value } : {}),
     ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
+    ...(messageId.value !== undefined ? { messageId: messageId.value } : {}),
+    ...(canFork.value !== undefined ? { canFork: canFork.value } : {}),
   })
 }
 
@@ -1885,6 +2007,29 @@ function parseOptionalString(
   if (value === undefined) return ok(undefined)
   if (!isBoundedString(value, maxLength)) {
     return fail('bad_request', `${field} must be at most ${maxLength} characters`)
+  }
+  return ok(value)
+}
+
+function parseOptionalNonEmptyString(
+  value: unknown,
+  maxLength: number,
+  field: string,
+): Result<string | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!isNonEmptyBoundedString(value, maxLength)) {
+    return fail('bad_request', `${field} must be 1–${maxLength} characters`)
+  }
+  return ok(value)
+}
+
+function parseOptionalNonNegativeInteger(
+  value: unknown,
+  field: string,
+): Result<number | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!isNonNegativeInteger(value)) {
+    return fail('bad_request', `${field} must be a non-negative integer`)
   }
   return ok(value)
 }

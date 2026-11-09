@@ -1,3 +1,4 @@
+import type { MobileSessionRef, MobileTimelineMessageItem } from '@universe-editor/mobile-protocol'
 import { useEffect, useRef, useState } from 'react'
 import { Spinner } from '../components/Spinner.js'
 import type { MobileClient } from '../state/mobileClient.js'
@@ -5,14 +6,23 @@ import { sessionRouteKey } from '../state/refs.js'
 import type { PermissionClearedInfo } from '../state/sessionStore.js'
 import { useStore } from '../state/useStore.js'
 import { commandErrorText, strings } from '../strings.js'
-import { Composer } from './Composer.js'
+import { Composer, type ComposerPrefill } from './Composer.js'
+import {
+  clipSideTaskQuote,
+  depositComposerPrefill,
+  sideTaskQuoteText,
+  takeComposerPrefill,
+} from './composerPrefill.js'
 import { ConfigSheet } from './ConfigSheet.js'
 import { ElicitationSheet } from './ElicitationSheet.js'
+import { MessageActionsSheet } from './MessageActionsSheet.js'
 import { PermissionSheet } from './PermissionSheet.js'
 import { PlanPanel } from './PlanPanel.js'
+import { RewindPreviewSheet } from './RewindPreviewSheet.js'
 import { SessionHeader } from './SessionHeader.js'
 import { SessionMenuSheet } from './SessionMenuSheet.js'
 import { readSessionDisplayPreference, type SessionDisplayPreference } from './sessionDisplay.js'
+import { SideTasksSheet } from './SideTasksSheet.js'
 import { Timeline } from './Timeline.js'
 import { useVisualViewportHeight } from './useVisualViewport.js'
 
@@ -22,18 +32,37 @@ export const SESSION_LOAD_TIMEOUT_MS = 15_000
 export interface SessionPageProps {
   readonly client: MobileClient
   readonly sessionKey: string
+  /** A command returned this ref (fork / side task); subscribe directly. */
+  readonly initialRef?: MobileSessionRef | undefined
+  readonly onOpenSessionRef?: ((ref: MobileSessionRef) => void) | undefined
   readonly onBack: () => void
   /** Inbox "待审批" rows ask the page to reveal the pending card immediately. */
   readonly focusPending?: boolean | undefined
 }
 
-export function SessionPage({ client, sessionKey, onBack, focusPending }: SessionPageProps) {
+export function SessionPage({
+  client,
+  sessionKey,
+  initialRef,
+  onOpenSessionRef,
+  onBack,
+  focusPending,
+}: SessionPageProps) {
+  // The ref that opened this route must survive later prop clearing without
+  // re-running `openSession(durable-id)` before the hub mirror contains it.
+  const initialRefRef = useRef(initialRef)
   useEffect(() => {
-    client.openSession(sessionKey)
+    initialRefRef.current = initialRef
+  }, [initialRef])
+  useEffect(() => {
+    const ref = initialRefRef.current
+    if (ref !== undefined && sessionRouteKey(ref) === sessionKey) client.openSessionRef(ref)
+    else client.openSession(sessionKey)
     return () => client.closeSession()
   }, [client, sessionKey])
 
   const state = useStore(client.getSessionStore())
+  const inbox = useStore(client.getInboxStore())
   const socketState = useStore(client.getSocketStateStore())
   const invalidFrame = useStore(client.getInvalidFrameStore())
   const viewportHeight = useVisualViewportHeight()
@@ -47,10 +76,34 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
   const [busyConfigId, setBusyConfigId] = useState<string | undefined>(undefined)
   const [loadTimedOut, setLoadTimedOut] = useState(false)
   const [retryToken, setRetryToken] = useState(0)
+  const [messageActionsItem, setMessageActionsItem] = useState<
+    MobileTimelineMessageItem | undefined
+  >(undefined)
+  const [rewindMessageId, setRewindMessageId] = useState<string | undefined>(undefined)
+  const [sideTasksOpen, setSideTasksOpen] = useState(false)
+  const [prefill, setPrefill] = useState<ComposerPrefill | undefined>(undefined)
   const handledCleared = useRef<PermissionClearedInfo | undefined>(undefined)
   const footerRef = useRef<HTMLDivElement | null>(null)
 
   const notice = (text: string): void => setToast(text)
+  const openRef = onOpenSessionRef ?? ((): void => undefined)
+  const applyPrefill = (text: string): void =>
+    setPrefill((previous) => ({
+      token: (previous?.token ?? 0) + 1,
+      sessionKey,
+      text,
+    }))
+
+  useEffect(() => {
+    const text = takeComposerPrefill(sessionKey)
+    if (text !== undefined) {
+      setPrefill((previous) => ({
+        token: (previous?.token ?? 0) + 1,
+        sessionKey,
+        text,
+      }))
+    }
+  }, [sessionKey])
   const pendingPermissionId = state.pendingPermission?.requestId
   const pendingElicitationId = state.pendingElicitation?.requestId
 
@@ -107,6 +160,37 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
     client.refreshSession()
   }
 
+  const forkFrom = async (messageId?: string): Promise<void> => {
+    const result = await client.forkSession(messageId)
+    setMessageActionsItem(undefined)
+    openRef(result.ref)
+  }
+
+  const createSideTaskFrom = async (text?: string): Promise<void> => {
+    const trimmed = text?.trim() ?? ''
+    const result = await client.createSideTask(
+      trimmed === '' ? undefined : clipSideTaskQuote(trimmed),
+    )
+    if (trimmed !== '') {
+      depositComposerPrefill(sessionRouteKey(result.ref), sideTaskQuoteText(trimmed))
+    }
+    setMessageActionsItem(undefined)
+    openRef(result.ref)
+  }
+
+  const reopenAfterRewind = (text: string | undefined): void => {
+    setRewindMessageId(undefined)
+    if (text !== undefined) {
+      applyPrefill(text)
+      notice(strings.rewindDone)
+    }
+  }
+
+  const openSideTaskRef = (ref: MobileSessionRef): void => {
+    setSideTasksOpen(false)
+    openRef(ref)
+  }
+
   const style = viewportHeight === undefined ? undefined : { height: `${viewportHeight}px` }
 
   if (state.removed) {
@@ -136,6 +220,13 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
   const elicitation = state.pendingElicitation
   const readOnly = state.summary?.readOnly ?? false
   const running = state.summary?.bucket === 'in_progress'
+  const rewindAvailable = state.summary?.rewindSupported === true && !readOnly
+  const sideTaskAvailable = state.summary?.forkSupported === true && !readOnly
+  const sideTaskOf = state.summary?.sideTaskOf
+  const parentSummary =
+    sideTaskOf === undefined
+      ? undefined
+      : inbox.sessions.find((session) => session.ref.durableId === sideTaskOf)
   const loadFailed = waitingForSnapshot && (loadTimedOut || invalidFrame !== undefined)
 
   return (
@@ -146,6 +237,8 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
         socketState={socketState}
         online={online}
         busyConfigId={busyConfigId}
+        parentTitle={parentSummary?.title}
+        onOpenParent={parentSummary === undefined ? undefined : () => openRef(parentSummary.ref)}
         onBack={onBack}
         onOpenConfig={(id) => setConfigSheetId(id)}
         onToggleBoolean={(option) => void toggleBoolean(option.id, option.currentValue !== 'On')}
@@ -175,6 +268,9 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
             displayMode={displayMode}
             truncated={state.truncated}
             client={client}
+            rewindAvailable={rewindAvailable}
+            sideTaskAvailable={sideTaskAvailable}
+            onOpenMessageActions={setMessageActionsItem}
           />
           <div className="session-footer" ref={footerRef} data-testid="session-footer">
             {permission !== undefined && (
@@ -202,12 +298,50 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
               imageSupported={state.summary?.imageSupported === true}
               fileSupported={state.summary?.authority === undefined}
               onUploadAttachment={(file, kind) => client.uploadAttachment(file, kind)}
+              prefill={prefill}
               onSend={(text, attachmentIds) => client.sendPrompt(text, attachmentIds)}
               onStop={() => client.cancelTurn()}
               onNotice={notice}
             />
           </div>
         </>
+      )}
+      {messageActionsItem !== undefined && (
+        <MessageActionsSheet
+          canRewind={rewindAvailable && messageActionsItem.messageId !== undefined}
+          canFork={messageActionsItem.canFork === true}
+          canCreateSideTask={sideTaskAvailable && messageActionsItem.text.trim() !== ''}
+          online={online}
+          running={running}
+          onRewind={() => {
+            const messageId = messageActionsItem.messageId
+            setMessageActionsItem(undefined)
+            if (messageId !== undefined) setRewindMessageId(messageId)
+          }}
+          onFork={() => forkFrom(messageActionsItem.messageId)}
+          onSideTask={() => createSideTaskFrom(messageActionsItem.text)}
+          onClose={() => setMessageActionsItem(undefined)}
+          onNotice={notice}
+        />
+      )}
+      {rewindMessageId !== undefined && (
+        <RewindPreviewSheet
+          client={client}
+          messageId={rewindMessageId}
+          online={online}
+          onClose={() => setRewindMessageId(undefined)}
+          onApplied={reopenAfterRewind}
+          onNotice={notice}
+        />
+      )}
+      {sideTasksOpen && (
+        <SideTasksSheet
+          client={client}
+          online={online}
+          onClose={() => setSideTasksOpen(false)}
+          onOpen={openSideTaskRef}
+          onNotice={notice}
+        />
       )}
       {configOption !== undefined && (
         <ConfigSheet
@@ -223,6 +357,16 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
           client={client}
           title={state.summary?.title ?? strings.sessionMore}
           online={online}
+          forkSupported={state.summary?.forkSupported === true}
+          readOnly={readOnly}
+          running={running}
+          sideTaskChildCount={state.summary?.sideTaskChildCount}
+          onForkTip={() => forkFrom()}
+          onNewSideTask={() => createSideTaskFrom()}
+          onOpenSideTasks={() => {
+            setMenuOpen(false)
+            setSideTasksOpen(true)
+          }}
           onClose={() => setMenuOpen(false)}
           onNotice={notice}
         />

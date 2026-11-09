@@ -1,6 +1,5 @@
 import type {
   MobileConfigOption,
-  MobileMessageAttachment,
   MobileMessageUpsertEvent,
   MobilePendingElicitation,
   MobilePendingPermission,
@@ -199,16 +198,20 @@ function upsertMessage(
   const text =
     event.textReplace !== undefined ? event.textReplace : existing.text + (event.textAppend ?? '')
   const next = [...timeline]
-  next[index] = buildMessage(event, text, existing.attachments)
+  next[index] = buildMessage(event, text, existing)
   return next
 }
 
 function buildMessage(
   event: MobileMessageUpsertEvent,
   text: string,
-  previousAttachments?: readonly MobileMessageAttachment[],
+  existing?: MobileTimelineMessageItem,
 ): MobileTimelineMessageItem {
-  const attachments = event.attachments ?? previousAttachments ?? []
+  const attachments = event.attachments ?? existing?.attachments ?? []
+  // A suffix append carries no anchor fields; preserve them from the existing
+  // row. An explicit `canFork: false` must win over the previous `true`.
+  const messageId = event.messageId ?? existing?.messageId
+  const canFork = event.canFork ?? existing?.canFork
   return {
     kind: 'message',
     id: event.id,
@@ -218,6 +221,8 @@ function buildMessage(
     ...(event.memoryTrimmed === true ? { memoryTrimmed: true } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
     ...(event.hasNonText === true ? { hasNonText: true } : {}),
+    ...(messageId !== undefined ? { messageId } : {}),
+    ...(canFork !== undefined ? { canFork } : {}),
   }
 }
 

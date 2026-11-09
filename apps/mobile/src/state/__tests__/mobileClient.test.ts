@@ -203,6 +203,165 @@ describe('MobileClient session subscription', () => {
   })
 })
 
+describe('MobileClient fork / rewind / side-task commands', () => {
+  function lastCommand(socket: FakeWebSocket): {
+    requestId: string
+    kind: string
+    payload: unknown
+    idempotencyKey?: string
+  } {
+    return sentFrames(socket)
+      .filter(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as Record<string, unknown>)['type'] === 'command',
+      )
+      .at(-1) as {
+      requestId: string
+      kind: string
+      payload: unknown
+      idempotencyKey?: string
+    }
+  }
+
+  it('subscribes directly to a command-returned ref', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSessionRef({ windowId: 2, localId: 'side-local', durableId: 'side-durable' })
+
+    expect(client.getOpenRouteKey()).toBe('side-durable')
+    expect(
+      sentFrames(socket).find(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as Record<string, unknown>)['type'] === 'subscribe_session',
+      ),
+    ).toMatchObject({
+      type: 'subscribe_session',
+      ref: { windowId: 2, localId: 'side-local', durableId: 'side-durable' },
+    })
+  })
+
+  it('binds fork/rewind/side-task payloads to the open ref', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    void client.forkSession('msg-1')
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'forkSession',
+      payload: { ref: { windowId: 1, localId: 's1' }, messageId: 'msg-1' },
+    })
+    expect(lastCommand(socket).idempotencyKey).toBeTruthy()
+
+    void client.previewRewind('msg-1')
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'previewRewind',
+      payload: { ref: { windowId: 1, localId: 's1' }, messageId: 'msg-1' },
+    })
+    expect(lastCommand(socket).idempotencyKey).toBeUndefined()
+
+    void client.rewindSession('msg-1', false)
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'rewindSession',
+      payload: { ref: { windowId: 1, localId: 's1' }, messageId: 'msg-1', rewindFiles: false },
+    })
+
+    void client.createSideTask('why?')
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'createSideTask',
+      payload: { ref: { windowId: 1, localId: 's1' }, quote: 'why?' },
+    })
+
+    void client.listSideTasks()
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'listSideTasks',
+      payload: { ref: { windowId: 1, localId: 's1' } },
+    })
+
+    void client.openSideTask('side-durable')
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'openSideTask',
+      payload: { ref: { windowId: 1, localId: 's1' }, sideTaskId: 'side-durable' },
+    })
+
+    void client.deleteSideTask('side-durable')
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'deleteSideTask',
+      payload: { ref: { windowId: 1, localId: 's1' }, sideTaskId: 'side-durable' },
+    })
+  })
+
+  it('validates command results and rejects malformed values', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    const fork = client.forkSession()
+    const forkCommand = lastCommand(socket)
+    socket.serverSend({
+      type: 'command_result',
+      requestId: forkCommand.requestId,
+      ok: true,
+      result: { ref: { windowId: 1, localId: 'fork-local', durableId: 'fork-durable' } },
+    })
+    await expect(fork).resolves.toEqual({
+      ref: { windowId: 1, localId: 'fork-local', durableId: 'fork-durable' },
+    })
+
+    const badPreview = client.previewRewind('msg-1')
+    const previewCommand = lastCommand(socket)
+    socket.serverSend({
+      type: 'command_result',
+      requestId: previewCommand.requestId,
+      ok: true,
+      result: { canRewind: 'yes', filesChanged: 1 },
+    })
+    await expect(badPreview).rejects.toMatchObject({ code: 'invalid_response' })
+
+    const rewind = client.rewindSession('msg-1')
+    const rewindCommand = lastCommand(socket)
+    socket.serverSend({
+      type: 'command_result',
+      requestId: rewindCommand.requestId,
+      ok: true,
+      result: { canRewind: true, text: 'original' },
+    })
+    await expect(rewind).resolves.toEqual({ canRewind: true, text: 'original' })
+
+    const list = client.listSideTasks()
+    const listCommand = lastCommand(socket)
+    socket.serverSend({
+      type: 'command_result',
+      requestId: listCommand.requestId,
+      ok: true,
+      result: 'nope',
+    })
+    await expect(list).rejects.toMatchObject({ code: 'invalid_response' })
+
+    const listOk = client.listSideTasks()
+    socket.serverSend({
+      type: 'command_result',
+      requestId: lastCommand(socket).requestId,
+      ok: true,
+      result: [{ id: 'side-1', title: 'Side', lastUsedAt: 1, live: true }],
+    })
+    await expect(listOk).resolves.toEqual([
+      { id: 'side-1', title: 'Side', lastUsedAt: 1, live: true },
+    ])
+  })
+
+  it('rejects when no session is open', async () => {
+    const { client } = createHarness()
+    await expect(client.listSideTasks()).rejects.toMatchObject({ code: 'session_not_found' })
+    await expect(client.rewindSession('msg-1')).rejects.toMatchObject({
+      code: 'session_not_found',
+    })
+  })
+})
+
 describe('MobileClient notifications', () => {
   it('captures the VAPID key and re-registers push after a reconnect', () => {
     const { client, sockets, timers } = createHarness()

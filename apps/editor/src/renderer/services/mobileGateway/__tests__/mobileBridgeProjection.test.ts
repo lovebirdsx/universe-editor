@@ -2,7 +2,12 @@ import { MAX_ATTACHMENTS_PER_PROMPT } from '@universe-editor/mobile-protocol'
 import type { AcpChildItem, AcpToolCall } from '../../acp/session/acpSession.js'
 import type { AcpMessage } from '../../acp/session/acpSessionModel.js'
 import { describe, expect, it } from 'vitest'
-import { diffMessage, projectMessage, projectToolCall } from '../mobileBridgeProjection.js'
+import {
+  diffMessage,
+  projectMessage,
+  projectToolCall,
+  type TimelineProjectionContext,
+} from '../mobileBridgeProjection.js'
 
 function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
   return {
@@ -151,6 +156,87 @@ describe('projectMessage mobile attachments', () => {
     expect(diffMessage(withAttachment, withoutAttachment)).toMatchObject({
       type: 'message_upsert',
       attachments: [],
+    })
+  })
+})
+
+function userMessage(overrides: Partial<AcpMessage> = {}): AcpMessage {
+  return {
+    id: 'm1',
+    role: 'user',
+    text: 'hello',
+    blocks: [{ type: 'text', text: 'hello' }],
+    streaming: false,
+    messageId: 'msg-1',
+    ...overrides,
+  }
+}
+
+const FORKABLE: TimelineProjectionContext = {
+  firstUserId: 'm0',
+  forkSupported: true,
+  readOnly: false,
+}
+
+describe('projectMessage rewind / fork anchors', () => {
+  it('projects the anchor and canFork for a non-first user turn', () => {
+    expect(projectMessage(userMessage(), FORKABLE)).toMatchObject({
+      messageId: 'msg-1',
+      canFork: true,
+    })
+  })
+
+  it('marks the first user turn rewind-only', () => {
+    expect(projectMessage(userMessage({ id: 'm0' }), FORKABLE)).toMatchObject({
+      messageId: 'msg-1',
+      canFork: false,
+    })
+  })
+
+  it('omits both fields for auto-retry and non-user messages', () => {
+    expect(projectMessage(userMessage({ autoRetry: true }), FORKABLE)).not.toHaveProperty(
+      'messageId',
+    )
+    expect(projectMessage(userMessage({ autoRetry: true }), FORKABLE)).not.toHaveProperty('canFork')
+    expect(
+      projectMessage(userMessage({ id: 'm2', role: 'agent' }), FORKABLE),
+    ).not.toHaveProperty('messageId')
+  })
+
+  it('keeps the anchor but disables fork for read-only or unsupported agents', () => {
+    expect(
+      projectMessage(userMessage(), { ...FORKABLE, readOnly: true }),
+    ).toMatchObject({ canFork: false })
+    expect(
+      projectMessage(userMessage(), { ...FORKABLE, forkSupported: false }),
+    ).toMatchObject({ canFork: false })
+  })
+
+  it('omits canFork when the caller has no timeline context', () => {
+    const projected = projectMessage(userMessage())
+    expect(projected).toMatchObject({ messageId: 'msg-1' })
+    expect(projected).not.toHaveProperty('canFork')
+  })
+})
+
+describe('diffMessage anchors', () => {
+  it('re-emits the anchor on a text append so the phone store keeps it', () => {
+    const previous = projectMessage(userMessage({ text: 'hel' }), FORKABLE)
+    const next = projectMessage(userMessage({ text: 'hello' }), FORKABLE)
+    expect(diffMessage(previous, next)).toMatchObject({
+      type: 'message_upsert',
+      textAppend: 'lo',
+      messageId: 'msg-1',
+      canFork: true,
+    })
+  })
+
+  it('emits an upsert when only canFork changes', () => {
+    const previous = projectMessage(userMessage(), FORKABLE)
+    const next = projectMessage(userMessage(), { ...FORKABLE, forkSupported: false })
+    expect(diffMessage(previous, next)).toMatchObject({
+      type: 'message_upsert',
+      canFork: false,
     })
   })
 })

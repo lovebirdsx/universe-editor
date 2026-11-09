@@ -32,6 +32,7 @@ import {
   type MobileSessionRef,
   type MobileSessionSnapshot,
   type MobileSessionSummary,
+  type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
   type ServerFrame,
   type SessionSnapshotFrame,
@@ -40,6 +41,7 @@ import type {
   IMobileBridgeService,
   MobileBridgeAttentionEvent,
   MobileBridgeEvent,
+  MobileBridgeNewSessionResult,
   MobileBridgePromptAttachment,
   MobileBridgeResult,
   MobileBridgeSessionEvent,
@@ -145,6 +147,10 @@ interface CommandOutcome {
 export const COMMAND_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000
 export const SEND_PROMPT_TIMEOUT_MS = 15_000
 const NEW_SESSION_BRIDGE_TIMEOUT_MS = 30_000
+/** Fork / rewind / side-task commands wait on an agent fork RPC plus a resume. */
+const LONG_COMMAND_TIMEOUT_MS = 120_000
+const PREVIEW_REWIND_TIMEOUT_MS = 30_000
+const LIST_SIDE_TASKS_TIMEOUT_MS = 10_000
 
 const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'sendPrompt',
@@ -158,6 +164,11 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'newSession',
   'renameSession',
   'deleteSession',
+  'forkSession',
+  'rewindSession',
+  'createSideTask',
+  'openSideTask',
+  'deleteSideTask',
 ])
 
 const sessionKey = (windowId: number, localId: string): string => `${windowId}:${localId}`
@@ -596,6 +607,55 @@ export class MobileGatewayHub {
           bridge.deleteSession(localId),
         )
       }
+      case 'forkSession': {
+        const p = frame.payload as { ref: MobileSessionRef; messageId?: string }
+        return this._sessionRefCommand(p.ref, LONG_COMMAND_TIMEOUT_MS, (bridge, localId) =>
+          bridge.forkSession(localId, p.messageId),
+        )
+      }
+      case 'previewRewind': {
+        const p = frame.payload as { ref: MobileSessionRef; messageId: string }
+        return this._sessionCommand(p.ref, PREVIEW_REWIND_TIMEOUT_MS, (bridge, localId) =>
+          bridge.previewRewind(localId, p.messageId),
+        )
+      }
+      case 'rewindSession': {
+        const p = frame.payload as {
+          ref: MobileSessionRef
+          messageId: string
+          rewindFiles?: boolean
+        }
+        return this._sessionCommand(p.ref, LONG_COMMAND_TIMEOUT_MS, (bridge, localId) =>
+          bridge.rewindSession(localId, p.messageId, p.rewindFiles),
+        )
+      }
+      case 'createSideTask': {
+        const p = frame.payload as { ref: MobileSessionRef; quote?: string }
+        return this._sessionRefCommand(p.ref, LONG_COMMAND_TIMEOUT_MS, (bridge, localId) =>
+          bridge.createSideTask(localId, p.quote),
+        )
+      }
+      case 'listSideTasks': {
+        const p = frame.payload as { ref: MobileSessionRef }
+        const outcome = await this._sessionCommand(
+          p.ref,
+          LIST_SIDE_TASKS_TIMEOUT_MS,
+          (bridge, localId) => bridge.listSideTasks(localId),
+        )
+        return outcome.ok ? { ok: true, result: clampSideTaskSummaries(outcome.result) } : outcome
+      }
+      case 'openSideTask': {
+        const p = frame.payload as { ref: MobileSessionRef; sideTaskId: string }
+        return this._sessionRefCommand(p.ref, LONG_COMMAND_TIMEOUT_MS, (bridge, localId) =>
+          bridge.openSideTask(localId, p.sideTaskId),
+        )
+      }
+      case 'deleteSideTask': {
+        const p = frame.payload as { ref: MobileSessionRef; sideTaskId: string }
+        return this._sessionCommand(p.ref, LONG_COMMAND_TIMEOUT_MS, (bridge, localId) =>
+          bridge.deleteSideTask(localId, p.sideTaskId),
+        )
+      }
       case 'listWorkspaces':
         return this._listWorkspaces()
       case 'listAgents':
@@ -616,6 +676,39 @@ export class MobileGatewayHub {
     const resolved = this._resolveSession(ref)
     if (resolved === undefined) return failOutcome('session_not_found')
     return this._withBridge(resolved, timeoutMs, (bridge) => call(bridge, resolved.localId))
+  }
+
+  /**
+   * Like `_sessionCommand`, but the bridge result is a renderer-local session
+   * ref: main stamps `windowId` so the phone can address the new session.
+   */
+  private async _sessionRefCommand(
+    ref: MobileSessionRef,
+    timeoutMs: number,
+    call: (
+      bridge: IMobileBridgeService,
+      localId: string,
+    ) => Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>,
+  ): Promise<CommandOutcome> {
+    const resolved = this._resolveSession(ref)
+    if (resolved === undefined) return failOutcome('session_not_found')
+    const outcome = await this._withBridge(resolved, timeoutMs, (bridge) =>
+      call(bridge, resolved.localId),
+    )
+    if (!outcome.ok) return outcome
+    if (!isBridgeNewSessionResult(outcome.result)) {
+      this._logger.warn('mobile bridge returned an invalid session ref')
+      return failOutcome('internal')
+    }
+    const value = outcome.result
+    const created: MobileNewSessionResult = {
+      ref: {
+        windowId: resolved.windowId,
+        localId: value.localId,
+        ...(value.durableId !== undefined ? { durableId: value.durableId } : {}),
+      },
+    }
+    return { ok: true, result: created }
   }
 
   private async _withBridge(
@@ -983,6 +1076,16 @@ export class MobileGatewayHub {
       ...(summary.imageSupported !== undefined
         ? { imageSupported: summary.imageSupported }
         : {}),
+      ...(summary.forkSupported === true ? { forkSupported: true } : {}),
+      ...(summary.rewindSupported === true ? { rewindSupported: true } : {}),
+      ...(summary.sideTaskOf !== undefined && summary.sideTaskOf.length > 0
+        ? { sideTaskOf: clampText(summary.sideTaskOf, MAX_ID_LENGTH) }
+        : {}),
+      ...(summary.sideTaskChildCount !== undefined &&
+      Number.isInteger(summary.sideTaskChildCount) &&
+      summary.sideTaskChildCount > 0
+        ? { sideTaskChildCount: summary.sideTaskChildCount }
+        : {}),
       updatedAt: summary.updatedAt,
     }
   }
@@ -1109,6 +1212,40 @@ function serializedLength(frame: unknown): number {
 
 function failOutcome(error: MobileErrorCode): CommandOutcome {
   return { ok: false, error }
+}
+
+function isBridgeNewSessionResult(value: unknown): value is MobileBridgeNewSessionResult {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  const localId = record['localId']
+  const durableId = record['durableId']
+  return (
+    typeof localId === 'string' &&
+    localId.length > 0 &&
+    (durableId === undefined || (typeof durableId === 'string' && durableId.length > 0))
+  )
+}
+
+/** Rebuild the side-task rows so a malformed bridge value cannot poison a frame. */
+function clampSideTaskSummaries(value: unknown): readonly MobileSideTaskSummary[] {
+  if (!Array.isArray(value)) return []
+  const rows: MobileSideTaskSummary[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const record = entry as Record<string, unknown>
+    const id = record['id']
+    const title = record['title']
+    if (typeof id !== 'string' || id.length === 0) continue
+    const lastUsedAt = record['lastUsedAt']
+    rows.push({
+      id: clampText(id, MAX_ID_LENGTH),
+      title: clampText(typeof title === 'string' ? title : '', MAX_TITLE_LENGTH),
+      lastUsedAt:
+        typeof lastUsedAt === 'number' && Number.isFinite(lastUsedAt) ? lastUsedAt : 0,
+      live: record['live'] === true,
+    })
+  }
+  return rows
 }
 
 function permissionKey(windowId: number, localId: string, requestId: string): string {

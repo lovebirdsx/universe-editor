@@ -4,7 +4,8 @@ import {
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import { CLEARED_FALLBACK_MS } from '../PermissionSheet.js'
 import { MobileClient } from '../../state/mobileClient.js'
@@ -18,6 +19,11 @@ import {
   userMessage,
 } from '../../test/protocolFixtures.js'
 import { strings } from '../../strings.js'
+import {
+  _resetComposerPrefillForTests,
+  depositComposerPrefill,
+  takeComposerPrefill,
+} from '../composerPrefill.js'
 import { SESSION_DISPLAY_STORAGE_KEY } from '../sessionDisplay.js'
 import { SessionPage, SESSION_LOAD_TIMEOUT_MS } from '../SessionPage.js'
 
@@ -75,7 +81,10 @@ function feed(socket: FakeWebSocket, frame: ServerFrame): void {
   })
 }
 
-function openPage(sessionKey = '1:s1'): {
+function openPage(
+  sessionKey = '1:s1',
+  overrides: Partial<Parameters<typeof SessionPage>[0]> = {},
+): {
   readonly harness: Harness
   readonly onBack: ReturnType<typeof vi.fn>
 } {
@@ -86,7 +95,9 @@ function openPage(sessionKey = '1:s1'): {
     sessions: [sessionSummary('s1')],
   })
   const onBack = vi.fn()
-  render(<SessionPage client={harness.client} sessionKey={sessionKey} onBack={onBack} />)
+  render(
+    <SessionPage client={harness.client} sessionKey={sessionKey} onBack={onBack} {...overrides} />,
+  )
   return { harness, onBack }
 }
 
@@ -535,6 +546,303 @@ describe('SessionPage snapshot rendering', () => {
 
     expect(screen.getByTestId('session-load-failed')).toBeTruthy()
     expect(screen.getByRole('button', { name: strings.sessionRetry })).toBeTruthy()
+  })
+})
+
+interface SentCommand {
+  readonly requestId: string
+  readonly kind: string
+  readonly payload: unknown
+}
+
+function commandFrames(socket: FakeWebSocket): SentCommand[] {
+  return sentFrames(socket).filter(
+    (frame) => frameType(frame) === 'command',
+  ) as unknown as SentCommand[]
+}
+
+function commandFor(socket: FakeWebSocket, kind: string): SentCommand | undefined {
+  return [...commandFrames(socket)].reverse().find((command) => command.kind === kind)
+}
+
+function respond(harness: Harness, kind: string, result?: unknown): void {
+  const command = commandFor(harness.socket, kind)
+  if (command === undefined) throw new Error(`no ${kind} command was sent`)
+  feed(
+    harness.socket,
+    (result === undefined
+      ? { type: 'command_result', requestId: command.requestId, ok: true }
+      : { type: 'command_result', requestId: command.requestId, ok: true, result }) as ServerFrame,
+  )
+}
+
+function anchoredUser(id: string, text: string, canFork: boolean) {
+  return { ...userMessage(id, text), messageId: `msg-${id}`, canFork }
+}
+
+describe('SessionPage fork / rewind / side tasks', () => {
+  beforeEach(() => {
+    _resetComposerPrefillForTests()
+  })
+
+  it('forks from a user message and opens the new ref directly', async () => {
+    const onOpenSessionRef = vi.fn()
+    const { harness } = openPage('1:s1', { onOpenSessionRef })
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { forkSupported: true, bucket: 'completed' }),
+        timeline: [anchoredUser('m1', 'hello', true)],
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('user-message-actions'))
+    fireEvent.click(screen.getByTestId('message-action-fork'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'forkSession')).toBeDefined())
+    expect(commandFor(harness.socket, 'forkSession')?.payload).toMatchObject({
+      messageId: 'msg-m1',
+    })
+
+    const ref = { windowId: 1, localId: 's9', durableId: 'durable-fork' }
+    respond(harness, 'forkSession', { ref })
+    await waitFor(() => expect(onOpenSessionRef).toHaveBeenCalledWith(ref))
+  })
+
+  it('previews a rewind, applies it keeping files, and backfills the composer', async () => {
+    const onOpenSessionRef = vi.fn()
+    const { harness } = openPage('1:s1', { onOpenSessionRef })
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { rewindSupported: true }),
+        timeline: [anchoredUser('m1', 'hello', false)],
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('user-message-actions'))
+    fireEvent.click(screen.getByTestId('message-action-rewind'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'previewRewind')).toBeDefined())
+    expect(commandFor(harness.socket, 'previewRewind')?.payload).toMatchObject({
+      messageId: 'msg-m1',
+    })
+    respond(harness, 'previewRewind', {
+      canRewind: true,
+      filesChanged: 1,
+      insertions: 2,
+      deletions: 1,
+    })
+
+    await waitFor(() => expect(screen.getByTestId('rewind-keep')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rewind-keep'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'rewindSession')).toBeDefined())
+    expect(commandFor(harness.socket, 'rewindSession')?.payload).toMatchObject({
+      messageId: 'msg-m1',
+      rewindFiles: false,
+    })
+    respond(harness, 'rewindSession', { canRewind: true, text: 'hello' })
+
+    await waitFor(() =>
+      expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).value).toBe('hello'),
+    )
+    expect(screen.getByTestId('session-toast').textContent).toBe(strings.rewindDone)
+    expect(onOpenSessionRef).not.toHaveBeenCalled()
+  })
+
+  it('creates a side task from an agent message and deposits its quote', async () => {
+    const onOpenSessionRef = vi.fn()
+    const { harness } = openPage('1:s1', { onOpenSessionRef })
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { forkSupported: true }),
+        timeline: [userMessage('m1', 'hello'), agentMessage('a1', 'the answer')],
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('agent-message-actions'))
+    fireEvent.click(screen.getByTestId('message-action-side-task'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'createSideTask')).toBeDefined())
+    expect(commandFor(harness.socket, 'createSideTask')?.payload).toMatchObject({
+      quote: 'the answer',
+    })
+
+    respond(harness, 'createSideTask', {
+      ref: { windowId: 1, localId: 's2', durableId: 'durable-side-9' },
+    })
+    await waitFor(() => expect(onOpenSessionRef).toHaveBeenCalled())
+    expect(takeComposerPrefill('durable-side-9')).toBe('> the answer\n\n')
+  })
+
+  it('forks from the end through the session menu', async () => {
+    const onOpenSessionRef = vi.fn()
+    const { harness } = openPage('1:s1', { onOpenSessionRef })
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { forkSupported: true, bucket: 'completed' }),
+        timeline: [userMessage('m1', 'hello')],
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-fork-tip'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'forkSession')).toBeDefined())
+    expect(commandFor(harness.socket, 'forkSession')?.payload).not.toHaveProperty('messageId')
+
+    const ref = { windowId: 1, localId: 's9', durableId: 'durable-fork' }
+    respond(harness, 'forkSession', { ref })
+    await waitFor(() => expect(onOpenSessionRef).toHaveBeenCalledWith(ref))
+  })
+
+  it('opens a side task from the parent list', async () => {
+    const onOpenSessionRef = vi.fn()
+    const { harness } = openPage('1:s1', { onOpenSessionRef })
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { forkSupported: true, sideTaskChildCount: 1 }),
+        timeline: [],
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-side-tasks'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'listSideTasks')).toBeDefined())
+    respond(harness, 'listSideTasks', [
+      { id: 'durable-side-1', title: 'Side chat', lastUsedAt: 1_000, live: true },
+    ])
+
+    await screen.findByTestId('side-task-row')
+    fireEvent.click(screen.getByTestId('side-task-open'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'openSideTask')).toBeDefined())
+    expect(commandFor(harness.socket, 'openSideTask')?.payload).toMatchObject({
+      sideTaskId: 'durable-side-1',
+    })
+    const ref = { windowId: 1, localId: 's2', durableId: 'durable-side-1' }
+    respond(harness, 'openSideTask', { ref })
+    await waitFor(() => expect(onOpenSessionRef).toHaveBeenCalledWith(ref))
+  })
+
+  it('deletes a side task and reloads the list', async () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { forkSupported: true, sideTaskChildCount: 1 }),
+        timeline: [],
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-side-tasks'))
+    await waitFor(() => expect(commandFor(harness.socket, 'listSideTasks')).toBeDefined())
+    respond(harness, 'listSideTasks', [
+      { id: 'durable-side-1', title: 'Side chat', lastUsedAt: 1_000, live: false },
+    ])
+
+    await screen.findByTestId('side-task-row')
+    fireEvent.click(screen.getByTestId('side-task-delete'))
+    fireEvent.click(screen.getByTestId('side-task-delete-confirm'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'deleteSideTask')).toBeDefined())
+    expect(commandFor(harness.socket, 'deleteSideTask')?.payload).toMatchObject({
+      sideTaskId: 'durable-side-1',
+    })
+    respond(harness, 'deleteSideTask')
+
+    await waitFor(() =>
+      expect(
+        commandFrames(harness.socket).filter((command) => command.kind === 'listSideTasks'),
+      ).toHaveLength(2),
+    )
+    respond(harness, 'listSideTasks', [])
+    await waitFor(() => expect(screen.getByTestId('side-task-empty')).toBeTruthy())
+  })
+
+  it('shows the parent chip for a side task and navigates to the parent', async () => {
+    const onOpenSessionRef = vi.fn()
+    const { harness } = openPage('1:s1', { onOpenSessionRef })
+    const parent = sessionSummary('p1', {
+      ref: sessionRef('p1', 1, 'durable-parent'),
+      title: 'Parent session',
+    })
+    feed(harness.socket, { type: 'inbox_snapshot', seq: 2, sessions: [parent] })
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { sideTaskOf: 'durable-parent' }),
+        timeline: [],
+      }),
+    )
+
+    const chip = screen.getByTestId('session-parent-chip')
+    expect(chip.textContent).toBe(strings.sideTaskParent('Parent session'))
+    fireEvent.click(chip)
+    expect(onOpenSessionRef).toHaveBeenCalledWith(parent.ref)
+  })
+
+  it('subscribes with a command-returned ref and consumes its prefill under StrictMode', async () => {
+    const initialRef = { windowId: 1, localId: 's9', durableId: 'durable-fork' }
+    const harness = createHarness()
+    depositComposerPrefill('durable-fork', '> quoted\n\n')
+
+    render(
+      <StrictMode>
+        <SessionPage
+          client={harness.client}
+          sessionKey="durable-fork"
+          initialRef={initialRef}
+          onBack={vi.fn()}
+        />
+      </StrictMode>,
+    )
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s9', { ref: initialRef }),
+        timeline: [],
+      }),
+    )
+
+    const subscribe = sentFrames(harness.socket).find(
+      (frame) => frameType(frame) === 'subscribe_session',
+    ) as { readonly ref?: unknown } | undefined
+    expect(subscribe?.ref).toEqual(initialRef)
+    await waitFor(() =>
+      expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).value).toBe(
+        '> quoted\n\n',
+      ),
+    )
+  })
+
+  it('does not carry a backfill into the next session', async () => {
+    const harness = createHarness()
+    feed(harness.socket, { type: 'inbox_snapshot', seq: 1, sessions: [sessionSummary('s1')] })
+    depositComposerPrefill('1:s1', 'leaked prompt')
+
+    const { rerender } = render(
+      <SessionPage client={harness.client} sessionKey="1:s1" onBack={vi.fn()} />,
+    )
+    feed(harness.socket, sessionSnapshotFrame(1, { summary: sessionSummary('s1'), timeline: [] }))
+    await waitFor(() =>
+      expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).value).toBe(
+        'leaked prompt',
+      ),
+    )
+
+    rerender(<SessionPage client={harness.client} sessionKey="1:s2" onBack={vi.fn()} />)
+    feed(harness.socket, sessionSnapshotFrame(1, { summary: sessionSummary('s2'), timeline: [] }))
+
+    await waitFor(() =>
+      expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).value).toBe(''),
+    )
   })
 })
 

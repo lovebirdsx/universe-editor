@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { FakeTimers } from '../../test/fakes.js'
 import { commandErrorText, strings } from '../../strings.js'
 import {
+  COMMAND_TIMEOUT_GRACE_MS,
   COMMAND_TIMEOUT_MS,
   CommandClient,
   CommandError,
@@ -55,11 +56,18 @@ describe('CommandClient', () => {
     expect(COMMAND_TIMEOUT_MS.setConfigOption).toBe(10_000)
     expect(COMMAND_TIMEOUT_MS.newSession).toBe(30_000)
     expect(COMMAND_TIMEOUT_MS.deleteSession).toBe(30_000)
+    expect(COMMAND_TIMEOUT_MS.forkSession).toBe(120_000)
+    expect(COMMAND_TIMEOUT_MS.previewRewind).toBe(30_000)
+    expect(COMMAND_TIMEOUT_MS.rewindSession).toBe(120_000)
+    expect(COMMAND_TIMEOUT_MS.createSideTask).toBe(120_000)
+    expect(COMMAND_TIMEOUT_MS.listSideTasks).toBe(10_000)
+    expect(COMMAND_TIMEOUT_MS.openSideTask).toBe(120_000)
+    expect(COMMAND_TIMEOUT_MS.deleteSideTask).toBe(120_000)
     expect(COMMAND_TIMEOUT_MS.listWorkspaces).toBe(10_000)
 
     const { client, timers } = createHarness()
     const outcome = client.request('sendPrompt', { ref: {}, text: 'hi' }).catch((error) => error)
-    timers.advance(COMMAND_TIMEOUT_MS.sendPrompt - 1)
+    timers.advance(COMMAND_TIMEOUT_MS.sendPrompt + COMMAND_TIMEOUT_GRACE_MS - 1)
     expect(timers.pendingTimeoutDelays()).toEqual([1])
     timers.advance(1)
     const error = await outcome
@@ -67,18 +75,32 @@ describe('CommandClient', () => {
     expect(error).toMatchObject({ code: 'timeout' })
   })
 
-  it('gives newSession a 30s deadline', () => {
+  it('waits past the gateway deadline before giving up', () => {
     const { client, timers } = createHarness()
     void client.request('newSession', { agentId: 'echo', workspace: { folder: 'file:///ws' } })
-    expect(timers.pendingTimeoutDelays()).toEqual([30_000])
+    expect(timers.pendingTimeoutDelays()).toEqual([
+      COMMAND_TIMEOUT_MS.newSession + COMMAND_TIMEOUT_GRACE_MS,
+    ])
   })
 
   it('adds an idempotency key to mutating commands only', () => {
     const { client, sent } = createHarness()
     void client.request('sendPrompt', { ref: {}, text: 'hi' })
     void client.request('listAgents', {})
+    void client.request('forkSession', { ref: {} })
+    void client.request('rewindSession', { ref: {}, messageId: 'm' })
+    void client.request('createSideTask', { ref: {} })
+    void client.request('openSideTask', { ref: {}, sideTaskId: 's' })
+    void client.request('deleteSideTask', { ref: {}, sideTaskId: 's' })
+    void client.request('previewRewind', { ref: {}, messageId: 'm' })
+    void client.request('listSideTasks', { ref: {} })
     expect(sent[0]?.idempotencyKey).toBe('idem-1')
     expect(sent[1]?.idempotencyKey).toBeUndefined()
+    for (const index of [2, 3, 4, 5, 6]) {
+      expect(sent[index]?.idempotencyKey).toBeTruthy()
+    }
+    expect(sent[7]?.idempotencyKey).toBeUndefined()
+    expect(sent[8]?.idempotencyKey).toBeUndefined()
   })
 
   it('reuses the requestId and idempotency key when resending after a reconnect', () => {

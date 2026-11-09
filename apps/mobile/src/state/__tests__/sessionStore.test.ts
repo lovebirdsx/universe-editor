@@ -209,6 +209,71 @@ describe('SessionStore message events', () => {
   })
 })
 
+describe('SessionStore message anchors', () => {
+  it('applies messageId and canFork from an upsert', () => {
+    const store = loadedStore()
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        {
+          type: 'message_upsert',
+          id: 'm1',
+          role: 'user',
+          textAppend: ' world',
+          streaming: false,
+          messageId: 'msg-1',
+          canFork: true,
+        },
+      ]),
+    )
+    expect(store.getState().timeline[0]).toMatchObject({
+      messageId: 'msg-1',
+      canFork: true,
+      text: 'hello world',
+    })
+  })
+
+  it('keeps the anchor when a later append omits it', () => {
+    const store = new SessionStore()
+    store.applySnapshot(
+      sessionSnapshotFrame(1, {
+        timeline: [{ ...userMessage('m1', 'hello'), messageId: 'msg-1', canFork: true }],
+      }),
+    )
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        { type: 'message_upsert', id: 'm1', role: 'user', textAppend: '!', streaming: false },
+      ]),
+    )
+    expect(store.getState().timeline[0]).toMatchObject({
+      text: 'hello!',
+      messageId: 'msg-1',
+      canFork: true,
+    })
+  })
+
+  it('lets an explicit canFork:false override the previous value', () => {
+    const store = new SessionStore()
+    store.applySnapshot(
+      sessionSnapshotFrame(1, {
+        timeline: [{ ...userMessage('m1', 'hello'), messageId: 'msg-1', canFork: true }],
+      }),
+    )
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        {
+          type: 'message_upsert',
+          id: 'm1',
+          role: 'user',
+          textAppend: '',
+          streaming: false,
+          canFork: false,
+        },
+      ]),
+    )
+    expect(store.getState().timeline[0]).toMatchObject({ canFork: false })
+  })
+})
+
 describe('SessionStore other events', () => {
   it('applies plan, config, summary, permission and elicitation events', () => {
     const store = loadedStore()

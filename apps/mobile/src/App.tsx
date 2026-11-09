@@ -1,3 +1,4 @@
+import type { MobileSessionRef } from '@universe-editor/mobile-protocol'
 import { useEffect, useMemo, useState } from 'react'
 import { NotificationToast } from './components/NotificationToast.js'
 import { Spinner } from './components/Spinner.js'
@@ -20,6 +21,7 @@ import {
 import { SessionPage } from './session/SessionPage.js'
 import { websocketUrlForLocation, type WebSocketLike } from './socket/mobileSocket.js'
 import { MobileClient } from './state/mobileClient.js'
+import { sessionRouteKey } from './state/refs.js'
 import { strings } from './strings.js'
 
 interface LoadedState {
@@ -36,6 +38,9 @@ export function App() {
     () => new URLSearchParams(window.location.search).get('focus') === 'pending',
   )
   const [notice, setNotice] = useState<string | undefined>(undefined)
+  // Ref returned by a fork / side-task command; the session route resolves it
+  // directly instead of waiting for the inbox mirror to catch up.
+  const [pendingRef, setPendingRef] = useState<MobileSessionRef | undefined>(undefined)
 
   useEffect(() => {
     let cancelled = false
@@ -51,6 +56,7 @@ export function App() {
 
   useEffect(() => {
     const onPopState = (): void => {
+      setPendingRef(undefined)
       setRoute(readRoute(window.location.pathname))
       setFocusPending(new URLSearchParams(window.location.search).get('focus') === 'pending')
     }
@@ -74,6 +80,7 @@ export function App() {
       const next = readRoute(url.pathname)
       if (next.name !== 'session') return
       window.history.replaceState({ mobile: true }, '', `${url.pathname}${url.search}`)
+      setPendingRef(undefined)
       setFocusPending(url.searchParams.get('focus') === 'pending')
       setRoute(next)
     }
@@ -107,28 +114,40 @@ export function App() {
     setNotice(result.persisted ? undefined : strings.pairStorageUnavailable)
     setLoaded({ loading: true, credentials: undefined })
     setReloadKey((value) => value + 1)
+    setPendingRef(undefined)
     setRoute({ name: 'inbox' })
   }
 
   const openSession = (sessionKey: string, pending = false): void => {
+    setPendingRef(undefined)
     navigateToSession(sessionKey)
     setFocusPending(pending)
     setRoute(readRoute(window.location.pathname))
   }
 
+  const openSessionRef = (ref: MobileSessionRef): void => {
+    setPendingRef(ref)
+    setFocusPending(false)
+    navigateToSession(sessionRouteKey(ref))
+    setRoute(readRoute(window.location.pathname))
+  }
+
   const openNewSession = (): void => {
+    setPendingRef(undefined)
     navigateToNewSession()
     setFocusPending(false)
     setRoute(readRoute(window.location.pathname))
   }
 
   const backToInbox = (): void => {
+    setPendingRef(undefined)
     leaveSession()
     setFocusPending(false)
     setRoute({ name: 'inbox' })
   }
 
   const unpair = (): void => {
+    setPendingRef(undefined)
     setNotice(undefined)
     void store.clear()
     setLoaded({ loading: false, credentials: undefined })
@@ -171,6 +190,7 @@ export function App() {
     <NotificationToast
       client={client}
       onOpen={(sessionKey, pending) => {
+        setPendingRef(undefined)
         setFocusPending(pending)
         navigateToSession(sessionKey)
         setRoute(readRoute(window.location.pathname))
@@ -183,8 +203,11 @@ export function App() {
       <>
         {overlay}
         <SessionPage
+          key={route.sessionKey}
           client={client}
           sessionKey={route.sessionKey}
+          initialRef={pendingRef}
+          onOpenSessionRef={openSessionRef}
           focusPending={focusPending}
           onBack={backToInbox}
         />
@@ -200,6 +223,7 @@ export function App() {
           client={client}
           onBack={backToInbox}
           onCreated={(sessionKey) => {
+            setPendingRef(undefined)
             setFocusPending(false)
             setRoute({ name: 'session', sessionKey })
           }}

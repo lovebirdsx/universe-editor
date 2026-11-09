@@ -8,10 +8,11 @@
  *  the same port in different workers.
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 import { chromium, devices, type Browser, type BrowserContext, type Page } from '@playwright/test'
 import type { WorkbenchPO } from '@universe-editor/e2e-harness'
 import {
@@ -19,6 +20,7 @@ import {
   parseServerFrame,
   serializeFrame,
   type MobilePermissionUpsertEvent,
+  type MobileTimelineMessageItem,
   type MobileWorkspaceCandidate,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
@@ -1236,6 +1238,117 @@ test.describe('mobile gateway in a workspace', () => {
     } finally {
       await context.close()
       await browser.close()
+    }
+  })
+})
+
+test.describe('mobile gateway fork/rewind guards', () => {
+  test.describe.configure({ mode: 'default' })
+
+  test('@p1 rejects fork, rewind and side tasks when the agent lacks the capabilities', async ({
+    page,
+    workbench,
+  }) => {
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    const { ws } = await connectRawPhone(page, workbench)
+    try {
+      await startEchoSession(page, workbench)
+      const inbox = await subscribeInbox(ws)
+      const row = inbox.sessions[0]!
+
+      expect(await sendCommand(ws, 'forkSession', { ref: row.ref })).toMatchObject({
+        ok: false,
+        error: 'unsupported_by_agent',
+      })
+      expect(
+        await sendCommand(ws, 'previewRewind', { ref: row.ref, messageId: 'missing' }),
+      ).toMatchObject({ ok: false, error: 'unsupported_by_agent' })
+      expect(await sendCommand(ws, 'createSideTask', { ref: row.ref })).toMatchObject({
+        ok: false,
+        error: 'unsupported_by_agent',
+      })
+    } finally {
+      ws.close()
+    }
+  })
+
+  test('@p1 rejects bogus and first-turn fork anchors', async ({ page, workbench }) => {
+    const { ws } = await connectRawPhone(page, workbench)
+    try {
+      await startEchoSession(page, workbench, { ECHO_AGENT_FORK: '1' })
+      await page.evaluate(() => window.__E2E__!.sendAcpPrompt('hello'))
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 10_000 })
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ role: 'agent', text: 'echo: hello', streaming: false }),
+          ]),
+        )
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), {
+          timeout: 10_000,
+        })
+        .toBe('idle')
+
+      const inbox = await subscribeInbox(ws)
+      const row = inbox.sessions[0]!
+      const snapshot = await subscribeSession(ws, row.ref)
+      const anchor = snapshot.session.timeline.find(
+        (item): item is MobileTimelineMessageItem =>
+          item.kind === 'message' && item.role === 'user',
+      )
+      expect(anchor?.messageId).toBeTruthy()
+      expect(anchor?.canFork).toBe(false)
+
+      expect(
+        await sendCommand(ws, 'forkSession', { ref: row.ref, messageId: 'not-an-anchor' }),
+      ).toMatchObject({ ok: false, error: 'invalid_anchor' })
+      expect(
+        await sendCommand(ws, 'forkSession', { ref: row.ref, messageId: anchor!.messageId }),
+      ).toMatchObject({ ok: false, error: 'invalid_anchor' })
+    } finally {
+      ws.close()
+    }
+  })
+
+  test('@p1 rejects a fork while the session is running', async ({ page, workbench }) => {
+    const dir = mkTempDir('ue2-mobile-fork-gate-')
+    const releasePath = join(dir, 'release')
+    const { ws } = await connectRawPhone(page, workbench)
+    try {
+      await startEchoSession(page, workbench, {
+        ECHO_AGENT_FORK: '1',
+        ECHO_AGENT_TURN_END_GATE: releasePath,
+      })
+      await page.evaluate(() => {
+        // The turn-end gate only holds streaming directives (finishTurn).
+        void window.__E2E__!.sendAcpPrompt('emit-thought:1x1')
+      })
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), {
+          timeout: 10_000,
+        })
+        .toBe('running')
+
+      const inbox = await subscribeInbox(ws)
+      const row = inbox.sessions[0]!
+      expect(await sendCommand(ws, 'forkSession', { ref: row.ref })).toMatchObject({
+        ok: false,
+        error: 'session_busy',
+      })
+
+      writeFileSync(releasePath, '')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionStatus()), {
+          timeout: 10_000,
+        })
+        .toBe('idle')
+    } finally {
+      if (!existsSync(releasePath)) writeFileSync(releasePath, '')
+      ws.close()
     }
   })
 })

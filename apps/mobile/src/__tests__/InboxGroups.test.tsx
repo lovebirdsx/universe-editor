@@ -1,7 +1,7 @@
 import type { MobileSessionBucket, MobileSessionSummary } from '@universe-editor/mobile-protocol'
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { groupSessions } from '../inbox/groupSessions.js'
+import { groupSessions, selectInboxSessions } from '../inbox/groupSessions.js'
 import { InboxGroups } from '../inbox/InboxGroups.js'
 import { strings } from '../strings.js'
 
@@ -65,5 +65,12 @@ describe('InboxGroups', () => {
 
   it('groupSessions returns no groups for an empty list', () => {
     expect(groupSessions([])).toEqual([])
+  })
+
+  it('filters side-task mirrors out of the inbox list', () => {
+    const parent = session('parent', 'completed', 'Parent')
+    const side = { ...session('side', 'completed', 'Side'), sideTaskOf: 'durable-parent' }
+    expect(selectInboxSessions([parent, side])).toEqual([parent])
+    expect(selectInboxSessions([side])).toEqual([])
   })
 })

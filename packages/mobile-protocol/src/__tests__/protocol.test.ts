@@ -253,6 +253,16 @@ describe('parseClientFrame', () => {
       },
       { kind: 'renameSession', payload: { ref: REF, title: 'Renamed' } },
       { kind: 'deleteSession', payload: { ref: REF } },
+      { kind: 'forkSession', payload: { ref: REF } },
+      { kind: 'forkSession', payload: { ref: REF, messageId: 'msg-user-1' } },
+      { kind: 'previewRewind', payload: { ref: REF, messageId: 'msg-user-1' } },
+      { kind: 'rewindSession', payload: { ref: REF, messageId: 'msg-user-1' } },
+      { kind: 'rewindSession', payload: { ref: REF, messageId: 'msg-user-1', rewindFiles: false } },
+      { kind: 'createSideTask', payload: { ref: REF } },
+      { kind: 'createSideTask', payload: { ref: REF, quote: 'what changed here?' } },
+      { kind: 'listSideTasks', payload: { ref: REF } },
+      { kind: 'openSideTask', payload: { ref: REF, sideTaskId: 'durable-side-1' } },
+      { kind: 'deleteSideTask', payload: { ref: REF, sideTaskId: 'durable-side-1' } },
       { kind: 'listWorkspaces', payload: {} },
       { kind: 'listAgents', payload: {} },
     ]
@@ -295,6 +305,17 @@ describe('parseClientFrame', () => {
       { kind: 'setConfigOption', payload: { ref: REF, configId: 'mode', value: {} } },
       { kind: 'newSession', payload: { agentId: '', workspace: { folder: '' } } },
       { kind: 'renameSession', payload: { ref: REF, title: '' } },
+      { kind: 'forkSession', payload: { ref: REF, messageId: '' } },
+      { kind: 'forkSession', payload: { ref: REF, messageId: 3 } },
+      { kind: 'previewRewind', payload: { ref: REF } },
+      { kind: 'previewRewind', payload: { ref: REF, messageId: '' } },
+      { kind: 'rewindSession', payload: { ref: REF, messageId: 'msg-1', rewindFiles: 'no' } },
+      { kind: 'createSideTask', payload: { ref: REF, quote: 'x'.repeat(8001) } },
+      { kind: 'createSideTask', payload: { ref: REF, quote: 7 } },
+      { kind: 'openSideTask', payload: { ref: REF } },
+      { kind: 'openSideTask', payload: { ref: REF, sideTaskId: '' } },
+      { kind: 'deleteSideTask', payload: { ref: REF, sideTaskId: 1 } },
+      { kind: 'listSideTasks', payload: 'nope' },
       { kind: 'listWorkspaces', payload: 'nope' },
     ]
     for (const command of bad) {
@@ -762,6 +783,99 @@ describe('parseServerFrame', () => {
     expect(errorCode(parseServerFrame(upsert([{ ...attachment, name: '' }])))).toBe('bad_request')
   })
 
+  it('parses fork/rewind capabilities and side-task summary fields', () => {
+    const summary = summaryJson({
+      forkSupported: true,
+      rewindSupported: false,
+      sideTaskOf: 'durable-parent',
+      sideTaskChildCount: 2,
+    })
+    const frame = { type: 'inbox_snapshot', seq: 1, sessions: [summary] }
+    expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+
+    const withSummary = (overrides: Record<string, unknown>): string =>
+      JSON.stringify({
+        type: 'inbox_snapshot',
+        seq: 1,
+        sessions: [summaryJson(overrides)],
+      })
+
+    expect(errorCode(parseServerFrame(withSummary({ forkSupported: 'yes' })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ rewindSupported: 1 })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ sideTaskOf: '' })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ sideTaskOf: 3 })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ sideTaskChildCount: -1 })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ sideTaskChildCount: 1.5 })))).toBe(
+      'bad_request',
+    )
+  })
+
+  it('parses message anchors and fork eligibility', () => {
+    const message = {
+      kind: 'message',
+      id: 'm1',
+      role: 'user',
+      text: 'hi',
+      streaming: false,
+      messageId: 'msg-user-1',
+      canFork: false,
+    }
+    const snapshot = (item: Record<string, unknown>): string =>
+      JSON.stringify({
+        type: 'session_snapshot',
+        seq: 1,
+        session: snapshotJson({ timeline: [item] }),
+      })
+
+    expect(parseServerFrame(snapshot(message))).toStrictEqual({
+      ok: true,
+      value: {
+        type: 'session_snapshot',
+        seq: 1,
+        session: snapshotJson({ timeline: [message] }),
+      },
+    })
+
+    const upsert = {
+      type: 'message_upsert',
+      id: 'm1',
+      role: 'user',
+      textAppend: ' there',
+      streaming: true,
+      messageId: 'msg-user-1',
+      canFork: true,
+    }
+    const delta = { type: 'session_delta', seq: 1, ref: REF, events: [upsert] }
+    expect(parseServerFrame(JSON.stringify(delta))).toStrictEqual({ ok: true, value: delta })
+
+    expect(errorCode(parseServerFrame(snapshot({ ...message, messageId: '' })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(snapshot({ ...message, canFork: 'no' })))).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame(
+          JSON.stringify({
+            type: 'session_delta',
+            seq: 1,
+            ref: REF,
+            events: [{ ...upsert, messageId: '' }],
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame(
+          JSON.stringify({
+            type: 'session_delta',
+            seq: 1,
+            ref: REF,
+            events: [{ ...upsert, canFork: 1 }],
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+  })
+
   it('rejects malformed snapshots and delta events', () => {
     const withSnapshot = (overrides: Record<string, unknown>): string =>
       JSON.stringify({ type: 'session_snapshot', seq: 1, session: snapshotJson(overrides) })
@@ -924,6 +1038,9 @@ describe('errors and close codes', () => {
   it('recognizes known error codes', () => {
     expect(isMobileErrorCode('unauthorized')).toBe(true)
     expect(isMobileErrorCode('protocol_mismatch')).toBe(true)
+    expect(isMobileErrorCode('unsupported_by_agent')).toBe(true)
+    expect(isMobileErrorCode('invalid_anchor')).toBe(true)
+    expect(isMobileErrorCode('session_busy')).toBe(true)
     expect(isMobileErrorCode('nope')).toBe(false)
     expect(isMobileErrorCode(1)).toBe(false)
   })

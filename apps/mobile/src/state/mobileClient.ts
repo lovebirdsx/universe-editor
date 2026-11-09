@@ -11,7 +11,11 @@ import type {
   MobileNewSessionResult,
   MobileNotificationPrefs,
   MobilePushSubscription,
+  MobileRewindPreview,
+  MobileRewindResult,
   MobileSessionRef,
+  MobileSessionRefResult,
+  MobileSideTaskSummary,
   MobileToolCallDetail,
   MobileWorkspaceCandidate,
   NotificationFrame,
@@ -28,6 +32,12 @@ import {
 } from '../socket/mobileSocket.js'
 import { CommandClient, CommandError, type CommandRequestOptions } from './commandClient.js'
 import { AttachmentClient, httpOriginForSocketUrl } from './attachmentClient.js'
+import {
+  isMobileRewindPreview,
+  isMobileRewindResult,
+  isMobileSessionRefResult,
+  isMobileSideTaskList,
+} from './commandResults.js'
 import { InboxStore, type InboxApplyResult } from './inboxStore.js'
 import { parseSessionRouteKey, refMatches, sessionRouteKey } from './refs.js'
 import { SessionStore } from './sessionStore.js'
@@ -208,6 +218,25 @@ export class MobileClient {
     this._maybeResolveRoute()
   }
 
+  /**
+   * Open a session named by a command result. The inbox may not contain the
+   * new row yet (fork / side task), so subscribe directly instead of waiting
+   * for `_maybeResolveRoute`.
+   */
+  openSessionRef(ref: MobileSessionRef): void {
+    const routeKey = sessionRouteKey(ref)
+    if (this._routeKey === routeKey && !this._session.getState().removed) {
+      this._subscribeCurrentSession()
+      return
+    }
+    this._routeKey = routeKey
+    this._invalidFrame.setState(undefined)
+    this._session.reset()
+    this._detail.clear()
+    this._currentRef = ref
+    this._subscribeCurrentSession()
+  }
+
   closeSession(): void {
     const ref = this._currentRef
     if (ref !== undefined) {
@@ -317,6 +346,58 @@ export class MobileClient {
     return this._sessionCommand('deleteSession', (ref) => ({ ref }))
   }
 
+  forkSession(messageId?: string): Promise<MobileSessionRefResult> {
+    return this._sessionCommandValue(
+      'forkSession',
+      (ref) => ({ ref, ...(messageId !== undefined ? { messageId } : {}) }),
+      isMobileSessionRefResult,
+    )
+  }
+
+  previewRewind(messageId: string): Promise<MobileRewindPreview> {
+    return this._sessionCommandValue(
+      'previewRewind',
+      (ref) => ({ ref, messageId }),
+      isMobileRewindPreview,
+    )
+  }
+
+  rewindSession(messageId: string, rewindFiles?: boolean): Promise<MobileRewindResult> {
+    return this._sessionCommandValue(
+      'rewindSession',
+      (ref) => ({
+        ref,
+        messageId,
+        ...(rewindFiles !== undefined ? { rewindFiles } : {}),
+      }),
+      isMobileRewindResult,
+    )
+  }
+
+  createSideTask(quote?: string): Promise<MobileSessionRefResult> {
+    return this._sessionCommandValue(
+      'createSideTask',
+      (ref) => ({ ref, ...(quote !== undefined && quote !== '' ? { quote } : {}) }),
+      isMobileSessionRefResult,
+    )
+  }
+
+  listSideTasks(): Promise<readonly MobileSideTaskSummary[]> {
+    return this._sessionCommandValue('listSideTasks', (ref) => ({ ref }), isMobileSideTaskList)
+  }
+
+  openSideTask(sideTaskId: string): Promise<MobileSessionRefResult> {
+    return this._sessionCommandValue(
+      'openSideTask',
+      (ref) => ({ ref, sideTaskId }),
+      isMobileSessionRefResult,
+    )
+  }
+
+  deleteSideTask(sideTaskId: string): Promise<void> {
+    return this._sessionCommand('deleteSideTask', (ref) => ({ ref, sideTaskId }))
+  }
+
   async newSession(
     agentId: string,
     workspace: { folder: string; authority?: string },
@@ -361,6 +442,20 @@ export class MobileClient {
       )
     }
     return this._commands.request<void>(kind, payloadFor(ref), options)
+  }
+
+  private _sessionCommandValue<T>(
+    kind: MobileCommandKind,
+    payloadFor: (ref: MobileSessionRef) => unknown,
+    validateResult: (value: unknown) => boolean,
+  ): Promise<T> {
+    const ref = this._currentRef
+    if (ref === undefined) {
+      return Promise.reject(
+        new CommandError('session_not_found', 'no session is open on the phone'),
+      )
+    }
+    return this._commands.request<T>(kind, payloadFor(ref), { validateResult })
   }
 
   private _handleState(state: SocketState): void {

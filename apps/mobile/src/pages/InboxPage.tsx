@@ -1,5 +1,6 @@
 import type { StoredCredentials } from '../credentials.js'
 import { InboxGroups } from '../inbox/InboxGroups.js'
+import { selectInboxSessions } from '../inbox/groupSessions.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { useStore } from '../state/useStore.js'
 import { NoticeBar } from '../components/NoticeBar.js'
@@ -93,7 +94,8 @@ export function InboxPage({
     }
 
     if (inbox.hasSnapshot) {
-      if (inbox.sessions.length === 0) {
+      const sessions = selectInboxSessions(inbox.sessions)
+      if (sessions.length === 0) {
         return (
           <div className="state-card">
             <p>{strings.inboxEmpty}</p>
@@ -102,7 +104,7 @@ export function InboxPage({
       }
       return (
         <InboxGroups
-          sessions={inbox.sessions}
+          sessions={sessions}
           onOpenSession={onOpenSession}
           stale={socketState !== 'connected'}
         />

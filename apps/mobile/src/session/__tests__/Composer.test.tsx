@@ -146,4 +146,69 @@ describe('Composer', () => {
     expect(sessionStorage.getItem(draftKey('1:s1'))).toBe('updated')
     expect(sessionStorage.getItem(draftKey('2:s2'))).toBeNull()
   })
+
+  it('applies a backfill over the stored draft and refocuses the input', () => {
+    sessionStorage.setItem(draftKey('1:s1'), 'old draft')
+    renderComposer({ prefill: { token: 1, sessionKey: '1:s1', text: '> quoted\n\n' } })
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+    expect(input.value).toBe('> quoted\n\n')
+    expect(document.activeElement).toBe(input)
+    expect(sessionStorage.getItem(draftKey('1:s1'))).toBe('> quoted\n\n')
+  })
+
+  it('ignores a backfill that belongs to another session', () => {
+    sessionStorage.setItem(draftKey('1:s1'), 'old draft')
+    renderComposer({ prefill: { token: 1, sessionKey: '2:s2', text: 'leaked prompt' } })
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+    expect(input.value).toBe('old draft')
+    expect(sessionStorage.getItem(draftKey('1:s1'))).toBe('old draft')
+  })
+
+  it('reapplies the same text when the token changes', () => {
+    const { rerender } = renderPrefillComposer()
+
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    expect(input.value).toBe('original prompt')
+
+    fireEvent.change(input, { target: { value: 'edited' } })
+    rerender(
+      <Composer
+        {...composerProps({ prefill: { token: 2, sessionKey: '1:s1', text: 'original prompt' } })}
+      />,
+    )
+    expect(input.value).toBe('original prompt')
+  })
 })
+
+function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
+  return {
+    sessionKey: '1:s1',
+    readOnly: false,
+    running: false,
+    online: true,
+    imageSupported: true,
+    fileSupported: true,
+    onUploadAttachment: vi.fn(async () => ({
+      id: 'att-1',
+      kind: 'image' as const,
+      name: 'shot.png',
+      mimeType: 'image/png',
+      size: 3,
+      createdAt: 1,
+    })),
+    onSend: vi.fn(async () => undefined),
+    onStop: vi.fn(async () => undefined),
+    onNotice: vi.fn(),
+    ...overrides,
+  }
+}
+
+function renderPrefillComposer() {
+  const props = composerProps({
+    prefill: { token: 1, sessionKey: '1:s1', text: 'original prompt' },
+  })
+  const { rerender } = render(<Composer {...props} />)
+  return { rerender }
+}

@@ -1,8 +1,9 @@
 import type {
   MobileTimelineItem,
+  MobileTimelineMessageItem,
   MobileTimelineToolCallItem,
 } from '@universe-editor/mobile-protocol'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { MobileClient } from '../../state/mobileClient.js'
 import { strings } from '../../strings.js'
@@ -43,6 +44,7 @@ const client = clientMock as unknown as Pick<
 function renderTimeline(
   timeline: readonly MobileTimelineItem[],
   displayMode: 'onlyMessage' | 'full',
+  overrides: Partial<Parameters<typeof Timeline>[0]> = {},
 ): void {
   render(
     <Timeline
@@ -51,6 +53,7 @@ function renderTimeline(
       displayMode={displayMode}
       truncated={false}
       client={client}
+      {...overrides}
     />,
   )
 }
@@ -137,6 +140,22 @@ describe('Timeline mobile attachments', () => {
   })
 })
 
+function anchoredUser(
+  id: string,
+  text: string,
+  overrides: Partial<MobileTimelineMessageItem> = {},
+): MobileTimelineMessageItem {
+  return {
+    kind: 'message',
+    id,
+    role: 'user',
+    text,
+    streaming: false,
+    messageId: `msg-${id}`,
+    ...overrides,
+  }
+}
+
 describe('Timeline display modes', () => {
   it('filters before pagination so hidden tail items do not fake load-earlier', () => {
     const timeline: MobileTimelineItem[] = [
@@ -178,5 +197,64 @@ describe('Timeline display modes', () => {
 
     expect(screen.getByTestId('tool-call-group')).toBeTruthy()
     expect(screen.getByText(strings.toolCallGroupTitle(3))).toBeTruthy()
+  })
+})
+
+describe('Timeline message actions', () => {
+  it('renders no action buttons without a handler', () => {
+    renderTimeline([anchoredUser('m1', 'hello', { canFork: true })], 'onlyMessage')
+    expect(screen.queryByTestId('user-message-actions')).toBeNull()
+    expect(screen.queryByTestId('agent-message-actions')).toBeNull()
+  })
+
+  it('offers actions on a forked user message and passes the item back', () => {
+    const onOpenMessageActions = vi.fn()
+    renderTimeline([anchoredUser('m1', 'hello', { canFork: true })], 'onlyMessage', {
+      onOpenMessageActions,
+    })
+
+    fireEvent.click(screen.getByTestId('user-message-actions'))
+    expect(onOpenMessageActions).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'm1', messageId: 'msg-m1', canFork: true }),
+    )
+  })
+
+  it('offers rewind on an anchored user message when the agent supports it', () => {
+    renderTimeline([anchoredUser('m1', 'hello', { canFork: false })], 'onlyMessage', {
+      rewindAvailable: true,
+      onOpenMessageActions: vi.fn(),
+    })
+    expect(screen.getByTestId('user-message-actions')).toBeTruthy()
+  })
+
+  it('hides the user action button when nothing is available', () => {
+    renderTimeline([anchoredUser('m1', 'hello', { canFork: false })], 'onlyMessage', {
+      onOpenMessageActions: vi.fn(),
+    })
+    expect(screen.queryByTestId('user-message-actions')).toBeNull()
+  })
+
+  it('offers side tasks on finished agent messages only', () => {
+    renderTimeline(
+      [{ kind: 'message', id: 'a1', role: 'agent', text: 'answer', streaming: false }],
+      'onlyMessage',
+      {
+        sideTaskAvailable: true,
+        onOpenMessageActions: vi.fn(),
+      },
+    )
+    expect(screen.getByTestId('agent-message-actions')).toBeTruthy()
+  })
+
+  it('hides agent actions while streaming or without text', () => {
+    renderTimeline(
+      [
+        { kind: 'message', id: 'a1', role: 'agent', text: 'partial', streaming: true },
+        { kind: 'message', id: 'a2', role: 'agent', text: '   ', streaming: false },
+      ],
+      'onlyMessage',
+      { sideTaskAvailable: true, onOpenMessageActions: vi.fn() },
+    )
+    expect(screen.queryByTestId('agent-message-actions')).toBeNull()
   })
 })

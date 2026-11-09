@@ -2861,6 +2861,82 @@ describe('AcpSessionService — rewind / fork', () => {
     }
   })
 
+  it('forkSession with activate:false leaves the source session active', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-fork-passive',
+      },
+    })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const activeBefore = svc.activeSessionId.get()
+
+      const fork = await svc.forkSession(s.id, undefined, { activate: false })
+
+      expect(fork.id).toBe('agent-fork-passive')
+      expect(svc.activeSessionId.get()).toBe(activeBefore)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('resumeSession joins an in-flight passive resume and a later active caller still activates', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { loadSession: true, initializeDelayMs: 20 },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const source = await svc.createSession('claude-code')
+      await source.whenConnected()
+      const activeBefore = svc.activeSessionId.get()
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-race',
+        title: 'race',
+      })
+
+      const passive = svc.resumeSession('agent-race', { activate: false })
+      const active = svc.resumeSession('agent-race', { activate: true })
+      const [resumed] = await Promise.all([passive, active])
+
+      expect(resumed.id).toBe('agent-race')
+      expect(svc.activeSessionId.get()).toBe('agent-race')
+      expect(activeBefore).not.toBe('agent-race')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('resumeSession with activate:false does not change the active session', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const source = await svc.createSession('claude-code')
+      await source.whenConnected()
+      const activeBefore = svc.activeSessionId.get()
+      history.add({
+        agentId: 'claude-code',
+        sessionIdOnAgent: 'agent-passive',
+        title: 'passive',
+      })
+
+      const resumed = await svc.resumeSession('agent-passive', { activate: false })
+
+      expect(resumed.id).toBe('agent-passive')
+      expect(svc.activeSessionId.get()).toBe(activeBefore)
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('forkSession carries the source session runtime config onto the fork history row', async () => {
     const tracker = new StubSessionChangeTracker()
     const forkConfig: readonly SessionConfigOption[] = [
