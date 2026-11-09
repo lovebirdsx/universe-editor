@@ -453,6 +453,31 @@ describe('MobileBridgeService', () => {
     expect(parsed.ok ? 'ok' : parsed.error.message).toBe('ok')
   })
 
+  it('reports session activity time instead of the moment the snapshot was projected', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { durableId: 'd1' })
+    harness.history.set(
+      [
+        {
+          id: 'd1',
+          title: 'History title',
+          lastUsedAt: 1_700_000_000_000,
+        } as unknown as AcpSessionHistoryEntry,
+      ],
+      undefined,
+    )
+    harness.add(first)
+
+    await expect(harness.service.listSessions()).resolves.toMatchObject([
+      { localId: 's1', updatedAt: 1_700_000_000_000 },
+    ])
+
+    // A phone (re)subscribing later must not relabel the same row as "just now".
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    const snapshot = await harness.service.getSnapshot('s1')
+    expect(snapshot?.summary.updatedAt).toBe(1_700_000_000_000)
+  })
+
   it('streams a new timeline item and suffix-only message updates', async () => {
     const harness = makeHarness()
     const first = makeSession('s1')

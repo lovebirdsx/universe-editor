@@ -965,6 +965,10 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return {
       title,
       ...(agentName !== undefined ? { agentName } : {}),
+      // Inbox rows show the session's last real activity, not when this
+      // projection happened to run — otherwise every re-subscribe (phone
+      // refresh) would relabel all rows as "just now".
+      ...(entry !== undefined ? { now: entry.lastUsedAt } : {}),
       ...(entry?.sideTaskOf !== undefined ? { sideTaskOf: entry.sideTaskOf } : {}),
       ...(childCount > 0 ? { sideTaskChildCount: childCount } : {}),
     }

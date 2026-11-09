@@ -233,7 +233,8 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
   pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
 - `summary` 含 `ref / agentId / agentName? / title / status / displayStatus / bucket /
   workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
-  hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`；v6 增加可选
+  hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会话最近活动时间，
+  取会话历史的 `lastUsedAt`，不是快照生成时刻）；v6 增加可选
   `forkSupported / rewindSupported`（agent 能力位）与 `sideTaskOf`（父会话 durable id）/
   `sideTaskChildCount`（直接子任务数）。
 - `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`、`attachments?`；v6 对 user

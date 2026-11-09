@@ -614,8 +614,9 @@ export function diffConfigOptions(
 }
 
 /**
- * Summary comparison ignores `updatedAt`: it advances on every projection and
- * would otherwise emit a `summary_changed` event on every throttle flush.
+ * Summary comparison ignores `updatedAt`: a session without a history row yet
+ * stamps the projection time, so comparing it would emit `summary_changed` on
+ * every throttle flush.
  */
 export function summaryChanged(
   previous: MobileBridgeSessionSummary,
