@@ -10,6 +10,7 @@ export interface SwipeableSessionRowProps {
   readonly children: ReactNode
   readonly open: boolean
   readonly disabled: boolean
+  readonly onGestureStart: () => void
   readonly onOpenChange: (open: boolean) => void
   readonly onShowActions: () => void
   readonly onCloseSession: () => void
@@ -32,6 +33,7 @@ export function SwipeableSessionRow({
   children,
   open,
   disabled,
+  onGestureStart,
   onOpenChange,
   onShowActions,
   onCloseSession,
@@ -58,6 +60,7 @@ export function SwipeableSessionRow({
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (disabled || event.button !== 0) return
+    onGestureStart()
     // A pointerup can land off-track (mouse long-press opens the sheet), so the
     // next gesture must clear the stale click suppression itself. Clearing the
     // timer also stops a second finger from leaving the first long-press armed.
@@ -108,10 +111,10 @@ export function SwipeableSessionRow({
     }
     setDragOffset(undefined)
     onOpenChange(offset.current < -TOTAL_ACTION_WIDTH_PX / 2)
-    // The click fires after pointerup; consume exactly that one.
-    setTimeout(() => {
-      suppressClick.current = false
-    }, 0)
+    // The compatibility click can arrive in a later task than pointerup (mobile
+    // browsers), so suppression lives until it is consumed or the next
+    // pointerdown resets it. A timer here would let that late click close the
+    // row again.
   }
 
   const onClickCapture = (event: React.MouseEvent<HTMLDivElement>): void => {

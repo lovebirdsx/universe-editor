@@ -26,6 +26,22 @@ function session(
   }
 }
 
+function visibleTitles(): string[] {
+  return screen
+    .getAllByTestId('inbox-session-row')
+    .map((row) => row.querySelector('.session-card__title')?.textContent ?? '')
+}
+
+function groupHeadings(): string[] {
+  return screen.getAllByRole('heading').map((heading) => heading.textContent ?? '')
+}
+
+function actionsOpen(title: string): boolean {
+  const swipeRow = screen.getByText(title).closest('[data-testid="inbox-swipe-row"]')
+  const action = swipeRow?.querySelector('[data-testid="inbox-session-close-action"]')
+  return action?.getAttribute('tabindex') === '0'
+}
+
 describe('InboxGroups', () => {
   it('orders buckets by urgency and renders each session', () => {
     render(
@@ -94,6 +110,82 @@ describe('InboxGroups', () => {
     expect(onCloseSession).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTestId('inbox-session-remove-action'))
     expect(onRemoveSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the actions revealed when the post-swipe click arrives late', () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <InboxGroups
+          sessions={[session('running', 'in_progress', 'Running task')]}
+          onCloseSession={vi.fn()}
+          onRemoveSession={vi.fn()}
+        />,
+      )
+
+      const row = screen.getByTestId('inbox-session-row')
+      fireEvent.pointerDown(row, { clientX: 240, clientY: 20, button: 0, pointerId: 1 })
+      fireEvent.pointerMove(row, { clientX: 60, clientY: 22, pointerId: 1 })
+      fireEvent.pointerUp(row, { clientX: 60, clientY: 22, pointerId: 1 })
+
+      // Mobile browsers dispatch the compatibility click in a later task, which
+      // can land after the zero-delay reset and must not close the open row.
+      act(() => {
+        vi.advanceTimersByTime(0)
+      })
+      fireEvent.click(row)
+
+      expect(screen.getByTestId('inbox-session-close-action').getAttribute('tabindex')).toBe('0')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('holds the list still while a row is being swiped', () => {
+    const alpha = session('alpha', 'in_progress', 'Alpha')
+    const bravo = { ...session('bravo', 'in_progress', 'Bravo'), updatedAt: alpha.updatedAt - 1000 }
+    const props = { onCloseSession: vi.fn(), onRemoveSession: vi.fn() }
+    const { rerender } = render(<InboxGroups sessions={[alpha, bravo]} {...props} />)
+
+    const row = screen.getAllByTestId('inbox-session-row')[0]!
+    fireEvent.pointerDown(row, { clientX: 240, clientY: 20, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(row, { clientX: 120, clientY: 22, pointerId: 1 })
+
+    // Another session becoming the most recent must not move rows mid-gesture.
+    rerender(
+      <InboxGroups
+        sessions={[{ ...bravo, updatedAt: alpha.updatedAt + 1000 }, alpha]}
+        {...props}
+      />,
+    )
+    expect(visibleTitles()).toEqual(['Alpha', 'Bravo'])
+
+    fireEvent.pointerUp(row, { clientX: 120, clientY: 22, pointerId: 1 })
+    expect(visibleTitles()).toEqual(['Bravo', 'Alpha'])
+    expect(actionsOpen('Alpha')).toBe(true)
+  })
+
+  it('holds a swiped row in place when its bucket changes mid-gesture', () => {
+    const alpha = session('alpha', 'in_progress', 'Alpha')
+    const completed = {
+      ...alpha,
+      status: 'idle',
+      displayStatus: 'completed',
+      bucket: 'completed' as const,
+    }
+    const props = { onCloseSession: vi.fn(), onRemoveSession: vi.fn() }
+    const { rerender } = render(<InboxGroups sessions={[alpha]} {...props} />)
+
+    const row = screen.getByTestId('inbox-session-row')
+    fireEvent.pointerDown(row, { clientX: 240, clientY: 20, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(row, { clientX: 120, clientY: 22, pointerId: 1 })
+
+    rerender(<InboxGroups sessions={[completed]} {...props} />)
+    expect(groupHeadings()).toEqual([`${strings.bucketInProgress}1`])
+
+    fireEvent.pointerUp(row, { clientX: 120, clientY: 22, pointerId: 1 })
+    expect(groupHeadings()).toEqual([`${strings.bucketCompleted}1`])
+    expect(actionsOpen('Alpha')).toBe(true)
   })
 
   it('opens the action menu on a long press', () => {

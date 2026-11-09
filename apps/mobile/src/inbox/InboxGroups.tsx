@@ -1,5 +1,5 @@
 import type { MobileSessionSummary } from '@universe-editor/mobile-protocol'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { sessionRouteKey } from '../state/refs.js'
 import { strings } from '../strings.js'
 import { formatUpdatedAt, groupSessions } from './groupSessions.js'
@@ -23,12 +23,34 @@ export function InboxGroups({
   onShowSessionActions,
   stale,
 }: InboxGroupsProps) {
-  const groups = groupSessions(sessions)
   const [openKey, setOpenKey] = useState<string | undefined>(undefined)
+  // A row that re-orders or changes bucket mid-gesture unmounts/moves under the
+  // finger and the swipe is lost, so hold the rendered list still until the
+  // pointer is released and apply the buffered inbox updates then.
+  const [gestureActive, setGestureActive] = useState(false)
+  const frozenSessions = useRef(sessions)
+  if (!gestureActive) frozenSessions.current = sessions
+  const groups = groupSessions(gestureActive ? frozenSessions.current : sessions)
   const actionsEnabled =
     onCloseSession !== undefined ||
     onRemoveSession !== undefined ||
     onShowSessionActions !== undefined
+
+  useEffect(() => {
+    if (!gestureActive) return
+    const end = (): void => setGestureActive(false)
+    // Bubble, not capture: unfreezing re-renders the live order, which can move
+    // the row into another group; it must run after the row's own pointerup or
+    // the moved row would swallow the event that ends the swipe. Any release
+    // ends the hold because a long press opens the sheet and the pointerup may
+    // never reach the row.
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    return () => {
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+  }, [gestureActive])
 
   useEffect(() => {
     if (openKey === undefined) return
@@ -69,6 +91,7 @@ export function InboxGroups({
                     <SwipeableSessionRow
                       open={openKey === key}
                       disabled={stale === true}
+                      onGestureStart={() => setGestureActive(true)}
                       onOpenChange={(next) => setOpenKey(next ? key : undefined)}
                       onShowActions={() => runAction(session, onShowSessionActions)}
                       onCloseSession={() => runAction(session, onCloseSession)}
