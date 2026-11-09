@@ -2,6 +2,8 @@ import type {
   ClientFrame,
   CommandFrame,
   MobileAgentCandidate,
+  MobileAttachmentKind,
+  MobileAttachmentUploadResult,
   MobileCommandKind,
   MobileAttentionKind,
   MobileElicitationAction,
@@ -25,6 +27,7 @@ import {
   type WebSocketLike,
 } from '../socket/mobileSocket.js'
 import { CommandClient, CommandError, type CommandRequestOptions } from './commandClient.js'
+import { AttachmentClient, httpOriginForSocketUrl } from './attachmentClient.js'
 import { InboxStore, type InboxApplyResult } from './inboxStore.js'
 import { parseSessionRouteKey, refMatches, sessionRouteKey } from './refs.js'
 import { SessionStore } from './sessionStore.js'
@@ -56,6 +59,7 @@ export class MobileClient {
   private readonly _inbox = new InboxStore()
   private readonly _session = new SessionStore()
   private readonly _commands: CommandClient
+  private readonly _attachments: AttachmentClient
   private readonly _detail: ToolCallDetailClient
   private readonly _notification = new Store<NotificationFrame | undefined>(undefined)
   private readonly _invalidFrame = new Store<ParseError | undefined>(undefined)
@@ -72,6 +76,11 @@ export class MobileClient {
     this._commands = new CommandClient({
       send: (frame) => this._sendCommand(frame),
       timers: options.timers,
+    })
+    this._attachments = new AttachmentClient({
+      origin: httpOriginForSocketUrl(options.url),
+      token: options.credentials.token,
+      onUnauthorized: options.onCredentialsInvalid,
     })
     this._detail = new ToolCallDetailClient(this._commands)
     this._socket = new MobileSocket({
@@ -233,8 +242,20 @@ export class MobileClient {
     return this._detail.request(ref, toolCallId)
   }
 
-  sendPrompt(text: string): Promise<void> {
-    return this._sessionCommand('sendPrompt', (ref) => ({ ref, text }))
+  sendPrompt(text: string, attachmentIds?: readonly string[]): Promise<void> {
+    return this._sessionCommand('sendPrompt', (ref) => ({
+      ref,
+      text,
+      ...(attachmentIds !== undefined && attachmentIds.length > 0 ? { attachmentIds } : {}),
+    }))
+  }
+
+  uploadAttachment(file: File, kind: MobileAttachmentKind): Promise<MobileAttachmentUploadResult> {
+    return this._attachments.upload(file, kind)
+  }
+
+  fetchAttachmentBlob(attachmentId: string): Promise<Blob> {
+    return this._attachments.fetchBlob({ id: attachmentId })
   }
 
   cancelTurn(): Promise<void> {

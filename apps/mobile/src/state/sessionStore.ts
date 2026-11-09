@@ -1,5 +1,6 @@
 import type {
   MobileConfigOption,
+  MobileMessageAttachment,
   MobileMessageUpsertEvent,
   MobilePendingElicitation,
   MobilePendingPermission,
@@ -198,11 +199,16 @@ function upsertMessage(
   const text =
     event.textReplace !== undefined ? event.textReplace : existing.text + (event.textAppend ?? '')
   const next = [...timeline]
-  next[index] = buildMessage(event, text)
+  next[index] = buildMessage(event, text, existing.attachments)
   return next
 }
 
-function buildMessage(event: MobileMessageUpsertEvent, text: string): MobileTimelineMessageItem {
+function buildMessage(
+  event: MobileMessageUpsertEvent,
+  text: string,
+  previousAttachments?: readonly MobileMessageAttachment[],
+): MobileTimelineMessageItem {
+  const attachments = event.attachments ?? previousAttachments ?? []
   return {
     kind: 'message',
     id: event.id,
@@ -210,6 +216,7 @@ function buildMessage(event: MobileMessageUpsertEvent, text: string): MobileTime
     text,
     streaming: event.streaming,
     ...(event.memoryTrimmed === true ? { memoryTrimmed: true } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
     ...(event.hasNonText === true ? { hasNonText: true } : {}),
   }
 }

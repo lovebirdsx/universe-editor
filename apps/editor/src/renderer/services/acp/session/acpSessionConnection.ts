@@ -33,6 +33,7 @@
 
 import type { IAcpClientConnection } from '../acpClientService.js'
 import type { SelectionContext } from '../promptContext.js'
+import type { PromptFileAttachment } from '../promptAttachment.js'
 import type { PromptImage } from '../promptImage.js'
 import type { PlacedRef } from '../promptRef.js'
 import { AcpConnectionError } from './acpErrors.js'
@@ -49,6 +50,7 @@ export interface QueuedPrompt {
   readonly refs: readonly PlacedRef[]
   readonly contexts: readonly SelectionContext[]
   readonly images: readonly PromptImage[]
+  readonly files: readonly PromptFileAttachment[]
   /** Client-generated messageId anchoring this prompt (see AcpMessage.messageId). */
   readonly messageId: string
   readonly resolve: () => void
@@ -104,10 +106,11 @@ export class AcpSessionConnection {
     refs: readonly PlacedRef[],
     contexts: readonly SelectionContext[],
     images: readonly PromptImage[],
+    files: readonly PromptFileAttachment[],
     messageId: string,
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this._queued.push({ text, refs, contexts, images, messageId, resolve, reject })
+      this._queued.push({ text, refs, contexts, images, files, messageId, resolve, reject })
     })
   }
 

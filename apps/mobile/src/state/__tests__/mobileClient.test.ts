@@ -155,6 +155,33 @@ describe('MobileClient session subscription', () => {
     await expect(resolved).resolves.toBeUndefined()
   })
 
+  it('sends attachment ids only when the prompt carries them', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    void client.sendPrompt('hello', ['att-1', 'att-2']).catch(() => undefined)
+    void client.sendPrompt('plain').catch(() => undefined)
+    const commands = sentFrames(socket).filter(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as Array<{ kind: string; payload: Record<string, unknown> }>
+    expect(commands[0]).toMatchObject({
+      kind: 'sendPrompt',
+      payload: {
+        ref: { windowId: 1, localId: 's1' },
+        text: 'hello',
+        attachmentIds: ['att-1', 'att-2'],
+      },
+    })
+    expect(commands[1]?.payload).toEqual({
+      ref: { windowId: 1, localId: 's1' },
+      text: 'plain',
+    })
+  })
+
   it('rejects commands while the gateway is not connected', async () => {
     const { client, sockets } = createHarness()
     client.openSession('1:s1')

@@ -220,6 +220,10 @@ describe('parseClientFrame', () => {
   it('validates M3 command payloads and the idempotency key', () => {
     const commands: Array<Record<string, unknown>> = [
       { kind: 'sendPrompt', payload: { ref: REF, text: 'hello' } },
+      {
+        kind: 'sendPrompt',
+        payload: { ref: REF, text: '', attachmentIds: ['a1', 'a2'] },
+      },
       { kind: 'cancelTurn', payload: { ref: REF } },
       {
         kind: 'resolvePermission',
@@ -267,6 +271,18 @@ describe('parseClientFrame', () => {
     const bad: Array<Record<string, unknown>> = [
       { kind: 'sendPrompt', payload: { ref: REF, text: 'x'.repeat(32 * 1024 + 1) } },
       { kind: 'sendPrompt', payload: { ref: REF, text: 3 } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: '   ' } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: 'hi', attachmentIds: 'a1' } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: 'hi', attachmentIds: ['a1', 'a1'] } },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '',
+          attachmentIds: Array.from({ length: 9 }, (_, i) => `a${i}`),
+        },
+      },
+      { kind: 'sendPrompt', payload: { ref: REF, text: '', attachmentIds: [''] } },
       { kind: 'resolvePermission', payload: { ref: REF, optionId: 'allow' } },
       {
         kind: 'resolveElicitation',
@@ -679,6 +695,71 @@ describe('parseServerFrame', () => {
     expect(errorCode(parseServerFrame(withSummary({ backgroundTaskCount: -1 })))).toBe(
       'bad_request',
     )
+    expect(errorCode(parseServerFrame(withSummary({ imageSupported: 'yes' })))).toBe('bad_request')
+  })
+
+  it('validates attachment metadata on timeline messages and upserts', () => {
+    const attachment = {
+      id: 'att-1',
+      kind: 'image',
+      name: 'shot.png',
+      mimeType: 'image/png',
+      size: 4,
+    }
+    const withMessage = (overrides: Record<string, unknown>): string =>
+      JSON.stringify({
+        type: 'session_snapshot',
+        seq: 1,
+        session: {
+          ...snapshotJson(),
+          timeline: [
+            {
+              kind: 'message',
+              id: 'msg-1',
+              role: 'user',
+              text: '',
+              streaming: false,
+              ...overrides,
+            },
+          ],
+        },
+      })
+    const parsed = parseServerFrame(withMessage({ attachments: [attachment] }))
+    expect(parsed.ok).toBe(true)
+
+    expect(errorCode(parseServerFrame(withMessage({ attachments: [{ id: 'a' }] })))).toBe(
+      'bad_request',
+    )
+    expect(
+      errorCode(parseServerFrame(withMessage({ attachments: [{ ...attachment, kind: 'audio' }] }))),
+    ).toBe('bad_request')
+    expect(
+      errorCode(parseServerFrame(withMessage({ attachments: [{ ...attachment, size: -1 }] }))),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame(withMessage({ attachments: [{ ...attachment, size: 26 * 1024 * 1024 }] })),
+      ),
+    ).toBe('bad_request')
+
+    const upsert = (attachments: unknown): string =>
+      JSON.stringify({
+        type: 'session_delta',
+        seq: 2,
+        ref: REF,
+        events: [
+          {
+            type: 'message_upsert',
+            id: 'msg-1',
+            role: 'user',
+            streaming: false,
+            attachments,
+          },
+        ],
+      })
+    expect(parseServerFrame(upsert([attachment])).ok).toBe(true)
+    expect(parseServerFrame(upsert([])).ok).toBe(true)
+    expect(errorCode(parseServerFrame(upsert([{ ...attachment, name: '' }])))).toBe('bad_request')
   })
 
   it('rejects malformed snapshots and delta events', () => {

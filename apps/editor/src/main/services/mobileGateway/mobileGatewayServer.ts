@@ -14,11 +14,17 @@ import { join } from 'node:path'
 import type { Duplex } from 'node:stream'
 import type { ILogger } from '@universe-editor/platform'
 import {
+  MAX_ATTACHMENT_UPLOAD_BYTES,
   MAX_CLIENT_FRAME_BYTES,
+  MOBILE_ATTACHMENT_KIND_HEADER,
+  MOBILE_ATTACHMENT_NAME_HEADER,
+  MOBILE_ATTACHMENT_PATH_PREFIX,
+  MOBILE_ATTACHMENT_UPLOAD_PATH,
   MOBILE_CLOSE_CODES,
   MOBILE_PAIR_PATH,
   MOBILE_PROTOCOL_VERSION,
   MOBILE_WS_PATH,
+  isMobileAttachmentKind,
   parseClientFrame,
   parsePairRequest,
   serializeFrame,
@@ -32,6 +38,11 @@ import type { AuditLog } from './auditLog.js'
 import { DeviceLimitError, type DeviceStore } from './deviceStore.js'
 import { HelloFailureLimiter } from './helloFailureLimiter.js'
 import type { MobileGatewayHub, MobileGatewayHubConnection } from './mobileGatewayHub.js'
+import {
+  MobileAttachmentError,
+  normalizeAttachmentMimeType,
+  type MobileGatewayAttachmentHttpStore,
+} from './mobileAttachmentStore.js'
 import type { PairingService } from './pairingService.js'
 import { isAllowedPushEndpoint } from './pushEndpoint.js'
 import { checkRequestHeaders } from './requestSecurity.js'
@@ -51,7 +62,7 @@ export const MAX_TOTAL_CONNECTIONS = 64
 export const MAX_PAIR_BODY_BYTES = 4 * 1024
 
 const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 const POLICY_VIOLATION_CLOSE = 1008
 const HSTS_VALUE = 'max-age=31536000'
 
@@ -87,6 +98,8 @@ export interface MobileGatewayServerOptions {
   readonly isPushEndpointAllowed?: (endpoint: string) => boolean
   /** M2 aggregation; absent in M1-only tests, which keep the empty inbox answer. */
   readonly hub?: MobileGatewayHub
+  /** Attachment upload/download store; absent when the gateway runs without files. */
+  readonly attachments?: MobileGatewayAttachmentHttpStore
 }
 
 interface ConnectionState {
@@ -300,6 +313,18 @@ export class MobileGatewayServer {
       await this._handlePair(req, res)
       return
     }
+    if (pathname === MOBILE_ATTACHMENT_UPLOAD_PATH) {
+      await this._handleAttachmentUpload(req, res)
+      return
+    }
+    if (pathname.startsWith(MOBILE_ATTACHMENT_PATH_PREFIX)) {
+      await this._handleAttachmentDownload(
+        req,
+        res,
+        pathname.slice(MOBILE_ATTACHMENT_PATH_PREFIX.length),
+      )
+      return
+    }
     if (pathname === MOBILE_WS_PATH) {
       this._sendText(res, 426, 'Upgrade Required', { Upgrade: 'websocket' })
       return
@@ -392,6 +417,169 @@ export class MobileGatewayServer {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
     }
     this._sendJson(res, 200, response)
+  }
+
+  private async _authenticateDevice(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<string | undefined> {
+    if (this._options.attachments === undefined) {
+      this._sendJson(res, 404, {
+        code: 'not_supported',
+        message: 'attachment api is unavailable',
+      })
+      return undefined
+    }
+    const header = req.headers.authorization
+    const token =
+      typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7).trim() : ''
+    if (token === '') {
+      this._sendJson(res, 401, {
+        code: 'unauthorized',
+        message: 'valid device token required',
+      })
+      return undefined
+    }
+    const device = await this._options.store.verify(token)
+    if (device === undefined) {
+      this._sendJson(res, 401, {
+        code: 'unauthorized',
+        message: 'valid device token required',
+      })
+      return undefined
+    }
+    return device.deviceId
+  }
+
+  private async _handleAttachmentUpload(
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const deviceId = await this._authenticateDevice(req, res)
+    if (deviceId === undefined) return
+    const attachments = this._options.attachments
+    if (attachments === undefined) {
+      this._sendJson(res, 404, {
+        code: 'not_supported',
+        message: 'attachments are not available',
+      })
+      return
+    }
+    if (req.method !== 'POST') {
+      this._sendText(res, 405, 'Method Not Allowed', { Allow: 'POST' })
+      return
+    }
+    const kind = headerValue(req.headers[MOBILE_ATTACHMENT_KIND_HEADER])
+    if (!isMobileAttachmentKind(kind)) {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'invalid attachment kind' })
+      return
+    }
+    const encodedName = headerValue(req.headers[MOBILE_ATTACHMENT_NAME_HEADER])
+    if (encodedName === undefined) {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'attachment name is required' })
+      return
+    }
+    let name: string
+    try {
+      name = decodeURIComponent(encodedName)
+    } catch {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'invalid attachment name' })
+      return
+    }
+    if (name.trim() === '') {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'attachment name is required' })
+      return
+    }
+    const body = await readBodyBytes(req, MAX_ATTACHMENT_UPLOAD_BYTES)
+    if (!body.ok) {
+      this._sendJson(res, 413, { code: 'bad_request', message: 'attachment is too large' })
+      return
+    }
+    const contentType = headerValue(req.headers['content-type'])?.split(';')[0]
+    const mimeType = normalizeAttachmentMimeType(contentType)
+    try {
+      const result = await attachments.save({
+        deviceId,
+        kind,
+        name,
+        mimeType,
+        bytes: body.bytes,
+      })
+      this._sendJson(res, 200, result)
+    } catch (err) {
+      if (err instanceof MobileAttachmentError) {
+        this._sendJson(res, err.code === 'rate_limited' ? 429 : 400, {
+          code: err.code,
+          message: err.message,
+        })
+        return
+      }
+      this._options.logger.error('attachment upload failed', err)
+      this._sendJson(res, 500, { code: 'internal', message: 'failed to store attachment' })
+    }
+  }
+
+  private async _handleAttachmentDownload(
+    req: IncomingMessage,
+    res: ServerResponse,
+    rawId: string,
+  ): Promise<void> {
+    const deviceId = await this._authenticateDevice(req, res)
+    if (deviceId === undefined) return
+    const attachments = this._options.attachments
+    if (attachments === undefined) {
+      this._sendJson(res, 404, {
+        code: 'not_supported',
+        message: 'attachments are not available',
+      })
+      return
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      this._sendText(res, 405, 'Method Not Allowed', { Allow: 'GET, HEAD' })
+      return
+    }
+    let id: string
+    try {
+      id = decodeURIComponent(rawId)
+    } catch {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'invalid attachment id' })
+      return
+    }
+    if (id === '' || id.includes('/')) {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'attachment is not available',
+      })
+      return
+    }
+    const entry = await attachments.open(deviceId, id)
+    if (entry === undefined) {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'attachment is not available',
+      })
+      return
+    }
+    let bytes: Buffer
+    try {
+      bytes = await readFile(entry.path)
+    } catch {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'attachment is not available',
+      })
+      return
+    }
+    this._applySecurityHeaders(res, 'no-store')
+    res.statusCode = 200
+    res.setHeader('Content-Type', entry.mimeType)
+    res.setHeader('Content-Length', bytes.byteLength)
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename*=UTF-8''${encodeRfc5987(entry.name)}`,
+    )
+    if (req.method === 'HEAD') res.end()
+    else res.end(bytes)
   }
 
   private async _handleStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -602,24 +790,35 @@ export class MobileGatewayServer {
           })
         } else {
           void this._options.hub
-            ?.handleCommand(connection.hubConnection, command, {
-              record: (action, result, detail) => {
-                void this._options.audit
-                  .append({
-                    ...(connection.deviceId !== undefined ? { deviceId: connection.deviceId } : {}),
-                    ...(connection.deviceName !== undefined
-                      ? { deviceName: connection.deviceName }
-                      : {}),
-                    remoteAddress: connection.remoteAddress,
-                    action,
-                    result,
-                    ...(detail !== undefined ? { detail } : {}),
-                  })
-                  .catch((err) =>
-                    this._options.logger.warn(`mobile command audit failed: ${String(err)}`),
-                  )
+            ?.handleCommand(
+              connection.hubConnection,
+              command,
+              {
+                record: (action, result, detail) => {
+                  void this._options.audit
+                    .append({
+                      ...(connection.deviceId !== undefined
+                        ? { deviceId: connection.deviceId }
+                        : {}),
+                      ...(connection.deviceName !== undefined
+                        ? { deviceName: connection.deviceName }
+                        : {}),
+                      remoteAddress: connection.remoteAddress,
+                      action,
+                      result,
+                      ...(detail !== undefined ? { detail } : {}),
+                    })
+                    .catch((err) =>
+                      this._options.logger.warn(`mobile command audit failed: ${String(err)}`),
+                    )
+                },
               },
-            })
+              {
+                ...(connection.deviceId !== undefined
+                  ? { deviceId: connection.deviceId }
+                  : {}),
+              },
+            )
             .catch((err) => {
               // A hub exception must not leave the phone waiting forever.
               this._options.logger.warn(`mobile command failed: ${String(err)}`)
@@ -684,7 +883,12 @@ export class MobileGatewayServer {
       serverVersion: this._options.serverVersion,
       deviceId: device.deviceId,
       serverTime: Date.now(),
-      capabilities: ['inbox', 'commands', 'notifications'],
+      capabilities: [
+        'inbox',
+        'commands',
+        'notifications',
+        ...(this._options.attachments !== undefined ? ['attachments'] : []),
+      ],
       ...(this._options.vapidPublicKey !== undefined
         ? { vapidPublicKey: this._options.vapidPublicKey }
         : {}),
@@ -943,10 +1147,24 @@ interface ReadBodyResult {
   readonly text: string
 }
 
+interface ReadBytesResult {
+  readonly ok: true
+  readonly bytes: Buffer
+}
+
 async function readBody(
   req: IncomingMessage,
   limit: number,
 ): Promise<ReadBodyResult | { readonly ok: false }> {
+  const result = await readBodyBytes(req, limit)
+  if (!result.ok) return result
+  return { ok: true, text: result.bytes.toString('utf8') }
+}
+
+async function readBodyBytes(
+  req: IncomingMessage,
+  limit: number,
+): Promise<ReadBytesResult | { readonly ok: false }> {
   const declared = req.headers['content-length']
   if (declared !== undefined) {
     const length = Number(declared)
@@ -969,7 +1187,19 @@ async function readBody(
     if (!tooLarge) chunks.push(buffer)
   }
   if (tooLarge) return { ok: false }
-  return { ok: true, text: Buffer.concat(chunks).toString('utf8') }
+  return { ok: true, bytes: Buffer.concat(chunks, total) }
+}
+
+function headerValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
+
+/** RFC 5987 attr-char: encodeURIComponent leaves `'()*` unescaped. */
+function encodeRfc5987(value: string): string {
+  return encodeURIComponent(value).replace(
+    /['()*]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  )
 }
 
 async function isFile(path: string): Promise<boolean> {

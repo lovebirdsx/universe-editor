@@ -6,6 +6,9 @@ import { join } from 'node:path'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { NullLogger } from '@universe-editor/platform'
 import {
+  MAX_ATTACHMENT_UPLOAD_BYTES,
+  MOBILE_ATTACHMENT_KIND_HEADER,
+  MOBILE_ATTACHMENT_NAME_HEADER,
   MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL_VERSION,
   parseServerFrame,
@@ -17,6 +20,7 @@ import { AuditLog } from '../auditLog.js'
 import { DeviceStore } from '../deviceStore.js'
 import { HelloFailureLimiter, MAX_HELLO_FAILURES_PER_ADDRESS } from '../helloFailureLimiter.js'
 import { ensureLanCertificate } from '../lanCertificate.js'
+import { MobileAttachmentStore } from '../mobileAttachmentStore.js'
 import { MobileGatewayServer, type MobileGatewayServerOptions } from '../mobileGatewayServer.js'
 import { PairingService } from '../pairingService.js'
 
@@ -634,5 +638,214 @@ describe('mobile gateway server integration', () => {
 
     ws.send(JSON.stringify({ type: 'client_state', visible: false }))
     await expect.poll(() => gateway.server.isDeviceVisible(paired.deviceId)).toBe(false)
+  })
+})
+
+describe('mobile gateway attachment api', () => {
+  async function startWithAttachments(): Promise<{
+    gateway: GatewayHarness
+    store: MobileAttachmentStore
+  }> {
+    const dir = mkTempDir('ue-mobile-attachment-store-')
+    const store = new MobileAttachmentStore({ rootDir: join(dir, 'attachments') })
+    await store.initialize()
+    cleanup.push(() => store.dispose())
+    cleanup.push(() => {
+      removeDirWithRetry(dir)
+    })
+    const gateway = await startGateway({ attachments: store })
+    return { gateway, store }
+  }
+
+  function upload(
+    base: string,
+    token: string,
+    kind: string,
+    name: string,
+    bytes: Uint8Array,
+    mimeType: string,
+  ): Promise<Response> {
+    return fetch(`${base}/api/attachments`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${token}`,
+        [MOBILE_ATTACHMENT_KIND_HEADER]: kind,
+        [MOBILE_ATTACHMENT_NAME_HEADER]: encodeURIComponent(name),
+        'content-type': mimeType,
+      },
+      body: bytes,
+    })
+  }
+
+  it('requires a valid device token', async () => {
+    const { gateway } = await startWithAttachments()
+    const unauthenticated = await fetch(`${gateway.base}/api/attachments`, { method: 'POST' })
+    expect(unauthenticated.status).toBe(401)
+    expect(await unauthenticated.json()).toMatchObject({ code: 'unauthorized' })
+
+    const invalid = await fetch(`${gateway.base}/api/attachments/att-1`, {
+      headers: { authorization: 'Bearer not-a-token' },
+    })
+    expect(invalid.status).toBe(401)
+  })
+
+  it('uploads and downloads the exact bytes for the owning device', async () => {
+    const { gateway } = await startWithAttachments()
+    const owner = await pair(gateway.base)
+    const other = await pair(gateway.base)
+    expect(other.deviceId).not.toBe(owner.deviceId)
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a])
+
+    const uploaded = await upload(
+      gateway.base,
+      owner.token,
+      'image',
+      '截图 1.png',
+      bytes,
+      'image/png; charset=binary',
+    )
+    expect(uploaded.status).toBe(200)
+    const result = (await uploaded.json()) as {
+      id: string
+      kind: string
+      name: string
+      mimeType: string
+      size: number
+    }
+    expect(result).toMatchObject({
+      kind: 'image',
+      name: '截图 1.png',
+      mimeType: 'image/png',
+      size: bytes.byteLength,
+    })
+
+    const downloaded = await fetch(`${gateway.base}/api/attachments/${result.id}`, {
+      headers: { authorization: `Bearer ${owner.token}` },
+    })
+    expect(downloaded.status).toBe(200)
+    expect(downloaded.headers.get('content-type')).toBe('image/png')
+    expect(downloaded.headers.get('cache-control')).toBe('no-store')
+    expect(downloaded.headers.get('content-disposition')).toContain(
+      `filename*=UTF-8''${encodeURIComponent('截图 1.png')}`,
+    )
+    expect(new Uint8Array(await downloaded.arrayBuffer())).toEqual(bytes)
+
+    const head = await fetch(`${gateway.base}/api/attachments/${result.id}`, {
+      method: 'HEAD',
+      headers: { authorization: `Bearer ${owner.token}` },
+    })
+    expect(head.status).toBe(200)
+    expect((await head.arrayBuffer()).byteLength).toBe(0)
+
+    const foreign = await fetch(`${gateway.base}/api/attachments/${result.id}`, {
+      headers: { authorization: `Bearer ${other.token}` },
+    })
+    expect(foreign.status).toBe(404)
+    expect(await foreign.json()).toMatchObject({ code: 'attachment_not_found' })
+  })
+
+  it('rejects invalid kind and name headers', async () => {
+    const { gateway } = await startWithAttachments()
+    const paired = await pair(gateway.base)
+
+    const badKind = await upload(gateway.base, paired.token, 'audio', 'a.wav', new Uint8Array(1), 'audio/wav')
+    expect(badKind.status).toBe(400)
+    expect(await badKind.json()).toMatchObject({ code: 'bad_request' })
+
+    const missingName = await fetch(`${gateway.base}/api/attachments`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${paired.token}`,
+        [MOBILE_ATTACHMENT_KIND_HEADER]: 'file',
+        'content-type': 'text/plain',
+      },
+      body: new Uint8Array(1),
+    })
+    expect(missingName.status).toBe(400)
+  })
+
+  it('returns 413 before reading a body larger than the upload limit', async () => {
+    const { gateway } = await startWithAttachments()
+    const paired = await pair(gateway.base)
+    const status = await new Promise<number>((resolve, reject) => {
+      const request = httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port: Number(new URL(gateway.base).port),
+          path: '/api/attachments',
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${paired.token}`,
+            [MOBILE_ATTACHMENT_KIND_HEADER]: 'file',
+            [MOBILE_ATTACHMENT_NAME_HEADER]: encodeURIComponent('huge.bin'),
+            'content-type': 'application/octet-stream',
+            'content-length': String(MAX_ATTACHMENT_UPLOAD_BYTES + 1),
+          },
+        },
+        (response) => {
+          response.resume()
+          resolve(response.statusCode ?? 0)
+        },
+      )
+      request.on('error', reject)
+      request.end()
+    })
+    expect(status).toBe(413)
+  })
+
+  it('advertises attachments only when a store is wired', async () => {
+    const { gateway } = await startWithAttachments()
+    const paired = await pair(gateway.base)
+    const ws = await connectWs(gateway.base)
+    cleanup.push(() => ws.terminate())
+    const ok = await hello(ws, paired.token)
+    expect(ok).toMatchObject({
+      type: 'hello_ok',
+      capabilities: ['inbox', 'commands', 'notifications', 'attachments'],
+    })
+
+    const bare = await startGateway()
+    const barePaired = await pair(bare.base)
+    const bareWs = await connectWs(bare.base)
+    cleanup.push(() => bareWs.terminate())
+    const bareOk = await hello(bareWs, barePaired.token)
+    expect(bareOk).toMatchObject({
+      type: 'hello_ok',
+      capabilities: ['inbox', 'commands', 'notifications'],
+    })
+    const refused = await fetch(`${bare.base}/api/attachments`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${barePaired.token}` },
+    })
+    expect(refused.status).toBe(404)
+    expect(await refused.json()).toMatchObject({ code: 'not_supported' })
+  })
+
+  it('encodes RFC 5987 attr-characters in the download filename', async () => {
+    const { gateway } = await startWithAttachments()
+    const paired = await pair(gateway.base)
+    const uploaded = await upload(
+      gateway.base,
+      paired.token,
+      'file',
+      "it's (1).txt",
+      new Uint8Array([1]),
+      'text/plain',
+    )
+    expect(uploaded.status).toBe(200)
+    const result = (await uploaded.json()) as { id: string }
+    const downloaded = await fetch(`${gateway.base}/api/attachments/${result.id}`, {
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(downloaded.headers.get('content-disposition')).toContain(
+      `filename*=UTF-8''it%27s%20%281%29.txt`,
+    )
+  })
+
+  it('serves a CSP that allows blob image previews', async () => {
+    const { gateway } = await startWithAttachments()
+    const response = await fetch(`${gateway.base}/`)
+    const csp = response.headers.get('content-security-policy') ?? ''
+    expect(csp).toContain("img-src 'self' data: blob:")
   })
 })

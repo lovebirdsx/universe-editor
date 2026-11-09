@@ -222,6 +222,23 @@ export const strings = {
   composerStopHint: '运行中也可以发送消息（排队给 Agent）',
   composerSendFailed: '发送失败，请重试。',
   composerDraftRestored: '已恢复上次未发送的草稿',
+  composerAttach: '添加附件',
+  composerAttachTitle: '添加附件',
+  composerAttachCamera: '拍照',
+  composerAttachPhotos: '从相册选择',
+  composerAttachFiles: '选择文件',
+  composerAttachCancel: '取消',
+  attachmentUploading: '上传中…',
+  attachmentUploadFailed: '上传失败',
+  attachmentRemove: '移除附件',
+  attachmentImageAlt: '图片附件',
+  attachmentImageLoadFailed: '图片加载失败',
+  attachmentTooMany: '最多添加 8 个附件',
+  attachmentTooManyImages: '最多添加 5 张图片',
+  attachmentImageTooLarge: '单张图片不能超过 5 MB',
+  attachmentFileTooLarge: '单个文件不能超过 25 MB',
+  attachmentTotalTooLarge: '附件总大小不能超过 50 MB',
+  attachmentUnsupportedImage: '仅支持 PNG、JPEG、WebP、GIF 图片',
 
   configTitle: '会话设置',
   configNeedsPc: '需在 PC 上切换',
@@ -296,6 +313,7 @@ const COMMAND_ERRORS: Readonly<Record<string, string>> = {
   forbidden_operation: '该操作不允许在手机上执行。',
   session_not_found: '会话不存在或已关闭。',
   session_read_only: '只读会话不能执行此操作。',
+  attachment_not_found: '附件不存在或已过期，请重新添加。',
   stale_request: '请求已在别处处理。',
   workspace_not_open: '目标工作区尚未在 PC 上打开，请先在 PC 上打开该工作区。',
   not_supported: '当前版本不支持该操作，请升级编辑器。',
@@ -312,4 +330,13 @@ const COMMAND_ERRORS: Readonly<Record<string, string>> = {
 export function commandErrorText(code: string | undefined): string {
   if (code === undefined) return strings.sessionActionFailed
   return COMMAND_ERRORS[code] ?? strings.sessionActionFailed
+}
+
+export function formatAttachmentSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) {
+    const kb = bytes / 1024
+    return `${kb < 10 ? kb.toFixed(1) : Math.round(kb)} KB`
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }

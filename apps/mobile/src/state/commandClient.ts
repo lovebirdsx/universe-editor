@@ -13,7 +13,7 @@ import {
  */
 export const COMMAND_TIMEOUT_MS: Readonly<Record<MobileCommandKind, number>> = {
   getToolCallDetail: 10_000,
-  sendPrompt: 5_000,
+  sendPrompt: 15_000,
   cancelTurn: 5_000,
   resolvePermission: 10_000,
   cancelPermission: 10_000,

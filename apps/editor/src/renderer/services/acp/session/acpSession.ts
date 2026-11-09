@@ -62,6 +62,10 @@ import {
   type SelectionContext,
 } from '../promptContext.js'
 import { composeImageBlocks, type PromptImage } from '../promptImage.js'
+import {
+  composeFileAttachmentBlocks,
+  type PromptFileAttachment,
+} from '../promptAttachment.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
 import { sessionModelId } from '../acpModelCandidates.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
@@ -607,6 +611,7 @@ interface PromptSnapshot {
   readonly refs: readonly PlacedRef[]
   readonly contexts: readonly SelectionContext[]
   readonly images: readonly PromptImage[]
+  readonly files: readonly PromptFileAttachment[]
   readonly messageId: string
   /**
    * The dispatch's own anchor id (never switched to a continuation id) — the
@@ -1819,6 +1824,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         last.refs,
         last.contexts,
         last.images,
+        last.files,
         nextId,
         undefined,
         last.continuation === true,
@@ -1838,12 +1844,12 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._agentOutputCount === (last.attemptBaseline ?? last.outputBaseline)
     ) {
       const nextId = this._rotateRetryAnchor(last.messageId)
-      await this._dispatchPrompt(text, [], [], [], nextId, undefined, true)
+      await this._dispatchPrompt(text, [], [], [], [], nextId, undefined, true)
       return
     }
     const messageId = generateUuid()
     this._appendMessage('user', text, [], messageId, { autoRetry: true })
-    await this._dispatchPrompt(text, [], [], [], messageId, undefined, true)
+    await this._dispatchPrompt(text, [], [], [], [], messageId, undefined, true)
   }
 
   /**
@@ -1919,7 +1925,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       if (failed.anchorProducedOutput === true) {
         const nextId = generateUuid()
         this._appendMessage('user', failed.text, [], nextId, { autoRetry: true })
-        await this._dispatchPrompt(failed.text, [], [], [], nextId, undefined, true)
+        await this._dispatchPrompt(failed.text, [], [], [], [], nextId, undefined, true)
       } else {
         const nextId = this._rotateRetryAnchor(failed.messageId)
         await this._dispatchPrompt(
@@ -1927,6 +1933,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           failed.refs,
           failed.contexts,
           failed.images,
+          failed.files,
           nextId,
           undefined,
           failed.continuation === true,
@@ -2064,7 +2071,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
     for (const q of queued) {
-      this._dispatchPrompt(q.text, q.refs, q.contexts, q.images, q.messageId).then(
+      this._dispatchPrompt(q.text, q.refs, q.contexts, q.images, q.files, q.messageId).then(
         q.resolve,
         q.reject,
       )
@@ -2214,6 +2221,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     refs?: readonly PlacedRef[],
     contexts?: readonly SelectionContext[],
     images?: readonly PromptImage[],
+    files?: readonly PromptFileAttachment[],
   ): Promise<void> {
     // Read-only preview session (foreign worktree): viewing only, no dispatch.
     if (this.readOnly) return
@@ -2255,9 +2263,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Always surface the user's message immediately, even while connecting, so
     // typing feels instant. The wire dispatch is deferred until the connection
     // is ready (queued) so the prompt is not lost.
-    this._appendMessage('user', text, composeImageBlocks(images ?? []), messageId, {
-      selectionContexts: contexts ?? [],
-    })
+    this._appendMessage(
+      'user',
+      text,
+      [...composeImageBlocks(images ?? []), ...composeFileAttachmentBlocks(files ?? [])],
+      messageId,
+      {
+        selectionContexts: contexts ?? [],
+      },
+    )
     void this._maybeGenerateTitle(text)
     // Re-handshake on demand: the agent process died while the session sat
     // idle (the idle close path sealed the status but kept the dead lease
@@ -2271,7 +2285,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     // is eventually dispatched (on connect) or rejected (on connection failure).
     if (!this._connection.isSettled) {
       try {
-        await this._connection.enqueue(text, refs ?? [], contexts ?? [], images ?? [], messageId)
+        await this._connection.enqueue(
+          text,
+          refs ?? [],
+          contexts ?? [],
+          images ?? [],
+          files ?? [],
+          messageId,
+        )
       } catch {
         // Connection failed before this queued prompt could be dispatched. The
         // failure is already surfaced as an [error] timeline message by
@@ -2287,6 +2308,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       refs ?? [],
       contexts ?? [],
       images ?? [],
+      files ?? [],
       messageId,
       isSideTaskFirstTurn ? SIDE_TASK_ROLE_PROMPT : undefined,
     )
@@ -2311,6 +2333,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     refs: readonly PlacedRef[],
     contexts: readonly SelectionContext[],
     images: readonly PromptImage[],
+    files: readonly PromptFileAttachment[],
     messageId: string,
     hiddenLeadBlock?: string,
     continuation = false,
@@ -2341,11 +2364,20 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Attached images lead the prompt as `image` ContentBlocks (after any
     // selection context, before the user's text).
     const imageBlocks = composeImageBlocks(images)
-    const body = prompt.length > 0 ? [...prompt] : [{ type: 'text' as const, text }]
+    // Phone-uploaded files follow the images as `resource_link` blocks.
+    const fileBlocks = composeFileAttachmentBlocks(files)
     // A hidden role instruction (side task's first turn) leads everything so the
     // model reads it before any selection context, image, or user text.
     const hiddenBlocks: readonly ContentBlock[] =
       hiddenLeadBlock !== undefined ? [{ type: 'text' as const, text: hiddenLeadBlock }] : []
+    const hasLeadingBlocks =
+      contextBlocks.length > 0 || imageBlocks.length > 0 || fileBlocks.length > 0
+    const body =
+      prompt.length > 0
+        ? [...prompt]
+        : text !== '' || !hasLeadingBlocks
+          ? [{ type: 'text' as const, text }]
+          : []
     const params: PromptRequest = {
       sessionId: sid,
       // The client-generated anchor for this user turn so rewind/fork can later
@@ -2355,7 +2387,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       _meta: { messageId },
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
-      prompt: [...hiddenBlocks, ...contextBlocks, ...imageBlocks, ...body],
+      prompt: [...hiddenBlocks, ...contextBlocks, ...imageBlocks, ...fileBlocks, ...body],
     }
     // Debug the exact block shapes sent to the agent — references (esp. symbols)
     // are lossy across the ACP boundary, so this makes context bugs diagnosable.
@@ -2381,6 +2413,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       refs,
       contexts,
       images,
+      files,
       messageId,
       sentMessageId: messageId,
       outputBaseline: this._agentOutputCount,
@@ -2582,6 +2615,7 @@ export class AcpSession extends Disposable implements IAcpSession {
                     refs: [],
                     contexts: [],
                     images: [],
+                    files: [],
                     continuation: true as const,
                   }
                 : {}),
@@ -2636,6 +2670,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           refs: continueOnRetry ? [] : snapshot.refs,
           contexts: continueOnRetry ? [] : snapshot.contexts,
           images: continueOnRetry ? [] : snapshot.images,
+          files: continueOnRetry ? [] : snapshot.files,
           messageId: currentMessageId,
           sentMessageId,
           outputBaseline: this._agentOutputCount,

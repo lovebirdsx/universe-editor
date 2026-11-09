@@ -65,8 +65,8 @@ describe('AcpSessionConnection — phases', () => {
 describe('AcpSessionConnection — queued prompts', () => {
   it('flushes queued prompts exactly once on connect, in order', () => {
     const c = new AcpSessionConnection()
-    const p1 = c.enqueue('first', [], [], [], 'mid-1')
-    const p2 = c.enqueue('second', [], [], [], 'mid-2')
+    const p1 = c.enqueue('first', [], [], [], [], 'mid-1')
+    const p2 = c.enqueue('second', [], [], [], [], 'mid-2')
     void p1
     void p2
     const drained = c.open(FAKE_CONN)
@@ -75,10 +75,28 @@ describe('AcpSessionConnection — queued prompts', () => {
     expect(c.open(FAKE_CONN)).toEqual([])
   })
 
+  it('keeps images and files attached to a queued prompt', () => {
+    const c = new AcpSessionConnection()
+    const images = [{ id: 'i1', mimeType: 'image/png', dataBase64: 'AAA', byteSize: 3 }]
+    const files = [
+      {
+        id: 'f1',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        byteSize: 5,
+        uri: 'file:///tmp/notes.txt',
+      },
+    ]
+    void c.enqueue('', [], [], images, files, 'mid-files')
+    const [queued] = c.open(FAKE_CONN)
+    expect(queued?.images).toEqual(images)
+    expect(queued?.files).toEqual(files)
+  })
+
   it('resolves a queued prompt when the drained deferred is resolved', async () => {
     const c = new AcpSessionConnection()
     const done = vi.fn()
-    const p = c.enqueue('hello', [], [], [], 'mid-h').then(done)
+    const p = c.enqueue('hello', [], [], [], [], 'mid-h').then(done)
     const [q] = c.open(FAKE_CONN)
     q!.resolve()
     await p
@@ -87,7 +105,7 @@ describe('AcpSessionConnection — queued prompts', () => {
 
   it('REJECTS queued prompts on fail (not silently dropped)', async () => {
     const c = new AcpSessionConnection()
-    const p = c.enqueue('lost', [], [], [], 'mid-l')
+    const p = c.enqueue('lost', [], [], [], [], 'mid-l')
     c.fail('agent crashed')
     await expect(p).rejects.toBeInstanceOf(AcpConnectionError)
     await expect(p).rejects.toThrow('agent crashed')
@@ -95,7 +113,7 @@ describe('AcpSessionConnection — queued prompts', () => {
 
   it('REJECTS queued prompts on close before connect', async () => {
     const c = new AcpSessionConnection()
-    const p = c.enqueue('lost', [], [], [], 'mid-c')
+    const p = c.enqueue('lost', [], [], [], [], 'mid-c')
     c.close()
     await expect(p).rejects.toBeInstanceOf(AcpConnectionError)
   })

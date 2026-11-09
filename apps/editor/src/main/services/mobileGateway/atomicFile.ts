@@ -1,19 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Atomic, permission-restricted JSON writes for the mobile gateway's user data.
+ *  Atomic, permission-restricted writes for the mobile gateway's user data.
  *  Mirrors aiSettingsFile.ts: write a unique tmp file next to the target, rename
  *  into place (retrying transient Windows locks), then chmod 0600 on POSIX so
  *  device hashes never linger at 0644.
  *--------------------------------------------------------------------------------------------*/
 
-import { chmod, mkdir, rename, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 const RENAME_ATTEMPTS = 10
 const RENAME_RETRY_DELAY_MS = 100
 const RENAME_RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY'])
-
-let tmpSeq = 0
 
 export async function writeJsonAtomic(
   path: string,
@@ -28,10 +27,25 @@ export async function writeFileAtomic(
   content: string,
   onChmodError?: (error: Error) => void,
 ): Promise<void> {
+  await writeBytesAtomic(path, Buffer.from(content, 'utf8'), onChmodError)
+}
+
+export async function writeBytesAtomic(
+  path: string,
+  content: Uint8Array,
+  onChmodError?: (error: Error) => void,
+): Promise<void> {
   await mkdir(dirname(path), { recursive: true })
-  const tmp = `${path}.${process.pid}.${tmpSeq++}.tmp`
-  await writeFile(tmp, content, { encoding: 'utf8', mode: 0o600 })
-  await renameWithRetries(tmp, path)
+  // A short sibling name keeps the temp path under the filesystem's 255-byte
+  // component limit even when the final attachment name uses the full budget.
+  const tmp = join(dirname(path), `.tmp-${randomUUID()}`)
+  try {
+    await writeFile(tmp, content, { mode: 0o600 })
+    await renameWithRetries(tmp, path)
+  } catch (err) {
+    await rm(tmp, { force: true }).catch(() => undefined)
+    throw err
+  }
   await chmodPrivate(path, onChmodError)
 }
 

@@ -5,7 +5,9 @@
 > 抽取）；**M3 交互后端已落地**（协议 v3：命令路由、审批仲裁、倒计时下沉、新建会话、高风险限制、
 > 幂等与审计）；**M4 通知已落地**（协议 v4：共享 attention 信号、前台 WS 通知、Web Push / VAPID、
 > PC 焦点抑制、通知偏好与深链）；**M5 打包与加固已落地**（`resources/mobile`、局域网自签
-> HTTPS / 证书轮换与指纹、CSP / 审计轮转 / 连接与设备上限、Tailscale / WSL 文档与冒烟）。
+> HTTPS / 证书轮换与指纹、CSP / 审计轮转 / 连接与设备上限、Tailscale / WSL 文档与冒烟）；
+> **M6 会话附件已落地**（协议 v6：图片 / 文件附件经 HTTP 上传到 PC 临时目录，图片走 ACP
+> `image`、文件走 `resource_link`，时间线展示缩略图与文件卡）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -30,9 +32,10 @@ PC 编辑器关闭时手机显示离线，不接管执行。
 | 会话页 | 摘要优先；工具调用默认折叠；diff 只读；可发 prompt、停止、切换模式与模型 |
 | 审批底部卡片 | 权限请求 + elicitation；先到先得，双端只有一次生效 |
 | 新建会话 | 选 agent、工作区、初始 prompt |
+| 输入附件 | 会话输入框可拍照 / 选图 / 选文件；图片作为 ACP `image`，普通文件以 PC 本地 `file:` URI 交给 agent |
 | 通知 | 仅「等待审批 / 提问 / 完成 / 出错」四类 |
 
-**第二期**：语音输入、图片附件、多台 PC 切换、中转服务器（脱离局域网/ Tailscale）。
+**第二期**：语音输入、多台 PC 切换、中转服务器（脱离局域网/ Tailscale）。
 
 **明确不做**：文件浏览、代码编辑、终端、agent / MCP / 供应商配置、扩展管理。
 
@@ -118,7 +121,7 @@ main 侧不直接读 `AcpSession`。
 | 工具调用 | preview（≤1KB）+ `hasDetail` + diff 增删行数 | `getToolCallDetail`，上限复用 `acpContentLimits.ts` |
 | 消息 | 正文 + `hasNonText`；`memoryTrimmed: true` 时无正文 | M2 无消息详情命令 |
 | diff | 统计信息 | M2 无 diff 详情命令 |
-| 图片 | 占位符 | 第一期不下发原图 |
+| 附件 | 元数据（id / kind / name / size） | 手机按 id 经 HTTP 懒加载，WS 不下发 base64 |
 | 已被内存裁剪的内容 | `memoryTrimmed: true` | 显示「内容已释放」，不重新拉取 |
 
 ## 4. 协议
@@ -128,13 +131,14 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 5`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 6`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
-供手机端「仅消息」过滤对齐桌面语义）。WS 建立后第一帧必须是
+供手机端「仅消息」过滤对齐桌面语义；v6 增加附件：`sendPrompt.attachmentIds`、消息
+`attachments`、`summary.imageSupported` 与 `attachment_not_found`）。WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v4 的 `hello_ok.capabilities` 为
-`['inbox', 'commands', 'notifications']`，旧客户端可以只看 `inbox`。`vapidPublicKey` 只在网关可推送
+`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v6 的 `hello_ok.capabilities` 为
+`['inbox', 'commands', 'notifications', 'attachments']`，旧客户端可以只看 `inbox`。`vapidPublicKey` 只在网关可推送
 时出现，VAPID 公钥走握手而不是额外 HTTP 端点。**token 不放 URL query**，避免进入访问日志与
 Referer。
 
@@ -157,7 +161,7 @@ Referer。
 | 分类 | kind | payload | 说明 |
 |---|---|---|---|
 | 详情 | `getToolCallDetail` | `{ ref, toolCallId }` | 工具调用详情按需拉取 |
-| 会话 | `sendPrompt` | `{ ref, text }` | 第一期仅纯文本；桥在 prompt 被接受后立即返回 |
+| 会话 | `sendPrompt` | `{ ref, text, attachmentIds? }` | 空文本 + 附件合法；桥在 prompt 被接受后立即返回 |
 | 会话 | `cancelTurn` | `{ ref }` | 停止当前 turn |
 | 审批 | `resolvePermission` | `{ ref, requestId, optionId, feedback? }` | 高风险选项被拒 |
 | 审批 | `cancelPermission` | `{ ref, requestId }` | 取消/关闭待审批卡片 |
@@ -176,9 +180,9 @@ Referer。
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
 只读命令（如 `getToolCallDetail`）不缓存。客户端重试不会重复发 prompt 或重复建会话。
 
-**超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` / `cancelTurn` 5s；
-审批、配置、自动执行、重命名 10s；`deleteSession` / `newSession` 30s。超时回
-`command_result { ok: false, error: 'internal' }`。
+**超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
+`cancelTurn` 5s；审批、配置、自动执行、重命名 10s；`deleteSession` / `newSession` 30s。超时回
+`command_result { ok: false, error: 'internal' }`。手机端 `sendPrompt` 同样是 15s，避免手机先超时重发。
 
 **服务端 → 客户端**
 
@@ -211,8 +215,8 @@ Referer。
   pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
 - `summary` 含 `ref / agentId / agentName? / title / status / displayStatus / bucket /
   workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
-  hasPendingElicitation / backgroundTaskCount / updatedAt`。
-- `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`）/ `toolCall`
+  hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`。
+- `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`、`attachments?`）/ `toolCall`
   （`toolKind`、`status`、preview、diff 增删行数；可带 `subagent` / `requiresUserDecision`
   标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片）/ `notice`
   （compaction / resurrection）。
@@ -223,6 +227,8 @@ Referer。
 - v3 的 `MobilePendingPermission` 带 `requestId`、每个选项带 `allowedOnMobile`，并可能带
   `autoResolve { optionId, deadlineAt?, paused }`；`permission_cleared` 带
   `{ requestId, reason, source }`，让手机区分 PC / 手机 / 自动执行与「被新请求取代」。
+- `message_upsert.attachments` 缺省表示不变、`[]` 表示清空；`hasNonText` 只表示未被
+  `attachments` 表达的非 text block（避免缩略图与「[包含附件]」占位重复）。
 - `summary_changed` 比较时忽略 `updatedAt`，避免每次合帧都发；`usage` 只在快照下发。
 
 **错误码**
@@ -236,7 +242,8 @@ Referer。
 | `stale_request` | `requestId` 已不在等待中（重复点击 / 另一端先处理） |
 | `workspace_not_open` | 目标工作区没有打开窗口且不能自动开窗 |
 | `not_supported` | 当前档位/版本不支持该命令 |
-| `rate_limited` | 触发速率限制 |
+| `rate_limited` | 触发速率限制（含附件配额已满） |
+| `attachment_not_found` | 附件不存在、已过期或属于其他设备 |
 | `internal` | 未分类的服务端错误 |
 
 `stale_request` 表示这次点击基于过期卡片：请求可能已被 PC 或另一端处理。客户端应直接按
@@ -305,7 +312,47 @@ Referer。
 客户端可以立即 `sendPrompt`，由会话保证在 ready 后按顺序投递。`listWorkspaces` 返回
 `{ folder, name, authority?, isOpen }`；`listAgents` 返回 `{ id, name, isDefault }`。
 
-## 7. 配对与安全
+## 7. 会话附件（协议 v6）
+
+手机输入框支持图片与文件附件。**WebSocket 只传附件 id，字节走同源 HTTP**：客户端帧上限 64KB，
+base64 塞进 `sendPrompt` 会在重连重发时放大内存与耗时。
+
+**上传 / 下载**（Bearer 设备 token，与 WS 握手同一凭据；token 不放 URL）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `POST` | `/api/attachments` | 原始字节 body；头 `X-Universe-Attachment-Kind: image\|file`、`X-Universe-Attachment-Name: <encodeURIComponent(name)>`；`Content-Type` 即 MIME |
+| `GET` / `HEAD` | `/api/attachments/:id` | 原始字节 + `Content-Type` / `Content-Length` / `Content-Disposition: inline` / `Cache-Control: no-store` |
+
+上传返回 `MobileAttachmentUploadResult { id, kind, name, mimeType?, size, createdAt }`。错误映射：
+401 `unauthorized`、400 `bad_request`、404 `attachment_not_found`、413 超过 25MB、429
+`rate_limited`、500 `internal`。
+
+**存储与生命周期**：`<userData>/mobile/attachments/<deviceId>/<attachmentId>/<sanitized-name>`。
+附件是**传输缓冲区，不是会话历史**——网关启动清空整个目录；pending 1 小时、已发送（`consume`）
+7 天，每 10 分钟 sweep；每设备 pending ≤ 32 个、总量 ≤ 256MB（满时拒绝新上传，不淘汰已发送
+附件，避免旧缩略图随机 404）。`attachmentId` 服务端生成，文件名只用于显示与落盘且经
+`sanitizeAttachmentFileName` 清洗；所有读写按 hello 认证得到的 `deviceId` 隔离，跨设备与不存在
+统一 404，不泄露存在性。
+
+**发送链路**：`sendPrompt.payload.attachmentIds`（≤8 个，其中图片 ≤5 张、单图 ≤5MB、单文件
+≤25MB、单 prompt 合计 ≤50MB）→ hub 用设备身份解析 → 图片读盘转 base64（ACP `image` block），
+普通文件生成 PC 本机 `file:` URI（ACP `resource_link`，与桌面 @ 文件一致）→ renderer 桥映射为
+`PromptImage` / `PromptFileAttachment`。网关命令成功返回后才把附件标记 sent；网关报错 / 超时仍为
+pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）。
+
+**能力门控**：`summary.imageSupported` 来自 agent handshake；为 false 时手机不显示拍照 / 相册
+入口，桥层也拒绝图片。远程会话（`summary.authority` 非空）不能发文件附件（agent 读不到 PC 本地
+路径），仍可发图片；桥层二次校验。`hello_ok.capabilities` 增加 `'attachments'`。
+
+**时间线投影**：用户消息的非 text block 若带 `_meta.mobileAttachment`，投影为
+`attachments: MobileMessageAttachment[]`（只下发元数据，不下发字节）；手机按 id 懒加载
+`GET /api/attachments/:id` 生成 object URL 缩略图或文件卡。CSP `img-src` 因此加入 `blob:`。
+
+**已知限制**：附件元数据只活在当前 PC 会话内存；PC 重启或会话重放后，旧消息不再有缩略图 /
+文件卡（正文仍在）。附件目录随网关启动清空，不支持跨重启下载。
+
+## 8. 配对与安全
 
 **开关**：网关默认关闭，必须在 PC 设置页显式开启。
 
@@ -393,7 +440,7 @@ feedback、提问内容或 token**。只读命令（`getToolCallDetail` / `listW
 文件是嵌套 camelCase，支持 JSONC 注释与尾逗号；保存时整文件重写，不保留注释。补全与校验的
 JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()` 注册。
 
-## 8. 传输档位与证书
+## 9. 传输档位与证书
 
 | 档位 | 监听 | 证书 | 能力 |
 |---|---|---|---|
@@ -441,7 +488,7 @@ JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()
 - iOS 有本地网络隐私提示；自签证书还需在系统里接受/信任，否则 Service Worker 与推送不可用。
 - iOS 26 对裸 IP 的 `ws` 有失败报告，优先建议用主机名 + 受信任证书。
 
-## 9. 通知
+## 10. 通知
 
 **公共信号**：抽出 `AgentAttentionSignal`，取值
 `permission` / `question` / `completed` / `errored`，其中 `completed` 带 250ms 防抖
@@ -494,7 +541,7 @@ JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()
 待处理卡片。SW 收到 `notificationclick` 时优先 `focus()` 现有窗口并 `postMessage`
 （`{ type:'mobile-navigate', url }`），否则 `openWindow`。
 
-## 10. 工程结构
+## 11. 工程结构
 
 **新包**
 
@@ -606,8 +653,11 @@ localStorage，不走协议。
 - 冒烟：`@p0` 覆盖网关启动、原生 WS「配对 → hello → 收件箱快照」与手机 PWA 配对路径，纳入
   `pnpm e2e:smoke`。
 - 协议负向测试：未授权、超长帧、坏 JSON、越权命令、非允许列表的 push endpoint。
+- 附件：`mobileAttachmentStore` / `attachmentNames` / 网关 HTTP API 单测覆盖配额、TTL、设备隔离、
+  越权与 413；`mobile.gateway.spec.ts` 的 `@p0` 用例从手机 UI 上传图片 + 文件，断言 PC 收到
+  image / resource_link block 且手机时间线出现缩略图与文件卡。
 
-## 11. 里程碑
+## 12. 里程碑
 
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
@@ -616,7 +666,8 @@ localStorage，不走协议。
 | M3 | 交互：prompt / 停止 / 模式模型、审批仲裁、倒计时下沉、新建会话（含自动开窗）、高风险限制、审计 | 双端审批只生效一次；重连恢复卡片；tab 未开倒计时照常执行 |
 | M4 | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制（已落地） | 两端边沿一致；不重复；点击直达会话 |
 | M5 | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地） | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
-## 12. 已确认的决策记录
+| M6 | 会话附件：HTTP 上传/下载、设备隔离与 TTL、ACP image / resource_link、手机附件 UI 与时间线展示（已落地） | 图片与文件经手机发出后 agent 收到正确 block；时间线显示缩略图 / 文件卡；限额与越权用例覆盖 |
+## 13. 已确认的决策记录
 
 日期：第 1–7 条为 **2026-11-08**，第 8 条为 **2026-11-09**。
 
@@ -636,11 +687,15 @@ localStorage，不走协议。
    `settings.json` 旧键不再读取、不迁移、不清理。原因是 configDir 常被重定位到云盘做多机共享，
    机器相关配置会互相覆盖；不一次性迁移，避免把 A 机器的值带到首次运行的 B 机器。文件非法时
    启动用默认值、运行中保留上一次有效配置，并在设置页显示错误。
+9. **会话附件走 HTTP、只传 id**：避免 64KB 客户端帧上限与重连重发大帧；附件按设备隔离存
+   PC 临时目录，网关启动清空，pending 1 小时 / sent 7 天。图片走 ACP `image`，普通文件走
+   `resource_link`（PC 本机 `file:` URI）；远程会话不能发文件。时间线只下发附件元数据，手机按 id
+   懒加载。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。
 
-## 13. 风险
+## 14. 风险
 
 | 风险 | 影响 | 缓解 |
 |---|---|---|

@@ -12,9 +12,11 @@ import type {
   MobileBridgeSessionSnapshot,
   MobileBridgeSessionSummary,
 } from '../../../../shared/ipc/mobileGatewayService.js'
+import { MobileAttachmentError } from '../mobileAttachmentStore.js'
 import {
   COMMAND_IDEMPOTENCY_TTL_MS,
   MAX_BUFFERED_SESSION_BYTES,
+  SEND_PROMPT_TIMEOUT_MS,
   MobileGatewayHub,
   type MobileCommandAudit,
   type MobileGatewayAttention,
@@ -980,7 +982,7 @@ describe('MobileGatewayHub commands', () => {
         kind: 'sendPrompt',
         payload: { ref, text: 'hello' },
       })
-      await vi.advanceTimersByTimeAsync(5001)
+      await vi.advanceTimersByTimeAsync(SEND_PROMPT_TIMEOUT_MS + 1)
       await pending
       expect(connection.frames.at(-1)).toStrictEqual({
         type: 'command_result',
@@ -1114,5 +1116,144 @@ describe('MobileGatewayHub attention mode', () => {
     hub.unregisterWindow(1)
     await tick()
     expect(bridge.stopAttention).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MobileGatewayHub attachment resolution', () => {
+  const ref: MobileSessionRef = { windowId: 1, localId: 's1', durableId: 'd1' }
+  const resolvedAttachments = [
+    {
+      kind: 'image' as const,
+      id: 'att-1',
+      name: 'shot.png',
+      mimeType: 'image/png',
+      byteSize: 3,
+      dataBase64: 'AAA=',
+    },
+  ]
+
+  function hostWith(
+    resolver: MobileGatewayHost['attachments'],
+  ): MobileGatewayHost {
+    return {
+      listOpenWorkspaces: () => [],
+      listRecentWorkspaces: async () => [],
+      openWorkspace: async () => {},
+      waitForBridge: async () => undefined,
+      ...(resolver !== undefined ? { attachments: resolver } : {}),
+    }
+  }
+
+  function makeHarness(resolver: MobileGatewayHost['attachments']) {
+    const hub = new MobileGatewayHub(NULL_LOGGER, hostWith(resolver))
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    return { hub, bridge, connection }
+  }
+
+  const command = {
+    type: 'command' as const,
+    requestId: 'a1',
+    kind: 'sendPrompt',
+    payload: { ref, text: '', attachmentIds: ['att-1'] },
+  }
+
+  it('resolves ids for the authenticated device and consumes them after success', async () => {
+    const resolveForPrompt = vi.fn(async () => resolvedAttachments)
+    const consume = vi.fn(async () => {})
+    const { hub, bridge, connection } = makeHarness({ resolveForPrompt, consume })
+
+    await hub.handleCommand(connection, command, undefined, { deviceId: 'dev-1' })
+
+    expect(resolveForPrompt).toHaveBeenCalledWith('dev-1', ['att-1'])
+    expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', '', resolvedAttachments)
+    await tick()
+    expect(consume).toHaveBeenCalledWith('dev-1', ['att-1'])
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'a1',
+      ok: true,
+    })
+  })
+
+  it('rejects attachment ids when the connection has no device identity', async () => {
+    const resolveForPrompt = vi.fn(async () => resolvedAttachments)
+    const { hub, bridge, connection } = makeHarness({ resolveForPrompt, consume: vi.fn() })
+
+    await hub.handleCommand(connection, command)
+
+    expect(resolveForPrompt).not.toHaveBeenCalled()
+    expect(bridge.sendPrompt).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'unauthorized' })
+  })
+
+  it('reports not_supported when the host has no attachment store', async () => {
+    const { hub, bridge, connection } = makeHarness(undefined)
+
+    await hub.handleCommand(connection, command, undefined, { deviceId: 'dev-1' })
+
+    expect(bridge.sendPrompt).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'not_supported' })
+  })
+
+  it('maps store errors onto mobile error codes and does not consume', async () => {
+    const consume = vi.fn(async () => {})
+    const resolveForPrompt = vi.fn(async () => {
+      throw new MobileAttachmentError('attachment_not_found', 'gone')
+    })
+    const { hub, bridge, connection } = makeHarness({ resolveForPrompt, consume })
+
+    await hub.handleCommand(connection, command, undefined, { deviceId: 'dev-1' })
+
+    expect(bridge.sendPrompt).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toMatchObject({
+      ok: false,
+      error: 'attachment_not_found',
+    })
+    await tick()
+    expect(consume).not.toHaveBeenCalled()
+  })
+
+  it('keeps the command successful when the post-send consume fails', async () => {
+    const resolveForPrompt = vi.fn(async () => resolvedAttachments)
+    const consume = vi.fn(async () => {
+      throw new Error('disk gone')
+    })
+    const { hub, bridge, connection } = makeHarness({ resolveForPrompt, consume })
+
+    await hub.handleCommand(connection, command, undefined, { deviceId: 'dev-1' })
+    await tick()
+
+    expect(bridge.sendPrompt).toHaveBeenCalled()
+    expect(consume).toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'a1',
+      ok: true,
+    })
+  })
+
+  it('forwards imageSupported through the protocol summary', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1', imageSupported: true })]
+    bridge.snapshots.set(
+      's1',
+      snapshot('s1', {
+        summary: summary('s1', { durableId: 'd1', imageSupported: true }),
+      }),
+    )
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.subscribeSession(connection, ref)
+
+    const frame = framesOf(connection, 'session_snapshot')[0]
+    expect(frame?.session.summary.imageSupported).toBe(true)
   })
 })

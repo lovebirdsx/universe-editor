@@ -35,6 +35,7 @@ import type {
   MobileBridgeCommandError,
   MobileBridgeEvent,
   MobileBridgeNewSessionResult,
+  MobileBridgePromptAttachment,
   MobileBridgeResult,
   MobileBridgeSessionDelta,
   MobileBridgeSessionEvent,
@@ -55,6 +56,8 @@ import type {
   IAcpSession,
 } from '../acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../acp/acpAgentRegistry.js'
+import type { PromptImage } from '../acp/promptImage.js'
+import type { PromptFileAttachment } from '../acp/promptAttachment.js'
 import { selectOptionHasValue } from '../acp/configOptionLabel.js'
 import { deleteSessionPlan, planSessionRemoval } from '../acp/session/sessionRemoval.js'
 import type {
@@ -225,13 +228,52 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     }
   }
 
-  async sendPrompt(localId: string, text: string): Promise<MobileBridgeResult<void>> {
+  async sendPrompt(
+    localId: string,
+    text: string,
+    attachments: readonly MobileBridgePromptAttachment[] = [],
+  ): Promise<MobileBridgeResult<void>> {
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
     if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const images: PromptImage[] = []
+    const files: PromptFileAttachment[] = []
+    for (const attachment of attachments) {
+      if (attachment.kind === 'image') {
+        images.push({
+          id: attachment.id,
+          attachmentId: attachment.id,
+          mimeType: attachment.mimeType,
+          dataBase64: attachment.dataBase64,
+          byteSize: attachment.byteSize,
+          name: attachment.name,
+        })
+      } else {
+        if (session.authority !== undefined) {
+          return fail(
+            'forbidden_operation',
+            'remote sessions cannot read files uploaded to this PC',
+          )
+        }
+        files.push({
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          byteSize: attachment.byteSize,
+          uri: attachment.uri,
+        })
+      }
+    }
+    if (images.length > 0 && session.imageSupported.get() !== true) {
+      return fail('not_supported', 'this agent does not accept image attachments')
+    }
     // Return once the prompt is accepted by the session (append + queue); the
     // actual agent round-trip is intentionally not awaited.
-    void session.sendPrompt(text).catch((err: unknown) => {
+    const dispatch =
+      images.length === 0 && files.length === 0
+        ? session.sendPrompt(text)
+        : session.sendPrompt(text, undefined, undefined, images, files)
+    void dispatch.catch((err: unknown) => {
       this._logger.warn(`mobile sendPrompt failed: ${String(err)}`)
     })
     return ok(undefined)

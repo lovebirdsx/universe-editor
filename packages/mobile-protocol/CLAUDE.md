@@ -1,6 +1,6 @@
 # packages/mobile-protocol/CLAUDE.md
 
-手机网关 wire 协议的唯一真相：main 网关（Node）与 `apps/mobile` PWA（浏览器）共同 import。设计与取舍见 `docs/development/mobile-gateway.md` §4/§7。
+手机网关 wire 协议的唯一真相：main 网关（Node）与 `apps/mobile` PWA（浏览器）共同 import。设计与取舍见 `docs/development/mobile-gateway.md` §4/§8。
 
 ## 零依赖红线
 

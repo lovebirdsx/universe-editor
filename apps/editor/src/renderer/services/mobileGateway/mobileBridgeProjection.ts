@@ -15,6 +15,7 @@ import {
   MAX_CONFIG_OPTIONS,
   MAX_CURRENCY_LENGTH,
   MAX_ELICITATION_CONTENT_KEYS,
+  MAX_ATTACHMENTS_PER_PROMPT,
   MAX_ID_LENGTH,
   MAX_PERMISSION_OPTIONS,
   MAX_PLAN_ENTRIES,
@@ -29,6 +30,7 @@ import {
   type MobileAutoResolve,
   type MobileConfigOption,
   type MobileElicitationField,
+  type MobileMessageAttachment,
   type MobileMessageUpsertEvent,
   type MobilePendingElicitation,
   type MobilePendingPermission,
@@ -44,6 +46,7 @@ import {
   type MobileUsage,
 } from '@universe-editor/mobile-protocol'
 import { computeLineDiff } from '@universe-editor/acp-view-model'
+import { readMobileAttachmentMeta } from '../acp/promptAttachment.js'
 import type {
   AcpMessage,
   AcpPendingElicitation,
@@ -99,6 +102,7 @@ export function toBridgeSummary(
     hasPendingPermission: pendingPermission !== undefined,
     hasPendingElicitation: pendingElicitation !== undefined,
     backgroundTaskCount: readObservable(session.backgroundTaskCount, r),
+    imageSupported: readObservable(session.imageSupported, r),
     updatedAt: options.now ?? Date.now(),
   }
 }
@@ -157,6 +161,19 @@ export function projectTimelineItem(item: TimelineItem): MobileTimelineItem {
 }
 
 export function projectMessage(message: AcpMessage): MobileTimelineMessageItem {
+  const attachments: MobileMessageAttachment[] = []
+  let hasNonText = false
+  for (const block of message.blocks) {
+    if (block.type === 'text') continue
+    const attachment = readMobileAttachmentMeta(block)
+    if (attachment === undefined) {
+      hasNonText = true
+    } else if (attachments.length < MAX_ATTACHMENTS_PER_PROMPT) {
+      attachments.push(attachment)
+    } else {
+      hasNonText = true
+    }
+  }
   return {
     kind: 'message',
     id: clampText(message.id, MAX_ID_LENGTH),
@@ -164,7 +181,8 @@ export function projectMessage(message: AcpMessage): MobileTimelineMessageItem {
     text: clampText(message.text, MAX_TEXT_LENGTH),
     streaming: message.streaming,
     ...(message.memoryTrimmed ? { memoryTrimmed: true } : {}),
-    ...(message.blocks.some((block) => block.type !== 'text') ? { hasNonText: true } : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
+    ...(hasNonText ? { hasNonText: true } : {}),
   }
 }
 
@@ -490,10 +508,12 @@ export function diffMessage(
 ): MobileMessageUpsertEvent | undefined {
   const textChanged = previous.text !== next.text
   const sameAppend = textChanged && next.text.startsWith(previous.text)
+  const attachmentsChanged = !sameJson(previous.attachments ?? [], next.attachments ?? [])
   const metadataChanged =
     previous.streaming !== next.streaming ||
     previous.memoryTrimmed !== next.memoryTrimmed ||
-    previous.hasNonText !== next.hasNonText
+    previous.hasNonText !== next.hasNonText ||
+    attachmentsChanged
   if (!textChanged && !metadataChanged) return undefined
   const textAppend = sameAppend && textChanged ? next.text.slice(previous.text.length) : undefined
   const textReplace = textChanged && !sameAppend ? next.text : undefined
@@ -505,6 +525,8 @@ export function diffMessage(
     ...(textAppend !== undefined ? { textAppend } : {}),
     ...(textReplace !== undefined ? { textReplace } : {}),
     ...(next.memoryTrimmed !== undefined ? { memoryTrimmed: next.memoryTrimmed } : {}),
+    ...(next.attachments !== undefined ? { attachments: next.attachments } : {}),
+    ...(attachmentsChanged && next.attachments === undefined ? { attachments: [] } : {}),
     ...(next.hasNonText !== undefined ? { hasNonText: next.hasNonText } : {}),
   }
 }

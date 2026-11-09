@@ -452,6 +452,80 @@ describe('SessionPage snapshot rendering', () => {
     }
   })
 
+  it('gates image and file attachments from the session summary', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', {
+          imageSupported: true,
+          authority: 'ssh-remote',
+        }),
+      }),
+    )
+
+    expect(screen.getByTestId('composer-attach')).toBeTruthy()
+    expect(screen.getByTestId('composer-photo-input')).toBeTruthy()
+    expect(screen.queryByTestId('composer-file-input')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('composer-attach'))
+    expect(screen.getByTestId('attachment-photos')).toBeTruthy()
+    expect(screen.queryByTestId('attachment-files')).toBeNull()
+  })
+
+  it('uploads a photo and sends its id with the prompt', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: 'att-1',
+            kind: 'image',
+            name: 'shot.png',
+            mimeType: 'image/png',
+            size: 3,
+            createdAt: 1,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const { harness } = openPage()
+      feed(
+        harness.socket,
+        sessionSnapshotFrame(1, {
+          timeline: [],
+          summary: sessionSummary('s1', { imageSupported: true }),
+        }),
+      )
+
+      fireEvent.change(screen.getByTestId('composer-photo-input'), {
+        target: { files: [new File(['abc'], 'shot.png', { type: 'image/png' })] },
+      })
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+      fireEvent.change(screen.getByTestId('composer-input'), {
+        target: { value: 'look' },
+      })
+      const send = screen.getByTestId('composer-send') as HTMLButtonElement
+      await waitFor(() => expect(send.disabled).toBe(false))
+      fireEvent.click(send)
+
+      await waitFor(() => {
+        const command = sentFrames(harness.socket).find(
+          (frame) =>
+            frameType(frame) === 'command' && (frame as { kind?: string }).kind === 'sendPrompt',
+        ) as { payload: unknown } | undefined
+        expect(command?.payload).toMatchObject({
+          ref: { windowId: 1, localId: 's1' },
+          text: 'look',
+          attachmentIds: ['att-1'],
+        })
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('shows the load error as soon as the gateway sends an invalid frame', () => {
     const { harness } = openPage()
 

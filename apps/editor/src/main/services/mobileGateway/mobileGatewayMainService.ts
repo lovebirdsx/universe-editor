@@ -70,6 +70,7 @@ import {
   isSameWorkspace,
   type MobileGatewayAttention,
 } from './mobileGatewayHub.js'
+import { MobileAttachmentStore } from './mobileAttachmentStore.js'
 import { MobileNotificationRouter } from './mobileNotificationRouter.js'
 import { PairingService } from './pairingService.js'
 import { loadOrCreateVapidKeys, type VapidKeyPair } from './vapidKeys.js'
@@ -94,6 +95,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private readonly _audit: AuditLog
   private readonly _assetsDir: string
   private readonly _mobileDir: string
+  private readonly _attachments: MobileAttachmentStore
   private readonly _configFile: string
   private readonly _configStore: MobileGatewayConfigStore
   private readonly _onDidChangeStatus = this._register(new Emitter<MobileGatewayStatus>())
@@ -139,6 +141,12 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       name: 'Mobile Gateway',
     })
     this._pushSender = createWebPushSender()
+    const mobileDir = join(app.getPath('userData'), 'mobile')
+    this._mobileDir = mobileDir
+    this._attachments = new MobileAttachmentStore({
+      rootDir: join(mobileDir, 'attachments'),
+      logger: this._logger,
+    })
     this._hub = new MobileGatewayHub(
       this._logger,
       {
@@ -153,12 +161,11 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
           this._windows?.openWindowForFolder(URI.parse(folder)) ?? Promise.resolve(),
         waitForBridge: (folder, authority, timeoutMs) =>
           this._waitForBridge(folder, authority, timeoutMs),
+        attachments: this._attachments,
       },
       (attention) => this._handleAttention(attention),
     )
 
-    const mobileDir = join(app.getPath('userData'), 'mobile')
-    this._mobileDir = mobileDir
     this._deviceStore = new DeviceStore(join(mobileDir, 'devices.json'), {
       onCorrupt: (error) => this._logger.warn(`devices.json is unreadable: ${error.message}`),
       onChmodError: (error) =>
@@ -186,6 +193,12 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       }),
     )
     this._ready = this._enqueue(async () => {
+      try {
+        await this._attachments.initialize()
+      } catch (err) {
+        this._setError(`attachment storage is unavailable: ${String(err)}`)
+        return
+      }
       const state = await this._configStore.load()
       this._configState = state
       await this._applyConfig(state.config)
@@ -247,6 +260,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   async revokeDevice(deviceId: string): Promise<void> {
     const removed = await this._deviceStore.revoke(deviceId)
     this._server?.revokeConnections(deviceId)
+    await this._attachments.deleteDevice(deviceId)
     await this._audit.append({
       ...(removed ? { deviceId } : {}),
       action: 'device_revoked',
@@ -376,6 +390,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._disposed = true
     this._pairing.cancel()
     this._hub.dispose()
+    this._attachments.dispose()
     const server = this._server
     this._server = undefined
     if (server !== undefined) void server.stop()
@@ -480,6 +495,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       },
       ...(vapid !== undefined ? { vapidPublicKey: vapid.publicKey } : {}),
       hub: this._hub,
+      attachments: this._attachments,
     })
     try {
       const { port } = await server.start()

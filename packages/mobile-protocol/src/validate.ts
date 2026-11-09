@@ -1,3 +1,12 @@
+import {
+  MAX_ATTACHMENTS_PER_PROMPT,
+  MAX_ATTACHMENT_ID_LENGTH,
+  MAX_ATTACHMENT_MIME_LENGTH,
+  MAX_ATTACHMENT_NAME_LENGTH,
+  MAX_FILE_ATTACHMENT_BYTES,
+  isMobileAttachmentKind,
+  type MobileMessageAttachment,
+} from './attachments.js'
 import { isMobileErrorCode } from './errors.js'
 import type {
   ClientFrame,
@@ -564,7 +573,45 @@ function parseSendPromptPayload(value: unknown): Result<{ ref: MobileSessionRef;
   if (!isBoundedString(text, MAX_PROMPT_LENGTH)) {
     return fail('bad_request', `sendPrompt.text must be at most ${MAX_PROMPT_LENGTH} characters`)
   }
-  return ok({ ref: ref.value, text })
+  const attachmentIds = value.attachmentIds
+  if (attachmentIds === undefined) {
+    if (text.trim() === '') {
+      return fail('bad_request', 'sendPrompt requires text or at least one attachment')
+    }
+    return ok({ ref: ref.value, text })
+  }
+  if (!Array.isArray(attachmentIds)) {
+    return fail('bad_request', 'sendPrompt.attachmentIds must be an array')
+  }
+  if (attachmentIds.length > MAX_ATTACHMENTS_PER_PROMPT) {
+    return fail(
+      'bad_request',
+      `sendPrompt.attachmentIds must contain at most ${MAX_ATTACHMENTS_PER_PROMPT} entries`,
+    )
+  }
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const item of attachmentIds) {
+    if (!isNonEmptyBoundedString(item, MAX_ATTACHMENT_ID_LENGTH)) {
+      return fail(
+        'bad_request',
+        `sendPrompt.attachmentIds entries must be 1–${MAX_ATTACHMENT_ID_LENGTH} characters`,
+      )
+    }
+    if (seen.has(item)) {
+      return fail('bad_request', 'sendPrompt.attachmentIds must not contain duplicates')
+    }
+    seen.add(item)
+    ids.push(item)
+  }
+  if (ids.length === 0 && text.trim() === '') {
+    return fail('bad_request', 'sendPrompt requires text or at least one attachment')
+  }
+  return ok({
+    ref: ref.value,
+    text,
+    ...(ids.length > 0 ? { attachmentIds: ids } : {}),
+  })
 }
 
 function parseResolvePermissionPayload(value: unknown): Result<{
@@ -972,6 +1019,8 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
   if (!isNonNegativeInteger(backgroundTaskCount)) {
     return fail('bad_request', 'session.backgroundTaskCount must be a non-negative integer')
   }
+  const imageSupported = parseOptionalBoolean(value.imageSupported, 'session.imageSupported')
+  if (!imageSupported.ok) return imageSupported
   const updatedAt = value.updatedAt
   if (!isFiniteNumber(updatedAt)) {
     return fail('bad_request', 'session.updatedAt must be a finite number')
@@ -991,6 +1040,7 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
     hasPendingPermission,
     hasPendingElicitation,
     backgroundTaskCount,
+    ...(imageSupported.value !== undefined ? { imageSupported: imageSupported.value } : {}),
     updatedAt,
   })
 }
@@ -1011,6 +1061,59 @@ function parseSessionRef(value: unknown): Result<MobileSessionRef> {
     return fail('bad_request', `session.ref.durableId must be 1–${MAX_ID_LENGTH} characters`)
   }
   return ok({ windowId, localId, durableId })
+}
+
+function parseAttachments(
+  value: unknown,
+  field: string,
+): Result<readonly MobileMessageAttachment[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', `${field} must be an array`)
+  if (value.length > MAX_ATTACHMENTS_PER_PROMPT) {
+    return fail(
+      'bad_request',
+      `${field} must contain at most ${MAX_ATTACHMENTS_PER_PROMPT} entries`,
+    )
+  }
+  const attachments: MobileMessageAttachment[] = []
+  for (const item of value) {
+    if (!isRecord(item)) return fail('bad_request', `${field} entries must be objects`)
+    const id = item.id
+    if (!isNonEmptyBoundedString(id, MAX_ATTACHMENT_ID_LENGTH)) {
+      return fail('bad_request', `${field}.id must be 1–${MAX_ATTACHMENT_ID_LENGTH} characters`)
+    }
+    const kind = item.kind
+    if (!isMobileAttachmentKind(kind)) {
+      return fail('bad_request', `${field}.kind is not known`)
+    }
+    const name = item.name
+    if (!isNonEmptyBoundedString(name, MAX_ATTACHMENT_NAME_LENGTH)) {
+      return fail('bad_request', `${field}.name must be 1–${MAX_ATTACHMENT_NAME_LENGTH} characters`)
+    }
+    const mimeType = parseOptionalString(
+      item.mimeType,
+      MAX_ATTACHMENT_MIME_LENGTH,
+      `${field}.mimeType`,
+    )
+    if (!mimeType.ok) return mimeType
+    const size = item.size
+    if (!isNonNegativeInteger(size) || size > MAX_FILE_ATTACHMENT_BYTES) {
+      return fail(
+        'bad_request',
+        `${field}.size must be a non-negative integer up to ${MAX_FILE_ATTACHMENT_BYTES}`,
+      )
+    }
+    attachments.push({
+      id,
+      kind,
+      name,
+      ...(mimeType.value !== undefined && mimeType.value !== ''
+        ? { mimeType: mimeType.value }
+        : {}),
+      size,
+    })
+  }
+  return ok(attachments)
 }
 
 function parseTimeline(value: unknown): Result<MobileTimelineItem[]> {
@@ -1067,6 +1170,8 @@ function parseTimelineMessage(value: Record<string, unknown>): Result<MobileTime
   if (!memoryTrimmed.ok) return memoryTrimmed
   const hasNonText = parseOptionalBoolean(value.hasNonText, 'message.hasNonText')
   if (!hasNonText.ok) return hasNonText
+  const attachments = parseAttachments(value.attachments, 'message.attachments')
+  if (!attachments.ok) return attachments
   return ok({
     kind: 'message',
     id,
@@ -1074,6 +1179,7 @@ function parseTimelineMessage(value: Record<string, unknown>): Result<MobileTime
     text,
     streaming,
     ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
+    ...(attachments.value !== undefined ? { attachments: attachments.value } : {}),
     ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
   })
 }
@@ -1687,6 +1793,8 @@ function parseMessageUpsertEvent(value: Record<string, unknown>): Result<MobileS
   if (!memoryTrimmed.ok) return memoryTrimmed
   const hasNonText = parseOptionalBoolean(value.hasNonText, 'message_upsert.hasNonText')
   if (!hasNonText.ok) return hasNonText
+  const attachments = parseAttachments(value.attachments, 'message_upsert.attachments')
+  if (!attachments.ok) return attachments
   return ok({
     type: 'message_upsert',
     id,
@@ -1695,6 +1803,7 @@ function parseMessageUpsertEvent(value: Record<string, unknown>): Result<MobileS
     ...(textAppend.value !== undefined ? { textAppend: textAppend.value } : {}),
     ...(textReplace.value !== undefined ? { textReplace: textReplace.value } : {}),
     ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
+    ...(attachments.value !== undefined ? { attachments: attachments.value } : {}),
     ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
   })
 }

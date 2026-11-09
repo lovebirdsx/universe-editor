@@ -64,11 +64,17 @@ interface FakeSessionHarness {
   backgroundTaskCount: ISettableObservable<number>
   isReplayingHistory: ISettableObservable<boolean>
   sessionIdOnAgent: ISettableObservable<string | undefined>
+  imageSupported: ISettableObservable<boolean>
 }
 
 function makeSession(
   id: string,
-  options: { durableId?: string; title?: string; readOnly?: boolean } = {},
+  options: {
+    durableId?: string
+    title?: string
+    readOnly?: boolean
+    authority?: string
+  } = {},
 ): FakeSessionHarness {
   const timeline = observableValue<readonly TimelineItem[]>('test.timeline', [])
   const toolCalls = observableValue<readonly AcpToolCall[]>('test.toolCalls', [])
@@ -91,13 +97,14 @@ function makeSession(
   const backgroundTaskCount = observableValue<number>('test.bg', 0)
   const isReplayingHistory = observableValue<boolean>('test.replay', false)
   const sessionIdOnAgent = observableValue<string | undefined>('test.durable', options.durableId)
+  const imageSupported = observableValue<boolean>('test.imageSupported', true)
   const settleEmitter = new Emitter<AcpPermissionSettledEvent>()
   const session = {
     id,
     agentId: 'fake',
     title: options.title ?? `Session ${id}`,
     cwd: '/workspace/demo',
-    authority: undefined,
+    authority: options.authority,
     readOnly: options.readOnly ?? false,
     timeline,
     toolCalls,
@@ -112,6 +119,7 @@ function makeSession(
     backgroundTaskCount,
     isReplayingHistory,
     sessionIdOnAgent,
+    imageSupported,
     onDidSettlePermission: settleEmitter.event,
     onDidSettleElicitation: Event.None,
     sendPrompt: vi.fn(async () => {}),
@@ -134,6 +142,7 @@ function makeSession(
     backgroundTaskCount,
     isReplayingHistory,
     sessionIdOnAgent,
+    imageSupported,
   }
 }
 
@@ -727,6 +736,98 @@ describe('MobileBridgeService commands', () => {
     })
     expect(callSpy(first.session, 'setConfigOption')).toHaveBeenNthCalledWith(1, 'mode', 'code')
     expect(callSpy(first.session, 'setConfigOption')).toHaveBeenNthCalledWith(2, 'fast', true)
+  })
+
+  it('maps phone attachments to prompt images and file links', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+
+    await expect(
+      harness.service.sendPrompt('s1', '', [
+        {
+          kind: 'image',
+          id: 'a1',
+          name: 'shot.png',
+          mimeType: 'image/png',
+          byteSize: 3,
+          dataBase64: 'AAA=',
+        },
+        {
+          kind: 'file',
+          id: 'a2',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          byteSize: 5,
+          uri: 'file:///tmp/attachments/a2/notes.txt',
+        },
+      ]),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(callSpy(first.session, 'sendPrompt')).toHaveBeenCalledWith(
+      '',
+      undefined,
+      undefined,
+      [
+        {
+          id: 'a1',
+          attachmentId: 'a1',
+          mimeType: 'image/png',
+          dataBase64: 'AAA=',
+          byteSize: 3,
+          name: 'shot.png',
+        },
+      ],
+      [
+        {
+          id: 'a2',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          byteSize: 5,
+          uri: 'file:///tmp/attachments/a2/notes.txt',
+        },
+      ],
+    )
+  })
+
+  it('rejects image attachments when the agent does not accept images', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    first.imageSupported.set(false, undefined)
+    harness.add(first)
+
+    await expect(
+      harness.service.sendPrompt('s1', 'x', [
+        {
+          kind: 'image',
+          id: 'a1',
+          name: 'shot.png',
+          mimeType: 'image/png',
+          byteSize: 3,
+          dataBase64: 'AAA=',
+        },
+      ]),
+    ).resolves.toMatchObject({ ok: false, code: 'not_supported' })
+    expect(callSpy(first.session, 'sendPrompt')).not.toHaveBeenCalled()
+  })
+
+  it('rejects file attachments for remote sessions', async () => {
+    const harness = makeHarness()
+    const remote = makeSession('s1', { authority: 'ssh-remote' })
+    harness.add(remote)
+
+    await expect(
+      harness.service.sendPrompt('s1', 'x', [
+        {
+          kind: 'file',
+          id: 'a2',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          byteSize: 5,
+          uri: 'file:///tmp/attachments/a2/notes.txt',
+        },
+      ]),
+    ).resolves.toMatchObject({ ok: false, code: 'forbidden_operation' })
+    expect(callSpy(remote.session, 'sendPrompt')).not.toHaveBeenCalled()
   })
 
   it('rejects unknown sessions, read-only sessions and unknown ids', async () => {

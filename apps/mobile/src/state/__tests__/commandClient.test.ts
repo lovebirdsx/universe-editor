@@ -49,7 +49,7 @@ describe('CommandClient', () => {
   })
 
   it('uses the per-kind timeout table', async () => {
-    expect(COMMAND_TIMEOUT_MS.sendPrompt).toBe(5_000)
+    expect(COMMAND_TIMEOUT_MS.sendPrompt).toBe(15_000)
     expect(COMMAND_TIMEOUT_MS.cancelTurn).toBe(5_000)
     expect(COMMAND_TIMEOUT_MS.resolvePermission).toBe(10_000)
     expect(COMMAND_TIMEOUT_MS.setConfigOption).toBe(10_000)
@@ -59,7 +59,7 @@ describe('CommandClient', () => {
 
     const { client, timers } = createHarness()
     const outcome = client.request('sendPrompt', { ref: {}, text: 'hi' }).catch((error) => error)
-    timers.advance(4_999)
+    timers.advance(COMMAND_TIMEOUT_MS.sendPrompt - 1)
     expect(timers.pendingTimeoutDelays()).toEqual([1])
     timers.advance(1)
     const error = await outcome

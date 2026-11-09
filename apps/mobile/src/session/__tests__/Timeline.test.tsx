@@ -2,7 +2,7 @@ import type {
   MobileTimelineItem,
   MobileTimelineToolCallItem,
 } from '@universe-editor/mobile-protocol'
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { MobileClient } from '../../state/mobileClient.js'
 import { strings } from '../../strings.js'
@@ -23,13 +23,22 @@ function toolCall(
   }
 }
 
-function userMessage(id: string, text: string): MobileTimelineItem {
-  return { kind: 'message', id, role: 'user', text, streaming: false }
+function userMessage(
+  id: string,
+  text: string,
+  overrides: Partial<MobileTimelineItem & { kind: 'message' }> = {},
+): MobileTimelineItem {
+  return { kind: 'message', id, role: 'user', text, streaming: false, ...overrides }
 }
 
-const client = {
+const clientMock = {
   requestToolCallDetail: vi.fn(),
-} as unknown as Pick<MobileClient, 'requestToolCallDetail'>
+  fetchAttachmentBlob: vi.fn<(attachmentId: string) => Promise<Blob>>(),
+}
+const client = clientMock as unknown as Pick<
+  MobileClient,
+  'requestToolCallDetail' | 'fetchAttachmentBlob'
+>
 
 function renderTimeline(
   timeline: readonly MobileTimelineItem[],
@@ -45,6 +54,88 @@ function renderTimeline(
     />,
   )
 }
+
+describe('Timeline mobile attachments', () => {
+  it('renders an image thumbnail fetched as a blob URL', async () => {
+    clientMock.fetchAttachmentBlob.mockResolvedValue(new Blob(['abc'], { type: 'image/png' }))
+    renderTimeline(
+      [
+        userMessage('m1', '', {
+          attachments: [
+            {
+              id: 'att-1',
+              kind: 'image',
+              name: 'shot.png',
+              mimeType: 'image/png',
+              size: 3,
+            },
+          ],
+        }),
+      ] as MobileTimelineItem[],
+      'full',
+    )
+
+    expect(screen.getByTestId('user-attachments')).toBeTruthy()
+    await waitFor(() =>
+      expect(screen.getByTestId('user-attachment-image').querySelector('img')?.src).toMatch(
+        /^blob:/,
+      ),
+    )
+    expect(clientMock.fetchAttachmentBlob).toHaveBeenCalledWith('att-1')
+    expect(screen.queryByText(strings.messageNonText)).toBeNull()
+  })
+
+  it('renders a file card with name and size and no empty text paragraph', () => {
+    renderTimeline(
+      [
+        userMessage('m1', '', {
+          attachments: [
+            {
+              id: 'att-2',
+              kind: 'file',
+              name: 'notes.txt',
+              mimeType: 'text/plain',
+              size: 1536,
+            },
+          ],
+        }),
+      ] as MobileTimelineItem[],
+      'full',
+    )
+
+    const card = screen.getByTestId('user-attachment-file')
+    expect(card.textContent).toContain('notes.txt')
+    expect(card.textContent).toContain('1.5 KB')
+    expect(document.querySelector('.message__text')).toBeNull()
+  })
+
+  it('falls back to a file card when the image cannot be loaded', async () => {
+    clientMock.fetchAttachmentBlob.mockRejectedValue(new Error('gone'))
+    renderTimeline(
+      [
+        userMessage('m1', 'caption', {
+          attachments: [
+            {
+              id: 'att-3',
+              kind: 'image',
+              name: 'missing.png',
+              mimeType: 'image/png',
+              size: 3,
+            },
+          ],
+        }),
+      ] as MobileTimelineItem[],
+      'full',
+    )
+
+    await waitFor(() =>
+      expect(screen.getByTestId('user-attachment-image').textContent).toContain(
+        strings.attachmentImageLoadFailed,
+      ),
+    )
+    expect(screen.getByText('caption')).toBeTruthy()
+  })
+})
 
 describe('Timeline display modes', () => {
   it('filters before pagination so hidden tail items do not fake load-earlier', () => {

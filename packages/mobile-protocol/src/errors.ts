@@ -3,6 +3,7 @@ export const MOBILE_ERROR_CODES = [
   'forbidden_operation',
   'session_not_found',
   'session_read_only',
+  'attachment_not_found',
   'stale_request',
   'workspace_not_open',
   'not_supported',

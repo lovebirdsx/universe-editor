@@ -40,10 +40,15 @@ import type {
   IMobileBridgeService,
   MobileBridgeAttentionEvent,
   MobileBridgeEvent,
+  MobileBridgePromptAttachment,
   MobileBridgeResult,
   MobileBridgeSessionEvent,
   MobileBridgeSessionSummary,
 } from '../../../shared/ipc/mobileGatewayService.js'
+import {
+  MobileAttachmentError,
+  type MobileGatewayAttachmentResolver,
+} from './mobileAttachmentStore.js'
 
 /** Once a socket has this much queued we drop deltas and ask the phone to resync. */
 export const MAX_BUFFERED_SESSION_BYTES = 1024 * 1024
@@ -121,6 +126,8 @@ export interface MobileGatewayHost {
     authority: string | undefined,
     timeoutMs: number,
   ): Promise<number | undefined>
+  /** Phone-uploaded attachments, scoped to the authenticated device. */
+  attachments?: MobileGatewayAttachmentResolver
 }
 
 /** Per-command audit sink; the server adds device identity and owns the file. */
@@ -136,6 +143,7 @@ interface CommandOutcome {
 
 /** How long a repeated idempotency key returns the first result. */
 export const COMMAND_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000
+export const SEND_PROMPT_TIMEOUT_MS = 15_000
 const NEW_SESSION_BRIDGE_TIMEOUT_MS = 30_000
 
 const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
@@ -379,6 +387,7 @@ export class MobileGatewayHub {
     connection: MobileGatewayHubConnection,
     frame: CommandFrame,
     audit?: MobileCommandAudit,
+    context?: { readonly deviceId?: string },
   ): Promise<void> {
     const mutating = MUTATING_COMMAND_KINDS.has(frame.kind)
     const cacheKey =
@@ -395,7 +404,7 @@ export class MobileGatewayHub {
         if (inflight !== undefined) {
           outcome = await inflight
         } else {
-          const run = this._dispatchCommand(frame).finally(() => {
+          const run = this._dispatchCommand(frame, context?.deviceId).finally(() => {
             this._inflightCommands.delete(cacheKey)
           })
           this._inflightCommands.set(cacheKey, run)
@@ -408,7 +417,7 @@ export class MobileGatewayHub {
         }
       }
     } else {
-      outcome = await this._dispatchCommand(frame)
+      outcome = await this._dispatchCommand(frame, context?.deviceId)
     }
 
     if (audit !== undefined && mutating) {
@@ -446,7 +455,10 @@ export class MobileGatewayHub {
     }
   }
 
-  private async _dispatchCommand(frame: CommandFrame): Promise<CommandOutcome> {
+  private async _dispatchCommand(
+    frame: CommandFrame,
+    deviceId: string | undefined,
+  ): Promise<CommandOutcome> {
     const payload = frame.payload as { ref?: MobileSessionRef }
     switch (frame.kind) {
       case 'getToolCallDetail': {
@@ -469,10 +481,36 @@ export class MobileGatewayHub {
         }
       }
       case 'sendPrompt': {
-        const p = frame.payload as { ref: MobileSessionRef; text: string }
-        return this._sessionCommand(p.ref, 5000, (bridge, localId) =>
-          bridge.sendPrompt(localId, p.text),
+        const p = frame.payload as {
+          ref: MobileSessionRef
+          text: string
+          attachmentIds?: readonly string[]
+        }
+        const ids = p.attachmentIds ?? []
+        let attachments: readonly MobileBridgePromptAttachment[] | undefined
+        if (ids.length > 0) {
+          if (deviceId === undefined) return failOutcome('unauthorized')
+          const resolver = this._host?.attachments
+          if (resolver === undefined) return failOutcome('not_supported')
+          try {
+            attachments = await resolver.resolveForPrompt(deviceId, ids)
+          } catch (err) {
+            if (err instanceof MobileAttachmentError) return failOutcome(err.code)
+            throw err
+          }
+        }
+        const outcome = await this._sessionCommand(p.ref, SEND_PROMPT_TIMEOUT_MS, (bridge, localId) =>
+          attachments === undefined
+            ? bridge.sendPrompt(localId, p.text)
+            : bridge.sendPrompt(localId, p.text, attachments),
         )
+        if (outcome.ok && ids.length > 0 && deviceId !== undefined) {
+          const resolver = this._host?.attachments
+          void resolver?.consume(deviceId, ids).catch((err: unknown) => {
+            this._logger.warn(`mobile attachment consume failed: ${String(err)}`)
+          })
+        }
+        return outcome
       }
       case 'cancelTurn': {
         const p = frame.payload as { ref: MobileSessionRef }
@@ -942,6 +980,9 @@ export class MobileGatewayHub {
       hasPendingPermission: summary.hasPendingPermission,
       hasPendingElicitation: summary.hasPendingElicitation,
       backgroundTaskCount: summary.backgroundTaskCount,
+      ...(summary.imageSupported !== undefined
+        ? { imageSupported: summary.imageSupported }
+        : {}),
       updatedAt: summary.updatedAt,
     }
   }

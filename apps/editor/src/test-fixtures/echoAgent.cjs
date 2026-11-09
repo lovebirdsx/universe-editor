@@ -1030,6 +1030,43 @@ async function runPrompt(id, params) {
     return finishTurn(id, sessionId, turn)
   }
 
+  // Test directive: "report-prompt-blocks" echoes a metadata-only view of the
+  // prompt blocks the editor forwarded (never raw image base64), so E2E can
+  // assert phone attachments arrived as image/resource_link blocks.
+  if (userText === 'report-prompt-blocks') {
+    const blocks = (params.prompt || []).map((block) => {
+      if (block.type === 'text') return { type: 'text', text: block.text }
+      if (block.type === 'image') {
+        return {
+          type: 'image',
+          mimeType: block.mimeType,
+          dataLength: typeof block.data === 'string' ? block.data.length : 0,
+          mobileAttachment: block._meta?.mobileAttachment ?? null,
+        }
+      }
+      if (block.type === 'resource_link') {
+        return {
+          type: 'resource_link',
+          uri: block.uri,
+          name: block.name,
+          mimeType: block.mimeType,
+          size: block.size,
+          mobileAttachment: block._meta?.mobileAttachment ?? null,
+        }
+      }
+      return { type: block.type }
+    })
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: JSON.stringify(blocks) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Emit two streaming chunks.
   notify('session/update', {
     sessionId,

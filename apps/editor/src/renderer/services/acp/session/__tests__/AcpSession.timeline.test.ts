@@ -1089,6 +1089,62 @@ describe('AcpSession.timeline', () => {
     await promptPromise
   })
 
+  it('dispatches file attachments as resource_link blocks after images', async () => {
+    svc.dispose()
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    svc = makeService(client)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const promptPromise = s.sendPrompt(
+      '',
+      undefined,
+      undefined,
+      [{ id: 'i1', mimeType: 'image/png', dataBase64: 'AAA', byteSize: 3, attachmentId: 'att-i' }],
+      [
+        {
+          id: 'att-f',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          byteSize: 5,
+          uri: 'file:///tmp/attachments/att-f/notes.txt',
+        },
+      ],
+    )
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(conn.agent.promptCalls).toHaveLength(1)
+    const blocks = conn.agent.promptCalls[0]!.prompt
+    expect(blocks[0]).toMatchObject({ type: 'image', data: 'AAA', mimeType: 'image/png' })
+    expect(blocks[1]).toMatchObject({
+      type: 'resource_link',
+      uri: 'file:///tmp/attachments/att-f/notes.txt',
+      name: 'notes.txt',
+      mimeType: 'text/plain',
+      size: 5,
+      _meta: {
+        mobileAttachment: {
+          id: 'att-f',
+          kind: 'file',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          size: 5,
+        },
+      },
+    })
+    expect(blocks.some((b) => b.type === 'text' && b.text === '')).toBe(false)
+
+    const userMsg = s.timeline
+      .get()
+      .flatMap((it) => (it.kind === 'message' ? [it.message] : []))
+      .find((m) => m.role === 'user')
+    expect(userMsg?.blocks.some((b) => b.type === 'resource_link')).toBe(true)
+
+    await s.cancelTurn()
+    await promptPromise
+  })
+
   it('keeps attached selection snapshots on the local user message', async () => {
     svc.dispose()
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })

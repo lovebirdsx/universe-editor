@@ -221,6 +221,8 @@ export interface MobileBridgeSessionSummary {
   readonly hasPendingPermission: boolean
   readonly hasPendingElicitation: boolean
   readonly backgroundTaskCount: number
+  /** Whether the agent accepts prompt images; absent until the handshake reports it. */
+  readonly imageSupported?: boolean
   readonly updatedAt: number
 }
 
@@ -299,6 +301,29 @@ export interface MobileBridgeNewSessionWorkspace {
   readonly authority?: string
 }
 
+/**
+ * One phone-uploaded attachment resolved by main for the authenticated device.
+ * Images carry raw base64 (they become ACP `image` blocks); files carry a
+ * `file:` URI that the agent reads from the PC (they become `resource_link`s).
+ */
+export type MobileBridgePromptAttachment =
+  | {
+      readonly kind: 'image'
+      readonly id: string
+      readonly name: string
+      readonly mimeType: string
+      readonly byteSize: number
+      readonly dataBase64: string
+    }
+  | {
+      readonly kind: 'file'
+      readonly id: string
+      readonly name: string
+      readonly mimeType: string
+      readonly byteSize: number
+      readonly uri: string
+    }
+
 /** Reverse channel: implemented in each renderer, called from main. */
 export interface IMobileBridgeService {
   readonly _serviceBrand: undefined
@@ -337,7 +362,11 @@ export interface IMobileBridgeService {
 
   // ---- Mutating commands (M3) -------------------------------------------------
 
-  sendPrompt(localId: string, text: string): Promise<MobileBridgeResult<void>>
+  sendPrompt(
+    localId: string,
+    text: string,
+    attachments?: readonly MobileBridgePromptAttachment[],
+  ): Promise<MobileBridgeResult<void>>
 
   cancelTurn(localId: string): Promise<MobileBridgeResult<void>>
 

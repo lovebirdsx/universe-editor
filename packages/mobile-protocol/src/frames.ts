@@ -1,3 +1,4 @@
+import type { MobileMessageAttachment } from './attachments.js'
 import type { MobileErrorCode } from './errors.js'
 
 export const MOBILE_SESSION_BUCKETS = [
@@ -37,6 +38,8 @@ export interface MobileSessionSummary {
   hasPendingPermission: boolean
   hasPendingElicitation: boolean
   backgroundTaskCount: number
+  /** Whether the agent accepts `image` content blocks for prompts. */
+  imageSupported?: boolean
   /** Epoch milliseconds. */
   updatedAt: number
 }
@@ -71,7 +74,9 @@ export interface MobileTimelineMessageItem {
   text: string
   streaming: boolean
   memoryTrimmed?: boolean
-  /** True when the message carries a non-text block (image / resource / audio). */
+  /** Attachments projected from the user message's mobile metadata. */
+  attachments?: readonly MobileMessageAttachment[]
+  /** True when the message carries a non-text block not represented by `attachments`. */
   hasNonText?: boolean
 }
 
@@ -346,8 +351,10 @@ export interface GetToolCallDetailPayload {
 
 export interface SendPromptPayload {
   ref: MobileSessionRef
-  /** Plain text only in the first release; capped by MAX_PROMPT_LENGTH. */
+  /** Capped by MAX_PROMPT_LENGTH; may be empty when attachments are present. */
   text: string
+  /** Attachment upload ids; the gateway resolves them for the authenticated device. */
+  attachmentIds?: readonly string[]
 }
 
 export interface CancelTurnPayload {
@@ -527,6 +534,8 @@ export interface MobileMessageUpsertEvent {
   textReplace?: string
   streaming: boolean
   memoryTrimmed?: boolean
+  /** Full replacement; omitted means unchanged, `[]` clears. */
+  attachments?: readonly MobileMessageAttachment[]
   hasNonText?: boolean
 }
 

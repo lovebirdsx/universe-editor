@@ -199,7 +199,10 @@ export function SessionPage({ client, sessionKey, onBack, focusPending }: Sessio
               readOnly={readOnly}
               running={running}
               online={online}
-              onSend={(text) => client.sendPrompt(text)}
+              imageSupported={state.summary?.imageSupported === true}
+              fileSupported={state.summary?.authority === undefined}
+              onUploadAttachment={(file, kind) => client.uploadAttachment(file, kind)}
+              onSend={(text, attachmentIds) => client.sendPrompt(text, attachmentIds)}
               onStop={() => client.cancelTurn()}
               onNotice={notice}
             />

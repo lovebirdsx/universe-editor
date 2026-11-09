@@ -12,6 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ContentBlock } from '@agentclientprotocol/sdk'
+import type { MobileMessageAttachment } from '@universe-editor/mobile-protocol'
 
 export interface PromptImage {
   /** Stable id for React keys + removal, unique within one draft. */
@@ -24,6 +25,8 @@ export interface PromptImage {
   readonly byteSize: number
   /** Original file name when available from a drop; absent for pastes. */
   readonly name?: string
+  /** Phone upload id; present only for attachments uploaded by the mobile PWA. */
+  readonly attachmentId?: string
 }
 
 /** Limits applied when accepting an image, sourced from `acp.prompt.image.*`. */
@@ -130,6 +133,19 @@ export function composeImageBlocks(images: readonly PromptImage[]): readonly Con
     type: 'image',
     data: img.dataBase64,
     mimeType: img.mimeType,
+    ...(img.attachmentId !== undefined
+      ? {
+          _meta: {
+            mobileAttachment: {
+              id: img.attachmentId,
+              kind: 'image',
+              name: img.name !== undefined && img.name !== '' ? img.name : 'image',
+              mimeType: img.mimeType,
+              size: img.byteSize,
+            } satisfies MobileMessageAttachment,
+          },
+        }
+      : {}),
   }))
 }
 

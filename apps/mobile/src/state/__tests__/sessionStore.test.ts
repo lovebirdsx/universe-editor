@@ -142,6 +142,71 @@ describe('SessionStore message events', () => {
     const item = store.getState().timeline[1]
     expect(item).toMatchObject({ id: 't1', status: 'completed', title: 'Done' })
   })
+
+  it('keeps attachments across text-only upserts and clears them explicitly', () => {
+    const attachment = {
+      id: 'att-1',
+      kind: 'image' as const,
+      name: 'shot.png',
+      mimeType: 'image/png',
+      size: 3,
+    }
+    const store = new SessionStore()
+    store.applySnapshot(
+      sessionSnapshotFrame(1, {
+        timeline: [{ ...userMessage('m1', ''), attachments: [attachment] }],
+      }),
+    )
+
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        { type: 'message_upsert', id: 'm1', role: 'user', textAppend: 'caption', streaming: false },
+      ]),
+    )
+    expect(store.getState().timeline[0]).toMatchObject({
+      text: 'caption',
+      attachments: [attachment],
+    })
+
+    store.applyDelta(
+      sessionDeltaFrame(3, [
+        {
+          type: 'message_upsert',
+          id: 'm1',
+          role: 'user',
+          streaming: false,
+          attachments: [],
+        },
+      ]),
+    )
+    expect(store.getState().timeline[0]).not.toHaveProperty('attachments')
+  })
+
+  it('creates a message directly from an upsert carrying attachments', () => {
+    const store = loadedStore()
+    const attachment = {
+      id: 'att-2',
+      kind: 'file' as const,
+      name: 'notes.txt',
+      mimeType: 'text/plain',
+      size: 5,
+    }
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        {
+          type: 'message_upsert',
+          id: 'm2',
+          role: 'user',
+          streaming: false,
+          attachments: [attachment],
+        },
+      ]),
+    )
+    expect(store.getState().timeline[1]).toMatchObject({
+      id: 'm2',
+      attachments: [attachment],
+    })
+  })
 })
 
 describe('SessionStore other events', () => {

@@ -212,12 +212,16 @@ async function connectRawPhone(
   return { ws, origin }
 }
 
-async function startEchoSession(page: Page, workbench: WorkbenchPO): Promise<void> {
+async function startEchoSession(
+  page: Page,
+  workbench: WorkbenchPO,
+  env?: Record<string, string>,
+): Promise<void> {
   await workbench.waitForRestored()
-  await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
-    'echo',
-    ECHO_AGENT_PATH,
-  ] as const)
+  await page.evaluate(
+    ([id, p, extra]) => window.__E2E__!.installAcpEchoAgent(id, p, extra),
+    ['echo', ECHO_AGENT_PATH, env] as const,
+  )
   await page.evaluate(() => {
     void window.__E2E__!.runCommand('workbench.action.agent.newSession')
   })
@@ -859,6 +863,93 @@ test.describe('mobile gateway', () => {
         ])
       await expect(phone.getByTestId('user-message').last()).toContainText('phone hello')
       await expect(phone.getByTestId('agent-message').last()).toContainText('echo: phone hello')
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@p0 sends a photo and a file attachment from the phone UI', async ({
+    page,
+    workbench,
+  }) => {
+    await startEchoSession(page, workbench, { ECHO_AGENT_IMAGE: '1' })
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+      await expect(phone.getByTestId('composer-attach')).toBeVisible()
+
+      // 1×1 transparent PNG so the phone can actually decode the thumbnail.
+      const png = Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+        'base64',
+      )
+      await phone.getByTestId('composer-photo-input').setInputFiles({
+        name: 'shot.png',
+        mimeType: 'image/png',
+        buffer: png,
+      })
+      await expect(
+        phone.locator('[data-testid="composer-attachment-image"].composer__chip--uploaded'),
+      ).toBeVisible()
+
+      await phone.getByTestId('composer-file-input').setInputFiles({
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        buffer: Buffer.from('hello phone'),
+      })
+      await expect(
+        phone.locator('[data-testid="composer-attachment-file"].composer__chip--uploaded'),
+      ).toBeVisible()
+
+      await phone.getByTestId('composer-input').fill('report-prompt-blocks')
+      const send = phone.getByTestId('composer-send')
+      await expect(send).toBeEnabled()
+      await send.click()
+
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const messages = window.__E2E__!.getAcpMessages()
+              return [...messages].reverse().find((m) => m.role === 'agent')?.text ?? ''
+            }),
+          { timeout: 10_000 },
+        )
+        .toContain('"resource_link"')
+
+      const blocks = await page.evaluate(() => {
+        const messages = window.__E2E__!.getAcpMessages()
+        const agent = [...messages]
+          .reverse()
+          .find((m) => m.role === 'agent' && m.text.startsWith('['))
+        return JSON.parse(agent!.text) as Array<Record<string, unknown>>
+      })
+      const image = blocks.find((block) => block['type'] === 'image')
+      expect(image).toMatchObject({
+        type: 'image',
+        mimeType: 'image/png',
+        mobileAttachment: { kind: 'image', name: 'shot.png' },
+      })
+      expect(Number(image?.['dataLength'])).toBeGreaterThan(0)
+      const link = blocks.find((block) => block['type'] === 'resource_link')
+      expect(link).toMatchObject({
+        type: 'resource_link',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: 11,
+        mobileAttachment: { kind: 'file', name: 'notes.txt', size: 11 },
+      })
+      expect(String(link?.['uri'])).toMatch(/^file:\/\//)
+      expect(String(link?.['uri'])).toContain('notes.txt')
+
+      const userMessage = phone.getByTestId('user-message').last()
+      await expect(userMessage.getByTestId('user-attachments')).toBeVisible()
+      await expect(userMessage.getByTestId('user-attachment-file')).toContainText('notes.txt')
+      await expect(
+        userMessage.getByTestId('user-attachment-image').locator('img'),
+      ).toHaveAttribute('src', /^blob:/)
+      await expect(userMessage).not.toContainText('[包含附件]')
     } finally {
       await context.close()
       await browser.close()

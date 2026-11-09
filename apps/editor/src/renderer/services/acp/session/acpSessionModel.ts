@@ -20,6 +20,7 @@ import type { McpTransport } from '../acpMcpServers.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { AcpRecoveryState } from './acpSessionRecovery.js'
 import type { SelectionContext } from '../promptContext.js'
+import type { PromptFileAttachment } from '../promptAttachment.js'
 import type { PromptImage } from '../promptImage.js'
 import type { PlacedRef } from '../promptRef.js'
 
@@ -909,6 +910,7 @@ export interface IAcpSession {
     refs?: readonly PlacedRef[],
     contexts?: readonly SelectionContext[],
     images?: readonly PromptImage[],
+    files?: readonly PromptFileAttachment[],
   ): Promise<void>
   /**
    * Cancel all in-flight prompts. `restorePrompt: false` suppresses

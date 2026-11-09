@@ -111,6 +111,34 @@ describe('composeImageBlocks', () => {
       { type: 'image', data: 'BBB', mimeType: 'image/jpeg' },
     ])
   })
+  it('stamps phone uploads with mobile attachment metadata', () => {
+    const blocks = composeImageBlocks([
+      {
+        id: 'i1',
+        attachmentId: 'att-1',
+        mimeType: 'image/png',
+        dataBase64: 'AAA',
+        byteSize: 3,
+        name: 'shot.png',
+      },
+    ])
+    expect(blocks).toEqual([
+      {
+        type: 'image',
+        data: 'AAA',
+        mimeType: 'image/png',
+        _meta: {
+          mobileAttachment: {
+            id: 'att-1',
+            kind: 'image',
+            name: 'shot.png',
+            mimeType: 'image/png',
+            size: 3,
+          },
+        },
+      },
+    ])
+  })
   it('returns [] for no images', () => {
     expect(composeImageBlocks([])).toEqual([])
   })

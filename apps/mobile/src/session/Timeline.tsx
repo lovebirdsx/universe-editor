@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { MarkdownView } from '../markdown/MarkdownView.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { strings } from '../strings.js'
+import { MessageAttachments } from './MessageAttachments.js'
 import { selectTimelineForDisplay, type SessionDisplayPreference } from './sessionDisplay.js'
 import { ToolCallGroup } from './ToolCallGroup.js'
 
@@ -20,7 +21,7 @@ export interface TimelineProps {
   readonly timeline: readonly MobileTimelineItem[]
   readonly displayMode: SessionDisplayPreference
   readonly truncated: boolean
-  readonly client: Pick<MobileClient, 'requestToolCallDetail'>
+  readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob'>
 }
 
 type TimelineGroup =
@@ -142,11 +143,11 @@ function TimelineItem({
   client,
 }: {
   readonly item: MobileTimelineItem
-  readonly client: Pick<MobileClient, 'requestToolCallDetail'>
+  readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob'>
 }) {
   switch (item.kind) {
     case 'message':
-      return <MessageItem item={item} />
+      return <MessageItem item={item} client={client} />
     case 'notice':
       return <NoticeItem item={item} />
     case 'toolCall':
@@ -154,14 +155,23 @@ function TimelineItem({
   }
 }
 
-function MessageItem({ item }: { readonly item: MobileTimelineMessageItem }) {
+function MessageItem({
+  item,
+  client,
+}: {
+  readonly item: MobileTimelineMessageItem
+  readonly client: Pick<MobileClient, 'fetchAttachmentBlob'>
+}) {
   if (item.memoryTrimmed === true) {
     return <div className="timeline-notice">{strings.memoryTrimmed}</div>
   }
   if (item.role === 'user') {
     return (
       <div className="message message--user" data-testid="user-message">
-        <p className="message__text">{item.text}</p>
+        {item.attachments !== undefined && item.attachments.length > 0 && (
+          <MessageAttachments attachments={item.attachments} client={client} />
+        )}
+        {item.text !== '' && <p className="message__text">{item.text}</p>}
         {item.hasNonText === true && <p className="muted-note">{strings.messageNonText}</p>}
       </div>
     )
