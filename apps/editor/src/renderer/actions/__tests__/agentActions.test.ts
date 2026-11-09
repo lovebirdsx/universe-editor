@@ -15,6 +15,7 @@ import {
   INotificationService,
   IQuickInputService,
   IUriIdentityService,
+  IWindowsService,
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
@@ -1125,6 +1126,15 @@ describe('NewAgentSessionWithScopeAction', () => {
     const showOpenDialog = vi.fn(
       async (_options: { defaultUri?: URI }): Promise<URI[] | undefined> => undefined,
     )
+    const confirm = vi.fn(
+      async (): Promise<{ confirmed: boolean; choice: 'primary' | 'secondary' | 'cancel' }> => ({
+        confirmed: true,
+        choice: 'primary',
+      }),
+    )
+    const openWindow = vi.fn(
+      async (_folder?: URI, _options?: { newAgentSession?: unknown }): Promise<void> => {},
+    )
     const openEditor = vi.fn()
     const notify = vi.fn()
     const groups = new EditorGroupsService()
@@ -1159,6 +1169,14 @@ describe('NewAgentSessionWithScopeAction', () => {
       _serviceBrand: undefined,
       showOpenDialog,
     } as unknown as IFileDialogService)
+    services.set(IDialogService, {
+      _serviceBrand: undefined,
+      confirm,
+    } as unknown as IDialogService)
+    services.set(IWindowsService, {
+      _serviceBrand: undefined,
+      openWindow,
+    } as unknown as IWindowsService)
     services.set(IEditorService, {
       _serviceBrand: undefined,
       openEditor,
@@ -1198,6 +1216,8 @@ describe('NewAgentSessionWithScopeAction', () => {
       getScopes,
       pick,
       showOpenDialog,
+      confirm,
+      openWindow,
       openEditor,
       notify,
       groups,
@@ -1233,6 +1253,73 @@ describe('NewAgentSessionWithScopeAction', () => {
     await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
     expect(b.showOpenDialog).toHaveBeenCalledTimes(1)
     expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: pickedFolder.fsPath })
+  })
+
+  it('routes a folder outside the workspace to a new window instead of creating here', async () => {
+    const pickedFolder = URI.file('/other')
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+      workspaceFolder: URI.file('/ws'),
+    })
+    b.showOpenDialog.mockResolvedValueOnce([pickedFolder])
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+
+    expect(b.confirm).toHaveBeenCalledTimes(1)
+    expect(b.createSession).not.toHaveBeenCalled()
+    expect(b.openWindow).toHaveBeenCalledTimes(1)
+    const [folder, options] = b.openWindow.mock.calls[0]!
+    expect((folder as URI).toString()).toBe(pickedFolder.toString())
+    expect(options).toEqual({
+      newAgentSession: { agentId: 'claude-code', cwd: pickedFolder.fsPath },
+    })
+  })
+
+  it('creates nothing when the outside-workspace prompt is dismissed', async () => {
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+      workspaceFolder: URI.file('/ws'),
+    })
+    b.showOpenDialog.mockResolvedValueOnce([URI.file('/other')])
+    b.confirm.mockResolvedValueOnce({ confirmed: false, choice: 'cancel' })
+
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+
+    expect(b.confirm).toHaveBeenCalledTimes(1)
+    expect(b.createSession).not.toHaveBeenCalled()
+    expect(b.openWindow).not.toHaveBeenCalled()
+  })
+
+  it('creates directly for a subdirectory of the open folder', async () => {
+    const sub = URI.file('/ws/sub')
+    const b = build({
+      scopes: [scope({ cwd: '/ws' })],
+      picked: { id: '__chooseFolder__', label: 'Choose Folder…' },
+      workspaceFolder: URI.file('/ws'),
+    })
+    b.showOpenDialog.mockResolvedValueOnce([sub])
+
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+
+    expect(b.confirm).not.toHaveBeenCalled()
+    expect(b.createSession).toHaveBeenCalledWith('claude-code', { cwd: sub.fsPath })
+    expect(b.openWindow).not.toHaveBeenCalled()
+  })
+
+  it('routes a configured scope outside the workspace through the same prompt', async () => {
+    const external = scope({ cwd: '/other', source: 'configured', label: 'other' })
+    const b = build({
+      scopes: [scope({ cwd: '/ws' }), external],
+      picked: { id: external.cwd, label: external.label },
+      workspaceFolder: URI.file('/ws'),
+    })
+
+    await b.inst.invokeFunction((accessor) => new NewAgentSessionWithScopeAction().run(accessor))
+
+    expect(b.confirm).toHaveBeenCalledTimes(1)
+    expect(b.createSession).not.toHaveBeenCalled()
+    expect(b.openWindow).toHaveBeenCalledTimes(1)
   })
 
   it('seeds the folder dialog defaultUri from the remembered local cwd', async () => {

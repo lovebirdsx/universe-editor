@@ -36,6 +36,19 @@ export interface IWindowRenderCrashInfo {
 }
 
 /**
+ * A brand-new ACP session the target window should create once it is up. Used
+ * when a session is requested for a folder this window is not rooted at: the
+ * window that owns (or will own) that folder creates it, so its workspace, file
+ * tree and agent process agree on the same working directory.
+ */
+export interface IOpenWindowNewAgentSession {
+  readonly agentId: string
+  readonly cwd: string
+  /** Remote authority the cwd lives on; omitted for a local folder. */
+  readonly authority?: string
+}
+
+/**
  * App-singleton window orchestration, served from the main process and consumed
  * by the renderer via `ProxyChannel.toService`. Unlike `IHostService` (per-window),
  * this covers cross-window concerns: which windows are open, switching between
@@ -86,8 +99,16 @@ export interface IWindowsService {
    * resume once it is up (used to follow a cross-worktree session into the
    * window that owns its cwd). Delivered via argv on a fresh window or pushed
    * over IPC when an already-open window is focused instead.
+   *
+   * `options.newAgentSession` asks the target window to CREATE a brand-new
+   * session at the given cwd once it is up. Same delivery model (argv on a new
+   * window, IPC push to a focused one); the window must be rooted at that cwd
+   * or one of its ancestors, otherwise the session would be foreign to it.
    */
-  openWindow(folder?: URI | UriComponents, options?: { sessionId?: string }): Promise<void>
+  openWindow(
+    folder?: URI | UriComponents,
+    options?: { sessionId?: string; newAgentSession?: IOpenWindowNewAgentSession },
+  ): Promise<void>
 
   /** Quit the entire application, closing all windows. */
   quit(): Promise<void>

@@ -22,6 +22,7 @@ import {
   type Event,
   type IDisposable,
   type IOpenWindowInfo,
+  type IOpenWindowNewAgentSession,
   type IWindowRenderCrashInfo,
   type ShutdownConfirmationContext,
   type IWorkspace,
@@ -67,6 +68,8 @@ export interface ICreateWindowOptions {
   readonly fileToOpen?: string
   /** ACP session id the renderer should resume once it is up (cross-worktree follow). */
   readonly sessionToOpen?: string
+  /** Brand-new ACP session the renderer should create once it is up (foreign-folder follow). */
+  readonly newAgentSession?: IOpenWindowNewAgentSession
   /** A `universe-editor://` deep link (as an opener-target string) to open at startup. */
   readonly deepLink?: string
   /** remote-ssh authority to scope an empty window to; a workspace folder wins when both are given. */
@@ -95,7 +98,12 @@ export interface IWindowMainService {
    */
   getRendererEpoch(windowId: number): number
   getOpenWindowInfos(): IOpenWindowInfo[]
-  openWindowForFolder(folder?: URI, sessionToOpen?: string, deepLink?: string): Promise<void>
+  openWindowForFolder(
+    folder?: URI,
+    sessionToOpen?: string,
+    deepLink?: string,
+    newAgentSession?: IOpenWindowNewAgentSession,
+  ): Promise<void>
   closeWindowsForRemoteAuthority(authority: string): Promise<boolean>
   captureSessionForQuit(): Promise<void>
   confirmQuit(requestingWindowId?: number): Promise<boolean>
@@ -301,6 +309,9 @@ export class WindowMainService implements IWindowMainService {
           `--ue-home-dir=${homedir()}`,
           ...(opts?.fileToOpen ? [`--ue-open-file=${opts.fileToOpen}`] : []),
           ...(opts?.sessionToOpen ? [`--ue-open-session=${opts.sessionToOpen}`] : []),
+          ...(opts?.newAgentSession
+            ? [`--ue-new-agent-session=${encodeURIComponent(JSON.stringify(opts.newAgentSession))}`]
+            : []),
           ...(opts?.deepLink ? [`--ue-open-uri=${opts.deepLink}`] : []),
           ...(windowRemoteAuthority ? [`--ue-remote-authority=${windowRemoteAuthority}`] : []),
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
@@ -852,11 +863,19 @@ export class WindowMainService implements IWindowMainService {
    * it is up: passed via argv to a freshly created window, or pushed over the
    * `ue:open-uri` IPC channel when an existing window is focused instead. Used by
    * agent deep links, which must land in the workspace matching their `cwd`.
+   *
+   * `newAgentSession` (optional) asks the target window to CREATE a session once
+   * it is up: passed via argv to a freshly created window, or pushed over the
+   * `ue:new-agent-session` IPC channel when an already-open window is focused.
+   * The exact-workspace match is tried first; a window already rooted at one of
+   * the cwd's ancestors is used next (a nested-folder session stays live in the
+   * window that owns its workspace instead of opening a duplicate one).
    */
   async openWindowForFolder(
     folder?: URI,
     sessionToOpen?: string,
     deepLink?: string,
+    newAgentSession?: IOpenWindowNewAgentSession,
   ): Promise<void> {
     const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
     let resolved = folder ?? null
@@ -896,10 +915,28 @@ export class WindowMainService implements IWindowMainService {
         if (this._opts.silentE2E) existing.win.showInactive()
         else existing.win.focus()
         if (sessionToOpen) existing.win.webContents.send('ue:open-session', sessionToOpen)
+        if (newAgentSession) {
+          existing.win.webContents.send('ue:new-agent-session', newAgentSession)
+        }
         if (deepLink) existing.win.webContents.send('ue:open-uri', deepLink)
         await this._opts.appServices.recentWorkspaces.add(workspace)
       }
       return
+    }
+    // The cwd may live under another window's workspace (a nested-folder
+    // session): focus that window and create the session there instead of
+    // opening a second workspace for the subdirectory. Deliberately gated on
+    // newAgentSession only — the other callers keep the exact-workspace rule.
+    if (newAgentSession) {
+      const ancestor = this._findWindowForAncestorWorkspace(resolved)
+      if (ancestor && !ancestor.win.isDestroyed()) {
+        if (ancestor.win.isMinimized()) ancestor.win.restore()
+        if (this._opts.silentE2E) ancestor.win.showInactive()
+        else ancestor.win.focus()
+        ancestor.win.webContents.send('ue:new-agent-session', newAgentSession)
+        await this._opts.appServices.recentWorkspaces.add(workspace)
+        return
+      }
     }
     // WorkspaceMainService.restoreCurrent() (invoked by createWindow below) bumps
     // the shared recent list itself, so no need to add() again here.
@@ -910,6 +947,7 @@ export class WindowMainService implements IWindowMainService {
       workspace,
       ...(uiState ? { uiState } : {}),
       ...(sessionToOpen ? { sessionToOpen } : {}),
+      ...(newAgentSession ? { newAgentSession } : {}),
       ...(deepLink ? { deepLink } : {}),
     })
   }
@@ -1121,6 +1159,23 @@ export class WindowMainService implements IWindowMainService {
     for (const entry of this._windows.values()) {
       const current = entry.workspace.current
       if (current && workspaceIdFromUri(current.folder.toString()) === workspaceId) {
+        return entry
+      }
+    }
+    return undefined
+  }
+
+  /**
+   * Locate the (live) window entry whose workspace contains `folder` on the same
+   * host. Used by `openWindowForFolder` for a brand-new session rooted at a
+   * nested folder: that window already owns the surrounding workspace, so the
+   * session stays live-resumable there.
+   */
+  private _findWindowForAncestorWorkspace(folder: URI): WindowEntry | undefined {
+    const platform = normalizePlatform(process.platform)
+    for (const entry of this._windows.values()) {
+      const current = entry.workspace.current
+      if (current && isEqualOrParentResource(folder, current.folder, platform)) {
         return entry
       }
     }

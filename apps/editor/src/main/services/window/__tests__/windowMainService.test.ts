@@ -76,6 +76,7 @@ vi.mock('electron', () => ({
         openDevTools: vi.fn(),
         isDevToolsOpened: vi.fn().mockReturnValue(false),
         setWindowOpenHandler: vi.fn(),
+        send: vi.fn(),
         getOSProcessId: vi.fn().mockReturnValue(1000),
       },
     })),
@@ -822,6 +823,72 @@ describe('WindowMainService', () => {
 
     expect(probe).not.toHaveBeenCalled()
     expect(svc.getWindows()).toHaveLength(1)
+  })
+
+  it('openWindowForFolder sends a new-agent-session request to the window already on that workspace', async () => {
+    const opts = makeOpts()
+    const addRecent = vi.fn().mockResolvedValue(undefined)
+    ;(opts.appServices as { recentWorkspaces: unknown }).recentWorkspaces = { add: addRecent }
+    const svc = makeService(opts)
+    const folder = URI.file('/tmp/req')
+    await svc.createWindow({ workspace: { folder, name: 'req' } })
+    const workspace = vi.mocked(WorkspaceMainService).mock.results.at(-1)?.value as {
+      current: unknown
+    }
+    workspace.current = { folder, name: 'req' }
+    const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+      webContents: { send: ReturnType<typeof vi.fn> }
+    }
+    const payload = { agentId: 'claude-code', cwd: folder.fsPath }
+
+    await svc.openWindowForFolder(folder, undefined, undefined, payload)
+
+    expect(svc.getWindows()).toHaveLength(1)
+    expect(win.webContents.send).toHaveBeenCalledWith('ue:new-agent-session', payload)
+    expect(addRecent).toHaveBeenCalledTimes(1)
+  })
+
+  it('openWindowForFolder routes a nested cwd to the window that already owns its workspace', async () => {
+    const opts = makeOpts()
+    const addRecent = vi.fn().mockResolvedValue(undefined)
+    ;(opts.appServices as { recentWorkspaces: unknown }).recentWorkspaces = { add: addRecent }
+    const svc = makeService(opts)
+    const workspaceFolder = URI.file('/tmp/ws')
+    await svc.createWindow({ workspace: { folder: workspaceFolder, name: 'ws' } })
+    const workspace = vi.mocked(WorkspaceMainService).mock.results.at(-1)?.value as {
+      current: unknown
+    }
+    workspace.current = { folder: workspaceFolder, name: 'ws' }
+    const win = vi.mocked(BrowserWindow).mock.results.at(-1)?.value as {
+      webContents: { send: ReturnType<typeof vi.fn> }
+    }
+    const nested = URI.file('/tmp/ws/sub')
+    const payload = { agentId: 'claude-code', cwd: nested.fsPath }
+
+    await svc.openWindowForFolder(nested, undefined, undefined, payload)
+
+    expect(svc.getWindows()).toHaveLength(1)
+    expect(win.webContents.send).toHaveBeenCalledWith('ue:new-agent-session', payload)
+  })
+
+  it('openWindowForFolder passes a new-agent-session request to a fresh window via argv', async () => {
+    const svc = makeService()
+    const payload = {
+      agentId: 'claude-code',
+      cwd: '/tmp/fresh',
+      authority: 'ssh-remote+box',
+    }
+
+    await svc.openWindowForFolder(URI.file('/tmp/fresh'), undefined, undefined, payload)
+
+    expect(svc.getWindows()).toHaveLength(1)
+    const options = vi.mocked(BrowserWindow).mock.calls.at(-1)?.[0] as {
+      webPreferences?: { additionalArguments?: string[] }
+    }
+    const flag = '--ue-new-agent-session='
+    const arg = options.webPreferences?.additionalArguments?.find((a) => a.startsWith(flag))
+    expect(arg).toBeDefined()
+    expect(JSON.parse(decodeURIComponent(arg!.slice(flag.length)))).toEqual(payload)
   })
 
   it('createWindow({ workspace }) restores the workspace before load', async () => {

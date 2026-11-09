@@ -3376,6 +3376,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'agent.newSessionWithScope.chooseFolder': '选择文件夹…',
   'agent.newSessionWithScope.dialogTitle': '选择 Agent 工作目录',
   'agent.newSessionWithScope.failed': '无法创建 Agent 会话：{message}',
+  'agent.newSessionWithScope.foreignFolder.cancel': '取消',
+  'agent.newSessionWithScope.foreignFolder.detail':
+    'Agent 会话需要在以该工作目录为根的窗口中运行。是否在新窗口中打开“{folder}”并在那里创建会话？',
+  'agent.newSessionWithScope.foreignFolder.message': '所选文件夹不在当前工作区内。',
+  'agent.newSessionWithScope.foreignFolder.open': '在新窗口中打开',
   'agent.newSessionWithScope.placeholder': '为新会话选择工作目录',
   'agent.rename.empty': '标题不能为空',
   'agent.rename.prompt': '输入该会话的新标题',

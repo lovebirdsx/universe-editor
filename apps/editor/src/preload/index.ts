@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { IpcRendererEvent } from 'electron'
+import type { IOpenWindowNewAgentSession } from '@universe-editor/platform'
 import { IPC_PROTOCOL_CHANNEL } from '../shared/ipc/channelNames.js'
 import { E2E_PROBE_ARGV_FLAG, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import {
@@ -24,6 +25,12 @@ const OPEN_URI_FLAG = '--ue-open-uri='
 const openUriArg = process.argv.find((a) => a.startsWith(OPEN_URI_FLAG))
 const openUriTarget = openUriArg ? openUriArg.slice(OPEN_URI_FLAG.length) : undefined
 
+const NEW_AGENT_SESSION_FLAG = '--ue-new-agent-session='
+const newAgentSessionArg = process.argv.find((a) => a.startsWith(NEW_AGENT_SESSION_FLAG))
+const newAgentSession = parseNewAgentSessionArg(
+  newAgentSessionArg ? newAgentSessionArg.slice(NEW_AGENT_SESSION_FLAG.length) : undefined,
+)
+
 const REMOTE_AUTHORITY_FLAG = '--ue-remote-authority='
 const remoteAuthorityArg = process.argv.find((a) => a.startsWith(REMOTE_AUTHORITY_FLAG))
 const remoteAuthority = remoteAuthorityArg
@@ -31,6 +38,28 @@ const remoteAuthority = remoteAuthorityArg
   : undefined
 
 const configurationDefaults = parseConfigurationDefaultsArg(process.argv)
+
+/** Validate the `--ue-new-agent-session` payload / an IPC push; malformed input is ignored. */
+function normalizeNewAgentSession(raw: unknown): IOpenWindowNewAgentSession | undefined {
+  if (raw === null || typeof raw !== 'object') return undefined
+  const o = raw as Record<string, unknown>
+  const agentId = o['agentId']
+  const cwd = o['cwd']
+  if (typeof agentId !== 'string' || typeof cwd !== 'string') return undefined
+  const authority = typeof o['authority'] === 'string' ? o['authority'] : undefined
+  return { agentId, cwd, ...(authority !== undefined ? { authority } : {}) }
+}
+
+function parseNewAgentSessionArg(
+  encoded: string | undefined,
+): IOpenWindowNewAgentSession | undefined {
+  if (encoded === undefined) return undefined
+  try {
+    return normalizeNewAgentSession(JSON.parse(decodeURIComponent(encoded)))
+  } catch {
+    return undefined
+  }
+}
 
 /** 存储在监听器没有就绪时收到的 deep link，等待监听器添加后进行处理 */
 const pendingOpenUriTargets: string[] = []
@@ -98,6 +127,17 @@ const bridge = {
     }
     ipcRenderer.on('ue:open-session', listener)
     return () => ipcRenderer.removeListener('ue:open-session', listener)
+  },
+  /** A brand-new agent session this window should create at cold-launch; undefined if none. */
+  newAgentSession,
+  /** Listen for a new-session request pushed by the main process to an already-open window. */
+  onNewAgentSession(cb: (request: IOpenWindowNewAgentSession) => void): () => void {
+    const listener = (_event: IpcRendererEvent, request: unknown): void => {
+      const parsed = normalizeNewAgentSession(request)
+      if (parsed) cb(parsed)
+    }
+    ipcRenderer.on('ue:new-agent-session', listener)
+    return () => ipcRenderer.removeListener('ue:new-agent-session', listener)
   },
   /** Opener target (`path:line:col` or `command:…`) from a deep link that cold-launched this window. */
   openUriTarget,

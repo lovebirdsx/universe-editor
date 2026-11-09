@@ -20,12 +20,14 @@ import {
   INotificationService,
   IQuickInputService,
   IUriIdentityService,
+  IWindowsService,
   IWorkspaceService,
   ILayoutService,
   MenuId,
   REMOTE_SCHEME,
   Severity,
   URI,
+  fsPathToWorkspaceUri,
   isWslAuthority,
   localize,
   localize2,
@@ -262,6 +264,27 @@ function subProjectSourceDescription(source: SubProjectScope['source']): string 
 }
 
 /**
+ * True when `cwd` cannot run as a live session in this window: it lies outside
+ * the open folder, or on a different host. Same verdict the resume guards and
+ * the session list use, so creating a session here anyway would leave a
+ * half-usable session — working until restart, then read-only as "foreign".
+ */
+function isForeignSessionCwd(
+  cwd: string,
+  authority: string | undefined,
+  workspace: IWorkspaceService,
+  uriIdentity: IUriIdentityService,
+): boolean {
+  const folder = workspace.current?.folder
+  return isForeignWorkspaceSession(
+    { cwd, ...(authority !== undefined ? { authority } : {}) },
+    folder?.fsPath,
+    authorityForFolder(folder),
+    uriIdentity,
+  )
+}
+
+/**
  * New Agent Session Here — creates a session rooted at the folder chosen in the
  * Explorer context menu (a file resolves to its parent). Pins the session cwd
  * (and remote authority) to that folder so a sub-project chat never leaks up to
@@ -322,6 +345,8 @@ export class NewAgentSessionWithScopeAction extends Action2 {
     const uriIdentity = accessor.get(IUriIdentityService)
     const groups = accessor.get(IEditorGroupsService)
     const auxWindows = accessor.get(IAuxiliaryEditorWindowService)
+    const dialog = accessor.get(IDialogService)
+    const windows = accessor.get(IWindowsService)
     // Mutable out-param: the quick pick writes the modifier state at acceptance.
     const keyMods = { ctrl: false, alt: false }
 
@@ -372,6 +397,38 @@ export class NewAgentSessionWithScopeAction extends Action2 {
         const scope = scopes.find((s) => s.cwd === picked.id)
         if (!scope) return
         target = { cwd: scope.cwd, ...(scope.authority ? { authority: scope.authority } : {}) }
+      }
+
+      if (isForeignSessionCwd(target.cwd, target.authority, workspace, uriIdentity)) {
+        // Creating here would produce a session this window cannot resume live
+        // after a restart (the split-brain guard classifies it as a foreign
+        // worktree), so route the user to a window rooted at the chosen folder.
+        const { confirmed } = await dialog.confirm({
+          message: localize(
+            'agent.newSessionWithScope.foreignFolder.message',
+            'The selected folder is outside the current workspace.',
+          ),
+          detail: localize(
+            'agent.newSessionWithScope.foreignFolder.detail',
+            'Agent sessions run in a window rooted at their working directory. Open "{folder}" in a new window and create the session there?',
+            { folder: target.cwd },
+          ),
+          primaryButton: localize(
+            'agent.newSessionWithScope.foreignFolder.open',
+            'Open in New Window',
+          ),
+          cancelButton: localize('agent.newSessionWithScope.foreignFolder.cancel', 'Cancel'),
+          type: 'info',
+        })
+        if (!confirmed) return
+        await windows.openWindow(fsPathToWorkspaceUri(target.cwd, target.authority), {
+          newAgentSession: {
+            agentId: registry.defaultAgentId(),
+            cwd: target.cwd,
+            ...(target.authority !== undefined ? { authority: target.authority } : {}),
+          },
+        })
+        return
       }
 
       const session = await sessions.createSession(registry.defaultAgentId(), target)

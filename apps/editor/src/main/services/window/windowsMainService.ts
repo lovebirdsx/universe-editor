@@ -9,6 +9,7 @@ import {
   type Event,
   type IDisposable,
   type IOpenWindowInfo,
+  type IOpenWindowNewAgentSession,
   type IWindowRenderCrashInfo,
   type IWindowsService,
   URI,
@@ -58,9 +59,17 @@ export class MainWindowsService implements IWindowsService, IDisposable {
     return Promise.resolve()
   }
 
-  openWindow(folder?: URI | UriComponents, options?: { sessionId?: string }): Promise<void> {
+  openWindow(
+    folder?: URI | UriComponents,
+    options?: { sessionId?: string; newAgentSession?: IOpenWindowNewAgentSession },
+  ): Promise<void> {
     const resolved = folder == null ? undefined : (URI.revive(folder) as URI)
-    return this._windows.openWindowForFolder(resolved, options?.sessionId)
+    return this._windows.openWindowForFolder(
+      resolved,
+      options?.sessionId,
+      undefined,
+      options?.newAgentSession,
+    )
   }
 
   quit(): Promise<void> {
