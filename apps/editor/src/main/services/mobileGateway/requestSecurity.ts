@@ -24,6 +24,12 @@ export function buildAllowedHosts(options: {
   readonly bindHost: string
   readonly port: number
   readonly extraHosts?: readonly string[]
+  /**
+   * The PC's own host name (the certificate SAN carries it). Only `name:port`
+   * is added: a bare name would claim the Tailscale Serve 443 origin, which is
+   * exactly what `extraHosts` means.
+   */
+  readonly localHostnames?: readonly string[]
 }): string[] {
   const allowed = new Set<string>()
   const add = (value: string): void => {
@@ -33,6 +39,11 @@ export function buildAllowedHosts(options: {
   add(`${options.bindHost}:${options.port}`)
   add(`127.0.0.1:${options.port}`)
   add(`localhost:${options.port}`)
+  for (const raw of options.localHostnames ?? []) {
+    const host = normalizeHostEntry(raw)
+    if (host === undefined) continue
+    if (!host.startsWith('[') && !host.includes(':')) add(`${host}:${options.port}`)
+  }
   for (const raw of options.extraHosts ?? []) {
     const host = normalizeHostEntry(raw)
     if (host === undefined) continue

@@ -199,6 +199,8 @@ export function buildOrigins(options: {
   readonly port: number
   readonly secure: boolean
   readonly allowedHosts: readonly string[]
+  /** The PC's own host name; offered as an optional LAN origin after the IP. */
+  readonly localHostname?: string
 }): GatewayOrigins {
   const urls = new Set<string>()
   if (options.bind === 'loopback') {
@@ -206,6 +208,20 @@ export function buildOrigins(options: {
     urls.add(`http://localhost:${options.port}`)
   } else {
     urls.add(`${options.secure ? 'https' : 'http'}://${options.host}:${options.port}`)
+    const localHostname =
+      options.secure && options.localHostname !== undefined
+        ? normalizeHostEntry(options.localHostname)
+        : undefined
+    if (
+      localHostname !== undefined &&
+      !localHostname.startsWith('[') &&
+      !localHostname.includes(':')
+    ) {
+      // iOS 26 has reported failures with `ws` on bare IP addresses; the name
+      // stays after the IP so the QR link keeps pointing at the address that
+      // does not depend on DNS.
+      urls.add(`https://${localHostname}:${options.port}`)
+    }
   }
   let trustedSecure = false
   for (const raw of options.allowedHosts) {

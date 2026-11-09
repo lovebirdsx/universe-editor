@@ -31,6 +31,13 @@ export type MobileGatewayState = 'stopped' | 'starting' | 'running' | 'error'
 export type MobileGatewayBindMode = 'loopback' | 'lan'
 
 /**
+ * `self-signed` is a single leaf the phone accepts per-origin (browser warning).
+ * `root-ca` adds a reusable root certificate the phone can install and trust;
+ * the leaf is reissued behind that stable root.
+ */
+export type MobileGatewayCertificateMode = 'self-signed' | 'root-ca'
+
+/**
  * Machine-local gateway configuration persisted to `<userData>/mobile/gateway.json`.
  * It deliberately stays out of settings.json: the config directory may be shared
  * across machines, while gateway settings must differ per machine.
@@ -43,6 +50,7 @@ export interface MobileGatewayConfig {
   readonly port: number
   /** Extra Host values accepted on top of the bind address / loopback. */
   readonly allowedHosts: readonly string[]
+  readonly certificateMode: MobileGatewayCertificateMode
   /** VAPID `sub` claim: a `mailto:` address or an `https:` URL. */
   readonly vapidSubject: string
 }
@@ -53,6 +61,7 @@ export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
   lanAddress: '',
   port: MOBILE_GATEWAY_DEFAULT_PORT,
   allowedHosts: [],
+  certificateMode: 'self-signed',
   // Placeholder per the repository's public-value policy. Override with a real
   // `mailto:` or `https:` URL before relying on push in the field.
   vapidSubject: 'https://universe-editor.example.com',
@@ -65,6 +74,7 @@ export interface MobileGatewayConfigPatch {
   readonly lanAddress?: string
   readonly port?: number
   readonly allowedHosts?: readonly string[]
+  readonly certificateMode?: MobileGatewayCertificateMode
   readonly vapidSubject?: string
 }
 
@@ -93,12 +103,16 @@ export interface MobileGatewayCapabilities {
 }
 
 export interface MobileGatewayCertificateInfo {
-  /** Lowercase hex SHA-256; the pairing link and phone pair page show it. */
+  /** Lowercase hex SHA-256 of the leaf; the pairing link and phone pair page show it. */
   readonly fingerprint: string
   /** SAN entries: the bound LAN address and the PC host name. */
   readonly addresses: readonly string[]
   /** Epoch milliseconds. */
   readonly expiresAt: number
+  /** Root CA fingerprint (root-ca mode only); this is what the phone installs. */
+  readonly caFingerprint?: string
+  /** Root CA expiry (root-ca mode only). */
+  readonly caExpiresAt?: number
 }
 
 export interface MobileGatewayStatus {
@@ -113,13 +127,21 @@ export interface MobileGatewayStatus {
   readonly lanAddresses: readonly string[]
   /** URL origins the phone can open, ordered loopback/lan first, then allowed hosts. */
   readonly origins: readonly string[]
+  /**
+   * Optional HTTPS origin built from the PC host name (LAN + TLS only). It sits
+   * after the IP origin because the name may resolve to Tailscale/WSL addresses;
+   * iOS 26 can fall back to it when bare-IP `ws` fails.
+   */
+  readonly lanHostnameOrigin?: string
   /** True when HTTP is bound to a non-loopback address (development only). */
   readonly insecure: boolean
   readonly bind: MobileGatewayBindMode
   readonly capabilities: MobileGatewayCapabilities
   readonly connectedDeviceCount: number
-  /** Present on the LAN tier while its self-signed certificate is loaded. */
+  /** Present on the LAN tier while its TLS certificate is loaded. */
   readonly certificate?: MobileGatewayCertificateInfo
+  /** Same-origin download URL for the root CA (root-ca + LAN + TLS only). */
+  readonly caDownloadUrl?: string
 }
 
 export interface MobileDeviceInfo {

@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises'
 import { parse, type ParseError } from 'jsonc-parser'
 import type {
   MobileGatewayBindMode,
+  MobileGatewayCertificateMode,
   MobileGatewayConfig,
   MobileGatewayConfigPatch,
 } from '../../../shared/ipc/mobileGatewayService.js'
@@ -26,6 +27,7 @@ const CONFIG_KEYS = new Set([
   'lanAddress',
   'port',
   'allowedHosts',
+  'certificateMode',
   'vapidSubject',
 ])
 
@@ -78,6 +80,12 @@ export function parseMobileGatewayConfigFile(raw: unknown): MobileGatewayConfigP
     if (hosts !== undefined) config = { ...config, allowedHosts: hosts }
   }
 
+  if (hasOwn(raw, 'certificateMode')) {
+    const mode = parseCertificateMode(raw['certificateMode'])
+    if (mode !== undefined) config = { ...config, certificateMode: mode }
+    else errors.push('"certificateMode" must be "self-signed" or "root-ca"')
+  }
+
   if (hasOwn(raw, 'vapidSubject')) {
     const value = raw['vapidSubject']
     if (typeof value === 'string' && isValidVapidSubject(value.trim())) {
@@ -105,6 +113,7 @@ export function validateMobileGatewayConfigPatch(raw: unknown): MobileGatewayCon
     lanAddress?: string
     port?: number
     allowedHosts?: readonly string[]
+    certificateMode?: MobileGatewayCertificateMode
     vapidSubject?: string
   } = {}
 
@@ -149,6 +158,15 @@ export function validateMobileGatewayConfigPatch(raw: unknown): MobileGatewayCon
     }
   }
 
+  if (hasOwn(raw, 'certificateMode')) {
+    const value = raw['certificateMode']
+    if (value !== undefined) {
+      const mode = parseCertificateMode(value)
+      if (mode !== undefined) patch.certificateMode = mode
+      else errors.push('"certificateMode" must be "self-signed" or "root-ca"')
+    }
+  }
+
   if (hasOwn(raw, 'vapidSubject')) {
     const value = raw['vapidSubject']
     if (value !== undefined) {
@@ -173,6 +191,7 @@ export function mergeMobileGatewayConfig(
     lanAddress: patch.lanAddress ?? base.lanAddress,
     port: patch.port ?? base.port,
     allowedHosts: patch.allowedHosts ?? base.allowedHosts,
+    certificateMode: patch.certificateMode ?? base.certificateMode,
     vapidSubject: patch.vapidSubject ?? base.vapidSubject,
   }
 }
@@ -185,6 +204,7 @@ export function serializeMobileGatewayConfig(config: MobileGatewayConfig): Mobil
     lanAddress: config.lanAddress,
     port: config.port,
     allowedHosts: [...config.allowedHosts],
+    certificateMode: config.certificateMode,
     vapidSubject: config.vapidSubject,
   }
 }
@@ -225,6 +245,10 @@ export async function readMobileGatewayConfigFile(
 
 function parseBindMode(value: unknown): MobileGatewayBindMode | undefined {
   return value === 'loopback' || value === 'lan' ? value : undefined
+}
+
+function parseCertificateMode(value: unknown): MobileGatewayCertificateMode | undefined {
+  return value === 'self-signed' || value === 'root-ca' ? value : undefined
 }
 
 function parseAllowedHosts(value: unknown, field: string, errors: string[]): string[] | undefined {

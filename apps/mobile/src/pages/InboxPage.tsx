@@ -11,6 +11,7 @@ import { refMatches } from '../state/refs.js'
 import { useStore } from '../state/useStore.js'
 import { NoticeBar } from '../components/NoticeBar.js'
 import { Spinner } from '../components/Spinner.js'
+import { ConnectionDiagnostic } from '../components/ConnectionDiagnostic.js'
 import { SettingsDrawer } from '../components/SettingsDrawer.js'
 import { StatusBar } from '../components/StatusBar.js'
 import { commandErrorText, strings } from '../strings.js'
@@ -43,6 +44,7 @@ export function InboxPage({
 }: InboxPageProps) {
   const inbox = useStore(client.getInboxStore())
   const socketState = useStore(client.getSocketStateStore())
+  const diagnosis = useStore(client.getConnectionDiagnosisStore())
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [sessionAction, setSessionAction] = useState<
     { readonly session: MobileSessionSummary; readonly view: InboxSessionSheetView } | undefined
@@ -96,6 +98,11 @@ export function InboxPage({
             <span>{strings.inboxOfflineBanner}</span>
           </div>
         )}
+        <ConnectionDiagnostic
+          diagnosis={diagnosis}
+          onRetryConnection={() => client.retryConnection()}
+          onRecheck={() => client.retryDiagnosis()}
+        />
         {renderBody()}
       </main>
       <button
@@ -169,6 +176,9 @@ export function InboxPage({
     }
 
     if (socketState === 'reconnecting') {
+      // The diagnostic card above already explains the failure; a second
+      // "reconnecting" card would just repeat it.
+      if (diagnosis !== undefined) return null
       return (
         <div className="state-card state-card--row">
           <Spinner label={strings.statusReconnecting} />

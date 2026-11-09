@@ -113,6 +113,10 @@ export function auditActionLabel(action: string): string {
       return localize('mobileDevices.audit.action.gatewayError', 'Gateway error')
     case 'hello_failed':
       return localize('mobileDevices.audit.action.helloFailed', 'Authentication failed')
+    case 'tls_handshake_failed':
+      return localize('mobileDevices.audit.action.tlsHandshakeFailed', 'TLS handshake failed')
+    case 'upgrade_rejected':
+      return localize('mobileDevices.audit.action.upgradeRejected', 'Connection refused')
     case 'push_subscribe':
       return localize('mobileDevices.audit.action.pushSubscribe', 'Push notifications enabled')
     case 'push_unsubscribe':

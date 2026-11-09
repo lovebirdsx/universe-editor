@@ -23,6 +23,7 @@ import {
   buildPairUrl,
   formatPairCode,
   isValidPairCodeShape,
+  MOBILE_CERT_PATH,
   normalizePairCode,
 } from '@universe-editor/mobile-protocol'
 import type {
@@ -123,6 +124,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _originsInfo: GatewayOrigins = { urls: [], trustedSecure: false }
   private _certificate: LanCertificate | undefined
   private _lanOrigin: string | undefined
+  private _lanHostnameOrigin: string | undefined
   private _server: MobileGatewayServer | undefined
   private _router: MobileNotificationRouter | undefined
   private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
@@ -231,7 +233,11 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
         buildPairUrl(
           origin,
           session.code,
-          origin === this._lanOrigin ? this._certificate?.fingerprint : undefined,
+          // Both LAN origins share the gateway certificate; the fingerprint
+          // lets the phone check it before pairing.
+          origin === this._lanOrigin || origin === this._lanHostnameOrigin
+            ? this._certificate?.fingerprint
+            : undefined,
         ),
       ),
     })
@@ -433,10 +439,13 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
 
     this._bind = runtime.bind
     this._insecure = runtime.insecure
+    const localHostname =
+      runtime.bind === 'lan' && runtime.secure ? normalizeLocalHostname() : undefined
     const allowedHosts = buildAllowedHosts({
       bindHost: runtime.host,
       port: runtime.port,
       extraHosts: this._config.allowedHosts,
+      ...(localHostname !== undefined ? { localHostnames: [localHostname] } : {}),
     })
 
     let certificate: LanCertificate | undefined
@@ -444,7 +453,8 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       try {
         certificate = await ensureLanCertificate({
           dir: join(this._mobileDir, 'tls'),
-          addresses: lanCertificateAddresses(runtime.host),
+          addresses: lanCertificateAddresses(runtime.host, localHostname),
+          mode: this._config.certificateMode,
           onChmodError: (error) =>
             this._logger.warn(`mobile TLS key chmod 0600 failed: ${error.message}`),
         })
@@ -464,7 +474,10 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       port: runtime.port,
       secure: runtime.secure,
       tlsFingerprint: certificate?.fingerprint,
+      tlsMode: this._config.certificateMode,
+      caFingerprint: certificate?.ca?.fingerprint,
       allowedHosts,
+      localHostname,
       assetsDir: this._assetsDir,
       vapidSubject: this._config.vapidSubject,
     })
@@ -485,6 +498,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       ...(certificate !== undefined
         ? { tls: { cert: certificate.cert, key: certificate.key } }
         : {}),
+      ...(certificate?.ca !== undefined ? { caCertificate: certificate.ca.cert } : {}),
       helloTimeoutMs: HELLO_TIMEOUT_MS,
       heartbeatIntervalMs: HEARTBEAT_INTERVAL_MS,
       heartbeatTimeoutMs: HEARTBEAT_TIMEOUT_MS,
@@ -526,11 +540,16 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
         port,
         secure: runtime.secure,
         allowedHosts: this._config.allowedHosts,
+        ...(localHostname !== undefined ? { localHostname } : {}),
       })
       this._origins = this._originsInfo.urls
       this._certificate = certificate
       this._lanOrigin =
         runtime.bind === 'lan' && runtime.secure ? `https://${runtime.host}:${port}` : undefined
+      this._lanHostnameOrigin =
+        runtime.bind === 'lan' && runtime.secure && localHostname !== undefined
+          ? `https://${localHostname}:${port}`
+          : undefined
       this._runningKey = runningKey
       this._state = 'running'
       this._error = undefined
@@ -552,6 +571,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       this._originsInfo = { urls: [], trustedSecure: false }
       this._certificate = undefined
       this._lanOrigin = undefined
+      this._lanHostnameOrigin = undefined
       this._setError(message)
       this._recordAudit({ action: 'gateway_error', result: 'failure', detail: message })
     }
@@ -567,6 +587,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._originsInfo = { urls: [], trustedSecure: false }
     this._certificate = undefined
     this._lanOrigin = undefined
+    this._lanHostnameOrigin = undefined
     this._insecure = false
     if (server === undefined) return
     await server.stop()
@@ -613,6 +634,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       state: this._state,
       ...(this._error !== undefined ? { error: this._error } : {}),
       ...(this._listenAddress !== undefined ? { listenAddress: this._listenAddress } : {}),
+      ...(this._lanHostnameOrigin !== undefined
+        ? { lanHostnameOrigin: this._lanHostnameOrigin }
+        : {}),
       lanAddresses: listLanAddresses(),
       origins: this._origins,
       insecure: this._insecure,
@@ -625,8 +649,17 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
               fingerprint: this._certificate.fingerprint,
               addresses: this._certificate.addresses,
               expiresAt: this._certificate.expiresAt,
+              ...(this._certificate.ca !== undefined
+                ? {
+                    caFingerprint: this._certificate.ca.fingerprint,
+                    caExpiresAt: this._certificate.ca.expiresAt,
+                  }
+                : {}),
             },
           }
+        : {}),
+      ...(this._lanOrigin !== undefined && this._certificate?.ca !== undefined
+        ? { caDownloadUrl: `${this._lanOrigin}${MOBILE_CERT_PATH}` }
         : {}),
     }
   }
@@ -673,11 +706,19 @@ function resolveMobileAssetsDir(): string {
 }
 
 /** Cover the bound address and the PC host name so both URLs validate. */
-function lanCertificateAddresses(host: string): string[] {
+function lanCertificateAddresses(host: string, localHostname?: string): string[] {
   const addresses = [host]
-  const name = hostname().trim()
-  if (name !== '' && !addresses.includes(name)) addresses.push(name)
+  if (localHostname !== undefined && !addresses.includes(localHostname)) {
+    addresses.push(localHostname)
+  }
   return addresses
+}
+
+/** Normalized `os.hostname()`; undefined when it cannot be a DNS SAN entry. */
+function normalizeLocalHostname(): string | undefined {
+  const name = hostname().trim().toLowerCase().replace(/\.$/u, '')
+  if (name === '' || name.includes(':') || name.includes('/') || /\s/u.test(name)) return undefined
+  return name
 }
 
 function describeListenError(err: unknown, host: string, port: number): string {

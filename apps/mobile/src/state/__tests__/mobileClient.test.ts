@@ -1,5 +1,5 @@
 import { MOBILE_PROTOCOL_VERSION, type HelloOkFrame } from '@universe-editor/mobile-protocol'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import { RECONNECT_BASE_MS } from '../../socket/mobileSocket.js'
 import { FakeTimers, FakeWebSocket, sentFrames } from '../../test/fakes.js'
@@ -26,13 +26,26 @@ function helloOkFrame(): HelloOkFrame {
   }
 }
 
-function createHarness(): {
+function createHarness(options: { readonly fetchImpl?: typeof fetch } = {}): {
   readonly client: MobileClient
   readonly sockets: FakeWebSocket[]
   readonly timers: FakeTimers
+  readonly fetchImpl: ReturnType<typeof vi.fn>
 } {
   const timers = new FakeTimers()
   const sockets: FakeWebSocket[] = []
+  const fetchImpl = vi.fn(
+    options.fetchImpl ??
+      (async () =>
+        new Response(
+          JSON.stringify({
+            status: 'ok',
+            serverVersion: '0.0.0-test',
+            protocolVersion: MOBILE_PROTOCOL_VERSION,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )),
+  )
   const client = new MobileClient({
     credentials,
     url: 'ws://pc.example.com/ws',
@@ -43,12 +56,13 @@ function createHarness(): {
     },
     timers,
     random: () => 0.5,
+    fetchImpl: fetchImpl as unknown as typeof fetch,
   })
   client.start()
   const first = sockets[0]!
   first.serverOpen()
   first.serverSend(helloOkFrame())
-  return { client, sockets, timers }
+  return { client, sockets, timers, fetchImpl }
 }
 
 function frameTypes(socket: FakeWebSocket): string[] {
@@ -536,5 +550,88 @@ describe('MobileClient notifications', () => {
 
     client.unsubscribePush()
     expect(sentFrames(socket)).toContainEqual({ type: 'push_unsubscribe' })
+  })
+})
+
+describe('MobileClient connection diagnosis', () => {
+  function failThreeTimes(harness: ReturnType<typeof createHarness>): void {
+    harness.sockets[0]!.serverClose(1006)
+    harness.timers.advance(RECONNECT_BASE_MS)
+    harness.sockets[1]!.serverClose(1006)
+    harness.timers.advance(RECONNECT_BASE_MS * 2)
+    harness.sockets[2]!.serverClose(1006)
+  }
+
+  it('probes the gateway after three failed reconnects', async () => {
+    const harness = createHarness()
+    failThreeTimes(harness)
+
+    expect(harness.client.getReconnectAttemptStore().getState()).toBe(3)
+    await vi.waitFor(() => {
+      expect(harness.fetchImpl).toHaveBeenCalledTimes(1)
+      expect(harness.client.getConnectionDiagnosisStore().getState()).toMatchObject({
+        kind: 'ok',
+        origin: 'http://pc.example.com',
+      })
+    })
+    expect(harness.fetchImpl.mock.calls[0]?.[0]).toBe('http://pc.example.com/api/health')
+  })
+
+  it('clears the diagnosis and attempt count once hello_ok lands', async () => {
+    const harness = createHarness()
+    failThreeTimes(harness)
+    await vi.waitFor(() => {
+      expect(harness.client.getConnectionDiagnosisStore().getState()).toBeDefined()
+    })
+
+    harness.timers.advance(RECONNECT_BASE_MS * 4)
+    const socket = harness.sockets[3]!
+    socket.serverOpen()
+    socket.serverSend(helloOkFrame())
+
+    expect(harness.client.getReconnectAttemptStore().getState()).toBe(0)
+    expect(harness.client.getConnectionDiagnosisStore().getState()).toBeUndefined()
+  })
+
+  it('drops a probe that resolves after the socket reconnected', async () => {
+    let release: ((response: Response) => void) | undefined
+    const harness = createHarness({
+      fetchImpl: () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    })
+    failThreeTimes(harness)
+    await vi.waitFor(() => {
+      expect(harness.fetchImpl).toHaveBeenCalledTimes(1)
+    })
+
+    harness.timers.advance(RECONNECT_BASE_MS * 4)
+    const socket = harness.sockets[3]!
+    socket.serverOpen()
+    socket.serverSend(helloOkFrame())
+    release!(
+      new Response(JSON.stringify({ status: 'ok', protocolVersion: MOBILE_PROTOCOL_VERSION }), {
+        status: 200,
+      }),
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(harness.client.getConnectionDiagnosisStore().getState()).toBeUndefined()
+  })
+
+  it('retryDiagnosis probes immediately and retryConnection skips the backoff', async () => {
+    const harness = createHarness()
+    harness.client.retryDiagnosis()
+    await vi.waitFor(() => {
+      expect(harness.client.getConnectionDiagnosisStore().getState()).toBeDefined()
+    })
+
+    harness.sockets[0]!.serverClose(1006)
+    expect(harness.sockets).toHaveLength(1)
+    harness.client.retryConnection()
+    expect(harness.sockets).toHaveLength(2)
+    expect(harness.timers.pendingTimeoutDelays()).toEqual([])
   })
 })

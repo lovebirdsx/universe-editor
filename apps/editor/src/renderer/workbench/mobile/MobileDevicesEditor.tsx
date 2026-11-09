@@ -36,6 +36,7 @@ import {
   IMobileGatewayService,
   type MobileDeviceInfo,
   type MobileGatewayBindMode,
+  type MobileGatewayCertificateMode,
   type MobileGatewayState,
   type MobileGatewayStatus,
 } from '../../../shared/ipc/mobileGatewayService.js'
@@ -66,6 +67,17 @@ const BIND_OPTIONS: readonly SelectOption<MobileGatewayBindMode>[] = [
     label: localize('mobileDevices.bind.loopback', 'Loopback (recommended)'),
   },
   { value: 'lan', label: localize('mobileDevices.bind.lan', 'LAN address') },
+]
+
+const CERTIFICATE_MODE_OPTIONS: readonly SelectOption<MobileGatewayCertificateMode>[] = [
+  {
+    value: 'self-signed',
+    label: localize('mobileDevices.certificate.mode.selfSigned', 'Self-signed (default)'),
+  },
+  {
+    value: 'root-ca',
+    label: localize('mobileDevices.certificate.mode.rootCa', 'Root CA (install on phone)'),
+  },
 ]
 
 function lanAddressOptions(
@@ -126,6 +138,9 @@ export function MobileDevicesEditor() {
 
   const browserOrigin =
     status?.state === 'running' ? chooseDesktopOrigin(status.origins) : undefined
+  const lanHostnameOrigin = status?.lanHostnameOrigin
+  const certificate = status?.certificate
+  const caDownloadUrl = status?.caDownloadUrl
   const selectedPairUrl = pairing.selectedUrl
 
   const openConfigJson = useCallback(() => {
@@ -166,6 +181,29 @@ export function MobileDevicesEditor() {
       }
     },
     [dialog, gateway],
+  )
+
+  const changeCertificateMode = useCallback(
+    async (mode: MobileGatewayCertificateMode) => {
+      if (mode === settings.certificateMode) return
+      if (mode === 'root-ca') {
+        const { confirmed } = await dialog.confirm({
+          message: localize(
+            'mobileDevices.certificate.switchConfirm',
+            'Enable root certificate mode?',
+          ),
+          detail: localize(
+            'mobileDevices.certificate.switchDetail',
+            'The gateway will reissue its HTTPS certificate. Every phone must install and fully trust this computer’s root certificate before it can connect again.',
+          ),
+          primaryButton: localize('mobileDevices.certificate.switch', 'Enable root CA'),
+          type: 'warning',
+        })
+        if (!confirmed) return
+      }
+      await config.update({ certificateMode: mode })
+    },
+    [config, dialog, settings.certificateMode],
   )
 
   return (
@@ -293,25 +331,88 @@ export function MobileDevicesEditor() {
                   </div>
                 )}
 
-                {status.certificate !== undefined && (
+                {certificate !== undefined && (
                   <div className={styles['certificate']} data-testid="mobile-gateway-certificate">
                     <span className={styles['fieldLabel']}>
-                      {localize('mobileDevices.gateway.certificate', 'Certificate fingerprint')}
+                      {certificate.caFingerprint === undefined
+                        ? localize('mobileDevices.gateway.certificate', 'Certificate fingerprint')
+                        : localize(
+                            'mobileDevices.gateway.leafFingerprint',
+                            'Leaf certificate fingerprint (shown in browser warnings)',
+                          )}
                     </span>
                     <code className={styles['inlineCode']}>
-                      {formatFingerprint(status.certificate.fingerprint)}
+                      {formatFingerprint(certificate.fingerprint)}
                     </code>
                     <span className={styles['statusMeta']}>
                       {localize('mobileDevices.gateway.certificateExpires', 'Expires {date}', {
-                        date: formatTimestamp(status.certificate.expiresAt),
+                        date: formatTimestamp(certificate.expiresAt),
                       })}
                     </span>
+                    {certificate.caFingerprint !== undefined && (
+                      <>
+                        <span className={styles['fieldLabel']}>
+                          {localize(
+                            'mobileDevices.gateway.caFingerprint',
+                            'Root CA fingerprint (install this on the phone)',
+                          )}
+                        </span>
+                        <code
+                          className={styles['inlineCode']}
+                          data-testid="mobile-gateway-ca-fingerprint"
+                        >
+                          {formatFingerprint(certificate.caFingerprint)}
+                        </code>
+                        {certificate.caExpiresAt !== undefined && (
+                          <span className={styles['statusMeta']}>
+                            {localize('mobileDevices.gateway.caExpires', 'Root CA expires {date}', {
+                              date: formatTimestamp(certificate.caExpiresAt),
+                            })}
+                          </span>
+                        )}
+                      </>
+                    )}
                     <span className={styles['description']}>
-                      {localize(
-                        'mobileDevices.gateway.certificateHint',
-                        'Compare this with the fingerprint shown on the phone pairing page before you pair.',
-                      )}
+                      {certificate.caFingerprint === undefined
+                        ? localize(
+                            'mobileDevices.gateway.certificateHint',
+                            'Compare this with the fingerprint shown on the phone pairing page before you pair.',
+                          )
+                        : localize(
+                            'mobileDevices.gateway.caFingerprintHint',
+                            'Install this root certificate once on the phone. The leaf may renew without pairing the phone again.',
+                          )}
                     </span>
+                    {caDownloadUrl !== undefined && (
+                      <>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => openExternal(caDownloadUrl)}
+                          data-testid="mobile-gateway-ca-download"
+                        >
+                          <ExternalLink
+                            size={14}
+                            strokeWidth={1.75}
+                            className={styles['buttonIcon']}
+                          />
+                          {localize(
+                            'mobileDevices.certificate.download',
+                            'Download root certificate',
+                          )}
+                        </Button>
+                        <span
+                          className={styles['description']}
+                          data-testid="mobile-gateway-ca-hint"
+                        >
+                          {localize(
+                            'mobileDevices.certificate.phoneHint',
+                            'On the phone, open {url} in Safari, install the profile, then enable full trust under Settings → General → About → Certificate Trust Settings.',
+                            { url: caDownloadUrl },
+                          )}
+                        </span>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -438,6 +539,30 @@ export function MobileDevicesEditor() {
                     'Binds a LAN address and serves HTTPS with a certificate generated on this PC. The phone must confirm the certificate fingerprint shown on the pairing page; installing the app and Web Push stay unavailable until the certificate is trusted.',
                   )}
                 </p>
+                <div className={cx(styles['settingRow'], styles['bindAddressRow'])}>
+                  <div className={styles['settingText']}>
+                    <div className={styles['label']}>
+                      {localize('mobileDevices.certificate.modeLabel', 'LAN HTTPS certificate')}
+                    </div>
+                    <div className={styles['description']}>
+                      {localize(
+                        'mobileDevices.certificate.modeDescription',
+                        'Self-signed: accept the browser warning on each phone. Root CA: install one certificate on the phone; leaf renewals keep working without pairing again.',
+                      )}
+                    </div>
+                  </div>
+                  <Select
+                    value={settings.certificateMode}
+                    options={CERTIFICATE_MODE_OPTIONS}
+                    onChange={(mode) => void changeCertificateMode(mode)}
+                    disabled={config.state === undefined}
+                    data-testid="mobile-gateway-certificate-mode"
+                    aria-label={localize(
+                      'mobileDevices.certificate.modeLabel',
+                      'LAN HTTPS certificate',
+                    )}
+                  />
+                </div>
               </div>
             )}
             <p className={styles['hint']} data-testid="mobile-gateway-config-local-only">
@@ -567,6 +692,16 @@ export function MobileDevicesEditor() {
                         </div>
                       )}
                     </div>
+                  )}
+
+                  {lanHostnameOrigin !== undefined && (
+                    <p className={styles['hint']} data-testid="mobile-gateway-hostname-hint">
+                      {localize(
+                        'mobileDevices.pairing.hostnameHint',
+                        '{hostname} is an optional fallback for iOS. If the phone cannot resolve that host name (common when this PC has Tailscale/WSL adapters), keep using the IP address.',
+                        { hostname: pairUrlLabel(lanHostnameOrigin) },
+                      )}
+                    </p>
                   )}
 
                   <p className={styles['description']}>

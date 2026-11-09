@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { X509Certificate } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
+import { connect as netConnect, createServer as netServer } from 'node:net'
 import { join } from 'node:path'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
 import { NullLogger } from '@universe-editor/platform'
@@ -19,7 +21,7 @@ import { WebSocket } from 'ws'
 import { AuditLog } from '../auditLog.js'
 import { DeviceStore } from '../deviceStore.js'
 import { HelloFailureLimiter, MAX_HELLO_FAILURES_PER_ADDRESS } from '../helloFailureLimiter.js'
-import { ensureLanCertificate } from '../lanCertificate.js'
+import { ensureLanCertificate, fingerprintOf } from '../lanCertificate.js'
 import { MobileAttachmentStore } from '../mobileAttachmentStore.js'
 import { MobileGatewayServer, type MobileGatewayServerOptions } from '../mobileGatewayServer.js'
 import { PairingService } from '../pairingService.js'
@@ -125,6 +127,51 @@ function httpsGet(
       },
     )
     request.on('error', reject)
+    request.end()
+  })
+}
+
+/** Binary-safe HTTPS request, optionally trusting only the supplied root CA. */
+function httpsRequestBuffer(
+  port: number,
+  path: string,
+  options: {
+    method?: string
+    headers?: Record<string, string>
+    body?: string
+    ca?: string
+    rejectUnauthorized?: boolean
+  } = {},
+): Promise<{
+  status: number
+  headers: Record<string, string | string[] | undefined>
+  body: Buffer
+}> {
+  return new Promise((resolve, reject) => {
+    const request = httpsRequest(
+      {
+        host: '127.0.0.1',
+        port,
+        path,
+        method: options.method ?? 'GET',
+        ...(options.headers !== undefined ? { headers: options.headers } : {}),
+        rejectUnauthorized: options.rejectUnauthorized ?? false,
+        ...(options.ca !== undefined ? { ca: options.ca } : {}),
+      },
+      (response) => {
+        const chunks: Buffer[] = []
+        response.on('data', (chunk: Buffer) => chunks.push(chunk))
+        response.on('end', () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks),
+          }),
+        )
+      },
+    )
+    request.on('error', reject)
+    if (options.body !== undefined) request.write(options.body)
     request.end()
   })
 }
@@ -241,6 +288,55 @@ function rawRequest(
     req.on('error', reject)
     req.end()
   })
+}
+
+/** Raw HTTP upgrade attempt; a rejected upgrade replies with the status line. */
+function upgradeStatus(
+  base: string,
+  options: { host?: string; origin?: string } = {},
+): Promise<number> {
+  const url = new URL(base)
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        hostname: url.hostname,
+        port: url.port,
+        path: '/ws',
+        method: 'GET',
+        headers: {
+          Connection: 'Upgrade',
+          Upgrade: 'websocket',
+          'Sec-WebSocket-Version': '13',
+          'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          Host: options.host ?? `${url.hostname}:${url.port}`,
+          ...(options.origin === undefined ? {} : { Origin: options.origin }),
+        },
+      },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode ?? 0)
+      },
+    )
+    req.on('upgrade', (res, socket) => {
+      socket.destroy()
+      resolve(res.statusCode ?? 101)
+    })
+    req.on('error', reject)
+    req.end()
+  })
+}
+
+/** Reserve an ephemeral port, then release it for the gateway to bind. */
+async function freePort(): Promise<number> {
+  const server = netServer()
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  const port = typeof address === 'object' && address !== null ? address.port : 0
+  await new Promise<void>((resolve) => server.close(() => resolve()))
+  return port
 }
 
 describe('mobile gateway server integration', () => {
@@ -416,6 +512,161 @@ describe('mobile gateway server integration', () => {
         })
       ).status,
     ).toBe(200)
+  })
+
+  it('serves an unauthenticated health probe without device data', async () => {
+    const gateway = await startGateway()
+    const response = await fetch(`${gateway.base}/api/health`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('content-security-policy')).toContain("default-src 'self'")
+    expect(response.headers.get('access-control-allow-origin')).toBeNull()
+    expect(await response.json()).toEqual({
+      status: 'ok',
+      serverVersion: '0.0.0-test',
+      protocolVersion: MOBILE_PROTOCOL_VERSION,
+    })
+
+    const head = await fetch(`${gateway.base}/api/health`, { method: 'HEAD' })
+    expect(head.status).toBe(200)
+    expect(await head.text()).toBe('')
+
+    const post = await fetch(`${gateway.base}/api/health`, { method: 'POST' })
+    expect(post.status).toBe(405)
+
+    const foreign = await rawRequest(gateway.base, '/api/health', { host: 'evil.example.com' })
+    expect(foreign.status).toBe(403)
+  })
+
+  it('accepts the PC host name with the port when it is allowlisted', async () => {
+    const port = await freePort()
+    const gateway = await startGateway({
+      port,
+      allowedHosts: [`desktop-test:${port}`],
+    })
+    expect(await upgradeStatus(gateway.base, { host: `desktop-test:${port}` })).toBe(101)
+  })
+
+  it('audits rejected WebSocket upgrades with the rejection reason', async () => {
+    const gateway = await startGateway()
+    expect(await upgradeStatus(gateway.base, { host: 'evil.example.com' })).toBe(403)
+    await expect
+      .poll(async () =>
+        (await gateway.audit.recent(20)).filter((entry) => entry.action === 'upgrade_rejected'),
+      )
+      .toHaveLength(1)
+    const [entry] = (await gateway.audit.recent(20)).filter(
+      (candidate) => candidate.action === 'upgrade_rejected',
+    )
+    expect(entry?.result).toBe('failure')
+    expect(entry?.detail).toContain('host is not allowed')
+  })
+
+  it('audits TLS handshake failures that never reach HTTP', async () => {
+    const tlsDir = mkTempDir('ue-mobile-tls-')
+    cleanup.push(() => {
+      removeDirWithRetry(tlsDir)
+    })
+    const certificate = await ensureLanCertificate({ dir: tlsDir, addresses: ['127.0.0.1'] })
+    const gateway = await startGateway({
+      tls: { cert: certificate.cert, key: certificate.key },
+    })
+
+    await new Promise<void>((resolve, reject) => {
+      const socket = netConnect(gateway.server.port, '127.0.0.1', () => {
+        // Plaintext against the TLS port: the handshake fails before HTTP.
+        socket.end('GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n')
+        resolve()
+      })
+      socket.on('error', reject)
+    })
+
+    await expect
+      .poll(async () =>
+        (await gateway.audit.recent(20)).filter((entry) => entry.action === 'tls_handshake_failed'),
+      )
+      .toHaveLength(1)
+  })
+
+  describe('root CA mode', () => {
+    async function startRootCaGateway() {
+      const tlsDir = mkTempDir('ue-mobile-tls-ca-')
+      cleanup.push(() => {
+        removeDirWithRetry(tlsDir)
+      })
+      const certificate = await ensureLanCertificate({
+        dir: tlsDir,
+        addresses: ['127.0.0.1'],
+        mode: 'root-ca',
+      })
+      expect(certificate.ca).toBeDefined()
+      const gateway = await startGateway({
+        tls: { cert: certificate.cert, key: certificate.key },
+        caCertificate: certificate.ca!.cert,
+      })
+      return { gateway, certificate, ca: certificate.ca! }
+    }
+
+    it('serves the root CA as DER and hides it without root-ca mode', async () => {
+      const plain = await startGateway()
+      expect((await fetch(`${plain.base}/api/cert`)).status).toBe(404)
+
+      const { gateway, ca } = await startRootCaGateway()
+      const response = await httpsRequestBuffer(gateway.server.port, '/api/cert')
+      expect(response.status).toBe(200)
+      expect(response.headers['content-type']).toContain('application/x-x509-ca-cert')
+      expect(response.headers['content-disposition']).toContain('attachment')
+      expect(response.headers['cache-control']).toBe('no-store')
+      const served = new X509Certificate(response.body)
+      expect(served.ca).toBe(true)
+      expect(fingerprintOf(served)).toBe(ca.fingerprint)
+
+      const head = await httpsRequestBuffer(gateway.server.port, '/api/cert', { method: 'HEAD' })
+      expect(head.status).toBe(200)
+      expect(head.body).toHaveLength(0)
+
+      const post = await httpsRequestBuffer(gateway.server.port, '/api/cert', { method: 'POST' })
+      expect(post.status).toBe(405)
+
+      const foreign = await httpsRequestBuffer(gateway.server.port, '/api/cert', {
+        headers: { Host: 'evil.example.com' },
+      })
+      expect(foreign.status).toBe(403)
+    })
+
+    it('verifies a WSS connection against the downloaded root CA', async () => {
+      const { gateway, certificate } = await startRootCaGateway()
+      const port = gateway.server.port
+      const url = `wss://127.0.0.1:${port}/ws`
+
+      await expect(
+        new Promise((resolve, reject) => {
+          const ws = new WebSocket(url)
+          ws.once('open', () => {
+            ws.terminate()
+            resolve('open')
+          })
+          ws.once('error', reject)
+        }),
+      ).rejects.toThrow()
+
+      const pairResponse = await httpsRequestBuffer(port, '/api/pair', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ code: 'ABCD2345', deviceName: 'Pixel 9', platform: 'android' }),
+      })
+      expect(pairResponse.status).toBe(200)
+      const paired = JSON.parse(pairResponse.body.toString('utf8')) as PairResponse
+
+      const ws = new WebSocket(url, { ca: certificate.ca!.cert })
+      await new Promise<void>((resolve, reject) => {
+        ws.once('open', resolve)
+        ws.once('error', reject)
+      })
+      const frame = await hello(ws, paired.token)
+      expect(frame.type).toBe('hello_ok')
+      ws.terminate()
+    })
   })
 
   it('shows the not-built page when the asset directory is missing', async () => {

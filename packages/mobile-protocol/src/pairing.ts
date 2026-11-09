@@ -1,4 +1,6 @@
 export const MOBILE_PAIR_PATH = '/api/pair'
+export const MOBILE_HEALTH_PATH = '/api/health'
+export const MOBILE_CERT_PATH = '/api/cert'
 export const MOBILE_WS_PATH = '/ws'
 export const MOBILE_PAIR_PAGE_PATH = '/pair'
 

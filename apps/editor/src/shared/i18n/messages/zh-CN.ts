@@ -22,6 +22,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.audit.action.gatewayStart': '网关已启动',
   'mobileDevices.audit.action.gatewayStop': '网关已停止',
   'mobileDevices.audit.action.helloFailed': '认证失败',
+  'mobileDevices.audit.action.tlsHandshakeFailed': 'TLS 握手失败',
+  'mobileDevices.audit.action.upgradeRejected': '连接被拒绝',
   'mobileDevices.audit.action.pairAttempt': '配对尝试',
   'mobileDevices.audit.action.pairingCancelled': '取消配对',
   'mobileDevices.audit.action.pairingStarted': '开始配对',
@@ -67,6 +69,22 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.devices.revokeFailed': '无法吊销设备：{error}',
   'mobileDevices.devices.section': '已配对设备',
   'mobileDevices.editorName': '手机设备',
+  'mobileDevices.certificate.download': '下载根证书',
+  'mobileDevices.certificate.mode.selfSigned': '自签名（默认）',
+  'mobileDevices.certificate.mode.rootCa': '根证书（需在手机安装）',
+  'mobileDevices.certificate.modeDescription':
+    '自签名：每台手机都要接受一次浏览器证书警告。根证书：在手机上安装一次，之后叶证书续签不影响信任。',
+  'mobileDevices.certificate.modeLabel': '局域网 HTTPS 证书',
+  'mobileDevices.certificate.phoneHint':
+    '在手机 Safari 中打开 {url}，安装描述文件，再到「设置 → 通用 → 关于本机 → 证书信任设置」开启完全信任。',
+  'mobileDevices.certificate.switch': '启用根证书',
+  'mobileDevices.certificate.switchConfirm': '启用根证书模式？',
+  'mobileDevices.certificate.switchDetail':
+    '网关会重新签发 HTTPS 证书。每台手机都必须安装并完全信任这台电脑的根证书后才能重新连接。',
+  'mobileDevices.gateway.caExpires': '根证书到期时间 {date}',
+  'mobileDevices.gateway.caFingerprint': '根证书指纹（在手机上安装此项）',
+  'mobileDevices.gateway.caFingerprintHint': '在手机上安装一次根证书；叶证书续签后无需重新配对。',
+  'mobileDevices.gateway.leafFingerprint': '叶证书指纹（浏览器警告中显示）',
   'mobileDevices.gateway.capabilities': '能力',
   'mobileDevices.gateway.capability.available': '可用',
   'mobileDevices.gateway.capability.installable': '可安装为应用',
@@ -101,6 +119,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.pairing.expired': '配对码已过期。',
   'mobileDevices.pairing.expires': '配对码将在 {time} 后过期',
   'mobileDevices.pairing.fixedExpiry': '该配对码不会过期（测试模式）。',
+  'mobileDevices.pairing.hostnameHint':
+    '{hostname} 是 iOS 的可选备用地址；若手机无法解析该主机名（本机有 Tailscale/WSL 虚拟网卡时常见），请继续使用 IP 地址。',
   'mobileDevices.pairing.noOrigins':
     '没有可用地址。请把 Tailscale 主机名加入网关配置的 allowedHosts。',
   'mobileDevices.pairing.openInBrowser': '在电脑浏览器中打开配对页',

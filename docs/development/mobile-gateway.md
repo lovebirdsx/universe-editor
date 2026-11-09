@@ -540,10 +540,10 @@ fork / rewind / 侧边任务、`openSession`）都记一条；`detail` 只含 `w
   使用当前选中的 `pairing.selectedUrl`，一次性码仍保留在 fragment。WSLg 下
   `shell.openExternal` 不保证拉起 Windows 浏览器，UI 与用户文档保留手动打开地址的兜底。
 **配置持久化（机器本地）**：`enabled` / `bind` / `lanAddress` / `port` / `allowedHosts` /
-`vapidSubject` 存 `<userData>/mobile/gateway.json`（`0600`、原子写入），**不进 `settings.json`、
-不跟随 configDir 重定位**，因此多台机器共享 configDir 时各自独立。旧 `settings.json` 里的
-`mobileGateway.*` 不读取、不迁移、不清理——做一次性迁移会把 A 机器的值带给首次运行的 B 机器，
-正是要避免的事。main 独占读写，renderer 经 `IMobileGatewayService` 的 `getConfig` /
+`certificateMode` / `vapidSubject` 存 `<userData>/mobile/gateway.json`（`0600`、原子写入），**不进
+`settings.json`、不跟随 configDir 重定位**，因此多台机器共享 configDir 时各自独立。旧
+`settings.json` 里的 `mobileGateway.*` 不读取、不迁移、不清理——做一次性迁移会把 A 机器的值带给首次
+运行的 B 机器，正是要避免的事。main 独占读写，renderer 经 `IMobileGatewayService` 的 `getConfig` /
 `updateConfig` / `onDidChangeConfig`；`UNIVERSE_MOBILE_*` 环境变量仍优先于文件。
 
 | 场景 | 行为 |
@@ -562,24 +562,55 @@ JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()
 | 档位 | 监听 | 证书 | 能力 |
 |---|---|---|---|
 | Tailscale（主推） | 网关只监听 `127.0.0.1` HTTP；由 `tailscale serve` 暴露 `https://<机器名>.ts.net` | Tailscale 自动签发与续期 | 安装 + SW + Web Push + 麦克风；iOS / Android 都完整 |
-| 局域网 | 监听用户选定网卡 IP（非 `0.0.0.0` 默认），`https.createServer` | 网关自签证书，SAN 含当前 LAN IP + PC 主机名，SHA-256 指纹进二维码 | 保证遥控 + 加密；安装 / 推送需手机信任证书，iOS 推送不保证 |
+| 局域网 | 监听用户选定网卡 IP（非 `0.0.0.0` 默认），`https.createServer` | 默认自签叶证书；可选 `root-ca`（根证书 + 叶证书），SAN 含当前 LAN IP + PC 主机名，SHA-256 指纹进二维码 | 保证遥控 + 加密；安装 / 推送需手机信任证书，iOS 推送不保证 |
 | 开发 / e2e | `127.0.0.1` HTTP；或显式 `UNIVERSE_MOBILE_INSECURE=1` 的局域网明文 | 无 | localhost 是安全上下文，SW 可用，无推送 |
 
-**局域网自签证书（M5）**：
+**局域网证书（M5，两种模式）**：
 
-- 首次启用局域网档时生成，存 `<userData>/mobile/tls/{cert.pem,key.pem}`（`0600`，原子写入）。
-  Node 内置 `crypto` 只能解析 X.509、不能签发，因此用 `selfsigned`（v5，基于 WebCrypto /
-  `@peculiar/x509`，无 native addon；见 catalog）。私钥为 EC P-256，签名 SHA-256。
-- SAN = 当前监听地址 + `os.hostname()`；如果 `gateway.json` 的 `lanAddress` 或
-  `UNIVERSE_MOBILE_LAN_ADDRESS` 改变，下次启动重新签发。
-- 有效期 365 天；剩余不足 30 天时自动续签。证书与私钥不匹配、文件损坏或读不出时同样重签。
+- `certificateMode = 'self-signed'`（默认）：单张自签叶证书，存
+  `<userData>/mobile/tls/{cert.pem,key.pem}`（`0600`，原子写入）。Node 内置 `crypto` 只能解析
+  X.509、不能签发，因此用 `selfsigned`（v5，基于 WebCrypto / `@peculiar/x509`，无 native addon；
+  见 catalog）。私钥为 EC P-256，签名 SHA-256。
+- `certificateMode = 'root-ca'`：同目录增加 `ca-cert.pem` / `ca-key.pem`（`0600`）。根证书为
+  EC P-256、`cA:true`、`keyCertSign`/`cRLSign`、`pathLenConstraint:0`、有效期 10 年；叶证书由该
+  根签发（365 天）。根在有效期内复用，叶按地址 / 到期续签，续签不改变手机已安装的信任锚。切回
+  `self-signed` 时检测到叶证书的签发者不是自身会重新签发；反向切换同理，因此旧模式的叶证书不会
+  被另一模式复用。
+- SAN = 当前监听地址 + `os.hostname()`（规范化小写、去尾点）；如果 `gateway.json` 的 `lanAddress`
+  或 `UNIVERSE_MOBILE_LAN_ADDRESS` 改变，下次启动重新签发。
+- 有效期 365 天；剩余不足 30 天时自动续签。证书与私钥不匹配、文件损坏或读不出时同样重签。CA
+  文件损坏 / 与私钥不匹配 / 过期时重建根证书（此时手机需重新安装）。
 - 指纹是 DER 证书的 SHA-256（小写十六进制）。`MobileGatewayStatus.certificate` 携带
-  `{ fingerprint, addresses, expiresAt }`，PC 设置页展示格式化指纹；配对 URL 的 `fp` 与
-  手机配对页展示同一值。
-- `capabilities.installable/push` 只认 `allowedHosts` 提供的受信任 HTTPS 源；局域网自签名
-  源不算（浏览器不把绕过证书错误的自签 HTTPS 视为安全上下文，Service Worker 不可用属预期）。
+  `{ fingerprint, addresses, expiresAt, caFingerprint?, caExpiresAt? }`；`fingerprint` 始终是叶证书，
+  `caFingerprint` 仅在 root-ca 模式存在。PC 设置页分别展示两者，配对 URL 的 `fp` 仍是叶证书。
+- root-ca 模式额外暴露 `GET|HEAD /api/cert`：返回根证书 DER
+  （`application/x-x509-ca-cert`、`Content-Disposition: attachment`、`no-store`），无鉴权但照常
+  走 Host/Origin 校验；非 root-ca 或非 TLS 时返回 404。根私钥绝不进入状态、日志或 HTTP。
+  手机侧在连接诊断的「已到达 PC，但 WebSocket 握手失败」分支给出下载链接与 iOS / Android 安装步骤。
+- `capabilities.installable/push` 只认 `allowedHosts` 提供的受信任 HTTPS 源；局域网源不算——
+  即使 root-ca 模式下手机已安装根证书，PC 也无法探测该信任状态。
 - 生产构建允许局域网档 HTTPS；仍拒绝非回环明文 HTTP。开发调试可设
   `UNIVERSE_MOBILE_INSECURE=1` 退回明文（状态与 UI 显示警告），打包版忽略该值并报错。
+
+**主机名 Host 白名单**：局域网 + TLS 时，`os.hostname()` 会同时进入证书 SAN 与 Host 白名单。
+白名单只加 `<hostname>:<port>`（`buildAllowedHosts` 的 `localHostnames`），**不加裸主机名**：
+裸主机名属于 Tailscale Serve 的 443 语义，只能由 `allowedHosts` 显式配置。`buildOrigins` 在 IP
+源之后追加 `https://<hostname>:<port>`，因此配对二维码默认仍是 IP；主机名可能解析到
+Tailscale/WSL 等多个地址，PC 设置页会把它标为 iOS 可选备用地址并给出警告。
+
+**连接可观测性与诊断**：
+
+- `GET|HEAD /api/health`（无鉴权、Host/Origin 校验、`no-store`）返回
+  `{ status: 'ok', serverVersion, protocolVersion }`，供手机在 WS 失败时区分「没到 PC」与
+  「到了 PC 但 TLS/WS 被拒」。不 bump `MOBILE_PROTOCOL_VERSION`（无 wire 帧变化）。
+- HTTPS server 监听 `tlsClientError`，升级拒绝路径（Host/Origin/path/连接数/限流）统一审计
+  `tls_handshake_failed` / `upgrade_rejected`；同一 remote + 原因 60 秒内只写一条审计，其余降为
+  debug 日志，避免重试刷盘。`detail` 截断到 240 字符（TLS 错误可能带证书链）。
+- 手机 `MobileSocket` 暴露 `onReconnectAttempt`（`hello_ok` 归零）与 `retryNow()`；`MobileClient`
+  在第 3 次连续重连后探测 `/api/health`（最小间隔 15s，成功连接即清空），并暴露
+  `retryConnection()` / `retryDiagnosis()`。探测结果是 HTTP 层分类（`ok` / `forbidden` /
+  `not-found` / `http-error` / `invalid-response` / `network-error` / `protocol-mismatch`），UI 据此
+  给出可执行提示。迟到的探测结果用连接代际号丢弃，避免重连成功后又被旧结果覆盖。
 
 **WSL2**：
 
@@ -603,7 +634,9 @@ JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()
   `MobileGatewayStatus.lanAddresses` 下发，设置页的地址下拉由它渲染。
 - Windows 首次监听非回环地址会弹防火墙授权。
 - iOS 有本地网络隐私提示；自签证书还需在系统里接受/信任，否则 Service Worker 与推送不可用。
-- iOS 26 对裸 IP 的 `ws` 有失败报告，优先建议用主机名 + 受信任证书。
+- iOS 26 对裸 IP 的 `ws` 有失败报告：局域网 + TLS 时配对页额外提供 `<hostname>:<port>` 源，并可选用
+  `root-ca` 模式安装受信任根证书；若手机无法解析主机名，IP 仍是默认源。失败时以手机诊断卡 +
+  PC 侧 `tls_handshake_failed` / `upgrade_rejected` 审计判断卡在 TCP、TLS 还是 WS。
 
 ## 10. 通知
 

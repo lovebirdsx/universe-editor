@@ -31,6 +31,7 @@ import {
   type TimerApi,
   type WebSocketLike,
 } from '../socket/mobileSocket.js'
+import { probeGatewayHealth, type ConnectionDiagnosis } from '../socket/connectionDiagnosis.js'
 import { CommandClient, CommandError, type CommandRequestOptions } from './commandClient.js'
 import { AttachmentClient, httpOriginForSocketUrl } from './attachmentClient.js'
 import {
@@ -52,10 +53,15 @@ export interface MobileClientOptions {
   readonly createWebSocket: (url: string) => WebSocketLike
   readonly timers?: TimerApi | undefined
   readonly random?: (() => number) | undefined
+  readonly fetchImpl?: typeof fetch | undefined
   readonly onCredentialsInvalid?: (() => void) | undefined
   readonly onProtocolMismatch?: (() => void) | undefined
   readonly logger?: Pick<Console, 'warn'> | undefined
 }
+
+/** The gateway treats a broken transport and a bad handshake as the same close. */
+export const DIAGNOSE_AFTER_ATTEMPTS = 3
+export const DIAGNOSIS_MIN_INTERVAL_MS = 15_000
 
 /**
  * Owns the one WebSocket the phone uses for both the inbox and the currently
@@ -75,7 +81,16 @@ export class MobileClient {
   private readonly _detail: ToolCallDetailClient
   private readonly _notification = new Store<NotificationFrame | undefined>(undefined)
   private readonly _invalidFrame = new Store<ParseError | undefined>(undefined)
+  private readonly _reconnectAttempt = new Store<number>(0)
+  private readonly _connectionDiagnosis = new Store<ConnectionDiagnosis | undefined>(undefined)
   private readonly _logger: Pick<Console, 'warn'>
+  private readonly _timers: TimerApi | undefined
+  private readonly _fetchImpl: typeof fetch | undefined
+  private readonly _origin: string
+  private _diagnosisInFlight = false
+  private _lastDiagnosisAt = Number.NEGATIVE_INFINITY
+  /** Bumped whenever the socket reaches a terminal/success state; stale probes are dropped. */
+  private _connectionEpoch = 0
   private _currentRef: MobileSessionRef | undefined
   private _routeKey: string | undefined
   private _serverTimeOffsetMs = 0
@@ -85,12 +100,15 @@ export class MobileClient {
 
   constructor(options: MobileClientOptions) {
     this._logger = options.logger ?? console
+    this._timers = options.timers
+    this._fetchImpl = options.fetchImpl
+    this._origin = httpOriginForSocketUrl(options.url)
     this._commands = new CommandClient({
       send: (frame) => this._sendCommand(frame),
       timers: options.timers,
     })
     this._attachments = new AttachmentClient({
-      origin: httpOriginForSocketUrl(options.url),
+      origin: this._origin,
       token: options.credentials.token,
       onUnauthorized: options.onCredentialsInvalid,
     })
@@ -117,6 +135,7 @@ export class MobileClient {
         options.onCredentialsInvalid?.()
       },
       onProtocolMismatch: options.onProtocolMismatch,
+      onReconnectAttempt: (attempt) => this._handleReconnectAttempt(attempt),
     })
   }
 
@@ -139,6 +158,26 @@ export class MobileClient {
   /** Last frame the gateway sent that failed protocol validation, if any. */
   getInvalidFrameStore(): Store<ParseError | undefined> {
     return this._invalidFrame
+  }
+
+  /** Consecutive reconnect attempts; 0 while connected. */
+  getReconnectAttemptStore(): Store<number> {
+    return this._reconnectAttempt
+  }
+
+  /** HTTP verdict about the gateway, probed after repeated socket failures. */
+  getConnectionDiagnosisStore(): Store<ConnectionDiagnosis | undefined> {
+    return this._connectionDiagnosis
+  }
+
+  /** Skip the reconnect backoff; the diagnostic card's primary action. */
+  retryConnection(): void {
+    this._socket.retryNow()
+  }
+
+  /** Re-probe `/api/health` now, ignoring the throttle. */
+  retryDiagnosis(): void {
+    void this._diagnose(true)
   }
 
   /** VAPID public key from `hello_ok`; undefined when the gateway has no push. */
@@ -519,6 +558,8 @@ export class MobileClient {
   private _handleState(state: SocketState): void {
     this._socketState.setState(state)
     if (state === 'connected') {
+      this._connectionEpoch += 1
+      this._connectionDiagnosis.setState(undefined)
       // Reconnect: commands whose response was lost are retried verbatim; the
       // gateway answers mutating duplicates from its idempotency cache.
       this._commands.resendPending()
@@ -531,6 +572,41 @@ export class MobileClient {
           ...(this._notificationPrefs !== undefined ? { prefs: this._notificationPrefs } : {}),
         })
       }
+    } else if (state === 'invalid' || state === 'protocol_mismatch') {
+      this._connectionEpoch += 1
+      this._connectionDiagnosis.setState(undefined)
+    }
+  }
+
+  private _handleReconnectAttempt(attempt: number): void {
+    this._reconnectAttempt.setState(attempt)
+    if (attempt === 0) {
+      this._connectionDiagnosis.setState(undefined)
+      return
+    }
+    if (attempt < DIAGNOSE_AFTER_ATTEMPTS) return
+    const now = this._timers?.now() ?? Date.now()
+    if (now - this._lastDiagnosisAt < DIAGNOSIS_MIN_INTERVAL_MS) return
+    void this._diagnose()
+  }
+
+  private async _diagnose(force = false): Promise<void> {
+    if (this._diagnosisInFlight) return
+    const now = this._timers?.now() ?? Date.now()
+    if (!force && now - this._lastDiagnosisAt < DIAGNOSIS_MIN_INTERVAL_MS) return
+    this._diagnosisInFlight = true
+    this._lastDiagnosisAt = now
+    const epoch = this._connectionEpoch
+    try {
+      const diagnosis = await probeGatewayHealth(this._origin, {
+        fetchImpl: this._fetchImpl,
+      })
+      // A reconnect may have completed while the probe was in flight; showing
+      // its result then would contradict the connected UI.
+      if (epoch !== this._connectionEpoch) return
+      this._connectionDiagnosis.setState(diagnosis)
+    } finally {
+      this._diagnosisInFlight = false
     }
   }
 

@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { readFile, stat } from 'node:fs/promises'
+import { X509Certificate } from 'node:crypto'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https'
 import { hostname } from 'node:os'
@@ -20,7 +21,9 @@ import {
   MOBILE_ATTACHMENT_NAME_HEADER,
   MOBILE_ATTACHMENT_PATH_PREFIX,
   MOBILE_ATTACHMENT_UPLOAD_PATH,
+  MOBILE_CERT_PATH,
   MOBILE_CLOSE_CODES,
+  MOBILE_HEALTH_PATH,
   MOBILE_PAIR_PATH,
   MOBILE_PROTOCOL_VERSION,
   MOBILE_WS_PATH,
@@ -65,6 +68,11 @@ const CONTENT_SECURITY_POLICY =
   "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 const POLICY_VIOLATION_CLOSE = 1008
 const HSTS_VALUE = 'max-age=31536000'
+/** One diagnostic audit entry per reason/address per minute; retries are chatty. */
+const DIAGNOSTIC_AUDIT_INTERVAL_MS = 60_000
+const MAX_DIAGNOSTIC_AUDIT_KEYS = 256
+/** TLS error messages can embed a cert chain; keep the audit detail bounded. */
+const MAX_DIAGNOSTIC_DETAIL_LENGTH = 240
 
 export interface MobileGatewayTlsOptions {
   readonly cert: string
@@ -81,8 +89,13 @@ export interface MobileGatewayServerOptions {
   readonly audit: AuditLog
   readonly logger: ILogger
   readonly serverVersion: string
-  /** LAN tier: serve HTTPS with the gateway-managed self-signed pair. */
+  /** LAN tier: serve HTTPS with the gateway-managed certificate pair. */
   readonly tls?: MobileGatewayTlsOptions
+  /**
+   * Root CA in PEM (root-ca mode). Enables `GET /api/cert` so a phone can
+   * install the trust anchor; never exposed when `tls` is absent.
+   */
+  readonly caCertificate?: string
   readonly helloTimeoutMs?: number
   readonly heartbeatIntervalMs?: number
   readonly heartbeatTimeoutMs?: number
@@ -125,6 +138,7 @@ export class MobileGatewayServer {
   private _stopping = false
   private _port = 0
   private readonly _helloFailures: HelloFailureLimiter
+  private readonly _diagnosticAuditAt = new Map<string, number>()
 
   constructor(private readonly _options: MobileGatewayServerOptions) {
     this._allowedHosts = this._options.allowedHosts
@@ -199,9 +213,23 @@ export class MobileGatewayServer {
     })
     wss.on('error', (err) => this._options.logger.error('mobile gateway websocket error', err))
     httpServer.on('upgrade', (req, socket, head) => this._handleUpgrade(req, socket, head))
-    httpServer.on('clientError', (_err, socket) => {
+    httpServer.on('clientError', (err, socket) => {
+      this._options.logger.debug(
+        `mobile gateway client error: ${(err as NodeJS.ErrnoException).code ?? 'unknown'} ${err.message}`,
+      )
       socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
     })
+    if (tls !== undefined) {
+      // Without this listener a TLS failure is completely invisible: the phone
+      // never reaches HTTP, so neither the access route nor `hello` can log it.
+      ;(httpServer as HttpsServer).on('tlsClientError', (err, tlsSocket) => {
+        this._recordDiagnostic(
+          tlsSocket.remoteAddress ?? '',
+          'tls_handshake_failed',
+          `${(err as NodeJS.ErrnoException).code ?? 'unknown'}: ${err.message}`,
+        )
+      })
+    }
 
     this._httpServer = httpServer
     this._wss = wss
@@ -248,7 +276,7 @@ export class MobileGatewayServer {
     this._heartbeat = setInterval(() => this._heartbeatTick(), interval)
     this._heartbeat.unref?.()
     this._options.logger.info(
-      `listening on ${this._options.tls === undefined ? 'http' : 'https'}://${this._options.host}:${this._port} allowedHosts=${this._options.allowedHosts.join(',')}`,
+      `listening on ${this._options.tls === undefined ? 'http' : 'https'}://${this._options.host}:${this._port} allowedHosts=${this._allowedHosts.join(',')}`,
     )
     return { port: this._port }
   }
@@ -276,6 +304,7 @@ export class MobileGatewayServer {
     this._httpServer = undefined
     httpServer.closeAllConnections?.()
     await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+    this._diagnosticAuditAt.clear()
     this._stopping = false
     this._options.logger.info('stopped')
   }
@@ -309,6 +338,14 @@ export class MobileGatewayServer {
       return
     }
 
+    if (pathname === MOBILE_HEALTH_PATH) {
+      this._handleHealth(req, res)
+      return
+    }
+    if (pathname === MOBILE_CERT_PATH) {
+      this._handleCertificate(req, res)
+      return
+    }
     if (pathname === MOBILE_PAIR_PATH) {
       await this._handlePair(req, res)
       return
@@ -338,6 +375,57 @@ export class MobileGatewayServer {
       return
     }
     await this._handleStatic(req, res)
+  }
+
+  /**
+   * Unauthenticated same-origin probe the phone uses to tell "the PC is
+   * unreachable" apart from "the PC is reachable but the WebSocket is rejected".
+   * Host/Origin checks still apply; it exposes no device or session data.
+   */
+  private _handleHealth(req: IncomingMessage, res: ServerResponse): void {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      this._sendText(res, 405, 'Method Not Allowed', { Allow: 'GET, HEAD' })
+      return
+    }
+    this._sendJson(
+      res,
+      200,
+      {
+        status: 'ok',
+        serverVersion: this._options.serverVersion,
+        protocolVersion: MOBILE_PROTOCOL_VERSION,
+      },
+      req.method === 'HEAD',
+    )
+  }
+
+  /**
+   * Root CA download for the phone's trust store. Served only when the gateway
+   * actually runs root-ca mode over TLS; Host/Origin checks already ran.
+   */
+  private _handleCertificate(req: IncomingMessage, res: ServerResponse): void {
+    if (this._options.tls === undefined || this._options.caCertificate === undefined) {
+      this._sendJson(res, 404, { code: 'not_supported', message: 'root CA is not enabled' })
+      return
+    }
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      this._sendText(res, 405, 'Method Not Allowed', { Allow: 'GET, HEAD' })
+      return
+    }
+    let der: Buffer
+    try {
+      der = new X509Certificate(this._options.caCertificate).raw
+    } catch {
+      this._sendJson(res, 500, { code: 'internal', message: 'root CA is unreadable' })
+      return
+    }
+    this._applySecurityHeaders(res, 'no-store')
+    res.statusCode = 200
+    res.setHeader('Content-Type', 'application/x-x509-ca-cert')
+    res.setHeader('Content-Disposition', 'attachment; filename="universe-editor-root-ca.cer"')
+    res.setHeader('Content-Length', der.byteLength)
+    if (req.method === 'HEAD') res.end()
+    else res.end(der)
   }
 
   private async _handlePair(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -616,7 +704,7 @@ export class MobileGatewayServer {
 
   private _handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     if (this._stopping || this._wss === undefined || this._httpServer === undefined) {
-      rejectUpgrade(socket, 503, 'Service Unavailable')
+      this._rejectUpgrade(req, socket, 503, 'Service Unavailable', 'server_not_ready')
       return
     }
     const check = checkRequestHeaders(
@@ -624,27 +712,27 @@ export class MobileGatewayServer {
       this._allowedHosts,
     )
     if (!check.ok) {
-      rejectUpgrade(socket, 403, 'Forbidden')
+      this._rejectUpgrade(req, socket, 403, 'Forbidden', check.reason)
       return
     }
     let pathname: string
     try {
       pathname = new URL(req.url ?? '/', 'http://gateway.invalid').pathname
     } catch {
-      rejectUpgrade(socket, 400, 'Bad Request')
+      this._rejectUpgrade(req, socket, 400, 'Bad Request', 'bad_url')
       return
     }
     if (pathname !== MOBILE_WS_PATH) {
-      rejectUpgrade(socket, 404, 'Not Found')
+      this._rejectUpgrade(req, socket, 404, 'Not Found', 'bad_path')
       return
     }
     // Reject before the upgrade handshake so a blocked address never gets a socket.
     if (this._connections.size >= (this._options.maxTotalConnections ?? MAX_TOTAL_CONNECTIONS)) {
-      rejectUpgrade(socket, 503, 'Too Many Connections')
+      this._rejectUpgrade(req, socket, 503, 'Too Many Connections', 'connection_limit')
       return
     }
     if (this._helloFailures.isBlocked(req.socket.remoteAddress ?? '')) {
-      rejectUpgrade(socket, 429, 'Too Many Requests')
+      this._rejectUpgrade(req, socket, 429, 'Too Many Requests', 'hello_rate_limited')
       return
     }
     try {
@@ -1016,6 +1104,54 @@ export class MobileGatewayServer {
     timer.unref?.()
   }
 
+  private _rejectUpgrade(
+    req: IncomingMessage,
+    socket: Duplex,
+    status: number,
+    text: string,
+    reason: string,
+  ): void {
+    this._recordDiagnostic(
+      req.socket.remoteAddress ?? '',
+      'upgrade_rejected',
+      `${reason} status=${status} host=${req.headers.host ?? '-'} origin=${req.headers.origin ?? '-'}`,
+    )
+    rejectUpgrade(socket, status, text)
+  }
+
+  /**
+   * Connection failures before `hello` are invisible to the rest of the gateway
+   * (TLS handshake, Host/Origin rejection). Record them with a per-reason/address
+   * minute bucket so a reconnecting phone cannot flood the audit log.
+   */
+  private _recordDiagnostic(
+    remoteAddress: string,
+    action: 'tls_handshake_failed' | 'upgrade_rejected',
+    detail: string,
+  ): void {
+    const normalized =
+      detail.length > MAX_DIAGNOSTIC_DETAIL_LENGTH
+        ? `${detail.slice(0, MAX_DIAGNOSTIC_DETAIL_LENGTH)}…`
+        : detail
+    const key = `${action}|${remoteAddress}|${normalized}`
+    const now = Date.now()
+    const last = this._diagnosticAuditAt.get(key)
+    if (last !== undefined && now - last < DIAGNOSTIC_AUDIT_INTERVAL_MS) {
+      this._options.logger.debug(`${action} ${normalized} remote=${remoteAddress} (suppressed)`)
+      return
+    }
+    if (this._diagnosticAuditAt.size >= MAX_DIAGNOSTIC_AUDIT_KEYS) {
+      this._diagnosticAuditAt.clear()
+    }
+    this._diagnosticAuditAt.set(key, now)
+    this._options.logger.warn(`${action} ${normalized} remote=${remoteAddress}`)
+    void this._options.audit
+      .append({ remoteAddress, action, result: 'failure', detail: normalized })
+      .catch((err) =>
+        this._options.logger.error(`mobile gateway audit write failed (${action})`, err),
+      )
+  }
+
   private _sendFrame(ws: WebSocket, frame: ServerFrame): void {
     if (ws.readyState !== WebSocket.OPEN) return
     ws.send(serializeFrame(frame), (err) => {
@@ -1031,13 +1167,14 @@ export class MobileGatewayServer {
     this._sendFrame(ws, { type: 'server_error', code, message, retryable: false })
   }
 
-  private _sendJson(res: ServerResponse, status: number, payload: unknown): void {
+  private _sendJson(res: ServerResponse, status: number, payload: unknown, headOnly = false): void {
     const body = Buffer.from(JSON.stringify(payload), 'utf8')
     this._applySecurityHeaders(res, 'no-store')
     res.statusCode = status
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
     res.setHeader('Content-Length', body.byteLength)
-    res.end(body)
+    if (headOnly) res.end()
+    else res.end(body)
   }
 
   private _sendText(

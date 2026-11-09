@@ -10,7 +10,9 @@ import {
   type PushRegistrationLike,
 } from '../notifications/pushNotifications.js'
 import { FullscreenButton } from './FullscreenButton.js'
+import { ConnectionDiagnostic } from './ConnectionDiagnostic.js'
 import { useDocumentScrollLock } from './useDocumentScrollLock.js'
+import { useStore } from '../state/useStore.js'
 import {
   readSessionDisplayPreference,
   setSessionDisplayPreference,
@@ -51,6 +53,7 @@ type PushState = 'unknown' | 'disabled' | 'enabled'
 
 export function SettingsDrawer({ client, credentials, onClose, onUnpair }: SettingsDrawerProps) {
   useDocumentScrollLock(true)
+  const diagnosis = useStore(client.getConnectionDiagnosisStore())
   const [capability] = useState<NotificationCapability>(() => detectNotificationCapability())
   const [pushState, setPushState] = useState<PushState>('unknown')
   const [busy, setBusy] = useState(false)
@@ -210,6 +213,28 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
         <button type="button" className="button button--danger" onClick={onUnpair}>
           {strings.settingsUnpair}
         </button>
+
+        <section className="drawer__section" data-testid="connection-diagnostic-settings">
+          <h3 className="drawer__sectionTitle">{strings.connectionDiagnosticTitle}</h3>
+          {diagnosis === undefined ? (
+            <>
+              <p className="drawer__hint">{strings.connectionDiagnosticSettingsHint}</p>
+              <button
+                type="button"
+                className="button button--secondary"
+                onClick={() => client.retryDiagnosis()}
+              >
+                {strings.connectionDiagnosticRecheck}
+              </button>
+            </>
+          ) : (
+            <ConnectionDiagnostic
+              diagnosis={diagnosis}
+              onRetryConnection={() => client.retryConnection()}
+              onRecheck={() => client.retryDiagnosis()}
+            />
+          )}
+        </section>
 
         <section className="drawer__section" data-testid="appearance-settings">
           <h3 className="drawer__sectionTitle">{strings.appearanceSection}</h3>

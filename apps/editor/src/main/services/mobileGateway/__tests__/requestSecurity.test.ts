@@ -21,6 +21,17 @@ describe('buildAllowedHosts', () => {
     expect(allowed).toContain('pc2.example.com:8443')
   })
 
+  it('accepts the PC host name only with the port', () => {
+    const allowed = buildAllowedHosts({
+      bindHost: '192.0.2.10',
+      port: 47321,
+      localHostnames: ['Desktop-Test', 'desktop-test:1234'],
+    })
+    expect(allowed).toContain('desktop-test:47321')
+    expect(allowed).not.toContain('desktop-test')
+    expect(allowed).not.toContain('desktop-test:1234')
+  })
+
   it('normalizes host entries', () => {
     expect(normalizeHostEntry('  PC.Example.COM ')).toBe('pc.example.com')
     expect(normalizeHostEntry('https://PC.example.com:8443/pair')).toBe('pc.example.com:8443')

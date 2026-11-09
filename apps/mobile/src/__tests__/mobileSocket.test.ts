@@ -24,6 +24,7 @@ interface SocketHarness {
   readonly states: SocketState[]
   readonly frames: ServerFrame[]
   readonly invalidFrames: ParseError[]
+  readonly attempts: number[]
   readonly onCredentialsInvalid: ReturnType<typeof vi.fn>
   readonly onProtocolMismatch: ReturnType<typeof vi.fn>
   readonly logger: { warn: ReturnType<typeof vi.fn> }
@@ -35,6 +36,7 @@ function createHarness(): SocketHarness {
   const states: SocketState[] = []
   const frames: ServerFrame[] = []
   const invalidFrames: ParseError[] = []
+  const attempts: number[] = []
   const onCredentialsInvalid = vi.fn()
   const onProtocolMismatch = vi.fn()
   const logger = { warn: vi.fn() }
@@ -51,6 +53,7 @@ function createHarness(): SocketHarness {
     onStateChange: (state) => states.push(state),
     onFrame: (frame) => frames.push(frame),
     onInvalidFrame: (error) => invalidFrames.push(error),
+    onReconnectAttempt: (attempt) => attempts.push(attempt),
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -62,6 +65,7 @@ function createHarness(): SocketHarness {
     states,
     frames,
     invalidFrames,
+    attempts,
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -246,6 +250,30 @@ describe('MobileSocket reconnect backoff', () => {
     expect(harness.timers.pendingTimeoutDelays()).toEqual([RECONNECT_BASE_MS])
 
     trigger()
+    expect(harness.sockets).toHaveLength(2)
+    expect(harness.timers.pendingTimeoutDelays()).toEqual([])
+  })
+
+  it('reports consecutive attempts and resets after hello_ok', () => {
+    const harness = createHarness()
+    connect(harness)
+    expect(harness.attempts).toEqual([0])
+
+    currentSocket(harness).serverClose(1006)
+    expect(harness.attempts).toEqual([0, 1])
+    harness.timers.advance(RECONNECT_BASE_MS)
+    harness.sockets[1]!.serverOpen()
+    harness.sockets[1]!.serverSend(helloOk())
+    expect(harness.attempts).toEqual([0, 1, 0])
+  })
+
+  it('retryNow skips the backoff', () => {
+    const harness = createHarness()
+    connect(harness)
+    currentSocket(harness).serverClose(1006)
+    expect(harness.timers.pendingTimeoutDelays()).toEqual([RECONNECT_BASE_MS])
+
+    harness.socket.retryNow()
     expect(harness.sockets).toHaveLength(2)
     expect(harness.timers.pendingTimeoutDelays()).toEqual([])
   })

@@ -217,4 +217,29 @@ describe('buildOrigins and capabilities', () => {
     expect(origins.urls).toEqual(['http://192.0.2.10:47321'])
     expect(capabilitiesForOrigins(origins)).toEqual({ installable: false, push: false })
   })
+
+  it('offers the PC host name after the LAN IP without trusting it', () => {
+    const origins = buildOrigins({
+      bind: 'lan',
+      host: '192.0.2.10',
+      port: 47321,
+      secure: true,
+      allowedHosts: [],
+      localHostname: 'Desktop-Test',
+    })
+    expect(origins.urls).toEqual(['https://192.0.2.10:47321', 'https://desktop-test:47321'])
+    expect(capabilitiesForOrigins(origins)).toEqual({ installable: false, push: false })
+  })
+
+  it('does not offer the host-name origin over plain HTTP', () => {
+    const origins = buildOrigins({
+      bind: 'lan',
+      host: '192.0.2.10',
+      port: 47321,
+      secure: false,
+      allowedHosts: [],
+      localHostname: 'desktop-test',
+    })
+    expect(origins.urls).toEqual(['http://192.0.2.10:47321'])
+  })
 })

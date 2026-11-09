@@ -109,6 +109,45 @@ export const strings = {
   inboxVersionMismatch: '手机端与 PC 版本不一致，请刷新页面。',
   inboxRefresh: '刷新页面',
 
+  connectionDiagnosticTitle: '连接诊断',
+  connectionDiagnosticOrigin: '当前地址',
+  connectionDiagnosticRetry: '立即重试',
+  connectionDiagnosticRecheck: '重新检查',
+  connectionDiagnosticRefresh: '刷新页面',
+  connectionDiagnosticUnreachable: (origin: string): string => `无法访问 ${origin}`,
+  connectionDiagnosticUnreachableBody: '手机没有收到 PC 网关的 HTTP 响应。请依次检查：',
+  connectionDiagnosticHintSameNetwork: '手机和 PC 在同一个 Wi-Fi 或局域网。',
+  connectionDiagnosticHintLocalNetwork: 'iOS：设置 → 隐私与安全 → 本地网络，允许 Safari / Chrome。',
+  connectionDiagnosticHintVpn:
+    '关闭手机上的 VPN、代理和私人中继；使用 Tailscale 时先确认 PC 在线。',
+  connectionDiagnosticHintGateway:
+    'PC 上「手机设备」里的网关仍在运行，Windows 防火墙允许专用网络。',
+  connectionDiagnosticHintCertificate: '浏览器提示证书不受信任时，先在 Safari 中接受证书。',
+  connectionDiagnosticReachable: '已到达 PC，但 WebSocket 握手失败',
+  connectionDiagnosticReachableBody:
+    'HTTP 已连通，地址和网络基本正常。问题多半在证书信任或 WebSocket：',
+  connectionDiagnosticHintCertInstall:
+    '局域网档：在 iOS 安装并信任 PC 的根证书，或改用 Tailscale 档。',
+  connectionDiagnosticHintHostname: '使用主机名时，确认手机能把它解析到 PC 的局域网 IP。',
+  connectionDiagnosticHintRefresh: '刷新手机页面后再试。',
+  connectionDiagnosticHintTailscale: '长期使用建议改用 Tailscale 档，它提供受信任的 HTTPS 证书。',
+  connectionDiagnosticInstallCa: '下载 PC 根证书',
+  connectionDiagnosticInstallCaHint:
+    '需先在 PC 上启用「根证书」模式。iOS：Safari 下载后到「设置 → 通用 → VPN 与设备管理」安装，再到「关于本机 → 证书信任设置」开启完全信任。',
+  connectionDiagnosticForbidden: '已连接到 PC，但地址被拒绝',
+  connectionDiagnosticForbiddenBody:
+    'PC 网关不接受当前地址。请改用 PC 设置页显示的局域网 IP，或把该主机名加入允许列表。',
+  connectionDiagnosticNotFound: 'PC 网关版本过旧',
+  connectionDiagnosticNotFoundBody: '该网关不支持连接诊断接口。请更新 PC 上的编辑器。',
+  connectionDiagnosticHttpError: (status: number): string => `PC 返回了 HTTP ${status}`,
+  connectionDiagnosticHttpErrorBody: '网关已响应，但请求被拒绝。请查看 PC 上的「手机设备」日志。',
+  connectionDiagnosticInvalidResponse: 'PC 返回了非预期响应',
+  connectionDiagnosticInvalidResponseBody:
+    '可能被代理、门户页或其它服务拦截。请确认地址和端口指向 Universe Editor。',
+  connectionDiagnosticProtocolMismatch: 'PC 已更新，手机页面需要刷新',
+  connectionDiagnosticProtocolMismatchBody: '刷新页面不会丢失配对凭据。',
+  connectionDiagnosticSettingsHint: '检查手机能否通过 HTTP 到达 PC 网关；结果只显示在这台手机上。',
+
   sessionsTitle: '会话',
   sessionsEntry: '会话',
   sessionsBack: '返回收件箱',

@@ -640,6 +640,81 @@ input:focus-visible {
   background: var(--warning);
 }
 
+.connection-diagnostic {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.connection-diagnostic--ok {
+  border-color: color-mix(in srgb, var(--warning) 35%, var(--border));
+}
+
+.connection-diagnostic--protocol-mismatch {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.connection-diagnostic__title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.connection-diagnostic__body,
+.connection-diagnostic__origin {
+  margin: 0;
+  color: var(--muted);
+}
+
+.connection-diagnostic__origin {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.connection-diagnostic__hints {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.connection-diagnostic__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.connection-diagnostic__install {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.connection-diagnostic__link {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.connection-diagnostic__actions .button {
+  flex: 1 1 auto;
+}
+
+.drawer .connection-diagnostic {
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
 .inbox-groups--stale {
   opacity: 0.6;
 }

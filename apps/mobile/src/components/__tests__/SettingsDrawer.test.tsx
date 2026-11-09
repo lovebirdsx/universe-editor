@@ -21,6 +21,12 @@ function renderDrawer(): void {
     unsubscribePush: vi.fn(),
     setNotificationPrefs: vi.fn(),
     getVapidPublicKey: () => undefined,
+    getConnectionDiagnosisStore: () => ({
+      getState: () => undefined,
+      subscribe: () => () => undefined,
+    }),
+    retryDiagnosis: vi.fn(),
+    retryConnection: vi.fn(),
   } as unknown as MobileClient
   render(
     <SettingsDrawer

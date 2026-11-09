@@ -50,6 +50,7 @@ describe('parseMobileGatewayConfigFile', () => {
         lanAddress: '  192.0.2.20  ',
         port: 48000,
         allowedHosts: ['  pc.example.ts.net  '],
+        certificateMode: 'root-ca',
         vapidSubject: '  mailto:dev@example.com  ',
       }),
     ).toEqual({
@@ -60,6 +61,7 @@ describe('parseMobileGatewayConfigFile', () => {
         lanAddress: '192.0.2.20',
         port: 48000,
         allowedHosts: ['pc.example.ts.net'],
+        certificateMode: 'root-ca',
         vapidSubject: 'mailto:dev@example.com',
       },
     })
@@ -81,6 +83,7 @@ describe('parseMobileGatewayConfigFile', () => {
     [{ allowedHosts: [1] }, '"allowedHosts" contains an invalid host name'],
     [{ allowedHosts: [''] }, '"allowedHosts" contains an invalid host name'],
     [{ allowedHosts: 'pc.example.ts.net' }, '"allowedHosts" must be an array'],
+    [{ certificateMode: 'ca' }, '"certificateMode" must be "self-signed" or "root-ca"'],
     [{ vapidSubject: 'http://example.com' }, '"vapidSubject" must be an https'],
   ])('rejects invalid known fields: %j', (raw, message) => {
     const result = parseMobileGatewayConfigFile(raw)
@@ -117,10 +120,15 @@ describe('validateMobileGatewayConfigPatch', () => {
         enabled: undefined,
         lanAddress: '  192.0.2.20 ',
         allowedHosts: [' pc.example.ts.net '],
+        certificateMode: 'root-ca',
       }),
     ).toEqual({
       ok: true,
-      patch: { lanAddress: '192.0.2.20', allowedHosts: ['pc.example.ts.net'] },
+      patch: {
+        lanAddress: '192.0.2.20',
+        allowedHosts: ['pc.example.ts.net'],
+        certificateMode: 'root-ca',
+      },
     })
   })
 })
@@ -133,6 +141,10 @@ describe('mergeMobileGatewayConfig', () => {
     expect(mergeMobileGatewayConfig(base, { allowedHosts: [] })).toEqual({
       ...base,
       allowedHosts: [],
+    })
+    expect(mergeMobileGatewayConfig(base, { certificateMode: 'root-ca' })).toEqual({
+      ...base,
+      certificateMode: 'root-ca',
     })
   })
 })
@@ -153,6 +165,7 @@ describe('serializeMobileGatewayConfig', () => {
       'lanAddress',
       'port',
       'allowedHosts',
+      'certificateMode',
       'vapidSubject',
     ])
   })

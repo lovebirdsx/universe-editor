@@ -67,6 +67,8 @@ export interface MobileSocketOptions {
   /** Revoked / unauthorized credentials: the caller must clear local state. */
   readonly onCredentialsInvalid?: (() => void) | undefined
   readonly onProtocolMismatch?: (() => void) | undefined
+  /** Consecutive reconnect attempts; resets to 0 once `hello_ok` lands. */
+  readonly onReconnectAttempt?: ((attempt: number) => void) | undefined
   readonly logger?: Pick<Console, 'warn'> | undefined
 }
 
@@ -100,6 +102,7 @@ export class MobileSocket {
   private readonly _onVisibilityChange: ((visible: boolean) => void) | undefined
   private readonly _onCredentialsInvalid: (() => void) | undefined
   private readonly _onProtocolMismatch: (() => void) | undefined
+  private readonly _onReconnectAttempt: ((attempt: number) => void) | undefined
 
   private _socket: WebSocketLike | undefined
   private _state: SocketState = 'connecting'
@@ -138,6 +141,7 @@ export class MobileSocket {
     this._onVisibilityChange = options.onVisibilityChange
     this._onCredentialsInvalid = options.onCredentialsInvalid
     this._onProtocolMismatch = options.onProtocolMismatch
+    this._onReconnectAttempt = options.onReconnectAttempt
   }
 
   get state(): SocketState {
@@ -167,6 +171,11 @@ export class MobileSocket {
     this._clearReconnectTimer()
     this._stopHeartbeat()
     this._terminateSocket(1000, 'client stopped')
+  }
+
+  /** Skip the current backoff and redial; used by the connection diagnostic UI. */
+  retryNow(): void {
+    this._retryNow()
   }
 
   private _connect(): void {
@@ -255,6 +264,7 @@ export class MobileSocket {
 
   private _handleHelloOk(): void {
     this._reconnectAttempt = 0
+    this._onReconnectAttempt?.(0)
     this._startHeartbeat()
     this._setState('connected')
     this._sendClientState(typeof document === 'undefined' || document.visibilityState === 'visible')
@@ -300,6 +310,7 @@ export class MobileSocket {
       RECONNECT_JITTER_MIN + this._random() * (RECONNECT_JITTER_MAX - RECONNECT_JITTER_MIN)
     const delay = Math.min(RECONNECT_MAX_MS, Math.round(base * jitter))
     this._reconnectAttempt += 1
+    this._onReconnectAttempt?.(this._reconnectAttempt)
     this._reconnectTimer = this._timers.setTimeout(() => {
       this._reconnectTimer = undefined
       this._connect()

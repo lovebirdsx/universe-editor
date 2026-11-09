@@ -86,6 +86,16 @@ describe('mobile service worker push handling', () => {
     expect(SOURCE).toContain("'/theme-boot.js'")
   })
 
+  it('never intercepts the unauthenticated health probe', () => {
+    const worker = loadWorker()
+    const respondWith = vi.fn()
+    worker.listeners.get('fetch')!({
+      request: { url: 'https://pc.example.ts.net/api/health', method: 'GET', mode: 'cors' },
+      respondWith,
+    })
+    expect(respondWith).not.toHaveBeenCalled()
+  })
+
   it('shows an approval notification that stays on screen', async () => {
     const worker = loadWorker()
     await dispatchPush(worker.listeners, {
