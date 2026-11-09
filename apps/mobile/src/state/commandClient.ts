@@ -34,6 +34,8 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<MobileCommandKind, number>> = {
   deleteSideTask: 120_000,
   listWorkspaces: 10_000,
   listAgents: 10_000,
+  listSessionHistory: 20_000,
+  openSession: 120_000,
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000
@@ -65,6 +67,7 @@ export const MUTATING_COMMAND_KINDS: ReadonlySet<MobileCommandKind> = new Set([
   'createSideTask',
   'openSideTask',
   'deleteSideTask',
+  'openSession',
 ])
 
 export type CommandErrorCode =

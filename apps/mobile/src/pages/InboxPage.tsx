@@ -25,6 +25,7 @@ export interface InboxPageProps {
   readonly onDismissNotice: () => void
   readonly onNotice: (text: string) => void
   readonly onOpenSession: (sessionKey: string, focusPending: boolean) => void
+  readonly onOpenSessions: () => void
   readonly onNewSession: () => void
   readonly onUnpair: () => void
 }
@@ -36,6 +37,7 @@ export function InboxPage({
   onDismissNotice,
   onNotice,
   onOpenSession,
+  onOpenSessions,
   onNewSession,
   onUnpair,
 }: InboxPageProps) {
@@ -83,6 +85,7 @@ export function InboxPage({
       <StatusBar
         pcName={credentials.pcName}
         state={socketState}
+        onOpenSessions={onOpenSessions}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <main className="inbox-page__body">

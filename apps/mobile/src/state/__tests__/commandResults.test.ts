@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   isMobileRewindPreview,
   isMobileRewindResult,
+  isMobileSessionHistoryEntry,
+  isMobileSessionHistoryList,
   isMobileSessionRef,
   isMobileSessionRefResult,
   isMobileSideTaskList,
@@ -60,5 +62,31 @@ describe('command result guards', () => {
     expect(isMobileSideTaskList([])).toBe(true)
     expect(isMobileSideTaskList([row, { id: '' }])).toBe(false)
     expect(isMobileSideTaskList('nope')).toBe(false)
+  })
+
+  it('validates session history rows and lists', () => {
+    const row = {
+      durableId: 'durable-1',
+      windowId: 1,
+      agentId: 'echo',
+      agentName: 'Echo',
+      title: 'Session',
+      firstPrompt: 'Fix tests',
+      workspaceName: 'demo',
+      createdAt: 1,
+      lastUsedAt: 2,
+      pinned: true,
+    }
+    expect(isMobileSessionHistoryEntry(row)).toBe(true)
+    expect(isMobileSessionHistoryEntry({ ...row, durableId: '' })).toBe(false)
+    expect(isMobileSessionHistoryEntry({ ...row, windowId: -1 })).toBe(false)
+    expect(isMobileSessionHistoryEntry({ ...row, title: 1 })).toBe(false)
+    expect(isMobileSessionHistoryEntry({ ...row, firstPrompt: 1 })).toBe(false)
+    expect(isMobileSessionHistoryEntry({ ...row, lastUsedAt: Number.NaN })).toBe(false)
+    expect(isMobileSessionHistoryEntry({ ...row, pinned: 'yes' })).toBe(false)
+    expect(isMobileSessionHistoryList([row])).toBe(true)
+    expect(isMobileSessionHistoryList([])).toBe(true)
+    expect(isMobileSessionHistoryList([row, { durableId: 'x' }])).toBe(false)
+    expect(isMobileSessionHistoryList('nope')).toBe(false)
   })
 })

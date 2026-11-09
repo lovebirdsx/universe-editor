@@ -64,6 +64,8 @@ describe('CommandClient', () => {
     expect(COMMAND_TIMEOUT_MS.openSideTask).toBe(120_000)
     expect(COMMAND_TIMEOUT_MS.deleteSideTask).toBe(120_000)
     expect(COMMAND_TIMEOUT_MS.listWorkspaces).toBe(10_000)
+    expect(COMMAND_TIMEOUT_MS.listSessionHistory).toBe(20_000)
+    expect(COMMAND_TIMEOUT_MS.openSession).toBe(120_000)
 
     const { client, timers } = createHarness()
     const outcome = client.request('sendPrompt', { ref: {}, text: 'hi' }).catch((error) => error)
@@ -94,6 +96,8 @@ describe('CommandClient', () => {
     void client.request('deleteSideTask', { ref: {}, sideTaskId: 's' })
     void client.request('previewRewind', { ref: {}, messageId: 'm' })
     void client.request('listSideTasks', { ref: {} })
+    void client.request('openSession', { durableId: 'durable-1' })
+    void client.request('listSessionHistory', {})
     expect(sent[0]?.idempotencyKey).toBe('idem-1')
     expect(sent[1]?.idempotencyKey).toBeUndefined()
     for (const index of [2, 3, 4, 5, 6]) {
@@ -101,6 +105,8 @@ describe('CommandClient', () => {
     }
     expect(sent[7]?.idempotencyKey).toBeUndefined()
     expect(sent[8]?.idempotencyKey).toBeUndefined()
+    expect(sent[9]?.idempotencyKey).toBeTruthy()
+    expect(sent[10]?.idempotencyKey).toBeUndefined()
   })
 
   it('reuses the requestId and idempotency key when resending after a reconnect', () => {

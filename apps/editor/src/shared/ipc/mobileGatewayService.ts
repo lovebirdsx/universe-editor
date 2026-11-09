@@ -237,6 +237,26 @@ export interface MobileBridgeSessionSummary {
   readonly updatedAt: number
 }
 
+/**
+ * One session-history row as projected by a renderer. Main adds `windowId` and
+ * the workspace display name; live rows are merged on the phone from the inbox
+ * mirror, so this shape stays history-only.
+ */
+export interface MobileBridgeSessionHistoryEntry {
+  /** Agent-issued durable id (`sessionIdOnAgent`). */
+  readonly durableId: string
+  readonly agentId: string
+  readonly agentName?: string
+  readonly title: string
+  /** First content-bearing user prompt, already capped for the wire. */
+  readonly firstPrompt?: string
+  readonly cwd?: string
+  readonly authority?: string
+  readonly createdAt: number
+  readonly lastUsedAt: number
+  readonly pinned?: boolean
+}
+
 export interface MobileBridgeSessionSnapshot extends Omit<
   MobileSessionSnapshot,
   'seq' | 'summary'
@@ -348,6 +368,25 @@ export interface IMobileBridgeService {
 
   /** Current inbox rows for this window (no streaming state required). */
   listSessions(token?: CancellationToken): Promise<readonly MobileBridgeSessionSummary[]>
+
+  /**
+   * Resumable history rows owned by this window (side tasks, archived and
+   * never-messaged sessions excluded). Cheap: reads the in-memory history
+   * mirror, no agent round-trip.
+   */
+  listSessionHistory(token?: CancellationToken): Promise<readonly MobileBridgeSessionHistoryEntry[]>
+
+  /** True when this window's history can resume `durableId`; used for routing. */
+  hasSessionHistory(durableId: string, token?: CancellationToken): Promise<boolean>
+
+  /**
+   * Resume a history-only session without activating it in the PC window.
+   * Returns the live ref, or a protocol error when the row is unknown / foreign.
+   */
+  openSession(
+    durableId: string,
+    token?: CancellationToken,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>
 
   /** Full read-only state for one session. */
   getSnapshot(

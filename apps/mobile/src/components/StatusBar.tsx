@@ -20,10 +20,11 @@ export function statusText(state: SocketState): string {
 export interface StatusBarProps {
   readonly pcName: string
   readonly state: SocketState
+  readonly onOpenSessions: () => void
   readonly onOpenSettings: () => void
 }
 
-export function StatusBar({ pcName, state, onOpenSettings }: StatusBarProps) {
+export function StatusBar({ pcName, state, onOpenSessions, onOpenSettings }: StatusBarProps) {
   return (
     <header className="status-bar">
       <div className="status-bar__identity">
@@ -32,14 +33,24 @@ export function StatusBar({ pcName, state, onOpenSettings }: StatusBarProps) {
         </span>
         <span className={`status-bar__state status-bar__state--${state}`}>{statusText(state)}</span>
       </div>
-      <button
-        type="button"
-        className="status-bar__settings"
-        aria-label={strings.settings}
-        onClick={onOpenSettings}
-      >
-        {strings.settings}
-      </button>
+      <div className="status-bar__actions">
+        <button
+          type="button"
+          className="status-bar__link"
+          data-testid="open-sessions"
+          onClick={onOpenSessions}
+        >
+          {strings.sessionsEntry}
+        </button>
+        <button
+          type="button"
+          className="status-bar__link"
+          aria-label={strings.settings}
+          onClick={onOpenSettings}
+        >
+          {strings.settings}
+        </button>
+      </div>
     </header>
   )
 }

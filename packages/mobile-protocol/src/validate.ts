@@ -122,6 +122,8 @@ export const MAX_CURRENCY_LENGTH = 16
 export const MAX_PROMPT_LENGTH = 32 * 1024
 /** Whole-message quote cap for side tasks; mirrors the desktop selection cap. */
 export const MAX_SIDE_TASK_QUOTE_LENGTH = 8000
+/** First-prompt excerpt carried by a session-history row (search + secondary line). */
+export const MAX_HISTORY_PROMPT_LENGTH = 280
 export const MAX_FEEDBACK_LENGTH = 8 * 1024
 export const MAX_ELICITATION_CONTENT_KEYS = 128
 export const MAX_PUSH_ENDPOINT_LENGTH = 2048
@@ -548,10 +550,27 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseSideTaskIdPayload(value, 'deleteSideTask')
     case 'listWorkspaces':
     case 'listAgents':
+    case 'listSessionHistory':
       return parseEmptyPayload(value, kind)
+    case 'openSession':
+      return parseOpenSessionPayload(value)
     default:
       return ok(value)
   }
+}
+
+function parseOpenSessionPayload(value: unknown): Result<{ durableId: string; windowId?: number }> {
+  if (!isRecord(value)) return fail('bad_request', 'openSession.payload must be an object')
+  const durableId = value.durableId
+  if (!isNonEmptyBoundedString(durableId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `openSession.durableId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  const windowId = value.windowId
+  if (windowId === undefined) return ok({ durableId })
+  if (!isNonNegativeInteger(windowId)) {
+    return fail('bad_request', 'openSession.windowId must be a non-negative integer')
+  }
+  return ok({ durableId, windowId })
 }
 
 function parseRefOnlyPayload(value: unknown, kind: string): Result<{ ref: MobileSessionRef }> {

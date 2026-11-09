@@ -12,6 +12,7 @@ import type {
   MobileBridgeNewSessionResult,
   MobileBridgeResult,
   MobileBridgeSessionEvent,
+  MobileBridgeSessionHistoryEntry,
   MobileBridgeSessionSnapshot,
   MobileBridgeSessionSummary,
 } from '../../../../shared/ipc/mobileGatewayService.js'
@@ -43,6 +44,16 @@ class FakeBridge implements IMobileBridgeService {
   readonly startAttention = vi.fn(async () => {})
   readonly stopAttention = vi.fn(async () => {})
   readonly listSessions = vi.fn(async () => this.sessions)
+  readonly listSessionHistory = vi.fn(async () => this.history)
+  readonly hasSessionHistory = vi.fn(async (durableId: string) =>
+    this.history.some((entry) => entry.durableId === durableId),
+  )
+  readonly openSession = vi.fn(
+    async (_durableId: string): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> => ({
+      ok: true,
+      value: { localId: 'resumed-local', durableId: 'resumed-durable' },
+    }),
+  )
   readonly getSnapshot = vi.fn(async (localId: string) => this.snapshots.get(localId))
   readonly getToolCallDetail = vi.fn(async () => this.detail)
   readonly ping = vi.fn(async () => 'pong' as const)
@@ -98,6 +109,7 @@ class FakeBridge implements IMobileBridgeService {
   readonly listAgents = vi.fn(async (): Promise<readonly MobileAgentCandidate[]> => [])
 
   sessions: MobileBridgeSessionSummary[] = []
+  history: MobileBridgeSessionHistoryEntry[] = []
   snapshots = new Map<string, MobileBridgeSessionSnapshot>()
   detail: Awaited<ReturnType<IMobileBridgeService['getToolCallDetail']>> = undefined
 
@@ -144,6 +156,22 @@ function summary(
     hasPendingElicitation: false,
     backgroundTaskCount: 0,
     updatedAt: 1,
+    ...overrides,
+  }
+}
+
+function historyRow(
+  durableId: string,
+  overrides: Partial<MobileBridgeSessionHistoryEntry> = {},
+): MobileBridgeSessionHistoryEntry {
+  return {
+    durableId,
+    agentId: 'fake',
+    agentName: 'Fake Agent',
+    title: `History ${durableId}`,
+    firstPrompt: 'first prompt',
+    createdAt: 1,
+    lastUsedAt: 1,
     ...overrides,
   }
 }
@@ -800,6 +828,242 @@ describe('MobileGatewayHub commands', () => {
     }
     expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', 'hello')
     expect(bridge.resolveElicitation).toHaveBeenCalledWith('s1', 'e1', 'accept', { name: 'Ada' })
+  })
+
+  it('aggregates history across windows, dedupes durable ids and stamps window facts', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const first = new FakeBridge()
+    const second = new FakeBridge()
+    first.history = [
+      historyRow('d1', { title: 'A', lastUsedAt: 10 }),
+      historyRow('d2', { pinned: true, lastUsedAt: 5 }),
+    ]
+    second.history = [historyRow('d1', { title: 'A newer', lastUsedAt: 20 })]
+    hub.registerWindow(1, first, () => 'workspace-a')
+    hub.registerWindow(2, second, () => 'workspace-b')
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'history',
+      kind: 'listSessionHistory',
+      payload: {},
+    })
+
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'history',
+      ok: true,
+      result: [
+        {
+          durableId: 'd2',
+          windowId: 1,
+          agentId: 'fake',
+          agentName: 'Fake Agent',
+          title: 'History d2',
+          firstPrompt: 'first prompt',
+          workspaceName: 'workspace-a',
+          createdAt: 1,
+          lastUsedAt: 5,
+          pinned: true,
+        },
+        {
+          durableId: 'd1',
+          windowId: 2,
+          agentId: 'fake',
+          agentName: 'Fake Agent',
+          title: 'A newer',
+          firstPrompt: 'first prompt',
+          workspaceName: 'workspace-b',
+          createdAt: 1,
+          lastUsedAt: 20,
+        },
+      ],
+    })
+  })
+
+  it('returns the live ref for a history id without resuming it again', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('live-1', { durableId: 'd1' })]
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+    connection.frames.length = 0
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open',
+      kind: 'openSession',
+      payload: { durableId: 'd1', windowId: 1 },
+    })
+
+    expect(bridge.openSession).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'open',
+      ok: true,
+      result: { ref: { windowId: 1, localId: 'live-1', durableId: 'd1' } },
+    })
+  })
+
+  it('routes a history-only session to its owning window and rejects unknown ids', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const first = new FakeBridge()
+    const second = new FakeBridge()
+    second.history = [historyRow('d1')]
+    hub.registerWindow(1, first)
+    hub.registerWindow(2, second)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open',
+      kind: 'openSession',
+      payload: { durableId: 'd1' },
+    })
+    expect(first.openSession).not.toHaveBeenCalled()
+    expect(second.openSession).toHaveBeenCalledWith('d1', expect.anything())
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'open',
+      ok: true,
+      result: {
+        ref: { windowId: 2, localId: 'resumed-local', durableId: 'resumed-durable' },
+      },
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'missing',
+      kind: 'openSession',
+      payload: { durableId: 'missing' },
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'missing',
+      ok: false,
+      error: 'session_not_found',
+    })
+  })
+
+  it('drops malformed history rows instead of failing the whole list', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.history = [
+      historyRow('d1'),
+      historyRow(''),
+      historyRow('d2', { agentId: '' }),
+      historyRow('d3', { createdAt: Number.NaN }),
+      historyRow('d4', { lastUsedAt: Number.POSITIVE_INFINITY }),
+    ]
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'history',
+      kind: 'listSessionHistory',
+      payload: {},
+    })
+
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({
+      requestId: 'history',
+      ok: true,
+      result: [{ durableId: 'd1' }],
+    })
+  })
+
+  it('falls back to another owner window and audits the actual window', async () => {
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const hinted = new FakeBridge()
+    const owner = new FakeBridge()
+    hinted.history = [historyRow('d1')]
+    owner.history = [historyRow('d1')]
+    hinted.openSession.mockResolvedValueOnce({
+      ok: false,
+      code: 'session_not_found',
+      message: 'session not found',
+    })
+    hub.registerWindow(1, hinted)
+    hub.registerWindow(2, owner)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'open',
+        kind: 'openSession',
+        payload: { durableId: 'd1', windowId: 1 },
+      },
+      audit,
+    )
+
+    expect(hinted.openSession).toHaveBeenCalledTimes(1)
+    expect(owner.openSession).toHaveBeenCalledTimes(1)
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({
+      ok: true,
+      result: { ref: { windowId: 2, localId: 'resumed-local' } },
+    })
+    expect(audit.record).toHaveBeenCalledWith(
+      'openSession',
+      'success',
+      'window=2 local=resumed-local',
+    )
+  })
+
+  it('dedupes concurrent resumes of the same durable id', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.history = [historyRow('d1')]
+    let release!: (value: MobileBridgeResult<MobileBridgeNewSessionResult>) => void
+    bridge.openSession.mockImplementationOnce(
+      () =>
+        new Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>((resolve) => {
+          release = resolve
+        }),
+    )
+    hub.registerWindow(1, bridge)
+    const first = makeConnection()
+    const second = makeConnection()
+    hub.addConnection(first)
+    hub.addConnection(second)
+
+    const firstRun = hub.handleCommand(first, {
+      type: 'command',
+      requestId: 'a',
+      kind: 'openSession',
+      payload: { durableId: 'd1' },
+    })
+    const secondRun = hub.handleCommand(second, {
+      type: 'command',
+      requestId: 'b',
+      kind: 'openSession',
+      payload: { durableId: 'd1' },
+    })
+    await tick()
+    expect(bridge.openSession).toHaveBeenCalledTimes(1)
+
+    release({ ok: true, value: { localId: 'local-x', durableId: 'd1' } })
+    await Promise.all([firstRun, secondRun])
+    expect(framesOf(first, 'command_result').at(-1)).toMatchObject({ requestId: 'a', ok: true })
+    expect(framesOf(second, 'command_result').at(-1)).toMatchObject({ requestId: 'b', ok: true })
+
+    await hub.handleCommand(first, {
+      type: 'command',
+      requestId: 'c',
+      kind: 'openSession',
+      payload: { durableId: 'd1' },
+    })
+    expect(bridge.openSession).toHaveBeenCalledTimes(2)
   })
 
   it('routes fork, rewind and side-task commands and stamps created refs', async () => {

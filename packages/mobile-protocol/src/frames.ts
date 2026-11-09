@@ -361,6 +361,8 @@ export const MOBILE_COMMAND_KINDS = [
   'deleteSideTask',
   'listWorkspaces',
   'listAgents',
+  'listSessionHistory',
+  'openSession',
 ] as const
 export type MobileCommandKind = (typeof MOBILE_COMMAND_KINDS)[number]
 
@@ -473,6 +475,42 @@ export interface OpenSideTaskPayload {
 export interface DeleteSideTaskPayload {
   ref: MobileSessionRef
   sideTaskId: string
+}
+
+/**
+ * One history row in the phone's session catalog. Live rows are merged on the
+ * phone from the inbox mirror; this shape describes a session the PC window no
+ * longer keeps resident but can `session/load` again.
+ */
+export interface MobileSessionHistoryEntry {
+  /** Agent-issued durable id (`sessionIdOnAgent`). */
+  durableId: string
+  /** Open PC window whose renderer owns this history bucket. */
+  windowId: number
+  agentId: string
+  agentName?: string
+  title: string
+  /** First content-bearing user prompt, capped for search / a secondary line. */
+  firstPrompt?: string
+  /** Main-owned display name of the owning window's workspace. */
+  workspaceName: string
+  cwd?: string
+  authority?: string
+  /** Epoch milliseconds. */
+  createdAt: number
+  /** Epoch milliseconds. */
+  lastUsedAt: number
+  pinned?: boolean
+}
+
+export interface OpenSessionPayload {
+  /** Durable id from `MobileSessionHistoryEntry`. */
+  durableId: string
+  /**
+   * Owning window from the catalog. A routing hint only: the gateway verifies
+   * the window's history still contains the session before resuming.
+   */
+  windowId?: number
 }
 
 export interface CommandFrame {

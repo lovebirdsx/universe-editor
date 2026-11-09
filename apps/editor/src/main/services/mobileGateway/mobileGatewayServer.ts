@@ -879,6 +879,7 @@ export class MobileGatewayServer {
         'inbox',
         'commands',
         'notifications',
+        'history',
         ...(this._options.attachments !== undefined ? ['attachments'] : []),
       ],
       ...(this._options.vapidPublicKey !== undefined

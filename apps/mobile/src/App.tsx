@@ -1,5 +1,5 @@
 import type { MobileSessionRef } from '@universe-editor/mobile-protocol'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NotificationToast } from './components/NotificationToast.js'
 import { Spinner } from './components/Spinner.js'
 import {
@@ -11,10 +11,14 @@ import { GuidePage } from './pages/GuidePage.js'
 import { InboxPage } from './pages/InboxPage.js'
 import { NewSessionPage } from './pages/NewSessionPage.js'
 import { PairPage } from './pages/PairPage.js'
+import { SessionsPage } from './pages/SessionsPage.js'
 import {
   leaveSession,
+  leaveSessions,
   navigateToNewSession,
   navigateToSession,
+  navigateToSessions,
+  pushMobileRoute,
   readRoute,
   type Route,
 } from './routing.js'
@@ -41,6 +45,20 @@ export function App() {
   // Ref returned by a fork / side-task command; the session route resolves it
   // directly instead of waiting for the inbox mirror to catch up.
   const [pendingRef, setPendingRef] = useState<MobileSessionRef | undefined>(undefined)
+  // Sessions opened from the catalog go back there; inbox rows go back to the inbox.
+  const [sessionOrigin, setSessionOrigin] = useState<'inbox' | 'sessions'>('inbox')
+  const sessionsScrollRef = useRef(0)
+  // A catalog page kept mounted behind its session keeps search, filter and rows.
+  const keepSessionsPage =
+    route.name === 'sessions' || (route.name === 'session' && sessionOrigin === 'sessions')
+
+  useEffect(() => {
+    if (route.name !== 'sessions' || sessionsScrollRef.current === 0) return
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo(0, sessionsScrollRef.current)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [route.name])
 
   useEffect(() => {
     let cancelled = false
@@ -79,7 +97,9 @@ export function App() {
       }
       const next = readRoute(url.pathname)
       if (next.name !== 'session') return
-      window.history.replaceState({ mobile: true }, '', `${url.pathname}${url.search}`)
+      // `pushState`, not replace: the inbox entry must stay below so the
+      // session's back button can return to it on a single-entry cold start.
+      pushMobileRoute(`${url.pathname}${url.search}`)
       setPendingRef(undefined)
       setFocusPending(url.searchParams.get('focus') === 'pending')
       setRoute(next)
@@ -120,20 +140,39 @@ export function App() {
 
   const openSession = (sessionKey: string, pending = false): void => {
     setPendingRef(undefined)
+    setSessionOrigin('inbox')
     navigateToSession(sessionKey)
     setFocusPending(pending)
     setRoute(readRoute(window.location.pathname))
   }
 
   const openSessionRef = (ref: MobileSessionRef): void => {
+    if (route.name === 'sessions') {
+      sessionsScrollRef.current = window.scrollY
+      setSessionOrigin('sessions')
+    }
     setPendingRef(ref)
     setFocusPending(false)
     navigateToSession(sessionRouteKey(ref))
     setRoute(readRoute(window.location.pathname))
   }
 
+  const openSessions = (): void => {
+    setPendingRef(undefined)
+    setFocusPending(false)
+    navigateToSessions()
+    setRoute(readRoute(window.location.pathname))
+  }
+
+  const leaveSessionsPage = (): void => {
+    setPendingRef(undefined)
+    sessionsScrollRef.current = 0
+    leaveSessions()
+  }
+
   const openNewSession = (): void => {
     setPendingRef(undefined)
+    setSessionOrigin('inbox')
     navigateToNewSession()
     setFocusPending(false)
     setRoute(readRoute(window.location.pathname))
@@ -146,8 +185,14 @@ export function App() {
     setRoute({ name: 'inbox' })
   }
 
+  const leaveSessionPage = (): void => {
+    setPendingRef(undefined)
+    setFocusPending(false)
+    leaveSession()
+  }
+
   const finishSession = (action: 'closed' | 'removed'): void => {
-    backToInbox()
+    leaveSessionPage()
     setNotice(action === 'closed' ? strings.sessionCloseNotice : strings.sessionRemovedNotice)
   }
 
@@ -195,6 +240,12 @@ export function App() {
     <NotificationToast
       client={client}
       onOpen={(sessionKey, pending) => {
+        if (route.name === 'sessions') {
+          sessionsScrollRef.current = window.scrollY
+          setSessionOrigin('sessions')
+        } else if (route.name !== 'session') {
+          setSessionOrigin('inbox')
+        }
         setPendingRef(undefined)
         setFocusPending(pending)
         navigateToSession(sessionKey)
@@ -203,44 +254,29 @@ export function App() {
     />
   )
 
-  if (route.name === 'session') {
-    return (
-      <>
-        {overlay}
-        <SessionPage
-          key={route.sessionKey}
-          client={client}
-          sessionKey={route.sessionKey}
-          initialRef={pendingRef}
-          onOpenSessionRef={openSessionRef}
-          focusPending={focusPending}
-          onBack={backToInbox}
-          onFinished={finishSession}
-        />
-      </>
-    )
-  }
-
-  if (route.name === 'new-session') {
-    return (
-      <>
-        {overlay}
-        <NewSessionPage
-          client={client}
-          onBack={backToInbox}
-          onCreated={(sessionKey) => {
-            setPendingRef(undefined)
-            setFocusPending(false)
-            setRoute({ name: 'session', sessionKey })
-          }}
-        />
-      </>
-    )
-  }
-
-  return (
-    <>
-      {overlay}
+  const page =
+    route.name === 'session' ? (
+      <SessionPage
+        key={route.sessionKey}
+        client={client}
+        sessionKey={route.sessionKey}
+        initialRef={pendingRef}
+        onOpenSessionRef={openSessionRef}
+        focusPending={focusPending}
+        onBack={leaveSessionPage}
+        onFinished={finishSession}
+      />
+    ) : route.name === 'new-session' ? (
+      <NewSessionPage
+        client={client}
+        onBack={backToInbox}
+        onCreated={(sessionKey) => {
+          setPendingRef(undefined)
+          setFocusPending(false)
+          setRoute({ name: 'session', sessionKey })
+        }}
+      />
+    ) : route.name === 'sessions' ? null : (
       <InboxPage
         client={client}
         credentials={credentials}
@@ -248,9 +284,28 @@ export function App() {
         onDismissNotice={() => setNotice(undefined)}
         onNotice={setNotice}
         onOpenSession={openSession}
+        onOpenSessions={openSessions}
         onNewSession={openNewSession}
         onUnpair={unpair}
       />
+    )
+
+  return (
+    <>
+      {overlay}
+      {keepSessionsPage && (
+        <div className={route.name === 'sessions' ? 'page-layer' : 'page-layer page-layer--hidden'}>
+          <SessionsPage
+            client={client}
+            active={route.name === 'sessions'}
+            notice={notice}
+            onDismissNotice={() => setNotice(undefined)}
+            onBack={leaveSessionsPage}
+            onOpenSessionRef={openSessionRef}
+          />
+        </div>
+      )}
+      {page}
     </>
   )
 }

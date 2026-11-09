@@ -257,7 +257,7 @@ describe('mobile gateway server integration', () => {
       type: 'hello_ok',
       deviceId: paired.deviceId,
       serverVersion: '0.0.0-test',
-      capabilities: ['inbox', 'commands', 'notifications'],
+      capabilities: ['inbox', 'commands', 'notifications', 'history'],
     })
     expect(ok.type === 'hello_ok' ? ok.serverTime : 0).toBeGreaterThan(0)
 
@@ -521,7 +521,7 @@ describe('mobile gateway server integration', () => {
     const ok = await hello(ws, paired.token)
     expect(ok).toMatchObject({
       type: 'hello_ok',
-      capabilities: ['inbox', 'commands', 'notifications'],
+      capabilities: ['inbox', 'commands', 'notifications', 'history'],
       vapidPublicKey: 'vapid-public-key',
     })
   })
@@ -808,7 +808,7 @@ describe('mobile gateway attachment api', () => {
     const ok = await hello(ws, paired.token)
     expect(ok).toMatchObject({
       type: 'hello_ok',
-      capabilities: ['inbox', 'commands', 'notifications', 'attachments'],
+      capabilities: ['inbox', 'commands', 'notifications', 'history', 'attachments'],
     })
 
     const bare = await startGateway()
@@ -818,7 +818,7 @@ describe('mobile gateway attachment api', () => {
     const bareOk = await hello(bareWs, barePaired.token)
     expect(bareOk).toMatchObject({
       type: 'hello_ok',
-      capabilities: ['inbox', 'commands', 'notifications'],
+      capabilities: ['inbox', 'commands', 'notifications', 'history'],
     })
     const refused = await fetch(`${bare.base}/api/attachments`, {
       method: 'POST',

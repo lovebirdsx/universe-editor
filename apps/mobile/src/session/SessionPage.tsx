@@ -2,7 +2,7 @@ import type { MobileSessionRef, MobileTimelineMessageItem } from '@universe-edit
 import { useEffect, useRef, useState } from 'react'
 import { Spinner } from '../components/Spinner.js'
 import type { MobileClient } from '../state/mobileClient.js'
-import { sessionRouteKey } from '../state/refs.js'
+import { parseSessionRouteKey, sessionRouteKey } from '../state/refs.js'
 import type { PermissionClearedInfo } from '../state/sessionStore.js'
 import { useStore } from '../state/useStore.js'
 import { commandErrorText, strings } from '../strings.js'
@@ -38,7 +38,7 @@ export interface SessionPageProps {
   readonly initialRef?: MobileSessionRef | undefined
   readonly onOpenSessionRef?: ((ref: MobileSessionRef) => void) | undefined
   readonly onBack: () => void
-  /** Close/remove succeeded: the app returns to the inbox with a notice. */
+  /** Close/remove succeeded: return to wherever the session was opened, with a notice. */
   readonly onFinished: (action: 'closed' | 'removed') => void
   /** Inbox "待审批" rows ask the page to reveal the pending card immediately. */
   readonly focusPending?: boolean | undefined
@@ -87,8 +87,17 @@ export function SessionPage({
   const [rewindMessageId, setRewindMessageId] = useState<string | undefined>(undefined)
   const [sideTasksOpen, setSideTasksOpen] = useState(false)
   const [prefill, setPrefill] = useState<ComposerPrefill | undefined>(undefined)
+  const [reopening, setReopening] = useState(false)
   const handledCleared = useRef<PermissionClearedInfo | undefined>(undefined)
   const footerRef = useRef<HTMLDivElement | null>(null)
+  const aliveRef = useRef(true)
+
+  useEffect(() => {
+    aliveRef.current = true
+    return () => {
+      aliveRef.current = false
+    }
+  }, [])
 
   // Switching sessions must not leave the previous session's menu open.
   useEffect(() => {
@@ -201,6 +210,32 @@ export function SessionPage({
     openRef(ref)
   }
 
+  const durableId =
+    state.ref?.durableId ??
+    (parseSessionRouteKey(sessionKey) === undefined ? sessionKey : undefined)
+
+  // Deep links and closed inbox rows can point at a durable id the PC still
+  // knows; resume it without activating the PC window, then re-subscribe.
+  const reopenSession = async (): Promise<void> => {
+    if (durableId === undefined || reopening || !online) return
+    setReopening(true)
+    try {
+      const result = await client.resumeSession(durableId, state.ref?.windowId)
+      if (!aliveRef.current) return
+      if (onOpenSessionRef !== undefined && sessionRouteKey(result.ref) !== sessionKey) {
+        onOpenSessionRef(result.ref)
+      } else {
+        client.openSessionRef(result.ref)
+      }
+    } catch (err) {
+      if (!aliveRef.current) return
+      const code = errorCode(err)
+      notice(code === undefined ? strings.sessionReopenFailed : commandErrorText(code))
+    } finally {
+      if (aliveRef.current) setReopening(false)
+    }
+  }
+
   const style = viewportHeight === undefined ? undefined : { height: `${viewportHeight}px` }
 
   if (state.removed) {
@@ -218,9 +253,19 @@ export function SessionPage({
         <main className="session-removed">
           <h2 className="session-removed__title">{strings.sessionRemovedTitle}</h2>
           <p className="muted">{strings.sessionRemovedBody}</p>
-          <button type="button" className="button button--primary" onClick={onBack}>
-            {strings.sessionBackToInbox}
-          </button>
+          <div className="session-removed__actions">
+            {durableId !== undefined && (
+              <button
+                type="button"
+                className="button button--primary"
+                data-testid="session-reopen"
+                disabled={reopening || !online}
+                onClick={() => void reopenSession()}
+              >
+                {reopening ? strings.sessionReopening : strings.sessionReopen}
+              </button>
+            )}
+          </div>
         </main>
       </div>
     )

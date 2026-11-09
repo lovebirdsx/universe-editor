@@ -13,6 +13,7 @@ import type {
   MobilePushSubscription,
   MobileRewindPreview,
   MobileRewindResult,
+  MobileSessionHistoryEntry,
   MobileSessionRef,
   MobileSessionRefResult,
   MobileSideTaskSummary,
@@ -35,6 +36,7 @@ import { AttachmentClient, httpOriginForSocketUrl } from './attachmentClient.js'
 import {
   isMobileRewindPreview,
   isMobileRewindResult,
+  isMobileSessionHistoryList,
   isMobileSessionRefResult,
   isMobileSideTaskList,
 } from './commandResults.js'
@@ -453,6 +455,27 @@ export class MobileClient {
       {
         validateResult: (value) => Array.isArray(value),
       },
+    )
+  }
+
+  /** Resumable history rows from every open PC window. */
+  async listSessionHistory(): Promise<readonly MobileSessionHistoryEntry[]> {
+    return this._commands.request<readonly MobileSessionHistoryEntry[]>(
+      'listSessionHistory',
+      {},
+      { validateResult: isMobileSessionHistoryList },
+    )
+  }
+
+  /** Resume a history-only session without activating it on the PC. */
+  async resumeSession(durableId: string, windowId?: number): Promise<MobileSessionRefResult> {
+    return this._commands.request<MobileSessionRefResult>(
+      'openSession',
+      {
+        durableId,
+        ...(windowId !== undefined ? { windowId } : {}),
+      },
+      { validateResult: isMobileSessionRefResult },
     )
   }
 

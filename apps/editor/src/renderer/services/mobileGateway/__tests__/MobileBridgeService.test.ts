@@ -10,8 +10,10 @@ import {
   DeferredPromise,
   Emitter,
   Event,
+  normalizePlatform,
   observableValue,
   URI,
+  UriIdentityService,
   type IEditorGroupsService,
   type ILogger,
   type ILoggerService,
@@ -268,6 +270,7 @@ function makeHarness(): {
     historyService,
     registry,
     workspace,
+    new UriIdentityService(normalizePlatform('linux')),
     editorGroups,
     userSettings,
     loggerService,
@@ -1241,6 +1244,97 @@ describe('MobileBridgeService fork / rewind / side tasks', () => {
       ...overrides,
     } as unknown as AcpSessionHistoryEntry
   }
+
+  it('projects resumable history rows, hiding archived, side-task and empty ones', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+    harness.history.set(
+      [
+        historyEntry('d1', {
+          title: 'Fix login',
+          firstPrompt: '  fix the login flow  ',
+          cwd: '/workspace/demo',
+          createdAt: 10,
+          lastUsedAt: 20,
+        }),
+        historyEntry('d2', {
+          title: 'Pinned',
+          cwd: '/workspace/demo/sub',
+          pinned: true,
+          lastUsedAt: 5,
+        }),
+        historyEntry('d3', { archived: true }),
+        historyEntry('d4', { hasMessages: false }),
+        historyEntry('d5', { sideTaskOf: 'd1' }),
+        historyEntry('d6', { cwd: '/other/project' }),
+        historyEntry('d7'),
+      ],
+      undefined,
+    )
+
+    const rows = await harness.service.listSessionHistory()
+
+    expect(rows.map((row) => row.durableId)).toStrictEqual(['d2', 'd1', 'd7'])
+    expect(rows[1]).toStrictEqual({
+      durableId: 'd1',
+      agentId: 'fake',
+      agentName: 'Fake Agent',
+      title: 'Fix login',
+      firstPrompt: 'fix the login flow',
+      cwd: '/workspace/demo',
+      createdAt: 10,
+      lastUsedAt: 20,
+    })
+    expect(rows[0]).toMatchObject({ pinned: true, cwd: '/workspace/demo/sub' })
+  })
+
+  it('answers history ownership and resumes without activating the PC window', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+    harness.history.set(
+      [
+        historyEntry('d1', { cwd: '/workspace/demo' }),
+        historyEntry('d2', { cwd: '/other/project' }),
+        historyEntry('d3', { archived: true }),
+        historyEntry('d4', { hasMessages: false }),
+        historyEntry('d5', { sideTaskOf: 'd1' }),
+      ],
+      undefined,
+    )
+    expect(await harness.service.hasSessionHistory('d1')).toBe(true)
+    expect(await harness.service.hasSessionHistory('missing')).toBe(false)
+    expect(await harness.service.hasSessionHistory('d2')).toBe(false)
+    expect(await harness.service.hasSessionHistory('d3')).toBe(false)
+    expect(await harness.service.hasSessionHistory('d4')).toBe(false)
+    expect(await harness.service.hasSessionHistory('d5')).toBe(false)
+
+    harness.resumeSession.mockResolvedValueOnce(fakeResultSession('local-1', 'd1'))
+    await expect(harness.service.openSession('d1')).resolves.toStrictEqual({
+      ok: true,
+      value: { localId: 'local-1', durableId: 'd1' },
+    })
+    expect(harness.resumeSession).toHaveBeenCalledWith('d1', { activate: false })
+
+    await expect(harness.service.openSession('d2')).resolves.toMatchObject({
+      ok: false,
+      code: 'forbidden_operation',
+    })
+    await expect(harness.service.openSession('d3')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+    await expect(harness.service.openSession('missing')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+    expect(harness.resumeSession).toHaveBeenCalledTimes(1)
+  })
 
   it('projects fork/rewind capabilities and side-task links onto summaries', async () => {
     const harness = makeHarness()

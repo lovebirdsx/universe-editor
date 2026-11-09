@@ -132,15 +132,18 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 6`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 7`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
 `attachments`、`summary.imageSupported`、`attachment_not_found`）、fork / rewind / 侧边任务
-（对应命令、agent 能力位、消息锚点与侧边任务关系字段）与 `closeSession` 命令）。WS 建立后第一帧必须是
+（对应命令、agent 能力位、消息锚点与侧边任务关系字段）与 `closeSession` 命令；v7 增加会话目录
+（`listSessionHistory` / `openSession`、`MobileSessionHistoryEntry` 与 `history` 能力位））。
+WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v6 的 `hello_ok.capabilities` 为
-`['inbox', 'commands', 'notifications', 'attachments']`，旧客户端可以只看 `inbox`。`vapidPublicKey` 只在网关可推送
+`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v7 的 `hello_ok.capabilities` 为
+`['inbox', 'commands', 'notifications', 'history', 'attachments']`（`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
+`vapidPublicKey` 只在网关可推送
 时出现，VAPID 公钥走握手而不是额外 HTTP 端点。**token 不放 URL query**，避免进入访问日志与
 Referer。
 
@@ -183,6 +186,8 @@ Referer。
 | 侧边任务 | `deleteSideTask` | `{ ref, sideTaskId }` | 级联删除该任务及其子树（含历史行） |
 | 枚举 | `listWorkspaces` | `{}` | 打开窗口 ∪ 最近工作区，带 `isOpen` |
 | 枚举 | `listAgents` | `{}` | 由第一个已注册窗口桥返回 |
+| 会话目录 | `listSessionHistory` | `{}` | 所有已打开窗口的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
+| 会话目录 | `openSession` | `{ durableId, windowId? }` | 按 durable id 非激活恢复历史会话；带幂等键 |
 
 `forkSession` / `previewRewind` / `rewindSession` 的 `messageId` 是 **SDK 消息锚点**
 （`AcpMessage.messageId`，仅 user 消息会有），不是本地的 `AcpMessage.id`；首条用户消息可回退、
@@ -192,14 +197,17 @@ Referer。
 
 **幂等**：会修改状态的命令可带 `idempotencyKey`。网关在内存中缓存首个结果 5 分钟
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
-只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`）不缓存。客户端重试不会重复发
+只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`）不缓存。客户端重试不会重复发
 prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
-`deleteSideTask` 都按可修改状态命令处理。
+`deleteSideTask` / `openSession` 都按可修改状态命令处理。
 
 **超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
 `cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` / `newSession` /
 `previewRewind` 30s；`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
-`deleteSideTask` 120s（要等 agent fork RPC 与 resume），`listSideTasks` 10s。超时回
+`deleteSideTask` 120s（要等 agent fork RPC 与 resume），`listSideTasks` 10s；
+`listSessionHistory` 8s（逐窗口等桥就绪最多 5s + 桥读取），手机端 20s 覆盖网关最坏耗时；
+`openSession` 每窗口 100s，只有 owner 立即回 `session_not_found` / `forbidden_operation` 才换下一个
+owner，不会把多个 100s 串联，手机端 120s + 5s 宽限仍等得到。超时回
 `command_result { ok: false, error: 'internal' }`。手机端 `sendPrompt` 同样是 15s，避免手机先超时重发。
 
 **服务端 → 客户端**
@@ -394,6 +402,31 @@ side task 字段与列表依赖 history，未初始化时表现为字段缺失 /
 `unsupported_by_agent`；锚点不存在 / 非 user / autoRetry / 首条用户消息用于 fork → `invalid_anchor`；
 运行中 fork → `session_busy`；其他 → `internal`（日志只记错误消息，不记 prompt / quote / 正文）。
 
+## 6c. 会话目录与恢复（v7）
+
+**范围**：`IAcpSessionHistoryService` 是 workspace-scoped（renderer 内存 + 落盘），网关只能读到
+**当前已打开窗口**的历史；未打开工作区的历史手机不可见。不新增 main 侧历史存储，也不改变
+「PC 是唯一真相」的边界。
+
+**聚合**（`MobileGatewayHub._listSessionHistory`）：逐窗口 `_ensureWindowReady` → 桥
+`listSessionHistory` → 桥内过滤侧边任务、归档、`hasMessages === false` 与
+`isForeignWorkspaceSession`；hub 再按 durableId 去重（pinned 优先，否则取较新 `lastUsedAt`），
+pinned / `lastUsedAt` 降序，最多 200 行，并盖上 `windowId` + `workspaceName`。空 `durableId` /
+`agentId` 或时间戳非有限值的坏行直接丢弃，避免手机端整份列表校验失败。行的 `durableId`
+即 `AcpSessionHistoryEntry.id`（`sessionIdOnAgent`）；首条 prompt 截到 280 字符。
+
+**打开**（`_openSession`）：同一 durable id 的并发请求共享一个 in-flight promise；先在 inbox 与各窗口
+`listSessions` 中找 live ref（命中直接返回，避免二次 resume）；未命中时优先使用请求里的 `windowId`
+hint，否则扫描各窗口 `hasSessionHistory` 找 owner；按 owner 顺序 `bridge.openSession` →
+`sessions.resumeSession(durableId, { activate: false })`。只有 `session_not_found` /
+`forbidden_operation` 会换下一个 owner，其他错误立即返回，不把多个 resume 串成超长等待。
+**不切换 PC 焦点**，也不改变 PC 当前打开的会话。
+
+**手机**：`/sessions` 独立页把目录与 inbox live 行按 durableId 合并；live 行直接订阅，历史行才发
+`openSession`。搜索、全部 / 活跃 / 已关闭过滤与按天分组都在本地完成，网关不接收查询参数。
+深链 `/s/<durableId>` 落到已关闭会话时，会话页提供「重新打开」按钮（同一 durable id 原地订阅，
+不新增 URL）。从目录打开的会话返回时保留搜索词、过滤条件与滚动位置。
+
 ## 7. 会话附件（协议 v6）
 
 手机输入框支持图片与文件附件。**WebSocket 只传附件 id，字节走同源 HTTP**：客户端帧上限 64KB，
@@ -487,10 +520,10 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录
 `ts` / `device` / `remoteAddress` / `action` / `result` / `detail`。所有会修改状态的命令
 （`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、关闭、删除、
-fork / rewind / 侧边任务）都记一条；`detail` 只含 `window=` / `local=` / `agent=` / `error=` 等
+fork / rewind / 侧边任务、`openSession`）都记一条；`detail` 只含 `window=` / `local=` / `agent=` / `error=` 等
 定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
 `sideTaskId` 或文件路径**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents` /
-`previewRewind` / `listSideTasks`）不审计。
+`previewRewind` / `listSideTasks` / `listSessionHistory`）不审计。
 
 **PC 设置页**：新增 Mobile Devices 编辑器。
 
@@ -752,6 +785,7 @@ localStorage，不走协议。
 | M5 | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地） | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
 | M6 | 会话附件：HTTP 上传/下载、设备隔离与 TTL、ACP image / resource_link、手机附件 UI 与时间线展示（已落地） | 图片与文件经手机发出后 agent 收到正确 block；时间线显示缩略图 / 文件卡；限额与越权用例覆盖 |
 | M7 | Fork / Rewind / 侧边任务：协议 v6、非激活分叉与恢复、回退 dry-run、侧边任务列表 / 打开 / 级联删除（已落地） | 手机分叉与打开侧边任务不抢 PC 焦点；回退先预览再执行；首条用户消息 / 运行中 / 能力位边界正确 |
+| M8 | 会话目录：协议 v7、`listSessionHistory` / `openSession`、手机 `/sessions` 页（搜索 / 状态过滤 / 按天分组）、已关闭会话重新打开（已落地） | 仅列出已打开窗口的可恢复历史；打开历史会话不抢 PC 焦点；live 行不重复 resume；跨工作区 / 归档 / 侧边任务 / 无消息行不出现 |
 
 ## 13. 已确认的决策记录
 
@@ -781,6 +815,10 @@ localStorage，不走协议。
     需刷新页面）；手机 fork 与打开侧边任务一律 `activate:false`，不抢 PC 焦点；rewind 原文只回填
     手机输入框，不写 PC 的 `AcpPromptReplaceInbox`；回退先 dry-run 预览，再给「丢弃 / 保留文件改动」
     两个执行按钮；侧边任务列表包含历史行，删除级联子树。
+11. **会话目录只覆盖已打开窗口**：历史服务是 workspace-scoped，手机不新增 main 侧历史存储；
+    未打开工作区的历史不可见。打开历史会话沿用 `resumeSession(..., { activate:false })`，
+    与 fork / 侧边任务一致，不抢 PC 焦点。目录与 inbox 按 durable id 在手机侧合并，live 行直接
+    订阅，只有历史行才发 `openSession`，避免重复 resume。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。
@@ -790,7 +828,7 @@ localStorage，不走协议。
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 协议与 view-model 漂移 | 字段静默错位 | DTO 单一来源 + 映射函数 + 编译期检查；详情按需接口收窄面 |
-| 协议 v6 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
+| 协议 v6 / v7 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
 | renderer 重载与会话 rekey | 连接指向旧会话/旧 epoch | 网关按 windowId + renderer epoch 失效桥；客户端靠快照恢复 |
 | IPC 帧成本 | 大内容卡顿/超限 | 50ms 合帧、<1MB 单帧、队列超限 `resync_required` |
 | 无手机订阅时空转 | 常驻开销 | 按订阅启停，无订阅不序列化 |

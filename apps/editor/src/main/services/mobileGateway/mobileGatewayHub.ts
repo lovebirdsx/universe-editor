@@ -17,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import {
   MAX_SERVER_FRAME_BYTES,
+  MAX_HISTORY_PROMPT_LENGTH,
   MAX_ID_LENGTH,
   MAX_STATUS_LENGTH,
   MAX_TITLE_LENGTH,
@@ -31,6 +32,7 @@ import {
   type MobileErrorCode,
   type MobileNewSessionResult,
   type MobileSessionEvent,
+  type MobileSessionHistoryEntry,
   type MobileSessionRef,
   type MobileSessionSnapshot,
   type MobileSessionSummary,
@@ -47,6 +49,7 @@ import type {
   MobileBridgePromptAttachment,
   MobileBridgeResult,
   MobileBridgeSessionEvent,
+  MobileBridgeSessionHistoryEntry,
   MobileBridgeSessionSummary,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import {
@@ -178,8 +181,20 @@ const SESSION_READY_TIMEOUT_MS = 10_000
 const LIST_AGENTS_TIMEOUT_MS = 10_000
 /** Fork / rewind / side-task commands wait on an agent fork RPC plus a resume. */
 const LONG_COMMAND_TIMEOUT_MS = 120_000
+/**
+ * History probes (live scan + owner search) can take ~20s before the bridge is
+ * called; keep the total under the phone's 120s + 5s grace.
+ */
+const OPEN_SESSION_TIMEOUT_MS = 100_000
 const PREVIEW_REWIND_TIMEOUT_MS = 30_000
 const LIST_SIDE_TASKS_TIMEOUT_MS = 10_000
+/** History catalog: bound each window's readiness and history read. */
+const HISTORY_WINDOW_READY_TIMEOUT_MS = 5_000
+const HISTORY_LIST_TIMEOUT_MS = 8_000
+/** Ownership probe before resuming; a wrong window answers `false` quickly. */
+const HISTORY_OWNER_TIMEOUT_MS = 5_000
+/** Keep the phone list responsive even with many open workspaces. */
+const MAX_HISTORY_RESULTS = 200
 
 const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'sendPrompt',
@@ -199,6 +214,7 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'createSideTask',
   'openSideTask',
   'deleteSideTask',
+  'openSession',
 ])
 
 const sessionKey = (windowId: number, localId: string): string => `${windowId}:${localId}`
@@ -214,6 +230,8 @@ export class MobileGatewayHub {
     { readonly outcome: CommandOutcome; readonly expiresAt: number }
   >()
   private readonly _inflightCommands = new Map<string, Promise<CommandOutcome>>()
+  /** Resumes are deduped by durable id across devices / idempotency keys. */
+  private readonly _inflightOpenSessions = new Map<string, Promise<CommandOutcome>>()
   private _inboxSeq = 0
   private _streaming = false
   private _attention = false
@@ -493,6 +511,17 @@ export class MobileGatewayHub {
         const agentId = (frame.payload as { agentId?: string }).agentId
         if (agentId !== undefined) parts.push(`agent=${agentId}`)
       }
+      if (frame.kind === 'openSession') {
+        const created = outcome.ok
+          ? (outcome.result as MobileNewSessionResult | undefined)
+          : undefined
+        if (created !== undefined) {
+          parts.push(`window=${created.ref.windowId}`, `local=${created.ref.localId}`)
+        } else {
+          const windowId = (frame.payload as { windowId?: number }).windowId
+          if (windowId !== undefined) parts.push(`window=${windowId}`)
+        }
+      }
       if (!outcome.ok && outcome.error !== undefined) parts.push(`error=${outcome.error}`)
       audit.record(
         frame.kind,
@@ -721,6 +750,12 @@ export class MobileGatewayHub {
         return this._listWorkspaces()
       case 'listAgents':
         return this._listAgents()
+      case 'listSessionHistory':
+        return this._listSessionHistory()
+      case 'openSession': {
+        const p = frame.payload as { durableId: string; windowId?: number }
+        return this._openSession(p.durableId, p.windowId)
+      }
       default:
         // Unknown kinds still reach here through a newer phone; payload carried
         // through validation unchanged.
@@ -976,6 +1011,229 @@ export class MobileGatewayHub {
     } catch (err) {
       this._logger.warn(`mobile listAgents failed: ${String(err)}`)
       return failOutcome('internal')
+    }
+  }
+
+  private async _listSessionHistory(): Promise<CommandOutcome> {
+    const windows = [...this._windows.values()]
+    const lists = await Promise.all(
+      windows.map(async (entry) => {
+        try {
+          // A window registered before its renderer booted cannot answer; give
+          // it the same short readiness window as the inbox snapshot.
+          if (
+            !(await this._ensureWindowReady(entry, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS))
+          ) {
+            return [] as MobileSessionHistoryEntry[]
+          }
+          const rows = await callWithToken(
+            (token) => entry.bridge.listSessionHistory(token),
+            HISTORY_LIST_TIMEOUT_MS,
+          )
+          return rows
+            .map((row) => this._toProtocolHistoryEntry(entry, row))
+            .filter((row): row is MobileSessionHistoryEntry => row !== undefined)
+        } catch (err) {
+          this._logger.warn(`mobile history list window ${entry.windowId} failed: ${String(err)}`)
+          return [] as MobileSessionHistoryEntry[]
+        }
+      }),
+    )
+
+    // Two windows on the same workspace each keep their own history bucket.
+    // Keep one row per durable id; a pinned row or the freshest timestamp wins.
+    const byDurable = new Map<string, MobileSessionHistoryEntry>()
+    for (const rows of lists) {
+      for (const row of rows) {
+        const existing = byDurable.get(row.durableId)
+        if (
+          existing === undefined ||
+          (row.pinned === true && existing.pinned !== true) ||
+          (row.pinned === existing.pinned && row.lastUsedAt > existing.lastUsedAt)
+        ) {
+          byDurable.set(row.durableId, row)
+        }
+      }
+    }
+    const result = [...byDurable.values()]
+      .sort(
+        (a, b) =>
+          Number(b.pinned === true) - Number(a.pinned === true) || b.lastUsedAt - a.lastUsedAt,
+      )
+      .slice(0, MAX_HISTORY_RESULTS)
+    return { ok: true, result }
+  }
+
+  private _openSession(
+    durableId: string,
+    windowIdHint: number | undefined,
+  ): Promise<CommandOutcome> {
+    const inflight = this._inflightOpenSessions.get(durableId)
+    if (inflight !== undefined) return inflight
+    const promise = this._openSessionOnce(durableId, windowIdHint)
+    this._inflightOpenSessions.set(durableId, promise)
+    const release = (): void => {
+      if (this._inflightOpenSessions.get(durableId) === promise) {
+        this._inflightOpenSessions.delete(durableId)
+      }
+    }
+    void promise.then(release, release)
+    return promise
+  }
+
+  private async _openSessionOnce(
+    durableId: string,
+    windowIdHint: number | undefined,
+  ): Promise<CommandOutcome> {
+    const live = await this._findLiveRef(durableId)
+    if (live !== undefined) return { ok: true, result: { ref: live } }
+
+    const candidates = [...this._windows.values()]
+    const hint = windowIdHint !== undefined ? this._windows.get(windowIdHint) : undefined
+    const owners = (
+      await Promise.all(
+        candidates.map(async (entry) =>
+          (await this._windowHasHistory(entry, durableId)) ? entry : undefined,
+        ),
+      )
+    ).filter((entry): entry is WindowEntry => entry !== undefined)
+    if (hint !== undefined) {
+      const index = owners.indexOf(hint)
+      if (index > 0) {
+        owners.splice(index, 1)
+        owners.unshift(hint)
+      }
+    }
+    if (owners.length === 0) return failOutcome('session_not_found')
+
+    let lastError: MobileErrorCode | undefined
+    for (const target of owners) {
+      const outcome = await this._openSessionInWindow(target, durableId)
+      if (outcome.ok) return outcome
+      lastError = outcome.error
+      // A stale hint or a window that lost its workspace can fail while another
+      // window still owns the row. Transient failures are not retried: a second
+      // full resume would exceed the phone's deadline.
+      if (outcome.error !== 'session_not_found' && outcome.error !== 'forbidden_operation') {
+        return outcome
+      }
+    }
+    return lastError === undefined
+      ? failOutcome('session_not_found')
+      : { ok: false, error: lastError }
+  }
+
+  private async _openSessionInWindow(
+    target: WindowEntry,
+    durableId: string,
+  ): Promise<CommandOutcome> {
+    try {
+      const result = await callWithToken(
+        (token) => target.bridge.openSession(durableId, token),
+        OPEN_SESSION_TIMEOUT_MS,
+      )
+      if (!result.ok) return { ok: false, error: result.code }
+      if (!isBridgeNewSessionResult(result.value)) {
+        this._logger.warn('mobile bridge returned an invalid session ref')
+        return failOutcome('internal')
+      }
+      const created: MobileNewSessionResult = {
+        ref: {
+          windowId: target.windowId,
+          localId: result.value.localId,
+          durableId: result.value.durableId ?? durableId,
+        },
+      }
+      return { ok: true, result: created }
+    } catch (err) {
+      this._logger.warn(`mobile openSession failed: ${String(err)}`)
+      return failOutcome('internal')
+    }
+  }
+
+  /**
+   * A resumable row may already be resident somewhere. Prefer the inbox cache
+   * maintained by streaming; when no phone subscribed, ask each window directly
+   * so a resume never duplicates an agent session in another window.
+   */
+  private async _findLiveRef(durableId: string): Promise<MobileSessionRef | undefined> {
+    for (const entry of this._inboxState.values()) {
+      const ref = entry.summary.ref
+      if (ref.durableId === durableId) return ref
+    }
+    const windows = [...this._windows.values()]
+    const lists = await Promise.all(
+      windows.map(async (entry) => {
+        try {
+          if (
+            !(await this._ensureWindowReady(entry, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS))
+          ) {
+            return undefined
+          }
+          return await callWithToken(
+            (token) => entry.bridge.listSessions(token),
+            HISTORY_OWNER_TIMEOUT_MS,
+          )
+        } catch {
+          return undefined
+        }
+      }),
+    )
+    for (let index = 0; index < lists.length; index += 1) {
+      const summary = lists[index]?.find((row) => row.durableId === durableId)
+      if (summary === undefined) continue
+      return {
+        windowId: windows[index]!.windowId,
+        localId: summary.localId,
+        durableId,
+      }
+    }
+    return undefined
+  }
+
+  private async _windowHasHistory(entry: WindowEntry, durableId: string): Promise<boolean> {
+    try {
+      if (!(await this._ensureWindowReady(entry, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS))) {
+        return false
+      }
+      return await callWithToken(
+        (token) => entry.bridge.hasSessionHistory(durableId, token),
+        HISTORY_OWNER_TIMEOUT_MS,
+      )
+    } catch {
+      return false
+    }
+  }
+
+  private _toProtocolHistoryEntry(
+    entry: WindowEntry,
+    row: MobileBridgeSessionHistoryEntry,
+  ): MobileSessionHistoryEntry | undefined {
+    const durableId = clampText(row.durableId, MAX_ID_LENGTH)
+    const agentId = clampText(row.agentId, MAX_ID_LENGTH)
+    // A corrupted persisted row must not fail the phone's all-or-nothing list
+    // guard; drop it here instead.
+    if (durableId === '' || agentId === '') return undefined
+    if (!Number.isFinite(row.createdAt) || !Number.isFinite(row.lastUsedAt)) return undefined
+    return {
+      durableId,
+      windowId: entry.windowId,
+      agentId,
+      ...(row.agentName !== undefined
+        ? { agentName: clampText(row.agentName, MAX_TITLE_LENGTH) }
+        : {}),
+      title: clampText(row.title, MAX_TITLE_LENGTH),
+      ...(row.firstPrompt !== undefined
+        ? { firstPrompt: clampText(row.firstPrompt, MAX_HISTORY_PROMPT_LENGTH) }
+        : {}),
+      workspaceName: this._workspaceName(entry),
+      ...(row.cwd !== undefined ? { cwd: clampText(row.cwd, MAX_WORKSPACE_NAME_LENGTH) } : {}),
+      ...(row.authority !== undefined
+        ? { authority: clampText(row.authority, MAX_WORKSPACE_NAME_LENGTH) }
+        : {}),
+      createdAt: row.createdAt,
+      lastUsedAt: row.lastUsedAt,
+      ...(row.pinned === true ? { pinned: true } : {}),
     }
   }
 

@@ -1,6 +1,7 @@
 import type {
   MobileRewindPreview,
   MobileRewindResult,
+  MobileSessionHistoryEntry,
   MobileSessionRef,
   MobileSessionRefResult,
   MobileSideTaskSummary,
@@ -71,4 +72,31 @@ export function isMobileSideTaskSummary(value: unknown): value is MobileSideTask
 
 export function isMobileSideTaskList(value: unknown): value is readonly MobileSideTaskSummary[] {
   return Array.isArray(value) && value.every(isMobileSideTaskSummary)
+}
+
+export function isMobileSessionHistoryEntry(value: unknown): value is MobileSessionHistoryEntry {
+  if (!isRecord(value)) return false
+  if (!isNonEmptyString(value['durableId'])) return false
+  if (!isNonNegativeInteger(value['windowId'])) return false
+  if (!isNonEmptyString(value['agentId'])) return false
+  const agentName = value['agentName']
+  if (agentName !== undefined && typeof agentName !== 'string') return false
+  if (typeof value['title'] !== 'string') return false
+  const firstPrompt = value['firstPrompt']
+  if (firstPrompt !== undefined && typeof firstPrompt !== 'string') return false
+  if (typeof value['workspaceName'] !== 'string') return false
+  const cwd = value['cwd']
+  if (cwd !== undefined && typeof cwd !== 'string') return false
+  const authority = value['authority']
+  if (authority !== undefined && typeof authority !== 'string') return false
+  if (!isFiniteNumber(value['createdAt'])) return false
+  if (!isFiniteNumber(value['lastUsedAt'])) return false
+  const pinned = value['pinned']
+  return pinned === undefined || typeof pinned === 'boolean'
+}
+
+export function isMobileSessionHistoryList(
+  value: unknown,
+): value is readonly MobileSessionHistoryEntry[] {
+  return Array.isArray(value) && value.every(isMobileSessionHistoryEntry)
 }

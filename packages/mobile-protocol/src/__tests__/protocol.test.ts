@@ -266,6 +266,9 @@ describe('parseClientFrame', () => {
       { kind: 'deleteSideTask', payload: { ref: REF, sideTaskId: 'durable-side-1' } },
       { kind: 'listWorkspaces', payload: {} },
       { kind: 'listAgents', payload: {} },
+      { kind: 'listSessionHistory', payload: {} },
+      { kind: 'openSession', payload: { durableId: 'durable-1' } },
+      { kind: 'openSession', payload: { durableId: 'durable-1', windowId: 2 } },
     ]
     for (const command of commands) {
       const frame = {
@@ -318,6 +321,11 @@ describe('parseClientFrame', () => {
       { kind: 'deleteSideTask', payload: { ref: REF, sideTaskId: 1 } },
       { kind: 'listSideTasks', payload: 'nope' },
       { kind: 'listWorkspaces', payload: 'nope' },
+      { kind: 'listSessionHistory', payload: 'nope' },
+      { kind: 'openSession', payload: {} },
+      { kind: 'openSession', payload: { durableId: '' } },
+      { kind: 'openSession', payload: { durableId: 'durable-1', windowId: -1 } },
+      { kind: 'openSession', payload: { durableId: 'durable-1', windowId: 1.5 } },
     ]
     for (const command of bad) {
       expect(

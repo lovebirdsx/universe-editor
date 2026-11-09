@@ -402,7 +402,7 @@ describe('SessionPage snapshot rendering', () => {
     feed(harness.socket, { type: 'session_removed', ref: sessionRef('s1') })
 
     expect(screen.getByText(strings.sessionRemovedTitle)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: strings.sessionBackToInbox }))
+    fireEvent.click(screen.getByRole('button', { name: strings.sessionBack }))
     expect(onBack).toHaveBeenCalledTimes(1)
   })
 
@@ -411,6 +411,43 @@ describe('SessionPage snapshot rendering', () => {
     feed(harness.socket, { type: 'session_removed', ref: sessionRef('s1') })
 
     expect(screen.getByText(strings.sessionRemovedTitle)).toBeTruthy()
+  })
+
+  it('reopens a removed durable session in place', async () => {
+    const ref = sessionRef('s1', 1, 'durable-1')
+    const { harness } = openPage('durable-1')
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, { summary: sessionSummary('s1', { ref }), timeline: [] }),
+    )
+    feed(harness.socket, { type: 'session_removed', ref })
+
+    fireEvent.click(screen.getByTestId('session-reopen'))
+    const command = sentFrames(harness.socket).find(
+      (frame): frame is { type: 'command'; requestId: string; kind: string; payload: unknown } =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as { type?: unknown }).type === 'command' &&
+        (frame as { kind?: unknown }).kind === 'openSession',
+    )
+    expect(command?.payload).toEqual({ durableId: 'durable-1', windowId: 1 })
+    if (command === undefined) throw new Error('openSession was not sent')
+
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: { ref },
+    })
+    await waitFor(() => expect(screen.queryByText(strings.sessionRemovedTitle)).toBeNull())
+    expect(
+      sentFrames(harness.socket).find(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as { type?: unknown }).type === 'subscribe_session',
+      ),
+    ).toMatchObject({ type: 'subscribe_session', ref: { durableId: 'durable-1' } })
   })
 
   it('resubscribes on a sequence gap', () => {

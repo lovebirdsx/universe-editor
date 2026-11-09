@@ -13,6 +13,7 @@ import {
   Emitter,
   IEditorGroupsService,
   ILoggerService,
+  IUriIdentityService,
   IWorkspaceService,
   REMOTE_SCHEME,
   URI,
@@ -25,9 +26,12 @@ import {
   clampText,
   isConfigValueAllowedOnMobile,
   isHighRiskPermissionOption,
+  MAX_HISTORY_PROMPT_LENGTH,
+  MAX_ID_LENGTH,
   MAX_SIDE_TASK_QUOTE_LENGTH,
   MAX_TEXT_LENGTH,
   MAX_TITLE_LENGTH,
+  MAX_WORKSPACE_NAME_LENGTH,
   type MobileAgentCandidate,
   type MobileElicitationAction,
   type MobileElicitationContentValue,
@@ -47,6 +51,7 @@ import type {
   MobileBridgeResult,
   MobileBridgeSessionDelta,
   MobileBridgeSessionEvent,
+  MobileBridgeSessionHistoryEntry,
   MobileBridgeSessionSnapshot,
   MobileBridgeSessionSummary,
   IMobileBridgeService,
@@ -56,6 +61,8 @@ import {
   collectSideTaskDescendants,
   directSideTaskChildren,
   IAcpSessionHistoryService,
+  isForeignWorkspaceSession,
+  type AcpSessionHistoryEntry,
 } from '../acp/session/acpSessionHistory.js'
 import { isResidentLive, isSessionWorking } from '../acp/session/acpSessionStatus.js'
 import {
@@ -139,6 +146,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IAcpAgentRegistry private readonly _agents: IAcpAgentRegistry,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
     @ILoggerService loggerService: ILoggerService,
@@ -159,6 +167,76 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       summaries.push(this._summaryFor(session))
     }
     return summaries
+  }
+
+  async listSessionHistory(
+    _token?: CancellationToken,
+  ): Promise<readonly MobileBridgeSessionHistoryEntry[]> {
+    await this._ensureHistory()
+    const rows: MobileBridgeSessionHistoryEntry[] = []
+    for (const entry of this._history.list()) {
+      if (!this._isResumableHistoryEntry(entry)) continue
+      const agentName = this._agentNameFor(entry.agentId)
+      const firstPrompt = entry.firstPrompt?.trim()
+      rows.push({
+        durableId: clampText(entry.id, MAX_ID_LENGTH),
+        agentId: clampText(entry.agentId, MAX_ID_LENGTH),
+        ...(agentName !== undefined ? { agentName: clampText(agentName, MAX_TITLE_LENGTH) } : {}),
+        title: clampText(entry.title.length > 0 ? entry.title : entry.id, MAX_TITLE_LENGTH),
+        ...(firstPrompt !== undefined && firstPrompt.length > 0
+          ? { firstPrompt: clampText(firstPrompt, MAX_HISTORY_PROMPT_LENGTH) }
+          : {}),
+        ...(entry.cwd !== undefined
+          ? { cwd: clampText(entry.cwd, MAX_WORKSPACE_NAME_LENGTH) }
+          : {}),
+        ...(entry.authority !== undefined
+          ? { authority: clampText(entry.authority, MAX_WORKSPACE_NAME_LENGTH) }
+          : {}),
+        createdAt: entry.createdAt,
+        lastUsedAt: entry.lastUsedAt,
+        ...(entry.pinned === true ? { pinned: true } : {}),
+      })
+    }
+    rows.sort(
+      (a, b) =>
+        Number(b.pinned === true) - Number(a.pinned === true) || b.lastUsedAt - a.lastUsedAt,
+    )
+    return rows
+  }
+
+  async hasSessionHistory(durableId: string, _token?: CancellationToken): Promise<boolean> {
+    await this._ensureHistory()
+    const entry = this._history.get(durableId)
+    return entry !== undefined && this._isResumableHistoryEntry(entry)
+  }
+
+  async openSession(
+    durableId: string,
+    _token?: CancellationToken,
+  ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> {
+    await this._ensureHistory()
+    const entry = this._history.get(durableId)
+    if (entry === undefined) return fail('session_not_found', 'unknown session history')
+    if (
+      isForeignWorkspaceSession(
+        entry,
+        this._currentCwd(),
+        this._currentAuthority(),
+        this._uriIdentity,
+      )
+    ) {
+      return fail('forbidden_operation', 'session belongs to another worktree')
+    }
+    if (!this._isResumableHistoryEntry(entry)) {
+      return fail('session_not_found', 'session is not resumable from mobile')
+    }
+    try {
+      // Never activates: opening from the phone must not steal the PC focus.
+      const session = await this._sessions.resumeSession(durableId, { activate: false })
+      return ok(toNewSessionResult(session))
+    } catch (err) {
+      return this._commandFailure(err, 'openSession')
+    }
   }
 
   async getSnapshot(localId: string): Promise<MobileBridgeSessionSnapshot | undefined> {
@@ -924,6 +1002,35 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
 
   private _summaryFor(session: IAcpSession): MobileBridgeSessionSummary {
     return toBridgeSnapshot(session, this._projectionOptions(session)).summary
+  }
+
+  /**
+   * Side tasks have their own entry point (the parent's side-task sheet),
+   * archived rows are hidden by default on the PC, and an agent never persisted
+   * a session that never sent a message. Cross-worktree rows must not leak into
+   * this window's catalog.
+   */
+  private _isResumableHistoryEntry(entry: AcpSessionHistoryEntry): boolean {
+    if (entry.sideTaskOf !== undefined) return false
+    if (entry.archived === true) return false
+    if (entry.hasMessages === false) return false
+    if (entry.id.length === 0) return false
+    return !isForeignWorkspaceSession(
+      entry,
+      this._currentCwd(),
+      this._currentAuthority(),
+      this._uriIdentity,
+    )
+  }
+
+  private _currentCwd(): string | undefined {
+    return this._workspace.current?.folder.fsPath
+  }
+
+  private _currentAuthority(): string | undefined {
+    const folder = this._workspace.current?.folder
+    if (folder === undefined || folder.scheme !== REMOTE_SCHEME) return undefined
+    return folder.authority || undefined
   }
 
   private async _ensureHistory(): Promise<void> {
