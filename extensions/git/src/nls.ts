@@ -56,6 +56,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'git.worktree.autoSyncFailed': '工作树"{0}"同步失败：{1}',
   'git.btn.discardAll': '放弃所有更改',
   'git.discard.allConfirm': '放弃工作区中的所有更改？此操作无法撤销。',
+  'git.discard.multiConfirm': '放弃选中的 {0} 个文件中的更改？此操作无法撤销。',
   'git.pick.branchToCheckout': '选择要签出的分支',
   'git.branch.noneAvailable': '没有可用的分支。',
   'git.stash.none': '没有储藏。',

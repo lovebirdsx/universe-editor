@@ -200,6 +200,30 @@ describe('ExtensionTreeView', () => {
     }
   })
 
+  it('keeps the multi-selection when right-clicking a selected row', async () => {
+    const { treeViews, extHost, services } = setup({
+      root: [dto(1, 'root-a'), dto(2, 'root-b'), dto(3, 'root-c')],
+    })
+    await treeViews.$registerTreeDataProvider(VIEW_ID)
+    await renderView(services)
+
+    fireEvent.click(screen.getByText('root-a'))
+    fireEvent.click(screen.getByText('root-b'), { ctrlKey: true })
+    await act(async () => {})
+    expect(extHost.$acceptSelection).toHaveBeenLastCalledWith(VIEW_ID, [1, 2])
+
+    // vscode tree contract: a right-click inside the selection keeps it, so the
+    // extension can read TreeView.selection for batch actions.
+    fireEvent.contextMenu(screen.getByText('root-a'))
+    await act(async () => {})
+    expect(extHost.$acceptSelection).toHaveBeenLastCalledWith(VIEW_ID, [1, 2])
+
+    // Right-clicking outside the selection still collapses to the clicked row.
+    fireEvent.contextMenu(screen.getByText('root-c'))
+    await act(async () => {})
+    expect(extHost.$acceptSelection).toHaveBeenLastCalledWith(VIEW_ID, [3])
+  })
+
   it('resets to the placeholder when the provider unregisters', async () => {
     const { treeViews, services } = setup({ root: [dto(1, 'root-a')] })
     await treeViews.$registerTreeDataProvider(VIEW_ID)

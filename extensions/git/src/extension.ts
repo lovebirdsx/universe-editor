@@ -36,6 +36,7 @@ import { PossibleRepoWatcher, joinCandidate } from './possibleRepoWatcher.js'
 import { detectRepoRoot } from './gitService.js'
 import { norm } from './pathUtil.js'
 import { initPublishConfirmation, type Repository } from './repository.js'
+import type { DiscardTarget } from './repositoryTypes.js'
 import {
   getCommits as getGitGraphCommits,
   getCommitDetails as getGitGraphCommitDetails,
@@ -73,6 +74,115 @@ function resourceLetter(arg: unknown): string | undefined {
 
 function isDirectoryArg(arg: unknown): boolean {
   return (arg as { isDirectory?: boolean } | undefined)?.isDirectory === true
+}
+
+/** One row of the second command arg the host attaches to SCM row menus. */
+interface ScmSelectionEntry {
+  readonly resourceUri?: string
+  readonly contextValue?: string
+  readonly scmResourceGroupId?: string
+}
+
+/** Whether the host attached a non-empty multi-selection. */
+function hasSelection(selection: unknown): selection is readonly unknown[] {
+  return Array.isArray(selection) && selection.length > 0
+}
+
+function selectionEntries(selection: readonly unknown[]): ScmSelectionEntry[] {
+  const out: ScmSelectionEntry[] = []
+  for (const entry of selection) {
+    if (typeof entry === 'object' && entry !== null) out.push(entry as ScmSelectionEntry)
+  }
+  return out
+}
+
+function dedupePaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const path of paths) {
+    const key = norm(path)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(path)
+  }
+  return out
+}
+
+/** Paths in one SCM group. Entries without a group id are accepted (callers may
+ *  omit it). The index group also drops untracked rows: one `?` path makes the
+ *  whole `git reset` fail. */
+function selectionPathsForGroup(
+  selection: readonly unknown[],
+  groupId: 'workingTree' | 'index',
+): string[] {
+  const out: string[] = []
+  for (const entry of selectionEntries(selection)) {
+    if (typeof entry.scmResourceGroupId === 'string' && entry.scmResourceGroupId !== groupId) {
+      continue
+    }
+    if (typeof entry.resourceUri !== 'string' || entry.resourceUri.length === 0) continue
+    if (groupId === 'index' && entry.contextValue === '?') continue
+    out.push(entry.resourceUri)
+  }
+  return dedupePaths(out)
+}
+
+function selectionDiscardTargets(selection: readonly unknown[]): DiscardTarget[] {
+  const seen = new Set<string>()
+  const out: DiscardTarget[] = []
+  for (const entry of selectionEntries(selection)) {
+    if (
+      typeof entry.scmResourceGroupId === 'string' &&
+      entry.scmResourceGroupId !== 'workingTree'
+    ) {
+      continue
+    }
+    if (typeof entry.resourceUri !== 'string' || entry.resourceUri.length === 0) continue
+    const key = norm(entry.resourceUri)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ path: entry.resourceUri, untracked: entry.contextValue === '?' })
+  }
+  return out
+}
+
+/** Route each item to its containing repo. Items outside every repo are dropped
+ *  rather than sent to whichever repo is active. */
+function groupByRepo<T>(
+  mgr: RepositoryManager,
+  items: readonly T[],
+  pathOf: (item: T) => string,
+): Map<Repository, T[]> {
+  const byRepo = new Map<Repository, T[]>()
+  for (const item of items) {
+    const repo = mgr.resolveContaining(pathOf(item))
+    if (!repo) continue
+    const list = byRepo.get(repo)
+    if (list) list.push(item)
+    else byRepo.set(repo, [item])
+  }
+  return byRepo
+}
+
+function runPerRepo<T>(
+  mgr: RepositoryManager,
+  items: readonly T[],
+  pathOf: (item: T) => string,
+  op: (repo: Repository, items: readonly T[]) => Promise<void>,
+): Promise<void> {
+  const byRepo = groupByRepo(mgr, items, pathOf)
+  return Promise.all([...byRepo].map(([repo, list]) => op(repo, list))).then(() => undefined)
+}
+
+function singleDiscardMessage(path: string): string {
+  return localize('git.discard.fileConfirm', "Discard changes in '{0}'? This cannot be undone.", {
+    0: basename(path),
+  })
+}
+
+async function confirmDiscard(message: string): Promise<boolean> {
+  const button = localize('git.btn.discardChanges', 'Discard Changes')
+  return (await window.showWarningMessage(message, button)) === button
 }
 
 /**
@@ -305,34 +415,85 @@ function registerGitCommands(
       if (await commitSmart(repo)) await repo?.sync()
     }),
 
-    register('git.stage', (arg) => {
-      const path = resourcePath(arg)
-      return path ? mgr.resolveRepo(arg)?.stage([path]) : undefined
+    register('git.stage', (arg, selection) => {
+      const primary = resourcePath(arg)
+      // SCM folder row: recurse through the folder path itself. Its selection is
+      // the subtree's visible file rows, not necessarily every file git knows.
+      if (isDirectoryArg(arg)) {
+        const repo = mgr.resolveRepo(arg)
+        return primary && repo ? repo.stage([primary]) : undefined
+      }
+      if (hasSelection(selection)) {
+        const paths = selectionPathsForGroup(selection, 'workingTree')
+        if (paths.length > 0) {
+          return runPerRepo(
+            mgr,
+            paths,
+            (path) => path,
+            (repo, list) => repo.stage(list),
+          )
+        }
+      }
+      const repo = mgr.resolveRepo(arg)
+      return primary && repo ? repo.stage([primary]) : undefined
     }),
-    register('git.unstage', (arg) => {
-      const path = resourcePath(arg)
-      return path ? mgr.resolveRepo(arg)?.unstage([path]) : undefined
+    register('git.unstage', (arg, selection) => {
+      const primary = resourcePath(arg)
+      if (isDirectoryArg(arg)) {
+        const repo = mgr.resolveRepo(arg)
+        return primary && repo ? repo.unstage([primary]) : undefined
+      }
+      if (hasSelection(selection)) {
+        const paths = selectionPathsForGroup(selection, 'index')
+        if (paths.length > 0) {
+          return runPerRepo(
+            mgr,
+            paths,
+            (path) => path,
+            (repo, list) => repo.unstage(list),
+          )
+        }
+      }
+      const repo = mgr.resolveRepo(arg)
+      return primary && repo ? repo.unstage([primary]) : undefined
     }),
     register('git.stageAll', (arg) => mgr.resolveRepo(arg)?.stageAll()),
     register('git.unstageAll', (arg) => mgr.resolveRepo(arg)?.unstageAll()),
 
-    register('git.discard', async (arg) => {
-      const repo = mgr.resolveRepo(arg)
-      const path = resourcePath(arg)
-      if (!repo || !path) return
-      const BTN_DISCARD = localize('git.btn.discardChanges', 'Discard Changes')
-      const confirm = await window.showWarningMessage(
-        localize('git.discard.fileConfirm', "Discard changes in '{0}'? This cannot be undone.", {
-          0: repo.basename(path),
-        }),
-        BTN_DISCARD,
-      )
-      if (confirm !== BTN_DISCARD) return
+    register('git.discard', async (arg, selection) => {
+      const primary = resourcePath(arg)
+      if (!primary) return
       if (isDirectoryArg(arg)) {
-        await repo.discardFolder(path)
-      } else {
-        await repo.discard(path, resourceLetter(arg) === '?')
+        const repo = mgr.resolveRepo(arg)
+        if (!repo || !(await confirmDiscard(singleDiscardMessage(primary)))) return
+        await repo.discardFolder(primary)
+        return
       }
+
+      const targets = hasSelection(selection) ? selectionDiscardTargets(selection) : []
+      if (targets.length === 0) {
+        // Palette / legacy invocation, or a selection with no working-tree rows.
+        const repo = mgr.resolveRepo(arg)
+        if (!repo || !(await confirmDiscard(singleDiscardMessage(primary)))) return
+        await repo.discard(primary, resourceLetter(arg) === '?')
+        return
+      }
+
+      const message =
+        targets.length === 1
+          ? singleDiscardMessage(targets[0]!.path)
+          : localize(
+              'git.discard.multiConfirm',
+              'Discard changes in {0} files? This cannot be undone.',
+              { 0: String(targets.length) },
+            )
+      if (!(await confirmDiscard(message))) return
+      await runPerRepo(
+        mgr,
+        targets,
+        (target) => target.path,
+        (repo, list) => repo.discardPaths(list),
+      )
     }),
 
     register('git.checkout', (arg) => mgr.resolveRepo(arg)?.checkout()),

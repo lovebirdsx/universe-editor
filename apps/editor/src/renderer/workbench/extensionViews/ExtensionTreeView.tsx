@@ -187,7 +187,12 @@ export function ExtensionTreeView({ viewId }: IViewComponentProps) {
     (e: ReactMouseEvent, item: ITreeItemDto) => {
       e.preventDefault()
       e.stopPropagation()
-      model.setSelection([String(item.handle)], String(item.handle))
+      const id = String(item.handle)
+      // vscode tree contract: right-clicking inside the selection keeps it (the
+      // extension reads TreeView.selection for batch actions); only a click
+      // outside collapses to the clicked row. Focus still moves to that row.
+      if (model.isSelected(id)) model.setFocus(id)
+      else model.setSelection([id], id)
       const scoped = contextKeyService.createScoped({
         view: viewId ?? '',
         viewItem: item.contextValue ?? '',

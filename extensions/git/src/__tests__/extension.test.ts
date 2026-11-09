@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   executeCommand: vi.fn(),
   showInformationMessage: vi.fn(),
   showErrorMessage: vi.fn(),
+  showWarningMessage: vi.fn(),
   configValues: new Map<string, unknown>(),
   hasSubmodules: vi.fn(),
 }))
@@ -47,7 +48,7 @@ vi.mock('@universe-editor/extension-api', () => ({
     }),
   },
   window: {
-    showWarningMessage: vi.fn(),
+    showWarningMessage: mocks.showWarningMessage,
     showInformationMessage: mocks.showInformationMessage,
     showErrorMessage: mocks.showErrorMessage,
   },
@@ -77,16 +78,23 @@ function fakeManager(resolve: (arg: unknown) => Repository | undefined): Reposit
   } as unknown as RepositoryManager
 }
 
-function makeCommands(
-  resolve: (arg: unknown) => Repository | undefined,
+function makeCommandsWithManager(
+  mgr: RepositoryManager,
   graph = { current: ROOT },
 ): Map<string, (...args: unknown[]) => unknown> {
   mocks.registerCommand.mockImplementation(() => ({ dispose: () => undefined }))
-  return createGitCommandsForTest(fakeManager(resolve), graph, {
+  return createGitCommandsForTest(mgr, graph, {
     root: ROOT,
     scanOpts: { maxDepth: 0, ignoredFolders: [] },
     log: () => undefined,
   })
+}
+
+function makeCommands(
+  resolve: (arg: unknown) => Repository | undefined,
+  graph = { current: ROOT },
+): Map<string, (...args: unknown[]) => unknown> {
+  return makeCommandsWithManager(fakeManager(resolve), graph)
 }
 
 function mockCommitDetails() {
@@ -107,6 +115,7 @@ beforeEach(() => {
   mocks.hasSubmodules.mockResolvedValue(false)
   mocks.gitExec.mockResolvedValue(gitFail())
   mocks.executeCommand.mockResolvedValue(undefined)
+  mocks.showWarningMessage.mockResolvedValue(undefined)
 })
 
 describe('normalizeUriArg', () => {
@@ -128,6 +137,257 @@ describe('normalizeUriArg', () => {
     expect(normalizeUriArg(undefined)).toBeUndefined()
     expect(normalizeUriArg({ scheme: 'untitled', path: '/x' })).toBeUndefined()
     expect(normalizeUriArg('https://example.com/x')).toBeUndefined()
+  })
+})
+
+type SelectionRepo = Repository & {
+  stage: ReturnType<typeof vi.fn>
+  unstage: ReturnType<typeof vi.fn>
+  discard: ReturnType<typeof vi.fn>
+  discardFolder: ReturnType<typeof vi.fn>
+  discardPaths: ReturnType<typeof vi.fn>
+}
+
+function fakeSelectionRepo(root: string): SelectionRepo {
+  return {
+    root,
+    refresh: vi.fn(async () => {}),
+    stage: vi.fn(async () => {}),
+    unstage: vi.fn(async () => {}),
+    discard: vi.fn(async () => {}),
+    discardFolder: vi.fn(async () => {}),
+    discardPaths: vi.fn(async () => {}),
+    basename: (path: string) => path.split(/[\\/]/).pop() ?? path,
+  } as unknown as SelectionRepo
+}
+
+function fakeRoutingManager(repos: readonly Repository[]): RepositoryManager {
+  const normPath = (path: string): string => path.replace(/\\/g, '/').toLowerCase()
+  const resolveContaining = vi.fn((path: string) => {
+    const target = normPath(path)
+    let best: Repository | undefined
+    let bestLen = -1
+    for (const repo of repos) {
+      const root = normPath(repo.root)
+      if ((target === root || target.startsWith(`${root}/`)) && root.length > bestLen) {
+        best = repo
+        bestLen = root.length
+      }
+    }
+    return best
+  })
+  return {
+    resolveRepo: vi.fn((arg: unknown) => {
+      const uri = (arg as { resourceUri?: string } | undefined)?.resourceUri
+      return uri ? resolveContaining(uri) : repos[0]
+    }),
+    resolveContaining,
+    submodulesOf: vi.fn(() => []),
+  } as unknown as RepositoryManager
+}
+
+describe('git multi-selection commands', () => {
+  const A = join(ROOT, 'a.ts')
+  const B = join(ROOT, 'b.ts')
+  const DIR = join(ROOT, 'src')
+  const SUB = join(ROOT, 'sub')
+  const SUB_FILE = join(SUB, 's.ts')
+
+  function resource(resourceUri: string, overrides: Record<string, unknown> = {}) {
+    return {
+      resourceUri,
+      contextValue: 'M',
+      scmResourceGroupId: 'workingTree',
+      ...overrides,
+    }
+  }
+
+  function setup(...repos: Repository[]) {
+    return { commands: makeCommandsWithManager(fakeRoutingManager(repos)) }
+  }
+
+  function confirmWithFirstButton(): void {
+    mocks.showWarningMessage.mockImplementation(
+      async (_message: unknown, button: unknown) => button,
+    )
+  }
+
+  it('stages every selected working-tree file in one repo call', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.stage')?.({ resourceUri: A }, [resource(A), resource(B)])
+
+    expect(repo.stage).toHaveBeenCalledTimes(1)
+    expect(repo.stage).toHaveBeenCalledWith([A, B])
+  })
+
+  it('stages only working-tree entries from a mixed-group selection', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.stage')?.({ resourceUri: A }, [
+      resource(A),
+      resource(B, { scmResourceGroupId: 'index' }),
+    ])
+
+    expect(repo.stage).toHaveBeenCalledWith([A])
+  })
+
+  it('accepts selection entries without a group id and dedupes paths', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.stage')?.({ resourceUri: A }, [
+      { resourceUri: A, contextValue: 'M' },
+      { resourceUri: A, contextValue: 'M' },
+      { resourceUri: B, contextValue: 'M' },
+    ])
+
+    expect(repo.stage).toHaveBeenCalledWith([A, B])
+  })
+
+  it('keeps the single directory target for a folder-row invocation', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.stage')?.({ resourceUri: DIR, isDirectory: true }, [
+      resource(A),
+      resource(B),
+    ])
+
+    expect(repo.stage).toHaveBeenCalledWith([DIR])
+  })
+
+  it('routes a multi-repo selection to each containing repo', async () => {
+    const main = fakeSelectionRepo(ROOT)
+    const sub = fakeSelectionRepo(SUB)
+    const { commands } = setup(main, sub)
+
+    await commands.get('git.stage')?.({ resourceUri: A }, [resource(A), resource(SUB_FILE)])
+
+    expect(main.stage).toHaveBeenCalledWith([A])
+    expect(sub.stage).toHaveBeenCalledWith([SUB_FILE])
+  })
+
+  it('falls back to the single primary target without a selection', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.stage')?.({ resourceUri: A, contextValue: 'M' })
+
+    expect(repo.stage).toHaveBeenCalledWith([A])
+  })
+
+  it('unstages every selected index file and skips worktree / untracked rows', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.unstage')?.({ resourceUri: A }, [
+      resource(A, { scmResourceGroupId: 'index' }),
+      resource(B, { scmResourceGroupId: 'workingTree' }),
+      resource(join(ROOT, 'new.ts'), { scmResourceGroupId: 'index', contextValue: '?' }),
+    ])
+
+    expect(repo.unstage).toHaveBeenCalledWith([A])
+  })
+
+  it('keeps the single directory target when unstaging a folder row', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.unstage')?.({ resourceUri: DIR, isDirectory: true }, [
+      resource(A, { scmResourceGroupId: 'index' }),
+    ])
+
+    expect(repo.unstage).toHaveBeenCalledWith([DIR])
+  })
+
+  it('falls back to the single primary target when unstaging without a selection', async () => {
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.unstage')?.({ resourceUri: A, contextValue: 'M' })
+
+    expect(repo.unstage).toHaveBeenCalledWith([A])
+  })
+
+  it('discards every selected working-tree file after one confirmation', async () => {
+    confirmWithFirstButton()
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.discard')?.({ resourceUri: A }, [
+      resource(A),
+      resource(B, { contextValue: '?' }),
+    ])
+
+    expect(mocks.showWarningMessage).toHaveBeenCalledTimes(1)
+    expect(String(mocks.showWarningMessage.mock.calls[0]?.[0])).toContain('2')
+    expect(repo.discardPaths).toHaveBeenCalledWith([
+      { path: A, untracked: false },
+      { path: B, untracked: true },
+    ])
+  })
+
+  it('uses the single-file confirmation when the selection resolves to one file', async () => {
+    confirmWithFirstButton()
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.discard')?.({ resourceUri: A }, [
+      resource(A),
+      resource(B, { scmResourceGroupId: 'index' }),
+    ])
+
+    expect(mocks.showWarningMessage).toHaveBeenCalledTimes(1)
+    expect(String(mocks.showWarningMessage.mock.calls[0]?.[0])).toContain('a.ts')
+    expect(repo.discardPaths).toHaveBeenCalledWith([{ path: A, untracked: false }])
+  })
+
+  it('does nothing when the discard confirmation is dismissed', async () => {
+    mocks.showWarningMessage.mockResolvedValue(undefined)
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.discard')?.({ resourceUri: A }, [resource(A), resource(B)])
+
+    expect(repo.discardPaths).not.toHaveBeenCalled()
+  })
+
+  it('keeps the recursive folder discard for a folder-row invocation', async () => {
+    confirmWithFirstButton()
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.discard')?.({ resourceUri: DIR, isDirectory: true }, [resource(A)])
+
+    expect(repo.discardFolder).toHaveBeenCalledWith(DIR)
+    expect(repo.discardPaths).not.toHaveBeenCalled()
+  })
+
+  it('routes a multi-repo discard selection to each containing repo', async () => {
+    confirmWithFirstButton()
+    const main = fakeSelectionRepo(ROOT)
+    const sub = fakeSelectionRepo(SUB)
+    const { commands } = setup(main, sub)
+
+    await commands.get('git.discard')?.({ resourceUri: A }, [resource(A), resource(SUB_FILE)])
+
+    expect(mocks.showWarningMessage).toHaveBeenCalledTimes(1)
+    expect(main.discardPaths).toHaveBeenCalledWith([{ path: A, untracked: false }])
+    expect(sub.discardPaths).toHaveBeenCalledWith([{ path: SUB_FILE, untracked: false }])
+  })
+
+  it('falls back to the legacy single-file discard without a selection', async () => {
+    confirmWithFirstButton()
+    const repo = fakeSelectionRepo(ROOT)
+    const { commands } = setup(repo)
+
+    await commands.get('git.discard')?.({ resourceUri: A, contextValue: '?' })
+
+    expect(mocks.showWarningMessage).toHaveBeenCalledTimes(1)
+    expect(repo.discard).toHaveBeenCalledWith(A, true)
   })
 })
 

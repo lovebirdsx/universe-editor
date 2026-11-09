@@ -51,6 +51,7 @@ import {
   type RefreshOptions,
   type RepositoryOptions,
   type RepoStatus,
+  type DiscardTarget,
 } from './repositoryTypes.js'
 
 export { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
@@ -806,8 +807,34 @@ export class Repository {
   }
 
   async discard(path: string, untracked: boolean): Promise<void> {
-    const args = untracked ? ['clean', '-f', '--', path] : ['checkout', '--', path]
-    await this._run(args, 'discard')
+    await this.discardPaths([{ path, untracked }])
+  }
+
+  /** Discard a batch: one `checkout` for tracked paths, one `clean -f` for
+   *  untracked paths, then a single refresh. The two kinds cannot share a
+   *  command: `checkout` aborts when any pathspec is untracked. */
+  async discardPaths(targets: readonly DiscardTarget[]): Promise<void> {
+    if (targets.length === 0) return
+    const tracked: string[] = []
+    const untracked: string[] = []
+    for (const target of targets) {
+      if (target.untracked) untracked.push(target.path)
+      else tracked.push(target.path)
+    }
+    this._beginOperation()
+    try {
+      if (tracked.length > 0) {
+        const checkout = await gitExec(['checkout', '--', ...tracked], this.root, this._log)
+        if (checkout.exitCode !== 0) await notifyGitFailure('discard', checkout)
+      }
+      if (untracked.length > 0) {
+        const clean = await gitExec(['clean', '-f', '--', ...untracked], this.root, this._log)
+        if (clean.exitCode !== 0) await notifyGitFailure('discard', clean)
+      }
+    } finally {
+      this._endOperation()
+      await this.refresh()
+    }
   }
 
   /** Discard every change under a directory — restore tracked files and remove untracked ones. */

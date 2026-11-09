@@ -104,6 +104,23 @@ export class RepositoryManager {
     return repo
   }
 
+  /** The repo whose root contains `resourceUri`, longest prefix wins. Unlike
+   *  {@link resolveRepo} there is no active-repo fallback: a batch command must
+   *  skip a path no repo owns instead of sending it to the active repo. */
+  resolveContaining(resourceUri: string): Repository | undefined {
+    const p = norm(resourceUri)
+    let best: Repository | undefined
+    let bestLen = -1
+    for (const repo of this._repos.values()) {
+      const r = norm(repo.root)
+      if ((p === r || p.startsWith(`${r}/`)) && r.length > bestLen) {
+        best = repo
+        bestLen = r.length
+      }
+    }
+    return best
+  }
+
   resolveRepo(arg: unknown): Repository | undefined {
     const a = (arg ?? undefined) as RepoArg | undefined
     if (a?.rootUri) {
@@ -111,17 +128,8 @@ export class RepositoryManager {
       if (hit) return hit
     }
     if (a?.resourceUri) {
-      const p = norm(a.resourceUri)
-      let best: Repository | undefined
-      let bestLen = -1
-      for (const repo of this._repos.values()) {
-        const r = norm(repo.root)
-        if ((p === r || p.startsWith(`${r}/`)) && r.length > bestLen) {
-          best = repo
-          bestLen = r.length
-        }
-      }
-      if (best) return best
+      const hit = this.resolveContaining(a.resourceUri)
+      if (hit) return hit
     }
     return this.active
   }

@@ -16,6 +16,13 @@ export interface FetchOptions {
   readonly silent?: boolean
 }
 
+/** One file a batch discard should revert: tracked paths go through `checkout`,
+ *  untracked ones through `clean -f`. */
+export interface DiscardTarget {
+  readonly path: string
+  readonly untracked: boolean
+}
+
 export interface RepositoryOptions {
   /** SourceControl label shown in the SCM view header (e.g. `Git: <submodule>`). */
   readonly label?: string

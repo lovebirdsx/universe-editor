@@ -135,6 +135,46 @@ describe('ScmView — file-row context menu', () => {
     )
   })
 
+  it('runs a multi-selection command over every selected file row', async () => {
+    contributions.push(
+      MenuRegistry.addMenuItem(MenuId.ScmResourceStateContext, {
+        command: 'git.stage',
+        title: 'Stage Changes',
+        when: 'scmProvider == git && scmResourceGroup == workingTree',
+        group: 'inline',
+        order: 1,
+      }),
+    )
+
+    const { scm, executeCommand } = setup()
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: 'D:/repo/a.txt', contextValue: 'M' },
+        { resourceUri: 'D:/repo/b.txt', contextValue: 'M' },
+      ])
+    })
+
+    const rowA = (await screen.findByText('a.txt')).closest('[role="treeitem"]') as HTMLElement
+    const rowB = (await screen.findByText('b.txt')).closest('[role="treeitem"]') as HTMLElement
+    fireEvent.click(rowA)
+    fireEvent.click(rowB, { ctrlKey: true })
+    fireEvent.contextMenu(rowB)
+
+    const menu = await screen.findByRole('menu')
+    fireEvent.click(within(menu).getByText('Stage Changes'))
+
+    expect(executeCommand).toHaveBeenCalledWith(
+      'git.stage',
+      expect.objectContaining({ resourceUri: 'D:/repo/b.txt', scmResourceGroupId: 'workingTree' }),
+      expect.arrayContaining([
+        expect.objectContaining({ resourceUri: 'D:/repo/a.txt' }),
+        expect.objectContaining({ resourceUri: 'D:/repo/b.txt' }),
+      ]),
+    )
+  })
+
   // Regression: the ContextMenu key opened a menu that was a mouse-only widget —
   // no arrow-key navigation, no Enter, nothing marking a current row — so the
   // menu looked unfocused and could only be driven with the mouse. Explorer had

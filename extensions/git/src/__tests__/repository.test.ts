@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { rm, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -672,6 +672,69 @@ describe('Repository.checkIgnore', () => {
     const repo = new Repository(root) // no `git init` — check-ignore exits 128
     try {
       await expect(repo.checkIgnore([join(root, 'x.ts')])).resolves.toEqual([])
+    } finally {
+      repo.dispose()
+    }
+  })
+})
+
+describe('Repository.discardPaths', () => {
+  async function createRepoWithFiles(): Promise<{ root: string; tracked: string; other: string }> {
+    const root = mkTempDir('ue-git-discard-')
+    tmpRoots.push(root)
+    await git(['init', root])
+    const tracked = join(root, 'tracked.txt')
+    const other = join(root, 'other.txt')
+    await writeFile(tracked, 'head\n')
+    await writeFile(other, 'head\n')
+    await git(['add', 'tracked.txt', 'other.txt'], root)
+    await git(['commit', '-m', 'initial'], root)
+    return { root, tracked, other }
+  }
+
+  it('restores tracked files and removes untracked ones in one batch', async () => {
+    const { root, tracked, other } = await createRepoWithFiles()
+    const untracked = join(root, 'new.txt')
+    await writeFile(tracked, 'dirty\n')
+    await writeFile(other, 'dirty2\n')
+    await writeFile(untracked, 'new\n')
+    const repo = new Repository(root)
+    try {
+      await repo.discardPaths([
+        { path: tracked, untracked: false },
+        { path: untracked, untracked: true },
+      ])
+      await expect(readFile(tracked, 'utf8')).resolves.toBe('head\n')
+      // A file outside the batch stays dirty.
+      await expect(readFile(other, 'utf8')).resolves.toBe('dirty2\n')
+      await expect(readFile(untracked, 'utf8')).rejects.toThrow()
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('keeps tracked changes when the batch only contains untracked files', async () => {
+    const { root, tracked } = await createRepoWithFiles()
+    const untracked = join(root, 'new.txt')
+    await writeFile(tracked, 'dirty\n')
+    await writeFile(untracked, 'new\n')
+    const repo = new Repository(root)
+    try {
+      await repo.discardPaths([{ path: untracked, untracked: true }])
+      await expect(readFile(untracked, 'utf8')).rejects.toThrow()
+      await expect(readFile(tracked, 'utf8')).resolves.toBe('dirty\n')
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('is a no-op for an empty batch', async () => {
+    const { root, tracked } = await createRepoWithFiles()
+    await writeFile(tracked, 'dirty\n')
+    const repo = new Repository(root)
+    try {
+      await repo.discardPaths([])
+      await expect(readFile(tracked, 'utf8')).resolves.toBe('dirty\n')
     } finally {
       repo.dispose()
     }

@@ -64,6 +64,23 @@ describe('RepositoryManager routing', () => {
     mgr.setActive(SUB)
     expect(mgr.resolveRepo({ rootUri: MAIN })?.root).toBe(MAIN)
   })
+
+  it('resolveContaining picks the longest containing root', () => {
+    const mgr = makeManager()
+    expect(mgr.resolveContaining(`${SUB}/file.ts`)?.root).toBe(SUB)
+    expect(mgr.resolveContaining(`${MAIN}/file.ts`)?.root).toBe(MAIN)
+  })
+
+  it('resolveContaining matches a repo root itself', () => {
+    const mgr = makeManager()
+    expect(mgr.resolveContaining(SUB)?.root).toBe(SUB)
+  })
+
+  it('resolveContaining never falls back to the active repo', () => {
+    const mgr = makeManager()
+    mgr.setActive(SUB)
+    expect(mgr.resolveContaining('/outside/file.ts')).toBeUndefined()
+  })
 })
 
 describe('RepositoryManager late additions', () => {
