@@ -8,9 +8,11 @@
 
 import {
   arePathsEqual,
+  CancellationTokenSource,
   normalizePlatform,
   REMOTE_SCHEME,
   URI,
+  type CancellationToken,
   type ILogger,
 } from '@universe-editor/platform'
 import {
@@ -70,6 +72,14 @@ interface WindowEntry {
   subscription: { dispose(): void } | undefined
   streaming: boolean
   attention: boolean
+  /**
+   * True once a ping reached this window's renderer. Main registers the
+   * reverse channel before `loadURL`, so subscribe / startStreaming frames
+   * sent earlier are dropped by the transport and nothing retries them.
+   */
+  rendererReady: boolean
+  /** In-flight readiness probe, shared by the wiring and command paths. */
+  readyProbe: Promise<boolean> | undefined
 }
 
 /** Main-owned attention fact, resolved from a bridge event and the inbox cache. */
@@ -122,7 +132,12 @@ export interface MobileGatewayHost {
   listOpenWorkspaces(): readonly MobileGatewayHostWorkspace[]
   listRecentWorkspaces(): Promise<readonly MobileGatewayHostWorkspace[]>
   openWorkspace(folder: string, authority?: string): Promise<void>
-  /** Resolve when the window's renderer bridge is registered, or undefined on timeout. */
+  /**
+   * Resolve when the window is open and main has registered its reverse
+   * channel, or undefined on timeout. The renderer may still be booting: its
+   * IPC channel is registered long after this point, so callers must ping it
+   * before issuing commands.
+   */
   waitForBridge(
     folder: string,
     authority: string | undefined,
@@ -146,7 +161,22 @@ interface CommandOutcome {
 /** How long a repeated idempotency key returns the first result. */
 export const COMMAND_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000
 export const SEND_PROMPT_TIMEOUT_MS = 15_000
+/**
+ * Total budget for open + renderer-ready + create. Stays below the phone's 30s
+ * command timeout so the phone receives the real error instead of a timeout.
+ */
+export const NEW_SESSION_TIMEOUT_MS = 25_000
 const NEW_SESSION_BRIDGE_TIMEOUT_MS = 30_000
+/** A ping sent before the renderer's listener exists never settles; cap each try. */
+const BRIDGE_PING_TIMEOUT_MS = 500
+const BRIDGE_PING_INTERVAL_MS = 100
+/** Inbox snapshot: bound each window's readiness wait and list call. */
+const INBOX_WINDOW_READY_TIMEOUT_MS = 5_000
+const INBOX_LIST_TIMEOUT_MS = 5_000
+/** Session subscribe: a snapshot requested before the renderer answers is lost. */
+const SESSION_READY_TIMEOUT_MS = 10_000
+/** List agents: also bound by the phone's own 10s command timeout. */
+const LIST_AGENTS_TIMEOUT_MS = 10_000
 /** Fork / rewind / side-task commands wait on an agent fork RPC plus a resume. */
 const LONG_COMMAND_TIMEOUT_MS = 120_000
 const PREVIEW_REWIND_TIMEOUT_MS = 30_000
@@ -207,6 +237,8 @@ export class MobileGatewayHub {
       subscription: undefined,
       streaming: false,
       attention: false,
+      rendererReady: false,
+      readyProbe: undefined,
     }
     this._windows.set(windowId, entry)
     this._syncWindow(entry)
@@ -227,6 +259,7 @@ export class MobileGatewayHub {
     for (const state of this._connections) {
       for (const [key, subscription] of state.sessions) {
         if (subscription.windowId !== windowId) continue
+        subscription.cancelled = true
         state.sessions.delete(key)
         this._send(
           state.connection,
@@ -344,14 +377,31 @@ export class MobileGatewayHub {
       this._send(connection, { type: 'session_removed', ref }, ref.localId)
       return
     }
+    const deadline = Date.now() + SESSION_READY_TIMEOUT_MS
+    if (!(await this._ensureWindowReady(entry, deadline))) {
+      // Unregister already removed the subscription and sent its own frame.
+      if (subscription.cancelled || state.sessions.get(key) !== subscription) return
+      this._logger.warn(
+        `mobile snapshot skipped: window ${resolved.windowId} renderer never answered`,
+      )
+      state.sessions.delete(key)
+      this._send(connection, { type: 'session_removed', ref }, ref.localId)
+      return
+    }
+    if (subscription.cancelled || state.sessions.get(key) !== subscription) return
     let snapshot: Awaited<ReturnType<IMobileBridgeService['getSnapshot']>>
     try {
-      snapshot = await entry.bridge.getSnapshot(resolved.localId)
+      snapshot = await callWithToken(
+        (token) => entry.bridge.getSnapshot(resolved.localId, token),
+        Math.max(1, deadline - Date.now()),
+      )
     } catch (err) {
       this._logger.warn(`mobile snapshot failed: ${String(err)}`)
       snapshot = undefined
     }
-    if (subscription.cancelled) return
+    // Unsubscribe / re-subscribe / window close may have replaced the entry
+    // while the snapshot was in flight; the newer request owns the output.
+    if (subscription.cancelled || state.sessions.get(key) !== subscription) return
     if (snapshot === undefined) {
       state.sessions.delete(key)
       this._send(connection, { type: 'session_removed', ref }, ref.localId)
@@ -387,11 +437,11 @@ export class MobileGatewayHub {
       ref.durableId !== undefined
         ? this._findSubscriptionKeyByDurable(state, ref.durableId)
         : undefined
-    if (key !== undefined) {
-      state.sessions.delete(key)
-      return
-    }
-    state.sessions.delete(sessionKey(ref.windowId, ref.localId))
+    const target = key ?? sessionKey(ref.windowId, ref.localId)
+    const subscription = state.sessions.get(target)
+    if (subscription !== undefined) subscription.cancelled = true
+    state.sessions.delete(target)
+    this._updateStreaming()
   }
 
   async handleCommand(
@@ -745,11 +795,18 @@ export class MobileGatewayHub {
     // open remote window is required.
     if (remote && openMatch === undefined) return failOutcome('workspace_not_open')
 
+    const deadline = Date.now() + NEW_SESSION_TIMEOUT_MS
     let windowId = openMatch?.windowId
     if (windowId === undefined || !this._windows.has(windowId)) {
       if (openMatch === undefined) {
+        const host = this._host
         try {
-          await this._host?.openWorkspace(payload.workspace.folder, authority)
+          if (host !== undefined) {
+            await withTimeout(
+              host.openWorkspace(payload.workspace.folder, authority),
+              Math.max(1, deadline - Date.now()),
+            )
+          }
         } catch (err) {
           this._logger.warn(`mobile newSession openWorkspace failed: ${String(err)}`)
           return failOutcome('workspace_not_open')
@@ -758,24 +815,37 @@ export class MobileGatewayHub {
       windowId = await this._host?.waitForBridge(
         payload.workspace.folder,
         authority,
-        NEW_SESSION_BRIDGE_TIMEOUT_MS,
+        Math.max(0, deadline - Date.now()),
       )
     }
     if (windowId === undefined) return failOutcome('workspace_not_open')
     const entry = this._windows.get(windowId)
     if (entry === undefined) return failOutcome('workspace_not_open')
 
+    // `waitForBridge` only proves main registered the reverse channel. A fresh
+    // window's renderer registers its side after the bundle boots, so a command
+    // sent now is dropped by the transport and never settles; ping until the
+    // renderer actually answers. Also covers a renderer reload.
+    if (!(await this._ensureWindowReady(entry, deadline))) {
+      this._logger.warn(
+        `mobile newSession renderer not ready within ${NEW_SESSION_TIMEOUT_MS}ms (window=${windowId})`,
+      )
+      return failOutcome('workspace_not_open')
+    }
+
     try {
-      const result = await withTimeout(
-        entry.bridge.newSession(
-          payload.agentId,
-          {
-            folder: payload.workspace.folder,
-            ...(authority !== undefined ? { authority } : {}),
-          },
-          payload.initialPrompt,
-        ),
-        NEW_SESSION_BRIDGE_TIMEOUT_MS,
+      const result = await callWithToken(
+        (token) =>
+          entry.bridge.newSession(
+            payload.agentId,
+            {
+              folder: payload.workspace.folder,
+              ...(authority !== undefined ? { authority } : {}),
+            },
+            payload.initialPrompt ?? null,
+            token,
+          ),
+        Math.max(1, deadline - Date.now()),
       )
       if (!result.ok) return { ok: false, error: result.code }
       const created: MobileNewSessionResult = {
@@ -790,6 +860,68 @@ export class MobileGatewayHub {
       this._logger.warn(`mobile newSession failed: ${String(err)}`)
       return failOutcome('internal')
     }
+  }
+
+  /**
+   * A dropped frame (renderer listener not installed yet) never settles, so
+   * each probe is bounded and cancelled on timeout. A failed probe also clears
+   * `rendererReady`: a reload kills the old renderer's wiring, and the next
+   * successful ping must rebuild it. Retries stop at the shared deadline.
+   */
+  private async _waitForBridgeReady(entry: WindowEntry, deadline: number): Promise<boolean> {
+    while (Date.now() < deadline) {
+      if (this._windows.get(entry.windowId) !== entry) return false
+      try {
+        await callWithToken(
+          (token) => entry.bridge.ping(token),
+          Math.max(1, Math.min(BRIDGE_PING_TIMEOUT_MS, deadline - Date.now())),
+        )
+        return true
+      } catch {
+        // Transport drop, ChannelNotFound, channel disposed, or timeout: retry.
+        if (this._windows.get(entry.windowId) === entry) this._markRendererLost(entry)
+      }
+      const sleepMs = Math.min(BRIDGE_PING_INTERVAL_MS, deadline - Date.now())
+      if (sleepMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, sleepMs))
+    }
+    return false
+  }
+
+  /**
+   * Probe until the renderer channel answers, then run the deferred wiring on
+   * the first success. Used by both the command path and the background sync.
+   */
+  private async _ensureWindowReady(entry: WindowEntry, deadline: number): Promise<boolean> {
+    if (!(await this._waitForBridgeReady(entry, deadline))) return false
+    if (this._windows.get(entry.windowId) !== entry) return false
+    if (!entry.rendererReady) {
+      entry.rendererReady = true
+      this._syncWindow(entry)
+    }
+    return true
+  }
+
+  /**
+   * A failed probe means the old renderer's event wiring is gone (reload) or
+   * never existed. Reset the flags so a later successful probe re-subscribes
+   * and re-sends the idempotent streaming/attention toggles; the old renderer
+   * is not asked to stop because it may already be gone.
+   */
+  private _markRendererLost(entry: WindowEntry): void {
+    entry.rendererReady = false
+    entry.subscription?.dispose()
+    entry.subscription = undefined
+    entry.streaming = false
+    entry.attention = false
+  }
+
+  private _startReadyProbe(entry: WindowEntry): void {
+    if (entry.readyProbe !== undefined) return
+    const probe = this._ensureWindowReady(entry, Date.now() + NEW_SESSION_TIMEOUT_MS)
+    entry.readyProbe = probe
+    void probe.finally(() => {
+      if (entry.readyProbe === probe) entry.readyProbe = undefined
+    })
   }
 
   private async _listWorkspaces(): Promise<CommandOutcome> {
@@ -814,10 +946,22 @@ export class MobileGatewayHub {
   }
 
   private async _listAgents(): Promise<CommandOutcome> {
-    const entry = this._windows.values().next().value as WindowEntry | undefined
+    const entries = [...this._windows.values()]
+    // Prefer a renderer that already answered; otherwise probe the first one.
+    const entry = entries.find((candidate) => candidate.rendererReady) ?? entries[0]
     if (entry === undefined) return { ok: true, result: [] as MobileAgentCandidate[] }
     try {
-      return { ok: true, result: await withTimeout(entry.bridge.listAgents(), 10_000) }
+      const deadline = Date.now() + LIST_AGENTS_TIMEOUT_MS
+      if (!(await this._ensureWindowReady(entry, deadline))) {
+        return failOutcome('internal')
+      }
+      return {
+        ok: true,
+        result: await callWithToken(
+          (token) => entry.bridge.listAgents(token),
+          Math.max(1, deadline - Date.now()),
+        ),
+      }
     } catch (err) {
       this._logger.warn(`mobile listAgents failed: ${String(err)}`)
       return failOutcome('internal')
@@ -987,8 +1131,26 @@ export class MobileGatewayHub {
       const windows = [...this._windows.values()]
       const lists = await Promise.all(
         windows.map(async (entry) => {
-          const summaries = await entry.bridge.listSessions()
-          return summaries.map((summary) => this._toProtocolSummary(entry, summary))
+          try {
+            // A window registered before its renderer booted cannot answer.
+            // Wait briefly; if it is still booting, leave its rows to the
+            // deltas its streaming emits once the readiness probe wires it.
+            if (
+              !(await this._ensureWindowReady(entry, Date.now() + INBOX_WINDOW_READY_TIMEOUT_MS))
+            ) {
+              return []
+            }
+            const summaries = await callWithToken(
+              (token) => entry.bridge.listSessions(token),
+              INBOX_LIST_TIMEOUT_MS,
+            )
+            return summaries.map((summary) => this._toProtocolSummary(entry, summary))
+          } catch (err) {
+            this._logger.warn(
+              `mobile inbox snapshot window ${entry.windowId} failed: ${String(err)}`,
+            )
+            return []
+          }
         }),
       )
       for (const list of lists) sessions.push(...list)
@@ -1160,6 +1322,13 @@ export class MobileGatewayHub {
   /** Bring one window's bridge subscriptions in line with the two flags. */
   private _syncWindow(entry: WindowEntry): void {
     const active = this._streaming || this._attention
+    if (!entry.rendererReady) {
+      // Frames sent to a booting renderer are dropped and never replayed, so
+      // hold the wiring until a ping proves the channel exists; the probe
+      // re-runs this method on success.
+      if (active) this._startReadyProbe(entry)
+      return
+    }
     if (active) {
       // Subscribe only when first needed, not at registerWindow: main registers
       // the window before the renderer has registered its IPC channel.
@@ -1296,5 +1465,21 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
         reject(error)
       },
     )
+  })
+}
+
+/**
+ * Bound a bridge call and cancel it on timeout. Cancelling releases the channel
+ * client's pending request instead of leaving it until the window closes; a
+ * cancel after success is a no-op because the listener is already removed.
+ */
+function callWithToken<T>(
+  call: (token: CancellationToken) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  const cts = new CancellationTokenSource()
+  return withTimeout(call(cts.token), timeoutMs).finally(() => {
+    cts.cancel()
+    cts.dispose()
   })
 }

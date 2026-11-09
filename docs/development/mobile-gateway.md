@@ -327,9 +327,31 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 
 | 目标工作区状态 | 行为 |
 |---|---|
-| 已有匹配窗口 | 直接调用该窗口桥的 `newSession`（不等待） |
-| 仅在最近列表 | `openWindowForFolder` 自动开窗（会把窗口带到前台，已接受），随后轮询等桥注册，上限 30s |
-| 都不在 / 等待桥超时 | 返回 `workspace_not_open` |
+| 已有匹配窗口 | ping 探活通过后调用该窗口桥的 `newSession`（覆盖 renderer reload） |
+| 仅在最近列表 | `openWindowForFolder` 自动开窗（会把窗口带到前台，已接受），等 main 侧桥注册，再 ping 到 renderer 的 `MobileBridge` 通道应答后才发命令 |
+| 都不在 / 等待桥超时 / ping 始终无应答 | 返回 `workspace_not_open` |
+
+**为什么必须 ping**：`createWindowScopedServices` 在 `loadURL` **之前**就调用了
+`mobileGateway.registerWindowBridge(...)`，`waitForBridge` 只能证明 main 侧反向代理存在；
+renderer 的 `ServiceChannels.MobileBridge` 要等 bundle 启动到 `main.tsx` 才注册。此前直接发
+`newSession` 会撞上这个窗口期：帧被 `ElectronProtocol.send` 静默丢弃（或命中未注册通道），
+RPC 永不返回，手机端只看到工作区被打开、会话没创建。
+
+**就绪门覆盖所有跨进程调用**：`_ensureWindowReady` 不只用于 `newSession`——inbox 快照与
+`listSessions`（每窗口 5s）、会话快照（就绪 + `getSnapshot` 共用 10s）、`listAgents`（就绪 +
+调用共用 10s，低于手机端命令超时）都会先等 ping 应答；renderer 未就绪时 `_syncWindow` 完全
+不发送 `startStreaming` / `startAttention` 帧，探活成功后再一次性建立事件订阅与 streaming 接线。
+探测失败会清掉旧的事件订阅并把 streaming/attention 标志归零（不向可能已消失的旧 renderer 发
+stop），下一次成功探测重新订阅并重发幂等开关，因此 renderer reload 后事件流能自愈。
+
+**参数槽位陷阱**：`newSession` 的 `initialPrompt` 用 `string | null` 而非可选参数。代理在发送前
+会剥掉参数数组尾部的 `undefined`，若省略 prompt，取消 token 会被前移进 prompt 槽位（renderer
+把 token 当 prompt、真正的 token 变成 `undefined`），超时取消随之失效。`null` 原样过线，槽位稳定。
+
+**预算**：打开窗口、等通道就绪、创建会话共用一个 25s deadline（低于手机端 30s 命令超时），
+超时返回 `workspace_not_open` / `internal` 而不是让手机先超时。每次 ping 带 500ms 超时 +
+100ms 间隔，并用 `CancellationToken` 取消，避免被丢弃的 RPC 在 channel client 里堆积。
+`newSession` 超时会取消底层请求，避免手机已收到超时后 renderer 又创建出「幽灵会话」。
 
 **远程**：已有远程会话可以镜像到手机；新建远程会话要求对应远程窗口已打开，不因手机请求而新建远程连接
 （`isRemoteWorkspace`：带 authority 或 scheme 为 `remote-ssh`）。仅最近列表里的远程工作区同样回
@@ -338,6 +360,8 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 **时序**：`createSession` 同步返回；桥立即回 `{ localId, durableId? }`，初始 prompt 先入队，
 客户端可以立即 `sendPrompt`，由会话保证在 ready 后按顺序投递。`listWorkspaces` 返回
 `{ folder, name, authority?, isOpen }`；`listAgents` 返回 `{ id, name, isDefault }`。
+新窗口的 renderer 在创建会话 / 列出 agent 前会等 `IUserSettingsSyncService.whenInitialized`
+（`ConfigInitContribution` 的 hydration 是 fire-and-forget），否则自定义 `acp.agents` 可能还没进内存。
 
 ## 6b. Fork / Rewind / 侧边任务（v6）
 

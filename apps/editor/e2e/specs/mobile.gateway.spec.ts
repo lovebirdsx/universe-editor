@@ -8,9 +8,9 @@
  *  the same port in different workers.
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkTempDir } from '@universe-editor/e2e-harness'
 import { chromium, devices, type Browser, type BrowserContext, type Page } from '@playwright/test'
@@ -118,13 +118,14 @@ async function sendCommand(
   kind: string,
   payload: unknown,
   idempotencyKey?: string,
+  timeoutMs = 10_000,
 ): Promise<CommandResultFrame> {
   const requestId = `e2e-${++nextCommandId}`
   const frame = await new Promise<CommandResultFrame>((resolve, reject) => {
     const timer = setTimeout(() => {
       cleanup()
       reject(new Error(`timed out waiting for command_result (${kind})`))
-    }, 10_000)
+    }, timeoutMs)
     const cleanup = (): void => {
       clearTimeout(timer)
       ws.off('message', onMessage)
@@ -1348,6 +1349,142 @@ test.describe('mobile gateway fork/rewind guards', () => {
         .toBe('idle')
     } finally {
       if (!existsSync(releasePath)) writeFileSync(releasePath, '')
+      ws.close()
+    }
+  })
+})
+
+/**
+ * Regression: a recent-only workspace is opened by the gateway first, and the
+ * session must be created in that NEW window. Main registers the reverse bridge
+ * before `loadURL`, so the command used to race the fresh renderer's channel
+ * registration and time out (workspace opened, no session).
+ */
+test.describe('mobile gateway recent workspace', () => {
+  test.describe.configure({ mode: 'default' })
+
+  test('@regression creates a session after opening a recent-only workspace', async ({
+    page,
+    workbench,
+    electronApp,
+    scratchDir,
+  }) => {
+    test.setTimeout(90_000)
+    await workbench.waitForRestored()
+
+    // The window the gateway opens for the recent workspace reads its agent
+    // config from USER settings at startup (Memory scope is per-window).
+    await page.evaluate(
+      ([agentPath]) =>
+        window.__E2E__!.runCommand('_workbench.updateConfiguration', 'acp.agents', [
+          { id: 'echo', name: 'Echo Agent', command: 'node', args: [agentPath] },
+        ]),
+      [ECHO_AGENT_PATH] as const,
+    )
+    await page.evaluate(() =>
+      window.__E2E__!.runCommand('_workbench.updateConfiguration', 'acp.defaultAgentId', 'echo'),
+    )
+    // The update resolves before settings.json necessarily hits disk; sending
+    // the phone command earlier would race the new window onto the real default
+    // agent (same flush race as the deep-link spec).
+    const userDataDir = await electronApp.evaluate(({ app }) => app.getPath('userData'))
+    await expect
+      .poll(
+        () => {
+          try {
+            const parsed = JSON.parse(
+              readFileSync(join(userDataDir, 'settings.json'), 'utf8'),
+            ) as Record<string, unknown>
+            const agents = parsed['acp.agents'] as Array<{ id?: string }> | undefined
+            return (
+              parsed['acp.defaultAgentId'] === 'echo' &&
+              Boolean(agents?.some((agent) => agent.id === 'echo'))
+            )
+          } catch {
+            return false
+          }
+        },
+        { timeout: 10_000, message: 'echo agent config should be flushed to settings.json' },
+      )
+      .toBe(true)
+
+    // Make the folder recent-only: opening it adds it to the recents; closing
+    // it leaves no window holding the folder, so the gateway opens a new one.
+    const dir = realpathSync.native(scratchDir('universe-editor-e2e-mobile-recent-'))
+    const posixDir = dir.replace(/\\/g, '/')
+    await workbench.openWorkspace(dir)
+    await expect.poll(() => workbench.getCurrentWorkspacePath()).toBe(posixDir)
+    await page.evaluate(() => window.__E2E__!.closeWorkspace())
+    await expect.poll(() => workbench.getCurrentWorkspacePath()).toBeUndefined()
+    await expect.poll(() => workbench.getRecentWorkspacePaths()).toContain(posixDir)
+
+    const { ws } = await connectRawPhone(page, workbench)
+    try {
+      // The real PWA subscribes to the inbox right after hello. This matters:
+      // it makes the hub want streaming before the new window exists, so its
+      // subscribe/startStreaming frames race the fresh renderer exactly like a
+      // real phone.
+      await subscribeInbox(ws)
+
+      const name = basename(posixDir)
+      let candidate: MobileWorkspaceCandidate | undefined
+      await expect
+        .poll(
+          async () => {
+            const result = await sendCommand(ws, 'listWorkspaces', {})
+            candidate = result.ok
+              ? (result.result as MobileWorkspaceCandidate[]).find(
+                  (workspace) => !workspace.isOpen && workspace.name === name,
+                )
+              : undefined
+            return candidate !== undefined
+          },
+          { timeout: 15_000 },
+        )
+        .toBe(true)
+
+      const created = await sendCommand(
+        ws,
+        'newSession',
+        { agentId: 'echo', workspace: { folder: candidate!.folder } },
+        undefined,
+        30_000,
+      )
+      expect(created).toMatchObject({ ok: true })
+      const ref = (created.result as { ref: { windowId: number; localId: string } }).ref
+      expect(typeof ref.windowId).toBe('number')
+      expect(ref.localId).not.toBe('')
+
+      const snapshot = await subscribeSession(ws, ref)
+      expect(snapshot.session.summary.agentId).toBe('echo')
+
+      // Streaming from the NEW window must be wired even though the inbox was
+      // subscribed before that window booted. Without the readiness resync the
+      // hub believes it started streaming, so no delta ever reaches the phone.
+      const deltas: Extract<ServerFrame, { type: 'session_delta' }>[] = []
+      ws.on('message', (data) => {
+        const parsed = parseServerFrame(data.toString())
+        if (parsed.ok && parsed.value.type === 'session_delta') deltas.push(parsed.value)
+      })
+      const prompt = await sendCommand(ws, 'sendPrompt', { ref, text: 'hello' })
+      expect(prompt).toMatchObject({ ok: true })
+
+      const mirroredText = (): string[] => {
+        const textById = new Map<string, string>()
+        for (const delta of deltas) {
+          for (const event of delta.events) {
+            if (event.type === 'timeline_item_added' && event.item.kind === 'message') {
+              textById.set(event.item.id, event.item.text)
+            } else if (event.type === 'message_upsert') {
+              const previous = textById.get(event.id) ?? ''
+              textById.set(event.id, event.textReplace ?? previous + (event.textAppend ?? ''))
+            }
+          }
+        }
+        return [...textById.values()]
+      }
+      await expect.poll(mirroredText, { timeout: 10_000 }).toEqual(['hello', 'echo: hello'])
+    } finally {
       ws.close()
     }
   })

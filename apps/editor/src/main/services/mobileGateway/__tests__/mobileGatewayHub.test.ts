@@ -1,4 +1,4 @@
-import { Emitter, type ILogger } from '@universe-editor/platform'
+import { CancellationToken, Emitter, type ILogger } from '@universe-editor/platform'
 import type {
   MobileAgentCandidate,
   MobileSessionRef,
@@ -21,6 +21,7 @@ import {
   MAX_BUFFERED_SESSION_BYTES,
   SEND_PROMPT_TIMEOUT_MS,
   MobileGatewayHub,
+  NEW_SESSION_TIMEOUT_MS,
   type MobileCommandAudit,
   type MobileGatewayAttention,
   type MobileGatewayHost,
@@ -285,6 +286,57 @@ describe('MobileGatewayHub', () => {
     ])
   })
 
+  it('wires inbox streaming after the renderer answers', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.ping
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    hub.subscribeInbox(connection)
+    expect(bridge.startStreaming).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(bridge.startStreaming).toHaveBeenCalledTimes(1))
+    connection.frames.length = 0
+
+    bridge.emit({ kind: 'inbox', upserts: [summary('s1')], removes: [] })
+    expect(framesOf(connection, 'inbox_delta')).toHaveLength(1)
+  })
+
+  it('rebuilds the event wiring after the renderer stops answering', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    hub.subscribeInbox(connection)
+    await vi.waitFor(() => expect(bridge.startStreaming).toHaveBeenCalledTimes(1))
+    connection.frames.length = 0
+
+    bridge.emit({ kind: 'inbox', upserts: [summary('s1')], removes: [] })
+    expect(framesOf(connection, 'inbox_delta')).toHaveLength(1)
+
+    // A reload kills the old renderer's wiring: probes fail, then the fresh
+    // renderer answers and the hub must re-subscribe and re-enable streaming.
+    bridge.ping
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'wake',
+      kind: 'listAgents',
+      payload: {},
+    })
+    await vi.waitFor(() => expect(bridge.startStreaming).toHaveBeenCalledTimes(2))
+    connection.frames.length = 0
+
+    bridge.emit({ kind: 'inbox', upserts: [summary('s1', { title: 'After reload' })], removes: [] })
+    expect(framesOf(connection, 'inbox_delta')).toHaveLength(1)
+  })
+
   it('sends a session snapshot then forwards monotonic deltas', async () => {
     const hub = new MobileGatewayHub(NULL_LOGGER)
     const bridge = new FakeBridge()
@@ -306,13 +358,31 @@ describe('MobileGatewayHub', () => {
       localId: 's1',
       durableId: 'd1',
     })
-    expect(bridge.getSnapshot).toHaveBeenCalledWith('s1')
+    expect(bridge.getSnapshot).toHaveBeenCalledWith('s1', expect.anything())
 
     bridge.emit(event())
     bridge.emit(event())
     const deltas = framesOf(connection, 'session_delta')
     expect(deltas.map((delta) => delta.seq)).toStrictEqual([2, 3])
     expect(deltas[0]?.ref).toStrictEqual({ windowId: 1, localId: 's1', durableId: 'd1' })
+  })
+
+  it('waits for the renderer bridge before requesting a session snapshot', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1')]
+    bridge.snapshots.set('s1', snapshot('s1'))
+    bridge.ping
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.subscribeSession(connection, { windowId: 1, localId: 's1' })
+
+    expect(bridge.getSnapshot).toHaveBeenCalledWith('s1', expect.anything())
+    expect(framesOf(connection, 'session_snapshot')).toHaveLength(1)
   })
 
   it('drops frames that fail protocol validation and logs the failure', async () => {
@@ -367,6 +437,8 @@ describe('MobileGatewayHub', () => {
     hub.addConnection(connection)
 
     const subscribing = hub.subscribeSession(connection, { windowId: 1, localId: 's1' })
+    // The bridge subscription is wired only after the readiness ping answers.
+    await vi.waitFor(() => expect(bridge.startStreaming).toHaveBeenCalledTimes(1))
     bridge.emit(
       event({
         events: [
@@ -897,6 +969,10 @@ describe('MobileGatewayHub commands', () => {
       'fake',
       { folder: 'file:///workspace/demo' },
       'go',
+      expect.anything(),
+    )
+    expect(CancellationToken.isCancellationToken((bridge.ping.mock.calls[0] as unknown[])[0])).toBe(
+      true,
     )
     expect(connection.frames.at(-1)).toStrictEqual({
       type: 'command_result',
@@ -928,13 +1004,122 @@ describe('MobileGatewayHub commands', () => {
     })
 
     expect(host.openWorkspace).toHaveBeenCalledWith('file:///workspace/recent', undefined)
-    expect(host.waitForBridge).toHaveBeenCalledWith('file:///workspace/recent', undefined, 30_000)
+    expect(host.waitForBridge).toHaveBeenCalledWith(
+      'file:///workspace/recent',
+      undefined,
+      expect.any(Number),
+    )
+    expect(bridge.ping).toHaveBeenCalled()
+    // Without a prompt the third argument stays `null` so the proxy does not
+    // strip it and shift the cancellation token into the prompt slot.
+    expect(bridge.newSession).toHaveBeenCalledWith(
+      'fake',
+      { folder: 'file:///workspace/recent' },
+      null,
+      expect.anything(),
+    )
     expect(connection.frames.at(-1)).toStrictEqual({
       type: 'command_result',
       requestId: 'n2',
       ok: true,
       result: { ref: { windowId: 5, localId: 'fresh' } },
     })
+  })
+
+  it('pings until the freshly opened window renderer answers', async () => {
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/recent', name: 'recent' },
+      ]),
+      waitForBridge: vi.fn(async () => 5),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    bridge.ping
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+      .mockRejectedValueOnce(new Error('ChannelNotFoundError'))
+    hub.registerWindow(5, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n2b',
+      kind: 'newSession',
+      payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/recent' } },
+    })
+
+    expect(bridge.ping).toHaveBeenCalledTimes(3)
+    expect(bridge.newSession).toHaveBeenCalledTimes(1)
+    expect(connection.frames.at(-1)).toMatchObject({ ok: true })
+  })
+
+  it('reports workspace_not_open when the renderer bridge never answers', async () => {
+    vi.useFakeTimers()
+    try {
+      const host = makeHost({
+        listOpenWorkspaces: vi.fn(() => [
+          { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+        ]),
+      })
+      const hub = new MobileGatewayHub(NULL_LOGGER, host)
+      const bridge = new FakeBridge()
+      bridge.ping.mockRejectedValue(new Error('not ready'))
+      hub.registerWindow(1, bridge)
+      const connection = makeConnection()
+      hub.addConnection(connection)
+
+      const pending = hub.handleCommand(connection, {
+        type: 'command',
+        requestId: 'n2c',
+        kind: 'newSession',
+        payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/demo' } },
+      })
+      await vi.advanceTimersByTimeAsync(NEW_SESSION_TIMEOUT_MS + 1_000)
+      await pending
+
+      expect(bridge.newSession).not.toHaveBeenCalled()
+      expect(connection.frames.at(-1)).toMatchObject({
+        ok: false,
+        error: 'workspace_not_open',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the pending newSession call when the budget expires', async () => {
+    vi.useFakeTimers()
+    try {
+      const host = makeHost({
+        listOpenWorkspaces: vi.fn(() => [
+          { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+        ]),
+      })
+      const hub = new MobileGatewayHub(NULL_LOGGER, host)
+      const bridge = new FakeBridge()
+      bridge.newSession.mockImplementationOnce(() => new Promise(() => {}))
+      hub.registerWindow(1, bridge)
+      const connection = makeConnection()
+      hub.addConnection(connection)
+
+      const pending = hub.handleCommand(connection, {
+        type: 'command',
+        requestId: 'n-timeout',
+        kind: 'newSession',
+        payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/demo' } },
+      })
+      await vi.advanceTimersByTimeAsync(NEW_SESSION_TIMEOUT_MS + 1_000)
+      await pending
+
+      const token = (bridge.newSession.mock.calls[0] as unknown[] | undefined)?.[3] as
+        | CancellationToken
+        | undefined
+      expect(token?.isCancellationRequested).toBe(true)
+      expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'internal' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('reports workspace_not_open when the recent window never produces a bridge', async () => {

@@ -7,7 +7,7 @@
  *  sessions out of each window's renderer.
  *--------------------------------------------------------------------------------------------*/
 
-import { createDecorator, type Event } from '@universe-editor/platform'
+import { createDecorator, type CancellationToken, type Event } from '@universe-editor/platform'
 import type {
   MobileAgentCandidate,
   MobileAttentionKind,
@@ -339,14 +339,21 @@ export type MobileBridgePromptAttachment =
 export interface IMobileBridgeService {
   readonly _serviceBrand: undefined
 
-  /** Cheap liveness probe kept from M1. */
-  ping(): Promise<'pong'>
+  /**
+   * Cheap liveness probe kept from M1. A token lets a caller abandon a probe
+   * whose frame may never settle (renderer listener not installed yet); the
+   * proxy lifts it out of the argument list, so implementations ignore it.
+   */
+  ping(token?: CancellationToken): Promise<'pong'>
 
   /** Current inbox rows for this window (no streaming state required). */
-  listSessions(): Promise<readonly MobileBridgeSessionSummary[]>
+  listSessions(token?: CancellationToken): Promise<readonly MobileBridgeSessionSummary[]>
 
   /** Full read-only state for one session. */
-  getSnapshot(localId: string): Promise<MobileBridgeSessionSnapshot | undefined>
+  getSnapshot(
+    localId: string,
+    token?: CancellationToken,
+  ): Promise<MobileBridgeSessionSnapshot | undefined>
 
   /**
    * Begin observing sessions. Until this is called the bridge performs no
@@ -407,10 +414,20 @@ export interface IMobileBridgeService {
 
   resumeAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>>
 
+  /**
+   * A trailing token lets the gateway abandon a request whose frame may be
+   * lost while the renderer boots, so it cannot create a session after the
+   * phone already received a timeout.
+   *
+   * `initialPrompt` must be `null` rather than `undefined` when absent: the
+   * proxy strips a trailing `undefined` before sending, which would shift the
+   * cancellation token into the prompt slot on the renderer side.
+   */
   newSession(
     agentId: string,
     workspace: MobileBridgeNewSessionWorkspace,
-    initialPrompt?: string,
+    initialPrompt: string | null,
+    token?: CancellationToken,
   ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>>
 
   renameSession(localId: string, title: string): Promise<MobileBridgeResult<void>>
@@ -469,7 +486,7 @@ export interface IMobileBridgeService {
   listWorkspaces(): Promise<readonly MobileWorkspaceCandidate[]>
 
   /** Agents this window can start a session with. */
-  listAgents(): Promise<readonly MobileAgentCandidate[]>
+  listAgents(token?: CancellationToken): Promise<readonly MobileAgentCandidate[]>
 
   /**
    * Inbox deltas and per-session delta batches. Per-session text is coalesced

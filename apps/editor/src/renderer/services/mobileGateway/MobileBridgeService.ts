@@ -19,6 +19,7 @@ import {
   type IDisposable,
   type ILogger,
   type IReader,
+  type CancellationToken,
 } from '@universe-editor/platform'
 import {
   clampText,
@@ -73,6 +74,7 @@ import type {
 import { IAcpAgentRegistry } from '../acp/acpAgentRegistry.js'
 import type { PromptImage } from '../acp/promptImage.js'
 import type { PromptFileAttachment } from '../acp/promptAttachment.js'
+import { IUserSettingsSyncService } from '../configuration/UserSettingsSync.js'
 import { selectOptionHasValue } from '../acp/configOptionLabel.js'
 import { deleteSessionPlan, planSessionRemoval } from '../acp/session/sessionRemoval.js'
 import { deleteSideTasks } from '../acp/session/sideTaskRemoval.js'
@@ -141,6 +143,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IAcpAgentRegistry private readonly _agents: IAcpAgentRegistry,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+    @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -404,8 +407,16 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   async newSession(
     agentId: string,
     workspace: { folder: string; authority?: string },
-    initialPrompt?: string,
+    initialPrompt: string | null,
+    token?: CancellationToken,
   ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> {
+    // A phone command is a one-shot cold-start action: the new window's
+    // hydration is fired-and-forgotten by ConfigInitContribution, so without
+    // this wait a custom `acp.agents` entry may still be missing.
+    await this._userSettings.whenInitialized
+    // The gateway's deadline may expire while hydration is in flight; do not
+    // create a session the phone has already been told failed.
+    if (token?.isCancellationRequested) return fail('internal', 'command cancelled')
     try {
       this._agents.get(agentId)
     } catch {
@@ -426,7 +437,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
         cwd: folder.fsPath,
         ...(authority !== undefined ? { authority } : {}),
       })
-      if (initialPrompt !== undefined && initialPrompt.length > 0) {
+      if (initialPrompt !== null && initialPrompt.length > 0) {
         void session.sendPrompt(initialPrompt).catch((err: unknown) => {
           this._logger.warn(`mobile newSession initial prompt failed: ${String(err)}`)
         })
@@ -647,6 +658,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   }
 
   async listAgents(): Promise<readonly MobileAgentCandidate[]> {
+    // Same cold-start hydration reason as `newSession`: return the full list.
+    await this._userSettings.whenInitialized
     const defaultId = this._agents.defaultAgentId()
     return this._agents.list().map((agent) => ({
       id: agent.id,

@@ -6,6 +6,8 @@ import {
   type SessionSnapshotFrame,
 } from '@universe-editor/mobile-protocol'
 import {
+  CancellationTokenSource,
+  DeferredPromise,
   Emitter,
   Event,
   observableValue,
@@ -34,6 +36,7 @@ import type {
   IAcpSessionHistoryService,
 } from '../../acp/session/acpSessionHistory.js'
 import type { IAcpAgentRegistry } from '../../acp/acpAgentRegistry.js'
+import type { IUserSettingsSyncService } from '../../configuration/UserSettingsSync.js'
 import {
   MOBILE_BRIDGE_LARGE_THROTTLE_MS,
   MOBILE_BRIDGE_THROTTLE_MS,
@@ -211,6 +214,7 @@ function makeHarness(): {
   forkSideTask: ReturnType<typeof vi.fn>
   resumeSession: ReturnType<typeof vi.fn>
   workspace: { current: { folder: URI; name: string } | null }
+  userSettings: { whenInitialized: Promise<void> }
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
@@ -256,12 +260,16 @@ function makeHarness(): {
     current: { folder: URI; name: string } | null
   }
   const editorGroups = { groups: [] } as unknown as IEditorGroupsService
+  const userSettings = {
+    whenInitialized: Promise.resolve(),
+  } as IUserSettingsSyncService
   const service = new MobileBridgeService(
     sessionService,
     historyService,
     registry,
     workspace,
     editorGroups,
+    userSettings,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
@@ -279,6 +287,7 @@ function makeHarness(): {
     forkSideTask,
     resumeSession,
     workspace: workspace as unknown as { current: { folder: URI; name: string } | null },
+    userSettings,
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -1075,14 +1084,60 @@ describe('MobileBridgeService commands', () => {
     expect(callSpy(created.session, 'sendPrompt')).toHaveBeenCalledWith('start here')
 
     await expect(
-      harness.service.newSession('unknown', { folder: 'file:///workspace/demo' }),
+      harness.service.newSession('unknown', { folder: 'file:///workspace/demo' }, null),
     ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
     await expect(
-      harness.service.newSession('fake', { folder: 'not a uri' }),
+      harness.service.newSession('fake', { folder: 'not a uri' }, null),
     ).resolves.toMatchObject({
       ok: false,
       code: 'bad_request',
     })
+  })
+
+  it('does not create a session when the gateway already cancelled the request', async () => {
+    const harness = makeHarness()
+    const cts = new CancellationTokenSource()
+    cts.cancel()
+
+    await expect(
+      harness.service.newSession('fake', { folder: 'file:///workspace/demo' }, null, cts.token),
+    ).resolves.toMatchObject({ ok: false, code: 'internal' })
+    expect(harness.sessionService.createSession).not.toHaveBeenCalled()
+  })
+
+  it('waits for user settings hydration before creating a session', async () => {
+    const harness = makeHarness()
+    const gate = new DeferredPromise<void>()
+    harness.userSettings.whenInitialized = gate.p
+    harness.created.mockReturnValue(makeSession('new-2').session)
+
+    const pending = harness.service.newSession('fake', { folder: 'file:///workspace/demo' }, null)
+    await Promise.resolve()
+    expect(harness.sessionService.createSession).not.toHaveBeenCalled()
+
+    gate.complete()
+    await expect(pending).resolves.toEqual({ ok: true, value: { localId: 'new-2' } })
+    expect(harness.sessionService.createSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('waits for user settings hydration before listing agents', async () => {
+    const harness = makeHarness()
+    const gate = new DeferredPromise<void>()
+    harness.userSettings.whenInitialized = gate.p
+
+    const pending = harness.service.listAgents()
+    let settled = false
+    void pending.then(() => {
+      settled = true
+    })
+    await Promise.resolve()
+    expect(settled).toBe(false)
+
+    gate.complete()
+    await expect(pending).resolves.toEqual([
+      { id: 'fake', name: 'Fake Agent', isDefault: true },
+      { id: 'other', name: 'Other Agent', isDefault: false },
+    ])
   })
 
   it('deletes a session through the shared removal pipeline', async () => {
