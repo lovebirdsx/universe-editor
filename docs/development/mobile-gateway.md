@@ -324,6 +324,9 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 `arePathsEqual(fsPath, fsPath, normalizePlatform(process.platform))`），**不手写
 `fsPath.toLowerCase()` / 反斜杠折叠**。远程工作区标记 authority。
 
+**顺序即契约**：响应里已打开窗口在前、最近工作区随后且按 `lastOpened` 倒序。手机端只按
+`isOpen` 稳定分组（已打开 / 最近），不再按名称重排——字母序会覆盖最近打开时间。
+
 **三种路径**（`MobileGatewayHub._newSession`）：
 
 | 目标工作区状态 | 行为 |

@@ -57,9 +57,9 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
       .then(([nextAgents, nextWorkspaces]) => {
         if (cancelled) return
         setAgents(nextAgents)
-        const sorted = [...nextWorkspaces].sort(
-          (a, b) => Number(b.isOpen) - Number(a.isOpen) || a.name.localeCompare(b.name),
-        )
+        // The gateway returns recent workspaces newest-first; only lift the open
+        // ones so the picker can group them without losing recency order.
+        const sorted = [...nextWorkspaces].sort((a, b) => Number(b.isOpen) - Number(a.isOpen))
         setWorkspaces(sorted)
         setAgentId((current) =>
           current !== undefined && nextAgents.some((agent) => agent.id === current)

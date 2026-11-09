@@ -185,6 +185,23 @@ describe('NewSessionPage', () => {
     expect(workspaceOption('file:///recent').getAttribute('aria-selected')).toBe('false')
   })
 
+  it('keeps the server order of recent workspaces (newest first)', async () => {
+    const { client } = createClient({
+      workspaces: [
+        { folder: 'file:///zeta', name: 'zeta', isOpen: false },
+        { folder: 'file:///open', name: 'open', isOpen: true },
+        { folder: 'file:///alpha', name: 'alpha', isOpen: false },
+      ],
+    })
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+
+    expect(
+      screen.getAllByTestId('new-session-workspace').map((el) => el.getAttribute('data-folder')),
+    ).toEqual(['file:///open', 'file:///zeta', 'file:///alpha'])
+  })
+
   it('closes the picker when the current option is tapped', async () => {
     const { client } = createClient()
     await renderLoaded(client)
