@@ -1289,10 +1289,7 @@ export class AcpSessionService
     this._sessionStore.setActive(sessionId)
   }
 
-  async resumeSession(
-    sessionId: string,
-    options?: { activate?: boolean },
-  ): Promise<IAcpSession> {
+  async resumeSession(sessionId: string, options?: { activate?: boolean }): Promise<IAcpSession> {
     const activate = options?.activate !== false
     // Concurrent callers (e.g. AcpSessionEditor's useEffect + a sidebar click
     // landing in the same frame) must dedupe — otherwise both race past the

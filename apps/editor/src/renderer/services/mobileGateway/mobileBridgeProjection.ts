@@ -227,10 +227,7 @@ export function projectMessage(
     ...(anchored ? { messageId: clampText(anchorMessageId, MAX_ID_LENGTH) } : {}),
     ...(anchored && context !== undefined
       ? {
-          canFork:
-            context.forkSupported &&
-            !context.readOnly &&
-            message.id !== context.firstUserId,
+          canFork: context.forkSupported && !context.readOnly && message.id !== context.firstUserId,
         }
       : {}),
   }

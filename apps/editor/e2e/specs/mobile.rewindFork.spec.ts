@@ -24,12 +24,7 @@ import {
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
 import { WebSocket } from 'ws'
-import {
-  MOBILE_E2E_CODE,
-  MOBILE_GATEWAY_PORT,
-  expect,
-  test,
-} from '../fixtures/mobileApp.js'
+import { MOBILE_E2E_CODE, MOBILE_GATEWAY_PORT, expect, test } from '../fixtures/mobileApp.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')

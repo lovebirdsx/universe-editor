@@ -166,7 +166,6 @@ export const SEND_PROMPT_TIMEOUT_MS = 15_000
  * command timeout so the phone receives the real error instead of a timeout.
  */
 export const NEW_SESSION_TIMEOUT_MS = 25_000
-const NEW_SESSION_BRIDGE_TIMEOUT_MS = 30_000
 /** A ping sent before the renderer's listener exists never settles; cap each try. */
 const BRIDGE_PING_TIMEOUT_MS = 500
 const BRIDGE_PING_INTERVAL_MS = 100
@@ -563,10 +562,13 @@ export class MobileGatewayHub {
             throw err
           }
         }
-        const outcome = await this._sessionCommand(p.ref, SEND_PROMPT_TIMEOUT_MS, (bridge, localId) =>
-          attachments === undefined
-            ? bridge.sendPrompt(localId, p.text)
-            : bridge.sendPrompt(localId, p.text, attachments),
+        const outcome = await this._sessionCommand(
+          p.ref,
+          SEND_PROMPT_TIMEOUT_MS,
+          (bridge, localId) =>
+            attachments === undefined
+              ? bridge.sendPrompt(localId, p.text)
+              : bridge.sendPrompt(localId, p.text, attachments),
         )
         if (outcome.ok && ids.length > 0 && deviceId !== undefined) {
           const resolver = this._host?.attachments
@@ -1259,9 +1261,7 @@ export class MobileGatewayHub {
       hasPendingPermission: summary.hasPendingPermission,
       hasPendingElicitation: summary.hasPendingElicitation,
       backgroundTaskCount: summary.backgroundTaskCount,
-      ...(summary.imageSupported !== undefined
-        ? { imageSupported: summary.imageSupported }
-        : {}),
+      ...(summary.imageSupported !== undefined ? { imageSupported: summary.imageSupported } : {}),
       ...(summary.forkSupported === true ? { forkSupported: true } : {}),
       ...(summary.rewindSupported === true ? { rewindSupported: true } : {}),
       ...(summary.sideTaskOf !== undefined && summary.sideTaskOf.length > 0
@@ -1433,8 +1433,7 @@ function clampSideTaskSummaries(value: unknown): readonly MobileSideTaskSummary[
     rows.push({
       id: clampText(id, MAX_ID_LENGTH),
       title: clampText(typeof title === 'string' ? title : '', MAX_TITLE_LENGTH),
-      lastUsedAt:
-        typeof lastUsedAt === 'number' && Number.isFinite(lastUsedAt) ? lastUsedAt : 0,
+      lastUsedAt: typeof lastUsedAt === 'number' && Number.isFinite(lastUsedAt) ? lastUsedAt : 0,
       live: record['live'] === true,
     })
   }

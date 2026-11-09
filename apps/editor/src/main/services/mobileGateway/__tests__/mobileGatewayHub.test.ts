@@ -1672,9 +1672,7 @@ describe('MobileGatewayHub attachment resolution', () => {
     },
   ]
 
-  function hostWith(
-    resolver: MobileGatewayHost['attachments'],
-  ): MobileGatewayHost {
+  function hostWith(resolver: MobileGatewayHost['attachments']): MobileGatewayHost {
     return {
       listOpenWorkspaces: () => [],
       listRecentWorkspaces: async () => [],

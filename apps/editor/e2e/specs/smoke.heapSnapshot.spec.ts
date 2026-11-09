@@ -171,7 +171,7 @@ async function startRound(page: Page): Promise<void> {
  *  restarts the band, and a resource reading that failed once (the boot-time PowerShell
  *  query, say) comes back on the sampler's own backoff — so the wait is minutes, not
  *  seconds, and it is the feature's real cost rather than a number this spec gets to pick. */
-const CAPTURE_WAIT_MS = 420_000
+const CAPTURE_WAIT_MS = 450_000
 
 test.describe('@p1 controlled heap snapshots', () => {
   test('captures a real baseline through the command consent dialog', async ({

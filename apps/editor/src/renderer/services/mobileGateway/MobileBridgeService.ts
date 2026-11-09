@@ -51,10 +51,7 @@ import type {
   MobileBridgeSessionSummary,
   IMobileBridgeService,
 } from '../../../shared/ipc/mobileGatewayService.js'
-import {
-  AcpForeignWorktreeError,
-  IAcpSessionService,
-} from '../acp/session/acpSessionService.js'
+import { AcpForeignWorktreeError, IAcpSessionService } from '../acp/session/acpSessionService.js'
 import {
   collectSideTaskDescendants,
   directSideTaskChildren,
@@ -525,9 +522,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       if (result === undefined) return fail('internal', 'rewind preview is unavailable')
       return ok({
         canRewind: result.canRewind,
-        ...(result.error !== undefined
-          ? { error: clampText(result.error, MAX_TEXT_LENGTH) }
-          : {}),
+        ...(result.error !== undefined ? { error: clampText(result.error, MAX_TEXT_LENGTH) } : {}),
         filesChanged: result.filesChanged?.length ?? 0,
         ...(result.insertions !== undefined ? { insertions: result.insertions } : {}),
         ...(result.deletions !== undefined ? { deletions: result.deletions } : {}),
@@ -560,9 +555,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       if (result === undefined) return fail('internal', 'rewind is unavailable')
       return ok({
         canRewind: result.canRewind,
-        ...(result.error !== undefined
-          ? { error: clampText(result.error, MAX_TEXT_LENGTH) }
-          : {}),
+        ...(result.error !== undefined ? { error: clampText(result.error, MAX_TEXT_LENGTH) } : {}),
         // Returned only for the phone-side composer backfill; it is never
         // written to the PC inbox (the desktop keeps its own draft).
         ...(result.canRewind ? { text: clampText(anchor.text, MAX_TEXT_LENGTH) } : {}),

@@ -451,10 +451,7 @@ export class MobileGatewayServer {
     return device.deviceId
   }
 
-  private async _handleAttachmentUpload(
-    req: IncomingMessage,
-    res: ServerResponse,
-  ): Promise<void> {
+  private async _handleAttachmentUpload(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const deviceId = await this._authenticateDevice(req, res)
     if (deviceId === undefined) return
     const attachments = this._options.attachments
@@ -574,10 +571,7 @@ export class MobileGatewayServer {
     res.statusCode = 200
     res.setHeader('Content-Type', entry.mimeType)
     res.setHeader('Content-Length', bytes.byteLength)
-    res.setHeader(
-      'Content-Disposition',
-      `inline; filename*=UTF-8''${encodeRfc5987(entry.name)}`,
-    )
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeRfc5987(entry.name)}`)
     if (req.method === 'HEAD') res.end()
     else res.end(bytes)
   }
@@ -814,9 +808,7 @@ export class MobileGatewayServer {
                 },
               },
               {
-                ...(connection.deviceId !== undefined
-                  ? { deviceId: connection.deviceId }
-                  : {}),
+                ...(connection.deviceId !== undefined ? { deviceId: connection.deviceId } : {}),
               },
             )
             .catch((err) => {

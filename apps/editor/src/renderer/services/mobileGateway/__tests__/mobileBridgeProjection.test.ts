@@ -67,10 +67,7 @@ describe('projectMessage mobile attachments', () => {
     size: 3,
   }
 
-  function message(
-    blocks: AcpMessage['blocks'],
-    overrides: Partial<AcpMessage> = {},
-  ): AcpMessage {
+  function message(blocks: AcpMessage['blocks'], overrides: Partial<AcpMessage> = {}): AcpMessage {
     return {
       id: 'm1',
       role: 'user',
@@ -198,18 +195,18 @@ describe('projectMessage rewind / fork anchors', () => {
       'messageId',
     )
     expect(projectMessage(userMessage({ autoRetry: true }), FORKABLE)).not.toHaveProperty('canFork')
-    expect(
-      projectMessage(userMessage({ id: 'm2', role: 'agent' }), FORKABLE),
-    ).not.toHaveProperty('messageId')
+    expect(projectMessage(userMessage({ id: 'm2', role: 'agent' }), FORKABLE)).not.toHaveProperty(
+      'messageId',
+    )
   })
 
   it('keeps the anchor but disables fork for read-only or unsupported agents', () => {
-    expect(
-      projectMessage(userMessage(), { ...FORKABLE, readOnly: true }),
-    ).toMatchObject({ canFork: false })
-    expect(
-      projectMessage(userMessage(), { ...FORKABLE, forkSupported: false }),
-    ).toMatchObject({ canFork: false })
+    expect(projectMessage(userMessage(), { ...FORKABLE, readOnly: true })).toMatchObject({
+      canFork: false,
+    })
+    expect(projectMessage(userMessage(), { ...FORKABLE, forkSupported: false })).toMatchObject({
+      canFork: false,
+    })
   })
 
   it('omits canFork when the caller has no timeline context', () => {

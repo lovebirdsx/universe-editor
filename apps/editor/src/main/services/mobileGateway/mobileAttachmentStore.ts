@@ -226,20 +226,13 @@ export class MobileAttachmentStore
         }
         seen.add(id)
         const entry = this._byId.get(id)
-        if (
-          entry === undefined ||
-          entry.deviceId !== deviceId ||
-          entry.expiresAt <= this._now()
-        ) {
+        if (entry === undefined || entry.deviceId !== deviceId || entry.expiresAt <= this._now()) {
           if (entry !== undefined && entry.deviceId === deviceId) this._dropEntry(entry)
           throw new MobileAttachmentError('attachment_not_found', 'attachment is not available')
         }
         totalBytes += entry.size
         if (totalBytes > MAX_ATTACHMENT_BYTES_PER_PROMPT) {
-          throw new MobileAttachmentError(
-            'bad_request',
-            'attachments for one prompt are too large',
-          )
+          throw new MobileAttachmentError('bad_request', 'attachments for one prompt are too large')
         }
         held.push(id)
         this._inUse.add(id)

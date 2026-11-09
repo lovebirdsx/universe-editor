@@ -1499,10 +1499,7 @@ describe('MobileBridgeService fork / rewind / side tasks', () => {
     const parent = makeSession('s1', { durableId: 'd1' })
     harness.add(parent)
     harness.history.set(
-      [
-        historyEntry('side-1', { sideTaskOf: 'd1' }),
-        historyEntry('other', { sideTaskOf: 'd9' }),
-      ],
+      [historyEntry('side-1', { sideTaskOf: 'd1' }), historyEntry('other', { sideTaskOf: 'd9' })],
       undefined,
     )
     harness.resumeSession.mockResolvedValueOnce(fakeResultSession('side-1', 'side-1'))

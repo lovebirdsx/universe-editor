@@ -38,6 +38,13 @@ const SNAPSHOT_SUFFIX = '.heapsnapshot'
 const PARTIAL_SUFFIX = '.heapsnapshot.partial'
 const META_SUFFIX = '.json'
 
+// A multi-GB partial can stay locked by a Windows antivirus scan long after
+// takeHeapSnapshot settles; losing this rename throws away the whole capture,
+// so retry far longer than the small atomic writers do.
+const RENAME_ATTEMPTS = 60
+const RENAME_RETRY_DELAY_MS = 500
+const RENAME_RETRYABLE = new Set(['EPERM', 'EACCES', 'EBUSY'])
+
 /** 每个产物（快照、partial、元数据 sidecar）都占预算。 */
 export const HEAP_SNAPSHOT_DIR_BUDGET = {
   maxBytes: 4 * GIB,
@@ -263,6 +270,19 @@ function sameIdentity(a: HeapSnapshotTargetIdentity, b: HeapSnapshotTargetIdenti
 
 function formatIdentity(identity: HeapSnapshotTargetIdentity): string {
   return `window=${identity.windowId} webContents=${identity.webContentsId} pid=${identity.pid} epoch=${identity.navigationEpoch}`
+}
+
+async function renameWithRetries(from: string, to: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await fs.rename(from, to)
+      return
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? ''
+      if (attempt >= RENAME_ATTEMPTS || !RENAME_RETRYABLE.has(code)) throw err
+      await new Promise((resolve) => setTimeout(resolve, RENAME_RETRY_DELAY_MS))
+    }
+  }
 }
 
 function artifactKind(name: string): HeapSnapshotArtifactEntry['kind'] | undefined {
@@ -802,7 +822,7 @@ export class HeapSnapshotController {
 
       const finalPath = partial.slice(0, -'.partial'.length)
       try {
-        await fs.rename(partial, finalPath)
+        await renameWithRetries(partial, finalPath)
       } catch (err) {
         await this._discardOwnPartial(round, partial)
         this._fail(

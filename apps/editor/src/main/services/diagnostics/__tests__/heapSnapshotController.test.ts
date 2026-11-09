@@ -297,6 +297,74 @@ describe('HeapSnapshotController', () => {
     })
   })
 
+  it('retries the rename through a transient Windows lock', async () => {
+    // A multi-GB snapshot can stay held by an AV scan after takeHeapSnapshot
+    // settles; EBUSY/EPERM must not discard a finished capture.
+    addWindow(1)
+    const transient = (code: string): NodeJS.ErrnoException =>
+      Object.assign(new Error(`${code}: resource busy or locked, rename`), { code })
+    const spy = vi
+      .spyOn(fs, 'rename')
+      .mockRejectedValueOnce(transient('EPERM'))
+      .mockRejectedValueOnce(transient('EBUSY'))
+    try {
+      controller.start(1)
+      feedBaseline(1)
+
+      await vi.waitFor(() => expect(kinds()).toEqual(['started:', 'captured:']), { timeout: 5_000 })
+      expect(spy.mock.calls.length).toBe(3)
+      expect(snapshots()).toHaveLength(1)
+      expect(partials()).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('does not retry a non-transient rename error', async () => {
+    addWindow(1)
+    const spy = vi
+      .spyOn(fs, 'rename')
+      .mockRejectedValue(
+        Object.assign(new Error('ENOSPC: no space left on device, rename'), { code: 'ENOSPC' }),
+      )
+    try {
+      controller.start(1)
+      feedBaseline(1)
+
+      await vi.waitFor(() => expect(kinds()).toContain('failed:capture-failed'), { timeout: 5_000 })
+      expect(spy.mock.calls.length).toBe(1)
+      expect(partials()).toEqual([])
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  it('gives up after the rename retry budget instead of retrying forever', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const spy = vi
+      .spyOn(fs, 'rename')
+      .mockRejectedValue(
+        Object.assign(new Error('EBUSY: resource busy or locked, rename'), { code: 'EBUSY' }),
+      )
+    try {
+      addWindow(1)
+      controller.start(1)
+      feedBaseline(1)
+      await until(() => spy.mock.calls.length >= 1)
+
+      await vi.advanceTimersByTimeAsync(60_000)
+      await until(() => kinds().includes('failed:capture-failed'))
+
+      expect(spy.mock.calls.length).toBeGreaterThan(1)
+      expect(kinds()).toContain('failed:capture-failed')
+      expect(controller.status(1)).toMatchObject({ active: false, code: 'capture-failed' })
+      expect(partials()).toEqual([])
+    } finally {
+      spy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('takes the growth snapshot when a sustained rise follows the baseline', async () => {
     addWindow(1)
     controller.start(1)

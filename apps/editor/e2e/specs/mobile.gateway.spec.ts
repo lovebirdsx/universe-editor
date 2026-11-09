@@ -221,10 +221,11 @@ async function startEchoSession(
   env?: Record<string, string>,
 ): Promise<void> {
   await workbench.waitForRestored()
-  await page.evaluate(
-    ([id, p, extra]) => window.__E2E__!.installAcpEchoAgent(id, p, extra),
-    ['echo', ECHO_AGENT_PATH, env] as const,
-  )
+  await page.evaluate(([id, p, extra]) => window.__E2E__!.installAcpEchoAgent(id, p, extra), [
+    'echo',
+    ECHO_AGENT_PATH,
+    env,
+  ] as const)
   await page.evaluate(() => {
     void window.__E2E__!.runCommand('workbench.action.agent.newSession')
   })
@@ -596,6 +597,11 @@ test.describe('mobile gateway', () => {
 
     const { browser, context, phone } = await pairPhone(page, workbench)
     try {
+      // Thoughts are filtered out in the default only-message mode; this spec
+      // measures their layout, so switch the phone to full display first.
+      await phone.getByRole('button', { name: '设置' }).click()
+      await phone.getByTestId('session-display-full').check()
+      await phone.getByRole('button', { name: '关闭', exact: true }).click()
       await openFirstPhoneSession(phone)
       const thought = phone.getByTestId('thought-item').first()
       await expect(thought).toBeAttached()
@@ -872,10 +878,7 @@ test.describe('mobile gateway', () => {
     }
   })
 
-  test('@p0 sends a photo and a file attachment from the phone UI', async ({
-    page,
-    workbench,
-  }) => {
+  test('@p0 sends a photo and a file attachment from the phone UI', async ({ page, workbench }) => {
     await startEchoSession(page, workbench, { ECHO_AGENT_IMAGE: '1' })
     const { browser, context, phone } = await pairPhone(page, workbench)
     try {
@@ -949,9 +952,10 @@ test.describe('mobile gateway', () => {
       const userMessage = phone.getByTestId('user-message').last()
       await expect(userMessage.getByTestId('user-attachments')).toBeVisible()
       await expect(userMessage.getByTestId('user-attachment-file')).toContainText('notes.txt')
-      await expect(
-        userMessage.getByTestId('user-attachment-image').locator('img'),
-      ).toHaveAttribute('src', /^blob:/)
+      await expect(userMessage.getByTestId('user-attachment-image').locator('img')).toHaveAttribute(
+        'src',
+        /^blob:/,
+      )
       await expect(userMessage).not.toContainText('[包含附件]')
     } finally {
       await context.close()

@@ -748,7 +748,14 @@ describe('mobile gateway attachment api', () => {
     const { gateway } = await startWithAttachments()
     const paired = await pair(gateway.base)
 
-    const badKind = await upload(gateway.base, paired.token, 'audio', 'a.wav', new Uint8Array(1), 'audio/wav')
+    const badKind = await upload(
+      gateway.base,
+      paired.token,
+      'audio',
+      'a.wav',
+      new Uint8Array(1),
+      'audio/wav',
+    )
     expect(badKind.status).toBe(400)
     expect(await badKind.json()).toMatchObject({ code: 'bad_request' })
 
