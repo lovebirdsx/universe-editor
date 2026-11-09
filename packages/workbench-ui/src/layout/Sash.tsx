@@ -7,7 +7,7 @@
  *  cursor.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import styles from './Sash.module.css'
 
 export type SashOrientation = 'horizontal' | 'vertical'
@@ -42,7 +42,10 @@ export function Sash({ orientation, onStart, onResize, onEnd, style }: SashProps
     [orientation, onStart],
   )
 
-  useEffect(() => {
+  // Layout effect (not useEffect): a synthetic mousedown forwarded by
+  // ResizeSeamDragGuard must install the window listeners before the *same*
+  // real pointermove finishes bubbling, otherwise the first few px are lost.
+  useLayoutEffect(() => {
     if (!active) return
     const onMove = (e: MouseEvent) => {
       const current = orientation === 'vertical' ? e.clientX : e.clientY
@@ -83,6 +86,7 @@ export function Sash({ orientation, onStart, onResize, onEnd, style }: SashProps
       onMouseDown={handleMouseDown}
       role="separator"
       aria-orientation={orientation}
+      data-resize-sash="true"
     />
   )
 }

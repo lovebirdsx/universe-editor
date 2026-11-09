@@ -47,6 +47,12 @@ universe-editor 的资源拖放统一成「**源端发布资源 URI → 目标�
 
 已接入的源（参考实现）：`ExplorerTreeNode.tsx`、`scm/ScmView.tsx`(ScmFileRow)、`search/SearchResultsTree.tsx`(file/match 行，folder 行不可拖)、`agents/SessionChangesView.tsx`(ChangeRow，单项)。
 
+## 分隔条 vs 拖拽内容
+
+`ResizeSeamDragGuard`（workbench-ui）在 pointerdown 捕获阶段仲裁：缝 10px 内有真实 sash 时，目标沿缝移动 ≥3px 才交给 sash，并临时 `draggable=false` 阻止原生 DnD。
+
+**新拖拽源不要写「离边缘几 px 取消 dragstart」的判断**（dragstart 太晚，无法交还手势）。自定义 sash 加 `data-resize-sash="true"`，细节见 workbench-ui `cases-resize-seam.md`。
+
 ## 线格式：writeUriList / readUriList / parseUriList（`dnd/uriList.ts`）
 
 `writeUriList(dt, uris)` 写**三种 MIME**：

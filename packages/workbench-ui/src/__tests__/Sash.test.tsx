@@ -7,6 +7,13 @@ import { fireEvent, render } from '@testing-library/react'
 import { Sash } from '../layout/Sash.js'
 
 describe('Sash', () => {
+  it('marks itself as a resize seam for the workbench gesture guard', () => {
+    const { container } = render(<Sash orientation="vertical" onResize={vi.fn()} />)
+    const handle = container.firstElementChild as HTMLElement
+    expect(handle.getAttribute('data-resize-sash')).toBe('true')
+    expect(handle.getAttribute('aria-orientation')).toBe('vertical')
+  })
+
   it('emits delta on mousemove during drag (vertical)', () => {
     const onResize = vi.fn()
     const { container } = render(<Sash orientation="vertical" onResize={onResize} />)

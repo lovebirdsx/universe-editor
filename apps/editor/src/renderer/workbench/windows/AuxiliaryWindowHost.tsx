@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   OwnerDocumentProvider,
+  ResizeSeamDragGuard,
   TooltipProvider,
   useDragSessionDocument,
 } from '@universe-editor/workbench-ui'
@@ -31,14 +32,17 @@ function AuxiliaryWindowContent({ entry }: { entry: IAuxiliaryEditorWindow }) {
   // cancelled there never reaches the main window's document.
   useDragSessionDocument(entry.window.document)
   return (
-    <TooltipProvider targetDocument={entry.window.document} resolveShortcut={resolveShortcut}>
-      <div className={styles['root']}>
-        <AuxiliaryTitleBar entry={entry} />
-        <div className={styles['editor']}>
-          <EditorArea editorPart={entry.part} />
+    <>
+      <ResizeSeamDragGuard />
+      <TooltipProvider targetDocument={entry.window.document} resolveShortcut={resolveShortcut}>
+        <div className={styles['root']}>
+          <AuxiliaryTitleBar entry={entry} />
+          <div className={styles['editor']}>
+            <EditorArea editorPart={entry.part} />
+          </div>
         </div>
-      </div>
-    </TooltipProvider>
+      </TooltipProvider>
+    </>
   )
 }
 

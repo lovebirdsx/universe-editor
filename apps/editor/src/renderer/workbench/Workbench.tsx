@@ -12,7 +12,11 @@ import type { LifecycleService, InstantiationService, LayoutSizes } from '@unive
 import { PerfMarks } from '../../shared/perf/marks.js'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
-import { DragSessionProvider, OwnerDocumentProvider } from '@universe-editor/workbench-ui'
+import {
+  DragSessionProvider,
+  OwnerDocumentProvider,
+  ResizeSeamDragGuard,
+} from '@universe-editor/workbench-ui'
 import { AuxiliaryWindowHost } from './windows/AuxiliaryWindowHost.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { TitleBar } from './titlebar/TitleBar.js'
@@ -93,6 +97,7 @@ function WorkbenchShell() {
 
   return (
     <>
+      <ResizeSeamDragGuard />
       <WorkbenchLayout
         sidebarVisible={sidebarVisible}
         secondarySidebarVisible={secondarySidebarVisible}
