@@ -237,7 +237,8 @@ export class MobileClient {
     this._subscribeCurrentSession()
   }
 
-  closeSession(): void {
+  /** Stop mirroring the open session; the PC session keeps running. */
+  unsubscribeSession(): void {
     const ref = this._currentRef
     if (ref !== undefined) {
       this._send({ type: 'unsubscribe_session', ref })
@@ -342,8 +343,33 @@ export class MobileClient {
     return this._sessionCommand('renameSession', (ref) => ({ ref, title }))
   }
 
-  deleteSession(): Promise<void> {
-    return this._sessionCommand('deleteSession', (ref) => ({ ref }))
+  /** End the live PC session but keep its history (`ref` defaults to the open session). */
+  closeSession(ref?: MobileSessionRef): Promise<void> {
+    const target = ref ?? this._currentRef
+    return this._sessionCommandFor('closeSession', target, (resolved) => ({ ref: resolved })).then(
+      () => {
+        if (target !== undefined) this._inbox.remove(target)
+      },
+      (error: unknown) => {
+        // A close racing with the PC (or a repeated tap) already achieved the
+        // user's intent; the row must still disappear.
+        if (error instanceof CommandError && error.code === 'session_not_found') {
+          if (target !== undefined) this._inbox.remove(target)
+          return
+        }
+        throw error
+      },
+    )
+  }
+
+  /** Delete the session and its history (`ref` defaults to the open session). */
+  deleteSession(ref?: MobileSessionRef): Promise<void> {
+    const target = ref ?? this._currentRef
+    return this._sessionCommandFor('deleteSession', target, (resolved) => ({ ref: resolved })).then(
+      () => {
+        if (target !== undefined) this._inbox.remove(target)
+      },
+    )
   }
 
   forkSession(messageId?: string): Promise<MobileSessionRefResult> {
@@ -435,7 +461,16 @@ export class MobileClient {
     payloadFor: (ref: MobileSessionRef) => unknown,
     options?: CommandRequestOptions,
   ): Promise<void> {
-    const ref = this._currentRef
+    return this._sessionCommandFor(kind, undefined, payloadFor, options)
+  }
+
+  private _sessionCommandFor(
+    kind: MobileCommandKind,
+    explicitRef: MobileSessionRef | undefined,
+    payloadFor: (ref: MobileSessionRef) => unknown,
+    options?: CommandRequestOptions,
+  ): Promise<void> {
+    const ref = explicitRef ?? this._currentRef
     if (ref === undefined) {
       return Promise.reject(
         new CommandError('session_not_found', 'no session is open on the phone'),
@@ -503,7 +538,10 @@ export class MobileClient {
       }
       case 'session_removed':
         if (this._currentRef !== undefined && refMatches(this._currentRef, frame.ref)) {
-          this._session.applyRemoved(frame.ref)
+          // The removal can arrive before the first snapshot (the PC closed the
+          // session while the phone was still loading it); mark it anyway so the
+          // page shows "closed on PC" instead of timing out on a snapshot.
+          if (!this._session.applyRemoved(frame.ref)) this._session.markRemoved()
         }
         break
       case 'notification':

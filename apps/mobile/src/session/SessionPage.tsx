@@ -6,6 +6,7 @@ import { sessionRouteKey } from '../state/refs.js'
 import type { PermissionClearedInfo } from '../state/sessionStore.js'
 import { useStore } from '../state/useStore.js'
 import { commandErrorText, strings } from '../strings.js'
+import { errorCode } from '../errors.js'
 import { Composer, type ComposerPrefill } from './Composer.js'
 import {
   clipSideTaskQuote,
@@ -22,6 +23,7 @@ import { RewindPreviewSheet } from './RewindPreviewSheet.js'
 import { SessionHeader } from './SessionHeader.js'
 import { SessionMenuSheet } from './SessionMenuSheet.js'
 import { readSessionDisplayPreference, type SessionDisplayPreference } from './sessionDisplay.js'
+import { isSessionWorking } from './sessionStatus.js'
 import { SideTasksSheet } from './SideTasksSheet.js'
 import { Timeline } from './Timeline.js'
 import { useVisualViewportHeight } from './useVisualViewport.js'
@@ -36,6 +38,8 @@ export interface SessionPageProps {
   readonly initialRef?: MobileSessionRef | undefined
   readonly onOpenSessionRef?: ((ref: MobileSessionRef) => void) | undefined
   readonly onBack: () => void
+  /** Close/remove succeeded: the app returns to the inbox with a notice. */
+  readonly onFinished: (action: 'closed' | 'removed') => void
   /** Inbox "待审批" rows ask the page to reveal the pending card immediately. */
   readonly focusPending?: boolean | undefined
 }
@@ -46,6 +50,7 @@ export function SessionPage({
   initialRef,
   onOpenSessionRef,
   onBack,
+  onFinished,
   focusPending,
 }: SessionPageProps) {
   // The ref that opened this route must survive later prop clearing without
@@ -58,7 +63,7 @@ export function SessionPage({
     const ref = initialRefRef.current
     if (ref !== undefined && sessionRouteKey(ref) === sessionKey) client.openSessionRef(ref)
     else client.openSession(sessionKey)
-    return () => client.closeSession()
+    return () => client.unsubscribeSession()
   }, [client, sessionKey])
 
   const state = useStore(client.getSessionStore())
@@ -84,6 +89,11 @@ export function SessionPage({
   const [prefill, setPrefill] = useState<ComposerPrefill | undefined>(undefined)
   const handledCleared = useRef<PermissionClearedInfo | undefined>(undefined)
   const footerRef = useRef<HTMLDivElement | null>(null)
+
+  // Switching sessions must not leave the previous session's menu open.
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [sessionKey])
 
   const notice = (text: string): void => setToast(text)
   const openRef = onOpenSessionRef ?? ((): void => undefined)
@@ -358,8 +368,11 @@ export function SessionPage({
           title={state.summary?.title ?? strings.sessionMore}
           online={online}
           forkSupported={state.summary?.forkSupported === true}
-          readOnly={readOnly}
+          // Unknown summary (still loading or just switched): treat as read-only
+          // and confirm before closing so a stale menu cannot end a live task.
+          readOnly={state.summary === undefined || readOnly}
           running={running}
+          closeNeedsConfirm={state.summary === undefined || isSessionWorking(state.summary)}
           sideTaskChildCount={state.summary?.sideTaskChildCount}
           onForkTip={() => forkFrom()}
           onNewSideTask={() => createSideTaskFrom()}
@@ -369,6 +382,7 @@ export function SessionPage({
           }}
           onClose={() => setMenuOpen(false)}
           onNotice={notice}
+          onFinished={onFinished}
         />
       )}
       {toast !== undefined && (
@@ -378,12 +392,4 @@ export function SessionPage({
       )}
     </div>
   )
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { readonly code?: unknown }).code
-    return typeof code === 'string' ? code : undefined
-  }
-  return undefined
 }

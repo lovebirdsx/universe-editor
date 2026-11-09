@@ -1,13 +1,21 @@
+import type { MobileSessionSummary } from '@universe-editor/mobile-protocol'
 import type { StoredCredentials } from '../credentials.js'
 import { InboxGroups } from '../inbox/InboxGroups.js'
 import { selectInboxSessions } from '../inbox/groupSessions.js'
+import {
+  InboxSessionActionSheet,
+  type InboxSessionSheetView,
+} from '../inbox/InboxSessionActionSheet.js'
 import type { MobileClient } from '../state/mobileClient.js'
+import { refMatches } from '../state/refs.js'
 import { useStore } from '../state/useStore.js'
 import { NoticeBar } from '../components/NoticeBar.js'
 import { Spinner } from '../components/Spinner.js'
 import { SettingsDrawer } from '../components/SettingsDrawer.js'
 import { StatusBar } from '../components/StatusBar.js'
-import { strings } from '../strings.js'
+import { commandErrorText, strings } from '../strings.js'
+import { errorCode } from '../errors.js'
+import { isSessionWorking } from '../session/sessionStatus.js'
 import { useState } from 'react'
 
 export interface InboxPageProps {
@@ -15,6 +23,7 @@ export interface InboxPageProps {
   readonly credentials: StoredCredentials
   readonly notice?: string | undefined
   readonly onDismissNotice: () => void
+  readonly onNotice: (text: string) => void
   readonly onOpenSession: (sessionKey: string, focusPending: boolean) => void
   readonly onNewSession: () => void
   readonly onUnpair: () => void
@@ -25,6 +34,7 @@ export function InboxPage({
   credentials,
   notice,
   onDismissNotice,
+  onNotice,
   onOpenSession,
   onNewSession,
   onUnpair,
@@ -32,11 +42,40 @@ export function InboxPage({
   const inbox = useStore(client.getInboxStore())
   const socketState = useStore(client.getSocketStateStore())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [sessionAction, setSessionAction] = useState<
+    { readonly session: MobileSessionSummary; readonly view: InboxSessionSheetView } | undefined
+  >(undefined)
+  // The sheet stays open while the inbox keeps moving; judge "is it working?"
+  // against the latest summary, not the one captured on long-press.
+  const actionSession =
+    sessionAction === undefined
+      ? undefined
+      : (inbox.sessions.find((session) => refMatches(session.ref, sessionAction.session.ref)) ??
+        sessionAction.session)
 
   const unpair = (): void => {
     setSettingsOpen(false)
     onDismissNotice()
     onUnpair()
+  }
+
+  const closeSession = (session: MobileSessionSummary): void => {
+    if (isSessionWorking(session)) {
+      setSessionAction({ session, view: 'close' })
+      return
+    }
+    void client
+      .closeSession(session.ref)
+      .then(() => onNotice(strings.sessionCloseNotice))
+      .catch((error: unknown) => onNotice(commandErrorText(errorCode(error))))
+  }
+
+  const removeSession = (session: MobileSessionSummary): void => {
+    setSessionAction({ session, view: 'remove' })
+  }
+
+  const completedSessionAction = (action: 'closed' | 'removed'): void => {
+    onNotice(action === 'closed' ? strings.sessionCloseNotice : strings.sessionRemovedNotice)
   }
 
   return (
@@ -74,6 +113,18 @@ export function InboxPage({
           onUnpair={unpair}
         />
       )}
+      {sessionAction !== undefined && actionSession !== undefined && (
+        <InboxSessionActionSheet
+          key={`${actionSession.ref.localId}:${sessionAction.view}`}
+          client={client}
+          session={actionSession}
+          initialView={sessionAction.view}
+          online={socketState === 'connected'}
+          onDismiss={() => setSessionAction(undefined)}
+          onNotice={onNotice}
+          onCompleted={completedSessionAction}
+        />
+      )}
     </div>
   )
 
@@ -106,6 +157,9 @@ export function InboxPage({
         <InboxGroups
           sessions={sessions}
           onOpenSession={onOpenSession}
+          onCloseSession={closeSession}
+          onRemoveSession={removeSession}
+          onShowSessionActions={(session) => setSessionAction({ session, view: 'menu' })}
           stale={socketState !== 'connected'}
         />
       )

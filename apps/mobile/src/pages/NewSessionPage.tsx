@@ -10,6 +10,7 @@ import type { MobileClient } from '../state/mobileClient.js'
 import { sessionRouteKey } from '../state/refs.js'
 import { useStore } from '../state/useStore.js'
 import { commandErrorText, strings } from '../strings.js'
+import { errorCode } from '../errors.js'
 import {
   AgentPickerSheet,
   isRemoteWorkspace,
@@ -282,12 +283,4 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
       </main>
     </div>
   )
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { readonly code?: unknown }).code
-    return typeof code === 'string' ? code : undefined
-  }
-  return undefined
 }

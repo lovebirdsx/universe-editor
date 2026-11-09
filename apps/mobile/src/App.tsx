@@ -146,6 +146,11 @@ export function App() {
     setRoute({ name: 'inbox' })
   }
 
+  const finishSession = (action: 'closed' | 'removed'): void => {
+    backToInbox()
+    setNotice(action === 'closed' ? strings.sessionCloseNotice : strings.sessionRemovedNotice)
+  }
+
   const unpair = (): void => {
     setPendingRef(undefined)
     setNotice(undefined)
@@ -210,6 +215,7 @@ export function App() {
           onOpenSessionRef={openSessionRef}
           focusPending={focusPending}
           onBack={backToInbox}
+          onFinished={finishSession}
         />
       </>
     )
@@ -240,6 +246,7 @@ export function App() {
         credentials={credentials}
         notice={notice}
         onDismissNotice={() => setNotice(undefined)}
+        onNotice={setNotice}
         onOpenSession={openSession}
         onNewSession={openNewSession}
         onUnpair={unpair}

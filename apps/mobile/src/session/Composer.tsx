@@ -10,6 +10,7 @@ import {
   type MobileAttachmentUploadResult,
 } from '@universe-editor/mobile-protocol'
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { errorCode } from '../errors.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { AttachmentSheet, type AttachmentPick } from './AttachmentSheet.js'
 
@@ -209,10 +210,7 @@ export function Composer({
     void uploadAll(accepted, pending)
   }
 
-  const pickFiles = (
-    event: ChangeEvent<HTMLInputElement>,
-    source: 'image' | 'file',
-  ): void => {
+  const pickFiles = (event: ChangeEvent<HTMLInputElement>, source: 'image' | 'file'): void => {
     const input = event.currentTarget
     // Clearing the input mutates the live FileList, so snapshot it first.
     const files = Array.from(input.files ?? [])
@@ -417,12 +415,4 @@ export function writeDraft(sessionKey: string, value: string): void {
 
 export function clearDraft(sessionKey: string): void {
   writeDraft(sessionKey, '')
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { readonly code?: unknown }).code
-    return typeof code === 'string' ? code : undefined
-  }
-  return undefined
 }

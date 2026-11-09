@@ -193,6 +193,7 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'resumeAutoResolve',
   'newSession',
   'renameSession',
+  'closeSession',
   'deleteSession',
   'forkSession',
   'rewindSession',
@@ -373,6 +374,7 @@ export class MobileGatewayHub {
 
     const entry = this._windows.get(resolved.windowId)
     if (entry === undefined) {
+      subscription.cancelled = true
       state.sessions.delete(key)
       this._send(connection, { type: 'session_removed', ref }, ref.localId)
       return
@@ -403,6 +405,7 @@ export class MobileGatewayHub {
     // while the snapshot was in flight; the newer request owns the output.
     if (subscription.cancelled || state.sessions.get(key) !== subscription) return
     if (snapshot === undefined) {
+      subscription.cancelled = true
       state.sessions.delete(key)
       this._send(connection, { type: 'session_removed', ref }, ref.localId)
       return
@@ -649,6 +652,12 @@ export class MobileGatewayHub {
         const p = frame.payload as { ref: MobileSessionRef; title: string }
         return this._sessionCommand(p.ref, 10_000, (bridge, localId) =>
           bridge.renameSession(localId, p.title),
+        )
+      }
+      case 'closeSession': {
+        const p = frame.payload as { ref: MobileSessionRef }
+        return this._sessionCommand(p.ref, 10_000, (bridge, localId) =>
+          bridge.closeSession(localId),
         )
       }
       case 'deleteSession': {
@@ -1023,6 +1032,21 @@ export class MobileGatewayHub {
           localId: ref.localId,
           ...(ref.durableId !== undefined ? { durableId: ref.durableId } : {}),
         })
+        // A subscriber may be looking at the session when it closes (from the
+        // phone itself or from the PC). Tell it explicitly instead of leaving
+        // the page on stale data until the next resubscribe.
+        const key = sessionKey(windowId, ref.localId)
+        for (const state of this._connections) {
+          const subscription = state.sessions.get(key)
+          if (subscription === undefined) continue
+          subscription.cancelled = true
+          state.sessions.delete(key)
+          this._send(
+            state.connection,
+            { type: 'session_removed', ref: subscription.ref },
+            subscription.localId,
+          )
+        }
       }
       this._broadcastInboxDelta(upserts, removes)
       return

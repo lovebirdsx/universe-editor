@@ -136,8 +136,8 @@ main 侧不直接读 `AcpSession`。
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
-`attachments`、`summary.imageSupported`、`attachment_not_found`）与 fork / rewind / 侧边任务
-（对应命令、agent 能力位、消息锚点与侧边任务关系字段））。WS 建立后第一帧必须是
+`attachments`、`summary.imageSupported`、`attachment_not_found`）、fork / rewind / 侧边任务
+（对应命令、agent 能力位、消息锚点与侧边任务关系字段）与 `closeSession` 命令）。WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v6 的 `hello_ok.capabilities` 为
 `['inbox', 'commands', 'notifications', 'attachments']`，旧客户端可以只看 `inbox`。`vapidPublicKey` 只在网关可推送
@@ -172,6 +172,7 @@ Referer。
 | 自动执行 | `pauseAutoResolve` / `resumeAutoResolve` | `{ ref, requestId }` | 暂停 / 继续 plan 倒计时 |
 | 会话管理 | `newSession` | `{ agentId, workspace, initialPrompt? }` | 见 §6 |
 | 会话管理 | `renameSession` | `{ ref, title }` | 会话标题 |
+| 会话管理 | `closeSession` | `{ ref }` | 结束活跃会话并关闭 PC 标签页，保留历史（等价 PC 关标签页） |
 | 会话管理 | `deleteSession` | `{ ref }` | 复用 PC「Delete Agent Session」的 plan → 执行链路 |
 | 分叉 / 回退 | `forkSession` | `{ ref, messageId? }` | 从锚点之前或末尾创建新会话；**不激活 PC** |
 | 分叉 / 回退 | `previewRewind` | `{ ref, messageId }` | 回退 dry-run：只返回文件影响，不修改会话 |
@@ -196,7 +197,7 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 `deleteSideTask` 都按可修改状态命令处理。
 
 **超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
-`cancelTurn` 5s；审批、配置、自动执行、重命名 10s；`deleteSession` / `newSession` /
+`cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` / `newSession` /
 `previewRewind` 30s；`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
 `deleteSideTask` 120s（要等 agent fork RPC 与 resume），`listSideTasks` 10s。超时回
 `command_result { ok: false, error: 'internal' }`。手机端 `sendPrompt` 同样是 15s，避免手机先超时重发。
@@ -481,7 +482,7 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录
 `ts` / `device` / `remoteAddress` / `action` / `result` / `detail`。所有会修改状态的命令
-（`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、删除、
+（`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、关闭、删除、
 fork / rewind / 侧边任务）都记一条；`detail` 只含 `window=` / `local=` / `agent=` / `error=` 等
 定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
 `sideTaskId` 或文件路径**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents` /

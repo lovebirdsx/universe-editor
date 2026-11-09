@@ -637,6 +637,59 @@ input:focus-visible {
   opacity: 0.6;
 }
 
+/* iOS-style swipe actions: the row itself stays a button; the actions sit
+   behind the translated track and only become reachable once revealed. */
+.inbox-swipe-row {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--surface-muted);
+  touch-action: pan-y pinch-zoom;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.inbox-swipe-row__actions {
+  position: absolute;
+  inset: 0 0 0 auto;
+  display: flex;
+  align-items: stretch;
+}
+
+.inbox-swipe-row__action {
+  padding: 0 4px;
+  border: none;
+  border-radius: 0;
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.inbox-swipe-row__action--close {
+  background: #8e8e93;
+}
+
+.inbox-swipe-row__action--remove {
+  background: var(--danger);
+}
+
+.inbox-swipe-row__action:disabled {
+  opacity: 0.5;
+}
+
+.inbox-swipe-row__track {
+  position: relative;
+  z-index: 1;
+  border-radius: 12px;
+  background: var(--surface);
+  touch-action: pan-y pinch-zoom;
+  transition: transform 180ms ease;
+}
+
+.inbox-swipe-row__track--dragging {
+  transition: none;
+}
+
 .session-card {
   display: flex;
   align-items: flex-start;

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { commandErrorText, strings } from '../strings.js'
+import { errorCode } from '../errors.js'
 
 export type PermissionCommandClient = Pick<
   MobileClient,
@@ -288,12 +289,4 @@ function permissionIcon(kind: string | undefined): string {
     default:
       return '⚑'
   }
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { readonly code?: unknown }).code
-    return typeof code === 'string' ? code : undefined
-  }
-  return undefined
 }

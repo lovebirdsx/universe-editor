@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { commandErrorText, strings } from '../strings.js'
+import { errorCode } from '../errors.js'
 
 export interface ConfigSheetProps {
   readonly client: Pick<MobileClient, 'setConfigOption'>
@@ -74,12 +75,4 @@ export function ConfigSheet({ client, option, online, onClose, onNotice }: Confi
       {!online && <p className="sheet__hint sheet__hint--danger">{strings.pendingOffline}</p>}
     </BottomSheet>
   )
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { readonly code?: unknown }).code
-    return typeof code === 'string' ? code : undefined
-  }
-  return undefined
 }

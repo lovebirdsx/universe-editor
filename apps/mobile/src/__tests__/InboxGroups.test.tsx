@@ -1,6 +1,6 @@
 import type { MobileSessionBucket, MobileSessionSummary } from '@universe-editor/mobile-protocol'
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { groupSessions, selectInboxSessions } from '../inbox/groupSessions.js'
 import { InboxGroups } from '../inbox/InboxGroups.js'
 import { strings } from '../strings.js'
@@ -72,5 +72,113 @@ describe('InboxGroups', () => {
     const side = { ...session('side', 'completed', 'Side'), sideTaskOf: 'durable-parent' }
     expect(selectInboxSessions([parent, side])).toEqual([parent])
     expect(selectInboxSessions([side])).toEqual([])
+  })
+
+  it('reveals close/remove after a horizontal swipe', () => {
+    const onCloseSession = vi.fn()
+    const onRemoveSession = vi.fn()
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={onCloseSession}
+        onRemoveSession={onRemoveSession}
+      />,
+    )
+
+    const row = screen.getByTestId('inbox-session-row')
+    fireEvent.pointerDown(row, { clientX: 240, clientY: 20, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(row, { clientX: 100, clientY: 22, pointerId: 1 })
+    fireEvent.pointerUp(row, { clientX: 100, clientY: 22, pointerId: 1 })
+
+    fireEvent.click(screen.getByTestId('inbox-session-close-action'))
+    expect(onCloseSession).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId('inbox-session-remove-action'))
+    expect(onRemoveSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('opens the action menu on a long press', () => {
+    vi.useFakeTimers()
+    try {
+      const onShowSessionActions = vi.fn()
+      render(
+        <InboxGroups
+          sessions={[session('running', 'in_progress', 'Running task')]}
+          onShowSessionActions={onShowSessionActions}
+        />,
+      )
+
+      const row = screen.getByTestId('inbox-session-row')
+      fireEvent.pointerDown(row, { clientX: 100, clientY: 20, button: 0, pointerId: 1 })
+      act(() => {
+        vi.advanceTimersByTime(500)
+      })
+      fireEvent.pointerUp(row, { clientX: 100, clientY: 20, pointerId: 1 })
+
+      expect(onShowSessionActions).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not swallow the next tap after a long press ends off-track', () => {
+    vi.useFakeTimers()
+    try {
+      const onShowSessionActions = vi.fn()
+      const onOpenSession = vi.fn()
+      render(
+        <InboxGroups
+          sessions={[session('running', 'in_progress', 'Running task')]}
+          onOpenSession={onOpenSession}
+          onShowSessionActions={onShowSessionActions}
+        />,
+      )
+
+      const row = screen.getByTestId('inbox-session-row')
+      fireEvent.pointerDown(row, { clientX: 100, clientY: 20, button: 0, pointerId: 1 })
+      act(() => {
+        vi.advanceTimersByTime(500)
+      })
+      expect(onShowSessionActions).toHaveBeenCalledTimes(1)
+      // The pointerup that follows a mouse long-press lands on the sheet
+      // overlay, so the row never sees it.
+      fireEvent.pointerDown(row, { clientX: 100, clientY: 20, button: 0, pointerId: 1 })
+      fireEvent.pointerUp(row, { clientX: 100, clientY: 20, button: 0, pointerId: 1 })
+      fireEvent.click(row)
+
+      expect(onOpenSession).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('offers the action menu through the context-menu key', () => {
+    const onShowSessionActions = vi.fn()
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onShowSessionActions={onShowSessionActions}
+      />,
+    )
+
+    const row = screen.getByTestId('inbox-session-row')
+    expect(row.getAttribute('aria-haspopup')).toBe('dialog')
+    fireEvent.contextMenu(row)
+    expect(onShowSessionActions).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not wrap read-only sessions in swipe actions', () => {
+    render(
+      <InboxGroups
+        sessions={[session('preview', 'completed', 'Preview')].map((entry) => ({
+          ...entry,
+          readOnly: true,
+        }))}
+        onCloseSession={vi.fn()}
+        onRemoveSession={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByTestId('inbox-swipe-row')).toBeNull()
+    expect(screen.getByTestId('inbox-session-row')).toBeTruthy()
   })
 })

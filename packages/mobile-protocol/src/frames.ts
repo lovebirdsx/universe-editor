@@ -350,6 +350,7 @@ export const MOBILE_COMMAND_KINDS = [
   'resumeAutoResolve',
   'newSession',
   'renameSession',
+  'closeSession',
   'deleteSession',
   'forkSession',
   'previewRewind',

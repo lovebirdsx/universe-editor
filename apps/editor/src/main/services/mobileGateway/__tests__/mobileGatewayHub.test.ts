@@ -59,6 +59,7 @@ class FakeBridge implements IMobileBridgeService {
     value: { localId: 'new-local' },
   }))
   readonly renameSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly closeSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly deleteSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly forkSession = vi.fn(
     async (): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> => ({
@@ -335,6 +336,73 @@ describe('MobileGatewayHub', () => {
 
     bridge.emit({ kind: 'inbox', upserts: [summary('s1', { title: 'After reload' })], removes: [] })
     expect(framesOf(connection, 'inbox_delta')).toHaveLength(1)
+  })
+
+  it('tells a subscribed phone when the session leaves the inbox', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+    await hub.subscribeSession(connection, { windowId: 1, localId: 's1', durableId: 'd1' })
+    connection.frames.length = 0
+
+    bridge.emit({
+      kind: 'inbox',
+      upserts: [],
+      removes: [{ localId: 's1', durableId: 'd1' }],
+    })
+
+    expect(framesOf(connection, 'session_removed')).toStrictEqual([
+      {
+        type: 'session_removed',
+        ref: { windowId: 1, localId: 's1', durableId: 'd1' },
+      },
+    ])
+    expect(framesOf(connection, 'inbox_delta').at(-1)?.removes).toStrictEqual([
+      { windowId: 1, localId: 's1', durableId: 'd1' },
+    ])
+  })
+
+  it('does not deliver a late snapshot after the session leaves the inbox', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    bridge.getSnapshot.mockImplementationOnce(async () => {
+      await gate
+      return snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) })
+    })
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+    connection.frames.length = 0
+
+    const subscribing = hub.subscribeSession(connection, {
+      windowId: 1,
+      localId: 's1',
+      durableId: 'd1',
+    })
+    bridge.emit({
+      kind: 'inbox',
+      upserts: [],
+      removes: [{ localId: 's1', durableId: 'd1' }],
+    })
+    release?.()
+    await subscribing
+
+    expect(framesOf(connection, 'session_snapshot')).toHaveLength(0)
+    expect(framesOf(connection, 'session_removed')).toHaveLength(1)
   })
 
   it('sends a session snapshot then forwards monotonic deltas', async () => {
@@ -718,6 +786,7 @@ describe('MobileGatewayHub commands', () => {
       ['pauseAutoResolve', { ref, requestId: 'req-1' }, bridge.pauseAutoResolve],
       ['resumeAutoResolve', { ref, requestId: 'req-1' }, bridge.resumeAutoResolve],
       ['renameSession', { ref, title: 'Renamed' }, bridge.renameSession],
+      ['closeSession', { ref }, bridge.closeSession],
       ['deleteSession', { ref }, bridge.deleteSession],
     ]
     for (const [kind, payload, spy] of cases) {

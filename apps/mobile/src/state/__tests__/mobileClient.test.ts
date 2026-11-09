@@ -189,6 +189,103 @@ describe('MobileClient session subscription', () => {
     await expect(client.sendPrompt('hello')).rejects.toMatchObject({ code: 'network' })
   })
 
+  it('targets an explicit inbox ref and drops the row after close/remove', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1'), sessionSummary('s2')],
+    })
+
+    const closed = client.closeSession(sessionRef('s1'))
+    const closeCommand = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { requestId: string; kind: string; payload: unknown }
+    expect(closeCommand.kind).toBe('closeSession')
+    expect(closeCommand.payload).toStrictEqual({ ref: sessionRef('s1') })
+    socket.serverSend({ type: 'command_result', requestId: closeCommand.requestId, ok: true })
+    await closed
+    expect(
+      client
+        .getInboxStore()
+        .getState()
+        .sessions.map((s) => s.ref.localId),
+    ).toEqual(['s2'])
+
+    const removed = client.deleteSession(sessionRef('s2'))
+    const deleteCommand = sentFrames(socket)
+      .filter(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as Record<string, unknown>)['type'] === 'command',
+      )
+      .at(-1) as { requestId: string; kind: string; payload: unknown }
+    expect(deleteCommand.kind).toBe('deleteSession')
+    expect(deleteCommand.payload).toStrictEqual({ ref: sessionRef('s2') })
+    socket.serverSend({ type: 'command_result', requestId: deleteCommand.requestId, ok: true })
+    await removed
+    expect(client.getInboxStore().getState().sessions).toEqual([])
+  })
+
+  it('marks a session removed even when the removal arrives before its snapshot', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    socket.serverSend({ type: 'session_removed', ref: sessionRef('s1') })
+
+    expect(client.getSessionStore().getState().removed).toBe(true)
+  })
+
+  it('treats a missing session as an already-finished close and drops the row', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1')],
+    })
+
+    const closed = client.closeSession(sessionRef('s1'))
+    const command = sentFrames(socket).at(-1) as { requestId: string }
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: false,
+      error: 'session_not_found',
+    })
+
+    await expect(closed).resolves.toBeUndefined()
+    expect(client.getInboxStore().getState().sessions).toEqual([])
+  })
+
+  it('keeps the inbox row when closing fails', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1')],
+    })
+
+    const closed = client.closeSession(sessionRef('s1'))
+    const command = sentFrames(socket).at(-1) as { requestId: string }
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: false,
+      error: 'internal',
+    })
+
+    await expect(closed).rejects.toMatchObject({ code: 'internal' })
+    expect(client.getInboxStore().getState().sessions).toHaveLength(1)
+  })
+
   it('auto-generates an idempotency key for newSession', () => {
     const { client, sockets } = createHarness()
     void client.newSession('echo', { folder: 'file:///work' }).catch(() => undefined)

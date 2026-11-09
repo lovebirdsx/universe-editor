@@ -252,6 +252,7 @@ describe('parseClientFrame', () => {
         },
       },
       { kind: 'renameSession', payload: { ref: REF, title: 'Renamed' } },
+      { kind: 'closeSession', payload: { ref: REF } },
       { kind: 'deleteSession', payload: { ref: REF } },
       { kind: 'forkSession', payload: { ref: REF } },
       { kind: 'forkSession', payload: { ref: REF, messageId: 'msg-user-1' } },

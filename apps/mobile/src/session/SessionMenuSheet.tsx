@@ -1,27 +1,32 @@
 import { useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet.js'
+import { ConfirmActionSheet } from '../components/ConfirmActionSheet.js'
 import { FullscreenButton } from '../components/FullscreenButton.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { commandErrorText, strings } from '../strings.js'
+import { errorCode } from '../errors.js'
 
 const MAX_TITLE_LENGTH = 512
 
 export interface SessionMenuSheetProps {
-  readonly client: Pick<MobileClient, 'renameSession' | 'deleteSession'>
+  readonly client: Pick<MobileClient, 'renameSession' | 'closeSession' | 'deleteSession'>
   readonly title: string
   readonly online: boolean
   readonly forkSupported?: boolean | undefined
-  readonly readOnly?: boolean | undefined
+  readonly readOnly: boolean
   readonly running?: boolean | undefined
+  /** True while a turn/ask/background task is live: closing can lose work. */
+  readonly closeNeedsConfirm: boolean
   readonly sideTaskChildCount?: number | undefined
   readonly onForkTip?: (() => Promise<void> | void) | undefined
   readonly onNewSideTask?: (() => Promise<void> | void) | undefined
   readonly onOpenSideTasks?: (() => void) | undefined
   readonly onClose: () => void
   readonly onNotice: (text: string) => void
+  readonly onFinished: (action: 'closed' | 'removed') => void
 }
 
-type View = 'menu' | 'rename' | 'delete'
+type View = 'menu' | 'rename' | 'close' | 'remove'
 
 export function SessionMenuSheet({
   client,
@@ -30,30 +35,43 @@ export function SessionMenuSheet({
   forkSupported,
   readOnly,
   running,
+  closeNeedsConfirm,
   sideTaskChildCount,
   onForkTip,
   onNewSideTask,
   onOpenSideTasks,
   onClose,
   onNotice,
+  onFinished,
 }: SessionMenuSheetProps) {
   const [view, setView] = useState<View>('menu')
   const [draft, setDraft] = useState(title)
   const [error, setError] = useState<string | undefined>(undefined)
   const [busy, setBusy] = useState(false)
 
-  const run = async (action: () => Promise<void> | void): Promise<void> => {
+  const run = async (action: () => Promise<void> | void, onSuccess: () => void): Promise<void> => {
     if (busy) return
     setBusy(true)
     setError(undefined)
     try {
       await action()
       setBusy(false)
-      onClose()
+      onSuccess()
     } catch (err) {
       setBusy(false)
       onNotice(commandErrorText(errorCode(err)))
     }
+  }
+
+  const requestClose = (): void => {
+    if (closeNeedsConfirm) {
+      setView('close')
+      return
+    }
+    void run(
+      () => client.closeSession(),
+      () => onFinished('closed'),
+    )
   }
 
   if (view === 'rename') {
@@ -67,7 +85,10 @@ export function SessionMenuSheet({
         setError(strings.sessionRenameTooLong)
         return
       }
-      void run(() => client.renameSession(next))
+      void run(
+        () => client.renameSession(next),
+        () => onClose(),
+      )
     }
     return (
       <BottomSheet
@@ -118,36 +139,48 @@ export function SessionMenuSheet({
     )
   }
 
-  if (view === 'delete') {
+  if (view === 'close') {
     return (
-      <BottomSheet
-        title={strings.sessionDeleteTitle}
-        testId="session-delete-sheet"
-        overlay
-        onDismiss={onClose}
-        expandKey="delete"
-      >
-        <p className="sheet__request">{strings.sessionDeleteBody}</p>
-        <div className="sheet-options">
-          <button
-            type="button"
-            className="sheet-option sheet-option--danger"
-            data-testid="session-delete-confirm"
-            disabled={!online || busy}
-            onClick={() => void run(() => client.deleteSession())}
-          >
-            {busy ? strings.pendingSubmitting : strings.sessionDeleteConfirm}
-          </button>
-          <button
-            type="button"
-            className="sheet-option sheet-option--cancel"
-            disabled={busy}
-            onClick={() => setView('menu')}
-          >
-            {strings.sessionDeleteCancel}
-          </button>
-        </div>
-      </BottomSheet>
+      <ConfirmActionSheet
+        title={strings.sessionCloseTitle}
+        body={strings.sessionCloseBody}
+        confirmLabel={strings.sessionCloseConfirm}
+        testId="session-close-sheet"
+        busy={busy}
+        disabled={!online}
+        onConfirm={() =>
+          void run(
+            () => client.closeSession(),
+            () => onFinished('closed'),
+          )
+        }
+        onCancel={() => {
+          if (!busy) setView('menu')
+        }}
+      />
+    )
+  }
+
+  if (view === 'remove') {
+    return (
+      <ConfirmActionSheet
+        title={strings.sessionRemoveTitle}
+        body={strings.sessionRemoveBody}
+        confirmLabel={strings.sessionRemoveConfirm}
+        testId="session-remove-sheet"
+        tone="danger"
+        busy={busy}
+        disabled={!online}
+        onConfirm={() =>
+          void run(
+            () => client.deleteSession(),
+            () => onFinished('removed'),
+          )
+        }
+        onCancel={() => {
+          if (!busy) setView('menu')
+        }}
+      />
     )
   }
 
@@ -157,7 +190,7 @@ export function SessionMenuSheet({
       testId="session-menu-sheet"
       tone="neutral"
       overlay
-      onDismiss={onClose}
+      onDismiss={busy ? undefined : onClose}
       expandKey="menu"
     >
       <div className="sheet-options">
@@ -166,15 +199,17 @@ export function SessionMenuSheet({
           testId="session-fullscreen"
           onToggled={onClose}
         />
-        <button
-          type="button"
-          className="sheet-option sheet-option--neutral"
-          data-testid="session-rename"
-          disabled={!online}
-          onClick={() => setView('rename')}
-        >
-          {strings.sessionRename}
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="session-rename"
+            disabled={!online || busy}
+            onClick={() => setView('rename')}
+          >
+            {strings.sessionRename}
+          </button>
+        )}
         {forkSupported === true && readOnly !== true && onForkTip !== undefined && (
           <button
             type="button"
@@ -182,7 +217,7 @@ export function SessionMenuSheet({
             data-testid="session-fork-tip"
             disabled={!online || running === true || busy}
             title={running === true ? strings.forkBusy : undefined}
-            onClick={() => void run(onForkTip)}
+            onClick={() => void run(onForkTip, onClose)}
           >
             {strings.sessionForkTip}
           </button>
@@ -193,7 +228,7 @@ export function SessionMenuSheet({
             className="sheet-option sheet-option--neutral"
             data-testid="session-new-side-task"
             disabled={!online || busy}
-            onClick={() => void run(onNewSideTask)}
+            onClick={() => void run(onNewSideTask, onClose)}
           >
             {busy ? strings.pendingSubmitting : strings.sideTasksNew}
           </button>
@@ -211,27 +246,37 @@ export function SessionMenuSheet({
               {`${strings.sideTasksMenu} (${sideTaskChildCount})`}
             </button>
           )}
+        {!readOnly && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="session-close"
+            disabled={!online || busy}
+            onClick={requestClose}
+          >
+            {strings.sessionClose}
+          </button>
+        )}
+        {!readOnly && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--danger"
+            data-testid="session-remove"
+            disabled={!online || busy}
+            onClick={() => setView('remove')}
+          >
+            {strings.sessionRemove}
+          </button>
+        )}
         <button
           type="button"
-          className="sheet-option sheet-option--danger"
-          data-testid="session-delete"
-          disabled={!online}
-          onClick={() => setView('delete')}
+          className="sheet-option sheet-option--cancel"
+          data-testid="session-menu-cancel"
+          onClick={onClose}
         >
-          {strings.sessionDelete}
-        </button>
-        <button type="button" className="sheet-option sheet-option--cancel" onClick={onClose}>
           {strings.pendingCancel}
         </button>
       </div>
     </BottomSheet>
   )
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (typeof error === 'object' && error !== null && 'code' in error) {
-    const code = (error as { readonly code?: unknown }).code
-    return typeof code === 'string' ? code : undefined
-  }
-  return undefined
 }

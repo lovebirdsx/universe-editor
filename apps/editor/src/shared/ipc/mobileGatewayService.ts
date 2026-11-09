@@ -432,6 +432,12 @@ export interface IMobileBridgeService {
 
   renameSession(localId: string, title: string): Promise<MobileBridgeResult<void>>
 
+  /**
+   * Ends the live session and closes its editor tab, but keeps the history row
+   * so it can be resumed on the PC. Same effect as closing the tab locally.
+   */
+  closeSession(localId: string): Promise<MobileBridgeResult<void>>
+
   /** Runs the same plan/execute path as the PC "Delete Agent Session" command. */
   deleteSession(localId: string): Promise<MobileBridgeResult<void>>
 

@@ -87,6 +87,7 @@ function openPage(
 ): {
   readonly harness: Harness
   readonly onBack: ReturnType<typeof vi.fn>
+  readonly onFinished: ReturnType<typeof vi.fn>
 } {
   const harness = createHarness()
   feed(harness.socket, {
@@ -95,10 +96,17 @@ function openPage(
     sessions: [sessionSummary('s1')],
   })
   const onBack = vi.fn()
+  const onFinished = vi.fn()
   render(
-    <SessionPage client={harness.client} sessionKey={sessionKey} onBack={onBack} {...overrides} />,
+    <SessionPage
+      client={harness.client}
+      sessionKey={sessionKey}
+      onBack={onBack}
+      onFinished={onFinished}
+      {...overrides}
+    />,
   )
-  return { harness, onBack }
+  return { harness, onBack, onFinished }
 }
 
 describe('SessionPage snapshot rendering', () => {
@@ -398,6 +406,13 @@ describe('SessionPage snapshot rendering', () => {
     expect(onBack).toHaveBeenCalledTimes(1)
   })
 
+  it('shows the removed state when the removal precedes the snapshot', () => {
+    const { harness } = openPage()
+    feed(harness.socket, { type: 'session_removed', ref: sessionRef('s1') })
+
+    expect(screen.getByText(strings.sessionRemovedTitle)).toBeTruthy()
+  })
+
   it('resubscribes on a sequence gap', () => {
     const { harness } = openPage()
     feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
@@ -546,6 +561,104 @@ describe('SessionPage snapshot rendering', () => {
 
     expect(screen.getByTestId('session-load-failed')).toBeTruthy()
     expect(screen.getByRole('button', { name: strings.sessionRetry })).toBeTruthy()
+  })
+
+  it('closes an idle session without a confirmation', async () => {
+    const { harness, onFinished } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', {
+          status: 'idle',
+          displayStatus: 'idle',
+          bucket: 'completed',
+        }),
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-close'))
+
+    const command = sentFrames(harness.socket).find(
+      (frame) =>
+        frameType(frame) === 'command' && (frame as { kind?: string }).kind === 'closeSession',
+    ) as { requestId: string; payload: unknown } | undefined
+    expect(command?.payload).toStrictEqual({ ref: sessionRef('s1') })
+
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: command!.requestId,
+      ok: true,
+    })
+    await act(async () => undefined)
+    expect(onFinished).toHaveBeenCalledWith('closed')
+  })
+
+  it('confirms before closing a running session', async () => {
+    const { harness, onFinished } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-close'))
+    expect(screen.getByTestId('session-close-sheet')).toBeTruthy()
+    expect(
+      sentFrames(harness.socket).some(
+        (frame) =>
+          frameType(frame) === 'command' && (frame as { kind?: string }).kind === 'closeSession',
+      ),
+    ).toBe(false)
+
+    fireEvent.click(screen.getByTestId('session-close-sheet-confirm'))
+    const command = sentFrames(harness.socket).find(
+      (frame) =>
+        frameType(frame) === 'command' && (frame as { kind?: string }).kind === 'closeSession',
+    ) as { requestId: string } | undefined
+    expect(command).toBeDefined()
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: command!.requestId,
+      ok: true,
+    })
+    await act(async () => undefined)
+    expect(onFinished).toHaveBeenCalledWith('closed')
+  })
+
+  it('removes a session after confirmation', async () => {
+    const { harness, onFinished } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-remove'))
+    expect(screen.getByTestId('session-remove-sheet')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('session-remove-sheet-confirm'))
+    const command = sentFrames(harness.socket).find(
+      (frame) =>
+        frameType(frame) === 'command' && (frame as { kind?: string }).kind === 'deleteSession',
+    ) as { requestId: string } | undefined
+    expect(command).toBeDefined()
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: command!.requestId,
+      ok: true,
+    })
+    await act(async () => undefined)
+    expect(onFinished).toHaveBeenCalledWith('removed')
+  })
+
+  it('hides rename, close and remove for a read-only session', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { readOnly: true }),
+      }),
+    )
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    expect(screen.queryByTestId('session-close')).toBeNull()
+    expect(screen.queryByTestId('session-remove')).toBeNull()
+    expect(screen.queryByTestId('session-rename')).toBeNull()
   })
 })
 
@@ -800,6 +913,7 @@ describe('SessionPage fork / rewind / side tasks', () => {
           sessionKey="durable-fork"
           initialRef={initialRef}
           onBack={vi.fn()}
+          onFinished={vi.fn()}
         />
       </StrictMode>,
     )
@@ -828,7 +942,12 @@ describe('SessionPage fork / rewind / side tasks', () => {
     depositComposerPrefill('1:s1', 'leaked prompt')
 
     const { rerender } = render(
-      <SessionPage client={harness.client} sessionKey="1:s1" onBack={vi.fn()} />,
+      <SessionPage
+        client={harness.client}
+        sessionKey="1:s1"
+        onBack={vi.fn()}
+        onFinished={vi.fn()}
+      />,
     )
     feed(harness.socket, sessionSnapshotFrame(1, { summary: sessionSummary('s1'), timeline: [] }))
     await waitFor(() =>
@@ -837,7 +956,14 @@ describe('SessionPage fork / rewind / side tasks', () => {
       ),
     )
 
-    rerender(<SessionPage client={harness.client} sessionKey="1:s2" onBack={vi.fn()} />)
+    rerender(
+      <SessionPage
+        client={harness.client}
+        sessionKey="1:s2"
+        onBack={vi.fn()}
+        onFinished={vi.fn()}
+      />,
+    )
     feed(harness.socket, sessionSnapshotFrame(1, { summary: sessionSummary('s2'), timeline: [] }))
 
     await waitFor(() =>

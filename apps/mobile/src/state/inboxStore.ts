@@ -67,6 +67,14 @@ export class InboxStore extends Store<InboxState> {
     return { status: 'applied' }
   }
 
+  /** Drop a row immediately after a successful close/remove command. */
+  remove(ref: MobileSessionRef): void {
+    const before = this._byLocalKey.size
+    this._remove(ref)
+    if (this._byLocalKey.size === before) return
+    this.setState({ ...this.getState(), sessions: [...this._byLocalKey.values()] })
+  }
+
   private _remove(ref: MobileSessionRef): void {
     if (ref.durableId !== undefined) {
       for (const [key, summary] of this._byLocalKey) {

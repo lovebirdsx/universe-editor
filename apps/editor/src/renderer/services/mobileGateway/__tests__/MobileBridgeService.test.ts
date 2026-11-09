@@ -1140,6 +1140,31 @@ describe('MobileBridgeService commands', () => {
     ])
   })
 
+  it('closes a live session through the shared close path without deleting history', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+
+    await expect(harness.service.closeSession('s1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.sessionService.closeSession).toHaveBeenCalledWith('s1')
+    expect(harness.sessionService.deleteOnAgent).not.toHaveBeenCalled()
+  })
+
+  it('rejects closing a read-only session', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { readOnly: true })
+    harness.add(first)
+
+    await expect(harness.service.closeSession('s1')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_read_only',
+    })
+    expect(harness.sessionService.closeSession).not.toHaveBeenCalled()
+  })
+
   it('deletes a session through the shared removal pipeline', async () => {
     const harness = makeHarness()
     const first = makeSession('s1')

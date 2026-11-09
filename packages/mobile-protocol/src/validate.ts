@@ -529,8 +529,9 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseNewSessionPayload(value)
     case 'renameSession':
       return parseRenameSessionPayload(value)
+    case 'closeSession':
     case 'deleteSession':
-      return parseRefOnlyPayload(value, 'deleteSession')
+      return parseRefOnlyPayload(value, kind)
     case 'forkSession':
       return parseForkSessionPayload(value)
     case 'previewRewind':

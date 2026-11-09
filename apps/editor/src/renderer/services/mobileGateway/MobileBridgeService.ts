@@ -460,6 +460,13 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return ok(undefined)
   }
 
+  async closeSession(localId: string): Promise<MobileBridgeResult<void>> {
+    // Closing the live session fires `onDidCloseSession`; the session-editor
+    // lifecycle contribution closes the matching tab, so the PC reflects this
+    // exactly as if the user had closed the tab there.
+    return this._run(localId, (session) => this._sessions.closeSession(session.id))
+  }
+
   async deleteSession(localId: string): Promise<MobileBridgeResult<void>> {
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
