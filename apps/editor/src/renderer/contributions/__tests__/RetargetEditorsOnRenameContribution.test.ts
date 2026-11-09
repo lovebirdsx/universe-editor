@@ -215,6 +215,7 @@ describe('RetargetEditorsOnRenameContribution', () => {
     )
     liveModels.set(oldUri.toString(), { getValue: () => 'edited in diff', isDisposed: () => false })
     diff.setDirty(true)
+    diff.setTracksSessionChanges(true)
     const model = new EditorGroupModel()
     model.openEditor(diff)
     EditorViewStateCache.save(model.id, diff.resource.toString(), { diffState: true })
@@ -228,6 +229,7 @@ describe('RetargetEditorsOnRenameContribution', () => {
     expect(moved.modifiedUri.toString()).toBe(newUri.toString())
     expect(moved.modifiedContent).toBe('edited in diff')
     expect(moved.isDirty).toBe(true)
+    expect(moved.tracksSessionChanges).toBe(true)
     expect(EditorViewStateCache.load(model.id, moved.resource.toString())).toEqual({
       diffState: true,
     })

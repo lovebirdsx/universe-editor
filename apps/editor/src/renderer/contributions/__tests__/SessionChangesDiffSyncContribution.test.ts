@@ -101,6 +101,7 @@ describe('SessionChangesDiffSyncContribution', () => {
       false,
       fileService,
     )
+    input.setTracksSessionChanges(true)
     const groups = makeGroups([input])
     const sessions = makeSessions('agent-1')
     const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
@@ -137,6 +138,7 @@ describe('SessionChangesDiffSyncContribution', () => {
       true,
       fileService,
     )
+    input.setTracksSessionChanges(true)
     let modelValue = 'current-1'
     const model = {
       getValue: () => modelValue,
@@ -183,6 +185,7 @@ describe('SessionChangesDiffSyncContribution', () => {
       true,
       fileService,
     )
+    input.setTracksSessionChanges(true)
     let modelValue = 'current-1'
     const model = {
       getValue: () => modelValue,
@@ -227,6 +230,7 @@ describe('SessionChangesDiffSyncContribution', () => {
       false,
       fileService,
     )
+    input.setTracksSessionChanges(true)
     const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
       change(uri, 'base-1', 'current-1'),
     ])
@@ -267,6 +271,50 @@ describe('SessionChangesDiffSyncContribution', () => {
 
     expect(input.originalContent).toBe('base')
     expect(input.modifiedContent).toBe('current')
+    contrib.dispose()
+  })
+
+  it('leaves a working-tree diff opened from SCM alone', () => {
+    // A git diff exposes the same `diff:<uri>` identity, originalUri and
+    // `liveModified` as a session diff, but its left side is HEAD — not the
+    // tracker's pinned baseline. Syncing it replaces HEAD with the session
+    // baseline (and can rewrite the shared buffer), so the tracker must not own
+    // this tab.
+    const uri = URI.file('/ws/foo.ts')
+    const input = new DiffEditorInput(
+      uri,
+      'head-content',
+      'worktree',
+      undefined,
+      undefined,
+      true,
+      fileService,
+    )
+    let modelValue = 'worktree'
+    const model = {
+      getValue: () => modelValue,
+      setValue: (v: string) => (modelValue = v),
+      isDisposed: () => false,
+    }
+    liveModels.set(uri.toString(), model)
+    markCleanCalls.length = 0
+
+    const changesObs = observableValue<readonly SessionFileChange[]>('changes', [
+      change(uri, 'pre-agent', 'worktree'),
+    ])
+    const contrib = new SessionChangesDiffSyncContribution(
+      makeSessions('agent-1'),
+      makeTracker(changesObs),
+      makeGroups([input]),
+    )
+
+    changesObs.set([change(uri, 'pre-agent', 'after')], undefined)
+
+    expect(input.originalContent).toBe('head-content')
+    expect(input.modifiedContent).toBe('worktree')
+    expect(modelValue).toBe('worktree')
+    expect(markCleanCalls).not.toContain(model)
+    liveModels.delete(uri.toString())
     contrib.dispose()
   })
 

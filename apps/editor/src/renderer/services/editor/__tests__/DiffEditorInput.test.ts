@@ -435,6 +435,51 @@ describe('DiffEditorInput', () => {
     })
   })
 
+  describe('updateFrom (open de-duplication)', () => {
+    it('adopts the incoming input origin', () => {
+      const existing = inst.createInstance(
+        DiffEditorInput,
+        uri,
+        'head',
+        'worktree',
+        undefined,
+        undefined,
+        true,
+      )
+      const session = inst.createInstance(
+        DiffEditorInput,
+        uri,
+        'baseline',
+        'current',
+        undefined,
+        undefined,
+        true,
+      )
+      session.setTracksSessionChanges(true)
+
+      existing.updateFrom(session)
+      expect(existing.tracksSessionChanges).toBe(true)
+      expect(existing.originalContent).toBe('baseline')
+
+      const external = inst.createInstance(
+        DiffEditorInput,
+        uri,
+        'head-2',
+        'worktree-2',
+        undefined,
+        undefined,
+        true,
+      )
+      existing.updateFrom(external)
+      expect(existing.tracksSessionChanges).toBe(false)
+      expect(existing.originalContent).toBe('head-2')
+
+      existing.dispose()
+      session.dispose()
+      external.dispose()
+    })
+  })
+
   describe('serialize / deserialize (Ctrl+Shift+T, session restore)', () => {
     it('serializes the structural URIs AND both sides content', () => {
       const openable = URI.file('/ws/a.ts')
@@ -552,6 +597,45 @@ describe('DiffEditorInput', () => {
       snapshot.dispose()
       restoredLive?.dispose()
       restoredSnapshot?.dispose()
+    })
+
+    it('round-trips the session-change origin flag', () => {
+      const tracked = inst.createInstance(
+        DiffEditorInput,
+        uri,
+        'base',
+        'current',
+        undefined,
+        undefined,
+        true,
+      )
+      tracked.setTracksSessionChanges(true)
+      const restoredTracked = inst.invokeFunction((accessor) =>
+        DiffEditorInput.deserialize(tracked.serialize(), accessor),
+      )
+      const trackedData = tracked.serialize() as unknown as Record<string, unknown>
+      expect(trackedData['tracksSessionChanges']).toBe(true)
+      expect(restoredTracked!.tracksSessionChanges).toBe(true)
+
+      const external = inst.createInstance(
+        DiffEditorInput,
+        uri,
+        'base',
+        'current',
+        undefined,
+        undefined,
+        true,
+      )
+      const restoredExternal = inst.invokeFunction((accessor) =>
+        DiffEditorInput.deserialize(external.serialize(), accessor),
+      )
+      expect(external.serialize()).not.toHaveProperty('tracksSessionChanges')
+      expect(restoredExternal!.tracksSessionChanges).toBe(false)
+
+      tracked.dispose()
+      external.dispose()
+      restoredTracked?.dispose()
+      restoredExternal?.dispose()
     })
 
     it('rejects malformed payloads', () => {

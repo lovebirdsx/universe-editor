@@ -45,6 +45,8 @@ watched 行显「推测」徽标（`acp-changes-inferred`）+ hover EyeOff 忽�
 
 **路径 2（diff tab 一直开着、agent 又改文件——真正的主场景）**：已打开的 `DiffEditorInput` 不订阅 tracker（只有 `SessionChangesView` 列表订阅了 `changesFor`），于是列表刷新而 tab 纹丝不动、不重新点行就永远不刷新。修复 = 常驻 contribution `SessionChangesDiffSyncContribution`（AfterRestore）：autorun 遍历 `sessions.sessions` 订阅**所有**会话的 `changesFor`（各自读 `sessionIdOnAgent`；diff tab 可属任意 session，不是只有 active），按同 `originalUri` 命中已开实例调 `update(baseline, current)`。测试 `SessionChangesDiffSyncContribution.test.ts`。
 
+**来源判定红线**：`DiffEditorInput.tracksSessionChanges` 决定一个 tab 是否属于会话 diff。只有 `SessionChangesView` 打开的 tab 置 true；`updateFrom` 随打开意图双向复制（`EditorService.openEditor` 去重 / `migrateFrom`），`OpenDiffAction` 在 SCM/git 复用同一 tab 时清回 false；`serialize`/`deserialize` 持久化该标志（恢复后的会话 diff 才能继续刷新）。SCM diff 与 session diff 共用 `diff:<uri>`、`originalUri`、`liveModified`，但前者的左列是 HEAD，**绝不能只按 URI 命中覆盖**——否则 agent 继续编辑时 git diff 的 HEAD 会被 pinned baseline 悄悄替换（2026-11 用户反馈：工作区 diff 打开后自动从「HEAD vs 工作区」变成「session baseline vs 工作区」）。
+
 **路径 3（用户在编辑器里改源文件，diff 要 live 跟随）**：`DiffEditor` 的 modified 侧是**独立临时 model**（synthetic URI），与源文件共享的 Monaco model 脱钩，所以切回源文件编辑（含未保存脏编辑）时 diff 不动。修复 = `DiffLiveContentSyncContribution`（AfterRestore）为每个开着的 `DiffEditorInput` 订阅其 `originalUri` 的共享 model（`MonacoModelRegistry.peek`），`onDidChangeContent` 时把 live 文本推进 diff 的 modified 侧。
 
 下游链路 `update()` → `onDidChangeContent` → `DiffEditor.tsx` 就地 setValue 双侧 model 本就齐全，两处缺口都只在「谁来触发 update」；路径 1/2 互补兜底（tracker 的 `_recompute` 是异步的，点行那刻 `current` 可能仍是旧值，contribution 会在重算完后再刷一次）。

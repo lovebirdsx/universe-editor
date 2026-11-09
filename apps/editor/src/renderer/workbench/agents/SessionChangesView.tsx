@@ -241,8 +241,21 @@ export function SessionChangesView() {
 function useOpenChange(): (c: SessionFileChange, preview: boolean, target?: OpenTarget) => void {
   const inst = useService(IInstantiationService)
   const createInput = useCallback(
-    (c: SessionFileChange) =>
-      inst.createInstance(DiffEditorInput, c.uri, c.baseline, c.current, undefined, c.uri, true),
+    (c: SessionFileChange) => {
+      const input = inst.createInstance(
+        DiffEditorInput,
+        c.uri,
+        c.baseline,
+        c.current,
+        undefined,
+        c.uri,
+        true,
+      )
+      // Only this list owns the tracker baseline as the left side. A working-tree
+      // diff for the same file shares its id/URI but compares against HEAD.
+      input.setTracksSessionChanges(true)
+      return input
+    },
     [inst],
   )
   return useOpenDiffEditor(createInput)

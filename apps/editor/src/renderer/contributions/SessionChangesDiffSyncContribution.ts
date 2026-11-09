@@ -63,6 +63,11 @@ export class SessionChangesDiffSyncContribution
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
         if (!(editor instanceof DiffEditorInput) || editor.isCrossFile) continue
+        // A working-tree diff opened from SCM shares this id, originalUri and
+        // liveModified, but its left side is HEAD. Pushing the tracker baseline
+        // into it would silently replace that baseline (and rewrite the shared
+        // buffer); only tabs opened from Session Changes opt into the sync.
+        if (!editor.tracksSessionChanges) continue
         const change = byUri.get(editor.originalUri.toString())
         if (!change) continue
         // A row without texts carries no content at all — the file was never

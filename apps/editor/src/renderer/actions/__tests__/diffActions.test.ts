@@ -190,6 +190,19 @@ describe('OpenDiffAction — lock-aware routing', () => {
     expect(locked.activeEditor?.id).toBe('diff:file:///ws/a.txt')
   })
 
+  it('clears the session-change origin when an external diff reuses the tab', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    runOpenDiff(inst, payload())
+    const input = groups.activeGroup.editors[0] as DiffEditorInput
+    input.setTracksSessionChanges(true)
+
+    runOpenDiff(inst, payload({ modified: 'after-2' }))
+
+    expect(input.tracksSessionChanges).toBe(false)
+    expect(input.modifiedContent).toBe('after-2')
+  })
+
   it('reveals an already-open diff by focusing its group and window', () => {
     const groups = new EditorGroupsService()
     const inst = buildServices(groups)
@@ -359,6 +372,24 @@ describe('OpenDiffAction — targeted opens', () => {
     expect(side.editors).toHaveLength(1)
     expect(side.editors[0]?.id).toBe('diff:file:///ws/a.txt')
     expect(inst.focus.focusedGroups).toEqual([side])
+  })
+
+  it('clears the session-change origin when the side group reuses the tab', () => {
+    const groups = new EditorGroupsService()
+    const inst = buildServices(groups)
+    const active = groups.activeGroup
+
+    runOpenDiff(inst, payload({ openTarget: 'side' }))
+    const side = groups.activeGroup
+    groups.activateGroup(active)
+    const input = side.editors[0] as DiffEditorInput
+    input.setTracksSessionChanges(true)
+
+    runOpenDiff(inst, payload({ openTarget: 'side', modified: 'after-2' }))
+
+    expect(side.editors).toHaveLength(1)
+    expect(input.tracksSessionChanges).toBe(false)
+    expect(input.modifiedContent).toBe('after-2')
   })
 
   it('opens a fresh diff in an auxiliary window', () => {

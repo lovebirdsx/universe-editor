@@ -39,6 +39,10 @@ interface ISerializedDiffEditor {
   readonly modifiedUri?: UriComponents
   readonly openableResource?: UriComponents
   readonly liveModified?: boolean
+  /** The left side mirrors an ACP session's pinned baseline. Persisted so a
+   *  restored session diff keeps following the tracker; SCM diffs persist
+   *  nothing here and keep their HEAD baseline after restore. */
+  readonly tracksSessionChanges?: boolean
   /** Set when the entry was persisted without its content (size budget): the
    *  tab is not restorable — deserialize returns null for these. */
   readonly contentDropped?: boolean
@@ -65,6 +69,10 @@ export class DiffEditorInput extends EditorInput {
   /** Dirty-tracking subscriptions for the currently-bound shared model. */
   private readonly _modifiedModelStore = this._register(new DisposableStore())
   private _boundModifiedModel: monaco.editor.ITextModel | undefined
+  /** True when the left side is an ACP session's pinned baseline. A git/SCM diff
+   *  shares the id, originalUri and `liveModified` of a session diff but compares
+   *  against HEAD, so the tracker must not treat both as the same content. */
+  private _tracksSessionChanges = false
 
   constructor(
     private readonly _originalUri: URI,
@@ -174,6 +182,20 @@ export class DiffEditorInput extends EditorInput {
    */
   get liveModified(): boolean {
     return this._liveModified
+  }
+
+  /**
+   * True when this tab was opened from the Session Changes list, i.e. its left
+   * side is the tracker's pinned baseline. Only these tabs may be refreshed from
+   * the tracker; a working-tree diff from SCM owns its HEAD baseline even though
+   * both share `diff:<uri>` and the live modified buffer.
+   */
+  get tracksSessionChanges(): boolean {
+    return this._tracksSessionChanges
+  }
+
+  setTracksSessionChanges(value: boolean): void {
+    this._tracksSessionChanges = value
   }
 
   get originalContent(): string {
@@ -308,6 +330,9 @@ export class DiffEditorInput extends EditorInput {
    *  diff of the same file (the file changed again while the tab was open). */
   override updateFrom(other: EditorInput): void {
     if (other instanceof DiffEditorInput) {
+      // Copy before update(): it early-returns on unchanged content, but the tab
+      // may still have changed owner (session list vs SCM / tool-call preview).
+      this._tracksSessionChanges = other._tracksSessionChanges
       this.update(other._originalContent, other._modifiedContent, other._liveModified)
     }
   }
@@ -355,6 +380,7 @@ export class DiffEditorInput extends EditorInput {
       this._fileService,
     )
     moved._hasLeadingBom = this._hasLeadingBom
+    moved._tracksSessionChanges = this._tracksSessionChanges
     if (this.isDirty) moved.setDirty(true)
 
     EditorViewStateCache.move(groupId, this.resource.toString(), moved.resource.toString())
@@ -382,6 +408,7 @@ export class DiffEditorInput extends EditorInput {
       ...(this._isCrossFile && { modifiedUri: this._modifiedUri!.toJSON() }),
       ...(this._openableResource && { openableResource: this._openableResource.toJSON() }),
       ...(this._liveModified && { liveModified: true }),
+      ...(this._tracksSessionChanges && { tracksSessionChanges: true }),
     }
   }
 
@@ -454,7 +481,7 @@ export class DiffEditorInput extends EditorInput {
       ? (URI.revive(d.openableResource) as URI)
       : undefined
     const inst = accessor.get(IInstantiationService)
-    return inst.createInstance(
+    const input = inst.createInstance(
       DiffEditorInput,
       originalUri,
       d.originalContent ?? '',
@@ -463,6 +490,8 @@ export class DiffEditorInput extends EditorInput {
       openableResource,
       d.liveModified === true,
     )
+    input.setTracksSessionChanges(d.tracksSessionChanges === true)
+    return input
   }
 
   override dispose(): void {

@@ -167,6 +167,10 @@ export class OpenDiffAction extends Action2 {
       // stays in its group even when that group is locked.
       const existing = targetGroup.editors.find((e) => e.id === id)
       if (existing instanceof DiffEditorInput) {
+        // An external diff (SCM/git/timeline/p4) takes the tab over: its left
+        // side is the caller's snapshot, so the session tracker must stop
+        // refreshing this tab even if it was opened from Session Changes before.
+        existing.setTracksSessionChanges(false)
         existing.update(payload.original, payload.modified, payload.liveModified ?? false)
         // Double-click (pinned=true) promotes a preview tab to permanent.
         targetGroup.openEditor(existing, { activate: true, pinned, preserveFocus })
@@ -196,6 +200,7 @@ export class OpenDiffAction extends Action2 {
       const side = ensureSideGroup(groups)
       const existing = side.editors.find((e) => e.id === id)
       if (existing instanceof DiffEditorInput) {
+        existing.setTracksSessionChanges(false)
         existing.update(payload.original, payload.modified, payload.liveModified ?? false)
         side.openEditor(existing, { activate: true, pinned, preserveFocus })
         if (!preserveFocus) revealExistingDiff(focusContext, side, existing)

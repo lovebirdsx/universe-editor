@@ -43,4 +43,51 @@ describe('EditorService diff reuse', () => {
     expect(fired).toBe(1)
     expect(second.isDisposed).toBe(true)
   })
+
+  it('adopts the origin of the incoming duplicate, in both directions', () => {
+    const svc = new EditorService()
+    const uri = URI.file('/tmp/foo.ts')
+
+    const external = new DiffEditorInput(
+      uri,
+      'head',
+      'worktree',
+      undefined,
+      undefined,
+      true,
+      fileService,
+    )
+    svc.openEditor(external, { pinned: false })
+    expect(external.tracksSessionChanges).toBe(false)
+
+    // Opening the same file from Session Changes reuses the tab and takes the
+    // left side over with the tracker baseline.
+    const session = new DiffEditorInput(
+      uri,
+      'baseline',
+      'current',
+      undefined,
+      undefined,
+      true,
+      fileService,
+    )
+    session.setTracksSessionChanges(true)
+    svc.openEditor(session, { pinned: false })
+    expect(external.tracksSessionChanges).toBe(true)
+    expect(external.originalContent).toBe('baseline')
+
+    // Opening it again from SCM hands the tab back to the external diff.
+    const externalAgain = new DiffEditorInput(
+      uri,
+      'head-2',
+      'worktree-2',
+      undefined,
+      undefined,
+      true,
+      fileService,
+    )
+    svc.openEditor(externalAgain, { pinned: false })
+    expect(external.tracksSessionChanges).toBe(false)
+    expect(external.originalContent).toBe('head-2')
+  })
 })

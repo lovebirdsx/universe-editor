@@ -55,6 +55,7 @@ import {
   type SessionFileChange,
 } from '../../../services/acp/session/sessionChangeTracker.js'
 import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
+import { DiffEditorInput } from '../../../services/editor/DiffEditorInput.js'
 import { IAuxiliaryEditorWindowService } from '../../../services/windows/auxiliaryEditorWindowService.js'
 import { sessionChangesViewState } from '../sessionChangesViewState.js'
 import { ServicesContext } from '../../useService.js'
@@ -249,6 +250,15 @@ describe('SessionChangesView — preview vs pin', () => {
     await waitFor(() => expect(editor.opened).toHaveLength(1))
     expect(editor.opened[0]?.options?.pinned).toBe(false)
     expect(editor.opened[0]?.options?.preserveFocus).toBe(true)
+  })
+
+  it('marks the opened diff as session-tracked', async () => {
+    const { editor } = renderView([change('/ws/src/a.ts')])
+    fireEvent.click(await screen.findByText('a.ts'))
+    await waitFor(() => expect(editor.opened).toHaveLength(1))
+    const input = editor.opened[0]?.input
+    expect(input).toBeInstanceOf(DiffEditorInput)
+    expect((input as DiffEditorInput).tracksSessionChanges).toBe(true)
   })
 
   it('double-click pins the diff (pinned:true)', async () => {
