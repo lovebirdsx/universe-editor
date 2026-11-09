@@ -62,10 +62,7 @@ import {
   type SelectionContext,
 } from '../promptContext.js'
 import { composeImageBlocks, type PromptImage } from '../promptImage.js'
-import {
-  composeFileAttachmentBlocks,
-  type PromptFileAttachment,
-} from '../promptAttachment.js'
+import { composeFileAttachmentBlocks, type PromptFileAttachment } from '../promptAttachment.js'
 import { composePromptBlocksFromRefs, type PlacedRef } from '../promptRef.js'
 import { sessionModelId } from '../acpModelCandidates.js'
 import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostStrategy.js'
@@ -1355,6 +1352,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       ...(_history !== undefined ? { history: _history } : {}),
       ...(_agentDefaults !== undefined ? { defaults: _agentDefaults } : {}),
       ...(suppressConfigDefaults ? { suppressDefaults: true } : {}),
+      canPersistAgentChanges: () => !this.isReplayingHistory.get() && !this.readOnly,
     })
     if (initState) {
       this.applyInitState(initState)

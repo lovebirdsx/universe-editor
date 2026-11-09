@@ -3611,6 +3611,79 @@ describe('AcpSessionService — rewind / fork', () => {
     }
   })
 
+  it('does not let an agent mode change overwrite the side-task history pin', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const bag: readonly SessionConfigOption[] = [
+      ...modelBag(),
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        currentValue: 'bypassPermissions',
+        options: [
+          { value: 'bypassPermissions', name: 'Bypass permissions' },
+          { value: 'dontAsk', name: "Don't Ask" },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+    const client = new FakeAcpClientService({
+      stubOptions: {
+        forkCapable: true,
+        loadSession: true,
+        forkedSessionId: 'agent-side-pinned',
+        newSessionConfigOptions: bag,
+        loadSessionConfigOptions: bag,
+      },
+    })
+    const { svc, history } = makeServiceWithHistory(client, tracker)
+    try {
+      const s = await svc.createSession('claude-code')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const side = await svc.forkSideTask(s.id, { text: 'q', label: 'l' })
+      const sideSid = side.sessionIdOnAgent.get()!
+      expect(history.get(sideSid)?.configOptions?.['mode']).toBe('dontAsk')
+      // Let the restore push land before injecting the agent's own change,
+      // otherwise the in-flight echo suppression would swallow it.
+      await vi.waitFor(() => {
+        const pushes = client.connected.flatMap((c) => c.agent.setConfigOptionCalls)
+        expect(pushes).toContainEqual(
+          expect.objectContaining({ configId: 'mode', value: 'dontAsk' }),
+        )
+      })
+
+      client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sideSid,
+        update: {
+          sessionUpdate: 'config_option_update',
+          configOptions: [
+            {
+              id: 'mode',
+              name: 'Mode',
+              category: 'mode',
+              type: 'select',
+              currentValue: 'bypassPermissions',
+              options: [
+                { value: 'bypassPermissions', name: 'Bypass permissions' },
+                { value: 'dontAsk', name: "Don't Ask" },
+              ],
+            },
+          ],
+        },
+      })
+
+      // The live view follows the notification, but the editor-owned read-only
+      // pin on the history row stays — resuming the side task stays read-only.
+      expect(side.configOptions.get().find((o) => o.id === 'mode')?.currentValue).toBe(
+        'bypassPermissions',
+      )
+      expect(history.get(sideSid)?.configOptions?.['mode']).toBe('dontAsk')
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('forkSideTask suppresses the baseline replay on the child timeline', async () => {
     const tracker = new StubSessionChangeTracker()
     const client = new FakeAcpClientService({

@@ -68,3 +68,16 @@ CLI 从 transcript 恢复模型时拿到的是 `claude-fable-5` 而非用户选�
 链路 = fork `session/list` 响应 `SessionInfo._meta.transcriptPath` → `acpSessionRestoreCoordinator.toBulkMergeInfo`（agent 无关通用提取）→ `acpSessionHistory` → `RevealAgentSessionInOSAction`（`host.showItemInFolder`）。claude fork 用 `findTranscriptFile` 查 `~/.claude/projects/...`；codex fork 直接映射 app-server `thread/list` 返回的 `Thread.path`（rollout JSONL，ephemeral 线程为 null 则省略）。**运行中 session 的 history 行在下次 hydrate 前没有 transcriptPath**：菜单项对 live session 保持可用，`RevealAgentSessionInOSAction` 缓存未命中时走 facade `resolveTranscriptPath` → coordinator `fetchTranscriptPath` 按需发一次 `session/list`（capability 门控、silent 连接、游标翻页）解析并经 `setHistoryTranscriptPath` 写回 history，解析不到才提示无 transcript。仅当行既非 live 又无缓存路径时菜单项才灰掉 = 其 fork 没上报，编辑器侧无需改。
 
 同一份 `transcriptPath` 也是 `CopyAgentSessionPathAction`（"复制会话文件路径"）的数据源，两者共用 `resolveSessionTranscriptPath`。差异只在拿到路径之后：copy 复制**原始路径**、不做 WSL UNC 映射、菜单不按 authority 置灰（远端会话复制的就是宿主路径，正适合粘进远端 shell），因此它只快照 `IAcpSessionService / IAcpSessionHistoryService / IEditorService / INotificationService`，不碰 `IHostService`。
+
+## agent 主动改 mode 必须镜像进 history（否则计划批准后恢复回退 plan）
+
+症状：plan 会话批准计划后，`acp.plan.autoExecute` 代选 `exit-plan-bypass`，fork 自行切到 `bypassPermissions` 并广播 `config_option_update`；此时关闭再恢复，模式退回 plan。fork 侧的 `TailScan` 已专门处理 `plan_mode_exit`、不会主动回 plan，问题在编辑器：用户手动选 plan 时 `ConfigOptionStateMachine.setConfigOption` 把 `mode=plan` 写进了 history，而 Agent 主动的更新只改 live observable（`ingestUpdate`）不回写 history；恢复时 desired = `{...agentDefaults, ...entry.configOptions}` 仍带 plan，`_reconcile` 又把 load 结果覆盖回 plan 并 `flushPendingPushes` 推给 Agent。
+
+契约：`ingestUpdate` 里 `type==='select'`、`isSessionModeCategory(category)`（`mode` + codex 的 `collaboration_mode`）、已 known 且非 provisional 的变更，视为该会话的新事实——同步 `_desired`、清 `_needsPush`，并写 history（value + label）。四条别退化：
+
+- **未声明 `changedConfigIds` 的 full bag 有 pending 守卫**：`_needsPush` 里有该 id 且 `_desired` 与新值不同 → 不镜像（恢复期重建会话的过期 seed 不能吞掉待推送意图）；`_meta` 显式声明时绕过守卫（权威变更）。
+- **echo 不写**：`_pendingPushes` / provisional 过滤在镜像之前；用户 setConfigOption 的乐观值不会被回声覆盖成 history。
+- **恢复性 push 不写 per-agent defaults**：`flushPendingPushes` 调 `setConfigOption(id, want, { writeDefaults:false })`。`AcpAgentDefaults` 只存 last user-driven choice，否则恢复一次 bypass 会把该 Agent 所有新会话默认成 bypass。
+- **side task 的 history mode 是编辑器 pin**（`forkSideTask` 的 `readOnlyMode`：claude=`dontAsk` / codex=`read-only`）：`suppressDefaults` 时只同步内存 desired，不写 history，Agent 主动变更不得覆盖 pin。AI Fix 复用同一 `suppressDefaults` 隔离开关，因此其 history 也被冻结（只有配置了 `acp.aiFix.mode` 时才是真 pin；这是保守取舍，避免为一条低风险路径再拆开关）。回放/readOnly 预览经 `canPersistAgentChanges` 门控，一律不持久化。
+
+`current_mode_update` 有意不处理：计划批准 / 模式切换等常规路径都伴随 full-bag `config_option_update`（带 options/label）；模型切换导致的 mode clamp 只出现在 `session/set_config_option` 响应袋（fork `session-update.ts` 注释明确此分工），本次不镜像响应袋、属既有缺口。旧 history 行里的 plan 不迁移，下一次自动执行后会被修正。对照测试：`acpSessionConfigOptions.test.ts` 镜像/守卫/echo/门控用例、`AcpSessionService.configOptions.test.ts` 三条端到端、`AcpSessionService.resume.test.ts`「restores the mirrored bypass mode」与「live agent bypass mirror survives close/resume」整链、`AcpSessionService.test.ts` side-task pin。

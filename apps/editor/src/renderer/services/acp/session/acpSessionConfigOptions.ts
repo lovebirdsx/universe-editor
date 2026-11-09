@@ -30,7 +30,11 @@ import type {
 import type { IAcpClientConnection } from '../acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
-import { findConfigOptionLabel, selectOptionHasValue } from '../configOptionLabel.js'
+import {
+  findConfigOptionLabel,
+  isSessionModeCategory,
+  selectOptionHasValue,
+} from '../configOptionLabel.js'
 import { readChangedConfigIds } from './acpSessionUpdateMeta.js'
 
 export interface ConfigOptionSessionInfo {
@@ -57,6 +61,12 @@ export interface ConfigOptionStateMachineDeps {
    * session's own values.
    */
   readonly suppressDefaults?: boolean
+  /**
+   * Whether an incoming update may be treated as the agent's live state.
+   * History replay and read-only previews carry no live facts, so they must
+   * neither move {@link _desired} nor rewrite history. Defaults to true.
+   */
+  readonly canPersistAgentChanges?: () => boolean
   /** Logs a non-fatal push-back failure. Optional so unit tests can omit it. */
   warn?(message: string): void
 }
@@ -173,6 +183,15 @@ export class ConfigOptionStateMachine {
       filtered,
       (id) => !known.has(id) || this._provisional.has(id),
     )
+    // Capture before `_provisional` is cleared: a provisional option is still a
+    // server-default echo, not an authoritative agent change.
+    const agentModeChanges = filtered.filter(
+      (o): o is Extract<SessionConfigOption, { type: 'select' }> =>
+        o.type === 'select' &&
+        isSessionModeCategory(o.category) &&
+        known.has(o.id) &&
+        !this._provisional.has(o.id),
+    )
     for (const f of filtered) this._provisional.delete(f.id)
     if (declared === undefined && reconciled.length === update.configOptions.length) {
       this.configOptions.set(reconciled, undefined)
@@ -182,7 +201,57 @@ export class ConfigOptionStateMachine {
       for (const f of reconciled) byId.set(f.id, f)
       this.configOptions.set(Array.from(byId.values()), undefined)
     }
+    this._mirrorAgentModeChanges(agentModeChanges, declared !== undefined)
     void this.flushPendingPushes()
+  }
+
+  /**
+   * Adopt an agent-initiated mode change as this session's new fact: move
+   * `_desired` so a later resume / reattach does not push the stale user pick
+   * back. Without this, approving a plan (agent switches to bypass) then
+   * closing and resuming the session showed plan again, because history still
+   * held the user's original pick.
+   *
+   * `declared` means the agent explicitly listed these ids as changed, so an
+   * update supersedes any pending push. An undeclared full bag may be a stale
+   * rebuild seed: if we still owe a push with a different value, keep the
+   * pending intent (the RPC lands later and is authoritative).
+   */
+  private _mirrorAgentModeChanges(
+    changes: readonly Extract<SessionConfigOption, { type: 'select' }>[],
+    declared: boolean,
+  ): void {
+    if (changes.length === 0) return
+    if (this._deps.canPersistAgentChanges?.() === false) return
+    const sessionId = this._deps.sessionInfo.getSessionId()
+    for (const opt of changes) {
+      const value = opt.currentValue
+      const pendingDesired = this._desired[opt.id]
+      // A desired value that went missing while `_needsPush` lingers (a later
+      // `setDesired` replaced the bag) is not a pending intent — flush drops
+      // it. Still adopt the agent's change in that case.
+      if (
+        !declared &&
+        pendingDesired !== undefined &&
+        this._needsPush.has(opt.id) &&
+        pendingDesired !== value
+      ) {
+        continue
+      }
+      this._desired = { ...this._desired, [opt.id]: value }
+      this._needsPush.delete(opt.id)
+      // Isolated sessions (side task / AI Fix) own their history values — the
+      // side-task mode pin (dontAsk / read-only) must not be overwritten by the
+      // agent. `suppressDefaults` is our only isolation signal, so AI Fix rows
+      // are frozen too.
+      if (this._deps.suppressDefaults === true || sessionId === undefined) continue
+      this._deps.history?.setHistoryConfigOption(
+        sessionId,
+        opt.id,
+        value,
+        findConfigOptionLabel(opt.options, value),
+      )
+    }
   }
 
   /**
@@ -230,7 +299,7 @@ export class ConfigOptionStateMachine {
             try {
               // `_needsPush` membership means the agent value still differs even
               // though we already overrode the *display* — push unconditionally.
-              await this.setConfigOption(id, want)
+              await this.setConfigOption(id, want, { writeDefaults: false })
             } catch (err) {
               this._deps.warn?.(
                 `failed to restore configOption ${id}=${want}: ${(err as Error).message}`,
@@ -287,9 +356,17 @@ export class ConfigOptionStateMachine {
     })
   }
 
-  async setConfigOption(configId: string, value: string | boolean): Promise<void> {
+  async setConfigOption(
+    configId: string,
+    value: string | boolean,
+    options?: { writeDefaults?: boolean },
+  ): Promise<void> {
     // Persistence buckets are string-only; booleans round-trip as 'true'/'false'.
     const persisted = typeof value === 'boolean' ? (value ? 'true' : 'false') : value
+    // A restore-driven push is not a user action: `AcpAgentDefaults` only holds
+    // the last user-driven choice, so resuming bypass must not become the
+    // default mode for every new session of this agent.
+    const writeDefaults = options?.writeDefaults !== false
     const conn = this._deps.getConn()
     const sessionId = this._deps.sessionInfo.getSessionId()
     // Connection not yet attached (session still connecting). The config bar now
@@ -300,7 +377,7 @@ export class ConfigOptionStateMachine {
     if (conn === undefined || sessionId === undefined) {
       this._applyLocalValue(configId, value)
       const { agentId } = this._deps.sessionInfo
-      if (this._deps.suppressDefaults !== true) {
+      if (writeDefaults && this._deps.suppressDefaults !== true) {
         this._deps.defaults?.setDefault(agentId, configId, persisted)
       }
       return
@@ -340,7 +417,7 @@ export class ConfigOptionStateMachine {
         persisted,
         this._labelOf(configId, value),
       )
-      if (this._deps.suppressDefaults !== true) {
+      if (writeDefaults && this._deps.suppressDefaults !== true) {
         this._deps.defaults?.setDefault(agentId, configId, persisted)
       }
       this._deps.telemetry.publicLog('acp.config_option_set', { sessionId, configId })

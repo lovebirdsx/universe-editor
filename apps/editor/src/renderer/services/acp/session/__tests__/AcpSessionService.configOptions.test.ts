@@ -1705,3 +1705,95 @@ describe('AcpSessionService — AI Fix sessions (configDesiredOverrides + suppre
     expect(built.history.get('agent-1')?.aiFix).toBeUndefined()
   })
 })
+
+describe('AcpSessionService — agent-initiated mode mirroring', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  const MODE: SessionConfigOption & { type: 'select' } = {
+    id: 'mode',
+    name: 'Mode',
+    category: 'mode',
+    type: 'select',
+    currentValue: 'plan',
+    options: [
+      { value: 'plan', name: 'Plan' },
+      { value: 'bypassPermissions', name: 'Bypass permissions' },
+    ],
+  }
+
+  function modeUpdate(value: string) {
+    return {
+      sessionUpdate: 'config_option_update' as const,
+      configOptions: [{ ...MODE, currentValue: value }],
+    }
+  }
+
+  it('mirrors a live agent mode change into history and leaves defaults alone', async () => {
+    const built = buildService({ newSessionResult: { configOptions: [{ ...MODE }] } })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const sid = s.sessionIdOnAgent.get()!
+    expect(built.history.get(sid)?.configOptions).toEqual({ mode: 'plan' })
+
+    // Plan approved: the agent switches itself to bypass and broadcasts it.
+    built.client.connected[0]!.sink.onSessionUpdate({
+      sessionId: sid,
+      update: modeUpdate('bypassPermissions'),
+    })
+
+    const entry = built.history.get(sid)
+    expect(entry?.configOptions).toEqual({ mode: 'bypassPermissions' })
+    expect(entry?.configLabels).toEqual({ mode: 'Bypass permissions' })
+    // An agent drive is not a user choice — new sessions must keep inheriting plan.
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({})
+  })
+
+  it('does not persist a mode change while replaying history', async () => {
+    const built = buildService({ newSessionResult: { configOptions: [{ ...MODE }] } })
+    svc = built.svc
+    await built.history.initialize()
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const sid = s.sessionIdOnAgent.get()!
+    s.beginHistoryReplay()
+    try {
+      built.client.connected[0]!.sink.onSessionUpdate({
+        sessionId: sid,
+        update: modeUpdate('bypassPermissions'),
+      })
+    } finally {
+      s.endHistoryReplay()
+    }
+    // Replayed traffic is not a live fact.
+    expect(built.history.get(sid)?.configOptions).toEqual({ mode: 'plan' })
+  })
+
+  it('keeps the AI Fix mode pin when the agent reports a different mode', async () => {
+    const built = buildService({
+      newSessionResult: { configOptions: [{ ...MODE }] },
+      setConfigOptionResult: { configOptions: [{ ...MODE }] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    const s = await svc.createSession('fake', { title: 'AI Fix: a.ts', aiFix: true })
+    await s.whenConnected()
+    const sid = s.sessionIdOnAgent.get()!
+
+    built.client.connected[0]!.sink.onSessionUpdate({
+      sessionId: sid,
+      update: modeUpdate('bypassPermissions'),
+    })
+
+    // suppressDefaults isolates the pinned row from agent-driven changes.
+    expect(built.history.get(sid)?.configOptions).toEqual({ mode: 'plan' })
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({})
+  })
+})

@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
+import { isSessionModeCategory } from '../configOptionLabel.js'
 
 /** Personal setting driving the countdown on the plan-review card. */
 export const PLAN_AUTO_EXECUTE_SETTING = 'acp.plan.autoExecute'
@@ -59,9 +60,7 @@ export function selectPlanAutoExecuteOptionId(
  */
 export function isPlanModeConfigOptions(options: readonly SessionConfigOption[]): boolean {
   return options.some(
-    (option) =>
-      option.currentValue === 'plan' &&
-      (option.category === 'mode' || option.category === 'collaboration_mode'),
+    (option) => option.currentValue === 'plan' && isSessionModeCategory(option.category),
   )
 }
 

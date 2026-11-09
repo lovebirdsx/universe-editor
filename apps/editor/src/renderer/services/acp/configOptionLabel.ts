@@ -30,6 +30,15 @@ export function findSelectOptionByCategory(
 }
 
 /**
+ * Whether `category` denotes the session's execution mode. Claude advertises
+ * `mode`; codex has both `collaboration_mode` (default/plan) and the access
+ * `mode` (read-only/workspace-write/…). All are mode switches for our purposes.
+ */
+export function isSessionModeCategory(category: string | null | undefined): boolean {
+  return category === 'mode' || category === 'collaboration_mode'
+}
+
+/**
  * Whether a select option actually offers `value` among its (possibly grouped)
  * candidates. Shared by every "override the server value with a saved one" site
  * so an unselectable value is never shown.

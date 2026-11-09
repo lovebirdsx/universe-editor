@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest'
 import { NoopTelemetryService } from '@universe-editor/platform'
 import type {
   SessionConfigOption,
+  SessionConfigOptionCategory,
   SessionUpdate,
   SetSessionConfigOptionRequest,
   SetSessionConfigOptionResponse,
@@ -22,12 +23,16 @@ import type { IAcpClientConnection } from '../../acpClientService.js'
 import type { IAcpSessionHistoryService } from '../acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 
-function makeConfigOption(id: string, currentValue: string): SessionConfigOption {
+function makeConfigOption(
+  id: string,
+  currentValue: string,
+  category: SessionConfigOptionCategory = id === 'MODEL' ? 'model' : 'mode',
+): SessionConfigOption {
   return {
     id,
     type: 'select',
     name: id,
-    category: id === 'MODEL' ? 'model' : 'mode',
+    category,
     currentValue,
     options: [
       { value: 'a', name: 'A' },
@@ -78,12 +83,12 @@ function makeFakeConn(opts: {
 
 function makeFakeHistory(): {
   history: IAcpSessionHistoryService
-  calls: Array<{ sessionId: string; configId: string; value: string }>
+  calls: Array<{ sessionId: string; configId: string; value: string; label?: string }>
 } {
-  const calls: Array<{ sessionId: string; configId: string; value: string }> = []
+  const calls: Array<{ sessionId: string; configId: string; value: string; label?: string }> = []
   const history = {
-    setHistoryConfigOption: (sessionId: string, configId: string, value: string) =>
-      calls.push({ sessionId, configId, value }),
+    setHistoryConfigOption: (sessionId: string, configId: string, value: string, label?: string) =>
+      calls.push({ sessionId, configId, value, ...(label !== undefined ? { label } : {}) }),
   } as unknown as IAcpSessionHistoryService
   return { history, calls }
 }
@@ -348,5 +353,250 @@ describe('ConfigOptionStateMachine', () => {
     sm.applyInitState([makeConfigOption('MODE', 'a')])
     await sm.flushPendingPushes()
     expect(fakeConn.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODE', value: 'b' }])
+  })
+
+  it('ingestUpdate mirrors an agent-initiated mode change to history', () => {
+    const fakeConn = makeFakeConn({})
+    const fakeHistory = makeFakeHistory()
+    const fakeDefaults = makeFakeDefaults()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'fake', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+      defaults: fakeDefaults.defaults,
+    })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    // Plan approved: the agent switches itself to bypass and broadcasts it.
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'b')],
+    })
+    expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
+    expect(fakeHistory.calls).toEqual([
+      { sessionId: 'ag-1', configId: 'MODE', value: 'b', label: 'B' },
+    ])
+    // An agent drive is not a user choice, so per-agent defaults stay untouched.
+    expect(fakeDefaults.calls).toEqual([])
+  })
+
+  it('ingestUpdate mirrors collaboration_mode (codex) the same way', () => {
+    const fakeConn = makeFakeConn({})
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'codex', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+    })
+    sm.applyInitState([makeConfigOption('collaboration_mode', 'a', 'collaboration_mode')])
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('collaboration_mode', 'b', 'collaboration_mode')],
+    })
+    expect(fakeHistory.calls).toEqual([
+      { sessionId: 'ag-1', configId: 'collaboration_mode', value: 'b', label: 'B' },
+    ])
+  })
+
+  it('ingestUpdate does not mirror non-mode options', () => {
+    const fakeConn = makeFakeConn({})
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+    })
+    sm.applyInitState([makeConfigOption('MODEL', 'a')])
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODEL', 'b')],
+    })
+    expect(fakeHistory.calls).toEqual([])
+  })
+
+  it('ingestUpdate does not mirror while canPersistAgentChanges is false (replay / read-only)', () => {
+    const fakeConn = makeFakeConn({})
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+      canPersistAgentChanges: () => false,
+    })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'b')],
+    })
+    // The display still follows the notification; only persistence is skipped.
+    expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
+    expect(fakeHistory.calls).toEqual([])
+  })
+
+  it('ingestUpdate ignores a still-provisional mode option (optimistic seed echo)', () => {
+    const fakeConn = makeFakeConn({})
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+    })
+    sm.seedConfigOptions([makeConfigOption('MODE', 'a')])
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'b')],
+    })
+    expect(fakeHistory.calls).toEqual([])
+  })
+
+  it('ingestUpdate does not mirror a suppressed echo of an in-flight user push', async () => {
+    const fakeConn = makeFakeConn({})
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+    })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    const push = sm.setConfigOption('MODE', 'b')
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'a')],
+    })
+    expect(fakeHistory.calls).toEqual([])
+    fakeConn.release()
+    await push
+    // Only the user's own push persisted the value.
+    expect(fakeHistory.calls).toEqual([
+      { sessionId: 'ag-1', configId: 'MODE', value: 'b', label: 'B' },
+    ])
+  })
+
+  it('keeps a pending push when an undeclared full bag carries a different mode', async () => {
+    const fakeConn = makeFakeConn({
+      setSessionConfigOption: async (req) => ({
+        configOptions: [makeConfigOption(String(req.configId), String(req.value))],
+      }),
+    })
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+    })
+    sm.setDesired({ MODE: 'b' })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    // A stale recreated-session seed still says 'a'; the pending push must survive it.
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'a')],
+    })
+    expect(fakeHistory.calls).toEqual([])
+    await sm.flushPendingPushes()
+    expect(fakeConn.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODE', value: 'b' }])
+    // The pending push is still the final writer, so the stale bag cannot stick.
+    expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
+  })
+
+  it('mirrors a declared mode change even when a different push is pending', async () => {
+    const fakeConn = makeFakeConn({
+      setSessionConfigOption: async (req) => ({
+        configOptions: [makeConfigOption(String(req.configId), String(req.value))],
+      }),
+    })
+    const fakeHistory = makeFakeHistory()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+      history: fakeHistory.history,
+    })
+    sm.setDesired({ MODE: 'b' })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    // The agent explicitly declares MODE as changed: this supersedes the pending push.
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'a')],
+      _meta: { 'universe-editor/changedConfigIds': ['MODE'] },
+    })
+    expect(fakeHistory.calls).toEqual([
+      { sessionId: 'ag-1', configId: 'MODE', value: 'a', label: 'A' },
+    ])
+    await sm.flushPendingPushes()
+    expect(fakeConn.calls).toEqual([])
+  })
+
+  it('adopts the mirrored mode as desired so a later init bag does not push the old value', async () => {
+    const fakeConn = makeFakeConn({
+      setSessionConfigOption: async (req) => ({
+        configOptions: [makeConfigOption(String(req.configId), String(req.value))],
+      }),
+    })
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
+    })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'b')],
+    })
+    // A resume/reattach advertises the stale server value again; the mirrored
+    // value is now the desired one and must be pushed back.
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
+    await sm.flushPendingPushes()
+    expect(fakeConn.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODE', value: 'b' }])
+  })
+
+  it('flushPendingPushes does not write per-agent defaults', async () => {
+    const fakeConn = makeFakeConn({
+      setSessionConfigOption: async (req) => ({
+        configOptions: [makeConfigOption(String(req.configId), String(req.value))],
+      }),
+    })
+    const fakeDefaults = makeFakeDefaults()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'ag-1', agentId: 'fake', getSessionId: () => 'ag-1' },
+      defaults: fakeDefaults.defaults,
+    })
+    sm.setDesired({ MODE: 'b' })
+    sm.applyInitState([makeConfigOption('MODE', 'a')])
+    await sm.flushPendingPushes()
+    expect(fakeConn.calls).toEqual([{ sessionId: 'ag-1', configId: 'MODE', value: 'b' }])
+    // Restoring a session value must not become the default for future sessions.
+    expect(fakeDefaults.calls).toEqual([])
+  })
+
+  it('suppressDefaults keeps a side-task mode pin when the agent changes it', () => {
+    const fakeConn = makeFakeConn({})
+    const fakeHistory = makeFakeHistory()
+    const fakeDefaults = makeFakeDefaults()
+    const sm = new ConfigOptionStateMachine({
+      getConn: () => fakeConn.conn,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'side-1', agentId: 'claude-code', getSessionId: () => 'side-1' },
+      history: fakeHistory.history,
+      defaults: fakeDefaults.defaults,
+      suppressDefaults: true,
+    })
+    sm.applyInitState([makeConfigOption('MODE', 'b')])
+    sm.ingestUpdate({
+      sessionUpdate: 'config_option_update',
+      configOptions: [makeConfigOption('MODE', 'a')],
+    })
+    // The history mode is an editor pin (dontAsk / read-only); the agent must
+    // not overwrite it, and no per-agent default is written either.
+    expect(fakeHistory.calls).toEqual([])
+    expect(fakeDefaults.calls).toEqual([])
   })
 })

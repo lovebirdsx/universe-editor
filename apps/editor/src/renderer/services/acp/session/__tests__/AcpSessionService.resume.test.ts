@@ -212,6 +212,8 @@ class FakeStorage implements IStorageService {
 interface FakeAcpClientOptions {
   /** Replace the default initialize result. Default advertises loadSession=true. */
   initializeResult?: Partial<InitializeResponse>
+  /** Extra fields merged into the session/new result (default: sessionId only). */
+  newSessionResult?: Partial<NewSessionResponse>
   /** Per-call override for session/load result (default: empty object). */
   loadSessionResult?: Partial<LoadSessionResponse>
   /** Throw an RPC error from session/load instead of returning a result. */
@@ -258,7 +260,10 @@ class StubAgent implements Agent {
 
   newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.newSessionCalls.push(params)
-    return Promise.resolve({ sessionId: this._agentSessionId } as unknown as NewSessionResponse)
+    return Promise.resolve({
+      sessionId: this._agentSessionId,
+      ...(this._opts.newSessionResult ?? {}),
+    } as unknown as NewSessionResponse)
   }
 
   async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
@@ -2095,6 +2100,107 @@ describe('AcpSessionService.resumeSession — configOption push-back', () => {
 
     const resumeAgent = built.client.connected[1]!.agent
     expect(resumeAgent.setConfigOptionCalls).toHaveLength(0)
+  })
+
+  it('restores the mirrored bypass mode and keeps the agent default on plan', async () => {
+    const loadFixture: SessionConfigOption = {
+      id: 'mode',
+      name: 'Mode',
+      category: 'mode',
+      type: 'select',
+      currentValue: 'plan',
+      options: [
+        { value: 'plan', name: 'Plan' },
+        { value: 'bypassPermissions', name: 'Bypass permissions' },
+      ],
+    }
+    const built = buildService({
+      loadSessionResult: { configOptions: [loadFixture] },
+      setConfigOptionResult: {
+        configOptions: [{ ...loadFixture, currentValue: 'bypassPermissions' }],
+      },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = built.history.list()[0]!.id
+    // The user picked plan (per-agent default); approving the plan let the
+    // agent switch to bypass, and the live mirror wrote bypass into this
+    // session's history. The load result still advertises the recreated
+    // session's plan seed.
+    built.agentDefaults.setDefault('fake', 'mode', 'plan')
+    built.history.setHistoryConfigOption(
+      historyId,
+      'mode',
+      'bypassPermissions',
+      'Bypass permissions',
+    )
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(historyId)
+    await new Promise((r) => setTimeout(r, 30))
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.setConfigOptionCalls).toHaveLength(1)
+    expect(resumeAgent.setConfigOptionCalls[0]).toMatchObject({
+      configId: 'mode',
+      value: 'bypassPermissions',
+    })
+    // Restoring this session's bypass must not become the agent-wide default.
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({ mode: 'plan' })
+  })
+
+  it('end-to-end: a live agent bypass mirror survives close/resume', async () => {
+    const modeFixture: SessionConfigOption = {
+      id: 'mode',
+      name: 'Mode',
+      category: 'mode',
+      type: 'select',
+      currentValue: 'plan',
+      options: [
+        { value: 'plan', name: 'Plan' },
+        { value: 'bypassPermissions', name: 'Bypass permissions' },
+      ],
+    }
+    const built = buildService({
+      newSessionResult: { configOptions: [modeFixture] },
+      loadSessionResult: { configOptions: [modeFixture] },
+      setConfigOptionResult: {
+        configOptions: [{ ...modeFixture, currentValue: 'bypassPermissions' }],
+      },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'mode', 'plan')
+
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const historyId = original.sessionIdOnAgent.get()!
+    // Plan approved: the agent switches itself and broadcasts the new mode.
+    built.client.connected[0]!.sink.onSessionUpdate({
+      sessionId: historyId,
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: [{ ...modeFixture, currentValue: 'bypassPermissions' }],
+      },
+    })
+    expect(built.history.get(historyId)?.configOptions).toEqual({ mode: 'bypassPermissions' })
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(historyId)
+    await new Promise((r) => setTimeout(r, 30))
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.setConfigOptionCalls).toHaveLength(1)
+    expect(resumeAgent.setConfigOptionCalls[0]).toMatchObject({
+      configId: 'mode',
+      value: 'bypassPermissions',
+    })
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({ mode: 'plan' })
   })
 
   it('passes the history-remembered model to session/load via _meta.claudeCode.resumeModel', async () => {
