@@ -12,6 +12,7 @@ import type {
   ClientFrame,
   ClientStateFrame,
   CommandFrame,
+  DeviceTrustChangedFrame,
   HelloFrame,
   HelloOkFrame,
   InboxDeltaFrame,
@@ -262,6 +263,8 @@ export function parseServerFrame(text: string): Result<ServerFrame> {
       return parseServerErrorFrame(frame)
     case 'device_revoked':
       return ok({ type: 'device_revoked' })
+    case 'device_trust_changed':
+      return parseDeviceTrustChangedFrame(frame)
     default:
       return fail('bad_request', `unknown server frame type: ${type}`)
   }
@@ -929,6 +932,10 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
   if (!isNonEmptyBoundedString(deviceId, MAX_ID_LENGTH)) {
     return fail('bad_request', `hello_ok.deviceId must be 1–${MAX_ID_LENGTH} characters`)
   }
+  const trusted = frame.trusted
+  if (typeof trusted !== 'boolean') {
+    return fail('bad_request', 'hello_ok.trusted must be a boolean')
+  }
   const serverTime = frame.serverTime
   if (!isFiniteNumber(serverTime)) {
     return fail('bad_request', 'hello_ok.serverTime must be a finite number')
@@ -946,10 +953,21 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
     protocolVersion,
     serverVersion,
     deviceId,
+    trusted,
     serverTime,
     capabilities: capabilities.value,
     ...(vapidPublicKey.value !== undefined ? { vapidPublicKey: vapidPublicKey.value } : {}),
   })
+}
+
+function parseDeviceTrustChangedFrame(
+  frame: Record<string, unknown>,
+): Result<DeviceTrustChangedFrame> {
+  const trusted = frame.trusted
+  if (typeof trusted !== 'boolean') {
+    return fail('bad_request', 'device_trust_changed.trusted must be a boolean')
+  }
+  return ok({ type: 'device_trust_changed', trusted })
 }
 
 function parsePongFrame(frame: Record<string, unknown>): Result<PongFrame> {

@@ -403,6 +403,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     localId: string,
     requestId: string,
     optionId: string,
+    allowHighRisk: boolean,
     feedback?: string,
   ): Promise<MobileBridgeResult<void>> {
     const session = this._liveSession(localId)
@@ -413,7 +414,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       return fail('stale_request', 'permission request is no longer pending')
     const option = pending.options.find((candidate) => candidate.optionId === optionId)
     if (option === undefined) return fail('bad_request', 'unknown permission option')
-    if (isHighRiskPermissionOption(option)) {
+    if (!allowHighRisk && isHighRiskPermissionOption(option)) {
       return fail('forbidden_operation', 'durable permission grants are not allowed from mobile')
     }
     pending.resolveWithSource(optionId, 'mobile', feedback)
@@ -453,11 +454,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     localId: string,
     configId: string,
     value: string | boolean,
+    allowHighRisk: boolean,
   ): Promise<MobileBridgeResult<void>> {
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
     if (session.readOnly) return fail('session_read_only', 'session is read-only')
-    if (!isConfigValueAllowedOnMobile(value)) {
+    if (!allowHighRisk && !isConfigValueAllowedOnMobile(value)) {
       return fail('forbidden_operation', 'bypass permissions cannot be enabled from mobile')
     }
     const option = session.configOptions.get().find((candidate) => candidate.id === configId)

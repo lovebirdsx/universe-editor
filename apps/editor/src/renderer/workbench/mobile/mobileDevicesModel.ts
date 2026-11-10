@@ -105,6 +105,16 @@ export function auditActionLabel(action: string): string {
       return localize('mobileDevices.audit.action.deviceConnected', 'Device connected')
     case 'device_revoked':
       return localize('mobileDevices.audit.action.deviceRevoked', 'Device revoked')
+    case 'device_trust_granted':
+      return localize(
+        'mobileDevices.audit.action.deviceTrustGranted',
+        'High-risk operations allowed',
+      )
+    case 'device_trust_revoked':
+      return localize(
+        'mobileDevices.audit.action.deviceTrustRevoked',
+        'High-risk operations disallowed',
+      )
     case 'gateway_start':
       return localize('mobileDevices.audit.action.gatewayStart', 'Gateway started')
     case 'gateway_stop':

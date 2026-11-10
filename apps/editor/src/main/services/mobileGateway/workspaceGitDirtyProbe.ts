@@ -49,14 +49,11 @@ function raceBridgeProbe(
   return new Promise<boolean | undefined>((resolve) => {
     let settled = false
     const onAbort = (): void => finish(undefined)
-    const cleanup = (): void => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', onAbort)
-    }
     const finish = (value: boolean | undefined): void => {
       if (settled) return
       settled = true
-      cleanup()
+      clearTimeout(timer)
+      signal.removeEventListener('abort', onAbort)
       resolve(value)
     }
     const timer = setTimeout(() => finish(undefined), WORKSPACE_GIT_BRIDGE_TIMEOUT_MS)

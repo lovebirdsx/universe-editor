@@ -271,6 +271,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       createdAt: device.createdAt,
       lastSeenAt: device.lastSeenAt,
       connected: connected.has(device.deviceId),
+      trusted: device.trusted === true,
       notificationsEnabled: device.notifications?.enabled === true,
     }))
   }
@@ -288,6 +289,30 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._logger.info(`revoke device id=${deviceId} removed=${removed}`)
     await this._refreshAttentionState()
     await this._emitDevices()
+  }
+
+  async setDeviceTrust(deviceId: string, trusted: boolean): Promise<void> {
+    if (typeof deviceId !== 'string' || deviceId.length === 0 || typeof trusted !== 'boolean') {
+      throw new Error('invalid device trust request')
+    }
+    await this._enqueue(async () => {
+      const updated = await this._deviceStore.setTrusted(deviceId, trusted)
+      const action = trusted ? 'device_trust_granted' : 'device_trust_revoked'
+      if (!updated) {
+        await this._appendAudit({
+          deviceId,
+          action,
+          result: 'failure',
+          detail: 'device not found',
+        })
+        await this._emitDevices()
+        throw new Error('device not found')
+      }
+      this._server?.setDeviceTrust(deviceId, trusted)
+      this._logger.info(`device trust granted=${trusted} id=${deviceId}`)
+      await this._emitDevices()
+      await this._appendAudit({ deviceId, action, result: 'success' })
+    })
   }
 
   getRecentAudit(limit: number): Promise<readonly MobileAuditEntry[]> {
@@ -702,11 +727,18 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     }
   }
 
+  /** Awaitable audit write that never rejects: a failed write must not undo the state change. */
+  private async _appendAudit(input: AuditInput): Promise<void> {
+    try {
+      await this._audit.append(input)
+    } catch (err) {
+      this._logger.warn(`audit append failed: ${String(err)}`)
+    }
+  }
+
   /** Fire-and-forget audit write; a failed write must never become an unhandled rejection. */
   private _recordAudit(input: AuditInput): void {
-    void this._audit.append(input).catch((err) => {
-      this._logger.warn(`audit append failed: ${String(err)}`)
-    })
+    void this._appendAudit(input)
   }
 
   /** Connection churn changes both the device rows (online flag) and the count in status. */

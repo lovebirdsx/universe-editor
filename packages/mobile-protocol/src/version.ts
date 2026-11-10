@@ -3,4 +3,4 @@
  * meaning, or close code changes; both the gateway and the PWA compare it
  * during the hello handshake.
  */
-export const MOBILE_PROTOCOL_VERSION = 8
+export const MOBILE_PROTOCOL_VERSION = 9

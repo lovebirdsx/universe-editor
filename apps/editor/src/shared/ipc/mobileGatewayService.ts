@@ -172,6 +172,8 @@ export interface MobileDeviceInfo {
   readonly lastSeenAt: number
   /** Whether this device currently has at least one WebSocket connection. */
   readonly connected: boolean
+  /** Whether the PC allows high-risk operations (bypass / durable grants) from it. */
+  readonly trusted: boolean
   /** Whether the phone turned on notifications for this device. */
   readonly notificationsEnabled: boolean
 }
@@ -209,6 +211,11 @@ export interface IMobileGatewayService {
   listDevices(): Promise<readonly MobileDeviceInfo[]>
   /** Revoke and immediately disconnect every connection of that device. */
   revokeDevice(deviceId: string): Promise<void>
+  /**
+   * Grant or revoke permission for high-risk operations (bypass / durable
+   * grants). Only the PC settings page calls this; phones cannot self-promote.
+   */
+  setDeviceTrust(deviceId: string, trusted: boolean): Promise<void>
   readonly onDidChangeDevices: Event<readonly MobileDeviceInfo[]>
 
   getRecentAudit(limit: number): Promise<readonly MobileAuditEntry[]>
@@ -478,6 +485,8 @@ export interface IMobileBridgeService {
     localId: string,
     requestId: string,
     optionId: string,
+    /** Computed by main from the connection's trusted-device state. */
+    allowHighRisk: boolean,
     feedback?: string,
   ): Promise<MobileBridgeResult<void>>
 
@@ -494,6 +503,8 @@ export interface IMobileBridgeService {
     localId: string,
     configId: string,
     value: string | boolean,
+    /** Computed by main from the connection's trusted-device state. */
+    allowHighRisk: boolean,
   ): Promise<MobileBridgeResult<void>>
 
   pauseAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>>

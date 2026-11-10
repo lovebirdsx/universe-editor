@@ -327,6 +327,23 @@ export class MobileGatewayServer {
     }
   }
 
+  /**
+   * Apply a PC trust toggle to every live connection of the device. The hub
+   * marks open sessions desynced so the phone resubscribes with the new
+   * projection; the frame lets the settings page show the new state immediately.
+   */
+  setDeviceTrust(deviceId: string, trusted: boolean): void {
+    for (const connection of this._connections) {
+      if (connection.deviceId !== deviceId) continue
+      if (connection.hubConnection !== undefined) {
+        this._options.hub?.setConnectionTrust(connection.hubConnection, deviceId, trusted)
+      }
+      if (connection.helloReceived) {
+        this._sendFrame(connection.ws, { type: 'device_trust_changed', trusted })
+      }
+    }
+  }
+
   // ---- HTTP -----------------------------------------------------------------
 
   private async _handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -958,19 +975,39 @@ export class MobileGatewayServer {
     }
 
     connection.deviceId = device.deviceId
-    connection.deviceName = device.name
     connection.helloReceived = true
     connection.lastPongAt = Date.now()
     if (connection.helloTimer !== undefined) {
       clearTimeout(connection.helloTimer)
       connection.helloTimer = undefined
     }
-    await this._options.store.touch(device.deviceId)
+    // Re-read after verify: a PC-side trust toggle or revoke may have landed
+    // while this handshake was waiting on the store queue.
+    const current = await this._options.store.get(device.deviceId)
+    if (current === undefined) {
+      await this._recordHelloFailure(connection, 'unauthorized')
+      this._close(connection, MOBILE_CLOSE_CODES.UNAUTHORIZED, 'invalid token')
+      return
+    }
+    connection.deviceName = current.name
+    if (connection.hubConnection !== undefined) {
+      this._options.hub?.authenticateConnection(connection.hubConnection, {
+        deviceId: current.deviceId,
+        trusted: current.trusted === true,
+      })
+    }
+    await this._options.store.touch(current.deviceId)
+    const trusted =
+      connection.hubConnection !== undefined
+        ? (this._options.hub?.isConnectionTrusted(connection.hubConnection) ??
+          current.trusted === true)
+        : current.trusted === true
     this._sendFrame(connection.ws, {
       type: 'hello_ok',
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       serverVersion: this._options.serverVersion,
-      deviceId: device.deviceId,
+      deviceId: current.deviceId,
+      trusted,
       serverTime: Date.now(),
       capabilities: [
         'inbox',
@@ -984,14 +1021,14 @@ export class MobileGatewayServer {
         : {}),
     })
     await this._options.audit.append({
-      deviceId: device.deviceId,
-      deviceName: device.name,
+      deviceId: current.deviceId,
+      deviceName: current.name,
       remoteAddress: connection.remoteAddress,
       action: 'device_connected',
       result: 'success',
     })
     this._options.logger.info(
-      `device connected id=${device.deviceId} name=${device.name} remote=${connection.remoteAddress}`,
+      `device connected id=${current.deviceId} name=${current.name} remote=${connection.remoteAddress}`,
     )
     this._options.onConnectionsChanged?.()
   }

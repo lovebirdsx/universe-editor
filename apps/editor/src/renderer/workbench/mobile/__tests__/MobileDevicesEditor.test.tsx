@@ -72,6 +72,7 @@ const DEVICE: MobileDeviceInfo = {
   createdAt: Date.UTC(2026, 0, 2, 10, 30),
   lastSeenAt: Date.UTC(2026, 0, 3, 9, 0),
   connected: true,
+  trusted: false,
   notificationsEnabled: false,
 }
 
@@ -105,6 +106,7 @@ class FakeMobileGatewayService {
   cancelPairing = vi.fn(async () => undefined)
   listDevices = vi.fn(async () => this.devices)
   revokeDevice = vi.fn(async () => undefined)
+  setDeviceTrust = vi.fn(async () => undefined)
   getRecentAudit = vi.fn(async () => this.audit)
 
   getConfig = vi.fn(async () => this.configState)
@@ -425,6 +427,55 @@ describe('MobileDevicesEditor', () => {
     })
 
     expect(gateway.revokeDevice).not.toHaveBeenCalled()
+  })
+
+  it('asks for confirmation before marking a device trusted', async () => {
+    const { gateway, dialog } = renderEditor({ devices: [DEVICE] })
+    await screen.findByTestId('mobile-device-d1')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mobile-device-trusted-d1'))
+    })
+
+    expect(dialog.confirm).toHaveBeenCalledTimes(1)
+    expect(gateway.setDeviceTrust).toHaveBeenCalledWith('d1', true)
+  })
+
+  it('does not trust a device when the confirmation is dismissed', async () => {
+    const { gateway, dialog } = renderEditor({ devices: [DEVICE] })
+    dialog.confirm.mockResolvedValue({ confirmed: false })
+    await screen.findByTestId('mobile-device-d1')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mobile-device-trusted-d1'))
+    })
+
+    expect(gateway.setDeviceTrust).not.toHaveBeenCalled()
+  })
+
+  it('revokes trust without a confirmation dialog', async () => {
+    const trustedDevice: MobileDeviceInfo = { ...DEVICE, trusted: true }
+    const { gateway, dialog } = renderEditor({ devices: [trustedDevice] })
+    await screen.findByTestId('mobile-device-d1')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mobile-device-trusted-d1'))
+    })
+
+    expect(dialog.confirm).not.toHaveBeenCalled()
+    expect(gateway.setDeviceTrust).toHaveBeenCalledWith('d1', false)
+  })
+
+  it('shows an error when the trust update fails', async () => {
+    const { gateway } = renderEditor({ devices: [DEVICE] })
+    gateway.setDeviceTrust.mockRejectedValueOnce(new Error('trust failed'))
+    await screen.findByTestId('mobile-device-d1')
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('mobile-device-trusted-d1'))
+    })
+
+    expect(await screen.findByText(/trust failed/)).toBeTruthy()
   })
 
   it('disables pairing while the gateway is not running', async () => {

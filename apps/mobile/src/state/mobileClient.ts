@@ -83,6 +83,7 @@ export class MobileClient {
   private readonly _invalidFrame = new Store<ParseError | undefined>(undefined)
   private readonly _reconnectAttempt = new Store<number>(0)
   private readonly _connectionDiagnosis = new Store<ConnectionDiagnosis | undefined>(undefined)
+  private readonly _deviceTrusted = new Store<boolean>(false)
   private readonly _logger: Pick<Console, 'warn'>
   private readonly _timers: TimerApi | undefined
   private readonly _fetchImpl: typeof fetch | undefined
@@ -129,7 +130,11 @@ export class MobileClient {
       onVapidPublicKey: (key) => {
         this._vapidPublicKey = key
       },
+      onDeviceTrust: (trusted) => {
+        this._deviceTrusted.setState(trusted)
+      },
       onCredentialsInvalid: () => {
+        this._deviceTrusted.setState(false)
         this._inbox.reset()
         this._session.reset()
         options.onCredentialsInvalid?.()
@@ -168,6 +173,11 @@ export class MobileClient {
   /** HTTP verdict about the gateway, probed after repeated socket failures. */
   getConnectionDiagnosisStore(): Store<ConnectionDiagnosis | undefined> {
     return this._connectionDiagnosis
+  }
+
+  /** Whether the PC marks this device trusted for high-risk operations. */
+  getDeviceTrustedStore(): Store<boolean> {
+    return this._deviceTrusted
   }
 
   /** Skip the reconnect backoff; the diagnostic card's primary action. */

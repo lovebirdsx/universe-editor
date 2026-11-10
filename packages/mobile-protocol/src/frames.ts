@@ -631,6 +631,8 @@ export interface HelloOkFrame {
   protocolVersion: number
   serverVersion: string
   deviceId: string
+  /** Whether the PC has marked this device trusted for high-risk operations. */
+  trusted: boolean
   serverTime: number
   capabilities: string[]
   /** VAPID public key (`base64url`), present when Web Push is configured. */
@@ -796,6 +798,16 @@ export interface DeviceRevokedFrame {
 }
 
 /**
+ * PC changed this device's high-risk permission. The phone updates its settings
+ * display; the gateway separately sends `resync_required` so open sessions get
+ * the new `allowedOnMobile` projection.
+ */
+export interface DeviceTrustChangedFrame {
+  type: 'device_trust_changed'
+  trusted: boolean
+}
+
+/**
  * Foreground in-app notification. The body is built by the gateway and never
  * carries prompt text or tool output; Web Push uses the same fields.
  */
@@ -823,5 +835,6 @@ export type ServerFrame =
   | ResyncRequiredFrame
   | ServerErrorFrame
   | DeviceRevokedFrame
+  | DeviceTrustChangedFrame
 
 export type ServerFrameType = ServerFrame['type']

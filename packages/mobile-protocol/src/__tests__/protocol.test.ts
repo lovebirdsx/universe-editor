@@ -34,6 +34,7 @@ function helloOkJson(overrides: Record<string, unknown> = {}): string {
     protocolVersion: MOBILE_PROTOCOL_VERSION,
     serverVersion: '0.1.0',
     deviceId: 'device-1',
+    trusted: false,
     serverTime: 1_700_000_000_000,
     capabilities: [],
     ...overrides,
@@ -444,10 +445,26 @@ describe('parseServerFrame', () => {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       serverVersion: '0.1.0',
       deviceId: 'device-1',
+      trusted: false,
       serverTime: 1_700_000_000_000,
       capabilities: ['inbox'],
     }
     expect(parseServerFrame(JSON.stringify(payload))).toStrictEqual({ ok: true, value: payload })
+  })
+
+  it('rejects hello_ok without a boolean trusted flag', () => {
+    expect(errorCode(parseServerFrame(helloOkJson({ trusted: undefined })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(helloOkJson({ trusted: 'yes' })))).toBe('bad_request')
+  })
+
+  it('parses device_trust_changed and rejects a non-boolean flag', () => {
+    expect(parseServerFrame('{"type":"device_trust_changed","trusted":true}')).toStrictEqual({
+      ok: true,
+      value: { type: 'device_trust_changed', trusted: true },
+    })
+    expect(errorCode(parseServerFrame('{"type":"device_trust_changed","trusted":"yes"}'))).toBe(
+      'bad_request',
+    )
   })
 
   it('parses pong and device_revoked', () => {

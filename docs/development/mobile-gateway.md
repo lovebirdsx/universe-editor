@@ -8,7 +8,9 @@
 > HTTPS / 证书轮换与指纹、CSP / 审计轮转 / 连接与设备上限、Tailscale / WSL 文档与冒烟）；
 > **M6 会话附件已落地**（协议 v6：图片 / 文件附件经 HTTP 上传到 PC 临时目录，图片走 ACP
 > `image`、文件走 `resource_link`，时间线展示缩略图与文件卡）；**M7 Fork / Rewind / 侧边任务已落地**
-> （协议 v6：非激活分叉与恢复、回退 dry-run 预览、侧边任务列表 / 打开 / 级联删除）。
+> （协议 v6：非激活分叉与恢复、回退 dry-run 预览、侧边任务列表 / 打开 / 级联删除）；
+> **M8 会话目录已落地**（协议 v7：历史会话搜索与恢复）；**M9 受信设备已落地**（协议 v9：
+> PC 逐设备授权高风险操作，默认关闭）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -132,7 +134,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 8`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 9`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -141,10 +143,12 @@ main 侧不直接读 `AcpSession`。
 （`listSessionHistory` / `openSession`、`MobileSessionHistoryEntry` 与 `history` 能力位）；v8 增加
 工作区 git 状态（`MobileWorkspaceCandidate.windowId?` / `gitDirty?`）与工具卡的 `startedAt` /
 `durationMs` / `settleReason` / `syntheticDenial`（供手机端「仅消息」尾部当前进展行对齐桌面：
-实时已运行时长、失败原因与上游中断判定））。
+实时已运行时长、失败原因与上游中断判定）；v9 增加受信设备：`hello_ok.trusted` 与
+`device_trust_changed` 帧）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v7 起的 `hello_ok.capabilities` 为
+`hello_ok { ..., serverTime, capabilities, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
+对该设备开启高风险操作，握手时由 main 的 hub 给出权威值；v7 起的 `hello_ok.capabilities` 为
 
 `['inbox', 'commands', 'notifications', 'history', 'attachments']`（`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
 `vapidPublicKey` 只在网关可推送
@@ -223,7 +227,8 @@ owner，不会把多个 100s 串联，手机端 120s + 5s 宽限仍等得到。�
 | `session_snapshot` / `session_delta` | 单会话全量 / 增量 |
 | `command_result` | 按 `requestId` 返回成功或错误码 |
 | `notification` | 前台通知 |
-| `resync_required` | 队列溢出或 seq 缺口，客户端重拉快照 |
+| `resync_required` | 队列溢出、seq 缺口或设备受信状态变化，客户端重拉快照 |
+| `device_trust_changed` | PC 授予 / 收回了该设备的高风险操作权限 |
 | `server_error` | 服务端内部错误 |
 | `device_revoked` | 设备被吊销，客户端清凭据并断开 |
 | `pong` | 心跳响应 |
@@ -505,7 +510,9 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
   `SHA-256(token)`（base64url），校验时一次哈希后与记录做常量时间比较。scrypt 之类慢哈希
   只对低熵口令有意义，且会让未鉴权连接反复发 `hello` 时耗尽 CPU。
 - PC 只存哈希到 `<userData>/mobile/devices.json`（权限 `0600`，当前文件版本 2；旧版记录直接丢弃），
-  记录 `name` / `platform` / `createdAt` / `lastSeenAt`。
+  记录 `name` / `platform` / `createdAt` / `lastSeenAt` / `trusted?`。`trusted` 是 PC 授予的
+  高风险操作开关，缺省视为 `false`；新增可选字段**不 bump `FILE_VERSION`**，否则升级会清空
+  所有已配对设备。
 - 手机存 IndexedDB；每次 WS 在 `hello` 帧携带 token。
 
 **防护**：
@@ -517,9 +524,10 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 - 静态页与 WS 响应加 CSP 等安全头。
 - 吊销立即断开所有该设备连接并发 `device_revoked`。
 
-**高风险操作第一期默认禁止（v3 已实现）**：唯一的策略真相在
+**高风险操作：默认禁止 + PC 逐设备受信（v9）**：唯一的策略真相仍在
 `packages/mobile-protocol/src/policy.ts`（`isHighRiskPermissionOption` /
 `isConfigValueAllowedOnMobile`），桥与网关共用，UI 只用投影出的 `allowedOnMobile` 隐藏。
+设备默认不受信，行为与 v3 第一期一致：
 
 | 类别 | 判定 |
 |---|---|
@@ -527,22 +535,42 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 | 配置值 | 值形如 `bypasspermissions` / `bypass` / `dangerously-skip-permissions` / `agent-full-access` / `danger-full-access` / `full-access` / `full_access` 一律禁止（大小写、连字符/下划线归一后匹配） |
 | 自动批准 / 自动执行策略 | 手机没有修改入口；`setConfigOption` 命中的策略值同样被上面的配置值规则拦截 |
 
+PC 可在「手机设备设置 → 已配对设备」逐台打开 **允许高风险操作**（`devices.json` 的
+`trusted`）。开关默认关闭，开启时用 warning 确认，关闭立即生效；手机端无法修改自己的信任
+状态。信任是**设备级**的，同一设备的所有连接一起变化。
+
+**按连接下发**：renderer 的会话投影是每窗口共享的一份，不能直接按设备分叉。因此
+`MobileBridgeService` 与 hub 的权限缓存始终保存**保守事实**（`allowedOnMobile` /
+`highRisk`），只有 main 的 hub 在发送边界按连接 `trusted` 重写：
+
+- 快照与 delta 出口（`subscribeSession` / `_sendSessionEvents`）对受信连接把命中高风险谓词且
+  原本 `allowedOnMobile:false` 的权限选项、配置值改为 `true`；其余字段原样透传。
+- `resolvePermission` / `setConfigOption` 路由到桥时多传 `allowHighRisk`；桥只在它为 `true`
+  时跳过高风险谓词，`session_read_only`、`stale_request`、未知选项/值等校验全部保留。
+- 信任变化时，hub 把该连接的非 `snapshotPending` 订阅置为 `desynced` 并发送
+  `resync_required { scope:'session', reason:'trust_changed', ref }`，再由
+  `device_trust_changed` 更新手机设置页的展示；手机重订阅后拿到宽化 / 收窄后的快照。
+- 幂等 key 按 `deviceId` 分域，避免不同设备复用同一 `idempotencyKey` 的放行结果。
+
 **双重校验**：
 
 1. **桥**（`MobileBridgeService`）：会话只读回 `session_read_only`；`requestId` 不匹配回
-   `stale_request`；未知选项/值回 `bad_request`；高风险回 `forbidden_operation`。
-2. **网关**（`MobileGatewayHub`）：从 `permission_upsert` / 快照缓存每个 request 的
-   `allowedOnMobile`，`resolvePermission` 只路由能证明「本次确实提供过且允许」的选项：
-   缓存中没有该 `requestId`（已结算/已清除，或从未下发）回 `stale_request`；缓存存在但
-   该选项未标记为允许回 `forbidden_operation`。缓存缺失不是策略拒绝——手机只可能从网关
-   自己发出的 `permission_upsert` / 快照得知 `requestId`，而网关先写缓存再发帧，所以缺失
-   只可能是请求已不在等待中（见 §4 错误码）。`setConfigOption` 用同一值谓词再校验一次。
-   第二期可在 PC 上把设备升级为「受信设备」后放开。
+   `stale_request`；未知选项/值回 `bad_request`；命中高风险且 `allowHighRisk !== true` 回
+   `forbidden_operation`。
+2. **网关**（`MobileGatewayHub`）：从 `permission_upsert` / 快照缓存每个 request 的保守
+   `allowedOnMobile` 与 `highRisk`，`resolvePermission` 只路由能证明「本次确实提供过且允许」的
+   选项：缓存中没有该 `requestId`（已结算/已清除，或从未下发）回 `stale_request`；缓存存在但
+   该选项既未标记允许、也未被当前受信连接放宽回 `forbidden_operation`。缓存缺失不是策略拒绝
+   ——手机只可能从网关自己发出的 `permission_upsert` / 快照得知 `requestId`，而网关先写缓存
+   再发帧，所以缺失只可能是请求已不在等待中（见 §4 错误码）。`setConfigOption` 用同一值谓词
+   再校验一次，仅受信连接跳过高风险谓词。
 
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录
 `ts` / `device` / `remoteAddress` / `action` / `result` / `detail`。所有会修改状态的命令
 （`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、关闭、删除、
-fork / rewind / 侧边任务、`openSession`）都记一条；`detail` 只含 `window=` / `local=` / `agent=` / `error=` 等
+fork / rewind / 侧边任务、`openSession`）都记一条；设备信任开关另记
+`device_trust_granted` / `device_trust_revoked`（未知设备记 `failure`）。`detail` 只含
+`window=` / `local=` / `agent=` / `error=` 等
 定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
 `sideTaskId` 或文件路径**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents` /
 `previewRewind` / `listSideTasks` / `listSessionHistory`）不审计。
@@ -854,13 +882,14 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M6 | 会话附件：HTTP 上传/下载、设备隔离与 TTL、ACP image / resource_link、手机附件 UI 与时间线展示（已落地） | 图片与文件经手机发出后 agent 收到正确 block；时间线显示缩略图 / 文件卡；限额与越权用例覆盖 |
 | M7 | Fork / Rewind / 侧边任务：协议 v6、非激活分叉与恢复、回退 dry-run、侧边任务列表 / 打开 / 级联删除（已落地） | 手机分叉与打开侧边任务不抢 PC 焦点；回退先预览再执行；首条用户消息 / 运行中 / 能力位边界正确 |
 | M8 | 会话目录：协议 v7、`listSessionHistory` / `openSession`、手机 `/sessions` 页（搜索 / 状态过滤 / 按天分组）、已关闭会话重新打开（已落地） | 仅列出已打开窗口的可恢复历史；打开历史会话不抢 PC 焦点；live 行不重复 resume；跨工作区 / 归档 / 侧边任务 / 无消息行不出现 |
+| M9 | 受信设备：协议 v9、PC 逐设备开关、按连接宽化投影、审计与手机设置状态展示（已落地） | 默认不受信；开启后手机可切 bypass / 持久授权；关闭后恢复 `forbidden_operation`；grant / revoke 有审计 |
 
 ## 13. 已确认的决策记录
 
-日期：第 1–7 条为 **2026-11-08**，第 8–10 条为 **2026-11-09**。
+日期：第 1–7 条为 **2026-11-08**，第 8–11 条为 **2026-11-09**，第 12 条为 **2026-11-10**。
 
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
-2. **手机高风险操作第一期默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验。
+2. **手机高风险操作默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验；v9 起由 PC 逐设备开启「受信设备」后放开（见决策 12）。
 3. **plan 自动执行倒计时下沉到 service**：接受「会话 tab 未打开也会自动执行」的行为变化，并同步测试与用户文档。
    实现见 §5：`AcpPendingPermission.autoResolve` 由 service 持有，状态 observable，PC 卡片只转发
    pause / resume / cancel。
@@ -887,6 +916,13 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
     未打开工作区的历史不可见。打开历史会话沿用 `resumeSession(..., { activate:false })`，
     与 fork / 侧边任务一致，不抢 PC 焦点。目录与 inbox 按 durable id 在手机侧合并，live 行直接
     订阅，只有历史行才发 `openSession`，避免重复 resume。
+12. **受信设备是 PC 独占的逐设备开关**：配对照样只证明「连过」，不自动授予高风险能力；默认
+    关闭，开启需 warning 确认，关闭立即生效。信任状态只存 main 的 `devices.json` 并在 hub
+    按连接宽化投影，手机不能自我提权。共享的 renderer 会话投影保持保守，避免同一会话被多台
+    设备查看时互相污染；信任变化用 `resync_required{reason:'trust_changed'}` 让手机重拉快照，
+    而不是在客户端自行推导。`devices.json` 新增可选 `trusted` 不 bump `FILE_VERSION`，防止
+    升级清空已配对设备。撤销对之后到达的命令立即生效；撤销瞬间已进入桥的在途命令可能完成，
+    属于毫秒级窗口并接受。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。
@@ -896,7 +932,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 协议与 view-model 漂移 | 字段静默错位 | DTO 单一来源 + 映射函数 + 编译期检查；详情按需接口收窄面 |
-| 协议 v7 / v8 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
+| 协议 v7–v9 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
 | renderer 重载与会话 rekey | 连接指向旧会话/旧 epoch | 网关按 windowId + renderer epoch 失效桥；客户端靠快照恢复 |
 | IPC 帧成本 | 大内容卡顿/超限 | 50ms 合帧、<1MB 单帧、队列超限 `resync_required` |
 | 无手机订阅时空转 | 常驻开销 | 按订阅启停，无订阅不序列化 |
@@ -905,5 +941,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | 自签证书在 iOS 上的限制 | 无法安装 PWA / 推送 | 局域网档明确只保证遥控；主推 Tailscale |
 | `selfsigned` / `@peculiar/x509` 供应链 | 本地签发失败导致局域网档不可用 | 仅 main 运行时使用；固定 catalog 版本；失败回 `gateway_error` 并在 UI 显示原因；单测覆盖生成与续签 |
 | 安全：DNS rebinding、token 泄漏、审计 PII | 未授权访问/隐私外泄 | Host+Origin 校验、token 只存哈希、审计脱敏、默认关闭 |
+| 受信设备被滥用或手机丢失 | 任意命令执行、持久放权 | 默认关闭；开启需 PC 确认；随时关闭信任或吊销设备；grant / revoke 写审计；手机不能自我提权 |
+| 撤销信任瞬间的在途命令 | 撤销后仍完成一次高风险操作 | hub 在 dispatch 时读取当次 trust；撤销对之后到达的命令立即生效；毫秒级窗口已接受并记录在决策 12 |
 | `web-push` 新依赖 | 供应链与升级成本 | 仅网关侧使用，锁定版本，推送失败可降级为前台 WS 通知 |
 | `userData` 被外部工具整体同步 | 机器相关配置再次跨机共享 | `gateway.json` 固定在 `<userData>/mobile`、不随 configDir 迁移；文档注明该边界，需要跨机共享的设置只放 configDir |

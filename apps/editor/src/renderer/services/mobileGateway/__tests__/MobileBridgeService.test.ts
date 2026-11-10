@@ -822,11 +822,11 @@ describe('MobileBridgeService commands', () => {
     })
     expect(callSpy(first.session, 'renameTitle')).toHaveBeenCalledWith('New title')
 
-    await expect(harness.service.setConfigOption('s1', 'mode', 'code')).resolves.toEqual({
+    await expect(harness.service.setConfigOption('s1', 'mode', 'code', false)).resolves.toEqual({
       ok: true,
       value: undefined,
     })
-    await expect(harness.service.setConfigOption('s1', 'fast', true)).resolves.toEqual({
+    await expect(harness.service.setConfigOption('s1', 'fast', true, false)).resolves.toEqual({
       ok: true,
       value: undefined,
     })
@@ -939,7 +939,9 @@ describe('MobileBridgeService commands', () => {
       ok: false,
       code: 'session_read_only',
     })
-    await expect(harness.service.resolvePermission('ro', 'r1', 'allow')).resolves.toMatchObject({
+    await expect(
+      harness.service.resolvePermission('ro', 'r1', 'allow', false),
+    ).resolves.toMatchObject({
       ok: false,
       code: 'session_read_only',
     })
@@ -960,26 +962,64 @@ describe('MobileBridgeService commands', () => {
     first.pendingPermission.set(pending, undefined)
 
     await expect(
-      harness.service.resolvePermission('s1', 'stale', 'allow-once'),
+      harness.service.resolvePermission('s1', 'stale', 'allow-once', false),
     ).resolves.toMatchObject({
       ok: false,
       code: 'stale_request',
     })
     await expect(
-      harness.service.resolvePermission('s1', 'req-1', 'missing'),
+      harness.service.resolvePermission('s1', 'req-1', 'missing', false),
     ).resolves.toMatchObject({
       ok: false,
       code: 'bad_request',
     })
     await expect(
-      harness.service.resolvePermission('s1', 'req-1', 'allow-always'),
+      harness.service.resolvePermission('s1', 'req-1', 'allow-always', false),
     ).resolves.toMatchObject({ ok: false, code: 'forbidden_operation' })
     expect(pending.resolveWithSource).not.toHaveBeenCalled()
 
     await expect(
-      harness.service.resolvePermission('s1', 'req-1', 'allow-once', 'looks good'),
+      harness.service.resolvePermission('s1', 'req-1', 'allow-once', false, 'looks good'),
     ).resolves.toEqual({ ok: true, value: undefined })
     expect(pending.resolveWithSource).toHaveBeenCalledWith('allow-once', 'mobile', 'looks good')
+  })
+
+  it('allows durable grants and bypass values only when main marks the device trusted', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    const pending = makePermission('req-1', [
+      { optionId: 'allow-always', name: 'Always', kind: 'allow_always' },
+    ])
+    first.pendingPermission.set(pending, undefined)
+    first.configOptions.set(
+      [
+        {
+          id: 'approval',
+          name: 'Approval',
+          type: 'select',
+          currentValue: 'ask',
+          options: [
+            { value: 'ask', name: 'Ask' },
+            { value: 'bypassPermissions', name: 'Bypass' },
+          ],
+        },
+      ] as unknown as SessionConfigOption[],
+      undefined,
+    )
+
+    await expect(
+      harness.service.resolvePermission('s1', 'req-1', 'allow-always', true),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(pending.resolveWithSource).toHaveBeenCalledWith('allow-always', 'mobile', undefined)
+
+    await expect(
+      harness.service.setConfigOption('s1', 'approval', 'bypassPermissions', true),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(callSpy(first.session, 'setConfigOption')).toHaveBeenCalledWith(
+      'approval',
+      'bypassPermissions',
+    )
   })
 
   it('cancels a permission with the mobile source and rejects stale requests', async () => {
@@ -1050,19 +1090,23 @@ describe('MobileBridgeService commands', () => {
     )
 
     await expect(
-      harness.service.setConfigOption('s1', 'approval', 'bypassPermissions'),
+      harness.service.setConfigOption('s1', 'approval', 'bypassPermissions', false),
     ).resolves.toMatchObject({ ok: false, code: 'forbidden_operation' })
     await expect(
-      harness.service.setConfigOption('s1', 'approval', 'missing'),
+      harness.service.setConfigOption('s1', 'approval', 'missing', false),
     ).resolves.toMatchObject({
       ok: false,
       code: 'bad_request',
     })
-    await expect(harness.service.setConfigOption('s1', 'missing', 'ask')).resolves.toMatchObject({
+    await expect(
+      harness.service.setConfigOption('s1', 'missing', 'ask', false),
+    ).resolves.toMatchObject({
       ok: false,
       code: 'bad_request',
     })
-    await expect(harness.service.setConfigOption('s1', 'fast', 'true')).resolves.toMatchObject({
+    await expect(
+      harness.service.setConfigOption('s1', 'fast', 'true', false),
+    ).resolves.toMatchObject({
       ok: false,
       code: 'bad_request',
     })

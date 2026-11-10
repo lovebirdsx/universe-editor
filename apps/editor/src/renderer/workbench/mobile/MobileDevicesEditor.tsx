@@ -131,6 +131,7 @@ export function MobileDevicesEditor() {
 
   const [auditOpen, setAuditOpen] = useState(false)
   const [deviceError, setDeviceError] = useState<string | undefined>(undefined)
+  const [trustBusyId, setTrustBusyId] = useState<string | undefined>(undefined)
   const audit = useRecentAudit(gateway, auditOpen)
 
   const canPair = status?.state === 'running'
@@ -179,6 +180,43 @@ export function MobileDevicesEditor() {
             error: err instanceof Error ? err.message : String(err),
           }),
         )
+      }
+    },
+    [dialog, gateway],
+  )
+
+  const changeTrust = useCallback(
+    async (device: MobileDeviceInfo, trusted: boolean) => {
+      if (device.trusted === trusted) return
+      setDeviceError(undefined)
+      if (trusted) {
+        const name = device.name !== '' ? device.name : device.deviceId
+        const { confirmed } = await dialog.confirm({
+          message: localize(
+            'mobileDevices.devices.trustConfirm',
+            'Allow high-risk operations from "{name}"?',
+            { name },
+          ),
+          detail: localize(
+            'mobileDevices.devices.trustDetail',
+            'This phone can approve durable permissions and switch the agent to bypass / full-access mode. Only enable it for a device you fully trust.',
+          ),
+          primaryButton: localize('mobileDevices.devices.trustAllow', 'Allow high-risk operations'),
+          type: 'warning',
+        })
+        if (!confirmed) return
+      }
+      setTrustBusyId(device.deviceId)
+      try {
+        await gateway.setDeviceTrust(device.deviceId, trusted)
+      } catch (err) {
+        setDeviceError(
+          localize('mobileDevices.devices.trustFailed', 'Could not update trust: {error}', {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        )
+      } finally {
+        setTrustBusyId(undefined)
       }
     },
     [dialog, gateway],
@@ -867,6 +905,26 @@ export function MobileDevicesEditor() {
                                 'Notifications: off',
                               )}
                         </span>
+                      </div>
+                      <div className={styles['deviceTrust']}>
+                        <Toggle
+                          checked={device.trusted}
+                          onChange={(checked) => void changeTrust(device, checked)}
+                          disabled={trustBusyId === device.deviceId}
+                          data-testid={`mobile-device-trusted-${device.deviceId}`}
+                          aria-label={localize(
+                            'mobileDevices.devices.trusted',
+                            'Allow high-risk operations',
+                          )}
+                        />
+                        <span>
+                          {localize('mobileDevices.devices.trusted', 'Allow high-risk operations')}
+                        </span>
+                        {device.trusted && (
+                          <span className={styles['deviceTrustOn']}>
+                            {localize('mobileDevices.devices.trustedOn', 'Trusted')}
+                          </span>
+                        )}
                       </div>
                     </div>
                     <span className={styles['deviceOnline']}>

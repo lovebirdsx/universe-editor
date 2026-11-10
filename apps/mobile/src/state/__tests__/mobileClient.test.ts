@@ -1,4 +1,8 @@
-import { MOBILE_PROTOCOL_VERSION, type HelloOkFrame } from '@universe-editor/mobile-protocol'
+import {
+  MOBILE_CLOSE_CODES,
+  MOBILE_PROTOCOL_VERSION,
+  type HelloOkFrame,
+} from '@universe-editor/mobile-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import { RECONNECT_BASE_MS } from '../../socket/mobileSocket.js'
@@ -15,18 +19,21 @@ const credentials: StoredCredentials = {
   protocolVersion: MOBILE_PROTOCOL_VERSION,
 }
 
-function helloOkFrame(): HelloOkFrame {
+function helloOkFrame(trusted = false): HelloOkFrame {
   return {
     type: 'hello_ok',
     protocolVersion: MOBILE_PROTOCOL_VERSION,
     serverVersion: '0.0.0-test',
     deviceId: 'device-1',
+    trusted,
     serverTime: 1,
     capabilities: ['inbox', 'session'],
   }
 }
 
-function createHarness(options: { readonly fetchImpl?: typeof fetch } = {}): {
+function createHarness(
+  options: { readonly fetchImpl?: typeof fetch; readonly trusted?: boolean } = {},
+): {
   readonly client: MobileClient
   readonly sockets: FakeWebSocket[]
   readonly timers: FakeTimers
@@ -61,7 +68,7 @@ function createHarness(options: { readonly fetchImpl?: typeof fetch } = {}): {
   client.start()
   const first = sockets[0]!
   first.serverOpen()
-  first.serverSend(helloOkFrame())
+  first.serverSend(helloOkFrame(options.trusted))
   return { client, sockets, timers, fetchImpl }
 }
 
@@ -140,6 +147,20 @@ describe('MobileClient session subscription', () => {
   it('corrects the PC clock from hello_ok', () => {
     const { client } = createHarness()
     expect(Math.abs(client.serverNow() - 1)).toBeLessThan(1_000)
+  })
+
+  it('tracks device trust from hello_ok and resets it when credentials are invalid', () => {
+    const trustedHarness = createHarness({ trusted: true })
+    expect(trustedHarness.client.getDeviceTrustedStore().getState()).toBe(true)
+
+    const { client, sockets } = createHarness()
+    expect(client.getDeviceTrustedStore().getState()).toBe(false)
+
+    sockets[0]!.serverSend({ type: 'device_trust_changed', trusted: true })
+    expect(client.getDeviceTrustedStore().getState()).toBe(true)
+
+    sockets[0]!.serverClose(MOBILE_CLOSE_CODES.UNAUTHORIZED)
+    expect(client.getDeviceTrustedStore().getState()).toBe(false)
   })
 
   it('sends session commands with the open ref and resolves stale as success', async () => {

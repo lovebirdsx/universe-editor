@@ -54,6 +54,7 @@ type PushState = 'unknown' | 'disabled' | 'enabled'
 export function SettingsDrawer({ client, credentials, onClose, onUnpair }: SettingsDrawerProps) {
   useDocumentScrollLock(true)
   const diagnosis = useStore(client.getConnectionDiagnosisStore())
+  const trusted = useStore(client.getDeviceTrustedStore())
   const [capability] = useState<NotificationCapability>(() => detectNotificationCapability())
   const [pushState, setPushState] = useState<PushState>('unknown')
   const [busy, setBusy] = useState(false)
@@ -208,7 +209,10 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
           <dd className="drawer__mono">{credentials.deviceId.slice(0, 8)}</dd>
           <dt>{strings.settingsPcName}</dt>
           <dd>{credentials.pcName}</dd>
+          <dt>{strings.settingsDeviceTrusted}</dt>
+          <dd>{trusted ? strings.settingsDeviceTrustedOn : strings.settingsDeviceTrustedOff}</dd>
         </dl>
+        <p className="drawer__hint">{strings.settingsDeviceTrustedHint}</p>
         <p className="drawer__hint">{strings.settingsUnpairHint}</p>
         <button type="button" className="button button--danger" onClick={onUnpair}>
           {strings.settingsUnpair}

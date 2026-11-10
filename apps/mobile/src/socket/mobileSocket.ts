@@ -62,6 +62,8 @@ export interface MobileSocketOptions {
   readonly onServerTime?: ((serverTime: number) => void) | undefined
   /** VAPID public key advertised by the gateway, when Web Push is available. */
   readonly onVapidPublicKey?: ((key: string | undefined) => void) | undefined
+  /** Whether the PC allows high-risk operations from this device. */
+  readonly onDeviceTrust?: ((trusted: boolean) => void) | undefined
   /** Foreground/background transitions, mirrored to the gateway as `client_state`. */
   readonly onVisibilityChange?: ((visible: boolean) => void) | undefined
   /** Revoked / unauthorized credentials: the caller must clear local state. */
@@ -99,6 +101,7 @@ export class MobileSocket {
   private readonly _onInvalidFrame: ((error: ParseError) => void) | undefined
   private readonly _onServerTime: ((serverTime: number) => void) | undefined
   private readonly _onVapidPublicKey: ((key: string | undefined) => void) | undefined
+  private readonly _onDeviceTrust: ((trusted: boolean) => void) | undefined
   private readonly _onVisibilityChange: ((visible: boolean) => void) | undefined
   private readonly _onCredentialsInvalid: (() => void) | undefined
   private readonly _onProtocolMismatch: (() => void) | undefined
@@ -138,6 +141,7 @@ export class MobileSocket {
     this._onInvalidFrame = options.onInvalidFrame
     this._onServerTime = options.onServerTime
     this._onVapidPublicKey = options.onVapidPublicKey
+    this._onDeviceTrust = options.onDeviceTrust
     this._onVisibilityChange = options.onVisibilityChange
     this._onCredentialsInvalid = options.onCredentialsInvalid
     this._onProtocolMismatch = options.onProtocolMismatch
@@ -239,7 +243,11 @@ export class MobileSocket {
       case 'hello_ok':
         this._onServerTime?.(frame.serverTime)
         this._onVapidPublicKey?.(frame.vapidPublicKey)
+        this._onDeviceTrust?.(frame.trusted)
         this._handleHelloOk()
+        break
+      case 'device_trust_changed':
+        this._onDeviceTrust?.(frame.trusted)
         break
       case 'pong':
         this._notePong()

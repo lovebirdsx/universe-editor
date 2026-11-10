@@ -2940,8 +2940,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         name: device.name,
         platform: device.platform,
         connected: device.connected,
+        trusted: device.trusted,
         notificationsEnabled: device.notificationsEnabled,
       }))
+    },
+    setMobileDeviceTrust: async (deviceId, trusted) => {
+      await services.mobileGatewayService.setDeviceTrust(deviceId, trusted)
     },
   }
 

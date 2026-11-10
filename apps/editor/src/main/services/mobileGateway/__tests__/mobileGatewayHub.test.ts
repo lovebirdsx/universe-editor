@@ -773,7 +773,7 @@ describe('MobileGatewayHub commands', () => {
     hub: MobileGatewayHub,
     bridge: FakeBridge,
     connection: FakeConnection,
-    options: Array<{ optionId: string; allowedOnMobile: boolean }>,
+    options: Array<{ optionId: string; kind?: string; allowedOnMobile: boolean }>,
   ): Promise<void> {
     bridge.sessions = [summary('s1', { durableId: 'd1' })]
     bridge.snapshots.set(
@@ -1283,7 +1283,7 @@ describe('MobileGatewayHub commands', () => {
       kind: 'resolvePermission',
       payload: { ref, requestId: 'req-1', optionId: 'allow-once', feedback: 'ok' },
     })
-    expect(bridge.resolvePermission).toHaveBeenCalledWith('s1', 'req-1', 'allow-once', 'ok')
+    expect(bridge.resolvePermission).toHaveBeenCalledWith('s1', 'req-1', 'allow-once', false, 'ok')
     expect(connection.frames.at(-1)).toMatchObject({ ok: true })
   })
 
@@ -1309,7 +1309,229 @@ describe('MobileGatewayHub commands', () => {
       kind: 'setConfigOption',
       payload: { ref, configId: 'mode', value: 'code' },
     })
-    expect(bridge.setConfigOption).toHaveBeenCalledWith('s1', 'mode', 'code')
+    expect(bridge.setConfigOption).toHaveBeenCalledWith('s1', 'mode', 'code', false)
+  })
+
+  it('widens high-risk options only for a trusted connection and keeps the cache conservative', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set(
+      's1',
+      snapshot('s1', {
+        summary: summary('s1', { durableId: 'd1' }),
+        configOptions: [
+          {
+            id: 'approval',
+            name: 'Approval',
+            type: 'select',
+            currentValue: 'ask',
+            allowedOnMobile: true,
+            options: [
+              { value: 'ask', label: 'Ask', allowedOnMobile: true },
+              { value: 'bypassPermissions', label: 'Bypass', allowedOnMobile: false },
+            ],
+          },
+        ],
+        pendingPermission: {
+          requestId: 'req-1',
+          toolCallId: 'tool-1',
+          title: 'Run command',
+          options: [
+            {
+              optionId: 'allow-once',
+              name: 'Allow once',
+              kind: 'allow_once',
+              allowedOnMobile: true,
+            },
+            {
+              optionId: 'allow-always',
+              name: 'Always',
+              kind: 'allow_always',
+              allowedOnMobile: false,
+            },
+          ],
+        },
+      }),
+    )
+    hub.registerWindow(1, bridge)
+    const trusted = makeConnection()
+    const plain = makeConnection()
+    hub.addConnection(trusted)
+    hub.addConnection(plain)
+    hub.authenticateConnection(trusted, { deviceId: 'd-trusted', trusted: true })
+    hub.authenticateConnection(plain, { deviceId: 'd-plain', trusted: false })
+    await hub.subscribeSession(trusted, ref)
+    await hub.subscribeSession(plain, ref)
+
+    const trustedSnapshot = framesOf(trusted, 'session_snapshot')[0]?.session
+    const plainSnapshot = framesOf(plain, 'session_snapshot')[0]?.session
+    expect(trustedSnapshot?.configOptions[0]?.options?.[1]?.allowedOnMobile).toBe(true)
+    expect(plainSnapshot?.configOptions[0]?.options?.[1]?.allowedOnMobile).toBe(false)
+    expect(trustedSnapshot?.pendingPermission?.options[1]?.allowedOnMobile).toBe(true)
+    expect(plainSnapshot?.pendingPermission?.options[1]?.allowedOnMobile).toBe(false)
+
+    const command = {
+      type: 'command' as const,
+      requestId: 'durable',
+      kind: 'resolvePermission' as const,
+      payload: { ref, requestId: 'req-1', optionId: 'allow-always' },
+    }
+    await hub.handleCommand(plain, command)
+    expect(plain.frames.at(-1)).toMatchObject({ ok: false, error: 'forbidden_operation' })
+    expect(bridge.resolvePermission).not.toHaveBeenCalled()
+
+    await hub.handleCommand(trusted, command)
+    expect(bridge.resolvePermission).toHaveBeenCalledWith(
+      's1',
+      'req-1',
+      'allow-always',
+      true,
+      undefined,
+    )
+    expect(trusted.frames.at(-1)).toMatchObject({ ok: true })
+
+    // The shared cache still reflects the conservative projection.
+    await hub.handleCommand(plain, { ...command, requestId: 'durable-2' })
+    expect(plain.frames.at(-1)).toMatchObject({ ok: false, error: 'forbidden_operation' })
+  })
+
+  it('resyncs only the affected connection when trust changes', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set(
+      's1',
+      snapshot('s1', {
+        summary: summary('s1', { durableId: 'd1' }),
+        pendingPermission: {
+          requestId: 'req-1',
+          toolCallId: 'tool-1',
+          title: 'Run command',
+          options: [
+            {
+              optionId: 'allow-always',
+              name: 'Always',
+              kind: 'allow_always',
+              allowedOnMobile: false,
+            },
+          ],
+        },
+      }),
+    )
+    hub.registerWindow(1, bridge)
+    const target = makeConnection()
+    const other = makeConnection()
+    hub.addConnection(target)
+    hub.addConnection(other)
+    hub.authenticateConnection(target, { deviceId: 'd1', trusted: false })
+    hub.authenticateConnection(other, { deviceId: 'd2', trusted: false })
+    await hub.subscribeSession(target, ref)
+    await hub.subscribeSession(other, ref)
+    target.frames.length = 0
+    other.frames.length = 0
+
+    hub.setConnectionTrust(target, 'd1', true)
+    expect(framesOf(target, 'resync_required')).toHaveLength(1)
+    expect(framesOf(target, 'resync_required')[0]).toMatchObject({ reason: 'trust_changed' })
+    expect(framesOf(other, 'resync_required')).toHaveLength(0)
+    expect(hub.isConnectionTrusted(target)).toBe(true)
+    expect(hub.isConnectionTrusted(other)).toBe(false)
+
+    await hub.subscribeSession(target, ref)
+    const updatedSnapshot = framesOf(target, 'session_snapshot').at(-1)?.session
+    expect(updatedSnapshot?.pendingPermission?.options[0]?.allowedOnMobile).toBe(true)
+
+    target.frames.length = 0
+    hub.setConnectionTrust(target, 'd1', false)
+    expect(framesOf(target, 'resync_required')).toHaveLength(1)
+
+    await hub.subscribeSession(target, ref)
+    const narrowedSnapshot = framesOf(target, 'session_snapshot').at(-1)?.session
+    expect(narrowedSnapshot?.pendingPermission?.options[0]?.allowedOnMobile).toBe(false)
+
+    await hub.handleCommand(target, {
+      type: 'command',
+      requestId: 'after-revoke',
+      kind: 'resolvePermission',
+      payload: { ref, requestId: 'req-1', optionId: 'allow-always' },
+    })
+    expect(target.frames.at(-1)).toMatchObject({ ok: false, error: 'forbidden_operation' })
+    expect(bridge.resolvePermission).not.toHaveBeenCalled()
+  })
+
+  it('widens session deltas only for a trusted connection', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const trusted = makeConnection()
+    const plain = makeConnection()
+    hub.addConnection(trusted)
+    hub.addConnection(plain)
+    hub.authenticateConnection(trusted, { deviceId: 'd-trusted', trusted: true })
+    hub.authenticateConnection(plain, { deviceId: 'd-plain', trusted: false })
+    await hub.subscribeSession(trusted, ref)
+    await hub.subscribeSession(plain, ref)
+
+    bridge.emit(
+      event({
+        events: [
+          {
+            type: 'config_options_snapshot',
+            options: [
+              {
+                id: 'approval',
+                name: 'Approval',
+                type: 'select',
+                currentValue: 'ask',
+                allowedOnMobile: true,
+                options: [
+                  { value: 'ask', label: 'Ask', allowedOnMobile: true },
+                  { value: 'bypassPermissions', label: 'Bypass', allowedOnMobile: false },
+                ],
+              },
+            ],
+          },
+          {
+            type: 'permission_upsert',
+            permission: {
+              requestId: 'req-1',
+              toolCallId: 'tool-1',
+              title: 'Run command',
+              options: [
+                {
+                  optionId: 'allow-always',
+                  name: 'Always',
+                  kind: 'allow_always',
+                  allowedOnMobile: false,
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    )
+
+    const trustedEvents = framesOf(trusted, 'session_delta').at(-1)?.events
+    const plainEvents = framesOf(plain, 'session_delta').at(-1)?.events
+    expect(trustedEvents?.[0]).toMatchObject({
+      type: 'config_options_snapshot',
+      options: [{ options: [{ allowedOnMobile: true }, { allowedOnMobile: true }] }],
+    })
+    expect(trustedEvents?.[1]).toMatchObject({
+      type: 'permission_upsert',
+      permission: { options: [{ allowedOnMobile: true }] },
+    })
+    expect(plainEvents?.[0]).toMatchObject({
+      type: 'config_options_snapshot',
+      options: [{ options: [{ allowedOnMobile: true }, { allowedOnMobile: false }] }],
+    })
+    expect(plainEvents?.[1]).toMatchObject({
+      type: 'permission_upsert',
+      permission: { options: [{ allowedOnMobile: false }] },
+    })
   })
 
   it('creates a session in an open window', async () => {

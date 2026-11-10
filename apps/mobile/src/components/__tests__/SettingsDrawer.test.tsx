@@ -1,10 +1,11 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import type { MobileClient } from '../../state/mobileClient.js'
 import { SESSION_DISPLAY_STORAGE_KEY } from '../../session/sessionDisplay.js'
 import { THEME_META_COLORS, THEME_STORAGE_KEY } from '../../theme.js'
 import { SettingsDrawer } from '../SettingsDrawer.js'
+import { strings } from '../../strings.js'
 
 const credentials: StoredCredentials = {
   deviceId: 'device-1',
@@ -15,7 +16,7 @@ const credentials: StoredCredentials = {
   protocolVersion: 5,
 }
 
-function renderDrawer(): void {
+function renderDrawer(trusted = false): void {
   const client = {
     subscribePush: vi.fn(),
     unsubscribePush: vi.fn(),
@@ -23,6 +24,10 @@ function renderDrawer(): void {
     getVapidPublicKey: () => undefined,
     getConnectionDiagnosisStore: () => ({
       getState: () => undefined,
+      subscribe: () => () => undefined,
+    }),
+    getDeviceTrustedStore: () => ({
+      getState: () => trusted,
       subscribe: () => () => undefined,
     }),
     retryDiagnosis: vi.fn(),
@@ -58,6 +63,15 @@ describe('SettingsDrawer preferences', () => {
     expect((screen.getByTestId('session-display-onlyMessage') as HTMLInputElement).checked).toBe(
       true,
     )
+  })
+
+  it('shows whether the PC trusts this device', () => {
+    renderDrawer(true)
+    expect(screen.getByText(strings.settingsDeviceTrustedOn)).toBeTruthy()
+
+    cleanup()
+    renderDrawer(false)
+    expect(screen.getByText(strings.settingsDeviceTrustedOff)).toBeTruthy()
   })
 
   it('applies and persists the selected theme', () => {

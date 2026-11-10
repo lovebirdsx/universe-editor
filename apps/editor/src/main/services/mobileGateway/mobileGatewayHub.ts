@@ -23,6 +23,7 @@ import {
   MAX_WORKSPACE_NAME_LENGTH,
   clampText,
   isConfigValueAllowedOnMobile,
+  isHighRiskPermissionOption,
   parseServerFrame,
   serializeFrame,
   type CommandFrame,
@@ -30,6 +31,7 @@ import {
   type MobileAttentionKind,
   type MobileErrorCode,
   type MobileNewSessionResult,
+  type MobilePendingPermission,
   type MobileSessionEvent,
   type MobileSessionHistoryEntry,
   type MobileSessionRef,
@@ -55,6 +57,7 @@ import {
   MobileAttachmentError,
   type MobileGatewayAttachmentResolver,
 } from './mobileAttachmentStore.js'
+import { widenEventForTrust, widenSnapshotForTrust } from './trustedProjection.js'
 
 /** Once a socket has this much queued we drop deltas and ask the phone to resync. */
 export const MAX_BUFFERED_SESSION_BYTES = 1024 * 1024
@@ -106,6 +109,9 @@ interface SessionSubscription {
 
 interface HubConnectionState {
   readonly connection: MobileGatewayHubConnection
+  /** Bound on the first successful hello; trust only updates through the PC API. */
+  deviceId: string | undefined
+  trusted: boolean
   inbox: boolean
   inboxSnapshotPending: boolean
   bufferedInbox: Array<{
@@ -232,12 +238,22 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
 
 const sessionKey = (windowId: number, localId: string): string => `${windowId}:${localId}`
 
+interface CachedPermissionOption {
+  /** Conservative projection published by the bridge; never widened here. */
+  readonly allowedOnMobile: boolean
+  /** True for allow_always / durable grants that only a trusted device may pick. */
+  readonly highRisk: boolean
+}
+
 export class MobileGatewayHub {
   private readonly _windows = new Map<number, WindowEntry>()
   private readonly _connections = new Set<HubConnectionState>()
   private readonly _inboxState = new Map<string, InboxEntry>()
-  /** `windowId:localId:requestId` → optionId → allowedOnMobile (gateway-side re-validation). */
-  private readonly _permissionOptions = new Map<string, ReadonlyMap<string, boolean>>()
+  /** `windowId:localId:requestId` → optionId → conservative permission facts. */
+  private readonly _permissionOptions = new Map<
+    string,
+    ReadonlyMap<string, CachedPermissionOption>
+  >()
   private readonly _idempotentResults = new Map<
     string,
     { readonly outcome: CommandOutcome; readonly expiresAt: number }
@@ -280,6 +296,7 @@ export class MobileGatewayHub {
     if (entry === undefined) return
     this._windows.delete(windowId)
     this._disposeWindowWatch(entry)
+    this._clearWindowPermissions(windowId)
 
     const removes: MobileSessionRef[] = []
     for (const [key, value] of this._inboxState) {
@@ -310,6 +327,7 @@ export class MobileGatewayHub {
     this._windows.clear()
     this._connections.clear()
     this._inboxState.clear()
+    this._permissionOptions.clear()
     this._streaming = false
     this._attention = false
   }
@@ -329,11 +347,62 @@ export class MobileGatewayHub {
   addConnection(connection: MobileGatewayHubConnection): void {
     this._connections.add({
       connection,
+      deviceId: undefined,
+      trusted: false,
       inbox: false,
       inboxSnapshotPending: false,
       bufferedInbox: [],
       sessions: new Map(),
     })
+  }
+
+  /**
+   * Bind the authenticated device after `hello`. The server re-reads the device
+   * record right before calling this, so a PC toggle racing with the handshake
+   * is picked up here; later changes go through `setConnectionTrust`.
+   */
+  authenticateConnection(
+    connection: MobileGatewayHubConnection,
+    identity: { readonly deviceId: string; readonly trusted: boolean },
+  ): void {
+    const state = this._find(connection)
+    if (state === undefined || state.deviceId !== undefined) return
+    state.deviceId = identity.deviceId
+    state.trusted = identity.trusted
+  }
+
+  /**
+   * Apply a PC grant/revoke to every live connection of one device. Sessions the
+   * phone is already watching are marked desynced and asked to resubscribe, so
+   * the next snapshot carries the new `allowedOnMobile` projection.
+   */
+  setConnectionTrust(
+    connection: MobileGatewayHubConnection,
+    deviceId: string,
+    trusted: boolean,
+  ): void {
+    const state = this._find(connection)
+    if (state === undefined || state.deviceId !== deviceId) return
+    if (state.trusted === trusted) return
+    state.trusted = trusted
+    for (const subscription of state.sessions.values()) {
+      if (subscription.snapshotPending || subscription.desynced) continue
+      subscription.desynced = true
+      this._send(
+        state.connection,
+        {
+          type: 'resync_required',
+          scope: 'session',
+          reason: 'trust_changed',
+          ref: subscription.ref,
+        },
+        subscription.localId,
+      )
+    }
+  }
+
+  isConnectionTrusted(connection: MobileGatewayHubConnection): boolean {
+    return this._find(connection)?.trusted === true
   }
 
   removeConnection(connection: MobileGatewayHubConnection): void {
@@ -447,14 +516,12 @@ export class MobileGatewayHub {
     }
     subscription.ref = summary.ref
     subscription.seq += 1
+    const base: MobileSessionSnapshot = { ...snapshot, seq: subscription.seq, summary }
+    const projected = state.trusted === true ? widenSnapshotForTrust(base) : base
     const frame: SessionSnapshotFrame = {
       type: 'session_snapshot',
       seq: subscription.seq,
-      session: this._fitSnapshot({
-        ...snapshot,
-        seq: subscription.seq,
-        summary,
-      }),
+      session: this._fitSnapshot(projected),
     }
     this._send(connection, frame, resolved.localId)
     subscription.snapshotPending = false
@@ -483,9 +550,16 @@ export class MobileGatewayHub {
     audit?: MobileCommandAudit,
     context?: { readonly deviceId?: string },
   ): Promise<void> {
+    const state = this._find(connection)
+    const sender = {
+      deviceId: state?.deviceId ?? context?.deviceId,
+      trusted: state?.trusted === true,
+    }
     const mutating = MUTATING_COMMAND_KINDS.has(frame.kind)
     const cacheKey =
-      frame.idempotencyKey !== undefined && mutating ? frame.idempotencyKey : undefined
+      frame.idempotencyKey !== undefined && mutating
+        ? `${sender.deviceId ?? ''}:${frame.idempotencyKey}`
+        : undefined
     let outcome: CommandOutcome
     if (cacheKey !== undefined) {
       const now = Date.now()
@@ -498,7 +572,7 @@ export class MobileGatewayHub {
         if (inflight !== undefined) {
           outcome = await inflight
         } else {
-          const run = this._dispatchCommand(frame, context?.deviceId).finally(() => {
+          const run = this._dispatchCommand(frame, sender).finally(() => {
             this._inflightCommands.delete(cacheKey)
           })
           this._inflightCommands.set(cacheKey, run)
@@ -511,7 +585,7 @@ export class MobileGatewayHub {
         }
       }
     } else {
-      outcome = await this._dispatchCommand(frame, context?.deviceId)
+      outcome = await this._dispatchCommand(frame, sender)
     }
 
     if (audit !== undefined && mutating) {
@@ -562,7 +636,7 @@ export class MobileGatewayHub {
 
   private async _dispatchCommand(
     frame: CommandFrame,
-    deviceId: string | undefined,
+    sender: { readonly deviceId: string | undefined; readonly trusted: boolean },
   ): Promise<CommandOutcome> {
     const payload = frame.payload as { ref?: MobileSessionRef }
     switch (frame.kind) {
@@ -594,11 +668,11 @@ export class MobileGatewayHub {
         const ids = p.attachmentIds ?? []
         let attachments: readonly MobileBridgePromptAttachment[] | undefined
         if (ids.length > 0) {
-          if (deviceId === undefined) return failOutcome('unauthorized')
+          if (sender.deviceId === undefined) return failOutcome('unauthorized')
           const resolver = this._host?.attachments
           if (resolver === undefined) return failOutcome('not_supported')
           try {
-            attachments = await resolver.resolveForPrompt(deviceId, ids)
+            attachments = await resolver.resolveForPrompt(sender.deviceId, ids)
           } catch (err) {
             if (err instanceof MobileAttachmentError) return failOutcome(err.code)
             throw err
@@ -612,9 +686,9 @@ export class MobileGatewayHub {
               ? bridge.sendPrompt(localId, p.text)
               : bridge.sendPrompt(localId, p.text, attachments),
         )
-        if (outcome.ok && ids.length > 0 && deviceId !== undefined) {
+        if (outcome.ok && ids.length > 0 && sender.deviceId !== undefined) {
           const resolver = this._host?.attachments
-          void resolver?.consume(deviceId, ids).catch((err: unknown) => {
+          void resolver?.consume(sender.deviceId, ids).catch((err: unknown) => {
             this._logger.warn(`mobile attachment consume failed: ${String(err)}`)
           })
         }
@@ -643,9 +717,19 @@ export class MobileGatewayHub {
         if (allowed === undefined) return failOutcome('stale_request')
         // Second line of defence: the bridge also rejects high-risk options, but
         // the gateway must not route an option it cannot prove was offered.
-        if (allowed.get(p.optionId) !== true) return failOutcome('forbidden_operation')
+        const option = allowed.get(p.optionId)
+        if (option === undefined) return failOutcome('forbidden_operation')
+        if (!option.allowedOnMobile && !(sender.trusted && option.highRisk)) {
+          return failOutcome('forbidden_operation')
+        }
         return this._withBridge(resolved, 10_000, (bridge) =>
-          bridge.resolvePermission(resolved.localId, p.requestId, p.optionId, p.feedback),
+          bridge.resolvePermission(
+            resolved.localId,
+            p.requestId,
+            p.optionId,
+            sender.trusted,
+            p.feedback,
+          ),
         )
       }
       case 'cancelPermission': {
@@ -671,9 +755,11 @@ export class MobileGatewayHub {
           configId: string
           value: string | boolean
         }
-        if (!isConfigValueAllowedOnMobile(p.value)) return failOutcome('forbidden_operation')
+        if (!isConfigValueAllowedOnMobile(p.value) && !sender.trusted) {
+          return failOutcome('forbidden_operation')
+        }
         return this._sessionCommand(p.ref, 10_000, (bridge, localId) =>
-          bridge.setConfigOption(localId, p.configId, p.value),
+          bridge.setConfigOption(localId, p.configId, p.value, sender.trusted),
         )
       }
       case 'pauseAutoResolve': {
@@ -1306,19 +1392,38 @@ export class MobileGatewayHub {
   private _cachePermission(
     windowId: number,
     localId: string,
-    permission: {
-      requestId: string
-      options: readonly { optionId: string; allowedOnMobile: boolean }[]
-    },
+    permission: MobilePendingPermission,
   ): void {
     this._permissionOptions.set(
       permissionKey(windowId, localId, permission.requestId),
-      new Map(permission.options.map((option) => [option.optionId, option.allowedOnMobile])),
+      new Map(
+        permission.options.map((option) => [
+          option.optionId,
+          {
+            allowedOnMobile: option.allowedOnMobile,
+            highRisk: isHighRiskPermissionOption(option),
+          },
+        ]),
+      ),
     )
   }
 
   private _clearPermission(windowId: number, localId: string, requestId: string): void {
     this._permissionOptions.delete(permissionKey(windowId, localId, requestId))
+  }
+
+  private _clearSessionPermissions(windowId: number, localId: string): void {
+    const prefix = `${windowId}:${localId}:`
+    for (const key of this._permissionOptions.keys()) {
+      if (key.startsWith(prefix)) this._permissionOptions.delete(key)
+    }
+  }
+
+  private _clearWindowPermissions(windowId: number): void {
+    const prefix = `${windowId}:`
+    for (const key of this._permissionOptions.keys()) {
+      if (key.startsWith(prefix)) this._permissionOptions.delete(key)
+    }
   }
 
   private _find(connection: MobileGatewayHubConnection): HubConnectionState | undefined {
@@ -1346,6 +1451,7 @@ export class MobileGatewayHub {
       const removes: MobileSessionRef[] = []
       for (const ref of event.removes) {
         this._inboxState.delete(sessionKey(windowId, ref.localId))
+        this._clearSessionPermissions(windowId, ref.localId)
         removes.push({
           windowId,
           localId: ref.localId,
@@ -1434,13 +1540,14 @@ export class MobileGatewayHub {
       return
     }
     subscription.seq += 1
+    const projected = state.trusted === true ? events.map(widenEventForTrust) : events
     this._send(
       state.connection,
       {
         type: 'session_delta',
         seq: subscription.seq,
         ref: subscription.ref,
-        events,
+        events: projected,
       },
       subscription.localId,
     )

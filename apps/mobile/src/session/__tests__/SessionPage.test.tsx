@@ -48,6 +48,7 @@ function helloOkFrame(): HelloOkFrame {
     protocolVersion: MOBILE_PROTOCOL_VERSION,
     serverVersion: '0.0.0-test',
     deviceId: 'device-1',
+    trusted: false,
     serverTime: 1,
     capabilities: ['inbox', 'session'],
   }

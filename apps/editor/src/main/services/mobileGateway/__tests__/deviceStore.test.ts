@@ -61,6 +61,33 @@ describe('DeviceStore', () => {
     expect(await store.revoke(added.device.deviceId)).toBe(false)
   })
 
+  it('persists the trusted flag and defaults it to false for new or legacy devices', async () => {
+    const added = await store.add({ name: 'Pixel', platform: 'android' })
+    expect(added.device.trusted).toBe(false)
+    expect((await store.get(added.device.deviceId))?.trusted).toBe(false)
+
+    expect(await store.setTrusted(added.device.deviceId, true)).toBe(true)
+    expect((await store.get(added.device.deviceId))?.trusted).toBe(true)
+
+    expect(await store.setTrusted('missing', true)).toBe(false)
+    expect((await store.list()).map((device) => device.deviceId)).toEqual([added.device.deviceId])
+  })
+
+  it('loads a v2 file without a trusted field as untrusted', async () => {
+    const added = await store.add({ name: 'Pixel', platform: 'android' })
+    const file = join(dir, 'mobile', 'devices.json')
+    const parsed = JSON.parse(await fs.readFile(file, 'utf8')) as {
+      version: number
+      devices: Array<Record<string, unknown>>
+    }
+    delete parsed.devices[0]!['trusted']
+    await fs.writeFile(file, JSON.stringify(parsed), 'utf8')
+
+    const listed = await store.list()
+    expect(listed[0]?.deviceId).toBe(added.device.deviceId)
+    expect(listed[0]?.trusted).toBeUndefined()
+  })
+
   it('caps the number of paired devices', async () => {
     for (let index = 0; index < MAX_PAIRED_DEVICES; index += 1) {
       await store.add({ name: `Phone ${index}`, platform: 'other' })

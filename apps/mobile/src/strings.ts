@@ -44,6 +44,10 @@ export const strings = {
   settingsDeviceName: '设备名称',
   settingsDeviceId: '设备 ID',
   settingsPcName: 'PC 名称',
+  settingsDeviceTrusted: '受信设备',
+  settingsDeviceTrustedOn: '是',
+  settingsDeviceTrustedOff: '否',
+  settingsDeviceTrustedHint: '只能由 PC 更改。受信后本机可以切换绕过权限模式，并批准持久授权。',
   settingsUnpair: '解除配对',
   settingsUnpairHint: '解除后需要重新扫码配对才能继续使用。',
 
