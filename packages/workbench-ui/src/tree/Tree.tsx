@@ -38,6 +38,7 @@ import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollR
 import { useStableCallback } from '../hooks/useStableCallback.js'
 import { isOpenTargetEnter, markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
+import type { ITreeFocusSource } from './focusSeed.js'
 import {
   dispatchKeyboardContextMenu,
   findRowElement,
@@ -151,8 +152,12 @@ export interface ITreeProps<T> {
   readonly onShiftTab?: () => void
   /** Context menu on empty area (null) — per-row menus are the view's job in renderRow. */
   readonly onContextMenu?: (e: ReactMouseEvent, node: IVisibleNode<T> | null) => void
-  /** Called when the tree container receives DOM focus — before built-in focus state update. */
-  readonly onFocus?: () => void
+  /** Called when the tree container receives DOM focus — before built-in focus state update.
+   *  `source` is `'pointer'` when the focus came from this tree's mousedown handler,
+   *  `'keyboard'` for Tab / programmatic focus. Seeding a cursor from a pointer
+   *  focus must pass `{ reveal: false }` (see `seedTreeFocusCursor`): revealing
+   *  would move the row out from under the still-pending mouseup/click. */
+  readonly onFocus?: (source: ITreeFocusSource) => void
   /**
    * Reports which rows the scroll viewport covers: the slice of `visibleNodes`
    * spanning the viewport plus `VISIBLE_OVERSCAN` rows of slack on each side,
@@ -208,6 +213,10 @@ export function Tree<T>(props: ITreeProps<T>) {
 
   const [hasFocus, setHasFocus] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  // Set only while this tree's own mousedown handler is focusing the container:
+  // focus() dispatches synchronously, so onFocus can classify the source before
+  // this resets. A second focusin from a child control is not pointer focus.
+  const pointerFocusRef = useRef(false)
   const visibleRef = useRef(visibleNodes)
   visibleRef.current = visibleNodes
 
@@ -603,10 +612,16 @@ export function Tree<T>(props: ITreeProps<T>) {
       tabIndex={0}
       data-focused={hasFocus}
       onKeyDown={onKeyDown}
-      onMouseDown={() => containerRef.current?.focus({ preventScroll: true })}
+      onMouseDown={() => {
+        pointerFocusRef.current = true
+        containerRef.current?.focus({ preventScroll: true })
+        pointerFocusRef.current = false
+      }}
       onFocus={() => {
         setHasFocus(true)
-        onFocus?.()
+        const source: ITreeFocusSource = pointerFocusRef.current ? 'pointer' : 'keyboard'
+        pointerFocusRef.current = false
+        onFocus?.(source)
       }}
       onBlur={() => setHasFocus(false)}
       {...(onContextMenu

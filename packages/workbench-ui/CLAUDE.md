@@ -45,7 +45,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 - 需要跨组件 DnD 状态共享
 - 需要虚拟滚动（列表 > 200 项时）
 - 通用原子控件 / 反馈类浮层（多处复用、与具体业务解耦）
-- 迁移现状：`.iconBtn` 仅剩 `workbench/panel/terminal/TerminalViewToolbar.module.css`，`ConfigOptionsBar.tsx` 仍在 `workbench/agents/`，`SessionsPopover` 已不存在；新增控件优先沉淀本包，动到旧 css 顺手迁。
+- 新增控件优先沉淀本包，动到旧 css 顺手迁。
 
 ## 关键约束
 
@@ -53,6 +53,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 - **`PopoverList` 报 hover 用 `onMouseMove`，绝不用 `onMouseEnter`**（`overlay/PopoverList.tsx`）：浮层常正好弹在**静止光标**下方，浏览器会给新落到光标下的行派发**合成 `mouseenter`**——用它会在按方向键的那一刻把键盘选中项劫持到鼠标那行。静止光标下的布局变化只发 `mouseenter`/`mouseover`、**不发 `mousemove`**；真移动鼠标才发，所以 hover 挂 `mousemove` 仍生效。回归锁：`__tests__/PopoverList.test.tsx` 的 `does not report hover on mouseenter alone` + e2e 用 `dispatchEvent('mouseenter')` 复现（Playwright 的 `mouse.move` 会真发 mousemove，复现不了）。改完需 `pnpm --filter @universe-editor/workbench-ui build`，否则 apps 用旧 dist。
 - **组件内自建 `TreeModel` 必须用 `useOwnedTreeModel(() => new TreeModel(...))`**：裸 `useRef`/`useMemo` 持有 + `useEffect` cleanup 里 `dispose()` 的写法在 React StrictMode 下会被「卸载演练」dispose 掉并在重挂载时复用 dead 实例（Emitter 不再 fire，`refresh()` 成 no-op），导致树永远不再更新——**dev-only，production build 不复现**（StrictMode 双挂载只在 dev 生效）。TreeModel 由 DI service 持有时不受此影响。
 - **`Tree` 的 reveal 可能在布局前消费**：layout effect 同步跑在本帧布局计算之前，`clientHeight` 可能仍是内容总高，目标行被误判「已可见」而丢滚动。所以「无需滚动但视口仍覆盖全部内容」时用 rAF 重试到布局落定（`Tree.tsx` reveal effect；守护：e2e `smoke.revealInExplorerScrollOnRemount` + 单测 `Tree.revealScroll`）。**别**在 reveal 路径里读一次 `clientHeight` 就当真值用。
+- **Tree 焦点播种**：`onFocus(source)` 为 `pointer` 时必须用 `seedTreeFocusCursor`（不 reveal）；否则 mouseup 前滚动会移走鼠标下的行，首次点击丢失。
 - **不依赖 platform DI**：通过 props 接收服务实例，不用 `@IFooService` 装饰器
 - **图标走 props/children 注入**：不引应用图标库（如 `lucide-react`）；调用方传入图标元素或 `renderIcon` 回调
 - 可选 className 类 props 声明为 `string | undefined`（兼容调用方传入的 `styles['x']`，应对 `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`）

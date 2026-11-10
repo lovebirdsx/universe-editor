@@ -34,7 +34,7 @@ gutter / peek / blame / open-changes 对 git 与 perforce 共用同一套 render
 
 ## 案例：Commit Changes 视图与图谱联动
 
-workspace 切换清空 / toolbar（Open in Graph / 折叠展开 / tree-list 持久化）/ 聚焦命令 `workbench.view.scm.commitChanges.focus`（空格预览、回车聚焦 diff）/ 图谱键盘导航（`useGraphKeyboardNav.ts` 被 git/perforce 复用）/ 三个根因坑（reveal 无高亮、点击延迟、静默跟随）与视图交互内核抽取（`workbench/changesTree/`，Session Changes 与 swarm 复用）见 [cases-commit-changes-graph.md](cases-commit-changes-graph.md)。
+workspace 切换清空 / toolbar（Open in Graph / 折叠展开 / tree-list 持久化）/ 聚焦命令 `workbench.view.scm.commitChanges.focus`（空格预览、回车聚焦 diff）/ 图谱键盘导航（`useGraphKeyboardNav.ts` 被 git/perforce 复用）/ 多个根因坑（reveal 无高亮、点击延迟、静默跟随、focus 播种误 reveal 导致点击丢失）与视图交互内核抽取（`workbench/changesTree/`，Session Changes 与 swarm 复用）见 [cases-commit-changes-graph.md](cases-commit-changes-graph.md)。
 
 ## 验证
 

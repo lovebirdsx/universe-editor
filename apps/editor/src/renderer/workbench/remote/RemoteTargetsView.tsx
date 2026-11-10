@@ -27,9 +27,11 @@ import {
 } from '@universe-editor/platform'
 import {
   IconButton,
+  seedTreeFocusCursor,
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  type ITreeFocusSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
 import { useEventValue, useObservable, useService } from '../useService.js'
@@ -149,13 +151,16 @@ export function RemoteTargetsView() {
   // tree view does. The visibility check matters because refresh() does not
   // clear `_focused`: an id from a previous snapshot must not pass for a live
   // cursor when the host it named has since disappeared.
-  const onTreeFocus = useCallback(() => {
-    const visible = model.getVisibleNodes()
-    const focusedId = model.focused
-    if (focusedId != null && visible.some((n) => n.id === focusedId)) return
-    const first = visible[0]
-    if (first) model.setSelection([first.id], first.id)
-  }, [model])
+  const onTreeFocus = useCallback(
+    (source: ITreeFocusSource) => {
+      const visible = model.getVisibleNodes()
+      const focusedId = model.focused
+      if (focusedId != null && visible.some((n) => n.id === focusedId)) return
+      const first = visible[0]
+      if (first) seedTreeFocusCursor(model, first.id, source)
+    },
+    [model],
+  )
 
   const runPrimaryAction = useCallback(
     (node: RemoteNode, modifiers: { ctrlKey: boolean; metaKey: boolean }) => {

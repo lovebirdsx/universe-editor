@@ -18,6 +18,10 @@
 
 视图交互内核（快照构建 / Tree 渲染 / 折叠信号 / 焦点记忆 / 键盘导航）已抽到 `workbench/changesTree/`：泛型 `ChangesTree` + `describeFile` slot（`ChangesTree.tsx` / `buildSnapshot.ts` / `toolbar.tsx` / `useOpenDiffEditor.ts`），Session Changes 复用同一实现——**改这里两个视图同时受益**；`workbench/scm/commitChanges/CommitChangesView.tsx` 只剩薄 wrapper（`toItem` + `describeFile` 注入 + `useGraphKeyboardNav`）。
 
+### 坑 5：滚到底后首次点击文件行会跳回顶部且打不开 diff
+
+`Tree` 的 `onFocus(source)` 现在区分焦点来源：`mousedown` 聚焦为 `'pointer'`，Tab/程序化聚焦（含 `workbench.view.scm.commitChanges.focus`）为 `'keyboard'`。树在 focus 时播种键盘游标必须走 `seedTreeFocusCursor`（`packages/workbench-ui/src/tree/focusSeed.ts`）：pointer 来源传 `{ reveal: false }`。若裸调 `model.setSelection(...)`，默认 `reveal: true` 会在 mouseup 前把首行滚入视口，虚拟列表随即移走/卸载鼠标下的行，click 落空——症状就是“首次点击滚回顶部且不打开 diff”，之后因树已持有焦点而正常。受影响面：ChangesTree（Commit/Session/Swarm Changes）、Explorer、Outline、Timeline、Remote Targets、Extension Tree View、Swarm Reviews；守护单测 `Tree.test.tsx` + 各视图的 scrollTop 回归。
+
 ### 关键参考路径
 
 - `apps/editor/src/renderer/workbench/scm/commitChanges/CommitChangesView.tsx` —— 薄 wrapper（describeFile 注入）

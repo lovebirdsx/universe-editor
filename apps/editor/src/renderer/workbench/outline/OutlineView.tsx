@@ -29,11 +29,13 @@ import {
 import { localize } from '@universe-editor/platform'
 import { ICommandService } from '@universe-editor/platform'
 import {
+  seedTreeFocusCursor,
   Tree,
   TreeModel,
   useOwnedTreeModel,
   isKeyboardContextMenu,
   type ITreeDataSource,
+  type ITreeFocusSource,
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useService, useObservable } from '../useService.js'
@@ -228,13 +230,16 @@ export function OutlineView() {
   // keyboard navigation is usable immediately, VSCode-style. Driven by the Tree's
   // onFocus prop rather than a manual listener so it also fires when symbols
   // arrive after the tree first mounted empty (cold language-server start).
-  const onTreeFocus = useCallback(() => {
-    const visible = model.getVisibleNodes()
-    const focusedId = model.focused
-    if (focusedId != null && visible.some((n) => n.id === focusedId)) return
-    const targetId = activeIdRef.current ?? visible[0]?.id
-    if (targetId != null) model.setSelection([targetId], targetId)
-  }, [model])
+  const onTreeFocus = useCallback(
+    (source: ITreeFocusSource) => {
+      const visible = model.getVisibleNodes()
+      const focusedId = model.focused
+      if (focusedId != null && visible.some((n) => n.id === focusedId)) return
+      const targetId = activeIdRef.current ?? visible[0]?.id
+      if (targetId != null) seedTreeFocusCursor(model, targetId, source)
+    },
+    [model],
+  )
 
   const activeId = activeSymbol ? display.idBySymbol.get(activeSymbol) : undefined
   activeIdRef.current = activeId

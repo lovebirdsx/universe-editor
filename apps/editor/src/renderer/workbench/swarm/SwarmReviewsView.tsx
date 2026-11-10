@@ -71,6 +71,7 @@ import {
   IconButton,
   Input,
   Spinner,
+  seedTreeFocusCursor,
   Tree,
   TreeModel,
   cx,
@@ -78,6 +79,7 @@ import {
   copyText,
   useOwnedTreeModel,
   type ITreeDataSource,
+  type ITreeFocusSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
 import {
@@ -1064,13 +1066,16 @@ export function SwarmReviewsView() {
 
   // Landing focus: keep an existing (still visible) cursor, else pick the first
   // review row so the arrow keys have somewhere to start.
-  const onTreeFocus = useCallback(() => {
-    const visible = treeModel.getVisibleNodes()
-    const focusedId = treeModel.focused
-    if (focusedId !== null && visible.some((n) => n.id === focusedId)) return
-    const first = visible.find((n) => n.element.kind === 'review') ?? visible[0]
-    if (first) treeModel.setSelection([first.id], first.id, { reveal: false })
-  }, [treeModel])
+  const onTreeFocus = useCallback(
+    (source: ITreeFocusSource) => {
+      const visible = treeModel.getVisibleNodes()
+      const focusedId = treeModel.focused
+      if (focusedId !== null && visible.some((n) => n.id === focusedId)) return
+      const first = visible.find((n) => n.element.kind === 'review') ?? visible[0]
+      if (first) seedTreeFocusCursor(treeModel, first.id, source)
+    },
+    [treeModel],
+  )
 
   const renderRow = (ctx: ITreeRowRenderContext<SwarmReviewsNode>) => {
     const node = ctx.node.element

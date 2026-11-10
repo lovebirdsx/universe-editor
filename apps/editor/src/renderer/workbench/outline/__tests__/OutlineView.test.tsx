@@ -395,6 +395,30 @@ describe('OutlineView', () => {
     expect(rows[1]?.getAttribute('aria-selected')).toBe('true')
   })
 
+  it('keeps the scroll position when a click first focuses a scrolled tree', () => {
+    const { instantiation, revealSymbol } = setup({
+      uri: 'file:///a.ts',
+      roots: Array.from({ length: 40 }, (_, i) =>
+        makeSymbol(`S${String(i).padStart(2, '0')}`, { line: i + 1 }),
+      ),
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+
+    const view = document.querySelector('[role="tree"]') as HTMLElement
+    Object.defineProperty(view, 'clientHeight', { configurable: true, value: 110 })
+    Object.defineProperty(view, 'scrollHeight', { configurable: true, value: 40 * 22 })
+    view.scrollTop = 700
+
+    const last = document.querySelectorAll('[role="treeitem"]')[39] as HTMLElement
+    fireEvent.mouseDown(last)
+    expect(view.scrollTop).toBe(700)
+
+    fireEvent.click(last)
+    expect(revealSymbol).toHaveBeenCalledTimes(1)
+  })
+
   it('filter on type prunes the tree to matches and ancestors', () => {
     const { instantiation } = setup({
       uri: 'file:///a.ts',

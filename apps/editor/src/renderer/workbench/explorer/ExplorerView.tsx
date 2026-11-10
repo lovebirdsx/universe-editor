@@ -39,9 +39,11 @@ import {
 import {
   DragSessionContext,
   DragSessionProvider,
+  seedTreeFocusCursor,
   Tree,
   dragContainsResources,
   isKeyboardContextMenu,
+  type ITreeFocusSource,
   type ITreeRowRenderContext,
   type IVisibleNode,
 } from '@universe-editor/workbench-ui'
@@ -352,11 +354,11 @@ export function ExplorerView() {
               ...(opts.modifiers ? { modifiers: opts.modifiers } : {}),
             })
           }}
-          onFocus={() => {
+          onFocus={(source: ITreeFocusSource) => {
             // Seeding a keyboard cursor is not a user request to jump: revealing
             // here would yank the viewport back to the root row when the user
             // scrolls down and clicks.
-            if (!tree.focused && root) tree.setSelection(root, root, { reveal: false })
+            if (!tree.focused && root) seedTreeFocusCursor(tree, root, source)
           }}
           onRowKeyDown={(e, node) => {
             if (node.id === rootKey) return

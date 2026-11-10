@@ -24,11 +24,13 @@ import {
 import { URI, type IObservable } from '@universe-editor/platform'
 import {
   resourceDragProps,
+  seedTreeFocusCursor,
   Tree,
   TreeModel,
   useOwnedTreeModel,
   type ITreeActivateModifiers,
   type ITreeDataSource,
+  type ITreeFocusSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
 import { ChevronDown, ChevronRight } from 'lucide-react'
@@ -441,25 +443,28 @@ export function ChangesTree<TEntry>({
   // the focus command, or after a remount dropped the TreeModel's focus — land
   // on the reveal file, else the remembered file, else the first file row
   // (folders are skipped: they only group).
-  const onTreeFocus = useCallback(() => {
-    const visible = treeModel.getVisibleNodes()
-    const focusedId = treeModel.focused
-    if (focusedId != null && visible.some((n) => n.id === focusedId)) return
-    const remembered = revealPathRef.current ?? callbacksRef.current.focusMemory?.recall()
-    let target =
-      remembered !== undefined
-        ? findChangesTreeFileNode(snapshotRef.current, remembered)
-        : undefined
-    if (!target) {
-      for (const n of visible) {
-        if (n.element.kind === 'file') {
-          target = n.element
-          break
+  const onTreeFocus = useCallback(
+    (source: ITreeFocusSource) => {
+      const visible = treeModel.getVisibleNodes()
+      const focusedId = treeModel.focused
+      if (focusedId != null && visible.some((n) => n.id === focusedId)) return
+      const remembered = revealPathRef.current ?? callbacksRef.current.focusMemory?.recall()
+      let target =
+        remembered !== undefined
+          ? findChangesTreeFileNode(snapshotRef.current, remembered)
+          : undefined
+      if (!target) {
+        for (const n of visible) {
+          if (n.element.kind === 'file') {
+            target = n.element
+            break
+          }
         }
       }
-    }
-    if (target) treeModel.setSelection([target.id], target.id)
-  }, [treeModel])
+      if (target) seedTreeFocusCursor(treeModel, target.id, source)
+    },
+    [treeModel],
+  )
 
   const toggleFolder = useCallback(
     (node: Extract<ChangesTreeNode<TEntry>, { kind: 'folder' }>): void => {

@@ -448,6 +448,27 @@ describe('SessionChangesView — focus landing and keyboard navigation', () => {
     ).toBe('true')
   })
 
+  it('keeps the scroll position when the first click focuses a scrolled tree', async () => {
+    const { editor } = renderView(
+      Array.from({ length: 40 }, (_, i) => change(`/ws/src/f${String(i).padStart(2, '0')}.ts`)),
+    )
+    await screen.findByText('f39.ts')
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    Object.defineProperty(tree, 'clientHeight', { configurable: true, value: 110 })
+    Object.defineProperty(tree, 'scrollHeight', { configurable: true, value: 40 * 22 })
+    tree.scrollTop = 700
+
+    const lastRow = document.querySelector('[data-row-key="file:/ws/src/f39.ts"]') as HTMLElement
+    // Pointer focus seeds a cursor on the first row without revealing it; the
+    // viewport must not jump before mouseup or the click lands elsewhere.
+    fireEvent.mouseDown(lastRow)
+    expect(tree.scrollTop).toBe(700)
+
+    fireEvent.click(lastRow)
+    await waitFor(() => expect(editor.opened).toHaveLength(1))
+  })
+
   it('ArrowDown moves the selection to the next row', async () => {
     renderView([change('/ws/src/a.ts'), change('/ws/src/b.ts')])
     await screen.findByText('a.ts')

@@ -30,11 +30,13 @@ import {
 import type { ITimelineItemDto } from '@universe-editor/extensions-common'
 import {
   ContextMenu,
+  seedTreeFocusCursor,
   Tree,
   TreeModel,
   useOwnedTreeModel,
   isKeyboardContextMenu,
   type ITreeDataSource,
+  type ITreeFocusSource,
 } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
@@ -291,13 +293,16 @@ export function TimelineView() {
   )
 
   // Focus landing in the tree without a focused row selects the first row.
-  const onTreeFocus = useCallback(() => {
-    const visible = model.getVisibleNodes()
-    const focusedId = model.focused
-    if (focusedId != null && visible.some((n) => n.id === focusedId)) return
-    const targetId = visible[0]?.id
-    if (targetId != null) model.setSelection([targetId], targetId)
-  }, [model])
+  const onTreeFocus = useCallback(
+    (source: ITreeFocusSource) => {
+      const visible = model.getVisibleNodes()
+      const focusedId = model.focused
+      if (focusedId != null && visible.some((n) => n.id === focusedId)) return
+      const targetId = visible[0]?.id
+      if (targetId != null) seedTreeFocusCursor(model, targetId, source)
+    },
+    [model],
+  )
 
   const openRowMenu = useCallback(
     (e: ReactMouseEvent, row: TimelineRow) => {

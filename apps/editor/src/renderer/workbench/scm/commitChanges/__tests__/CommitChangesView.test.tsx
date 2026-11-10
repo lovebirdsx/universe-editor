@@ -275,6 +275,34 @@ describe('CommitChangesView', () => {
     ).toBe('false')
   })
 
+  it('keeps the scroll position when the first click focuses a scrolled tree', () => {
+    const files = Array.from({ length: 40 }, (_, i) =>
+      entry(`src/file${String(i).padStart(2, '0')}.ts`),
+    )
+    renderView()
+    act(() => {
+      commitChangesViewState.show(payload({ files }))
+    })
+
+    const tree = document.querySelector('[role="tree"]') as HTMLElement
+    Object.defineProperty(tree, 'clientHeight', { configurable: true, value: 110 })
+    Object.defineProperty(tree, 'scrollHeight', { configurable: true, value: 40 * 22 })
+    tree.scrollTop = 700
+
+    const lastRow = document.querySelector('[data-row-key="file:src/file39.ts"]')
+    expect(lastRow).toBeTruthy()
+    // Pointer focus seeds a keyboard cursor on the first file row; that seed
+    // must not reveal it — the viewport jump would unmount/move the row under
+    // the pointer before mouseup, so the following click never reaches it.
+    fireEvent.mouseDown(lastRow!)
+    expect(tree.scrollTop).toBe(700)
+
+    fireEvent.click(lastRow!)
+    expect(executeCommand).toHaveBeenCalledWith('git-graph.openFileDiff', {
+      path: 'src/file39.ts',
+    })
+  })
+
   it('focusing the tree in list mode lands on the first row', () => {
     renderView()
     act(() => {
