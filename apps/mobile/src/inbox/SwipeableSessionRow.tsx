@@ -3,8 +3,23 @@ import { strings } from '../strings.js'
 
 const ACTION_WIDTH_PX = 76
 const TOTAL_ACTION_WIDTH_PX = ACTION_WIDTH_PX * 2
+const OPEN_THRESHOLD_PX = TOTAL_ACTION_WIDTH_PX / 2
 const LONG_PRESS_MS = 500
 const SWIPE_START_PX = 10
+// A thumb swiping left arcs downwards first, so the horizontal span is often
+// smaller than the vertical one in the opening frames. Bias the direction lock
+// towards horizontal or the browser's vertical pan wins before the row moves.
+const HORIZONTAL_BIAS = 0.6
+// Chrome starts a vertical pan once it clears its ~8px touch slop, so claim the
+// sequence at the same distance; waiting for the 10px drag threshold lets the
+// browser cancel diagonal swipes first.
+const TOUCH_LOCK_PX = 8
+const FLICK_PROJECTION_MS = 100
+const FLICK_MIN_DISTANCE_PX = 24
+const FLICK_MIN_VELOCITY = 0.25
+const FLICK_MAX_VELOCITY = 3
+const VELOCITY_WINDOW_MS = 120
+const VELOCITY_MIN_DT_MS = 8
 
 export interface SwipeableSessionRowProps {
   readonly children: ReactNode
@@ -17,17 +32,48 @@ export interface SwipeableSessionRowProps {
   readonly onRemoveSession: () => void
 }
 
+interface MoveSample {
+  readonly x: number
+  readonly t: number
+}
+
 interface DragState {
+  readonly pointerId: number
   readonly startX: number
   readonly startY: number
   readonly base: number
   moved: boolean
+  readonly samples: MoveSample[]
+}
+
+const horizontalIntent = (dx: number, dy: number, slop: number): boolean =>
+  Math.abs(dx) > slop && Math.abs(dx) >= Math.abs(dy) * HORIZONTAL_BIAS
+
+const verticalIntent = (dx: number, dy: number, slop: number): boolean =>
+  Math.abs(dy) > slop && Math.abs(dx) < Math.abs(dy) * HORIZONTAL_BIAS
+
+const clampOffset = (value: number): number => Math.max(-TOTAL_ACTION_WIDTH_PX, Math.min(0, value))
+
+/** Release speed in px/ms over the last gesture window; 0 after the finger rests. */
+const releaseVelocity = (samples: readonly MoveSample[]): number => {
+  const last = samples[samples.length - 1]
+  if (last === undefined) return 0
+  let first = last
+  for (let index = samples.length - 2; index >= 0; index -= 1) {
+    const sample = samples[index]
+    if (sample === undefined || last.t - sample.t > VELOCITY_WINDOW_MS) break
+    first = sample
+  }
+  const dt = last.t - first.t
+  if (dt < VELOCITY_MIN_DT_MS) return 0
+  return Math.max(-FLICK_MAX_VELOCITY, Math.min(FLICK_MAX_VELOCITY, (last.x - first.x) / dt))
 }
 
 /**
  * iOS-style row: swipe left to reveal close/remove, long-press for the same
- * actions. Pointer events are only captured once the gesture is clearly
- * horizontal, so vertical scrolling still belongs to the browser.
+ * actions. Horizontal touch gestures must actively claim the sequence from the
+ * browser's vertical pan, otherwise a diagonal (thumb) swipe is cancelled
+ * before the row has moved.
  */
 export function SwipeableSessionRow({
   children,
@@ -44,6 +90,7 @@ export function SwipeableSessionRow({
   const offset = useRef(0)
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const suppressClick = useRef(false)
+  const trackRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(
     () => () => {
@@ -51,6 +98,64 @@ export function SwipeableSessionRow({
     },
     [],
   )
+
+  useEffect(() => {
+    const track = trackRef.current
+    if (track === null || disabled) return
+    let startX = 0
+    let startY = 0
+    let tracking = false
+    let intent: 'horizontal' | 'vertical' | undefined
+
+    const onTouchStart = (event: TouchEvent): void => {
+      intent = undefined
+      tracking = event.touches.length === 1
+      const touch = event.touches[0]
+      if (touch !== undefined) {
+        startX = touch.clientX
+        startY = touch.clientY
+      }
+    }
+
+    const onTouchMove = (event: TouchEvent): void => {
+      if (!tracking || event.touches.length !== 1) return
+      const touch = event.touches[0]
+      if (touch === undefined) return
+      if (intent === 'horizontal') {
+        // Keep claiming every move: a single cancelled touchmove only stops
+        // scrolling for that event in some browsers.
+        if (event.cancelable) event.preventDefault()
+        return
+      }
+      if (intent === 'vertical') return
+      const dx = touch.clientX - startX
+      const dy = touch.clientY - startY
+      if (horizontalIntent(dx, dy, TOUCH_LOCK_PX)) {
+        intent = 'horizontal'
+        if (event.cancelable) event.preventDefault()
+      } else if (verticalIntent(dx, dy, TOUCH_LOCK_PX)) {
+        intent = 'vertical'
+      }
+    }
+
+    const reset = (): void => {
+      tracking = false
+      intent = undefined
+    }
+
+    track.addEventListener('touchstart', onTouchStart, { passive: true })
+    // Non-passive is required: pointer events cannot cancel the browser's pan,
+    // only preventDefault on touchmove can.
+    track.addEventListener('touchmove', onTouchMove, { passive: false })
+    track.addEventListener('touchend', reset)
+    track.addEventListener('touchcancel', reset)
+    return () => {
+      track.removeEventListener('touchstart', onTouchStart)
+      track.removeEventListener('touchmove', onTouchMove)
+      track.removeEventListener('touchend', reset)
+      track.removeEventListener('touchcancel', reset)
+    }
+  }, [disabled])
 
   const clearLongPress = (): void => {
     if (longPressTimer.current === undefined) return
@@ -60,6 +165,8 @@ export function SwipeableSessionRow({
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>): void => {
     if (disabled || event.button !== 0) return
+    // The second finger of a two-finger gesture must not reset the drag.
+    if (event.pointerType === 'touch' && !event.isPrimary) return
     onGestureStart()
     // A pointerup can land off-track (mouse long-press opens the sheet), so the
     // next gesture must clear the stale click suppression itself. Clearing the
@@ -67,7 +174,14 @@ export function SwipeableSessionRow({
     clearLongPress()
     suppressClick.current = false
     const base = open ? -TOTAL_ACTION_WIDTH_PX : 0
-    drag.current = { startX: event.clientX, startY: event.clientY, base, moved: false }
+    drag.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      base,
+      moved: false,
+      samples: [{ x: event.clientX, t: event.timeStamp }],
+    }
     offset.current = base
     if (!open) {
       longPressTimer.current = setTimeout(() => {
@@ -81,36 +195,59 @@ export function SwipeableSessionRow({
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>): void => {
     const current = drag.current
-    if (current === undefined) return
+    if (current === undefined || current.pointerId !== event.pointerId) return
     const dx = event.clientX - current.startX
     const dy = event.clientY - current.startY
     if (!current.moved) {
-      if (Math.abs(dy) > SWIPE_START_PX && Math.abs(dy) >= Math.abs(dx)) {
+      if (verticalIntent(dx, dy, SWIPE_START_PX)) {
         clearLongPress()
         return
       }
-      if (Math.abs(dx) <= SWIPE_START_PX || Math.abs(dx) <= Math.abs(dy)) return
+      if (!horizontalIntent(dx, dy, SWIPE_START_PX)) return
       current.moved = true
       clearLongPress()
       event.currentTarget.setPointerCapture?.(event.pointerId)
     }
     suppressClick.current = true
-    offset.current = Math.max(-TOTAL_ACTION_WIDTH_PX, Math.min(0, current.base + dx))
+    offset.current = clampOffset(current.base + dx)
     setDragOffset(offset.current)
+    current.samples.push({ x: event.clientX, t: event.timeStamp })
+    if (current.samples.length > 6) current.samples.shift()
     if (event.cancelable) event.preventDefault()
   }
 
-  const finishGesture = (): void => {
+  const finishGesture = (event: React.PointerEvent<HTMLDivElement>): void => {
     clearLongPress()
     const current = drag.current
+    if (current === undefined || current.pointerId !== event.pointerId) return
     drag.current = undefined
-    if (current === undefined) return setDragOffset(undefined)
-    if (!current.moved) {
-      setDragOffset(undefined)
-      return
+    const cancelled = event.type === 'pointercancel'
+    if (!cancelled && !current.moved) {
+      // A fast flick can lose the pointermove that crosses the slop (coalesced
+      // frames); the release point still proves a horizontal intent.
+      const dx = event.clientX - current.startX
+      const dy = event.clientY - current.startY
+      if (!horizontalIntent(dx, dy, SWIPE_START_PX)) {
+        setDragOffset(undefined)
+        return
+      }
+      current.moved = true
+      offset.current = clampOffset(current.base + dx)
+      suppressClick.current = true
+      current.samples.push({ x: event.clientX, t: event.timeStamp })
+    } else if (!cancelled) {
+      // The last segment between the final pointermove and the release is not
+      // reported separately; count the release point itself.
+      offset.current = clampOffset(current.base + event.clientX - current.startX)
+      current.samples.push({ x: event.clientX, t: event.timeStamp })
     }
+    const velocity = cancelled ? 0 : releaseVelocity(current.samples)
+    const projected =
+      Math.abs(offset.current) >= FLICK_MIN_DISTANCE_PX && Math.abs(velocity) >= FLICK_MIN_VELOCITY
+        ? clampOffset(offset.current + velocity * FLICK_PROJECTION_MS)
+        : offset.current
     setDragOffset(undefined)
-    onOpenChange(offset.current < -TOTAL_ACTION_WIDTH_PX / 2)
+    onOpenChange(projected < -OPEN_THRESHOLD_PX)
     // The compatibility click can arrive in a later task than pointerup (mobile
     // browsers), so suppression lives until it is consumed or the next
     // pointerdown resets it. A timer here would let that late click close the
@@ -163,6 +300,7 @@ export function SwipeableSessionRow({
         </button>
       </div>
       <div
+        ref={trackRef}
         className={`inbox-swipe-row__track${dragOffset !== undefined ? ' inbox-swipe-row__track--dragging' : ''}`}
         style={{ transform: `translateX(${translate}px)` }}
         onPointerDown={onPointerDown}

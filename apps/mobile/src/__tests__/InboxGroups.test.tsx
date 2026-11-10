@@ -43,6 +43,30 @@ function actionsOpen(title: string): boolean {
   return action?.getAttribute('tabindex') === '0'
 }
 
+function firePointerAt(
+  element: Element,
+  type: 'pointerdown' | 'pointermove' | 'pointerup',
+  init: PointerEventInit,
+  timeStamp: number,
+): void {
+  const event = new PointerEvent(type, { bubbles: true, cancelable: true, ...init })
+  Object.defineProperty(event, 'timeStamp', { configurable: true, value: timeStamp })
+  fireEvent(element, event)
+}
+
+function dispatchTouch(
+  element: Element,
+  type: 'touchstart' | 'touchmove' | 'touchend',
+  touches: readonly { readonly clientX: number; readonly clientY: number }[],
+): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'touches', { value: touches })
+  act(() => {
+    element.dispatchEvent(event)
+  })
+  return event
+}
+
 describe('InboxGroups', () => {
   it('marks rows whose workspace has uncommitted changes', () => {
     render(
@@ -133,6 +157,110 @@ describe('InboxGroups', () => {
     expect(onCloseSession).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTestId('inbox-session-remove-action'))
     expect(onRemoveSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses release velocity to complete a short fast flick', () => {
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={vi.fn()}
+      />,
+    )
+
+    const row = screen.getByTestId('inbox-session-row')
+    firePointerAt(row, 'pointerdown', { clientX: 200, clientY: 20, button: 0, pointerId: 1 }, 1000)
+    firePointerAt(row, 'pointermove', { clientX: 160, clientY: 22, pointerId: 1 }, 1016)
+    // 50px is below the 76px position threshold, but the release speed projects
+    // the row past it.
+    firePointerAt(row, 'pointerup', { clientX: 150, clientY: 22, pointerId: 1 }, 1032)
+
+    expect(actionsOpen('Running task')).toBe(true)
+  })
+
+  it('does not project a short slow drag that ends at rest', () => {
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={vi.fn()}
+      />,
+    )
+
+    const row = screen.getByTestId('inbox-session-row')
+    firePointerAt(row, 'pointerdown', { clientX: 200, clientY: 20, button: 0, pointerId: 1 }, 1000)
+    firePointerAt(row, 'pointermove', { clientX: 160, clientY: 22, pointerId: 1 }, 1100)
+    firePointerAt(row, 'pointerup', { clientX: 150, clientY: 22, pointerId: 1 }, 1300)
+
+    expect(actionsOpen('Running task')).toBe(false)
+  })
+
+  it('claims diagonal touch moves from the browser pan', () => {
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={vi.fn()}
+      />,
+    )
+
+    const track = screen
+      .getByTestId('inbox-swipe-row')
+      .querySelector<HTMLElement>('.inbox-swipe-row__track')
+    expect(track).not.toBeNull()
+    dispatchTouch(track!, 'touchstart', [{ clientX: 200, clientY: 100 }])
+    // Thumb arc: 45px down for 30px left must still belong to the swipe.
+    const diagonal = dispatchTouch(track!, 'touchmove', [{ clientX: 170, clientY: 145 }])
+    expect(diagonal.defaultPrevented).toBe(true)
+    dispatchTouch(track!, 'touchend', [])
+    dispatchTouch(track!, 'touchstart', [{ clientX: 200, clientY: 100 }])
+    const vertical = dispatchTouch(track!, 'touchmove', [{ clientX: 198, clientY: 160 }])
+    expect(vertical.defaultPrevented).toBe(false)
+  })
+
+  it('ignores a second touch pointer during a swipe', () => {
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={vi.fn()}
+      />,
+    )
+
+    const row = screen.getByTestId('inbox-session-row')
+    fireEvent.pointerDown(row, {
+      clientX: 240,
+      clientY: 20,
+      button: 0,
+      pointerId: 1,
+      pointerType: 'touch',
+      isPrimary: true,
+    })
+    fireEvent.pointerMove(row, {
+      clientX: 140,
+      clientY: 22,
+      pointerId: 1,
+      pointerType: 'touch',
+    })
+    fireEvent.pointerDown(row, {
+      clientX: 300,
+      clientY: 60,
+      button: 0,
+      pointerId: 2,
+      pointerType: 'touch',
+      isPrimary: false,
+    })
+    fireEvent.pointerMove(row, {
+      clientX: 280,
+      clientY: 60,
+      pointerId: 2,
+      pointerType: 'touch',
+    })
+    fireEvent.pointerUp(row, {
+      clientX: 140,
+      clientY: 22,
+      pointerId: 1,
+      pointerType: 'touch',
+      isPrimary: true,
+    })
+
+    expect(actionsOpen('Running task')).toBe(true)
   })
 
   it('keeps the actions revealed when the post-swipe click arrives late', () => {
