@@ -90,6 +90,27 @@ describe('buildSessionCatalog', () => {
     const rows = buildSessionCatalog([historyRow({ title: '' })], [])
     expect(rows[0]?.title).toBe('durable-1')
   })
+
+  it('passes a closed workspace folder and authority through', () => {
+    const closed: MobileSessionHistoryEntry = {
+      durableId: 'closed-remote',
+      agentId: 'echo',
+      title: 'Remote session',
+      workspaceName: 'remote-project',
+      folder: 'remote-ssh://devhost/home/dev/project',
+      authority: 'devhost',
+      createdAt: 1_000,
+      lastUsedAt: 2_000,
+    }
+    const rows = buildSessionCatalog([closed], [])
+    expect(rows[0]).toMatchObject({
+      durableId: 'closed-remote',
+      windowId: undefined,
+      folder: 'remote-ssh://devhost/home/dev/project',
+      authority: 'devhost',
+      live: false,
+    })
+  })
 })
 
 describe('filterSessionCatalog', () => {

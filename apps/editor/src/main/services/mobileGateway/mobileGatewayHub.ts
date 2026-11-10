@@ -54,6 +54,10 @@ import type {
   MobileBridgeSessionSummary,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import {
+  MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT,
+  MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT,
+} from '../../../shared/ipc/mobileGatewayService.js'
+import {
   MobileAttachmentError,
   type MobileGatewayAttachmentResolver,
 } from './mobileAttachmentStore.js'
@@ -161,6 +165,15 @@ export interface MobileGatewayHost {
     bridge: IMobileBridgeService | undefined,
     signal: AbortSignal,
   ): Promise<boolean | undefined>
+  /**
+   * Read the resumable history persisted in a closed workspace's own storage
+   * bucket. Read-only; missing or corrupt buckets resolve to an empty list.
+   */
+  readWorkspaceSessionHistory(
+    workspace: MobileGatewayHostWorkspace,
+  ): Promise<readonly MobileBridgeSessionHistoryEntry[]>
+  /** Cap for closed workspaces included in the history catalog (config-driven). */
+  sessionHistoryWorkspaceLimit(): number
   /** Phone-uploaded attachments, scoped to the authenticated device. */
   attachments?: MobileGatewayAttachmentResolver
 }
@@ -174,6 +187,23 @@ interface CommandOutcome {
   readonly ok: boolean
   readonly result?: unknown
   readonly error?: MobileErrorCode
+}
+
+interface OpenWorkspaceFailure {
+  readonly ok: false
+  readonly error: MobileErrorCode
+}
+
+interface ClosedWorkspaceHistory {
+  readonly workspace: MobileGatewayHostWorkspace
+  readonly rows: readonly MobileSessionHistoryEntry[]
+}
+
+interface HistoryEntryContext {
+  readonly windowId?: number
+  readonly workspaceName: string
+  readonly folder?: string
+  readonly authority?: string
 }
 
 /** How long a repeated idempotency key returns the first result. */
@@ -200,12 +230,18 @@ const LONG_COMMAND_TIMEOUT_MS = 120_000
  * History probes (live scan + owner search) can take ~20s before the bridge is
  * called; keep the total under the phone's 120s + 5s grace.
  */
-const OPEN_SESSION_TIMEOUT_MS = 100_000
+export const OPEN_SESSION_TIMEOUT_MS = 100_000
+/** A freshly opened window may still be swapping to its workspace bucket. */
+const HISTORY_OPEN_POLL_INTERVAL_MS = 300
 const PREVIEW_REWIND_TIMEOUT_MS = 30_000
 const LIST_SIDE_TASKS_TIMEOUT_MS = 10_000
 /** History catalog: bound each window's readiness and history read. */
 const HISTORY_WINDOW_READY_TIMEOUT_MS = 5_000
 const HISTORY_LIST_TIMEOUT_MS = 8_000
+/** Reading a closed workspace bucket is a local small-file read. */
+const HISTORY_DISK_READ_TIMEOUT_MS = 2_000
+/** Limit concurrent local bucket reads while building the catalog. */
+const HISTORY_DISK_READ_CONCURRENCY = 4
 /** Ownership probe before resuming; a wrong window answers `false` quickly. */
 const HISTORY_OWNER_TIMEOUT_MS = 5_000
 /** Keep the phone list responsive even with many open workspaces. */
@@ -856,8 +892,13 @@ export class MobileGatewayHub {
       case 'listSessionHistory':
         return this._listSessionHistory()
       case 'openSession': {
-        const p = frame.payload as { durableId: string; windowId?: number }
-        return this._openSession(p.durableId, p.windowId)
+        const p = frame.payload as {
+          durableId: string
+          windowId?: number
+          folder?: string
+          authority?: string
+        }
+        return this._openSession(p.durableId, p.windowId, p.folder, p.authority)
       }
       default:
         // Unknown kinds still reach here through a newer phone; payload carried
@@ -931,52 +972,11 @@ export class MobileGatewayHub {
     workspace: { folder: string; authority?: string }
     initialPrompt?: string
   }): Promise<CommandOutcome> {
-    const open = this._host?.listOpenWorkspaces() ?? []
-    const recent = (await this._host?.listRecentWorkspaces().catch(() => [])) ?? []
-    const openMatch = open.find((candidate) => isSameWorkspace(candidate, payload.workspace))
-    const recentMatch = recent.find((candidate) => isSameWorkspace(candidate, payload.workspace))
-    const target = openMatch ?? recentMatch
-    if (target === undefined) return failOutcome('workspace_not_open')
-
-    const authority = payload.workspace.authority ?? target.authority
-
     const deadline = Date.now() + NEW_SESSION_TIMEOUT_MS
-    let windowId = openMatch?.windowId
-    if (windowId === undefined || !this._windows.has(windowId)) {
-      if (openMatch === undefined) {
-        const host = this._host
-        try {
-          if (host !== undefined) {
-            await withTimeout(
-              host.openWorkspace(payload.workspace.folder, authority),
-              Math.max(1, deadline - Date.now()),
-            )
-          }
-        } catch (err) {
-          this._logger.warn(`mobile newSession openWorkspace failed: ${String(err)}`)
-          return failOutcome('workspace_not_open')
-        }
-      }
-      windowId = await this._host?.waitForBridge(
-        payload.workspace.folder,
-        authority,
-        Math.max(0, deadline - Date.now()),
-      )
-    }
-    if (windowId === undefined) return failOutcome('workspace_not_open')
-    const entry = this._windows.get(windowId)
-    if (entry === undefined) return failOutcome('workspace_not_open')
-
-    // `waitForBridge` only proves main registered the reverse channel. A fresh
-    // window's renderer registers its side after the bundle boots, so a command
-    // sent now is dropped by the transport and never settles; ping until the
-    // renderer actually answers. Also covers a renderer reload.
-    if (!(await this._ensureWindowReady(entry, deadline))) {
-      this._logger.warn(
-        `mobile newSession renderer not ready within ${NEW_SESSION_TIMEOUT_MS}ms (window=${windowId})`,
-      )
-      return failOutcome('workspace_not_open')
-    }
+    const opened = await this._openWorkspaceWindow(payload.workspace, deadline)
+    if (!opened.ok) return { ok: false, error: opened.error }
+    const { entry, authority } = opened
+    const windowId = entry.windowId
 
     try {
       const result = await callWithToken(
@@ -1005,6 +1005,64 @@ export class MobileGatewayHub {
       this._logger.warn(`mobile newSession failed: ${String(err)}`)
       return failOutcome('internal')
     }
+  }
+
+  /**
+   * Bring a workspace's window to the foreground (when needed), wait for main
+   * to register its reverse channel and for the renderer to answer, then hand
+   * back the ready window entry. Shared by `newSession` and the history
+   * `openSession` fallback so both paths behave identically.
+   */
+  private async _openWorkspaceWindow(
+    workspace: { folder: string; authority?: string },
+    deadline: number,
+  ): Promise<
+    { ok: true; entry: WindowEntry; authority: string | undefined } | OpenWorkspaceFailure
+  > {
+    const open = this._host?.listOpenWorkspaces() ?? []
+    const recent = (await this._host?.listRecentWorkspaces().catch(() => [])) ?? []
+    const openMatch = open.find((candidate) => isSameWorkspace(candidate, workspace))
+    const recentMatch = recent.find((candidate) => isSameWorkspace(candidate, workspace))
+    const target = openMatch ?? recentMatch
+    if (target === undefined) return { ok: false, error: 'workspace_not_open' }
+
+    const authority = workspace.authority ?? target.authority
+    let windowId = openMatch?.windowId
+    if (windowId === undefined || !this._windows.has(windowId)) {
+      if (openMatch === undefined) {
+        const host = this._host
+        if (host === undefined) return { ok: false, error: 'workspace_not_open' }
+        try {
+          await withTimeout(
+            host.openWorkspace(workspace.folder, authority),
+            Math.max(1, deadline - Date.now()),
+          )
+        } catch (err) {
+          this._logger.warn(`mobile openWorkspace failed: ${String(err)}`)
+          return { ok: false, error: 'workspace_not_open' }
+        }
+      }
+      windowId = await this._host?.waitForBridge(
+        workspace.folder,
+        authority,
+        Math.max(0, deadline - Date.now()),
+      )
+    }
+    if (windowId === undefined) return { ok: false, error: 'workspace_not_open' }
+    const entry = this._windows.get(windowId)
+    if (entry === undefined) return { ok: false, error: 'workspace_not_open' }
+
+    // `waitForBridge` only proves main registered the reverse channel. A fresh
+    // window's renderer registers its side after the bundle boots, so a command
+    // sent now is dropped by the transport and never settles; ping until the
+    // renderer actually answers. Also covers a renderer reload.
+    if (!(await this._ensureWindowReady(entry, deadline))) {
+      this._logger.warn(
+        `mobile renderer not ready within the command deadline (window=${windowId})`,
+      )
+      return { ok: false, error: 'workspace_not_open' }
+    }
+    return { ok: true, entry, authority }
   }
 
   /**
@@ -1160,45 +1218,78 @@ export class MobileGatewayHub {
   }
 
   private async _listSessionHistory(): Promise<CommandOutcome> {
+    const openWorkspaceByWindow = new Map<number, MobileGatewayHostWorkspace>()
+    for (const workspace of this._host?.listOpenWorkspaces() ?? []) {
+      if (workspace.windowId !== undefined) openWorkspaceByWindow.set(workspace.windowId, workspace)
+    }
     const windows = [...this._windows.values()]
-    const lists = await Promise.all(
+    // Open windows stay authoritative and fresh: they read the renderer's
+    // in-memory mirror, which also sees history writes that are still inside
+    // the renderer's write debounce. When a renderer cannot answer (still
+    // booting, timed out, reloading), fall back to that workspace's bucket so
+    // its rows do not vanish from the catalog.
+    const openLists = await Promise.all(
       windows.map(async (entry) => {
+        const readFallback = async (reason: string): Promise<MobileSessionHistoryEntry[]> => {
+          const workspace = openWorkspaceByWindow.get(entry.windowId)
+          if (workspace === undefined) return []
+          this._logger.warn(
+            `mobile history list window ${entry.windowId} ${reason}; reading its bucket instead`,
+          )
+          return this._readWorkspaceHistory(workspace)
+        }
         try {
           // A window registered before its renderer booted cannot answer; give
           // it the same short readiness window as the inbox snapshot.
           if (
             !(await this._ensureWindowReady(entry, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS))
           ) {
-            return [] as MobileSessionHistoryEntry[]
+            return await readFallback('renderer not ready')
           }
           const rows = await callWithToken(
             (token) => entry.bridge.listSessionHistory(token),
             HISTORY_LIST_TIMEOUT_MS,
           )
           return rows
-            .map((row) => this._toProtocolHistoryEntry(entry, row))
+            .map((row) =>
+              this._toProtocolHistoryEntry(row, {
+                windowId: entry.windowId,
+                workspaceName: this._workspaceName(entry),
+              }),
+            )
             .filter((row): row is MobileSessionHistoryEntry => row !== undefined)
         } catch (err) {
-          this._logger.warn(`mobile history list window ${entry.windowId} failed: ${String(err)}`)
-          return [] as MobileSessionHistoryEntry[]
+          return await readFallback(`failed: ${String(err)}`)
         }
       }),
     )
 
+    const diskHistories = await this._readClosedWorkspaceHistories()
+
     // Two windows on the same workspace each keep their own history bucket.
-    // Keep one row per durable id; a pinned row or the freshest timestamp wins.
+    // Keep one row per durable id; a pinned row or the freshest timestamp wins
+    // among open windows, the same rule dedupes disk copies, and an open row
+    // always beats the disk copy.
     const byDurable = new Map<string, MobileSessionHistoryEntry>()
-    for (const rows of lists) {
+    for (const rows of openLists) {
       for (const row of rows) {
         const existing = byDurable.get(row.durableId)
-        if (
-          existing === undefined ||
-          (row.pinned === true && existing.pinned !== true) ||
-          (row.pinned === existing.pinned && row.lastUsedAt > existing.lastUsedAt)
-        ) {
+        if (existing === undefined || preferHistoryRow(row, existing)) {
           byDurable.set(row.durableId, row)
         }
       }
+    }
+    const diskByDurable = new Map<string, MobileSessionHistoryEntry>()
+    for (const { rows } of diskHistories) {
+      for (const row of rows) {
+        const existing = diskByDurable.get(row.durableId)
+        if (existing === undefined || preferHistoryRow(row, existing)) {
+          diskByDurable.set(row.durableId, row)
+        }
+      }
+    }
+    for (const [durableId, row] of diskByDurable) {
+      if (!byDurable.has(durableId)) byDurable.set(durableId, row)
     }
     const result = [...byDurable.values()]
       .sort(
@@ -1209,13 +1300,93 @@ export class MobileGatewayHub {
     return { ok: true, result }
   }
 
+  /** Recent workspaces that no open window covers, capped by configuration. */
+  private async _closedHistoryWorkspaces(): Promise<MobileGatewayHostWorkspace[]> {
+    const host = this._host
+    if (host === undefined) return []
+    const recent = await host.listRecentWorkspaces().catch(() => [])
+    const open = host.listOpenWorkspaces()
+    const limit = this._historyWorkspaceLimit()
+    const targets: MobileGatewayHostWorkspace[] = []
+    for (const workspace of recent) {
+      if (targets.length >= limit) break
+      if (open.some((candidate) => isSameWorkspace(candidate, workspace))) continue
+      targets.push(workspace)
+    }
+    return targets
+  }
+
+  private _historyWorkspaceLimit(): number {
+    const raw = this._host?.sessionHistoryWorkspaceLimit()
+    if (raw === undefined || !Number.isInteger(raw) || raw < 1) {
+      return MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT
+    }
+    return Math.min(raw, MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT)
+  }
+
+  /**
+   * Read every closed candidate's bucket with bounded concurrency. Both the
+   * catalog and the deep-link reverse lookup consume this shape.
+   */
+  private async _readClosedWorkspaceHistories(): Promise<ClosedWorkspaceHistory[]> {
+    const workspaces = await this._closedHistoryWorkspaces()
+    const results = new Array<ClosedWorkspaceHistory | undefined>(workspaces.length)
+    await mapWithConcurrency(
+      workspaces,
+      HISTORY_DISK_READ_CONCURRENCY,
+      async (workspace, index) => {
+        results[index] = { workspace, rows: await this._readWorkspaceHistory(workspace) }
+      },
+    )
+    return results.filter((value): value is ClosedWorkspaceHistory => value !== undefined)
+  }
+
+  /** Find the closed workspace whose persisted bucket owns a durable id. */
+  private async _findClosedWorkspaceForSession(
+    durableId: string,
+  ): Promise<MobileGatewayHostWorkspace | undefined> {
+    const histories = await this._readClosedWorkspaceHistories()
+    for (const { workspace, rows } of histories) {
+      if (rows.some((row) => row.durableId === durableId)) return workspace
+    }
+    return undefined
+  }
+
+  private async _readWorkspaceHistory(
+    workspace: MobileGatewayHostWorkspace,
+  ): Promise<MobileSessionHistoryEntry[]> {
+    const host = this._host
+    if (host === undefined) return []
+    try {
+      const rows = await withTimeout(
+        host.readWorkspaceSessionHistory(workspace),
+        HISTORY_DISK_READ_TIMEOUT_MS,
+      )
+      return rows
+        .map((row) =>
+          this._toProtocolHistoryEntry(row, {
+            workspaceName: workspace.name,
+            folder: workspace.folder,
+            ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),
+          }),
+        )
+        .filter((row): row is MobileSessionHistoryEntry => row !== undefined)
+    } catch (err) {
+      this._logger.warn(`mobile history read for ${workspace.name} failed: ${String(err)}`)
+      return []
+    }
+  }
+
   private _openSession(
     durableId: string,
     windowIdHint: number | undefined,
+    folder: string | undefined,
+    authority: string | undefined,
   ): Promise<CommandOutcome> {
     const inflight = this._inflightOpenSessions.get(durableId)
     if (inflight !== undefined) return inflight
-    const promise = this._openSessionOnce(durableId, windowIdHint)
+    const deadline = Date.now() + OPEN_SESSION_TIMEOUT_MS
+    const promise = this._openSessionOnce(durableId, windowIdHint, folder, authority, deadline)
     this._inflightOpenSessions.set(durableId, promise)
     const release = (): void => {
       if (this._inflightOpenSessions.get(durableId) === promise) {
@@ -1229,8 +1400,11 @@ export class MobileGatewayHub {
   private async _openSessionOnce(
     durableId: string,
     windowIdHint: number | undefined,
+    folder: string | undefined,
+    authority: string | undefined,
+    deadline: number,
   ): Promise<CommandOutcome> {
-    const live = await this._findLiveRef(durableId)
+    const live = await this._findLiveRef(durableId, deadline)
     if (live !== undefined) return { ok: true, result: { ref: live } }
 
     const candidates = [...this._windows.values()]
@@ -1238,7 +1412,7 @@ export class MobileGatewayHub {
     const owners = (
       await Promise.all(
         candidates.map(async (entry) =>
-          (await this._windowHasHistory(entry, durableId)) ? entry : undefined,
+          (await this._windowHasHistory(entry, durableId, deadline)) ? entry : undefined,
         ),
       )
     ).filter((entry): entry is WindowEntry => entry !== undefined)
@@ -1249,11 +1423,30 @@ export class MobileGatewayHub {
         owners.unshift(hint)
       }
     }
-    if (owners.length === 0) return failOutcome('session_not_found')
+    if (owners.length === 0) {
+      // A catalog row from a closed workspace carries its folder. Deep links and
+      // refreshed pages may not: reverse-look the durable id in the same closed
+      // workspace buckets the catalog reads. Reuse the new-session open flow so
+      // the phone can resume without first opening the workspace by hand.
+      const target =
+        folder !== undefined
+          ? { folder, ...(authority !== undefined ? { authority } : {}) }
+          : await this._findClosedWorkspaceForSession(durableId)
+      if (target === undefined) return failOutcome('session_not_found')
+      const opened = await this._openWorkspaceWindow(target, deadline)
+      if (!opened.ok) return { ok: false, error: opened.error }
+      // A fresh renderer may still be swapping from the empty/GLOBAL bucket to
+      // this workspace's bucket. Poll until the row becomes visible instead of
+      // resuming before the history exists.
+      if (!(await this._waitForHistory(opened.entry, durableId, deadline))) {
+        return failOutcome('session_not_found')
+      }
+      return this._openSessionInWindow(opened.entry, durableId, deadline)
+    }
 
     let lastError: MobileErrorCode | undefined
     for (const target of owners) {
-      const outcome = await this._openSessionInWindow(target, durableId)
+      const outcome = await this._openSessionInWindow(target, durableId, deadline)
       if (outcome.ok) return outcome
       lastError = outcome.error
       // A stale hint or a window that lost its workspace can fail while another
@@ -1271,11 +1464,12 @@ export class MobileGatewayHub {
   private async _openSessionInWindow(
     target: WindowEntry,
     durableId: string,
+    deadline: number,
   ): Promise<CommandOutcome> {
     try {
       const result = await callWithToken(
         (token) => target.bridge.openSession(durableId, token),
-        OPEN_SESSION_TIMEOUT_MS,
+        Math.max(1, deadline - Date.now()),
       )
       if (!result.ok) return { ok: false, error: result.code }
       if (!isBridgeNewSessionResult(result.value)) {
@@ -1297,11 +1491,33 @@ export class MobileGatewayHub {
   }
 
   /**
+   * Wait for a freshly opened window's history service to publish this row.
+   * Keeps polling on the caller's shared budget so the whole command still
+   * fits inside the phone's timeout.
+   */
+  private async _waitForHistory(
+    entry: WindowEntry,
+    durableId: string,
+    deadline: number,
+  ): Promise<boolean> {
+    while (Date.now() < deadline) {
+      if (await this._windowHasHistory(entry, durableId, deadline)) return true
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) return false
+      await delay(Math.min(HISTORY_OPEN_POLL_INTERVAL_MS, remaining))
+    }
+    return false
+  }
+
+  /**
    * A resumable row may already be resident somewhere. Prefer the inbox cache
    * maintained by streaming; when no phone subscribed, ask each window directly
    * so a resume never duplicates an agent session in another window.
    */
-  private async _findLiveRef(durableId: string): Promise<MobileSessionRef | undefined> {
+  private async _findLiveRef(
+    durableId: string,
+    deadline: number,
+  ): Promise<MobileSessionRef | undefined> {
     for (const entry of this._inboxState.values()) {
       const ref = entry.summary.ref
       if (ref.durableId === durableId) return ref
@@ -1310,14 +1526,13 @@ export class MobileGatewayHub {
     const lists = await Promise.all(
       windows.map(async (entry) => {
         try {
-          if (
-            !(await this._ensureWindowReady(entry, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS))
-          ) {
+          const readyDeadline = Math.min(deadline, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS)
+          if (!(await this._ensureWindowReady(entry, readyDeadline))) {
             return undefined
           }
           return await callWithToken(
             (token) => entry.bridge.listSessions(token),
-            HISTORY_OWNER_TIMEOUT_MS,
+            Math.max(1, Math.min(HISTORY_OWNER_TIMEOUT_MS, deadline - Date.now())),
           )
         } catch {
           return undefined
@@ -1336,14 +1551,19 @@ export class MobileGatewayHub {
     return undefined
   }
 
-  private async _windowHasHistory(entry: WindowEntry, durableId: string): Promise<boolean> {
+  private async _windowHasHistory(
+    entry: WindowEntry,
+    durableId: string,
+    deadline: number,
+  ): Promise<boolean> {
     try {
-      if (!(await this._ensureWindowReady(entry, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS))) {
+      const readyDeadline = Math.min(deadline, Date.now() + HISTORY_WINDOW_READY_TIMEOUT_MS)
+      if (!(await this._ensureWindowReady(entry, readyDeadline))) {
         return false
       }
       return await callWithToken(
         (token) => entry.bridge.hasSessionHistory(durableId, token),
-        HISTORY_OWNER_TIMEOUT_MS,
+        Math.max(1, Math.min(HISTORY_OWNER_TIMEOUT_MS, deadline - Date.now())),
       )
     } catch {
       return false
@@ -1351,8 +1571,8 @@ export class MobileGatewayHub {
   }
 
   private _toProtocolHistoryEntry(
-    entry: WindowEntry,
     row: MobileBridgeSessionHistoryEntry,
+    context: HistoryEntryContext,
   ): MobileSessionHistoryEntry | undefined {
     const durableId = clampText(row.durableId, MAX_ID_LENGTH)
     const agentId = clampText(row.agentId, MAX_ID_LENGTH)
@@ -1360,9 +1580,21 @@ export class MobileGatewayHub {
     // guard; drop it here instead.
     if (durableId === '' || agentId === '') return undefined
     if (!Number.isFinite(row.createdAt) || !Number.isFinite(row.lastUsedAt)) return undefined
+    // `folder` and `authority` are identities, not display text: truncating
+    // them would make the phone open or label the wrong workspace. Drop an
+    // over-long hint instead, matching the protocol's payload limits.
+    const folder =
+      context.folder !== undefined && context.folder.length <= MAX_SERVER_FRAME_BYTES
+        ? context.folder
+        : undefined
+    const rawAuthority = row.authority ?? context.authority
+    const authority =
+      rawAuthority !== undefined && rawAuthority.length <= MAX_WORKSPACE_NAME_LENGTH
+        ? rawAuthority
+        : undefined
     return {
       durableId,
-      windowId: entry.windowId,
+      ...(context.windowId !== undefined ? { windowId: context.windowId } : {}),
       agentId,
       ...(row.agentName !== undefined
         ? { agentName: clampText(row.agentName, MAX_TITLE_LENGTH) }
@@ -1371,11 +1603,10 @@ export class MobileGatewayHub {
       ...(row.firstPrompt !== undefined
         ? { firstPrompt: clampText(row.firstPrompt, MAX_HISTORY_PROMPT_LENGTH) }
         : {}),
-      workspaceName: this._workspaceName(entry),
+      workspaceName: clampText(context.workspaceName, MAX_WORKSPACE_NAME_LENGTH),
+      ...(folder !== undefined ? { folder } : {}),
       ...(row.cwd !== undefined ? { cwd: clampText(row.cwd, MAX_WORKSPACE_NAME_LENGTH) } : {}),
-      ...(row.authority !== undefined
-        ? { authority: clampText(row.authority, MAX_WORKSPACE_NAME_LENGTH) }
-        : {}),
+      ...(authority !== undefined ? { authority } : {}),
       createdAt: row.createdAt,
       lastUsedAt: row.lastUsedAt,
       ...(row.pinned === true ? { pinned: true } : {}),
@@ -1885,6 +2116,19 @@ export function isSameWorkspace(
   if (first.scheme !== second.scheme) return false
   if ((a.authority ?? first.authority) !== (b.authority ?? second.authority)) return false
   return arePathsEqual(first.fsPath, second.fsPath, HOST_PLATFORM)
+}
+
+/** Shared ordering rule for duplicate history rows (pinned first, then freshest). */
+function preferHistoryRow(
+  candidate: MobileSessionHistoryEntry,
+  existing: MobileSessionHistoryEntry,
+): boolean {
+  if (candidate.pinned === true && existing.pinned !== true) return true
+  return candidate.pinned === existing.pinned && candidate.lastUsedAt > existing.lastUsedAt
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms))
 }
 
 async function mapWithConcurrency<T>(

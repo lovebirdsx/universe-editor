@@ -215,14 +215,12 @@ function sameState(a: MobileGatewayConfigState, b: MobileGatewayConfigState): bo
 }
 
 function sameConfig(a: MobileGatewayConfig, b: MobileGatewayConfig): boolean {
+  // Serializing both sides keeps this comparison exhaustive: new fields are
+  // picked up automatically instead of silently escaping the external-edit
+  // check and being overwritten by the next update.
   return (
-    a.enabled === b.enabled &&
-    a.bind === b.bind &&
-    a.lanAddress === b.lanAddress &&
-    a.port === b.port &&
-    a.vapidSubject === b.vapidSubject &&
-    a.allowedHosts.length === b.allowedHosts.length &&
-    a.allowedHosts.every((value, index) => value === b.allowedHosts[index])
+    JSON.stringify(serializeMobileGatewayConfig(a)) ===
+    JSON.stringify(serializeMobileGatewayConfig(b))
   )
 }
 

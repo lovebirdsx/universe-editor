@@ -30,6 +30,12 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { PersistedStateBase } from '../persistedStateBase.js'
+import {
+  ACP_SESSION_HISTORY_ACCEPTED_SCHEMA_VERSIONS,
+  ACP_SESSION_HISTORY_SCHEMA_VERSION,
+  isDescendantOrEqualPath,
+  isForeignWorkspaceHistoryEntry,
+} from '../../../../shared/mobileGateway/sessionHistoryFilter.js'
 import { IAcpSideTaskIndexService } from './acpSideTaskIndex.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { AcpPlanEntry } from './acpSessionModel.js'
@@ -497,8 +503,7 @@ export function isDescendantOrEqual(
   parent: string | undefined,
   child: string | undefined,
 ): boolean {
-  if (parent === undefined || child === undefined) return false
-  return uriIdentity.relativePathUnder(parent, child) !== null
+  return isDescendantOrEqualPath(uriIdentity, parent, child)
 }
 
 /**
@@ -543,11 +548,7 @@ export function isForeignWorkspaceSession(
   currentAuthority: string | undefined,
   uriIdentity: IUriIdentityService,
 ): boolean {
-  if (entry.cwd === undefined || currentCwd === undefined) return false
-  if (!isDescendantOrEqual(uriIdentity, currentCwd, entry.cwd)) return true
-  // Past this point the cwd lies inside the open folder, so a legacy row that
-  // predates persisted authorities belongs to this window's host.
-  return entry.authority !== undefined && entry.authority !== currentAuthority
+  return isForeignWorkspaceHistoryEntry(entry, currentCwd, currentAuthority, uriIdentity)
 }
 
 /** Legacy rows created before the hydrate sweep persisted `authority` lack the
@@ -671,7 +672,7 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 6
+const SCHEMA_VERSION = ACP_SESSION_HISTORY_SCHEMA_VERSION
 const MAX_ENTRIES = 100
 /**
  * Bound on remembered tombstones. A user-deleted session must never be rebuilt
@@ -1469,14 +1470,7 @@ export class AcpSessionHistoryService
     if (typeof raw !== 'object' || raw === null) return undefined
     const o = raw as PersistedShape
     if (!Array.isArray(o.entries)) return undefined
-    if (
-      o.schemaVersion !== SCHEMA_VERSION &&
-      o.schemaVersion !== 5 &&
-      o.schemaVersion !== 4 &&
-      o.schemaVersion !== 3 &&
-      o.schemaVersion !== 2 &&
-      o.schemaVersion !== 1
-    ) {
+    if (!ACP_SESSION_HISTORY_ACCEPTED_SCHEMA_VERSIONS.includes(o.schemaVersion)) {
       this._logger.warn(`ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
       return undefined
     }

@@ -21,6 +21,12 @@ export type SessionsClient = Pick<
   'listSessionHistory' | 'resumeSession' | 'getInboxStore' | 'getSocketStateStore'
 >
 
+/** Workspace context carried alongside a catalog row opened from a closed workspace. */
+export interface SessionWorkspaceHint {
+  readonly folder: string
+  readonly authority?: string
+}
+
 export interface SessionsPageProps {
   readonly client: SessionsClient
   /** False while the page is kept mounted behind an open session. */
@@ -28,7 +34,7 @@ export interface SessionsPageProps {
   readonly notice?: string | undefined
   readonly onDismissNotice?: (() => void) | undefined
   readonly onBack: () => void
-  readonly onOpenSessionRef: (ref: MobileSessionRef) => void
+  readonly onOpenSessionRef: (ref: MobileSessionRef, workspaceHint?: SessionWorkspaceHint) => void
 }
 
 const FILTERS: readonly { readonly id: SessionCatalogFilter; readonly label: string }[] = [
@@ -121,11 +127,18 @@ export function SessionsPage({
     setOpeningKey(row.key)
     setError(undefined)
     void client
-      .resumeSession(durableId, row.windowId)
+      .resumeSession(durableId, row.windowId, row.folder, row.authority)
       .then((result) => {
         if (!aliveRef.current) return
         setOpeningKey(undefined)
-        onOpenSessionRef(result.ref)
+        if (row.folder === undefined) {
+          onOpenSessionRef(result.ref)
+        } else {
+          onOpenSessionRef(result.ref, {
+            folder: row.folder,
+            ...(row.authority !== undefined ? { authority: row.authority } : {}),
+          })
+        }
       })
       .catch((err: unknown) => {
         if (!aliveRef.current) return
@@ -315,6 +328,11 @@ function SessionCatalogRowView({ row, disabled, opening, onOpen }: SessionCatalo
             <span className="session-card__workspace">{row.workspaceName}</span>
           )}
         </span>
+        {!row.live && row.windowId === undefined && row.folder !== undefined && (
+          <span className="sessions-row__hint" data-testid="sessions-row-open-hint">
+            {strings.sessionsWillOpenWorkspace}
+          </span>
+        )}
         {badges.length > 0 && (
           <span className="session-card__badges">
             {badges.map((badge) => (

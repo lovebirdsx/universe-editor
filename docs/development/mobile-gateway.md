@@ -10,7 +10,8 @@
 > `image`、文件走 `resource_link`，时间线展示缩略图与文件卡）；**M7 Fork / Rewind / 侧边任务已落地**
 > （协议 v6：非激活分叉与恢复、回退 dry-run 预览、侧边任务列表 / 打开 / 级联删除）；
 > **M8 会话目录已落地**（协议 v7：历史会话搜索与恢复）；**M9 受信设备已落地**（协议 v9：
-> PC 逐设备授权高风险操作，默认关闭）。
+> PC 逐设备授权高风险操作，默认关闭）；**M10 会话目录覆盖最近工作区已落地**（协议 v10：
+> 历史目录同时读取已打开窗口与最近打开工作区的落盘历史，点击未打开工作区的行会自动开窗恢复）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -20,23 +21,23 @@
 手机是 PC 编辑器里 ACP agent 会话的**遥控器**：不跑 agent、不存会话、不做第二套 agent 运行时。
 PC 编辑器关闭时手机显示离线，不接管执行。
 
-| 维度 | 定位 |
-|---|---|
-| 形态 | PWA，由 PC 编辑器内置网关提供页面；手机浏览器打开后「添加到主屏幕」 |
-| 数据归属 | 会话、agent 进程、工作区全部留在 PC；手机只持设备凭据与本地缓存 |
-| 核心场景 | 离开工位后收到审批/提问，远程看一眼、批一下、发一句话 |
-| 离线语义 | PC 编辑器不在线即整体离线，手机不做离线队列与本地执行 |
+| 维度     | 定位                                                                |
+| -------- | ------------------------------------------------------------------- |
+| 形态     | PWA，由 PC 编辑器内置网关提供页面；手机浏览器打开后「添加到主屏幕」 |
+| 数据归属 | 会话、agent 进程、工作区全部留在 PC；手机只持设备凭据与本地缓存     |
+| 核心场景 | 离开工位后收到审批/提问，远程看一眼、批一下、发一句话               |
+| 离线语义 | PC 编辑器不在线即整体离线，手机不做离线队列与本地执行               |
 
 **第一期界面**
 
-| 界面 | 内容 |
-|---|---|
-| 收件箱 | 按待审批 / 运行中 / 已完成 / 出错分组；显示 agent、工作区、PC 在线状态 |
-| 会话页 | 摘要优先；工具调用默认折叠；diff 只读；可发 prompt、停止、切换模式与模型 |
-| 审批底部卡片 | 权限请求 + elicitation；先到先得，双端只有一次生效 |
-| 新建会话 | 选 agent、工作区、初始 prompt |
-| 输入附件 | 会话输入框可拍照 / 选图 / 选文件；图片作为 ACP `image`，普通文件以 PC 本地 `file:` URI 交给 agent |
-| 通知 | 仅「等待审批 / 提问 / 完成 / 出错」四类 |
+| 界面         | 内容                                                                                              |
+| ------------ | ------------------------------------------------------------------------------------------------- |
+| 收件箱       | 按待审批 / 运行中 / 已完成 / 出错分组；显示 agent、工作区、PC 在线状态                            |
+| 会话页       | 摘要优先；工具调用默认折叠；diff 只读；可发 prompt、停止、切换模式与模型                          |
+| 审批底部卡片 | 权限请求 + elicitation；先到先得，双端只有一次生效                                                |
+| 新建会话     | 选 agent、工作区、初始 prompt                                                                     |
+| 输入附件     | 会话输入框可拍照 / 选图 / 选文件；图片作为 ACP `image`，普通文件以 PC 本地 `file:` URI 交给 agent |
+| 通知         | 仅「等待审批 / 提问 / 完成 / 出错」四类                                                           |
 
 **第二期**：语音输入、多台 PC 切换、中转服务器（脱离局域网/ Tailscale）。
 
@@ -86,15 +87,15 @@ main 侧不直接读 `AcpSession`。
 
 **数据源**（全部来自 renderer 现有 observable）：
 
-| 数据 | 来源 |
-|---|---|
-| 会话集合与活跃会话 | `IAcpSessionService.sessions` / `activeSession` |
-| 时间线、消息、工具调用 | `IAcpSession.timeline` / `messages` / `toolCalls` |
-| 计划 | `IAcpSession.plan` |
-| 状态与展示状态 | `status` + `computeSessionDisplayStatus`（`session/acpSessionStatus.ts`） |
-| 待审批 / 待提问 | `pendingPermission` / `pendingElicitation` |
-| 配置、用量、只读、路径 | `configOptions` / `usage` / `readOnly` / `cwd` / `authority` |
-| 收件箱分组 | `statusBucketFor`（`session/acpSessionFilterService.ts`） |
+| 数据                   | 来源                                                                      |
+| ---------------------- | ------------------------------------------------------------------------- |
+| 会话集合与活跃会话     | `IAcpSessionService.sessions` / `activeSession`                           |
+| 时间线、消息、工具调用 | `IAcpSession.timeline` / `messages` / `toolCalls`                         |
+| 计划                   | `IAcpSession.plan`                                                        |
+| 状态与展示状态         | `status` + `computeSessionDisplayStatus`（`session/acpSessionStatus.ts`） |
+| 待审批 / 待提问        | `pendingPermission` / `pendingElicitation`                                |
+| 配置、用量、只读、路径 | `configOptions` / `usage` / `readOnly` / `cwd` / `authority`              |
+| 收件箱分组             | `statusBucketFor`（`session/acpSessionFilterService.ts`）                 |
 
 `statusBucketFor` 已把展示状态折叠为四档，正好对应收件箱四组：
 `input_needed` → 待审批，`in_progress` → 运行中，`completed` → 已完成，`failed` → 出错。
@@ -110,22 +111,22 @@ main 侧不直接读 `AcpSession`。
 
 **节流**：
 
-| 层级 | 节奏 | 说明 |
-|---|---|---|
+| 层级     | 节奏                  | 说明                                                                                |
+| -------- | --------------------- | ----------------------------------------------------------------------------------- |
 | 会话状态 | 已有 16ms / 64ms 批次 | 重负载流使用 64ms（`acpSession.ts` 的 `STREAM_BATCH_MS` / `STREAM_HEAVY_BATCH_MS`） |
-| 桥合帧 | 约 50ms 一帧 | 重流（replay / 大量 append）放宽到约 100ms |
-| 单帧体量 | < 1MB | `MAX_SERVER_FRAME_BYTES`；超限快照丢弃最早 timeline 项并标记 `truncated` |
-| 出站队列 | 每连接 1MB | `ws.bufferedAmount` 超限时丢弃中间增量，回 `resync_required{scope:'session'}` |
+| 桥合帧   | 约 50ms 一帧          | 重流（replay / 大量 append）放宽到约 100ms                                          |
+| 单帧体量 | < 1MB                 | `MAX_SERVER_FRAME_BYTES`；超限快照丢弃最早 timeline 项并标记 `truncated`            |
+| 出站队列 | 每连接 1MB            | `ws.bufferedAmount` 超限时丢弃中间增量，回 `resync_required{scope:'session'}`       |
 
 **大内容裁剪**：
 
-| 内容 | 主列表下发 | 详情按需 |
-|---|---|---|
-| 工具调用 | preview（≤1KB）+ `hasDetail` + diff 增删行数 | `getToolCallDetail`，上限复用 `acpContentLimits.ts` |
-| 消息 | 正文 + `hasNonText`；`memoryTrimmed: true` 时无正文 | M2 无消息详情命令 |
-| diff | 统计信息 | M2 无 diff 详情命令 |
-| 附件 | 元数据（id / kind / name / size） | 手机按 id 经 HTTP 懒加载，WS 不下发 base64 |
-| 已被内存裁剪的内容 | `memoryTrimmed: true` | 显示「内容已释放」，不重新拉取 |
+| 内容               | 主列表下发                                          | 详情按需                                            |
+| ------------------ | --------------------------------------------------- | --------------------------------------------------- |
+| 工具调用           | preview（≤1KB）+ `hasDetail` + diff 增删行数        | `getToolCallDetail`，上限复用 `acpContentLimits.ts` |
+| 消息               | 正文 + `hasNonText`；`memoryTrimmed: true` 时无正文 | M2 无消息详情命令                                   |
+| diff               | 统计信息                                            | M2 无 diff 详情命令                                 |
+| 附件               | 元数据（id / kind / name / size）                   | 手机按 id 经 HTTP 懒加载，WS 不下发 base64          |
+| 已被内存裁剪的内容 | `memoryTrimmed: true`                               | 显示「内容已释放」，不重新拉取                      |
 
 ## 4. 协议
 
@@ -134,7 +135,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 9`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 10`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -144,7 +145,9 @@ main 侧不直接读 `AcpSession`。
 工作区 git 状态（`MobileWorkspaceCandidate.windowId?` / `gitDirty?`）与工具卡的 `startedAt` /
 `durationMs` / `settleReason` / `syntheticDenial`（供手机端「仅消息」尾部当前进展行对齐桌面：
 实时已运行时长、失败原因与上游中断判定）；v9 增加受信设备：`hello_ok.trusted` 与
-`device_trust_changed` 帧）。
+`device_trust_changed` 帧；v10 让会话目录覆盖最近工作区：`MobileSessionHistoryEntry.windowId`
+改为可选并新增 `folder?`，`openSession` payload 新增 `folder?` / `authority?`，网关在目标工作区
+未打开时先自动开窗再恢复）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
@@ -157,45 +160,45 @@ Referer。
 
 **客户端 → 服务端**
 
-| 消息 | 作用 |
-|---|---|
-| `hello` | 协议版本、设备 token、客户端版本、能力 |
-| `subscribe_inbox` / `unsubscribe_inbox` | 订阅或退订收件箱 |
-| `subscribe_session` / `unsubscribe_session` | `{ ref, afterSeq? }`，订阅单个会话 |
-| `command` | `{ requestId, kind, payload, idempotencyKey? }` |
-| `push_subscribe` | `{ subscription:{endpoint,keys}, prefs? }`，注册 Web Push（端点必须命中推送服务允许列表） |
-| `push_unsubscribe` | 注销本设备的 Web Push 订阅 |
-| `set_notification_prefs` | `{ enabled, kinds?, alwaysNotify? }`，按设备保存通知偏好 |
-| `client_state` | `{ visible }`，前台 / 后台声明；前台连接优先收 WS 通知 |
-| `ping` | 心跳，服务端回 `pong` |
+| 消息                                        | 作用                                                                                      |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `hello`                                     | 协议版本、设备 token、客户端版本、能力                                                    |
+| `subscribe_inbox` / `unsubscribe_inbox`     | 订阅或退订收件箱                                                                          |
+| `subscribe_session` / `unsubscribe_session` | `{ ref, afterSeq? }`，订阅单个会话                                                        |
+| `command`                                   | `{ requestId, kind, payload, idempotencyKey? }`                                           |
+| `push_subscribe`                            | `{ subscription:{endpoint,keys}, prefs? }`，注册 Web Push（端点必须命中推送服务允许列表） |
+| `push_unsubscribe`                          | 注销本设备的 Web Push 订阅                                                                |
+| `set_notification_prefs`                    | `{ enabled, kinds?, alwaysNotify? }`，按设备保存通知偏好                                  |
+| `client_state`                              | `{ visible }`，前台 / 后台声明；前台连接优先收 WS 通知                                    |
+| `ping`                                      | 心跳，服务端回 `pong`                                                                     |
 
 **命令 kind（v3 已实现）**：
 
-| 分类 | kind | payload | 说明 |
-|---|---|---|---|
-| 详情 | `getToolCallDetail` | `{ ref, toolCallId }` | 工具调用详情按需拉取 |
-| 会话 | `sendPrompt` | `{ ref, text, attachmentIds? }` | 空文本 + 附件合法；桥在 prompt 被接受后立即返回 |
-| 会话 | `cancelTurn` | `{ ref }` | 停止当前 turn |
-| 审批 | `resolvePermission` | `{ ref, requestId, optionId, feedback? }` | 高风险选项被拒 |
-| 审批 | `cancelPermission` | `{ ref, requestId }` | 取消/关闭待审批卡片 |
-| 审批 | `resolveElicitation` | `{ ref, requestId, action, content? }` | `accept` / `decline` / `cancel` |
-| 配置 | `setConfigOption` | `{ ref, configId, value }` | `string`（select）或 `boolean` |
-| 自动执行 | `pauseAutoResolve` / `resumeAutoResolve` | `{ ref, requestId }` | 暂停 / 继续 plan 倒计时 |
-| 会话管理 | `newSession` | `{ agentId, workspace, initialPrompt? }` | 见 §6 |
-| 会话管理 | `renameSession` | `{ ref, title }` | 会话标题 |
-| 会话管理 | `closeSession` | `{ ref }` | 结束活跃会话并关闭 PC 标签页，保留历史（等价 PC 关标签页） |
-| 会话管理 | `deleteSession` | `{ ref }` | 复用 PC「Delete Agent Session」的 plan → 执行链路 |
-| 分叉 / 回退 | `forkSession` | `{ ref, messageId? }` | 从锚点之前或末尾创建新会话；**不激活 PC** |
-| 分叉 / 回退 | `previewRewind` | `{ ref, messageId }` | 回退 dry-run：只返回文件影响，不修改会话 |
-| 分叉 / 回退 | `rewindSession` | `{ ref, messageId, rewindFiles? }` | 截断到锚点之前；`rewindFiles:false` 保留文件 |
-| 侧边任务 | `createSideTask` | `{ ref, quote? }` | 以父会话历史为上下文创建只读侧边任务 |
-| 侧边任务 | `listSideTasks` | `{ ref }` | 直接子任务（含历史行），只读 |
-| 侧边任务 | `openSideTask` | `{ ref, sideTaskId }` | 非激活恢复；历史行也可打开 |
-| 侧边任务 | `deleteSideTask` | `{ ref, sideTaskId }` | 级联删除该任务及其子树（含历史行） |
-| 枚举 | `listWorkspaces` | `{}` | 打开窗口 ∪ 最近工作区，带 `isOpen`；打开候选带 `windowId`，前 20 个候选尽力探测 `gitDirty`（见 §6） |
-| 枚举 | `listAgents` | `{}` | 由第一个已注册窗口桥返回 |
-| 会话目录 | `listSessionHistory` | `{}` | 所有已打开窗口的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
-| 会话目录 | `openSession` | `{ durableId, windowId? }` | 按 durable id 非激活恢复历史会话；带幂等键 |
+| 分类        | kind                                     | payload                                         | 说明                                                                                                              |
+| ----------- | ---------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 详情        | `getToolCallDetail`                      | `{ ref, toolCallId }`                           | 工具调用详情按需拉取                                                                                              |
+| 会话        | `sendPrompt`                             | `{ ref, text, attachmentIds? }`                 | 空文本 + 附件合法；桥在 prompt 被接受后立即返回                                                                   |
+| 会话        | `cancelTurn`                             | `{ ref }`                                       | 停止当前 turn                                                                                                     |
+| 审批        | `resolvePermission`                      | `{ ref, requestId, optionId, feedback? }`       | 高风险选项被拒                                                                                                    |
+| 审批        | `cancelPermission`                       | `{ ref, requestId }`                            | 取消/关闭待审批卡片                                                                                               |
+| 审批        | `resolveElicitation`                     | `{ ref, requestId, action, content? }`          | `accept` / `decline` / `cancel`                                                                                   |
+| 配置        | `setConfigOption`                        | `{ ref, configId, value }`                      | `string`（select）或 `boolean`                                                                                    |
+| 自动执行    | `pauseAutoResolve` / `resumeAutoResolve` | `{ ref, requestId }`                            | 暂停 / 继续 plan 倒计时                                                                                           |
+| 会话管理    | `newSession`                             | `{ agentId, workspace, initialPrompt? }`        | 见 §6                                                                                                             |
+| 会话管理    | `renameSession`                          | `{ ref, title }`                                | 会话标题                                                                                                          |
+| 会话管理    | `closeSession`                           | `{ ref }`                                       | 结束活跃会话并关闭 PC 标签页，保留历史（等价 PC 关标签页）                                                        |
+| 会话管理    | `deleteSession`                          | `{ ref }`                                       | 复用 PC「Delete Agent Session」的 plan → 执行链路                                                                 |
+| 分叉 / 回退 | `forkSession`                            | `{ ref, messageId? }`                           | 从锚点之前或末尾创建新会话；**不激活 PC**                                                                         |
+| 分叉 / 回退 | `previewRewind`                          | `{ ref, messageId }`                            | 回退 dry-run：只返回文件影响，不修改会话                                                                          |
+| 分叉 / 回退 | `rewindSession`                          | `{ ref, messageId, rewindFiles? }`              | 截断到锚点之前；`rewindFiles:false` 保留文件                                                                      |
+| 侧边任务    | `createSideTask`                         | `{ ref, quote? }`                               | 以父会话历史为上下文创建只读侧边任务                                                                              |
+| 侧边任务    | `listSideTasks`                          | `{ ref }`                                       | 直接子任务（含历史行），只读                                                                                      |
+| 侧边任务    | `openSideTask`                           | `{ ref, sideTaskId }`                           | 非激活恢复；历史行也可打开                                                                                        |
+| 侧边任务    | `deleteSideTask`                         | `{ ref, sideTaskId }`                           | 级联删除该任务及其子树（含历史行）                                                                                |
+| 枚举        | `listWorkspaces`                         | `{}`                                            | 打开窗口 ∪ 最近工作区，带 `isOpen`；打开候选带 `windowId`，前 20 个候选尽力探测 `gitDirty`（见 §6）               |
+| 枚举        | `listAgents`                             | `{}`                                            | 由第一个已注册窗口桥返回                                                                                          |
+| 会话目录    | `listSessionHistory`                     | `{}`                                            | 已打开窗口 + 最近工作区（前 N 个，N 可配、默认 20）的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
+| 会话目录    | `openSession`                            | `{ durableId, windowId?, folder?, authority? }` | 按 durable id 非激活恢复历史会话；目标工作区未打开时先自动开窗再恢复；带幂等键                                    |
 
 `forkSession` / `previewRewind` / `rewindSession` 的 `messageId` 是 **SDK 消息锚点**
 （`AcpMessage.messageId`，仅 user 消息会有），不是本地的 `AcpMessage.id`；首条用户消息可回退、
@@ -213,25 +216,29 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 `cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` / `newSession` /
 `previewRewind` 30s；`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
 `deleteSideTask` 120s（要等 agent fork RPC 与 resume），`listSideTasks` 10s；
-`listSessionHistory` 8s（逐窗口等桥就绪最多 5s + 桥读取），手机端 20s 覆盖网关最坏耗时；
-`openSession` 每窗口 100s，只有 owner 立即回 `session_not_found` / `forbidden_operation` 才换下一个
-owner，不会把多个 100s 串联，手机端 120s + 5s 宽限仍等得到。超时回
+`listSessionHistory` 8s（逐窗口等桥就绪最多 5s + 桥读取；每个关闭工作区读盘额外 2s 上限），
+手机端 20s 覆盖网关最坏耗时；
+`openSession` 从入口起共用一份 100s 总预算：live 查找、owner 扫描、开窗、等桥、历史轮询与恢复都
+只花剩余时间，只有 owner 立即回 `session_not_found` / `forbidden_operation` 才换下一个 owner，
+不会把多个 100s 串联。无 owner 时先按 payload `folder` 或磁盘反查定位工作区，再开窗、等桥、
+轮询新窗口的 history 就绪后恢复；超时回 `session_not_found` 或 `workspace_not_open`。手机端
+120s + 5s 宽限仍等得到。超时回
 `command_result { ok: false, error: 'internal' }`。手机端 `sendPrompt` 同样是 15s，避免手机先超时重发。
 
 **服务端 → 客户端**
 
-| 消息 | 作用 |
-|---|---|
-| `hello_ok` | 握手成功 |
-| `inbox_snapshot` / `inbox_delta` | 收件箱全量 / 增量 |
-| `session_snapshot` / `session_delta` | 单会话全量 / 增量 |
-| `command_result` | 按 `requestId` 返回成功或错误码 |
-| `notification` | 前台通知 |
-| `resync_required` | 队列溢出、seq 缺口或设备受信状态变化，客户端重拉快照 |
-| `device_trust_changed` | PC 授予 / 收回了该设备的高风险操作权限 |
-| `server_error` | 服务端内部错误 |
-| `device_revoked` | 设备被吊销，客户端清凭据并断开 |
-| `pong` | 心跳响应 |
+| 消息                                 | 作用                                                 |
+| ------------------------------------ | ---------------------------------------------------- |
+| `hello_ok`                           | 握手成功                                             |
+| `inbox_snapshot` / `inbox_delta`     | 收件箱全量 / 增量                                    |
+| `session_snapshot` / `session_delta` | 单会话全量 / 增量                                    |
+| `command_result`                     | 按 `requestId` 返回成功或错误码                      |
+| `notification`                       | 前台通知                                             |
+| `resync_required`                    | 队列溢出、seq 缺口或设备受信状态变化，客户端重拉快照 |
+| `device_trust_changed`               | PC 授予 / 收回了该设备的高风险操作权限               |
+| `server_error`                       | 服务端内部错误                                       |
+| `device_revoked`                     | 设备被吊销，客户端清凭据并断开                       |
+| `pong`                               | 心跳响应                                             |
 
 **seq 与会话 key**：
 
@@ -247,10 +254,10 @@ owner，不会把多个 100s 串联，手机端 120s + 5s 宽限仍等得到。�
 **M2 快照与增量事件**：
 
 - `MobileSessionSnapshot { seq, summary, timeline, plan, configOptions, usage?,
-  pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
+pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
 - `summary` 含 `ref / agentId / agentName? / title / status / displayStatus / bucket /
-  workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
-  hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会话最近活动时间，
+workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
+hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会话最近活动时间，
   取会话历史的 `lastUsedAt`，不是快照生成时刻）；v6 增加可选
   `forkSupported / rewindSupported`（agent 能力位）与 `sideTaskOf`（父会话 durable id）/
   `sideTaskChildCount`（直接子任务数）。
@@ -275,21 +282,21 @@ owner，不会把多个 100s 串联，手机端 120s + 5s 宽限仍等得到。�
 
 **错误码**
 
-| 错误码 | 语义 |
-|---|---|
-| `unauthorized` | token 缺失/无效/已吊销 |
-| `forbidden_operation` | 高风险操作被策略拒绝 |
-| `session_not_found` | 会话不存在或已关闭 |
-| `session_read_only` | 只读预览会话不能写 |
-| `stale_request` | `requestId` 已不在等待中（重复点击 / 另一端先处理） |
-| `workspace_not_open` | 目标工作区没有打开窗口且不能自动开窗 |
-| `not_supported` | 当前档位/版本不支持该命令 |
-| `unsupported_by_agent` | 当前 agent 未声明 fork / rewind 能力 |
-| `invalid_anchor` | 消息锚点不存在、已回退，或不能用于该操作（如首条用户消息用于 fork） |
-| `session_busy` | 会话正在运行，fork 被拒绝 |
-| `rate_limited` | 触发速率限制（含附件配额已满） |
-| `attachment_not_found` | 附件不存在、已过期或属于其他设备 |
-| `internal` | 未分类的服务端错误 |
+| 错误码                 | 语义                                                                |
+| ---------------------- | ------------------------------------------------------------------- |
+| `unauthorized`         | token 缺失/无效/已吊销                                              |
+| `forbidden_operation`  | 高风险操作被策略拒绝                                                |
+| `session_not_found`    | 会话不存在或已关闭                                                  |
+| `session_read_only`    | 只读预览会话不能写                                                  |
+| `stale_request`        | `requestId` 已不在等待中（重复点击 / 另一端先处理）                 |
+| `workspace_not_open`   | 目标工作区没有打开窗口且不能自动开窗（会话目录开窗恢复同样用此码）  |
+| `not_supported`        | 当前档位/版本不支持该命令                                           |
+| `unsupported_by_agent` | 当前 agent 未声明 fork / rewind 能力                                |
+| `invalid_anchor`       | 消息锚点不存在、已回退，或不能用于该操作（如首条用户消息用于 fork） |
+| `session_busy`         | 会话正在运行，fork 被拒绝                                           |
+| `rate_limited`         | 触发速率限制（含附件配额已满）                                      |
+| `attachment_not_found` | 附件不存在、已过期或属于其他设备                                    |
+| `internal`             | 未分类的服务端错误                                                  |
 
 `stale_request` 表示这次点击基于过期卡片：请求可能已被 PC 或另一端处理。客户端应直接按
 快照/增量收敛 UI（卡片消失），不要把它显示成操作失败，也不要自动重发。
@@ -360,11 +367,11 @@ renderer 桥的 `getWorkspaceGitDirty`——git 扩展跑在远端 extension hos
 
 **三种路径**（`MobileGatewayHub._newSession`）：
 
-| 目标工作区状态 | 行为 |
-|---|---|
-| 已有匹配窗口 | ping 探活通过后调用该窗口桥的 `newSession`（覆盖 renderer reload） |
-| 仅在最近列表 | `openWindowForFolder` 自动开窗（会把窗口带到前台，已接受），等 main 侧桥注册，再 ping 到 renderer 的 `MobileBridge` 通道应答后才发命令 |
-| 都不在 / 等待桥超时 / ping 始终无应答 | 返回 `workspace_not_open` |
+| 目标工作区状态                        | 行为                                                                                                                                   |
+| ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| 已有匹配窗口                          | ping 探活通过后调用该窗口桥的 `newSession`（覆盖 renderer reload）                                                                     |
+| 仅在最近列表                          | `openWindowForFolder` 自动开窗（会把窗口带到前台，已接受），等 main 侧桥注册，再 ping 到 renderer 的 `MobileBridge` 通道应答后才发命令 |
+| 都不在 / 等待桥超时 / ping 始终无应答 | 返回 `workspace_not_open`                                                                                                              |
 
 **为什么必须 ping**：`createWindowScopedServices` 在 `loadURL` **之前**就调用了
 `mobileGateway.registerWindowBridge(...)`，`waitForBridge` 只能证明 main 侧反向代理存在；
@@ -404,15 +411,15 @@ renderer ping 无应答。
 
 三项能力都复用桌面 `IAcpSessionService` 的既有实现，桥只做守卫、参数归一与结果裁剪，不复制算法。
 
-| 命令 | 关键行为 |
-|---|---|
-| `forkSession` | `sessions.forkSession(id, messageId, { activate:false })`；运行中回 `session_busy`；首条用户消息回 `invalid_anchor`；手机分叉不抢 PC 焦点 |
-| `previewRewind` | `rewindSession(..., { dryRun:true })`；只回 `canRewind / error / filesChanged 数量 / insertions / deletions`，**不把文件路径发给手机** |
-| `rewindSession` | 默认回滚文件，`rewindFiles:false` 保留文件；成功后把锚点原文放进响应 `text`，只用于手机输入框回填，**不写 PC 的 `AcpPromptReplaceInbox`** |
-| `createSideTask` | `forkSideTask` 以父会话完整历史为上下文、抑制 replay 基线、强制只读；quote trim 后截到 8000 字符，标题取折叠空白后的前 60 字符 |
-| `listSideTasks` | 按父会话 durable id 列直接子任务；含历史行；`live` 只表示当前窗口已 resident，不是正确性信号 |
-| `openSideTask` | 历史行走 `resumeSession(id, { activate:false })`；已 resident 直接返回 ref；只允许直接子任务 |
-| `deleteSideTask` | `collectSideTaskDescendants` + `deleteSideTasks` 级联删除子树（含历史行） |
+| 命令             | 关键行为                                                                                                                                  |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `forkSession`    | `sessions.forkSession(id, messageId, { activate:false })`；运行中回 `session_busy`；首条用户消息回 `invalid_anchor`；手机分叉不抢 PC 焦点 |
+| `previewRewind`  | `rewindSession(..., { dryRun:true })`；只回 `canRewind / error / filesChanged 数量 / insertions / deletions`，**不把文件路径发给手机**    |
+| `rewindSession`  | 默认回滚文件，`rewindFiles:false` 保留文件；成功后把锚点原文放进响应 `text`，只用于手机输入框回填，**不写 PC 的 `AcpPromptReplaceInbox`** |
+| `createSideTask` | `forkSideTask` 以父会话完整历史为上下文、抑制 replay 基线、强制只读；quote trim 后截到 8000 字符，标题取折叠空白后的前 60 字符            |
+| `listSideTasks`  | 按父会话 durable id 列直接子任务；含历史行；`live` 只表示当前窗口已 resident，不是正确性信号                                              |
+| `openSideTask`   | 历史行走 `resumeSession(id, { activate:false })`；已 resident 直接返回 ref；只允许直接子任务                                              |
+| `deleteSideTask` | `collectSideTaskDescendants` + `deleteSideTasks` 级联删除子树（含历史行）                                                                 |
 
 **焦点**：`resumeSession` / `forkSession` 增加可选 `activate`，手机一律传 `false`。`resumeSession`
 的 in-flight 去重（`_resumingBySessionId`）在 await 之后按 `wantActive` 补 `setActive`，否则手机先发起的
@@ -426,30 +433,70 @@ side task 字段与列表依赖 history，未初始化时表现为字段缺失 /
 `unsupported_by_agent`；锚点不存在 / 非 user / autoRetry / 首条用户消息用于 fork → `invalid_anchor`；
 运行中 fork → `session_busy`；其他 → `internal`（日志只记错误消息，不记 prompt / quote / 正文）。
 
-## 6c. 会话目录与恢复（v7）
+## 6c. 会话目录与恢复（v7，v10 扩展范围）
 
-**范围**：`IAcpSessionHistoryService` 是 workspace-scoped（renderer 内存 + 落盘），网关只能读到
-**当前已打开窗口**的历史；未打开工作区的历史手机不可见。不新增 main 侧历史存储，也不改变
-「PC 是唯一真相」的边界。
+**范围**：手机目录 = 已打开窗口的历史（renderer 内存镜像，最实时）∪ 最近打开工作区中未被打开
+窗口覆盖的前 N 个（main 只读读取各自的落盘历史）。`N = gateway.json` 的
+`sessionHistoryWorkspaceLimit`，默认 20、范围 1–100；已打开窗口不受 N 限制。收件箱仍只显示
+live 会话，不读盘。没有新增 main 侧历史存储，也不改变「PC 是唯一真相」的边界。
 
-**聚合**（`MobileGatewayHub._listSessionHistory`）：逐窗口 `_ensureWindowReady` → 桥
-`listSessionHistory` → 桥内过滤侧边任务、归档、`hasMessages === false` 与
-`isForeignWorkspaceSession`；hub 再按 durableId 去重（pinned 优先，否则取较新 `lastUsedAt`），
-pinned / `lastUsedAt` 降序，最多 200 行，并盖上 `windowId` + `workspaceName`。空 `durableId` /
-`agentId` 或时间戳非有限值的坏行直接丢弃，避免手机端整份列表校验失败。行的 `durableId`
-即 `AcpSessionHistoryEntry.id`（`sessionIdOnAgent`）；首条 prompt 截到 280 字符。
+**落盘位置**：历史仍由 renderer 的 `AcpSessionHistoryService` 通过 `PersistedStateBase` 写入
+WORKSPACE 桶 `<userData>/workspaces/<id>.json`，键 `acp.sessionHistory`，payload 为
+`{ schemaVersion, entries, deleted }`。桶 id 与 `WorkspaceMainService` 完全一致：
+`sha1(folderUri.toString()).slice(0,16)`。`folderUri` 来自最近工作区列表的 canonical URI 字符串，
+因此远程工作区（`remote-ssh://authority/...`）也能算出正确桶，无需额外映射。
 
-**打开**（`_openSession`）：同一 durable id 的并发请求共享一个 in-flight promise；先在 inbox 与各窗口
-`listSessions` 中找 live ref（命中直接返回，避免二次 resume）；未命中时优先使用请求里的 `windowId`
-hint，否则扫描各窗口 `hasSessionHistory` 找 owner；按 owner 顺序 `bridge.openSession` →
+**读盘**（`workspaceSessionHistoryReader.ts`）：main 直接 `readFile` + `JSON.parse` 桶文件，
+**不走 `createStorage`**——后者遇到坏 JSON 会把文件改名为 `.corrupt`，而手机目录读取必须是纯只读。
+文件缺失、坏 JSON、超过 16MB、`schemaVersion` 不在 1–6（与 renderer 的兼容范围一致）都返回空并
+打 debug 日志，绝不写盘。条目归一化与 renderer 一致（`id !== sessionIdOnAgent` 时取后者），并应用
+同一套可恢复过滤：排除侧边任务、归档、`hasMessages === false`、空 id、`deleted` 墓碑，以及
+`isForeignWorkspaceSession` 判定的跨工作区行。过滤规则抽在
+`apps/editor/src/shared/mobileGateway/sessionHistoryFilter.ts`，renderer 桥与 main 读盘共用。
+
+**聚合**（`MobileGatewayHub._listSessionHistory`）：已打开窗口照旧逐窗口 `_ensureWindowReady`
+→ 桥 `listSessionHistory`；某个窗口无法应答（renderer 未就绪 / 超时 / 重载）时，回退只读该窗口
+所属工作区的落盘桶，避免它的历史整体消失。随后对最近工作区的前 N 个关闭工作区读盘（并发 4，
+每桶 2s 上限）。按 durableId 去重：**已打开窗口的行绝对优先**（窗口之间仍按 pinned / 较新
+`lastUsedAt` 取一行）；磁盘行之间复用同一套 pinned / 较新规则，且只在没有同 id 的打开行时补入。
+最后 pinned / `lastUsedAt` 降序，最多 200 行。打开行盖 `windowId` + `workspaceName`；磁盘行不带
+`windowId`，盖 `folder` + `authority` + `workspaceName`。`folder` / `authority` 是身份而非展示
+文本，不做截断：超过协议长度上限（`folder` 对齐 `openSession.folder` 的 `MAX_TEXT_LENGTH`，
+`authority` 对齐 `MAX_WORKSPACE_NAME_LENGTH`）时直接省略该 hint。空 `durableId` / `agentId` 或
+时间戳非有限值的坏行直接丢弃，避免手机端整份列表校验失败。行的 `durableId` 即
+`AcpSessionHistoryEntry.id`（`sessionIdOnAgent`）；首条 prompt 截到 280 字符。
+
+**打开**（`_openSession`）：入口计算一次 100s 总预算（`deadline = now + 100s`），live 查找、owner
+扫描、开窗、等桥、历史轮询与 `bridge.openSession` 全部使用 `deadline - now` 的剩余预算；同一
+durable id 的并发请求共享一个 in-flight promise。先在 inbox 与各窗口 `listSessions` 中找 live ref
+（命中直接返回，避免二次 resume）；未命中时优先使用请求里的 `windowId` hint，否则扫描各窗口
+`hasSessionHistory` 找 owner；按 owner 顺序 `bridge.openSession` →
 `sessions.resumeSession(durableId, { activate: false })`。只有 `session_not_found` /
 `forbidden_operation` 会换下一个 owner，其他错误立即返回，不把多个 resume 串成超长等待。
-**不切换 PC 焦点**，也不改变 PC 当前打开的会话。
+
+**未打开工作区**：所有窗口都没有该会话时：
+
+- payload 带 `folder` → 直接使用；
+- payload 不带 `folder`（深链 / 刷新丢失 hint）→ 在「未打开的最近工作区前 N 个」的落盘历史中按
+  durableId 反查，命中则用该工作区（含远程 authority）。
+
+随后复用 `newSession` 的开窗流程（`openWorkspace` → `waitForBridge` → renderer ping 就绪），
+再以 300ms 间隔轮询 `bridge.hasSessionHistory(durableId)`，确认新窗口的 workspace 历史桶已加载
+（renderer 可能仍停留在 GLOBAL 作用域）后才调用 `bridge.openSession`。轮询与开窗共用同一份 100s
+预算；超时仍未命中回 `session_not_found`，开窗或等桥失败回 `workspace_not_open`。远程工作区同样
+由 main 调 `openWindowForFolder`，随后由新窗口的 `RemoteStatusContribution` 与 ACP host 异步建立
+远程连接，连接本身的失败仍体现为会话连接错误。**不切换 PC 焦点到某个会话**，但自动开窗会把窗口
+带到前台（与新建会话一致，已接受）。
 
 **手机**：`/sessions` 独立页把目录与 inbox live 行按 durableId 合并；live 行直接订阅，历史行才发
-`openSession`。搜索、全部 / 活跃 / 已关闭过滤与按天分组都在本地完成，网关不接收查询参数。
-深链 `/s/<durableId>` 落到已关闭会话时，会话页提供「重新打开」按钮（同一 durable id 原地订阅，
-不新增 URL）。从目录打开的会话返回时保留搜索词、过滤条件与滚动位置。
+`openSession`。来自未打开工作区的行显示「将在 PC 上打开此工作区」，点击时把 `folder` / `authority`
+随 `openSession` 发给 PC。搜索、全部 / 活跃 / 已关闭过滤与按天分组都在本地完成，网关不接收查询
+参数。深链 `/s/<durableId>` 落到已关闭会话时，会话页提供「重新打开」按钮（同一 durable id 原地
+订阅，不新增 URL）；此时 payload 通常没有 `folder`，由网关在前 N 个关闭工作区的落盘历史中反查
+并自动开窗。从目录打开的会话返回时保留搜索词、过滤条件与滚动位置。
+
+**落盘滞后**：renderer 的历史写入有 100ms 防抖，且只保证退出时 flush。因此刚发生的重命名 / 新
+会话 / 删除可能短暂落后于磁盘；已打开窗口永远走内存镜像，不受影响。手机目录刷新即重新读盘。
 
 ## 7. 会话附件（协议 v6）
 
@@ -458,10 +505,10 @@ base64 塞进 `sendPrompt` 会在重连重发时放大内存与耗时。
 
 **上传 / 下载**（Bearer 设备 token，与 WS 握手同一凭据；token 不放 URL）：
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| `POST` | `/api/attachments` | 原始字节 body；头 `X-Universe-Attachment-Kind: image\|file`、`X-Universe-Attachment-Name: <encodeURIComponent(name)>`；`Content-Type` 即 MIME |
-| `GET` / `HEAD` | `/api/attachments/:id` | 原始字节 + `Content-Type` / `Content-Length` / `Content-Disposition: inline` / `Cache-Control: no-store` |
+| 方法           | 路径                   | 说明                                                                                                                                          |
+| -------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST`         | `/api/attachments`     | 原始字节 body；头 `X-Universe-Attachment-Kind: image\|file`、`X-Universe-Attachment-Name: <encodeURIComponent(name)>`；`Content-Type` 即 MIME |
+| `GET` / `HEAD` | `/api/attachments/:id` | 原始字节 + `Content-Type` / `Content-Length` / `Content-Disposition: inline` / `Cache-Control: no-store`                                      |
 
 上传返回 `MobileAttachmentUploadResult { id, kind, name, mimeType?, size, createdAt }`。错误映射：
 401 `unauthorized`、400 `bad_request`、404 `attachment_not_found`、413 超过 25MB、429
@@ -529,11 +576,11 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 `isConfigValueAllowedOnMobile`），桥与网关共用，UI 只用投影出的 `allowedOnMobile` 隐藏。
 设备默认不受信，行为与 v3 第一期一致：
 
-| 类别 | 判定 |
-|---|---|
-| 权限选项 | 任何 `kind === 'allow_always'` 一律禁止；作用域化持久规则同样禁止：`allow-with-updates`、`allow-skill-exact`、`allow-skill-prefix`、`exit-plan-bypass` |
-| 配置值 | 值形如 `bypasspermissions` / `bypass` / `dangerously-skip-permissions` / `agent-full-access` / `danger-full-access` / `full-access` / `full_access` 一律禁止（大小写、连字符/下划线归一后匹配） |
-| 自动批准 / 自动执行策略 | 手机没有修改入口；`setConfigOption` 命中的策略值同样被上面的配置值规则拦截 |
+| 类别                    | 判定                                                                                                                                                                                            |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 权限选项                | 任何 `kind === 'allow_always'` 一律禁止；作用域化持久规则同样禁止：`allow-with-updates`、`allow-skill-exact`、`allow-skill-prefix`、`exit-plan-bypass`                                          |
+| 配置值                  | 值形如 `bypasspermissions` / `bypass` / `dangerously-skip-permissions` / `agent-full-access` / `danger-full-access` / `full-access` / `full_access` 一律禁止（大小写、连字符/下划线归一后匹配） |
+| 自动批准 / 自动执行策略 | 手机没有修改入口；`setConfigOption` 命中的策略值同样被上面的配置值规则拦截                                                                                                                      |
 
 PC 可在「手机设备设置 → 已配对设备」逐台打开 **允许高风险操作**（`devices.json` 的
 `trusted`）。开关默认关闭，开启时用 warning 确认，关闭立即生效；手机端无法修改自己的信任
@@ -589,31 +636,34 @@ fork / rewind / 侧边任务、`openSession`）都记一条；设备信任开关
   `chooseDesktopOrigin` 选择（优先回环 HTTP，其次 `https://`，最后 `origins[0]`）；配对入口直接
   使用当前选中的 `pairing.selectedUrl`，一次性码仍保留在 fragment。WSLg 下
   `shell.openExternal` 不保证拉起 Windows 浏览器，UI 与用户文档保留手动打开地址的兜底。
-**配置持久化（机器本地）**：`enabled` / `bind` / `lanAddress` / `port` / `allowedHosts` /
-`certificateMode` / `vapidSubject` 存 `<userData>/mobile/gateway.json`（`0600`、原子写入），**不进
-`settings.json`、不跟随 configDir 重定位**，因此多台机器共享 configDir 时各自独立。旧
-`settings.json` 里的 `mobileGateway.*` 不读取、不迁移、不清理——做一次性迁移会把 A 机器的值带给首次
-运行的 B 机器，正是要避免的事。main 独占读写，renderer 经 `IMobileGatewayService` 的 `getConfig` /
-`updateConfig` / `onDidChangeConfig`；`UNIVERSE_MOBILE_*` 环境变量仍优先于文件。
+  **配置持久化（机器本地）**：`enabled` / `bind` / `lanAddress` / `port` / `allowedHosts` /
+  `certificateMode` / `vapidSubject` / `sessionHistoryWorkspaceLimit` 存 `<userData>/mobile/gateway.json`
+  （`0600`、原子写入），**不进
+  `settings.json`、不跟随 configDir 重定位**，因此多台机器共享 configDir 时各自独立。旧
+  `settings.json` 里的 `mobileGateway.*` 不读取、不迁移、不清理——做一次性迁移会把 A 机器的值带给首次
+  运行的 B 机器，正是要避免的事。main 独占读写，renderer 经 `IMobileGatewayService` 的 `getConfig` /
+  `updateConfig` / `onDidChangeConfig`；`UNIVERSE_MOBILE_*` 环境变量仍优先于文件。
 
-| 场景 | 行为 |
-|---|---|
-| 文件缺失 | 默认配置（网关关闭）；启动不创建文件，执行「打开网关配置 (JSON)」或首次保存时才创建 |
-| 空文件 | 等价于默认配置 |
-| 启动时 JSON / 已知字段非法 | 默认配置 + `error`（网关保持关闭），设置页显示原因 |
-| 运行中外部编辑非法 | 保留上一次有效配置并广播 `error`；文件被删除则回到默认关闭 |
-| 未知字段 | 忽略（便于降级回旧版本）；已知字段类型 / 范围非法则整体拒绝 |
+| 场景                       | 行为                                                                                |
+| -------------------------- | ----------------------------------------------------------------------------------- |
+| 文件缺失                   | 默认配置（网关关闭）；启动不创建文件，执行「打开网关配置 (JSON)」或首次保存时才创建 |
+| 空文件                     | 等价于默认配置                                                                      |
+| 启动时 JSON / 已知字段非法 | 默认配置 + `error`（网关保持关闭），设置页显示原因                                  |
+| 运行中外部编辑非法         | 保留上一次有效配置并广播 `error`；文件被删除则回到默认关闭                          |
+| 未知字段                   | 忽略（便于降级回旧版本）；已知字段类型 / 范围非法则整体拒绝                         |
 
 文件是嵌套 camelCase，支持 JSONC 注释与尾逗号；保存时整文件重写，不保留注释。补全与校验的
 JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()` 注册。
+`sessionHistoryWorkspaceLimit` 控制手机会话目录读取多少个最近打开但当前关闭的工作区（默认 20，
+1–100；已打开窗口不占名额）；调大意味着更多本地历史文件读取，目录刷新会更慢。
 
 ## 9. 传输档位与证书
 
-| 档位 | 监听 | 证书 | 能力 |
-|---|---|---|---|
-| Tailscale（主推） | 网关只监听 `127.0.0.1` HTTP；由 `tailscale serve` 暴露 `https://<机器名>.ts.net` | Tailscale 自动签发与续期 | 安装 + SW + Web Push + 麦克风；iOS / Android 都完整 |
-| 局域网 | 监听用户选定网卡 IP（非 `0.0.0.0` 默认），`https.createServer` | 默认自签叶证书；可选 `root-ca`（根证书 + 叶证书），SAN 含当前 LAN IP + PC 主机名，SHA-256 指纹进二维码 | 保证遥控 + 加密；安装 / 推送需手机信任证书，iOS 推送不保证 |
-| 开发 / e2e | `127.0.0.1` HTTP；或显式 `UNIVERSE_MOBILE_INSECURE=1` 的局域网明文 | 无 | localhost 是安全上下文，SW 可用，无推送 |
+| 档位              | 监听                                                                             | 证书                                                                                                   | 能力                                                       |
+| ----------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| Tailscale（主推） | 网关只监听 `127.0.0.1` HTTP；由 `tailscale serve` 暴露 `https://<机器名>.ts.net` | Tailscale 自动签发与续期                                                                               | 安装 + SW + Web Push + 麦克风；iOS / Android 都完整        |
+| 局域网            | 监听用户选定网卡 IP（非 `0.0.0.0` 默认），`https.createServer`                   | 默认自签叶证书；可选 `root-ca`（根证书 + 叶证书），SAN 含当前 LAN IP + PC 主机名，SHA-256 指纹进二维码 | 保证遥控 + 加密；安装 / 推送需手机信任证书，iOS 推送不保证 |
+| 开发 / e2e        | `127.0.0.1` HTTP；或显式 `UNIVERSE_MOBILE_INSECURE=1` 的局域网明文               | 无                                                                                                     | localhost 是安全上下文，SW 可用，无推送                    |
 
 **局域网证书（M5，两种模式）**：
 
@@ -703,10 +753,10 @@ Tailscale/WSL 等多个地址，PC 设置页会把它标为 iOS 可选备用地�
 
 **投递**：
 
-| 场景 | 通道 |
-|---|---|
+| 场景                                     | 通道              |
+| ---------------------------------------- | ----------------- |
 | 手机有前台连接（`client_state visible`） | WS `notification` |
-| 手机无前台连接 | Web Push（VAPID） |
+| 手机无前台连接                           | Web Push（VAPID） |
 
 - 网关只对「通知开关打开且 kind 未被过滤」的设备发送；`kinds` 缺省表示四类全收。
 - 有前台连接时优先走 WS；发送失败或无前台连接时回落到 Web Push。
@@ -731,13 +781,13 @@ Tailscale/WSL 等多个地址，PC 设置页会把它标为 iOS 可选备用地�
 
 **抑制矩阵**：
 
-| 设备通知开关 | kind 命中 | PC 有窗口聚焦 | `alwaysNotify` | 结果 |
-|---|---|---|---|---|
-| 关 | — | — | — | 不发 |
-| 开 | 否 | — | — | 不发 |
-| 开 | 是 | 是 | 否 | 不发 |
-| 开 | 是 | 是 | 是 | 发（前台 WS 优先，否则推送） |
-| 开 | 是 | 否 | — | 发（前台 WS 优先，否则推送） |
+| 设备通知开关 | kind 命中 | PC 有窗口聚焦 | `alwaysNotify` | 结果                         |
+| ------------ | --------- | ------------- | -------------- | ---------------------------- |
+| 关           | —         | —             | —              | 不发                         |
+| 开           | 否        | —             | —              | 不发                         |
+| 开           | 是        | 是            | 否             | 不发                         |
+| 开           | 是        | 是            | 是             | 发（前台 WS 优先，否则推送） |
+| 开           | 是        | 否            | —              | 发（前台 WS 优先，否则推送） |
 
 `notifications.enabled=false` 的设备不会让 renderer 进入 attention-only 模式；只要至少一台设备
 打开通知，hub 就在没有收件箱订阅者时也保持 `startAttention()`。带 `autoResolve` 的审批不发通知
@@ -751,21 +801,21 @@ Tailscale/WSL 等多个地址，PC 设置页会把它标为 iOS 可选备用地�
 
 **新包**
 
-| 包 | 内容 |
-|---|---|
-| `packages/mobile-protocol` | WS 消息、命令/事件 DTO、错误码、版本常量；运行时零依赖 |
-| `packages/acp-view-model` | 纯逻辑：`ansi`、diff、文件路径链接、markdown 渲染、内容上限等 |
+| 包                         | 内容                                                          |
+| -------------------------- | ------------------------------------------------------------- |
+| `packages/mobile-protocol` | WS 消息、命令/事件 DTO、错误码、版本常量；运行时零依赖        |
+| `packages/acp-view-model`  | 纯逻辑：`ansi`、diff、文件路径链接、markdown 渲染、内容上限等 |
 
 **M2 已抽取 `packages/acp-view-model`**（运行时零依赖，SDK 仅 `import type`）：
 
-| 模块 | 来源 |
-|---|---|
-| `ansi` | `apps/editor/src/renderer/services/acp/ansi.ts` |
-| `filePathLink` | `apps/editor/src/renderer/services/acp/filePathLink.ts` |
-| `markdownRenderer` | `apps/editor/src/renderer/services/acp/markdownRenderer.ts` |
-| `contentLimits` | `apps/editor/src/renderer/services/acp/session/acpContentLimits.ts` |
-| `terminalOutput` | 从 `session/acpSessionUpdateMeta.ts` 拆出的纯函数 `readTerminalOutput` |
-| `lineDiff` | `apps/editor/src/renderer/workbench/agents/lineDiff.ts` |
+| 模块               | 来源                                                                   |
+| ------------------ | ---------------------------------------------------------------------- |
+| `ansi`             | `apps/editor/src/renderer/services/acp/ansi.ts`                        |
+| `filePathLink`     | `apps/editor/src/renderer/services/acp/filePathLink.ts`                |
+| `markdownRenderer` | `apps/editor/src/renderer/services/acp/markdownRenderer.ts`            |
+| `contentLimits`    | `apps/editor/src/renderer/services/acp/session/acpContentLimits.ts`    |
+| `terminalOutput`   | 从 `session/acpSessionUpdateMeta.ts` 拆出的纯函数 `readTerminalOutput` |
+| `lineDiff`         | `apps/editor/src/renderer/workbench/agents/lineDiff.ts`                |
 
 editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余函数仍留在 editor：
 它们依赖 `DiffHunk`、`AcpModelCost`、`parseMcpToolName` 等编辑器模型类型，不属于纯 view-model。
@@ -782,16 +832,16 @@ localStorage，不走协议。
 
 **M4 通知实现位置**：
 
-| 位置 | 职责 |
-|---|---|
-| `apps/editor/src/renderer/services/acp/session/agentAttentionSignal.ts` | 四类边沿的共享信号（无配置依赖） |
-| `apps/editor/src/renderer/services/mobileGateway/MobileBridgeService.ts` | `startStreaming` 内转发 attention；`startAttention` / `stopAttention` 轻量模式 |
-| `apps/editor/src/main/services/mobileGateway/mobileNotificationRouter.ts` | 抑制矩阵、正文构造、WS / 推送抉择、4KB 限制、404/410 清理 |
-| `apps/editor/src/main/services/mobileGateway/webPushSender.ts` | `web-push` 的可注入薄包装（测试不发网络） |
-| `apps/editor/src/main/services/mobileGateway/vapidKeys.ts` | VAPID 持久化（`0600`） |
-| `apps/editor/src/main/services/mobileGateway/pushEndpoint.ts` | 推送服务主机允许列表 |
-| `apps/mobile/src/notifications/pushNotifications.ts` | 能力探测、用户手势授权、`PushManager.subscribe` |
-| `apps/mobile/public/sw.js` | `push` 展示与 `notificationclick` 深链 |
+| 位置                                                                      | 职责                                                                           |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `apps/editor/src/renderer/services/acp/session/agentAttentionSignal.ts`   | 四类边沿的共享信号（无配置依赖）                                               |
+| `apps/editor/src/renderer/services/mobileGateway/MobileBridgeService.ts`  | `startStreaming` 内转发 attention；`startAttention` / `stopAttention` 轻量模式 |
+| `apps/editor/src/main/services/mobileGateway/mobileNotificationRouter.ts` | 抑制矩阵、正文构造、WS / 推送抉择、4KB 限制、404/410 清理                      |
+| `apps/editor/src/main/services/mobileGateway/webPushSender.ts`            | `web-push` 的可注入薄包装（测试不发网络）                                      |
+| `apps/editor/src/main/services/mobileGateway/vapidKeys.ts`                | VAPID 持久化（`0600`）                                                         |
+| `apps/editor/src/main/services/mobileGateway/pushEndpoint.ts`             | 推送服务主机允许列表                                                           |
+| `apps/mobile/src/notifications/pushNotifications.ts`                      | 能力探测、用户手势授权、`PushManager.subscribe`                                |
+| `apps/mobile/public/sw.js`                                                | `push` 展示与 `notificationclick` 深链                                         |
 
 **Service Worker 缓存回退标记**：`sw.js` 的导航 `networkFirst` 在请求失败回退缓存时记录时间戳，
 并向所有窗口广播 `mobile-shell-from-cache`；页面可用 `mobile-shell-status` 查询（`fromCache` /
@@ -802,14 +852,14 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 
 **机器本地配置实现位置**：
 
-| 位置 | 职责 |
-|---|---|
-| `apps/editor/src/shared/ipc/mobileGatewayService.ts` | 配置 DTO、默认值、patch / state / result 类型与 `IMobileGatewayService` 契约 |
-| `apps/editor/src/main/services/mobileGateway/gatewayConfigFile.ts` | `gateway.json` 解析、patch 校验、合并与序列化（纯函数） |
-| `apps/editor/src/main/services/mobileGateway/gatewayConfigStore.ts` | 串行读写队列、原子写、`fs.watch` 外部变更与自写抑制 |
-| `apps/editor/src/main/services/mobileGateway/gatewayConfig.ts` | 运行时解析：环境变量优先级、绑定地址、allowed origins |
-| `apps/editor/src/renderer/contributions/MobileGatewayContributions.ts` | `gateway.json` 的 JSON schema 注册 |
-| `apps/editor/src/renderer/actions/mobileActions.ts` | `workbench.action.mobile.openGatewayConfigJson` |
+| 位置                                                                   | 职责                                                                         |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `apps/editor/src/shared/ipc/mobileGatewayService.ts`                   | 配置 DTO、默认值、patch / state / result 类型与 `IMobileGatewayService` 契约 |
+| `apps/editor/src/main/services/mobileGateway/gatewayConfigFile.ts`     | `gateway.json` 解析、patch 校验、合并与序列化（纯函数）                      |
+| `apps/editor/src/main/services/mobileGateway/gatewayConfigStore.ts`    | 串行读写队列、原子写、`fs.watch` 外部变更与自写抑制                          |
+| `apps/editor/src/main/services/mobileGateway/gatewayConfig.ts`         | 运行时解析：环境变量优先级、绑定地址、allowed origins                        |
+| `apps/editor/src/renderer/contributions/MobileGatewayContributions.ts` | `gateway.json` 的 JSON schema 注册                                           |
+| `apps/editor/src/renderer/actions/mobileActions.ts`                    | `workbench.action.mobile.openGatewayConfigJson`                              |
 
 **构建与打包**（M5 已落地）：
 
@@ -832,15 +882,15 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 
 **环境变量**
 
-| 变量 | 作用 |
-|---|---|
-| `UNIVERSE_MOBILE_GATEWAY` | 强制开启网关（开发/测试） |
-| `UNIVERSE_MOBILE_PORT` | 监听端口 |
-| `UNIVERSE_MOBILE_BIND` | 绑定地址 |
+| 变量                          | 作用                                          |
+| ----------------------------- | --------------------------------------------- |
+| `UNIVERSE_MOBILE_GATEWAY`     | 强制开启网关（开发/测试）                     |
+| `UNIVERSE_MOBILE_PORT`        | 监听端口                                      |
+| `UNIVERSE_MOBILE_BIND`        | 绑定地址                                      |
 | `UNIVERSE_MOBILE_LAN_ADDRESS` | 局域网档绑定/证书地址（测试与开发；覆盖设置） |
-| `UNIVERSE_MOBILE_INSECURE` | 允许非回环明文 HTTP（开发专用；打包版拒绝） |
-| `UNIVERSE_MOBILE_ASSETS_DIR` | 覆盖静态资源目录 |
-| `UNIVERSE_MOBILE_E2E_CODE` | e2e 用固定一次性码 |
+| `UNIVERSE_MOBILE_INSECURE`    | 允许非回环明文 HTTP（开发专用；打包版拒绝）   |
+| `UNIVERSE_MOBILE_ASSETS_DIR`  | 覆盖静态资源目录                              |
+| `UNIVERSE_MOBILE_E2E_CODE`    | e2e 用固定一次性码                            |
 
 `UNIVERSE_MOBILE_PORT=0` 仅从环境变量接受（测试用临时端口）；设置文件里的端口仍要求 1–65535。
 
@@ -872,17 +922,18 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 
 ## 12. 里程碑
 
-| 里程碑 | 内容 | 验收 |
-|---|---|---|
-| M1 | 协议包、网关骨架、配对、设备管理、PC 设置页、手机配对页 + 空收件箱 | 默认关闭；扫码配对成功；吊销即断；未授权被拒 |
-| M2 | 只读镜像：收件箱聚合、会话快照/增量、摘要与详情、抽 `acp-view-model` | 多窗口会话状态与 PC 一致；流式不卡；重连一致 |
-| M3 | 交互：prompt / 停止 / 模式模型、审批仲裁、倒计时下沉、新建会话（含自动开窗）、高风险限制、审计 | 双端审批只生效一次；重连恢复卡片；tab 未开倒计时照常执行 |
-| M4 | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制（已落地） | 两端边沿一致；不重复；点击直达会话 |
-| M5 | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地） | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过 |
-| M6 | 会话附件：HTTP 上传/下载、设备隔离与 TTL、ACP image / resource_link、手机附件 UI 与时间线展示（已落地） | 图片与文件经手机发出后 agent 收到正确 block；时间线显示缩略图 / 文件卡；限额与越权用例覆盖 |
-| M7 | Fork / Rewind / 侧边任务：协议 v6、非激活分叉与恢复、回退 dry-run、侧边任务列表 / 打开 / 级联删除（已落地） | 手机分叉与打开侧边任务不抢 PC 焦点；回退先预览再执行；首条用户消息 / 运行中 / 能力位边界正确 |
-| M8 | 会话目录：协议 v7、`listSessionHistory` / `openSession`、手机 `/sessions` 页（搜索 / 状态过滤 / 按天分组）、已关闭会话重新打开（已落地） | 仅列出已打开窗口的可恢复历史；打开历史会话不抢 PC 焦点；live 行不重复 resume；跨工作区 / 归档 / 侧边任务 / 无消息行不出现 |
-| M9 | 受信设备：协议 v9、PC 逐设备开关、按连接宽化投影、审计与手机设置状态展示（已落地） | 默认不受信；开启后手机可切 bypass / 持久授权；关闭后恢复 `forbidden_operation`；grant / revoke 有审计 |
+| 里程碑 | 内容                                                                                                                                                     | 验收                                                                                                                                                                                         |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| M1     | 协议包、网关骨架、配对、设备管理、PC 设置页、手机配对页 + 空收件箱                                                                                       | 默认关闭；扫码配对成功；吊销即断；未授权被拒                                                                                                                                                 |
+| M2     | 只读镜像：收件箱聚合、会话快照/增量、摘要与详情、抽 `acp-view-model`                                                                                     | 多窗口会话状态与 PC 一致；流式不卡；重连一致                                                                                                                                                 |
+| M3     | 交互：prompt / 停止 / 模式模型、审批仲裁、倒计时下沉、新建会话（含自动开窗）、高风险限制、审计                                                           | 双端审批只生效一次；重连恢复卡片；tab 未开倒计时照常执行                                                                                                                                     |
+| M4     | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制（已落地）                                                                                   | 两端边沿一致；不重复；点击直达会话                                                                                                                                                           |
+| M5     | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地）                                                                         | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过                                                                                                                                |
+| M6     | 会话附件：HTTP 上传/下载、设备隔离与 TTL、ACP image / resource_link、手机附件 UI 与时间线展示（已落地）                                                  | 图片与文件经手机发出后 agent 收到正确 block；时间线显示缩略图 / 文件卡；限额与越权用例覆盖                                                                                                   |
+| M7     | Fork / Rewind / 侧边任务：协议 v6、非激活分叉与恢复、回退 dry-run、侧边任务列表 / 打开 / 级联删除（已落地）                                              | 手机分叉与打开侧边任务不抢 PC 焦点；回退先预览再执行；首条用户消息 / 运行中 / 能力位边界正确                                                                                                 |
+| M8     | 会话目录：协议 v7、`listSessionHistory` / `openSession`、手机 `/sessions` 页（搜索 / 状态过滤 / 按天分组）、已关闭会话重新打开（已落地；v10 扩展见 M10） | 打开历史会话不抢 PC 焦点；live 行不重复 resume；跨工作区 / 归档 / 侧边任务 / 无消息行不出现                                                                                                  |
+| M9     | 受信设备：协议 v9、PC 逐设备开关、按连接宽化投影、审计与手机设置状态展示（已落地）                                                                       | 默认不受信；开启后手机可切 bypass / 持久授权；关闭后恢复 `forbidden_operation`；grant / revoke 有审计                                                                                        |
+| M10    | 会话目录覆盖最近工作区：协议 v10、main 只读读盘、已打开优先去重、N 可配（默认 20）、未打开工作区点击后自动开窗恢复、远程工作区同链路、手机提示（已落地） | 目录列出已打开 ∪ 最近 N 个关闭工作区；同 durable id 只出现一次且打开窗口优先；点未打开工作区的行会自动开窗并恢复；远程工作区可列出并在开窗失败时回 `workspace_not_open`；收件箱仍只显示 live |
 
 ## 13. 已确认的决策记录
 
@@ -912,10 +963,15 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
     需刷新页面）；手机 fork 与打开侧边任务一律 `activate:false`，不抢 PC 焦点；rewind 原文只回填
     手机输入框，不写 PC 的 `AcpPromptReplaceInbox`；回退先 dry-run 预览，再给「丢弃 / 保留文件改动」
     两个执行按钮；侧边任务列表包含历史行，删除级联子树。
-11. **会话目录只覆盖已打开窗口**：历史服务是 workspace-scoped，手机不新增 main 侧历史存储；
-    未打开工作区的历史不可见。打开历史会话沿用 `resumeSession(..., { activate:false })`，
-    与 fork / 侧边任务一致，不抢 PC 焦点。目录与 inbox 按 durable id 在手机侧合并，live 行直接
-    订阅，只有历史行才发 `openSession`，避免重复 resume。
+11. **会话目录覆盖最近工作区（v10，2026-11-10 修订）**：历史服务是 workspace-scoped，但每个
+    工作区的历史会独立落盘。网关在读取已打开窗口（renderer 内存镜像）之外，再由 main 只读读取
+    最近打开工作区中未被窗口覆盖的前 N 个（`sessionHistoryWorkspaceLimit`，默认 20），按 durable id
+    去重且已打开优先。未打开工作区的行带 `folder`；打开时复用 `newSession` 的开窗流程先开窗，等
+    新窗口的 workspace 历史桶加载（轮询 `hasSessionHistory`）后再
+    `resumeSession(..., { activate:false })`，不抢 PC 会话焦点（开窗本身会带到前台，与决策 4 一致）。
+    payload 缺 `folder` 时（深链 / 刷新）按 durable id 在前 N 个关闭工作区的落盘历史中反查。
+    远程工作区沿用同一链路，开窗失败回 `workspace_not_open`。落盘有 100ms 防抖，目录可能短暂滞后，
+    已打开窗口不受影响。收件箱仍只显示 live 会话。
 12. **受信设备是 PC 独占的逐设备开关**：配对照样只证明「连过」，不自动授予高风险能力；默认
     关闭，开启需 warning 确认，关闭立即生效。信任状态只存 main 的 `devices.json` 并在 hub
     按连接宽化投影，手机不能自我提权。共享的 renderer 会话投影保持保守，避免同一会话被多台
@@ -929,19 +985,19 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 
 ## 14. 风险
 
-| 风险 | 影响 | 缓解 |
-|---|---|---|
-| 协议与 view-model 漂移 | 字段静默错位 | DTO 单一来源 + 映射函数 + 编译期检查；详情按需接口收窄面 |
-| 协议 v7–v9 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
-| renderer 重载与会话 rekey | 连接指向旧会话/旧 epoch | 网关按 windowId + renderer epoch 失效桥；客户端靠快照恢复 |
-| IPC 帧成本 | 大内容卡顿/超限 | 50ms 合帧、<1MB 单帧、队列超限 `resync_required` |
-| 无手机订阅时空转 | 常驻开销 | 按订阅启停，无订阅不序列化 |
-| 权限 Promise 生命周期 | 审批悬挂或重复结算 | settled 守卫 + `requestId` + 广播 `cleared` |
-| Tailscale Serve 的 WS 稳定性 | 断连、丢消息 | 心跳、首帧 token、自动重连、先快照后增量；备选自管 HTTPS |
-| 自签证书在 iOS 上的限制 | 无法安装 PWA / 推送 | 局域网档明确只保证遥控；主推 Tailscale |
-| `selfsigned` / `@peculiar/x509` 供应链 | 本地签发失败导致局域网档不可用 | 仅 main 运行时使用；固定 catalog 版本；失败回 `gateway_error` 并在 UI 显示原因；单测覆盖生成与续签 |
-| 安全：DNS rebinding、token 泄漏、审计 PII | 未授权访问/隐私外泄 | Host+Origin 校验、token 只存哈希、审计脱敏、默认关闭 |
-| 受信设备被滥用或手机丢失 | 任意命令执行、持久放权 | 默认关闭；开启需 PC 确认；随时关闭信任或吊销设备；grant / revoke 写审计；手机不能自我提权 |
-| 撤销信任瞬间的在途命令 | 撤销后仍完成一次高风险操作 | hub 在 dispatch 时读取当次 trust；撤销对之后到达的命令立即生效；毫秒级窗口已接受并记录在决策 12 |
-| `web-push` 新依赖 | 供应链与升级成本 | 仅网关侧使用，锁定版本，推送失败可降级为前台 WS 通知 |
-| `userData` 被外部工具整体同步 | 机器相关配置再次跨机共享 | `gateway.json` 固定在 `<userData>/mobile`、不随 configDir 迁移；文档注明该边界，需要跨机共享的设置只放 configDir |
+| 风险                                      | 影响                           | 缓解                                                                                                             |
+| ----------------------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| 协议与 view-model 漂移                    | 字段静默错位                   | DTO 单一来源 + 映射函数 + 编译期检查；详情按需接口收窄面                                                         |
+| 协议 v7–v10 硬切换                        | 未更新的 PWA 连不上（4400）    | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA                                           |
+| renderer 重载与会话 rekey                 | 连接指向旧会话/旧 epoch        | 网关按 windowId + renderer epoch 失效桥；客户端靠快照恢复                                                        |
+| IPC 帧成本                                | 大内容卡顿/超限                | 50ms 合帧、<1MB 单帧、队列超限 `resync_required`                                                                 |
+| 无手机订阅时空转                          | 常驻开销                       | 按订阅启停，无订阅不序列化                                                                                       |
+| 权限 Promise 生命周期                     | 审批悬挂或重复结算             | settled 守卫 + `requestId` + 广播 `cleared`                                                                      |
+| Tailscale Serve 的 WS 稳定性              | 断连、丢消息                   | 心跳、首帧 token、自动重连、先快照后增量；备选自管 HTTPS                                                         |
+| 自签证书在 iOS 上的限制                   | 无法安装 PWA / 推送            | 局域网档明确只保证遥控；主推 Tailscale                                                                           |
+| `selfsigned` / `@peculiar/x509` 供应链    | 本地签发失败导致局域网档不可用 | 仅 main 运行时使用；固定 catalog 版本；失败回 `gateway_error` 并在 UI 显示原因；单测覆盖生成与续签               |
+| 安全：DNS rebinding、token 泄漏、审计 PII | 未授权访问/隐私外泄            | Host+Origin 校验、token 只存哈希、审计脱敏、默认关闭                                                             |
+| 受信设备被滥用或手机丢失                  | 任意命令执行、持久放权         | 默认关闭；开启需 PC 确认；随时关闭信任或吊销设备；grant / revoke 写审计；手机不能自我提权                        |
+| 撤销信任瞬间的在途命令                    | 撤销后仍完成一次高风险操作     | hub 在 dispatch 时读取当次 trust；撤销对之后到达的命令立即生效；毫秒级窗口已接受并记录在决策 12                  |
+| `web-push` 新依赖                         | 供应链与升级成本               | 仅网关侧使用，锁定版本，推送失败可降级为前台 WS 通知                                                             |
+| `userData` 被外部工具整体同步             | 机器相关配置再次跨机共享       | `gateway.json` 固定在 `<userData>/mobile`、不随 configDir 迁移；文档注明该边界，需要跨机共享的设置只放 configDir |

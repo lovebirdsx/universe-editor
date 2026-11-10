@@ -38,6 +38,9 @@ export interface SessionPageProps {
   readonly initialRef?: MobileSessionRef | undefined
   readonly onOpenSessionRef?: ((ref: MobileSessionRef) => void) | undefined
   readonly onBack: () => void
+  /** Workspace of a closed catalog row, used if this session must be reopened. */
+  readonly workspaceFolder?: string | undefined
+  readonly workspaceAuthority?: string | undefined
   /** Close/remove succeeded: return to wherever the session was opened, with a notice. */
   readonly onFinished: (action: 'closed' | 'removed') => void
   /** Inbox "待审批" rows ask the page to reveal the pending card immediately. */
@@ -50,6 +53,8 @@ export function SessionPage({
   initialRef,
   onOpenSessionRef,
   onBack,
+  workspaceFolder,
+  workspaceAuthority,
   onFinished,
   focusPending,
 }: SessionPageProps) {
@@ -220,7 +225,12 @@ export function SessionPage({
     if (durableId === undefined || reopening || !online) return
     setReopening(true)
     try {
-      const result = await client.resumeSession(durableId, state.ref?.windowId)
+      const result = await client.resumeSession(
+        durableId,
+        state.ref?.windowId,
+        workspaceFolder,
+        workspaceAuthority,
+      )
       if (!aliveRef.current) return
       if (onOpenSessionRef !== undefined && sessionRouteKey(result.ref) !== sessionKey) {
         onOpenSessionRef(result.ref)

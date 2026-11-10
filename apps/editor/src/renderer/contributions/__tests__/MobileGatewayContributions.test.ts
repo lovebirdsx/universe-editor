@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { JSONContributionRegistry, URI } from '@universe-editor/platform'
 import {
   IMobileGatewayService,
+  MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT,
+  MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT,
   type MobileGatewayConfigState,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import { MobileGatewayConfigurationContribution } from '../MobileGatewayContributions.js'
@@ -53,10 +55,17 @@ describe('MobileGatewayConfigurationContribution', () => {
       'port',
       'allowedHosts',
       'vapidSubject',
+      'sessionHistoryWorkspaceLimit',
     ])
     expect(registered?.schema.properties?.['bind']?.enum).toEqual(['loopback', 'lan'])
     expect(registered?.schema.properties?.['port']?.minimum).toBe(1)
     expect(registered?.schema.properties?.['port']?.maximum).toBe(65535)
+    expect(registered?.schema.properties?.['sessionHistoryWorkspaceLimit']?.default).toBe(
+      MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT,
+    )
+    expect(registered?.schema.properties?.['sessionHistoryWorkspaceLimit']?.maximum).toBe(
+      MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT,
+    )
   })
 
   it('does not register when the config file uri is unavailable', async () => {

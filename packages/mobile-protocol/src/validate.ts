@@ -562,18 +562,35 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
   }
 }
 
-function parseOpenSessionPayload(value: unknown): Result<{ durableId: string; windowId?: number }> {
+function parseOpenSessionPayload(value: unknown): Result<{
+  durableId: string
+  windowId?: number
+  folder?: string
+  authority?: string
+}> {
   if (!isRecord(value)) return fail('bad_request', 'openSession.payload must be an object')
   const durableId = value.durableId
   if (!isNonEmptyBoundedString(durableId, MAX_ID_LENGTH)) {
     return fail('bad_request', `openSession.durableId must be 1–${MAX_ID_LENGTH} characters`)
   }
+  const folder = parseOptionalNonEmptyString(value.folder, MAX_TEXT_LENGTH, 'openSession.folder')
+  if (!folder.ok) return folder
+  const authority = parseOptionalNonEmptyString(
+    value.authority,
+    MAX_WORKSPACE_NAME_LENGTH,
+    'openSession.authority',
+  )
+  if (!authority.ok) return authority
   const windowId = value.windowId
-  if (windowId === undefined) return ok({ durableId })
-  if (!isNonNegativeInteger(windowId)) {
+  if (windowId !== undefined && !isNonNegativeInteger(windowId)) {
     return fail('bad_request', 'openSession.windowId must be a non-negative integer')
   }
-  return ok({ durableId, windowId })
+  return ok({
+    durableId,
+    ...(windowId !== undefined ? { windowId } : {}),
+    ...(folder.value !== undefined ? { folder: folder.value } : {}),
+    ...(authority.value !== undefined ? { authority: authority.value } : {}),
+  })
 }
 
 function parseRefOnlyPayload(value: unknown, kind: string): Result<{ ref: MobileSessionRef }> {

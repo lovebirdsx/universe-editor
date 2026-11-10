@@ -2566,6 +2566,12 @@ input:focus-visible {
   font-weight: 600;
 }
 
+.sessions-row__hint {
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 /* New session page --------------------------------------------------------- */
 
 .new-session-page {

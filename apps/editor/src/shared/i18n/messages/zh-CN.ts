@@ -1283,6 +1283,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '"lan" 模式下绑定的 IPv4 地址。留空则自动选择最合适的局域网网卡：优先私有地址与物理网卡，忽略 169.254 开头的链路本地地址。',
   'settings.mobileGateway.port':
     '网关的 TCP 端口（配对 API、PWA 资源与 WebSocket）。环境变量 UNIVERSE_MOBILE_PORT 会覆盖此值。',
+  'settings.mobileGateway.sessionHistoryWorkspaceLimit':
+    '手机历史会话目录包含多少个「最近打开但当前已关闭」的工作区。已打开的窗口始终包含在内。调大后会读取更多本地历史文件，目录加载可能变慢。',
   'settings.mobileGateway.vapidSubject':
     'Web Push VAPID 声明中嵌入的联系地址。推送服务要求 https URL 或 mailto: 地址；默认值只是占位，正式推送请改为真实地址。',
   'settings.markdown': 'Markdown',

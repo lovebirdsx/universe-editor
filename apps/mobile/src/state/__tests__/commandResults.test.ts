@@ -78,6 +78,13 @@ describe('command result guards', () => {
       pinned: true,
     }
     expect(isMobileSessionHistoryEntry(row)).toBe(true)
+    const closedRow: Record<string, unknown> = {
+      ...row,
+      folder: 'file:///workspace/closed',
+      authority: 'devhost',
+    }
+    delete closedRow.windowId
+    expect(isMobileSessionHistoryEntry(closedRow)).toBe(true)
     expect(isMobileSessionHistoryEntry({ ...row, durableId: '' })).toBe(false)
     expect(isMobileSessionHistoryEntry({ ...row, windowId: -1 })).toBe(false)
     expect(isMobileSessionHistoryEntry({ ...row, title: 1 })).toBe(false)

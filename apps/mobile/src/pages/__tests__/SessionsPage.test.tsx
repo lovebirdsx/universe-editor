@@ -106,7 +106,43 @@ describe('SessionsPage', () => {
     await waitFor(() =>
       expect(harness.onOpenSessionRef).toHaveBeenCalledWith(sessionRef('s9', 1, 'durable-1')),
     )
-    expect(harness.resumeSession).toHaveBeenCalledWith('durable-1', 1)
+    expect(harness.resumeSession).toHaveBeenCalledWith('durable-1', 1, undefined, undefined)
+  })
+
+  it('resumes a closed workspace row with its folder and shows the PC-open hint', async () => {
+    const folder = 'remote-ssh://devhost/home/dev/project'
+    const closed: MobileSessionHistoryEntry = {
+      durableId: 'durable-remote',
+      agentId: 'echo',
+      agentName: 'Echo',
+      title: 'Remote session',
+      workspaceName: 'remote-project',
+      folder,
+      authority: 'devhost',
+      createdAt: 1_000,
+      lastUsedAt: 2_000,
+    }
+    const harness = createHarness({ history: [closed] })
+    renderPage(harness)
+
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+    expect(screen.getByTestId('sessions-row-open-hint').textContent).toContain(
+      strings.sessionsWillOpenWorkspace,
+    )
+
+    fireEvent.click(screen.getByTestId('sessions-row'))
+    await waitFor(() =>
+      expect(harness.onOpenSessionRef).toHaveBeenCalledWith(sessionRef('s9', 1, 'durable-1'), {
+        folder,
+        authority: 'devhost',
+      }),
+    )
+    expect(harness.resumeSession).toHaveBeenCalledWith(
+      'durable-remote',
+      undefined,
+      folder,
+      'devhost',
+    )
   })
 
   it('searches and filters rows locally', async () => {

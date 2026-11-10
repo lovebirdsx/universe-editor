@@ -516,13 +516,24 @@ export class MobileClient {
     )
   }
 
-  /** Resume a history-only session without activating it on the PC. */
-  async resumeSession(durableId: string, windowId?: number): Promise<MobileSessionRefResult> {
+  /**
+   * Resume a history-only session without activating it on the PC. A closed
+   * workspace's row supplies `folder` (+ remote `authority`) so the gateway can
+   * open the workspace before resuming.
+   */
+  async resumeSession(
+    durableId: string,
+    windowId?: number,
+    folder?: string,
+    authority?: string,
+  ): Promise<MobileSessionRefResult> {
     return this._commands.request<MobileSessionRefResult>(
       'openSession',
       {
         durableId,
         ...(windowId !== undefined ? { windowId } : {}),
+        ...(folder !== undefined ? { folder } : {}),
+        ...(authority !== undefined ? { authority } : {}),
       },
       { validateResult: isMobileSessionRefResult },
     )

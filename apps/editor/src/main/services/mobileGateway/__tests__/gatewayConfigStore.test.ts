@@ -120,6 +120,31 @@ describe('MobileGatewayConfigStore', () => {
     expect(store.state.config.port).toBe(48010)
   })
 
+  it('applies an external edit that only changes the closed-workspace limit', async () => {
+    const { file, store } = await setup()
+    await store.load()
+    const event = nextExternalEvent(store)
+
+    await writeFile(
+      file,
+      JSON.stringify({ ...DEFAULT_MOBILE_GATEWAY_CONFIG, sessionHistoryWorkspaceLimit: 7 }),
+      'utf8',
+    )
+
+    await expect(event).resolves.toEqual({
+      config: { ...DEFAULT_MOBILE_GATEWAY_CONFIG, sessionHistoryWorkspaceLimit: 7 },
+    })
+    expect(store.state.config.sessionHistoryWorkspaceLimit).toBe(7)
+
+    // A later mechanical update must merge into the externally edited value,
+    // not write the stale startup value back.
+    await store.update({ port: 48011 })
+    expect(JSON.parse(await readFile(file, 'utf8'))).toMatchObject({
+      port: 48011,
+      sessionHistoryWorkspaceLimit: 7,
+    })
+  })
+
   it('keeps the last valid config when an external edit is invalid', async () => {
     const { file, store } = await setup()
     await store.load()

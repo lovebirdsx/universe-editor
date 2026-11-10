@@ -14,7 +14,10 @@ import type {
   MobileGatewayConfig,
   MobileGatewayConfigPatch,
 } from '../../../shared/ipc/mobileGatewayService.js'
-import { DEFAULT_MOBILE_GATEWAY_CONFIG } from '../../../shared/ipc/mobileGatewayService.js'
+import {
+  DEFAULT_MOBILE_GATEWAY_CONFIG,
+  MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT,
+} from '../../../shared/ipc/mobileGatewayService.js'
 import { isValidVapidSubject } from './gatewayConfig.js'
 import { normalizeHostEntry } from './requestSecurity.js'
 
@@ -29,6 +32,7 @@ const CONFIG_KEYS = new Set([
   'allowedHosts',
   'certificateMode',
   'vapidSubject',
+  'sessionHistoryWorkspaceLimit',
 ])
 
 export type MobileGatewayConfigFileReadResult =
@@ -95,6 +99,15 @@ export function parseMobileGatewayConfigFile(raw: unknown): MobileGatewayConfigP
     }
   }
 
+  if (hasOwn(raw, 'sessionHistoryWorkspaceLimit')) {
+    const value = raw['sessionHistoryWorkspaceLimit']
+    if (isSessionHistoryWorkspaceLimit(value)) {
+      config = { ...config, sessionHistoryWorkspaceLimit: value }
+    } else {
+      errors.push(sessionHistoryWorkspaceLimitError())
+    }
+  }
+
   return errors.length === 0 ? { ok: true, config } : { ok: false, errors }
 }
 
@@ -115,6 +128,7 @@ export function validateMobileGatewayConfigPatch(raw: unknown): MobileGatewayCon
     allowedHosts?: readonly string[]
     certificateMode?: MobileGatewayCertificateMode
     vapidSubject?: string
+    sessionHistoryWorkspaceLimit?: number
   } = {}
 
   if (hasOwn(raw, 'enabled')) {
@@ -178,6 +192,17 @@ export function validateMobileGatewayConfigPatch(raw: unknown): MobileGatewayCon
     }
   }
 
+  if (hasOwn(raw, 'sessionHistoryWorkspaceLimit')) {
+    const value = raw['sessionHistoryWorkspaceLimit']
+    if (value !== undefined) {
+      if (isSessionHistoryWorkspaceLimit(value)) {
+        patch.sessionHistoryWorkspaceLimit = value
+      } else {
+        errors.push(sessionHistoryWorkspaceLimitError())
+      }
+    }
+  }
+
   return errors.length === 0 ? { ok: true, patch } : { ok: false, errors }
 }
 
@@ -193,6 +218,8 @@ export function mergeMobileGatewayConfig(
     allowedHosts: patch.allowedHosts ?? base.allowedHosts,
     certificateMode: patch.certificateMode ?? base.certificateMode,
     vapidSubject: patch.vapidSubject ?? base.vapidSubject,
+    sessionHistoryWorkspaceLimit:
+      patch.sessionHistoryWorkspaceLimit ?? base.sessionHistoryWorkspaceLimit,
   }
 }
 
@@ -206,6 +233,7 @@ export function serializeMobileGatewayConfig(config: MobileGatewayConfig): Mobil
     allowedHosts: [...config.allowedHosts],
     certificateMode: config.certificateMode,
     vapidSubject: config.vapidSubject,
+    sessionHistoryWorkspaceLimit: config.sessionHistoryWorkspaceLimit,
   }
 }
 
@@ -273,6 +301,19 @@ function parseAllowedHosts(value: unknown, field: string, errors: string[]): str
 
 function isPort(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= 65535
+}
+
+function isSessionHistoryWorkspaceLimit(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT
+  )
+}
+
+function sessionHistoryWorkspaceLimitError(): string {
+  return `"sessionHistoryWorkspaceLimit" must be an integer between 1 and ${MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT}`
 }
 
 function stripBom(text: string): string {

@@ -19,6 +19,8 @@ import {
 import {
   IMobileGatewayService,
   MOBILE_GATEWAY_DEFAULT_PORT,
+  MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT,
+  MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT,
 } from '../../shared/ipc/mobileGatewayService.js'
 import { schemaFileMatchForUri } from '../services/preferences/schemaFileMatch.js'
 
@@ -79,6 +81,16 @@ const MOBILE_GATEWAY_SCHEMA: IJSONSchema = {
       description: localize(
         'settings.mobileGateway.vapidSubject',
         'Contact address embedded in Web Push VAPID claims. Push services require either an https URL or a mailto: address. The default is a placeholder; set a real one for production push.',
+      ),
+    },
+    sessionHistoryWorkspaceLimit: {
+      type: 'number',
+      default: MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT,
+      minimum: 1,
+      maximum: MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT,
+      description: localize(
+        'settings.mobileGateway.sessionHistoryWorkspaceLimit',
+        'How many recently opened but currently closed workspaces contribute session history to the phone catalog. Open windows are always included. Raising it reads more local history files and can slow the catalog.',
       ),
     },
   },

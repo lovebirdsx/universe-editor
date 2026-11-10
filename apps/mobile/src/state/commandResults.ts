@@ -77,7 +77,8 @@ export function isMobileSideTaskList(value: unknown): value is readonly MobileSi
 export function isMobileSessionHistoryEntry(value: unknown): value is MobileSessionHistoryEntry {
   if (!isRecord(value)) return false
   if (!isNonEmptyString(value['durableId'])) return false
-  if (!isNonNegativeInteger(value['windowId'])) return false
+  const windowId = value['windowId']
+  if (windowId !== undefined && !isNonNegativeInteger(windowId)) return false
   if (!isNonEmptyString(value['agentId'])) return false
   const agentName = value['agentName']
   if (agentName !== undefined && typeof agentName !== 'string') return false
@@ -85,6 +86,8 @@ export function isMobileSessionHistoryEntry(value: unknown): value is MobileSess
   const firstPrompt = value['firstPrompt']
   if (firstPrompt !== undefined && typeof firstPrompt !== 'string') return false
   if (typeof value['workspaceName'] !== 'string') return false
+  const folder = value['folder']
+  if (folder !== undefined && typeof folder !== 'string') return false
   const cwd = value['cwd']
   if (cwd !== undefined && typeof cwd !== 'string') return false
   const authority = value['authority']

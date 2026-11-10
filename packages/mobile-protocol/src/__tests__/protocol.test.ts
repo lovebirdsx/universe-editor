@@ -270,6 +270,14 @@ describe('parseClientFrame', () => {
       { kind: 'listSessionHistory', payload: {} },
       { kind: 'openSession', payload: { durableId: 'durable-1' } },
       { kind: 'openSession', payload: { durableId: 'durable-1', windowId: 2 } },
+      {
+        kind: 'openSession',
+        payload: {
+          durableId: 'durable-1',
+          folder: 'file:///workspace/demo',
+          authority: 'host',
+        },
+      },
     ]
     for (const command of commands) {
       const frame = {
@@ -327,6 +335,9 @@ describe('parseClientFrame', () => {
       { kind: 'openSession', payload: { durableId: '' } },
       { kind: 'openSession', payload: { durableId: 'durable-1', windowId: -1 } },
       { kind: 'openSession', payload: { durableId: 'durable-1', windowId: 1.5 } },
+      { kind: 'openSession', payload: { durableId: 'durable-1', folder: '' } },
+      { kind: 'openSession', payload: { durableId: 'durable-1', folder: 3 } },
+      { kind: 'openSession', payload: { durableId: 'durable-1', authority: 3 } },
     ]
     for (const command of bad) {
       expect(

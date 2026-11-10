@@ -42,6 +42,7 @@ import {
   type MobileToolCallDetail,
 } from '@universe-editor/mobile-protocol'
 import { truncateDiffSideText, truncateToolTextBlock } from '@universe-editor/acp-view-model'
+import { isResumableHistoryEntry } from '../../../shared/mobileGateway/sessionHistoryFilter.js'
 import type {
   MobileBridgeAttentionEvent,
   MobileBridgeCommandError,
@@ -1031,11 +1032,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
    * this window's catalog.
    */
   private _isResumableHistoryEntry(entry: AcpSessionHistoryEntry): boolean {
-    if (entry.sideTaskOf !== undefined) return false
-    if (entry.archived === true) return false
-    if (entry.hasMessages === false) return false
-    if (entry.id.length === 0) return false
-    return !isForeignWorkspaceSession(
+    return isResumableHistoryEntry(
       entry,
       this._currentCwd(),
       this._currentAuthority(),

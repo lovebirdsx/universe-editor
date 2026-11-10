@@ -61,6 +61,7 @@ import { MOBILE_GATEWAY_CONFIG_FILE } from './gatewayConfigFile.js'
 import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
 import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
 import { WorkspaceGitStatusService } from './workspaceGitStatus.js'
+import { WorkspaceSessionHistoryReader } from './workspaceSessionHistoryReader.js'
 import { ensureLanCertificate, type LanCertificate } from './lanCertificate.js'
 import { buildAllowedHosts } from './requestSecurity.js'
 import { isCertificateRejection, isLocalTlsClient } from './tlsTrust.js'
@@ -113,6 +114,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
 
   private readonly _windowBridges = new Map<number, IMobileBridgeService>()
   private readonly _gitStatus: WorkspaceGitStatusService
+  private readonly _sessionHistoryReader: WorkspaceSessionHistoryReader
   private readonly _hub: MobileGatewayHub
   private _windows: MobileGatewayWindowProvider | undefined
 
@@ -158,6 +160,10 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       logger: this._logger,
     })
     this._gitStatus = this._register(new WorkspaceGitStatusService({ logger: this._logger }))
+    this._sessionHistoryReader = new WorkspaceSessionHistoryReader({
+      userDataDir: app.getPath('userData'),
+      logger: this._logger,
+    })
     this._hub = new MobileGatewayHub(
       this._logger,
       {
@@ -175,6 +181,8 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
         workspaceGitDirty: createWorkspaceGitDirtyProbe({
           isDirty: (root, signal) => this._gitStatus.isDirty(root, signal),
         }),
+        readWorkspaceSessionHistory: (workspace) => this._sessionHistoryReader.read(workspace),
+        sessionHistoryWorkspaceLimit: () => this._config.sessionHistoryWorkspaceLimit,
         attachments: this._attachments,
       },
       (attention) => this._handleAttention(attention),

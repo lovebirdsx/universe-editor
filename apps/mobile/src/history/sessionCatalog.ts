@@ -12,14 +12,18 @@ export type SessionCatalogDateBucket = 'today' | 'yesterday' | 'earlier'
 
 /**
  * One row per durable session. The inbox only knows sessions that are live
- * right now; history adds resumable rows from every open PC window. Merging by
- * durable id keeps a live session from showing up twice and lets a tapped live
- * row open directly instead of going through `openSession` again.
+ * right now; history adds resumable rows from every open PC window and from
+ * recently opened (closed) workspaces. Merging by durable id keeps a live
+ * session from showing up twice and lets a tapped live row open directly
+ * instead of going through `openSession` again.
  */
 export interface SessionCatalogRow {
   readonly key: string
   readonly durableId: string | undefined
   readonly windowId: number | undefined
+  /** Closed-workspace row: the workspace to open before resuming. */
+  readonly folder: string | undefined
+  readonly authority: string | undefined
   readonly title: string
   readonly firstPrompt: string | undefined
   readonly agentLabel: string
@@ -76,6 +80,8 @@ export function buildSessionCatalog(
       key: `d:${entry.durableId}`,
       durableId: entry.durableId,
       windowId: live?.ref.windowId ?? entry.windowId,
+      folder: entry.folder,
+      authority: live?.authority ?? entry.authority,
       title: pickTitle(live?.title, entry.title, entry.durableId),
       firstPrompt: entry.firstPrompt,
       agentLabel: pickAgent(live?.agentName, entry.agentName, entry.agentId),
@@ -95,6 +101,8 @@ export function buildSessionCatalog(
       key: `d:${durableId}`,
       durableId,
       windowId: live.ref.windowId,
+      folder: undefined,
+      authority: live.authority,
       title: pickTitle(live.title, undefined, durableId),
       firstPrompt: undefined,
       agentLabel: pickAgent(live.agentName, undefined, live.agentId),
@@ -113,6 +121,8 @@ export function buildSessionCatalog(
       key,
       durableId: undefined,
       windowId: live.ref.windowId,
+      folder: undefined,
+      authority: live.authority,
       title: pickTitle(live.title, undefined, key),
       firstPrompt: undefined,
       agentLabel: pickAgent(live.agentName, undefined, live.agentId),

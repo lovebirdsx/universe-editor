@@ -261,5 +261,10 @@ export function workspaceIdFromUri(uriString: string): string {
 
 /** Backend file path for a given workspace id, under `<userData>/workspaces/`. */
 export function workspaceStoragePath(workspaceId: string): string {
-  return join(app.getPath('userData'), 'workspaces', `${workspaceId}.json`)
+  return workspaceStoragePathFor(app.getPath('userData'), workspaceId)
+}
+
+/** Pure variant for callers that already know the user-data directory. */
+export function workspaceStoragePathFor(userDataDir: string, workspaceId: string): string {
+  return join(userDataDir, 'workspaces', `${workspaceId}.json`)
 }

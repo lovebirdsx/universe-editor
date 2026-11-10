@@ -493,16 +493,26 @@ export interface DeleteSideTaskPayload {
 export interface MobileSessionHistoryEntry {
   /** Agent-issued durable id (`sessionIdOnAgent`). */
   durableId: string
-  /** Open PC window whose renderer owns this history bucket. */
-  windowId: number
+  /**
+   * Open PC window whose renderer owns this history bucket. Present for live
+   * windows only; rows read from a closed workspace's storage omit it and
+   * point at `folder` instead.
+   */
+  windowId?: number
   agentId: string
   agentName?: string
   title: string
   /** First content-bearing user prompt, capped for search / a secondary line. */
   firstPrompt?: string
-  /** Main-owned display name of the owning window's workspace. */
+  /** Main-owned display name of the owning workspace. */
   workspaceName: string
+  /**
+   * Workspace URI of a closed-workspace history row. Opening it lets the PC
+   * open the workspace first, then resume the session.
+   */
+  folder?: string
   cwd?: string
+  /** Remote authority of the workspace / session, when not local. */
   authority?: string
   /** Epoch milliseconds. */
   createdAt: number
@@ -519,6 +529,14 @@ export interface OpenSessionPayload {
    * the window's history still contains the session before resuming.
    */
   windowId?: number
+  /**
+   * Workspace URI for rows whose workspace is closed. When no live window owns
+   * the row, the gateway opens this workspace (bringing it to the foreground)
+   * and resumes the session there.
+   */
+  folder?: string
+  /** Remote authority of `folder`; omitted for local workspaces. */
+  authority?: string
 }
 
 export interface CommandFrame {

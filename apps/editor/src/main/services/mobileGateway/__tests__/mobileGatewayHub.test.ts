@@ -1,9 +1,11 @@
 import { CancellationToken, Emitter, type ILogger } from '@universe-editor/platform'
-import type {
-  MobileAgentCandidate,
-  MobileSessionRef,
-  MobileSideTaskSummary,
-  ServerFrame,
+import {
+  MAX_SERVER_FRAME_BYTES,
+  MAX_WORKSPACE_NAME_LENGTH,
+  type MobileAgentCandidate,
+  type MobileSessionRef,
+  type MobileSideTaskSummary,
+  type ServerFrame,
 } from '@universe-editor/mobile-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import type {
@@ -21,6 +23,7 @@ import {
   COMMAND_IDEMPOTENCY_TTL_MS,
   MAX_BUFFERED_SESSION_BYTES,
   MAX_GIT_STATUS_CANDIDATES,
+  OPEN_SESSION_TIMEOUT_MS,
   SEND_PROMPT_TIMEOUT_MS,
   MobileGatewayHub,
   NEW_SESSION_TIMEOUT_MS,
@@ -754,18 +757,24 @@ describe('MobileGatewayHub commands', () => {
     listRecentWorkspaces: ReturnType<typeof vi.fn>
     openWorkspace: ReturnType<typeof vi.fn>
     waitForBridge: ReturnType<typeof vi.fn>
+    readWorkspaceSessionHistory: ReturnType<typeof vi.fn>
+    sessionHistoryWorkspaceLimit: ReturnType<typeof vi.fn>
   } {
     return {
       listOpenWorkspaces: vi.fn(() => []),
       listRecentWorkspaces: vi.fn(async () => []),
       openWorkspace: vi.fn(async () => {}),
       waitForBridge: vi.fn(async () => undefined),
+      readWorkspaceSessionHistory: vi.fn(async () => []),
+      sessionHistoryWorkspaceLimit: vi.fn(() => 20),
       ...overrides,
     } as MobileGatewayHost & {
       listOpenWorkspaces: ReturnType<typeof vi.fn>
       listRecentWorkspaces: ReturnType<typeof vi.fn>
       openWorkspace: ReturnType<typeof vi.fn>
       waitForBridge: ReturnType<typeof vi.fn>
+      readWorkspaceSessionHistory: ReturnType<typeof vi.fn>
+      sessionHistoryWorkspaceLimit: ReturnType<typeof vi.fn>
     }
   }
 
@@ -1066,6 +1075,414 @@ describe('MobileGatewayHub commands', () => {
       payload: { durableId: 'd1' },
     })
     expect(bridge.openSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('merges closed-workspace disk history, prefers open rows and caps workspaces', async () => {
+    const recent = [
+      { folder: 'file:///workspace/recent-1', name: 'recent-1' },
+      { folder: 'remote-ssh://devhost/home/dev/project', name: 'remote', authority: 'devhost' },
+      { folder: 'file:///workspace/recent-3', name: 'recent-3' },
+      { folder: 'file:///workspace/open', name: 'open' },
+    ]
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/open', name: 'open' },
+      ]),
+      listRecentWorkspaces: vi.fn(async () => recent),
+      readWorkspaceSessionHistory: vi.fn(async (workspace: { name: string }) => {
+        if (workspace.name === 'recent-1') return [historyRow('d1', { title: 'stale copy' })]
+        if (workspace.name === 'remote') {
+          return [historyRow('d2', { title: 'remote row', authority: 'devhost' })]
+        }
+        return [historyRow('d3', { title: 'capped row' })]
+      }),
+      sessionHistoryWorkspaceLimit: vi.fn(() => 2),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const open = new FakeBridge()
+    open.history = [historyRow('d1', { title: 'open wins', lastUsedAt: 30 })]
+    hub.registerWindow(1, open, () => 'open')
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'history',
+      kind: 'listSessionHistory',
+      payload: {},
+    })
+
+    expect(host.readWorkspaceSessionHistory).toHaveBeenCalledTimes(2)
+    expect(host.readWorkspaceSessionHistory).toHaveBeenCalledWith(recent[0])
+    expect(host.readWorkspaceSessionHistory).toHaveBeenCalledWith(recent[1])
+    const result = framesOf(connection, 'command_result').at(-1)?.result as Array<
+      Record<string, unknown>
+    >
+    expect(result.map((row) => row['durableId'])).toEqual(['d1', 'd2'])
+    expect(result[0]).toMatchObject({
+      durableId: 'd1',
+      windowId: 1,
+      workspaceName: 'open',
+      title: 'open wins',
+    })
+    expect(result[0]).not.toHaveProperty('folder')
+    expect(result[1]).toMatchObject({
+      durableId: 'd2',
+      workspaceName: 'remote',
+      folder: recent[1]?.folder,
+      authority: 'devhost',
+    })
+    expect(result[1]).not.toHaveProperty('windowId')
+  })
+
+  it('opens a closed workspace before resuming its history session', async () => {
+    const folder = 'file:///workspace/recent'
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'recent' }]),
+      waitForBridge: vi.fn(async () => 5),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    // Owner scan misses; the freshly opened window's poll then finds it.
+    bridge.hasSessionHistory.mockResolvedValueOnce(false).mockResolvedValue(true)
+    bridge.openSession.mockResolvedValueOnce({
+      ok: true,
+      value: { localId: 'resumed-local', durableId: 'd1' },
+    })
+    hub.registerWindow(5, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open-closed',
+      kind: 'openSession',
+      payload: { durableId: 'd1', folder },
+    })
+
+    expect(host.openWorkspace).toHaveBeenCalledWith(folder, undefined)
+    expect(host.waitForBridge).toHaveBeenCalledWith(folder, undefined, expect.any(Number))
+    expect(bridge.ping).toHaveBeenCalled()
+    expect(bridge.openSession).toHaveBeenCalledWith('d1', expect.anything())
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({
+      ok: true,
+      result: { ref: { windowId: 5, localId: 'resumed-local', durableId: 'd1' } },
+    })
+  })
+
+  it('opens a closed remote workspace before resuming its history session', async () => {
+    const folder = 'remote-ssh://devhost/home/dev/project'
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'project', authority: 'devhost' }]),
+      waitForBridge: vi.fn(async () => 7),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    bridge.hasSessionHistory.mockResolvedValueOnce(false).mockResolvedValue(true)
+    hub.registerWindow(7, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open-remote',
+      kind: 'openSession',
+      payload: { durableId: 'd1', folder, authority: 'devhost' },
+    })
+
+    expect(host.openWorkspace).toHaveBeenCalledWith(folder, 'devhost')
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({ ok: true })
+  })
+
+  it('reports workspace_not_open when the closed workspace cannot be opened', async () => {
+    const folder = 'file:///workspace/recent'
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'recent' }]),
+      waitForBridge: vi.fn(async () => undefined),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open-failed',
+      kind: 'openSession',
+      payload: { durableId: 'd1', folder },
+    })
+
+    expect(framesOf(connection, 'command_result').at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'open-failed',
+      ok: false,
+      error: 'workspace_not_open',
+    })
+  })
+
+  it('reports workspace_not_open when opening the workspace rejects', async () => {
+    const folder = 'file:///workspace/recent'
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'recent' }]),
+      openWorkspace: vi.fn(async () => {
+        throw new Error('open failed')
+      }),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open-rejected',
+      kind: 'openSession',
+      payload: { durableId: 'd1', folder },
+    })
+
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({
+      ok: false,
+      error: 'workspace_not_open',
+    })
+  })
+
+  it('waits for a freshly opened window to publish the history row', async () => {
+    const folder = 'file:///workspace/recent'
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'recent' }]),
+      waitForBridge: vi.fn(async () => 5),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    // First call is the owner scan; the next two are the post-open polls.
+    bridge.hasSessionHistory
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+    hub.registerWindow(5, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open-polled',
+      kind: 'openSession',
+      payload: { durableId: 'd1', folder },
+    })
+
+    expect(bridge.hasSessionHistory).toHaveBeenCalledTimes(3)
+    expect(bridge.openSession).toHaveBeenCalledWith('d1', expect.anything())
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({ ok: true })
+  })
+
+  it('gives up within the shared deadline when the opened window never publishes it', async () => {
+    vi.useFakeTimers()
+    try {
+      const folder = 'file:///workspace/recent'
+      const host = makeHost({
+        listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'recent' }]),
+        waitForBridge: vi.fn(async () => 5),
+      })
+      const hub = new MobileGatewayHub(NULL_LOGGER, host)
+      const bridge = new FakeBridge()
+      bridge.hasSessionHistory.mockResolvedValue(false)
+      hub.registerWindow(5, bridge)
+      const connection = makeConnection()
+      hub.addConnection(connection)
+
+      const command = hub.handleCommand(connection, {
+        type: 'command',
+        requestId: 'open-timeout',
+        kind: 'openSession',
+        payload: { durableId: 'd1', folder },
+      })
+      await vi.advanceTimersByTimeAsync(OPEN_SESSION_TIMEOUT_MS + 1_000)
+      await command
+
+      expect(bridge.openSession).not.toHaveBeenCalled()
+      expect(framesOf(connection, 'command_result').at(-1)).toStrictEqual({
+        type: 'command_result',
+        requestId: 'open-timeout',
+        ok: false,
+        error: 'session_not_found',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reverse-looks a deep-linked durable id in closed workspace buckets', async () => {
+    const folder = 'remote-ssh://devhost/home/dev/project'
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'project', authority: 'devhost' }]),
+      readWorkspaceSessionHistory: vi.fn(async () => [historyRow('deep-id')]),
+      waitForBridge: vi.fn(async () => 7),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    bridge.hasSessionHistory.mockResolvedValueOnce(false).mockResolvedValue(true)
+    hub.registerWindow(7, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open-deep',
+      kind: 'openSession',
+      payload: { durableId: 'deep-id' },
+    })
+
+    expect(host.readWorkspaceSessionHistory).toHaveBeenCalledWith(
+      expect.objectContaining({ folder, name: 'project' }),
+    )
+    expect(host.openWorkspace).toHaveBeenCalledWith(folder, 'devhost')
+    expect(bridge.openSession).toHaveBeenCalledWith('deep-id', expect.anything())
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({ ok: true })
+  })
+
+  it('rejects a folder that is neither open nor recent without opening it', async () => {
+    const host = makeHost()
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'open-unknown',
+      kind: 'openSession',
+      payload: { durableId: 'd1', folder: 'file:///workspace/not-listed' },
+    })
+
+    expect(host.openWorkspace).not.toHaveBeenCalled()
+    expect(framesOf(connection, 'command_result').at(-1)).toMatchObject({
+      ok: false,
+      error: 'workspace_not_open',
+    })
+  })
+
+  it('falls back to the workspace bucket when an open window cannot list history', async () => {
+    const workspace = {
+      windowId: 1,
+      folder: 'file:///workspace/open',
+      name: 'open',
+    }
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [workspace]),
+      readWorkspaceSessionHistory: vi.fn(async () => [historyRow('d1', { title: 'from disk' })]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    bridge.listSessionHistory.mockRejectedValueOnce(new Error('renderer timed out'))
+    hub.registerWindow(1, bridge, () => 'open')
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'history-fallback',
+      kind: 'listSessionHistory',
+      payload: {},
+    })
+
+    expect(host.readWorkspaceSessionHistory).toHaveBeenCalledWith(workspace)
+    const result = framesOf(connection, 'command_result').at(-1)?.result as Array<
+      Record<string, unknown>
+    >
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({
+      durableId: 'd1',
+      title: 'from disk',
+      workspaceName: 'open',
+      folder: workspace.folder,
+    })
+    expect(result[0]).not.toHaveProperty('windowId')
+  })
+
+  it('dedupes disk rows with the same pinned/freshness rule as open rows', async () => {
+    const recent = [
+      { folder: 'file:///workspace/a', name: 'a' },
+      { folder: 'file:///workspace/b', name: 'b' },
+    ]
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => recent),
+      readWorkspaceSessionHistory: vi.fn(async (workspace: { name: string }) =>
+        workspace.name === 'a'
+          ? [historyRow('d1', { lastUsedAt: 10 }), historyRow('d2', { lastUsedAt: 10 })]
+          : [
+              historyRow('d1', { pinned: true, lastUsedAt: 5 }),
+              historyRow('d2', { lastUsedAt: 20 }),
+            ],
+      ),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'history-dedupe',
+      kind: 'listSessionHistory',
+      payload: {},
+    })
+
+    const result = framesOf(connection, 'command_result').at(-1)?.result as Array<
+      Record<string, unknown>
+    >
+    expect(result).toHaveLength(2)
+    expect(result[0]).toMatchObject({ durableId: 'd1', pinned: true })
+    expect(result[1]).toMatchObject({ durableId: 'd2', lastUsedAt: 20 })
+  })
+
+  it('falls back to the default or hard cap for an unusable workspace limit', async () => {
+    const recent = Array.from({ length: 105 }, (_value, index) => ({
+      folder: `file:///workspace/w${index}`,
+      name: `w${index}`,
+    }))
+    const run = async (limit: number): Promise<number> => {
+      const host = makeHost({
+        listRecentWorkspaces: vi.fn(async () => recent),
+        sessionHistoryWorkspaceLimit: vi.fn(() => limit),
+      })
+      const hub = new MobileGatewayHub(NULL_LOGGER, host)
+      const connection = makeConnection()
+      hub.addConnection(connection)
+      await hub.handleCommand(connection, {
+        type: 'command',
+        requestId: `history-limit-${limit}`,
+        kind: 'listSessionHistory',
+        payload: {},
+      })
+      return host.readWorkspaceSessionHistory.mock.calls.length
+    }
+
+    expect(await run(0)).toBe(20)
+    expect(await run(Number.NaN)).toBe(20)
+    expect(await run(2.5)).toBe(20)
+    expect(await run(101)).toBe(100)
+  })
+
+  it('drops over-long workspace hints instead of truncating identities', async () => {
+    const folder = `file:///${'a'.repeat(MAX_SERVER_FRAME_BYTES)}`
+    const authority = 'h'.repeat(MAX_WORKSPACE_NAME_LENGTH + 1)
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'huge', authority }]),
+      readWorkspaceSessionHistory: vi.fn(async () => [historyRow('d1', { authority })]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'history-hints',
+      kind: 'listSessionHistory',
+      payload: {},
+    })
+
+    const result = framesOf(connection, 'command_result').at(-1)?.result as Array<
+      Record<string, unknown>
+    >
+    expect(result[0]).toMatchObject({ durableId: 'd1', workspaceName: 'huge' })
+    expect(result[0]).not.toHaveProperty('folder')
+    expect(result[0]).not.toHaveProperty('authority')
   })
 
   it('routes fork, rewind and side-task commands and stamps created refs', async () => {
@@ -2408,6 +2825,8 @@ describe('MobileGatewayHub attachment resolution', () => {
       listRecentWorkspaces: async () => [],
       openWorkspace: async () => {},
       waitForBridge: async () => undefined,
+      readWorkspaceSessionHistory: async () => [],
+      sessionHistoryWorkspaceLimit: () => 20,
       ...(resolver !== undefined ? { attachments: resolver } : {}),
     }
   }

@@ -474,6 +474,34 @@ describe('SessionPage snapshot rendering', () => {
     expect(onBack).toHaveBeenCalledTimes(1)
   })
 
+  it('reopens a removed session with its closed-workspace hint', async () => {
+    const ref = sessionRef('s1', 1, 'durable-1')
+    const { harness } = openPage('durable-1', {
+      workspaceFolder: 'file:///workspace/demo',
+      workspaceAuthority: 'devhost',
+    })
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, { summary: sessionSummary('s1', { ref }), timeline: [] }),
+    )
+    feed(harness.socket, { type: 'session_removed', ref })
+
+    fireEvent.click(screen.getByTestId('session-reopen'))
+    const command = sentFrames(harness.socket).find(
+      (frame): frame is { type: 'command'; requestId: string; kind: string; payload: unknown } =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as { type?: unknown }).type === 'command' &&
+        (frame as { kind?: unknown }).kind === 'openSession',
+    )
+    expect(command?.payload).toEqual({
+      durableId: 'durable-1',
+      windowId: 1,
+      folder: 'file:///workspace/demo',
+      authority: 'devhost',
+    })
+  })
+
   it('shows the removed state when the removal precedes the snapshot', () => {
     const { harness } = openPage()
     feed(harness.socket, { type: 'session_removed', ref: sessionRef('s1') })

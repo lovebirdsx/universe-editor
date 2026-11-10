@@ -11,7 +11,7 @@ import { GuidePage } from './pages/GuidePage.js'
 import { InboxPage } from './pages/InboxPage.js'
 import { NewSessionPage } from './pages/NewSessionPage.js'
 import { PairPage } from './pages/PairPage.js'
-import { SessionsPage } from './pages/SessionsPage.js'
+import { SessionsPage, type SessionWorkspaceHint } from './pages/SessionsPage.js'
 import {
   leaveSession,
   leaveSessions,
@@ -45,6 +45,11 @@ export function App() {
   // Ref returned by a fork / side-task command; the session route resolves it
   // directly instead of waiting for the inbox mirror to catch up.
   const [pendingRef, setPendingRef] = useState<MobileSessionRef | undefined>(undefined)
+  // Workspace of a catalog row that came from a closed workspace; the session
+  // page keeps it so a later "reopen" can ask the PC to open that workspace.
+  const [pendingWorkspaceHint, setPendingWorkspaceHint] = useState<
+    SessionWorkspaceHint | undefined
+  >(undefined)
   // Sessions opened from the catalog go back there; inbox rows go back to the inbox.
   const [sessionOrigin, setSessionOrigin] = useState<'inbox' | 'sessions'>('inbox')
   const sessionsScrollRef = useRef(0)
@@ -75,6 +80,7 @@ export function App() {
   useEffect(() => {
     const onPopState = (): void => {
       setPendingRef(undefined)
+      setPendingWorkspaceHint(undefined)
       setRoute(readRoute(window.location.pathname))
       setFocusPending(new URLSearchParams(window.location.search).get('focus') === 'pending')
     }
@@ -101,6 +107,7 @@ export function App() {
       // session's back button can return to it on a single-entry cold start.
       pushMobileRoute(`${url.pathname}${url.search}`)
       setPendingRef(undefined)
+      setPendingWorkspaceHint(undefined)
       setFocusPending(url.searchParams.get('focus') === 'pending')
       setRoute(next)
     }
@@ -135,23 +142,26 @@ export function App() {
     setLoaded({ loading: true, credentials: undefined })
     setReloadKey((value) => value + 1)
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     setRoute({ name: 'inbox' })
   }
 
   const openSession = (sessionKey: string, pending = false): void => {
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     setSessionOrigin('inbox')
     navigateToSession(sessionKey)
     setFocusPending(pending)
     setRoute(readRoute(window.location.pathname))
   }
 
-  const openSessionRef = (ref: MobileSessionRef): void => {
+  const openSessionRef = (ref: MobileSessionRef, workspaceHint?: SessionWorkspaceHint): void => {
     if (route.name === 'sessions') {
       sessionsScrollRef.current = window.scrollY
       setSessionOrigin('sessions')
     }
     setPendingRef(ref)
+    setPendingWorkspaceHint(workspaceHint)
     setFocusPending(false)
     navigateToSession(sessionRouteKey(ref))
     setRoute(readRoute(window.location.pathname))
@@ -159,6 +169,7 @@ export function App() {
 
   const openSessions = (): void => {
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     setFocusPending(false)
     navigateToSessions()
     setRoute(readRoute(window.location.pathname))
@@ -166,12 +177,14 @@ export function App() {
 
   const leaveSessionsPage = (): void => {
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     sessionsScrollRef.current = 0
     leaveSessions()
   }
 
   const openNewSession = (): void => {
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     setSessionOrigin('inbox')
     navigateToNewSession()
     setFocusPending(false)
@@ -180,6 +193,7 @@ export function App() {
 
   const backToInbox = (): void => {
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     leaveSession()
     setFocusPending(false)
     setRoute({ name: 'inbox' })
@@ -187,6 +201,7 @@ export function App() {
 
   const leaveSessionPage = (): void => {
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     setFocusPending(false)
     leaveSession()
   }
@@ -198,6 +213,7 @@ export function App() {
 
   const unpair = (): void => {
     setPendingRef(undefined)
+    setPendingWorkspaceHint(undefined)
     setNotice(undefined)
     void store.clear()
     setLoaded({ loading: false, credentials: undefined })
@@ -247,6 +263,7 @@ export function App() {
           setSessionOrigin('inbox')
         }
         setPendingRef(undefined)
+        setPendingWorkspaceHint(undefined)
         setFocusPending(pending)
         navigateToSession(sessionKey)
         setRoute(readRoute(window.location.pathname))
@@ -263,6 +280,8 @@ export function App() {
         initialRef={pendingRef}
         onOpenSessionRef={openSessionRef}
         focusPending={focusPending}
+        workspaceFolder={pendingWorkspaceHint?.folder}
+        workspaceAuthority={pendingWorkspaceHint?.authority}
         onBack={leaveSessionPage}
         onFinished={finishSession}
       />
@@ -272,6 +291,7 @@ export function App() {
         onBack={backToInbox}
         onCreated={(sessionKey) => {
           setPendingRef(undefined)
+          setPendingWorkspaceHint(undefined)
           setFocusPending(false)
           setRoute({ name: 'session', sessionKey })
         }}

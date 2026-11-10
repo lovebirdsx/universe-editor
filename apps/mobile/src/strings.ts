@@ -173,6 +173,7 @@ export const strings = {
   sessionsOffline: '离线，暂时无法读取会话历史。',
   sessionsOfflineBanner: '与 PC 的连接已断开，正在重连。目录可能不是最新。',
   sessionsOpening: '正在打开…',
+  sessionsWillOpenWorkspace: '将在 PC 上打开此工作区',
   sessionsLiveBadge: '活跃',
   sessionsPinnedBadge: '置顶',
   sessionsGroupToday: '今天',

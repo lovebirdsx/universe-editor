@@ -52,6 +52,7 @@ describe('parseMobileGatewayConfigFile', () => {
         allowedHosts: ['  pc.example.ts.net  '],
         certificateMode: 'root-ca',
         vapidSubject: '  mailto:dev@example.com  ',
+        sessionHistoryWorkspaceLimit: 12,
       }),
     ).toEqual({
       ok: true,
@@ -63,6 +64,7 @@ describe('parseMobileGatewayConfigFile', () => {
         allowedHosts: ['pc.example.ts.net'],
         certificateMode: 'root-ca',
         vapidSubject: 'mailto:dev@example.com',
+        sessionHistoryWorkspaceLimit: 12,
       },
     })
   })
@@ -85,6 +87,22 @@ describe('parseMobileGatewayConfigFile', () => {
     [{ allowedHosts: 'pc.example.ts.net' }, '"allowedHosts" must be an array'],
     [{ certificateMode: 'ca' }, '"certificateMode" must be "self-signed" or "root-ca"'],
     [{ vapidSubject: 'http://example.com' }, '"vapidSubject" must be an https'],
+    [
+      { sessionHistoryWorkspaceLimit: 0 },
+      '"sessionHistoryWorkspaceLimit" must be an integer between 1 and 100',
+    ],
+    [
+      { sessionHistoryWorkspaceLimit: 101 },
+      '"sessionHistoryWorkspaceLimit" must be an integer between 1 and 100',
+    ],
+    [
+      { sessionHistoryWorkspaceLimit: 1.5 },
+      '"sessionHistoryWorkspaceLimit" must be an integer between 1 and 100',
+    ],
+    [
+      { sessionHistoryWorkspaceLimit: '20' },
+      '"sessionHistoryWorkspaceLimit" must be an integer between 1 and 100',
+    ],
   ])('rejects invalid known fields: %j', (raw, message) => {
     const result = parseMobileGatewayConfigFile(raw)
     expect(result.ok).toBe(false)
@@ -121,6 +139,7 @@ describe('validateMobileGatewayConfigPatch', () => {
         lanAddress: '  192.0.2.20 ',
         allowedHosts: [' pc.example.ts.net '],
         certificateMode: 'root-ca',
+        sessionHistoryWorkspaceLimit: 8,
       }),
     ).toEqual({
       ok: true,
@@ -128,6 +147,7 @@ describe('validateMobileGatewayConfigPatch', () => {
         lanAddress: '192.0.2.20',
         allowedHosts: ['pc.example.ts.net'],
         certificateMode: 'root-ca',
+        sessionHistoryWorkspaceLimit: 8,
       },
     })
   })
@@ -167,6 +187,7 @@ describe('serializeMobileGatewayConfig', () => {
       'allowedHosts',
       'certificateMode',
       'vapidSubject',
+      'sessionHistoryWorkspaceLimit',
     ])
   })
 })

@@ -25,6 +25,8 @@ import type {
 } from '@universe-editor/mobile-protocol'
 
 export const MOBILE_GATEWAY_DEFAULT_PORT = 47321
+export const MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT = 20
+export const MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT = 100
 
 export type MobileGatewayState = 'stopped' | 'starting' | 'running' | 'error'
 
@@ -53,6 +55,11 @@ export interface MobileGatewayConfig {
   readonly certificateMode: MobileGatewayCertificateMode
   /** VAPID `sub` claim: a `mailto:` address or an `https:` URL. */
   readonly vapidSubject: string
+  /**
+   * How many recently opened (but currently closed) workspaces contribute
+   * resumable history to the phone catalog. Open windows are always included.
+   */
+  readonly sessionHistoryWorkspaceLimit: number
 }
 
 export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
@@ -65,6 +72,7 @@ export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
   // Placeholder per the repository's public-value policy. Override with a real
   // `mailto:` or `https:` URL before relying on push in the field.
   vapidSubject: 'https://universe-editor.example.com',
+  sessionHistoryWorkspaceLimit: MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT,
 }
 
 /** Field-level update. `allowedHosts` replaces the whole list. */
@@ -76,6 +84,7 @@ export interface MobileGatewayConfigPatch {
   readonly allowedHosts?: readonly string[]
   readonly certificateMode?: MobileGatewayCertificateMode
   readonly vapidSubject?: string
+  readonly sessionHistoryWorkspaceLimit?: number
 }
 
 /**
