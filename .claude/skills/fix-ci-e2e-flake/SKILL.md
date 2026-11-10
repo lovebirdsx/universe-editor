@@ -113,6 +113,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - 诊断断言查有界 ring（`stats.recent` 仅 32 条）、产品链路实际已同步观测到 write、慢 runner 上 initial+retry 同形态=false 的是「ring 被其它出站帧挤掉」而非「没发写」；改用累计 per-target 计数并保留原强度 → 案例 113
 - 重复审批在 `permission_cleared` 先/后到达时拿到 `stale_request` / `forbidden_operation` 两种码（initial+retry 同形态）=两层校验的缓存最终一致，不是测试放宽；网关按「缓存缺失=stale / 选项不允许=forbidden」区分 → 案例 114
 - `waitForHidden` 超时、面板持续 visible + teardown 5 个泄漏栈全在 `QuickTextSearchService.show`、结果已渲染且 option 已可见=回车落在「host 列表已提交、passive focus-reconcile 未跑」的窗口，读到 in-range 的 **separator**（案例 102 的范围守卫覆盖不到），picker 又没消费 onOk → 静默 no-op；修 accept 路径对 autoFocusFirstItem 回退实时最佳匹配，file dialog 保持 onOk → 案例 115
+- `@regression @serial` 用例在 CI **regression 趟** initial 挂/retry 过、seed 后 poll 已确认剪贴板可读仍无 chip/timeline 元素、同 spec 另一个 `@serial` 用例在另一 worker 同窗口写 OS 剪贴板=ONLY_TAG 并行趟漏排 @serial（tag 调度契约缺口），在共享 config 的 `ONLY_TAG` 分支自动并入 `grepInvert` → 案例 116
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

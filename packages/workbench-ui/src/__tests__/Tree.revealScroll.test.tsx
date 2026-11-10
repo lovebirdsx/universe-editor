@@ -205,4 +205,38 @@ describe('Tree — reveal survives a structure change', () => {
     // 父行展开后 c20 位于索引 21（父行是第 0 行）：[462, 484) 对视口 [0, 220) → 底对齐。
     expect(root.scrollTop).toBe(21 * ROW_HEIGHT + ROW_HEIGHT - VIEWPORT)
   })
+
+  it('does not re-apply an already-satisfied reveal after a later structure change', async () => {
+    // 启动焦点恢复会播种一次根行 reveal：根行本就在视口里，这次请求无需滚动。
+    // 若把已满足的请求继续挂在 state 上，后续任何结构变化（展开/折叠/刷新）都会
+    // 让 effect 带着它重跑，对用户此刻的滚动位置再算一次「最小滚动」——表现为
+    // 滚动后首次点击树被拉回顶部（e2e smoke.explorerThresholdScroll 守护）。
+    const children: Node[] = Array.from({ length: 30 }, (_, i) => ({ id: `c${i}` }))
+    const parent: Node = { id: 'parent' }
+    const leaves: Node[] = Array.from({ length: 40 }, (_, i) => ({ id: `r${i}` }))
+    const dataSource: ITreeDataSource<Node> = {
+      getId: (n) => n.id,
+      hasChildren: (n) => n.id === parent.id,
+      getChildren: (n) => (n.id === parent.id ? children : []),
+      getRoots: () => [parent, ...leaves],
+    }
+    const model = new TreeModel<Node>({ dataSource })
+    const { root } = renderTree(model)
+    // 让「无需滚动」的那次尝试被判定为布局已落定，而不是进入 rAF 重试。
+    Object.defineProperty(root, 'scrollHeight', {
+      configurable: true,
+      get: () => 100_000,
+    })
+
+    await reveal(model, 'r0')
+    expect(root.scrollTop).toBe(0)
+
+    root.scrollTop = 300
+    await act(async () => {
+      await model.expand(parent)
+    })
+
+    // 结构变化重跑 effect，但旧请求已消费：绝不把 r0（此时已因展开下移）拉回视口。
+    expect(root.scrollTop).toBe(300)
+  })
 })

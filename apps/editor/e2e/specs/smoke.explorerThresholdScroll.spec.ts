@@ -90,7 +90,11 @@ async function seedWorkspace(): Promise<string> {
 }
 
 async function openSeededWorkspace(
-  workbench: { waitForRestored(): Promise<void>; openWorkspace(dir: string): Promise<unknown> },
+  workbench: {
+    waitForRestored(): Promise<void>
+    waitForBootstrapFocusSettled(): Promise<void>
+    openWorkspace(dir: string): Promise<unknown>
+  },
   page: Page,
 ): Promise<string> {
   const tmpDir = await seedWorkspace()
@@ -103,6 +107,9 @@ async function openSeededWorkspace(
   // the row count is settled before we measure anything.
   await expect.poll(() => rows.count(), { timeout: 10000 }).toBe(COLLAPSED_ROWS)
   await expect.poll(() => readScroll(page).then((s) => s?.windowed), { timeout: 5000 }).toBe(false)
+  // The startup focus restore seeds the tree cursor (and its reveal) after
+  // `waitForRestored()`; scrolling before it lands would race a late reveal.
+  await workbench.waitForBootstrapFocusSettled()
 
   return tmpDir
 }

@@ -53,6 +53,8 @@ harness 的启动 fixture 接收 `extensions: string[]`（扩展 id allowlist）
 
 tag 打在**用例级**标题末尾（`@regression` 尤其是单用例级）。**tag 分流策略集中在共享 config**（`packages/e2e-harness/src/playwrightConfig.ts` 的 `grepOptions`）——core 与**每个扩展**用同一套过滤，行为一致（此前扩展跑裸 `playwright test`，其 `@regression` 用例每次都跑，现已统一）。各 npm script 不再传 `--grep`，只翻三个环境变量：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（把 @regression 并回主趟）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag，用于 @serial/@regression/@flaky/@perf/@visual 的独立趟）、`UNIVERSE_E2E_ONLY_TAG_INVERT=<正则>`（在 ONLY_TAG 趟上叠加排除，`e2e:smoke` 用它把 @p0∩@serial 的用例挡在并行趟外）。
 
+除 `UNIVERSE_E2E_ONLY_TAG=@serial` 的串行趟自身外，**所有 `ONLY_TAG` 趟都会自动把 `@serial` 并入 `grepInvert`**——专用趟同样是并行趟（CI 的 `@regression` 趟用 2 worker），`@serial` 用例混进去会跨 worker 互抢 OS 剪贴板（案例见 skill `fix-ci-e2e-flake` 116）。新增专用趟无需再手工维护该排除。
+
 **约定：`@p0` 不与 `@serial`/`@flaky`/`@perf`/`@visual` 同标**——smoke 的语义是「可并行的主路径冒烟」；历史反例（`smoke.workspace.spec.ts`）由 `e2e:smoke` 的 INVERT 兜住。
 
 | tag | 含义 | 默认 `pnpm e2e` | `pnpm e2ea` | CI |

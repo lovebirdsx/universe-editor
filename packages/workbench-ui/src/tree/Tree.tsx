@@ -283,6 +283,17 @@ export function Tree<T>(props: ITreeProps<T>) {
     let attempt = 0
     let cancelled = false
     let frame: OwnerFrame | undefined
+    // A reveal request is a one-shot intent. Once the target row exists and a
+    // laid-out viewport confirms it (or we scrolled to it), consume the request:
+    // this effect also re-runs on every structureVersion bump (a row revealed
+    // through a later expansion only shows up then), and an already-satisfied
+    // request outliving that bump would re-apply itself against a scroll
+    // position the user has changed since — the "click after scrolling yanks the
+    // tree back to the seeded row" regression. Keep it armed only while the
+    // target is absent or the viewport is not laid out yet.
+    const settle = (): void => {
+      setRevealRequest((prev) => (prev === revealRequest ? null : prev))
+    }
     const tryScroll = (): void => {
       if (cancelled) return
       attempt += 1
@@ -308,6 +319,7 @@ export function Tree<T>(props: ITreeProps<T>) {
         // to, and nothing re-runs this once the pane is sized — put the row at the
         // top of the range rather than leaving the reveal unconsumed.
         scroller.scrollTop = Math.max(0, rowTop)
+        settle()
         return
       }
       const visibleBottom = visibleTop + viewport
@@ -321,10 +333,13 @@ export function Tree<T>(props: ITreeProps<T>) {
         // the retried attempt still needs no scroll.
         if (viewport >= scroller.scrollHeight && attempt < 10) {
           frame = requestOwnerFrame(scroller, tryScroll)
+          return
         }
+        settle()
         return
       }
       scroller.scrollTop = next
+      settle()
     }
     tryScroll()
     return () => {

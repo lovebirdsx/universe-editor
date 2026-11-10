@@ -52,6 +52,8 @@ const INCLUDE_REGRESSION = process.env['UNIVERSE_E2E_INCLUDE_REGRESSION'] === '1
 // A dedicated single-tag pass: run ONLY specs carrying this tag, ignoring the
 // default exclusions. Used by the @serial (--workers=1) pass and by CI's separate
 // @regression / @flaky / @perf / @visual passes. Empty ⇒ the normal main pass.
+// @serial stays excluded from every pass except the @serial one itself — see
+// grepOptions().
 const ONLY_TAG = process.env['UNIVERSE_E2E_ONLY_TAG']
 // Exclusions applied ON TOP of an ONLY_TAG pass. The value is a regex alternation
 // (deliberately NOT escaped, unlike ONLY_TAG's literal single tag): e2e:smoke sets
@@ -69,10 +71,20 @@ function grepOptions(): { grep?: RegExp; grepInvert?: RegExp } {
     return {}
   }
   if (ONLY_TAG) {
+    // @serial is a scheduling contract, not just a tag: those cases share
+    // process-wide resources (the OS clipboard) and may not run alongside each
+    // other. Only the dedicated @serial pass (which CI pins to --workers=1) may
+    // select them; every other ONLY_TAG pass is parallel, so fold @serial into
+    // its exclusions. Without this, CI's @regression pass ran
+    // @regression+@serial cases on two workers and they clobbered each other's
+    // clipboard between seed and Ctrl+V.
+    const invertParts = [ONLY_TAG_INVERT, ONLY_TAG === '@serial' ? undefined : '@serial'].filter(
+      (tag): tag is string => Boolean(tag),
+    )
     // Match the tag literally (@ is not a regex metachar; escape defensively).
     return {
       grep: new RegExp(ONLY_TAG.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
-      ...(ONLY_TAG_INVERT ? { grepInvert: new RegExp(ONLY_TAG_INVERT) } : {}),
+      ...(invertParts.length > 0 ? { grepInvert: new RegExp(invertParts.join('|')) } : {}),
     }
   }
   const excluded = [...NEVER_TAGS, '@serial', ...(INCLUDE_REGRESSION ? [] : ['@regression'])]
