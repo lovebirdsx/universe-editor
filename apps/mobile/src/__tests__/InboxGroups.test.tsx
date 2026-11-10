@@ -169,10 +169,10 @@ describe('InboxGroups', () => {
 
     const row = screen.getByTestId('inbox-session-row')
     firePointerAt(row, 'pointerdown', { clientX: 200, clientY: 20, button: 0, pointerId: 1 }, 1000)
-    firePointerAt(row, 'pointermove', { clientX: 160, clientY: 22, pointerId: 1 }, 1016)
-    // 50px is below the 76px position threshold, but the release speed projects
+    firePointerAt(row, 'pointermove', { clientX: 175, clientY: 22, pointerId: 1 }, 1016)
+    // 30px is below the 38px position threshold, but the release speed projects
     // the row past it.
-    firePointerAt(row, 'pointerup', { clientX: 150, clientY: 22, pointerId: 1 }, 1032)
+    firePointerAt(row, 'pointerup', { clientX: 170, clientY: 22, pointerId: 1 }, 1032)
 
     expect(actionsOpen('Running task')).toBe(true)
   })
@@ -187,10 +187,66 @@ describe('InboxGroups', () => {
 
     const row = screen.getByTestId('inbox-session-row')
     firePointerAt(row, 'pointerdown', { clientX: 200, clientY: 20, button: 0, pointerId: 1 }, 1000)
-    firePointerAt(row, 'pointermove', { clientX: 160, clientY: 22, pointerId: 1 }, 1100)
-    firePointerAt(row, 'pointerup', { clientX: 150, clientY: 22, pointerId: 1 }, 1300)
+    firePointerAt(row, 'pointermove', { clientX: 180, clientY: 22, pointerId: 1 }, 1100)
+    firePointerAt(row, 'pointerup', { clientX: 170, clientY: 22, pointerId: 1 }, 1300)
 
     expect(actionsOpen('Running task')).toBe(false)
+  })
+
+  it('keeps release velocity when the finger lifts on the last sample point', () => {
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={vi.fn()}
+      />,
+    )
+
+    const row = screen.getByTestId('inbox-session-row')
+    firePointerAt(row, 'pointerdown', { clientX: 200, clientY: 20, button: 0, pointerId: 1 }, 1000)
+    firePointerAt(row, 'pointermove', { clientX: 170, clientY: 22, pointerId: 1 }, 1016)
+    // A duplicate release point must not count as 16ms of rest.
+    firePointerAt(row, 'pointerup', { clientX: 170, clientY: 22, pointerId: 1 }, 1032)
+
+    expect(actionsOpen('Running task')).toBe(true)
+  })
+
+  it('opens a slow drag once the first action is half revealed', () => {
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={vi.fn()}
+      />,
+    )
+
+    const row = screen.getByTestId('inbox-session-row')
+    firePointerAt(row, 'pointerdown', { clientX: 200, clientY: 20, button: 0, pointerId: 1 }, 1000)
+    firePointerAt(row, 'pointermove', { clientX: 160, clientY: 22, pointerId: 1 }, 1200)
+    firePointerAt(row, 'pointerup', { clientX: 160, clientY: 22, pointerId: 1 }, 1400)
+
+    expect(actionsOpen('Running task')).toBe(true)
+  })
+
+  it('claims diagonal touch moves before the browser pan slop', () => {
+    render(
+      <InboxGroups
+        sessions={[session('running', 'in_progress', 'Running task')]}
+        onCloseSession={vi.fn()}
+      />,
+    )
+
+    const track = screen
+      .getByTestId('inbox-swipe-row')
+      .querySelector<HTMLElement>('.inbox-swipe-row__track')
+    expect(track).not.toBeNull()
+    dispatchTouch(track!, 'touchstart', [{ clientX: 200, clientY: 100 }])
+    // Thumb arc: 8px left for 14px down must be claimed before the browser
+    // starts its vertical pan, or the swipe is lost.
+    const diagonal = dispatchTouch(track!, 'touchmove', [{ clientX: 192, clientY: 114 }])
+    expect(diagonal.defaultPrevented).toBe(true)
+    dispatchTouch(track!, 'touchend', [])
+    dispatchTouch(track!, 'touchstart', [{ clientX: 200, clientY: 100 }])
+    const vertical = dispatchTouch(track!, 'touchmove', [{ clientX: 196, clientY: 140 }])
+    expect(vertical.defaultPrevented).toBe(false)
   })
 
   it('claims diagonal touch moves from the browser pan', () => {

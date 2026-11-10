@@ -3,23 +3,30 @@ import { strings } from '../strings.js'
 
 const ACTION_WIDTH_PX = 76
 const TOTAL_ACTION_WIDTH_PX = ACTION_WIDTH_PX * 2
-const OPEN_THRESHOLD_PX = TOTAL_ACTION_WIDTH_PX / 2
+// Open once the first action is half revealed, like a native swipe row. The
+// old half-of-total threshold (76px) made ordinary swipes snap back.
+const OPEN_THRESHOLD_PX = ACTION_WIDTH_PX / 2
 const LONG_PRESS_MS = 500
-const SWIPE_START_PX = 10
+const SWIPE_START_PX = 8
 // A thumb swiping left arcs downwards first, so the horizontal span is often
 // smaller than the vertical one in the opening frames. Bias the direction lock
 // towards horizontal or the browser's vertical pan wins before the row moves.
-const HORIZONTAL_BIAS = 0.6
-// Chrome starts a vertical pan once it clears its ~8px touch slop, so claim the
-// sequence at the same distance; waiting for the 10px drag threshold lets the
-// browser cancel diagonal swipes first.
-const TOUCH_LOCK_PX = 8
+const HORIZONTAL_BIAS = 0.5
+// The browser starts a vertical pan around its ~8px touch slop. Decide before
+// that: waiting for a larger threshold lets the browser cancel diagonal swipes
+// before JS can claim the sequence.
+const TOUCH_LOCK_PX = 6
 const FLICK_PROJECTION_MS = 100
-const FLICK_MIN_DISTANCE_PX = 24
+const FLICK_MIN_DISTANCE_PX = 16
 const FLICK_MIN_VELOCITY = 0.25
 const FLICK_MAX_VELOCITY = 3
 const VELOCITY_WINDOW_MS = 120
 const VELOCITY_MIN_DT_MS = 8
+// Holding still before lifting must not count as a flick. The release point is
+// also skipped when it did not move past the last sample: it would only add
+// rest time and dilute the release speed.
+const VELOCITY_REST_MS = 80
+const MAX_VELOCITY_SAMPLES = 10
 
 export interface SwipeableSessionRowProps {
   readonly children: ReactNode
@@ -54,7 +61,7 @@ const verticalIntent = (dx: number, dy: number, slop: number): boolean =>
 
 const clampOffset = (value: number): number => Math.max(-TOTAL_ACTION_WIDTH_PX, Math.min(0, value))
 
-/** Release speed in px/ms over the last gesture window; 0 after the finger rests. */
+/** Release speed in px/ms over the last gesture window. */
 const releaseVelocity = (samples: readonly MoveSample[]): number => {
   const last = samples[samples.length - 1]
   if (last === undefined) return 0
@@ -212,7 +219,7 @@ export function SwipeableSessionRow({
     offset.current = clampOffset(current.base + dx)
     setDragOffset(offset.current)
     current.samples.push({ x: event.clientX, t: event.timeStamp })
-    if (current.samples.length > 6) current.samples.shift()
+    if (current.samples.length > MAX_VELOCITY_SAMPLES) current.samples.shift()
     if (event.cancelable) event.preventDefault()
   }
 
@@ -232,22 +239,27 @@ export function SwipeableSessionRow({
         return
       }
       current.moved = true
-      offset.current = clampOffset(current.base + dx)
       suppressClick.current = true
-      current.samples.push({ x: event.clientX, t: event.timeStamp })
-    } else if (!cancelled) {
+    }
+    const lastSample = current.samples[current.samples.length - 1]
+    const rested = lastSample !== undefined && event.timeStamp - lastSample.t > VELOCITY_REST_MS
+    if (!cancelled) {
       // The last segment between the final pointermove and the release is not
       // reported separately; count the release point itself.
       offset.current = clampOffset(current.base + event.clientX - current.startX)
-      current.samples.push({ x: event.clientX, t: event.timeStamp })
+      // Skip a release that did not move past the last sample: it would only
+      // add rest time and dilute the release speed.
+      if (!rested && lastSample !== undefined && Math.abs(event.clientX - lastSample.x) >= 1) {
+        current.samples.push({ x: event.clientX, t: event.timeStamp })
+      }
     }
-    const velocity = cancelled ? 0 : releaseVelocity(current.samples)
+    const velocity = cancelled || rested ? 0 : releaseVelocity(current.samples)
     const projected =
       Math.abs(offset.current) >= FLICK_MIN_DISTANCE_PX && Math.abs(velocity) >= FLICK_MIN_VELOCITY
         ? clampOffset(offset.current + velocity * FLICK_PROJECTION_MS)
         : offset.current
     setDragOffset(undefined)
-    onOpenChange(projected < -OPEN_THRESHOLD_PX)
+    onOpenChange(projected <= -OPEN_THRESHOLD_PX)
     // The compatibility click can arrive in a later task than pointerup (mobile
     // browsers), so suppression lives until it is consumed or the next
     // pointerdown resets it. A timer here would let that late click close the
