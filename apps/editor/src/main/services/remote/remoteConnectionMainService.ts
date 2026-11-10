@@ -1082,6 +1082,9 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
 
   private async _closeEntry(entry: ConnectionEntry, stopDaemon: boolean): Promise<void> {
     if (entry.state === 'disposed') return
+    // Extension-host tunnels keep their own reconnect loop; a user-visible close
+    // must dispose them or they keep dialing the dead port for the grace time.
+    this._disposeExtensionHostTunnels(entry.authority)
     this._teardownForRetry(entry)
     if (stopDaemon && entry.transport !== 'direct') {
       try {
@@ -1098,6 +1101,15 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     }
     entry.closedByUser = false
     this._fireState(entry, 'idle')
+  }
+
+  private _disposeExtensionHostTunnels(authority: string): void {
+    for (const [tunnel, closeSub] of this._extensionHostTunnels) {
+      if (tunnel.authority !== authority) continue
+      this._extensionHostTunnels.delete(tunnel)
+      closeSub.dispose()
+      tunnel.dispose()
+    }
   }
 
   private _teardownConnection(entry: ConnectionEntry): void {

@@ -381,6 +381,21 @@ describe('RemoteConnectionMainService direct mode', () => {
     expect(made.procs).toHaveLength(1)
   })
 
+  it('closeConnection disposes the extension-host tunnel so it stops reconnecting', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    await made.svc.getConnection('host')
+    await made.svc.openExtensionHostConnection('host')
+    expect(daemon.acceptedCount).toBe(2)
+
+    await made.svc.closeConnection('host')
+
+    // Both the management and the extension-host sockets must be released; the
+    // tunnel's own reconnect loop otherwise outlives the closed connection.
+    await vi.waitFor(() => expect(daemon.closedCount).toBe(2), { timeout: 5000 })
+  })
+
   it('connect clears the user-disconnect guard and brings up again', async () => {
     const daemon = await startDaemon()
     made = makeDirectService(daemon)
