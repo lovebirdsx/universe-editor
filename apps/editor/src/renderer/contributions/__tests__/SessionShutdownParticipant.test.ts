@@ -81,11 +81,7 @@ describe('SessionShutdownParticipant', () => {
   it('vetoes when the user cancels', async () => {
     const lifecycle: ILifecycleService = new LifecycleService()
     const dialog = makeDialog(false)
-    makeParticipant(
-      lifecycle,
-      [sessionWithStatus('running'), sessionWithStatus('idle')],
-      dialog,
-    )
+    makeParticipant(lifecycle, [sessionWithStatus('running'), sessionWithStatus('idle')], dialog)
 
     const vetoed = await lifecycle.confirmBeforeShutdown(ShutdownReason.CloseWindow)
     expect(vetoed).toBe(true)
@@ -176,11 +172,7 @@ describe('SessionShutdownParticipant', () => {
     // backgroundTaskCount > 0 must still gate the shutdown.
     const lifecycle: ILifecycleService = new LifecycleService()
     const dialog = makeDialog(false)
-    makeParticipant(
-      lifecycle,
-      [sessionWithStatus('idle', 1), sessionWithStatus('closed')],
-      dialog,
-    )
+    makeParticipant(lifecycle, [sessionWithStatus('idle', 1), sessionWithStatus('closed')], dialog)
 
     const vetoed = await lifecycle.confirmBeforeShutdown(ShutdownReason.CloseWindow)
     expect(vetoed).toBe(true)

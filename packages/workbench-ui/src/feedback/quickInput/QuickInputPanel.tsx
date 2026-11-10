@@ -1051,13 +1051,18 @@ export function QuickPickPanel({
       // re-run, not a "nothing is selectable" answer.
       const cursorInRange = focusedIdx < sortedFiltered.length
       const listIsCurrent = !filtersLocally || deferredFilterText === filterText
-      const acceptItem =
-        listIsCurrent && cursorInRange
-          ? sortedFiltered[focusedIdx]
-          : (() => {
-              const latest = buildDisplayList(baseItems, filterText, displayListOptions)
-              return latest[firstSelectableIndex(latest)]
-            })()
+      const liveBestMatch = (): QuickPickInput<IQuickPickItem> | undefined => {
+        const latest = buildDisplayList(baseItems, filterText, displayListOptions)
+        return latest[firstSelectableIndex(latest)]
+      }
+      let acceptItem = listIsCurrent && cursorInRange ? sortedFiltered[focusedIdx] : liveBestMatch()
+      // A host-driven list swap commits before the reconcile effect moves the
+      // cursor, so an in-range index can still point at a now-separator row (text
+      // search always renders `[file separator, ...matches]`) — same silent no-op.
+      // Autofocus pickers accept the live best match; the file dialog keeps its
+      // onOk path (autoFocusFirstItem=false, including its `focusedIdx === -1`
+      // "no highlight" sentinel).
+      if (!isSelectable(acceptItem) && autoFocusFirstItem) acceptItem = liveBestMatch()
       if (isSelectable(acceptItem)) accept([acceptItem], { ctrl: e.ctrlKey, alt: e.altKey })
       // No selectable item (e.g. an empty directory in the file dialog): fall back
       // to the host's OK handler so a trailing-separator path can still be opened.

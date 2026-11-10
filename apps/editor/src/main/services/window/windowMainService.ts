@@ -1118,12 +1118,9 @@ export class WindowMainService implements IWindowMainService {
       )
 
     if (
-      !(await this._canProceed(
-        requester.win.id,
-        requester.rendererLifecycle,
-        ShutdownReason.Quit,
-        { runningSessions },
-      ))
+      !(await this._canProceed(requester.win.id, requester.rendererLifecycle, ShutdownReason.Quit, {
+        runningSessions,
+      }))
     ) {
       return false
     }

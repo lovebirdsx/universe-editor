@@ -16,11 +16,7 @@
  *  that's what the title-bar agent pill shows.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  Emitter,
-  type Event,
-  type RunningSessionsShutdownInfo,
-} from '@universe-editor/platform'
+import { Emitter, type Event, type RunningSessionsShutdownInfo } from '@universe-editor/platform'
 import type {
   IRendererSessionsService,
   ISessionSwitcherService,

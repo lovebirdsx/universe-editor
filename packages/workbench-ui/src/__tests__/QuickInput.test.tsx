@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Window } from 'happy-dom'
+import { useLayoutEffect, useRef } from 'react'
 import { act, cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import { QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
 import { BUSY_BAR_DELAY_MS } from '../feedback/quickInput/QuickInputProgress.js'
@@ -457,6 +458,21 @@ describe('QuickPickPanel label colors', () => {
   })
 })
 
+/**
+ * Fires Enter from a layout effect: the new item list is already committed, but
+ * QuickPickPanel's passive focus-reconcile effect has not run yet. That is the
+ * commit gap where the cursor still points at the previous list's slot.
+ */
+function PressEnterInCommitGap({ armed }: { armed: boolean }) {
+  const fired = useRef(false)
+  useLayoutEffect(() => {
+    if (!armed || fired.current) return
+    fired.current = true
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+  }, [armed])
+  return null
+}
+
 describe('QuickPickPanel keyboard', () => {
   it('Enter selects the focused item and invokes onAccept + onClose', () => {
     const onAccept = vi.fn()
@@ -465,6 +481,37 @@ describe('QuickPickPanel keyboard', () => {
     const input = screen.getByTestId('quick-input-field')
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: false, alt: false })
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('Enter in the list/focus commit gap accepts the match, not the separator', () => {
+    // Text search commits [file separator, ...matches]; the preceding empty-list
+    // commit leaves the cursor at 0, and the reconcile effect that moves it past
+    // the separator runs after the commit. Enter in that gap must not silently
+    // no-op on the separator (the picker has no onOk consumer).
+    const prompt: IQuickPickItem = { id: 'prompt', label: 'Enter a term to search for.' }
+    const match: IQuickPickItem = { id: 'match', label: 'const quick-search-probe-target = 1' }
+    const results: QuickPickInput<IQuickPickItem>[] = [
+      { type: 'separator', id: 'file.target.txt', label: 'target.txt' },
+      match,
+    ]
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    const ui = (list: QuickPickInput<IQuickPickItem>[], armed: boolean) => (
+      <>
+        <QuickPickPanel
+          state={makeState({ prefix: undefined, items: list, filterExternally: true, onAccept })}
+          onClose={onClose}
+        />
+        <PressEnterInCommitGap armed={armed} />
+      </>
+    )
+
+    const { rerender } = render(ui([prompt], false))
+    rerender(ui([], false)) // runSearch() drops the previous query's rows first
+    rerender(ui(results, true)) // Enter fires before the passive focus-reconcile effect
+
+    expect(onAccept).toHaveBeenCalledWith([match], { ctrl: false, alt: false })
     expect(onClose).toHaveBeenCalledOnce()
   })
 

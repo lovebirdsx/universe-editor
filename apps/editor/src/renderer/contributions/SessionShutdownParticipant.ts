@@ -129,17 +129,13 @@ function runningSessionsDetail(otherWindows: readonly RunningSessionsByWindow[])
   }
   const list = otherWindows
     .map((w) =>
-      localize(
-        'shutdown.runningSessions.otherWindowEntry',
-        '{name} ({count} sessions)',
-        {
-          name:
-            w.workspaceName === ''
-              ? localize('shutdown.runningSessions.untitledWindow', 'Untitled window')
-              : w.workspaceName,
-          count: w.count,
-        },
-      ),
+      localize('shutdown.runningSessions.otherWindowEntry', '{name} ({count} sessions)', {
+        name:
+          w.workspaceName === ''
+            ? localize('shutdown.runningSessions.untitledWindow', 'Untitled window')
+            : w.workspaceName,
+        count: w.count,
+      }),
     )
     .join('\n')
   return localize(

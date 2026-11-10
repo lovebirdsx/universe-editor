@@ -856,16 +856,13 @@ describe('WindowMainService', () => {
 
   it('waits for the user decision after the renderer reports the prompt is shown', async () => {
     const gate = deferred<boolean>()
-    let svc!: WindowMainServiceInstance
     const lifecycle = {
       _serviceBrand: undefined,
-      confirmShutdown: vi.fn(
-        (_reason: ShutdownReason, context?: { promptAckId?: number }) => {
-          const windowId = svc.getWindows()[0]!.id
-          svc.reportShutdownPromptShown(windowId, context!.promptAckId!)
-          return gate.promise
-        },
-      ),
+      confirmShutdown: vi.fn((_reason: ShutdownReason, context?: { promptAckId?: number }) => {
+        const windowId = svc.getWindows()[0]!.id
+        svc.reportShutdownPromptShown(windowId, context!.promptAckId!)
+        return gate.promise
+      }),
     }
     vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
       disposable: combinedDisposable(),
@@ -873,7 +870,7 @@ describe('WindowMainService', () => {
       rendererSessions: {} as never,
       rendererMobileBridge: {} as never,
     }))
-    svc = makeService()
+    const svc = makeService()
     const windowId = await svc.createWindow()
 
     vi.useFakeTimers()
@@ -1438,10 +1435,9 @@ describe('WindowMainService', () => {
 
       await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(false)
 
-      expect(vetoingLifecycle.confirmShutdown).toHaveBeenCalledWith(
-        ShutdownReason.CloseWindow,
-        { promptAckId: expect.any(Number) },
-      )
+      expect(vetoingLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.CloseWindow, {
+        promptAckId: expect.any(Number),
+      })
       expect(windowAt(0).close).not.toHaveBeenCalled()
       expect(windowAt(1).close).not.toHaveBeenCalled()
     })
