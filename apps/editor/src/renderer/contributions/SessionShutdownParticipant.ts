@@ -36,6 +36,7 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
             e.reason,
             e.context?.runningSessions,
             e.context?.skipRunningSessionPrompt === true,
+            e.context?.skipSessionIds,
             e.context?.promptAckId,
           ),
           'acp.runningSessions',
@@ -49,15 +50,24 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
     reason: ShutdownReason,
     aggregate: RunningSessionsShutdownInfo | undefined,
     skipPrompt = false,
+    skipSessionIds: readonly string[] = [],
     promptAckId?: number,
   ): Promise<boolean> {
     if (skipPrompt) return false
     // Closing kills the agent process — and with it any still-running
     // `run_in_background` task (e.g. a robocopy mirror), so a session whose
     // turn settled but whose background work is in flight counts as busy too.
-    const localRunningCount = this._sessions.sessions
-      .get()
-      .filter((s) => s.status.get() === 'running' || s.backgroundTaskCount.get() > 0).length
+    // The CLI quit names the session that requested the refresh: it is being
+    // intentionally interrupted, so exempt it from both the local and the
+    // coordinator's count. Everything else still prompts.
+    const skip = new Set(skipSessionIds)
+    const localRunningCount = this._sessions.sessions.get().filter((s) => {
+      if (skip.size > 0) {
+        const durableId = s.sessionIdOnAgent?.get()
+        if (skip.has(s.id) || (durableId !== undefined && skip.has(durableId))) return false
+      }
+      return s.status.get() === 'running' || s.backgroundTaskCount.get() > 0
+    }).length
     // The coordinator's snapshot can undercount its own window when listSessions
     // times out; trust whichever count is higher for the prompt's host window.
     const promptWindowCount = Math.max(aggregate?.promptWindowCount ?? 0, localRunningCount)

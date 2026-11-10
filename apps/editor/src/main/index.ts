@@ -40,7 +40,12 @@ import {
   installMainProtocolDispatcher,
   markRendererFramesUnreachable,
 } from './ipc/electronProtocol.js'
-import { hasAgentSessionsFlag, hasQuitFlag, parseFileToOpen } from './cliArgs.js'
+import {
+  hasAgentSessionsFlag,
+  hasQuitFlag,
+  parseFileToOpen,
+  parseQuitSkipSession,
+} from './cliArgs.js'
 import {
   emptyAgentSessionsSnapshot,
   sendAgentSessionsPayload,
@@ -490,7 +495,14 @@ if (!hasSingleInstanceLock) {
     // before-quit snapshots the full window set before any close handler runs.
     // Never fall through to file/deep-link routing below.
     if (hasQuitFlag(argv)) {
-      mainLogger.info('second-instance --quit')
+      // The refresh skill names its own agent session so the quit gate exempts
+      // exactly that session (its work is being intentionally interrupted);
+      // every other running session still prompts.
+      const skipSessionId = parseQuitSkipSession(argv)
+      if (skipSessionId) windowMainService?.prepareQuitSkipSessions([skipSessionId])
+      mainLogger.info(
+        `second-instance --quit${skipSessionId ? ` skipSession=${skipSessionId}` : ''}`,
+      )
       app.quit()
       return
     }

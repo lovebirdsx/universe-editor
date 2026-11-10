@@ -31,6 +31,22 @@ export function hasQuitFlag(argv: readonly string[]): boolean {
 }
 
 /**
+ * `--quit-skip-session=<agentSessionId>` exempts one session from the quit
+ * confirmation prompt. The refresh-installed-editor skill names the session
+ * that initiated the quit (its own `CLAUDE_CODE_SESSION_ID`); every other
+ * running session still prompts. Kept `=`-only so it never eats a path token.
+ */
+export function parseQuitSkipSession(argv: readonly string[]): string | undefined {
+  const prefix = '--quit-skip-session='
+  for (const arg of argv) {
+    if (!arg.startsWith(prefix)) continue
+    const id = arg.slice(prefix.length).trim()
+    return id.length > 0 ? id : undefined
+  }
+  return undefined
+}
+
+/**
  * `--agent-sessions` asks a running instance to print a live agent-session
  * snapshot as JSON on stdout and exit. A second launch forwards the flag and
  * advertises a response pipe through `requestSingleInstanceLock(additionalData)`;

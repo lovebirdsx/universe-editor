@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { hasAgentSessionsFlag, hasQuitFlag, parseFileToOpen } from '../cliArgs.js'
+import {
+  hasAgentSessionsFlag,
+  hasQuitFlag,
+  parseFileToOpen,
+  parseQuitSkipSession,
+} from '../cliArgs.js'
 
 describe('parseFileToOpen', () => {
   // Regression: `--user-data-dir <path>` (space form) must not have its value
@@ -85,5 +90,23 @@ describe('hasAgentSessionsFlag', () => {
     expect(hasAgentSessionsFlag(['app.exe', '/project', '--agent-sessions'])).toBe(true)
     expect(hasAgentSessionsFlag(['app.exe', '--agent-sessions-other'])).toBe(false)
     expect(hasAgentSessionsFlag(['app.exe'])).toBe(false)
+  })
+})
+
+describe('parseQuitSkipSession', () => {
+  it('reads the id from the =value form', () => {
+    expect(parseQuitSkipSession(['app.exe', '--quit', '--quit-skip-session=sess-1'])).toBe('sess-1')
+  })
+
+  it('ignores the flag when the id is missing', () => {
+    expect(parseQuitSkipSession(['app.exe', '--quit'])).toBeUndefined()
+    expect(parseQuitSkipSession(['app.exe', '--quit-skip-session='])).toBeUndefined()
+    expect(parseQuitSkipSession(['app.exe', '--quit-skip-session=   '])).toBeUndefined()
+  })
+
+  it('does not treat the =value token as a folder to open', () => {
+    expect(
+      parseFileToOpen(['app.exe', '--quit', '--quit-skip-session=sess-1'], true),
+    ).toBeUndefined()
   })
 })

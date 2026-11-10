@@ -107,9 +107,11 @@ export interface IWindowMainService {
   ): Promise<void>
   closeWindowsForRemoteAuthority(authority: string): Promise<boolean>
   captureSessionForQuit(): Promise<void>
-  confirmQuit(requestingWindowId?: number): Promise<boolean>
+  confirmQuit(requestingWindowId?: number, skipSessionIds?: readonly string[]): Promise<boolean>
   /** Remember which window asked to quit; consumed by before-quit. */
   prepareQuit(windowId: number): void
+  /** Exempt sessions from the pending quit's running-session prompt (CLI `--quit`). */
+  prepareQuitSkipSessions(sessionIds: readonly string[]): void
   /** Confirm the pending quit initiator (falling back to the focused window), then commit. */
   confirmQuitFromPendingRequest(): Promise<boolean>
   /** Whether a quit confirmation is currently in flight. */
@@ -200,6 +202,8 @@ export class WindowMainService implements IWindowMainService {
   private _quitConfirmed = false
   /** Window that initiated the current quit (prepareQuit), consumed by before-quit. */
   private _pendingQuitRequesterId: number | undefined
+  /** Sessions exempted from the pending quit's running-session prompt (CLI `--quit`). */
+  private _pendingQuitSkipSessionIds: readonly string[] = []
   /** Single-flight quit confirmation shared by Exit, Cmd+Q and update installs. */
   private _quitConfirmation: Promise<boolean> | undefined
   /** Monotonic ids for renderer prompt acknowledgements. */
@@ -1054,13 +1058,16 @@ export class WindowMainService implements IWindowMainService {
    * success, marks every window as cleared so their close handlers bypass the
    * per-window confirm.
    */
-  confirmQuit(requestingWindowId?: number): Promise<boolean> {
+  confirmQuit(
+    requestingWindowId?: number,
+    skipSessionIds: readonly string[] = [],
+  ): Promise<boolean> {
     if (this._quitConfirmed) return Promise.resolve(true)
     if (this._quitConfirmation !== undefined) return this._quitConfirmation
     // A direct caller (update install) owns this confirmation; drop a stale
     // Exit requester so it cannot leak into a later before-quit.
     this._pendingQuitRequesterId = undefined
-    const run = this._confirmQuit(requestingWindowId)
+    const run = this._confirmQuit(requestingWindowId, skipSessionIds)
     this._quitConfirmation = run
     void run.then(
       () => this._clearQuitConfirmation(run),
@@ -1076,10 +1083,19 @@ export class WindowMainService implements IWindowMainService {
     }
   }
 
+  /** Exempt sessions from the pending quit's running-session prompt (CLI `--quit`). */
+  prepareQuitSkipSessions(sessionIds: readonly string[]): void {
+    if (!this._quitConfirmed && this._quitConfirmation === undefined) {
+      this._pendingQuitSkipSessionIds = sessionIds
+    }
+  }
+
   confirmQuitFromPendingRequest(): Promise<boolean> {
     const requester = this._pendingQuitRequesterId
+    const skipSessionIds = this._pendingQuitSkipSessionIds
     this._pendingQuitRequesterId = undefined
-    return this.confirmQuit(requester)
+    this._pendingQuitSkipSessionIds = []
+    return this.confirmQuit(requester, skipSessionIds)
   }
 
   isQuitConfirmationPending(): boolean {
@@ -1097,7 +1113,10 @@ export class WindowMainService implements IWindowMainService {
     if (this._quitConfirmation === run) this._quitConfirmation = undefined
   }
 
-  private async _confirmQuit(requestingWindowId?: number): Promise<boolean> {
+  private async _confirmQuit(
+    requestingWindowId?: number,
+    skipSessionIds: readonly string[] = [],
+  ): Promise<boolean> {
     const requester = this._resolveQuitRequester(requestingWindowId)
     if (!requester) {
       this.markQuitConfirmed()
@@ -1108,7 +1127,13 @@ export class WindowMainService implements IWindowMainService {
     if (requester.win.isDestroyed()) {
       return this._resolveQuitAfterRequesterGone()
     }
-    const runningSessions = summarizeRunningSessionsForPrompt(sessions, requester.win.id)
+    const runningSessions = summarizeRunningSessionsForPrompt(
+      sessions,
+      requester.win.id,
+      skipSessionIds,
+    )
+    const shutdownContext: ShutdownConfirmationContext =
+      skipSessionIds.length > 0 ? { runningSessions, skipSessionIds } : { runningSessions }
     const otherSessionCount = runningSessions.otherWindows.reduce((n, w) => n + w.count, 0)
     this._opts.logService
       .createLogger({ id: 'window', name: 'Window' })
@@ -1118,9 +1143,12 @@ export class WindowMainService implements IWindowMainService {
       )
 
     if (
-      !(await this._canProceed(requester.win.id, requester.rendererLifecycle, ShutdownReason.Quit, {
-        runningSessions,
-      }))
+      !(await this._canProceed(
+        requester.win.id,
+        requester.rendererLifecycle,
+        ShutdownReason.Quit,
+        shutdownContext,
+      ))
     ) {
       return false
     }

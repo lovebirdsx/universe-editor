@@ -172,17 +172,28 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * Group running sessions by owning window for the quit confirmation copy. The
  * prompting window gets its own count; every other window with running work is
  * listed so the user can tell which projects the quit would interrupt.
+ * `skipSessionIds` exempts sessions the quit initiator explicitly named (CLI
+ * `--quit` from the refresh skill) — they belong to the caller and are expected
+ * to be interrupted; every other session still counts.
  */
 export function summarizeRunningSessionsForPrompt(
   sessions: readonly SessionSummary[],
   promptWindowId: number,
+  skipSessionIds: readonly string[] = [],
 ): RunningSessionsShutdownInfo {
+  const skip = new Set(skipSessionIds)
   let promptWindowCount = 0
   const otherWindows = new Map<number, { workspaceName: string; count: number }>()
   for (const session of sessions) {
     // 'background' = turn settled but run_in_background tasks still executing;
     // quitting kills the agent process and that work with it, so count it.
     if (session.status !== 'running' && session.status !== 'background') continue
+    if (
+      skip.has(session.sessionId) ||
+      (session.agentSessionId !== undefined && skip.has(session.agentSessionId))
+    ) {
+      continue
+    }
     if (session.windowId === promptWindowId) {
       promptWindowCount++
       continue

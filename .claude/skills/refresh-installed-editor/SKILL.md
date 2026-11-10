@@ -37,10 +37,12 @@ disable-model-invocation: true
 
 ## 关闭编辑器：与 File → Exit 等价
 
-**不使用 taskkill 强杀，也不逐个窗口发 WM_CLOSE。** worker 在安装版运行时启动 `Universe Editor.exe --quit`：第二个实例拿不到 single-instance 锁，会把参数转发给主实例；主实例走 `app.quit()` 管线——与 File → Exit 相同，`before-quit` 先 `captureSessionForQuit()` 快照全部窗口，再在 `will-quit` 清理异常退出 sentinel。因此不会「关一个窗口重写一次 session」导致下次只恢复最后一个窗口，也不会触发「编辑器异常退出」提示。
+**不使用 taskkill 强杀，也不逐个窗口发 WM_CLOSE。** worker 在安装版运行时启动 `Universe Editor.exe --quit`（从编辑器内调用时附带 `--quit-skip-session=<CLAUDE_CODE_SESSION_ID>`）：第二个实例拿不到 single-instance 锁，会把参数转发给主实例；主实例走 `app.quit()` 管线——与 File → Exit 相同，`before-quit` 先 `captureSessionForQuit()` 快照全部窗口，再在 `will-quit` 清理异常退出 sentinel。因此不会「关一个窗口重写一次 session」导致下次只恢复最后一个窗口，也不会触发「编辑器异常退出」提示。
 
 - 发送退出请求后只轮询等待安装目录进程全部消失，**超时也不会强杀**：worker 以失败结束，安装目录不动，编辑器保持运行。
-- 未保存文件会照常弹出确认框，确认后编辑器才退出；调用会话仍在运行时会被一并结束（会话检查已排除它）。若关闭时调用会话仍有运行中的任务，还会弹出会话确认框，点 Exit 即可；无人确认时脚本按超时失败，编辑器不动。
+- `--quit-skip-session` 让退出确认**只豁免调用会话**（它的工作本来就会被预期的刷新中断）；其它运行中会话在关闭前已由脚本门禁拦截。调用会话会一并结束，属预期。
+- **安装版较旧、不支持 `--quit-skip-session` 时**回退为纯 `--quit`：若此时调用会话仍在运行（即使位于另一个窗口），编辑器会弹出会话确认框，需要手动点 Exit；完成一次安装版更新后该弹窗自动消失（dry-run 会提示支持情况）。
+- 未保存文件等其它编辑器 veto 不受该参数影响，仍按编辑器自己的确认框处理。
 - 若编辑器长时间不退出，手动 `File → Exit` 后加 `--skip-build` 重跑。
 
 `--quit` 是编辑器主进程的启动参数：已有实例时由 second-instance 转发给主实例；没有实例时冷启动直接退出，不创建窗口。
@@ -71,7 +73,7 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 | 依赖 | `pnpm-lock.yaml`、workspace、根 manifest、`.npmrc`、patches 变化时执行 `pnpm install --frozen-lockfile` |
 | 构建 | 主 worktree 执行生产打包（等价于 `package:win:dir`），产出 win-unpacked 目录 |
 | 会话检查（关闭前） | 再次查询；有其它运行中的会话则中止，编辑器不动，可加 `--skip-build` 重跑 |
-| 关闭 | 运行 `"Universe Editor.exe" --quit`（等价于 File → Exit，先快照全部窗口），等待正常退出；超时则失败，不强杀 |
+| 关闭 | 运行 `"Universe Editor.exe" --quit [--quit-skip-session=<调用会话 id>]`（等价于 File → Exit，先快照全部窗口），等待正常退出；超时则失败，不强杀 |
 | 覆盖 | `robocopy /E` 覆盖安装目录；保留卸载器、`app-update.yml`、`elevate.exe` 等安装器专属文件 |
 | 校验 | 比较 exe/app.asar 大小与时间戳、确认卸载器存在，并运行 `verify-packaged` |
 | 重启 | 清理 E2E/自定义 userData 等环境变量，detached 启动安装版，等待进程出现 |
@@ -106,7 +108,7 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 | 预检 / pull / 依赖 / 构建 | 未关闭，可继续使用 | 查看日志修复后重跑；若产物已完整可加 `--skip-build` |
 | 有其它运行中的会话（开跑或关闭前） | 未关闭，未做任何写操作或仅完成构建 | 结束/停掉这些会话后重跑；构建已完成时加 `--skip-build` |
 | 安装版不支持 `--agent-sessions` | 未关闭，未做任何写操作 | 先手动更新安装版到包含该查询命令的版本 |
-| 关闭进程 | 编辑器保持运行（--quit 被确认框拦下或未响应） | 脚本不强杀；手动 File → Exit 后加 `--skip-build` 重跑 |
+| 关闭进程 | 编辑器保持运行（确认框等待中或未响应） | 脚本不强杀；确认框点 Exit（旧安装版不支持 skip 时可能要求手动确认），或手动 File → Exit 后加 `--skip-build` 重跑 |
 | 覆盖/校验 | 已关闭，可能半覆盖 | 修复文件占用/磁盘后加 `--skip-build` 重跑；`robocopy /E` 可重复执行 |
 | 重启 | 已关闭，安装目录已更新 | 手动运行安装目录下的 `Universe Editor.exe` |
 
@@ -114,7 +116,7 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 
 ## 注意事项
 
-- 执行前先保存编辑器内未保存的文件；有其它正在运行的 agent 会话时脚本会拒绝执行，空闲会话无需处理。
+- 执行前先保存编辑器内未保存的文件；有其它正在运行的 agent 会话时脚本会拒绝执行，空闲会话无需处理。从编辑器内调用时退出确认只豁免调用会话；安装版尚不支持 `--quit-skip-session` 时仍需手动确认一次。
 - 主 worktree 必须干净且位于 main；不会自动处理未提交改动。
 - 默认使用 prod 打包环境，要求主 worktree 存在 `.env.prod`；缺失时用 `--env dev` 或 `--allow-missing-env`。
 - 构建可能持续数分钟到十几分钟；worker 独立运行，不要重复触发。

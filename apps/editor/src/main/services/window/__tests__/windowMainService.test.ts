@@ -759,6 +759,67 @@ describe('WindowMainService', () => {
     })
   })
 
+  it('exempts the CLI quit initiator session from the running-session prompt', async () => {
+    const otherLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    const requestingLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    vi.mocked(bootstrapWindowIpc)
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: otherLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: requestingLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+    const opts = makeOpts()
+    const getAllSessions = vi.fn().mockResolvedValue([
+      {
+        windowId: 2,
+        workspaceName: 'requesting',
+        sessionId: 'local-initiator',
+        agentSessionId: 'durable-initiator',
+        title: 'Initiator',
+        status: 'running',
+        agentId: 'claude',
+      },
+      {
+        windowId: 1,
+        workspaceName: 'other',
+        sessionId: 'other-running',
+        title: 'Other',
+        status: 'running',
+        agentId: 'claude',
+      },
+    ])
+    Object.assign(opts.appServices.sessionSwitcher, { getAllSessions })
+    const svc = makeService(opts)
+    await svc.createWindow()
+    const requestingWindowId = await svc.createWindow()
+
+    svc.prepareQuit(requestingWindowId)
+    svc.prepareQuitSkipSessions(['durable-initiator'])
+    await expect(svc.confirmQuitFromPendingRequest()).resolves.toBe(true)
+
+    expect(requestingLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
+      runningSessions: {
+        promptWindowCount: 0,
+        otherWindows: [{ workspaceName: 'other', count: 1 }],
+      },
+      skipSessionIds: ['durable-initiator'],
+      promptAckId: expect.any(Number),
+    })
+  })
+
   it('falls back to the focused window when no quit initiator is recorded', async () => {
     const firstLifecycle = {
       _serviceBrand: undefined,

@@ -249,4 +249,21 @@ describe('summarizeRunningSessionsForPrompt', () => {
       { workspaceName: 'zeta', count: 1 },
     ])
   })
+
+  it('exempts sessions named by the quit initiator (local or durable id)', () => {
+    const breakdown = summarizeRunningSessionsForPrompt(
+      [
+        { ...summary('own-skipped', 1, 'projA', 'running'), agentSessionId: 'durable-own' },
+        summary('other-skipped', 2, 'projB', 'background'),
+        summary('other-running', 2, 'projB', 'running'),
+      ],
+      1,
+      ['durable-own', 'other-skipped'],
+    )
+
+    expect(breakdown).toEqual({
+      promptWindowCount: 0,
+      otherWindows: [{ workspaceName: 'projB', count: 1 }],
+    })
+  })
 })

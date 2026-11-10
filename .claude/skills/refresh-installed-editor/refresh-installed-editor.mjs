@@ -15,6 +15,9 @@
  *  关闭用 `Universe Editor.exe --quit`：第二个实例把参数转发给已运行的主实例，主实例走
  *  File → Exit 的 app.quit() 管线（before-quit 先快照全部窗口，will-quit 清理 sentinel），
  *  不强杀、不逐窗口 WM_CLOSE（逐窗关闭会重写 session、收缩恢复列表）。
+ *  从编辑器内调用时还会带上 `--quit-skip-session=<调用会话 id>`：编辑器退出确认只豁免
+ *  这一个会话（它的工作本来就会被预期的刷新中断），其它运行中会话仍照常拦截；安装版
+ *  较旧、不支持该参数时回退为纯 `--quit`（可能弹一次确认框，更新一次安装版后消失）。
  *  覆盖用 robocopy /E 而不是 /MIR：只覆盖同名文件，保留卸载器等安装器专属文件。
  *  只关闭可执行路径位于安装目录下的进程，避免误杀 dev / 其它 worktree 实例。
  *--------------------------------------------------------------------------------------------*/
@@ -48,6 +51,12 @@ const POLL_INTERVAL_MS = 1000
 const AGENT_SESSIONS_FLAG = '--agent-sessions'
 const AGENT_SESSIONS_PROTOCOL = 1
 const AGENT_SESSIONS_TIMEOUT_MS = 30_000
+/**
+ * Exempts the session that invoked this skill from the editor's quit
+ * confirmation. Every other running session still prompts; the flag is optional
+ * so older installed builds fall back to the plain `--quit` behavior.
+ */
+const QUIT_SKIP_SESSION_FLAG = '--quit-skip-session='
 /** Killing the editor must not interrupt sessions with work in flight. */
 const BLOCKING_SESSION_STATUSES = new Set(['running', 'ask', 'background'])
 const OTHER_SESSIONS_EXIT_CODE = 11
@@ -532,6 +541,12 @@ function installedSupportsAgentSessions(install) {
   return existsSync(asar) && fileContainsText(asar, AGENT_SESSIONS_FLAG)
 }
 
+/** 安装版是否支持 `--quit-skip-session=`（旧版本只有纯 `--quit`）。 */
+function installedSupportsQuitSkipSession(install) {
+  const asar = join(install.dir, 'resources', 'app.asar')
+  return existsSync(asar) && fileContainsText(asar, QUIT_SKIP_SESSION_FLAG)
+}
+
 function fileContainsText(file, needle) {
   const needleBuffer = Buffer.from(needle)
   const chunkSize = 1 << 20
@@ -676,10 +691,21 @@ function otherSessionsError(others, phase) {
  * 不要改回逐窗口 WM_CLOSE/taskkill：逐窗关闭会在每次 close/closed 时重写
  * session、收缩恢复列表，且强杀会留下异常退出 sentinel。
  */
-function requestInstalledEditorQuit(installDir, exe) {
-  log('请求编辑器正常退出：--quit（等价于 File → Exit）…')
-  const result = spawnSync(exe, ['--quit'], {
-    cwd: installDir,
+function requestInstalledEditorQuit(install, invoking) {
+  const args = ['--quit']
+  if (invoking?.agentSessionId) {
+    if (installedSupportsQuitSkipSession(install)) {
+      args.push(`${QUIT_SKIP_SESSION_FLAG}${invoking.agentSessionId}`)
+    } else {
+      warn(
+        `安装版不支持 "${QUIT_SKIP_SESSION_FLAG}"：关闭时可能出现调用会话的退出确认框；` +
+          '完成一次安装版更新后该确认框会自动消失。',
+      )
+    }
+  }
+  log(`请求编辑器正常退出：${args.join(' ')}（等价于 File → Exit）…`)
+  const result = spawnSync(install.exe, args, {
+    cwd: install.dir,
     env: installedEditorEnv(),
     encoding: 'utf8',
     windowsHide: true,
@@ -692,18 +718,18 @@ function requestInstalledEditorQuit(installDir, exe) {
   }
 }
 
-async function closeInstallProcesses(installDir, exe, graceSeconds) {
-  let processes = listInstallProcesses(installDir)
+async function closeInstallProcesses(install, invoking, graceSeconds) {
+  let processes = listInstallProcesses(install.dir)
   if (processes.length === 0) {
     log('安装版未运行，跳过关闭')
     return 0
   }
   const initialCount = processes.length
-  requestInstalledEditorQuit(installDir, exe)
+  requestInstalledEditorQuit(install, invoking)
   const deadline = Date.now() + graceSeconds * 1000
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS)
-    processes = listInstallProcesses(installDir)
+    processes = listInstallProcesses(install.dir)
     if (processes.length === 0) {
       log('安装版已正常退出')
       return initialCount
@@ -858,6 +884,8 @@ function preflight(options) {
     foreignProcesses,
     sessionSnapshot,
     otherSessions,
+    invokingSession: options.invokingSession,
+    quitSkipSessionSupported: installedSupportsQuitSkipSession(install),
   }
 }
 
@@ -875,6 +903,16 @@ function printPreflightSummary(info) {
         .map((session) => `  - ${formatSessionSummary(session)}`)
         .join('\n')}`,
     )
+  }
+  if (info.installProcesses.length > 0 && info.invokingSession?.agentSessionId) {
+    if (info.quitSkipSessionSupported) {
+      log('退出确认豁免: 支持 --quit-skip-session（调用会话不会触发确认框）')
+    } else {
+      warn(
+        '退出确认豁免: 安装版不支持 --quit-skip-session，关闭时可能出现调用会话的确认框；' +
+          '更新一次安装版后自动消失',
+      )
+    }
   }
   if (info.foreignProcesses.length > 0) {
     warn(
@@ -922,6 +960,11 @@ function printDryRun(options, info) {
   } else {
     warn('调用会话: 无法识别（未设置 CLAUDE_CODE_SESSION_ID），任何运行中的会话都会被拦')
   }
+  log(
+    `退出确认豁免（${QUIT_SKIP_SESSION_FLAG}）: ${
+      info.quitSkipSessionSupported ? '安装版支持' : '安装版不支持（关闭时可能弹确认框）'
+    }`,
+  )
   if (info.sessionSnapshot === undefined) {
     log('其它运行中的会话: 安装版未运行，无')
   } else if (info.otherSessions.length === 0) {
@@ -951,8 +994,12 @@ function printDryRun(options, info) {
   console.log(
     `  "${info.install.exe}" ${AGENT_SESSIONS_FLAG}（关闭前再次查询会话；有其它运行中的会话则中止）`,
   )
+  const quitSkipArg =
+    info.quitSkipSessionSupported && options.invokingSession?.agentSessionId
+      ? ` ${QUIT_SKIP_SESSION_FLAG}${options.invokingSession.agentSessionId}`
+      : ''
   console.log(
-    `  "${info.install.exe}" --quit（等价于 File → Exit；等待 ${options.graceSeconds}s，超时不强杀）`,
+    `  "${info.install.exe}" --quit${quitSkipArg}（等价于 File → Exit；等待 ${options.graceSeconds}s，超时不强杀）`,
   )
   console.log(
     `  robocopy "${join(info.main, WIN_UNPACKED_REL)}" "${info.install.dir}" /E /XJ /R:2 /W:1 /NP`,
@@ -1200,8 +1247,8 @@ async function runFlow(options, info) {
 
   log('关闭安装版…')
   const closedCount = await closeInstallProcesses(
-    info.install.dir,
-    info.install.exe,
+    info.install,
+    options.invokingSession,
     options.graceSeconds,
   )
   const remaining = listInstallProcesses(info.install.dir)
@@ -1296,8 +1343,10 @@ running / ask / background 状态的会话就中止；安装版不支持 --agent
   --allow-missing-env    .env.<mode> 缺失时继续
   -h, --help             显示帮助
 
-关闭方式：运行 "Universe Editor.exe" --quit（second-instance 转发给主实例，
-走与 File → Exit 相同的 app.quit() 管线；冷启动时直接退出，不创建窗口）。`)
+关闭方式：运行 "Universe Editor.exe" --quit [--quit-skip-session=<id>]（second-instance
+转发给主实例，走与 File → Exit 相同的 app.quit() 管线；冷启动时直接退出，不创建窗口）。
+从编辑器内调用时自动带上调用会话 id，退出确认只豁免该会话；安装版不支持该参数时
+回退为纯 --quit（可能弹一次确认框，更新一次安装版后消失）。`)
 }
 
 main().catch((error) => {

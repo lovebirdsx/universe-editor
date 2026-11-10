@@ -16,8 +16,14 @@ import { IAcpSessionService } from '../../services/acp/session/acpSessionService
 import type { AcpSessionStatus, IAcpSession } from '../../services/acp/session/acpSession.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../../shared/e2e/contract.js'
 
-function sessionWithStatus(status: AcpSessionStatus, backgroundTasks = 0): IAcpSession {
+function sessionWithStatus(
+  status: AcpSessionStatus,
+  backgroundTasks = 0,
+  ids: { id: string; durableId?: string } = { id: 'test-session' },
+): IAcpSession {
   return {
+    id: ids.id,
+    sessionIdOnAgent: observableValue('sessionIdOnAgent', ids.durableId),
     status: observableValue('status', status),
     backgroundTaskCount: observableValue('backgroundTaskCount', backgroundTasks),
   } as unknown as IAcpSession
@@ -227,6 +233,44 @@ describe('SessionShutdownParticipant', () => {
     await lifecycle.shutdown(ShutdownReason.Quit, { skipRunningSessionPrompt: true })
 
     expect(joined).toBe(true)
+  })
+
+  it('exempts the quit initiator by durable id but still prompts for other sessions', async () => {
+    const lifecycle: ILifecycleService = new LifecycleService()
+    const dialog = makeDialog(true)
+    makeParticipant(
+      lifecycle,
+      [
+        sessionWithStatus('running', 0, { id: 'local-initiator', durableId: 'durable-initiator' }),
+        sessionWithStatus('running', 0, { id: 'local-other' }),
+      ],
+      dialog,
+    )
+
+    await lifecycle.confirmBeforeShutdown(ShutdownReason.Quit, {
+      runningSessions: { promptWindowCount: 0, otherWindows: [] },
+      skipSessionIds: ['durable-initiator'],
+      promptAckId: 15,
+    })
+
+    expect(dialog.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('This window has 1') }),
+    )
+  })
+
+  it('does not prompt when the only running session is the quit initiator', async () => {
+    const lifecycle: ILifecycleService = new LifecycleService()
+    const dialog = makeDialog(true)
+    makeParticipant(lifecycle, [sessionWithStatus('running', 0, { id: 'local-initiator' })], dialog)
+
+    const vetoed = await lifecycle.confirmBeforeShutdown(ShutdownReason.Quit, {
+      runningSessions: { promptWindowCount: 0, otherWindows: [] },
+      skipSessionIds: ['local-initiator'],
+      promptAckId: 16,
+    })
+
+    expect(vetoed).toBe(false)
+    expect(dialog.confirm).not.toHaveBeenCalled()
   })
 
   it('does not prompt or acknowledge in E2E', async () => {

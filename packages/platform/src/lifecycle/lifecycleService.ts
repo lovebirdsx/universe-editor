@@ -54,6 +54,12 @@ export interface ShutdownConfirmationContext {
   readonly runningSessions?: RunningSessionsShutdownInfo
   /** Another window already owns the application-wide running-session prompt. */
   readonly skipRunningSessionPrompt?: boolean
+  /**
+   * Session ids the quit initiator explicitly exempted (CLI `--quit` from the
+   * refresh skill names the session that requested the quit). Every other
+   * running session still prompts.
+   */
+  readonly skipSessionIds?: readonly string[]
   /** Main-generated id the renderer echoes once the prompt is on screen, so the
    *  coordinator can wait for the user's decision instead of its no-answer timeout. */
   readonly promptAckId?: number
