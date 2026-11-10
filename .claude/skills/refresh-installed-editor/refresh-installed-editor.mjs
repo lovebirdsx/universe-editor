@@ -6,7 +6,13 @@
  *  Job Object（KILL_ON_JOB_CLOSE）管理本地子进程树，普通 detached 子进程仍会随编辑器退出
  *  被杀；WMI 创建的进程不在该 Job 内，才能在关闭编辑器后继续完成覆盖和重启。
  *
+ *  worker 启动后先等待调用本 skill 的 Claude 会话进程（CLAUDE_PID）退出：会话收尾有延迟，
+ *  提前关闭编辑器会打断它。会话结束前不做任何同步/构建；结束后才开始执行。
+ *
  *  顺序刻意是「构建成功后才关闭编辑器」：构建失败时安装版不受影响，编译期间也可继续使用。
+ *  关闭用 `Universe Editor.exe --quit`：第二个实例把参数转发给已运行的主实例，主实例走
+ *  File → Exit 的 app.quit() 管线（before-quit 先快照全部窗口，will-quit 清理 sentinel），
+ *  不强杀、不逐窗口 WM_CLOSE（逐窗关闭会重写 session、收缩恢复列表）。
  *  覆盖用 robocopy /E 而不是 /MIR：只覆盖同名文件，保留卸载器等安装器专属文件。
  *  只关闭可执行路径位于安装目录下的进程，避免误杀 dev / 其它 worktree 实例。
  *--------------------------------------------------------------------------------------------*/
@@ -32,8 +38,11 @@ const WIN_UNPACKED_REL = 'apps/editor/release/win-unpacked'
 const PACKAGE_EDITOR_REL = 'scripts/release/package-editor.mjs'
 const RUNTIME_RESOURCES_REL = 'scripts/release/runtime-resources.mjs'
 const DEFAULT_ENV_MODE = 'prod'
-const DEFAULT_GRACE_SECONDS = 15
+const DEFAULT_GRACE_SECONDS = 60
 const POLL_INTERVAL_MS = 1000
+const SESSION_POLL_INTERVAL_MS = 5000
+const SESSION_LOG_INTERVAL_MS = 120_000
+const SESSION_IDENTITY_CHECK_INTERVAL_MS = 30_000
 const RUN_ROOT = join(tmpdir(), 'refresh-installed-editor')
 const LAST_RESULT_FILE = join(RUN_ROOT, 'last-result.json')
 const RUN_LOCK_FILE = join(RUN_ROOT, 'run.lock.json')
@@ -54,8 +63,10 @@ function parseArgs(argv) {
     strictNotes: false,
     noRestart: false,
     allowMissingEnv: false,
+    noWaitSession: false,
     envMode: DEFAULT_ENV_MODE,
     graceSeconds: DEFAULT_GRACE_SECONDS,
+    sessionWaitSeconds: 0,
     installDir: undefined,
     mainWorktree: undefined,
   }
@@ -73,7 +84,16 @@ function parseArgs(argv) {
     else if (arg === '--strict-notes') options.strictNotes = true
     else if (arg === '--no-restart') options.noRestart = true
     else if (arg === '--allow-missing-env') options.allowMissingEnv = true
-    else if (arg === '--env' || arg.startsWith('--env=')) {
+    else if (arg === '--no-wait-session') options.noWaitSession = true
+    else if (arg === '--session-wait-timeout' || arg.startsWith('--session-wait-timeout=')) {
+      const { value, next } = takeValue(argv, i, '--session-wait-timeout')
+      const seconds = Number(value)
+      if (!Number.isInteger(seconds) || seconds < 0) {
+        throw new CliError('--session-wait-timeout 必须是非负整数（秒，0 表示不限）', 2)
+      }
+      options.sessionWaitSeconds = seconds
+      i = next
+    } else if (arg === '--env' || arg.startsWith('--env=')) {
       const { value, next } = takeValue(argv, i, '--env')
       options.envMode = value
       i = next
@@ -366,7 +386,7 @@ function listProcesses() {
   const command = [
     '$ErrorActionPreference = "Stop"',
     '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    '@(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, ExecutablePath, Name) | ConvertTo-Json -Compress',
+    '@(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, ExecutablePath, Name, CreationDate) | ConvertTo-Json -Compress',
   ].join('; ')
   const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8',
@@ -394,7 +414,18 @@ function listProcesses() {
       parentPid: Number(item.ParentProcessId),
       path: String(item.ExecutablePath),
       name: String(item.Name ?? ''),
+      creationDate: parseWmiDate(item.CreationDate),
     }))
+}
+
+/** PowerShell 5.1 把 DateTime 序列化成 `/Date(ms)/`，新版可能是 ISO 字符串。 */
+function parseWmiDate(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string') return undefined
+  const match = /\/Date\((\d+)\)\//.exec(value)
+  if (match) return Number(match[1])
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : undefined
 }
 
 function listInstallProcesses(installDir) {
@@ -481,47 +512,68 @@ function buildProduction(main, options) {
   run(process.execPath, [entry, ...args], { cwd: main, exitCode: 6 })
 }
 
-async function closeInstallProcesses(installDir, graceSeconds) {
+function installedEditorEnv() {
+  const env = { ...process.env }
+  for (const key of [
+    'ELECTRON_RUN_AS_NODE',
+    'ELECTRON_NO_ATTACH_CONSOLE',
+    'NODE_OPTIONS',
+    'UNIVERSE_E2E',
+    'UNIVERSE_USER_DATA_DIR',
+    'UNIVERSE_CONFIG_DIR',
+    'UE_ENV',
+  ]) {
+    delete env[key]
+  }
+  return env
+}
+
+/**
+ * 用 `Universe Editor.exe --quit` 请求已运行的安装版退出。第二个实例拿不到
+ * single-instance 锁，会把 argv 转发给主实例；主实例按 File → Exit 的
+ * app.quit() 管线退出（before-quit 先快照全部窗口，再 will-quit 清理）。
+ * 不要改回逐窗口 WM_CLOSE/taskkill：逐窗关闭会在每次 close/closed 时重写
+ * session、收缩恢复列表，且强杀会留下异常退出 sentinel。
+ */
+function requestInstalledEditorQuit(installDir, exe) {
+  log('请求编辑器正常退出：--quit（等价于 File → Exit）…')
+  const result = spawnSync(exe, ['--quit'], {
+    cwd: installDir,
+    env: installedEditorEnv(),
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 30_000,
+  })
+  // 第二个实例自身只负责转发并快速退出；非零退出码不单独判失败，
+  // 以安装目录进程是否全部消失为准。
+  if (result.error) {
+    warn(`--quit 启动失败: ${result.error.message}；继续观察安装版是否退出`)
+  }
+}
+
+async function closeInstallProcesses(installDir, exe, graceSeconds) {
   let processes = listInstallProcesses(installDir)
   if (processes.length === 0) {
     log('安装版未运行，跳过关闭')
     return 0
   }
   const initialCount = processes.length
-  log(`发现 ${processes.length} 个安装目录进程，请求优雅退出…`)
-  for (const processInfo of processes) {
-    spawnSync('taskkill', ['/PID', String(processInfo.pid)], {
-      encoding: 'utf8',
-      windowsHide: true,
-    })
-  }
+  requestInstalledEditorQuit(installDir, exe)
   const deadline = Date.now() + graceSeconds * 1000
   while (Date.now() < deadline) {
     await sleep(POLL_INTERVAL_MS)
     processes = listInstallProcesses(installDir)
     if (processes.length === 0) {
-      log('安装版已全部退出')
+      log('安装版已正常退出')
       return initialCount
     }
   }
-  log(`优雅关闭超时（${graceSeconds}s），强制结束剩余 ${processes.length} 个进程…`)
-  for (const processInfo of processes) {
-    spawnSync('taskkill', ['/PID', String(processInfo.pid), '/T', '/F'], {
-      encoding: 'utf8',
-      windowsHide: true,
-    })
-  }
-  await sleep(1000)
-  processes = listInstallProcesses(installDir)
-  if (processes.length > 0) {
-    const detail = processes.map((item) => `${item.name}(${item.pid})`).join(', ')
-    throw new CliError(
-      `无法关闭安装目录进程: ${detail}。请以管理员身份重跑，或手动关闭后加 --skip-build。`,
-      7,
-    )
-  }
-  log('安装版已强制退出')
-  return initialCount
+  const detail = processes.map((item) => `${item.name}(${item.pid})`).join(', ')
+  throw new CliError(
+    `编辑器在 ${graceSeconds}s 内没有退出（可能有未保存改动、运行中的会话或确认框等待处理）。` +
+      `脚本不会强杀；请手动 File → Exit 后加 --skip-build 重跑。剩余进程: ${detail}`,
+    7,
+  )
 }
 
 function copyBuildToInstall(sourceDir, installDir) {
@@ -586,25 +638,13 @@ function verifyInstalledCopy(sourceDir, installDir, main) {
 }
 
 async function launchInstalledEditor(installDir, exe) {
-  const env = { ...process.env }
-  for (const key of [
-    'ELECTRON_RUN_AS_NODE',
-    'ELECTRON_NO_ATTACH_CONSOLE',
-    'NODE_OPTIONS',
-    'UNIVERSE_E2E',
-    'UNIVERSE_USER_DATA_DIR',
-    'UNIVERSE_CONFIG_DIR',
-    'UE_ENV',
-  ]) {
-    delete env[key]
-  }
   let spawnError
   const child = spawn(exe, [], {
     cwd: installDir,
     detached: true,
     stdio: 'ignore',
     windowsHide: false,
-    env,
+    env: installedEditorEnv(),
   })
   child.on('error', (error) => {
     spawnError = error
@@ -718,6 +758,20 @@ function printDryRun(options, info) {
     )
   }
   log(`现有构建产物: ${info.sourceExists ? '存在' : '不存在（正式运行会构建）'}`)
+  const sessionWait = resolveInvokingSessionWait()
+  if (options.noWaitSession) {
+    log('调用会话: 跳过等待（--no-wait-session），worker 立即执行')
+  } else if (sessionWait) {
+    log(
+      `调用会话: 等待 PID ${sessionWait.pid}${
+        sessionWait.sessionId ? `（session ${sessionWait.sessionId}）` : ''
+      } 退出后才开始执行${
+        options.sessionWaitSeconds > 0 ? `，最多等 ${options.sessionWaitSeconds}s` : ''
+      }`,
+    )
+  } else {
+    log('调用会话: 未检测到 CLAUDE_PID，worker 不等待')
+  }
   log('计划执行:')
   if (!options.skipBuild) {
     if (!options.skipPull) {
@@ -733,7 +787,9 @@ function printDryRun(options, info) {
   } else {
     console.log('  （跳过构建，复用现有 win-unpacked）')
   }
-  console.log(`  taskkill /PID <安装目录进程>（优雅等待 ${options.graceSeconds}s，超时 /T /F）`)
+  console.log(
+    `  "${info.install.exe}" --quit（等价于 File → Exit；等待 ${options.graceSeconds}s，超时不强杀）`,
+  )
   console.log(
     `  robocopy "${join(info.main, WIN_UNPACKED_REL)}" "${info.install.dir}" /E /XJ /R:2 /W:1 /NP`,
   )
@@ -760,6 +816,108 @@ function isPidAlive(pid) {
     return true
   } catch {
     return false
+  }
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) return `${minutes}m${seconds.toString().padStart(2, '0')}s`
+  return `${Math.floor(minutes / 60)}h${(minutes % 60).toString().padStart(2, '0')}m`
+}
+
+function readProcessCreationDate(pid) {
+  const command = [
+    '$ErrorActionPreference = "Stop"',
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
+    `@(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object CreationDate) | ConvertTo-Json -Compress`,
+  ].join('; ')
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', command],
+    {
+      encoding: 'utf8',
+      windowsHide: true,
+    },
+  )
+  if (result.status !== 0) return undefined
+  const text = result.stdout.trim()
+  if (!text) return undefined
+  try {
+    const parsed = JSON.parse(text)
+    const entry = Array.isArray(parsed) ? parsed[0] : parsed
+    return parseWmiDate(entry?.CreationDate)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * 调用本 skill 的 Claude 会话进程。worker 在它退出后才开始执行；PID 复用用
+ * CreationDate 校验，避免长等待期间 PID 被系统回收后误判会话仍在。
+ */
+function resolveInvokingSessionWait() {
+  const pid = Number(process.env.CLAUDE_PID)
+  if (!Number.isInteger(pid) || pid <= 0) return undefined
+  let creationDate
+  try {
+    creationDate = listProcesses().find((item) => item.pid === pid)?.creationDate
+  } catch {
+    // 取不到启动时间时退化到只看 PID 存活，等待仍然成立。
+  }
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID?.trim() || undefined
+  return {
+    pid,
+    ...(sessionId ? { sessionId } : {}),
+    ...(creationDate !== undefined ? { creationDate } : {}),
+  }
+}
+
+async function waitForInvokingSession(sessionWait, options) {
+  if (!sessionWait?.pid) {
+    log('未检测到调用会话进程（CLAUDE_PID），跳过等待，立即执行')
+    return
+  }
+  if (options.noWaitSession) {
+    log('--no-wait-session：跳过等待调用会话结束')
+    return
+  }
+  const label = sessionWait.sessionId
+    ? `session ${sessionWait.sessionId} / PID ${sessionWait.pid}`
+    : `PID ${sessionWait.pid}`
+  log(`等待调用本 skill 的会话结束（${label}）…`)
+  log('会话结束（关闭聊天标签页或退出 Claude CLI）后才会开始同步与构建。')
+  const startedAt = Date.now()
+  const timeoutMs = options.sessionWaitSeconds * 1000
+  let nextLogAt = startedAt + SESSION_LOG_INTERVAL_MS
+  let nextIdentityCheckAt = 0
+  while (true) {
+    if (!isPidAlive(sessionWait.pid)) {
+      log(`调用会话已结束（等待 ${formatDuration(Date.now() - startedAt)}），开始执行`)
+      return
+    }
+    const now = Date.now()
+    if (sessionWait.creationDate !== undefined && now >= nextIdentityCheckAt) {
+      nextIdentityCheckAt = now + SESSION_IDENTITY_CHECK_INTERVAL_MS
+      const current = readProcessCreationDate(sessionWait.pid)
+      if (current === undefined || current !== sessionWait.creationDate) {
+        log(`调用会话进程已退出（PID ${sessionWait.pid} 已被复用或消失），开始执行`)
+        return
+      }
+    }
+    if (timeoutMs > 0 && now - startedAt >= timeoutMs) {
+      throw new CliError(
+        `等待调用会话结束超时（${options.sessionWaitSeconds}s），未做任何写操作。请结束会话后重跑，或用 --no-wait-session 立即执行。`,
+        10,
+      )
+    }
+    if (now >= nextLogAt) {
+      log(`仍在等待会话结束（已等待 ${formatDuration(now - startedAt)}）…`)
+      nextLogAt = now + SESSION_LOG_INTERVAL_MS
+    }
+    await sleep(SESSION_POLL_INTERVAL_MS)
   }
 }
 
@@ -820,6 +978,7 @@ function createDetachedWorker(options, info) {
 
   const workerArgs = process.argv.slice(2).filter((arg) => arg !== '--foreground')
   workerArgs.push('--main-worktree', info.main, '--install-dir', info.install.dir)
+  const sessionWait = resolveInvokingSessionWait()
   writeFileSync(
     configFile,
     JSON.stringify({
@@ -829,6 +988,7 @@ function createDetachedWorker(options, info) {
       envFile,
       resultFile,
       lockFile,
+      sessionWait: sessionWait ?? null,
     }),
   )
 
@@ -873,7 +1033,7 @@ function createDetachedWorker(options, info) {
     throw new CliError(`创建独立后台进程失败: WMI 未返回有效 PID（${result.stdout.trim()}）`, 9)
   }
   writeFileSync(lockFile, JSON.stringify({ pid, startedAt: new Date().toISOString(), logFile }))
-  return { pid, logFile, resultFile, runDir }
+  return { pid, logFile, resultFile, runDir, sessionWait }
 }
 
 async function runWorker(configPath) {
@@ -900,6 +1060,9 @@ async function runWorker(configPath) {
     log('独立 worker 启动，开始预检…')
     const info = preflight(options)
     printPreflightSummary(info)
+    // 预检是只读的，先做掉；真正的写操作（pull/install/build/关闭/覆盖）必须等
+    // 调用本 skill 的会话完全退出后再开始。
+    await waitForInvokingSession(config.sessionWait, options)
     await runFlow(options, info)
     writeResult(config.resultFile, {
       ok: true,
@@ -961,7 +1124,11 @@ async function runFlow(options, info) {
   }
 
   log('关闭安装版…')
-  const closedCount = await closeInstallProcesses(info.install.dir, options.graceSeconds)
+  const closedCount = await closeInstallProcesses(
+    info.install.dir,
+    info.install.exe,
+    options.graceSeconds,
+  )
   const remaining = listInstallProcesses(info.install.dir)
   if (remaining.length > 0) {
     throw new CliError('关闭后重新检测到安装目录进程，已中止覆盖', 7)
@@ -1008,7 +1175,9 @@ async function main() {
 
   printPreflightSummary(info)
   if (options.foreground) {
-    warn('--foreground：脚本在当前进程运行；从编辑器内启动时，编辑器关闭会终止脚本')
+    warn(
+      '--foreground：脚本在当前进程运行；从编辑器内启动时，编辑器关闭会终止脚本。跳过等待调用会话（前台等待会阻塞会话本身）',
+    )
     await runFlow(options, info)
     return
   }
@@ -1018,30 +1187,50 @@ async function main() {
   log(`后台进程 PID: ${worker.pid}`)
   log(`日志: ${worker.logFile}`)
   log(`上次结果: ${worker.resultFile}`)
-  log('脚本会脱离编辑器进程树继续运行：构建成功后关闭当前编辑器、覆盖安装目录并重启。')
+  if (worker.sessionWait && !options.noWaitSession) {
+    log(
+      `worker 会先等待调用本 skill 的会话结束（PID ${worker.sessionWait.pid}${
+        worker.sessionWait.sessionId ? `，session ${worker.sessionWait.sessionId}` : ''
+      }）再开始执行。`,
+    )
+    log('请关闭当前聊天标签页或退出 Claude CLI；会话进程退出后自动开始构建。')
+  } else {
+    log(
+      options.noWaitSession
+        ? '已指定 --no-wait-session：worker 立即开始执行。'
+        : '未检测到调用会话进程（CLAUDE_PID）：worker 立即开始执行。',
+    )
+  }
+  log('构建成功后会用 --quit 正常关闭编辑器（等价于 File → Exit），不会强杀。')
   log('编辑器关闭后本会话会退出，属正常现象；重新打开编辑器后查看 last-result.json 或日志。')
 }
 
 function printHelp() {
   console.log(`用法: node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs [选项]
 
-默认流程：前台预检 -> 启动独立后台 worker -> worker 拉取主 worktree main、
-生产打包、关闭安装目录进程、覆盖安装目录并启动编辑器。
+默认流程：前台预检 -> 启动独立后台 worker -> worker 等待调用会话结束 ->
+拉取主 worktree main、生产打包、用 "Universe Editor.exe" --quit 正常关闭编辑器
+（与 File → Exit 相同的 before-quit/will-quit 管线）、覆盖安装目录并启动编辑器。
 worker 通过 WMI 创建，不在编辑器的 Job Object 内，因此编辑器关闭后仍会继续。
 
 选项:
   --dry-run              只预检并打印计划，不执行任何写操作
-  --foreground           在当前进程直接执行完整流程（编辑器外调试用；编辑器内会被关闭打断）
+  --foreground           在当前进程直接执行完整流程（编辑器外调试用；会跳过等待调用会话）
   --skip-build           跳过拉取/依赖/构建，复用现有 win-unpacked
   --skip-pull            不拉取 main，允许主 worktree 有本地改动
   --env <mode>           打包环境，默认 prod（读取 .env.<mode>）
   --strict-notes         不跳过 release notes 发版门禁
   --no-restart           覆盖后不启动编辑器
+  --no-wait-session      不等待调用会话结束，worker 立即执行
+  --session-wait-timeout <秒>  等待调用会话结束的上限，默认 0（不限）
   --install-dir <path>   安装目录，默认 %LOCALAPPDATA%\\Programs\\Universe Editor
   --main-worktree <path> 主 worktree 路径，默认从 git 自动探测
-  --grace-timeout <秒>   优雅关闭等待时间，默认 15
+  --grace-timeout <秒>   等待编辑器正常退出的上限，默认 60；超时不会强杀
   --allow-missing-env    .env.<mode> 缺失时继续
-  -h, --help             显示帮助`)
+  -h, --help             显示帮助
+
+关闭方式：运行 "Universe Editor.exe" --quit（second-instance 转发给主实例，
+走与 File → Exit 相同的 app.quit() 管线；冷启动时直接退出，不创建窗口）。`)
 }
 
 main().catch((error) => {
