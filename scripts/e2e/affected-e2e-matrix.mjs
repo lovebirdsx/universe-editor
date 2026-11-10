@@ -65,6 +65,11 @@ export const EXTENSION_SUITES = [
   { name: '@universe-editor/typescript', dir: 'extensions/typescript', prep: 'tsserver' },
   { name: '@universe-editor/ai', dir: 'extensions/ai', prep: 'none' },
   { name: '@universe-editor/perforce', dir: 'extensions/perforce', prep: 'none' },
+  {
+    name: '@universe-editor/numbered-bookmarks',
+    dir: 'extensions/numbered-bookmarks',
+    prep: 'none',
+  },
 ]
 
 // Out-of-workspace marketplace extensions with their own e2e suite. They are NOT
@@ -339,7 +344,9 @@ function main() {
 const invokedDirectly =
   process.argv[1] &&
   realpathSync(process.argv[1]).split(sep).join('/') ===
-    fileURLToPath(import.meta.url).split(sep).join('/')
+    fileURLToPath(import.meta.url)
+      .split(sep)
+      .join('/')
 if (invokedDirectly) {
   main()
 }

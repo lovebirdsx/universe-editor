@@ -38,7 +38,7 @@ Playwright + `_electron` 跑**打包产物** `out/`，通过 `window.__E2E__` �
 E2E 已按「内核 vs 插件」物理拆分：
 
 - **核心** spec 住 `apps/editor/e2e/specs/`，基线**不激活任何扩展**（fixture 传 `extensions: []`）——冷启动不 spawn tsserver / markdown-LSP，消除大半 LSP-warmup flake。
-- **扩展专属** spec 跟随扩展住 `extensions/<ext>/e2e/`（markdown / typescript / ai / perforce），各自带 `playwright.config.ts` + `e2e` script + scoped fixture（只激活自己：`extensions: ['@universe-editor/<ext>']`）。**删扩展即删其测试**。
+- **扩展专属** spec 跟随扩展住 `extensions/<ext>/e2e/`（markdown / typescript / ai / perforce / numbered-bookmarks），各自带 `playwright.config.ts` + `e2e` script + scoped fixture（只激活自己：`extensions: ['@universe-editor/<ext>']`）。**删扩展即删其测试**。
 - 少数核心 spec 需某扩展来**搭建**其（核心 UI 的）场景，走 `apps/editor/e2e/fixtures/core*App.ts` scoped fixture（基线 `[]` 之上只加所需扩展），如 `coreGitApp`（dirty-diff / 键位）、`coreTypescriptApp`（引用预览）、`coreMarkdownApp`（跨文件链接定义）。
 
 > 判归属：某能力是**扩展提供**的（LSP 符号/定义/诊断、SCM quick-diff、tsserver 语义）才需 scoped fixture 或迁到扩展目录；markdown/mermaid **预览渲染**与 **ACP/agents** 是**核心**，其 spec 用基线 `[]` 即可。

@@ -703,15 +703,24 @@ importers:
 
   extensions/numbered-bookmarks:
     devDependencies:
+      '@playwright/test':
+        specifier: 'catalog:'
+        version: 1.62.1
       '@types/node':
         specifier: 'catalog:'
         version: 22.19.17
       '@universe-editor/config-ts':
         specifier: workspace:*
         version: link:../../packages/config-ts
+      '@universe-editor/e2e-harness':
+        specifier: workspace:*
+        version: link:../../packages/e2e-harness
       '@universe-editor/extension-api':
         specifier: workspace:*
         version: link:../../packages/extension-api
+      cross-env:
+        specifier: 'catalog:'
+        version: 7.0.3
       esbuild:
         specifier: 'catalog:'
         version: 0.25.12

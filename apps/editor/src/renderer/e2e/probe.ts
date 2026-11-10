@@ -1787,6 +1787,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           endLineNumber: d.range.endLineNumber,
           endColumn: d.range.endColumn,
           ...(d.options.className != null && { className: d.options.className }),
+          ...(d.options.glyphMarginClassName != null && {
+            glyphMarginClassName: d.options.glyphMarginClassName,
+          }),
           ...(description !== undefined && { description }),
         }
       })

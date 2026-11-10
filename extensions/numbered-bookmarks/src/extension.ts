@@ -22,7 +22,7 @@ import {
 import { BookmarkStore, SLOT_COUNT, type Bookmark } from './bookmarks.js'
 import { DecorationProvider, type DecorationColors } from './decorations.js'
 import { keyToFsPath, uriToKey } from './paths.js'
-import { applyLineEdit, diffLines } from './sticky.js'
+import { applyDocumentChange } from './sticky.js'
 import { load, save } from './persistence.js'
 
 function lineRange(line: number): Range {
@@ -90,11 +90,22 @@ export async function activate(context: ExtensionContext): Promise<void> {
     if (editor) decorate(editor)
   }
 
+  /** Repaint visible editors showing `key` (one per editor group), or all when omitted. */
+  const decorateVisible = (key?: string): void => {
+    for (const editor of window.visibleTextEditors) {
+      if (key !== undefined && uriToKey(editor.document.uri) !== key) continue
+      decorate(editor)
+    }
+  }
+
   context.subscriptions.push(
     window.onDidChangeActiveTextEditor((editor) => {
       if (!editor) return
       lastText.set(uriToKey(editor.document.uri), editor.document.getText())
       decorate(editor)
+    }),
+    window.onDidChangeVisibleTextEditors((editors) => {
+      for (const editor of editors) decorate(editor)
     }),
   )
 
@@ -105,12 +116,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const next = document.getText()
       lastText.set(key, next)
       if (previous === undefined) return
-      const edit = diffLines(previous, next)
-      if (!edit) return
-      if (applyLineEdit(store, key, edit)) {
-        persist()
-        void decorateActive()
-      }
+      const result = applyDocumentChange(store, key, previous, next)
+      if (!result) return
+      if (result.moved) persist()
+      // Tracked ranges drift when text is inserted at their start; repaint from the store.
+      if (result.repaint) decorateVisible(key)
     }),
   )
 
@@ -134,7 +144,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
         result ? `set ${result.line}` : 'cleared'
       } (${key})`,
     )
-    await decorateActive()
+    // A slot is workspace-global: setting it here can clear the ribbon in another group.
+    decorateVisible()
     persist()
   }
 
@@ -166,14 +177,16 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   context.subscriptions.push(
     commands.registerCommand('numberedBookmarks.list', () => listBookmarks(store, jumpTo)),
-    commands.registerCommand('numberedBookmarks.clear', async () => {
+    commands.registerCommand('numberedBookmarks.clear', () => {
       store.clearAll()
-      await decorateActive()
+      decorateVisible()
       persist()
     }),
   )
 
-  // The active editor may already be open when we activate (onStartupFinished).
+  // The editor list may still be filling in when we activate (onStartupFinished),
+  // so paint what is visible and let the active editor cover the gap.
+  decorateVisible()
   await decorateActive()
 
   console.info('[numbered-bookmarks] activated')

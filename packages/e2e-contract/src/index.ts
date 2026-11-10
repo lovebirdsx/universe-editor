@@ -134,13 +134,15 @@ export interface E2ECodeAction {
 }
 
 /** A decoration currently painted on a document model (monaco's internal
- *  decorations included — filter by className to find extension-contributed ones). */
+ *  decorations included — filter by className / glyphMarginClassName to find
+ *  extension-contributed ones). */
 export interface E2EEditorDecoration {
   readonly startLineNumber: number
   readonly startColumn: number
   readonly endLineNumber: number
   readonly endColumn: number
   readonly className?: string
+  readonly glyphMarginClassName?: string
   readonly description?: string
 }
 
@@ -1730,8 +1732,8 @@ export interface E2EProbe {
   ): Promise<readonly E2ECodeAction[]>
   /**
    * Decorations currently painted on a document model (monaco's internal
-   * decorations included). Filter by `className` to find extension-contributed
-   * decorations (their line decorations carry an `ext-deco-*` class).
+   * decorations included). Filter by `className` / `glyphMarginClassName` to
+   * find extension-contributed decorations (`ext-deco-line-*` / `ext-deco-gutter-*`).
    */
   getEditorDecorations(uri: string): Promise<readonly E2EEditorDecoration[]>
   /**

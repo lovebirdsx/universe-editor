@@ -67,3 +67,28 @@ export function applyLineEdit(store: BookmarkStore, path: string, edit: LineEdit
   }
   return changed
 }
+
+export interface DocumentChangeResult {
+  readonly moved: boolean
+  readonly repaint: boolean
+}
+
+/**
+ * Apply a full-text change to one document's bookmarks. `repaint` is true
+ * whenever the document still has a bookmark: the host paints them as
+ * zero-width tracked ranges, and Monaco's default stickiness grows such a range
+ * when text is inserted at its start — the stored line can stay put while the
+ * decoration has already stretched. The store is the source of truth, so the
+ * caller must re-apply it even when nothing moved.
+ */
+export function applyDocumentChange(
+  store: BookmarkStore,
+  path: string,
+  previousText: string,
+  nextText: string,
+): DocumentChangeResult | undefined {
+  const edit = diffLines(previousText, nextText)
+  if (!edit) return undefined
+  const moved = applyLineEdit(store, path, edit)
+  return { moved, repaint: moved || store.has(path) }
+}

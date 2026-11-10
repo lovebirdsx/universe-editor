@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyLineEdit, diffLines } from '../sticky.js'
+import { applyDocumentChange, applyLineEdit, diffLines } from '../sticky.js'
 import { BookmarkStore } from '../bookmarks.js'
 
 const A = '/D:/proj/a.ts'
@@ -71,5 +71,46 @@ describe('applyLineEdit', () => {
     store.toggle(0, A, 4)
     expect(applyLineEdit(store, A, { start: 1, delta: 0, oldEnd: 1 })).toBe(false)
     expect(store.get(0)?.line).toBe(4)
+  })
+})
+
+describe('applyDocumentChange', () => {
+  it('repaints even when the bookmark line does not move (copy lines down)', () => {
+    const store = new BookmarkStore()
+    store.toggle(0, A, 0)
+    const result = applyDocumentChange(store, A, '1\n2\n3\n', '1\n2\n3\n1\n2\n3\n')
+    expect(result).toEqual({ moved: false, repaint: true })
+    expect(store.get(0)?.line).toBe(0)
+  })
+
+  it('returns undefined when the text did not change', () => {
+    const store = new BookmarkStore()
+    store.toggle(0, A, 0)
+    expect(applyDocumentChange(store, A, 'a\nb', 'a\nb')).toBeUndefined()
+  })
+
+  it('does not repaint a file with no bookmarks', () => {
+    const store = new BookmarkStore()
+    store.toggle(0, B, 3)
+    expect(applyDocumentChange(store, A, '1\n2\n3\n', '1\n2\n3\n1\n2\n3\n')).toEqual({
+      moved: false,
+      repaint: false,
+    })
+  })
+
+  it('reports a move and repaint when a bookmark below the edit shifts', () => {
+    const store = new BookmarkStore()
+    store.toggle(2, A, 2)
+    const result = applyDocumentChange(store, A, '1\n2\n3\n', '1\n2\nX\n3\n')
+    expect(result).toEqual({ moved: true, repaint: true })
+    expect(store.get(2)?.line).toBe(3)
+  })
+
+  it('repaints a same-line-count edit without moving the bookmark', () => {
+    const store = new BookmarkStore()
+    store.toggle(1, A, 0)
+    const result = applyDocumentChange(store, A, '1\n2\n3\n', '1\nX\n3\n')
+    expect(result).toEqual({ moved: false, repaint: true })
+    expect(store.get(1)?.line).toBe(0)
   })
 })

@@ -46,6 +46,15 @@ describe('BookmarkStore', () => {
     ])
   })
 
+  it('reports whether a file has any bookmark', () => {
+    const store = new BookmarkStore()
+    store.toggle(0, B, 1)
+    expect(store.has(B)).toBe(true)
+    expect(store.has(A)).toBe(false)
+    store.clearAll()
+    expect(store.has(B)).toBe(false)
+  })
+
   it('lists all bookmarks in slot order', () => {
     const store = new BookmarkStore()
     store.toggle(5, B, 9)

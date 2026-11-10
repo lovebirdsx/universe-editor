@@ -54,6 +54,11 @@ export class BookmarkStore {
     this.slots = emptySlots()
   }
 
+  /** True when at least one slot points into `path`. */
+  has(path: string): boolean {
+    return this.slots.some((b) => b !== null && b.path === path)
+  }
+
   /** `[slot, line]` pairs that live in `path`, sorted by line. */
   forPath(path: string): Array<[number, number]> {
     const out: Array<[number, number]> = []

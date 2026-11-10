@@ -19,7 +19,7 @@ playwright.config.ts  timeout/retries/workers(CI vs 本地分流)
 
 **基座已抽包**：通用 driver（fixture 工厂 + 6 个 PO + `expectNoLeaks`/`evaluateWhenRestored`）在 `packages/e2e-harness`；探针类型契约在零依赖包 `packages/e2e-contract`（单一事实源）。本目录的 `fixtures/electronApp.ts`、`fixtures/sharedApp.ts`、`pages/WorkbenchPO.ts` 只是把 harness 工厂**绑定到本 app 的 `out/` 产物路径**的薄 shim。改通用 driver → 改 harness；改探针接口 → 改 e2e-contract（`src/shared/e2e/contract.ts` 是它的 re-export barrel）。
 
-**本目录只放核心 spec**：扩展专属 e2e 已迁到 `extensions/<ext>/e2e/`（perforce/markdown/typescript/ai）。**归属判据：这个测试断言的行为，随该扩展一起删掉就消失吗？是 → 归扩展。**
+**本目录只放核心 spec**：扩展专属 e2e 已迁到 `extensions/<ext>/e2e/`（perforce/markdown/typescript/ai/numbered-bookmarks）。**归属判据：这个测试断言的行为，随该扩展一起删掉就消失吗？是 → 归扩展。**
 
 ## 最小扩展集启动（P2 基线）
 
