@@ -8,11 +8,17 @@
  *  factory owns the shared cross-cutting knobs; callers pass only what differs.
  *--------------------------------------------------------------------------------------------*/
 
-import { defineConfig, type PlaywrightTestConfig } from '@playwright/test'
+import { defineConfig, type PlaywrightTestConfig, type ReporterDescription } from '@playwright/test'
 import { cpus } from 'node:os'
 import { fileURLToPath } from 'node:url'
 
 const isCI = Boolean(process.env['CI'])
+
+// Optional JSON report for CI shard-timing analysis. Each CI pass (smoke /
+// regression / serial / flaky / perf) is a separate Playwright invocation in the
+// same job, and the HTML report is overwritten by the next pass; CI therefore
+// points this env at a distinct file per pass and uploads the whole directory.
+const jsonReportFile = process.env['UNIVERSE_E2E_JSON_REPORT']
 
 // Local worker count scales with the machine: each worker drives its own
 // Electron instance (shared-app fixture), so oversubscribing cores only
@@ -110,7 +116,7 @@ export interface E2EConfigOptions {
  *     timing flake that higher worker counts surface (a rerun is far cheaper
  *     than a human re-running the suite)
  *   - workers: 2 on CI (2-core runners starve at 4), core-scaled locally (≤8)
- *   - reporter: github + html on CI, list locally
+ *   - reporter: github + html on CI (+ json when UNIVERSE_E2E_JSON_REPORT is set), list locally
  * Retain-on-failure trace/video/screenshot are constant; `fullyParallel` is an
  * opt-in (see E2EConfigOptions.fullyParallel for the shared-app vs cold-launch
  * rationale).
@@ -121,6 +127,11 @@ export interface E2EConfigOptions {
  */
 export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestConfig {
   const { grep, grepInvert } = grepOptions()
+  const ciReporters: ReporterDescription[] = [
+    ['github'],
+    ['html', { open: 'never', outputFolder: 'playwright-report' }],
+  ]
+  if (jsonReportFile) ciReporters.push(['json', { outputFile: jsonReportFile }])
   return defineConfig({
     // Unconditional: the setup itself no-ops unless linux && no DISPLAY, so the
     // core + every extension suite get headless Xvfb bootstrap for free. The .js
@@ -145,9 +156,7 @@ export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestC
     // test.describe.configure({mode:'default'}) (see smoke.update.spec.ts —
     // fixed feed port + shared dev-app-update.yml).
     fullyParallel: options.fullyParallel ?? false,
-    reporter: isCI
-      ? [['github'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
-      : [['list']],
+    reporter: isCI ? ciReporters : [['list']],
     use: {
       trace: 'retain-on-failure',
       video: 'retain-on-failure',

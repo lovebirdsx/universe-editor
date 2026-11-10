@@ -57,10 +57,10 @@ tag 打在**用例级**标题末尾（`@regression` 尤其是单用例级）。*
 
 | tag | 含义 | 默认 `pnpm e2e` | `pnpm e2ea` | CI |
 |---|---|---|---|---|
-| `@p0` | 核心冒烟，失败阻塞 | ✅ | ✅ | shard×2 |
-| `@p1` | 一般冒烟，阻塞 | ✅ | ✅ | shard×2 |
-| `@regression` | 守护已修复 bug | ❌ 排除（保持轻快） | ✅ 并回 | 单独并行趟，阻塞 |
-| `@serial` | 跨进程竞态需隔离 | 单独 `--workers=1` 趟 | 同左 | 单独串行趟 |
+| `@p0` | 核心冒烟，失败阻塞 | ✅ | ✅ | 并行趟，Linux shard×2 / Windows shard×4 |
+| `@p1` | 一般冒烟，阻塞 | ✅ | ✅ | 并行趟，Linux shard×2 / Windows shard×4 |
+| `@regression` | 守护已修复 bug | ❌ 排除（保持轻快） | ✅ 并回 | 单独并行趟，阻塞；Windows 仅 push/nightly 跑，PR 跳过 |
+| `@serial` | 跨进程竞态需隔离 | 单独 `--workers=1` 趟 | 同左 | 单独串行趟，仅 shard 1 |
 | `@flaky` | headless 偶发（如 DnD） | 排除 | 排除 | `continue-on-error`，不阻塞 |
 | `@perf` | 性能观测（启动 / 交互响应），observe-only 不卡预算 | 排除 | 排除 | 写 metrics 工件 |
 | `@visual` | 视觉回归 | 排除 | 排除 | 需显式跑（`test:visual`） |
@@ -125,8 +125,10 @@ npm --prefix extensions-external/<ext> run e2e   # 单个外部 suite（runner �
 E2E 在 CI 里**按改动范围选择性执行**，避免插件越多 E2E 越重：
 
 - **PR**：`scripts/e2e/affected-e2e-matrix.mjs` 用 turbo affected（`--filter=...[origin/main]`）算出受影响的 suite，只跑它们。改一个扩展只跑该扩展 E2E；改 `platform` / `e2e-harness`（上游）→ 依赖传递触发全量兜底。
-- **main / nightly**：无条件全量（`--all`），防 affected 漏网。
-- CI 三段式：`detect-affected` 算矩阵 → `e2e`(核心) 按 `core` 门控 → `e2e-extensions` matrix 按 `fromJson(extensions)` 展开，每 suite 按 `prep` 条件化装 vendored tsserver / excel-diff vsix。
+- **main / nightly**：无条件全量（`--all`），防 affected 漏网。nightly 由 `schedule`（`17 18 * * *`）触发，与 push / dispatch 共用同一套全量路径。
+- CI 三段式：`detect-affected` 算矩阵 → `e2e`(核心) 按 `core` 门控 → `e2e-extensions` matrix 按 `fromJson(extensions)` 展开，每 suite 按 `prep` 条件化装 vendored tsserver / excel-diff vsix。`detect-affected` 不跑 `pnpm install`（turbo `--dry=json` 只读清单；无本地 turbo 时脚本回退到 lock 版本的 `pnpm dlx`）。
+- 核心 E2E 的 shard 矩阵按 OS 分：**Linux 2 shard、Windows 4 shard**（Windows E2E 是成功 run 的关键路径）。PR 上 Windows 跳过 `@regression`（smoke/serial/flaky 保留），push / nightly 全跑。每个 pass 额外输出一份 JSON 报告（`UNIVERSE_E2E_JSON_REPORT`），与 HTML 报告一起按 OS×shard 上传，便于按 spec 统计耗时。
+- **bench** 为 observe-only 软任务；PR 仅在 benchmark 输入变更（`apps/editor/src|bench`、`packages/`、`scripts/bench/`、lockfile 等，见 `computeShouldRunBench`）时运行，非 PR 事件由 `--all` 强制运行。
 - 核心 scoped fixture 运行时激活 git/typescript/markdown，这三个已声明为 `apps/editor` 的 devDependencies，故 turbo affected 在它们变更时会经依赖图 fanout 到 core（`@universe-editor/editor`），自动触发核心重跑——无需手工维护额外的包清单。
 - **外部扩展**（`extensions-external/*`）turbo 看不见，改用 **git path diff**：`affected-e2e-matrix.mjs` 的 `computeExternalMatrix` 算受影响 suite（改某 suite 目录只跑它，改共享基建 editor / e2e-harness / e2e-contract / extension-host / extension-api / scripts/e2e 扇出全部），输出喂 `e2e-external` matrix job。
 - **跨仓 ACP 契约**（`acp-contract` job）单独门控：git path diff（`computeShouldRunAcpContract`）命中 `vendor/`（含 submodule 指针 gitlink 变更）、`apps/editor/src/renderer/services/acp/`、main 侧 acpHost / claude|codex Binary|Config、integration 的契约/隔离用例与 `vitest.config.ts`、`scripts/e2e/affected-e2e-matrix.mjs`（含其单测）、CI 自身定义，才跑。该 job 先 `agent:build`，再跑真 fork dist 的 wire 契约——**无网络模型**（app-server 由 fork 自带的本地二进制拉起，故别称其「完全离线」）——然后用 **Node 24** 跑 codex fork 自身的 `typecheck` + 单测（`RUN_E2E_TESTS=false`，跳过需真模型的 e2e）。每条保留行为挂在哪个测试入口（真进程 / 桩 / 缺口）见 skill `update-codex-acp` 的 `.claude/skills/update-codex-acp/references/acceptance-matrix.md`。普通 `docs/`（含本文件）不触发它。

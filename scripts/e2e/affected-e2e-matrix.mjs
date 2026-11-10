@@ -3,7 +3,7 @@
  *  affected-e2e-matrix.mjs — emit the GitHub Actions job matrices for E2E, scoped
  *  to what a change actually touched (P4 affected execution).
  *
- *  Two outputs (written as GITHUB_OUTPUT lines, or printed when run locally):
+ *  Outputs (written as GITHUB_OUTPUT lines, or printed when run locally):
  *    - core:       "true"/"false" — whether the core suite (apps/editor) is
  *                  affected and must run.
  *    - extensions: JSON array of {name, dir, prep} for each extension whose own
@@ -14,12 +14,17 @@
  *    - acp-contract: "true"/"false" — whether the cross-repo ACP contract test
  *                  (spawns real fork dist) should run (editor↔fork wire paths, or
  *                  forced on --all).
+ *    - bench:      "true"/"false" — whether the observability benchmark job should
+ *                  run (benchmark-input paths, or forced on --all).
  *
  *  How "affected" is computed: `turbo run e2e --filter=...[<base>] --dry=json`.
  *  Turbo walks the workspace dependency graph, so editing `platform` marks every
  *  downstream e2e affected (correct — a kernel change should be fully tested),
  *  while editing one extension marks only that extension (+ core if a core scoped
- *  fixture depends on it).
+ *  fixture depends on it). The dry run only reads the workspace manifests, so it
+ *  works without `node_modules`; when the local turbo binary is absent (CI's
+ *  detect job skips the install) we run the lockfile-pinned version via
+ *  `pnpm dlx` instead.
  *
  *  Why core = "is @universe-editor/editor affected?" and NOT a hand-maintained
  *  package list: the core suite's scoped fixtures (peekPreview→typescript,
@@ -40,7 +45,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, realpathSync } from 'node:fs'
+import { appendFileSync, readFileSync, realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { sep } from 'node:path'
 import { createRequire } from 'node:module'
@@ -136,6 +141,24 @@ const ACP_CONTRACT_PATHS = [
   '.github/workflows/ci.yml',
 ]
 
+// The benchmark job is observe-only (continue-on-error) but expensive: it builds
+// the editor and sweeps a 10k-file directory + a 50 MB file. Docs/extension-only
+// PRs never need those numbers, so gate on the inputs the benches actually read:
+// the bench dirs themselves, the editor/main services they import (with their
+// platform/temp-root deps), and the renderer bundle baseline inputs. Non-PR
+// events force it on via `--all`.
+const BENCH_PATHS = [
+  'apps/editor/bench/',
+  'apps/editor/src/',
+  'apps/editor/package.json',
+  'apps/editor/electron.vite.config.ts',
+  'packages/',
+  'scripts/bench/',
+  'pnpm-workspace.yaml',
+  'pnpm-lock.yaml',
+  'turbo.json',
+]
+
 function parseArgs(argv) {
   const args = { all: false, base: undefined }
   for (let i = 0; i < argv.length; i++) {
@@ -212,19 +235,62 @@ export function computeShouldRunAcpContract(changedPaths, { all = false } = {}) 
 }
 
 /**
+ * Whether the observability benchmark job should run for a set of changed file
+ * paths. Pure so the routing is unit-testable. `all` forces it on (main push /
+ * nightly / manual dispatch); otherwise it runs iff a benchmark input changed
+ * (see {@link BENCH_PATHS}).
+ */
+export function computeShouldRunBench(changedPaths, { all = false } = {}) {
+  if (all) return true
+  return [...changedPaths].some((p) => BENCH_PATHS.some((prefix) => p.startsWith(prefix)))
+}
+
+/** Exact turbo version pinned in the lockfile (used by the no-install fallback). */
+function turboVersionFromLock() {
+  const lock = readFileSync(new URL('../../pnpm-lock.yaml', import.meta.url), 'utf8')
+  const match = lock.match(/^\s{2}turbo@([^:\s]+):/m)
+  if (!match?.[1]) throw new Error('could not read the pinned turbo version from pnpm-lock.yaml')
+  return match[1]
+}
+
+/** `node <turbo.js>` normally, `pnpm dlx turbo@<locked> …` when not installed. */
+function turboCommand(args) {
+  try {
+    // Invoke turbo's JS entry via `node` (no shell) so this works identically on
+    // Windows and Linux CI — `npx` is not directly spawnable without a shell.
+    return {
+      command: process.execPath,
+      args: [require.resolve('turbo/bin/turbo'), ...args],
+    }
+  } catch {
+    // CI's detect-affected job intentionally skips `pnpm install`: `--dry=json`
+    // only reads workspace manifests, and dlx fetches just turbo. Keep this path
+    // on the exact lockfile version so dry-run semantics never drift.
+    return {
+      command: process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm',
+      args: ['dlx', `turbo@${turboVersionFromLock()}`, ...args],
+      shell: process.platform === 'win32',
+    }
+  }
+}
+
+/**
  * Ask turbo which packages have an affected `e2e` task. Returns the set of
  * package names with a real (non-<NONEXISTENT>) e2e command. Filter is
  * `...[<base>]` — the `...` includes dependents so a dep change fans out.
  */
 function affectedE2ePackages(base) {
-  // Invoke turbo's JS entry via `node` (no shell) so this works identically on
-  // Windows and Linux CI — `npx` is not directly spawnable without a shell.
-  const turboBin = require.resolve('turbo/bin/turbo')
-  const out = execFileSync(
-    process.execPath,
-    [turboBin, 'run', 'e2e', `--filter=...[${base}]`, '--dry=json'],
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
-  )
+  const { command, args, shell } = turboCommand([
+    'run',
+    'e2e',
+    `--filter=...[${base}]`,
+    '--dry=json',
+  ])
+  const out = execFileSync(command, args, {
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+    ...(shell ? { shell } : {}),
+  })
   return e2ePackagesFromPlan(JSON.parse(out))
 }
 
@@ -249,6 +315,7 @@ function main() {
   const external = computeExternalMatrix(changedPaths, { all: forceAll })
   const shouldPackage = computeShouldPackage(changedPaths, { all: forceAll })
   const shouldRunAcpContract = computeShouldRunAcpContract(changedPaths, { all: forceAll })
+  const shouldRunBench = computeShouldRunBench(changedPaths, { all: forceAll })
 
   const outputs = {
     core: String(core),
@@ -258,6 +325,7 @@ function main() {
     'has-external': String(external.length > 0),
     'package-windows': String(shouldPackage),
     'acp-contract': String(shouldRunAcpContract),
+    bench: String(shouldRunBench),
   }
 
   const gh = process.env.GITHUB_OUTPUT

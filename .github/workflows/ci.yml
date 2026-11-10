@@ -6,21 +6,37 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+  # Nightly full run: the safety net for the PR-time affected heuristic. 18:17
+  # (off the hour) avoids the top-of-hour scheduler stampede on shared runners.
+  schedule:
+    - cron: '17 18 * * *'
 
 # Cancel superseded runs on the same ref. On a PR, a new push cancels the prior
 # run (cancel-in-progress). On main, the group is per-SHA so pushes never cancel
 # each other — every main commit keeps its full run as the safety-net record.
+# event_name keeps the nightly/dispatch full runs in their own group: they are
+# both scoped to refs/heads/main and must not cancel an in-flight push run (or
+# each other's superseded run, which is what cancel-in-progress is for).
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
-  ci:
-    name: Lint / Typecheck / Test / Build
+  # Cheap guards first, and the only job allowed to cancel the run: a lint/docs
+  # failure reds the PR in ~2 min instead of letting the 15+ min Windows E2E
+  # critical path finish. E2E deliberately does NOT `needs` this job — it must
+  # start immediately, so a green lint keeps everything parallel. On failure
+  # `gh run cancel` (actions: write) cancels the rest; a cancelled required check
+  # counts as failed, same as ci-gate reporting the failure.
+  fast-lint:
+    name: Fast Lint / Guards
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
     env:
-      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
 
     steps:
       - uses: actions/checkout@v5
@@ -33,17 +49,8 @@ jobs:
           cache: pnpm
           package-manager-cache: false
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Cache Turbo
-        uses: actions/cache@v5
-        with:
-          path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            turbo-${{ runner.os }}-
-
+      # Node-builtin-only guards: run before the install so a broken link or a
+      # blown CLAUDE.md budget fails in seconds, not after dependency setup.
       - name: Docs link check
         run: pnpm docs:check
 
@@ -55,12 +62,6 @@ jobs:
 
       - name: CLAUDE.md size check
         run: pnpm claude-md:check
-
-      # 版本介绍的唯一正式来源是 docs/release-notes/*.md；apps/editor/resources/
-      # release-notes.json 是它的确定性派生物（含语法子集/链接白名单校验）。
-      # 同样只在 `pnpm check` 里，CI 逐条拆跑必须显式补上。
-      - name: Release notes check
-        run: pnpm release:notes:check
 
       # 内部标识（内网域名/代号/私网地址/本机路径/账号名）不得进入公开仓库。
       # 规则文件 gitignored，走 CI secret（raw JSON 数组）注入：raw 时落盘内容 ===
@@ -88,8 +89,67 @@ jobs:
         if: always()
         run: rm -f scripts/sensitive-rules.json
 
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 版本介绍的唯一正式来源是 docs/release-notes/*.md；apps/editor/resources/
+      # release-notes.json 是它的确定性派生物（含语法子集/链接白名单校验）。
+      # 该脚本依赖 markdown-it（根 devDependency），所以放在 install 之后。
+      - name: Release notes check
+        run: pnpm release:notes:check
+
       - name: Lint
         run: pnpm lint
+
+      # Cancelling the whole run is the fail-fast signal: E2E jobs have no
+      # `needs` on this job (they start in parallel to keep the happy path fast),
+      # so without this they would keep burning runners after lint already failed.
+      - name: Cancel the run
+        if: failure()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run cancel ${{ github.run_id }}
+
+  ci:
+    name: Typecheck / Test / Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4.4.0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+          package-manager-cache: false
+
+      # Electron's own binary is downloaded by its install script; cache the
+      # @electron/get archive so the ~90 MB fetch does not repeat per job.
+      - name: Cache Electron binary
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\electron\Cache' || '~/.cache/electron' }}
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        id: turbo-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
 
       - name: Typecheck
         run: pnpm typecheck
@@ -112,47 +172,29 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # Linux's single cache writer. Every other Linux job only restores; this
+      # job runs the full `pnpm build` after `pnpm test`, so its .turbo covers
+      # the superset those jobs need. Skipped when the exact SHA key was already
+      # restored (including a cache saved earlier by this same job definition).
+      - name: Save Turbo cache
+        if: success() && steps.turbo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+
   # Job DAG note: jobs fan out in parallel from the start. The only real data
   # dependency is detect-affected → the e2e/package matrix jobs (affected
   # outputs); every job builds what it needs itself via the turbo cache. There
   # is deliberately no `needs: ci` fail-fast gate — it serialized ~6 min of
   # wall time per run while lint/type errors are already caught by local
-  # `pnpm check` + PR flow, and ci-gate remains the single aggregation point.
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: pnpm/action-setup@v4.4.0
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: pnpm
-          package-manager-cache: false
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Cache Turbo
-        uses: actions/cache@v5
-        with:
-          path: .turbo
-          key: turbo-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            turbo-${{ runner.os }}-
-
-      - name: Build (editor workspace deps dist required for integration imports)
-        run: pnpm build --filter="@universe-editor/editor^..."
-
-      - name: Run integration tests
-        run: pnpm --filter @universe-editor/editor test:integration
-
+  # `pnpm check` + PR flow (fast-lint now cancels the run early instead), and
+  # ci-gate remains the single aggregation point.
+  # Integration tests have no separate job: root `pnpm test` already runs turbo's
+  # `test:integration` task, whose `^build` edge produces the same editor dist
+  # closure the old job built by hand. The standalone job predates that split
+  # and only duplicated a full install + scoped build.
+  #
   # External consumer anti-rot: scaffold both extension templates from packed
   # tarballs, build them against those tarballs, and `uex package` each into a
   # VSIX. Catches SDK/template/CLI drift the way a third-party author would.
@@ -185,11 +227,17 @@ jobs:
           cache: pnpm
           package-manager-cache: false
 
+      # No Electron runtime here (scaffold → npm i → build → uex package) and the
+      # Job Object addon is only needed by editor e2e/build jobs, so skip both
+      # downloads/builds. The install itself is otherwise identical.
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          UNIVERSE_SKIP_NATIVE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -242,8 +290,8 @@ jobs:
   # Cross-repo ACP contract test: spawns the REAL built fork dist and asserts the
   # editor↔fork ext-method / _meta wire shape (see acpForkContract.integration.test).
   # Needs the submodules + `pnpm agent:build`, so it's gated by detect-affected to
-  # the editor↔fork wire surface (main push forces it on). In the plain
-  # `integration` job above the same spec self-skips (no fork dist there).
+  # the editor↔fork wire surface (main push forces it on). In the plain `ci` job's
+  # `pnpm test` the same spec self-skips (no fork dist there).
   acp-contract:
     name: ACP Cross-Repo Contract
     needs: detect-affected
@@ -267,10 +315,12 @@ jobs:
           package-manager-cache: false
 
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -334,15 +384,14 @@ jobs:
         run: npm --prefix vendor/codex-acp run test
 
   # Decide which E2E suites to run. On a PR we scope to what the change touched
-  # (turbo affected, base = origin/main); on a main push we force EVERYTHING —
-  # the full run is the safety net for the affected heuristic. Outputs drive the
-  # `e2e` (core) gate and the `e2e-extensions` matrix below.
+  # (turbo affected, base = origin/main); on the nightly schedule / main push /
+  # manual dispatch we force EVERYTHING — the full run is the safety net for the
+  # affected heuristic. Outputs drive the `e2e` (core) gate, the
+  # `e2e-extensions` matrix and the bench / packaging / ACP gates below.
   detect-affected:
     name: Detect affected E2E
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
     outputs:
       core: ${{ steps.detect.outputs.core }}
       extensions: ${{ steps.detect.outputs.extensions }}
@@ -351,6 +400,7 @@ jobs:
       has-external: ${{ steps.detect.outputs.has-external }}
       package-windows: ${{ steps.detect.outputs.package-windows }}
       acp-contract: ${{ steps.detect.outputs.acp-contract }}
+      bench: ${{ steps.detect.outputs.bench }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -365,9 +415,10 @@ jobs:
           cache: pnpm
           package-manager-cache: false
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
+      # Deliberately no `pnpm install`: turbo's `--dry=json` only reads the
+      # workspace manifests + lockfile, and the routing script falls back to
+      # `pnpm dlx turbo@<lock version>` when node_modules/turbo is absent. That
+      # removes a full install from the critical path feeding every E2E job.
       - name: Compute affected E2E matrix
         id: detect
         run: |
@@ -379,14 +430,35 @@ jobs:
           fi
 
   e2e:
-    name: E2E Smoke (${{ matrix.os }} ${{ matrix.shard }}/2)
+    name: E2E (${{ matrix.os }} ${{ matrix.shard }}/${{ matrix.total }})
     needs: detect-affected
     if: needs.detect-affected.outputs.core == 'true'
     strategy:
       fail-fast: false
+      # Windows is the critical path (its smoke pass was ~8.5 min per 2 shards),
+      # so it gets 4 shards; Linux stays at 2 (the runner is not the bottleneck
+      # there and extra jobs only add install/setup overhead). `total` is per-row
+      # so `--shard` can stay a plain expression.
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        shard: [1, 2]
+        include:
+          - os: ubuntu-latest
+            shard: 1
+            total: 2
+          - os: ubuntu-latest
+            shard: 2
+            total: 2
+          - os: windows-latest
+            shard: 1
+            total: 4
+          - os: windows-latest
+            shard: 2
+            total: 4
+          - os: windows-latest
+            shard: 3
+            total: 4
+          - os: windows-latest
+            shard: 4
+            total: 4
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     env:
@@ -414,11 +486,27 @@ jobs:
           cache: pnpm
           package-manager-cache: false
 
+      # The Electron binary itself (~90 MB) is outside the pnpm store; cache
+      # @electron/get's archive so every Windows shard does not re-download it.
+      - name: Cache Electron binary
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\electron\Cache' || '~/.cache/electron' }}
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      # The native addon is built by turbo below (and only Windows compiles it).
+      # Skipping the workspace install hook avoids a node-gyp rebuild before the
+      # build step can restore the same artifact from the turbo cache.
       - name: Install dependencies
+        env:
+          UNIVERSE_SKIP_NATIVE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        id: turbo-cache
+        uses: actions/cache/restore@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -432,7 +520,18 @@ jobs:
       # runners.
       - name: Install Playwright system dependencies (Linux)
         if: runner.os == 'Linux'
-        run: pnpm --filter @universe-editor/editor exec playwright install-deps
+        timeout-minutes: 5
+        uses: ./.github/actions/playwright-install-deps
+
+      # Browser downloads are keyed by the pnpm lock hash; restore-keys keeps the
+      # previous shell available when only unrelated deps changed.
+      - name: Cache Playwright browser
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.os == 'Windows' && '~\AppData\Local\ms-playwright' || '~/.cache/ms-playwright' }}
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
 
       - name: Install Playwright browser (Chromium headless shell)
         run: pnpm --filter @universe-editor/editor exec playwright install --only-shell chromium
@@ -456,9 +555,19 @@ jobs:
           TURBO_CONCURRENCY: ${{ runner.os == 'Windows' && 2 || 10 }}
         run: pnpm build
 
+      # Windows has no other full-build job, so shard 1 is its single turbo cache
+      # writer (Linux's writer is the `ci` job). Saving right after the build (not
+      # at job end) lets the other shards restore it even if this shard then reds.
+      - name: Save Turbo cache (Windows shard 1)
+        if: success() && runner.os == 'Windows' && matrix.shard == 1 && steps.turbo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+
       # The Job Object addon's real-OS tests self-skip everywhere but Windows, so the
       # Linux `ci` job can never cover them. This is the Windows leg that runs on every
-      # PR touching core packages — gate the addon here (shard 2 would be a duplicate).
+      # PR touching core packages — gate the addon here (other shards would duplicate it).
       # The existence check keeps the gate honest: the spec file skips itself when the
       # addon is missing, which would otherwise turn a silently-broken build green.
       - name: Process Job addon tests (Windows)
@@ -470,23 +579,31 @@ jobs:
 
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
+        env:
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-smoke.json
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/${{ matrix.total }}
 
       # @regression cases guard specific fixed bugs (not core-path smoke). They are
       # excluded from the local `pnpm e2e` main pass to keep the day-to-day loop
-      # fast, but still block CI here — same parallel shard×2 mechanism as the main
+      # fast, but still block CI here — same parallel shard mechanism as the main
       # pass. Tag filtering lives in the shared config (UNIVERSE_E2E_ONLY_TAG); no
       # --grep flag. See apps/editor/e2e/CLAUDE.md.
       - name: Run E2E regression (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: UNIVERSE_E2E_ONLY_TAG=@regression xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
+        env:
+          UNIVERSE_E2E_ONLY_TAG: '@regression'
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-regression.json
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/${{ matrix.total }}
 
       # @serial cases switch the workspace twice and trip a cross-process race in
       # @parcel/watcher's windows backend under parallel workers; pin to one
       # worker. Run only on shard 1 so the (small) serial set isn't duplicated.
       - name: Run E2E smoke serial (Linux, xvfb)
         if: runner.os == 'Linux' && matrix.shard == 1
-        run: UNIVERSE_E2E_ONLY_TAG=@serial xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
+        env:
+          UNIVERSE_E2E_ONLY_TAG: '@serial'
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-serial.json
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       # @flaky cases (e.g. headless drag-and-drop) are environment-sensitive, not
       # regressions — run them separately, report-only, so they never block the
@@ -494,7 +611,10 @@ jobs:
       - name: Run E2E flaky (Linux, xvfb, non-blocking)
         if: runner.os == 'Linux' && matrix.shard == 1
         continue-on-error: true
-        run: UNIVERSE_E2E_ONLY_TAG=@flaky xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
+        env:
+          UNIVERSE_E2E_ONLY_TAG: '@flaky'
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-flaky.json
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       # @perf records the startup timeline and the interaction-responsiveness
       # report into JSON/Markdown artifacts (observe-only, no budget assertion).
@@ -503,7 +623,10 @@ jobs:
       - name: Run E2E startup perf (Linux, xvfb, observe-only)
         if: runner.os == 'Linux' && matrix.shard == 1
         continue-on-error: true
-        run: UNIVERSE_E2E_ONLY_TAG=@perf xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
+        env:
+          UNIVERSE_E2E_ONLY_TAG: '@perf'
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-perf.json
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       - name: Upload perf metrics
         if: always() && runner.os == 'Linux' && matrix.shard == 1
@@ -519,26 +642,41 @@ jobs:
       - name: Run E2E smoke (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
+        env:
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-smoke.json
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/${{ matrix.total }}
 
-      # @regression: bug-guard cases excluded from the local main pass; still block
-      # CI here via the same parallel shard×2 mechanism. Tag filtering lives in the
-      # shared config (UNIVERSE_E2E_ONLY_TAG); no --grep flag. See apps/editor/e2e/CLAUDE.md.
+      # @regression: bug-guard cases excluded from the local main pass. Windows
+      # regression used to be the joint-longest pass (~5.3 min beside the 8.5 min
+      # smoke), so PRs skip it and keep only the smoke/serial/flaky passes; main
+      # pushes and the nightly full run still cover it on all 4 shards. Linux
+      # keeps its PR regression pass — it is cheap there and not the critical path.
+      # Tag filtering lives in the shared config (UNIVERSE_E2E_ONLY_TAG); no
+      # --grep flag. See apps/editor/e2e/CLAUDE.md.
       - name: Run E2E regression (Windows)
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && github.event_name != 'pull_request'
         shell: bash
-        run: UNIVERSE_E2E_ONLY_TAG=@regression pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/2
+        env:
+          UNIVERSE_E2E_ONLY_TAG: '@regression'
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-regression.json
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --shard=${{ matrix.shard }}/${{ matrix.total }}
 
       - name: Run E2E smoke serial (Windows)
         if: runner.os == 'Windows' && matrix.shard == 1
         shell: bash
-        run: UNIVERSE_E2E_ONLY_TAG=@serial pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
+        env:
+          UNIVERSE_E2E_ONLY_TAG: '@serial'
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-serial.json
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       - name: Run E2E flaky (Windows, non-blocking)
         if: runner.os == 'Windows' && matrix.shard == 1
         continue-on-error: true
         shell: bash
-        run: UNIVERSE_E2E_ONLY_TAG=@flaky pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
+        env:
+          UNIVERSE_E2E_ONLY_TAG: '@flaky'
+          UNIVERSE_E2E_JSON_REPORT: ${{ runner.temp }}/playwright-json/${{ runner.os }}-${{ matrix.shard }}-flaky.json
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --workers=1
 
       # - name: Run visual regression (Linux only)
       #   if: runner.os == 'Linux'
@@ -553,12 +691,18 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+      # The HTML report is overwritten by each later pass; the JSON reporter is
+      # pointed at runner.temp with one file per pass (smoke/regression/serial/…)
+      # so spec-level durations survive for all of them. Artifact name is already
+      # unique per OS×shard.
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v6
         with:
           name: playwright-report-${{ matrix.os }}-${{ matrix.shard }}
-          path: apps/editor/e2e/playwright-report
+          path: |
+            apps/editor/e2e/playwright-report
+            ${{ runner.temp }}/playwright-json
           retention-days: 14
           if-no-files-found: ignore
 
@@ -599,11 +743,21 @@ jobs:
           cache: pnpm
           package-manager-cache: false
 
+      - name: Cache Electron binary
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
       - name: Install dependencies
+        env:
+          UNIVERSE_SKIP_NATIVE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -611,7 +765,8 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Install Playwright system dependencies (Linux)
-        run: pnpm --filter @universe-editor/editor exec playwright install-deps
+        timeout-minutes: 5
+        uses: ./.github/actions/playwright-install-deps
 
       # typescript extension specs drive the vendored typescript-language-server
       # (outside the pnpm workspace). Only install it for suites that need it.
@@ -619,8 +774,17 @@ jobs:
         if: matrix.suite.prep == 'tsserver'
         run: npm --prefix vendor/typescript-language-server ci
 
+      # Only the suite's own dependency closure + the packaged editor are needed.
+      # Mirrors scripts/e2e/ensure-e2e-build.mjs: editor... pulls the host, built-in
+      # extensions and process-job; remote-server is not an editor dependency but
+      # its dist is spawned by the remote specs. A full workspace build also built
+      # mobile/other apps this suite never touches.
       - name: Build
-        run: pnpm build
+        run: >-
+          pnpm build
+          --filter=@universe-editor/editor...
+          --filter=${{ matrix.suite.name }}...
+          --filter=@universe-editor/remote-server...
 
       # Playwright resolves outputDir / html outputFolder relative to the config
       # file's directory (e2e/), so artifacts land under <dir>/e2e/ — upload paths
@@ -703,11 +867,21 @@ jobs:
           NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT: 60000
         run: npm --prefix extensions-external/${{ matrix.suite.name }} ci --prefer-offline --no-audit --no-fund
 
+      - name: Cache Electron binary
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/electron
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
       - name: Install dependencies
+        env:
+          UNIVERSE_SKIP_NATIVE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -715,7 +889,8 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Install Playwright system dependencies (Linux)
-        run: pnpm --filter @universe-editor/editor exec playwright install-deps
+        timeout-minutes: 5
+        uses: ./.github/actions/playwright-install-deps
 
       # `pnpm --filter <pkg> build` calls the package's own build script directly,
       # bypassing turbo — so it wouldn't build the editor's workspace deps first
@@ -769,8 +944,13 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  # Observability only (soft job), and the expensive part is a 10k-file / 50 MB
+  # workspace sweep. On a PR it runs only when a benchmark input changed; all
+  # non-PR events (main push / nightly / dispatch) force it via detect-affected.
   bench:
     name: Benchmark
+    needs: detect-affected
+    if: needs.detect-affected.outputs.bench == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     continue-on-error: true
@@ -789,10 +969,13 @@ jobs:
           package-manager-cache: false
 
       - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          UNIVERSE_SKIP_NATIVE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -862,11 +1045,23 @@ jobs:
           cache: pnpm
           package-manager-cache: false
 
+      - name: Cache Electron binary
+        uses: actions/cache@v5
+        with:
+          path: ~\AppData\Local\electron\Cache
+          key: electron-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            electron-${{ runner.os }}-
+
+      # runtime:stage below rebuilds the Job Object addon with --require; the
+      # install hook would only repeat the same node-gyp compile earlier.
       - name: Install dependencies
+        env:
+          UNIVERSE_SKIP_NATIVE_BUILD: '1'
         run: pnpm install --frozen-lockfile
 
       - name: Cache Turbo
-        uses: actions/cache@v5
+        uses: actions/cache/restore@v5
         with:
           path: .turbo
           key: turbo-${{ runner.os }}-${{ github.sha }}
@@ -920,12 +1115,14 @@ jobs:
   # any failed or was cancelled — it is the single required check registered in
   # the main-branch ruleset. `if: always()` is essential: without it a failing
   # need would SKIP this job, and a skipped required check counts as passed.
+  # A whole-run cancellation (fast-lint's gh run cancel) marks this check
+  # cancelled, which likewise does not satisfy the required check.
   ci-gate:
     name: CI Gate
     if: always()
     needs:
+      - fast-lint
       - ci
-      - integration
       - external-consumer-smoke
       - detect-affected
       - acp-contract

@@ -25,6 +25,7 @@ import {
   computeExternalMatrix,
   computeShouldPackage,
   computeShouldRunAcpContract,
+  computeShouldRunBench,
 } from '../affected-e2e-matrix.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -240,6 +241,40 @@ test('an unrelated change does NOT trigger the ACP contract test', () => {
     'docs/development/testing.md',
   ]) {
     assert.equal(computeShouldRunAcpContract([p]), false, `${p} should not trigger the contract test`)
+  }
+})
+
+// --- bench gating -----------------------------------------------------------
+// The observability benchmark job is soft but expensive; on PRs it runs only
+// when a benchmark input changed. Non-PR events force it on via --all.
+
+test('--all forces the benchmark job on (main / nightly / manual)', () => {
+  assert.equal(computeShouldRunBench([], { all: true }), true)
+})
+
+test('a benchmark-input change gates the benchmark job on', () => {
+  for (const p of [
+    'apps/editor/bench/largeDirectory.bench.ts',
+    'apps/editor/src/main/services/files/fileSystemMainService.ts',
+    'apps/editor/package.json',
+    'packages/platform/src/editor/editorGroupModel.ts',
+    'scripts/bench/bundle-size.mjs',
+    'pnpm-lock.yaml',
+    'turbo.json',
+  ]) {
+    assert.equal(computeShouldRunBench([p]), true, `${p} should gate the benchmark on`)
+  }
+})
+
+test('a docs/extension-only change does NOT trigger the benchmark', () => {
+  for (const p of [
+    'extensions/perforce/src/extension.ts',
+    'extensions-external/pdf/src/extension.ts',
+    'scripts/e2e/run-e2e.mjs',
+    'docs/user/foo.md',
+    'README.md',
+  ]) {
+    assert.equal(computeShouldRunBench([p]), false, `${p} should not trigger the benchmark`)
   }
 })
 

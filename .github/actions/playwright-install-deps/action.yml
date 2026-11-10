@@ -1,0 +1,25 @@
+name: Install Playwright system dependencies
+description: >-
+  `playwright install-deps` with bounded apt network waits and one retry. apt on
+  shared runners intermittently hangs 6-15 min on a stale mirror and used to burn
+  the whole job timeout; callers should also set `timeout-minutes` on the step.
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        # Most hangs are a stalled mirror download: make apt itself give up and retry.
+        printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+          | sudo tee /etc/apt/apt.conf.d/99ci-timeouts >/dev/null
+        for attempt in 1 2; do
+          if timeout --kill-after=10 120 pnpm --filter @universe-editor/editor exec playwright install-deps; then
+            exit 0
+          fi
+          echo "::warning::playwright install-deps attempt ${attempt} failed or timed out; retrying"
+          # timeout only kills pnpm; the sudo'd apt-get child survives holding the
+          # dpkg lock, which would make the retry fail immediately.
+          sudo pkill -9 -f 'apt-get|dpkg' || true
+          sudo dpkg --configure -a || true
+        done
+        exit 1

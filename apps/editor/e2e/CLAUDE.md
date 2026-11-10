@@ -75,9 +75,9 @@ tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其单
 
 | tag | 含义 | 默认 `pnpm e2e` | CI |
 |---|---|---|---|
-| `@p0` | 核心冒烟，失败**阻塞** CI；`e2e:smoke` 的选中集 | ✅ 跑 | 并行趟 shard×2 |
-| `@p1` | 一般冒烟，阻塞 | ✅ 跑 | 并行趟 shard×2 |
-| `@regression` | 守护已修复 bug（非主路径冒烟） | ❌ 排除（`e2ea` 并回） | 单独并行趟 |
+| `@p0` | 核心冒烟，失败**阻塞** CI；`e2e:smoke` 的选中集 | ✅ 跑 | 并行趟 Linux×2/Win×4 |
+| `@p1` | 一般冒烟，阻塞 | ✅ 跑 | 并行趟 Linux×2/Win×4 |
+| `@regression` | 守护已修复 bug（非主路径冒烟） | ❌ 排除（`e2ea` 并回） | 单独并行趟（Win 仅 push/nightly） |
 | `@serial` | 独占全局资源（如 OS 剪贴板）需隔离 | 单独 `--workers=1` 串行趟 | 单独串行趟，仅 shard 1 |
 | `@flaky` | headless 偶发（如 DnD） | 排除 | 单独趟 continue-on-error 不阻塞，仅 shard 1 |
 | `@perf` | 启动性能观测 | 排除 | 单独趟 continue-on-error，仅 shard 1 |
