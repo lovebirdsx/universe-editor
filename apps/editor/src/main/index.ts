@@ -40,7 +40,14 @@ import {
   installMainProtocolDispatcher,
   markRendererFramesUnreachable,
 } from './ipc/electronProtocol.js'
-import { hasQuitFlag, parseFileToOpen } from './cliArgs.js'
+import { hasAgentSessionsFlag, hasQuitFlag, parseFileToOpen } from './cliArgs.js'
+import {
+  emptyAgentSessionsSnapshot,
+  sendAgentSessionsPayload,
+  serializeAgentSessionsSnapshot,
+  startAgentSessionsResponseServer,
+  type AgentSessionsResponseServer,
+} from './agentSessionsCli.js'
 import { resolveFromRepo } from './repoPaths.js'
 import { getAppVersion } from './appVersion.js'
 import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
@@ -201,6 +208,7 @@ function parseDeepLinkArg(argv: readonly string[]): DeepLinkTarget | undefined {
 const startupPath = parseFileToOpen(process.argv, app.isPackaged)
 const startupDeepLink = parseDeepLinkArg(process.argv)
 const startupQuitRequested = hasQuitFlag(process.argv)
+const startupAgentSessionsRequested = hasAgentSessionsFlag(process.argv)
 
 // Resolve product identity once (pure): reused for the --version/--help banner
 // and for applyProductIdentity below.
@@ -403,22 +411,92 @@ if (e2eEnabled) {
   app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
 }
 
+/** Write to a stdio stream and wait for the bytes to flush before exiting. */
+async function writeCliStream(stream: NodeJS.WriteStream, text: string): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const done = () => resolve()
+    stream.once('error', done)
+    stream.write(text, done)
+  })
+}
+
+async function printAgentSessionsResponse(server: AgentSessionsResponseServer): Promise<void> {
+  let exitCode = 0
+  try {
+    await writeCliStream(process.stdout, await server.response)
+  } catch (error) {
+    exitCode = 1
+    await writeCliStream(
+      process.stderr,
+      `[agent-sessions] ${error instanceof Error ? error.message : String(error)}\n`,
+    )
+  } finally {
+    server.dispose()
+  }
+  // A read-only query must not reach will-quit (it would disarm the previous
+  // session's crash sentinel); process.exit also skips Electron teardown here.
+  process.exit(exitCode)
+}
+
+/** Primary side: aggregate every window's sessions and answer the second instance. */
+async function answerAgentSessionsQuery(additionalData: unknown): Promise<void> {
+  const pipeName = (additionalData as { agentSessionsPipe?: unknown } | undefined)
+    ?.agentSessionsPipe
+  if (typeof pipeName !== 'string') {
+    mainLogger.warn('second-instance --agent-sessions: missing response pipe')
+    return
+  }
+  try {
+    // The handshake can fire before startup finishes; services must not be
+    // materialized ahead of the normal whenReady sequence.
+    await app.whenReady()
+    const snapshot = await getOrCreateServices().app.sessionSwitcher.queryAgentSessions()
+    const sent = await sendAgentSessionsPayload(pipeName, serializeAgentSessionsSnapshot(snapshot))
+    if (!sent) mainLogger.warn('second-instance --agent-sessions: response pipe unreachable')
+  } catch (error) {
+    mainLogger.error(`second-instance --agent-sessions failed: ${String(error)}`)
+  }
+}
+
 // Single-instance lock: a second launch focuses the existing window instead of
 // starting a rival process. Required for the auto-update restart-to-install flow
 // (quitAndInstall relaunches the app). E2E spawns many isolated instances (each
 // with its own userData dir), so it opts out — as does extension-development
 // mode (see above).
-const hasSingleInstanceLock = e2eEnabled || extDevEnabled || app.requestSingleInstanceLock()
+//
+// `--agent-sessions` needs its response socket listening before the handshake:
+// the primary answers during `requestSingleInstanceLock`.
+const agentSessionsServer = startupAgentSessionsRequested
+  ? startAgentSessionsResponseServer()
+  : undefined
+const hasSingleInstanceLock =
+  e2eEnabled ||
+  extDevEnabled ||
+  app.requestSingleInstanceLock(
+    agentSessionsServer ? { agentSessionsPipe: agentSessionsServer.pipeName } : undefined,
+  )
 if (!hasSingleInstanceLock) {
-  app.quit()
+  if (agentSessionsServer) {
+    // Second instance for `--agent-sessions`: print the primary's answer on
+    // stdout, then exit. Do not call app.quit() — that would close the socket
+    // before the answer arrives.
+    void printAgentSessionsResponse(agentSessionsServer)
+  } else {
+    app.quit()
+  }
 } else {
-  app.on('second-instance', (_event, argv, workingDirectory) => {
+  app.on('second-instance', (_event, argv, workingDirectory, additionalData) => {
     // `--quit` is an external File → Exit: go straight through app.quit() so
     // before-quit snapshots the full window set before any close handler runs.
     // Never fall through to file/deep-link routing below.
     if (hasQuitFlag(argv)) {
       mainLogger.info('second-instance --quit')
       app.quit()
+      return
+    }
+    if (hasAgentSessionsFlag(argv)) {
+      mainLogger.info('second-instance --agent-sessions')
+      void answerAgentSessionsQuery(additionalData)
       return
     }
     const deepLink = parseDeepLinkArg(argv)
@@ -706,6 +784,21 @@ async function loadMainSettingsText(): Promise<string> {
 
 void app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
+  // Cold start with --agent-sessions (no instance to forward to): there are no
+  // sessions to report. Print the empty snapshot and exit without a window.
+  if (startupAgentSessionsRequested) {
+    mainLogger.info('startup --agent-sessions: no running instance, reporting empty snapshot')
+    agentSessionsServer?.dispose()
+    await writeCliStream(
+      process.stdout,
+      serializeAgentSessionsSnapshot(emptyAgentSessionsSnapshot()),
+    )
+    // Hard exits (`app.exit` / `process.exit`) fault in this early whenReady
+    // path on Electron 43; go through the normal quit. The sentinel was never
+    // armed for this launch, so will-quit cannot disarm the previous one.
+    app.quit()
+    return
+  }
   // Cold start with --quit (no instance to forward to): exit without creating a
   // window. Skip sentinel read/arm: this launch is not a session, so it must not
   // consume or overwrite the previous session's abnormal-exit evidence.

@@ -14,6 +14,12 @@ import { createDecorator, type Event } from '@universe-editor/platform'
 /** A live session as reported by a renderer, before main tags window metadata. */
 export interface RendererSessionSummary {
   readonly sessionId: string
+  /**
+   * Durable session id issued by the agent (`sessionIdOnAgent`), once the
+   * handshake has completed. The `--agent-sessions` CLI exposes it so a caller
+   * can recognize the session it is running inside.
+   */
+  readonly agentSessionId?: string
   readonly title: string
   /** Serialized `AcpSessionDisplayStatus` (e.g. 'running' | 'idle' | 'ask' | …). */
   readonly status: string

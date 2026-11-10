@@ -31,6 +31,16 @@ export function hasQuitFlag(argv: readonly string[]): boolean {
 }
 
 /**
+ * `--agent-sessions` asks a running instance to print a live agent-session
+ * snapshot as JSON on stdout and exit. A second launch forwards the flag and
+ * advertises a response pipe through `requestSingleInstanceLock(additionalData)`;
+ * with no running instance the flag prints an empty list.
+ */
+export function hasAgentSessionsFlag(argv: readonly string[]): boolean {
+  return argv.includes('--agent-sessions')
+}
+
+/**
  * Extract the first positional argument (a file or directory to open at startup).
  * Windows file associations pass the path as a plain argv entry.
  *

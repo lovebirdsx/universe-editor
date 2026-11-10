@@ -6,8 +6,10 @@
  *  Job Object（KILL_ON_JOB_CLOSE）管理本地子进程树，普通 detached 子进程仍会随编辑器退出
  *  被杀；WMI 创建的进程不在该 Job 内，才能在关闭编辑器后继续完成覆盖和重启。
  *
- *  worker 启动后先等待调用本 skill 的 Claude 会话进程（CLAUDE_PID）退出：会话收尾有延迟，
- *  提前关闭编辑器会打断它。会话结束前不做任何同步/构建；结束后才开始执行。
+ *  执行时机：先通过安装版的 `--agent-sessions` 查询当前所有会话。除调用本 skill 的
+ *  会话外只要还有正在运行（running / ask / background）的会话就中止；构建成功、关闭
+ *  编辑器前再查一次，期间新开的会话同样会阻止关闭。调用会话本身允许继续运行，
+ *  关闭编辑器时会一并结束。安装版不支持该查询时直接拒绝执行。
  *
  *  顺序刻意是「构建成功后才关闭编辑器」：构建失败时安装版不受影响，编译期间也可继续使用。
  *  关闭用 `Universe Editor.exe --quit`：第二个实例把参数转发给已运行的主实例，主实例走
@@ -19,9 +21,12 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import {
+  closeSync,
   existsSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   realpathSync,
   statSync,
   unlinkSync,
@@ -40,9 +45,13 @@ const RUNTIME_RESOURCES_REL = 'scripts/release/runtime-resources.mjs'
 const DEFAULT_ENV_MODE = 'prod'
 const DEFAULT_GRACE_SECONDS = 60
 const POLL_INTERVAL_MS = 1000
-const SESSION_POLL_INTERVAL_MS = 5000
-const SESSION_LOG_INTERVAL_MS = 120_000
-const SESSION_IDENTITY_CHECK_INTERVAL_MS = 30_000
+const AGENT_SESSIONS_FLAG = '--agent-sessions'
+const AGENT_SESSIONS_PROTOCOL = 1
+const AGENT_SESSIONS_TIMEOUT_MS = 30_000
+/** Killing the editor must not interrupt sessions with work in flight. */
+const BLOCKING_SESSION_STATUSES = new Set(['running', 'ask', 'background'])
+const OTHER_SESSIONS_EXIT_CODE = 11
+const SESSION_QUERY_EXIT_CODE = 12
 const RUN_ROOT = join(tmpdir(), 'refresh-installed-editor')
 const LAST_RESULT_FILE = join(RUN_ROOT, 'last-result.json')
 const RUN_LOCK_FILE = join(RUN_ROOT, 'run.lock.json')
@@ -63,10 +72,8 @@ function parseArgs(argv) {
     strictNotes: false,
     noRestart: false,
     allowMissingEnv: false,
-    noWaitSession: false,
     envMode: DEFAULT_ENV_MODE,
     graceSeconds: DEFAULT_GRACE_SECONDS,
-    sessionWaitSeconds: 0,
     installDir: undefined,
     mainWorktree: undefined,
   }
@@ -84,16 +91,7 @@ function parseArgs(argv) {
     else if (arg === '--strict-notes') options.strictNotes = true
     else if (arg === '--no-restart') options.noRestart = true
     else if (arg === '--allow-missing-env') options.allowMissingEnv = true
-    else if (arg === '--no-wait-session') options.noWaitSession = true
-    else if (arg === '--session-wait-timeout' || arg.startsWith('--session-wait-timeout=')) {
-      const { value, next } = takeValue(argv, i, '--session-wait-timeout')
-      const seconds = Number(value)
-      if (!Number.isInteger(seconds) || seconds < 0) {
-        throw new CliError('--session-wait-timeout 必须是非负整数（秒，0 表示不限）', 2)
-      }
-      options.sessionWaitSeconds = seconds
-      i = next
-    } else if (arg === '--env' || arg.startsWith('--env=')) {
+    else if (arg === '--env' || arg.startsWith('--env=')) {
       const { value, next } = takeValue(argv, i, '--env')
       options.envMode = value
       i = next
@@ -528,6 +526,149 @@ function installedEditorEnv() {
   return env
 }
 
+/** 安装版是否支持 `--agent-sessions`（判断依据是 app.asar 里的命令字符串）。 */
+function installedSupportsAgentSessions(install) {
+  const asar = join(install.dir, 'resources', 'app.asar')
+  return existsSync(asar) && fileContainsText(asar, AGENT_SESSIONS_FLAG)
+}
+
+function fileContainsText(file, needle) {
+  const needleBuffer = Buffer.from(needle)
+  const chunkSize = 1 << 20
+  const buffer = Buffer.alloc(chunkSize)
+  const fd = openSync(file, 'r')
+  try {
+    let carry = Buffer.alloc(0)
+    while (true) {
+      const read = readSync(fd, buffer, 0, chunkSize, null)
+      if (read <= 0) return false
+      const chunk =
+        carry.length > 0
+          ? Buffer.concat([carry, buffer.subarray(0, read)])
+          : buffer.subarray(0, read)
+      if (chunk.includes(needleBuffer)) return true
+      carry = Buffer.from(chunk.subarray(Math.max(0, chunk.length - needleBuffer.length + 1)))
+    }
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/**
+ * 调用本 skill 的会话由 CLAUDE_CODE_SESSION_ID 标识，它同时是 ACP 会话的
+ * durable id（编辑器查询结果里的 agentSessionId）。没有该变量时无法认领调用
+ * 会话，任何正在运行的会话都会被当成“其它会话”。
+ */
+function resolveInvokingSession() {
+  const agentSessionId = process.env.CLAUDE_CODE_SESSION_ID?.trim() || undefined
+  return agentSessionId ? { agentSessionId } : undefined
+}
+
+function queryAgentSessions(install) {
+  if (!installedSupportsAgentSessions(install)) {
+    throw new CliError(
+      `当前安装版不支持 "${AGENT_SESSIONS_FLAG}" 会话查询，无法确认其它会话是否在运行。` +
+        '请先手动更新到包含该查询命令的编辑器版本。',
+      SESSION_QUERY_EXIT_CODE,
+    )
+  }
+  log(`查询会话：${EXE_NAME} ${AGENT_SESSIONS_FLAG}`)
+  const result = spawnSync(install.exe, [AGENT_SESSIONS_FLAG], {
+    cwd: install.dir,
+    env: installedEditorEnv(),
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: AGENT_SESSIONS_TIMEOUT_MS,
+  })
+  if (result.error) {
+    throw new CliError(`会话查询失败: ${result.error.message}`, SESSION_QUERY_EXIT_CODE)
+  }
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').trim()
+    throw new CliError(
+      `会话查询失败 (exit ${result.status})${detail ? `: ${detail}` : ''}`,
+      SESSION_QUERY_EXIT_CODE,
+    )
+  }
+  const snapshot = parseAgentSessionsOutput(result.stdout)
+  if (!snapshot) {
+    throw new CliError('会话查询没有返回可解析的 JSON', SESSION_QUERY_EXIT_CODE)
+  }
+  if (!Array.isArray(snapshot.failedWindows) || snapshot.failedWindows.length > 0) {
+    throw new CliError(
+      `会话查询不完整（未响应的窗口: ${JSON.stringify(snapshot.failedWindows ?? [])}），已中止`,
+      SESSION_QUERY_EXIT_CODE,
+    )
+  }
+  return snapshot
+}
+
+function parseAgentSessionsOutput(stdout) {
+  const lines = String(stdout ?? '').split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const text = lines[i].trim()
+    if (!text.startsWith('{')) continue
+    try {
+      const parsed = JSON.parse(text)
+      if (parsed && parsed.protocol === AGENT_SESSIONS_PROTOCOL && Array.isArray(parsed.sessions)) {
+        return parsed
+      }
+    } catch {
+      // 继续向前找可解析的那一行。
+    }
+  }
+  return undefined
+}
+
+function findOtherRunningSessions(snapshot, invoking) {
+  const sessions = Array.isArray(snapshot.sessions) ? snapshot.sessions : []
+  return sessions.filter(
+    (session) =>
+      session &&
+      typeof session === 'object' &&
+      BLOCKING_SESSION_STATUSES.has(String(session.status)) &&
+      !isInvokingSessionSummary(session, invoking),
+  )
+}
+
+function isInvokingSessionSummary(session, invoking) {
+  if (!invoking?.agentSessionId) return false
+  return (
+    session.agentSessionId === invoking.agentSessionId ||
+    session.sessionId === invoking.agentSessionId
+  )
+}
+
+function formatSessionSummary(session) {
+  const agent = session.agentId ? String(session.agentId) : 'agent'
+  const status = session.status ? String(session.status) : 'unknown'
+  const title = session.title ? `「${String(session.title)}」` : ''
+  const windowInfo = Number.isInteger(session.windowId) ? `，窗口 ${session.windowId}` : ''
+  const workspace = session.workspaceName ? `，工作区 ${session.workspaceName}` : ''
+  return `${agent}${title}（${status}${windowInfo}${workspace}）`
+}
+
+/**
+ * 查询并返回“其它正在运行的会话”。安装版未运行时无需查询（没有可中断的工作）。
+ * `editorRunning` 由调用方从已有的进程枚举传入，避免重复拉起 PowerShell。
+ */
+function collectOtherRunningSessions(install, invoking, editorRunning) {
+  if (!editorRunning) return { snapshot: undefined, others: [] }
+  const snapshot = queryAgentSessions(install)
+  return { snapshot, others: findOtherRunningSessions(snapshot, invoking) }
+}
+
+function otherSessionsError(others, phase) {
+  const list = others.map((session) => `  - ${formatSessionSummary(session)}`).join('\n')
+  const retry =
+    phase === '关闭编辑器前' ? '（构建产物已生成，结束会话后可加 --skip-build 重跑）' : ''
+  return new CliError(
+    `${phase}检测到其它正在运行的 agent 会话：\n${list}\n` +
+      `已中止，不会关闭编辑器。请先结束这些会话后重跑${retry}。`,
+    OTHER_SESSIONS_EXIT_CODE,
+  )
+}
+
 /**
  * 用 `Universe Editor.exe --quit` 请求已运行的安装版退出。第二个实例拿不到
  * single-instance 锁，会把 argv 转发给主实例；主实例按 File → Exit 的
@@ -698,6 +839,11 @@ function preflight(options) {
   const foreignProcesses = allProcesses.filter(
     (item) => item.name === EXE_NAME && !isUnder(item.path, install.dir),
   )
+  const { snapshot: sessionSnapshot, others: otherSessions } = collectOtherRunningSessions(
+    install,
+    options.invokingSession,
+    installProcesses.length > 0,
+  )
 
   return {
     main,
@@ -710,6 +856,8 @@ function preflight(options) {
     submodules,
     installProcesses,
     foreignProcesses,
+    sessionSnapshot,
+    otherSessions,
   }
 }
 
@@ -717,6 +865,17 @@ function printPreflightSummary(info) {
   log(`主 worktree: ${info.main}`)
   log(`安装目录: ${info.install.dir}`)
   log(`安装版版本: ${info.installedVersion ?? '未知'}；构建源码版本: ${info.editorVersion}`)
+  if (info.sessionSnapshot === undefined) {
+    log('安装版未运行：无会话需要检查')
+  } else if (info.otherSessions.length === 0) {
+    log(`会话检查: 无其它运行中的会话（共 ${info.sessionSnapshot.sessions.length} 个会话）`)
+  } else {
+    warn(
+      `会话检查: ${info.otherSessions.length} 个其它会话正在运行:\n${info.otherSessions
+        .map((session) => `  - ${formatSessionSummary(session)}`)
+        .join('\n')}`,
+    )
+  }
   if (info.foreignProcesses.length > 0) {
     warn(
       `安装目录外还有 Universe Editor 进程: ${info.foreignProcesses
@@ -758,19 +917,21 @@ function printDryRun(options, info) {
     )
   }
   log(`现有构建产物: ${info.sourceExists ? '存在' : '不存在（正式运行会构建）'}`)
-  const sessionWait = resolveInvokingSessionWait()
-  if (options.noWaitSession) {
-    log('调用会话: 跳过等待（--no-wait-session），worker 立即执行')
-  } else if (sessionWait) {
-    log(
-      `调用会话: 等待 PID ${sessionWait.pid}${
-        sessionWait.sessionId ? `（session ${sessionWait.sessionId}）` : ''
-      } 退出后才开始执行${
-        options.sessionWaitSeconds > 0 ? `，最多等 ${options.sessionWaitSeconds}s` : ''
-      }`,
-    )
+  if (options.invokingSession?.agentSessionId) {
+    log(`调用会话: ${options.invokingSession.agentSessionId}`)
   } else {
-    log('调用会话: 未检测到 CLAUDE_PID，worker 不等待')
+    warn('调用会话: 无法识别（未设置 CLAUDE_CODE_SESSION_ID），任何运行中的会话都会被拦')
+  }
+  if (info.sessionSnapshot === undefined) {
+    log('其它运行中的会话: 安装版未运行，无')
+  } else if (info.otherSessions.length === 0) {
+    log(`其它运行中的会话: 无（共 ${info.sessionSnapshot.sessions.length} 个会话，可以执行）`)
+  } else {
+    warn(
+      `其它运行中的会话（正式运行会中止）:\n${info.otherSessions
+        .map((session) => `  - ${formatSessionSummary(session)}`)
+        .join('\n')}`,
+    )
   }
   log('计划执行:')
   if (!options.skipBuild) {
@@ -787,6 +948,9 @@ function printDryRun(options, info) {
   } else {
     console.log('  （跳过构建，复用现有 win-unpacked）')
   }
+  console.log(
+    `  "${info.install.exe}" ${AGENT_SESSIONS_FLAG}（关闭前再次查询会话；有其它运行中的会话则中止）`,
+  )
   console.log(
     `  "${info.install.exe}" --quit（等价于 File → Exit；等待 ${options.graceSeconds}s，超时不强杀）`,
   )
@@ -816,108 +980,6 @@ function isPidAlive(pid) {
     return true
   } catch {
     return false
-  }
-}
-
-function formatDuration(ms) {
-  const totalSeconds = Math.round(ms / 1000)
-  if (totalSeconds < 60) return `${totalSeconds}s`
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  if (minutes < 60) return `${minutes}m${seconds.toString().padStart(2, '0')}s`
-  return `${Math.floor(minutes / 60)}h${(minutes % 60).toString().padStart(2, '0')}m`
-}
-
-function readProcessCreationDate(pid) {
-  const command = [
-    '$ErrorActionPreference = "Stop"',
-    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    `@(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}" | Select-Object CreationDate) | ConvertTo-Json -Compress`,
-  ].join('; ')
-  const result = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', command],
-    {
-      encoding: 'utf8',
-      windowsHide: true,
-    },
-  )
-  if (result.status !== 0) return undefined
-  const text = result.stdout.trim()
-  if (!text) return undefined
-  try {
-    const parsed = JSON.parse(text)
-    const entry = Array.isArray(parsed) ? parsed[0] : parsed
-    return parseWmiDate(entry?.CreationDate)
-  } catch {
-    return undefined
-  }
-}
-
-/**
- * 调用本 skill 的 Claude 会话进程。worker 在它退出后才开始执行；PID 复用用
- * CreationDate 校验，避免长等待期间 PID 被系统回收后误判会话仍在。
- */
-function resolveInvokingSessionWait() {
-  const pid = Number(process.env.CLAUDE_PID)
-  if (!Number.isInteger(pid) || pid <= 0) return undefined
-  let creationDate
-  try {
-    creationDate = listProcesses().find((item) => item.pid === pid)?.creationDate
-  } catch {
-    // 取不到启动时间时退化到只看 PID 存活，等待仍然成立。
-  }
-  const sessionId = process.env.CLAUDE_CODE_SESSION_ID?.trim() || undefined
-  return {
-    pid,
-    ...(sessionId ? { sessionId } : {}),
-    ...(creationDate !== undefined ? { creationDate } : {}),
-  }
-}
-
-async function waitForInvokingSession(sessionWait, options) {
-  if (!sessionWait?.pid) {
-    log('未检测到调用会话进程（CLAUDE_PID），跳过等待，立即执行')
-    return
-  }
-  if (options.noWaitSession) {
-    log('--no-wait-session：跳过等待调用会话结束')
-    return
-  }
-  const label = sessionWait.sessionId
-    ? `session ${sessionWait.sessionId} / PID ${sessionWait.pid}`
-    : `PID ${sessionWait.pid}`
-  log(`等待调用本 skill 的会话结束（${label}）…`)
-  log('会话结束（关闭聊天标签页或退出 Claude CLI）后才会开始同步与构建。')
-  const startedAt = Date.now()
-  const timeoutMs = options.sessionWaitSeconds * 1000
-  let nextLogAt = startedAt + SESSION_LOG_INTERVAL_MS
-  let nextIdentityCheckAt = 0
-  while (true) {
-    if (!isPidAlive(sessionWait.pid)) {
-      log(`调用会话已结束（等待 ${formatDuration(Date.now() - startedAt)}），开始执行`)
-      return
-    }
-    const now = Date.now()
-    if (sessionWait.creationDate !== undefined && now >= nextIdentityCheckAt) {
-      nextIdentityCheckAt = now + SESSION_IDENTITY_CHECK_INTERVAL_MS
-      const current = readProcessCreationDate(sessionWait.pid)
-      if (current === undefined || current !== sessionWait.creationDate) {
-        log(`调用会话进程已退出（PID ${sessionWait.pid} 已被复用或消失），开始执行`)
-        return
-      }
-    }
-    if (timeoutMs > 0 && now - startedAt >= timeoutMs) {
-      throw new CliError(
-        `等待调用会话结束超时（${options.sessionWaitSeconds}s），未做任何写操作。请结束会话后重跑，或用 --no-wait-session 立即执行。`,
-        10,
-      )
-    }
-    if (now >= nextLogAt) {
-      log(`仍在等待会话结束（已等待 ${formatDuration(now - startedAt)}）…`)
-      nextLogAt = now + SESSION_LOG_INTERVAL_MS
-    }
-    await sleep(SESSION_POLL_INTERVAL_MS)
   }
 }
 
@@ -978,7 +1040,7 @@ function createDetachedWorker(options, info) {
 
   const workerArgs = process.argv.slice(2).filter((arg) => arg !== '--foreground')
   workerArgs.push('--main-worktree', info.main, '--install-dir', info.install.dir)
-  const sessionWait = resolveInvokingSessionWait()
+  const invokingSession = resolveInvokingSession()
   writeFileSync(
     configFile,
     JSON.stringify({
@@ -988,7 +1050,7 @@ function createDetachedWorker(options, info) {
       envFile,
       resultFile,
       lockFile,
-      sessionWait: sessionWait ?? null,
+      invokingSession: invokingSession ?? null,
     }),
   )
 
@@ -1033,7 +1095,7 @@ function createDetachedWorker(options, info) {
     throw new CliError(`创建独立后台进程失败: WMI 未返回有效 PID（${result.stdout.trim()}）`, 9)
   }
   writeFileSync(lockFile, JSON.stringify({ pid, startedAt: new Date().toISOString(), logFile }))
-  return { pid, logFile, resultFile, runDir, sessionWait }
+  return { pid, logFile, resultFile, runDir }
 }
 
 async function runWorker(configPath) {
@@ -1055,14 +1117,15 @@ async function runWorker(configPath) {
   }
 
   const options = parseArgs(config.args)
+  options.invokingSession = config.invokingSession ?? resolveInvokingSession()
   let exitCode = 0
   try {
     log('独立 worker 启动，开始预检…')
     const info = preflight(options)
     printPreflightSummary(info)
-    // 预检是只读的，先做掉；真正的写操作（pull/install/build/关闭/覆盖）必须等
-    // 调用本 skill 的会话完全退出后再开始。
-    await waitForInvokingSession(config.sessionWait, options)
+    if (info.otherSessions.length > 0) {
+      throw otherSessionsError(info.otherSessions, '预检时')
+    }
     await runFlow(options, info)
     writeResult(config.resultFile, {
       ok: true,
@@ -1123,6 +1186,18 @@ async function runFlow(options, info) {
     warn('--skip-build：跳过同步、依赖安装与构建，复用现有产物')
   }
 
+  // 构建期间可能又开了会话：关闭编辑器前必须重新确认。
+  const editorRunning = listInstallProcesses(info.install.dir).length > 0
+  const { others: lateOtherSessions } = collectOtherRunningSessions(
+    info.install,
+    options.invokingSession,
+    editorRunning,
+  )
+  if (lateOtherSessions.length > 0) {
+    throw otherSessionsError(lateOtherSessions, '关闭编辑器前')
+  }
+  log('关闭前会话检查通过')
+
   log('关闭安装版…')
   const closedCount = await closeInstallProcesses(
     info.install.dir,
@@ -1164,6 +1239,7 @@ async function main() {
   if (process.platform !== 'win32') {
     throw new CliError('该 skill 仅支持 Windows（安装版与打包链都是 Windows 专属）', 2)
   }
+  options.invokingSession = resolveInvokingSession()
 
   log('预检…')
   const info = preflight(options)
@@ -1174,9 +1250,12 @@ async function main() {
   }
 
   printPreflightSummary(info)
+  if (info.otherSessions.length > 0) {
+    throw otherSessionsError(info.otherSessions, '预检时')
+  }
   if (options.foreground) {
     warn(
-      '--foreground：脚本在当前进程运行；从编辑器内启动时，编辑器关闭会终止脚本。跳过等待调用会话（前台等待会阻塞会话本身）',
+      '--foreground：脚本在当前进程运行；从编辑器内启动时，编辑器关闭会终止脚本。会话检查照常执行',
     )
     await runFlow(options, info)
     return
@@ -1187,42 +1266,30 @@ async function main() {
   log(`后台进程 PID: ${worker.pid}`)
   log(`日志: ${worker.logFile}`)
   log(`上次结果: ${worker.resultFile}`)
-  if (worker.sessionWait && !options.noWaitSession) {
-    log(
-      `worker 会先等待调用本 skill 的会话结束（PID ${worker.sessionWait.pid}${
-        worker.sessionWait.sessionId ? `，session ${worker.sessionWait.sessionId}` : ''
-      }）再开始执行。`,
-    )
-    log('请关闭当前聊天标签页或退出 Claude CLI；会话进程退出后自动开始构建。')
-  } else {
-    log(
-      options.noWaitSession
-        ? '已指定 --no-wait-session：worker 立即开始执行。'
-        : '未检测到调用会话进程（CLAUDE_PID）：worker 立即开始执行。',
-    )
-  }
-  log('构建成功后会用 --quit 正常关闭编辑器（等价于 File → Exit），不会强杀。')
-  log('编辑器关闭后本会话会退出，属正常现象；重新打开编辑器后查看 last-result.json 或日志。')
+  log('worker 会立即开始同步与构建；关闭编辑器前会再次查询会话。')
+  log('无需关闭当前聊天标签页；构建成功后编辑器会自动关闭，本会话会一并结束。')
+  log('重新打开编辑器后查看 last-result.json 或日志确认结果。')
 }
 
 function printHelp() {
   console.log(`用法: node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs [选项]
 
-默认流程：前台预检 -> 启动独立后台 worker -> worker 等待调用会话结束 ->
-拉取主 worktree main、生产打包、用 "Universe Editor.exe" --quit 正常关闭编辑器
-（与 File → Exit 相同的 before-quit/will-quit 管线）、覆盖安装目录并启动编辑器。
+默认流程：前台预检（查询运行中的 agent 会话）-> 启动独立后台 worker ->
+拉取主 worktree main、生产打包、关闭前再次查询会话、用 "Universe Editor.exe" --quit
+正常关闭编辑器（与 File → Exit 相同的 before-quit/will-quit 管线）、覆盖安装目录并启动编辑器。
 worker 通过 WMI 创建，不在编辑器的 Job Object 内，因此编辑器关闭后仍会继续。
+
+会话门禁：除调用本 skill 的会话（按 CLAUDE_CODE_SESSION_ID 识别）外，只要还有
+running / ask / background 状态的会话就中止；安装版不支持 --agent-sessions 时直接拒绝。
 
 选项:
   --dry-run              只预检并打印计划，不执行任何写操作
-  --foreground           在当前进程直接执行完整流程（编辑器外调试用；会跳过等待调用会话）
+  --foreground           在当前进程直接执行完整流程（编辑器外调试用）
   --skip-build           跳过拉取/依赖/构建，复用现有 win-unpacked
   --skip-pull            不拉取 main，允许主 worktree 有本地改动
   --env <mode>           打包环境，默认 prod（读取 .env.<mode>）
   --strict-notes         不跳过 release notes 发版门禁
   --no-restart           覆盖后不启动编辑器
-  --no-wait-session      不等待调用会话结束，worker 立即执行
-  --session-wait-timeout <秒>  等待调用会话结束的上限，默认 0（不限）
   --install-dir <path>   安装目录，默认 %LOCALAPPDATA%\\Programs\\Universe Editor
   --main-worktree <path> 主 worktree 路径，默认从 git 自动探测
   --grace-timeout <秒>   等待编辑器正常退出的上限，默认 60；超时不会强杀

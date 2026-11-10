@@ -388,7 +388,13 @@ describe('RendererSessionsService', () => {
       const list = await h.svc.listSessions()
 
       expect(list).toEqual([
-        { sessionId: 's1', title: 'Session s1', status: 'dormant', agentId: 'fake' },
+        {
+          sessionId: 's1',
+          agentSessionId: 's1',
+          title: 'Session s1',
+          status: 'dormant',
+          agentId: 'fake',
+        },
       ])
     })
 
@@ -401,6 +407,7 @@ describe('RendererSessionsService', () => {
 
       expect(list.map((s) => s.sessionId)).toEqual(['live'])
       expect(list[0]!.status).toBe('running')
+      expect(list[0]!.agentSessionId).toBe('live')
     })
 
     it('lists a restored tab that has no live session as dormant', async () => {
@@ -410,7 +417,13 @@ describe('RendererSessionsService', () => {
       const list = await h.svc.listSessions()
 
       expect(list).toEqual([
-        { sessionId: 'durable-1', title: 'Restored chat', status: 'dormant', agentId: 'fake' },
+        {
+          sessionId: 'durable-1',
+          agentSessionId: 'durable-1',
+          title: 'Restored chat',
+          status: 'dormant',
+          agentId: 'fake',
+        },
       ])
     })
 
@@ -422,7 +435,11 @@ describe('RendererSessionsService', () => {
       const list = await h.svc.listSessions()
 
       expect(list).toHaveLength(1)
-      expect(list[0]).toMatchObject({ sessionId: 'local-1', status: 'running' })
+      expect(list[0]).toMatchObject({
+        sessionId: 'local-1',
+        agentSessionId: 'durable-1',
+        status: 'running',
+      })
       expect(list[0]!.title).toBe('History title')
     })
 
@@ -434,6 +451,7 @@ describe('RendererSessionsService', () => {
       const list = await h.svc.listSessions()
 
       expect(list.map((s) => s.sessionId)).toEqual(['local-1'])
+      expect(list[0]!.agentSessionId).toBeUndefined()
     })
 
     it('does not resurface a just-closed session through its still-open tab', async () => {

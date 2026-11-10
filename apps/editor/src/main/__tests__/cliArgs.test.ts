@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hasQuitFlag, parseFileToOpen } from '../cliArgs.js'
+import { hasAgentSessionsFlag, hasQuitFlag, parseFileToOpen } from '../cliArgs.js'
 
 describe('parseFileToOpen', () => {
   // Regression: `--user-data-dir <path>` (space form) must not have its value
@@ -57,6 +57,13 @@ describe('parseFileToOpen', () => {
     expect(parseFileToOpen(['node', 'main.js', '--quit', '/project'], false)).toBe('/project')
   })
 
+  it('never treats --agent-sessions as a path and keeps a following path', () => {
+    expect(parseFileToOpen(['node', 'main.js', '--agent-sessions'], false)).toBeUndefined()
+    expect(parseFileToOpen(['node', 'main.js', '--agent-sessions', '/project'], false)).toBe(
+      '/project',
+    )
+  })
+
   it('slices argv[1+] when packaged', () => {
     // Packaged: argv[0] is the exe; a bare positional at argv[1] is the file.
     expect(parseFileToOpen(['app.exe', '/project'], true)).toBe('/project')
@@ -69,5 +76,14 @@ describe('hasQuitFlag', () => {
     expect(hasQuitFlag(['app.exe', '/project', '--quit'])).toBe(true)
     expect(hasQuitFlag(['app.exe', '--quit-other'])).toBe(false)
     expect(hasQuitFlag(['app.exe'])).toBe(false)
+  })
+})
+
+describe('hasAgentSessionsFlag', () => {
+  it('detects the exact flag anywhere in argv', () => {
+    expect(hasAgentSessionsFlag(['app.exe', '--agent-sessions'])).toBe(true)
+    expect(hasAgentSessionsFlag(['app.exe', '/project', '--agent-sessions'])).toBe(true)
+    expect(hasAgentSessionsFlag(['app.exe', '--agent-sessions-other'])).toBe(false)
+    expect(hasAgentSessionsFlag(['app.exe'])).toBe(false)
   })
 })

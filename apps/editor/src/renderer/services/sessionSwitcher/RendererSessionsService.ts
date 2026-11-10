@@ -50,7 +50,13 @@ export class RendererSessionsService implements IRendererSessionsService {
       if (status === 'closed') continue
       const title =
         resolveLiveSessionTitle(this._history, this._sessions, session.id) ?? session.title
-      summaries.push({ sessionId: session.id, title, status, agentId: session.agentId })
+      summaries.push({
+        sessionId: session.id,
+        ...(durableId !== undefined ? { agentSessionId: durableId } : {}),
+        title,
+        status,
+        agentId: session.agentId,
+      })
     }
     // Restore only hydrates session tabs; an inactive editor is never mounted,
     // so its session is not in the live registry. Report it as dormant —
@@ -65,6 +71,7 @@ export class RendererSessionsService implements IRendererSessionsService {
         listed.add(editor.sessionId)
         summaries.push({
           sessionId: entry.id,
+          agentSessionId: entry.id,
           title: entry.title,
           status: 'dormant',
           agentId: entry.agentId,

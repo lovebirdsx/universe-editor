@@ -76,6 +76,26 @@ describe('SessionSwitcherMainService', () => {
     expect(all[0]).toMatchObject({ sessionId: 'b', windowId: 2 })
   })
 
+  it('queryAgentSessions keeps failed windows visible for the CLI', async () => {
+    const svc = new SessionSwitcherMainService()
+    svc.registerWindow(1, {
+      rendererSessions: rendererStub(Promise.reject(new Error('dead'))),
+      getWorkspaceName: () => 'projA',
+      focus: () => {},
+    })
+    svc.registerWindow(2, {
+      rendererSessions: rendererStub([SESSION('b')]),
+      getWorkspaceName: () => 'projB',
+      focus: () => {},
+    })
+
+    const result = await svc.queryAgentSessions()
+    expect(result.windowCount).toBe(2)
+    expect(result.failedWindows).toEqual([1])
+    expect(result.sessions).toHaveLength(1)
+    expect(result.sessions[0]).toMatchObject({ sessionId: 'b', windowId: 2 })
+  })
+
   it('drops unregistered windows', async () => {
     const svc = new SessionSwitcherMainService()
     svc.registerWindow(1, {

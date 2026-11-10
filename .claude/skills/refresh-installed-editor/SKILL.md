@@ -12,22 +12,26 @@ disable-model-invocation: true
 
 ## 关键：脚本必须独立于编辑器运行
 
-编辑器用 Windows Job Object（`KILL_ON_JOB_CLOSE`）管理本地子进程树；从编辑器内启动的普通子进程会随编辑器关闭一起被杀。脚本默认只在前台预检，然后用 WMI `Win32_Process.Create` 启动一个不在该 Job 内的 worker，由 worker 完成等待、构建、关闭、覆盖和重启。
+编辑器用 Windows Job Object（`KILL_ON_JOB_CLOSE`）管理本地子进程树；从编辑器内启动的普通子进程会随编辑器关闭一起被杀。脚本默认只在前台预检，然后用 WMI `Win32_Process.Create` 启动一个不在该 Job 内的 worker，由 worker 完成构建、关闭、覆盖和重启。
 
-## 执行时机：等调用会话结束
+## 执行时机：只拦其它运行中的会话
 
-调用本 skill 的 Claude 会话（环境里的 `CLAUDE_PID`）结束时会有一段收尾延迟。worker 启动后**先等待该进程退出**，会话结束前不做任何同步或构建，避免构建/关闭打断正在收尾的会话。
+开跑前用安装版的 `Universe Editor.exe --agent-sessions` 查询当前所有 agent 会话（含自定义与远程会话），再按状态过滤：
+
+- **拦**：`running`（有任务在跑）、`ask`（等你点权限/回答）、`background`（后台任务未结束）。
+- **不拦**：`idle`、`dormant`（没有在跑的工作，重启后能恢复）。
+- 调用本 skill 的会话通过 `CLAUDE_CODE_SESSION_ID` 对照 `agentSessionId` 排除，允许它继续运行。
+
+只要还有别的会话处于上述“拦”的状态，就**拒绝执行**（不构建、不关闭）。构建成功、真正关闭编辑器前会**再查一次**，防止构建期间新开的会话被误杀。
+
+安装版不支持 `--agent-sessions`（app.asar 里没有该命令）时直接拒绝，不会退回猜测。若 `CLAUDE_CODE_SESSION_ID` 缺失（例如从普通终端调用），无法认领调用会话，任何运行中的会话都会被视为拦路。
 
 因此默认执行后：
 
-1. 前台立即返回，打印 worker PID、日志和结果文件路径。
-2. worker 在后台等待当前会话结束（关闭 Agent 聊天标签页或退出 Claude CLI）。
-3. 会话进程退出后才开始拉取、依赖安装和生产构建；构建成功后才关闭编辑器。
-4. worker 独立完成关闭、覆盖并重新启动编辑器。
-
-**调用后请主动结束当前会话**，否则 worker 会一直等待。想跳过等待、立即执行时加 `--no-wait-session`。
-
-注意：编辑器默认会在会话闲置约 5 分钟后回收 agent 进程（配置 `acp.idleProcessTimeoutMs`），进程被回收也会被视为「会话结束」并触发后续流程。
+1. 前台立即返回，打印 worker PID、日志和结果文件路径（有其它运行中的会话时直接报错退出）。
+2. worker 立即拉取、安装依赖并生产构建。
+3. 构建成功后再次查询会话；通过则正常关闭编辑器、覆盖并重启。
+4. 关闭编辑器时调用会话会一并结束，属预期行为；无需手动关闭聊天标签页。
 
 不要在 worker 运行期间重复触发；脚本用 `%TEMP%\refresh-installed-editor\run.lock.json` 防并发。
 
@@ -36,7 +40,7 @@ disable-model-invocation: true
 **不使用 taskkill 强杀，也不逐个窗口发 WM_CLOSE。** worker 在安装版运行时启动 `Universe Editor.exe --quit`：第二个实例拿不到 single-instance 锁，会把参数转发给主实例；主实例走 `app.quit()` 管线——与 File → Exit 相同，`before-quit` 先 `captureSessionForQuit()` 快照全部窗口，再在 `will-quit` 清理异常退出 sentinel。因此不会「关一个窗口重写一次 session」导致下次只恢复最后一个窗口，也不会触发「编辑器异常退出」提示。
 
 - 发送退出请求后只轮询等待安装目录进程全部消失，**超时也不会强杀**：worker 以失败结束，安装目录不动，编辑器保持运行。
-- 未保存文件或运行中的会话会照常弹出确认框，确认后编辑器才退出。worker 会先等待调用会话结束，通常不会遇到会话确认。
+- 未保存文件会照常弹出确认框，确认后编辑器才退出；调用会话仍在运行时会被一并结束（会话检查已排除它）。若关闭时调用会话仍有运行中的任务，还会弹出会话确认框，点 Exit 即可；无人确认时脚本按超时失败，编辑器不动。
 - 若编辑器长时间不退出，手动 `File → Exit` 后加 `--skip-build` 重跑。
 
 `--quit` 是编辑器主进程的启动参数：已有实例时由 second-instance 转发给主实例；没有实例时冷启动直接退出，不创建窗口。
@@ -55,17 +59,18 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs --dry-
 node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 ```
 
-默认使用主 worktree 的 main、prod 打包环境、跳过 release notes 发版门禁；worker 等当前会话结束后开始构建，构建成功后正常关闭、覆盖并重启。
+默认使用主 worktree 的 main、prod 打包环境、跳过 release notes 发版门禁；worker 立即开始构建，构建成功后再次检查会话，通过后正常关闭、覆盖并重启。
 
 ## 默认流程
 
 | 阶段 | 动作 |
 |---|---|
 | 预检 | 定位主 worktree（必须是 main）、检查工作区与 submodule 干净、`.env.prod` 存在、安装目录存在、记录当前进程与版本 |
-| 等待会话 | 等待 `CLAUDE_PID` 退出；`--no-wait-session` 跳过，`--session-wait-timeout` 设置上限 |
+| 会话检查（开跑） | `Universe Editor.exe --agent-sessions` 查询；排除调用会话后仍有 running / ask / background 会话则拒绝执行 |
 | 同步 | 主 worktree 执行 `git pull --ff-only --no-recurse-submodules`，随后 `git submodule update --init --recursive` |
 | 依赖 | `pnpm-lock.yaml`、workspace、根 manifest、`.npmrc`、patches 变化时执行 `pnpm install --frozen-lockfile` |
 | 构建 | 主 worktree 执行生产打包（等价于 `package:win:dir`），产出 win-unpacked 目录 |
+| 会话检查（关闭前） | 再次查询；有其它运行中的会话则中止，编辑器不动，可加 `--skip-build` 重跑 |
 | 关闭 | 运行 `"Universe Editor.exe" --quit`（等价于 File → Exit，先快照全部窗口），等待正常退出；超时则失败，不强杀 |
 | 覆盖 | `robocopy /E` 覆盖安装目录；保留卸载器、`app-update.yml`、`elevate.exe` 等安装器专属文件 |
 | 校验 | 比较 exe/app.asar 大小与时间戳、确认卸载器存在，并运行 `verify-packaged` |
@@ -75,15 +80,13 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
-| `--dry-run` | 关 | 只预检并打印计划，不执行任何写操作 |
-| `--foreground` | 关 | 在当前进程执行完整流程；编辑器外调试用，会跳过等待调用会话（前台等待会死锁） |
-| `--skip-build` | 关 | 跳过拉取/依赖/构建，复用现有产物；用于覆盖失败后的重跑 |
+| `--dry-run` | 关 | 只预检并打印计划（含会话检查结果），不执行任何写操作 |
+| `--foreground` | 关 | 在当前进程执行完整流程；编辑器外调试用 |
+| `--skip-build` | 关 | 跳过拉取/依赖/构建，复用现有产物；用于会话检查中止或覆盖失败后的重跑 |
 | `--skip-pull` | 关 | 不拉取 main，允许主 worktree 有本地改动 |
 | `--env <mode>` | `prod` | 打包环境，读取主 worktree 的 `.env.<mode>` |
 | `--strict-notes` | 关 | 不跳过 release notes 发版门禁 |
 | `--no-restart` | 关 | 覆盖后不启动编辑器 |
-| `--no-wait-session` | 关 | 不等待调用会话结束，worker 立即执行 |
-| `--session-wait-timeout <秒>` | `0`（不限） | 等待调用会话结束的上限；超时中止且不做任何写操作 |
 | `--install-dir <path>` | `%LOCALAPPDATA%\Programs\Universe Editor` | 安装目录 |
 | `--main-worktree <path>` | 自动探测 | 主 worktree 路径 |
 | `--grace-timeout <秒>` | 60 | 发送关闭请求后等待正常退出的上限；超时只报错，不强杀 |
@@ -93,7 +96,7 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 
 - 最近一次结果：`%TEMP%\refresh-installed-editor\last-result.json`（包含 `ok`、`exitCode`、`message`、`logFile`）。
 - 每次运行的完整日志：`%TEMP%\refresh-installed-editor\<runId>\run.log`。
-- 等待会话、构建输出、关闭、覆盖、重启日志都在 run.log 中。
+- 会话查询、构建输出、关闭、覆盖、重启日志都在 run.log 中。
 - 编辑器重启后，可让 Claude 读取 last-result.json 和日志尾部确认结果。
 
 ## 失败恢复
@@ -101,7 +104,8 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 | 失败阶段 | 编辑器状态 | 恢复方式 |
 |---|---|---|
 | 预检 / pull / 依赖 / 构建 | 未关闭，可继续使用 | 查看日志修复后重跑；若产物已完整可加 `--skip-build` |
-| 等待会话超时 | 未关闭，未做任何写操作 | 结束会话后重跑，或加 `--no-wait-session` |
+| 有其它运行中的会话（开跑或关闭前） | 未关闭，未做任何写操作或仅完成构建 | 结束/停掉这些会话后重跑；构建已完成时加 `--skip-build` |
+| 安装版不支持 `--agent-sessions` | 未关闭，未做任何写操作 | 先手动更新安装版到包含该查询命令的版本 |
 | 关闭进程 | 编辑器保持运行（--quit 被确认框拦下或未响应） | 脚本不强杀；手动 File → Exit 后加 `--skip-build` 重跑 |
 | 覆盖/校验 | 已关闭，可能半覆盖 | 修复文件占用/磁盘后加 `--skip-build` 重跑；`robocopy /E` 可重复执行 |
 | 重启 | 已关闭，安装目录已更新 | 手动运行安装目录下的 `Universe Editor.exe` |
@@ -110,7 +114,7 @@ node .claude/skills/refresh-installed-editor/refresh-installed-editor.mjs
 
 ## 注意事项
 
-- 执行前先保存编辑器内未保存的文件和正在运行的 Agent 会话。正常关闭遇到未保存确认会等待；超时后脚本失败而不是强杀。
+- 执行前先保存编辑器内未保存的文件；有其它正在运行的 agent 会话时脚本会拒绝执行，空闲会话无需处理。
 - 主 worktree 必须干净且位于 main；不会自动处理未提交改动。
 - 默认使用 prod 打包环境，要求主 worktree 存在 `.env.prod`；缺失时用 `--env dev` 或 `--allow-missing-env`。
 - 构建可能持续数分钟到十几分钟；worker 独立运行，不要重复触发。

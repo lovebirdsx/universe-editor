@@ -35,6 +35,18 @@ export interface SessionSwitcherWindowEntry {
 /** Max wait for a single window's listSessions before it is skipped. */
 const LIST_TIMEOUT_MS = 1500
 
+/**
+ * Complete live-session snapshot for the `--agent-sessions` CLI. Unlike
+ * {@link SessionSwitcherMainService.getAllSessions}, failures are surfaced:
+ * a caller deciding whether it is safe to quit must not treat a timed-out
+ * window as "no sessions".
+ */
+export interface AgentSessionsQueryResult {
+  readonly windowCount: number
+  readonly failedWindows: readonly number[]
+  readonly sessions: readonly SessionSummary[]
+}
+
 export class SessionSwitcherMainService implements ISessionSwitcherService {
   declare readonly _serviceBrand: undefined
 
@@ -53,23 +65,32 @@ export class SessionSwitcherMainService implements ISessionSwitcherService {
   }
 
   async getAllSessions(): Promise<readonly SessionSummary[]> {
+    return (await this.queryAgentSessions()).sessions
+  }
+
+  /** Snapshot for the `--agent-sessions` CLI; keeps per-window failures visible. */
+  async queryAgentSessions(): Promise<AgentSessionsQueryResult> {
     const entries = [...this._windows.entries()]
     const settled = await Promise.allSettled(
       entries.map(([, entry]) =>
         withTimeout(entry.rendererSessions.listSessions(), LIST_TIMEOUT_MS),
       ),
     )
-    const result: SessionSummary[] = []
+    const sessions: SessionSummary[] = []
+    const failedWindows: number[] = []
     for (let i = 0; i < settled.length; i++) {
       const outcome = settled[i]!
-      if (outcome.status !== 'fulfilled') continue
       const [windowId, entry] = entries[i]!
+      if (outcome.status !== 'fulfilled') {
+        failedWindows.push(windowId)
+        continue
+      }
       const workspaceName = entry.getWorkspaceName()
       for (const s of outcome.value) {
-        result.push({ ...s, windowId, workspaceName })
+        sessions.push({ ...s, windowId, workspaceName })
       }
     }
-    return result
+    return { windowCount: entries.length, failedWindows, sessions }
   }
 
   async reveal(windowId: number, sessionId: string): Promise<void> {
