@@ -1050,7 +1050,7 @@ test.describe('mobile gateway', () => {
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
         'base64',
       )
-      await phone.getByTestId('composer-photo-input').setInputFiles({
+      await phone.getByTestId('composer-attachment-input').setInputFiles({
         name: 'shot.png',
         mimeType: 'image/png',
         buffer: png,
@@ -1059,7 +1059,7 @@ test.describe('mobile gateway', () => {
         phone.locator('[data-testid="composer-attachment-image"].composer__chip--uploaded'),
       ).toBeVisible()
 
-      await phone.getByTestId('composer-file-input').setInputFiles({
+      await phone.getByTestId('composer-attachment-input').setInputFiles({
         name: 'notes.txt',
         mimeType: 'text/plain',
         buffer: Buffer.from('hello phone'),
