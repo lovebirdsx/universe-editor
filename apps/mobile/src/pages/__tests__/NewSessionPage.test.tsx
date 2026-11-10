@@ -200,9 +200,7 @@ describe('NewSessionPage', () => {
 
     fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
     expect(workspaceOption('file:///dirty').textContent).toContain(strings.badgeWorkspaceDirty)
-    expect(workspaceOption('file:///clean').textContent).not.toContain(
-      strings.badgeWorkspaceDirty,
-    )
+    expect(workspaceOption('file:///clean').textContent).not.toContain(strings.badgeWorkspaceDirty)
   })
 
   it('keeps the server order of recent workspaces (newest first)', async () => {
