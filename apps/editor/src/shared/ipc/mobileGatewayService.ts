@@ -115,6 +115,18 @@ export interface MobileGatewayCertificateInfo {
   readonly caExpiresAt?: number
 }
 
+/**
+ * A phone rejected the gateway certificate during the TLS handshake. This is the
+ * layer below HTTP/WS: the request never reaches the gateway, so only the audit
+ * trail (and this status field) reveals it.
+ */
+export interface MobileGatewayTlsTrustWarning {
+  /** Epoch milliseconds of the most recent rejected handshake. */
+  readonly at: number
+  /** Remote address of the rejecting client. */
+  readonly remoteAddress: string
+}
+
 export interface MobileGatewayStatus {
   readonly state: MobileGatewayState
   readonly error?: string
@@ -142,6 +154,12 @@ export interface MobileGatewayStatus {
   readonly certificate?: MobileGatewayCertificateInfo
   /** Same-origin download URL for the root CA (root-ca + LAN + TLS only). */
   readonly caDownloadUrl?: string
+  /**
+   * Set while a client has recently rejected the TLS certificate. Cleared when
+   * the gateway restarts; the phone may otherwise stay on a cached app shell
+   * that can never reach the gateway.
+   */
+  readonly tlsTrustWarning?: MobileGatewayTlsTrustWarning
 }
 
 export interface MobileDeviceInfo {

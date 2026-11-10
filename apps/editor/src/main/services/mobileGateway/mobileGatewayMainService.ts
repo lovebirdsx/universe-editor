@@ -38,6 +38,7 @@ import type {
   MobileGatewayConfigUpdateResult,
   MobileGatewayStatus,
   MobileGatewayState,
+  MobileGatewayTlsTrustWarning,
   MobilePairingSession,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import { DEFAULT_MOBILE_GATEWAY_CONFIG } from '../../../shared/ipc/mobileGatewayService.js'
@@ -62,11 +63,13 @@ import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
 import { WorkspaceGitStatusService } from './workspaceGitStatus.js'
 import { ensureLanCertificate, type LanCertificate } from './lanCertificate.js'
 import { buildAllowedHosts } from './requestSecurity.js'
+import { isCertificateRejection, isLocalTlsClient } from './tlsTrust.js'
 import {
   HEARTBEAT_INTERVAL_MS,
   HEARTBEAT_TIMEOUT_MS,
   HELLO_TIMEOUT_MS,
   MobileGatewayServer,
+  type MobileGatewayDiagnosticEvent,
 } from './mobileGatewayServer.js'
 import {
   MobileGatewayHub,
@@ -128,6 +131,8 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _certificate: LanCertificate | undefined
   private _lanOrigin: string | undefined
   private _lanHostnameOrigin: string | undefined
+  private _boundHost: string | undefined
+  private _tlsTrustWarning: MobileGatewayTlsTrustWarning | undefined
   private _server: MobileGatewayServer | undefined
   private _router: MobileNotificationRouter | undefined
   private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
@@ -494,6 +499,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
 
     await this._teardown()
     this._setState('starting')
+    this._boundHost = runtime.host
     const server = new MobileGatewayServer({
       host: runtime.host,
       port: runtime.port,
@@ -517,6 +523,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
         void this._emitDevices()
       },
       ...(vapid !== undefined ? { vapidPublicKey: vapid.publicKey } : {}),
+      onDiagnostic: (event) => this._handleDiagnostic(event),
       hub: this._hub,
       attachments: this._attachments,
     })
@@ -598,6 +605,8 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._lanOrigin = undefined
     this._lanHostnameOrigin = undefined
     this._insecure = false
+    this._boundHost = undefined
+    this._tlsTrustWarning = undefined
     if (server === undefined) return
     await server.stop()
     this._logger.info('stopped')
@@ -670,7 +679,21 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       ...(this._lanOrigin !== undefined && this._certificate?.ca !== undefined
         ? { caDownloadUrl: `${this._lanOrigin}${MOBILE_CERT_PATH}` }
         : {}),
+      ...(this._tlsTrustWarning !== undefined ? { tlsTrustWarning: this._tlsTrustWarning } : {}),
     }
+  }
+
+  /**
+   * A client rejected our certificate (alert 46) before HTTP routing. Surface it
+   * in the settings page: the phone itself may be stuck on a cached app shell
+   * and cannot show any hint.
+   */
+  private _handleDiagnostic(event: MobileGatewayDiagnosticEvent): void {
+    if (event.action !== 'tls_handshake_failed') return
+    if (!isCertificateRejection(event.detail)) return
+    if (isLocalTlsClient(event.remoteAddress, this._boundHost)) return
+    this._tlsTrustWarning = { at: Date.now(), remoteAddress: event.remoteAddress }
+    this._emitStatus()
   }
 
   private async _emitDevices(): Promise<void> {

@@ -141,6 +141,7 @@ export function MobileDevicesEditor() {
   const lanHostnameOrigin = status?.lanHostnameOrigin
   const certificate = status?.certificate
   const caDownloadUrl = status?.caDownloadUrl
+  const tlsTrustWarning = status?.tlsTrustWarning
   const selectedPairUrl = pairing.selectedUrl
 
   const openConfigJson = useCallback(() => {
@@ -413,6 +414,34 @@ export function MobileDevicesEditor() {
                         </span>
                       </>
                     )}
+                  </div>
+                )}
+
+                {tlsTrustWarning !== undefined && (
+                  <div className={styles['warning']} data-testid="mobile-gateway-tls-trust-warning">
+                    <TriangleAlert size={14} strokeWidth={1.75} />
+                    <span>
+                      <strong>
+                        {localize(
+                          'mobileDevices.gateway.tlsTrustWarningTitle',
+                          'The phone does not trust the gateway certificate',
+                        )}
+                      </strong>
+                      <br />
+                      {localize(
+                        'mobileDevices.gateway.tlsTrustWarning',
+                        'The last TLS handshake was rejected by the phone as certificate_unknown ({time}, from {address}). This usually means iOS lost the certificate exception, or a home-screen app cannot show the certificate warning.',
+                        {
+                          time: formatTimestamp(tlsTrustWarning.at),
+                          address: tlsTrustWarning.remoteAddress,
+                        },
+                      )}
+                      <br />
+                      {localize(
+                        'mobileDevices.gateway.tlsTrustWarningHint',
+                        'Clear this site’s browsing data on the phone and reopen it to accept the certificate again. For a durable fix, switch to root certificate mode and fully trust the root CA on the phone.',
+                      )}
+                    </span>
                   </div>
                 )}
 

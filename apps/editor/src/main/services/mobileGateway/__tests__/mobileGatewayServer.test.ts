@@ -600,11 +600,13 @@ describe('mobile gateway server integration', () => {
         mode: 'root-ca',
       })
       expect(certificate.ca).toBeDefined()
+      const onDiagnostic = vi.fn()
       const gateway = await startGateway({
         tls: { cert: certificate.cert, key: certificate.key },
         caCertificate: certificate.ca!.cert,
+        onDiagnostic,
       })
-      return { gateway, certificate, ca: certificate.ca! }
+      return { gateway, certificate, ca: certificate.ca!, onDiagnostic }
     }
 
     it('serves the root CA as DER and hides it without root-ca mode', async () => {
@@ -635,7 +637,7 @@ describe('mobile gateway server integration', () => {
     })
 
     it('verifies a WSS connection against the downloaded root CA', async () => {
-      const { gateway, certificate } = await startRootCaGateway()
+      const { gateway, certificate, onDiagnostic } = await startRootCaGateway()
       const port = gateway.server.port
       const url = `wss://127.0.0.1:${port}/ws`
 
@@ -649,6 +651,14 @@ describe('mobile gateway server integration', () => {
           ws.once('error', reject)
         }),
       ).rejects.toThrow()
+
+      // The rejected handshake must reach the host service, which turns it into
+      // the settings-page warning; the phone itself cannot report this layer.
+      await vi.waitFor(() => {
+        expect(onDiagnostic).toHaveBeenCalledWith(
+          expect.objectContaining({ action: 'tls_handshake_failed' }),
+        )
+      })
 
       const pairResponse = await httpsRequestBuffer(port, '/api/pair', {
         method: 'POST',
@@ -720,7 +730,9 @@ describe('mobile gateway server integration', () => {
     const closed = waitClose(first)
     first.close()
     await closed
-    const next = await connectWs(gateway.base)
+    // The server removes the socket on its own `close` event, which can land a
+    // tick after the client's under load; poll instead of assuming ordering.
+    const next = await vi.waitFor(async () => connectWs(gateway.base))
     cleanup.push(() => next.terminate())
   })
 

@@ -18,6 +18,7 @@ import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
 import { isSessionWorking } from '../session/sessionStatus.js'
 import { collectDirtyWindowIds } from '../inbox/workspaceDirty.js'
+import { useShellCacheFallback } from '../shellCache.js'
 import { useEffect, useState } from 'react'
 
 export interface InboxPageProps {
@@ -46,6 +47,8 @@ export function InboxPage({
   const inbox = useStore(client.getInboxStore())
   const socketState = useStore(client.getSocketStateStore())
   const diagnosis = useStore(client.getConnectionDiagnosisStore())
+  const shellFromCache = useShellCacheFallback()
+  const [cacheNoticeDismissed, setCacheNoticeDismissed] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [dirtyWindowIds, setDirtyWindowIds] = useState<ReadonlySet<number>>(() => new Set())
   const [sessionAction, setSessionAction] = useState<
@@ -110,6 +113,14 @@ export function InboxPage({
       />
       <main className="inbox-page__body">
         {notice !== undefined && <NoticeBar text={notice} onDismiss={onDismissNotice} />}
+        {shellFromCache && !cacheNoticeDismissed && (
+          <div data-testid="shell-cache-notice">
+            <NoticeBar
+              text={strings.shellFromCacheNotice}
+              onDismiss={() => setCacheNoticeDismissed(true)}
+            />
+          </div>
+        )}
         {inbox.hasSnapshot && socketState !== 'connected' && (
           <div className="offline-banner" role="status">
             <span className="offline-banner__dot" aria-hidden="true" />

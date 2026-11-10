@@ -20,9 +20,16 @@ interface LoadedWorker {
   }
 }
 
-function loadWorker(): LoadedWorker {
+interface LoadOptions {
+  readonly fetchImpl?: ReturnType<typeof vi.fn>
+  readonly cachedResponse?: unknown
+  readonly clients?: ReadonlyArray<{ postMessage: ReturnType<typeof vi.fn> }>
+}
+
+function loadWorker(options: LoadOptions = {}): LoadedWorker {
   const listeners = new Map<string, Listener>()
   const shown: Array<{ title: string; options: Record<string, unknown> }> = []
+  const clients = options.clients ?? []
   const self = {
     location: { origin: 'https://pc.example.ts.net' },
     addEventListener: (type: string, listener: Listener) => listeners.set(type, listener),
@@ -33,20 +40,25 @@ function loadWorker(): LoadedWorker {
       }),
     },
     clients: {
-      matchAll: vi.fn(async () => [] as unknown[]),
+      matchAll: vi.fn(async () => clients as unknown[]),
       openWindow: vi.fn(async () => undefined),
       claim: vi.fn(async () => undefined),
     },
   }
+  const cache = {
+    addAll: vi.fn(async () => undefined),
+    put: vi.fn(async () => undefined),
+    match: vi.fn(async () => options.cachedResponse),
+  }
   const caches = {
-    open: vi.fn(async () => ({ addAll: vi.fn(), put: vi.fn(), match: vi.fn() })),
+    open: vi.fn(async () => cache),
     keys: vi.fn(async () => [] as string[]),
     delete: vi.fn(async () => true),
   }
   runInNewContext(SOURCE, {
     self,
     caches,
-    fetch: vi.fn(),
+    fetch: options.fetchImpl ?? vi.fn(),
     Response: { error: () => ({}) },
     URL,
   })
@@ -206,5 +218,73 @@ describe('mobile service worker push handling', () => {
     expect(worker.self.clients.openWindow).toHaveBeenCalledWith(
       'https://pc.example.ts.net/s/durable-1?focus=pending',
     )
+  })
+})
+
+describe('mobile service worker shell cache status', () => {
+  it('reports a fresh shell to a status query', () => {
+    const worker = loadWorker()
+    const source = { postMessage: vi.fn() }
+
+    worker.listeners.get('message')!({ data: { type: 'mobile-shell-status' }, source })
+
+    expect(source.postMessage).toHaveBeenCalledWith({
+      type: 'mobile-shell-status',
+      fromCache: false,
+      at: 0,
+    })
+  })
+
+  it('flags a navigation served from cache and answers later queries', async () => {
+    const client = { postMessage: vi.fn() }
+    const worker = loadWorker({
+      fetchImpl: vi.fn(async () => {
+        throw new TypeError('offline')
+      }),
+      cachedResponse: { body: 'cached shell' },
+      clients: [client],
+    })
+    const respondWith = vi.fn()
+
+    worker.listeners.get('fetch')!({
+      request: { url: 'https://pc.example.ts.net/', method: 'GET', mode: 'navigate' },
+      respondWith,
+    })
+
+    const response = respondWith.mock.calls[0]?.[0] as Promise<unknown>
+    await expect(response).resolves.toEqual({ body: 'cached shell' })
+    await vi.waitFor(() => {
+      expect(client.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'mobile-shell-from-cache' }),
+      )
+    })
+
+    const source = { postMessage: vi.fn() }
+    worker.listeners.get('message')!({ data: { type: 'mobile-shell-status' }, source })
+    expect(source.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'mobile-shell-status', fromCache: true }),
+    )
+  })
+
+  it('clears the flag after a successful shell fetch', async () => {
+    const worker = loadWorker({
+      fetchImpl: vi.fn(async () => ({ ok: true, clone: () => ({}) })),
+      cachedResponse: { body: 'cached shell' },
+    })
+    const respondWith = vi.fn()
+
+    worker.listeners.get('fetch')!({
+      request: { url: 'https://pc.example.ts.net/', method: 'GET', mode: 'navigate' },
+      respondWith,
+    })
+    await (respondWith.mock.calls[0]?.[0] as Promise<unknown>)
+
+    const source = { postMessage: vi.fn() }
+    worker.listeners.get('message')!({ data: { type: 'mobile-shell-status' }, source })
+    expect(source.postMessage).toHaveBeenCalledWith({
+      type: 'mobile-shell-status',
+      fromCache: false,
+      at: 0,
+    })
   })
 })

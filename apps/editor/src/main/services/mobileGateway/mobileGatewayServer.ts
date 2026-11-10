@@ -79,6 +79,13 @@ export interface MobileGatewayTlsOptions {
   readonly key: string
 }
 
+/** Failures that happen before HTTP request routing (TLS / WS upgrade). */
+export interface MobileGatewayDiagnosticEvent {
+  readonly action: 'tls_handshake_failed' | 'upgrade_rejected'
+  readonly remoteAddress: string
+  readonly detail: string
+}
+
 export interface MobileGatewayServerOptions {
   readonly host: string
   readonly port: number
@@ -96,6 +103,8 @@ export interface MobileGatewayServerOptions {
    * install the trust anchor; never exposed when `tls` is absent.
    */
   readonly caCertificate?: string
+  /** Notified for failures recorded in the audit; the host service turns them into UI state. */
+  readonly onDiagnostic?: (event: MobileGatewayDiagnosticEvent) => void
   readonly helloTimeoutMs?: number
   readonly heartbeatIntervalMs?: number
   readonly heartbeatTimeoutMs?: number
@@ -1145,6 +1154,11 @@ export class MobileGatewayServer {
     }
     this._diagnosticAuditAt.set(key, now)
     this._options.logger.warn(`${action} ${normalized} remote=${remoteAddress}`)
+    try {
+      this._options.onDiagnostic?.({ action, remoteAddress, detail: normalized })
+    } catch (err) {
+      this._options.logger.warn(`mobile gateway diagnostic listener failed (${action})`, err)
+    }
     void this._options.audit
       .append({ remoteAddress, action, result: 'failure', detail: normalized })
       .catch((err) =>

@@ -223,6 +223,23 @@ describe('MobileDevicesEditor', () => {
     expect(screen.getByTestId('mobile-gateway-insecure')).toBeTruthy()
   })
 
+  it('warns when a phone rejected the gateway certificate', async () => {
+    renderEditor({
+      status: {
+        ...RUNNING_STATUS,
+        bind: 'lan',
+        listenAddress: '192.0.2.20:47321',
+        origins: ['https://192.0.2.20:47321'],
+        tlsTrustWarning: { at: Date.UTC(2026, 0, 3, 9, 0), remoteAddress: '192.0.2.30' },
+      },
+    })
+    await screen.findByTestId('mobile-gateway-state')
+
+    const warning = screen.getByTestId('mobile-gateway-tls-trust-warning')
+    expect(warning.textContent).toContain('certificate_unknown')
+    expect(warning.textContent).toContain('192.0.2.30')
+  })
+
   it('updates the gateway config through the service', async () => {
     const { gateway } = renderEditor()
     await screen.findByTestId('mobile-gateway-state')

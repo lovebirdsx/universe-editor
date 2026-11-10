@@ -628,11 +628,17 @@ Tailscale/WSL 等多个地址，PC 设置页会把它标为 iOS 可选备用地�
 - HTTPS server 监听 `tlsClientError`，升级拒绝路径（Host/Origin/path/连接数/限流）统一审计
   `tls_handshake_failed` / `upgrade_rejected`；同一 remote + 原因 60 秒内只写一条审计，其余降为
   debug 日志，避免重试刷盘。`detail` 截断到 240 字符（TLS 错误可能带证书链）。
+- `onDiagnostic` 把审计事件回传给 `MobileGatewayMainService`；证书拒绝（`certificate_unknown` /
+  alert 46）且来源不是本机时，`MobileGatewayStatus.tlsTrustWarning` 带上时间与来源，设置页显示
+  「手机未信任当前证书」及处理建议。**这一层失败没有 HTTP 请求，只有 PC 侧能看到**；手机可能被
+  旧缓存页面困住，永远显示「离线」。
 - 手机 `MobileSocket` 暴露 `onReconnectAttempt`（`hello_ok` 归零）与 `retryNow()`；`MobileClient`
   在第 3 次连续重连后探测 `/api/health`（最小间隔 15s，成功连接即清空），并暴露
   `retryConnection()` / `retryDiagnosis()`。探测结果是 HTTP 层分类（`ok` / `forbidden` /
   `not-found` / `http-error` / `invalid-response` / `network-error` / `protocol-mismatch`），UI 据此
   给出可执行提示。迟到的探测结果用连接代际号丢弃，避免重连成功后又被旧结果覆盖。
+  `network-error` 同时覆盖「离线」与「TLS 在 HTTP 之前被拒」两种情况，文案提示清除网站数据 /
+  无痕窗口 / 根证书模式。
 
 **WSL2**：
 
@@ -758,6 +764,13 @@ localStorage，不走协议。
 | `apps/editor/src/main/services/mobileGateway/pushEndpoint.ts` | 推送服务主机允许列表 |
 | `apps/mobile/src/notifications/pushNotifications.ts` | 能力探测、用户手势授权、`PushManager.subscribe` |
 | `apps/mobile/public/sw.js` | `push` 展示与 `notificationclick` 深链 |
+
+**Service Worker 缓存回退标记**：`sw.js` 的导航 `networkFirst` 在请求失败回退缓存时记录时间戳，
+并向所有窗口广播 `mobile-shell-from-cache`；页面可用 `mobile-shell-status` 查询（`fromCache` /
+`at`），`InboxPage` 据此显示「当前页面来自缓存」。这条提示解决的是「手机丢失证书信任 → 导航在
+TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线，且 PC 端升级无法到达手机」的死循环。
+真实案例：iPhone 的 TLS 握手被本机以 `certificate_unknown` 拒绝，浏览器清除网站数据并重新接受
+证书后恢复；期间 PC 审计只有 `tls_handshake_failed`，没有 `hello`。
 
 **机器本地配置实现位置**：
 

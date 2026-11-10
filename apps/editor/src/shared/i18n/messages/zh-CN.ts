@@ -85,6 +85,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.gateway.caFingerprint': '根证书指纹（在手机上安装此项）',
   'mobileDevices.gateway.caFingerprintHint': '在手机上安装一次根证书；叶证书续签后无需重新配对。',
   'mobileDevices.gateway.leafFingerprint': '叶证书指纹（浏览器警告中显示）',
+  'mobileDevices.gateway.tlsTrustWarningTitle': '手机未信任当前证书',
+  'mobileDevices.gateway.tlsTrustWarning':
+    '记录到手机以 certificate_unknown 拒绝 TLS 握手（{time}，来源 {address}）。常见于 iOS 丢失证书信任例外，或从主屏幕应用打开时无法接受证书警告。',
+  'mobileDevices.gateway.tlsTrustWarningHint':
+    '在手机上清除该网站的浏览数据后重新打开并接受证书；长期使用建议切换为根证书模式，并在手机上完全信任根证书。',
   'mobileDevices.gateway.capabilities': '能力',
   'mobileDevices.gateway.capability.available': '可用',
   'mobileDevices.gateway.capability.installable': '可安装为应用',

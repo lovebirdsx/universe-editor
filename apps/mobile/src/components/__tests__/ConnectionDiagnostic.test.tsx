@@ -35,6 +35,8 @@ describe('ConnectionDiagnostic', () => {
     expect(screen.getByText(strings.connectionDiagnosticUnreachable(ORIGIN))).toBeTruthy()
     expect(screen.getByTestId('connection-diagnostic-origin').textContent).toContain(ORIGIN)
     expect(screen.getByText(strings.connectionDiagnosticHintLocalNetwork)).toBeTruthy()
+    expect(screen.getByText(strings.connectionDiagnosticHintClearSiteData)).toBeTruthy()
+    expect(screen.getByText(strings.connectionDiagnosticHintRootCa)).toBeTruthy()
 
     fireEvent.click(screen.getByTestId('connection-diagnostic-retry'))
     expect(onRetryConnection).toHaveBeenCalledTimes(1)

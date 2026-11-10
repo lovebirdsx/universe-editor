@@ -40,6 +40,8 @@ function copyFor(diagnosis: ConnectionDiagnosis): DiagnosisCopy {
           strings.connectionDiagnosticHintVpn,
           strings.connectionDiagnosticHintGateway,
           strings.connectionDiagnosticHintCertificate,
+          strings.connectionDiagnosticHintClearSiteData,
+          strings.connectionDiagnosticHintRootCa,
         ],
         canRetryConnection: true,
         canRefresh: false,
@@ -84,8 +86,9 @@ function copyFor(diagnosis: ConnectionDiagnosis): DiagnosisCopy {
 
 /**
  * Explains why the WebSocket keeps failing. The probe behind `diagnosis` hits
- * the same origin over HTTP, so "network-error" means the phone never reached
- * the PC, while "ok" means only the TLS/WS handshake is failing.
+ * the same origin over HTTP, so "network-error" means the HTTP probe never got a
+ * response — offline, or the TLS handshake was rejected before HTTP — while
+ * "ok" means only the WebSocket handshake is failing.
  */
 export function ConnectionDiagnostic({
   diagnosis,

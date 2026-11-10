@@ -108,6 +108,8 @@ export const strings = {
   inboxOfflineBanner: '与 PC 的连接已断开，正在重连。列表可能不是最新。',
   inboxVersionMismatch: '手机端与 PC 版本不一致，请刷新页面。',
   inboxRefresh: '刷新页面',
+  shellFromCacheNotice:
+    '当前页面来自缓存，可能不是最新版本。若一直显示离线，请清除该网站的浏览数据后重新打开。',
 
   connectionDiagnosticTitle: '连接诊断',
   connectionDiagnosticOrigin: '当前地址',
@@ -123,6 +125,10 @@ export const strings = {
   connectionDiagnosticHintGateway:
     'PC 上「手机设备」里的网关仍在运行，Windows 防火墙允许专用网络。',
   connectionDiagnosticHintCertificate: '浏览器提示证书不受信任时，先在 Safari 中接受证书。',
+  connectionDiagnosticHintClearSiteData:
+    '页面能打开但一直离线时，可能运行的是旧缓存：清除该网站的浏览数据（或用无痕窗口）后重新打开并接受证书。',
+  connectionDiagnosticHintRootCa:
+    '长期使用建议在 PC 设置页切换为根证书模式，并在手机上完全信任根证书。',
   connectionDiagnosticReachable: '已到达 PC，但 WebSocket 握手失败',
   connectionDiagnosticReachableBody:
     'HTTP 已连通，地址和网络基本正常。问题多半在证书信任或 WebSocket：',
