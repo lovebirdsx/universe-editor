@@ -185,6 +185,7 @@ function makeWindowsStub(open: readonly IOpenWindowInfo[] = []): WindowsStub {
     async openWindow(folder?: URI) {
       openWindowCalls.push(folder)
     },
+    async reportShutdownPromptShown() {},
     async quit() {},
   } as WindowsStub
 }

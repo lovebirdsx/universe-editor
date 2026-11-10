@@ -223,7 +223,11 @@ function makeOpts() {
       docs: {} as never,
       performance: {} as never,
       usage: {} as never,
-      sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} } as never,
+      sessionSwitcher: {
+        registerWindow: () => {},
+        unregisterWindow: () => {},
+        getAllSessions: vi.fn().mockResolvedValue([]),
+      } as never,
       configLocation: {
         onDidChangeConfigDir: () => ({ dispose: () => {} }),
         currentDir: '',
@@ -274,6 +278,12 @@ function makeService(opts = makeOpts()): WindowMainServiceInstance {
   const svc = new WindowMainService(opts)
   openServices.push(svc)
   return svc
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((r) => (resolve = r))
+  return { promise, resolve }
 }
 
 describe('WindowMainService', () => {
@@ -664,14 +674,264 @@ describe('WindowMainService', () => {
     expect(confirmed).toBe(true)
     expect(getAllSessions).toHaveBeenCalledTimes(1)
     expect(requestingLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
-      runningSessionCount: 1,
+      runningSessions: {
+        promptWindowCount: 0,
+        otherWindows: [{ workspaceName: 'background', count: 1 }],
+      },
+      promptAckId: expect.any(Number),
     })
     expect(backgroundLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
       skipRunningSessionPrompt: true,
+      promptAckId: expect.any(Number),
     })
     expect(requestingLifecycle.confirmShutdown.mock.invocationCallOrder[0]).toBeLessThan(
       backgroundLifecycle.confirmShutdown.mock.invocationCallOrder[0]!,
     )
+  })
+
+  it('routes a File -> Exit quit to the initiating window', async () => {
+    const otherLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    const requestingLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    vi.mocked(bootstrapWindowIpc)
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: otherLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: requestingLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+    const opts = makeOpts()
+    const getAllSessions = vi.fn().mockResolvedValue([
+      {
+        windowId: 2,
+        workspaceName: 'requesting',
+        sessionId: 'own-running',
+        title: 'Own',
+        status: 'running',
+        agentId: 'claude',
+      },
+      {
+        windowId: 1,
+        workspaceName: 'other',
+        sessionId: 'other-background',
+        title: 'Other',
+        status: 'background',
+        agentId: 'claude',
+      },
+      {
+        windowId: 2,
+        workspaceName: 'requesting',
+        sessionId: 'own-idle',
+        title: 'Idle',
+        status: 'idle',
+        agentId: 'claude',
+      },
+    ])
+    Object.assign(opts.appServices.sessionSwitcher, { getAllSessions })
+    const svc = makeService(opts)
+    await svc.createWindow()
+    const requestingWindowId = await svc.createWindow()
+
+    svc.prepareQuit(requestingWindowId)
+    await expect(svc.confirmQuitFromPendingRequest()).resolves.toBe(true)
+
+    expect(requestingLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
+      runningSessions: {
+        promptWindowCount: 1,
+        otherWindows: [{ workspaceName: 'other', count: 1 }],
+      },
+      promptAckId: expect.any(Number),
+    })
+    expect(otherLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
+      skipRunningSessionPrompt: true,
+      promptAckId: expect.any(Number),
+    })
+  })
+
+  it('falls back to the focused window when no quit initiator is recorded', async () => {
+    const firstLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    const focusedLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    vi.mocked(bootstrapWindowIpc)
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: firstLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: focusedLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+    const svc = makeService()
+    await svc.createWindow()
+    const focusedWindowId = await svc.createWindow()
+    svc.focusWindow(focusedWindowId)
+
+    await expect(svc.confirmQuitFromPendingRequest()).resolves.toBe(true)
+
+    expect(focusedLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
+      runningSessions: { promptWindowCount: 0, otherWindows: [] },
+      promptAckId: expect.any(Number),
+    })
+    expect(firstLifecycle.confirmShutdown).toHaveBeenCalledWith(ShutdownReason.Quit, {
+      skipRunningSessionPrompt: true,
+      promptAckId: expect.any(Number),
+    })
+  })
+
+  it('reuses the in-flight confirmation for repeated quit requests', async () => {
+    const gate = deferred<boolean>()
+    const lifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn(() => gate.promise),
+    }
+    vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+      disposable: combinedDisposable(),
+      rendererLifecycle: lifecycle,
+      rendererSessions: {} as never,
+      rendererMobileBridge: {} as never,
+    }))
+    const opts = makeOpts()
+    const getAllSessions = vi.fn().mockResolvedValue([])
+    Object.assign(opts.appServices.sessionSwitcher, { getAllSessions })
+    const svc = makeService(opts)
+    const windowId = await svc.createWindow()
+
+    const first = svc.confirmQuit(windowId)
+    const second = svc.confirmQuit(windowId)
+    expect(second).toBe(first)
+    await vi.waitFor(() => expect(lifecycle.confirmShutdown).toHaveBeenCalledTimes(1))
+
+    gate.resolve(true)
+    await expect(first).resolves.toBe(true)
+    expect(getAllSessions).toHaveBeenCalledTimes(1)
+    expect(lifecycle.confirmShutdown).toHaveBeenCalledTimes(1)
+  })
+
+  it('blocks window closes while a quit confirmation is in flight', async () => {
+    const gate = deferred<boolean>()
+    const lifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn(() => gate.promise),
+    }
+    vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+      disposable: combinedDisposable(),
+      rendererLifecycle: lifecycle,
+      rendererSessions: {} as never,
+      rendererMobileBridge: {} as never,
+    }))
+    const svc = makeService()
+    const windowId = await svc.createWindow()
+
+    const pending = svc.confirmQuit(windowId)
+    await vi.waitFor(() => expect(lifecycle.confirmShutdown).toHaveBeenCalledTimes(1))
+
+    const preventDefault = vi.fn()
+    grabLastWindowCloseHandler()({ preventDefault })
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(lifecycle.confirmShutdown).toHaveBeenCalledTimes(1)
+
+    gate.resolve(true)
+    await expect(pending).resolves.toBe(true)
+  })
+
+  it('waits for the user decision after the renderer reports the prompt is shown', async () => {
+    const gate = deferred<boolean>()
+    let svc!: WindowMainServiceInstance
+    const lifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn(
+        (_reason: ShutdownReason, context?: { promptAckId?: number }) => {
+          const windowId = svc.getWindows()[0]!.id
+          svc.reportShutdownPromptShown(windowId, context!.promptAckId!)
+          return gate.promise
+        },
+      ),
+    }
+    vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+      disposable: combinedDisposable(),
+      rendererLifecycle: lifecycle,
+      rendererSessions: {} as never,
+      rendererMobileBridge: {} as never,
+    }))
+    svc = makeService()
+    const windowId = await svc.createWindow()
+
+    vi.useFakeTimers()
+    try {
+      const pending = svc.confirmQuit(windowId)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(lifecycle.confirmShutdown).toHaveBeenCalledTimes(1)
+
+      let settled = false
+      void pending.then(() => (settled = true))
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(settled).toBe(false)
+
+      gate.resolve(false)
+      await expect(pending).resolves.toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('cancels the quit when the initiating window disappears and another remains', async () => {
+    const gate = deferred<boolean>()
+    const otherLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn().mockResolvedValue(true),
+    }
+    const requestingLifecycle = {
+      _serviceBrand: undefined,
+      confirmShutdown: vi.fn(() => gate.promise),
+    }
+    vi.mocked(bootstrapWindowIpc)
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: otherLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      .mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: requestingLifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+    const svc = makeService()
+    await svc.createWindow()
+    const requestingWindowId = await svc.createWindow()
+
+    const pending = svc.confirmQuit(requestingWindowId)
+    await vi.waitFor(() => expect(requestingLifecycle.confirmShutdown).toHaveBeenCalledTimes(1))
+
+    const requestingWindow = vi.mocked(BrowserWindow).mock.results[1]?.value as {
+      isDestroyed: ReturnType<typeof vi.fn>
+    }
+    requestingWindow.isDestroyed.mockReturnValue(true)
+    gate.resolve(true)
+
+    await expect(pending).resolves.toBe(false)
+    expect(otherLifecycle.confirmShutdown).not.toHaveBeenCalled()
   })
 
   it('marks only the first created window as the current session first window', async () => {
@@ -1180,7 +1440,7 @@ describe('WindowMainService', () => {
 
       expect(vetoingLifecycle.confirmShutdown).toHaveBeenCalledWith(
         ShutdownReason.CloseWindow,
-        undefined,
+        { promptAckId: expect.any(Number) },
       )
       expect(windowAt(0).close).not.toHaveBeenCalled()
       expect(windowAt(1).close).not.toHaveBeenCalled()

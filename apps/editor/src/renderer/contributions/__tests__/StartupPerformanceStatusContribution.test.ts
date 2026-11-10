@@ -48,6 +48,7 @@ function windowsStub(isFirst = true): WindowsStub {
     getLastRenderCrash: vi.fn(() => Promise.resolve(null)),
     focusWindow: vi.fn(() => Promise.resolve()),
     openWindow: vi.fn(() => Promise.resolve()),
+    reportShutdownPromptShown: vi.fn(() => Promise.resolve()),
     quit: vi.fn(() => Promise.resolve()),
   } as WindowsStub
 }

@@ -73,7 +73,13 @@ export class MainWindowsService implements IWindowsService, IDisposable {
   }
 
   quit(): Promise<void> {
+    this._windows.prepareQuit(this._windowId)
     app.quit()
+    return Promise.resolve()
+  }
+
+  reportShutdownPromptShown(promptAckId: number): Promise<void> {
+    this._windows.reportShutdownPromptShown(this._windowId, promptAckId)
     return Promise.resolve()
   }
 

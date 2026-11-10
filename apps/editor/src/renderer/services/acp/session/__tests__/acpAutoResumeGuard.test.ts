@@ -20,6 +20,7 @@ function stubWindows(crash: IWindowRenderCrashInfo | null | Error): IWindowsServ
       crash instanceof Error ? async () => Promise.reject(crash) : async () => crash,
     focusWindow: async () => {},
     openWindow: async () => {},
+    reportShutdownPromptShown: async () => {},
     quit: async () => {},
   }
 }

@@ -2260,9 +2260,20 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'shutdown.action.quit': '退出',
   'shutdown.action.reload': '重启编辑器',
   'shutdown.action.switchWorkspace': '切换工作区',
-  'shutdown.runningSessions.continue': '继续',
+  'shutdown.runningSessions.confirm.closeWindow': '关闭窗口',
+  'shutdown.runningSessions.confirm.quit': '退出',
+  'shutdown.runningSessions.confirm.reload': '重启编辑器',
+  'shutdown.runningSessions.confirm.switchWorkspace': '切换工作区',
   'shutdown.runningSessions.detail': '是否继续？',
-  'shutdown.runningSessions.message': '{count} 个会话正在运行，{action}将中断它们',
+  'shutdown.runningSessions.detail.withOtherWindows': '其它窗口：\n{list}\n\n是否继续？',
+  'shutdown.runningSessions.message.both':
+    '本窗口有 {ownCount} 个会话正在运行，其它 {windowCount} 个窗口中另有 {otherCount} 个，{action}将中断它们',
+  'shutdown.runningSessions.message.otherWindows':
+    '其它 {windowCount} 个窗口中另有 {count} 个会话正在运行，{action}将中断它们',
+  'shutdown.runningSessions.message.thisWindow':
+    '本窗口有 {count} 个会话正在运行，{action}将中断它们',
+  'shutdown.runningSessions.otherWindowEntry': '{name}（{count} 个会话）',
+  'shutdown.runningSessions.untitledWindow': '未命名窗口',
   'window.untitled': '未命名（窗口 {id}）',
   'workspace.openFolder.notDirectory.title': '路径不是文件夹',
   'workspace.openFolder.notDirectory.detail': '路径“{0}”不是文件夹。',

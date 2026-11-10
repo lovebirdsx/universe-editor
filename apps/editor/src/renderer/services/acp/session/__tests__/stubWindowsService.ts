@@ -18,6 +18,7 @@ export function stubWindowsService(crash?: IWindowRenderCrashInfo | null | Error
       crash instanceof Error ? async () => Promise.reject(crash) : async () => crash ?? null,
     focusWindow: async () => {},
     openWindow: async () => {},
+    reportShutdownPromptShown: async () => {},
     quit: async () => {},
   }
 }

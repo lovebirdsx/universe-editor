@@ -52,6 +52,7 @@ import { deriveWindowRemoteAuthority } from './windowRemoteAuthority.js'
 import { WindowSessionStore } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
 import { AuxiliaryWindowsMainService } from './auxiliaryWindowsMainService.js'
+import { summarizeRunningSessionsForPrompt } from '../sessionSwitcher/sessionSwitcherMainService.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { processLifecycle } from '../process/processLifecycle.js'
 import { windowOwner } from '@universe-editor/node-services'
@@ -107,6 +108,14 @@ export interface IWindowMainService {
   closeWindowsForRemoteAuthority(authority: string): Promise<boolean>
   captureSessionForQuit(): Promise<void>
   confirmQuit(requestingWindowId?: number): Promise<boolean>
+  /** Remember which window asked to quit; consumed by before-quit. */
+  prepareQuit(windowId: number): void
+  /** Confirm the pending quit initiator (falling back to the focused window), then commit. */
+  confirmQuitFromPendingRequest(): Promise<boolean>
+  /** Whether a quit confirmation is currently in flight. */
+  isQuitConfirmationPending(): boolean
+  /** Renderer reports its shutdown prompt is on screen, switching the wait to user-decision mode. */
+  reportShutdownPromptShown(windowId: number, promptAckId: number): void
   isQuitConfirmed(): boolean
   dispose(): void
 }
@@ -151,6 +160,12 @@ export interface WindowMainServiceOptions {
 // can't stall quit indefinitely. On timeout the veto is released (app proceeds).
 const CONFIRM_SHUTDOWN_TIMEOUT_MS = 10_000
 
+// Once a renderer reports its confirm prompt is on screen, the remaining wait is
+// the user's decision, not renderer responsiveness. This backstop only covers a
+// renderer that dies after showing the prompt, so it must be long enough not to
+// yank the prompt away from someone who is reading it.
+const SHUTDOWN_PROMPT_DECISION_TIMEOUT_MS = 5 * 60_000
+
 // Under WSLg (Wayland + software rendering, no /dev/dri) the compositor may never
 // commit a first frame on a warm relaunch, so ready-to-show does not fire; the
 // did-finish-load listener below covers that. Should both signals be lost, force-show
@@ -183,6 +198,17 @@ export class WindowMainService implements IWindowMainService {
   /** Set once a quit has been confirmed (renderer cleared, or a restart path
    *  already confirmed) so before-quit doesn't prompt a second time. */
   private _quitConfirmed = false
+  /** Window that initiated the current quit (prepareQuit), consumed by before-quit. */
+  private _pendingQuitRequesterId: number | undefined
+  /** Single-flight quit confirmation shared by Exit, Cmd+Q and update installs. */
+  private _quitConfirmation: Promise<boolean> | undefined
+  /** Monotonic ids for renderer prompt acknowledgements. */
+  private _nextPromptAckId = 0
+  /** Prompt acknowledgements waiting for the renderer to report the modal is visible. */
+  private readonly _promptAckCallbacks = new Map<
+    number,
+    { readonly windowId: number; onShown(): void }
+  >()
   /** Window ids cleared to close — set after a confirmed close/quit so the
    *  close handler bypasses the renderer veto round-trip on the second pass. */
   private readonly _allowClose = new Set<number>()
@@ -615,6 +641,12 @@ export class WindowMainService implements IWindowMainService {
         disposables.dispose()
         return
       }
+      if (this._quitConfirmation !== undefined) {
+        // A quit decision is in flight; the window set is an input to it, so a
+        // close here would either change the snapshot or start a second prompt.
+        e.preventDefault()
+        return
+      }
       e.preventDefault()
       void this._confirmAndClose(entry)
     })
@@ -1016,58 +1048,139 @@ export class WindowMainService implements IWindowMainService {
   }
 
   /**
-   * Ask the renderer whether the app may quit. Polls every window's lifecycle
-   * veto chain; a single veto aborts the quit. On success, marks every window
-   * as cleared so their close handlers bypass the per-window confirm.
+   * Ask the renderer whether the app may quit. The initiating window owns the
+   * one application-wide running-session prompt; every other window is only
+   * asked about its own non-session vetos. A single veto aborts the quit. On
+   * success, marks every window as cleared so their close handlers bypass the
+   * per-window confirm.
    */
-  async confirmQuit(requestingWindowId?: number): Promise<boolean> {
-    if (requestingWindowId !== undefined) {
-      const requestingWindow = this._windows.get(requestingWindowId)
-      if (requestingWindow && !requestingWindow.win.isDestroyed()) {
-        const sessions = await this._opts.appServices.sessionSwitcher.getAllSessions()
-        // 'background' = turn settled but run_in_background tasks still executing;
-        // quitting kills the agent process and that work with it, so count it.
-        const runningSessionCount = sessions.filter(
-          (session) => session.status === 'running' || session.status === 'background',
-        ).length
-        this._opts.logService
-          .createLogger({ id: 'window', name: 'Window' })
-          .info(
-            `confirmQuit requester=${requestingWindowId} runningSessions=${runningSessionCount}`,
-          )
-        if (
-          !(await this._canProceed(
-            requestingWindowId,
-            requestingWindow.rendererLifecycle,
-            ShutdownReason.Quit,
-            {
-              runningSessionCount,
-            },
-          ))
-        ) {
-          return false
-        }
-        for (const [windowId, { win, rendererLifecycle }] of this._windows) {
-          if (windowId === requestingWindowId || win.isDestroyed()) continue
-          if (
-            !(await this._canProceed(windowId, rendererLifecycle, ShutdownReason.Quit, {
-              skipRunningSessionPrompt: true,
-            }))
-          ) {
-            return false
-          }
-        }
-        this.markQuitConfirmed()
-        return true
-      }
+  confirmQuit(requestingWindowId?: number): Promise<boolean> {
+    if (this._quitConfirmed) return Promise.resolve(true)
+    if (this._quitConfirmation !== undefined) return this._quitConfirmation
+    // A direct caller (update install) owns this confirmation; drop a stale
+    // Exit requester so it cannot leak into a later before-quit.
+    this._pendingQuitRequesterId = undefined
+    const run = this._confirmQuit(requestingWindowId)
+    this._quitConfirmation = run
+    void run.then(
+      () => this._clearQuitConfirmation(run),
+      () => this._clearQuitConfirmation(run),
+    )
+    return run
+  }
+
+  /** Remember which window asked to quit; consumed by before-quit. */
+  prepareQuit(windowId: number): void {
+    if (!this._quitConfirmed && this._quitConfirmation === undefined) {
+      this._pendingQuitRequesterId = windowId
+    }
+  }
+
+  confirmQuitFromPendingRequest(): Promise<boolean> {
+    const requester = this._pendingQuitRequesterId
+    this._pendingQuitRequesterId = undefined
+    return this.confirmQuit(requester)
+  }
+
+  isQuitConfirmationPending(): boolean {
+    return this._quitConfirmation !== undefined
+  }
+
+  /** Switch the pending confirmation for `windowId` into user-decision mode. */
+  reportShutdownPromptShown(windowId: number, promptAckId: number): void {
+    const entry = this._promptAckCallbacks.get(promptAckId)
+    if (!entry || entry.windowId !== windowId) return
+    entry.onShown()
+  }
+
+  private _clearQuitConfirmation(run: Promise<boolean>): void {
+    if (this._quitConfirmation === run) this._quitConfirmation = undefined
+  }
+
+  private async _confirmQuit(requestingWindowId?: number): Promise<boolean> {
+    const requester = this._resolveQuitRequester(requestingWindowId)
+    if (!requester) {
+      this.markQuitConfirmed()
+      return true
     }
 
-    for (const { win, rendererLifecycle } of this._windows.values()) {
-      if (win.isDestroyed()) continue
-      if (!(await this._canProceed(win.id, rendererLifecycle, ShutdownReason.Quit))) return false
+    const sessions = await this._opts.appServices.sessionSwitcher.getAllSessions()
+    if (requester.win.isDestroyed()) {
+      return this._resolveQuitAfterRequesterGone()
+    }
+    const runningSessions = summarizeRunningSessionsForPrompt(sessions, requester.win.id)
+    const otherSessionCount = runningSessions.otherWindows.reduce((n, w) => n + w.count, 0)
+    this._opts.logService
+      .createLogger({ id: 'window', name: 'Window' })
+      .info(
+        `confirmQuit requester=${requester.win.id} ownSessions=${runningSessions.promptWindowCount} ` +
+          `otherWindows=${runningSessions.otherWindows.length} otherSessions=${otherSessionCount}`,
+      )
+
+    if (
+      !(await this._canProceed(
+        requester.win.id,
+        requester.rendererLifecycle,
+        ShutdownReason.Quit,
+        { runningSessions },
+      ))
+    ) {
+      return false
+    }
+    // The requester owned the application-wide decision; if it vanished while
+    // the user was deciding, do not commit on its behalf.
+    if (requester.win.isDestroyed()) {
+      return this._resolveQuitAfterRequesterGone()
+    }
+
+    for (const [windowId, { win, rendererLifecycle }] of this._windows) {
+      if (windowId === requester.win.id || win.isDestroyed()) continue
+      if (
+        !(await this._canProceed(windowId, rendererLifecycle, ShutdownReason.Quit, {
+          skipRunningSessionPrompt: true,
+        }))
+      ) {
+        return false
+      }
     }
     this.markQuitConfirmed()
     return true
+  }
+
+  /** Explicit initiator if alive, else the focused window, else any live window. */
+  private _resolveQuitRequester(requestingWindowId?: number): WindowEntry | undefined {
+    if (this._windows.size === 0) return undefined
+    if (requestingWindowId !== undefined) {
+      const requested = this._windows.get(requestingWindowId)
+      if (requested && !requested.win.isDestroyed()) return requested
+    }
+    const focusedId = this.getFocusedWindowId()
+    if (focusedId !== null) {
+      const focused = this._windows.get(focusedId)
+      if (focused && !focused.win.isDestroyed()) return focused
+    }
+    for (const entry of this._windows.values()) {
+      if (!entry.win.isDestroyed()) return entry
+    }
+    return undefined
+  }
+
+  /**
+   * The requester disappeared while deciding. With other windows left, cancel
+   * so the user can retry; with none left, commit so the app does not linger
+   * with no windows.
+   */
+  private _resolveQuitAfterRequesterGone(): boolean {
+    if (this._hasLiveWindows()) return false
+    this.markQuitConfirmed()
+    return true
+  }
+
+  private _hasLiveWindows(): boolean {
+    for (const entry of this._windows.values()) {
+      if (!entry.win.isDestroyed()) return true
+    }
+    return false
   }
 
   isQuitConfirmed(): boolean {
@@ -1107,34 +1220,53 @@ export class WindowMainService implements IWindowMainService {
     // round-trip. The IPC channel only rejects on window teardown, so without a
     // timeout here the quit/close flow would hang silently forever. Bound the
     // wait and treat a non-answer as "release the veto" — an unresponsive
-    // renderer must not be able to block the app from quitting.
-    const confirm = rendererLifecycle.confirmShutdown(reason, context)
-    // If the timeout wins the race, a late rejection from the renderer (e.g. the
-    // channel disposed during window teardown) would surface as an unhandled
-    // rejection — the race no longer observes it.
-    void confirm.catch(() => undefined)
-    let timer: ReturnType<typeof setTimeout> | undefined
+    // renderer must not be able to block the app from quitting. Once the
+    // renderer reports the prompt is on screen, the wait is the user's decision.
+    const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
+    const promptAckId = ++this._nextPromptAckId
+    let firstTimer: ReturnType<typeof setTimeout> | undefined
+    let decisionTimer: ReturnType<typeof setTimeout> | undefined
+    let resolveDecisionDeadline!: (proceed: boolean) => void
+    const firstDeadline = new Promise<boolean>((resolve) => {
+      firstTimer = setTimeout(() => {
+        logger.warn(
+          `confirmShutdown timed out after ${CONFIRM_SHUTDOWN_TIMEOUT_MS}ms id=${windowId} reason=${reason}; proceeding`,
+        )
+        resolve(true)
+      }, CONFIRM_SHUTDOWN_TIMEOUT_MS)
+    })
+    const decisionDeadline = new Promise<boolean>((resolve) => {
+      resolveDecisionDeadline = resolve
+    })
+    this._promptAckCallbacks.set(promptAckId, {
+      windowId,
+      onShown: () => {
+        clearTimeout(firstTimer)
+        decisionTimer = setTimeout(() => {
+          logger.warn(
+            `shutdown prompt unanswered after ${SHUTDOWN_PROMPT_DECISION_TIMEOUT_MS}ms id=${windowId} reason=${reason}; proceeding`,
+          )
+          resolveDecisionDeadline(true)
+        }, SHUTDOWN_PROMPT_DECISION_TIMEOUT_MS)
+      },
+    })
+
     try {
-      return await Promise.race([
-        confirm,
-        new Promise<boolean>((resolve) => {
-          timer = setTimeout(() => {
-            this._opts.logService
-              .createLogger({ id: 'window', name: 'Window' })
-              .warn(
-                `confirmShutdown timed out after ${CONFIRM_SHUTDOWN_TIMEOUT_MS}ms id=${windowId} reason=${reason}; proceeding`,
-              )
-            resolve(true)
-          }, CONFIRM_SHUTDOWN_TIMEOUT_MS)
-        }),
-      ])
+      const confirm = rendererLifecycle.confirmShutdown(reason, { ...context, promptAckId })
+      // If a deadline wins the race, a late rejection from the renderer (e.g.
+      // the channel disposed during window teardown) would surface as an
+      // unhandled rejection — the race no longer observes it.
+      void confirm.catch(() => undefined)
+      return await Promise.race([confirm, firstDeadline, decisionDeadline])
     } catch {
       return true
     } finally {
       // The renderer answered (or the channel rejected) before the deadline:
-      // cancel the timer so it cannot fire later and log a phantom timeout for
-      // a round-trip that actually succeeded.
-      clearTimeout(timer)
+      // cancel the timers so they cannot fire later and log a phantom timeout
+      // for a round-trip that actually succeeded.
+      clearTimeout(firstTimer)
+      clearTimeout(decisionTimer)
+      this._promptAckCallbacks.delete(promptAckId)
     }
   }
 

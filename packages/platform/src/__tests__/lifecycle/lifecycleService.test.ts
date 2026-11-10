@@ -8,6 +8,7 @@ import {
   LifecycleService,
   ShutdownReason,
   runWhenPhase,
+  type RunningSessionsShutdownInfo,
 } from '../../lifecycle/lifecycleService.js'
 
 describe('LifecycleService', () => {
@@ -82,14 +83,26 @@ describe('LifecycleService', () => {
 
   it('passes shutdown confirmation context to participants', async () => {
     const svc = new LifecycleService()
-    let runningSessionCount: number | undefined
+    let runningSessions: RunningSessionsShutdownInfo | undefined
+    let promptAckId: number | undefined
     svc.onBeforeShutdown((e) => {
-      runningSessionCount = e.context?.runningSessionCount
+      runningSessions = e.context?.runningSessions
+      promptAckId = e.context?.promptAckId
     })
 
-    await svc.confirmBeforeShutdown(ShutdownReason.Quit, { runningSessionCount: 2 })
+    await svc.confirmBeforeShutdown(ShutdownReason.Quit, {
+      runningSessions: {
+        promptWindowCount: 1,
+        otherWindows: [{ workspaceName: 'other', count: 2 }],
+      },
+      promptAckId: 7,
+    })
 
-    expect(runningSessionCount).toBe(2)
+    expect(runningSessions).toEqual({
+      promptWindowCount: 1,
+      otherWindows: [{ workspaceName: 'other', count: 2 }],
+    })
+    expect(promptAckId).toBe(7)
   })
 
   it('shutdown() returns whether it was vetoed', async () => {

@@ -6,11 +6,13 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   SessionSwitcherMainService,
   createWindowScopedSessionSwitcher,
+  summarizeRunningSessionsForPrompt,
 } from '../sessionSwitcherMainService.js'
 import type {
   IRendererSessionsService,
   RendererSessionSummary,
   SessionStatusCounts,
+  SessionSummary,
 } from '../../../../shared/ipc/sessionSwitcher.js'
 
 function rendererStub(
@@ -162,5 +164,69 @@ describe('SessionSwitcherMainService', () => {
     await scoped1.reportSessionCounts({ running: 1, ask: 0 })
     await scoped2.reportSessionCounts({ running: 3, ask: 1 })
     expect(await scoped1.getSessionCounts()).toEqual({ running: 4, ask: 1 })
+  })
+})
+
+describe('summarizeRunningSessionsForPrompt', () => {
+  const summary = (
+    sessionId: string,
+    windowId: number,
+    workspaceName: string,
+    status: string,
+  ): SessionSummary => ({
+    sessionId,
+    windowId,
+    workspaceName,
+    title: sessionId,
+    status,
+    agentId: 'claude-code',
+  })
+
+  it('returns an empty breakdown when no session is running', () => {
+    expect(
+      summarizeRunningSessionsForPrompt(
+        [summary('a', 1, 'projA', 'idle'), summary('b', 2, 'projB', 'dormant')],
+        1,
+      ),
+    ).toEqual({ promptWindowCount: 0, otherWindows: [] })
+  })
+
+  it('counts running and background sessions, grouped by window', () => {
+    const breakdown = summarizeRunningSessionsForPrompt(
+      [
+        summary('own-running', 1, 'projA', 'running'),
+        summary('own-background', 1, 'projA', 'background'),
+        summary('own-idle', 1, 'projA', 'idle'),
+        summary('other-running', 2, 'projB', 'running'),
+        summary('other-ask', 2, 'projB', 'ask'),
+        summary('third-background', 3, 'projC', 'background'),
+      ],
+      1,
+    )
+
+    expect(breakdown).toEqual({
+      promptWindowCount: 2,
+      otherWindows: [
+        { workspaceName: 'projB', count: 1 },
+        { workspaceName: 'projC', count: 1 },
+      ],
+    })
+  })
+
+  it('sorts other windows by workspace name and keeps untitled windows', () => {
+    const breakdown = summarizeRunningSessionsForPrompt(
+      [
+        summary('b', 2, 'zeta', 'running'),
+        summary('a', 3, 'alpha', 'running'),
+        summary('u', 4, '', 'running'),
+      ],
+      1,
+    )
+
+    expect(breakdown.otherWindows).toEqual([
+      { workspaceName: '', count: 1 },
+      { workspaceName: 'alpha', count: 1 },
+      { workspaceName: 'zeta', count: 1 },
+    ])
   })
 })

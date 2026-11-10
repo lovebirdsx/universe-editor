@@ -882,8 +882,14 @@ app.on('before-quit', (e) => {
   // running sessions can be guarded. Veto cancels the quit entirely.
   mainLogger.info('before-quit confirm')
   e.preventDefault()
+  if (windowMainService.isQuitConfirmationPending()) {
+    // A second quit event (repeated Exit / Cmd+Q) must not start a parallel
+    // confirmation and stack another prompt.
+    mainLogger.info('before-quit confirmation already in flight')
+    return
+  }
   void (async () => {
-    const ok = await windowMainService.confirmQuit()
+    const ok = await windowMainService.confirmQuitFromPendingRequest()
     if (!ok) {
       mainLogger.info('quit vetoed by renderer')
       return

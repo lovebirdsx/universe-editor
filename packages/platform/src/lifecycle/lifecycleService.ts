@@ -35,11 +35,28 @@ export const enum ShutdownReason {
   SwitchWorkspace,
 }
 
+/** Running sessions owned by one window other than the prompt's host window. */
+export interface RunningSessionsByWindow {
+  /** Workspace folder name; '' for an untitled window. */
+  readonly workspaceName: string
+  readonly count: number
+}
+
+/** Application-wide running-session breakdown supplied by a quit coordinator. */
+export interface RunningSessionsShutdownInfo {
+  /** Sessions owned by the window hosting the prompt. */
+  readonly promptWindowCount: number
+  /** One entry per other window that owns running sessions. */
+  readonly otherWindows: readonly RunningSessionsByWindow[]
+}
+
 export interface ShutdownConfirmationContext {
-  /** Application-wide running-session count supplied by a quit coordinator. */
-  readonly runningSessionCount?: number
+  readonly runningSessions?: RunningSessionsShutdownInfo
   /** Another window already owns the application-wide running-session prompt. */
   readonly skipRunningSessionPrompt?: boolean
+  /** Main-generated id the renderer echoes once the prompt is on screen, so the
+   *  coordinator can wait for the user's decision instead of its no-answer timeout. */
+  readonly promptAckId?: number
 }
 
 export interface BeforeShutdownEvent {

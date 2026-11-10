@@ -97,6 +97,7 @@ function makeWindowsStub(open: readonly IOpenWindowInfo[] = []): WindowsStub {
       },
       async focusWindow() {},
       async openWindow() {},
+      async reportShutdownPromptShown() {},
       async quit() {},
     } as IWindowsServiceType,
     setOpen(next) {

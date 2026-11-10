@@ -124,16 +124,19 @@ test.describe('@p0 windows', () => {
       .toBe(false)
   })
 
-  test('Exit closes every window', async ({ electronApp, workbench, page }) => {
+  test('Exit closes every window', async ({ electronApp, workbench }) => {
     await workbench.waitForRestored()
 
     const newWindow = electronApp.waitForEvent('window')
     await workbench.openFolderInNewWindow(tmpFolder().dir)
-    await waitForNewWindowReady(await newWindow)
+    const newPage = await newWindow
+    await waitForNewWindowReady(newPage)
     expect(electronApp.windows().length).toBe(2)
 
+    // Quit from the second window so the exit requester is not the primary one;
+    // the running-session confirm must route back to the window that asked.
     // app.quit() tears down the process; fire-and-forget and watch windows drain.
-    void page
+    void newPage
       .evaluate(() => void window.__E2E__!.runCommand('workbench.action.quit'))
       .catch(() => {})
 

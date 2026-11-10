@@ -195,6 +195,7 @@ function makeWindows(crash: IWindowRenderCrashInfo | null = null): IWindowsServi
     getLastRenderCrash: async () => crash,
     focusWindow: async () => {},
     openWindow: async () => {},
+    reportShutdownPromptShown: async () => {},
     quit: async () => {},
   }
 }

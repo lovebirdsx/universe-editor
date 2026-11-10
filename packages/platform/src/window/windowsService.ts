@@ -112,6 +112,13 @@ export interface IWindowsService {
 
   /** Quit the entire application, closing all windows. */
   quit(): Promise<void>
+
+  /**
+   * Report that the shutdown prompt is now on screen. The main process then waits
+   * for the user's decision instead of treating the round-trip as unresponsive.
+   * Internal shutdown coordination, not part of the extension API surface.
+   */
+  reportShutdownPromptShown(promptAckId: number): Promise<void>
 }
 
 export const IWindowsService = createDecorator<IWindowsService>('windowsService')
