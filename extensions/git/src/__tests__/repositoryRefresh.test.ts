@@ -13,7 +13,7 @@ const gitExecMock = vi.hoisted(() => vi.fn())
 vi.mock('../gitService.js', () => ({
   gitExec: gitExecMock,
   gitExecBinary: vi.fn(),
-  detectLinkedWorktree: async () => false,
+  detectGitDirs: async () => undefined,
 }))
 
 vi.mock('@universe-editor/extension-api', () => ({

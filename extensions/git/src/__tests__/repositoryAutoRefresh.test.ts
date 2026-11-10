@@ -4,13 +4,21 @@
  * extension-api + gitExec so the chain is exercised without a real repo.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { FSWatcher } from 'node:fs'
+import { join } from 'node:path'
 
 const gitExecMock = vi.hoisted(() => vi.fn())
+const detectGitDirsMock = vi.hoisted(() => vi.fn())
+const fsWatchMock = vi.hoisted(() => vi.fn())
 vi.mock('../gitService.js', () => ({
   gitExec: gitExecMock,
   gitExecBinary: vi.fn(),
-  detectLinkedWorktree: async () => false,
+  detectGitDirs: detectGitDirsMock,
 }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, watch: fsWatchMock }
+})
 
 const apiMock = vi.hoisted(() => ({
   windowState: { focused: true },
@@ -94,8 +102,49 @@ const { Repository } = await import('../repository.js')
 
 const CLEAN = { exitCode: 0, stdout: '', stderr: '' }
 
-function statusOut(files: readonly string[]): string {
-  return files.map((f) => `1 .M N... 0 0 0 0 0 ${f}\0`).join('')
+type WatchListener = (event: string, filename: string | Buffer | null) => void
+
+interface FsWatcherHandle {
+  readonly target: string
+  readonly close: ReturnType<typeof vi.fn>
+  readonly listener: WatchListener | undefined
+  emitError(err: unknown): void
+}
+
+let fsWatchers: Map<string, FsWatcherHandle>
+
+function installFsWatchers(): void {
+  fsWatchers = new Map()
+  fsWatchMock.mockImplementation(((target: string, listener?: WatchListener) => {
+    const errorHandlers: ((err: unknown) => void)[] = []
+    const close = vi.fn()
+    fsWatchers.set(target, {
+      target,
+      close,
+      get listener() {
+        return listener
+      },
+      emitError(err: unknown) {
+        for (const handler of errorHandlers) handler(err)
+      },
+    })
+    return {
+      on(event: string, handler: (err: unknown) => void) {
+        if (event === 'error') errorHandlers.push(handler)
+      },
+      close,
+    } as unknown as FSWatcher
+  }) as never)
+}
+
+function statusOut(files: readonly string[], upstream?: string): string {
+  const headers = ['# branch.oid ' + 'a'.repeat(40), '# branch.head main']
+  if (upstream !== undefined) headers.push(`# branch.upstream ${upstream}`)
+  headers.push('# branch.ab +0 -0')
+  return (
+    headers.map((header) => `${header}\0`).join('') +
+    files.map((f) => `1 .M N... 0 0 0 0 0 ${f}\0`).join('')
+  )
 }
 
 const statusCalls = () =>
@@ -110,6 +159,16 @@ async function fireChangeAndDrain(): Promise<void> {
   await advance(1000)
 }
 
+/** Fire a git-dir / upstream fs.watch event, then let the chain debounce elapse. */
+async function fireFsAndDrain(
+  target: string,
+  name: string | Buffer | null = 'index',
+): Promise<void> {
+  fsWatchers.get(target)?.listener?.('change', name)
+  await advance(0)
+  await advance(1000)
+}
+
 function setFocused(focused: boolean): void {
   apiMock.windowState.focused = focused
   for (const fn of [...apiMock.focusListeners]) fn({ focused })
@@ -119,6 +178,10 @@ beforeEach(() => {
   vi.useFakeTimers()
   gitExecMock.mockReset()
   gitExecMock.mockImplementation(async () => CLEAN)
+  detectGitDirsMock.mockReset()
+  detectGitDirsMock.mockImplementation(async () => undefined)
+  fsWatchMock.mockReset()
+  installFsWatchers()
   apiMock.windowState.focused = true
   apiMock.focusListeners.clear()
   apiMock.workingTreeListeners.create.clear()
@@ -361,5 +424,128 @@ describe('Repository watcher auto-refresh chain', () => {
     } finally {
       repo.dispose()
     }
+  })
+
+  it('refreshes when an external git operation touches the worktree git dir', async () => {
+    const gitDir = '/repo/.git/worktrees/task2'
+    const commonDir = '/repo/.git'
+    detectGitDirsMock.mockImplementation(async () => ({
+      gitDir,
+      commonDir,
+      isLinkedWorktree: true,
+    }))
+    const repo = new Repository('/repo')
+    try {
+      await advance(0) // let the probe retarget the watcher
+      expect(fsWatchers.has(gitDir)).toBe(true)
+
+      await fireFsAndDrain(gitDir, 'index')
+      expect(statusCalls()).toBe(1)
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('ignores index.lock events from the git dir', async () => {
+    const gitDir = '/repo/.git'
+    detectGitDirsMock.mockImplementation(async () => ({
+      gitDir,
+      commonDir: gitDir,
+      isLinkedWorktree: false,
+    }))
+    const repo = new Repository('/repo')
+    try {
+      await advance(0)
+      await fireFsAndDrain(gitDir, 'index.lock')
+      expect(statusCalls()).toBe(0)
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('tracks the upstream ref and rebuilds the watcher when it changes', async () => {
+    const gitDir = '/repo/.git'
+    detectGitDirsMock.mockImplementation(async () => ({
+      gitDir,
+      commonDir: gitDir,
+      isLinkedWorktree: false,
+    }))
+    gitExecMock.mockImplementation(async () => ({
+      exitCode: 0,
+      stdout: statusOut([], 'origin/main'),
+      stderr: '',
+    }))
+    const repo = new Repository('/repo')
+    try {
+      await repo.refresh()
+      const mainRef = join(gitDir, 'refs', 'remotes', 'origin', 'main')
+      expect(fsWatchers.has(mainRef)).toBe(true)
+
+      await fireFsAndDrain(mainRef, 'main')
+      expect(statusCalls()).toBe(2)
+
+      gitExecMock.mockImplementation(async () => ({
+        exitCode: 0,
+        stdout: statusOut([], 'origin/dev'),
+        stderr: '',
+      }))
+      await repo.refresh()
+      expect(fsWatchers.get(mainRef)?.close).toHaveBeenCalled()
+      const devRef = join(gitDir, 'refs', 'remotes', 'origin', 'dev')
+      expect(fsWatchers.has(devRef)).toBe(true)
+
+      gitExecMock.mockImplementation(async () => CLEAN)
+      await repo.refresh()
+      expect(fsWatchers.get(devRef)?.close).toHaveBeenCalled()
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('keeps the upstream watcher when status fails', async () => {
+    const gitDir = '/repo/.git'
+    detectGitDirsMock.mockImplementation(async () => ({
+      gitDir,
+      commonDir: gitDir,
+      isLinkedWorktree: false,
+    }))
+    gitExecMock.mockImplementation(async () => ({
+      exitCode: 0,
+      stdout: statusOut([], 'origin/main'),
+      stderr: '',
+    }))
+    const repo = new Repository('/repo')
+    try {
+      await repo.refresh()
+      const mainRef = join(gitDir, 'refs', 'remotes', 'origin', 'main')
+      const handle = fsWatchers.get(mainRef)
+
+      gitExecMock.mockImplementation(async () => ({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'boom',
+      }))
+      await repo.refresh()
+      expect(handle?.close).not.toHaveBeenCalled()
+    } finally {
+      repo.dispose()
+    }
+  })
+
+  it('does not retarget the watcher when the git-dir probe resolves after dispose', async () => {
+    let resolveDirs: (value: unknown) => void = () => undefined
+    detectGitDirsMock.mockImplementation(() => new Promise((resolve) => (resolveDirs = resolve)))
+    const repo = new Repository('/repo')
+    await advance(0)
+    repo.dispose()
+    const callsAfterDispose = fsWatchMock.mock.calls.length
+
+    resolveDirs({
+      gitDir: '/repo/.git/worktrees/task2',
+      commonDir: '/repo/.git',
+      isLinkedWorktree: true,
+    })
+    await advance(0)
+    expect(fsWatchMock).toHaveBeenCalledTimes(callsAfterDispose)
   })
 })

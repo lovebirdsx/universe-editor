@@ -25,7 +25,13 @@ import {
   type SourceControlResourceGroup,
 } from '@universe-editor/extension-api'
 import { localize } from './nls.js'
-import { detectLinkedWorktree, gitExec, gitExecBinary, type GitExecResult } from './gitService.js'
+import {
+  detectGitDirs,
+  gitExec,
+  gitExecBinary,
+  type GitDirs,
+  type GitExecResult,
+} from './gitService.js'
 import { selectHunkPatch } from './hunkPatch.js'
 import { notifyGitFailure } from './gitError.js'
 import { parseStatus } from './statusParser.js'
@@ -119,9 +125,9 @@ export class Repository {
   private _autofetchInitial: ReturnType<typeof setTimeout> | undefined
   /** Set when the latest `git status` exceeded `git.statusLimit`; gates the watcher chain. */
   private _isRepositoryHuge = false
-  /** One-shot linked-worktree probe started at construction; `_doRefresh` awaits it
-   *  so the very first button state is already worktree-correct. */
-  private readonly _linkedWorktreeProbe: Promise<boolean>
+  /** One-shot git-dir probe started at construction; `_doRefresh` awaits it so
+   *  the very first button state is worktree-correct and the watcher can retarget. */
+  private readonly _gitDirsProbe: Promise<GitDirs | undefined>
   private readonly _disposedPromise: Promise<void>
   private _resolveDisposed!: () => void
   private readonly _onSubmodulesUpdated: (() => void) | undefined
@@ -152,7 +158,7 @@ export class Repository {
   ) {
     this._onSubmodulesUpdated = opts.onSubmodulesUpdated
     this._disposedPromise = new Promise<void>((resolve) => (this._resolveDisposed = resolve))
-    this._linkedWorktreeProbe = detectLinkedWorktree(root, this._log)
+    this._gitDirsProbe = detectGitDirs(root, this._log)
     this._sc = scm.createSourceControl('git', opts.label ?? 'Git', root)
     this._sc.inputBox.placeholder = localize(
       'git.input.placeholder',
@@ -180,13 +186,18 @@ export class Repository {
       run: (args, label, progress) => this._run(args, label, progress),
     })
 
-    this._watcher = new RepositoryWatcher(
+    this._watcher = new RepositoryWatcher({
       root,
-      () => this._onWatcherChange(),
-      (globPattern) => workspace.createFileSystemWatcher(globPattern),
-      this._log,
-    )
+      onChange: () => this._onWatcherChange(),
+      createFileSystemWatcher: (globPattern) => workspace.createFileSystemWatcher(globPattern),
+      ...(this._log !== undefined ? { log: this._log } : {}),
+    })
     this._watcher.start()
+    void this._gitDirsProbe
+      .then((dirs) => {
+        if (!this._disposed && dirs !== undefined) this._watcher.setGitDirs(dirs)
+      })
+      .catch((err) => this._log?.(`[git] git-dir probe failed: ${String(err)}`))
     void this._startAutofetch().catch((err) =>
       this._log?.(`[git] autofetch init failed: ${String(err)}`),
     )
@@ -280,7 +291,10 @@ export class Repository {
     this._workingCount = working.length
     this._sc.count = staged.length + working.length
     const hasChanges = staged.length + working.length > 0
-    const isLinkedWorktree = await this._linkedWorktreeProbe
+    const gitDirs = await this._gitDirsProbe
+    if (gitDirs !== undefined) this._watcher.setGitDirs(gitDirs)
+    const isLinkedWorktree = gitDirs?.isLinkedWorktree ?? false
+    this._watcher.setUpstream(status.upstream)
     this._sc.acceptInputCommand = gitPrimaryInputCommand({
       hasChanges,
       branch: status.branch,

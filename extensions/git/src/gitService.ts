@@ -189,8 +189,16 @@ export async function detectRepoRoot(cwd: string): Promise<string | undefined> {
   }
 }
 
+export interface GitDirs {
+  /** Absolute path: `<root>/.git` for a checkout, `<main>/.git/worktrees/<name>` for a worktree. */
+  readonly gitDir: string
+  /** Absolute path: same as `gitDir` except in a linked worktree, where it is `<main>/.git`. */
+  readonly commonDir: string
+  readonly isLinkedWorktree: boolean
+}
+
 /**
- * Compare `rev-parse --git-dir` / `--git-common-dir` output: a linked worktree
+ * Normalize `rev-parse --git-dir` / `--git-common-dir` output. A linked worktree
  * (`git worktree add`) keeps its own git dir under `<main>/.git/worktrees/<name>`
  * while sharing the main repo's common dir, so the two differ. The main checkout
  * reports the same path twice, and so does a submodule (`.git/modules/<name>` is
@@ -200,32 +208,46 @@ export async function detectRepoRoot(cwd: string): Promise<string | undefined> {
  * repo root, `../../../.git` from a nested subdirectory), so both are resolved
  * against `cwd` before comparing.
  */
+export function parseGitDirs(
+  gitDirLine: string,
+  commonDirLine: string,
+  cwd: string,
+): GitDirs | undefined {
+  const gitDir = gitDirLine.trim()
+  if (!gitDir) return undefined
+  const commonDir = commonDirLine.trim() || gitDir
+  const absoluteGitDir = resolve(cwd, gitDir)
+  const absoluteCommonDir = resolve(cwd, commonDir)
+  return {
+    gitDir: absoluteGitDir,
+    commonDir: absoluteCommonDir,
+    isLinkedWorktree: !samePath(absoluteGitDir, absoluteCommonDir),
+  }
+}
+
 export function isLinkedWorktreeDirs(
   gitDirLine: string,
   commonDirLine: string,
   cwd: string,
 ): boolean {
-  const gitDir = gitDirLine.trim()
-  const commonDir = commonDirLine.trim()
-  if (!gitDir || !commonDir) return false
-  return !samePath(resolve(cwd, gitDir), resolve(cwd, commonDir))
+  return parseGitDirs(gitDirLine, commonDirLine, cwd)?.isLinkedWorktree ?? false
 }
 
 /**
- * Whether `cwd` is a linked worktree. Never rejects: git failing (not a repo, git
- * not installed) reports false, which keeps the Publish Branch button — the
- * behaviour from before worktrees were considered.
+ * Resolve the repository's git dirs. Never rejects: git failing (not a repo, git
+ * not installed) yields `undefined` so callers can fall back to `<root>/.git`
+ * and keep the pre-worktree behaviour.
  */
-export async function detectLinkedWorktree(
+export async function detectGitDirs(
   cwd: string,
   log?: (msg: string) => void,
-): Promise<boolean> {
+): Promise<GitDirs | undefined> {
   try {
     const res = await gitExec(['rev-parse', '--git-dir', '--git-common-dir'], cwd, log)
-    if (res.exitCode !== 0) return false
+    if (res.exitCode !== 0) return undefined
     const [gitDir, commonDir] = res.stdout.split('\n')
-    return isLinkedWorktreeDirs(gitDir ?? '', commonDir ?? '', cwd)
+    return parseGitDirs(gitDir ?? '', commonDir ?? '', cwd)
   } catch {
-    return false
+    return undefined
   }
 }

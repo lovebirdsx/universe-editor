@@ -21,6 +21,7 @@ vi.mock('../gitService.js', () => ({
   gitExec: mocks.gitExec,
   gitExecBinary: vi.fn(),
   detectRepoRoot: vi.fn(),
+  detectGitDirs: async () => undefined,
 }))
 // Make the .gitmodules probe a knob instead of touching the filesystem, while
 // still routing the update through the real `updateSubmodules` so the git argv
