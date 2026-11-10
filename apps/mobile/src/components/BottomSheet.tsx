@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { strings } from '../strings.js'
 import { useDocumentScrollLock } from './useDocumentScrollLock.js'
 
@@ -72,7 +73,7 @@ export function BottomSheet({
     dragStart.current = undefined
   }
 
-  return (
+  const surface = (
     <div
       className={overlay ? 'sheet-backdrop' : 'sheet-slot'}
       data-testid={overlay ? `${testId}-backdrop` : undefined}
@@ -140,4 +141,10 @@ export function BottomSheet({
       </section>
     </div>
   )
+
+  // Overlays must be laid out against the viewport. Some mobile WebViews turn a
+  // fixed descendant's containing block into a scroll ancestor (the composer
+  // lives inside `.session-footer`, which scrolls), which collapsed the sheet to
+  // just its cancel button. Portaling to <body> keeps that out of reach.
+  return overlay ? createPortal(surface, document.body) : surface
 }

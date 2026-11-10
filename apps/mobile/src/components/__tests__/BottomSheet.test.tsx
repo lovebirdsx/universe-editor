@@ -43,4 +43,15 @@ describe('BottomSheet', () => {
 
     expect(document.documentElement.classList.contains(LOCK_CLASS)).toBe(false)
   })
+
+  it('portals overlay sheets to the body so scroll ancestors cannot clip them', () => {
+    const { container } = renderOverlay('portal-sheet')
+    const sheet = screen.getByTestId('portal-sheet')
+
+    expect(container.contains(sheet)).toBe(false)
+    expect(document.body.contains(sheet)).toBe(true)
+
+    const backdrop = screen.getByTestId('portal-sheet-backdrop')
+    expect(container.contains(backdrop)).toBe(false)
+  })
 })
