@@ -1401,6 +1401,46 @@ describe('MobileGatewayHub commands', () => {
     })
   })
 
+  it('opens a recent-only remote workspace and creates the session in its window', async () => {
+    const folder = 'remote-ssh://wsl+ubuntu-24.04/home/dev/project'
+    const authority = 'wsl+ubuntu-24.04'
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [{ folder, name: 'project', authority }]),
+      waitForBridge: vi.fn(async () => 7),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    bridge.newSession.mockResolvedValueOnce({ ok: true, value: { localId: 'remote-fresh' } })
+    hub.registerWindow(7, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n-remote',
+      kind: 'newSession',
+      payload: {
+        agentId: 'fake',
+        workspace: { folder, authority },
+      },
+    })
+
+    expect(host.openWorkspace).toHaveBeenCalledWith(folder, authority)
+    expect(host.waitForBridge).toHaveBeenCalledWith(folder, authority, expect.any(Number))
+    expect(bridge.newSession).toHaveBeenCalledWith(
+      'fake',
+      { folder, authority },
+      null,
+      expect.anything(),
+    )
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'n-remote',
+      ok: true,
+      result: { ref: { windowId: 7, localId: 'remote-fresh' } },
+    })
+  })
+
   it('pings until the freshly opened window renderer answers', async () => {
     const host = makeHost({
       listRecentWorkspaces: vi.fn(async () => [
@@ -1537,7 +1577,7 @@ describe('MobileGatewayHub commands', () => {
         workspace: { folder: 'remote-ssh://host/workspace', authority: 'host' },
       },
     })
-    expect(remoteHost.openWorkspace).not.toHaveBeenCalled()
+    expect(remoteHost.openWorkspace).toHaveBeenCalledWith('remote-ssh://host/workspace', 'host')
     expect(remoteConnection.frames.at(-1)).toMatchObject({
       ok: false,
       error: 'workspace_not_open',

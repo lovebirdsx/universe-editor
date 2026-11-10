@@ -10,7 +10,6 @@ import {
   arePathsEqual,
   CancellationTokenSource,
   normalizePlatform,
-  REMOTE_SCHEME,
   URI,
   type CancellationToken,
   type ILogger,
@@ -854,10 +853,6 @@ export class MobileGatewayHub {
     if (target === undefined) return failOutcome('workspace_not_open')
 
     const authority = payload.workspace.authority ?? target.authority
-    const remote = isRemoteWorkspace(payload.workspace.folder, authority)
-    // Remote sessions cannot be started by opening a local window; an already
-    // open remote window is required.
-    if (remote && openMatch === undefined) return failOutcome('workspace_not_open')
 
     const deadline = Date.now() + NEW_SESSION_TIMEOUT_MS
     let windowId = openMatch?.windowId
@@ -1783,15 +1778,6 @@ export function isSameWorkspace(
   if (first.scheme !== second.scheme) return false
   if ((a.authority ?? first.authority) !== (b.authority ?? second.authority)) return false
   return arePathsEqual(first.fsPath, second.fsPath, HOST_PLATFORM)
-}
-
-function isRemoteWorkspace(folder: string, authority: string | undefined): boolean {
-  if (authority !== undefined && authority !== '') return true
-  try {
-    return URI.parse(folder).scheme === REMOTE_SCHEME
-  } catch {
-    return false
-  }
 }
 
 async function mapWithConcurrency<T>(

@@ -378,9 +378,11 @@ stop），下一次成功探测重新订阅并重发幂等开关，因此 render
 100ms 间隔，并用 `CancellationToken` 取消，避免被丢弃的 RPC 在 channel client 里堆积。
 `newSession` 超时会取消底层请求，避免手机已收到超时后 renderer 又创建出「幽灵会话」。
 
-**远程**：已有远程会话可以镜像到手机；新建远程会话要求对应远程窗口已打开，不因手机请求而新建远程连接
-（`isRemoteWorkspace`：带 authority 或 scheme 为 `remote-ssh`）。仅最近列表里的远程工作区同样回
-`workspace_not_open`。
+**远程**：已有远程会话可以镜像到手机；最近列表里的远程工作区与本地工作区一样，由手机请求自动开窗。
+远程连接随后由新窗口 renderer（`RemoteStatusContribution`）与 ACP host 的
+`getConnection(authority)` 异步建立，连接失败体现为会话自身的连接错误，而不是
+`workspace_not_open`。后者只用于工作区既不在打开列表也不在最近列表、开窗失败、等桥超时或
+renderer ping 无应答。
 
 **时序**：`createSession` 同步返回；桥立即回 `{ localId, durableId? }`，初始 prompt 先入队，
 客户端可以立即 `sendPrompt`，由会话保证在 ready 后按顺序投递。`listWorkspaces` 返回
@@ -845,7 +847,7 @@ localStorage，不走协议。
    实现见 §5：`AcpPendingPermission.autoResolve` 由 service 持有，状态 observable，PC 卡片只转发
    pause / resume / cancel。
 4. **手机新建会话允许自动开窗**：窗口会被带到前台，已接受。
-5. **默认值**：PC 聚焦时不发任何手机通知；远程会话可镜像、新建远程会话需远程窗口已打开；详情按需拉取。
+5. **默认值**：PC 聚焦时不发任何手机通知；远程会话可镜像；手机新建会话与本地一致，可自动打开最近列表里的远程工作区（远程连接异步建立）；详情按需拉取。
 6. **协议 v3 的幂等与超时**：会修改状态的命令支持 `idempotencyKey`（结果缓存 5 分钟、并发去重）；
    网关按命令设 5s / 10s / 30s 三档超时，超时回 `internal`，不让一次坏调用挂住连接。
 7. **局域网档用自签 HTTPS + 指纹核对**：证书由网关本地签发（`selfsigned` 5.x，基于 WebCrypto），
