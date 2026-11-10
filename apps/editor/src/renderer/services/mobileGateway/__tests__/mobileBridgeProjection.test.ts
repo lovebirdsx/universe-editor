@@ -58,6 +58,49 @@ describe('projectToolCall only-message flags', () => {
   })
 })
 
+describe('projectToolCall activity timing', () => {
+  it('projects timing and settlement fields', () => {
+    expect(
+      projectToolCall(
+        toolCall({
+          startedAt: 1_700_000_000_000,
+          durationMs: 5_000,
+          settleReason: 'cancelled',
+          syntheticDenial: true,
+        }),
+      ),
+    ).toMatchObject({
+      startedAt: 1_700_000_000_000,
+      durationMs: 5_000,
+      settleReason: 'cancelled',
+      syntheticDenial: true,
+    })
+  })
+
+  it('omits timing fields for an ordinary tool call', () => {
+    const projected = projectToolCall(toolCall())
+    expect(projected).not.toHaveProperty('startedAt')
+    expect(projected).not.toHaveProperty('durationMs')
+    expect(projected).not.toHaveProperty('settleReason')
+    expect(projected).not.toHaveProperty('syntheticDenial')
+  })
+
+  it('drops invalid timings and empty settle reasons', () => {
+    const projected = projectToolCall(
+      toolCall({ startedAt: -1, durationMs: 1.5, settleReason: '' }),
+    )
+    expect(projected).not.toHaveProperty('startedAt')
+    expect(projected).not.toHaveProperty('durationMs')
+    expect(projected).not.toHaveProperty('settleReason')
+  })
+
+  it('clamps an oversized settle reason to the wire limit', () => {
+    const projected = projectToolCall(toolCall({ settleReason: 'x'.repeat(1_500) }))
+    expect(projected.settleReason).toHaveLength(1_024)
+    expect(projected.settleReason?.endsWith('…')).toBe(true)
+  })
+})
+
 describe('projectMessage mobile attachments', () => {
   const attachmentMeta = {
     id: 'att-1',

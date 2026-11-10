@@ -139,10 +139,13 @@ main 侧不直接读 `AcpSession`。
 `attachments`、`summary.imageSupported`、`attachment_not_found`）、fork / rewind / 侧边任务
 （对应命令、agent 能力位、消息锚点与侧边任务关系字段）与 `closeSession` 命令；v7 增加会话目录
 （`listSessionHistory` / `openSession`、`MobileSessionHistoryEntry` 与 `history` 能力位）；v8 增加
-工作区 git 状态（`MobileWorkspaceCandidate.windowId?` / `gitDirty?`））。
+工作区 git 状态（`MobileWorkspaceCandidate.windowId?` / `gitDirty?`）与工具卡的 `startedAt` /
+`durationMs` / `settleReason` / `syntheticDenial`（供手机端「仅消息」尾部当前进展行对齐桌面：
+实时已运行时长、失败原因与上游中断判定））。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v7 起的 `hello_ok.capabilities` 为
+
 `['inbox', 'commands', 'notifications', 'history', 'attachments']`（`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
 `vapidPublicKey` 只在网关可推送
 时出现，VAPID 公钥走握手而不是额外 HTTP 端点。**token 不放 URL query**，避免进入访问日志与
@@ -249,7 +252,9 @@ owner，不会把多个 100s 串联，手机端 120s + 5s 宽限仍等得到。�
 - `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`、`attachments?`；v6 对 user
   消息额外带 SDK 锚点 `messageId` 与 `canFork`）/ `toolCall`
   （`toolKind`、`status`、preview、diff 增删行数；可带 `subagent` / `requiresUserDecision`
-  标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片）/ `notice`
+  标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片；v8 另带可选的
+  `startedAt` / `durationMs` / `settleReason` / `syntheticDenial`，用于底部当前进展行的
+  秒表与失败原因）/ `notice`
   （compaction / resurrection）。`canFork` 在首条用户消息、只读会话或 agent 不支持 fork 时为
   false；`messageId` 只在 user 且非 autoRetry 时出现。
 - `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、

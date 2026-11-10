@@ -621,6 +621,76 @@ describe('parseServerFrame', () => {
     )
   })
 
+  it('parses tool-call activity timing fields', () => {
+    const toolCall = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+      kind: 'toolCall',
+      id: 'tool-1',
+      title: 'Bash',
+      toolKind: 'execute',
+      status: 'completed',
+      hasDetail: true,
+      ...overrides,
+    })
+    const snapshot = (item: Record<string, unknown>): string =>
+      JSON.stringify({
+        type: 'session_snapshot',
+        seq: 1,
+        session: snapshotJson({ timeline: [item] }),
+      })
+
+    const timing = {
+      startedAt: 1_700_000_000_000,
+      durationMs: 5_000,
+      settleReason: 'cancelled',
+      syntheticDenial: true,
+    }
+    const parsed = parseServerFrame(snapshot(toolCall(timing)))
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) {
+      expect(parsed.value).toMatchObject({
+        type: 'session_snapshot',
+        session: { timeline: [timing] },
+      })
+    }
+
+    const delta = {
+      type: 'session_delta',
+      seq: 1,
+      ref: REF,
+      events: [
+        { type: 'tool_call_upsert', item: toolCall({ ...timing, startedAt: 0, durationMs: 0 }) },
+      ],
+    }
+    expect(parseServerFrame(JSON.stringify(delta))).toStrictEqual({ ok: true, value: delta })
+
+    const plain = parseServerFrame(snapshot(toolCall()))
+    expect(plain.ok).toBe(true)
+    if (plain.ok) {
+      const timeline = (
+        plain.value as unknown as {
+          session: { timeline: Array<Record<string, unknown>> }
+        }
+      ).session.timeline
+      expect(timeline[0]).not.toHaveProperty('startedAt')
+      expect(timeline[0]).not.toHaveProperty('durationMs')
+      expect(timeline[0]).not.toHaveProperty('settleReason')
+      expect(timeline[0]).not.toHaveProperty('syntheticDenial')
+    }
+
+    for (const bad of [
+      { startedAt: -1 },
+      { startedAt: 1.5 },
+      { startedAt: '5' },
+      { durationMs: -1 },
+      { durationMs: 1.5 },
+      { settleReason: '' },
+      { settleReason: 'x'.repeat(1025) },
+      { syntheticDenial: 'yes' },
+    ]) {
+      expect(errorCode(parseServerFrame(snapshot(toolCall(bad))))).toBe('bad_request')
+    }
+  })
+
   it('parses session_removed, command_result and resync_required', () => {
     expect(
       parseServerFrame(JSON.stringify({ type: 'session_removed', ref: DURABLE_REF })),

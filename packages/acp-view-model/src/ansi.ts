@@ -144,6 +144,13 @@ function snapshot(text: string, state: AnsiState): AnsiSegment {
  * segment with no style fields. SGR escapes split the text into runs; all other
  * escape sequences are dropped.
  */
+/** Plain text with every ANSI escape sequence (SGR styles included) removed. */
+export function stripAnsi(input: string): string {
+  return parseAnsi(input)
+    .map((segment) => segment.text)
+    .join('')
+}
+
 export function parseAnsi(input: string): AnsiSegment[] {
   const segments: AnsiSegment[] = []
   const state = emptyState()

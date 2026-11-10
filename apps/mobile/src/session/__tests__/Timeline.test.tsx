@@ -35,10 +35,11 @@ function userMessage(
 const clientMock = {
   requestToolCallDetail: vi.fn(),
   fetchAttachmentBlob: vi.fn<(attachmentId: string) => Promise<Blob>>(),
+  serverNow: vi.fn(() => 1_000_000),
 }
 const client = clientMock as unknown as Pick<
   MobileClient,
-  'requestToolCallDetail' | 'fetchAttachmentBlob'
+  'requestToolCallDetail' | 'fetchAttachmentBlob' | 'serverNow'
 >
 
 function renderTimeline(
@@ -197,6 +198,95 @@ describe('Timeline display modes', () => {
 
     expect(screen.getByTestId('tool-call-group')).toBeTruthy()
     expect(screen.getByText(strings.toolCallGroupTitle(3))).toBeTruthy()
+  })
+})
+
+describe('Timeline hidden activity', () => {
+  it('shows the current thought below a running only-message timeline', () => {
+    renderTimeline(
+      [
+        userMessage('m1', 'hello'),
+        {
+          kind: 'message',
+          id: 'th1',
+          role: 'thought',
+          text: '\n  Reading the parser  \nmore',
+          streaming: true,
+        },
+      ],
+      'onlyMessage',
+      { active: true },
+    )
+
+    expect(screen.getByTestId('session-timeline-activity')).toBeTruthy()
+    expect(screen.getByTestId('session-timeline-activity-primary').textContent).toBe(
+      strings.activityThinking,
+    )
+    expect(screen.getByTestId('session-timeline-activity-detail').textContent).toBe(
+      'Reading the parser',
+    )
+  })
+
+  it('shows a running hidden tool with its path and elapsed time', () => {
+    clientMock.serverNow.mockReturnValue(1_005_000)
+    renderTimeline(
+      [
+        userMessage('m1', 'hello'),
+        toolCall('t1', {
+          status: 'in_progress',
+          title: 'Edit parser',
+          locations: [{ path: 'src/parser.ts', line: 42 }],
+          startedAt: 1_000_000,
+        }),
+      ],
+      'onlyMessage',
+      { active: true },
+    )
+
+    expect(screen.getByTestId('session-timeline-activity-primary').textContent).toBe('Edit parser')
+    expect(screen.getByTestId('session-timeline-activity-detail').textContent).toBe(
+      'src/parser.ts:42 · 5s',
+    )
+  })
+
+  it('shows the previous settled tool when the hidden tail failed', () => {
+    renderTimeline(
+      [
+        userMessage('m1', 'hello'),
+        toolCall('t1', {
+          status: 'failed',
+          title: 'Bash',
+          preview: '```console\nboom\n```',
+          durationMs: 2_000,
+        }),
+      ],
+      'onlyMessage',
+      { active: true },
+    )
+
+    expect(screen.getByTestId('session-timeline-activity-primary').textContent).toBe(
+      strings.activityThinking,
+    )
+    expect(screen.getByTestId('session-timeline-activity-detail').textContent).toBe(
+      `上一步 Bash · 失败：boom · 2s`,
+    )
+  })
+
+  it('does not show the row in full mode', () => {
+    renderTimeline(
+      [userMessage('m1', 'hello'), toolCall('t1', { status: 'in_progress' })],
+      'full',
+      { active: true },
+    )
+    expect(screen.queryByTestId('session-timeline-activity')).toBeNull()
+  })
+
+  it('does not show the row when the session is inactive', () => {
+    renderTimeline(
+      [userMessage('m1', 'hello'), toolCall('t1', { status: 'in_progress' })],
+      'onlyMessage',
+    )
+    expect(screen.queryByTestId('session-timeline-activity')).toBeNull()
   })
 })
 

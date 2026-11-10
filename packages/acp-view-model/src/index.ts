@@ -1,3 +1,4 @@
+export * from './activityText.js'
 export * from './ansi.js'
 export * from './filePathLink.js'
 export * from './markdownRenderer.js'

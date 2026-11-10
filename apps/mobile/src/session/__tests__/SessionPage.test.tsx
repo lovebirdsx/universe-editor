@@ -145,6 +145,73 @@ describe('SessionPage snapshot rendering', () => {
     expect(screen.queryByTestId('tool-call-row')).toBeNull()
   })
 
+  it('shows the hidden activity while running and hides it when a card needs attention', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        timeline: [
+          userMessage('m1', 'hello'),
+          { kind: 'message', id: 'th1', role: 'thought', text: 'thinking', streaming: true },
+        ],
+      }),
+    )
+
+    expect(screen.getByTestId('session-timeline-activity')).toBeTruthy()
+    expect(screen.getByTestId('session-timeline-activity-primary').textContent).toBe(
+      strings.activityThinking,
+    )
+
+    feed(harness.socket, {
+      type: 'session_delta',
+      seq: 2,
+      ref: sessionRef('s1'),
+      events: [
+        {
+          type: 'permission_upsert',
+          permission: {
+            requestId: 'req-1',
+            toolCallId: 'tool-1',
+            title: 'Run command',
+            options: [{ optionId: 'allow', name: 'Allow', allowedOnMobile: true }],
+          },
+        },
+      ],
+    })
+    expect(screen.queryByTestId('session-timeline-activity')).toBeNull()
+  })
+
+  it('hides the hidden activity once the session goes idle', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        timeline: [
+          userMessage('m1', 'hello'),
+          { kind: 'message', id: 'th1', role: 'thought', text: 'thinking', streaming: true },
+        ],
+      }),
+    )
+    expect(screen.getByTestId('session-timeline-activity')).toBeTruthy()
+
+    feed(harness.socket, {
+      type: 'session_delta',
+      seq: 2,
+      ref: sessionRef('s1'),
+      events: [
+        {
+          type: 'summary_changed',
+          summary: sessionSummary('s1', {
+            status: 'idle',
+            displayStatus: 'idle',
+            bucket: 'completed',
+          }),
+        },
+      ],
+    })
+    expect(screen.queryByTestId('session-timeline-activity')).toBeNull()
+  })
+
   it('keeps key tool cards ungrouped in only-message mode', () => {
     const { harness } = openPage()
     feed(

@@ -9,7 +9,12 @@ import { MarkdownView } from '../markdown/MarkdownView.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { strings } from '../strings.js'
 import { MessageAttachments } from './MessageAttachments.js'
-import { selectTimelineForDisplay, type SessionDisplayPreference } from './sessionDisplay.js'
+import {
+  getHiddenActivity,
+  selectTimelineForDisplay,
+  type SessionDisplayPreference,
+} from './sessionDisplay.js'
+import { TimelineActivity } from './TimelineActivity.js'
 import { ToolCallGroup } from './ToolCallGroup.js'
 
 const INITIAL_VISIBLE_ITEMS = 200
@@ -21,7 +26,9 @@ export interface TimelineProps {
   readonly timeline: readonly MobileTimelineItem[]
   readonly displayMode: SessionDisplayPreference
   readonly truncated: boolean
-  readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob'>
+  /** Agent is running and no permission / elicitation is waiting on the user. */
+  readonly active?: boolean | undefined
+  readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob' | 'serverNow'>
   /** The agent supports rewind, so user messages with an anchor offer it. */
   readonly rewindAvailable?: boolean | undefined
   /** Side tasks can be created from any message with text. */
@@ -38,6 +45,7 @@ export function Timeline({
   timeline,
   displayMode,
   truncated,
+  active = false,
   client,
   rewindAvailable = false,
   sideTaskAvailable = false,
@@ -50,6 +58,11 @@ export function Timeline({
   const displayTimeline = useMemo(
     () => selectTimelineForDisplay(timeline, displayMode),
     [timeline, displayMode],
+  )
+  const timelineTail = timeline[timeline.length - 1]
+  const activity = useMemo(
+    () => getHiddenActivity(displayTimeline, timelineTail, displayMode, active),
+    [displayTimeline, timelineTail, displayMode, active],
   )
 
   useEffect(() => {
@@ -67,7 +80,7 @@ export function Timeline({
     } else {
       setShowJump(true)
     }
-  }, [timeline])
+  }, [timeline, activity])
 
   const handleScroll = (): void => {
     const element = scrollRef.current
@@ -125,6 +138,7 @@ export function Timeline({
             />
           ),
         )}
+        {activity !== null && <TimelineActivity activity={activity} client={client} />}
       </div>
       {showJump && (
         <button type="button" className="jump-button" onClick={jumpToLatest}>

@@ -109,6 +109,14 @@ export interface MobileTimelineToolCallItem {
   subagent?: boolean
   /** This call asked the user for a decision. Kept by the phone's only-message mode. */
   requiresUserDecision?: boolean
+  /** PC epoch ms when the call started; anchors the phone's running stopwatch. */
+  startedAt?: number
+  /** Frozen PC-computed elapsed ms once the call settled. */
+  durationMs?: number
+  /** Why the card settled locally (cancelled / orphaned), as the PC recorded it. */
+  settleReason?: string
+  /** The failed result is a CLI-synthesized denial; show it as an upstream interruption. */
+  syntheticDenial?: boolean
 }
 
 export interface MobileTimelineNoticeItem {

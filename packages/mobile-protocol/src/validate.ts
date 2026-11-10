@@ -1352,6 +1352,18 @@ function parseTimelineToolCall(value: Record<string, unknown>): Result<MobileTim
     'toolCall.requiresUserDecision',
   )
   if (!requiresUserDecision.ok) return requiresUserDecision
+  const startedAt = parseOptionalNonNegativeInteger(value.startedAt, 'toolCall.startedAt')
+  if (!startedAt.ok) return startedAt
+  const durationMs = parseOptionalNonNegativeInteger(value.durationMs, 'toolCall.durationMs')
+  if (!durationMs.ok) return durationMs
+  const settleReason = parseOptionalNonEmptyString(
+    value.settleReason,
+    MAX_REASON_LENGTH,
+    'toolCall.settleReason',
+  )
+  if (!settleReason.ok) return settleReason
+  const syntheticDenial = parseOptionalBoolean(value.syntheticDenial, 'toolCall.syntheticDenial')
+  if (!syntheticDenial.ok) return syntheticDenial
   return ok({
     kind: 'toolCall',
     id,
@@ -1367,6 +1379,10 @@ function parseTimelineToolCall(value: Record<string, unknown>): Result<MobileTim
     ...(requiresUserDecision.value !== undefined
       ? { requiresUserDecision: requiresUserDecision.value }
       : {}),
+    ...(startedAt.value !== undefined ? { startedAt: startedAt.value } : {}),
+    ...(durationMs.value !== undefined ? { durationMs: durationMs.value } : {}),
+    ...(settleReason.value !== undefined ? { settleReason: settleReason.value } : {}),
+    ...(syntheticDenial.value !== undefined ? { syntheticDenial: syntheticDenial.value } : {}),
   })
 }
 

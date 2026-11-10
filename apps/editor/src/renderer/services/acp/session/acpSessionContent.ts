@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ContentBlock, ToolCallContent, ToolCallLocation } from '@agentclientprotocol/sdk'
+import { firstLineSummary, stripCodeFence } from '@universe-editor/acp-view-model'
 import {
   MESSAGE_TEXT_REBUILD_AT,
   capContentBlock,
@@ -21,6 +22,10 @@ import type {
   TimelineItem,
 } from './acpSessionModel.js'
 
+// Shared with the phone PWA through `@universe-editor/acp-view-model`; re-exported
+// here so existing editor import paths keep working.
+export { firstLineSummary, stripCodeFence }
+
 /** A text block whose content is empty or only whitespace carries nothing. */
 export function isBlankContentBlock(block: ContentBlock): boolean {
   return block.type === 'text' && block.text.trim().length === 0
@@ -29,14 +34,6 @@ export function isBlankContentBlock(block: ContentBlock): boolean {
 /** True when at least one block would render visible content. */
 export function hasVisibleMessageContent(blocks: readonly ContentBlock[]): boolean {
   return blocks.some((b) => (b.type === 'text' ? b.text.trim().length > 0 : true))
-}
-
-/** First non-empty line of a message, trimmed and clamped, for the collapsed
- *  single-line summary. Matches the sticky-scroll overlay's header clamp. */
-export function firstLineSummary(text: string): string {
-  const firstLine = text.split('\n', 1)[0]?.trim() ?? ''
-  const MAX = 120
-  return firstLine.length > MAX ? `${firstLine.slice(0, MAX)}…` : firstLine
 }
 
 export function blocksToText(blocks: readonly ContentBlock[] | undefined): string {
@@ -54,18 +51,6 @@ export function blocksToText(blocks: readonly ContentBlock[] | undefined): strin
               : `[image: ${b.mimeType}]`,
     )
     .join('')
-}
-
-/**
- * 剥掉 fork 给工具结果加的整块代码围栏：客户端未通告终端输出能力时，shell 输出被包成
- * ` ```console ` 围栏、错误文本被包成裸 ``` 围栏（见 vendor/claude-agent-acp 的
- * `toolUpdateFromToolResult`）。卡片正文按终端渲染，围栏会字面显示出来，故展示/复制时剥掉。
- *
- * 只认「整段就是一个围栏块」——正文夹带其它段落、或输出自身含反引号时原样返回，避免误伤。
- */
-export function stripCodeFence(text: string): string {
-  const m = /^```(?:\w*)?\n([\s\S]*?)\n```$/.exec(text.trim())
-  return m?.[1] ?? text
 }
 
 /**

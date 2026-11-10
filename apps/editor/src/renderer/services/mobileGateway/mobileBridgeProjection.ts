@@ -19,6 +19,7 @@ import {
   MAX_ID_LENGTH,
   MAX_PERMISSION_OPTIONS,
   MAX_PLAN_ENTRIES,
+  MAX_REASON_LENGTH,
   MAX_REQUEST_ID_LENGTH,
   MAX_STATUS_LENGTH,
   MAX_TEXT_LENGTH,
@@ -242,6 +243,12 @@ export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
   const locations = call.locations?.slice(0, MAX_PROJECTED_LOCATIONS)
   // Mirrors the desktop only-message keep-set predicates in timelineCollapse.ts.
   const subagent = call.subagent === true || (call.children?.length ?? 0) > 0
+  const startedAt = nonNegativeSafeInt(call.startedAt)
+  const durationMs = nonNegativeSafeInt(call.durationMs)
+  const settleReason =
+    call.settleReason !== undefined && call.settleReason.length > 0
+      ? clampText(call.settleReason, MAX_REASON_LENGTH)
+      : undefined
   return {
     kind: 'toolCall',
     id: clampText(call.id, MAX_ID_LENGTH),
@@ -255,7 +262,15 @@ export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
     ...(call.memoryTrimmed ? { memoryTrimmed: true } : {}),
     ...(subagent ? { subagent: true } : {}),
     ...(call.requiresUserDecision === true ? { requiresUserDecision: true } : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(settleReason !== undefined ? { settleReason } : {}),
+    ...(call.syntheticDenial === true ? { syntheticDenial: true } : {}),
   }
+}
+
+function nonNegativeSafeInt(value: number | undefined): number | undefined {
+  return value !== undefined && Number.isSafeInteger(value) && value >= 0 ? value : undefined
 }
 
 function projectDiffStat(diff: AcpToolCall['diffs'][number]): MobileToolCallDiffStat {

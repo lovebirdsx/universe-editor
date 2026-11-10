@@ -8,6 +8,7 @@
  *  timeline is never mutated.
  *--------------------------------------------------------------------------------------------*/
 
+import { firstNonEmptyLine } from '@universe-editor/acp-view-model'
 import { localize } from '@universe-editor/platform'
 import type { CollapseMode } from '../../services/acp/session/acpChatViewStateCache.js'
 import type {
@@ -174,14 +175,6 @@ export function filterChildItemsForDisplay(
     out.push(child)
   }
   return changed ? out : children
-}
-
-function firstNonEmptyLine(text: string): string {
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (trimmed.length > 0) return trimmed
-  }
-  return ''
 }
 
 function thoughtSummary(message: AcpMessage): string | undefined {

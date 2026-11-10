@@ -6,14 +6,11 @@
  *  recorded duration once settled.
  *--------------------------------------------------------------------------------------------*/
 
+import { formatElapsed } from '@universe-editor/acp-view-model'
 import { useEffect, useState } from 'react'
 
-export function formatElapsed(ms: number): string {
-  const s = Math.floor(ms / 1000)
-  const m = Math.floor(s / 60)
-  if (m > 0) return `${m}:${String(s % 60).padStart(2, '0')}`
-  return `${s}s`
-}
+// Shared with the phone PWA through `@universe-editor/acp-view-model`.
+export { formatElapsed }
 
 /**
  * Live stopwatch text for a status card: while `running` (and `startedAt` is
