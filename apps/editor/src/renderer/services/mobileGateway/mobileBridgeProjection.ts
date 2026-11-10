@@ -6,17 +6,25 @@
  *  diff statistics, notice replacement) are unit-testable in isolation.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ElicitationSchema, SessionConfigOption } from '@agentclientprotocol/sdk'
+import type {
+  AvailableCommand,
+  ElicitationSchema,
+  SessionConfigOption,
+} from '@agentclientprotocol/sdk'
 import type { IObservable, IReader } from '@universe-editor/platform'
 import {
   clampText,
   isConfigValueAllowedOnMobile,
   isPermissionOptionAllowedOnMobile,
+  MAX_COMMAND_DESCRIPTION_LENGTH,
+  MAX_COMMAND_INPUT_HINT_LENGTH,
+  MAX_COMMAND_NAME_LENGTH,
   MAX_CONFIG_OPTIONS,
   MAX_CURRENCY_LENGTH,
   MAX_ELICITATION_CONTENT_KEYS,
   MAX_ATTACHMENTS_PER_PROMPT,
   MAX_ID_LENGTH,
+  MAX_MOBILE_COMMANDS,
   MAX_PERMISSION_OPTIONS,
   MAX_PLAN_ENTRIES,
   MAX_REASON_LENGTH,
@@ -29,6 +37,7 @@ import {
   MAX_TOOL_CALL_LOCATIONS,
   MAX_WORKSPACE_NAME_LENGTH,
   type MobileAutoResolve,
+  type MobileAvailableCommand,
   type MobileConfigOption,
   type MobileElicitationField,
   type MobileMessageAttachment,
@@ -155,6 +164,7 @@ export function toBridgeSnapshot(
     configOptions: readObservable(session.configOptions, r)
       .slice(0, MAX_CONFIG_OPTIONS)
       .map(projectConfigOption),
+    availableCommands: projectAvailableCommands(readObservable(session.availableCommands, r)),
     isReplayingHistory: readObservable(session.isReplayingHistory, r),
     ...(usage !== undefined ? { usage } : {}),
     ...(permission !== undefined ? { pendingPermission: permission } : {}),
@@ -291,6 +301,49 @@ export function projectPlanEntry(entry: AcpPlanEntry): MobilePlanEntry {
       ? { priority: clampText(entry.priority, MAX_STATUS_LENGTH) }
       : {}),
   }
+}
+
+export function projectAvailableCommands(
+  commands: readonly AvailableCommand[],
+): MobileAvailableCommand[] {
+  const projected: MobileAvailableCommand[] = []
+  const seen = new Set<string>()
+  for (const command of commands) {
+    if (projected.length >= MAX_MOBILE_COMMANDS) break
+    const name = normalizeCommandName(command.name)
+    // A name with whitespace or an empty stem cannot be a slash token; sending
+    // it would fail the gateway's whole-frame validation and drop the delta.
+    if (name.length === 0 || /\s/.test(name)) continue
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    const description =
+      typeof command.description === 'string' ? command.description.replace(/\s+/g, ' ').trim() : ''
+    const hint =
+      command.input != null && typeof command.input.hint === 'string'
+        ? command.input.hint.trim()
+        : ''
+    projected.push({
+      name: clampText(name, MAX_COMMAND_NAME_LENGTH),
+      description: clampText(description, MAX_COMMAND_DESCRIPTION_LENGTH),
+      ...(hint.length > 0 ? { inputHint: clampText(hint, MAX_COMMAND_INPUT_HINT_LENGTH) } : {}),
+    })
+  }
+  return projected
+}
+
+/** Display/insertion always adds the leading slash; wire names never carry it. */
+export function normalizeCommandName(name: string): string {
+  return name.trim().replace(/^\/+/, '')
+}
+
+export function diffAvailableCommands(
+  previous: readonly MobileAvailableCommand[],
+  next: readonly MobileAvailableCommand[],
+): NonSummarySessionEvent | undefined {
+  return sameJson(previous, next)
+    ? undefined
+    : { type: 'available_commands_snapshot', commands: next }
 }
 
 export function projectConfigOption(option: SessionConfigOption): MobileConfigOption {

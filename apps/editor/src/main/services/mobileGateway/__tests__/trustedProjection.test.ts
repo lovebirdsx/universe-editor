@@ -115,6 +115,7 @@ describe('widenSnapshotForTrust / widenEventForTrust', () => {
       timeline: [],
       plan: [],
       configOptions: [configOption()],
+      availableCommands: [],
       pendingPermission: permission(),
       isReplayingHistory: false,
       seq: 1,
@@ -149,6 +150,7 @@ describe('widenSnapshotForTrust / widenEventForTrust', () => {
       timeline: [],
       plan: [],
       configOptions: [],
+      availableCommands: [],
       isReplayingHistory: false,
       seq: 1,
     }

@@ -126,6 +126,24 @@ describe('SessionPage snapshot rendering', () => {
     expect(screen.getByTestId('agent-markdown')).toBeTruthy()
   })
 
+  it('passes the agent command list to the composer', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        timeline: [],
+        availableCommands: [{ name: 'compact', description: 'Compact the conversation' }],
+      }),
+    )
+
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+    fireEvent.focus(input)
+    fireEvent.change(input, { target: { value: '/' } })
+
+    expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
+    expect(screen.getByText('/compact')).toBeTruthy()
+  })
+
   it('defaults to only-message: hides thoughts and ordinary tool calls', () => {
     const { harness } = openPage()
     feed(

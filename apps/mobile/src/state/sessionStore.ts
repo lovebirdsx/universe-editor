@@ -1,4 +1,5 @@
 import type {
+  MobileAvailableCommand,
   MobileConfigOption,
   MobileMessageUpsertEvent,
   MobilePendingElicitation,
@@ -32,6 +33,7 @@ export interface SessionState {
   readonly timeline: readonly MobileTimelineItem[]
   readonly plan: readonly MobilePlanEntry[]
   readonly configOptions: readonly MobileConfigOption[]
+  readonly availableCommands: readonly MobileAvailableCommand[]
   readonly usage: MobileUsage | undefined
   readonly pendingPermission: MobilePendingPermission | undefined
   readonly pendingElicitation: MobilePendingElicitation | undefined
@@ -56,6 +58,7 @@ const EMPTY: SessionState = {
   timeline: [],
   plan: [],
   configOptions: [],
+  availableCommands: [],
   usage: undefined,
   pendingPermission: undefined,
   pendingElicitation: undefined,
@@ -90,6 +93,7 @@ export class SessionStore extends Store<SessionState> {
       timeline: snapshot.timeline,
       plan: snapshot.plan,
       configOptions: snapshot.configOptions,
+      availableCommands: snapshot.availableCommands,
       usage: snapshot.usage,
       pendingPermission: snapshot.pendingPermission,
       pendingElicitation: snapshot.pendingElicitation,
@@ -159,6 +163,8 @@ function applyEvent(
       return { ...state, plan: event.plan }
     case 'config_options_snapshot':
       return { ...state, configOptions: event.options }
+    case 'available_commands_snapshot':
+      return { ...state, availableCommands: event.commands }
     case 'summary_changed':
       return { ...state, summary: event.summary, ref: event.summary.ref }
     case 'permission_upsert':

@@ -16,6 +16,8 @@
  *  configOptions (model/mode/thought_level + 3 custom) and
  *  session/set_config_option applies a pick, answering with the updated bag —
  *  used by E2E to drive the config bar's overflow panel.
+ *  ECHO_AGENT_COMMANDS=1: session/new follows up with
+ *  `available_commands_update`, used by the phone slash-command E2E.
  *  ECHO_AGENT_SESSION_NEW_DELAY_MS=<ms> delays every session/new response —
  *  used by E2E to exercise the editor's optimistic "connecting" session row.
  *  ECHO_AGENT_FORK=1: initialize advertises `sessionCapabilities.fork`, and
@@ -150,6 +152,14 @@ if (process.env.ECHO_AGENT_ORPHAN_FILE) {
   })
 }
 const configOptionsEnabled = process.env.ECHO_AGENT_CONFIG_OPTIONS === '1'
+// ECHO_AGENT_COMMANDS=1: session/new advertises slash commands for the phone
+// autocomplete E2E (leading slash, mcp: prefix and an argument hint included).
+const commandsEnabled = process.env.ECHO_AGENT_COMMANDS === '1'
+const ECHO_AVAILABLE_COMMANDS = [
+  { name: 'compact', description: 'Compact the conversation', input: { hint: 'instructions' } },
+  { name: '/diff', description: 'Review the working tree' },
+  { name: 'mcp:github:review', description: 'Review a pull request' },
+]
 const forkCapabilityEnabled = process.env.ECHO_AGENT_FORK === '1'
 const rewindCapabilityEnabled = process.env.ECHO_AGENT_REWIND === '1'
 const forkRpcEnabled = process.env.ECHO_AGENT_FORK_RPC === '1'
@@ -1248,6 +1258,20 @@ function handle(msg) {
       const result = configOptionsEnabled
         ? { sessionId, configOptions: buildConfigOptions(sessionId) }
         : { sessionId }
+      if (commandsEnabled) {
+        // Deliver after the session/new reply has been processed: the ACP client
+        // registers the session there, and an update arriving in the same socket
+        // chunk can otherwise be dropped before the session exists.
+        setTimeout(() => {
+          notify('session/update', {
+            sessionId,
+            update: {
+              sessionUpdate: 'available_commands_update',
+              availableCommands: ECHO_AVAILABLE_COMMANDS,
+            },
+          })
+        }, 50)
+      }
       const newDelayMs = Number(process.env.ECHO_AGENT_SESSION_NEW_DELAY_MS ?? 0)
       if (newDelayMs > 0) {
         setTimeout(() => reply(msg.id, result), newDelayMs)

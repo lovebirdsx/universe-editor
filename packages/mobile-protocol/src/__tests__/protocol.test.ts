@@ -111,6 +111,10 @@ function snapshotJson(overrides: Record<string, unknown> = {}): Record<string, u
         ],
       },
     ],
+    availableCommands: [
+      { name: 'compact', description: 'Compact the conversation', inputHint: 'instructions' },
+      { name: 'mcp:github:review', description: 'Review a PR' },
+    ],
     usage: { used: 100, size: 1000, cost: { amount: 0.02, currency: 'USD' }, costEstimated: true },
     pendingPermission: {
       requestId: 'perm-1',
@@ -519,6 +523,7 @@ describe('parseServerFrame', () => {
       timeline: [],
       plan: [],
       configOptions: [],
+      availableCommands: [],
       usage: undefined,
       pendingPermission: undefined,
       pendingElicitation: undefined,
@@ -565,6 +570,13 @@ describe('parseServerFrame', () => {
             currentValue: 'On',
             allowedOnMobile: true,
           },
+        ],
+      },
+      {
+        type: 'available_commands_snapshot',
+        commands: [
+          { name: 'compact', description: 'Compact the conversation', inputHint: 'instructions' },
+          { name: 'status', description: 'Show status' },
         ],
       },
       { type: 'summary_changed', summary: summaryJson({ bucket: 'input_needed' }) },
@@ -1008,6 +1020,17 @@ describe('parseServerFrame', () => {
         parseServerFrame(withSnapshot({ pendingPermission: { toolCallId: 't', title: 'x' } })),
       ),
     ).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSnapshot({ availableCommands: 'nope' })))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withSnapshot({ availableCommands: [{ name: '' }] })))).toBe(
+      'bad_request',
+    )
+    expect(
+      errorCode(
+        parseServerFrame(withSnapshot({ availableCommands: [{ name: 'a b', description: '' }] })),
+      ),
+    ).toBe('bad_request')
 
     const withDelta = (events: unknown[]): string =>
       JSON.stringify({ type: 'session_delta', seq: 1, ref: REF, events })
@@ -1021,6 +1044,11 @@ describe('parseServerFrame', () => {
     expect(errorCode(parseServerFrame(withDelta([{ type: 'permission_upsert' }])))).toBe(
       'bad_request',
     )
+    expect(
+      errorCode(
+        parseServerFrame(withDelta([{ type: 'available_commands_snapshot', commands: [{}] }])),
+      ),
+    ).toBe('bad_request')
   })
 
   it('validates resync and command_result fields', () => {

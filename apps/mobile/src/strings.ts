@@ -295,6 +295,8 @@ export const strings = {
   elicitationTextHint: '请输入你的回答。',
 
   composerPlaceholder: '给 Agent 发消息…',
+  composerPlaceholderWithCommands: '给 Agent 发消息…（输入 / 使用指令）',
+  composerCommands: '斜杠指令',
   composerSend: '发送',
   composerStop: '停止',
   composerStopping: '正在停止…',

@@ -8,17 +8,37 @@ import {
   isMobileImageMimeType,
   type MobileAttachmentKind,
   type MobileAttachmentUploadResult,
+  type MobileAvailableCommand,
 } from '@universe-editor/mobile-protocol'
-import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+} from 'react'
 import { errorCode } from '../errors.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { AttachmentSheet, type AttachmentPick } from './AttachmentSheet.js'
+import {
+  SLASH_COMMAND_LIST_ID,
+  SlashCommandPanel,
+  slashCommandOptionId,
+} from './SlashCommandPanel.js'
+import {
+  applySlashCommand,
+  extractSlashQuery,
+  filterSlashCommands,
+  type SlashQuery,
+} from './slashCommands.js'
 import { useAutoGrowTextarea } from './useAutoGrowTextarea.js'
 
 const MAX_ROWS = 6
 const LINE_HEIGHT_PX = 22
 const MAX_HEIGHT_PX = MAX_ROWS * LINE_HEIGHT_PX
 const DRAFT_PREFIX = 'universe.mobile.draft:'
+const NO_COMMANDS: readonly MobileAvailableCommand[] = []
 
 export type ComposerAttachmentStatus = 'uploading' | 'uploaded' | 'failed'
 
@@ -46,6 +66,8 @@ export interface ComposerProps {
   readonly online: boolean
   readonly imageSupported: boolean
   readonly fileSupported: boolean
+  /** Agent-advertised slash commands; empty hides both the button and the panel. */
+  readonly commands: readonly MobileAvailableCommand[]
   readonly onUploadAttachment: (
     file: File,
     kind: MobileAttachmentKind,
@@ -64,6 +86,7 @@ export function Composer({
   online,
   imageSupported,
   fileSupported,
+  commands,
   onUploadAttachment,
   prefill,
   onSend,
@@ -75,6 +98,13 @@ export function Composer({
   const [stopping, setStopping] = useState(false)
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([])
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [caret, setCaret] = useState(() => value.length)
+  const [armed, setArmed] = useState(false)
+  const [focused, setFocused] = useState(false)
+  const [slashDismissed, setSlashDismissed] = useState(false)
+  const [slashIndex, setSlashIndex] = useState(0)
+  const [caretRequest, setCaretRequest] = useState(0)
+  const pendingCaret = useRef<number | null>(null)
   const textareaRef = useAutoGrowTextarea(value, { maxHeightPx: MAX_HEIGHT_PX })
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
   const photosInputRef = useRef<HTMLInputElement | null>(null)
@@ -99,6 +129,33 @@ export function Composer({
   }, [prefill, sessionKey, textareaRef])
 
   const disabled = !online || readOnly
+  const slash: SlashQuery | null = armed && !disabled ? extractSlashQuery(value, caret) : null
+  const slashMatches = slash === null ? NO_COMMANDS : filterSlashCommands(commands, slash.query)
+  const slashOpen = focused && !slashDismissed && slash !== null && slashMatches.length > 0
+  const activeSlashIndex = Math.min(slashIndex, Math.max(slashMatches.length - 1, 0))
+  const slashQuery = slash?.query
+
+  // A dismissed list re-arms itself once the command token disappears, so
+  // backspacing into the token brings the suggestions back.
+  const slashActive = slash !== null
+  useEffect(() => {
+    if (!slashActive) setSlashDismissed(false)
+  }, [slashActive])
+
+  useEffect(() => {
+    setSlashIndex(0)
+  }, [slashQuery])
+
+  useLayoutEffect(() => {
+    const position = pendingCaret.current
+    if (position === null) return
+    pendingCaret.current = null
+    const element = textareaRef.current
+    if (element === null) return
+    element.focus({ preventScroll: true })
+    element.setSelectionRange(position, position)
+  }, [caretRequest, textareaRef])
+
   const attaching = attachments.some((attachment) => attachment.status === 'uploading')
   const canAttach = (imageSupported || fileSupported) && !disabled
   const readyAttachments = attachments.filter(
@@ -111,6 +168,70 @@ export function Composer({
     !attaching &&
     attachments.every((attachment) => attachment.status === 'uploaded') &&
     (value.trim() !== '' || readyAttachments.length > 0)
+
+  const handleChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
+    const next = event.target.value
+    setValue(next)
+    setCaret(event.target.selectionStart ?? next.length)
+    setArmed(true)
+  }
+
+  const acceptCommand = (command: MobileAvailableCommand): void => {
+    if (slash === null) return
+    const next = applySlashCommand(value, slash.tokenEnd, command.name)
+    if (next.text.length > MAX_PROMPT_LENGTH) return
+    pendingCaret.current = next.caret
+    setCaretRequest((request) => request + 1)
+    setValue(next.text)
+    setCaret(next.caret)
+    setSlashDismissed(true)
+  }
+
+  const insertSlash = (): void => {
+    if (disabled || value !== '') return
+    pendingCaret.current = 1
+    setCaretRequest((request) => request + 1)
+    setValue('/')
+    setCaret(1)
+    setArmed(true)
+    setFocused(true)
+    setSlashDismissed(false)
+    textareaRef.current?.focus()
+  }
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (!slashOpen || event.nativeEvent.isComposing) return
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setSlashIndex((activeSlashIndex + 1) % slashMatches.length)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setSlashIndex((activeSlashIndex - 1 + slashMatches.length) % slashMatches.length)
+      return
+    }
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      const command = slashMatches[activeSlashIndex]
+      if (command !== undefined) acceptCommand(command)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      setSlashDismissed(true)
+    }
+  }
+
+  const handleFocus = (): void => setFocused(true)
+
+  // A click on a suggestion blurs the textarea before the click lands; keep the
+  // list mounted until the next turn and only then decide it really lost focus.
+  const handleBlur = (): void => {
+    window.setTimeout(() => {
+      if (document.activeElement !== textareaRef.current) setFocused(false)
+    }, 0)
+  }
 
   const send = async (): Promise<void> => {
     if (!canSend) return
@@ -292,6 +413,13 @@ export function Composer({
           ))}
         </div>
       )}
+      {slashOpen && (
+        <SlashCommandPanel
+          commands={slashMatches}
+          activeIndex={activeSlashIndex}
+          onPick={acceptCommand}
+        />
+      )}
       <div className="composer__row">
         {canAttach && (
           <button
@@ -305,6 +433,17 @@ export function Composer({
             +
           </button>
         )}
+        {commands.length > 0 && value === '' && !disabled && (
+          <button
+            type="button"
+            className="composer__slash"
+            data-testid="composer-slash"
+            aria-label={strings.composerCommands}
+            onClick={insertSlash}
+          >
+            /
+          </button>
+        )}
         <textarea
           ref={textareaRef}
           className="composer__input"
@@ -313,9 +452,23 @@ export function Composer({
           value={value}
           disabled={disabled}
           maxLength={MAX_PROMPT_LENGTH}
-          placeholder={online ? strings.composerPlaceholder : strings.composerOffline}
+          placeholder={
+            online
+              ? commands.length > 0
+                ? strings.composerPlaceholderWithCommands
+                : strings.composerPlaceholder
+              : strings.composerOffline
+          }
           aria-label={strings.composerPlaceholder}
-          onChange={(event) => setValue(event.target.value)}
+          aria-autocomplete="list"
+          aria-controls={slashOpen ? SLASH_COMMAND_LIST_ID : undefined}
+          aria-expanded={slashOpen}
+          aria-activedescendant={slashOpen ? slashCommandOptionId(activeSlashIndex) : undefined}
+          onChange={handleChange}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
+          onKeyDown={handleKeyDown}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
         />
         {running && (
           <button

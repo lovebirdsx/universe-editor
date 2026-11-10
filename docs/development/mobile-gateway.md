@@ -95,6 +95,7 @@ main 侧不直接读 `AcpSession`。
 | 状态与展示状态         | `status` + `computeSessionDisplayStatus`（`session/acpSessionStatus.ts`） |
 | 待审批 / 待提问        | `pendingPermission` / `pendingElicitation`                                |
 | 配置、用量、只读、路径 | `configOptions` / `usage` / `readOnly` / `cwd` / `authority`              |
+| 斜杠指令               | `IAcpSession.availableCommands`（agent 通告的 `available_commands_update`） |
 | 收件箱分组             | `statusBucketFor`（`session/acpSessionFilterService.ts`）                 |
 
 `statusBucketFor` 已把展示状态折叠为四档，正好对应收件箱四组：
@@ -135,7 +136,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 10`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 11`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -147,7 +148,8 @@ main 侧不直接读 `AcpSession`。
 实时已运行时长、失败原因与上游中断判定）；v9 增加受信设备：`hello_ok.trusted` 与
 `device_trust_changed` 帧；v10 让会话目录覆盖最近工作区：`MobileSessionHistoryEntry.windowId`
 改为可选并新增 `folder?`，`openSession` payload 新增 `folder?` / `authority?`，网关在目标工作区
-未打开时先自动开窗再恢复）。
+未打开时先自动开窗再恢复；v11 增加 agent 斜杠指令：快照 `availableCommands` 与
+`available_commands_snapshot` 增量，供手机输入 `/` 时做内联补全）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
@@ -253,8 +255,8 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 
 **M2 快照与增量事件**：
 
-- `MobileSessionSnapshot { seq, summary, timeline, plan, configOptions, usage?,
-pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
+- `MobileSessionSnapshot { seq, summary, timeline, plan, configOptions, availableCommands,
+  usage?, pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
 - `summary` 含 `ref / agentId / agentName? / title / status / displayStatus / bucket /
 workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
 hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会话最近活动时间，
@@ -271,8 +273,11 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
   false；`messageId` 只在 user 且非 autoRetry 时出现。
 - `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、
   `tool_call_upsert`、`timeline_item_added/removed`、`plan_snapshot`、
-  `config_options_snapshot`、`summary_changed`、`permission_upsert/cleared`、
-  `elicitation_upsert/cleared`。
+  `config_options_snapshot`、`available_commands_snapshot`、`summary_changed`、
+  `permission_upsert/cleared`、`elicitation_upsert/cleared`。
+- `availableCommands` 只含展示所需字段：`{ name, description, inputHint? }`。`name` 由桥在投影时
+  去掉前导 `/` 并按小写去重；空名或含空白的条目直接丢弃（否则网关的整帧自校验会失败）。
+  上限 100 条，name ≤128、description ≤256、inputHint ≤128 字符；快照与增量都发全量列表。
 - v3 的 `MobilePendingPermission` 带 `requestId`、每个选项带 `allowedOnMobile`，并可能带
   `autoResolve { optionId, deadlineAt?, paused }`；`permission_cleared` 带
   `{ requestId, reason, source }`，让手机区分 PC / 手机 / 自动执行与「被新请求取代」。

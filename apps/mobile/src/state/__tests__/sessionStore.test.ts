@@ -36,6 +36,7 @@ describe('SessionStore snapshot', () => {
           },
         ],
         usage: { used: 10, size: 100 },
+        availableCommands: [{ name: 'compact', description: 'Compact the conversation' }],
         pendingPermission: {
           requestId: 'req-1',
           toolCallId: 't1',
@@ -54,6 +55,9 @@ describe('SessionStore snapshot', () => {
     expect(state.plan).toEqual([{ content: 'step', status: 'in_progress' }])
     expect(state.configOptions).toHaveLength(1)
     expect(state.usage).toEqual({ used: 10, size: 100 })
+    expect(state.availableCommands).toEqual([
+      { name: 'compact', description: 'Compact the conversation' },
+    ])
     expect(state.pendingPermission?.title).toBe('Run')
     expect(state.isReplayingHistory).toBe(true)
     expect(state.truncated).toBe(true)
@@ -294,6 +298,10 @@ describe('SessionStore other events', () => {
       },
       { type: 'summary_changed', summary },
       {
+        type: 'available_commands_snapshot',
+        commands: [{ name: 'diff', description: 'Review', inputHint: 'path' }],
+      },
+      {
         type: 'permission_upsert',
         permission: {
           requestId: 'req-1',
@@ -319,6 +327,9 @@ describe('SessionStore other events', () => {
     expect(state.configOptions[0]?.currentValue).toBe('Opus')
     expect(state.summary?.title).toBe('Renamed')
     expect(state.ref).toEqual(summary.ref)
+    expect(state.availableCommands).toEqual([
+      { name: 'diff', description: 'Review', inputHint: 'path' },
+    ])
     expect(state.pendingPermission?.title).toBe('Run')
     expect(state.pendingElicitation?.message).toBe('Which one?')
 

@@ -26,6 +26,7 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     online: true,
     imageSupported: true,
     fileSupported: true,
+    commands: [],
     onUploadAttachment,
     onSend,
     onStop,
@@ -193,6 +194,105 @@ describe('Composer', () => {
     )
     expect(input.value).toBe('original prompt')
   })
+
+  describe('slash commands', () => {
+    const commands = [
+      { name: 'diff', description: 'Review the working tree', inputHint: 'path' },
+      { name: 'compact', description: 'Compact the conversation' },
+    ]
+
+    const type = (input: HTMLTextAreaElement, value: string): void => {
+      fireEvent.change(input, { target: { value } })
+    }
+
+    it('opens on / and filters as the user types', () => {
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '/')
+      expect(screen.getAllByTestId('composer-command-option')).toHaveLength(2)
+
+      type(input, '/co')
+      const options = screen.getAllByTestId('composer-command-option')
+      expect(options).toHaveLength(1)
+      expect(options[0]?.textContent).toContain('/compact')
+    })
+
+    it('does not open when the agent advertises no commands', () => {
+      renderComposer()
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '/')
+      expect(screen.queryByTestId('composer-command-panel')).toBeNull()
+      expect(screen.queryByTestId('composer-slash')).toBeNull()
+    })
+
+    it('inserts the picked command and leaves the caret ready for arguments', async () => {
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/di')
+
+      fireEvent.click(screen.getAllByTestId('composer-command-option')[0]!)
+
+      await waitFor(() => expect(input.value).toBe('/diff '))
+      expect(input.selectionStart).toBe(6)
+      expect(screen.queryByTestId('composer-command-panel')).toBeNull()
+      expect(document.activeElement).toBe(input)
+    })
+
+    it('closes once the caret leaves the command token', () => {
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/diff hello')
+
+      expect(screen.queryByTestId('composer-command-panel')).toBeNull()
+    })
+
+    it('supports arrow keys, Enter and Escape', async () => {
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/')
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await waitFor(() => expect(input.value).toBe('/compact '))
+
+      type(input, '/')
+      fireEvent.keyDown(input, { key: 'Escape' })
+      expect(screen.queryByTestId('composer-command-panel')).toBeNull()
+    })
+
+    it('offers the slash shortcut only for an empty composer', () => {
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      expect(screen.getByTestId('composer-slash')).toBeTruthy()
+
+      fireEvent.click(screen.getByTestId('composer-slash'))
+      expect(input.value).toBe('/')
+      expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
+
+      type(input, '/di')
+      expect(screen.queryByTestId('composer-slash')).toBeNull()
+    })
+
+    it('does not pop the list for a restored draft until the user edits', () => {
+      sessionStorage.setItem(draftKey('1:s1'), '/diff')
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      expect(screen.queryByTestId('composer-command-panel')).toBeNull()
+
+      type(input, '/diff ')
+      expect(screen.queryByTestId('composer-command-panel')).toBeNull()
+      type(input, '/dif')
+      expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
+    })
+  })
 })
 
 function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
@@ -203,6 +303,7 @@ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) 
     online: true,
     imageSupported: true,
     fileSupported: true,
+    commands: [],
     onUploadAttachment: vi.fn(async () => ({
       id: 'att-1',
       kind: 'image' as const,

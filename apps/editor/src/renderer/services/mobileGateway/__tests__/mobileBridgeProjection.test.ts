@@ -1,9 +1,12 @@
-import { MAX_ATTACHMENTS_PER_PROMPT } from '@universe-editor/mobile-protocol'
+import { MAX_ATTACHMENTS_PER_PROMPT, MAX_MOBILE_COMMANDS } from '@universe-editor/mobile-protocol'
+import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import type { AcpChildItem, AcpToolCall } from '../../acp/session/acpSession.js'
 import type { AcpMessage } from '../../acp/session/acpSessionModel.js'
 import { describe, expect, it } from 'vitest'
 import {
+  diffAvailableCommands,
   diffMessage,
+  projectAvailableCommands,
   projectMessage,
   projectToolCall,
   type TimelineProjectionContext,
@@ -33,6 +36,54 @@ const childMessage: AcpChildItem = {
     streaming: false,
   },
 }
+
+describe('projectAvailableCommands', () => {
+  const command = (overrides: Record<string, unknown> = {}): AvailableCommand =>
+    ({
+      name: 'compact',
+      description: 'Compact the conversation',
+      ...overrides,
+    }) as unknown as AvailableCommand
+
+  it('strips leading slashes and projects the argument hint', () => {
+    expect(
+      projectAvailableCommands([
+        command({ name: '/compact', input: { hint: 'instructions' } }),
+        command({ name: 'mcp:github:review', description: '  Review\n a PR  ' }),
+      ]),
+    ).toStrictEqual([
+      { name: 'compact', description: 'Compact the conversation', inputHint: 'instructions' },
+      { name: 'mcp:github:review', description: 'Review a PR' },
+    ])
+  })
+
+  it('drops empty or whitespace names and de-duplicates case-insensitively', () => {
+    expect(
+      projectAvailableCommands([
+        command({ name: '/' }),
+        command({ name: 'two words' }),
+        command({ name: 'Status' }),
+        command({ name: '/status', description: 'duplicate' }),
+      ]),
+    ).toStrictEqual([{ name: 'Status', description: 'Compact the conversation' }])
+  })
+
+  it('caps the command count', () => {
+    const commands = Array.from({ length: MAX_MOBILE_COMMANDS + 5 }, (_, index) =>
+      command({ name: `cmd-${index}` }),
+    )
+    expect(projectAvailableCommands(commands)).toHaveLength(MAX_MOBILE_COMMANDS)
+  })
+
+  it('emits a snapshot event only when the projection changed', () => {
+    const commands = [{ name: 'status', description: 'Show status' }]
+    expect(diffAvailableCommands(commands, commands)).toBeUndefined()
+    expect(diffAvailableCommands([], commands)).toStrictEqual({
+      type: 'available_commands_snapshot',
+      commands,
+    })
+  })
+})
 
 describe('projectToolCall only-message flags', () => {
   it('omits both flags for an ordinary tool call', () => {

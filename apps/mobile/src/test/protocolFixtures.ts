@@ -43,6 +43,7 @@ export function sessionSnapshot(
     timeline: [],
     plan: [],
     configOptions: [],
+    availableCommands: [],
     isReplayingHistory: false,
     ...overrides,
   }

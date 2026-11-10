@@ -89,6 +89,7 @@ import type {
   MobilePermissionSettleSource,
 } from '@universe-editor/mobile-protocol'
 import {
+  diffAvailableCommands,
   diffConfigOptions,
   diffElicitation,
   diffPermission,
@@ -117,6 +118,7 @@ interface SessionStream {
   publishedTimeline: MobileBridgeSessionSnapshot['timeline']
   publishedPlan: MobileBridgeSessionSnapshot['plan']
   publishedConfigOptions: MobileBridgeSessionSnapshot['configOptions']
+  publishedCommands: MobileBridgeSessionSnapshot['availableCommands']
   publishedPermission: MobileBridgeSessionSnapshot['pendingPermission']
   publishedElicitation: MobileBridgeSessionSnapshot['pendingElicitation']
   publishedSummary: MobileBridgeSessionSummary | undefined
@@ -879,6 +881,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       publishedTimeline: [],
       publishedPlan: [],
       publishedConfigOptions: [],
+      publishedCommands: [],
       publishedPermission: undefined,
       publishedElicitation: undefined,
       publishedSummary: undefined,
@@ -957,6 +960,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     if (planEvent !== undefined) events.push(planEvent)
     const configEvent = diffConfigOptions(stream.publishedConfigOptions, next.configOptions)
     if (configEvent !== undefined) events.push(configEvent)
+    const commandsEvent = diffAvailableCommands(stream.publishedCommands, next.availableCommands)
+    if (commandsEvent !== undefined) events.push(commandsEvent)
     const previousPermission = stream.publishedPermission
     const permissionCleared =
       previousPermission !== undefined &&
@@ -996,6 +1001,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     stream.publishedTimeline = next.timeline
     stream.publishedPlan = next.plan
     stream.publishedConfigOptions = next.configOptions
+    stream.publishedCommands = next.availableCommands
     stream.publishedPermission = next.pendingPermission
     stream.publishedElicitation = next.pendingElicitation
     stream.publishedSummary = next.summary

@@ -18,6 +18,7 @@ import type {
   InboxDeltaFrame,
   InboxSnapshotFrame,
   MobileAttentionKind,
+  MobileAvailableCommand,
   MobileConfigOption,
   MobileConfigOptionType,
   MobileConfigOptionValue,
@@ -113,6 +114,10 @@ export const MAX_TIMELINE_ITEMS = 20_000
 export const MAX_EVENTS_PER_DELTA = 5_000
 export const MAX_PLAN_ENTRIES = 500
 export const MAX_CONFIG_OPTIONS = 200
+export const MAX_MOBILE_COMMANDS = 100
+export const MAX_COMMAND_NAME_LENGTH = 128
+export const MAX_COMMAND_DESCRIPTION_LENGTH = 256
+export const MAX_COMMAND_INPUT_HINT_LENGTH = 128
 export const MAX_PERMISSION_OPTIONS = 64
 export const MAX_TOOL_CALL_DIFFS = 256
 export const MAX_TOOL_CALL_LOCATIONS = 256
@@ -1065,6 +1070,8 @@ function parseSessionSnapshot(value: unknown): Result<MobileSessionSnapshot> {
   if (!plan.ok) return plan
   const configOptions = parseConfigOptions(value.configOptions)
   if (!configOptions.ok) return configOptions
+  const availableCommands = parseAvailableCommands(value.availableCommands)
+  if (!availableCommands.ok) return availableCommands
   const isReplayingHistory = value.isReplayingHistory
   if (typeof isReplayingHistory !== 'boolean') {
     return fail('bad_request', 'session.isReplayingHistory must be a boolean')
@@ -1085,6 +1092,7 @@ function parseSessionSnapshot(value: unknown): Result<MobileSessionSnapshot> {
     timeline: timeline.value,
     plan: plan.value,
     configOptions: configOptions.value,
+    availableCommands: availableCommands.value,
     isReplayingHistory,
     ...(usage.value !== undefined ? { usage: usage.value } : {}),
     ...(pendingPermission.value !== undefined
@@ -1561,6 +1569,45 @@ function parseConfigOptions(value: unknown): Result<MobileConfigOption[]> {
   return ok(options)
 }
 
+function parseAvailableCommands(value: unknown): Result<MobileAvailableCommand[]> {
+  if (!Array.isArray(value) || value.length > MAX_MOBILE_COMMANDS) {
+    return fail(
+      'bad_request',
+      `availableCommands must be an array of at most ${MAX_MOBILE_COMMANDS}`,
+    )
+  }
+  const commands: MobileAvailableCommand[] = []
+  for (const raw of value) {
+    if (!isRecord(raw)) return fail('bad_request', 'availableCommands entries must be objects')
+    const name = raw.name
+    if (!isNonEmptyBoundedString(name, MAX_COMMAND_NAME_LENGTH)) {
+      return fail('bad_request', `command.name must be 1–${MAX_COMMAND_NAME_LENGTH} characters`)
+    }
+    if (/\s/.test(name)) {
+      return fail('bad_request', 'command.name must not contain whitespace')
+    }
+    const description = raw.description
+    if (!isBoundedString(description, MAX_COMMAND_DESCRIPTION_LENGTH)) {
+      return fail(
+        'bad_request',
+        `command.description must be at most ${MAX_COMMAND_DESCRIPTION_LENGTH} characters`,
+      )
+    }
+    const inputHint = parseOptionalString(
+      raw.inputHint,
+      MAX_COMMAND_INPUT_HINT_LENGTH,
+      'command.inputHint',
+    )
+    if (!inputHint.ok) return inputHint
+    commands.push({
+      name,
+      description,
+      ...(inputHint.value !== undefined ? { inputHint: inputHint.value } : {}),
+    })
+  }
+  return ok(commands)
+}
+
 function parseConfigOptionValues(value: unknown): Result<MobileConfigOptionValue[]> {
   if (!Array.isArray(value) || value.length > MAX_CONFIG_OPTIONS) {
     return fail('bad_request', 'configOption.options must be a bounded array')
@@ -1909,6 +1956,11 @@ function parseSessionEvent(value: unknown): Result<MobileSessionEvent> {
       const options = parseConfigOptions(value.options)
       if (!options.ok) return options
       return ok({ type: 'config_options_snapshot', options: options.value })
+    }
+    case 'available_commands_snapshot': {
+      const commands = parseAvailableCommands(value.commands)
+      if (!commands.ok) return commands
+      return ok({ type: 'available_commands_snapshot', commands: commands.value })
     }
     case 'summary_changed': {
       const summary = parseSessionSummary(value.summary)

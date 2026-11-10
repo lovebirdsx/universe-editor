@@ -1,4 +1,4 @@
-import type { SessionConfigOption } from '@agentclientprotocol/sdk'
+import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import {
   MAX_TITLE_LENGTH,
   parseServerFrame,
@@ -62,6 +62,7 @@ interface FakeSessionHarness {
   toolCalls: ISettableObservable<readonly AcpToolCall[]>
   plan: ISettableObservable<readonly AcpPlanEntry[]>
   configOptions: ISettableObservable<readonly SessionConfigOption[]>
+  availableCommands: ISettableObservable<readonly AvailableCommand[]>
   usage: ISettableObservable<AcpUsage | undefined>
   pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
   pendingElicitation: ISettableObservable<AcpPendingElicitation | undefined>
@@ -92,6 +93,10 @@ function makeSession(
   const toolCalls = observableValue<readonly AcpToolCall[]>('test.toolCalls', [])
   const plan = observableValue<readonly AcpPlanEntry[]>('test.plan', [])
   const configOptions = observableValue<readonly SessionConfigOption[]>('test.config', [])
+  const availableCommands = observableValue<readonly AvailableCommand[]>(
+    'test.availableCommands',
+    [],
+  )
   const usage = observableValue<AcpUsage | undefined>('test.usage', undefined)
   const pendingPermission = observableValue<AcpPendingPermission | undefined>(
     'test.permission',
@@ -125,6 +130,7 @@ function makeSession(
     toolCalls,
     plan,
     configOptions,
+    availableCommands,
     usage,
     pendingPermission,
     pendingElicitation,
@@ -151,6 +157,7 @@ function makeSession(
     toolCalls,
     plan,
     configOptions,
+    availableCommands,
     usage,
     pendingPermission,
     pendingElicitation,
@@ -377,6 +384,17 @@ describe('MobileBridgeService', () => {
       undefined,
     )
     first.usage.set({ used: 10, size: 100, cost: { amount: 0.1, currency: 'USD' } }, undefined)
+    first.availableCommands.set(
+      [
+        {
+          name: '/compact',
+          description: 'Compact  the conversation',
+          input: { hint: 'instructions' },
+        },
+        { name: 'status', description: 'Show status' },
+      ] as unknown as AvailableCommand[],
+      undefined,
+    )
 
     const snapshot = await harness.service.getSnapshot('s1')
 
@@ -427,6 +445,50 @@ describe('MobileBridgeService', () => {
       size: 100,
       cost: { amount: 0.1, currency: 'USD' },
     })
+    expect(snapshot?.availableCommands).toStrictEqual([
+      {
+        name: 'compact',
+        description: 'Compact the conversation',
+        inputHint: 'instructions',
+      },
+      { name: 'status', description: 'Show status' },
+    ])
+  })
+
+  it('streams command-list changes once and skips identical projections', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1')
+    harness.add(first)
+    await harness.service.startStreaming()
+    await flush()
+
+    const commands = [
+      { name: 'compact', description: 'Compact the conversation' },
+    ] as unknown as AvailableCommand[]
+    first.availableCommands.set(commands, undefined)
+    await flush()
+
+    const commandEvents = harness.events.flatMap((event) =>
+      event.kind === 'session_delta'
+        ? event.events.filter((delta) => delta.type === 'available_commands_snapshot')
+        : [],
+    )
+    expect(commandEvents).toStrictEqual([
+      {
+        type: 'available_commands_snapshot',
+        commands: [{ name: 'compact', description: 'Compact the conversation' }],
+      },
+    ])
+
+    first.availableCommands.set([...commands], undefined)
+    await flush()
+    expect(
+      harness.events.filter(
+        (event) =>
+          event.kind === 'session_delta' &&
+          event.events.some((delta) => delta.type === 'available_commands_snapshot'),
+      ),
+    ).toHaveLength(1)
   })
 
   it('clamps oversized projected fields so the snapshot passes protocol validation', async () => {

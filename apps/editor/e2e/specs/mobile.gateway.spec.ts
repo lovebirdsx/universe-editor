@@ -1005,6 +1005,39 @@ test.describe('mobile gateway', () => {
     }
   })
 
+  test('@p0 suggests slash commands on the phone and inserts the picked one', async ({
+    page,
+    workbench,
+  }) => {
+    await startEchoSession(page, workbench, { ECHO_AGENT_COMMANDS: '1' })
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+
+      const input = phone.getByTestId('composer-input')
+      const panel = phone.getByTestId('composer-command-panel')
+      // available_commands_update arrives asynchronously; the "/" button only
+      // renders once the list is non-empty, so it is the ready signal.
+      await expect(phone.getByTestId('composer-slash')).toBeVisible()
+      await input.focus()
+      await input.fill('/')
+      await expect(panel).toBeVisible()
+      await expect(panel.getByTestId('composer-command-option')).toHaveCount(3)
+
+      await input.fill('/di')
+      await expect(panel.getByTestId('composer-command-option')).toHaveCount(1)
+      await expect(panel).toContainText('/diff')
+
+      await panel.getByTestId('composer-command-option').first().click()
+      await expect(input).toHaveValue('/diff ')
+      await expect(panel).toHaveCount(0)
+      await expect(input).toBeFocused()
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
   test('@p0 sends a photo and a file attachment from the phone UI', async ({ page, workbench }) => {
     await startEchoSession(page, workbench, { ECHO_AGENT_IMAGE: '1' })
     const { browser, context, phone } = await pairPhone(page, workbench)

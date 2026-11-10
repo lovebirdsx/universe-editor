@@ -1647,7 +1647,9 @@ input:focus-visible {
   padding: 10px 12px calc(env(safe-area-inset-bottom) + 10px);
   background: var(--surface);
   border-top: 1px solid var(--border);
-  max-height: 62dvh;
+  /* iOS keyboards shrink only the visual viewport, so `dvh` alone can exceed
+     the pinned `.session-page` height. Percent is relative to that height. */
+  max-height: min(62dvh, 62%);
   overflow-y: auto;
 }
 
@@ -2266,6 +2268,62 @@ input:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Keep the input (and any suggestion panel) visible when the footer holds a
+     tall pending sheet; the footer itself is the scroll container. */
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.composer__commands {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(52px * 4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.composer__command {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.composer__command[data-active='true'] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.composer__command-name {
+  flex: none;
+  font-weight: 600;
+}
+
+.composer__command-hint {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer__command-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .composer__hint {
@@ -2297,6 +2355,19 @@ input:focus-visible {
 
 .composer__attach:disabled {
   opacity: 0.5;
+}
+
+.composer__slash {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .composer__attachments {

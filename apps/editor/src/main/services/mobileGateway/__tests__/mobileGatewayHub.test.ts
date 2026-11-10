@@ -190,6 +190,7 @@ function snapshot(
     timeline: [{ kind: 'message', id: 'm1', role: 'user', text: 'hello', streaming: false }],
     plan: [],
     configOptions: [],
+    availableCommands: [],
     isReplayingHistory: false,
     ...overrides,
   }

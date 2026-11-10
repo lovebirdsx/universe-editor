@@ -367,6 +367,7 @@ export function SessionPage({
               online={online}
               imageSupported={state.summary?.imageSupported === true}
               fileSupported={state.summary?.authority === undefined}
+              commands={state.availableCommands}
               onUploadAttachment={(file, kind) => client.uploadAttachment(file, kind)}
               prefill={prefill}
               onSend={(text, attachmentIds) => client.sendPrompt(text, attachmentIds)}

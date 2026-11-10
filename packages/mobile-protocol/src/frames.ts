@@ -251,6 +251,15 @@ export interface MobilePendingElicitation {
   url?: string
 }
 
+/** One slash command advertised by the agent. Display adds the leading `/`. */
+export interface MobileAvailableCommand {
+  /** Canonical name with leading slashes stripped; never contains whitespace. */
+  name: string
+  description: string
+  /** ACP `input.hint`; rendered as `<hint>` after the command name. */
+  inputHint?: string
+}
+
 /** Full read-only session snapshot. `seq` is the session scope sequence. */
 export interface MobileSessionSnapshot {
   seq: number
@@ -258,6 +267,7 @@ export interface MobileSessionSnapshot {
   timeline: readonly MobileTimelineItem[]
   plan: readonly MobilePlanEntry[]
   configOptions: readonly MobileConfigOption[]
+  availableCommands: readonly MobileAvailableCommand[]
   usage?: MobileUsage
   pendingPermission?: MobilePendingPermission
   pendingElicitation?: MobilePendingElicitation
@@ -723,6 +733,12 @@ export interface MobileConfigOptionsSnapshotEvent {
   options: readonly MobileConfigOption[]
 }
 
+/** Full replacement; the agent can refresh its command list mid-session. */
+export interface MobileAvailableCommandsSnapshotEvent {
+  type: 'available_commands_snapshot'
+  commands: readonly MobileAvailableCommand[]
+}
+
 export interface MobileSummaryChangedEvent {
   type: 'summary_changed'
   summary: MobileSessionSummary
@@ -767,6 +783,7 @@ export type MobileSessionEvent =
   | MobileTimelineItemRemovedEvent
   | MobilePlanSnapshotEvent
   | MobileConfigOptionsSnapshotEvent
+  | MobileAvailableCommandsSnapshotEvent
   | MobileSummaryChangedEvent
   | MobilePermissionUpsertEvent
   | MobilePermissionClearedEvent
