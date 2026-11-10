@@ -520,7 +520,7 @@ jobs:
       # runners.
       - name: Install Playwright system dependencies (Linux)
         if: runner.os == 'Linux'
-        timeout-minutes: 5
+        timeout-minutes: 8
         uses: ./.github/actions/playwright-install-deps
 
       # Browser downloads are keyed by the pnpm lock hash; restore-keys keeps the
@@ -765,7 +765,7 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Install Playwright system dependencies (Linux)
-        timeout-minutes: 5
+        timeout-minutes: 8
         uses: ./.github/actions/playwright-install-deps
 
       # typescript extension specs drive the vendored typescript-language-server
@@ -889,7 +889,7 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Install Playwright system dependencies (Linux)
-        timeout-minutes: 5
+        timeout-minutes: 8
         uses: ./.github/actions/playwright-install-deps
 
       # `pnpm --filter <pkg> build` calls the package's own build script directly,

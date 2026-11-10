@@ -1,25 +1,32 @@
 name: Install Playwright system dependencies
 description: >-
-  `playwright install-deps` with bounded apt network waits and one retry. apt on
-  shared runners intermittently hangs 6-15 min on a stale mirror and used to burn
-  the whole job timeout; callers should also set `timeout-minutes` on the step.
+  `playwright install-deps chromium` (chromium and tools groups only, not
+  firefox/webkit). A slow runner mirror trickles data instead of stalling, so
+  apt's timeouts never fire and retries keep hitting the same mirror; each
+  timed-out attempt drops the azure mirror so the next one uses
+  archive.ubuntu.com (actions/runner-images#14823). Callers should still set
+  `timeout-minutes` on the step.
 
 runs:
   using: composite
   steps:
     - shell: bash
       run: |
-        # Most hangs are a stalled mirror download: make apt itself give up and retry.
-        printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
-          | sudo tee /etc/apt/apt.conf.d/99ci-timeouts >/dev/null
-        for attempt in 1 2; do
-          if timeout --kill-after=10 120 pnpm --filter @universe-editor/editor exec playwright install-deps; then
+        for attempt in 1 2 3; do
+          start=$SECONDS
+          if timeout --kill-after=10 120 pnpm --filter @universe-editor/editor exec playwright install-deps chromium; then
+            echo "playwright install-deps succeeded on attempt ${attempt} after $((SECONDS - start))s"
             exit 0
           fi
-          echo "::warning::playwright install-deps attempt ${attempt} failed or timed out; retrying"
+          echo "::warning::playwright install-deps attempt ${attempt} failed or timed out after $((SECONDS - start))s"
+          # Show which apt/dpkg phase was running when the timeout fired.
+          ps -eo pid,etimes,args | grep -E '[a]pt|[d]pkg' || true
           # timeout only kills pnpm; the sudo'd apt-get child survives holding the
           # dpkg lock, which would make the retry fail immediately.
           sudo pkill -9 -f 'apt-get|dpkg' || true
           sudo dpkg --configure -a || true
+          # The azure mirror trickles rather than stalls, so apt keeps waiting on it;
+          # drop it so the next attempt uses archive.ubuntu.com. Repeating this is safe.
+          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt 2>/dev/null || true
         done
         exit 1
