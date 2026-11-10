@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseFileToOpen } from '../cliArgs.js'
+import { hasQuitFlag, parseFileToOpen } from '../cliArgs.js'
 
 describe('parseFileToOpen', () => {
   // Regression: `--user-data-dir <path>` (space form) must not have its value
@@ -52,8 +52,22 @@ describe('parseFileToOpen', () => {
     expect(parseFileToOpen(argv, false)).toBeUndefined()
   })
 
+  it('never treats --quit as a path and keeps a following path', () => {
+    expect(parseFileToOpen(['node', 'main.js', '--quit'], false)).toBeUndefined()
+    expect(parseFileToOpen(['node', 'main.js', '--quit', '/project'], false)).toBe('/project')
+  })
+
   it('slices argv[1+] when packaged', () => {
     // Packaged: argv[0] is the exe; a bare positional at argv[1] is the file.
     expect(parseFileToOpen(['app.exe', '/project'], true)).toBe('/project')
+  })
+})
+
+describe('hasQuitFlag', () => {
+  it('detects the flag anywhere in argv', () => {
+    expect(hasQuitFlag(['app.exe', '--quit'])).toBe(true)
+    expect(hasQuitFlag(['app.exe', '/project', '--quit'])).toBe(true)
+    expect(hasQuitFlag(['app.exe', '--quit-other'])).toBe(false)
+    expect(hasQuitFlag(['app.exe'])).toBe(false)
   })
 })

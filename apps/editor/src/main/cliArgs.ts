@@ -22,6 +22,15 @@ const VALUED_FLAGS: ReadonlySet<string> = (() => {
 })()
 
 /**
+ * `--quit` asks an already-running instance to exit (File → Exit equivalent).
+ * A second launch only forwards the flag; the primary instance calls app.quit().
+ * Kept value-less so it never consumes a following path.
+ */
+export function hasQuitFlag(argv: readonly string[]): boolean {
+  return argv.includes('--quit')
+}
+
+/**
  * Extract the first positional argument (a file or directory to open at startup).
  * Windows file associations pass the path as a plain argv entry.
  *

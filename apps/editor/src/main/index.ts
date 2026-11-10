@@ -40,7 +40,7 @@ import {
   installMainProtocolDispatcher,
   markRendererFramesUnreachable,
 } from './ipc/electronProtocol.js'
-import { parseFileToOpen } from './cliArgs.js'
+import { hasQuitFlag, parseFileToOpen } from './cliArgs.js'
 import { resolveFromRepo } from './repoPaths.js'
 import { getAppVersion } from './appVersion.js'
 import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
@@ -200,6 +200,7 @@ function parseDeepLinkArg(argv: readonly string[]): DeepLinkTarget | undefined {
 
 const startupPath = parseFileToOpen(process.argv, app.isPackaged)
 const startupDeepLink = parseDeepLinkArg(process.argv)
+const startupQuitRequested = hasQuitFlag(process.argv)
 
 // Resolve product identity once (pure): reused for the --version/--help banner
 // and for applyProductIdentity below.
@@ -412,6 +413,14 @@ if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv, workingDirectory) => {
+    // `--quit` is an external File → Exit: go straight through app.quit() so
+    // before-quit snapshots the full window set before any close handler runs.
+    // Never fall through to file/deep-link routing below.
+    if (hasQuitFlag(argv)) {
+      mainLogger.info('second-instance --quit')
+      app.quit()
+      return
+    }
     const deepLink = parseDeepLinkArg(argv)
     if (deepLink) {
       routeDeepLink(deepLink)
@@ -697,6 +706,14 @@ async function loadMainSettingsText(): Promise<string> {
 
 void app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
+  // Cold start with --quit (no instance to forward to): exit without creating a
+  // window. Skip sentinel read/arm: this launch is not a session, so it must not
+  // consume or overwrite the previous session's abnormal-exit evidence.
+  if (startupQuitRequested) {
+    mainLogger.info('startup --quit: exiting before creating a window')
+    app.quit()
+    return
+  }
   mark(PerfMarks.mainAppReady)
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
 
