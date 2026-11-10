@@ -2343,8 +2343,12 @@ input:focus-visible {
 
 .composer__attach {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   height: 44px;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-muted);
@@ -2359,8 +2363,12 @@ input:focus-visible {
 
 .composer__slash {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 44px;
   height: 44px;
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface-muted);
@@ -2449,6 +2457,15 @@ input:focus-visible {
 .composer__input:disabled {
   cursor: default;
   opacity: 0.7;
+}
+
+/* A textarea placeholder wraps by default; keep it on one line and clip it
+   instead, so a narrow phone never grows the row. */
+.composer__input::placeholder {
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .composer__send,
