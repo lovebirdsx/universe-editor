@@ -157,9 +157,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       rootDir: join(mobileDir, 'attachments'),
       logger: this._logger,
     })
-    this._gitStatus = this._register(
-      new WorkspaceGitStatusService({ logger: this._logger }),
-    )
+    this._gitStatus = this._register(new WorkspaceGitStatusService({ logger: this._logger }))
     this._hub = new MobileGatewayHub(
       this._logger,
       {

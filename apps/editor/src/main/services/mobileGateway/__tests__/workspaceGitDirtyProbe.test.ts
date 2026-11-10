@@ -28,9 +28,9 @@ describe('createWorkspaceGitDirtyProbe', () => {
     const probe = createWorkspaceGitDirtyProbe({ isDirty })
     const signal = new AbortController().signal
 
-    await expect(
-      probe({ folder: 'file:///repo', name: 'repo' }, undefined, signal),
-    ).resolves.toBe(true)
+    await expect(probe({ folder: 'file:///repo', name: 'repo' }, undefined, signal)).resolves.toBe(
+      true,
+    )
     expect(isDirty).toHaveBeenCalledWith('/repo', signal)
   })
 
@@ -39,8 +39,9 @@ describe('createWorkspaceGitDirtyProbe', () => {
     const probe = createWorkspaceGitDirtyProbe({ isDirty })
     const folder = 'file://server/share/repo'
 
-    await expect(probe({ folder, name: 'repo' }, undefined, new AbortController().signal)).resolves
-      .toBe(false)
+    await expect(
+      probe({ folder, name: 'repo' }, undefined, new AbortController().signal),
+    ).resolves.toBe(false)
     expect(isDirty).toHaveBeenCalledWith(URI.parse(folder).fsPath, expect.any(AbortSignal))
   })
 

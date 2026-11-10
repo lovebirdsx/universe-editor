@@ -48,10 +48,9 @@ function raceBridgeProbe(
   if (signal.aborted) return Promise.resolve(undefined)
   return new Promise<boolean | undefined>((resolve) => {
     let settled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
     const onAbort = (): void => finish(undefined)
     const cleanup = (): void => {
-      if (timer !== undefined) clearTimeout(timer)
+      clearTimeout(timer)
       signal.removeEventListener('abort', onAbort)
     }
     const finish = (value: boolean | undefined): void => {
@@ -60,7 +59,7 @@ function raceBridgeProbe(
       cleanup()
       resolve(value)
     }
-    timer = setTimeout(() => finish(undefined), WORKSPACE_GIT_BRIDGE_TIMEOUT_MS)
+    const timer = setTimeout(() => finish(undefined), WORKSPACE_GIT_BRIDGE_TIMEOUT_MS)
     signal.addEventListener('abort', onAbort, { once: true })
     void bridge.getWorkspaceGitDirty().then(finish, () => finish(undefined))
   })

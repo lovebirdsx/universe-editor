@@ -58,9 +58,7 @@ class FakeBridge implements IMobileBridgeService {
   readonly getSnapshot = vi.fn(async (localId: string) => this.snapshots.get(localId))
   readonly getToolCallDetail = vi.fn(async () => this.detail)
   readonly ping = vi.fn(async () => 'pong' as const)
-  readonly getWorkspaceGitDirty = vi.fn(
-    async (): Promise<boolean | undefined> => undefined,
-  )
+  readonly getWorkspaceGitDirty = vi.fn(async (): Promise<boolean | undefined> => undefined)
   readonly sendPrompt = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly cancelTurn = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resolvePermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
@@ -1792,7 +1790,9 @@ describe('MobileGatewayHub commands', () => {
       result: readonly Record<string, unknown>[]
     }
     expect(
-      frame.result.slice(0, MAX_GIT_STATUS_CANDIDATES + 1).every((item) => item['gitDirty'] === true),
+      frame.result
+        .slice(0, MAX_GIT_STATUS_CANDIDATES + 1)
+        .every((item) => item['gitDirty'] === true),
     ).toBe(true)
     expect(
       frame.result

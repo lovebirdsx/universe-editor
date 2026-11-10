@@ -1828,19 +1828,13 @@ describe('MobileBridgeService workspace git state', () => {
 
   it('reports clean when every git provider counts zero', async () => {
     const harness = makeHarness()
-    harness.scmSourceControls.set(
-      [sourceControl('git', 0), sourceControl('git', 0)],
-      undefined,
-    )
+    harness.scmSourceControls.set([sourceControl('git', 0), sourceControl('git', 0)], undefined)
     await expect(harness.service.getWorkspaceGitDirty()).resolves.toBe(false)
   })
 
   it('reports dirty when any git provider has changes', async () => {
     const harness = makeHarness()
-    harness.scmSourceControls.set(
-      [sourceControl('git', 0), sourceControl('git', 3)],
-      undefined,
-    )
+    harness.scmSourceControls.set([sourceControl('git', 0), sourceControl('git', 3)], undefined)
     await expect(harness.service.getWorkspaceGitDirty()).resolves.toBe(true)
   })
 
