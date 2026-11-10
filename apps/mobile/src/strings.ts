@@ -194,6 +194,8 @@ export const strings = {
   badgeRemote: '远程',
   badgeReadOnly: '只读',
   badgeBackgroundTasks: (count: number): string => `后台任务 ${count}`,
+  badgeWorkspaceDirty: '有修改',
+  workspaceDirtyTitle: '工作区有未提交的修改',
 
   sessionBack: '返回',
   sessionLoading: '正在获取会话…',

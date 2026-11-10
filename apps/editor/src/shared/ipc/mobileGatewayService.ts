@@ -388,6 +388,13 @@ export interface IMobileBridgeService {
    */
   ping(token?: CancellationToken): Promise<'pong'>
 
+  /**
+   * Any git source control in this window reports changes. Used by the main
+   * gateway for remote windows, whose git extension runs in the remote host.
+   * Returns undefined when no git provider has reported a count yet.
+   */
+  getWorkspaceGitDirty(token?: CancellationToken): Promise<boolean | undefined>
+
   /** Current inbox rows for this window (no streaming state required). */
   listSessions(token?: CancellationToken): Promise<readonly MobileBridgeSessionSummary[]>
 

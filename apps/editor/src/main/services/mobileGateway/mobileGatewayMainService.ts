@@ -58,6 +58,8 @@ import {
 } from './gatewayConfig.js'
 import { MOBILE_GATEWAY_CONFIG_FILE } from './gatewayConfigFile.js'
 import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
+import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
+import { WorkspaceGitStatusService } from './workspaceGitStatus.js'
 import { ensureLanCertificate, type LanCertificate } from './lanCertificate.js'
 import { buildAllowedHosts } from './requestSecurity.js'
 import {
@@ -107,6 +109,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   readonly onDidChangeConfig: Event<MobileGatewayConfigState> = this._onDidChangeConfig.event
 
   private readonly _windowBridges = new Map<number, IMobileBridgeService>()
+  private readonly _gitStatus: WorkspaceGitStatusService
   private readonly _hub: MobileGatewayHub
   private _windows: MobileGatewayWindowProvider | undefined
 
@@ -149,6 +152,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       rootDir: join(mobileDir, 'attachments'),
       logger: this._logger,
     })
+    this._gitStatus = this._register(
+      new WorkspaceGitStatusService({ logger: this._logger }),
+    )
     this._hub = new MobileGatewayHub(
       this._logger,
       {
@@ -163,6 +169,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
           this._windows?.openWindowForFolder(URI.parse(folder)) ?? Promise.resolve(),
         waitForBridge: (folder, authority, timeoutMs) =>
           this._waitForBridge(folder, authority, timeoutMs),
+        workspaceGitDirty: createWorkspaceGitDirtyProbe({
+          isDirty: (root, signal) => this._gitStatus.isDirty(root, signal),
+        }),
         attachments: this._attachments,
       },
       (attention) => this._handleAttention(attention),

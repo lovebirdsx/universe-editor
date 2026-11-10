@@ -185,6 +185,26 @@ describe('NewSessionPage', () => {
     expect(workspaceOption('file:///recent').getAttribute('aria-selected')).toBe('false')
   })
 
+  it('marks workspaces with uncommitted changes', async () => {
+    const { client } = createClient({
+      workspaces: [
+        { folder: 'file:///dirty', name: 'dirty', isOpen: true, gitDirty: true },
+        { folder: 'file:///clean', name: 'clean', isOpen: true, gitDirty: false },
+      ],
+    })
+    await renderLoaded(client)
+
+    expect(screen.getByTestId('new-session-workspace-trigger').textContent).toContain(
+      strings.badgeWorkspaceDirty,
+    )
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    expect(workspaceOption('file:///dirty').textContent).toContain(strings.badgeWorkspaceDirty)
+    expect(workspaceOption('file:///clean').textContent).not.toContain(
+      strings.badgeWorkspaceDirty,
+    )
+  })
+
   it('keeps the server order of recent workspaces (newest first)', async () => {
     const { client } = createClient({
       workspaces: [

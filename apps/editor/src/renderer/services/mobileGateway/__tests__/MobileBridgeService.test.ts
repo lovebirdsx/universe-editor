@@ -39,6 +39,7 @@ import type {
 } from '../../acp/session/acpSessionHistory.js'
 import type { IAcpAgentRegistry } from '../../acp/acpAgentRegistry.js'
 import type { IUserSettingsSyncService } from '../../configuration/UserSettingsSync.js'
+import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmService.js'
 import {
   MOBILE_BRIDGE_LARGE_THROTTLE_MS,
   MOBILE_BRIDGE_THROTTLE_MS,
@@ -217,6 +218,7 @@ function makeHarness(): {
   resumeSession: ReturnType<typeof vi.fn>
   workspace: { current: { folder: URI; name: string } | null }
   userSettings: { whenInitialized: Promise<void> }
+  scmSourceControls: ISettableObservable<readonly IScmSourceControlModel[]>
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
@@ -265,6 +267,11 @@ function makeHarness(): {
   const userSettings = {
     whenInitialized: Promise.resolve(),
   } as IUserSettingsSyncService
+  const scmSourceControls = observableValue<readonly IScmSourceControlModel[]>(
+    'test.scmSourceControls',
+    [],
+  )
+  const scm = { sourceControls: scmSourceControls } as unknown as IScmService
   const service = new MobileBridgeService(
     sessionService,
     historyService,
@@ -273,6 +280,7 @@ function makeHarness(): {
     new UriIdentityService(normalizePlatform('linux')),
     editorGroups,
     userSettings,
+    scm,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
@@ -291,6 +299,7 @@ function makeHarness(): {
     resumeSession,
     workspace: workspace as unknown as { current: { folder: URI; name: string } | null },
     userSettings,
+    scmSourceControls,
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -1798,5 +1807,46 @@ describe('MobileBridgeService attention', () => {
     harness.service.dispose()
     first.pendingElicitation.set({ request: {} } as unknown as AcpPendingElicitation, undefined)
     expect(harness.events).toHaveLength(0)
+  })
+})
+
+describe('MobileBridgeService workspace git state', () => {
+  function sourceControl(id: string, count: number | undefined): IScmSourceControlModel {
+    return {
+      id,
+      count: observableValue<number | undefined>('test.scmCount', count),
+    } as unknown as IScmSourceControlModel
+  }
+
+  it('returns undefined when no git provider has reported a count', async () => {
+    const harness = makeHarness()
+    await expect(harness.service.getWorkspaceGitDirty()).resolves.toBeUndefined()
+
+    harness.scmSourceControls.set([sourceControl('git', undefined)], undefined)
+    await expect(harness.service.getWorkspaceGitDirty()).resolves.toBeUndefined()
+  })
+
+  it('reports clean when every git provider counts zero', async () => {
+    const harness = makeHarness()
+    harness.scmSourceControls.set(
+      [sourceControl('git', 0), sourceControl('git', 0)],
+      undefined,
+    )
+    await expect(harness.service.getWorkspaceGitDirty()).resolves.toBe(false)
+  })
+
+  it('reports dirty when any git provider has changes', async () => {
+    const harness = makeHarness()
+    harness.scmSourceControls.set(
+      [sourceControl('git', 0), sourceControl('git', 3)],
+      undefined,
+    )
+    await expect(harness.service.getWorkspaceGitDirty()).resolves.toBe(true)
+  })
+
+  it('ignores non-git providers', async () => {
+    const harness = makeHarness()
+    harness.scmSourceControls.set([sourceControl('perforce', 5)], undefined)
+    await expect(harness.service.getWorkspaceGitDirty()).resolves.toBeUndefined()
   })
 })

@@ -1001,6 +1001,11 @@ async function bootstrapWorkbench(): Promise<void> {
     ProxyChannel.fromService(instantiation.createInstance(RendererSessionsService)),
   )
 
+  // The mobile bridge injects IScmService (remote windows report git state
+  // through their renderer SCM), so register it before creating the bridge.
+  const scmService = workbenchStore.add(new ScmService())
+  services.set(IScmService, scmService)
+
   // Reverse channel: main's mobile gateway calls into this window (M2 projects
   // ACP sessions through it). Created through DI so it can observe the session
   // service and history; it does no work until a phone subscribes.
@@ -1008,12 +1013,6 @@ async function bootstrapWorkbench(): Promise<void> {
     ServiceChannels.MobileBridge,
     ProxyChannel.fromService(workbenchStore.add(instantiation.createInstance(MobileBridgeService))),
   )
-
-  // Extension host client: owns the extension-host subprocess + RPC. Created here
-  // (after IOutputService/ILoggerService/proxy services are set) so the
-  // ExtensionsContribution can inject it; it starts the host on an idle phase.
-  const scmService = workbenchStore.add(new ScmService())
-  services.set(IScmService, scmService)
 
   // Timeline model (file-history providers from extensions); the built-in
   // TimelineView renders it. Needs IContextKeyService (timelineHasProvider).

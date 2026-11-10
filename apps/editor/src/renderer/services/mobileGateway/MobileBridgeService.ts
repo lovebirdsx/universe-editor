@@ -57,6 +57,7 @@ import type {
   IMobileBridgeService,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import { AcpForeignWorktreeError, IAcpSessionService } from '../acp/session/acpSessionService.js'
+import { IScmService } from '../extensions/ScmService.js'
 import {
   collectSideTaskDescendants,
   directSideTaskChildren,
@@ -149,6 +150,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
+    @IScmService private readonly _scm: IScmService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -157,6 +159,22 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
 
   ping(): Promise<'pong'> {
     return Promise.resolve('pong')
+  }
+
+  /**
+   * Remote windows run their git extension in the remote host; its SCM count
+   * (which includes untracked files) is the freshest signal available here.
+   */
+  getWorkspaceGitDirty(): Promise<boolean | undefined> {
+    let sawGitCount = false
+    for (const sourceControl of this._scm.sourceControls.get()) {
+      if (sourceControl.id !== 'git') continue
+      const count = sourceControl.count.get()
+      if (count === undefined) continue
+      sawGitCount = true
+      if (count > 0) return Promise.resolve(true)
+    }
+    return Promise.resolve(sawGitCount ? false : undefined)
   }
 
   async listSessions(): Promise<readonly MobileBridgeSessionSummary[]> {

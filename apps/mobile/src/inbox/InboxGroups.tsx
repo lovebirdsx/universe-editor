@@ -11,6 +11,8 @@ export interface InboxGroupsProps {
   readonly onCloseSession?: ((session: MobileSessionSummary) => void) | undefined
   readonly onRemoveSession?: ((session: MobileSessionSummary) => void) | undefined
   readonly onShowSessionActions?: ((session: MobileSessionSummary) => void) | undefined
+  /** Windows whose workspace has uncommitted changes (joined by ref.windowId). */
+  readonly dirtyWindowIds?: ReadonlySet<number> | undefined
   /** The PC is offline / reconnecting: keep the list visible but de-emphasised. */
   readonly stale?: boolean | undefined
 }
@@ -21,6 +23,7 @@ export function InboxGroups({
   onCloseSession,
   onRemoveSession,
   onShowSessionActions,
+  dirtyWindowIds,
   stale,
 }: InboxGroupsProps) {
   const [openKey, setOpenKey] = useState<string | undefined>(undefined)
@@ -103,6 +106,7 @@ export function InboxGroups({
                         disabled={stale === true}
                         actionsOpen={openKey === key}
                         onShowActions={() => runAction(session, onShowSessionActions)}
+                        workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
                       />
                     </SwipeableSessionRow>
                   ) : (
@@ -110,6 +114,7 @@ export function InboxGroups({
                       session={session}
                       onOpenSession={onOpenSession}
                       disabled={stale === true}
+                      workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
                     />
                   )}
                 </li>
@@ -127,6 +132,7 @@ interface SessionRowProps {
   readonly onOpenSession?: ((sessionKey: string, focusPending: boolean) => void) | undefined
   readonly disabled: boolean
   readonly actionsOpen?: boolean | undefined
+  readonly workspaceDirty?: boolean | undefined
   readonly onShowActions?: (() => void) | undefined
 }
 
@@ -135,6 +141,7 @@ function SessionRow({
   onOpenSession,
   disabled,
   actionsOpen,
+  workspaceDirty,
   onShowActions,
 }: SessionRowProps) {
   const routeKey = sessionRouteKey(session.ref)
@@ -150,6 +157,7 @@ function SessionRow({
   }
   if (session.authority !== undefined) badges.push(strings.badgeRemote)
   if (session.readOnly) badges.push(strings.badgeReadOnly)
+  if (workspaceDirty === true) badges.push(strings.badgeWorkspaceDirty)
 
   return (
     <button

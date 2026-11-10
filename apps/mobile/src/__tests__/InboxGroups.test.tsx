@@ -9,9 +9,10 @@ function session(
   localId: string,
   bucket: MobileSessionBucket,
   title: string,
+  windowId = 1,
 ): MobileSessionSummary {
   return {
-    ref: { windowId: 1, localId },
+    ref: { windowId, localId },
     agentId: 'claude',
     title,
     status: 'running',
@@ -43,6 +44,28 @@ function actionsOpen(title: string): boolean {
 }
 
 describe('InboxGroups', () => {
+  it('marks rows whose workspace has uncommitted changes', () => {
+    render(
+      <InboxGroups
+        sessions={[session('dirty', 'completed', 'Changed task')]}
+        dirtyWindowIds={new Set([1])}
+      />,
+    )
+
+    expect(screen.getByText(strings.badgeWorkspaceDirty)).toBeTruthy()
+  })
+
+  it('does not mark rows for clean or unknown windows', () => {
+    render(
+      <InboxGroups
+        sessions={[session('clean', 'completed', 'Clean task')]}
+        dirtyWindowIds={new Set([2])}
+      />,
+    )
+
+    expect(screen.queryByText(strings.badgeWorkspaceDirty)).toBeNull()
+  })
+
   it('orders buckets by urgency and renders each session', () => {
     render(
       <InboxGroups

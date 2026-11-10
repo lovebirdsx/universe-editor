@@ -132,16 +132,17 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 7`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 8`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
 `attachments`、`summary.imageSupported`、`attachment_not_found`）、fork / rewind / 侧边任务
 （对应命令、agent 能力位、消息锚点与侧边任务关系字段）与 `closeSession` 命令；v7 增加会话目录
-（`listSessionHistory` / `openSession`、`MobileSessionHistoryEntry` 与 `history` 能力位））。
+（`listSessionHistory` / `openSession`、`MobileSessionHistoryEntry` 与 `history` 能力位）；v8 增加
+工作区 git 状态（`MobileWorkspaceCandidate.windowId?` / `gitDirty?`））。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v7 的 `hello_ok.capabilities` 为
+`hello_ok { ..., serverTime, capabilities, vapidPublicKey? }`；v7 起的 `hello_ok.capabilities` 为
 `['inbox', 'commands', 'notifications', 'history', 'attachments']`（`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
 `vapidPublicKey` 只在网关可推送
 时出现，VAPID 公钥走握手而不是额外 HTTP 端点。**token 不放 URL query**，避免进入访问日志与
@@ -184,7 +185,7 @@ Referer。
 | 侧边任务 | `listSideTasks` | `{ ref }` | 直接子任务（含历史行），只读 |
 | 侧边任务 | `openSideTask` | `{ ref, sideTaskId }` | 非激活恢复；历史行也可打开 |
 | 侧边任务 | `deleteSideTask` | `{ ref, sideTaskId }` | 级联删除该任务及其子树（含历史行） |
-| 枚举 | `listWorkspaces` | `{}` | 打开窗口 ∪ 最近工作区，带 `isOpen` |
+| 枚举 | `listWorkspaces` | `{}` | 打开窗口 ∪ 最近工作区，带 `isOpen`；打开候选带 `windowId`，前 20 个候选尽力探测 `gitDirty`（见 §6） |
 | 枚举 | `listAgents` | `{}` | 由第一个已注册窗口桥返回 |
 | 会话目录 | `listSessionHistory` | `{}` | 所有已打开窗口的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
 | 会话目录 | `openSession` | `{ durableId, windowId? }` | 按 durable id 非激活恢复历史会话；带幂等键 |
@@ -335,6 +336,17 @@ owner，不会把多个 100s 串联，手机端 120s + 5s 宽限仍等得到。�
 
 **顺序即契约**：响应里已打开窗口在前、最近工作区随后且按 `lastOpened` 倒序。手机端只按
 `isOpen` 稳定分组（已打开 / 最近），不再按名称重排——字母序会覆盖最近打开时间。
+
+**工作区 git 状态**：`listWorkspaces` 尽力为候选附带 `gitDirty`（`true` 有未提交修改、`false`
+干净、省略为未知）。本地 `file:` 工作区（含 UNC）由 main 的 `WorkspaceGitStatusService` 直接执行
+`git status --porcelain -z`（`GIT_OPTIONAL_LOCKS=0`、`buildChildEnv` 清洗环境、单次 1.5s 超时、
+8MB 输出上限），结果按路径身份键缓存 5s，并合并同路径的在途请求；已打开的远程工作区走该窗口
+renderer 桥的 `getWorkspaceGitDirty`——git 扩展跑在远端 extension host，桥读取本地
+`IScmService` 中 `id === 'git'` 的 `count > 0`（含未跟踪文件），1.5s 超时；仅最近、未打开的远程
+工作区返回未知（手机也不能从它创建会话）。探测覆盖所有已打开候选（收件箱依赖），其余用较新的
+最近候选补足到 20 个，4 并发、总预算 2.5s；非 git 仓库、git 不可用、超时、renderer 未就绪
+（冷启动 git 扩展尚未报数）都静默省略字段，UI 不显示任何标记。收件箱用候选的 `windowId` 与
+`session.ref.windowId` 关联，因此不给会话摘要新增路径字段。
 
 **三种路径**（`MobileGatewayHub._newSession`）：
 
@@ -864,7 +876,7 @@ localStorage，不走协议。
 | 风险 | 影响 | 缓解 |
 |---|---|---|
 | 协议与 view-model 漂移 | 字段静默错位 | DTO 单一来源 + 映射函数 + 编译期检查；详情按需接口收窄面 |
-| 协议 v6 / v7 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
+| 协议 v7 / v8 硬切换 | 未更新的 PWA 连不上（4400） | 客户端显示「版本不一致，请刷新页面」；文档提示刷新或重新打开已安装 PWA |
 | renderer 重载与会话 rekey | 连接指向旧会话/旧 epoch | 网关按 windowId + renderer epoch 失效桥；客户端靠快照恢复 |
 | IPC 帧成本 | 大内容卡顿/超限 | 50ms 合帧、<1MB 单帧、队列超限 `resync_required` |
 | 无手机订阅时空转 | 常驻开销 | 按订阅启停，无订阅不序列化 |

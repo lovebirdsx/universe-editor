@@ -146,6 +146,16 @@ export interface MobileGatewayHost {
     authority: string | undefined,
     timeoutMs: number,
   ): Promise<number | undefined>
+  /**
+   * Best-effort dirty probe for one workspace candidate. `bridge` is present
+   * only for an open window whose renderer is ready. Implementations must not
+   * throw; `undefined` means unknown (non-repo / git missing / timeout).
+   */
+  workspaceGitDirty?(
+    workspace: MobileGatewayHostWorkspace,
+    bridge: IMobileBridgeService | undefined,
+    signal: AbortSignal,
+  ): Promise<boolean | undefined>
   /** Phone-uploaded attachments, scoped to the authenticated device. */
   attachments?: MobileGatewayAttachmentResolver
 }
@@ -195,6 +205,10 @@ const HISTORY_LIST_TIMEOUT_MS = 8_000
 const HISTORY_OWNER_TIMEOUT_MS = 5_000
 /** Keep the phone list responsive even with many open workspaces. */
 const MAX_HISTORY_RESULTS = 200
+/** Cap how many workspace candidates pay for a `git status` probe. */
+export const MAX_GIT_STATUS_CANDIDATES = 20
+const GIT_STATUS_CONCURRENCY = 4
+const GIT_STATUS_TOTAL_BUDGET_MS = 2_500
 
 const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'sendPrompt',
@@ -982,6 +996,7 @@ export class MobileGatewayHub {
       name: workspace.name,
       ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),
       isOpen: true,
+      ...(workspace.windowId !== undefined ? { windowId: workspace.windowId } : {}),
     }))
     for (const workspace of recent) {
       if (open.some((candidate) => isSameWorkspace(candidate, workspace))) continue
@@ -992,7 +1007,52 @@ export class MobileGatewayHub {
         isOpen: false,
       })
     }
+    await this._annotateWorkspaceGitDirty(result, open.length)
     return { ok: true, result }
+  }
+
+  /**
+   * Local workspaces are probed by main; remote candidates only answer through
+   * an open, ready renderer. The phone shows no marker for unknown, so a slow
+   * repo or a booting window degrades to "no badge" instead of blocking the
+   * whole list.
+   */
+  private async _annotateWorkspaceGitDirty(
+    candidates: MobileWorkspaceCandidate[],
+    openCount: number,
+  ): Promise<void> {
+    const host = this._host
+    if (host?.workspaceGitDirty === undefined) return
+    // Every open window is needed for the inbox join; only recent-only entries
+    // are capped.
+    const limit = Math.max(MAX_GIT_STATUS_CANDIDATES, openCount)
+    const targets = candidates.slice(0, limit)
+    const controller = new AbortController()
+    const results = new Map<number, boolean>()
+    const run = mapWithConcurrency(targets, GIT_STATUS_CONCURRENCY, async (candidate, index) => {
+      const entry =
+        candidate.windowId !== undefined ? this._windows.get(candidate.windowId) : undefined
+      const bridge = entry?.rendererReady === true ? entry.bridge : undefined
+      try {
+        const value = await host.workspaceGitDirty!(candidate, bridge, controller.signal)
+        if (!controller.signal.aborted && value !== undefined) results.set(index, value)
+      } catch {
+        // Unknown for this candidate; keep probing the rest.
+      }
+    })
+    let budgetTimer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      run,
+      new Promise<void>((resolve) => {
+        budgetTimer = setTimeout(resolve, GIT_STATUS_TOTAL_BUDGET_MS)
+      }),
+    ])
+    if (budgetTimer !== undefined) clearTimeout(budgetTimer)
+    controller.abort()
+    for (const [index, value] of results) {
+      const candidate = candidates[index]
+      if (candidate !== undefined) candidate.gitDirty = value
+    }
   }
 
   private async _listAgents(): Promise<CommandOutcome> {
@@ -1732,6 +1792,25 @@ function isRemoteWorkspace(folder: string, authority: string | undefined): boole
   } catch {
     return false
   }
+}
+
+async function mapWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  fn: (item: T, index: number) => Promise<void>,
+): Promise<void> {
+  let next = 0
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const index = next
+      next += 1
+      if (index >= items.length) return
+      const item = items[index]
+      if (item === undefined) return
+      await fn(item, index)
+    }
+  })
+  await Promise.all(workers)
 }
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {

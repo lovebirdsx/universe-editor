@@ -20,6 +20,7 @@ import { MobileAttachmentError } from '../mobileAttachmentStore.js'
 import {
   COMMAND_IDEMPOTENCY_TTL_MS,
   MAX_BUFFERED_SESSION_BYTES,
+  MAX_GIT_STATUS_CANDIDATES,
   SEND_PROMPT_TIMEOUT_MS,
   MobileGatewayHub,
   NEW_SESSION_TIMEOUT_MS,
@@ -57,6 +58,9 @@ class FakeBridge implements IMobileBridgeService {
   readonly getSnapshot = vi.fn(async (localId: string) => this.snapshots.get(localId))
   readonly getToolCallDetail = vi.fn(async () => this.detail)
   readonly ping = vi.fn(async () => 'pong' as const)
+  readonly getWorkspaceGitDirty = vi.fn(
+    async (): Promise<boolean | undefined> => undefined,
+  )
   readonly sendPrompt = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly cancelTurn = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resolvePermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
@@ -1589,10 +1593,172 @@ describe('MobileGatewayHub commands', () => {
       requestId: 'w1',
       ok: true,
       result: [
-        { folder: 'file:///workspace/open', name: 'open', isOpen: true },
+        { folder: 'file:///workspace/open', name: 'open', isOpen: true, windowId: 1 },
         { folder: 'file:///workspace/older', name: 'older', isOpen: false },
       ],
     })
+  })
+
+  it('annotates known git state and keeps unknown candidates bare', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/open', name: 'open' },
+      ]),
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/clean', name: 'clean' },
+        { folder: 'remote-ssh://host/remote', name: 'remote', authority: 'host' },
+      ]),
+      workspaceGitDirty: vi.fn(async (workspace) => {
+        if (workspace.folder.endsWith('/open')) return true
+        if (workspace.folder.endsWith('/clean')) return false
+        return undefined
+      }),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'w2',
+      kind: 'listWorkspaces',
+      payload: {},
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'w2',
+      ok: true,
+      result: [
+        {
+          folder: 'file:///workspace/open',
+          name: 'open',
+          isOpen: true,
+          windowId: 1,
+          gitDirty: true,
+        },
+        { folder: 'file:///workspace/clean', name: 'clean', isOpen: false, gitDirty: false },
+        { folder: 'remote-ssh://host/remote', name: 'remote', authority: 'host', isOpen: false },
+      ],
+    })
+  })
+
+  it('passes the ready bridge to remote open candidates', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'remote-ssh://host/repo', name: 'repo', authority: 'host' },
+      ]),
+      workspaceGitDirty: vi.fn(async (_workspace, bridge) =>
+        bridge === undefined ? undefined : bridge.getWorkspaceGitDirty(),
+      ),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+
+    const bridge = new FakeBridge()
+    bridge.getWorkspaceGitDirty.mockResolvedValueOnce(true)
+    hub.registerWindow(1, bridge, () => 'repo')
+    // The ready probe must finish before the gateway trusts the bridge.
+    await vi.waitFor(() => expect(bridge.startStreaming).toHaveBeenCalled())
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'w3',
+      kind: 'listWorkspaces',
+      payload: {},
+    })
+    const frame = connection.frames.find(
+      (candidate) => candidate.type === 'command_result' && candidate.requestId === 'w3',
+    )
+    expect(frame).toMatchObject({
+      type: 'command_result',
+      requestId: 'w3',
+      ok: true,
+      result: [
+        {
+          folder: 'remote-ssh://host/repo',
+          name: 'repo',
+          authority: 'host',
+          isOpen: true,
+          windowId: 1,
+          gitDirty: true,
+        },
+      ],
+    })
+    expect(bridge.getWorkspaceGitDirty).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the list when one probe fails', async () => {
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/a', name: 'a' },
+        { folder: 'file:///workspace/b', name: 'b' },
+      ]),
+      workspaceGitDirty: vi.fn(async (workspace) => {
+        if (workspace.folder.endsWith('/a')) throw new Error('boom')
+        return true
+      }),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'w4',
+      kind: 'listWorkspaces',
+      payload: {},
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'w4',
+      ok: true,
+      result: [
+        { folder: 'file:///workspace/a', name: 'a', isOpen: false },
+        { folder: 'file:///workspace/b', name: 'b', isOpen: false, gitDirty: true },
+      ],
+    })
+  })
+
+  it('probes every open window and caps only recent candidates', async () => {
+    const open = Array.from({ length: MAX_GIT_STATUS_CANDIDATES + 1 }, (_, index) => ({
+      windowId: index + 1,
+      folder: `file:///workspace/open-${index}`,
+      name: `open-${index}`,
+    }))
+    const recent = Array.from({ length: 5 }, (_, index) => ({
+      folder: `file:///workspace/recent-${index}`,
+      name: `recent-${index}`,
+    }))
+    const probe = vi.fn(async () => true)
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => open),
+      listRecentWorkspaces: vi.fn(async () => recent),
+      workspaceGitDirty: probe,
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'w5',
+      kind: 'listWorkspaces',
+      payload: {},
+    })
+    expect(probe).toHaveBeenCalledTimes(MAX_GIT_STATUS_CANDIDATES + 1)
+    const frame = connection.frames.at(-1) as {
+      result: readonly Record<string, unknown>[]
+    }
+    expect(
+      frame.result.slice(0, MAX_GIT_STATUS_CANDIDATES + 1).every((item) => item['gitDirty'] === true),
+    ).toBe(true)
+    expect(
+      frame.result
+        .slice(MAX_GIT_STATUS_CANDIDATES + 1)
+        .every((item) => item['gitDirty'] === undefined),
+    ).toBe(true)
   })
 
   it('lists agents through the first registered bridge', async () => {

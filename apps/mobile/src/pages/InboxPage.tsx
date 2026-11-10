@@ -17,7 +17,8 @@ import { StatusBar } from '../components/StatusBar.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
 import { isSessionWorking } from '../session/sessionStatus.js'
-import { useState } from 'react'
+import { collectDirtyWindowIds } from '../inbox/workspaceDirty.js'
+import { useEffect, useState } from 'react'
 
 export interface InboxPageProps {
   readonly client: MobileClient
@@ -46,6 +47,7 @@ export function InboxPage({
   const socketState = useStore(client.getSocketStateStore())
   const diagnosis = useStore(client.getConnectionDiagnosisStore())
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [dirtyWindowIds, setDirtyWindowIds] = useState<ReadonlySet<number>>(() => new Set())
   const [sessionAction, setSessionAction] = useState<
     { readonly session: MobileSessionSummary; readonly view: InboxSessionSheetView } | undefined
   >(undefined)
@@ -56,6 +58,22 @@ export function InboxPage({
       ? undefined
       : (inbox.sessions.find((session) => refMatches(session.ref, sessionAction.session.ref)) ??
         sessionAction.session)
+
+  // One-shot on entry / reconnect: the badge is advisory, so a failure keeps
+  // the previous set rather than replacing it with "everything clean".
+  useEffect(() => {
+    if (socketState !== 'connected') return
+    let cancelled = false
+    void client
+      .listWorkspaces()
+      .then((workspaces) => {
+        if (!cancelled) setDirtyWindowIds(collectDirtyWindowIds(workspaces))
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [client, socketState])
 
   const unpair = (): void => {
     setSettingsOpen(false)
@@ -170,6 +188,7 @@ export function InboxPage({
           onCloseSession={closeSession}
           onRemoveSession={removeSession}
           onShowSessionActions={(session) => setSessionAction({ session, view: 'menu' })}
+          dirtyWindowIds={dirtyWindowIds}
           stale={socketState !== 'connected'}
         />
       )

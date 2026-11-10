@@ -220,6 +220,11 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
                     {selectedWorkspace.isOpen && (
                       <span className="session-badge">{strings.newSessionWorkspaceOpen}</span>
                     )}
+                    {selectedWorkspace.gitDirty === true && (
+                      <span className="session-badge" title={strings.workspaceDirtyTitle}>
+                        {strings.badgeWorkspaceDirty}
+                      </span>
+                    )}
                     {isRemoteWorkspace(selectedWorkspace) && (
                       <span className="session-badge">{strings.newSessionWorkspaceRemote}</span>
                     )}

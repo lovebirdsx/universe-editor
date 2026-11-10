@@ -120,6 +120,11 @@ export function WorkspacePickerSheet({
         {workspace.isOpen && (
           <span className="session-badge">{strings.newSessionWorkspaceOpen}</span>
         )}
+        {workspace.gitDirty === true && (
+          <span className="session-badge" title={strings.workspaceDirtyTitle}>
+            {strings.badgeWorkspaceDirty}
+          </span>
+        )}
         {isRemoteWorkspace(workspace) && (
           <span className="session-badge">{strings.newSessionWorkspaceRemote}</span>
         )}

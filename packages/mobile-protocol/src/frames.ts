@@ -590,6 +590,10 @@ export interface MobileWorkspaceCandidate {
   name: string
   authority?: string
   isOpen: boolean
+  /** Present for open workspaces; the phone joins inbox rows by window id. */
+  windowId?: number
+  /** true/false when known; omitted when unknown (non-repo / git missing / timeout). */
+  gitDirty?: boolean
 }
 
 export interface MobileAgentCandidate {
