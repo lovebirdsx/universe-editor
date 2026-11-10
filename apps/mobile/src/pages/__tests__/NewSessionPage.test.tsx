@@ -80,10 +80,27 @@ describe('NewSessionPage', () => {
 
     fireEvent.click(screen.getByTestId('new-session-submit'))
 
-    await waitFor(() =>
-      expect(newSession).toHaveBeenCalledWith('echo', { folder: 'file:///open' }, undefined),
-    )
+    await waitFor(() => expect(newSession).toHaveBeenCalledWith('echo', { folder: 'file:///open' }))
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith('1:s9'))
+  })
+
+  it('replaces the new-session entry so back returns to the inbox', async () => {
+    const { client } = createClient()
+    const replaceState = vi.spyOn(window.history, 'replaceState')
+    const pushState = vi.spyOn(window.history, 'pushState')
+    try {
+      render(<NewSessionPage client={client} onBack={vi.fn()} onCreated={vi.fn()} />)
+      await waitFor(() => expect(screen.getByTestId('new-session-submit')).toBeTruthy())
+
+      fireEvent.click(screen.getByTestId('new-session-submit'))
+
+      await waitFor(() => expect(replaceState).toHaveBeenCalledTimes(1))
+      expect(replaceState.mock.calls[0]?.[2]).toBe('/s/1%3As9')
+      expect(pushState).not.toHaveBeenCalled()
+    } finally {
+      replaceState.mockRestore()
+      pushState.mockRestore()
+    }
   })
 
   it('picks an agent from the overlay sheet and closes it', async () => {
@@ -99,7 +116,7 @@ describe('NewSessionPage', () => {
     expect(screen.getByTestId('new-session-agent-trigger').textContent).toContain('Claude')
   })
 
-  it('passes the chosen agent, workspace and initial prompt', async () => {
+  it('passes the chosen agent and workspace', async () => {
     const { client, newSession } = createClient()
     await renderLoaded(client)
 
@@ -107,17 +124,10 @@ describe('NewSessionPage', () => {
     fireEvent.click(screen.getByText('Claude'))
     fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
     fireEvent.click(screen.getByText('recent'))
-    fireEvent.change(screen.getByTestId('new-session-prompt'), {
-      target: { value: 'fix the build' },
-    })
     fireEvent.click(screen.getByTestId('new-session-submit'))
 
     await waitFor(() =>
-      expect(newSession).toHaveBeenCalledWith(
-        'claude',
-        { folder: 'file:///recent' },
-        'fix the build',
-      ),
+      expect(newSession).toHaveBeenCalledWith('claude', { folder: 'file:///recent' }),
     )
   })
 
@@ -301,11 +311,7 @@ describe('NewSessionPage', () => {
 
     fireEvent.click(screen.getByTestId('new-session-submit'))
     await waitFor(() =>
-      expect(second.newSession).toHaveBeenCalledWith(
-        'echo',
-        { folder: 'file:///other' },
-        undefined,
-      ),
+      expect(second.newSession).toHaveBeenCalledWith('echo', { folder: 'file:///other' }),
     )
   })
 })

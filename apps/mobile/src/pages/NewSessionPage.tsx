@@ -2,10 +2,9 @@ import type {
   MobileAgentCandidate,
   MobileWorkspaceCandidate,
 } from '@universe-editor/mobile-protocol'
-import { MAX_PROMPT_LENGTH } from '@universe-editor/mobile-protocol'
 import { useEffect, useState } from 'react'
 import { Spinner } from '../components/Spinner.js'
-import { navigateToSession } from '../routing.js'
+import { replaceWithSession } from '../routing.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { sessionRouteKey } from '../state/refs.js'
 import { useStore } from '../state/useStore.js'
@@ -38,7 +37,6 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
   const [workspaces, setWorkspaces] = useState<readonly MobileWorkspaceCandidate[]>([])
   const [agentId, setAgentId] = useState<string | undefined>(undefined)
   const [folder, setFolder] = useState<string | undefined>(undefined)
-  const [prompt, setPrompt] = useState('')
   const [error, setError] = useState<string | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -96,14 +94,10 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
     setSubmitting(true)
     setError(undefined)
     try {
-      const result = await client.newSession(
-        agentId,
-        {
-          folder: workspace.folder,
-          ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),
-        },
-        prompt.trim() === '' ? undefined : prompt,
-      )
+      const result = await client.newSession(agentId, {
+        folder: workspace.folder,
+        ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),
+      })
       const ref = result?.ref
       if (ref === undefined) {
         setError(commandErrorText('invalid_response'))
@@ -111,7 +105,7 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
         return
       }
       const sessionKey = sessionRouteKey(ref)
-      navigateToSession(sessionKey)
+      replaceWithSession(sessionKey)
       onCreated(sessionKey)
     } catch (err) {
       setSubmitting(false)
@@ -248,22 +242,6 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
                   {strings.newSessionWorkspaceWillOpen}
                 </p>
               )}
-            </section>
-            <section className="new-session-section">
-              <label className="new-session-label" htmlFor="new-session-prompt">
-                {strings.newSessionPromptLabel}
-              </label>
-              <textarea
-                id="new-session-prompt"
-                className="sheet__textarea new-session-prompt"
-                data-testid="new-session-prompt"
-                rows={3}
-                maxLength={MAX_PROMPT_LENGTH}
-                value={prompt}
-                disabled={disabled}
-                placeholder={strings.newSessionPromptPlaceholder}
-                onChange={(event) => setPrompt(event.target.value)}
-              />
             </section>
             <button
               type="button"

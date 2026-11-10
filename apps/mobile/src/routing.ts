@@ -59,6 +59,18 @@ export function navigateToNewSession(
   pushMobileRoute(NEW_SESSION_PATH, history)
 }
 
+/**
+ * Swap the new-session entry for the created session: the form was pushed on
+ * top of the inbox, so replacing it keeps the session's back button on the
+ * inbox instead of returning to the form that just created it.
+ */
+export function replaceWithSession(
+  sessionKey: string,
+  history: Pick<History, 'replaceState' | 'state'> = window.history,
+): void {
+  history.replaceState(history.state, '', sessionPath(sessionKey))
+}
+
 export function navigateToSessions(
   history: Pick<History, 'pushState' | 'state'> = window.history,
 ): void {

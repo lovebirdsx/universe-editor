@@ -6,6 +6,7 @@ import {
   navigateToSession,
   navigateToSessions,
   readRoute,
+  replaceWithSession,
   sessionPath,
 } from '../routing.js'
 
@@ -56,6 +57,12 @@ describe('navigation', () => {
     const pushState = vi.fn()
     navigateToSessions({ pushState, state: null })
     expect(pushState).toHaveBeenCalledWith({ mobile: true, depth: 1 }, '', '/sessions')
+  })
+
+  it('replaces the new-session entry with the created session', () => {
+    const replaceState = vi.fn()
+    replaceWithSession('a:b', { replaceState, state: { mobile: true, depth: 1 } })
+    expect(replaceState).toHaveBeenCalledWith({ mobile: true, depth: 1 }, '', '/s/a%3Ab')
   })
 
   it('goes back when the current entry was opened in-app', () => {

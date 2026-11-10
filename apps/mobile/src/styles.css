@@ -2727,10 +2727,6 @@ input:focus-visible {
   min-width: 0;
 }
 
-.new-session-prompt {
-  min-height: 88px;
-}
-
 .new-session-submit {
   width: 100%;
   min-height: 48px;

@@ -354,8 +354,6 @@ export const strings = {
   newSessionBack: '返回收件箱',
   newSessionAgentLabel: '选择 Agent',
   newSessionWorkspaceLabel: '选择工作区',
-  newSessionPromptLabel: '初始消息（可选）',
-  newSessionPromptPlaceholder: '告诉 Agent 要做什么…',
   newSessionSubmit: '创建会话',
   newSessionSubmitting: '正在创建…',
   newSessionLoading: '正在读取 Agent 与工作区…',
