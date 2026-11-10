@@ -1350,11 +1350,21 @@ test.describe('mobile gateway in a workspace', () => {
     ] as const)
     const { browser, context, phone } = await pairPhone(page, workbench)
     try {
-      // A short viewport keeps the new-session page itself scrollable.
+      // Compact phone viewport. The form fits it now, so the document overflow
+      // that makes this test meaningful is set up explicitly below.
       await phone.setViewportSize({ width: 390, height: 480 })
       await phone.getByTestId('new-session-fab').click()
       const trigger = phone.getByTestId('new-session-workspace-trigger')
       await expect(trigger).toContainText('已打开', { timeout: 10_000 })
+
+      // Without the initial-prompt textarea the form fits the viewport, so the
+      // document would not scroll and the backdrop-pan assertion below would be
+      // vacuous. Pad the root: the scroll lock only proves something while the
+      // page behind could otherwise scroll. `overflow: hidden` keeps
+      // scrollHeight intact, so the check below still holds with the sheet open.
+      await phone.evaluate(() => {
+        document.documentElement.style.minHeight = `${window.innerHeight * 2}px`
+      })
       await trigger.click()
 
       const sheet = phone.getByTestId('new-session-workspace-sheet')
