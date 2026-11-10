@@ -10,6 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -32,9 +33,26 @@ const electronBuilderPkg = createRequire(join(editorRoot, 'package.json')).resol
 )
 const electronBuilderCli = join(dirname(electronBuilderPkg), 'cli.js')
 
+// electron-builder 靠 npm_config_user_agent 识别包管理器；直接 node 调用时该变量缺失，
+// 且它用 `pnpm --workspace-root exec pwd` 探工作区根，在 Git Bash 下拿到 MSYS 路径会
+// 回退 npm 收集器，漏掉 pnpm 布局里的 optionalDependencies（@vscode/ripgrep-* 等），
+// 产物启动即报 "Could not find @vscode/ripgrep-win32-x64"。
+const pnpmVersion =
+  JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))
+    .packageManager?.split('@')[1]
+    ?.split('+')[0] ?? '0.0.0'
+const userAgent = process.env.npm_config_user_agent
+const env = userAgent?.includes('pnpm')
+  ? process.env
+  : {
+      ...process.env,
+      npm_config_user_agent: `pnpm/${pnpmVersion} npm/? node/${process.version.slice(1)} ${process.platform} ${process.arch}`,
+    }
+
 const result = spawnSync(process.execPath, [electronBuilderCli, ...process.argv.slice(2)], {
   cwd: editorRoot,
   stdio: 'inherit',
+  env,
 })
 if (result.error) {
   console.error(`electron-builder 启动失败: ${result.error.message}`)
