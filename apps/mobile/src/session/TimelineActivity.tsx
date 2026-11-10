@@ -10,8 +10,9 @@ export interface TimelineActivityProps {
 
 /**
  * The phone's counterpart of the desktop `TimelineHiddenActivity`: a spinner plus
- * a two-line summary of the slot the only-message filter hid. The stopwatch state
- * lives here so its per-second tick re-renders this row alone, not the timeline.
+ * a single-line summary of the slot the only-message filter hid. The stopwatch
+ * state lives here so its per-second tick re-renders this row alone, not the
+ * timeline.
  */
 export function TimelineActivity({ activity, client }: TimelineActivityProps) {
   const elapsed = useElapsedTime(
@@ -42,14 +43,10 @@ export function TimelineActivity({ activity, client }: TimelineActivityProps) {
         >
           {primary}
         </span>
-        {secondary !== undefined && (
-          <span
-            className="timeline-activity__detail"
-            data-testid="session-timeline-activity-detail"
-          >
-            {secondary}
-          </span>
-        )}
+        {/* Always mounted: the CSS slot keeps the row height stable while activity swaps. */}
+        <span className="timeline-activity__detail" data-testid="session-timeline-activity-detail">
+          {secondary}
+        </span>
       </div>
     </div>
   )

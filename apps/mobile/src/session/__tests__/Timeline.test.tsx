@@ -272,6 +272,17 @@ describe('Timeline hidden activity', () => {
     )
   })
 
+  it('keeps an empty detail slot so activity swaps do not change the row height', () => {
+    renderTimeline(
+      [userMessage('m1', 'hello'), toolCall('t1', { status: 'in_progress', title: 'Bash' })],
+      'onlyMessage',
+      { active: true },
+    )
+
+    expect(screen.getByTestId('session-timeline-activity-primary').textContent).toBe('Bash')
+    expect(screen.getByTestId('session-timeline-activity-detail').textContent).toBe('')
+  })
+
   it('does not show the row in full mode', () => {
     renderTimeline(
       [userMessage('m1', 'hello'), toolCall('t1', { status: 'in_progress' })],
