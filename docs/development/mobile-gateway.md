@@ -532,8 +532,8 @@ base64 塞进 `sendPrompt` 会在重连重发时放大内存与耗时。
 `PromptImage` / `PromptFileAttachment`。网关命令成功返回后才把附件标记 sent；网关报错 / 超时仍为
 pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）。
 
-**能力门控**：`summary.imageSupported` 来自 agent handshake；为 false 时手机不显示拍照 / 相册
-入口，桥层也拒绝图片。远程会话（`summary.authority` 非空）不能发文件附件（agent 读不到 PC 本地
+**能力门控**：`summary.imageSupported` 来自 agent handshake；为 false 时手机不产生图片附件
+（照片按普通文件处理），桥层也拒绝图片。远程会话（`summary.authority` 非空）不能发文件附件（agent 读不到 PC 本地
 路径），仍可发图片；桥层二次校验。`hello_ok.capabilities` 增加 `'attachments'`。
 
 **时间线投影**：用户消息的非 text block 若带 `_meta.mobileAttachment`，投影为

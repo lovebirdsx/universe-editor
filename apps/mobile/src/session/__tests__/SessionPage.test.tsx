@@ -642,12 +642,22 @@ describe('SessionPage snapshot rendering', () => {
     )
 
     expect(screen.getByTestId('composer-attach')).toBeTruthy()
-    expect(screen.getByTestId('composer-photo-input')).toBeTruthy()
-    expect(screen.queryByTestId('composer-file-input')).toBeNull()
+    const input = screen.getByTestId('composer-attachment-input') as HTMLInputElement
+    expect(input.accept).toBe('image/*')
+  })
 
-    fireEvent.click(screen.getByTestId('composer-attach'))
-    expect(screen.getByTestId('attachment-photos')).toBeTruthy()
-    expect(screen.queryByTestId('attachment-files')).toBeNull()
+  it('lets a local session pick images and files in one system sheet', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { imageSupported: true }),
+      }),
+    )
+
+    expect(screen.getByTestId('composer-attach')).toBeTruthy()
+    const input = screen.getByTestId('composer-attachment-input') as HTMLInputElement
+    expect(input.hasAttribute('accept')).toBe(false)
   })
 
   it('uploads a photo and sends its id with the prompt', async () => {
@@ -676,7 +686,7 @@ describe('SessionPage snapshot rendering', () => {
         }),
       )
 
-      fireEvent.change(screen.getByTestId('composer-photo-input'), {
+      fireEvent.change(screen.getByTestId('composer-attachment-input'), {
         target: { files: [new File(['abc'], 'shot.png', { type: 'image/png' })] },
       })
       await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))

@@ -2493,40 +2493,6 @@ input:focus-visible {
   color: #ffffff;
 }
 
-.attachment-sheet {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.attachment-sheet__option {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  padding: 0 14px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface-muted);
-  font-size: 15px;
-  text-align: left;
-}
-
-.attachment-sheet__icon {
-  flex: none;
-  font-size: 20px;
-}
-
-.attachment-sheet__cancel {
-  width: 100%;
-  min-height: 48px;
-  margin-top: 10px;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 15px;
-}
-
 .session-toast {
   position: absolute;
   left: 50%;

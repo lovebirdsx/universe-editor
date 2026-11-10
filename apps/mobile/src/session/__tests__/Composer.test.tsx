@@ -78,7 +78,7 @@ describe('Composer', () => {
 
   it('uploads a picked photo and sends it without text', async () => {
     const { onSend, onUploadAttachment } = renderComposer()
-    const input = screen.getByTestId('composer-photo-input')
+    const input = screen.getByTestId('composer-attachment-input')
     fireEvent.change(input, {
       target: { files: [new File(['abc'], 'shot.png', { type: 'image/png' })] },
     })
@@ -91,9 +91,9 @@ describe('Composer', () => {
     expect(screen.queryByTestId('composer-attachments')).toBeNull()
   })
 
-  it('treats images chosen through the file picker as file attachments', async () => {
-    const { onUploadAttachment } = renderComposer()
-    const input = screen.getByTestId('composer-file-input')
+  it('treats photos as ordinary files when the agent has no image support', async () => {
+    const { onUploadAttachment } = renderComposer({ imageSupported: false })
+    const input = screen.getByTestId('composer-attachment-input')
     fireEvent.change(input, {
       target: { files: [new File(['abc'], 'shot.png', { type: 'image/png' })] },
     })
@@ -101,12 +101,24 @@ describe('Composer', () => {
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith(expect.any(File), 'file'))
   })
 
+  it('limits remote sessions to images and rejects other files', () => {
+    const { onUploadAttachment, onNotice } = renderComposer({ fileSupported: false })
+    const input = screen.getByTestId('composer-attachment-input') as HTMLInputElement
+    expect(input.accept).toBe('image/*')
+
+    fireEvent.change(input, {
+      target: { files: [new File(['abc'], 'notes.txt', { type: 'text/plain' })] },
+    })
+    expect(onNotice).toHaveBeenCalledWith(strings.attachmentUnsupportedImage)
+    expect(onUploadAttachment).not.toHaveBeenCalled()
+  })
+
   it('keeps a failed upload visible and blocks sending until it is removed', async () => {
     const onUploadAttachment = vi.fn(async () => {
       throw Object.assign(new Error('offline'), { code: 'network' })
     })
     const { onNotice } = renderComposer({ onUploadAttachment })
-    const input = screen.getByTestId('composer-file-input')
+    const input = screen.getByTestId('composer-attachment-input')
     fireEvent.change(input, {
       target: { files: [new File(['abc'], 'notes.txt', { type: 'text/plain' })] },
     })
@@ -122,19 +134,18 @@ describe('Composer', () => {
   it('hides the attachment entry when neither capability is available', () => {
     renderComposer({ imageSupported: false, fileSupported: false })
     expect(screen.queryByTestId('composer-attach')).toBeNull()
-    expect(screen.queryByTestId('composer-photo-input')).toBeNull()
-    expect(screen.queryByTestId('composer-file-input')).toBeNull()
+    expect(screen.queryByTestId('composer-attachment-input')).toBeNull()
   })
 
-  it('offers only the file entry for agents without image support', () => {
-    renderComposer({ imageSupported: false })
-    expect(screen.queryByTestId('composer-photo-input')).toBeNull()
-    expect(screen.getByTestId('composer-file-input')).toBeTruthy()
+  it('opens the system picker directly from the attach button', () => {
+    renderComposer()
+    const input = screen.getByTestId('composer-attachment-input') as HTMLInputElement
+    expect(input.hasAttribute('accept')).toBe(false)
+    expect(input.multiple).toBe(true)
 
+    const click = vi.spyOn(input, 'click')
     fireEvent.click(screen.getByTestId('composer-attach'))
-    expect(screen.queryByTestId('attachment-camera')).toBeNull()
-    expect(screen.queryByTestId('attachment-photos')).toBeNull()
-    expect(screen.getByTestId('attachment-files')).toBeTruthy()
+    expect(click).toHaveBeenCalledTimes(1)
   })
 
   it('auto-grows with the content and shrinks back', () => {

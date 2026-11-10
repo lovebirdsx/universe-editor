@@ -20,7 +20,6 @@ import {
 } from 'react'
 import { errorCode } from '../errors.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
-import { AttachmentSheet, type AttachmentPick } from './AttachmentSheet.js'
 import {
   SLASH_COMMAND_LIST_ID,
   SlashCommandPanel,
@@ -97,7 +96,6 @@ export function Composer({
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([])
-  const [sheetOpen, setSheetOpen] = useState(false)
   const [caret, setCaret] = useState(() => value.length)
   const [armed, setArmed] = useState(false)
   const [focused, setFocused] = useState(false)
@@ -106,9 +104,7 @@ export function Composer({
   const [caretRequest, setCaretRequest] = useState(0)
   const pendingCaret = useRef<number | null>(null)
   const textareaRef = useAutoGrowTextarea(value, { maxHeightPx: MAX_HEIGHT_PX })
-  const cameraInputRef = useRef<HTMLInputElement | null>(null)
-  const photosInputRef = useRef<HTMLInputElement | null>(null)
-  const filesInputRef = useRef<HTMLInputElement | null>(null)
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const attachmentSeq = useRef(0)
   const mounted = useRef(true)
 
@@ -263,14 +259,11 @@ export function Composer({
     }
   }
 
-  const pick = (pick: AttachmentPick): void => {
-    setSheetOpen(false)
-    if (pick === 'camera') cameraInputRef.current?.click()
-    else if (pick === 'photos') photosInputRef.current?.click()
-    else filesInputRef.current?.click()
+  const pick = (): void => {
+    attachmentInputRef.current?.click()
   }
 
-  const acceptFiles = (files: readonly File[], source: 'image' | 'file'): void => {
+  const acceptFiles = (files: readonly File[]): void => {
     if (files.length === 0) return
     if (disabled || attaching) return
     let count = attachments.length
@@ -278,16 +271,19 @@ export function Composer({
     let totalBytes = attachments.reduce((sum, attachment) => sum + attachment.size, 0)
     const accepted: Array<{ readonly file: File; readonly kind: MobileAttachmentKind }> = []
     for (const file of files) {
-      const kind: MobileAttachmentKind = source === 'image' ? 'image' : 'file'
+      // The system picker mixes photos and documents, so the kind follows the
+      // file itself; an agent without image support gets photos as plain files.
+      const kind: MobileAttachmentKind =
+        imageSupported && isMobileImageMimeType(file.type) ? 'image' : 'file'
       if (count >= MAX_ATTACHMENTS_PER_PROMPT) {
         onNotice(strings.attachmentTooMany)
         break
       }
+      if (kind === 'file' && !fileSupported) {
+        onNotice(strings.attachmentUnsupportedImage)
+        continue
+      }
       if (kind === 'image') {
-        if (!isMobileImageMimeType(file.type)) {
-          onNotice(strings.attachmentUnsupportedImage)
-          continue
-        }
         if (imageCount >= MAX_IMAGE_ATTACHMENTS_PER_PROMPT) {
           onNotice(strings.attachmentTooManyImages)
           continue
@@ -325,12 +321,12 @@ export function Composer({
     void uploadAll(accepted, pending)
   }
 
-  const pickFiles = (event: ChangeEvent<HTMLInputElement>, source: 'image' | 'file'): void => {
+  const pickFiles = (event: ChangeEvent<HTMLInputElement>): void => {
     const input = event.currentTarget
     // Clearing the input mutates the live FileList, so snapshot it first.
     const files = Array.from(input.files ?? [])
     input.value = ''
-    acceptFiles(files, source)
+    acceptFiles(files)
   }
 
   const uploadAll = async (
@@ -428,7 +424,7 @@ export function Composer({
             data-testid="composer-attach"
             aria-label={strings.composerAttach}
             disabled={sending || stopping || attaching}
-            onClick={() => setSheetOpen(true)}
+            onClick={pick}
           >
             +
           </button>
@@ -495,44 +491,17 @@ export function Composer({
           </button>
         )}
       </div>
-      {imageSupported && !disabled && (
-        <>
-          <input
-            ref={cameraInputRef}
-            className="composer__file-input"
-            data-testid="composer-camera-input"
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(event) => pickFiles(event, 'image')}
-          />
-          <input
-            ref={photosInputRef}
-            className="composer__file-input"
-            data-testid="composer-photo-input"
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={(event) => pickFiles(event, 'image')}
-          />
-        </>
-      )}
-      {fileSupported && !disabled && (
+      {canAttach && (
         <input
-          ref={filesInputRef}
+          ref={attachmentInputRef}
           className="composer__file-input"
-          data-testid="composer-file-input"
+          data-testid="composer-attachment-input"
           type="file"
+          // No accept when files are allowed: iOS then offers photo library,
+          // camera and files in one system sheet instead of a nested menu.
+          accept={fileSupported ? undefined : 'image/*'}
           multiple
-          onChange={(event) => pickFiles(event, 'file')}
-        />
-      )}
-      {sheetOpen && canAttach && (
-        <AttachmentSheet
-          imageSupported={imageSupported}
-          fileSupported={fileSupported}
-          onPick={pick}
-          onClose={() => setSheetOpen(false)}
+          onChange={pickFiles}
         />
       )}
     </div>
