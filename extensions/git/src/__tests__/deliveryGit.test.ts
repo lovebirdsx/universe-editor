@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -9,6 +9,7 @@ import {
   beginDelivery,
   commitSourceDelivery,
   continuePickDelivery,
+  hasPendingWork,
   inspectDelivery,
   preparePickDelivery,
   promoteAndPushDelivery,
@@ -207,6 +208,117 @@ describe('delivery inspect', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.blockers.map((blocker) => blocker.code)).toContain('merge_commit_unsupported')
+  })
+})
+
+describe('delivery pending work', () => {
+  it('reports a clean worktree with no commits ahead of main as pending-free', async () => {
+    const fixture = await createFixture()
+    await git(['reset', '--hard', 'main'], fixture.feature)
+
+    const result = await hasPendingWork({ sourceCwd: fixture.feature })
+
+    expect(result).toMatchObject({ ok: true, pending: false, dirty: false, commitCount: 0 })
+  })
+
+  it('reports commits outside main', async () => {
+    const fixture = await createFixture()
+
+    const result = await hasPendingWork({ sourceCwd: fixture.feature })
+
+    expect(result).toMatchObject({ ok: true, pending: true, dirty: false, commitCount: 1 })
+  })
+
+  it('reports uncommitted changes without consulting main', async () => {
+    const fixture = await createFixture()
+    await writeFile(join(fixture.feature, 'wip.txt'), 'wip\n')
+    await git(['checkout', '--detach'], fixture.main)
+
+    const result = await hasPendingWork({ sourceCwd: fixture.feature })
+
+    expect(result).toMatchObject({ ok: true, pending: true, dirty: true, commitCount: 0 })
+  })
+
+  it('counts untracked files as pending', async () => {
+    const fixture = await createFixture()
+    await git(['reset', '--hard', 'main'], fixture.feature)
+    await writeFile(join(fixture.feature, 'untracked.txt'), 'untracked\n')
+
+    const result = await hasPendingWork({ sourceCwd: fixture.feature })
+
+    expect(result).toMatchObject({ ok: true, pending: true, dirty: true, commitCount: 0 })
+  })
+
+  it('ignores commits that already reached main', async () => {
+    const fixture = await createFixture()
+    await git(['merge', '--ff-only', 'feature'], fixture.main)
+
+    const result = await hasPendingWork({ sourceCwd: fixture.feature })
+
+    expect(result).toMatchObject({ ok: true, pending: false, dirty: false, commitCount: 0 })
+  })
+
+  it('does not count commits already on the upstream when main is behind', async () => {
+    const fixture = await createFixture()
+    await git(['push', 'origin', 'feature:main'], fixture.feature)
+
+    const upToDate = await hasPendingWork({ sourceCwd: fixture.feature })
+    expect(upToDate).toMatchObject({ ok: true, pending: false, dirty: false, commitCount: 0 })
+
+    await commitFile(fixture.feature, 'more.txt', 'more\n', 'more feature')
+    const next = await hasPendingWork({ sourceCwd: fixture.feature })
+    expect(next).toMatchObject({ ok: true, pending: true, dirty: false, commitCount: 1 })
+  })
+
+  it('falls back to main when the main branch has no upstream', async () => {
+    const fixture = await createFixture()
+    await git(['branch', '--unset-upstream', 'main'], fixture.main)
+
+    const result = await hasPendingWork({ sourceCwd: fixture.feature })
+
+    expect(result).toMatchObject({ ok: true, pending: true, dirty: false, commitCount: 1 })
+  })
+
+  it('resolves a session cwd nested inside the worktree', async () => {
+    const fixture = await createFixture()
+    const nested = join(fixture.feature, 'src')
+    await mkdir(nested, { recursive: true })
+
+    const result = await hasPendingWork({ sourceCwd: nested })
+
+    expect(result).toMatchObject({ ok: true, pending: true, dirty: false, commitCount: 1 })
+  })
+
+  it('reports pending only for uncommitted changes in the main worktree', async () => {
+    const fixture = await createFixture()
+
+    const clean = await hasPendingWork({ sourceCwd: fixture.main })
+    expect(clean).toMatchObject({ ok: true, pending: false, dirty: false, commitCount: 0 })
+
+    await writeFile(join(fixture.main, 'wip.txt'), 'wip\n')
+    const dirty = await hasPendingWork({ sourceCwd: fixture.main })
+    expect(dirty).toMatchObject({ ok: true, pending: true, dirty: true, commitCount: 0 })
+  })
+
+  it('fails outside a repository', async () => {
+    const dir = mkTempDir('ue-git-pending-')
+    tmpRoots.push(dir)
+
+    const result = await hasPendingWork({ sourceCwd: dir })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('not_a_repository')
+  })
+
+  it('fails when a clean source worktree has a detached main', async () => {
+    const fixture = await createFixture()
+    await git(['reset', '--hard', 'main'], fixture.feature)
+    await git(['checkout', '--detach'], fixture.main)
+
+    const result = await hasPendingWork({ sourceCwd: fixture.feature })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.code).toBe('detached_main')
   })
 })
 

@@ -605,11 +605,17 @@ durable id 非激活恢复，让收件箱行重新出现；恢复失败则直接
 
 **手机投影**：会话摘要带 `delivery?`（阶段、commit 数、可否推送/重试/撤销、同步计数）与
 `deliveryAvailable?`；收件箱行有 badge 与顶部汇总，详情页含 commit 列表、worktree 结果、
-冲突文件与「确认推送」「重试」「打开 main worktree」「撤销本次交付」。`deliveryAvailable` 只看
-会话本身能否发起（idle、可写、有 cwd），不排除已有记录：已交付（`synced`）的行在手机上隐藏
-交付入口，改由详情页的「再次交付」重新走 `previewDelivery`。**协议绝不下发绝对路径**，
-只给 worktree 目录名；交付错误只带 `code` 与裁剪后的 message，扩展侧 detail 不投影。交付变化
-经 `summary_changed` 增量与收件箱 upsert 同步到手机。
+冲突文件与「确认推送」「重试」「打开 main worktree」「撤销本次交付」。`deliveryAvailable` 要求
+会话可发起（idle、可写、有 cwd）**且**其 worktree 有未提交修改或存在 main worktree 当前分支
+不存在的提交；后者由 git 扩展的只读命令 `git.agentDelivery.hasPendingWork` 判定（不 fetch，
+main 落后 upstream 时以 upstream 为 base，避免把已在远端的提交算作待交付）。renderer 的
+`SessionDeliveryService` 按 `authority + 规范化 cwd` 缓存探测结果（TTL 10s，失败/超时按不可
+交付），探测异步进行：inbox snapshot 首帧可能暂缺该字段，随后经 `summary_changed` /
+`inbox_delta` 补齐；会话回合结束与交付记录变化时强制刷新，另有 30s sweep 兜底 PC 上的手工
+改动。已交付（`synced`）的行在手机上隐藏交付入口，改由详情页的「再次交付」重新走
+`previewDelivery`。**协议绝不下发绝对路径**，只给 worktree 目录名；交付错误只带 `code` 与
+裁剪后的 message，扩展侧 detail 不投影。交付变化经 `summary_changed` 增量与收件箱 upsert
+同步到手机。
 
 **刻意限制**：合并提交不支持；单次交付最多 200 个提交（preview 直接给 `unsupported` blocker）；
 main worktree 必须存在且不在 detached HEAD，目标分支须有唯一 upstream；v1 不做自动交付、

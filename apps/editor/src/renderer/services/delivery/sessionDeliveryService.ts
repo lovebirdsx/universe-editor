@@ -100,6 +100,13 @@ export interface ISessionDeliveryService {
 
   /** A session row may offer the "deliver" action. */
   isAvailable(session: IAcpSession): boolean
+  /** Cached worktree check: uncommitted changes or commits main does not reach. */
+  hasDeliverableChanges(session: IAcpSession): boolean
+  /** Refresh the cached check; resolves true when the visible value changed. */
+  refreshDeliverableChanges(
+    session: IAcpSession,
+    options?: { readonly force?: boolean },
+  ): Promise<boolean>
   /** The session's own repo/worktrees are being delivered right now. */
   isDeliveryBusyForSession(session: IAcpSession): boolean
   /** A new prompt rooted at `cwd` on `authority` would race a delivery. */
@@ -108,6 +115,11 @@ export interface ISessionDeliveryService {
 
 export const ISessionDeliveryService =
   createDecorator<ISessionDeliveryService>('sessionDeliveryService')
+
+/** How long a worktree probe may be reused before the mobile inbox asks again. */
+export const DELIVERABLE_CHANGES_TTL_MS = 10_000
+/** Background probes must never pin an in-flight entry forever. */
+export const DELIVERABLE_CHANGES_TIMEOUT_MS = 10_000
 
 type RecordPatch = {
   readonly [K in keyof SessionDeliveryRecord]?: SessionDeliveryRecord[K] | undefined
@@ -118,6 +130,14 @@ interface CommitMessageResult {
   readonly head?: string
   readonly commit?: SessionDeliveryCommit
   readonly error?: SessionDeliveryError
+}
+
+interface DeliverableChangesEntry {
+  value: boolean | undefined
+  checkedAt: number
+  /** Only the newest probe may write; a forced refresh supersedes an older one. */
+  generation: number
+  inFlight: Promise<boolean> | undefined
 }
 
 interface PickAllResult {
@@ -180,6 +200,8 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
   private readonly _instanceId = globalThis.crypto.randomUUID()
   private _initializePromise: Promise<void> | undefined
   private _writeChain: Promise<void> = Promise.resolve()
+  private readonly _deliverableChanges = new Map<string, DeliverableChangesEntry>()
+  private readonly _deliverableProbeTimers = new Set<ReturnType<typeof setTimeout>>()
   private _disposed = false
 
   constructor(
@@ -739,6 +761,76 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     )
   }
 
+  hasDeliverableChanges(session: IAcpSession): boolean {
+    const cwd = session.cwd
+    if (cwd === undefined || cwd.length === 0) return false
+    const entry = this._deliverableChanges.get(this._deliverableChangesKey(cwd, session.authority))
+    return entry?.value === true
+  }
+
+  refreshDeliverableChanges(
+    session: IAcpSession,
+    options?: { readonly force?: boolean },
+  ): Promise<boolean> {
+    if (this._disposed) return Promise.resolve(false)
+    const cwd = session.cwd
+    if (cwd === undefined || cwd.length === 0) return Promise.resolve(false)
+    const key = this._deliverableChangesKey(cwd, session.authority)
+    const force = options?.force === true
+    const existing = this._deliverableChanges.get(key)
+    const entry: DeliverableChangesEntry = existing ?? {
+      value: undefined,
+      checkedAt: 0,
+      generation: 0,
+      inFlight: undefined,
+    }
+    if (existing === undefined) this._deliverableChanges.set(key, entry)
+    if (!force) {
+      if (entry.inFlight !== undefined) return entry.inFlight
+      if (entry.value !== undefined && Date.now() - entry.checkedAt < DELIVERABLE_CHANGES_TTL_MS) {
+        return Promise.resolve(false)
+      }
+    }
+    const generation = ++entry.generation
+    const before = entry.value === true
+    const probe = this._probeDeliverableChanges(cwd).then((value) => {
+      if (this._disposed || entry.generation !== generation) return false
+      const after = value === true
+      entry.value = value
+      entry.checkedAt = Date.now()
+      entry.inFlight = undefined
+      return before !== after
+    })
+    entry.inFlight = probe
+    return probe
+  }
+
+  private _probeDeliverableChanges(cwd: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const state: { timer: ReturnType<typeof setTimeout> | undefined } = { timer: undefined }
+      let settled = false
+      const finish = (value: boolean): void => {
+        if (settled) return
+        settled = true
+        if (state.timer !== undefined) {
+          clearTimeout(state.timer)
+          this._deliverableProbeTimers.delete(state.timer)
+        }
+        resolve(value)
+      }
+      state.timer = setTimeout(() => finish(false), DELIVERABLE_CHANGES_TIMEOUT_MS)
+      this._deliverableProbeTimers.add(state.timer)
+      this._git.hasPendingWork({ sourceCwd: cwd }).then(
+        (result) => finish(result.ok && result.pending === true),
+        () => finish(false),
+      )
+    })
+  }
+
+  private _deliverableChangesKey(cwd: string, authority: string | undefined): string {
+    return `${authority ?? ''}|${this._uriIdentity.getPathComparisonKey(cwd)}`
+  }
+
   isDeliveryBusyForSession(session: IAcpSession): boolean {
     return this._activeRecordForSession(session) !== undefined
   }
@@ -749,6 +841,9 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
 
   override dispose(): void {
     this._disposed = true
+    for (const timer of this._deliverableProbeTimers) clearTimeout(timer)
+    this._deliverableProbeTimers.clear()
+    this._deliverableChanges.clear()
     for (const timer of this._heartbeats.values()) clearInterval(timer)
     this._heartbeats.clear()
     super.dispose()

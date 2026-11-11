@@ -9,7 +9,11 @@ import type {
 } from '../sessionDeliveryGit.js'
 import type { SessionDeliveryRecord } from '../sessionDeliveryTypes.js'
 import type { ISessionDeliveryStore } from '../sessionDeliveryStore.js'
-import { SessionDeliveryService } from '../sessionDeliveryService.js'
+import {
+  DELIVERABLE_CHANGES_TIMEOUT_MS,
+  DELIVERABLE_CHANGES_TTL_MS,
+  SessionDeliveryService,
+} from '../sessionDeliveryService.js'
 
 const COMMIT = {
   sha: 'c1',
@@ -92,6 +96,12 @@ function pickData(overrides: Partial<DeliveryGitPickData> = {}): DeliveryGitPick
 function makeGit(overrides: Partial<ISessionDeliveryGit> = {}): ISessionDeliveryGit {
   return {
     inspect: vi.fn(async () => ({ ok: true, ...inspectData() })),
+    hasPendingWork: vi.fn(async () => ({
+      ok: true,
+      pending: false,
+      dirty: false,
+      commitCount: 0,
+    })),
     acquireLock: vi.fn(async () => ({ ok: true, acquired: true })),
     heartbeatLock: vi.fn(async () => ({ ok: true, heartbeatAt: 'now' })),
     releaseLock: vi.fn(async () => ({ ok: true, released: true })),
@@ -632,6 +642,189 @@ describe('SessionDeliveryService guards', () => {
     expect(active.isAvailable(makeSession({ status: value('running') }))).toBe(false)
     expect(active.isAvailable(makeSession({ internal: true }))).toBe(false)
     expect(active.isAvailable(makeSession({ readOnly: true }))).toBe(false)
+  })
+})
+
+describe('SessionDeliveryService pending work probe', () => {
+  type PendingResult = Awaited<ReturnType<ISessionDeliveryGit['hasPendingWork']>>
+  const pendingResult = {
+    ok: true,
+    pending: true,
+    dirty: false,
+    commitCount: 1,
+  } as const
+  const cleanResult = {
+    ok: true,
+    pending: false,
+    dirty: false,
+    commitCount: 0,
+  } as const
+
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((settle) => {
+      resolve = settle
+    })
+    return { promise, resolve }
+  }
+
+  it('caches the probe and only exposes a confirmed true', async () => {
+    const git = makeGit({ hasPendingWork: vi.fn(async () => pendingResult) })
+    active = makeService({ git })
+    const session = makeSession()
+
+    expect(active.hasDeliverableChanges(session)).toBe(false)
+    await expect(active.refreshDeliverableChanges(session)).resolves.toBe(true)
+    expect(active.hasDeliverableChanges(session)).toBe(true)
+  })
+
+  it('does not treat an unknown false as a visible change', async () => {
+    active = makeService()
+
+    await expect(active.refreshDeliverableChanges(makeSession())).resolves.toBe(false)
+    expect(active.hasDeliverableChanges(makeSession())).toBe(false)
+  })
+
+  it('reports true to false as a visible change', async () => {
+    const git = makeGit({ hasPendingWork: vi.fn(async () => pendingResult) })
+    active = makeService({ git })
+    const session = makeSession()
+    await active.refreshDeliverableChanges(session)
+
+    vi.mocked(git.hasPendingWork).mockResolvedValue(cleanResult)
+    await expect(active.refreshDeliverableChanges(session, { force: true })).resolves.toBe(true)
+    expect(active.hasDeliverableChanges(session)).toBe(false)
+  })
+
+  it('reuses the cache within the TTL and re-probes afterwards', async () => {
+    vi.useFakeTimers()
+    try {
+      const git = makeGit({ hasPendingWork: vi.fn(async () => pendingResult) })
+      active = makeService({ git })
+      const session = makeSession()
+
+      await active.refreshDeliverableChanges(session)
+      await active.refreshDeliverableChanges(session)
+      expect(git.hasPendingWork).toHaveBeenCalledTimes(1)
+
+      vi.advanceTimersByTime(DELIVERABLE_CHANGES_TTL_MS)
+      await active.refreshDeliverableChanges(session)
+      expect(git.hasPendingWork).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forces past the TTL', async () => {
+    const git = makeGit({ hasPendingWork: vi.fn(async () => pendingResult) })
+    active = makeService({ git })
+    const session = makeSession()
+
+    await active.refreshDeliverableChanges(session)
+    await active.refreshDeliverableChanges(session, { force: true })
+
+    expect(git.hasPendingWork).toHaveBeenCalledTimes(2)
+  })
+
+  it('deduplicates concurrent probes for the same worktree', async () => {
+    const probe = deferred<PendingResult>()
+    const git = makeGit({ hasPendingWork: vi.fn(() => probe.promise) })
+    active = makeService({ git })
+    const session = makeSession()
+
+    const first = active.refreshDeliverableChanges(session)
+    const second = active.refreshDeliverableChanges(session)
+    expect(git.hasPendingWork).toHaveBeenCalledTimes(1)
+
+    probe.resolve(pendingResult)
+    await expect(first).resolves.toBe(true)
+    await expect(second).resolves.toBe(true)
+  })
+
+  it('lets a forced probe supersede an older in-flight one', async () => {
+    const normal = deferred<PendingResult>()
+    const forced = deferred<PendingResult>()
+    const git = makeGit({
+      hasPendingWork: vi
+        .fn()
+        .mockReturnValueOnce(normal.promise)
+        .mockReturnValueOnce(forced.promise),
+    })
+    active = makeService({ git })
+    const session = makeSession()
+
+    const first = active.refreshDeliverableChanges(session)
+    const second = active.refreshDeliverableChanges(session, { force: true })
+
+    forced.resolve(pendingResult)
+    await expect(second).resolves.toBe(true)
+    normal.resolve(cleanResult)
+    await expect(first).resolves.toBe(false)
+
+    expect(active.hasDeliverableChanges(session)).toBe(true)
+  })
+
+  it('times out a stuck probe and recovers on the next forced refresh', async () => {
+    vi.useFakeTimers()
+    try {
+      const git = makeGit({ hasPendingWork: vi.fn(() => new Promise<never>(() => {})) })
+      active = makeService({ git })
+      const session = makeSession()
+
+      const refresh = active.refreshDeliverableChanges(session)
+      await vi.advanceTimersByTimeAsync(DELIVERABLE_CHANGES_TIMEOUT_MS)
+      await expect(refresh).resolves.toBe(false)
+      expect(active.hasDeliverableChanges(session)).toBe(false)
+
+      vi.mocked(git.hasPendingWork).mockResolvedValue(pendingResult)
+      await expect(active.refreshDeliverableChanges(session, { force: true })).resolves.toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('treats probe failures as not deliverable', async () => {
+    const git = makeGit({
+      hasPendingWork: vi.fn(
+        async () =>
+          ({ ok: false, error: { code: 'git_failed', message: 'boom' } }) as PendingResult,
+      ),
+    })
+    active = makeService({ git })
+
+    await expect(active.refreshDeliverableChanges(makeSession())).resolves.toBe(false)
+    expect(active.hasDeliverableChanges(makeSession())).toBe(false)
+  })
+
+  it('skips sessions without a cwd', async () => {
+    const git = makeGit()
+    active = makeService({ git })
+
+    await expect(active.refreshDeliverableChanges(makeSession({ cwd: undefined }))).resolves.toBe(
+      false,
+    )
+    expect(git.hasPendingWork).not.toHaveBeenCalled()
+  })
+
+  it('keeps caches separate per authority', async () => {
+    const git = makeGit({ hasPendingWork: vi.fn(async () => pendingResult) })
+    active = makeService({ git })
+
+    await active.refreshDeliverableChanges(makeSession({ authority: 'remote-a' }))
+    expect(active.hasDeliverableChanges(makeSession({ authority: 'remote-a' }))).toBe(true)
+    expect(active.hasDeliverableChanges(makeSession({ authority: 'remote-b' }))).toBe(false)
+  })
+
+  it('ignores probe results after dispose', async () => {
+    const probe = deferred<PendingResult>()
+    const git = makeGit({ hasPendingWork: vi.fn(() => probe.promise) })
+    const service = makeService({ git })
+    const refresh = service.refreshDeliverableChanges(makeSession())
+
+    service.dispose()
+    probe.resolve(pendingResult)
+
+    await expect(refresh).resolves.toBe(false)
   })
 })
 

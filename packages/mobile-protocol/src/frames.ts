@@ -52,7 +52,7 @@ export interface MobileSessionSummary {
   sideTaskChildCount?: number
   /** Latest agent delivery for this session's worktree, when one exists. */
   delivery?: MobileDeliverySummary
-  /** The row can start a delivery (idle, writable session rooted in a repo). */
+  /** Idle, writable session whose worktree is dirty or holds commits main lacks. */
   deliveryAvailable?: boolean
   /** Epoch milliseconds. */
   updatedAt: number

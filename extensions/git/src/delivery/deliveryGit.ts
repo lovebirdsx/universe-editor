@@ -37,6 +37,8 @@ import type {
   DeliveryInspectResult,
   DeliveryPickData,
   DeliveryPickResult,
+  DeliveryPendingWorkInput,
+  DeliveryPendingWorkResult,
   DeliveryPreparePickInput,
   DeliveryPromoteAndPushData,
   DeliveryPromoteAndPushInput,
@@ -183,6 +185,17 @@ export const divergence = async (
   return { ahead, behind }
 }
 
+/**
+ * Shared by inspect and the mobile availability probe so both agree on which
+ * commits count as "to deliver": when main can fast-forward to upstream, commits
+ * already on the upstream are not pending.
+ */
+export const deliveryBaseSha = (
+  mainHead: string,
+  upstreamHead: string,
+  mainIsBehindUpstream: boolean,
+): string => (mainIsBehindUpstream ? upstreamHead : mainHead)
+
 export const listWorktrees = async (
   cwd: string,
   log?: Log,
@@ -266,6 +279,19 @@ const mergeCommitsInRange = async (
     .split('\n')
     .map((line) => line.trim())
     .filter(Boolean)
+}
+
+const countCommitsInRange = async (
+  cwd: string,
+  range: string,
+  log?: Log,
+): Promise<number | undefined> => {
+  const res = await runDeliveryGit(['rev-list', '--count', range], cwd, log, {
+    timeoutMs: LOCAL_TIMEOUT_MS,
+  })
+  if (res.exitCode !== 0) return undefined
+  const count = Number(res.stdout.trim())
+  return Number.isFinite(count) ? count : undefined
 }
 
 interface UpstreamInfo {
@@ -558,7 +584,7 @@ export async function inspectDelivery(
   const dirty = sourceStatus.files.length > 0
 
   const canFastForward = counts.ahead === 0 && counts.behind > 0
-  const baseSha = canFastForward ? upstreamHead : mainHead
+  const baseSha = deliveryBaseSha(mainHead, upstreamHead, canFastForward)
   const range = `${baseSha}..${sourceHead}`
   const commits = await commitsInRange(sourceWorktree, range, log)
   if (commits === undefined) return fail('git_failed', 'Could not list the commits to deliver.')
@@ -647,6 +673,73 @@ export async function inspectDelivery(
     warnings,
   }
   return okData(data)
+}
+
+/** Mirrors inspect's baseSha without fetching; an unresolved upstream falls back to main. */
+const pendingBaseSha = async (
+  mainWorktree: string,
+  mainBranch: string,
+  mainHead: string,
+  log?: Log,
+): Promise<string> => {
+  const upstream = await resolveUpstream(mainWorktree, mainBranch, log)
+  if (upstream === undefined) return mainHead
+  const upstreamHead = await resolveRef(mainWorktree, upstream.upstreamRef, log)
+  if (upstreamHead === undefined || upstreamHead === mainHead) return mainHead
+  const behind = await isAncestor(mainWorktree, mainHead, upstreamHead, log)
+  return behind === true ? upstreamHead : mainHead
+}
+
+/**
+ * Cheap probe for the mobile inbox's「交付」action: only report a delivery when
+ * the source worktree is dirty or still holds commits main does not reach.
+ * Unlike inspect this never fetches and does not require delivery to be
+ * unblocked — the confirm sheet owns the detailed blockers.
+ */
+export async function hasPendingWork(
+  input: DeliveryPendingWorkInput,
+  log?: Log,
+): Promise<DeliveryPendingWorkResult> {
+  if (typeof input?.sourceCwd !== 'string' || input.sourceCwd.length === 0) {
+    return fail('not_a_repository', 'The session has no working directory.')
+  }
+  const sourceWorktree = await detectRepoRoot(input.sourceCwd)
+  if (sourceWorktree === undefined) {
+    return fail('not_a_repository', 'The session working directory is not inside a git repository.')
+  }
+  const sourceStatus = await readWorktreeStatus(sourceWorktree, log)
+  if (sourceStatus === undefined) {
+    return fail('git_failed', 'Could not read git status for the source worktree.')
+  }
+  const dirty = sourceStatus.files.length > 0
+  if (dirty) return okData({ pending: true, dirty: true, commitCount: 0 })
+
+  const sourceHead = sourceStatus.headRevision ?? (await currentHead(sourceWorktree, log))
+  if (sourceHead === undefined) return okData({ pending: false, dirty: false, commitCount: 0 })
+
+  const worktrees = await listWorktrees(input.sourceCwd, log)
+  if (worktrees === undefined) return fail('git_failed', 'Could not list git worktrees.')
+  const main = worktrees.find((wt) => wt.isMain)
+  if (main === undefined) return fail('no_main_worktree', 'No main worktree was found.')
+  if (main.bare) return fail('bare_repository', 'The main worktree is bare.')
+  if (main.branch === undefined) {
+    return fail('detached_main', 'The main worktree is in detached HEAD state.')
+  }
+  const mainHead = await currentHead(main.path, log)
+  if (mainHead === undefined) return fail('git_failed', 'Could not read the main worktree HEAD.')
+
+  // The common "nothing to deliver" case stops here without resolving upstream.
+  const againstMain = await countCommitsInRange(sourceWorktree, `${mainHead}..${sourceHead}`, log)
+  if (againstMain === undefined) return fail('git_failed', 'Could not count pending commits.')
+  if (againstMain === 0) return okData({ pending: false, dirty: false, commitCount: 0 })
+
+  const baseSha = await pendingBaseSha(main.path, main.branch, mainHead, log)
+  const commitCount =
+    baseSha === mainHead
+      ? againstMain
+      : await countCommitsInRange(sourceWorktree, `${baseSha}..${sourceHead}`, log)
+  if (commitCount === undefined) return fail('git_failed', 'Could not count pending commits.')
+  return okData({ pending: commitCount > 0, dirty: false, commitCount })
 }
 
 export async function beginDelivery(

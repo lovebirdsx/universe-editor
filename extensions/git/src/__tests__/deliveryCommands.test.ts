@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { registerDeliveryCommands } from '../delivery/deliveryCommands.js'
 
 describe('delivery command registration', () => {
+  it('registers the pending-work probe', () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>()
+    registerDeliveryCommands((id, handler) => {
+      handlers.set(id, handler)
+      return { dispose: () => undefined }
+    })
+
+    expect(handlers.has('git.agentDelivery.hasPendingWork')).toBe(true)
+  })
+
   it('turns a thrown handler into a git_failed result', async () => {
     const handlers = new Map<string, (...args: unknown[]) => unknown>()
     registerDeliveryCommands((id, handler) => {

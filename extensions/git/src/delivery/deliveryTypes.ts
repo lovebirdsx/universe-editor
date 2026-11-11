@@ -104,6 +104,21 @@ export interface DeliveryInspectData {
 
 export type DeliveryInspectResult = DeliveryResult<DeliveryInspectData>
 
+/** Cheap availability probe behind the mobile inbox's「交付」action. */
+export interface DeliveryPendingWorkInput {
+  readonly sourceCwd: string
+}
+
+export interface DeliveryPendingWorkData {
+  /** The source worktree is dirty or has commits the main branch does not reach. */
+  readonly pending: boolean
+  readonly dirty: boolean
+  /** `base..sourceHead` count; 0 when the dirty short-circuit skipped it. */
+  readonly commitCount: number
+}
+
+export type DeliveryPendingWorkResult = DeliveryResult<DeliveryPendingWorkData>
+
 export interface DeliveryBeginInput {
   readonly commonDir: string
   readonly deliveryId: string

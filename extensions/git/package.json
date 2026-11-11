@@ -341,6 +341,10 @@
         "title": "Agent Delivery: Inspect"
       },
       {
+        "command": "git.agentDelivery.hasPendingWork",
+        "title": "Agent Delivery: Has Pending Work"
+      },
+      {
         "command": "git.agentDelivery.acquireLock",
         "title": "Agent Delivery: Acquire Lock"
       },
@@ -909,6 +913,10 @@
         },
         {
           "command": "git.agentDelivery.inspect",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.hasPendingWork",
           "when": "false"
         },
         {

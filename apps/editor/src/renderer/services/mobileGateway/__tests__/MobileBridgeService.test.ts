@@ -48,11 +48,15 @@ import {
   MOBILE_BRIDGE_THROTTLE_MS,
   MOBILE_DRAFT_ACK_TIMEOUT_MS,
   MOBILE_DRAFT_THROTTLE_MS,
+  MOBILE_PENDING_WORK_SWEEP_MS,
   MobileBridgeService,
 } from '../MobileBridgeService.js'
 import type { ISessionDeliveryService } from '../../delivery/sessionDeliveryService.js'
 import type { ISessionBranchPushService } from '../../delivery/sessionBranchPushService.js'
-import type { SessionDeliveryPreview } from '../../delivery/sessionDeliveryTypes.js'
+import type {
+  SessionDeliveryChange,
+  SessionDeliveryPreview,
+} from '../../delivery/sessionDeliveryTypes.js'
 import type { MobileBridgeEvent } from '../../../../shared/ipc/mobileGatewayService.js'
 
 const NULL_LOGGER: ILogger = {
@@ -237,11 +241,13 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   scmSourceControls: ISettableObservable<readonly IScmSourceControlModel[]>
   files: IFileService
   delivery: ISessionDeliveryService
+  deliveryChanges: Emitter<SessionDeliveryChange>
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
   const sessions = observableValue<readonly IAcpSession[]>('test.sessions', [])
   const history = observableValue<readonly AcpSessionHistoryEntry[]>('test.history', [])
+  const deliveryChanges = new Emitter<SessionDeliveryChange>()
   const live = new Map<string, IAcpSession>()
   const created = vi.fn()
   const forkSession = vi.fn()
@@ -305,9 +311,11 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   } as unknown as IFileService
   const delivery = {
     initialize: vi.fn(async () => {}),
-    onDidChange: Event.None,
+    onDidChange: deliveryChanges.event,
     getSummaryForSession: vi.fn(() => undefined),
     isAvailable: vi.fn(() => false),
+    hasDeliverableChanges: vi.fn(() => false),
+    refreshDeliverableChanges: vi.fn(async () => false),
     isDeliveryBusyForSession: vi.fn(() => false),
     isDeliveryBusyForCwd: vi.fn(() => false),
     preview: vi.fn(),
@@ -358,6 +366,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     scmSourceControls,
     files,
     delivery,
+    deliveryChanges,
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -373,6 +382,14 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
 
 async function flush(ms = MOBILE_BRIDGE_THROTTLE_MS + 10): Promise<void> {
   await vi.advanceTimersByTimeAsync(ms)
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
 }
 
 describe('MobileBridgeService', () => {
@@ -2458,6 +2475,7 @@ describe('MobileBridgeService deliveries', () => {
     harness.add(makeSession('s1', { durableId: 'd1' }))
     vi.mocked(harness.delivery.getSummaryForSession).mockReturnValue(deliverySummary)
     vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+    vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(true)
 
     await expect(harness.service.listSessions()).resolves.toMatchObject([
       { localId: 's1', delivery: deliverySummary, deliveryAvailable: true },
@@ -2471,6 +2489,7 @@ describe('MobileBridgeService deliveries', () => {
       harness.add(makeSession('s1', { durableId: 'd1' }))
       vi.mocked(harness.delivery.getSummaryForSession).mockReturnValue(deliverySummary)
       vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+      vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(true)
 
       await harness.service.startStreaming()
       await flush()
@@ -2506,10 +2525,205 @@ describe('MobileBridgeService deliveries', () => {
       expect(latestUpsert()?.deliveryAvailable).toBeUndefined()
 
       vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+      vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(true)
       session.status.set('idle', undefined)
       await flush()
 
       expect(latestUpsert()).toMatchObject({ localId: 's1', deliveryAvailable: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('offers delivery only when the session is eligible and its worktree has work', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+    vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(false)
+
+    const [ineligibleWorktree] = await harness.service.listSessions()
+    expect(ineligibleWorktree?.deliveryAvailable).toBeUndefined()
+
+    vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(true)
+    const [eligible] = await harness.service.listSessions()
+    expect(eligible?.deliveryAvailable).toBe(true)
+
+    vi.mocked(harness.delivery.isAvailable).mockReturnValue(false)
+    const [notIdle] = await harness.service.listSessions()
+    expect(notIdle?.deliveryAvailable).toBeUndefined()
+  })
+
+  it('publishes delivery availability after the background probe finds work', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      harness.add(makeSession('s1', { durableId: 'd1' }))
+      vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+      let settleProbe: ((changed: boolean) => void) | undefined
+      let answered = false
+      vi.mocked(harness.delivery.refreshDeliverableChanges).mockImplementation(() => {
+        if (answered) return Promise.resolve(false)
+        return new Promise<boolean>((resolve) => {
+          settleProbe = resolve
+        })
+      })
+
+      const [initial] = await harness.service.listSessions()
+      expect(initial?.deliveryAvailable).toBeUndefined()
+
+      vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(true)
+      answered = true
+      settleProbe?.(true)
+      await flush(0)
+
+      const upserts = harness.events.flatMap((event) =>
+        event.kind === 'inbox' ? event.upserts : [],
+      )
+      expect(upserts.at(-1)).toMatchObject({ localId: 's1', deliveryAvailable: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not publish when a probe leaves the value unchanged', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      harness.add(makeSession('s1', { durableId: 'd1' }))
+      vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+
+      await harness.service.listSessions()
+      await flush(0)
+
+      expect(harness.events).toHaveLength(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('republishes every session sharing the probed worktree', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      harness.add(makeSession('s1', { durableId: 'd1', cwd: '/repo/feature' }))
+      harness.add(makeSession('s2', { durableId: 'd2', cwd: '/repo/feature' }))
+      harness.add(makeSession('s3', { durableId: 'd3', cwd: '/repo/other' }))
+      vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+      const featureProbe = deferred<boolean>()
+      const otherProbe = deferred<boolean>()
+      let featureAnswered = false
+      vi.mocked(harness.delivery.refreshDeliverableChanges).mockImplementation((session) => {
+        if (session.cwd !== '/repo/feature') return otherProbe.promise
+        return featureAnswered ? Promise.resolve(false) : featureProbe.promise
+      })
+
+      await harness.service.listSessions()
+      vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(true)
+      featureAnswered = true
+      featureProbe.resolve(true)
+      await flush(0)
+
+      const published = new Set(
+        harness.events.flatMap((event) =>
+          event.kind === 'inbox' ? event.upserts.map((summary) => summary.localId) : [],
+        ),
+      )
+      expect(published).toEqual(new Set(['s1', 's2']))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('recomputes the summary when the session starts running before the probe lands', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      const session = makeSession('s1', { durableId: 'd1' })
+      harness.add(session)
+      vi.mocked(harness.delivery.isAvailable).mockImplementation(
+        () => session.status.get() === 'idle',
+      )
+      vi.mocked(harness.delivery.hasDeliverableChanges).mockReturnValue(true)
+      let settleProbe: ((changed: boolean) => void) | undefined
+      let answered = false
+      vi.mocked(harness.delivery.refreshDeliverableChanges).mockImplementation(() => {
+        if (answered) return Promise.resolve(false)
+        return new Promise<boolean>((resolve) => {
+          settleProbe = resolve
+        })
+      })
+
+      await harness.service.listSessions()
+      session.status.set('running', undefined)
+      answered = true
+      settleProbe?.(true)
+      await flush(0)
+
+      const upserts = harness.events.flatMap((event) =>
+        event.kind === 'inbox' ? event.upserts : [],
+      )
+      expect(upserts.at(-1)?.deliveryAvailable).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forces a probe when a running session becomes idle', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      const session = makeSession('s1', { durableId: 'd1' })
+      harness.add(session)
+      vi.mocked(harness.delivery.isAvailable).mockImplementation(
+        () => session.status.get() === 'idle',
+      )
+      session.status.set('running', undefined)
+      await harness.service.startStreaming()
+      await flush()
+      vi.mocked(harness.delivery.refreshDeliverableChanges).mockClear()
+
+      session.status.set('idle', undefined)
+      await flush()
+
+      expect(harness.delivery.refreshDeliverableChanges).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 's1' }),
+        { force: true },
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('forces a probe when a delivery record changes', () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+
+    harness.deliveryChanges.fire({ deliveryId: 'del-1', sessionLocalId: 's1' })
+
+    expect(harness.delivery.refreshDeliverableChanges).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 's1' }),
+      { force: true },
+    )
+  })
+
+  it('sweeps eligible worktrees while streaming and stops afterwards', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      harness.add(makeSession('s1', { durableId: 'd1' }))
+      vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+      await harness.service.startStreaming()
+      await flush()
+      vi.mocked(harness.delivery.refreshDeliverableChanges).mockClear()
+
+      await vi.advanceTimersByTimeAsync(MOBILE_PENDING_WORK_SWEEP_MS)
+      expect(harness.delivery.refreshDeliverableChanges).toHaveBeenCalled()
+
+      await harness.service.stopStreaming()
+      vi.mocked(harness.delivery.refreshDeliverableChanges).mockClear()
+      await vi.advanceTimersByTimeAsync(MOBILE_PENDING_WORK_SWEEP_MS * 2)
+      expect(harness.delivery.refreshDeliverableChanges).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
     }

@@ -62,6 +62,13 @@ export interface DeliveryGitInspectData {
   readonly warnings: readonly string[]
 }
 
+/** Cheap probe behind the mobile inbox's「交付」action. */
+export interface DeliveryGitPendingWorkData {
+  readonly pending: boolean
+  readonly dirty: boolean
+  readonly commitCount: number
+}
+
 export interface DeliveryGitBeginData {
   readonly mainHeadBefore: string
   readonly mainHeadAfter: string
@@ -184,6 +191,9 @@ export interface ISessionDeliveryGit {
     targetBranch?: string
     fetch?: boolean
   }): Promise<DeliveryGitResult<DeliveryGitInspectData>>
+  hasPendingWork(input: {
+    sourceCwd: string
+  }): Promise<DeliveryGitResult<DeliveryGitPendingWorkData>>
   acquireLock(input: {
     commonDir: string
     token: string
@@ -323,6 +333,12 @@ export class SessionDeliveryGit implements ISessionDeliveryGit {
     fetch?: boolean
   }): Promise<DeliveryGitResult<DeliveryGitInspectData>> {
     return this._run<DeliveryGitInspectData>('inspect', input)
+  }
+
+  hasPendingWork(input: {
+    sourceCwd: string
+  }): Promise<DeliveryGitResult<DeliveryGitPendingWorkData>> {
+    return this._run<DeliveryGitPendingWorkData>('hasPendingWork', input)
   }
 
   acquireLock(input: {

@@ -304,7 +304,7 @@ export interface MobileBridgeSessionSummary {
   readonly sideTaskChildCount?: number
   /** Latest agent delivery for this row's worktree (protocol projection). */
   readonly delivery?: MobileDeliverySummary
-  /** The row may start a delivery. */
+  /** Idle, writable session whose worktree is dirty or holds commits main lacks. */
   readonly deliveryAvailable?: boolean
   readonly updatedAt: number
 }

@@ -159,6 +159,8 @@ export const MOBILE_BRIDGE_LARGE_DELTA_CHARS = 64 * 1024
 export const MOBILE_DRAFT_THROTTLE_MS = 250
 /** A lost hub ack must not keep a remote draft queued forever. */
 export const MOBILE_DRAFT_ACK_TIMEOUT_MS = 2000
+/** Backstop for worktree changes made outside a session turn (manual PC edits). */
+export const MOBILE_PENDING_WORK_SWEEP_MS = 30_000
 
 interface SessionStream {
   readonly localId: string
@@ -216,6 +218,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   private readonly _draftSync = new Map<string, DraftSyncState>()
   private readonly _agentNames = new Map<string, string | undefined>()
   private _attentionSubscription: IDisposable | undefined
+  private _pendingWorkSweep: ReturnType<typeof setInterval> | undefined
   private _disposed = false
 
   constructor(
@@ -371,6 +374,10 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     this._draftSubscription = AcpPromptDraftCache.onDidChange((event) =>
       this._onDraftChanged(event),
     )
+    this._pendingWorkSweep = setInterval(
+      () => this._sweepPendingWork(),
+      MOBILE_PENDING_WORK_SWEEP_MS,
+    )
   }
 
   async stopStreaming(): Promise<void> {
@@ -381,6 +388,10 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     this._rootWatcher = undefined
     this._draftSubscription?.dispose()
     this._draftSubscription = undefined
+    if (this._pendingWorkSweep !== undefined) {
+      clearInterval(this._pendingWorkSweep)
+      this._pendingWorkSweep = undefined
+    }
     for (const timer of this._draftTimers.values()) clearTimeout(timer)
     this._draftTimers.clear()
     this._publishedDrafts.clear()
@@ -1775,6 +1786,15 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     // service, so they must be attached here too or every flush would upsert
     // a summary that makes the phone drop its「交付」badge.
     const summary = this._withDelivery(stream.session, next.summary)
+    // A finished turn may have committed or edited files; do not let the probe
+    // TTL hide the newly deliverable work until the next sweep.
+    if (
+      stream.publishedSummary !== undefined &&
+      stream.publishedSummary.status !== 'idle' &&
+      summary.status === 'idle'
+    ) {
+      this._schedulePendingWorkRefresh(stream.session, true)
+    }
     const summaryChangedNow =
       stream.publishedSummary !== undefined
         ? summaryChanged(stream.publishedSummary, summary)
@@ -1835,11 +1855,71 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     summary: MobileBridgeSessionSummary,
   ): MobileBridgeSessionSummary {
     const delivery = this._delivery.getSummaryForSession(session.id, session.sessionIdOnAgent.get())
-    const deliveryAvailable = this._delivery.isAvailable(session)
+    const eligible = this._delivery.isAvailable(session)
+    if (eligible) this._schedulePendingWorkRefresh(session)
+    const deliveryAvailable = eligible && this._delivery.hasDeliverableChanges(session)
     return {
       ...summary,
       ...(delivery !== undefined ? { delivery: toMobileDeliverySummary(delivery) } : {}),
       ...(deliveryAvailable ? { deliveryAvailable: true } : {}),
+    }
+  }
+
+  private _schedulePendingWorkRefresh(session: IAcpSession, force = false): void {
+    void this._delivery
+      .refreshDeliverableChanges(session, force ? { force: true } : undefined)
+      .then((changed) => {
+        if (!changed || this._disposed) return
+        this._publishPendingWorkFor(session)
+      })
+      .catch(() => undefined)
+  }
+
+  private _publishPendingWorkFor(session: IAcpSession): void {
+    const key = this._pendingWorkKey(session)
+    if (key === undefined) return
+    for (const candidate of this._sessions.sessions.get()) {
+      if (!isResidentLive(candidate)) continue
+      if (this._pendingWorkKey(candidate) !== key) continue
+      this._publishSummary(candidate)
+    }
+  }
+
+  private _pendingWorkKey(session: IAcpSession): string | undefined {
+    const cwd = session.cwd
+    if (cwd === undefined || cwd.length === 0) return undefined
+    return `${session.authority ?? ''}|${this._uriIdentity.getPathComparisonKey(cwd)}`
+  }
+
+  private _publishSummary(session: IAcpSession): void {
+    const summary = this._summaryFor(session)
+    const stream = this._streams.get(session.id)
+    if (
+      stream !== undefined &&
+      stream.publishedSummary !== undefined &&
+      !summaryChanged(stream.publishedSummary, summary)
+    ) {
+      return
+    }
+    if (stream !== undefined) stream.publishedSummary = summary
+    this._emit({
+      kind: 'session_delta',
+      localId: session.id,
+      events: [{ type: 'summary_changed', summary }],
+    })
+    this._emit({ kind: 'inbox', upserts: [summary], removes: [] })
+  }
+
+  private _sweepPendingWork(): void {
+    if (this._disposed || !this._streaming) return
+    const seen = new Set<string>()
+    for (const session of this._sessions.sessions.get()) {
+      if (!isResidentLive(session) || !this._delivery.isAvailable(session)) continue
+      if (this._delivery.isDeliveryBusyForSession(session)) continue
+      const key = this._pendingWorkKey(session)
+      if (key === undefined || seen.has(key)) continue
+      seen.add(key)
+      this._schedulePendingWorkRefresh(session)
     }
   }
 
@@ -1860,13 +1940,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
         ? this._liveSession(change.sessionDurableId)
         : undefined)
     if (session === undefined) return
-    const summary = this._summaryFor(session)
-    this._emit({
-      kind: 'session_delta',
-      localId: session.id,
-      events: [{ type: 'summary_changed', summary }],
-    })
-    this._emit({ kind: 'inbox', upserts: [summary], removes: [] })
+    this._publishSummary(session)
+    this._schedulePendingWorkRefresh(session, true)
   }
 
   /**
