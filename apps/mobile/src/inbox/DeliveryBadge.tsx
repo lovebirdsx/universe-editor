@@ -35,7 +35,7 @@ export function SessionDeliveryControls({
   if (delivery === undefined && !canStart) return null
 
   return (
-    <span className="session-card__delivery">
+    <>
       {delivery !== undefined && (
         <span
           role="button"
@@ -67,6 +67,6 @@ export function SessionDeliveryControls({
           {strings.deliveryAction}
         </span>
       )}
-    </span>
+    </>
   )
 }

@@ -245,6 +245,21 @@ describe('InboxPage delivery', () => {
     expect(await screen.findByTestId('delivery-confirm-sheet')).toBeTruthy()
   })
 
+  it('keeps the delivery badge on the same badge row', () => {
+    const client = createClient([
+      sessionSummary('s1', {
+        authority: 'remote',
+        delivery: deliverySummary({ phase: 'synced', canConfirmPush: false }),
+        deliveryAvailable: true,
+      }),
+    ])
+    renderPage(client)
+
+    const badgesRow = screen.getByTestId('inbox-delivery-badge').closest('.session-card__badges')
+    expect(badgesRow).not.toBeNull()
+    expect(badgesRow?.textContent).toContain('远程')
+  })
+
   it('keeps the start action while a delivery still needs the user', async () => {
     const client = createClient([
       sessionSummary('s1', { delivery: deliverySummary(), deliveryAvailable: true }),

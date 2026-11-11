@@ -173,6 +173,8 @@ function SessionRow({
   if (session.authority !== undefined) badges.push(strings.badgeRemote)
   if (session.readOnly) badges.push(strings.badgeReadOnly)
   if (workspaceDirty === true) badges.push(strings.badgeWorkspaceDirty)
+  // Delivery badges share the row with the rest so a synced row stays compact.
+  const hasDelivery = session.delivery !== undefined || session.deliveryAvailable === true
 
   return (
     <button
@@ -203,22 +205,22 @@ function SessionRow({
           <span className="session-card__agent">{agent}</span>
           <span className="session-card__workspace">{session.workspaceName}</span>
         </span>
-        {badges.length > 0 && (
+        {(badges.length > 0 || hasDelivery) && (
           <span className="session-card__badges">
             {badges.map((badge) => (
               <span key={badge} className="session-badge">
                 {badge}
               </span>
             ))}
+            {hasDelivery && (
+              <SessionDeliveryControls
+                delivery={session.delivery}
+                available={session.deliveryAvailable}
+                onStartDelivery={() => onStartDelivery?.(session)}
+                onOpenDelivery={() => onOpenDelivery?.(session)}
+              />
+            )}
           </span>
-        )}
-        {(session.delivery !== undefined || session.deliveryAvailable === true) && (
-          <SessionDeliveryControls
-            delivery={session.delivery}
-            available={session.deliveryAvailable}
-            onStartDelivery={() => onStartDelivery?.(session)}
-            onOpenDelivery={() => onOpenDelivery?.(session)}
-          />
         )}
       </span>
     </button>
