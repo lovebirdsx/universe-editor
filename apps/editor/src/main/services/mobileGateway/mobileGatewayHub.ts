@@ -1525,7 +1525,23 @@ export class MobileGatewayHub {
   private async _listWorkspaces(): Promise<CommandOutcome> {
     const open = this._host?.listOpenWorkspaces() ?? []
     const recent = (await this._host?.listRecentWorkspaces().catch(() => [])) ?? []
-    const result: MobileWorkspaceCandidate[] = open.map((workspace) => ({
+    // The phone keeps group order as-is, so the open group needs the same
+    // newest-first recency order as the recent group. Window order is just
+    // window creation order; rank each open workspace by its position in the
+    // recent list (which is `lastOpened` desc), unknown ones last.
+    const openByRecency = open
+      .map((workspace, windowOrder) => ({
+        workspace,
+        windowOrder,
+        recentIndex: recent.findIndex((entry) => isSameWorkspace(entry, workspace)),
+      }))
+      .sort((a, b) => {
+        const left = a.recentIndex === -1 ? Number.MAX_SAFE_INTEGER : a.recentIndex
+        const right = b.recentIndex === -1 ? Number.MAX_SAFE_INTEGER : b.recentIndex
+        return left - right || a.windowOrder - b.windowOrder
+      })
+      .map((entry) => entry.workspace)
+    const result: MobileWorkspaceCandidate[] = openByRecency.map((workspace) => ({
       folder: workspace.folder,
       name: workspace.name,
       ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),

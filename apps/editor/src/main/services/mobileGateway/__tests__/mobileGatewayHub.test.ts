@@ -8,6 +8,7 @@ import {
   type MobileDeliveryStartResult,
   type MobileSessionRef,
   type MobileSideTaskSummary,
+  type MobileWorkspaceCandidate,
   type DraftUpdateFrame,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
@@ -2325,6 +2326,41 @@ describe('MobileGatewayHub commands', () => {
         { folder: 'file:///workspace/older', name: 'older', isOpen: false },
       ],
     })
+  })
+
+  it('orders open workspaces by last-opened recency', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/oldest', name: 'oldest' },
+        { windowId: 2, folder: 'file:///workspace/newest', name: 'newest' },
+        { windowId: 3, folder: 'file:///workspace/unknown', name: 'unknown' },
+        { windowId: 4, folder: 'file:///workspace/middle', name: 'middle' },
+      ]),
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/newest', name: 'newest' },
+        { folder: 'file:///workspace/middle', name: 'middle' },
+        { folder: 'file:///workspace/oldest', name: 'oldest' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'w-order',
+      kind: 'listWorkspaces',
+      payload: {},
+    })
+    const frame = connection.frames.at(-1) as {
+      result: readonly MobileWorkspaceCandidate[]
+    }
+    expect(frame.result.map((workspace) => workspace.name)).toEqual([
+      'newest',
+      'middle',
+      'oldest',
+      'unknown',
+    ])
   })
 
   it('annotates known git state and keeps unknown candidates bare', async () => {

@@ -383,7 +383,8 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
 `arePathsEqual(fsPath, fsPath, normalizePlatform(process.platform))`），**不手写
 `fsPath.toLowerCase()` / 反斜杠折叠**。远程工作区标记 authority。
 
-**顺序即契约**：响应里已打开窗口在前、最近工作区随后且按 `lastOpened` 倒序。手机端只按
+**顺序即契约**：响应里已打开窗口在前、最近工作区随后；两组都按 `lastOpened` 倒序
+（已打开工作区用其在最近列表中的位置排名，不在最近列表里的排在组尾并保留窗口顺序）。手机端只按
 `isOpen` 稳定分组（已打开 / 最近），不再按名称重排——字母序会覆盖最近打开时间。
 
 **工作区 git 状态**：`listWorkspaces` 尽力为候选附带 `gitDirty`（`true` 有未提交修改、`false`
