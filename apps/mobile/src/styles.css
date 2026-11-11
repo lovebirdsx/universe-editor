@@ -2878,6 +2878,9 @@ input:focus-visible {
   right: 20px;
   bottom: calc(env(safe-area-inset-bottom) + 20px);
   z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 56px;
   height: 56px;
   min-height: 56px;
@@ -2885,9 +2888,6 @@ input:focus-visible {
   border-radius: 50%;
   background: var(--accent);
   color: var(--on-accent);
-  font-size: 28px;
-  font-weight: 400;
-  line-height: 1;
   box-shadow: var(--shadow);
 }
 

@@ -171,7 +171,9 @@ export function InboxPage({
         disabled={socketState !== 'connected'}
         onClick={onNewSession}
       >
-        +
+        <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 4.5v15M4.5 12h15" fill="none" stroke="currentColor" strokeWidth="2" />
+        </svg>
       </button>
       {settingsOpen && (
         <SettingsDrawer
