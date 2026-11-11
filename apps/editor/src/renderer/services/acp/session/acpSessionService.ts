@@ -1491,8 +1491,17 @@ export class AcpSessionService
       this._wireRecovery(session)
       this._wireConfigOptionsCache(session)
       this._wireAutoReviewGuard(session)
-      this._wireMcpDrift(session)
+      // Snapshot the attach-time pin BEFORE wiring the drift autorun: `autorun`
+      // runs synchronously on creation, and `attachConnection` above may already
+      // have flipped the status to 'idle'. A missing snapshot makes a pinned
+      // session (history row `mcpServerNames`) read as drifted and reload itself
+      // on every resume — the false reload toasts "MCP servers changed", steals
+      // the active pointer (its resumeSession defaults to activate:true), and
+      // destroys a just-forked side task's quote prefill. Store the selection
+      // itself, not the resolved wire list, so capability-dropped servers cannot
+      // false-positive (same rule as the create path).
       this._mcpSelectionAtAttach.set(session.id, session.mcpServerSelection.get())
+      this._wireMcpDrift(session)
       const captured = session
       // Read-only foreign previews register so getById/timeline work, but must
       // not become the active session — that belongs to the current worktree.
@@ -3218,6 +3227,10 @@ export class AcpSessionService
    * `run_in_background` task reads as idle too, so its count is read here as
    * well: it both holds the converge back and, by changing, re-fires the
    * autorun once the task ends and the waiting drift can finally apply.
+   *
+   * The autorun runs synchronously on creation, so callers MUST record the
+   * session's `_mcpSelectionAtAttach` snapshot BEFORE wiring this — otherwise a
+   * pinned session's first run compares against `undefined` and reloads itself.
    */
   private _wireMcpDrift(session: AcpSession): void {
     this._register(

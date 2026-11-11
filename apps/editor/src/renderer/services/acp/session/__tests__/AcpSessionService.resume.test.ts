@@ -428,6 +428,7 @@ function buildService(
   agentDefaults: AcpAgentDefaultsService
   notifications: StubNotificationService
   storage: FakeStorage
+  config: IConfigurationService
 } {
   const client = new FakeAcpClientService(opts)
   const config: IConfigurationService = new ConfigurationService()
@@ -487,7 +488,7 @@ function buildService(
     stubSubProjectService(),
     stubLastSessionCwdServiceForTest(),
   )
-  return { svc, client, history, agentDefaults, notifications, storage }
+  return { svc, client, history, agentDefaults, notifications, storage, config }
 }
 
 // ---------------------------------------------------------------------------
@@ -757,6 +758,41 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     await svc.closeSession(original.id)
     const resumed = await svc.resumeSession(historyId)
     expect(resumed.configOptions.get()).toEqual([])
+  })
+
+  it('does not mistake a pinned MCP selection for drift and reload on resume', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'agent-pinned',
+      title: 'pinned',
+      hasMessages: true,
+      mcpServerNames: ['fs'],
+    })
+
+    const resumed = await svc.resumeSession('agent-pinned', { activate: false })
+
+    expect(resumed.status.get()).toBe('idle')
+    expect(resumed.mcpServerSelection.get()).toEqual(['fs'])
+    expect(
+      built.client.connected[0]!.agent.loadSessionCalls[0]!.mcpServers.map((m) => m.name),
+    ).toEqual(['fs'])
+    // The drift autorun runs synchronously when wired. Recording the attach
+    // snapshot after it made a pinned row look drifted and triggered a real
+    // close+resume (toast + active-pointer steal) right after resume.
+    expect(
+      built.notifications.captured.filter((n) => n.message.includes('MCP servers changed')),
+    ).toHaveLength(0)
+
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(svc.activeSession.get()).toBeUndefined()
+    expect(built.client.connected).toHaveLength(1)
   })
 
   it('defaults a resumed row without a recorded display mode to onlyMessage', async () => {

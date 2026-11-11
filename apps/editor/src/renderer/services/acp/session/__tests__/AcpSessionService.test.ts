@@ -3258,6 +3258,48 @@ describe('AcpSessionService — rewind / fork', () => {
     }
   })
 
+  it('forkSideTask from a pinned parent does not schedule a spurious MCP reload', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({
+      stubOptions: { forkCapable: true, loadSession: true, forkedSessionId: 'agent-side-pinned' },
+    })
+    const { svc, config, notification } = makeServiceWithHistory(client, tracker)
+    try {
+      await config.update('acp.mcpServers', {
+        fs: { command: 'node', args: [] },
+        docs: { command: 'node', args: [] },
+      })
+      const parent = await svc.createSession('claude-code')
+      await parent.whenConnected()
+      await parent.sendPrompt('first turn')
+      const parentSid = parent.sessionIdOnAgent.get()!
+
+      // Pinning the parent is an intentional reload: exactly one toast.
+      svc.setSessionMcpServers(parentSid, ['fs'])
+      await vi.waitFor(() => {
+        expect(client.connected).toHaveLength(2)
+        expect(client.connected[1]!.agent.loadSessionCalls).toHaveLength(1)
+      })
+      const reloadToasts = (): number =>
+        notification.captured.filter((n) => n.message.includes('MCP servers changed')).length
+      const before = reloadToasts()
+
+      const side = await svc.forkSideTask(parentSid, {
+        text: 'quoted text',
+        label: 'quote summary',
+      })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+
+      expect(side.mcpServerSelection.get()).toEqual(['fs'])
+      expect(reloadToasts()).toBe(before)
+      // forkSideTask is activate:false; the buggy reload's resumeSession
+      // (default activate:true) would have stolen the active pointer.
+      expect(svc.activeSession.get()?.id).toBe(parentSid)
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('forkSideTask overrides an explicitly-selected mode with the read-only value', async () => {
     const tracker = new StubSessionChangeTracker()
     const modeConfig: readonly SessionConfigOption[] = [
