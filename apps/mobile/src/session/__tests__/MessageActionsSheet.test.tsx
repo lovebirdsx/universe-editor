@@ -56,6 +56,11 @@ describe('MessageActionsSheet', () => {
 
     fireEvent.click(screen.getByTestId('message-action-fork'))
     await waitFor(() => expect(onFork).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect((screen.getByTestId('message-action-side-task') as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    )
 
     fireEvent.click(screen.getByTestId('message-action-side-task'))
     await waitFor(() => expect(onSideTask).toHaveBeenCalledTimes(1))
