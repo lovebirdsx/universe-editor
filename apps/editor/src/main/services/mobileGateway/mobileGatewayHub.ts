@@ -10,6 +10,7 @@ import {
   arePathsEqual,
   CancellationTokenSource,
   normalizePlatform,
+  relativePathUnder,
   URI,
   type CancellationToken,
   type ILogger,
@@ -30,6 +31,7 @@ import {
   type DraftUpdateFrame,
   type MobileAgentCandidate,
   type MobileAttentionKind,
+  type MobileDeliveryExpectation,
   type MobileDraftState,
   type MobileErrorCode,
   type MobileNewSessionResult,
@@ -47,6 +49,7 @@ import {
 import type {
   IMobileBridgeService,
   MobileBridgeAttentionEvent,
+  MobileBridgeDeliveryContext,
   MobileBridgeEvent,
   MobileBridgeImage,
   MobileBridgeNewSessionResult,
@@ -239,6 +242,15 @@ export const OPEN_SESSION_TIMEOUT_MS = 100_000
 const HISTORY_OPEN_POLL_INTERVAL_MS = 300
 const PREVIEW_REWIND_TIMEOUT_MS = 30_000
 const LIST_SIDE_TASKS_TIMEOUT_MS = 10_000
+/** Preview may fetch; start may run an internal side task (90s budget). */
+const DELIVERY_PREVIEW_TIMEOUT_MS = 110_000
+const DELIVERY_START_TIMEOUT_MS = 110_000
+/** Push / retry / undo include network round-trips and worktree sync. */
+const DELIVERY_MUTATION_TIMEOUT_MS = 110_000
+/** Local record reads and opening an existing window. */
+const DELIVERY_READ_TIMEOUT_MS = 10_000
+/** Cross-window guards probe peers; a wedged renderer must not block routing. */
+const DELIVERY_GUARD_TIMEOUT_MS = 5_000
 /** History catalog: bound each window's readiness and history read. */
 const HISTORY_WINDOW_READY_TIMEOUT_MS = 5_000
 const HISTORY_LIST_TIMEOUT_MS = 8_000
@@ -276,6 +288,11 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'openSideTask',
   'deleteSideTask',
   'openSession',
+  'startDelivery',
+  'confirmDeliveryPush',
+  'retryDelivery',
+  'undoDelivery',
+  'openDeliveryMainWorktree',
 ])
 
 const sessionKey = (windowId: number, localId: string): string => `${windowId}:${localId}`
@@ -921,6 +938,9 @@ export class MobileGatewayHub {
           draftImageIds?: readonly string[]
           draftFileIds?: readonly string[]
         }
+        if (this._windows.size > 1 && (await this._deliveryBusyForSession(p.ref))) {
+          return failOutcome('delivery_busy')
+        }
         const ids = p.attachmentIds ?? []
         const draftImageIds = p.draftImageIds ?? []
         const draftFileIds = p.draftFileIds ?? []
@@ -1062,6 +1082,9 @@ export class MobileGatewayHub {
           workspace: { folder: string; authority?: string }
           initialPrompt?: string
         }
+        if (this._windows.size > 1 && (await this._deliveryBusyForWorkspace(p.workspace))) {
+          return failOutcome('delivery_busy')
+        }
         return this._newSession(p)
       }
       case 'renameSession': {
@@ -1146,6 +1169,49 @@ export class MobileGatewayHub {
         }
         return this._openSession(p.durableId, p.windowId, p.folder, p.authority)
       }
+      case 'previewDelivery': {
+        const p = frame.payload as { ref: MobileSessionRef }
+        return this._sessionCommand(p.ref, DELIVERY_PREVIEW_TIMEOUT_MS, (bridge, localId) =>
+          bridge.previewDelivery(localId, p.ref.durableId),
+        )
+      }
+      case 'startDelivery': {
+        const p = frame.payload as {
+          ref: MobileSessionRef
+          expectation: MobileDeliveryExpectation
+        }
+        return this._startDelivery(p.ref, p.expectation)
+      }
+      case 'getDelivery': {
+        const p = frame.payload as { ref: MobileSessionRef; deliveryId: string }
+        return this._sessionCommand(p.ref, DELIVERY_READ_TIMEOUT_MS, (bridge, localId) =>
+          bridge.getDelivery(localId, p.deliveryId),
+        )
+      }
+      case 'confirmDeliveryPush': {
+        const p = frame.payload as { ref: MobileSessionRef; deliveryId: string }
+        return this._sessionCommand(p.ref, DELIVERY_MUTATION_TIMEOUT_MS, (bridge, localId) =>
+          bridge.confirmDeliveryPush(localId, p.deliveryId),
+        )
+      }
+      case 'retryDelivery': {
+        const p = frame.payload as { ref: MobileSessionRef; deliveryId: string }
+        return this._sessionCommand(p.ref, DELIVERY_MUTATION_TIMEOUT_MS, (bridge, localId) =>
+          bridge.retryDelivery(localId, p.deliveryId),
+        )
+      }
+      case 'undoDelivery': {
+        const p = frame.payload as { ref: MobileSessionRef; deliveryId: string }
+        return this._sessionCommand(p.ref, DELIVERY_MUTATION_TIMEOUT_MS, (bridge, localId) =>
+          bridge.undoDelivery(localId, p.deliveryId),
+        )
+      }
+      case 'openDeliveryMainWorktree': {
+        const p = frame.payload as { ref: MobileSessionRef; deliveryId: string }
+        return this._sessionCommand(p.ref, DELIVERY_READ_TIMEOUT_MS, (bridge, localId) =>
+          bridge.openDeliveryMainWorktree(localId, p.deliveryId),
+        )
+      }
       default:
         // Unknown kinds still reach here through a newer phone; payload carried
         // through validation unchanged.
@@ -1211,6 +1277,89 @@ export class MobileGatewayHub {
       this._logger.warn(`mobile command failed: ${String(err)}`)
       return failOutcome('internal')
     }
+  }
+
+  private async _startDelivery(
+    ref: MobileSessionRef,
+    expectation: MobileDeliveryExpectation,
+  ): Promise<CommandOutcome> {
+    const resolved = this._resolveSession(ref)
+    if (resolved === undefined) return failOutcome('session_not_found')
+    if (await this._deliveryBusyForSession(ref)) return failOutcome('delivery_busy')
+    return this._withBridge(resolved, DELIVERY_START_TIMEOUT_MS, (bridge) =>
+      bridge.startDelivery(resolved.localId, expectation, ref.durableId),
+    )
+  }
+
+  /**
+   * Cross-window guard: a phone may address a window whose bridge has only its
+   * own delivery records. A delivery in another window for the same source (or
+   * main) worktree must reject prompts/starts before they reach the renderer.
+   * The git directory lock is still the final defence.
+   */
+  private async _deliveryBusyForSession(ref: MobileSessionRef): Promise<boolean> {
+    if (this._windows.size <= 1) return false
+    const resolved = this._resolveSession(ref)
+    if (resolved === undefined) return false
+    const entry = this._windows.get(resolved.windowId)
+    if (entry === undefined) return false
+    let context: MobileBridgeDeliveryContext | undefined
+    try {
+      context = await withTimeout(
+        entry.bridge.getDeliveryContext(resolved.localId, ref.durableId),
+        DELIVERY_GUARD_TIMEOUT_MS,
+      )
+    } catch {
+      return false
+    }
+    if (context === undefined) return false
+    return this._deliveryBusyForCwd(resolved.windowId, context.sourceCwd, context.authority)
+  }
+
+  private async _deliveryBusyForWorkspace(workspace: {
+    folder: string
+    authority?: string
+  }): Promise<boolean> {
+    if (this._windows.size <= 1) return false
+    let folder: URI
+    try {
+      folder = URI.parse(workspace.folder)
+    } catch {
+      return false
+    }
+    const authority = workspace.authority ?? folder.authority ?? undefined
+    const cwd = folder.scheme ? folder.fsPath : workspace.folder
+    return this._deliveryBusyForCwd(-1, cwd, authority || undefined)
+  }
+
+  private async _deliveryBusyForCwd(
+    excludeWindowId: number,
+    cwd: string,
+    authority: string | undefined,
+  ): Promise<boolean> {
+    const probes = [...this._windows.values()]
+      .filter((entry) => entry.windowId !== excludeWindowId)
+      .map(async (entry) => {
+        try {
+          return await withTimeout(entry.bridge.listActiveDeliveries(), DELIVERY_GUARD_TIMEOUT_MS)
+        } catch {
+          return []
+        }
+      })
+    const activeDeliveries = await Promise.all(probes)
+    for (const contexts of activeDeliveries) {
+      for (const context of contexts) {
+        if ((context.authority ?? '') !== (authority ?? '')) continue
+        if (isPathInside(context.sourceCwd, cwd, authority)) return true
+        if (
+          context.mainWorktree !== undefined &&
+          isPathInside(context.mainWorktree, cwd, authority)
+        ) {
+          return true
+        }
+      }
+    }
+    return false
   }
 
   private async _newSession(payload: {
@@ -2199,6 +2348,8 @@ export class MobileGatewayHub {
       summary.sideTaskChildCount > 0
         ? { sideTaskChildCount: summary.sideTaskChildCount }
         : {}),
+      ...(summary.delivery !== undefined ? { delivery: summary.delivery } : {}),
+      ...(summary.deliveryAvailable === true ? { deliveryAvailable: true } : {}),
       updatedAt: summary.updatedAt,
     }
   }
@@ -2385,6 +2536,19 @@ function permissionKey(windowId: number, localId: string, requestId: string): st
 }
 
 const HOST_PLATFORM = normalizePlatform(process.platform)
+
+/**
+ * True when `cwd` is the worktree root or lives under it. Remote authorities
+ * carry POSIX paths on the server, so compare byte prefixes; local paths go
+ * through the shared platform comparison (Windows casing/separators).
+ */
+function isPathInside(root: string, cwd: string, authority: string | undefined): boolean {
+  if (authority !== undefined && authority.length > 0) {
+    if (cwd === root) return true
+    return cwd.startsWith(root.endsWith('/') ? root : `${root}/`)
+  }
+  return relativePathUnder(root, cwd, HOST_PLATFORM) !== null
+}
 
 export function isSameWorkspace(
   a: { folder: string; authority?: string },

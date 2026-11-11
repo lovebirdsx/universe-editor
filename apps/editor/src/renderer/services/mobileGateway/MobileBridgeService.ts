@@ -66,6 +66,7 @@ import type {
   MobileBridgeSessionSnapshot,
   MobileBridgeSessionSummary,
   MobileBridgeImage,
+  MobileBridgeDeliveryContext,
   IMobileBridgeService,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import {
@@ -101,9 +102,24 @@ import { IUserSettingsSyncService } from '../configuration/UserSettingsSync.js'
 import { selectOptionHasValue } from '../acp/configOptionLabel.js'
 import { deleteSessionPlan, planSessionRemoval } from '../acp/session/sessionRemoval.js'
 import { deleteSideTasks } from '../acp/session/sideTaskRemoval.js'
+import { ISessionDeliveryService } from '../delivery/sessionDeliveryService.js'
+import {
+  worktreeName,
+  type SessionDeliveryChange,
+  type SessionDeliveryDetail,
+  type SessionDeliveryError,
+  type SessionDeliveryPreview,
+  type SessionDeliverySummary,
+} from '../delivery/sessionDeliveryTypes.js'
 import type {
   MobilePermissionSettleReason,
   MobilePermissionSettleSource,
+  MobileDeliveryDetail,
+  MobileDeliveryError,
+  MobileDeliveryExpectation,
+  MobileDeliveryPreview,
+  MobileDeliveryStartResult,
+  MobileDeliverySummary,
 } from '@universe-editor/mobile-protocol'
 import {
   diffAvailableCommands,
@@ -188,10 +204,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
     @IScmService private readonly _scm: IScmService,
     @IFileService private readonly _files: IFileService,
+    @ISessionDeliveryService private readonly _delivery: ISessionDeliveryService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'mobileBridge', name: 'Mobile Bridge' })
+    this._register(this._delivery.onDidChange((change) => this._onDeliveryChanged(change)))
   }
 
   ping(): Promise<'pong'> {
@@ -216,6 +234,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
 
   async listSessions(): Promise<readonly MobileBridgeSessionSummary[]> {
     await this._ensureHistory()
+    await this._ensureDelivery()
     const summaries: MobileBridgeSessionSummary[] = []
     for (const session of this._sessions.sessions.get()) {
       if (!isResidentLive(session)) continue
@@ -296,6 +315,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
 
   async getSnapshot(localId: string): Promise<MobileBridgeSessionSnapshot | undefined> {
     await this._ensureHistory()
+    await this._ensureDelivery()
     const session = this._sessions.getById(localId)
     if (session === undefined || !isResidentLive(session)) return undefined
     // Emit any coalesced delta first so the caller cannot receive an event that
@@ -303,8 +323,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const stream = this._streams.get(session.id)
     if (stream !== undefined) this._flush(stream)
     const snapshot = toBridgeSnapshot(session, this._projectionOptions(session))
+    const withDelivery = {
+      ...snapshot,
+      summary: this._withDelivery(session, snapshot.summary),
+    }
     const draft = this._draftFor(session)
-    return draft === undefined ? snapshot : { ...snapshot, draft }
+    return draft === undefined ? withDelivery : { ...withDelivery, draft }
   }
 
   async startStreaming(): Promise<void> {
@@ -687,6 +711,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
     if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (this._delivery.isDeliveryBusyForSession(session)) {
+      return fail(
+        'delivery_busy',
+        'A delivery is running for this worktree; wait for it to finish before prompting.',
+      )
+    }
     const images: PromptImage[] = []
     const files: PromptFileAttachment[] = []
     for (const attachment of attachments) {
@@ -862,6 +892,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const authority =
       workspace.authority ??
       (folder.scheme === REMOTE_SCHEME && folder.authority ? folder.authority : undefined)
+    if (this._delivery.isDeliveryBusyForCwd(folder.fsPath, authority)) {
+      return fail(
+        'delivery_busy',
+        'A delivery is running for this repository; wait for it to finish before starting a session.',
+      )
+    }
     try {
       const session = await this._sessions.createSession(agentId, {
         cwd: folder.fsPath,
@@ -901,6 +937,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
     if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (this._delivery.isDeliveryBusyForSession(session)) {
+      return fail(
+        'delivery_busy',
+        'finish or undo the active delivery before deleting this session',
+      )
+    }
     // Same plan → execute pipeline as the PC "Delete Agent Session" command;
     // the phone already confirmed, so only the execution half runs here.
     const plan = planSessionRemoval(this._sessions, this._history, localId)
@@ -1074,6 +1116,211 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       return ok(undefined)
     } catch (err) {
       return this._commandFailure(err, 'deleteSideTask')
+    }
+  }
+
+  async previewDelivery(
+    localId: string,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobileDeliveryPreview>> {
+    await this._ensureDelivery()
+    const session =
+      this._liveSession(localId) ?? (durableId ? this._liveSession(durableId) : undefined)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const result = await this._delivery.preview(session.id)
+    if (!result.ok) return this._deliveryFailure(result.error)
+    return ok(this._toMobileDeliveryPreview(result.preview))
+  }
+
+  async startDelivery(
+    localId: string,
+    expectation: MobileDeliveryExpectation,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobileDeliveryStartResult>> {
+    await this._ensureDelivery()
+    const session =
+      this._liveSession(localId) ?? (durableId ? this._liveSession(durableId) : undefined)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const result = await this._delivery.start(session.id, expectation)
+    if (!result.ok) return this._deliveryFailure(result.error)
+    return ok(result.value)
+  }
+
+  async getDelivery(
+    localId: string,
+    deliveryId: string,
+  ): Promise<MobileBridgeResult<MobileDeliveryDetail>> {
+    await this._ensureDelivery()
+    const record = this._delivery.getRecord(deliveryId)
+    if (record === undefined || !this._deliveryBelongsToSession(record, localId)) {
+      return fail('delivery_not_found', 'unknown delivery')
+    }
+    const detail = this._delivery.getDetail(deliveryId)
+    if (detail === undefined) return fail('delivery_not_found', 'unknown delivery')
+    return ok(this._toMobileDeliveryDetail(detail))
+  }
+
+  async confirmDeliveryPush(
+    localId: string,
+    deliveryId: string,
+  ): Promise<MobileBridgeResult<void>> {
+    return this._runDelivery(localId, deliveryId, () => this._delivery.confirmPush(deliveryId))
+  }
+
+  async retryDelivery(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>> {
+    return this._runDelivery(localId, deliveryId, () => this._delivery.retry(deliveryId))
+  }
+
+  async undoDelivery(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>> {
+    return this._runDelivery(localId, deliveryId, () => this._delivery.undo(deliveryId))
+  }
+
+  async openDeliveryMainWorktree(
+    localId: string,
+    deliveryId: string,
+  ): Promise<MobileBridgeResult<void>> {
+    return this._runDelivery(localId, deliveryId, () => this._delivery.openMainWorktree(deliveryId))
+  }
+
+  async getDeliveryContext(
+    localId: string,
+    durableId?: string,
+  ): Promise<MobileBridgeDeliveryContext | undefined> {
+    await this._ensureDelivery()
+    const session =
+      this._liveSession(localId) ?? (durableId ? this._liveSession(durableId) : undefined)
+    const context = this._delivery.getContext(
+      session?.id ?? localId,
+      durableId ?? session?.sessionIdOnAgent.get(),
+    )
+    if (context !== undefined) {
+      return {
+        sourceCwd: context.sourceCwd,
+        ...(context.authority !== undefined ? { authority: context.authority } : {}),
+        ...(context.deliveryId !== undefined ? { deliveryId: context.deliveryId } : {}),
+        ...(context.phase !== undefined ? { phase: context.phase } : {}),
+        ...(context.mainWorktree !== undefined ? { mainWorktree: context.mainWorktree } : {}),
+      }
+    }
+    if (session === undefined) return undefined
+    const cwd = session.cwd
+    if (cwd === undefined || cwd.length === 0) return undefined
+    return {
+      sourceCwd: cwd,
+      ...(session.authority !== undefined ? { authority: session.authority } : {}),
+    }
+  }
+
+  async listActiveDeliveries(): Promise<readonly MobileBridgeDeliveryContext[]> {
+    await this._ensureDelivery()
+    return this._delivery.listActiveContexts().map((context) => ({
+      sourceCwd: context.sourceCwd,
+      ...(context.authority !== undefined ? { authority: context.authority } : {}),
+      ...(context.deliveryId !== undefined ? { deliveryId: context.deliveryId } : {}),
+      ...(context.phase !== undefined ? { phase: context.phase } : {}),
+      ...(context.mainWorktree !== undefined ? { mainWorktree: context.mainWorktree } : {}),
+    }))
+  }
+
+  private async _runDelivery(
+    localId: string,
+    deliveryId: string,
+    action: () => Promise<
+      | { readonly ok: true; readonly value: void }
+      | { readonly ok: false; readonly error: SessionDeliveryError }
+    >,
+  ): Promise<MobileBridgeResult<void>> {
+    await this._ensureDelivery()
+    const record = this._delivery.getRecord(deliveryId)
+    if (record === undefined || !this._deliveryBelongsToSession(record, localId)) {
+      return fail('delivery_not_found', 'unknown delivery')
+    }
+    const result = await action()
+    return result.ok ? ok(undefined) : this._deliveryFailure(result.error)
+  }
+
+  private _deliveryBelongsToSession(
+    record: {
+      readonly source: { readonly sessionLocalId?: string; readonly sessionDurableId?: string }
+    },
+    localId: string,
+  ): boolean {
+    if (record.source.sessionLocalId === localId) return true
+    if (record.source.sessionDurableId === localId) return true
+    const session = this._liveSession(localId)
+    if (session === undefined) return false
+    const durableId = session.sessionIdOnAgent.get()
+    return (
+      record.source.sessionLocalId === session.id ||
+      (durableId !== undefined && record.source.sessionDurableId === durableId)
+    )
+  }
+
+  private _deliveryFailure(error: SessionDeliveryError): MobileBridgeCommandError {
+    const message = clipDeliveryText(error.message)
+    switch (error.code) {
+      case 'busy':
+      case 'lock_held':
+        return fail('delivery_busy', message)
+      case 'not_found':
+        return fail('delivery_not_found', message)
+      case 'conflict':
+        return fail('delivery_conflict', message)
+      case 'unsupported':
+      case 'merge_commit_unsupported':
+        return fail('delivery_unsupported', message)
+      default:
+        return fail('internal', message)
+    }
+  }
+
+  private _toMobileDeliveryDetail(detail: SessionDeliveryDetail): MobileDeliveryDetail {
+    return {
+      ...detail,
+      summary: toMobileDeliverySummary(detail.summary),
+      conflictFiles: detail.conflictFiles.map(clipDeliveryText),
+      ...(detail.generatedMessage !== undefined
+        ? { generatedMessage: clipDeliveryText(detail.generatedMessage) }
+        : {}),
+      syncResults: detail.syncResults.map((result) => ({
+        name: clipDeliveryText(result.name),
+        ...(result.branch !== undefined ? { branch: clipDeliveryText(result.branch) } : {}),
+        status: result.status,
+        ...(result.error !== undefined ? { error: clipDeliveryText(result.error) } : {}),
+      })),
+    }
+  }
+
+  private _toMobileDeliveryPreview(preview: SessionDeliveryPreview): MobileDeliveryPreview {
+    return {
+      source: {
+        worktreeName: worktreeName(preview.source.worktree),
+        ...(preview.source.branch !== undefined ? { branch: preview.source.branch } : {}),
+        head: preview.source.head,
+        dirty: preview.source.dirty,
+        changedFileCount: preview.source.changedFileCount,
+        untrackedCount: preview.source.untrackedCount,
+        ...(preview.source.pendingOperation !== undefined
+          ? { pendingOperation: preview.source.pendingOperation }
+          : {}),
+        isMainWorktree: preview.source.isMainWorktree,
+      },
+      target: {
+        mainWorktreeName: worktreeName(preview.target.mainWorktree),
+        mainBranch: preview.target.mainBranch,
+        remote: preview.target.remote,
+        remoteBranch: preview.target.remoteBranch,
+        upstreamRef: preview.target.upstreamRef,
+        baseSha: preview.target.baseSha,
+        mainHead: preview.expectation.mainHead,
+        upstreamHead: preview.target.upstreamHead,
+        aheadOfUpstream: preview.target.aheadOfUpstream,
+      },
+      commits: preview.commits,
+      blockers: preview.blockers.map(toMobileDeliveryError),
+      warnings: preview.warnings.map(clipDeliveryText),
+      forkSupported: preview.forkSupported,
+      expectation: preview.expectation,
     }
   }
 
@@ -1360,7 +1607,47 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   }
 
   private _summaryFor(session: IAcpSession): MobileBridgeSessionSummary {
-    return toBridgeSnapshot(session, this._projectionOptions(session)).summary
+    const base = toBridgeSnapshot(session, this._projectionOptions(session)).summary
+    return this._withDelivery(session, base)
+  }
+
+  private _withDelivery(
+    session: IAcpSession,
+    summary: MobileBridgeSessionSummary,
+  ): MobileBridgeSessionSummary {
+    const delivery = this._delivery.getSummaryForSession(session.id, session.sessionIdOnAgent.get())
+    const deliveryAvailable = this._delivery.isAvailable(session)
+    return {
+      ...summary,
+      ...(delivery !== undefined ? { delivery: toMobileDeliverySummary(delivery) } : {}),
+      ...(deliveryAvailable ? { deliveryAvailable: true } : {}),
+    }
+  }
+
+  private async _ensureDelivery(): Promise<void> {
+    try {
+      await this._delivery.initialize()
+    } catch (err) {
+      this._logger.warn(`mobile bridge delivery initialization failed: ${String(err)}`)
+    }
+  }
+
+  private _onDeliveryChanged(change: SessionDeliveryChange): void {
+    const session =
+      (change.sessionLocalId !== undefined
+        ? this._liveSession(change.sessionLocalId)
+        : undefined) ??
+      (change.sessionDurableId !== undefined
+        ? this._liveSession(change.sessionDurableId)
+        : undefined)
+    if (session === undefined) return
+    const summary = this._summaryFor(session)
+    this._emit({
+      kind: 'session_delta',
+      localId: session.id,
+      events: [{ type: 'summary_changed', summary }],
+    })
+    this._emit({ kind: 'inbox', upserts: [summary], removes: [] })
   }
 
   /**
@@ -1454,6 +1741,33 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
 
 function ok<T>(value: T): MobileBridgeResult<T> {
   return { ok: true, value }
+}
+
+/** Phone-facing delivery text; raw git stderr (absolute paths) never leaves the PC. */
+const DELIVERY_TEXT_LIMIT = 300
+
+function clipDeliveryText(text: string): string {
+  return text.length > DELIVERY_TEXT_LIMIT ? `${text.slice(0, DELIVERY_TEXT_LIMIT - 1)}…` : text
+}
+
+function toMobileDeliveryError(error: SessionDeliveryError): MobileDeliveryError {
+  return { code: error.code, message: clipDeliveryText(error.message) }
+}
+
+function toMobileDeliverySummary(summary: SessionDeliverySummary): MobileDeliverySummary {
+  return {
+    deliveryId: summary.deliveryId,
+    phase: summary.phase,
+    commitCount: summary.commitCount,
+    dirtySource: summary.dirtySource,
+    mainBranch: summary.mainBranch,
+    updatedAt: summary.updatedAt,
+    ...(summary.error !== undefined ? { error: toMobileDeliveryError(summary.error) } : {}),
+    canConfirmPush: summary.canConfirmPush,
+    canRetry: summary.canRetry,
+    canUndo: summary.canUndo,
+    sync: summary.sync,
+  }
 }
 
 function fail(code: MobileBridgeCommandError['code'], message: string): MobileBridgeCommandError {

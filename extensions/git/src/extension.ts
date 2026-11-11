@@ -59,6 +59,7 @@ import {
 import * as gga from './gitGraphActions.js'
 import { updateSubmodulesIfPresent } from './submoduleSync.js'
 import { autoSyncWorktreesAfterPull } from './worktreeAutoSync.js'
+import { registerDeliveryCommands } from './delivery/deliveryCommands.js'
 import { getBlame } from './blameSource.js'
 import { createGitTimelineCommands, GitTimelineProvider } from './timelineProvider.js'
 import { notifyGitFailure, setGitLogShower } from './gitError.js'
@@ -893,6 +894,7 @@ function registerGitCommands(
       }
     }),
   )
+  context.subscriptions.push(...registerDeliveryCommands(register, log))
   return registry
 }
 

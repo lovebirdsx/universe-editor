@@ -42,6 +42,14 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
   return out
 }
 
+export interface GitExecOptions {
+  readonly input?: string
+  /** Extra child env entries, merged over the sanitized process env. */
+  readonly env?: Readonly<Record<string, string>>
+  /** Kill the child when it runs longer than this and report exit code -1. */
+  readonly timeoutMs?: number
+}
+
 /**
  * Run `git <args>` in `cwd`. Resolves with stdout/stderr/exitCode regardless of
  * the exit code (callers decide what a non-zero code means); rejects only if the
@@ -56,27 +64,37 @@ export function gitExec(
   args: readonly string[],
   cwd: string,
   log?: (msg: string) => void,
-  options?: { readonly input?: string },
+  options?: GitExecOptions,
 ): Promise<GitExecResult> {
   return new Promise((resolve, reject) => {
     log?.(`> git ${args.join(' ')}`)
     const start = Date.now()
     const proc = spawn('git', [...args], {
       cwd,
-      env: sanitizeEnv(),
+      env: options?.env ? { ...sanitizeEnv(), ...options.env } : sanitizeEnv(),
       windowsHide: true,
       shell: false,
     })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []
+    let timedOut = false
+    const timer =
+      options?.timeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true
+            proc.kill()
+          }, options.timeoutMs)
     proc.stdout.on('data', (chunk: Buffer) => stdout.push(chunk))
     proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
     proc.on('error', reject)
     proc.on('close', (code) => {
+      if (timer !== undefined) clearTimeout(timer)
+      const timeoutNote = timedOut ? `\n[git timed out after ${options?.timeoutMs}ms]` : ''
       const result: GitExecResult = {
         stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
-        exitCode: code ?? 0,
+        stderr: Buffer.concat(stderr).toString('utf8') + timeoutNote,
+        exitCode: timedOut ? -1 : (code ?? 0),
       }
       const elapsed = Date.now() - start
       const stderrNote = result.stderr.trim() ? `\n  stderr: ${result.stderr.trim()}` : ''

@@ -49,6 +49,8 @@ import {
   MOBILE_DRAFT_THROTTLE_MS,
   MobileBridgeService,
 } from '../MobileBridgeService.js'
+import type { ISessionDeliveryService } from '../../delivery/sessionDeliveryService.js'
+import type { SessionDeliveryPreview } from '../../delivery/sessionDeliveryTypes.js'
 import type { MobileBridgeEvent } from '../../../../shared/ipc/mobileGatewayService.js'
 
 const NULL_LOGGER: ILogger = {
@@ -232,6 +234,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   userSettings: { whenInitialized: Promise<void> }
   scmSourceControls: ISettableObservable<readonly IScmSourceControlModel[]>
   files: IFileService
+  delivery: ISessionDeliveryService
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
@@ -298,6 +301,24 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     readFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
     ...filesOverrides,
   } as unknown as IFileService
+  const delivery = {
+    initialize: vi.fn(async () => {}),
+    onDidChange: Event.None,
+    getSummaryForSession: vi.fn(() => undefined),
+    isAvailable: vi.fn(() => false),
+    isDeliveryBusyForSession: vi.fn(() => false),
+    isDeliveryBusyForCwd: vi.fn(() => false),
+    preview: vi.fn(),
+    start: vi.fn(),
+    confirmPush: vi.fn(),
+    retry: vi.fn(),
+    undo: vi.fn(),
+    openMainWorktree: vi.fn(),
+    getContext: vi.fn(() => undefined),
+    getRecord: vi.fn(() => undefined),
+    getDetail: vi.fn(() => undefined),
+    listActiveContexts: vi.fn(() => []),
+  } as unknown as ISessionDeliveryService
   const service = new MobileBridgeService(
     sessionService,
     historyService,
@@ -308,6 +329,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     userSettings,
     scm,
     files,
+    delivery,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
@@ -328,6 +350,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     userSettings,
     scmSourceControls,
     files,
+    delivery,
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -2336,5 +2359,180 @@ describe('MobileBridgeService image bytes', () => {
     expect(vi.mocked(harness.files.readFile).mock.calls[0]?.[0].toString()).toBe(
       'file:///mnt/real/shot.png',
     )
+  })
+})
+
+describe('MobileBridgeService deliveries', () => {
+  const deliverySummary = {
+    deliveryId: 'del-1',
+    phase: 'awaiting_push' as const,
+    commitCount: 1,
+    dirtySource: false,
+    mainBranch: 'main',
+    updatedAt: 5,
+    canConfirmPush: true,
+    canRetry: false,
+    canUndo: true,
+    sync: { synced: 0, upToDate: 0, skipped: 0, failed: 0 },
+  }
+
+  it('projects the active delivery into session summaries', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    vi.mocked(harness.delivery.getSummaryForSession).mockReturnValue(deliverySummary)
+    vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+
+    await expect(harness.service.listSessions()).resolves.toMatchObject([
+      { localId: 's1', delivery: deliverySummary, deliveryAvailable: true },
+    ])
+  })
+
+  it('routes preview/start to the delivery service and strips absolute paths', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    const expectation = {
+      mainHead: 'm1',
+      mainBranch: 'main',
+      targetBranch: 'main',
+      remote: 'origin',
+      remoteBranch: 'main',
+      upstreamRef: 'origin/main',
+      upstreamHead: 'u1',
+      sourceHead: 's1',
+      baseSha: 'b1',
+      commits: [],
+    }
+    const preview: SessionDeliveryPreview = {
+      source: {
+        worktree: 'D:/repo/feature',
+        branch: 'feature',
+        head: 's1',
+        dirty: false,
+        changedFileCount: 0,
+        untrackedCount: 0,
+        isMainWorktree: false,
+      },
+      target: {
+        mainWorktree: 'D:/repo/main',
+        mainBranch: 'main',
+        targetBranch: 'main',
+        remote: 'origin',
+        remoteBranch: 'main',
+        upstreamRef: 'origin/main',
+        baseSha: 'b1',
+        upstreamHead: 'u1',
+        aheadOfUpstream: 1,
+      },
+      commits: [],
+      blockers: [],
+      warnings: [],
+      forkSupported: true,
+      expectation,
+    }
+    vi.mocked(harness.delivery.preview).mockResolvedValue({ ok: true, preview })
+
+    const result = await harness.service.previewDelivery('s1', 'd1')
+    expect(harness.delivery.preview).toHaveBeenCalledWith('s1')
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        source: { worktreeName: 'feature' },
+        target: { mainWorktreeName: 'main' },
+      },
+    })
+    expect(JSON.stringify(result)).not.toContain('D:/repo')
+
+    vi.mocked(harness.delivery.start).mockResolvedValue({
+      ok: true,
+      value: { deliveryId: 'del-1' },
+    })
+    await expect(harness.service.startDelivery('s1', expectation, 'd1')).resolves.toEqual({
+      ok: true,
+      value: { deliveryId: 'del-1' },
+    })
+    expect(harness.delivery.start).toHaveBeenCalledWith('s1', expectation)
+  })
+
+  it('rejects delivery commands for unknown sessions and foreign delivery ids', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+
+    await expect(harness.service.previewDelivery('missing')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+    vi.mocked(harness.delivery.getRecord).mockReturnValue({
+      source: { sessionLocalId: 'other' },
+    } as unknown as ReturnType<ISessionDeliveryService['getRecord']>)
+    await expect(harness.service.getDelivery('s1', 'del-1')).resolves.toMatchObject({
+      ok: false,
+      code: 'delivery_not_found',
+    })
+  })
+
+  it('blocks prompts and new sessions while a delivery holds the worktree', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    vi.mocked(harness.delivery.isDeliveryBusyForSession).mockReturnValue(true)
+    vi.mocked(harness.delivery.isDeliveryBusyForCwd).mockReturnValue(true)
+
+    await expect(harness.service.sendPrompt('s1', 'hello')).resolves.toMatchObject({
+      ok: false,
+      code: 'delivery_busy',
+    })
+    await expect(
+      harness.service.newSession('fake', { folder: 'file:///workspace/demo' }, null),
+    ).resolves.toMatchObject({ ok: false, code: 'delivery_busy' })
+  })
+
+  it('refuses to delete a session whose delivery is still active', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    vi.mocked(harness.delivery.isDeliveryBusyForSession).mockReturnValue(true)
+
+    await expect(harness.service.deleteSession('s1')).resolves.toMatchObject({
+      ok: false,
+      code: 'delivery_busy',
+    })
+  })
+
+  it('strips raw git error details and clips long messages before sending', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    vi.mocked(harness.delivery.getRecord).mockReturnValue({
+      source: { sessionLocalId: 's1', sessionDurableId: 'd1' },
+    } as unknown as ReturnType<ISessionDeliveryService['getRecord']>)
+    vi.mocked(harness.delivery.getDetail).mockReturnValue({
+      summary: {
+        ...deliverySummary,
+        error: {
+          code: 'git_failed',
+          message: 'x'.repeat(400),
+          detail: 'D:/secret/repo/.git delivery stderr',
+        },
+      },
+      source: { worktreeName: 'feature', head: 's1', dirty: false },
+      target: {
+        mainWorktreeName: 'main',
+        mainBranch: 'main',
+        remote: 'origin',
+        remoteBranch: 'main',
+        upstreamRef: 'origin/main',
+        baseSha: 'b1',
+        mainHead: 'm1',
+      },
+      commits: [],
+      conflictFiles: [],
+      syncResults: [],
+    })
+
+    const result = await harness.service.getDelivery('s1', 'del-1')
+    expect(result.ok).toBe(true)
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain('D:/secret/repo')
+    expect(serialized).not.toContain('x'.repeat(400))
+    if (result.ok) {
+      expect(result.value.summary.error?.message).toHaveLength(300)
+    }
   })
 })

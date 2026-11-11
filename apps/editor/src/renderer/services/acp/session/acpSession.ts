@@ -1278,6 +1278,10 @@ export class AcpSession extends Disposable implements IAcpSession {
      * process-wide singleton; tests pass a private one with a tiny budget.
      */
     private readonly _residentBudget: IAcpResidentBudget = sharedResidentBudget,
+    /** Editor-owned helper session — hidden from every list/notification surface. */
+    readonly internal: boolean = false,
+    /** Internal session that may edit files inside its cwd (conflict resolver). */
+    readonly internalWritable: boolean = false,
   ) {
     super()
     this._budgetHolder = {

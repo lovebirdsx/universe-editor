@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { sessionRouteKey } from '../state/refs.js'
 import { strings } from '../strings.js'
 import { formatUpdatedAt, groupSessions } from './groupSessions.js'
+import { SessionDeliveryControls } from './DeliveryBadge.js'
 import { SwipeableSessionRow } from './SwipeableSessionRow.js'
 
 export interface InboxGroupsProps {
@@ -11,6 +12,10 @@ export interface InboxGroupsProps {
   readonly onCloseSession?: ((session: MobileSessionSummary) => void) | undefined
   readonly onRemoveSession?: ((session: MobileSessionSummary) => void) | undefined
   readonly onShowSessionActions?: ((session: MobileSessionSummary) => void) | undefined
+  /** Open the delivery confirmation flow for an inbox row. */
+  readonly onStartDelivery?: ((session: MobileSessionSummary) => void) | undefined
+  /** Open the status sheet of the row's latest delivery. */
+  readonly onOpenDelivery?: ((session: MobileSessionSummary) => void) | undefined
   /** Windows whose workspace has uncommitted changes (joined by ref.windowId). */
   readonly dirtyWindowIds?: ReadonlySet<number> | undefined
   /** The PC is offline / reconnecting: keep the list visible but de-emphasised. */
@@ -23,6 +28,8 @@ export function InboxGroups({
   onCloseSession,
   onRemoveSession,
   onShowSessionActions,
+  onStartDelivery,
+  onOpenDelivery,
   dirtyWindowIds,
   stale,
 }: InboxGroupsProps) {
@@ -107,6 +114,8 @@ export function InboxGroups({
                         actionsOpen={openKey === key}
                         onShowActions={() => runAction(session, onShowSessionActions)}
                         workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
+                        onStartDelivery={onStartDelivery}
+                        onOpenDelivery={onOpenDelivery}
                       />
                     </SwipeableSessionRow>
                   ) : (
@@ -115,6 +124,8 @@ export function InboxGroups({
                       onOpenSession={onOpenSession}
                       disabled={stale === true}
                       workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
+                      onStartDelivery={onStartDelivery}
+                      onOpenDelivery={onOpenDelivery}
                     />
                   )}
                 </li>
@@ -134,6 +145,8 @@ interface SessionRowProps {
   readonly actionsOpen?: boolean | undefined
   readonly workspaceDirty?: boolean | undefined
   readonly onShowActions?: (() => void) | undefined
+  readonly onStartDelivery?: ((session: MobileSessionSummary) => void) | undefined
+  readonly onOpenDelivery?: ((session: MobileSessionSummary) => void) | undefined
 }
 
 function SessionRow({
@@ -143,6 +156,8 @@ function SessionRow({
   actionsOpen,
   workspaceDirty,
   onShowActions,
+  onStartDelivery,
+  onOpenDelivery,
 }: SessionRowProps) {
   const routeKey = sessionRouteKey(session.ref)
   const focusPending =
@@ -196,6 +211,14 @@ function SessionRow({
               </span>
             ))}
           </span>
+        )}
+        {(session.delivery !== undefined || session.deliveryAvailable === true) && (
+          <SessionDeliveryControls
+            delivery={session.delivery}
+            available={session.deliveryAvailable}
+            onStartDelivery={() => onStartDelivery?.(session)}
+            onOpenDelivery={() => onOpenDelivery?.(session)}
+          />
         )}
       </span>
     </button>

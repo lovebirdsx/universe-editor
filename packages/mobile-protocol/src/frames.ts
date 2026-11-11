@@ -50,6 +50,10 @@ export interface MobileSessionSummary {
   sideTaskOf?: string
   /** Number of direct side-task children (parent rows only). */
   sideTaskChildCount?: number
+  /** Latest agent delivery for this session's worktree, when one exists. */
+  delivery?: MobileDeliverySummary
+  /** The row can start a delivery (idle, writable session rooted in a repo). */
+  deliveryAvailable?: boolean
   /** Epoch milliseconds. */
   updatedAt: number
 }
@@ -387,6 +391,13 @@ export const MOBILE_COMMAND_KINDS = [
   'listAgents',
   'listSessionHistory',
   'openSession',
+  'previewDelivery',
+  'startDelivery',
+  'getDelivery',
+  'confirmDeliveryPush',
+  'retryDelivery',
+  'undoDelivery',
+  'openDeliveryMainWorktree',
 ] as const
 export type MobileCommandKind = (typeof MOBILE_COMMAND_KINDS)[number]
 
@@ -640,6 +651,177 @@ export interface MobileWorkspaceCandidate {
   windowId?: number
   /** true/false when known; omitted when unknown (non-repo / git missing / timeout). */
   gitDirty?: boolean
+}
+
+// ---- Agent delivery ----------------------------------------------------------
+
+export const MOBILE_DELIVERY_PHASES = [
+  'preflighting',
+  'committing',
+  'cherry_picking',
+  'resolving_conflict',
+  'awaiting_push',
+  'pushing',
+  'syncing',
+  'synced',
+  'partial',
+  'failed',
+  'undoing',
+  'undone',
+] as const
+export type MobileDeliveryPhase = (typeof MOBILE_DELIVERY_PHASES)[number]
+
+export const MOBILE_DELIVERY_WORKTREE_STATUSES = [
+  'synced',
+  'up_to_date',
+  'skipped_dirty',
+  'skipped_in_progress',
+  'skipped_diverged',
+  'skipped_source_changed',
+  'failed',
+] as const
+export type MobileDeliveryWorktreeStatus = (typeof MOBILE_DELIVERY_WORKTREE_STATUSES)[number]
+
+export interface MobileDeliveryCommit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  authoredAt: string
+}
+
+export interface MobileDeliveryError {
+  /** Git-extension error code (main_dirty, conflict, …) or a renderer code. */
+  code: string
+  message: string
+  detail?: string
+}
+
+export interface MobileDeliverySyncSummary {
+  synced: number
+  upToDate: number
+  skipped: number
+  failed: number
+}
+
+export interface MobileDeliveryWorktreeResult {
+  /** Worktree directory name; absolute paths never reach the phone. */
+  name: string
+  branch?: string
+  status: MobileDeliveryWorktreeStatus
+  error?: string
+}
+
+export interface MobileDeliverySummary {
+  deliveryId: string
+  phase: MobileDeliveryPhase
+  commitCount: number
+  dirtySource: boolean
+  mainBranch: string
+  /** Epoch milliseconds. */
+  updatedAt: number
+  error?: MobileDeliveryError
+  canConfirmPush: boolean
+  canRetry: boolean
+  canUndo: boolean
+  sync: MobileDeliverySyncSummary
+}
+
+export interface MobileDeliveryUndoResult {
+  /** Epoch milliseconds. */
+  at: number
+  revertedShas: readonly string[]
+  mainHead: string
+}
+
+/** Detail for the phone's delivery sheet. Worktree names only, never paths. */
+export interface MobileDeliveryDetail {
+  summary: MobileDeliverySummary
+  source: {
+    worktreeName: string
+    branch?: string
+    head: string
+    dirty: boolean
+  }
+  target: {
+    mainWorktreeName: string
+    mainBranch: string
+    remote: string
+    remoteBranch: string
+    upstreamRef: string
+    baseSha: string
+    mainHead: string
+  }
+  commits: readonly MobileDeliveryCommit[]
+  generatedMessage?: string
+  conflictFiles: readonly string[]
+  conflictedCommit?: MobileDeliveryCommit
+  pushedSha?: string
+  remoteRef?: string
+  syncResults: readonly MobileDeliveryWorktreeResult[]
+  undo?: MobileDeliveryUndoResult
+}
+
+/** Heads pinned by the preview; `startDelivery` echoes them back for re-check. */
+export interface MobileDeliveryExpectation {
+  mainHead: string
+  mainBranch: string
+  targetBranch: string
+  remote: string
+  remoteBranch: string
+  upstreamRef: string
+  upstreamHead: string
+  sourceHead: string
+  baseSha: string
+  commits: readonly string[]
+}
+
+export interface MobileDeliveryPreview {
+  source: {
+    worktreeName: string
+    branch?: string
+    head: string
+    dirty: boolean
+    changedFileCount: number
+    untrackedCount: number
+    pendingOperation?: string
+    isMainWorktree: boolean
+  }
+  target: {
+    mainWorktreeName: string
+    mainBranch: string
+    remote: string
+    remoteBranch: string
+    upstreamRef: string
+    baseSha: string
+    mainHead: string
+    upstreamHead: string
+    aheadOfUpstream: number
+  }
+  commits: readonly MobileDeliveryCommit[]
+  blockers: readonly MobileDeliveryError[]
+  warnings: readonly string[]
+  forkSupported: boolean
+  expectation: MobileDeliveryExpectation
+}
+
+export interface PreviewDeliveryPayload {
+  ref: MobileSessionRef
+}
+
+export interface StartDeliveryPayload {
+  ref: MobileSessionRef
+  expectation: MobileDeliveryExpectation
+}
+
+export interface DeliveryCommandPayload {
+  ref: MobileSessionRef
+  deliveryId: string
+}
+
+/** Result of `startDelivery`. */
+export interface MobileDeliveryStartResult {
+  deliveryId: string
 }
 
 export interface MobileAgentCandidate {

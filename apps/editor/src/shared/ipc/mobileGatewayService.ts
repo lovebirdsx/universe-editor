@@ -11,6 +11,11 @@ import { createDecorator, type CancellationToken, type Event } from '@universe-e
 import type {
   MobileAgentCandidate,
   MobileAttentionKind,
+  MobileDeliveryDetail,
+  MobileDeliveryExpectation,
+  MobileDeliveryPreview,
+  MobileDeliveryStartResult,
+  MobileDeliverySummary,
   MobileDraftContextSummary,
   MobileDraftFileRef,
   MobileDraftImageRef,
@@ -294,7 +299,20 @@ export interface MobileBridgeSessionSummary {
   readonly sideTaskOf?: string
   /** Number of direct side-task children (parent rows only). */
   readonly sideTaskChildCount?: number
+  /** Latest agent delivery for this row's worktree (protocol projection). */
+  readonly delivery?: MobileDeliverySummary
+  /** The row may start a delivery. */
+  readonly deliveryAvailable?: boolean
   readonly updatedAt: number
+}
+
+/** Renderer-side delivery summary; same shape as the wire projection. */
+export interface MobileBridgeDeliveryContext {
+  readonly sourceCwd: string
+  readonly authority?: string
+  readonly deliveryId?: string
+  readonly phase?: string
+  readonly mainWorktree?: string
 }
 
 /**
@@ -677,6 +695,58 @@ export interface IMobileBridgeService {
 
   /** Delete a side task and its whole descendant subtree. */
   deleteSideTask(localId: string, sideTaskId: string): Promise<MobileBridgeResult<void>>
+
+  // ---- Agent delivery ---------------------------------------------------------
+
+  /**
+   * Inspect the session's repository: commits to deliver, main/upstream heads,
+   * blockers and warnings. `durableId` lets a resumed row (whose local id
+   * changed) resolve the owning delivery.
+   */
+  previewDelivery(
+    localId: string,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobileDeliveryPreview>>
+
+  /**
+   * Start a delivery, pinning the heads returned by the preview. Returns the
+   * delivery id; progress arrives through `onDidChange` inbox/session deltas.
+   */
+  startDelivery(
+    localId: string,
+    expectation: MobileDeliveryExpectation,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobileDeliveryStartResult>>
+
+  getDelivery(
+    localId: string,
+    deliveryId: string,
+  ): Promise<MobileBridgeResult<MobileDeliveryDetail>>
+
+  /** Promote the temporary worktree to main and push it (no force). */
+  confirmDeliveryPush(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>>
+
+  /** Re-run a failed delivery, or retry worktree sync after a push. */
+  retryDelivery(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>>
+
+  /** Undo an unpushed delivery locally, or revert + push it when already pushed. */
+  undoDelivery(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>>
+
+  /** Open the repository's main worktree in the PC workbench. */
+  openDeliveryMainWorktree(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>>
+
+  /**
+   * Main-only routing/guard context (source/main worktree, current phase).
+   * Carries absolute paths and is never forwarded to a phone frame. Falls back
+   * to the live session's cwd when no delivery record exists yet.
+   */
+  getDeliveryContext(
+    localId: string,
+    durableId?: string,
+  ): Promise<MobileBridgeDeliveryContext | undefined>
+
+  /** Active deliveries owned by this window (main-only cross-window guard). */
+  listActiveDeliveries(): Promise<readonly MobileBridgeDeliveryContext[]>
 
   /** This window's open workspace (main merges it with recent workspaces). */
   listWorkspaces(): Promise<readonly MobileWorkspaceCandidate[]>

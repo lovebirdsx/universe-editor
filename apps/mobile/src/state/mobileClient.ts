@@ -6,6 +6,10 @@ import type {
   MobileAttachmentUploadResult,
   MobileCommandKind,
   MobileAttentionKind,
+  MobileDeliveryDetail,
+  MobileDeliveryExpectation,
+  MobileDeliveryPreview,
+  MobileDeliveryStartResult,
   MobileDraftFileRef,
   MobileDraftImageRef,
   MobileElicitationAction,
@@ -42,6 +46,9 @@ import {
 } from './commandClient.js'
 import { AttachmentClient, httpOriginForSocketUrl } from './attachmentClient.js'
 import {
+  isMobileDeliveryDetail,
+  isMobileDeliveryPreview,
+  isMobileDeliveryStartResult,
   isMobileRewindPreview,
   isMobileRewindResult,
   isMobileSessionHistoryList,
@@ -548,6 +555,47 @@ export class MobileClient {
     return this._sessionCommand('deleteSideTask', (ref) => ({ ref, sideTaskId }))
   }
 
+  /** Inspect the repository behind an inbox row without opening the session. */
+  previewDelivery(ref: MobileSessionRef): Promise<MobileDeliveryPreview> {
+    return this._commandValueFor('previewDelivery', ref, isMobileDeliveryPreview)
+  }
+
+  startDelivery(
+    ref: MobileSessionRef,
+    expectation: MobileDeliveryExpectation,
+  ): Promise<MobileDeliveryStartResult> {
+    return this._commandValueFor('startDelivery', ref, isMobileDeliveryStartResult, (target) => ({
+      ref: target,
+      expectation,
+    }))
+  }
+
+  getDelivery(ref: MobileSessionRef, deliveryId: string): Promise<MobileDeliveryDetail> {
+    return this._commandValueFor('getDelivery', ref, isMobileDeliveryDetail, (target) => ({
+      ref: target,
+      deliveryId,
+    }))
+  }
+
+  confirmDeliveryPush(ref: MobileSessionRef, deliveryId: string): Promise<void> {
+    return this._commandFor('confirmDeliveryPush', ref, (target) => ({ ref: target, deliveryId }))
+  }
+
+  retryDelivery(ref: MobileSessionRef, deliveryId: string): Promise<void> {
+    return this._commandFor('retryDelivery', ref, (target) => ({ ref: target, deliveryId }))
+  }
+
+  undoDelivery(ref: MobileSessionRef, deliveryId: string): Promise<void> {
+    return this._commandFor('undoDelivery', ref, (target) => ({ ref: target, deliveryId }))
+  }
+
+  openDeliveryMainWorktree(ref: MobileSessionRef, deliveryId: string): Promise<void> {
+    return this._commandFor('openDeliveryMainWorktree', ref, (target) => ({
+      ref: target,
+      deliveryId,
+    }))
+  }
+
   async newSession(
     agentId: string,
     workspace: { folder: string; authority?: string },
@@ -647,6 +695,24 @@ export class MobileClient {
       )
     }
     return this._commands.request<T>(kind, payloadFor(ref), { validateResult })
+  }
+
+  /** Commands addressed by an explicit inbox row rather than the open session. */
+  private _commandValueFor<T>(
+    kind: MobileCommandKind,
+    ref: MobileSessionRef,
+    validateResult: (value: unknown) => boolean,
+    payloadFor: (ref: MobileSessionRef) => unknown = (target) => ({ ref: target }),
+  ): Promise<T> {
+    return this._commands.request<T>(kind, payloadFor(ref), { validateResult })
+  }
+
+  private _commandFor(
+    kind: MobileCommandKind,
+    ref: MobileSessionRef,
+    payloadFor: (ref: MobileSessionRef) => unknown,
+  ): Promise<void> {
+    return this._commands.request<void>(kind, payloadFor(ref))
   }
 
   private _handleState(state: SocketState): void {

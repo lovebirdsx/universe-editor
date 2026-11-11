@@ -83,7 +83,10 @@ const exists = async (path: string): Promise<boolean> => {
  * `--git-path` resolves them per worktree (a linked worktree's git dir lives under
  * the main repo's `worktrees/<name>/`, not in `<wt>/.git`).
  */
-const pendingOperation = async (worktreePath: string, log: Log): Promise<string | undefined> => {
+export const pendingOperation = async (
+  worktreePath: string,
+  log: Log,
+): Promise<string | undefined> => {
   const gitPath = await gitExec(['rev-parse', '--git-path', 'x'], worktreePath, log)
   if (gitPath.exitCode !== 0) return undefined
   const gitDir = gitPath.stdout.trim().replace(/x$/, '')

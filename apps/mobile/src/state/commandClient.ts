@@ -36,6 +36,13 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<MobileCommandKind, number>> = {
   listAgents: 10_000,
   listSessionHistory: 20_000,
   openSession: 120_000,
+  previewDelivery: 120_000,
+  startDelivery: 120_000,
+  getDelivery: 10_000,
+  confirmDeliveryPush: 120_000,
+  retryDelivery: 120_000,
+  undoDelivery: 120_000,
+  openDeliveryMainWorktree: 10_000,
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000
@@ -68,6 +75,11 @@ export const MUTATING_COMMAND_KINDS: ReadonlySet<MobileCommandKind> = new Set([
   'openSideTask',
   'deleteSideTask',
   'openSession',
+  'startDelivery',
+  'confirmDeliveryPush',
+  'retryDelivery',
+  'undoDelivery',
+  'openDeliveryMainWorktree',
 ])
 
 export type CommandErrorCode =

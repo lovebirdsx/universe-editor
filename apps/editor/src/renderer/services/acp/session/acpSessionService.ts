@@ -252,6 +252,21 @@ export interface IAcpCreateSessionOptions {
    * map and would clobber a later override.
    */
   readonly configDesiredOverrides?: Readonly<Record<string, string>>
+  /**
+   * Editor-owned helper session (delivery conflict resolution). Hidden from
+   * every list/notification surface, never persisted, and never activated.
+   */
+  readonly internal?: boolean
+  /**
+   * Internal session allowed to edit files inside its own cwd (delivery
+   * conflict resolution). Derived (read/search only) when omitted.
+   */
+  readonly internalWritable?: boolean
+  /**
+   * Whether a newly created session becomes the active one. Defaults to true;
+   * internal sessions always stay inactive.
+   */
+  readonly activate?: boolean
 }
 
 export type McpServerConnectionResolution =
@@ -375,6 +390,7 @@ export interface IAcpSessionService {
   forkSideTask(
     parentSessionId: string,
     quote?: { text: string; label: string },
+    options?: { internal?: boolean },
   ): Promise<IAcpSession>
   /**
    * Rewind a live session to an earlier user message (回退) — delegates to the
@@ -608,6 +624,38 @@ function buildExtraModelEffortMeta(
     }
   }
   return out
+}
+
+/**
+ * Policy for unattended internal sessions. Delivery commit-message sessions are
+ * read-only; conflict resolution may edit inside its own cwd. Only one-shot
+ * `allow_once` options are ever selected, never `allow_always`.
+ */
+export function decideInternalPermission(
+  params: RequestPermissionRequest,
+  session: { readonly internalWritable: boolean; readonly cwd: string | undefined },
+  uriIdentity: IUriIdentityService,
+): string | undefined {
+  // Read-only internal sessions (commit message generation) must not modify
+  // the worktree even if the agent ignores its pinned read-only mode.
+  const allowedKinds: ReadonlySet<string> = session.internalWritable
+    ? new Set(['read', 'edit', 'delete', 'move', 'search'])
+    : new Set(['read', 'search'])
+  const kind = params.toolCall.kind
+  const locations = params.toolCall.locations ?? []
+  const cwd = session.cwd
+  const withinCwd =
+    cwd !== undefined &&
+    locations.every((location) => uriIdentity.relativePathUnder(cwd, location.path) !== null)
+  const writes = kind === 'edit' || kind === 'delete' || kind === 'move'
+  // Writes must name their targets; a location-less default would let an agent
+  // touch arbitrary paths. Reads may omit locations (the fs gateway still
+  // enforces its own sandbox).
+  const locationsOk = writes
+    ? locations.length > 0 && withinCwd
+    : locations.length === 0 || withinCwd
+  if (kind == null || !allowedKinds.has(kind) || !locationsOk) return undefined
+  return params.options.find((candidate) => candidate.kind === 'allow_once')?.optionId
 }
 
 export class AcpSessionService
@@ -952,7 +1000,8 @@ export class AcpSessionService
       : DEFAULT_COLLAPSE_MODE
     const cwd = options?.cwd ?? this._rememberedCwd() ?? this._currentCwd() ?? this._homeCwd()
     const authority = options?.authority ?? this._currentAuthority()
-    if (cwd !== undefined) {
+    const internal = options?.internal === true
+    if (cwd !== undefined && !internal) {
       this._lastSessionCwd.remember(cwd, authority)
     }
     const now = new Date()
@@ -970,7 +1019,9 @@ export class AcpSessionService
       agentId: resolvedAgentId,
       title,
       collapseMode: initialCollapseMode,
-      withTitleService: true,
+      withTitleService: !internal,
+      ...(internal ? { internal: true } : {}),
+      ...(internal && options?.internalWritable === true ? { internalWritable: true } : {}),
       ...(cwd !== undefined ? { cwd } : {}),
       ...(authority !== undefined ? { authority } : {}),
       ...(options?.aiFix === true ? { suppressConfigDefaults: true } : {}),
@@ -1006,9 +1057,11 @@ export class AcpSessionService
     if (options?.promptDraft !== undefined) {
       AcpPromptDraftCache.save(session.id, options.promptDraft)
     }
-    this._sessionStore.add(session, { activate: true })
+    this._sessionStore.add(session, {
+      activate: options?.activate !== false && !internal,
+    })
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
-    this._onDidCreate.fire(session)
+    if (!internal) this._onDidCreate.fire(session)
 
     void this._connectSession(session, resolvedAgentId, cwd, authority, profile, options)
     return session
@@ -1211,6 +1264,7 @@ export class AcpSessionService
         hasMessages: false,
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
         ...(options?.aiFix === true ? { aiFix: true } : {}),
+        ...(options?.internal === true ? { internal: true } : {}),
       })
       profile.step('didHistoryAdd')
       this._mcpSelectionAtAttach.set(session.id, selection)
@@ -1373,6 +1427,7 @@ export class AcpSessionService
       readOnly: boolean
       activate?: boolean
       withTitleService?: boolean
+      internal?: boolean
     },
   ): Promise<IAcpSession> {
     const { readOnly } = options
@@ -1394,6 +1449,7 @@ export class AcpSessionService
     if (!entry) {
       throw new Error(`Unknown agent session id: ${sessionId}`)
     }
+    const internal = entry.internal === true || options.internal === true
     // Split-brain guard: a session carries the cwd it was created in. Resuming it
     // here would spawn the agent against that cwd while this window's views stay
     // on the open folder. If the session belongs to a different worktree, refuse
@@ -1469,8 +1525,9 @@ export class AcpSessionService
         // title, so we must not regenerate (and overwrite) it on the next turn.
         // Side tasks are the exception — their row title is only the quote-label
         // placeholder, so the first turn should derive/generate the real one.
-        withTitleService: options.withTitleService === true,
+        withTitleService: options.withTitleService === true && !internal,
         readOnly,
+        ...(internal ? { internal: true } : {}),
         // A read-only preview or a resumed remote session runs on the entry's
         // host, which need not be this window's — cost must follow the entry.
         ...(cwd !== undefined ? { cwd } : {}),
@@ -1508,7 +1565,7 @@ export class AcpSessionService
       // Side tasks likewise stay inactive: the caller opens them in a
       // right-split tab without stealing the parent chat's active slot.
       const prior = this._sessionStore.replace(captured, {
-        activate: options.activate !== false && !readOnly,
+        activate: options.activate !== false && !readOnly && !internal,
       })
       registered = true
       prior?.dispose()
@@ -1604,7 +1661,7 @@ export class AcpSessionService
       this._telemetry.publicLog('acp.session_resumed', {
         agentId: entry.agentId,
       })
-      this._onDidCreate.fire(session)
+      if (!internal) this._onDidCreate.fire(session)
       return session
     } catch (err) {
       if (registered && session) {
@@ -2241,6 +2298,7 @@ export class AcpSessionService
   async forkSideTask(
     parentSessionId: string,
     quote?: { text: string; label: string },
+    options?: { internal?: boolean },
   ): Promise<IAcpSession> {
     // Side tasks fork the parent's CURRENT tip, so the parent must be resident
     // (a history-only row would fork a stale tip) and writable (a read-only
@@ -2303,6 +2361,7 @@ export class AcpSessionService
       ...(forkCollapseMode !== undefined ? { collapseMode: forkCollapseMode } : {}),
       configOptions,
       configLabels,
+      ...(options?.internal === true ? { internal: true } : {}),
     })
     // The model value itself stays out of telemetry, like `acp.config_option_set`.
     this._telemetry.publicLog('acp.side_task_forked', {
@@ -2317,7 +2376,8 @@ export class AcpSessionService
     return this._resumeSessionInner(newSessionId, {
       readOnly: false,
       activate: false,
-      withTitleService: true,
+      withTitleService: options?.internal !== true,
+      ...(options?.internal === true ? { internal: true } : {}),
     })
   }
 
@@ -2616,6 +2676,7 @@ export class AcpSessionService
       this._logger.warn(`request_permission for unknown session ${params.sessionId}`)
       return { outcome: { outcome: 'cancelled' } }
     }
+    if (session.internal) return this._resolveInternalPermission(params, session)
     // Claude 的计划会话由三档权限策略（agentSettings.claude.planPermissionPolicy）
     // 接管，且不走旧的通用 kind 自动批准旁路：manual/auto 一律人工，skip 只选
     // Agent 给的一次性「允许」选项——都不写永久规则。
@@ -2901,6 +2962,36 @@ export class AcpSessionService
     return JSON.stringify(params.options.map(({ optionId, kind }) => ({ optionId, kind })))
   }
 
+  /**
+   * Internal sessions (delivery commit message / conflict resolution) run
+   * unattended, so they must never park a permission card. Only in-cwd file
+   * edits are approved — and only with a one-shot option, never `allow_always`
+   * (that would persist a rule onto the user's real agent defaults). Anything
+   * that can execute commands, fetch, switch modes or leave the worktree is
+   * rejected outright.
+   */
+  private _resolveInternalPermission(
+    params: RequestPermissionRequest,
+    session: IAcpSession,
+  ): RequestPermissionResponse {
+    const optionId = decideInternalPermission(params, session, this._uriIdentity)
+    if (optionId !== undefined) {
+      this._telemetry.publicLog('acp.permission_internal_approved', {
+        kind: params.toolCall.kind ?? undefined,
+      })
+      return { outcome: { outcome: 'selected', optionId } }
+    }
+    const reject =
+      params.options.find((candidate) => candidate.kind === 'reject_once') ??
+      params.options.find((candidate) => candidate.kind === 'reject_always')
+    this._logger.info(
+      `[acp] internal session denied permission: kind=${params.toolCall.kind ?? 'unknown'} locations=${(params.toolCall.locations ?? []).length}`,
+    )
+    return reject !== undefined
+      ? { outcome: { outcome: 'selected', optionId: reject.optionId } }
+      : { outcome: { outcome: 'cancelled' } }
+  }
+
   async onCreateElicitation(params: CreateElicitationRequest): Promise<CreateElicitationResponse> {
     // Session-scoped elicitations route by sessionId; request-scoped ones
     // (auth/config phases before any session exists) have no card host, so
@@ -2914,6 +3005,7 @@ export class AcpSessionService
       this._logger.warn(`elicitation/create for unknown session ${sessionId ?? '(request-scoped)'}`)
       return { action: 'cancel' }
     }
+    if (session.internal) return { action: 'cancel' }
     const isUrl = params.mode === 'url'
     const rawElicitationId = 'elicitationId' in params ? params.elicitationId : undefined
     const elicitationId = typeof rawElicitationId === 'string' ? rawElicitationId : undefined

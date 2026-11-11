@@ -235,6 +235,13 @@ export interface AcpSessionHistoryEntry {
    * persisted so a resume rebuilds the same isolation.
    */
   readonly aiFix?: boolean
+  /**
+   * Editor-owned helper session (delivery side task / conflict resolver). Kept
+   * out of `entries`, `list()` and persistence so it never reaches the session
+   * list, the mobile inbox or the restore coordinator. `get()` still resolves it
+   * so `session/load` can rebuild the fork.
+   */
+  readonly internal?: boolean
 }
 
 export interface IAcpSessionHistoryService {
@@ -738,7 +745,7 @@ export class AcpSessionHistoryService
   }
 
   list(): readonly AcpSessionHistoryEntry[] {
-    return this._state
+    return this._state.filter((entry) => entry.internal !== true)
   }
 
   get(id: string): AcpSessionHistoryEntry | undefined {
@@ -829,6 +836,8 @@ export class AcpSessionHistoryService
     // Remote authority is set once at creation and carried across re-adds.
     const carriedAuthority =
       entry.authority ?? (existingIdx >= 0 ? this._state[existingIdx]!.authority : undefined)
+    const carriedInternal =
+      entry.internal ?? (existingIdx >= 0 ? this._state[existingIdx]!.internal : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -857,6 +866,7 @@ export class AcpSessionHistoryService
         : {}),
       ...(carriedTranscriptPath !== undefined ? { transcriptPath: carriedTranscriptPath } : {}),
       ...(carriedAiFix !== undefined ? { aiFix: carriedAiFix } : {}),
+      ...(carriedInternal === true ? { internal: true } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
       ...(existingDerivedTitle === true ? { derivedTitle: true } : {}),
@@ -1461,7 +1471,11 @@ export class AcpSessionHistoryService
   }
 
   protected override _serialize(state: AcpSessionHistoryEntry[]): PersistedShape {
-    return { schemaVersion: SCHEMA_VERSION, entries: state, deleted: [...this._deleted] }
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      entries: state.filter((entry) => entry.internal !== true),
+      deleted: [...this._deleted],
+    }
   }
 
   protected override _deserialize(raw: unknown): AcpSessionHistoryEntry[] | undefined {
@@ -1484,6 +1498,8 @@ export class AcpSessionHistoryService
     // derived-title protection — no data migration needed.
     // v5 → v6: `deleted` is optional, old payloads simply carry no tombstones —
     // sessions deleted before the upgrade stay re-importable, as before.
+    // v6 → v7: `internal` is optional and internal rows are never serialized;
+    // old payloads are ordinary user sessions.
     // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
     // 否则 history.get(sessionIdOnAgent) 永远 miss。
     this._loadedDeleted =
@@ -1545,7 +1561,10 @@ export class AcpSessionHistoryService
   }
 
   private _publish(): void {
-    this.entries.set(this._state, undefined)
+    this.entries.set(
+      this._state.filter((entry) => entry.internal !== true),
+      undefined,
+    )
   }
 }
 

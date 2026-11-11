@@ -1,0 +1,719 @@
+import { normalizePlatform } from '@universe-editor/platform'
+import { UriIdentityService } from '@universe-editor/platform'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { IAcpSession } from '../../acp/session/acpSession.js'
+import type {
+  DeliveryGitInspectData,
+  DeliveryGitPickData,
+  ISessionDeliveryGit,
+} from '../sessionDeliveryGit.js'
+import type { SessionDeliveryRecord } from '../sessionDeliveryTypes.js'
+import type { ISessionDeliveryStore } from '../sessionDeliveryStore.js'
+import { SessionDeliveryService } from '../sessionDeliveryService.js'
+
+const COMMIT = {
+  sha: 'c1',
+  shortSha: 'c1',
+  subject: 'feat: deliver me',
+  author: 'testuser',
+  authoredAt: '2026-01-01T00:00:00.000Z',
+}
+
+function value<T>(current: T): { get(): T } {
+  return { get: () => current }
+}
+
+function makeSession(overrides: Partial<Record<keyof IAcpSession, unknown>> = {}): IAcpSession {
+  return {
+    id: 's1',
+    agentId: 'claude',
+    title: 'Task',
+    cwd: '/repo/feature',
+    readOnly: false,
+    internal: false,
+    status: value('idle'),
+    pendingPermission: value(undefined),
+    pendingElicitation: value(undefined),
+    forkSupported: value(true),
+    sessionIdOnAgent: value('durable-1'),
+    messages: value([]),
+    sendPrompt: vi.fn(async () => {}),
+    cancelTurn: vi.fn(async () => {}),
+    ...overrides,
+  } as unknown as IAcpSession
+}
+
+function inspectData(overrides: Partial<DeliveryGitInspectData> = {}): DeliveryGitInspectData {
+  return {
+    repository: {
+      commonDir: '/repo/.git',
+      mainWorktree: '/repo',
+      mainBranch: 'main',
+      targetBranch: 'main',
+      remote: 'origin',
+      remoteBranch: 'main',
+      upstreamRef: 'origin/main',
+      mainHead: 'm1',
+      upstreamHead: 'u1',
+      aheadOfUpstream: 0,
+      behindUpstream: 0,
+      canFastForward: true,
+    },
+    source: {
+      worktree: '/repo/feature',
+      branch: 'feature',
+      head: 's1',
+      dirty: false,
+      changedFileCount: 0,
+      untrackedCount: 0,
+      isMainWorktree: false,
+    },
+    commits: [COMMIT],
+    baseSha: 'm1',
+    blockers: [],
+    warnings: [],
+    ...overrides,
+  }
+}
+
+function pickData(overrides: Partial<DeliveryGitPickData> = {}): DeliveryGitPickData {
+  return {
+    status: 'picked',
+    tempWorktree: '/repo/.delivery/wt',
+    tempHead: 'picked1',
+    picked: [COMMIT],
+    skippedEmpty: [],
+    remainingCommits: [],
+    conflictFiles: [],
+    ...overrides,
+  }
+}
+
+function makeGit(overrides: Partial<ISessionDeliveryGit> = {}): ISessionDeliveryGit {
+  return {
+    inspect: vi.fn(async () => ({ ok: true, ...inspectData() })),
+    acquireLock: vi.fn(async () => ({ ok: true, acquired: true })),
+    heartbeatLock: vi.fn(async () => ({ ok: true, heartbeatAt: 'now' })),
+    releaseLock: vi.fn(async () => ({ ok: true, released: true })),
+    begin: vi.fn(async () => ({
+      ok: true,
+      mainHeadBefore: 'm1',
+      mainHeadAfter: 'm2',
+      upstreamHead: 'u1',
+      mainBranch: 'main',
+      remote: 'origin',
+      upstreamRef: 'origin/main',
+      fetched: true,
+    })),
+    commitSource: vi.fn(async () => ({ ok: true, head: 's2', commit: COMMIT })),
+    preparePick: vi.fn(async () => ({ ok: true, ...pickData() })),
+    continuePick: vi.fn(async () => ({ ok: true, ...pickData() })),
+    abortPick: vi.fn(async () => ({ ok: true, removed: true })),
+    promoteAndPush: vi.fn(async () => ({
+      ok: true,
+      pushedSha: 'picked1',
+      mainHead: 'picked1',
+      remoteRef: 'origin/main',
+    })),
+    restoreMain: vi.fn(async () => ({ ok: true, head: 'm1' })),
+    syncWorktrees: vi.fn(async () => ({
+      ok: true,
+      results: [
+        {
+          name: 'feature',
+          path: '/repo/feature',
+          branch: 'feature',
+          status: 'synced',
+        },
+      ],
+    })),
+    undo: vi.fn(async () => ({
+      ok: true,
+      mainHead: 'm3',
+      revertedShas: ['c1'],
+      remoteRef: 'origin/main',
+    })),
+    changeContext: vi.fn(async () => ({
+      ok: true,
+      files: [{ path: 'src/a.ts', status: 'M', diff: '+a' }],
+      totalFiles: 1,
+      truncated: false,
+      fingerprint: 'fp1',
+      statusText: ' M src/a.ts',
+    })),
+    ...overrides,
+  } as unknown as ISessionDeliveryGit
+}
+
+function record(overrides: Partial<SessionDeliveryRecord> = {}): SessionDeliveryRecord {
+  return {
+    id: 'd1',
+    repositoryKey: 'repo-key',
+    commonDir: '/repo/.git',
+    phase: 'awaiting_push',
+    createdAt: 1,
+    updatedAt: 2,
+    attempt: 1,
+    source: {
+      sessionLocalId: 's1',
+      sessionDurableId: 'durable-1',
+      agentId: 'claude',
+      cwd: '/repo/feature',
+      worktree: '/repo/feature',
+      head: 's1',
+    },
+    target: {
+      mainWorktree: '/repo',
+      mainBranch: 'main',
+      targetBranch: 'main',
+      remote: 'origin',
+      remoteBranch: 'main',
+      upstreamRef: 'origin/main',
+      baseSha: 'm1',
+      upstreamHead: 'u1',
+      aheadOfUpstream: 0,
+    },
+    sourceDirty: false,
+    commits: [COMMIT],
+    skippedEmpty: [],
+    tempWorktree: '/repo/.delivery/wt',
+    tempHead: 'picked1',
+    conflictFiles: [],
+    mainHeadBefore: 'm1',
+    mainHeadAfter: 'm2',
+    syncResults: [],
+    lockToken: 'token-1',
+    ...overrides,
+  }
+}
+
+function makeStore(records: readonly SessionDeliveryRecord[] = []): ISessionDeliveryStore {
+  const state = { version: 1, records }
+  return {
+    listRepositoryKeys: vi.fn(async () => (records.length > 0 ? ['repo-key'] : [])),
+    readRepository: vi.fn(async () => (records.length > 0 ? state : undefined)),
+    writeRepository: vi.fn(async () => {}),
+    rememberRepository: vi.fn(async () => {}),
+  } as unknown as ISessionDeliveryStore
+}
+
+const sessionsService = (session: IAcpSession | undefined, extra: Record<string, unknown> = {}) =>
+  ({
+    getById: vi.fn((id: string) => (id === session?.id ? session : undefined)),
+    createSession: vi.fn(),
+    forkSideTask: vi.fn(),
+    resumeSession: vi.fn(),
+    ...extra,
+  }) as never
+
+function makeService(
+  options: {
+    session?: IAcpSession | undefined
+    git?: ISessionDeliveryGit
+    store?: ISessionDeliveryStore
+    sessions?: Record<string, unknown>
+  } = {},
+): SessionDeliveryService {
+  const session = options.session ?? makeSession()
+  return new SessionDeliveryService(
+    sessionsService(session, options.sessions),
+    { get: vi.fn(() => undefined) } as never,
+    options.git ?? makeGit(),
+    options.store ?? makeStore(),
+    { openFolder: vi.fn(async () => {}) } as never,
+    new UriIdentityService(normalizePlatform('linux')),
+    {
+      createLogger: () => ({
+        warn: vi.fn(),
+        info: vi.fn(),
+        debug: vi.fn(),
+        trace: vi.fn(),
+        error: vi.fn(),
+      }),
+    } as never,
+  )
+}
+
+async function previewOf(service: SessionDeliveryService) {
+  const preview = await service.preview('s1')
+  if (!preview.ok) throw new Error(`preview failed: ${preview.error.code}`)
+  return preview.preview
+}
+
+let active: SessionDeliveryService | undefined
+
+afterEach(() => {
+  active?.dispose()
+  active = undefined
+})
+
+describe('SessionDeliveryService preview', () => {
+  it('projects commits, heads and the pinned expectation', async () => {
+    active = makeService()
+    const preview = await previewOf(active)
+
+    expect(preview.commits).toEqual([COMMIT])
+    expect(preview.expectation).toMatchObject({
+      mainHead: 'm1',
+      upstreamHead: 'u1',
+      sourceHead: 's1',
+      baseSha: 'm1',
+      commits: ['c1'],
+    })
+    expect(preview.blockers).toEqual([])
+  })
+
+  it('blocks a commit range larger than the phone protocol accepts', async () => {
+    const commits = Array.from({ length: 201 }, (_, index) => ({
+      ...COMMIT,
+      sha: `c${index}`,
+      shortSha: `c${index}`,
+    }))
+    const git = makeGit({
+      inspect: vi.fn(async () => ({ ok: true, ...inspectData({ commits }) }) as const),
+    })
+    active = makeService({ git })
+
+    const preview = await previewOf(active)
+    expect(preview.blockers.map((blocker) => blocker.code)).toContain('unsupported')
+    expect(preview.blockers.some((blocker) => blocker.message.includes('201'))).toBe(true)
+  })
+
+  it('blocks a dirty source when the agent cannot fork a message side task', async () => {
+    const git = makeGit({
+      inspect: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...inspectData({ source: { ...inspectData().source, dirty: true } }),
+          }) as const,
+      ),
+    } as never)
+    active = makeService({ git, session: makeSession({ forkSupported: value(false) }) })
+
+    const preview = await previewOf(active)
+    expect(preview.forkSupported).toBe(false)
+    expect(preview.blockers.map((blocker) => blocker.code)).toContain('unsupported')
+  })
+
+  it('blocks preview while another delivery runs for the repository', async () => {
+    const git = makeGit()
+    active = makeService({ git })
+    const preview = await previewOf(active)
+    await active.start('s1', preview.expectation)
+
+    const blocked = await active.preview('s1')
+    expect(blocked.ok).toBe(true)
+    if (blocked.ok) {
+      expect(blocked.preview.blockers.map((blocker) => blocker.code)).toContain('busy')
+    }
+  })
+})
+
+describe('SessionDeliveryService start', () => {
+  it('reaches awaiting_push with a clean source worktree', async () => {
+    const git = makeGit()
+    active = makeService({ git })
+    const preview = await previewOf(active)
+
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    expect(git.begin).toHaveBeenCalledTimes(1)
+    expect(git.preparePick).toHaveBeenCalledTimes(1)
+    const summary = active.getSummaryForSession('s1', 'durable-1')
+    expect(summary).toMatchObject({ phase: 'awaiting_push', commitCount: 1, canConfirmPush: true })
+    expect(active.getDetail(started.value.deliveryId)?.target.mainWorktreeName).toBe('repo')
+    expect(active.listActiveContexts()).toHaveLength(1)
+  })
+
+  it('commits dirty changes with the side-task message before picking', async () => {
+    const sideTask = makeSession({
+      id: 'side-1',
+      internal: true,
+      messages: value([{ role: 'agent', text: 'feat: generated subject\n\nbody' }]),
+    })
+    const session = makeSession()
+    const git = makeGit({
+      inspect: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...inspectData({
+              source: { ...inspectData().source, dirty: true, changedFileCount: 1 },
+            }),
+          }) as const,
+      ),
+    })
+    const forkSideTask = vi.fn(async () => sideTask)
+    active = makeService({
+      session,
+      git,
+      sessions: {
+        forkSideTask,
+        getById: vi.fn((id: string) => (id === 's1' ? session : undefined)),
+      },
+    })
+    const preview = await previewOf(active)
+
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    expect(forkSideTask).toHaveBeenCalledWith('s1', undefined, { internal: true })
+    expect(sideTask.sendPrompt).toHaveBeenCalledTimes(1)
+    expect(git.commitSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'feat: generated subject\n\nbody',
+        expectedSourceHead: 's1',
+      }),
+    )
+    expect(git.preparePick).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceHead: 's2', commits: ['c1', 'c1'] }),
+    )
+    expect(active.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+  })
+
+  it('fails and restores main when the side task returns an empty message', async () => {
+    const sideTask = makeSession({ id: 'side-1', internal: true, messages: value([]) })
+    const session = makeSession()
+    const git = makeGit({
+      inspect: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...inspectData({ source: { ...inspectData().source, dirty: true } }),
+          }) as const,
+      ),
+    })
+    active = makeService({
+      session,
+      git,
+      sessions: { forkSideTask: vi.fn(async () => sideTask), getById: vi.fn(() => session) },
+    })
+    const preview = await previewOf(active)
+
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(false)
+    if (!started.ok) expect(started.error.code).toBe('invalid_message')
+    expect(git.commitSource).not.toHaveBeenCalled()
+    expect(git.restoreMain).toHaveBeenCalledTimes(1)
+    expect(active.getSummaryForSession('s1')?.phase).toBe('failed')
+  })
+})
+
+describe('SessionDeliveryService confirmPush / undo', () => {
+  it('promotes, pushes and reports synced worktrees', async () => {
+    const git = makeGit()
+    active = makeService({ git })
+    const preview = await previewOf(active)
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    const pushed = await active.confirmPush(started.value.deliveryId)
+    expect(pushed.ok).toBe(true)
+    expect(git.promoteAndPush).toHaveBeenCalledTimes(1)
+    expect(git.syncWorktrees).toHaveBeenCalledTimes(1)
+    expect(active.getSummaryForSession('s1')).toMatchObject({
+      phase: 'synced',
+      canUndo: true,
+      sync: { synced: 1, upToDate: 0, skipped: 0, failed: 0 },
+    })
+  })
+
+  it('restores main when undoing an unpushed delivery', async () => {
+    const git = makeGit()
+    active = makeService({ git })
+    const preview = await previewOf(active)
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    const undone = await active.undo(started.value.deliveryId)
+    expect(undone.ok).toBe(true)
+    expect(git.abortPick).toHaveBeenCalledTimes(1)
+    expect(git.restoreMain).toHaveBeenCalledWith({
+      mainWorktree: '/repo',
+      expectedCurrentHead: 'm2',
+      restoreToHead: 'm1',
+      targetBranch: 'main',
+    })
+    expect(active.getSummaryForSession('s1')?.phase).toBe('undone')
+  })
+
+  it('reverts a pushed delivery and syncs again', async () => {
+    const git = makeGit()
+    active = makeService({ git })
+    const preview = await previewOf(active)
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    await active.confirmPush(started.value.deliveryId)
+
+    const undone = await active.undo(started.value.deliveryId)
+    expect(undone.ok).toBe(true)
+    expect(git.undo).toHaveBeenCalledWith(
+      expect.objectContaining({ pushedSha: 'picked1', deliveredShas: ['c1'] }),
+    )
+    expect(git.syncWorktrees).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(git.syncWorktrees).mock.calls[1]?.[0]).toMatchObject({
+      newHead: 'm3',
+      expectedSourceHead: 'picked1',
+    })
+    expect(active.getSummaryForSession('s1')).toMatchObject({ phase: 'undone', canUndo: false })
+  })
+
+  it('retries a failed undo instead of treating it as a sync failure', async () => {
+    let attempts = 0
+    const git = makeGit({
+      undo: vi.fn(async () => {
+        attempts++
+        if (attempts === 1) {
+          return { ok: false, error: { code: 'push_failed', message: 'push failed' } } as const
+        }
+        return {
+          ok: true,
+          mainHead: 'm3',
+          revertedShas: ['c1'],
+          remoteRef: 'origin/main',
+        } as const
+      }),
+    })
+    active = makeService({ git })
+    const preview = await previewOf(active)
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    await active.confirmPush(started.value.deliveryId)
+
+    const failed = await active.undo(started.value.deliveryId)
+    expect(failed.ok).toBe(false)
+    expect(active.getSummaryForSession('s1')?.phase).toBe('failed')
+
+    const retried = await active.retry(started.value.deliveryId)
+    expect(retried.ok).toBe(true)
+    expect(git.undo).toHaveBeenCalledTimes(2)
+    expect(active.getSummaryForSession('s1')?.phase).toBe('undone')
+  })
+})
+
+describe('SessionDeliveryService conflict resolution', () => {
+  it('runs one internal resolver session and continues the pick', async () => {
+    const resolver = makeSession({
+      id: 'resolver-1',
+      internal: true,
+      messages: value([{ role: 'agent', text: 'resolved' }]),
+    })
+    const session = makeSession()
+    const git = makeGit({
+      preparePick: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...pickData({
+              status: 'conflict',
+              picked: [],
+              remainingCommits: ['c1'],
+              conflictFiles: ['src/a.ts'],
+              conflictedCommit: COMMIT,
+            }),
+          }) as const,
+      ),
+      continuePick: vi.fn(async () => ({ ok: true, ...pickData() }) as const),
+    })
+    const createSession = vi.fn(async () => resolver)
+    active = makeService({
+      session,
+      git,
+      sessions: {
+        getById: vi.fn(() => session),
+        createSession,
+      },
+    })
+    const preview = await previewOf(active)
+
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    expect(createSession).toHaveBeenCalledWith(
+      'claude',
+      expect.objectContaining({
+        cwd: '/repo/.delivery/wt',
+        internal: true,
+        activate: false,
+      }),
+    )
+    expect(resolver.sendPrompt).toHaveBeenCalledTimes(1)
+    expect(git.continuePick).toHaveBeenCalledTimes(1)
+    expect(active.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+  })
+
+  it('aborts and restores main when the resolver fails', async () => {
+    const resolver = makeSession({
+      id: 'resolver-1',
+      internal: true,
+      sendPrompt: vi.fn(async () => {
+        throw new Error('agent failed')
+      }),
+    })
+    const session = makeSession()
+    const git = makeGit({
+      preparePick: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...pickData({
+              status: 'conflict',
+              picked: [],
+              remainingCommits: ['c1'],
+              conflictFiles: ['src/a.ts'],
+              conflictedCommit: COMMIT,
+            }),
+          }) as const,
+      ),
+    })
+    active = makeService({
+      session,
+      git,
+      sessions: { getById: vi.fn(() => session), createSession: vi.fn(async () => resolver) },
+    })
+    const preview = await previewOf(active)
+
+    const started = await active.start('s1', preview.expectation)
+    expect(started.ok).toBe(false)
+    expect(git.abortPick).toHaveBeenCalled()
+    expect(git.restoreMain).toHaveBeenCalledTimes(1)
+    expect(active.getSummaryForSession('s1')?.phase).toBe('failed')
+  })
+})
+
+describe('SessionDeliveryService guards', () => {
+  it('reports the source worktree as busy during a delivery', async () => {
+    const git = makeGit()
+    active = makeService({ git })
+    const preview = await previewOf(active)
+    await active.start('s1', preview.expectation)
+
+    expect(active.isDeliveryBusyForCwd('/repo/feature', undefined)).toBe(true)
+    expect(active.isDeliveryBusyForCwd('/repo', undefined)).toBe(true)
+    expect(active.isDeliveryBusyForCwd('/other', undefined)).toBe(false)
+  })
+
+  it('offers delivery only for idle, writable, non-internal sessions', () => {
+    active = makeService()
+    expect(active.isAvailable(makeSession())).toBe(true)
+    expect(active.isAvailable(makeSession({ status: value('running') }))).toBe(false)
+    expect(active.isAvailable(makeSession({ internal: true }))).toBe(false)
+    expect(active.isAvailable(makeSession({ readOnly: true }))).toBe(false)
+  })
+})
+
+describe('SessionDeliveryService restart recovery', () => {
+  it('re-acquires the lock for a persisted awaiting_push delivery', async () => {
+    const git = makeGit()
+    active = makeService({ git, store: makeStore([record()]) })
+
+    await active.initialize()
+
+    // The token was persisted by an earlier process; a fresh window must not
+    // reuse it without proving the old owner is gone.
+    expect(git.heartbeatLock).not.toHaveBeenCalled()
+    expect(git.acquireLock).toHaveBeenCalledWith(
+      expect.objectContaining({ commonDir: '/repo/.git' }),
+    )
+    expect(active.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+    expect(active.getDetail('d1')?.summary.phase).toBe('awaiting_push')
+    expect(active.listActiveContexts()).toHaveLength(1)
+  })
+
+  it('leaves a delivery alone when another live window owns its lock', async () => {
+    const git = makeGit({
+      acquireLock: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            acquired: false,
+            owner: {
+              token: 'token-1',
+              pid: 1,
+              hostname: 'other-host',
+              startedAt: new Date(0).toISOString(),
+              heartbeatAt: new Date().toISOString(),
+            },
+          }) as const,
+      ),
+    })
+    active = makeService({ git, store: makeStore([record({ phase: 'awaiting_push' })]) })
+
+    await active.initialize()
+
+    expect(active.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+    expect(git.abortPick).not.toHaveBeenCalled()
+    expect(git.restoreMain).not.toHaveBeenCalled()
+  })
+
+  it('waits for confirmation when main moved but the remote did not', async () => {
+    const git = makeGit({
+      inspect: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...inspectData({
+              repository: {
+                ...inspectData().repository,
+                mainHead: 'picked1',
+                upstreamHead: 'u1',
+              },
+            }),
+          }) as const,
+      ),
+    })
+    active = makeService({ git, store: makeStore([record({ phase: 'pushing' })]) })
+
+    await active.initialize()
+
+    expect(active.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+    expect(git.promoteAndPush).not.toHaveBeenCalled()
+    expect(git.syncWorktrees).not.toHaveBeenCalled()
+  })
+
+  it('syncs when the remote already has the pushed delivery', async () => {
+    const git = makeGit({
+      inspect: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...inspectData({
+              repository: {
+                ...inspectData().repository,
+                mainHead: 'picked1',
+                upstreamHead: 'picked1',
+              },
+            }),
+          }) as const,
+      ),
+    })
+    active = makeService({ git, store: makeStore([record({ phase: 'pushing' })]) })
+
+    await active.initialize()
+
+    expect(git.syncWorktrees).toHaveBeenCalledTimes(1)
+    expect(active.getSummaryForSession('s1')?.phase).toBe('synced')
+  })
+
+  it('aborts a mid-flight delivery, restores main and marks it failed', async () => {
+    const git = makeGit()
+    active = makeService({ git, store: makeStore([record({ phase: 'cherry_picking' })]) })
+
+    await active.initialize()
+
+    expect(git.abortPick).toHaveBeenCalled()
+    expect(git.restoreMain).toHaveBeenCalledWith({
+      mainWorktree: '/repo',
+      expectedCurrentHead: 'm2',
+      restoreToHead: 'm1',
+      targetBranch: 'main',
+    })
+    expect(active.getSummaryForSession('s1')?.phase).toBe('failed')
+    expect(active.listActiveContexts()).toHaveLength(0)
+  })
+})

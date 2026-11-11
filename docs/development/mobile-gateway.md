@@ -11,7 +11,9 @@
 > （协议 v6：非激活分叉与恢复、回退 dry-run 预览、侧边任务列表 / 打开 / 级联删除）；
 > **M8 会话目录已落地**（协议 v7：历史会话搜索与恢复）；**M9 受信设备已落地**（协议 v9：
 > PC 逐设备授权高风险操作，默认关闭）；**M10 会话目录覆盖最近工作区已落地**（协议 v10：
-> 历史目录同时读取已打开窗口与最近打开工作区的落盘历史，点击未打开工作区的行会自动开窗恢复）。
+> 历史目录同时读取已打开窗口与最近打开工作区的落盘历史，点击未打开工作区的行会自动开窗恢复）；
+> **M11 手机交付已落地**（协议 v14：手机确认后把子 worktree 的提交交付到 main——预检、提交信息
+> side task、临时树 cherry-pick、冲突 agent 解决、待推送、推送与 worktree 同步、撤销）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -136,7 +138,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 13`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 14`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -154,7 +156,11 @@ main 侧不直接读 `AcpSession`。
 `{ index, mimeType, size, truncated? }` 元数据，字节经同源 HTTP `/api/sessions/image` 与
 `/api/sessions/file` 按需读取（见 §7b）；v13 增加双端草稿同步：
 `session_snapshot.draft`、`session_delta` 的 `draft_update` 事件、客户端 `draft_update` 帧与
-`sendPrompt.draftImageIds` / `draftFileIds`（见 §7c））。
+`sendPrompt.draftImageIds` / `draftFileIds`（见 §7c）；v14 增加交付（`previewDelivery` /
+`startDelivery` / `getDelivery` / `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` /
+`openDeliveryMainWorktree`、`MobileDeliveryPreview` / `MobileDeliverySummary` /
+`MobileDeliveryDetail`、会话摘要的 `delivery?` / `deliveryAvailable?` 与四个 `delivery_*`
+错误码，见 §6d）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
@@ -207,6 +213,13 @@ Referer。
 | 枚举        | `listAgents`                             | `{}`                                            | 由第一个已注册窗口桥返回                                                                                          |
 | 会话目录    | `listSessionHistory`                     | `{}`                                            | 已打开窗口 + 最近工作区（前 N 个，N 可配、默认 20）的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
 | 会话目录    | `openSession`                            | `{ durableId, windowId?, folder?, authority? }` | 按 durable id 非激活恢复历史会话；目标工作区未打开时先自动开窗再恢复；带幂等键                                    |
+| 交付        | `previewDelivery`                        | `{ ref }`                                       | 交付 dry-run：源 / 目标 / 提交列表 / blocker / 期望 heads；不改 git                                              |
+| 交付        | `startDelivery`                          | `{ ref, expectation }`                          | 重新校验 preview 的 heads 后执行；成功先停在「待推送」                                                          |
+| 交付        | `getDelivery`                            | `{ ref, deliveryId }`                           | 详情：阶段、错误、commit 列表、冲突文件、worktree 同步结果                                                      |
+| 交付        | `confirmDeliveryPush`                    | `{ ref, deliveryId }`                           | 用户确认后前移 main、push、同步 worktree                                                                        |
+| 交付        | `retryDelivery`                          | `{ ref, deliveryId }`                           | 失败后重新走 preview + start（旧的临时树与锁会先清理）                                                          |
+| 交付        | `undoDelivery`                           | `{ ref, deliveryId }`                           | 撤销最近一次交付：未推送回滚 main；已推送 revert + 非 force push + 同步                                         |
+| 交付        | `openDeliveryMainWorktree`               | `{ ref, deliveryId }`                           | 在 PC 打开 main worktree（复用已开窗口）                                                                        |
 
 `forkSession` / `previewRewind` / `rewindSession` 的 `messageId` 是 **SDK 消息锚点**
 （`AcpMessage.messageId`，仅 user 消息会有），不是本地的 `AcpMessage.id`；首条用户消息可回退、
@@ -218,7 +231,9 @@ Referer。
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
 只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`）不缓存。客户端重试不会重复发
 prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
-`deleteSideTask` / `openSession` 都按可修改状态命令处理。
+`deleteSideTask` / `openSession` 都按可修改状态命令处理；交付中的 `startDelivery` /
+`confirmDeliveryPush` / `retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree` 同样处理
+（`previewDelivery` / `getDelivery` 只读，不缓存）。
 
 **超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
 `cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` / `newSession` /
@@ -230,7 +245,9 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 只花剩余时间，只有 owner 立即回 `session_not_found` / `forbidden_operation` 才换下一个 owner，
 不会把多个 100s 串联。无 owner 时先按 payload `folder` 或磁盘反查定位工作区，再开窗、等桥、
 轮询新窗口的 history 就绪后恢复；超时回 `session_not_found` 或 `workspace_not_open`。手机端
-120s + 5s 宽限仍等得到。超时回
+120s + 5s 宽限仍等得到。交付命令的网关超时：`previewDelivery` / `startDelivery` /
+`confirmDeliveryPush` / `retryDelivery` / `undoDelivery` 110s（手机端 120s），
+`getDelivery` / `openDeliveryMainWorktree` 10s；跨窗口 busy 探测每窗口 5s。超时回
 `command_result { ok: false, error: 'internal' }`。手机端 `sendPrompt` 同样是 15s，避免手机先超时重发。
 
 **服务端 → 客户端**
@@ -307,6 +324,10 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
 | `session_busy`         | 会话正在运行，fork 被拒绝                                           |
 | `rate_limited`         | 触发速率限制（含附件配额已满）                                      |
 | `attachment_not_found` | 附件不存在、已过期或属于其他设备                                    |
+| `delivery_busy`        | 同一仓库已有交付在运行（含其它窗口），或交付期间该 worktree 被占用、其会话被删除 |
+| `delivery_not_found`   | 交付 id 不存在、已被清理，或不属于该会话                            |
+| `delivery_conflict`    | main / 远端已移动、push 被拒或冲突无法自动解决，需要人工处理         |
+| `delivery_unsupported` | 仓库形态不满足交付条件（bare / detached main / 无唯一 upstream / 合并提交等） |
 | `internal`             | 未分类的服务端错误                                                  |
 
 `stale_request` 表示这次点击基于过期卡片：请求可能已被 PC 或另一端处理。客户端应直接按
@@ -509,6 +530,74 @@ durable id 的并发请求共享一个 in-flight promise。先在 inbox 与各�
 **落盘滞后**：renderer 的历史写入有 100ms 防抖，且只保证退出时 flush。因此刚发生的重命名 / 新
 会话 / 删除可能短暂落后于磁盘；已打开窗口永远走内存镜像，不受影响。手机目录刷新即重新读盘。
 
+## 6d. 交付到 main（协议 v14）
+
+手机可以就一个已完成的 ACP 会话，把它所在子 worktree 的提交交付到 main。**只手动触发**：
+任务完成仍只发通知；收件箱会话行出现「交付」入口（摘要带 `deliveryAvailable:true`）后，用户
+打开确认页（`previewDelivery`）再执行（`startDelivery`）。所有 git 写操作都在内置 git 扩展的
+`git.agentDelivery.*` 命令里完成；renderer 的 `SessionDeliveryService` 只做状态机与编排，
+main 与手机都不执行 git。
+
+**流水线**（阶段即 `MobileDeliveryPhase`）：
+
+1. `preflighting`：`inspect`（可 fetch）后获取跨窗口/目录锁；main 必须干净、无进行中操作且
+   能从 upstream ff-only 前移；`begin` 记录 `mainHeadBefore` / `mainHeadAfter`。
+2. `committing`：源 worktree 干净则跳过。脏时基于原会话 fork 一个 **internal 只读 side task**
+   生成 commit message（imperative subject ≤72 字符，可带空行 + 简短 body）；renderer 把
+   `changeContext` 的 status + 文件 diff 附进 prompt，发送前后校验变更指纹一致；随后由编辑器
+   执行 `commitSource`（`git add -A` + `git commit`）。side task 失败 / 超时（90s）/ 空消息 /
+   指纹变化一律终止交付：不落固定文案、不继续 cherry-pick。
+3. `cherry_picking`：在 main worktree 同级创建 detached 临时 worktree
+   （`.universe-editor-delivery-worktrees/<shortId>`），逐个 cherry-pick 源分支相对 main 的提交；
+   空提交记入 `skippedEmpty`；合并提交 v1 直接 `delivery_unsupported`。
+4. `resolving_conflict`：冲突时创建一个隐藏的 internal 可写 ACP 会话（cwd = 临时 worktree），
+   提示只允许编辑冲突文件，最多 1 次。完成后扩展校验「修改文件集合 ⊆ 冲突文件集合」「无残留
+   冲突标记」「无未合并路径」，再 `git add -A` + `cherry-pick --continue`。任一步失败则 abort
+   临时树、恢复 main、阶段 `failed`。internal 会话的权限策略：只对 cwd 内的
+   `read/edit/delete/move/search` 选 `allow_once`（没有一次性选项就拒绝），
+   `execute/fetch/switch_mode/other` 一律拒绝，不写 `allow_always`，elicitation 直接 cancel。
+5. `awaiting_push`：全部提交就绪，main 仍停在交付前。手机详情页显示 commit 列表与「确认推送」。
+   **只有用户确认**才 `promoteAndPush`：写前再次校验 main 仍在该目标分支、HEAD 仍为 `baseSha`、
+   干净、`baseSha` 是 `tempHead` 祖先 → `reset --hard tempHead` → `git push`（绝不 `--force`）。
+   push 返回成功还不够：随后 fetch 并解析远端引用，必须等于 `tempHead`，否则按 `push_failed`
+   处理（main 已前移时不自动回滚，留给重试 / 撤销判断）。push 失败且 main 仍安全时恢复 `baseSha`。
+6. `syncing`：源 worktree 仅在 HEAD == `expectedSourceHead`、干净、无进行中时重置到新 main；
+   其他 worktree 只在「干净 + 无进行中 + 是 newHead 祖先」时快进，其余跳过并记录原因
+   （`skipped_dirty` / `skipped_in_progress` / `skipped_diverged` / `skipped_source_changed`）。
+7. `synced` / `partial`：全部成功，或部分 worktree 跳过 / 失败；main 已推送不回滚。
+
+**撤销**：`undoDelivery` 只允许最近一次交付。未推送：main 仍在期望 head 且干净时恢复到交付前；
+已推送：要求 main/upstream 仍等于 `pushedSha`，按逆序 `git revert --no-edit`，冲突则
+`revert --abort` 并失败，绝不 force push；成功后重新同步 worktree。撤销失败后记录
+`failedAction:'undo'`，手机「重试」继续撤销而不是转成重新交付。
+
+**失败原则**：任何一步失败都终止并清理；只有 main 仍在预期提交且干净时才 reset 恢复；绝不
+stash、绝不 reset 有独立提交的 worktree、绝不 force push。失败详情写进记录，手机可「重试」。
+
+**跨窗口互斥**：同一仓库同一时间只允许一个交付，三层防线：renderer 的
+`SessionDeliveryService` 内存记录（同窗口 guard）、hub 的 `getDeliveryContext` /
+`listActiveDeliveries` 跨窗口探测（路径身份比较，远程 authority 用字节前缀）、git 扩展的
+`<common-dir>/universe-editor/delivery.lock/owner.json` 目录锁（10 分钟 TTL + 心跳 + 同 host
+PID 存活判断，释放校验 token）。锁 owner 记录窗口实例 id：重启后的记录不复用持久化 token 直接
+心跳，而是重新尝试 acquire（被活窗口持有时保持 busy）；owner 缺失但目录刚创建（初始化窗口期）
+时视为占用中、不清理。交付期间，同 repo 源 / main worktree 的新 `sendPrompt` /
+`newSession` 被拒绝（`delivery_busy`），避免 agent 在交付中途改写源树；删除源会话同样被拒绝。
+
+**重启恢复**：`awaiting_push` 继续持有锁；`pushing` 只信远端状态——远端已是 `tempHead` 转同步，
+本地 main 已是 `tempHead` 但远端没有则回到 `awaiting_push`（可再次确认推送），其余 `failed`
+且不回滚；其它中间态 abort 临时树 + 恢复 main + `failed`。源会话不在 live 时按
+durable id 非激活恢复，让收件箱行重新出现；恢复失败则直接失败并释放锁。
+
+**手机投影**：会话摘要带 `delivery?`（阶段、commit 数、可否推送/重试/撤销、同步计数）与
+`deliveryAvailable?`；收件箱行有 badge 与顶部汇总，详情页含 commit 列表、worktree 结果、
+冲突文件与「确认推送」「重试」「打开 main worktree」「撤销本次交付」。**协议绝不下发绝对路径**，
+只给 worktree 目录名；交付错误只带 `code` 与裁剪后的 message，扩展侧 detail 不投影。交付变化
+经 `summary_changed` 增量与收件箱 upsert 同步到手机。
+
+**刻意限制**：合并提交不支持；单次交付最多 200 个提交（preview 直接给 `unsupported` blocker）；
+main worktree 必须存在且不在 detached HEAD，目标分支须有唯一 upstream；v1 不做自动交付、
+自动 review 或分叉 worktree 自动 rebase。
+
 ## 7. 会话附件（协议 v6）
 
 手机输入框支持图片与文件附件。**WebSocket 只传附件 id，字节走同源 HTTP**：客户端帧上限 64KB，
@@ -690,7 +779,8 @@ PC 可在「手机设备设置 → 已配对设备」逐台打开 **允许高风
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录
 `ts` / `device` / `remoteAddress` / `action` / `result` / `detail`。所有会修改状态的命令
 （`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、关闭、删除、
-fork / rewind / 侧边任务、`openSession`）都记一条；设备信任开关另记
+fork / rewind / 侧边任务、`openSession`、`startDelivery` / `confirmDeliveryPush` /
+`retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree`）都记一条；设备信任开关另记
 `device_trust_granted` / `device_trust_revoked`（未知设备记 `failure`）。`detail` 只含
 `window=` / `local=` / `agent=` / `error=` 等
 定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
@@ -1004,6 +1094,12 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
   `MobileBridgeService` 覆盖 image ordinal、mobileAttachment 跳过、truncated、MIME 白名单、realpath
   与符号链接根；网关 HTTP 单测覆盖鉴权、参数校验、HEAD、响应头与 CSP；`mobile.gateway.spec.ts`
   另断言用户附件缩略图与 Agent ACP / markdown `data:` 图片都能打开全屏预览（含滚动锁与关闭）。
+- 交付：`extensions/git/src/__tests__/deliveryGit.test.ts` 用真实 git + bare remote 覆盖 inspect /
+  ff-only / 分叉 / 脏树 / 临时 worktree / 空提交 / 合并提交 / 冲突 / 冲突解决的越界修改与残留
+  标记 / push / sync 分桶 / undo / 锁；`sessionDeliveryService.test.ts` 覆盖 preview 期望、
+  side task 失败与空消息、冲突 resolver、确认推送、撤销守卫与重启恢复；`MobileBridgeService` /
+  `mobileGatewayHub` 覆盖 delivery 投影、命令路由、跨窗口 busy 与 `delivery_busy` guard；
+  协议包测试覆盖 v13、7 个命令 payload 与四个交付错误码。
 
 ## 12. 里程碑
 
@@ -1019,10 +1115,12 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M8     | 会话目录：协议 v7、`listSessionHistory` / `openSession`、手机 `/sessions` 页（搜索 / 状态过滤 / 按天分组）、已关闭会话重新打开（已落地；v10 扩展见 M10） | 打开历史会话不抢 PC 焦点；live 行不重复 resume；跨工作区 / 归档 / 侧边任务 / 无消息行不出现                                                                                                  |
 | M9     | 受信设备：协议 v9、PC 逐设备开关、按连接宽化投影、审计与手机设置状态展示（已落地）                                                                       | 默认不受信；开启后手机可切 bypass / 持久授权；关闭后恢复 `forbidden_operation`；grant / revoke 有审计                                                                                        |
 | M10    | 会话目录覆盖最近工作区：协议 v10、main 只读读盘、已打开优先去重、N 可配（默认 20）、未打开工作区点击后自动开窗恢复、远程工作区同链路、手机提示（已落地） | 目录列出已打开 ∪ 最近 N 个关闭工作区；同 durable id 只出现一次且打开窗口优先；点未打开工作区的行会自动开窗并恢复；远程工作区可列出并在开窗失败时回 `workspace_not_open`；收件箱仍只显示 live |
+| M11    | 手机交付：协议 v14、git 扩展交付原语、renderer 交付状态机与提交信息 side task、冲突 agent 解决、待推送确认、推送与 worktree 同步、撤销与重启恢复（已落地） | 干净 / 脏源交付到「待推送」；确认后 push 并同步；冲突自动解决或安全失败且 main 不动；main / 远端移动时拒绝撤销；绝对路径不下发手机 |
 
 ## 13. 已确认的决策记录
 
-日期：第 1–7 条为 **2026-11-08**，第 8–11 条为 **2026-11-09**，第 12 条为 **2026-11-10**。
+日期：第 1–7 条为 **2026-11-08**，第 8–11 条为 **2026-11-09**，第 12 条为 **2026-11-10**，
+第 13 条为 **2026-11-11**。
 
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
 2. **手机高风险操作默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验；v9 起由 PC 逐设备开启「受信设备」后放开（见决策 12）。
@@ -1064,6 +1162,11 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
     而不是在客户端自行推导。`devices.json` 新增可选 `trusted` 不 bump `FILE_VERSION`，防止
     升级清空已配对设备。撤销对之后到达的命令立即生效；撤销瞬间已进入桥的在途命令可能完成，
     属于毫秒级窗口并接受。
+13. **交付只在手机手动确认，main 直到推送前不动**：preview → start 先把提交 cherry-pick 到临时
+    detached worktree，冲突由 internal agent 解决（最多 1 次）；只有用户点「确认推送」才
+    `reset --hard` main 并 push。提交信息由基于原会话的只读 side task 生成，失败即终止（不落
+    固定文案）；绝不 force push / stash / reset 有独立提交的 worktree。跨窗口用 renderer 记录 +
+    hub 探测 + git 目录锁三层互斥；交付期间拒绝同 worktree 的新 prompt / newSession。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。

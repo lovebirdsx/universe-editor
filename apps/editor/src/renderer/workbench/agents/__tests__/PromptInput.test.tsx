@@ -524,6 +524,8 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     authority: undefined,
     cwd: opts.cwd,
     readOnly: opts.readOnly ?? false,
+    internal: false,
+    internalWritable: false,
     sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', opts.id ?? 's1'),
     title: 'Fake',
     messages,

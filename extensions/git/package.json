@@ -335,6 +335,62 @@
         "command": "git.viewCommit",
         "title": "%git.command.viewCommit.title%",
         "category": "Git"
+      },
+      {
+        "command": "git.agentDelivery.inspect",
+        "title": "Agent Delivery: Inspect"
+      },
+      {
+        "command": "git.agentDelivery.acquireLock",
+        "title": "Agent Delivery: Acquire Lock"
+      },
+      {
+        "command": "git.agentDelivery.heartbeatLock",
+        "title": "Agent Delivery: Heartbeat Lock"
+      },
+      {
+        "command": "git.agentDelivery.releaseLock",
+        "title": "Agent Delivery: Release Lock"
+      },
+      {
+        "command": "git.agentDelivery.begin",
+        "title": "Agent Delivery: Begin"
+      },
+      {
+        "command": "git.agentDelivery.commitSource",
+        "title": "Agent Delivery: Commit Source"
+      },
+      {
+        "command": "git.agentDelivery.preparePick",
+        "title": "Agent Delivery: Prepare Pick"
+      },
+      {
+        "command": "git.agentDelivery.continuePick",
+        "title": "Agent Delivery: Continue Pick"
+      },
+      {
+        "command": "git.agentDelivery.abortPick",
+        "title": "Agent Delivery: Abort Pick"
+      },
+      {
+        "command": "git.agentDelivery.promoteAndPush",
+        "title": "Agent Delivery: Promote and Push"
+      },
+      {
+        "command": "git.agentDelivery.restoreMain",
+        "title": "Agent Delivery: Restore Main"
+      },
+      {
+        "command": "git.agentDelivery.syncWorktrees",
+        "title": "Agent Delivery: Sync Worktrees"
+      },
+      {
+        "command": "git.agentDelivery.undo",
+        "title": "Agent Delivery: Undo"
+      },
+      {
+        "command": "git.agentDelivery.changeContext",
+        "title": "Agent Delivery: Change Context"
       }
     ],
     "submenus": [
@@ -841,6 +897,62 @@
         },
         {
           "command": "git.viewCommit",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.inspect",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.acquireLock",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.heartbeatLock",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.releaseLock",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.begin",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.commitSource",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.preparePick",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.continuePick",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.abortPick",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.promoteAndPush",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.restoreMain",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.syncWorktrees",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.undo",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.changeContext",
           "when": "false"
         }
       ]

@@ -6,9 +6,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 export const ACP_SESSION_HISTORY_STORAGE_KEY = 'acp.sessionHistory'
-export const ACP_SESSION_HISTORY_SCHEMA_VERSION = 6
+export const ACP_SESSION_HISTORY_SCHEMA_VERSION = 7
 /** Old payloads stay readable: no field added since v1 requires migration. */
-export const ACP_SESSION_HISTORY_ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6]
+export const ACP_SESSION_HISTORY_ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7]
 
 /** The minimum persisted shape the catalog filter needs. */
 export interface ResumableHistoryEntry {
@@ -18,6 +18,7 @@ export interface ResumableHistoryEntry {
   readonly sideTaskOf?: string
   readonly archived?: boolean
   readonly hasMessages?: boolean
+  readonly internal?: boolean
 }
 
 /** Structural subset of `IUriIdentityService` so main can pass the same rules. */
@@ -66,6 +67,7 @@ export function isResumableHistoryEntry(
   pathIdentity: HistoryPathIdentity,
 ): boolean {
   if (entry.sideTaskOf !== undefined) return false
+  if (entry.internal === true) return false
   if (entry.archived === true) return false
   if (entry.hasMessages === false) return false
   if (entry.id.length === 0) return false

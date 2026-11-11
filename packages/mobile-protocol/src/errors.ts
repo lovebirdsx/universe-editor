@@ -14,6 +14,10 @@ export const MOBILE_ERROR_CODES = [
   'protocol_mismatch',
   'bad_request',
   'internal',
+  'delivery_busy',
+  'delivery_not_found',
+  'delivery_conflict',
+  'delivery_unsupported',
 ] as const
 
 export type MobileErrorCode = (typeof MOBILE_ERROR_CODES)[number]

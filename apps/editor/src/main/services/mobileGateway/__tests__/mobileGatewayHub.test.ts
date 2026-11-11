@@ -3,6 +3,9 @@ import {
   MAX_SERVER_FRAME_BYTES,
   MAX_WORKSPACE_NAME_LENGTH,
   type MobileAgentCandidate,
+  type MobileDeliveryDetail,
+  type MobileDeliveryPreview,
+  type MobileDeliveryStartResult,
   type MobileSessionRef,
   type MobileSideTaskSummary,
   type DraftUpdateFrame,
@@ -11,6 +14,7 @@ import {
 import { describe, expect, it, vi } from 'vitest'
 import type {
   IMobileBridgeService,
+  MobileBridgeDeliveryContext,
   MobileBridgeEvent,
   MobileBridgeImage,
   MobileBridgeNewSessionResult,
@@ -125,6 +129,37 @@ class FakeBridge implements IMobileBridgeService {
     }),
   )
   readonly deleteSideTask = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly previewDelivery = vi.fn(
+    async (): Promise<MobileBridgeResult<MobileDeliveryPreview>> => ({
+      ok: false as const,
+      code: 'internal' as const,
+      message: 'not implemented',
+    }),
+  )
+  readonly startDelivery = vi.fn(
+    async (): Promise<MobileBridgeResult<MobileDeliveryStartResult>> => ({
+      ok: false as const,
+      code: 'internal' as const,
+      message: 'not implemented',
+    }),
+  )
+  readonly getDelivery = vi.fn(
+    async (): Promise<MobileBridgeResult<MobileDeliveryDetail>> => ({
+      ok: false as const,
+      code: 'internal' as const,
+      message: 'not implemented',
+    }),
+  )
+  readonly confirmDeliveryPush = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly retryDelivery = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly undoDelivery = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly openDeliveryMainWorktree = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly getDeliveryContext = vi.fn(
+    async (): Promise<MobileBridgeDeliveryContext | undefined> => undefined,
+  )
+  readonly listActiveDeliveries = vi.fn(
+    async (): Promise<readonly MobileBridgeDeliveryContext[]> => [],
+  )
   readonly listWorkspaces = vi.fn(async () => [])
   readonly listAgents = vi.fn(async (): Promise<readonly MobileAgentCandidate[]> => [])
 
@@ -3239,5 +3274,187 @@ describe('MobileGatewayHub draft updates', () => {
       .flatMap((frame) => frame.events)
       .filter((event) => event.type === 'draft_update')
     expect(draftEvents.at(-1)?.draft.text).toBe('')
+  })
+})
+
+describe('MobileGatewayHub delivery commands', () => {
+  const ref: MobileSessionRef = { windowId: 1, localId: 's1', durableId: 'd1' }
+  const expectation = {
+    mainHead: 'm1',
+    mainBranch: 'main',
+    targetBranch: 'main',
+    remote: 'origin',
+    remoteBranch: 'main',
+    upstreamRef: 'origin/main',
+    upstreamHead: 'u1',
+    sourceHead: 's1',
+    baseSha: 'b1',
+    commits: ['c1'],
+  }
+
+  it('projects delivery summaries into inbox snapshots', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    const delivery = {
+      deliveryId: 'del-1',
+      phase: 'awaiting_push' as const,
+      commitCount: 2,
+      dirtySource: false,
+      mainBranch: 'main',
+      updatedAt: 10,
+      canConfirmPush: true,
+      canRetry: false,
+      canUndo: true,
+      sync: { synced: 0, upToDate: 0, skipped: 0, failed: 0 },
+    }
+    bridge.sessions = [summary('s1', { durableId: 'd1', delivery, deliveryAvailable: true })]
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+
+    const frame = framesOf(connection, 'inbox_snapshot')[0]
+    expect(frame?.sessions[0]).toMatchObject({ delivery, deliveryAvailable: true })
+    expect(frame?.sessions[0]?.delivery?.phase).toBe('awaiting_push')
+  })
+
+  it('routes previewDelivery with the durable id', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.previewDelivery.mockResolvedValueOnce({
+      ok: false,
+      code: 'delivery_unsupported',
+      message: 'no repository',
+    })
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'preview',
+      kind: 'previewDelivery',
+      payload: { ref },
+    })
+
+    expect(bridge.previewDelivery).toHaveBeenCalledWith('s1', 'd1')
+    expect(framesOf(connection, 'command_result')[0]).toMatchObject({
+      requestId: 'preview',
+      ok: false,
+      error: 'delivery_unsupported',
+    })
+  })
+
+  it('rejects a start when another window is delivering the same worktree', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const target = new FakeBridge()
+    target.getDeliveryContext.mockResolvedValueOnce({ sourceCwd: 'D:/repo/feature' })
+    const other = new FakeBridge()
+    other.listActiveDeliveries.mockResolvedValueOnce([
+      { sourceCwd: 'D:/repo/feature', mainWorktree: 'D:/repo/main', phase: 'cherry_picking' },
+    ])
+    hub.registerWindow(1, target)
+    hub.registerWindow(2, other)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'start',
+      kind: 'startDelivery',
+      payload: { ref, expectation },
+    })
+
+    expect(target.startDelivery).not.toHaveBeenCalled()
+    expect(framesOf(connection, 'command_result')[0]).toMatchObject({
+      ok: false,
+      error: 'delivery_busy',
+    })
+  })
+
+  it('starts a delivery when the other window works on a different worktree', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const target = new FakeBridge()
+    target.getDeliveryContext.mockResolvedValueOnce({ sourceCwd: 'D:/repo/feature' })
+    target.startDelivery.mockResolvedValueOnce({ ok: true, value: { deliveryId: 'del-1' } })
+    const other = new FakeBridge()
+    other.listActiveDeliveries.mockResolvedValueOnce([
+      { sourceCwd: 'D:/repo/other', mainWorktree: 'D:/repo/main', phase: 'preflighting' },
+    ])
+    hub.registerWindow(1, target)
+    hub.registerWindow(2, other)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'start',
+      kind: 'startDelivery',
+      payload: { ref, expectation },
+    })
+
+    expect(target.startDelivery).toHaveBeenCalledWith('s1', expectation, 'd1')
+    expect(framesOf(connection, 'command_result')[0]).toMatchObject({
+      ok: true,
+      result: { deliveryId: 'del-1' },
+    })
+  })
+
+  it('routes confirm, retry, undo, get and open-main-worktree', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    const calls: Array<[string, string]> = [
+      ['getDelivery', 'getDelivery'],
+      ['confirmDeliveryPush', 'confirmDeliveryPush'],
+      ['retryDelivery', 'retryDelivery'],
+      ['undoDelivery', 'undoDelivery'],
+      ['openDeliveryMainWorktree', 'openDeliveryMainWorktree'],
+    ]
+    for (const [kind] of calls) {
+      await hub.handleCommand(connection, {
+        type: 'command',
+        requestId: kind,
+        kind,
+        payload: { ref, deliveryId: 'del-1' },
+      })
+    }
+
+    expect(bridge.getDelivery).toHaveBeenCalledWith('s1', 'del-1')
+    expect(bridge.confirmDeliveryPush).toHaveBeenCalledWith('s1', 'del-1')
+    expect(bridge.retryDelivery).toHaveBeenCalledWith('s1', 'del-1')
+    expect(bridge.undoDelivery).toHaveBeenCalledWith('s1', 'del-1')
+    expect(bridge.openDeliveryMainWorktree).toHaveBeenCalledWith('s1', 'del-1')
+  })
+
+  it('rejects prompts while another window delivers the same worktree', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const target = new FakeBridge()
+    target.getDeliveryContext.mockResolvedValueOnce({ sourceCwd: 'D:/repo/feature' })
+    const other = new FakeBridge()
+    other.listActiveDeliveries.mockResolvedValueOnce([
+      { sourceCwd: 'D:/repo/feature', mainWorktree: 'D:/repo/main', phase: 'pushing' },
+    ])
+    hub.registerWindow(1, target)
+    hub.registerWindow(2, other)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'prompt',
+      kind: 'sendPrompt',
+      payload: { ref, text: 'continue' },
+    })
+
+    expect(target.sendPrompt).not.toHaveBeenCalled()
+    expect(framesOf(connection, 'command_result')[0]).toMatchObject({
+      ok: false,
+      error: 'delivery_busy',
+    })
   })
 })

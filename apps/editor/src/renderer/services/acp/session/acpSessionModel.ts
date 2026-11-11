@@ -636,6 +636,10 @@ export interface IAcpSessionInitState {
   readonly accumulatedRunningMs?: number
 }
 
+/** Shared predicate for editor-owned helper sessions (see {@link IAcpSession.internal}). */
+export const isInternalSession = (session: { readonly internal?: boolean } | undefined): boolean =>
+  session?.internal === true
+
 export interface IAcpSession {
   /**
    * The session's stable local id, generated up-front (a uuid for freshly
@@ -674,6 +678,19 @@ export interface IAcpSession {
    * are no-ops when set, and the chat UI hides the prompt input.
    */
   readonly readOnly: boolean
+  /**
+   * True for editor-owned helper sessions (delivery commit-message generation,
+   * conflict resolution). Internal sessions never appear in the session list,
+   * notifications, the mobile inbox or the changelist, and are never persisted.
+   * Their history row only exists so `session/load` can rebuild the fork.
+   */
+  readonly internal: boolean
+  /**
+   * Internal sessions with write access (delivery conflict resolution). Other
+   * internal sessions only get one-shot read/search approvals; edit/delete/move
+   * is rejected regardless of what the agent asks for.
+   */
+  readonly internalWritable: boolean
   /**
    * The agent-issued `sessionId` from `session/new` (a.k.a. `sessionIdOnAgent`).
    * `undefined` while the session is still connecting; set once

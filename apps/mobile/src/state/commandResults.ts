@@ -1,10 +1,14 @@
-import type {
-  MobileRewindPreview,
-  MobileRewindResult,
-  MobileSessionHistoryEntry,
-  MobileSessionRef,
-  MobileSessionRefResult,
-  MobileSideTaskSummary,
+import {
+  MOBILE_DELIVERY_PHASES,
+  type MobileDeliveryDetail,
+  type MobileDeliveryPreview,
+  type MobileDeliveryStartResult,
+  type MobileRewindPreview,
+  type MobileRewindResult,
+  type MobileSessionHistoryEntry,
+  type MobileSessionRef,
+  type MobileSessionRefResult,
+  type MobileSideTaskSummary,
 } from '@universe-editor/mobile-protocol'
 
 /**
@@ -102,4 +106,60 @@ export function isMobileSessionHistoryList(
   value: unknown,
 ): value is readonly MobileSessionHistoryEntry[] {
   return Array.isArray(value) && value.every(isMobileSessionHistoryEntry)
+}
+
+function isDeliveryPhase(value: unknown): boolean {
+  return typeof value === 'string' && (MOBILE_DELIVERY_PHASES as readonly string[]).includes(value)
+}
+
+function isDeliverySummary(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  return (
+    isNonEmptyString(value['deliveryId']) &&
+    isDeliveryPhase(value['phase']) &&
+    isNonNegativeInteger(value['commitCount']) &&
+    typeof value['dirtySource'] === 'boolean' &&
+    isNonEmptyString(value['mainBranch']) &&
+    isFiniteNumber(value['updatedAt']) &&
+    typeof value['canConfirmPush'] === 'boolean' &&
+    typeof value['canRetry'] === 'boolean' &&
+    typeof value['canUndo'] === 'boolean' &&
+    isRecord(value['sync'])
+  )
+}
+
+export function isMobileDeliveryPreview(value: unknown): value is MobileDeliveryPreview {
+  if (!isRecord(value)) return false
+  const source = value['source']
+  const target = value['target']
+  if (!isRecord(source) || !isRecord(target)) return false
+  if (!isNonEmptyString(source['worktreeName']) || !isNonEmptyString(source['head'])) return false
+  if (typeof source['dirty'] !== 'boolean' || typeof source['isMainWorktree'] !== 'boolean') {
+    return false
+  }
+  if (!isNonEmptyString(target['mainBranch']) || !isNonEmptyString(target['mainHead'])) {
+    return false
+  }
+  return (
+    Array.isArray(value['commits']) &&
+    Array.isArray(value['blockers']) &&
+    Array.isArray(value['warnings']) &&
+    typeof value['forkSupported'] === 'boolean' &&
+    isRecord(value['expectation'])
+  )
+}
+
+export function isMobileDeliveryDetail(value: unknown): value is MobileDeliveryDetail {
+  if (!isRecord(value)) return false
+  if (!isDeliverySummary(value['summary'])) return false
+  if (!isRecord(value['source']) || !isRecord(value['target'])) return false
+  return (
+    Array.isArray(value['commits']) &&
+    Array.isArray(value['conflictFiles']) &&
+    Array.isArray(value['syncResults'])
+  )
+}
+
+export function isMobileDeliveryStartResult(value: unknown): value is MobileDeliveryStartResult {
+  return isRecord(value) && isNonEmptyString(value['deliveryId'])
 }

@@ -53,6 +53,8 @@ function makeSession(selection: readonly string[] | null = null, readOnly = fals
     authority: undefined,
     cwd: undefined,
     readOnly,
+    internal: false,
+    internalWritable: false,
     sessionIdOnAgent: observableValue<string | undefined>('sid', 's1'),
     title: 'Fake',
     messages: observableValue<readonly AcpMessage[]>('m', []),

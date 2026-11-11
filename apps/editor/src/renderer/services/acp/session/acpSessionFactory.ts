@@ -28,6 +28,7 @@ import {
   NULL_ACP_MESSAGE_ATTACHMENT_STORE,
 } from './acpMessageAttachmentStore.js'
 import { IAcpSessionProviderContext } from './acpSessionProviderContext.js'
+import { sharedResidentBudget } from './acpResidentBudget.js'
 
 export interface IAcpSessionCreateOptions {
   readonly id: string
@@ -59,6 +60,10 @@ export interface IAcpSessionCreateOptions {
    * see IAcpSession.cwd.
    */
   readonly cwd?: string
+  /** Editor-owned helper session (delivery side task / conflict resolver). */
+  readonly internal?: boolean
+  /** Internal session allowed to edit files inside its own cwd. */
+  readonly internalWritable?: boolean
 }
 
 export interface IAcpSessionFactory {
@@ -137,6 +142,9 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       this._providerContext,
       opts.cwd,
       opts.authority,
+      sharedResidentBudget,
+      opts.internal ?? false,
+      opts.internalWritable ?? false,
     )
   }
 }

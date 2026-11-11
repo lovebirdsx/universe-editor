@@ -52,19 +52,19 @@ export class ResourceMap<V> implements Map<URI, V> {
     }
   }
 
-  *values(): IterableIterator<V> {
+  *values(): MapIterator<V> {
     for (const entry of this._map.values()) yield entry.value
   }
 
-  *keys(): IterableIterator<URI> {
+  *keys(): MapIterator<URI> {
     for (const entry of this._map.values()) yield entry.uri
   }
 
-  *entries(): IterableIterator<[URI, V]> {
+  *entries(): MapIterator<[URI, V]> {
     for (const entry of this._map.values()) yield [entry.uri, entry.value]
   }
 
-  [Symbol.iterator](): IterableIterator<[URI, V]> {
+  [Symbol.iterator](): MapIterator<[URI, V]> {
     return this.entries()
   }
 
@@ -105,19 +105,19 @@ export class ResourceSet implements Set<URI> {
     this._map.forEach((uri) => callbackfn.call(thisArg, uri, uri, this))
   }
 
-  values(): IterableIterator<URI> {
+  values(): SetIterator<URI> {
     return this._map.keys()
   }
 
-  keys(): IterableIterator<URI> {
+  keys(): SetIterator<URI> {
     return this._map.keys()
   }
 
-  *entries(): IterableIterator<[URI, URI]> {
+  *entries(): SetIterator<[URI, URI]> {
     for (const uri of this._map.keys()) yield [uri, uri]
   }
 
-  [Symbol.iterator](): IterableIterator<URI> {
+  [Symbol.iterator](): SetIterator<URI> {
     return this._map.keys()
   }
 

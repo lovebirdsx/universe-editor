@@ -370,6 +370,110 @@ export const strings = {
   sessionNeverAskAgain: '不再提示',
   sessionActionFailed: '操作失败，请重试。',
 
+  deliveryAction: '交付',
+  deliveryPendingBadge: '待交付',
+  deliveryConfirmTitle: '交付到 main',
+  deliveryConfirmIntro:
+    '把这条会话所在 worktree 的提交合入 main，确认推送后再同步其它 worktree。全程不会 force push。',
+  deliveryPreviewLoading: '正在检查仓库状态…',
+  deliveryPreviewFailed: '无法读取交付信息。',
+  deliveryBlockers: '暂时无法交付',
+  deliveryWarnings: '注意',
+  deliverySourceLabel: '源 worktree',
+  deliveryTargetLabel: '目标',
+  deliverySourceDirty: (files: number, untracked: number): string =>
+    `有未提交改动：${files} 个已修改，${untracked} 个未跟踪`,
+  deliveryDirtyNote: '交付时会先由 Agent 基于这条会话生成提交信息，再由编辑器提交。',
+  deliveryCommitsLabel: (count: number): string => `待交付提交（${count}）`,
+  deliveryNoCommits: '源 worktree 没有需要交付的新提交。',
+  deliveryStart: '开始交付',
+  deliveryStarting: '正在开始交付…',
+  deliveryCancel: '取消',
+  deliveryClose: '关闭',
+  deliveryLoading: '正在加载交付详情…',
+  deliveryDetailFailed: '无法读取交付详情。',
+  deliveryConfirmPush: '确认推送',
+  deliveryConfirmPushTitle: '确认推送到远端？',
+  deliveryConfirmPushBody: 'main 将前移到交付提交并推送到远端，不会 force push。',
+  deliveryPushing: '正在推送…',
+  deliveryRetry: '重试',
+  deliveryRetrying: '正在重试…',
+  deliveryUndo: '撤销本次交付',
+  deliveryUndoTitle: '撤销这次交付？',
+  deliveryUndoBody:
+    '未推送时会直接恢复 main；已推送时会创建 revert 提交并再次推送，不会 force push。',
+  deliveryUndoing: '正在撤销…',
+  deliveryOpenMainWorktree: '打开 main worktree',
+  deliveryOpeningMainWorktree: '正在打开…',
+  deliveryDetailTitle: '交付详情',
+  deliveryOpenSession: '进入会话',
+  deliveryErrorLabel: '错误',
+  deliveryConflictLabel: (count: number): string => `冲突文件（${count}）`,
+  deliveryWorktreesLabel: 'worktree 同步',
+  deliveryPushLabel: '推送',
+  deliveryPushedTo: (ref: string): string => `已推送到 ${ref}`,
+  deliverySummaryDirty: '包含新提交',
+  deliverySummaryCommits: (count: number): string => `${count} 个提交`,
+  deliverySummarySync: (synced: number, skipped: number, failed: number): string => {
+    const parts = [`${synced} 个已同步`]
+    if (skipped > 0) parts.push(`${skipped} 个跳过`)
+    if (failed > 0) parts.push(`${failed} 个失败`)
+    return parts.join(' · ')
+  },
+  deliveryPhaseLabel: (phase: string): string => {
+    switch (phase) {
+      case 'preflighting':
+        return '准备中'
+      case 'committing':
+        return '提交中'
+      case 'cherry_picking':
+        return '合入中'
+      case 'resolving_conflict':
+        return '解决冲突'
+      case 'awaiting_push':
+        return '待推送'
+      case 'pushing':
+        return '推送中'
+      case 'syncing':
+        return '同步中'
+      case 'synced':
+        return '已交付'
+      case 'partial':
+        return '部分同步'
+      case 'failed':
+        return '交付失败'
+      case 'undoing':
+        return '撤销中'
+      case 'undone':
+        return '已撤销'
+      default:
+        return phase
+    }
+  },
+  deliveryWorktreeStatusLabel: (status: string): string => {
+    switch (status) {
+      case 'synced':
+        return '已同步'
+      case 'up_to_date':
+        return '已是最新'
+      case 'skipped_dirty':
+        return '有未提交改动，已跳过'
+      case 'skipped_in_progress':
+        return '有进行中的操作，已跳过'
+      case 'skipped_diverged':
+        return '有独立提交，已跳过'
+      case 'skipped_source_changed':
+        return '源 worktree 已变化，已跳过'
+      case 'failed':
+        return '同步失败'
+      default:
+        return status
+    }
+  },
+  deliverySummaryTitle: (total: number): string => `交付 · ${total} 条进行中或待处理`,
+  deliverySummaryPushable: (count: number): string => `${count} 条待推送`,
+  deliverySummaryFailed: (count: number): string => `${count} 条需处理`,
+
   newSessionTitle: '新建会话',
   newSessionBack: '返回收件箱',
   newSessionAgentLabel: '选择 Agent',
@@ -466,6 +570,10 @@ const COMMAND_ERRORS: Readonly<Record<string, string>> = {
   network: '与 PC 的连接已断开，请稍后重试。',
   invalid_response: 'PC 返回了无法识别的结果。',
   cancelled: '操作已取消。',
+  delivery_busy: '该仓库正在交付，请等待当前交付完成。',
+  delivery_not_found: '交付记录不存在或已被清理。',
+  delivery_conflict: '仓库状态已变化，请重新交付。',
+  delivery_unsupported: '当前仓库或编辑器版本不支持交付。',
 }
 
 export function commandErrorText(code: string | undefined): string {

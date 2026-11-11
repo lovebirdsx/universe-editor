@@ -7,7 +7,7 @@ import {
   type InboxSessionSheetView,
 } from '../inbox/InboxSessionActionSheet.js'
 import type { MobileClient } from '../state/mobileClient.js'
-import { refMatches } from '../state/refs.js'
+import { refMatches, sessionRouteKey } from '../state/refs.js'
 import { useStore } from '../state/useStore.js'
 import { NoticeBar } from '../components/NoticeBar.js'
 import { Spinner } from '../components/Spinner.js'
@@ -22,8 +22,20 @@ import {
   shouldConfirmSessionClose,
 } from '../session/sessionConfirm.js'
 import { collectDirtyWindowIds } from '../inbox/workspaceDirty.js'
+import { selectDeliveryEntries } from '../inbox/deliveryStatus.js'
+import { DeliverySummaryBar } from '../inbox/DeliverySummaryBar.js'
+import { DeliveryConfirmSheet } from '../inbox/DeliveryConfirmSheet.js'
+import { DeliveryDetailSheet } from '../inbox/DeliveryDetailSheet.js'
 import { useShellCacheFallback } from '../shellCache.js'
 import { useEffect, useState } from 'react'
+
+type DeliverySheet =
+  | { readonly mode: 'confirm'; readonly session: MobileSessionSummary }
+  | {
+      readonly mode: 'detail'
+      readonly session: MobileSessionSummary
+      readonly deliveryId: string
+    }
 
 export interface InboxPageProps {
   readonly client: MobileClient
@@ -58,6 +70,7 @@ export function InboxPage({
   const [sessionAction, setSessionAction] = useState<
     { readonly session: MobileSessionSummary; readonly view: InboxSessionSheetView } | undefined
   >(undefined)
+  const [deliverySheet, setDeliverySheet] = useState<DeliverySheet | undefined>(undefined)
   // The sheet stays open while the inbox keeps moving; judge "is it working?"
   // against the latest summary, not the one captured on long-press.
   const actionSession =
@@ -65,6 +78,11 @@ export function InboxPage({
       ? undefined
       : (inbox.sessions.find((session) => refMatches(session.ref, sessionAction.session.ref)) ??
         sessionAction.session)
+  const deliverySession =
+    deliverySheet === undefined
+      ? undefined
+      : (inbox.sessions.find((session) => refMatches(session.ref, deliverySheet.session.ref)) ??
+        deliverySheet.session)
 
   // One-shot on entry / reconnect: the badge is advisory, so a failure keeps
   // the previous set rather than replacing it with "everything clean".
@@ -112,6 +130,12 @@ export function InboxPage({
 
   const completedSessionAction = (action: 'closed' | 'removed'): void => {
     onNotice(action === 'closed' ? strings.sessionCloseNotice : strings.sessionRemovedNotice)
+  }
+
+  const openDeliveryDetail = (session: MobileSessionSummary): void => {
+    const delivery = session.delivery
+    if (delivery === undefined) return
+    setDeliverySheet({ mode: 'detail', session, deliveryId: delivery.deliveryId })
   }
 
   return (
@@ -175,6 +199,34 @@ export function InboxPage({
           onCompleted={completedSessionAction}
         />
       )}
+      {deliverySheet?.mode === 'confirm' && deliverySession !== undefined && (
+        <DeliveryConfirmSheet
+          key={`confirm:${deliverySession.ref.localId}`}
+          client={client}
+          session={deliverySession}
+          online={socketState === 'connected'}
+          onDismiss={() => setDeliverySheet(undefined)}
+          onStarted={(deliveryId) =>
+            setDeliverySheet({ mode: 'detail', session: deliverySession, deliveryId })
+          }
+          onNotice={onNotice}
+        />
+      )}
+      {deliverySheet?.mode === 'detail' && deliverySession !== undefined && (
+        <DeliveryDetailSheet
+          key={`detail:${deliverySheet.deliveryId}`}
+          client={client}
+          session={deliverySession}
+          deliveryId={deliverySheet.deliveryId}
+          online={socketState === 'connected'}
+          onDismiss={() => setDeliverySheet(undefined)}
+          onOpenSession={() => {
+            setDeliverySheet(undefined)
+            onOpenSession(sessionRouteKey(deliverySession.ref), false)
+          }}
+          onNotice={onNotice}
+        />
+      )}
     </div>
   )
 
@@ -203,16 +255,27 @@ export function InboxPage({
           </div>
         )
       }
+      const deliveryEntries = selectDeliveryEntries(sessions, true)
       return (
-        <InboxGroups
-          sessions={sessions}
-          onOpenSession={onOpenSession}
-          onCloseSession={closeSession}
-          onRemoveSession={removeSession}
-          onShowSessionActions={(session) => setSessionAction({ session, view: 'menu' })}
-          dirtyWindowIds={dirtyWindowIds}
-          stale={socketState !== 'connected'}
-        />
+        <>
+          {deliveryEntries.length > 0 && (
+            <DeliverySummaryBar
+              entries={deliveryEntries}
+              onOpenDelivery={(session) => openDeliveryDetail(session)}
+            />
+          )}
+          <InboxGroups
+            sessions={sessions}
+            onOpenSession={onOpenSession}
+            onCloseSession={closeSession}
+            onRemoveSession={removeSession}
+            onShowSessionActions={(session) => setSessionAction({ session, view: 'menu' })}
+            onStartDelivery={(session) => setDeliverySheet({ mode: 'confirm', session })}
+            onOpenDelivery={(session) => openDeliveryDetail(session)}
+            dirtyWindowIds={dirtyWindowIds}
+            stale={socketState !== 'connected'}
+          />
+        </>
       )
     }
 

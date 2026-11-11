@@ -95,7 +95,10 @@ export class AcpSessionRegistry {
   add(session: AcpSession, options: { activate: boolean }): void {
     transaction((tx) => {
       this._sessions = [...this._sessions, session]
-      this._sessionsObs.set(this._sessions, tx)
+      this._sessionsObs.set(
+        this._sessions.filter((s) => !s.internal),
+        tx,
+      )
       if (options.activate) {
         this._activeSessionId.set(session.id, tx)
         this._activeSession.set(session, tx)
@@ -112,7 +115,10 @@ export class AcpSessionRegistry {
     const prior = this._sessions.find((s) => s.id === session.id)
     transaction((tx) => {
       this._sessions = [...this._sessions.filter((s) => s.id !== session.id), session]
-      this._sessionsObs.set(this._sessions, tx)
+      this._sessionsObs.set(
+        this._sessions.filter((s) => !s.internal),
+        tx,
+      )
       if (options.activate) {
         this._activeSessionId.set(session.id, tx)
         this._activeSession.set(session, tx)
@@ -129,9 +135,12 @@ export class AcpSessionRegistry {
   remove(localId: string): void {
     transaction((tx) => {
       this._sessions = this._sessions.filter((x) => x.id !== localId)
-      this._sessionsObs.set(this._sessions, tx)
+      this._sessionsObs.set(
+        this._sessions.filter((s) => !s.internal),
+        tx,
+      )
       if (this._activeSessionId.get() === localId) {
-        const next = this._sessions[0]
+        const next = this._sessions.find((s) => !s.internal)
         this._activeSessionId.set(next?.id, tx)
         this._activeSession.set(next, tx)
       }

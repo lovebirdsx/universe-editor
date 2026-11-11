@@ -286,6 +286,10 @@ import {
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { MobileBridgeService } from './services/mobileGateway/MobileBridgeService.js'
+import {
+  ISessionDeliveryService,
+  SessionDeliveryService,
+} from './services/delivery/sessionDeliveryService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import { ITerminalXtermService } from './services/terminal/TerminalXtermService.js'
 import {
@@ -1005,6 +1009,13 @@ async function bootstrapWorkbench(): Promise<void> {
   // through their renderer SCM), so register it before creating the bridge.
   const scmService = workbenchStore.add(new ScmService())
   services.set(IScmService, scmService)
+
+  // Session delivery orchestration (commit → cherry-pick → confirm → push →
+  // sync worktrees). Registered before the mobile bridge, which injects it.
+  const sessionDeliveryService = workbenchStore.add(
+    instantiation.createInstance(SessionDeliveryService),
+  )
+  services.set(ISessionDeliveryService, sessionDeliveryService)
 
   // Reverse channel: main's mobile gateway calls into this window (M2 projects
   // ACP sessions through it). Created through DI so it can observe the session

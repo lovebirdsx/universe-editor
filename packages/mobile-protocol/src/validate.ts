@@ -41,6 +41,11 @@ import type {
   MobileConfigOption,
   MobileConfigOptionType,
   MobileConfigOptionValue,
+  MobileDeliveryError,
+  MobileDeliveryExpectation,
+  MobileDeliveryPhase,
+  MobileDeliverySummary,
+  MobileDeliverySyncSummary,
   MobileDraftUpdateEvent,
   MobileElicitationAction,
   MobileElicitationContentValue,
@@ -91,6 +96,7 @@ import type {
 import {
   MOBILE_ATTENTION_KINDS,
   MOBILE_CONFIG_OPTION_TYPES,
+  MOBILE_DELIVERY_PHASES,
   MOBILE_ELICITATION_ACTIONS,
   MOBILE_ELICITATION_FIELD_KINDS,
   MOBILE_MESSAGE_ROLES,
@@ -124,6 +130,10 @@ export const MAX_DEVICE_NAME_LENGTH = 64
 export const MAX_CLIENT_VERSION_LENGTH = 64
 export const MAX_SERVER_VERSION_LENGTH = 64
 export const MAX_CAPABILITIES = 32
+/** One delivery is a bounded commit range; larger ranges are rejected. */
+export const MAX_DELIVERY_COMMITS = 200
+export const MAX_DELIVERY_ERROR_LENGTH = 2000
+export const MAX_DELIVERY_DETAIL_LENGTH = 8000
 export const MAX_ID_LENGTH = 128
 export const MAX_TITLE_LENGTH = 512
 export const MAX_WORKSPACE_NAME_LENGTH = 256
@@ -883,9 +893,100 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseEmptyPayload(value, kind)
     case 'openSession':
       return parseOpenSessionPayload(value)
+    case 'previewDelivery':
+      return parseRefOnlyPayload(value, 'previewDelivery')
+    case 'startDelivery':
+      return parseStartDeliveryPayload(value)
+    case 'getDelivery':
+    case 'confirmDeliveryPush':
+    case 'retryDelivery':
+    case 'undoDelivery':
+    case 'openDeliveryMainWorktree':
+      return parseDeliveryCommandPayload(value, kind)
     default:
       return ok(value)
   }
+}
+
+function parseDeliveryCommandPayload(
+  value: unknown,
+  kind: string,
+): Result<{ ref: MobileSessionRef; deliveryId: string }> {
+  if (!isRecord(value)) return fail('bad_request', `${kind}.payload must be an object`)
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const deliveryId = value.deliveryId
+  if (!isNonEmptyBoundedString(deliveryId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `${kind}.deliveryId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  return ok({ ref: ref.value, deliveryId })
+}
+
+function parseDeliveryExpectation(value: unknown): Result<MobileDeliveryExpectation> {
+  if (!isRecord(value)) {
+    return fail('bad_request', 'startDelivery.expectation must be an object')
+  }
+  const fields = [
+    'mainHead',
+    'mainBranch',
+    'targetBranch',
+    'remote',
+    'remoteBranch',
+    'upstreamRef',
+    'upstreamHead',
+    'sourceHead',
+    'baseSha',
+  ] as const
+  const parsed: Record<(typeof fields)[number], string> = {
+    mainHead: '',
+    mainBranch: '',
+    targetBranch: '',
+    remote: '',
+    remoteBranch: '',
+    upstreamRef: '',
+    upstreamHead: '',
+    sourceHead: '',
+    baseSha: '',
+  }
+  for (const field of fields) {
+    const raw = value[field]
+    if (!isNonEmptyBoundedString(raw, MAX_TEXT_LENGTH)) {
+      return fail(
+        'bad_request',
+        `startDelivery.expectation.${field} must be 1–${MAX_TEXT_LENGTH} characters`,
+      )
+    }
+    parsed[field] = raw
+  }
+  const rawCommits = value.commits
+  if (!Array.isArray(rawCommits)) {
+    return fail('bad_request', 'startDelivery.expectation.commits must be an array')
+  }
+  if (rawCommits.length > MAX_DELIVERY_COMMITS) {
+    return fail(
+      'bad_request',
+      `startDelivery.expectation.commits must contain at most ${MAX_DELIVERY_COMMITS} entries`,
+    )
+  }
+  const commits: string[] = []
+  for (const sha of rawCommits) {
+    if (!isNonEmptyBoundedString(sha, MAX_ID_LENGTH)) {
+      return fail('bad_request', 'startDelivery.expectation.commits entries must be strings')
+    }
+    commits.push(sha)
+  }
+  return ok({ ...parsed, commits })
+}
+
+function parseStartDeliveryPayload(
+  value: unknown,
+): Result<{ ref: MobileSessionRef; expectation: MobileDeliveryExpectation }> {
+  if (!isRecord(value)) return fail('bad_request', 'startDelivery.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const expectation = parseDeliveryExpectation(value.expectation)
+  if (!expectation.ok) return expectation
+  return ok({ ref: ref.value, expectation: expectation.value })
 }
 
 function parseOpenSessionPayload(value: unknown): Result<{
@@ -1532,6 +1633,13 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
     'session.sideTaskChildCount',
   )
   if (!sideTaskChildCount.ok) return sideTaskChildCount
+  const delivery = parseOptional(value.delivery, parseDeliverySummary)
+  if (!delivery.ok) return delivery
+  const deliveryAvailable = parseOptionalBoolean(
+    value.deliveryAvailable,
+    'session.deliveryAvailable',
+  )
+  if (!deliveryAvailable.ok) return deliveryAvailable
   const updatedAt = value.updatedAt
   if (!isFiniteNumber(updatedAt)) {
     return fail('bad_request', 'session.updatedAt must be a finite number')
@@ -1558,8 +1666,115 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
     ...(sideTaskChildCount.value !== undefined
       ? { sideTaskChildCount: sideTaskChildCount.value }
       : {}),
+    ...(delivery.value !== undefined ? { delivery: delivery.value } : {}),
+    ...(deliveryAvailable.value !== undefined
+      ? { deliveryAvailable: deliveryAvailable.value }
+      : {}),
     updatedAt,
   })
+}
+
+function parseDeliverySummary(value: unknown): Result<MobileDeliverySummary> {
+  if (!isRecord(value)) return fail('bad_request', 'session.delivery must be an object')
+  const deliveryId = value.deliveryId
+  if (!isNonEmptyBoundedString(deliveryId, MAX_ID_LENGTH)) {
+    return fail('bad_request', `session.delivery.deliveryId must be 1–${MAX_ID_LENGTH} characters`)
+  }
+  const phase = value.phase
+  if (typeof phase !== 'string' || !isDeliveryPhase(phase)) {
+    return fail('bad_request', 'session.delivery.phase is not known')
+  }
+  const commitCount = value.commitCount
+  if (!isNonNegativeInteger(commitCount)) {
+    return fail('bad_request', 'session.delivery.commitCount must be a non-negative integer')
+  }
+  const dirtySource = value.dirtySource
+  if (typeof dirtySource !== 'boolean') {
+    return fail('bad_request', 'session.delivery.dirtySource must be a boolean')
+  }
+  const mainBranch = value.mainBranch
+  if (!isNonEmptyBoundedString(mainBranch, MAX_WORKSPACE_NAME_LENGTH)) {
+    return fail(
+      'bad_request',
+      `session.delivery.mainBranch must be 1–${MAX_WORKSPACE_NAME_LENGTH} characters`,
+    )
+  }
+  const updatedAt = value.updatedAt
+  if (!isFiniteNumber(updatedAt)) {
+    return fail('bad_request', 'session.delivery.updatedAt must be a finite number')
+  }
+  const error = parseOptional(value.error, parseDeliveryError)
+  if (!error.ok) return error
+  const canConfirmPush = parseOptionalBoolean(
+    value.canConfirmPush,
+    'session.delivery.canConfirmPush',
+  )
+  if (!canConfirmPush.ok) return canConfirmPush
+  const canRetry = parseOptionalBoolean(value.canRetry, 'session.delivery.canRetry')
+  if (!canRetry.ok) return canRetry
+  const canUndo = parseOptionalBoolean(value.canUndo, 'session.delivery.canUndo')
+  if (!canUndo.ok) return canUndo
+  const sync = parseDeliverySyncSummary(value.sync)
+  if (!sync.ok) return sync
+  return ok({
+    deliveryId,
+    phase,
+    commitCount,
+    dirtySource,
+    mainBranch,
+    updatedAt,
+    ...(error.value !== undefined ? { error: error.value } : {}),
+    canConfirmPush: canConfirmPush.value === true,
+    canRetry: canRetry.value === true,
+    canUndo: canUndo.value === true,
+    sync: sync.value,
+  })
+}
+
+function parseDeliveryError(value: unknown): Result<MobileDeliveryError> {
+  if (!isRecord(value)) return fail('bad_request', 'delivery.error must be an object')
+  const code = value.code
+  if (!isNonEmptyBoundedString(code, MAX_STATUS_LENGTH)) {
+    return fail('bad_request', 'delivery.error.code must be a short string')
+  }
+  const message = value.message
+  if (!isNonEmptyBoundedString(message, MAX_DELIVERY_ERROR_LENGTH)) {
+    return fail('bad_request', 'delivery.error.message is missing or too long')
+  }
+  const detail = parseOptionalString(
+    value.detail,
+    MAX_DELIVERY_DETAIL_LENGTH,
+    'delivery.error.detail',
+  )
+  if (!detail.ok) return detail
+  return ok({
+    code,
+    message,
+    ...(detail.value !== undefined ? { detail: detail.value } : {}),
+  })
+}
+
+function parseDeliverySyncSummary(value: unknown): Result<MobileDeliverySyncSummary> {
+  if (!isRecord(value)) return fail('bad_request', 'delivery.sync must be an object')
+  const counters = ['synced', 'upToDate', 'skipped', 'failed'] as const
+  const parsed: Record<(typeof counters)[number], number> = {
+    synced: 0,
+    upToDate: 0,
+    skipped: 0,
+    failed: 0,
+  }
+  for (const counter of counters) {
+    const raw = value[counter]
+    if (!isNonNegativeInteger(raw)) {
+      return fail('bad_request', `delivery.sync.${counter} must be a non-negative integer`)
+    }
+    parsed[counter] = raw
+  }
+  return ok(parsed)
+}
+
+function isDeliveryPhase(value: string): value is MobileDeliveryPhase {
+  return (MOBILE_DELIVERY_PHASES as readonly string[]).includes(value)
 }
 
 function parseSessionRef(value: unknown): Result<MobileSessionRef> {

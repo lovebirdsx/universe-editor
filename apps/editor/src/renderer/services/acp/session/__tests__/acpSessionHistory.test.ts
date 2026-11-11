@@ -480,7 +480,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(6)
+    expect(persisted.schemaVersion).toBe(7)
     expect(persisted.entries).toHaveLength(1)
   })
 
@@ -524,7 +524,7 @@ describe('AcpSessionHistoryService — persistence', () => {
 
   it('drops a persisted row covered by a tombstone (crash between delete and sweep)', async () => {
     storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
-      schemaVersion: 6,
+      schemaVersion: 7,
       entries: [
         {
           id: 'gone',
