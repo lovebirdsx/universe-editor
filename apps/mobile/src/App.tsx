@@ -206,11 +206,6 @@ export function App() {
     leaveSession()
   }
 
-  const finishSession = (action: 'closed' | 'removed'): void => {
-    leaveSessionPage()
-    setNotice(action === 'closed' ? strings.sessionCloseNotice : strings.sessionRemovedNotice)
-  }
-
   const unpair = (): void => {
     setPendingRef(undefined)
     setPendingWorkspaceHint(undefined)
@@ -283,7 +278,7 @@ export function App() {
         workspaceFolder={pendingWorkspaceHint?.folder}
         workspaceAuthority={pendingWorkspaceHint?.authority}
         onBack={leaveSessionPage}
-        onFinished={finishSession}
+        onFinished={leaveSessionPage}
       />
     ) : route.name === 'new-session' ? (
       <NewSessionPage

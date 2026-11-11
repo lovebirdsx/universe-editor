@@ -41,8 +41,8 @@ export interface SessionPageProps {
   /** Workspace of a closed catalog row, used if this session must be reopened. */
   readonly workspaceFolder?: string | undefined
   readonly workspaceAuthority?: string | undefined
-  /** Close/remove succeeded: return to wherever the session was opened, with a notice. */
-  readonly onFinished: (action: 'closed' | 'removed') => void
+  /** Close/remove succeeded: return to wherever the session was opened. */
+  readonly onFinished: () => void
   /** Inbox "待审批" rows ask the page to reveal the pending card immediately. */
   readonly focusPending?: boolean | undefined
 }

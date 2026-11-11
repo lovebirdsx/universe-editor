@@ -243,14 +243,14 @@ describe('SessionsPage', () => {
       <SessionsPage
         client={harness.client}
         active={false}
-        notice={strings.sessionCloseNotice}
+        notice={strings.credentialsInvalid}
         onDismissNotice={onDismissNotice}
         onBack={vi.fn()}
         onOpenSessionRef={harness.onOpenSessionRef}
       />,
     )
 
-    expect(screen.getByText(strings.sessionCloseNotice)).toBeTruthy()
+    expect(screen.getByText(strings.credentialsInvalid)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: strings.noticeDismiss }))
     expect(onDismissNotice).toHaveBeenCalledTimes(1)
   })

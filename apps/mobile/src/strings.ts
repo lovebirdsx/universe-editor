@@ -361,12 +361,10 @@ export const strings = {
   sessionCloseBody:
     'Agent 正在运行，关闭会中断当前任务。会话历史会保留，之后可以在 PC 的会话列表里恢复。',
   sessionCloseConfirm: '关闭会话',
-  sessionCloseNotice: '会话已关闭，可在 PC 上恢复',
   sessionRemove: '移除会话',
   sessionRemoveTitle: '移除这个会话？',
   sessionRemoveBody: '会话及其子任务会从 Agent 端删除，历史记录也会一并删除，且无法恢复。',
   sessionRemoveConfirm: '移除',
-  sessionRemovedNotice: '会话已移除',
   sessionNeverAskAgain: '不再提示',
   sessionActionFailed: '操作失败，请重试。',
 

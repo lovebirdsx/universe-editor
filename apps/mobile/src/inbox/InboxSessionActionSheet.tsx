@@ -22,7 +22,6 @@ export interface InboxSessionActionSheetProps {
   readonly online: boolean
   readonly onDismiss: () => void
   readonly onNotice: (text: string) => void
-  readonly onCompleted: (action: 'closed' | 'removed') => void
 }
 
 /** Long-press menu and swipe-action confirmations for one inbox row. */
@@ -33,18 +32,16 @@ export function InboxSessionActionSheet({
   online,
   onDismiss,
   onNotice,
-  onCompleted,
 }: InboxSessionActionSheetProps) {
   const [view, setView] = useState<InboxSessionSheetView>(initialView)
   const [busy, setBusy] = useState(false)
 
-  const run = (action: 'closed' | 'removed', request: () => Promise<void>): void => {
+  const run = (request: () => Promise<void>): void => {
     if (busy) return
     setBusy(true)
     void request()
       .then(() => {
         setBusy(false)
-        onCompleted(action)
         onDismiss()
       })
       .catch((error: unknown) => {
@@ -54,11 +51,11 @@ export function InboxSessionActionSheet({
   }
 
   const doClose = (): void => {
-    run('closed', () => client.closeSession(session.ref))
+    run(() => client.closeSession(session.ref))
   }
 
   const doRemove = (): void => {
-    run('removed', () => client.deleteSession(session.ref))
+    run(() => client.deleteSession(session.ref))
   }
 
   const requestClose = (): void => {

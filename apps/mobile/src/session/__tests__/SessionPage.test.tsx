@@ -757,7 +757,7 @@ describe('SessionPage snapshot rendering', () => {
       ok: true,
     })
     await act(async () => undefined)
-    expect(onFinished).toHaveBeenCalledWith('closed')
+    expect(onFinished).toHaveBeenCalled()
   })
 
   it('confirms before closing a running session', async () => {
@@ -786,7 +786,7 @@ describe('SessionPage snapshot rendering', () => {
       ok: true,
     })
     await act(async () => undefined)
-    expect(onFinished).toHaveBeenCalledWith('closed')
+    expect(onFinished).toHaveBeenCalled()
   })
 
   it('removes a session after confirmation', async () => {
@@ -809,7 +809,7 @@ describe('SessionPage snapshot rendering', () => {
       ok: true,
     })
     await act(async () => undefined)
-    expect(onFinished).toHaveBeenCalledWith('removed')
+    expect(onFinished).toHaveBeenCalled()
   })
 
   it('closes a running session directly once the close preference is off', async () => {
@@ -832,7 +832,7 @@ describe('SessionPage snapshot rendering', () => {
       ok: true,
     })
     await act(async () => undefined)
-    expect(onFinished).toHaveBeenCalledWith('closed')
+    expect(onFinished).toHaveBeenCalled()
   })
 
   it('removes a session directly once the remove preference is off', async () => {
@@ -855,7 +855,7 @@ describe('SessionPage snapshot rendering', () => {
       ok: true,
     })
     await act(async () => undefined)
-    expect(onFinished).toHaveBeenCalledWith('removed')
+    expect(onFinished).toHaveBeenCalled()
   })
 
   it('persists never-ask from the close confirmation', () => {

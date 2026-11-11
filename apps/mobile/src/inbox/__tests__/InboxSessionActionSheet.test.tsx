@@ -19,7 +19,6 @@ function createClient() {
 describe('InboxSessionActionSheet', () => {
   it('closes an idle session directly from the long-press menu', async () => {
     const client = createClient()
-    const onCompleted = vi.fn()
     const onDismiss = vi.fn()
     render(
       <InboxSessionActionSheet
@@ -33,20 +32,17 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={onDismiss}
         onNotice={vi.fn()}
-        onCompleted={onCompleted}
       />,
     )
 
     fireEvent.click(screen.getByTestId('inbox-session-close'))
-    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('closed'))
+    await waitFor(() => expect(onDismiss).toHaveBeenCalled())
     expect(client.closeSession).toHaveBeenCalledWith(expect.objectContaining({ localId: 's1' }))
     expect(screen.queryByTestId('inbox-session-close-sheet')).toBeNull()
-    expect(onDismiss).toHaveBeenCalled()
   })
 
   it('confirms before closing a working session', async () => {
     const client = createClient()
-    const onCompleted = vi.fn()
     render(
       <InboxSessionActionSheet
         client={client}
@@ -55,14 +51,12 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={onCompleted}
       />,
     )
 
     expect(screen.getByTestId('inbox-session-close-sheet')).toBeTruthy()
     fireEvent.click(screen.getByTestId('inbox-session-close-sheet-confirm'))
-    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('closed'))
-    expect(client.closeSession).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(client.closeSession).toHaveBeenCalledTimes(1))
   })
 
   it('confirms when only a background task is still running', () => {
@@ -80,7 +74,6 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={vi.fn()}
       />,
     )
 
@@ -91,7 +84,6 @@ describe('InboxSessionActionSheet', () => {
 
   it('always confirms removal', async () => {
     const client = createClient()
-    const onCompleted = vi.fn()
     render(
       <InboxSessionActionSheet
         client={client}
@@ -104,15 +96,15 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={onCompleted}
       />,
     )
 
     fireEvent.click(screen.getByTestId('inbox-session-remove'))
     expect(screen.getByTestId('inbox-session-remove-sheet')).toBeTruthy()
     fireEvent.click(screen.getByTestId('inbox-session-remove-sheet-confirm'))
-    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('removed'))
-    expect(client.deleteSession).toHaveBeenCalledWith(expect.objectContaining({ localId: 's1' }))
+    await waitFor(() =>
+      expect(client.deleteSession).toHaveBeenCalledWith(expect.objectContaining({ localId: 's1' })),
+    )
   })
 
   it('disables actions while the PC is offline', () => {
@@ -124,7 +116,6 @@ describe('InboxSessionActionSheet', () => {
         online={false}
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={vi.fn()}
       />,
     )
 
@@ -134,7 +125,6 @@ describe('InboxSessionActionSheet', () => {
 
   it('remembers never-ask after closing a working session', async () => {
     const client = createClient()
-    const onCompleted = vi.fn()
     render(
       <InboxSessionActionSheet
         client={client}
@@ -143,7 +133,6 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={onCompleted}
       />,
     )
 
@@ -151,13 +140,12 @@ describe('InboxSessionActionSheet', () => {
     fireEvent.click(screen.getByTestId('inbox-session-close-sheet-never-ask'))
     fireEvent.click(screen.getByTestId('inbox-session-close-sheet-confirm'))
 
-    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('closed'))
+    await waitFor(() => expect(client.closeSession).toHaveBeenCalledTimes(1))
     expect(localStorage.getItem(SESSION_CLOSE_CONFIRM_STORAGE_KEY)).toBe('never')
   })
 
   it('remembers never-ask when removing', async () => {
     const client = createClient()
-    const onCompleted = vi.fn()
     render(
       <InboxSessionActionSheet
         client={client}
@@ -166,7 +154,6 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={onCompleted}
       />,
     )
 
@@ -174,14 +161,13 @@ describe('InboxSessionActionSheet', () => {
     fireEvent.click(screen.getByTestId('inbox-session-remove-sheet-never-ask'))
     fireEvent.click(screen.getByTestId('inbox-session-remove-sheet-confirm'))
 
-    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('removed'))
+    await waitFor(() => expect(client.deleteSession).toHaveBeenCalledTimes(1))
     expect(localStorage.getItem(SESSION_REMOVE_CONFIRM_STORAGE_KEY)).toBe('never')
   })
 
   it('closes a working session directly once the close preference is off', async () => {
     setSessionCloseConfirmEnabled(false)
     const client = createClient()
-    const onCompleted = vi.fn()
     render(
       <InboxSessionActionSheet
         client={client}
@@ -190,21 +176,18 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={onCompleted}
       />,
     )
 
     fireEvent.click(screen.getByTestId('inbox-session-close'))
 
     expect(screen.queryByTestId('inbox-session-close-sheet')).toBeNull()
-    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('closed'))
-    expect(client.closeSession).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(client.closeSession).toHaveBeenCalledTimes(1))
   })
 
   it('removes directly once the remove preference is off', async () => {
     setSessionRemoveConfirmEnabled(false)
     const client = createClient()
-    const onCompleted = vi.fn()
     render(
       <InboxSessionActionSheet
         client={client}
@@ -213,15 +196,13 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={onCompleted}
       />,
     )
 
     fireEvent.click(screen.getByTestId('inbox-session-remove'))
 
     expect(screen.queryByTestId('inbox-session-remove-sheet')).toBeNull()
-    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('removed'))
-    expect(client.deleteSession).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(client.deleteSession).toHaveBeenCalledTimes(1))
   })
 
   it('keeps close confirmation when only the remove preference is off', () => {
@@ -234,7 +215,6 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={vi.fn()}
       />,
     )
 
@@ -253,7 +233,6 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={vi.fn()}
       />,
     )
 
@@ -271,7 +250,6 @@ describe('InboxSessionActionSheet', () => {
         online
         onDismiss={vi.fn()}
         onNotice={vi.fn()}
-        onCompleted={vi.fn()}
       />,
     )
 

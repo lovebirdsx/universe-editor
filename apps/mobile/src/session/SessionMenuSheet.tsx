@@ -29,7 +29,7 @@ export interface SessionMenuSheetProps {
   readonly onOpenSideTasks?: (() => void) | undefined
   readonly onClose: () => void
   readonly onNotice: (text: string) => void
-  readonly onFinished: (action: 'closed' | 'removed') => void
+  readonly onFinished: () => void
 }
 
 type View = 'menu' | 'rename' | 'close' | 'remove'
@@ -72,14 +72,14 @@ export function SessionMenuSheet({
   const doClose = (): void => {
     void run(
       () => client.closeSession(),
-      () => onFinished('closed'),
+      () => onFinished(),
     )
   }
 
   const doRemove = (): void => {
     void run(
       () => client.deleteSession(),
-      () => onFinished('removed'),
+      () => onFinished(),
     )
   }
 

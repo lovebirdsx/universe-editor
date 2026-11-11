@@ -113,7 +113,6 @@ export function InboxPage({
     }
     void client
       .closeSession(session.ref)
-      .then(() => onNotice(strings.sessionCloseNotice))
       .catch((error: unknown) => onNotice(commandErrorText(errorCode(error))))
   }
 
@@ -124,12 +123,7 @@ export function InboxPage({
     }
     void client
       .deleteSession(session.ref)
-      .then(() => onNotice(strings.sessionRemovedNotice))
       .catch((error: unknown) => onNotice(commandErrorText(errorCode(error))))
-  }
-
-  const completedSessionAction = (action: 'closed' | 'removed'): void => {
-    onNotice(action === 'closed' ? strings.sessionCloseNotice : strings.sessionRemovedNotice)
   }
 
   const openDeliveryDetail = (session: MobileSessionSummary): void => {
@@ -196,7 +190,6 @@ export function InboxPage({
           online={socketState === 'connected'}
           onDismiss={() => setSessionAction(undefined)}
           onNotice={onNotice}
-          onCompleted={completedSessionAction}
         />
       )}
       {deliverySheet?.mode === 'confirm' && deliverySession !== undefined && (
