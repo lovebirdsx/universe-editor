@@ -60,17 +60,15 @@ test.describe('mobile delivery', () => {
         mkdirSync(mainDir, { recursive: true })
         git(parent, ['init', '--bare', remoteDir])
         git(mainDir, ['init', '-b', 'main'])
+        // Delivery cherry-picks run inside the extension host, which has no
+        // global git identity on CI runners; the repo config is shared with
+        // every linked worktree (feature and the temporary delivery one).
+        git(mainDir, ['config', 'user.name', 'testuser'])
+        git(mainDir, ['config', 'user.email', 'testuser@example.com'])
+        git(mainDir, ['config', 'commit.gpgsign', 'false'])
         writeFileSync(join(mainDir, 'README.md'), '# delivery demo\n')
         git(mainDir, ['add', '-A'])
-        git(mainDir, [
-          '-c',
-          'user.name=testuser',
-          '-c',
-          'user.email=testuser@example.com',
-          'commit',
-          '-m',
-          'initial',
-        ])
+        git(mainDir, ['commit', '-m', 'initial'])
         git(mainDir, ['remote', 'add', 'origin', remoteDir])
         git(mainDir, ['push', '-u', 'origin', 'main'])
 
@@ -80,15 +78,7 @@ test.describe('mobile delivery', () => {
         git(mainDir, ['worktree', 'add', '-b', 'feature', dir])
         writeFileSync(join(dir, 'feature.txt'), 'feature\n')
         git(dir, ['add', '-A'])
-        git(dir, [
-          '-c',
-          'user.name=testuser',
-          '-c',
-          'user.email=testuser@example.com',
-          'commit',
-          '-m',
-          'feat: add feature file',
-        ])
+        git(dir, ['commit', '-m', 'feat: add feature file'])
       },
     },
   })
@@ -137,7 +127,12 @@ test.describe('mobile delivery', () => {
         undefined,
         120_000,
       )
-      expect(startFrame.ok).toBe(true)
+      if (!startFrame.ok) {
+        // The wire only carries the mobile error code; the git extension's
+        // output channel holds the command and stderr that caused it.
+        const gitLog = await page.evaluate(() => window.__E2E__!.getOutputChannelContent('Git'))
+        throw new Error(`startDelivery failed: ${startFrame.error}\n${gitLog.slice(-4000)}`)
+      }
       const { deliveryId } = startFrame.result as MobileDeliveryStartResult
 
       await expect
