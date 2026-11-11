@@ -3237,6 +3237,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.mention.pickFile.title': '选择要提及的文件',
   'acp.mention.pickFolder.open': '提及',
   'acp.mention.pickFolder.title': '选择要提及的文件夹',
+  'acp.fileAttachment.remove': '移除附件',
   'acp.newSession': '新建会话',
   'acp.newSession.titled': '新建 {name} 会话',
   'acp.newSession.withScope': '新建会话（选择作用域）',

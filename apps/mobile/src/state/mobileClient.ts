@@ -6,6 +6,8 @@ import type {
   MobileAttachmentUploadResult,
   MobileCommandKind,
   MobileAttentionKind,
+  MobileDraftFileRef,
+  MobileDraftImageRef,
   MobileElicitationAction,
   MobileElicitationContentValue,
   MobileNewSessionResult,
@@ -32,7 +34,12 @@ import {
   type WebSocketLike,
 } from '../socket/mobileSocket.js'
 import { probeGatewayHealth, type ConnectionDiagnosis } from '../socket/connectionDiagnosis.js'
-import { CommandClient, CommandError, type CommandRequestOptions } from './commandClient.js'
+import {
+  CommandClient,
+  CommandError,
+  createCommandId,
+  type CommandRequestOptions,
+} from './commandClient.js'
 import { AttachmentClient, httpOriginForSocketUrl } from './attachmentClient.js'
 import {
   isMobileRewindPreview,
@@ -324,12 +331,47 @@ export class MobileClient {
     return this._detail.request(ref, toolCallId)
   }
 
-  sendPrompt(text: string, attachmentIds?: readonly string[]): Promise<void> {
+  sendPrompt(
+    text: string,
+    attachmentIds?: readonly string[],
+    draftImageIds?: readonly string[],
+    draftFileIds?: readonly string[],
+  ): Promise<void> {
     return this._sessionCommand('sendPrompt', (ref) => ({
       ref,
       text,
       ...(attachmentIds !== undefined && attachmentIds.length > 0 ? { attachmentIds } : {}),
+      ...(draftImageIds !== undefined && draftImageIds.length > 0 ? { draftImageIds } : {}),
+      ...(draftFileIds !== undefined && draftFileIds.length > 0 ? { draftFileIds } : {}),
     }))
+  }
+
+  /**
+   * Publish the composer draft to the gateway. Deliberately bypasses
+   * {@link CommandClient}: this is high-frequency and lossy, so there is no
+   * request/response, timeout or idempotency cache. Offline edits stay local.
+   */
+  sendDraft(
+    text: string,
+    caret: number,
+    baseRevision: number,
+    images: readonly MobileDraftImageRef[] = [],
+    files: readonly MobileDraftFileRef[] = [],
+  ): void {
+    const ref = this._currentRef
+    if (ref === undefined || this._socket.state !== 'connected') return
+    this._socket.send({
+      type: 'draft_update',
+      ref,
+      baseRevision,
+      clientUpdateId: createCommandId(),
+      draft: {
+        text,
+        caret,
+        images,
+        ...(files.length > 0 ? { files } : {}),
+      },
+    })
   }
 
   uploadAttachment(file: File, kind: MobileAttachmentKind): Promise<MobileAttachmentUploadResult> {
@@ -358,6 +400,16 @@ export class MobileClient {
       )
     }
     return this._attachments.fetchWorkspaceImage(ref, src)
+  }
+
+  fetchDraftImageBlob(imageId: string): Promise<Blob> {
+    const ref = this._currentRef
+    if (ref === undefined) {
+      return Promise.reject(
+        new CommandError('session_not_found', 'no session is open on the phone'),
+      )
+    }
+    return this._attachments.fetchDraftImage(ref, imageId)
   }
 
   cancelTurn(): Promise<void> {

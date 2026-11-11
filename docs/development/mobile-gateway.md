@@ -136,7 +136,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 12`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 13`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -152,13 +152,15 @@ main 侧不直接读 `AcpSession`。
 `available_commands_snapshot` 增量，供手机输入 `/` 时做内联补全；v12 增加消息图片：
 `MobileTimelineMessageItem.images?` / `MobileMessageUpsertEvent.images?` 只下发
 `{ index, mimeType, size, truncated? }` 元数据，字节经同源 HTTP `/api/sessions/image` 与
-`/api/sessions/file` 按需读取（见 §7b））。
+`/api/sessions/file` 按需读取（见 §7b）；v13 增加双端草稿同步：
+`session_snapshot.draft`、`session_delta` 的 `draft_update` 事件、客户端 `draft_update` 帧与
+`sendPrompt.draftImageIds` / `draftFileIds`（见 §7c））。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
 对该设备开启高风险操作，握手时由 main 的 hub 给出权威值；v7 起的 `hello_ok.capabilities` 为
 
-`['inbox', 'commands', 'notifications', 'history', 'attachments']`（`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
+`['inbox', 'commands', 'notifications', 'history', 'draft', 'attachments']`（`draft` 恒在；`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
 `vapidPublicKey` 只在网关可推送
 时出现，VAPID 公钥走握手而不是额外 HTTP 端点。**token 不放 URL query**，避免进入访问日志与
 Referer。
@@ -175,6 +177,7 @@ Referer。
 | `push_unsubscribe`                          | 注销本设备的 Web Push 订阅                                                                |
 | `set_notification_prefs`                    | `{ enabled, kinds?, alwaysNotify? }`，按设备保存通知偏好                                  |
 | `client_state`                              | `{ visible }`，前台 / 后台声明；前台连接优先收 WS 通知                                    |
+| `draft_update`                              | `{ ref, baseRevision, clientUpdateId, draft }`，高频草稿更新（不做 command 应答）         |
 | `ping`                                      | 心跳，服务端回 `pong`                                                                     |
 
 **命令 kind（v3 已实现）**：
@@ -182,7 +185,7 @@ Referer。
 | 分类        | kind                                     | payload                                         | 说明                                                                                                              |
 | ----------- | ---------------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | 详情        | `getToolCallDetail`                      | `{ ref, toolCallId }`                           | 工具调用详情按需拉取                                                                                              |
-| 会话        | `sendPrompt`                             | `{ ref, text, attachmentIds? }`                 | 空文本 + 附件合法；桥在 prompt 被接受后立即返回                                                                   |
+| 会话        | `sendPrompt`                             | `{ ref, text, attachmentIds?, draftImageIds?, draftFileIds? }` | 空文本 + 附件合法；`draftImageIds` / `draftFileIds` 指向已物化在 PC 草稿中的附件；桥在 prompt 被接受后立即返回                              |
 | 会话        | `cancelTurn`                             | `{ ref }`                                       | 停止当前 turn                                                                                                     |
 | 审批        | `resolvePermission`                      | `{ ref, requestId, optionId, feedback? }`       | 高风险选项被拒                                                                                                    |
 | 审批        | `cancelPermission`                       | `{ ref, requestId }`                            | 取消/关闭待审批卡片                                                                                               |
@@ -556,8 +559,9 @@ Agent 回复中的 ACP `image` block，以及 markdown 引用的 PC 工作区本
 | -------------- | ---------------------------------------------------- | ------------------------------------------- |
 | `GET` / `HEAD` | `/api/sessions/image?windowId&localId&message&index` | 读取指定消息内第 `index` 个 ACP image block |
 | `GET` / `HEAD` | `/api/sessions/file?windowId&localId&path`           | 读取会话工作区内被 markdown 引用的图片文件  |
+| `GET` / `HEAD` | `/api/sessions/draft-image?windowId&localId&image`   | 读取 PC 草稿中 `image` id 对应的图片        |
 
-两个端点都要求 Bearer 设备 token，非 `GET` / `HEAD` 返回 405；参数按严格十进制整数 / 长度上限校验，
+这些端点都要求 Bearer 设备 token，非 `GET` / `HEAD` 返回 405；参数按严格十进制整数 / 长度上限校验，
 失败 400；找不到会话、消息、文件或越界统一 404 `attachment_not_found`（不泄露路径是否存在）。
 响应只允许 `image/png|jpeg|webp|gif`（SVG 明确排除），带 `Content-Type` / `Content-Length` /
 `Content-Disposition: inline` / `Cache-Control: no-store`，`HEAD` 不发送 body。
@@ -581,6 +585,33 @@ Agent 直接给出的 `http(s)` 外链由手机浏览器直接加载——PC 不
 **已知限制**：工具调用详情（`ToolCallDetail`）里的图片不在本次范围；多图画廊、保存 / 分享、
 SVG 预览未提供。流式期间 `message.id` 稳定，resume 后可能重编号，正在进行的图片请求会 404，
 重挂载后按新 id 重新拉取即可。
+
+## 7c. 输入框草稿同步（协议 v13）
+
+PC 与手机打开同一会话时，两端输入框共享一份草稿（文本、光标、图片、手机上传的文件）。
+`MobileGatewayHub` 为每个 `windowId:localId` 维护一个轻量 registry，并分配单调递增的
+`revision`；两端都按「最后写入者覆盖」处理，不做冲突提示。
+
+- **PC 来源**：`AcpPromptDraftCache` 仍是 PC 内容真身。`MobileBridgeService.startStreaming()`
+  订阅其变更，仅在 `source === 'local'` 时按 250ms 防抖发布；`echo` 帧不回传。
+- **手机来源**：客户端直接发 `draft_update`（不经 command 的请求 / 超时 / 幂等路径），payload
+  只允许 `text` / `caret` / `images` / `files`。hub 先调 `bridge.applyDraft` 写入 PC cache，
+  再更新 registry 并 fan-out；内容未变时只回发起者一个带 `clientUpdateId` 的 ack。
+- **快照**：`session_snapshot.draft` 带 registry 当前草稿；订阅时先用 PC bridge 快照里的草稿
+  播种，registry 优先。空草稿删除 registry 条目并广播一次空状态，避免重连后复活。
+- **refs/contexts**：结构化 @/# 引用只活在 PC cache。投影成只读摘要随草稿下发；手机改文本时
+  PC 清空 refs（字符区间失效）、保留 contexts，仅光标 / 附件变化时两者都保留。
+- **附件**：WS 只传 id + 元数据，字节不走 WS。手机草稿里的图片 / 文件首次出现时，hub 用
+  `MobileAttachmentStore.resolveForPrompt` 取字节并 `bridge.attachDraftAttachments` 物化到
+  PC cache；PC 粘贴的图片经 `/api/sessions/draft-image` 给手机预览。手机发送时，本机上传的
+  附件走 `attachmentIds`，草稿中已有的图片 / 文件走 `draftImageIds` / `draftFileIds`，由
+  `bridge.resolveDraftAttachments` 合并进同一次 prompt。prompt 被接受后 hub 清空 registry 与
+  PC cache，并广播空草稿。
+- **只读 / 未订阅**：readOnly 会话拒绝 `bridge.applyDraft`，hub 丢弃该更新；未订阅的会话直接忽略。
+- **手机本地兜底**：手机把 `{ text, caret, updatedAt }` 写到 sessionStorage（v2 key，最多 20 条
+  LRU；旧版纯文本 key 读取后自动迁移）。重连后仅当 hub 没有更新的草稿才补发本地内容；IME
+  合成期间先缓存远端草稿，结束后再应用。
+- **敏感内容**：草稿不写日志、不进审计与推送；日志只记录长度 / revision / 附件数一类的摘要。
 
 ## 8. 配对与安全
 

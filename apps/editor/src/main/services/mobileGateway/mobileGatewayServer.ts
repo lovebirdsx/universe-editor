@@ -26,6 +26,7 @@ import {
   MOBILE_ATTACHMENT_UPLOAD_PATH,
   MOBILE_CERT_PATH,
   MOBILE_CLOSE_CODES,
+  MOBILE_DRAFT_IMAGE_PATH,
   MOBILE_HEALTH_PATH,
   MOBILE_PAIR_PATH,
   MOBILE_PROTOCOL_VERSION,
@@ -400,6 +401,10 @@ export class MobileGatewayServer {
       await this._handleSessionImage(req, res, url.searchParams)
       return
     }
+    if (pathname === MOBILE_DRAFT_IMAGE_PATH) {
+      await this._handleDraftImage(req, res, url.searchParams)
+      return
+    }
     if (pathname === MOBILE_SESSION_FILE_PATH) {
       await this._handleSessionWorkspaceImage(req, res, url.searchParams)
       return
@@ -742,6 +747,37 @@ export class MobileGatewayServer {
     this._sendImage(req, res, image.mimeType, image.bytes)
   }
 
+  /** Preview bytes for an image the PC pasted into the shared draft. */
+  private async _handleDraftImage(
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: URLSearchParams,
+  ): Promise<void> {
+    const deviceId = await this._authenticateDevice(req, res)
+    if (deviceId === undefined) return
+    if (!this._allowImageRead(req, res)) return
+    const hub = this._options.hub
+    if (hub === undefined) {
+      this._sendJson(res, 404, { code: 'not_supported', message: 'image api is unavailable' })
+      return
+    }
+    const ref = sessionRefFromQuery(params)
+    const imageId = params.get('image') ?? ''
+    if (ref === undefined || imageId === '' || imageId.length > MAX_ID_LENGTH) {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'invalid draft image request' })
+      return
+    }
+    const image = await hub.readDraftImage(ref, imageId)
+    if (image === undefined) {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'image is not available',
+      })
+      return
+    }
+    this._sendImage(req, res, image.mimeType, image.bytes)
+  }
+
   /** Image bytes for a markdown-referenced workspace file (confined to the session cwd). */
   private async _handleSessionWorkspaceImage(
     req: IncomingMessage,
@@ -991,6 +1027,15 @@ export class MobileGatewayServer {
       case 'client_state':
         connection.visible = parsed.value.visible
         break
+      case 'draft_update':
+        if (connection.hubConnection !== undefined) {
+          void this._options.hub
+            ?.handleDraftUpdate(connection.hubConnection, parsed.value)
+            .catch((err) => {
+              this._options.logger.warn(`mobile draft update failed: ${String(err)}`)
+            })
+        }
+        break
       case 'push_subscribe':
         await this._handlePushSubscribe(connection, parsed.value)
         break
@@ -1127,6 +1172,7 @@ export class MobileGatewayServer {
         'commands',
         'notifications',
         'history',
+        'draft',
         ...(this._options.attachments !== undefined ? ['attachments'] : []),
       ],
       ...(this._options.vapidPublicKey !== undefined

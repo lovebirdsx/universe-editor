@@ -369,8 +369,15 @@ export function SessionPage({
               fileSupported={state.summary?.authority === undefined}
               commands={state.availableCommands}
               onUploadAttachment={(file, kind) => client.uploadAttachment(file, kind)}
+              fetchDraftImage={(imageId) => client.fetchDraftImageBlob(imageId)}
               prefill={prefill}
-              onSend={(text, attachmentIds) => client.sendPrompt(text, attachmentIds)}
+              draft={state.draft}
+              onDraftChange={(text, caret, baseRevision, images, files) =>
+                client.sendDraft(text, caret, baseRevision, images, files)
+              }
+              onSend={(text, attachmentIds, draftImageIds, draftFileIds) =>
+                client.sendPrompt(text, attachmentIds, draftImageIds, draftFileIds)
+              }
               onStop={() => client.cancelTurn()}
               onNotice={notice}
             />

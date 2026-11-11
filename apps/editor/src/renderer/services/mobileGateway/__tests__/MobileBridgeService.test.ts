@@ -35,6 +35,7 @@ import type {
   TimelineItem,
 } from '../../acp/session/acpSession.js'
 import type { IAcpSessionService } from '../../acp/session/acpSessionService.js'
+import { AcpPromptDraftCache } from '../../acp/session/acpPromptDraftCache.js'
 import type {
   AcpSessionHistoryEntry,
   IAcpSessionHistoryService,
@@ -45,6 +46,7 @@ import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmSe
 import {
   MOBILE_BRIDGE_LARGE_THROTTLE_MS,
   MOBILE_BRIDGE_THROTTLE_MS,
+  MOBILE_DRAFT_THROTTLE_MS,
   MobileBridgeService,
 } from '../MobileBridgeService.js'
 import type { MobileBridgeEvent } from '../../../../shared/ipc/mobileGatewayService.js'
@@ -350,6 +352,175 @@ describe('MobileBridgeService', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    AcpPromptDraftCache._resetForTests()
+  })
+
+  it('publishes a locally edited draft after the debounce window', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    await harness.service.startStreaming()
+
+    AcpPromptDraftCache.save('s1', { text: 'hi', caret: 2 })
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
+
+    expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([
+      { kind: 'draft', localId: 's1', draft: { text: 'hi', caret: 2, images: [] } },
+    ])
+  })
+
+  it('applies a phone draft to the cache without echoing it back', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    await harness.service.startStreaming()
+
+    const result = await harness.service.applyDraft('s1', {
+      text: 'from phone',
+      caret: 4,
+      images: [],
+    })
+    expect(result).toStrictEqual({ ok: true, value: undefined })
+    expect(AcpPromptDraftCache.load('s1')?.text).toBe('from phone')
+    expect(AcpPromptDraftCache.load('s1')?.caret).toBe(4)
+
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
+    expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([])
+  })
+
+  it('cancels a queued local publish when a phone draft arrives first', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    await harness.service.startStreaming()
+
+    AcpPromptDraftCache.save('s1', { text: 'local edit', caret: 11 })
+    await harness.service.applyDraft('s1', { text: 'from phone', caret: 10, images: [] })
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
+
+    expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([])
+  })
+
+  it('publishes a pasted picture immediately instead of behind the typing debounce', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    await harness.service.startStreaming()
+
+    AcpPromptDraftCache.save('s1', { text: 'hi', caret: 2 })
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
+    expect(harness.events.filter((event) => event.kind === 'draft')).toHaveLength(1)
+
+    AcpPromptDraftCache.save('s1', {
+      text: 'hi',
+      caret: 2,
+      images: [{ id: 'img-1', mimeType: 'image/png', dataBase64: 'AQID', byteSize: 3 } as never],
+    })
+
+    expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([
+      { kind: 'draft', localId: 's1', draft: { text: 'hi', caret: 2, images: [] } },
+      {
+        kind: 'draft',
+        localId: 's1',
+        draft: {
+          text: 'hi',
+          caret: 2,
+          images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3 }],
+        },
+      },
+    ])
+  })
+
+  it('rejects a phone draft for a read-only session', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { readOnly: true }))
+
+    const result = await harness.service.applyDraft('s1', { text: 'nope', caret: 4, images: [] })
+
+    expect(result).toMatchObject({ ok: false, code: 'session_read_only' })
+    expect(AcpPromptDraftCache.load('s1')).toBeUndefined()
+  })
+
+  it('serves bytes for a picture pasted on the PC', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    AcpPromptDraftCache.save('s1', {
+      text: '',
+      images: [
+        {
+          id: 'img-1',
+          mimeType: 'image/png',
+          dataBase64: 'AQID',
+          byteSize: 3,
+        },
+      ],
+    })
+
+    const image = await harness.service.getDraftImage('s1', 'img-1')
+
+    expect(image?.mimeType).toBe('image/png')
+    expect([...image!.bytes]).toEqual([1, 2, 3])
+    await expect(harness.service.getDraftImage('s1', 'missing')).resolves.toBeUndefined()
+  })
+
+  it('materializes phone attachments into the draft and resolves them for sending', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+
+    await harness.service.attachDraftAttachments('s1', [
+      {
+        kind: 'image',
+        id: 'img-1',
+        name: 'shot.png',
+        mimeType: 'image/png',
+        byteSize: 3,
+        dataBase64: 'AQID',
+      },
+      {
+        kind: 'file',
+        id: 'file-1',
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        byteSize: 7,
+        uri: 'file:///tmp/notes.txt',
+      },
+    ])
+
+    const draft = AcpPromptDraftCache.load('s1')
+    expect(draft?.images?.[0]).toMatchObject({ id: 'img-1', attachmentId: 'img-1' })
+    expect(draft?.files?.[0]).toMatchObject({ id: 'file-1', uri: 'file:///tmp/notes.txt' })
+
+    const resolved = await harness.service.resolveDraftAttachments('s1', ['img-1'], ['file-1'])
+    expect(resolved).toStrictEqual({
+      ok: true,
+      value: [
+        {
+          kind: 'image',
+          id: 'img-1',
+          name: 'shot.png',
+          mimeType: 'image/png',
+          byteSize: 3,
+          dataBase64: 'AQID',
+        },
+        {
+          kind: 'file',
+          id: 'file-1',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          byteSize: 7,
+          uri: 'file:///tmp/notes.txt',
+        },
+      ],
+    })
+
+    await expect(
+      harness.service.resolveDraftAttachments('s1', ['img-1', 'missing']),
+    ).resolves.toMatchObject({ ok: false, code: 'attachment_not_found' })
+  })
+
+  it('clears the shared draft on request', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    AcpPromptDraftCache.save('s1', { text: 'draft' })
+
+    await expect(harness.service.clearDraft('s1')).resolves.toEqual({ ok: true, value: undefined })
+    expect(AcpPromptDraftCache.load('s1')).toBeUndefined()
   })
 
   it('does no work before startStreaming', async () => {
@@ -524,13 +695,15 @@ describe('MobileBridgeService', () => {
     if (item?.kind !== 'toolCall') throw new Error('expected a tool call')
     expect(item.title.length).toBe(MAX_TITLE_LENGTH)
 
-    const { localId, durableId, ...wireSummary } = snapshot!.summary
+    const { summary, draft: bridgeDraft, ...wireSnapshot } = snapshot!
+    expect(bridgeDraft).toBeUndefined()
+    const { localId, durableId, ...wireSummary } = summary
     const frame: SessionSnapshotFrame = {
       type: 'session_snapshot',
       seq: 1,
       session: {
         seq: 1,
-        ...snapshot!,
+        ...wireSnapshot,
         summary: {
           ...wireSummary,
           ref: {

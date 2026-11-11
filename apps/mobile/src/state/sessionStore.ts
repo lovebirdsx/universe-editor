@@ -1,6 +1,7 @@
 import type {
   MobileAvailableCommand,
   MobileConfigOption,
+  MobileDraftState,
   MobileMessageUpsertEvent,
   MobilePendingElicitation,
   MobilePendingPermission,
@@ -38,6 +39,8 @@ export interface SessionState {
   readonly pendingPermission: MobilePendingPermission | undefined
   readonly pendingElicitation: MobilePendingElicitation | undefined
   readonly permissionCleared: PermissionClearedInfo | undefined
+  /** Latest draft published by the PC or another phone (hub registry). */
+  readonly draft: MobileDraftState | undefined
   readonly isReplayingHistory: boolean
   readonly truncated: boolean
   readonly seq: number | undefined
@@ -63,6 +66,7 @@ const EMPTY: SessionState = {
   pendingPermission: undefined,
   pendingElicitation: undefined,
   permissionCleared: undefined,
+  draft: undefined,
   isReplayingHistory: false,
   truncated: false,
   seq: undefined,
@@ -98,6 +102,7 @@ export class SessionStore extends Store<SessionState> {
       pendingPermission: snapshot.pendingPermission,
       pendingElicitation: snapshot.pendingElicitation,
       permissionCleared: undefined,
+      draft: snapshot.draft,
       isReplayingHistory: snapshot.isReplayingHistory,
       truncated: snapshot.truncated === true,
       seq: frame.seq,
@@ -183,6 +188,11 @@ function applyEvent(
       return { ...state, pendingElicitation: event.elicitation }
     case 'elicitation_cleared':
       return { ...state, pendingElicitation: undefined }
+    case 'draft_update':
+      // The gateway owns the revision order; an out-of-order or stale update
+      // must not roll the composer back to older text.
+      if (state.draft !== undefined && event.draft.revision < state.draft.revision) return state
+      return { ...state, draft: event.draft }
     default: {
       const unknown = event as { readonly type?: unknown }
       logger.warn(`mobile session: ignoring unknown event ${String(unknown.type)}`)

@@ -2525,6 +2525,33 @@ describe('PromptInput — draft persistence', () => {
     })
   })
 
+  it('applies a phone-authored draft without publishing it back as a local edit', () => {
+    renderWithServices(<PromptInput session={makeSession({ id: 's1' })} />)
+    const sources: string[] = []
+    const subscription = AcpPromptDraftCache.onDidChange((event) => {
+      sources.push(event.source)
+    })
+
+    act(() => {
+      AcpPromptDraftCache.save('s1', { text: 'typed on the phone', caret: 5 }, { source: 'remote' })
+    })
+
+    subscription.dispose()
+    expect(getTextarea().value).toBe('typed on the phone')
+    expect(sources).toEqual(['remote'])
+  })
+
+  it('clears the input for a remote empty draft', () => {
+    renderWithServices(<PromptInput session={makeSession({ id: 's1' })} />)
+    fireEvent.change(getTextarea(), { target: { value: 'local text' } })
+
+    act(() => {
+      AcpPromptDraftCache.clear('s1', { source: 'remote' })
+    })
+
+    expect(getTextarea().value).toBe('')
+  })
+
   it('clears the draft after the prompt is sent', () => {
     const session = makeSession({ id: 's1' })
     renderWithServices(<PromptInput session={session} />)

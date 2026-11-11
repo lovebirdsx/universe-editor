@@ -432,3 +432,32 @@ describe('SessionStore sequencing and removal', () => {
     expect(store.getState().removed).toBe(false)
   })
 })
+
+describe('SessionStore draft', () => {
+  const draft = (revision: number, text: string) => ({
+    text,
+    caret: text.length,
+    images: [],
+    revision,
+    updatedAt: revision,
+    source: 'pc' as const,
+  })
+
+  it('copies the snapshot draft', () => {
+    const store = new SessionStore()
+    store.applySnapshot(sessionSnapshotFrame(1, { draft: draft(3, 'pc draft') }))
+
+    expect(store.getState().draft).toEqual(draft(3, 'pc draft'))
+  })
+
+  it('applies draft deltas and ignores older revisions', () => {
+    const store = new SessionStore()
+    store.applySnapshot(sessionSnapshotFrame(1, { draft: draft(2, 'old') }))
+
+    store.applyDelta(sessionDeltaFrame(2, [{ type: 'draft_update', draft: draft(3, 'new') }]))
+    expect(store.getState().draft?.text).toBe('new')
+
+    store.applyDelta(sessionDeltaFrame(3, [{ type: 'draft_update', draft: draft(1, 'stale') }]))
+    expect(store.getState().draft?.text).toBe('new')
+  })
+})

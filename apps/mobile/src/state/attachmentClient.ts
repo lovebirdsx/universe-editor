@@ -3,6 +3,7 @@ import {
   MOBILE_ATTACHMENT_NAME_HEADER,
   MOBILE_ATTACHMENT_PATH_PREFIX,
   MOBILE_ATTACHMENT_UPLOAD_PATH,
+  MOBILE_DRAFT_IMAGE_PATH,
   MOBILE_SESSION_FILE_PATH,
   MOBILE_SESSION_IMAGE_PATH,
   isMobileAttachmentKind,
@@ -101,6 +102,11 @@ export class AttachmentClient {
   /** Bytes of a markdown-referenced workspace image, resolved on the PC. */
   async fetchWorkspaceImage(ref: MobileSessionRef, src: string): Promise<Blob> {
     return this._fetchBlob(MOBILE_SESSION_FILE_PATH, { ...refQuery(ref), path: src })
+  }
+
+  /** Bytes of a picture the PC pasted into the shared draft. */
+  async fetchDraftImage(ref: MobileSessionRef, imageId: string): Promise<Blob> {
+    return this._fetchBlob(MOBILE_DRAFT_IMAGE_PATH, { ...refQuery(ref), image: imageId })
   }
 
   private async _fetchBlob(pathname: string, params?: Record<string, string>): Promise<Blob> {

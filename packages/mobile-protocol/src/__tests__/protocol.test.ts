@@ -232,6 +232,11 @@ describe('parseClientFrame', () => {
         kind: 'sendPrompt',
         payload: { ref: REF, text: '', attachmentIds: ['a1', 'a2'] },
       },
+      { kind: 'sendPrompt', payload: { ref: REF, text: '', draftImageIds: ['img-1'] } },
+      {
+        kind: 'sendPrompt',
+        payload: { ref: REF, text: '', draftImageIds: ['img-1'], draftFileIds: ['file-1'] },
+      },
       { kind: 'cancelTurn', payload: { ref: REF } },
       {
         kind: 'resolvePermission',
@@ -313,6 +318,9 @@ describe('parseClientFrame', () => {
         },
       },
       { kind: 'sendPrompt', payload: { ref: REF, text: '', attachmentIds: [''] } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: '', draftImageIds: 'img-1' } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: '', draftFileIds: ['file-1', 'file-1'] } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: '', draftImageIds: ['img-1', 'img-1'] } },
       { kind: 'resolvePermission', payload: { ref: REF, optionId: 'allow' } },
       {
         kind: 'resolveElicitation',
@@ -454,6 +462,66 @@ describe('parseClientFrame', () => {
   it('rejects frames larger than the client limit', () => {
     expect(errorCode(parseClientFrame('x'.repeat(MAX_CLIENT_FRAME_BYTES + 1)))).toBe('bad_request')
   })
+
+  it('parses draft_update and rejects phone-authored refs/contexts', () => {
+    const frame = {
+      type: 'draft_update',
+      ref: DURABLE_REF,
+      baseRevision: 3,
+      clientUpdateId: 'update-1',
+      draft: {
+        text: 'hello @src/a.ts',
+        caret: 6,
+        images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 12, name: 'a.png' }],
+        files: [{ id: 'file-1', name: 'notes.txt', byteSize: 4 }],
+      },
+    }
+    expect(parseClientFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+    expect(
+      errorCode(
+        parseClientFrame(JSON.stringify({ ...frame, draft: { ...frame.draft, refs: [] } })),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseClientFrame(JSON.stringify({ ...frame, draft: { ...frame.draft, contexts: [] } })),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseClientFrame(JSON.stringify({ ...frame, draft: { ...frame.draft, caret: 99 } })),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseClientFrame(
+          JSON.stringify({
+            ...frame,
+            draft: {
+              ...frame.draft,
+              images: [
+                { id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 12 },
+                { id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 12 },
+              ],
+            },
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseClientFrame(
+          JSON.stringify({
+            ...frame,
+            draft: {
+              ...frame.draft,
+              images: [{ id: 'img-1', source: 'pc', mimeType: 'image/svg+xml', byteSize: 12 }],
+            },
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+  })
 })
 
 describe('parseServerFrame', () => {
@@ -519,6 +587,85 @@ describe('parseServerFrame', () => {
   it('parses a full session snapshot', () => {
     const frame = { type: 'session_snapshot', seq: 2, session: snapshotJson() }
     expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+  })
+
+  it('parses a session snapshot with a shared draft', () => {
+    const draft = {
+      text: 'hello',
+      caret: 5,
+      images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 12 }],
+      files: [{ id: 'file-1', name: 'a.txt', byteSize: 2 }],
+      refs: [{ id: 'ref-1', kind: 'file', label: 'src/a.ts', start: 0, end: 5 }],
+      contexts: [{ relPath: 'src/a.ts', startLine: 1, endLine: 2, languageId: 'typescript' }],
+      revision: 4,
+      updatedAt: 1_700_000_000_000,
+      source: 'pc',
+    }
+    const frame = { type: 'session_snapshot', seq: 2, session: snapshotJson({ draft }) }
+    expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+    expect(
+      errorCode(
+        parseServerFrame(
+          JSON.stringify({
+            ...frame,
+            session: snapshotJson({ draft: { ...draft, source: 'phone' } }),
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame(
+          JSON.stringify({
+            ...frame,
+            session: snapshotJson({ draft: { ...draft, caret: 99 } }),
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame(
+          JSON.stringify({
+            ...frame,
+            session: snapshotJson({
+              draft: {
+                ...draft,
+                refs: [{ id: 'ref-1', kind: 'file', label: 'x', start: 4, end: 2 }],
+              },
+            }),
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
+  })
+
+  it('parses a draft_update session delta event', () => {
+    const draft = {
+      text: 'hi',
+      caret: 2,
+      images: [],
+      revision: 5,
+      updatedAt: 1_700_000_000_000,
+      source: 'mobile',
+    }
+    const frame = {
+      type: 'session_delta',
+      seq: 9,
+      ref: DURABLE_REF,
+      events: [{ type: 'draft_update', draft, clientUpdateId: 'update-1' }],
+    }
+    expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+    expect(
+      errorCode(
+        parseServerFrame(
+          JSON.stringify({
+            ...frame,
+            events: [{ type: 'draft_update', draft: { ...draft, caret: 9 } }],
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
   })
 
   it('parses a minimal session snapshot without optional fields', () => {

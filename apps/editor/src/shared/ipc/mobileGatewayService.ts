@@ -11,6 +11,10 @@ import { createDecorator, type CancellationToken, type Event } from '@universe-e
 import type {
   MobileAgentCandidate,
   MobileAttentionKind,
+  MobileDraftContextSummary,
+  MobileDraftFileRef,
+  MobileDraftImageRef,
+  MobileDraftRefSummary,
   MobileElicitationAction,
   MobileElicitationContentValue,
   MobileErrorCode,
@@ -315,9 +319,21 @@ export interface MobileBridgeSessionHistoryEntry {
 
 export interface MobileBridgeSessionSnapshot extends Omit<
   MobileSessionSnapshot,
-  'seq' | 'summary'
+  'seq' | 'summary' | 'draft'
 > {
   readonly summary: MobileBridgeSessionSummary
+  /** Renderer-side draft; main stamps the gateway-assigned revision and source. */
+  readonly draft?: MobileBridgeDraft
+}
+
+/** Draft content produced by a renderer; the gateway owns revision/order. */
+export interface MobileBridgeDraft {
+  readonly text: string
+  readonly caret: number
+  readonly images: readonly MobileDraftImageRef[]
+  readonly files?: readonly MobileDraftFileRef[]
+  readonly refs?: readonly MobileDraftRefSummary[]
+  readonly contexts?: readonly MobileDraftContextSummary[]
 }
 
 /**
@@ -356,10 +372,18 @@ export interface MobileBridgeAttentionEvent {
   readonly permissionTitle?: string
 }
 
+export interface MobileBridgeDraftChange {
+  readonly kind: 'draft'
+  readonly localId: string
+  /** Absent means the draft was cleared (submitted / session closed). */
+  readonly draft: MobileBridgeDraft | undefined
+}
+
 export type MobileBridgeEvent =
   | MobileBridgeInboxChange
   | MobileBridgeSessionDelta
   | MobileBridgeAttentionEvent
+  | MobileBridgeDraftChange
 
 /** Bridge-level command failure. `code` is the protocol error code sent back to the phone. */
 export interface MobileBridgeCommandError {
@@ -504,6 +528,41 @@ export interface IMobileBridgeService {
     src: string,
     token?: CancellationToken,
   ): Promise<MobileBridgeImage | undefined>
+
+  /**
+   * Apply a draft authored by the phone. Writes the renderer's draft cache even
+   * when no PromptInput is mounted; the next mount restores it.
+   */
+  applyDraft(localId: string, draft: MobileBridgeDraft): Promise<MobileBridgeResult<void>>
+
+  /**
+   * Bytes for a picture the PC pasted into the draft. `undefined` when the id
+   * is not (or no longer) part of the draft.
+   */
+  getDraftImage(
+    localId: string,
+    imageId: string,
+    token?: CancellationToken,
+  ): Promise<MobileBridgeImage | undefined>
+
+  /**
+   * Materialize phone-uploaded attachments into the draft cache. Called when a
+   * phone draft first references them, so PromptInput can render the chips.
+   */
+  attachDraftAttachments(
+    localId: string,
+    attachments: readonly MobileBridgePromptAttachment[],
+  ): Promise<MobileBridgeResult<void>>
+
+  /** Draft attachments (PC-pasted images / another phone's files), ready to be sent. */
+  resolveDraftAttachments(
+    localId: string,
+    imageIds: readonly string[],
+    fileIds?: readonly string[],
+  ): Promise<MobileBridgeResult<readonly MobileBridgePromptAttachment[]>>
+
+  /** Drop the shared draft after a prompt was sent (from either side). */
+  clearDraft(localId: string): Promise<MobileBridgeResult<void>>
 
   // ---- Mutating commands (M3) -------------------------------------------------
 

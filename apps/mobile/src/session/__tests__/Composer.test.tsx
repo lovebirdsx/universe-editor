@@ -2,7 +2,7 @@ import type { MobileAttachmentUploadResult } from '@universe-editor/mobile-proto
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strings } from '../../strings.js'
-import { Composer, draftKey } from '../Composer.js'
+import { Composer, draftKey, legacyDraftKey, readDraft, writeDraft } from '../Composer.js'
 
 beforeEach(() => {
   sessionStorage.clear()
@@ -24,6 +24,7 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     createdAt: 1,
   }))
   const onNotice = vi.fn()
+  const onDraftChange = vi.fn()
   const props = {
     sessionKey: '1:s1',
     readOnly: false,
@@ -33,13 +34,22 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     fileSupported: true,
     commands: [],
     onUploadAttachment,
+    fetchDraftImage: vi.fn(async () => new Blob()),
+    onDraftChange,
     onSend,
     onStop,
     onNotice,
     ...overrides,
   }
   const view = render(<Composer {...props} />)
-  return { onSend, onStop, onUploadAttachment, onNotice, unmount: view.unmount }
+  return {
+    onSend,
+    onStop,
+    onUploadAttachment,
+    onNotice,
+    onDraftChange,
+    unmount: view.unmount,
+  }
 }
 
 function pickFile(name: string, type: string): void {
@@ -62,7 +72,7 @@ describe('Composer', () => {
     const send = screen.getByTestId('composer-send')
     fireEvent.click(send)
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello phone', []))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello phone', [], [], []))
     await waitFor(() => expect(input.value).toBe(''))
     expect(sessionStorage.getItem(draftKey('1:s1'))).toBeNull()
   })
@@ -103,7 +113,7 @@ describe('Composer', () => {
     const send = screen.getByTestId('composer-send') as HTMLButtonElement
     await waitFor(() => expect(send.disabled).toBe(false))
     fireEvent.click(send)
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1']))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], []))
     expect(screen.queryByTestId('composer-attachments')).toBeNull()
   })
 
@@ -225,7 +235,7 @@ describe('Composer', () => {
     await waitFor(() => expect(send.disabled).toBe(false))
     fireEvent.click(send)
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1']))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], []))
     expect(revoke).toHaveBeenCalledWith(src)
   })
 
@@ -270,33 +280,54 @@ describe('Composer', () => {
   })
 
   it('restores and saves the per-session draft', () => {
-    sessionStorage.setItem(draftKey('1:s1'), 'unfinished')
+    sessionStorage.setItem(legacyDraftKey('1:s1'), 'unfinished')
     renderComposer()
     const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
     expect(input.value).toBe('unfinished')
 
     fireEvent.change(input, { target: { value: 'updated' } })
-    expect(sessionStorage.getItem(draftKey('1:s1'))).toBe('updated')
+    expect(readDraft('1:s1').text).toBe('updated')
     expect(sessionStorage.getItem(draftKey('2:s2'))).toBeNull()
   })
 
+  it('migrates a legacy per-session draft into the v2 store', () => {
+    sessionStorage.setItem(legacyDraftKey('1:s1'), 'legacy text')
+    renderComposer()
+    const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+    expect(input.value).toBe('legacy text')
+    expect(sessionStorage.getItem(legacyDraftKey('1:s1'))).toBeNull()
+    expect(readDraft('1:s1').text).toBe('legacy text')
+  })
+
+  it('prunes the least recently written drafts beyond the storage cap', () => {
+    for (let index = 0; index < 20; index += 1) {
+      writeDraft(`sk-${index}`, `text ${index}`, 0, index)
+    }
+    writeDraft('sk-new', 'fresh', 0, 100)
+
+    expect(sessionStorage.getItem(draftKey('sk-0'))).toBeNull()
+    expect(readDraft('sk-1').text).toBe('text 1')
+    expect(readDraft('sk-new').text).toBe('fresh')
+  })
+
   it('applies a backfill over the stored draft and refocuses the input', () => {
-    sessionStorage.setItem(draftKey('1:s1'), 'old draft')
+    sessionStorage.setItem(legacyDraftKey('1:s1'), 'old draft')
     renderComposer({ prefill: { token: 1, sessionKey: '1:s1', text: '> quoted\n\n' } })
     const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
 
     expect(input.value).toBe('> quoted\n\n')
     expect(document.activeElement).toBe(input)
-    expect(sessionStorage.getItem(draftKey('1:s1'))).toBe('> quoted\n\n')
+    expect(readDraft('1:s1').text).toBe('> quoted\n\n')
   })
 
   it('ignores a backfill that belongs to another session', () => {
-    sessionStorage.setItem(draftKey('1:s1'), 'old draft')
+    sessionStorage.setItem(legacyDraftKey('1:s1'), 'old draft')
     renderComposer({ prefill: { token: 1, sessionKey: '2:s2', text: 'leaked prompt' } })
     const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
 
     expect(input.value).toBe('old draft')
-    expect(sessionStorage.getItem(draftKey('1:s1'))).toBe('old draft')
+    expect(readDraft('1:s1').text).toBe('old draft')
   })
 
   it('reapplies the same text when the token changes', () => {
@@ -400,7 +431,7 @@ describe('Composer', () => {
     })
 
     it('does not pop the list for a restored draft until the user edits', () => {
-      sessionStorage.setItem(draftKey('1:s1'), '/diff')
+      sessionStorage.setItem(legacyDraftKey('1:s1'), '/diff')
       renderComposer({ commands })
       const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
       fireEvent.focus(input)
@@ -410,6 +441,74 @@ describe('Composer', () => {
       expect(screen.queryByTestId('composer-command-panel')).toBeNull()
       type(input, '/dif')
       expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
+    })
+  })
+
+  describe('draft sync', () => {
+    const remote = (revision: number, text: string) => ({
+      text,
+      caret: text.length,
+      images: [],
+      revision,
+      updatedAt: revision,
+      source: 'pc' as const,
+    })
+
+    it('applies a remote draft without publishing it back', async () => {
+      const onDraftChange = vi.fn()
+      render(<Composer {...composerProps({ draft: remote(4, 'from pc'), onDraftChange })} />)
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+      await waitFor(() => expect(input.value).toBe('from pc'))
+      expect(onDraftChange).not.toHaveBeenCalled()
+    })
+
+    it('publishes a local edit after the debounce with the last seen revision', async () => {
+      const onDraftChange = vi.fn()
+      render(<Composer {...composerProps({ draft: remote(4, 'from pc'), onDraftChange })} />)
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() => expect(input.value).toBe('from pc'))
+
+      fireEvent.change(input, { target: { value: 'typed here' } })
+
+      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[0]).toBe('typed here'))
+      expect(onDraftChange.mock.calls[0]?.[2]).toBe(4)
+    })
+
+    it('renders a PC draft picture and can withdraw it', async () => {
+      const onDraftChange = vi.fn()
+      const draft = {
+        ...remote(4, ''),
+        images: [
+          {
+            id: 'img-1',
+            source: 'pc' as const,
+            mimeType: 'image/png',
+            byteSize: 3,
+            name: 'shot.png',
+          },
+        ],
+      }
+      render(<Composer {...composerProps({ draft, onDraftChange })} />)
+
+      expect(screen.getByTestId('composer-draft-images')).toBeTruthy()
+      fireEvent.click(screen.getByLabelText(strings.draftImageRemove))
+
+      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[3]).toEqual([]))
+    })
+
+    it('shows a draft file from another phone and can withdraw it', async () => {
+      const onDraftChange = vi.fn()
+      const draft = {
+        ...remote(4, ''),
+        files: [{ id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', byteSize: 7 }],
+      }
+      render(<Composer {...composerProps({ draft, onDraftChange })} />)
+
+      expect(screen.getByTestId('composer-draft-files')).toBeTruthy()
+      fireEvent.click(screen.getByLabelText(strings.attachmentRemove))
+
+      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[4]).toEqual([]))
     })
   })
 })
@@ -431,8 +530,10 @@ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) 
       size: 3,
       createdAt: 1,
     })),
+    fetchDraftImage: vi.fn(async () => new Blob()),
     onSend: vi.fn(async () => undefined),
     onStop: vi.fn(async () => undefined),
+    onDraftChange: vi.fn(),
     onNotice: vi.fn(),
     ...overrides,
   }

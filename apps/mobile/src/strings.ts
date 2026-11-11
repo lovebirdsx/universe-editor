@@ -326,6 +326,10 @@ export const strings = {
   attachmentFileTooLarge: '单个文件不能超过 25 MB',
   attachmentTotalTooLarge: '附件总大小不能超过 50 MB',
   attachmentUnsupportedImage: '仅支持 PNG、JPEG、WebP、GIF 图片',
+  draftImageFallbackName: '电脑端图片',
+  draftImageOpen: '预览电脑端草稿图片',
+  draftImageRemove: '移除电脑端图片',
+  draftImageLoadFailed: '图片加载失败',
 
   imagePreviewTitle: '图片预览',
   imagePreviewClose: '关闭预览',

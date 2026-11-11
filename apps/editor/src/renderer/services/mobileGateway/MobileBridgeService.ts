@@ -55,6 +55,7 @@ import { isResumableHistoryEntry } from '../../../shared/mobileGateway/sessionHi
 import type {
   MobileBridgeAttentionEvent,
   MobileBridgeCommandError,
+  MobileBridgeDraft,
   MobileBridgeEvent,
   MobileBridgeNewSessionResult,
   MobileBridgePromptAttachment,
@@ -67,6 +68,12 @@ import type {
   MobileBridgeImage,
   IMobileBridgeService,
 } from '../../../shared/ipc/mobileGatewayService.js'
+import {
+  AcpPromptDraftCache,
+  type AcpPromptDraft,
+  type AcpPromptDraftChange,
+} from '../acp/session/acpPromptDraftCache.js'
+import { mergeBridgeDraft, toBridgeDraft } from './mobileDraftSync.js'
 import { AcpForeignWorktreeError, IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IScmService } from '../extensions/ScmService.js'
 import {
@@ -125,6 +132,8 @@ export const MOBILE_BRIDGE_THROTTLE_MS = 50
 /** Slower window while one message grows by more than {@link MOBILE_BRIDGE_LARGE_DELTA_CHARS}. */
 export const MOBILE_BRIDGE_LARGE_THROTTLE_MS = 100
 export const MOBILE_BRIDGE_LARGE_DELTA_CHARS = 64 * 1024
+/** Draft changes are less urgent than timeline deltas; coalesce keystrokes. */
+export const MOBILE_DRAFT_THROTTLE_MS = 250
 
 interface SessionStream {
   readonly localId: string
@@ -160,6 +169,11 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   private _syncScheduled = false
   private _syncHandle: ReturnType<typeof setTimeout> | undefined
   private readonly _streams = new Map<string, SessionStream>()
+  private _draftSubscription: IDisposable | undefined
+  private readonly _draftTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly _publishedDrafts = new Map<string, string>()
+  /** Attachment id set last published, so a paste/drop skips the typing debounce. */
+  private readonly _publishedDraftAttachments = new Map<string, string>()
   private readonly _agentNames = new Map<string, string | undefined>()
   private _attentionSubscription: IDisposable | undefined
   private _disposed = false
@@ -288,7 +302,9 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     // precedes this snapshot but describes state the snapshot already carries.
     const stream = this._streams.get(session.id)
     if (stream !== undefined) this._flush(stream)
-    return toBridgeSnapshot(session, this._projectionOptions(session))
+    const snapshot = toBridgeSnapshot(session, this._projectionOptions(session))
+    const draft = this._draftFor(session)
+    return draft === undefined ? snapshot : { ...snapshot, draft }
   }
 
   async startStreaming(): Promise<void> {
@@ -303,6 +319,9 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       }),
     )
     this._syncNow()
+    this._draftSubscription = AcpPromptDraftCache.onDidChange((event) =>
+      this._onDraftChanged(event),
+    )
   }
 
   async stopStreaming(): Promise<void> {
@@ -311,6 +330,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     this._logger.debug('mobile bridge streaming stopped')
     this._rootWatcher?.dispose()
     this._rootWatcher = undefined
+    this._draftSubscription?.dispose()
+    this._draftSubscription = undefined
+    for (const timer of this._draftTimers.values()) clearTimeout(timer)
+    this._draftTimers.clear()
+    this._publishedDrafts.clear()
+    this._publishedDraftAttachments.clear()
     if (this._syncHandle !== undefined) {
       clearTimeout(this._syncHandle)
       this._syncHandle = undefined
@@ -410,6 +435,194 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       if (image !== undefined) return image
     }
     return undefined
+  }
+
+  async applyDraft(localId: string, draft: MobileBridgeDraft): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const next = mergeBridgeDraft(AcpPromptDraftCache.load(session.id), draft)
+    if (next === undefined) {
+      AcpPromptDraftCache.clear(session.id, { source: 'remote' })
+    } else {
+      AcpPromptDraftCache.save(session.id, next, { source: 'remote' })
+    }
+    return ok(undefined)
+  }
+
+  async getDraftImage(
+    localId: string,
+    imageId: string,
+    _token?: CancellationToken,
+  ): Promise<MobileBridgeImage | undefined> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return undefined
+    const image = AcpPromptDraftCache.load(session.id)?.images?.find(
+      (candidate) => candidate.id === imageId,
+    )
+    if (image === undefined) return undefined
+    try {
+      const binary = atob(image.dataBase64)
+      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+      return { mimeType: image.mimeType, bytes }
+    } catch {
+      return undefined
+    }
+  }
+
+  async attachDraftAttachments(
+    localId: string,
+    attachments: readonly MobileBridgePromptAttachment[],
+  ): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (attachments.length === 0) return ok(undefined)
+    const current: AcpPromptDraft = AcpPromptDraftCache.load(session.id) ?? { text: '' }
+    const images = [...(current.images ?? [])]
+    const files = [...(current.files ?? [])]
+    for (const attachment of attachments) {
+      if (attachment.kind === 'image') {
+        const image: PromptImage = {
+          id: attachment.id,
+          attachmentId: attachment.id,
+          mimeType: attachment.mimeType,
+          dataBase64: attachment.dataBase64,
+          byteSize: attachment.byteSize,
+          name: attachment.name,
+        }
+        const index = images.findIndex((candidate) => candidate.id === attachment.id)
+        if (index === -1) images.push(image)
+        else images[index] = image
+      } else {
+        const file: PromptFileAttachment = {
+          id: attachment.id,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          byteSize: attachment.byteSize,
+          uri: attachment.uri,
+        }
+        const index = files.findIndex((candidate) => candidate.id === attachment.id)
+        if (index === -1) files.push(file)
+        else files[index] = file
+      }
+    }
+    AcpPromptDraftCache.save(
+      session.id,
+      {
+        ...current,
+        ...(images.length > 0 ? { images } : {}),
+        ...(files.length > 0 ? { files } : {}),
+      },
+      { source: 'remote' },
+    )
+    return ok(undefined)
+  }
+
+  async resolveDraftAttachments(
+    localId: string,
+    imageIds: readonly string[],
+    fileIds: readonly string[] = [],
+  ): Promise<MobileBridgeResult<readonly MobileBridgePromptAttachment[]>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const draft = AcpPromptDraftCache.load(session.id)
+    const images = draft?.images ?? []
+    const resolved: MobileBridgePromptAttachment[] = []
+    for (const id of imageIds) {
+      const image = images.find((candidate) => candidate.id === id)
+      if (image === undefined) continue
+      resolved.push({
+        kind: 'image',
+        id: image.id,
+        name: image.name ?? 'image',
+        mimeType: image.mimeType,
+        byteSize: image.byteSize,
+        dataBase64: image.dataBase64,
+      })
+    }
+    for (const id of fileIds) {
+      const file = (draft?.files ?? []).find((candidate) => candidate.id === id)
+      if (file === undefined) continue
+      resolved.push({
+        kind: 'file',
+        id: file.id,
+        name: file.name,
+        mimeType: file.mimeType,
+        byteSize: file.byteSize,
+        uri: file.uri,
+      })
+    }
+    if (resolved.length !== imageIds.length + fileIds.length) {
+      return fail('attachment_not_found', 'draft attachment is no longer available')
+    }
+    return ok(resolved)
+  }
+
+  async clearDraft(localId: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    AcpPromptDraftCache.clear(session.id, { source: 'remote' })
+    return ok(undefined)
+  }
+
+  private _draftFor(session: IAcpSession): MobileBridgeDraft | undefined {
+    const draft = AcpPromptDraftCache.load(session.id)
+    return draft === undefined ? undefined : toBridgeDraft(draft)
+  }
+
+  private _onDraftChanged(event: AcpPromptDraftChange): void {
+    if (!this._streaming) return
+    const session = this._liveSession(event.sessionId)
+    if (session === undefined) return
+    // A remote apply/clear supersedes a local publish that has not fired yet.
+    if (event.source !== 'local') {
+      this._cancelDraftTimer(session.id)
+      return
+    }
+    const draft = event.draft === undefined ? undefined : toBridgeDraft(event.draft)
+    const key = JSON.stringify(draft ?? null)
+    if (this._publishedDrafts.get(session.id) === key) return
+    const attachments = attachmentKey(draft)
+    const publishedAttachments = this._publishedDraftAttachments.get(session.id)
+    const attachmentsChanged =
+      publishedAttachments !== undefined && publishedAttachments !== attachments
+    this._cancelDraftTimer(session.id)
+    // A paste/drop must not wait behind typing: the phone's next keystroke
+    // would otherwise publish the older attachment set and delete the new one.
+    if (draft === undefined || attachmentsChanged) {
+      this._publishDraft(session, draft, key, attachments)
+      return
+    }
+    this._draftTimers.set(
+      session.id,
+      setTimeout(() => {
+        this._draftTimers.delete(session.id)
+        // The cache may have been replaced by a remote apply while queued.
+        const latest = this._draftFor(session)
+        const latestKey = JSON.stringify(latest ?? null)
+        if (latestKey !== key) return
+        this._publishDraft(session, latest, latestKey, attachmentKey(latest))
+      }, MOBILE_DRAFT_THROTTLE_MS),
+    )
+  }
+
+  private _publishDraft(
+    session: IAcpSession,
+    draft: MobileBridgeDraft | undefined,
+    key: string,
+    attachments: string,
+  ): void {
+    this._publishedDrafts.set(session.id, key)
+    this._publishedDraftAttachments.set(session.id, attachments)
+    this._emit({ kind: 'draft', localId: session.id, draft })
+  }
+
+  private _cancelDraftTimer(sessionId: string): void {
+    const timer = this._draftTimers.get(sessionId)
+    if (timer !== undefined) clearTimeout(timer)
+    this._draftTimers.delete(sessionId)
   }
 
   private async _readWorkspaceImage(
@@ -1282,4 +1495,12 @@ function prepareSideTaskQuote(
 
 function isResidentLiveSession(session: IAcpSession | undefined): boolean {
   return session !== undefined && isResidentLive(session)
+}
+
+function attachmentKey(draft: MobileBridgeDraft | undefined): string {
+  if (draft === undefined) return ''
+  return JSON.stringify([
+    draft.images.map((image) => image.id),
+    (draft.files ?? []).map((file) => file.id),
+  ])
 }

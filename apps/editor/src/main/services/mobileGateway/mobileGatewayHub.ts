@@ -27,8 +27,10 @@ import {
   parseServerFrame,
   serializeFrame,
   type CommandFrame,
+  type DraftUpdateFrame,
   type MobileAgentCandidate,
   type MobileAttentionKind,
+  type MobileDraftState,
   type MobileErrorCode,
   type MobileNewSessionResult,
   type MobilePendingPermission,
@@ -62,6 +64,7 @@ import {
   MobileAttachmentError,
   type MobileGatewayAttachmentResolver,
 } from './mobileAttachmentStore.js'
+import { MobileDraftRegistry, isDraftEmpty } from './mobileDraftRegistry.js'
 import { widenEventForTrust, widenSnapshotForTrust } from './trustedProjection.js'
 
 /** Once a socket has this much queued we drop deltas and ask the phone to resync. */
@@ -300,6 +303,11 @@ export class MobileGatewayHub {
   private readonly _inflightCommands = new Map<string, Promise<CommandOutcome>>()
   /** Resumes are deduped by durable id across devices / idempotency keys. */
   private readonly _inflightOpenSessions = new Map<string, Promise<CommandOutcome>>()
+  private readonly _drafts = new MobileDraftRegistry()
+  /** Per-session serialization so concurrent draft updates cannot reorder. */
+  private readonly _draftQueues = new Map<string, Promise<void>>()
+  /** Bumped when a prompt clears the draft; older in-flight updates are dropped. */
+  private readonly _draftEpochs = new Map<string, number>()
   private _inboxSeq = 0
   private _streaming = false
   private _attention = false
@@ -336,6 +344,7 @@ export class MobileGatewayHub {
     this._windows.delete(windowId)
     this._disposeWindowWatch(entry)
     this._clearWindowPermissions(windowId)
+    this._drafts.deleteWindow(windowId)
 
     const removes: MobileSessionRef[] = []
     for (const [key, value] of this._inboxState) {
@@ -393,6 +402,15 @@ export class MobileGatewayHub {
   ): Promise<MobileBridgeImage | undefined> {
     return this._readSessionResource(ref, (bridge, localId, token) =>
       bridge.getWorkspaceImage(localId, src, token),
+    )
+  }
+
+  /** Bytes for a picture the PC pasted into the draft (phone preview only). */
+  readDraftImage(ref: MobileSessionRef, imageId: string): Promise<MobileBridgeImage | undefined> {
+    const draft = this._drafts.get(sessionKey(ref.windowId, ref.localId))
+    if (!draft?.images.some((image) => image.id === imageId)) return Promise.resolve(undefined)
+    return this._readSessionResource(ref, (bridge, localId, token) =>
+      bridge.getDraftImage(localId, imageId, token),
     )
   }
 
@@ -606,7 +624,21 @@ export class MobileGatewayHub {
     }
     subscription.ref = summary.ref
     subscription.seq += 1
-    const base: MobileSessionSnapshot = { ...snapshot, seq: subscription.seq, summary }
+    // The renderer snapshot is the freshest PC state; the registry may also
+    // hold a phone-authored update that has not reached the cache yet.
+    // Seed from the renderer only when this session has no registry entry; a
+    // phone update that landed while the snapshot was in flight must win.
+    if (snapshot.draft !== undefined && this._drafts.get(key) === undefined) {
+      this._drafts.setFromRenderer(key, snapshot.draft)
+    }
+    const { draft: _snapshotDraft, ...snapshotRest } = snapshot
+    const draft = this._drafts.get(key)
+    const base: MobileSessionSnapshot = {
+      ...snapshotRest,
+      seq: subscription.seq,
+      summary,
+      ...(draft !== undefined ? { draft } : {}),
+    }
     const projected = state.trusted === true ? widenSnapshotForTrust(base) : base
     const frame: SessionSnapshotFrame = {
       type: 'session_snapshot',
@@ -724,6 +756,138 @@ export class MobileGatewayHub {
     }
   }
 
+  /** High-frequency, best-effort phone draft. Never produces a command_result. */
+  async handleDraftUpdate(
+    connection: MobileGatewayHubConnection,
+    frame: DraftUpdateFrame,
+  ): Promise<void> {
+    const state = this._find(connection)
+    if (state === undefined) return
+    const resolved = this._resolveSession(frame.ref)
+    if (resolved === undefined) return
+    let key = sessionKey(resolved.windowId, resolved.localId)
+    let localId = resolved.localId
+    if (!state.sessions.has(key) && frame.ref.durableId !== undefined) {
+      // The agent re-issued a localId; the subscription still tracks the
+      // session by its durable id, so follow that instead of dropping the edit.
+      const durableKey = this._findSubscriptionKeyByDurable(state, frame.ref.durableId)
+      const subscription = durableKey === undefined ? undefined : state.sessions.get(durableKey)
+      if (durableKey !== undefined && subscription !== undefined) {
+        key = durableKey
+        localId = subscription.ref.localId
+      }
+    }
+    if (!state.sessions.has(key)) return
+    const epoch = this._draftEpochs.get(key) ?? 0
+    await this._enqueueDraft(key, async () => {
+      if ((this._draftEpochs.get(key) ?? 0) !== epoch) return
+      const current = this._find(connection)
+      if (current === undefined) return
+      const subscription = current.sessions.get(key)
+      if (subscription === undefined || subscription.cancelled) return
+      const entry = this._windows.get(subscription.ref.windowId)
+      if (entry === undefined) return
+      await this._attachNewDraftAttachments(entry.bridge, current.deviceId, localId, key, frame)
+      if ((this._draftEpochs.get(key) ?? 0) !== epoch) return
+      const applied = await entry.bridge
+        .applyDraft(localId, {
+          text: frame.draft.text,
+          caret: frame.draft.caret,
+          images: frame.draft.images,
+          ...(frame.draft.files !== undefined ? { files: frame.draft.files } : {}),
+        })
+        .catch(() => undefined)
+      // A read-only / vanished session is not a protocol error for a lossy update.
+      if (applied === undefined || !applied.ok) return
+      if ((this._draftEpochs.get(key) ?? 0) !== epoch) {
+        // A prompt cleared the draft while this update was in flight; undo it.
+        void entry.bridge.clearDraft(localId).catch(() => undefined)
+        return
+      }
+      if (this._find(connection)?.sessions.get(key) !== subscription) return
+      const result = this._drafts.setFromPhone(key, frame.draft)
+      if (result.state === undefined) return
+      // Empty content must not survive as a registry entry: a later snapshot
+      // would otherwise erase another phone's locally restored draft.
+      if (isDraftEmpty(result.state)) this._drafts.delete(key)
+      if (!result.changed) {
+        this._sendSessionEvents(current, subscription, [
+          {
+            type: 'draft_update',
+            draft: result.state,
+            clientUpdateId: frame.clientUpdateId,
+          },
+        ])
+        return
+      }
+      this._broadcastDraft(key, result.state, connection, frame.clientUpdateId)
+    })
+  }
+
+  private _enqueueDraft(key: string, task: () => Promise<void>): Promise<void> {
+    const previous = this._draftQueues.get(key) ?? Promise.resolve()
+    const next = previous.then(task, task)
+    this._draftQueues.set(key, next)
+    return next.finally(() => {
+      if (this._draftQueues.get(key) === next) this._draftQueues.delete(key)
+    })
+  }
+
+  /**
+   * Phone uploads live in the main-process attachment store; PromptInput needs
+   * `PromptImage`/`PromptFileAttachment` objects. Resolve only ids the registry
+   * has not seen yet — a draft update is sent on every keystroke.
+   */
+  private async _attachNewDraftAttachments(
+    bridge: IMobileBridgeService,
+    deviceId: string | undefined,
+    localId: string,
+    key: string,
+    frame: DraftUpdateFrame,
+  ): Promise<void> {
+    const resolver = this._host?.attachments
+    if (deviceId === undefined || resolver === undefined) return
+    const previous = this._drafts.get(key)
+    const known = new Set<string>([
+      ...(previous?.images ?? []).map((image) => image.id),
+      ...(previous?.files ?? []).map((file) => file.id),
+    ])
+    const ids = [
+      ...frame.draft.images.filter((image) => image.source === 'mobile').map((image) => image.id),
+      ...(frame.draft.files ?? []).map((file) => file.id),
+    ].filter((id) => !known.has(id))
+    if (ids.length === 0) return
+    try {
+      const attachments = await resolver.resolveForPrompt(deviceId, ids)
+      await bridge.attachDraftAttachments(localId, attachments)
+    } catch (err) {
+      // A missing/expired upload should drop that chip, not the text edit.
+      this._logger.warn(`mobile draft attachment resolve failed: ${String(err)}`)
+    }
+  }
+
+  private _broadcastDraft(
+    key: string,
+    draft: MobileDraftState,
+    origin?: MobileGatewayHubConnection,
+    clientUpdateId?: string,
+  ): void {
+    for (const state of this._connections) {
+      const subscription = state.sessions.get(key)
+      if (subscription === undefined) continue
+      const event: MobileSessionEvent = {
+        type: 'draft_update',
+        draft,
+        ...(state.connection === origin && clientUpdateId !== undefined ? { clientUpdateId } : {}),
+      }
+      if (subscription.snapshotPending) {
+        subscription.buffered.push(event)
+        continue
+      }
+      this._sendSessionEvents(state, subscription, [event])
+    }
+  }
+
   private async _dispatchCommand(
     frame: CommandFrame,
     sender: { readonly deviceId: string | undefined; readonly trusted: boolean },
@@ -754,8 +918,12 @@ export class MobileGatewayHub {
           ref: MobileSessionRef
           text: string
           attachmentIds?: readonly string[]
+          draftImageIds?: readonly string[]
+          draftFileIds?: readonly string[]
         }
         const ids = p.attachmentIds ?? []
+        const draftImageIds = p.draftImageIds ?? []
+        const draftFileIds = p.draftFileIds ?? []
         let attachments: readonly MobileBridgePromptAttachment[] | undefined
         if (ids.length > 0) {
           if (sender.deviceId === undefined) return failOutcome('unauthorized')
@@ -771,15 +939,39 @@ export class MobileGatewayHub {
         const outcome = await this._sessionCommand(
           p.ref,
           SEND_PROMPT_TIMEOUT_MS,
-          (bridge, localId) =>
-            attachments === undefined
+          async (bridge, localId) => {
+            let all = attachments ?? []
+            if (draftImageIds.length > 0 || draftFileIds.length > 0) {
+              const resolved = await bridge.resolveDraftAttachments(
+                localId,
+                draftImageIds,
+                draftFileIds,
+              )
+              if (!resolved.ok) return resolved
+              all = [...all, ...resolved.value]
+            }
+            return all.length === 0
               ? bridge.sendPrompt(localId, p.text)
-              : bridge.sendPrompt(localId, p.text, attachments),
+              : bridge.sendPrompt(localId, p.text, all)
+          },
         )
         if (outcome.ok && ids.length > 0 && sender.deviceId !== undefined) {
           const resolver = this._host?.attachments
           void resolver?.consume(sender.deviceId, ids).catch((err: unknown) => {
             this._logger.warn(`mobile attachment consume failed: ${String(err)}`)
+          })
+        }
+        if (outcome.ok) {
+          const key = sessionKey(p.ref.windowId, p.ref.localId)
+          // Invalidate draft updates that were received before this prompt.
+          this._draftEpochs.set(key, (this._draftEpochs.get(key) ?? 0) + 1)
+          const cleared = this._drafts.setFromRenderer(key, undefined)
+          if (cleared.changed && cleared.state !== undefined) {
+            this._broadcastDraft(key, cleared.state)
+          }
+          const entry = this._windows.get(p.ref.windowId)
+          void entry?.bridge.clearDraft(p.ref.localId).catch((err: unknown) => {
+            this._logger.warn(`mobile draft clear failed: ${String(err)}`)
           })
         }
         return outcome
@@ -1737,6 +1929,7 @@ export class MobileGatewayHub {
       for (const ref of event.removes) {
         this._inboxState.delete(sessionKey(windowId, ref.localId))
         this._clearSessionPermissions(windowId, ref.localId)
+        this._drafts.delete(sessionKey(windowId, ref.localId))
         removes.push({
           windowId,
           localId: ref.localId,
@@ -1759,6 +1952,16 @@ export class MobileGatewayHub {
         }
       }
       this._broadcastInboxDelta(upserts, removes)
+      return
+    }
+    if (event.kind === 'draft') {
+      const key = sessionKey(windowId, event.localId)
+      const result = this._drafts.setFromRenderer(key, event.draft)
+      if (!result.changed || result.state === undefined) return
+      // An empty state clears every subscriber's draft; the registry itself
+      // drops the entry so a later snapshot does not resurrect it.
+      if (isDraftEmpty(result.state)) this._drafts.delete(key)
+      this._broadcastDraft(key, result.state)
       return
     }
     for (const delta of event.events) {
@@ -1793,15 +1996,29 @@ export class MobileGatewayHub {
     connection: MobileGatewayHubConnection,
     frame: ServerFrame,
     sessionId?: string,
-  ): void {
+  ): boolean {
     const parsed = parseServerFrame(serializeFrame(frame))
-    if (!parsed.ok) {
-      this._logger.error(
-        `mobile gateway dropped invalid frame type=${frame.type} session=${sessionId ?? '-'}: ${parsed.error.message}`,
-      )
-      return
+    if (parsed.ok) {
+      connection.send(frame)
+      return true
     }
-    connection.send(frame)
+    // A draft can be larger than the wire limits (PC prompt has no protocol
+    // cap). Drop just the draft so the snapshot/delta still reaches the phone.
+    const stripped = stripDraft(frame)
+    if (stripped !== undefined) {
+      const retry = parseServerFrame(serializeFrame(stripped))
+      if (retry.ok) {
+        this._logger.warn(
+          `mobile gateway dropped an out-of-range draft type=${frame.type} session=${sessionId ?? '-'}: ${parsed.error.message}`,
+        )
+        connection.send(stripped)
+        return true
+      }
+    }
+    this._logger.error(
+      `mobile gateway dropped invalid frame type=${frame.type} session=${sessionId ?? '-'}: ${parsed.error.message}`,
+    )
+    return false
   }
 
   private _sendSessionEvents(
@@ -1826,7 +2043,7 @@ export class MobileGatewayHub {
     }
     subscription.seq += 1
     const projected = state.trusted === true ? events.map(widenEventForTrust) : events
-    this._send(
+    const sent = this._send(
       state.connection,
       {
         type: 'session_delta',
@@ -1836,6 +2053,7 @@ export class MobileGatewayHub {
       },
       subscription.localId,
     )
+    if (!sent) subscription.seq -= 1
   }
 
   private _broadcastInboxDelta(
@@ -2110,6 +2328,19 @@ export class MobileGatewayHub {
 
 function serializedLength(frame: unknown): number {
   return JSON.stringify(frame).length
+}
+
+/** Retry shape without the draft payload; keeps snapshots and deltas deliverable. */
+function stripDraft(frame: ServerFrame): ServerFrame | undefined {
+  if (frame.type === 'session_snapshot' && frame.session.draft !== undefined) {
+    const { draft: _draft, ...session } = frame.session
+    return { ...frame, session }
+  }
+  if (frame.type === 'session_delta') {
+    const events = frame.events.filter((event) => event.type !== 'draft_update')
+    if (events.length !== frame.events.length) return { ...frame, events }
+  }
+  return undefined
 }
 
 function failOutcome(error: MobileErrorCode): CommandOutcome {

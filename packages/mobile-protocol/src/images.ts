@@ -14,6 +14,8 @@ export const MAX_IMAGE_SRC_LENGTH = 4096
 
 export const MOBILE_SESSION_IMAGE_PATH = '/api/sessions/image'
 export const MOBILE_SESSION_FILE_PATH = '/api/sessions/file'
+/** Bytes of one image referenced by the shared prompt draft. */
+export const MOBILE_DRAFT_IMAGE_PATH = '/api/sessions/draft-image'
 
 export interface MobileMessageImage {
   /** 0-based ordinal among all image blocks in the message (attachments included). */

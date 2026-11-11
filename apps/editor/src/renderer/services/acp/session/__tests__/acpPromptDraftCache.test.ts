@@ -68,4 +68,19 @@ describe('AcpPromptDraftCache', () => {
     flood('c')
     expect(AcpPromptDraftCache.load('s1')).toBeUndefined()
   })
+
+  it('reports local and remote changes but never echoes a remote apply', () => {
+    const events: string[] = []
+    const subscription = AcpPromptDraftCache.onDidChange((event) => {
+      events.push(`${event.source}:${event.draft?.text ?? ''}:${event.originId ?? ''}`)
+    })
+
+    AcpPromptDraftCache.save('s1', { text: 'local' })
+    AcpPromptDraftCache.save('s1', { text: 'remote' }, { source: 'remote', originId: 'box-2' })
+    AcpPromptDraftCache.save('s1', { text: 'remote' }, { source: 'echo' })
+    AcpPromptDraftCache.clear('s1', { source: 'remote' })
+
+    subscription.dispose()
+    expect(events).toEqual(['local:local:', 'remote:remote:box-2', 'remote::'])
+  })
 })

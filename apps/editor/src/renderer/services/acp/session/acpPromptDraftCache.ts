@@ -13,8 +13,10 @@
  *  life of the window.
  *--------------------------------------------------------------------------------------------*/
 
+import { Emitter, type Event } from '@universe-editor/platform'
 import { BoundedCache } from '../../memory/boundedCache.js'
 import type { SelectionContext } from '../promptContext.js'
+import type { PromptFileAttachment } from '../promptAttachment.js'
 import type { PromptImage } from '../promptImage.js'
 import type { PlacedRef } from '../promptRef.js'
 
@@ -24,7 +26,19 @@ export interface AcpPromptDraft {
   readonly refs?: readonly PlacedRef[]
   readonly contexts?: readonly SelectionContext[]
   readonly images?: readonly PromptImage[]
+  /** Non-image attachments uploaded by the phone. */
+  readonly files?: readonly PromptFileAttachment[]
   readonly caret?: number
+}
+
+/** `local` = the user typed here; `remote` = applied from another client; `echo` = mirror of a remote apply. */
+export type AcpPromptDraftChangeSource = 'local' | 'remote' | 'echo'
+
+export interface AcpPromptDraftChange {
+  readonly sessionId: string
+  readonly draft: AcpPromptDraft | undefined
+  readonly source: AcpPromptDraftChangeSource
+  readonly originId?: string
 }
 
 export const MAX_DRAFT_SESSIONS = 8
@@ -39,6 +53,8 @@ export function measureDraftBytes(draft: AcpPromptDraft): number {
   let bytes = draft.text.length * 2
   for (const image of draft.images ?? []) bytes += image.dataBase64.length * 2
   for (const context of draft.contexts ?? []) bytes += context.text.length * 2
+  for (const file of draft.files ?? [])
+    bytes += (file.name.length + file.uri.length + file.mimeType.length) * 2
   for (const placed of draft.refs ?? []) {
     bytes += (placed.ref.label.length + placed.ref.uri.length) * 2
   }
@@ -53,17 +69,44 @@ class AcpPromptDraftCacheImpl {
     (sessionId) => this._pinned.has(sessionId),
   )
   private readonly _pinned = new Map<string, number>()
+  private readonly _onDidChange = new Emitter<AcpPromptDraftChange>()
 
-  save(sessionId: string, draft: AcpPromptDraft): void {
+  readonly onDidChange: Event<AcpPromptDraftChange> = this._onDidChange.event
+
+  save(
+    sessionId: string,
+    draft: AcpPromptDraft,
+    meta: { source?: AcpPromptDraftChangeSource; originId?: string } = {},
+  ): void {
     this._cache.set(sessionId, draft)
+    this._fire(sessionId, draft, meta)
   }
 
   load(sessionId: string): AcpPromptDraft | undefined {
     return this._cache.get(sessionId)
   }
 
-  clear(sessionId: string): void {
+  clear(
+    sessionId: string,
+    meta: { source?: AcpPromptDraftChangeSource; originId?: string } = {},
+  ): void {
     this._cache.delete(sessionId)
+    this._fire(sessionId, undefined, meta)
+  }
+
+  private _fire(
+    sessionId: string,
+    draft: AcpPromptDraft | undefined,
+    meta: { source?: AcpPromptDraftChangeSource; originId?: string },
+  ): void {
+    const source = meta.source ?? 'local'
+    if (source === 'echo') return
+    this._onDidChange.fire({
+      sessionId,
+      draft,
+      source,
+      ...(meta.originId !== undefined ? { originId: meta.originId } : {}),
+    })
   }
 
   /**

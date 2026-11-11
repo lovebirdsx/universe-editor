@@ -4,9 +4,22 @@ import {
   MAX_ATTACHMENT_MIME_LENGTH,
   MAX_ATTACHMENT_NAME_LENGTH,
   MAX_FILE_ATTACHMENT_BYTES,
+  MAX_IMAGE_ATTACHMENT_BYTES,
+  MAX_IMAGE_ATTACHMENTS_PER_PROMPT,
   isMobileAttachmentKind,
+  isMobileImageMimeType,
   type MobileMessageAttachment,
 } from './attachments.js'
+import type {
+  DraftUpdateFrame,
+  MobileDraftContextSummary,
+  MobileDraftFileRef,
+  MobileDraftImageRef,
+  MobileDraftPayload,
+  MobileDraftRefSummary,
+  MobileDraftState,
+} from './draft.js'
+import { MOBILE_DRAFT_SOURCES } from './draft.js'
 import { isMobileErrorCode } from './errors.js'
 import {
   MAX_IMAGES_PER_MESSAGE,
@@ -28,6 +41,7 @@ import type {
   MobileConfigOption,
   MobileConfigOptionType,
   MobileConfigOptionValue,
+  MobileDraftUpdateEvent,
   MobileElicitationAction,
   MobileElicitationContentValue,
   MobileElicitationEnumOption,
@@ -95,11 +109,11 @@ import { MOBILE_PROTOCOL_VERSION } from './version.js'
 
 /**
  * Compared against JS string length (UTF-16 code units), not encoded bytes.
- * The transport is JSON text and every user-controlled string is capped far
- * below this, so exact UTF-8 accounting would add complexity without changing
- * the rejection outcome.
+ * The transport is JSON text. Drafts are the only client payload that can
+ * approach the cap: 32K non-ASCII characters are ~96KB encoded, so the limit
+ * leaves room for JSON overhead rather than silently dropping long drafts.
  */
-export const MAX_CLIENT_FRAME_BYTES = 64 * 1024
+export const MAX_CLIENT_FRAME_BYTES = 192 * 1024
 /**
  * Soft ceiling for one server → client frame. The gateway trims oversized
  * snapshots (oldest timeline items first) rather than dropping the frame.
@@ -132,6 +146,19 @@ export const MAX_REQUEST_ID_LENGTH = 128
 export const MAX_CURRENCY_LENGTH = 16
 /** Phone prompt cap; also applies to a new session's initial prompt. */
 export const MAX_PROMPT_LENGTH = 32 * 1024
+export const MAX_DRAFT_TEXT_LENGTH = MAX_PROMPT_LENGTH
+export const MAX_DRAFT_REFS = 64
+export const MAX_DRAFT_REF_KIND_LENGTH = 64
+export const MAX_DRAFT_REF_LABEL_LENGTH = 512
+export const MAX_DRAFT_CONTEXTS = 16
+export const MAX_DRAFT_CONTEXT_PATH_LENGTH = MAX_WORKSPACE_NAME_LENGTH
+export const MAX_DRAFT_CONTEXT_LANGUAGE_LENGTH = 64
+export const MAX_DRAFT_IMAGES = MAX_IMAGE_ATTACHMENTS_PER_PROMPT
+export const MAX_DRAFT_FILES = MAX_ATTACHMENTS_PER_PROMPT
+/** The PC can hold its own image set plus files uploaded by a phone. */
+export const MAX_DRAFT_ATTACHMENTS = MAX_DRAFT_IMAGES + MAX_DRAFT_FILES
+export const MAX_DRAFT_NAME_LENGTH = MAX_ATTACHMENT_NAME_LENGTH
+export const MAX_DRAFT_UPDATE_ID_LENGTH = 64
 /** Whole-message quote cap for side tasks; mirrors the desktop selection cap. */
 export const MAX_SIDE_TASK_QUOTE_LENGTH = 8000
 /** First-prompt excerpt carried by a session-history row (search + secondary line). */
@@ -238,6 +265,8 @@ export function parseClientFrame(text: string): Result<ClientFrame> {
       return parseSetNotificationPrefsFrame(frame)
     case 'client_state':
       return parseClientStateFrame(frame)
+    case 'draft_update':
+      return parseDraftUpdateFrame(frame)
     default:
       return fail('bad_request', `unknown client frame type: ${type}`)
   }
@@ -393,6 +422,292 @@ function parseClientStateFrame(frame: Record<string, unknown>): Result<ClientSta
     return fail('bad_request', 'client_state.visible must be a boolean')
   }
   return ok({ type: 'client_state', visible })
+}
+
+function parseDraftUpdateFrame(frame: Record<string, unknown>): Result<DraftUpdateFrame> {
+  const ref = parseSessionRef(frame.ref)
+  if (!ref.ok) return ref
+  const baseRevision = frame.baseRevision
+  if (!isNonNegativeInteger(baseRevision)) {
+    return fail('bad_request', 'draft_update.baseRevision must be a non-negative integer')
+  }
+  const clientUpdateId = frame.clientUpdateId
+  if (!isNonEmptyBoundedString(clientUpdateId, MAX_DRAFT_UPDATE_ID_LENGTH)) {
+    return fail(
+      'bad_request',
+      `draft_update.clientUpdateId must be 1–${MAX_DRAFT_UPDATE_ID_LENGTH} characters`,
+    )
+  }
+  const draft = parseDraftPayload(frame.draft)
+  if (!draft.ok) return draft
+  return ok({
+    type: 'draft_update',
+    ref: ref.value,
+    baseRevision,
+    clientUpdateId,
+    draft: draft.value,
+  })
+}
+
+function parseDraftPayload(value: unknown): Result<MobileDraftPayload> {
+  if (!isRecord(value)) return fail('bad_request', 'draft_update.draft must be an object')
+  if (value['refs'] !== undefined || value['contexts'] !== undefined) {
+    return fail('bad_request', 'draft_update.draft must not carry refs or contexts')
+  }
+  const text = parseDraftText(value['text'])
+  if (!text.ok) return text
+  const caret = parseDraftCaret(value['caret'], text.value.length)
+  if (!caret.ok) return caret
+  const images = parseDraftImages(value['images'], 'draft_update.draft.images')
+  if (!images.ok) return images
+  const files = parseDraftFiles(value['files'], 'draft_update.draft.files')
+  if (!files.ok) return files
+  const total = parseDraftAttachmentTotal(images.value, files.value)
+  if (total !== undefined) return fail('bad_request', total)
+  return ok({
+    text: text.value,
+    caret: caret.value,
+    images: images.value,
+    ...(files.value !== undefined ? { files: files.value } : {}),
+  })
+}
+
+function parseDraftState(value: unknown): Result<MobileDraftState> {
+  if (!isRecord(value)) return fail('bad_request', 'session.draft must be an object')
+  const text = parseDraftText(value['text'])
+  if (!text.ok) return text
+  const caret = parseDraftCaret(value['caret'], text.value.length)
+  if (!caret.ok) return caret
+  const images = parseDraftImages(value['images'], 'session.draft.images')
+  if (!images.ok) return images
+  const files = parseDraftFiles(value['files'], 'session.draft.files')
+  if (!files.ok) return files
+  const total = parseDraftAttachmentTotal(images.value, files.value)
+  if (total !== undefined) return fail('bad_request', total)
+  const refs = parseDraftRefs(value['refs'], text.value.length)
+  if (!refs.ok) return refs
+  const contexts = parseDraftContexts(value['contexts'])
+  if (!contexts.ok) return contexts
+  const revision = value['revision']
+  if (!isNonNegativeInteger(revision)) {
+    return fail('bad_request', 'session.draft.revision must be a non-negative integer')
+  }
+  const updatedAt = value['updatedAt']
+  if (!isNonNegativeInteger(updatedAt)) {
+    return fail('bad_request', 'session.draft.updatedAt must be a non-negative integer')
+  }
+  const source = value['source']
+  if (typeof source !== 'string' || !isDraftSource(source)) {
+    return fail('bad_request', 'session.draft.source is not known')
+  }
+  return ok({
+    text: text.value,
+    caret: caret.value,
+    images: images.value,
+    ...(files.value !== undefined ? { files: files.value } : {}),
+    ...(refs.value !== undefined ? { refs: refs.value } : {}),
+    ...(contexts.value !== undefined ? { contexts: contexts.value } : {}),
+    revision,
+    updatedAt,
+    source,
+  })
+}
+
+function parseDraftText(value: unknown): Result<string> {
+  if (!isBoundedString(value, MAX_DRAFT_TEXT_LENGTH)) {
+    return fail('bad_request', `draft.text must be at most ${MAX_DRAFT_TEXT_LENGTH} characters`)
+  }
+  return ok(value)
+}
+
+function parseDraftCaret(value: unknown, textLength: number): Result<number> {
+  if (!isNonNegativeInteger(value) || value > textLength) {
+    return fail('bad_request', 'draft.caret must be an integer within the draft text')
+  }
+  return ok(value)
+}
+
+function parseDraftAttachmentTotal(
+  images: readonly MobileDraftImageRef[],
+  files: readonly MobileDraftFileRef[] | undefined,
+): string | undefined {
+  if (images.length + (files?.length ?? 0) > MAX_DRAFT_ATTACHMENTS) {
+    return `draft attachments must contain at most ${MAX_DRAFT_ATTACHMENTS} entries`
+  }
+  return undefined
+}
+
+function parseDraftImages(value: unknown, field: string): Result<readonly MobileDraftImageRef[]> {
+  if (!Array.isArray(value)) return fail('bad_request', `${field} must be an array`)
+  if (value.length > MAX_DRAFT_IMAGES) {
+    return fail('bad_request', `${field} must contain at most ${MAX_DRAFT_IMAGES} entries`)
+  }
+  const images: MobileDraftImageRef[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (!isRecord(item)) return fail('bad_request', `${field} entries must be objects`)
+    const id = item['id']
+    if (!isNonEmptyBoundedString(id, MAX_ATTACHMENT_ID_LENGTH)) {
+      return fail('bad_request', `${field}.id must be 1–${MAX_ATTACHMENT_ID_LENGTH} characters`)
+    }
+    if (seen.has(id)) return fail('bad_request', `${field} must not contain duplicate ids`)
+    seen.add(id)
+    const source = item['source']
+    if (typeof source !== 'string' || !isDraftSource(source)) {
+      return fail('bad_request', `${field}.source is not known`)
+    }
+    const mimeType = item['mimeType']
+    if (!isNonEmptyBoundedString(mimeType, MAX_ATTACHMENT_MIME_LENGTH)) {
+      return fail(
+        'bad_request',
+        `${field}.mimeType must be 1–${MAX_ATTACHMENT_MIME_LENGTH} characters`,
+      )
+    }
+    if (!isMobileImageMimeType(mimeType)) {
+      return fail('bad_request', `${field}.mimeType is not a supported image type`)
+    }
+    const byteSize = item['byteSize']
+    if (!isNonNegativeInteger(byteSize) || byteSize > MAX_IMAGE_ATTACHMENT_BYTES) {
+      return fail('bad_request', `${field}.byteSize is out of range`)
+    }
+    const name = parseOptionalNonEmptyString(item['name'], MAX_DRAFT_NAME_LENGTH, `${field}.name`)
+    if (!name.ok) return name
+    images.push({
+      id,
+      source,
+      mimeType,
+      byteSize,
+      ...(name.value !== undefined ? { name: name.value } : {}),
+    })
+  }
+  return ok(images)
+}
+
+function parseDraftFiles(
+  value: unknown,
+  field: string,
+): Result<readonly MobileDraftFileRef[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', `${field} must be an array`)
+  if (value.length > MAX_DRAFT_FILES) {
+    return fail('bad_request', `${field} must contain at most ${MAX_DRAFT_FILES} entries`)
+  }
+  const files: MobileDraftFileRef[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (!isRecord(item)) return fail('bad_request', `${field} entries must be objects`)
+    const id = item['id']
+    if (!isNonEmptyBoundedString(id, MAX_ATTACHMENT_ID_LENGTH)) {
+      return fail('bad_request', `${field}.id must be 1–${MAX_ATTACHMENT_ID_LENGTH} characters`)
+    }
+    if (seen.has(id)) return fail('bad_request', `${field} must not contain duplicate ids`)
+    seen.add(id)
+    const name = item['name']
+    if (!isNonEmptyBoundedString(name, MAX_DRAFT_NAME_LENGTH)) {
+      return fail('bad_request', `${field}.name must be 1–${MAX_DRAFT_NAME_LENGTH} characters`)
+    }
+    const mimeType = parseOptionalString(
+      item['mimeType'],
+      MAX_ATTACHMENT_MIME_LENGTH,
+      `${field}.mimeType`,
+    )
+    if (!mimeType.ok) return mimeType
+    const byteSize = item['byteSize']
+    if (!isNonNegativeInteger(byteSize) || byteSize > MAX_FILE_ATTACHMENT_BYTES) {
+      return fail('bad_request', `${field}.byteSize is out of range`)
+    }
+    files.push({
+      id,
+      name,
+      ...(mimeType.value !== undefined ? { mimeType: mimeType.value } : {}),
+      byteSize,
+    })
+  }
+  return ok(files)
+}
+
+function parseDraftRefs(
+  value: unknown,
+  textLength: number,
+): Result<readonly MobileDraftRefSummary[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', 'session.draft.refs must be an array')
+  if (value.length > MAX_DRAFT_REFS) {
+    return fail('bad_request', `session.draft.refs must contain at most ${MAX_DRAFT_REFS} entries`)
+  }
+  const refs: MobileDraftRefSummary[] = []
+  for (const item of value) {
+    if (!isRecord(item)) return fail('bad_request', 'session.draft.refs entries must be objects')
+    const id = item['id']
+    if (!isNonEmptyBoundedString(id, MAX_ATTACHMENT_ID_LENGTH)) {
+      return fail('bad_request', 'session.draft.refs.id must be 1–128 characters')
+    }
+    const kind = item['kind']
+    if (!isNonEmptyBoundedString(kind, MAX_DRAFT_REF_KIND_LENGTH)) {
+      return fail('bad_request', 'session.draft.refs.kind is out of range')
+    }
+    const label = item['label']
+    if (!isNonEmptyBoundedString(label, MAX_DRAFT_REF_LABEL_LENGTH)) {
+      return fail('bad_request', 'session.draft.refs.label is out of range')
+    }
+    const start = item['start']
+    const end = item['end']
+    if (
+      !isNonNegativeInteger(start) ||
+      !isNonNegativeInteger(end) ||
+      start >= end ||
+      end > textLength
+    ) {
+      return fail('bad_request', 'session.draft.refs range is out of bounds')
+    }
+    refs.push({ id, kind, label, start, end })
+  }
+  return ok(refs)
+}
+
+function parseDraftContexts(
+  value: unknown,
+): Result<readonly MobileDraftContextSummary[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', 'session.draft.contexts must be an array')
+  if (value.length > MAX_DRAFT_CONTEXTS) {
+    return fail(
+      'bad_request',
+      `session.draft.contexts must contain at most ${MAX_DRAFT_CONTEXTS} entries`,
+    )
+  }
+  const contexts: MobileDraftContextSummary[] = []
+  for (const item of value) {
+    if (!isRecord(item)) {
+      return fail('bad_request', 'session.draft.contexts entries must be objects')
+    }
+    const relPath = item['relPath']
+    if (!isNonEmptyBoundedString(relPath, MAX_DRAFT_CONTEXT_PATH_LENGTH)) {
+      return fail('bad_request', 'session.draft.contexts.relPath is out of range')
+    }
+    const startLine = item['startLine']
+    const endLine = item['endLine']
+    if (!isNonNegativeInteger(startLine) || !isNonNegativeInteger(endLine) || startLine > endLine) {
+      return fail('bad_request', 'session.draft.contexts line range is invalid')
+    }
+    const languageId = parseOptionalNonEmptyString(
+      item['languageId'],
+      MAX_DRAFT_CONTEXT_LANGUAGE_LENGTH,
+      'session.draft.contexts.languageId',
+    )
+    if (!languageId.ok) return languageId
+    contexts.push({
+      relPath,
+      startLine,
+      endLine,
+      ...(languageId.value !== undefined ? { languageId: languageId.value } : {}),
+    })
+  }
+  return ok(contexts)
+}
+
+function isDraftSource(value: string): value is MobileDraftState['source'] {
+  return (MOBILE_DRAFT_SOURCES as readonly string[]).includes(value)
 }
 
 function parsePushSubscription(value: unknown): Result<MobilePushSubscription> {
@@ -701,7 +1016,13 @@ function parseEmptyPayload(value: unknown, kind: string): Result<Record<string, 
   return ok({})
 }
 
-function parseSendPromptPayload(value: unknown): Result<{ ref: MobileSessionRef; text: string }> {
+function parseSendPromptPayload(value: unknown): Result<{
+  ref: MobileSessionRef
+  text: string
+  attachmentIds?: readonly string[]
+  draftImageIds?: readonly string[]
+  draftFileIds?: readonly string[]
+}> {
   if (!isRecord(value)) return fail('bad_request', 'sendPrompt.payload must be an object')
   const ref = parseSessionRef(value.ref)
   if (!ref.ok) return ref
@@ -709,45 +1030,63 @@ function parseSendPromptPayload(value: unknown): Result<{ ref: MobileSessionRef;
   if (!isBoundedString(text, MAX_PROMPT_LENGTH)) {
     return fail('bad_request', `sendPrompt.text must be at most ${MAX_PROMPT_LENGTH} characters`)
   }
-  const attachmentIds = value.attachmentIds
-  if (attachmentIds === undefined) {
-    if (text.trim() === '') {
-      return fail('bad_request', 'sendPrompt requires text or at least one attachment')
-    }
-    return ok({ ref: ref.value, text })
-  }
-  if (!Array.isArray(attachmentIds)) {
-    return fail('bad_request', 'sendPrompt.attachmentIds must be an array')
-  }
-  if (attachmentIds.length > MAX_ATTACHMENTS_PER_PROMPT) {
-    return fail(
-      'bad_request',
-      `sendPrompt.attachmentIds must contain at most ${MAX_ATTACHMENTS_PER_PROMPT} entries`,
-    )
-  }
-  const ids: string[] = []
-  const seen = new Set<string>()
-  for (const item of attachmentIds) {
-    if (!isNonEmptyBoundedString(item, MAX_ATTACHMENT_ID_LENGTH)) {
-      return fail(
-        'bad_request',
-        `sendPrompt.attachmentIds entries must be 1–${MAX_ATTACHMENT_ID_LENGTH} characters`,
-      )
-    }
-    if (seen.has(item)) {
-      return fail('bad_request', 'sendPrompt.attachmentIds must not contain duplicates')
-    }
-    seen.add(item)
-    ids.push(item)
-  }
-  if (ids.length === 0 && text.trim() === '') {
+  const attachmentIds = parsePromptIdList(
+    value.attachmentIds,
+    MAX_ATTACHMENTS_PER_PROMPT,
+    'sendPrompt.attachmentIds',
+  )
+  if (!attachmentIds.ok) return attachmentIds
+  const draftImageIds = parsePromptIdList(
+    value.draftImageIds,
+    MAX_DRAFT_IMAGES,
+    'sendPrompt.draftImageIds',
+  )
+  if (!draftImageIds.ok) return draftImageIds
+  const draftFileIds = parsePromptIdList(
+    value.draftFileIds,
+    MAX_DRAFT_FILES,
+    'sendPrompt.draftFileIds',
+  )
+  if (!draftFileIds.ok) return draftFileIds
+  const attachmentCount = attachmentIds.value?.length ?? 0
+  const draftImageCount = draftImageIds.value?.length ?? 0
+  const draftFileCount = draftFileIds.value?.length ?? 0
+  if (attachmentCount + draftImageCount + draftFileCount === 0 && text.trim() === '') {
     return fail('bad_request', 'sendPrompt requires text or at least one attachment')
   }
   return ok({
     ref: ref.value,
     text,
-    ...(ids.length > 0 ? { attachmentIds: ids } : {}),
+    ...(attachmentIds.value !== undefined ? { attachmentIds: attachmentIds.value } : {}),
+    ...(draftImageIds.value !== undefined ? { draftImageIds: draftImageIds.value } : {}),
+    ...(draftFileIds.value !== undefined ? { draftFileIds: draftFileIds.value } : {}),
   })
+}
+
+function parsePromptIdList(
+  value: unknown,
+  maxEntries: number,
+  field: string,
+): Result<readonly string[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', `${field} must be an array`)
+  if (value.length > maxEntries) {
+    return fail('bad_request', `${field} must contain at most ${maxEntries} entries`)
+  }
+  const ids: string[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (!isNonEmptyBoundedString(item, MAX_ATTACHMENT_ID_LENGTH)) {
+      return fail(
+        'bad_request',
+        `${field} entries must be 1–${MAX_ATTACHMENT_ID_LENGTH} characters`,
+      )
+    }
+    if (seen.has(item)) return fail('bad_request', `${field} must not contain duplicates`)
+    seen.add(item)
+    ids.push(item)
+  }
+  return ok(ids.length > 0 ? ids : undefined)
 }
 
 function parseResolvePermissionPayload(value: unknown): Result<{
@@ -1088,6 +1427,8 @@ function parseSessionSnapshot(value: unknown): Result<MobileSessionSnapshot> {
   if (!pendingPermission.ok) return pendingPermission
   const pendingElicitation = parseOptional(value.pendingElicitation, parsePendingElicitation)
   if (!pendingElicitation.ok) return pendingElicitation
+  const draft = parseOptional(value.draft, parseDraftState)
+  if (!draft.ok) return draft
   const truncated = value.truncated
   if (truncated !== undefined && typeof truncated !== 'boolean') {
     return fail('bad_request', 'session.truncated must be a boolean')
@@ -1107,6 +1448,7 @@ function parseSessionSnapshot(value: unknown): Result<MobileSessionSnapshot> {
     ...(pendingElicitation.value !== undefined
       ? { pendingElicitation: pendingElicitation.value }
       : {}),
+    ...(draft.value !== undefined ? { draft: draft.value } : {}),
     ...(truncated !== undefined ? { truncated } : {}),
   })
 }
@@ -2050,6 +2392,21 @@ function parseSessionEvent(value: unknown): Result<MobileSessionEvent> {
     }
     case 'elicitation_cleared':
       return ok({ type: 'elicitation_cleared' })
+    case 'draft_update': {
+      const draft = parseDraftState(value.draft)
+      if (!draft.ok) return draft
+      const clientUpdateId = parseOptionalNonEmptyString(
+        value.clientUpdateId,
+        MAX_DRAFT_UPDATE_ID_LENGTH,
+        'draft_update.clientUpdateId',
+      )
+      if (!clientUpdateId.ok) return clientUpdateId
+      return ok({
+        type: 'draft_update',
+        draft: draft.value,
+        ...(clientUpdateId.value !== undefined ? { clientUpdateId: clientUpdateId.value } : {}),
+      } satisfies MobileDraftUpdateEvent)
+    }
     default:
       return fail('bad_request', `unknown session event type: ${type}`)
   }

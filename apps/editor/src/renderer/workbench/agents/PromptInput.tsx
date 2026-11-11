@@ -74,6 +74,7 @@ import {
   type ImageRejectReason,
   type PromptImage,
 } from '../../services/acp/promptImage.js'
+import type { PromptFileAttachment } from '../../services/acp/promptAttachment.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
   openEditorAndReveal,
@@ -124,6 +125,7 @@ import { MentionPopover } from './MentionPopover.js'
 import { ContextPopover, type ContextPopoverEntry } from './ContextPopover.js'
 import { SelectionContextChips } from './SelectionContextChips.js'
 import { PromptImageChips } from './PromptImageChips.js'
+import { PromptFileChips } from './PromptFileChips.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import {
   PromptMonacoEditor,
@@ -142,7 +144,10 @@ import { ConfigOptionsBar, type ConfigOptionsBarHandle } from './ConfigOptionsBa
 import { CollapseModePicker } from './CollapseModePicker.js'
 import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
-import { AcpPromptDraftCache } from '../../services/acp/session/acpPromptDraftCache.js'
+import {
+  AcpPromptDraftCache,
+  type AcpPromptDraft,
+} from '../../services/acp/session/acpPromptDraftCache.js'
 import { AcpPromptCancelledDraftStash } from '../../services/acp/session/acpPromptCancelledDraftStash.js'
 import { AcpPromptContextInbox } from '../../services/acp/session/acpPromptContextInbox.js'
 import { AcpPromptTextInbox } from '../../services/acp/session/acpPromptTextInbox.js'
@@ -231,6 +236,9 @@ export function PromptInput({
   const [images, setImages] = useState<readonly PromptImage[]>(
     () => AcpPromptDraftCache.load(session.id)?.images ?? [],
   )
+  const [promptFiles, setPromptFiles] = useState<readonly PromptFileAttachment[]>(
+    () => AcpPromptDraftCache.load(session.id)?.files ?? [],
+  )
   // Live mirror of `images`: an attach reads the file for tens of milliseconds,
   // and a callback that closed over the state value would append to a stale
   // list when two attaches overlap. Every writer goes through commitImages.
@@ -313,6 +321,10 @@ export function PromptInput({
   // Saves the in-progress draft text when the user enters history navigation mode,
   // so Escape / Down-past-end restores it.
   const historyDraftRef = useRef('')
+  /** The remote draft whose UI write is in flight; the save effect treats an equal draft as an echo. */
+  const applyingRemoteDraftRef = useRef<AcpPromptDraft | undefined>(undefined)
+  /** Remote draft that arrived before Monaco was ready. */
+  const pendingRemoteDraftRef = useRef<AcpPromptDraft | undefined>(undefined)
   // Latest popover state + accept callbacks, read by the WidgetHandle methods
   // (bound once) when a suggestion command fires. Refreshed every render.
   const popoverStateRef = useRef<PopoverHandleState | null>(null)
@@ -651,6 +663,7 @@ export function PromptInput({
       el.restoreRefs(draft.refs ?? [])
       setContexts(draft.contexts ?? [])
       commitImages(() => draft.images ?? [])
+      setPromptFiles(draft.files ?? [])
       imageUndo.reset()
       syncImageUndoState()
       requestFrame(() => el.focus())
@@ -662,6 +675,7 @@ export function PromptInput({
     editorReady,
     contexts,
     images,
+    promptFiles.length,
     requestFrame,
     commitImages,
     imageUndo,
@@ -687,20 +701,79 @@ export function PromptInput({
     return () => AcpPromptDraftCache.unpin(session.id)
   }, [session.id])
 
+  // Apply a draft authored by the phone. Text replaces the whole buffer (as one
+  // undoable edit) which also invalidates the old ref pills; contexts survive
+  // because they are independent of the text range.
+  const applyRemoteDraft = useCallback(
+    (draft: AcpPromptDraft | undefined): void => {
+      const handle = editorHandleRef.current
+      if (handle === null && draft !== undefined) {
+        pendingRemoteDraftRef.current = draft
+        return
+      }
+      applyingRemoteDraftRef.current = draft
+      if (draft === undefined) {
+        handle?.setText('', 0)
+        handle?.clearHistory()
+        setText('')
+        setCaret(0)
+        setContexts([])
+        commitImages(() => [])
+        setPromptFiles([])
+        imageUndo.reset()
+        syncImageUndoState()
+        return
+      }
+      const currentText = handle?.getText() ?? ''
+      const nextCaret = Math.max(0, Math.min(draft.caret ?? draft.text.length, draft.text.length))
+      if (currentText !== draft.text) {
+        handle?.setTextUndoable(draft.text, nextCaret)
+        setText(draft.text)
+        setCaret(nextCaret)
+        imageUndo.reset()
+        syncImageUndoState()
+      } else if (draft.caret !== undefined) {
+        // A bare cursor move must not steal focus or fight an IME session.
+        const focused = dropHostRef.current?.contains(document.activeElement) === true
+        if (!focused) {
+          handle?.setCaret(nextCaret)
+          setCaret(nextCaret)
+        }
+      }
+      if (draft.contexts !== undefined) setContexts(draft.contexts)
+      commitImages(() => draft.images ?? [])
+      setPromptFiles(draft.files ?? [])
+    },
+    [commitImages, imageUndo, syncImageUndoState],
+  )
+
+  useEffect(() => {
+    const subscription = AcpPromptDraftCache.onDidChange((event) => {
+      if (event.sessionId !== session.id) return
+      if (event.source !== 'remote') return
+      applyRemoteDraft(event.draft)
+    })
+    return () => subscription.dispose()
+  }, [session.id, applyRemoteDraft])
+
   // Persist the unsent draft (text + range-tracked refs + attached contexts +
-  // attached images) per session so switching tabs / sessions and coming back
-  // restores it (see AcpPromptDraftCache). Kept alive while any is non-empty so a
-  // draft with only attachments (no text yet) survives a tab switch. Refs are
-  // read live from the tracker (they change on every edit, which also bumps
-  // `text`/`caret`, so this effect re-runs in step).
+  // attached images/files) per session so switching tabs / sessions and coming
+  // back restores it (see AcpPromptDraftCache). The `echo` source keeps a
+  // remote apply from being published straight back to the phone.
   useEffect(() => {
     const refs = editorHandleRef.current?.listRefs() ?? []
-    if (text || contexts.length > 0 || images.length > 0 || refs.length > 0) {
-      AcpPromptDraftCache.save(session.id, { text, refs, contexts, images, caret })
+    const draft: AcpPromptDraft | undefined =
+      text || contexts.length > 0 || images.length > 0 || promptFiles.length > 0 || refs.length > 0
+        ? { text, refs, contexts, images, files: promptFiles, caret }
+        : undefined
+    const echo = sameDraft(applyingRemoteDraftRef.current, draft)
+    if (draft === undefined) {
+      AcpPromptDraftCache.clear(session.id, { source: echo ? 'echo' : 'local' })
     } else {
-      AcpPromptDraftCache.clear(session.id)
+      AcpPromptDraftCache.save(session.id, draft, { source: echo ? 'echo' : 'local' })
     }
-  }, [text, contexts, images, caret, session.id])
+    applyingRemoteDraftRef.current = undefined
+  }, [text, contexts, images, promptFiles, caret, session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text, caret), [text, caret])
   const slashMatches = useMemo<readonly AvailableCommand[]>(
@@ -1381,6 +1454,7 @@ export function PromptInput({
     const refs = editorHandleRef.current?.listRefs() ?? []
     const attached = contexts
     const attachedImages = images
+    const attachedFiles = promptFiles
     // Stash the full submitted draft so cancelling the turn before any response
     // arrives can restore it verbatim (onDidCancelForRestore → drain below).
     // Cleared by the session once the turn settles without a cancel.
@@ -1389,6 +1463,7 @@ export function PromptInput({
       refs,
       contexts: attached,
       images: attachedImages,
+      files: attachedFiles,
     })
     editorHandleRef.current?.clearRefs()
     editorHandleRef.current?.setText('', 0)
@@ -1399,6 +1474,7 @@ export function PromptInput({
     AcpPromptDraftCache.clear(session.id)
     setContexts([])
     commitImages(() => [])
+    setPromptFiles([])
     imageUndo.reset()
     syncImageUndoState()
     setHistoryOpen(false)
@@ -1409,7 +1485,11 @@ export function PromptInput({
     setMentionIndex(0)
     setHashIndex(0)
     historyService.push(value)
-    void session.sendPrompt(value, refs, attached, attachedImages)
+    if (attachedFiles.length > 0) {
+      void session.sendPrompt(value, refs, attached, attachedImages, attachedFiles)
+    } else {
+      void session.sendPrompt(value, refs, attached, attachedImages)
+    }
   }
 
   const revealContext = (ctx: SelectionContext, target: OpenTarget = 'default'): void => {
@@ -1542,6 +1622,11 @@ export function PromptInput({
     setEditorReady(true)
     const refs = initialDraftRef.current.refs
     if (refs.length > 0) editorHandleRef.current?.restoreRefs(refs)
+    const pending = pendingRemoteDraftRef.current
+    if (pending !== undefined) {
+      pendingRemoteDraftRef.current = undefined
+      applyRemoteDraft(pending)
+    }
   }
 
   // ArrowUp on the first line opens history when nothing else is open. Returns
@@ -1833,6 +1918,10 @@ export function PromptInput({
           syncImageUndoState()
         }}
       />
+      <PromptFileChips
+        files={promptFiles}
+        onRemove={(id) => setPromptFiles((prev) => prev.filter((file) => file.id !== id))}
+      />
       <div className={styles['promptComposer']}>
         {historyOpen && historyEntries.length > 0 ? (
           <PromptHistoryPopover
@@ -1979,6 +2068,37 @@ function imageRejectMessage(reason: ImageRejectReason, limits: ImageLimits): str
         n: limits.maxCount,
       })
   }
+}
+
+/**
+ * Value equality for the local save effect: a draft just applied from the phone
+ * must be written back as an echo instead of being published again.
+ */
+function sameDraft(a: AcpPromptDraft | undefined, b: AcpPromptDraft | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b
+  if (a.text !== b.text || (a.caret ?? 0) !== (b.caret ?? 0)) return false
+  if (refKey(a) !== refKey(b)) return false
+  if (contextKey(a) !== contextKey(b)) return false
+  if (
+    (a.images ?? []).map((image) => image.id).join('|') !==
+    (b.images ?? []).map((image) => image.id).join('|')
+  ) {
+    return false
+  }
+  return (
+    (a.files ?? []).map((file) => file.id).join('|') ===
+    (b.files ?? []).map((file) => file.id).join('|')
+  )
+}
+
+function refKey(draft: AcpPromptDraft): string {
+  return (draft.refs ?? []).map((ref) => `${ref.ref.id}:${ref.start}:${ref.end}`).join('|')
+}
+
+function contextKey(draft: AcpPromptDraft): string {
+  return (draft.contexts ?? [])
+    .map((context) => `${context.uri}:${context.startLine}:${context.endLine}`)
+    .join('|')
 }
 
 /**

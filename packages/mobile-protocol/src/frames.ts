@@ -1,4 +1,5 @@
 import type { MobileMessageAttachment } from './attachments.js'
+import type { DraftUpdateFrame, MobileDraftState } from './draft.js'
 import type { MobileErrorCode } from './errors.js'
 import type { MobileMessageImage } from './images.js'
 
@@ -277,6 +278,8 @@ export interface MobileSessionSnapshot {
   isReplayingHistory: boolean
   /** True when the gateway dropped the earliest timeline items to fit one frame. */
   truncated?: boolean
+  /** Current unsent prompt draft; omitted when both ends are empty. */
+  draft?: MobileDraftState
 }
 
 export interface MobileToolCallDiffDetail {
@@ -398,6 +401,10 @@ export interface SendPromptPayload {
   text: string
   /** Attachment upload ids; the gateway resolves them for the authenticated device. */
   attachmentIds?: readonly string[]
+  /** Draft image ids already materialized in the PC draft (PC paste or another phone). */
+  draftImageIds?: readonly string[]
+  /** Draft file ids already materialized in the PC draft (another phone's upload). */
+  draftFileIds?: readonly string[]
 }
 
 export interface CancelTurnPayload {
@@ -653,6 +660,7 @@ export type ClientFrame =
   | PushUnsubscribeFrame
   | SetNotificationPrefsFrame
   | ClientStateFrame
+  | DraftUpdateFrame
 export type ClientFrameType = ClientFrame['type']
 
 // Server → client
@@ -781,6 +789,13 @@ export interface MobileElicitationClearedEvent {
   type: 'elicitation_cleared'
 }
 
+/** Full replacement of the shared draft; `clientUpdateId` only echoes to the sender. */
+export interface MobileDraftUpdateEvent {
+  type: 'draft_update'
+  draft: MobileDraftState
+  clientUpdateId?: string
+}
+
 export type MobileSessionEvent =
   | MobileMessageUpsertEvent
   | MobileToolCallUpsertEvent
@@ -794,6 +809,7 @@ export type MobileSessionEvent =
   | MobilePermissionClearedEvent
   | MobileElicitationUpsertEvent
   | MobileElicitationClearedEvent
+  | MobileDraftUpdateEvent
 
 export interface SessionDeltaFrame {
   type: 'session_delta'

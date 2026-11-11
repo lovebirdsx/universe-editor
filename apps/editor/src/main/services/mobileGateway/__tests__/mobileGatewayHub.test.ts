@@ -5,6 +5,7 @@ import {
   type MobileAgentCandidate,
   type MobileSessionRef,
   type MobileSideTaskSummary,
+  type DraftUpdateFrame,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
 import { describe, expect, it, vi } from 'vitest'
@@ -13,6 +14,7 @@ import type {
   MobileBridgeEvent,
   MobileBridgeImage,
   MobileBridgeNewSessionResult,
+  MobileBridgePromptAttachment,
   MobileBridgeResult,
   MobileBridgeSessionEvent,
   MobileBridgeSessionHistoryEntry,
@@ -65,6 +67,16 @@ class FakeBridge implements IMobileBridgeService {
   readonly getWorkspaceImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
   readonly ping = vi.fn(async () => 'pong' as const)
   readonly getWorkspaceGitDirty = vi.fn(async (): Promise<boolean | undefined> => undefined)
+  readonly applyDraft = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly getDraftImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
+  readonly attachDraftAttachments = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly resolveDraftAttachments = vi.fn(
+    async (): Promise<MobileBridgeResult<readonly MobileBridgePromptAttachment[]>> => ({
+      ok: true,
+      value: [],
+    }),
+  )
+  readonly clearDraft = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly sendPrompt = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly cancelTurn = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resolvePermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
@@ -2968,5 +2980,264 @@ describe('MobileGatewayHub attachment resolution', () => {
       hub.readSessionImage({ windowId: 9, localId: 's1' }, 'm1', 0),
     ).resolves.toBeUndefined()
     await expect(hub.readSessionWorkspaceImage(ref, 'missing.png')).resolves.toEqual(image)
+  })
+
+  it('materializes uploaded draft attachments once per id', async () => {
+    const resolveForPrompt = vi.fn(async () => resolvedAttachments)
+    const { hub, bridge, connection } = makeHarness({ resolveForPrompt, consume: vi.fn() })
+    hub.authenticateConnection(connection, { deviceId: 'dev-1', trusted: false })
+    await hub.subscribeSession(connection, ref)
+    const frame: DraftUpdateFrame = {
+      type: 'draft_update',
+      ref,
+      baseRevision: 0,
+      clientUpdateId: 'u1',
+      draft: {
+        text: 'hi',
+        caret: 2,
+        images: [{ id: 'att-1', source: 'mobile', mimeType: 'image/png', byteSize: 3 }],
+      },
+    }
+
+    await hub.handleDraftUpdate(connection, frame)
+
+    expect(resolveForPrompt).toHaveBeenCalledWith('dev-1', ['att-1'])
+    expect(bridge.attachDraftAttachments).toHaveBeenCalledWith('s1', resolvedAttachments)
+
+    await hub.handleDraftUpdate(connection, {
+      ...frame,
+      clientUpdateId: 'u2',
+      draft: { ...frame.draft, text: 'hi!' },
+    })
+    expect(resolveForPrompt).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('MobileGatewayHub draft updates', () => {
+  function draftFrame(overrides: Partial<DraftUpdateFrame> = {}): DraftUpdateFrame {
+    return {
+      type: 'draft_update',
+      ref: { windowId: 1, localId: 's1', durableId: 'd1' },
+      baseRevision: 0,
+      clientUpdateId: 'u1',
+      draft: { text: 'hello', caret: 5, images: [] },
+      ...overrides,
+    }
+  }
+
+  async function setup() {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const origin = makeConnection()
+    const peer = makeConnection()
+    for (const connection of [origin, peer]) {
+      hub.addConnection(connection)
+      hub.subscribeInbox(connection)
+      await hub.subscribeSession(connection, {
+        windowId: 1,
+        localId: 's1',
+        durableId: 'd1',
+      })
+      connection.frames.length = 0
+    }
+    return { hub, bridge, origin, peer }
+  }
+
+  it('applies a phone draft once and fans it out with a caller-only clientUpdateId', async () => {
+    const { hub, bridge, origin, peer } = await setup()
+
+    await hub.handleDraftUpdate(origin, draftFrame())
+
+    expect(bridge.applyDraft).toHaveBeenCalledWith('s1', {
+      text: 'hello',
+      caret: 5,
+      images: [],
+    })
+    const originEvents = framesOf(origin, 'session_delta').flatMap((frame) => frame.events)
+    const peerEvents = framesOf(peer, 'session_delta').flatMap((frame) => frame.events)
+    expect(originEvents).toStrictEqual([
+      {
+        type: 'draft_update',
+        draft: expect.objectContaining({ text: 'hello', revision: 1, source: 'mobile' }),
+        clientUpdateId: 'u1',
+      },
+    ])
+    expect(peerEvents).toStrictEqual([
+      {
+        type: 'draft_update',
+        draft: expect.objectContaining({ text: 'hello', revision: 1, source: 'mobile' }),
+      },
+    ])
+  })
+
+  it('acks an identical update to the caller without re-broadcasting it', async () => {
+    const { hub, origin, peer } = await setup()
+    await hub.handleDraftUpdate(origin, draftFrame())
+    origin.frames.length = 0
+    peer.frames.length = 0
+
+    await hub.handleDraftUpdate(origin, draftFrame({ clientUpdateId: 'u2' }))
+
+    const originEvents = framesOf(origin, 'session_delta').flatMap((frame) => frame.events)
+    expect(originEvents).toStrictEqual([
+      {
+        type: 'draft_update',
+        draft: expect.objectContaining({ text: 'hello', revision: 1 }),
+        clientUpdateId: 'u2',
+      },
+    ])
+    expect(framesOf(peer, 'session_delta')).toStrictEqual([])
+  })
+
+  it('ignores a draft for a session the connection has not subscribed to', async () => {
+    const { hub, bridge, origin } = await setup()
+
+    await hub.handleDraftUpdate(
+      origin,
+      draftFrame({ ref: { windowId: 1, localId: 'other', durableId: 'd9' } }),
+    )
+
+    expect(bridge.applyDraft).not.toHaveBeenCalled()
+    expect(framesOf(origin, 'session_delta')).toStrictEqual([])
+  })
+
+  it('seeds a new subscriber snapshot with the registry draft', async () => {
+    const { hub, origin } = await setup()
+    await hub.handleDraftUpdate(origin, draftFrame())
+
+    const late = makeConnection()
+    hub.addConnection(late)
+    await hub.subscribeSession(late, { windowId: 1, localId: 's1', durableId: 'd1' })
+
+    const snapshots = framesOf(late, 'session_snapshot')
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]?.session.draft).toMatchObject({
+      text: 'hello',
+      caret: 5,
+      revision: 1,
+      source: 'mobile',
+    })
+  })
+
+  it('removes an empty phone draft so a later snapshot cannot resurrect it', async () => {
+    const { hub, origin } = await setup()
+    await hub.handleDraftUpdate(origin, draftFrame())
+    await hub.handleDraftUpdate(
+      origin,
+      draftFrame({
+        clientUpdateId: 'u-clear',
+        draft: { text: '', caret: 0, images: [] },
+      }),
+    )
+
+    const late = makeConnection()
+    hub.addConnection(late)
+    await hub.subscribeSession(late, { windowId: 1, localId: 's1', durableId: 'd1' })
+
+    expect(framesOf(late, 'session_snapshot')[0]?.session.draft).toBeUndefined()
+  })
+
+  it('resolves a stale localId through the durable id', async () => {
+    const { hub, bridge, origin } = await setup()
+
+    await hub.handleDraftUpdate(
+      origin,
+      draftFrame({ ref: { windowId: 1, localId: 'stale', durableId: 'd1' } }),
+    )
+
+    expect(bridge.applyDraft).toHaveBeenCalledWith('s1', {
+      text: 'hello',
+      caret: 5,
+      images: [],
+    })
+  })
+
+  it('serves bytes only for an image the draft actually references', async () => {
+    const { hub, bridge, origin } = await setup()
+    bridge.getDraftImage.mockResolvedValue({
+      mimeType: 'image/png',
+      bytes: new Uint8Array([1, 2, 3]),
+    })
+    await hub.handleDraftUpdate(origin, draftFrame())
+
+    await expect(
+      hub.readDraftImage({ windowId: 1, localId: 's1', durableId: 'd1' }, 'img-1'),
+    ).resolves.toBeUndefined()
+
+    await hub.handleDraftUpdate(
+      origin,
+      draftFrame({
+        clientUpdateId: 'u2',
+        draft: {
+          text: 'hello',
+          caret: 5,
+          images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3 }],
+        },
+      }),
+    )
+    const image = await hub.readDraftImage({ windowId: 1, localId: 's1', durableId: 'd1' }, 'img-1')
+    expect(image).toMatchObject({ mimeType: 'image/png' })
+    expect(bridge.getDraftImage).toHaveBeenCalledWith('s1', 'img-1', expect.anything())
+  })
+
+  it('resolves PC draft images on send and clears the shared draft', async () => {
+    const { hub, bridge, origin } = await setup()
+    bridge.resolveDraftAttachments.mockResolvedValue({
+      ok: true,
+      value: [
+        {
+          kind: 'image',
+          id: 'img-1',
+          name: 'shot.png',
+          mimeType: 'image/png',
+          byteSize: 3,
+          dataBase64: 'AQID',
+        },
+        {
+          kind: 'file',
+          id: 'file-1',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          byteSize: 7,
+          uri: 'file:///tmp/notes.txt',
+        },
+      ],
+    })
+    await hub.handleDraftUpdate(
+      origin,
+      draftFrame({
+        draft: {
+          text: 'hello',
+          caret: 5,
+          images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3 }],
+        },
+      }),
+    )
+    origin.frames.length = 0
+
+    await hub.handleCommand(origin, {
+      type: 'command',
+      requestId: 'send-1',
+      kind: 'sendPrompt',
+      payload: {
+        ref: { windowId: 1, localId: 's1', durableId: 'd1' },
+        text: 'hello',
+        draftImageIds: ['img-1'],
+        draftFileIds: ['file-1'],
+      },
+    })
+
+    expect(bridge.resolveDraftAttachments).toHaveBeenCalledWith('s1', ['img-1'], ['file-1'])
+    expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', 'hello', [
+      expect.objectContaining({ kind: 'image', id: 'img-1' }),
+      expect.objectContaining({ kind: 'file', id: 'file-1' }),
+    ])
+    expect(bridge.clearDraft).toHaveBeenCalledWith('s1')
+    const draftEvents = framesOf(origin, 'session_delta')
+      .flatMap((frame) => frame.events)
+      .filter((event) => event.type === 'draft_update')
+    expect(draftEvents.at(-1)?.draft.text).toBe('')
   })
 })

@@ -163,6 +163,29 @@ describe('MobileClient session subscription', () => {
     expect(client.getDeviceTrustedStore().getState()).toBe(false)
   })
 
+  it('sends a high-frequency draft frame without the command wrapper', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    client.sendDraft('hi', 1, 4)
+
+    const frame = sentFrames(socket).find(
+      (candidate) =>
+        typeof candidate === 'object' &&
+        candidate !== null &&
+        (candidate as Record<string, unknown>)['type'] === 'draft_update',
+    ) as { type: string; baseRevision: number; clientUpdateId: string; draft: unknown }
+    expect(frame).toMatchObject({
+      type: 'draft_update',
+      ref: { windowId: 1, localId: 's1' },
+      baseRevision: 4,
+      draft: { text: 'hi', caret: 1, images: [] },
+    })
+    expect(frame.clientUpdateId).toBeTruthy()
+    expect(frameTypes(socket)).not.toContain('command')
+  })
+
   it('sends session commands with the open ref and resolves stale as success', async () => {
     const { client, sockets } = createHarness()
     const socket = sockets[0]!
@@ -197,6 +220,7 @@ describe('MobileClient session subscription', () => {
 
     void client.sendPrompt('hello', ['att-1', 'att-2']).catch(() => undefined)
     void client.sendPrompt('plain').catch(() => undefined)
+    void client.sendPrompt('with draft', [], ['img-1'], ['file-1']).catch(() => undefined)
     const commands = sentFrames(socket).filter(
       (frame) =>
         typeof frame === 'object' &&
@@ -214,6 +238,12 @@ describe('MobileClient session subscription', () => {
     expect(commands[1]?.payload).toEqual({
       ref: { windowId: 1, localId: 's1' },
       text: 'plain',
+    })
+    expect(commands[2]?.payload).toEqual({
+      ref: { windowId: 1, localId: 's1' },
+      text: 'with draft',
+      draftImageIds: ['img-1'],
+      draftFileIds: ['file-1'],
     })
   })
 
