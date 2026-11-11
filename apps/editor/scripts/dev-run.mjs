@@ -102,6 +102,16 @@ const upstream = spawnSync(
 )
 if (upstream.status !== 0) process.exit(upstream.status ?? 1)
 
+// Same mobile PWA freshness gate as `pnpm dev` (see scripts/dev/
+// ensure-mobile-assets-build.mjs): the gateway starts from source, so a stale served bundle
+// turns every phone handshake into close 4400「版本不一致」even though the editor is current.
+const mobileAssets = spawnSync(
+  process.execPath,
+  [resolve(REPO_ROOT, 'scripts/dev/ensure-mobile-assets-build.mjs')],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+)
+if (mobileAssets.status !== 0) process.exit(mobileAssets.status ?? 1)
+
 // Same remote-server bundle freshness gate as `pnpm dev` (see scripts/dev/
 // ensure-remote-server-bundle.mjs). dev:run has no watch semantics, so this precheck
 // is the only freshness guarantee — the deploy hash must not fail-open on a stale bundle.

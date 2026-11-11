@@ -49,6 +49,17 @@ const upstream = spawnSync(
 )
 if (upstream.status !== 0) process.exit(upstream.status ?? 1)
 
+// The phone PWA served by the mobile gateway is a separate vite build that electron-vite
+// never touches. A protocol bump with a stale apps/mobile/dist leaves every phone handshake
+// dead (close 4400 / 「版本不一致」) and refreshing cannot recover it — see
+// scripts/dev/ensure-mobile-assets-build.mjs. Fast no-op once stamped.
+const mobileAssets = spawnSync(
+  process.execPath,
+  [resolve(REPO_ROOT, 'scripts/dev/ensure-mobile-assets-build.mjs')],
+  { cwd: REPO_ROOT, stdio: 'inherit' },
+)
+if (mobileAssets.status !== 0) process.exit(mobileAssets.status ?? 1)
+
 // The remote-server deploy bundle is content-hashed on connect; keep dist-bundle fresh
 // before launching so a stale/missing bundle can't fail-open past the staleness check.
 // Fast no-op once stamped; only input changes pay the esbuild bundle.

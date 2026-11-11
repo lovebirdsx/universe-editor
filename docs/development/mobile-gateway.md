@@ -940,7 +940,12 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 **构建与打包**（M5 已落地）：
 
 1. `runtime:stage` 先跑 `pnpm --filter @universe-editor/mobile build`，产出 `apps/mobile/dist`
-   （`apps/mobile` 用 `vite build --watch` 供开发）。
+   （`apps/mobile` 用 `vite build --watch` 供开发）。`pnpm dev` / `pnpm dev:run` 启动前还会跑
+   `scripts/dev/ensure-mobile-assets-build.mjs`：按输入指纹（mobile 自身 + 经 dist 解析的
+   mobile-protocol / acp-view-model 源码）自检，过期时用 turbo 重建。否则 bump
+   `MOBILE_PROTOCOL_VERSION` 后，网关（main 走 src alias，立即是新版）仍托管旧 PWA，
+   手机握手一律 4400「版本不一致」，且刷新页面也拿不到新文件。设置了
+   `UNIVERSE_MOBILE_ASSETS_DIR` 时该自检跳过（自定义资源目录由使用者负责）。
 2. `scripts/release/runtime-resources.mjs` 将其 stage 到 `.runtime-resources/mobile`，
    `REQUIRED_SOURCE_FILES` 以 `mobile/index.html` 为哨兵；缺失时 `verify-source` /
    `verify-packaged` 直接失败。
