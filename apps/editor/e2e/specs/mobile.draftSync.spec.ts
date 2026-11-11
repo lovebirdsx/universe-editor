@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
- *  Phone ↔ PC composer draft sync (protocol v13). One raw-WebSocket phone covers
+ *  Phone ↔ PC composer draft sync (protocol v17). One raw-WebSocket phone covers
  *  the frame contract (ack + snapshot), the PWA phone covers the real UI path in
  *  both directions. Cold-launch fixture: the gateway is main-process state.
+ *  Caret/selection is local to each client and never travels on the wire.
  *--------------------------------------------------------------------------------------------*/
 
 import { existsSync } from 'node:fs'
@@ -115,6 +116,19 @@ async function subscribeInbox(ws: WebSocket): Promise<InboxRef> {
   return row.ref
 }
 
+async function focusPcPrompt(page: Page): Promise<void> {
+  await page.getByRole('tab', { name: /Echo Agent/ }).click()
+  await expect(page.getByTestId('acp-prompt-drop-host')).toBeVisible({ timeout: 10_000 })
+  await page.evaluate(() => {
+    void window.__E2E__!.runCommand('workbench.action.agent.focusInput')
+  })
+  await expect
+    .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), {
+      timeout: 5_000,
+    })
+    .toBe(true)
+}
+
 async function subscribeSession(
   ws: WebSocket,
   ref: InboxRef,
@@ -222,9 +236,8 @@ test.describe('mobile draft sync', () => {
         serializeFrame({
           type: 'draft_update',
           ref,
-          baseRevision: 0,
           clientUpdateId,
-          draft: { text: 'typed on phone', caret: 14, images: [] },
+          draft: { text: 'typed on phone', images: [] },
         }),
       )
 
@@ -251,16 +264,7 @@ test.describe('mobile draft sync', () => {
     try {
       await openFirstPhoneSession(phone)
 
-      await page.getByRole('tab', { name: /Echo Agent/ }).click()
-      await expect(page.getByTestId('acp-prompt-drop-host')).toBeVisible({ timeout: 10_000 })
-      await page.evaluate(() => {
-        void window.__E2E__!.runCommand('workbench.action.agent.focusInput')
-      })
-      await expect
-        .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('acpPromptInputFocused')), {
-          timeout: 5_000,
-        })
-        .toBe(true)
+      await focusPcPrompt(page)
 
       await page.keyboard.type('draft from pc')
       const phoneInput = phone.getByTestId('composer-input')
@@ -271,6 +275,63 @@ test.describe('mobile draft sync', () => {
         .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()), { timeout: 10_000 })
         .toBe('draft from phone')
       await expect(phoneInput).toHaveValue('draft from phone')
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@regression clears the phone composer when the PC deletes every character', async ({
+    page,
+    workbench,
+  }) => {
+    await startEchoSession(page, workbench)
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+      await focusPcPrompt(page)
+
+      await page.keyboard.type('clear me')
+      const phoneInput = phone.getByTestId('composer-input')
+      await expect(phoneInput).toHaveValue('clear me', { timeout: 10_000 })
+
+      await page.keyboard.press('Control+A')
+      await page.keyboard.press('Backspace')
+
+      await expect(phoneInput).toHaveValue('', { timeout: 10_000 })
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@regression keeps the phone caret when a newer PC draft arrives', async ({
+    page,
+    workbench,
+  }) => {
+    await startEchoSession(page, workbench)
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+      await focusPcPrompt(page)
+
+      await page.keyboard.type('abcdef')
+      const phoneInput = phone.getByTestId('composer-input')
+      await expect(phoneInput).toHaveValue('abcdef', { timeout: 10_000 })
+
+      await phoneInput.evaluate((element) => {
+        const textarea = element as HTMLTextAreaElement
+        textarea.focus()
+        textarea.setSelectionRange(2, 2)
+        textarea.dispatchEvent(new Event('select', { bubbles: true }))
+      })
+
+      await page.keyboard.type('X')
+
+      await expect(phoneInput).toHaveValue('abcdefX', { timeout: 10_000 })
+      expect(
+        await phoneInput.evaluate((element) => (element as HTMLTextAreaElement).selectionStart),
+      ).toBe(2)
     } finally {
       await context.close()
       await browser.close()

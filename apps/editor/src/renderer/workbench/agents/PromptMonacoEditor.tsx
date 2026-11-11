@@ -183,6 +183,8 @@ export interface PromptMonacoEditorProps {
    * stacks (images) whose versions refer to the discarded history.
    */
   readonly onDidResetHistory?: () => void
+  /** IME composition start/end; the host defers remote draft applies while composing. */
+  readonly onCompositionChange?: (composing: boolean) => void
   readonly onEditorReady?: (editor: monaco.editor.IStandaloneCodeEditor, ns: typeof monaco) => void
 }
 
@@ -198,6 +200,7 @@ export function PromptMonacoEditor({
   onEnter,
   onArrowUp,
   onDidResetHistory,
+  onCompositionChange,
   onEditorReady,
 }: PromptMonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -216,6 +219,8 @@ export function PromptMonacoEditor({
   onArrowUpRef.current = onArrowUp
   const onDidResetHistoryRef = useRef(onDidResetHistory)
   onDidResetHistoryRef.current = onDidResetHistory
+  const onCompositionChangeRef = useRef(onCompositionChange)
+  onCompositionChangeRef.current = onCompositionChange
   const onEditorReadyRef = useRef(onEditorReady)
   onEditorReadyRef.current = onEditorReady
 
@@ -485,6 +490,8 @@ export function PromptMonacoEditor({
         }),
       )
       disposables.push(ed.onDidChangeCursorPosition(() => emitChange('cursor')))
+      disposables.push(ed.onDidCompositionStart(() => onCompositionChangeRef.current?.(true)))
+      disposables.push(ed.onDidCompositionEnd(() => onCompositionChangeRef.current?.(false)))
 
       // Bridge Monaco text focus → the dedicated `acpPromptInputFocused` contextKey
       // (NOT `editorTextFocus`): commands gated on editorTextFocus (findWordAtCursor,

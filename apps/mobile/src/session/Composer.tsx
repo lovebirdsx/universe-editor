@@ -48,10 +48,30 @@ const LEGACY_DRAFT_PREFIX = 'universe.mobile.draft:'
 /** sessionStorage is small; stale sessions must not crowd out the active draft. */
 const MAX_STORED_DRAFTS = 20
 const NO_COMMANDS: readonly MobileAvailableCommand[] = []
-/** How long a local keystroke wins over an incoming remote draft. */
-const LOCAL_EDIT_GRACE_MS = 400
 /** Matches the PC-side publisher; keeps typing from flooding the socket. */
 const DRAFT_SYNC_DEBOUNCE_MS = 250
+const EMPTY_ID_SET: ReadonlySet<string> = new Set()
+
+/**
+ * The fields whose changes make this phone the writer. Remote attachment
+ * mirrors are deliberately excluded: they move when another client edits and
+ * must not look like an unpublished local edit.
+ */
+function localDraftKey(
+  text: string,
+  localImages: readonly MobileDraftImageRef[],
+  localFiles: readonly MobileDraftFileRef[],
+  removedImages: ReadonlySet<string>,
+  removedFiles: ReadonlySet<string>,
+): string {
+  return JSON.stringify([
+    text,
+    localImages.map((image) => image.id),
+    localFiles.map((file) => file.id),
+    [...removedImages].sort(),
+    [...removedFiles].sort(),
+  ])
+}
 
 export type ComposerAttachmentStatus = 'uploading' | 'uploaded' | 'failed'
 
@@ -92,15 +112,15 @@ export interface ComposerProps {
   readonly fetchDraftImage: (imageId: string) => Promise<Blob>
   /** One-shot backfill (rewind text / side-task quote) owned by the session page. */
   readonly prefill?: ComposerPrefill | undefined
-  /** Latest draft from the hub (PC or another phone), applied when the user is idle. */
+  /** Latest draft from the hub (PC or another phone), applied when this phone is idle. */
   readonly draft?: MobileDraftState | undefined
+  /** Gateway ack for this phone's latest draft; advances the local revision watermark. */
+  readonly draftAck?: { readonly clientUpdateId: string; readonly revision: number } | undefined
   readonly onDraftChange: (
     text: string,
-    caret: number,
-    baseRevision: number,
     images: readonly MobileDraftImageRef[],
     files: readonly MobileDraftFileRef[],
-  ) => void
+  ) => string | undefined
   readonly onSend: (
     text: string,
     attachmentIds: readonly string[],
@@ -123,6 +143,7 @@ export function Composer({
   fetchDraftImage,
   prefill,
   draft,
+  draftAck,
   onDraftChange,
   onSend,
   onStop,
@@ -148,32 +169,22 @@ export function Composer({
   const attachmentSeq = useRef(0)
   const previewUrls = useRef<Set<string>>(new Set())
   const mounted = useRef(true)
-  const lastLocalEditAt = useRef(Number.NEGATIVE_INFINITY)
   const composing = useRef(false)
-  const pendingRemote = useRef<MobileDraftState | undefined>(undefined)
-  const pendingRemoteTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  /** Highest gateway revision this composer has applied or been acked for. */
+  const lastIncorporatedRevision = useRef(0)
+  /** Local publishes in flight, by the id the gateway will echo back. */
+  const pendingSends = useRef<Set<string>>(new Set())
+  /** Local field snapshot considered already published (see localDraftKey). */
+  const lastPublishedKey = useRef(
+    localDraftKey(initialDraft.text, [], [], EMPTY_ID_SET, EMPTY_ID_SET),
+  )
+  /** Selection to restore after a remote value commit; never the remote caret. */
+  const pendingSelection = useRef<{ start: number; end: number } | undefined>(undefined)
   const interacted = useRef(false)
   /** sessionStorage had text at mount; publish it once the gateway is reachable. */
   const restoredDraft = useRef(initialDraft.text !== '')
   const [syncTick, setSyncTick] = useState(0)
-
-  const applyRemoteDraft = useCallback(
-    (next: MobileDraftState): void => {
-      pendingRemote.current = undefined
-      if (pendingRemoteTimer.current !== undefined) {
-        clearTimeout(pendingRemoteTimer.current)
-        pendingRemoteTimer.current = undefined
-      }
-      setValue(next.text)
-      const position = Math.max(0, Math.min(next.caret, next.text.length))
-      setCaret(position)
-      const element = textareaRef.current
-      if (element !== null && document.activeElement === element) {
-        element.setSelectionRange(position, position)
-      }
-    },
-    [textareaRef],
-  )
+  const onDraftChangeRef = useRef(onDraftChange)
 
   useEffect(() => {
     const urls = previewUrls.current
@@ -181,7 +192,6 @@ export function Composer({
     return () => {
       mounted.current = false
       releaseAllPreviewUrls(urls)
-      if (pendingRemoteTimer.current !== undefined) clearTimeout(pendingRemoteTimer.current)
     }
   }, [])
 
@@ -192,31 +202,9 @@ export function Composer({
   useEffect(() => {
     if (prefill === undefined || prefill.sessionKey !== sessionKey) return
     interacted.current = true
-    lastLocalEditAt.current = Date.now()
     setValue(prefill.text)
     textareaRef.current?.focus()
   }, [prefill, sessionKey, textareaRef])
-
-  // Apply a draft authored on the PC (or another phone). Text wins only when
-  // this device has been idle for a moment, so a slow socket cannot swallow
-  // characters the user is typing right now.
-  useEffect(() => {
-    if (draft === undefined) {
-      pendingRemote.current = undefined
-      if (pendingRemoteTimer.current !== undefined) {
-        clearTimeout(pendingRemoteTimer.current)
-        pendingRemoteTimer.current = undefined
-      }
-      return
-    }
-    if (draft.text === value && draft.caret === caret) return
-    if (composing.current) {
-      pendingRemote.current = draft
-      return
-    }
-    if (Date.now() - lastLocalEditAt.current < LOCAL_EDIT_GRACE_MS) return
-    applyRemoteDraft(draft)
-  }, [draft, value, caret, applyRemoteDraft, syncTick])
 
   const slash: SlashQuery | null = armed && !disabled ? extractSlashQuery(value, caret) : null
   const slashMatches = slash === null ? NO_COMMANDS : filterSlashCommands(commands, slash.query)
@@ -304,19 +292,160 @@ export function Composer({
       ),
     [draft, removedDraftFiles, localFileIds],
   )
-  const draftImages = useMemo(
-    () => [...remoteDraftImages, ...localImages],
-    [remoteDraftImages, localImages],
-  )
   const draftImageIds = useMemo(
     () => remoteDraftImages.map((image) => image.id),
     [remoteDraftImages],
   )
-  const draftFiles = useMemo(
-    () => [...remoteDraftFiles, ...localFiles],
-    [remoteDraftFiles, localFiles],
-  )
   const draftFileIds = useMemo(() => remoteDraftFiles.map((file) => file.id), [remoteDraftFiles])
+
+  // Read by the debounce timers below: they must see the latest local/remote
+  // inputs without depending on remote drafts (which would cancel a PC edit).
+  const snapshotRef = useRef({
+    value: initialDraft.text,
+    localImages: [] as readonly MobileDraftImageRef[],
+    localFiles: [] as readonly MobileDraftFileRef[],
+    remoteDraftImages: [] as readonly MobileDraftImageRef[],
+    remoteDraftFiles: [] as readonly MobileDraftFileRef[],
+    removedImages: EMPTY_ID_SET,
+    removedFiles: EMPTY_ID_SET,
+    key: localDraftKey(initialDraft.text, [], [], EMPTY_ID_SET, EMPTY_ID_SET),
+  })
+  const draftRef = useRef(draft)
+  useLayoutEffect(() => {
+    snapshotRef.current = {
+      value,
+      localImages,
+      localFiles,
+      remoteDraftImages,
+      remoteDraftFiles,
+      removedImages: removedDraftImages,
+      removedFiles: removedDraftFiles,
+      key: localDraftKey(value, localImages, localFiles, removedDraftImages, removedDraftFiles),
+    }
+    draftRef.current = draft
+    onDraftChangeRef.current = onDraftChange
+  })
+
+  const publishDraft = useCallback((force = false): boolean => {
+    const snapshot = snapshotRef.current
+    if (!mounted.current || composing.current) return false
+    if (!force && snapshot.key === lastPublishedKey.current) return false
+    const clientUpdateId = onDraftChangeRef.current(
+      snapshot.value,
+      [...snapshot.remoteDraftImages, ...snapshot.localImages],
+      [...snapshot.remoteDraftFiles, ...snapshot.localFiles],
+    )
+    if (clientUpdateId === undefined) return false
+    pendingSends.current.add(clientUpdateId)
+    lastPublishedKey.current = snapshot.key
+    return true
+  }, [])
+
+  const applyRemoteDraft = useCallback(
+    (next: MobileDraftState): void => {
+      const oldText = snapshotRef.current.value
+      if (next.text !== oldText) {
+        const element = textareaRef.current
+        const max = next.text.length
+        // Keep this phone's selection; the remote caret no longer exists on the wire.
+        const keepSelection = oldText !== '' && document.activeElement === element
+        const start = keepSelection ? Math.min(element?.selectionStart ?? max, max) : max
+        const end = keepSelection ? Math.min(element?.selectionEnd ?? start, max) : max
+        pendingSelection.current = { start, end }
+        setValue(next.text)
+        setCaret(start)
+      }
+      lastIncorporatedRevision.current = Math.max(lastIncorporatedRevision.current, next.revision)
+      // Adopt the applied text as the published baseline: it must not bounce
+      // back to the gateway as a local edit.
+      const nextKey = localDraftKey(
+        next.text,
+        snapshotRef.current.localImages,
+        snapshotRef.current.localFiles,
+        snapshotRef.current.removedImages,
+        snapshotRef.current.removedFiles,
+      )
+      lastPublishedKey.current = nextKey
+      snapshotRef.current = { ...snapshotRef.current, value: next.text, key: nextKey }
+    },
+    [textareaRef],
+  )
+
+  // The controlled textarea moves its caret to the end when React commits a new
+  // value; restore the local selection after the commit, never inside setValue.
+  useLayoutEffect(() => {
+    const selection = pendingSelection.current
+    if (selection === undefined) return
+    pendingSelection.current = undefined
+    const element = textareaRef.current
+    if (element === null) return
+    element.setSelectionRange(selection.start, selection.end)
+    setCaret(selection.start)
+  }, [value, textareaRef])
+
+  // A dropped connection loses the echo that would settle these ids; the
+  // resubscribed snapshot is the new baseline.
+  useEffect(() => {
+    if (!online) pendingSends.current.clear()
+  }, [online])
+
+  // Our own update echoed by the gateway is an ack, never remote text.
+  useEffect(() => {
+    if (draftAck === undefined) return
+    pendingSends.current.delete(draftAck.clientUpdateId)
+    lastIncorporatedRevision.current = Math.max(lastIncorporatedRevision.current, draftAck.revision)
+    setSyncTick((tick) => tick + 1)
+  }, [draftAck])
+
+  // Apply a remote draft only when this phone is not the writer: no IME, no
+  // local publish in flight, no unpublished local fields, and a newer revision.
+  useEffect(() => {
+    if (draft === undefined || disabled) return
+    if (draft.revision <= lastIncorporatedRevision.current) return
+    if (draftAck !== undefined && draft.revision <= draftAck.revision) return
+    if (composing.current || pendingSends.current.size > 0) return
+    if (snapshotRef.current.key !== lastPublishedKey.current) return
+    applyRemoteDraft(draft)
+  }, [
+    draft,
+    draftAck,
+    disabled,
+    value,
+    attachments,
+    removedDraftImages,
+    removedDraftFiles,
+    syncTick,
+    applyRemoteDraft,
+  ])
+
+  // Publish local edits after a short pause. Only local fields participate:
+  // caret moves and remote attachment mirrors never schedule a publish.
+  useEffect(() => {
+    if (!interacted.current || disabled) return
+    if (snapshotRef.current.key === lastPublishedKey.current) return
+    const handle = window.setTimeout(() => publishDraft(), DRAFT_SYNC_DEBOUNCE_MS)
+    return () => window.clearTimeout(handle)
+  }, [value, attachments, removedDraftImages, removedDraftFiles, disabled, syncTick, publishDraft])
+
+  // A draft restored from sessionStorage (page reload / app restart) is pushed
+  // once the snapshot has been seen and only when the hub has nothing newer.
+  useEffect(() => {
+    if (!restoredDraft.current || !online || disabled) return
+    restoredDraft.current = false
+    if (draft !== undefined) return
+    interacted.current = true
+    const handle = window.setTimeout(() => {
+      if (draftRef.current !== undefined) return
+      if (!publishDraft(true)) {
+        // The gateway was momentarily unwritable; make the normal debounce
+        // retry instead of losing the restored draft.
+        lastPublishedKey.current = ''
+        setSyncTick((tick) => tick + 1)
+      }
+    }, DRAFT_SYNC_DEBOUNCE_MS)
+    return () => window.clearTimeout(handle)
+  }, [online, disabled, draft, publishDraft])
+
   const canSend =
     !disabled &&
     !sending &&
@@ -328,42 +457,9 @@ export function Composer({
       remoteDraftFiles.length > 0 ||
       remoteDraftImages.length > 0)
 
-  // Publish local edits after a short pause. Nothing is sent on mount: a draft
-  // restored from sessionStorage is published by the first real interaction.
-  useEffect(() => {
-    if (!interacted.current || disabled) return
-    const matchesDraft =
-      draft !== undefined &&
-      draft.text === value &&
-      draft.caret === caret &&
-      JSON.stringify(draft.images) === JSON.stringify(draftImages) &&
-      JSON.stringify(draft.files ?? []) === JSON.stringify(draftFiles)
-    if (matchesDraft) return
-    const handle = window.setTimeout(() => {
-      if (!mounted.current || composing.current) return
-      onDraftChange(value, caret, draft?.revision ?? 0, draftImages, draftFiles)
-    }, DRAFT_SYNC_DEBOUNCE_MS)
-    return () => window.clearTimeout(handle)
-  }, [value, caret, draft, draftImages, draftFiles, disabled, online, onDraftChange, syncTick])
-
-  // A draft restored from sessionStorage (page reload / app restart) is pushed
-  // once the snapshot has been seen and only when the hub has nothing newer.
-  useEffect(() => {
-    if (!restoredDraft.current || !online || disabled) return
-    restoredDraft.current = false
-    if (draft !== undefined) return
-    interacted.current = true
-    const handle = window.setTimeout(() => {
-      if (!mounted.current || composing.current) return
-      onDraftChange(value, caret, 0, draftImages, draftFiles)
-    }, DRAFT_SYNC_DEBOUNCE_MS)
-    return () => window.clearTimeout(handle)
-  }, [online, disabled, draft, value, caret, draftImages, draftFiles, onDraftChange])
-
   const handleChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const next = event.target.value
     interacted.current = true
-    lastLocalEditAt.current = Date.now()
     setValue(next)
     setCaret(event.target.selectionStart ?? next.length)
     setArmed(true)
@@ -375,23 +471,8 @@ export function Composer({
 
   const handleCompositionEnd = (): void => {
     composing.current = false
-    const pending = pendingRemote.current
-    if (pending !== undefined) {
-      // The last keystroke just happened, so the grace period has not elapsed
-      // yet; apply the buffered remote draft as soon as it does.
-      const remaining = LOCAL_EDIT_GRACE_MS - (Date.now() - lastLocalEditAt.current)
-      if (remaining <= 0) {
-        applyRemoteDraft(pending)
-      } else {
-        if (pendingRemoteTimer.current !== undefined) clearTimeout(pendingRemoteTimer.current)
-        pendingRemoteTimer.current = setTimeout(() => {
-          pendingRemoteTimer.current = undefined
-          const latest = pendingRemote.current
-          if (latest === undefined || composing.current) return
-          applyRemoteDraft(latest)
-        }, remaining)
-      }
-    }
+    // Re-evaluate both directions: apply what arrived during the IME session,
+    // or publish the text the IME just committed.
     setSyncTick((tick) => tick + 1)
   }
 
@@ -400,7 +481,6 @@ export function Composer({
     const next = applySlashCommand(value, slash.tokenEnd, command.name)
     if (next.text.length > MAX_PROMPT_LENGTH) return
     interacted.current = true
-    lastLocalEditAt.current = Date.now()
     pendingCaret.current = next.caret
     setCaretRequest((request) => request + 1)
     setValue(next.text)
@@ -411,7 +491,6 @@ export function Composer({
   const insertSlash = (): void => {
     if (disabled || value !== '') return
     interacted.current = true
-    lastLocalEditAt.current = Date.now()
     pendingCaret.current = 1
     setCaretRequest((request) => request + 1)
     setValue('/')
@@ -471,6 +550,8 @@ export function Composer({
       setAttachments([])
       setRemovedDraftImages(new Set())
       setRemovedDraftFiles(new Set())
+      pendingSends.current.clear()
+      lastPublishedKey.current = localDraftKey('', [], [], EMPTY_ID_SET, EMPTY_ID_SET)
       clearDraft(sessionKey)
     } catch (error) {
       onNotice(commandErrorText(errorCode(error)))
@@ -610,7 +691,6 @@ export function Composer({
       releasePreviewUrl(previewUrls.current, removed.previewUrl)
     }
     interacted.current = true
-    lastLocalEditAt.current = Date.now()
     setAttachments((current) => current.filter((attachment) => attachment.key !== key))
   }
 
@@ -628,7 +708,6 @@ export function Composer({
           fetchImage={fetchDraftImage}
           onRemove={(id) => {
             interacted.current = true
-            lastLocalEditAt.current = Date.now()
             setRemovedDraftImages((current) => new Set(current).add(id))
           }}
         />
@@ -665,7 +744,6 @@ export function Composer({
                 aria-label={strings.attachmentRemove}
                 onClick={() => {
                   interacted.current = true
-                  lastLocalEditAt.current = Date.now()
                   setRemovedDraftFiles((current) => new Set(current).add(file.id))
                 }}
               >

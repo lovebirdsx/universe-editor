@@ -350,7 +350,6 @@ export interface MobileBridgeSessionSnapshot extends Omit<
 /** Draft content produced by a renderer; the gateway owns revision/order. */
 export interface MobileBridgeDraft {
   readonly text: string
-  readonly caret: number
   readonly images: readonly MobileDraftImageRef[]
   readonly files?: readonly MobileDraftFileRef[]
   readonly refs?: readonly MobileDraftRefSummary[]
@@ -555,6 +554,19 @@ export interface IMobileBridgeService {
    * when no PromptInput is mounted; the next mount restores it.
    */
   applyDraft(localId: string, draft: MobileBridgeDraft): Promise<MobileBridgeResult<void>>
+
+  /**
+   * The revision the gateway assigned to the phone draft just passed to
+   * `applyDraft`. The renderer uses it to settle a deferred remote apply
+   * against its own local publish order.
+   */
+  noteDraftRevision(localId: string, revision: number): Promise<void>
+
+  /**
+   * The revision the gateway assigned to a draft this renderer published.
+   * Every local publish awaits this ack before it accepts an older remote draft.
+   */
+  ackDraftRevision(localId: string, revision: number): Promise<void>
 
   /**
    * Bytes for a picture the PC pasted into the draft. `undefined` when the id

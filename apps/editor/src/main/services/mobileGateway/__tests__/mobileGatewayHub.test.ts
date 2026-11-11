@@ -75,6 +75,8 @@ class FakeBridge implements IMobileBridgeService {
   readonly ping = vi.fn(async () => 'pong' as const)
   readonly getWorkspaceGitDirty = vi.fn(async (): Promise<boolean | undefined> => undefined)
   readonly applyDraft = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly noteDraftRevision = vi.fn(async () => {})
+  readonly ackDraftRevision = vi.fn(async () => {})
   readonly getDraftImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
   readonly attachDraftAttachments = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resolveDraftAttachments = vi.fn(
@@ -3077,11 +3079,9 @@ describe('MobileGatewayHub attachment resolution', () => {
     const frame: DraftUpdateFrame = {
       type: 'draft_update',
       ref,
-      baseRevision: 0,
       clientUpdateId: 'u1',
       draft: {
         text: 'hi',
-        caret: 2,
         images: [{ id: 'att-1', source: 'mobile', mimeType: 'image/png', byteSize: 3 }],
       },
     }
@@ -3105,9 +3105,8 @@ describe('MobileGatewayHub draft updates', () => {
     return {
       type: 'draft_update',
       ref: { windowId: 1, localId: 's1', durableId: 'd1' },
-      baseRevision: 0,
       clientUpdateId: 'u1',
-      draft: { text: 'hello', caret: 5, images: [] },
+      draft: { text: 'hello', images: [] },
       ...overrides,
     }
   }
@@ -3139,9 +3138,9 @@ describe('MobileGatewayHub draft updates', () => {
 
     expect(bridge.applyDraft).toHaveBeenCalledWith('s1', {
       text: 'hello',
-      caret: 5,
       images: [],
     })
+    expect(bridge.noteDraftRevision).toHaveBeenCalledWith('s1', 1)
     const originEvents = framesOf(origin, 'session_delta').flatMap((frame) => frame.events)
     const peerEvents = framesOf(peer, 'session_delta').flatMap((frame) => frame.events)
     expect(originEvents).toStrictEqual([
@@ -3157,6 +3156,54 @@ describe('MobileGatewayHub draft updates', () => {
         draft: expect.objectContaining({ text: 'hello', revision: 1, source: 'mobile' }),
       },
     ])
+  })
+
+  it('acks a renderer draft with the revision it assigned', async () => {
+    const { bridge, origin, peer } = await setup()
+
+    bridge.emit({
+      kind: 'draft',
+      localId: 's1',
+      draft: { text: 'typed on pc', images: [] },
+    })
+    await tick()
+
+    expect(bridge.ackDraftRevision).toHaveBeenCalledWith('s1', 1)
+    expect(framesOf(origin, 'session_delta').flatMap((frame) => frame.events)).toStrictEqual([
+      {
+        type: 'draft_update',
+        draft: expect.objectContaining({ text: 'typed on pc', revision: 1, source: 'pc' }),
+      },
+    ])
+    expect(framesOf(peer, 'session_delta').flatMap((frame) => frame.events)).toStrictEqual([
+      {
+        type: 'draft_update',
+        draft: expect.objectContaining({ text: 'typed on pc', revision: 1, source: 'pc' }),
+      },
+    ])
+
+    origin.frames.length = 0
+    peer.frames.length = 0
+    bridge.emit({ kind: 'draft', localId: 's1', draft: undefined })
+    await tick()
+
+    expect(bridge.ackDraftRevision).toHaveBeenLastCalledWith('s1', 2)
+    expect(framesOf(peer, 'session_delta').flatMap((frame) => frame.events)).toStrictEqual([
+      {
+        type: 'draft_update',
+        draft: expect.objectContaining({ text: '', revision: 2, source: 'pc' }),
+      },
+    ])
+  })
+
+  it('acks a renderer clear even when the registry had no entry', async () => {
+    const { bridge, origin } = await setup()
+
+    bridge.emit({ kind: 'draft', localId: 's1', draft: undefined })
+    await tick()
+
+    expect(bridge.ackDraftRevision).toHaveBeenCalledWith('s1', 0)
+    expect(framesOf(origin, 'session_delta')).toStrictEqual([])
   })
 
   it('acks an identical update to the caller without re-broadcasting it', async () => {
@@ -3202,7 +3249,6 @@ describe('MobileGatewayHub draft updates', () => {
     expect(snapshots).toHaveLength(1)
     expect(snapshots[0]?.session.draft).toMatchObject({
       text: 'hello',
-      caret: 5,
       revision: 1,
       source: 'mobile',
     })
@@ -3215,7 +3261,7 @@ describe('MobileGatewayHub draft updates', () => {
       origin,
       draftFrame({
         clientUpdateId: 'u-clear',
-        draft: { text: '', caret: 0, images: [] },
+        draft: { text: '', images: [] },
       }),
     )
 
@@ -3236,7 +3282,6 @@ describe('MobileGatewayHub draft updates', () => {
 
     expect(bridge.applyDraft).toHaveBeenCalledWith('s1', {
       text: 'hello',
-      caret: 5,
       images: [],
     })
   })
@@ -3259,7 +3304,6 @@ describe('MobileGatewayHub draft updates', () => {
         clientUpdateId: 'u2',
         draft: {
           text: 'hello',
-          caret: 5,
           images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3 }],
         },
       }),
@@ -3297,7 +3341,6 @@ describe('MobileGatewayHub draft updates', () => {
       draftFrame({
         draft: {
           text: 'hello',
-          caret: 5,
           images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3 }],
         },
       }),

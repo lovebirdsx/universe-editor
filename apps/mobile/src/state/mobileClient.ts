@@ -378,28 +378,28 @@ export class MobileClient {
    * Publish the composer draft to the gateway. Deliberately bypasses
    * {@link CommandClient}: this is high-frequency and lossy, so there is no
    * request/response, timeout or idempotency cache. Offline edits stay local.
+   * Returns the update id when the frame left this client; the gateway echoes
+   * it back as an ack carrying the revision it assigned.
    */
   sendDraft(
     text: string,
-    caret: number,
-    baseRevision: number,
     images: readonly MobileDraftImageRef[] = [],
     files: readonly MobileDraftFileRef[] = [],
-  ): void {
+  ): string | undefined {
     const ref = this._currentRef
-    if (ref === undefined || this._socket.state !== 'connected') return
+    if (ref === undefined || this._socket.state !== 'connected') return undefined
+    const clientUpdateId = createCommandId()
     this._socket.send({
       type: 'draft_update',
       ref,
-      baseRevision,
-      clientUpdateId: createCommandId(),
+      clientUpdateId,
       draft: {
         text,
-        caret,
         images,
         ...(files.length > 0 ? { files } : {}),
       },
     })
+    return clientUpdateId
   }
 
   uploadAttachment(file: File, kind: MobileAttachmentKind): Promise<MobileAttachmentUploadResult> {

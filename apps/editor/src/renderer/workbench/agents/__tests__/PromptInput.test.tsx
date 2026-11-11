@@ -2543,15 +2543,51 @@ describe('PromptInput — draft persistence', () => {
     expect(sources).toEqual(['remote'])
   })
 
-  it('clears the input for a remote empty draft', () => {
+  it('keeps the local caret when a phone draft replaces the text', () => {
+    renderWithServices(<PromptInput session={makeSession({ id: 's1' })} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'abcdef' } })
+    ta.setSelectionRange(2, 2)
+
+    act(() => {
+      AcpPromptDraftCache.save('s1', { text: 'abcdefgh', caret: 8 }, { source: 'remote' })
+    })
+
+    expect(ta.value).toBe('abcdefgh')
+    expect(ta.selectionStart).toBe(2)
+  })
+
+  it('publishes a local clear instead of treating it as an echo', () => {
+    renderWithServices(<PromptInput session={makeSession({ id: 's1' })} />)
+    const sources: string[] = []
+    const subscription = AcpPromptDraftCache.onDidChange((event) => {
+      sources.push(event.source)
+    })
+
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'gone' } })
+    fireEvent.change(ta, { target: { value: '' } })
+
+    subscription.dispose()
+    expect(AcpPromptDraftCache.load('s1')).toBeUndefined()
+    expect(sources.at(-1)).toBe('local')
+  })
+
+  it('clears the input for a remote empty draft without echoing it as local', () => {
     renderWithServices(<PromptInput session={makeSession({ id: 's1' })} />)
     fireEvent.change(getTextarea(), { target: { value: 'local text' } })
+    const sources: string[] = []
+    const subscription = AcpPromptDraftCache.onDidChange((event) => {
+      sources.push(event.source)
+    })
 
     act(() => {
       AcpPromptDraftCache.clear('s1', { source: 'remote' })
     })
 
+    subscription.dispose()
     expect(getTextarea().value).toBe('')
+    expect(sources).toEqual(['remote'])
   })
 
   it('clears the draft after the prompt is sent', () => {

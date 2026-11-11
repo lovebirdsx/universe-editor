@@ -51,7 +51,6 @@ export function toBridgeDraft(draft: AcpPromptDraft): MobileBridgeDraft | undefi
   }
   return {
     text,
-    caret: draft.caret ?? text.length,
     images,
     ...(files.length > 0 ? { files } : {}),
     ...(refs.length > 0 ? { refs } : {}),
@@ -60,10 +59,12 @@ export function toBridgeDraft(draft: AcpPromptDraft): MobileBridgeDraft | undefi
 }
 
 /**
- * Apply a gateway draft to the PC cache. Text/caret are shared; refs survive
- * only while the text is unchanged (their ranges point into the old buffer);
- * contexts always survive. Attachments are matched by id so a draft authored on
- * the phone cannot fabricate bytes the renderer has not received yet.
+ * Apply a gateway draft to the PC cache. Text/attachments are shared; refs
+ * survive only while the text is unchanged (their ranges point into the old
+ * buffer); contexts always survive. The caret is local UI state: keep this
+ * window's position (clamped) so a phone edit never moves the PC cursor.
+ * Attachments are matched by id so a draft authored on the phone cannot
+ * fabricate bytes the renderer has not received yet.
  */
 export function mergeBridgeDraft(
   current: AcpPromptDraft | undefined,
@@ -92,7 +93,13 @@ export function mergeBridgeDraft(
   ) {
     return undefined
   }
-  const caret = Math.max(0, Math.min(incoming.caret, incoming.text.length))
+  // A remote text replacement keeps the local caret; an empty local buffer has
+  // no meaningful position, so the next mount starts typing at the end.
+  const localCaret = current?.caret
+  const caret =
+    localCaret === undefined || current?.text === ''
+      ? incoming.text.length
+      : Math.min(localCaret, incoming.text.length)
   return {
     text: incoming.text,
     caret,

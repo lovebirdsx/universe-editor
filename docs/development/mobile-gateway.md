@@ -165,7 +165,9 @@ main 侧不直接读 `AcpSession`。
 错误码，见 §6d）；v15 增加 `hello_ok.webBuildId`：网关从当前 `index.html` 的入口脚本名生成构建
 标识，手机端与自身已加载的入口脚本名比对，不一致时提示刷新（协议版本不变时也能发现 PC 重建）。
 v16 增加分支推送：`previewPushBranch` / `pushBranch`、`MobilePushBranchPreview` /
-`MobilePushBranchResult` 与四个 `push_*` 错误码（只发布会话分支，不碰 main，见 §6e）。
+`MobilePushBranchResult` 与四个 `push_*` 错误码（只发布会话分支，不碰 main，见 §6e）；v17 让
+光标 / 选区退出草稿协议：`draft_update` 删除 `baseRevision`、draft 删除 `caret`，origin 回显只作
+ack（见 §7c）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
@@ -189,7 +191,7 @@ Referer。
 | `push_unsubscribe`                          | 注销本设备的 Web Push 订阅                                                                |
 | `set_notification_prefs`                    | `{ enabled, kinds?, alwaysNotify? }`，按设备保存通知偏好                                  |
 | `client_state`                              | `{ visible }`，前台 / 后台声明；前台连接优先收 WS 通知                                    |
-| `draft_update`                              | `{ ref, baseRevision, clientUpdateId, draft }`，高频草稿更新（不做 command 应答）         |
+| `draft_update`                              | `{ ref, clientUpdateId, draft }`，draft 只含共享文档字段；origin 以回显作 ack（不做 command 应答） |
 | `ping`                                      | 心跳，服务端回 `pong`                                                                     |
 
 **命令 kind（v3 已实现）**：
@@ -707,21 +709,54 @@ Agent 直接给出的 `http(s)` 外链由手机浏览器直接加载——PC 不
 SVG 预览未提供。流式期间 `message.id` 稳定，resume 后可能重编号，正在进行的图片请求会 404，
 重挂载后按新 id 重新拉取即可。
 
-## 7c. 输入框草稿同步（协议 v13）
+## 7c. 输入框草稿同步（协议 v17）
 
-PC 与手机打开同一会话时，两端输入框共享一份草稿（文本、光标、图片、手机上传的文件）。
-`MobileGatewayHub` 为每个 `windowId:localId` 维护一个轻量 registry，并分配单调递增的
-`revision`；两端都按「最后写入者覆盖」处理，不做冲突提示。
+PC 与手机打开同一会话时，两端输入框共享一份草稿：**文本、图片、手机上传的文件、PC 的
+refs/contexts**。**光标 / 选区是每个客户端自己的 UI 状态，不在 wire 上传输**。`MobileGatewayHub`
+为每个 `windowId:localId` 维护一个轻量 registry，并分配单调递增的 `revision`；两端都按「最后
+写入者覆盖」处理，不做字符级合并或冲突提示。
 
-- **PC 来源**：`AcpPromptDraftCache` 仍是 PC 内容真身。`MobileBridgeService.startStreaming()`
-  订阅其变更，仅在 `source === 'local'` 时按 250ms 防抖发布；`echo` 帧不回传。
-- **手机来源**：客户端直接发 `draft_update`（不经 command 的请求 / 超时 / 幂等路径），payload
-  只允许 `text` / `caret` / `images` / `files`。hub 先调 `bridge.applyDraft` 写入 PC cache，
-  再更新 registry 并 fan-out；内容未变时只回发起者一个带 `clientUpdateId` 的 ack。
-- **快照**：`session_snapshot.draft` 带 registry 当前草稿；订阅时先用 PC bridge 快照里的草稿
-  播种，registry 优先。空草稿删除 registry 条目并广播一次空状态，避免重连后复活。
-- **refs/contexts**：结构化 @/# 引用只活在 PC cache。投影成只读摘要随草稿下发；手机改文本时
-  PC 清空 refs（字符区间失效）、保留 contexts，仅光标 / 附件变化时两者都保留。
+**共享文档与应用准入**
+
+- 草稿正文由 hub 串行处理（`_enqueueDraft`）并分配 `revision`。客户端只在满足全部条件时应用远端
+  正文：不是 IME 合成中、没有未发布 / 未 ack 的本端发布、本地字段自上次成功发布后未变、远端
+  `revision` 高于本端已并入水位线。否则先记录，待水位线推进后再按 revision 结算。
+- 应用远端文本时保存本地 selection（clamp 到新文本长度），在 React commit 后用
+  `useLayoutEffect` 恢复；本地原文本为空时落到末尾。**远端 caret 不存在，任何路径都不会移动
+  本端光标。**
+- 自己的更新经 hub 回显时带 `clientUpdateId`：客户端只把它当 ack（推进水位线、清 pending），
+  绝不回写文本。
+
+**PC 侧（renderer）**
+
+- `AcpPromptDraftCache` 仍是 PC 内容真身（可继续保存本地 caret）。`MobileBridgeService.startStreaming()`
+  只发布 `source === 'local'` 的变更，250ms 防抖；`echo` 帧不回传。远端写入不会取消本地待发布
+  定时器（那会丢掉正在输入的内容），而是进入 deferred 队列。
+- `bridge.applyDraft`（hub → renderer，内部 IPC）在本地有防抖中的发布或 `awaitingLocalPublish > 0`
+  时只记录 deferred；`noteDraftRevision` / `ackDraftRevision`（同样只是内部 IPC，不属于 wire
+  协议）分别补全 deferred 的 revision 与推进本地已发布水位线。ack 丢失有 2s 防御超时。
+- 本地删空必须按 `source:'local'` 发布；只有远端 apply 引起的保存才是 `echo`（实现用显式
+  pending 标记，不做 `sameDraft(undefined, undefined)` 之类的值比较）。
+- IME 合成期间缓存最新远端草稿；composition end 时仅当本地文本仍等于收到时的文本才应用。
+
+**手机侧（PWA）**
+
+- 客户端直接发 `draft_update`（不经 command 的请求 / 超时 / 幂等路径），payload 只允许
+  `text` / `images` / `files`。hub 先调 `bridge.applyDraft` 写入 PC cache，再更新 registry 并
+  fan-out；内容未变时只回发起者一个带 `clientUpdateId` 的 ack。
+- `sendDraft` 返回本次 `clientUpdateId`（未连接时 `undefined`）。Composer 只在
+  `draft.revision` 高于已并入水位线、且本地无未发布 / 未 ack 编辑时应用远端；方向和选区变化
+  不触发发布，也不改 revision。
+- 手机仍把 `{ text, caret, updatedAt }` 写到 sessionStorage（v2 key，最多 20 条 LRU；旧版纯
+  文本 key 读取后自动迁移），但 caret 仅用于本机重挂载，不参与同步。
+- 重连后仅当 hub 没有更新的草稿才补发本地内容。空草稿同样要发布（删光全部字符也是本地编辑）。
+
+**hub 与快照**
+
+- `session_snapshot.draft` 带 registry 当前草稿；订阅时先用 PC bridge 快照里的草稿播种，
+  registry 优先。空草稿删除 registry 条目并广播一次空状态，避免重连后复活。
+- `refs/contexts` 只活在 PC cache。投影成只读摘要随草稿下发；手机改文本时 PC 清空 refs（字符
+  区间失效）、保留 contexts，文本不变时两者都保留。
 - **附件**：WS 只传 id + 元数据，字节不走 WS。手机草稿里的图片 / 文件首次出现时，hub 用
   `MobileAttachmentStore.resolveForPrompt` 取字节并 `bridge.attachDraftAttachments` 物化到
   PC cache；PC 粘贴的图片经 `/api/sessions/draft-image` 给手机预览。手机发送时，本机上传的
@@ -729,10 +764,11 @@ PC 与手机打开同一会话时，两端输入框共享一份草稿（文本�
   `bridge.resolveDraftAttachments` 合并进同一次 prompt。prompt 被接受后 hub 清空 registry 与
   PC cache，并广播空草稿。
 - **只读 / 未订阅**：readOnly 会话拒绝 `bridge.applyDraft`，hub 丢弃该更新；未订阅的会话直接忽略。
-- **手机本地兜底**：手机把 `{ text, caret, updatedAt }` 写到 sessionStorage（v2 key，最多 20 条
-  LRU；旧版纯文本 key 读取后自动迁移）。重连后仅当 hub 没有更新的草稿才补发本地内容；IME
-  合成期间先缓存远端草稿，结束后再应用。
+- **收敛**：hub 按会话串行分配 revision，最后被处理的那次更新胜出。有未 ack 本地发布时远端
+  更新只记录不应用；ack 到达后按 revision 决定应用还是丢弃 deferred，因此不会出现一端显示 A、
+  另一端显示 B 的永久分叉。
 - **敏感内容**：草稿不写日志、不进审计与推送；日志只记录长度 / revision / 附件数一类的摘要。
+- **兼容**：v17 与旧 PWA 不兼容，握手会因协议版本不匹配被拒绝；升级网关后手机需刷新页面。
 
 ## 8. 配对与安全
 
@@ -1131,7 +1167,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
   标记 / push / sync 分桶 / undo / 锁；`sessionDeliveryService.test.ts` 覆盖 preview 期望、
   side task 失败与空消息、冲突 resolver、确认推送、撤销守卫与重启恢复；`MobileBridgeService` /
   `mobileGatewayHub` 覆盖 delivery 投影、命令路由、跨窗口 busy 与 `delivery_busy` guard；
-  协议包测试覆盖 v13、7 个命令 payload 与四个交付错误码。
+  协议包测试覆盖 v17、7 个命令 payload 与四个交付错误码。
 
 ## 12. 里程碑
 

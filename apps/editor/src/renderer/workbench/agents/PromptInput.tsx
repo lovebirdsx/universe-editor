@@ -321,10 +321,18 @@ export function PromptInput({
   // Saves the in-progress draft text when the user enters history navigation mode,
   // so Escape / Down-past-end restores it.
   const historyDraftRef = useRef('')
-  /** The remote draft whose UI write is in flight; the save effect treats an equal draft as an echo. */
-  const applyingRemoteDraftRef = useRef<AcpPromptDraft | undefined>(undefined)
-  /** Remote draft that arrived before Monaco was ready. */
-  const pendingRemoteDraftRef = useRef<AcpPromptDraft | undefined>(undefined)
+  /**
+   * Marks the UI write of a remote draft. `pending` stays true until local
+   * content actually differs, because Monaco emits a deferred cursor event
+   * after a programmatic setText; clearing it on the first save would let that
+   * second event re-publish the remote draft as a local edit.
+   */
+  const remoteApplyRef = useRef<{ pending: boolean; draft?: AcpPromptDraft }>({ pending: false })
+  /** Remote draft buffered while the editor is not ready or an IME is composing. */
+  const pendingRemoteDraftRef = useRef<
+    { draft: AcpPromptDraft | undefined; textAtReceipt?: string } | undefined
+  >(undefined)
+  const composingRef = useRef(false)
   // Latest popover state + accept callbacks, read by the WidgetHandle methods
   // (bound once) when a suggestion command fires. Refreshed every render.
   const popoverStateRef = useRef<PopoverHandleState | null>(null)
@@ -703,18 +711,20 @@ export function PromptInput({
 
   // Apply a draft authored by the phone. Text replaces the whole buffer (as one
   // undoable edit) which also invalidates the old ref pills; contexts survive
-  // because they are independent of the text range.
+  // because they are independent of the text range. The caret never comes from
+  // the phone: keep this window's cursor (clamped), or start typing at the end
+  // when the local buffer was empty.
   const applyRemoteDraft = useCallback(
     (draft: AcpPromptDraft | undefined): void => {
       const handle = editorHandleRef.current
-      if (handle === null && draft !== undefined) {
-        pendingRemoteDraftRef.current = draft
+      if (handle === null) {
+        pendingRemoteDraftRef.current = { draft }
         return
       }
-      applyingRemoteDraftRef.current = draft
+      remoteApplyRef.current = { pending: true, ...(draft !== undefined ? { draft } : {}) }
       if (draft === undefined) {
-        handle?.setText('', 0)
-        handle?.clearHistory()
+        handle.setText('', 0)
+        handle.clearHistory()
         setText('')
         setCaret(0)
         setContexts([])
@@ -724,21 +734,16 @@ export function PromptInput({
         syncImageUndoState()
         return
       }
-      const currentText = handle?.getText() ?? ''
-      const nextCaret = Math.max(0, Math.min(draft.caret ?? draft.text.length, draft.text.length))
+      const currentText = handle.getText()
       if (currentText !== draft.text) {
-        handle?.setTextUndoable(draft.text, nextCaret)
+        const localCaret = handle.getCaret()
+        const nextCaret =
+          currentText === '' ? draft.text.length : Math.min(localCaret, draft.text.length)
+        handle.setTextUndoable(draft.text, nextCaret)
         setText(draft.text)
         setCaret(nextCaret)
         imageUndo.reset()
         syncImageUndoState()
-      } else if (draft.caret !== undefined) {
-        // A bare cursor move must not steal focus or fight an IME session.
-        const focused = dropHostRef.current?.contains(document.activeElement) === true
-        if (!focused) {
-          handle?.setCaret(nextCaret)
-          setCaret(nextCaret)
-        }
       }
       if (draft.contexts !== undefined) setContexts(draft.contexts)
       commitImages(() => draft.images ?? [])
@@ -751,10 +756,39 @@ export function PromptInput({
     const subscription = AcpPromptDraftCache.onDidChange((event) => {
       if (event.sessionId !== session.id) return
       if (event.source !== 'remote') return
+      if (composingRef.current && editorHandleRef.current !== null) {
+        pendingRemoteDraftRef.current = {
+          draft: event.draft,
+          textAtReceipt: editorHandleRef.current.getText(),
+        }
+        return
+      }
       applyRemoteDraft(event.draft)
     })
     return () => subscription.dispose()
   }, [session.id, applyRemoteDraft])
+
+  const onCompositionChange = useCallback(
+    (composing: boolean): void => {
+      composingRef.current = composing
+      if (composing) return
+      const pending = pendingRemoteDraftRef.current
+      pendingRemoteDraftRef.current = undefined
+      if (pending === undefined) return
+      const handle = editorHandleRef.current
+      // The user typed during composition, so the buffered remote draft is
+      // older than the local buffer and must not overwrite it.
+      if (
+        pending.textAtReceipt !== undefined &&
+        handle !== null &&
+        handle.getText() !== pending.textAtReceipt
+      ) {
+        return
+      }
+      applyRemoteDraft(pending.draft)
+    },
+    [applyRemoteDraft],
+  )
 
   // Persist the unsent draft (text + range-tracked refs + attached contexts +
   // attached images/files) per session so switching tabs / sessions and coming
@@ -766,13 +800,16 @@ export function PromptInput({
       text || contexts.length > 0 || images.length > 0 || promptFiles.length > 0 || refs.length > 0
         ? { text, refs, contexts, images, files: promptFiles, caret }
         : undefined
-    const echo = sameDraft(applyingRemoteDraftRef.current, draft)
+    // An explicit pending marker, not a value comparison alone: a local clear
+    // (delete the last character) also produces `undefined` and must publish.
+    const applied = remoteApplyRef.current
+    const echo = applied.pending && sameDraft(applied.draft, draft)
     if (draft === undefined) {
       AcpPromptDraftCache.clear(session.id, { source: echo ? 'echo' : 'local' })
     } else {
       AcpPromptDraftCache.save(session.id, draft, { source: echo ? 'echo' : 'local' })
     }
-    applyingRemoteDraftRef.current = undefined
+    if (!echo) remoteApplyRef.current = { pending: false }
   }, [text, contexts, images, promptFiles, caret, session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text, caret), [text, caret])
@@ -1625,7 +1662,7 @@ export function PromptInput({
     const pending = pendingRemoteDraftRef.current
     if (pending !== undefined) {
       pendingRemoteDraftRef.current = undefined
-      applyRemoteDraft(pending)
+      applyRemoteDraft(pending.draft)
     }
   }
 
@@ -1983,6 +2020,7 @@ export function PromptInput({
               imageUndo.reset()
               syncImageUndoState()
             }}
+            onCompositionChange={onCompositionChange}
             onEditorReady={onEditorReady}
           />
         </div>
@@ -2076,7 +2114,7 @@ function imageRejectMessage(reason: ImageRejectReason, limits: ImageLimits): str
  */
 function sameDraft(a: AcpPromptDraft | undefined, b: AcpPromptDraft | undefined): boolean {
   if (a === undefined || b === undefined) return a === b
-  if (a.text !== b.text || (a.caret ?? 0) !== (b.caret ?? 0)) return false
+  if (a.text !== b.text) return false
   if (refKey(a) !== refKey(b)) return false
   if (contextKey(a) !== contextKey(b)) return false
   if (

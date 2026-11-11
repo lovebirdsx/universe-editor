@@ -41,6 +41,10 @@ export interface SessionState {
   readonly permissionCleared: PermissionClearedInfo | undefined
   /** Latest draft published by the PC or another phone (hub registry). */
   readonly draft: MobileDraftState | undefined
+  /** Highest gateway draft revision this client has incorporated. */
+  readonly draftRevision: number
+  /** Gateway ack for this client's latest accepted draft; identity drives effects. */
+  readonly lastDraftAck: { readonly clientUpdateId: string; readonly revision: number } | undefined
   readonly isReplayingHistory: boolean
   readonly truncated: boolean
   readonly seq: number | undefined
@@ -67,6 +71,8 @@ const EMPTY: SessionState = {
   pendingElicitation: undefined,
   permissionCleared: undefined,
   draft: undefined,
+  draftRevision: 0,
+  lastDraftAck: undefined,
   isReplayingHistory: false,
   truncated: false,
   seq: undefined,
@@ -103,6 +109,8 @@ export class SessionStore extends Store<SessionState> {
       pendingElicitation: snapshot.pendingElicitation,
       permissionCleared: undefined,
       draft: snapshot.draft,
+      draftRevision: snapshot.draft?.revision ?? 0,
+      lastDraftAck: undefined,
       isReplayingHistory: snapshot.isReplayingHistory,
       truncated: snapshot.truncated === true,
       seq: frame.seq,
@@ -188,11 +196,26 @@ function applyEvent(
       return { ...state, pendingElicitation: event.elicitation }
     case 'elicitation_cleared':
       return { ...state, pendingElicitation: undefined }
-    case 'draft_update':
+    case 'draft_update': {
+      // The gateway only attaches `clientUpdateId` to the connection that sent
+      // the update: this is our own echo, an ack, and must never rewrite the
+      // composer. It still advances the revision watermark.
+      if (event.clientUpdateId !== undefined) {
+        return {
+          ...state,
+          draft: event.draft.revision >= state.draftRevision ? event.draft : state.draft,
+          draftRevision: Math.max(state.draftRevision, event.draft.revision),
+          lastDraftAck: {
+            clientUpdateId: event.clientUpdateId,
+            revision: event.draft.revision,
+          },
+        }
+      }
       // The gateway owns the revision order; an out-of-order or stale update
       // must not roll the composer back to older text.
-      if (state.draft !== undefined && event.draft.revision < state.draft.revision) return state
-      return { ...state, draft: event.draft }
+      if (event.draft.revision <= state.draftRevision) return state
+      return { ...state, draft: event.draft, draftRevision: event.draft.revision }
+    }
     default: {
       const unknown = event as { readonly type?: unknown }
       logger.warn(`mobile session: ignoring unknown event ${String(unknown.type)}`)

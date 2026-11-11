@@ -516,11 +516,9 @@ describe('parseClientFrame', () => {
     const frame = {
       type: 'draft_update',
       ref: DURABLE_REF,
-      baseRevision: 3,
       clientUpdateId: 'update-1',
       draft: {
         text: 'hello @src/a.ts',
-        caret: 6,
         images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 12, name: 'a.png' }],
         files: [{ id: 'file-1', name: 'notes.txt', byteSize: 4 }],
       },
@@ -534,11 +532,6 @@ describe('parseClientFrame', () => {
     expect(
       errorCode(
         parseClientFrame(JSON.stringify({ ...frame, draft: { ...frame.draft, contexts: [] } })),
-      ),
-    ).toBe('bad_request')
-    expect(
-      errorCode(
-        parseClientFrame(JSON.stringify({ ...frame, draft: { ...frame.draft, caret: 99 } })),
       ),
     ).toBe('bad_request')
     expect(
@@ -663,7 +656,6 @@ describe('parseServerFrame', () => {
   it('parses a session snapshot with a shared draft', () => {
     const draft = {
       text: 'hello',
-      caret: 5,
       images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 12 }],
       files: [{ id: 'file-1', name: 'a.txt', byteSize: 2 }],
       refs: [{ id: 'ref-1', kind: 'file', label: 'src/a.ts', start: 0, end: 5 }],
@@ -689,16 +681,6 @@ describe('parseServerFrame', () => {
         parseServerFrame(
           JSON.stringify({
             ...frame,
-            session: snapshotJson({ draft: { ...draft, caret: 99 } }),
-          }),
-        ),
-      ),
-    ).toBe('bad_request')
-    expect(
-      errorCode(
-        parseServerFrame(
-          JSON.stringify({
-            ...frame,
             session: snapshotJson({
               draft: {
                 ...draft,
@@ -714,7 +696,6 @@ describe('parseServerFrame', () => {
   it('parses a draft_update session delta event', () => {
     const draft = {
       text: 'hi',
-      caret: 2,
       images: [],
       revision: 5,
       updatedAt: 1_700_000_000_000,
@@ -732,7 +713,7 @@ describe('parseServerFrame', () => {
         parseServerFrame(
           JSON.stringify({
             ...frame,
-            events: [{ type: 'draft_update', draft: { ...draft, caret: 9 } }],
+            events: [{ type: 'draft_update', draft: { ...draft, source: 'phone' } }],
           }),
         ),
       ),

@@ -157,6 +157,8 @@ export const MOBILE_BRIDGE_LARGE_THROTTLE_MS = 100
 export const MOBILE_BRIDGE_LARGE_DELTA_CHARS = 64 * 1024
 /** Draft changes are less urgent than timeline deltas; coalesce keystrokes. */
 export const MOBILE_DRAFT_THROTTLE_MS = 250
+/** A lost hub ack must not keep a remote draft queued forever. */
+export const MOBILE_DRAFT_ACK_TIMEOUT_MS = 2000
 
 interface SessionStream {
   readonly localId: string
@@ -179,6 +181,20 @@ interface SessionStream {
   settleWatcher: IDisposable | undefined
 }
 
+/**
+ * Per-session ordering bookkeeping for the shared draft. Local publishes and
+ * phone drafts are ordered by the hub, but this renderer only learns the order
+ * from the revisions the hub echoes back; a remote draft is held as `deferred`
+ * until no local publish is waiting, then settled by revision.
+ */
+interface DraftSyncState {
+  lastLocalRevision: number
+  lastRemoteRevision: number
+  awaitingLocalPublish: number
+  deferred: { draft: MobileBridgeDraft; revision: number | undefined } | undefined
+  ackTimer: ReturnType<typeof setTimeout> | undefined
+}
+
 export class MobileBridgeService extends Disposable implements IMobileBridgeService {
   declare readonly _serviceBrand: undefined
 
@@ -197,6 +213,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   private readonly _publishedDrafts = new Map<string, string>()
   /** Attachment id set last published, so a paste/drop skips the typing debounce. */
   private readonly _publishedDraftAttachments = new Map<string, string>()
+  private readonly _draftSync = new Map<string, DraftSyncState>()
   private readonly _agentNames = new Map<string, string | undefined>()
   private _attentionSubscription: IDisposable | undefined
   private _disposed = false
@@ -368,6 +385,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     this._draftTimers.clear()
     this._publishedDrafts.clear()
     this._publishedDraftAttachments.clear()
+    for (const sessionId of [...this._draftSync.keys()]) this._resetDraftSync(sessionId)
     if (this._syncHandle !== undefined) {
       clearTimeout(this._syncHandle)
       this._syncHandle = undefined
@@ -473,13 +491,97 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
     if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    const state = this._draftSyncState(session.id)
+    // Never replace a buffer the user is still editing (or whose publish is in
+    // flight): the local publish will receive a newer hub revision.
+    if (this._draftTimers.has(session.id) || state.awaitingLocalPublish > 0) {
+      state.deferred = { draft, revision: undefined }
+      return ok(undefined)
+    }
+    this._applyRemoteDraftNow(session, draft)
+    return ok(undefined)
+  }
+
+  async noteDraftRevision(localId: string, revision: number): Promise<void> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return
+    const state = this._draftSyncState(session.id)
+    if (state.deferred !== undefined) {
+      state.deferred = { draft: state.deferred.draft, revision }
+      this._settleDeferredDraft(session, state)
+      return
+    }
+    state.lastRemoteRevision = Math.max(state.lastRemoteRevision, revision)
+  }
+
+  async ackDraftRevision(localId: string, revision: number): Promise<void> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return
+    const state = this._draftSyncState(session.id)
+    state.lastLocalRevision = Math.max(state.lastLocalRevision, revision)
+    if (state.awaitingLocalPublish > 0) state.awaitingLocalPublish -= 1
+    this._settleDeferredDraft(session, state)
+  }
+
+  private _draftSyncState(sessionId: string): DraftSyncState {
+    let state = this._draftSync.get(sessionId)
+    if (state === undefined) {
+      state = {
+        lastLocalRevision: 0,
+        lastRemoteRevision: 0,
+        awaitingLocalPublish: 0,
+        deferred: undefined,
+        ackTimer: undefined,
+      }
+      this._draftSync.set(sessionId, state)
+    }
+    return state
+  }
+
+  private _resetDraftSync(sessionId: string): void {
+    const state = this._draftSync.get(sessionId)
+    if (state === undefined) return
+    if (state.ackTimer !== undefined) clearTimeout(state.ackTimer)
+    this._draftSync.delete(sessionId)
+  }
+
+  private _settleDeferredDraft(session: IAcpSession, state: DraftSyncState): void {
+    const deferred = state.deferred
+    if (deferred === undefined) return
+    if (state.awaitingLocalPublish > 0 || this._draftTimers.has(session.id)) return
+    const revision = deferred.revision
+    if (
+      revision !== undefined &&
+      revision <= Math.max(state.lastLocalRevision, state.lastRemoteRevision)
+    ) {
+      // The hub already processed a newer local (or applied remote) draft.
+      state.deferred = undefined
+      return
+    }
+    state.deferred = undefined
+    if (revision !== undefined)
+      state.lastRemoteRevision = Math.max(state.lastRemoteRevision, revision)
+    this._applyRemoteDraftNow(session, deferred.draft)
+  }
+
+  private _applyRemoteDraftNow(session: IAcpSession, draft: MobileBridgeDraft): void {
     const next = mergeBridgeDraft(AcpPromptDraftCache.load(session.id), draft)
     if (next === undefined) {
       AcpPromptDraftCache.clear(session.id, { source: 'remote' })
     } else {
       AcpPromptDraftCache.save(session.id, next, { source: 'remote' })
     }
-    return ok(undefined)
+  }
+
+  private _armDraftAckTimeout(sessionId: string, state: DraftSyncState): void {
+    if (state.ackTimer !== undefined) clearTimeout(state.ackTimer)
+    state.ackTimer = setTimeout(() => {
+      state.ackTimer = undefined
+      // A lost ack must not keep a remote draft queued forever.
+      state.awaitingLocalPublish = 0
+      const session = this._liveSession(sessionId)
+      if (session !== undefined) this._settleDeferredDraft(session, state)
+    }, MOBILE_DRAFT_ACK_TIMEOUT_MS)
   }
 
   async getDraftImage(
@@ -595,6 +697,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   async clearDraft(localId: string): Promise<MobileBridgeResult<void>> {
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
+    // The prompt was accepted: a queued local publish must not resurrect the
+    // submitted text, and any deferred phone draft belongs to the old epoch.
+    this._cancelDraftTimer(session.id)
+    this._resetDraftSync(session.id)
+    this._publishedDrafts.set(session.id, 'null')
+    this._publishedDraftAttachments.delete(session.id)
     AcpPromptDraftCache.clear(session.id, { source: 'remote' })
     return ok(undefined)
   }
@@ -608,11 +716,10 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     if (!this._streaming) return
     const session = this._liveSession(event.sessionId)
     if (session === undefined) return
-    // A remote apply/clear supersedes a local publish that has not fired yet.
-    if (event.source !== 'local') {
-      this._cancelDraftTimer(session.id)
-      return
-    }
+    // A remote write (an applied phone draft or a materialized attachment) must
+    // not cancel a queued local publish: this window's unsent keystrokes would
+    // be lost and the phone would keep the older text.
+    if (event.source !== 'local') return
     const draft = event.draft === undefined ? undefined : toBridgeDraft(event.draft)
     const key = JSON.stringify(draft ?? null)
     if (this._publishedDrafts.get(session.id) === key) return
@@ -631,11 +738,11 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       session.id,
       setTimeout(() => {
         this._draftTimers.delete(session.id)
-        // The cache may have been replaced by a remote apply while queued.
+        // Only a phone attachment materialization can touch the cache while
+        // this timer is queued (it preserves the local text), so publish the
+        // merged content instead of dropping the local edit.
         const latest = this._draftFor(session)
-        const latestKey = JSON.stringify(latest ?? null)
-        if (latestKey !== key) return
-        this._publishDraft(session, latest, latestKey, attachmentKey(latest))
+        this._publishDraft(session, latest, JSON.stringify(latest ?? null), attachmentKey(latest))
       }, MOBILE_DRAFT_THROTTLE_MS),
     )
   }
@@ -648,6 +755,9 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   ): void {
     this._publishedDrafts.set(session.id, key)
     this._publishedDraftAttachments.set(session.id, attachments)
+    const state = this._draftSyncState(session.id)
+    state.awaitingLocalPublish += 1
+    this._armDraftAckTimeout(session.id, state)
     this._emit({ kind: 'draft', localId: session.id, draft })
   }
 
@@ -1541,6 +1651,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       removes.push({ localId, ...(durableId !== undefined ? { durableId } : {}) })
       this._disposeStream(stream)
       this._streams.delete(localId)
+      this._resetDraftSync(localId)
       this._logger.debug(`mobile bridge dropped session ${localId}`)
     }
     if (removes.length > 0) this._emit({ kind: 'inbox', upserts: [], removes })

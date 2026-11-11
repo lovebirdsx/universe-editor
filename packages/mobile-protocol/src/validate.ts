@@ -439,10 +439,6 @@ function parseClientStateFrame(frame: Record<string, unknown>): Result<ClientSta
 function parseDraftUpdateFrame(frame: Record<string, unknown>): Result<DraftUpdateFrame> {
   const ref = parseSessionRef(frame.ref)
   if (!ref.ok) return ref
-  const baseRevision = frame.baseRevision
-  if (!isNonNegativeInteger(baseRevision)) {
-    return fail('bad_request', 'draft_update.baseRevision must be a non-negative integer')
-  }
   const clientUpdateId = frame.clientUpdateId
   if (!isNonEmptyBoundedString(clientUpdateId, MAX_DRAFT_UPDATE_ID_LENGTH)) {
     return fail(
@@ -455,7 +451,6 @@ function parseDraftUpdateFrame(frame: Record<string, unknown>): Result<DraftUpda
   return ok({
     type: 'draft_update',
     ref: ref.value,
-    baseRevision,
     clientUpdateId,
     draft: draft.value,
   })
@@ -468,8 +463,6 @@ function parseDraftPayload(value: unknown): Result<MobileDraftPayload> {
   }
   const text = parseDraftText(value['text'])
   if (!text.ok) return text
-  const caret = parseDraftCaret(value['caret'], text.value.length)
-  if (!caret.ok) return caret
   const images = parseDraftImages(value['images'], 'draft_update.draft.images')
   if (!images.ok) return images
   const files = parseDraftFiles(value['files'], 'draft_update.draft.files')
@@ -478,7 +471,6 @@ function parseDraftPayload(value: unknown): Result<MobileDraftPayload> {
   if (total !== undefined) return fail('bad_request', total)
   return ok({
     text: text.value,
-    caret: caret.value,
     images: images.value,
     ...(files.value !== undefined ? { files: files.value } : {}),
   })
@@ -488,8 +480,6 @@ function parseDraftState(value: unknown): Result<MobileDraftState> {
   if (!isRecord(value)) return fail('bad_request', 'session.draft must be an object')
   const text = parseDraftText(value['text'])
   if (!text.ok) return text
-  const caret = parseDraftCaret(value['caret'], text.value.length)
-  if (!caret.ok) return caret
   const images = parseDraftImages(value['images'], 'session.draft.images')
   if (!images.ok) return images
   const files = parseDraftFiles(value['files'], 'session.draft.files')
@@ -514,7 +504,6 @@ function parseDraftState(value: unknown): Result<MobileDraftState> {
   }
   return ok({
     text: text.value,
-    caret: caret.value,
     images: images.value,
     ...(files.value !== undefined ? { files: files.value } : {}),
     ...(refs.value !== undefined ? { refs: refs.value } : {}),
@@ -528,13 +517,6 @@ function parseDraftState(value: unknown): Result<MobileDraftState> {
 function parseDraftText(value: unknown): Result<string> {
   if (!isBoundedString(value, MAX_DRAFT_TEXT_LENGTH)) {
     return fail('bad_request', `draft.text must be at most ${MAX_DRAFT_TEXT_LENGTH} characters`)
-  }
-  return ok(value)
-}
-
-function parseDraftCaret(value: unknown, textLength: number): Result<number> {
-  if (!isNonNegativeInteger(value) || value > textLength) {
-    return fail('bad_request', 'draft.caret must be an integer within the draft text')
   }
   return ok(value)
 }

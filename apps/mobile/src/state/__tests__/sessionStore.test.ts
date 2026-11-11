@@ -436,18 +436,18 @@ describe('SessionStore sequencing and removal', () => {
 describe('SessionStore draft', () => {
   const draft = (revision: number, text: string) => ({
     text,
-    caret: text.length,
     images: [],
     revision,
     updatedAt: revision,
     source: 'pc' as const,
   })
 
-  it('copies the snapshot draft', () => {
+  it('copies the snapshot draft and starts the revision watermark there', () => {
     const store = new SessionStore()
     store.applySnapshot(sessionSnapshotFrame(1, { draft: draft(3, 'pc draft') }))
 
     expect(store.getState().draft).toEqual(draft(3, 'pc draft'))
+    expect(store.getState().draftRevision).toBe(3)
   })
 
   it('applies draft deltas and ignores older revisions', () => {
@@ -456,8 +456,64 @@ describe('SessionStore draft', () => {
 
     store.applyDelta(sessionDeltaFrame(2, [{ type: 'draft_update', draft: draft(3, 'new') }]))
     expect(store.getState().draft?.text).toBe('new')
+    expect(store.getState().draftRevision).toBe(3)
 
-    store.applyDelta(sessionDeltaFrame(3, [{ type: 'draft_update', draft: draft(1, 'stale') }]))
+    store.applyDelta(sessionDeltaFrame(3, [{ type: 'draft_update', draft: draft(3, 'same') }]))
     expect(store.getState().draft?.text).toBe('new')
+    expect(store.getState().draftRevision).toBe(3)
+
+    store.applyDelta(sessionDeltaFrame(4, [{ type: 'draft_update', draft: draft(1, 'stale') }]))
+    expect(store.getState().draft?.text).toBe('new')
+  })
+
+  it('treats an update carrying clientUpdateId as an ack and advances the watermark', () => {
+    const store = new SessionStore()
+    store.applySnapshot(sessionSnapshotFrame(1, { draft: draft(2, 'hub') }))
+    store.applyDelta(sessionDeltaFrame(2, [{ type: 'draft_update', draft: draft(3, 'hub') }]))
+
+    store.applyDelta(
+      sessionDeltaFrame(3, [
+        { type: 'draft_update', clientUpdateId: 'u1', draft: draft(3, 'phone') },
+      ]),
+    )
+
+    const state = store.getState()
+    expect(state.draft).toEqual(draft(3, 'phone'))
+    expect(state.draftRevision).toBe(3)
+    expect(state.lastDraftAck).toEqual({ clientUpdateId: 'u1', revision: 3 })
+  })
+
+  it('produces a fresh ack object even when the revision did not advance', () => {
+    const store = new SessionStore()
+    store.applySnapshot(sessionSnapshotFrame(1, { draft: draft(2, 'hub') }))
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        { type: 'draft_update', clientUpdateId: 'u1', draft: draft(2, 'hub') },
+      ]),
+    )
+    const first = store.getState().lastDraftAck
+    store.applyDelta(
+      sessionDeltaFrame(3, [
+        { type: 'draft_update', clientUpdateId: 'u2', draft: draft(2, 'hub') },
+      ]),
+    )
+    expect(store.getState().lastDraftAck).toEqual({ clientUpdateId: 'u2', revision: 2 })
+    expect(store.getState().lastDraftAck).not.toBe(first)
+  })
+
+  it('resets the watermark and ack on a snapshot', () => {
+    const store = new SessionStore()
+    store.applySnapshot(sessionSnapshotFrame(1, { draft: draft(5, 'hub') }))
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        { type: 'draft_update', clientUpdateId: 'u1', draft: draft(5, 'hub') },
+      ]),
+    )
+
+    store.applySnapshot(sessionSnapshotFrame(3, {}))
+
+    expect(store.getState().draft).toBeUndefined()
+    expect(store.getState().draftRevision).toBe(0)
+    expect(store.getState().lastDraftAck).toBeUndefined()
   })
 })

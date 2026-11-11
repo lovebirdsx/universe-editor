@@ -447,12 +447,18 @@ describe('Composer', () => {
   describe('draft sync', () => {
     const remote = (revision: number, text: string) => ({
       text,
-      caret: text.length,
       images: [],
       revision,
       updatedAt: revision,
       source: 'pc' as const,
     })
+    const draftImage = {
+      id: 'img-1',
+      source: 'pc' as const,
+      mimeType: 'image/png',
+      byteSize: 3,
+      name: 'shot.png',
+    }
 
     it('applies a remote draft without publishing it back', async () => {
       const onDraftChange = vi.fn()
@@ -463,7 +469,7 @@ describe('Composer', () => {
       expect(onDraftChange).not.toHaveBeenCalled()
     })
 
-    it('publishes a local edit after the debounce with the last seen revision', async () => {
+    it('publishes a local edit after the debounce without remote fields', async () => {
       const onDraftChange = vi.fn()
       render(<Composer {...composerProps({ draft: remote(4, 'from pc'), onDraftChange })} />)
       const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
@@ -472,29 +478,137 @@ describe('Composer', () => {
       fireEvent.change(input, { target: { value: 'typed here' } })
 
       await waitFor(() => expect(onDraftChange.mock.calls[0]?.[0]).toBe('typed here'))
-      expect(onDraftChange.mock.calls[0]?.[2]).toBe(4)
+      expect(onDraftChange.mock.calls[0]?.[1]).toEqual([])
+      expect(onDraftChange.mock.calls[0]?.[2]).toEqual([])
+    })
+
+    it('publishes an empty draft when the user deletes everything', async () => {
+      let seq = 0
+      const onDraftChange = vi.fn<(text: string) => string>(() => `u${(seq += 1)}`)
+      render(<Composer {...composerProps({ onDraftChange })} />)
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+      fireEvent.change(input, { target: { value: 'abc' } })
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalled())
+      onDraftChange.mockClear()
+
+      fireEvent.change(input, { target: { value: '' } })
+      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[0]).toBe(''))
+    })
+
+    it('does not publish or move the caret when the user moves the selection', async () => {
+      const onDraftChange = vi.fn()
+      render(<Composer {...composerProps({ draft: remote(4, 'hello'), onDraftChange })} />)
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() => expect(input.value).toBe('hello'))
+
+      input.focus()
+      input.setSelectionRange(2, 2)
+      fireEvent.select(input)
+      await new Promise((resolve) => setTimeout(resolve, 300))
+
+      expect(input.selectionStart).toBe(2)
+      expect(onDraftChange).not.toHaveBeenCalled()
+    })
+
+    it('keeps the local selection when remote text is applied', async () => {
+      const onDraftChange = vi.fn()
+      const { rerender } = render(
+        <Composer {...composerProps({ draft: remote(1, 'abcdef'), onDraftChange })} />,
+      )
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() => expect(input.value).toBe('abcdef'))
+
+      input.focus()
+      input.setSelectionRange(2, 2)
+      rerender(<Composer {...composerProps({ draft: remote(2, 'abcdefghij'), onDraftChange })} />)
+
+      await waitFor(() => expect(input.value).toBe('abcdefghij'))
+      expect(input.selectionStart).toBe(2)
+      expect(onDraftChange).not.toHaveBeenCalled()
+    })
+
+    it('places the caret at the end when remote text fills an empty composer', async () => {
+      const { rerender } = render(<Composer {...composerProps()} />)
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+      rerender(<Composer {...composerProps({ draft: remote(1, 'remote text') })} />)
+
+      await waitFor(() => expect(input.value).toBe('remote text'))
+      expect(input.selectionStart).toBe('remote text'.length)
+    })
+
+    it('defers remote text until the local publish is acknowledged', async () => {
+      const onDraftChange = vi.fn(() => 'u1')
+      const { rerender } = render(<Composer {...composerProps({ onDraftChange })} />)
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'mine' } })
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalledTimes(1))
+
+      rerender(<Composer {...composerProps({ draft: remote(5, 'theirs'), onDraftChange })} />)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(input.value).toBe('mine')
+
+      rerender(
+        <Composer
+          {...composerProps({
+            draft: remote(5, 'theirs'),
+            draftAck: { clientUpdateId: 'u1', revision: 4 },
+            onDraftChange,
+          })}
+        />,
+      )
+
+      await waitFor(() => expect(input.value).toBe('theirs'))
+      expect(onDraftChange).toHaveBeenCalledTimes(1)
+    })
+
+    it('applies remote text even when the remote attachment list changed', async () => {
+      const onDraftChange = vi.fn()
+      const { rerender } = render(
+        <Composer
+          {...composerProps({ draft: { ...remote(4, 'a'), images: [draftImage] }, onDraftChange })}
+        />,
+      )
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() => expect(input.value).toBe('a'))
+
+      rerender(
+        <Composer
+          {...composerProps({
+            draft: { ...remote(5, 'b'), images: [draftImage, { ...draftImage, id: 'img-2' }] },
+            onDraftChange,
+          })}
+        />,
+      )
+
+      await waitFor(() => expect(input.value).toBe('b'))
+      expect(onDraftChange).not.toHaveBeenCalled()
+    })
+
+    it('waits for composition to end before applying remote text', async () => {
+      const onDraftChange = vi.fn()
+      const { rerender } = render(<Composer {...composerProps({ onDraftChange })} />)
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+      fireEvent.compositionStart(input)
+      rerender(<Composer {...composerProps({ draft: remote(3, '组合词'), onDraftChange })} />)
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      expect(input.value).toBe('')
+
+      fireEvent.compositionEnd(input)
+      await waitFor(() => expect(input.value).toBe('组合词'))
     })
 
     it('renders a PC draft picture and can withdraw it', async () => {
       const onDraftChange = vi.fn()
-      const draft = {
-        ...remote(4, ''),
-        images: [
-          {
-            id: 'img-1',
-            source: 'pc' as const,
-            mimeType: 'image/png',
-            byteSize: 3,
-            name: 'shot.png',
-          },
-        ],
-      }
+      const draft = { ...remote(4, ''), images: [draftImage] }
       render(<Composer {...composerProps({ draft, onDraftChange })} />)
 
       expect(screen.getByTestId('composer-draft-images')).toBeTruthy()
       fireEvent.click(screen.getByLabelText(strings.draftImageRemove))
 
-      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[3]).toEqual([]))
+      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[1]).toEqual([]))
     })
 
     it('shows a draft file from another phone and can withdraw it', async () => {
@@ -508,7 +622,7 @@ describe('Composer', () => {
       expect(screen.getByTestId('composer-draft-files')).toBeTruthy()
       fireEvent.click(screen.getByLabelText(strings.attachmentRemove))
 
-      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[4]).toEqual([]))
+      await waitFor(() => expect(onDraftChange.mock.calls[0]?.[2]).toEqual([]))
     })
   })
 })

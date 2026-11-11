@@ -375,9 +375,8 @@ export function SessionPage({
               fetchDraftImage={(imageId) => client.fetchDraftImageBlob(imageId)}
               prefill={prefill}
               draft={state.draft}
-              onDraftChange={(text, caret, baseRevision, images, files) =>
-                client.sendDraft(text, caret, baseRevision, images, files)
-              }
+              draftAck={state.lastDraftAck}
+              onDraftChange={(text, images, files) => client.sendDraft(text, images, files)}
               onSend={(text, attachmentIds, draftImageIds, draftFileIds) =>
                 client.sendPrompt(text, attachmentIds, draftImageIds, draftFileIds)
               }

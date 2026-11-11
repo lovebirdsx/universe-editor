@@ -811,7 +811,6 @@ export class MobileGatewayHub {
       const applied = await entry.bridge
         .applyDraft(localId, {
           text: frame.draft.text,
-          caret: frame.draft.caret,
           images: frame.draft.images,
           ...(frame.draft.files !== undefined ? { files: frame.draft.files } : {}),
         })
@@ -826,6 +825,9 @@ export class MobileGatewayHub {
       if (this._find(connection)?.sessions.get(key) !== subscription) return
       const result = this._drafts.setFromPhone(key, frame.draft)
       if (result.state === undefined) return
+      // Let the renderer pair this phone draft with the order the hub assigned
+      // before any later local publish can be acknowledged.
+      await entry.bridge.noteDraftRevision(localId, result.state.revision).catch(() => undefined)
       // Empty content must not survive as a registry entry: a later snapshot
       // would otherwise erase another phone's locally restored draft.
       if (isDraftEmpty(result.state)) this._drafts.delete(key)
@@ -2139,6 +2141,11 @@ export class MobileGatewayHub {
     if (event.kind === 'draft') {
       const key = sessionKey(windowId, event.localId)
       const result = this._drafts.setFromRenderer(key, event.draft)
+      // The renderer increments its awaiting-publish counter for every local
+      // publish; ack even an unchanged or empty draft or it waits forever.
+      // No registry entry means the hub never assigned this session a revision.
+      const revision = result.state?.revision ?? 0
+      void entry.bridge.ackDraftRevision(event.localId, revision).catch(() => undefined)
       if (!result.changed || result.state === undefined) return
       // An empty state clears every subscriber's draft; the registry itself
       // drops the entry so a later snapshot does not resurrect it.

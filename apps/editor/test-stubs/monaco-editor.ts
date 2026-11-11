@@ -706,6 +706,8 @@ function makePromptEditor(
     onDidChangeModelContent: (cb: (e: ContentChangedEvent) => void) =>
       listen(contentListeners, cb),
     onDidChangeCursorPosition: (cb: () => void) => listen(cursorListeners, cb),
+    onDidCompositionStart: () => noopDisposable,
+    onDidCompositionEnd: () => noopDisposable,
     onDidChangeModelDecorations: () => noopDisposable,
     onDidFocusEditorText: (cb: () => void) => listen(focusListeners, cb),
     onDidBlurEditorText: (cb: () => void) => listen(blurListeners, cb),

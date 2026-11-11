@@ -24,18 +24,6 @@ export function isDraftEmpty(draft: MobileDraftState): boolean {
   )
 }
 
-/** Strip gateway-owned metadata for the renderer bridge. */
-export function toBridgeDraft(draft: MobileDraftState): MobileBridgeDraft {
-  return {
-    text: draft.text,
-    caret: draft.caret,
-    images: draft.images,
-    ...(draft.files !== undefined ? { files: draft.files } : {}),
-    ...(draft.refs !== undefined ? { refs: draft.refs } : {}),
-    ...(draft.contexts !== undefined ? { contexts: draft.contexts } : {}),
-  }
-}
-
 /** Drafts are only a convenience; a long-lived PC would otherwise keep one per session. */
 export const MAX_DRAFT_ENTRIES = 32
 
@@ -65,7 +53,7 @@ export class MobileDraftRegistry {
       if (previous === undefined) return { state: undefined, changed: false }
       // Keep the emptied state's source on the pc side; the hub broadcasts this
       // to subscribers, who must not treat the clear as a phone edit.
-      const empty = this._stateFor({ text: '', caret: 0, images: [] }, 'pc', previous)
+      const empty = this._stateFor({ text: '', images: [] }, 'pc', previous)
       this._entries.delete(key)
       return { state: empty, changed: true }
     }
@@ -90,7 +78,6 @@ export class MobileDraftRegistry {
     const previous = this._entries.get(key)
     const source: MobileBridgeDraft = {
       text: draft.text,
-      caret: draft.caret,
       images: draft.images,
       ...(draft.files !== undefined ? { files: draft.files } : {}),
       ...(previous?.text === draft.text && previous.refs !== undefined
@@ -125,7 +112,6 @@ export class MobileDraftRegistry {
     this._revision = Math.max(this._revision + 1, (previous?.revision ?? 0) + 1)
     return {
       text: draft.text,
-      caret: draft.caret,
       images: draft.images,
       ...(draft.files !== undefined ? { files: draft.files } : {}),
       ...(draft.refs !== undefined ? { refs: draft.refs } : {}),
@@ -138,11 +124,10 @@ export class MobileDraftRegistry {
 }
 
 function contentKey(
-  draft: Pick<MobileDraftState, 'text' | 'caret' | 'images' | 'files' | 'refs' | 'contexts'>,
+  draft: Pick<MobileDraftState, 'text' | 'images' | 'files' | 'refs' | 'contexts'>,
 ): string {
   return JSON.stringify([
     draft.text,
-    draft.caret,
     draft.images,
     draft.files ?? [],
     draft.refs ?? [],

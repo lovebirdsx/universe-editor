@@ -219,21 +219,21 @@ describe('MobileClient session subscription', () => {
     const socket = sockets[0]!
     client.openSession('1:s1')
 
-    client.sendDraft('hi', 1, 4)
+    const clientUpdateId = client.sendDraft('hi')
 
     const frame = sentFrames(socket).find(
       (candidate) =>
         typeof candidate === 'object' &&
         candidate !== null &&
         (candidate as Record<string, unknown>)['type'] === 'draft_update',
-    ) as { type: string; baseRevision: number; clientUpdateId: string; draft: unknown }
+    ) as { type: string; clientUpdateId: string; draft: unknown }
     expect(frame).toMatchObject({
       type: 'draft_update',
       ref: { windowId: 1, localId: 's1' },
-      baseRevision: 4,
-      draft: { text: 'hi', caret: 1, images: [] },
+      draft: { text: 'hi', images: [] },
     })
     expect(frame.clientUpdateId).toBeTruthy()
+    expect(frame.clientUpdateId).toBe(clientUpdateId)
     expect(frameTypes(socket)).not.toContain('command')
   })
 

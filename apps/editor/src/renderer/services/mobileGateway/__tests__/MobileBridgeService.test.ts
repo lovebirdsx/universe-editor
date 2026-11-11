@@ -46,6 +46,7 @@ import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmSe
 import {
   MOBILE_BRIDGE_LARGE_THROTTLE_MS,
   MOBILE_BRIDGE_THROTTLE_MS,
+  MOBILE_DRAFT_ACK_TIMEOUT_MS,
   MOBILE_DRAFT_THROTTLE_MS,
   MobileBridgeService,
 } from '../MobileBridgeService.js'
@@ -393,7 +394,7 @@ describe('MobileBridgeService', () => {
     await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
 
     expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([
-      { kind: 'draft', localId: 's1', draft: { text: 'hi', caret: 2, images: [] } },
+      { kind: 'draft', localId: 's1', draft: { text: 'hi', images: [] } },
     ])
   })
 
@@ -404,27 +405,98 @@ describe('MobileBridgeService', () => {
 
     const result = await harness.service.applyDraft('s1', {
       text: 'from phone',
-      caret: 4,
       images: [],
     })
     expect(result).toStrictEqual({ ok: true, value: undefined })
     expect(AcpPromptDraftCache.load('s1')?.text).toBe('from phone')
-    expect(AcpPromptDraftCache.load('s1')?.caret).toBe(4)
+    // The remote caret is gone; an empty local buffer starts at the end.
+    expect(AcpPromptDraftCache.load('s1')?.caret).toBe(10)
 
     await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
     expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([])
   })
 
-  it('cancels a queued local publish when a phone draft arrives first', async () => {
+  it('keeps a queued local publish when a phone draft arrives first', async () => {
     const harness = makeHarness()
     harness.add(makeSession('s1'))
     await harness.service.startStreaming()
 
     AcpPromptDraftCache.save('s1', { text: 'local edit', caret: 11 })
-    await harness.service.applyDraft('s1', { text: 'from phone', caret: 10, images: [] })
+    await harness.service.applyDraft('s1', { text: 'from phone', images: [] })
+    await harness.service.noteDraftRevision('s1', 4)
     await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
 
-    expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([])
+    expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([
+      { kind: 'draft', localId: 's1', draft: { text: 'local edit', images: [] } },
+    ])
+
+    // The hub assigned the local publish a higher revision than the phone
+    // update, so the deferred phone text must not overwrite it.
+    await harness.service.ackDraftRevision('s1', 5)
+    expect(AcpPromptDraftCache.load('s1')?.text).toBe('local edit')
+  })
+
+  it('keeps a queued local publish when a phone attachment lands first', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    await harness.service.startStreaming()
+
+    AcpPromptDraftCache.save('s1', { text: 'local text', caret: 10 })
+    await harness.service.attachDraftAttachments('s1', [
+      {
+        kind: 'image',
+        id: 'img-1',
+        name: 'shot.png',
+        mimeType: 'image/png',
+        byteSize: 3,
+        dataBase64: 'AQID',
+      },
+    ])
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
+
+    expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([
+      {
+        kind: 'draft',
+        localId: 's1',
+        draft: {
+          text: 'local text',
+          images: [
+            { id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3, name: 'shot.png' },
+          ],
+        },
+      },
+    ])
+  })
+
+  it('applies a deferred phone draft when it outranks the local publish', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    await harness.service.startStreaming()
+
+    AcpPromptDraftCache.save('s1', { text: 'local edit', caret: 11 })
+    await harness.service.applyDraft('s1', { text: 'from phone', images: [] })
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
+    await harness.service.noteDraftRevision('s1', 6)
+    expect(AcpPromptDraftCache.load('s1')?.text).toBe('local edit')
+
+    await harness.service.ackDraftRevision('s1', 5)
+
+    expect(AcpPromptDraftCache.load('s1')?.text).toBe('from phone')
+  })
+
+  it('settles a deferred phone draft when the local ack never arrives', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1'))
+    await harness.service.startStreaming()
+
+    AcpPromptDraftCache.save('s1', { text: 'local edit', caret: 11 })
+    await harness.service.applyDraft('s1', { text: 'from phone', images: [] })
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_THROTTLE_MS)
+    await harness.service.noteDraftRevision('s1', 6)
+
+    await vi.advanceTimersByTimeAsync(MOBILE_DRAFT_ACK_TIMEOUT_MS)
+
+    expect(AcpPromptDraftCache.load('s1')?.text).toBe('from phone')
   })
 
   it('publishes a pasted picture immediately instead of behind the typing debounce', async () => {
@@ -443,13 +515,12 @@ describe('MobileBridgeService', () => {
     })
 
     expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([
-      { kind: 'draft', localId: 's1', draft: { text: 'hi', caret: 2, images: [] } },
+      { kind: 'draft', localId: 's1', draft: { text: 'hi', images: [] } },
       {
         kind: 'draft',
         localId: 's1',
         draft: {
           text: 'hi',
-          caret: 2,
           images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3 }],
         },
       },
@@ -460,7 +531,7 @@ describe('MobileBridgeService', () => {
     const harness = makeHarness()
     harness.add(makeSession('s1', { readOnly: true }))
 
-    const result = await harness.service.applyDraft('s1', { text: 'nope', caret: 4, images: [] })
+    const result = await harness.service.applyDraft('s1', { text: 'nope', images: [] })
 
     expect(result).toMatchObject({ ok: false, code: 'session_read_only' })
     expect(AcpPromptDraftCache.load('s1')).toBeUndefined()

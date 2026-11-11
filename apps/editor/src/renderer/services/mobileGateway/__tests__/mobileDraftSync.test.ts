@@ -47,7 +47,6 @@ describe('toBridgeDraft', () => {
 
     expect(projected).toEqual({
       text: 'look @a.ts',
-      caret: 4,
       images: [{ id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3, name: 'shot.png' }],
       files: [{ id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', byteSize: 7 }],
       refs: [{ id: 'r1', kind: 'file', label: 'a.ts', start: 5, end: 9 }],
@@ -55,18 +54,14 @@ describe('toBridgeDraft', () => {
     })
     expect(JSON.stringify(projected)).not.toContain('AAAA')
   })
-
-  it('defaults the caret to the end of the text', () => {
-    expect(toBridgeDraft({ text: 'abc' })?.caret).toBe(3)
-  })
 })
 
 describe('mergeBridgeDraft', () => {
   it('clears the cache for an empty incoming draft without prior content', () => {
-    expect(mergeBridgeDraft(undefined, { text: '', caret: 0, images: [] })).toBeUndefined()
+    expect(mergeBridgeDraft(undefined, { text: '', images: [] })).toBeUndefined()
   })
 
-  it('keeps refs and contexts when only the caret moved', () => {
+  it('keeps the local caret and refs when the remote text is unchanged', () => {
     const current: AcpPromptDraft = {
       text: 'x @a.ts',
       caret: 7,
@@ -76,31 +71,33 @@ describe('mergeBridgeDraft', () => {
       contexts: [{ uri: 'file:///a.ts', relPath: 'a.ts', text: 'code', startLine: 1, endLine: 2 }],
     }
 
-    const merged = mergeBridgeDraft(current, { text: 'x @a.ts', caret: 2, images: [] })
+    const merged = mergeBridgeDraft(current, { text: 'x @a.ts', images: [] })
 
-    expect(merged?.caret).toBe(2)
+    expect(merged?.caret).toBe(7)
     expect(merged?.refs).toHaveLength(1)
     expect(merged?.contexts).toHaveLength(1)
   })
 
-  it('drops refs but keeps contexts when the phone edits the text', () => {
+  it('drops refs but keeps contexts and the local caret when the phone edits the text', () => {
     const current: AcpPromptDraft = {
       text: 'x @a.ts',
+      caret: 7,
       refs: [
         { ref: { id: 'r1', kind: 'file', label: 'a.ts', uri: 'file:///a.ts' }, start: 2, end: 6 },
       ],
       contexts: [{ uri: 'file:///a.ts', relPath: 'a.ts', text: 'code', startLine: 1, endLine: 2 }],
     }
 
-    const merged = mergeBridgeDraft(current, { text: 'x @a.ts and more', caret: 16, images: [] })
+    const merged = mergeBridgeDraft(current, { text: 'x @a.ts and more', images: [] })
 
+    expect(merged?.caret).toBe(7)
     expect(merged?.refs).toBeUndefined()
     expect(merged?.contexts).toHaveLength(1)
   })
 
   it('treats an omitted picture as a deletion', () => {
     const current: AcpPromptDraft = { text: '', images: [IMAGE] }
-    const merged = mergeBridgeDraft(current, { text: '', caret: 0, images: [] })
+    const merged = mergeBridgeDraft(current, { text: '', images: [] })
 
     expect(merged).toBeUndefined()
   })
@@ -109,7 +106,6 @@ describe('mergeBridgeDraft', () => {
     const current: AcpPromptDraft = { text: '', images: [IMAGE], files: [FILE] }
     const merged = mergeBridgeDraft(current, {
       text: '',
-      caret: 0,
       images: [
         { id: 'img-1', source: 'pc', mimeType: 'image/png', byteSize: 3 },
         { id: 'img-2', source: 'mobile', mimeType: 'image/png', byteSize: 9 },
@@ -124,7 +120,7 @@ describe('mergeBridgeDraft', () => {
     expect(merged?.files).toEqual([FILE])
   })
 
-  it('clamps an out-of-range caret', () => {
-    expect(mergeBridgeDraft(undefined, { text: 'abc', caret: 99, images: [] })?.caret).toBe(3)
+  it('starts at the end when there is no local caret', () => {
+    expect(mergeBridgeDraft(undefined, { text: 'abc', images: [] })?.caret).toBe(3)
   })
 })

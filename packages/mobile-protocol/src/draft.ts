@@ -1,7 +1,9 @@
 /**
  * Shared prompt-draft state for the PC ↔ phone sync. The WebSocket carries only
- * text, caret, attachment metadata and read-only summaries; image/file bytes
- * travel over the gateway's HTTP APIs.
+ * text, attachment metadata and read-only summaries; image/file bytes travel
+ * over the gateway's HTTP APIs. Caret/selection is local UI state on each
+ * client and never crosses the wire — applying a remote caret resets the
+ * cursor of whichever input is being typed in.
  */
 
 import type { MobileSessionRef } from './frames.js'
@@ -46,7 +48,6 @@ export interface MobileDraftContextSummary {
 /** Canonical draft state broadcast by the gateway. `revision` is gateway-assigned. */
 export interface MobileDraftState {
   readonly text: string
-  readonly caret: number
   readonly images: readonly MobileDraftImageRef[]
   readonly files?: readonly MobileDraftFileRef[]
   readonly refs?: readonly MobileDraftRefSummary[]
@@ -59,7 +60,6 @@ export interface MobileDraftState {
 /** Phone → gateway. Phones cannot author refs/contexts. */
 export interface MobileDraftPayload {
   readonly text: string
-  readonly caret: number
   readonly images: readonly MobileDraftImageRef[]
   readonly files?: readonly MobileDraftFileRef[]
 }
@@ -68,8 +68,7 @@ export interface MobileDraftPayload {
 export interface DraftUpdateFrame {
   type: 'draft_update'
   ref: MobileSessionRef
-  /** Revision the sender last saw; lets a client drop an update superseded by a snapshot. */
-  baseRevision: number
+  /** Echoed back to the sender only; the sender treats it as an ack, never as a text write. */
   clientUpdateId: string
   draft: MobileDraftPayload
 }
