@@ -224,6 +224,7 @@ export function InboxPage({
             setDeliverySheet(undefined)
             onOpenSession(sessionRouteKey(deliverySession.ref), false)
           }}
+          onStartDelivery={() => setDeliverySheet({ mode: 'confirm', session: deliverySession })}
           onNotice={onNotice}
         />
       )}

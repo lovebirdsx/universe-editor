@@ -398,6 +398,7 @@ export const strings = {
   deliveryPushing: '正在推送…',
   deliveryRetry: '重试',
   deliveryRetrying: '正在重试…',
+  deliveryAgain: '再次交付',
   deliveryUndo: '撤销本次交付',
   deliveryUndoTitle: '撤销这次交付？',
   deliveryUndoBody:

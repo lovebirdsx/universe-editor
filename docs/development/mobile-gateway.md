@@ -590,7 +590,9 @@ durable id 非激活恢复，让收件箱行重新出现；恢复失败则直接
 
 **手机投影**：会话摘要带 `delivery?`（阶段、commit 数、可否推送/重试/撤销、同步计数）与
 `deliveryAvailable?`；收件箱行有 badge 与顶部汇总，详情页含 commit 列表、worktree 结果、
-冲突文件与「确认推送」「重试」「打开 main worktree」「撤销本次交付」。**协议绝不下发绝对路径**，
+冲突文件与「确认推送」「重试」「打开 main worktree」「撤销本次交付」。`deliveryAvailable` 只看
+会话本身能否发起（idle、可写、有 cwd），不排除已有记录：已交付（`synced`）的行在手机上隐藏
+交付入口，改由详情页的「再次交付」重新走 `previewDelivery`。**协议绝不下发绝对路径**，
 只给 worktree 目录名；交付错误只带 `code` 与裁剪后的 message，扩展侧 detail 不投影。交付变化
 经 `summary_changed` 增量与收件箱 upsert 同步到手机。
 

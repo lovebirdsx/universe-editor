@@ -104,7 +104,10 @@ const detailFixture: MobileDeliveryDetail = {
   syncResults: [],
 }
 
-function createClient(sessions: readonly MobileSessionSummary[]) {
+function createClient(
+  sessions: readonly MobileSessionSummary[],
+  detail: MobileDeliveryDetail = detailFixture,
+) {
   const inboxStore = new Store({ sessions, seq: 1, hasSnapshot: true })
   const socketStore = new Store<'connected'>('connected')
   const diagnosisStore = new Store<undefined>(undefined)
@@ -119,7 +122,7 @@ function createClient(sessions: readonly MobileSessionSummary[]) {
     deleteSession: vi.fn(async () => {}),
     previewDelivery: vi.fn(async () => previewFixture),
     startDelivery: vi.fn(async () => ({ deliveryId: 'd-1' })),
-    getDelivery: vi.fn(async () => detailFixture),
+    getDelivery: vi.fn(async () => detail),
     confirmDeliveryPush: vi.fn(async () => {}),
     retryDelivery: vi.fn(async () => {}),
     undoDelivery: vi.fn(async () => {}),
@@ -219,6 +222,37 @@ describe('InboxPage delivery', () => {
       expect.objectContaining({ localId: 's1' }),
       'd-1',
     )
+  })
+
+  it('hides the start action once synced and re-delivers from the detail sheet', async () => {
+    const synced = deliverySummary({
+      phase: 'synced',
+      canConfirmPush: false,
+      canRetry: false,
+    })
+    const client = createClient(
+      [sessionSummary('s1', { delivery: synced, deliveryAvailable: true })],
+      { ...detailFixture, summary: synced },
+    )
+    renderPage(client)
+
+    expect(screen.queryByTestId('inbox-delivery-action')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    fireEvent.click(await screen.findByTestId('delivery-start-again'))
+
+    expect(client.previewDelivery).toHaveBeenCalledWith(expect.objectContaining({ localId: 's1' }))
+    expect(await screen.findByTestId('delivery-confirm-sheet')).toBeTruthy()
+  })
+
+  it('keeps the start action while a delivery still needs the user', async () => {
+    const client = createClient([
+      sessionSummary('s1', { delivery: deliverySummary(), deliveryAvailable: true }),
+    ])
+    renderPage(client)
+
+    expect(screen.getByTestId('inbox-delivery-action')).toBeTruthy()
+    expect(screen.getByTestId('inbox-delivery-badge')).toBeTruthy()
   })
 
   it('shows the pushable count in the inbox summary bar', () => {

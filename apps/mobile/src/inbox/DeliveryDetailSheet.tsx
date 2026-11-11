@@ -26,6 +26,8 @@ export interface DeliveryDetailSheetProps {
   readonly online: boolean
   readonly onDismiss: () => void
   readonly onOpenSession: () => void
+  /** Start another delivery once the latest one has fully synced. */
+  readonly onStartDelivery: () => void
   readonly onNotice: (text: string) => void
 }
 
@@ -37,6 +39,7 @@ export function DeliveryDetailSheet({
   online,
   onDismiss,
   onOpenSession,
+  onStartDelivery,
   onNotice,
 }: DeliveryDetailSheetProps) {
   const [detail, setDetail] = useState<MobileDeliveryDetail | undefined>(undefined)
@@ -156,6 +159,17 @@ export function DeliveryDetailSheet({
               onClick={() => setView('confirm-undo')}
             >
               {busy === 'undo' ? strings.deliveryUndoing : strings.deliveryUndo}
+            </button>
+          )}
+          {summary?.phase === 'synced' && (
+            <button
+              type="button"
+              className="sheet-option sheet-option--neutral"
+              data-testid="delivery-start-again"
+              disabled={disabled}
+              onClick={onStartDelivery}
+            >
+              {strings.deliveryAgain}
             </button>
           )}
           <button

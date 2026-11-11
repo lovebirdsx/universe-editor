@@ -5,7 +5,7 @@ import { deliveryTone } from './deliveryStatus.js'
 
 export interface SessionDeliveryControlsProps {
   readonly delivery?: MobileDeliverySummary | undefined
-  /** No delivery record yet, but the row can start one. */
+  /** The row can start a first delivery; synced rows re-deliver from the detail sheet. */
   readonly available?: boolean | undefined
   readonly onStartDelivery: () => void
   readonly onOpenDelivery: () => void
@@ -29,7 +29,10 @@ export function SessionDeliveryControls({
   onStartDelivery,
   onOpenDelivery,
 }: SessionDeliveryControlsProps) {
-  if (delivery === undefined && available !== true) return null
+  // A synced row keeps only the status badge: re-delivery lives in the detail
+  // sheet, so the row never offers a preview that would immediately block.
+  const canStart = available === true && delivery?.phase !== 'synced'
+  if (delivery === undefined && !canStart) return null
 
   return (
     <span className="session-card__delivery">
@@ -49,7 +52,7 @@ export function SessionDeliveryControls({
           {strings.deliveryPhaseLabel(delivery.phase)}
         </span>
       )}
-      {available === true && (
+      {canStart && (
         <span
           role="button"
           tabIndex={0}
