@@ -170,7 +170,8 @@ export interface DeliveryAbortPickInput {
   readonly deliveryId: string
   readonly token: string
   readonly mainWorktree: string
-  readonly tempWorktree: string
+  /** Defaults to the path `preparePick` derives from `deliveryId`. */
+  readonly tempWorktree?: string
 }
 
 export type DeliveryPickStatus = 'picked' | 'conflict'

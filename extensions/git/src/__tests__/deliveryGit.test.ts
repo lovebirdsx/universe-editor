@@ -105,6 +105,39 @@ async function createConflictFixture(): Promise<Fixture> {
   return { root, remote, main, feature }
 }
 
+/**
+ * A repo carrying a submodule whose configured URL does not exist. The delivery
+ * must never initialize submodules in the temp worktree, so the broken URL
+ * would fail the pick if the old unconditional `submodule update` came back.
+ */
+async function createSubmoduleFixture(): Promise<Fixture> {
+  const root = mkTempDir('ue-git-delivery-submodule-')
+  tmpRoots.push(root)
+  const remote = join(root, 'remote.git')
+  const main = join(root, 'main')
+  const feature = join(root, 'feature')
+  const sub = join(root, 'sub')
+
+  await git(['init', '--initial-branch=main', sub])
+  await git(['config', 'user.name', 'Universe Test'], sub)
+  await git(['config', 'user.email', 'test@example.com'], sub)
+  await writeFile(join(sub, 'sub.txt'), 'sub\n')
+  await git(['add', 'sub.txt'], sub)
+  await git(['commit', '-m', 'sub initial'], sub)
+
+  await git(['init', '--bare', '--initial-branch=main', remote])
+  await cloneWithIdentity(remote, main)
+  await commitFile(main, 'base.txt', 'base\n', 'initial')
+  await git(['-c', 'protocol.file.allow=always', 'submodule', 'add', sub, 'vendor/sub'], main)
+  await git(['commit', '-m', 'add submodule'], main)
+  await git(['config', 'submodule.vendor/sub.url', join(root, 'missing-sub')], main)
+  await git(['push', '-u', 'origin', 'main'], main)
+  await git(['worktree', 'add', '-b', 'feature', feature], main)
+  await commitFile(feature, 'feature.txt', 'feature\n', 'add feature')
+
+  return { root, remote, main, feature }
+}
+
 const token = 'delivery-token-1'
 
 afterEach(() => {
@@ -549,6 +582,101 @@ describe('delivery pipeline', () => {
     expect(aborted.ok && aborted.removed).toBe(true)
     const worktrees = await git(['worktree', 'list', '--porcelain'], fixture.main)
     expect(worktrees).not.toContain('.universe-editor-delivery-worktrees')
+    await releaseDeliveryLock({ commonDir, token })
+  })
+
+  it('removes the temp worktree when the pick fails', async () => {
+    const fixture = await createFixture()
+    const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: true })
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) return
+    const { commonDir, mainWorktree } = inspected.repository
+    await acquireDeliveryLock({ commonDir, token })
+
+    const picked = await preparePickDelivery({
+      commonDir,
+      deliveryId: 'failed-pick-delivery',
+      token,
+      mainWorktree,
+      sourceWorktree: fixture.feature,
+      baseSha: inspected.baseSha,
+      sourceHead: inspected.source.head,
+      commits: ['deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'],
+    })
+
+    expect(picked.ok).toBe(false)
+    if (!picked.ok) expect(picked.error.code).toBe('git_failed')
+    const worktrees = await git(['worktree', 'list', '--porcelain'], fixture.main)
+    expect(worktrees).not.toContain('.universe-editor-delivery-worktrees')
+    await releaseDeliveryLock({ commonDir, token })
+  })
+
+  it('derives the temp worktree path when abort omits it', async () => {
+    const fixture = await createConflictFixture()
+    const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: true })
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) return
+    const { commonDir, mainWorktree } = inspected.repository
+    await acquireDeliveryLock({ commonDir, token })
+    const picked = await preparePickDelivery({
+      commonDir,
+      deliveryId: 'derived-abort-delivery',
+      token,
+      mainWorktree,
+      sourceWorktree: fixture.feature,
+      baseSha: inspected.baseSha,
+      sourceHead: inspected.source.head,
+      commits: inspected.commits.map((commit) => commit.sha),
+    })
+    expect(picked.ok).toBe(true)
+    if (!picked.ok) return
+    expect(picked.status).toBe('conflict')
+
+    // The renderer cannot know the path when prepare dies mid-command, so it
+    // aborts by delivery id alone.
+    const aborted = await abortPickDelivery({
+      commonDir,
+      deliveryId: 'derived-abort-delivery',
+      token,
+      mainWorktree,
+    })
+    expect(aborted.ok && aborted.removed).toBe(true)
+    const worktrees = await git(['worktree', 'list', '--porcelain'], fixture.main)
+    expect(worktrees).not.toContain('.universe-editor-delivery-worktrees')
+    await releaseDeliveryLock({ commonDir, token })
+  })
+
+  it('picks without initializing submodules in the temp worktree', async () => {
+    const fixture = await createSubmoduleFixture()
+    const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: true })
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) return
+    const { commonDir, mainWorktree } = inspected.repository
+    await acquireDeliveryLock({ commonDir, token })
+
+    const picked = await preparePickDelivery({
+      commonDir,
+      deliveryId: 'submodule-delivery',
+      token,
+      mainWorktree,
+      sourceWorktree: fixture.feature,
+      baseSha: inspected.baseSha,
+      sourceHead: inspected.source.head,
+      commits: inspected.commits.map((commit) => commit.sha),
+    })
+
+    expect(picked.ok).toBe(true)
+    if (!picked.ok) return
+    expect(picked.status).toBe('picked')
+    // `-` means the submodule was never initialized in the temp worktree.
+    expect((await git(['submodule', 'status'], picked.tempWorktree)).startsWith('-')).toBe(true)
+    await abortPickDelivery({
+      commonDir,
+      deliveryId: 'submodule-delivery',
+      token,
+      mainWorktree,
+      tempWorktree: picked.tempWorktree,
+    })
     await releaseDeliveryLock({ commonDir, token })
   })
 

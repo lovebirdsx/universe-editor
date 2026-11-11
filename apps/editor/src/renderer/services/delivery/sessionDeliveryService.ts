@@ -1056,7 +1056,18 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
       sourceHead,
       commits: commitShas,
     })
-    if (!prepared.ok) return { ok: false, error: fromGitFailure(prepared.error) }
+    if (!prepared.ok) {
+      // Prepare may have died after creating the temp worktree (e.g. the
+      // extension host was restarted mid-pick). The git extension derives the
+      // path from the delivery id, so the leftover is still removed.
+      await this._git.abortPick({
+        commonDir,
+        deliveryId: record.id,
+        token: record.lockToken!,
+        mainWorktree: record.target.mainWorktree,
+      })
+      return { ok: false, error: fromGitFailure(prepared.error) }
+    }
     if (prepared.status === 'picked') {
       return {
         ok: true,

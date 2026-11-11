@@ -195,7 +195,7 @@ export interface ISessionDeliveryGit {
     deliveryId: string
     token: string
     mainWorktree: string
-    tempWorktree: string
+    tempWorktree?: string
   }): Promise<DeliveryGitResult<{ removed: boolean }>>
   promoteAndPush(input: {
     commonDir: string
@@ -342,7 +342,7 @@ export class SessionDeliveryGit implements ISessionDeliveryGit {
     deliveryId: string
     token: string
     mainWorktree: string
-    tempWorktree: string
+    tempWorktree?: string
   }): Promise<DeliveryGitResult<{ removed: boolean }>> {
     return this._run<{ removed: boolean }>('abortPick', input)
   }
@@ -422,7 +422,7 @@ export class SessionDeliveryGit implements ISessionDeliveryGit {
       return {
         ok: false,
         error: {
-          code: 'unsupported',
+          code: 'git_failed',
           message: `git delivery command '${command}' failed`,
           detail: err instanceof Error ? err.message : String(err),
         },

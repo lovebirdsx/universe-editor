@@ -29,6 +29,7 @@ import type {
   DeliveryCommitSourceInput,
   DeliveryCommitSourceResult,
   DeliveryContinuePickInput,
+  DeliveryFailure,
   DeliveryInspectInput,
   DeliveryInspectResult,
   DeliveryLockResult,
@@ -56,6 +57,15 @@ export type DeliveryCommandRegister = (
 
 type Log = ((msg: string) => void) | undefined
 
+const commandFailure = (name: string, err: unknown): { ok: false; error: DeliveryFailure } => ({
+  ok: false,
+  error: {
+    code: 'git_failed',
+    message: `git delivery command '${name}' failed`,
+    detail: err instanceof Error ? err.message : String(err),
+  },
+})
+
 export function registerDeliveryCommands(
   register: DeliveryCommandRegister,
   log?: Log,
@@ -66,7 +76,15 @@ export function registerDeliveryCommands(
     run: (input: TInput, log?: Log) => Promise<TResult>,
   ): void => {
     registrations.push(
-      register(`git.agentDelivery.${name}`, (...args: unknown[]) => run(args[0] as TInput, log)),
+      register(`git.agentDelivery.${name}`, async (...args: unknown[]) => {
+        // A thrown handler would reject the extension-host command proxy and
+        // lose the failure shape the renderer expects; always return a result.
+        try {
+          return await run(args[0] as TInput, log)
+        } catch (err) {
+          return commandFailure(name, err)
+        }
+      }),
     )
   }
 

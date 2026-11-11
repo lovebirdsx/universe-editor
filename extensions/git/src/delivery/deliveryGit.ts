@@ -390,6 +390,14 @@ const deliveryIdFragment = (deliveryId: string): string => {
   return safe || 'delivery'
 }
 
+/** Shared by prepare and abort so failure cleanup can derive the same path. */
+const tempWorktreePath = (mainWorktree: string, deliveryId: string, tempRoot?: string): string => {
+  const fragment = deliveryIdFragment(deliveryId)
+  return tempRoot
+    ? join(tempRoot, fragment)
+    : join(dirname(mainWorktree), DEFAULT_TEMP_DIR, fragment)
+}
+
 /**
  * Cherry-pick `commits` in order. Empty picks are skipped and recorded; the
  * first conflict stops the loop and leaves the cherry-pick state in the temp
@@ -804,10 +812,7 @@ export async function preparePickDelivery(
   if (baseExists === undefined)
     return fail('git_failed', 'The delivery base commit no longer exists.')
 
-  const fragment = deliveryIdFragment(input.deliveryId)
-  const tempWorktree = input.tempRoot
-    ? join(input.tempRoot, fragment)
-    : join(dirname(input.mainWorktree), DEFAULT_TEMP_DIR, fragment)
+  const tempWorktree = tempWorktreePath(input.mainWorktree, input.deliveryId, input.tempRoot)
 
   if (await isRegisteredWorktree(input.mainWorktree, tempWorktree, log)) {
     await removeTempWorktree(input.mainWorktree, tempWorktree, log)
@@ -837,18 +842,21 @@ export async function preparePickDelivery(
       gitErrorText(add),
     )
   }
-  const submodules = await updateSubmodulesAt(tempWorktree, log)
-  if (submodules !== undefined && submodules.exitCode !== 0) {
-    await removeTempWorktree(input.mainWorktree, tempWorktree, log)
-    return fail(
-      'temp_worktree_failed',
-      'Could not initialize submodules in the temporary worktree.',
-      gitErrorText(submodules),
-    )
-  }
 
-  const result = await pickCommits(tempWorktree, input.commits, [], [], log)
-  if (!result.ok || result.status === 'conflict') return result
+  // Submodules are intentionally left uninitialized: the temp worktree only
+  // carries cherry-picked commits, and a linked worktree would clone every
+  // submodule from its remote into `.git/worktrees/<id>/modules` (minutes per
+  // delivery on a slow network).
+  let result: DeliveryPickResult
+  try {
+    result = await pickCommits(tempWorktree, input.commits, [], [], log)
+  } catch (err) {
+    await removeTempWorktree(input.mainWorktree, tempWorktree, log)
+    throw err
+  }
+  if (!result.ok) {
+    await removeTempWorktree(input.mainWorktree, tempWorktree, log)
+  }
   return result
 }
 
@@ -929,11 +937,15 @@ export async function abortPickDelivery(
   if (!(await isDeliveryLockHeld(input.commonDir, input.token))) {
     return fail('lock_lost', 'The delivery lock is no longer held by this session.')
   }
-  if (await isRegisteredWorktree(input.mainWorktree, input.tempWorktree, log)) {
-    await runDeliveryGit(['cherry-pick', '--abort'], input.tempWorktree, log, {
+  // Prepare can die before it reports the path (e.g. the extension host is
+  // restarted mid-pick), so the caller may omit it and rely on the same
+  // deterministic naming prepare uses.
+  const tempWorktree = input.tempWorktree ?? tempWorktreePath(input.mainWorktree, input.deliveryId)
+  if (await isRegisteredWorktree(input.mainWorktree, tempWorktree, log)) {
+    await runDeliveryGit(['cherry-pick', '--abort'], tempWorktree, log, {
       timeoutMs: LOCAL_TIMEOUT_MS,
     })
-    const removed = await removeTempWorktree(input.mainWorktree, input.tempWorktree, log)
+    const removed = await removeTempWorktree(input.mainWorktree, tempWorktree, log)
     return okData({ removed })
   }
   return okData({ removed: true })

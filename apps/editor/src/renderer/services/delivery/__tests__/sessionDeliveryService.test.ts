@@ -328,6 +328,34 @@ describe('SessionDeliveryService start', () => {
     expect(active.listActiveContexts()).toHaveLength(1)
   })
 
+  it('aborts the temp worktree when preparePick fails without a path', async () => {
+    const git = makeGit({
+      preparePick: vi.fn(
+        async () =>
+          ({
+            ok: false,
+            error: { code: 'git_failed', message: 'extension host disconnected' },
+          }) as const,
+      ),
+    })
+    active = makeService({ git })
+    const preview = await previewOf(active)
+
+    const started = await active.start('s1', preview.expectation)
+
+    expect(started.ok).toBe(false)
+    if (!started.ok) expect(started.error.code).toBe('git_failed')
+    // Prepare died before reporting a path; the abort must still be issued so
+    // the git extension can derive it from the delivery id.
+    expect(git.abortPick).toHaveBeenCalledWith({
+      commonDir: '/repo/.git',
+      deliveryId: expect.any(String),
+      token: expect.any(String),
+      mainWorktree: '/repo',
+    })
+    expect(active.getSummaryForSession('s1')?.phase).toBe('failed')
+  })
+
   it('commits dirty changes with the side-task message before picking', async () => {
     const sideTask = makeSession({
       id: 'side-1',
