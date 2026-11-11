@@ -445,6 +445,50 @@ input:focus-visible {
   font-size: 14px;
 }
 
+/* Update banner ------------------------------------------------------------ */
+
+.update-banner {
+  position: fixed;
+  left: 50%;
+  top: calc(env(safe-area-inset-top) + 12px);
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(92%, 420px);
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--warning) 16%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border));
+  box-shadow: var(--shadow);
+  font-size: 14px;
+}
+
+.update-banner__text {
+  flex: 1;
+}
+
+.update-banner__reload {
+  flex: none;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 14px;
+}
+
+.update-banner__dismiss {
+  flex: none;
+  width: 32px;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+}
+
 /* Inbox states ------------------------------------------------------------ */
 
 .state-card {

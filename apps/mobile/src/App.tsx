@@ -2,6 +2,7 @@ import type { MobileSessionRef } from '@universe-editor/mobile-protocol'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NotificationToast } from './components/NotificationToast.js'
 import { Spinner } from './components/Spinner.js'
+import { UpdateBanner } from './components/UpdateBanner.js'
 import {
   createCredentialStore,
   type SaveCredentialsResult,
@@ -307,6 +308,7 @@ export function App() {
 
   return (
     <>
+      <UpdateBanner mismatchStore={client.getWebBuildMismatchStore()} />
       {overlay}
       {keepSessionsPage && (
         <div className={route.name === 'sessions' ? 'page-layer' : 'page-layer page-layer--hidden'}>

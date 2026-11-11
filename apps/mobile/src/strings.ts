@@ -119,6 +119,9 @@ export const strings = {
   inboxReconnecting: '离线·重连中，正在尝试重新连接…',
   inboxOfflineBanner: '与 PC 的连接已断开，正在重连。列表可能不是最新。',
   inboxVersionMismatch: '手机端与 PC 版本不一致，请刷新页面。',
+  updateAvailable: 'PC 端已更新，刷新页面即可使用新版本。',
+  updateReload: '刷新',
+  updateDismiss: '关闭提示',
   inboxRefresh: '刷新页面',
   shellFromCacheNotice:
     '当前页面来自缓存，可能不是最新版本。若一直显示离线，请清除该网站的浏览数据后重新打开。',

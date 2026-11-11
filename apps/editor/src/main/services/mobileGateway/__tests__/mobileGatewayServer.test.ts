@@ -390,6 +390,28 @@ describe('mobile gateway server integration', () => {
     expect(JSON.stringify(audit)).not.toContain('ABCD2345')
   })
 
+  it('advertises the entry script from index.html and re-reads it per hello', async () => {
+    const gateway = await startGateway({}, { assets: false })
+    const indexPath = join(gateway.dir, 'assets', 'index.html')
+    await fs.writeFile(indexPath, '<script type="module" src="/assets/index-old.js"></script>')
+    const paired = await pair(gateway.base)
+
+    const first = await connectWs(gateway.base)
+    cleanup.push(() => first.terminate())
+    expect(await hello(first, paired.token)).toMatchObject({
+      type: 'hello_ok',
+      webBuildId: 'index-old.js',
+    })
+
+    await fs.writeFile(indexPath, '<script src="/assets/index-new.js" type="module"></script>')
+    const second = await connectWs(gateway.base)
+    cleanup.push(() => second.terminate())
+    expect(await hello(second, paired.token)).toMatchObject({
+      type: 'hello_ok',
+      webBuildId: 'index-new.js',
+    })
+  })
+
   it('binds the device trust to the hub and broadcasts trust changes', async () => {
     const hub = new MobileGatewayHub(new NullLogger())
     const gateway = await startGateway({ hub })

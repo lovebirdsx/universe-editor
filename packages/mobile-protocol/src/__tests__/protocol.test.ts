@@ -7,6 +7,7 @@ import {
   MAX_MESSAGE_IMAGE_INDEX,
   MAX_SERVER_FRAME_BYTES,
   MAX_TOKEN_LENGTH,
+  MAX_WEB_BUILD_ID_LENGTH,
   MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL_VERSION,
   isMobileErrorCode,
@@ -536,6 +537,28 @@ describe('parseServerFrame', () => {
       capabilities: ['inbox'],
     }
     expect(parseServerFrame(JSON.stringify(payload))).toStrictEqual({ ok: true, value: payload })
+  })
+
+  it('parses hello_ok.webBuildId and rejects values that are not bounded strings', () => {
+    expect(parseServerFrame(helloOkJson({ webBuildId: 'index-_PQNuEOX.js' }))).toStrictEqual({
+      ok: true,
+      value: {
+        type: 'hello_ok',
+        protocolVersion: MOBILE_PROTOCOL_VERSION,
+        serverVersion: '0.1.0',
+        deviceId: 'device-1',
+        trusted: false,
+        serverTime: 1_700_000_000_000,
+        capabilities: [],
+        webBuildId: 'index-_PQNuEOX.js',
+      },
+    })
+    expect(errorCode(parseServerFrame(helloOkJson({ webBuildId: 42 })))).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame(helloOkJson({ webBuildId: 'x'.repeat(MAX_WEB_BUILD_ID_LENGTH + 1) })),
+      ),
+    ).toBe('bad_request')
   })
 
   it('rejects hello_ok without a boolean trusted flag', () => {

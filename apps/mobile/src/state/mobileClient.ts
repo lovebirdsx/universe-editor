@@ -38,6 +38,7 @@ import {
   type WebSocketLike,
 } from '../socket/mobileSocket.js'
 import { probeGatewayHealth, type ConnectionDiagnosis } from '../socket/connectionDiagnosis.js'
+import { compareWebBuildId, readClientWebBuildId, type WebBuildMismatch } from '../webBuildId.js'
 import {
   CommandClient,
   CommandError,
@@ -70,6 +71,8 @@ export interface MobileClientOptions {
   readonly fetchImpl?: typeof fetch | undefined
   readonly onCredentialsInvalid?: (() => void) | undefined
   readonly onProtocolMismatch?: (() => void) | undefined
+  /** Overridable for tests; defaults to the module script the page loaded. */
+  readonly clientWebBuildId?: string
   readonly logger?: Pick<Console, 'warn'> | undefined
 }
 
@@ -98,6 +101,8 @@ export class MobileClient {
   private readonly _reconnectAttempt = new Store<number>(0)
   private readonly _connectionDiagnosis = new Store<ConnectionDiagnosis | undefined>(undefined)
   private readonly _deviceTrusted = new Store<boolean>(false)
+  private readonly _webBuildMismatch = new Store<WebBuildMismatch | undefined>(undefined)
+  private readonly _clientWebBuildId: string | undefined
   private readonly _logger: Pick<Console, 'warn'>
   private readonly _timers: TimerApi | undefined
   private readonly _fetchImpl: typeof fetch | undefined
@@ -118,6 +123,7 @@ export class MobileClient {
     this._timers = options.timers
     this._fetchImpl = options.fetchImpl
     this._origin = httpOriginForSocketUrl(options.url)
+    this._clientWebBuildId = options.clientWebBuildId ?? readClientWebBuildId()
     this._commands = new CommandClient({
       send: (frame) => this._sendCommand(frame),
       timers: options.timers,
@@ -145,11 +151,15 @@ export class MobileClient {
       onVapidPublicKey: (key) => {
         this._vapidPublicKey = key
       },
+      onWebBuildId: (buildId) => {
+        this._webBuildMismatch.setState(compareWebBuildId(buildId, this._clientWebBuildId))
+      },
       onDeviceTrust: (trusted) => {
         this._deviceTrusted.setState(trusted)
       },
       onCredentialsInvalid: () => {
         this._deviceTrusted.setState(false)
+        this._webBuildMismatch.setState(undefined)
         this._inbox.reset()
         this._session.reset()
         options.onCredentialsInvalid?.()
@@ -193,6 +203,11 @@ export class MobileClient {
   /** Whether the PC marks this device trusted for high-risk operations. */
   getDeviceTrustedStore(): Store<boolean> {
     return this._deviceTrusted
+  }
+
+  /** PC entry script differs from the one this page loaded; reload to update. */
+  getWebBuildMismatchStore(): Store<WebBuildMismatch | undefined> {
+    return this._webBuildMismatch
   }
 
   /** Skip the reconnect backoff; the diagnostic card's primary action. */
@@ -264,6 +279,7 @@ export class MobileClient {
     this._socket.stop()
     this._commands.clear()
     this._detail.clear()
+    this._webBuildMismatch.setState(undefined)
   }
 
   /** Subscribe to one session (at most one at a time) and reset its projection. */

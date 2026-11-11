@@ -62,6 +62,8 @@ export interface MobileSocketOptions {
   readonly onServerTime?: ((serverTime: number) => void) | undefined
   /** VAPID public key advertised by the gateway, when Web Push is available. */
   readonly onVapidPublicKey?: ((key: string | undefined) => void) | undefined
+  /** Entry script the gateway currently serves; lets a stale page prompt for reload. */
+  readonly onWebBuildId?: ((buildId: string | undefined) => void) | undefined
   /** Whether the PC allows high-risk operations from this device. */
   readonly onDeviceTrust?: ((trusted: boolean) => void) | undefined
   /** Foreground/background transitions, mirrored to the gateway as `client_state`. */
@@ -101,6 +103,7 @@ export class MobileSocket {
   private readonly _onInvalidFrame: ((error: ParseError) => void) | undefined
   private readonly _onServerTime: ((serverTime: number) => void) | undefined
   private readonly _onVapidPublicKey: ((key: string | undefined) => void) | undefined
+  private readonly _onWebBuildId: ((buildId: string | undefined) => void) | undefined
   private readonly _onDeviceTrust: ((trusted: boolean) => void) | undefined
   private readonly _onVisibilityChange: ((visible: boolean) => void) | undefined
   private readonly _onCredentialsInvalid: (() => void) | undefined
@@ -141,6 +144,7 @@ export class MobileSocket {
     this._onInvalidFrame = options.onInvalidFrame
     this._onServerTime = options.onServerTime
     this._onVapidPublicKey = options.onVapidPublicKey
+    this._onWebBuildId = options.onWebBuildId
     this._onDeviceTrust = options.onDeviceTrust
     this._onVisibilityChange = options.onVisibilityChange
     this._onCredentialsInvalid = options.onCredentialsInvalid
@@ -243,6 +247,7 @@ export class MobileSocket {
       case 'hello_ok':
         this._onServerTime?.(frame.serverTime)
         this._onVapidPublicKey?.(frame.vapidPublicKey)
+        this._onWebBuildId?.(frame.webBuildId)
         this._onDeviceTrust?.(frame.trusted)
         this._handleHelloOk()
         break

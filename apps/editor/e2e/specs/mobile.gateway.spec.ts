@@ -458,8 +458,9 @@ test.describe('mobile gateway', () => {
     page,
     workbench,
   }) => {
-    const { ws } = await connectRawPhone(page, workbench)
+    const { ws, hello } = await connectRawPhone(page, workbench)
     try {
+      expect(hello.webBuildId).toMatch(/\.js$/)
       const snapshot = await subscribeInbox(ws)
       expect(snapshot.sessions).toEqual([])
     } finally {

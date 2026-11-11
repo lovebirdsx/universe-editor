@@ -19,7 +19,7 @@ const credentials: StoredCredentials = {
   protocolVersion: MOBILE_PROTOCOL_VERSION,
 }
 
-function helloOkFrame(trusted = false): HelloOkFrame {
+function helloOkFrame(trusted = false, webBuildId?: string): HelloOkFrame {
   return {
     type: 'hello_ok',
     protocolVersion: MOBILE_PROTOCOL_VERSION,
@@ -28,11 +28,17 @@ function helloOkFrame(trusted = false): HelloOkFrame {
     trusted,
     serverTime: 1,
     capabilities: ['inbox', 'session'],
+    ...(webBuildId !== undefined ? { webBuildId } : {}),
   }
 }
 
 function createHarness(
-  options: { readonly fetchImpl?: typeof fetch; readonly trusted?: boolean } = {},
+  options: {
+    readonly fetchImpl?: typeof fetch
+    readonly trusted?: boolean
+    readonly clientWebBuildId?: string
+    readonly serverWebBuildId?: string
+  } = {},
 ): {
   readonly client: MobileClient
   readonly sockets: FakeWebSocket[]
@@ -64,11 +70,14 @@ function createHarness(
     timers,
     random: () => 0.5,
     fetchImpl: fetchImpl as unknown as typeof fetch,
+    ...(options.clientWebBuildId !== undefined
+      ? { clientWebBuildId: options.clientWebBuildId }
+      : {}),
   })
   client.start()
   const first = sockets[0]!
   first.serverOpen()
-  first.serverSend(helloOkFrame(options.trusted))
+  first.serverSend(helloOkFrame(options.trusted, options.serverWebBuildId))
   return { client, sockets, timers, fetchImpl }
 }
 
@@ -79,6 +88,48 @@ function frameTypes(socket: FakeWebSocket): string[] {
       : '',
   )
 }
+
+describe('MobileClient web build id', () => {
+  it('reports a mismatch when the PC serves a different entry script', () => {
+    const { client } = createHarness({
+      clientWebBuildId: 'index-old.js',
+      serverWebBuildId: 'index-new.js',
+    })
+    expect(client.getWebBuildMismatchStore().getState()).toEqual({
+      serverBuildId: 'index-new.js',
+      clientBuildId: 'index-old.js',
+    })
+  })
+
+  it('clears the mismatch when a reconnect sees the loaded build', () => {
+    const { client, sockets, timers } = createHarness({
+      clientWebBuildId: 'index-old.js',
+      serverWebBuildId: 'index-new.js',
+    })
+    sockets[0]!.serverClose(1006)
+    timers.advance(RECONNECT_BASE_MS)
+
+    const second = sockets[1]
+    expect(second).toBeDefined()
+    second!.serverOpen()
+    second!.serverSend(helloOkFrame(false, 'index-old.js'))
+
+    expect(client.getWebBuildMismatchStore().getState()).toBeUndefined()
+  })
+
+  it('does not report a mismatch when either side omits the build id', () => {
+    expect(
+      createHarness({ clientWebBuildId: 'index-old.js' })
+        .client.getWebBuildMismatchStore()
+        .getState(),
+    ).toBeUndefined()
+    expect(
+      createHarness({ serverWebBuildId: 'index-new.js' })
+        .client.getWebBuildMismatchStore()
+        .getState(),
+    ).toBeUndefined()
+  })
+})
 
 describe('MobileClient session subscription', () => {
   it('resolves a durable route key from the inbox and subscribes once', () => {

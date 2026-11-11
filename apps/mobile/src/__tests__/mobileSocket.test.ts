@@ -26,6 +26,7 @@ interface SocketHarness {
   readonly invalidFrames: ParseError[]
   readonly attempts: number[]
   readonly trusts: boolean[]
+  readonly webBuildIds: Array<string | undefined>
   readonly onCredentialsInvalid: ReturnType<typeof vi.fn>
   readonly onProtocolMismatch: ReturnType<typeof vi.fn>
   readonly logger: { warn: ReturnType<typeof vi.fn> }
@@ -39,6 +40,7 @@ function createHarness(): SocketHarness {
   const invalidFrames: ParseError[] = []
   const attempts: number[] = []
   const trusts: boolean[] = []
+  const webBuildIds: Array<string | undefined> = []
   const onCredentialsInvalid = vi.fn()
   const onProtocolMismatch = vi.fn()
   const logger = { warn: vi.fn() }
@@ -57,6 +59,7 @@ function createHarness(): SocketHarness {
     onInvalidFrame: (error) => invalidFrames.push(error),
     onReconnectAttempt: (attempt) => attempts.push(attempt),
     onDeviceTrust: (trusted) => trusts.push(trusted),
+    onWebBuildId: (buildId) => webBuildIds.push(buildId),
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -70,6 +73,7 @@ function createHarness(): SocketHarness {
     invalidFrames,
     attempts,
     trusts,
+    webBuildIds,
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -140,6 +144,15 @@ describe('MobileSocket handshake', () => {
 
     expect(harness.trusts).toEqual([false, true])
     expect(harness.frames.some((frame) => frame.type === 'device_trust_changed')).toBe(false)
+  })
+
+  it('reports the gateway entry script from hello_ok', () => {
+    const harness = createHarness()
+    harness.socket.start()
+    const socket = currentSocket(harness)
+    socket.serverOpen()
+    socket.serverSend({ ...helloOk(), webBuildId: 'index-new.js' })
+    expect(harness.webBuildIds).toEqual(['index-new.js'])
   })
 
   it('warns and reports malformed or non-text frames without forwarding them', () => {

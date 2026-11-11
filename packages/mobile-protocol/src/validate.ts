@@ -112,6 +112,7 @@ import {
 import type { PairDevicePlatform, PairRequest } from './pairing.js'
 import { isValidPairCodeShape, normalizePairCode, PAIR_DEVICE_PLATFORMS } from './pairing.js'
 import { MOBILE_PROTOCOL_VERSION } from './version.js'
+import { MAX_WEB_BUILD_ID_LENGTH } from './webBuildId.js'
 
 /**
  * Compared against JS string length (UTF-16 code units), not encoded bytes.
@@ -1410,6 +1411,12 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
   }
   const capabilities = parseCapabilities(frame.capabilities)
   if (!capabilities.ok) return capabilities
+  const webBuildId = parseOptionalString(
+    frame.webBuildId,
+    MAX_WEB_BUILD_ID_LENGTH,
+    'hello_ok.webBuildId',
+  )
+  if (!webBuildId.ok) return webBuildId
   const vapidPublicKey = parseOptionalString(
     frame.vapidPublicKey,
     MAX_PUSH_KEY_LENGTH,
@@ -1424,6 +1431,7 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
     trusted,
     serverTime,
     capabilities: capabilities.value,
+    ...(webBuildId.value !== undefined ? { webBuildId: webBuildId.value } : {}),
     ...(vapidPublicKey.value !== undefined ? { vapidPublicKey: vapidPublicKey.value } : {}),
   })
 }

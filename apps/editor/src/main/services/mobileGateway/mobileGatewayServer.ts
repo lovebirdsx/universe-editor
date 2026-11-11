@@ -61,6 +61,7 @@ import {
   contentTypeFor,
   isNoCacheAsset,
   NOT_BUILT_PAGE,
+  readWebBuildId,
   resolveStaticPath,
 } from './staticAssets.js'
 
@@ -104,6 +105,11 @@ export interface MobileGatewayServerOptions {
   readonly audit: AuditLog
   readonly logger: ILogger
   readonly serverVersion: string
+  /**
+   * Entry script currently served from `assetsDir`, advertised in `hello_ok`
+   * so an already-open PWA can detect a rebuild. Overridable for tests.
+   */
+  readonly resolveWebBuildId?: () => Promise<string | undefined>
   /** LAN tier: serve HTTPS with the gateway-managed certificate pair. */
   readonly tls?: MobileGatewayTlsOptions
   /**
@@ -156,10 +162,13 @@ export class MobileGatewayServer {
   private _port = 0
   private readonly _helloFailures: HelloFailureLimiter
   private readonly _diagnosticAuditAt = new Map<string, number>()
+  private readonly _resolveWebBuildId: () => Promise<string | undefined>
 
   constructor(private readonly _options: MobileGatewayServerOptions) {
     this._allowedHosts = this._options.allowedHosts
     this._helloFailures = this._options.helloFailureLimiter ?? new HelloFailureLimiter()
+    this._resolveWebBuildId =
+      this._options.resolveWebBuildId ?? (() => readWebBuildId(this._options.assetsDir))
   }
 
   get port(): number {
@@ -1155,6 +1164,7 @@ export class MobileGatewayServer {
       })
     }
     await this._options.store.touch(current.deviceId)
+    const webBuildId = await this._resolveWebBuildId().catch(() => undefined)
     const trusted =
       connection.hubConnection !== undefined
         ? (this._options.hub?.isConnectionTrusted(connection.hubConnection) ??
@@ -1175,6 +1185,7 @@ export class MobileGatewayServer {
         'draft',
         ...(this._options.attachments !== undefined ? ['attachments'] : []),
       ],
+      ...(webBuildId !== undefined ? { webBuildId } : {}),
       ...(this._options.vapidPublicKey !== undefined
         ? { vapidPublicKey: this._options.vapidPublicKey }
         : {}),

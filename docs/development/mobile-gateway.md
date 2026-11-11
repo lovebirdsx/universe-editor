@@ -138,7 +138,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 14`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 15`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -160,13 +160,15 @@ main 侧不直接读 `AcpSession`。
 `startDelivery` / `getDelivery` / `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` /
 `openDeliveryMainWorktree`、`MobileDeliveryPreview` / `MobileDeliverySummary` /
 `MobileDeliveryDetail`、会话摘要的 `delivery?` / `deliveryAvailable?` 与四个 `delivery_*`
-错误码，见 §6d）。
+错误码，见 §6d）；v15 增加 `hello_ok.webBuildId`：网关从当前 `index.html` 的入口脚本名生成构建
+标识，手机端与自身已加载的入口脚本名比对，不一致时提示刷新（协议版本不变时也能发现 PC 重建）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
+`hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
 对该设备开启高风险操作，握手时由 main 的 hub 给出权威值；v7 起的 `hello_ok.capabilities` 为
 
 `['inbox', 'commands', 'notifications', 'history', 'draft', 'attachments']`（`draft` 恒在；`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
+`webBuildId` 只反映静态资源构建（Vite 每次构建会改入口脚本哈希），不参与协议兼容判断；
 `vapidPublicKey` 只在网关可推送
 时出现，VAPID 公钥走握手而不是额外 HTTP 端点。**token 不放 URL query**，避免进入访问日志与
 Referer。

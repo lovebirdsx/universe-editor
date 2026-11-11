@@ -856,6 +856,8 @@ export interface HelloOkFrame {
   trusted: boolean
   serverTime: number
   capabilities: string[]
+  /** Entry script the gateway currently serves; lets a stale PWA prompt for reload. */
+  webBuildId?: string
   /** VAPID public key (`base64url`), present when Web Push is configured. */
   vapidPublicKey?: string
 }

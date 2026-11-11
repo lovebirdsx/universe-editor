@@ -7,7 +7,9 @@
  *  ordinary missing paths.
  *--------------------------------------------------------------------------------------------*/
 
-import { basename, extname, resolve, sep } from 'node:path'
+import { readFile } from 'node:fs/promises'
+import { basename, extname, join, resolve, sep } from 'node:path'
+import { webBuildIdFromAssetUrl } from '@universe-editor/mobile-protocol'
 
 export type StaticPathResolution =
   | { readonly kind: 'file'; readonly path: string }
@@ -86,6 +88,34 @@ export function contentTypeFor(filePath: string): string {
 export function isNoCacheAsset(filePath: string): boolean {
   const name = basename(filePath).toLowerCase()
   return name === 'index.html' || name === 'sw.js' || name === 'theme-boot.js'
+}
+
+const SCRIPT_TAG_PATTERN = /<script\b([^>]*)>/gi
+const MODULE_TYPE_PATTERN = /\btype\s*=\s*(?:"module"|'module')/i
+const SCRIPT_SRC_PATTERN = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)')/i
+
+/**
+ * Vite rewrites the entry script name on every build. Both the gateway and the
+ * loaded page derive the build id from that name, so a page left open across a
+ * rebuild can compare them in `hello_ok` and prompt for a reload.
+ */
+export function webBuildIdFromIndexHtml(html: string): string | undefined {
+  for (const match of html.matchAll(SCRIPT_TAG_PATTERN)) {
+    const attributes = match[1] ?? ''
+    if (!MODULE_TYPE_PATTERN.test(attributes)) continue
+    const src = SCRIPT_SRC_PATTERN.exec(attributes)
+    const id = webBuildIdFromAssetUrl(src?.[1] ?? src?.[2])
+    if (id !== undefined) return id
+  }
+  return undefined
+}
+
+export async function readWebBuildId(rootDir: string): Promise<string | undefined> {
+  try {
+    return webBuildIdFromIndexHtml(await readFile(join(rootDir, 'index.html'), 'utf8'))
+  } catch {
+    return undefined
+  }
 }
 
 export const NOT_BUILT_PAGE = `<!doctype html>
