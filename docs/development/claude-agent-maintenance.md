@@ -225,6 +225,20 @@ SHA 记录当前 P2 起点；下表测试结果保留为**首批验收历史**�
 
 **未验证**：真实 CLI 的端到端行为（需真实凭据与模型触发 `run_in_background`）；输出守卫不能阻止 CLI 已开始的工具副作用，源头阻止依赖 stopTask + cancel_queued，两者都漏的窄窗口无法从 adapter 侧封死。
 
+## P2 第八批：前台任务完成通知误置自主轮次（修复）
+
+**症状**：Claude agent 会话的最后一条回答已输出、`session/prompt` 已返回 `end_turn`，编辑器仍显示 running（停止按钮/转圈），要等几十秒才停止。本机会话 `cc4718d0` 的日志时序：02:11:29.922 最后一条回答 → 02:11:30 `end_turn`；`_universe/background_activity` 从 02:08:49 起 `backgroundTasks` 在 1/0 间反复切换、`autonomousTurn` 始终为 `true`，直到 **02:12:21**（最后一次通知后 60s）才推送 `{0,false}`；主进程 `host.log` 的 `notify shown title=Agent finished its task` 同样落在 02:12:21，running→idle 延迟 **51s**。`backgroundTasks:1` 的时段对应普通**前台** Bash/Terminal 工具调用（如 02:11:10 的 `git push`：02:11:14 bg=1，02:11:15 工具完成 bg=0）。
+
+**根因**：SDK 的 `task_started.is_backgrounded === false` 表示该任务注册在**前台**、spawning tool call 正阻塞等待它；它的 `task_notification` 就是当前用户轮自己的工具结果，不会开启 autonomous followup。fork 的 `case "task_notification"` 却对**每条非 ambient 通知**调用 `noteAutonomousWake`，把 `autonomousTurn` 置 true。普通用户轮 `result` 不清这个标志（清除点只有自主-origin result / cancel / 流结束 / wake grace 超时），而每条前台通知都会把 60s `DEFAULT_AUTONOMOUS_WAKE_GRACE_MS` 重新 arm → 编辑器按 `autonomousTurnActive` 持续 running 到计时器到期，延迟随前台工具数量与计时器相位落在「几十秒」。CLI 二进制证据（`claude.exe`，SDK 0.3.287）：`local_bash` / 前台 `local_agent` 注册时 `isBackgrounded:!1`，后台 agent 为 `!0`，转后台经 `task_updated patch.is_backgrounded`；CLI 自身的活动判定 `fg()` 也排除 `isBackgrounded === false`。
+
+**修法**（fork `acp-agent.ts`）：新增 `Session.foregroundTaskIds`，只影响 wake latch，不动 settle / 计数 / 工具卡 / subagent。加入：`task_started.is_backgrounded === false`；移出：`task_started.is_backgrounded === true`、`task_updated.patch.is_backgrounded === true`（增量 patch 可能没有 `status`，处理放在 case 顶部）、`task_updated` running/pending 且 `resumeLiveTask` 真正重注册（SDK 契约：恢复的子 agent 一定在后台）、`background_tasks_changed` 的每个 task（level 只含后台任务，兜底 backgrounding patch 丢失）、`task_notification`（无条件 delete 并据返回值决定是否置位，重复/ambient/cancelled 都消费标记）、`activateTurn`（非 local-only）清空。`is_backgrounded === undefined`（老 CLI / 字段未覆盖的任务类型）保持旧行为。与 `liveBackgroundTasks` 分开保存：terminal `task_updated` 可能先于顺序未定义的 notification 删除 record，标记会丢。完整状态机见 fork `cases-session.md`。
+
+**测试与负向验证**：`acp-agent.test.ts` 的 `background activity notification` describe 19 → 23 例。A 主回归：前台任务通知不置位（pristine 实测红：trace 收到 `activity:0/true` + `after-notification:true`，修后 `0/false`）；B 后台任务在用户轮内完成仍置位（防「用户轮在途就一律不 latch」的粗粒度守卫，修复前后均绿）；C patch-only 转后台后恢复唤醒（去掉 `task_updated` 顶部清理即红：`after-backgrounded:true`、无 `0/true`）；D resume 子 agent 后恢复唤醒（把 resume 清理改回裸 `resumeLiveTask` 即红：`after-resume:true`、无 `0/true`）。既有 18776 用例（无 `is_backgrounded` 的通知在 turn 结束后仍置位）是「undefined 保持旧行为」哨兵，保持绿。**本机校验**：fork 定向 **23/23 通过**；fork 全量 **2499 通过 / 41 失败 / 32 跳过**（41 条均为既存 Windows 路径/换行/golden 失败，与 `background activity` 无关，与 P2 第七批记录的基线数量一致）；`typecheck`、`lint` 通过，改动文件用 `prettier --end-of-line auto` 校验通过（整仓 `format:check` 因本机 `core.autocrlf=true` 对全部文件报 CRLF，非本批引入）；`pnpm agent:build` 后跨仓契约 **52/52 通过**；父仓 `pnpm check` 通过。
+
+**codex 对照**：不需要同步修复——`vendor/codex-acp` 的 `BackgroundActivity.wake()` 在 `clientPrompts > 0` 时 early-return，且其后台任务集合只含后台 terminal，「前台工具完成」不会进入唤醒路径。
+
+**未验证 / 残余风险**：真实 CLI 端到端只做了日志时序取证，未在修复后的构建里手工跑前台 Bash + `run_in_background` 双场景；`emitBackgroundActivity` 仍把前台任务计入 `backgroundTasks`（日志里的 bg=1 即来自此），严格语义应排除但会改变 wire 计数，另批处理；backgrounding patch 与 level 同时丢失会漏一次真实 followup；重复 `task_notification` 在第一次 delete 后第二次可能重新置位（SDK 称已去重）。本文档不宣称「彻底解决」。
+
 ## 后续范围
 
 **本轮已执行**（详见各节）：纯历史解析整理（已提交 fork `90795e5`）；会话锚点解析与 query 资源释放的模块化提取；真实 SDK 文件操作验收（8/8）与真实 dist/CLI 跨仓契约验收（46/46；无 CLI 38/8 skip）；上游固定范围评估 12 项与 `compare` 回归修复（19/19）；窗口用例的启动门禁。
