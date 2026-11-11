@@ -5,6 +5,12 @@ import { FullscreenButton } from '../components/FullscreenButton.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
+import {
+  isSessionRemoveConfirmEnabled,
+  setSessionCloseConfirmEnabled,
+  setSessionRemoveConfirmEnabled,
+  shouldConfirmSessionClose,
+} from './sessionConfirm.js'
 
 const MAX_TITLE_LENGTH = 512
 
@@ -63,15 +69,34 @@ export function SessionMenuSheet({
     }
   }
 
-  const requestClose = (): void => {
-    if (closeNeedsConfirm) {
-      setView('close')
-      return
-    }
+  const doClose = (): void => {
     void run(
       () => client.closeSession(),
       () => onFinished('closed'),
     )
+  }
+
+  const doRemove = (): void => {
+    void run(
+      () => client.deleteSession(),
+      () => onFinished('removed'),
+    )
+  }
+
+  const requestClose = (): void => {
+    if (shouldConfirmSessionClose(closeNeedsConfirm)) {
+      setView('close')
+      return
+    }
+    doClose()
+  }
+
+  const requestRemove = (): void => {
+    if (isSessionRemoveConfirmEnabled()) {
+      setView('remove')
+      return
+    }
+    doRemove()
   }
 
   if (view === 'rename') {
@@ -148,12 +173,11 @@ export function SessionMenuSheet({
         testId="session-close-sheet"
         busy={busy}
         disabled={!online}
-        onConfirm={() =>
-          void run(
-            () => client.closeSession(),
-            () => onFinished('closed'),
-          )
-        }
+        neverAskAgainLabel={strings.sessionNeverAskAgain}
+        onConfirm={(neverAskAgain) => {
+          if (neverAskAgain) setSessionCloseConfirmEnabled(false)
+          doClose()
+        }}
         onCancel={() => {
           if (!busy) setView('menu')
         }}
@@ -171,12 +195,11 @@ export function SessionMenuSheet({
         tone="danger"
         busy={busy}
         disabled={!online}
-        onConfirm={() =>
-          void run(
-            () => client.deleteSession(),
-            () => onFinished('removed'),
-          )
-        }
+        neverAskAgainLabel={strings.sessionNeverAskAgain}
+        onConfirm={(neverAskAgain) => {
+          if (neverAskAgain) setSessionRemoveConfirmEnabled(false)
+          doRemove()
+        }}
         onCancel={() => {
           if (!busy) setView('menu')
         }}
@@ -263,7 +286,7 @@ export function SessionMenuSheet({
             className="sheet-option sheet-option--danger"
             data-testid="session-remove"
             disabled={!online || busy}
-            onClick={() => setView('remove')}
+            onClick={requestRemove}
           >
             {strings.sessionRemove}
           </button>

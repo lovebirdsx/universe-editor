@@ -1,6 +1,12 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { sessionSummary } from '../../test/protocolFixtures.js'
+import {
+  SESSION_CLOSE_CONFIRM_STORAGE_KEY,
+  SESSION_REMOVE_CONFIRM_STORAGE_KEY,
+  setSessionCloseConfirmEnabled,
+  setSessionRemoveConfirmEnabled,
+} from '../../session/sessionConfirm.js'
 import { InboxSessionActionSheet } from '../InboxSessionActionSheet.js'
 
 function createClient() {
@@ -124,5 +130,154 @@ describe('InboxSessionActionSheet', () => {
 
     expect((screen.getByTestId('inbox-session-close') as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByTestId('inbox-session-remove') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('remembers never-ask after closing a working session', async () => {
+    const client = createClient()
+    const onCompleted = vi.fn()
+    render(
+      <InboxSessionActionSheet
+        client={client}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onCompleted={onCompleted}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-close'))
+    fireEvent.click(screen.getByTestId('inbox-session-close-sheet-never-ask'))
+    fireEvent.click(screen.getByTestId('inbox-session-close-sheet-confirm'))
+
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('closed'))
+    expect(localStorage.getItem(SESSION_CLOSE_CONFIRM_STORAGE_KEY)).toBe('never')
+  })
+
+  it('remembers never-ask when removing', async () => {
+    const client = createClient()
+    const onCompleted = vi.fn()
+    render(
+      <InboxSessionActionSheet
+        client={client}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onCompleted={onCompleted}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-remove'))
+    fireEvent.click(screen.getByTestId('inbox-session-remove-sheet-never-ask'))
+    fireEvent.click(screen.getByTestId('inbox-session-remove-sheet-confirm'))
+
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('removed'))
+    expect(localStorage.getItem(SESSION_REMOVE_CONFIRM_STORAGE_KEY)).toBe('never')
+  })
+
+  it('closes a working session directly once the close preference is off', async () => {
+    setSessionCloseConfirmEnabled(false)
+    const client = createClient()
+    const onCompleted = vi.fn()
+    render(
+      <InboxSessionActionSheet
+        client={client}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onCompleted={onCompleted}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-close'))
+
+    expect(screen.queryByTestId('inbox-session-close-sheet')).toBeNull()
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('closed'))
+    expect(client.closeSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes directly once the remove preference is off', async () => {
+    setSessionRemoveConfirmEnabled(false)
+    const client = createClient()
+    const onCompleted = vi.fn()
+    render(
+      <InboxSessionActionSheet
+        client={client}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onCompleted={onCompleted}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-remove'))
+
+    expect(screen.queryByTestId('inbox-session-remove-sheet')).toBeNull()
+    await waitFor(() => expect(onCompleted).toHaveBeenCalledWith('removed'))
+    expect(client.deleteSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps close confirmation when only the remove preference is off', () => {
+    setSessionRemoveConfirmEnabled(false)
+    render(
+      <InboxSessionActionSheet
+        client={createClient()}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onCompleted={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-close'))
+
+    expect(screen.getByTestId('inbox-session-close-sheet')).toBeTruthy()
+  })
+
+  it('keeps remove confirmation when only the close preference is off', () => {
+    setSessionCloseConfirmEnabled(false)
+    render(
+      <InboxSessionActionSheet
+        client={createClient()}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onCompleted={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-remove'))
+
+    expect(screen.getByTestId('inbox-session-remove-sheet')).toBeTruthy()
+  })
+
+  it('does not persist the preference when the user cancels', () => {
+    render(
+      <InboxSessionActionSheet
+        client={createClient()}
+        session={sessionSummary('s1')}
+        initialView="remove"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onCompleted={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-remove-sheet-never-ask'))
+    fireEvent.click(screen.getByTestId('inbox-session-remove-sheet-cancel'))
+
+    expect(localStorage.getItem(SESSION_REMOVE_CONFIRM_STORAGE_KEY)).toBeNull()
   })
 })

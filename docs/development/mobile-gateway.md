@@ -870,9 +870,10 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 **首屏主题**：网关 CSP 是 `default-src 'self'`，`index.html` 不能内联脚本。主题偏好在
 `apps/mobile/public/theme-boot.js`（同源外部同步脚本）里于首帧前读取 localStorage 并写入
 `<html data-theme>` / `meta[theme-color]`；`src/theme.ts` 负责后续切换与系统监听。该文件被
-`sw.js` 预缓存（修改其内容必须 bump `CACHE_NAME`），并由网关按 `no-cache` 提供。主题与
-会话显示偏好（`universe.mobile.theme` / `universe.mobile.sessionDisplay`）都是手机本地
-localStorage，不走协议。
+`sw.js` 预缓存（修改其内容必须 bump `CACHE_NAME`），并由网关按 `no-cache` 提供。主题、会话
+显示与会话操作确认偏好（`universe.mobile.theme` / `universe.mobile.sessionDisplay` /
+`universe.mobile.sessionCloseConfirm` / `universe.mobile.sessionRemoveConfirm`）都是手机本地
+localStorage，不走协议。后两个 key 的值为 `ask` / `never`，缺失时按 `ask`（需要确认）处理。
 
 **M4 通知实现位置**：
 

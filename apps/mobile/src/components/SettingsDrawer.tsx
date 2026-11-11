@@ -18,6 +18,12 @@ import {
   setSessionDisplayPreference,
   type SessionDisplayPreference,
 } from '../session/sessionDisplay.js'
+import {
+  isSessionCloseConfirmEnabled,
+  isSessionRemoveConfirmEnabled,
+  setSessionCloseConfirmEnabled,
+  setSessionRemoveConfirmEnabled,
+} from '../session/sessionConfirm.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { strings } from '../strings.js'
 import { readThemePreference, setThemePreference, type ThemePreference } from '../theme.js'
@@ -64,6 +70,8 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
   const [display, setDisplay] = useState<SessionDisplayPreference>(() =>
     readSessionDisplayPreference(),
   )
+  const [confirmClose, setConfirmClose] = useState<boolean>(() => isSessionCloseConfirmEnabled())
+  const [confirmRemove, setConfirmRemove] = useState<boolean>(() => isSessionRemoveConfirmEnabled())
   const [fullscreenSupported] = useState(isFullscreenSupported)
   const [error, setError] = useState<string | undefined>(undefined)
   const mountedRef = useRef(true)
@@ -190,6 +198,16 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
     setSessionDisplayPreference(next)
   }
 
+  const updateConfirmClose = (next: boolean): void => {
+    setConfirmClose(next)
+    setSessionCloseConfirmEnabled(next)
+  }
+
+  const updateConfirmRemove = (next: boolean): void => {
+    setConfirmRemove(next)
+    setSessionRemoveConfirmEnabled(next)
+  }
+
   return (
     <div className="drawer-backdrop" onClick={onClose}>
       <aside
@@ -286,6 +304,31 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
             ))}
           </div>
           <p className="drawer__hint">{strings.sessionDisplayHint}</p>
+        </section>
+
+        <section className="drawer__section" data-testid="session-confirm-settings">
+          <h3 className="drawer__sectionTitle">{strings.sessionConfirmSection}</h3>
+          <label className="drawer__checkbox">
+            <input
+              type="checkbox"
+              checked={confirmClose}
+              onChange={(event) => updateConfirmClose(event.currentTarget.checked)}
+              data-testid="session-confirm-close"
+            />
+            <span>{strings.sessionConfirmClose}</span>
+          </label>
+          <p className="drawer__hint">{strings.sessionConfirmCloseHint}</p>
+          <label className="drawer__checkbox">
+            <input
+              type="checkbox"
+              checked={confirmRemove}
+              onChange={(event) => updateConfirmRemove(event.currentTarget.checked)}
+              data-testid="session-confirm-remove"
+            />
+            <span>{strings.sessionConfirmRemove}</span>
+          </label>
+          <p className="drawer__hint">{strings.sessionConfirmRemoveHint}</p>
+          <p className="drawer__hint">{strings.sessionConfirmHint}</p>
         </section>
 
         <section className="drawer__section" data-testid="fullscreen-settings">

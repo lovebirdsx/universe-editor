@@ -25,6 +25,11 @@ import {
   takeComposerPrefill,
 } from '../composerPrefill.js'
 import { SESSION_DISPLAY_STORAGE_KEY } from '../sessionDisplay.js'
+import {
+  SESSION_CLOSE_CONFIRM_STORAGE_KEY,
+  setSessionCloseConfirmEnabled,
+  setSessionRemoveConfirmEnabled,
+} from '../sessionConfirm.js'
 import { SessionPage, SESSION_LOAD_TIMEOUT_MS } from '../SessionPage.js'
 
 const credentials: StoredCredentials = {
@@ -805,6 +810,75 @@ describe('SessionPage snapshot rendering', () => {
     })
     await act(async () => undefined)
     expect(onFinished).toHaveBeenCalledWith('removed')
+  })
+
+  it('closes a running session directly once the close preference is off', async () => {
+    setSessionCloseConfirmEnabled(false)
+    const { harness, onFinished } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-close'))
+
+    expect(screen.queryByTestId('session-close-sheet')).toBeNull()
+    const command = sentFrames(harness.socket).find(
+      (frame) =>
+        frameType(frame) === 'command' && (frame as { kind?: string }).kind === 'closeSession',
+    ) as { requestId: string } | undefined
+    expect(command).toBeDefined()
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: command!.requestId,
+      ok: true,
+    })
+    await act(async () => undefined)
+    expect(onFinished).toHaveBeenCalledWith('closed')
+  })
+
+  it('removes a session directly once the remove preference is off', async () => {
+    setSessionRemoveConfirmEnabled(false)
+    const { harness, onFinished } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-remove'))
+
+    expect(screen.queryByTestId('session-remove-sheet')).toBeNull()
+    const command = sentFrames(harness.socket).find(
+      (frame) =>
+        frameType(frame) === 'command' && (frame as { kind?: string }).kind === 'deleteSession',
+    ) as { requestId: string } | undefined
+    expect(command).toBeDefined()
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: command!.requestId,
+      ok: true,
+    })
+    await act(async () => undefined)
+    expect(onFinished).toHaveBeenCalledWith('removed')
+  })
+
+  it('persists never-ask from the close confirmation', () => {
+    const { harness } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-close'))
+    fireEvent.click(screen.getByTestId('session-close-sheet-never-ask'))
+    fireEvent.click(screen.getByTestId('session-close-sheet-confirm'))
+
+    expect(localStorage.getItem(SESSION_CLOSE_CONFIRM_STORAGE_KEY)).toBe('never')
+  })
+
+  it('keeps removal confirmation when only the close preference is off', () => {
+    setSessionCloseConfirmEnabled(false)
+    const { harness } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-remove'))
+
+    expect(screen.getByTestId('session-remove-sheet')).toBeTruthy()
   })
 
   it('hides rename, close and remove for a read-only session', () => {

@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import type { MobileClient } from '../../state/mobileClient.js'
 import { SESSION_DISPLAY_STORAGE_KEY } from '../../session/sessionDisplay.js'
+import {
+  SESSION_CLOSE_CONFIRM_STORAGE_KEY,
+  SESSION_REMOVE_CONFIRM_STORAGE_KEY,
+} from '../../session/sessionConfirm.js'
 import { THEME_META_COLORS, THEME_STORAGE_KEY } from '../../theme.js'
 import { SettingsDrawer } from '../SettingsDrawer.js'
 import { strings } from '../../strings.js'
@@ -97,6 +101,36 @@ describe('SettingsDrawer preferences', () => {
 
     fireEvent.click(screen.getByTestId('session-display-onlyMessage'))
     expect(localStorage.getItem(SESSION_DISPLAY_STORAGE_KEY)).toBe('onlyMessage')
+  })
+
+  it('defaults to asking before closing and removing sessions', () => {
+    renderDrawer()
+
+    expect((screen.getByTestId('session-confirm-close') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('session-confirm-remove') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('reflects stored session confirm preferences independently', () => {
+    localStorage.setItem(SESSION_CLOSE_CONFIRM_STORAGE_KEY, 'never')
+    renderDrawer()
+
+    expect((screen.getByTestId('session-confirm-close') as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByTestId('session-confirm-remove') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('persists each session confirm preference without touching the other', () => {
+    renderDrawer()
+
+    fireEvent.click(screen.getByTestId('session-confirm-close'))
+    expect(localStorage.getItem(SESSION_CLOSE_CONFIRM_STORAGE_KEY)).toBe('never')
+    expect(localStorage.getItem(SESSION_REMOVE_CONFIRM_STORAGE_KEY)).toBeNull()
+
+    fireEvent.click(screen.getByTestId('session-confirm-remove'))
+    expect(localStorage.getItem(SESSION_REMOVE_CONFIRM_STORAGE_KEY)).toBe('never')
+    expect(localStorage.getItem(SESSION_CLOSE_CONFIRM_STORAGE_KEY)).toBe('never')
+
+    fireEvent.click(screen.getByTestId('session-confirm-close'))
+    expect(localStorage.getItem(SESSION_CLOSE_CONFIRM_STORAGE_KEY)).toBe('ask')
   })
 
   it('explains fullscreen availability when the browser cannot go fullscreen', () => {

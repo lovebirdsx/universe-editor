@@ -6,6 +6,12 @@ import type { MobileClient } from '../state/mobileClient.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
 import { isSessionWorking } from '../session/sessionStatus.js'
+import {
+  isSessionRemoveConfirmEnabled,
+  setSessionCloseConfirmEnabled,
+  setSessionRemoveConfirmEnabled,
+  shouldConfirmSessionClose,
+} from '../session/sessionConfirm.js'
 
 export type InboxSessionSheetView = 'menu' | 'close' | 'remove'
 
@@ -47,12 +53,28 @@ export function InboxSessionActionSheet({
       })
   }
 
+  const doClose = (): void => {
+    run('closed', () => client.closeSession(session.ref))
+  }
+
+  const doRemove = (): void => {
+    run('removed', () => client.deleteSession(session.ref))
+  }
+
   const requestClose = (): void => {
-    if (isSessionWorking(session)) {
+    if (shouldConfirmSessionClose(isSessionWorking(session))) {
       setView('close')
       return
     }
-    run('closed', () => client.closeSession(session.ref))
+    doClose()
+  }
+
+  const requestRemove = (): void => {
+    if (isSessionRemoveConfirmEnabled()) {
+      setView('remove')
+      return
+    }
+    doRemove()
   }
 
   if (view === 'close') {
@@ -64,7 +86,11 @@ export function InboxSessionActionSheet({
         testId="inbox-session-close-sheet"
         busy={busy}
         disabled={!online}
-        onConfirm={() => run('closed', () => client.closeSession(session.ref))}
+        neverAskAgainLabel={strings.sessionNeverAskAgain}
+        onConfirm={(neverAskAgain) => {
+          if (neverAskAgain) setSessionCloseConfirmEnabled(false)
+          doClose()
+        }}
         onCancel={() => {
           if (!busy) setView('menu')
         }}
@@ -82,7 +108,11 @@ export function InboxSessionActionSheet({
         tone="danger"
         busy={busy}
         disabled={!online}
-        onConfirm={() => run('removed', () => client.deleteSession(session.ref))}
+        neverAskAgainLabel={strings.sessionNeverAskAgain}
+        onConfirm={(neverAskAgain) => {
+          if (neverAskAgain) setSessionRemoveConfirmEnabled(false)
+          doRemove()
+        }}
         onCancel={() => {
           if (!busy) setView('menu')
         }}
@@ -114,7 +144,7 @@ export function InboxSessionActionSheet({
           className="sheet-option sheet-option--danger"
           data-testid="inbox-session-remove"
           disabled={!online || busy}
-          onClick={() => setView('remove')}
+          onClick={requestRemove}
         >
           {strings.sessionRemove}
         </button>

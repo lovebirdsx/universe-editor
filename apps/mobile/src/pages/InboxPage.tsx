@@ -17,6 +17,10 @@ import { StatusBar } from '../components/StatusBar.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
 import { isSessionWorking } from '../session/sessionStatus.js'
+import {
+  isSessionRemoveConfirmEnabled,
+  shouldConfirmSessionClose,
+} from '../session/sessionConfirm.js'
 import { collectDirtyWindowIds } from '../inbox/workspaceDirty.js'
 import { useShellCacheFallback } from '../shellCache.js'
 import { useEffect, useState } from 'react'
@@ -85,7 +89,7 @@ export function InboxPage({
   }
 
   const closeSession = (session: MobileSessionSummary): void => {
-    if (isSessionWorking(session)) {
+    if (shouldConfirmSessionClose(isSessionWorking(session))) {
       setSessionAction({ session, view: 'close' })
       return
     }
@@ -96,7 +100,14 @@ export function InboxPage({
   }
 
   const removeSession = (session: MobileSessionSummary): void => {
-    setSessionAction({ session, view: 'remove' })
+    if (isSessionRemoveConfirmEnabled()) {
+      setSessionAction({ session, view: 'remove' })
+      return
+    }
+    void client
+      .deleteSession(session.ref)
+      .then(() => onNotice(strings.sessionRemovedNotice))
+      .catch((error: unknown) => onNotice(commandErrorText(errorCode(error))))
   }
 
   const completedSessionAction = (action: 'closed' | 'removed'): void => {

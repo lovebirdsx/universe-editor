@@ -63,6 +63,14 @@ export const strings = {
   sessionDisplayFull: '完整显示',
   sessionDisplayHint: '仅消息会隐藏思考与普通工具调用，保留对话内容和关键卡片。',
 
+  sessionConfirmSection: '会话操作确认',
+  sessionConfirmClose: '关闭会话前确认',
+  sessionConfirmCloseHint: 'Agent 正在运行、等待审批或还有后台任务时，关闭前先确认。',
+  sessionConfirmRemove: '移除会话前确认',
+  sessionConfirmRemoveHint: '移除会删除会话、子任务和历史记录，且无法恢复。',
+  sessionConfirmHint:
+    '在确认弹层勾选「不再提示」会关闭对应确认；两个开关相互独立，可随时在这里重新开启。',
+
   fullscreenSection: '全屏显示',
   fullscreenEnter: '进入全屏',
   fullscreenExit: '退出全屏',
@@ -355,6 +363,7 @@ export const strings = {
   sessionRemoveBody: '会话及其子任务会从 Agent 端删除，历史记录也会一并删除，且无法恢复。',
   sessionRemoveConfirm: '移除',
   sessionRemovedNotice: '会话已移除',
+  sessionNeverAskAgain: '不再提示',
   sessionActionFailed: '操作失败，请重试。',
 
   newSessionTitle: '新建会话',
