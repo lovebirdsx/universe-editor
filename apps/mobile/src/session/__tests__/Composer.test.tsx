@@ -1,10 +1,15 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { MobileAttachmentUploadResult } from '@universe-editor/mobile-protocol'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strings } from '../../strings.js'
 import { Composer, draftKey } from '../Composer.js'
 
 beforeEach(() => {
   sessionStorage.clear()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
@@ -33,8 +38,19 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     onNotice,
     ...overrides,
   }
-  render(<Composer {...props} />)
-  return { onSend, onStop, onUploadAttachment, onNotice }
+  const view = render(<Composer {...props} />)
+  return { onSend, onStop, onUploadAttachment, onNotice, unmount: view.unmount }
+}
+
+function pickFile(name: string, type: string): void {
+  fireEvent.change(screen.getByTestId('composer-attachment-input'), {
+    target: { files: [new File(['abc'], name, { type })] },
+  })
+}
+
+async function previewSrc(): Promise<string> {
+  const button = await waitFor(() => screen.getByTestId('composer-attachment-image-button'))
+  return button.querySelector('img')?.getAttribute('src') ?? ''
 }
 
 describe('Composer', () => {
@@ -129,6 +145,98 @@ describe('Composer', () => {
 
     fireEvent.click(screen.getByLabelText(strings.attachmentRemove))
     expect(screen.queryByTestId('composer-attachments')).toBeNull()
+  })
+
+  it('opens and closes the full-screen preview from an image thumbnail', async () => {
+    renderComposer()
+    pickFile('shot.png', 'image/png')
+
+    const src = await previewSrc()
+    expect(src).toMatch(/^blob:/)
+    const button = screen.getByTestId('composer-attachment-image-button')
+    expect(button.getAttribute('aria-label')).toBe(strings.imagePreviewOpen('shot.png'))
+
+    fireEvent.click(button)
+    expect(screen.getByTestId('image-preview')).toBeTruthy()
+    expect(screen.getByTestId('image-preview-image').getAttribute('src')).toBe(src)
+    expect(document.documentElement.classList.contains('is-scroll-locked')).toBe(true)
+
+    fireEvent.click(screen.getByTestId('image-preview-close'))
+    expect(screen.queryByTestId('image-preview')).toBeNull()
+    expect(document.documentElement.classList.contains('is-scroll-locked')).toBe(false)
+  })
+
+  it('does not make file attachments previewable', async () => {
+    renderComposer()
+    pickFile('notes.txt', 'text/plain')
+
+    const chip = await waitFor(() => screen.getByTestId('composer-attachment-file'))
+    expect(within(chip).queryByTestId('composer-attachment-image-button')).toBeNull()
+  })
+
+  it('previews an image while its upload is still pending', async () => {
+    const onUploadAttachment = vi.fn(
+      () => new Promise<MobileAttachmentUploadResult>(() => undefined),
+    )
+    renderComposer({ onUploadAttachment })
+    pickFile('shot.png', 'image/png')
+
+    const chip = await waitFor(() => screen.getByTestId('composer-attachment-image'))
+    expect(chip.className).toContain('composer__chip--uploading')
+    fireEvent.click(screen.getByTestId('composer-attachment-image-button'))
+    expect(screen.getByTestId('image-preview')).toBeTruthy()
+  })
+
+  it('previews an image after its upload failed', async () => {
+    const onUploadAttachment = vi.fn(async () => {
+      throw Object.assign(new Error('offline'), { code: 'network' })
+    })
+    renderComposer({ onUploadAttachment })
+    pickFile('shot.png', 'image/png')
+
+    await waitFor(() => expect(screen.getByText(strings.attachmentUploadFailed)).toBeTruthy())
+    fireEvent.click(screen.getByTestId('composer-attachment-image-button'))
+    expect(screen.getByTestId('image-preview')).toBeTruthy()
+  })
+
+  it('revokes the local preview URL when the attachment is removed', async () => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    renderComposer()
+    pickFile('shot.png', 'image/png')
+    const src = await previewSrc()
+    await waitFor(() =>
+      expect(screen.getByTestId('composer-attachment-image').className).toContain(
+        'composer__chip--uploaded',
+      ),
+    )
+
+    fireEvent.click(screen.getByLabelText(strings.attachmentRemove))
+    expect(revoke).toHaveBeenCalledWith(src)
+    expect(screen.queryByTestId('composer-attachments')).toBeNull()
+  })
+
+  it('revokes local preview URLs after a successful send', async () => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    const { onSend } = renderComposer()
+    pickFile('shot.png', 'image/png')
+    const src = await previewSrc()
+
+    const send = screen.getByTestId('composer-send') as HTMLButtonElement
+    await waitFor(() => expect(send.disabled).toBe(false))
+    fireEvent.click(send)
+
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1']))
+    expect(revoke).toHaveBeenCalledWith(src)
+  })
+
+  it('revokes local preview URLs on unmount', async () => {
+    const revoke = vi.spyOn(URL, 'revokeObjectURL')
+    const { unmount } = renderComposer()
+    pickFile('shot.png', 'image/png')
+    const src = await previewSrc()
+    unmount()
+
+    expect(revoke).toHaveBeenCalledWith(src)
   })
 
   it('hides the attachment entry when neither capability is available', () => {

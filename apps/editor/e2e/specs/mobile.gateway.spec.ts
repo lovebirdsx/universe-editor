@@ -1059,6 +1059,14 @@ test.describe('mobile gateway', () => {
         phone.locator('[data-testid="composer-attachment-image"].composer__chip--uploaded'),
       ).toBeVisible()
 
+      const composerImage = phone.locator('[data-testid="composer-attachment-image"]')
+      await expect(composerImage.locator('img')).toHaveAttribute('src', /^blob:/)
+      await composerImage.getByTestId('composer-attachment-image-button').click()
+      await expect(phone.getByTestId('image-preview')).toBeVisible()
+      await expect(phone.getByTestId('image-preview-image')).toHaveAttribute('src', /^blob:/)
+      await phone.getByTestId('image-preview-close').click()
+      await expect(phone.getByTestId('image-preview')).toHaveCount(0)
+
       await phone.getByTestId('composer-attachment-input').setInputFiles({
         name: 'notes.txt',
         mimeType: 'text/plain',
@@ -1067,6 +1075,11 @@ test.describe('mobile gateway', () => {
       await expect(
         phone.locator('[data-testid="composer-attachment-file"].composer__chip--uploaded'),
       ).toBeVisible()
+      await expect(
+        phone
+          .locator('[data-testid="composer-attachment-file"]')
+          .getByTestId('composer-attachment-image-button'),
+      ).toHaveCount(0)
 
       await phone.getByTestId('composer-input').fill('report-prompt-blocks')
       const send = phone.getByTestId('composer-send')

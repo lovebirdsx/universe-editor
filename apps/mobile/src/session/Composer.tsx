@@ -19,7 +19,8 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { errorCode } from '../errors.js'
-import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
+import { commandErrorText, strings } from '../strings.js'
+import { ComposerAttachmentChip } from './ComposerAttachmentChip.js'
 import {
   SLASH_COMMAND_LIST_ID,
   SlashCommandPanel,
@@ -48,6 +49,8 @@ export interface ComposerAttachment {
   readonly size: number
   readonly status: ComposerAttachmentStatus
   readonly id?: string
+  /** Local blob: URL of a picked image, so it can be previewed before/after upload. */
+  readonly previewUrl?: string
 }
 
 export interface ComposerPrefill {
@@ -106,11 +109,15 @@ export function Composer({
   const textareaRef = useAutoGrowTextarea(value, { maxHeightPx: MAX_HEIGHT_PX })
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const attachmentSeq = useRef(0)
+  const previewUrls = useRef<Set<string>>(new Set())
   const mounted = useRef(true)
 
   useEffect(() => {
+    const urls = previewUrls.current
+    mounted.current = true
     return () => {
       mounted.current = false
+      releaseAllPreviewUrls(urls)
     }
   }, [])
 
@@ -238,6 +245,7 @@ export function Composer({
         readyAttachments.map((attachment) => attachment.id as string),
       )
       setValue('')
+      releaseAllPreviewUrls(previewUrls.current)
       setAttachments([])
       clearDraft(sessionKey)
     } catch (error) {
@@ -307,14 +315,17 @@ export function Composer({
     }
     if (accepted.length === 0) return
 
-    const pending = accepted.map(({ file, kind }) => {
+    const pending = accepted.map(({ file, kind }): ComposerAttachment => {
       attachmentSeq.current += 1
+      const previewUrl =
+        kind === 'image' ? rememberPreviewUrl(previewUrls.current, file) : undefined
       return {
         key: `a${attachmentSeq.current}`,
         kind,
         name: file.name.trim() === '' ? 'attachment' : file.name,
         size: file.size,
-        status: 'uploading' as const,
+        status: 'uploading',
+        ...(previewUrl === undefined ? {} : { previewUrl }),
       }
     })
     setAttachments((current) => [...current, ...pending])
@@ -367,6 +378,10 @@ export function Composer({
 
   const removeAttachment = (key: string): void => {
     if (sending) return
+    const removed = attachments.find((attachment) => attachment.key === key)
+    if (removed?.previewUrl !== undefined) {
+      releasePreviewUrl(previewUrls.current, removed.previewUrl)
+    }
     setAttachments((current) => current.filter((attachment) => attachment.key !== key))
   }
 
@@ -381,31 +396,12 @@ export function Composer({
       {attachments.length > 0 && (
         <div className="composer__attachments" data-testid="composer-attachments">
           {attachments.map((attachment) => (
-            <div
+            <ComposerAttachmentChip
               key={attachment.key}
-              className={`composer__chip composer__chip--${attachment.status}`}
-              data-testid={`composer-attachment-${attachment.kind}`}
-            >
-              <span className="composer__chip-name">{attachment.name}</span>
-              <span className="composer__chip-size">{formatAttachmentSize(attachment.size)}</span>
-              {attachment.status === 'uploading' && (
-                <span className="composer__chip-status">{strings.attachmentUploading}</span>
-              )}
-              {attachment.status === 'failed' && (
-                <span className="composer__chip-status composer__chip-status--failed">
-                  {strings.attachmentUploadFailed}
-                </span>
-              )}
-              <button
-                type="button"
-                className="composer__chip-remove"
-                aria-label={strings.attachmentRemove}
-                disabled={sending || attachment.status === 'uploading'}
-                onClick={() => removeAttachment(attachment.key)}
-              >
-                ×
-              </button>
-            </div>
+              attachment={attachment}
+              sending={sending}
+              onRemove={removeAttachment}
+            />
           ))}
         </div>
       )}
@@ -531,4 +527,20 @@ export function writeDraft(sessionKey: string, value: string): void {
 
 export function clearDraft(sessionKey: string): void {
   writeDraft(sessionKey, '')
+}
+
+function rememberPreviewUrl(urls: Set<string>, file: File): string {
+  const url = URL.createObjectURL(file)
+  urls.add(url)
+  return url
+}
+
+function releasePreviewUrl(urls: Set<string>, url: string): void {
+  urls.delete(url)
+  URL.revokeObjectURL(url)
+}
+
+function releaseAllPreviewUrls(urls: Set<string>): void {
+  for (const url of urls) URL.revokeObjectURL(url)
+  urls.clear()
 }

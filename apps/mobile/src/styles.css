@@ -2462,6 +2462,29 @@ input:focus-visible {
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
 
+.composer__chip-thumb {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--border);
+  cursor: zoom-in;
+}
+
+.composer__chip-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.composer__chip--uploading .composer__chip-thumb,
+.composer__chip--failed .composer__chip-thumb {
+  opacity: 0.55;
+}
+
 .composer__chip-name {
   max-width: 140px;
   overflow: hidden;
