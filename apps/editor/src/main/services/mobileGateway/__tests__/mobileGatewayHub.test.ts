@@ -6,6 +6,8 @@ import {
   type MobileDeliveryDetail,
   type MobileDeliveryPreview,
   type MobileDeliveryStartResult,
+  type MobilePushBranchPreview,
+  type MobilePushBranchResult,
   type MobileSessionRef,
   type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
@@ -155,6 +157,20 @@ class FakeBridge implements IMobileBridgeService {
   readonly retryDelivery = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly undoDelivery = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly openDeliveryMainWorktree = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly previewPushBranch = vi.fn(
+    async (): Promise<MobileBridgeResult<MobilePushBranchPreview>> => ({
+      ok: false as const,
+      code: 'internal' as const,
+      message: 'not implemented',
+    }),
+  )
+  readonly pushBranch = vi.fn(
+    async (): Promise<MobileBridgeResult<MobilePushBranchResult>> => ({
+      ok: false as const,
+      code: 'internal' as const,
+      message: 'not implemented',
+    }),
+  )
   readonly getDeliveryContext = vi.fn(
     async (): Promise<MobileBridgeDeliveryContext | undefined> => undefined,
   )
@@ -3379,6 +3395,67 @@ describe('MobileGatewayHub delivery commands', () => {
       requestId: 'preview',
       ok: false,
       error: 'delivery_unsupported',
+    })
+  })
+
+  it('routes previewPushBranch with the durable id', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.previewPushBranch.mockResolvedValueOnce({
+      ok: false,
+      code: 'push_unsupported',
+      message: 'no repository',
+    })
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'push-preview',
+      kind: 'previewPushBranch',
+      payload: { ref },
+    })
+
+    expect(bridge.previewPushBranch).toHaveBeenCalledWith('s1', 'd1')
+    expect(framesOf(connection, 'command_result')[0]).toMatchObject({
+      requestId: 'push-preview',
+      ok: false,
+      error: 'push_unsupported',
+    })
+  })
+
+  it('routes pushBranch with the pinned expectation', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.pushBranch.mockResolvedValueOnce({
+      ok: false,
+      code: 'push_conflict',
+      message: 'remote moved',
+    })
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    const expectation = {
+      branch: 'feature',
+      head: 's1',
+      remote: 'origin',
+      remoteBranch: 'feature',
+      remoteHead: 'r1',
+    }
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'push',
+      kind: 'pushBranch',
+      payload: { ref, expectation },
+    })
+
+    expect(bridge.pushBranch).toHaveBeenCalledWith('s1', expectation, 'd1')
+    expect(framesOf(connection, 'command_result')[0]).toMatchObject({
+      requestId: 'push',
+      ok: false,
+      error: 'push_conflict',
     })
   })
 

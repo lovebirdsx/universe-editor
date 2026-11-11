@@ -127,6 +127,42 @@ export interface DeliveryGitChangeContextData {
   readonly statusText: string
 }
 
+export interface DeliveryGitPushSourceInfo {
+  readonly worktree: string
+  readonly branch: string
+  readonly head: string
+  readonly dirty: boolean
+  readonly changedFileCount: number
+  readonly untrackedCount: number
+  readonly pendingOperation?: string
+  readonly isMainWorktree: boolean
+}
+
+export interface DeliveryGitPushRemoteInfo {
+  readonly name: string
+  readonly branch: string
+  readonly exists: boolean
+  readonly head?: string
+  readonly ahead: number
+  readonly behind: number
+}
+
+export interface DeliveryGitPushInspectData {
+  readonly source: DeliveryGitPushSourceInfo
+  readonly remote: DeliveryGitPushRemoteInfo
+  readonly blockers: readonly DeliveryGitFailure[]
+  readonly warnings: readonly string[]
+  readonly fetched: boolean
+}
+
+export interface DeliveryGitPushExecuteData {
+  readonly branch: string
+  readonly head: string
+  readonly remote: string
+  readonly remoteBranch: string
+  readonly published: boolean
+}
+
 export interface DeliveryGitLockOwner {
   readonly token: string
   readonly pid: number
@@ -241,6 +277,21 @@ export interface ISessionDeliveryGit {
     maxFiles?: number
     maxChars?: number
   }): Promise<DeliveryGitResult<DeliveryGitChangeContextData>>
+  inspectPushBranch(input: {
+    sourceCwd: string
+    remote?: string
+    remoteBranch?: string
+    fetch?: boolean
+  }): Promise<DeliveryGitResult<DeliveryGitPushInspectData>>
+  pushBranch(input: {
+    sourceCwd: string
+    expectedBranch: string
+    expectedHead: string
+    remote: string
+    remoteBranch: string
+    expectedRemoteHead?: string
+    fetch?: boolean
+  }): Promise<DeliveryGitResult<DeliveryGitPushExecuteData>>
 }
 
 export interface DeliveryGitBeginInput {
@@ -405,6 +456,27 @@ export class SessionDeliveryGit implements ISessionDeliveryGit {
     return this._run<DeliveryGitChangeContextData>('changeContext', input)
   }
 
+  inspectPushBranch(input: {
+    sourceCwd: string
+    remote?: string
+    remoteBranch?: string
+    fetch?: boolean
+  }): Promise<DeliveryGitResult<DeliveryGitPushInspectData>> {
+    return this._run<DeliveryGitPushInspectData>('inspectPushBranch', input)
+  }
+
+  pushBranch(input: {
+    sourceCwd: string
+    expectedBranch: string
+    expectedHead: string
+    remote: string
+    remoteBranch: string
+    expectedRemoteHead?: string
+    fetch?: boolean
+  }): Promise<DeliveryGitResult<DeliveryGitPushExecuteData>> {
+    return this._run<DeliveryGitPushExecuteData>('pushBranch', input)
+  }
+
   private async _run<T>(command: string, input: unknown): Promise<DeliveryGitResult<T>> {
     try {
       const result = await this._commands.executeCommand(`${COMMAND_PREFIX}${command}`, input)
@@ -443,8 +515,10 @@ export function deliveryErrorFromGit(failure: DeliveryGitFailure): {
     'bare_repository',
     'no_main_worktree',
     'detached_main',
+    'detached_source',
     'target_branch_mismatch',
     'no_upstream',
+    'no_remote',
     'upstream_changed',
     'main_dirty',
     'main_in_progress',
@@ -456,6 +530,7 @@ export function deliveryErrorFromGit(failure: DeliveryGitFailure): {
     'source_in_progress',
     'nothing_to_deliver',
     'nothing_to_commit',
+    'nothing_to_push',
     'merge_commit_unsupported',
     'head_mismatch',
     'lock_held',
@@ -463,11 +538,13 @@ export function deliveryErrorFromGit(failure: DeliveryGitFailure): {
     'fetch_failed',
     'git_failed',
     'invalid_message',
+    'invalid_branch',
     'conflict',
     'source_changed',
     'temp_worktree_failed',
     'push_failed',
     'remote_moved',
+    'remote_diverged',
     'unsupported',
   ]
   const code = known.find((candidate) => candidate === failure.code) ?? 'git_failed'

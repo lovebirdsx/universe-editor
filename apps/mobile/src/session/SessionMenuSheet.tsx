@@ -27,6 +27,8 @@ export interface SessionMenuSheetProps {
   readonly onForkTip?: (() => Promise<void> | void) | undefined
   readonly onNewSideTask?: (() => Promise<void> | void) | undefined
   readonly onOpenSideTasks?: (() => void) | undefined
+  /** Opens the branch-publishing sheet; absent hides the entry. */
+  readonly onPushBranch?: (() => void) | undefined
   readonly onClose: () => void
   readonly onNotice: (text: string) => void
   readonly onFinished: () => void
@@ -46,6 +48,7 @@ export function SessionMenuSheet({
   onForkTip,
   onNewSideTask,
   onOpenSideTasks,
+  onPushBranch,
   onClose,
   onNotice,
   onFinished,
@@ -269,6 +272,17 @@ export function SessionMenuSheet({
               {`${strings.sideTasksMenu} (${sideTaskChildCount})`}
             </button>
           )}
+        {!readOnly && onPushBranch !== undefined && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="session-push-branch"
+            disabled={!online || busy}
+            onClick={onPushBranch}
+          >
+            {strings.pushBranchAction}
+          </button>
+        )}
         {!readOnly && (
           <button
             type="button"

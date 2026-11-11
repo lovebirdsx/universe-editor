@@ -894,6 +894,45 @@ describe('SessionPage snapshot rendering', () => {
     expect(screen.queryByTestId('session-close')).toBeNull()
     expect(screen.queryByTestId('session-remove')).toBeNull()
     expect(screen.queryByTestId('session-rename')).toBeNull()
+    expect(screen.queryByTestId('session-push-branch')).toBeNull()
+  })
+
+  it('opens the push-branch sheet from the session menu', async () => {
+    const { harness } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))
+
+    fireEvent.click(screen.getByTestId('session-more'))
+    fireEvent.click(screen.getByTestId('session-push-branch'))
+
+    await waitFor(() => expect(commandFor(harness.socket, 'previewPushBranch')).toBeDefined())
+    expect(commandFor(harness.socket, 'previewPushBranch')?.payload).toMatchObject({
+      ref: sessionRef('s1'),
+    })
+    respond(harness, 'previewPushBranch', {
+      source: {
+        worktreeName: 'main',
+        branch: 'tasks/abc',
+        head: 'abc12345',
+        dirty: false,
+        changedFileCount: 0,
+        untrackedCount: 0,
+        isMainWorktree: false,
+      },
+      remote: { name: 'origin', branch: 'tasks/abc', exists: false, ahead: 0, behind: 0 },
+      blockers: [],
+      warnings: [],
+      expectation: {
+        branch: 'tasks/abc',
+        head: 'abc12345',
+        remote: 'origin',
+        remoteBranch: 'tasks/abc',
+      },
+    })
+
+    await screen.findByTestId('push-branch-sheet')
+    expect((screen.getByTestId('push-branch-remote-name') as HTMLInputElement).value).toBe(
+      'tasks/abc',
+    )
   })
 })
 

@@ -16,6 +16,7 @@ import {
 } from './composerPrefill.js'
 import { ConfigSheet } from './ConfigSheet.js'
 import { ElicitationSheet } from './ElicitationSheet.js'
+import { PushBranchSheet } from '../git/PushBranchSheet.js'
 import { MessageActionsSheet } from './MessageActionsSheet.js'
 import { PermissionSheet } from './PermissionSheet.js'
 import { PlanPanel } from './PlanPanel.js'
@@ -82,6 +83,7 @@ export function SessionPage({
 
   const [toast, setToast] = useState<string | undefined>(undefined)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [pushOpen, setPushOpen] = useState(false)
   const [configSheetId, setConfigSheetId] = useState<string | undefined>(undefined)
   const [busyConfigId, setBusyConfigId] = useState<string | undefined>(undefined)
   const [loadTimedOut, setLoadTimedOut] = useState(false)
@@ -107,6 +109,7 @@ export function SessionPage({
   // Switching sessions must not leave the previous session's menu open.
   useEffect(() => {
     setMenuOpen(false)
+    setPushOpen(false)
   }, [sessionKey])
 
   const notice = (text: string): void => setToast(text)
@@ -448,9 +451,22 @@ export function SessionPage({
             setMenuOpen(false)
             setSideTasksOpen(true)
           }}
+          onPushBranch={() => {
+            setMenuOpen(false)
+            setPushOpen(true)
+          }}
           onClose={() => setMenuOpen(false)}
           onNotice={notice}
           onFinished={onFinished}
+        />
+      )}
+      {pushOpen && state.summary !== undefined && (
+        <PushBranchSheet
+          client={client}
+          session={state.summary}
+          online={online}
+          onDismiss={() => setPushOpen(false)}
+          onNotice={notice}
         />
       )}
       {toast !== undefined && (

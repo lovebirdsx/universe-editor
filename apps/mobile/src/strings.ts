@@ -412,6 +412,44 @@ export const strings = {
   deliveryErrorLabel: '错误',
   deliveryConflictLabel: (count: number): string => `冲突文件（${count}）`,
   deliveryWorktreesLabel: 'worktree 同步',
+  pushBranchAction: '推送分支',
+  pushBranchTitle: '推送分支',
+  pushBranchIntro: '把这个会话所在分支推送到远端，不改动 main，也不会 force push。',
+  pushBranchPreviewLoading: '正在检查分支状态…',
+  pushBranchPreviewFailed: '无法读取分支信息。',
+  pushBranchSourceLabel: '分支',
+  pushBranchRemoteLabel: '远端',
+  pushBranchTargetLabel: '远端分支名',
+  pushBranchTargetHint: '临时分支可以改个名字，避免在远端留下一次性分支。',
+  pushBranchNewRemote: (remote: string): string => `${remote} 还没有这个分支，推送后会创建。`,
+  pushBranchExistingRemote: (remote: string, ahead: number, behind: number): string => {
+    if (behind > 0) return `${remote} 有 ${behind} 个本地没有的提交。`
+    if (ahead === 0) return `${remote} 已有这个分支，且没有新提交。`
+    return `本地领先 ${remote} ${ahead} 个提交。`
+  },
+  pushBranchDirty: (files: number, untracked: number): string =>
+    `有未提交改动（${files} 个已修改，${untracked} 个未跟踪），不会被推送。`,
+  pushBranchBlockers: '暂时无法推送',
+  pushBranchStart: '推送',
+  pushBranchStarting: '正在推送…',
+  pushBranchCancel: '取消',
+  pushBranchSuccess: (remote: string, branch: string): string => `已推送到 ${remote}/${branch}`,
+  pushBlockerText: (code: string, fallback: string): string => {
+    switch (code) {
+      case 'remote_diverged':
+        return '远端分支有本地没有的提交，请先在电脑上同步。'
+      case 'nothing_to_push':
+        return '这个分支的提交都已经在远端了。'
+      case 'source_in_progress':
+        return '分支上有进行中的 Git 操作，请先在电脑上完成。'
+      case 'invalid_branch':
+        return '远端分支名不合法。'
+      case 'fetch_failed':
+        return '连接远端失败，请检查网络后重试。'
+      default:
+        return fallback
+    }
+  },
   deliveryPushLabel: '推送',
   deliveryPushedTo: (ref: string): string => `已推送到 ${ref}`,
   deliverySummaryDirty: '包含新提交',
@@ -576,6 +614,10 @@ const COMMAND_ERRORS: Readonly<Record<string, string>> = {
   delivery_not_found: '交付记录不存在或已被清理。',
   delivery_conflict: '仓库状态已变化，请重新交付。',
   delivery_unsupported: '当前仓库或编辑器版本不支持交付。',
+  push_busy: '该仓库正在交付或推送，请稍后再试。',
+  push_conflict: '远端分支已变化，请刷新后重试。',
+  push_unsupported: '当前分支不支持推送。',
+  push_failed: '推送失败，请检查网络或远端权限。',
 }
 
 export function commandErrorText(code: string | undefined): string {

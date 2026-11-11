@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isMobilePushBranchPreview,
+  isMobilePushBranchResult,
   isMobileRewindPreview,
   isMobileRewindResult,
   isMobileSessionHistoryEntry,
@@ -48,6 +50,48 @@ describe('command result guards', () => {
     expect(isMobileRewindResult({ canRewind: false, error: 'locked' })).toBe(true)
     expect(isMobileRewindResult({ canRewind: 1 })).toBe(false)
     expect(isMobileRewindResult({ canRewind: true, text: 3 })).toBe(false)
+  })
+
+  it('validates push-branch previews and results', () => {
+    const preview = {
+      source: {
+        worktreeName: 'feature',
+        branch: 'feature',
+        head: 'abc',
+        dirty: false,
+        changedFileCount: 0,
+        untrackedCount: 0,
+        isMainWorktree: false,
+      },
+      remote: { name: 'origin', branch: 'feature', exists: false, ahead: 0, behind: 0 },
+      blockers: [],
+      warnings: [],
+      expectation: {
+        branch: 'feature',
+        head: 'abc',
+        remote: 'origin',
+        remoteBranch: 'feature',
+      },
+    }
+    expect(isMobilePushBranchPreview(preview)).toBe(true)
+    expect(
+      isMobilePushBranchPreview({ ...preview, source: { ...preview.source, branch: '' } }),
+    ).toBe(false)
+    expect(
+      isMobilePushBranchPreview({ ...preview, remote: { ...preview.remote, exists: 'no' } }),
+    ).toBe(false)
+    expect(isMobilePushBranchPreview({ ...preview, blockers: 'none' })).toBe(false)
+
+    const result = {
+      branch: 'feature',
+      remote: 'origin',
+      remoteBranch: 'feature',
+      head: 'abc',
+      published: true,
+    }
+    expect(isMobilePushBranchResult(result)).toBe(true)
+    expect(isMobilePushBranchResult({ ...result, published: 'yes' })).toBe(false)
+    expect(isMobilePushBranchResult({ ...result, remote: '' })).toBe(false)
   })
 
   it('validates side-task rows and lists', () => {

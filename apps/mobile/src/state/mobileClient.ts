@@ -16,6 +16,9 @@ import type {
   MobileElicitationContentValue,
   MobileNewSessionResult,
   MobileNotificationPrefs,
+  MobilePushBranchExpectation,
+  MobilePushBranchPreview,
+  MobilePushBranchResult,
   MobilePushSubscription,
   MobileRewindPreview,
   MobileRewindResult,
@@ -50,6 +53,8 @@ import {
   isMobileDeliveryDetail,
   isMobileDeliveryPreview,
   isMobileDeliveryStartResult,
+  isMobilePushBranchPreview,
+  isMobilePushBranchResult,
   isMobileRewindPreview,
   isMobileRewindResult,
   isMobileSessionHistoryList,
@@ -609,6 +614,22 @@ export class MobileClient {
     return this._commandFor('openDeliveryMainWorktree', ref, (target) => ({
       ref: target,
       deliveryId,
+    }))
+  }
+
+  /** Inspect the session branch and its remote without writing anything. */
+  previewPushBranch(ref: MobileSessionRef): Promise<MobilePushBranchPreview> {
+    return this._commandValueFor('previewPushBranch', ref, isMobilePushBranchPreview)
+  }
+
+  /** Publish the session branch, pinning the heads returned by the preview. */
+  pushBranch(
+    ref: MobileSessionRef,
+    expectation: MobilePushBranchExpectation,
+  ): Promise<MobilePushBranchResult> {
+    return this._commandValueFor('pushBranch', ref, isMobilePushBranchResult, (target) => ({
+      ref: target,
+      expectation,
     }))
   }
 

@@ -391,6 +391,14 @@
       {
         "command": "git.agentDelivery.changeContext",
         "title": "Agent Delivery: Change Context"
+      },
+      {
+        "command": "git.agentDelivery.inspectPushBranch",
+        "title": "Agent Delivery: Inspect Push Branch"
+      },
+      {
+        "command": "git.agentDelivery.pushBranch",
+        "title": "Agent Delivery: Push Branch"
       }
     ],
     "submenus": [
@@ -953,6 +961,14 @@
         },
         {
           "command": "git.agentDelivery.changeContext",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.inspectPushBranch",
+          "when": "false"
+        },
+        {
+          "command": "git.agentDelivery.pushBranch",
           "when": "false"
         }
       ]

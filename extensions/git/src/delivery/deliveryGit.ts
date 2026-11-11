@@ -56,11 +56,11 @@ import type {
   DeliveryWorktreeSyncResult,
 } from './deliveryTypes.js'
 
-type Log = ((msg: string) => void) | undefined
+export type Log = ((msg: string) => void) | undefined
 
 const DEFAULT_TEMP_DIR = '.universe-editor-delivery-worktrees'
-const NETWORK_TIMEOUT_MS = 120_000
-const LOCAL_TIMEOUT_MS = 60_000
+export const NETWORK_TIMEOUT_MS = 120_000
+export const LOCAL_TIMEOUT_MS = 60_000
 const SUBMODULE_TIMEOUT_MS = 300_000
 
 /** Never let git open an editor, prompt for credentials, or wait for a password. */
@@ -102,14 +102,14 @@ const okData = <T extends object>(data: T): DeliveryResult<T> => ({ ok: true, ..
 const gitFail = <T>(message: string, res: GitExecResult): DeliveryResult<T> =>
   fail('git_failed', message, gitErrorText(res))
 
-const currentHead = async (cwd: string, log?: Log): Promise<string | undefined> => {
+export const currentHead = async (cwd: string, log?: Log): Promise<string | undefined> => {
   const res = await runDeliveryGit(['rev-parse', 'HEAD'], cwd, log, {
     timeoutMs: LOCAL_TIMEOUT_MS,
   })
   return res.exitCode === 0 ? res.stdout.trim() || undefined : undefined
 }
 
-const currentBranch = async (cwd: string, log?: Log): Promise<string | undefined> => {
+export const currentBranch = async (cwd: string, log?: Log): Promise<string | undefined> => {
   const res = await runDeliveryGit(['symbolic-ref', '--quiet', '--short', 'HEAD'], cwd, log, {
     timeoutMs: LOCAL_TIMEOUT_MS,
   })
@@ -130,14 +130,18 @@ const requireMainBranch = async (
   )
 }
 
-const resolveRef = async (cwd: string, ref: string, log?: Log): Promise<string | undefined> => {
+export const resolveRef = async (
+  cwd: string,
+  ref: string,
+  log?: Log,
+): Promise<string | undefined> => {
   const res = await runDeliveryGit(['rev-parse', '--verify', '-q', ref], cwd, log, {
     timeoutMs: LOCAL_TIMEOUT_MS,
   })
   return res.exitCode === 0 ? res.stdout.trim() || undefined : undefined
 }
 
-const isAncestor = async (
+export const isAncestor = async (
   cwd: string,
   ancestor: string,
   descendant: string,
@@ -159,7 +163,7 @@ interface Divergence {
   readonly behind: number
 }
 
-const divergence = async (
+export const divergence = async (
   cwd: string,
   local: string,
   remote: string,
@@ -179,7 +183,10 @@ const divergence = async (
   return { ahead, behind }
 }
 
-const listWorktrees = async (cwd: string, log?: Log): Promise<WorktreeInfo[] | undefined> => {
+export const listWorktrees = async (
+  cwd: string,
+  log?: Log,
+): Promise<WorktreeInfo[] | undefined> => {
   const res = await runDeliveryGit(['worktree', 'list', '--porcelain'], cwd, log, {
     timeoutMs: LOCAL_TIMEOUT_MS,
   })
@@ -267,7 +274,7 @@ interface UpstreamInfo {
   readonly upstreamRef: string
 }
 
-const resolveUpstream = async (
+export const resolveUpstream = async (
   mainWorktree: string,
   branch: string,
   log?: Log,
@@ -293,7 +300,11 @@ const resolveUpstream = async (
   return { remote, remoteBranch, upstreamRef: `${remote}/${remoteBranch}` }
 }
 
-const fetchRemote = (mainWorktree: string, remote: string, log?: Log): Promise<GitExecResult> =>
+export const fetchRemote = (
+  mainWorktree: string,
+  remote: string,
+  log?: Log,
+): Promise<GitExecResult> =>
   runDeliveryGit(['fetch', remote, '--prune'], mainWorktree, log, {
     timeoutMs: NETWORK_TIMEOUT_MS,
   })

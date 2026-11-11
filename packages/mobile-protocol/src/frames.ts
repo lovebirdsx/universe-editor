@@ -398,6 +398,8 @@ export const MOBILE_COMMAND_KINDS = [
   'retryDelivery',
   'undoDelivery',
   'openDeliveryMainWorktree',
+  'previewPushBranch',
+  'pushBranch',
 ] as const
 export type MobileCommandKind = (typeof MOBILE_COMMAND_KINDS)[number]
 
@@ -822,6 +824,63 @@ export interface DeliveryCommandPayload {
 /** Result of `startDelivery`. */
 export interface MobileDeliveryStartResult {
   deliveryId: string
+}
+
+// ---- Push session branch -----------------------------------------------------
+
+export interface MobilePushBranchSource {
+  /** Worktree directory name; absolute paths never reach the phone. */
+  worktreeName: string
+  branch: string
+  head: string
+  dirty: boolean
+  changedFileCount: number
+  untrackedCount: number
+  pendingOperation?: string
+  isMainWorktree: boolean
+}
+
+export interface MobilePushBranchRemote {
+  name: string
+  branch: string
+  exists: boolean
+  head?: string
+  ahead: number
+  behind: number
+}
+
+/** Heads pinned by the preview; `pushBranch` echoes them back for re-check. */
+export interface MobilePushBranchExpectation {
+  branch: string
+  head: string
+  remote: string
+  remoteBranch: string
+  remoteHead?: string
+}
+
+export interface MobilePushBranchPreview {
+  source: MobilePushBranchSource
+  remote: MobilePushBranchRemote
+  blockers: readonly MobileDeliveryError[]
+  warnings: readonly string[]
+  expectation: MobilePushBranchExpectation
+}
+
+export interface PreviewPushBranchPayload {
+  ref: MobileSessionRef
+}
+
+export interface PushBranchPayload {
+  ref: MobileSessionRef
+  expectation: MobilePushBranchExpectation
+}
+
+export interface MobilePushBranchResult {
+  branch: string
+  remote: string
+  remoteBranch: string
+  head: string
+  published: boolean
 }
 
 export interface MobileAgentCandidate {

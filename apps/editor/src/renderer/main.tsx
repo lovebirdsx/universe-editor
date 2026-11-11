@@ -290,6 +290,10 @@ import {
   ISessionDeliveryService,
   SessionDeliveryService,
 } from './services/delivery/sessionDeliveryService.js'
+import {
+  ISessionBranchPushService,
+  SessionBranchPushService,
+} from './services/delivery/sessionBranchPushService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import { ITerminalXtermService } from './services/terminal/TerminalXtermService.js'
 import {
@@ -1016,6 +1020,13 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(SessionDeliveryService),
   )
   services.set(ISessionDeliveryService, sessionDeliveryService)
+
+  // Publishing a session branch (no main changes) shares the delivery service
+  // for its cross-window busy guard.
+  const sessionBranchPushService = workbenchStore.add(
+    instantiation.createInstance(SessionBranchPushService),
+  )
+  services.set(ISessionBranchPushService, sessionBranchPushService)
 
   // Reverse channel: main's mobile gateway calls into this window (M2 projects
   // ACP sessions through it). Created through DI so it can observe the session

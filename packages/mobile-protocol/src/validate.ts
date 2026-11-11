@@ -63,6 +63,7 @@ import type {
   MobilePermissionOption,
   MobilePlanEntry,
   MobilePlanEntryStatus,
+  MobilePushBranchExpectation,
   MobilePushSubscription,
   MobileResyncScope,
   MobileSessionBucket,
@@ -904,9 +905,56 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
     case 'undoDelivery':
     case 'openDeliveryMainWorktree':
       return parseDeliveryCommandPayload(value, kind)
+    case 'previewPushBranch':
+      return parseRefOnlyPayload(value, 'previewPushBranch')
+    case 'pushBranch':
+      return parsePushBranchPayload(value)
     default:
       return ok(value)
   }
+}
+
+function parsePushBranchPayload(
+  value: unknown,
+): Result<{ ref: MobileSessionRef; expectation: MobilePushBranchExpectation }> {
+  if (!isRecord(value)) return fail('bad_request', 'pushBranch.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const expectation = value.expectation
+  if (!isRecord(expectation)) {
+    return fail('bad_request', 'pushBranch.expectation must be an object')
+  }
+  const fields = ['branch', 'head', 'remote', 'remoteBranch'] as const
+  const parsed: Record<(typeof fields)[number], string> = {
+    branch: '',
+    head: '',
+    remote: '',
+    remoteBranch: '',
+  }
+  for (const field of fields) {
+    const raw = expectation[field]
+    if (!isNonEmptyBoundedString(raw, MAX_TEXT_LENGTH)) {
+      return fail(
+        'bad_request',
+        `pushBranch.expectation.${field} must be 1–${MAX_TEXT_LENGTH} characters`,
+      )
+    }
+    parsed[field] = raw
+  }
+  const remoteHead = expectation.remoteHead
+  if (remoteHead !== undefined && !isNonEmptyBoundedString(remoteHead, MAX_TEXT_LENGTH)) {
+    return fail(
+      'bad_request',
+      `pushBranch.expectation.remoteHead must be 1–${MAX_TEXT_LENGTH} characters`,
+    )
+  }
+  return ok({
+    ref: ref.value,
+    expectation: {
+      ...parsed,
+      ...(remoteHead !== undefined ? { remoteHead } : {}),
+    },
+  })
 }
 
 function parseDeliveryCommandPayload(

@@ -36,6 +36,7 @@ import {
   type MobileErrorCode,
   type MobileNewSessionResult,
   type MobilePendingPermission,
+  type MobilePushBranchExpectation,
   type MobileSessionEvent,
   type MobileSessionHistoryEntry,
   type MobileSessionRef,
@@ -293,6 +294,7 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'retryDelivery',
   'undoDelivery',
   'openDeliveryMainWorktree',
+  'pushBranch',
 ])
 
 const sessionKey = (windowId: number, localId: string): string => `${windowId}:${localId}`
@@ -1210,6 +1212,21 @@ export class MobileGatewayHub {
         const p = frame.payload as { ref: MobileSessionRef; deliveryId: string }
         return this._sessionCommand(p.ref, DELIVERY_READ_TIMEOUT_MS, (bridge, localId) =>
           bridge.openDeliveryMainWorktree(localId, p.deliveryId),
+        )
+      }
+      case 'previewPushBranch': {
+        const p = frame.payload as { ref: MobileSessionRef }
+        return this._sessionCommand(p.ref, DELIVERY_PREVIEW_TIMEOUT_MS, (bridge, localId) =>
+          bridge.previewPushBranch(localId, p.ref.durableId),
+        )
+      }
+      case 'pushBranch': {
+        const p = frame.payload as {
+          ref: MobileSessionRef
+          expectation: MobilePushBranchExpectation
+        }
+        return this._sessionCommand(p.ref, DELIVERY_MUTATION_TIMEOUT_MS, (bridge, localId) =>
+          bridge.pushBranch(localId, p.expectation, p.ref.durableId),
         )
       }
       default:

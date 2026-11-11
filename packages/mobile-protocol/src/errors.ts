@@ -18,6 +18,10 @@ export const MOBILE_ERROR_CODES = [
   'delivery_not_found',
   'delivery_conflict',
   'delivery_unsupported',
+  'push_busy',
+  'push_conflict',
+  'push_unsupported',
+  'push_failed',
 ] as const
 
 export type MobileErrorCode = (typeof MOBILE_ERROR_CODES)[number]

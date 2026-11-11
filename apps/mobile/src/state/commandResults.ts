@@ -3,6 +3,8 @@ import {
   type MobileDeliveryDetail,
   type MobileDeliveryPreview,
   type MobileDeliveryStartResult,
+  type MobilePushBranchPreview,
+  type MobilePushBranchResult,
   type MobileRewindPreview,
   type MobileRewindResult,
   type MobileSessionHistoryEntry,
@@ -162,4 +164,45 @@ export function isMobileDeliveryDetail(value: unknown): value is MobileDeliveryD
 
 export function isMobileDeliveryStartResult(value: unknown): value is MobileDeliveryStartResult {
   return isRecord(value) && isNonEmptyString(value['deliveryId'])
+}
+
+export function isMobilePushBranchPreview(value: unknown): value is MobilePushBranchPreview {
+  if (!isRecord(value)) return false
+  const source = value['source']
+  const remote = value['remote']
+  if (!isRecord(source) || !isRecord(remote)) return false
+  if (
+    !isNonEmptyString(source['worktreeName']) ||
+    !isNonEmptyString(source['branch']) ||
+    !isNonEmptyString(source['head']) ||
+    typeof source['dirty'] !== 'boolean' ||
+    typeof source['isMainWorktree'] !== 'boolean'
+  ) {
+    return false
+  }
+  if (
+    !isNonEmptyString(remote['name']) ||
+    !isNonEmptyString(remote['branch']) ||
+    typeof remote['exists'] !== 'boolean' ||
+    !isNonNegativeInteger(remote['ahead']) ||
+    !isNonNegativeInteger(remote['behind'])
+  ) {
+    return false
+  }
+  return (
+    Array.isArray(value['blockers']) &&
+    Array.isArray(value['warnings']) &&
+    isRecord(value['expectation'])
+  )
+}
+
+export function isMobilePushBranchResult(value: unknown): value is MobilePushBranchResult {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value['branch']) &&
+    isNonEmptyString(value['remote']) &&
+    isNonEmptyString(value['remoteBranch']) &&
+    isNonEmptyString(value['head']) &&
+    typeof value['published'] === 'boolean'
+  )
 }

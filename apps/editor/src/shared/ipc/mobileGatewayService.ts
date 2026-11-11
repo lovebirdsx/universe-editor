@@ -23,6 +23,9 @@ import type {
   MobileElicitationAction,
   MobileElicitationContentValue,
   MobileErrorCode,
+  MobilePushBranchExpectation,
+  MobilePushBranchPreview,
+  MobilePushBranchResult,
   MobileRewindPreview,
   MobileRewindResult,
   MobileSessionBucket,
@@ -734,6 +737,22 @@ export interface IMobileBridgeService {
 
   /** Open the repository's main worktree in the PC workbench. */
   openDeliveryMainWorktree(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>>
+
+  /**
+   * Inspect the session branch and its remote before publishing. This never
+   * writes; blockers cover a diverged remote and an already-pushed branch.
+   */
+  previewPushBranch(
+    localId: string,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobilePushBranchPreview>>
+
+  /** Publish the session branch, pinning the heads the preview returned. */
+  pushBranch(
+    localId: string,
+    expectation: MobilePushBranchExpectation,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobilePushBranchResult>>
 
   /**
    * Main-only routing/guard context (source/main worktree, current phase).

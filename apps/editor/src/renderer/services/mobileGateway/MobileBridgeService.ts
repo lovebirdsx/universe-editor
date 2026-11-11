@@ -104,6 +104,10 @@ import { deleteSessionPlan, planSessionRemoval } from '../acp/session/sessionRem
 import { deleteSideTasks } from '../acp/session/sideTaskRemoval.js'
 import { ISessionDeliveryService } from '../delivery/sessionDeliveryService.js'
 import {
+  ISessionBranchPushService,
+  type SessionBranchPushPreview,
+} from '../delivery/sessionBranchPushService.js'
+import {
   worktreeName,
   type SessionDeliveryChange,
   type SessionDeliveryDetail,
@@ -120,6 +124,9 @@ import type {
   MobileDeliveryPreview,
   MobileDeliveryStartResult,
   MobileDeliverySummary,
+  MobilePushBranchExpectation,
+  MobilePushBranchPreview,
+  MobilePushBranchResult,
 } from '@universe-editor/mobile-protocol'
 import {
   diffAvailableCommands,
@@ -205,6 +212,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IScmService private readonly _scm: IScmService,
     @IFileService private readonly _files: IFileService,
     @ISessionDeliveryService private readonly _delivery: ISessionDeliveryService,
+    @ISessionBranchPushService private readonly _branchPush: ISessionBranchPushService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -1182,6 +1190,37 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return this._runDelivery(localId, deliveryId, () => this._delivery.openMainWorktree(deliveryId))
   }
 
+  async previewPushBranch(
+    localId: string,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobilePushBranchPreview>> {
+    const session =
+      this._liveSession(localId) ?? (durableId ? this._liveSession(durableId) : undefined)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const result = await this._branchPush.preview(session.id)
+    if (!result.ok) return this._pushFailure(result.error)
+    return ok(this._toMobilePushBranchPreview(result.value))
+  }
+
+  async pushBranch(
+    localId: string,
+    expectation: MobilePushBranchExpectation,
+    durableId?: string,
+  ): Promise<MobileBridgeResult<MobilePushBranchResult>> {
+    const session =
+      this._liveSession(localId) ?? (durableId ? this._liveSession(durableId) : undefined)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const result = await this._branchPush.push(session.id, expectation)
+    if (!result.ok) return this._pushFailure(result.error)
+    return ok({
+      branch: result.value.branch,
+      remote: result.value.remote,
+      remoteBranch: result.value.remoteBranch,
+      head: result.value.head,
+      published: result.value.published,
+    })
+  }
+
   async getDeliveryContext(
     localId: string,
     durableId?: string,
@@ -1271,6 +1310,71 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
         return fail('delivery_unsupported', message)
       default:
         return fail('internal', message)
+    }
+  }
+
+  private _pushFailure(error: SessionDeliveryError): MobileBridgeCommandError {
+    const message = clipDeliveryText(error.message)
+    switch (error.code) {
+      case 'busy':
+        return fail('push_busy', message)
+      case 'session_running':
+        return fail('session_busy', message)
+      case 'remote_moved':
+      case 'remote_diverged':
+      case 'head_mismatch':
+      case 'upstream_changed':
+        return fail('push_conflict', message)
+      case 'unsupported':
+      case 'not_a_repository':
+      case 'no_remote':
+      case 'nothing_to_push':
+      case 'detached_source':
+      case 'invalid_branch':
+      case 'source_in_progress':
+        return fail('push_unsupported', message)
+      default:
+        return fail('push_failed', message)
+    }
+  }
+
+  private _toMobilePushBranchPreview(preview: SessionBranchPushPreview): MobilePushBranchPreview {
+    return {
+      source: {
+        worktreeName: worktreeName(preview.source.worktree),
+        branch: preview.source.branch,
+        head: preview.source.head,
+        dirty: preview.source.dirty,
+        changedFileCount: preview.source.changedFileCount,
+        untrackedCount: preview.source.untrackedCount,
+        ...(preview.source.pendingOperation !== undefined
+          ? { pendingOperation: clipDeliveryText(preview.source.pendingOperation) }
+          : {}),
+        isMainWorktree: preview.source.isMainWorktree,
+      },
+      remote: {
+        name: clipDeliveryText(preview.remote.name),
+        branch: clipDeliveryText(preview.remote.branch),
+        exists: preview.remote.exists,
+        ...(preview.remote.head !== undefined ? { head: preview.remote.head } : {}),
+        ahead: preview.remote.ahead,
+        behind: preview.remote.behind,
+      },
+      blockers: preview.blockers.map((error) => ({
+        code: error.code,
+        message: clipDeliveryText(error.message),
+        ...(error.detail !== undefined ? { detail: clipDeliveryText(error.detail) } : {}),
+      })),
+      warnings: preview.warnings.map(clipDeliveryText),
+      expectation: {
+        branch: preview.expectation.branch,
+        head: preview.expectation.head,
+        remote: preview.expectation.remote,
+        remoteBranch: preview.expectation.remoteBranch,
+        ...(preview.expectation.remoteHead !== undefined
+          ? { remoteHead: preview.expectation.remoteHead }
+          : {}),
+      },
     }
   }
 

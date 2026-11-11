@@ -26,6 +26,7 @@ import { selectDeliveryEntries } from '../inbox/deliveryStatus.js'
 import { DeliverySummaryBar } from '../inbox/DeliverySummaryBar.js'
 import { DeliveryConfirmSheet } from '../inbox/DeliveryConfirmSheet.js'
 import { DeliveryDetailSheet } from '../inbox/DeliveryDetailSheet.js'
+import { PushBranchSheet } from '../git/PushBranchSheet.js'
 import { useShellCacheFallback } from '../shellCache.js'
 import { useEffect, useState } from 'react'
 
@@ -71,6 +72,7 @@ export function InboxPage({
     { readonly session: MobileSessionSummary; readonly view: InboxSessionSheetView } | undefined
   >(undefined)
   const [deliverySheet, setDeliverySheet] = useState<DeliverySheet | undefined>(undefined)
+  const [pushSession, setPushSession] = useState<MobileSessionSummary | undefined>(undefined)
   // The sheet stays open while the inbox keeps moving; judge "is it working?"
   // against the latest summary, not the one captured on long-press.
   const actionSession =
@@ -83,6 +85,10 @@ export function InboxPage({
       ? undefined
       : (inbox.sessions.find((session) => refMatches(session.ref, deliverySheet.session.ref)) ??
         deliverySheet.session)
+  const pushTarget =
+    pushSession === undefined
+      ? undefined
+      : (inbox.sessions.find((session) => refMatches(session.ref, pushSession.ref)) ?? pushSession)
 
   // One-shot on entry / reconnect: the badge is advisory, so a failure keeps
   // the previous set rather than replacing it with "everything clean".
@@ -191,6 +197,20 @@ export function InboxPage({
           initialView={sessionAction.view}
           online={socketState === 'connected'}
           onDismiss={() => setSessionAction(undefined)}
+          onNotice={onNotice}
+          onPushBranch={(session) => {
+            setSessionAction(undefined)
+            setPushSession(session)
+          }}
+        />
+      )}
+      {pushTarget !== undefined && (
+        <PushBranchSheet
+          key={`push:${pushTarget.ref.localId}`}
+          client={client}
+          session={pushTarget}
+          online={socketState === 'connected'}
+          onDismiss={() => setPushSession(undefined)}
           onNotice={onNotice}
         />
       )}

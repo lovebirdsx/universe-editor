@@ -291,6 +291,32 @@ describe('parseClientFrame', () => {
           authority: 'host',
         },
       },
+      { kind: 'previewPushBranch', payload: { ref: REF } },
+      {
+        kind: 'pushBranch',
+        payload: {
+          ref: REF,
+          expectation: {
+            branch: 'feature',
+            head: 'abc123',
+            remote: 'origin',
+            remoteBranch: 'feature',
+          },
+        },
+      },
+      {
+        kind: 'pushBranch',
+        payload: {
+          ref: REF,
+          expectation: {
+            branch: 'feature',
+            head: 'abc123',
+            remote: 'origin',
+            remoteBranch: 'tasks/feature',
+            remoteHead: 'def456',
+          },
+        },
+      },
     ]
     for (const command of commands) {
       const frame = {
@@ -354,6 +380,28 @@ describe('parseClientFrame', () => {
       { kind: 'openSession', payload: { durableId: 'durable-1', folder: '' } },
       { kind: 'openSession', payload: { durableId: 'durable-1', folder: 3 } },
       { kind: 'openSession', payload: { durableId: 'durable-1', authority: 3 } },
+      { kind: 'previewPushBranch', payload: {} },
+      { kind: 'pushBranch', payload: { ref: REF } },
+      {
+        kind: 'pushBranch',
+        payload: {
+          ref: REF,
+          expectation: { branch: '', head: 'abc', remote: 'origin', remoteBranch: 'feature' },
+        },
+      },
+      {
+        kind: 'pushBranch',
+        payload: {
+          ref: REF,
+          expectation: {
+            branch: 'feature',
+            head: 'abc',
+            remote: 'origin',
+            remoteBranch: 'feature',
+            remoteHead: '',
+          },
+        },
+      },
     ]
     for (const command of bad) {
       expect(

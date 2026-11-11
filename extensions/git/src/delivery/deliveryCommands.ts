@@ -17,6 +17,14 @@ import {
 } from './deliveryGit.js'
 import { readDeliveryChangeContext } from './deliveryChangeContext.js'
 import { acquireDeliveryLock, heartbeatDeliveryLock, releaseDeliveryLock } from './deliveryLock.js'
+import {
+  inspectPushBranch,
+  pushBranch,
+  type PushBranchExecuteInput,
+  type PushBranchExecuteResult,
+  type PushBranchInspectInput,
+  type PushBranchInspectResult,
+} from './pushBranch.js'
 import type {
   DeliveryAbortPickInput,
   DeliveryAbortPickResult,
@@ -111,5 +119,7 @@ export function registerDeliveryCommands(
     'changeContext',
     readDeliveryChangeContext,
   )
+  add<PushBranchInspectInput, PushBranchInspectResult>('inspectPushBranch', inspectPushBranch)
+  add<PushBranchExecuteInput, PushBranchExecuteResult>('pushBranch', pushBranch)
   return registrations
 }

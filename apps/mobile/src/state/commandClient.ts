@@ -43,6 +43,8 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<MobileCommandKind, number>> = {
   retryDelivery: 120_000,
   undoDelivery: 120_000,
   openDeliveryMainWorktree: 10_000,
+  previewPushBranch: 120_000,
+  pushBranch: 120_000,
 }
 
 const DEFAULT_TIMEOUT_MS = 10_000
@@ -80,6 +82,7 @@ export const MUTATING_COMMAND_KINDS: ReadonlySet<MobileCommandKind> = new Set([
   'retryDelivery',
   'undoDelivery',
   'openDeliveryMainWorktree',
+  'pushBranch',
 ])
 
 export type CommandErrorCode =

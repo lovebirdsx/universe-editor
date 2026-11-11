@@ -17,6 +17,46 @@ function createClient() {
 }
 
 describe('InboxSessionActionSheet', () => {
+  it('opens the push-branch flow from the long-press menu', () => {
+    const onPushBranch = vi.fn()
+    render(
+      <InboxSessionActionSheet
+        client={createClient()}
+        session={sessionSummary('s1', {
+          status: 'idle',
+          displayStatus: 'idle',
+          bucket: 'completed',
+        })}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onPushBranch={onPushBranch}
+      />,
+    )
+
+    expect(screen.queryByTestId('inbox-session-push-branch')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('inbox-session-push-branch'))
+    expect(onPushBranch).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: expect.objectContaining({ localId: 's1' }) }),
+    )
+  })
+
+  it('hides the push-branch entry when the caller does not provide it', () => {
+    render(
+      <InboxSessionActionSheet
+        client={createClient()}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByTestId('inbox-session-push-branch')).toBeNull()
+  })
+
   it('closes an idle session directly from the long-press menu', async () => {
     const client = createClient()
     const onDismiss = vi.fn()

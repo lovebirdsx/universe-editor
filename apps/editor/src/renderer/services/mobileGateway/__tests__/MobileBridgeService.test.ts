@@ -50,6 +50,7 @@ import {
   MobileBridgeService,
 } from '../MobileBridgeService.js'
 import type { ISessionDeliveryService } from '../../delivery/sessionDeliveryService.js'
+import type { ISessionBranchPushService } from '../../delivery/sessionBranchPushService.js'
 import type { SessionDeliveryPreview } from '../../delivery/sessionDeliveryTypes.js'
 import type { MobileBridgeEvent } from '../../../../shared/ipc/mobileGatewayService.js'
 
@@ -319,6 +320,10 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     getDetail: vi.fn(() => undefined),
     listActiveContexts: vi.fn(() => []),
   } as unknown as ISessionDeliveryService
+  const branchPush = {
+    preview: vi.fn(),
+    push: vi.fn(),
+  } as unknown as ISessionBranchPushService
   const service = new MobileBridgeService(
     sessionService,
     historyService,
@@ -330,6 +335,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     scm,
     files,
     delivery,
+    branchPush,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
