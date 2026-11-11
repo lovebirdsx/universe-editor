@@ -1771,12 +1771,16 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     }
     const elicitationEvent = diffElicitation(stream.publishedElicitation, next.pendingElicitation)
     if (elicitationEvent !== undefined) events.push(elicitationEvent)
+    // The stream projects the session only; delivery fields live on this
+    // service, so they must be attached here too or every flush would upsert
+    // a summary that makes the phone drop its「交付」badge.
+    const summary = this._withDelivery(stream.session, next.summary)
     const summaryChangedNow =
       stream.publishedSummary !== undefined
-        ? summaryChanged(stream.publishedSummary, next.summary)
+        ? summaryChanged(stream.publishedSummary, summary)
         : false
     if (summaryChangedNow) {
-      events.push({ type: 'summary_changed', summary: next.summary })
+      events.push({ type: 'summary_changed', summary })
     }
 
     if (events.length > 0) {
@@ -1789,7 +1793,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     }
 
     if (stream.publishedSummary === undefined || summaryChangedNow) {
-      this._emit({ kind: 'inbox', upserts: [next.summary], removes: [] })
+      this._emit({ kind: 'inbox', upserts: [summary], removes: [] })
     }
 
     stream.publishedTimeline = next.timeline
@@ -1798,7 +1802,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     stream.publishedCommands = next.availableCommands
     stream.publishedPermission = next.pendingPermission
     stream.publishedElicitation = next.pendingElicitation
-    stream.publishedSummary = next.summary
+    stream.publishedSummary = summary
     stream.publishedMessageChars = next.timeline.reduce(
       (sum, item) => (item.kind === 'message' ? sum + item.text.length : sum),
       0,

@@ -2464,6 +2464,57 @@ describe('MobileBridgeService deliveries', () => {
     ])
   })
 
+  it('keeps delivery fields on streamed inbox upserts', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      harness.add(makeSession('s1', { durableId: 'd1' }))
+      vi.mocked(harness.delivery.getSummaryForSession).mockReturnValue(deliverySummary)
+      vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+
+      await harness.service.startStreaming()
+      await flush()
+
+      const upserts = harness.events.flatMap((event) =>
+        event.kind === 'inbox' ? event.upserts : [],
+      )
+      expect(upserts.at(-1)).toMatchObject({
+        localId: 's1',
+        delivery: deliverySummary,
+        deliveryAvailable: true,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restores delivery availability when a running session finishes', async () => {
+    vi.useFakeTimers()
+    try {
+      const harness = makeHarness()
+      const session = makeSession('s1', { durableId: 'd1' })
+      harness.add(session)
+      vi.mocked(harness.delivery.getSummaryForSession).mockReturnValue(deliverySummary)
+      vi.mocked(harness.delivery.isAvailable).mockReturnValue(false)
+      session.status.set('running', undefined)
+
+      await harness.service.startStreaming()
+      await flush()
+
+      const latestUpsert = () =>
+        harness.events.flatMap((event) => (event.kind === 'inbox' ? event.upserts : [])).at(-1)
+      expect(latestUpsert()?.deliveryAvailable).toBeUndefined()
+
+      vi.mocked(harness.delivery.isAvailable).mockReturnValue(true)
+      session.status.set('idle', undefined)
+      await flush()
+
+      expect(latestUpsert()).toMatchObject({ localId: 's1', deliveryAvailable: true })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('routes preview/start to the delivery service and strips absolute paths', async () => {
     const harness = makeHarness()
     harness.add(makeSession('s1', { durableId: 'd1' }))
