@@ -53,7 +53,7 @@ describe('Outline navigation Action2s', () => {
     }
   })
 
-  it('Ctrl+P/N/B/F resolve to the outline commands when the outline is focused', () => {
+  it('Ctrl+P/N/J/B/F resolve to the outline commands when the outline is focused', () => {
     disposables.push(registerAction2(OutlineNavigateUpAction))
     disposables.push(registerAction2(OutlineNavigateDownAction))
     disposables.push(registerAction2(OutlineNavigateLeftAction))
@@ -61,6 +61,7 @@ describe('Outline navigation Action2s', () => {
     const c = ctx(OUTLINE_VIEW)
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+p', c)).toBe(OutlineNavigateUpAction.ID)
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+n', c)).toBe(OutlineNavigateDownAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+j', c)).toBe(OutlineNavigateDownAction.ID)
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+b', c)).toBe(OutlineNavigateLeftAction.ID)
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+f', c)).toBe(OutlineNavigateRightAction.ID)
   })

@@ -68,6 +68,19 @@ test.describe('@p1 menu ctrl navigation', () => {
     await expect(active).toHaveText(first)
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
 
+    // Ctrl+J / Ctrl+K are the emacs twins of Ctrl+N / Ctrl+P. Ctrl+J globally
+    // toggles the panel and Ctrl+K starts a chord, so the menu must own them:
+    // the highlight steps regardless, which only happens when the registry
+    // claimed the stroke before the dispatcher ran.
+    await page.keyboard.press('Control+j')
+    await expect(menus).toHaveCount(1)
+    await expect(active).not.toHaveText(first)
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(editorBefore)
+
+    await page.keyboard.press('Control+k')
+    await expect(menus).toHaveCount(1)
+    await expect(active).toHaveText(first)
+
     // The cursor is a single row and the keyboard one is painted with a focus
     // outline on top of its fill. Note the *pointer's* row gets no such marker:
     // it is painted by `:hover`, which an unfocused (offscreen) e2e window never
@@ -90,10 +103,13 @@ test.describe('@p1 menu ctrl navigation', () => {
     await expect(cursor).toHaveCount(0)
     await expect(page.locator('[role="menuitem"][data-active="mouse"]')).toHaveCount(1)
 
-    // Closed menu = the window-capture listener is gone. Ctrl+P is quick open
-    // again, so the aliases only ever shadowed the globals while a menu was up.
+    // Closed menu = its layer is gone. The tree is still focused, so Ctrl+P now
+    // belongs to the shared list layer (it steps the tree instead of opening
+    // quick open). Move focus out of the list: the global meaning returns, which
+    // proves the aliases only shadowed it while a list surface owned the keys.
     await page.keyboard.press('Escape')
     await expect(menus).toHaveCount(0)
+    await workbench.focusActiveEditorGroup()
     await page.keyboard.press('Control+p')
     await expect
       .poll(() => workbench.getContextKey<boolean>('quickInputVisible'), { timeout: 5000 })

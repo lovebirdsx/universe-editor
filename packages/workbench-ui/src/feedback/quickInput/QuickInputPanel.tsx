@@ -29,7 +29,7 @@ import type {
   QuickPickInput,
 } from '@universe-editor/platform'
 import { localize } from '@universe-editor/platform'
-import { ctrlNavigationKey } from '../../keybinding/ctrlNavigation.js'
+import { ctrlNavigationDirection, ctrlNavigationKey } from '../../keybinding/ctrlNavigation.js'
 import { fuzzyScore, wordMatchField } from '../../text/fuzzyMatch.js'
 import { isAltRemoveShortcut } from './removeShortcut.js'
 import type { QuickPickState } from './quickInputViewModel.js'
@@ -464,6 +464,38 @@ function isQuickNavigateModifierHeld(
 ): boolean {
   if (e.metaKey) return false
   return modifier === 'alt' ? e.altKey && !e.ctrlKey : e.ctrlKey && !e.altKey
+}
+
+/** The letter rows a locked quick-navigate picker walks with P/N/J/K. */
+type QuickNavigateStep = 'up' | 'down'
+
+/**
+ * Direction for a locked quick-navigate picker. `requireAlt` selects the two
+ * shapes the picker supports: the Alt+S gesture keeps Alt held, while a picker
+ * opened without a modifier (the title-bar capsule) accepts bare letters.
+ * macOS Option+letter composes a character (`∆`, `˚`), so fall back to `code`;
+ * AltGr reports Ctrl+Alt and must never count as Alt.
+ */
+function quickNavigateStep(
+  e: Pick<globalThis.KeyboardEvent, 'key' | 'code' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>,
+  requireAlt: boolean,
+): QuickNavigateStep | undefined {
+  if (e.ctrlKey || e.metaKey || e.shiftKey) return undefined
+  if (requireAlt !== e.altKey) return undefined
+  const key = e.key.toLowerCase()
+  if (key === 'n' || key === 'j') return 'down'
+  if (key === 'p' || key === 'k') return 'up'
+  if (!e.altKey) return undefined
+  switch (e.code) {
+    case 'KeyN':
+    case 'KeyJ':
+      return 'down'
+    case 'KeyP':
+    case 'KeyK':
+      return 'up'
+    default:
+      return undefined
+  }
 }
 
 // 每个 document 一个测量 canvas：不同窗口的字体与 realm 不同。
@@ -946,9 +978,29 @@ export function QuickPickPanel({
         setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, e.shiftKey ? -1 : 1))
         return
       }
+      // Move the locked list with the same aliases as any picker: Ctrl+P/N/J/K.
+      // The Alt+S gesture keeps Alt held, so it also accepts Alt+P/N/J/K; a
+      // picker opened without a modifier (the title-bar capsule) accepts bare
+      // P/N/J/K. Enter has already handed the field over before a bare letter
+      // could reach this branch, so filtering is never stolen.
+      const ctrlStep = ctrlNavigationDirection(e)
+      const heldStep =
+        quickNavigate !== undefined && isQuickNavigateModifierHeld(e, quickNavigate.modifier)
+          ? quickNavigateStep(e, true)
+          : undefined
+      const step =
+        ctrlStep === 'up' || ctrlStep === 'down'
+          ? ctrlStep
+          : (heldStep ?? quickNavigateStep(e, false))
+      if (step !== undefined) {
+        e.preventDefault()
+        if (len === 0) return
+        setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, step === 'down' ? 1 : -1))
+        return
+      }
       // Swallow printable characters (Space included): the field is readOnly, so they
       // would go nowhere anyway, and they must not double as the way out of the locked
-      // state. Navigation keys, Delete, Ctrl+N/P and Ctrl+X fall through below.
+      // state. Navigation keys, Delete, Ctrl+N/P/J/K and Ctrl+X fall through below.
       if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault()
         return
@@ -976,10 +1028,10 @@ export function QuickPickPanel({
       else setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, 1))
       return
     }
-    if (e.key === 'ArrowDown' || ctrlNavigationKey(e) === 'n') {
+    if (e.key === 'ArrowDown' || ctrlNavigationDirection(e) === 'down') {
       e.preventDefault()
       setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, 1))
-    } else if (e.key === 'ArrowUp' || ctrlNavigationKey(e) === 'p') {
+    } else if (e.key === 'ArrowUp' || ctrlNavigationDirection(e) === 'up') {
       e.preventDefault()
       setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, -1))
     } else if (e.key === 'PageDown') {
@@ -1381,11 +1433,10 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
       state.onInput?.(value)
       onClose()
     } else {
-      // The picker's list answers Ctrl+N / Ctrl+P. A plain text prompt has no
-      // list to move, so it holds those two rather than letting quick open /
-      // new file fire behind the dialog — but only those two.
-      const alias = ctrlNavigationKey(e)
-      if (alias === 'n' || alias === 'p') e.preventDefault()
+      // The picker's list answers Ctrl+N/P/J/K. A plain text prompt has no
+      // list to move, so it holds those rather than letting quick open /
+      // new file / toggle panel (or the Ctrl+K chord) fire behind the dialog.
+      if (ctrlNavigationKey(e) !== undefined) e.preventDefault()
     }
   }
 

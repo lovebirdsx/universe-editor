@@ -32,6 +32,7 @@ import {
   type MouseEvent,
 } from 'react'
 import { isOpenTargetEnter } from '@universe-editor/platform'
+import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { resolveIndexNavigation } from './listKeyboard.js'
 import {
   dispatchKeyboardContextMenu,
@@ -173,6 +174,26 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
     },
     [revealRow],
   )
+
+  // Ctrl+P/N/J/K are the same movement as ArrowUp/ArrowDown. The registry
+  // claims them on window capture (ahead of quick open / new file) and only
+  // while the container itself is the active element — the same rule as the
+  // React handler below, so a row's inline input keeps its own keystrokes.
+  useCtrlNavigationLayer({
+    kind: 'list',
+    directions: ['up', 'down'],
+    getElement: () => optionsRef.current.getContainer(),
+    onMove: (direction) => {
+      const { count, focusedIndex, getPageSize } = optionsRef.current
+      if (count === 0) return
+      const next = resolveIndexNavigation(direction === 'down' ? 'ArrowDown' : 'ArrowUp', {
+        index: focusedIndex,
+        count,
+        pageSize: getPageSize?.(),
+      })
+      if (next !== undefined) focusRow(next)
+    },
+  })
 
   const openContextMenu = useCallback(() => {
     const { getContainer, getItemKey, rowDataAttr, focusedIndex, count } = optionsRef.current

@@ -617,6 +617,37 @@ describe('QuickPickPanel keyboard', () => {
     expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
   })
 
+  it('Ctrl+J and Ctrl+K move like Ctrl+N and Ctrl+P', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    const selected = () =>
+      screen.getAllByRole('option').find((o) => o.getAttribute('aria-selected') === 'true')
+        ?.textContent
+
+    const down = createEvent.keyDown(input, { key: 'j', ctrlKey: true })
+    fireEvent(input, down)
+    expect(down.defaultPrevented).toBe(true)
+    expect(selected()).toContain('Go to Line')
+
+    const up = createEvent.keyDown(input, { key: 'k', ctrlKey: true })
+    fireEvent(input, up)
+    expect(up.defaultPrevented).toBe(true)
+    expect(selected()).toContain('Format Document')
+  })
+
+  it('does not treat Ctrl+Shift+J or Ctrl+Alt+J as list navigation', () => {
+    render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    const selected = () =>
+      screen.getAllByRole('option').find((o) => o.getAttribute('aria-selected') === 'true')
+        ?.textContent
+
+    fireEvent.keyDown(input, { key: 'j', ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(input, { key: 'j', ctrlKey: true, altKey: true })
+    expect(selected()).toContain('Format Document')
+  })
+
   it('Ctrl+Enter reports ctrl modifier to onAccept', () => {
     const onAccept = vi.fn()
     render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
@@ -1482,6 +1513,74 @@ describe('QuickPickPanel quick navigate locked mode', () => {
     expect(selectedRow()?.textContent).toContain('Format Document')
     fireEvent.keyDown(field(), { key: 'Delete' })
     expect(onItemRemove).toHaveBeenCalledWith(items[0])
+  })
+
+  it('moves with Ctrl+P/N/J/K while locked', () => {
+    render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
+
+    fireEvent.keyDown(field(), { key: 'j', ctrlKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'n', ctrlKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+    fireEvent.keyDown(field(), { key: 'k', ctrlKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'p', ctrlKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  // The title-bar capsule opens the Alt+S picker without holding a modifier, so
+  // bare letters must move instead of merely being swallowed.
+  it('moves with bare P/N/J/K while locked without a modifier', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+
+    fireEvent.keyDown(field(), { key: 'j' })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'n' })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+    fireEvent.keyDown(field(), { key: 'k' })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'p' })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('moves with Alt+P/N/J/K while the Alt gesture holds the modifier', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+
+    fireEvent.keyDown(field(), { key: 'j', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'n', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+    fireEvent.keyDown(field(), { key: 'k', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'p', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('recognises Alt+letter by physical code when Option composes a character', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+
+    fireEvent.keyDown(field(), { key: '∆', code: 'KeyJ', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: '˚', code: 'KeyK', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('does not navigate on AltGr-shaped Ctrl+Alt+letter', () => {
+    render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 'j', ctrlKey: true, altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('lets bare P/N/J/K type once Enter handed the field over', () => {
+    render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
+    fireEvent.keyDown(field(), { key: 'Enter' })
+
+    const event = createEvent.keyDown(field(), { key: 'j' })
+    fireEvent(field(), event)
+    expect(event.defaultPrevented).toBe(false)
+
+    fireEvent.change(field(), { target: { value: 'line' } })
+    expect(screen.getAllByRole('option')).toHaveLength(1)
   })
 
   it('swallows Space while locked, so a multi-select row is not toggled by it', () => {

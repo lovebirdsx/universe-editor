@@ -3,14 +3,26 @@
  *  ctrlNavigation — the Ctrl+letter movement aliases, and the rule both of their
  *  consumers use to decide which modifier shapes count as one.
  *
- *  Two surfaces map a stroke onto a direction: the quick pick's list (Ctrl+P/N)
- *  and every context menu, through `useMenuNavigation` (Ctrl+P/N/H/L). They have
- *  to agree, or the same stroke would step one and leave the other to the global
- *  keybinding handler.
+ *  Every list surface maps these strokes onto a direction: the quick pick's list,
+ *  context menus, overlay pickers, trees, flat lists and the graph views. They
+ *  have to agree, or the same stroke would step one and leave the other to the
+ *  global keybinding handler.
+ *
+ *  `n`/`p` are the emacs pair; `j`/`k` the vim pair. Both are accepted so a list
+ *  answers the same stroke whichever muscle memory the user brings. `Ctrl+K`
+ *  cannot be a normal keybinding: the registry resolves chord prefixes before
+ *  single strokes, so every `ctrl+k ...` chord would shadow it. Consumers claim
+ *  these strokes on window capture instead (see `ctrlNavigationRegistry`).
  *--------------------------------------------------------------------------------------------*/
 
-/** The letters with a directional meaning; `n`/`p` = down/up, `l`/`h` = right/left. */
-export type CtrlNavigationKey = 'h' | 'l' | 'n' | 'p'
+/**
+ * The letters with a directional meaning; `n`/`j` = down, `p`/`k` = up,
+ * `l`/`h` = right/left.
+ */
+export type CtrlNavigationKey = 'h' | 'j' | 'k' | 'l' | 'n' | 'p'
+
+/** The direction a Ctrl navigation alias stands for. */
+export type CtrlNavigationDirection = 'up' | 'down' | 'left' | 'right'
 
 /**
  * Structural event shape, so a native `KeyboardEvent` and React's synthetic
@@ -39,5 +51,27 @@ export interface CtrlNavigationKeyEvent {
 export function ctrlNavigationKey(e: CtrlNavigationKeyEvent): CtrlNavigationKey | undefined {
   if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return undefined
   const key = e.key.toLowerCase()
-  return key === 'h' || key === 'l' || key === 'n' || key === 'p' ? key : undefined
+  return key === 'h' || key === 'j' || key === 'k' || key === 'l' || key === 'n' || key === 'p'
+    ? key
+    : undefined
+}
+
+/** The direction this stroke moves a list, or `undefined` when it is not an alias. */
+export function ctrlNavigationDirection(
+  e: CtrlNavigationKeyEvent,
+): CtrlNavigationDirection | undefined {
+  switch (ctrlNavigationKey(e)) {
+    case 'n':
+    case 'j':
+      return 'down'
+    case 'p':
+    case 'k':
+      return 'up'
+    case 'h':
+      return 'left'
+    case 'l':
+      return 'right'
+    default:
+      return undefined
+  }
 }

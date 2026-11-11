@@ -230,6 +230,75 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     expect(selected()).toEqual(['0'])
     model.dispose()
   })
+
+  it('moves with Ctrl+P/N/J/K while the tree holds focus', () => {
+    const model = makeModel()
+    renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+    act(() => view().focus())
+
+    fireEvent.keyDown(view(), { key: 'j', ctrlKey: true })
+    expect(selected()).toEqual(['0/0'])
+    fireEvent.keyDown(view(), { key: 'n', ctrlKey: true })
+    expect(selected()).toEqual(['1'])
+    fireEvent.keyDown(view(), { key: 'k', ctrlKey: true })
+    expect(selected()).toEqual(['0/0'])
+    fireEvent.keyDown(view(), { key: 'p', ctrlKey: true })
+    expect(selected()).toEqual(['0'])
+
+    // The registry claims the stroke even when the cursor cannot move, so the
+    // document-capture dispatcher never turns it into quick open / new file.
+    act(() => model.setSelection(['0'], '0'))
+    expect(fireEvent.keyDown(view(), { key: 'p', ctrlKey: true })).toBe(false)
+    expect(selected()).toEqual(['0'])
+    model.dispose()
+  })
+
+  it('leaves Ctrl+J/K to a focused row input', () => {
+    const model = makeModel()
+    render(
+      <Tree<Node>
+        model={model}
+        renderRow={(ctx) => (
+          <div key={ctx.node.id} data-row-key={ctx.node.id} data-selected={ctx.isSelected}>
+            {ctx.node.id}
+            <input data-testid={`input-${ctx.node.id}`} />
+          </div>
+        )}
+      />,
+    )
+    act(() => model.setSelection(['0'], '0'))
+    const input = screen.getByTestId('input-0')
+    act(() => input.focus())
+
+    expect(fireEvent.keyDown(input, { key: 'j', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(selected()).toEqual(['0'])
+    model.dispose()
+  })
+
+  it('moves with Ctrl+J/K while a row button holds focus, like the arrow keys', () => {
+    const model = makeModel()
+    render(
+      <Tree<Node>
+        model={model}
+        renderRow={(ctx) => (
+          <div key={ctx.node.id} data-row-key={ctx.node.id} data-selected={ctx.isSelected}>
+            {ctx.node.id}
+            <button type="button" data-testid={`button-${ctx.node.id}`} />
+          </div>
+        )}
+      />,
+    )
+    act(() => model.setSelection(['0'], '0'))
+    const button = screen.getByTestId('button-0')
+    act(() => button.focus())
+
+    fireEvent.keyDown(button, { key: 'j', ctrlKey: true, bubbles: true })
+    expect(selected()).toEqual(['0/0'])
+    fireEvent.keyDown(button, { key: 'k', ctrlKey: true, bubbles: true })
+    expect(selected()).toEqual(['0'])
+    model.dispose()
+  })
 })
 
 describe('Tree — shift range extension', () => {

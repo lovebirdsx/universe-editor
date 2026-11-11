@@ -267,6 +267,30 @@ describe('GitGraphEditor keyboard navigation', () => {
     expect(bridgeCalls(executeCommand)).toHaveLength(3)
   })
 
+  it('Ctrl+P/N/J/K move the selection like ArrowUp/ArrowDown', async () => {
+    const { container } = renderEditor()
+    await flush()
+
+    const body = scrollBody(container)
+    body.focus()
+
+    fireEvent.keyDown(body, { key: 'j', ctrlKey: true })
+    await flush()
+    expect(gitGraphViewState.selection).toEqual([HASH_B])
+
+    fireEvent.keyDown(body, { key: 'n', ctrlKey: true })
+    await flush()
+    expect(gitGraphViewState.selection).toEqual([HASH_C])
+
+    fireEvent.keyDown(body, { key: 'p', ctrlKey: true })
+    await flush()
+    expect(gitGraphViewState.selection).toEqual([HASH_B])
+
+    fireEvent.keyDown(body, { key: 'k', ctrlKey: true })
+    await flush()
+    expect(gitGraphViewState.selection).toEqual([HASH_A])
+  })
+
   it('the uncommitted node is skipped: the first commit is selected on open', async () => {
     const { container, executeCommand } = renderEditor(true)
     await flush()

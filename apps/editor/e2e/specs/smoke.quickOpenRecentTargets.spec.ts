@@ -159,6 +159,13 @@ test.describe('@p0 quick open recent targets', () => {
     await page.keyboard.press('p')
     await expect.poll(() => selected.textContent()).toBe(initial)
 
+    // Ctrl+J / Ctrl+K are the same down/up steps. Ctrl+K would otherwise be the
+    // chord leader; the locked picker must claim it before the dispatcher.
+    await page.keyboard.press('j')
+    await expect.poll(() => selected.textContent()).not.toBe(initial)
+    await page.keyboard.press('k')
+    await expect.poll(() => selected.textContent()).toBe(initial)
+
     await page.keyboard.up('Control')
     await workbench.quickInput.waitForHidden()
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(previous)

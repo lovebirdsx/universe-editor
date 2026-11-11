@@ -830,6 +830,39 @@ describe('PromptInput — slash popover navigation (via widget handle)', () => {
     fireEvent.change(ta, { target: { value: 'plain text' } })
     expect(changes.at(-1)).toBe(false)
   })
+
+  it('steps the open popover with Ctrl+J/K while the prompt is focused', () => {
+    const handleRef = makeHandleRef()
+    renderWithServices(
+      <PromptInput session={makeSession({ commands: COMMANDS })} handleRef={handleRef} />,
+    )
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '/' } })
+    act(() => ta.focus())
+
+    fireEvent.keyDown(ta, { key: 'j', ctrlKey: true })
+    expect(screen.getAllByRole('option')[1]?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(ta, { key: 'n', ctrlKey: true })
+    expect(screen.getAllByRole('option')[2]?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(ta, { key: 'k', ctrlKey: true })
+    expect(screen.getAllByRole('option')[1]?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(ta, { key: 'p', ctrlKey: true })
+    expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('leaves Ctrl+J/K alone when the popover is stale but the prompt lost focus', () => {
+    const handleRef = makeHandleRef()
+    renderWithServices(
+      <PromptInput session={makeSession({ commands: COMMANDS })} handleRef={handleRef} />,
+    )
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '/' } })
+    act(() => ta.focus())
+    act(() => ta.blur())
+
+    fireEvent.keyDown(document.body, { key: 'j', ctrlKey: true })
+    expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
+  })
 })
 
 describe('PromptInput — submit and cancel', () => {

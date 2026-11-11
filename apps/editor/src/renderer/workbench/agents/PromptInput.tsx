@@ -55,6 +55,7 @@ import {
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
   requestOwnerFrame,
+  useCtrlNavigationLayer,
 } from '@universe-editor/workbench-ui'
 import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
@@ -1220,6 +1221,25 @@ export function PromptInput({
     onPopoverOpenChange?.(popoverOpen)
   }, [onPopoverOpenChange, popoverOpen])
 
+  // Ctrl+P/N/J/K step the suggestion list. Window capture is the only way to
+  // claim Ctrl+K (chord-first resolution would otherwise start a chord), and
+  // scoping to the form keeps an unfocused session's stale popover from eating
+  // keystrokes in the focused one. The Monaco textarea is editable, hence
+  // `allowEditableFocus`; the popovers themselves never take DOM focus.
+  const promptFormRef = useRef<HTMLFormElement | null>(null)
+  useCtrlNavigationLayer({
+    kind: 'overlay',
+    focus: 'within',
+    allowEditableFocus: true,
+    enabled: popoverOpen && handleRef !== undefined,
+    directions: ['up', 'down'],
+    getElement: () => promptFormRef.current,
+    onMove: (direction) => {
+      if (direction === 'down') handleRef?.current.popoverSelectNext()
+      else handleRef?.current.popoverSelectPrev()
+    },
+  })
+
   const acceptSlash = (cmd: AvailableCommand): void => {
     // ACP schema 规定 name 不带 `/`（例如 `create_plan`），但部分实现会带上 —
     // 两种形态都要还原成 `/<name>`，否则提交给 agent 时丢掉 `/`，被当作普通文本。
@@ -1933,6 +1953,7 @@ export function PromptInput({
 
   return (
     <form
+      ref={promptFormRef}
       className={styles['promptForm']}
       data-testid="acp-prompt"
       onSubmit={submit}

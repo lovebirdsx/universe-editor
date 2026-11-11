@@ -121,6 +121,18 @@ test.describe('@p1 agents session list keyboard navigation', () => {
     expect(await page.evaluate(cursorRowIds)).toEqual(second)
     await page.keyboard.press('Home')
     expect(await page.evaluate(cursorRowIds)).toEqual(first)
+
+    // Ctrl+J / Ctrl+K (emacs) pair with Ctrl+N / Ctrl+P. Each has a global
+    // meaning while the list holds focus, so the list must claim all four.
+    await page.keyboard.press('Control+j')
+    expect(await page.evaluate(cursorRowIds)).toEqual(second)
+    await page.keyboard.press('Control+k')
+    expect(await page.evaluate(cursorRowIds)).toEqual(first)
+    await page.keyboard.press('Control+n')
+    expect(await page.evaluate(cursorRowIds)).toEqual(second)
+    await page.keyboard.press('Control+p')
+    expect(await page.evaluate(cursorRowIds)).toEqual(first)
+    expect(await workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
   })
 
   test('Enter opens the session under the cursor', async ({ page, workbench }) => {

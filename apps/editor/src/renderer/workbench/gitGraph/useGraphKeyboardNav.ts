@@ -8,10 +8,13 @@
  *  go through the same entry point as mouse clicks, so latest-wins sequencing
  *  and payload caching are preserved. Only the listed navigation keys are
  *  handled (and prevented) — everything else bubbles up untouched.
+ *
+ *  Ctrl+P/N/J/K are the same up/down movement, claimed by the shared
+ *  `ctrlNavigationRegistry` while the graph container holds focus.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'
-import { isContextMenuKey } from '@universe-editor/workbench-ui'
+import { isContextMenuKey, useCtrlNavigationLayer } from '@universe-editor/workbench-ui'
 
 export interface GraphKeyboardNavOptions {
   /** Keys of the currently rendered rows, top to bottom (after filtering). */
@@ -45,6 +48,47 @@ export function useGraphKeyboardNav({
   rowHeight,
   scrollToRow,
 }: GraphKeyboardNavOptions): (e: KeyboardEvent<HTMLDivElement>) => void {
+  const moveTo = useCallback(
+    (index: number) => {
+      if (rows.length === 0) return
+      const clamped = Math.max(0, Math.min(rows.length - 1, index))
+      const key = rows[clamped]!
+      select(key)
+      if (scrollToRow) {
+        scrollToRow(clamped)
+        return
+      }
+      // getAttribute comparison instead of a `[${rowAttribute}="${...}"]`
+      // selector: attribute-string escapes are not honoured by every selector
+      // engine (happy-dom in tests).
+      const row = scrollRef.current
+        ?.querySelectorAll(`[${rowAttribute}]`)
+        .values()
+        .find((el) => el.getAttribute(rowAttribute) === key)
+      row?.scrollIntoView({ block: 'nearest' })
+    },
+    [rows, select, scrollRef, rowAttribute, scrollToRow],
+  )
+
+  // From no selection, down starts at the first row and up at the last — the
+  // same convention the arrow keys have always used.
+  const moveBy = useCallback(
+    (delta: 1 | -1) => {
+      if (rows.length === 0) return
+      const currentKey = selectionRef.current[0]
+      const currentIndex = currentKey === undefined ? -1 : rows.indexOf(currentKey)
+      moveTo(currentIndex < 0 ? (delta > 0 ? 0 : rows.length - 1) : currentIndex + delta)
+    },
+    [moveTo, rows, selectionRef],
+  )
+
+  useCtrlNavigationLayer({
+    kind: 'list',
+    directions: ['up', 'down'],
+    getElement: () => scrollRef.current,
+    onMove: (direction) => moveBy(direction === 'down' ? 1 : -1),
+  })
+
   return useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (rows.length === 0) return
@@ -58,24 +102,6 @@ export function useGraphKeyboardNav({
         if (e.repeat || currentKey === undefined) return
         openMenu(currentKey)
         return
-      }
-
-      const moveTo = (index: number) => {
-        const clamped = Math.max(0, Math.min(rows.length - 1, index))
-        const key = rows[clamped]!
-        select(key)
-        if (scrollToRow) {
-          scrollToRow(clamped)
-          return
-        }
-        // getAttribute comparison instead of a `[${rowAttribute}="${...}"]`
-        // selector: attribute-string escapes are not honoured by every selector
-        // engine (happy-dom in tests).
-        const row = scrollRef.current
-          ?.querySelectorAll(`[${rowAttribute}]`)
-          .values()
-          .find((el) => el.getAttribute(rowAttribute) === key)
-        row?.scrollIntoView({ block: 'nearest' })
       }
 
       switch (e.key) {
@@ -120,6 +146,6 @@ export function useGraphKeyboardNav({
           return
       }
     },
-    [rows, selectionRef, select, openMenu, openCommitChanges, scrollRef, rowAttribute, rowHeight],
+    [rows, selectionRef, moveTo, openMenu, openCommitChanges, scrollRef, rowHeight],
   )
 }

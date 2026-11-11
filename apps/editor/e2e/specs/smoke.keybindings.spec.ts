@@ -206,6 +206,36 @@ test.describe('@p1 keybindings editor', () => {
     await expect.poll(() => menu.count()).toBe(0)
   })
 
+  test('Ctrl+J / Ctrl+K step the focused grid without toggling the panel or a chord', async ({
+    page,
+    workbench,
+  }) => {
+    await openKeybindingsEditor(workbench)
+    await expect.poll(() => dataRows(page).count()).toBeGreaterThan(1)
+
+    const selectedTitle = () =>
+      page.evaluate(
+        () =>
+          document
+            .querySelector('[role=grid] [role=row][aria-selected="true"] [role=gridcell][title]')
+            ?.getAttribute('title') ?? null,
+      )
+
+    await dataRows(page).first().click()
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement?.getAttribute('role')))
+      .toBe('grid')
+    const initial = await selectedTitle()
+    expect(initial).not.toBeNull()
+
+    // Ctrl+J globally toggles the panel; Ctrl+K starts a chord. The grid holds
+    // focus, so the shared navigation layer must claim both before the dispatcher.
+    await page.keyboard.press('Control+j')
+    await expect.poll(selectedTitle).not.toBe(initial)
+    await page.keyboard.press('Control+k')
+    await expect.poll(selectedTitle).toBe(initial)
+  })
+
   test('record keys mode mirrors real keystrokes into the search box', async ({
     page,
     workbench,

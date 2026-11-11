@@ -7,7 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { useCallback, useRef, useState } from 'react'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   useFlatListNavigation,
   type IUseFlatListNavigationOptions,
@@ -109,6 +109,33 @@ describe('useFlatListNavigation — navigation keys', () => {
     render(<Harness itemCount={0} onFocusChange={onFocusChange} />)
     fireEvent.keyDown(list(), { key: 'ArrowDown' })
     expect(onFocusChange).not.toHaveBeenCalled()
+  })
+
+  it('moves with Ctrl+P/N/J/K while the container holds focus', () => {
+    render(<Harness focusedIndex={0} />)
+    act(() => list().focus())
+
+    fireEvent.keyDown(list(), { key: 'j', ctrlKey: true })
+    expect(selected()).toEqual(['row-1'])
+    fireEvent.keyDown(list(), { key: 'n', ctrlKey: true })
+    expect(selected()).toEqual(['row-2'])
+    fireEvent.keyDown(list(), { key: 'k', ctrlKey: true })
+    expect(selected()).toEqual(['row-1'])
+    fireEvent.keyDown(list(), { key: 'p', ctrlKey: true })
+    expect(selected()).toEqual(['row-0'])
+
+    // Claimed even at the boundary: the stroke must not reach quick open.
+    expect(fireEvent.keyDown(list(), { key: 'p', ctrlKey: true })).toBe(false)
+    expect(selected()).toEqual(['row-0'])
+  })
+
+  it('leaves Ctrl+J/K to a focused inner input', () => {
+    render(<Harness focusedIndex={0} withInnerInput />)
+    const input = screen.getByTestId('inner-input')
+    act(() => input.focus())
+
+    expect(fireEvent.keyDown(input, { key: 'j', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(selected()).toEqual(['row-0'])
   })
 })
 

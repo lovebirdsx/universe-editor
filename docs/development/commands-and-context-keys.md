@@ -41,6 +41,17 @@ f1: false,
 
 排查读 `KeybindingsRegistry.traceKeystroke` 的 candidates（`selected` / `outcomeReason`）；完整决策树见 skill `fix-keybinding-not-firing`。
 
+## 列表 Ctrl 别名：window capture + 单层仲裁
+
+列表 / 菜单 / 浮层的方向别名（`Ctrl+P`/`Ctrl+K` 上、`Ctrl+N`/`Ctrl+J` 下，`Ctrl+H`/`Ctrl+L` 左右）**不能**用普通 keybinding 实现：`resolveKeystroke` 先解析和弦前缀，`ctrl+k` 开头的弦永远先于单键命中，因此单键 `Ctrl+K` 在列表聚焦期间只能由 **window capture** 抢下（代价就是这段期间 `Ctrl+K` 和弦不可用）。
+
+唯一入口是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：每个 `Document` 一个 window-capture 监听；注册层按 `menu > dialog > overlay > list` 优先级激活，同 kind 取嵌套更深者。一次按键只交给一层，命中即 `preventDefault + stopPropagation + stopImmediatePropagation`（边界落空也吞，否则底下的全局命令会照常执行）。
+
+- **菜单是虚拟焦点**（`aria-activedescendant`），DOM 焦点仍在唤出它的树上，所以不能每个组件各挂一个 window 监听——`stopPropagation` 不会阻止同一 target 上的其它监听器，两层会同时移动。
+- `list` 层默认 `focus: 'self'`（容器自身是 `activeElement`）且拒绝 editable 焦点，行内输入框因此保留自己的键；`overlay` 默认 `focus: 'within'`；`dialog` 可用 `allowEditableFocus`（复选框对话框）。
+- 接入点：Tree / FlatList / Git·Perforce 图谱 / ChatBody 时间线 / 大纲（list，Tree 层用 `focus: 'within'`，行内按钮聚焦时仍可移动、可编辑控件除外），Select（overlay），扩展「更多」菜单（menu），Perforce 同步对话框（dialog）。Outline 另有 `ctrl+p`/`ctrl+n`/`ctrl+j` 的 Action2 兜底（`ctrl+k` 无法注册为全局单键），用于 `focusedView` 成立但焦点在视图 body（含筛选框）的情况。
+- QuickInput 不走注册表：锁定 / readOnly / 松开修饰键即接受的语义只有面板自己知道，别名在 `QuickInputPanel` 内处理，`isQuickInputOwnedKey` 负责让 dispatcher 放行。
+
 ## 焦点类上下文键：一律 DOM 派生
 
 **全局键盘守卫**：`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts` 有一道「无 ctrl/alt/meta 的裸字符键与 Delete/Backspace 保留给文本面」的守卫，判据 `isEditableTarget(target) || editorTextFocus === true || acpPromptInputFocused === true`（inTextSurface / isPrintableTyping / isNativeEditing 三处，紧挨 chord 分支）。任一 key 残留 true，即便 registry 已解析出 `EXECUTE` 也会被吞。**签名症状**：`Ctrl+F` 正常、`runCommand` 正常、裸字母（如 markdown 预览 link hints 的 `f`）无反应。

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { Select } from '../atoms/Select.js'
 import styles from '../atoms/Select.module.css'
 
@@ -107,6 +107,30 @@ describe('Select', () => {
       fireEvent.keyDown(screen.getByRole('listbox'), { key: 'ArrowDown' })
       expect(screen.getByRole('option', { name: 'mid' }).getAttribute('data-active')).toBe('false')
       expect(screen.getByRole('option', { name: 'b' }).getAttribute('data-active')).toBe('true')
+    })
+
+    it('steps with Ctrl+J/K, skipping disabled options and wrapping', () => {
+      render(<Select value="a" options={WITH_DISABLED} onChange={() => {}} data-testid="sel" />)
+      fireEvent.click(screen.getByTestId('sel'))
+      const listbox = screen.getByRole('listbox')
+      const active = (name: string) =>
+        screen.getByRole('option', { name }).getAttribute('data-active')
+      act(() => (screen.getByRole('option', { name: 'a' }) as HTMLElement).focus())
+
+      expect(active('a')).toBe('true')
+      // The disabled 'mid' row is skipped in both directions.
+      fireEvent.keyDown(listbox, { key: 'j', ctrlKey: true })
+      expect(active('b')).toBe('true')
+      fireEvent.keyDown(listbox, { key: 'j', ctrlKey: true })
+      expect(active('a')).toBe('true')
+      fireEvent.keyDown(listbox, { key: 'k', ctrlKey: true })
+      expect(active('b')).toBe('true')
+    })
+
+    it('leaves Ctrl+J/K alone while the popup is closed', () => {
+      render(<Select value="a" options={WITH_DISABLED} onChange={() => {}} data-testid="sel" />)
+      expect(fireEvent.keyDown(screen.getByTestId('sel'), { key: 'j', ctrlKey: true })).toBe(true)
+      expect(screen.queryByRole('listbox')).toBeNull()
     })
   })
 })

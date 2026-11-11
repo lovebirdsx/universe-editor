@@ -62,3 +62,9 @@ export * from './text/fuzzyMatch.js'
 export * from './text/wordMatching.js'
 export * from './text/HighlightedLabel.js'
 export * from './keybinding/KeybindingLabel.js'
+export * from './keybinding/ctrlNavigation.js'
+export {
+  useCtrlNavigationLayer,
+  type CtrlNavigationLayerKind,
+  type ICtrlNavigationLayerOptions,
+} from './keybinding/ctrlNavigationRegistry.js'

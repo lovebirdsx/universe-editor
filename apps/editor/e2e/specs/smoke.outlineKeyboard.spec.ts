@@ -77,6 +77,13 @@ test.describe('@p1 outline keyboard navigation', () => {
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['version'])
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
 
+    // Ctrl+J / Ctrl+K are the emacs twins. Ctrl+J globally toggles the panel and
+    // Ctrl+K starts a chord; the focused tree must claim both.
+    await page.keyboard.press('Control+j')
+    await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
+    await page.keyboard.press('Control+k')
+    await expect.poll(() => page.evaluate(selectedName)).toEqual(['version'])
+
     // Down to the expandable `scripts` row, then Ctrl+F to expand and descend.
     await page.keyboard.press('Control+n')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])

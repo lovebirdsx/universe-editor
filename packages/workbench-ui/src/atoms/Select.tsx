@@ -23,6 +23,7 @@ import {
   FloatingFocusManager,
 } from '@floating-ui/react'
 import { cx } from './cx.js'
+import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import styles from './Select.module.css'
 
@@ -31,6 +32,22 @@ import styles from './Select.module.css'
  * the popover to the full viewport width on wide screens.
  */
 const WRAP_MAX_WIDTH = 420
+
+/** Wrap-around step that skips disabled options; also starts from either end. */
+function stepEnabled<T extends string>(
+  options: readonly SelectOption<T>[],
+  from: number | null,
+  delta: 1 | -1,
+): number | undefined {
+  const count = options.length
+  if (count === 0) return undefined
+  let index = from ?? (delta > 0 ? -1 : count)
+  for (let i = 0; i < count; i++) {
+    index = (index + delta + count) % count
+    if (options[index]?.disabled !== true) return index
+  }
+  return undefined
+}
 
 export interface SelectOption<T extends string> {
   readonly value: T
@@ -115,10 +132,26 @@ export function Select<T extends string>({
   })
 
   const listRef = useRef<Array<HTMLElement | null>>([])
+  const popupRef = useRef<HTMLDivElement | null>(null)
   const labelsRef = useRef<Array<string>>(options.map((o) => o.text ?? o.value))
   labelsRef.current = options.map((o) => o.text ?? o.value)
 
   const disabledIndices = options.flatMap((o, i) => (o.disabled ? [i] : []))
+
+  useCtrlNavigationLayer({
+    kind: 'overlay',
+    focus: 'within',
+    enabled: open,
+    directions: ['up', 'down'],
+    getElement: () => popupRef.current,
+    onMove: (direction) => {
+      const next = stepEnabled(options, activeIndex, direction === 'down' ? 1 : -1)
+      if (next === undefined) return
+      setActiveIndex(next)
+      listRef.current[next]?.focus()
+    },
+    ...(targetDocument !== undefined ? { targetDocument } : {}),
+  })
 
   const click = useClick(context, { enabled: !disabled })
   const dismiss = useDismiss(context)
@@ -185,7 +218,10 @@ export function Select<T extends string>({
         <FloatingPortal {...(doc ? { root: doc.body } : {})}>
           <FloatingFocusManager context={context} modal={false}>
             <div
-              ref={refs.setFloating}
+              ref={(node) => {
+                popupRef.current = node
+                refs.setFloating(node)
+              }}
               className={styles['popover']}
               style={floatingStyles}
               // react-aria's FocusScope `contain` (FocusScopeOverlay) would yank

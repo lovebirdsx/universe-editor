@@ -108,6 +108,18 @@ test.describe('@p1 agents prompt history', () => {
       .toBe('first prompt')
     // Highlight moved up to the top (oldest) row.
     await expect(rows.nth(0)).toHaveAttribute('aria-selected', 'true')
+
+    // Ctrl+J / Ctrl+K mirror ArrowDown / ArrowUp over the same popover. Ctrl+K
+    // globally starts a chord, so the open popover must claim it first.
+    await page.keyboard.press('Control+j')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('second prompt')
+    await page.keyboard.press('Control+k')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpPromptText()))
+      .toBe('first prompt')
+    await expect(rows.nth(0)).toHaveAttribute('aria-selected', 'true')
   })
 
   test('a stationary cursor under the popover does not hijack keyboard selection @regression', async ({

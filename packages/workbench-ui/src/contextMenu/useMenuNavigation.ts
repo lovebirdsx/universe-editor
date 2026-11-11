@@ -1,10 +1,15 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useMenuNavigation — the keyboard half of every menu in the workbench: arrow
- *  stepping across separators (with Ctrl+P/N/H/L as their aliases), Home/End,
- *  submenu expand/collapse, Enter/Space, and the opening highlight. Navigation
- *  moves a *virtual* focus (`aria-activedescendant`) rather than DOM focus, so
- *  the tree or list that raised the menu keeps its own focus ring and selection.
+ *  stepping across separators, Home/End, submenu expand/collapse, Enter/Space,
+ *  and the opening highlight. Navigation moves a *virtual* focus
+ *  (`aria-activedescendant`) rather than DOM focus, so the tree or list that
+ *  raised the menu keeps its own focus ring and selection.
+ *
+ *  The Ctrl movement aliases (Ctrl+P/N/J/K/H/L) are *not* handled here: menus
+ *  paint with virtual focus, so a per-menu window listener would race with the
+ *  list underneath. `ctrlNavigationRegistry` owns those strokes and gives the
+ *  menu top priority while it is open.
  *
  *  Shared by `ContextMenu` (MenuRegistry-driven) and `ListMenu` (item-driven) so
  *  the two can never drift apart.
@@ -12,7 +17,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isModifiedEnter, runWithInvocationModifiers } from '@universe-editor/platform'
-import { ctrlNavigationKey, type CtrlNavigationKey } from '../keybinding/ctrlNavigation.js'
+import {
+  useCtrlNavigationLayer,
+  type CtrlNavigationDirection,
+} from '../keybinding/ctrlNavigationRegistry.js'
 import { useOwnerDocument } from '../overlay/ownerDocumentContext.js'
 import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
 
@@ -23,11 +31,15 @@ import { rowsAtLevel, stepIndex, type RowModel } from './menuModel.js'
  */
 const SUBMENU_CLOSE_DELAY_MS = 250
 
-/** Ctrl+P/N/H/L stand in for the four arrow keys while a menu owns the keyboard. */
-const CTRL_NAV_ARROWS: Record<
-  CtrlNavigationKey,
-  'ArrowUp' | 'ArrowDown' | 'ArrowLeft' | 'ArrowRight'
-> = { h: 'ArrowLeft', l: 'ArrowRight', n: 'ArrowDown', p: 'ArrowUp' }
+/** Level the arrow keys act on: wherever the cursor currently sits. */
+const activeLevel = (s: MenuState): number => s.active?.level ?? s.open.length
+
+/**
+ * Deepest level actually on screen. Hovering a submenu row opens its panel
+ * without moving the cursor into it, so this can run ahead of `activeLevel` —
+ * and it is what Escape and ArrowLeft must peel off.
+ */
+const deepestLevel = (s: MenuState): number => Math.max(s.open.length, s.active?.level ?? 0)
 
 /** Which input last moved the cursor: a pointer hover, or a keyboard step. */
 export type MenuCursorSource = 'mouse' | 'keyboard'
@@ -197,16 +209,6 @@ export function useMenuNavigation(
     [cancelClose, scheduleClose],
   )
 
-  /** Level the arrow keys act on: wherever the cursor currently sits. */
-  const activeLevel = (s: MenuState): number => s.active?.level ?? s.open.length
-
-  /**
-   * Deepest level actually on screen. Hovering a submenu row opens its panel
-   * without moving the cursor into it, so this can run ahead of `activeLevel` —
-   * and it is what Escape and ArrowLeft must peel off.
-   */
-  const deepestLevel = (s: MenuState): number => Math.max(s.open.length, s.active?.level ?? 0)
-
   const collapse = useCallback((): boolean => {
     const s = stateRef.current
     const level = deepestLevel(s)
@@ -243,6 +245,43 @@ export function useMenuNavigation(
     return collapse()
   }, [cancelClose, collapse])
 
+  // One implementation for the four Ctrl aliases, shared with the registry.
+  // Vertical steps skip separators/disabled rows through `stepIndex`; horizontal
+  // steps reuse the same expand/collapse the arrow keys use.
+  const moveByDirection = useCallback(
+    (direction: CtrlNavigationDirection): void => {
+      const s = stateRef.current
+      if (direction === 'left' || direction === 'right') {
+        cancelClose()
+        if (direction === 'left') collapse()
+        else expand()
+        return
+      }
+      const level = activeLevel(s)
+      const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
+      if (!levelRows) return
+      const next = stepIndex(levelRows, s.active?.index, direction === 'down' ? 1 : -1)
+      if (next === undefined) return
+      cancelClose()
+      setState({
+        open: s.open.slice(0, level),
+        active: { level, index: next, source: 'keyboard' },
+      })
+    },
+    [cancelClose, collapse, expand],
+  )
+
+  // Menus win over the list underneath while open: the registry is the only
+  // place that claims the Ctrl aliases, so the virtual focus never races with
+  // the still-focused tree/list that raised the menu.
+  useCtrlNavigationLayer({
+    kind: 'menu',
+    enabled,
+    directions: ['up', 'down', 'left', 'right'],
+    onMove: moveByDirection,
+    targetDocument: doc,
+  })
+
   // Window capture: the workbench keybinding dispatcher listens on *document*
   // capture, so registering here runs first; stopping propagation also keeps the
   // arrow keys away from whatever tree or list the menu was opened from.
@@ -271,30 +310,18 @@ export function useMenuNavigation(
         }
         return
       }
-      if (e.altKey || e.metaKey) return
-      // Ctrl is ours only for the four aliases. Any other Ctrl stroke —
-      // Ctrl+Left, the Ctrl+K chord leader — keeps its global meaning, and
-      // Alt/Meta stay out entirely so Alt+ArrowDown and Cmd+ArrowDown never
-      // fall through to the plain arrow cases below. (Modified Enter was
-      // handled above, before this guard.) One casualty is a chord *completing*
-      // on an alias: Ctrl+K Ctrl+L lands on a menu that wants 'l' for
-      // ArrowRight, so the stroke is swallowed and the chord times out.
-      const alias = ctrlNavigationKey(e)
-      if (e.ctrlKey && alias === undefined) return
-      const key = alias === undefined ? e.key : CTRL_NAV_ARROWS[alias]
+      // Every Ctrl stroke belongs to the registry (the four movement aliases) or
+      // to the global dispatcher. Alt/Meta are never menu navigation; making
+      // them fall through keeps Alt+ArrowDown / Cmd+ArrowDown out of the plain
+      // arrow cases below. Modified Enter was handled above, before this guard.
+      if (e.ctrlKey || e.altKey || e.metaKey) return
+      const key = e.key
       const s = stateRef.current
       const level = activeLevel(s)
       const levelRows = rowsAtLevel(rowsRef.current, s.open, level)
-      // Nothing to step through at this level. The arrows fall through to the
-      // view underneath — that is how they reach the tree that raised the menu —
-      // but an alias stays ours: leaking Ctrl+H would pop the Replace widget on
-      // top of it. Same split in the ArrowLeft/ArrowRight cases below.
-      if (!levelRows) {
-        if (alias === undefined) return
-        e.preventDefault()
-        e.stopPropagation()
-        return
-      }
+      // Nothing to step through at this level: bare arrows fall through to the
+      // view underneath — that is how they reach the tree that raised the menu.
+      if (!levelRows) return
 
       const move = (next: number | undefined): void => {
         if (next === undefined) return
@@ -307,10 +334,10 @@ export function useMenuNavigation(
 
       switch (key) {
         case 'ArrowDown':
-          move(stepIndex(levelRows, s.active?.index, 1))
+          moveByDirection('down')
           break
         case 'ArrowUp':
-          move(stepIndex(levelRows, s.active?.index, -1))
+          moveByDirection('up')
           break
         case 'Home':
           move(stepIndex(levelRows, undefined, 1))
@@ -320,11 +347,11 @@ export function useMenuNavigation(
           break
         case 'ArrowRight':
           cancelClose()
-          if (!expand() && alias === undefined) return
+          if (!expand()) return
           break
         case 'ArrowLeft':
           cancelClose()
-          if (!collapse() && alias === undefined) return
+          if (!collapse()) return
           break
         case 'Enter':
         case ' ': {
@@ -346,7 +373,7 @@ export function useMenuNavigation(
     }
     view.addEventListener('keydown', onKeyDown, true)
     return () => view.removeEventListener('keydown', onKeyDown, true)
-  }, [enabled, cancelClose, collapse, expand, view])
+  }, [enabled, cancelClose, collapse, expand, moveByDirection, view])
 
   return { state, onRowEnter, onCancelClose: cancelClose, onEscape }
 }

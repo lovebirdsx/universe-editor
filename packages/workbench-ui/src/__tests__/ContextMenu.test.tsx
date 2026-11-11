@@ -555,12 +555,16 @@ describe('ContextMenu submenus', () => {
 
       expect(pressWith({ key: 'n', ctrlKey: true })).toBe(true)
       expect(activeLabel(menu)).toBe('A')
-      // Index 1 is the group separator, so B is next.
-      pressWith({ key: 'n', ctrlKey: true })
+      // Index 1 is the group separator, so B is next. Ctrl+J is the vim alias.
+      pressWith({ key: 'j', ctrlKey: true })
       expect(activeLabel(menu)).toBe('B')
       pressWith({ key: 'n', ctrlKey: true })
       expect(activeLabel(menu)).toBe('A')
+      pressWith({ key: 'n', ctrlKey: true })
+      expect(activeLabel(menu)).toBe('B')
 
+      pressWith({ key: 'k', ctrlKey: true })
+      expect(activeLabel(menu)).toBe('A')
       pressWith({ key: 'p', ctrlKey: true })
       expect(activeLabel(menu)).toBe('B')
       // CapsLock reports an upper-case letter with no Shift held.

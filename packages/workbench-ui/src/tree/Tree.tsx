@@ -35,6 +35,7 @@ import { VirtualList } from '../list/VirtualList.js'
 import { resolveIndexNavigation } from '../list/listKeyboard.js'
 import { hasTrustworthyViewport } from '../list/scrollElementLayout.js'
 import { useScrollRestore, type IScrollStatePersister } from '../list/useScrollRestore.js'
+import { useCtrlNavigationLayer } from '../keybinding/ctrlNavigationRegistry.js'
 import { useStableCallback } from '../hooks/useStableCallback.js'
 import { isOpenTargetEnter, markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
@@ -467,6 +468,22 @@ export function Tree<T>(props: ITreeProps<T>) {
     const row = node ? findRow(root, node.id) : null
     dispatchKeyboardContextMenu(row ?? root, row !== null)
   }, [])
+
+  // Ctrl+P/N/J/K step the tree exactly like ArrowUp/ArrowDown. The registry
+  // claims them on window capture, before the global quick-open/new-file
+  // bindings. `within` (not the list default `self`) matches the arrow keys:
+  // row controls such as Search's collapse / replace-all buttons keep DOM
+  // focus on the button, and the keydown still reaches the container. Editable
+  // targets are rejected separately, so a row's inline editor keeps its keys.
+  // Horizontal aliases stay global (Ctrl+H/L are replace / select-line);
+  // Outline's Ctrl+B/F remain the left/right gestures for that view.
+  useCtrlNavigationLayer({
+    kind: 'list',
+    focus: 'within',
+    directions: ['up', 'down'],
+    getElement: () => containerRef.current,
+    onMove: (direction) => model.navigate(direction === 'up' ? 'up' : 'down'),
+  })
 
   // 身份恒定、body 最新：返回的行处理器每次调用现造（读到当前 model / onActivate），
   // 工厂自身不钉住产出旧一代行的渲染帧。

@@ -82,6 +82,7 @@ import {
   isKeyboardContextMenu,
   isKeyupContextMenuSupplement,
   requestOwnerFrame,
+  useCtrlNavigationLayer,
   type OwnerFrame,
 } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
@@ -695,6 +696,18 @@ function ChatScroll({
     },
     [scrollContainerRef],
   )
+
+  // Ctrl+P/N/J/K move through the timeline like Alt+J/K. Scoped to the scroll
+  // container (`focus: 'within'`), with editable targets excluded by default so
+  // the find widget keeps its own keys. The prompt input lives outside this
+  // container and handles the aliases for its suggestion popover.
+  useCtrlNavigationLayer({
+    kind: 'list',
+    focus: 'within',
+    directions: ['up', 'down'],
+    getElement: () => containerRef.current,
+    onMove: (direction) => handleRef.current.move(direction === 'down' ? 'next' : 'prev'),
+  })
   const saved = AcpChatViewStateCache.load(session.id)
   const stickRef = useRef(saved?.stuck ?? true)
   // True while we are re-applying a restored scrollTop as content settles, so

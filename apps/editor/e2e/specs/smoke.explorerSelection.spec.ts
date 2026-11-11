@@ -139,4 +139,45 @@ test.describe('@p1 explorer selection feedback', () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
+
+  test('Ctrl+P/N/J/K walk the tree without leaking to quick open, new file or panel', async ({
+    workbench,
+    page,
+  }) => {
+    const tmpDir = mkTempDir('ue2-sel-ctrl-')
+    await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'a')
+    await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'b')
+    await fs.writeFile(path.join(tmpDir, 'gamma.txt'), 'c')
+
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
+
+    const alpha = page.locator('[role="treeitem"]', { hasText: 'alpha.txt' })
+    await expect(alpha).toBeVisible({ timeout: 5000 })
+    await alpha.click()
+    await page.waitForTimeout(RESTORE_WINDOW_MS)
+    await alpha.click()
+    await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
+
+    const selected = page.locator('[role="treeitem"][aria-selected="true"]')
+    const expectSelected = (name: string) =>
+      expect.poll(() => selected.textContent()).toContain(name)
+
+    // Ctrl+N / Ctrl+J step down, Ctrl+K / Ctrl+P step back up. Every one of
+    // them has a global meaning (new file, toggle panel, chord, quick open)
+    // that must not fire while the tree itself holds focus.
+    await page.keyboard.press('Control+n')
+    await expectSelected('beta.txt')
+    await page.keyboard.press('Control+j')
+    await expectSelected('gamma.txt')
+    await page.keyboard.press('Control+k')
+    await expectSelected('beta.txt')
+    await page.keyboard.press('Control+p')
+    await expectSelected('alpha.txt')
+
+    await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
+    await expect.poll(() => workbench.getActiveEditorUri()).toContain('alpha.txt')
+
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
 })

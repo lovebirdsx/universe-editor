@@ -129,6 +129,21 @@ describe('PerforceGraphSyncDialog', () => {
     expect(document.activeElement).toBe(boxes[0])
   })
 
+  it('mirrors arrow focus movement with Ctrl+J/K', () => {
+    renderDialog()
+    const boxes = dialogBoxes()
+    expect(document.activeElement).toBe(boxes[0])
+
+    fireEvent.keyDown(boxes[0]!, { key: 'j', ctrlKey: true })
+    expect(document.activeElement).toBe(boxes[1])
+    fireEvent.keyDown(boxes[1]!, { key: 'n', ctrlKey: true })
+    expect(document.activeElement).toBe(boxes[2])
+    fireEvent.keyDown(boxes[2]!, { key: 'k', ctrlKey: true })
+    expect(document.activeElement).toBe(boxes[1])
+    fireEvent.keyDown(boxes[1]!, { key: 'p', ctrlKey: true })
+    expect(document.activeElement).toBe(boxes[0])
+  })
+
   it('toggles a row with Space', () => {
     renderDialog()
     const dialog = screen.getByTestId('perforceGraph-syncDialog')

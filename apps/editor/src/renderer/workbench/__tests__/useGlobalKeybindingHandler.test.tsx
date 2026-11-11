@@ -565,6 +565,78 @@ describe('useGlobalKeybindingHandler — QuickInput isolation', () => {
     expect(stopPropagation).not.toHaveBeenCalled()
   })
 
+  it.each(['j', 'k'])(
+    'leaves Ctrl+%s for QuickInput navigation without executing the workbench command',
+    (key) => {
+      const { executeCommand, instantiation } = createHarness()
+      disposables.push(
+        KeybindingsRegistry.registerKeybinding({
+          key: `ctrl+${key}`,
+          command: 'test.globalClaim',
+        }),
+      )
+      disposables.push(CommandsRegistry.registerCommand('test.globalClaim', () => {}))
+      const input = showQuickInput(instantiation)
+      mountHost(instantiation)
+
+      const { preventDefault, stopPropagation } = dispatch({ ctrlKey: true, key, from: input })
+
+      expect(executeCommand).not.toHaveBeenCalled()
+      expect(preventDefault).not.toHaveBeenCalled()
+      expect(stopPropagation).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    ['j', 'KeyJ'],
+    ['k', 'KeyK'],
+    ['n', 'KeyN'],
+    ['p', 'KeyP'],
+  ])('leaves Alt+%s for the locked QuickPick list', (key, code) => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: `alt+${key}`, command: 'test.globalClaim' }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.globalClaim', () => {}))
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({
+      altKey: true,
+      key,
+      code,
+      from: input,
+    })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
+  it('recognises Alt+letter by physical code when Option composes a character', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'alt+j',
+        command: 'test.globalClaim',
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.globalClaim', () => {}))
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({
+      altKey: true,
+      key: '∆',
+      code: 'KeyJ',
+      from: input,
+    })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
   it('still routes Escape to the QuickInput close command', () => {
     const { executeCommand, instantiation } = createHarness()
     disposables.push(
@@ -599,8 +671,10 @@ describe('useGlobalKeybindingHandler — QuickInput isolation', () => {
 
     expect(executeCommand).not.toHaveBeenCalled()
     expect(statusBar.entries.get()).toHaveLength(0)
-    expect(preventDefault).toHaveBeenCalledTimes(1)
-    expect(stopPropagation).toHaveBeenCalledTimes(1)
+    // Ctrl+K is a picker alias: the panel gets it to move the list, and the
+    // dispatcher must neither start the chord nor claim the event.
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
   })
 
   it('leaves native input editing shortcuts such as Ctrl+A alone', () => {

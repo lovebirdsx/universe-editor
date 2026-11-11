@@ -521,6 +521,42 @@ describe('ChatBody — click to focus a timeline item', () => {
     }
   })
 
+  it('moves with Ctrl+J/K while the timeline holds focus', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    const scroll = container.querySelector<HTMLElement>(
+      '[data-testid="acp-timeline"]',
+    )!.parentElement!
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:b'))
+    })
+    expect(container.ownerDocument.activeElement).toBe(scroll)
+
+    fireEvent.keyDown(scroll, { key: 'k', ctrlKey: true })
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    expect(slotEl(container, 'm:b').className).not.toContain(focusedClass)
+
+    fireEvent.keyDown(scroll, { key: 'j', ctrlKey: true })
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+
+    // Claimed even at the boundary so quick open does not fire behind the chat.
+    expect(fireEvent.keyDown(scroll, { key: 'j', ctrlKey: true })).toBe(false)
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+  })
+
+  it('leaves Ctrl+J/K to an editable control inside the timeline', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    const scroll = container.querySelector<HTMLElement>(
+      '[data-testid="acp-timeline"]',
+    )!.parentElement!
+    const input = container.ownerDocument.createElement('input')
+    scroll.appendChild(input)
+    act(() => input.focus())
+
+    expect(fireEvent.keyDown(input, { key: 'j', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(slotEl(container, 'm:a').className).not.toContain(focusedClass)
+    expect(slotEl(container, 'm:b').className).not.toContain(focusedClass)
+  })
+
   it('opens the menu via the ContextMenu key right after keyboard navigation moved focus', () => {
     const disposable = registerAction2(CaptureChatContextArgAction)
     try {

@@ -195,6 +195,23 @@ test.describe('@p1 git graph keyboard scroll', () => {
       await page.keyboard.press('ArrowDown')
       await page.keyboard.press('ArrowUp')
       expectFirstRowBelowHeader(await readTopRowGeometry(page), 'after ArrowDown/ArrowUp')
+
+      // Ctrl+J / Ctrl+K are the same down/up steps; Ctrl+J globally toggles the
+      // panel, so the graph container has to claim it on window capture.
+      const selectedHash = () =>
+        page.evaluate(
+          () =>
+            document
+              .querySelector('[data-testid="gitGraph-editor"] [data-hash][aria-selected="true"]')
+              ?.getAttribute('data-hash') ?? null,
+        )
+      const firstHash = await selectedHash()
+      expect(firstHash).not.toBeNull()
+      await page.keyboard.press('Control+j')
+      await expect.poll(selectedHash).not.toBe(firstHash)
+      await page.keyboard.press('Control+k')
+      await expect.poll(selectedHash).toBe(firstHash)
+      expectFirstRowBelowHeader(await readTopRowGeometry(page), 'after Ctrl+J/Ctrl+K')
     } finally {
       await closeApp(app)
     }

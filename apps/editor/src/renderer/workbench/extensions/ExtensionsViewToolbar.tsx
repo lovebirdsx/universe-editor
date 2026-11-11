@@ -11,7 +11,7 @@
 import { forwardRef, useCallback, useEffect, useRef, useState, type HTMLAttributes } from 'react'
 import { Check, MoreHorizontal } from 'lucide-react'
 import { IContextKeyService, localize } from '@universe-editor/platform'
-import { AnchoredSurface, IconButton } from '@universe-editor/workbench-ui'
+import { AnchoredSurface, IconButton, useCtrlNavigationLayer } from '@universe-editor/workbench-ui'
 import { useEventValue, useExecuteCommand, useObservable, useService } from '../useService.js'
 import {
   parseExtensionListQuery,
@@ -91,6 +91,24 @@ interface ExtensionsMenuProps {
   readonly onEscape: () => void
 }
 
+type MenuMove = 'down' | 'up' | 'home' | 'end'
+
+/** Roving focus across the menu's menuitem rows, wrapping at both ends. */
+function moveMenuFocus(items: readonly HTMLElement[], current: number, move: MenuMove): void {
+  if (items.length === 0) return
+  const next =
+    move === 'home'
+      ? 0
+      : move === 'end'
+        ? items.length - 1
+        : move === 'down'
+          ? (current + 1) % items.length
+          : current <= 0
+            ? items.length - 1
+            : current - 1
+  items[next]?.focus()
+}
+
 function ExtensionsMenu({
   anchor,
   query,
@@ -101,6 +119,24 @@ function ExtensionsMenu({
   onEscape,
 }: ExtensionsMenuProps) {
   const rect = anchor.getBoundingClientRect()
+
+  // Ctrl+P/N/J/K drive the same roving focus as the arrows. A registry layer
+  // (rather than the surface's onKeyDown) is required because the global
+  // dispatcher would otherwise turn Ctrl+K into the chord leader and Ctrl+P/N
+  // into quick open / new file.
+  useCtrlNavigationLayer({
+    kind: 'menu',
+    directions: ['up', 'down'],
+    onMove: (direction) => {
+      const menu = anchor.ownerDocument.querySelector<HTMLElement>(
+        '[data-testid="extensions-more-menu"]',
+      )
+      if (!menu) return
+      const items = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
+      const current = items.indexOf(anchor.ownerDocument.activeElement as HTMLElement)
+      moveMenuFocus(items, current, direction === 'down' ? 'down' : 'up')
+    },
+  })
 
   return (
     <AnchoredSurface
@@ -131,17 +167,17 @@ function ExtensionsMenu({
             if (items.length === 0) return
             e.preventDefault()
             const current = items.indexOf(e.target as HTMLElement)
-            const next =
+            moveMenuFocus(
+              items,
+              current,
               e.key === 'Home'
-                ? 0
+                ? 'home'
                 : e.key === 'End'
-                  ? items.length - 1
+                  ? 'end'
                   : e.key === 'ArrowDown'
-                    ? (current + 1) % items.length
-                    : current <= 0
-                      ? items.length - 1
-                      : current - 1
-            items[next]?.focus()
+                    ? 'down'
+                    : 'up',
+            )
           },
           onBlur: (e) => {
             const next = e.relatedTarget as Node | null

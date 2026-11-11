@@ -46,6 +46,8 @@ const CHORD_TIMEOUT_MS = 1500
 const QUICK_INPUT_NATIVE_NAVIGATION_KEYS = new Set(['arrowleft', 'arrowright', 'home', 'end'])
 const QUICK_INPUT_NATIVE_PRIMARY_SHORTCUTS = new Set(['a', 'c', 'v', 'x', 'z', 'y'])
 const QUICK_INPUT_OWNED_KEYS = new Set(['enter', 'arrowup', 'arrowdown', 'pageup', 'pagedown'])
+const QUICK_INPUT_PICKER_ALIASES = new Set(['n', 'p', 'j', 'k'])
+const QUICK_INPUT_ALT_ALIAS_CODES = new Set(['KeyN', 'KeyP', 'KeyJ', 'KeyK'])
 
 function isNativeEditableKey(e: KeyboardEvent): boolean {
   if (!isEditableTarget(e.target)) return false
@@ -71,14 +73,19 @@ function isQuickInputNativeEditingKey(e: KeyboardEvent): boolean {
 function isQuickInputOwnedKey(e: KeyboardEvent): boolean {
   const key = e.key.toLowerCase()
   if (QUICK_INPUT_OWNED_KEYS.has(key)) return true
-  return (
-    e.ctrlKey &&
-    !e.altKey &&
-    !e.metaKey &&
-    !e.shiftKey &&
-    (key === 'n' || key === 'p') &&
-    isEditableTarget(e.target)
-  )
+  if (!isEditableTarget(e.target)) return false
+  if (e.metaKey || e.shiftKey) return false
+
+  // Every picker answers Ctrl+P/N/J/K.
+  if (e.ctrlKey && !e.altKey) return QUICK_INPUT_PICKER_ALIASES.has(key)
+
+  // The Alt+S gesture keeps Alt held while P/N/J/K move. macOS Option+letter
+  // composes a character (∆/˚), so also match the physical key. AltGr reports
+  // Ctrl+Alt and must not count as Alt.
+  if (e.altKey && !e.ctrlKey) {
+    return QUICK_INPUT_PICKER_ALIASES.has(key) || QUICK_INPUT_ALT_ALIAS_CODES.has(e.code)
+  }
+  return false
 }
 
 // Modal dialogs rendered by RendererDialogService own their keyboard events

@@ -215,10 +215,10 @@ describe('useOverlayListNavigation', () => {
   it('leaves non-alias ctrl/meta combos for the workbench and forwards Alt+digit', () => {
     const onAltDigit = vi.fn()
     render(<Harness onAltDigit={onAltDigit} />)
-    // Ctrl+K leads the workbench's chord rather than moving the cursor, and no
-    // Meta stroke is ever an alias (Cmd+P stays quick open on macOS). The four
-    // letters that *are* aliases have their own block below.
-    fireEvent.keyDown(popup(), { key: 'k', ctrlKey: true })
+    // Ctrl+B is not an alias (it keeps its workbench meaning), and no Meta stroke
+    // is ever one (Cmd+P stays quick open on macOS). The six letters that *are*
+    // aliases have their own block below.
+    fireEvent.keyDown(popup(), { key: 'b', ctrlKey: true })
     fireEvent.keyDown(popup(), { key: 'ArrowDown', metaKey: true })
     expect(active()).toBe(0)
     fireEvent.keyDown(popup(), { key: '1', code: 'Digit1', altKey: true })
@@ -274,9 +274,13 @@ describe('useOverlayListNavigation', () => {
   // happy-dom has no dispatcher, so what these cases pin down is the hook's own
   // contract: the mapping, the swallow-when-declined rule, and ownership.
   describe('Ctrl movement aliases', () => {
-    it('steps with Ctrl+N / Ctrl+P exactly like the arrows, wrapping too', () => {
+    it('steps with Ctrl+N/J / Ctrl+P/K exactly like the arrows, wrapping too', () => {
       render(<Harness />)
       fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      expect(active()).toBe(1)
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
+      expect(active()).toBe(2)
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
       expect(active()).toBe(1)
       fireEvent.keyDown(window, { key: 'p', ctrlKey: true })
       expect(active()).toBe(0)
@@ -363,7 +367,7 @@ describe('useOverlayListNavigation', () => {
 
     it('keeps stripes that already name a global command', () => {
       render(<Harness />)
-      fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
       // Ctrl+Shift+N is a new window, Ctrl+Alt+… an AltGr character.
       fireEvent.keyDown(window, { key: 'n', ctrlKey: true, shiftKey: true })
       fireEvent.keyDown(window, { key: 'p', ctrlKey: true, altKey: true })

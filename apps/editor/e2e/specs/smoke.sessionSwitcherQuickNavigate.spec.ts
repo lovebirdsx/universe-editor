@@ -134,6 +134,17 @@ test.describe('@p0 Alt+S quick-navigate', () => {
     await page.keyboard.press('Shift+s')
     await expect.poll(() => selectedRowIndex(page)).toBe(nextIdx)
 
+    // Alt 按住期间 P/N/J/K 与 Alt+S 同向移动（J/N 下、K/P 上）。按的是裸字母，
+    // 由键盘状态补上 Alt——`Alt+j` 会再按一次 Alt，抬起时就成了「松手即接受」。
+    await page.keyboard.press('j')
+    await expect.poll(() => selectedRowIndex(page)).toBe((nextIdx + 1) % labels.length)
+    await page.keyboard.press('k')
+    await expect.poll(() => selectedRowIndex(page)).toBe(nextIdx)
+    await page.keyboard.press('n')
+    await expect.poll(() => selectedRowIndex(page)).toBe((nextIdx + 1) % labels.length)
+    await page.keyboard.press('p')
+    await expect.poll(() => selectedRowIndex(page)).toBe(nextIdx)
+
     // 松开 Alt 直接打开高亮项。
     await page.keyboard.up('Alt')
     await workbench.quickInput.waitForHidden()

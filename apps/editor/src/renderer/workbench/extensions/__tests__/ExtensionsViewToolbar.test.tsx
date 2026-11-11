@@ -156,4 +156,21 @@ describe('ExtensionsViewToolbar', () => {
     fireEvent.keyDown(builtinItem(), { key: 'ArrowUp' })
     expect(document.activeElement).toBe(screen.getByTestId('extensions-menu-update-all'))
   })
+
+  it('moves the keyboard cursor with Ctrl+J/K', () => {
+    setup(true)
+    open()
+
+    fireEvent.keyDown(builtinItem(), { key: 'j', ctrlKey: true })
+    expect(document.activeElement).toBe(updatesItem())
+    fireEvent.keyDown(updatesItem(), { key: 'n', ctrlKey: true })
+    expect(document.activeElement).toBe(screen.getByTestId('extensions-menu-check-for-updates'))
+    fireEvent.keyDown(screen.getByTestId('extensions-menu-check-for-updates'), {
+      key: 'k',
+      ctrlKey: true,
+    })
+    expect(document.activeElement).toBe(updatesItem())
+    fireEvent.keyDown(updatesItem(), { key: 'p', ctrlKey: true })
+    expect(document.activeElement).toBe(builtinItem())
+  })
 })

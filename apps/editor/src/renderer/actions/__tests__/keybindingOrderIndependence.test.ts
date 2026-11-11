@@ -152,6 +152,13 @@ const SCENARIOS: readonly Scenario[] = [
     scopedId: OutlineNavigateDownAction.ID,
   },
   {
+    name: 'Outline navigate down alias (ctrl+j) beats global ctrl+j',
+    key: 'ctrl+j',
+    context: { focusedView: 'workbench.view.outline.main' },
+    scoped: OutlineNavigateDownAction,
+    scopedId: OutlineNavigateDownAction.ID,
+  },
+  {
     name: 'Outline navigate up (ctrl+p) beats global ctrl+p',
     key: 'ctrl+p',
     context: { focusedView: 'workbench.view.outline.main' },

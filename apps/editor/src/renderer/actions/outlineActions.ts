@@ -5,12 +5,14 @@
  *  global keybinding handler claims in the document capture phase before the keys
  *  could reach the tree, so they must be real commands gated on `focusedView`.
  *
- *  Vim aliases (Ctrl+H/J/K/L) are intentionally not bound: Ctrl+K is the app's
- *  chord leader (Ctrl+K Ctrl+S, …) and would shadow a single-stroke Ctrl+K, so
- *  the vim set can't be completed cleanly — emacs covers the four directions.
- *  That reasoning is about *global* bindings; context menus do bind Ctrl+H/L
- *  because they take the keys at the window capture phase (see
- *  `useMenuNavigation`), which never reaches this registry.
+ *  Ctrl+J rides along with Ctrl+N as the down alias. Ctrl+K is the app's chord
+ *  leader (Ctrl+K Ctrl+S, …) and chord-first resolution means a single-stroke
+ *  Ctrl+K binding can never fire, so the up pair is only complete while the tree
+ *  container itself has DOM focus — `ctrlNavigationRegistry` claims Ctrl+P/N/J/K
+ *  at the window capture phase there (see packages/workbench-ui). These commands
+ *  remain the fallback while `focusedView` holds but focus sits elsewhere in the
+ *  view body — including the filter box, where they keep the aliases on the
+ *  outline list instead of letting the global commands run behind it.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -37,14 +39,18 @@ class OutlineNavigateAction extends Action2 {
   constructor(
     id: string,
     title: ILocalizedString,
-    key: string,
+    keys: readonly string[],
     private readonly _direction: 'up' | 'down' | 'left' | 'right',
   ) {
     super({
       id,
       title,
       category: CATEGORY,
-      keybinding: { primary: key, when: OUTLINE_FOCUS_WHEN, weight: OUTLINE_KEY_WEIGHT },
+      keybinding: keys.map((primary) => ({
+        primary,
+        when: OUTLINE_FOCUS_WHEN,
+        weight: OUTLINE_KEY_WEIGHT,
+      })),
       precondition: OUTLINE_FOCUS_WHEN,
     })
   }
@@ -59,7 +65,7 @@ export class OutlineNavigateUpAction extends OutlineNavigateAction {
     super(
       OutlineNavigateUpAction.ID,
       localize2('action.outline.navigateUp', 'Outline: Select Previous Item'),
-      'ctrl+p',
+      ['ctrl+p'],
       'up',
     )
   }
@@ -71,7 +77,7 @@ export class OutlineNavigateDownAction extends OutlineNavigateAction {
     super(
       OutlineNavigateDownAction.ID,
       localize2('action.outline.navigateDown', 'Outline: Select Next Item'),
-      'ctrl+n',
+      ['ctrl+n', 'ctrl+j'],
       'down',
     )
   }
@@ -83,7 +89,7 @@ export class OutlineNavigateLeftAction extends OutlineNavigateAction {
     super(
       OutlineNavigateLeftAction.ID,
       localize2('action.outline.navigateLeft', 'Outline: Collapse or Select Parent'),
-      'ctrl+b',
+      ['ctrl+b'],
       'left',
     )
   }
@@ -95,7 +101,7 @@ export class OutlineNavigateRightAction extends OutlineNavigateAction {
     super(
       OutlineNavigateRightAction.ID,
       localize2('action.outline.navigateRight', 'Outline: Expand or Select First Child'),
-      'ctrl+f',
+      ['ctrl+f'],
       'right',
     )
   }

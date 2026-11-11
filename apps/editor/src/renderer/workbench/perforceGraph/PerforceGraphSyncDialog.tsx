@@ -15,6 +15,7 @@ import { localize } from '@universe-editor/platform'
 import {
   FocusScopeOverlay,
   isHTMLElementLike,
+  useCtrlNavigationLayer,
   useOwnerDocument,
 } from '@universe-editor/workbench-ui'
 import type { P4GraphSyncScopeDto } from '@universe-editor/extensions-common'
@@ -75,15 +76,10 @@ export function PerforceGraphSyncDialog({
   const onDialogKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp' || e.key === 'Home' || e.key === 'End') {
       e.preventDefault()
-      const items = itemRefs.current
-      const current = items.findIndex((el) => el !== null && el === e.target)
-      const last = state.candidates.length
-      let next: number
-      if (e.key === 'Home') next = 0
-      else if (e.key === 'End') next = last
-      else if (e.key === 'ArrowDown') next = current < 0 ? 0 : Math.min(current + 1, last)
-      else next = current < 0 ? last : Math.max(current - 1, 0)
-      items[next]?.focus()
+      moveFocus(
+        e.target,
+        e.key === 'Home' ? 'home' : e.key === 'End' ? 'end' : e.key === 'ArrowDown' ? 'down' : 'up',
+      )
       return
     }
     // Toggle explicitly on keydown (preventDefault suppresses the native
@@ -103,6 +99,38 @@ export function PerforceGraphSyncDialog({
     }
     // Enter confirms from anywhere except the buttons (those activate natively).
     if (e.key === 'Enter' && !isButtonTarget(e.target)) confirm()
+  }
+
+  // Ctrl+P/N/J/K mirror ArrowUp/ArrowDown. The focused rows are checkboxes —
+  // editable targets — so the layer opts into editable focus; dialog priority
+  // keeps them ahead of any list underneath the modal.
+  useCtrlNavigationLayer({
+    kind: 'dialog',
+    allowEditableFocus: true,
+    enabled: doc !== undefined,
+    directions: ['up', 'down'],
+    onMove: (direction) =>
+      moveFocus(doc?.activeElement ?? null, direction === 'down' ? 'down' : 'up'),
+    ...(targetDocument !== undefined ? { targetDocument } : {}),
+  })
+
+  function moveFocus(target: EventTarget | null, move: 'up' | 'down' | 'home' | 'end'): void {
+    const items = itemRefs.current
+    const current = items.findIndex((el) => el !== null && el === target)
+    const last = state.candidates.length
+    const next =
+      move === 'home'
+        ? 0
+        : move === 'end'
+          ? last
+          : move === 'down'
+            ? current < 0
+              ? 0
+              : Math.min(current + 1, last)
+            : current < 0
+              ? last
+              : Math.max(current - 1, 0)
+    items[next]?.focus()
   }
 
   if (!doc) return null
