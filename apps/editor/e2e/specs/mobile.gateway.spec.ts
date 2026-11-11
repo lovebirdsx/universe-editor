@@ -1117,6 +1117,57 @@ test.describe('mobile gateway', () => {
         /^blob:/,
       )
       await expect(userMessage).not.toContainText('[包含附件]')
+
+      await userMessage.getByTestId('user-attachment-image-button').click()
+      await expect(phone.getByTestId('image-preview')).toBeVisible()
+      await expect(phone.getByTestId('image-preview-image')).toHaveAttribute('src', /^blob:/)
+      await expect
+        .poll(() =>
+          phone.evaluate(() => document.documentElement.classList.contains('is-scroll-locked')),
+        )
+        .toBe(true)
+      await phone.getByTestId('image-preview-close').click()
+      await expect(phone.getByTestId('image-preview')).toHaveCount(0)
+      await expect
+        .poll(() =>
+          phone.evaluate(() => document.documentElement.classList.contains('is-scroll-locked')),
+        )
+        .toBe(false)
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@p0 previews agent reply images on the phone', async ({ page, workbench }) => {
+    await startEchoSession(page, workbench)
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+      const input = phone.getByTestId('composer-input')
+
+      await input.fill('report-reply-image')
+      await phone.getByTestId('composer-send').click()
+
+      const acpImage = phone.getByTestId('message-image').last()
+      await expect(acpImage).toBeVisible({ timeout: 10_000 })
+      await expect(acpImage.locator('img')).toHaveAttribute('src', /^blob:/)
+      await acpImage.click()
+      await expect(phone.getByTestId('image-preview')).toBeVisible()
+      await expect(phone.getByTestId('image-preview-image')).toHaveAttribute('src', /^blob:/)
+      await phone.keyboard.press('Escape')
+      await expect(phone.getByTestId('image-preview')).toHaveCount(0)
+
+      await input.fill('report-markdown-image')
+      await phone.getByTestId('composer-send').click()
+
+      const markdownImage = phone.getByTestId('markdown-image').last()
+      await expect(markdownImage).toBeVisible({ timeout: 10_000 })
+      await expect(markdownImage.locator('img')).toHaveAttribute('src', /^data:image\/png/)
+      await markdownImage.click()
+      await expect(phone.getByTestId('image-preview')).toBeVisible()
+      await phone.getByTestId('image-preview-close').click()
+      await expect(phone.getByTestId('image-preview')).toHaveCount(0)
     } finally {
       await context.close()
       await browser.close()

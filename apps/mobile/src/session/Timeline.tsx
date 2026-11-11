@@ -9,6 +9,7 @@ import { MarkdownView } from '../markdown/MarkdownView.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { strings } from '../strings.js'
 import { MessageAttachments } from './MessageAttachments.js'
+import { MessageImages } from './MessageImages.js'
 import {
   getHiddenActivity,
   selectTimelineForDisplay,
@@ -28,7 +29,14 @@ export interface TimelineProps {
   readonly truncated: boolean
   /** Agent is running and no permission / elicitation is waiting on the user. */
   readonly active?: boolean | undefined
-  readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob' | 'serverNow'>
+  readonly client: Pick<
+    MobileClient,
+    | 'requestToolCallDetail'
+    | 'fetchAttachmentBlob'
+    | 'fetchMessageImageBlob'
+    | 'fetchWorkspaceImageBlob'
+    | 'serverNow'
+  >
   /** The agent supports rewind, so user messages with an anchor offer it. */
   readonly rewindAvailable?: boolean | undefined
   /** Side tasks can be created from any message with text. */
@@ -177,7 +185,13 @@ function TimelineItem({
   onOpenMessageActions,
 }: {
   readonly item: MobileTimelineItem
-  readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'fetchAttachmentBlob'>
+  readonly client: Pick<
+    MobileClient,
+    | 'requestToolCallDetail'
+    | 'fetchAttachmentBlob'
+    | 'fetchMessageImageBlob'
+    | 'fetchWorkspaceImageBlob'
+  >
   readonly rewindAvailable: boolean
   readonly sideTaskAvailable: boolean
   readonly onOpenMessageActions: ((item: MobileTimelineMessageItem) => void) | undefined
@@ -208,7 +222,10 @@ function MessageItem({
   onOpenMessageActions,
 }: {
   readonly item: MobileTimelineMessageItem
-  readonly client: Pick<MobileClient, 'fetchAttachmentBlob'>
+  readonly client: Pick<
+    MobileClient,
+    'fetchAttachmentBlob' | 'fetchMessageImageBlob' | 'fetchWorkspaceImageBlob'
+  >
   readonly rewindAvailable: boolean
   readonly sideTaskAvailable: boolean
   readonly onOpenMessageActions: ((item: MobileTimelineMessageItem) => void) | undefined
@@ -227,6 +244,9 @@ function MessageItem({
         {item.attachments !== undefined && item.attachments.length > 0 && (
           <MessageAttachments attachments={item.attachments} client={client} />
         )}
+        {item.images !== undefined && item.images.length > 0 && (
+          <MessageImages messageId={item.id} images={item.images} client={client} />
+        )}
         {item.text !== '' && <p className="message__text">{item.text}</p>}
         {item.hasNonText === true && <p className="muted-note">{strings.messageNonText}</p>}
         {showActions && (
@@ -238,7 +258,7 @@ function MessageItem({
       </div>
     )
   }
-  if (item.role === 'thought') return <ThoughtItem item={item} />
+  if (item.role === 'thought') return <ThoughtItem item={item} client={client} />
   const showActions =
     onOpenMessageActions !== undefined &&
     sideTaskAvailable &&
@@ -246,7 +266,10 @@ function MessageItem({
     item.text.trim() !== ''
   return (
     <div className="message message--agent" data-testid="agent-message">
-      <MarkdownView text={item.text} testId="agent-markdown" />
+      <MarkdownView text={item.text} testId="agent-markdown" imageLoader={client} />
+      {item.images !== undefined && item.images.length > 0 && (
+        <MessageImages messageId={item.id} images={item.images} client={client} />
+      )}
       {item.hasNonText === true && <p className="muted-note">{strings.messageNonText}</p>}
       {item.streaming && <span className="streaming-cursor" aria-hidden="true" />}
       {showActions && (
@@ -279,7 +302,13 @@ function MessageActionsButton({
   )
 }
 
-function ThoughtItem({ item }: { readonly item: MobileTimelineMessageItem }) {
+function ThoughtItem({
+  item,
+  client,
+}: {
+  readonly item: MobileTimelineMessageItem
+  readonly client: Pick<MobileClient, 'fetchMessageImageBlob' | 'fetchWorkspaceImageBlob'>
+}) {
   const [expanded, setExpanded] = useState(false)
   return (
     <section className="thought" data-testid="thought-item">
@@ -300,7 +329,10 @@ function ThoughtItem({ item }: { readonly item: MobileTimelineMessageItem }) {
       </button>
       {expanded && (
         <div className="thought__body">
-          <MarkdownView text={item.text} />
+          <MarkdownView text={item.text} imageLoader={client} />
+          {item.images !== undefined && item.images.length > 0 && (
+            <MessageImages messageId={item.id} images={item.images} client={client} />
+          )}
         </div>
       )}
     </section>

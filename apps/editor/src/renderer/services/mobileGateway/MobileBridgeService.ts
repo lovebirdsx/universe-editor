@@ -12,6 +12,7 @@ import {
   Disposable,
   Emitter,
   IEditorGroupsService,
+  IFileService,
   ILoggerService,
   IUriIdentityService,
   IWorkspaceService,
@@ -26,11 +27,15 @@ import {
   clampText,
   isConfigValueAllowedOnMobile,
   isHighRiskPermissionOption,
+  isPreviewableImageMimeType,
   MAX_HISTORY_PROMPT_LENGTH,
   MAX_ID_LENGTH,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_IMAGE_INDEX,
   MAX_SIDE_TASK_QUOTE_LENGTH,
   MAX_TEXT_LENGTH,
   MAX_TITLE_LENGTH,
+  MAX_WORKSPACE_IMAGE_BYTES,
   MAX_WORKSPACE_NAME_LENGTH,
   type MobileAgentCandidate,
   type MobileElicitationAction,
@@ -41,7 +46,11 @@ import {
   type MobileWorkspaceCandidate,
   type MobileToolCallDetail,
 } from '@universe-editor/mobile-protocol'
-import { truncateDiffSideText, truncateToolTextBlock } from '@universe-editor/acp-view-model'
+import {
+  MEDIA_TRUNCATED_META_KEY,
+  truncateDiffSideText,
+  truncateToolTextBlock,
+} from '@universe-editor/acp-view-model'
 import { isResumableHistoryEntry } from '../../../shared/mobileGateway/sessionHistoryFilter.js'
 import type {
   MobileBridgeAttentionEvent,
@@ -55,6 +64,7 @@ import type {
   MobileBridgeSessionHistoryEntry,
   MobileBridgeSessionSnapshot,
   MobileBridgeSessionSummary,
+  MobileBridgeImage,
   IMobileBridgeService,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import { AcpForeignWorktreeError, IAcpSessionService } from '../acp/session/acpSessionService.js'
@@ -78,7 +88,7 @@ import type {
   IAcpSession,
 } from '../acp/session/acpSession.js'
 import { IAcpAgentRegistry } from '../acp/acpAgentRegistry.js'
-import type { PromptImage } from '../acp/promptImage.js'
+import { mimeTypeForFileName, type PromptImage } from '../acp/promptImage.js'
 import type { PromptFileAttachment } from '../acp/promptAttachment.js'
 import { IUserSettingsSyncService } from '../configuration/UserSettingsSync.js'
 import { selectOptionHasValue } from '../acp/configOptionLabel.js'
@@ -100,6 +110,15 @@ import {
   type PermissionClearMetadata,
   type SessionProjectionOptions,
 } from './mobileBridgeProjection.js'
+import {
+  decodeBase64Bytes,
+  imagePathToUri,
+  isPathUnderAnyRoot,
+  resolveImageRoots,
+  resolveMarkdownImageCandidates,
+  type MobileImagePathContext,
+  type ResolvedImagePath,
+} from './mobileImagePath.js'
 
 /** Coalescing window for ordinary session updates. */
 export const MOBILE_BRIDGE_THROTTLE_MS = 50
@@ -154,6 +173,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
     @IScmService private readonly _scm: IScmService,
+    @IFileService private readonly _files: IFileService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -344,6 +364,105 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
         ? { locations: call.locations.slice(0, 256) }
         : {}),
       ...(call.memoryTrimmed ? { memoryTrimmed: true } : {}),
+    }
+  }
+
+  async getMessageImage(
+    localId: string,
+    messageId: string,
+    index: number,
+  ): Promise<MobileBridgeImage | undefined> {
+    if (!Number.isInteger(index) || index < 0 || index > MAX_MESSAGE_IMAGE_INDEX) return undefined
+    const session = this._sessions.getById(localId)
+    if (session === undefined) return undefined
+    const message = session.messages.get().find((candidate) => candidate.id === messageId)
+    if (message === undefined) return undefined
+    let ordinal = 0
+    for (const block of message.blocks) {
+      if (block.type !== 'image') continue
+      if (ordinal++ !== index) continue
+      // The phone already owns attachments it uploaded; they are served by the
+      // attachment store, and a truncated block has no bytes left to serve.
+      if (block._meta?.['mobileAttachment'] !== undefined) return undefined
+      if (block._meta?.[MEDIA_TRUNCATED_META_KEY] === true) return undefined
+      const mimeType = block.mimeType.toLowerCase()
+      if (!isPreviewableImageMimeType(mimeType)) return undefined
+      const bytes = decodeBase64Bytes(block.data, MAX_MESSAGE_IMAGE_BYTES)
+      return bytes === undefined ? undefined : { mimeType, bytes }
+    }
+    return undefined
+  }
+
+  async getWorkspaceImage(localId: string, src: string): Promise<MobileBridgeImage | undefined> {
+    const session = this._sessions.getById(localId)
+    if (session === undefined) return undefined
+    const context: MobileImagePathContext = {
+      cwd: session.cwd,
+      authority: session.authority,
+      workspaceFolder: this._workspace.current?.folder,
+      identity: this._uriIdentity,
+    }
+    const candidates = resolveMarkdownImageCandidates(src, context)
+    if (candidates.length === 0) return undefined
+    const roots = resolveImageRoots(context)
+    for (const candidate of candidates) {
+      const image = await this._readWorkspaceImage(candidate, roots, context)
+      if (image !== undefined) return image
+    }
+    return undefined
+  }
+
+  private async _readWorkspaceImage(
+    candidate: ResolvedImagePath,
+    roots: readonly string[],
+    context: MobileImagePathContext,
+  ): Promise<MobileBridgeImage | undefined> {
+    let resource = candidate.uri
+    const realpath = this._files.realpath?.bind(this._files)
+    if (realpath !== undefined) {
+      try {
+        resource = await realpath(resource)
+      } catch (err) {
+        this._logger.debug(`mobile image realpath failed: ${String(err)}`)
+        return undefined
+      }
+      // A symlink may point outside the roots; re-run the allow-list on the
+      // real path. The root itself may live behind a symlink, so fall back to
+      // comparing against the roots' real paths before rejecting.
+      if (!isPathUnderAnyRoot(resource.fsPath, roots, context.identity)) {
+        let underRealRoot = false
+        for (const root of roots) {
+          try {
+            const realRoot = await realpath(imagePathToUri(root, context.authority))
+            if (isPathUnderAnyRoot(resource.fsPath, [realRoot.fsPath], context.identity)) {
+              underRealRoot = true
+              break
+            }
+          } catch {
+            continue
+          }
+        }
+        if (!underRealRoot) return undefined
+      }
+    }
+    let size: number
+    try {
+      const stat = await this._files.stat(resource)
+      if (!stat.isFile) return undefined
+      size = stat.size
+    } catch {
+      return undefined
+    }
+    if (size <= 0 || size > MAX_WORKSPACE_IMAGE_BYTES) return undefined
+    const mimeType = mimeTypeForFileName(resource.path) || candidate.mimeType
+    if (mimeType === '' || !isPreviewableImageMimeType(mimeType)) return undefined
+    try {
+      const bytes = await this._files.readFile(resource)
+      if (bytes.byteLength === 0 || bytes.byteLength > MAX_WORKSPACE_IMAGE_BYTES) return undefined
+      return { mimeType, bytes }
+    } catch (err) {
+      this._logger.debug(`mobile image read failed: ${String(err)}`)
+      return undefined
     }
   }
 

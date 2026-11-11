@@ -389,6 +389,16 @@ export interface MobileBridgeNewSessionWorkspace {
 }
 
 /**
+ * Raw image bytes for the gateway's session-image endpoints. Main proxies the
+ * request to the renderer and writes the bytes to the HTTP response; they never
+ * travel over the WebSocket.
+ */
+export interface MobileBridgeImage {
+  readonly mimeType: string
+  readonly bytes: Uint8Array
+}
+
+/**
  * One phone-uploaded attachment resolved by main for the authenticated device.
  * Images carry raw base64 (they become ACP `image` blocks); files carry a
  * `file:` URI that the agent reads from the PC (they become `resource_link`s).
@@ -479,6 +489,21 @@ export interface IMobileBridgeService {
 
   /** Full tool-call body; undefined when the session/tool call is gone. */
   getToolCallDetail(localId: string, toolCallId: string): Promise<MobileToolCallDetail | undefined>
+
+  /** The `index`-th ACP image block of a message; undefined when unavailable. */
+  getMessageImage(
+    localId: string,
+    messageId: string,
+    index: number,
+    token?: CancellationToken,
+  ): Promise<MobileBridgeImage | undefined>
+
+  /** A markdown-referenced workspace file image, resolved against the session cwd. */
+  getWorkspaceImage(
+    localId: string,
+    src: string,
+    token?: CancellationToken,
+  ): Promise<MobileBridgeImage | undefined>
 
   // ---- Mutating commands (M3) -------------------------------------------------
 

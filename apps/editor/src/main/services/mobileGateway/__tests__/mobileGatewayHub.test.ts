@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   IMobileBridgeService,
   MobileBridgeEvent,
+  MobileBridgeImage,
   MobileBridgeNewSessionResult,
   MobileBridgeResult,
   MobileBridgeSessionEvent,
@@ -60,6 +61,8 @@ class FakeBridge implements IMobileBridgeService {
   )
   readonly getSnapshot = vi.fn(async (localId: string) => this.snapshots.get(localId))
   readonly getToolCallDetail = vi.fn(async () => this.detail)
+  readonly getMessageImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
+  readonly getWorkspaceImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
   readonly ping = vi.fn(async () => 'pong' as const)
   readonly getWorkspaceGitDirty = vi.fn(async (): Promise<boolean | undefined> => undefined)
   readonly sendPrompt = vi.fn(async () => ({ ok: true as const, value: undefined }))
@@ -2943,5 +2946,27 @@ describe('MobileGatewayHub attachment resolution', () => {
 
     const frame = framesOf(connection, 'session_snapshot')[0]
     expect(frame?.session.summary.imageSupported).toBe(true)
+  })
+
+  it('reads image bytes through the owning window bridge', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    const image = { mimeType: 'image/png', bytes: new Uint8Array([1, 2, 3]) }
+    bridge.getMessageImage.mockResolvedValue(image)
+    bridge.getWorkspaceImage.mockResolvedValue(image)
+    hub.registerWindow(1, bridge)
+
+    const ref: MobileSessionRef = { windowId: 1, localId: 's1', durableId: 'd1' }
+    await expect(hub.readSessionImage(ref, 'm1', 0)).resolves.toEqual(image)
+    expect(bridge.getMessageImage).toHaveBeenCalledWith('s1', 'm1', 0, expect.anything())
+
+    await expect(hub.readSessionWorkspaceImage(ref, 'img/a.png')).resolves.toEqual(image)
+    expect(bridge.getWorkspaceImage).toHaveBeenCalledWith('s1', 'img/a.png', expect.anything())
+
+    await expect(
+      hub.readSessionImage({ windowId: 9, localId: 's1' }, 'm1', 0),
+    ).resolves.toBeUndefined()
+    await expect(hub.readSessionWorkspaceImage(ref, 'missing.png')).resolves.toEqual(image)
   })
 })

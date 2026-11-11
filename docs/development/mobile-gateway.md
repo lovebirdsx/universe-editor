@@ -87,16 +87,16 @@ main 侧不直接读 `AcpSession`。
 
 **数据源**（全部来自 renderer 现有 observable）：
 
-| 数据                   | 来源                                                                      |
-| ---------------------- | ------------------------------------------------------------------------- |
-| 会话集合与活跃会话     | `IAcpSessionService.sessions` / `activeSession`                           |
-| 时间线、消息、工具调用 | `IAcpSession.timeline` / `messages` / `toolCalls`                         |
-| 计划                   | `IAcpSession.plan`                                                        |
-| 状态与展示状态         | `status` + `computeSessionDisplayStatus`（`session/acpSessionStatus.ts`） |
-| 待审批 / 待提问        | `pendingPermission` / `pendingElicitation`                                |
-| 配置、用量、只读、路径 | `configOptions` / `usage` / `readOnly` / `cwd` / `authority`              |
+| 数据                   | 来源                                                                        |
+| ---------------------- | --------------------------------------------------------------------------- |
+| 会话集合与活跃会话     | `IAcpSessionService.sessions` / `activeSession`                             |
+| 时间线、消息、工具调用 | `IAcpSession.timeline` / `messages` / `toolCalls`                           |
+| 计划                   | `IAcpSession.plan`                                                          |
+| 状态与展示状态         | `status` + `computeSessionDisplayStatus`（`session/acpSessionStatus.ts`）   |
+| 待审批 / 待提问        | `pendingPermission` / `pendingElicitation`                                  |
+| 配置、用量、只读、路径 | `configOptions` / `usage` / `readOnly` / `cwd` / `authority`                |
 | 斜杠指令               | `IAcpSession.availableCommands`（agent 通告的 `available_commands_update`） |
-| 收件箱分组             | `statusBucketFor`（`session/acpSessionFilterService.ts`）                 |
+| 收件箱分组             | `statusBucketFor`（`session/acpSessionFilterService.ts`）                   |
 
 `statusBucketFor` 已把展示状态折叠为四档，正好对应收件箱四组：
 `input_needed` → 待审批，`in_progress` → 运行中，`completed` → 已完成，`failed` → 出错。
@@ -136,7 +136,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 11`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 12`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -149,7 +149,10 @@ main 侧不直接读 `AcpSession`。
 `device_trust_changed` 帧；v10 让会话目录覆盖最近工作区：`MobileSessionHistoryEntry.windowId`
 改为可选并新增 `folder?`，`openSession` payload 新增 `folder?` / `authority?`，网关在目标工作区
 未打开时先自动开窗再恢复；v11 增加 agent 斜杠指令：快照 `availableCommands` 与
-`available_commands_snapshot` 增量，供手机输入 `/` 时做内联补全）。
+`available_commands_snapshot` 增量，供手机输入 `/` 时做内联补全；v12 增加消息图片：
+`MobileTimelineMessageItem.images?` / `MobileMessageUpsertEvent.images?` 只下发
+`{ index, mimeType, size, truncated? }` 元数据，字节经同源 HTTP `/api/sessions/image` 与
+`/api/sessions/file` 按需读取（见 §7b））。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
@@ -256,15 +259,15 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 **M2 快照与增量事件**：
 
 - `MobileSessionSnapshot { seq, summary, timeline, plan, configOptions, availableCommands,
-  usage?, pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
+usage?, pendingPermission?, pendingElicitation?, isReplayingHistory, truncated? }`。
 - `summary` 含 `ref / agentId / agentName? / title / status / displayStatus / bucket /
 workspaceName / cwd? / authority? / readOnly / hasPendingPermission /
 hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会话最近活动时间，
   取会话历史的 `lastUsedAt`，不是快照生成时刻）；v6 增加可选
   `forkSupported / rewindSupported`（agent 能力位）与 `sideTaskOf`（父会话 durable id）/
   `sideTaskChildCount`（直接子任务数）。
-- `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`、`attachments?`；v6 对 user
-  消息额外带 SDK 锚点 `messageId` 与 `canFork`）/ `toolCall`
+- `timeline` 为判别联合：`message`（正文、`streaming`、`hasNonText`、`attachments?`、
+  `images?`；v6 对 user 消息额外带 SDK 锚点 `messageId` 与 `canFork`）/ `toolCall`
   （`toolKind`、`status`、preview、diff 增删行数；可带 `subagent` / `requiresUserDecision`
   标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片；v8 另带可选的
   `startedAt` / `durationMs` / `settleReason` / `syntheticDenial`，用于底部当前进展行的
@@ -281,8 +284,8 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
 - v3 的 `MobilePendingPermission` 带 `requestId`、每个选项带 `allowedOnMobile`，并可能带
   `autoResolve { optionId, deadlineAt?, paused }`；`permission_cleared` 带
   `{ requestId, reason, source }`，让手机区分 PC / 手机 / 自动执行与「被新请求取代」。
-- `message_upsert.attachments` 缺省表示不变、`[]` 表示清空；`hasNonText` 只表示未被
-  `attachments` 表达的非 text block（避免缩略图与「[包含附件]」占位重复）。
+- `message_upsert.attachments` / `images` 缺省表示不变、`[]` 表示清空；`hasNonText` 只表示未被
+  `attachments` / `images` 表达的非 text block（避免缩略图与「[包含附件]」占位重复）。
 - `summary_changed` 比较时忽略 `updatedAt`，避免每次合帧都发；`usage` 只在快照下发。
 
 **错误码**
@@ -542,6 +545,42 @@ pending，手机可用同一 id 重发（幂等键保证不重复发 prompt）�
 
 **已知限制**：附件元数据只活在当前 PC 会话内存；PC 重启或会话重放后，旧消息不再有缩略图 /
 文件卡（正文仍在）。附件目录随网关启动清空，不支持跨重启下载。
+
+## 7b. 会话图片读取（协议 v12）
+
+时间线里的**用户上传图片**仍走 `/api/attachments/:id`；v12 新增两类「本来就在 PC 会话里」的图片：
+Agent 回复中的 ACP `image` block，以及 markdown 引用的 PC 工作区本地图片。它们没有附件 id，
+也不该把 base64 塞进 WS，因此按需经同源 HTTP 读取：
+
+| 方法           | 路径                                                 | 说明                                        |
+| -------------- | ---------------------------------------------------- | ------------------------------------------- |
+| `GET` / `HEAD` | `/api/sessions/image?windowId&localId&message&index` | 读取指定消息内第 `index` 个 ACP image block |
+| `GET` / `HEAD` | `/api/sessions/file?windowId&localId&path`           | 读取会话工作区内被 markdown 引用的图片文件  |
+
+两个端点都要求 Bearer 设备 token，非 `GET` / `HEAD` 返回 405；参数按严格十进制整数 / 长度上限校验，
+失败 400；找不到会话、消息、文件或越界统一 404 `attachment_not_found`（不泄露路径是否存在）。
+响应只允许 `image/png|jpeg|webp|gif`（SVG 明确排除），带 `Content-Type` / `Content-Length` /
+`Content-Disposition: inline` / `Cache-Control: no-store`，`HEAD` 不发送 body。
+
+**`index` 语义**：消息内所有 image block（包含 `_meta.mobileAttachment` 的手机上传图）的 0-based
+序号。投影时手机上传图仍归入 `attachments`，不会重复出现；`images` 只列剩余可预览的 block，
+但保留原始序号，桥按同一规则扫描定位。`data` 为空或带 `_meta['universe-editor/truncated']` 的
+block 标记 `truncated: true`，手机显示占位且不发请求。单条消息最多投影 24 张，单图上限 8MB。
+
+**路径安全**（`mobileImagePath.ts`）：相对路径以 `session.cwd` 为基准，只允许 `cwd` 与同 host 的
+工作区根之下；本地会话构造 `file:`，远程会话构造 `remote-ssh://<authority>/<path>`，绝不回退本地
+`file:`。拒绝 NUL、UNC（`\\` / `//`）、盘符相对路径、其他 scheme 与超长 src；带 percent 编码的
+相对路径会尝试解码变体。读取前做词法越界检查，随后 `realpath` 复核（允许工作区根本身是符号链接，
+按 real root 比较），再校验 `stat.isFile` 与 0 < size ≤ 16MB；MIME 以文件扩展名优先、block 声明兜底。
+
+**CSP 与远程图片**：`img-src` 扩为 `'self' data: blob: https: http:`。markdown 的 `data:` 小图与
+Agent 直接给出的 `http(s)` 外链由手机浏览器直接加载——PC 不代理远程图片（避免 SSRF），代价是手机
+会向第三方地址发起请求并暴露 IP；HTTPS 页面上的 `http://` 图片还可能被混合内容策略拦截，属预期。
+工作区路径不会进入 `<img src>`，必须先经 `/api/sessions/file` 换成分 blob URL。
+
+**已知限制**：工具调用详情（`ToolCallDetail`）里的图片不在本次范围；多图画廊、保存 / 分享、
+SVG 预览未提供。流式期间 `message.id` 稳定，resume 后可能重编号，正在进行的图片请求会 404，
+重挂载后按新 id 重新拉取即可。
 
 ## 8. 配对与安全
 
@@ -924,6 +963,10 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 - 附件：`mobileAttachmentStore` / `attachmentNames` / 网关 HTTP API 单测覆盖配额、TTL、设备隔离、
   越权与 413；`mobile.gateway.spec.ts` 的 `@p0` 用例从手机 UI 上传图片 + 文件，断言 PC 收到
   image / resource_link block 且手机时间线出现缩略图与文件卡。
+- 会话图片：`mobileImagePath` 纯函数单测覆盖相对 / 绝对 / `file:` / UNC / 越界 / remote-ssh 映射；
+  `MobileBridgeService` 覆盖 image ordinal、mobileAttachment 跳过、truncated、MIME 白名单、realpath
+  与符号链接根；网关 HTTP 单测覆盖鉴权、参数校验、HEAD、响应头与 CSP；`mobile.gateway.spec.ts`
+  另断言用户附件缩略图与 Agent ACP / markdown `data:` 图片都能打开全屏预览（含滚动锁与关闭）。
 
 ## 12. 里程碑
 

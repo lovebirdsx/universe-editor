@@ -50,6 +50,8 @@
  *                                          the synthetic "Saved Explore result" card
  *                                          backed by a real markdown file in tmp
  *    - report-mcp-servers / report-cwd   → echoes session/new params
+ *    - report-reply-image                → emits one ACP image block as the reply
+ *    - report-markdown-image             → emits a data-URI markdown image
  *    - elicit-form                       → sends elicitation/create (form mode),
  *                                          echoes the user's response
  *    - elicit-url                        → sends elicitation/create (url mode),
@@ -1077,6 +1079,35 @@ async function runPrompt(id, params) {
       update: {
         sessionUpdate: 'agent_message_chunk',
         content: { type: 'text', text: JSON.stringify(blocks) },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "report-reply-image" emits one ACP image block (without
+  // mobileAttachment meta) so E2E can assert agent images render and preview on
+  // the phone through the session image endpoint.
+  if (userText === 'report-reply-image') {
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'image', mimeType: 'image/png', data: PNG_BASE64 },
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "report-markdown-image" emits a data-URI markdown image so
+  // E2E can assert inline images render and preview without a workspace read.
+  if (userText === 'report-markdown-image') {
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: `![demo](data:image/png;base64,${PNG_BASE64})` },
       },
     })
     activeTurns.delete(sessionId)

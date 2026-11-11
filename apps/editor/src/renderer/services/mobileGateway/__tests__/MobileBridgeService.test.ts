@@ -15,6 +15,8 @@ import {
   URI,
   UriIdentityService,
   type IEditorGroupsService,
+  type IFileService,
+  type IFileStat,
   type ILogger,
   type ILoggerService,
   type ISettableObservable,
@@ -84,6 +86,7 @@ function makeSession(
     title?: string
     readOnly?: boolean
     authority?: string
+    cwd?: string
     forkSupported?: boolean
     rewindSupported?: boolean
   } = {},
@@ -122,7 +125,7 @@ function makeSession(
     id,
     agentId: 'fake',
     title: options.title ?? `Session ${id}`,
-    cwd: '/workspace/demo',
+    cwd: options.cwd ?? '/workspace/demo',
     authority: options.authority,
     readOnly: options.readOnly ?? false,
     timeline,
@@ -211,7 +214,7 @@ function toolCall(overrides: Partial<AcpToolCall> = {}): AcpToolCall {
   }
 }
 
-function makeHarness(): {
+function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   service: MobileBridgeService
   sessions: ISettableObservable<readonly IAcpSession[]>
   history: ISettableObservable<readonly AcpSessionHistoryEntry[]>
@@ -226,6 +229,7 @@ function makeHarness(): {
   workspace: { current: { folder: URI; name: string } | null }
   userSettings: { whenInitialized: Promise<void> }
   scmSourceControls: ISettableObservable<readonly IScmSourceControlModel[]>
+  files: IFileService
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
@@ -279,6 +283,19 @@ function makeHarness(): {
     [],
   )
   const scm = { sourceControls: scmSourceControls } as unknown as IScmService
+  const files = {
+    stat: vi.fn(
+      async (resource: URI): Promise<IFileStat> => ({
+        resource,
+        isFile: true,
+        isDirectory: false,
+        size: 3,
+        mtime: 0,
+      }),
+    ),
+    readFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
+    ...filesOverrides,
+  } as unknown as IFileService
   const service = new MobileBridgeService(
     sessionService,
     historyService,
@@ -288,6 +305,7 @@ function makeHarness(): {
     editorGroups,
     userSettings,
     scm,
+    files,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
@@ -307,6 +325,7 @@ function makeHarness(): {
     workspace: workspace as unknown as { current: { folder: URI; name: string } | null },
     userSettings,
     scmSourceControls,
+    files,
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -1948,5 +1967,201 @@ describe('MobileBridgeService workspace git state', () => {
     const harness = makeHarness()
     harness.scmSourceControls.set([sourceControl('perforce', 5)], undefined)
     await expect(harness.service.getWorkspaceGitDirty()).resolves.toBeUndefined()
+  })
+})
+
+describe('MobileBridgeService image bytes', () => {
+  function imageMessage(blocks: AcpMessage['blocks'], id = 'm1'): AcpMessage {
+    return { id, role: 'agent', text: '', blocks, streaming: false }
+  }
+
+  it('returns bytes for the requested ACP image ordinal', async () => {
+    const harness = makeHarness()
+    const session = makeSession('s1')
+    session.messages.set(
+      [
+        imageMessage([
+          { type: 'text', text: 'hi' },
+          { type: 'image', data: 'AQID', mimeType: 'image/png' },
+          { type: 'image', data: 'BAUG', mimeType: 'image/jpeg' },
+        ]),
+      ],
+      undefined,
+    )
+    harness.add(session)
+
+    await expect(harness.service.getMessageImage('s1', 'm1', 1)).resolves.toEqual({
+      mimeType: 'image/jpeg',
+      bytes: new Uint8Array([4, 5, 6]),
+    })
+    await expect(harness.service.getMessageImage('s1', 'm1', 2)).resolves.toBeUndefined()
+    await expect(harness.service.getMessageImage('missing', 'm1', 0)).resolves.toBeUndefined()
+    await expect(harness.service.getMessageImage('s1', 'missing', 0)).resolves.toBeUndefined()
+    await expect(harness.service.getMessageImage('s1', 'm1', -1)).resolves.toBeUndefined()
+  })
+
+  it('does not serve phone attachments, truncated payloads or unsupported types', async () => {
+    const harness = makeHarness()
+    const session = makeSession('s1')
+    session.messages.set(
+      [
+        imageMessage([
+          {
+            type: 'image',
+            data: 'AQID',
+            mimeType: 'image/png',
+            _meta: {
+              mobileAttachment: {
+                id: 'att-1',
+                kind: 'image',
+                name: 'shot.png',
+                mimeType: 'image/png',
+                size: 3,
+              },
+            },
+          },
+          {
+            type: 'image',
+            data: '',
+            mimeType: 'image/png',
+            _meta: { 'universe-editor/truncated': true },
+          },
+          { type: 'image', data: 'AQID', mimeType: 'image/svg+xml' },
+          { type: 'image', data: 'not base64!', mimeType: 'image/png' },
+        ]),
+      ],
+      undefined,
+    )
+    harness.add(session)
+
+    for (let index = 0; index < 4; index++) {
+      await expect(harness.service.getMessageImage('s1', 'm1', index)).resolves.toBeUndefined()
+    }
+  })
+
+  it('resolves a relative workspace image against the session cwd', async () => {
+    const harness = makeHarness()
+    const session = makeSession('s1')
+    harness.add(session)
+
+    await expect(harness.service.getWorkspaceImage('s1', 'images/shot.png')).resolves.toEqual({
+      mimeType: 'image/png',
+      bytes: new Uint8Array([1, 2, 3]),
+    })
+    expect(vi.mocked(harness.files.readFile).mock.calls[0]?.[0].toString()).toBe(
+      'file:///workspace/demo/images/shot.png',
+    )
+  })
+
+  it('tries the percent-decoded variant when the literal path is missing', async () => {
+    const harness = makeHarness({
+      readFile: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('ENOENT'))
+        .mockResolvedValueOnce(new Uint8Array([7])),
+    })
+    const session = makeSession('s1')
+    harness.add(session)
+
+    await expect(harness.service.getWorkspaceImage('s1', 'images/my%20shot.png')).resolves.toEqual({
+      mimeType: 'image/png',
+      bytes: new Uint8Array([7]),
+    })
+    expect(vi.mocked(harness.files.readFile).mock.calls[1]?.[0].toString()).toBe(
+      'file:///workspace/demo/images/my%20shot.png',
+    )
+  })
+
+  it('rejects escapes, other schemes, remote file: paths and unsupported roots', async () => {
+    const harness = makeHarness()
+    const session = makeSession('s1')
+    harness.add(session)
+
+    await expect(
+      harness.service.getWorkspaceImage('s1', '../../etc/passwd.png'),
+    ).resolves.toBeUndefined()
+    await expect(
+      harness.service.getWorkspaceImage('s1', '/tmp/outside.png'),
+    ).resolves.toBeUndefined()
+    await expect(
+      harness.service.getWorkspaceImage('s1', '\\\\server\\share\\x.png'),
+    ).resolves.toBeUndefined()
+    await expect(
+      harness.service.getWorkspaceImage('s1', 'https://example.com/x.png'),
+    ).resolves.toBeUndefined()
+    await expect(
+      harness.service.getWorkspaceImage('s1', 'file:///tmp/outside.png'),
+    ).resolves.toBeUndefined()
+    await expect(harness.service.getWorkspaceImage('s1', 'notes.txt')).resolves.toBeUndefined()
+    await expect(harness.service.getWorkspaceImage('missing', 'shot.png')).resolves.toBeUndefined()
+  })
+
+  it('builds remote-ssh resources for remote sessions', async () => {
+    const harness = makeHarness()
+    const session = makeSession('remote', {
+      authority: 'ssh-remote+host',
+      cwd: '/home/dev/proj',
+    })
+    harness.add(session)
+
+    await expect(harness.service.getWorkspaceImage('remote', 'img/shot.png')).resolves.toEqual({
+      mimeType: 'image/png',
+      bytes: new Uint8Array([1, 2, 3]),
+    })
+    expect(vi.mocked(harness.files.readFile).mock.calls[0]?.[0].toString()).toBe(
+      'remote-ssh://ssh-remote+host/home/dev/proj/img/shot.png',
+    )
+    await expect(
+      harness.service.getWorkspaceImage('remote', 'file:///home/dev/proj/img/shot.png'),
+    ).resolves.toBeUndefined()
+  })
+
+  it('rejects oversized files before reading them', async () => {
+    const harness = makeHarness({
+      stat: vi.fn(async (resource: URI) => ({
+        resource,
+        isFile: true,
+        isDirectory: false,
+        size: 17 * 1024 * 1024,
+        mtime: 0,
+      })),
+    })
+    const session = makeSession('s1')
+    harness.add(session)
+
+    await expect(harness.service.getWorkspaceImage('s1', 'shot.png')).resolves.toBeUndefined()
+    expect(vi.mocked(harness.files.readFile)).not.toHaveBeenCalled()
+  })
+
+  it('re-checks the real path so symlinks cannot escape the cwd', async () => {
+    const harness = makeHarness({
+      realpath: vi.fn(async (uri: URI) =>
+        uri.fsPath.endsWith('.png') ? URI.file('/etc/passwd.png') : uri,
+      ),
+    })
+    const session = makeSession('s1')
+    harness.add(session)
+
+    await expect(harness.service.getWorkspaceImage('s1', 'shot.png')).resolves.toBeUndefined()
+  })
+
+  it('allows a symlinked cwd when the real paths still nest', async () => {
+    const harness = makeHarness({
+      realpath: vi.fn(async (uri: URI) => {
+        if (uri.fsPath === '/workspace/demo') return URI.file('/mnt/real')
+        if (uri.fsPath === '/workspace/demo/shot.png') return URI.file('/mnt/real/shot.png')
+        return uri
+      }),
+    })
+    const session = makeSession('s1')
+    harness.add(session)
+
+    await expect(harness.service.getWorkspaceImage('s1', 'shot.png')).resolves.toEqual({
+      mimeType: 'image/png',
+      bytes: new Uint8Array([1, 2, 3]),
+    })
+    expect(vi.mocked(harness.files.readFile).mock.calls[0]?.[0].toString()).toBe(
+      'file:///mnt/real/shot.png',
+    )
   })
 })

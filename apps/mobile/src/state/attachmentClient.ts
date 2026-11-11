@@ -3,11 +3,14 @@ import {
   MOBILE_ATTACHMENT_NAME_HEADER,
   MOBILE_ATTACHMENT_PATH_PREFIX,
   MOBILE_ATTACHMENT_UPLOAD_PATH,
+  MOBILE_SESSION_FILE_PATH,
+  MOBILE_SESSION_IMAGE_PATH,
   isMobileAttachmentKind,
   isMobileErrorCode,
   type MobileAttachmentKind,
   type MobileAttachmentUploadResult,
   type MobileMessageAttachment,
+  type MobileSessionRef,
 } from '@universe-editor/mobile-protocol'
 import { CommandError } from './commandClient.js'
 
@@ -83,16 +86,32 @@ export class AttachmentClient {
   }
 
   async fetchBlob(attachment: Pick<MobileMessageAttachment, 'id'>): Promise<Blob> {
+    return this._fetchBlob(`${MOBILE_ATTACHMENT_PATH_PREFIX}${encodeURIComponent(attachment.id)}`)
+  }
+
+  /** Bytes of one ACP image block of the open session's message. */
+  async fetchSessionImage(ref: MobileSessionRef, messageId: string, index: number): Promise<Blob> {
+    return this._fetchBlob(MOBILE_SESSION_IMAGE_PATH, {
+      ...refQuery(ref),
+      message: messageId,
+      index: String(index),
+    })
+  }
+
+  /** Bytes of a markdown-referenced workspace image, resolved on the PC. */
+  async fetchWorkspaceImage(ref: MobileSessionRef, src: string): Promise<Blob> {
+    return this._fetchBlob(MOBILE_SESSION_FILE_PATH, { ...refQuery(ref), path: src })
+  }
+
+  private async _fetchBlob(pathname: string, params?: Record<string, string>): Promise<Blob> {
+    const query = params === undefined ? '' : `?${new URLSearchParams(params).toString()}`
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this._downloadTimeoutMs)
     try {
-      const response = await this._fetch(
-        `${this._origin}${MOBILE_ATTACHMENT_PATH_PREFIX}${encodeURIComponent(attachment.id)}`,
-        {
-          headers: { Authorization: `Bearer ${this._token}` },
-          signal: controller.signal,
-        },
-      )
+      const response = await this._fetch(`${this._origin}${pathname}${query}`, {
+        headers: { Authorization: `Bearer ${this._token}` },
+        signal: controller.signal,
+      })
       if (!response.ok) throw await this._errorFromResponse(response)
       return await response.blob()
     } catch (err) {
@@ -136,6 +155,14 @@ export class AttachmentClient {
       if (name === 'AbortError') return new CommandError('timeout', 'attachment request timed out')
     }
     return new CommandError('network', 'attachment request failed')
+  }
+}
+
+function refQuery(ref: MobileSessionRef): Record<string, string> {
+  return {
+    windowId: String(ref.windowId),
+    localId: ref.localId,
+    ...(ref.durableId !== undefined ? { durableId: ref.durableId } : {}),
   }
 }
 

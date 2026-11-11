@@ -177,4 +177,69 @@ describe('AttachmentClient download', () => {
       }),
     )
   })
+
+  it('fetches session image bytes with the ref, message and index', async () => {
+    const fetchImpl = vi.fn(
+      async (..._args: Parameters<typeof fetch>) =>
+        new Response(new Uint8Array([4, 5]), { headers: { 'content-type': 'image/png' } }),
+    )
+    const client = new AttachmentClient({
+      origin: 'http://pc.example.com',
+      token: 'tok-1',
+      fetchImpl,
+    })
+
+    const blob = await client.fetchSessionImage(
+      { windowId: 2, localId: 'local-1', durableId: 'durable-1' },
+      'm1',
+      3,
+    )
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([4, 5]))
+    const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    expect(url.pathname).toBe('/api/sessions/image')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      windowId: '2',
+      localId: 'local-1',
+      durableId: 'durable-1',
+      message: 'm1',
+      index: '3',
+    })
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: 'Bearer tok-1' },
+    })
+  })
+
+  it('fetches workspace image bytes without ever putting the token in the URL', async () => {
+    const fetchImpl = vi.fn(
+      async (..._args: Parameters<typeof fetch>) =>
+        new Response(new Uint8Array([6]), { headers: { 'content-type': 'image/jpeg' } }),
+    )
+    const client = new AttachmentClient({
+      origin: 'http://pc.example.com',
+      token: 'tok-1',
+      fetchImpl,
+    })
+
+    const blob = await client.fetchWorkspaceImage(
+      { windowId: 1, localId: 'local-1' },
+      'img/我的 图.jpg',
+    )
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(new Uint8Array([6]))
+    const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    expect(url.pathname).toBe('/api/sessions/file')
+    expect(url.searchParams.get('path')).toBe('img/我的 图.jpg')
+    expect(url.searchParams.get('localId')).toBe('local-1')
+    expect(url.toString()).not.toContain('tok-1')
+  })
+
+  it('maps a missing session image to attachment_not_found', async () => {
+    const client = new AttachmentClient({
+      origin: 'http://pc.example.com',
+      token: 'tok-1',
+      fetchImpl: async () => new Response('', { status: 404 }),
+    })
+    await expect(
+      client.fetchSessionImage({ windowId: 1, localId: 's1' }, 'm1', 0),
+    ).rejects.toMatchObject({ code: 'attachment_not_found' })
+  })
 })

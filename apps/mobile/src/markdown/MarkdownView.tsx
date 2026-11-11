@@ -6,13 +6,23 @@ import {
   type MdNode,
   type TableAlign,
 } from '@universe-editor/acp-view-model'
-import { Fragment, useMemo, type ReactNode } from 'react'
+import { Fragment, createContext, useContext, useMemo, type ReactNode } from 'react'
 import { strings } from '../strings.js'
+import { MarkdownImage, type MarkdownImageLoader } from './MarkdownImage.js'
+import { resolveMarkdownImageSource } from './imageSource.js'
 
 export interface MarkdownViewProps {
   readonly text: string
   readonly testId?: string
+  /**
+   * When present, workspace/file images render as clickable previews. Without
+   * it the renderer keeps the text placeholder (other markdown surfaces do not
+   * have a gateway to resolve PC paths).
+   */
+  readonly imageLoader?: MarkdownImageLoader | undefined
 }
+
+const ImageLoaderContext = createContext<MarkdownImageLoader | undefined>(undefined)
 
 /**
  * Phone-sized React renderer for the shared markdown AST. No raw HTML is ever
@@ -20,14 +30,16 @@ export interface MarkdownViewProps {
  * anchors, and file paths stay visible but inert because the phone cannot open
  * files.
  */
-export function MarkdownView({ text, testId }: MarkdownViewProps) {
+export function MarkdownView({ text, testId, imageLoader }: MarkdownViewProps) {
   const nodes = useMemo(() => parseMarkdown(text), [text])
   return (
-    <div className="md" {...(testId !== undefined ? { 'data-testid': testId } : {})}>
-      {nodes.map((node, index) => (
-        <MarkdownBlock key={index} node={node} />
-      ))}
-    </div>
+    <ImageLoaderContext.Provider value={imageLoader}>
+      <div className="md" {...(testId !== undefined ? { 'data-testid': testId } : {})}>
+        {nodes.map((node, index) => (
+          <MarkdownBlock key={index} node={node} />
+        ))}
+      </div>
+    </ImageLoaderContext.Provider>
   )
 }
 
@@ -135,6 +147,7 @@ function renderInline(nodes: readonly MdInline[]): ReactNode {
 }
 
 function InlineNode({ node }: { node: MdInline }): ReactNode {
+  const loader = useContext(ImageLoaderContext)
   switch (node.type) {
     case 'text':
       return <Fragment>{node.text}</Fragment>
@@ -147,6 +160,11 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
     case 'code':
       return <code className="md-inline-code">{node.text}</code>
     case 'link':
+      if (containsImage(node.children)) {
+        // A markdown link around an image would nest a preview <button> inside
+        // an <a>; keep the label inert instead of guessing at two actions.
+        return <span className="md-link md-link--inert">{renderInline(node.children)}</span>
+      }
       return <MarkdownLink href={node.href}>{renderInline(node.children)}</MarkdownLink>
     case 'filepath': {
       const label =
@@ -155,12 +173,19 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
           : node.path
       return <span className="md-filepath">{label}</span>
     }
-    case 'image':
-      return (
-        <span className="md-image-placeholder">
-          {strings.markdownImage(node.alt === '' ? undefined : node.alt)}
-        </span>
-      )
+    case 'image': {
+      const source = resolveMarkdownImageSource(node.src)
+      // Without a gateway-backed loader keep the inert placeholder; markdown
+      // surfaces outside the chat must never start loading phone-visible images.
+      if (loader === undefined || source === undefined) {
+        return (
+          <span className="md-image-placeholder">
+            {strings.markdownImage(node.alt === '' ? undefined : node.alt)}
+          </span>
+        )
+      }
+      return <MarkdownImage source={source} alt={node.alt} loader={loader} />
+    }
     case 'anchor':
       return <span id={node.id} className="md-anchor" />
     case 'math_inline':
@@ -168,6 +193,22 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
     case 'softbreak':
       return <br />
   }
+}
+
+function containsImage(nodes: readonly MdInline[]): boolean {
+  for (const node of nodes) {
+    switch (node.type) {
+      case 'image':
+        return true
+      case 'bold':
+      case 'italic':
+      case 'strike':
+      case 'link':
+        if (containsImage(node.children)) return true
+        break
+    }
+  }
+  return false
 }
 
 function MarkdownLink({ href, children }: { href: string; children: ReactNode }): ReactNode {

@@ -214,6 +214,7 @@ function buildMessage(
   existing?: MobileTimelineMessageItem,
 ): MobileTimelineMessageItem {
   const attachments = event.attachments ?? existing?.attachments ?? []
+  const images = event.images ?? existing?.images ?? []
   // A suffix append carries no anchor fields; preserve them from the existing
   // row. An explicit `canFork: false` must win over the previous `true`.
   const messageId = event.messageId ?? existing?.messageId
@@ -226,6 +227,7 @@ function buildMessage(
     streaming: event.streaming,
     ...(event.memoryTrimmed === true ? { memoryTrimmed: true } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
+    ...(images.length > 0 ? { images } : {}),
     ...(event.hasNonText === true ? { hasNonText: true } : {}),
     ...(messageId !== undefined ? { messageId } : {}),
     ...(canFork !== undefined ? { canFork } : {}),

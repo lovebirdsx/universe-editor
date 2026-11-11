@@ -4,7 +4,7 @@ import type {
   MobileTimelineToolCallItem,
 } from '@universe-editor/mobile-protocol'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { MobileClient } from '../../state/mobileClient.js'
 import { strings } from '../../strings.js'
 import { Timeline } from '../Timeline.js'
@@ -35,11 +35,17 @@ function userMessage(
 const clientMock = {
   requestToolCallDetail: vi.fn(),
   fetchAttachmentBlob: vi.fn<(attachmentId: string) => Promise<Blob>>(),
+  fetchMessageImageBlob: vi.fn<(messageId: string, index: number) => Promise<Blob>>(),
+  fetchWorkspaceImageBlob: vi.fn<(src: string) => Promise<Blob>>(),
   serverNow: vi.fn(() => 1_000_000),
 }
 const client = clientMock as unknown as Pick<
   MobileClient,
-  'requestToolCallDetail' | 'fetchAttachmentBlob' | 'serverNow'
+  | 'requestToolCallDetail'
+  | 'fetchAttachmentBlob'
+  | 'fetchMessageImageBlob'
+  | 'fetchWorkspaceImageBlob'
+  | 'serverNow'
 >
 
 function renderTimeline(
@@ -357,5 +363,116 @@ describe('Timeline message actions', () => {
       { sideTaskAvailable: true, onOpenMessageActions: vi.fn() },
     )
     expect(screen.queryByTestId('agent-message-actions')).toBeNull()
+  })
+})
+
+describe('Timeline mobile image preview', () => {
+  beforeEach(() => {
+    clientMock.fetchMessageImageBlob.mockClear()
+    clientMock.fetchWorkspaceImageBlob.mockClear()
+  })
+
+  it('opens and closes the full-screen viewer from a user attachment thumbnail', async () => {
+    clientMock.fetchAttachmentBlob.mockResolvedValue(new Blob(['abc'], { type: 'image/png' }))
+    renderTimeline(
+      [
+        userMessage('m1', '', {
+          attachments: [
+            { id: 'att-1', kind: 'image', name: 'shot.png', mimeType: 'image/png', size: 3 },
+          ],
+        }),
+      ] as MobileTimelineItem[],
+      'full',
+    )
+
+    await waitFor(() => screen.getByTestId('user-attachment-image-button'))
+    fireEvent.click(screen.getByTestId('user-attachment-image-button'))
+    expect(screen.getByTestId('image-preview')).toBeTruthy()
+    expect(document.documentElement.classList.contains('is-scroll-locked')).toBe(true)
+
+    fireEvent.click(screen.getByTestId('image-preview-close'))
+    expect(screen.queryByTestId('image-preview')).toBeNull()
+    expect(document.documentElement.classList.contains('is-scroll-locked')).toBe(false)
+  })
+
+  it('renders ACP image blocks for agent replies and previews them', async () => {
+    clientMock.fetchMessageImageBlob.mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    renderTimeline(
+      [
+        {
+          kind: 'message',
+          id: 'a1',
+          role: 'agent',
+          text: 'see this',
+          streaming: false,
+          images: [{ index: 0, mimeType: 'image/png', size: 3 }],
+        },
+      ],
+      'onlyMessage',
+    )
+
+    await waitFor(() => screen.getByTestId('message-image'))
+    expect(clientMock.fetchMessageImageBlob).toHaveBeenCalledWith('a1', 0)
+    expect(screen.queryByText(strings.messageNonText)).toBeNull()
+
+    fireEvent.click(screen.getByTestId('message-image'))
+    expect(screen.getByTestId('image-preview')).toBeTruthy()
+    expect(screen.getByTestId('image-preview-image').getAttribute('src')).toMatch(/^blob:/)
+  })
+
+  it('does not request truncated agent images', () => {
+    renderTimeline(
+      [
+        {
+          kind: 'message',
+          id: 'a1',
+          role: 'agent',
+          text: '',
+          streaming: false,
+          images: [{ index: 0, mimeType: 'image/png', size: 0, truncated: true }],
+        },
+      ],
+      'onlyMessage',
+    )
+
+    expect(screen.getByTestId('message-image-unavailable').textContent).toContain(
+      strings.messageImageUnavailable,
+    )
+    expect(clientMock.fetchMessageImageBlob).not.toHaveBeenCalled()
+  })
+
+  it('loads workspace markdown images through the session loader', async () => {
+    clientMock.fetchWorkspaceImageBlob.mockResolvedValue(new Blob(['md'], { type: 'image/png' }))
+    renderTimeline(
+      [{ kind: 'message', id: 'a1', role: 'agent', text: '![shot](img/a.png)', streaming: false }],
+      'onlyMessage',
+    )
+
+    await waitFor(() => screen.getByTestId('markdown-image'))
+    expect(clientMock.fetchWorkspaceImageBlob).toHaveBeenCalledWith('img/a.png')
+
+    fireEvent.click(screen.getByTestId('markdown-image'))
+    expect(screen.getByTestId('image-preview')).toBeTruthy()
+  })
+
+  it('renders data: markdown images directly without a workspace request', async () => {
+    renderTimeline(
+      [
+        {
+          kind: 'message',
+          id: 'a1',
+          role: 'agent',
+          text: '![dot](data:image/png;base64,AAA=)',
+          streaming: false,
+        },
+      ],
+      'onlyMessage',
+    )
+
+    await waitFor(() => screen.getByTestId('markdown-image'))
+    expect(clientMock.fetchWorkspaceImageBlob).not.toHaveBeenCalled()
+    expect(screen.getByTestId('markdown-image').querySelector('img')?.src).toBe(
+      'data:image/png;base64,AAA=',
+    )
   })
 })

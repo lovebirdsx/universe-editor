@@ -17,6 +17,9 @@ import type { ILogger } from '@universe-editor/platform'
 import {
   MAX_ATTACHMENT_UPLOAD_BYTES,
   MAX_CLIENT_FRAME_BYTES,
+  MAX_ID_LENGTH,
+  MAX_IMAGE_SRC_LENGTH,
+  MAX_MESSAGE_IMAGE_INDEX,
   MOBILE_ATTACHMENT_KIND_HEADER,
   MOBILE_ATTACHMENT_NAME_HEADER,
   MOBILE_ATTACHMENT_PATH_PREFIX,
@@ -26,11 +29,15 @@ import {
   MOBILE_HEALTH_PATH,
   MOBILE_PAIR_PATH,
   MOBILE_PROTOCOL_VERSION,
+  MOBILE_SESSION_FILE_PATH,
+  MOBILE_SESSION_IMAGE_PATH,
   MOBILE_WS_PATH,
   isMobileAttachmentKind,
+  isPreviewableImageMimeType,
   parseClientFrame,
   parsePairRequest,
   serializeFrame,
+  type MobileSessionRef,
   type PairResponse,
   type PushSubscribeFrame,
   type ServerFrame,
@@ -65,7 +72,7 @@ export const MAX_TOTAL_CONNECTIONS = 64
 export const MAX_PAIR_BODY_BYTES = 4 * 1024
 
 const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 const POLICY_VIOLATION_CLOSE = 1008
 const HSTS_VALUE = 'max-age=31536000'
 /** One diagnostic audit entry per reason/address per minute; retries are chatty. */
@@ -356,13 +363,14 @@ export class MobileGatewayServer {
       return
     }
 
-    let pathname: string
+    let url: URL
     try {
-      pathname = new URL(req.url ?? '/', 'http://gateway.invalid').pathname
+      url = new URL(req.url ?? '/', 'http://gateway.invalid')
     } catch {
       this._sendText(res, 400, 'Bad Request')
       return
     }
+    const pathname = url.pathname
 
     if (pathname === MOBILE_HEALTH_PATH) {
       this._handleHealth(req, res)
@@ -386,6 +394,14 @@ export class MobileGatewayServer {
         res,
         pathname.slice(MOBILE_ATTACHMENT_PATH_PREFIX.length),
       )
+      return
+    }
+    if (pathname === MOBILE_SESSION_IMAGE_PATH) {
+      await this._handleSessionImage(req, res, url.searchParams)
+      return
+    }
+    if (pathname === MOBILE_SESSION_FILE_PATH) {
+      await this._handleSessionWorkspaceImage(req, res, url.searchParams)
       return
     }
     if (pathname === MOBILE_WS_PATH) {
@@ -537,13 +553,6 @@ export class MobileGatewayServer {
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<string | undefined> {
-    if (this._options.attachments === undefined) {
-      this._sendJson(res, 404, {
-        code: 'not_supported',
-        message: 'attachment api is unavailable',
-      })
-      return undefined
-    }
     const header = req.headers.authorization
     const token =
       typeof header === 'string' && header.startsWith('Bearer ') ? header.slice(7).trim() : ''
@@ -688,6 +697,110 @@ export class MobileGatewayServer {
     res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeRfc5987(entry.name)}`)
     if (req.method === 'HEAD') res.end()
     else res.end(bytes)
+  }
+
+  /**
+   * Image bytes for one ACP image block. The phone learns `index` from the
+   * timeline metadata; bytes never travel over the WebSocket because the server
+   * frame cap is far below the ACP image cap.
+   */
+  private async _handleSessionImage(
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: URLSearchParams,
+  ): Promise<void> {
+    const deviceId = await this._authenticateDevice(req, res)
+    if (deviceId === undefined) return
+    if (!this._allowImageRead(req, res)) return
+    const hub = this._options.hub
+    if (hub === undefined) {
+      this._sendJson(res, 404, { code: 'not_supported', message: 'image api is unavailable' })
+      return
+    }
+    const ref = sessionRefFromQuery(params)
+    const messageId = params.get('message') ?? ''
+    const index = integerParam(params, 'index')
+    if (
+      ref === undefined ||
+      messageId === '' ||
+      messageId.length > MAX_ID_LENGTH ||
+      index === undefined ||
+      index < 0 ||
+      index > MAX_MESSAGE_IMAGE_INDEX
+    ) {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'invalid image request' })
+      return
+    }
+    const image = await hub.readSessionImage(ref, messageId, index)
+    if (image === undefined) {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'image is not available',
+      })
+      return
+    }
+    this._sendImage(req, res, image.mimeType, image.bytes)
+  }
+
+  /** Image bytes for a markdown-referenced workspace file (confined to the session cwd). */
+  private async _handleSessionWorkspaceImage(
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: URLSearchParams,
+  ): Promise<void> {
+    const deviceId = await this._authenticateDevice(req, res)
+    if (deviceId === undefined) return
+    if (!this._allowImageRead(req, res)) return
+    const hub = this._options.hub
+    if (hub === undefined) {
+      this._sendJson(res, 404, { code: 'not_supported', message: 'image api is unavailable' })
+      return
+    }
+    const ref = sessionRefFromQuery(params)
+    const src = params.get('path') ?? ''
+    if (ref === undefined || src === '' || src.length > MAX_IMAGE_SRC_LENGTH) {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'invalid image path' })
+      return
+    }
+    const image = await hub.readSessionWorkspaceImage(ref, src)
+    if (image === undefined) {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'image is not available',
+      })
+      return
+    }
+    this._sendImage(req, res, image.mimeType, image.bytes)
+  }
+
+  private _allowImageRead(req: IncomingMessage, res: ServerResponse): boolean {
+    if (req.method === 'GET' || req.method === 'HEAD') return true
+    this._sendText(res, 405, 'Method Not Allowed', { Allow: 'GET, HEAD' })
+    return false
+  }
+
+  private _sendImage(
+    req: IncomingMessage,
+    res: ServerResponse,
+    mimeType: string,
+    bytes: Uint8Array,
+  ): void {
+    const normalized = mimeType.toLowerCase()
+    if (!isPreviewableImageMimeType(normalized)) {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'image is not available',
+      })
+      return
+    }
+    const body = Buffer.from(bytes)
+    this._applySecurityHeaders(res, 'no-store')
+    res.statusCode = 200
+    res.setHeader('Content-Type', normalized)
+    res.setHeader('Content-Length', body.byteLength)
+    res.setHeader('Content-Disposition', `inline; filename="image.${imageExtension(normalized)}"`)
+    if (req.method === 'HEAD') res.end()
+    else res.end(body)
   }
 
   private async _handleStatic(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1373,6 +1486,43 @@ async function readBodyBytes(
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value
+}
+
+function sessionRefFromQuery(params: URLSearchParams): MobileSessionRef | undefined {
+  const windowId = integerParam(params, 'windowId')
+  const localId = params.get('localId') ?? ''
+  const durableId = params.get('durableId') ?? undefined
+  if (windowId === undefined || windowId < 0) return undefined
+  if (localId === '' || localId.length > MAX_ID_LENGTH) return undefined
+  if (durableId !== undefined && (durableId === '' || durableId.length > MAX_ID_LENGTH)) {
+    return undefined
+  }
+  return {
+    windowId,
+    localId,
+    ...(durableId !== undefined ? { durableId } : {}),
+  }
+}
+
+/** Strict query integer: `Number('')` is `0`, which would silently accept a missing param. */
+function integerParam(params: URLSearchParams, name: string): number | undefined {
+  const raw = params.get(name)
+  if (raw === null || !/^\d+$/.test(raw)) return undefined
+  const value = Number(raw)
+  return Number.isSafeInteger(value) ? value : undefined
+}
+
+function imageExtension(mimeType: string): string {
+  switch (mimeType) {
+    case 'image/jpeg':
+      return 'jpg'
+    case 'image/webp':
+      return 'webp'
+    case 'image/gif':
+      return 'gif'
+    default:
+      return 'png'
+  }
 }
 
 /** RFC 5987 attr-char: encodeURIComponent leaves `'()*` unescaped. */

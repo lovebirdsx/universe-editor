@@ -319,6 +319,16 @@ export const strings = {
   attachmentTotalTooLarge: '附件总大小不能超过 50 MB',
   attachmentUnsupportedImage: '仅支持 PNG、JPEG、WebP、GIF 图片',
 
+  imagePreviewTitle: '图片预览',
+  imagePreviewClose: '关闭预览',
+  imagePreviewOpen: (name: string): string => `预览图片：${name}`,
+  imagePreviewGestureHint: '双指缩放 · 双击放大 · 下滑关闭',
+  messageImageAlt: '会话图片',
+  messageImageOpen: (index: number): string => `预览第 ${index + 1} 张图片`,
+  messageImageUnavailable: '图片不可用',
+  messageImageLoadFailed: '图片加载失败',
+  markdownImageLoadFailed: '图片加载失败',
+
   configTitle: '会话设置',
   configNeedsPc: '需在 PC 上切换',
   configOn: '开',

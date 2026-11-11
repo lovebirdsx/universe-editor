@@ -1,5 +1,6 @@
 import type { MobileMessageAttachment } from './attachments.js'
 import type { MobileErrorCode } from './errors.js'
+import type { MobileMessageImage } from './images.js'
 
 export const MOBILE_SESSION_BUCKETS = [
   'input_needed',
@@ -84,7 +85,9 @@ export interface MobileTimelineMessageItem {
   memoryTrimmed?: boolean
   /** Attachments projected from the user message's mobile metadata. */
   attachments?: readonly MobileMessageAttachment[]
-  /** True when the message carries a non-text block not represented by `attachments`. */
+  /** ACP image blocks not represented by `attachments`; bytes are fetched over HTTP. */
+  images?: readonly MobileMessageImage[]
+  /** True when the message carries a non-text block not represented by attachments/images. */
   hasNonText?: boolean
   /** Agent-side user-turn anchor; only user messages with a client messageId. */
   messageId?: string
@@ -703,6 +706,8 @@ export interface MobileMessageUpsertEvent {
   memoryTrimmed?: boolean
   /** Full replacement; omitted means unchanged, `[]` clears. */
   attachments?: readonly MobileMessageAttachment[]
+  /** Full replacement; omitted means unchanged, `[]` clears. */
+  images?: readonly MobileMessageImage[]
   hasNonText?: boolean
   messageId?: string
   canFork?: boolean

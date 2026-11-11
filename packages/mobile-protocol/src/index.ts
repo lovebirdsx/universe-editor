@@ -1,6 +1,7 @@
 export * from './version.js'
 export * from './errors.js'
 export * from './attachments.js'
+export * from './images.js'
 export * from './pairing.js'
 export * from './frames.js'
 export * from './policy.js'

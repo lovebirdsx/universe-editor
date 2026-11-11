@@ -16,6 +16,7 @@ import {
   clampText,
   isConfigValueAllowedOnMobile,
   isPermissionOptionAllowedOnMobile,
+  isPreviewableImageMimeType,
   MAX_COMMAND_DESCRIPTION_LENGTH,
   MAX_COMMAND_INPUT_HINT_LENGTH,
   MAX_COMMAND_NAME_LENGTH,
@@ -24,6 +25,7 @@ import {
   MAX_ELICITATION_CONTENT_KEYS,
   MAX_ATTACHMENTS_PER_PROMPT,
   MAX_ID_LENGTH,
+  MAX_IMAGES_PER_MESSAGE,
   MAX_MOBILE_COMMANDS,
   MAX_PERMISSION_OPTIONS,
   MAX_PLAN_ENTRIES,
@@ -41,6 +43,7 @@ import {
   type MobileConfigOption,
   type MobileElicitationField,
   type MobileMessageAttachment,
+  type MobileMessageImage,
   type MobileMessageUpsertEvent,
   type MobilePendingElicitation,
   type MobilePendingPermission,
@@ -55,7 +58,7 @@ import {
   type MobileToolCallUpsertEvent,
   type MobileUsage,
 } from '@universe-editor/mobile-protocol'
-import { computeLineDiff } from '@universe-editor/acp-view-model'
+import { computeLineDiff, MEDIA_TRUNCATED_META_KEY } from '@universe-editor/acp-view-model'
 import { readMobileAttachmentMeta } from '../acp/promptAttachment.js'
 import type {
   AcpMessage,
@@ -214,14 +217,51 @@ export function projectMessage(
     message.role === 'user' && message.autoRetry !== true ? message.messageId : undefined
   const anchored = anchorMessageId !== undefined && anchorMessageId.length > 0
   const attachments: MobileMessageAttachment[] = []
+  const images: MobileMessageImage[] = []
+  const representedBlocks = new Set<number>()
   let hasNonText = false
-  for (const block of message.blocks) {
+  let imageOrdinal = 0
+  for (const [blockIndex, block] of message.blocks.entries()) {
     if (block.type === 'text') continue
+    if (block.type === 'image') {
+      const ordinal = imageOrdinal++
+      const stamped = block._meta?.['mobileAttachment'] !== undefined
+      const attachment = stamped ? readMobileAttachmentMeta(block) : undefined
+      if (attachment !== undefined) {
+        if (attachments.length < MAX_ATTACHMENTS_PER_PROMPT) {
+          attachments.push(attachment)
+          representedBlocks.add(blockIndex)
+        } else {
+          hasNonText = true
+        }
+        continue
+      }
+      if (stamped) {
+        // A phone-stamped block the phone would reject stays a plain non-text block.
+        hasNonText = true
+        continue
+      }
+      const mimeType = block.mimeType.toLowerCase()
+      if (!isPreviewableImageMimeType(mimeType) || images.length >= MAX_IMAGES_PER_MESSAGE) {
+        hasNonText = true
+        continue
+      }
+      const truncated = block.data === '' || block._meta?.[MEDIA_TRUNCATED_META_KEY] === true
+      images.push({
+        index: ordinal,
+        mimeType,
+        size: truncated ? 0 : base64DecodedByteLength(block.data),
+        ...(truncated ? { truncated: true } : {}),
+      })
+      representedBlocks.add(blockIndex)
+      continue
+    }
     const attachment = readMobileAttachmentMeta(block)
     if (attachment === undefined) {
       hasNonText = true
     } else if (attachments.length < MAX_ATTACHMENTS_PER_PROMPT) {
       attachments.push(attachment)
+      representedBlocks.add(blockIndex)
     } else {
       hasNonText = true
     }
@@ -230,10 +270,19 @@ export function projectMessage(
     kind: 'message',
     id: clampText(message.id, MAX_ID_LENGTH),
     role: message.role,
-    text: clampText(message.text, MAX_TEXT_LENGTH),
+    // Rebuild only when a non-text block is now represented on the wire: its
+    // `[image: mime]` / `[resource: name]` placeholder must not duplicate the
+    // thumbnail or file card.
+    text: clampText(
+      representedBlocks.size > 0
+        ? projectMessageText(message.blocks, representedBlocks)
+        : message.text,
+      MAX_TEXT_LENGTH,
+    ),
     streaming: message.streaming,
     ...(message.memoryTrimmed ? { memoryTrimmed: true } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
+    ...(images.length > 0 ? { images } : {}),
     ...(hasNonText ? { hasNonText: true } : {}),
     ...(anchored ? { messageId: clampText(anchorMessageId, MAX_ID_LENGTH) } : {}),
     ...(anchored && context !== undefined
@@ -242,6 +291,43 @@ export function projectMessage(
         }
       : {}),
   }
+}
+
+/** Mirrors `blocksToText` but omits non-text blocks already represented on the wire. */
+function projectMessageText(
+  blocks: AcpMessage['blocks'],
+  representedBlocks: ReadonlySet<number>,
+): string {
+  let text = ''
+  for (const [blockIndex, block] of blocks.entries()) {
+    if (block.type === 'text') {
+      text += block.text
+      continue
+    }
+    if (representedBlocks.has(blockIndex)) continue
+    if (block.type === 'image') {
+      text += `[image: ${block.mimeType}]`
+      continue
+    }
+    if (block.type === 'resource') {
+      text += `[resource: ${block.resource.uri}]`
+      continue
+    }
+    if (block.type === 'resource_link') {
+      text += `[resource: ${block.name ?? block.uri}]`
+      continue
+    }
+    if (block.type === 'audio') {
+      text += `[audio: ${block.mimeType}]`
+    }
+  }
+  return text
+}
+
+function base64DecodedByteLength(data: string): number {
+  if (data.length === 0) return 0
+  const padding = data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0
+  return Math.max(0, Math.floor((data.length * 3) / 4) - padding)
 }
 
 const TOOL_PREVIEW_CHARS = 1024
@@ -624,11 +710,13 @@ export function diffMessage(
   const textChanged = previous.text !== next.text
   const sameAppend = textChanged && next.text.startsWith(previous.text)
   const attachmentsChanged = !sameJson(previous.attachments ?? [], next.attachments ?? [])
+  const imagesChanged = !sameJson(previous.images ?? [], next.images ?? [])
   const metadataChanged =
     previous.streaming !== next.streaming ||
     previous.memoryTrimmed !== next.memoryTrimmed ||
     previous.hasNonText !== next.hasNonText ||
     attachmentsChanged ||
+    imagesChanged ||
     previous.messageId !== next.messageId ||
     previous.canFork !== next.canFork
   if (!textChanged && !metadataChanged) return undefined
@@ -644,6 +732,8 @@ export function diffMessage(
     ...(next.memoryTrimmed !== undefined ? { memoryTrimmed: next.memoryTrimmed } : {}),
     ...(next.attachments !== undefined ? { attachments: next.attachments } : {}),
     ...(attachmentsChanged && next.attachments === undefined ? { attachments: [] } : {}),
+    ...(next.images !== undefined ? { images: next.images } : {}),
+    ...(imagesChanged && next.images === undefined ? { images: [] } : {}),
     ...(next.hasNonText !== undefined ? { hasNonText: next.hasNonText } : {}),
     ...(next.messageId !== undefined ? { messageId: next.messageId } : {}),
     ...(next.canFork !== undefined ? { canFork: next.canFork } : {}),

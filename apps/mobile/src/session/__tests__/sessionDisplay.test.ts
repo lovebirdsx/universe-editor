@@ -57,6 +57,7 @@ describe('selectTimelineForDisplay', () => {
       message('e1', 'agent', '[error] boom'),
       message('s1', 'agent', '', { streaming: true }),
       message('n1', 'agent', '', { hasNonText: true }),
+      message('i1', 'agent', '', { images: [{ index: 0, mimeType: 'image/png', size: 3 }] }),
       notice,
       toolCall('t1', { subagent: true }),
       toolCall('t2', { requiresUserDecision: true }),

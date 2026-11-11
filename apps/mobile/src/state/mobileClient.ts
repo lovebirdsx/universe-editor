@@ -111,6 +111,7 @@ export class MobileClient {
     this._attachments = new AttachmentClient({
       origin: this._origin,
       token: options.credentials.token,
+      fetchImpl: options.fetchImpl,
       onUnauthorized: options.onCredentialsInvalid,
     })
     this._detail = new ToolCallDetailClient(this._commands)
@@ -337,6 +338,26 @@ export class MobileClient {
 
   fetchAttachmentBlob(attachmentId: string): Promise<Blob> {
     return this._attachments.fetchBlob({ id: attachmentId })
+  }
+
+  fetchMessageImageBlob(messageId: string, index: number): Promise<Blob> {
+    const ref = this._currentRef
+    if (ref === undefined) {
+      return Promise.reject(
+        new CommandError('session_not_found', 'no session is open on the phone'),
+      )
+    }
+    return this._attachments.fetchSessionImage(ref, messageId, index)
+  }
+
+  fetchWorkspaceImageBlob(src: string): Promise<Blob> {
+    const ref = this._currentRef
+    if (ref === undefined) {
+      return Promise.reject(
+        new CommandError('session_not_found', 'no session is open on the phone'),
+      )
+    }
+    return this._attachments.fetchWorkspaceImage(ref, src)
   }
 
   cancelTurn(): Promise<void> {

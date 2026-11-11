@@ -65,7 +65,12 @@ function isErrorMessage(item: MobileTimelineMessageItem): boolean {
 }
 
 function hasVisibleContent(item: MobileTimelineMessageItem): boolean {
-  return item.text.trim().length > 0 || item.hasNonText === true || item.streaming
+  return (
+    item.text.trim().length > 0 ||
+    (item.images?.length ?? 0) > 0 ||
+    item.hasNonText === true ||
+    item.streaming
+  )
 }
 
 function isAlwaysKeptToolCall(item: MobileTimelineToolCallItem): boolean {

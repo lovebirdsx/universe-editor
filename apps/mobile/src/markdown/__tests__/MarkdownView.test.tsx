@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { MarkdownView } from '../MarkdownView.js'
 import { strings } from '../../strings.js'
 
@@ -66,5 +66,75 @@ describe('MarkdownView', () => {
     )
     expect(container.querySelector('img')).toBeNull()
     expect(screen.getByText(strings.markdownImage('screenshot'))).toBeTruthy()
+  })
+
+  it('renders remote and data images directly when a loader is present', () => {
+    const loader = { fetchWorkspaceImageBlob: vi.fn() }
+    const { container } = render(
+      <MarkdownView
+        text={'![remote](https://example.com/a.png) ![inline](data:image/png;base64,AAA=)'}
+        imageLoader={loader}
+      />,
+    )
+
+    const images = [...container.querySelectorAll('img')]
+    expect(images.map((img) => img.getAttribute('src'))).toEqual([
+      'https://example.com/a.png',
+      'data:image/png;base64,AAA=',
+    ])
+    expect(images.every((img) => img.getAttribute('referrerpolicy') === 'no-referrer')).toBe(true)
+    expect(loader.fetchWorkspaceImageBlob).not.toHaveBeenCalled()
+  })
+
+  it('loads workspace paths through the loader and opens the preview', async () => {
+    const loader = {
+      fetchWorkspaceImageBlob: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),
+    }
+    render(<MarkdownView text="![shot](img/a.png)" imageLoader={loader} />)
+
+    await waitFor(() => screen.getByTestId('markdown-image'))
+    expect(loader.fetchWorkspaceImageBlob).toHaveBeenCalledWith('img/a.png')
+
+    fireEvent.click(screen.getByTestId('markdown-image'))
+    expect(screen.getByTestId('image-preview')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('image-preview-close'))
+    expect(screen.queryByTestId('image-preview')).toBeNull()
+  })
+
+  it('shows a failure label when a workspace image cannot be read', async () => {
+    const loader = { fetchWorkspaceImageBlob: vi.fn(async () => Promise.reject(new Error('no'))) }
+    render(<MarkdownView text="![shot](img/a.png)" imageLoader={loader} />)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('markdown-image-failed').textContent).toContain(
+        strings.markdownImageLoadFailed,
+      ),
+    )
+  })
+
+  it('keeps oversized image sources inert even with a loader', () => {
+    const loader = { fetchWorkspaceImageBlob: vi.fn() }
+    const { container } = render(
+      <MarkdownView
+        text={`![x](https://example.com/${'a'.repeat(8200)}.png)`}
+        imageLoader={loader}
+      />,
+    )
+    expect(container.querySelector('img')).toBeNull()
+    expect(screen.getByText(strings.markdownImage('x'))).toBeTruthy()
+    expect(loader.fetchWorkspaceImageBlob).not.toHaveBeenCalled()
+  })
+
+  it('does not nest an anchor around a previewable image', async () => {
+    const loader = {
+      fetchWorkspaceImageBlob: vi.fn(async () => new Blob(['png'], { type: 'image/png' })),
+    }
+    const { container } = render(
+      <MarkdownView text="[![shot](img/a.png)](https://example.com/x)" imageLoader={loader} />,
+    )
+
+    await waitFor(() => screen.getByTestId('markdown-image'))
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.querySelector('.md-link--inert')).toBeTruthy()
   })
 })

@@ -46,6 +46,7 @@ import type {
   IMobileBridgeService,
   MobileBridgeAttentionEvent,
   MobileBridgeEvent,
+  MobileBridgeImage,
   MobileBridgeNewSessionResult,
   MobileBridgePromptAttachment,
   MobileBridgeResult,
@@ -244,6 +245,8 @@ const HISTORY_DISK_READ_TIMEOUT_MS = 2_000
 const HISTORY_DISK_READ_CONCURRENCY = 4
 /** Ownership probe before resuming; a wrong window answers `false` quickly. */
 const HISTORY_OWNER_TIMEOUT_MS = 5_000
+/** Reading image bytes is a renderer round-trip (and, for workspace files, a disk read). */
+const SESSION_IMAGE_TIMEOUT_MS = 15_000
 /** Keep the phone list responsive even with many open workspaces. */
 const MAX_HISTORY_RESULTS = 200
 /** Cap how many workspace candidates pay for a `git status` probe. */
@@ -366,6 +369,57 @@ export class MobileGatewayHub {
     this._permissionOptions.clear()
     this._streaming = false
     this._attention = false
+  }
+
+  /**
+   * Bytes for one ACP image block of a live session. Served over HTTP (not the
+   * WebSocket); `undefined` makes the caller answer 404 without distinguishing
+   * "missing" from "not allowed".
+   */
+  readSessionImage(
+    ref: MobileSessionRef,
+    messageId: string,
+    index: number,
+  ): Promise<MobileBridgeImage | undefined> {
+    return this._readSessionResource(ref, (bridge, localId, token) =>
+      bridge.getMessageImage(localId, messageId, index, token),
+    )
+  }
+
+  /** A workspace image referenced from markdown, resolved against the session cwd. */
+  readSessionWorkspaceImage(
+    ref: MobileSessionRef,
+    src: string,
+  ): Promise<MobileBridgeImage | undefined> {
+    return this._readSessionResource(ref, (bridge, localId, token) =>
+      bridge.getWorkspaceImage(localId, src, token),
+    )
+  }
+
+  private async _readSessionResource(
+    ref: MobileSessionRef,
+    call: (
+      bridge: IMobileBridgeService,
+      localId: string,
+      token: CancellationToken,
+    ) => Promise<MobileBridgeImage | undefined>,
+  ): Promise<MobileBridgeImage | undefined> {
+    const resolved = this._resolveSession(ref)
+    if (resolved === undefined) return undefined
+    const entry = this._windows.get(resolved.windowId)
+    if (entry === undefined) return undefined
+    const deadline = Date.now() + SESSION_IMAGE_TIMEOUT_MS
+    if (!(await this._ensureWindowReady(entry, deadline))) return undefined
+    if (this._windows.get(resolved.windowId) !== entry) return undefined
+    try {
+      return await callWithToken(
+        (token) => call(entry.bridge, resolved.localId, token),
+        Math.max(1, deadline - Date.now()),
+      )
+    } catch (err) {
+      this._logger.warn(`mobile session image read failed: ${String(err)}`)
+      return undefined
+    }
   }
 
   /**

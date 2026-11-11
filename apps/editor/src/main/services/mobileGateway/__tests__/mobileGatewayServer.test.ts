@@ -26,6 +26,7 @@ import { MobileAttachmentStore } from '../mobileAttachmentStore.js'
 import { MobileGatewayHub } from '../mobileGatewayHub.js'
 import { MobileGatewayServer, type MobileGatewayServerOptions } from '../mobileGatewayServer.js'
 import { PairingService } from '../pairingService.js'
+import type { MobileBridgeImage } from '../../../../shared/ipc/mobileGatewayService.js'
 
 interface GatewayHarness {
   readonly server: MobileGatewayServer
@@ -1142,5 +1143,129 @@ describe('mobile gateway attachment api', () => {
     const response = await fetch(`${gateway.base}/`)
     const csp = response.headers.get('content-security-policy') ?? ''
     expect(csp).toContain("img-src 'self' data: blob:")
+  })
+})
+
+describe('mobile gateway session image api', () => {
+  async function startWithImageHub(): Promise<{
+    gateway: GatewayHarness
+    readSessionImage: ReturnType<typeof vi.fn>
+    readSessionWorkspaceImage: ReturnType<typeof vi.fn>
+  }> {
+    const readSessionImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
+    const readSessionWorkspaceImage = vi.fn(
+      async (): Promise<MobileBridgeImage | undefined> => undefined,
+    )
+    const hub = {
+      readSessionImage,
+      readSessionWorkspaceImage,
+    } as unknown as MobileGatewayHub
+    const gateway = await startGateway({ hub })
+    return { gateway, readSessionImage, readSessionWorkspaceImage }
+  }
+
+  const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+
+  it('requires a device token and allows only GET/HEAD', async () => {
+    const { gateway } = await startWithImageHub()
+    const paired = await pair(gateway.base)
+    const path = '/api/sessions/image?windowId=1&localId=s1&message=m1&index=0'
+
+    const unauthenticated = await fetch(`${gateway.base}${path}`)
+    expect(unauthenticated.status).toBe(401)
+    expect(await unauthenticated.json()).toMatchObject({ code: 'unauthorized' })
+
+    const invalid = await fetch(`${gateway.base}${path}`, {
+      headers: { authorization: 'Bearer not-a-token' },
+    })
+    expect(invalid.status).toBe(401)
+
+    const post = await fetch(`${gateway.base}${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(post.status).toBe(405)
+  })
+
+  it('rejects malformed image requests', async () => {
+    const { gateway } = await startWithImageHub()
+    const paired = await pair(gateway.base)
+    const auth = { authorization: `Bearer ${paired.token}` }
+    for (const path of [
+      '/api/sessions/image',
+      '/api/sessions/image?windowId=1&localId=s1&message=m1',
+      '/api/sessions/image?windowId=1&localId=s1&message=m1&index=-1',
+      '/api/sessions/image?windowId=1&localId=s1&message=m1&index=256',
+      '/api/sessions/file?windowId=1&localId=s1',
+      '/api/sessions/file?windowId=1&localId=s1&path=',
+    ]) {
+      const response = await fetch(`${gateway.base}${path}`, { headers: auth })
+      expect(response.status, path).toBe(400)
+      expect(await response.json()).toMatchObject({ code: 'bad_request' })
+    }
+  })
+
+  it('serves ACP image bytes with no-store and a HEAD variant', async () => {
+    const { gateway, readSessionImage } = await startWithImageHub()
+    const paired = await pair(gateway.base)
+    readSessionImage.mockResolvedValue({ mimeType: 'image/png', bytes })
+    const path = '/api/sessions/image?windowId=2&localId=s1&message=m1&index=1'
+
+    const response = await fetch(`${gateway.base}${path}`, {
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('image/png')
+    expect(response.headers.get('content-length')).toBe(String(bytes.byteLength))
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('content-disposition')).toBe('inline; filename="image.png"')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(response.headers.get('content-security-policy')).toContain(
+      "img-src 'self' data: blob: https: http:",
+    )
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes)
+    expect(readSessionImage).toHaveBeenCalledWith({ windowId: 2, localId: 's1' }, 'm1', 1)
+
+    const head = await fetch(`${gateway.base}${path}`, {
+      method: 'HEAD',
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(head.status).toBe(200)
+    expect((await head.arrayBuffer()).byteLength).toBe(0)
+  })
+
+  it('serves workspace image paths and hides misses', async () => {
+    const { gateway, readSessionWorkspaceImage } = await startWithImageHub()
+    const paired = await pair(gateway.base)
+    readSessionWorkspaceImage.mockResolvedValueOnce({ mimeType: 'image/jpeg', bytes })
+    const base = `${gateway.base}/api/sessions/file?windowId=1&localId=s1`
+
+    const response = await fetch(`${base}&path=${encodeURIComponent('img/a.jpg')}`, {
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('image/jpeg')
+    expect(response.headers.get('content-disposition')).toBe('inline; filename="image.jpg"')
+    expect(readSessionWorkspaceImage).toHaveBeenCalledWith(
+      { windowId: 1, localId: 's1' },
+      'img/a.jpg',
+    )
+
+    const missing = await fetch(`${base}&path=${encodeURIComponent('img/missing.jpg')}`, {
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toMatchObject({ code: 'attachment_not_found' })
+  })
+
+  it('answers 404 when no hub is wired', async () => {
+    const gateway = await startGateway()
+    const paired = await pair(gateway.base)
+    const response = await fetch(
+      `${gateway.base}/api/sessions/image?windowId=1&localId=s1&message=m1&index=0`,
+      { headers: { authorization: `Bearer ${paired.token}` } },
+    )
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ code: 'not_supported' })
   })
 })

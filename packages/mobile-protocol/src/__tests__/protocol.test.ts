@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { ClientFrame, ParseErrorCode, Result, ServerFrame } from '../index.js'
 import {
   MAX_CLIENT_FRAME_BYTES,
+  MAX_IMAGES_PER_MESSAGE,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_IMAGE_INDEX,
   MAX_SERVER_FRAME_BYTES,
   MAX_TOKEN_LENGTH,
   MOBILE_CLOSE_CODES,
@@ -900,6 +903,90 @@ describe('parseServerFrame', () => {
     expect(parseServerFrame(upsert([attachment])).ok).toBe(true)
     expect(parseServerFrame(upsert([])).ok).toBe(true)
     expect(errorCode(parseServerFrame(upsert([{ ...attachment, name: '' }])))).toBe('bad_request')
+  })
+
+  it('validates message image metadata on timeline messages and upserts', () => {
+    const image = { index: 0, mimeType: 'image/png', size: 4 }
+    const withMessage = (overrides: Record<string, unknown>): string =>
+      JSON.stringify({
+        type: 'session_snapshot',
+        seq: 1,
+        session: {
+          ...snapshotJson(),
+          timeline: [
+            {
+              kind: 'message',
+              id: 'msg-1',
+              role: 'agent',
+              text: '',
+              streaming: false,
+              ...overrides,
+            },
+          ],
+        },
+      })
+    const parsed = parseServerFrame(withMessage({ images: [image] }))
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok && parsed.value.type === 'session_snapshot') {
+      expect(parsed.value.session.timeline[0]).toMatchObject({ images: [image] })
+    }
+
+    expect(
+      errorCode(parseServerFrame(withMessage({ images: [{ ...image, truncated: true }] }))),
+    ).toBe(undefined)
+    expect(errorCode(parseServerFrame(withMessage({ images: 'nope' })))).toBe('bad_request')
+    expect(
+      errorCode(
+        parseServerFrame(
+          withMessage({ images: Array.from({ length: MAX_IMAGES_PER_MESSAGE + 1 }, () => image) }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withMessage({ images: [{ ...image, index: -1 }] })))).toBe(
+      'bad_request',
+    )
+    expect(
+      errorCode(
+        parseServerFrame(
+          withMessage({ images: [{ ...image, index: MAX_MESSAGE_IMAGE_INDEX + 1 }] }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withMessage({ images: [{ ...image, mimeType: '' }] })))).toBe(
+      'bad_request',
+    )
+    expect(errorCode(parseServerFrame(withMessage({ images: [{ ...image, size: -1 }] })))).toBe(
+      'bad_request',
+    )
+    expect(
+      errorCode(
+        parseServerFrame(
+          withMessage({ images: [{ ...image, size: MAX_MESSAGE_IMAGE_BYTES + 1 }] }),
+        ),
+      ),
+    ).toBe('bad_request')
+    expect(
+      errorCode(parseServerFrame(withMessage({ images: [{ ...image, truncated: 'yes' }] }))),
+    ).toBe('bad_request')
+
+    const upsert = (images: unknown): string =>
+      JSON.stringify({
+        type: 'session_delta',
+        seq: 2,
+        ref: REF,
+        events: [
+          {
+            type: 'message_upsert',
+            id: 'msg-1',
+            role: 'agent',
+            streaming: false,
+            images,
+          },
+        ],
+      })
+    expect(parseServerFrame(upsert([image])).ok).toBe(true)
+    expect(parseServerFrame(upsert([])).ok).toBe(true)
+    expect(errorCode(parseServerFrame(upsert([{ ...image, mimeType: 1 }])))).toBe('bad_request')
   })
 
   it('parses fork/rewind capabilities and side-task summary fields', () => {

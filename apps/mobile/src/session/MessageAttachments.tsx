@@ -1,5 +1,6 @@
 import type { MobileMessageAttachment } from '@universe-editor/mobile-protocol'
 import { useEffect, useState } from 'react'
+import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { formatAttachmentSize, strings } from '../strings.js'
 
 export interface AttachmentBlobSource {
@@ -47,6 +48,7 @@ function AttachmentImage({
 }) {
   const [url, setUrl] = useState<string | undefined>(undefined)
   const [failed, setFailed] = useState(false)
+  const [previewing, setPreviewing] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -87,13 +89,30 @@ function AttachmentImage({
   return (
     <div className="message__attachment-image" data-testid="user-attachment-image">
       {url !== undefined ? (
-        <img
-          src={url}
-          alt={attachment.name === '' ? strings.attachmentImageAlt : attachment.name}
-          loading="lazy"
-        />
+        <button
+          type="button"
+          className="message__attachment-image-button"
+          data-testid="user-attachment-image-button"
+          aria-label={strings.imagePreviewOpen(
+            attachment.name === '' ? strings.attachmentImageAlt : attachment.name,
+          )}
+          onClick={() => setPreviewing(true)}
+        >
+          <img
+            src={url}
+            alt={attachment.name === '' ? strings.attachmentImageAlt : attachment.name}
+            loading="lazy"
+          />
+        </button>
       ) : (
         <span className="message__attachment-placeholder" aria-hidden="true" />
+      )}
+      {previewing && url !== undefined && (
+        <ImagePreviewOverlay
+          src={url}
+          alt={attachment.name === '' ? strings.attachmentImageAlt : attachment.name}
+          onClose={() => setPreviewing(false)}
+        />
       )}
     </div>
   )

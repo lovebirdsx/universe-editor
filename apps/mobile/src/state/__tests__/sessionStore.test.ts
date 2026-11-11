@@ -186,6 +186,36 @@ describe('SessionStore message events', () => {
     expect(store.getState().timeline[0]).not.toHaveProperty('attachments')
   })
 
+  it('keeps images across text-only upserts and clears them explicitly', () => {
+    const image = { index: 0, mimeType: 'image/png', size: 3 }
+    const store = new SessionStore()
+    store.applySnapshot(
+      sessionSnapshotFrame(1, {
+        timeline: [{ ...agentMessage('m1', ''), images: [image] }],
+      }),
+    )
+
+    store.applyDelta(
+      sessionDeltaFrame(2, [
+        {
+          type: 'message_upsert',
+          id: 'm1',
+          role: 'agent',
+          textAppend: 'caption',
+          streaming: false,
+        },
+      ]),
+    )
+    expect(store.getState().timeline[0]).toMatchObject({ text: 'caption', images: [image] })
+
+    store.applyDelta(
+      sessionDeltaFrame(3, [
+        { type: 'message_upsert', id: 'm1', role: 'agent', streaming: false, images: [] },
+      ]),
+    )
+    expect(store.getState().timeline[0]).not.toHaveProperty('images')
+  })
+
   it('creates a message directly from an upsert carrying attachments', () => {
     const store = loadedStore()
     const attachment = {

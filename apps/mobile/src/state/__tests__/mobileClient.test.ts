@@ -656,3 +656,45 @@ describe('MobileClient connection diagnosis', () => {
     expect(harness.timers.pendingTimeoutDelays()).toEqual([])
   })
 })
+
+describe('MobileClient session images', () => {
+  it('rejects when no session is open', async () => {
+    const { client } = createHarness()
+    await expect(client.fetchMessageImageBlob('m1', 0)).rejects.toMatchObject({
+      code: 'session_not_found',
+    })
+    await expect(client.fetchWorkspaceImageBlob('img/a.png')).rejects.toMatchObject({
+      code: 'session_not_found',
+    })
+  })
+
+  it('fetches message and workspace images with the open ref', async () => {
+    const fetchImpl = vi.fn(
+      async (_input: string | URL | Request) =>
+        new Response(new Uint8Array([1, 2]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        }),
+    )
+    const { client } = createHarness({ fetchImpl: fetchImpl as unknown as typeof fetch })
+    client.openSessionRef(sessionRef('local-1', 2, 'durable-1'))
+
+    const messageBlob = await client.fetchMessageImageBlob('m1', 3)
+    expect(messageBlob.size).toBe(2)
+    const messageUrl = new URL(String(fetchImpl.mock.calls[0]?.[0]))
+    expect(messageUrl.pathname).toBe('/api/sessions/image')
+    expect(Object.fromEntries(messageUrl.searchParams)).toEqual({
+      windowId: '2',
+      localId: 'local-1',
+      durableId: 'durable-1',
+      message: 'm1',
+      index: '3',
+    })
+
+    await client.fetchWorkspaceImageBlob('img/a.png')
+    const workspaceUrl = new URL(String(fetchImpl.mock.calls[1]?.[0]))
+    expect(workspaceUrl.pathname).toBe('/api/sessions/file')
+    expect(workspaceUrl.searchParams.get('path')).toBe('img/a.png')
+    expect(workspaceUrl.searchParams.get('durableId')).toBe('durable-1')
+  })
+})

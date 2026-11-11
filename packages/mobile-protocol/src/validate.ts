@@ -8,6 +8,12 @@ import {
   type MobileMessageAttachment,
 } from './attachments.js'
 import { isMobileErrorCode } from './errors.js'
+import {
+  MAX_IMAGES_PER_MESSAGE,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MAX_MESSAGE_IMAGE_INDEX,
+  type MobileMessageImage,
+} from './images.js'
 import type {
   ClientFrame,
   ClientStateFrame,
@@ -1285,6 +1291,53 @@ function parseAttachments(
   return ok(attachments)
 }
 
+function parseImages(
+  value: unknown,
+  field: string,
+): Result<readonly MobileMessageImage[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', `${field} must be an array`)
+  if (value.length > MAX_IMAGES_PER_MESSAGE) {
+    return fail('bad_request', `${field} must contain at most ${MAX_IMAGES_PER_MESSAGE} entries`)
+  }
+  const images: MobileMessageImage[] = []
+  for (const item of value) {
+    if (!isRecord(item)) return fail('bad_request', `${field} entries must be objects`)
+    const index = item.index
+    if (!isNonNegativeInteger(index) || index > MAX_MESSAGE_IMAGE_INDEX) {
+      return fail(
+        'bad_request',
+        `${field}.index must be a non-negative integer up to ${MAX_MESSAGE_IMAGE_INDEX}`,
+      )
+    }
+    const mimeType = item.mimeType
+    if (!isNonEmptyBoundedString(mimeType, MAX_ATTACHMENT_MIME_LENGTH)) {
+      return fail(
+        'bad_request',
+        `${field}.mimeType must be 1–${MAX_ATTACHMENT_MIME_LENGTH} characters`,
+      )
+    }
+    const size = item.size
+    if (!isNonNegativeInteger(size) || size > MAX_MESSAGE_IMAGE_BYTES) {
+      return fail(
+        'bad_request',
+        `${field}.size must be a non-negative integer up to ${MAX_MESSAGE_IMAGE_BYTES}`,
+      )
+    }
+    const truncated = item.truncated
+    if (truncated !== undefined && typeof truncated !== 'boolean') {
+      return fail('bad_request', `${field}.truncated must be a boolean`)
+    }
+    images.push({
+      index,
+      mimeType,
+      size,
+      ...(truncated === true ? { truncated: true } : {}),
+    })
+  }
+  return ok(images)
+}
+
 function parseTimeline(value: unknown): Result<MobileTimelineItem[]> {
   if (!Array.isArray(value)) {
     return fail('bad_request', 'session.timeline must be an array')
@@ -1341,6 +1394,8 @@ function parseTimelineMessage(value: Record<string, unknown>): Result<MobileTime
   if (!hasNonText.ok) return hasNonText
   const attachments = parseAttachments(value.attachments, 'message.attachments')
   if (!attachments.ok) return attachments
+  const images = parseImages(value.images, 'message.images')
+  if (!images.ok) return images
   const messageId = parseOptionalNonEmptyString(value.messageId, MAX_ID_LENGTH, 'message.messageId')
   if (!messageId.ok) return messageId
   const canFork = parseOptionalBoolean(value.canFork, 'message.canFork')
@@ -1353,6 +1408,7 @@ function parseTimelineMessage(value: Record<string, unknown>): Result<MobileTime
     streaming,
     ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
     ...(attachments.value !== undefined ? { attachments: attachments.value } : {}),
+    ...(images.value !== undefined ? { images: images.value } : {}),
     ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
     ...(messageId.value !== undefined ? { messageId: messageId.value } : {}),
     ...(canFork.value !== undefined ? { canFork: canFork.value } : {}),
@@ -2030,6 +2086,8 @@ function parseMessageUpsertEvent(value: Record<string, unknown>): Result<MobileS
   if (!hasNonText.ok) return hasNonText
   const attachments = parseAttachments(value.attachments, 'message_upsert.attachments')
   if (!attachments.ok) return attachments
+  const images = parseImages(value.images, 'message_upsert.images')
+  if (!images.ok) return images
   const messageId = parseOptionalNonEmptyString(
     value.messageId,
     MAX_ID_LENGTH,
@@ -2047,6 +2105,7 @@ function parseMessageUpsertEvent(value: Record<string, unknown>): Result<MobileS
     ...(textReplace.value !== undefined ? { textReplace: textReplace.value } : {}),
     ...(memoryTrimmed.value !== undefined ? { memoryTrimmed: memoryTrimmed.value } : {}),
     ...(attachments.value !== undefined ? { attachments: attachments.value } : {}),
+    ...(images.value !== undefined ? { images: images.value } : {}),
     ...(hasNonText.value !== undefined ? { hasNonText: hasNonText.value } : {}),
     ...(messageId.value !== undefined ? { messageId: messageId.value } : {}),
     ...(canFork.value !== undefined ? { canFork: canFork.value } : {}),

@@ -1,4 +1,8 @@
-import { MAX_ATTACHMENTS_PER_PROMPT, MAX_MOBILE_COMMANDS } from '@universe-editor/mobile-protocol'
+import {
+  MAX_ATTACHMENTS_PER_PROMPT,
+  MAX_IMAGES_PER_MESSAGE,
+  MAX_MOBILE_COMMANDS,
+} from '@universe-editor/mobile-protocol'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import type { AcpChildItem, AcpToolCall } from '../../acp/session/acpSession.js'
 import type { AcpMessage } from '../../acp/session/acpSessionModel.js'
@@ -187,6 +191,39 @@ describe('projectMessage mobile attachments', () => {
     expect(projected).not.toHaveProperty('hasNonText')
   })
 
+  it('projects file attachments and drops their text placeholder when images are rebuilt', () => {
+    const fileMeta = {
+      id: 'att-2',
+      kind: 'file',
+      name: 'notes.txt',
+      mimeType: 'text/plain',
+      size: 5,
+    }
+    const projected = projectMessage(
+      message([
+        { type: 'text', text: 'look' },
+        {
+          type: 'image',
+          data: 'AAA=',
+          mimeType: 'image/png',
+          _meta: { mobileAttachment: attachmentMeta },
+        },
+        {
+          type: 'resource_link',
+          uri: 'file:///tmp/notes.txt',
+          name: 'notes.txt',
+          mimeType: 'text/plain',
+          size: 5,
+          _meta: { mobileAttachment: fileMeta },
+        },
+        { type: 'text', text: 'done' },
+      ]),
+    )
+    expect(projected.attachments).toEqual([attachmentMeta, fileMeta])
+    expect(projected).not.toHaveProperty('hasNonText')
+    expect(projected.text).toBe('lookdone')
+  })
+
   it('keeps hasNonText for blocks without a mobile attachment stamp', () => {
     const projected = projectMessage(
       message([
@@ -247,6 +284,112 @@ describe('projectMessage mobile attachments', () => {
     expect(diffMessage(withAttachment, withoutAttachment)).toMatchObject({
       type: 'message_upsert',
       attachments: [],
+    })
+  })
+})
+
+describe('projectMessage mobile images', () => {
+  function message(blocks: AcpMessage['blocks'], overrides: Partial<AcpMessage> = {}): AcpMessage {
+    return {
+      id: 'm1',
+      role: 'agent',
+      text: '',
+      blocks,
+      streaming: false,
+      ...overrides,
+    }
+  }
+
+  it('projects plain image blocks and drops their text placeholders', () => {
+    const projected = projectMessage(
+      message([
+        { type: 'text', text: 'before' },
+        { type: 'image', data: 'AAA=', mimeType: 'image/png' },
+        { type: 'text', text: 'after' },
+      ]),
+    )
+    expect(projected).toMatchObject({
+      images: [{ index: 0, mimeType: 'image/png', size: 2 }],
+      text: 'beforeafter',
+    })
+    expect(projected).not.toHaveProperty('hasNonText')
+  })
+
+  it('keeps the image ordinal correct when attachments precede plain images', () => {
+    const projected = projectMessage(
+      message([
+        {
+          type: 'image',
+          data: 'AAA=',
+          mimeType: 'image/png',
+          _meta: {
+            mobileAttachment: {
+              id: 'att-1',
+              kind: 'image',
+              name: 'shot.png',
+              mimeType: 'image/png',
+              size: 3,
+            },
+          },
+        },
+        { type: 'image', data: 'AAAA', mimeType: 'image/jpeg' },
+        { type: 'text', text: 'caption' },
+      ]),
+    )
+    expect(projected.attachments).toHaveLength(1)
+    expect(projected.images).toEqual([{ index: 1, mimeType: 'image/jpeg', size: 3 }])
+    expect(projected.text).toBe('caption')
+  })
+
+  it('marks truncated payloads without requesting them', () => {
+    const projected = projectMessage(
+      message([
+        {
+          type: 'image',
+          data: '',
+          mimeType: 'image/png',
+          _meta: { 'universe-editor/truncated': true },
+        },
+      ]),
+    )
+    expect(projected.images).toEqual([
+      { index: 0, mimeType: 'image/png', size: 0, truncated: true },
+    ])
+  })
+
+  it('keeps hasNonText for images the phone cannot render', () => {
+    const projected = projectMessage(
+      message([{ type: 'image', data: 'AAA=', mimeType: 'image/svg+xml' }]),
+    )
+    expect(projected).not.toHaveProperty('images')
+    expect(projected).toMatchObject({ hasNonText: true })
+  })
+
+  it('caps projected images and keeps the rest as non-text content', () => {
+    const blocks: AcpMessage['blocks'] = Array.from({ length: MAX_IMAGES_PER_MESSAGE + 1 }, () => ({
+      type: 'image' as const,
+      data: 'AAA=',
+      mimeType: 'image/png',
+    }))
+    const projected = projectMessage(message(blocks))
+    expect(projected.images).toHaveLength(MAX_IMAGES_PER_MESSAGE)
+    expect(projected).toMatchObject({ hasNonText: true })
+    expect(projected.text).toBe('[image: image/png]')
+  })
+
+  it('diffs image arrays and clears them explicitly', () => {
+    const withImage = projectMessage(
+      message([{ type: 'image', data: 'AAA=', mimeType: 'image/png' }]),
+    )
+    const withoutImage = projectMessage(message([]))
+    expect(diffMessage(withImage, withImage)).toBeUndefined()
+    expect(diffMessage(withImage, withoutImage)).toMatchObject({
+      type: 'message_upsert',
+      images: [],
+    })
+    expect(diffMessage(withoutImage, withImage)).toMatchObject({
+      type: 'message_upsert',
+      images: [{ index: 0, mimeType: 'image/png', size: 2 }],
     })
   })
 })
