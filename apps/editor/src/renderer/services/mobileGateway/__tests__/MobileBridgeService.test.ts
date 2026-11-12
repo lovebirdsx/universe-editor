@@ -393,6 +393,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     start: vi.fn(),
     startInBackground: vi.fn(),
     confirmPush: vi.fn(),
+    confirmPushInBackground: vi.fn(),
     retry: vi.fn(),
     undo: vi.fn(),
     openMainWorktree: vi.fn(),
@@ -3984,6 +3985,20 @@ describe('MobileBridgeService deliveries', () => {
       value: { deliveryId: 'del-1' },
     })
     expect(harness.delivery.startInBackground).toHaveBeenCalledWith('s1', expectation)
+
+    vi.mocked(harness.delivery.getRecord).mockReturnValue({
+      source: { sessionLocalId: 's1', sessionDurableId: 'd1' },
+    } as unknown as ReturnType<ISessionDeliveryService['getRecord']>)
+    vi.mocked(harness.delivery.confirmPushInBackground).mockResolvedValue({
+      ok: true,
+      value: undefined,
+    })
+    await expect(harness.service.confirmDeliveryPush('s1', 'del-1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.delivery.confirmPushInBackground).toHaveBeenCalledWith('del-1')
+    expect(harness.delivery.confirmPush).not.toHaveBeenCalled()
   })
 
   it('rejects delivery commands for unknown sessions and foreign delivery ids', async () => {

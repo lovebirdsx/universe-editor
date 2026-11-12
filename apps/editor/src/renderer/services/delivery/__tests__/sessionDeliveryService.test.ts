@@ -28,6 +28,7 @@ function value<T>(current: T): { get(): T } {
 }
 
 type BeginResult = Awaited<ReturnType<ISessionDeliveryGit['begin']>>
+type PromoteResult = Awaited<ReturnType<ISessionDeliveryGit['promoteAndPush']>>
 
 function deferred<T>(): {
   readonly promise: Promise<T>
@@ -765,6 +766,176 @@ describe('SessionDeliveryService confirmPush / undo', () => {
     expect(retried.ok).toBe(true)
     expect(git.undo).toHaveBeenCalledTimes(2)
     expect(active.getSummaryForSession('s1')?.phase).toBe('undone')
+  })
+})
+
+describe('SessionDeliveryService background push', () => {
+  async function awaitingPush(service: SessionDeliveryService): Promise<string> {
+    const preview = await previewOf(service)
+    const started = await service.start('s1', preview.expectation)
+    if (!started.ok) throw new Error(`start failed: ${started.error.code}`)
+    return started.value.deliveryId
+  }
+
+  it('returns before promote/push/sync finishes and continues in the background', async () => {
+    const pending = deferred<PromoteResult>()
+    const git = makeGit({ promoteAndPush: vi.fn(() => pending.promise) })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    const accepted = await service.confirmPushInBackground(deliveryId)
+    expect(accepted.ok).toBe(true)
+    expect(service.getSummaryForSession('s1')?.phase).toBe('pushing')
+    expect(git.syncWorktrees).not.toHaveBeenCalled()
+
+    pending.resolve({
+      ok: true,
+      pushedSha: 'picked1',
+      mainHead: 'picked1',
+      remoteRef: 'origin/main',
+    })
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('synced')
+    })
+    expect(git.syncWorktrees).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the temp worktree and releases the lock when the push fails', async () => {
+    const git = makeGit({
+      promoteAndPush: vi.fn(async () => ({
+        ok: false as const,
+        error: { code: 'push_failed' as const, message: 'push failed' },
+      })),
+    })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    const accepted = await service.confirmPushInBackground(deliveryId)
+    expect(accepted.ok).toBe(true)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('failed')
+    })
+    expect(git.releaseLock).toHaveBeenCalledTimes(1)
+    expect(git.abortPick).not.toHaveBeenCalled()
+    expect(git.restoreMain).not.toHaveBeenCalled()
+    expect(service.getRecord(deliveryId)).toMatchObject({
+      tempWorktree: '/repo/.delivery/wt',
+      tempHead: 'picked1',
+    })
+    expect(service.getSummaryForSession('s1')?.canRetry).toBe(true)
+  })
+
+  it('fails safely and keeps the temp worktree when the push throws', async () => {
+    const git = makeGit({
+      promoteAndPush: vi.fn(async () => {
+        throw new Error('extension host disconnected')
+      }),
+    })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    const accepted = await service.confirmPushInBackground(deliveryId)
+    expect(accepted.ok).toBe(true)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('failed')
+    })
+    expect(git.releaseLock).toHaveBeenCalledTimes(1)
+    expect(git.abortPick).not.toHaveBeenCalled()
+    expect(git.restoreMain).not.toHaveBeenCalled()
+    expect(service.getRecord(deliveryId)?.tempWorktree).toBe('/repo/.delivery/wt')
+    expect(service.getSummaryForSession('s1')?.error?.detail).toContain('could not be verified')
+  })
+
+  it('finishes syncing when the push throws but the remote already has the commit', async () => {
+    const git = makeGit({
+      inspect: vi.fn(async () => ({
+        ok: true as const,
+        ...inspectData({
+          repository: { ...inspectData().repository, upstreamHead: 'picked1', mainHead: 'm1' },
+        }),
+      })),
+      promoteAndPush: vi.fn(async () => {
+        throw new Error('connection reset')
+      }),
+    })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    const accepted = await service.confirmPushInBackground(deliveryId)
+    expect(accepted.ok).toBe(true)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('synced')
+    })
+    expect(git.syncWorktrees).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a second background push while the first is still running', async () => {
+    const pending = deferred<PromoteResult>()
+    const git = makeGit({ promoteAndPush: vi.fn(() => pending.promise) })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    const first = await service.confirmPushInBackground(deliveryId)
+    expect(first.ok).toBe(true)
+    const second = await service.confirmPushInBackground(deliveryId)
+    expect(second.ok).toBe(false)
+    if (!second.ok) expect(second.error.code).toBe('unsupported')
+    expect(git.promoteAndPush).toHaveBeenCalledTimes(1)
+
+    pending.resolve({
+      ok: true,
+      pushedSha: 'picked1',
+      mainHead: 'picked1',
+      remoteRef: 'origin/main',
+    })
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('synced')
+    })
+  })
+
+  it('retries a failed push in the background', async () => {
+    let attempts = 0
+    const pending = deferred<PromoteResult>()
+    const git = makeGit({
+      promoteAndPush: vi.fn(() => {
+        attempts++
+        if (attempts === 1) {
+          return Promise.resolve({
+            ok: false as const,
+            error: { code: 'push_failed' as const, message: 'push failed' },
+          })
+        }
+        return pending.promise
+      }),
+    })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    await service.confirmPushInBackground(deliveryId)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('failed')
+    })
+
+    const retried = await service.retry(deliveryId)
+    expect(retried.ok).toBe(true)
+    expect(service.getSummaryForSession('s1')?.phase).toBe('pushing')
+    expect(git.promoteAndPush).toHaveBeenCalledTimes(2)
+
+    pending.resolve({
+      ok: true,
+      pushedSha: 'picked1',
+      mainHead: 'picked1',
+      remoteRef: 'origin/main',
+    })
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('synced')
+    })
   })
 })
 

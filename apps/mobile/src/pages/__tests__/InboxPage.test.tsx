@@ -135,13 +135,14 @@ function renderPage(
   client: MobileClient,
   onOpenSession = vi.fn(),
   onDeliveryNotice = vi.fn(),
+  onNotice = vi.fn(),
 ): void {
   render(
     <InboxPage
       client={client}
       credentials={credentials}
       onDismissNotice={vi.fn()}
-      onNotice={vi.fn()}
+      onNotice={onNotice}
       onDeliveryNotice={onDeliveryNotice}
       onOpenSession={onOpenSession}
       onOpenSessions={vi.fn()}
@@ -338,6 +339,47 @@ describe('InboxPage delivery', () => {
 
     await waitFor(() => expect(onDeliveryNotice).toHaveBeenCalledTimes(1))
     expect(onDeliveryNotice.mock.calls[0]?.[0]).toContain('Session s1')
+  })
+
+  it('closes the push confirmation before the background push resolves', async () => {
+    const client = createClient([
+      sessionSummary('s1', { delivery: deliverySummary(), deliveryAvailable: true }),
+    ])
+    let resolvePush: () => void = () => undefined
+    vi.mocked(client.confirmDeliveryPush).mockReturnValue(
+      new Promise<void>((resolve) => {
+        resolvePush = resolve
+      }),
+    )
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    fireEvent.click(await screen.findByTestId('delivery-confirm-push'))
+    fireEvent.click(await screen.findByTestId('delivery-push-confirm-sheet-confirm'))
+
+    expect(screen.queryByTestId('delivery-detail-sheet')).toBeNull()
+    expect(client.confirmDeliveryPush).toHaveBeenCalledWith(
+      expect.objectContaining({ localId: 's1' }),
+      'd-1',
+    )
+
+    resolvePush()
+  })
+
+  it('reports a push start failure after closing the confirmation', async () => {
+    const client = createClient([
+      sessionSummary('s1', { delivery: deliverySummary(), deliveryAvailable: true }),
+    ])
+    vi.mocked(client.confirmDeliveryPush).mockRejectedValue(new Error('offline'))
+    const onNotice = vi.fn()
+    renderPage(client, vi.fn(), vi.fn(), onNotice)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    fireEvent.click(await screen.findByTestId('delivery-confirm-push'))
+    fireEvent.click(await screen.findByTestId('delivery-push-confirm-sheet-confirm'))
+
+    await waitFor(() => expect(onNotice).toHaveBeenCalledTimes(1))
+    expect(screen.queryByTestId('delivery-detail-sheet')).toBeNull()
   })
 
   it('does not re-preview when the inbox updates during confirmation', async () => {

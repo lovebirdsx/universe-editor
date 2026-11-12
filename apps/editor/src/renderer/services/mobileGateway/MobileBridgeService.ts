@@ -1703,7 +1703,9 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     localId: string,
     deliveryId: string,
   ): Promise<MobileBridgeResult<void>> {
-    return this._runDelivery(localId, deliveryId, () => this._delivery.confirmPush(deliveryId))
+    return this._runDelivery(localId, deliveryId, () =>
+      this._delivery.confirmPushInBackground(deliveryId),
+    )
   }
 
   async retryDelivery(localId: string, deliveryId: string): Promise<MobileBridgeResult<void>> {

@@ -96,6 +96,12 @@ export interface ISessionDeliveryService {
     expectation: SessionDeliveryStartExpectation,
   ): Promise<SessionDeliveryCommandResult<SessionDeliveryStartResult>>
   confirmPush(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
+  /**
+   * Validate, lock and persist `pushing` synchronously, then run promote/push/
+   * sync in the background. Later failures land in the record and reach the
+   * phone through the normal inbox deltas.
+   */
+  confirmPushInBackground(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
   retry(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
   undo(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
   openMainWorktree(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
@@ -163,6 +169,12 @@ interface PreparedSessionDeliveryStart {
   readonly expectation: SessionDeliveryStartExpectation
 }
 
+interface PreparedSessionDeliveryPush {
+  readonly record: SessionDeliveryRecord
+  readonly tempWorktree: string
+  readonly tempHead: string
+}
+
 const HEARTBEAT_INTERVAL_MS = 60_000
 
 function failure(
@@ -217,6 +229,8 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
   private _writeChain: Promise<void> = Promise.resolve()
   private readonly _deliverableChanges = new Map<string, DeliverableChangesEntry>()
   private readonly _deliverableProbeTimers = new Set<ReturnType<typeof setTimeout>>()
+  /** Same-renderer guard: two confirms must not promote/push the same record. */
+  private readonly _pushInFlight = new Set<string>()
   private _disposed = false
 
   constructor(
@@ -598,7 +612,84 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     })
   }
 
+  /**
+   * Background-push cleanup. Unlike _failDeliverySafely this must keep the temp
+   * worktree for a retry; before recording a push failure it verifies the
+   * remote, because the extension RPC may reject after the push already landed.
+   */
+  private async _failPushSafely(deliveryId: string, error: SessionDeliveryError): Promise<void> {
+    const latest = this._records.get(deliveryId)
+    if (latest === undefined || !isActiveDeliveryPhase(latest.phase)) return
+    let finalError = error
+    if (latest.phase === 'pushing' && latest.pushedSha === undefined) {
+      let state: 'pushed' | 'local_only' | 'lost' | 'unknown' = 'unknown'
+      try {
+        state = await this._remoteDeliveryState(latest)
+      } catch (err) {
+        this._logger.warn(`failed to verify the push state for delivery ${deliveryId}`, err)
+      }
+      if (state === 'pushed') {
+        const syncing =
+          this._update(latest.id, {
+            phase: 'syncing',
+            pushedSha: latest.tempHead,
+            tempWorktree: undefined,
+            tempHead: undefined,
+          }) ?? latest
+        try {
+          await this._syncRecord(syncing)
+        } catch (err) {
+          this._logger.warn(`failed to sync worktrees after an uncertain push`, err)
+          await this._releaseLockSafely(syncing)
+          this._update(syncing.id, { phase: 'failed', error: finalError })
+        }
+        return
+      }
+      if (state === 'local_only') {
+        // Main already holds the delivery commit but the remote does not.
+        // Return to awaiting_push with the temp worktree intact.
+        this._update(latest.id, {
+          phase: 'awaiting_push',
+          pushedSha: undefined,
+          error: undefined,
+        })
+        this._startHeartbeat(latest)
+        return
+      }
+      finalError = appendDetail(
+        finalError,
+        'The remote branch could not be verified; check it before retrying.',
+      )
+    }
+    await this._releaseLockSafely(latest)
+    this._update(latest.id, { phase: 'failed', error: finalError })
+  }
+
   async confirmPush(deliveryId: string): Promise<SessionDeliveryCommandResult<void>> {
+    const prepared = await this._prepareConfirmPush(deliveryId)
+    if (!prepared.ok) return prepared
+    return this._runPush(prepared.value)
+  }
+
+  async confirmPushInBackground(deliveryId: string): Promise<SessionDeliveryCommandResult<void>> {
+    const prepared = await this._prepareConfirmPush(deliveryId)
+    if (!prepared.ok) return prepared
+    const id = prepared.value.record.id
+    void this._runPush(prepared.value)
+      .then((result) => {
+        if (!result.ok) {
+          this._logger.warn(`background push ${id} failed: ${result.error.code}`)
+        }
+      })
+      .catch((err: unknown) => {
+        this._logger.warn(`background push ${id} crashed`, err)
+      })
+    return { ok: true, value: undefined }
+  }
+
+  private async _prepareConfirmPush(
+    deliveryId: string,
+  ): Promise<SessionDeliveryCommandResult<PreparedSessionDeliveryPush>> {
     await this.initialize()
     const record = this._records.get(deliveryId)
     if (record === undefined) return { ok: false, error: failure('not_found', 'Unknown delivery.') }
@@ -616,41 +707,94 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     }
     const locked = await this._ensureLock(record)
     if (!locked.ok) return { ok: false, error: locked.error! }
-    let current = locked.record
-    const tempWorktree = record.tempWorktree
-    const tempHead = record.tempHead
-    current = this._update(current.id, { phase: 'pushing', error: undefined }) ?? current
-    const promoted = await this._git.promoteAndPush({
-      commonDir: current.commonDir,
-      deliveryId: current.id,
-      token: current.lockToken!,
-      mainWorktree: current.target.mainWorktree,
-      targetBranch: current.target.targetBranch,
-      baseSha: current.target.baseSha,
-      tempWorktree,
-      tempHead,
-      remote: current.target.remote,
-      upstreamRef: current.target.upstreamRef,
-    })
-    if (!promoted.ok) {
-      const error = fromGitFailure(promoted.error)
-      await this._releaseLock(current)
-      // Keep the temp worktree: the extension restores main to the base commit,
-      // so the user can retry the push from the delivery detail.
-      current = this._update(current.id, { phase: 'failed', error }) ?? current
-      return { ok: false, error }
+    if (this._pushInFlight.has(deliveryId)) {
+      return { ok: false, error: failure('busy', 'This delivery is already pushing.') }
     }
-    current =
-      this._update(current.id, {
-        pushedSha: promoted.pushedSha,
-        remoteRef: promoted.remoteRef,
-        phase: 'syncing',
-        tempWorktree: undefined,
-        tempHead: undefined,
-      }) ?? current
-    const syncError = await this._syncRecord(current)
-    if (syncError !== undefined) return { ok: false, error: syncError }
-    return { ok: true, value: undefined }
+    const latest = this._records.get(deliveryId) ?? locked.record
+    if (
+      (latest.phase !== 'awaiting_push' && latest.phase !== 'failed') ||
+      latest.tempWorktree === undefined ||
+      latest.tempHead === undefined
+    ) {
+      return {
+        ok: false,
+        error: failure('unsupported', 'This delivery is not waiting to be pushed.'),
+      }
+    }
+    this._pushInFlight.add(deliveryId)
+    try {
+      // A failed push released its lock; the normal awaiting_push path kept the
+      // heartbeat running, so retries need to start it again.
+      this._startHeartbeat(latest)
+      const current = this._update(latest.id, { phase: 'pushing', error: undefined }) ?? latest
+      // The phone closes its sheet before this returns; make `pushing` durable
+      // first so a renderer crash can still reconcile from the remote state.
+      await this._writeChain
+      return {
+        ok: true,
+        value: {
+          record: current,
+          tempWorktree: latest.tempWorktree,
+          tempHead: latest.tempHead,
+        },
+      }
+    } catch (err) {
+      this._pushInFlight.delete(deliveryId)
+      throw err
+    }
+  }
+
+  private async _runPush(
+    prepared: PreparedSessionDeliveryPush,
+  ): Promise<SessionDeliveryCommandResult<void>> {
+    let current = prepared.record
+    try {
+      const promoted = await this._git.promoteAndPush({
+        commonDir: current.commonDir,
+        deliveryId: current.id,
+        token: current.lockToken!,
+        mainWorktree: current.target.mainWorktree,
+        targetBranch: current.target.targetBranch,
+        baseSha: current.target.baseSha,
+        tempWorktree: prepared.tempWorktree,
+        tempHead: prepared.tempHead,
+        remote: current.target.remote,
+        upstreamRef: current.target.upstreamRef,
+      })
+      if (!promoted.ok) {
+        const error = fromGitFailure(promoted.error)
+        await this._releaseLock(current)
+        // Keep the temp worktree: the extension restores main to the base commit,
+        // so the user can retry the push from the delivery detail.
+        current = this._update(current.id, { phase: 'failed', error }) ?? current
+        return { ok: false, error }
+      }
+      current =
+        this._update(current.id, {
+          pushedSha: promoted.pushedSha,
+          remoteRef: promoted.remoteRef,
+          phase: 'syncing',
+          tempWorktree: undefined,
+          tempHead: undefined,
+        }) ?? current
+      const syncError = await this._syncRecord(current)
+      if (syncError !== undefined) return { ok: false, error: syncError }
+      return { ok: true, value: undefined }
+    } catch (err) {
+      const error = failure(
+        'push_failed',
+        'The push stopped unexpectedly.',
+        err instanceof Error ? err.message : String(err),
+      )
+      await this._failPushSafely(current.id, error)
+      const settled = this._records.get(current.id)?.phase
+      // The extension RPC may reject after the push already landed; the remote
+      // check above can still finish the delivery successfully.
+      if (settled === 'synced' || settled === 'partial') return { ok: true, value: undefined }
+      return { ok: false, error }
+    } finally {
+      this._pushInFlight.delete(current.id)
+    }
   }
 
   async retry(deliveryId: string): Promise<SessionDeliveryCommandResult<void>> {
@@ -677,7 +821,7 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     // A failed push keeps the temp worktree; retry the push instead of creating
     // a second delivery whose temporary worktree would be left behind.
     if (record.tempWorktree !== undefined && record.tempHead !== undefined) {
-      return this.confirmPush(deliveryId)
+      return this.confirmPushInBackground(deliveryId)
     }
     const session = await this._resolveSourceSession(record)
     if (session === undefined) {
@@ -964,6 +1108,7 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     for (const timer of this._deliverableProbeTimers) clearTimeout(timer)
     this._deliverableProbeTimers.clear()
     this._deliverableChanges.clear()
+    this._pushInFlight.clear()
     for (const timer of this._heartbeats.values()) clearInterval(timer)
     this._heartbeats.clear()
     super.dispose()
@@ -1570,6 +1715,15 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     if (token === undefined) return
     await this._git.releaseLock({ commonDir: record.commonDir, token })
     this._update(record.id, { lockToken: undefined, lockInstanceId: undefined })
+  }
+
+  private async _releaseLockSafely(record: SessionDeliveryRecord): Promise<void> {
+    try {
+      await this._releaseLock(record)
+    } catch (err) {
+      this._logger.warn(`failed to release the delivery lock for ${record.id}`, err)
+      this._stopHeartbeat(record.id)
+    }
   }
 
   private _startHeartbeat(record: SessionDeliveryRecord): void {

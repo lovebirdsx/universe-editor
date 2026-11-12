@@ -261,7 +261,7 @@ Referer。
 | 交付        | `previewDelivery`                        | `{ ref }`                                                                       | 交付 dry-run：源 / 目标 / 提交列表 / blocker / 期望 heads；不改 git                                                                                       |
 | 交付        | `startDelivery`                          | `{ ref, expectation }`                                                          | 重新校验 preview 的 heads 后启动后台交付，成功即返回 `deliveryId`（后续阶段经 inbox 下发）                                                                  |
 | 交付        | `getDelivery`                            | `{ ref, deliveryId }`                                                           | 详情：阶段、错误、commit 列表、冲突文件、worktree 同步结果                                                                                                |
-| 交付        | `confirmDeliveryPush`                    | `{ ref, deliveryId }`                                                           | 用户确认后前移 main、push、同步 worktree                                                                                                                  |
+| 交付        | `confirmDeliveryPush`                    | `{ ref, deliveryId }`                                                           | 用户确认后只做校验 / 加锁 / 落 `pushing`，成功即返回；前移 main、push、同步 worktree 在 renderer 后台继续（阶段经 inbox 下发）                              |
 | 交付        | `retryDelivery`                          | `{ ref, deliveryId }`                                                           | 失败后重新走 preview + start（旧的临时树与锁会先清理）                                                                                                    |
 | 交付        | `undoDelivery`                           | `{ ref, deliveryId }`                                                           | 撤销最近一次交付：未推送回滚 main；已推送 revert + 非 force push + 同步                                                                                   |
 | 交付        | `openDeliveryMainWorktree`               | `{ ref, deliveryId }`                                                           | 在 PC 打开 main worktree（复用已开窗口）                                                                                                                  |
@@ -309,10 +309,11 @@ prompt、重复建会话或重复分叉。`resolvePromptRef` 语义只读，但�
 120s + 5s 宽限仍等得到。交付命令的网关超时：`previewDelivery` / `startDelivery` /
 `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` 110s（手机端 120s），
 `getDelivery` / `openDeliveryMainWorktree` 10s；跨窗口 busy 探测每窗口 5s。超时回
-`command_result { ok: false, error: 'internal' }`。`startDelivery` 与 `retryDelivery` 的重新交付
-分支只等预检、锁与 record 落盘，不再等 90s 的提交信息 side task；110s 保留给 inspect、锁竞争与
-异常兜底，真正的提交与 cherry-pick 在 renderer 后台执行。手机端 `sendPrompt` 同样是 15s，避免
-手机先超时重发。
+`command_result { ok: false, error: 'internal' }`。`startDelivery` / `confirmDeliveryPush` 与
+`retryDelivery` 的重新交付 / 失败推送重试分支只等预检、锁与 record 落盘（`pushing`），不再等
+提交信息 side task 或 push / worktree 同步；110s 保留给 inspect、锁竞争与异常兜底，真正的流水线
+在 renderer 后台执行。同步重试与撤销仍是同步命令。手机端 `sendPrompt` 同样是 15s，避免手机先
+超时重发。
 
 **服务端 → 客户端**
 
@@ -621,7 +622,13 @@ main 与手机都不执行 git。
 fire-and-forget 在 renderer 继续，手机确认页随即关闭，可自由浏览其它会话。后台链路整体
 try/catch，逃逸异常走 `_failDeliverySafely`：基于**最新** record 隔离执行
 `abortPick` / `restoreMain` / `releaseLock`，最终落 `failed`，失败状态经既有 inbox delta 下发。
-`retryDelivery` 的「重新交付」分支同样后台执行；push 重试与同步重试仍是同步命令。
+`confirmDeliveryPush` 同样拆成 `_prepareConfirmPush`（校验 → `_ensureLock` → 落 `pushing` 并等
+落盘）与 `_runPush`（`promoteAndPush` → `_syncRecord`）：手机在发命令前先关闭确认弹层，成功
+返回即表示推送已被受理，push 与 worktree 同步在后台继续。`_runPush` 的逃逸异常走
+`_failPushSafely`：先经 `_remoteDeliveryState` 复核远端（扩展 RPC 可能在 push 已成功后 reject），
+`pushed` 转同步、`local_only` 回到 `awaiting_push`，否则释放锁并落 `failed`；整条路径**保留临时
+worktree**，供「重试」再次推送。同实例用 `_pushInFlight` 防止重复确认，跨窗口仍由目录锁兜底。
+`retryDelivery` 的「重新交付」分支、失败推送重试分支同样后台执行；同步重试与撤销仍是同步命令。
 
 **流水线**（阶段即 `MobileDeliveryPhase`）：
 
@@ -646,6 +653,8 @@ try/catch，逃逸异常走 `_failDeliverySafely`：基于**最新** record 隔�
    干净、`baseSha` 是 `tempHead` 祖先 → `reset --hard tempHead` → `git push`（绝不 `--force`）。
    push 返回成功还不够：随后 fetch 并解析远端引用，必须等于 `tempHead`，否则按 `push_failed`
    处理（main 已前移时不自动回滚，留给重试 / 撤销判断）。push 失败且 main 仍安全时恢复 `baseSha`。
+   手机确认后弹层立即关闭，阶段转 `pushing`，后续 push 与 `syncing` 都在 renderer 后台执行；失败
+   保留临时 worktree，用户可在详情里「重试」。
 6. `syncing`：源 worktree 仅在 HEAD == `expectedSourceHead`、干净、无进行中时重置到新 main；
    其他 worktree 只在「干净 + 无进行中 + 是 newHead 祖先」时快进，其余跳过并记录原因
    （`skipped_dirty` / `skipped_in_progress` / `skipped_diverged` / `skipped_source_changed`）。
@@ -670,8 +679,9 @@ PID 存活判断，释放校验 token）。锁 owner 记录窗口实例 id：重
 
 **重启恢复**：`awaiting_push` 继续持有锁；`pushing` 只信远端状态——远端已是 `tempHead` 转同步，
 本地 main 已是 `tempHead` 但远端没有则回到 `awaiting_push`（可再次确认推送），其余 `failed`
-且不回滚；其它中间态 abort 临时树 + 恢复 main + `failed`。源会话不在 live 时按
-durable id 非激活恢复，让收件箱行重新出现；恢复失败则直接失败并释放锁。
+且不回滚；其它中间态 abort 临时树 + 恢复 main + `failed`。后台 push 的异常收尾
+（`_failPushSafely`）复用同一套 `_remoteDeliveryState` 判断，因此运行中出错与重启恢复的结论一致。
+源会话不在 live 时按 durable id 非激活恢复，让收件箱行重新出现；恢复失败则直接失败并释放锁。
 
 **手机投影**：会话摘要带 `delivery?`（阶段、commit 数、可否推送/重试/撤销、同步计数）与
 `deliveryAvailable?`；收件箱行有 badge 与顶部汇总（进行中显示阶段 pill：单条显示阶段名，多条
@@ -1482,8 +1492,9 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 - 交付：`extensions/git/src/__tests__/deliveryGit.test.ts` 用真实 git + bare remote 覆盖 inspect /
   ff-only / 分叉 / 脏树 / 临时 worktree / 空提交 / 合并提交 / 冲突 / 冲突解决的越界修改与残留
   标记 / push / sync 分桶 / undo / 锁；`sessionDeliveryService.test.ts` 覆盖 preview 期望、
-  side task 失败与空消息、冲突 resolver、确认推送、撤销守卫与重启恢复；`MobileBridgeService` /
-  `mobileGatewayHub` 覆盖 delivery 投影、命令路由、跨窗口 busy 与 `delivery_busy` guard；
+  side task 失败与空消息、冲突 resolver、确认推送、后台推送的成功 / 失败 / 异常远端复核 /
+  重复确认防护、撤销守卫与重启恢复；`MobileBridgeService` / `mobileGatewayHub` 覆盖 delivery
+  投影、命令路由（含后台推送入口）、跨窗口 busy 与 `delivery_busy` guard；
   协议包测试覆盖 v18（含 `deleteHistorySession` payload）与四个交付错误码。
 
 ## 12. 里程碑

@@ -11,7 +11,7 @@ import { deliveryTone } from './deliveryStatus.js'
 import { DeliveryCommitList, DeliveryErrorList, DeliveryWorktreeResults } from './DeliveryParts.js'
 
 type DetailView = 'detail' | 'confirm-push' | 'confirm-undo'
-type DeliveryAction = 'push' | 'retry' | 'undo' | 'open'
+type DeliveryAction = 'retry' | 'undo' | 'open'
 
 export interface DeliveryDetailSheetProps {
   readonly client: Pick<
@@ -93,12 +93,17 @@ export function DeliveryDetailSheet({
         body={strings.deliveryConfirmPushBody}
         confirmLabel={strings.deliveryConfirmPush}
         testId="delivery-push-confirm-sheet"
-        busy={busy === 'push'}
+        busy={false}
         disabled={!online}
-        onConfirm={() => run('push', () => client.confirmDeliveryPush(session.ref, deliveryId))}
-        onCancel={() => {
-          if (busy === undefined) setView('detail')
+        onConfirm={() => {
+          // Close first: the push keeps running on the PC and the phone follows
+          // it through inbox deltas, so the user is free to keep browsing.
+          onDismiss()
+          void client
+            .confirmDeliveryPush(session.ref, deliveryId)
+            .catch((error: unknown) => onNotice(commandErrorText(errorCode(error))))
         }}
+        onCancel={() => setView('detail')}
       />
     )
   }
@@ -141,7 +146,7 @@ export function DeliveryDetailSheet({
               disabled={disabled}
               onClick={() => setView('confirm-push')}
             >
-              {busy === 'push' ? strings.deliveryPushing : strings.deliveryConfirmPush}
+              {strings.deliveryConfirmPush}
             </button>
           )}
           {summary?.canRetry === true && (

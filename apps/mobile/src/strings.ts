@@ -433,7 +433,6 @@ export const strings = {
   deliveryConfirmPush: '确认推送',
   deliveryConfirmPushTitle: '确认推送到远端？',
   deliveryConfirmPushBody: 'main 将前移到交付提交并推送到远端，不会 force push。',
-  deliveryPushing: '正在推送…',
   deliveryRetry: '重试',
   deliveryRetrying: '正在重试…',
   deliveryAgain: '再次交付',
