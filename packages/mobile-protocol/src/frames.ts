@@ -390,6 +390,7 @@ export const MOBILE_COMMAND_KINDS = [
   'openSideTask',
   'deleteSideTask',
   'listWorkspaces',
+  'listDirectory',
   'listAgents',
   'listSessionHistory',
   'openSession',
@@ -523,12 +524,39 @@ export interface NewSessionWorkspace {
   /** Workspace folder as a URI string (`file:///…` / `remote-ssh://…`). */
   folder: string
   authority?: string
+  /** Workspace-relative session directory (`/`-separated); omitted = root. */
+  relativePath?: string
 }
 
 export interface NewSessionPayload {
   agentId: string
   workspace: NewSessionWorkspace
   initialPrompt?: string
+}
+
+/** List the directories under a workspace-relative path (read-only). */
+export interface ListDirectoryPayload {
+  /** Workspace root URI; must be an open or recent workspace on the PC. */
+  folder: string
+  authority?: string
+  /** Workspace-relative directory (`/`-separated); omitted = workspace root. */
+  relativePath?: string
+}
+
+export interface MobileDirectoryEntry {
+  name: string
+  /** Canonical workspace-relative path of this directory. */
+  relativePath: string
+}
+
+export interface MobileDirectoryListing {
+  /** Canonical workspace-relative path that was listed (`''` = root). */
+  relativePath: string
+  /** Parent directory; omitted at the workspace root. `''` means the root. */
+  parentRelativePath?: string
+  entries: readonly MobileDirectoryEntry[]
+  /** Set when entries were trimmed to the gateway's frame budget. */
+  truncated?: boolean
 }
 
 export interface RenameSessionPayload {

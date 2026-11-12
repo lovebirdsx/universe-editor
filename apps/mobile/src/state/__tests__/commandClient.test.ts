@@ -65,6 +65,7 @@ describe('CommandClient', () => {
     expect(COMMAND_TIMEOUT_MS.openSideTask).toBe(120_000)
     expect(COMMAND_TIMEOUT_MS.deleteSideTask).toBe(120_000)
     expect(COMMAND_TIMEOUT_MS.listWorkspaces).toBe(10_000)
+    expect(COMMAND_TIMEOUT_MS.listDirectory).toBe(25_000)
     expect(COMMAND_TIMEOUT_MS.listSessionHistory).toBe(20_000)
     expect(COMMAND_TIMEOUT_MS.openSession).toBe(120_000)
 
@@ -110,6 +111,8 @@ describe('CommandClient', () => {
     expect(sent[9]?.idempotencyKey).toBeTruthy()
     expect(sent[10]?.idempotencyKey).toBeUndefined()
     expect(sent[11]?.idempotencyKey).toBeTruthy()
+    void client.request('listDirectory', { folder: 'file:///ws' })
+    expect(sent[12]?.idempotencyKey).toBeUndefined()
   })
 
   it('reuses the requestId and idempotency key when resending after a reconnect', () => {

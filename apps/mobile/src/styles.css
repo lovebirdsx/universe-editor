@@ -3193,6 +3193,29 @@ input:focus-visible {
   font-weight: 700;
 }
 
+.directory-picker__path {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.directory-picker__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.directory-picker__error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .new-session-option__text {
   display: flex;
   flex-direction: column;

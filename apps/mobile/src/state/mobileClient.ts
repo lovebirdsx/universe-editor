@@ -10,6 +10,7 @@ import type {
   MobileDeliveryExpectation,
   MobileDeliveryPreview,
   MobileDeliveryStartResult,
+  MobileDirectoryListing,
   MobileDraftFileRef,
   MobileDraftImageRef,
   MobileElicitationAction,
@@ -58,6 +59,7 @@ import {
   isMobileDeliveryDetail,
   isMobileDeliveryPreview,
   isMobileDeliveryStartResult,
+  isMobileDirectoryListing,
   isMobilePromptRefSuggestionsResult,
   isMobilePushBranchPreview,
   isMobilePushBranchResult,
@@ -687,7 +689,7 @@ export class MobileClient {
 
   async newSession(
     agentId: string,
-    workspace: { folder: string; authority?: string },
+    workspace: { folder: string; authority?: string; relativePath?: string },
     initialPrompt?: string,
   ): Promise<MobileNewSessionResult> {
     return this._commands.request<MobileNewSessionResult>('newSession', {
@@ -695,6 +697,22 @@ export class MobileClient {
       workspace,
       ...(initialPrompt !== undefined && initialPrompt !== '' ? { initialPrompt } : {}),
     })
+  }
+
+  /** Read one directory inside a workspace; `relativePath` omitted means its root. */
+  async listDirectory(
+    workspace: { folder: string; authority?: string },
+    relativePath?: string,
+  ): Promise<MobileDirectoryListing> {
+    return this._commands.request<MobileDirectoryListing>(
+      'listDirectory',
+      {
+        folder: workspace.folder,
+        ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),
+        ...(relativePath !== undefined ? { relativePath } : {}),
+      },
+      { validateResult: isMobileDirectoryListing },
+    )
   }
 
   async listAgents(): Promise<readonly MobileAgentCandidate[]> {

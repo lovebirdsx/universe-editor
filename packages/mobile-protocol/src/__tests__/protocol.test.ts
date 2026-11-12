@@ -226,6 +226,69 @@ describe('parseClientFrame', () => {
     expect(parseClientFrame(JSON.stringify(unknown))).toStrictEqual({ ok: true, value: unknown })
   })
 
+  it('leaves workspace-relative path semantics to the hub', () => {
+    // Rejecting `..` here would make the gateway answer `server_error`, which
+    // does not settle the phone's pending command. Shape-only: it must parse.
+    const listFrame = {
+      type: 'command',
+      requestId: 'req',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///ws', relativePath: '../outside' },
+    }
+    expect(parseClientFrame(JSON.stringify(listFrame))).toStrictEqual({
+      ok: true,
+      value: listFrame,
+    })
+
+    const sessionFrame = {
+      type: 'command',
+      requestId: 'req',
+      kind: 'newSession',
+      payload: {
+        agentId: 'claude',
+        workspace: { folder: 'file:///ws', relativePath: '../outside' },
+      },
+    }
+    expect(parseClientFrame(JSON.stringify(sessionFrame))).toStrictEqual({
+      ok: true,
+      value: sessionFrame,
+    })
+  })
+
+  it('normalizes empty workspace-relative paths to absent', () => {
+    const listFrame = {
+      type: 'command',
+      requestId: 'req',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///ws', relativePath: '' },
+    }
+    expect(parseClientFrame(JSON.stringify(listFrame))).toStrictEqual({
+      ok: true,
+      value: {
+        type: 'command',
+        requestId: 'req',
+        kind: 'listDirectory',
+        payload: { folder: 'file:///ws' },
+      },
+    })
+
+    const sessionFrame = {
+      type: 'command',
+      requestId: 'req',
+      kind: 'newSession',
+      payload: { agentId: 'claude', workspace: { folder: 'file:///ws', relativePath: '' } },
+    }
+    expect(parseClientFrame(JSON.stringify(sessionFrame))).toStrictEqual({
+      ok: true,
+      value: {
+        type: 'command',
+        requestId: 'req',
+        kind: 'newSession',
+        payload: { agentId: 'claude', workspace: { folder: 'file:///ws' } },
+      },
+    })
+  })
+
   it('validates M3 command payloads and the idempotency key', () => {
     const commands: Array<Record<string, unknown>> = [
       { kind: 'sendPrompt', payload: { ref: REF, text: 'hello' } },
@@ -316,7 +379,11 @@ describe('parseClientFrame', () => {
         kind: 'newSession',
         payload: {
           agentId: 'claude-code',
-          workspace: { folder: 'file:///workspace/demo', authority: 'host' },
+          workspace: {
+            folder: 'file:///workspace/demo',
+            authority: 'host',
+            relativePath: 'packages/ui',
+          },
           initialPrompt: 'start',
         },
       },
@@ -336,6 +403,15 @@ describe('parseClientFrame', () => {
       { kind: 'openSideTask', payload: { ref: REF, sideTaskId: 'durable-side-1' } },
       { kind: 'deleteSideTask', payload: { ref: REF, sideTaskId: 'durable-side-1' } },
       { kind: 'listWorkspaces', payload: {} },
+      { kind: 'listDirectory', payload: { folder: 'file:///workspace/demo' } },
+      {
+        kind: 'listDirectory',
+        payload: {
+          folder: 'file:///workspace/demo',
+          authority: 'host',
+          relativePath: 'packages/ui',
+        },
+      },
       { kind: 'listAgents', payload: {} },
       { kind: 'listSessionHistory', payload: {} },
       { kind: 'openSession', payload: { durableId: 'durable-1' } },
@@ -501,6 +577,20 @@ describe('parseClientFrame', () => {
       { kind: 'deleteSideTask', payload: { ref: REF, sideTaskId: 1 } },
       { kind: 'listSideTasks', payload: 'nope' },
       { kind: 'listWorkspaces', payload: 'nope' },
+      { kind: 'listDirectory', payload: {} },
+      { kind: 'listDirectory', payload: { folder: '' } },
+      { kind: 'listDirectory', payload: { folder: 'file:///ws', relativePath: 3 } },
+      {
+        kind: 'listDirectory',
+        payload: { folder: 'file:///ws', relativePath: 'x'.repeat(4097) },
+      },
+      {
+        kind: 'newSession',
+        payload: {
+          agentId: 'claude',
+          workspace: { folder: 'file:///ws', relativePath: 'x'.repeat(4097) },
+        },
+      },
       { kind: 'listSessionHistory', payload: 'nope' },
       { kind: 'openSession', payload: {} },
       { kind: 'openSession', payload: { durableId: '' } },

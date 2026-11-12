@@ -433,6 +433,11 @@ export interface MobileBridgeNewSessionWorkspace {
   /** Workspace folder as a URI string; the bridge stores it as the session cwd. */
   readonly folder: string
   readonly authority?: string
+  /**
+   * Workspace-relative session directory (`/`-separated); the bridge resolves
+   * and validates it against `folder`. Omitted = the workspace root.
+   */
+  readonly relativePath?: string
 }
 
 /**

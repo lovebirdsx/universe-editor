@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isMobileDirectoryListing,
   isMobilePromptRefSuggestionsResult,
   isMobilePushBranchPreview,
   isMobilePushBranchResult,
@@ -24,6 +25,43 @@ describe('command result guards', () => {
     expect(isMobileSessionRefResult({ ref: { windowId: 1, localId: 's1' } })).toBe(true)
     expect(isMobileSessionRefResult({ ref: null })).toBe(false)
     expect(isMobileSessionRefResult('nope')).toBe(false)
+  })
+
+  it('validates directory listings and their canonical relative paths', () => {
+    expect(
+      isMobileDirectoryListing({
+        relativePath: '',
+        entries: [{ name: 'packages', relativePath: 'packages' }],
+      }),
+    ).toBe(true)
+    expect(
+      isMobileDirectoryListing({
+        relativePath: 'packages',
+        parentRelativePath: '',
+        entries: [],
+        truncated: true,
+      }),
+    ).toBe(true)
+    expect(
+      isMobileDirectoryListing({
+        relativePath: '',
+        entries: [{ name: 'a/b', relativePath: 'a/b' }],
+      }),
+    ).toBe(false)
+    expect(
+      isMobileDirectoryListing({
+        relativePath: '',
+        entries: [{ name: 'a', relativePath: '../a' }],
+      }),
+    ).toBe(false)
+    expect(isMobileDirectoryListing({ relativePath: 'a/../b', entries: [] })).toBe(false)
+    expect(isMobileDirectoryListing({ relativePath: '', parentRelativePath: 1, entries: [] })).toBe(
+      false,
+    )
+    expect(isMobileDirectoryListing({ relativePath: '', entries: [], truncated: 'yes' })).toBe(
+      false,
+    )
+    expect(isMobileDirectoryListing({ relativePath: '', entries: 'nope' })).toBe(false)
   })
 
   it('accepts a rewind preview and rejects wrong types', () => {

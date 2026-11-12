@@ -1413,7 +1413,13 @@ test.describe('mobile gateway', () => {
  * exist before the command arrives (the cold fixture otherwise starts empty).
  */
 test.describe('mobile gateway in a workspace', () => {
-  test.use({ workspaceSeeder: { seed: () => {} } })
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        mkdirSync(join(dir, 'packages', 'demo'), { recursive: true })
+      },
+    },
+  })
 
   test('@p1 creates a session in an open workspace from the phone', async ({
     page,
@@ -1446,6 +1452,31 @@ test.describe('mobile gateway in a workspace', () => {
         expect.arrayContaining([expect.objectContaining({ id: 'echo', isDefault: true })]),
       )
 
+      const rootListing = await sendCommand(ws, 'listDirectory', { folder: candidate!.folder })
+      expect(rootListing).toMatchObject({ ok: true })
+      expect(rootListing.result).toMatchObject({
+        relativePath: '',
+        entries: expect.arrayContaining([{ name: 'packages', relativePath: 'packages' }]),
+      })
+      expect(rootListing.result).not.toHaveProperty('parentRelativePath')
+
+      const packages = await sendCommand(ws, 'listDirectory', {
+        folder: candidate!.folder,
+        relativePath: 'packages',
+      })
+      expect(packages).toMatchObject({ ok: true })
+      expect(packages.result).toMatchObject({
+        relativePath: 'packages',
+        parentRelativePath: '',
+        entries: [{ name: 'demo', relativePath: 'packages/demo' }],
+      })
+
+      const escape = await sendCommand(ws, 'listDirectory', {
+        folder: candidate!.folder,
+        relativePath: '../outside',
+      })
+      expect(escape).toMatchObject({ ok: false, error: 'bad_request' })
+
       const created = await sendCommand(ws, 'newSession', {
         agentId: 'echo',
         workspace: { folder: candidate!.folder },
@@ -1457,6 +1488,22 @@ test.describe('mobile gateway in a workspace', () => {
 
       const snapshot = await subscribeSession(ws, ref)
       expect(snapshot.session.summary.agentId).toBe('echo')
+
+      const createdSubdir = await sendCommand(
+        ws,
+        'newSession',
+        {
+          agentId: 'echo',
+          workspace: { folder: candidate!.folder, relativePath: 'packages/demo' },
+        },
+        undefined,
+        30_000,
+      )
+      expect(createdSubdir).toMatchObject({ ok: true })
+      const subRef = (createdSubdir.result as { ref: { windowId: number; localId: string } }).ref
+      const subSnapshot = await subscribeSession(ws, subRef)
+      expect(subSnapshot.session.summary.agentId).toBe('echo')
+      expect(subSnapshot.session.summary.cwd?.replace(/\\/g, '/')).toMatch(/packages\/demo$/)
 
       const missing = await sendCommand(ws, 'newSession', {
         agentId: 'echo',
@@ -1500,6 +1547,57 @@ test.describe('mobile gateway in a workspace', () => {
 
       await phone.getByTestId('new-session-submit').click()
 
+      await expect(phone).toHaveURL(/\/s\//, { timeout: 15_000 })
+      await expect(phone.getByTestId('composer')).toBeVisible()
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), {
+          timeout: 15_000,
+        })
+        .toBe(1)
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@p1 creates a session in a chosen subdirectory from the phone new-session page', async ({
+    page,
+    workbench,
+  }) => {
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    const { browser, context, phone } = await pairPhone(page, workbench)
+    try {
+      await phone.getByTestId('new-session-fab').click()
+      await expect(phone).toHaveURL(/\/new$/)
+      await expect(phone.getByTestId('new-session-workspace-trigger')).toContainText('已打开', {
+        timeout: 10_000,
+      })
+
+      await phone.getByTestId('new-session-directory-trigger').click()
+      const sheet = phone.getByTestId('new-session-directory-sheet')
+      await expect(sheet).toBeVisible()
+
+      const packages = sheet.locator(
+        '[data-testid="new-session-directory-entry"][data-relative-path="packages"]',
+      )
+      await expect(packages).toBeVisible({ timeout: 10_000 })
+      await packages.click()
+      const demo = sheet.locator(
+        '[data-testid="new-session-directory-entry"][data-relative-path="packages/demo"]',
+      )
+      await expect(demo).toBeVisible()
+      await demo.click()
+      await expect(sheet.getByTestId('new-session-directory-select')).toBeEnabled()
+      await sheet.getByTestId('new-session-directory-select').click()
+      await expect(sheet).toHaveCount(0)
+      await expect(phone.getByTestId('new-session-directory-trigger')).toContainText(
+        'packages/demo',
+      )
+
+      await phone.getByTestId('new-session-submit').click()
       await expect(phone).toHaveURL(/\/s\//, { timeout: 15_000 })
       await expect(phone.getByTestId('composer')).toBeVisible()
       await expect

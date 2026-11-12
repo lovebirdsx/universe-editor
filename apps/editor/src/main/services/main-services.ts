@@ -277,7 +277,12 @@ registerSingleton(
 )
 registerSingletonFactory(
   IMobileGatewayService,
-  (acc) => new MobileGatewayMainService(acc.get(IRecentWorkspacesService), acc.get(ILoggerService)),
+  (acc) =>
+    new MobileGatewayMainService(
+      acc.get(IRecentWorkspacesService),
+      acc.get(ILoggerService),
+      acc.get(IFileService),
+    ),
 )
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))
 registerSingleton(

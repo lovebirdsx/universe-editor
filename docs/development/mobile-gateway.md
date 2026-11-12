@@ -16,7 +16,9 @@
 > side task、临时树 cherry-pick、冲突 agent 解决、待推送、推送与 worktree 同步、撤销）；
 > **M12 手机推送分支已落地**（协议 v16：把会话分支直接发布到远端，不改 main、绝不 force，
 > 远端分支名可改为 `tasks/...`）；**M13 手机会话目录删除已落地**（协议 v18：历史行可由手机删除，
-> 仅限 PC 已打开窗口所属行；live 行仍走既有删除链路）。
+> 仅限 PC 已打开窗口所属行；live 行仍走既有删除链路）；**M14 新建会话支持工作区内子目录已落地**
+> （协议 v21：只读命令 `listDirectory` 逐级浏览，`newSession.workspace.relativePath?` 指定会话
+> cwd；范围仅工作区内）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -40,13 +42,14 @@ PC 编辑器关闭时手机显示离线，不接管执行。
 | 收件箱       | 按待审批 / 运行中 / 已完成 / 出错分组；显示 agent、工作区、PC 在线状态                            |
 | 会话页       | 摘要优先；工具调用默认折叠；diff 只读；可发 prompt、停止、切换模式与模型                          |
 | 审批底部卡片 | 权限请求 + elicitation；先到先得，双端只有一次生效                                                |
-| 新建会话     | 选 agent、工作区                                                                                  |
+| 新建会话     | 选 agent、工作区；可在工作区内逐级选择会话子目录                                                  |
 | 输入附件     | 会话输入框可拍照 / 选图 / 选文件；图片作为 ACP `image`，普通文件以 PC 本地 `file:` URI 交给 agent |
 | 通知         | 仅「等待审批 / 提问 / 完成 / 出错」四类                                                           |
 
 **第二期**：语音输入、多台 PC 切换、中转服务器（脱离局域网/ Tailscale）。
 
-**明确不做**：文件浏览、代码编辑、终端、agent / MCP / 供应商配置、扩展管理。
+**明确不做**：文件内容浏览 / 编辑、终端、agent / MCP / 供应商配置、扩展管理。新建会话支持在
+工作区内逐级选目录（v21），但手机不读写文件内容、不接触绝对路径。
 
 **设计依据（竞品共识）**：移动端只做监工 / 审批 / 验收 / 通知；首屏是任务收件箱而不是会话列表；
 ACP 生态目前没有成熟的移动客户端，因此协议与 view-model 需要自建。
@@ -141,7 +144,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 20`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 21`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -173,7 +176,10 @@ payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的
 `deleteSession`（见 §6c）；v19 增加 `hello_ok.notificationPrefs`：握手时回传该设备已保存的通知
 偏好（`enabled` / `kinds?` / `alwaysNotify`，含 `enabled:false` 的记录），手机端据此回填设置抽屉，
 避免用默认值覆盖已保存偏好。v20 增加输入框引用补全：只读命令 `searchPromptRefs` 与
-`sendPrompt.refs`（手机 `@` 文件 / `#` 符号、本地修改、打开的编辑器、文档，见 §7d）。
+`sendPrompt.refs`（手机 `@` 文件 / `#` 符号、本地修改、打开的编辑器、文档，见 §7d）；v21
+增加工作区目录浏览：只读命令 `listDirectory`、`MobileDirectoryListing` 与
+`newSession.workspace.relativePath?`（工作区相对、`/` 分隔；手机只回显服务端给的路径、不接触
+绝对路径，见 §6f）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted, notificationPrefs? }`；`trusted` 表示 PC 是否已
@@ -213,7 +219,7 @@ Referer。
 | 审批        | `resolveElicitation`                     | `{ ref, requestId, action, content? }`                         | `accept` / `decline` / `cancel`                                                                                   |
 | 配置        | `setConfigOption`                        | `{ ref, configId, value }`                                     | `string`（select）或 `boolean`                                                                                    |
 | 自动执行    | `pauseAutoResolve` / `resumeAutoResolve` | `{ ref, requestId }`                                           | 暂停 / 继续 plan 倒计时                                                                                           |
-| 会话管理    | `newSession`                             | `{ agentId, workspace, initialPrompt? }`                       | 见 §6                                                                                                             |
+| 会话管理    | `newSession`                             | `{ agentId, workspace: { folder, authority?, relativePath? }, initialPrompt? }` | 见 §6 / §6f                                                                                                       |
 | 会话管理    | `renameSession`                          | `{ ref, title }`                                               | 会话标题                                                                                                          |
 | 会话管理    | `closeSession`                           | `{ ref }`                                                      | 结束活跃会话并关闭 PC 标签页，保留历史（等价 PC 关标签页）                                                        |
 | 会话管理    | `deleteSession`                          | `{ ref }`                                                      | 复用 PC「Delete Agent Session」的 plan → 执行链路                                                                 |
@@ -226,6 +232,7 @@ Referer。
 | 侧边任务    | `deleteSideTask`                         | `{ ref, sideTaskId }`                                          | 级联删除该任务及其子树（含历史行）                                                                                |
 | 枚举        | `listWorkspaces`                         | `{}`                                                           | 打开窗口 ∪ 最近工作区，带 `isOpen`；打开候选带 `windowId`，前 20 个候选尽力探测 `gitDirty`（见 §6）               |
 | 枚举        | `listAgents`                             | `{}`                                                           | 由第一个已注册窗口桥返回                                                                                          |
+| 枚举        | `listDirectory`                          | `{ folder, authority?, relativePath? }`                        | 只读列出工作区内一层子目录；`relativePath` 省略/空 = 根；只返回目录，超出预算带 `truncated: true`（见 §6f）     |
 | 会话目录    | `listSessionHistory`                     | `{}`                                                           | 已打开窗口 + 最近工作区（前 N 个，N 可配、默认 20）的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
 | 会话目录    | `openSession`                            | `{ durableId, windowId?, folder?, authority? }`                | 按 durable id 非激活恢复历史会话；目标工作区未打开时先自动开窗再恢复；带幂等键                                    |
 | 会话目录    | `deleteHistorySession`                   | `{ durableId, windowId? }`                                     | 删除 PC 已打开窗口所属的历史行；live 竞态走 `deleteSession`；无 owner 回 `session_not_found`；带幂等键            |
@@ -248,7 +255,7 @@ Referer。
 **幂等**：会修改状态的命令可带 `idempotencyKey`。网关在内存中缓存首个结果 5 分钟
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
 只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`、
-`searchPromptRefs`）不缓存。客户端重试不会重复发
+`searchPromptRefs`、`listDirectory`）不缓存。客户端重试不会重复发
 prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
 `deleteSideTask` / `openSession` / `deleteHistorySession` 都按可修改状态命令处理；交付中的 `startDelivery` /
 `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree` 同样处理
@@ -259,7 +266,8 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 `cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` /
 `deleteHistorySession` / `newSession` / `previewRewind` 30s；`forkSession` / `rewindSession` /
 `createSideTask` / `openSideTask` / `deleteSideTask` 120s（要等 agent fork RPC 与 resume），
-`listSideTasks` 10s；
+`listSideTasks` 10s；`listDirectory` 20s（手机端 25s，只读命令无宽限；远程工作区首次浏览可能
+触发建连，超时后重试即可）；
 `listSessionHistory` 8s（逐窗口等桥就绪最多 5s + 桥读取；每个关闭工作区读盘额外 2s 上限），
 手机端 20s 覆盖网关最坏耗时；
 `openSession` 从入口起共用一份 100s 总预算：live 查找、owner 扫描、开窗、等桥、历史轮询与恢复都
@@ -660,6 +668,53 @@ PR。入口在手机收件箱会话的长按菜单（**推送分支**），与�
 4. 错误码 `push_busy` / `push_conflict` / `push_unsupported` / `push_failed`；协议只下发 worktree
    目录名与裁剪后的错误 message。
 
+## 6f. 新建会话的工作区子目录（协议 v21）
+
+手机新建会话可把 cwd 设为工作区内的任意子目录。**wire 上只传工作区相对路径**（`/` 分隔，
+`''` / 省略 = 工作区根）：手机从 `listDirectory` 拿到服务端生成的 `relativePath` 并原样回显，
+既不拼绝对路径，也不做路径归一化。路由不变——`newSession` 仍按工作区根匹配窗口、必要时开窗，
+`relativePath` 只透传给该窗口桥。
+
+**目录列举放 main**：`MobileGatewayHost.listDirectory` 由 `MobileGatewayMainService` 用根容器
+`IFileService` 实现（`workspaceDirectoryBrowser.ts`），不开窗：
+
+- 已打开工作区与最近但未打开的工作区都能浏览；
+- 本地 `file:` 直接读；`remote-ssh` 经 `RemoteFileSystemProvider` 按需建连（首次浏览可能接近
+  20s 预算，超时后重试即可，连接会在后台继续建立）；
+- 工作区不在「打开 ∪ 最近」列表 → `workspace_not_open`；host 未装配该能力 → `not_supported`。
+
+**路径规则（严格拒绝、不做归一化）**：拒绝 NUL、`\`、开头 `/`、空段、`.`、`..`、盘符前缀
+（`C:`）与总长 > 4096。`\` 归一化会把 POSIX 合法文件名 `a\b` 误解释成两层目录，`URI.joinPath`
+又会自行折叠 `..`，因此安全校验必须在 join 之前完成。副作用：POSIX 下名字含 `\` 的目录无法
+通过本协议浏览 / 选择（列表里会被跳过），这是 Windows 反斜杠歧义的代价。
+
+**符号链接**：列表允许出现符号链接目录；每次列举与创建会话都先 `stat` 确认是目录，再用
+`realpath(root)` + `realpath(target)` 校验目标仍在工作区内（按 scheme 选平台语义：`remote-ssh`
+一律 POSIX，本地用 host platform）。越界 → `bad_request`，不会被 `URI.joinPath` 的文本折叠绕过。
+POSIX 根工作区（`/`）单独视为包含所有同源路径——`relativePathUnder` 的前缀比较不覆盖根。
+
+**错误分类**：本地 provider 抛 `FileSystemError`，但 IPC/远程传输复活后是带 `code` 的普通
+`Error`。`ENOENT`/`EACCES`/`ENOTDIR`/`EISDIR` 按 `code` 识别（不能依赖 `instanceof`）→
+`bad_request`；建连失败等无 `code` 异常 → `internal`。日志只记 `code`/`name`，不记 message
+（可能含绝对路径）。
+
+**条目预算与排序**：只返回目录，按名称大小写不敏感升序（`numeric` 排序，原始串做 tie-break）。
+`MAX_DIRECTORY_ENTRIES = 500` 与 `MAX_DIRECTORY_LISTING_CHARS = 256 * 1024` 任一触发即截断并置
+`truncated: true`；服务端帧上限 1MB，不能只限条数。
+
+**`newSession` 二次校验**：hub 先按路径规则拒绝非法 `relativePath`（`bad_request`），再把匹配到
+的工作区 folder（而非手机回显的拼写）交给 bridge，以 `URI.joinPath` 拼出 cwd、`stat` 必须是目录、
+`realpath` 归属校验通过后才调 `createSession({ cwd, authority })`。`delivery_busy` 仍按工作区根
+判断。任何一步失败都不创建会话。
+
+**错误码**：路径非法 / 不存在 / 非目录 / 无权限 / realpath 越界 → `bad_request`；工作区不在
+打开 ∪ 最近 → `workspace_not_open`；超时 / 远程建连失败 / 未知 fs 错误 → `internal`。手机端在
+目录 Sheet 内按上下文覆盖 `bad_request` / `workspace_not_open` 文案；提交时仅在选了子目录的
+情况下把 `bad_request` 映射为「所选目录已失效」。
+
+**安全**：`listDirectory` 是只读命令，不审计、不缓存、不带幂等键；`newSession` 的审计 `detail`
+仍只有 `agent=`，**绝不记录所选相对路径或绝对路径**；目录日志只记数量与错误码，不记目录名。
+
 ## 7. 会话附件（协议 v6）
 
 手机输入框支持图片与文件附件。**WebSocket 只传附件 id，字节走同源 HTTP**：客户端帧上限 64KB，
@@ -949,7 +1004,8 @@ fork / rewind / 侧边任务、`openSession`、`startDelivery` / `confirmDeliver
 `window=` / `local=` / `agent=` / `error=` 等
 定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
 `sideTaskId` 或文件路径**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents` /
-`previewRewind` / `listSideTasks` / `listSessionHistory`）不审计。
+`previewRewind` / `listSideTasks` / `listSessionHistory` / `listDirectory`）不审计；`newSession`
+的 `detail` 只有 `agent=`，不含工作区路径或所选子目录。
 
 **PC 设置页**：新增 Mobile Devices 编辑器。
 
@@ -1284,6 +1340,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M11    | 手机交付：协议 v14、git 扩展交付原语、renderer 交付状态机与提交信息 side task、冲突 agent 解决、待推送确认、推送与 worktree 同步、撤销与重启恢复（已落地） | 干净 / 脏源交付到「待推送」；确认后 push 并同步；冲突自动解决或安全失败且 main 不动；main / 远端移动时拒绝撤销；绝对路径不下发手机                                                           |
 | M12    | 手机推送分支：协议 v16、git 扩展 `inspectPushBranch` / `pushBranch`、远端分支名可改、分叉阻断、绝不 force push（已落地）                                   | 会话分支可 publish 到远端；分叉 / 已推送 / 进行中操作给出 blocker；临时分支可改名到 `tasks/...`；不改 main、不设已有 upstream                                                                |
 | M13    | 手机会话目录删除：协议 v18、`deleteHistorySession`、左滑 / 长按 + 二次确认、多窗口历史镜像同删（已落地）                                                    | 打开窗口的历史行可删且 PC 标签页关闭；未打开工作区行无删除入口；删除后目录刷新不复活；live 竞态仍走既有删除守卫                                                                              |
+| M14    | 新建会话支持工作区内子目录：协议 v21、`listDirectory` 只读浏览、`newSession.workspace.relativePath?`、main `IFileService` 列举、symlink / 路径 / 条目预算守卫（已落地） | 手机可逐级浏览并选择工作区内目录；创建后 PC 会话 cwd 落在该子目录；越界 / 非法路径回 `bad_request`；远程工作区同链路 |
 
 ## 13. 已确认的决策记录
 

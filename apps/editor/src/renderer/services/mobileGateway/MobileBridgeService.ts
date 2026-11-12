@@ -39,6 +39,7 @@ import {
   MAX_TITLE_LENGTH,
   MAX_WORKSPACE_IMAGE_BYTES,
   MAX_WORKSPACE_NAME_LENGTH,
+  parseWorkspaceRelativePath,
   type MobileAgentCandidate,
   type MobileElicitationAction,
   type MobileElicitationContentValue,
@@ -57,6 +58,11 @@ import {
   truncateToolTextBlock,
 } from '@universe-editor/acp-view-model'
 import { isResumableHistoryEntry } from '../../../shared/mobileGateway/sessionHistoryFilter.js'
+import { isPathWithinWorkspace } from '../../../shared/mobileGateway/workspacePathScope.js'
+import {
+  describeFsError,
+  isUnavailablePathError,
+} from '../../../shared/mobileGateway/workspaceFsErrors.js'
 import type {
   MobileBridgeAttentionEvent,
   MobileBridgeCommandError,
@@ -1097,7 +1103,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
 
   async newSession(
     agentId: string,
-    workspace: { folder: string; authority?: string },
+    workspace: { folder: string; authority?: string; relativePath?: string },
     initialPrompt: string | null,
     token?: CancellationToken,
   ): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> {
@@ -1123,6 +1129,47 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const authority =
       workspace.authority ??
       (folder.scheme === REMOTE_SCHEME && folder.authority ? folder.authority : undefined)
+    const relativePath = parseWorkspaceRelativePath(workspace.relativePath)
+    if (relativePath === null) return fail('bad_request', 'invalid workspace-relative path')
+
+    let cwd = folder
+    if (relativePath.segments.length > 0) {
+      try {
+        cwd = URI.joinPath(folder, ...relativePath.segments)
+      } catch {
+        return fail('bad_request', 'invalid session directory')
+      }
+      try {
+        const stat = await this._files.stat(cwd)
+        if (!stat.isDirectory) return fail('bad_request', 'session directory is not a directory')
+      } catch (err) {
+        if (!isUnavailablePathError(err)) {
+          this._logger.warn(`mobile newSession stat failed: ${describeFsError(err)}`)
+          return fail('internal', 'failed to inspect session directory')
+        }
+        return fail('bad_request', 'session directory is unavailable')
+      }
+      const realpath = this._files.realpath?.bind(this._files)
+      if (realpath !== undefined) {
+        let realFolder: URI
+        let realCwd: URI
+        try {
+          realFolder = await realpath(folder)
+          realCwd = await realpath(cwd)
+        } catch (err) {
+          if (!isUnavailablePathError(err)) {
+            this._logger.warn(`mobile newSession realpath failed: ${describeFsError(err)}`)
+            return fail('internal', 'failed to resolve session directory')
+          }
+          return fail('bad_request', 'session directory cannot be resolved')
+        }
+        if (!isPathWithinWorkspace(realFolder, realCwd, this._uriIdentity.platform)) {
+          return fail('bad_request', 'session directory is outside the workspace')
+        }
+      }
+      if (token?.isCancellationRequested) return fail('internal', 'command cancelled')
+    }
+
     if (this._delivery.isDeliveryBusyForCwd(folder.fsPath, authority)) {
       return fail(
         'delivery_busy',
@@ -1131,7 +1178,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     }
     try {
       const session = await this._sessions.createSession(agentId, {
-        cwd: folder.fsPath,
+        cwd: cwd.fsPath,
         ...(authority !== undefined ? { authority } : {}),
       })
       if (initialPrompt !== null && initialPrompt.length > 0) {

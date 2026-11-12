@@ -1798,6 +1798,248 @@ describe('MobileBridgeService commands', () => {
     })
   })
 
+  it('creates a session in the workspace root without touching the file system', async () => {
+    const harness = makeHarness()
+    harness.created.mockReturnValue(makeSession('root-1').session)
+
+    await expect(
+      harness.service.newSession('fake', { folder: 'file:///workspace/demo' }, null),
+    ).resolves.toEqual({ ok: true, value: { localId: 'root-1' } })
+    expect(harness.files.stat).not.toHaveBeenCalled()
+    expect(harness.sessionService.createSession).toHaveBeenCalledWith('fake', {
+      cwd: '/workspace/demo',
+    })
+  })
+
+  it('validates a workspace subdirectory and uses it as the session cwd', async () => {
+    const stat = vi.fn(
+      async (resource: URI): Promise<IFileStat> => ({
+        resource,
+        isFile: false,
+        isDirectory: true,
+        size: 0,
+        mtime: 0,
+      }),
+    )
+    const harness = makeHarness({ stat })
+    harness.created.mockReturnValue(makeSession('sub-1').session)
+
+    await expect(
+      harness.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'packages/ui' },
+        null,
+      ),
+    ).resolves.toEqual({ ok: true, value: { localId: 'sub-1' } })
+    expect(vi.mocked(stat).mock.calls[0]?.[0].toString()).toBe('file:///workspace/demo/packages/ui')
+    expect(harness.sessionService.createSession).toHaveBeenCalledWith('fake', {
+      cwd: '/workspace/demo/packages/ui',
+    })
+  })
+
+  it('rejects a missing or non-directory session directory without creating a session', async () => {
+    const missing = makeHarness({
+      stat: vi.fn(async () => {
+        throw Object.assign(new Error('ENOENT: /workspace/demo/gone'), { code: 'ENOENT' })
+      }),
+    })
+    await expect(
+      missing.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'gone' },
+        null,
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+    expect(missing.sessionService.createSession).not.toHaveBeenCalled()
+
+    const file = makeHarness({
+      stat: vi.fn(
+        async (resource: URI): Promise<IFileStat> => ({
+          resource,
+          isFile: true,
+          isDirectory: false,
+          size: 1,
+          mtime: 0,
+        }),
+      ),
+    })
+    await expect(
+      file.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'notes.txt' },
+        null,
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+    expect(file.sessionService.createSession).not.toHaveBeenCalled()
+  })
+
+  it('maps a transport failure while inspecting the directory to internal', async () => {
+    const statFailure = makeHarness({
+      stat: vi.fn(async () => {
+        throw new Error('remote connection closed')
+      }),
+    })
+    await expect(
+      statFailure.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'packages' },
+        null,
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'internal' })
+    expect(statFailure.sessionService.createSession).not.toHaveBeenCalled()
+
+    const directoryStat = vi.fn(
+      async (resource: URI): Promise<IFileStat> => ({
+        resource,
+        isFile: false,
+        isDirectory: true,
+        size: 0,
+        mtime: 0,
+      }),
+    )
+    const realpathFailure = makeHarness({
+      stat: directoryStat,
+      realpath: vi.fn(async () => {
+        throw new Error('remote connection closed')
+      }),
+    })
+    await expect(
+      realpathFailure.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'packages' },
+        null,
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'internal' })
+    expect(realpathFailure.sessionService.createSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps a revived EACCES from realpath a bad_request', async () => {
+    const harness = makeHarness({
+      stat: vi.fn(
+        async (resource: URI): Promise<IFileStat> => ({
+          resource,
+          isFile: false,
+          isDirectory: true,
+          size: 0,
+          mtime: 0,
+        }),
+      ),
+      realpath: vi.fn(async () => {
+        throw Object.assign(new Error('EACCES: /workspace/demo/packages'), { code: 'EACCES' })
+      }),
+    })
+    await expect(
+      harness.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'packages' },
+        null,
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+    expect(harness.sessionService.createSession).not.toHaveBeenCalled()
+  })
+
+  it('rejects a subdirectory whose real path escapes the workspace', async () => {
+    const harness = makeHarness({
+      stat: vi.fn(
+        async (resource: URI): Promise<IFileStat> => ({
+          resource,
+          isFile: false,
+          isDirectory: true,
+          size: 0,
+          mtime: 0,
+        }),
+      ),
+      realpath: vi.fn(async (uri: URI) =>
+        uri.fsPath === '/workspace/demo/link' ? URI.file('/elsewhere/link') : uri,
+      ),
+    })
+
+    await expect(
+      harness.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'link' },
+        null,
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+    expect(harness.sessionService.createSession).not.toHaveBeenCalled()
+  })
+
+  it('allows a symlinked workspace when the real paths still nest', async () => {
+    const harness = makeHarness({
+      stat: vi.fn(
+        async (resource: URI): Promise<IFileStat> => ({
+          resource,
+          isFile: false,
+          isDirectory: true,
+          size: 0,
+          mtime: 0,
+        }),
+      ),
+      realpath: vi.fn(async (uri: URI) => {
+        if (uri.fsPath === '/workspace/demo') return URI.file('/mnt/real')
+        if (uri.fsPath === '/workspace/demo/packages/ui') return URI.file('/mnt/real/packages/ui')
+        return uri
+      }),
+    })
+    harness.created.mockReturnValue(makeSession('sub-2').session)
+
+    await expect(
+      harness.service.newSession(
+        'fake',
+        { folder: 'file:///workspace/demo', relativePath: 'packages/ui' },
+        null,
+      ),
+    ).resolves.toEqual({ ok: true, value: { localId: 'sub-2' } })
+    expect(harness.sessionService.createSession).toHaveBeenCalledWith('fake', {
+      cwd: '/workspace/demo/packages/ui',
+    })
+  })
+
+  it('rejects invalid workspace-relative paths before touching the file system', async () => {
+    const harness = makeHarness()
+
+    for (const relativePath of ['../outside', '/abs', 'a\\b', 'a//b', 'a/./b']) {
+      await expect(
+        harness.service.newSession(
+          'fake',
+          { folder: 'file:///workspace/demo', relativePath },
+          null,
+        ),
+      ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+    }
+    expect(harness.files.stat).not.toHaveBeenCalled()
+    expect(harness.sessionService.createSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps the remote authority when creating a session in a remote subdirectory', async () => {
+    const stat = vi.fn(
+      async (resource: URI): Promise<IFileStat> => ({
+        resource,
+        isFile: false,
+        isDirectory: true,
+        size: 0,
+        mtime: 0,
+      }),
+    )
+    const harness = makeHarness({ stat })
+    harness.created.mockReturnValue(makeSession('remote-1').session)
+
+    await expect(
+      harness.service.newSession(
+        'fake',
+        { folder: 'remote-ssh://ssh-remote+host/home/dev/proj', relativePath: 'packages/ui' },
+        null,
+      ),
+    ).resolves.toEqual({ ok: true, value: { localId: 'remote-1' } })
+    expect(vi.mocked(stat).mock.calls[0]?.[0].toString()).toBe(
+      'remote-ssh://ssh-remote+host/home/dev/proj/packages/ui',
+    )
+    expect(harness.sessionService.createSession).toHaveBeenCalledWith('fake', {
+      cwd: '/home/dev/proj/packages/ui',
+      authority: 'ssh-remote+host',
+    })
+  })
+
   it('does not create a session when the gateway already cancelled the request', async () => {
     const harness = makeHarness()
     const cts = new CancellationTokenSource()

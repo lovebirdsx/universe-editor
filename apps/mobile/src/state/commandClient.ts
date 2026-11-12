@@ -35,6 +35,7 @@ export const COMMAND_TIMEOUT_MS: Readonly<Record<MobileCommandKind, number>> = {
   openSideTask: 120_000,
   deleteSideTask: 120_000,
   listWorkspaces: 10_000,
+  listDirectory: 25_000,
   listAgents: 10_000,
   listSessionHistory: 20_000,
   openSession: 120_000,

@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path'
 import {
   Disposable,
   Emitter,
+  IFileService,
   URI,
   type Event,
   type ILogger,
@@ -60,6 +61,7 @@ import {
 import { MOBILE_GATEWAY_CONFIG_FILE } from './gatewayConfigFile.js'
 import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
 import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
+import { WorkspaceDirectoryBrowser } from './workspaceDirectoryBrowser.js'
 import { WorkspaceGitStatusService } from './workspaceGitStatus.js'
 import { WorkspaceSessionHistoryReader } from './workspaceSessionHistoryReader.js'
 import { ensureLanCertificate, type LanCertificate } from './lanCertificate.js'
@@ -137,6 +139,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _tlsTrustWarning: MobileGatewayTlsTrustWarning | undefined
   private _server: MobileGatewayServer | undefined
   private _router: MobileNotificationRouter | undefined
+  private readonly _directoryBrowser: WorkspaceDirectoryBrowser | undefined
   private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
   private readonly _pushSender: WebPushSender
   private _runningKey: string | undefined
@@ -146,6 +149,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   constructor(
     @IRecentWorkspacesService private readonly _recent: RecentWorkspacesMainService,
     @ILoggerService loggerService?: ILoggerService,
+    @IFileService private readonly _files?: IFileService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, {
@@ -164,6 +168,10 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       userDataDir: app.getPath('userData'),
       logger: this._logger,
     })
+    this._directoryBrowser =
+      this._files === undefined
+        ? undefined
+        : new WorkspaceDirectoryBrowser(this._files, { logger: this._logger })
     this._hub = new MobileGatewayHub(
       this._logger,
       {
@@ -181,6 +189,11 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
         workspaceGitDirty: createWorkspaceGitDirtyProbe({
           isDirty: (root, signal) => this._gitStatus.isDirty(root, signal),
         }),
+        ...(this._directoryBrowser !== undefined
+          ? {
+              listDirectory: this._directoryBrowser.read.bind(this._directoryBrowser),
+            }
+          : {}),
         readWorkspaceSessionHistory: (workspace) => this._sessionHistoryReader.read(workspace),
         sessionHistoryWorkspaceLimit: () => this._config.sessionHistoryWorkspaceLimit,
         attachments: this._attachments,

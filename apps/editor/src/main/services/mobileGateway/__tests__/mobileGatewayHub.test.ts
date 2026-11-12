@@ -32,6 +32,7 @@ import type {
   MobileBridgeSessionSummary,
 } from '../../../../shared/ipc/mobileGatewayService.js'
 import { MobileAttachmentError } from '../mobileAttachmentStore.js'
+import { WorkspaceDirectoryBrowseError } from '../workspaceDirectoryBrowser.js'
 import {
   COMMAND_IDEMPOTENCY_TTL_MS,
   MAX_BUFFERED_SESSION_BYTES,
@@ -2319,6 +2320,41 @@ describe('MobileGatewayHub commands', () => {
     })
   })
 
+  it('hands the bridge the matched workspace spelling instead of the phone variation', async () => {
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/recent/', name: 'recent' },
+      ]),
+      waitForBridge: vi.fn(async () => 5),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    bridge.newSession.mockResolvedValueOnce({ ok: true, value: { localId: 'canonical' } })
+    hub.registerWindow(5, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n-canonical',
+      kind: 'newSession',
+      payload: { agentId: 'fake', workspace: { folder: 'file:///workspace/recent' } },
+    })
+
+    expect(host.openWorkspace).toHaveBeenCalledWith('file:///workspace/recent/', undefined)
+    expect(host.waitForBridge).toHaveBeenCalledWith(
+      'file:///workspace/recent/',
+      undefined,
+      expect.any(Number),
+    )
+    expect(bridge.newSession).toHaveBeenCalledWith(
+      'fake',
+      { folder: 'file:///workspace/recent/' },
+      null,
+      expect.anything(),
+    )
+  })
+
   it('opens a recent-only remote workspace and creates the session in its window', async () => {
     const folder = 'remote-ssh://wsl+ubuntu-24.04/home/dev/project'
     const authority = 'wsl+ubuntu-24.04'
@@ -2357,6 +2393,255 @@ describe('MobileGatewayHub commands', () => {
       ok: true,
       result: { ref: { windowId: 7, localId: 'remote-fresh' } },
     })
+  })
+
+  it('lists a directory in an open workspace without opening a window', async () => {
+    const listing = {
+      relativePath: 'packages',
+      parentRelativePath: '',
+      entries: [{ name: 'ui', relativePath: 'packages/ui' }],
+    }
+    const listDirectory = vi.fn(async () => listing)
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+      listDirectory,
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'dir-1',
+        kind: 'listDirectory',
+        payload: { folder: 'file:///workspace/demo', relativePath: 'packages' },
+      },
+      audit,
+    )
+
+    expect(listDirectory).toHaveBeenCalledWith(
+      expect.objectContaining({ folder: 'file:///workspace/demo' }),
+      'packages',
+    )
+    expect(host.openWorkspace).not.toHaveBeenCalled()
+    expect(host.waitForBridge).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'dir-1',
+      ok: true,
+      result: listing,
+    })
+    // Read-only browsing is not audited.
+    expect(audit.record).not.toHaveBeenCalled()
+  })
+
+  it('lists a recent-only workspace without opening it', async () => {
+    const listDirectory = vi.fn(async () => ({ relativePath: '', entries: [] }))
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/recent', name: 'recent' },
+      ]),
+      listDirectory,
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'dir-2',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///workspace/recent' },
+    })
+
+    expect(host.openWorkspace).not.toHaveBeenCalled()
+    expect(listDirectory).toHaveBeenCalledWith(
+      expect.objectContaining({ folder: 'file:///workspace/recent' }),
+      undefined,
+    )
+    expect(connection.frames.at(-1)).toMatchObject({ ok: true })
+  })
+
+  it('rejects directory listings for unknown or invalid targets', async () => {
+    const listDirectory = vi.fn(async () => ({ relativePath: '', entries: [] }))
+    const host = makeHost({ listDirectory })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'dir-3',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///workspace/unknown' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({
+      ok: false,
+      error: 'workspace_not_open',
+    })
+    expect(listDirectory).not.toHaveBeenCalled()
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'dir-4',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///workspace/unknown', relativePath: '../outside' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'bad_request' })
+    expect(listDirectory).not.toHaveBeenCalled()
+  })
+
+  it('reports not_supported when the host cannot browse directories', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'dir-5',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///workspace/demo' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'not_supported' })
+  })
+
+  it('maps directory browse failures to bad_request or internal', async () => {
+    const badHost = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+      listDirectory: vi.fn(async () => {
+        throw new WorkspaceDirectoryBrowseError('bad_request', 'missing')
+      }),
+    })
+    const badHub = new MobileGatewayHub(NULL_LOGGER, badHost)
+    const badConnection = makeConnection()
+    badHub.addConnection(badConnection)
+    await badHub.handleCommand(badConnection, {
+      type: 'command',
+      requestId: 'dir-6',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///workspace/demo' },
+    })
+    expect(badConnection.frames.at(-1)).toMatchObject({ ok: false, error: 'bad_request' })
+
+    const brokenHost = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+      listDirectory: vi.fn(async () => {
+        throw new Error('provider exploded')
+      }),
+    })
+    const brokenHub = new MobileGatewayHub(NULL_LOGGER, brokenHost)
+    const brokenConnection = makeConnection()
+    brokenHub.addConnection(brokenConnection)
+    await brokenHub.handleCommand(brokenConnection, {
+      type: 'command',
+      requestId: 'dir-7',
+      kind: 'listDirectory',
+      payload: { folder: 'file:///workspace/demo' },
+    })
+    expect(brokenConnection.frames.at(-1)).toMatchObject({ ok: false, error: 'internal' })
+  })
+
+  it('passes a canonical workspace-relative path to the bridge', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n-rel',
+      kind: 'newSession',
+      payload: {
+        agentId: 'fake',
+        workspace: { folder: 'file:///workspace/demo', relativePath: 'packages/ui' },
+      },
+    })
+
+    expect(bridge.newSession).toHaveBeenCalledWith(
+      'fake',
+      { folder: 'file:///workspace/demo', relativePath: 'packages/ui' },
+      null,
+      expect.anything(),
+    )
+    expect(connection.frames.at(-1)).toMatchObject({ ok: true })
+  })
+
+  it('rejects an invalid relative path before opening a window', async () => {
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/recent', name: 'recent' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    hub.registerWindow(5, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'n-rel-bad',
+      kind: 'newSession',
+      payload: {
+        agentId: 'fake',
+        workspace: { folder: 'file:///workspace/recent', relativePath: '../outside' },
+      },
+    })
+
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'bad_request' })
+    expect(host.openWorkspace).not.toHaveBeenCalled()
+    expect(bridge.newSession).not.toHaveBeenCalled()
+  })
+
+  it('keeps relative paths out of the newSession audit detail', async () => {
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'n-rel-audit',
+        kind: 'newSession',
+        payload: {
+          agentId: 'fake',
+          workspace: { folder: 'file:///workspace/demo', relativePath: 'secret-dir' },
+        },
+      },
+      audit,
+    )
+
+    expect(audit.record).toHaveBeenCalledWith('newSession', 'success', 'agent=fake')
+    expect(JSON.stringify(vi.mocked(audit.record).mock.calls)).not.toContain('secret-dir')
   })
 
   it('pings until the freshly opened window renderer answers', async () => {

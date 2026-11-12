@@ -547,6 +547,89 @@ describe('MobileClient session subscription', () => {
     expect(command.kind).toBe('newSession')
     expect(command.idempotencyKey).toBeTruthy()
   })
+
+  it('forwards the selected workspace subdirectory when creating a session', () => {
+    const { client, sockets } = createHarness()
+    void client
+      .newSession('echo', { folder: 'file:///work', relativePath: 'packages/demo' }, 'go')
+      .catch(() => undefined)
+    const command = sentFrames(sockets[0]!).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { payload: unknown }
+    expect(command.payload).toEqual({
+      agentId: 'echo',
+      workspace: { folder: 'file:///work', relativePath: 'packages/demo' },
+      initialPrompt: 'go',
+    })
+  })
+
+  it('lists a workspace directory as a read-only command and guards the result', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    const listed = client.listDirectory(
+      { folder: 'file:///work', authority: 'ssh-remote+host' },
+      'packages',
+    )
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { requestId: string; kind: string; payload: unknown; idempotencyKey?: string }
+    expect(command.kind).toBe('listDirectory')
+    expect(command.idempotencyKey).toBeUndefined()
+    expect(command.payload).toEqual({
+      folder: 'file:///work',
+      authority: 'ssh-remote+host',
+      relativePath: 'packages',
+    })
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: {
+        relativePath: 'packages',
+        parentRelativePath: '',
+        entries: [{ name: 'demo', relativePath: 'packages/demo' }],
+      },
+    })
+    await expect(listed).resolves.toMatchObject({
+      relativePath: 'packages',
+      entries: [{ name: 'demo', relativePath: 'packages/demo' }],
+    })
+
+    const malformed = client.listDirectory({ folder: 'file:///work' })
+    const next = sentFrames(socket)
+      .filter(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as Record<string, unknown>)['type'] === 'command',
+      )
+      .at(-1) as { requestId: string }
+    socket.serverSend({
+      type: 'command_result',
+      requestId: next.requestId,
+      ok: true,
+      result: { relativePath: '../escape', entries: [] },
+    })
+    await expect(malformed).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('omits the authority and relativePath for a root directory listing', () => {
+    const { client, sockets } = createHarness()
+    void client.listDirectory({ folder: 'file:///work' }).catch(() => undefined)
+    const command = sentFrames(sockets[0]!).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { payload: unknown }
+    expect(command.payload).toEqual({ folder: 'file:///work' })
+  })
 })
 
 describe('MobileClient fork / rewind / side-task commands', () => {

@@ -7,9 +7,12 @@ import {
   MAX_PROMPT_REF_URI_LENGTH,
   MOBILE_DELIVERY_PHASES,
   MOBILE_PROMPT_REF_KINDS,
+  parseWorkspaceRelativePath,
   type MobileDeliveryDetail,
   type MobileDeliveryPreview,
   type MobileDeliveryStartResult,
+  type MobileDirectoryEntry,
+  type MobileDirectoryListing,
   type MobilePromptRefSuggestion,
   type MobilePromptRefSuggestionsResult,
   type MobilePushBranchPreview,
@@ -66,6 +69,31 @@ export function isMobileSessionRef(value: unknown): value is MobileSessionRef {
 
 export function isMobileSessionRefResult(value: unknown): value is MobileSessionRefResult {
   return isRecord(value) && isMobileSessionRef(value['ref'])
+}
+
+function isWorkspaceRelativePath(value: unknown): value is string {
+  return typeof value === 'string' && parseWorkspaceRelativePath(value)?.path === value
+}
+
+function isMobileDirectoryEntry(value: unknown): value is MobileDirectoryEntry {
+  return (
+    isRecord(value) &&
+    isNonEmptyString(value['name']) &&
+    !value['name'].includes('/') &&
+    isWorkspaceRelativePath(value['relativePath'])
+  )
+}
+
+export function isMobileDirectoryListing(value: unknown): value is MobileDirectoryListing {
+  if (!isRecord(value)) return false
+  if (!isWorkspaceRelativePath(value['relativePath'])) return false
+  const parent = value['parentRelativePath']
+  if (parent !== undefined && !isWorkspaceRelativePath(parent)) return false
+  if (!Array.isArray(value['entries']) || !value['entries'].every(isMobileDirectoryEntry)) {
+    return false
+  }
+  const truncated = value['truncated']
+  return truncated === undefined || typeof truncated === 'boolean'
 }
 
 export function isMobileRewindPreview(value: unknown): value is MobileRewindPreview {

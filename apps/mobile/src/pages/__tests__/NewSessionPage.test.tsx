@@ -1,6 +1,8 @@
-import type {
-  MobileAgentCandidate,
-  MobileWorkspaceCandidate,
+import {
+  parentWorkspaceRelativePath,
+  type MobileAgentCandidate,
+  type MobileDirectoryListing,
+  type MobileWorkspaceCandidate,
 } from '@universe-editor/mobile-protocol'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
@@ -25,12 +27,26 @@ const workspaces: MobileWorkspaceCandidate[] = [
   },
 ]
 
+function makeListing(relativePath: string, entries: readonly string[]): MobileDirectoryListing {
+  return {
+    relativePath,
+    ...(relativePath !== ''
+      ? { parentRelativePath: parentWorkspaceRelativePath(relativePath) ?? '' }
+      : {}),
+    entries: entries.map((name) => ({
+      name,
+      relativePath: relativePath === '' ? name : `${relativePath}/${name}`,
+    })),
+  }
+}
+
 function createClient(
   options: {
     readonly online?: boolean
     readonly agents?: MobileAgentCandidate[]
     readonly workspaces?: MobileWorkspaceCandidate[]
     readonly createError?: { readonly code: string }
+    readonly listDirectory?: (relativePath: string) => MobileDirectoryListing
   } = {},
 ) {
   const socketState = new Store<SocketState>(
@@ -42,13 +58,26 @@ function createClient(
     }
     return { ref: { windowId: 1, localId: 's9' } }
   })
+  const listDirectory = vi.fn(
+    async (_workspace: unknown, relativePath?: string): Promise<MobileDirectoryListing> =>
+      options.listDirectory?.(relativePath ?? '') ?? makeListing(relativePath ?? '', []),
+  )
   const client: NewSessionClient = {
     getSocketStateStore: () => socketState,
     listAgents: vi.fn(async () => options.agents ?? agents),
     listWorkspaces: vi.fn(async () => options.workspaces ?? workspaces),
+    listDirectory,
     newSession,
   }
-  return { client, newSession, socketState }
+  return { client, newSession, listDirectory, socketState }
+}
+
+function directoryEntry(relativePath: string): HTMLElement {
+  const entry = screen
+    .getAllByTestId('new-session-directory-entry')
+    .find((element) => element.getAttribute('data-relative-path') === relativePath)
+  if (entry === undefined) throw new Error(`missing directory entry: ${relativePath}`)
+  return entry
 }
 
 function workspaceOption(folder: string): HTMLElement {
@@ -312,6 +341,112 @@ describe('NewSessionPage', () => {
     fireEvent.click(screen.getByTestId('new-session-submit'))
     await waitFor(() =>
       expect(second.newSession).toHaveBeenCalledWith('echo', { folder: 'file:///other' }),
+    )
+  })
+
+  it('creates the session in the chosen workspace subdirectory', async () => {
+    const { client, newSession, listDirectory } = createClient({
+      listDirectory: (relativePath) => {
+        if (relativePath === '') return makeListing('', ['packages', 'src'])
+        if (relativePath === 'packages') return makeListing('packages', ['demo'])
+        return makeListing(relativePath, [])
+      },
+    })
+    await renderLoaded(client)
+
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+      strings.newSessionDirectoryRoot,
+    )
+    fireEvent.click(screen.getByTestId('new-session-directory-trigger'))
+    await waitFor(() => expect(directoryEntry('packages')).toBeTruthy())
+    expect(listDirectory).toHaveBeenCalledWith({ folder: 'file:///open' }, undefined)
+
+    fireEvent.click(directoryEntry('packages'))
+    await waitFor(() =>
+      expect(listDirectory).toHaveBeenCalledWith({ folder: 'file:///open' }, 'packages'),
+    )
+    await waitFor(() => expect(directoryEntry('packages/demo')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('new-session-directory-select'))
+    expect(screen.queryByTestId('new-session-directory-sheet')).toBeNull()
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain('packages')
+
+    fireEvent.click(screen.getByTestId('new-session-submit'))
+    await waitFor(() =>
+      expect(newSession).toHaveBeenCalledWith('echo', {
+        folder: 'file:///open',
+        relativePath: 'packages',
+      }),
+    )
+  })
+
+  it('resets the chosen directory when the workspace changes', async () => {
+    const { client } = createClient({
+      listDirectory: (relativePath) =>
+        relativePath === '' ? makeListing('', ['packages']) : makeListing(relativePath, []),
+    })
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-directory-trigger'))
+    await waitFor(() => expect(directoryEntry('packages')).toBeTruthy())
+    fireEvent.click(directoryEntry('packages'))
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('new-session-directory-select') as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByTestId('new-session-directory-select'))
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain('packages')
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(screen.getByText('recent'))
+
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+      strings.newSessionDirectoryRoot,
+    )
+  })
+
+  it('forwards the remote authority while browsing directories', async () => {
+    const { client, listDirectory } = createClient({
+      listDirectory: (relativePath) => makeListing(relativePath, []),
+    })
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(screen.getByText('work'))
+    fireEvent.click(screen.getByTestId('new-session-directory-trigger'))
+
+    await waitFor(() =>
+      expect(listDirectory).toHaveBeenCalledWith(
+        { folder: 'remote-ssh://build-host/work', authority: 'build-host' },
+        undefined,
+      ),
+    )
+  })
+
+  it('explains an invalid chosen directory on submit', async () => {
+    const { client } = createClient({
+      createError: { code: 'bad_request' },
+      listDirectory: (relativePath) =>
+        relativePath === '' ? makeListing('', ['packages']) : makeListing(relativePath, []),
+    })
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-directory-trigger'))
+    await waitFor(() => expect(directoryEntry('packages')).toBeTruthy())
+    fireEvent.click(directoryEntry('packages'))
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('new-session-directory-select') as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByTestId('new-session-directory-select'))
+    fireEvent.click(screen.getByTestId('new-session-submit'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('new-session-error').textContent).toContain(
+        strings.newSessionDirectoryInvalid,
+      ),
     )
   })
 })

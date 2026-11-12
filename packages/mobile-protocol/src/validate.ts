@@ -121,6 +121,7 @@ import type { PairDevicePlatform, PairRequest } from './pairing.js'
 import { isValidPairCodeShape, normalizePairCode, PAIR_DEVICE_PLATFORMS } from './pairing.js'
 import { MOBILE_PROTOCOL_VERSION } from './version.js'
 import { MAX_WEB_BUILD_ID_LENGTH } from './webBuildId.js'
+import { MAX_WORKSPACE_RELATIVE_PATH_LENGTH } from './workspacePath.js'
 
 /**
  * Compared against JS string length (UTF-16 code units), not encoded bytes.
@@ -891,6 +892,8 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseSideTaskIdPayload(value, 'openSideTask')
     case 'deleteSideTask':
       return parseSideTaskIdPayload(value, 'deleteSideTask')
+    case 'listDirectory':
+      return parseListDirectoryPayload(value)
     case 'listWorkspaces':
     case 'listAgents':
     case 'listSessionHistory':
@@ -1571,7 +1574,7 @@ function parseSetConfigOptionPayload(value: unknown): Result<{
 
 function parseNewSessionPayload(value: unknown): Result<{
   agentId: string
-  workspace: { folder: string; authority?: string }
+  workspace: { folder: string; authority?: string; relativePath?: string }
   initialPrompt?: string
 }> {
   if (!isRecord(value)) return fail('bad_request', 'newSession.payload must be an object')
@@ -1593,6 +1596,11 @@ function parseNewSessionPayload(value: unknown): Result<{
     'newSession.workspace.authority',
   )
   if (!authority.ok) return authority
+  const relativePath = parseOptionalRelativePath(
+    workspace.relativePath,
+    'newSession.workspace.relativePath',
+  )
+  if (!relativePath.ok) return relativePath
   const initialPrompt = parseOptionalString(
     value.initialPrompt,
     MAX_PROMPT_LENGTH,
@@ -1604,8 +1612,40 @@ function parseNewSessionPayload(value: unknown): Result<{
     workspace: {
       folder,
       ...(authority.value !== undefined ? { authority: authority.value } : {}),
+      ...(relativePath.value !== undefined ? { relativePath: relativePath.value } : {}),
     },
     ...(initialPrompt.value !== undefined ? { initialPrompt: initialPrompt.value } : {}),
+  })
+}
+
+/**
+ * Shape-only on purpose: rejecting `..` / `\` here would make
+ * `parseClientFrame` fail, and the server answers that with `server_error` —
+ * which the phone only logs instead of settling the pending command. The hub
+ * re-validates semantics and returns a proper `bad_request` result.
+ */
+function parseListDirectoryPayload(value: unknown): Result<{
+  folder: string
+  authority?: string
+  relativePath?: string
+}> {
+  if (!isRecord(value)) return fail('bad_request', 'listDirectory.payload must be an object')
+  const folder = value.folder
+  if (!isNonEmptyBoundedString(folder, MAX_TEXT_LENGTH)) {
+    return fail('bad_request', 'listDirectory.folder must be a URI string')
+  }
+  const authority = parseOptionalString(
+    value.authority,
+    MAX_WORKSPACE_NAME_LENGTH,
+    'listDirectory.authority',
+  )
+  if (!authority.ok) return authority
+  const relativePath = parseOptionalRelativePath(value.relativePath, 'listDirectory.relativePath')
+  if (!relativePath.ok) return relativePath
+  return ok({
+    folder,
+    ...(authority.value !== undefined ? { authority: authority.value } : {}),
+    ...(relativePath.value !== undefined ? { relativePath: relativePath.value } : {}),
   })
 }
 
@@ -3034,6 +3074,13 @@ function parseOptionalString(
     return fail('bad_request', `${field} must be at most ${maxLength} characters`)
   }
   return ok(value)
+}
+
+/** Empty strings are normalized to "absent" so the root has one wire shape. */
+function parseOptionalRelativePath(value: unknown, field: string): Result<string | undefined> {
+  const parsed = parseOptionalString(value, MAX_WORKSPACE_RELATIVE_PATH_LENGTH, field)
+  if (!parsed.ok) return parsed
+  return ok(parsed.value === '' ? undefined : parsed.value)
 }
 
 function parseOptionalNonEmptyString(

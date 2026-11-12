@@ -15,10 +15,11 @@ import {
   isRemoteWorkspace,
   WorkspacePickerSheet,
 } from './NewSessionPickerSheet.js'
+import { DirectoryPickerSheet } from './DirectoryPickerSheet.js'
 
 export type NewSessionClient = Pick<
   MobileClient,
-  'listAgents' | 'listWorkspaces' | 'newSession' | 'getSocketStateStore'
+  'listAgents' | 'listWorkspaces' | 'listDirectory' | 'newSession' | 'getSocketStateStore'
 >
 
 export interface NewSessionPageProps {
@@ -27,7 +28,7 @@ export interface NewSessionPageProps {
   readonly onCreated: (sessionKey: string) => void
 }
 
-type PickerKind = 'agent' | 'workspace'
+type PickerKind = 'agent' | 'workspace' | 'directory'
 
 export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProps) {
   const socketState = useStore(client.getSocketStateStore())
@@ -37,6 +38,7 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
   const [workspaces, setWorkspaces] = useState<readonly MobileWorkspaceCandidate[]>([])
   const [agentId, setAgentId] = useState<string | undefined>(undefined)
   const [folder, setFolder] = useState<string | undefined>(undefined)
+  const [relativePath, setRelativePath] = useState('')
   const [error, setError] = useState<string | undefined>(undefined)
   const [submitting, setSubmitting] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -81,6 +83,11 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
     }
   }, [client, online, reloadKey])
 
+  // A relative session directory only means something inside one workspace.
+  useEffect(() => {
+    setRelativePath('')
+  }, [folder])
+
   const submit = async (): Promise<void> => {
     if (agentId === undefined || folder === undefined) {
       setError(strings.newSessionRequired)
@@ -97,6 +104,7 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
       const result = await client.newSession(agentId, {
         folder: workspace.folder,
         ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),
+        ...(relativePath !== '' ? { relativePath } : {}),
       })
       const ref = result?.ref
       if (ref === undefined) {
@@ -109,7 +117,12 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
       onCreated(sessionKey)
     } catch (err) {
       setSubmitting(false)
-      setError(commandErrorText(errorCode(err)))
+      const code = errorCode(err)
+      setError(
+        relativePath !== '' && code === 'bad_request'
+          ? strings.newSessionDirectoryInvalid
+          : commandErrorText(code),
+      )
     }
   }
 
@@ -241,6 +254,56 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
                 <p className="sheet__hint" data-testid="new-session-open-hint">
                   {strings.newSessionWorkspaceWillOpen}
                 </p>
+              )}
+            </section>
+            <section className="new-session-section">
+              <h2 className="new-session-label" id="new-session-directory-heading">
+                {strings.newSessionDirectoryLabel}
+              </h2>
+              {selectedWorkspace === undefined ? (
+                <p className="muted">{strings.newSessionNoWorkspaces}</p>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="choice new-session-select"
+                    data-testid="new-session-directory-trigger"
+                    aria-haspopup="dialog"
+                    aria-expanded={picker === 'directory'}
+                    aria-labelledby="new-session-directory-heading new-session-directory-value"
+                    disabled={disabled}
+                    onClick={() => setPicker('directory')}
+                  >
+                    <span className="new-session-select__text" id="new-session-directory-value">
+                      <span className="new-session-select__name">
+                        {relativePath === '' ? strings.newSessionDirectoryRoot : relativePath}
+                      </span>
+                    </span>
+                    <span className="new-session-select__chevron" aria-hidden="true">
+                      ›
+                    </span>
+                  </button>
+                  {picker === 'directory' && (
+                    <DirectoryPickerSheet
+                      initialRelativePath={relativePath}
+                      disabled={disabled}
+                      listDirectory={(path) =>
+                        client.listDirectory(
+                          {
+                            folder: selectedWorkspace.folder,
+                            ...(selectedWorkspace.authority !== undefined
+                              ? { authority: selectedWorkspace.authority }
+                              : {}),
+                          },
+                          path === '' ? undefined : path,
+                        )
+                      }
+                      onSelect={setRelativePath}
+                      onClose={() => setPicker(undefined)}
+                    />
+                  )}
+                  <p className="sheet__hint">{strings.newSessionDirectoryHint}</p>
+                </>
               )}
             </section>
             <button

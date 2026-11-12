@@ -34,12 +34,15 @@ import {
   isConfigValueAllowedOnMobile,
   isHighRiskPermissionOption,
   parseServerFrame,
+  parseWorkspaceRelativePath,
   serializeFrame,
   type CommandFrame,
   type DraftUpdateFrame,
+  type ListDirectoryPayload,
   type MobileAgentCandidate,
   type MobileAttentionKind,
   type MobileDeliveryExpectation,
+  type MobileDirectoryListing,
   type MobileDraftState,
   type MobileErrorCode,
   type MobileNewSessionResult,
@@ -81,6 +84,7 @@ import {
 } from './mobileAttachmentStore.js'
 import { MobileDraftRegistry, isDraftEmpty } from './mobileDraftRegistry.js'
 import { widenEventForTrust, widenSnapshotForTrust } from './trustedProjection.js'
+import { WorkspaceDirectoryBrowseError } from './workspaceDirectoryBrowser.js'
 
 /** Once a socket has this much queued we drop deltas and ask the phone to resync. */
 export const MAX_BUFFERED_SESSION_BYTES = 1024 * 1024
@@ -191,6 +195,16 @@ export interface MobileGatewayHost {
   readWorkspaceSessionHistory(
     workspace: MobileGatewayHostWorkspace,
   ): Promise<readonly MobileBridgeSessionHistoryEntry[]>
+  /**
+   * List the directories under a workspace-relative path. The hub has already
+   * matched the workspace against the open/recent set; implementations only
+   * enforce containment within that root. Optional so test doubles can omit it
+   * (the hub answers `not_supported`).
+   */
+  listDirectory?(
+    workspace: MobileGatewayHostWorkspace,
+    relativePath: string | undefined,
+  ): Promise<MobileDirectoryListing>
   /** Cap for closed workspaces included in the history catalog (config-driven). */
   sessionHistoryWorkspaceLimit(): number
   /** Phone-uploaded attachments, scoped to the authenticated device. */
@@ -235,6 +249,8 @@ export const SEARCH_PROMPT_REFS_TIMEOUT_MS = 10_000
  * command timeout so the phone receives the real error instead of a timeout.
  */
 export const NEW_SESSION_TIMEOUT_MS = 25_000
+/** Read-only directory browsing; stays below the phone's 25s command timeout. */
+const LIST_DIRECTORY_TIMEOUT_MS = 20_000
 /** A ping sent before the renderer's listener exists never settles; cap each try. */
 const BRIDGE_PING_TIMEOUT_MS = 500
 const BRIDGE_PING_INTERVAL_MS = 100
@@ -1185,7 +1201,7 @@ export class MobileGatewayHub {
       case 'newSession': {
         const p = frame.payload as {
           agentId: string
-          workspace: { folder: string; authority?: string }
+          workspace: { folder: string; authority?: string; relativePath?: string }
           initialPrompt?: string
         }
         if (this._windows.size > 1 && (await this._deliveryBusyForWorkspace(p.workspace))) {
@@ -1266,6 +1282,8 @@ export class MobileGatewayHub {
       }
       case 'listWorkspaces':
         return this._listWorkspaces()
+      case 'listDirectory':
+        return this._listDirectory(frame.payload as ListDirectoryPayload)
       case 'listAgents':
         return this._listAgents()
       case 'listSessionHistory':
@@ -1578,13 +1596,15 @@ export class MobileGatewayHub {
 
   private async _newSession(payload: {
     agentId: string
-    workspace: { folder: string; authority?: string }
+    workspace: { folder: string; authority?: string; relativePath?: string }
     initialPrompt?: string
   }): Promise<CommandOutcome> {
+    const relativePath = parseWorkspaceRelativePath(payload.workspace.relativePath)
+    if (relativePath === null) return failOutcome('bad_request')
     const deadline = Date.now() + NEW_SESSION_TIMEOUT_MS
     const opened = await this._openWorkspaceWindow(payload.workspace, deadline)
     if (!opened.ok) return { ok: false, error: opened.error }
-    const { entry, authority } = opened
+    const { entry, authority, folder } = opened
     const windowId = entry.windowId
 
     try {
@@ -1593,8 +1613,9 @@ export class MobileGatewayHub {
           entry.bridge.newSession(
             payload.agentId,
             {
-              folder: payload.workspace.folder,
+              folder,
               ...(authority !== undefined ? { authority } : {}),
+              ...(relativePath.path !== '' ? { relativePath: relativePath.path } : {}),
             },
             payload.initialPrompt ?? null,
             token,
@@ -1626,7 +1647,8 @@ export class MobileGatewayHub {
     workspace: { folder: string; authority?: string },
     deadline: number,
   ): Promise<
-    { ok: true; entry: WindowEntry; authority: string | undefined } | OpenWorkspaceFailure
+    | { ok: true; entry: WindowEntry; authority: string | undefined; folder: string }
+    | OpenWorkspaceFailure
   > {
     const open = this._host?.listOpenWorkspaces() ?? []
     const recent = (await this._host?.listRecentWorkspaces().catch(() => [])) ?? []
@@ -1635,6 +1657,10 @@ export class MobileGatewayHub {
     const target = openMatch ?? recentMatch
     if (target === undefined) return { ok: false, error: 'workspace_not_open' }
 
+    // Match is case-insensitive on Windows even for remote-ssh, whose paths are
+    // POSIX; hand the bridge the matched spelling so its containment check uses
+    // the same root as the workspace, not the phone's variation.
+    const folder = target.folder
     const authority = workspace.authority ?? target.authority
     let windowId = openMatch?.windowId
     if (windowId === undefined || !this._windows.has(windowId)) {
@@ -1643,7 +1669,7 @@ export class MobileGatewayHub {
         if (host === undefined) return { ok: false, error: 'workspace_not_open' }
         try {
           await withTimeout(
-            host.openWorkspace(workspace.folder, authority),
+            host.openWorkspace(folder, authority),
             Math.max(1, deadline - Date.now()),
           )
         } catch (err) {
@@ -1652,7 +1678,7 @@ export class MobileGatewayHub {
         }
       }
       windowId = await this._host?.waitForBridge(
-        workspace.folder,
+        folder,
         authority,
         Math.max(0, deadline - Date.now()),
       )
@@ -1671,7 +1697,7 @@ export class MobileGatewayHub {
       )
       return { ok: false, error: 'workspace_not_open' }
     }
-    return { ok: true, entry, authority }
+    return { ok: true, entry, authority, folder }
   }
 
   /**
@@ -1773,6 +1799,39 @@ export class MobileGatewayHub {
     }
     await this._annotateWorkspaceGitDirty(result, open.length)
     return { ok: true, result }
+  }
+
+  /**
+   * Directory browsing deliberately does not open a window: a recent-but-closed
+   * workspace can be browsed without bringing the PC front and center. It also
+   * never touches the renderer bridge, so main's IFileService (local + remote
+   * providers) is the single implementation for both kinds of workspace.
+   */
+  private async _listDirectory(payload: ListDirectoryPayload): Promise<CommandOutcome> {
+    const parsed = parseWorkspaceRelativePath(payload.relativePath)
+    if (parsed === null) return failOutcome('bad_request')
+    const host = this._host
+    const listDirectory = host?.listDirectory?.bind(host)
+    if (host === undefined || listDirectory === undefined) return failOutcome('not_supported')
+
+    const open = host.listOpenWorkspaces()
+    const recent = (await host.listRecentWorkspaces().catch(() => [])) ?? []
+    const target =
+      open.find((candidate) => isSameWorkspace(candidate, payload)) ??
+      recent.find((candidate) => isSameWorkspace(candidate, payload))
+    if (target === undefined) return failOutcome('workspace_not_open')
+
+    try {
+      const listing = await withTimeout(
+        listDirectory(target, parsed.path === '' ? undefined : parsed.path),
+        LIST_DIRECTORY_TIMEOUT_MS,
+      )
+      return { ok: true, result: listing }
+    } catch (err) {
+      if (err instanceof WorkspaceDirectoryBrowseError) return failOutcome(err.code)
+      this._logger.warn(`mobile listDirectory failed: ${String(err)}`)
+      return failOutcome('internal')
+    }
   }
 
   /**
