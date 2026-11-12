@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { promises as fs } from 'node:fs'
+import { win32 } from 'node:path'
 import {
   hasAgentSessionsFlag,
   hasQuitFlag,
@@ -73,6 +75,66 @@ describe('parseFileToOpen', () => {
     // Packaged: argv[0] is the exe; a bare positional at argv[1] is the file.
     expect(parseFileToOpen(['app.exe', '/project'], true)).toBe('/project')
   })
+})
+
+describe('parseFileToOpen (Windows Explorer quoting)', () => {
+  // Regression: Explorer's `"<exe>" "%V"` template turns a drive root `D:\`
+  // into the command line `"<exe>" "D:\"`; the trailing backslash escapes the
+  // closing quote, so argv receives `D:"` and fs.stat fails -> opened as a file.
+  it('repairs the drive root mangled by the quoted context-menu command', () => {
+    expect(parseFileToOpen(['app.exe', 'D:"'], true, 'win32')).toBe('D:\\')
+  })
+
+  it('repairs the mangled root in dev-mode argv', () => {
+    expect(parseFileToOpen(['electron', 'main.js', 'D:"'], false, 'win32')).toBe('D:\\')
+  })
+
+  it('repairs a UNC share root', () => {
+    expect(parseFileToOpen(['app.exe', '\\\\server\\share"'], true, 'win32')).toBe(
+      '\\\\server\\share',
+    )
+  })
+
+  it('leaves an already-correct drive root and ordinary paths untouched', () => {
+    expect(parseFileToOpen(['app.exe', 'D:\\'], true, 'win32')).toBe('D:\\')
+    const file = 'C:\\Users\\test user\\my project\\file.ts'
+    expect(parseFileToOpen(['app.exe', file], true, 'win32')).toBe(file)
+  })
+
+  it('does not turn a user-typed bare drive into the root', () => {
+    // `D:` is drive-relative; only the quote artifact means the selected root.
+    expect(parseFileToOpen(['app.exe', 'D:'], true, 'win32')).toBe('D:')
+  })
+
+  it('does not strip quotes on non-Windows platforms', () => {
+    expect(parseFileToOpen(['app.exe', 'D:"'], true, 'linux')).toBe('D:"')
+    expect(parseFileToOpen(['app.exe', 'D:"'], true, 'darwin')).toBe('D:"')
+  })
+
+  it('does not repair the value consumed by a valued flag', () => {
+    expect(
+      parseFileToOpen(['app.exe', '--user-data-dir', 'D:"', 'C:\\project'], true, 'win32'),
+    ).toBe('C:\\project')
+    expect(parseFileToOpen(['app.exe', '--user-data-dir', 'D:"'], true, 'win32')).toBeUndefined()
+  })
+
+  it('still ignores deep links', () => {
+    expect(
+      parseFileToOpen(['app.exe', 'universe-editor://file/foo"'], true, 'win32'),
+    ).toBeUndefined()
+  })
+
+  const windowsRoot = win32.parse(process.cwd()).root
+  it.skipIf(process.platform !== 'win32' || !/^[A-Za-z]:\\$/.test(windowsRoot))(
+    'defaults to the host platform and yields a stat-able directory',
+    async () => {
+      const mangled = `${windowsRoot.slice(0, -1)}"` // `D:\` -> `D:"`
+      // Two-arg call deliberately exercises the process.platform default.
+      const parsed = parseFileToOpen(['app.exe', mangled], true)
+      expect(parsed).toBe(windowsRoot)
+      expect((await fs.stat(parsed!)).isDirectory()).toBe(true)
+    },
+  )
 })
 
 describe('hasQuitFlag', () => {

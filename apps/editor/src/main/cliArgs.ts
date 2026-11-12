@@ -57,8 +57,22 @@ export function hasAgentSessionsFlag(argv: readonly string[]): boolean {
 }
 
 /**
+ * Explorer builds the directory command as `"<exe>" "%V"`. At a drive root
+ * `%V` is `D:\`, so the trailing backslash escapes the closing quote and argv
+ * receives `D:"`. Windows file names cannot contain `"`, so dropping it is
+ * lossless; the bare drive left behind is the selected root. Quote-free tokens
+ * keep their Win32 drive-relative meaning (`ue D:` = current directory on D:).
+ */
+function repairWindowsArgvToken(token: string, platform: NodeJS.Platform): string {
+  if (platform !== 'win32' || !token.includes('"')) return token
+  const unquoted = token.replaceAll('"', '')
+  return /^[a-zA-Z]:$/.test(unquoted) ? `${unquoted}\\` : unquoted
+}
+
+/**
  * Extract the first positional argument (a file or directory to open at startup).
- * Windows file associations pass the path as a plain argv entry.
+ * Windows file associations pass the path as a plain argv entry; a drive/UNC
+ * root arrives mangled by Explorer's quoted `%V` template and is repaired.
  *
  * Skips both flags and the values consumed by valued flags — otherwise the value
  * of e.g. `--user-data-dir <path>` (space form) would be mistaken for a folder to
@@ -68,7 +82,11 @@ export function hasAgentSessionsFlag(argv: readonly string[]): boolean {
  * Packaged: argv[0]=exe, argv[1+]=user args.
  * Dev:      argv[0]=electron, argv[1]=main script, argv[2+]=user args.
  */
-export function parseFileToOpen(argv: readonly string[], isPackaged: boolean): string | undefined {
+export function parseFileToOpen(
+  argv: readonly string[],
+  isPackaged: boolean,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
   const args = argv.slice(isPackaged ? 1 : 2)
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!
@@ -79,7 +97,7 @@ export function parseFileToOpen(argv: readonly string[], isPackaged: boolean): s
       }
       continue
     }
-    if (a.length > 0 && !isDeepLink(a)) return a
+    if (a.length > 0 && !isDeepLink(a)) return repairWindowsArgvToken(a, platform)
   }
   return undefined
 }
