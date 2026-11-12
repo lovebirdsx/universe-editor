@@ -29,6 +29,8 @@ export interface TimelineProps {
   readonly truncated: boolean
   /** Agent is running and no permission / elicitation is waiting on the user. */
   readonly active?: boolean | undefined
+  /** Raw session status is `running`; gates the streaming caret like desktop. */
+  readonly running?: boolean | undefined
   readonly client: Pick<
     MobileClient,
     | 'requestToolCallDetail'
@@ -56,6 +58,7 @@ export function Timeline({
   displayMode,
   truncated,
   active = false,
+  running = false,
   client,
   rewindAvailable = false,
   sideTaskAvailable = false,
@@ -142,6 +145,7 @@ export function Timeline({
               key={`${group.item.kind}:${group.item.id}`}
               item={group.item}
               client={client}
+              running={running}
               rewindAvailable={rewindAvailable}
               sideTaskAvailable={sideTaskAvailable}
               onOpenMessageActions={onOpenMessageActions}
@@ -188,6 +192,7 @@ function groupTimeline(items: readonly MobileTimelineItem[], groupTools: boolean
 function TimelineItem({
   item,
   client,
+  running,
   rewindAvailable,
   sideTaskAvailable,
   onOpenMessageActions,
@@ -200,6 +205,7 @@ function TimelineItem({
     | 'fetchMessageImageBlob'
     | 'fetchWorkspaceImageBlob'
   >
+  readonly running: boolean
   readonly rewindAvailable: boolean
   readonly sideTaskAvailable: boolean
   readonly onOpenMessageActions:
@@ -212,6 +218,7 @@ function TimelineItem({
         <MessageItem
           item={item}
           client={client}
+          running={running}
           rewindAvailable={rewindAvailable}
           sideTaskAvailable={sideTaskAvailable}
           onOpenMessageActions={onOpenMessageActions}
@@ -227,6 +234,7 @@ function TimelineItem({
 function MessageItem({
   item,
   client,
+  running,
   rewindAvailable,
   sideTaskAvailable,
   onOpenMessageActions,
@@ -236,6 +244,7 @@ function MessageItem({
     MobileClient,
     'fetchAttachmentBlob' | 'fetchMessageImageBlob' | 'fetchWorkspaceImageBlob'
   >
+  readonly running: boolean
   readonly rewindAvailable: boolean
   readonly sideTaskAvailable: boolean
   readonly onOpenMessageActions:
@@ -274,9 +283,11 @@ function MessageItem({
       </div>
     )
   }
-  if (item.role === 'thought') return <ThoughtItem item={item} client={client} />
-  const showActions =
-    onOpenMessageActions !== undefined && item.streaming !== true && hasCopyableContent(item)
+  if (item.role === 'thought') {
+    return <ThoughtItem item={item} client={client} running={running} />
+  }
+  const streaming = item.streaming && running
+  const showActions = onOpenMessageActions !== undefined && !streaming && hasCopyableContent(item)
   return (
     <div className="message message--agent" data-testid="agent-message" ref={rootRef}>
       <MarkdownView text={item.text} testId="agent-markdown" imageLoader={client} />
@@ -284,7 +295,7 @@ function MessageItem({
         <MessageImages messageId={item.id} images={item.images} client={client} />
       )}
       {item.hasNonText === true && <p className="muted-note">{strings.messageNonText}</p>}
-      {item.streaming && <span className="streaming-cursor" aria-hidden="true" />}
+      {streaming && <span className="streaming-cursor" aria-hidden="true" />}
       {showActions && (
         <MessageActionsButton
           testId="agent-message-actions"
@@ -320,9 +331,11 @@ function MessageActionsButton({
 function ThoughtItem({
   item,
   client,
+  running,
 }: {
   readonly item: MobileTimelineMessageItem
   readonly client: Pick<MobileClient, 'fetchMessageImageBlob' | 'fetchWorkspaceImageBlob'>
+  readonly running: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   return (
@@ -334,7 +347,7 @@ function ThoughtItem({
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="thought__title">{strings.thoughtTitle}</span>
-        {item.streaming && <span className="streaming-cursor" aria-hidden="true" />}
+        {item.streaming && running && <span className="streaming-cursor" aria-hidden="true" />}
         <span className="thought__chevron" aria-hidden="true">
           {expanded ? '▴' : '▾'}
         </span>

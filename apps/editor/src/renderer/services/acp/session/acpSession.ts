@@ -1656,15 +1656,32 @@ export class AcpSession extends Disposable implements IAcpSession {
   applyBackgroundActivity(params: { backgroundTasks: number; autonomousTurn: boolean }): void {
     if (this.status.get() === 'closed') return
     this._lastActivityAt = Date.now() // the notification itself is proof of life
+    const wasAutonomous = this._autonomousTurnActive
     this.backgroundTaskCount.set(params.backgroundTasks, undefined)
     this._autonomousTurnActive = params.autonomousTurn
+    // An autonomous turn holds no prompt RPC, so _dispatchPrompt's finally
+    // never flushes its trailing stream. true -> false is that turn's end;
+    // skip while another prompt is live or history is still replaying (the
+    // replay's own end seals it).
+    if (
+      wasAutonomous &&
+      !params.autonomousTurn &&
+      this._inFlight.size === 0 &&
+      !this.isReplayingHistory.get()
+    ) {
+      this._flushStream()
+    }
     this._recomputeStatus()
   }
 
   /** Drop the background-activity inputs on any connection teardown path. */
   private _resetBackgroundActivity(): void {
+    const wasAutonomous = this._autonomousTurnActive
     this._autonomousTurnActive = false
     this.backgroundTaskCount.set(0, undefined)
+    // Losing the autonomous flag is that turn's only end signal (it has no
+    // prompt finally), so seal its trailing stream on every teardown.
+    if (wasAutonomous) this._flushStream()
   }
 
   /**
@@ -1963,6 +1980,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._commitBatchedTx()
     // A replayed sub-agent card is finished history, not a growing run.
     this._sealLiveChildMessages()
+    // Replay has no prompt finally to flush the trailing message. Without this
+    // the last replayed reply keeps `streaming: true` into idle, and the phone
+    // (which lacks the desktop session-running caret gate) blinks forever.
+    this._sealStreamingMessages()
     this._commitBatchedTx()
     this._suppressReplayToTimeline = false
     this._suppressAnchorMessageId = undefined
@@ -4497,7 +4518,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     const closed = this._closePriorStreaming()
     if (closed.length === 0) return
     for (const c of closed) this._upsertMessageInTimeline(c)
-    this.messages.set(this._messages, this._batchedTx())
+    // The loop rewrites _timeline too; publish both lanes or timeline readers
+    // (desktop ChatBody, mobile bridge diff) keep the stale streaming flag.
+    const tx = this._batchedTx()
+    this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
   }
 
   private _flushStream(): void {

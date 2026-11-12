@@ -371,8 +371,8 @@ export function SessionPage({
   const running = state.summary?.bucket === 'in_progress'
   // The activity row mirrors the desktop: only a raw `running` turn counts (not
   // connecting / background), and a pending card already tells the user why.
-  const activityActive =
-    state.summary?.status === 'running' && permission === undefined && elicitation === undefined
+  const sessionRunning = state.summary?.status === 'running'
+  const activityActive = sessionRunning && permission === undefined && elicitation === undefined
   const rewindAvailable = state.summary?.rewindSupported === true && !readOnly
   const sideTaskAvailable = state.summary?.forkSupported === true && !readOnly
   const sideTaskOf = state.summary?.sideTaskOf
@@ -464,6 +464,7 @@ export function SessionPage({
             displayMode={displayMode}
             truncated={state.truncated}
             active={activityActive}
+            running={sessionRunning}
             client={client}
             rewindAvailable={rewindAvailable}
             sideTaskAvailable={sideTaskAvailable}

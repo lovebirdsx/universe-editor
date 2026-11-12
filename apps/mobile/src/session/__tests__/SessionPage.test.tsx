@@ -295,6 +295,37 @@ describe('SessionPage snapshot rendering', () => {
     expect(document.querySelector('.streaming-cursor')).toBeNull()
   })
 
+  it('drops the cursor when the summary goes idle while the message still says streaming', () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        timeline: [userMessage('m1', 'hello'), agentMessage('a1', 'echo: partial', true)],
+      }),
+    )
+    expect(document.querySelector('.streaming-cursor')).toBeTruthy()
+    expect(screen.queryByTestId('agent-message-actions')).toBeNull()
+
+    feed(harness.socket, {
+      type: 'session_delta',
+      seq: 2,
+      ref: sessionRef('s1'),
+      events: [
+        {
+          type: 'summary_changed',
+          summary: sessionSummary('s1', {
+            status: 'idle',
+            displayStatus: 'idle',
+            bucket: 'completed',
+          }),
+        },
+      ],
+    })
+
+    expect(document.querySelector('.streaming-cursor')).toBeNull()
+    expect(screen.getByTestId('agent-message-actions')).toBeTruthy()
+  })
+
   it('collapses consecutive tool calls and fetches a detail on expand (cached)', async () => {
     localStorage.setItem(SESSION_DISPLAY_STORAGE_KEY, 'full')
     const { harness } = openPage()

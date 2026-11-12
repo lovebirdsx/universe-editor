@@ -1821,6 +1821,42 @@ describe('AcpSession.timeline', () => {
     expect(item.message.text).toBe('fresh message')
   })
 
+  it('seals the trailing replayed message when endHistoryReplay fires', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    s.beginHistoryReplay()
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'replayed ' },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'reply' },
+      },
+    })
+    await new Promise((r) => setTimeout(r, 25))
+
+    const before = s.timeline.get().find((it) => it.kind === 'message')
+    if (before?.kind !== 'message') throw new Error('expected message')
+    expect(before.message.text).toBe('replayed reply')
+    expect(before.message.streaming).toBe(true)
+
+    s.endHistoryReplay()
+
+    const after = s.timeline.get().find((it) => it.kind === 'message')
+    if (after?.kind !== 'message') throw new Error('expected message')
+    expect(after.message.text).toBe('replayed reply')
+    expect(after.message.streaming).toBe(false)
+    expect(s.messages.get().every((m) => !m.streaming)).toBe(true)
+  })
+
   it('keeps the forked baseline plan out of the bar when the fork re-sends taskState', async () => {
     const s = await svc.createSession()
     await s.whenConnected()

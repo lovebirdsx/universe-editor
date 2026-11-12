@@ -389,9 +389,56 @@ describe('Timeline message actions', () => {
         { kind: 'message', id: 'a2', role: 'agent', text: '   ', streaming: false },
       ],
       'onlyMessage',
-      { sideTaskAvailable: true, onOpenMessageActions: vi.fn() },
+      { running: true, sideTaskAvailable: true, onOpenMessageActions: vi.fn() },
     )
     expect(screen.queryByTestId('agent-message-actions')).toBeNull()
+  })
+
+  it('offers actions on a stale-streaming agent message once the session is idle', () => {
+    renderTimeline(
+      [{ kind: 'message', id: 'a1', role: 'agent', text: 'answer', streaming: true }],
+      'onlyMessage',
+      { running: false, onOpenMessageActions: vi.fn() },
+    )
+    expect(screen.getByTestId('agent-message-actions')).toBeTruthy()
+  })
+})
+
+describe('Timeline streaming caret', () => {
+  it('hides the agent caret when the session is idle even if the message is streaming', () => {
+    renderTimeline(
+      [{ kind: 'message', id: 'a1', role: 'agent', text: 'partial', streaming: true }],
+      'onlyMessage',
+      { running: false },
+    )
+    expect(document.querySelector('.streaming-cursor')).toBeNull()
+  })
+
+  it('shows the agent caret while the session is running', () => {
+    renderTimeline(
+      [{ kind: 'message', id: 'a1', role: 'agent', text: 'partial', streaming: true }],
+      'onlyMessage',
+      { running: true },
+    )
+    expect(document.querySelector('.streaming-cursor')).toBeTruthy()
+  })
+
+  it('hides the thought caret when the session is idle', () => {
+    renderTimeline(
+      [{ kind: 'message', id: 'th1', role: 'thought', text: 'thinking', streaming: true }],
+      'full',
+      { running: false },
+    )
+    expect(document.querySelector('.streaming-cursor')).toBeNull()
+  })
+
+  it('shows the thought caret while the session is running', () => {
+    renderTimeline(
+      [{ kind: 'message', id: 'th1', role: 'thought', text: 'thinking', streaming: true }],
+      'full',
+      { running: true },
+    )
+    expect(document.querySelector('.streaming-cursor')).toBeTruthy()
   })
 })
 

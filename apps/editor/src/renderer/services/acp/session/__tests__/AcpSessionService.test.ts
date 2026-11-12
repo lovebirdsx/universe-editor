@@ -8081,6 +8081,38 @@ describe('AcpSessionService — orphan tool-call sweep', () => {
     svc.dispose()
   })
 
+  it('seals a streaming message when the autonomous turn ends with no prompt in flight', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client)
+    const session = await svc.createSession()
+    if (!(session instanceof AcpSession)) throw new Error('expected a concrete AcpSession')
+    await session.whenConnected()
+    const conn = client.connected[0]!
+
+    session.applyBackgroundActivity({ backgroundTasks: 0, autonomousTurn: true })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'autonomous output' },
+      },
+    })
+    await vi.advanceTimersByTimeAsync(25)
+
+    const streaming = session.timeline.get().find((it) => it.kind === 'message')
+    if (streaming?.kind !== 'message') throw new Error('expected message')
+    expect(streaming.message.streaming).toBe(true)
+    expect(session.status.get()).toBe('running')
+
+    session.applyBackgroundActivity({ backgroundTasks: 0, autonomousTurn: false })
+
+    const sealed = session.timeline.get().find((it) => it.kind === 'message')
+    if (sealed?.kind !== 'message') throw new Error('expected message')
+    expect(sealed.message.streaming).toBe(false)
+    expect(session.status.get()).toBe('idle')
+    svc.dispose()
+  })
+
   it('settles the card when the autonomousTurn:false activity lands after the turn (real-world ordering)', async () => {
     // Production logs: the agent's `autonomousTurn:false` background-activity
     // notification arrives AFTER the session/prompt response. A synchronous
