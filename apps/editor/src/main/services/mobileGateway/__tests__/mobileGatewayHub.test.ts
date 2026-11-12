@@ -2555,6 +2555,158 @@ describe('MobileGatewayHub commands', () => {
     expect(brokenConnection.frames.at(-1)).toMatchObject({ ok: false, error: 'internal' })
   })
 
+  it('returns new-session options for an open workspace without opening a window', async () => {
+    const options = { lastRelativePath: 'packages/demo', projectRoots: ['packages/demo'] }
+    const readNewSessionOptions = vi.fn(async () => options)
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+      readNewSessionOptions,
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'options-1',
+        kind: 'getNewSessionOptions',
+        payload: { folder: 'file:///workspace/demo' },
+      },
+      audit,
+    )
+
+    expect(readNewSessionOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ folder: 'file:///workspace/demo' }),
+    )
+    expect(host.openWorkspace).not.toHaveBeenCalled()
+    expect(host.waitForBridge).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'options-1',
+      ok: true,
+      result: options,
+    })
+    // Read-only defaults are not audited and ignore idempotency keys.
+    expect(audit.record).not.toHaveBeenCalled()
+  })
+
+  it('returns new-session options for a recent-only workspace', async () => {
+    const readNewSessionOptions = vi.fn(async () => ({ projectRoots: [] }))
+    const host = makeHost({
+      listRecentWorkspaces: vi.fn(async () => [
+        { folder: 'file:///workspace/recent', name: 'recent' },
+      ]),
+      readNewSessionOptions,
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'options-2',
+      kind: 'getNewSessionOptions',
+      payload: { folder: 'file:///workspace/recent' },
+    })
+
+    expect(host.openWorkspace).not.toHaveBeenCalled()
+    expect(readNewSessionOptions).toHaveBeenCalledWith(
+      expect.objectContaining({ folder: 'file:///workspace/recent' }),
+    )
+    expect(connection.frames.at(-1)).toMatchObject({ ok: true, result: { projectRoots: [] } })
+  })
+
+  it('rejects new-session options for unknown workspaces', async () => {
+    const readNewSessionOptions = vi.fn(async () => ({ projectRoots: [] }))
+    const host = makeHost({ readNewSessionOptions })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'options-3',
+      kind: 'getNewSessionOptions',
+      payload: { folder: 'file:///workspace/unknown' },
+    })
+
+    expect(connection.frames.at(-1)).toMatchObject({
+      ok: false,
+      error: 'workspace_not_open',
+    })
+    expect(readNewSessionOptions).not.toHaveBeenCalled()
+  })
+
+  it('reports not_supported when the host cannot read new-session options', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'options-4',
+      kind: 'getNewSessionOptions',
+      payload: { folder: 'file:///workspace/demo' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'not_supported' })
+  })
+
+  it('maps new-session option read failures to internal', async () => {
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+      readNewSessionOptions: vi.fn(async () => {
+        throw new Error('provider exploded')
+      }),
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'options-5',
+      kind: 'getNewSessionOptions',
+      payload: { folder: 'file:///workspace/demo' },
+    })
+    expect(connection.frames.at(-1)).toMatchObject({ ok: false, error: 'internal' })
+  })
+
+  it('does not cache read-only new-session options by idempotency key', async () => {
+    const readNewSessionOptions = vi.fn(async () => ({ projectRoots: [] }))
+    const host = makeHost({
+      listOpenWorkspaces: vi.fn(() => [
+        { windowId: 1, folder: 'file:///workspace/demo', name: 'demo' },
+      ]),
+      readNewSessionOptions,
+    })
+    const hub = new MobileGatewayHub(NULL_LOGGER, host)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    for (const requestId of ['options-6', 'options-7']) {
+      await hub.handleCommand(connection, {
+        type: 'command',
+        requestId,
+        idempotencyKey: 'same-key',
+        kind: 'getNewSessionOptions',
+        payload: { folder: 'file:///workspace/demo' },
+      })
+    }
+    expect(readNewSessionOptions).toHaveBeenCalledTimes(2)
+  })
+
   it('passes a canonical workspace-relative path to the bridge', async () => {
     const host = makeHost({
       listOpenWorkspaces: vi.fn(() => [

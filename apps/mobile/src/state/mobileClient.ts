@@ -15,6 +15,7 @@ import type {
   MobileDraftImageRef,
   MobileElicitationAction,
   MobileElicitationContentValue,
+  MobileNewSessionOptions,
   MobileNewSessionResult,
   MobileNotificationPrefs,
   MobilePushBranchExpectation,
@@ -60,6 +61,7 @@ import {
   isMobileDeliveryPreview,
   isMobileDeliveryStartResult,
   isMobileDirectoryListing,
+  isMobileNewSessionOptions,
   isMobilePromptRefSuggestionsResult,
   isMobilePushBranchPreview,
   isMobilePushBranchResult,
@@ -712,6 +714,21 @@ export class MobileClient {
         ...(relativePath !== undefined ? { relativePath } : {}),
       },
       { validateResult: isMobileDirectoryListing },
+    )
+  }
+
+  /** Read the remembered session directory and configured project roots. */
+  async getNewSessionOptions(workspace: {
+    folder: string
+    authority?: string
+  }): Promise<MobileNewSessionOptions> {
+    return this._commands.request<MobileNewSessionOptions>(
+      'getNewSessionOptions',
+      {
+        folder: workspace.folder,
+        ...(workspace.authority !== undefined ? { authority: workspace.authority } : {}),
+      },
+      { validateResult: isMobileNewSessionOptions },
     )
   }
 

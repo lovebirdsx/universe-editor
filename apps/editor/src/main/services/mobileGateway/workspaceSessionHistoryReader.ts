@@ -8,7 +8,6 @@
  *  is left untouched) and applies the same resumable-row rules as the bridge.
  *--------------------------------------------------------------------------------------------*/
 
-import { readFile, stat } from 'node:fs/promises'
 import {
   normalizePlatform,
   URI,
@@ -30,10 +29,10 @@ import {
   isResumableHistoryEntry,
   type ResumableHistoryEntry,
 } from '../../../shared/mobileGateway/sessionHistoryFilter.js'
-import { workspaceIdFromUri, workspaceStoragePathFor } from '../../storage.js'
-
-/** A single bucket above this is treated as corrupt rather than read whole. */
-const MAX_HISTORY_BUCKET_BYTES = 16 * 1024 * 1024
+import {
+  DEFAULT_WORKSPACE_STATE_BUCKET_MAX_BYTES,
+  readWorkspaceStateBucket,
+} from './workspaceStateBucket.js'
 
 export interface WorkspaceSessionHistoryReaderOptions {
   readonly userDataDir: string
@@ -80,35 +79,15 @@ export class WorkspaceSessionHistoryReader {
       return []
     }
 
-    const file = workspaceStoragePathFor(
-      this._options.userDataDir,
-      workspaceIdFromUri(workspace.folder),
-    )
-    let text: string
-    try {
-      const info = await stat(file)
-      if (info.size > MAX_HISTORY_BUCKET_BYTES) {
-        this._options.logger.debug(
-          `mobile history bucket skipped: file is ${info.size} bytes (cap ${MAX_HISTORY_BUCKET_BYTES})`,
-        )
-        return []
-      }
-      text = await readFile(file, 'utf8')
-    } catch (err) {
-      this._options.logger.debug(`mobile history bucket unavailable: ${describe(err)}`)
-      return []
-    }
-
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(stripBom(text))
-    } catch (err) {
-      this._options.logger.debug(
-        `mobile history bucket is not valid JSON; keeping it untouched (${describe(err)})`,
-      )
-      return []
-    }
-    if (!isRecord(parsed)) return []
+    const bucket = await readWorkspaceStateBucket({
+      userDataDir: this._options.userDataDir,
+      folder: workspace.folder,
+      maxBytes: DEFAULT_WORKSPACE_STATE_BUCKET_MAX_BYTES,
+      label: 'mobile history bucket',
+      logger: this._options.logger,
+    })
+    if (!bucket.ok) return []
+    const parsed = bucket.state
 
     const history = parsed[ACP_SESSION_HISTORY_STORAGE_KEY]
     if (!isRecord(history)) return []
@@ -193,12 +172,4 @@ function isPersistedHistoryEntry(value: unknown): value is PersistedHistoryEntry
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function stripBom(text: string): string {
-  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }

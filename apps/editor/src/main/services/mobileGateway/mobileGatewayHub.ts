@@ -38,6 +38,7 @@ import {
   serializeFrame,
   type CommandFrame,
   type DraftUpdateFrame,
+  type GetNewSessionOptionsPayload,
   type ListDirectoryPayload,
   type MobileAgentCandidate,
   type MobileAttentionKind,
@@ -45,6 +46,7 @@ import {
   type MobileDirectoryListing,
   type MobileDraftState,
   type MobileErrorCode,
+  type MobileNewSessionOptions,
   type MobileNewSessionResult,
   type MobilePendingPermission,
   type MobilePromptRef,
@@ -85,6 +87,7 @@ import {
 import { MobileDraftRegistry, isDraftEmpty } from './mobileDraftRegistry.js'
 import { widenEventForTrust, widenSnapshotForTrust } from './trustedProjection.js'
 import { WorkspaceDirectoryBrowseError } from './workspaceDirectoryBrowser.js'
+import { describeFsError } from '../../../shared/mobileGateway/workspaceFsErrors.js'
 
 /** Once a socket has this much queued we drop deltas and ask the phone to resync. */
 export const MAX_BUFFERED_SESSION_BYTES = 1024 * 1024
@@ -205,6 +208,13 @@ export interface MobileGatewayHost {
     workspace: MobileGatewayHostWorkspace,
     relativePath: string | undefined,
   ): Promise<MobileDirectoryListing>
+  /**
+   * Read the new-session defaults for one workspace. The hub has already
+   * matched the workspace against the open/recent set; implementations only
+   * return data derived from that workspace. Optional so test doubles can omit
+   * it (the hub answers `not_supported`).
+   */
+  readNewSessionOptions?(workspace: MobileGatewayHostWorkspace): Promise<MobileNewSessionOptions>
   /** Cap for closed workspaces included in the history catalog (config-driven). */
   sessionHistoryWorkspaceLimit(): number
   /** Phone-uploaded attachments, scoped to the authenticated device. */
@@ -251,6 +261,8 @@ export const SEARCH_PROMPT_REFS_TIMEOUT_MS = 10_000
 export const NEW_SESSION_TIMEOUT_MS = 25_000
 /** Read-only directory browsing; stays below the phone's 25s command timeout. */
 const LIST_DIRECTORY_TIMEOUT_MS = 20_000
+/** Read-only options; remote settings/existence checks may need a connection setup. */
+const NEW_SESSION_OPTIONS_TIMEOUT_MS = 20_000
 /** A ping sent before the renderer's listener exists never settles; cap each try. */
 const BRIDGE_PING_TIMEOUT_MS = 500
 const BRIDGE_PING_INTERVAL_MS = 100
@@ -1284,6 +1296,8 @@ export class MobileGatewayHub {
         return this._listWorkspaces()
       case 'listDirectory':
         return this._listDirectory(frame.payload as ListDirectoryPayload)
+      case 'getNewSessionOptions':
+        return this._getNewSessionOptions(frame.payload as GetNewSessionOptionsPayload)
       case 'listAgents':
         return this._listAgents()
       case 'listSessionHistory':
@@ -1830,6 +1844,34 @@ export class MobileGatewayHub {
     } catch (err) {
       if (err instanceof WorkspaceDirectoryBrowseError) return failOutcome(err.code)
       this._logger.warn(`mobile listDirectory failed: ${String(err)}`)
+      return failOutcome('internal')
+    }
+  }
+
+  /**
+   * Read-only new-session defaults (remembered directory + configured project
+   * roots). Like `listDirectory` this never opens a window; the host derives
+   * everything from the matched workspace.
+   */
+  private async _getNewSessionOptions(
+    payload: GetNewSessionOptionsPayload,
+  ): Promise<CommandOutcome> {
+    const host = this._host
+    const read = host?.readNewSessionOptions?.bind(host)
+    if (host === undefined || read === undefined) return failOutcome('not_supported')
+
+    const open = host.listOpenWorkspaces()
+    const recent = (await host.listRecentWorkspaces().catch(() => [])) ?? []
+    const target =
+      open.find((candidate) => isSameWorkspace(candidate, payload)) ??
+      recent.find((candidate) => isSameWorkspace(candidate, payload))
+    if (target === undefined) return failOutcome('workspace_not_open')
+
+    try {
+      const options = await withTimeout(read(target), NEW_SESSION_OPTIONS_TIMEOUT_MS)
+      return { ok: true, result: options }
+    } catch (err) {
+      this._logger.warn(`mobile getNewSessionOptions failed: ${describeFsError(err)}`)
       return failOutcome('internal')
     }
   }

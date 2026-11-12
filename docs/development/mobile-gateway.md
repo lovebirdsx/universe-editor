@@ -18,7 +18,9 @@
 > 远端分支名可改为 `tasks/...`）；**M13 手机会话目录删除已落地**（协议 v18：历史行可由手机删除，
 > 仅限 PC 已打开窗口所属行；live 行仍走既有删除链路）；**M14 新建会话支持工作区内子目录已落地**
 > （协议 v21：只读命令 `listDirectory` 逐级浏览，`newSession.workspace.relativePath?` 指定会话
-> cwd；范围仅工作区内）。
+> cwd；范围仅工作区内）；**M15 新建会话目录记忆与项目根已落地**（协议 v22：只读命令
+> `getNewSessionOptions` 读取工作区上次创建目录与 `acp.projectRoots`，目录 Sheet 顶部提供
+> 「项目根」快捷区）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -49,7 +51,8 @@ PC 编辑器关闭时手机显示离线，不接管执行。
 **第二期**：语音输入、多台 PC 切换、中转服务器（脱离局域网/ Tailscale）。
 
 **明确不做**：文件内容浏览 / 编辑、终端、agent / MCP / 供应商配置、扩展管理。新建会话支持在
-工作区内逐级选目录（v21），但手机不读写文件内容、不接触绝对路径。
+工作区内逐级选目录（v21），并默认继承该工作区上次创建会话的目录、快捷选择 `acp.projectRoots`
+（v22），但手机不读写文件内容、不接触绝对路径。
 
 **设计依据（竞品共识）**：移动端只做监工 / 审批 / 验收 / 通知；首屏是任务收件箱而不是会话列表；
 ACP 生态目前没有成熟的移动客户端，因此协议与 view-model 需要自建。
@@ -144,7 +147,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 21`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 22`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -179,7 +182,8 @@ payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的
 `sendPrompt.refs`（手机 `@` 文件 / `#` 符号、本地修改、打开的编辑器、文档，见 §7d）；v21
 增加工作区目录浏览：只读命令 `listDirectory`、`MobileDirectoryListing` 与
 `newSession.workspace.relativePath?`（工作区相对、`/` 分隔；手机只回显服务端给的路径、不接触
-绝对路径，见 §6f）。
+绝对路径，见 §6f）；v22 增加新建会话选项：只读命令 `getNewSessionOptions` 与
+`MobileNewSessionOptions`（上次创建目录 + 工作区内 `acp.projectRoots`，见 §6g）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted, notificationPrefs? }`；`trusted` 表示 PC 是否已
@@ -233,6 +237,7 @@ Referer。
 | 枚举        | `listWorkspaces`                         | `{}`                                                           | 打开窗口 ∪ 最近工作区，带 `isOpen`；打开候选带 `windowId`，前 20 个候选尽力探测 `gitDirty`（见 §6）               |
 | 枚举        | `listAgents`                             | `{}`                                                           | 由第一个已注册窗口桥返回                                                                                          |
 | 枚举        | `listDirectory`                          | `{ folder, authority?, relativePath? }`                        | 只读列出工作区内一层子目录；`relativePath` 省略/空 = 根；只返回目录，超出预算带 `truncated: true`（见 §6f）     |
+| 枚举        | `getNewSessionOptions`                   | `{ folder, authority? }`                                       | 只读读取该工作区上次创建会话的相对目录与配置的项目根（均工作区内，见 §6g）                                        |
 | 会话目录    | `listSessionHistory`                     | `{}`                                                           | 已打开窗口 + 最近工作区（前 N 个，N 可配、默认 20）的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
 | 会话目录    | `openSession`                            | `{ durableId, windowId?, folder?, authority? }`                | 按 durable id 非激活恢复历史会话；目标工作区未打开时先自动开窗再恢复；带幂等键                                    |
 | 会话目录    | `deleteHistorySession`                   | `{ durableId, windowId? }`                                     | 删除 PC 已打开窗口所属的历史行；live 竞态走 `deleteSession`；无 owner 回 `session_not_found`；带幂等键            |
@@ -255,7 +260,7 @@ Referer。
 **幂等**：会修改状态的命令可带 `idempotencyKey`。网关在内存中缓存首个结果 5 分钟
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
 只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`、
-`searchPromptRefs`、`listDirectory`）不缓存。客户端重试不会重复发
+`searchPromptRefs`、`listDirectory`、`getNewSessionOptions`）不缓存。客户端重试不会重复发
 prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
 `deleteSideTask` / `openSession` / `deleteHistorySession` 都按可修改状态命令处理；交付中的 `startDelivery` /
 `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree` 同样处理
@@ -267,7 +272,8 @@ prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `cre
 `deleteHistorySession` / `newSession` / `previewRewind` 30s；`forkSession` / `rewindSession` /
 `createSideTask` / `openSideTask` / `deleteSideTask` 120s（要等 agent fork RPC 与 resume），
 `listSideTasks` 10s；`listDirectory` 20s（手机端 25s，只读命令无宽限；远程工作区首次浏览可能
-触发建连，超时后重试即可）；
+触发建连，超时后重试即可）；`getNewSessionOptions` 20s（手机端 25s，只读；读取本地桶与工作区
+设置，远程 `IFileService` 探测可能触发建连）；
 `listSessionHistory` 8s（逐窗口等桥就绪最多 5s + 桥读取；每个关闭工作区读盘额外 2s 上限），
 手机端 20s 覆盖网关最坏耗时；
 `openSession` 从入口起共用一份 100s 总预算：live 查找、owner 扫描、开窗、等桥、历史轮询与恢复都
@@ -715,6 +721,44 @@ POSIX 根工作区（`/`）单独视为包含所有同源路径——`relativePa
 **安全**：`listDirectory` 是只读命令，不审计、不缓存、不带幂等键；`newSession` 的审计 `detail`
 仍只有 `agent=`，**绝不记录所选相对路径或绝对路径**；目录日志只记数量与错误码，不记目录名。
 
+## 6g. 新建会话的目录记忆与项目根（协议 v22）
+
+目录选择器不再「永远从工作区根开始」：打开新建页时手机先发只读命令
+`getNewSessionOptions { folder, authority? }`，拿到 `MobileNewSessionOptions
+{ lastRelativePath?, projectRoots }`。两项都是**工作区相对路径**（`/` 分隔）；绝对路径与设置
+原文不出 PC。
+
+**上次目录（`lastRelativePath`）**：复用桌面 `acp.lastSessionCwd`（`AcpLastSessionCwdService`），
+读写同一份按工作区落盘的 `<userData>/workspaces/<sha1(folderUri)[0:16]>.json`。桌面或手机任一端
+创建会话都会更新它，因此多设备一致；手机不写 localStorage。main 侧
+`WorkspaceNewSessionOptionsReader` 直接从桶文件读 `acp.lastSessionCwd`：
+
+- `schemaVersion` 必须为 1、`cwd` 非空；远程工作区的 `authority` 必须与目标工作区一致
+  （本地按 `undefined` 比较），避免把另一台主机的记忆带进本工作区；
+- 用平台语义（`remote-ssh` 一律 POSIX，本地按 host）把绝对 cwd 相对化；根目录 / 工作区外 /
+  非法相对路径均省略；
+- 目标必须仍是目录（`stat`）；`ENOENT` / `EACCES` / `ENOTDIR` / `EISDIR` 丢弃，传输类错误保留
+  （与桌面 probe 一致）；`realpath` 复核仍须落在工作区内；
+- 写盘有 100ms 防抖，刚在另一端创建会话后立即进入新建页可能读到旧值，重新进入即可；读取失败
+  一律静默回退工作区根。
+
+**项目根（`projectRoots`）**：读取工作区两层设置——`.universe-editor/settings.json`（Project）
+优先，仅当该层文件缺失 / 损坏 / 超 1MB 时才回退 `.vscode/settings.json`（兼容层）。Project 层
+存在 `acp.projectRoots` key 即整值生效（含 `[]` / 非数组），不再看 VSCode 层；**不读用户全局
+设置**。条目解析与桌面 `AcpSubProjectService` 共用 `shared/acp/projectRoots.ts`：绝对路径按工作区
+authority 解析，相对路径按 `/` 或 `\` 拆分后 `URI.joinPath`；过滤工作区外与工作区根自身，按平台
+大小写去重，保持配置顺序，最多 50 条。与桌面一致**不做存在性 stat**；失效项点按后由
+`listDirectory` 报 `bad_request`，Sheet 内已有错误提示与重试。
+
+**手机交互**：目录 Sheet 顶部显示「项目根」快捷区。点按只跳到该目录并刷新列表（不关闭 Sheet、
+不选中），用户仍需点「选择此目录」确认；再点当前项会强制刷新。继承的目录只更新触发器文本，
+不阻塞页面加载；用户已手动选择后，晚到的记忆不覆盖选择。切换工作区（folder + authority）会重置
+继承目录与项目根，并按各自工作区重新拉取。
+
+**路由与安全**：hub 在「打开 ∪ 最近」的工作区里匹配，未命中 → `workspace_not_open`；host 未装配
+→ `not_supported`；读取失败 → `internal`。命令为只读：不审计、不缓存、不带幂等键，日志只记数量
+与错误码，不记目录名或绝对路径。
+
 ## 7. 会话附件（协议 v6）
 
 手机输入框支持图片与文件附件。**WebSocket 只传附件 id，字节走同源 HTTP**：客户端帧上限 64KB，
@@ -1004,7 +1048,8 @@ fork / rewind / 侧边任务、`openSession`、`startDelivery` / `confirmDeliver
 `window=` / `local=` / `agent=` / `error=` 等
 定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
 `sideTaskId` 或文件路径**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents` /
-`previewRewind` / `listSideTasks` / `listSessionHistory` / `listDirectory`）不审计；`newSession`
+`previewRewind` / `listSideTasks` / `listSessionHistory` / `listDirectory` /
+`getNewSessionOptions`）不审计；`newSession`
 的 `detail` 只有 `agent=`，不含工作区路径或所选子目录。
 
 **PC 设置页**：新增 Mobile Devices 编辑器。
@@ -1341,6 +1386,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M12    | 手机推送分支：协议 v16、git 扩展 `inspectPushBranch` / `pushBranch`、远端分支名可改、分叉阻断、绝不 force push（已落地）                                   | 会话分支可 publish 到远端；分叉 / 已推送 / 进行中操作给出 blocker；临时分支可改名到 `tasks/...`；不改 main、不设已有 upstream                                                                |
 | M13    | 手机会话目录删除：协议 v18、`deleteHistorySession`、左滑 / 长按 + 二次确认、多窗口历史镜像同删（已落地）                                                    | 打开窗口的历史行可删且 PC 标签页关闭；未打开工作区行无删除入口；删除后目录刷新不复活；live 竞态仍走既有删除守卫                                                                              |
 | M14    | 新建会话支持工作区内子目录：协议 v21、`listDirectory` 只读浏览、`newSession.workspace.relativePath?`、main `IFileService` 列举、symlink / 路径 / 条目预算守卫（已落地） | 手机可逐级浏览并选择工作区内目录；创建后 PC 会话 cwd 落在该子目录；越界 / 非法路径回 `bad_request`；远程工作区同链路 |
+| M15    | 新建会话目录记忆与项目根：协议 v22、`getNewSessionOptions` 只读命令、复用 `acp.lastSessionCwd`、工作区 `acp.projectRoots` 快捷区（已落地） | 新建页继承该工作区上次创建目录且失效回落根；切换工作区按各自记忆恢复；项目根快捷区只跳转、确认后创建；工作区外路径不下发 |
 
 ## 13. 已确认的决策记录
 

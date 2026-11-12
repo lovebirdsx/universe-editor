@@ -65,7 +65,12 @@ async function waitForRunning(page: Page): Promise<string> {
 
 /** Click the real "Pair new device" button and read back the fixed e2e code. */
 async function startPairing(page: Page): Promise<void> {
-  await page.getByTestId('mobile-pairing-start').click()
+  // A previous pairing in the same session leaves the editor on the success
+  // notice, which offers "Pair another device" instead of the idle button.
+  const trigger = page.locator(
+    '[data-testid="mobile-pairing-start"], [data-testid="mobile-pairing-another"]',
+  )
+  await trigger.click()
   await expect(page.getByTestId('mobile-pairing-active')).toBeVisible()
   await expect(page.getByTestId('mobile-pairing-code')).toHaveText(FIXED_CODE_DISPLAY)
 }
@@ -162,6 +167,47 @@ async function sendCommand(
     )
   })
   return frame
+}
+
+/** Find the open workspace candidate for the seeded temp directory. */
+async function findOpenWorkspace(
+  ws: WebSocket,
+  launchDir: string,
+): Promise<MobileWorkspaceCandidate> {
+  let candidate: MobileWorkspaceCandidate | undefined
+  await expect
+    .poll(
+      async () => {
+        const result = await sendCommand(ws, 'listWorkspaces', {})
+        if (!result.ok) return false
+        candidate = (result.result as MobileWorkspaceCandidate[]).find(
+          (workspace) => workspace.isOpen && workspace.folder.endsWith(launchDir),
+        )
+        return candidate !== undefined
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true)
+  return candidate!
+}
+
+/** Poll until the PC-side remembered cwd catches up (the durable write is debounced). */
+async function expectRememberedRelativePath(
+  ws: WebSocket,
+  folder: string,
+  expected: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const options = await sendCommand(ws, 'getNewSessionOptions', { folder })
+        return options.ok
+          ? (options.result as { lastRelativePath?: string }).lastRelativePath
+          : undefined
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(expected)
 }
 
 async function subscribeInbox(
@@ -325,7 +371,11 @@ function tlsRequest(
 }
 
 /** Pair an iPhone 13 browser context through the PWA and wait for the PC to see it online. */
-async function pairPhone(page: Page, workbench: WorkbenchPO): Promise<PairedPhone> {
+async function pairPhone(
+  page: Page,
+  workbench: WorkbenchPO,
+  expectedDevices = 1,
+): Promise<PairedPhone> {
   await openSettings(page, workbench)
   const origin = await waitForRunning(page)
   await startPairing(page)
@@ -339,8 +389,8 @@ async function pairPhone(page: Page, workbench: WorkbenchPO): Promise<PairedPhon
     await phone.getByRole('button', { name: '开始配对' }).click()
     await expect(phone.getByText('已连接', { exact: true })).toBeVisible()
     const deviceRow = page.locator('li[data-testid^="mobile-device-"]')
-    await expect(deviceRow).toHaveCount(1)
-    await expect(deviceRow).toContainText('Online')
+    await expect(deviceRow).toHaveCount(expectedDevices)
+    await expect(deviceRow.last()).toContainText('Online')
   } catch (error) {
     await browser.close()
     throw error
@@ -1686,6 +1736,143 @@ test.describe('mobile gateway in a workspace', () => {
       await expect.poll(() => content.evaluate((node) => node.scrollTop)).toBeGreaterThan(0)
       expect(await phone.evaluate(() => window.scrollY)).toBe(0)
     } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+})
+
+/**
+ * New-session options: the remembered cwd lives PC-side in the workspace state
+ * bucket, and project roots come from the workspace settings layers. The seeder
+ * writes both layers so Project winning over `.vscode` and outside-the-workspace
+ * absolute roots being dropped are part of the assertion.
+ */
+test.describe('mobile gateway new-session options', () => {
+  test.describe.configure({ mode: 'default' })
+
+  test.use({
+    workspaceSeeder: {
+      seed(dir) {
+        mkdirSync(join(dir, 'packages', 'demo'), { recursive: true })
+        mkdirSync(join(dir, 'packages', 'other'), { recursive: true })
+        mkdirSync(join(dir, '.universe-editor'), { recursive: true })
+        writeFileSync(
+          join(dir, '.universe-editor', 'settings.json'),
+          JSON.stringify({
+            'acp.projectRoots': ['packages/demo', join(dir, '..', 'outside-root')],
+          }),
+        )
+        mkdirSync(join(dir, '.vscode'), { recursive: true })
+        writeFileSync(
+          join(dir, '.vscode', 'settings.json'),
+          JSON.stringify({ 'acp.projectRoots': ['packages/other'] }),
+        )
+      },
+    },
+  })
+
+  test('@p1 reads project roots and remembers the created directory', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    const { ws } = await connectRawPhone(page, workbench)
+    try {
+      const workspace = await findOpenWorkspace(ws, launchWorkspace!.dir)
+
+      const options = await sendCommand(ws, 'getNewSessionOptions', { folder: workspace.folder })
+      expect(options).toMatchObject({ ok: true })
+      expect(options.result).toEqual({ projectRoots: ['packages/demo'] })
+
+      const unknown = await sendCommand(ws, 'getNewSessionOptions', {
+        folder: 'file:///universe-editor/missing-workspace',
+      })
+      expect(unknown).toMatchObject({ ok: false, error: 'workspace_not_open' })
+
+      const created = await sendCommand(
+        ws,
+        'newSession',
+        {
+          agentId: 'echo',
+          workspace: { folder: workspace.folder, relativePath: 'packages/other' },
+        },
+        undefined,
+        30_000,
+      )
+      expect(created).toMatchObject({ ok: true })
+      const ref = (created.result as { ref: { windowId: number; localId: string } }).ref
+      const snapshot = await subscribeSession(ws, ref)
+      expect(snapshot.session.summary.cwd?.replace(/\\/g, '/')).toMatch(/packages\/other$/)
+
+      await expectRememberedRelativePath(ws, workspace.folder, 'packages/other')
+    } finally {
+      ws.close()
+    }
+  })
+
+  test('@p1 inherits the remembered directory and jumps to a project root from the phone', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    test.setTimeout(90_000)
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+    const { ws } = await connectRawPhone(page, workbench)
+    const { browser, context, phone } = await pairPhone(page, workbench, 2)
+    try {
+      const workspace = await findOpenWorkspace(ws, launchWorkspace!.dir)
+
+      // Seed the PC-side memory through the same bridge the phone uses.
+      const seeded = await sendCommand(
+        ws,
+        'newSession',
+        {
+          agentId: 'echo',
+          workspace: { folder: workspace.folder, relativePath: 'packages/other' },
+        },
+        undefined,
+        30_000,
+      )
+      expect(seeded).toMatchObject({ ok: true })
+      await expectRememberedRelativePath(ws, workspace.folder, 'packages/other')
+
+      await phone.getByTestId('new-session-fab').click()
+      await expect(phone).toHaveURL(/\/new$/)
+      const trigger = phone.getByTestId('new-session-directory-trigger')
+      await expect(trigger).toContainText('packages/other', { timeout: 15_000 })
+
+      await trigger.click()
+      const sheet = phone.getByTestId('new-session-directory-sheet')
+      await expect(sheet).toBeVisible()
+      const projectRoot = sheet.locator(
+        '[data-testid="new-session-directory-project-root"][data-relative-path="packages/demo"]',
+      )
+      await expect(projectRoot).toBeVisible()
+      await projectRoot.click()
+
+      // The shortcut only navigates; the user confirms with the select button.
+      await expect(sheet).toBeVisible()
+      await expect(sheet.getByTestId('new-session-directory-path')).toContainText('packages/demo')
+      await expect(sheet.getByTestId('new-session-directory-select')).toBeEnabled()
+      await sheet.getByTestId('new-session-directory-select').click()
+      await expect(sheet).toHaveCount(0)
+      await expect(trigger).toContainText('packages/demo')
+
+      await phone.getByTestId('new-session-submit').click()
+      await expect(phone).toHaveURL(/\/s\//, { timeout: 15_000 })
+      await expect(phone.getByTestId('composer')).toBeVisible()
+
+      await expectRememberedRelativePath(ws, workspace.folder, 'packages/demo')
+    } finally {
+      ws.close()
       await context.close()
       await browser.close()
     }

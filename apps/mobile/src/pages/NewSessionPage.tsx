@@ -2,7 +2,7 @@ import type {
   MobileAgentCandidate,
   MobileWorkspaceCandidate,
 } from '@universe-editor/mobile-protocol'
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Spinner } from '../components/Spinner.js'
 import { replaceWithSession } from '../routing.js'
 import type { MobileClient } from '../state/mobileClient.js'
@@ -19,7 +19,12 @@ import { DirectoryPickerSheet } from './DirectoryPickerSheet.js'
 
 export type NewSessionClient = Pick<
   MobileClient,
-  'listAgents' | 'listWorkspaces' | 'listDirectory' | 'newSession' | 'getSocketStateStore'
+  | 'listAgents'
+  | 'listWorkspaces'
+  | 'listDirectory'
+  | 'getNewSessionOptions'
+  | 'newSession'
+  | 'getSocketStateStore'
 >
 
 export interface NewSessionPageProps {
@@ -43,6 +48,18 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
   const [submitting, setSubmitting] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
   const [picker, setPicker] = useState<PickerKind | undefined>(undefined)
+  const [projectRoots, setProjectRoots] = useState<readonly string[]>([])
+  const manualSelectionRef = useRef(false)
+  const latestOptionsKeyRef = useRef<string | undefined>(undefined)
+
+  // A remembered directory belongs to one concrete workspace (folder + authority).
+  const selectedWorkspace = workspaces.find((candidate) => candidate.folder === folder)
+  const workspaceAuthority = selectedWorkspace?.authority
+  const optionsKey = folder === undefined ? undefined : `${folder}\u0000${workspaceAuthority ?? ''}`
+  // Layout timing: a stale response must not land between commit and passive effects.
+  useLayoutEffect(() => {
+    latestOptionsKeyRef.current = optionsKey
+  }, [optionsKey])
 
   useEffect(() => {
     setPicker(undefined)
@@ -83,10 +100,40 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
     }
   }, [client, online, reloadKey])
 
-  // A relative session directory only means something inside one workspace.
+  // Switching workspaces invalidates both the inherited path and its roots.
   useEffect(() => {
+    manualSelectionRef.current = false
     setRelativePath('')
-  }, [folder])
+    setProjectRoots([])
+  }, [optionsKey])
+
+  useEffect(() => {
+    if (folder === undefined || !online) return
+    let cancelled = false
+    void client
+      .getNewSessionOptions({
+        folder,
+        ...(workspaceAuthority !== undefined ? { authority: workspaceAuthority } : {}),
+      })
+      .then((options) => {
+        if (cancelled || latestOptionsKeyRef.current !== optionsKey) return
+        setProjectRoots(options.projectRoots)
+        if (!manualSelectionRef.current && options.lastRelativePath !== undefined) {
+          setRelativePath(options.lastRelativePath)
+        }
+      })
+      .catch(() => {
+        // Remembered values are a convenience; failures keep the workspace root.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [client, folder, online, optionsKey, workspaceAuthority])
+
+  const selectDirectory = (next: string): void => {
+    manualSelectionRef.current = true
+    setRelativePath(next)
+  }
 
   const submit = async (): Promise<void> => {
     if (agentId === undefined || folder === undefined) {
@@ -126,7 +173,6 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
     }
   }
 
-  const selectedWorkspace = workspaces.find((candidate) => candidate.folder === folder)
   const selectedAgent = agents.find((agent) => agent.id === agentId)
   const disabled = !online || submitting || loading
 
@@ -287,6 +333,7 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
                     <DirectoryPickerSheet
                       initialRelativePath={relativePath}
                       disabled={disabled}
+                      projectRoots={projectRoots}
                       listDirectory={(path) =>
                         client.listDirectory(
                           {
@@ -298,7 +345,7 @@ export function NewSessionPage({ client, onBack, onCreated }: NewSessionPageProp
                           path === '' ? undefined : path,
                         )
                       }
-                      onSelect={setRelativePath}
+                      onSelect={selectDirectory}
                       onClose={() => setPicker(undefined)}
                     />
                   )}

@@ -894,6 +894,8 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseSideTaskIdPayload(value, 'deleteSideTask')
     case 'listDirectory':
       return parseListDirectoryPayload(value)
+    case 'getNewSessionOptions':
+      return parseGetNewSessionOptionsPayload(value)
     case 'listWorkspaces':
     case 'listAgents':
     case 'listSessionHistory':
@@ -1646,6 +1648,29 @@ function parseListDirectoryPayload(value: unknown): Result<{
     folder,
     ...(authority.value !== undefined ? { authority: authority.value } : {}),
     ...(relativePath.value !== undefined ? { relativePath: relativePath.value } : {}),
+  })
+}
+
+function parseGetNewSessionOptionsPayload(value: unknown): Result<{
+  folder: string
+  authority?: string
+}> {
+  if (!isRecord(value)) {
+    return fail('bad_request', 'getNewSessionOptions.payload must be an object')
+  }
+  const folder = value.folder
+  if (!isNonEmptyBoundedString(folder, MAX_TEXT_LENGTH)) {
+    return fail('bad_request', 'getNewSessionOptions.folder must be a URI string')
+  }
+  const authority = parseOptionalString(
+    value.authority,
+    MAX_WORKSPACE_NAME_LENGTH,
+    'getNewSessionOptions.authority',
+  )
+  if (!authority.ok) return authority
+  return ok({
+    folder,
+    ...(authority.value !== undefined ? { authority: authority.value } : {}),
   })
 }
 

@@ -63,6 +63,7 @@ import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
 import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
 import { WorkspaceDirectoryBrowser } from './workspaceDirectoryBrowser.js'
 import { WorkspaceGitStatusService } from './workspaceGitStatus.js'
+import { WorkspaceNewSessionOptionsReader } from './workspaceNewSessionOptionsReader.js'
 import { WorkspaceSessionHistoryReader } from './workspaceSessionHistoryReader.js'
 import { ensureLanCertificate, type LanCertificate } from './lanCertificate.js'
 import { buildAllowedHosts } from './requestSecurity.js'
@@ -140,6 +141,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _server: MobileGatewayServer | undefined
   private _router: MobileNotificationRouter | undefined
   private readonly _directoryBrowser: WorkspaceDirectoryBrowser | undefined
+  private readonly _newSessionOptions: WorkspaceNewSessionOptionsReader
   private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
   private readonly _pushSender: WebPushSender
   private _runningKey: string | undefined
@@ -172,6 +174,11 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       this._files === undefined
         ? undefined
         : new WorkspaceDirectoryBrowser(this._files, { logger: this._logger })
+    this._newSessionOptions = new WorkspaceNewSessionOptionsReader({
+      userDataDir: app.getPath('userData'),
+      logger: this._logger,
+      ...(this._files !== undefined ? { files: this._files } : {}),
+    })
     this._hub = new MobileGatewayHub(
       this._logger,
       {
@@ -194,6 +201,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
               listDirectory: this._directoryBrowser.read.bind(this._directoryBrowser),
             }
           : {}),
+        readNewSessionOptions: (workspace) => this._newSessionOptions.read(workspace),
         readWorkspaceSessionHistory: (workspace) => this._sessionHistoryReader.read(workspace),
         sessionHistoryWorkspaceLimit: () => this._config.sessionHistoryWorkspaceLimit,
         attachments: this._attachments,

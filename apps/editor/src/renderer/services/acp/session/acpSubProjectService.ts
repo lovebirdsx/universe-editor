@@ -23,7 +23,6 @@ import {
   IFileService,
   ILoggerService,
   InstantiationType,
-  isAbsolutePath,
   IUriIdentityService,
   IWorkspaceService,
   localize,
@@ -32,7 +31,14 @@ import {
   type Event,
   type ILogger,
 } from '@universe-editor/platform'
+import {
+  configuredProjectRootEntries,
+  PROJECT_ROOTS_KEY,
+  resolveConfiguredProjectRoot,
+} from '../../../../shared/acp/projectRoots.js'
 import { getOriginalResource } from '../../editor/editorResourceAccessor.js'
+
+export { PROJECT_ROOTS_KEY }
 
 export interface SubProjectScope {
   readonly cwd: string
@@ -66,7 +72,6 @@ export interface ISubProjectService {
 
 export const ISubProjectService = createDecorator<ISubProjectService>('acpSubProjectService')
 
-export const PROJECT_ROOTS_KEY = 'acp.projectRoots'
 const DETECT_ENABLED_KEY = 'acp.subProject.detectEnabled'
 const DETECT_MARKERS_KEY = 'acp.subProject.detectMarkers'
 const MAX_DEPTH_KEY = 'acp.subProject.maxDepth'
@@ -314,11 +319,7 @@ export class AcpSubProjectService extends Disposable implements ISubProjectServi
   private _resolveConfiguredRoot(entry: string): URI | undefined {
     const root = this._workspace.current?.folder
     if (!root) return undefined
-    if (isAbsolutePath(entry, this._uriIdentity.platform)) {
-      return fsPathToWorkspaceUri(entry, root.authority || undefined)
-    }
-    const segments = entry.split(/[\\/]/).filter((s) => s.length > 0 && s !== '.')
-    return URI.joinPath(root, ...segments)
+    return resolveConfiguredProjectRoot(root, entry, this._uriIdentity.platform)
   }
 
   private _scopeFor(uri: URI, source: SubProjectScope['source']): SubProjectScope {
@@ -341,9 +342,7 @@ export class AcpSubProjectService extends Disposable implements ISubProjectServi
   }
 
   private _configuredRoots(): readonly string[] {
-    const raw = this._config.get<unknown>(PROJECT_ROOTS_KEY)
-    if (!Array.isArray(raw)) return []
-    return raw.filter((e): e is string => typeof e === 'string' && e.trim().length > 0)
+    return configuredProjectRootEntries(this._config.get<unknown>(PROJECT_ROOTS_KEY))
   }
 
   private _detectEnabled(): boolean {

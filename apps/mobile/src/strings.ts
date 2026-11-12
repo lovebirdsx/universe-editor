@@ -549,6 +549,7 @@ export const strings = {
   newSessionDirectoryInvalid: '所选目录已失效，请重新选择。',
 
   directoryPickerTitle: '选择会话目录',
+  directoryPickerProjectRoots: '项目根',
   directoryPickerUp: '上一级',
   directoryPickerSelect: '选择此目录',
   directoryPickerLoading: '正在读取目录…',

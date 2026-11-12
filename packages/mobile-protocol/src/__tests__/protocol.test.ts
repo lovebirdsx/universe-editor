@@ -412,6 +412,11 @@ describe('parseClientFrame', () => {
           relativePath: 'packages/ui',
         },
       },
+      { kind: 'getNewSessionOptions', payload: { folder: 'file:///workspace/demo' } },
+      {
+        kind: 'getNewSessionOptions',
+        payload: { folder: 'remote-ssh://build-host/work', authority: 'build-host' },
+      },
       { kind: 'listAgents', payload: {} },
       { kind: 'listSessionHistory', payload: {} },
       { kind: 'openSession', payload: { durableId: 'durable-1' } },
@@ -584,6 +589,10 @@ describe('parseClientFrame', () => {
         kind: 'listDirectory',
         payload: { folder: 'file:///ws', relativePath: 'x'.repeat(4097) },
       },
+      { kind: 'getNewSessionOptions', payload: {} },
+      { kind: 'getNewSessionOptions', payload: { folder: '' } },
+      { kind: 'getNewSessionOptions', payload: { folder: 3 } },
+      { kind: 'getNewSessionOptions', payload: { folder: 'file:///ws', authority: 3 } },
       {
         kind: 'newSession',
         payload: {

@@ -1,4 +1,5 @@
 import {
+  MAX_NEW_SESSION_PROJECT_ROOTS,
   MAX_PROMPT_REF_DESCRIPTION_LENGTH,
   MAX_PROMPT_REF_DIR_PATH_LENGTH,
   MAX_PROMPT_REF_LABEL_LENGTH,
@@ -13,6 +14,7 @@ import {
   type MobileDeliveryStartResult,
   type MobileDirectoryEntry,
   type MobileDirectoryListing,
+  type MobileNewSessionOptions,
   type MobilePromptRefSuggestion,
   type MobilePromptRefSuggestionsResult,
   type MobilePushBranchPreview,
@@ -94,6 +96,24 @@ export function isMobileDirectoryListing(value: unknown): value is MobileDirecto
   }
   const truncated = value['truncated']
   return truncated === undefined || typeof truncated === 'boolean'
+}
+
+function isNonEmptyWorkspaceRelativePath(value: unknown): value is string {
+  return (
+    typeof value === 'string' && value !== '' && parseWorkspaceRelativePath(value)?.path === value
+  )
+}
+
+export function isMobileNewSessionOptions(value: unknown): value is MobileNewSessionOptions {
+  if (!isRecord(value)) return false
+  const last = value['lastRelativePath']
+  if (last !== undefined && !isNonEmptyWorkspaceRelativePath(last)) return false
+  const roots = value['projectRoots']
+  return (
+    Array.isArray(roots) &&
+    roots.length <= MAX_NEW_SESSION_PROJECT_ROOTS &&
+    roots.every(isNonEmptyWorkspaceRelativePath)
+  )
 }
 
 export function isMobileRewindPreview(value: unknown): value is MobileRewindPreview {

@@ -2,6 +2,7 @@ import {
   parentWorkspaceRelativePath,
   type MobileAgentCandidate,
   type MobileDirectoryListing,
+  type MobileNewSessionOptions,
   type MobileWorkspaceCandidate,
 } from '@universe-editor/mobile-protocol'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -40,6 +41,17 @@ function makeListing(relativePath: string, entries: readonly string[]): MobileDi
   }
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
+}
+
 function createClient(
   options: {
     readonly online?: boolean
@@ -47,6 +59,10 @@ function createClient(
     readonly workspaces?: MobileWorkspaceCandidate[]
     readonly createError?: { readonly code: string }
     readonly listDirectory?: (relativePath: string) => MobileDirectoryListing
+    readonly newSessionOptions?: (workspace: {
+      readonly folder: string
+      readonly authority?: string
+    }) => MobileNewSessionOptions | Promise<MobileNewSessionOptions>
   } = {},
 ) {
   const socketState = new Store<SocketState>(
@@ -62,14 +78,19 @@ function createClient(
     async (_workspace: unknown, relativePath?: string): Promise<MobileDirectoryListing> =>
       options.listDirectory?.(relativePath ?? '') ?? makeListing(relativePath ?? '', []),
   )
+  const getNewSessionOptions = vi.fn(
+    async (workspace: { folder: string; authority?: string }): Promise<MobileNewSessionOptions> =>
+      options.newSessionOptions?.(workspace) ?? { projectRoots: [] },
+  )
   const client: NewSessionClient = {
     getSocketStateStore: () => socketState,
     listAgents: vi.fn(async () => options.agents ?? agents),
     listWorkspaces: vi.fn(async () => options.workspaces ?? workspaces),
     listDirectory,
+    getNewSessionOptions,
     newSession,
   }
-  return { client, newSession, listDirectory, socketState }
+  return { client, newSession, listDirectory, getNewSessionOptions, socketState }
 }
 
 function directoryEntry(relativePath: string): HTMLElement {
@@ -85,6 +106,14 @@ function workspaceOption(folder: string): HTMLElement {
     .getAllByTestId('new-session-workspace')
     .find((element) => element.getAttribute('data-folder') === folder)
   if (option === undefined) throw new Error(`missing workspace option: ${folder}`)
+  return option
+}
+
+function projectRootOption(relativePath: string): HTMLElement {
+  const option = screen
+    .getAllByTestId('new-session-directory-project-root')
+    .find((element) => element.getAttribute('data-relative-path') === relativePath)
+  if (option === undefined) throw new Error(`missing project root: ${relativePath}`)
   return option
 }
 
@@ -447,6 +476,166 @@ describe('NewSessionPage', () => {
       expect(screen.getByTestId('new-session-error').textContent).toContain(
         strings.newSessionDirectoryInvalid,
       ),
+    )
+  })
+
+  it('inherits the remembered directory for the selected workspace', async () => {
+    const { client } = createClient({
+      newSessionOptions: () => ({ lastRelativePath: 'packages/demo', projectRoots: [] }),
+    })
+    await renderLoaded(client)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+        'packages/demo',
+      ),
+    )
+  })
+
+  it('restores each workspace own remembered directory', async () => {
+    const { client } = createClient({
+      newSessionOptions: (workspace) => ({
+        lastRelativePath: workspace.folder === 'file:///open' ? 'packages/open' : 'packages/recent',
+        projectRoots: [],
+      }),
+    })
+    await renderLoaded(client)
+    await waitFor(() =>
+      expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+        'packages/open',
+      ),
+    )
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(screen.getByText('recent'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+        'packages/recent',
+      ),
+    )
+  })
+
+  it('applies a late remembered path only when the user has not chosen manually', async () => {
+    const pending = deferred<MobileNewSessionOptions>()
+    const { client } = createClient({
+      listDirectory: (relativePath) =>
+        relativePath === '' ? makeListing('', ['packages']) : makeListing(relativePath, []),
+      newSessionOptions: () => pending.promise,
+    })
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-directory-trigger'))
+    await waitFor(() => expect(directoryEntry('packages')).toBeTruthy())
+    fireEvent.click(directoryEntry('packages'))
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('new-session-directory-select') as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByTestId('new-session-directory-select'))
+
+    await act(async () => {
+      pending.resolve({ lastRelativePath: 'src', projectRoots: ['packages/demo'] })
+    })
+
+    const trigger = screen.getByTestId('new-session-directory-trigger')
+    expect(trigger.textContent).toContain('packages')
+    expect(trigger.textContent).not.toContain('src')
+
+    fireEvent.click(trigger)
+    await waitFor(() => expect(projectRootOption('packages/demo')).toBeTruthy())
+  })
+
+  it('drops a remembered path that resolves after switching workspaces', async () => {
+    const slow = deferred<MobileNewSessionOptions>()
+    const { client } = createClient({
+      newSessionOptions: (workspace) =>
+        workspace.folder === 'file:///open'
+          ? slow.promise
+          : { lastRelativePath: 'packages/recent', projectRoots: [] },
+    })
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(screen.getByText('recent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+        'packages/recent',
+      ),
+    )
+
+    await act(async () => {
+      slow.resolve({ lastRelativePath: 'packages/open', projectRoots: [] })
+    })
+
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+      'packages/recent',
+    )
+  })
+
+  it('keeps the workspace root when options cannot be read', async () => {
+    const { client, getNewSessionOptions, newSession } = createClient({
+      newSessionOptions: () =>
+        Promise.reject(Object.assign(new Error('boom'), { code: 'internal' })),
+    })
+    await renderLoaded(client)
+    await waitFor(() => expect(getNewSessionOptions).toHaveBeenCalled())
+
+    expect(screen.queryByTestId('new-session-error')).toBeNull()
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+      strings.newSessionDirectoryRoot,
+    )
+
+    fireEvent.click(screen.getByTestId('new-session-submit'))
+    await waitFor(() => expect(newSession).toHaveBeenCalledWith('echo', { folder: 'file:///open' }))
+  })
+
+  it('passes configured project roots to the directory sheet', async () => {
+    const { client, listDirectory } = createClient({
+      listDirectory: (relativePath) => makeListing(relativePath, []),
+      newSessionOptions: () => ({ projectRoots: ['packages/demo'] }),
+    })
+    await renderLoaded(client)
+
+    fireEvent.click(screen.getByTestId('new-session-directory-trigger'))
+    await waitFor(() => expect(projectRootOption('packages/demo')).toBeTruthy())
+
+    fireEvent.click(projectRootOption('packages/demo'))
+    await waitFor(() =>
+      expect(listDirectory).toHaveBeenLastCalledWith({ folder: 'file:///open' }, 'packages/demo'),
+    )
+    expect(screen.getByTestId('new-session-directory-sheet')).toBeTruthy()
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+      strings.newSessionDirectoryRoot,
+    )
+
+    await waitFor(() =>
+      expect(
+        (screen.getByTestId('new-session-directory-select') as HTMLButtonElement).disabled,
+      ).toBe(false),
+    )
+    fireEvent.click(screen.getByTestId('new-session-directory-select'))
+    expect(screen.getByTestId('new-session-directory-trigger').textContent).toContain(
+      'packages/demo',
+    )
+  })
+
+  it('reads options for a remote workspace with its authority', async () => {
+    const { client, getNewSessionOptions } = createClient()
+    await renderLoaded(client)
+    await waitFor(() =>
+      expect(getNewSessionOptions).toHaveBeenCalledWith({ folder: 'file:///open' }),
+    )
+
+    fireEvent.click(screen.getByTestId('new-session-workspace-trigger'))
+    fireEvent.click(screen.getByText('work'))
+
+    await waitFor(() =>
+      expect(getNewSessionOptions).toHaveBeenCalledWith({
+        folder: 'remote-ssh://build-host/work',
+        authority: 'build-host',
+      }),
     )
   })
 })

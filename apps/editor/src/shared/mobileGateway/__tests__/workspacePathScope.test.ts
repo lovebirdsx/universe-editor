@@ -29,9 +29,9 @@ describe('isPathWithinWorkspace', () => {
   })
 
   it('treats the POSIX root as containing every path on the same scheme/authority', () => {
-    expect(isPathWithinWorkspace(URI.parse('file:///'), URI.parse('file:///work/sub'), 'linux')).toBe(
-      true,
-    )
+    expect(
+      isPathWithinWorkspace(URI.parse('file:///'), URI.parse('file:///work/sub'), 'linux'),
+    ).toBe(true)
     expect(
       isPathWithinWorkspace(
         URI.parse('remote-ssh://host/'),

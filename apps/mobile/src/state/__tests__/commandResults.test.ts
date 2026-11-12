@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isMobileDirectoryListing,
+  isMobileNewSessionOptions,
   isMobilePromptRefSuggestionsResult,
   isMobilePushBranchPreview,
   isMobilePushBranchResult,
@@ -62,6 +63,29 @@ describe('command result guards', () => {
       false,
     )
     expect(isMobileDirectoryListing({ relativePath: '', entries: 'nope' })).toBe(false)
+  })
+
+  it('validates new-session options and their canonical relative paths', () => {
+    expect(isMobileNewSessionOptions({ projectRoots: [] })).toBe(true)
+    expect(
+      isMobileNewSessionOptions({
+        lastRelativePath: 'packages/demo',
+        projectRoots: ['packages/demo'],
+      }),
+    ).toBe(true)
+    expect(isMobileNewSessionOptions({ lastRelativePath: '', projectRoots: [] })).toBe(false)
+    expect(isMobileNewSessionOptions({ lastRelativePath: '../a', projectRoots: [] })).toBe(false)
+    expect(isMobileNewSessionOptions({ lastRelativePath: 'a\\b', projectRoots: [] })).toBe(false)
+    expect(isMobileNewSessionOptions({})).toBe(false)
+    expect(isMobileNewSessionOptions({ projectRoots: 'nope' })).toBe(false)
+    expect(isMobileNewSessionOptions({ projectRoots: [''] })).toBe(false)
+    expect(isMobileNewSessionOptions({ projectRoots: ['../a'] })).toBe(false)
+    expect(isMobileNewSessionOptions({ projectRoots: ['a\\b'] })).toBe(false)
+    expect(
+      isMobileNewSessionOptions({
+        projectRoots: Array.from({ length: 51 }, (_, index) => `a/${index}`),
+      }),
+    ).toBe(false)
   })
 
   it('accepts a rewind preview and rejects wrong types', () => {

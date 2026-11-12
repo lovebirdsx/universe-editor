@@ -11,6 +11,8 @@ import { commandErrorText, strings } from '../strings.js'
 export interface DirectoryPickerSheetProps {
   readonly initialRelativePath: string
   readonly disabled: boolean
+  /** Configured project roots inside the workspace (workspace-relative). */
+  readonly projectRoots: readonly string[]
   /** `relativePath` is '' for the workspace root. */
   readonly listDirectory: (relativePath: string) => Promise<MobileDirectoryListing>
   readonly onSelect: (relativePath: string) => void
@@ -28,6 +30,7 @@ function directoryErrorMessage(error: unknown): string {
 export function DirectoryPickerSheet({
   initialRelativePath,
   disabled,
+  projectRoots,
   listDirectory,
   onSelect,
   onClose,
@@ -97,6 +100,45 @@ export function DirectoryPickerSheet({
           </button>
           {loading && <Spinner />}
         </div>
+        {projectRoots.length > 0 && (
+          <div
+            className="new-session-picker__group"
+            data-testid="new-session-directory-project-roots"
+          >
+            <div className="new-session-picker__group-title" aria-hidden="true">
+              {strings.directoryPickerProjectRoots}
+            </div>
+            <div
+              className="choice-list"
+              role="group"
+              aria-label={strings.directoryPickerProjectRoots}
+            >
+              {projectRoots.map((root) => {
+                const current = root === currentPath
+                return (
+                  <button
+                    key={root}
+                    type="button"
+                    aria-current={current ? 'true' : undefined}
+                    className={`choice${current ? ' choice--selected' : ''}`}
+                    data-testid="new-session-directory-project-root"
+                    data-relative-path={root}
+                    disabled={disabled}
+                    onClick={() => {
+                      if (current) setReloadKey((value) => value + 1)
+                      else setCurrentPath(root)
+                    }}
+                  >
+                    <span className="choice__label">{root}</span>
+                    <span className="new-session-select__chevron" aria-hidden="true">
+                      ›
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
         {error !== undefined ? (
           <div className="directory-picker__error">
             <p className="sheet__hint" role="alert" data-testid="new-session-directory-error">

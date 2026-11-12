@@ -391,6 +391,7 @@ export const MOBILE_COMMAND_KINDS = [
   'deleteSideTask',
   'listWorkspaces',
   'listDirectory',
+  'getNewSessionOptions',
   'listAgents',
   'listSessionHistory',
   'openSession',
@@ -532,6 +533,32 @@ export interface NewSessionPayload {
   agentId: string
   workspace: NewSessionWorkspace
   initialPrompt?: string
+}
+
+/** Read the remembered session directory and configured project roots for one workspace. */
+export interface GetNewSessionOptionsPayload {
+  /** Workspace root URI; must be an open or recent workspace on the PC. */
+  folder: string
+  authority?: string
+}
+
+/**
+ * Cap for configured project roots returned by `getNewSessionOptions`. Keeps
+ * the frame well below the gateway's wire limit even with pathological config.
+ */
+export const MAX_NEW_SESSION_PROJECT_ROOTS = 50
+
+export interface MobileNewSessionOptions {
+  /**
+   * Workspace-relative directory of the last created session. Omitted when
+   * unknown, outside the workspace, deleted, or equal to the workspace root.
+   */
+  lastRelativePath?: string
+  /**
+   * Configured project roots inside this workspace, in settings order.
+   * Canonical `/`-separated workspace-relative paths.
+   */
+  projectRoots: readonly string[]
 }
 
 /** List the directories under a workspace-relative path (read-only). */

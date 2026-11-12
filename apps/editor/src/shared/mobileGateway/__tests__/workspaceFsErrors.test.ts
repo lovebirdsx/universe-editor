@@ -11,7 +11,9 @@ describe('isUnavailablePathError', () => {
 
   it('recognizes revived IPC errors by their code', () => {
     expect(
-      isUnavailablePathError(Object.assign(new Error('ENOENT: /home/dev/work'), { code: 'ENOENT' })),
+      isUnavailablePathError(
+        Object.assign(new Error('ENOENT: /home/dev/work'), { code: 'ENOENT' }),
+      ),
     ).toBe(true)
     expect(
       isUnavailablePathError(Object.assign(new Error('not a directory'), { code: 'ENOTDIR' })),

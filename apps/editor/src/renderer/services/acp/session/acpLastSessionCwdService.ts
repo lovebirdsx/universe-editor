@@ -32,6 +32,11 @@ import {
   REMOTE_SCHEME,
   URI,
 } from '@universe-editor/platform'
+import {
+  ACP_LAST_SESSION_CWD_SCHEMA_VERSION,
+  ACP_LAST_SESSION_CWD_STORAGE_KEY,
+  type PersistedAcpLastSessionCwd,
+} from '../../../../shared/acp/lastSessionCwdState.js'
 import { PersistedStateBase } from '../persistedStateBase.js'
 import { isForeignWorkspaceSession } from './acpSessionHistory.js'
 
@@ -105,14 +110,8 @@ export const IAcpLastSessionCwdService = createDecorator<IAcpLastSessionCwdServi
   'acpLastSessionCwdService',
 )
 
-const STORAGE_KEY = 'acp.lastSessionCwd'
-const SCHEMA_VERSION = 1
-
-interface PersistedShape {
-  readonly schemaVersion: number
-  readonly cwd?: string
-  readonly authority?: string
-}
+const STORAGE_KEY = ACP_LAST_SESSION_CWD_STORAGE_KEY
+const SCHEMA_VERSION = ACP_LAST_SESSION_CWD_SCHEMA_VERSION
 
 interface LastCwdState {
   readonly cwd?: string
@@ -226,7 +225,7 @@ export class AcpLastSessionCwdService
     return current.cwd !== undefined ? current : loaded
   }
 
-  protected override _serialize(state: LastCwdState): PersistedShape {
+  protected override _serialize(state: LastCwdState): PersistedAcpLastSessionCwd {
     return {
       schemaVersion: SCHEMA_VERSION,
       ...(state.cwd !== undefined ? { cwd: state.cwd } : {}),
@@ -236,7 +235,7 @@ export class AcpLastSessionCwdService
 
   protected override _deserialize(raw: unknown): LastCwdState | undefined {
     if (typeof raw !== 'object' || raw === null) return undefined
-    const o = raw as PersistedShape
+    const o = raw as PersistedAcpLastSessionCwd
     if (o.schemaVersion !== SCHEMA_VERSION) {
       this._logger.warn(`ignoring acp.lastSessionCwd with schemaVersion=${o.schemaVersion}`)
       return undefined

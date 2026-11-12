@@ -630,6 +630,54 @@ describe('MobileClient session subscription', () => {
     ) as { payload: unknown }
     expect(command.payload).toEqual({ folder: 'file:///work' })
   })
+
+  it('reads new-session options as a read-only command and guards the result', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    const options = client.getNewSessionOptions({
+      folder: 'file:///work',
+      authority: 'ssh-remote+host',
+    })
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { requestId: string; kind: string; payload: unknown; idempotencyKey?: string }
+    expect(command.kind).toBe('getNewSessionOptions')
+    expect(command.idempotencyKey).toBeUndefined()
+    expect(command.payload).toEqual({
+      folder: 'file:///work',
+      authority: 'ssh-remote+host',
+    })
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: { lastRelativePath: 'packages/demo', projectRoots: ['packages/demo'] },
+    })
+    await expect(options).resolves.toStrictEqual({
+      lastRelativePath: 'packages/demo',
+      projectRoots: ['packages/demo'],
+    })
+
+    const malformed = client.getNewSessionOptions({ folder: 'file:///work' })
+    const next = sentFrames(socket)
+      .filter(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as Record<string, unknown>)['type'] === 'command',
+      )
+      .at(-1) as { requestId: string }
+    socket.serverSend({
+      type: 'command_result',
+      requestId: next.requestId,
+      ok: true,
+      result: { projectRoots: ['../escape'] },
+    })
+    await expect(malformed).rejects.toMatchObject({ code: 'invalid_response' })
+  })
 })
 
 describe('MobileClient fork / rewind / side-task commands', () => {

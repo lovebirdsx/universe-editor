@@ -44,9 +44,18 @@ function directoryEntry(relativePath: string): HTMLElement {
   return entry
 }
 
+function projectRootOption(relativePath: string): HTMLElement {
+  const option = screen
+    .getAllByTestId('new-session-directory-project-root')
+    .find((element) => element.getAttribute('data-relative-path') === relativePath)
+  if (option === undefined) throw new Error(`missing project root: ${relativePath}`)
+  return option
+}
+
 function renderSheet(
   listDirectory: (relativePath: string) => Promise<MobileDirectoryListing>,
   initialRelativePath = '',
+  projectRoots: readonly string[] = [],
 ): { readonly onSelect: ReturnType<typeof vi.fn>; readonly onClose: ReturnType<typeof vi.fn> } {
   const onSelect = vi.fn()
   const onClose = vi.fn()
@@ -54,6 +63,7 @@ function renderSheet(
     <DirectoryPickerSheet
       initialRelativePath={initialRelativePath}
       disabled={false}
+      projectRoots={projectRoots}
       listDirectory={listDirectory}
       onSelect={onSelect}
       onClose={onClose}
@@ -171,5 +181,54 @@ describe('DirectoryPickerSheet', () => {
     expect(screen.getByTestId('new-session-directory-path').textContent).toContain(
       strings.newSessionDirectoryRoot,
     )
+  })
+})
+
+describe('DirectoryPickerSheet project roots', () => {
+  it('jumps to a project root without selecting or closing the sheet', async () => {
+    const listDirectory = vi.fn(async (path: string) => makeListing(path, []))
+    const { onSelect, onClose } = renderSheet(listDirectory, '', ['packages/demo'])
+
+    await waitFor(() =>
+      expect(screen.getByTestId('new-session-directory-project-roots')).toBeTruthy(),
+    )
+    expect(screen.getByText(strings.directoryPickerProjectRoots)).toBeTruthy()
+
+    fireEvent.click(projectRootOption('packages/demo'))
+
+    await waitFor(() => expect(listDirectory).toHaveBeenLastCalledWith('packages/demo'))
+    expect(screen.getByTestId('new-session-directory-path').textContent).toContain('packages/demo')
+    expect(projectRootOption('packages/demo').getAttribute('aria-current')).toBe('true')
+    expect(screen.getByTestId('new-session-directory-sheet')).toBeTruthy()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('reloads when the current root is tapped again', async () => {
+    const listDirectory = vi.fn(async (path: string) => makeListing(path, []))
+    renderSheet(listDirectory, 'packages/demo', ['packages/demo'])
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(1))
+    fireEvent.click(projectRootOption('packages/demo'))
+
+    await waitFor(() => expect(listDirectory).toHaveBeenCalledTimes(2))
+    expect(listDirectory).toHaveBeenLastCalledWith('packages/demo')
+  })
+
+  it('keeps shortcuts visible when the directory fails to load', async () => {
+    const listDirectory = vi.fn(async () => {
+      throw Object.assign(new Error('missing'), { code: 'bad_request' })
+    })
+    renderSheet(listDirectory, 'packages/demo', ['packages/demo'])
+
+    await waitFor(() => expect(screen.getByTestId('new-session-directory-error')).toBeTruthy())
+    expect(screen.getByTestId('new-session-directory-project-roots')).toBeTruthy()
+  })
+
+  it('omits the section when no roots are configured', async () => {
+    renderSheet(async (path) => makeListing(path, []), '', [])
+
+    await waitFor(() => expect(screen.getByTestId('new-session-directory-empty')).toBeTruthy())
+    expect(screen.queryByTestId('new-session-directory-project-roots')).toBeNull()
   })
 })
