@@ -239,6 +239,8 @@ const LONG_COMMAND_TIMEOUT_MS = 120_000
  * called; keep the total under the phone's 120s + 5s grace.
  */
 export const OPEN_SESSION_TIMEOUT_MS = 100_000
+/** History delete: owner probes + bridge delete, within the phone's 30s + grace. */
+const DELETE_HISTORY_TIMEOUT_MS = 30_000
 /** A freshly opened window may still be swapping to its workspace bucket. */
 const HISTORY_OPEN_POLL_INTERVAL_MS = 300
 const PREVIEW_REWIND_TIMEOUT_MS = 30_000
@@ -283,6 +285,7 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'renameSession',
   'closeSession',
   'deleteSession',
+  'deleteHistorySession',
   'forkSession',
   'rewindSession',
   'createSideTask',
@@ -1109,6 +1112,10 @@ export class MobileGatewayHub {
           bridge.deleteSession(localId),
         )
       }
+      case 'deleteHistorySession': {
+        const p = frame.payload as { durableId: string; windowId?: number }
+        return this._deleteHistorySession(p.durableId, p.windowId)
+      }
       case 'forkSession': {
         const p = frame.payload as { ref: MobileSessionRef; messageId?: string }
         return this._sessionRefCommand(p.ref, LONG_COMMAND_TIMEOUT_MS, (bridge, localId) =>
@@ -1237,6 +1244,95 @@ export class MobileGatewayHub {
         void payload
         return failOutcome('not_supported')
     }
+  }
+
+  /**
+   * Delete one catalog row addressed by durable id. The phone sends this only
+   * for rows it could not delete through `deleteSession` (history rows have no
+   * local id); live rows still use their ref.
+   */
+  private async _deleteHistorySession(
+    durableId: string,
+    windowIdHint: number | undefined,
+  ): Promise<CommandOutcome> {
+    const deadline = Date.now() + DELETE_HISTORY_TIMEOUT_MS
+
+    // The PC may have resumed the row after the phone listed it. Route that
+    // race through the live path so read-only / delivery guards still apply.
+    const live = this._inboxSessionByDurable(durableId)
+    let liveOutcome: CommandOutcome | undefined
+    if (live !== undefined) {
+      liveOutcome = await this._withBridge(live, DELETE_HISTORY_TIMEOUT_MS, (bridge) =>
+        bridge.deleteSession(live.localId),
+      )
+      if (!liveOutcome.ok && liveOutcome.error !== 'session_not_found') return liveOutcome
+    }
+
+    // Two open windows on one workspace keep separate history mirrors, so drop
+    // the row from every owner; otherwise a catalog refresh resurrects it.
+    const entries = [...this._windows.values()]
+    const owners = (
+      await Promise.all(
+        entries.map(async (entry) =>
+          (await this._windowHasHistory(entry, durableId, deadline)) ? entry : undefined,
+        ),
+      )
+    ).filter((entry): entry is WindowEntry => entry !== undefined)
+    const hint = windowIdHint !== undefined ? this._windows.get(windowIdHint) : undefined
+    if (hint !== undefined) {
+      const index = owners.indexOf(hint)
+      if (index > 0) {
+        owners.splice(index, 1)
+        owners.unshift(hint)
+      }
+    }
+
+    if (owners.length === 0) {
+      return liveOutcome?.ok === true ? liveOutcome : failOutcome('session_not_found')
+    }
+
+    const results = await Promise.all(
+      owners.map((entry) => this._deleteHistoryInWindow(entry, durableId, deadline)),
+    )
+    const succeeded = results.find((outcome) => outcome.ok)
+    if (succeeded !== undefined) return succeeded
+    if (liveOutcome?.ok === true) return liveOutcome
+    // A window that never had the row answers session_not_found; surface a real
+    // failure (read-only, forbidden, internal) when every owner failed.
+    return (
+      results.find((outcome) => !outcome.ok && outcome.error !== 'session_not_found') ??
+      results[0] ??
+      failOutcome('session_not_found')
+    )
+  }
+
+  private async _deleteHistoryInWindow(
+    entry: WindowEntry,
+    durableId: string,
+    deadline: number,
+  ): Promise<CommandOutcome> {
+    try {
+      const result = await withTimeout(
+        entry.bridge.deleteHistorySession(durableId),
+        Math.max(1, Math.min(DELETE_HISTORY_TIMEOUT_MS, deadline - Date.now())),
+      )
+      return result.ok ? { ok: true, result: result.value } : { ok: false, error: result.code }
+    } catch (err) {
+      this._logger.warn(
+        `mobile deleteHistorySession window ${entry.windowId} failed: ${String(err)}`,
+      )
+      return failOutcome('internal')
+    }
+  }
+
+  private _inboxSessionByDurable(
+    durableId: string,
+  ): { windowId: number; localId: string } | undefined {
+    for (const entry of this._inboxState.values()) {
+      if (entry.summary.ref.durableId !== durableId) continue
+      return { windowId: entry.windowId, localId: entry.summary.ref.localId }
+    }
+    return undefined
   }
 
   private async _sessionCommand(

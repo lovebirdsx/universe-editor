@@ -664,6 +664,14 @@ export interface IMobileBridgeService {
   /** Runs the same plan/execute path as the PC "Delete Agent Session" command. */
   deleteSession(localId: string): Promise<MobileBridgeResult<void>>
 
+  /**
+   * Deletes one history row owned by this window. The phone has no local id for
+   * history rows, so the durable id is the address. When this window resumed
+   * the session after the phone listed it, the shared pipeline closes the live
+   * instance first; agent-side deletion stays best-effort.
+   */
+  deleteHistorySession(durableId: string): Promise<MobileBridgeResult<void>>
+
   // ---- Fork / rewind / side task -------------------------------------------------
 
   /**

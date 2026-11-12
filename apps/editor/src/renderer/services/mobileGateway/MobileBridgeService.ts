@@ -1079,6 +1079,44 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return ok(undefined)
   }
 
+  async deleteHistorySession(durableId: string): Promise<MobileBridgeResult<void>> {
+    await this._ensureHistory()
+    const entry = this._history.get(durableId)
+    if (entry === undefined) return fail('session_not_found', 'unknown session history')
+    if (
+      isForeignWorkspaceSession(
+        entry,
+        this._currentCwd(),
+        this._currentAuthority(),
+        this._uriIdentity,
+      )
+    ) {
+      return fail('forbidden_operation', 'session belongs to another worktree')
+    }
+    if (!this._isResumableHistoryEntry(entry)) {
+      return fail('session_not_found', 'session is not resumable from mobile')
+    }
+    // The PC may have resumed this row after the phone listed it; keep the same
+    // guards as the live delete path before the shared pipeline closes it.
+    const live = this._sessions.getById(durableId)
+    if (live !== undefined && isResidentLive(live)) {
+      if (live.readOnly) return fail('session_read_only', 'session is read-only')
+      if (this._delivery.isDeliveryBusyForSession(live)) {
+        return fail(
+          'delivery_busy',
+          'finish or undo the active delivery before deleting this session',
+        )
+      }
+    }
+    try {
+      const plan = planSessionRemoval(this._sessions, this._history, durableId)
+      await deleteSessionPlan(plan, this._sessions, this._history, this._editorGroups)
+      return ok(undefined)
+    } catch (err) {
+      return this._commandFailure(err, 'deleteHistorySession')
+    }
+  }
+
   async forkSession(
     localId: string,
     messageId?: string,

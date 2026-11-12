@@ -524,6 +524,18 @@ export class MobileClient {
     )
   }
 
+  /** Delete a history-page row addressed by durable id (live rows use `deleteSession`). */
+  deleteHistorySession(durableId: string, windowId?: number): Promise<void> {
+    return this._commands
+      .request<void>('deleteHistorySession', {
+        durableId,
+        ...(windowId !== undefined ? { windowId } : {}),
+      })
+      .then(() => {
+        this._inbox.removeByDurableId(durableId)
+      })
+  }
+
   forkSession(messageId?: string): Promise<MobileSessionRefResult> {
     return this._sessionCommandValue(
       'forkSession',

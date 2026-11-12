@@ -75,6 +75,16 @@ export class InboxStore extends Store<InboxState> {
     this.setState({ ...this.getState(), sessions: [...this._byLocalKey.values()] })
   }
 
+  /** Drop a history-page row by durable id when the caller has no local ref. */
+  removeByDurableId(durableId: string): void {
+    for (const [key, summary] of this._byLocalKey) {
+      if (summary.ref.durableId !== durableId) continue
+      this._byLocalKey.delete(key)
+      this.setState({ ...this.getState(), sessions: [...this._byLocalKey.values()] })
+      return
+    }
+  }
+
   private _remove(ref: MobileSessionRef): void {
     if (ref.durableId !== undefined) {
       for (const [key, summary] of this._byLocalKey) {

@@ -101,11 +101,25 @@ export function InboxGroups({
                     <SwipeableSessionRow
                       open={openKey === key}
                       disabled={stale === true}
+                      actions={[
+                        {
+                          key: 'close',
+                          label: strings.sessionClose,
+                          testId: 'inbox-session-close-action',
+                          tone: 'close',
+                          onSelect: () => runAction(session, onCloseSession),
+                        },
+                        {
+                          key: 'remove',
+                          label: strings.sessionRemove,
+                          testId: 'inbox-session-remove-action',
+                          tone: 'remove',
+                          onSelect: () => runAction(session, onRemoveSession),
+                        },
+                      ]}
                       onGestureStart={() => setGestureActive(true)}
                       onOpenChange={(next) => setOpenKey(next ? key : undefined)}
                       onShowActions={() => runAction(session, onShowSessionActions)}
-                      onCloseSession={() => runAction(session, onCloseSession)}
-                      onRemoveSession={() => runAction(session, onRemoveSession)}
                     >
                       <SessionRow
                         session={session}

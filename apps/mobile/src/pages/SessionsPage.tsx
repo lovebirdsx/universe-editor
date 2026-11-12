@@ -1,5 +1,6 @@
 import type { MobileSessionHistoryEntry, MobileSessionRef } from '@universe-editor/mobile-protocol'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ConfirmActionSheet } from '../components/ConfirmActionSheet.js'
 import { NoticeBar } from '../components/NoticeBar.js'
 import { Spinner } from '../components/Spinner.js'
 import { errorCode } from '../errors.js'
@@ -12,13 +13,23 @@ import {
   type SessionCatalogRow,
 } from '../history/sessionCatalog.js'
 import { formatUpdatedAt } from '../inbox/groupSessions.js'
+import { SwipeableSessionRow } from '../inbox/SwipeableSessionRow.js'
+import {
+  isSessionRemoveConfirmEnabled,
+  setSessionRemoveConfirmEnabled,
+} from '../session/sessionConfirm.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { useStore } from '../state/useStore.js'
 import { commandErrorText, strings } from '../strings.js'
 
 export type SessionsClient = Pick<
   MobileClient,
-  'listSessionHistory' | 'resumeSession' | 'getInboxStore' | 'getSocketStateStore'
+  | 'listSessionHistory'
+  | 'resumeSession'
+  | 'deleteSession'
+  | 'deleteHistorySession'
+  | 'getInboxStore'
+  | 'getSocketStateStore'
 >
 
 /** Workspace context carried alongside a catalog row opened from a closed workspace. */
@@ -51,6 +62,14 @@ const COUNTS: Readonly<
   closed: (counts) => counts.closed,
 }
 
+/**
+ * Live rows have a ref; history rows read from an open PC window carry its
+ * windowId. Rows from a closed workspace have neither — deleting them would
+ * require opening that workspace on the PC first, so the entry stays hidden.
+ */
+const canRemoveSession = (row: SessionCatalogRow): boolean =>
+  row.ref !== undefined || row.windowId !== undefined
+
 export function SessionsPage({
   client,
   active,
@@ -74,6 +93,10 @@ export function SessionsPage({
   const [filter, setFilter] = useState<SessionCatalogFilter>('all')
   const [reloadKey, setReloadKey] = useState(0)
   const [openingKey, setOpeningKey] = useState<string | undefined>(undefined)
+  const [openKey, setOpenKey] = useState<string | undefined>(undefined)
+  const [gestureActive, setGestureActive] = useState(false)
+  const [pendingRemove, setPendingRemove] = useState<SessionCatalogRow | undefined>(undefined)
+  const [removingKey, setRemovingKey] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     aliveRef.current = true
@@ -81,6 +104,24 @@ export function SessionsPage({
       aliveRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    if (openKey === undefined) return
+    const close = (): void => setOpenKey(undefined)
+    window.addEventListener('scroll', close, { passive: true, capture: true })
+    return () => window.removeEventListener('scroll', close, { capture: true })
+  }, [openKey])
+
+  useEffect(() => {
+    if (!gestureActive) return
+    const end = (): void => setGestureActive(false)
+    window.addEventListener('pointerup', end)
+    window.addEventListener('pointercancel', end)
+    return () => {
+      window.removeEventListener('pointerup', end)
+      window.removeEventListener('pointercancel', end)
+    }
+  }, [gestureActive])
 
   useEffect(() => {
     if (!isActive || !online) return
@@ -114,7 +155,12 @@ export function SessionsPage({
     () => filterSessionCatalog(catalog, filter, query),
     [catalog, filter, query],
   )
-  const groups = useMemo(() => groupSessionCatalog(visible), [visible])
+  // Freeze the rendered order while a row is being swiped; otherwise a live
+  // inbox update can re-group the list under the finger and lose the gesture.
+  const frozenVisible = useRef<readonly SessionCatalogRow[]>(visible)
+  if (!gestureActive) frozenVisible.current = visible
+  const displayVisible = gestureActive ? frozenVisible.current : visible
+  const groups = useMemo(() => groupSessionCatalog(displayVisible), [displayVisible])
 
   const openRow = (row: SessionCatalogRow): void => {
     if (openingKey !== undefined || !online) return
@@ -147,6 +193,51 @@ export function SessionsPage({
       })
   }
 
+  const removeRow = (row: SessionCatalogRow): void => {
+    if (!online || removingKey !== undefined) return
+    const ref = row.ref
+    const durableId = row.durableId
+    let request: Promise<void>
+    if (ref !== undefined) {
+      // Live row, including a pending session that has no durable id yet.
+      request = client.deleteSession(ref)
+    } else if (durableId !== undefined) {
+      // History row owned by an open PC window.
+      request = client.deleteHistorySession(durableId, row.windowId)
+    } else {
+      return
+    }
+
+    setRemovingKey(row.key)
+    setError(undefined)
+    void request
+      .then(() => {
+        if (!aliveRef.current) return
+        if (durableId !== undefined) {
+          setHistory((rows) => rows?.filter((entry) => entry.durableId !== durableId))
+        }
+      })
+      .catch((err: unknown) => {
+        if (!aliveRef.current) return
+        setError(commandErrorText(errorCode(err)))
+      })
+      .finally(() => {
+        if (!aliveRef.current) return
+        setPendingRemove(undefined)
+        setRemovingKey(undefined)
+      })
+  }
+
+  const requestRemove = (row: SessionCatalogRow): void => {
+    if (!online || openingKey !== undefined || removingKey !== undefined) return
+    setOpenKey(undefined)
+    if (!isSessionRemoveConfirmEnabled()) {
+      removeRow(row)
+      return
+    }
+    setPendingRemove(row)
+  }
+
   const refresh = (): void => setReloadKey((value) => value + 1)
 
   return (
@@ -165,7 +256,7 @@ export function SessionsPage({
           type="button"
           className="text-button"
           data-testid="sessions-refresh"
-          disabled={!online || loading}
+          disabled={!online || loading || removingKey !== undefined}
           onClick={refresh}
         >
           {strings.sessionsRefresh}
@@ -234,16 +325,45 @@ export function SessionsPage({
                       <span className="inbox-group__count">{group.rows.length}</span>
                     </h2>
                     <ul className="inbox-group__list">
-                      {group.rows.map((row) => (
-                        <li key={row.key}>
+                      {group.rows.map((row) => {
+                        const disabled =
+                          !online || openingKey !== undefined || removingKey !== undefined
+                        const rowView = (
                           <SessionCatalogRowView
                             row={row}
-                            disabled={!online || openingKey !== undefined}
+                            disabled={disabled}
                             opening={openingKey === row.key}
                             onOpen={() => openRow(row)}
                           />
-                        </li>
-                      ))}
+                        )
+                        return (
+                          <li key={row.key}>
+                            {canRemoveSession(row) ? (
+                              <SwipeableSessionRow
+                                testId="sessions-swipe-row"
+                                open={openKey === row.key}
+                                disabled={disabled}
+                                actions={[
+                                  {
+                                    key: 'remove',
+                                    label: strings.sessionRemove,
+                                    testId: 'sessions-remove-action',
+                                    tone: 'remove',
+                                    onSelect: () => requestRemove(row),
+                                  },
+                                ]}
+                                onGestureStart={() => setGestureActive(true)}
+                                onOpenChange={(next) => setOpenKey(next ? row.key : undefined)}
+                                onShowActions={() => requestRemove(row)}
+                              >
+                                {rowView}
+                              </SwipeableSessionRow>
+                            ) : (
+                              rowView
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   </section>
                 ))}
@@ -252,6 +372,26 @@ export function SessionsPage({
           </>
         )}
       </main>
+      {pendingRemove !== undefined && (
+        <ConfirmActionSheet
+          key={`sessions-remove:${pendingRemove.key}`}
+          title={strings.sessionRemoveTitle}
+          body={strings.sessionRemoveBody}
+          confirmLabel={strings.sessionRemoveConfirm}
+          testId="sessions-remove-sheet"
+          tone="danger"
+          busy={removingKey !== undefined}
+          disabled={!online}
+          neverAskAgainLabel={strings.sessionNeverAskAgain}
+          onConfirm={(neverAskAgain) => {
+            if (neverAskAgain) setSessionRemoveConfirmEnabled(false)
+            removeRow(pendingRemove)
+          }}
+          onCancel={() => {
+            if (removingKey === undefined) setPendingRemove(undefined)
+          }}
+        />
+      )}
     </div>
   )
 

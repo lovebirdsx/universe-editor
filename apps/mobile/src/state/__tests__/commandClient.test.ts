@@ -56,6 +56,7 @@ describe('CommandClient', () => {
     expect(COMMAND_TIMEOUT_MS.setConfigOption).toBe(10_000)
     expect(COMMAND_TIMEOUT_MS.newSession).toBe(30_000)
     expect(COMMAND_TIMEOUT_MS.deleteSession).toBe(30_000)
+    expect(COMMAND_TIMEOUT_MS.deleteHistorySession).toBe(30_000)
     expect(COMMAND_TIMEOUT_MS.forkSession).toBe(120_000)
     expect(COMMAND_TIMEOUT_MS.previewRewind).toBe(30_000)
     expect(COMMAND_TIMEOUT_MS.rewindSession).toBe(120_000)
@@ -98,6 +99,7 @@ describe('CommandClient', () => {
     void client.request('listSideTasks', { ref: {} })
     void client.request('openSession', { durableId: 'durable-1' })
     void client.request('listSessionHistory', {})
+    void client.request('deleteHistorySession', { durableId: 'durable-1' })
     expect(sent[0]?.idempotencyKey).toBe('idem-1')
     expect(sent[1]?.idempotencyKey).toBeUndefined()
     for (const index of [2, 3, 4, 5, 6]) {
@@ -107,6 +109,7 @@ describe('CommandClient', () => {
     expect(sent[8]?.idempotencyKey).toBeUndefined()
     expect(sent[9]?.idempotencyKey).toBeTruthy()
     expect(sent[10]?.idempotencyKey).toBeUndefined()
+    expect(sent[11]?.idempotencyKey).toBeTruthy()
   })
 
   it('reuses the requestId and idempotency key when resending after a reconnect', () => {

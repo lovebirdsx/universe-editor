@@ -57,6 +57,25 @@ describe('InboxStore', () => {
     expect(store.getState().sessions).toEqual([])
   })
 
+  it('removes a row by durable id for the history page', () => {
+    const store = new InboxStore()
+    store.applySnapshot({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [
+        sessionSummary('a', { ref: sessionRef('a', 1, 'durable-a') }),
+        sessionSummary('b', { ref: sessionRef('b', 1, 'durable-b') }),
+      ],
+    })
+
+    store.removeByDurableId('durable-a')
+    expect(store.getState().sessions.map((session) => session.ref.localId)).toEqual(['b'])
+
+    const state = store.getState()
+    store.removeByDurableId('missing')
+    expect(store.getState()).toBe(state)
+  })
+
   it('asks for a resubscribe when a delta arrives before the snapshot', () => {
     const store = new InboxStore()
     const result = store.applyDelta({

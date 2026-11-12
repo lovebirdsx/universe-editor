@@ -15,7 +15,8 @@
 > **M11 手机交付已落地**（协议 v14：手机确认后把子 worktree 的提交交付到 main——预检、提交信息
 > side task、临时树 cherry-pick、冲突 agent 解决、待推送、推送与 worktree 同步、撤销）；
 > **M12 手机推送分支已落地**（协议 v16：把会话分支直接发布到远端，不改 main、绝不 force，
-> 远端分支名可改为 `tasks/...`）。
+> 远端分支名可改为 `tasks/...`）；**M13 手机会话目录删除已落地**（协议 v18：历史行可由手机删除，
+> 仅限 PC 已打开窗口所属行；live 行仍走既有删除链路）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -140,7 +141,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 16`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 18`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -167,7 +168,9 @@ main 侧不直接读 `AcpSession`。
 v16 增加分支推送：`previewPushBranch` / `pushBranch`、`MobilePushBranchPreview` /
 `MobilePushBranchResult` 与四个 `push_*` 错误码（只发布会话分支，不碰 main，见 §6e）；v17 让
 光标 / 选区退出草稿协议：`draft_update` 删除 `baseRevision`、draft 删除 `caret`，origin 回显只作
-ack（见 §7c）。
+ack（见 §7c）；v18 增加会话目录删除：`deleteHistorySession` 命令与 `{ durableId, windowId? }`
+payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的行无入口），live 行优先走
+`deleteSession`（见 §6c）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
@@ -221,6 +224,7 @@ Referer。
 | 枚举        | `listAgents`                             | `{}`                                                           | 由第一个已注册窗口桥返回                                                                                          |
 | 会话目录    | `listSessionHistory`                     | `{}`                                                           | 已打开窗口 + 最近工作区（前 N 个，N 可配、默认 20）的可恢复历史行，只读；已排除侧边任务、归档、无消息与跨工作区行 |
 | 会话目录    | `openSession`                            | `{ durableId, windowId?, folder?, authority? }`                | 按 durable id 非激活恢复历史会话；目标工作区未打开时先自动开窗再恢复；带幂等键                                    |
+| 会话目录    | `deleteHistorySession`                   | `{ durableId, windowId? }`                                     | 删除 PC 已打开窗口所属的历史行；live 竞态走 `deleteSession`；无 owner 回 `session_not_found`；带幂等键            |
 | 交付        | `previewDelivery`                        | `{ ref }`                                                      | 交付 dry-run：源 / 目标 / 提交列表 / blocker / 期望 heads；不改 git                                               |
 | 交付        | `startDelivery`                          | `{ ref, expectation }`                                         | 重新校验 preview 的 heads 后执行；成功先停在「待推送」                                                            |
 | 交付        | `getDelivery`                            | `{ ref, deliveryId }`                                          | 详情：阶段、错误、commit 列表、冲突文件、worktree 同步结果                                                        |
@@ -241,14 +245,15 @@ Referer。
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
 只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`）不缓存。客户端重试不会重复发
 prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
-`deleteSideTask` / `openSession` 都按可修改状态命令处理；交付中的 `startDelivery` /
+`deleteSideTask` / `openSession` / `deleteHistorySession` 都按可修改状态命令处理；交付中的 `startDelivery` /
 `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree` 同样处理
 （`previewDelivery` / `getDelivery` 只读，不缓存）。
 
 **超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
-`cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` / `newSession` /
-`previewRewind` 30s；`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
-`deleteSideTask` 120s（要等 agent fork RPC 与 resume），`listSideTasks` 10s；
+`cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` /
+`deleteHistorySession` / `newSession` / `previewRewind` 30s；`forkSession` / `rewindSession` /
+`createSideTask` / `openSideTask` / `deleteSideTask` 120s（要等 agent fork RPC 与 resume），
+`listSideTasks` 10s；
 `listSessionHistory` 8s（逐窗口等桥就绪最多 5s + 桥读取；每个关闭工作区读盘额外 2s 上限），
 手机端 20s 覆盖网关最坏耗时；
 `openSession` 从入口起共用一份 100s 总预算：live 查找、owner 扫描、开窗、等桥、历史轮询与恢复都
@@ -541,6 +546,15 @@ durable id 的并发请求共享一个 in-flight promise。先在 inbox 与各�
 参数。深链 `/s/<durableId>` 落到已关闭会话时，会话页提供「重新打开」按钮（同一 durable id 原地
 订阅，不新增 URL）；此时 payload 通常没有 `folder`，由网关在前 N 个关闭工作区的落盘历史中反查
 并自动开窗。从目录打开的会话返回时保留搜索词、过滤条件与滚动位置。
+
+**删除**：每行左滑或长按可删除，均弹二次确认（可勾选「不再提醒」，与收件箱共用
+`universe.mobile.sessionRemoveConfirm` 偏好）。只有 live 行与带 `windowId` 的已打开窗口历史行显示入口；
+来自未打开工作区的行（只有 `folder`）不显示，网关也因找不到 owner 回 `session_not_found`。live 行发
+`deleteSession(ref)`；历史行发 `deleteHistorySession { durableId, windowId? }`。网关先在 inbox 缓存中按
+durableId 找 live 会话（PC 可能在手机列目录后恢复了它），命中则走 live 删除；否则用 `windowId` hint +
+各窗口 `hasSessionHistory` 找 owner，对所有拥有该行的打开窗口执行桥删除（同一 durableId 可能存在于多个
+窗口的历史镜像），至少一个成功即成功。桥侧复用 PC 的 `planSessionRemoval` → `deleteSessionPlan`：关闭
+live 实例、尽力删除 agent transcript、写历史墓碑、关闭编辑器标签页。成功后手机立即从目录与 inbox 移除行。
 
 **落盘滞后**：renderer 的历史写入有 100ms 防抖，且只保证退出时 flush。因此刚发生的重命名 / 新
 会话 / 删除可能短暂落后于磁盘；已打开窗口永远走内存镜像，不受影响。手机目录刷新即重新读盘。
@@ -1173,7 +1187,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
   标记 / push / sync 分桶 / undo / 锁；`sessionDeliveryService.test.ts` 覆盖 preview 期望、
   side task 失败与空消息、冲突 resolver、确认推送、撤销守卫与重启恢复；`MobileBridgeService` /
   `mobileGatewayHub` 覆盖 delivery 投影、命令路由、跨窗口 busy 与 `delivery_busy` guard；
-  协议包测试覆盖 v17、7 个命令 payload 与四个交付错误码。
+  协议包测试覆盖 v18（含 `deleteHistorySession` payload）与四个交付错误码。
 
 ## 12. 里程碑
 
@@ -1191,6 +1205,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M10    | 会话目录覆盖最近工作区：协议 v10、main 只读读盘、已打开优先去重、N 可配（默认 20）、未打开工作区点击后自动开窗恢复、远程工作区同链路、手机提示（已落地）   | 目录列出已打开 ∪ 最近 N 个关闭工作区；同 durable id 只出现一次且打开窗口优先；点未打开工作区的行会自动开窗并恢复；远程工作区可列出并在开窗失败时回 `workspace_not_open`；收件箱仍只显示 live |
 | M11    | 手机交付：协议 v14、git 扩展交付原语、renderer 交付状态机与提交信息 side task、冲突 agent 解决、待推送确认、推送与 worktree 同步、撤销与重启恢复（已落地） | 干净 / 脏源交付到「待推送」；确认后 push 并同步；冲突自动解决或安全失败且 main 不动；main / 远端移动时拒绝撤销；绝对路径不下发手机                                                           |
 | M12    | 手机推送分支：协议 v16、git 扩展 `inspectPushBranch` / `pushBranch`、远端分支名可改、分叉阻断、绝不 force push（已落地）                                   | 会话分支可 publish 到远端；分叉 / 已推送 / 进行中操作给出 blocker；临时分支可改名到 `tasks/...`；不改 main、不设已有 upstream                                                                |
+| M13    | 手机会话目录删除：协议 v18、`deleteHistorySession`、左滑 / 长按 + 二次确认、多窗口历史镜像同删（已落地）                                                    | 打开窗口的历史行可删且 PC 标签页关闭；未打开工作区行无删除入口；删除后目录刷新不复活；live 竞态仍走既有删除守卫                                                                              |
 
 ## 13. 已确认的决策记录
 

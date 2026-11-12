@@ -380,6 +380,7 @@ export const MOBILE_COMMAND_KINDS = [
   'renameSession',
   'closeSession',
   'deleteSession',
+  'deleteHistorySession',
   'forkSession',
   'previewRewind',
   'rewindSession',
@@ -478,6 +479,13 @@ export interface RenameSessionPayload {
 
 export interface DeleteSessionPayload {
   ref: MobileSessionRef
+}
+
+/** Delete one catalog row that has no live ref (history rows carry only a durable id). */
+export interface DeleteHistorySessionPayload {
+  durableId: string
+  /** Routing hint: the open PC window the phone listed the row from. */
+  windowId?: number
 }
 
 export interface ForkSessionPayload {

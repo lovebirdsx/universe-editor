@@ -256,7 +256,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   const resumeSession = vi.fn()
   const sessionService = {
     sessions,
-    getById: (id: string) => live.get(id),
+    getById: (id: string) =>
+      live.get(id) ?? [...live.values()].find((session) => session.sessionIdOnAgent.get() === id),
     createSession: vi.fn(async () => created()),
     closeSession: vi.fn(async () => {}),
     deleteOnAgent: vi.fn(async () => {}),
@@ -390,6 +391,21 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
     resolve = settle
   })
   return { promise, resolve }
+}
+
+function makeHistoryEntry(
+  id: string,
+  overrides: Partial<AcpSessionHistoryEntry> = {},
+): AcpSessionHistoryEntry {
+  return {
+    id,
+    agentId: 'fake',
+    sessionIdOnAgent: id,
+    title: `Session ${id}`,
+    createdAt: 1,
+    lastUsedAt: 1,
+    ...overrides,
+  } as unknown as AcpSessionHistoryEntry
 }
 
 describe('MobileBridgeService', () => {
@@ -1627,6 +1643,98 @@ describe('MobileBridgeService commands', () => {
       value: undefined,
     })
     expect(harness.sessionService.closeSession).toHaveBeenCalledWith('s1')
+  })
+
+  it('deletes a history-only row through the shared removal pipeline', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+    harness.history.set([makeHistoryEntry('d1', { cwd: '/workspace/demo' })], undefined)
+
+    await expect(harness.service.deleteHistorySession('d1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.sessionService.closeSession).not.toHaveBeenCalled()
+    expect(harness.sessionService.deleteOnAgent).toHaveBeenCalledWith('d1')
+    expect(harness.historyService.removeDeleted).toHaveBeenCalledWith('d1')
+  })
+
+  it('closes the live instance when the PC resumed a history row first', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    harness.history.set([makeHistoryEntry('d1', { cwd: '/workspace/demo' })], undefined)
+
+    await expect(harness.service.deleteHistorySession('d1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.sessionService.closeSession).toHaveBeenCalledWith('s1')
+    expect(harness.sessionService.deleteOnAgent).toHaveBeenCalledWith('d1')
+    expect(harness.historyService.removeDeleted).toHaveBeenCalledWith('d1')
+  })
+
+  it('rejects deleting a history row this window does not own', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+    harness.history.set([makeHistoryEntry('d1', { cwd: '/other/project' })], undefined)
+
+    await expect(harness.service.deleteHistorySession('d1')).resolves.toMatchObject({
+      ok: false,
+      code: 'forbidden_operation',
+    })
+    expect(harness.sessionService.deleteOnAgent).not.toHaveBeenCalled()
+    expect(harness.historyService.removeDeleted).not.toHaveBeenCalled()
+  })
+
+  it('reports session_not_found for an unknown history row', async () => {
+    const harness = makeHarness()
+
+    await expect(harness.service.deleteHistorySession('missing')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+    expect(harness.sessionService.deleteOnAgent).not.toHaveBeenCalled()
+  })
+
+  it('keeps the live guards when deleting a history row that became live', async () => {
+    const readOnly = makeHarness()
+    readOnly.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+    readOnly.add(makeSession('s1', { durableId: 'd1', readOnly: true }))
+    readOnly.history.set([makeHistoryEntry('d1', { cwd: '/workspace/demo' })], undefined)
+
+    await expect(readOnly.service.deleteHistorySession('d1')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_read_only',
+    })
+    expect(readOnly.sessionService.deleteOnAgent).not.toHaveBeenCalled()
+
+    const busy = makeHarness()
+    busy.workspace.current = {
+      folder: URI.parse('file:///workspace/demo'),
+      name: 'demo',
+    }
+    busy.add(makeSession('s1', { durableId: 'd1' }))
+    busy.history.set([makeHistoryEntry('d1', { cwd: '/workspace/demo' })], undefined)
+    vi.mocked(busy.delivery.isDeliveryBusyForSession).mockReturnValue(true)
+
+    await expect(busy.service.deleteHistorySession('d1')).resolves.toMatchObject({
+      ok: false,
+      code: 'delivery_busy',
+    })
+    expect(busy.sessionService.deleteOnAgent).not.toHaveBeenCalled()
   })
 
   it('lists this window workspace and the visible agents', async () => {

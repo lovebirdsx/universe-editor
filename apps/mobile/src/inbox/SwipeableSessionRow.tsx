@@ -1,8 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { strings } from '../strings.js'
 
 const ACTION_WIDTH_PX = 76
-const TOTAL_ACTION_WIDTH_PX = ACTION_WIDTH_PX * 2
 // Open once the first action is half revealed, like a native swipe row. The
 // old half-of-total threshold (76px) made ordinary swipes snap back.
 const OPEN_THRESHOLD_PX = ACTION_WIDTH_PX / 2
@@ -28,15 +26,25 @@ const VELOCITY_MIN_DT_MS = 8
 const VELOCITY_REST_MS = 80
 const MAX_VELOCITY_SAMPLES = 10
 
+export interface SwipeableSessionAction {
+  readonly key: string
+  readonly label: string
+  readonly testId: string
+  /** Picks the existing close/remove button styling. */
+  readonly tone: 'close' | 'remove'
+  readonly onSelect: () => void
+}
+
 export interface SwipeableSessionRowProps {
   readonly children: ReactNode
   readonly open: boolean
   readonly disabled: boolean
+  readonly actions: readonly SwipeableSessionAction[]
+  /** Defaults to `inbox-swipe-row`; other lists pass their own id. */
+  readonly testId?: string
   readonly onGestureStart: () => void
   readonly onOpenChange: (open: boolean) => void
   readonly onShowActions: () => void
-  readonly onCloseSession: () => void
-  readonly onRemoveSession: () => void
 }
 
 interface MoveSample {
@@ -59,7 +67,8 @@ const horizontalIntent = (dx: number, dy: number, slop: number): boolean =>
 const verticalIntent = (dx: number, dy: number, slop: number): boolean =>
   Math.abs(dy) > slop && Math.abs(dx) < Math.abs(dy) * HORIZONTAL_BIAS
 
-const clampOffset = (value: number): number => Math.max(-TOTAL_ACTION_WIDTH_PX, Math.min(0, value))
+const clampOffset = (value: number, maxWidth: number): number =>
+  Math.max(-maxWidth, Math.min(0, value))
 
 /** Release speed in px/ms over the last gesture window. */
 const releaseVelocity = (samples: readonly MoveSample[]): number => {
@@ -86,12 +95,13 @@ export function SwipeableSessionRow({
   children,
   open,
   disabled,
+  actions,
+  testId,
   onGestureStart,
   onOpenChange,
   onShowActions,
-  onCloseSession,
-  onRemoveSession,
 }: SwipeableSessionRowProps) {
+  const totalWidth = ACTION_WIDTH_PX * actions.length
   const [dragOffset, setDragOffset] = useState<number | undefined>(undefined)
   const drag = useRef<DragState | undefined>(undefined)
   const offset = useRef(0)
@@ -180,7 +190,7 @@ export function SwipeableSessionRow({
     // timer also stops a second finger from leaving the first long-press armed.
     clearLongPress()
     suppressClick.current = false
-    const base = open ? -TOTAL_ACTION_WIDTH_PX : 0
+    const base = open ? -totalWidth : 0
     drag.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -216,7 +226,7 @@ export function SwipeableSessionRow({
       event.currentTarget.setPointerCapture?.(event.pointerId)
     }
     suppressClick.current = true
-    offset.current = clampOffset(current.base + dx)
+    offset.current = clampOffset(current.base + dx, totalWidth)
     setDragOffset(offset.current)
     current.samples.push({ x: event.clientX, t: event.timeStamp })
     if (current.samples.length > MAX_VELOCITY_SAMPLES) current.samples.shift()
@@ -246,7 +256,7 @@ export function SwipeableSessionRow({
     if (!cancelled) {
       // The last segment between the final pointermove and the release is not
       // reported separately; count the release point itself.
-      offset.current = clampOffset(current.base + event.clientX - current.startX)
+      offset.current = clampOffset(current.base + event.clientX - current.startX, totalWidth)
       // Skip a release that did not move past the last sample: it would only
       // add rest time and dilute the release speed.
       if (!rested && lastSample !== undefined && Math.abs(event.clientX - lastSample.x) >= 1) {
@@ -256,7 +266,7 @@ export function SwipeableSessionRow({
     const velocity = cancelled || rested ? 0 : releaseVelocity(current.samples)
     const projected =
       Math.abs(offset.current) >= FLICK_MIN_DISTANCE_PX && Math.abs(velocity) >= FLICK_MIN_VELOCITY
-        ? clampOffset(offset.current + velocity * FLICK_PROJECTION_MS)
+        ? clampOffset(offset.current + velocity * FLICK_PROJECTION_MS, totalWidth)
         : offset.current
     setDragOffset(undefined)
     onOpenChange(projected <= -OPEN_THRESHOLD_PX)
@@ -279,37 +289,25 @@ export function SwipeableSessionRow({
     onOpenChange(false)
   }
 
-  const translate = dragOffset ?? (open ? -TOTAL_ACTION_WIDTH_PX : 0)
+  const translate = dragOffset ?? (open ? -totalWidth : 0)
 
   return (
-    <div className="inbox-swipe-row" data-testid="inbox-swipe-row">
-      <div
-        className="inbox-swipe-row__actions"
-        style={{ width: TOTAL_ACTION_WIDTH_PX }}
-        aria-hidden={!open}
-      >
-        <button
-          type="button"
-          className="inbox-swipe-row__action inbox-swipe-row__action--close"
-          data-testid="inbox-session-close-action"
-          style={{ width: ACTION_WIDTH_PX }}
-          tabIndex={open ? 0 : -1}
-          disabled={disabled}
-          onClick={onCloseSession}
-        >
-          {strings.sessionClose}
-        </button>
-        <button
-          type="button"
-          className="inbox-swipe-row__action inbox-swipe-row__action--remove"
-          data-testid="inbox-session-remove-action"
-          style={{ width: ACTION_WIDTH_PX }}
-          tabIndex={open ? 0 : -1}
-          disabled={disabled}
-          onClick={onRemoveSession}
-        >
-          {strings.sessionRemove}
-        </button>
+    <div className="inbox-swipe-row" data-testid={testId ?? 'inbox-swipe-row'}>
+      <div className="inbox-swipe-row__actions" style={{ width: totalWidth }} aria-hidden={!open}>
+        {actions.map((action) => (
+          <button
+            key={action.key}
+            type="button"
+            className={`inbox-swipe-row__action inbox-swipe-row__action--${action.tone}`}
+            data-testid={action.testId}
+            style={{ width: ACTION_WIDTH_PX }}
+            tabIndex={open ? 0 : -1}
+            disabled={disabled}
+            onClick={action.onSelect}
+          >
+            {action.label}
+          </button>
+        ))}
       </div>
       <div
         ref={trackRef}

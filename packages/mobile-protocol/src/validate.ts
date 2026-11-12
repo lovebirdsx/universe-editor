@@ -857,6 +857,8 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
     case 'closeSession':
     case 'deleteSession':
       return parseRefOnlyPayload(value, kind)
+    case 'deleteHistorySession':
+      return parseDeleteHistorySessionPayload(value)
     case 'forkSession':
       return parseForkSessionPayload(value)
     case 'previewRewind':
@@ -1049,6 +1051,26 @@ function parseOpenSessionPayload(value: unknown): Result<{
     ...(folder.value !== undefined ? { folder: folder.value } : {}),
     ...(authority.value !== undefined ? { authority: authority.value } : {}),
   })
+}
+
+function parseDeleteHistorySessionPayload(
+  value: unknown,
+): Result<{ durableId: string; windowId?: number }> {
+  if (!isRecord(value)) {
+    return fail('bad_request', 'deleteHistorySession.payload must be an object')
+  }
+  const durableId = value.durableId
+  if (!isNonEmptyBoundedString(durableId, MAX_ID_LENGTH)) {
+    return fail(
+      'bad_request',
+      `deleteHistorySession.durableId must be 1–${MAX_ID_LENGTH} characters`,
+    )
+  }
+  const windowId = value.windowId
+  if (windowId !== undefined && !isNonNegativeInteger(windowId)) {
+    return fail('bad_request', 'deleteHistorySession.windowId must be a non-negative integer')
+  }
+  return ok({ durableId, ...(windowId !== undefined ? { windowId } : {}) })
 }
 
 function parseRefOnlyPayload(value: unknown, kind: string): Result<{ ref: MobileSessionRef }> {

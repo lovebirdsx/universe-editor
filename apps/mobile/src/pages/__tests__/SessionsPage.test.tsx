@@ -1,12 +1,13 @@
 import type { MobileSessionHistoryEntry, MobileSessionRef } from '@universe-editor/mobile-protocol'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { SessionsPage, type SessionsClient } from '../SessionsPage.js'
 import { InboxStore } from '../../state/inboxStore.js'
 import { Store } from '../../state/store.js'
 import type { SocketState } from '../../socket/mobileSocket.js'
 import { sessionRef, sessionSummary } from '../../test/protocolFixtures.js'
 import { commandErrorText, strings } from '../../strings.js'
+import { setSessionRemoveConfirmEnabled } from '../../session/sessionConfirm.js'
 
 function historyRow(overrides: Partial<MobileSessionHistoryEntry> = {}): MobileSessionHistoryEntry {
   return {
@@ -29,6 +30,8 @@ interface Harness {
   readonly socketState: Store<SocketState>
   readonly listSessionHistory: ReturnType<typeof vi.fn>
   readonly resumeSession: ReturnType<typeof vi.fn>
+  readonly deleteSession: ReturnType<typeof vi.fn>
+  readonly deleteHistorySession: ReturnType<typeof vi.fn>
   readonly onOpenSessionRef: ReturnType<typeof vi.fn>
 }
 
@@ -49,13 +52,26 @@ function createHarness(
   const resumeSession = vi.fn(async () => ({
     ref: sessionRef('s9', 1, 'durable-1'),
   }))
+  const deleteSession = vi.fn(async () => {})
+  const deleteHistorySession = vi.fn(async () => {})
   const client: SessionsClient = {
     getInboxStore: () => inbox,
     getSocketStateStore: () => socketState,
     listSessionHistory,
     resumeSession,
+    deleteSession,
+    deleteHistorySession,
   }
-  return { client, inbox, socketState, listSessionHistory, resumeSession, onOpenSessionRef }
+  return {
+    client,
+    inbox,
+    socketState,
+    listSessionHistory,
+    resumeSession,
+    deleteSession,
+    deleteHistorySession,
+    onOpenSessionRef,
+  }
 }
 
 function renderPage(harness: Harness, active?: boolean): ReturnType<typeof render> {
@@ -69,7 +85,17 @@ function renderPage(harness: Harness, active?: boolean): ReturnType<typeof rende
   )
 }
 
+function swipeLeft(row: HTMLElement): void {
+  fireEvent.pointerDown(row, { clientX: 240, clientY: 20, button: 0, pointerId: 1 })
+  fireEvent.pointerMove(row, { clientX: 100, clientY: 22, pointerId: 1 })
+  fireEvent.pointerUp(row, { clientX: 100, clientY: 22, pointerId: 1 })
+}
+
 describe('SessionsPage', () => {
+  beforeEach(() => {
+    setSessionRemoveConfirmEnabled(true)
+  })
+
   it('merges live inbox rows with history and opens a closed row by resuming it', async () => {
     const harness = createHarness()
     harness.inbox.applySnapshot({
@@ -253,5 +279,128 @@ describe('SessionsPage', () => {
     expect(screen.getByText(strings.credentialsInvalid)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: strings.noticeDismiss }))
     expect(onDismissNotice).toHaveBeenCalledTimes(1)
+  })
+
+  it('removes an open-window history row after swiping and confirming', async () => {
+    const harness = createHarness()
+    renderPage(harness)
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+
+    swipeLeft(screen.getByTestId('sessions-row'))
+    fireEvent.click(screen.getByTestId('sessions-remove-action'))
+    expect(screen.getByTestId('sessions-remove-sheet')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('sessions-remove-sheet-confirm'))
+
+    await waitFor(() => expect(harness.deleteHistorySession).toHaveBeenCalledWith('durable-1', 1))
+    await waitFor(() => expect(screen.queryByTestId('sessions-row')).toBeNull())
+  })
+
+  it('opens the remove confirmation on a long press', async () => {
+    const harness = createHarness()
+    renderPage(harness)
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+
+    vi.useFakeTimers()
+    try {
+      const row = screen.getByTestId('sessions-row')
+      fireEvent.pointerDown(row, { clientX: 100, clientY: 20, button: 0, pointerId: 1 })
+      act(() => {
+        vi.advanceTimersByTime(500)
+      })
+      expect(screen.getByTestId('sessions-remove-sheet')).toBeTruthy()
+      fireEvent.pointerUp(row, { clientX: 100, clientY: 20, pointerId: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('deletes a live row through deleteSession instead of the history command', async () => {
+    const harness = createHarness()
+    harness.inbox.applySnapshot({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [
+        sessionSummary('s1', {
+          ref: sessionRef('s1', 1, 'durable-1'),
+          title: 'Live session',
+          bucket: 'in_progress',
+          updatedAt: 3_000,
+        }),
+      ],
+    })
+    renderPage(harness)
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+
+    swipeLeft(screen.getByTestId('sessions-row'))
+    fireEvent.click(screen.getByTestId('sessions-remove-action'))
+    fireEvent.click(screen.getByTestId('sessions-remove-sheet-confirm'))
+
+    await waitFor(() =>
+      expect(harness.deleteSession).toHaveBeenCalledWith(sessionRef('s1', 1, 'durable-1')),
+    )
+    expect(harness.deleteHistorySession).not.toHaveBeenCalled()
+  })
+
+  it('hides the remove entry for a closed-workspace row', async () => {
+    const harness = createHarness({
+      history: [
+        {
+          durableId: 'durable-closed',
+          agentId: 'echo',
+          agentName: 'Echo',
+          title: 'Remote session',
+          workspaceName: 'remote-project',
+          folder: 'remote-ssh://devhost/home/dev/project',
+          createdAt: 1_000,
+          lastUsedAt: 2_000,
+        },
+      ],
+    })
+    renderPage(harness)
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+
+    expect(screen.queryByTestId('sessions-swipe-row')).toBeNull()
+    expect(screen.queryByTestId('sessions-remove-action')).toBeNull()
+    expect(screen.getByTestId('sessions-row-open-hint')).toBeTruthy()
+  })
+
+  it('keeps the row and shows the error when deletion fails', async () => {
+    const harness = createHarness()
+    harness.deleteHistorySession.mockRejectedValueOnce(
+      Object.assign(new Error('failed'), { code: 'internal' }),
+    )
+    renderPage(harness)
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+
+    swipeLeft(screen.getByTestId('sessions-row'))
+    fireEvent.click(screen.getByTestId('sessions-remove-action'))
+    fireEvent.click(screen.getByTestId('sessions-remove-sheet-confirm'))
+
+    await waitFor(() => expect(screen.getByText(commandErrorText('internal'))).toBeTruthy())
+    expect(screen.queryByTestId('sessions-remove-sheet')).toBeNull()
+    expect(screen.getByTestId('sessions-row')).toBeTruthy()
+  })
+
+  it('disables the remove action while offline', async () => {
+    const harness = createHarness()
+    renderPage(harness)
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+
+    act(() => harness.socketState.setState('reconnecting'))
+
+    expect((screen.getByTestId('sessions-remove-action') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('removes without confirmation after opting out', async () => {
+    setSessionRemoveConfirmEnabled(false)
+    const harness = createHarness()
+    renderPage(harness)
+    await waitFor(() => expect(screen.getByTestId('sessions-row')).toBeTruthy())
+
+    swipeLeft(screen.getByTestId('sessions-row'))
+    fireEvent.click(screen.getByTestId('sessions-remove-action'))
+
+    expect(screen.queryByTestId('sessions-remove-sheet')).toBeNull()
+    await waitFor(() => expect(harness.deleteHistorySession).toHaveBeenCalledWith('durable-1', 1))
   })
 })

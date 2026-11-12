@@ -348,6 +348,50 @@ describe('MobileClient session subscription', () => {
     expect(client.getInboxStore().getState().sessions).toEqual([])
   })
 
+  it('deletes a history row by durable id and drops the matching inbox row', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1', { ref: sessionRef('s1', 1, 'durable-1') })],
+    })
+
+    const removed = client.deleteHistorySession('durable-1', 2)
+    const command = sentFrames(socket).at(-1) as {
+      requestId: string
+      kind: string
+      payload: unknown
+    }
+    expect(command.kind).toBe('deleteHistorySession')
+    expect(command.payload).toStrictEqual({ durableId: 'durable-1', windowId: 2 })
+    socket.serverSend({ type: 'command_result', requestId: command.requestId, ok: true })
+    await removed
+    expect(client.getInboxStore().getState().sessions).toEqual([])
+  })
+
+  it('keeps the inbox row when deleting a history row fails', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1', { ref: sessionRef('s1', 1, 'durable-1') })],
+    })
+
+    const removed = client.deleteHistorySession('durable-1')
+    const command = sentFrames(socket).at(-1) as { requestId: string }
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: false,
+      error: 'internal',
+    })
+
+    await expect(removed).rejects.toMatchObject({ code: 'internal' })
+    expect(client.getInboxStore().getState().sessions).toHaveLength(1)
+  })
+
   it('marks a session removed even when the removal arrives before its snapshot', () => {
     const { client, sockets } = createHarness()
     const socket = sockets[0]!

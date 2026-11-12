@@ -101,6 +101,9 @@ class FakeBridge implements IMobileBridgeService {
   readonly renameSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly closeSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly deleteSession = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly deleteHistorySession = vi.fn(
+    async (): Promise<MobileBridgeResult<void>> => ({ ok: true, value: undefined }),
+  )
   readonly forkSession = vi.fn(
     async (): Promise<MobileBridgeResult<MobileBridgeNewSessionResult>> => ({
       ok: true,
@@ -877,6 +880,7 @@ describe('MobileGatewayHub commands', () => {
     const hub = new MobileGatewayHub(NULL_LOGGER)
     const bridge = new FakeBridge()
     bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.history = [historyRow('d1')]
     bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
     hub.registerWindow(1, bridge)
     const connection = makeConnection()
@@ -897,6 +901,7 @@ describe('MobileGatewayHub commands', () => {
       ['renameSession', { ref, title: 'Renamed' }, bridge.renameSession],
       ['closeSession', { ref }, bridge.closeSession],
       ['deleteSession', { ref }, bridge.deleteSession],
+      ['deleteHistorySession', { durableId: 'd1' }, bridge.deleteHistorySession],
     ]
     for (const [kind, payload, spy] of cases) {
       await hub.handleCommand(connection, { type: 'command', requestId: kind, kind, payload })
@@ -909,6 +914,132 @@ describe('MobileGatewayHub commands', () => {
     }
     expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', 'hello')
     expect(bridge.resolveElicitation).toHaveBeenCalledWith('s1', 'e1', 'accept', { name: 'Ada' })
+  })
+
+  it('deletes a history row from every open window that owns it', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const first = new FakeBridge()
+    const second = new FakeBridge()
+    const third = new FakeBridge()
+    first.history = [historyRow('d1')]
+    second.history = [historyRow('d1')]
+    hub.registerWindow(1, first)
+    hub.registerWindow(2, second)
+    hub.registerWindow(3, third)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'delete-history',
+      kind: 'deleteHistorySession',
+      payload: { durableId: 'd1', windowId: 2 },
+    })
+
+    expect(first.deleteHistorySession).toHaveBeenCalledWith('d1')
+    expect(second.deleteHistorySession).toHaveBeenCalledWith('d1')
+    expect(third.deleteHistorySession).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'delete-history',
+      ok: true,
+    })
+  })
+
+  it('reports session_not_found when no open window owns the history row', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'delete-history',
+      kind: 'deleteHistorySession',
+      payload: { durableId: 'missing' },
+    })
+
+    expect(bridge.deleteHistorySession).not.toHaveBeenCalled()
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'delete-history',
+      ok: false,
+      error: 'session_not_found',
+    })
+  })
+
+  it('uses the live delete path when the PC resumed the row first', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    hub.subscribeInbox(connection)
+    await tick()
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'delete-history',
+      kind: 'deleteHistorySession',
+      payload: { durableId: 'd1', windowId: 1 },
+    })
+
+    expect(bridge.deleteSession).toHaveBeenCalledWith('s1')
+    expect(bridge.deleteHistorySession).not.toHaveBeenCalled()
+  })
+
+  it('succeeds when at least one owner deletes the row and reports a hard failure otherwise', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const first = new FakeBridge()
+    const second = new FakeBridge()
+    first.history = [historyRow('d1')]
+    second.history = [historyRow('d1')]
+    first.deleteHistorySession.mockResolvedValueOnce({
+      ok: false,
+      code: 'session_not_found',
+      message: 'already gone',
+    })
+    hub.registerWindow(1, first)
+    hub.registerWindow(2, second)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'delete-history',
+      kind: 'deleteHistorySession',
+      payload: { durableId: 'd1' },
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'delete-history',
+      ok: true,
+    })
+
+    first.deleteHistorySession.mockResolvedValue({
+      ok: false,
+      code: 'session_read_only',
+      message: 'read-only',
+    })
+    second.deleteHistorySession.mockResolvedValue({
+      ok: false,
+      code: 'session_read_only',
+      message: 'read-only',
+    })
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'delete-history-again',
+      kind: 'deleteHistorySession',
+      payload: { durableId: 'd1' },
+    })
+    expect(connection.frames.at(-1)).toStrictEqual({
+      type: 'command_result',
+      requestId: 'delete-history-again',
+      ok: false,
+      error: 'session_read_only',
+    })
   })
 
   it('aggregates history across windows, dedupes durable ids and stamps window facts', async () => {
