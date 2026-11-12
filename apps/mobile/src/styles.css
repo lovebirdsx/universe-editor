@@ -3737,3 +3737,96 @@ input:focus-visible {
   text-align: center;
   pointer-events: none;
 }
+
+/* Copy-as-image fallback ---------------------------------------------------- */
+
+.copy-image-preview {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: calc(env(safe-area-inset-top) + 12px) calc(env(safe-area-inset-right) + 16px)
+    calc(env(safe-area-inset-bottom) + 16px) calc(env(safe-area-inset-left) + 16px);
+  background: #000;
+  overscroll-behavior: none;
+}
+
+.copy-image-preview__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #fff;
+}
+
+.copy-image-preview__title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.copy-image-preview__close {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 16%);
+  color: #fff;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.copy-image-preview__stage {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* No touch-action / user-select / touch-callout overrides: iOS needs the
+   long-press menu on this image to copy or save it. */
+.copy-image-preview__image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.copy-image-preview__hint,
+.copy-image-preview__status {
+  margin: 0;
+  color: rgb(255 255 255 / 70%);
+  font-size: 12px;
+  text-align: center;
+}
+
+.copy-image-preview__status {
+  min-height: 16px;
+  color: var(--warning);
+}
+
+.copy-image-preview__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.copy-image-preview__action {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 16%);
+  color: #fff;
+  font-size: 15px;
+  text-align: center;
+  text-decoration: none;
+}

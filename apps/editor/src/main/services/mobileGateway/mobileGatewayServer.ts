@@ -80,7 +80,7 @@ export const MAX_TOTAL_CONNECTIONS = 64
 export const MAX_PAIR_BODY_BYTES = 4 * 1024
 
 const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+  "default-src 'self'; connect-src 'self' blob: ws: wss:; img-src 'self' data: blob: https: http:; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 const POLICY_VIOLATION_CLOSE = 1008
 const HSTS_VALUE = 'max-age=31536000'
 /** One diagnostic audit entry per reason/address per minute; retries are chatty. */

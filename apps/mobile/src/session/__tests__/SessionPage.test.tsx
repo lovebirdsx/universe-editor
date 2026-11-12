@@ -7,6 +7,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
+import { writeClipboardImage, writeClipboardText } from '../../clipboard.js'
 import { CLEARED_FALLBACK_MS } from '../PermissionSheet.js'
 import { MobileClient } from '../../state/mobileClient.js'
 import { FakeTimers, FakeWebSocket, sentFrames } from '../../test/fakes.js'
@@ -24,6 +25,11 @@ import {
   depositComposerPrefill,
   takeComposerPrefill,
 } from '../composerPrefill.js'
+import {
+  MessageImageTooLargeError,
+  MessageImageUnavailableError,
+  renderMessageImage,
+} from '../messageImage.js'
 import { SESSION_DISPLAY_STORAGE_KEY } from '../sessionDisplay.js'
 import {
   SESSION_CLOSE_CONFIRM_STORAGE_KEY,
@@ -31,6 +37,16 @@ import {
   setSessionRemoveConfirmEnabled,
 } from '../sessionConfirm.js'
 import { SessionPage, SESSION_LOAD_TIMEOUT_MS } from '../SessionPage.js'
+
+vi.mock('../../clipboard.js', () => ({
+  writeClipboardText: vi.fn(),
+  writeClipboardImage: vi.fn(),
+}))
+vi.mock('../messageImage.js', () => ({
+  renderMessageImage: vi.fn(),
+  MessageImageTooLargeError: class MessageImageTooLargeError extends Error {},
+  MessageImageUnavailableError: class MessageImageUnavailableError extends Error {},
+}))
 
 const credentials: StoredCredentials = {
   deviceId: 'device-1',
@@ -1252,6 +1268,111 @@ describe('SessionPage fork / rewind / side tasks', () => {
 
     await waitFor(() =>
       expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).value).toBe(''),
+    )
+  })
+})
+
+describe('SessionPage message copy', () => {
+  beforeEach(() => {
+    vi.mocked(writeClipboardText).mockReset().mockResolvedValue(true)
+    vi.mocked(writeClipboardImage).mockReset().mockResolvedValue(true)
+    vi.mocked(renderMessageImage)
+      .mockReset()
+      .mockResolvedValue(new Blob(['png'], { type: 'image/png' }))
+  })
+
+  function openSheet(harness: Harness, testId = 'user-message-actions'): void {
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [userMessage('m1', 'hello')] }))
+    fireEvent.click(screen.getByTestId(testId))
+  }
+
+  it('copies the raw message text and closes the sheet', async () => {
+    const { harness } = openPage()
+    openSheet(harness)
+
+    fireEvent.click(screen.getByTestId('message-action-copy-text'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-toast').textContent).toBe(strings.messageCopyTextDone),
+    )
+    expect(writeClipboardText).toHaveBeenCalledWith('hello')
+    expect(screen.queryByTestId('message-actions-sheet')).toBeNull()
+  })
+
+  it('keeps the sheet open and reports a text copy failure', async () => {
+    vi.mocked(writeClipboardText).mockResolvedValue(false)
+    const { harness } = openPage()
+    openSheet(harness)
+
+    fireEvent.click(screen.getByTestId('message-action-copy-text'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-toast').textContent).toBe(strings.messageCopyTextFailed),
+    )
+    expect(screen.getByTestId('message-actions-sheet')).toBeTruthy()
+  })
+
+  it('starts the clipboard write synchronously and reports the image as copied', async () => {
+    const { harness } = openPage()
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        timeline: [userMessage('m1', 'hello'), agentMessage('a1', 'the answer')],
+      }),
+    )
+    fireEvent.click(screen.getByTestId('agent-message-actions'))
+    fireEvent.click(screen.getByTestId('message-action-copy-image'))
+
+    // WebKit needs the write inside the click stack, before the capture resolves.
+    expect(renderMessageImage).toHaveBeenCalledTimes(1)
+    expect(writeClipboardImage).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(writeClipboardImage).mock.calls[0]?.[0]).toBeInstanceOf(Promise)
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-toast').textContent).toBe(strings.messageCopyImageDone),
+    )
+    expect(screen.queryByTestId('message-actions-sheet')).toBeNull()
+    expect(screen.queryByTestId('copy-image-preview')).toBeNull()
+  })
+
+  it('opens the preview overlay when the clipboard cannot take the image', async () => {
+    vi.mocked(writeClipboardImage).mockResolvedValue(false)
+    const { harness } = openPage()
+    openSheet(harness)
+
+    fireEvent.click(screen.getByTestId('message-action-copy-image'))
+
+    await screen.findByTestId('copy-image-preview')
+    expect(screen.queryByTestId('message-actions-sheet')).toBeNull()
+  })
+
+  it('maps capture failures to useful messages', async () => {
+    vi.mocked(renderMessageImage).mockRejectedValue(new MessageImageTooLargeError())
+    const { harness } = openPage()
+    openSheet(harness)
+
+    fireEvent.click(screen.getByTestId('message-action-copy-image'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('session-toast').textContent).toBe(
+        strings.messageCopyImageTooLarge,
+      ),
+    )
+    expect(screen.getByTestId('message-actions-sheet')).toBeTruthy()
+    expect(writeClipboardImage).toHaveBeenCalledTimes(1)
+
+    vi.mocked(renderMessageImage).mockRejectedValue(new MessageImageUnavailableError())
+    fireEvent.click(screen.getByTestId('message-action-copy-image'))
+    await waitFor(() =>
+      expect(screen.getByTestId('session-toast').textContent).toBe(
+        strings.messageCopyImageUnavailable,
+      ),
+    )
+
+    vi.mocked(renderMessageImage).mockRejectedValue(new Error('boom'))
+    fireEvent.click(screen.getByTestId('message-action-copy-image'))
+    await waitFor(() =>
+      expect(screen.getByTestId('session-toast').textContent).toBe(strings.messageCopyImageFailed),
     )
   })
 })

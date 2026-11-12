@@ -314,7 +314,7 @@ describe('Timeline message actions', () => {
     expect(screen.queryByTestId('agent-message-actions')).toBeNull()
   })
 
-  it('offers actions on a forked user message and passes the item back', () => {
+  it('offers actions on a forked user message and passes the item and element back', () => {
     const onOpenMessageActions = vi.fn()
     renderTimeline([anchoredUser('m1', 'hello', { canFork: true })], 'onlyMessage', {
       onOpenMessageActions,
@@ -323,6 +323,7 @@ describe('Timeline message actions', () => {
     fireEvent.click(screen.getByTestId('user-message-actions'))
     expect(onOpenMessageActions).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'm1', messageId: 'msg-m1', canFork: true }),
+      screen.getByTestId('user-message'),
     )
   })
 
@@ -334,21 +335,49 @@ describe('Timeline message actions', () => {
     expect(screen.getByTestId('user-message-actions')).toBeTruthy()
   })
 
-  it('hides the user action button when nothing is available', () => {
+  it('offers copy actions on a plain text user message', () => {
     renderTimeline([anchoredUser('m1', 'hello', { canFork: false })], 'onlyMessage', {
+      onOpenMessageActions: vi.fn(),
+    })
+    expect(screen.getByTestId('user-message-actions')).toBeTruthy()
+  })
+
+  it('offers copy actions on attachment-only and image-only user messages', () => {
+    clientMock.fetchMessageImageBlob.mockResolvedValue(new Blob(['img'], { type: 'image/png' }))
+    renderTimeline(
+      [
+        userMessage('m1', '', {
+          attachments: [
+            { id: 'att-1', kind: 'file', name: 'notes.txt', mimeType: 'text/plain', size: 1 },
+          ],
+        }),
+        {
+          kind: 'message',
+          id: 'm2',
+          role: 'user',
+          text: '',
+          streaming: false,
+          images: [{ index: 0, mimeType: 'image/png', size: 3 }],
+        },
+      ],
+      'onlyMessage',
+      { onOpenMessageActions: vi.fn() },
+    )
+    expect(screen.getAllByTestId('user-message-actions')).toHaveLength(2)
+  })
+
+  it('hides the user action button when nothing is available', () => {
+    renderTimeline([anchoredUser('m1', '', { canFork: false })], 'onlyMessage', {
       onOpenMessageActions: vi.fn(),
     })
     expect(screen.queryByTestId('user-message-actions')).toBeNull()
   })
 
-  it('offers side tasks on finished agent messages only', () => {
+  it('offers copy actions on finished agent messages with content', () => {
     renderTimeline(
       [{ kind: 'message', id: 'a1', role: 'agent', text: 'answer', streaming: false }],
       'onlyMessage',
-      {
-        sideTaskAvailable: true,
-        onOpenMessageActions: vi.fn(),
-      },
+      { onOpenMessageActions: vi.fn() },
     )
     expect(screen.getByTestId('agent-message-actions')).toBeTruthy()
   })

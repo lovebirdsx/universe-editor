@@ -4,6 +4,8 @@ import { commandErrorText, strings } from '../../strings.js'
 import { MessageActionsSheet } from '../MessageActionsSheet.js'
 
 function renderSheet(overrides: Partial<Parameters<typeof MessageActionsSheet>[0]> = {}) {
+  const onCopyText = vi.fn(async () => undefined)
+  const onCopyImage = vi.fn(async () => undefined)
   const onRewind = vi.fn()
   const onFork = vi.fn(async () => undefined)
   const onSideTask = vi.fn(async () => undefined)
@@ -11,11 +13,15 @@ function renderSheet(overrides: Partial<Parameters<typeof MessageActionsSheet>[0
   const onNotice = vi.fn()
   render(
     <MessageActionsSheet
+      canCopyText
+      canCopyImage
       canRewind
       canFork
       canCreateSideTask
       online
       running={false}
+      onCopyText={onCopyText}
+      onCopyImage={onCopyImage}
       onRewind={onRewind}
       onFork={onFork}
       onSideTask={onSideTask}
@@ -24,22 +30,69 @@ function renderSheet(overrides: Partial<Parameters<typeof MessageActionsSheet>[0
       {...overrides}
     />,
   )
-  return { onRewind, onFork, onSideTask, onClose, onNotice }
+  return { onCopyText, onCopyImage, onRewind, onFork, onSideTask, onClose, onNotice }
 }
 
 describe('MessageActionsSheet', () => {
-  it('offers rewind, fork and side task when allowed', () => {
+  it('offers copy text and copy image when allowed', () => {
     renderSheet()
+    expect(screen.getByTestId('message-action-copy-text')).toBeTruthy()
+    expect(screen.getByTestId('message-action-copy-image')).toBeTruthy()
     expect(screen.getByTestId('message-action-rewind')).toBeTruthy()
     expect(screen.getByTestId('message-action-fork')).toBeTruthy()
     expect(screen.getByTestId('message-action-side-task')).toBeTruthy()
   })
 
   it('hides disallowed actions', () => {
-    renderSheet({ canRewind: false, canFork: false, canCreateSideTask: true })
+    renderSheet({
+      canCopyText: false,
+      canCopyImage: false,
+      canRewind: false,
+      canFork: false,
+      canCreateSideTask: true,
+    })
+    expect(screen.queryByTestId('message-action-copy-text')).toBeNull()
+    expect(screen.queryByTestId('message-action-copy-image')).toBeNull()
     expect(screen.queryByTestId('message-action-rewind')).toBeNull()
     expect(screen.queryByTestId('message-action-fork')).toBeNull()
     expect(screen.getByTestId('message-action-side-task')).toBeTruthy()
+  })
+
+  it('keeps copy actions available offline and while running', () => {
+    renderSheet({ online: false, running: true })
+    expect((screen.getByTestId('message-action-copy-text') as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+    expect((screen.getByTestId('message-action-copy-image') as HTMLButtonElement).disabled).toBe(
+      false,
+    )
+  })
+
+  it('invokes copy actions', async () => {
+    const { onCopyText, onCopyImage } = renderSheet()
+    fireEvent.click(screen.getByTestId('message-action-copy-text'))
+    await waitFor(() => expect(onCopyText).toHaveBeenCalledTimes(1))
+    fireEvent.click(screen.getByTestId('message-action-copy-image'))
+    await waitFor(() => expect(onCopyImage).toHaveBeenCalledTimes(1))
+  })
+
+  it('disables other actions and shows progress while copying', async () => {
+    let resolveCopy: (() => void) | undefined
+    renderSheet({
+      onCopyImage: () =>
+        new Promise<void>((resolve) => {
+          resolveCopy = resolve
+        }),
+    })
+    fireEvent.click(screen.getByTestId('message-action-copy-image'))
+    const copyImage = screen.getByTestId('message-action-copy-image') as HTMLButtonElement
+    expect(copyImage.textContent).toBe(strings.messageCopyImageBusy)
+    expect(copyImage.disabled).toBe(true)
+    expect((screen.getByTestId('message-action-fork') as HTMLButtonElement).disabled).toBe(true)
+
+    resolveCopy?.()
+    await waitFor(() => expect(copyImage.disabled).toBe(false))
+    expect(copyImage.textContent).toBe(strings.messageActionCopyImage)
   })
 
   it('disables fork while the session is running and explains why', () => {

@@ -12,6 +12,7 @@ import type { PermissionClearedInfo } from '../state/sessionStore.js'
 import { useStore } from '../state/useStore.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
+import { writeClipboardImage, writeClipboardText } from '../clipboard.js'
 import { Composer, type ComposerPrefill } from './Composer.js'
 import {
   clipSideTaskQuote,
@@ -20,8 +21,14 @@ import {
   takeComposerPrefill,
 } from './composerPrefill.js'
 import { ConfigSheet } from './ConfigSheet.js'
+import { CopyImageOverlay } from './CopyImageOverlay.js'
 import { ElicitationSheet } from './ElicitationSheet.js'
 import { PushBranchSheet } from '../git/PushBranchSheet.js'
+import {
+  MessageImageTooLargeError,
+  MessageImageUnavailableError,
+  renderMessageImage,
+} from './messageImage.js'
 import { MessageActionsSheet } from './MessageActionsSheet.js'
 import { McpServersSheet } from './McpServersSheet.js'
 import { PermissionSheet } from './PermissionSheet.js'
@@ -34,7 +41,7 @@ import { readSessionDisplayPreference, type SessionDisplayPreference } from './s
 import { isSessionWorking } from './sessionStatus.js'
 import { SideTasksSheet } from './SideTasksSheet.js'
 import { SubagentModelSheet } from './SubagentModelSheet.js'
-import { Timeline } from './Timeline.js'
+import { hasCopyableContent, Timeline } from './Timeline.js'
 import { useVisualViewportHeight } from './useVisualViewport.js'
 
 const TOAST_MS = 3_000
@@ -47,6 +54,11 @@ type SessionSettingsState =
   | { readonly status: 'loading' }
   | { readonly status: 'ready'; readonly settings: MobileSessionSettings }
   | { readonly status: 'failed'; readonly message: string }
+
+interface MessageActionsTarget {
+  readonly item: MobileTimelineMessageItem
+  readonly element: HTMLDivElement
+}
 
 export interface SessionPageProps {
   readonly client: MobileClient
@@ -108,9 +120,8 @@ export function SessionPage({
   const settingsRequest = useRef(0)
   const [loadTimedOut, setLoadTimedOut] = useState(false)
   const [retryToken, setRetryToken] = useState(0)
-  const [messageActionsItem, setMessageActionsItem] = useState<
-    MobileTimelineMessageItem | undefined
-  >(undefined)
+  const [messageActions, setMessageActions] = useState<MessageActionsTarget | undefined>(undefined)
+  const [copyImagePreview, setCopyImagePreview] = useState<Blob | undefined>(undefined)
   const [rewindMessageId, setRewindMessageId] = useState<string | undefined>(undefined)
   const [sideTasksOpen, setSideTasksOpen] = useState(false)
   const [prefill, setPrefill] = useState<ComposerPrefill | undefined>(undefined)
@@ -132,6 +143,8 @@ export function SessionPage({
     setPushOpen(false)
     setSettingsState({ status: 'idle' })
     setSettingsView(undefined)
+    setMessageActions(undefined)
+    setCopyImagePreview(undefined)
   }, [sessionKey])
 
   const notice = (text: string): void => setToast(text)
@@ -231,7 +244,7 @@ export function SessionPage({
 
   const forkFrom = async (messageId?: string): Promise<void> => {
     const result = await client.forkSession(messageId)
-    setMessageActionsItem(undefined)
+    setMessageActions(undefined)
     openRef(result.ref)
   }
 
@@ -243,8 +256,34 @@ export function SessionPage({
     if (trimmed !== '') {
       depositComposerPrefill(sessionRouteKey(result.ref), sideTaskQuoteText(trimmed))
     }
-    setMessageActionsItem(undefined)
+    setMessageActions(undefined)
     openRef(result.ref)
+  }
+
+  const copyMessageText = async (target: MessageActionsTarget): Promise<void> => {
+    if (await writeClipboardText(target.item.text)) {
+      setMessageActions(undefined)
+      notice(strings.messageCopyTextDone)
+    } else {
+      notice(strings.messageCopyTextFailed)
+    }
+  }
+
+  const copyMessageImage = async (target: MessageActionsTarget): Promise<void> => {
+    const capture = renderMessageImage(target.element)
+    // Must stay in the click's synchronous stack: WebKit drops the clipboard
+    // grant if `clipboard.write` runs after an await.
+    const written = writeClipboardImage(capture)
+    let blob: Blob
+    try {
+      blob = await capture
+    } catch (error) {
+      notice(messageImageErrorText(error))
+      return
+    }
+    setMessageActions(undefined)
+    if (await written) notice(strings.messageCopyImageDone)
+    else setCopyImagePreview(blob)
   }
 
   const reopenAfterRewind = (text: string | undefined): void => {
@@ -428,7 +467,7 @@ export function SessionPage({
             client={client}
             rewindAvailable={rewindAvailable}
             sideTaskAvailable={sideTaskAvailable}
-            onOpenMessageActions={setMessageActionsItem}
+            onOpenMessageActions={(item, element) => setMessageActions({ item, element })}
           />
           <div className="session-footer" ref={footerRef} data-testid="session-footer">
             {permission !== undefined && (
@@ -475,22 +514,36 @@ export function SessionPage({
           </div>
         </>
       )}
-      {messageActionsItem !== undefined && (
+      {messageActions !== undefined && (
         <MessageActionsSheet
-          canRewind={rewindAvailable && messageActionsItem.messageId !== undefined}
-          canFork={messageActionsItem.canFork === true}
-          canCreateSideTask={sideTaskAvailable && messageActionsItem.text.trim() !== ''}
+          canCopyText={messageActions.item.text.trim() !== ''}
+          canCopyImage={hasCopyableContent(messageActions.item)}
+          canRewind={rewindAvailable && messageActions.item.messageId !== undefined}
+          canFork={messageActions.item.canFork === true}
+          canCreateSideTask={sideTaskAvailable && messageActions.item.text.trim() !== ''}
           online={online}
           running={running}
+          onCopyText={() => copyMessageText(messageActions)}
+          onCopyImage={() => copyMessageImage(messageActions)}
           onRewind={() => {
-            const messageId = messageActionsItem.messageId
-            setMessageActionsItem(undefined)
+            const messageId = messageActions.item.messageId
+            setMessageActions(undefined)
             if (messageId !== undefined) setRewindMessageId(messageId)
           }}
-          onFork={() => forkFrom(messageActionsItem.messageId)}
-          onSideTask={() => createSideTaskFrom(messageActionsItem.text)}
-          onClose={() => setMessageActionsItem(undefined)}
+          onFork={() => forkFrom(messageActions.item.messageId)}
+          onSideTask={() => createSideTaskFrom(messageActions.item.text)}
+          onClose={() => setMessageActions(undefined)}
           onNotice={notice}
+        />
+      )}
+      {copyImagePreview !== undefined && (
+        <CopyImageOverlay
+          blob={copyImagePreview}
+          onClose={() => setCopyImagePreview(undefined)}
+          onCopied={() => {
+            setCopyImagePreview(undefined)
+            notice(strings.messageCopyImageDone)
+          }}
         />
       )}
       {rewindMessageId !== undefined && (
@@ -629,4 +682,10 @@ export function SessionPage({
       )}
     </div>
   )
+}
+
+function messageImageErrorText(error: unknown): string {
+  if (error instanceof MessageImageTooLargeError) return strings.messageCopyImageTooLarge
+  if (error instanceof MessageImageUnavailableError) return strings.messageCopyImageUnavailable
+  return strings.messageCopyImageFailed
 }

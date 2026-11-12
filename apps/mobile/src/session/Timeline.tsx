@@ -41,7 +41,9 @@ export interface TimelineProps {
   readonly rewindAvailable?: boolean | undefined
   /** Side tasks can be created from any message with text. */
   readonly sideTaskAvailable?: boolean | undefined
-  readonly onOpenMessageActions?: ((item: MobileTimelineMessageItem) => void) | undefined
+  readonly onOpenMessageActions?:
+    | ((item: MobileTimelineMessageItem, element: HTMLDivElement) => void)
+    | undefined
 }
 
 type TimelineGroup =
@@ -157,6 +159,12 @@ export function Timeline({
   )
 }
 
+export function hasCopyableContent(item: MobileTimelineMessageItem): boolean {
+  return (
+    item.text.trim() !== '' || (item.images?.length ?? 0) > 0 || (item.attachments?.length ?? 0) > 0
+  )
+}
+
 function groupTimeline(items: readonly MobileTimelineItem[], groupTools: boolean): TimelineGroup[] {
   const groups: TimelineGroup[] = []
   let pendingTools: MobileTimelineToolCallItem[] = []
@@ -194,7 +202,9 @@ function TimelineItem({
   >
   readonly rewindAvailable: boolean
   readonly sideTaskAvailable: boolean
-  readonly onOpenMessageActions: ((item: MobileTimelineMessageItem) => void) | undefined
+  readonly onOpenMessageActions:
+    | ((item: MobileTimelineMessageItem, element: HTMLDivElement) => void)
+    | undefined
 }) {
   switch (item.kind) {
     case 'message':
@@ -228,19 +238,23 @@ function MessageItem({
   >
   readonly rewindAvailable: boolean
   readonly sideTaskAvailable: boolean
-  readonly onOpenMessageActions: ((item: MobileTimelineMessageItem) => void) | undefined
+  readonly onOpenMessageActions:
+    | ((item: MobileTimelineMessageItem, element: HTMLDivElement) => void)
+    | undefined
 }) {
+  const rootRef = useRef<HTMLDivElement | null>(null)
   if (item.memoryTrimmed === true) {
     return <div className="timeline-notice">{strings.memoryTrimmed}</div>
   }
   if (item.role === 'user') {
     const showActions =
       onOpenMessageActions !== undefined &&
-      (item.canFork === true ||
+      (hasCopyableContent(item) ||
+        item.canFork === true ||
         (item.messageId !== undefined && rewindAvailable) ||
         sideTaskAvailable)
     return (
-      <div className="message message--user" data-testid="user-message">
+      <div className="message message--user" data-testid="user-message" ref={rootRef}>
         {item.attachments !== undefined && item.attachments.length > 0 && (
           <MessageAttachments attachments={item.attachments} client={client} />
         )}
@@ -252,7 +266,9 @@ function MessageItem({
         {showActions && (
           <MessageActionsButton
             testId="user-message-actions"
-            onClick={() => onOpenMessageActions?.(item)}
+            onClick={() => {
+              if (rootRef.current !== null) onOpenMessageActions?.(item, rootRef.current)
+            }}
           />
         )}
       </div>
@@ -260,12 +276,9 @@ function MessageItem({
   }
   if (item.role === 'thought') return <ThoughtItem item={item} client={client} />
   const showActions =
-    onOpenMessageActions !== undefined &&
-    sideTaskAvailable &&
-    item.streaming !== true &&
-    item.text.trim() !== ''
+    onOpenMessageActions !== undefined && item.streaming !== true && hasCopyableContent(item)
   return (
-    <div className="message message--agent" data-testid="agent-message">
+    <div className="message message--agent" data-testid="agent-message" ref={rootRef}>
       <MarkdownView text={item.text} testId="agent-markdown" imageLoader={client} />
       {item.images !== undefined && item.images.length > 0 && (
         <MessageImages messageId={item.id} images={item.images} client={client} />
@@ -275,7 +288,9 @@ function MessageItem({
       {showActions && (
         <MessageActionsButton
           testId="agent-message-actions"
-          onClick={() => onOpenMessageActions?.(item)}
+          onClick={() => {
+            if (rootRef.current !== null) onOpenMessageActions?.(item, rootRef.current)
+          }}
         />
       )}
     </div>

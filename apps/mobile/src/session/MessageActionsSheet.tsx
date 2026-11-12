@@ -3,11 +3,15 @@ import { BottomSheet } from '../components/BottomSheet.js'
 import { commandErrorText, strings } from '../strings.js'
 
 export interface MessageActionsSheetProps {
+  readonly canCopyText: boolean
+  readonly canCopyImage: boolean
   readonly canRewind: boolean
   readonly canFork: boolean
   readonly canCreateSideTask: boolean
   readonly online: boolean
   readonly running: boolean
+  readonly onCopyText: () => Promise<void> | void
+  readonly onCopyImage: () => Promise<void> | void
   readonly onRewind: () => void
   readonly onFork: () => Promise<void> | void
   readonly onSideTask: () => Promise<void> | void
@@ -15,21 +19,27 @@ export interface MessageActionsSheetProps {
   readonly onNotice: (text: string) => void
 }
 
+type MessageActionKind = 'copy-text' | 'copy-image' | 'fork' | 'side-task'
+
 export function MessageActionsSheet({
+  canCopyText,
+  canCopyImage,
   canRewind,
   canFork,
   canCreateSideTask,
   online,
   running,
+  onCopyText,
+  onCopyImage,
   onRewind,
   onFork,
   onSideTask,
   onClose,
   onNotice,
 }: MessageActionsSheetProps) {
-  const [busy, setBusy] = useState<'fork' | 'side-task' | undefined>(undefined)
+  const [busy, setBusy] = useState<MessageActionKind | undefined>(undefined)
 
-  const run = async (kind: 'fork' | 'side-task', action: () => Promise<void> | void) => {
+  const run = async (kind: MessageActionKind, action: () => Promise<void> | void) => {
     if (busy !== undefined) return
     setBusy(kind)
     try {
@@ -51,12 +61,34 @@ export function MessageActionsSheet({
       expandKey="message-actions"
     >
       <div className="sheet-options">
+        {canCopyText && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="message-action-copy-text"
+            disabled={busy !== undefined}
+            onClick={() => void run('copy-text', onCopyText)}
+          >
+            {busy === 'copy-text' ? strings.messageCopyTextBusy : strings.messageActionCopyText}
+          </button>
+        )}
+        {canCopyImage && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="message-action-copy-image"
+            disabled={busy !== undefined}
+            onClick={() => void run('copy-image', onCopyImage)}
+          >
+            {busy === 'copy-image' ? strings.messageCopyImageBusy : strings.messageActionCopyImage}
+          </button>
+        )}
         {canRewind && (
           <button
             type="button"
             className="sheet-option sheet-option--neutral"
             data-testid="message-action-rewind"
-            disabled={!online}
+            disabled={!online || busy !== undefined}
             onClick={onRewind}
           >
             {strings.messageActionRewind}

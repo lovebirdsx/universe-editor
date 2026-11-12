@@ -15,6 +15,7 @@
   "dependencies": {
     "@universe-editor/acp-view-model": "workspace:*",
     "@universe-editor/mobile-protocol": "workspace:*",
+    "html-to-image": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
   },

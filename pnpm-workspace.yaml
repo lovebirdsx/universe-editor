@@ -62,6 +62,8 @@ catalog:
   # UI
   allotment: ^1.20.0
   lucide-react: ^0.460.0
+  # 手机 PWA 的「复制成图片」按需加载（浏览器端 DOM → PNG），不进首屏 bundle。
+  html-to-image: ^1.11.13
   # QR rendering for the Mobile Devices settings page. Only the SVG renderer is
   # used (`toString(..., { type: 'svg' })`), so neither the renderer nor the test
   # environment needs a canvas.

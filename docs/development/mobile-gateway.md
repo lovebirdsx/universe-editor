@@ -1358,6 +1358,14 @@ editor 原位置保留 re-export，import 不变。`acpSessionUpdateMeta` 其余
 `universe.mobile.sessionCloseConfirm` / `universe.mobile.sessionRemoveConfirm`）都是手机本地
 localStorage，不走协议。后两个 key 的值为 `ask` / `never`，缺失时按 `ask`（需要确认）处理。
 
+**复制消息 / 复制成图片**：消息 `⋯` 里的复制操作完全在 `apps/mobile` 客户端实现，不新增协议帧。
+复制文本优先 `navigator.clipboard.writeText`，非安全上下文（局域网自签证书）退回 `textarea` +
+`execCommand('copy')`。复制成图片按需动态加载 `html-to-image` 捕获当前消息 DOM（过滤
+`.message__actions`、`skipFonts`、失败远程图用透明占位），并在点击的同步栈内调用
+`navigator.clipboard.write`——WebKit 在 `await` 之后会丢失用户激活并拒绝写入；图片剪贴板不可用时
+打开预览浮层（长按 / 分享 / 保存）。捕获库需要把 blob 图片 fetch 成 data URL，因此网关 CSP 的
+`connect-src` 含 `blob:`；不放开远程 `http(s)`，远程图片在截图中保持占位。
+
 **M4 通知实现位置**：
 
 | 位置                                                                      | 职责                                                                           |
