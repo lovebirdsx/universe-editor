@@ -1,7 +1,14 @@
-import { render, screen, fireEvent, cleanup } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import type {
+  MobileAttentionKind,
+  MobileNotificationPrefs,
+  MobilePushSubscription,
+} from '@universe-editor/mobile-protocol'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import type { MobileClient } from '../../state/mobileClient.js'
+import type { SocketState } from '../../socket/mobileSocket.js'
+import { Store } from '../../state/store.js'
 import { SESSION_DISPLAY_STORAGE_KEY } from '../../session/sessionDisplay.js'
 import {
   SESSION_CLOSE_CONFIRM_STORAGE_KEY,
@@ -20,11 +27,42 @@ const credentials: StoredCredentials = {
   protocolVersion: 5,
 }
 
-function renderDrawer(trusted = false): void {
+interface DrawerHarness {
+  readonly client: MobileClient
+  readonly prefsStore: Store<MobileNotificationPrefs | undefined>
+  readonly socketStore: Store<SocketState>
+  readonly setNotificationPrefs: ReturnType<typeof vi.fn>
+}
+
+interface DrawerOptions {
+  readonly prefs?: MobileNotificationPrefs
+  readonly socketState?: SocketState
+}
+
+function createDrawerClient(trusted: boolean, options: DrawerOptions = {}): DrawerHarness {
+  const prefsStore = new Store<MobileNotificationPrefs | undefined>(options.prefs)
+  const socketStore = new Store<SocketState>(options.socketState ?? 'connected')
+  const setNotificationPrefs = vi.fn(
+    (
+      enabled: boolean,
+      kinds: readonly MobileAttentionKind[] | undefined,
+      alwaysNotify: boolean,
+    ) => {
+      prefsStore.setState({
+        enabled,
+        ...(kinds !== undefined ? { kinds } : {}),
+        alwaysNotify,
+      })
+    },
+  )
   const client = {
-    subscribePush: vi.fn(),
+    subscribePush: vi.fn(
+      (_subscription: MobilePushSubscription, prefs?: MobileNotificationPrefs) => {
+        if (prefs !== undefined) prefsStore.setState(prefs)
+      },
+    ),
     unsubscribePush: vi.fn(),
-    setNotificationPrefs: vi.fn(),
+    setNotificationPrefs,
     getVapidPublicKey: () => undefined,
     getConnectionDiagnosisStore: () => ({
       getState: () => undefined,
@@ -34,9 +72,15 @@ function renderDrawer(trusted = false): void {
       getState: () => trusted,
       subscribe: () => () => undefined,
     }),
+    getNotificationPrefsStore: () => prefsStore,
+    getSocketStateStore: () => socketStore,
     retryDiagnosis: vi.fn(),
     retryConnection: vi.fn(),
   } as unknown as MobileClient
+  return { client, prefsStore, socketStore, setNotificationPrefs }
+}
+
+function renderWithClient(client: MobileClient): void {
   render(
     <SettingsDrawer
       client={client}
@@ -45,6 +89,12 @@ function renderDrawer(trusted = false): void {
       onUnpair={() => undefined}
     />,
   )
+}
+
+function renderDrawer(trusted = false, options: DrawerOptions = {}): DrawerHarness {
+  const harness = createDrawerClient(trusted, options)
+  renderWithClient(harness.client)
+  return harness
 }
 
 describe('SettingsDrawer preferences', () => {
@@ -141,5 +191,124 @@ describe('SettingsDrawer preferences', () => {
     expect(screen.queryByTestId('fullscreen-toggle')).toBeNull()
 
     delete (document as { fullscreenEnabled?: boolean }).fullscreenEnabled
+  })
+})
+
+describe('SettingsDrawer notification preferences', () => {
+  const restores: Array<() => void> = []
+
+  function define(target: object, key: string, value: unknown): void {
+    const descriptor = Object.getOwnPropertyDescriptor(target, key)
+    Object.defineProperty(target, key, { configurable: true, value })
+    restores.push(() => {
+      if (descriptor === undefined) Reflect.deleteProperty(target, key)
+      else Object.defineProperty(target, key, descriptor)
+    })
+  }
+
+  beforeEach(() => {
+    define(window, 'isSecureContext', true)
+    define(window, 'Notification', {
+      permission: 'granted',
+      requestPermission: async () => 'granted',
+    })
+    define(window, 'PushManager', class {})
+    define(navigator, 'serviceWorker', {
+      ready: Promise.resolve({
+        pushManager: {
+          getSubscription: async () => ({
+            toJSON: () => ({
+              endpoint: 'https://fcm.googleapis.com/fcm/send/token',
+              keys: { p256dh: 'p256dh', auth: 'auth' },
+            }),
+          }),
+        },
+      }),
+    })
+  })
+
+  afterEach(() => {
+    while (restores.length > 0) restores.pop()?.()
+  })
+
+  async function renderNotificationDrawer(options: DrawerOptions = {}): Promise<DrawerHarness> {
+    const harness = renderDrawer(false, options)
+    await screen.findByTestId('notification-always')
+    return harness
+  }
+
+  it('hydrates kinds and alwaysNotify from the saved preferences', async () => {
+    await renderNotificationDrawer({
+      prefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+
+    expect((screen.getByTestId('notification-kind-permission') as HTMLInputElement).checked).toBe(
+      true,
+    )
+    expect((screen.getByTestId('notification-kind-question') as HTMLInputElement).checked).toBe(
+      false,
+    )
+    expect((screen.getByTestId('notification-always') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('keeps the hydrated alwaysNotify when toggling a kind', async () => {
+    const harness = await renderNotificationDrawer({
+      prefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+
+    fireEvent.click(screen.getByTestId('notification-kind-completed'))
+
+    expect(harness.setNotificationPrefs).toHaveBeenLastCalledWith(
+      true,
+      ['permission', 'completed'],
+      true,
+    )
+  })
+
+  it('keeps the hydrated kinds when toggling alwaysNotify', async () => {
+    const harness = await renderNotificationDrawer({
+      prefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+
+    fireEvent.click(screen.getByTestId('notification-always'))
+
+    expect(harness.setNotificationPrefs).toHaveBeenLastCalledWith(true, ['permission'], false)
+  })
+
+  it('keeps the preference after closing and reopening the drawer', async () => {
+    const harness = await renderNotificationDrawer({
+      prefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+    cleanup()
+
+    renderWithClient(harness.client)
+    await screen.findByTestId('notification-always')
+
+    expect((screen.getByTestId('notification-kind-permission') as HTMLInputElement).checked).toBe(
+      true,
+    )
+    expect((screen.getByTestId('notification-always') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('applies preferences that arrive after the drawer mounts', async () => {
+    const harness = await renderNotificationDrawer()
+
+    expect((screen.getByTestId('notification-always') as HTMLInputElement).checked).toBe(false)
+    act(() => {
+      harness.prefsStore.setState({ enabled: true, kinds: ['question'], alwaysNotify: true })
+    })
+
+    expect((screen.getByTestId('notification-kind-question') as HTMLInputElement).checked).toBe(
+      true,
+    )
+    expect((screen.getByTestId('notification-always') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('disables the controls until the connection says defaults are authoritative', async () => {
+    const harness = await renderNotificationDrawer({ socketState: 'connecting' })
+
+    expect((screen.getByTestId('notification-always') as HTMLInputElement).disabled).toBe(true)
+    act(() => harness.socketStore.setState('connected'))
+    expect((screen.getByTestId('notification-always') as HTMLInputElement).disabled).toBe(false)
   })
 })

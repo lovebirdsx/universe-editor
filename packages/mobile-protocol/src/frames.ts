@@ -927,6 +927,8 @@ export interface HelloOkFrame {
   webBuildId?: string
   /** VAPID public key (`base64url`), present when Web Push is configured. */
   vapidPublicKey?: string
+  /** Notification preferences saved for this device; absent when never set. */
+  notificationPrefs?: MobileNotificationPrefs
 }
 
 export interface PongFrame {

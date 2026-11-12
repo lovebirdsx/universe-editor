@@ -2,6 +2,7 @@ import {
   MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL_VERSION,
   type HelloOkFrame,
+  type MobileNotificationPrefs,
   type ParseError,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
@@ -27,6 +28,7 @@ interface SocketHarness {
   readonly attempts: number[]
   readonly trusts: boolean[]
   readonly webBuildIds: Array<string | undefined>
+  readonly notificationPrefs: Array<MobileNotificationPrefs | undefined>
   readonly onCredentialsInvalid: ReturnType<typeof vi.fn>
   readonly onProtocolMismatch: ReturnType<typeof vi.fn>
   readonly logger: { warn: ReturnType<typeof vi.fn> }
@@ -41,6 +43,7 @@ function createHarness(): SocketHarness {
   const attempts: number[] = []
   const trusts: boolean[] = []
   const webBuildIds: Array<string | undefined> = []
+  const notificationPrefs: Array<MobileNotificationPrefs | undefined> = []
   const onCredentialsInvalid = vi.fn()
   const onProtocolMismatch = vi.fn()
   const logger = { warn: vi.fn() }
@@ -60,6 +63,7 @@ function createHarness(): SocketHarness {
     onReconnectAttempt: (attempt) => attempts.push(attempt),
     onDeviceTrust: (trusted) => trusts.push(trusted),
     onWebBuildId: (buildId) => webBuildIds.push(buildId),
+    onNotificationPrefs: (prefs) => notificationPrefs.push(prefs),
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -74,6 +78,7 @@ function createHarness(): SocketHarness {
     attempts,
     trusts,
     webBuildIds,
+    notificationPrefs,
     onCredentialsInvalid,
     onProtocolMismatch,
     logger,
@@ -153,6 +158,21 @@ describe('MobileSocket handshake', () => {
     socket.serverOpen()
     socket.serverSend({ ...helloOk(), webBuildId: 'index-new.js' })
     expect(harness.webBuildIds).toEqual(['index-new.js'])
+  })
+
+  it('reports notification preferences from hello_ok', () => {
+    const harness = createHarness()
+    const socket = connect(harness)
+    expect(harness.notificationPrefs).toEqual([undefined])
+
+    socket.serverSend({
+      ...helloOk(),
+      notificationPrefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+    expect(harness.notificationPrefs).toEqual([
+      undefined,
+      { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    ])
   })
 
   it('warns and reports malformed or non-text frames without forwarding them', () => {

@@ -24,6 +24,7 @@ import {
   MOBILE_ATTACHMENT_NAME_HEADER,
   MOBILE_ATTACHMENT_PATH_PREFIX,
   MOBILE_ATTACHMENT_UPLOAD_PATH,
+  MOBILE_ATTENTION_KINDS,
   MOBILE_CERT_PATH,
   MOBILE_CLOSE_CODES,
   MOBILE_DRAFT_IMAGE_PATH,
@@ -38,6 +39,7 @@ import {
   parseClientFrame,
   parsePairRequest,
   serializeFrame,
+  type MobileNotificationPrefs,
   type MobileSessionRef,
   type PairResponse,
   type PushSubscribeFrame,
@@ -46,7 +48,11 @@ import {
 } from '@universe-editor/mobile-protocol'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { AuditLog } from './auditLog.js'
-import { DeviceLimitError, type DeviceStore } from './deviceStore.js'
+import {
+  DeviceLimitError,
+  type DeviceStore,
+  type MobileNotificationPrefsRecord,
+} from './deviceStore.js'
 import { HelloFailureLimiter } from './helloFailureLimiter.js'
 import type { MobileGatewayHub, MobileGatewayHubConnection } from './mobileGatewayHub.js'
 import {
@@ -1170,6 +1176,8 @@ export class MobileGatewayServer {
         ? (this._options.hub?.isConnectionTrusted(connection.hubConnection) ??
           current.trusted === true)
         : current.trusted === true
+    const notificationPrefs =
+      current.notifications !== undefined ? wireNotificationPrefs(current.notifications) : undefined
     this._sendFrame(connection.ws, {
       type: 'hello_ok',
       protocolVersion: MOBILE_PROTOCOL_VERSION,
@@ -1189,6 +1197,7 @@ export class MobileGatewayServer {
       ...(this._options.vapidPublicKey !== undefined
         ? { vapidPublicKey: this._options.vapidPublicKey }
         : {}),
+      ...(notificationPrefs !== undefined ? { notificationPrefs } : {}),
     })
     await this._options.audit.append({
       deviceId: current.deviceId,
@@ -1477,6 +1486,22 @@ export class MobileGatewayServer {
       result,
       ...(detail !== undefined ? { detail } : {}),
     })
+  }
+}
+
+function wireNotificationPrefs(
+  stored: MobileNotificationPrefsRecord,
+): MobileNotificationPrefs | undefined {
+  const kinds = stored.kinds
+  // A hand-edited devices.json can carry kinds the phone's strict parser rejects;
+  // omit the whole snapshot rather than making hello_ok undecodable.
+  if (kinds !== undefined && kinds.some((kind) => !MOBILE_ATTENTION_KINDS.includes(kind))) {
+    return undefined
+  }
+  return {
+    enabled: stored.enabled,
+    ...(kinds !== undefined ? { kinds } : {}),
+    alwaysNotify: stored.alwaysNotify,
   }
 }
 

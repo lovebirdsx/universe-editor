@@ -4,6 +4,7 @@ import {
   parseServerFrame,
   serializeFrame,
   type ClientFrame,
+  type MobileNotificationPrefs,
   type ParseError,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
@@ -66,6 +67,8 @@ export interface MobileSocketOptions {
   readonly onWebBuildId?: ((buildId: string | undefined) => void) | undefined
   /** Whether the PC allows high-risk operations from this device. */
   readonly onDeviceTrust?: ((trusted: boolean) => void) | undefined
+  /** Notification preferences saved on the PC, echoed in `hello_ok`. */
+  readonly onNotificationPrefs?: ((prefs: MobileNotificationPrefs | undefined) => void) | undefined
   /** Foreground/background transitions, mirrored to the gateway as `client_state`. */
   readonly onVisibilityChange?: ((visible: boolean) => void) | undefined
   /** Revoked / unauthorized credentials: the caller must clear local state. */
@@ -105,6 +108,9 @@ export class MobileSocket {
   private readonly _onVapidPublicKey: ((key: string | undefined) => void) | undefined
   private readonly _onWebBuildId: ((buildId: string | undefined) => void) | undefined
   private readonly _onDeviceTrust: ((trusted: boolean) => void) | undefined
+  private readonly _onNotificationPrefs:
+    | ((prefs: MobileNotificationPrefs | undefined) => void)
+    | undefined
   private readonly _onVisibilityChange: ((visible: boolean) => void) | undefined
   private readonly _onCredentialsInvalid: (() => void) | undefined
   private readonly _onProtocolMismatch: (() => void) | undefined
@@ -146,6 +152,7 @@ export class MobileSocket {
     this._onVapidPublicKey = options.onVapidPublicKey
     this._onWebBuildId = options.onWebBuildId
     this._onDeviceTrust = options.onDeviceTrust
+    this._onNotificationPrefs = options.onNotificationPrefs
     this._onVisibilityChange = options.onVisibilityChange
     this._onCredentialsInvalid = options.onCredentialsInvalid
     this._onProtocolMismatch = options.onProtocolMismatch
@@ -249,6 +256,7 @@ export class MobileSocket {
         this._onVapidPublicKey?.(frame.vapidPublicKey)
         this._onWebBuildId?.(frame.webBuildId)
         this._onDeviceTrust?.(frame.trusted)
+        this._onNotificationPrefs?.(frame.notificationPrefs)
         this._handleHelloOk()
         break
       case 'device_trust_changed':

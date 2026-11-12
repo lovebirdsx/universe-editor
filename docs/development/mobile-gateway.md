@@ -141,7 +141,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 18`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 19`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -170,10 +170,12 @@ v16 增加分支推送：`previewPushBranch` / `pushBranch`、`MobilePushBranchP
 光标 / 选区退出草稿协议：`draft_update` 删除 `baseRevision`、draft 删除 `caret`，origin 回显只作
 ack（见 §7c）；v18 增加会话目录删除：`deleteHistorySession` 命令与 `{ durableId, windowId? }`
 payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的行无入口），live 行优先走
-`deleteSession`（见 §6c）。
+`deleteSession`（见 §6c）；v19 增加 `hello_ok.notificationPrefs`：握手时回传该设备已保存的通知
+偏好（`enabled` / `kinds?` / `alwaysNotify`，含 `enabled:false` 的记录），手机端据此回填设置抽屉，
+避免用默认值覆盖已保存偏好。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted }`；`trusted` 表示 PC 是否已
+`hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted, notificationPrefs? }`；`trusted` 表示 PC 是否已
 对该设备开启高风险操作，握手时由 main 的 hub 给出权威值；v7 起的 `hello_ok.capabilities` 为
 
 `['inbox', 'commands', 'notifications', 'history', 'draft', 'attachments']`（`draft` 恒在；`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
@@ -1014,6 +1016,8 @@ Tailscale/WSL 等多个地址，PC 设置页会把它标为 iOS 可选备用地�
 | 手机无前台连接                           | Web Push（VAPID） |
 
 - 网关只对「通知开关打开且 kind 未被过滤」的设备发送；`kinds` 缺省表示四类全收。
+- 通知偏好的权威源是 PC 的 `devices.json`；握手时经 `hello_ok.notificationPrefs` 回传（含
+  `enabled:false` 的记录），手机端据此回填设置抽屉，不落 localStorage。
 - 有前台连接时优先走 WS；发送失败或无前台连接时回落到 Web Push。
 - VAPID 密钥对存 `<userData>/mobile/vapid.json`（`0600`，原子写入），依赖 `web-push`；
   `gateway.json` 的 `vapidSubject` 缺省 `https://universe-editor.example.com`（须为 `mailto:` 或 `https:`）。

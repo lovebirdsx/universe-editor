@@ -935,6 +935,52 @@ describe('mobile gateway server integration', () => {
       .toEqual({ enabled: true, kinds: ['question'], alwaysNotify: false })
   })
 
+  it('returns stored notification preferences in hello_ok', async () => {
+    const gateway = await startGateway()
+    const paired = await pair(gateway.base)
+    const first = await connectWs(gateway.base)
+    cleanup.push(() => first.terminate())
+    expect(await hello(first, paired.token)).not.toHaveProperty('notificationPrefs')
+
+    first.send(
+      JSON.stringify({
+        type: 'set_notification_prefs',
+        enabled: true,
+        kinds: ['permission', 'completed'],
+        alwaysNotify: true,
+      }),
+    )
+    await expect
+      .poll(async () => (await gateway.store.get(paired.deviceId))?.notifications)
+      .toEqual({ enabled: true, kinds: ['permission', 'completed'], alwaysNotify: true })
+
+    const second = await connectWs(gateway.base)
+    cleanup.push(() => second.terminate())
+    expect(await hello(second, paired.token)).toMatchObject({
+      type: 'hello_ok',
+      notificationPrefs: { enabled: true, kinds: ['permission', 'completed'], alwaysNotify: true },
+    })
+
+    first.send(
+      JSON.stringify({
+        type: 'set_notification_prefs',
+        enabled: false,
+        kinds: ['question'],
+        alwaysNotify: true,
+      }),
+    )
+    await expect
+      .poll(async () => (await gateway.store.get(paired.deviceId))?.notifications)
+      .toEqual({ enabled: false, kinds: ['question'], alwaysNotify: true })
+
+    const third = await connectWs(gateway.base)
+    cleanup.push(() => third.terminate())
+    expect(await hello(third, paired.token)).toMatchObject({
+      type: 'hello_ok',
+      notificationPrefs: { enabled: false, kinds: ['question'], alwaysNotify: true },
+    })
+  })
+
   it('tracks the foreground visibility declared by client_state', async () => {
     const gateway = await startGateway()
     const paired = await pair(gateway.base)

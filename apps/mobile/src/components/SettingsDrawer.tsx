@@ -64,8 +64,12 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
   const [capability] = useState<NotificationCapability>(() => detectNotificationCapability())
   const [pushState, setPushState] = useState<PushState>('unknown')
   const [busy, setBusy] = useState(false)
-  const [kinds, setKinds] = useState<readonly MobileAttentionKind[]>(ALL_KINDS)
-  const [alwaysNotify, setAlwaysNotify] = useState(false)
+  const notificationPrefs = useStore(client.getNotificationPrefsStore())
+  const socketState = useStore(client.getSocketStateStore())
+  const kinds = notificationPrefs?.kinds ?? ALL_KINDS
+  const alwaysNotify = notificationPrefs?.alwaysNotify ?? false
+  // Connected with no stored prefs means defaults are authoritative; offline is not.
+  const prefsReady = notificationPrefs !== undefined || socketState === 'connected'
   const [theme, setTheme] = useState<ThemePreference>(() => readThemePreference())
   const [display, setDisplay] = useState<SessionDisplayPreference>(() =>
     readSessionDisplayPreference(),
@@ -179,12 +183,10 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
     const next = checked
       ? ALL_KINDS.filter((candidate) => candidate === kind || kinds.includes(candidate))
       : kinds.filter((candidate) => candidate !== kind)
-    setKinds(next)
     if (pushState === 'enabled') client.setNotificationPrefs(true, next, alwaysNotify)
   }
 
   const updateAlwaysNotify = (next: boolean): void => {
-    setAlwaysNotify(next)
     if (pushState === 'enabled') client.setNotificationPrefs(true, kinds, next)
   }
 
@@ -398,6 +400,7 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
                           checked={kinds.includes(kind)}
                           onChange={(event) => updateKinds(kind, event.currentTarget.checked)}
                           data-testid={`notification-kind-${kind}`}
+                          disabled={!prefsReady}
                         />
                         <span>{KIND_LABELS[kind]}</span>
                       </label>
@@ -409,6 +412,7 @@ export function SettingsDrawer({ client, credentials, onClose, onUnpair }: Setti
                       checked={alwaysNotify}
                       onChange={(event) => updateAlwaysNotify(event.currentTarget.checked)}
                       data-testid="notification-always"
+                      disabled={!prefsReady}
                     />
                     <span>{strings.notificationsAlwaysNotify}</span>
                   </label>

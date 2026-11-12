@@ -654,6 +654,95 @@ describe('MobileClient notifications', () => {
     })
   })
 
+  it('hydrates notification preferences from hello_ok', () => {
+    const { client, sockets } = createHarness()
+    sockets[0]!.serverSend({
+      ...helloOkFrame(),
+      notificationPrefs: { enabled: true, kinds: ['permission'], alwaysNotify: true },
+    })
+    expect(client.getNotificationPrefsStore().getState()).toEqual({
+      enabled: true,
+      kinds: ['permission'],
+      alwaysNotify: true,
+    })
+  })
+
+  it('mirrors preferences sent with subscribePush into the store', () => {
+    const { client } = createHarness()
+    const subscription = {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/token',
+      keys: { p256dh: 'p256dh', auth: 'auth' },
+    }
+    client.subscribePush(subscription, {
+      enabled: true,
+      kinds: ['permission'],
+      alwaysNotify: true,
+    })
+    expect(client.getNotificationPrefsStore().getState()).toEqual({
+      enabled: true,
+      kinds: ['permission'],
+      alwaysNotify: true,
+    })
+  })
+
+  it('keeps a locally edited snapshot over a later hello and replays it', () => {
+    const { client, sockets, timers } = createHarness()
+    const first = sockets[0]!
+    first.serverSend({
+      ...helloOkFrame(),
+      notificationPrefs: { enabled: true, kinds: ['permission'], alwaysNotify: false },
+    })
+    const subscription = {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/token',
+      keys: { p256dh: 'p256dh', auth: 'auth' },
+    }
+    client.subscribePush(subscription)
+    client.setNotificationPrefs(true, ['question'], true)
+
+    first.serverClose(1006)
+    timers.advance(RECONNECT_BASE_MS)
+    const second = sockets[1]!
+    second.serverOpen()
+    second.serverSend({
+      ...helloOkFrame(),
+      notificationPrefs: { enabled: true, kinds: ['permission'], alwaysNotify: false },
+    })
+
+    expect(client.getNotificationPrefsStore().getState()).toEqual({
+      enabled: true,
+      kinds: ['question'],
+      alwaysNotify: true,
+    })
+    expect(sentFrames(second)).toContainEqual({
+      type: 'push_subscribe',
+      subscription,
+      prefs: { enabled: true, kinds: ['question'], alwaysNotify: true },
+    })
+  })
+
+  it('refreshes hydrated prefs from a later hello when nothing was edited locally', () => {
+    const { client, sockets, timers } = createHarness()
+    sockets[0]!.serverSend({
+      ...helloOkFrame(),
+      notificationPrefs: { enabled: true, kinds: ['permission'], alwaysNotify: false },
+    })
+
+    sockets[0]!.serverClose(1006)
+    timers.advance(RECONNECT_BASE_MS)
+    const second = sockets[1]!
+    second.serverOpen()
+    second.serverSend({
+      ...helloOkFrame(),
+      notificationPrefs: { enabled: true, kinds: ['question'], alwaysNotify: true },
+    })
+
+    expect(client.getNotificationPrefsStore().getState()).toEqual({
+      enabled: true,
+      kinds: ['question'],
+      alwaysNotify: true,
+    })
+  })
+
   it('stores a notification only when its session is not open', () => {
     const { client, sockets } = createHarness()
     const socket = sockets[0]!
@@ -689,6 +778,11 @@ describe('MobileClient notifications', () => {
     client.setNotificationPrefs(true, ['question', 'completed'], true)
     expect(sentFrames(socket)).toContainEqual({
       type: 'set_notification_prefs',
+      enabled: true,
+      kinds: ['question', 'completed'],
+      alwaysNotify: true,
+    })
+    expect(client.getNotificationPrefsStore().getState()).toEqual({
       enabled: true,
       kinds: ['question', 'completed'],
       alwaysNotify: true,

@@ -121,7 +121,11 @@ export class MobileClient {
   private _serverTimeOffsetMs = 0
   private _vapidPublicKey: string | undefined
   private _pushSubscription: MobilePushSubscription | undefined
+  /** Prefs this client sent and must replay after a reconnect; local edits win over hello snapshots. */
   private _notificationPrefs: MobileNotificationPrefs | undefined
+  private readonly _notificationPrefsStore = new Store<MobileNotificationPrefs | undefined>(
+    undefined,
+  )
 
   constructor(options: MobileClientOptions) {
     this._logger = options.logger ?? console
@@ -161,6 +165,11 @@ export class MobileClient {
       },
       onDeviceTrust: (trusted) => {
         this._deviceTrusted.setState(trusted)
+      },
+      onNotificationPrefs: (prefs) => {
+        if (this._notificationPrefs === undefined) {
+          this._notificationPrefsStore.setState(prefs)
+        }
       },
       onCredentialsInvalid: () => {
         this._deviceTrusted.setState(false)
@@ -210,6 +219,11 @@ export class MobileClient {
     return this._deviceTrusted
   }
 
+  /** Notification preferences last known for this device; hydrated from `hello_ok`. */
+  getNotificationPrefsStore(): Store<MobileNotificationPrefs | undefined> {
+    return this._notificationPrefsStore
+  }
+
   /** PC entry script differs from the one this page loaded; reload to update. */
   getWebBuildMismatchStore(): Store<WebBuildMismatch | undefined> {
     return this._webBuildMismatch
@@ -249,7 +263,10 @@ export class MobileClient {
 
   subscribePush(subscription: MobilePushSubscription, prefs?: MobileNotificationPrefs): void {
     this._pushSubscription = subscription
-    if (prefs !== undefined) this._notificationPrefs = prefs
+    if (prefs !== undefined) {
+      this._notificationPrefs = prefs
+      this._notificationPrefsStore.setState(prefs)
+    }
     this._send({
       type: 'push_subscribe',
       subscription,
@@ -267,17 +284,14 @@ export class MobileClient {
     kinds: readonly MobileAttentionKind[] | undefined,
     alwaysNotify: boolean,
   ): void {
-    this._notificationPrefs = {
+    const prefs: MobileNotificationPrefs = {
       enabled,
       ...(kinds !== undefined ? { kinds } : {}),
       alwaysNotify,
     }
-    this._send({
-      type: 'set_notification_prefs',
-      enabled,
-      ...(kinds !== undefined ? { kinds } : {}),
-      alwaysNotify,
-    })
+    this._notificationPrefs = prefs
+    this._notificationPrefsStore.setState(prefs)
+    this._send({ type: 'set_notification_prefs', ...prefs })
   }
 
   stop(): void {

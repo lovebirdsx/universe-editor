@@ -1475,6 +1475,10 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
     'hello_ok.vapidPublicKey',
   )
   if (!vapidPublicKey.ok) return vapidPublicKey
+  const notificationPrefs = parseOptional(frame.notificationPrefs, (value) =>
+    parseNotificationPrefs(value, 'hello_ok.notificationPrefs'),
+  )
+  if (!notificationPrefs.ok) return notificationPrefs
   return ok({
     type: 'hello_ok',
     protocolVersion,
@@ -1485,6 +1489,9 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
     capabilities: capabilities.value,
     ...(webBuildId.value !== undefined ? { webBuildId: webBuildId.value } : {}),
     ...(vapidPublicKey.value !== undefined ? { vapidPublicKey: vapidPublicKey.value } : {}),
+    ...(notificationPrefs.value !== undefined
+      ? { notificationPrefs: notificationPrefs.value }
+      : {}),
   })
 }
 

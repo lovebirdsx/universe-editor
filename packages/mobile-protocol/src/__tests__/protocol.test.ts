@@ -609,6 +609,38 @@ describe('parseServerFrame', () => {
     ).toBe('bad_request')
   })
 
+  it('parses hello_ok.notificationPrefs and rejects malformed values', () => {
+    const prefs = { enabled: true, kinds: ['permission', 'question'], alwaysNotify: true }
+    expect(parseServerFrame(helloOkJson({ notificationPrefs: prefs }))).toStrictEqual({
+      ok: true,
+      value: {
+        type: 'hello_ok',
+        protocolVersion: MOBILE_PROTOCOL_VERSION,
+        serverVersion: '0.1.0',
+        deviceId: 'device-1',
+        trusted: false,
+        serverTime: 1_700_000_000_000,
+        capabilities: [],
+        notificationPrefs: prefs,
+      },
+    })
+    expect(
+      parseServerFrame(helloOkJson({ notificationPrefs: { enabled: false, alwaysNotify: false } })),
+    ).toMatchObject({
+      ok: true,
+      value: { notificationPrefs: { enabled: false, alwaysNotify: false } },
+    })
+    for (const notificationPrefs of [
+      null,
+      { enabled: 'yes' },
+      { enabled: true, alwaysNotify: 'yes' },
+      { enabled: true, kinds: ['bogus'] },
+      { enabled: true, kinds: ['permission', 'permission', 'question', 'completed', 'errored'] },
+    ]) {
+      expect(errorCode(parseServerFrame(helloOkJson({ notificationPrefs })))).toBe('bad_request')
+    }
+  })
+
   it('rejects hello_ok without a boolean trusted flag', () => {
     expect(errorCode(parseServerFrame(helloOkJson({ trusted: undefined })))).toBe('bad_request')
     expect(errorCode(parseServerFrame(helloOkJson({ trusted: 'yes' })))).toBe('bad_request')
