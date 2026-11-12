@@ -1,7 +1,6 @@
 import type { MobileConfigOption } from '@universe-editor/mobile-protocol'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { strings } from '../../strings.js'
 import { ConfigSheet } from '../ConfigSheet.js'
 
 const modeOption: MobileConfigOption = {
@@ -9,19 +8,19 @@ const modeOption: MobileConfigOption = {
   name: 'Mode',
   type: 'select',
   currentValue: 'Default',
-  allowedOnMobile: true,
   options: [
-    { value: 'default', label: 'Default', allowedOnMobile: true },
-    { value: 'acceptEdits', label: 'Accept edits', allowedOnMobile: true },
-    { value: 'bypassPermissions', label: 'Bypass permissions', allowedOnMobile: false },
+    { value: 'default', label: 'Default' },
+    { value: 'acceptEdits', label: 'Accept edits' },
+    { value: 'bypassPermissions', label: 'Bypass permissions' },
   ],
 }
 
 describe('ConfigSheet', () => {
-  it('disables high-risk values and labels them as PC-only', () => {
+  it('offers every value including bypass', async () => {
+    const setConfigOption = vi.fn(async () => undefined)
     render(
       <ConfigSheet
-        client={{ setConfigOption: vi.fn(async () => undefined) }}
+        client={{ setConfigOption }}
         option={modeOption}
         online
         onClose={vi.fn()}
@@ -32,9 +31,11 @@ describe('ConfigSheet', () => {
     const values = screen.getAllByTestId('config-value')
     expect(values).toHaveLength(3)
     const bypass = values.find((value) => value.getAttribute('data-value') === 'bypassPermissions')!
-    expect((bypass as HTMLButtonElement).disabled).toBe(true)
-    expect(bypass.textContent).toContain(strings.configNeedsPc)
+    expect((bypass as HTMLButtonElement).disabled).toBe(false)
     expect(values[0]?.getAttribute('data-current')).toBe('true')
+
+    fireEvent.click(bypass)
+    await waitFor(() => expect(setConfigOption).toHaveBeenCalledWith('mode', 'bypassPermissions'))
   })
 
   it('submits the chosen value and closes', async () => {

@@ -65,8 +65,6 @@ export interface MobileSocketOptions {
   readonly onVapidPublicKey?: ((key: string | undefined) => void) | undefined
   /** Entry script the gateway currently serves; lets a stale page prompt for reload. */
   readonly onWebBuildId?: ((buildId: string | undefined) => void) | undefined
-  /** Whether the PC allows high-risk operations from this device. */
-  readonly onDeviceTrust?: ((trusted: boolean) => void) | undefined
   /** Notification preferences saved on the PC, echoed in `hello_ok`. */
   readonly onNotificationPrefs?: ((prefs: MobileNotificationPrefs | undefined) => void) | undefined
   /** Foreground/background transitions, mirrored to the gateway as `client_state`. */
@@ -107,7 +105,6 @@ export class MobileSocket {
   private readonly _onServerTime: ((serverTime: number) => void) | undefined
   private readonly _onVapidPublicKey: ((key: string | undefined) => void) | undefined
   private readonly _onWebBuildId: ((buildId: string | undefined) => void) | undefined
-  private readonly _onDeviceTrust: ((trusted: boolean) => void) | undefined
   private readonly _onNotificationPrefs:
     | ((prefs: MobileNotificationPrefs | undefined) => void)
     | undefined
@@ -151,7 +148,6 @@ export class MobileSocket {
     this._onServerTime = options.onServerTime
     this._onVapidPublicKey = options.onVapidPublicKey
     this._onWebBuildId = options.onWebBuildId
-    this._onDeviceTrust = options.onDeviceTrust
     this._onNotificationPrefs = options.onNotificationPrefs
     this._onVisibilityChange = options.onVisibilityChange
     this._onCredentialsInvalid = options.onCredentialsInvalid
@@ -255,12 +251,8 @@ export class MobileSocket {
         this._onServerTime?.(frame.serverTime)
         this._onVapidPublicKey?.(frame.vapidPublicKey)
         this._onWebBuildId?.(frame.webBuildId)
-        this._onDeviceTrust?.(frame.trusted)
         this._onNotificationPrefs?.(frame.notificationPrefs)
         this._handleHelloOk()
-        break
-      case 'device_trust_changed':
-        this._onDeviceTrust?.(frame.trusted)
         break
       case 'pong':
         this._notePong()

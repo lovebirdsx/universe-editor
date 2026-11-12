@@ -885,7 +885,6 @@ export interface E2EMobileDevice {
   readonly name: string
   readonly platform: string
   readonly connected: boolean
-  readonly trusted: boolean
   readonly notificationsEnabled: boolean
 }
 
@@ -2282,8 +2281,6 @@ export interface E2EProbe {
   getMobileGatewayStatus(): Promise<E2EMobileGatewayStatus>
   /** Paired devices with their live notification switch (no tokens leave main). */
   listMobileDevices(): Promise<readonly E2EMobileDevice[]>
-  /** Grant/revoke high-risk operations for a paired phone (PC settings action). */
-  setMobileDeviceTrust(deviceId: string, trusted: boolean): Promise<void>
 }
 
 declare global {

@@ -160,19 +160,13 @@ export interface MobileConfigOption {
   type: MobileConfigOptionType
   /** Human-readable label of the current value (never the raw value for selects). */
   currentValue: string
-  /**
-   * False when every value of a select would trip the high-risk policy (the
-   * phone cannot change the option at all). Boolean options are always true.
-   */
-  allowedOnMobile: boolean
-  /** Select values, with the label the phone renders and whether it may pick it. */
+  /** Select values, with the label the phone renders. */
   options?: readonly MobileConfigOptionValue[]
 }
 
 export interface MobileConfigOptionValue {
   value: string
   label: string
-  allowedOnMobile: boolean
 }
 
 /** Session usage, pruned to what a phone header needs. */
@@ -187,8 +181,6 @@ export interface MobilePermissionOption {
   optionId: string
   name: string
   kind?: string
-  /** False for `allow_always` and other durable / bypass grants (§7). */
-  allowedOnMobile: boolean
 }
 
 export interface MobileAutoResolve {
@@ -1145,8 +1137,6 @@ export interface HelloOkFrame {
   protocolVersion: number
   serverVersion: string
   deviceId: string
-  /** Whether the PC has marked this device trusted for high-risk operations. */
-  trusted: boolean
   serverTime: number
   capabilities: string[]
   /** Entry script the gateway currently serves; lets a stale PWA prompt for reload. */
@@ -1333,16 +1323,6 @@ export interface DeviceRevokedFrame {
 }
 
 /**
- * PC changed this device's high-risk permission. The phone updates its settings
- * display; the gateway separately sends `resync_required` so open sessions get
- * the new `allowedOnMobile` projection.
- */
-export interface DeviceTrustChangedFrame {
-  type: 'device_trust_changed'
-  trusted: boolean
-}
-
-/**
  * Foreground in-app notification. The body is built by the gateway and never
  * carries prompt text or tool output; Web Push uses the same fields.
  */
@@ -1370,6 +1350,5 @@ export type ServerFrame =
   | ResyncRequiredFrame
   | ServerErrorFrame
   | DeviceRevokedFrame
-  | DeviceTrustChangedFrame
 
 export type ServerFrameType = ServerFrame['type']

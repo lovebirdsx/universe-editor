@@ -41,7 +41,6 @@ function helloOkJson(overrides: Record<string, unknown> = {}): string {
     protocolVersion: MOBILE_PROTOCOL_VERSION,
     serverVersion: '0.1.0',
     deviceId: 'device-1',
-    trusted: false,
     serverTime: 1_700_000_000_000,
     capabilities: [],
     ...overrides,
@@ -111,10 +110,9 @@ function snapshotJson(overrides: Record<string, unknown> = {}): Record<string, u
         category: 'model',
         type: 'select',
         currentValue: 'Claude',
-        allowedOnMobile: true,
         options: [
-          { value: 'sonnet', label: 'Claude', allowedOnMobile: true },
-          { value: 'bypassPermissions', label: 'Bypass', allowedOnMobile: false },
+          { value: 'sonnet', label: 'Claude' },
+          { value: 'bypassPermissions', label: 'Bypass' },
         ],
       },
     ],
@@ -129,8 +127,8 @@ function snapshotJson(overrides: Record<string, unknown> = {}): Record<string, u
       title: 'Run command',
       kind: 'execute',
       options: [
-        { optionId: 'allow', name: 'Allow', kind: 'allow_once', allowedOnMobile: true },
-        { optionId: 'allow-always', name: 'Always', kind: 'allow_always', allowedOnMobile: false },
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+        { optionId: 'allow-always', name: 'Always', kind: 'allow_always' },
       ],
       autoResolve: { optionId: 'allow', deadlineAt: 1_700_000_100_000, paused: false },
     },
@@ -1218,7 +1216,6 @@ describe('parseServerFrame', () => {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       serverVersion: '0.1.0',
       deviceId: 'device-1',
-      trusted: false,
       serverTime: 1_700_000_000_000,
       capabilities: ['inbox'],
     }
@@ -1233,7 +1230,6 @@ describe('parseServerFrame', () => {
         protocolVersion: MOBILE_PROTOCOL_VERSION,
         serverVersion: '0.1.0',
         deviceId: 'device-1',
-        trusted: false,
         serverTime: 1_700_000_000_000,
         capabilities: [],
         webBuildId: 'index-_PQNuEOX.js',
@@ -1256,7 +1252,6 @@ describe('parseServerFrame', () => {
         protocolVersion: MOBILE_PROTOCOL_VERSION,
         serverVersion: '0.1.0',
         deviceId: 'device-1',
-        trusted: false,
         serverTime: 1_700_000_000_000,
         capabilities: [],
         notificationPrefs: prefs,
@@ -1279,17 +1274,8 @@ describe('parseServerFrame', () => {
     }
   })
 
-  it('rejects hello_ok without a boolean trusted flag', () => {
-    expect(errorCode(parseServerFrame(helloOkJson({ trusted: undefined })))).toBe('bad_request')
-    expect(errorCode(parseServerFrame(helloOkJson({ trusted: 'yes' })))).toBe('bad_request')
-  })
-
-  it('parses device_trust_changed and rejects a non-boolean flag', () => {
-    expect(parseServerFrame('{"type":"device_trust_changed","trusted":true}')).toStrictEqual({
-      ok: true,
-      value: { type: 'device_trust_changed', trusted: true },
-    })
-    expect(errorCode(parseServerFrame('{"type":"device_trust_changed","trusted":"yes"}'))).toBe(
+  it('treats device_trust_changed as an unknown frame', () => {
+    expect(errorCode(parseServerFrame('{"type":"device_trust_changed","trusted":true}'))).toBe(
       'bad_request',
     )
   })
@@ -1447,7 +1433,6 @@ describe('parseServerFrame', () => {
             name: 'Model',
             type: 'boolean',
             currentValue: 'On',
-            allowedOnMobile: true,
           },
         ],
       },
@@ -1465,7 +1450,7 @@ describe('parseServerFrame', () => {
           requestId: 'perm-1',
           toolCallId: 'tool-1',
           title: 'Run',
-          options: [{ optionId: 'yes', name: 'Yes', allowedOnMobile: true }],
+          options: [{ optionId: 'yes', name: 'Yes' }],
         },
       },
       {

@@ -51,8 +51,6 @@ export interface MobileDeviceRecord {
   readonly tokenHash: string
   readonly createdAt: number
   readonly lastSeenAt: number
-  /** PC-granted permission for high-risk operations; absent means false. */
-  readonly trusted?: boolean
   readonly notifications?: MobileNotificationPrefsRecord
   readonly push?: MobilePushSubscriptionRecord
 }
@@ -121,7 +119,6 @@ export class DeviceStore {
         tokenHash: hashToken(token),
         createdAt,
         lastSeenAt: createdAt,
-        trusted: false,
       }
       file.devices.push(device)
       await this._save(file)
@@ -152,18 +149,6 @@ export class DeviceStore {
       const next = file.devices.filter((device) => device.deviceId !== deviceId)
       if (next.length === file.devices.length) return false
       await this._save({ version: FILE_VERSION, devices: next })
-      return true
-    })
-  }
-
-  /** Grant or revoke the device's high-risk permission. Returns false when it is gone. */
-  setTrusted(deviceId: string, trusted: boolean): Promise<boolean> {
-    return this._enqueue(async () => {
-      const file = await this._load()
-      const index = file.devices.findIndex((device) => device.deviceId === deviceId)
-      if (index < 0) return false
-      file.devices[index] = { ...file.devices[index]!, trusted: trusted === true }
-      await this._save(file)
       return true
     })
   }
@@ -314,7 +299,6 @@ function isDeviceRecord(value: unknown): value is MobileDeviceRecord {
     typeof value['tokenHash'] === 'string' &&
     typeof value['createdAt'] === 'number' &&
     typeof value['lastSeenAt'] === 'number' &&
-    (value['trusted'] === undefined || typeof value['trusted'] === 'boolean') &&
     (value['notifications'] === undefined || isNotificationPrefs(value['notifications'])) &&
     (value['push'] === undefined || isPushSubscription(value['push']))
   )

@@ -350,23 +350,6 @@ export class MobileGatewayServer {
     }
   }
 
-  /**
-   * Apply a PC trust toggle to every live connection of the device. The hub
-   * marks open sessions desynced so the phone resubscribes with the new
-   * projection; the frame lets the settings page show the new state immediately.
-   */
-  setDeviceTrust(deviceId: string, trusted: boolean): void {
-    for (const connection of this._connections) {
-      if (connection.deviceId !== deviceId) continue
-      if (connection.hubConnection !== undefined) {
-        this._options.hub?.setConnectionTrust(connection.hubConnection, deviceId, trusted)
-      }
-      if (connection.helloReceived) {
-        this._sendFrame(connection.ws, { type: 'device_trust_changed', trusted })
-      }
-    }
-  }
-
   // ---- HTTP -----------------------------------------------------------------
 
   private async _handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -1154,8 +1137,8 @@ export class MobileGatewayServer {
       clearTimeout(connection.helloTimer)
       connection.helloTimer = undefined
     }
-    // Re-read after verify: a PC-side trust toggle or revoke may have landed
-    // while this handshake was waiting on the store queue.
+    // Re-read after verify: a revoke may have landed while this handshake was
+    // waiting on the store queue.
     const current = await this._options.store.get(device.deviceId)
     if (current === undefined) {
       await this._recordHelloFailure(connection, 'unauthorized')
@@ -1164,18 +1147,10 @@ export class MobileGatewayServer {
     }
     connection.deviceName = current.name
     if (connection.hubConnection !== undefined) {
-      this._options.hub?.authenticateConnection(connection.hubConnection, {
-        deviceId: current.deviceId,
-        trusted: current.trusted === true,
-      })
+      this._options.hub?.authenticateConnection(connection.hubConnection, current.deviceId)
     }
     await this._options.store.touch(current.deviceId)
     const webBuildId = await this._resolveWebBuildId().catch(() => undefined)
-    const trusted =
-      connection.hubConnection !== undefined
-        ? (this._options.hub?.isConnectionTrusted(connection.hubConnection) ??
-          current.trusted === true)
-        : current.trusted === true
     const notificationPrefs =
       current.notifications !== undefined ? wireNotificationPrefs(current.notifications) : undefined
     this._sendFrame(connection.ws, {
@@ -1183,7 +1158,6 @@ export class MobileGatewayServer {
       protocolVersion: MOBILE_PROTOCOL_VERSION,
       serverVersion: this._options.serverVersion,
       deviceId: current.deviceId,
-      trusted,
       serverTime: Date.now(),
       capabilities: [
         'inbox',

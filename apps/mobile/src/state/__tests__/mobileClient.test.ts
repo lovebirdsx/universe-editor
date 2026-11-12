@@ -1,8 +1,4 @@
-import {
-  MOBILE_CLOSE_CODES,
-  MOBILE_PROTOCOL_VERSION,
-  type HelloOkFrame,
-} from '@universe-editor/mobile-protocol'
+import { MOBILE_PROTOCOL_VERSION, type HelloOkFrame } from '@universe-editor/mobile-protocol'
 import { describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import { RECONNECT_BASE_MS } from '../../socket/mobileSocket.js'
@@ -19,13 +15,12 @@ const credentials: StoredCredentials = {
   protocolVersion: MOBILE_PROTOCOL_VERSION,
 }
 
-function helloOkFrame(trusted = false, webBuildId?: string): HelloOkFrame {
+function helloOkFrame(webBuildId?: string): HelloOkFrame {
   return {
     type: 'hello_ok',
     protocolVersion: MOBILE_PROTOCOL_VERSION,
     serverVersion: '0.0.0-test',
     deviceId: 'device-1',
-    trusted,
     serverTime: 1,
     capabilities: ['inbox', 'session'],
     ...(webBuildId !== undefined ? { webBuildId } : {}),
@@ -35,7 +30,6 @@ function helloOkFrame(trusted = false, webBuildId?: string): HelloOkFrame {
 function createHarness(
   options: {
     readonly fetchImpl?: typeof fetch
-    readonly trusted?: boolean
     readonly clientWebBuildId?: string
     readonly serverWebBuildId?: string
   } = {},
@@ -77,7 +71,7 @@ function createHarness(
   client.start()
   const first = sockets[0]!
   first.serverOpen()
-  first.serverSend(helloOkFrame(options.trusted, options.serverWebBuildId))
+  first.serverSend(helloOkFrame(options.serverWebBuildId))
   return { client, sockets, timers, fetchImpl }
 }
 
@@ -112,7 +106,7 @@ describe('MobileClient web build id', () => {
     const second = sockets[1]
     expect(second).toBeDefined()
     second!.serverOpen()
-    second!.serverSend(helloOkFrame(false, 'index-old.js'))
+    second!.serverSend(helloOkFrame('index-old.js'))
 
     expect(client.getWebBuildMismatchStore().getState()).toBeUndefined()
   })
@@ -198,20 +192,6 @@ describe('MobileClient session subscription', () => {
   it('corrects the PC clock from hello_ok', () => {
     const { client } = createHarness()
     expect(Math.abs(client.serverNow() - 1)).toBeLessThan(1_000)
-  })
-
-  it('tracks device trust from hello_ok and resets it when credentials are invalid', () => {
-    const trustedHarness = createHarness({ trusted: true })
-    expect(trustedHarness.client.getDeviceTrustedStore().getState()).toBe(true)
-
-    const { client, sockets } = createHarness()
-    expect(client.getDeviceTrustedStore().getState()).toBe(false)
-
-    sockets[0]!.serverSend({ type: 'device_trust_changed', trusted: true })
-    expect(client.getDeviceTrustedStore().getState()).toBe(true)
-
-    sockets[0]!.serverClose(MOBILE_CLOSE_CODES.UNAUTHORIZED)
-    expect(client.getDeviceTrustedStore().getState()).toBe(false)
   })
 
   it('sends a high-frequency draft frame without the command wrapper', () => {

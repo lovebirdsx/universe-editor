@@ -354,7 +354,6 @@ describe('mobile gateway server integration', () => {
     expect(ok).toMatchObject({
       type: 'hello_ok',
       deviceId: paired.deviceId,
-      trusted: false,
       serverVersion: '0.0.0-test',
       capabilities: ['inbox', 'commands', 'notifications', 'history', 'draft'],
     })
@@ -410,26 +409,6 @@ describe('mobile gateway server integration', () => {
       type: 'hello_ok',
       webBuildId: 'index-new.js',
     })
-  })
-
-  it('binds the device trust to the hub and broadcasts trust changes', async () => {
-    const hub = new MobileGatewayHub(new NullLogger())
-    const gateway = await startGateway({ hub })
-    const paired = await pair(gateway.base)
-
-    const ws = await connectWs(gateway.base)
-    cleanup.push(() => ws.terminate())
-    expect(await hello(ws, paired.token)).toMatchObject({ type: 'hello_ok', trusted: false })
-
-    const changed = nextFrame(ws)
-    await gateway.store.setTrusted(paired.deviceId, true)
-    gateway.server.setDeviceTrust(paired.deviceId, true)
-    expect(await changed).toEqual({ type: 'device_trust_changed', trusted: true })
-
-    // A later hello reads the persisted value through the hub.
-    const second = await connectWs(gateway.base)
-    cleanup.push(() => second.terminate())
-    expect(await hello(second, paired.token)).toMatchObject({ type: 'hello_ok', trusted: true })
   })
 
   it('closes unauthorized, protocol-mismatched and silent clients with the matching codes', async () => {
@@ -829,7 +808,6 @@ describe('mobile gateway server integration', () => {
     const ok = await hello(ws, paired.token)
     expect(ok).toMatchObject({
       type: 'hello_ok',
-      trusted: false,
       capabilities: ['inbox', 'commands', 'notifications', 'history', 'draft'],
       vapidPublicKey: 'vapid-public-key',
     })
@@ -1163,7 +1141,6 @@ describe('mobile gateway attachment api', () => {
     const ok = await hello(ws, paired.token)
     expect(ok).toMatchObject({
       type: 'hello_ok',
-      trusted: false,
       capabilities: ['inbox', 'commands', 'notifications', 'history', 'draft', 'attachments'],
     })
 
@@ -1174,7 +1151,6 @@ describe('mobile gateway attachment api', () => {
     const bareOk = await hello(bareWs, barePaired.token)
     expect(bareOk).toMatchObject({
       type: 'hello_ok',
-      trusted: false,
       capabilities: ['inbox', 'commands', 'notifications', 'history', 'draft'],
     })
     const refused = await fetch(`${bare.base}/api/attachments`, {

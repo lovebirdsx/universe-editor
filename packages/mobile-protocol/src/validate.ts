@@ -31,7 +31,6 @@ import type {
   ClientFrame,
   ClientStateFrame,
   CommandFrame,
-  DeviceTrustChangedFrame,
   HelloFrame,
   HelloOkFrame,
   InboxDeltaFrame,
@@ -348,8 +347,6 @@ export function parseServerFrame(text: string): Result<ServerFrame> {
       return parseServerErrorFrame(frame)
     case 'device_revoked':
       return ok({ type: 'device_revoked' })
-    case 'device_trust_changed':
-      return parseDeviceTrustChangedFrame(frame)
     default:
       return fail('bad_request', `unknown server frame type: ${type}`)
   }
@@ -1933,10 +1930,6 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
   if (!isNonEmptyBoundedString(deviceId, MAX_ID_LENGTH)) {
     return fail('bad_request', `hello_ok.deviceId must be 1–${MAX_ID_LENGTH} characters`)
   }
-  const trusted = frame.trusted
-  if (typeof trusted !== 'boolean') {
-    return fail('bad_request', 'hello_ok.trusted must be a boolean')
-  }
   const serverTime = frame.serverTime
   if (!isFiniteNumber(serverTime)) {
     return fail('bad_request', 'hello_ok.serverTime must be a finite number')
@@ -1964,7 +1957,6 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
     protocolVersion,
     serverVersion,
     deviceId,
-    trusted,
     serverTime,
     capabilities: capabilities.value,
     ...(webBuildId.value !== undefined ? { webBuildId: webBuildId.value } : {}),
@@ -1973,16 +1965,6 @@ function parseHelloOkFrame(frame: Record<string, unknown>): Result<HelloOkFrame>
       ? { notificationPrefs: notificationPrefs.value }
       : {}),
   })
-}
-
-function parseDeviceTrustChangedFrame(
-  frame: Record<string, unknown>,
-): Result<DeviceTrustChangedFrame> {
-  const trusted = frame.trusted
-  if (typeof trusted !== 'boolean') {
-    return fail('bad_request', 'device_trust_changed.trusted must be a boolean')
-  }
-  return ok({ type: 'device_trust_changed', trusted })
 }
 
 function parsePongFrame(frame: Record<string, unknown>): Result<PongFrame> {
@@ -2711,9 +2693,6 @@ function parseConfigOptions(value: unknown): Result<MobileConfigOption[]> {
     if (!isBoundedString(currentValue, MAX_TITLE_LENGTH)) {
       return fail('bad_request', 'configOption.currentValue is too large')
     }
-    if (typeof raw.allowedOnMobile !== 'boolean') {
-      return fail('bad_request', 'configOption.allowedOnMobile must be a boolean')
-    }
     const values = parseOptional(raw.options, parseConfigOptionValues)
     if (!values.ok) return values
     options.push({
@@ -2721,7 +2700,6 @@ function parseConfigOptions(value: unknown): Result<MobileConfigOption[]> {
       name,
       type,
       currentValue,
-      allowedOnMobile: raw.allowedOnMobile,
       ...(category.value !== undefined ? { category: category.value } : {}),
       ...(values.value !== undefined ? { options: values.value } : {}),
     })
@@ -2785,10 +2763,7 @@ function parseConfigOptionValues(value: unknown): Result<MobileConfigOptionValue
     if (!isBoundedString(label, MAX_TITLE_LENGTH)) {
       return fail('bad_request', 'configOption.options.label is too large')
     }
-    if (typeof raw.allowedOnMobile !== 'boolean') {
-      return fail('bad_request', 'configOption.options.allowedOnMobile must be a boolean')
-    }
-    options.push({ value: optionValue, label, allowedOnMobile: raw.allowedOnMobile })
+    options.push({ value: optionValue, label })
   }
   return ok(options)
 }
@@ -2855,14 +2830,10 @@ function parsePendingPermission(value: unknown): Result<MobilePendingPermission>
     }
     const optionKind = parseOptionalString(raw.kind, MAX_STATUS_LENGTH, 'permission.options.kind')
     if (!optionKind.ok) return optionKind
-    if (typeof raw.allowedOnMobile !== 'boolean') {
-      return fail('bad_request', 'permission.options.allowedOnMobile must be a boolean')
-    }
     options.push({
       optionId,
       name,
       ...(optionKind.value !== undefined ? { kind: optionKind.value } : {}),
-      allowedOnMobile: raw.allowedOnMobile,
     })
   }
   let autoResolve: { optionId: string; deadlineAt?: number; paused: boolean } | undefined

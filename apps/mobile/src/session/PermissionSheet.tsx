@@ -52,8 +52,7 @@ export function PermissionSheet({ client, permission, online, onNotice }: Permis
     }
   }, [requestId])
 
-  const options = permission.options.filter((option) => option.allowedOnMobile !== false)
-  const hiddenCount = permission.options.length - options.length
+  const options = permission.options
 
   const isPlanReview = permission.kind === 'switch_mode'
   const supportsFeedback =
@@ -118,9 +117,6 @@ export function PermissionSheet({ client, permission, online, onNotice }: Permis
       icon={permissionIcon(permission.kind)}
       testId="permission-sheet"
       expandKey={requestId}
-      footer={
-        hiddenCount > 0 ? <p className="sheet__hint">{strings.pendingHiddenOptions}</p> : undefined
-      }
     >
       <p className="sheet__request" data-testid="permission-title">
         {permission.title}

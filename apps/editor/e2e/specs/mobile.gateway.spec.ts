@@ -227,7 +227,7 @@ async function subscribeSession(
   return snapshot
 }
 
-/** The echo agent's `mode` select carries a high-risk `bypass` value. */
+/** The echo agent's `mode` select carries a `bypass` value. */
 function bypassValue(
   options: Extract<ServerFrame, { type: 'session_snapshot' }>['session']['configOptions'],
 ): MobileConfigOptionValue | undefined {
@@ -238,7 +238,7 @@ function bypassValue(
 
 /**
  * Config options arrive from the agent after `session/new`; re-subscribe until
- * the snapshot carries them so the policy assertions never race the handshake.
+ * the snapshot carries them so assertions never race the handshake.
  */
 async function subscribeWithConfig(
   ws: WebSocket,
@@ -995,13 +995,13 @@ test.describe('mobile gateway', () => {
       const requestId = permission!.requestId
       const allowOnce = permission!.options.find((option) => option.optionId === 'allow-once')
       const durable = permission!.options.find((option) => option.optionId === 'allow-with-updates')
-      expect(allowOnce).toMatchObject({ allowedOnMobile: true })
-      expect(durable).toMatchObject({ allowedOnMobile: false })
+      expect(allowOnce).toBeDefined()
+      expect(durable).toBeDefined()
 
       const forbidden = await sendCommand(ws, 'resolvePermission', {
         ref: row.ref,
         requestId,
-        optionId: 'allow-with-updates',
+        optionId: 'never-offered',
       })
       expect(forbidden).toMatchObject({ ok: false, error: 'forbidden_operation' })
       await expect(page.getByTestId('acp-permission-card')).toBeVisible()
@@ -1046,34 +1046,43 @@ test.describe('mobile gateway', () => {
     }
   })
 
-  test('@p1 grants and revokes high-risk device trust from the PC', async ({ page, workbench }) => {
+  test('@p1 lets the phone switch bypass and grant durable permissions', async ({
+    page,
+    workbench,
+  }) => {
     const { ws, hello } = await connectRawPhone(page, workbench)
     try {
-      expect(hello.trusted).toBe(false)
+      expect(hello).not.toHaveProperty('trusted')
 
       await startEchoSession(page, workbench, { ECHO_AGENT_CONFIG_OPTIONS: '1' })
-      const deviceId = (await page.evaluate(() => window.__E2E__!.listMobileDevices()))[0]?.deviceId
-      if (deviceId === undefined) throw new Error('paired device missing')
-
       const inbox = await subscribeInbox(ws)
       const row = inbox.sessions[0]!
       const initial = await subscribeWithConfig(ws, row.ref)
-      expect(bypassValue(initial.session.configOptions)).toMatchObject({ allowedOnMobile: false })
-
-      const events = collectSessionEvents(ws)
-      const trustChanged = nextFrameOfType(ws, 'device_trust_changed')
-      const resync = nextFrameOfType(ws, 'resync_required')
-      await page.evaluate((id) => window.__E2E__!.setMobileDeviceTrust(id, true), deviceId)
-      expect(await trustChanged).toMatchObject({ trusted: true })
-      expect(await resync).toMatchObject({
-        scope: 'session',
-        reason: 'trust_changed',
-        ref: expect.objectContaining({ localId: row.ref.localId }),
+      expect(bypassValue(initial.session.configOptions)).toEqual({
+        value: 'bypass',
+        label: 'bypassPermissions (auto-approve everything)',
       })
 
-      // Re-subscribing after the resync yields the widened projection.
-      const widened = await subscribeSession(ws, row.ref)
-      expect(bypassValue(widened.session.configOptions)).toMatchObject({ allowedOnMobile: true })
+      const events = collectSessionEvents(ws)
+      const switched = await sendCommand(ws, 'setConfigOption', {
+        ref: row.ref,
+        configId: 'mode',
+        value: 'bypass',
+      })
+      expect(switched).toMatchObject({ ok: true })
+      await expect
+        .poll(
+          () => {
+            const latest = [...events]
+              .reverse()
+              .find((event) => event.type === 'config_options_snapshot')
+            return latest?.type === 'config_options_snapshot'
+              ? latest.options.find((option) => option.id === 'mode')?.currentValue
+              : undefined
+          },
+          { timeout: 5000 },
+        )
+        .toBe('bypassPermissions (auto-approve everything)')
 
       await page.evaluate(() => {
         void window.__E2E__!.sendAcpPrompt('approve-shell')
@@ -1093,7 +1102,7 @@ test.describe('mobile gateway', () => {
         )
         .toBeTruthy()
       const durable = permission!.options.find((option) => option.optionId === 'allow-with-updates')
-      expect(durable).toMatchObject({ allowedOnMobile: true })
+      expect(durable).toBeDefined()
 
       const approved = await sendCommand(ws, 'resolvePermission', {
         ref: row.ref,
@@ -1102,41 +1111,6 @@ test.describe('mobile gateway', () => {
       })
       expect(approved).toMatchObject({ ok: true })
       await expect(page.getByTestId('acp-permission-card')).toBeHidden()
-
-      const revokeChanged = nextFrameOfType(ws, 'device_trust_changed')
-      const revokeResync = nextFrameOfType(ws, 'resync_required')
-      await page.evaluate((id) => window.__E2E__!.setMobileDeviceTrust(id, false), deviceId)
-      expect(await revokeChanged).toMatchObject({ trusted: false })
-      expect(await revokeResync).toMatchObject({ scope: 'session', reason: 'trust_changed' })
-
-      const narrowed = await subscribeSession(ws, row.ref)
-      expect(bypassValue(narrowed.session.configOptions)).toMatchObject({ allowedOnMobile: false })
-
-      const denied = await sendCommand(ws, 'setConfigOption', {
-        ref: row.ref,
-        configId: 'mode',
-        value: 'bypass',
-      })
-      expect(denied).toMatchObject({ ok: false, error: 'forbidden_operation' })
-
-      await openSettings(page, workbench)
-      await expect(page.getByTestId(`mobile-device-trusted-${deviceId}`)).toHaveAttribute(
-        'aria-checked',
-        'false',
-      )
-      await page.getByTestId('mobile-audit-toggle').click()
-      await expect(
-        page
-          .getByTestId('mobile-audit-row')
-          .filter({ hasText: 'High-risk operations allowed' })
-          .first(),
-      ).toBeVisible()
-      await expect(
-        page
-          .getByTestId('mobile-audit-row')
-          .filter({ hasText: 'High-risk operations disallowed' })
-          .first(),
-      ).toBeVisible()
     } finally {
       ws.close()
     }
@@ -1469,11 +1443,10 @@ test.describe('mobile gateway', () => {
 
       const sheet = phone.getByTestId('permission-sheet')
       await expect(sheet).toBeVisible({ timeout: 10_000 })
-      // The durable "allow access" option is PC-only and must not be offered.
-      await expect(phone.locator('[data-option-id="allow-with-updates"]')).toHaveCount(0)
-      await expect(phone.getByText('部分选项需在 PC 上操作')).toBeVisible()
+      // Durable grants are offered to the phone just like on the PC.
+      await expect(phone.locator('[data-option-id="allow-with-updates"]')).toHaveCount(1)
 
-      await phone.locator('[data-option-id="allow-once"]').click()
+      await phone.locator('[data-option-id="allow-with-updates"]').click()
 
       await expect(page.getByTestId('acp-permission-card')).toBeHidden({ timeout: 10_000 })
       await expect(phone.getByTestId('permission-sheet')).toBeHidden()

@@ -14,8 +14,6 @@ import type {
 import type { IObservable, IReader } from '@universe-editor/platform'
 import {
   clampText,
-  isConfigValueAllowedOnMobile,
-  isPermissionOptionAllowedOnMobile,
   isPreviewableImageMimeType,
   MAX_COMMAND_DESCRIPTION_LENGTH,
   MAX_COMMAND_INPUT_HINT_LENGTH,
@@ -442,7 +440,6 @@ export function projectConfigOption(option: SessionConfigOption): MobileConfigOp
       ...(category !== undefined ? { category } : {}),
       type: 'boolean',
       currentValue: option.currentValue ? 'On' : 'Off',
-      allowedOnMobile: true,
     }
   }
   const values = flattenSelectOptions(option.options)
@@ -450,7 +447,6 @@ export function projectConfigOption(option: SessionConfigOption): MobileConfigOp
     .map((value) => ({
       value: clampText(value.value, MAX_TITLE_LENGTH),
       label: clampText(value.name, MAX_TITLE_LENGTH),
-      allowedOnMobile: isConfigValueAllowedOnMobile(value.value),
     }))
   return {
     id: clampText(option.id, MAX_ID_LENGTH),
@@ -461,7 +457,6 @@ export function projectConfigOption(option: SessionConfigOption): MobileConfigOp
       findConfigOptionLabel(option.options, option.currentValue),
       MAX_TITLE_LENGTH,
     ),
-    allowedOnMobile: values.some((value) => value.allowedOnMobile),
     ...(values.length > 0 ? { options: values } : {}),
   }
 }
@@ -526,7 +521,6 @@ export function projectPendingPermission(
       optionId: clampText(option.optionId, MAX_ID_LENGTH),
       name: clampText(option.name, MAX_TITLE_LENGTH),
       ...(option.kind !== undefined ? { kind: clampText(option.kind, MAX_STATUS_LENGTH) } : {}),
-      allowedOnMobile: isPermissionOptionAllowedOnMobile(option),
     })),
     ...(autoResolve !== undefined ? { autoResolve } : {}),
   }

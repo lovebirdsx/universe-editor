@@ -26,7 +26,6 @@ interface SocketHarness {
   readonly frames: ServerFrame[]
   readonly invalidFrames: ParseError[]
   readonly attempts: number[]
-  readonly trusts: boolean[]
   readonly webBuildIds: Array<string | undefined>
   readonly notificationPrefs: Array<MobileNotificationPrefs | undefined>
   readonly onCredentialsInvalid: ReturnType<typeof vi.fn>
@@ -41,7 +40,6 @@ function createHarness(): SocketHarness {
   const frames: ServerFrame[] = []
   const invalidFrames: ParseError[] = []
   const attempts: number[] = []
-  const trusts: boolean[] = []
   const webBuildIds: Array<string | undefined> = []
   const notificationPrefs: Array<MobileNotificationPrefs | undefined> = []
   const onCredentialsInvalid = vi.fn()
@@ -61,7 +59,6 @@ function createHarness(): SocketHarness {
     onFrame: (frame) => frames.push(frame),
     onInvalidFrame: (error) => invalidFrames.push(error),
     onReconnectAttempt: (attempt) => attempts.push(attempt),
-    onDeviceTrust: (trusted) => trusts.push(trusted),
     onWebBuildId: (buildId) => webBuildIds.push(buildId),
     onNotificationPrefs: (prefs) => notificationPrefs.push(prefs),
     onCredentialsInvalid,
@@ -76,7 +73,6 @@ function createHarness(): SocketHarness {
     frames,
     invalidFrames,
     attempts,
-    trusts,
     webBuildIds,
     notificationPrefs,
     onCredentialsInvalid,
@@ -91,7 +87,6 @@ function helloOk(): HelloOkFrame {
     protocolVersion: MOBILE_PROTOCOL_VERSION,
     serverVersion: '0.0.0-test',
     deviceId: 'device-1',
-    trusted: false,
     serverTime: 1,
     capabilities: ['inbox'],
   }
@@ -140,15 +135,6 @@ describe('MobileSocket handshake', () => {
     const socket = connect(harness)
     socket.serverSend({ type: 'inbox_snapshot', seq: 0, sessions: [] })
     expect(harness.frames).toEqual([{ type: 'inbox_snapshot', seq: 0, sessions: [] }])
-  })
-
-  it('reports device trust from hello_ok and device_trust_changed', () => {
-    const harness = createHarness()
-    const socket = connect(harness)
-    socket.serverSend({ type: 'device_trust_changed', trusted: true })
-
-    expect(harness.trusts).toEqual([false, true])
-    expect(harness.frames.some((frame) => frame.type === 'device_trust_changed')).toBe(false)
   })
 
   it('reports the gateway entry script from hello_ok', () => {

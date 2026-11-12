@@ -2549,20 +2549,12 @@ input:focus-visible {
   white-space: nowrap;
 }
 
-.config-chip--blocked {
-  opacity: 0.7;
-}
-
 .config-chip__name {
   color: var(--muted);
 }
 
 .config-chip__value {
   font-weight: 600;
-}
-
-.config-chip__blocked {
-  color: var(--warning);
 }
 
 .config-chip__switch {

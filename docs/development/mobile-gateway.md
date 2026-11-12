@@ -2,15 +2,15 @@
 
 > 状态：**M1 已落地**（协议包、main 网关与配对、PC 设置页、手机 PWA 骨架）；
 > **M2 只读镜像后端已落地**（协议 v2、每窗口会话桥、main 侧收件箱/会话聚合、`acp-view-model`
-> 抽取）；**M3 交互后端已落地**（协议 v3：命令路由、审批仲裁、倒计时下沉、新建会话、高风险限制、
+> 抽取）；**M3 交互后端已落地**（协议 v3：命令路由、审批仲裁、倒计时下沉、新建会话、
 > 幂等与审计）；**M4 通知已落地**（协议 v4：共享 attention 信号、前台 WS 通知、Web Push / VAPID、
 > PC 焦点抑制、通知偏好与深链）；**M5 打包与加固已落地**（`resources/mobile`、局域网自签
 > HTTPS / 证书轮换与指纹、CSP / 审计轮转 / 连接与设备上限、Tailscale / WSL 文档与冒烟）；
 > **M6 会话附件已落地**（协议 v6：图片 / 文件附件经 HTTP 上传到 PC 临时目录，图片走 ACP
 > `image`、文件走 `resource_link`，时间线展示缩略图与文件卡）；**M7 Fork / Rewind / 侧边任务已落地**
 > （协议 v6：非激活分叉与恢复、回退 dry-run 预览、侧边任务列表 / 打开 / 级联删除）；
-> **M8 会话目录已落地**（协议 v7：历史会话搜索与恢复）；**M9 受信设备已落地**（协议 v9：
-> PC 逐设备授权高风险操作，默认关闭）；**M10 会话目录覆盖最近工作区已落地**（协议 v10：
+> **M8 会话目录已落地**（协议 v7：历史会话搜索与恢复）；**M9 受信设备曾落地**（协议 v9：
+> PC 逐设备授权高风险操作；v23 已整体移除，见 M18）；**M10 会话目录覆盖最近工作区已落地**（协议 v10：
 > 历史目录同时读取已打开窗口与最近打开工作区的落盘历史，点击未打开工作区的行会自动开窗恢复）；
 > **M11 手机交付已落地**（协议 v14：手机确认后把子 worktree 的提交交付到 main——预检、提交信息
 > side task、临时树 cherry-pick、冲突 agent 解决、待推送、推送与 worktree 同步、撤销）；
@@ -192,11 +192,14 @@ payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的
 `text?`）与 `resolvePromptRef` 命令——commit 返回最近提交列表，chatContext 在 PC 打开扩展自己的
 选择器（见 §7d）；v23 增加会话内参数配置：只读命令 `getSessionSettings`（子模型当前值 / 候选 +
 按 agent 过滤的 MCP 池 / 选择 / live 状态）、写命令 `setSubagentModel` / `restartAgentProcess` /
-`setSessionMcpServers` 与 `MobileSessionSettings` DTO（见 §6h）。
+`setSessionMcpServers` 与 `MobileSessionSettings` DTO（见 §6h），并删除 `hello_ok.trusted`、
+`device_trust_changed` 帧与 `MobileConfigOption` / `MobileConfigOptionValue` /
+`MobilePermissionOption` 的 `allowedOnMobile`：手机与 PC 权限完全一致，可直接切换 bypass /
+full-access 并提交持久授权选项。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
-`hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted, notificationPrefs? }`；`trusted` 表示 PC 是否已
-对该设备开启高风险操作，握手时由 main 的 hub 给出权威值；v7 起的 `hello_ok.capabilities` 为
+`hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, notificationPrefs? }`；
+v7 起的 `hello_ok.capabilities` 为
 
 `['inbox', 'commands', 'notifications', 'history', 'draft', 'attachments']`（`draft` 恒在；`attachments` 仅在附件服务可用时出现），旧客户端可以只看 `inbox`。
 `webBuildId` 只反映静态资源构建（Vite 每次构建会改入口脚本哈希），不参与协议兼容判断；
@@ -228,7 +231,7 @@ Referer。
 | 会话        | `searchPromptRefs`                       | `{ ref, trigger, query, limit? }`                                               | 只读补全：`trigger` 为 `'@'` / `'#'`，`query` 最长 256，`limit` 默认 20、上限 50；返回 `{ entries }`（见 §7d）                                            |
 | 会话        | `resolvePromptRef`                       | `{ ref, kind: 'commit'\|'chatContext', query, limit?, handle?, label? }`        | 两步选择：commit 返回最近提交（`limit` 默认 50、上限 200）；chatContext 在 PC 弹扩展选择器，取消时无 `entry`；会在 PC 打开 UI，按可修改命令处理（见 §7d） |
 | 会话        | `cancelTurn`                             | `{ ref }`                                                                       | 停止当前 turn                                                                                                                                             |
-| 审批        | `resolvePermission`                      | `{ ref, requestId, optionId, feedback? }`                                       | 高风险选项被拒                                                                                                                                            |
+| 审批        | `resolvePermission`                      | `{ ref, requestId, optionId, feedback? }`                                       | 选项必须是本会话审批请求中下发过的                                                                                                                                            |
 | 审批        | `cancelPermission`                       | `{ ref, requestId }`                                                            | 取消/关闭待审批卡片                                                                                                                                       |
 | 审批        | `resolveElicitation`                     | `{ ref, requestId, action, content? }`                                          | `accept` / `decline` / `cancel`                                                                                                                           |
 | 配置        | `setConfigOption`                        | `{ ref, configId, value }`                                                      | `string`（select）或 `boolean`                                                                                                                            |
@@ -317,8 +320,7 @@ prompt、重复建会话或重复分叉。`resolvePromptRef` 语义只读，但�
 | `session_snapshot` / `session_delta` | 单会话全量 / 增量                                    |
 | `command_result`                     | 按 `requestId` 返回成功或错误码                      |
 | `notification`                       | 前台通知                                             |
-| `resync_required`                    | 队列溢出、seq 缺口或设备受信状态变化，客户端重拉快照 |
-| `device_trust_changed`               | PC 授予 / 收回了该设备的高风险操作权限               |
+| `resync_required`                    | 队列溢出或 seq 缺口，客户端重拉快照                   |
 | `server_error`                       | 服务端内部错误                                       |
 | `device_revoked`                     | 设备被吊销，客户端清凭据并断开                       |
 | `pong`                               | 心跳响应                                             |
@@ -359,7 +361,7 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
 - `availableCommands` 只含展示所需字段：`{ name, description, inputHint? }`。`name` 由桥在投影时
   去掉前导 `/` 并按小写去重；空名或含空白的条目直接丢弃（否则网关的整帧自校验会失败）。
   上限 100 条，name ≤128、description ≤256、inputHint ≤128 字符；快照与增量都发全量列表。
-- v3 的 `MobilePendingPermission` 带 `requestId`、每个选项带 `allowedOnMobile`，并可能带
+- v3 的 `MobilePendingPermission` 带 `requestId`、选项列表，并可能带
   `autoResolve { optionId, deadlineAt?, paused }`；`permission_cleared` 带
   `{ requestId, reason, source }`，让手机区分 PC / 手机 / 自动执行与「被新请求取代」。
 - `message_upsert.attachments` / `images` 缺省表示不变、`[]` 表示清空；`hasNonText` 只表示未被
@@ -371,7 +373,7 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
 | 错误码                 | 语义                                                                             |
 | ---------------------- | -------------------------------------------------------------------------------- |
 | `unauthorized`         | token 缺失/无效/已吊销                                                           |
-| `forbidden_operation`  | 高风险操作被策略拒绝                                                             |
+| `forbidden_operation`  | 命令被拒绝：审批选项未下发过、跨 worktree 限制、远程会话附件等非策略限制         |
 | `session_not_found`    | 会话不存在或已关闭                                                               |
 | `session_read_only`    | 只读预览会话不能写                                                               |
 | `stale_request`        | `requestId` 已不在等待中（重复点击 / 另一端先处理）                              |
@@ -1102,9 +1104,8 @@ file / openEditor / scmChange → `resource_link`，symbol / docs / commit / cha
   `SHA-256(token)`（base64url），校验时一次哈希后与记录做常量时间比较。scrypt 之类慢哈希
   只对低熵口令有意义，且会让未鉴权连接反复发 `hello` 时耗尽 CPU。
 - PC 只存哈希到 `<userData>/mobile/devices.json`（权限 `0600`，当前文件版本 2；旧版记录直接丢弃），
-  记录 `name` / `platform` / `createdAt` / `lastSeenAt` / `trusted?`。`trusted` 是 PC 授予的
-  高风险操作开关，缺省视为 `false`；新增可选字段**不 bump `FILE_VERSION`**，否则升级会清空
-  所有已配对设备。
+  记录 `name` / `platform` / `createdAt` / `lastSeenAt`。v23 起不再有 `trusted`；旧文件里残留的
+  该字段在读写时被忽略，**不 bump `FILE_VERSION`**，否则升级会清空所有已配对设备。
 - 手机存 IndexedDB；每次 WS 在 `hello` 帧携带 token。
 
 **防护**：
@@ -1116,54 +1117,28 @@ file / openEditor / scmChange → `resource_link`，symbol / docs / commit / cha
 - 静态页与 WS 响应加 CSP 等安全头。
 - 吊销立即断开所有该设备连接并发 `device_revoked`。
 
-**高风险操作：默认禁止 + PC 逐设备受信（v9）**：唯一的策略真相仍在
-`packages/mobile-protocol/src/policy.ts`（`isHighRiskPermissionOption` /
-`isConfigValueAllowedOnMobile`），桥与网关共用，UI 只用投影出的 `allowedOnMobile` 隐藏。
-设备默认不受信，行为与 v3 第一期一致：
-
-| 类别                    | 判定                                                                                                                                                                                            |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 权限选项                | 任何 `kind === 'allow_always'` 一律禁止；作用域化持久规则同样禁止：`allow-with-updates`、`allow-skill-exact`、`allow-skill-prefix`、`exit-plan-bypass`                                          |
-| 配置值                  | 值形如 `bypasspermissions` / `bypass` / `dangerously-skip-permissions` / `agent-full-access` / `danger-full-access` / `full-access` / `full_access` 一律禁止（大小写、连字符/下划线归一后匹配） |
-| 自动批准 / 自动执行策略 | 手机没有修改入口；`setConfigOption` 命中的策略值同样被上面的配置值规则拦截                                                                                                                      |
-
-PC 可在「手机设备设置 → 已配对设备」逐台打开 **允许高风险操作**（`devices.json` 的
-`trusted`）。开关默认关闭，开启时用 warning 确认，关闭立即生效；手机端无法修改自己的信任
-状态。信任是**设备级**的，同一设备的所有连接一起变化。
-
-**按连接下发**：renderer 的会话投影是每窗口共享的一份，不能直接按设备分叉。因此
-`MobileBridgeService` 与 hub 的权限缓存始终保存**保守事实**（`allowedOnMobile` /
-`highRisk`），只有 main 的 hub 在发送边界按连接 `trusted` 重写：
-
-- 快照与 delta 出口（`subscribeSession` / `_sendSessionEvents`）对受信连接把命中高风险谓词且
-  原本 `allowedOnMobile:false` 的权限选项、配置值改为 `true`；其余字段原样透传。
-- `resolvePermission` / `setConfigOption` 路由到桥时多传 `allowHighRisk`；桥只在它为 `true`
-  时跳过高风险谓词，`session_read_only`、`stale_request`、未知选项/值等校验全部保留。
-- 信任变化时，hub 把该连接的非 `snapshotPending` 订阅置为 `desynced` 并发送
-  `resync_required { scope:'session', reason:'trust_changed', ref }`，再由
-  `device_trust_changed` 更新手机设置页的展示；手机重订阅后拿到宽化 / 收窄后的快照。
-- 幂等 key 按 `deviceId` 分域，避免不同设备复用同一 `idempotencyKey` 的放行结果。
-
-**双重校验**：
+**手机与 PC 权限一致（v23）**：v23 移除了设备级 trust、`allowedOnMobile` 投影与高风险值门控。
+手机是同一会话的遥控器，可直接切换 `bypassPermissions` / full-access 等配置值，也可提交
+`allow_always` / `allow-with-updates` / `exit-plan-bypass` 等持久授权选项，与 PC 审批卡片一致。
+保留的校验只在两条边界上：
 
 1. **桥**（`MobileBridgeService`）：会话只读回 `session_read_only`；`requestId` 不匹配回
-   `stale_request`；未知选项/值回 `bad_request`；命中高风险且 `allowHighRisk !== true` 回
-   `forbidden_operation`。
-2. **网关**（`MobileGatewayHub`）：从 `permission_upsert` / 快照缓存每个 request 的保守
-   `allowedOnMobile` 与 `highRisk`，`resolvePermission` 只路由能证明「本次确实提供过且允许」的
-   选项：缓存中没有该 `requestId`（已结算/已清除，或从未下发）回 `stale_request`；缓存存在但
-   该选项既未标记允许、也未被当前受信连接放宽回 `forbidden_operation`。缓存缺失不是策略拒绝
-   ——手机只可能从网关自己发出的 `permission_upsert` / 快照得知 `requestId`，而网关先写缓存
-   再发帧，所以缺失只可能是请求已不在等待中（见 §4 错误码）。`setConfigOption` 用同一值谓词
-   再校验一次，仅受信连接跳过高风险谓词。
+   `stale_request`；未知选项/值回 `bad_request`。
+2. **网关**（`MobileGatewayHub`）：从 `permission_upsert` / 快照缓存每个 request 已下发的
+   `optionId` 集合，`resolvePermission` 只路由「本次确实下发过」的选项：缓存中没有该 `requestId`
+   （已结算/已清除，或从未下发）回 `stale_request`；选项不在集合内回 `forbidden_operation`。
+   缓存缺失不是策略拒绝——手机只可能从网关自己发出的 `permission_upsert` / 快照得知
+   `requestId`，而网关先写缓存再发帧。`setConfigOption` 不做值策略检查，只校验桥侧的未知
+   configId / value。
+
+手机拥有与 PC 相同的操控权限，只应在自己的设备上配对并依赖设备锁屏；吊销设备仍会立即断开连接。
 
 **审计**：`<userData>/mobile/audit.jsonl`，按大小轮转。记录
 `ts` / `device` / `remoteAddress` / `action` / `result` / `detail`。所有会修改状态的命令
 （`sendPrompt`、`cancelTurn`、审批/提问、配置、自动执行控制、`newSession`、重命名、关闭、删除、
 fork / rewind / 侧边任务、`openSession`、`setSubagentModel`、`restartAgentProcess`、
 `setSessionMcpServers`、`startDelivery` / `confirmDeliveryPush` /
-`retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree`）都记一条；设备信任开关另记
-`device_trust_granted` / `device_trust_revoked`（未知设备记 `failure`）。`detail` 只含
+`retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree`）都记一条。`detail` 只含
 `window=` / `local=` / `agent=` / `error=` 等
 定位信息，**绝不记 prompt 正文、feedback、提问内容、消息原文、quote、token、`messageId`、
 `sideTaskId` 或文件路径**。只读命令（`getToolCallDetail` / `listWorkspaces` / `listAgents` /
@@ -1494,13 +1469,13 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | M1     | 协议包、网关骨架、配对、设备管理、PC 设置页、手机配对页 + 空收件箱                                                                                                                | 默认关闭；扫码配对成功；吊销即断；未授权被拒                                                                                                                                                 |
 | M2     | 只读镜像：收件箱聚合、会话快照/增量、摘要与详情、抽 `acp-view-model`                                                                                                              | 多窗口会话状态与 PC 一致；流式不卡；重连一致                                                                                                                                                 |
-| M3     | 交互：prompt / 停止 / 模式模型、审批仲裁、倒计时下沉、新建会话（含自动开窗）、高风险限制、审计                                                                                    | 双端审批只生效一次；重连恢复卡片；tab 未开倒计时照常执行                                                                                                                                     |
+| M3     | 交互：prompt / 停止 / 模式模型、审批仲裁、倒计时下沉、新建会话（含自动开窗）、审计                                                                                                | 双端审批只生效一次；重连恢复卡片；tab 未开倒计时照常执行                                                                                                                                     |
 | M4     | 通知：`AgentAttentionSignal`、WS 通知、Web Push、PC 焦点抑制（已落地）                                                                                                            | 两端边沿一致；不重复；点击直达会话                                                                                                                                                           |
 | M5     | 打包、局域网自签 HTTPS、安全加固、Tailscale / WSL 与用户文档、纳入冒烟（已落地）                                                                                                  | 安装包含 `resources/mobile`；`check:full` 与 `e2e:smoke` 通过                                                                                                                                |
 | M6     | 会话附件：HTTP 上传/下载、设备隔离与 TTL、ACP image / resource_link、手机附件 UI 与时间线展示（已落地）                                                                           | 图片与文件经手机发出后 agent 收到正确 block；时间线显示缩略图 / 文件卡；限额与越权用例覆盖                                                                                                   |
 | M7     | Fork / Rewind / 侧边任务：协议 v6、非激活分叉与恢复、回退 dry-run、侧边任务列表 / 打开 / 级联删除（已落地）                                                                       | 手机分叉与打开侧边任务不抢 PC 焦点；回退先预览再执行；首条用户消息 / 运行中 / 能力位边界正确                                                                                                 |
 | M8     | 会话目录：协议 v7、`listSessionHistory` / `openSession`、手机 `/sessions` 页（搜索 / 状态过滤 / 按天分组）、已关闭会话重新打开（已落地；v10 扩展见 M10）                          | 打开历史会话不抢 PC 焦点；live 行不重复 resume；跨工作区 / 归档 / 侧边任务 / 无消息行不出现                                                                                                  |
-| M9     | 受信设备：协议 v9、PC 逐设备开关、按连接宽化投影、审计与手机设置状态展示（已落地）                                                                                                | 默认不受信；开启后手机可切 bypass / 持久授权；关闭后恢复 `forbidden_operation`；grant / revoke 有审计                                                                                        |
+| M9     | 受信设备：协议 v9、PC 逐设备开关、按连接宽化投影、审计与手机设置状态展示（已落地；v23 整体移除，见 M18）                                                                          | 默认不受信；开启后手机可切 bypass / 持久授权；关闭后恢复 `forbidden_operation`；grant / revoke 有审计                                                                                        |
 | M10    | 会话目录覆盖最近工作区：协议 v10、main 只读读盘、已打开优先去重、N 可配（默认 20）、未打开工作区点击后自动开窗恢复、远程工作区同链路、手机提示（已落地）                          | 目录列出已打开 ∪ 最近 N 个关闭工作区；同 durable id 只出现一次且打开窗口优先；点未打开工作区的行会自动开窗并恢复；远程工作区可列出并在开窗失败时回 `workspace_not_open`；收件箱仍只显示 live |
 | M11    | 手机交付：协议 v14、git 扩展交付原语、renderer 交付状态机与提交信息 side task、冲突 agent 解决、待推送确认、推送与 worktree 同步、撤销与重启恢复（已落地）                        | 干净 / 脏源交付到「待推送」；确认后 push 并同步；冲突自动解决或安全失败且 main 不动；main / 远端移动时拒绝撤销；绝对路径不下发手机                                                           |
 | M12    | 手机推送分支：协议 v16、git 扩展 `inspectPushBranch` / `pushBranch`、远端分支名可改、分叉阻断、绝不 force push（已落地）                                                          | 会话分支可 publish 到远端；分叉 / 已推送 / 进行中操作给出 blocker；临时分支可改名到 `tasks/...`；不改 main、不设已有 upstream                                                                |
@@ -1509,6 +1484,7 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M15    | 新建会话目录记忆与项目根：协议 v22、`getNewSessionOptions` 只读命令、复用 `acp.lastSessionCwd`、工作区 `acp.projectRoots` 快捷区（已落地）                                        | 新建页继承该工作区上次创建目录且失效回落根；切换工作区按各自记忆恢复；项目根快捷区只跳转、确认后创建；工作区外路径不下发                                                                     |
 | M16    | `#` 两步引用：协议 v22、`commit` / `chatContext` 搜索入口与 `resolvePromptRef`、git-graph 串行取提交、扩展在 PC 弹选择器、发送重建（已落地）                                      | 手机可选最近提交并发送 `_meta.commit`；扩展入口结果回传后自动插入；PC 取消 / 超时保留 token；协议与三层 clamp 覆盖坏字段                                                                     |
 | M17    | 会话内参数配置：协议 v23、`getSessionSettings` / `setSubagentModel` / `restartAgentProcess` / `setSessionMcpServers`、子模型 FORCE 成对写入、MCP 会话白名单与 live 状态（已落地） | 手机可查看候选并写会话主机 settings；非 claude / 只读 / 跨 agent 名字被拒；运行中重启先确认；MCP 切换在 idle 后收敛                                                                          |
+| M18    | 手机权限与 PC 一致：协议 v23、删除设备 trust / `allowedOnMobile` / 高风险值门控，手机可直接切换 bypass 与持久授权（已落地）                                                   | 手机审批卡片与配置选择器不再隐藏选项；未下发选项仍回 `forbidden_operation`；PC 设置页无「允许高风险操作」开关                                                                                |
 
 ## 13. 已确认的决策记录
 
@@ -1516,7 +1492,9 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 第 13 条为 **2026-11-11**，第 14–15 条为 **2026-11-12**。
 
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
-2. **手机高风险操作默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验；v9 起由 PC 逐设备开启「受信设备」后放开（见决策 12）。
+2. **手机与 PC 权限一致（v23 修订）**：手机是同一会话的遥控器，不单独设高风险门控；
+   `allow_always` / bypass / 自动批准策略与 PC 一样可用，只保留桥与网关的只读 / stale /
+   未下发选项校验（见决策 12）。
 3. **plan 自动执行倒计时下沉到 service**：接受「会话 tab 未打开也会自动执行」的行为变化，并同步测试与用户文档。
    实现见 §5：`AcpPendingPermission.autoResolve` 由 service 持有，状态 observable，PC 卡片只转发
    pause / resume / cancel。
@@ -1548,13 +1526,11 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
     payload 缺 `folder` 时（深链 / 刷新）按 durable id 在前 N 个关闭工作区的落盘历史中反查。
     远程工作区沿用同一链路，开窗失败回 `workspace_not_open`。落盘有 100ms 防抖，目录可能短暂滞后，
     已打开窗口不受影响。收件箱仍只显示 live 会话。
-12. **受信设备是 PC 独占的逐设备开关**：配对照样只证明「连过」，不自动授予高风险能力；默认
-    关闭，开启需 warning 确认，关闭立即生效。信任状态只存 main 的 `devices.json` 并在 hub
-    按连接宽化投影，手机不能自我提权。共享的 renderer 会话投影保持保守，避免同一会话被多台
-    设备查看时互相污染；信任变化用 `resync_required{reason:'trust_changed'}` 让手机重拉快照，
-    而不是在客户端自行推导。`devices.json` 新增可选 `trusted` 不 bump `FILE_VERSION`，防止
-    升级清空已配对设备。撤销对之后到达的命令立即生效；撤销瞬间已进入桥的在途命令可能完成，
-    属于毫秒级窗口并接受。
+12. **设备信任在高风险门控上无法形成边界（v23 移除）**：只要工作区在 PC 上可以开 bypass，
+    针对某台设备的限制就是徒劳的；设备级 trust 还带来按连接宽化投影、`resync_required` 与
+    双重策略校验的复杂度。v23 删除 `trusted`、`device_trust_changed`、`allowedOnMobile` 与
+    PC 设置页开关，手机与 PC 审批权限完全一致。手机丢失的缓解改为吊销设备（立即断开）与
+    设备锁屏；`devices.json` 不 bump `FILE_VERSION`，旧文件里的 `trusted` 字段被忽略。
 13. **交付只在手机手动确认，main 直到推送前不动**：preview → start 先把提交 cherry-pick 到临时
     detached worktree，冲突由 internal agent 解决（最多 1 次）；只有用户点「确认推送」才
     `reset --hard` main 并 push。提交信息由基于原会话的只读 side task 生成，失败即终止（不落
@@ -1589,7 +1565,6 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | 自签证书在 iOS 上的限制                   | 无法安装 PWA / 推送            | 局域网档明确只保证遥控；主推 Tailscale                                                                           |
 | `selfsigned` / `@peculiar/x509` 供应链    | 本地签发失败导致局域网档不可用 | 仅 main 运行时使用；固定 catalog 版本；失败回 `gateway_error` 并在 UI 显示原因；单测覆盖生成与续签               |
 | 安全：DNS rebinding、token 泄漏、审计 PII | 未授权访问/隐私外泄            | Host+Origin 校验、token 只存哈希、审计脱敏、默认关闭                                                             |
-| 受信设备被滥用或手机丢失                  | 任意命令执行、持久放权         | 默认关闭；开启需 PC 确认；随时关闭信任或吊销设备；grant / revoke 写审计；手机不能自我提权                        |
-| 撤销信任瞬间的在途命令                    | 撤销后仍完成一次高风险操作     | hub 在 dispatch 时读取当次 trust；撤销对之后到达的命令立即生效；毫秒级窗口已接受并记录在决策 12                  |
+| 手机权限等同 PC                        | 手机丢失或误操作等于任意命令执行 | 网关默认关闭、配对需 PC 扫码、吊销设备立即断开；只在自己的设备上配对并设置锁屏             |
 | `web-push` 新依赖                         | 供应链与升级成本               | 仅网关侧使用，锁定版本，推送失败可降级为前台 WS 通知                                                             |
 | `userData` 被外部工具整体同步             | 机器相关配置再次跨机共享       | `gateway.json` 固定在 `<userData>/mobile`、不随 configDir 迁移；文档注明该边界，需要跨机共享的设置只放 configDir |

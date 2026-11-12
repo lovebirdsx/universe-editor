@@ -41,12 +41,11 @@ export function ConfigSheet({ client, option, online, onClose, onNotice }: Confi
       expandKey={option.id}
     >
       {values.length === 0 ? (
-        <p className="sheet__hint">{strings.configNeedsPc}</p>
+        <p className="sheet__hint">{strings.configNoOptions}</p>
       ) : (
         <ul className="config-values">
           {values.map((value) => {
             const current = value.label === option.currentValue
-            const blocked = value.allowedOnMobile === false
             return (
               <li key={value.value}>
                 <button
@@ -55,14 +54,11 @@ export function ConfigSheet({ client, option, online, onClose, onNotice }: Confi
                   data-testid="config-value"
                   data-value={value.value}
                   data-current={current ? 'true' : undefined}
-                  disabled={blocked || !online || busyValue !== undefined}
+                  disabled={!online || busyValue !== undefined}
                   onClick={() => void choose(value.value)}
                 >
                   <span className="config-value__label">{value.label}</span>
                   {current && <span className="config-value__check">{strings.configCurrent}</span>}
-                  {blocked && (
-                    <span className="config-value__blocked">{strings.configNeedsPc}</span>
-                  )}
                   {busyValue === value.value && (
                     <span className="config-value__blocked">{strings.configSwitching}</span>
                   )}

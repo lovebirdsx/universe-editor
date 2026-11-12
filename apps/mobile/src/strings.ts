@@ -44,10 +44,6 @@ export const strings = {
   settingsDeviceName: '设备名称',
   settingsDeviceId: '设备 ID',
   settingsPcName: 'PC 名称',
-  settingsDeviceTrusted: '受信设备',
-  settingsDeviceTrustedOn: '是',
-  settingsDeviceTrustedOff: '否',
-  settingsDeviceTrustedHint: '只能由 PC 更改。受信后本机可以切换绕过权限模式，并批准持久授权。',
   settingsUnpair: '解除配对',
   settingsUnpairHint: '解除后需要重新扫码配对才能继续使用。',
 
@@ -270,7 +266,6 @@ export const strings = {
     title === undefined || title === '' ? 'Agent 提问' : `Agent 提问：${title}`,
   pendingElicitationSheetTitle: '回答提问',
   pendingOptionsLabel: '可选操作',
-  pendingHiddenOptions: '部分选项需在 PC 上操作',
   pendingCancel: '取消',
   pendingOffline: 'PC 离线，暂时无法操作',
   pendingResolvedElsewhere: '已在 PC 上处理',
@@ -360,7 +355,7 @@ export const strings = {
   markdownImageLoadFailed: '图片加载失败',
 
   configTitle: '会话设置',
-  configNeedsPc: '需在 PC 上切换',
+  configNoOptions: '暂无可选项',
   configOn: '开',
   configOff: '关',
   configSwitching: '切换中…',

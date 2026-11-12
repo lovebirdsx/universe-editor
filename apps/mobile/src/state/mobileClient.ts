@@ -120,7 +120,6 @@ export class MobileClient {
   private readonly _invalidFrame = new Store<ParseError | undefined>(undefined)
   private readonly _reconnectAttempt = new Store<number>(0)
   private readonly _connectionDiagnosis = new Store<ConnectionDiagnosis | undefined>(undefined)
-  private readonly _deviceTrusted = new Store<boolean>(false)
   private readonly _webBuildMismatch = new Store<WebBuildMismatch | undefined>(undefined)
   private readonly _clientWebBuildId: string | undefined
   private readonly _logger: Pick<Console, 'warn'>
@@ -178,16 +177,12 @@ export class MobileClient {
       onWebBuildId: (buildId) => {
         this._webBuildMismatch.setState(compareWebBuildId(buildId, this._clientWebBuildId))
       },
-      onDeviceTrust: (trusted) => {
-        this._deviceTrusted.setState(trusted)
-      },
       onNotificationPrefs: (prefs) => {
         if (this._notificationPrefs === undefined) {
           this._notificationPrefsStore.setState(prefs)
         }
       },
       onCredentialsInvalid: () => {
-        this._deviceTrusted.setState(false)
         this._webBuildMismatch.setState(undefined)
         this._inbox.reset()
         this._session.reset()
@@ -227,11 +222,6 @@ export class MobileClient {
   /** HTTP verdict about the gateway, probed after repeated socket failures. */
   getConnectionDiagnosisStore(): Store<ConnectionDiagnosis | undefined> {
     return this._connectionDiagnosis
-  }
-
-  /** Whether the PC marks this device trusted for high-risk operations. */
-  getDeviceTrustedStore(): Store<boolean> {
-    return this._deviceTrusted
   }
 
   /** Notification preferences last known for this device; hydrated from `hello_ok`. */

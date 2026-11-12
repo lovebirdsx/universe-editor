@@ -27,33 +27,26 @@ function permission(overrides: Partial<MobilePendingPermission> = {}): MobilePen
     toolCallId: 't1',
     title: 'Run the command',
     options: [
-      { optionId: 'allow-once', name: 'Yes', kind: 'allow_once', allowedOnMobile: true },
+      { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
       {
         optionId: 'allow-with-updates',
         name: 'Yes, and allow access',
         kind: 'allow_always',
-        allowedOnMobile: false,
       },
-      { optionId: 'reject', name: 'No', kind: 'reject_once', allowedOnMobile: true },
+      { optionId: 'reject', name: 'No', kind: 'reject_once' },
     ],
     ...overrides,
   }
 }
 
 describe('PermissionSheet', () => {
-  it('hides mobile-forbidden options and explains why', () => {
-    render(
-      <PermissionSheet
-        client={createClient()}
-        permission={permission()}
-        online
-        onNotice={vi.fn()}
-      />,
-    )
+  it('offers durable grants like any other option', () => {
+    const client = createClient()
+    render(<PermissionSheet client={client} permission={permission()} online onNotice={vi.fn()} />)
 
-    expect(screen.getAllByTestId('permission-option')).toHaveLength(2)
-    expect(screen.queryByText('Yes, and allow access')).toBeNull()
-    expect(screen.getByText(strings.pendingHiddenOptions)).toBeTruthy()
+    expect(screen.getAllByTestId('permission-option')).toHaveLength(3)
+    fireEvent.click(screen.getByText('Yes, and allow access'))
+    expect(client.resolvePermission).toHaveBeenCalledWith('req-1', 'allow-with-updates')
   })
 
   it('shows a loading state and submits the tapped option', async () => {
@@ -145,9 +138,8 @@ describe('PermissionSheet', () => {
               optionId: 'implement_plan',
               name: 'Implement',
               kind: 'allow_once',
-              allowedOnMobile: true,
             },
-            { optionId: 'reject', name: 'No', kind: 'reject_once', allowedOnMobile: true },
+            { optionId: 'reject', name: 'No', kind: 'reject_once' },
           ],
         })}
         online

@@ -130,19 +130,15 @@ export function SessionHeader({
                 <button
                   key={option.id}
                   type="button"
-                  className={`config-chip${option.allowedOnMobile ? '' : ' config-chip--blocked'}`}
+                  className="config-chip"
                   data-testid="config-chip"
                   data-config-id={option.id}
                   aria-label={strings.configOpen(option.name)}
-                  title={option.allowedOnMobile ? undefined : strings.configNeedsPc}
                   disabled={!online || busyConfigId === option.id}
                   onClick={() => onOpenConfig(option.id)}
                 >
                   <span className="config-chip__name">{option.name}</span>
                   <span className="config-chip__value">{option.currentValue}</span>
-                  {!option.allowedOnMobile && (
-                    <span className="config-chip__blocked">{strings.configNeedsPc}</span>
-                  )}
                 </button>
               ),
             )}

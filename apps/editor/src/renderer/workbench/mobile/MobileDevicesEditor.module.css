@@ -430,18 +430,6 @@
   color: var(--vscode-editor-mutedForeground);
 }
 
-.deviceTrust {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-2);
-  font-size: var(--font-size-xs);
-  color: var(--vscode-editor-mutedForeground);
-}
-
-.deviceTrustOn {
-  color: var(--vscode-success-foreground, #89d185);
-}
-
 .empty {
   display: flex;
   flex-direction: column;

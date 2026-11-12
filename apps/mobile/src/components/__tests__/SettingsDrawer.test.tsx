@@ -16,7 +16,6 @@ import {
 } from '../../session/sessionConfirm.js'
 import { THEME_META_COLORS, THEME_STORAGE_KEY } from '../../theme.js'
 import { SettingsDrawer } from '../SettingsDrawer.js'
-import { strings } from '../../strings.js'
 
 const credentials: StoredCredentials = {
   deviceId: 'device-1',
@@ -39,7 +38,7 @@ interface DrawerOptions {
   readonly socketState?: SocketState
 }
 
-function createDrawerClient(trusted: boolean, options: DrawerOptions = {}): DrawerHarness {
+function createDrawerClient(options: DrawerOptions = {}): DrawerHarness {
   const prefsStore = new Store<MobileNotificationPrefs | undefined>(options.prefs)
   const socketStore = new Store<SocketState>(options.socketState ?? 'connected')
   const setNotificationPrefs = vi.fn(
@@ -68,10 +67,6 @@ function createDrawerClient(trusted: boolean, options: DrawerOptions = {}): Draw
       getState: () => undefined,
       subscribe: () => () => undefined,
     }),
-    getDeviceTrustedStore: () => ({
-      getState: () => trusted,
-      subscribe: () => () => undefined,
-    }),
     getNotificationPrefsStore: () => prefsStore,
     getSocketStateStore: () => socketStore,
     retryDiagnosis: vi.fn(),
@@ -91,8 +86,8 @@ function renderWithClient(client: MobileClient): void {
   )
 }
 
-function renderDrawer(trusted = false, options: DrawerOptions = {}): DrawerHarness {
-  const harness = createDrawerClient(trusted, options)
+function renderDrawer(options: DrawerOptions = {}): DrawerHarness {
+  const harness = createDrawerClient(options)
   renderWithClient(harness.client)
   return harness
 }
@@ -117,15 +112,6 @@ describe('SettingsDrawer preferences', () => {
     expect((screen.getByTestId('session-display-onlyMessage') as HTMLInputElement).checked).toBe(
       true,
     )
-  })
-
-  it('shows whether the PC trusts this device', () => {
-    renderDrawer(true)
-    expect(screen.getByText(strings.settingsDeviceTrustedOn)).toBeTruthy()
-
-    cleanup()
-    renderDrawer(false)
-    expect(screen.getByText(strings.settingsDeviceTrustedOff)).toBeTruthy()
   })
 
   it('applies and persists the selected theme', () => {
@@ -232,7 +218,7 @@ describe('SettingsDrawer notification preferences', () => {
   })
 
   async function renderNotificationDrawer(options: DrawerOptions = {}): Promise<DrawerHarness> {
-    const harness = renderDrawer(false, options)
+    const harness = renderDrawer(options)
     await screen.findByTestId('notification-always')
     return harness
   }

@@ -53,7 +53,6 @@ function helloOkFrame(): HelloOkFrame {
     protocolVersion: MOBILE_PROTOCOL_VERSION,
     serverVersion: '0.0.0-test',
     deviceId: 'device-1',
-    trusted: false,
     serverTime: 1,
     capabilities: ['inbox', 'session'],
   }
@@ -197,7 +196,7 @@ describe('SessionPage snapshot rendering', () => {
             requestId: 'req-1',
             toolCallId: 'tool-1',
             title: 'Run command',
-            options: [{ optionId: 'allow', name: 'Allow', allowedOnMobile: true }],
+            options: [{ optionId: 'allow', name: 'Allow' }],
           },
         },
       ],
@@ -341,8 +340,8 @@ describe('SessionPage snapshot rendering', () => {
           toolCallId: 't1',
           title: 'Run the command',
           options: [
-            { optionId: 'allow', name: '允许一次', allowedOnMobile: true },
-            { optionId: 'deny', name: '拒绝', allowedOnMobile: true },
+            { optionId: 'allow', name: '允许一次' },
+            { optionId: 'deny', name: '拒绝' },
           ],
         },
         pendingElicitation: {
@@ -437,7 +436,7 @@ describe('SessionPage snapshot rendering', () => {
     }
   })
 
-  it('drives config chips, boolean switches and the high-risk picker', () => {
+  it('drives config chips, boolean switches and the config picker', () => {
     const { harness } = openPage()
     feed(
       harness.socket,
@@ -448,10 +447,9 @@ describe('SessionPage snapshot rendering', () => {
             name: '模式',
             type: 'select',
             currentValue: '默认',
-            allowedOnMobile: true,
             options: [
-              { value: 'default', label: '默认', allowedOnMobile: true },
-              { value: 'bypassPermissions', label: '完全访问', allowedOnMobile: false },
+              { value: 'default', label: '默认' },
+              { value: 'bypassPermissions', label: '完全访问' },
             ],
           },
           {
@@ -459,7 +457,6 @@ describe('SessionPage snapshot rendering', () => {
             name: '联网',
             type: 'boolean',
             currentValue: 'On',
-            allowedOnMobile: true,
           },
         ],
       }),
@@ -483,8 +480,21 @@ describe('SessionPage snapshot rendering', () => {
     const bypass = screen
       .getAllByTestId('config-value')
       .find((value) => value.getAttribute('data-value') === 'bypassPermissions')!
-    expect((bypass as HTMLButtonElement).disabled).toBe(true)
-    expect(bypass.textContent).toContain(strings.configNeedsPc)
+    expect((bypass as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(bypass)
+
+    const modeCommand = sentFrames(harness.socket)
+      .filter(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as Record<string, unknown>)['kind'] === 'setConfigOption',
+      )
+      .at(-1) as { payload: unknown } | undefined
+    expect(modeCommand?.payload).toMatchObject({
+      configId: 'mode',
+      value: 'bypassPermissions',
+    })
   })
 
   it('renders a removed session and lets the user go back', () => {
@@ -1252,12 +1262,11 @@ function pendingPermission() {
     toolCallId: 't1',
     title: 'Run the command',
     options: [
-      { optionId: 'allow-once', name: '允许一次', kind: 'allow_once', allowedOnMobile: true },
+      { optionId: 'allow-once', name: '允许一次', kind: 'allow_once' },
       {
         optionId: 'allow-with-updates',
         name: '总是允许',
         kind: 'allow_always',
-        allowedOnMobile: false,
       },
     ],
   }
