@@ -363,6 +363,30 @@ export function ExtensionsView() {
   // closing over a value that does not exist yet.
   const navRef = useRef<IFlatListNavigation | undefined>(undefined)
 
+  // Tree parity for the section headers: Left folds an expanded section (or
+  // jumps an entry back to its header), Right expands a folded one (or steps
+  // into its first entry). Shared by the bare arrows and Ctrl+H/Ctrl+L.
+  const moveHorizontal = useCallback(
+    (direction: 'left' | 'right', index: number) => {
+      const row = navigable[index]
+      if (!row) return
+      if (row.kind === 'entry') {
+        const headerIndex = headerNavIndexOf[index] ?? -1
+        if (direction === 'left' && headerIndex >= 0) navRef.current?.focusRow(headerIndex)
+        return
+      }
+      const isCollapsed = collapsed.has(row.section.id)
+      if (direction === 'left') {
+        setSectionCollapsed(row.section.id, true)
+      } else if (isCollapsed) {
+        setSectionCollapsed(row.section.id, false)
+      } else if (row.section.entries.length > 0) {
+        navRef.current?.focusRow(index + 1)
+      }
+    },
+    [navigable, headerNavIndexOf, collapsed, setSectionCollapsed],
+  )
+
   const nav = useFlatListNavigation({
     count: navigable.length,
     focusedIndex,
@@ -386,32 +410,16 @@ export function ExtensionsView() {
       },
       [navigable, toggleSection, openDetail],
     ),
-    // Tree parity for the section headers: Left folds an expanded section (or
-    // jumps an entry back to its header), Right expands a folded one (or steps
-    // into its first entry).
     onRowKeyDown: useCallback(
       (e: React.KeyboardEvent, index: number) => {
         if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
-        const row = navigable[index]
-        if (!row) return
         e.preventDefault()
         e.stopPropagation()
-        if (row.kind === 'entry') {
-          const headerIndex = headerNavIndexOf[index] ?? -1
-          if (e.key === 'ArrowLeft' && headerIndex >= 0) navRef.current?.focusRow(headerIndex)
-          return
-        }
-        const isCollapsed = collapsed.has(row.section.id)
-        if (e.key === 'ArrowLeft') {
-          setSectionCollapsed(row.section.id, true)
-        } else if (isCollapsed) {
-          setSectionCollapsed(row.section.id, false)
-        } else if (row.section.entries.length > 0) {
-          navRef.current?.focusRow(index + 1)
-        }
+        moveHorizontal(e.key === 'ArrowLeft' ? 'left' : 'right', index)
       },
-      [navigable, headerNavIndexOf, collapsed, setSectionCollapsed],
+      [moveHorizontal],
     ),
+    onMoveHorizontal: moveHorizontal,
     onShiftTab: useCallback(() => inputRef.current?.focus(), []),
   })
   navRef.current = nav

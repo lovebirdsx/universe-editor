@@ -254,7 +254,29 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     model.dispose()
   })
 
-  it('leaves Ctrl+J/K to a focused row input', () => {
+  it('moves with Ctrl+H/L while the tree holds focus', () => {
+    const model = makeModel()
+    renderTree(model)
+    act(() => model.setSelection(['0'], '0'))
+    act(() => view().focus())
+
+    fireEvent.keyDown(view(), { key: 'h', ctrlKey: true })
+    expect(model.isExpanded('0')).toBe(false)
+    fireEvent.keyDown(view(), { key: 'l', ctrlKey: true })
+    expect(model.isExpanded('0')).toBe(true)
+    fireEvent.keyDown(view(), { key: 'l', ctrlKey: true })
+    expect(selected()).toEqual(['0/0'])
+    fireEvent.keyDown(view(), { key: 'h', ctrlKey: true })
+    expect(selected()).toEqual(['0'])
+
+    // A leaf has nowhere to expand, but the stroke is still claimed.
+    act(() => model.setSelection(['1'], '1'))
+    expect(fireEvent.keyDown(view(), { key: 'l', ctrlKey: true })).toBe(false)
+    expect(selected()).toEqual(['1'])
+    model.dispose()
+  })
+
+  it('leaves Ctrl+P/N/J/K/H/L to a focused row input', () => {
     const model = makeModel()
     render(
       <Tree<Node>
@@ -273,10 +295,14 @@ describe('Tree — arrow navigation drives model.navigate', () => {
 
     expect(fireEvent.keyDown(input, { key: 'j', ctrlKey: true, bubbles: true })).toBe(true)
     expect(selected()).toEqual(['0'])
+    expect(fireEvent.keyDown(input, { key: 'h', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(model.isExpanded('0')).toBe(true)
+    expect(fireEvent.keyDown(input, { key: 'l', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(selected()).toEqual(['0'])
     model.dispose()
   })
 
-  it('moves with Ctrl+J/K while a row button holds focus, like the arrow keys', () => {
+  it('moves with Ctrl aliases while a row button holds focus, like the arrow keys', () => {
     const model = makeModel()
     render(
       <Tree<Node>
@@ -297,6 +323,11 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     expect(selected()).toEqual(['0/0'])
     fireEvent.keyDown(button, { key: 'k', ctrlKey: true, bubbles: true })
     expect(selected()).toEqual(['0'])
+
+    fireEvent.keyDown(button, { key: 'h', ctrlKey: true, bubbles: true })
+    expect(model.isExpanded('0')).toBe(false)
+    fireEvent.keyDown(button, { key: 'l', ctrlKey: true, bubbles: true })
+    expect(model.isExpanded('0')).toBe(true)
     model.dispose()
   })
 })

@@ -209,6 +209,40 @@ describe('ExtensionsView keyboard navigation', () => {
     expect(focusedLabels()[0]).toContain('acme.one')
   })
 
+  it('Ctrl+H / Ctrl+L fold and expand sections while the list holds focus', () => {
+    setup({ installed: [entry('acme.one'), entry('acme.two')] })
+    act(() => list().focus())
+    expect(focusedLabels()).toEqual(['Installed'])
+
+    expect(fireEvent.keyDown(list(), { key: 'h', ctrlKey: true })).toBe(false)
+    expect(screen.queryAllByTestId('extension-row')).toHaveLength(0)
+    expect(screen.getByTestId('extension-section-header').getAttribute('aria-expanded')).toBe(
+      'false',
+    )
+
+    expect(fireEvent.keyDown(list(), { key: 'l', ctrlKey: true })).toBe(false)
+    expect(screen.getAllByTestId('extension-row')).toHaveLength(2)
+    expect(focusedLabels()).toEqual(['Installed'])
+
+    fireEvent.keyDown(list(), { key: 'l', ctrlKey: true })
+    expect(focusedLabels()[0]).toContain('acme.one')
+  })
+
+  it('Ctrl+H on an entry jumps back to its own section header', async () => {
+    setup({
+      installed: [entry('acme.one')],
+      results: [entry('acme.market', { installed: false })],
+      marketplace: true,
+    })
+    await waitFor(() => expect(screen.getAllByTestId('extension-section-header')).toHaveLength(2))
+    act(() => list().focus())
+
+    fireEvent.keyDown(list(), { key: 'End' })
+    expect(focusedLabels()[0]).toContain('acme.market')
+    expect(fireEvent.keyDown(list(), { key: 'h', ctrlKey: true })).toBe(false)
+    expect(focusedLabels()).toEqual(['Market Extensions'])
+  })
+
   it('ArrowLeft on an entry jumps back to its own section header', async () => {
     setup({
       installed: [entry('acme.one')],

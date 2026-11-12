@@ -26,8 +26,9 @@
  *      the "…" panel: the panel opens with that row expanded and the cursor
  *      inside its option list
  *    - the Ctrl movement aliases (Ctrl+N/P = down/up, Ctrl+H/L = collapse/open
- *      the row) work inside an open surface without reaching quick open, and are
- *      gone again once it closes
+ *      the row, or walk the trigger row when no surface is up) work inside an
+ *      open surface without reaching quick open, and are gone again once it
+ *      closes
  *    - whenever a surface hands the cursor back, the focus context keys the chords
  *      are gated on agree with the DOM (see expectFocusKeysAgreeWithDom)
  *
@@ -234,6 +235,18 @@ test.describe('@p0 agents config bar keyboard', () => {
     await expect(modelTrigger(page)).toBeFocused()
     // ...and the keys the chords are gated on agree with that DOM read.
     await expectFocusKeysAgreeWithDom(page, 'acp-config-model-trigger')
+
+    // Ctrl+L / Ctrl+H walk the trigger row like ← / →, claimed on window capture
+    // because Ctrl+H globally means Replace. No popover may open from the walk.
+    const modeTrigger = page.getByTestId('acp-config-mode-trigger')
+    await page.keyboard.press('Control+l')
+    await expect(modeTrigger).toBeFocused()
+    await page.keyboard.press('Control+h')
+    await expect(modelTrigger(page)).toBeFocused()
+    await expect(modelPopover(page)).toBeHidden()
+    expect(await page.evaluate(() => window.__E2E__!.getContextKey('quickInputVisible'))).toBe(
+      false,
+    )
 
     // Past the end: the bar reports how many entries the session actually has,
     // and the chord must not fall through to the workbench. Alt+<digit> is

@@ -129,6 +129,61 @@ describe('useFlatListNavigation — navigation keys', () => {
     expect(selected()).toEqual(['row-0'])
   })
 
+  it('leaves Ctrl+H/L to the global bindings when no horizontal handler is provided', () => {
+    const onFocusChange = vi.fn()
+    render(<Harness focusedIndex={0} onFocusChange={onFocusChange} />)
+    act(() => list().focus())
+
+    expect(fireEvent.keyDown(list(), { key: 'h', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(list(), { key: 'l', ctrlKey: true })).toBe(true)
+    expect(onFocusChange).not.toHaveBeenCalled()
+  })
+
+  it('forwards Ctrl+H/L to onMoveHorizontal when provided', () => {
+    const onMoveHorizontal = vi.fn()
+    render(<Harness focusedIndex={2} onMoveHorizontal={onMoveHorizontal} />)
+    act(() => list().focus())
+
+    expect(fireEvent.keyDown(list(), { key: 'h', ctrlKey: true })).toBe(false)
+    expect(onMoveHorizontal).toHaveBeenLastCalledWith('left', 2)
+    expect(fireEvent.keyDown(list(), { key: 'l', ctrlKey: true })).toBe(false)
+    expect(onMoveHorizontal).toHaveBeenLastCalledWith('right', 2)
+  })
+
+  it('claims horizontal aliases at a boundary without calling the handler', () => {
+    const onMoveHorizontal = vi.fn()
+    render(
+      <Harness focusedIndex={-1} focusSelectsFirst={false} onMoveHorizontal={onMoveHorizontal} />,
+    )
+    act(() => list().focus())
+
+    expect(fireEvent.keyDown(list(), { key: 'h', ctrlKey: true })).toBe(false)
+    expect(onMoveHorizontal).not.toHaveBeenCalled()
+  })
+
+  it('picks up an onMoveHorizontal added after mount without re-registering', () => {
+    const onMoveHorizontal = vi.fn()
+    const view = render(<Harness focusedIndex={0} />)
+    act(() => list().focus())
+    expect(fireEvent.keyDown(list(), { key: 'h', ctrlKey: true })).toBe(true)
+
+    view.rerender(<Harness focusedIndex={0} onMoveHorizontal={onMoveHorizontal} />)
+
+    expect(fireEvent.keyDown(list(), { key: 'h', ctrlKey: true })).toBe(false)
+    expect(onMoveHorizontal).toHaveBeenCalledWith('left', 0)
+  })
+
+  it('leaves Ctrl+H/L to a focused inner input', () => {
+    const onMoveHorizontal = vi.fn()
+    render(<Harness focusedIndex={0} withInnerInput onMoveHorizontal={onMoveHorizontal} />)
+    const input = screen.getByTestId('inner-input')
+    act(() => input.focus())
+
+    expect(fireEvent.keyDown(input, { key: 'h', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(fireEvent.keyDown(input, { key: 'l', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(onMoveHorizontal).not.toHaveBeenCalled()
+  })
+
   it('leaves Ctrl+J/K to a focused inner input', () => {
     render(<Harness focusedIndex={0} withInnerInput />)
     const input = screen.getByTestId('inner-input')

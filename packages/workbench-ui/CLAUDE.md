@@ -57,7 +57,7 @@ Workbench 风格 React UI 基础设施。**依赖 React，不依赖 Electron**�
 - **不依赖 platform DI**：通过 props 接收服务实例，不用 `@IFooService` 装饰器
 - **图标走 props/children 注入**：不引应用图标库（如 `lucide-react`）；调用方传入图标元素或 `renderIcon` 回调
 - 可选 className 类 props 声明为 `string | undefined`（兼容调用方传入的 `styles['x']`，应对 `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes`）
-- **列表 Ctrl 别名统一走 `keybinding/ctrlNavigationRegistry.ts`**：window capture 抢在 chord-first dispatcher 之前，按 `menu > dialog > overlay > list` 只激活一层；list 默认要求容器自身是 `activeElement` 且拒绝 editable 焦点。Tree/FlatList（list 层）、Select（overlay 层）已接入；代价是这些 surface 聚焦期间 `Ctrl+K` 和弦不可用。
+- **列表 Ctrl 别名统一走 `keybinding/ctrlNavigationRegistry.ts`**：window capture 抢在 chord-first dispatcher 之前，按 `menu > dialog > overlay > list` 只激活一层；list 默认要求容器自身是 `activeElement` 且拒绝 editable 焦点。Tree 注册四方向，FlatList 仅宿主传 `onMoveHorizontal` 时才注册左右（`directions` 每帧读取，可后加）；Select（overlay 层）已接入；代价是这些 surface 聚焦期间 `Ctrl+K` 和弦不可用。
 - 测试文件位于 `src/__tests__/`，环境 `happy-dom`
   - ⚠️ happy-dom **丢弃 inline style 里的 `var()`**：那条声明读回空串，若它还是该元素唯一的声明，`el.getAttribute('style')` 直接是 `null`（其余声明正常保留）。涉及 CSS 变量的样式写不成断言（`--view-background` 那条就因此只能靠审查 + 真机验证）。
 - **滚动列表的绘制约定**（滚动内容要不透明底衬 / 行定位用 `top` 不用 `transform` / reveal 只滚自己的 scroller、禁用 `scrollIntoView`）见 [docs/development/scroll-lists.md](../../docs/development/scroll-lists.md)。`Tree`/`VirtualList` 的行是透明底，底衬由 `VirtualList` 的 spacer 打、颜色取宿主 republish 的 `--view-background`——**part 根要设它，未走 portal 且自绘背景的浮层也要设它**：漏前者退回残影，漏后者会把宿主 part 的颜色涂到浮层上。手写虚拟化列表（`ChatBody` / `QuickInputPanel` / `useFlatListNavigation` 的 reveal）尚未跟上这套约定。

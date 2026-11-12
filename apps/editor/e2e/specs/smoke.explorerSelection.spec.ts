@@ -180,4 +180,50 @@ test.describe('@p1 explorer selection feedback', () => {
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
+
+  test('Ctrl+H/L collapse, expand and descend the tree without leaking to replace', async ({
+    workbench,
+    page,
+  }) => {
+    const tmpDir = mkTempDir('ue2-sel-ctrl-hl-')
+    await fs.mkdir(path.join(tmpDir, 'src'), { recursive: true })
+    await fs.writeFile(path.join(tmpDir, 'src', 'child.ts'), 'export {}\n')
+
+    await workbench.waitForRestored()
+    await workbench.openWorkspace(tmpDir)
+
+    const src = page.locator('[role="treeitem"]', { hasText: 'src' })
+    const child = page.locator('[role="treeitem"]', { hasText: 'child.ts' })
+    await expect(src).toBeVisible({ timeout: 5000 })
+
+    // Opening the workspace arms a focus-restore window; wait it out, then click
+    // the child so the tree (not the editor) owns the keyboard.
+    await src.click()
+    await page.waitForTimeout(RESTORE_WINDOW_MS)
+    await child.click()
+    await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
+    await expect(child).toHaveAttribute('aria-selected', 'true')
+
+    // Left from the child selects its parent; Left again collapses it.
+    await page.keyboard.press('Control+h')
+    await expect(src).toHaveAttribute('aria-selected', 'true')
+    await page.keyboard.press('Control+h')
+    await expect(child).toHaveCount(0)
+    await expect(src).toHaveAttribute('aria-expanded', 'false')
+
+    // Right expands, then steps into the first child; Left comes back.
+    await page.keyboard.press('Control+l')
+    await expect(child).toBeVisible()
+    await page.keyboard.press('Control+l')
+    await expect(child).toHaveAttribute('aria-selected', 'true')
+    await page.keyboard.press('Control+h')
+    await expect(src).toHaveAttribute('aria-selected', 'true')
+
+    // None of the strokes reached the global replace / quick-open commands.
+    await expect.poll(() => workbench.getContextKey<boolean>('findWidgetVisible')).toBe(false)
+    await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
+    await expect(page.locator('[role="tree"][data-focused="true"]').first()).toBeVisible()
+
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+  })
 })

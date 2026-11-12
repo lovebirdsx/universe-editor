@@ -5,14 +5,18 @@
  *  global keybinding handler claims in the document capture phase before the keys
  *  could reach the tree, so they must be real commands gated on `focusedView`.
  *
- *  Ctrl+J rides along with Ctrl+N as the down alias. Ctrl+K is the app's chord
- *  leader (Ctrl+K Ctrl+S, …) and chord-first resolution means a single-stroke
- *  Ctrl+K binding can never fire, so the up pair is only complete while the tree
- *  container itself has DOM focus — `ctrlNavigationRegistry` claims Ctrl+P/N/J/K
- *  at the window capture phase there (see packages/workbench-ui). These commands
- *  remain the fallback while `focusedView` holds but focus sits elsewhere in the
- *  view body — including the filter box, where they keep the aliases on the
- *  outline list instead of letting the global commands run behind it.
+ *  Ctrl+J rides along with Ctrl+N as the down alias, Ctrl+H / Ctrl+L with B/F as
+ *  the horizontal pair. Ctrl+K is the app's chord leader (Ctrl+K Ctrl+S, …) and
+ *  chord-first resolution means a single-stroke Ctrl+K binding can never fire,
+ *  so the up pair is only complete while the tree container itself has DOM
+ *  focus — `ctrlNavigationRegistry` claims Ctrl+P/N/J/K/H/L at the window
+ *  capture phase there (see packages/workbench-ui). These commands remain the
+ *  fallback while `focusedView` holds but focus sits elsewhere in the view body
+ *  — including the filter box, where they keep the aliases on the outline list
+ *  instead of letting the global commands run behind it. Ctrl+H shares its key
+ *  with Replace; the weight below wins only while `OUTLINE_FOCUS_WHEN` holds.
+ *  Ctrl+L has no dispatcher-level global single-key binding (Monaco's
+ *  expandLineSelection is editor-internal).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -89,7 +93,7 @@ export class OutlineNavigateLeftAction extends OutlineNavigateAction {
     super(
       OutlineNavigateLeftAction.ID,
       localize2('action.outline.navigateLeft', 'Outline: Collapse or Select Parent'),
-      ['ctrl+b'],
+      ['ctrl+b', 'ctrl+h'],
       'left',
     )
   }
@@ -101,7 +105,7 @@ export class OutlineNavigateRightAction extends OutlineNavigateAction {
     super(
       OutlineNavigateRightAction.ID,
       localize2('action.outline.navigateRight', 'Outline: Expand or Select First Child'),
-      ['ctrl+f'],
+      ['ctrl+f', 'ctrl+l'],
       'right',
     )
   }

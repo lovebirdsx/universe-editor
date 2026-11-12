@@ -185,8 +185,8 @@ function registerLayer(doc: Document, entry: LayerEntry): () => void {
 
 /**
  * Register the calling component as the current document's list-navigation
- * layer. Register only the directions the surface really implements: a Tree
- * leaves Ctrl+H/L alone, so replace/select-line keep their global meaning.
+ * layer. Register only the directions the surface really implements: a flat
+ * list with no horizontal semantics leaves Ctrl+H/L to replace/select-line.
  */
 export function useCtrlNavigationLayer(options: ICtrlNavigationLayerOptions): void {
   const contextDoc = useContext(OwnerDocumentContext)

@@ -469,20 +469,20 @@ export function Tree<T>(props: ITreeProps<T>) {
     dispatchKeyboardContextMenu(row ?? root, row !== null)
   }, [])
 
-  // Ctrl+P/N/J/K step the tree exactly like ArrowUp/ArrowDown. The registry
-  // claims them on window capture, before the global quick-open/new-file
-  // bindings. `within` (not the list default `self`) matches the arrow keys:
-  // row controls such as Search's collapse / replace-all buttons keep DOM
-  // focus on the button, and the keydown still reaches the container. Editable
-  // targets are rejected separately, so a row's inline editor keeps its keys.
-  // Horizontal aliases stay global (Ctrl+H/L are replace / select-line);
-  // Outline's Ctrl+B/F remain the left/right gestures for that view.
+  // Ctrl+P/N/J/K step the tree exactly like ArrowUp/ArrowDown, and Ctrl+H/L
+  // mirror ArrowLeft/ArrowRight (collapse / go to parent, expand / enter first
+  // child). The registry claims them on window capture, before the global
+  // quick-open/new-file/replace/select-line bindings. `within` (not the list
+  // default `self`) matches the arrow keys: row controls such as Search's
+  // collapse / replace-all buttons keep DOM focus on the button, and the
+  // keydown still reaches the container. Editable targets are rejected
+  // separately, so a row's inline editor keeps its keys.
   useCtrlNavigationLayer({
     kind: 'list',
     focus: 'within',
-    directions: ['up', 'down'],
+    directions: ['up', 'down', 'left', 'right'],
     getElement: () => containerRef.current,
-    onMove: (direction) => model.navigate(direction === 'up' ? 'up' : 'down'),
+    onMove: (direction) => model.navigate(direction),
   })
 
   // 身份恒定、body 最新：返回的行处理器每次调用现造（读到当前 model / onActivate），

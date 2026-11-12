@@ -39,7 +39,12 @@ import {
 import { CancelAgentTurnAction } from '../agentSessionActions.js'
 import { CancelExplorerMultiSelectionAction } from '../explorerSelectionActions.js'
 import { MarkdownPreviewFindCloseAction } from '../markdownActions.js'
-import { OutlineNavigateDownAction, OutlineNavigateUpAction } from '../outlineActions.js'
+import {
+  OutlineNavigateDownAction,
+  OutlineNavigateLeftAction,
+  OutlineNavigateRightAction,
+  OutlineNavigateUpAction,
+} from '../outlineActions.js'
 
 /**
  * A conflicting global command bound to the same key at the DEFAULT weight
@@ -164,6 +169,20 @@ const SCENARIOS: readonly Scenario[] = [
     context: { focusedView: 'workbench.view.outline.main' },
     scoped: OutlineNavigateUpAction,
     scopedId: OutlineNavigateUpAction.ID,
+  },
+  {
+    name: 'Outline navigate left alias (ctrl+h) beats global ctrl+h',
+    key: 'ctrl+h',
+    context: { focusedView: 'workbench.view.outline.main' },
+    scoped: OutlineNavigateLeftAction,
+    scopedId: OutlineNavigateLeftAction.ID,
+  },
+  {
+    name: 'Outline navigate right alias (ctrl+l) beats global ctrl+l',
+    key: 'ctrl+l',
+    context: { focusedView: 'workbench.view.outline.main' },
+    scoped: OutlineNavigateRightAction,
+    scopedId: OutlineNavigateRightAction.ID,
   },
   {
     name: 'Explorer cancel multi-selection (escape) beats global escape',

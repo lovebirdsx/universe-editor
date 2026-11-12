@@ -311,6 +311,28 @@ describe('ConfigOptionsBar', () => {
     expect(modeTrigger.textContent).toContain('Default')
   })
 
+  it('moves between triggers with Ctrl+H / Ctrl+L while a trigger holds focus', () => {
+    renderWithServices(<ConfigOptionsBar session={makeSession([MODEL_OPTION, MODE_OPTION])} />)
+    const modelTrigger = screen.getByTestId('acp-config-model-trigger')
+    const modeTrigger = screen.getByTestId('acp-config-mode-trigger')
+
+    act(() => modelTrigger.focus())
+    expect(document.activeElement).toBe(modelTrigger)
+
+    expect(fireEvent.keyDown(modelTrigger, { key: 'l', ctrlKey: true })).toBe(false)
+    expect(document.activeElement).toBe(modeTrigger)
+    expect(fireEvent.keyDown(modeTrigger, { key: 'h', ctrlKey: true })).toBe(false)
+    expect(document.activeElement).toBe(modelTrigger)
+
+    // The aliases move the caret only: no popover opens.
+    expect(screen.queryByTestId('acp-config-model-popover')).toBeNull()
+    expect(screen.queryByTestId('acp-config-mode-popover')).toBeNull()
+
+    // The bare arrows still walk the same line.
+    fireEvent.keyDown(modelTrigger, { key: 'ArrowRight' })
+    expect(document.activeElement).toBe(modeTrigger)
+  })
+
   it('marks the Auto review row when the credential cannot serve its reviewer', () => {
     const session = makeSession([CODEX_MODE_OPTION], { agentId: 'codex' })
     renderWithServices(
@@ -699,6 +721,20 @@ describe('ConfigOptionsBar — overflow', () => {
     expect(screen.getByTestId('acp-config-overflow-trigger').getAttribute('data-empty')).toBe(
       'true',
     )
+  })
+
+  it('horizontal aliases only visit triggers that are still inline', async () => {
+    const { bar } = renderNarrow(230)
+    await fireResize()
+    const model = screen.getByTestId('acp-config-model-trigger')
+    const subagent = entryEl(bar, '__subagent__').querySelector('button') as HTMLElement
+
+    act(() => model.focus())
+    expect(fireEvent.keyDown(model, { key: 'l', ctrlKey: true })).toBe(false)
+    expect(document.activeElement).toBe(subagent)
+    // The overflowed tail is inert, so the walk wraps back to model.
+    expect(fireEvent.keyDown(subagent, { key: 'l', ctrlKey: true })).toBe(false)
+    expect(document.activeElement).toBe(model)
   })
 
   it('closes the inline popover when its entry overflows', async () => {

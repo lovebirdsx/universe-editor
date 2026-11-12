@@ -226,7 +226,7 @@ describe('useCtrlNavigationLayer — arbitration', () => {
     expect(outerMove).not.toHaveBeenCalled()
   })
 
-  it('leaves a direction to a layer that implements it (Tree has no horizontal aliases)', () => {
+  it('leaves a direction to a layer that does not implement it', () => {
     const listMove = vi.fn()
     render(<Layer kind="list" onMove={listMove} directions={['up', 'down']} />)
     ;(document.querySelector('[data-testid="surface"]') as HTMLElement).focus()
@@ -236,6 +236,24 @@ describe('useCtrlNavigationLayer — arbitration', () => {
     expect(listMove).not.toHaveBeenCalled()
     // Not claimed: the global replace / select-line bindings stay reachable.
     expect(press('h')).toBe(true)
+  })
+
+  it('reads directions per stroke, so a layer can opt into horizontal later', () => {
+    const onMove = vi.fn()
+    const view = render(<Layer kind="list" onMove={onMove} directions={['up', 'down']} />)
+    ;(document.querySelector('[data-testid="surface"]') as HTMLElement).focus()
+
+    expect(press('h')).toBe(true)
+    onMove.mockClear()
+
+    view.rerender(
+      <Layer kind="list" onMove={onMove} directions={['up', 'down', 'left', 'right']} />,
+    )
+
+    expect(press('h')).toBe(false)
+    expect(onMove).toHaveBeenCalledTimes(1)
+    expect(onMove).toHaveBeenCalledWith('left', expect.anything())
+    expect(__getCtrlNavigationLayerCountForTests(document)).toBe(1)
   })
 
   it('claims the stroke even when the surface has nowhere to move', () => {

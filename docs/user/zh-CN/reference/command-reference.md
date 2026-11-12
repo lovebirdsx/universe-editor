@@ -76,7 +76,7 @@
 >
 > 「转到编辑器中的符号…」按 `Ctrl+Shift+O` 走的是**编辑器内核**那一条（面板里显示英文 **Go to Symbol in Editor...**）；两者用途相同，都要求当前语言提供符号。见 [编辑器文本编辑快捷键](./editor-shortcuts.md)。
 
-> 列表与浮层的上下移动统一支持 `Ctrl+P` / `Ctrl+K`（上）与 `Ctrl+N` / `Ctrl+J`（下）：树视图、搜索结果、源代码管理、Agent 会话列表、快捷键编辑器、Git / Perforce 图谱在**自身聚焦时**生效；快速打开、`Ctrl+Tab`、`Alt+S` 等浮层在**打开期间**生效。详见[快捷键速查表](./keyboard-shortcuts.md#菜单内键盘操作)。
+> 列表与浮层的上下移动统一支持 `Ctrl+P` / `Ctrl+K`（上）与 `Ctrl+N` / `Ctrl+J`（下）：树视图、搜索结果、源代码管理、Agent 会话列表、快捷键编辑器、Git / Perforce 图谱在**自身聚焦时**生效；快速打开、`Ctrl+Tab`、`Alt+S` 等浮层在**打开期间**生效。横向移动同理：支持 `←` / `→` 的树视图、扩展视图分区列表、Agent 配置栏按钮行在聚焦时用 `Ctrl+H` / `Ctrl+L`；大纲筛选框聚焦时仍移动大纲。详见[快捷键速查表](./keyboard-shortcuts.md#菜单内键盘操作)。
 
 > 更多见 [全局搜索与替换](../search-navigation/global-search.md)、[符号与定义跳转](../search-navigation/symbols-and-definitions.md)、[导航历史](../search-navigation/history.md)。
 

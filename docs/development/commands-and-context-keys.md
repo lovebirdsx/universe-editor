@@ -48,8 +48,8 @@ f1: false,
 唯一入口是 `packages/workbench-ui/src/keybinding/ctrlNavigationRegistry.ts`：每个 `Document` 一个 window-capture 监听；注册层按 `menu > dialog > overlay > list` 优先级激活，同 kind 取嵌套更深者。一次按键只交给一层，命中即 `preventDefault + stopPropagation + stopImmediatePropagation`（边界落空也吞，否则底下的全局命令会照常执行）。
 
 - **菜单是虚拟焦点**（`aria-activedescendant`），DOM 焦点仍在唤出它的树上，所以不能每个组件各挂一个 window 监听——`stopPropagation` 不会阻止同一 target 上的其它监听器，两层会同时移动。
-- `list` 层默认 `focus: 'self'`（容器自身是 `activeElement`）且拒绝 editable 焦点，行内输入框因此保留自己的键；`overlay` 默认 `focus: 'within'`；`dialog` 可用 `allowEditableFocus`（复选框对话框）。
-- 接入点：Tree / FlatList / Git·Perforce 图谱 / ChatBody 时间线 / 大纲（list，Tree 层用 `focus: 'within'`，行内按钮聚焦时仍可移动、可编辑控件除外），Select（overlay），扩展「更多」菜单（menu），Perforce 同步对话框（dialog）。Outline 另有 `ctrl+p`/`ctrl+n`/`ctrl+j` 的 Action2 兜底（`ctrl+k` 无法注册为全局单键），用于 `focusedView` 成立但焦点在视图 body（含筛选框）的情况。
+- `list` 层默认 `focus: 'self'`（容器自身是 `activeElement`）且拒绝 editable 焦点，行内输入框因此保留自己的键；`overlay` 默认 `focus: 'within'`；`dialog` 可用 `allowEditableFocus`（复选框对话框）。层的 `directions` 每次按键从 `optionsRef` 读取，可随渲染增减（FlatList 的 `onMoveHorizontal` 后加也即时生效），不需要重新注册。
+- 接入点：Tree 注册四方向（`focus: 'within'`，行内按钮聚焦时仍可移动、可编辑控件除外）；FlatList 固定上下，仅宿主传 `onMoveHorizontal` 时才注册左右（扩展视图分区列表）；Agent 配置栏触发器行注册 `left`/`right`；Git·Perforce 图谱 / ChatBody 时间线 / 大纲走 list 层。Select（overlay），扩展「更多」菜单（menu），Perforce 同步对话框（dialog）。Outline 另有 `ctrl+p`/`ctrl+n`/`ctrl+j`/`ctrl+h`/`ctrl+l` 的 Action2 兜底（`ctrl+k` 无法注册为全局单键；`ctrl+h` 与替换同键，靠 weight 胜出），用于 `focusedView` 成立但焦点在视图 body（含筛选框）的情况。
 - QuickInput 不走注册表：锁定 / readOnly / 松开修饰键即接受的语义只有面板自己知道，别名在 `QuickInputPanel` 内处理，`isQuickInputOwnedKey` 负责让 dispatcher 放行。
 
 ## 焦点类上下文键：一律 DOM 派生

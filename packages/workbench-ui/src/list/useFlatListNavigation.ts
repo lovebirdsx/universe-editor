@@ -81,6 +81,14 @@ export interface IUseFlatListNavigationOptions {
   readonly modifierActivation?: boolean | undefined
   /** Keys not handled here (Delete / F2 / …) reach the view, un-defaulted. */
   readonly onRowKeyDown?: ((e: KeyboardEvent, index: number) => void) | undefined
+  /**
+   * Opt in to horizontal movement (Ctrl+H / Ctrl+L). Only when supplied does the
+   * shared registry layer register left/right; a list with no horizontal
+   * semantics must leave the global replace / select-line meanings untouched.
+   * Receives the controlled focused index; out-of-range indexes are not
+   * delivered (the stroke is still claimed, like every alias at a boundary).
+   */
+  readonly onMoveHorizontal?: ((direction: 'left' | 'right', index: number) => void) | undefined
   /** Shift+Tab inside the list — hand focus back to a prior region (a search box). */
   readonly onShiftTab?: (() => void) | undefined
   readonly role?: FlatListRole | undefined
@@ -175,17 +183,26 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
     [revealRow],
   )
 
-  // Ctrl+P/N/J/K are the same movement as ArrowUp/ArrowDown. The registry
-  // claims them on window capture (ahead of quick open / new file) and only
-  // while the container itself is the active element — the same rule as the
-  // React handler below, so a row's inline input keeps its own keystrokes.
+  // Ctrl+P/N/J/K are the same movement as ArrowUp/ArrowDown, and Ctrl+H/L as
+  // ArrowLeft/ArrowRight when the host supplies `onMoveHorizontal`. The registry
+  // claims them on window capture (ahead of quick open / new file / replace /
+  // select-line) and only while the container itself is the active element —
+  // the same rule as the React handler below, so a row's inline input keeps its
+  // own keystrokes.
   useCtrlNavigationLayer({
     kind: 'list',
-    directions: ['up', 'down'],
+    directions:
+      options.onMoveHorizontal === undefined ? ['up', 'down'] : ['up', 'down', 'left', 'right'],
     getElement: () => optionsRef.current.getContainer(),
     onMove: (direction) => {
-      const { count, focusedIndex, getPageSize } = optionsRef.current
+      const { count, focusedIndex, getPageSize, onMoveHorizontal } = optionsRef.current
       if (count === 0) return
+      if (direction === 'left' || direction === 'right') {
+        if (onMoveHorizontal === undefined) return
+        if (focusedIndex < 0 || focusedIndex >= count) return
+        onMoveHorizontal(direction, focusedIndex)
+        return
+      }
       const next = resolveIndexNavigation(direction === 'down' ? 'ArrowDown' : 'ArrowUp', {
         index: focusedIndex,
         count,

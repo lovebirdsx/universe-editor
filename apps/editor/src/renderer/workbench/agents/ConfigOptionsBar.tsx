@@ -47,6 +47,7 @@ import {
   AnchoredSurface,
   findRowElement,
   isHTMLElementLike,
+  useCtrlNavigationLayer,
   useOverlayListNavigation,
   type IOverlayListNavigation,
 } from '@universe-editor/workbench-ui'
@@ -348,6 +349,39 @@ export function ConfigOptionsBar({
   // Left/right walk the inline triggers. The popover renders into a portal, so
   // while it is up its own keys never bubble back here — this only ever runs
   // with focus on a trigger.
+  const moveTriggerFocus = useCallback(
+    (direction: 'left' | 'right', target: EventTarget | null): void => {
+      const items = itemsRef.current
+      if (!items || target === null) return
+      const triggers = visibleEntryEls(items)
+      if (triggers.length === 0) return
+      const current = triggers.findIndex((el) => el === target || el.contains(target as Node))
+      if (current < 0) return
+      const next =
+        direction === 'right'
+          ? (current + 1) % triggers.length
+          : (current - 1 + triggers.length) % triggers.length
+      triggers[next]?.querySelector('button')?.focus()
+    },
+    [itemsRef],
+  )
+
+  // Ctrl+H / Ctrl+L mirror the same walk. The registry is required because the
+  // global dispatcher would otherwise turn them into replace / select-line; the
+  // open popover lives in a portal with its own overlay layer, which outranks
+  // this list layer.
+  useCtrlNavigationLayer({
+    kind: 'list',
+    focus: 'within',
+    directions: ['left', 'right'],
+    getElement: () => itemsRef.current,
+    onMove: (direction, event) => {
+      if (direction === 'left' || direction === 'right') {
+        moveTriggerFocus(direction, event.target)
+      }
+    },
+  })
+
   const onItemsKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return
@@ -359,11 +393,13 @@ export function ConfigOptionsBar({
       let next: number
       switch (e.key) {
         case 'ArrowRight':
-          next = (current + 1) % triggers.length
-          break
+          e.preventDefault()
+          moveTriggerFocus('right', e.target)
+          return
         case 'ArrowLeft':
-          next = (current - 1 + triggers.length) % triggers.length
-          break
+          e.preventDefault()
+          moveTriggerFocus('left', e.target)
+          return
         case 'Home':
           next = 0
           break
@@ -382,7 +418,7 @@ export function ConfigOptionsBar({
       e.preventDefault()
       triggers[next]?.querySelector('button')?.focus()
     },
-    [itemsRef],
+    [itemsRef, moveTriggerFocus],
   )
 
   const openEntryAt = useCallback(

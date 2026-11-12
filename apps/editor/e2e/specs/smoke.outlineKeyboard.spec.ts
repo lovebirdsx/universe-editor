@@ -37,7 +37,10 @@ const selectedName = () => {
 }
 
 test.describe('@p1 outline keyboard navigation', () => {
-  test('arrows and emacs Ctrl+P/N/B/F drive the outline selection', async ({ page, workbench }) => {
+  test('arrows and emacs Ctrl+P/N/B/F/H/L drive the outline selection', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -97,5 +100,35 @@ test.describe('@p1 outline keyboard navigation', () => {
     // Ctrl+B from the child steps back to the parent.
     await page.keyboard.press('Control+b')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
+
+    // Ctrl+H / Ctrl+L mirror Ctrl+B / Ctrl+F: collapse, expand, descend, ascend.
+    await page.keyboard.press('Control+h')
+    await expect(outline.getByRole('treeitem', { name: 'build' })).toHaveCount(0)
+    await page.keyboard.press('Control+l')
+    await expect(outline.getByRole('treeitem', { name: 'build' })).toBeVisible()
+    await page.keyboard.press('Control+l')
+    await expect.poll(() => page.evaluate(selectedName)).toEqual(['build'])
+    await page.keyboard.press('Control+h')
+    await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
+
+    // The filter box is editable, so the Tree layer steps aside; the Action2
+    // fallback must keep Ctrl+H/L on the outline instead of Replace / line
+    // select. `i` matches scripts and build, so the pruned tree keeps both.
+    await page.keyboard.press('i')
+    // Scope to the Outline's part: the Output panel has a "Filter" placeholder too.
+    const filter = page.getByTestId('part-secondarysidebar').getByPlaceholder('Filter')
+    await expect(filter).toBeFocused()
+    await expect(filter).toHaveValue('i')
+    await page.keyboard.press('Control+h')
+    await expect(outline.getByRole('treeitem', { name: 'build' })).toHaveCount(0)
+    await page.keyboard.press('Control+l')
+    await expect(outline.getByRole('treeitem', { name: 'build' })).toBeVisible()
+    await page.keyboard.press('Control+l')
+    await expect.poll(() => page.evaluate(selectedName)).toEqual(['build'])
+    await page.keyboard.press('Control+h')
+    await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
+    // Still typing into the filter, not into an editor find widget.
+    await expect(filter).toBeFocused()
+    await expect(filter).toHaveValue('i')
   })
 })

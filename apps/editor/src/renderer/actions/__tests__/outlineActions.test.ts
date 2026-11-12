@@ -24,6 +24,7 @@ import {
   OutlineNavigateLeftAction,
   OutlineNavigateRightAction,
 } from '../outlineActions.js'
+import { FindReplaceInFileAction } from '../searchActions.js'
 import { OutlineNavigatorRegistry } from '../../workbench/outline/outlineNavigatorRegistry.js'
 
 const OUTLINE_VIEW = 'workbench.view.outline.main'
@@ -53,7 +54,7 @@ describe('Outline navigation Action2s', () => {
     }
   })
 
-  it('Ctrl+P/N/J/B/F resolve to the outline commands when the outline is focused', () => {
+  it('Ctrl+P/N/J/B/F/H/L resolve to the outline commands when the outline is focused', () => {
     disposables.push(registerAction2(OutlineNavigateUpAction))
     disposables.push(registerAction2(OutlineNavigateDownAction))
     disposables.push(registerAction2(OutlineNavigateLeftAction))
@@ -64,6 +65,25 @@ describe('Outline navigation Action2s', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+j', c)).toBe(OutlineNavigateDownAction.ID)
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+b', c)).toBe(OutlineNavigateLeftAction.ID)
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+f', c)).toBe(OutlineNavigateRightAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+h', c)).toBe(OutlineNavigateLeftAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+l', c)).toBe(OutlineNavigateRightAction.ID)
+  })
+
+  it('Ctrl+H stays on the outline while focused, and keeps Replace elsewhere', () => {
+    disposables.push(registerAction2(OutlineNavigateLeftAction))
+    disposables.push(registerAction2(FindReplaceInFileAction))
+
+    const outline = ctx(OUTLINE_VIEW)
+    outline.set('hasActiveEditor', true)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+h', outline)).toBe(
+      OutlineNavigateLeftAction.ID,
+    )
+
+    const explorer = ctx('workbench.view.explorer.tree')
+    explorer.set('hasActiveEditor', true)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+h', explorer)).toBe(
+      FindReplaceInFileAction.ID,
+    )
   })
 
   it('does NOT claim Ctrl+P when focus is elsewhere (global quick open wins)', () => {
