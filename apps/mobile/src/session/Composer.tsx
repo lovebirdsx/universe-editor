@@ -799,7 +799,9 @@ export function Composer({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.nativeEvent.isComposing) return
+    // keyCode 229 catches IMEs that report a composition-confirming Enter as
+    // isComposing=false.
+    if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
     if (secondStep !== undefined) {
       // The second step owns Enter: swallowing it while the list is loading or
       // empty keeps a newline from silently cancelling the picker.
@@ -852,28 +854,44 @@ export function Composer({
       }
       return
     }
-    if (!refOpen) return
-    if (refSuggestions.length > 0) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        setRefIndex((activeRefIndex + 1) % refSuggestions.length)
-        return
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault()
-        setRefIndex((activeRefIndex - 1 + refSuggestions.length) % refSuggestions.length)
-        return
-      }
+    if (refOpen) {
+      // The completion panel owns Enter even while loading / empty / failed;
+      // swallowing it keeps a newline from silently cancelling the query.
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault()
         const suggestion = refSuggestions[activeRefIndex]
         if (suggestion !== undefined) acceptPromptRef(suggestion)
         return
       }
+      if (refSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          setRefIndex((activeRefIndex + 1) % refSuggestions.length)
+          return
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          setRefIndex((activeRefIndex - 1 + refSuggestions.length) % refSuggestions.length)
+          return
+        }
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setRefDismissed(true)
+      }
+      return
     }
-    if (event.key === 'Escape') {
+    // No popover owns Enter: plain Enter submits, like the desktop composer.
+    // Modified Enter falls through to the textarea for a newline.
+    if (
+      event.key === 'Enter' &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey
+    ) {
       event.preventDefault()
-      setRefDismissed(true)
+      void send()
     }
   }
 
@@ -1186,6 +1204,7 @@ export function Composer({
           className="composer__input"
           data-testid="composer-input"
           rows={1}
+          enterKeyHint="send"
           value={value}
           disabled={disabled}
           maxLength={MAX_PROMPT_LENGTH}

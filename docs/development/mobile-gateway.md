@@ -1070,6 +1070,10 @@ file / openEditor / scmChange → `resource_link`，symbol / docs / commit / cha
   也能正确处理；后续文本编辑按 common prefix/suffix 平移已放置区间，与编辑相交的 token 丢弃。
 - 发送前用 `collectPlacedRefs` 复检每个区间切片，失效的 ref 不发送；成功后清空文本 / refs；
   失败保留原稿。
+- 键盘：无浮层时无修饰键 Enter 发送（与 PC 输入框一致），Shift / Alt / Ctrl / Meta+Enter
+  交给 textarea 换行；`secondStep` / 斜杠 / 引用面板打开时 Enter 优先接受候选，加载 / 失败 /
+  空候选也消费 Enter、不发送。Enter 始终被消费，空稿 / 附件上传中 / 发送中由 `send()` 的
+  `canSend` 守卫直接返回；IME 组合（`isComposing` 或 `keyCode 229`）不拦截。
 - 草稿：refs 只写手机 sessionStorage（用于重挂载），**不进入 `MobileDraftPayload`**，PC 草稿里
   不会出现引用药丸；PC 改文本时手机清空本地区间。坏数据 / 切片不匹配的 refs 读取时丢弃；
   commit / chatContext 用 `isSendableMobilePromptRef` 额外要求 hash + 正文齐全。

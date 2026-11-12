@@ -1,5 +1,6 @@
 import type {
   MobileAttachmentUploadResult,
+  MobilePromptRefSuggestion,
   ResolvePromptRefResult,
 } from '@universe-editor/mobile-protocol'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -113,6 +114,101 @@ describe('Composer', () => {
     renderComposer({ online: false })
     expect(screen.getByText(strings.composerOffline)).toBeTruthy()
     expect((screen.getByTestId('composer-input') as HTMLTextAreaElement).disabled).toBe(true)
+  })
+
+  describe('keyboard submit', () => {
+    const pressEnter = (input: HTMLTextAreaElement, init: KeyboardEventInit = {}): boolean =>
+      fireEvent.keyDown(input, { key: 'Enter', ...init })
+
+    it('sends on Enter and clears the draft', async () => {
+      const { onSend } = renderComposer()
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'hello phone' } })
+
+      // false = defaultPrevented: the textarea must not insert a newline.
+      expect(pressEnter(input)).toBe(false)
+
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello phone', [], [], [], []))
+      await waitFor(() => expect(input.value).toBe(''))
+      expect(sessionStorage.getItem(draftKey('1:s1'))).toBeNull()
+    })
+
+    it('keeps modified Enter for a newline', () => {
+      const { onSend } = renderComposer()
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'line one' } })
+
+      for (const modifier of ['shiftKey', 'altKey', 'ctrlKey', 'metaKey'] as const) {
+        expect(pressEnter(input, { [modifier]: true })).toBe(true)
+      }
+      expect(onSend).not.toHaveBeenCalled()
+      expect(input.value).toBe('line one')
+    })
+
+    it('consumes Enter without sending an empty draft', () => {
+      const { onSend } = renderComposer()
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+
+      expect(pressEnter(input)).toBe(false)
+      expect(onSend).not.toHaveBeenCalled()
+      expect(input.value).toBe('')
+    })
+
+    it('does not send while an attachment is still uploading', async () => {
+      const onUploadAttachment = vi.fn(() => new Promise<MobileAttachmentUploadResult>(() => {}))
+      const { onSend } = renderComposer({ onUploadAttachment })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: 'hello' } })
+      pickFile('shot.png', 'image/png')
+      await waitFor(() => expect(onUploadAttachment).toHaveBeenCalled())
+
+      expect(pressEnter(input)).toBe(false)
+      expect(onSend).not.toHaveBeenCalled()
+    })
+
+    it('sends an attachment-only draft on Enter', async () => {
+      const { onSend } = renderComposer()
+      pickFile('shot.png', 'image/png')
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() =>
+        expect((screen.getByTestId('composer-send') as HTMLButtonElement).disabled).toBe(false),
+      )
+
+      expect(pressEnter(input)).toBe(false)
+
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], [], []))
+    })
+
+    it('does not send the Enter that confirms an IME composition', () => {
+      const { onSend } = renderComposer()
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.change(input, { target: { value: '你好' } })
+
+      expect(pressEnter(input, { isComposing: true })).toBe(true)
+      expect(pressEnter(input, { keyCode: 229 })).toBe(true)
+      expect(onSend).not.toHaveBeenCalled()
+    })
+
+    it('does not send while the ref panel is loading, then sends after Escape', async () => {
+      const searchPromptRefs = vi.fn(
+        () => new Promise<readonly MobilePromptRefSuggestion[]>(() => {}),
+      )
+      const { onSend } = renderComposer({ searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      fireEvent.change(input, { target: { value: 'hello @src' } })
+      await waitFor(() => expect(screen.getByTestId('composer-ref-loading')).toBeTruthy())
+
+      expect(pressEnter(input)).toBe(false)
+      expect(onSend).not.toHaveBeenCalled()
+      expect(input.value).toBe('hello @src')
+
+      fireEvent.keyDown(input, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByTestId('composer-ref-panel')).toBeNull())
+
+      expect(pressEnter(input)).toBe(false)
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello @src', [], [], [], []))
+    })
   })
 
   it('uploads a picked photo and sends it without text', async () => {

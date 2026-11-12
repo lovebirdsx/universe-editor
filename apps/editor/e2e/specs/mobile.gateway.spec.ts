@@ -1151,7 +1151,8 @@ test.describe('mobile gateway', () => {
     try {
       await openFirstPhoneSession(phone)
 
-      await phone.getByTestId('composer-input').fill('phone hello')
+      const input = phone.getByTestId('composer-input')
+      await input.fill('phone hello')
       await phone.getByTestId('composer-send').click()
 
       await expect
@@ -1162,6 +1163,41 @@ test.describe('mobile gateway', () => {
         ])
       await expect(phone.getByTestId('user-message').last()).toContainText('phone hello')
       await expect(phone.getByTestId('agent-message').last()).toContainText('echo: phone hello')
+
+      // Enter submits like the send button; an empty draft consumes it without
+      // leaving a newline behind.
+      await input.fill('enter hello')
+      await input.press('Enter')
+      await expect(input).toHaveValue('')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
+        .toEqual([
+          { role: 'user', text: 'phone hello', streaming: false },
+          { role: 'agent', text: 'echo: phone hello', streaming: false },
+          { role: 'user', text: 'enter hello', streaming: false },
+          { role: 'agent', text: 'echo: enter hello', streaming: false },
+        ])
+      await input.press('Enter')
+      await expect(input).toHaveValue('')
+
+      // Modified Enter falls through to the textarea, so Shift+Enter inserts a
+      // newline and the next plain Enter submits the multi-line draft.
+      await input.pressSequentially('line one')
+      await input.press('Shift+Enter')
+      await input.pressSequentially('line two')
+      await expect(input).toHaveValue('line one\nline two')
+      await input.press('Enter')
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages()), { timeout: 5000 })
+        .toEqual([
+          { role: 'user', text: 'phone hello', streaming: false },
+          { role: 'agent', text: 'echo: phone hello', streaming: false },
+          { role: 'user', text: 'enter hello', streaming: false },
+          { role: 'agent', text: 'echo: enter hello', streaming: false },
+          { role: 'user', text: 'line one\nline two', streaming: false },
+          { role: 'agent', text: 'echo: line one\nline two', streaming: false },
+        ])
     } finally {
       await context.close()
       await browser.close()
