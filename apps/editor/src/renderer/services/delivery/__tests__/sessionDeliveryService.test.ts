@@ -36,6 +36,7 @@ function makeSession(overrides: Partial<Record<keyof IAcpSession, unknown>> = {}
     readOnly: false,
     internal: false,
     status: value('idle'),
+    isDormant: value(false),
     pendingPermission: value(undefined),
     pendingElicitation: value(undefined),
     forkSupported: value(true),
@@ -636,10 +637,17 @@ describe('SessionDeliveryService guards', () => {
     expect(active.isDeliveryBusyForCwd('/other', undefined)).toBe(false)
   })
 
-  it('offers delivery only for idle, writable, non-internal sessions', () => {
+  it('offers delivery for idle or idle-reaped dormant sessions', () => {
     active = makeService()
     expect(active.isAvailable(makeSession())).toBe(true)
+    expect(
+      active.isAvailable(makeSession({ status: value('closed'), isDormant: value(true) })),
+    ).toBe(true)
+    expect(
+      active.isAvailable(makeSession({ status: value('closed'), isDormant: value(false) })),
+    ).toBe(false)
     expect(active.isAvailable(makeSession({ status: value('running') }))).toBe(false)
+    expect(active.isAvailable(makeSession({ status: value('errored') }))).toBe(false)
     expect(active.isAvailable(makeSession({ internal: true }))).toBe(false)
     expect(active.isAvailable(makeSession({ readOnly: true }))).toBe(false)
   })

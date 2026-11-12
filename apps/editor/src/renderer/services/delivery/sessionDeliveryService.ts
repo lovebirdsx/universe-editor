@@ -98,7 +98,7 @@ export interface ISessionDeliveryService {
   /** Every active delivery owned by this window (cross-window guards live in main). */
   listActiveContexts(): readonly SessionDeliveryContext[]
 
-  /** A session row may offer the "deliver" action. */
+  /** A session row may offer the "deliver" action (idle, or idle-reaped dormant). */
   isAvailable(session: IAcpSession): boolean
   /** Cached worktree check: uncommitted changes or commits main does not reach. */
   hasDeliverableChanges(session: IAcpSession): boolean
@@ -750,12 +750,17 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
   }
 
   isAvailable(session: IAcpSession): boolean {
+    const status = session.status.get()
+    // An idle-reaped session is dormant (`closed` + isDormant): the agent
+    // process is gone, but delivery only needs it to generate a commit message
+    // for a dirty source, and forkSideTask wakes the session on demand.
+    const idleOrDormant = status === 'idle' || (status === 'closed' && session.isDormant.get())
     return (
       !isInternalSession(session) &&
       !session.readOnly &&
       session.cwd !== undefined &&
       session.cwd.length > 0 &&
-      session.status.get() === 'idle' &&
+      idleOrDormant &&
       session.pendingPermission.get() === undefined &&
       session.pendingElicitation.get() === undefined
     )
