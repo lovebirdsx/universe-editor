@@ -1,12 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { IConfigurationNode } from '@universe-editor/platform'
-import {
-  SETTINGS_HEADER_HEIGHT,
-  SETTINGS_ROW_HEIGHT_NO_DESC,
-  SETTINGS_ROW_HEIGHT_WITH_DESC,
-  buildFlatModel,
-  buildTocEntries,
-} from '../settingsFlatModel.js'
+import { buildFlatModel, buildTocEntries } from '../settingsFlatModel.js'
 import type { RankedSetting } from '../settingsSearchModel.js'
 
 const NODES: IConfigurationNode[] = [
@@ -49,13 +43,9 @@ describe('buildFlatModel', () => {
     expect(r3).toMatchObject({ kind: 'row', key: 'files.autoSave' })
   })
 
-  it('records header item indexes and accumulated estimated offsets', () => {
+  it('records header item indexes', () => {
     const model = buildFlatModel(NODES)
     expect(model.headerIndexes).toEqual([0, 3])
-    expect(model.headerOffsets).toEqual([
-      0,
-      SETTINGS_HEADER_HEIGHT + SETTINGS_ROW_HEIGHT_WITH_DESC + SETTINGS_ROW_HEIGHT_NO_DESC,
-    ])
   })
 
   it('restricts and reorders rows by the search ranking, dropping zero-hit groups', () => {

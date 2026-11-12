@@ -20,19 +20,46 @@ import { SETTINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferencesFocus.js'
 
 // happy-dom has no layout engine — the real virtualizer would render 0 items.
 // Render every item so row-level assertions work against the full list.
+//
+// `measuredItemSize` models the height the virtualizer measured after render:
+// the TOC scroll spy must hit-test against these positions, not against
+// settingsFlatModel's estimates. Keep the default at 100 so existing tests keep
+// their old geometry; the navigation regression lowers it to make the estimate
+// table and the measured layout diverge.
+const virtualizerState = vi.hoisted(() => ({ measuredItemSize: 100 }))
+
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getTotalSize: () => count * 100,
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * 100,
-        size: 100,
-      })),
-    scrollToIndex: () => {},
-    measureElement: () => {},
-  }),
+  useVirtualizer: ({
+    count,
+    getScrollElement,
+  }: {
+    count: number
+    getScrollElement: () => HTMLElement | null
+  }) => {
+    const size = (): number => virtualizerState.measuredItemSize
+    return {
+      getTotalSize: () => count * size(),
+      getVirtualItems: () =>
+        Array.from({ length: count }, (_, index) => ({
+          index,
+          key: index,
+          start: index * size(),
+          size: size(),
+        })),
+      scrollToIndex: (index: number) => {
+        const el = getScrollElement()
+        if (!el) return
+        el.scrollTop = index * size()
+        el.dispatchEvent(new Event('scroll'))
+      },
+      measureElement: () => {},
+      getVirtualItemForOffset: (offset: number) => {
+        if (count === 0) return undefined
+        const index = Math.min(count - 1, Math.max(0, Math.floor(offset / size())))
+        return { index, key: index, start: index * size(), size: size() }
+      },
+    }
+  },
 }))
 
 class FakeStorage implements IStorageService {
@@ -124,6 +151,7 @@ function mount(opts: { workspaceOpen?: boolean; storage?: FakeStorage } = {}) {
 
 afterEach(() => {
   cleanup()
+  virtualizerState.measuredItemSize = 100
 })
 
 describe('SettingsEditor', () => {
@@ -171,6 +199,43 @@ describe('SettingsEditor', () => {
     expect(items.length).toBe(2)
     expect(items[0]?.textContent).toBe('Editor2')
     expect(items[1]?.textContent).toBe('Files1')
+  })
+
+  it('keeps the clicked TOC entry active when measured heights differ from estimates', async () => {
+    for (const id of ['alpha', 'beta', 'gamma']) {
+      disposables.push(
+        ConfigurationRegistry.registerConfiguration({
+          id,
+          title: id,
+          properties: Object.fromEntries(
+            Array.from({ length: 4 }, (_, i) => [
+              `${id}.option${i}`,
+              { type: 'string' as const, default: '', description: 'A setting description' },
+            ]),
+          ),
+        }),
+      )
+    }
+    // Estimates say 96px per described row; the rendered rows measure 40px.
+    // The old spy compared the measured scrollTop against those estimates and
+    // highlighted beta after clicking gamma.
+    virtualizerState.measuredItemSize = 40
+    const { container } = mount()
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-testid="settings-group-alpha"]')).toBeTruthy()
+    })
+
+    const toc = container.querySelector('[data-testid="settings-toc"]')!
+    const buttons = (): Element[] => Array.from(toc.querySelectorAll('button'))
+    expect(buttons().map((b) => b.textContent)).toEqual(['alpha4', 'beta4', 'gamma4'])
+
+    fireEvent.click(buttons()[2]!)
+
+    await waitFor(() => {
+      expect(buttons()[2]?.getAttribute('aria-current')).toBe('true')
+      expect(buttons()[1]?.getAttribute('aria-current')).toBe('false')
+    })
   })
 
   it('renders one row per property, with correct controls', () => {

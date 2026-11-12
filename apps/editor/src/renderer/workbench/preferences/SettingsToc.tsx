@@ -28,6 +28,7 @@ export function SettingsToc({ entries, activeId, onNavigate }: SettingsTocProps)
           key={entry.id}
           type="button"
           className={`${styles['tocItem']} ${entry.id === activeId ? styles['tocItemActive'] : ''}`}
+          aria-current={entry.id === activeId}
           onClick={() => onNavigate(entry)}
         >
           <span className={styles['tocLabel']}>{entry.title}</span>

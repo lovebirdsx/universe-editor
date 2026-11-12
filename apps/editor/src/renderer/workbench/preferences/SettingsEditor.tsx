@@ -189,17 +189,14 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
       return
     }
     const update = () => {
-      const top = el.scrollTop + 40
-      let active: string | undefined
-      for (let i = 0; i < model.headerIndexes.length; i++) {
-        if (model.headerOffsets[i]! <= top) {
-          const header = model.items[model.headerIndexes[i]!]
-          if (header?.kind === 'header') active = header.id
-        } else {
-          break
-        }
-      }
-      setActiveTocId(active)
+      // Hit-test the viewport top against the virtualizer's measured layout.
+      // A separate table of estimateSize offsets drifts from real row heights
+      // under `measureDynamically`, which used to highlight an earlier group
+      // after clicking a lower TOC entry.
+      const index = listRef.current?.getItemIndexAtOffset(el.scrollTop + 40)
+      const item = index == null ? undefined : model.items[index]
+      if (!item) return
+      setActiveTocId(item.kind === 'header' ? item.id : item.groupId)
     }
     update()
     el.addEventListener('scroll', update, { passive: true })

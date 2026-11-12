@@ -62,6 +62,13 @@ export interface VirtualListHandle {
   scrollToIndex(index: number, opts?: { align?: 'auto' | 'start' | 'center' | 'end' }): void
   /** The scrollable element (this list's own scroller). Null before mount. */
   getScrollElement(): HTMLElement | null
+  /**
+   * Index of the item spanning `offset` in the list's layout coordinates (the
+   * space `estimateSize` / `getTotalSize` use), or null for an empty list.
+   * Reads only the measurement table, never the scroll offset, so it is safe
+   * before the first layout gate opens.
+   */
+  getItemIndexAtOffset(offset: number): number | null
 }
 
 interface CachedStyle {
@@ -146,6 +153,12 @@ function VirtualListInner<T>(
         // Raw scroller on purpose: callers derive page sizes / scroll state from
         // it even while the layout gate holds the virtualizer back.
         return resolveScrollElement()
+      },
+      getItemIndexAtOffset(offset) {
+        // getVirtualItemForOffset only walks the measurement table; it does not
+        // read the scroll offset, so this cannot seed a stale pre-restore value
+        // the way reading getVirtualItems() would.
+        return virtualizer.getVirtualItemForOffset(offset)?.index ?? null
       },
     }),
     [virtualizer, resolveScrollElement],

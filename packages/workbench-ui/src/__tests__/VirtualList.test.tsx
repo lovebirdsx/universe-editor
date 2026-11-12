@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/react'
-import { useLayoutEffect, useRef, useState } from 'react'
-import { VirtualList } from '../list/VirtualList.js'
+import { useLayoutEffect, useRef, useState, type RefObject } from 'react'
+import { VirtualList, type VirtualListHandle } from '../list/VirtualList.js'
 
 // happy-dom has no layout engine so @tanstack/react-virtual renders 0 visible items
 // (ResizeObserver never fires, container height stays 0). Tests verify the stable
@@ -173,5 +173,44 @@ describe('VirtualList', () => {
     const { container } = render(<Host />)
 
     expect((container.firstElementChild as HTMLElement).scrollTop).toBe(120)
+  })
+
+  it('reports the item index at a layout offset', () => {
+    const handle: RefObject<VirtualListHandle | null> = { current: null }
+    render(
+      <VirtualList
+        ref={handle}
+        items={Array.from({ length: 5 }, (_, i) => `i${i}`)}
+        renderItem={(item, style) => (
+          <div key={item} style={style}>
+            {item}
+          </div>
+        )}
+        estimateSize={() => 22}
+        windowed={false}
+      />,
+    )
+
+    expect(handle.current?.getItemIndexAtOffset(0)).toBe(0)
+    expect(handle.current?.getItemIndexAtOffset(21)).toBe(0)
+    expect(handle.current?.getItemIndexAtOffset(22)).toBe(1)
+    // Past the end clamps to the last item, matching the virtualizer's binary
+    // search.
+    expect(handle.current?.getItemIndexAtOffset(500)).toBe(4)
+  })
+
+  it('reports no item index for an empty list', () => {
+    const handle: RefObject<VirtualListHandle | null> = { current: null }
+    render(
+      <VirtualList
+        ref={handle}
+        items={[]}
+        renderItem={() => null}
+        estimateSize={() => 22}
+        windowed={false}
+      />,
+    )
+
+    expect(handle.current?.getItemIndexAtOffset(0)).toBeNull()
   })
 })

@@ -83,4 +83,49 @@ test.describe('@p1 settings editor', () => {
       .toBe(14)
     await expect(page.locator('[data-key="editor.fontSize"][data-modified="true"]')).toHaveCount(0)
   })
+
+  test('keeps the clicked TOC entry active after navigating to a lower group @regression', async ({
+    page,
+  }) => {
+    const toc = page.getByTestId('settings-toc')
+    const performanceEntry = toc.getByRole('button', { name: 'Performance' })
+    await expect(performanceEntry).toBeVisible()
+
+    // The highlight drifts only after rows above the target have been measured:
+    // until then the virtualizer's estimate table and the spy agree. Scroll in
+    // small steps so the rows passed over render and get measured.
+    await page.locator('[data-testid="settings-group-workbench"]').hover()
+    for (let i = 0; i < 6; i++) {
+      await page.mouse.wheel(0, 300)
+      await page.waitForTimeout(50)
+    }
+
+    await performanceEntry.click()
+
+    // Wait until the target header is aligned with the scroller top. That means
+    // the measurement reconcile and the final scroll event have landed, so this
+    // cannot pass on the click handler's optimistic highlight alone.
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const header = document.querySelector('[data-testid="settings-group-performance"]')
+          if (!header) return 9999
+          let scroller: HTMLElement | null = header.parentElement
+          while (scroller) {
+            const overflowY = getComputedStyle(scroller).overflowY
+            if (overflowY === 'auto' || overflowY === 'scroll') break
+            scroller = scroller.parentElement
+          }
+          if (!scroller) return 9999
+          return Math.abs(header.getBoundingClientRect().top - scroller.getBoundingClientRect().top)
+        }),
+      )
+      .toBeLessThan(80)
+
+    await expect(performanceEntry).toHaveAttribute('aria-current', 'true')
+    await expect(toc.getByRole('button', { name: 'Search' })).toHaveAttribute(
+      'aria-current',
+      'false',
+    )
+  })
 })

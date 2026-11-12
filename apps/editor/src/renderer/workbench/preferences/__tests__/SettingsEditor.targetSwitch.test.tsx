@@ -34,6 +34,11 @@ vi.mock('@tanstack/react-virtual', () => ({
       })),
     scrollToIndex: () => {},
     measureElement: () => {},
+    getVirtualItemForOffset: (offset: number) => {
+      if (count === 0) return undefined
+      const index = Math.min(count - 1, Math.max(0, Math.floor(offset / 100)))
+      return { index, key: index, start: index * 100, size: 100 }
+    },
   }),
 }))
 

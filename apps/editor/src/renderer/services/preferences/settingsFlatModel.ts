@@ -21,8 +21,6 @@ export type SettingsFlatItem =
 
 export interface SettingsFlatModel {
   readonly items: readonly SettingsFlatItem[]
-  /** Estimated pixel offset of each header item, aligned with `headerIndexes`. */
-  readonly headerOffsets: readonly number[]
   /** Index into `items` of each header, in document order. */
   readonly headerIndexes: readonly number[]
 }
@@ -48,9 +46,7 @@ export function buildFlatModel(
   const rankByKey = ranked ? new Map(ranked.map((r, i) => [r.key, i] as const)) : undefined
 
   const items: SettingsFlatItem[] = []
-  const headerOffsets: number[] = []
   const headerIndexes: number[] = []
-  let offset = 0
 
   for (const node of nodes) {
     let keys = Object.keys(node.properties).filter((k) => isScalarSchema(node.properties[k]!))
@@ -62,7 +58,6 @@ export function buildFlatModel(
     if (keys.length === 0) continue
 
     headerIndexes.push(items.length)
-    headerOffsets.push(offset)
     const header: SettingsFlatItem = {
       kind: 'header',
       id: node.id,
@@ -70,7 +65,6 @@ export function buildFlatModel(
       count: keys.length,
     }
     items.push(header)
-    offset += estimateFlatItemSize(header)
 
     for (const key of keys) {
       const row: SettingsFlatItem = {
@@ -80,11 +74,10 @@ export function buildFlatModel(
         groupId: node.id,
       }
       items.push(row)
-      offset += estimateFlatItemSize(row)
     }
   }
 
-  return { items, headerOffsets, headerIndexes }
+  return { items, headerIndexes }
 }
 
 export interface SettingsTocEntry {

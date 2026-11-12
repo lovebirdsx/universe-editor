@@ -56,7 +56,7 @@
 - **导航目标按下标（`itemIndex`）会立刻过期**，须按 id/key 从最新 model 重解析：配置 registry 会动态重排（`ThemesContribution._updateColorThemeSchema` 的 dispose + re-register 把节点挪到 `_nodes` 末尾，主题初始化期间连续 fire ~6 次），见 [packages/platform/CLAUDE.md](../../packages/platform/CLAUDE.md) 的「Configuration 注册表的顺序语义」。model / ranked 必须 `useMemo`（identity 稳定），循环以其为 epoch 在重排时续期窗口。
 - **末尾组物理上无法顶到视口顶**（下方内容不足一屏）：对齐循环要识别「已到底 + header 在视口内」即收敛，否则空转 600ms 停在前面组；此时 scroll spy 高亮落在前面组是 VSCode 同款固有行为，e2e 断言须避开末尾组（锚：`apps/editor/src/renderer/workbench/preferences/SettingsEditor.tsx:209` 的 `scrollToIndex(align:'start')` 与 TOC scroll spy）。
 
-> ⚠️ **现网未用锚点**：`SettingsEditor.tsx:86` 走的是 `useScrollRestore`（纯 `scrollTop`）+ `:323` 的 `measureDynamically`。按上面的机制陈述，这是一个**活的漂移风险**（实机复验前保留本节，别当作已解决删掉）。
+> **现状**：SettingsEditor 的 TOC scroll spy 已改用 `VirtualListHandle.getItemIndexAtOffset(scrollTop + 40)`（虚拟化器实测坐标），不再维护独立的 `estimateSize` 偏移表——修复前两者在 `measureDynamically` 下会漂移，点击靠下分组会高亮到更靠前的分组。恢复侧仍是纯 `scrollTop`（`useScrollRestore`），上面第 1 条的风险仍在；末组因底部 clamp 无法顶到视口顶、高亮落在前组仍是固有行为，e2e 断言须避开末尾组。
 
 ## 排查套路
 
@@ -88,6 +88,7 @@ document.querySelector('#root').style.opacity = '0.999'
 | 列表重排后仍是「一摞不重叠的行」 | `apps/editor/src/renderer/workbench/swarm/__tests__/SwarmReviewsView.test.tsx` 的 soft refresh 用例（key 唯一、offset 严格递增、换选中不调 `scrollIntoView`）；`extensions/perforce/e2e/specs/swarmReview.spec.ts` 的 dashboard journey 补了真布局版（行矩形互不重叠、`End` 把最后一行底对齐） |
 | 同一实体跨两个父节点时行 id 仍唯一 | 同文件的 `duplicate review across groups` 用例（同一 review 同时在 Needs My Action 与 Authored by Me，逐个折叠后断言 treeitem 数量、key 唯一、无孤儿 review 行、`top` 严格递增）。**这是真复现**：修复前折叠后 DOM 会多出一行 |
 | 行高亮不画进装饰列 | `apps/editor/src/renderer/workbench/gitGraph/__tests__/rowBackgroundClipping.test.ts`（读 CSS 文本断言：裁剪 gradient 在位、状态规则只许下发 `--row-background`，含失焦态那两条）；`apps/editor/e2e/specs/smoke.gitGraphRowHighlight.spec.ts`（像素级断言：hover / 选中 / 失焦时泳道列内 0 像素变化，同时描述区必须有变化——前半句单独看会被「什么都没画」骗过；失焦那相改读 `--row-background`，因为描述区的像素变化分不清是填充变了还是行文字色变了） |
+| scroll spy 跟实测坐标而不是估算表 | `apps/editor/src/renderer/workbench/preferences/__tests__/SettingsEditor.test.tsx`（估算 96px / 实测 40px 下点击第三个分组仍保持高亮，旧实现变红）；`apps/editor/e2e/specs/smoke.settings.spec.ts` 的 `@regression` 用例（真布局里先滚动测量再点击靠下分组，断言 `aria-current`；旧实现变红） |
 
 ⚠️ e2e 那两条是**真布局护栏，不是复现**：残影本身没有可断言的信号（DOM 一直是干净的），而旧的 `scrollIntoView` 实现同样能通过「底对齐最后一行」这条断言。判断某条用例是否真的守住约定，唯一办法是**把实现改回去跑一遍**（`git checkout HEAD -- <file>` + rebuild），看它是否变红。
 
