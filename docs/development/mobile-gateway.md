@@ -259,7 +259,7 @@ Referer。
 | 会话目录    | `openSession`                            | `{ durableId, windowId?, folder?, authority? }`                                 | 按 durable id 非激活恢复历史会话；目标工作区未打开时先自动开窗再恢复；带幂等键                                                                            |
 | 会话目录    | `deleteHistorySession`                   | `{ durableId, windowId? }`                                                      | 删除 PC 已打开窗口所属的历史行；live 竞态走 `deleteSession`；无 owner 回 `session_not_found`；带幂等键                                                    |
 | 交付        | `previewDelivery`                        | `{ ref }`                                                                       | 交付 dry-run：源 / 目标 / 提交列表 / blocker / 期望 heads；不改 git                                                                                       |
-| 交付        | `startDelivery`                          | `{ ref, expectation }`                                                          | 重新校验 preview 的 heads 后执行；成功先停在「待推送」                                                                                                    |
+| 交付        | `startDelivery`                          | `{ ref, expectation }`                                                          | 重新校验 preview 的 heads 后启动后台交付，成功即返回 `deliveryId`（后续阶段经 inbox 下发）                                                                  |
 | 交付        | `getDelivery`                            | `{ ref, deliveryId }`                                                           | 详情：阶段、错误、commit 列表、冲突文件、worktree 同步结果                                                                                                |
 | 交付        | `confirmDeliveryPush`                    | `{ ref, deliveryId }`                                                           | 用户确认后前移 main、push、同步 worktree                                                                                                                  |
 | 交付        | `retryDelivery`                          | `{ ref, deliveryId }`                                                           | 失败后重新走 preview + start（旧的临时树与锁会先清理）                                                                                                    |
@@ -309,7 +309,10 @@ prompt、重复建会话或重复分叉。`resolvePromptRef` 语义只读，但�
 120s + 5s 宽限仍等得到。交付命令的网关超时：`previewDelivery` / `startDelivery` /
 `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` 110s（手机端 120s），
 `getDelivery` / `openDeliveryMainWorktree` 10s；跨窗口 busy 探测每窗口 5s。超时回
-`command_result { ok: false, error: 'internal' }`。手机端 `sendPrompt` 同样是 15s，避免手机先超时重发。
+`command_result { ok: false, error: 'internal' }`。`startDelivery` 与 `retryDelivery` 的重新交付
+分支只等预检、锁与 record 落盘，不再等 90s 的提交信息 side task；110s 保留给 inspect、锁竞争与
+异常兜底，真正的提交与 cherry-pick 在 renderer 后台执行。手机端 `sendPrompt` 同样是 15s，避免
+手机先超时重发。
 
 **服务端 → 客户端**
 
@@ -612,6 +615,14 @@ live 实例、尽力删除 agent transcript、写历史墓碑、关闭编辑器�
 `git.agentDelivery.*` 命令里完成；renderer 的 `SessionDeliveryService` 只做状态机与编排，
 main 与手机都不执行 git。
 
+**执行模型**：`startDelivery` 只执行 `_prepareStart`（session guard → `inspect` / expectation
+校验 → blockers → `acquireLock` → 写 record + 启动心跳），成功即返回 `{ deliveryId }`；
+`_runStart`（`begin` → 提交信息 / `commitSource` → cherry-pick → `awaiting_push`）以
+fire-and-forget 在 renderer 继续，手机确认页随即关闭，可自由浏览其它会话。后台链路整体
+try/catch，逃逸异常走 `_failDeliverySafely`：基于**最新** record 隔离执行
+`abortPick` / `restoreMain` / `releaseLock`，最终落 `failed`，失败状态经既有 inbox delta 下发。
+`retryDelivery` 的「重新交付」分支同样后台执行；push 重试与同步重试仍是同步命令。
+
 **流水线**（阶段即 `MobileDeliveryPhase`）：
 
 1. `preflighting`：`inspect`（可 fetch）后获取跨窗口/目录锁；main 必须干净、无进行中操作且
@@ -663,8 +674,9 @@ PID 存活判断，释放校验 token）。锁 owner 记录窗口实例 id：重
 durable id 非激活恢复，让收件箱行重新出现；恢复失败则直接失败并释放锁。
 
 **手机投影**：会话摘要带 `delivery?`（阶段、commit 数、可否推送/重试/撤销、同步计数）与
-`deliveryAvailable?`；收件箱行有 badge 与顶部汇总，详情页含 commit 列表、worktree 结果、
-冲突文件与「确认推送」「重试」「打开 main worktree」「撤销本次交付」。`deliveryAvailable` 要求
+`deliveryAvailable?`；收件箱行有 badge 与顶部汇总（进行中显示阶段 pill：单条显示阶段名，多条
+显示「N 条进行中」），详情页含 commit 列表、worktree 结果、冲突文件与「确认推送」「重试」
+「打开 main worktree」「撤销本次交付」。`deliveryAvailable` 要求
 会话可发起（`status === 'idle'`，或空闲回收后的休眠态 `status === 'closed' && isDormant`；可写、
 有 cwd）**且**其 worktree 有未提交修改或存在 main worktree 当前分支不存在的提交；后者由 git
 扩展的只读命令 `git.agentDelivery.hasPendingWork` 判定（不 fetch，main 落后 upstream 时以
@@ -673,10 +685,13 @@ upstream 为 base，避免把已在远端的提交算作待交付）。休眠会
 `SessionDeliveryService` 按 `authority + 规范化 cwd` 缓存探测结果（TTL 10s，失败/超时按不可
 交付），探测异步进行：inbox snapshot 首帧可能暂缺该字段，随后经 `summary_changed` /
 `inbox_delta` 补齐；会话回合结束与交付记录变化时强制刷新，另有 30s sweep 兜底 PC 上的手工
-改动。已交付（`synced`）的行在手机上隐藏交付入口，改由详情页的「再次交付」重新走
-`previewDelivery`。**协议绝不下发绝对路径**，只给 worktree 目录名；交付错误只带 `code` 与
-裁剪后的 message，扩展侧 detail 不投影。交付变化经 `summary_changed` 增量与收件箱 upsert
-同步到手机。
+改动。已有任何交付记录（进行中 / `awaiting_push` / `failed` / `partial` / `synced` /
+`undone`）的行只显示状态徽标，点击直达交付详情，不再显示「交付」入口；`undone` 的再次交付
+也放在详情页。手机端另有本地 `deliveryAlerts` watcher 订阅 inbox：同一 `deliveryId` 从进行中
+（含 `awaiting_push`）进入 `awaiting_push` / `failed` / `partial` 且用户不在收件箱时弹全局
+Toast；首次观察只建立 baseline，重连 snapshot 不会误弹，不新增 wire 消息。**协议绝不下发绝对
+路径**，只给 worktree 目录名；交付错误只带 `code` 与裁剪后的 message，扩展侧 detail 不投影。
+交付变化经 `summary_changed` 增量与收件箱 upsert 同步到手机。
 
 **刻意限制**：合并提交不支持；单次交付最多 200 个提交（preview 直接给 `unsupported` blocker）；
 main worktree 必须存在且不在 detached HEAD，目标分支须有唯一 upstream；v1 不做自动交付、

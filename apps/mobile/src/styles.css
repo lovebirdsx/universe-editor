@@ -545,6 +545,11 @@ input:focus-visible {
   font-weight: 600;
 }
 
+.delivery-summary-bar__pill--active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
 .delivery-summary-bar__pill--action {
   background: var(--accent);
   color: var(--on-accent);
@@ -3624,6 +3629,15 @@ input:focus-visible {
   background: transparent;
   color: var(--muted);
   font-size: 20px;
+}
+
+.delivery-toast {
+  /* Keep the delivery notice clear of the foreground notification toast. */
+  top: calc(env(safe-area-inset-top) + 88px);
+}
+
+.delivery-toast--danger .notification-toast__title {
+  color: var(--danger);
 }
 
 .drawer__section {

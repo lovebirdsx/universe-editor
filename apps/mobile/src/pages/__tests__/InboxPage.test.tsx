@@ -4,9 +4,10 @@ import type {
   MobileDeliverySummary,
   MobileSessionSummary,
 } from '@universe-editor/mobile-protocol'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
+import { strings } from '../../strings.js'
 import { sessionSummary } from '../../test/protocolFixtures.js'
 import { Store } from '../../state/store.js'
 import type { MobileClient } from '../../state/mobileClient.js'
@@ -130,13 +131,18 @@ function createClient(
   } as unknown as MobileClient
 }
 
-function renderPage(client: MobileClient, onOpenSession = vi.fn()): void {
+function renderPage(
+  client: MobileClient,
+  onOpenSession = vi.fn(),
+  onDeliveryNotice = vi.fn(),
+): void {
   render(
     <InboxPage
       client={client}
       credentials={credentials}
       onDismissNotice={vi.fn()}
       onNotice={vi.fn()}
+      onDeliveryNotice={onDeliveryNotice}
       onOpenSession={onOpenSession}
       onOpenSessions={vi.fn()}
       onNewSession={vi.fn()}
@@ -260,14 +266,17 @@ describe('InboxPage delivery', () => {
     expect(badgesRow?.textContent).toContain('远程')
   })
 
-  it('keeps the start action while a delivery still needs the user', async () => {
+  it('opens the detail instead of a duplicate start while a delivery needs the user', async () => {
     const client = createClient([
       sessionSummary('s1', { delivery: deliverySummary(), deliveryAvailable: true }),
     ])
     renderPage(client)
 
-    expect(screen.getByTestId('inbox-delivery-action')).toBeTruthy()
+    expect(screen.queryByTestId('inbox-delivery-action')).toBeNull()
     expect(screen.getByTestId('inbox-delivery-badge')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    expect(await screen.findByTestId('delivery-detail-sheet')).toBeTruthy()
   })
 
   it('shows the pushable count in the inbox summary bar', () => {
@@ -281,5 +290,114 @@ describe('InboxPage delivery', () => {
 
     const bar = screen.getByTestId('inbox-delivery-summary')
     expect(bar.textContent).toContain('1 条待推送')
+  })
+
+  it('shows the running phase in the inbox summary bar', () => {
+    const client = createClient([
+      sessionSummary('s1', { delivery: deliverySummary({ phase: 'pushing' }) }),
+    ])
+    renderPage(client)
+
+    expect(screen.getByTestId('inbox-delivery-summary-active').textContent).toBe(
+      strings.deliveryPhaseLabel('pushing'),
+    )
+  })
+
+  it('closes the confirm sheet before the background start resolves', async () => {
+    const client = createClient([sessionSummary('s1', { deliveryAvailable: true })])
+    let resolveStart: (value: { deliveryId: string }) => void = () => undefined
+    vi.mocked(client.startDelivery).mockReturnValue(
+      new Promise((resolve) => {
+        resolveStart = resolve
+      }),
+    )
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-action'))
+    fireEvent.click(await screen.findByTestId('delivery-start'))
+
+    expect(screen.queryByTestId('delivery-confirm-sheet')).toBeNull()
+    expect(client.startDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ localId: 's1' }),
+      previewFixture.expectation,
+    )
+    expect(screen.getByTestId('inbox-delivery-starting')).toBeTruthy()
+
+    resolveStart({ deliveryId: 'd-1' })
+    await waitFor(() => expect(screen.queryByTestId('inbox-delivery-starting')).toBeNull())
+  })
+
+  it('reports a background start failure through the delivery notice', async () => {
+    const client = createClient([sessionSummary('s1', { deliveryAvailable: true })])
+    vi.mocked(client.startDelivery).mockRejectedValue(new Error('offline'))
+    const onDeliveryNotice = vi.fn()
+    renderPage(client, vi.fn(), onDeliveryNotice)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-action'))
+    fireEvent.click(await screen.findByTestId('delivery-start'))
+
+    await waitFor(() => expect(onDeliveryNotice).toHaveBeenCalledTimes(1))
+    expect(onDeliveryNotice.mock.calls[0]?.[0]).toContain('Session s1')
+  })
+
+  it('does not re-preview when the inbox updates during confirmation', async () => {
+    const client = createClient([sessionSummary('s1', { deliveryAvailable: true })])
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-action'))
+    await screen.findByTestId('delivery-commits')
+    expect(client.previewDelivery).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      client.getInboxStore().setState({
+        sessions: [sessionSummary('s1', { deliveryAvailable: true, updatedAt: 2_000 })],
+        seq: 2,
+        hasSnapshot: true,
+      })
+    })
+    expect(client.previewDelivery).toHaveBeenCalledTimes(1)
+  })
+
+  it('follows the live delivery id after a retry replaces the record', async () => {
+    const failed = deliverySummary({ phase: 'failed', canConfirmPush: false, canRetry: true })
+    const client = createClient(
+      [sessionSummary('s1', { delivery: failed, deliveryAvailable: true })],
+      { ...detailFixture, summary: failed },
+    )
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    expect(await screen.findByTestId('delivery-detail-sheet')).toBeTruthy()
+    expect(client.getDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ localId: 's1' }),
+      'd-1',
+    )
+
+    const replacement = deliverySummary({
+      deliveryId: 'd-2',
+      phase: 'committing',
+      canConfirmPush: false,
+      canRetry: false,
+    })
+    act(() => {
+      client.getInboxStore().setState({
+        sessions: [
+          sessionSummary('s1', {
+            delivery: replacement,
+            deliveryAvailable: true,
+            updatedAt: 2_000,
+          }),
+        ],
+        seq: 2,
+        hasSnapshot: true,
+      })
+    })
+
+    await waitFor(() =>
+      expect(client.getDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({ localId: 's1' }),
+        'd-2',
+      ),
+    )
   })
 })

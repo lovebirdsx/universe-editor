@@ -1,4 +1,7 @@
-import type { MobileSessionSummary } from '@universe-editor/mobile-protocol'
+import type {
+  MobileDeliveryExpectation,
+  MobileSessionSummary,
+} from '@universe-editor/mobile-protocol'
 import type { StoredCredentials } from '../credentials.js'
 import { InboxGroups } from '../inbox/InboxGroups.js'
 import { selectInboxSessions } from '../inbox/groupSessions.js'
@@ -7,7 +10,7 @@ import {
   type InboxSessionSheetView,
 } from '../inbox/InboxSessionActionSheet.js'
 import type { MobileClient } from '../state/mobileClient.js'
-import { refMatches, sessionRouteKey } from '../state/refs.js'
+import { refMatches, localRefKey, sessionRouteKey } from '../state/refs.js'
 import { useStore } from '../state/useStore.js'
 import { NoticeBar } from '../components/NoticeBar.js'
 import { Spinner } from '../components/Spinner.js'
@@ -28,7 +31,7 @@ import { DeliveryConfirmSheet } from '../inbox/DeliveryConfirmSheet.js'
 import { DeliveryDetailSheet } from '../inbox/DeliveryDetailSheet.js'
 import { PushBranchSheet } from '../git/PushBranchSheet.js'
 import { useShellCacheFallback } from '../shellCache.js'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 type DeliverySheet =
   | { readonly mode: 'confirm'; readonly session: MobileSessionSummary }
@@ -44,6 +47,7 @@ export interface InboxPageProps {
   readonly notice?: string | undefined
   readonly onDismissNotice: () => void
   readonly onNotice: (text: string) => void
+  readonly onDeliveryNotice: (text: string) => void
   readonly onOpenSession: (sessionKey: string, focusPending: boolean) => void
   readonly onOpenSessions: () => void
   readonly onNewSession: () => void
@@ -56,6 +60,7 @@ export function InboxPage({
   notice,
   onDismissNotice,
   onNotice,
+  onDeliveryNotice,
   onOpenSession,
   onOpenSessions,
   onNewSession,
@@ -72,6 +77,8 @@ export function InboxPage({
     { readonly session: MobileSessionSummary; readonly view: InboxSessionSheetView } | undefined
   >(undefined)
   const [deliverySheet, setDeliverySheet] = useState<DeliverySheet | undefined>(undefined)
+  const [startingKeys, setStartingKeys] = useState<ReadonlySet<string>>(() => new Set())
+  const startingKeysRef = useRef<Set<string>>(new Set())
   const [pushSession, setPushSession] = useState<MobileSessionSummary | undefined>(undefined)
   // The sheet stays open while the inbox keeps moving; judge "is it working?"
   // against the latest summary, not the one captured on long-press.
@@ -85,6 +92,11 @@ export function InboxPage({
       ? undefined
       : (inbox.sessions.find((session) => refMatches(session.ref, deliverySheet.session.ref)) ??
         deliverySheet.session)
+  // A retry can replace the record with a new one; follow the live summary.
+  const deliveryDetailId =
+    deliverySheet?.mode === 'detail'
+      ? (deliverySession?.delivery?.deliveryId ?? deliverySheet.deliveryId)
+      : undefined
   const pushTarget =
     pushSession === undefined
       ? undefined
@@ -136,6 +148,42 @@ export function InboxPage({
     const delivery = session.delivery
     if (delivery === undefined) return
     setDeliverySheet({ mode: 'detail', session, deliveryId: delivery.deliveryId })
+  }
+
+  const isDeliveryStarting = (session: MobileSessionSummary): boolean =>
+    startingKeys.has(localRefKey(session.ref))
+
+  const requestStartDelivery = (session: MobileSessionSummary): void => {
+    if (session.delivery !== undefined) {
+      openDeliveryDetail(session)
+      return
+    }
+    if (startingKeysRef.current.has(localRefKey(session.ref))) return
+    setDeliverySheet({ mode: 'confirm', session })
+  }
+
+  // Close the confirm sheet first: the delivery keeps running on the PC and the
+  // phone follows it through inbox deltas, so the user is free to keep browsing.
+  const beginDelivery = (
+    session: MobileSessionSummary,
+    expectation: MobileDeliveryExpectation,
+  ): void => {
+    const key = localRefKey(session.ref)
+    if (startingKeysRef.current.has(key)) return
+    startingKeysRef.current.add(key)
+    setStartingKeys(new Set(startingKeysRef.current))
+    setDeliverySheet(undefined)
+    void client
+      .startDelivery(session.ref, expectation)
+      .then(
+        () => undefined,
+        (error: unknown) =>
+          onDeliveryNotice(`「${session.title}」${commandErrorText(errorCode(error))}`),
+      )
+      .finally(() => {
+        startingKeysRef.current.delete(key)
+        setStartingKeys(new Set(startingKeysRef.current))
+      })
   }
 
   return (
@@ -221,28 +269,27 @@ export function InboxPage({
           session={deliverySession}
           online={socketState === 'connected'}
           onDismiss={() => setDeliverySheet(undefined)}
-          onStarted={(deliveryId) =>
-            setDeliverySheet({ mode: 'detail', session: deliverySession, deliveryId })
-          }
-          onNotice={onNotice}
+          onStart={(expectation) => beginDelivery(deliverySession, expectation)}
         />
       )}
-      {deliverySheet?.mode === 'detail' && deliverySession !== undefined && (
-        <DeliveryDetailSheet
-          key={`detail:${deliverySheet.deliveryId}`}
-          client={client}
-          session={deliverySession}
-          deliveryId={deliverySheet.deliveryId}
-          online={socketState === 'connected'}
-          onDismiss={() => setDeliverySheet(undefined)}
-          onOpenSession={() => {
-            setDeliverySheet(undefined)
-            onOpenSession(sessionRouteKey(deliverySession.ref), false)
-          }}
-          onStartDelivery={() => setDeliverySheet({ mode: 'confirm', session: deliverySession })}
-          onNotice={onNotice}
-        />
-      )}
+      {deliverySheet?.mode === 'detail' &&
+        deliverySession !== undefined &&
+        deliveryDetailId !== undefined && (
+          <DeliveryDetailSheet
+            key={`detail:${deliveryDetailId}`}
+            client={client}
+            session={deliverySession}
+            deliveryId={deliveryDetailId}
+            online={socketState === 'connected'}
+            onDismiss={() => setDeliverySheet(undefined)}
+            onOpenSession={() => {
+              setDeliverySheet(undefined)
+              onOpenSession(sessionRouteKey(deliverySession.ref), false)
+            }}
+            onStartDelivery={() => setDeliverySheet({ mode: 'confirm', session: deliverySession })}
+            onNotice={onNotice}
+          />
+        )}
     </div>
   )
 
@@ -286,8 +333,9 @@ export function InboxPage({
             onCloseSession={closeSession}
             onRemoveSession={removeSession}
             onShowSessionActions={(session) => setSessionAction({ session, view: 'menu' })}
-            onStartDelivery={(session) => setDeliverySheet({ mode: 'confirm', session })}
+            onStartDelivery={requestStartDelivery}
             onOpenDelivery={(session) => openDeliveryDetail(session)}
+            isDeliveryStarting={isDeliveryStarting}
             dirtyWindowIds={dirtyWindowIds}
             stale={socketState !== 'connected'}
           />

@@ -548,8 +548,19 @@ export const strings = {
     }
   },
   deliverySummaryTitle: (total: number): string => `交付 · ${total} 条进行中或待处理`,
+  deliverySummaryActive: (count: number): string => `${count} 条进行中`,
   deliverySummaryPushable: (count: number): string => `${count} 条待推送`,
   deliverySummaryFailed: (count: number): string => `${count} 条需处理`,
+  deliveryAlertAwaitingPushTitle: '交付待确认推送',
+  deliveryAlertAwaitingPushBody: (title: string): string =>
+    `「${title}」的交付已准备就绪，确认后推送。`,
+  deliveryAlertFailedTitle: '交付失败',
+  deliveryAlertFailedBody: (title: string): string =>
+    `「${title}」的交付失败，可在收件箱查看详情。`,
+  deliveryAlertPartialTitle: '交付部分同步',
+  deliveryAlertPartialBody: (title: string): string =>
+    `「${title}」已推送，但部分 worktree 同步失败。`,
+  deliveryStartFailedTitle: '交付未开始',
 
   newSessionTitle: '新建会话',
   newSessionBack: '返回收件箱',

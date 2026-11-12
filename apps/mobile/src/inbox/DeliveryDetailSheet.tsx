@@ -1,11 +1,12 @@
 import type { MobileDeliveryDetail, MobileSessionSummary } from '@universe-editor/mobile-protocol'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet.js'
 import { ConfirmActionSheet } from '../components/ConfirmActionSheet.js'
 import { Spinner } from '../components/Spinner.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
 import type { MobileClient } from '../state/mobileClient.js'
+import { localRefKey } from '../state/refs.js'
 import { deliveryTone } from './deliveryStatus.js'
 import { DeliveryCommitList, DeliveryErrorList, DeliveryWorktreeResults } from './DeliveryParts.js'
 
@@ -48,11 +49,15 @@ export function DeliveryDetailSheet({
   const [view, setView] = useState<DetailView>('detail')
   const [reloadToken, setReloadToken] = useState(0)
   const summaryUpdatedAt = session.delivery?.updatedAt
+  // Track the newest ref object without re-fetching on every inbox push.
+  const sessionRef = useRef(session.ref)
+  sessionRef.current = session.ref
+  const refKey = localRefKey(sessionRef.current)
 
   useEffect(() => {
     let cancelled = false
     setFailure(undefined)
-    void client.getDelivery(session.ref, deliveryId).then(
+    void client.getDelivery(sessionRef.current, deliveryId).then(
       (value) => {
         if (!cancelled) setDetail(value)
       },
@@ -63,7 +68,7 @@ export function DeliveryDetailSheet({
     return () => {
       cancelled = true
     }
-  }, [client, session.ref, deliveryId, reloadToken, summaryUpdatedAt])
+  }, [client, refKey, deliveryId, reloadToken, summaryUpdatedAt])
 
   const run = (action: DeliveryAction, request: () => Promise<void>): void => {
     if (busy !== undefined) return
@@ -161,7 +166,7 @@ export function DeliveryDetailSheet({
               {busy === 'undo' ? strings.deliveryUndoing : strings.deliveryUndo}
             </button>
           )}
-          {summary?.phase === 'synced' && (
+          {(summary?.phase === 'synced' || summary?.phase === 'undone') && (
             <button
               type="button"
               className="sheet-option sheet-option--neutral"

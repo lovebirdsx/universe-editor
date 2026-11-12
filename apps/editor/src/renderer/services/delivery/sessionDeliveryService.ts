@@ -86,6 +86,15 @@ export interface ISessionDeliveryService {
     sessionId: string,
     expectation: SessionDeliveryStartExpectation,
   ): Promise<SessionDeliveryCommandResult<SessionDeliveryStartResult>>
+  /**
+   * Preflight synchronously, then run the pipeline in the background. The
+   * returned id is safe to open immediately; later failures land in the record
+   * and reach the phone through the normal inbox deltas.
+   */
+  startInBackground(
+    sessionId: string,
+    expectation: SessionDeliveryStartExpectation,
+  ): Promise<SessionDeliveryCommandResult<SessionDeliveryStartResult>>
   confirmPush(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
   retry(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
   undo(deliveryId: string): Promise<SessionDeliveryCommandResult<void>>
@@ -146,6 +155,12 @@ interface PickAllResult {
   readonly commits?: readonly SessionDeliveryCommit[]
   readonly skippedEmpty?: readonly string[]
   readonly error?: SessionDeliveryError
+}
+
+interface PreparedSessionDeliveryStart {
+  readonly record: SessionDeliveryRecord
+  readonly session: IAcpSession
+  readonly expectation: SessionDeliveryStartExpectation
 }
 
 const HEARTBEAT_INTERVAL_MS = 60_000
@@ -257,8 +272,20 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
       )
     }
     const repositoryKey = await sessionDeliveryRepositoryKey(data.repository.commonDir)
-    if (this._activeRecordForRepo(repositoryKey) !== undefined) {
-      blockers.push(failure('busy', 'Another delivery is already running for this repository.'))
+    const activeForRepo = this._activeRecordForRepo(repositoryKey)
+    if (activeForRepo !== undefined) {
+      const durableId = session!.sessionIdOnAgent.get()
+      const own =
+        activeForRepo.source.sessionLocalId === session!.id ||
+        (durableId !== undefined && activeForRepo.source.sessionDurableId === durableId)
+      blockers.push(
+        failure(
+          'busy',
+          own
+            ? 'This session already has an active delivery.'
+            : 'Another delivery is already running for this repository.',
+        ),
+      )
     }
     const target = {
       mainWorktree: data.repository.mainWorktree,
@@ -309,6 +336,34 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     sessionId: string,
     expectation: SessionDeliveryStartExpectation,
   ): Promise<SessionDeliveryCommandResult<SessionDeliveryStartResult>> {
+    const prepared = await this._prepareStart(sessionId, expectation)
+    if (!prepared.ok) return prepared
+    return this._runStart(prepared.value)
+  }
+
+  async startInBackground(
+    sessionId: string,
+    expectation: SessionDeliveryStartExpectation,
+  ): Promise<SessionDeliveryCommandResult<SessionDeliveryStartResult>> {
+    const prepared = await this._prepareStart(sessionId, expectation)
+    if (!prepared.ok) return prepared
+    const deliveryId = prepared.value.record.id
+    void this._runStart(prepared.value)
+      .then((result) => {
+        if (!result.ok) {
+          this._logger.warn(`background delivery ${deliveryId} failed: ${result.error.code}`)
+        }
+      })
+      .catch((err: unknown) => {
+        this._logger.warn(`background delivery ${deliveryId} crashed`, err)
+      })
+    return { ok: true, value: { deliveryId } }
+  }
+
+  private async _prepareStart(
+    sessionId: string,
+    expectation: SessionDeliveryStartExpectation,
+  ): Promise<SessionDeliveryCommandResult<PreparedSessionDeliveryStart>> {
     await this.initialize()
     const session = this._sessions.getById(sessionId)
     const guard = this._guardSession(session)
@@ -366,7 +421,7 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
 
     const now = Date.now()
     const durableId = live.sessionIdOnAgent.get()
-    let record: SessionDeliveryRecord = {
+    const record: SessionDeliveryRecord = {
       id: deliveryId,
       repositoryKey,
       commonDir: data.repository.commonDir,
@@ -405,82 +460,142 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     }
     this._put(record)
     this._startHeartbeat(record)
+    return { ok: true, value: { record, session: live, expectation } }
+  }
 
-    const begin = await this._git.begin({
-      commonDir: data.repository.commonDir,
-      deliveryId,
-      token,
-      mainWorktree: data.repository.mainWorktree,
-      sourceCwd: data.source.worktree,
-      targetBranch: data.repository.targetBranch,
-      expectedMainHead: expectation.mainHead,
-      expectedUpstreamHead: expectation.upstreamHead,
-      expectedSourceHead: expectation.sourceHead,
-      remote: data.repository.remote,
-      upstreamRef: data.repository.upstreamRef,
-    })
-    if (!begin.ok) {
-      await this._failDelivery(record, fromGitFailure(begin.error))
-      return { ok: false, error: fromGitFailure(begin.error) }
-    }
-    record =
-      this._update(record.id, {
-        mainHeadBefore: begin.mainHeadBefore,
-        mainHeadAfter: begin.mainHeadAfter,
-        target: { ...record.target, upstreamHead: begin.upstreamHead, baseSha: data.baseSha },
-      }) ?? record
-
-    let sourceHead = data.source.head
-    let commits: readonly SessionDeliveryCommit[] = data.commits
-    if (data.source.dirty) {
-      record = this._update(record.id, { phase: 'committing' }) ?? record
-      const generated = await this._generateAndCommit(record, live)
-      if (!generated.ok || generated.head === undefined || generated.commit === undefined) {
-        await this._failDelivery(
-          record,
-          generated.error ?? failure('side_task_failed', 'Commit message generation failed.'),
-          {
-            restoreMain: true,
-          },
-        )
-        return { ok: false, error: generated.error! }
+  private async _runStart(
+    prepared: PreparedSessionDeliveryStart,
+  ): Promise<SessionDeliveryCommandResult<SessionDeliveryStartResult>> {
+    let { record } = prepared
+    const { session, expectation } = prepared
+    try {
+      const begin = await this._git.begin({
+        commonDir: record.commonDir,
+        deliveryId: record.id,
+        token: record.lockToken!,
+        mainWorktree: record.target.mainWorktree,
+        sourceCwd: record.source.worktree,
+        targetBranch: record.target.targetBranch,
+        expectedMainHead: expectation.mainHead,
+        expectedUpstreamHead: expectation.upstreamHead,
+        expectedSourceHead: expectation.sourceHead,
+        remote: record.target.remote,
+        upstreamRef: record.target.upstreamRef,
+      })
+      if (!begin.ok) {
+        await this._failDelivery(record, fromGitFailure(begin.error))
+        return { ok: false, error: fromGitFailure(begin.error) }
       }
-      sourceHead = generated.head
-      commits = [...commits, generated.commit]
       record =
         this._update(record.id, {
-          generatedMessage: generated.commit.subject,
-          commits,
-          source: { ...record.source, head: sourceHead },
+          mainHeadBefore: begin.mainHeadBefore,
+          mainHeadAfter: begin.mainHeadAfter,
+          target: { ...record.target, upstreamHead: begin.upstreamHead },
         }) ?? record
-    }
 
-    record = this._update(record.id, { phase: 'cherry_picking' }) ?? record
-    const picked = await this._pickAll(
-      record,
-      sourceHead,
-      commits.map((commit) => commit.sha),
-    )
-    if (!picked.ok || picked.pick === undefined) {
-      await this._failDelivery(
+      let sourceHead = record.source.head
+      let commits: readonly SessionDeliveryCommit[] = record.commits
+      if (record.sourceDirty) {
+        record = this._update(record.id, { phase: 'committing' }) ?? record
+        const generated = await this._generateAndCommit(record, session)
+        if (!generated.ok || generated.head === undefined || generated.commit === undefined) {
+          await this._failDelivery(
+            record,
+            generated.error ?? failure('side_task_failed', 'Commit message generation failed.'),
+            {
+              restoreMain: true,
+            },
+          )
+          return { ok: false, error: generated.error! }
+        }
+        sourceHead = generated.head
+        commits = [...commits, generated.commit]
+        record =
+          this._update(record.id, {
+            generatedMessage: generated.commit.subject,
+            commits,
+            source: { ...record.source, head: sourceHead },
+          }) ?? record
+      }
+
+      record = this._update(record.id, { phase: 'cherry_picking' }) ?? record
+      const picked = await this._pickAll(
         record,
-        picked.error ?? failure('git_failed', 'Cherry-picking the delivery failed.'),
-        { restoreMain: true, tempWorktree: picked.pick?.tempWorktree },
+        sourceHead,
+        commits.map((commit) => commit.sha),
       )
-      return { ok: false, error: picked.error ?? failure('git_failed', 'Cherry-pick failed.') }
+      if (!picked.ok || picked.pick === undefined) {
+        await this._failDelivery(
+          record,
+          picked.error ?? failure('git_failed', 'Cherry-picking the delivery failed.'),
+          { restoreMain: true, tempWorktree: picked.pick?.tempWorktree },
+        )
+        return { ok: false, error: picked.error ?? failure('git_failed', 'Cherry-pick failed.') }
+      }
+      const pick = picked.pick
+      record =
+        this._update(record.id, {
+          phase: 'awaiting_push',
+          tempWorktree: pick.tempWorktree,
+          tempHead: pick.tempHead,
+          commits: picked.commits ?? commits,
+          skippedEmpty: picked.skippedEmpty ?? [],
+          conflictFiles: [],
+        }) ?? record
+      this._startHeartbeat(record)
+      return { ok: true, value: { deliveryId: record.id } }
+    } catch (err) {
+      const error = failure(
+        'git_failed',
+        'The delivery stopped unexpectedly.',
+        err instanceof Error ? err.message : String(err),
+      )
+      await this._failDeliverySafely(record.id, error)
+      return { ok: false, error }
     }
-    const pick = picked.pick
-    record =
-      this._update(record.id, {
-        phase: 'awaiting_push',
-        tempWorktree: pick.tempWorktree,
-        tempHead: pick.tempHead,
-        commits: picked.commits ?? commits,
-        skippedEmpty: picked.skippedEmpty ?? [],
-        conflictFiles: [],
-      }) ?? record
-    this._startHeartbeat(record)
-    return { ok: true, value: { deliveryId: record.id } }
+  }
+
+  /** Last-resort cleanup for a background pipeline that escaped its own error paths. */
+  private async _failDeliverySafely(
+    deliveryId: string,
+    error: SessionDeliveryError,
+  ): Promise<void> {
+    const latest = this._records.get(deliveryId)
+    if (latest === undefined || !isActiveDeliveryPhase(latest.phase)) return
+    let finalError = error
+    if (latest.lockToken !== undefined) {
+      try {
+        await this._git.abortPick({
+          commonDir: latest.commonDir,
+          deliveryId: latest.id,
+          token: latest.lockToken,
+          mainWorktree: latest.target.mainWorktree,
+          ...(latest.tempWorktree !== undefined ? { tempWorktree: latest.tempWorktree } : {}),
+        })
+      } catch (err) {
+        this._logger.warn(`failed to abort the temp worktree for delivery ${deliveryId}`, err)
+      }
+    }
+    try {
+      const restoreError = await this._restoreMain(latest)
+      if (restoreError !== undefined) finalError = appendDetail(finalError, restoreError.message)
+    } catch (err) {
+      this._logger.warn(`failed to restore main for delivery ${deliveryId}`, err)
+    }
+    try {
+      await this._releaseLock(latest)
+    } catch (err) {
+      this._logger.warn(`failed to release the lock for delivery ${deliveryId}`, err)
+      this._stopHeartbeat(deliveryId)
+    }
+    this._stopHeartbeat(deliveryId)
+    this._update(deliveryId, {
+      phase: 'failed',
+      error: finalError,
+      tempWorktree: undefined,
+      tempHead: undefined,
+      conflictFiles: [],
+    })
   }
 
   async confirmPush(deliveryId: string): Promise<SessionDeliveryCommandResult<void>> {
@@ -577,7 +692,7 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     if (preview.preview.blockers.length > 0) {
       return { ok: false, error: preview.preview.blockers[0]! }
     }
-    const started = await this.start(session.id, preview.preview.expectation)
+    const started = await this.startInBackground(session.id, preview.preview.expectation)
     return started.ok ? { ok: true, value: undefined } : started
   }
 
@@ -1486,7 +1601,19 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
       const matchesLocal = record.source.sessionLocalId === localId
       const matchesDurable = durableId !== undefined && record.source.sessionDurableId === durableId
       if (!matchesLocal && !matchesDurable) continue
-      if (best === undefined || record.updatedAt > best.updatedAt) best = record
+      if (best === undefined) {
+        best = record
+        continue
+      }
+      // A retry can create the next record within the same millisecond as the
+      // failure update; break the tie on createdAt (and insertion order) so the
+      // session summary follows the new attempt.
+      if (
+        record.updatedAt > best.updatedAt ||
+        (record.updatedAt === best.updatedAt && record.createdAt >= best.createdAt)
+      ) {
+        best = record
+      }
     }
     return best
   }

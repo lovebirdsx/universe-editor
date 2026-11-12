@@ -16,6 +16,8 @@ export interface InboxGroupsProps {
   readonly onStartDelivery?: ((session: MobileSessionSummary) => void) | undefined
   /** Open the status sheet of the row's latest delivery. */
   readonly onOpenDelivery?: ((session: MobileSessionSummary) => void) | undefined
+  /** startDelivery was fired and the record has not appeared in the inbox yet. */
+  readonly isDeliveryStarting?: ((session: MobileSessionSummary) => boolean) | undefined
   /** Windows whose workspace has uncommitted changes (joined by ref.windowId). */
   readonly dirtyWindowIds?: ReadonlySet<number> | undefined
   /** The PC is offline / reconnecting: keep the list visible but de-emphasised. */
@@ -30,6 +32,7 @@ export function InboxGroups({
   onShowSessionActions,
   onStartDelivery,
   onOpenDelivery,
+  isDeliveryStarting,
   dirtyWindowIds,
   stale,
 }: InboxGroupsProps) {
@@ -130,6 +133,7 @@ export function InboxGroups({
                         workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
                         onStartDelivery={onStartDelivery}
                         onOpenDelivery={onOpenDelivery}
+                        starting={isDeliveryStarting?.(session) === true}
                       />
                     </SwipeableSessionRow>
                   ) : (
@@ -140,6 +144,7 @@ export function InboxGroups({
                       workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
                       onStartDelivery={onStartDelivery}
                       onOpenDelivery={onOpenDelivery}
+                      starting={isDeliveryStarting?.(session) === true}
                     />
                   )}
                 </li>
@@ -161,6 +166,7 @@ interface SessionRowProps {
   readonly onShowActions?: (() => void) | undefined
   readonly onStartDelivery?: ((session: MobileSessionSummary) => void) | undefined
   readonly onOpenDelivery?: ((session: MobileSessionSummary) => void) | undefined
+  readonly starting?: boolean | undefined
 }
 
 function SessionRow({
@@ -172,6 +178,7 @@ function SessionRow({
   onShowActions,
   onStartDelivery,
   onOpenDelivery,
+  starting,
 }: SessionRowProps) {
   const routeKey = sessionRouteKey(session.ref)
   const focusPending =
@@ -188,7 +195,8 @@ function SessionRow({
   if (session.readOnly) badges.push(strings.badgeReadOnly)
   if (workspaceDirty === true) badges.push(strings.badgeWorkspaceDirty)
   // Delivery badges share the row with the rest so a synced row stays compact.
-  const hasDelivery = session.delivery !== undefined || session.deliveryAvailable === true
+  const hasDelivery =
+    session.delivery !== undefined || session.deliveryAvailable === true || starting === true
 
   return (
     <button
@@ -230,6 +238,7 @@ function SessionRow({
               <SessionDeliveryControls
                 delivery={session.delivery}
                 available={session.deliveryAvailable}
+                starting={starting}
                 onStartDelivery={() => onStartDelivery?.(session)}
                 onOpenDelivery={() => onOpenDelivery?.(session)}
               />

@@ -301,7 +301,7 @@ const DELETE_HISTORY_TIMEOUT_MS = 30_000
 const HISTORY_OPEN_POLL_INTERVAL_MS = 300
 const PREVIEW_REWIND_TIMEOUT_MS = 30_000
 const LIST_SIDE_TASKS_TIMEOUT_MS = 10_000
-/** Preview may fetch; start may run an internal side task (90s budget). */
+/** Preview may fetch; start only waits for preflight and the delivery lock. */
 const DELIVERY_PREVIEW_TIMEOUT_MS = 110_000
 const DELIVERY_START_TIMEOUT_MS = 110_000
 /** Push / retry / undo include network round-trips and worktree sync. */

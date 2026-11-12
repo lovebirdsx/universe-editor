@@ -76,16 +76,30 @@ export function selectDeliveryEntries(
 
 export interface DeliveryInboxSummary {
   readonly total: number
+  readonly active: number
+  readonly activePhase?: MobileDeliveryPhase
   readonly pushable: number
   readonly failed: number
 }
 
 export function summarizeDeliveries(entries: readonly DeliveryInboxEntry[]): DeliveryInboxSummary {
+  let active = 0
+  let activePhase: MobileDeliveryPhase | undefined
   let pushable = 0
   let failed = 0
   for (const entry of entries) {
+    if (isActiveDeliveryPhase(entry.delivery.phase)) {
+      active += 1
+      activePhase ??= entry.delivery.phase
+    }
     if (entry.delivery.phase === 'awaiting_push') pushable += 1
     if (entry.delivery.phase === 'failed' || entry.delivery.phase === 'partial') failed += 1
   }
-  return { total: entries.length, pushable, failed }
+  return {
+    total: entries.length,
+    active,
+    ...(activePhase !== undefined ? { activePhase } : {}),
+    pushable,
+    failed,
+  }
 }

@@ -1,19 +1,23 @@
-import type { MobileDeliveryPreview, MobileSessionSummary } from '@universe-editor/mobile-protocol'
-import { useEffect, useState } from 'react'
+import type {
+  MobileDeliveryExpectation,
+  MobileDeliveryPreview,
+  MobileSessionSummary,
+} from '@universe-editor/mobile-protocol'
+import { useEffect, useRef, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet.js'
 import { Spinner } from '../components/Spinner.js'
 import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
 import type { MobileClient } from '../state/mobileClient.js'
+import { localRefKey } from '../state/refs.js'
 import { DeliveryCommitList, DeliveryErrorList } from './DeliveryParts.js'
 
 export interface DeliveryConfirmSheetProps {
-  readonly client: Pick<MobileClient, 'previewDelivery' | 'startDelivery'>
+  readonly client: Pick<MobileClient, 'previewDelivery'>
   readonly session: MobileSessionSummary
   readonly online: boolean
   readonly onDismiss: () => void
-  readonly onStarted: (deliveryId: string) => void
-  readonly onNotice: (text: string) => void
+  readonly onStart: (expectation: MobileDeliveryExpectation) => void
 }
 
 /** Preview + confirmation before any repository write happens. */
@@ -22,16 +26,20 @@ export function DeliveryConfirmSheet({
   session,
   online,
   onDismiss,
-  onStarted,
-  onNotice,
+  onStart,
 }: DeliveryConfirmSheetProps) {
   const [preview, setPreview] = useState<MobileDeliveryPreview | undefined>(undefined)
   const [failure, setFailure] = useState<string | undefined>(undefined)
-  const [starting, setStarting] = useState(false)
+  const submitted = useRef(false)
+  // Keep the newest ref object without re-running the preview when the inbox
+  // pushes replace the session object but keep the same local identity.
+  const sessionRef = useRef(session.ref)
+  sessionRef.current = session.ref
+  const sessionKey = localRefKey(sessionRef.current)
 
   useEffect(() => {
     let cancelled = false
-    void client.previewDelivery(session.ref).then(
+    void client.previewDelivery(sessionRef.current).then(
       (value) => {
         if (!cancelled) setPreview(value)
       },
@@ -42,21 +50,12 @@ export function DeliveryConfirmSheet({
     return () => {
       cancelled = true
     }
-  }, [client, session.ref])
+  }, [client, sessionKey])
 
   const start = (): void => {
-    if (starting || preview === undefined) return
-    setStarting(true)
-    void client.startDelivery(session.ref, preview.expectation).then(
-      (result) => {
-        setStarting(false)
-        onStarted(result.deliveryId)
-      },
-      (error: unknown) => {
-        setStarting(false)
-        onNotice(commandErrorText(errorCode(error)))
-      },
-    )
+    if (submitted.current || preview === undefined) return
+    submitted.current = true
+    onStart(preview.expectation)
   }
 
   const blocked = preview !== undefined && preview.blockers.length > 0
@@ -67,23 +66,22 @@ export function DeliveryConfirmSheet({
       testId="delivery-confirm-sheet"
       tone="neutral"
       overlay
-      onDismiss={starting ? undefined : onDismiss}
+      onDismiss={onDismiss}
       footer={
         <div className="sheet-options">
           <button
             type="button"
             className="sheet-option sheet-option--neutral"
             data-testid="delivery-start"
-            disabled={!online || starting || preview === undefined || blocked}
+            disabled={!online || preview === undefined || blocked}
             onClick={start}
           >
-            {starting ? strings.deliveryStarting : strings.deliveryStart}
+            {strings.deliveryStart}
           </button>
           <button
             type="button"
             className="sheet-option sheet-option--cancel"
             data-testid="delivery-confirm-cancel"
-            disabled={starting}
             onClick={onDismiss}
           >
             {strings.deliveryCancel}

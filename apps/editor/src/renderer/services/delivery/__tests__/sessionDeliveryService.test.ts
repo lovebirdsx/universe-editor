@@ -27,6 +27,22 @@ function value<T>(current: T): { get(): T } {
   return { get: () => current }
 }
 
+type BeginResult = Awaited<ReturnType<ISessionDeliveryGit['begin']>>
+
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+  readonly reject: (error: unknown) => void
+} {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 function makeSession(overrides: Partial<Record<keyof IAcpSession, unknown>> = {}): IAcpSession {
   return {
     id: 's1',
@@ -307,7 +323,7 @@ describe('SessionDeliveryService preview', () => {
     expect(preview.blockers.map((blocker) => blocker.code)).toContain('unsupported')
   })
 
-  it('blocks preview while another delivery runs for the repository', async () => {
+  it('reports its own running delivery instead of another one', async () => {
     const git = makeGit()
     active = makeService({ git })
     const preview = await previewOf(active)
@@ -316,7 +332,58 @@ describe('SessionDeliveryService preview', () => {
     const blocked = await active.preview('s1')
     expect(blocked.ok).toBe(true)
     if (blocked.ok) {
-      expect(blocked.preview.blockers.map((blocker) => blocker.code)).toContain('busy')
+      expect(blocked.preview.blockers).toContainEqual(
+        expect.objectContaining({
+          code: 'busy',
+          message: 'This session already has an active delivery.',
+        }),
+      )
+    }
+  })
+
+  it('blocks preview while another session delivers the same repository', async () => {
+    const first = makeSession()
+    const second = makeSession({
+      id: 's2',
+      cwd: '/repo/other',
+      sessionIdOnAgent: value('durable-2'),
+    })
+    const git = makeGit({
+      inspect: vi.fn(async (input: { sourceCwd: string }) => {
+        const base = inspectData()
+        return {
+          ok: true,
+          ...inspectData({
+            source:
+              input.sourceCwd === '/repo/other'
+                ? { ...base.source, worktree: '/repo/other', branch: 'other', head: 'o1' }
+                : base.source,
+          }),
+        } as const
+      }),
+    })
+    active = makeService({
+      session: first,
+      git,
+      sessions: {
+        getById: vi.fn((id: string) => (id === 's1' ? first : id === 's2' ? second : undefined)),
+      },
+    })
+
+    const otherPreview = await active.preview('s2')
+    if (!otherPreview.ok) throw new Error('preview failed')
+    const started = await active.start('s2', otherPreview.preview.expectation)
+    expect(started.ok).toBe(true)
+
+    const blocked = await active.preview('s1')
+    expect(blocked.ok).toBe(true)
+    if (blocked.ok) {
+      expect(blocked.preview.blockers).toContainEqual(
+        expect.objectContaining({
+          code: 'busy',
+          message: 'Another delivery is already running for this repository.',
+        }),
+      )
     }
   })
 })
@@ -437,6 +504,171 @@ describe('SessionDeliveryService start', () => {
     expect(git.commitSource).not.toHaveBeenCalled()
     expect(git.restoreMain).toHaveBeenCalledTimes(1)
     expect(active.getSummaryForSession('s1')?.phase).toBe('failed')
+  })
+})
+
+describe('SessionDeliveryService background start', () => {
+  const beginData = {
+    ok: true as const,
+    mainHeadBefore: 'm1',
+    mainHeadAfter: 'm2',
+    upstreamHead: 'u1',
+    mainBranch: 'main',
+    remote: 'origin',
+    upstreamRef: 'origin/main',
+    fetched: true,
+  }
+
+  it('returns before the git pipeline finishes and continues in the background', async () => {
+    const pending = deferred<BeginResult>()
+    const git = makeGit({ begin: vi.fn(() => pending.promise) })
+    const service = makeService({ git })
+    active = service
+    const preview = await previewOf(service)
+
+    const started = await service.startInBackground('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+    expect(git.begin).toHaveBeenCalledTimes(1)
+    expect(git.preparePick).not.toHaveBeenCalled()
+    expect(service.getSummaryForSession('s1')?.phase).toBe('preflighting')
+
+    pending.resolve(beginData)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+    })
+    expect(service.getSummaryForSession('s1')?.deliveryId).toBe(started.value.deliveryId)
+  })
+
+  it('marks the delivery failed and cleans up when the background pipeline throws', async () => {
+    const git = makeGit({
+      preparePick: vi.fn(async () => {
+        throw new Error('extension host disconnected')
+      }),
+    })
+    const service = makeService({ git })
+    active = service
+    const preview = await previewOf(service)
+
+    const started = await service.startInBackground('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('failed')
+    })
+    expect(service.getSummaryForSession('s1')?.error?.message).toBe(
+      'The delivery stopped unexpectedly.',
+    )
+    expect(git.abortPick).toHaveBeenCalled()
+    expect(git.restoreMain).toHaveBeenCalledTimes(1)
+    expect(git.releaseLock).toHaveBeenCalledTimes(1)
+    expect(service.listActiveContexts()).toHaveLength(0)
+  })
+
+  it('fails a dirty background delivery and releases the lock when the message is empty', async () => {
+    const sideTask = makeSession({ id: 'side-1', internal: true, messages: value([]) })
+    const session = makeSession()
+    const git = makeGit({
+      inspect: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...inspectData({ source: { ...inspectData().source, dirty: true } }),
+          }) as const,
+      ),
+    })
+    const service = makeService({
+      session,
+      git,
+      sessions: { forkSideTask: vi.fn(async () => sideTask), getById: vi.fn(() => session) },
+    })
+    active = service
+    const preview = await previewOf(service)
+
+    const started = await service.startInBackground('s1', preview.expectation)
+    expect(started.ok).toBe(true)
+    if (!started.ok) return
+
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('failed')
+    })
+    expect(git.commitSource).not.toHaveBeenCalled()
+    expect(git.restoreMain).toHaveBeenCalledTimes(1)
+    expect(git.releaseLock).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a second background start for the same session', async () => {
+    const pending = deferred<BeginResult>()
+    const git = makeGit({ begin: vi.fn(() => pending.promise) })
+    const service = makeService({ git })
+    active = service
+    const preview = await previewOf(service)
+
+    const first = await service.startInBackground('s1', preview.expectation)
+    expect(first.ok).toBe(true)
+    const second = await service.startInBackground('s1', preview.expectation)
+    expect(second.ok).toBe(false)
+    if (!second.ok) {
+      expect(second.error.code).toBe('busy')
+      expect(second.error.message).toBe('This session already has an active delivery.')
+    }
+    expect(git.begin).toHaveBeenCalledTimes(1)
+
+    pending.resolve(beginData)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+    })
+  })
+
+  it('restarts a failed delivery in the background from retry', async () => {
+    let sideTaskMessages: { role: string; text: string }[] = []
+    const sideTask = makeSession({
+      id: 'side-1',
+      internal: true,
+      messages: { get: () => sideTaskMessages },
+    })
+    const session = makeSession()
+    const pending = deferred<BeginResult>()
+    const begin = vi
+      .fn()
+      .mockResolvedValueOnce(beginData)
+      .mockImplementationOnce(() => pending.promise)
+    const git = makeGit({
+      inspect: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            ...inspectData({ source: { ...inspectData().source, dirty: true } }),
+          }) as const,
+      ),
+      begin: begin as unknown as ISessionDeliveryGit['begin'],
+    })
+    const service = makeService({
+      session,
+      git,
+      sessions: { forkSideTask: vi.fn(async () => sideTask), getById: vi.fn(() => session) },
+    })
+    active = service
+    const preview = await previewOf(service)
+
+    const failed = await service.start('s1', preview.expectation)
+    expect(failed.ok).toBe(false)
+    const failedSummary = service.getSummaryForSession('s1')
+    expect(failedSummary?.phase).toBe('failed')
+    if (failedSummary === undefined) return
+
+    sideTaskMessages = [{ role: 'agent', text: 'feat: retried subject' }]
+    const retried = await service.retry(failedSummary.deliveryId)
+    expect(retried.ok).toBe(true)
+    expect(service.getSummaryForSession('s1')?.phase).toBe('preflighting')
+
+    pending.resolve(beginData)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+    })
+    expect(begin).toHaveBeenCalledTimes(2)
+    expect(service.getSummaryForSession('s1')?.deliveryId).not.toBe(failedSummary.deliveryId)
   })
 })
 

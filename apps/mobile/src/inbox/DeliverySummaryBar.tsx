@@ -12,6 +12,12 @@ export function DeliverySummaryBar({ entries, onOpenDelivery }: DeliverySummaryB
   const first = entries[0]
   if (first === undefined) return null
   const summary = summarizeDeliveries(entries)
+  const activeLabel =
+    summary.active === 0
+      ? undefined
+      : summary.active === 1 && summary.activePhase !== undefined
+        ? strings.deliveryPhaseLabel(summary.activePhase)
+        : strings.deliverySummaryActive(summary.active)
   const target =
     entries.find((entry) => entry.delivery.phase === 'awaiting_push') ??
     entries.find(
@@ -30,6 +36,14 @@ export function DeliverySummaryBar({ entries, onOpenDelivery }: DeliverySummaryB
         {strings.deliverySummaryTitle(summary.total)}
       </span>
       <span className="delivery-summary-bar__detail">
+        {activeLabel !== undefined && (
+          <span
+            className="delivery-summary-bar__pill delivery-summary-bar__pill--active"
+            data-testid="inbox-delivery-summary-active"
+          >
+            {activeLabel}
+          </span>
+        )}
         {summary.pushable > 0 && (
           <span className="delivery-summary-bar__pill delivery-summary-bar__pill--action">
             {strings.deliverySummaryPushable(summary.pushable)}

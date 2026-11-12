@@ -1680,7 +1680,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const session =
       this._liveSession(localId) ?? (durableId ? this._liveSession(durableId) : undefined)
     if (session === undefined) return fail('session_not_found', 'session is not live')
-    const result = await this._delivery.start(session.id, expectation)
+    const result = await this._delivery.startInBackground(session.id, expectation)
     if (!result.ok) return this._deliveryFailure(result.error)
     return ok(result.value)
   }

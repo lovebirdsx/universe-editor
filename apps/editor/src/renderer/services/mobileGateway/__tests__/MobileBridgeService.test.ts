@@ -391,6 +391,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     isDeliveryBusyForCwd: vi.fn(() => false),
     preview: vi.fn(),
     start: vi.fn(),
+    startInBackground: vi.fn(),
     confirmPush: vi.fn(),
     retry: vi.fn(),
     undo: vi.fn(),
@@ -3974,7 +3975,7 @@ describe('MobileBridgeService deliveries', () => {
     })
     expect(JSON.stringify(result)).not.toContain('D:/repo')
 
-    vi.mocked(harness.delivery.start).mockResolvedValue({
+    vi.mocked(harness.delivery.startInBackground).mockResolvedValue({
       ok: true,
       value: { deliveryId: 'del-1' },
     })
@@ -3982,7 +3983,7 @@ describe('MobileBridgeService deliveries', () => {
       ok: true,
       value: { deliveryId: 'del-1' },
     })
-    expect(harness.delivery.start).toHaveBeenCalledWith('s1', expectation)
+    expect(harness.delivery.startInBackground).toHaveBeenCalledWith('s1', expectation)
   })
 
   it('rejects delivery commands for unknown sessions and foreign delivery ids', async () => {

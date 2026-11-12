@@ -1,5 +1,6 @@
 import type { MobileSessionRef } from '@universe-editor/mobile-protocol'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { DeliveryAlertToast } from './components/DeliveryAlertToast.js'
 import { NotificationToast } from './components/NotificationToast.js'
 import { Spinner } from './components/Spinner.js'
 import { UpdateBanner } from './components/UpdateBanner.js'
@@ -8,6 +9,7 @@ import {
   type SaveCredentialsResult,
   type StoredCredentials,
 } from './credentials.js'
+import { DeliveryAlertWatcher, type DeliveryAlert } from './inbox/deliveryAlerts.js'
 import { GuidePage } from './pages/GuidePage.js'
 import { InboxPage } from './pages/InboxPage.js'
 import { NewSessionPage } from './pages/NewSessionPage.js'
@@ -34,6 +36,12 @@ interface LoadedState {
   readonly credentials: StoredCredentials | undefined
 }
 
+interface DeliveryToastState {
+  readonly title: string
+  readonly body: string
+  readonly tone: 'info' | 'danger'
+}
+
 export function App() {
   const store = useMemo(() => createCredentialStore(), [])
   const [loaded, setLoaded] = useState<LoadedState>({ loading: true, credentials: undefined })
@@ -43,6 +51,7 @@ export function App() {
     () => new URLSearchParams(window.location.search).get('focus') === 'pending',
   )
   const [notice, setNotice] = useState<string | undefined>(undefined)
+  const [deliveryToast, setDeliveryToast] = useState<DeliveryToastState | undefined>(undefined)
   // Ref returned by a fork / side-task command; the session route resolves it
   // directly instead of waiting for the inbox mirror to catch up.
   const [pendingRef, setPendingRef] = useState<MobileSessionRef | undefined>(undefined)
@@ -200,6 +209,38 @@ export function App() {
     setRoute({ name: 'inbox' })
   }
 
+  const showDeliveryAlert = (alert: DeliveryAlert): void => {
+    if (alert.phase === 'awaiting_push') {
+      setDeliveryToast({
+        tone: 'info',
+        title: strings.deliveryAlertAwaitingPushTitle,
+        body: strings.deliveryAlertAwaitingPushBody(alert.sessionTitle),
+      })
+      return
+    }
+    setDeliveryToast({
+      tone: 'danger',
+      title:
+        alert.phase === 'partial'
+          ? strings.deliveryAlertPartialTitle
+          : strings.deliveryAlertFailedTitle,
+      body:
+        alert.phase === 'partial'
+          ? strings.deliveryAlertPartialBody(alert.sessionTitle)
+          : strings.deliveryAlertFailedBody(alert.sessionTitle),
+    })
+  }
+
+  const openInboxFromToast = (): void => {
+    setDeliveryToast(undefined)
+    if (route.name === 'inbox') return
+    if (route.name === 'sessions') {
+      leaveSessionsPage()
+      return
+    }
+    backToInbox()
+  }
+
   const leaveSessionPage = (): void => {
     setPendingRef(undefined)
     setPendingWorkspaceHint(undefined)
@@ -249,22 +290,38 @@ export function App() {
   }
 
   const overlay = (
-    <NotificationToast
-      client={client}
-      onOpen={(sessionKey, pending) => {
-        if (route.name === 'sessions') {
-          sessionsScrollRef.current = window.scrollY
-          setSessionOrigin('sessions')
-        } else if (route.name !== 'session') {
-          setSessionOrigin('inbox')
-        }
-        setPendingRef(undefined)
-        setPendingWorkspaceHint(undefined)
-        setFocusPending(pending)
-        navigateToSession(sessionKey)
-        setRoute(readRoute(window.location.pathname))
-      }}
-    />
+    <>
+      <NotificationToast
+        client={client}
+        onOpen={(sessionKey, pending) => {
+          if (route.name === 'sessions') {
+            sessionsScrollRef.current = window.scrollY
+            setSessionOrigin('sessions')
+          } else if (route.name !== 'session') {
+            setSessionOrigin('inbox')
+          }
+          setPendingRef(undefined)
+          setPendingWorkspaceHint(undefined)
+          setFocusPending(pending)
+          navigateToSession(sessionKey)
+          setRoute(readRoute(window.location.pathname))
+        }}
+      />
+      <DeliveryAlertWatcher
+        client={client}
+        enabled={route.name !== 'inbox'}
+        onAlert={showDeliveryAlert}
+      />
+      {deliveryToast !== undefined && (
+        <DeliveryAlertToast
+          title={deliveryToast.title}
+          body={deliveryToast.body}
+          tone={deliveryToast.tone}
+          onDismiss={() => setDeliveryToast(undefined)}
+          onOpenInbox={openInboxFromToast}
+        />
+      )}
+    </>
   )
 
   const page =
@@ -299,6 +356,9 @@ export function App() {
         notice={notice}
         onDismissNotice={() => setNotice(undefined)}
         onNotice={setNotice}
+        onDeliveryNotice={(text) =>
+          setDeliveryToast({ tone: 'danger', title: strings.deliveryStartFailedTitle, body: text })
+        }
         onOpenSession={openSession}
         onOpenSessions={openSessions}
         onNewSession={openNewSession}

@@ -5,8 +5,10 @@ import { deliveryTone } from './deliveryStatus.js'
 
 export interface SessionDeliveryControlsProps {
   readonly delivery?: MobileDeliverySummary | undefined
-  /** The row can start a first delivery; synced rows re-deliver from the detail sheet. */
+  /** The row can start a first delivery; existing records open the detail sheet. */
   readonly available?: boolean | undefined
+  /** The phone fired startDelivery and the inbox has not mirrored the record yet. */
+  readonly starting?: boolean | undefined
   readonly onStartDelivery: () => void
   readonly onOpenDelivery: () => void
 }
@@ -26,12 +28,24 @@ function activate(event: KeyboardEvent<HTMLSpanElement>, action: () => void): vo
 export function SessionDeliveryControls({
   delivery,
   available,
+  starting,
   onStartDelivery,
   onOpenDelivery,
 }: SessionDeliveryControlsProps) {
-  // A synced row keeps only the status badge: re-delivery lives in the detail
-  // sheet, so the row never offers a preview that would immediately block.
-  const canStart = available === true && delivery?.phase !== 'synced'
+  if (delivery === undefined && starting === true) {
+    return (
+      <span
+        className="delivery-badge delivery-badge--active"
+        data-testid="inbox-delivery-starting"
+        role="status"
+      >
+        {strings.deliveryStarting}
+      </span>
+    )
+  }
+  // Any existing record (running, awaiting push, failed, synced, undone) opens
+  // the detail sheet; only a row with no record at all gets the start action.
+  const canStart = available === true && delivery === undefined
   if (delivery === undefined && !canStart) return null
 
   return (

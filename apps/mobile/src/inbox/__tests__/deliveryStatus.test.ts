@@ -50,7 +50,7 @@ describe('deliveryStatus', () => {
     ).toEqual(['d2'])
   })
 
-  it('counts pushable and failed deliveries for the summary bar', () => {
+  it('counts active, pushable and failed deliveries for the summary bar', () => {
     const entries = selectDeliveryEntries([
       summary('s1', delivery({ deliveryId: 'd1', phase: 'awaiting_push' })),
       summary('s2', delivery({ deliveryId: 'd2', phase: 'pushing' })),
@@ -58,7 +58,26 @@ describe('deliveryStatus', () => {
       summary('s4', delivery({ deliveryId: 'd4', phase: 'partial' })),
     ])
 
-    expect(summarizeDeliveries(entries)).toEqual({ total: 4, pushable: 1, failed: 2 })
+    expect(summarizeDeliveries(entries)).toEqual({
+      total: 4,
+      active: 1,
+      activePhase: 'pushing',
+      pushable: 1,
+      failed: 2,
+    })
+  })
+
+  it('keeps the first active phase when several deliveries run', () => {
+    const entries = selectDeliveryEntries([
+      summary('s1', delivery({ deliveryId: 'd1', phase: 'committing' })),
+      summary('s2', delivery({ deliveryId: 'd2', phase: 'cherry_picking' })),
+    ])
+
+    expect(summarizeDeliveries(entries)).toMatchObject({
+      total: 2,
+      active: 2,
+      activePhase: 'committing',
+    })
   })
 
   it('classifies phases for activity and badge tone', () => {
