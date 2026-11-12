@@ -1,10 +1,11 @@
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ExtensionContext } from '@universe-editor/extension-api'
 import type { Repository } from '../repository.js'
 import type { RepositoryManager } from '../repositoryManager.js'
 import type { GitStatusBarController } from '../gitStatusBar.js'
-import { createGitCommandsForTest, normalizeUriArg } from '../extension.js'
+import { activate, createGitCommandsForTest, normalizeUriArg } from '../extension.js'
 
 const mocks = vi.hoisted(() => ({
   gitExec: vi.fn(),
@@ -15,6 +16,9 @@ const mocks = vi.hoisted(() => ({
   showWarningMessage: vi.fn(),
   configValues: new Map<string, unknown>(),
   hasSubmodules: vi.fn(),
+  workspaceRootPath: undefined as string | undefined,
+  createOutputChannel: vi.fn(),
+  discoverRepos: vi.fn(),
 }))
 
 vi.mock('../gitService.js', () => ({
@@ -36,12 +40,31 @@ vi.mock('../submoduleSync.js', async (importOriginal) => {
         : { ran: false },
   }
 })
+vi.mock('../repoDiscovery.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../repoDiscovery.js')>()
+  return { ...actual, discoverRepos: mocks.discoverRepos }
+})
+// The real watcher opens fs.watch on the workspace root; activation tests only
+// care about which commands the no-repository branch registers.
+vi.mock('../possibleRepoWatcher.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../possibleRepoWatcher.js')>()
+  return {
+    ...actual,
+    PossibleRepoWatcher: class {
+      start(): void {}
+      dispose(): void {}
+    },
+  }
+})
 vi.mock('@universe-editor/extension-api', () => ({
   commands: {
     registerCommand: mocks.registerCommand,
     executeCommand: mocks.executeCommand,
   },
   workspace: {
+    get rootPath() {
+      return mocks.workspaceRootPath
+    },
     getConfiguration: () => ({
       get: vi.fn((k: string, d: unknown) =>
         mocks.configValues.has(k) ? mocks.configValues.get(k) : d,
@@ -52,6 +75,7 @@ vi.mock('@universe-editor/extension-api', () => ({
     showWarningMessage: mocks.showWarningMessage,
     showInformationMessage: mocks.showInformationMessage,
     showErrorMessage: mocks.showErrorMessage,
+    createOutputChannel: mocks.createOutputChannel,
   },
 }))
 
@@ -117,6 +141,55 @@ beforeEach(() => {
   mocks.gitExec.mockResolvedValue(gitFail())
   mocks.executeCommand.mockResolvedValue(undefined)
   mocks.showWarningMessage.mockResolvedValue(undefined)
+  mocks.workspaceRootPath = undefined
+  mocks.registerCommand.mockImplementation(() => ({ dispose: () => undefined }))
+  mocks.createOutputChannel.mockReturnValue({
+    appendLine: vi.fn(),
+    show: vi.fn(),
+    dispose: vi.fn(),
+  })
+  mocks.discoverRepos.mockResolvedValue({ repos: [], mainRoot: undefined })
+})
+
+describe('activate in a workspace without git', () => {
+  const NOT_A_REPOSITORY = {
+    ok: false,
+    error: {
+      code: 'not_a_repository',
+      message: 'The session working directory is not inside a git repository.',
+    },
+  }
+
+  function makeContext(): ExtensionContext {
+    return {
+      subscriptions: [] as { dispose(): void }[],
+      globalState: {
+        get: vi.fn((_key: string, defaultValue: unknown) => defaultValue),
+        update: vi.fn(async () => {}),
+      },
+    } as unknown as ExtensionContext
+  }
+
+  function probeHandler(): ((...args: unknown[]) => unknown) | undefined {
+    const call = mocks.registerCommand.mock.calls.find(
+      ([id]) => id === 'git.agentDelivery.hasPendingWork',
+    )
+    return call?.[1] as ((...args: unknown[]) => unknown) | undefined
+  }
+
+  it('answers the pending-work probe when no folder is open', async () => {
+    mocks.workspaceRootPath = undefined
+    await activate(makeContext())
+
+    expect(await probeHandler()?.({ sourceCwd: ROOT })).toEqual(NOT_A_REPOSITORY)
+  })
+
+  it('answers the probe when the open folder holds no repository', async () => {
+    mocks.workspaceRootPath = ROOT
+    await activate(makeContext())
+
+    expect(await probeHandler()?.({ sourceCwd: ROOT })).toEqual(NOT_A_REPOSITORY)
+  })
 })
 
 describe('normalizeUriArg', () => {

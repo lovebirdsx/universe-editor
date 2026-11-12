@@ -60,6 +60,7 @@ import * as gga from './gitGraphActions.js'
 import { updateSubmodulesIfPresent } from './submoduleSync.js'
 import { autoSyncWorktreesAfterPull } from './worktreeAutoSync.js'
 import { registerDeliveryCommands } from './delivery/deliveryCommands.js'
+import type { DeliveryPendingWorkResult } from './delivery/deliveryTypes.js'
 import { getBlame } from './blameSource.js'
 import { createGitTimelineCommands, GitTimelineProvider } from './timelineProvider.js'
 import { notifyGitFailure, setGitLogShower } from './gitError.js'
@@ -249,6 +250,28 @@ function registerGitGraphStubs(): Disposable[] {
     commands.registerCommand('git-graph.startCommitStream', () => false),
     commands.registerCommand('git-graph.cancelCommitStream', () => false),
     commands.registerCommand('git-graph.setRepo', () => undefined),
+  ]
+}
+
+/**
+ * The mobile bridge probes pending work after every finished turn, including
+ * when the open folder is not a repository. Without a handler the host rejects
+ * the contributed command, which the renderer logs as an error even though
+ * "nothing to deliver" is the expected answer. The real command takes over once
+ * a repository is discovered.
+ */
+export function registerDeliveryProbeStub(): Disposable[] {
+  return [
+    commands.registerCommand(
+      'git.agentDelivery.hasPendingWork',
+      (): DeliveryPendingWorkResult => ({
+        ok: false,
+        error: {
+          code: 'not_a_repository',
+          message: 'The session working directory is not inside a git repository.',
+        },
+      }),
+    ),
   ]
 }
 
@@ -913,7 +936,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
     console.info('[git] no workspace folder open; git source control disabled')
-    context.subscriptions.push(...registerGitGraphStubs())
+    context.subscriptions.push(...registerGitGraphStubs(), ...registerDeliveryProbeStub())
     return
   }
 
@@ -944,6 +967,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
       commands.registerCommand('git.getHeadContent', () => null),
       commands.registerCommand('git.checkIgnore', () => []),
       ...registerGitGraphStubs(),
+      ...registerDeliveryProbeStub(),
     ]
     context.subscriptions.push(...stubs)
     console.info(`[git] no git repository found under ${root}; watching for one to appear`)
