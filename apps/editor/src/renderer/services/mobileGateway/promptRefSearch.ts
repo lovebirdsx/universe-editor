@@ -37,7 +37,9 @@ import {
   type MentionFileEntry,
 } from '../acp/mentionFileSearch.js'
 import {
+  CommitContextProvider,
   DocsContextProvider,
+  ExtensionContextProvider,
   OpenEditorContextProvider,
   ScmChangeContextProvider,
   WorkspaceSymbolContextProvider,
@@ -46,6 +48,7 @@ import {
 import type { SessionScopeRoot } from '../acp/sessionScope.js'
 import { IDocsService } from '../../../shared/ipc/docsService.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
+import { IChatContextService } from '../extensions/ChatContextService.js'
 import { IScmService } from '../extensions/ScmService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 
@@ -87,23 +90,23 @@ function fileSuggestion(entry: MentionFileEntry): MobilePromptRefSuggestion | un
 
 function contextSuggestion(item: ContextSuggestionItem): MobilePromptRefSuggestion | undefined {
   const label = fitText(item.label, MAX_PROMPT_REF_LABEL_LENGTH)
-  const uri = fitText(item.uri, MAX_PROMPT_REF_URI_LENGTH)
-  if (label === undefined || uri === undefined) return undefined
+  if (label === undefined) return undefined
   const description = clampDescription(item.description)
-  const base = {
-    kind: item.kind,
+  const shared = {
     label,
-    uri,
     ...(description !== undefined ? { description } : {}),
   }
   switch (item.kind) {
     case 'symbol': {
+      const uri = fitText(item.uri, MAX_PROMPT_REF_URI_LENGTH)
+      if (uri === undefined) return undefined
       const line = item.meta?.line
       const column = item.meta?.column
       const symbolKind = item.meta?.symbolKind
       return {
-        ...base,
+        ...shared,
         kind: 'symbol',
+        uri,
         ...(typeof line === 'number' && Number.isInteger(line) && line > 0 ? { line } : {}),
         ...(typeof column === 'number' && Number.isInteger(column) && column > 0 ? { column } : {}),
         ...(typeof symbolKind === 'number' && Number.isInteger(symbolKind) && symbolKind >= 0
@@ -111,22 +114,38 @@ function contextSuggestion(item: ContextSuggestionItem): MobilePromptRefSuggesti
           : {}),
       }
     }
-    case 'scmChange':
+    case 'scmChange': {
+      const uri = fitText(item.uri, MAX_PROMPT_REF_URI_LENGTH)
+      if (uri === undefined) return undefined
       return {
-        ...base,
+        ...shared,
         kind: 'scmChange',
+        uri,
         ...(item.meta?.scmStatus !== undefined
           ? { scmStatus: clampText(sanitize(item.meta.scmStatus), MAX_PROMPT_REF_STATUS_LENGTH) }
           : {}),
       }
-    case 'openEditor':
-      return { ...base, kind: 'openEditor' }
+    }
+    case 'openEditor': {
+      const uri = fitText(item.uri, MAX_PROMPT_REF_URI_LENGTH)
+      if (uri === undefined) return undefined
+      return { ...shared, kind: 'openEditor', uri }
+    }
     case 'docs': {
+      const uri = fitText(item.uri, MAX_PROMPT_REF_URI_LENGTH)
+      if (uri === undefined) return undefined
       const dirPath = item.meta?.dirPath
       if (dirPath === undefined) return undefined
       const fitted = fitText(dirPath, MAX_PROMPT_REF_DIR_PATH_LENGTH)
       if (fitted === undefined) return undefined
-      return { ...base, kind: 'docs', dirPath: fitted }
+      return { ...shared, kind: 'docs', uri, dirPath: fitted }
+    }
+    case 'commit':
+      return { ...shared, kind: 'commit', uri: '' }
+    case 'chatContext': {
+      const handle = item.meta?.chatContextHandle
+      if (typeof handle !== 'number' || !Number.isInteger(handle) || handle < 1) return undefined
+      return { ...shared, kind: 'chatContext', uri: '', chatContextHandle: handle }
     }
     default:
       return undefined
@@ -154,6 +173,8 @@ interface ContextProviders {
   readonly scmChange: ScmChangeContextProvider
   readonly openEditor: OpenEditorContextProvider
   readonly docs: DocsContextProvider
+  readonly commit: CommitContextProvider
+  readonly chatContext: ExtensionContextProvider
 }
 
 export interface PromptRefSearchDeps {
@@ -165,6 +186,7 @@ export interface PromptRefSearchDeps {
   readonly uriIdentity: IUriIdentityService
   readonly langFeatures: ILanguageFeaturesService
   readonly docs: IDocsService
+  readonly chatContext: IChatContextService
 }
 
 export class MobilePromptRefSearch {
@@ -272,11 +294,19 @@ export class MobilePromptRefSearch {
     token: CancellationToken | undefined,
   ): Promise<readonly MobilePromptRefSuggestion[]> {
     const providers = this._contextProviders()
-    const [symbol, scmChange, openEditor, docs] = await Promise.all([
+    // Mobile gates the commit entry on a real Git repo: the provider only checks
+    // that some source control exists, and a P4-only workspace would otherwise
+    // offer a picker that can never load commits.
+    const hasGit = this._deps.scm.sourceControls
+      .get()
+      .some((control) => control.id === 'git' && control.rootUri !== undefined)
+    const [symbol, scmChange, openEditor, docs, commit, chatContext] = await Promise.all([
       withTimeout(providers.symbol.query(query), CONTEXT_PROVIDER_TIMEOUT_MS),
       withTimeout(providers.scmChange.query(query), CONTEXT_PROVIDER_TIMEOUT_MS),
       withTimeout(providers.openEditor.query(query), CONTEXT_PROVIDER_TIMEOUT_MS),
       withTimeout(providers.docs.query(query), CONTEXT_PROVIDER_TIMEOUT_MS),
+      hasGit ? withTimeout(providers.commit.query(query), CONTEXT_PROVIDER_TIMEOUT_MS) : [],
+      withTimeout(providers.chatContext.query(query), CONTEXT_PROVIDER_TIMEOUT_MS),
     ])
     if (token?.isCancellationRequested === true) return []
     const scoped = (
@@ -293,14 +323,17 @@ export class MobilePromptRefSearch {
       })
     }
     // Fewest items first so high-signal sources surface at the top; the stable
-    // sort keeps symbol → scmChange → openEditor → docs on ties (same rule as
-    // the desktop popover). Docs reference app resources, never a workspace
-    // path, so they are not narrowed.
+    // sort keeps symbol → scmChange → openEditor → docs → commit → chatContext
+    // on ties (same rule as the desktop popover). Docs reference app resources,
+    // commit/chatContext entries carry no workspace resource, so none of them
+    // are narrowed to a subdirectory session.
     const groups: readonly (readonly ContextSuggestionItem[])[] = [
       scoped(symbol),
       scoped(scmChange),
       scoped(openEditor),
       docs ?? [],
+      commit ?? [],
+      chatContext ?? [],
     ]
     return groups
       .filter((group) => group.length > 0)
@@ -329,6 +362,8 @@ export class MobilePromptRefSearch {
         this._deps.uriIdentity,
       ),
       docs: new DocsContextProvider(this._deps.docs),
+      commit: new CommitContextProvider(this._deps.scm),
+      chatContext: new ExtensionContextProvider(this._deps.chatContext),
     }
     return this._providers
   }

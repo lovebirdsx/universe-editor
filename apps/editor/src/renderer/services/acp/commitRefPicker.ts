@@ -7,32 +7,25 @@
  *  drives IQuickInputService directly.
  *--------------------------------------------------------------------------------------------*/
 
-import type { GitGraphCommitDto, GitGraphLoadResult } from '@universe-editor/extensions-common'
-import { GitGraphCommands } from '@universe-editor/extensions-common'
+import type { GitGraphCommitDto } from '@universe-editor/extensions-common'
 import {
-  generateUuid,
   ICommandService,
   INotificationService,
   IQuickInputService,
   IWorkspaceService,
   type IQuickPickItem,
-  type URI,
-  absolutePathToWorkspaceUri,
   localize,
   Severity,
 } from '@universe-editor/platform'
-import { scmViewState } from '../../workbench/scm/scmViewState.js'
 import { relativeTime } from '../../relativeTime.js'
 import { IScmService } from '../extensions/ScmService.js'
+import {
+  commitToRef,
+  loadRepoCommits,
+  resolveCommitRepoRoot,
+  SHORT_HASH_LENGTH,
+} from './commitRef.js'
 import type { PromptRef } from './promptRef.js'
-
-const MAX_COMMITS = 200
-const MAX_SUBJECT_LENGTH = 60
-const SHORT_HASH_LENGTH = 7
-
-function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text
-}
 
 function basename(path: string): string {
   const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
@@ -59,22 +52,6 @@ function toQuickPickItem(commit: GitGraphCommitDto): CommitQuickPickItem {
   }
 }
 
-function commitToRef(
-  commit: GitGraphCommitDto,
-  repoRoot: string,
-  folder: URI | undefined,
-): PromptRef {
-  const shortHash = commit.hash.slice(0, SHORT_HASH_LENGTH)
-  const subject = truncate(commit.message, MAX_SUBJECT_LENGTH)
-  return {
-    id: generateUuid(),
-    kind: 'commit',
-    label: `${shortHash} ${subject}`,
-    uri: absolutePathToWorkspaceUri(repoRoot, folder).toString(),
-    meta: { commitHash: commit.hash, description: commit.message },
-  }
-}
-
 /**
  * Drives the two-step `#` commit flow: resolve repo → setRepo/getCommits (the
  * git-graph extension's commands are stateful, no root param — see
@@ -90,7 +67,7 @@ export class CommitRefPicker {
   ) {}
 
   async pick(): Promise<PromptRef | undefined> {
-    const root = this._resolveRepoRoot()
+    const root = resolveCommitRepoRoot(this._scm)
     if (!root) {
       this._notification.notify({
         severity: Severity.Warning,
@@ -120,12 +97,8 @@ export class CommitRefPicker {
     qp.show()
 
     try {
-      await this._commands.executeCommand(GitGraphCommands.setRepo, root)
-      const result = await this._commands.executeCommand<GitGraphLoadResult>(
-        GitGraphCommands.getCommits,
-        { maxCommits: MAX_COMMITS, order: 'date', includeRemotes: true },
-      )
-      qp.items = (result?.commits ?? []).map(toQuickPickItem)
+      const commits = await loadRepoCommits(this._commands, root)
+      qp.items = commits.map(toQuickPickItem)
       qp.busy = false
     } catch {
       // `hide()` — not `dispose()`, which only tears down the picker's emitters
@@ -156,13 +129,5 @@ export class CommitRefPicker {
     })
     qp.dispose()
     return picked ? commitToRef(picked, root, this._workspace.current?.folder) : undefined
-  }
-
-  private _resolveRepoRoot(): string | undefined {
-    const controls = this._scm.sourceControls.get()
-    if (controls.length === 0) return undefined
-    const selected = scmViewState.selectedRepo.get()
-    if (selected && controls.some((c) => c.rootUri === selected)) return selected
-    return controls[0]?.rootUri
   }
 }

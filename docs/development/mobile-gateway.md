@@ -20,7 +20,8 @@
 > （协议 v21：只读命令 `listDirectory` 逐级浏览，`newSession.workspace.relativePath?` 指定会话
 > cwd；范围仅工作区内）；**M15 新建会话目录记忆与项目根已落地**（协议 v22：只读命令
 > `getNewSessionOptions` 读取工作区上次创建目录与 `acp.projectRoots`，目录 Sheet 顶部提供
-> 「项目根」快捷区）。
+> 「项目根」快捷区）；**M16 手机 `#` 两步引用已落地**（协议 v22：`commit` / `chatContext`
+> 搜索入口与 `resolvePromptRef`，commit 走手机列表，扩展在 PC 弹选择器后回传结果）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -183,7 +184,10 @@ payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的
 增加工作区目录浏览：只读命令 `listDirectory`、`MobileDirectoryListing` 与
 `newSession.workspace.relativePath?`（工作区相对、`/` 分隔；手机只回显服务端给的路径、不接触
 绝对路径，见 §6f）；v22 增加新建会话选项：只读命令 `getNewSessionOptions` 与
-`MobileNewSessionOptions`（上次创建目录 + 工作区内 `acp.projectRoots`，见 §6g）。
+`MobileNewSessionOptions`（上次创建目录 + 工作区内 `acp.projectRoots`，见 §6g）；v22 同时增加
+`#` 两步引用：`commit` / `chatContext` 两类 suggestion（`commitHash?` / `chatContextHandle?` /
+`text?`）与 `resolvePromptRef` 命令——commit 返回最近提交列表，chatContext 在 PC 打开扩展自己的
+选择器（见 §7d）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted, notificationPrefs? }`；`trusted` 表示 PC 是否已
@@ -217,6 +221,7 @@ Referer。
 | 详情        | `getToolCallDetail`                      | `{ ref, toolCallId }`                                          | 工具调用详情按需拉取                                                                                              |
 | 会话        | `sendPrompt`                             | `{ ref, text, attachmentIds?, draftImageIds?, draftFileIds?, refs? }` | 空文本 + 附件合法；`draftImageIds` / `draftFileIds` 指向已物化在 PC 草稿中的附件；`refs` 为结构化 `@` / `#` 引用（见 §7d）；桥在 prompt 被接受后立即返回 |
 | 会话        | `searchPromptRefs`                       | `{ ref, trigger, query, limit? }`                              | 只读补全：`trigger` 为 `'@'` / `'#'`，`query` 最长 256，`limit` 默认 20、上限 50；返回 `{ entries }`（见 §7d） |
+| 会话        | `resolvePromptRef`                       | `{ ref, kind: 'commit'\|'chatContext', query, limit?, handle?, label? }` | 两步选择：commit 返回最近提交（`limit` 默认 50、上限 200）；chatContext 在 PC 弹扩展选择器，取消时无 `entry`；会在 PC 打开 UI，按可修改命令处理（见 §7d） |
 | 会话        | `cancelTurn`                             | `{ ref }`                                                      | 停止当前 turn                                                                                                     |
 | 审批        | `resolvePermission`                      | `{ ref, requestId, optionId, feedback? }`                      | 高风险选项被拒                                                                                                    |
 | 审批        | `cancelPermission`                       | `{ ref, requestId }`                                           | 取消/关闭待审批卡片                                                                                               |
@@ -261,13 +266,17 @@ Referer。
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
 只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`、
 `searchPromptRefs`、`listDirectory`、`getNewSessionOptions`）不缓存。客户端重试不会重复发
-prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
+prompt、重复建会话或重复分叉。`resolvePromptRef` 语义只读，但会在 PC 弹出提交列表或扩展选择器，
+因此也按可修改命令处理：带幂等键，重连 resend 命中 in-flight / 缓存，避免重复弹窗。
+`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
 `deleteSideTask` / `openSession` / `deleteHistorySession` 都按可修改状态命令处理；交付中的 `startDelivery` /
 `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree` 同样处理
 （`previewDelivery` / `getDelivery` 只读，不缓存）。
 
 **超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
 `searchPromptRefs` 10s（手机端 12s；桥内文件列表 5s、兜底搜索 3s、`#` provider 并行 6s），
+`resolvePromptRef` 按 kind 分档：commit 20s、chatContext 120s（等用户在 PC 上完成选择；手机端
+125s + 5s 宽限），
 `cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` /
 `deleteHistorySession` / `newSession` / `previewRewind` 30s；`forkSession` / `rewindSession` /
 `createSideTask` / `openSideTask` / `deleteSideTask` 120s（要等 agent fork RPC 与 resume），
@@ -897,14 +906,17 @@ refs/contexts**。**光标 / 选区是每个客户端自己的 UI 状态，不�
 - **敏感内容**：草稿不写日志、不进审计与推送；日志只记录长度 / revision / 附件数一类的摘要。
 - **兼容**：v17 与旧 PWA 不兼容，握手会因协议版本不匹配被拒绝；升级网关后手机需刷新页面。
 
-## 7d. 输入框引用补全（协议 v20）
+## 7d. 输入框引用补全（协议 v20，v22 扩展 `#` 两步选择）
 
-手机输入 `@`（工作区文件）或 `#`（符号 / 本地 Git 修改 / 打开的编辑器 / 文档）时，向 PC 拉取
-候选并展示；选中后把 token 插进正文，发送时把结构化 refs 一并交给 ACP。链路：
+手机输入 `@`（工作区文件）或 `#`（符号 / 本地 Git 修改 / 打开的编辑器 / 文档 / Git 提交 /
+扩展上下文）时，向 PC 拉取候选并展示；选中后把 token 插进正文，发送时把结构化 refs 一并交给
+ACP。`#Git Commit…` 与扩展贡献的 `#` 入口还有第二层候选，走 `resolvePromptRef`。链路：
 
 ```
 PWA Composer → searchPromptRefs 命令 → hub（10s）→ renderer 桥 MobilePromptRefSearch
-             → 桌面 headless provider（文件列表 / Symbol / SCM / OpenEditor / Docs）
+             → 桌面 headless provider（文件列表 / Symbol / SCM / OpenEditor / Docs / Commit / Extension）
+PWA Composer → resolvePromptRef 命令 → hub → MobilePromptRefResolver
+             → commit: git-graph 最近提交 / chatContext: 扩展在 PC 弹自己的选择器
 PWA sendPrompt.refs → hub → bridge.toPlacedMobileRefs → PlacedRef[] → AcpSession.sendPrompt
              → composePromptBlocksFromRefs → ACP prompt blocks
 ```
@@ -912,58 +924,100 @@ PWA sendPrompt.refs → hub → bridge.toPlacedMobileRefs → PlacedRef[] → Ac
 **wire 形状**
 
 ```ts
-MobilePromptRefSuggestion { kind: 'file'|'symbol'|'scmChange'|'openEditor'|'docs',
-  label, uri, description?, line?, column?, symbolKind?, scmStatus?, dirPath? }
+MobilePromptRefSuggestion { kind: 'file'|'symbol'|'scmChange'|'openEditor'|'docs'|'commit'|'chatContext',
+  label, uri, description?, line?, column?, symbolKind?, scmStatus?, dirPath?,
+  commitHash?, chatContextHandle?, text? }
 MobilePromptRef = MobilePromptRefSuggestion & { start, end }
 SearchPromptRefsPayload { ref, trigger: '@'|'#', query, limit? }
 MobilePromptRefSuggestionsResult { entries: MobilePromptRefSuggestion[] }
+ResolvePromptRefPayload { ref, kind: 'commit'|'chatContext', query, limit?, handle?, label? }
+ResolvePromptRefResult =
+  | { kind: 'commit', entries: MobilePromptRefSuggestion[] }
+  | { kind: 'chatContext', entry?: MobilePromptRefSuggestion }
 ```
 
 `label` 是插进正文的文本（文件为 workspace 相对路径；其它为 pill 文本，可含空格）；`uri` 只用于
-回传与 PC 侧校验，手机不展示。`dirPath` 仅 docs 必填。
+回传与 PC 侧校验，手机不展示。`dirPath` 仅 docs 必填。commit 的搜索入口 uri 为空，最终项 uri 为
+仓库根 URI 并带完整 `commitHash` 与 subject（`text`）；chatContext 的搜索入口 uri 为空并带正整数
+`chatContextHandle`，最终项 uri 为空并带扩展返回的正文 `text`（可多行）。
 
 **搜索（renderer `promptRefSearch.ts`）**
 
 - `@`：`loadWorkspaceFiles(scope.root, ...)` + `filterMentionFiles`；文件过多被截断时，再用
   `fileSearch.search` 兜底（非空 query 走 scored；空 query 用 `matchAll: true`），按 uri 去重后
   截断到 limit。
-- `#`：四个桌面 headless provider 并行；`scope.narrowed`（会话 cwd 在 workspace 子目录）时
-  symbol / scmChange / openEditor 按 `URI.isEqualOrParent` 过滤，docs 不过滤。单组失败 / 超时只
-  丢该组，返回顺序按数量升序、并列保持 symbol → scmChange → openEditor → docs。
+- `#`：六个桌面 headless provider 并行；`scope.narrowed`（会话 cwd 在 workspace 子目录）时
+  symbol / scmChange / openEditor 按 `URI.isEqualOrParent` 过滤，docs / commit / chatContext 不过滤。
+  commit 入口只在存在 `id === 'git'` 的 sourceControl 时出现（P4-only 工作区不显示）。单组失败 /
+  超时只丢该组，返回顺序按数量升序、并列保持 symbol → scmChange → openEditor → docs → commit →
+  chatContext。
 - 会话只读时仍可查询（只读不写）；会话找不到时回 `session_not_found`，会话没有可用 workspace
   时返回空列表；输出清洗控制字符，身份字段（label / uri / dirPath）超限时直接丢弃该条，不做
   截断（截断后的 token 回传必然无法通过桥校验），只有展示用的 description / scmStatus 允许裁剪。
-- 网关再对桥返回值做一次 clamp：最多 50 条，丢弃未知 kind / 空值 / 超长或含控制字符的身份字段。
+- 网关再对桥返回值做一次 clamp：最多 50 条，丢弃未知 kind / 空值 / 超长或含控制字符的身份字段；
+  chatContext 搜索入口必须带正整数 handle。
+
+**两步选择（renderer `promptRefResolve.ts`）**
+
+- `commit`：取当前选中的 git 仓库（否则第一个 git 仓库），经模块级 Promise 队列串行执行
+  `git-graph.setRepo` → `getCommits({ maxCommits, order: 'date', includeRemotes: true })`，避免与
+  桌面 `CommitRefPicker` 互相覆盖状态化命令。最多返回 limit 条（默认 50、上限 200，按日期倒序）；
+  label 为 7 位短 hash + 60 字 subject，`description` 为 `author · 相对时间`，`text` 为 commit
+  subject（≤512）；仓库根映射为 workspace URI。非法 hash / 空正文 / 无法映射的条目丢弃。
+- `chatContext`：先确认 handle 仍指向 label 相同的 provider（防句柄复用），再调用
+  `IChatContextService.resolveItem(handle, query, { sessionDir })`——扩展在 PC 上弹自己的选择器。
+  用户取消或扩展已卸载时返回 `{ kind: 'chatContext' }`（无 entry）；成功时正文去掉不安全控制
+  字符，超过 4096 字符截断并记录日志（不含正文）。
+- 网关对结果再 clamp：kind 必须与请求一致；commit 条目要求非空 uri + 合法 hash + 非空 text，并按
+  请求 limit 截断；chatContext 条目要求 uri 为空且 text 非空。commit 超时 20s，chatContext 120s
+  （等 PC 上的选择器），手机端 125s + 5s 宽限。
 
 **发送校验（renderer `mobilePromptRefs.ts`）**
 
 协议层先做一次：`start` / `end` 整数且 `text.slice(start, end) === promptRefPrefix(kind) + label`，
-按 start 排序后不重叠；file label 拒绝绝对路径、反斜杠与 `..`；docs 必须带 `dirPath`。
+按 start 排序后不重叠；file label 拒绝绝对路径、反斜杠与 `..`；docs 必须带 `dirPath`。v22 起
+commit 必须带非空 uri（仓库根）、合法 `commitHash` 与非空 `text`（subject，拒绝控制字符）；
+chatContext 的 uri 必须为空、`text` 非空（允许多行 / 制表符，拒绝 NUL）。所有 ref 的
+label + uri + text 的 **UTF-8 字节数**汇总不得超过 32KB（ws 帧上限按字节计，按字符会漏算多字节
+文本）：手机端超出的 ref 保留为普通文本，网关直接拒绝。其它 kind 不得携带这三个字段。
 
 桥层复检（协议包不知道 workspace）：
 
 - file：用 `URI.joinPath(mentionRoot, label)` 重建 URI，与回传 uri 比对路径身份键；
 - symbol / scmChange / openEditor：scheme + authority 必须与 workspace 根一致，且必须落在
   `mentionRoot` 之下（会话收窄时 `mentionRoot` 即 `session.cwd`，未收窄时为 workspace 根）；
-- docs：`dirPath` 必须在 `IDocsService.getDocsRoot('user' | 'extensionDev')` 之下，且与 uri 一致。
+- docs：`dirPath` 必须在 `IDocsService.getDocsRoot('user' | 'extensionDev')` 之下，且与 uri 一致；
+- commit：uri 必须命中该会话 workspace 内 git sourceControl 的仓库根（仓库根可在会话 cwd 之上，
+  因此不受 `mentionRoot` 限制），hash / 正文合法后用 `commitRefFromParts` 重建，与桌面
+  `commitToRef` 同形（`_meta.commit`）；
+- chatContext：uri 为空、正文非空无 NUL，用 `chatContextItemToRef` 组装为 text block。
 
 任一失败回 `bad_request`，不调用 `session.sendPrompt`。通过后按桌面同款映射：
-file / openEditor / scmChange → `resource_link`，symbol / docs → `text`（line/column 与目录说明
-只有 text block 能原样传给 agent）。
+file / openEditor / scmChange → `resource_link`，symbol / docs / commit / chatContext → `text`
+（line/column 与目录说明只有 text block 能原样传给 agent）。
 
 **手机交互（`Composer.tsx` / `PromptRefPanel.tsx`）**
 
 - 面板优先级 `/` > `#` > `@`；150ms 防抖，递增 seq 丢弃过期响应；IME 合成期间不查询，
   composition end 后补一次。
+- 选中 `#Git Commit…` 后打开二级提交列表（最近 50 条），↑/↓/Enter 选择，「返回」/ Escape 回一级；
+  选中扩展 `#` 入口后显示「请在电脑上完成选择…」，扩展在 PC 弹选择器，结果回传后自动插入；PC
+  取消或超时（约 2 分钟）则保留原 `#` token。二级等待期间发送按钮禁用，避免把占位文本当普通
+  消息发出。
+- 文本编辑 / IME / 远端草稿 / prefill / 发送 / 切会话都会递增 seq 并关闭二级，迟到结果丢弃；
+  插入前复检开始时捕获的 token 切片仍与文本一致。
 - 接受时用区间（`start`/`end`）替换 token，不按 label 重新扫描，因此含空格的符号 / docs label
   也能正确处理；后续文本编辑按 common prefix/suffix 平移已放置区间，与编辑相交的 token 丢弃。
-- 发送前用 `collectPlacedRefs` 复检每个区间切片，失效的 ref 不发送。成功后清空文本 / refs；
+- 发送前用 `collectPlacedRefs` 复检每个区间切片，失效的 ref 不发送；成功后清空文本 / refs；
   失败保留原稿。
 - 草稿：refs 只写手机 sessionStorage（用于重挂载），**不进入 `MobileDraftPayload`**，PC 草稿里
-  不会出现引用药丸；PC 改文本时手机清空本地区间。坏数据 / 切片不匹配的 refs 读取时丢弃。
+  不会出现引用药丸；PC 改文本时手机清空本地区间。坏数据 / 切片不匹配的 refs 读取时丢弃；
+  commit / chatContext 用 `isSendableMobilePromptRef` 额外要求 hash + 正文齐全。
 - 限制：单条 prompt 最多 32 个 ref；label / description 512、uri / dirPath 1024、query 256、
-  候选 50。v1 不支持文件夹、commit 两步选择、扩展 chatContext、编辑选区上下文。
-- v20 与旧 PWA 不兼容，握手精确匹配版本；升级网关后手机需刷新页面。
+  候选 50；commit 默认 50、上限 200，无分页 / 搜索；chatContext 正文上限 4096、全部 ref 合计
+  32KB 字节；
+  多仓库沿用 PC 当前选中仓库。v1 仍不支持文件夹与编辑选区上下文。
+- v22 与旧 PWA 不兼容，握手精确匹配版本；升级网关后手机需刷新页面。
 
 ## 8. 配对与安全
 
@@ -1387,11 +1441,12 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M13    | 手机会话目录删除：协议 v18、`deleteHistorySession`、左滑 / 长按 + 二次确认、多窗口历史镜像同删（已落地）                                                    | 打开窗口的历史行可删且 PC 标签页关闭；未打开工作区行无删除入口；删除后目录刷新不复活；live 竞态仍走既有删除守卫                                                                              |
 | M14    | 新建会话支持工作区内子目录：协议 v21、`listDirectory` 只读浏览、`newSession.workspace.relativePath?`、main `IFileService` 列举、symlink / 路径 / 条目预算守卫（已落地） | 手机可逐级浏览并选择工作区内目录；创建后 PC 会话 cwd 落在该子目录；越界 / 非法路径回 `bad_request`；远程工作区同链路 |
 | M15    | 新建会话目录记忆与项目根：协议 v22、`getNewSessionOptions` 只读命令、复用 `acp.lastSessionCwd`、工作区 `acp.projectRoots` 快捷区（已落地） | 新建页继承该工作区上次创建目录且失效回落根；切换工作区按各自记忆恢复；项目根快捷区只跳转、确认后创建；工作区外路径不下发 |
+| M16    | `#` 两步引用：协议 v22、`commit` / `chatContext` 搜索入口与 `resolvePromptRef`、git-graph 串行取提交、扩展在 PC 弹选择器、发送重建（已落地） | 手机可选最近提交并发送 `_meta.commit`；扩展入口结果回传后自动插入；PC 取消 / 超时保留 token；协议与三层 clamp 覆盖坏字段 |
 
 ## 13. 已确认的决策记录
 
 日期：第 1–7 条为 **2026-11-08**，第 8–11 条为 **2026-11-09**，第 12 条为 **2026-11-10**，
-第 13 条为 **2026-11-11**。
+第 13 条为 **2026-11-11**，第 14 条为 **2026-11-12**。
 
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
 2. **手机高风险操作默认禁止**：`allow_always` / `bypass` / 自动批准策略均不可用，网关与桥双重校验；v9 起由 PC 逐设备开启「受信设备」后放开（见决策 12）。
@@ -1438,6 +1493,12 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
     `reset --hard` main 并 push。提交信息由基于原会话的只读 side task 生成，失败即终止（不落
     固定文案）；绝不 force push / stash / reset 有独立提交的 worktree。跨窗口用 renderer 记录 +
     hub 探测 + git 目录锁三层互斥；交付期间拒绝同 worktree 的新 prompt / newSession。
+14. **`#` 两步选择复用现有选择器**：commit 由手机拉取最近 50 条（上限 200，无分页）并在手机
+    列表选；扩展 chatContext 不新增候选 API，而是让扩展在 PC 弹自己的选择器，手机发第二次 RPC
+    等结果。`resolvePromptRef` 语义只读但会打开 PC UI，故按可修改命令带幂等键，防止重连 resend
+    重复弹窗；超时 commit 20s / chatContext 120s（等用户操作），手机端 125s + 5s 宽限。PC 取消
+    或扩展报错时手机保留原 token，前者回到一级列表，后者显示失败可重试。多仓库沿用桌面当前
+    选中的 git 仓库；P4-only 工作区不显示 commit 入口。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。

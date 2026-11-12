@@ -356,6 +356,55 @@ describe('parseClientFrame', () => {
           ],
         },
       },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix login',
+          refs: [
+            {
+              kind: 'commit',
+              label: 'Fix login',
+              uri: 'file:///workspace/demo',
+              commitHash: 'a'.repeat(40),
+              text: 'Fix login',
+              description: 'testuser · 2 hours ago',
+              start: 0,
+              end: 10,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Perforce CL',
+          refs: [
+            {
+              kind: 'chatContext',
+              label: 'Perforce CL',
+              uri: '',
+              text: 'Changelist 123\n- src/a.ts',
+              description: 'Perforce',
+              start: 0,
+              end: 12,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'commit', query: 'fix' },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'commit', query: '', limit: 200 },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'chatContext', query: '', handle: 3, label: 'Perforce CL' },
+      },
       { kind: 'cancelTurn', payload: { ref: REF } },
       {
         kind: 'resolvePermission',
@@ -558,6 +607,256 @@ describe('parseClientFrame', () => {
           refs: [{ kind: 'docs', label: 'Doc', uri: 'file:///docs', start: 0, end: 4 }],
         },
       },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [{ kind: 'commit', label: 'Fix', uri: 'file:///w', text: 'Fix', start: 0, end: 4 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [
+            {
+              kind: 'commit',
+              label: 'Fix',
+              uri: 'file:///w',
+              commitHash: 'not-hex',
+              text: 'Fix',
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [
+            {
+              kind: 'commit',
+              label: 'Fix',
+              uri: 'file:///w',
+              commitHash: 'a'.repeat(40),
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [
+            {
+              kind: 'commit',
+              label: 'Fix',
+              uri: 'file:///w',
+              commitHash: 'a'.repeat(40),
+              text: 'x'.repeat(513),
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [
+            {
+              kind: 'commit',
+              label: 'Fix',
+              uri: 'file:///w',
+              commitHash: 'a'.repeat(40),
+              text: 'Fix',
+              chatContextHandle: 1,
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Ext',
+          refs: [
+            {
+              kind: 'chatContext',
+              label: 'Ext',
+              uri: 'file:///w',
+              text: 'body',
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Ext',
+          refs: [
+            { kind: 'chatContext', label: 'Ext', uri: '', text: 'a\u0000b', start: 0, end: 4 },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Ext',
+          refs: [{ kind: 'chatContext', label: 'Ext', uri: '', start: 0, end: 4 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Ext',
+          refs: [
+            {
+              kind: 'chatContext',
+              label: 'Ext',
+              uri: '',
+              text: 'x'.repeat(4097),
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [
+            {
+              kind: 'file',
+              label: 'Fix',
+              uri: 'file:///w',
+              text: 'Fix',
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [
+            {
+              kind: 'file',
+              label: 'Fix',
+              uri: 'file:///w',
+              commitHash: 'a'.repeat(40),
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Fix',
+          refs: [
+            {
+              kind: 'chatContext',
+              label: 'Fix',
+              uri: '',
+              text: 'Fix',
+              chatContextHandle: 1,
+              start: 0,
+              end: 4,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Nope',
+          refs: [
+            {
+              kind: 'commit',
+              label: 'Fix',
+              uri: 'file:///w',
+              commitHash: 'a'.repeat(40),
+              text: 'Fix',
+              start: 0,
+              end: 5,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'file', query: '' },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'commit', query: 'x'.repeat(257) },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'commit', query: '', limit: 0 },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'commit', query: '', limit: 201 },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'commit', query: '', handle: 1 },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'commit', query: '', label: 'Git Commit…' },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'chatContext', query: '', label: 'Perforce CL' },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'chatContext', query: '', handle: 0, label: 'Perforce CL' },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'chatContext', query: '', handle: 1.5, label: 'Perforce CL' },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'chatContext', query: '', handle: 1, label: '' },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { ref: REF, kind: 'chatContext', query: '', handle: 1, label: 'x', limit: 10 },
+      },
+      {
+        kind: 'resolvePromptRef',
+        payload: { kind: 'commit', query: '' },
+      },
       { kind: 'resolvePermission', payload: { ref: REF, optionId: 'allow' } },
       {
         kind: 'resolveElicitation',
@@ -685,6 +984,45 @@ describe('parseClientFrame', () => {
         ),
       ),
     ).toBe('bad_request')
+  })
+
+  it('caps the aggregate prompt ref byte budget', () => {
+    const build = (count: number, textLength: number, fill = 'x') => {
+      const labels = Array.from({ length: count }, (_, index) => `c${index}`)
+      const tokens = labels.map((label) => `#${label}`)
+      const text = tokens.join(' ')
+      let cursor = 0
+      const refs = tokens.map((token, index) => {
+        const start = text.indexOf(token, cursor)
+        cursor = start + token.length
+        return {
+          kind: 'chatContext',
+          label: labels[index],
+          uri: '',
+          text: fill.repeat(textLength),
+          start,
+          end: cursor,
+        }
+      })
+      return { text, refs }
+    }
+    const frame = (payload: ReturnType<typeof build>) => ({
+      type: 'command',
+      requestId: 'r',
+      kind: 'sendPrompt',
+      payload: { ref: REF, ...payload },
+    })
+
+    const exact = build(8, 4000)
+    expect(parseClientFrame(JSON.stringify(frame(exact)))).toStrictEqual({
+      ok: true,
+      value: frame(exact),
+    })
+    expect(errorCode(parseClientFrame(JSON.stringify(frame(build(9, 4000)))))).toBe('bad_request')
+    // Bytes, not UTF-16 units: 8 × 4,000 CJK chars is ~96KB.
+    expect(errorCode(parseClientFrame(JSON.stringify(frame(build(8, 4000, '中')))))).toBe(
+      'bad_request',
+    )
   })
 
   it('rejects non-JSON and non-object payloads', () => {

@@ -1,4 +1,5 @@
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
+import { GitGraphCommands } from '@universe-editor/extensions-common'
 import {
   MAX_TITLE_LENGTH,
   parseServerFrame,
@@ -15,6 +16,7 @@ import {
   URI,
   UriIdentityService,
   type IEditorGroupsService,
+  type ICommandService,
   type IFileSearchComplete,
   type IFileSearchService,
   type IFileService,
@@ -45,6 +47,7 @@ import type {
 import type { IAcpAgentRegistry } from '../../acp/acpAgentRegistry.js'
 import type { IUserSettingsSyncService } from '../../configuration/UserSettingsSync.js'
 import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmService.js'
+import type { IChatContextService } from '../../extensions/ChatContextService.js'
 import type { IExcludeService } from '../../exclude/ExcludeService.js'
 import {
   MOBILE_BRIDGE_LARGE_THROTTLE_MS,
@@ -64,6 +67,7 @@ import type {
 } from '../../delivery/sessionDeliveryTypes.js'
 import type { MobileBridgeEvent } from '../../../../shared/ipc/mobileGatewayService.js'
 import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
+import { relativeTime } from '../../../relativeTime.js'
 
 const NULL_LOGGER: ILogger = {
   trace: () => {},
@@ -248,6 +252,9 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   files: IFileService
   fileSearch: IFileSearchService
   docs: IDocsService
+  commands: ICommandService
+  chatContext: IChatContextService
+  chatProviders: Array<{ handle: number; provider: Record<string, unknown> }>
   delivery: ISessionDeliveryService
   deliveryChanges: Emitter<SessionDeliveryChange>
   add(session: FakeSessionHarness): void
@@ -363,6 +370,15 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     getDocs: vi.fn(async () => ({ user: {}, extensionDev: {} })),
     getDocsRoot: vi.fn(async (category: DocCategory) => `/docs/${category}`),
   } as unknown as IDocsService
+  const commands = {
+    executeCommand: vi.fn(async () => undefined),
+  } as unknown as ICommandService
+  const chatProviders: Array<{ handle: number; provider: Record<string, unknown> }> = []
+  const chatContext = {
+    getProviders: () => chatProviders,
+    resolveItem: vi.fn(async () => undefined),
+    resolveItemOrThrow: vi.fn(async () => undefined),
+  } as unknown as IChatContextService
   const service = new MobileBridgeService(
     sessionService,
     historyService,
@@ -379,6 +395,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     exclude,
     langFeatures,
     docs,
+    commands,
+    chatContext,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
@@ -401,6 +419,9 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     files,
     fileSearch,
     docs,
+    commands,
+    chatContext,
+    chatProviders,
     delivery,
     deliveryChanges,
     add(session) {
@@ -1206,6 +1227,16 @@ describe('MobileBridgeService commands', () => {
     return (session as unknown as Record<string, T>)[name]!
   }
 
+  function promptRefSourceControl(rootUri: string): IScmSourceControlModel {
+    return {
+      id: 'git',
+      label: 'Git',
+      rootUri,
+      count: observableValue<number | undefined>('test.scmCount', 0),
+      groups: observableValue('test.groups', []),
+    } as unknown as IScmSourceControlModel
+  }
+
   it('forwards prompt, cancel, rename and config commands to the session', async () => {
     const harness = makeHarness()
     const first = makeSession('s1')
@@ -1400,6 +1431,194 @@ describe('MobileBridgeService commands', () => {
       ok: true,
       value: [],
     })
+  })
+
+  it('lists commit and extension entries in prompt-ref completion', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    harness.add(makeSession('s1'))
+    harness.scmSourceControls.set([promptRefSourceControl('/workspace/demo')], undefined)
+    harness.chatProviders.push({
+      handle: 7,
+      provider: {
+        label: 'Perforce CL',
+        description: 'Pick a changelist',
+        keywords: ['cl'],
+      },
+    })
+
+    await expect(harness.service.searchPromptRefs('s1', '#', '', 20)).resolves.toEqual({
+      ok: true,
+      value: [
+        {
+          kind: 'commit',
+          label: 'Git Commit…',
+          uri: '',
+          description: 'Pick a commit from history',
+        },
+        {
+          kind: 'chatContext',
+          label: 'Perforce CL',
+          uri: '',
+          chatContextHandle: 7,
+          description: 'Pick a changelist',
+        },
+      ],
+    })
+  })
+
+  it('resolves commit history for the phone, even for a read-only session', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    harness.add(makeSession('ro', { readOnly: true }))
+    harness.scmSourceControls.set([promptRefSourceControl('/workspace/demo')], undefined)
+    const hash = 'a'.repeat(40)
+    vi.mocked(harness.commands.executeCommand).mockImplementation((async (id: string) =>
+      id === GitGraphCommands.getCommits
+        ? {
+            commits: [
+              {
+                hash,
+                parents: [],
+                author: 'Alice',
+                email: 'alice@example.com',
+                date: 1700000000,
+                message: 'fix login',
+                heads: [],
+                tags: [],
+                remotes: [],
+                stash: null,
+                worktrees: [],
+              },
+            ],
+            head: hash,
+            headName: 'main',
+            moreAvailable: false,
+            uncommittedChanges: 0,
+          }
+        : undefined) as never)
+
+    const result = await harness.service.resolvePromptRef('ro', {
+      kind: 'commit',
+      query: '',
+      limit: 50,
+    })
+
+    expect(harness.commands.executeCommand).toHaveBeenNthCalledWith(
+      1,
+      GitGraphCommands.setRepo,
+      '/workspace/demo',
+    )
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        kind: 'commit',
+        entries: [
+          {
+            kind: 'commit',
+            label: 'aaaaaaa fix login',
+            uri: URI.file('/workspace/demo').toString(),
+            commitHash: hash,
+            text: 'fix login',
+            description: `Alice · ${relativeTime(1700000000 * 1000)}`,
+          },
+        ],
+      },
+    })
+  })
+
+  it('runs the extension picker for chatContext with the session directory', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    harness.add(makeSession('s1', { cwd: '/workspace/demo/sub' }))
+    harness.chatProviders.push({
+      handle: 7,
+      provider: { label: 'Perforce CL', description: 'Pick a changelist', keywords: ['cl'] },
+    })
+    vi.mocked(harness.chatContext.resolveItemOrThrow).mockResolvedValue({
+      label: 'CL 1',
+      text: 'body',
+    })
+
+    const result = await harness.service.resolvePromptRef('s1', {
+      kind: 'chatContext',
+      query: 'cl',
+      handle: 7,
+      label: 'Perforce CL',
+    })
+
+    expect(harness.chatContext.resolveItemOrThrow).toHaveBeenCalledWith(7, 'cl', {
+      sessionDir: '/workspace/demo/sub',
+    })
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        kind: 'chatContext',
+        entry: {
+          kind: 'chatContext',
+          label: 'CL 1',
+          uri: '',
+          text: 'body',
+          description: 'Pick a changelist',
+        },
+      },
+    })
+  })
+
+  it('rejects resolve for unknown sessions and chatContext without a handle', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    harness.add(makeSession('s1'))
+
+    await expect(
+      harness.service.resolvePromptRef('missing', { kind: 'commit', query: '' }),
+    ).resolves.toMatchObject({ ok: false, code: 'session_not_found' })
+    await expect(
+      harness.service.resolvePromptRef('s1', { kind: 'chatContext', query: '' }),
+    ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+  })
+
+  it('rebuilds a commit ref from the repo root above a narrowed session', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    const first = makeSession('s1', { cwd: '/workspace/demo/sub' })
+    harness.add(first)
+    harness.scmSourceControls.set([promptRefSourceControl('/workspace/demo')], undefined)
+    const hash = 'a'.repeat(40)
+
+    await expect(
+      harness.service.sendPrompt(
+        's1',
+        'see #a1b2c3d fix',
+        [],
+        [
+          {
+            kind: 'commit',
+            label: 'a1b2c3d fix',
+            uri: URI.file('/workspace/demo').toString(),
+            commitHash: hash,
+            text: 'fix',
+            start: 4,
+            end: 16,
+          },
+        ],
+      ),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(callSpy(first.session, 'sendPrompt')).toHaveBeenCalledWith(
+      'see #a1b2c3d fix',
+      [
+        expect.objectContaining({
+          ref: expect.objectContaining({
+            kind: 'commit',
+            uri: URI.file('/workspace/demo').toString(),
+            meta: { commitHash: hash, description: 'fix' },
+          }),
+        }),
+      ],
+      undefined,
+      [],
+      [],
+    )
   })
 
   it('converts phone prompt refs into placed refs', async () => {

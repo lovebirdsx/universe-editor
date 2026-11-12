@@ -37,6 +37,8 @@ import type {
   MobileSideTaskSummary,
   MobileToolCallDetail,
   MobileWorkspaceCandidate,
+  ResolvePromptRefRequest,
+  ResolvePromptRefResult,
 } from '@universe-editor/mobile-protocol'
 
 export const MOBILE_GATEWAY_DEFAULT_PORT = 47321
@@ -552,6 +554,17 @@ export interface IMobileBridgeService {
     query: string,
     limit: number,
   ): Promise<MobileBridgeResult<readonly MobilePromptRefSuggestion[]>>
+
+  /**
+   * Second step for `#` entries that cannot be listed in one query: commit
+   * history (returns final commit entries) and extension chatContext (runs the
+   * provider's own picker on this PC). Object parameter so optional fields keep
+   * their `undefined` identity across IPC.
+   */
+  resolvePromptRef(
+    localId: string,
+    request: ResolvePromptRefRequest,
+  ): Promise<MobileBridgeResult<ResolvePromptRefResult>>
 
   /** The `index`-th ACP image block of a message; undefined when unavailable. */
   getMessageImage(

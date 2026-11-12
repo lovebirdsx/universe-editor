@@ -68,6 +68,7 @@ describe('CommandClient', () => {
     expect(COMMAND_TIMEOUT_MS.listDirectory).toBe(25_000)
     expect(COMMAND_TIMEOUT_MS.listSessionHistory).toBe(20_000)
     expect(COMMAND_TIMEOUT_MS.openSession).toBe(120_000)
+    expect(COMMAND_TIMEOUT_MS.resolvePromptRef).toBe(125_000)
 
     const { client, timers } = createHarness()
     const outcome = client.request('sendPrompt', { ref: {}, text: 'hi' }).catch((error) => error)
@@ -113,6 +114,16 @@ describe('CommandClient', () => {
     expect(sent[11]?.idempotencyKey).toBeTruthy()
     void client.request('listDirectory', { folder: 'file:///ws' })
     expect(sent[12]?.idempotencyKey).toBeUndefined()
+  })
+
+  it('treats resolvePromptRef as mutating and waits past the gateway deadline', () => {
+    const { client, sent, timers } = createHarness()
+    void client.request('resolvePromptRef', { kind: 'commit', query: '' })
+
+    expect(sent[0]?.idempotencyKey).toBe('idem-1')
+    expect(timers.pendingTimeoutDelays()).toEqual([
+      COMMAND_TIMEOUT_MS.resolvePromptRef + COMMAND_TIMEOUT_GRACE_MS,
+    ])
   })
 
   it('reuses the requestId and idempotency key when resending after a reconnect', () => {

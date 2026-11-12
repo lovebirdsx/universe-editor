@@ -369,6 +369,7 @@ export interface UnsubscribeSessionFrame {
 export const MOBILE_COMMAND_KINDS = [
   'getToolCallDetail',
   'searchPromptRefs',
+  'resolvePromptRef',
   'sendPrompt',
   'cancelTurn',
   'resolvePermission',
@@ -418,6 +419,8 @@ export const MOBILE_PROMPT_REF_KINDS = [
   'scmChange',
   'openEditor',
   'docs',
+  'commit',
+  'chatContext',
 ] as const
 export type MobilePromptRefKind = (typeof MOBILE_PROMPT_REF_KINDS)[number]
 
@@ -446,6 +449,15 @@ export interface MobilePromptRefSuggestion {
   scmStatus?: string
   /** `docs`: native fs path of the locale directory. */
   dirPath?: string
+  /** `commit`: full SHA of the picked commit (final item / send ref only). */
+  commitHash?: string
+  /** `chatContext`: extension provider handle (search entry only). */
+  chatContextHandle?: number
+  /**
+   * Agent-facing body: `commit` = commit subject, `chatContext` = the text the
+   * extension provider returned. Display-only `description` never reaches the agent.
+   */
+  text?: string
 }
 
 /** A suggestion placed at a character range in the prompt text. */
@@ -467,6 +479,35 @@ export interface SearchPromptRefsPayload {
 export interface MobilePromptRefSuggestionsResult {
   entries: readonly MobilePromptRefSuggestion[]
 }
+
+/** Kinds whose first row is only an entry point for a second selection step. */
+export const MOBILE_PROMPT_REF_RESOLVE_KINDS = ['commit', 'chatContext'] as const
+export type MobilePromptRefResolveKind = (typeof MOBILE_PROMPT_REF_RESOLVE_KINDS)[number]
+
+/**
+ * Second step of a `#` entry: `commit` lists history candidates; `chatContext`
+ * asks the extension provider to run its own picker on the PC.
+ */
+export interface ResolvePromptRefRequest {
+  kind: MobilePromptRefResolveKind
+  /** Text after `#` when the entry was accepted; forwarded to extension providers. */
+  query: string
+  /** `commit`: max history entries (default 50). Not accepted for chatContext. */
+  limit?: number
+  /** `chatContext`: provider handle from the search entry. */
+  handle?: number
+  /** `chatContext`: entry label; guards against a reused handle after a host restart. */
+  label?: string
+}
+
+export interface ResolvePromptRefPayload extends ResolvePromptRefRequest {
+  ref: MobileSessionRef
+}
+
+/** `chatContext` without `entry` means the user cancelled or the provider is gone. */
+export type ResolvePromptRefResult =
+  | { kind: 'commit'; entries: readonly MobilePromptRefSuggestion[] }
+  | { kind: 'chatContext'; entry?: MobilePromptRefSuggestion }
 
 export interface SendPromptPayload {
   ref: MobileSessionRef

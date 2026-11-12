@@ -87,6 +87,7 @@ import type {
   PongFrame,
   PushSubscribeFrame,
   ResyncRequiredFrame,
+  ResolvePromptRefPayload,
   SearchPromptRefsPayload,
   ServerErrorFrame,
   ServerFrame,
@@ -111,6 +112,7 @@ import {
   MOBILE_PERMISSION_SETTLE_SOURCES,
   MOBILE_PLAN_ENTRY_STATUSES,
   MOBILE_PROMPT_REF_KINDS,
+  MOBILE_PROMPT_REF_RESOLVE_KINDS,
   MOBILE_PROMPT_REF_TRIGGERS,
   MOBILE_RESYNC_SCOPES,
   MOBILE_SESSION_BUCKETS,
@@ -119,6 +121,7 @@ import {
 } from './frames.js'
 import type { PairDevicePlatform, PairRequest } from './pairing.js'
 import { isValidPairCodeShape, normalizePairCode, PAIR_DEVICE_PLATFORMS } from './pairing.js'
+import { utf8ByteLength } from './text.js'
 import { MOBILE_PROTOCOL_VERSION } from './version.js'
 import { MAX_WEB_BUILD_ID_LENGTH } from './webBuildId.js'
 import { MAX_WORKSPACE_RELATIVE_PATH_LENGTH } from './workspacePath.js'
@@ -198,6 +201,18 @@ export const MAX_PROMPT_REF_STATUS_LENGTH = 32
 export const MAX_PROMPT_REF_QUERY_LENGTH = 256
 export const MAX_PROMPT_REF_SUGGESTIONS = 50
 export const DEFAULT_PROMPT_REF_SUGGESTIONS = 20
+/** `commit` second step: history candidates. */
+export const MAX_COMMIT_PROMPT_REFS = 200
+export const DEFAULT_COMMIT_PROMPT_REFS = 50
+export const MAX_PROMPT_REF_COMMIT_HASH_LENGTH = 64
+/** `commit` subject carried as the agent-facing `text`. */
+export const MAX_PROMPT_REF_COMMIT_TEXT_LENGTH = 512
+/** `chatContext` provider body carried as the agent-facing `text`. */
+export const MAX_PROMPT_REF_TEXT_LENGTH = 4096
+/** Keeps 32 text-bearing refs plus a full prompt under MAX_CLIENT_FRAME_BYTES. */
+export const MAX_PROMPT_REF_BYTES_TOTAL = 32 * 1024
+
+const COMMIT_HASH_RE = /^[0-9a-fA-F]{7,64}$/
 
 export type ParseErrorCode = 'bad_request' | 'protocol_mismatch'
 
@@ -854,6 +869,8 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseGetToolCallDetailPayload(value)
     case 'searchPromptRefs':
       return parseSearchPromptRefsPayload(value)
+    case 'resolvePromptRef':
+      return parseResolvePromptRefPayload(value)
     case 'sendPrompt':
       return parseSendPromptPayload(value)
     case 'cancelTurn':
@@ -1284,6 +1301,65 @@ function parseSearchPromptRefsPayload(value: unknown): Result<SearchPromptRefsPa
   })
 }
 
+function parseResolvePromptRefPayload(value: unknown): Result<ResolvePromptRefPayload> {
+  if (!isRecord(value)) return fail('bad_request', 'resolvePromptRef.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const kind = value.kind
+  if (
+    typeof kind !== 'string' ||
+    !(MOBILE_PROMPT_REF_RESOLVE_KINDS as readonly string[]).includes(kind)
+  ) {
+    return fail('bad_request', "resolvePromptRef.kind must be 'commit' or 'chatContext'")
+  }
+  const query = value.query
+  if (!isBoundedString(query, MAX_PROMPT_REF_QUERY_LENGTH)) {
+    return fail(
+      'bad_request',
+      `resolvePromptRef.query must be at most ${MAX_PROMPT_REF_QUERY_LENGTH} characters`,
+    )
+  }
+  if (kind === 'commit') {
+    if (value.handle !== undefined || value.label !== undefined) {
+      return fail('bad_request', 'resolvePromptRef commit does not accept handle/label')
+    }
+    const limit = value.limit
+    if (
+      limit !== undefined &&
+      (typeof limit !== 'number' ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > MAX_COMMIT_PROMPT_REFS)
+    ) {
+      return fail(
+        'bad_request',
+        `resolvePromptRef.limit must be an integer between 1 and ${MAX_COMMIT_PROMPT_REFS}`,
+      )
+    }
+    return ok({
+      ref: ref.value,
+      kind: 'commit',
+      query,
+      ...(limit !== undefined ? { limit } : {}),
+    })
+  }
+  if (value.limit !== undefined) {
+    return fail('bad_request', 'resolvePromptRef chatContext does not accept limit')
+  }
+  const handle = value.handle
+  if (typeof handle !== 'number' || !Number.isInteger(handle) || handle < 1) {
+    return fail('bad_request', 'resolvePromptRef.handle must be a positive integer')
+  }
+  const label = value.label
+  if (!isNonEmptyBoundedString(label, MAX_PROMPT_REF_LABEL_LENGTH) || hasControlCharacters(label)) {
+    return fail(
+      'bad_request',
+      `resolvePromptRef.label must be 1–${MAX_PROMPT_REF_LABEL_LENGTH} printable characters`,
+    )
+  }
+  return ok({ ref: ref.value, kind: 'chatContext', query, handle, label })
+}
+
 function parsePromptRefs(
   value: unknown,
   text: string,
@@ -1295,6 +1371,7 @@ function parsePromptRefs(
     return fail('bad_request', `sendPrompt.refs must contain at most ${MAX_PROMPT_REFS} entries`)
   }
   const parsed: MobilePromptRef[] = []
+  let textTotal = 0
   for (const item of value) {
     if (!isRecord(item)) return fail('bad_request', 'sendPrompt.refs entries must be objects')
     const kind = item.kind
@@ -1315,7 +1392,11 @@ function parsePromptRefs(
       return fail('bad_request', 'sendPrompt.refs file label must be a relative workspace path')
     }
     const uri = item.uri
-    if (!isNonEmptyBoundedString(uri, MAX_PROMPT_REF_URI_LENGTH)) {
+    if (kind === 'chatContext') {
+      if (uri !== '') {
+        return fail('bad_request', 'sendPrompt.refs chatContext uri must be empty')
+      }
+    } else if (!isNonEmptyBoundedString(uri, MAX_PROMPT_REF_URI_LENGTH)) {
       return fail(
         'bad_request',
         `sendPrompt.refs uri must be 1–${MAX_PROMPT_REF_URI_LENGTH} characters`,
@@ -1366,6 +1447,72 @@ function parsePromptRefs(
     if (kind === 'docs' && dirPath === undefined) {
       return fail('bad_request', 'sendPrompt.refs docs entries require dirPath')
     }
+    const rawCommitHash = item.commitHash
+    const rawText = item.text
+    const rawHandle = item.chatContextHandle
+    let commitHash: string | undefined
+    let refText: string | undefined
+    if (kind === 'commit') {
+      if (typeof rawCommitHash !== 'string' || !isValidCommitHash(rawCommitHash)) {
+        return fail(
+          'bad_request',
+          `sendPrompt.refs commit entries require a ${MAX_PROMPT_REF_COMMIT_HASH_LENGTH}-character hex commitHash`,
+        )
+      }
+      if (
+        !isNonEmptyBoundedString(rawText, MAX_PROMPT_REF_COMMIT_TEXT_LENGTH) ||
+        hasControlCharacters(rawText)
+      ) {
+        return fail(
+          'bad_request',
+          `sendPrompt.refs commit text must be 1–${MAX_PROMPT_REF_COMMIT_TEXT_LENGTH} printable characters`,
+        )
+      }
+      if (rawHandle !== undefined) {
+        return fail(
+          'bad_request',
+          'sendPrompt.refs chatContextHandle is only valid on chatContext search entries',
+        )
+      }
+      commitHash = rawCommitHash
+      refText = rawText
+    } else if (kind === 'chatContext') {
+      if (rawCommitHash !== undefined) {
+        return fail('bad_request', 'sendPrompt.refs commitHash is only valid on commit entries')
+      }
+      if (
+        !isNonEmptyBoundedString(rawText, MAX_PROMPT_REF_TEXT_LENGTH) ||
+        hasUnsafeTextControls(rawText)
+      ) {
+        return fail(
+          'bad_request',
+          `sendPrompt.refs chatContext text must be 1–${MAX_PROMPT_REF_TEXT_LENGTH} characters`,
+        )
+      }
+      if (rawHandle !== undefined) {
+        return fail(
+          'bad_request',
+          'sendPrompt.refs chatContextHandle is only valid on chatContext search entries',
+        )
+      }
+      refText = rawText
+    } else if (rawCommitHash !== undefined || rawText !== undefined || rawHandle !== undefined) {
+      return fail(
+        'bad_request',
+        'sendPrompt.refs text/commitHash/chatContextHandle are only valid on commit/chatContext entries',
+      )
+    }
+    {
+      // The frame limit is bytes; counting UTF-16 units lets CJK refs blow
+      // past MAX_CLIENT_FRAME_BYTES and get the connection closed by ws.
+      textTotal += utf8ByteLength(label) + utf8ByteLength(uri) + utf8ByteLength(refText ?? '')
+      if (textTotal > MAX_PROMPT_REF_BYTES_TOTAL) {
+        return fail(
+          'bad_request',
+          `sendPrompt.refs total label/uri/text must be at most ${MAX_PROMPT_REF_BYTES_TOTAL} bytes`,
+        )
+      }
+    }
     const start = item.start
     const end = item.end
     if (!isNonNegativeInteger(start) || !isNonNegativeInteger(end) || end <= start) {
@@ -1387,6 +1534,8 @@ function parsePromptRefs(
       ...(symbolKind.value !== undefined ? { symbolKind: symbolKind.value } : {}),
       ...(scmStatus !== undefined ? { scmStatus } : {}),
       ...(dirPath !== undefined ? { dirPath } : {}),
+      ...(commitHash !== undefined ? { commitHash } : {}),
+      ...(refText !== undefined ? { text: refText } : {}),
       start,
       end,
     })
@@ -1404,9 +1553,23 @@ function isMobilePromptRefKind(value: unknown): value is MobilePromptRefKind {
   return typeof value === 'string' && (MOBILE_PROMPT_REF_KINDS as readonly string[]).includes(value)
 }
 
+/** Shared by send-ref validation, the gateway clamp and the phone-side guards. */
+export function isValidCommitHash(value: string): boolean {
+  return COMMIT_HASH_RE.test(value)
+}
+
 function hasControlCharacters(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const code = value.charCodeAt(index)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+function hasUnsafeTextControls(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code === 0x09 || code === 0x0a || code === 0x0d) continue
     if (code <= 0x1f || code === 0x7f) return true
   }
   return false

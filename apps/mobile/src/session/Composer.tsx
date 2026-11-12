@@ -13,8 +13,10 @@ import {
   type MobileDraftImageRef,
   type MobileDraftState,
   type MobilePromptRef,
+  type MobilePromptRefResolveKind,
   type MobilePromptRefSuggestion,
   type MobilePromptRefTrigger,
+  type ResolvePromptRefResult,
 } from '@universe-editor/mobile-protocol'
 import {
   useCallback,
@@ -27,7 +29,7 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { errorCode } from '../errors.js'
-import { isMobilePromptRefSuggestion } from '../state/commandResults.js'
+import { isSendableMobilePromptRef } from '../state/commandResults.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { ComposerAttachmentChip } from './ComposerAttachmentChip.js'
@@ -112,6 +114,29 @@ export interface ComposerPrefill {
   readonly text: string
 }
 
+/** The `#` token a second step will replace, captured before the RPC. */
+interface PromptRefAnchor {
+  readonly start: number
+  readonly end: number
+  readonly anchorText: string
+}
+
+/**
+ * Inline second step for entries with an open-ended candidate space: commit
+ * history for `#Git Commit…`, or a picker the extension opens on the PC for its
+ * own `#` entry. The anchor survives independently of the caret.
+ */
+interface PromptRefSecondStep {
+  readonly kind: MobilePromptRefResolveKind
+  readonly title: string
+  readonly anchor: PromptRefAnchor
+  readonly suggestions: readonly MobilePromptRefSuggestion[]
+  readonly loading: boolean
+  readonly failed: boolean
+  readonly loadingText?: string | undefined
+  readonly emptyText?: string | undefined
+}
+
 export interface ComposerProps {
   readonly sessionKey: string
   readonly readOnly: boolean
@@ -134,6 +159,12 @@ export interface ComposerProps {
     trigger: MobilePromptRefTrigger,
     query: string,
   ) => Promise<readonly MobilePromptRefSuggestion[]>
+  /** Second step for `commit` / `chatContext` entries; `chatContext` may open a PC picker. */
+  readonly resolvePromptRef: (
+    kind: MobilePromptRefResolveKind,
+    query: string,
+    options?: { readonly handle?: number; readonly label?: string; readonly limit?: number },
+  ) => Promise<ResolvePromptRefResult>
   /** Latest draft from the hub (PC or another phone), applied when this phone is idle. */
   readonly draft?: MobileDraftState | undefined
   /** Gateway ack for this phone's latest draft; advances the local revision watermark. */
@@ -166,6 +197,7 @@ export function Composer({
   fetchDraftImage,
   prefill,
   searchPromptRefs,
+  resolvePromptRef,
   draft,
   draftAck,
   onDraftChange,
@@ -194,9 +226,12 @@ export function Composer({
     useState<readonly MobilePromptRefSuggestion[]>(EMPTY_PROMPT_REFS)
   const [refLoading, setRefLoading] = useState(false)
   const [refFailed, setRefFailed] = useState(false)
+  const [secondStep, setSecondStep] = useState<PromptRefSecondStep | undefined>(undefined)
+  const [secondIndex, setSecondIndex] = useState(0)
   const [caretRequest, setCaretRequest] = useState(0)
   const pendingCaret = useRef<number | null>(null)
   const refSearchSeq = useRef(0)
+  const secondStepSeq = useRef(0)
   const disabled = !online || readOnly
   const textareaRef = useAutoGrowTextarea(value, { maxHeightPx: MAX_HEIGHT_PX })
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
@@ -222,12 +257,23 @@ export function Composer({
   const [refSearchTick, setRefSearchTick] = useState(0)
   const onDraftChangeRef = useRef(onDraftChange)
   const searchPromptRefsRef = useRef(searchPromptRefs)
+  const resolvePromptRefRef = useRef(resolvePromptRef)
+
+  // Bumping the sequence invalidates a pending second-step RPC: its late
+  // result (commit list or the extension picker's answer) must not insert into
+  // text the user has since edited or replaced.
+  const closeSecondStep = useCallback((): void => {
+    secondStepSeq.current += 1
+    setSecondStep(undefined)
+    setSecondIndex(0)
+  }, [])
 
   useEffect(() => {
     const urls = previewUrls.current
     mounted.current = true
     return () => {
       mounted.current = false
+      secondStepSeq.current += 1
       releaseAllPreviewUrls(urls)
     }
   }, [])
@@ -239,10 +285,12 @@ export function Composer({
   useEffect(() => {
     if (prefill === undefined || prefill.sessionKey !== sessionKey) return
     interacted.current = true
+    closeSecondStep()
+    setRefDismissed(false)
     setValue(prefill.text)
     setPlacedRefs([])
     textareaRef.current?.focus()
-  }, [prefill, sessionKey, textareaRef])
+  }, [prefill, sessionKey, textareaRef, closeSecondStep])
 
   const slash: SlashQuery | null = armed && !disabled ? extractSlashQuery(value, caret) : null
   const slashMatches = slash === null ? NO_COMMANDS : filterSlashCommands(commands, slash.query)
@@ -258,6 +306,8 @@ export function Composer({
       : null
   const refOpen = focused && !refDismissed && refQuery !== null
   const activeRefIndex = Math.min(refIndex, Math.max(refSuggestions.length - 1, 0))
+  const secondSuggestions = secondStep?.suggestions ?? EMPTY_PROMPT_REFS
+  const activeSecondIndex = Math.min(secondIndex, Math.max(secondSuggestions.length - 1, 0))
   const refTrigger = refQuery?.trigger
   const refQueryText = refQuery?.query
 
@@ -287,7 +337,13 @@ export function Composer({
   // bumps `refSearchTick` to retry a query suppressed during composition.
   useEffect(() => {
     const seq = ++refSearchSeq.current
-    if (!refOpen || refTrigger === undefined || refQueryText === undefined || composing.current) {
+    if (
+      !refOpen ||
+      secondStep !== undefined ||
+      refTrigger === undefined ||
+      refQueryText === undefined ||
+      composing.current
+    ) {
       setRefLoading(false)
       return
     }
@@ -312,7 +368,7 @@ export function Composer({
     return () => {
       window.clearTimeout(timer)
     }
-  }, [refOpen, refTrigger, refQueryText, refSearchTick])
+  }, [refOpen, secondStep, refTrigger, refQueryText, refSearchTick])
 
   useLayoutEffect(() => {
     const position = pendingCaret.current
@@ -416,6 +472,7 @@ export function Composer({
     draftRef.current = draft
     onDraftChangeRef.current = onDraftChange
     searchPromptRefsRef.current = searchPromptRefs
+    resolvePromptRefRef.current = resolvePromptRef
   })
 
   const publishDraft = useCallback((force = false): boolean => {
@@ -449,6 +506,7 @@ export function Composer({
         // Remote text has no tracked ranges here; stale refs would fail the
         // send-time slice check, so drop them instead of sending a broken prompt.
         setPlacedRefs([])
+        closeSecondStep()
       }
       lastIncorporatedRevision.current = Math.max(lastIncorporatedRevision.current, next.revision)
       // Adopt the applied text as the published baseline: it must not bounce
@@ -463,7 +521,7 @@ export function Composer({
       lastPublishedKey.current = nextKey
       snapshotRef.current = { ...snapshotRef.current, value: next.text, key: nextKey }
     },
-    [textareaRef],
+    [textareaRef, closeSecondStep],
   )
 
   // The controlled textarea moves its caret to the end when React commits a new
@@ -546,6 +604,8 @@ export function Composer({
     !sending &&
     !stopping &&
     !attaching &&
+    // The placeholder token (`#Git`) is not a valid prompt on its own.
+    secondStep === undefined &&
     attachments.every((attachment) => attachment.status === 'uploaded') &&
     (value.trim() !== '' ||
       readyAttachments.length > 0 ||
@@ -555,6 +615,7 @@ export function Composer({
   const handleChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const next = event.target.value
     interacted.current = true
+    if (secondStep !== undefined) closeSecondStep()
     setPlacedRefs((current) => applyTextEdit(value, next, current))
     setValue(next)
     setCaret(event.target.selectionStart ?? next.length)
@@ -566,6 +627,7 @@ export function Composer({
     // Invalidate any completion query already in flight: it was computed for
     // the pre-composition text and must not overwrite the panel mid-IME.
     refSearchSeq.current++
+    if (secondStep !== undefined) closeSecondStep()
   }
 
   const handleCompositionEnd = (): void => {
@@ -588,9 +650,124 @@ export function Composer({
     setSlashDismissed(true)
   }
 
+  // Reopening the first list keeps a cancelled picker retryable: the `#` token
+  // is still under the caret, so dismissing the panel would strand the user.
+  const reopenFirstStep = (): void => {
+    closeSecondStep()
+    setRefDismissed(false)
+  }
+
+  const leaveSecondStep = (): void => {
+    // A PC picker may still be open for chatContext; its late answer is
+    // discarded by the sequence bump. Escape returns to the first list rather
+    // than dismissing the whole panel.
+    reopenFirstStep()
+    textareaRef.current?.focus()
+  }
+
+  const insertRefAtAnchor = (
+    anchor: PromptRefAnchor,
+    suggestion: MobilePromptRefSuggestion,
+  ): boolean => {
+    const base = snapshotRef.current.value
+    // Edits close the second step, but re-check anyway: a slice mismatch would
+    // insert a ref whose token no longer exists.
+    if (base.slice(anchor.start, anchor.end) !== anchor.anchorText) return false
+    const next = insertPromptRef(base, anchor.start, anchor.end, suggestion)
+    if (next.text.length > MAX_PROMPT_LENGTH) return false
+    interacted.current = true
+    setPlacedRefs((current) =>
+      [...applyTextEdit(base, next.text, current), next.placed].sort(
+        (left, right) => left.start - right.start,
+      ),
+    )
+    pendingCaret.current = next.caret
+    setCaretRequest((request) => request + 1)
+    setValue(next.text)
+    setCaret(next.caret)
+    setRefDismissed(true)
+    closeSecondStep()
+    return true
+  }
+
+  const failSecondStep = (seq: number): void => {
+    if (seq !== secondStepSeq.current) return
+    setSecondStep((current) =>
+      current === undefined ? current : { ...current, loading: false, failed: true },
+    )
+  }
+
+  const beginSecondStep = (suggestion: MobilePromptRefSuggestion, query: PromptRefQuery): void => {
+    if (suggestion.kind !== 'commit' && suggestion.kind !== 'chatContext') return
+    if (suggestion.kind === 'chatContext' && suggestion.chatContextHandle === undefined) return
+    const anchor: PromptRefAnchor = {
+      start: query.start,
+      end: query.end,
+      anchorText: value.slice(query.start, query.end),
+    }
+    const seq = ++secondStepSeq.current
+    setRefDismissed(true)
+    setSecondIndex(0)
+
+    if (suggestion.kind === 'commit') {
+      setSecondStep({
+        kind: 'commit',
+        title: strings.promptRefPickCommit,
+        anchor,
+        suggestions: EMPTY_PROMPT_REFS,
+        loading: true,
+        failed: false,
+        emptyText: strings.promptRefCommitEmpty,
+      })
+      void resolvePromptRefRef
+        .current('commit', query.query)
+        .then((result: ResolvePromptRefResult) => {
+          if (seq !== secondStepSeq.current) return
+          if (result.kind !== 'commit') {
+            failSecondStep(seq)
+            return
+          }
+          setSecondStep((current) =>
+            current === undefined || current.kind !== 'commit'
+              ? current
+              : { ...current, loading: false, suggestions: result.entries },
+          )
+        })
+        .catch(() => failSecondStep(seq))
+      return
+    }
+
+    const handle = suggestion.chatContextHandle
+    if (handle === undefined) return
+    setSecondStep({
+      kind: 'chatContext',
+      title: suggestion.label,
+      anchor,
+      suggestions: EMPTY_PROMPT_REFS,
+      loading: true,
+      failed: false,
+      loadingText: strings.promptRefWaitForPc,
+    })
+    void resolvePromptRefRef
+      .current('chatContext', query.query, { handle, label: suggestion.label })
+      .then((result: ResolvePromptRefResult) => {
+        if (seq !== secondStepSeq.current) return
+        const entry = result.kind === 'chatContext' ? result.entry : undefined
+        // No entry means the user cancelled on the PC or the extension is
+        // gone; the `#` token stays as typed and the first list reopens so a
+        // retry does not require retyping the token.
+        if (entry === undefined || !insertRefAtAnchor(anchor, entry)) reopenFirstStep()
+      })
+      .catch(() => failSecondStep(seq))
+  }
+
   const acceptPromptRef = (suggestion: MobilePromptRefSuggestion): void => {
     const query = refQuery
     if (query === null) return
+    if (suggestion.kind === 'commit' || suggestion.kind === 'chatContext') {
+      beginSecondStep(suggestion, query)
+      return
+    }
     const next = insertPromptRef(value, query.start, query.end, suggestion)
     if (next.text.length > MAX_PROMPT_LENGTH) return
     interacted.current = true
@@ -601,6 +778,11 @@ export function Composer({
     setValue(next.text)
     setCaret(next.caret)
     setRefDismissed(true)
+  }
+
+  const acceptSecondSuggestion = (suggestion: MobilePromptRefSuggestion): void => {
+    if (secondStep === undefined) return
+    if (!insertRefAtAnchor(secondStep.anchor, suggestion)) reopenFirstStep()
   }
 
   const insertSlash = (): void => {
@@ -618,6 +800,35 @@ export function Composer({
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (event.nativeEvent.isComposing) return
+    if (secondStep !== undefined) {
+      // The second step owns Enter: swallowing it while the list is loading or
+      // empty keeps a newline from silently cancelling the picker.
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        const suggestion = secondSuggestions[activeSecondIndex]
+        if (suggestion !== undefined) acceptSecondSuggestion(suggestion)
+        return
+      }
+      if (secondSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          setSecondIndex((activeSecondIndex + 1) % secondSuggestions.length)
+          return
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          setSecondIndex(
+            (activeSecondIndex - 1 + secondSuggestions.length) % secondSuggestions.length,
+          )
+          return
+        }
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        leaveSecondStep()
+      }
+      return
+    }
     if (slashOpen) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
@@ -672,7 +883,14 @@ export function Composer({
   // list mounted until the next turn and only then decide it really lost focus.
   const handleBlur = (): void => {
     window.setTimeout(() => {
-      if (document.activeElement !== textareaRef.current) setFocused(false)
+      if (document.activeElement === textareaRef.current) return
+      setFocused(false)
+      // Keep only an in-flight PC picker (its answer inserts automatically).
+      // A commit list or a failed step must not linger off-focus and keep the
+      // send button disabled.
+      if (secondStep !== undefined && !(secondStep.kind === 'chatContext' && secondStep.loading)) {
+        closeSecondStep()
+      }
     }, 0)
   }
 
@@ -860,7 +1078,7 @@ export function Composer({
           {draft?.refs?.map((ref) => (
             <span key={ref.id} className="composer__chip">
               <span className="composer__chip-name">
-                {ref.kind === 'symbol' || ref.kind === 'scmChange' ? '#' : '@'}
+                {ref.kind === 'file' ? '@' : '#'}
                 {ref.label}
               </span>
             </span>
@@ -915,7 +1133,21 @@ export function Composer({
           onPick={acceptCommand}
         />
       )}
-      {refOpen && refQuery !== null && (
+      {secondStep !== undefined && (
+        <PromptRefPanel
+          trigger={refTrigger ?? '#'}
+          suggestions={secondStep.suggestions}
+          activeIndex={activeSecondIndex}
+          loading={secondStep.loading}
+          failed={secondStep.failed}
+          onPick={acceptSecondSuggestion}
+          title={secondStep.title}
+          onBack={leaveSecondStep}
+          loadingText={secondStep.loadingText}
+          emptyText={secondStep.emptyText}
+        />
+      )}
+      {secondStep === undefined && refOpen && refQuery !== null && (
         <PromptRefPanel
           trigger={refQuery.trigger}
           suggestions={refSuggestions}
@@ -967,15 +1199,21 @@ export function Composer({
           aria-label={strings.composerPlaceholder}
           aria-autocomplete="list"
           aria-controls={
-            slashOpen ? SLASH_COMMAND_LIST_ID : refOpen ? PROMPT_REF_LIST_ID : undefined
+            slashOpen
+              ? SLASH_COMMAND_LIST_ID
+              : secondStep !== undefined || refOpen
+                ? PROMPT_REF_LIST_ID
+                : undefined
           }
-          aria-expanded={slashOpen || refOpen}
+          aria-expanded={slashOpen || refOpen || secondStep !== undefined}
           aria-activedescendant={
             slashOpen
               ? slashCommandOptionId(activeSlashIndex)
-              : refOpen && refSuggestions.length > 0
-                ? promptRefOptionId(activeRefIndex)
-                : undefined
+              : secondStep !== undefined && secondSuggestions.length > 0
+                ? promptRefOptionId(activeSecondIndex)
+                : refOpen && refSuggestions.length > 0
+                  ? promptRefOptionId(activeRefIndex)
+                  : undefined
           }
           onChange={handleChange}
           onCompositionStart={handleCompositionStart}
@@ -1201,9 +1439,7 @@ function parseStoredDraft(raw: string): StoredDraft | undefined {
 }
 
 function isStoredPromptRef(value: unknown): value is MobilePromptRef {
-  if (!isMobilePromptRefSuggestion(value)) return false
-  const record = value as unknown as Record<string, unknown>
-  return Number.isInteger(record['start']) && Number.isInteger(record['end'])
+  return isSendableMobilePromptRef(value)
 }
 
 function pruneDrafts(keep: string, storage: Storage | undefined): void {

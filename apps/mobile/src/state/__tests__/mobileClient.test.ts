@@ -387,6 +387,133 @@ describe('MobileClient session subscription', () => {
     expect((command?.['payload'] as { query?: string } | undefined)?.query).toHaveLength(256)
   })
 
+  it('sends resolvePromptRef and validates commit results', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+    const hash = 'a'.repeat(40)
+    const pending = client.resolvePromptRef('commit', 'fix', { limit: 50 })
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['kind'] === 'resolvePromptRef',
+    ) as { requestId: string; payload: Record<string, unknown>; idempotencyKey?: string }
+
+    expect(command.payload).toEqual({
+      ref: { windowId: 1, localId: 's1' },
+      kind: 'commit',
+      query: 'fix',
+      limit: 50,
+    })
+    // It can open a picker on the PC, so a resend must reuse the same key.
+    expect(command.idempotencyKey).toBeTruthy()
+
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: {
+        kind: 'commit',
+        entries: [
+          {
+            kind: 'commit',
+            label: 'a1b2c3d fix',
+            uri: 'file:///repo',
+            commitHash: hash,
+            text: 'fix',
+          },
+        ],
+      },
+    })
+
+    await expect(pending).resolves.toEqual({
+      kind: 'commit',
+      entries: [
+        {
+          kind: 'commit',
+          label: 'a1b2c3d fix',
+          uri: 'file:///repo',
+          commitHash: hash,
+          text: 'fix',
+        },
+      ],
+    })
+  })
+
+  it('sends chatContext handles and accepts a cancelled resolution', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+    const pending = client.resolvePromptRef('chatContext', '', {
+      handle: 4,
+      label: 'Perforce CL',
+    })
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['kind'] === 'resolvePromptRef',
+    ) as { requestId: string; payload: Record<string, unknown> }
+
+    expect(command.payload).toEqual({
+      ref: { windowId: 1, localId: 's1' },
+      kind: 'chatContext',
+      query: '',
+      handle: 4,
+      label: 'Perforce CL',
+    })
+
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: { kind: 'chatContext' },
+    })
+
+    await expect(pending).resolves.toEqual({ kind: 'chatContext' })
+  })
+
+  it('rejects resolve results missing final commit fields', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+    const pending = client.resolvePromptRef('commit', '')
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['kind'] === 'resolvePromptRef',
+    ) as { requestId: string }
+
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: {
+        kind: 'commit',
+        entries: [{ kind: 'commit', label: 'a1b2c3d fix', uri: 'file:///repo', text: 'fix' }],
+      },
+    })
+
+    await expect(pending).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('truncates overlong resolve queries to the protocol limit', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    void client.resolvePromptRef('commit', 'x'.repeat(300)).catch(() => undefined)
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['kind'] === 'resolvePromptRef',
+    ) as { payload: { query?: string } }
+    expect(command.payload.query).toHaveLength(256)
+  })
+
   it('rejects commands while the gateway is not connected', async () => {
     const { client, sockets } = createHarness()
     client.openSession('1:s1')

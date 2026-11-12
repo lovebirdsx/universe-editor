@@ -1028,6 +1028,14 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   services.set(ISessionBranchPushService, sessionBranchPushService)
 
+  // Extension-contributed chat context providers (`#` popover entries); each
+  // entry resolves host-side into the item that ends up in the prompt. Must be
+  // registered before the mobile bridge, which injects it.
+  services.set(
+    IChatContextService,
+    workbenchStore.add(instantiation.createInstance(ChatContextService)),
+  )
+
   // Reverse channel: main's mobile gateway calls into this window (M2 projects
   // ACP sessions through it). Created through DI so it can observe the session
   // service and history; it does no work until a phone subscribes.
@@ -1045,13 +1053,6 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(
     ITreeViewsService,
     workbenchStore.add(instantiation.createInstance(TreeViewsService)),
-  )
-
-  // Extension-contributed chat context providers (`#` popover entries); each
-  // entry resolves host-side into the item that ends up in the prompt.
-  services.set(
-    IChatContextService,
-    workbenchStore.add(instantiation.createInstance(ChatContextService)),
   )
 
   // Git status decorations derived from the SCM model; colours Explorer rows and

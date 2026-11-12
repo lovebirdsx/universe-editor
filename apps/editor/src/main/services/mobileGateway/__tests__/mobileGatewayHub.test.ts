@@ -1,5 +1,6 @@
 import { CancellationToken, Emitter, type ILogger } from '@universe-editor/platform'
 import {
+  DEFAULT_COMMIT_PROMPT_REFS,
   DEFAULT_PROMPT_REF_SUGGESTIONS,
   MAX_SERVER_FRAME_BYTES,
   MAX_WORKSPACE_NAME_LENGTH,
@@ -14,6 +15,8 @@ import {
   type MobileSessionRef,
   type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
+  type ResolvePromptRefRequest,
+  type ResolvePromptRefResult,
   type DraftUpdateFrame,
   type ServerFrame,
 } from '@universe-editor/mobile-protocol'
@@ -96,6 +99,15 @@ class FakeBridge implements IMobileBridgeService {
       ok: true,
       value: [],
     }),
+  )
+  readonly resolvePromptRef = vi.fn(
+    async (
+      _localId: string,
+      request: ResolvePromptRefRequest,
+    ): Promise<MobileBridgeResult<ResolvePromptRefResult>> =>
+      request.kind === 'commit'
+        ? { ok: true, value: { kind: 'commit', entries: [] } }
+        : { ok: true, value: { kind: 'chatContext' } },
   )
   readonly cancelTurn = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resolvePermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
@@ -975,6 +987,239 @@ describe('MobileGatewayHub commands', () => {
       label: 'src/a.ts',
       uri: 'file:///w/src/a.ts',
     })
+  })
+
+  it('keeps commit and chatContext search entries while dropping malformed ones', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    bridge.searchPromptRefs.mockResolvedValue({
+      ok: true,
+      value: [
+        { kind: 'commit', label: 'Git Commit…', uri: '', description: 'Pick a commit' },
+        { kind: 'chatContext', label: 'Perforce CL', uri: '', chatContextHandle: 3 },
+        { kind: 'chatContext', label: 'No handle', uri: '' },
+        { kind: 'chatContext', label: 'Has uri', uri: 'file:///w', chatContextHandle: 4 },
+        { kind: 'commit', label: 'Has uri', uri: 'file:///w' },
+      ],
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'search-context',
+      kind: 'searchPromptRefs',
+      payload: { ref, trigger: '#', query: '' },
+    })
+
+    const frame = connection.frames.at(-1) as Extract<ServerFrame, { type: 'command_result' }>
+    const entries = (frame.result as { entries: readonly MobilePromptRefSuggestion[] }).entries
+    expect(entries).toEqual([
+      { kind: 'commit', label: 'Git Commit…', uri: '', description: 'Pick a commit' },
+      { kind: 'chatContext', label: 'Perforce CL', uri: '', chatContextHandle: 3 },
+    ])
+  })
+
+  it('clamps search entries to the requested limit', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    bridge.searchPromptRefs.mockResolvedValue({
+      ok: true,
+      value: [
+        { kind: 'file', label: 'a.ts', uri: 'file:///w/a.ts' },
+        { kind: 'file', label: 'b.ts', uri: 'file:///w/b.ts' },
+        { kind: 'file', label: 'c.ts', uri: 'file:///w/c.ts' },
+      ],
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'search-limit',
+      kind: 'searchPromptRefs',
+      payload: { ref, trigger: '@', query: '', limit: 2 },
+    })
+
+    expect(bridge.searchPromptRefs).toHaveBeenCalledWith('s1', '@', '', 2)
+    const frame = connection.frames.at(-1) as Extract<ServerFrame, { type: 'command_result' }>
+    const entries = (frame.result as { entries: readonly MobilePromptRefSuggestion[] }).entries
+    expect(entries.map((entry) => entry.label)).toEqual(['a.ts', 'b.ts'])
+  })
+
+  it('routes commit resolution with the default limit and clamps entries', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    const hash = 'a'.repeat(40)
+    bridge.resolvePromptRef.mockResolvedValue({
+      ok: true,
+      value: {
+        kind: 'commit',
+        entries: [
+          {
+            kind: 'commit',
+            label: 'a1b2c3d fix',
+            uri: 'file:///w/repo',
+            commitHash: hash,
+            text: 'fix',
+            description: 'Alice',
+          },
+          { kind: 'commit', label: 'bad', uri: 'file:///w/repo', commitHash: 'nope', text: 'bad' },
+          { kind: 'chatContext', label: 'cross-kind', uri: '', text: 'x' },
+        ],
+      },
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'resolve-commit',
+      kind: 'resolvePromptRef',
+      payload: { ref, kind: 'commit', query: 'fix' },
+      idempotencyKey: 'resolve-key',
+    })
+
+    expect(bridge.resolvePromptRef).toHaveBeenCalledWith('s1', {
+      kind: 'commit',
+      query: 'fix',
+      limit: DEFAULT_COMMIT_PROMPT_REFS,
+    })
+    const frame = connection.frames.at(-1) as Extract<ServerFrame, { type: 'command_result' }>
+    expect(frame).toMatchObject({ type: 'command_result', ok: true, requestId: 'resolve-commit' })
+    expect(frame.result).toEqual({
+      kind: 'commit',
+      entries: [
+        {
+          kind: 'commit',
+          label: 'a1b2c3d fix',
+          uri: 'file:///w/repo',
+          commitHash: hash,
+          text: 'fix',
+          description: 'Alice',
+        },
+      ],
+    })
+  })
+
+  it('serves repeated resolvePromptRef idempotency keys from the cache', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    for (let round = 0; round < 2; round += 1) {
+      await hub.handleCommand(connection, {
+        type: 'command',
+        requestId: `resolve-${round}`,
+        kind: 'resolvePromptRef',
+        payload: { ref, kind: 'commit', query: 'fix', limit: 1 },
+        idempotencyKey: 'same-resolve-key',
+      })
+    }
+
+    expect(bridge.resolvePromptRef).toHaveBeenCalledTimes(1)
+    expect(bridge.resolvePromptRef).toHaveBeenCalledWith('s1', {
+      kind: 'commit',
+      query: 'fix',
+      limit: 1,
+    })
+  })
+
+  it('routes chatContext resolution and clamps the returned item', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    bridge.resolvePromptRef.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        kind: 'chatContext',
+        entry: {
+          kind: 'chatContext',
+          label: 'CL 123',
+          uri: '',
+          text: 'Change 123\n- src/a.ts',
+          description: 'Perforce',
+        },
+      },
+    })
+    bridge.resolvePromptRef.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        kind: 'chatContext',
+        entry: { kind: 'chatContext', label: 'CL 9', uri: 'file:///w', text: 'x' },
+      },
+    })
+
+    for (let round = 0; round < 2; round += 1) {
+      await hub.handleCommand(connection, {
+        type: 'command',
+        requestId: `resolve-chat-${round}`,
+        kind: 'resolvePromptRef',
+        payload: { ref, kind: 'chatContext', query: '', handle: 4, label: 'Perforce CL' },
+        idempotencyKey: `resolve-chat-key-${round}`,
+      })
+    }
+
+    expect(bridge.resolvePromptRef).toHaveBeenCalledWith('s1', {
+      kind: 'chatContext',
+      query: '',
+      handle: 4,
+      label: 'Perforce CL',
+    })
+    const [first, second] = connection.frames
+      .filter(
+        (candidate): candidate is Extract<ServerFrame, { type: 'command_result' }> =>
+          candidate.type === 'command_result',
+      )
+      .slice(-2)
+    expect(first?.result).toEqual({
+      kind: 'chatContext',
+      entry: {
+        kind: 'chatContext',
+        label: 'CL 123',
+        uri: '',
+        text: 'Change 123\n- src/a.ts',
+        description: 'Perforce',
+      },
+    })
+    expect(second?.result).toEqual({ kind: 'chatContext' })
+  })
+
+  it('caps commit entries at the requested limit', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    const entry = (hash: string) => ({
+      kind: 'commit' as const,
+      label: `${hash.slice(0, 7)} subject`,
+      uri: 'file:///w/repo',
+      commitHash: hash,
+      text: 'subject',
+    })
+    bridge.resolvePromptRef.mockResolvedValue({
+      ok: true,
+      value: { kind: 'commit', entries: [entry('a'.repeat(40)), entry('b'.repeat(40))] },
+    })
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'resolve-limit',
+      kind: 'resolvePromptRef',
+      payload: { ref, kind: 'commit', query: '', limit: 1 },
+      idempotencyKey: 'resolve-limit-key',
+    })
+
+    const frame = connection.frames.at(-1) as Extract<ServerFrame, { type: 'command_result' }>
+    expect((frame.result as { entries: readonly unknown[] }).entries).toHaveLength(1)
   })
 
   it('forwards structured prompt refs to the bridge', async () => {

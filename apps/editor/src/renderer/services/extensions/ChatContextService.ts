@@ -36,6 +36,15 @@ export interface IChatContextService {
     query: string,
     context?: IChatContextResolveContextDto,
   ): Promise<IChatContextItemDto | undefined>
+  /**
+   * Same as {@link resolveItem} but rejects when the extension picker fails,
+   * for callers that must tell a provider error apart from a user cancel.
+   */
+  resolveItemOrThrow(
+    handle: number,
+    query: string,
+    context?: IChatContextResolveContextDto,
+  ): Promise<IChatContextItemDto | undefined>
   /** Drop every provider (extension host torn down). */
   reset(): void
 }
@@ -61,15 +70,23 @@ export class ChatContextService extends Disposable implements IChatContextServic
     query: string,
     context?: IChatContextResolveContextDto,
   ): Promise<IChatContextItemDto | undefined> {
-    if (!this._providers.has(handle) || !this._extHost) return undefined
     try {
-      return await this._extHost.$resolveChatContextItem(handle, query, context)
+      return await this.resolveItemOrThrow(handle, query, context)
     } catch (err) {
       console.warn(
         `[chatContext] $resolveChatContextItem(${handle}) failed: ${(err as Error).message}`,
       )
       return undefined
     }
+  }
+
+  async resolveItemOrThrow(
+    handle: number,
+    query: string,
+    context?: IChatContextResolveContextDto,
+  ): Promise<IChatContextItemDto | undefined> {
+    if (!this._providers.has(handle) || !this._extHost) return undefined
+    return this._extHost.$resolveChatContextItem(handle, query, context)
   }
 
   reset(): void {

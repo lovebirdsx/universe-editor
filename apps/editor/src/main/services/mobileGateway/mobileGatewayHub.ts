@@ -16,12 +16,16 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import {
+  DEFAULT_COMMIT_PROMPT_REFS,
   DEFAULT_PROMPT_REF_SUGGESTIONS,
+  MAX_COMMIT_PROMPT_REFS,
+  MAX_PROMPT_REF_COMMIT_TEXT_LENGTH,
   MAX_PROMPT_REF_DESCRIPTION_LENGTH,
   MAX_PROMPT_REF_DIR_PATH_LENGTH,
   MAX_PROMPT_REF_LABEL_LENGTH,
   MAX_PROMPT_REF_STATUS_LENGTH,
   MAX_PROMPT_REF_SUGGESTIONS,
+  MAX_PROMPT_REF_TEXT_LENGTH,
   MAX_PROMPT_REF_URI_LENGTH,
   MAX_SERVER_FRAME_BYTES,
   MAX_HISTORY_PROMPT_LENGTH,
@@ -33,6 +37,7 @@ import {
   clampText,
   isConfigValueAllowedOnMobile,
   isHighRiskPermissionOption,
+  isValidCommitHash,
   parseServerFrame,
   parseWorkspaceRelativePath,
   serializeFrame,
@@ -59,6 +64,8 @@ import {
   type MobileSessionSummary,
   type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
+  type ResolvePromptRefPayload,
+  type ResolvePromptRefResult,
   type SearchPromptRefsPayload,
   type ServerFrame,
   type SessionSnapshotFrame,
@@ -254,6 +261,14 @@ export const COMMAND_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000
 export const SEND_PROMPT_TIMEOUT_MS = 15_000
 /** Read-only completion; the renderer budgets its own walks below this. */
 export const SEARCH_PROMPT_REFS_TIMEOUT_MS = 10_000
+/** Commit history is a git-graph round-trip queued behind the desktop picker. */
+export const RESOLVE_COMMIT_TIMEOUT_MS = 20_000
+/**
+ * chatContext runs the extension's own picker on the PC, which blocks until the
+ * user acts. The phone waits 125s + 5s idempotent grace, so 120s here leaves the
+ * real error path reachable.
+ */
+export const RESOLVE_CHAT_CONTEXT_TIMEOUT_MS = 120_000
 /**
  * Total budget for open + renderer-ready + create. Stays below the phone's 30s
  * command timeout so the phone receives the real error instead of a timeout.
@@ -322,6 +337,9 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'setConfigOption',
   'pauseAutoResolve',
   'resumeAutoResolve',
+  // Semantically read-only, but it can open a picker on the PC; the idempotency
+  // key keeps a reconnect resend from popping a second one.
+  'resolvePromptRef',
   'newSession',
   'renameSession',
   'closeSession',
@@ -361,16 +379,37 @@ function isPrintableBounded(value: unknown, max: number): value is string {
   return isBoundedIdentity(value, max) && !CONTROL_CHAR_RE.test(value)
 }
 
+/** chatContext bodies are multi-line: tabs/newlines are fine, other C0 + DEL are not. */
+function isSafePromptRefText(value: unknown, max: number): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > max) return false
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code === 0x09 || code === 0x0a || code === 0x0d) continue
+    if (code <= 0x1f || code === 0x7f) return false
+  }
+  return true
+}
+
+function clampRefDescription(value: unknown): { description?: string } {
+  return typeof value === 'string'
+    ? { description: clampText(value, MAX_PROMPT_REF_DESCRIPTION_LENGTH) }
+    : {}
+}
+
 /**
  * The bridge is trusted but version-skewed or buggy code must not push an
  * unbounded / malformed completion payload to the phone. Invalid entries are
  * dropped instead of failing the whole command.
  */
-function clampPromptRefSuggestions(value: unknown): readonly MobilePromptRefSuggestion[] {
+function clampPromptRefSuggestions(
+  value: unknown,
+  requestedLimit: number,
+): readonly MobilePromptRefSuggestion[] {
   if (!Array.isArray(value)) return []
+  const limit = Math.max(1, Math.min(requestedLimit, MAX_PROMPT_REF_SUGGESTIONS))
   const entries: MobilePromptRefSuggestion[] = []
   for (const raw of value) {
-    if (entries.length >= MAX_PROMPT_REF_SUGGESTIONS) break
+    if (entries.length >= limit) break
     if (typeof raw !== 'object' || raw === null) continue
     const item = raw as Record<string, unknown>
     const kind = item.kind
@@ -381,8 +420,25 @@ function clampPromptRefSuggestions(value: unknown): readonly MobilePromptRefSugg
       continue
     }
     const label = item.label
-    const uri = item.uri
     if (!isPrintableBounded(label, MAX_PROMPT_REF_LABEL_LENGTH)) continue
+    const description = clampRefDescription(item.description)
+    if (kind === 'commit') {
+      if (item.uri !== '') continue
+      entries.push({ kind: 'commit', label, uri: '', ...description })
+      continue
+    }
+    if (kind === 'chatContext') {
+      if (item.uri !== '' || !isPositiveInteger(item.chatContextHandle)) continue
+      entries.push({
+        kind: 'chatContext',
+        label,
+        uri: '',
+        chatContextHandle: item.chatContextHandle,
+        ...description,
+      })
+      continue
+    }
+    const uri = item.uri
     if (!isPrintableBounded(uri, MAX_PROMPT_REF_URI_LENGTH)) continue
     const dirPath = item.dirPath
     const docsDirPath = isPrintableBounded(dirPath, MAX_PROMPT_REF_DIR_PATH_LENGTH)
@@ -393,9 +449,7 @@ function clampPromptRefSuggestions(value: unknown): readonly MobilePromptRefSugg
       kind: kind as MobilePromptRefSuggestion['kind'],
       label,
       uri,
-      ...(typeof item.description === 'string'
-        ? { description: clampText(item.description, MAX_PROMPT_REF_DESCRIPTION_LENGTH) }
-        : {}),
+      ...description,
       ...(isPositiveInteger(item.line) ? { line: item.line } : {}),
       ...(isPositiveInteger(item.column) ? { column: item.column } : {}),
       ...(isNonNegativeInteger(item.symbolKind) ? { symbolKind: item.symbolKind } : {}),
@@ -406,6 +460,75 @@ function clampPromptRefSuggestions(value: unknown): readonly MobilePromptRefSugg
     })
   }
   return entries
+}
+
+function clampCommitPromptRefEntries(
+  value: unknown,
+  requestedLimit: number,
+): readonly MobilePromptRefSuggestion[] {
+  if (!Array.isArray(value)) return []
+  const limit = Math.max(1, Math.min(requestedLimit, MAX_COMMIT_PROMPT_REFS))
+  const entries: MobilePromptRefSuggestion[] = []
+  for (const raw of value) {
+    if (entries.length >= limit) break
+    if (typeof raw !== 'object' || raw === null) continue
+    const item = raw as Record<string, unknown>
+    const label = item.label
+    const uri = item.uri
+    const commitHash = item.commitHash
+    const text = item.text
+    if (item.kind !== 'commit') continue
+    if (!isPrintableBounded(label, MAX_PROMPT_REF_LABEL_LENGTH)) continue
+    if (!isPrintableBounded(uri, MAX_PROMPT_REF_URI_LENGTH)) continue
+    if (typeof commitHash !== 'string' || !isValidCommitHash(commitHash)) continue
+    if (!isPrintableBounded(text, MAX_PROMPT_REF_COMMIT_TEXT_LENGTH)) continue
+    entries.push({
+      kind: 'commit',
+      label,
+      uri,
+      commitHash,
+      text,
+      ...clampRefDescription(item.description),
+    })
+  }
+  return entries
+}
+
+function clampChatContextPromptRefEntry(value: unknown): MobilePromptRefSuggestion | undefined {
+  if (typeof value !== 'object' || value === null) return undefined
+  const item = value as Record<string, unknown>
+  if (item.kind !== 'chatContext' || item.uri !== '') return undefined
+  const label = item.label
+  const text = item.text
+  if (!isPrintableBounded(label, MAX_PROMPT_REF_LABEL_LENGTH)) return undefined
+  if (!isSafePromptRefText(text, MAX_PROMPT_REF_TEXT_LENGTH)) return undefined
+  return {
+    kind: 'chatContext',
+    label,
+    uri: '',
+    text,
+    ...clampRefDescription(item.description),
+  }
+}
+
+function clampResolvePromptRefResult(
+  value: unknown,
+  payload: ResolvePromptRefPayload,
+): ResolvePromptRefResult {
+  const record =
+    typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined
+  if (payload.kind === 'commit') {
+    return {
+      kind: 'commit',
+      entries: clampCommitPromptRefEntries(
+        record?.kind === 'commit' ? record.entries : undefined,
+        payload.limit ?? DEFAULT_COMMIT_PROMPT_REFS,
+      ),
+    }
+  }
+  const entry =
+    record?.kind === 'chatContext' ? clampChatContextPromptRefEntry(record.entry) : undefined
+  return { kind: 'chatContext', ...(entry !== undefined ? { entry } : {}) }
 }
 
 interface CachedPermissionOption {
@@ -1057,7 +1180,31 @@ export class MobileGatewayHub {
             ),
         )
         if (!outcome.ok) return outcome
-        return { ok: true, result: { entries: clampPromptRefSuggestions(outcome.result) } }
+        return {
+          ok: true,
+          result: {
+            entries: clampPromptRefSuggestions(
+              outcome.result,
+              p.limit ?? DEFAULT_PROMPT_REF_SUGGESTIONS,
+            ),
+          },
+        }
+      }
+      case 'resolvePromptRef': {
+        const p = frame.payload as ResolvePromptRefPayload
+        const timeoutMs =
+          p.kind === 'commit' ? RESOLVE_COMMIT_TIMEOUT_MS : RESOLVE_CHAT_CONTEXT_TIMEOUT_MS
+        const outcome = await this._sessionCommand(p.ref, timeoutMs, (bridge, localId) =>
+          bridge.resolvePromptRef(localId, {
+            kind: p.kind,
+            query: p.query,
+            ...(p.kind === 'commit' ? { limit: p.limit ?? DEFAULT_COMMIT_PROMPT_REFS } : {}),
+            ...(p.handle !== undefined ? { handle: p.handle } : {}),
+            ...(p.label !== undefined ? { label: p.label } : {}),
+          }),
+        )
+        if (!outcome.ok) return outcome
+        return { ok: true, result: clampResolvePromptRefResult(outcome.result, p) }
       }
       case 'sendPrompt': {
         const p = frame.payload as {

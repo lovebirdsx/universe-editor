@@ -14,6 +14,8 @@ import {
 export const COMMAND_TIMEOUT_MS: Readonly<Record<MobileCommandKind, number>> = {
   getToolCallDetail: 10_000,
   searchPromptRefs: 12_000,
+  // chatContext blocks on the extension picker on the PC (gateway caps at 120s).
+  resolvePromptRef: 125_000,
   sendPrompt: 15_000,
   cancelTurn: 5_000,
   resolvePermission: 10_000,
@@ -71,6 +73,9 @@ export const MUTATING_COMMAND_KINDS: ReadonlySet<MobileCommandKind> = new Set([
   'setConfigOption',
   'pauseAutoResolve',
   'resumeAutoResolve',
+  // Semantically read-only, but it may open a picker on the PC; the key lets a
+  // reconnect resend hit the gateway cache instead of popping a second one.
+  'resolvePromptRef',
   'newSession',
   'renameSession',
   'closeSession',

@@ -13,6 +13,8 @@ import {
   isMobileSessionRefResult,
   isMobileSideTaskList,
   isMobileSideTaskSummary,
+  isResolvePromptRefResult,
+  isSendableMobilePromptRef,
 } from '../commandResults.js'
 
 describe('command result guards', () => {
@@ -262,6 +264,180 @@ describe('command result guards', () => {
           uri: 'u',
         })),
       }),
+    ).toBe(false)
+  })
+
+  it('validates commit and chatContext suggestions with their extra fields', () => {
+    const hash = 'a'.repeat(40)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [
+          { kind: 'commit', label: 'Git Commit…', uri: '' },
+          { kind: 'chatContext', label: 'Perforce CL', uri: '', chatContextHandle: 3 },
+          {
+            kind: 'commit',
+            label: 'a1b2c3d subject',
+            uri: 'file:///repo',
+            commitHash: hash,
+            text: 'subject',
+          },
+          { kind: 'chatContext', label: 'CL 1', uri: '', text: 'line1\nline2' },
+        ],
+      }),
+    ).toBe(true)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'chatContext', label: 'CL', uri: 'file:///repo' }],
+      }),
+    ).toBe(false)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'chatContext', label: 'CL', uri: '', chatContextHandle: 0 }],
+      }),
+    ).toBe(false)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [
+          { kind: 'commit', label: 'a', uri: 'file:///repo', commitHash: 'not-hex', text: 's' },
+        ],
+      }),
+    ).toBe(false)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'chatContext', label: 'CL', uri: '', text: 'a\u0000b' }],
+      }),
+    ).toBe(false)
+  })
+
+  it('validates resolve results and requires final commit/chatContext fields', () => {
+    const hash = 'a'.repeat(40)
+    expect(
+      isResolvePromptRefResult(
+        {
+          kind: 'commit',
+          entries: [
+            {
+              kind: 'commit',
+              label: 'a1b2c3d s',
+              uri: 'file:///repo',
+              commitHash: hash,
+              text: 's',
+            },
+          ],
+        },
+        'commit',
+      ),
+    ).toBe(true)
+    expect(
+      isResolvePromptRefResult(
+        {
+          kind: 'commit',
+          entries: [{ kind: 'commit', label: 'a1b2c3d s', uri: 'file:///repo' }],
+        },
+        'commit',
+      ),
+    ).toBe(false)
+    expect(isResolvePromptRefResult({ kind: 'chatContext' }, 'chatContext')).toBe(true)
+    expect(
+      isResolvePromptRefResult(
+        {
+          kind: 'chatContext',
+          entry: { kind: 'chatContext', label: 'CL', uri: '', text: 'body' },
+        },
+        'chatContext',
+      ),
+    ).toBe(true)
+    expect(
+      isResolvePromptRefResult(
+        {
+          kind: 'chatContext',
+          entry: { kind: 'chatContext', label: 'CL', uri: 'file:///w', text: 'body' },
+        },
+        'chatContext',
+      ),
+    ).toBe(false)
+    expect(
+      isResolvePromptRefResult(
+        {
+          kind: 'chatContext',
+          entry: { kind: 'chatContext', label: 'CL', uri: '', chatContextHandle: 3, text: 'body' },
+        },
+        'chatContext',
+      ),
+    ).toBe(false)
+    expect(isResolvePromptRefResult({ kind: 'commit', entries: [] }, 'chatContext')).toBe(false)
+  })
+
+  it('validates sendable refs used by draft restore and send', () => {
+    const hash = 'a'.repeat(40)
+    expect(
+      isSendableMobilePromptRef({
+        kind: 'commit',
+        label: 'a1b2c3d s',
+        uri: 'file:///repo',
+        commitHash: hash,
+        text: 's',
+        start: 0,
+        end: 9,
+      }),
+    ).toBe(true)
+    expect(
+      isSendableMobilePromptRef({
+        kind: 'chatContext',
+        label: 'CL',
+        uri: '',
+        text: 'body',
+        start: 0,
+        end: 3,
+      }),
+    ).toBe(true)
+    expect(
+      isSendableMobilePromptRef({
+        kind: 'commit',
+        label: 'x',
+        uri: 'file:///repo',
+        start: 0,
+        end: 2,
+      }),
+    ).toBe(false)
+    expect(
+      isSendableMobilePromptRef({ kind: 'chatContext', label: 'CL', uri: '', start: 0, end: 3 }),
+    ).toBe(false)
+    expect(
+      isSendableMobilePromptRef({
+        kind: 'chatContext',
+        label: 'CL',
+        uri: '',
+        chatContextHandle: 3,
+        text: 'body',
+        start: 0,
+        end: 3,
+      }),
+    ).toBe(false)
+    expect(
+      isSendableMobilePromptRef({
+        kind: 'commit',
+        label: 'a1b2c3d s',
+        uri: 'file:///repo',
+        commitHash: hash,
+        text: 's',
+        description: 'bad\u0000description',
+        start: 0,
+        end: 9,
+      }),
+    ).toBe(false)
+    expect(
+      isSendableMobilePromptRef({
+        kind: 'file',
+        label: 'a',
+        uri: 'file:///w/a',
+        text: 'x',
+        start: 0,
+        end: 2,
+      }),
+    ).toBe(false)
+    expect(
+      isSendableMobilePromptRef({ kind: 'file', label: 'a', uri: 'file:///w/a', start: 0, end: 0 }),
     ).toBe(false)
   })
 })

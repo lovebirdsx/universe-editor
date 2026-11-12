@@ -12,6 +12,7 @@ import {
   CancellationTokenSource,
   Disposable,
   Emitter,
+  ICommandService,
   IEditorGroupsService,
   IFileSearchService,
   IFileService,
@@ -20,6 +21,7 @@ import {
   IWorkspaceService,
   REMOTE_SCHEME,
   URI,
+  absolutePathToWorkspaceUri,
   type IDisposable,
   type ILogger,
   type IReader,
@@ -27,6 +29,7 @@ import {
 } from '@universe-editor/platform'
 import {
   clampText,
+  DEFAULT_COMMIT_PROMPT_REFS,
   isConfigValueAllowedOnMobile,
   isHighRiskPermissionOption,
   isPreviewableImageMimeType,
@@ -51,6 +54,8 @@ import {
   type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
   type MobileToolCallDetail,
+  type ResolvePromptRefRequest,
+  type ResolvePromptRefResult,
 } from '@universe-editor/mobile-protocol'
 import {
   MEDIA_TRUNCATED_META_KEY,
@@ -87,10 +92,12 @@ import {
 } from '../acp/session/acpPromptDraftCache.js'
 import { mergeBridgeDraft, toBridgeDraft } from './mobileDraftSync.js'
 import { MobilePromptRefSearch } from './promptRefSearch.js'
+import { MobilePromptRefResolver } from './promptRefResolve.js'
 import { toPlacedMobileRefs } from './mobilePromptRefs.js'
 import { resolveSessionScopeRoot } from '../acp/sessionScope.js'
 import type { PlacedRef } from '../acp/promptRef.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
+import { IChatContextService } from '../extensions/ChatContextService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IDocsService } from '../../../shared/ipc/docsService.js'
 import { AcpForeignWorktreeError, IAcpSessionService } from '../acp/session/acpSessionService.js'
@@ -238,6 +245,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   private _attentionSubscription: IDisposable | undefined
   private _pendingWorkSweep: ReturnType<typeof setInterval> | undefined
   private readonly _promptRefSearch: MobilePromptRefSearch
+  private readonly _promptRefResolver: MobilePromptRefResolver
   /** Newest completion query per session; a keystroke supersedes the previous walk. */
   private readonly _promptRefSearches = new Map<string, CancellationTokenSource>()
   private _disposed = false
@@ -258,6 +266,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IExcludeService exclude: IExcludeService,
     @ILanguageFeaturesService langFeatures: ILanguageFeaturesService,
     @IDocsService private readonly _docs: IDocsService,
+    @ICommandService private readonly _commands: ICommandService,
+    @IChatContextService private readonly _chatContext: IChatContextService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -271,6 +281,13 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       uriIdentity: this._uriIdentity,
       langFeatures,
       docs: this._docs,
+      chatContext: this._chatContext,
+    })
+    this._promptRefResolver = new MobilePromptRefResolver({
+      commands: this._commands,
+      scm: this._scm,
+      workspace: this._workspace,
+      chatContext: this._chatContext,
     })
     this._register(this._delivery.onDidChange((change) => this._onDeliveryChanged(change)))
   }
@@ -772,6 +789,20 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return roots
   }
 
+  /**
+   * Workspace URIs of the open Git repos. A commit ref points at the repo root,
+   * which may be above a narrowed session's cwd, so it cannot use `mentionRoot`.
+   */
+  private _gitCommitRoots(): readonly URI[] {
+    const folder = this._workspace.current?.folder
+    const roots: URI[] = []
+    for (const control of this._scm.sourceControls.get()) {
+      if (control.id !== 'git' || control.rootUri === undefined) continue
+      roots.push(absolutePathToWorkspaceUri(control.rootUri, folder))
+    }
+    return roots
+  }
+
   private _onDraftChanged(event: AcpPromptDraftChange): void {
     if (!this._streaming) return
     const session = this._liveSession(event.sessionId)
@@ -918,6 +949,45 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     }
   }
 
+  /**
+   * Second-step resolution for `#` commit / extension entries. Read-only like
+   * `searchPromptRefs`: chatContext may open an extension picker on this PC, but
+   * neither path mutates the session.
+   */
+  async resolvePromptRef(
+    localId: string,
+    request: ResolvePromptRefRequest,
+  ): Promise<MobileBridgeResult<ResolvePromptRefResult>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    try {
+      if (request.kind === 'commit') {
+        const entries = await this._promptRefResolver.resolveCommit(
+          request.limit ?? DEFAULT_COMMIT_PROMPT_REFS,
+        )
+        return ok({ kind: 'commit', entries })
+      }
+      if (request.handle === undefined || request.label === undefined) {
+        return fail('bad_request', 'chatContext requires a provider handle and label')
+      }
+      const scope = resolveSessionScopeRoot(
+        this._workspace.current?.folder,
+        session.cwd,
+        this._uriIdentity,
+      )
+      const entry = await this._promptRefResolver.resolveChatContext(
+        request.handle,
+        request.query,
+        request.label,
+        scope === undefined ? undefined : scope.root.fsPath,
+      )
+      return ok({ kind: 'chatContext', ...(entry !== undefined ? { entry } : {}) })
+    } catch (err) {
+      this._logger.warn(`mobile prompt ref resolve failed: ${String(err)}`)
+      return fail('internal', 'prompt reference resolve failed')
+    }
+  }
+
   async sendPrompt(
     localId: string,
     text: string,
@@ -975,10 +1045,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
         return fail('bad_request', 'no workspace is open to resolve prompt references')
       }
       const needsDocs = refs.some((ref) => ref.kind === 'docs')
+      const needsCommit = refs.some((ref) => ref.kind === 'commit')
       const converted = toPlacedMobileRefs(text, refs, {
         mentionRoot: scope.root,
         uriIdentity: this._uriIdentity,
         docsRoots: needsDocs ? await this._docsRoots() : [],
+        commitRoots: needsCommit ? this._gitCommitRoots() : [],
       })
       if (!converted.ok) return fail('bad_request', converted.message)
       placed = converted.value

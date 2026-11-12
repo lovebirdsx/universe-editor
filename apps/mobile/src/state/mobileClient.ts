@@ -23,6 +23,7 @@ import type {
   MobilePushBranchResult,
   MobilePushSubscription,
   MobilePromptRef,
+  MobilePromptRefResolveKind,
   MobilePromptRefSuggestion,
   MobilePromptRefSuggestionsResult,
   MobilePromptRefTrigger,
@@ -36,6 +37,7 @@ import type {
   MobileWorkspaceCandidate,
   NotificationFrame,
   ParseError,
+  ResolvePromptRefResult,
   ServerFrame,
   SessionSnapshotFrame,
 } from '@universe-editor/mobile-protocol'
@@ -70,6 +72,7 @@ import {
   isMobileSessionHistoryList,
   isMobileSessionRefResult,
   isMobileSideTaskList,
+  isResolvePromptRefResult,
 } from './commandResults.js'
 import { InboxStore, type InboxApplyResult } from './inboxStore.js'
 import { parseSessionRouteKey, refMatches, sessionRouteKey } from './refs.js'
@@ -416,6 +419,30 @@ export class MobileClient {
       }),
       isMobilePromptRefSuggestionsResult,
     ).then((result) => result.entries)
+  }
+
+  /**
+   * Second step for `#` entries with an open-ended candidate space. `commit`
+   * returns the final commit entries; `chatContext` runs the extension picker
+   * on the PC and resolves to nothing when the user cancels there.
+   */
+  resolvePromptRef(
+    kind: MobilePromptRefResolveKind,
+    query: string,
+    options: { readonly handle?: number; readonly label?: string; readonly limit?: number } = {},
+  ): Promise<ResolvePromptRefResult> {
+    return this._sessionCommandValue<ResolvePromptRefResult>(
+      'resolvePromptRef',
+      (ref) => ({
+        ref,
+        kind,
+        query: query.slice(0, MAX_PROMPT_REF_QUERY_LENGTH),
+        ...(options.limit !== undefined ? { limit: options.limit } : {}),
+        ...(options.handle !== undefined ? { handle: options.handle } : {}),
+        ...(options.label !== undefined ? { label: options.label } : {}),
+      }),
+      (value) => isResolvePromptRefResult(value, kind),
+    )
   }
 
   /**

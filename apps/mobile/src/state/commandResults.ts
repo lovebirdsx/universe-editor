@@ -1,10 +1,14 @@
 import {
+  isValidCommitHash,
+  MAX_COMMIT_PROMPT_REFS,
   MAX_NEW_SESSION_PROJECT_ROOTS,
+  MAX_PROMPT_REF_COMMIT_TEXT_LENGTH,
   MAX_PROMPT_REF_DESCRIPTION_LENGTH,
   MAX_PROMPT_REF_DIR_PATH_LENGTH,
   MAX_PROMPT_REF_LABEL_LENGTH,
   MAX_PROMPT_REF_STATUS_LENGTH,
   MAX_PROMPT_REF_SUGGESTIONS,
+  MAX_PROMPT_REF_TEXT_LENGTH,
   MAX_PROMPT_REF_URI_LENGTH,
   MOBILE_DELIVERY_PHASES,
   MOBILE_PROMPT_REF_KINDS,
@@ -15,6 +19,8 @@ import {
   type MobileDirectoryEntry,
   type MobileDirectoryListing,
   type MobileNewSessionOptions,
+  type MobilePromptRef,
+  type MobilePromptRefResolveKind,
   type MobilePromptRefSuggestion,
   type MobilePromptRefSuggestionsResult,
   type MobilePushBranchPreview,
@@ -25,6 +31,7 @@ import {
   type MobileSessionRef,
   type MobileSessionRefResult,
   type MobileSideTaskSummary,
+  type ResolvePromptRefResult,
 } from '@universe-editor/mobile-protocol'
 
 /**
@@ -276,38 +283,165 @@ export function isMobilePushBranchResult(value: unknown): value is MobilePushBra
   )
 }
 
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
+/** chatContext bodies may span lines; other C0 controls and DEL are still unsafe. */
+const UNSAFE_MULTILINE_CHARS = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/
+
+function isPrintableText(value: unknown, max: number): value is string {
+  return isBoundedNonEmptyString(value, max) && !CONTROL_CHARS.test(value)
+}
+
+function isSafeMultilineText(value: unknown, max: number): value is string {
+  return isBoundedNonEmptyString(value, max) && !UNSAFE_MULTILINE_CHARS.test(value)
+}
+
+function isMobilePromptRefKindValue(value: unknown): value is string {
+  return typeof value === 'string' && (MOBILE_PROMPT_REF_KINDS as readonly string[]).includes(value)
+}
+
 export function isMobilePromptRefSuggestion(value: unknown): value is MobilePromptRefSuggestion {
   if (!isRecord(value)) return false
   const kind = value['kind']
-  if (typeof kind !== 'string' || !(MOBILE_PROMPT_REF_KINDS as readonly string[]).includes(kind)) {
+  if (!isMobilePromptRefKindValue(kind)) return false
+  const label = value['label']
+  if (!isBoundedNonEmptyString(label, MAX_PROMPT_REF_LABEL_LENGTH) || CONTROL_CHARS.test(label)) {
     return false
   }
-  if (!isBoundedNonEmptyString(value['label'], MAX_PROMPT_REF_LABEL_LENGTH)) return false
-  if (!isBoundedNonEmptyString(value['uri'], MAX_PROMPT_REF_URI_LENGTH)) return false
+  const uri = value['uri']
+  if (kind === 'chatContext') {
+    if (uri !== '') return false
+  } else if (kind === 'commit') {
+    // The search entry has no URI; the resolved entry carries the repo root.
+    if (typeof uri !== 'string' || uri.length > MAX_PROMPT_REF_URI_LENGTH) return false
+  } else if (!isBoundedNonEmptyString(uri, MAX_PROMPT_REF_URI_LENGTH)) {
+    return false
+  }
   const description = value['description']
   if (
     description !== undefined &&
-    !isBoundedString(description, MAX_PROMPT_REF_DESCRIPTION_LENGTH)
+    (!isBoundedString(description, MAX_PROMPT_REF_DESCRIPTION_LENGTH) ||
+      CONTROL_CHARS.test(description))
   ) {
     return false
   }
   const scmStatus = value['scmStatus']
   if (
     scmStatus !== undefined &&
-    !isBoundedNonEmptyString(scmStatus, MAX_PROMPT_REF_STATUS_LENGTH)
+    (!isBoundedNonEmptyString(scmStatus, MAX_PROMPT_REF_STATUS_LENGTH) ||
+      CONTROL_CHARS.test(scmStatus))
   ) {
     return false
   }
   const dirPath = value['dirPath']
-  if (dirPath !== undefined && !isBoundedNonEmptyString(dirPath, MAX_PROMPT_REF_DIR_PATH_LENGTH)) {
+  if (
+    dirPath !== undefined &&
+    (!isBoundedNonEmptyString(dirPath, MAX_PROMPT_REF_DIR_PATH_LENGTH) ||
+      CONTROL_CHARS.test(dirPath))
+  ) {
     return false
   }
   for (const key of ['line', 'column'] as const) {
     if (value[key] !== undefined && !isPositiveInteger(value[key])) return false
   }
   if (value['symbolKind'] !== undefined && !isNonNegativeInteger(value['symbolKind'])) return false
+  const commitHash = value['commitHash']
+  if (commitHash !== undefined) {
+    if (kind !== 'commit' || typeof commitHash !== 'string' || !isValidCommitHash(commitHash)) {
+      return false
+    }
+  }
+  const chatContextHandle = value['chatContextHandle']
+  if (chatContextHandle !== undefined) {
+    if (kind !== 'chatContext' || !isPositiveInteger(chatContextHandle)) return false
+  }
+  const text = value['text']
+  if (text !== undefined) {
+    if (kind === 'commit') {
+      if (!isPrintableText(text, MAX_PROMPT_REF_COMMIT_TEXT_LENGTH)) return false
+    } else if (kind === 'chatContext') {
+      if (!isSafeMultilineText(text, MAX_PROMPT_REF_TEXT_LENGTH)) return false
+    } else {
+      return false
+    }
+  }
   // A docs entry without its directory cannot be validated or forwarded.
   return kind !== 'docs' || isNonEmptyString(dirPath)
+}
+
+function isFinalCommitSuggestion(value: unknown): value is MobilePromptRefSuggestion {
+  if (!isMobilePromptRefSuggestion(value) || value.kind !== 'commit') return false
+  return (
+    value.uri !== '' &&
+    typeof value.commitHash === 'string' &&
+    isValidCommitHash(value.commitHash) &&
+    isPrintableText(value.text, MAX_PROMPT_REF_COMMIT_TEXT_LENGTH)
+  )
+}
+
+function isFinalChatContextSuggestion(value: unknown): value is MobilePromptRefSuggestion {
+  if (!isMobilePromptRefSuggestion(value) || value.kind !== 'chatContext') return false
+  // The picker handle belongs to the search entry only; sending it would make
+  // the protocol reject the whole prompt.
+  return (
+    value.uri === '' &&
+    value.chatContextHandle === undefined &&
+    isSafeMultilineText(value.text, MAX_PROMPT_REF_TEXT_LENGTH)
+  )
+}
+
+export function isResolvePromptRefResult(
+  value: unknown,
+  expectedKind: MobilePromptRefResolveKind,
+): value is ResolvePromptRefResult {
+  if (!isRecord(value) || value['kind'] !== expectedKind) return false
+  if (expectedKind === 'commit') {
+    return (
+      Array.isArray(value['entries']) &&
+      value['entries'].length <= MAX_COMMIT_PROMPT_REFS &&
+      value['entries'].every(isFinalCommitSuggestion)
+    )
+  }
+  const entry = value['entry']
+  return entry === undefined || isFinalChatContextSuggestion(entry)
+}
+
+/**
+ * Draft-restoration / send guard: unlike a search suggestion, a sendable ref
+ * must carry every field the gateway rebuilds from (commit hash + subject,
+ * chatContext body) and a well-formed range. The suggestion guard runs first so
+ * the display fields (description / scmStatus / line / column) stay bounded
+ * too — the protocol rejects the whole prompt over any of them.
+ */
+export function isSendableMobilePromptRef(value: unknown): value is MobilePromptRef {
+  if (!isMobilePromptRefSuggestion(value)) return false
+  const candidate = value as MobilePromptRef
+  if (
+    !isNonNegativeInteger(candidate.start) ||
+    !isNonNegativeInteger(candidate.end) ||
+    candidate.end <= candidate.start
+  ) {
+    return false
+  }
+  if (candidate.kind === 'chatContext') {
+    return (
+      candidate.chatContextHandle === undefined &&
+      isSafeMultilineText(candidate.text, MAX_PROMPT_REF_TEXT_LENGTH)
+    )
+  }
+  if (candidate.uri === '') return false
+  if (candidate.kind === 'commit') {
+    return (
+      typeof candidate.commitHash === 'string' &&
+      isValidCommitHash(candidate.commitHash) &&
+      isPrintableText(candidate.text, MAX_PROMPT_REF_COMMIT_TEXT_LENGTH) &&
+      candidate.chatContextHandle === undefined
+    )
+  }
+  return (
+    candidate.commitHash === undefined &&
+    candidate.text === undefined &&
+    candidate.chatContextHandle === undefined
+  )
 }
 
 export function isMobilePromptRefSuggestionsResult(

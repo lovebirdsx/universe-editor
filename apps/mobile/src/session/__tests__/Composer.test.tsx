@@ -1,4 +1,7 @@
-import type { MobileAttachmentUploadResult } from '@universe-editor/mobile-protocol'
+import type {
+  MobileAttachmentUploadResult,
+  ResolvePromptRefResult,
+} from '@universe-editor/mobile-protocol'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strings } from '../../strings.js'
@@ -27,6 +30,10 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
   const onNotice = vi.fn()
   const onDraftChange = vi.fn()
   const searchPromptRefs = vi.fn(async () => [])
+  const resolvePromptRef = vi.fn(
+    async (kind: 'commit' | 'chatContext'): Promise<ResolvePromptRefResult> =>
+      kind === 'commit' ? { kind: 'commit', entries: [] } : { kind: 'chatContext' },
+  )
   const props: ComposerProps = {
     sessionKey: '1:s1',
     readOnly: false,
@@ -38,6 +45,7 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     onUploadAttachment,
     fetchDraftImage: vi.fn(async () => new Blob()),
     searchPromptRefs,
+    resolvePromptRef,
     onDraftChange,
     onSend,
     onStop,
@@ -52,6 +60,7 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     onNotice,
     onDraftChange,
     searchPromptRefs,
+    resolvePromptRef,
     unmount: view.unmount,
   }
 }
@@ -592,6 +601,268 @@ describe('Composer', () => {
       await waitFor(() => expect(input.value).toBe('remote text'))
       expect(readDraft('1:s1').refs).toBeUndefined()
     })
+
+    const commitEntry = {
+      kind: 'commit' as const,
+      label: 'a1b2c3d Fix tests',
+      uri: 'file:///repo',
+      commitHash: 'a'.repeat(40),
+      text: 'Fix tests',
+    }
+    const commitSearchEntry = { kind: 'commit' as const, label: 'Git Commit…', uri: '' }
+    const chatEntry = {
+      kind: 'chatContext' as const,
+      label: 'CL 1',
+      uri: '',
+      text: 'body line',
+    }
+
+    it('opens the commit list and inserts the picked commit as a ref', async () => {
+      const searchPromptRefs = vi.fn(async () => [commitSearchEntry])
+      const resolvePromptRef = vi.fn(
+        async (): Promise<ResolvePromptRefResult> => ({
+          kind: 'commit',
+          entries: [
+            commitEntry,
+            { ...commitEntry, label: 'b2c3d4e Older', commitHash: 'b'.repeat(40) },
+          ],
+        }),
+      )
+      const { onSend } = renderComposer({ searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#Git')
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('#', 'Git'))
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+
+      expect(resolvePromptRef).toHaveBeenCalledWith('commit', 'Git')
+      expect(await waitFor(() => screen.getByText(strings.promptRefPickCommit))).toBeTruthy()
+      const options = await waitFor(() => screen.getAllByTestId('composer-ref-option'))
+      expect(options).toHaveLength(2)
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await waitFor(() => expect(input.value).toBe('#b2c3d4e Older'))
+      expect(screen.queryByTestId('composer-ref-panel')).toBeNull()
+
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() =>
+        expect(onSend).toHaveBeenCalledWith(
+          '#b2c3d4e Older',
+          [],
+          [],
+          [],
+          [
+            {
+              ...commitEntry,
+              label: 'b2c3d4e Older',
+              commitHash: 'b'.repeat(40),
+              start: 0,
+              end: 14,
+            },
+          ],
+        ),
+      )
+    })
+
+    it('reports an empty commit history and returns to the first list', async () => {
+      const searchPromptRefs = vi.fn(async () => [commitSearchEntry])
+      renderComposer({ searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#Git')
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+      expect(await waitFor(() => screen.getByTestId('composer-ref-empty').textContent)).toContain(
+        strings.promptRefCommitEmpty,
+      )
+
+      fireEvent.click(screen.getByTestId('composer-ref-back'))
+      await waitFor(() => expect(screen.queryByTestId('composer-ref-back')).toBeNull())
+      expect(input.value).toBe('#Git')
+    })
+
+    it('shows a failure when the commit list cannot be loaded', async () => {
+      const searchPromptRefs = vi.fn(async () => [commitSearchEntry])
+      const resolvePromptRef = vi.fn(async () => {
+        throw new Error('offline')
+      })
+      renderComposer({ searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#Git')
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+      expect(await waitFor(() => screen.getByTestId('composer-ref-failed').textContent)).toContain(
+        strings.promptRefFailed,
+      )
+      expect(input.value).toBe('#Git')
+    })
+
+    it('waits for the PC picker and inserts the extension chat context', async () => {
+      const searchPromptRefs = vi.fn(async () => [
+        { kind: 'chatContext' as const, label: 'Perforce CL', uri: '', chatContextHandle: 3 },
+      ])
+      let resolvePicker!: (value: ResolvePromptRefResult) => void
+      const resolvePromptRef = vi.fn(
+        () =>
+          new Promise<ResolvePromptRefResult>((resolve) => {
+            resolvePicker = resolve
+          }),
+      )
+      const { onSend } = renderComposer({ searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#P4')
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+
+      expect(resolvePromptRef).toHaveBeenCalledWith('chatContext', 'P4', {
+        handle: 3,
+        label: 'Perforce CL',
+      })
+      expect(screen.getByTestId('composer-ref-loading').textContent).toContain(
+        strings.promptRefWaitForPc,
+      )
+      expect((screen.getByTestId('composer-send') as HTMLButtonElement).disabled).toBe(true)
+
+      resolvePicker({ kind: 'chatContext', entry: chatEntry })
+      await waitFor(() => expect(input.value).toBe('#CL 1'))
+      expect(screen.queryByTestId('composer-ref-panel')).toBeNull()
+
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() =>
+        expect(onSend).toHaveBeenCalledWith(
+          '#CL 1',
+          [],
+          [],
+          [],
+          [{ ...chatEntry, start: 0, end: 5 }],
+        ),
+      )
+    })
+
+    it('keeps the token when the PC picker is cancelled', async () => {
+      const searchPromptRefs = vi.fn(async () => [
+        { kind: 'chatContext' as const, label: 'Perforce CL', uri: '', chatContextHandle: 3 },
+      ])
+      const resolvePromptRef = vi.fn(
+        async (): Promise<ResolvePromptRefResult> => ({ kind: 'chatContext' }),
+      )
+      renderComposer({ searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#P4')
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+
+      // Cancel returns to the first list so the token can be retried without
+      // retyping it.
+      await waitFor(() => expect(screen.queryByTestId('composer-ref-back')).toBeNull())
+      expect(await waitFor(() => screen.getByTestId('composer-ref-option'))).toBeTruthy()
+      expect(input.value).toBe('#P4')
+    })
+
+    it('swallows Enter while the PC picker is still open', async () => {
+      const searchPromptRefs = vi.fn(async () => [
+        { kind: 'chatContext' as const, label: 'Perforce CL', uri: '', chatContextHandle: 3 },
+      ])
+      let resolvePicker!: (value: ResolvePromptRefResult) => void
+      const resolvePromptRef = vi.fn(
+        () =>
+          new Promise<ResolvePromptRefResult>((resolve) => {
+            resolvePicker = resolve
+          }),
+      )
+      renderComposer({ searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#P4')
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+      await waitFor(() => expect(screen.getByTestId('composer-ref-loading')))
+
+      // false = defaultPrevented: no newline, no keydown-close of the step.
+      expect(fireEvent.keyDown(input, { key: 'Enter' })).toBe(false)
+      expect(screen.getByTestId('composer-ref-loading')).toBeTruthy()
+      expect(input.value).toBe('#P4')
+
+      resolvePicker({ kind: 'chatContext' })
+      await waitFor(() => expect(screen.queryByTestId('composer-ref-back')).toBeNull())
+    })
+
+    it('discards a second-step result after the text is edited', async () => {
+      const searchPromptRefs = vi.fn(async () => [commitSearchEntry])
+      let resolveCommit!: (value: ResolvePromptRefResult) => void
+      const resolvePromptRef = vi.fn(
+        () =>
+          new Promise<ResolvePromptRefResult>((resolve) => {
+            resolveCommit = resolve
+          }),
+      )
+      renderComposer({ searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#Git')
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+      type(input, '#Git ')
+      expect(screen.queryByTestId('composer-ref-back')).toBeNull()
+
+      resolveCommit({ kind: 'commit', entries: [commitEntry] })
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(input.value).toBe('#Git ')
+    })
+
+    it('returns to the first list with Escape instead of dismissing it', async () => {
+      const searchPromptRefs = vi.fn(async () => [commitSearchEntry])
+      const resolvePromptRef = vi.fn(
+        async (): Promise<ResolvePromptRefResult> => ({ kind: 'commit', entries: [] }),
+      )
+      renderComposer({ searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#Git')
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+      await waitFor(() => screen.getByTestId('composer-ref-back'))
+
+      fireEvent.keyDown(input, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByTestId('composer-ref-back')).toBeNull())
+      expect(input.value).toBe('#Git')
+      expect(await waitFor(() => screen.getByTestId('composer-ref-option'))).toBeTruthy()
+    })
+
+    it('uses the right prefix for restored draft chips', async () => {
+      render(
+        <Composer
+          {...composerProps({
+            draft: {
+              text: '',
+              images: [],
+              refs: [
+                {
+                  id: 'r1',
+                  kind: 'commit',
+                  label: 'a1b2c3d Fix tests',
+                  start: 0,
+                  end: 2,
+                },
+                { id: 'r2', kind: 'docs', label: 'Guide', start: 0, end: 2 },
+              ],
+              revision: 1,
+              updatedAt: 1,
+              source: 'pc',
+            },
+          })}
+        />,
+      )
+
+      const chips = await waitFor(() => screen.getByTestId('composer-draft-refs'))
+      expect(chips.textContent).toContain('#a1b2c3d Fix tests')
+      expect(chips.textContent).toContain('#Guide')
+    })
   })
 
   describe('draft sync', () => {
@@ -796,6 +1067,10 @@ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}):
     })),
     fetchDraftImage: vi.fn(async () => new Blob()),
     searchPromptRefs: vi.fn(async () => []),
+    resolvePromptRef: vi.fn(
+      async (kind: 'commit' | 'chatContext'): Promise<ResolvePromptRefResult> =>
+        kind === 'commit' ? { kind: 'commit', entries: [] } : { kind: 'chatContext' },
+    ),
     onSend: vi.fn(async () => undefined),
     onStop: vi.fn(async () => undefined),
     onDraftChange: vi.fn(),

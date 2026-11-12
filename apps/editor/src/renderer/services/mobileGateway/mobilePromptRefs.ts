@@ -10,9 +10,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type IUriIdentityService } from '@universe-editor/platform'
-import { promptRefPrefix, type MobilePromptRef } from '@universe-editor/mobile-protocol'
-import type { ContextSuggestionItem } from '../acp/contextSuggestions.js'
 import {
+  isValidCommitHash,
+  promptRefPrefix,
+  type MobilePromptRef,
+} from '@universe-editor/mobile-protocol'
+import type { ContextSuggestionItem } from '../acp/contextSuggestions.js'
+import { commitRefFromParts } from '../acp/commitRef.js'
+import {
+  chatContextItemToRef,
   mentionEntryToRef,
   suggestionItemToRef,
   type PlacedRef,
@@ -24,6 +30,8 @@ export interface MobilePromptRefContext {
   readonly uriIdentity: IUriIdentityService
   /** Native fs paths of the built-in docs roots (`user` / `extensionDev`). */
   readonly docsRoots: readonly string[]
+  /** Workspace URIs of the open Git repos a `commit` ref may point at. */
+  readonly commitRoots: readonly URI[]
 }
 
 export type MobilePromptRefResult =
@@ -101,6 +109,41 @@ function convertOne(
       return invalid('file reference does not match the session workspace')
     }
     return mentionEntryToRef({ uri: uri.toString(), relPath: ref.label }, 'file')
+  }
+
+  if (ref.kind === 'commit') {
+    const commitHash = ref.commitHash
+    if (commitHash === undefined || !isValidCommitHash(commitHash)) {
+      return invalid('commit reference needs a valid hash')
+    }
+    const subject = ref.text
+    if (subject === undefined || subject.length === 0) {
+      return invalid('commit reference needs a subject')
+    }
+    const uri = parseUri(ref.uri)
+    if (uri === undefined) return invalid('commit reference needs a repository uri')
+    // The repo root may sit above the session directory (narrowed sessions), so
+    // it is checked against the live Git roots instead of `mentionRoot`.
+    const key = context.uriIdentity.getComparisonKey(uri)
+    const known = context.commitRoots.some(
+      (root) => context.uriIdentity.getComparisonKey(root) === key,
+    )
+    if (!known) return invalid('commit reference does not match an open repository')
+    return commitRefFromParts({
+      label: ref.label,
+      uri: uri.toString(),
+      commitHash,
+      description: subject,
+    })
+  }
+
+  if (ref.kind === 'chatContext') {
+    if (ref.uri !== '') return invalid('chatContext reference must not name a resource')
+    const text = ref.text
+    if (text === undefined || text.length === 0) {
+      return invalid('chatContext reference needs text')
+    }
+    return chatContextItemToRef({ label: ref.label, text })
   }
 
   if (ref.kind === 'docs') {

@@ -22,6 +22,7 @@ function context(overrides: Partial<MobilePromptRefContext> = {}): MobilePromptR
     mentionRoot: URI.file('/workspace'),
     uriIdentity: IDENTITY,
     docsRoots: ['/docs/user'],
+    commitRoots: [URI.file('/workspace/repo')],
     ...overrides,
   }
 }
@@ -35,6 +36,13 @@ function fileRef(overrides: Partial<MobilePromptRef> = {}): MobilePromptRef {
     end: 14,
     ...overrides,
   }
+}
+
+/** Simulates a version-skewed phone frame that omits an optional wire field. */
+function withoutField(ref: MobilePromptRef, field: keyof MobilePromptRef): MobilePromptRef {
+  const copy: Record<string, unknown> = { ...ref }
+  delete copy[field]
+  return copy as unknown as MobilePromptRef
 }
 
 describe('toPlacedMobileRefs files', () => {
@@ -167,6 +175,111 @@ describe('toPlacedMobileRefs docs', () => {
     expect(
       toPlacedMobileRefs('#Editor User Guide', [docsRef({ uri: 'file:///tmp/docs' })], context()),
     ).toMatchObject({ ok: false })
+  })
+})
+
+describe('toPlacedMobileRefs commit', () => {
+  const HASH = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'
+
+  function commitRef(overrides: Partial<MobilePromptRef> = {}): MobilePromptRef {
+    return {
+      kind: 'commit',
+      label: 'a1b2c3d fix login bug',
+      uri: URI.file('/workspace/repo').toString(),
+      commitHash: HASH,
+      text: 'fix login bug',
+      start: 0,
+      end: 22,
+      ...overrides,
+    }
+  }
+
+  it('rebuilds a commit ref with the hash and subject', () => {
+    const result = toPlacedMobileRefs('#a1b2c3d fix login bug', [commitRef()], context())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value[0]?.ref).toMatchObject({
+      kind: 'commit',
+      label: 'a1b2c3d fix login bug',
+      uri: URI.file('/workspace/repo').toString(),
+      meta: { commitHash: HASH, description: 'fix login bug' },
+    })
+  })
+
+  it('accepts a repo root above a narrowed session directory', () => {
+    const narrowed = context({ mentionRoot: URI.file('/workspace/repo/sub') })
+
+    const result = toPlacedMobileRefs('#a1b2c3d fix login bug', [commitRef()], narrowed)
+
+    expect(result.ok).toBe(true)
+  })
+
+  it('rejects a repository outside the open git roots', () => {
+    const ref = commitRef({ uri: URI.file('/workspace/other').toString() })
+
+    expect(toPlacedMobileRefs('#a1b2c3d fix login bug', [ref], context())).toMatchObject({
+      ok: false,
+    })
+  })
+
+  it('rejects a missing or malformed hash', () => {
+    const missing = withoutField(commitRef(), 'commitHash')
+    const malformed = commitRef({ commitHash: 'not-hex' })
+
+    expect(toPlacedMobileRefs('#a1b2c3d fix login bug', [missing], context())).toMatchObject({
+      ok: false,
+    })
+    expect(toPlacedMobileRefs('#a1b2c3d fix login bug', [malformed], context())).toMatchObject({
+      ok: false,
+    })
+  })
+
+  it('rejects a missing subject', () => {
+    const ref = withoutField(commitRef(), 'text')
+
+    expect(toPlacedMobileRefs('#a1b2c3d fix login bug', [ref], context())).toMatchObject({
+      ok: false,
+    })
+  })
+})
+
+describe('toPlacedMobileRefs chatContext', () => {
+  function chatContextRef(overrides: Partial<MobilePromptRef> = {}): MobilePromptRef {
+    return {
+      kind: 'chatContext',
+      label: 'CL 123',
+      uri: '',
+      text: 'Change 123\n- src/a.ts',
+      start: 0,
+      end: 7,
+      ...overrides,
+    }
+  }
+
+  it('passes the extension body through as a chatContext ref', () => {
+    const result = toPlacedMobileRefs('#CL 123', [chatContextRef()], context())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value[0]?.ref).toMatchObject({
+      kind: 'chatContext',
+      label: 'CL 123',
+      uri: '',
+      meta: { text: 'Change 123\n- src/a.ts' },
+    })
+  })
+
+  it('rejects a chatContext ref that claims a resource', () => {
+    const ref = chatContextRef({ uri: URI.file('/workspace/a.ts').toString() })
+
+    expect(toPlacedMobileRefs('#CL 123', [ref], context())).toMatchObject({ ok: false })
+  })
+
+  it('rejects a missing body', () => {
+    const ref = withoutField(chatContextRef(), 'text')
+
+    expect(toPlacedMobileRefs('#CL 123', [ref], context())).toMatchObject({ ok: false })
   })
 })
 

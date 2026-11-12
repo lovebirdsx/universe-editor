@@ -1,6 +1,8 @@
 import {
   MAX_PROMPT_REFS,
+  MAX_PROMPT_REF_BYTES_TOTAL,
   promptRefPrefix,
+  utf8ByteLength,
   type MobilePromptRef,
   type MobilePromptRefSuggestion,
   type MobilePromptRefTrigger,
@@ -155,9 +157,18 @@ export function collectPlacedRefs(
   valid.sort((a, b) => a.start - b.start)
   const result: MobilePromptRef[] = []
   let previousEnd = 0
+  let byteTotal = 0
   for (const candidate of valid) {
     if (result.length >= MAX_PROMPT_REFS) break
     if (candidate.start < previousEnd) continue
+    // The gateway rejects the whole prompt over the aggregate byte budget;
+    // keeping the token as plain text is friendlier than failing the send.
+    const bytes =
+      utf8ByteLength(candidate.ref.label) +
+      utf8ByteLength(candidate.ref.uri) +
+      utf8ByteLength(candidate.ref.text ?? '')
+    if (byteTotal + bytes > MAX_PROMPT_REF_BYTES_TOTAL) continue
+    byteTotal += bytes
     result.push({ ...candidate.ref, start: candidate.start, end: candidate.end })
     previousEnd = candidate.end
   }

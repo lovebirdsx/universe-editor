@@ -113,6 +113,25 @@ describe('insertPromptRef', () => {
       placed: { start: 0, end: 18 },
     })
   })
+
+  it('uses the # prefix for commit and chatContext suggestions', () => {
+    const commit = insertPromptRef('#Git', 0, 4, {
+      kind: 'commit',
+      label: 'a1b2c3d fix',
+      uri: 'file:///repo',
+      commitHash: 'a'.repeat(40),
+      text: 'fix',
+    })
+    expect(commit.text).toBe('#a1b2c3d fix')
+
+    const chatContext = insertPromptRef('#P4', 0, 3, {
+      kind: 'chatContext',
+      label: 'CL 1',
+      uri: '',
+      text: 'body',
+    })
+    expect(chatContext.text).toBe('#CL 1')
+  })
 })
 
 describe('collectPlacedRefs', () => {
@@ -156,5 +175,30 @@ describe('collectPlacedRefs', () => {
 
     expect(refs).toHaveLength(32)
     expect(refs.at(-1)?.start).toBe(31 * 6)
+  })
+
+  it('caps the aggregate prompt-ref byte budget', () => {
+    const tokens = Array.from({ length: 9 }, (_, index) => `#c${index}`)
+    const text = tokens.join(' ')
+    let cursor = 0
+    const placed = tokens.map((token, index) => {
+      const start = text.indexOf(token, cursor)
+      cursor = start + token.length
+      return {
+        ref: {
+          kind: 'chatContext' as const,
+          label: `c${index}`,
+          uri: '',
+          text: 'x'.repeat(4000),
+        },
+        start,
+        end: cursor,
+      }
+    })
+
+    const refs = collectPlacedRefs(text, placed)
+
+    expect(refs).toHaveLength(8)
+    expect(refs.at(-1)?.label).toBe('c7')
   })
 })

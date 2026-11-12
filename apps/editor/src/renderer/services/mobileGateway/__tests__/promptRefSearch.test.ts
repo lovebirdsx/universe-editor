@@ -89,6 +89,7 @@ function makeSearch(options: {
   symbolEntries?: readonly unknown[]
   docsRoot?: string
   docsFail?: boolean
+  chatProviders?: readonly { handle: number; provider: unknown }[]
 }): InstanceType<typeof MobilePromptRefSearch> {
   const workspace = { current: { folder: URI.file('/workspace'), name: 'workspace' } }
   const langFeatures = {
@@ -105,6 +106,7 @@ function makeSearch(options: {
       return options.docsRoot ?? '/docs/user'
     },
   }
+  const chatContext = { getProviders: () => options.chatProviders ?? [] }
   return new MobilePromptRefSearch({
     fileSearch: options.fileSearch,
     exclude: makeExclude() as never,
@@ -114,6 +116,7 @@ function makeSearch(options: {
     uriIdentity: IDENTITY,
     langFeatures: langFeatures as never,
     docs: docs as never,
+    chatContext: chatContext as never,
   })
 }
 
@@ -224,6 +227,26 @@ describe('MobilePromptRefSearch # context', () => {
     }
   }
 
+  function gitControl(resources: readonly string[] = []): unknown {
+    return { id: 'git', ...(scmControl(resources) as Record<string, unknown>) }
+  }
+
+  function chatProvider(
+    handle: number,
+    over: Record<string, unknown> = {},
+  ): { handle: number; provider: unknown } {
+    return {
+      handle,
+      provider: {
+        label: 'Perforce CL',
+        description: 'Pick a changelist',
+        keywords: ['cl', 'changelist'],
+        iconId: 'git-commit',
+        ...over,
+      },
+    }
+  }
+
   it('merges provider groups fewest-first and maps every kind', async () => {
     const search = makeSearch({
       fileSearch: makeFileSearch({}),
@@ -323,5 +346,77 @@ describe('MobilePromptRefSearch # context', () => {
     const entries = await search.search(scope(), '#', '', 20)
 
     expect(entries.map((entry) => entry.kind)).toEqual(['scmChange'])
+  })
+
+  it('surfaces git commit and extension chatContext entries with empty uris', async () => {
+    const search = makeSearch({
+      fileSearch: makeFileSearch({}),
+      scmSourceControls: [gitControl()],
+      chatProviders: [chatProvider(4)],
+      docsRoot: '/docs/user',
+    })
+
+    const entries = await search.search(scope(), '#', '', 20)
+
+    expect(entries.map((entry) => entry.kind)).toEqual(['docs', 'commit', 'chatContext'])
+    expect(entries[1]).toMatchObject({ kind: 'commit', uri: '' })
+    expect(entries[2]).toMatchObject({
+      kind: 'chatContext',
+      label: 'Perforce CL',
+      uri: '',
+      chatContextHandle: 4,
+      description: 'Pick a changelist',
+    })
+  })
+
+  it('hides the commit entry in a P4-only workspace but keeps extension entries', async () => {
+    const search = makeSearch({
+      fileSearch: makeFileSearch({}),
+      scmSourceControls: [{ id: 'perforce', ...(scmControl([]) as Record<string, unknown>) }],
+      chatProviders: [chatProvider(2)],
+      docsRoot: '/docs/user',
+    })
+
+    const entries = await search.search(scope(), '#', '', 20)
+
+    expect(entries.some((entry) => entry.kind === 'commit')).toBe(false)
+    expect(entries.some((entry) => entry.kind === 'chatContext')).toBe(true)
+  })
+
+  it('hides the commit entry when the git control has no repository root', async () => {
+    const search = makeSearch({
+      fileSearch: makeFileSearch({}),
+      scmSourceControls: [{ id: 'git' }],
+      docsRoot: '/docs/user',
+    })
+
+    const entries = await search.search(scope(), '#', '', 20)
+
+    expect(entries.some((entry) => entry.kind === 'commit')).toBe(false)
+  })
+
+  it('keeps commit and chatContext entries for narrowed sessions', async () => {
+    const search = makeSearch({
+      fileSearch: makeFileSearch({}),
+      scmSourceControls: [gitControl()],
+      chatProviders: [chatProvider(1)],
+      docsRoot: '/docs/user',
+    })
+
+    const entries = await search.search(scope('/workspace/sub', true), '#', '', 20)
+
+    expect(entries.some((entry) => entry.kind === 'commit')).toBe(true)
+    expect(entries.some((entry) => entry.kind === 'chatContext')).toBe(true)
+  })
+
+  it('drops extension entries without a valid chatContext handle', async () => {
+    const search = makeSearch({
+      fileSearch: makeFileSearch({}),
+      chatProviders: [chatProvider(0)],
+    })
+
+    const entries = await search.search(scope(), '#', '', 20)
+
+    expect(entries.some((entry) => entry.kind === 'chatContext')).toBe(false)
   })
 })
