@@ -374,11 +374,12 @@ export function SessionPage({
               onUploadAttachment={(file, kind) => client.uploadAttachment(file, kind)}
               fetchDraftImage={(imageId) => client.fetchDraftImageBlob(imageId)}
               prefill={prefill}
+              searchPromptRefs={(trigger, query) => client.searchPromptRefs(trigger, query)}
               draft={state.draft}
               draftAck={state.lastDraftAck}
               onDraftChange={(text, images, files) => client.sendDraft(text, images, files)}
-              onSend={(text, attachmentIds, draftImageIds, draftFileIds) =>
-                client.sendPrompt(text, attachmentIds, draftImageIds, draftFileIds)
+              onSend={(text, attachmentIds, draftImageIds, draftFileIds, refs) =>
+                client.sendPrompt(text, attachmentIds, draftImageIds, draftFileIds, refs)
               }
               onStop={() => client.cancelTurn()}
               onNotice={notice}

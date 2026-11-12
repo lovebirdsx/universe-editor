@@ -16,12 +16,20 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import {
+  DEFAULT_PROMPT_REF_SUGGESTIONS,
+  MAX_PROMPT_REF_DESCRIPTION_LENGTH,
+  MAX_PROMPT_REF_DIR_PATH_LENGTH,
+  MAX_PROMPT_REF_LABEL_LENGTH,
+  MAX_PROMPT_REF_STATUS_LENGTH,
+  MAX_PROMPT_REF_SUGGESTIONS,
+  MAX_PROMPT_REF_URI_LENGTH,
   MAX_SERVER_FRAME_BYTES,
   MAX_HISTORY_PROMPT_LENGTH,
   MAX_ID_LENGTH,
   MAX_STATUS_LENGTH,
   MAX_TITLE_LENGTH,
   MAX_WORKSPACE_NAME_LENGTH,
+  MOBILE_PROMPT_REF_KINDS,
   clampText,
   isConfigValueAllowedOnMobile,
   isHighRiskPermissionOption,
@@ -36,6 +44,8 @@ import {
   type MobileErrorCode,
   type MobileNewSessionResult,
   type MobilePendingPermission,
+  type MobilePromptRef,
+  type MobilePromptRefSuggestion,
   type MobilePushBranchExpectation,
   type MobileSessionEvent,
   type MobileSessionHistoryEntry,
@@ -44,6 +54,7 @@ import {
   type MobileSessionSummary,
   type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
+  type SearchPromptRefsPayload,
   type ServerFrame,
   type SessionSnapshotFrame,
 } from '@universe-editor/mobile-protocol'
@@ -217,6 +228,8 @@ interface HistoryEntryContext {
 /** How long a repeated idempotency key returns the first result. */
 export const COMMAND_IDEMPOTENCY_TTL_MS = 5 * 60 * 1000
 export const SEND_PROMPT_TIMEOUT_MS = 15_000
+/** Read-only completion; the renderer budgets its own walks below this. */
+export const SEARCH_PROMPT_REFS_TIMEOUT_MS = 10_000
 /**
  * Total budget for open + renderer-ready + create. Stays below the phone's 30s
  * command timeout so the phone receives the real error instead of a timeout.
@@ -301,6 +314,71 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
 ])
 
 const sessionKey = (windowId: number, localId: string): string => `${windowId}:${localId}`
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+}
+
+function isBoundedIdentity(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= max
+}
+
+const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/
+
+function isPrintableBounded(value: unknown, max: number): value is string {
+  return isBoundedIdentity(value, max) && !CONTROL_CHAR_RE.test(value)
+}
+
+/**
+ * The bridge is trusted but version-skewed or buggy code must not push an
+ * unbounded / malformed completion payload to the phone. Invalid entries are
+ * dropped instead of failing the whole command.
+ */
+function clampPromptRefSuggestions(value: unknown): readonly MobilePromptRefSuggestion[] {
+  if (!Array.isArray(value)) return []
+  const entries: MobilePromptRefSuggestion[] = []
+  for (const raw of value) {
+    if (entries.length >= MAX_PROMPT_REF_SUGGESTIONS) break
+    if (typeof raw !== 'object' || raw === null) continue
+    const item = raw as Record<string, unknown>
+    const kind = item.kind
+    if (
+      typeof kind !== 'string' ||
+      !(MOBILE_PROMPT_REF_KINDS as readonly string[]).includes(kind)
+    ) {
+      continue
+    }
+    const label = item.label
+    const uri = item.uri
+    if (!isPrintableBounded(label, MAX_PROMPT_REF_LABEL_LENGTH)) continue
+    if (!isPrintableBounded(uri, MAX_PROMPT_REF_URI_LENGTH)) continue
+    const dirPath = item.dirPath
+    const docsDirPath = isPrintableBounded(dirPath, MAX_PROMPT_REF_DIR_PATH_LENGTH)
+      ? dirPath
+      : undefined
+    if (kind === 'docs' && docsDirPath === undefined) continue
+    entries.push({
+      kind: kind as MobilePromptRefSuggestion['kind'],
+      label,
+      uri,
+      ...(typeof item.description === 'string'
+        ? { description: clampText(item.description, MAX_PROMPT_REF_DESCRIPTION_LENGTH) }
+        : {}),
+      ...(isPositiveInteger(item.line) ? { line: item.line } : {}),
+      ...(isPositiveInteger(item.column) ? { column: item.column } : {}),
+      ...(isNonNegativeInteger(item.symbolKind) ? { symbolKind: item.symbolKind } : {}),
+      ...(isPrintableBounded(item.scmStatus, MAX_PROMPT_REF_STATUS_LENGTH)
+        ? { scmStatus: item.scmStatus }
+        : {}),
+      ...(kind === 'docs' && docsDirPath !== undefined ? { dirPath: docsDirPath } : {}),
+    })
+  }
+  return entries
+}
 
 interface CachedPermissionOption {
   /** Conservative projection published by the bridge; never widened here. */
@@ -937,6 +1015,22 @@ export class MobileGatewayHub {
           return failOutcome('internal')
         }
       }
+      case 'searchPromptRefs': {
+        const p = frame.payload as SearchPromptRefsPayload
+        const outcome = await this._sessionCommand(
+          p.ref,
+          SEARCH_PROMPT_REFS_TIMEOUT_MS,
+          (bridge, localId) =>
+            bridge.searchPromptRefs(
+              localId,
+              p.trigger,
+              p.query,
+              p.limit ?? DEFAULT_PROMPT_REF_SUGGESTIONS,
+            ),
+        )
+        if (!outcome.ok) return outcome
+        return { ok: true, result: { entries: clampPromptRefSuggestions(outcome.result) } }
+      }
       case 'sendPrompt': {
         const p = frame.payload as {
           ref: MobileSessionRef
@@ -944,7 +1038,9 @@ export class MobileGatewayHub {
           attachmentIds?: readonly string[]
           draftImageIds?: readonly string[]
           draftFileIds?: readonly string[]
+          refs?: readonly MobilePromptRef[]
         }
+        const refs = p.refs ?? []
         if (this._windows.size > 1 && (await this._deliveryBusyForSession(p.ref))) {
           return failOutcome('delivery_busy')
         }
@@ -977,9 +1073,12 @@ export class MobileGatewayHub {
               if (!resolved.ok) return resolved
               all = [...all, ...resolved.value]
             }
-            return all.length === 0
-              ? bridge.sendPrompt(localId, p.text)
-              : bridge.sendPrompt(localId, p.text, all)
+            if (all.length === 0 && refs.length === 0) {
+              return bridge.sendPrompt(localId, p.text)
+            }
+            return refs.length === 0
+              ? bridge.sendPrompt(localId, p.text, all)
+              : bridge.sendPrompt(localId, p.text, all, refs)
           },
         )
         if (outcome.ok && ids.length > 0 && sender.deviceId !== undefined) {

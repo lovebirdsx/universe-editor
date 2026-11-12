@@ -9,9 +9,11 @@
 
 import {
   autorun,
+  CancellationTokenSource,
   Disposable,
   Emitter,
   IEditorGroupsService,
+  IFileSearchService,
   IFileService,
   ILoggerService,
   IUriIdentityService,
@@ -40,6 +42,9 @@ import {
   type MobileAgentCandidate,
   type MobileElicitationAction,
   type MobileElicitationContentValue,
+  type MobilePromptRef,
+  type MobilePromptRefSuggestion,
+  type MobilePromptRefTrigger,
   type MobileRewindPreview,
   type MobileRewindResult,
   type MobileSideTaskSummary,
@@ -75,6 +80,13 @@ import {
   type AcpPromptDraftChange,
 } from '../acp/session/acpPromptDraftCache.js'
 import { mergeBridgeDraft, toBridgeDraft } from './mobileDraftSync.js'
+import { MobilePromptRefSearch } from './promptRefSearch.js'
+import { toPlacedMobileRefs } from './mobilePromptRefs.js'
+import { resolveSessionScopeRoot } from '../acp/sessionScope.js'
+import type { PlacedRef } from '../acp/promptRef.js'
+import { IExcludeService } from '../exclude/ExcludeService.js'
+import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
+import { IDocsService } from '../../../shared/ipc/docsService.js'
 import { AcpForeignWorktreeError, IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IScmService } from '../extensions/ScmService.js'
 import {
@@ -219,6 +231,9 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   private readonly _agentNames = new Map<string, string | undefined>()
   private _attentionSubscription: IDisposable | undefined
   private _pendingWorkSweep: ReturnType<typeof setInterval> | undefined
+  private readonly _promptRefSearch: MobilePromptRefSearch
+  /** Newest completion query per session; a keystroke supersedes the previous walk. */
+  private readonly _promptRefSearches = new Map<string, CancellationTokenSource>()
   private _disposed = false
 
   constructor(
@@ -233,10 +248,24 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IFileService private readonly _files: IFileService,
     @ISessionDeliveryService private readonly _delivery: ISessionDeliveryService,
     @ISessionBranchPushService private readonly _branchPush: ISessionBranchPushService,
+    @IFileSearchService fileSearch: IFileSearchService,
+    @IExcludeService exclude: IExcludeService,
+    @ILanguageFeaturesService langFeatures: ILanguageFeaturesService,
+    @IDocsService private readonly _docs: IDocsService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'mobileBridge', name: 'Mobile Bridge' })
+    this._promptRefSearch = new MobilePromptRefSearch({
+      fileSearch,
+      exclude,
+      workspace: this._workspace,
+      editorGroups: this._editorGroups,
+      scm: this._scm,
+      uriIdentity: this._uriIdentity,
+      langFeatures,
+      docs: this._docs,
+    })
     this._register(this._delivery.onDidChange((change) => this._onDeliveryChanged(change)))
   }
 
@@ -723,6 +752,20 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return draft === undefined ? undefined : toBridgeDraft(draft)
   }
 
+  /** Missing docs roots degrade to none — a ref that needs them is then rejected. */
+  private async _docsRoots(): Promise<readonly string[]> {
+    const roots: string[] = []
+    for (const category of ['user', 'extensionDev'] as const) {
+      try {
+        const root = await this._docs.getDocsRoot(category)
+        if (root.length > 0) roots.push(root)
+      } catch {
+        continue
+      }
+    }
+    return roots
+  }
+
   private _onDraftChanged(event: AcpPromptDraftChange): void {
     if (!this._streaming) return
     const session = this._liveSession(event.sessionId)
@@ -832,10 +875,48 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     }
   }
 
+  /**
+   * Read-only `@` / `#` completion. A read-only session may still query: the
+   * suggestions never mutate the session, and the phone needs the same catalog
+   * it would get from an editable one.
+   */
+  async searchPromptRefs(
+    localId: string,
+    trigger: MobilePromptRefTrigger,
+    query: string,
+    limit: number,
+  ): Promise<MobileBridgeResult<readonly MobilePromptRefSuggestion[]>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    const scope = resolveSessionScopeRoot(
+      this._workspace.current?.folder,
+      session.cwd,
+      this._uriIdentity,
+    )
+    if (scope === undefined) return ok([])
+    const previous = this._promptRefSearches.get(localId)
+    previous?.cancel()
+    previous?.dispose()
+    const cts = new CancellationTokenSource()
+    this._promptRefSearches.set(localId, cts)
+    try {
+      const entries = await this._promptRefSearch.search(scope, trigger, query, limit, cts.token)
+      return cts.token.isCancellationRequested ? ok([]) : ok(entries)
+    } catch (err) {
+      if (cts.token.isCancellationRequested) return ok([])
+      this._logger.warn(`mobile prompt ref search failed: ${String(err)}`)
+      return fail('internal', 'prompt reference search failed')
+    } finally {
+      if (this._promptRefSearches.get(localId) === cts) this._promptRefSearches.delete(localId)
+      cts.dispose()
+    }
+  }
+
   async sendPrompt(
     localId: string,
     text: string,
     attachments: readonly MobileBridgePromptAttachment[] = [],
+    refs: readonly MobilePromptRef[] = [],
   ): Promise<MobileBridgeResult<void>> {
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
@@ -877,12 +958,33 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     if (images.length > 0 && session.imageSupported.get() !== true) {
       return fail('not_supported', 'this agent does not accept image attachments')
     }
+    let placed: readonly PlacedRef[] | undefined
+    if (refs.length > 0) {
+      const scope = resolveSessionScopeRoot(
+        this._workspace.current?.folder,
+        session.cwd,
+        this._uriIdentity,
+      )
+      if (scope === undefined) {
+        return fail('bad_request', 'no workspace is open to resolve prompt references')
+      }
+      const needsDocs = refs.some((ref) => ref.kind === 'docs')
+      const converted = toPlacedMobileRefs(text, refs, {
+        mentionRoot: scope.root,
+        uriIdentity: this._uriIdentity,
+        docsRoots: needsDocs ? await this._docsRoots() : [],
+      })
+      if (!converted.ok) return fail('bad_request', converted.message)
+      placed = converted.value
+    }
     // Return once the prompt is accepted by the session (append + queue); the
     // actual agent round-trip is intentionally not awaited.
     const dispatch =
-      images.length === 0 && files.length === 0
-        ? session.sendPrompt(text)
-        : session.sendPrompt(text, undefined, undefined, images, files)
+      placed !== undefined && placed.length > 0
+        ? session.sendPrompt(text, placed, undefined, images, files)
+        : images.length === 0 && files.length === 0
+          ? session.sendPrompt(text)
+          : session.sendPrompt(text, undefined, undefined, images, files)
     void dispatch.catch((err: unknown) => {
       this._logger.warn(`mobile sendPrompt failed: ${String(err)}`)
     })
@@ -1614,6 +1716,11 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
+    for (const search of this._promptRefSearches.values()) {
+      search.cancel()
+      search.dispose()
+    }
+    this._promptRefSearches.clear()
     void this.stopStreaming()
     void this.stopAttention()
     this._onDidChange.dispose()

@@ -8,7 +8,7 @@
  *  the same port in different workers.
  *--------------------------------------------------------------------------------------------*/
 
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { request as httpsRequest } from 'node:https'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,6 +21,7 @@ import {
   serializeFrame,
   type MobileConfigOptionValue,
   type MobilePermissionUpsertEvent,
+  type MobilePromptRefSuggestion,
   type MobileTimelineMessageItem,
   type MobileWorkspaceCandidate,
   type ServerFrame,
@@ -797,6 +798,117 @@ test.describe('mobile gateway', () => {
     } finally {
       ws.close()
     }
+  })
+
+  test.describe('prompt refs', () => {
+    test.use({
+      workspaceSeeder: {
+        seed(dir) {
+          mkdirSync(join(dir, 'src'), { recursive: true })
+          writeFileSync(join(dir, 'src', 'a.ts'), 'export const a = 1\n')
+        },
+      },
+    })
+
+    test('@p1 completes workspace files and forwards a structured ref', async ({
+      page,
+      workbench,
+    }) => {
+      await startEchoSession(page, workbench)
+      const { ws } = await connectRawPhone(page, workbench)
+      try {
+        const inbox = await subscribeInbox(ws)
+        const ref = inbox.sessions[0]!.ref
+
+        const result = await sendCommand(ws, 'searchPromptRefs', {
+          ref,
+          trigger: '@',
+          query: 'a',
+        })
+        expect(result).toMatchObject({ ok: true })
+        const entries = (result.result as { entries: readonly MobilePromptRefSuggestion[] }).entries
+        const file = entries.find((entry) => entry.kind === 'file' && entry.label === 'src/a.ts')
+        expect(file).toBeDefined()
+        expect(file?.uri).toMatch(/^file:\/\//)
+
+        const text = 'report-prompt-blocks @src/a.ts'
+        const sent = await sendCommand(ws, 'sendPrompt', {
+          ref,
+          text,
+          refs: [{ ...file!, start: text.indexOf('@'), end: text.length }],
+        })
+        expect(sent).toMatchObject({ ok: true })
+
+        await expect
+          .poll(
+            () =>
+              page.evaluate(() => {
+                const messages = window.__E2E__!.getAcpMessages()
+                return (
+                  [...messages].reverse().find((m) => m.role === 'agent' && m.text.startsWith('['))
+                    ?.text ?? ''
+                )
+              }),
+            { timeout: 10_000 },
+          )
+          .toContain('"resource_link"')
+
+        const blocks = await page.evaluate(() => {
+          const messages = window.__E2E__!.getAcpMessages()
+          const agent = [...messages]
+            .reverse()
+            .find((m) => m.role === 'agent' && m.text.startsWith('['))
+          return JSON.parse(agent!.text) as Array<Record<string, unknown>>
+        })
+        const link = blocks.find((block) => block['type'] === 'resource_link')
+        expect(link).toMatchObject({ type: 'resource_link', name: 'src/a.ts' })
+        expect(String(link?.['uri'])).toContain('src/a.ts')
+        expect(
+          blocks
+            .filter((block) => block['type'] === 'text')
+            .map((block) => String(block['text']))
+            .join('\n'),
+        ).not.toContain('@src/a.ts')
+      } finally {
+        ws.close()
+      }
+    })
+
+    test('@p1 completes and sends an @ ref from the phone UI', async ({ page, workbench }) => {
+      await startEchoSession(page, workbench)
+      const { browser, context, phone } = await pairPhone(page, workbench)
+      try {
+        await openFirstPhoneSession(phone)
+        const input = phone.getByTestId('composer-input')
+        const panel = phone.getByTestId('composer-ref-panel')
+        await input.focus()
+        await input.fill('report-prompt-blocks @a')
+
+        const option = panel.getByTestId('composer-ref-option').filter({ hasText: 'src/a.ts' })
+        await expect(option).toBeVisible()
+        await option.click()
+        await expect(input).toHaveValue('report-prompt-blocks @src/a.ts')
+        await expect(panel).toHaveCount(0)
+
+        await phone.getByTestId('composer-send').click()
+        await expect
+          .poll(
+            () =>
+              page.evaluate(() => {
+                const messages = window.__E2E__!.getAcpMessages()
+                return (
+                  [...messages].reverse().find((m) => m.role === 'agent' && m.text.startsWith('['))
+                    ?.text ?? ''
+                )
+              }),
+            { timeout: 10_000 },
+          )
+          .toContain('"name":"src/a.ts"')
+      } finally {
+        await context.close()
+        await browser.close()
+      }
+    })
   })
 
   test('@p1 arbitrates a permission request from the phone', async ({ page, workbench }) => {

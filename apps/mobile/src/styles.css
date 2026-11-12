@@ -2706,6 +2706,22 @@ input:focus-visible {
   white-space: nowrap;
 }
 
+.composer__ref-kind {
+  flex: none;
+  color: var(--muted);
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 5px;
+}
+
+.composer__ref-status {
+  padding: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 .composer__hint {
   color: var(--muted);
   font-size: 12px;

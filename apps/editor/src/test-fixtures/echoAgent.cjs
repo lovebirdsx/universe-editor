@@ -1051,7 +1051,7 @@ async function runPrompt(id, params) {
   // Test directive: "report-prompt-blocks" echoes a metadata-only view of the
   // prompt blocks the editor forwarded (never raw image base64), so E2E can
   // assert phone attachments arrived as image/resource_link blocks.
-  if (userText === 'report-prompt-blocks') {
+  if (userText.startsWith('report-prompt-blocks')) {
     const blocks = (params.prompt || []).map((block) => {
       if (block.type === 'text') return { type: 'text', text: block.text }
       if (block.type === 'image') {

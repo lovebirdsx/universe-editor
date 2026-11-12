@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  isMobilePromptRefSuggestionsResult,
   isMobilePushBranchPreview,
   isMobilePushBranchResult,
   isMobileRewindPreview,
@@ -139,5 +140,66 @@ describe('command result guards', () => {
     expect(isMobileSessionHistoryList([])).toBe(true)
     expect(isMobileSessionHistoryList([row, { durableId: 'x' }])).toBe(false)
     expect(isMobileSessionHistoryList('nope')).toBe(false)
+  })
+
+  it('validates prompt-ref suggestion lists', () => {
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'file', label: 'src/a.ts', uri: 'file:///w/src/a.ts' }],
+      }),
+    ).toBe(true)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [
+          {
+            kind: 'symbol',
+            label: 'fn',
+            uri: 'file:///w/a.ts',
+            line: 3,
+            column: 1,
+            symbolKind: 11,
+          },
+          { kind: 'docs', label: 'Guide', uri: 'file:///docs', dirPath: '/docs/zh-CN' },
+        ],
+      }),
+    ).toBe(true)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'docs', label: 'Guide', uri: 'file:///docs' }],
+      }),
+    ).toBe(false)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'folder', label: 'src', uri: 'file:///w/src' }],
+      }),
+    ).toBe(false)
+    expect(isMobilePromptRefSuggestionsResult({ entries: 'nope' })).toBe(false)
+    expect(isMobilePromptRefSuggestionsResult({ entries: [{ kind: 'file', label: '' }] })).toBe(
+      false,
+    )
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'file', label: 'a', uri: 'u', line: -1 }],
+      }),
+    ).toBe(false)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'file', label: 'a', uri: 'u', line: 0 }],
+      }),
+    ).toBe(false)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: [{ kind: 'file', label: 'a'.repeat(513), uri: 'u' }],
+      }),
+    ).toBe(false)
+    expect(
+      isMobilePromptRefSuggestionsResult({
+        entries: Array.from({ length: 51 }, () => ({
+          kind: 'file',
+          label: 'a',
+          uri: 'u',
+        })),
+      }),
+    ).toBe(false)
   })
 })

@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strings } from '../../strings.js'
 import { Composer, draftKey, legacyDraftKey, readDraft, writeDraft } from '../Composer.js'
+import type { ComposerProps } from '../Composer.js'
 
 beforeEach(() => {
   sessionStorage.clear()
@@ -25,7 +26,8 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
   }))
   const onNotice = vi.fn()
   const onDraftChange = vi.fn()
-  const props = {
+  const searchPromptRefs = vi.fn(async () => [])
+  const props: ComposerProps = {
     sessionKey: '1:s1',
     readOnly: false,
     running: false,
@@ -35,6 +37,7 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     commands: [],
     onUploadAttachment,
     fetchDraftImage: vi.fn(async () => new Blob()),
+    searchPromptRefs,
     onDraftChange,
     onSend,
     onStop,
@@ -48,6 +51,7 @@ function renderComposer(overrides: Partial<Parameters<typeof Composer>[0]> = {})
     onUploadAttachment,
     onNotice,
     onDraftChange,
+    searchPromptRefs,
     unmount: view.unmount,
   }
 }
@@ -72,7 +76,7 @@ describe('Composer', () => {
     const send = screen.getByTestId('composer-send')
     fireEvent.click(send)
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello phone', [], [], []))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello phone', [], [], [], []))
     await waitFor(() => expect(input.value).toBe(''))
     expect(sessionStorage.getItem(draftKey('1:s1'))).toBeNull()
   })
@@ -113,7 +117,7 @@ describe('Composer', () => {
     const send = screen.getByTestId('composer-send') as HTMLButtonElement
     await waitFor(() => expect(send.disabled).toBe(false))
     fireEvent.click(send)
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], []))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], [], []))
     expect(screen.queryByTestId('composer-attachments')).toBeNull()
   })
 
@@ -235,7 +239,7 @@ describe('Composer', () => {
     await waitFor(() => expect(send.disabled).toBe(false))
     fireEvent.click(send)
 
-    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], []))
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], [], []))
     expect(revoke).toHaveBeenCalledWith(src)
   })
 
@@ -444,6 +448,152 @@ describe('Composer', () => {
     })
   })
 
+  describe('prompt refs', () => {
+    const fileRef = {
+      kind: 'file' as const,
+      label: 'src/a.ts',
+      uri: 'file:///workspace/src/a.ts',
+    }
+    const docsRef = {
+      kind: 'docs' as const,
+      label: 'Editor User Guide',
+      uri: 'file:///docs/user/zh-CN',
+      dirPath: '/docs/user/zh-CN',
+    }
+
+    const type = (input: HTMLTextAreaElement, value: string): void => {
+      fireEvent.change(input, { target: { value } })
+    }
+
+    it('queries @ completion and inserts the picked file as a ref', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef])
+      const { onSend } = renderComposer({ searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, 'look @src')
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('@', 'src'))
+      await waitFor(() => expect(screen.getByTestId('composer-ref-option')))
+
+      fireEvent.click(screen.getAllByTestId('composer-ref-option')[0]!)
+      await waitFor(() => expect(input.value).toBe('look @src/a.ts'))
+      expect(input.selectionStart).toBe('look @src/a.ts'.length)
+      expect(screen.queryByTestId('composer-ref-panel')).toBeNull()
+
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() =>
+        expect(onSend).toHaveBeenCalledWith(
+          'look @src/a.ts',
+          [],
+          [],
+          [],
+          [{ ...fileRef, start: 5, end: 14 }],
+        ),
+      )
+    })
+
+    it('queries # completion with its kind label and supports labels with spaces', async () => {
+      const searchPromptRefs = vi.fn(async () => [docsRef])
+      renderComposer({ searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#doc')
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('#', 'doc'))
+      const option = await waitFor(() => screen.getByTestId('composer-ref-option'))
+      expect(option.textContent).toContain(strings.promptRefKindDocs)
+
+      fireEvent.click(option)
+      await waitFor(() => expect(input.value).toBe('#Editor User Guide'))
+      expect(input.selectionStart).toBe('#Editor User Guide'.length)
+    })
+
+    it('supports arrow keys, Enter and Escape', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef, { ...fileRef, label: 'src/b.ts' }])
+      renderComposer({ searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '@')
+      await waitFor(() => expect(screen.getAllByTestId('composer-ref-option')).toHaveLength(2))
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+      fireEvent.keyDown(input, { key: 'Enter' })
+      await waitFor(() => expect(input.value).toBe('@src/b.ts'))
+
+      type(input, '')
+      await waitFor(() => expect(screen.queryByTestId('composer-ref-panel')).toBeNull())
+      type(input, '@')
+      await waitFor(() => expect(screen.getByTestId('composer-ref-panel')).toBeTruthy())
+      fireEvent.keyDown(input, { key: 'Escape' })
+      expect(screen.queryByTestId('composer-ref-panel')).toBeNull()
+
+      type(input, '')
+      await waitFor(() => expect(screen.queryByTestId('composer-ref-panel')).toBeNull())
+      type(input, '@a')
+      await waitFor(() => expect(screen.getByTestId('composer-ref-panel')).toBeTruthy())
+    })
+
+    it('waits for composition to end before querying', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef])
+      renderComposer({ searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      fireEvent.compositionStart(input)
+      type(input, '@a')
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(searchPromptRefs).not.toHaveBeenCalled()
+
+      fireEvent.compositionEnd(input)
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('@', 'a'))
+    })
+
+    it('restores refs from storage and sends them', async () => {
+      writeDraft('1:s1', 'see @src/a.ts', 14, 1, [{ ...fileRef, start: 4, end: 13 }])
+      const { onSend } = renderComposer()
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() => expect(input.value).toBe('see @src/a.ts'))
+      expect(readDraft('1:s1').refs).toHaveLength(1)
+
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() =>
+        expect(onSend).toHaveBeenCalledWith(
+          'see @src/a.ts',
+          [],
+          [],
+          [],
+          [{ ...fileRef, start: 4, end: 13 }],
+        ),
+      )
+    })
+
+    it('discards stored refs with invalid identity fields', async () => {
+      writeDraft('1:s1', '@', 1, 1, [{ kind: 'file', label: '', uri: '', start: 0, end: 1 }])
+      const { onSend } = renderComposer()
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() => expect(input.value).toBe('@'))
+      expect(readDraft('1:s1').refs).toBeUndefined()
+
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('@', [], [], [], []))
+    })
+
+    it('clears tracked refs when a remote draft replaces the text', async () => {
+      writeDraft('1:s1', '@src/a.ts', 9, 1, [{ ...fileRef, start: 0, end: 9 }])
+      render(
+        <Composer
+          {...composerProps({
+            draft: { text: 'remote text', images: [], revision: 2, updatedAt: 2, source: 'pc' },
+          })}
+        />,
+      )
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      await waitFor(() => expect(input.value).toBe('remote text'))
+      expect(readDraft('1:s1').refs).toBeUndefined()
+    })
+  })
+
   describe('draft sync', () => {
     const remote = (revision: number, text: string) => ({
       text,
@@ -627,7 +777,7 @@ describe('Composer', () => {
   })
 })
 
-function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
+function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}): ComposerProps {
   return {
     sessionKey: '1:s1',
     readOnly: false,
@@ -645,6 +795,7 @@ function composerProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) 
       createdAt: 1,
     })),
     fetchDraftImage: vi.fn(async () => new Blob()),
+    searchPromptRefs: vi.fn(async () => []),
     onSend: vi.fn(async () => undefined),
     onStop: vi.fn(async () => undefined),
     onDraftChange: vi.fn(),

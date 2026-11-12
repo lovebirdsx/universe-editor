@@ -26,6 +26,9 @@ import type {
   MobilePushBranchExpectation,
   MobilePushBranchPreview,
   MobilePushBranchResult,
+  MobilePromptRef,
+  MobilePromptRefSuggestion,
+  MobilePromptRefTrigger,
   MobileRewindPreview,
   MobileRewindResult,
   MobileSessionBucket,
@@ -534,6 +537,17 @@ export interface IMobileBridgeService {
   /** Full tool-call body; undefined when the session/tool call is gone. */
   getToolCallDetail(localId: string, toolCallId: string): Promise<MobileToolCallDetail | undefined>
 
+  /**
+   * Read-only `@` / `#` completion for a session. `limit` is required so the
+   * proxy never has to carry a mid-argument `undefined` (it would become null).
+   */
+  searchPromptRefs(
+    localId: string,
+    trigger: MobilePromptRefTrigger,
+    query: string,
+    limit: number,
+  ): Promise<MobileBridgeResult<readonly MobilePromptRefSuggestion[]>>
+
   /** The `index`-th ACP image block of a message; undefined when unavailable. */
   getMessageImage(
     localId: string,
@@ -603,6 +617,7 @@ export interface IMobileBridgeService {
     localId: string,
     text: string,
     attachments?: readonly MobileBridgePromptAttachment[],
+    refs?: readonly MobilePromptRef[],
   ): Promise<MobileBridgeResult<void>>
 
   cancelTurn(localId: string): Promise<MobileBridgeResult<void>>

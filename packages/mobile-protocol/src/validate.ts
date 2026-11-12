@@ -63,6 +63,9 @@ import type {
   MobilePermissionOption,
   MobilePlanEntry,
   MobilePlanEntryStatus,
+  MobilePromptRef,
+  MobilePromptRefKind,
+  MobilePromptRefTrigger,
   MobilePushBranchExpectation,
   MobilePushSubscription,
   MobileResyncScope,
@@ -84,6 +87,7 @@ import type {
   PongFrame,
   PushSubscribeFrame,
   ResyncRequiredFrame,
+  SearchPromptRefsPayload,
   ServerErrorFrame,
   ServerFrame,
   SessionDeltaFrame,
@@ -106,9 +110,12 @@ import {
   MOBILE_PERMISSION_SETTLE_REASONS,
   MOBILE_PERMISSION_SETTLE_SOURCES,
   MOBILE_PLAN_ENTRY_STATUSES,
+  MOBILE_PROMPT_REF_KINDS,
+  MOBILE_PROMPT_REF_TRIGGERS,
   MOBILE_RESYNC_SCOPES,
   MOBILE_SESSION_BUCKETS,
   MOBILE_TIMELINE_ITEM_KINDS,
+  promptRefPrefix,
 } from './frames.js'
 import type { PairDevicePlatform, PairRequest } from './pairing.js'
 import { isValidPairCodeShape, normalizePairCode, PAIR_DEVICE_PLATFORMS } from './pairing.js'
@@ -181,6 +188,15 @@ export const MAX_PUSH_ENDPOINT_LENGTH = 2048
 export const MAX_PUSH_KEY_LENGTH = 256
 export const MAX_NOTIFICATION_ID_LENGTH = 128
 export const MAX_NOTIFICATION_BODY_LENGTH = 1024
+export const MAX_PROMPT_REFS = 32
+export const MAX_PROMPT_REF_LABEL_LENGTH = 512
+export const MAX_PROMPT_REF_DESCRIPTION_LENGTH = 512
+export const MAX_PROMPT_REF_URI_LENGTH = 1024
+export const MAX_PROMPT_REF_DIR_PATH_LENGTH = 1024
+export const MAX_PROMPT_REF_STATUS_LENGTH = 32
+export const MAX_PROMPT_REF_QUERY_LENGTH = 256
+export const MAX_PROMPT_REF_SUGGESTIONS = 50
+export const DEFAULT_PROMPT_REF_SUGGESTIONS = 20
 
 export type ParseErrorCode = 'bad_request' | 'protocol_mismatch'
 
@@ -835,6 +851,8 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
   switch (kind) {
     case 'getToolCallDetail':
       return parseGetToolCallDetailPayload(value)
+    case 'searchPromptRefs':
+      return parseSearchPromptRefsPayload(value)
     case 'sendPrompt':
       return parseSendPromptPayload(value)
     case 'cancelTurn':
@@ -1176,6 +1194,7 @@ function parseSendPromptPayload(value: unknown): Result<{
   attachmentIds?: readonly string[]
   draftImageIds?: readonly string[]
   draftFileIds?: readonly string[]
+  refs?: readonly MobilePromptRef[]
 }> {
   if (!isRecord(value)) return fail('bad_request', 'sendPrompt.payload must be an object')
   const ref = parseSessionRef(value.ref)
@@ -1202,6 +1221,8 @@ function parseSendPromptPayload(value: unknown): Result<{
     'sendPrompt.draftFileIds',
   )
   if (!draftFileIds.ok) return draftFileIds
+  const refs = parsePromptRefs(value.refs, text)
+  if (!refs.ok) return refs
   const attachmentCount = attachmentIds.value?.length ?? 0
   const draftImageCount = draftImageIds.value?.length ?? 0
   const draftFileCount = draftFileIds.value?.length ?? 0
@@ -1214,7 +1235,190 @@ function parseSendPromptPayload(value: unknown): Result<{
     ...(attachmentIds.value !== undefined ? { attachmentIds: attachmentIds.value } : {}),
     ...(draftImageIds.value !== undefined ? { draftImageIds: draftImageIds.value } : {}),
     ...(draftFileIds.value !== undefined ? { draftFileIds: draftFileIds.value } : {}),
+    ...(refs.value !== undefined ? { refs: refs.value } : {}),
   })
+}
+
+function parseSearchPromptRefsPayload(value: unknown): Result<SearchPromptRefsPayload> {
+  if (!isRecord(value)) return fail('bad_request', 'searchPromptRefs.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  const trigger = value.trigger
+  if (
+    typeof trigger !== 'string' ||
+    !(MOBILE_PROMPT_REF_TRIGGERS as readonly string[]).includes(trigger)
+  ) {
+    return fail('bad_request', "searchPromptRefs.trigger must be '@' or '#'")
+  }
+  const query = value.query
+  if (!isBoundedString(query, MAX_PROMPT_REF_QUERY_LENGTH)) {
+    return fail(
+      'bad_request',
+      `searchPromptRefs.query must be at most ${MAX_PROMPT_REF_QUERY_LENGTH} characters`,
+    )
+  }
+  const limit = value.limit
+  if (limit !== undefined) {
+    if (
+      typeof limit !== 'number' ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > MAX_PROMPT_REF_SUGGESTIONS
+    ) {
+      return fail(
+        'bad_request',
+        `searchPromptRefs.limit must be an integer between 1 and ${MAX_PROMPT_REF_SUGGESTIONS}`,
+      )
+    }
+  }
+  return ok({
+    ref: ref.value,
+    trigger: trigger as MobilePromptRefTrigger,
+    query,
+    ...(limit !== undefined ? { limit } : {}),
+  })
+}
+
+function parsePromptRefs(
+  value: unknown,
+  text: string,
+): Result<readonly MobilePromptRef[] | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (!Array.isArray(value)) return fail('bad_request', 'sendPrompt.refs must be an array')
+  if (value.length === 0) return ok(undefined)
+  if (value.length > MAX_PROMPT_REFS) {
+    return fail('bad_request', `sendPrompt.refs must contain at most ${MAX_PROMPT_REFS} entries`)
+  }
+  const parsed: MobilePromptRef[] = []
+  for (const item of value) {
+    if (!isRecord(item)) return fail('bad_request', 'sendPrompt.refs entries must be objects')
+    const kind = item.kind
+    if (!isMobilePromptRefKind(kind)) {
+      return fail('bad_request', 'sendPrompt.refs entry kind is unknown')
+    }
+    const label = item.label
+    if (
+      !isNonEmptyBoundedString(label, MAX_PROMPT_REF_LABEL_LENGTH) ||
+      hasControlCharacters(label)
+    ) {
+      return fail(
+        'bad_request',
+        `sendPrompt.refs label must be 1–${MAX_PROMPT_REF_LABEL_LENGTH} printable characters`,
+      )
+    }
+    if (kind === 'file' && !isSafeFileRefLabel(label)) {
+      return fail('bad_request', 'sendPrompt.refs file label must be a relative workspace path')
+    }
+    const uri = item.uri
+    if (!isNonEmptyBoundedString(uri, MAX_PROMPT_REF_URI_LENGTH)) {
+      return fail(
+        'bad_request',
+        `sendPrompt.refs uri must be 1–${MAX_PROMPT_REF_URI_LENGTH} characters`,
+      )
+    }
+    const description = item.description
+    if (
+      description !== undefined &&
+      (!isBoundedString(description, MAX_PROMPT_REF_DESCRIPTION_LENGTH) ||
+        hasControlCharacters(description))
+    ) {
+      return fail(
+        'bad_request',
+        `sendPrompt.refs description must be at most ${MAX_PROMPT_REF_DESCRIPTION_LENGTH} printable characters`,
+      )
+    }
+    const line = parseOptionalPositiveInteger(item.line, 'sendPrompt.refs line')
+    if (!line.ok) return line
+    const column = parseOptionalPositiveInteger(item.column, 'sendPrompt.refs column')
+    if (!column.ok) return column
+    const symbolKind = parseOptionalNonNegativeInteger(
+      item.symbolKind,
+      'sendPrompt.refs symbolKind',
+    )
+    if (!symbolKind.ok) return symbolKind
+    const scmStatus = item.scmStatus
+    if (
+      scmStatus !== undefined &&
+      (!isNonEmptyBoundedString(scmStatus, MAX_PROMPT_REF_STATUS_LENGTH) ||
+        hasControlCharacters(scmStatus))
+    ) {
+      return fail(
+        'bad_request',
+        `sendPrompt.refs scmStatus must be 1–${MAX_PROMPT_REF_STATUS_LENGTH} printable characters`,
+      )
+    }
+    const dirPath = item.dirPath
+    if (
+      dirPath !== undefined &&
+      (!isNonEmptyBoundedString(dirPath, MAX_PROMPT_REF_DIR_PATH_LENGTH) ||
+        hasControlCharacters(dirPath))
+    ) {
+      return fail(
+        'bad_request',
+        `sendPrompt.refs dirPath must be 1–${MAX_PROMPT_REF_DIR_PATH_LENGTH} printable characters`,
+      )
+    }
+    if (kind === 'docs' && dirPath === undefined) {
+      return fail('bad_request', 'sendPrompt.refs docs entries require dirPath')
+    }
+    const start = item.start
+    const end = item.end
+    if (!isNonNegativeInteger(start) || !isNonNegativeInteger(end) || end <= start) {
+      return fail('bad_request', 'sendPrompt.refs start/end must describe a non-empty range')
+    }
+    if (end > text.length) {
+      return fail('bad_request', 'sendPrompt.refs range must stay inside the prompt text')
+    }
+    if (text.slice(start, end) !== promptRefPrefix(kind) + label) {
+      return fail('bad_request', 'sendPrompt.refs range must match its @/# token')
+    }
+    parsed.push({
+      kind,
+      label,
+      uri,
+      ...(description !== undefined ? { description } : {}),
+      ...(line.value !== undefined ? { line: line.value } : {}),
+      ...(column.value !== undefined ? { column: column.value } : {}),
+      ...(symbolKind.value !== undefined ? { symbolKind: symbolKind.value } : {}),
+      ...(scmStatus !== undefined ? { scmStatus } : {}),
+      ...(dirPath !== undefined ? { dirPath } : {}),
+      start,
+      end,
+    })
+  }
+  parsed.sort((a, b) => a.start - b.start)
+  let cursor = 0
+  for (const ref of parsed) {
+    if (ref.start < cursor) return fail('bad_request', 'sendPrompt.refs must not overlap')
+    cursor = ref.end
+  }
+  return ok(parsed)
+}
+
+function isMobilePromptRefKind(value: unknown): value is MobilePromptRefKind {
+  return typeof value === 'string' && (MOBILE_PROMPT_REF_KINDS as readonly string[]).includes(value)
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index)
+    if (code <= 0x1f || code === 0x7f) return true
+  }
+  return false
+}
+
+function isSafeFileRefLabel(label: string): boolean {
+  if (label.startsWith('/') || label.includes('\\')) return false
+  if (/^[A-Za-z]:/.test(label)) return false
+  return !label.split('/').some((segment) => segment === '..')
+}
+
+function parseOptionalPositiveInteger(value: unknown, field: string): Result<number | undefined> {
+  if (value === undefined) return ok(undefined)
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    return fail('bad_request', `${field} must be a positive integer`)
+  }
+  return ok(value)
 }
 
 function parsePromptIdList(

@@ -298,6 +298,95 @@ describe('MobileClient session subscription', () => {
     })
   })
 
+  it('sends prompt refs and resolves completion entries', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    void client
+      .sendPrompt(
+        'see @src/a.ts',
+        [],
+        [],
+        [],
+        [{ kind: 'file', label: 'src/a.ts', uri: 'file:///w/src/a.ts', start: 4, end: 13 }],
+      )
+      .catch(() => undefined)
+    const search = client.searchPromptRefs('@', 'src', 5)
+    const commands = sentFrames(socket).filter(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as Array<{
+      requestId: string
+      kind: string
+      payload: Record<string, unknown>
+      idempotencyKey?: string
+    }>
+    expect(commands[0]).toMatchObject({
+      kind: 'sendPrompt',
+      payload: {
+        ref: { windowId: 1, localId: 's1' },
+        text: 'see @src/a.ts',
+        refs: [{ kind: 'file', label: 'src/a.ts', uri: 'file:///w/src/a.ts', start: 4, end: 13 }],
+      },
+    })
+    expect(commands[1]).toMatchObject({
+      kind: 'searchPromptRefs',
+      payload: { ref: { windowId: 1, localId: 's1' }, trigger: '@', query: 'src', limit: 5 },
+    })
+    // Read-only completion must not carry an idempotency key.
+    expect(commands[1]?.idempotencyKey).toBeUndefined()
+
+    socket.serverSend({
+      type: 'command_result',
+      requestId: commands[1]!.requestId,
+      ok: true,
+      result: { entries: [{ kind: 'file', label: 'src/a.ts', uri: 'file:///w/src/a.ts' }] },
+    })
+    await expect(search).resolves.toEqual([
+      { kind: 'file', label: 'src/a.ts', uri: 'file:///w/src/a.ts' },
+    ])
+  })
+
+  it('rejects malformed prompt-ref completion results', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    const search = client.searchPromptRefs('#', '', 20)
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command',
+    ) as { requestId: string }
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: { entries: [{ kind: 'folder', label: 'src' }] },
+    })
+    await expect(search).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('truncates overlong completion queries to the protocol limit', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    void client.searchPromptRefs('@', 'x'.repeat(300)).catch(() => undefined)
+    const command = sentFrames(socket).find(
+      (frame) =>
+        typeof frame === 'object' &&
+        frame !== null &&
+        (frame as Record<string, unknown>)['type'] === 'command' &&
+        (frame as Record<string, unknown>)['kind'] === 'searchPromptRefs',
+    ) as Record<string, unknown> | undefined
+    expect((command?.['payload'] as { query?: string } | undefined)?.query).toHaveLength(256)
+  })
+
   it('rejects commands while the gateway is not connected', async () => {
     const { client, sockets } = createHarness()
     client.openSession('1:s1')

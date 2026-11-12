@@ -12,6 +12,9 @@ import {
   type MobileDraftFileRef,
   type MobileDraftImageRef,
   type MobileDraftState,
+  type MobilePromptRef,
+  type MobilePromptRefSuggestion,
+  type MobilePromptRefTrigger,
 } from '@universe-editor/mobile-protocol'
 import {
   useCallback,
@@ -24,9 +27,20 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { errorCode } from '../errors.js'
+import { isMobilePromptRefSuggestion } from '../state/commandResults.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { ComposerAttachmentChip } from './ComposerAttachmentChip.js'
+import { PROMPT_REF_LIST_ID, PromptRefPanel, promptRefOptionId } from './PromptRefPanel.js'
+import {
+  applyTextEdit,
+  collectPlacedRefs,
+  extractHashQuery,
+  extractMentionQuery,
+  insertPromptRef,
+  type PlacedPromptRef,
+  type PromptRefQuery,
+} from './promptRefs.js'
 import {
   SLASH_COMMAND_LIST_ID,
   SlashCommandPanel,
@@ -50,7 +64,10 @@ const MAX_STORED_DRAFTS = 20
 const NO_COMMANDS: readonly MobileAvailableCommand[] = []
 /** Matches the PC-side publisher; keeps typing from flooding the socket. */
 const DRAFT_SYNC_DEBOUNCE_MS = 250
+/** Mobile mirror of the desktop popover's `#` debounce. */
+const REF_SEARCH_DEBOUNCE_MS = 150
 const EMPTY_ID_SET: ReadonlySet<string> = new Set()
+const EMPTY_PROMPT_REFS: readonly MobilePromptRefSuggestion[] = []
 
 /**
  * The fields whose changes make this phone the writer. Remote attachment
@@ -112,6 +129,11 @@ export interface ComposerProps {
   readonly fetchDraftImage: (imageId: string) => Promise<Blob>
   /** One-shot backfill (rewind text / side-task quote) owned by the session page. */
   readonly prefill?: ComposerPrefill | undefined
+  /** Read-only `@` / `#` completion against this session's workspace. */
+  readonly searchPromptRefs: (
+    trigger: MobilePromptRefTrigger,
+    query: string,
+  ) => Promise<readonly MobilePromptRefSuggestion[]>
   /** Latest draft from the hub (PC or another phone), applied when this phone is idle. */
   readonly draft?: MobileDraftState | undefined
   /** Gateway ack for this phone's latest draft; advances the local revision watermark. */
@@ -126,6 +148,7 @@ export interface ComposerProps {
     attachmentIds: readonly string[],
     draftImageIds: readonly string[],
     draftFileIds: readonly string[],
+    refs: readonly MobilePromptRef[],
   ) => Promise<void>
   readonly onStop: () => Promise<void>
   readonly onNotice: (text: string) => void
@@ -142,6 +165,7 @@ export function Composer({
   onUploadAttachment,
   fetchDraftImage,
   prefill,
+  searchPromptRefs,
   draft,
   draftAck,
   onDraftChange,
@@ -154,6 +178,9 @@ export function Composer({
   const [sending, setSending] = useState(false)
   const [stopping, setStopping] = useState(false)
   const [attachments, setAttachments] = useState<readonly ComposerAttachment[]>([])
+  const [placedRefs, setPlacedRefs] = useState<readonly PlacedPromptRef[]>(() =>
+    (initialDraft.refs ?? []).map((ref) => ({ ref, start: ref.start, end: ref.end })),
+  )
   const [removedDraftImages, setRemovedDraftImages] = useState<ReadonlySet<string>>(new Set())
   const [removedDraftFiles, setRemovedDraftFiles] = useState<ReadonlySet<string>>(new Set())
   const [caret, setCaret] = useState(initialDraft.caret)
@@ -161,8 +188,15 @@ export function Composer({
   const [focused, setFocused] = useState(false)
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
+  const [refDismissed, setRefDismissed] = useState(false)
+  const [refIndex, setRefIndex] = useState(0)
+  const [refSuggestions, setRefSuggestions] =
+    useState<readonly MobilePromptRefSuggestion[]>(EMPTY_PROMPT_REFS)
+  const [refLoading, setRefLoading] = useState(false)
+  const [refFailed, setRefFailed] = useState(false)
   const [caretRequest, setCaretRequest] = useState(0)
   const pendingCaret = useRef<number | null>(null)
+  const refSearchSeq = useRef(0)
   const disabled = !online || readOnly
   const textareaRef = useAutoGrowTextarea(value, { maxHeightPx: MAX_HEIGHT_PX })
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
@@ -184,7 +218,10 @@ export function Composer({
   /** sessionStorage had text at mount; publish it once the gateway is reachable. */
   const restoredDraft = useRef(initialDraft.text !== '')
   const [syncTick, setSyncTick] = useState(0)
+  /** Retry signal for a completion query suppressed by IME composition. */
+  const [refSearchTick, setRefSearchTick] = useState(0)
   const onDraftChangeRef = useRef(onDraftChange)
+  const searchPromptRefsRef = useRef(searchPromptRefs)
 
   useEffect(() => {
     const urls = previewUrls.current
@@ -196,13 +233,14 @@ export function Composer({
   }, [])
 
   useEffect(() => {
-    writeDraft(sessionKey, value, caret)
-  }, [sessionKey, value, caret])
+    writeDraft(sessionKey, value, caret, Date.now(), collectPlacedRefs(value, placedRefs))
+  }, [sessionKey, value, caret, placedRefs])
 
   useEffect(() => {
     if (prefill === undefined || prefill.sessionKey !== sessionKey) return
     interacted.current = true
     setValue(prefill.text)
+    setPlacedRefs([])
     textareaRef.current?.focus()
   }, [prefill, sessionKey, textareaRef])
 
@@ -211,6 +249,17 @@ export function Composer({
   const slashOpen = focused && !slashDismissed && slash !== null && slashMatches.length > 0
   const activeSlashIndex = Math.min(slashIndex, Math.max(slashMatches.length - 1, 0))
   const slashQuery = slash?.query
+
+  // One panel at a time: `/` owns the first token, `#` wins over `@` because a
+  // single token can only carry one prefix (same precedence as the desktop).
+  const refQuery: PromptRefQuery | null =
+    armed && !disabled && slash === null
+      ? (extractHashQuery(value, caret) ?? extractMentionQuery(value, caret))
+      : null
+  const refOpen = focused && !refDismissed && refQuery !== null
+  const activeRefIndex = Math.min(refIndex, Math.max(refSuggestions.length - 1, 0))
+  const refTrigger = refQuery?.trigger
+  const refQueryText = refQuery?.query
 
   // A dismissed list re-arms itself once the command token disappears, so
   // backspacing into the token brings the suggestions back.
@@ -222,6 +271,48 @@ export function Composer({
   useEffect(() => {
     setSlashIndex(0)
   }, [slashQuery])
+
+  const refActive = refQuery !== null
+  useEffect(() => {
+    if (!refActive) setRefDismissed(false)
+  }, [refActive])
+
+  useEffect(() => {
+    setRefIndex(0)
+  }, [refTrigger, refQueryText])
+
+  // Debounced completion query. `refSearchSeq` discards a slow response that a
+  // newer query, a dismissed panel or an IME composition has superseded. Draft
+  // acks bump `syncTick` but must not re-run this effect; only composition end
+  // bumps `refSearchTick` to retry a query suppressed during composition.
+  useEffect(() => {
+    const seq = ++refSearchSeq.current
+    if (!refOpen || refTrigger === undefined || refQueryText === undefined || composing.current) {
+      setRefLoading(false)
+      return
+    }
+    setRefSuggestions(EMPTY_PROMPT_REFS)
+    setRefFailed(false)
+    setRefLoading(true)
+    const timer = window.setTimeout(() => {
+      void searchPromptRefsRef
+        .current(refTrigger, refQueryText)
+        .then((entries) => {
+          if (seq !== refSearchSeq.current) return
+          setRefSuggestions(entries)
+        })
+        .catch(() => {
+          if (seq !== refSearchSeq.current) return
+          setRefFailed(true)
+        })
+        .finally(() => {
+          if (seq === refSearchSeq.current) setRefLoading(false)
+        })
+    }, REF_SEARCH_DEBOUNCE_MS)
+    return () => {
+      window.clearTimeout(timer)
+    }
+  }, [refOpen, refTrigger, refQueryText, refSearchTick])
 
   useLayoutEffect(() => {
     const position = pendingCaret.current
@@ -324,6 +415,7 @@ export function Composer({
     }
     draftRef.current = draft
     onDraftChangeRef.current = onDraftChange
+    searchPromptRefsRef.current = searchPromptRefs
   })
 
   const publishDraft = useCallback((force = false): boolean => {
@@ -354,6 +446,9 @@ export function Composer({
         pendingSelection.current = { start, end }
         setValue(next.text)
         setCaret(start)
+        // Remote text has no tracked ranges here; stale refs would fail the
+        // send-time slice check, so drop them instead of sending a broken prompt.
+        setPlacedRefs([])
       }
       lastIncorporatedRevision.current = Math.max(lastIncorporatedRevision.current, next.revision)
       // Adopt the applied text as the published baseline: it must not bounce
@@ -460,6 +555,7 @@ export function Composer({
   const handleChange = (event: ChangeEvent<HTMLTextAreaElement>): void => {
     const next = event.target.value
     interacted.current = true
+    setPlacedRefs((current) => applyTextEdit(value, next, current))
     setValue(next)
     setCaret(event.target.selectionStart ?? next.length)
     setArmed(true)
@@ -467,6 +563,9 @@ export function Composer({
 
   const handleCompositionStart = (): void => {
     composing.current = true
+    // Invalidate any completion query already in flight: it was computed for
+    // the pre-composition text and must not overwrite the panel mid-IME.
+    refSearchSeq.current++
   }
 
   const handleCompositionEnd = (): void => {
@@ -474,6 +573,7 @@ export function Composer({
     // Re-evaluate both directions: apply what arrived during the IME session,
     // or publish the text the IME just committed.
     setSyncTick((tick) => tick + 1)
+    setRefSearchTick((tick) => tick + 1)
   }
 
   const acceptCommand = (command: MobileAvailableCommand): void => {
@@ -486,6 +586,21 @@ export function Composer({
     setValue(next.text)
     setCaret(next.caret)
     setSlashDismissed(true)
+  }
+
+  const acceptPromptRef = (suggestion: MobilePromptRefSuggestion): void => {
+    const query = refQuery
+    if (query === null) return
+    const next = insertPromptRef(value, query.start, query.end, suggestion)
+    if (next.text.length > MAX_PROMPT_LENGTH) return
+    interacted.current = true
+    const shifted = applyTextEdit(value, next.text, placedRefs)
+    setPlacedRefs([...shifted, next.placed].sort((left, right) => left.start - right.start))
+    pendingCaret.current = next.caret
+    setCaretRequest((request) => request + 1)
+    setValue(next.text)
+    setCaret(next.caret)
+    setRefDismissed(true)
   }
 
   const insertSlash = (): void => {
@@ -502,26 +617,52 @@ export function Composer({
   }
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (!slashOpen || event.nativeEvent.isComposing) return
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setSlashIndex((activeSlashIndex + 1) % slashMatches.length)
+    if (event.nativeEvent.isComposing) return
+    if (slashOpen) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setSlashIndex((activeSlashIndex + 1) % slashMatches.length)
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setSlashIndex((activeSlashIndex - 1 + slashMatches.length) % slashMatches.length)
+        return
+      }
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        const command = slashMatches[activeSlashIndex]
+        if (command !== undefined) acceptCommand(command)
+        return
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setSlashDismissed(true)
+      }
       return
     }
-    if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setSlashIndex((activeSlashIndex - 1 + slashMatches.length) % slashMatches.length)
-      return
-    }
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      const command = slashMatches[activeSlashIndex]
-      if (command !== undefined) acceptCommand(command)
-      return
+    if (!refOpen) return
+    if (refSuggestions.length > 0) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setRefIndex((activeRefIndex + 1) % refSuggestions.length)
+        return
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setRefIndex((activeRefIndex - 1 + refSuggestions.length) % refSuggestions.length)
+        return
+      }
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault()
+        const suggestion = refSuggestions[activeRefIndex]
+        if (suggestion !== undefined) acceptPromptRef(suggestion)
+        return
+      }
     }
     if (event.key === 'Escape') {
       event.preventDefault()
-      setSlashDismissed(true)
+      setRefDismissed(true)
     }
   }
 
@@ -544,8 +685,10 @@ export function Composer({
         readyAttachments.map((attachment) => attachment.id as string),
         draftImageIds,
         draftFileIds,
+        collectPlacedRefs(value, placedRefs),
       )
       setValue('')
+      setPlacedRefs([])
       releaseAllPreviewUrls(previewUrls.current)
       setAttachments([])
       setRemovedDraftImages(new Set())
@@ -772,6 +915,16 @@ export function Composer({
           onPick={acceptCommand}
         />
       )}
+      {refOpen && refQuery !== null && (
+        <PromptRefPanel
+          trigger={refQuery.trigger}
+          suggestions={refSuggestions}
+          activeIndex={activeRefIndex}
+          loading={refLoading}
+          failed={refFailed}
+          onPick={acceptPromptRef}
+        />
+      )}
       <div className="composer__row">
         {canAttach && (
           <button
@@ -813,9 +966,17 @@ export function Composer({
           }
           aria-label={strings.composerPlaceholder}
           aria-autocomplete="list"
-          aria-controls={slashOpen ? SLASH_COMMAND_LIST_ID : undefined}
-          aria-expanded={slashOpen}
-          aria-activedescendant={slashOpen ? slashCommandOptionId(activeSlashIndex) : undefined}
+          aria-controls={
+            slashOpen ? SLASH_COMMAND_LIST_ID : refOpen ? PROMPT_REF_LIST_ID : undefined
+          }
+          aria-expanded={slashOpen || refOpen}
+          aria-activedescendant={
+            slashOpen
+              ? slashCommandOptionId(activeSlashIndex)
+              : refOpen && refSuggestions.length > 0
+                ? promptRefOptionId(activeRefIndex)
+                : undefined
+          }
           onChange={handleChange}
           onCompositionStart={handleCompositionStart}
           onCompositionEnd={handleCompositionEnd}
@@ -952,6 +1113,8 @@ export function legacyDraftKey(sessionKey: string): string {
 export interface StoredDraft {
   readonly text: string
   readonly caret: number
+  /** Structured `@` / `#` refs, kept only while their token slices still match. */
+  readonly refs?: readonly MobilePromptRef[]
 }
 
 export function readDraft(sessionKey: string): StoredDraft {
@@ -973,13 +1136,22 @@ export function writeDraft(
   value: string,
   caret: number = value.length,
   now: number = Date.now(),
+  refs: readonly MobilePromptRef[] = [],
 ): void {
   try {
     const storage = globalThis.sessionStorage
     if (value === '') {
       storage?.removeItem(draftKey(sessionKey))
     } else {
-      storage?.setItem(draftKey(sessionKey), JSON.stringify({ text: value, caret, updatedAt: now }))
+      storage?.setItem(
+        draftKey(sessionKey),
+        JSON.stringify({
+          text: value,
+          caret,
+          updatedAt: now,
+          ...(refs.length > 0 ? { refs } : {}),
+        }),
+      )
       pruneDrafts(draftKey(sessionKey), storage)
     }
     storage?.removeItem(legacyDraftKey(sessionKey))
@@ -1012,12 +1184,26 @@ function parseStoredDraft(raw: string): StoredDraft | undefined {
   try {
     const parsed: unknown = JSON.parse(raw)
     if (typeof parsed !== 'object' || parsed === null) return undefined
-    const record = parsed as { text?: unknown; caret?: unknown }
+    const record = parsed as { text?: unknown; caret?: unknown; refs?: unknown }
     if (typeof record.text !== 'string' || typeof record.caret !== 'number') return undefined
-    return { text: record.text, caret: record.caret }
+    const refs = Array.isArray(record.refs)
+      ? collectPlacedRefs(
+          record.text,
+          record.refs
+            .filter(isStoredPromptRef)
+            .map((ref) => ({ ref, start: ref.start, end: ref.end })),
+        )
+      : []
+    return { text: record.text, caret: record.caret, ...(refs.length > 0 ? { refs } : {}) }
   } catch {
     return undefined
   }
+}
+
+function isStoredPromptRef(value: unknown): value is MobilePromptRef {
+  if (!isMobilePromptRefSuggestion(value)) return false
+  const record = value as unknown as Record<string, unknown>
+  return Number.isInteger(record['start']) && Number.isInteger(record['end'])
 }
 
 function pruneDrafts(keep: string, storage: Storage | undefined): void {

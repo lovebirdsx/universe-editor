@@ -15,6 +15,8 @@ import {
   URI,
   UriIdentityService,
   type IEditorGroupsService,
+  type IFileSearchComplete,
+  type IFileSearchService,
   type IFileService,
   type IFileStat,
   type ILogger,
@@ -43,6 +45,7 @@ import type {
 import type { IAcpAgentRegistry } from '../../acp/acpAgentRegistry.js'
 import type { IUserSettingsSyncService } from '../../configuration/UserSettingsSync.js'
 import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmService.js'
+import type { IExcludeService } from '../../exclude/ExcludeService.js'
 import {
   MOBILE_BRIDGE_LARGE_THROTTLE_MS,
   MOBILE_BRIDGE_THROTTLE_MS,
@@ -53,11 +56,14 @@ import {
 } from '../MobileBridgeService.js'
 import type { ISessionDeliveryService } from '../../delivery/sessionDeliveryService.js'
 import type { ISessionBranchPushService } from '../../delivery/sessionBranchPushService.js'
+import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
+import type { DocCategory, IDocsService } from '../../../../shared/ipc/docsService.js'
 import type {
   SessionDeliveryChange,
   SessionDeliveryPreview,
 } from '../../delivery/sessionDeliveryTypes.js'
 import type { MobileBridgeEvent } from '../../../../shared/ipc/mobileGatewayService.js'
+import { invalidateMentionFileCache } from '../../acp/mentionFileSearch.js'
 
 const NULL_LOGGER: ILogger = {
   trace: () => {},
@@ -240,6 +246,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   userSettings: { whenInitialized: Promise<void> }
   scmSourceControls: ISettableObservable<readonly IScmSourceControlModel[]>
   files: IFileService
+  fileSearch: IFileSearchService
+  docs: IDocsService
   delivery: ISessionDeliveryService
   deliveryChanges: Emitter<SessionDeliveryChange>
   add(session: FakeSessionHarness): void
@@ -334,6 +342,27 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     preview: vi.fn(),
     push: vi.fn(),
   } as unknown as ISessionBranchPushService
+  const fileSearch = {
+    search: vi.fn(
+      async (): Promise<IFileSearchComplete> => ({
+        results: [],
+        limitHit: false,
+        filesWalked: 0,
+        directoriesWalked: 0,
+        durationMs: 0,
+      }),
+    ),
+  } as unknown as IFileSearchService
+  const exclude = {
+    getDirNameIgnores: () => [],
+    getSearchExcludeGlobs: () => [],
+    getUseIgnoreFiles: () => false,
+  } as unknown as IExcludeService
+  const langFeatures = {} as unknown as ILanguageFeaturesService
+  const docs = {
+    getDocs: vi.fn(async () => ({ user: {}, extensionDev: {} })),
+    getDocsRoot: vi.fn(async (category: DocCategory) => `/docs/${category}`),
+  } as unknown as IDocsService
   const service = new MobileBridgeService(
     sessionService,
     historyService,
@@ -346,6 +375,10 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     files,
     delivery,
     branchPush,
+    fileSearch,
+    exclude,
+    langFeatures,
+    docs,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
@@ -366,6 +399,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     userSettings,
     scmSourceControls,
     files,
+    fileSearch,
+    docs,
     delivery,
     deliveryChanges,
     add(session) {
@@ -1311,6 +1346,207 @@ describe('MobileBridgeService commands', () => {
       ]),
     ).resolves.toMatchObject({ ok: false, code: 'forbidden_operation' })
     expect(callSpy(remote.session, 'sendPrompt')).not.toHaveBeenCalled()
+  })
+
+  it('routes prompt-ref completion through the session scope', async () => {
+    invalidateMentionFileCache()
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    const first = makeSession('s1')
+    harness.add(first)
+    vi.mocked(harness.fileSearch.search).mockResolvedValueOnce({
+      relPaths: ['src/a.ts', 'b.ts'],
+      limitHit: false,
+      filesWalked: 2,
+      directoriesWalked: 1,
+      durationMs: 1,
+    })
+
+    await expect(harness.service.searchPromptRefs('s1', '@', 'src', 10)).resolves.toEqual({
+      ok: true,
+      value: [{ kind: 'file', label: 'src/a.ts', uri: 'file:///workspace/demo/src/a.ts' }],
+    })
+    expect(harness.fileSearch.search).toHaveBeenCalledWith(
+      expect.objectContaining({ root: URI.file('/workspace/demo'), matchAll: true }),
+      expect.anything(),
+    )
+  })
+
+  it('allows prompt-ref completion for read-only sessions but not without a workspace', async () => {
+    invalidateMentionFileCache()
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    const readOnly = makeSession('ro', { readOnly: true })
+    harness.add(readOnly)
+    vi.mocked(harness.fileSearch.search).mockResolvedValueOnce({
+      relPaths: ['a.ts'],
+      limitHit: false,
+      filesWalked: 1,
+      directoriesWalked: 1,
+      durationMs: 1,
+    })
+
+    await expect(harness.service.searchPromptRefs('ro', '@', 'a', 5)).resolves.toEqual({
+      ok: true,
+      value: [{ kind: 'file', label: 'a.ts', uri: 'file:///workspace/demo/a.ts' }],
+    })
+    await expect(harness.service.searchPromptRefs('missing', '@', 'a', 5)).resolves.toMatchObject({
+      ok: false,
+      code: 'session_not_found',
+    })
+
+    harness.workspace.current = null
+    await expect(harness.service.searchPromptRefs('ro', '@', 'a', 5)).resolves.toEqual({
+      ok: true,
+      value: [],
+    })
+  })
+
+  it('converts phone prompt refs into placed refs', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    const first = makeSession('s1')
+    harness.add(first)
+
+    await expect(
+      harness.service.sendPrompt(
+        's1',
+        'see @src/a.ts',
+        [],
+        [
+          {
+            kind: 'file',
+            label: 'src/a.ts',
+            uri: 'file:///workspace/demo/src/a.ts',
+            start: 4,
+            end: 13,
+          },
+        ],
+      ),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(callSpy(first.session, 'sendPrompt')).toHaveBeenCalledWith(
+      'see @src/a.ts',
+      [
+        expect.objectContaining({
+          start: 4,
+          end: 13,
+          ref: expect.objectContaining({
+            kind: 'file',
+            label: 'src/a.ts',
+            uri: 'file:///workspace/demo/src/a.ts',
+          }),
+        }),
+      ],
+      undefined,
+      [],
+      [],
+    )
+  })
+
+  it('converts docs refs using the real docs roots', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    const first = makeSession('s1')
+    harness.add(first)
+    const dirPath = '/docs/user/zh-CN'
+
+    await expect(
+      harness.service.sendPrompt(
+        's1',
+        '#Editor User Guide',
+        [],
+        [
+          {
+            kind: 'docs',
+            label: 'Editor User Guide',
+            uri: URI.file(dirPath).toString(),
+            dirPath,
+            start: 0,
+            end: 18,
+          },
+        ],
+      ),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(harness.docs.getDocsRoot).toHaveBeenCalledWith('user')
+    expect(callSpy(first.session, 'sendPrompt')).toHaveBeenCalledWith(
+      '#Editor User Guide',
+      [
+        expect.objectContaining({
+          ref: expect.objectContaining({
+            kind: 'docs',
+            meta: expect.objectContaining({ dirPath }),
+          }),
+        }),
+      ],
+      undefined,
+      [],
+      [],
+    )
+  })
+
+  it('rejects forged refs without dispatching the prompt', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    const first = makeSession('s1')
+    harness.add(first)
+
+    await expect(
+      harness.service.sendPrompt(
+        's1',
+        'see @src/a.ts',
+        [],
+        [
+          {
+            kind: 'file',
+            label: 'src/a.ts',
+            uri: 'file:///other/src/a.ts',
+            start: 4,
+            end: 13,
+          },
+        ],
+      ),
+    ).resolves.toMatchObject({ ok: false, code: 'bad_request' })
+    expect(callSpy(first.session, 'sendPrompt')).not.toHaveBeenCalled()
+  })
+
+  it('keeps attachments and refs in one prompt', async () => {
+    const harness = makeHarness()
+    harness.workspace.current = { folder: URI.file('/workspace/demo'), name: 'demo' }
+    const first = makeSession('s1')
+    harness.add(first)
+
+    await expect(
+      harness.service.sendPrompt(
+        's1',
+        '@src/a.ts',
+        [
+          {
+            kind: 'image',
+            id: 'a1',
+            name: 'shot.png',
+            mimeType: 'image/png',
+            byteSize: 3,
+            dataBase64: 'AAA=',
+          },
+        ],
+        [
+          {
+            kind: 'file',
+            label: 'src/a.ts',
+            uri: 'file:///workspace/demo/src/a.ts',
+            start: 0,
+            end: 9,
+          },
+        ],
+      ),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(callSpy(first.session, 'sendPrompt')).toHaveBeenCalledWith(
+      '@src/a.ts',
+      [expect.objectContaining({ start: 0, end: 9 })],
+      undefined,
+      [expect.objectContaining({ id: 'a1' })],
+      [],
+    )
   })
 
   it('rejects unknown sessions, read-only sessions and unknown ids', async () => {

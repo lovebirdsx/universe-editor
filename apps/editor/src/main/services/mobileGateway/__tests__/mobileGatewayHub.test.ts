@@ -1,11 +1,14 @@
 import { CancellationToken, Emitter, type ILogger } from '@universe-editor/platform'
 import {
+  DEFAULT_PROMPT_REF_SUGGESTIONS,
   MAX_SERVER_FRAME_BYTES,
   MAX_WORKSPACE_NAME_LENGTH,
   type MobileAgentCandidate,
   type MobileDeliveryDetail,
   type MobileDeliveryPreview,
   type MobileDeliveryStartResult,
+  type MobilePromptRef,
+  type MobilePromptRefSuggestion,
   type MobilePushBranchPreview,
   type MobilePushBranchResult,
   type MobileSessionRef,
@@ -87,6 +90,12 @@ class FakeBridge implements IMobileBridgeService {
   )
   readonly clearDraft = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly sendPrompt = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly searchPromptRefs = vi.fn(
+    async (): Promise<MobileBridgeResult<readonly MobilePromptRefSuggestion[]>> => ({
+      ok: true,
+      value: [],
+    }),
+  )
   readonly cancelTurn = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resolvePermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly cancelPermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
@@ -914,6 +923,77 @@ describe('MobileGatewayHub commands', () => {
     }
     expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', 'hello')
     expect(bridge.resolveElicitation).toHaveBeenCalledWith('s1', 'e1', 'accept', { name: 'Ada' })
+  })
+
+  it('routes prompt-ref completion, applies the default limit and clamps entries', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    bridge.searchPromptRefs.mockResolvedValue({
+      ok: true,
+      value: [
+        { kind: 'file', label: 'src/a.ts', uri: 'file:///w/src/a.ts' },
+        { kind: 'file', label: 'x'.repeat(600), uri: 'file:///w/big' },
+        {
+          kind: 'nope',
+          label: 'bad',
+          uri: 'file:///w/bad',
+        } as unknown as MobilePromptRefSuggestion,
+        { kind: 'docs', label: 'Docs', uri: 'file:///docs' },
+      ],
+    })
+
+    for (let round = 0; round < 2; round += 1) {
+      await hub.handleCommand(connection, {
+        type: 'command',
+        requestId: `search-${round}`,
+        kind: 'searchPromptRefs',
+        payload: { ref, trigger: '@', query: 'src' },
+        idempotencyKey: 'same-key',
+      })
+    }
+
+    // Read-only commands must not be served from the idempotency cache.
+    expect(bridge.searchPromptRefs).toHaveBeenCalledTimes(2)
+    expect(bridge.searchPromptRefs).toHaveBeenCalledWith(
+      's1',
+      '@',
+      'src',
+      DEFAULT_PROMPT_REF_SUGGESTIONS,
+    )
+    const frame = connection.frames.at(-1) as Extract<ServerFrame, { type: 'command_result' }>
+    expect(frame).toMatchObject({ type: 'command_result', requestId: 'search-1', ok: true })
+    const entries = (frame.result as { entries: readonly MobilePromptRefSuggestion[] }).entries
+    // Overlong identity fields, unknown kinds and docs without dirPath are
+    // dropped, never truncated: a clipped token could not be sent back.
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({
+      kind: 'file',
+      label: 'src/a.ts',
+      uri: 'file:///w/src/a.ts',
+    })
+  })
+
+  it('forwards structured prompt refs to the bridge', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    const refs: MobilePromptRef[] = [
+      { kind: 'file', label: 'src/a.ts', uri: 'file:///w/src/a.ts', start: 8, end: 17 },
+    ]
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'send',
+      kind: 'sendPrompt',
+      payload: { ref, text: 'look at @src/a.ts', refs },
+    })
+
+    expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', 'look at @src/a.ts', [], refs)
   })
 
   it('deletes a history row from every open window that owns it', async () => {

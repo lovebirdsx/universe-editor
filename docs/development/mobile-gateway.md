@@ -141,7 +141,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 19`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 20`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -172,7 +172,8 @@ ack（见 §7c）；v18 增加会话目录删除：`deleteHistorySession` 命令
 payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的行无入口），live 行优先走
 `deleteSession`（见 §6c）；v19 增加 `hello_ok.notificationPrefs`：握手时回传该设备已保存的通知
 偏好（`enabled` / `kinds?` / `alwaysNotify`，含 `enabled:false` 的记录），手机端据此回填设置抽屉，
-避免用默认值覆盖已保存偏好。
+避免用默认值覆盖已保存偏好。v20 增加输入框引用补全：只读命令 `searchPromptRefs` 与
+`sendPrompt.refs`（手机 `@` 文件 / `#` 符号、本地修改、打开的编辑器、文档，见 §7d）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, trusted, notificationPrefs? }`；`trusted` 表示 PC 是否已
@@ -204,7 +205,8 @@ Referer。
 | 分类        | kind                                     | payload                                                        | 说明                                                                                                              |
 | ----------- | ---------------------------------------- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | 详情        | `getToolCallDetail`                      | `{ ref, toolCallId }`                                          | 工具调用详情按需拉取                                                                                              |
-| 会话        | `sendPrompt`                             | `{ ref, text, attachmentIds?, draftImageIds?, draftFileIds? }` | 空文本 + 附件合法；`draftImageIds` / `draftFileIds` 指向已物化在 PC 草稿中的附件；桥在 prompt 被接受后立即返回    |
+| 会话        | `sendPrompt`                             | `{ ref, text, attachmentIds?, draftImageIds?, draftFileIds?, refs? }` | 空文本 + 附件合法；`draftImageIds` / `draftFileIds` 指向已物化在 PC 草稿中的附件；`refs` 为结构化 `@` / `#` 引用（见 §7d）；桥在 prompt 被接受后立即返回 |
+| 会话        | `searchPromptRefs`                       | `{ ref, trigger, query, limit? }`                              | 只读补全：`trigger` 为 `'@'` / `'#'`，`query` 最长 256，`limit` 默认 20、上限 50；返回 `{ entries }`（见 §7d） |
 | 会话        | `cancelTurn`                             | `{ ref }`                                                      | 停止当前 turn                                                                                                     |
 | 审批        | `resolvePermission`                      | `{ ref, requestId, optionId, feedback? }`                      | 高风险选项被拒                                                                                                    |
 | 审批        | `cancelPermission`                       | `{ ref, requestId }`                                           | 取消/关闭待审批卡片                                                                                               |
@@ -245,13 +247,15 @@ Referer。
 
 **幂等**：会修改状态的命令可带 `idempotencyKey`。网关在内存中缓存首个结果 5 分钟
 （`COMMAND_IDEMPOTENCY_TTL_MS`），并对同时到达的同 key 请求共享同一个 in-flight Promise；
-只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`）不缓存。客户端重试不会重复发
+只读命令（如 `getToolCallDetail`、`previewRewind`、`listSideTasks`、`listSessionHistory`、
+`searchPromptRefs`）不缓存。客户端重试不会重复发
 prompt、重复建会话或重复分叉。`forkSession` / `rewindSession` / `createSideTask` / `openSideTask` /
 `deleteSideTask` / `openSession` / `deleteHistorySession` 都按可修改状态命令处理；交付中的 `startDelivery` /
 `confirmDeliveryPush` / `retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree` 同样处理
 （`previewDelivery` / `getDelivery` 只读，不缓存）。
 
 **超时**：网关对每条命令设上限，避免坏桥挂死连接：`sendPrompt` 15s（附件读盘 + 桥转发），
+`searchPromptRefs` 10s（手机端 12s；桥内文件列表 5s、兜底搜索 3s、`#` provider 并行 6s），
 `cancelTurn` 5s；审批、配置、自动执行、重命名、`closeSession` 10s；`deleteSession` /
 `deleteHistorySession` / `newSession` / `previewRewind` 30s；`forkSession` / `rewindSession` /
 `createSideTask` / `openSideTask` / `deleteSideTask` 120s（要等 agent fork RPC 与 resume），
@@ -793,6 +797,74 @@ refs/contexts**。**光标 / 选区是每个客户端自己的 UI 状态，不�
   另一端显示 B 的永久分叉。
 - **敏感内容**：草稿不写日志、不进审计与推送；日志只记录长度 / revision / 附件数一类的摘要。
 - **兼容**：v17 与旧 PWA 不兼容，握手会因协议版本不匹配被拒绝；升级网关后手机需刷新页面。
+
+## 7d. 输入框引用补全（协议 v20）
+
+手机输入 `@`（工作区文件）或 `#`（符号 / 本地 Git 修改 / 打开的编辑器 / 文档）时，向 PC 拉取
+候选并展示；选中后把 token 插进正文，发送时把结构化 refs 一并交给 ACP。链路：
+
+```
+PWA Composer → searchPromptRefs 命令 → hub（10s）→ renderer 桥 MobilePromptRefSearch
+             → 桌面 headless provider（文件列表 / Symbol / SCM / OpenEditor / Docs）
+PWA sendPrompt.refs → hub → bridge.toPlacedMobileRefs → PlacedRef[] → AcpSession.sendPrompt
+             → composePromptBlocksFromRefs → ACP prompt blocks
+```
+
+**wire 形状**
+
+```ts
+MobilePromptRefSuggestion { kind: 'file'|'symbol'|'scmChange'|'openEditor'|'docs',
+  label, uri, description?, line?, column?, symbolKind?, scmStatus?, dirPath? }
+MobilePromptRef = MobilePromptRefSuggestion & { start, end }
+SearchPromptRefsPayload { ref, trigger: '@'|'#', query, limit? }
+MobilePromptRefSuggestionsResult { entries: MobilePromptRefSuggestion[] }
+```
+
+`label` 是插进正文的文本（文件为 workspace 相对路径；其它为 pill 文本，可含空格）；`uri` 只用于
+回传与 PC 侧校验，手机不展示。`dirPath` 仅 docs 必填。
+
+**搜索（renderer `promptRefSearch.ts`）**
+
+- `@`：`loadWorkspaceFiles(scope.root, ...)` + `filterMentionFiles`；文件过多被截断时，再用
+  `fileSearch.search` 兜底（非空 query 走 scored；空 query 用 `matchAll: true`），按 uri 去重后
+  截断到 limit。
+- `#`：四个桌面 headless provider 并行；`scope.narrowed`（会话 cwd 在 workspace 子目录）时
+  symbol / scmChange / openEditor 按 `URI.isEqualOrParent` 过滤，docs 不过滤。单组失败 / 超时只
+  丢该组，返回顺序按数量升序、并列保持 symbol → scmChange → openEditor → docs。
+- 会话只读时仍可查询（只读不写）；会话找不到时回 `session_not_found`，会话没有可用 workspace
+  时返回空列表；输出清洗控制字符，身份字段（label / uri / dirPath）超限时直接丢弃该条，不做
+  截断（截断后的 token 回传必然无法通过桥校验），只有展示用的 description / scmStatus 允许裁剪。
+- 网关再对桥返回值做一次 clamp：最多 50 条，丢弃未知 kind / 空值 / 超长或含控制字符的身份字段。
+
+**发送校验（renderer `mobilePromptRefs.ts`）**
+
+协议层先做一次：`start` / `end` 整数且 `text.slice(start, end) === promptRefPrefix(kind) + label`，
+按 start 排序后不重叠；file label 拒绝绝对路径、反斜杠与 `..`；docs 必须带 `dirPath`。
+
+桥层复检（协议包不知道 workspace）：
+
+- file：用 `URI.joinPath(mentionRoot, label)` 重建 URI，与回传 uri 比对路径身份键；
+- symbol / scmChange / openEditor：scheme + authority 必须与 workspace 根一致，且必须落在
+  `mentionRoot` 之下（会话收窄时 `mentionRoot` 即 `session.cwd`，未收窄时为 workspace 根）；
+- docs：`dirPath` 必须在 `IDocsService.getDocsRoot('user' | 'extensionDev')` 之下，且与 uri 一致。
+
+任一失败回 `bad_request`，不调用 `session.sendPrompt`。通过后按桌面同款映射：
+file / openEditor / scmChange → `resource_link`，symbol / docs → `text`（line/column 与目录说明
+只有 text block 能原样传给 agent）。
+
+**手机交互（`Composer.tsx` / `PromptRefPanel.tsx`）**
+
+- 面板优先级 `/` > `#` > `@`；150ms 防抖，递增 seq 丢弃过期响应；IME 合成期间不查询，
+  composition end 后补一次。
+- 接受时用区间（`start`/`end`）替换 token，不按 label 重新扫描，因此含空格的符号 / docs label
+  也能正确处理；后续文本编辑按 common prefix/suffix 平移已放置区间，与编辑相交的 token 丢弃。
+- 发送前用 `collectPlacedRefs` 复检每个区间切片，失效的 ref 不发送。成功后清空文本 / refs；
+  失败保留原稿。
+- 草稿：refs 只写手机 sessionStorage（用于重挂载），**不进入 `MobileDraftPayload`**，PC 草稿里
+  不会出现引用药丸；PC 改文本时手机清空本地区间。坏数据 / 切片不匹配的 refs 读取时丢弃。
+- 限制：单条 prompt 最多 32 个 ref；label / description 512、uri / dirPath 1024、query 256、
+  候选 50。v1 不支持文件夹、commit 两步选择、扩展 chatContext、编辑选区上下文。
+- v20 与旧 PWA 不兼容，握手精确匹配版本；升级网关后手机需刷新页面。
 
 ## 8. 配对与安全
 

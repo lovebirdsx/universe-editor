@@ -20,6 +20,10 @@ import type {
   MobilePushBranchPreview,
   MobilePushBranchResult,
   MobilePushSubscription,
+  MobilePromptRef,
+  MobilePromptRefSuggestion,
+  MobilePromptRefSuggestionsResult,
+  MobilePromptRefTrigger,
   MobileRewindPreview,
   MobileRewindResult,
   MobileSessionHistoryEntry,
@@ -33,6 +37,7 @@ import type {
   ServerFrame,
   SessionSnapshotFrame,
 } from '@universe-editor/mobile-protocol'
+import { MAX_PROMPT_REF_QUERY_LENGTH } from '@universe-editor/mobile-protocol'
 import type { StoredCredentials } from '../credentials.js'
 import {
   MobileSocket,
@@ -53,6 +58,7 @@ import {
   isMobileDeliveryDetail,
   isMobileDeliveryPreview,
   isMobileDeliveryStartResult,
+  isMobilePromptRefSuggestionsResult,
   isMobilePushBranchPreview,
   isMobilePushBranchResult,
   isMobileRewindPreview,
@@ -378,6 +384,7 @@ export class MobileClient {
     attachmentIds?: readonly string[],
     draftImageIds?: readonly string[],
     draftFileIds?: readonly string[],
+    refs?: readonly MobilePromptRef[],
   ): Promise<void> {
     return this._sessionCommand('sendPrompt', (ref) => ({
       ref,
@@ -385,7 +392,26 @@ export class MobileClient {
       ...(attachmentIds !== undefined && attachmentIds.length > 0 ? { attachmentIds } : {}),
       ...(draftImageIds !== undefined && draftImageIds.length > 0 ? { draftImageIds } : {}),
       ...(draftFileIds !== undefined && draftFileIds.length > 0 ? { draftFileIds } : {}),
+      ...(refs !== undefined && refs.length > 0 ? { refs } : {}),
     }))
+  }
+
+  /** Read-only `@` / `#` completion for the open session. */
+  searchPromptRefs(
+    trigger: MobilePromptRefTrigger,
+    query: string,
+    limit = 20,
+  ): Promise<readonly MobilePromptRefSuggestion[]> {
+    return this._sessionCommandValue<MobilePromptRefSuggestionsResult>(
+      'searchPromptRefs',
+      (ref) => ({
+        ref,
+        trigger,
+        query: query.slice(0, MAX_PROMPT_REF_QUERY_LENGTH),
+        limit,
+      }),
+      isMobilePromptRefSuggestionsResult,
+    ).then((result) => result.entries)
   }
 
   /**

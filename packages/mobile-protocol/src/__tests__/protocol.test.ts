@@ -238,6 +238,61 @@ describe('parseClientFrame', () => {
         kind: 'sendPrompt',
         payload: { ref: REF, text: '', draftImageIds: ['img-1'], draftFileIds: ['file-1'] },
       },
+      { kind: 'searchPromptRefs', payload: { ref: REF, trigger: '@', query: 'src' } },
+      { kind: 'searchPromptRefs', payload: { ref: REF, trigger: '#', query: '', limit: 20 } },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'look at @src/a.ts',
+          refs: [
+            {
+              kind: 'file',
+              label: 'src/a.ts',
+              uri: 'file:///workspace/demo/src/a.ts',
+              start: 8,
+              end: 17,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'ask #Foo',
+          refs: [
+            {
+              kind: 'symbol',
+              label: 'Foo',
+              uri: 'file:///workspace/demo/src/a.ts',
+              description: 'src/a.ts:3',
+              line: 3,
+              column: 1,
+              symbolKind: 11,
+              start: 4,
+              end: 8,
+            },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Editor User Guide',
+          refs: [
+            {
+              kind: 'docs',
+              label: 'Editor User Guide',
+              uri: 'file:///opt/docs/zh-CN',
+              dirPath: '/opt/docs/zh-CN',
+              start: 0,
+              end: 18,
+            },
+          ],
+        },
+      },
       { kind: 'cancelTurn', payload: { ref: REF } },
       {
         kind: 'resolvePermission',
@@ -350,6 +405,78 @@ describe('parseClientFrame', () => {
       { kind: 'sendPrompt', payload: { ref: REF, text: '', draftImageIds: 'img-1' } },
       { kind: 'sendPrompt', payload: { ref: REF, text: '', draftFileIds: ['file-1', 'file-1'] } },
       { kind: 'sendPrompt', payload: { ref: REF, text: '', draftImageIds: ['img-1', 'img-1'] } },
+      { kind: 'searchPromptRefs', payload: { ref: REF, trigger: '!', query: '' } },
+      { kind: 'searchPromptRefs', payload: { ref: REF, trigger: '@', query: 'x'.repeat(257) } },
+      { kind: 'searchPromptRefs', payload: { ref: REF, trigger: '@', query: '', limit: 0 } },
+      { kind: 'searchPromptRefs', payload: { ref: REF, trigger: '@', query: '', limit: 1.5 } },
+      { kind: 'searchPromptRefs', payload: { ref: REF, trigger: '@', query: '', limit: 51 } },
+      { kind: 'sendPrompt', payload: { ref: REF, text: 'hi @a', refs: 'nope' } },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'hi @a',
+          refs: [{ kind: 'folder', label: 'a', uri: 'file:///w/a', start: 3, end: 5 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'hi @a',
+          refs: [{ kind: 'file', label: 'b', uri: 'file:///w/a', start: 3, end: 5 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'hi @a',
+          refs: [{ kind: 'file', label: 'a', uri: 'file:///w/a', start: 3, end: 99 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'hi @a',
+          refs: [{ kind: 'file', label: 'a', uri: 'file:///w/a', start: 4, end: 4 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'hi @a',
+          refs: [{ kind: 'file', label: '../a', uri: 'file:///w/a', start: 3, end: 5 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'hi @a',
+          refs: [{ kind: 'file', label: 'a', uri: 'file:///w/a', start: 4, end: 5 }],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: 'hi @a',
+          refs: [
+            { kind: 'file', label: 'a', uri: 'file:///w/a', start: 3, end: 5, description: 'x\ny' },
+          ],
+        },
+      },
+      {
+        kind: 'sendPrompt',
+        payload: {
+          ref: REF,
+          text: '#Doc',
+          refs: [{ kind: 'docs', label: 'Doc', uri: 'file:///docs', start: 0, end: 4 }],
+        },
+      },
       { kind: 'resolvePermission', payload: { ref: REF, optionId: 'allow' } },
       {
         kind: 'resolveElicitation',
@@ -417,6 +544,48 @@ describe('parseClientFrame', () => {
         ),
       ).toBe('bad_request')
     }
+  })
+
+  it('normalizes an empty refs array and caps prompt refs', () => {
+    expect(
+      parseClientFrame(
+        JSON.stringify({
+          type: 'command',
+          requestId: 'r',
+          kind: 'sendPrompt',
+          payload: { ref: REF, text: 'hello', refs: [] },
+        }),
+      ),
+    ).toStrictEqual({
+      ok: true,
+      value: {
+        type: 'command',
+        requestId: 'r',
+        kind: 'sendPrompt',
+        payload: { ref: REF, text: 'hello' },
+      },
+    })
+
+    const tokens = Array.from({ length: 33 }, (_, index) => `@f${index}`)
+    const text = tokens.join(' ')
+    let cursor = 0
+    const refs = tokens.map((token, index) => {
+      const start = text.indexOf(token, cursor)
+      cursor = start + token.length
+      return { kind: 'file', label: `f${index}`, uri: `file:///w/f${index}`, start, end: cursor }
+    })
+    expect(
+      errorCode(
+        parseClientFrame(
+          JSON.stringify({
+            type: 'command',
+            requestId: 'r',
+            kind: 'sendPrompt',
+            payload: { ref: REF, text, refs },
+          }),
+        ),
+      ),
+    ).toBe('bad_request')
   })
 
   it('rejects non-JSON and non-object payloads', () => {

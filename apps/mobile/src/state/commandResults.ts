@@ -1,8 +1,17 @@
 import {
+  MAX_PROMPT_REF_DESCRIPTION_LENGTH,
+  MAX_PROMPT_REF_DIR_PATH_LENGTH,
+  MAX_PROMPT_REF_LABEL_LENGTH,
+  MAX_PROMPT_REF_STATUS_LENGTH,
+  MAX_PROMPT_REF_SUGGESTIONS,
+  MAX_PROMPT_REF_URI_LENGTH,
   MOBILE_DELIVERY_PHASES,
+  MOBILE_PROMPT_REF_KINDS,
   type MobileDeliveryDetail,
   type MobileDeliveryPreview,
   type MobileDeliveryStartResult,
+  type MobilePromptRefSuggestion,
+  type MobilePromptRefSuggestionsResult,
   type MobilePushBranchPreview,
   type MobilePushBranchResult,
   type MobileRewindPreview,
@@ -29,6 +38,18 @@ function isNonEmptyString(value: unknown): value is string {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+}
+
+function isBoundedString(value: unknown, max: number): value is string {
+  return typeof value === 'string' && value.length <= max
+}
+
+function isBoundedNonEmptyString(value: unknown, max: number): value is string {
+  return isNonEmptyString(value) && value.length <= max
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -204,5 +225,50 @@ export function isMobilePushBranchResult(value: unknown): value is MobilePushBra
     isNonEmptyString(value['remoteBranch']) &&
     isNonEmptyString(value['head']) &&
     typeof value['published'] === 'boolean'
+  )
+}
+
+export function isMobilePromptRefSuggestion(value: unknown): value is MobilePromptRefSuggestion {
+  if (!isRecord(value)) return false
+  const kind = value['kind']
+  if (typeof kind !== 'string' || !(MOBILE_PROMPT_REF_KINDS as readonly string[]).includes(kind)) {
+    return false
+  }
+  if (!isBoundedNonEmptyString(value['label'], MAX_PROMPT_REF_LABEL_LENGTH)) return false
+  if (!isBoundedNonEmptyString(value['uri'], MAX_PROMPT_REF_URI_LENGTH)) return false
+  const description = value['description']
+  if (
+    description !== undefined &&
+    !isBoundedString(description, MAX_PROMPT_REF_DESCRIPTION_LENGTH)
+  ) {
+    return false
+  }
+  const scmStatus = value['scmStatus']
+  if (
+    scmStatus !== undefined &&
+    !isBoundedNonEmptyString(scmStatus, MAX_PROMPT_REF_STATUS_LENGTH)
+  ) {
+    return false
+  }
+  const dirPath = value['dirPath']
+  if (dirPath !== undefined && !isBoundedNonEmptyString(dirPath, MAX_PROMPT_REF_DIR_PATH_LENGTH)) {
+    return false
+  }
+  for (const key of ['line', 'column'] as const) {
+    if (value[key] !== undefined && !isPositiveInteger(value[key])) return false
+  }
+  if (value['symbolKind'] !== undefined && !isNonNegativeInteger(value['symbolKind'])) return false
+  // A docs entry without its directory cannot be validated or forwarded.
+  return kind !== 'docs' || isNonEmptyString(dirPath)
+}
+
+export function isMobilePromptRefSuggestionsResult(
+  value: unknown,
+): value is MobilePromptRefSuggestionsResult {
+  return (
+    isRecord(value) &&
+    Array.isArray(value['entries']) &&
+    value['entries'].length <= MAX_PROMPT_REF_SUGGESTIONS &&
+    value['entries'].every(isMobilePromptRefSuggestion)
   )
 }

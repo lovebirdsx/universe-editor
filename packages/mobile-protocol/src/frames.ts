@@ -368,6 +368,7 @@ export interface UnsubscribeSessionFrame {
  */
 export const MOBILE_COMMAND_KINDS = [
   'getToolCallDetail',
+  'searchPromptRefs',
   'sendPrompt',
   'cancelTurn',
   'resolvePermission',
@@ -409,6 +410,62 @@ export interface GetToolCallDetailPayload {
   toolCallId: string
 }
 
+export const MOBILE_PROMPT_REF_KINDS = [
+  'file',
+  'symbol',
+  'scmChange',
+  'openEditor',
+  'docs',
+] as const
+export type MobilePromptRefKind = (typeof MOBILE_PROMPT_REF_KINDS)[number]
+
+export const MOBILE_PROMPT_REF_TRIGGERS = ['@', '#'] as const
+export type MobilePromptRefTrigger = (typeof MOBILE_PROMPT_REF_TRIGGERS)[number]
+
+/** The trigger char a ref kind is authored with; file mentions use `@`. */
+export function promptRefPrefix(kind: MobilePromptRefKind): MobilePromptRefTrigger {
+  return kind === 'file' ? '@' : '#'
+}
+
+/** One `@` / `#` completion row. `label` is the text after the trigger. */
+export interface MobilePromptRefSuggestion {
+  kind: MobilePromptRefKind
+  /** For `file` this is the workspace-relative path; otherwise the pill label. */
+  label: string
+  /** Absolute resource URI produced by the PC provider. */
+  uri: string
+  /** Display-only secondary line. */
+  description?: string
+  /** `symbol`: 1-based location. */
+  line?: number
+  column?: number
+  symbolKind?: number
+  /** `scmChange`: single status letter. */
+  scmStatus?: string
+  /** `docs`: native fs path of the locale directory. */
+  dirPath?: string
+}
+
+/** A suggestion placed at a character range in the prompt text. */
+export interface MobilePromptRef extends MobilePromptRefSuggestion {
+  /** Offset of the leading `@`/`#` (inclusive). */
+  start: number
+  /** One past the last label character (exclusive). */
+  end: number
+}
+
+export interface SearchPromptRefsPayload {
+  ref: MobileSessionRef
+  trigger: MobilePromptRefTrigger
+  /** Text after the trigger up to the first whitespace; may be empty. */
+  query: string
+  limit?: number
+}
+
+export interface MobilePromptRefSuggestionsResult {
+  entries: readonly MobilePromptRefSuggestion[]
+}
+
 export interface SendPromptPayload {
   ref: MobileSessionRef
   /** Capped by MAX_PROMPT_LENGTH; may be empty when attachments are present. */
@@ -419,6 +476,8 @@ export interface SendPromptPayload {
   draftImageIds?: readonly string[]
   /** Draft file ids already materialized in the PC draft (another phone's upload). */
   draftFileIds?: readonly string[]
+  /** Structured `@` / `#` references whose ranges match tokens inside `text`. */
+  refs?: readonly MobilePromptRef[]
 }
 
 export interface CancelTurnPayload {
