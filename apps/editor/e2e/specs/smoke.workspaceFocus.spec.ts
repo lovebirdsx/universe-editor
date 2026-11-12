@@ -10,7 +10,7 @@ import { mkTempDir } from '@universe-editor/e2e-harness'
 const EXPLORER_TREE = 'workbench.view.explorer.tree'
 
 test.describe('@p1 workspace focus restore', () => {
-  test('focuses Explorer so physical Ctrl+P opens quick access with no editors', async ({
+  test('focuses Explorer so physical shortcuts stay usable with no editors', async ({
     page,
     workbench,
   }) => {
@@ -42,7 +42,10 @@ test.describe('@p1 workspace focus restore', () => {
     await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(EXPLORER_TREE)
     await expect.poll(() => workbench.getContextKey<boolean>('terminalFocus')).toBe(false)
 
-    await page.keyboard.press('Control+P')
+    // Ctrl+P now steps the focused Explorer tree (see smoke.explorerSelection),
+    // so the palette proves the dispatcher still receives physical shortcuts;
+    // terminalFocus === false above guards the original regression.
+    await page.keyboard.press('Control+Shift+P')
     await workbench.quickInput.waitForVisible()
     await expect(workbench.quickInput.input).toBeFocused()
   })
