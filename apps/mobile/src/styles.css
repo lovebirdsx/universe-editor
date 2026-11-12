@@ -2642,6 +2642,77 @@ input:focus-visible {
   font-size: 12px;
 }
 
+.subagent-restart-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.subagent-restart-hint button,
+.mcp-sheet__state button {
+  flex: none;
+  padding: 6px 10px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mcp-sheet__state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mcp-servers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcp-server-row__name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mcp-status-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.mcp-status-dot[data-tone='ok'] {
+  background: var(--success);
+}
+
+.mcp-status-dot[data-tone='error'] {
+  background: var(--danger);
+}
+
+.mcp-status-dot[data-tone='pending'] {
+  background: var(--warning);
+}
+
+.mcp-default-badge {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Composer ----------------------------------------------------------------- */
 
 .composer {

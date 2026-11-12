@@ -227,6 +227,30 @@ export function agentIdToMcpAffinity(agentId: string | undefined): McpAgentAffin
 }
 
 /**
+ * Narrow the union pool mirror to what THIS session can actually wire: shared
+ * definitions plus the ones whose `agentAffinity` matches the session's agent
+ * (a definition without an affinity is shared). The mirror is the union across
+ * agents so the AI settings panel can badge every source; a claude-code
+ * session must neither display nor pin a codex-only entry — the wire filter
+ * would silently drop it and the pinned name could never come back.
+ * `sharedWith` rows stay visible for every agent that defines the name: the
+ * union shows one row per name, so without this a codex+claude shared name
+ * would vanish from the loser's picker even though its layers do wire it.
+ */
+export function filterPoolForSession(
+  pool: readonly McpServerDefinition[],
+  agentId: string | undefined,
+): readonly McpServerDefinition[] {
+  const affinity = agentIdToMcpAffinity(agentId)
+  return pool.filter(
+    (d) =>
+      d.agentAffinity === undefined ||
+      d.agentAffinity === affinity ||
+      (affinity !== undefined && d.sharedWith?.includes(affinity) === true),
+  )
+}
+
+/**
  * One settings layer contributing to `acp.mcpServers`, lowest priority first.
  * `source` is the pool attribution a server gets when THIS layer wins its name.
  */

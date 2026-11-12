@@ -33,6 +33,7 @@ import type {
   MobileRewindResult,
   MobileSessionBucket,
   MobileSessionEvent,
+  MobileSessionSettings,
   MobileSessionSnapshot,
   MobileSideTaskSummary,
   MobileToolCallDetail,
@@ -664,6 +665,28 @@ export interface IMobileBridgeService {
     value: string | boolean,
     /** Computed by main from the connection's trusted-device state. */
     allowHighRisk: boolean,
+  ): Promise<MobileBridgeResult<void>>
+
+  /**
+   * On-demand session settings. The subagent value comes from an async
+   * `settings.json` read on the session's host, so it is not part of the
+   * observable snapshot stream.
+   */
+  getSessionSettings(localId: string): Promise<MobileBridgeResult<MobileSessionSettings>>
+
+  /**
+   * Write the subagent model env pair (`CLAUDE_CODE_SUBAGENT_MODEL` +
+   * `_FORCE`) into the session host's settings file. `null` clears both.
+   */
+  setSubagentModel(localId: string, model: string | null): Promise<MobileBridgeResult<void>>
+
+  /** Respawn the agent process so spawn-time env (subagent model) is re-read. */
+  restartAgentProcess(localId: string): Promise<MobileBridgeResult<void>>
+
+  /** Pin this session's MCP whitelist; `null` restores the default set. */
+  setSessionMcpServers(
+    localId: string,
+    servers: readonly string[] | null,
   ): Promise<MobileBridgeResult<void>>
 
   pauseAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>>

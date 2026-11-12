@@ -215,6 +215,7 @@ function makeSession(
     recoveryState: observableValue('recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),
+    isReconnecting: false,
     requestProcessRestart: () => {},
     configObs,
   } satisfies FakeSession

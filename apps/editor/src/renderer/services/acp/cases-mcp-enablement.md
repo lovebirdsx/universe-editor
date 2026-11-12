@@ -24,7 +24,7 @@ union 仍是**每 name 一行**，行 affinity 取最后合并的 agent 层。�
 
 ## UI 消费 per-agent 视图的统一入口
 
-`filterPoolForSession(pool, agentId)`（`workbench/agents/McpServerPicker.tsx` 导出）：picker / ConfigOptionsBar / ConfigBarOverflowMenu 三处把 union 镜像过滤成当前会话视图；picker 触发器可见性用 **unionPool** 判定（他 agent 条目存在时触发器仍显示，计数显示 0/0）。agent 专属条目在 UI 上带 affinity 徽标（`claude` / `codex` + tooltip「仅 Claude Code / Codex 会话生效」）；AI 设置面板的 agent 徽标点击经 `configPath()` 打开对应配置文件（只读文件，不走编辑对话框）。
+`filterPoolForSession(pool, agentId)`（`services/acp/acpMcpServers.ts` 导出；`McpServerPicker.tsx` 转出以保持既有 import）：picker / ConfigOptionsBar / ConfigBarOverflowMenu 三处把 union 镜像过滤成当前会话视图，手机网关桥（`MobileBridgeService.getSessionSettings` / `setSessionMcpServers`）也用同一函数；picker 触发器可见性用 **unionPool** 判定（他 agent 条目存在时触发器仍显示，计数显示 0/0）。agent 专属条目在 UI 上带 affinity 徽标（`claude` / `codex` + tooltip「仅 Claude Code / Codex 会话生效」）；AI 设置面板的 agent 徽标点击经 `configPath()` 打开对应配置文件（只读文件，不走编辑对话框）。
 
 ## 扩展贡献层
 

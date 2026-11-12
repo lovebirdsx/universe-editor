@@ -376,6 +376,10 @@ export const MOBILE_COMMAND_KINDS = [
   'cancelPermission',
   'resolveElicitation',
   'setConfigOption',
+  'getSessionSettings',
+  'setSubagentModel',
+  'restartAgentProcess',
+  'setSessionMcpServers',
   'pauseAutoResolve',
   'resumeAutoResolve',
   'newSession',
@@ -555,6 +559,73 @@ export interface SetConfigOptionPayload {
   ref: MobileSessionRef
   configId: string
   value: string | boolean
+}
+
+/** On-demand session settings; the subagent value is an async file read, not a stream event. */
+export interface GetSessionSettingsPayload {
+  ref: MobileSessionRef
+}
+
+export const MAX_SUBAGENT_MODEL_CANDIDATES = 64
+export const MAX_MCP_SERVERS = 100
+export const MOBILE_MCP_TRANSPORTS = ['stdio', 'http', 'sse'] as const
+export type MobileMcpTransport = (typeof MOBILE_MCP_TRANSPORTS)[number]
+
+export interface SetSubagentModelPayload {
+  ref: MobileSessionRef
+  /** null = follow the session model (clears the model + force env pair). */
+  model: string | null
+}
+
+export interface RestartAgentProcessPayload {
+  ref: MobileSessionRef
+}
+
+export interface SetSessionMcpServersPayload {
+  ref: MobileSessionRef
+  /** null = follow the defaults (every pool entry that is not default-disabled). */
+  servers: readonly string[] | null
+}
+
+export interface MobileSubagentModelSettings {
+  /** True only for claude-code sessions. */
+  supported: boolean
+  /** Effective `env.CLAUDE_CODE_SUBAGENT_MODEL` on the session's host; null = inherit. */
+  current: string | null
+  /** The session's model catalogue plus the current value, deduped. */
+  candidates: readonly string[]
+}
+
+export interface MobileMcpServerEntry {
+  name: string
+  transport: MobileMcpTransport
+  /** Desktop `McpServerDefinition.disabled`: off by default, usable when pinned. */
+  defaultDisabled: boolean
+}
+
+export interface MobileMcpServerLiveStatus {
+  name: string
+  /** Raw agent status string (`connected` / `failed` / `needs-auth` / `pending` …). */
+  status: string
+  transport?: MobileMcpTransport
+}
+
+export interface MobileMcpSessionSettings {
+  /** Union pool narrowed to this session's agent. */
+  pool: readonly MobileMcpServerEntry[]
+  /** Session-level whitelist; null = follow the defaults. */
+  selection: readonly string[] | null
+  /** Names that would run now, in pool order. */
+  enabled: readonly string[]
+  /** Connection state reported by the agent; servers it never reported are absent. */
+  live: readonly MobileMcpServerLiveStatus[]
+}
+
+export interface MobileSessionSettings {
+  /** False for read-only sessions (side tasks); the phone hides every writer then. */
+  canEdit: boolean
+  subagentModel: MobileSubagentModelSettings
+  mcp: MobileMcpSessionSettings
 }
 
 export interface AutoResolveControlPayload {

@@ -44,7 +44,11 @@ import {
   type CommandFrame,
   type DraftUpdateFrame,
   type GetNewSessionOptionsPayload,
+  type GetSessionSettingsPayload,
   type ListDirectoryPayload,
+  type RestartAgentProcessPayload,
+  type SetSessionMcpServersPayload,
+  type SetSubagentModelPayload,
   type MobileAgentCandidate,
   type MobileAttentionKind,
   type MobileDeliveryExpectation,
@@ -315,6 +319,11 @@ const HISTORY_WINDOW_READY_TIMEOUT_MS = 5_000
 const HISTORY_LIST_TIMEOUT_MS = 8_000
 /** Reading a closed workspace bucket is a local small-file read. */
 const HISTORY_DISK_READ_TIMEOUT_MS = 2_000
+/** Session settings read a settings file (possibly on a remote host) plus the MCP pool. */
+const SESSION_SETTINGS_TIMEOUT_MS = 20_000
+const SUBAGENT_MODEL_WRITE_TIMEOUT_MS = 30_000
+const RESTART_PROCESS_TIMEOUT_MS = 10_000
+const SESSION_MCP_WRITE_TIMEOUT_MS = 10_000
 /** Limit concurrent local bucket reads while building the catalog. */
 const HISTORY_DISK_READ_CONCURRENCY = 4
 /** Ownership probe before resuming; a wrong window answers `false` quickly. */
@@ -335,6 +344,9 @@ const MUTATING_COMMAND_KINDS: ReadonlySet<string> = new Set([
   'cancelPermission',
   'resolveElicitation',
   'setConfigOption',
+  'setSubagentModel',
+  'restartAgentProcess',
+  'setSessionMcpServers',
   'pauseAutoResolve',
   'resumeAutoResolve',
   // Semantically read-only, but it can open a picker on the PC; the idempotency
@@ -1343,6 +1355,30 @@ export class MobileGatewayHub {
         }
         return this._sessionCommand(p.ref, 10_000, (bridge, localId) =>
           bridge.setConfigOption(localId, p.configId, p.value, sender.trusted),
+        )
+      }
+      case 'getSessionSettings': {
+        const p = frame.payload as GetSessionSettingsPayload
+        return this._sessionCommand(p.ref, SESSION_SETTINGS_TIMEOUT_MS, (bridge, localId) =>
+          bridge.getSessionSettings(localId),
+        )
+      }
+      case 'setSubagentModel': {
+        const p = frame.payload as SetSubagentModelPayload
+        return this._sessionCommand(p.ref, SUBAGENT_MODEL_WRITE_TIMEOUT_MS, (bridge, localId) =>
+          bridge.setSubagentModel(localId, p.model),
+        )
+      }
+      case 'restartAgentProcess': {
+        const p = frame.payload as RestartAgentProcessPayload
+        return this._sessionCommand(p.ref, RESTART_PROCESS_TIMEOUT_MS, (bridge, localId) =>
+          bridge.restartAgentProcess(localId),
+        )
+      }
+      case 'setSessionMcpServers': {
+        const p = frame.payload as SetSessionMcpServersPayload
+        return this._sessionCommand(p.ref, SESSION_MCP_WRITE_TIMEOUT_MS, (bridge, localId) =>
+          bridge.setSessionMcpServers(localId, p.servers),
         )
       }
       case 'pauseAutoResolve': {

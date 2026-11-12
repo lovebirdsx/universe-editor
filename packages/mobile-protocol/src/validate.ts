@@ -100,6 +100,7 @@ import type {
   UnsubscribeSessionFrame,
 } from './frames.js'
 import {
+  MAX_MCP_SERVERS,
   MOBILE_ATTENTION_KINDS,
   MOBILE_CONFIG_OPTION_TYPES,
   MOBILE_DELIVERY_PHASES,
@@ -883,6 +884,13 @@ function parseCommandPayload(kind: string, value: unknown): Result<unknown> {
       return parseResolveElicitationPayload(value)
     case 'setConfigOption':
       return parseSetConfigOptionPayload(value)
+    case 'getSessionSettings':
+    case 'restartAgentProcess':
+      return parseRefOnlyPayload(value, kind)
+    case 'setSubagentModel':
+      return parseSetSubagentModelPayload(value)
+    case 'setSessionMcpServers':
+      return parseSetSessionMcpServersPayload(value)
     case 'pauseAutoResolve':
     case 'resumeAutoResolve':
       return parseRequestRefPayload(value, kind)
@@ -1735,6 +1743,46 @@ function parseSetConfigOptionPayload(value: unknown): Result<{
     return fail('bad_request', 'setConfigOption.value must be a boolean or a short string')
   }
   return ok({ ref: ref.value, configId, value: configValue })
+}
+
+function parseSetSubagentModelPayload(value: unknown): Result<{
+  ref: MobileSessionRef
+  model: string | null
+}> {
+  if (!isRecord(value)) return fail('bad_request', 'setSubagentModel.payload must be an object')
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  if (value.model === null) return ok({ ref: ref.value, model: null })
+  if (!isNonEmptyBoundedString(value.model, MAX_TITLE_LENGTH)) {
+    return fail('bad_request', 'setSubagentModel.model must be null or a short model id')
+  }
+  return ok({ ref: ref.value, model: value.model })
+}
+
+function parseSetSessionMcpServersPayload(value: unknown): Result<{
+  ref: MobileSessionRef
+  servers: readonly string[] | null
+}> {
+  if (!isRecord(value)) {
+    return fail('bad_request', 'setSessionMcpServers.payload must be an object')
+  }
+  const ref = parseSessionRef(value.ref)
+  if (!ref.ok) return ref
+  if (value.servers === null) return ok({ ref: ref.value, servers: null })
+  if (!Array.isArray(value.servers)) {
+    return fail('bad_request', 'setSessionMcpServers.servers must be an array or null')
+  }
+  if (value.servers.length > MAX_MCP_SERVERS) {
+    return fail('bad_request', `setSessionMcpServers.servers supports at most ${MAX_MCP_SERVERS}`)
+  }
+  const servers: string[] = []
+  for (const entry of value.servers) {
+    if (!isNonEmptyBoundedString(entry, MAX_ID_LENGTH)) {
+      return fail('bad_request', 'setSessionMcpServers server names must be short strings')
+    }
+    servers.push(entry)
+  }
+  return ok({ ref: ref.value, servers })
 }
 
 function parseNewSessionPayload(value: unknown): Result<{

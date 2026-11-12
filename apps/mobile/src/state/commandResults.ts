@@ -1,6 +1,8 @@
 import {
   isValidCommitHash,
   MAX_COMMIT_PROMPT_REFS,
+  MAX_ID_LENGTH,
+  MAX_MCP_SERVERS,
   MAX_NEW_SESSION_PROJECT_ROOTS,
   MAX_PROMPT_REF_COMMIT_TEXT_LENGTH,
   MAX_PROMPT_REF_DESCRIPTION_LENGTH,
@@ -10,7 +12,11 @@ import {
   MAX_PROMPT_REF_SUGGESTIONS,
   MAX_PROMPT_REF_TEXT_LENGTH,
   MAX_PROMPT_REF_URI_LENGTH,
+  MAX_STATUS_LENGTH,
+  MAX_SUBAGENT_MODEL_CANDIDATES,
+  MAX_TITLE_LENGTH,
   MOBILE_DELIVERY_PHASES,
+  MOBILE_MCP_TRANSPORTS,
   MOBILE_PROMPT_REF_KINDS,
   parseWorkspaceRelativePath,
   type MobileDeliveryDetail,
@@ -30,6 +36,7 @@ import {
   type MobileSessionHistoryEntry,
   type MobileSessionRef,
   type MobileSessionRefResult,
+  type MobileSessionSettings,
   type MobileSideTaskSummary,
   type ResolvePromptRefResult,
 } from '@universe-editor/mobile-protocol'
@@ -453,4 +460,56 @@ export function isMobilePromptRefSuggestionsResult(
     value['entries'].length <= MAX_PROMPT_REF_SUGGESTIONS &&
     value['entries'].every(isMobilePromptRefSuggestion)
   )
+}
+
+function isMcpTransport(value: unknown): boolean {
+  return typeof value === 'string' && (MOBILE_MCP_TRANSPORTS as readonly string[]).includes(value)
+}
+
+function isMcpNameList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= MAX_MCP_SERVERS &&
+    value.every((entry) => isBoundedNonEmptyString(entry, MAX_ID_LENGTH))
+  )
+}
+
+export function isMobileSessionSettings(value: unknown): value is MobileSessionSettings {
+  if (!isRecord(value) || typeof value['canEdit'] !== 'boolean') return false
+
+  const subagent = value['subagentModel']
+  if (!isRecord(subagent) || typeof subagent['supported'] !== 'boolean') return false
+  const current = subagent['current']
+  if (current !== null && !isBoundedNonEmptyString(current, MAX_TITLE_LENGTH)) return false
+  const candidates = subagent['candidates']
+  if (
+    !Array.isArray(candidates) ||
+    candidates.length > MAX_SUBAGENT_MODEL_CANDIDATES ||
+    !candidates.every((entry) => isBoundedNonEmptyString(entry, MAX_TITLE_LENGTH))
+  ) {
+    return false
+  }
+
+  const mcp = value['mcp']
+  if (!isRecord(mcp)) return false
+  const pool = mcp['pool']
+  if (!Array.isArray(pool) || pool.length > MAX_MCP_SERVERS) return false
+  for (const entry of pool) {
+    if (!isRecord(entry)) return false
+    if (!isBoundedNonEmptyString(entry['name'], MAX_ID_LENGTH)) return false
+    if (!isMcpTransport(entry['transport'])) return false
+    if (typeof entry['defaultDisabled'] !== 'boolean') return false
+  }
+  const selection = mcp['selection']
+  if (selection !== null && !isMcpNameList(selection)) return false
+  if (!isMcpNameList(mcp['enabled'])) return false
+  const live = mcp['live']
+  if (!Array.isArray(live) || live.length > MAX_MCP_SERVERS) return false
+  for (const entry of live) {
+    if (!isRecord(entry)) return false
+    if (!isBoundedNonEmptyString(entry['name'], MAX_ID_LENGTH)) return false
+    if (!isBoundedString(entry['status'], MAX_STATUS_LENGTH)) return false
+    if (entry['transport'] !== undefined && !isMcpTransport(entry['transport'])) return false
+  }
+  return true
 }

@@ -35,9 +35,11 @@ import {
   isPreviewableImageMimeType,
   MAX_HISTORY_PROMPT_LENGTH,
   MAX_ID_LENGTH,
+  MAX_MCP_SERVERS,
   MAX_MESSAGE_IMAGE_BYTES,
   MAX_MESSAGE_IMAGE_INDEX,
   MAX_SIDE_TASK_QUOTE_LENGTH,
+  MAX_SUBAGENT_MODEL_CANDIDATES,
   MAX_TEXT_LENGTH,
   MAX_TITLE_LENGTH,
   MAX_WORKSPACE_IMAGE_BYTES,
@@ -51,6 +53,7 @@ import {
   type MobilePromptRefTrigger,
   type MobileRewindPreview,
   type MobileRewindResult,
+  type MobileSessionSettings,
   type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
   type MobileToolCallDetail,
@@ -125,6 +128,9 @@ import { mimeTypeForFileName, type PromptImage } from '../acp/promptImage.js'
 import type { PromptFileAttachment } from '../acp/promptAttachment.js'
 import { IUserSettingsSyncService } from '../configuration/UserSettingsSync.js'
 import { selectOptionHasValue } from '../acp/configOptionLabel.js'
+import { mergeModelCandidates, sessionModelCandidates } from '../acp/acpModelCandidates.js'
+import { filterPoolForSession, resolveMcpServerSelection } from '../acp/acpMcpServers.js'
+import { IClaudeConfigService } from '../../../shared/ipc/claudeConfigService.js'
 import { deleteSessionPlan, planSessionRemoval } from '../acp/session/sessionRemoval.js'
 import { deleteSideTasks } from '../acp/session/sideTaskRemoval.js'
 import { ISessionDeliveryService } from '../delivery/sessionDeliveryService.js'
@@ -186,6 +192,9 @@ export const MOBILE_DRAFT_THROTTLE_MS = 250
 export const MOBILE_DRAFT_ACK_TIMEOUT_MS = 2000
 /** Backstop for worktree changes made outside a session turn (manual PC edits). */
 export const MOBILE_PENDING_WORK_SWEEP_MS = 30_000
+
+const SUBAGENT_MODEL_ENV = 'CLAUDE_CODE_SUBAGENT_MODEL'
+const SUBAGENT_MODEL_FORCE_ENV = 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE'
 
 interface SessionStream {
   readonly localId: string
@@ -268,6 +277,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     @IDocsService private readonly _docs: IDocsService,
     @ICommandService private readonly _commands: ICommandService,
     @IChatContextService private readonly _chatContext: IChatContextService,
+    @IClaudeConfigService private readonly _claude: IClaudeConfigService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -1147,6 +1157,157 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       }
     }
     return this._run(localId, (live) => live.setConfigOption(configId, value))
+  }
+
+  async getSessionSettings(localId: string): Promise<MobileBridgeResult<MobileSessionSettings>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+
+    const supported = session.agentId === 'claude-code'
+    let current: string | null = null
+    let candidates: readonly string[] = []
+    if (supported) {
+      let settings: Awaited<ReturnType<IClaudeConfigService['read']>>
+      try {
+        // The session's host, not the window's: fork / preview sessions can
+        // belong to a different authority than the active workspace.
+        settings = await this._claude.read(session.authority)
+      } catch (err) {
+        this._logger.warn(`mobile getSessionSettings read failed: ${String(err)}`)
+        return fail('internal', 'failed to read the agent settings')
+      }
+      const raw = settings.env?.[SUBAGENT_MODEL_ENV]
+      current = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null
+      candidates = mergeModelCandidates(
+        sessionModelCandidates(session.configOptions.get()),
+        current === null ? [] : [current],
+      ).slice(0, MAX_SUBAGENT_MODEL_CANDIDATES)
+    }
+
+    // The desktop picker also refreshes on open so a `.mcp.json` edited on disk
+    // is picked up; a failed refresh keeps the service's existing mirror.
+    try {
+      await this._sessions.refreshMcpServerDefinitions()
+    } catch (err) {
+      this._logger.warn(`mobile getSessionSettings mcp refresh failed: ${String(err)}`)
+    }
+    const pool = filterPoolForSession(
+      this._sessions.mcpServerDefinitions.get(),
+      session.agentId,
+    ).slice(0, MAX_MCP_SERVERS)
+    const selection = session.mcpServerSelection.get()
+    const { enabledNames } = resolveMcpServerSelection(pool, selection)
+    const live = session.mcpServers.get().slice(0, MAX_MCP_SERVERS)
+
+    return ok({
+      canEdit: !session.readOnly,
+      subagentModel: { supported, current, candidates },
+      mcp: {
+        pool: pool.map((definition) => ({
+          name: definition.name,
+          transport: definition.transport,
+          defaultDisabled: definition.disabled,
+        })),
+        selection: selection === null ? null : [...selection],
+        enabled: enabledNames,
+        live: live.map((server) => ({
+          name: server.name,
+          status: server.status,
+          ...(server.transport !== undefined ? { transport: server.transport } : {}),
+        })),
+      },
+    })
+  }
+
+  async setSubagentModel(localId: string, model: string | null): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (session.agentId !== 'claude-code') {
+      return fail('unsupported_by_agent', 'agent does not support a subagent model')
+    }
+    const next = model === null ? null : model.trim()
+    if (model !== null && next === '') return fail('bad_request', 'invalid model id')
+
+    if (next !== null) {
+      let onDisk: string | null = null
+      try {
+        const settings = await this._claude.read(session.authority)
+        const raw = settings.env?.[SUBAGENT_MODEL_ENV]
+        onDisk = typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : null
+      } catch (err) {
+        this._logger.warn(`mobile setSubagentModel read failed: ${String(err)}`)
+        return fail('internal', 'failed to read the agent settings')
+      }
+      const allowed = mergeModelCandidates(
+        sessionModelCandidates(session.configOptions.get()),
+        onDisk === null ? [] : [onDisk],
+      )
+      if (!allowed.includes(next)) return fail('bad_request', 'unknown model')
+    }
+
+    try {
+      await this._claude.patch(
+        {
+          env: {
+            [SUBAGENT_MODEL_ENV]: next,
+            [SUBAGENT_MODEL_FORCE_ENV]: next === null ? null : '1',
+          },
+        },
+        session.authority,
+      )
+    } catch (err) {
+      this._logger.warn(`mobile setSubagentModel patch failed: ${String(err)}`)
+      return fail('internal', 'failed to write the agent settings')
+    }
+    return ok(undefined)
+  }
+
+  async restartAgentProcess(localId: string): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+    if (session.isReconnecting) return fail('session_busy', 'session is reconnecting')
+    // `requestProcessRestart` silently no-ops without a durable id; surface it
+    // instead of telling the phone a restart happened when nothing did.
+    if (session.sessionIdOnAgent.get() === undefined) {
+      return fail('not_supported', 'session is not resumable yet')
+    }
+    session.requestProcessRestart()
+    return ok(undefined)
+  }
+
+  async setSessionMcpServers(
+    localId: string,
+    servers: readonly string[] | null,
+  ): Promise<MobileBridgeResult<void>> {
+    const session = this._liveSession(localId)
+    if (session === undefined) return fail('session_not_found', 'session is not live')
+    if (session.readOnly) return fail('session_read_only', 'session is read-only')
+
+    let next: readonly string[] | null = null
+    if (servers !== null) {
+      next = [...new Set(servers)]
+      if (next.length > MAX_MCP_SERVERS) return fail('bad_request', 'too many MCP servers')
+      const union = this._sessions.mcpServerDefinitions.get()
+      const allowed = new Set(
+        filterPoolForSession(union, session.agentId).map((definition) => definition.name),
+      )
+      const unionNames = new Set(union.map((definition) => definition.name))
+      for (const name of next) {
+        // A name that exists in the union but belongs to another agent is a
+        // cross-agent pin; a name absent from the union is a stale pin whose
+        // definition was deleted, which the wire filter drops like the desktop.
+        if (!allowed.has(name) && unionNames.has(name)) {
+          return fail('bad_request', 'MCP server does not belong to this agent')
+        }
+      }
+    }
+
+    // Synchronous: sets the observable and, when the session is idle, converges
+    // the connection through the existing MCP drift reload.
+    this._sessions.setSessionMcpServers(localId, next)
+    return ok(undefined)
   }
 
   async pauseAutoResolve(localId: string, requestId: string): Promise<MobileBridgeResult<void>> {

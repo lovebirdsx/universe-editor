@@ -1,5 +1,10 @@
-import type { MobileSessionRef, MobileTimelineMessageItem } from '@universe-editor/mobile-protocol'
+import type {
+  MobileSessionRef,
+  MobileSessionSettings,
+  MobileTimelineMessageItem,
+} from '@universe-editor/mobile-protocol'
 import { useEffect, useRef, useState } from 'react'
+import { BottomSheet } from '../components/BottomSheet.js'
 import { Spinner } from '../components/Spinner.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { parseSessionRouteKey, sessionRouteKey } from '../state/refs.js'
@@ -18,19 +23,30 @@ import { ConfigSheet } from './ConfigSheet.js'
 import { ElicitationSheet } from './ElicitationSheet.js'
 import { PushBranchSheet } from '../git/PushBranchSheet.js'
 import { MessageActionsSheet } from './MessageActionsSheet.js'
+import { McpServersSheet } from './McpServersSheet.js'
 import { PermissionSheet } from './PermissionSheet.js'
 import { PlanPanel } from './PlanPanel.js'
 import { RewindPreviewSheet } from './RewindPreviewSheet.js'
 import { SessionHeader } from './SessionHeader.js'
 import { SessionMenuSheet } from './SessionMenuSheet.js'
+import { resolveEnabledMcpNames, toggleMcpSelection } from './sessionSettings.js'
 import { readSessionDisplayPreference, type SessionDisplayPreference } from './sessionDisplay.js'
 import { isSessionWorking } from './sessionStatus.js'
 import { SideTasksSheet } from './SideTasksSheet.js'
+import { SubagentModelSheet } from './SubagentModelSheet.js'
 import { Timeline } from './Timeline.js'
 import { useVisualViewportHeight } from './useVisualViewport.js'
 
 const TOAST_MS = 3_000
 export const SESSION_LOAD_TIMEOUT_MS = 15_000
+
+type SettingsView = 'subagent' | 'mcp'
+
+type SessionSettingsState =
+  | { readonly status: 'idle' }
+  | { readonly status: 'loading' }
+  | { readonly status: 'ready'; readonly settings: MobileSessionSettings }
+  | { readonly status: 'failed'; readonly message: string }
 
 export interface SessionPageProps {
   readonly client: MobileClient
@@ -86,6 +102,10 @@ export function SessionPage({
   const [pushOpen, setPushOpen] = useState(false)
   const [configSheetId, setConfigSheetId] = useState<string | undefined>(undefined)
   const [busyConfigId, setBusyConfigId] = useState<string | undefined>(undefined)
+  const [settingsState, setSettingsState] = useState<SessionSettingsState>({ status: 'idle' })
+  const [settingsView, setSettingsView] = useState<SettingsView | undefined>(undefined)
+  const [settingsBusy, setSettingsBusy] = useState(false)
+  const settingsRequest = useRef(0)
   const [loadTimedOut, setLoadTimedOut] = useState(false)
   const [retryToken, setRetryToken] = useState(0)
   const [messageActionsItem, setMessageActionsItem] = useState<
@@ -110,6 +130,8 @@ export function SessionPage({
   useEffect(() => {
     setMenuOpen(false)
     setPushOpen(false)
+    setSettingsState({ status: 'idle' })
+    setSettingsView(undefined)
   }, [sessionKey])
 
   const notice = (text: string): void => setToast(text)
@@ -185,6 +207,26 @@ export function SessionPage({
     setLoadTimedOut(false)
     setRetryToken((value) => value + 1)
     client.refreshSession()
+  }
+
+  // Lazy on purpose: opening a session must not pay for a settings.json read
+  // (possibly on a remote host) and an MCP pool rebuild. The chip triggers it.
+  const loadSettings = async (quiet: boolean): Promise<void> => {
+    const request = ++settingsRequest.current
+    if (!quiet) setSettingsState({ status: 'loading' })
+    try {
+      const settings = await client.getSessionSettings()
+      if (!aliveRef.current || request !== settingsRequest.current) return
+      setSettingsState({ status: 'ready', settings })
+    } catch (error) {
+      if (!aliveRef.current || request !== settingsRequest.current) return
+      setSettingsState({ status: 'failed', message: commandErrorText(errorCode(error)) })
+    }
+  }
+
+  const openSettings = (view: SettingsView): void => {
+    setSettingsView(view)
+    void loadSettings(settingsState.status === 'ready')
   }
 
   const forkFrom = async (messageId?: string): Promise<void> => {
@@ -301,6 +343,45 @@ export function SessionPage({
       : inbox.sessions.find((session) => session.ref.durableId === sideTaskOf)
   const loadFailed = waitingForSnapshot && (loadTimedOut || invalidFrame !== undefined)
 
+  const settings = settingsState.status === 'ready' ? settingsState.settings : undefined
+  const canEditSettings = !readOnly && settings?.canEdit !== false
+  const showSubagent = canEditSettings && state.summary?.agentId === 'claude-code'
+  // Until the lazy query returns we cannot know whether the pool is empty, so
+  // the entry stays visible; once it lands, an empty pool hides it like desktop.
+  const showMcp =
+    canEditSettings && (settingsState.status !== 'ready' || (settings?.mcp.pool.length ?? 0) > 0)
+  const subagentValue =
+    settings === undefined ? undefined : (settings.subagentModel.current ?? strings.subagentInherit)
+  const mcpValue =
+    settings === undefined
+      ? undefined
+      : `${settings.mcp.enabled.length}/${settings.mcp.pool.length}`
+
+  const applyMcp = async (servers: readonly string[] | null): Promise<void> => {
+    if (settingsBusy || settings === undefined) return
+    const previous = settingsState
+    const enabled =
+      servers === null
+        ? resolveEnabledMcpNames(settings.mcp.pool, null)
+        : settings.mcp.pool
+            .filter((server) => servers.includes(server.name))
+            .map((server) => server.name)
+    setSettingsState({
+      status: 'ready',
+      settings: { ...settings, mcp: { ...settings.mcp, selection: servers, enabled } },
+    })
+    setSettingsBusy(true)
+    try {
+      await client.setSessionMcpServers(servers)
+    } catch (error) {
+      if (!aliveRef.current) return
+      setSettingsState(previous)
+      notice(commandErrorText(errorCode(error)))
+    } finally {
+      if (aliveRef.current) setSettingsBusy(false)
+    }
+  }
+
   return (
     <div className="session-page" style={style}>
       <SessionHeader
@@ -309,6 +390,10 @@ export function SessionPage({
         socketState={socketState}
         online={online}
         busyConfigId={busyConfigId}
+        subagentValue={subagentValue}
+        onOpenSubagent={showSubagent ? () => openSettings('subagent') : undefined}
+        mcpValue={mcpValue}
+        onOpenMcp={showMcp ? () => openSettings('mcp') : undefined}
         parentTitle={parentSummary?.title}
         onOpenParent={parentSummary === undefined ? undefined : () => openRef(parentSummary.ref)}
         onBack={onBack}
@@ -434,6 +519,71 @@ export function SessionPage({
           online={online}
           onClose={() => setConfigSheetId(undefined)}
           onNotice={notice}
+        />
+      )}
+      {settingsView !== undefined && settingsState.status === 'loading' && (
+        <BottomSheet
+          title={strings.configTitle}
+          testId="session-settings-loading"
+          tone="neutral"
+          overlay
+          onDismiss={() => setSettingsView(undefined)}
+        >
+          <Spinner label={strings.sessionSettingsLoading} />
+        </BottomSheet>
+      )}
+      {settingsView !== undefined && settingsState.status === 'failed' && (
+        <BottomSheet
+          title={strings.configTitle}
+          testId="session-settings-error"
+          tone="neutral"
+          overlay
+          onDismiss={() => setSettingsView(undefined)}
+        >
+          <p className="sheet__hint sheet__hint--danger">{settingsState.message}</p>
+          <button
+            type="button"
+            className="button"
+            data-testid="session-settings-retry"
+            onClick={() => void loadSettings(false)}
+          >
+            {strings.sessionSettingsRetry}
+          </button>
+        </BottomSheet>
+      )}
+      {settingsView === 'subagent' &&
+        settings !== undefined &&
+        settings.subagentModel.supported && (
+          <SubagentModelSheet
+            client={client}
+            settings={settings.subagentModel}
+            running={running}
+            online={online}
+            onChanged={(current) =>
+              setSettingsState((previous) =>
+                previous.status === 'ready'
+                  ? {
+                      status: 'ready',
+                      settings: {
+                        ...previous.settings,
+                        subagentModel: { ...previous.settings.subagentModel, current },
+                      },
+                    }
+                  : previous,
+              )
+            }
+            onClose={() => setSettingsView(undefined)}
+            onNotice={notice}
+          />
+        )}
+      {settingsView === 'mcp' && settings !== undefined && (
+        <McpServersSheet
+          settings={settings.mcp}
+          online={online}
+          busy={settingsBusy}
+          onToggle={(name) => void applyMcp(toggleMcpSelection(settings.mcp, name))}
+          onReset={() => void applyMcp(null)}
+          onClose={() => setSettingsView(undefined)}
         />
       )}
       {menuOpen && (

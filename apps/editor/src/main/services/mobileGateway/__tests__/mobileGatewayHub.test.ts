@@ -13,6 +13,7 @@ import {
   type MobilePushBranchPreview,
   type MobilePushBranchResult,
   type MobileSessionRef,
+  type MobileSessionSettings,
   type MobileSideTaskSummary,
   type MobileWorkspaceCandidate,
   type ResolvePromptRefRequest,
@@ -114,6 +115,19 @@ class FakeBridge implements IMobileBridgeService {
   readonly cancelPermission = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resolveElicitation = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly setConfigOption = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly getSessionSettings = vi.fn(
+    async (): Promise<MobileBridgeResult<MobileSessionSettings>> => ({
+      ok: true,
+      value: {
+        canEdit: true,
+        subagentModel: { supported: false, current: null, candidates: [] },
+        mcp: { pool: [], selection: null, enabled: [], live: [] },
+      },
+    }),
+  )
+  readonly setSubagentModel = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly restartAgentProcess = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  readonly setSessionMcpServers = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly pauseAutoResolve = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly resumeAutoResolve = vi.fn(async () => ({ ok: true as const, value: undefined }))
   readonly newSession = vi.fn(async () => ({
@@ -918,6 +932,9 @@ describe('MobileGatewayHub commands', () => {
         bridge.resolveElicitation,
       ],
       ['setConfigOption', { ref, configId: 'mode', value: 'code' }, bridge.setConfigOption],
+      ['setSubagentModel', { ref, model: 'opus' }, bridge.setSubagentModel],
+      ['restartAgentProcess', { ref }, bridge.restartAgentProcess],
+      ['setSessionMcpServers', { ref, servers: ['shared'] }, bridge.setSessionMcpServers],
       ['pauseAutoResolve', { ref, requestId: 'req-1' }, bridge.pauseAutoResolve],
       ['resumeAutoResolve', { ref, requestId: 'req-1' }, bridge.resumeAutoResolve],
       ['renameSession', { ref, title: 'Renamed' }, bridge.renameSession],
@@ -936,6 +953,115 @@ describe('MobileGatewayHub commands', () => {
     }
     expect(bridge.sendPrompt).toHaveBeenCalledWith('s1', 'hello')
     expect(bridge.resolveElicitation).toHaveBeenCalledWith('s1', 'e1', 'accept', { name: 'Ada' })
+    expect(bridge.setSubagentModel).toHaveBeenCalledWith('s1', 'opus')
+    expect(bridge.restartAgentProcess).toHaveBeenCalledWith('s1')
+    expect(bridge.setSessionMcpServers).toHaveBeenCalledWith('s1', ['shared'])
+  })
+
+  it('routes getSessionSettings and returns the projected settings', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(connection, {
+      type: 'command',
+      requestId: 'settings-1',
+      kind: 'getSessionSettings',
+      payload: { ref },
+    })
+
+    expect(bridge.getSessionSettings).toHaveBeenCalledWith('s1')
+    const frame = connection.frames.at(-1) as Extract<ServerFrame, { type: 'command_result' }>
+    expect(frame).toMatchObject({ type: 'command_result', ok: true, requestId: 'settings-1' })
+    expect(frame.result).toEqual({
+      canEdit: true,
+      subagentModel: { supported: false, current: null, candidates: [] },
+      mcp: { pool: [], selection: null, enabled: [], live: [] },
+    })
+  })
+
+  it('audits the new mutating commands but not the settings query, and caches writes', async () => {
+    const audit: MobileCommandAudit = { record: vi.fn() }
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+
+    await hub.handleCommand(
+      connection,
+      { type: 'command', requestId: 'read-1', kind: 'getSessionSettings', payload: { ref } },
+      audit,
+    )
+    expect(audit.record).not.toHaveBeenCalled()
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'write-sub-1',
+        kind: 'setSubagentModel',
+        payload: { ref, model: 'opus' },
+        idempotencyKey: 'sub-key',
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenLastCalledWith(
+      'setSubagentModel',
+      'success',
+      'window=1 local=s1',
+    )
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'write-sub-2',
+        kind: 'setSubagentModel',
+        payload: { ref, model: 'opus' },
+        idempotencyKey: 'sub-key',
+      },
+      audit,
+    )
+    expect(bridge.setSubagentModel).toHaveBeenCalledTimes(1)
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'write-restart-1',
+        kind: 'restartAgentProcess',
+        payload: { ref },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenLastCalledWith(
+      'restartAgentProcess',
+      'success',
+      'window=1 local=s1',
+    )
+
+    await hub.handleCommand(
+      connection,
+      {
+        type: 'command',
+        requestId: 'write-mcp-1',
+        kind: 'setSessionMcpServers',
+        payload: { ref, servers: ['shared'] },
+      },
+      audit,
+    )
+    expect(audit.record).toHaveBeenLastCalledWith(
+      'setSessionMcpServers',
+      'success',
+      'window=1 local=s1',
+    )
   })
 
   it('routes prompt-ref completion, applies the default limit and clamps entries', async () => {

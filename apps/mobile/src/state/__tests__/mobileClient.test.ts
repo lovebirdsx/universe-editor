@@ -966,6 +966,167 @@ describe('MobileClient fork / rewind / side-task commands', () => {
   })
 })
 
+describe('MobileClient session settings commands', () => {
+  function lastCommand(socket: FakeWebSocket): {
+    requestId: string
+    kind: string
+    payload: unknown
+    idempotencyKey?: string
+  } {
+    return sentFrames(socket)
+      .filter(
+        (frame) =>
+          typeof frame === 'object' &&
+          frame !== null &&
+          (frame as Record<string, unknown>)['type'] === 'command',
+      )
+      .at(-1) as {
+      requestId: string
+      kind: string
+      payload: unknown
+      idempotencyKey?: string
+    }
+  }
+
+  const settingsPayload = {
+    canEdit: true,
+    subagentModel: { supported: true, current: 'opus', candidates: ['sonnet', 'opus'] },
+    mcp: {
+      pool: [{ name: 'shared', transport: 'stdio', defaultDisabled: false }],
+      selection: null,
+      enabled: ['shared'],
+      live: [{ name: 'shared', status: 'connected', transport: 'stdio' }],
+    },
+  }
+
+  it('queries session settings without an idempotency key', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    const pending = client.getSessionSettings()
+    const command = lastCommand(socket)
+    expect(command).toMatchObject({
+      kind: 'getSessionSettings',
+      payload: { ref: { windowId: 1, localId: 's1' } },
+    })
+    expect(command.idempotencyKey).toBeUndefined()
+
+    socket.serverSend({
+      type: 'command_result',
+      requestId: command.requestId,
+      ok: true,
+      result: settingsPayload,
+    })
+    await expect(pending).resolves.toEqual(settingsPayload)
+  })
+
+  it('rejects a malformed session settings result', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    const pending = client.getSessionSettings()
+    socket.serverSend({
+      type: 'command_result',
+      requestId: lastCommand(socket).requestId,
+      ok: true,
+      result: { ...settingsPayload, canEdit: 'yes' },
+    })
+    await expect(pending).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('sends the subagent model and restart commands with idempotency keys', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    const save = client.setSubagentModel('opus')
+    const saveCommand = lastCommand(socket)
+    expect(saveCommand).toMatchObject({
+      kind: 'setSubagentModel',
+      payload: { ref: { windowId: 1, localId: 's1' }, model: 'opus' },
+    })
+    expect(saveCommand.idempotencyKey).toBeTruthy()
+    socket.serverSend({
+      type: 'command_result',
+      requestId: saveCommand.requestId,
+      ok: true,
+    })
+    await expect(save).resolves.toBeUndefined()
+
+    const inherit = client.setSubagentModel(null)
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'setSubagentModel',
+      payload: { model: null },
+    })
+    socket.serverSend({
+      type: 'command_result',
+      requestId: lastCommand(socket).requestId,
+      ok: true,
+    })
+    await expect(inherit).resolves.toBeUndefined()
+
+    const restart = client.restartAgentProcess()
+    const restartCommand = lastCommand(socket)
+    expect(restartCommand).toMatchObject({
+      kind: 'restartAgentProcess',
+      payload: { ref: { windowId: 1, localId: 's1' } },
+    })
+    expect(restartCommand.idempotencyKey).toBeTruthy()
+    socket.serverSend({
+      type: 'command_result',
+      requestId: restartCommand.requestId,
+      ok: true,
+    })
+    await expect(restart).resolves.toBeUndefined()
+  })
+
+  it('sends the session MCP whitelist and the reset sentinel', async () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    client.openSession('1:s1')
+
+    const pin = client.setSessionMcpServers(['shared', 'docs'])
+    const pinCommand = lastCommand(socket)
+    expect(pinCommand).toMatchObject({
+      kind: 'setSessionMcpServers',
+      payload: { ref: { windowId: 1, localId: 's1' }, servers: ['shared', 'docs'] },
+    })
+    expect(pinCommand.idempotencyKey).toBeTruthy()
+    socket.serverSend({
+      type: 'command_result',
+      requestId: pinCommand.requestId,
+      ok: true,
+    })
+    await expect(pin).resolves.toBeUndefined()
+
+    const reset = client.setSessionMcpServers(null)
+    expect(lastCommand(socket)).toMatchObject({
+      kind: 'setSessionMcpServers',
+      payload: { servers: null },
+    })
+    socket.serverSend({
+      type: 'command_result',
+      requestId: lastCommand(socket).requestId,
+      ok: true,
+    })
+    await expect(reset).resolves.toBeUndefined()
+  })
+
+  it('rejects session settings commands when no session is open', async () => {
+    const { client } = createHarness()
+    await expect(client.getSessionSettings()).rejects.toMatchObject({ code: 'session_not_found' })
+    await expect(client.setSubagentModel('opus')).rejects.toMatchObject({
+      code: 'session_not_found',
+    })
+    await expect(client.restartAgentProcess()).rejects.toMatchObject({ code: 'session_not_found' })
+    await expect(client.setSessionMcpServers(null)).rejects.toMatchObject({
+      code: 'session_not_found',
+    })
+  })
+})
+
 describe('MobileClient notifications', () => {
   it('captures the VAPID key and re-registers push after a reconnect', () => {
     const { client, sockets, timers } = createHarness()

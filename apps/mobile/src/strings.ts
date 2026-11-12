@@ -367,6 +367,33 @@ export const strings = {
   configCurrent: '当前',
   configOpen: (name: string): string => `切换${name}`,
 
+  subagentChipLabel: '子模型',
+  subagentChipOpen: '配置子模型',
+  subagentInherit: '跟随主模型',
+  subagentSheetDesc:
+    '子 Agent（包括本应跟随主模型的内置 Agent）都会使用该模型。它在进程启动时读取，修改后下次会话生效。',
+  subagentNextSession: '下次会话生效',
+  subagentRestartNow: '立即重启',
+  subagentRestarting: '正在重启会话…',
+  subagentRestartTitle: '立即重启会话？',
+  subagentRestartBody: '重启会中断当前正在运行的任务，会话随后以新的子模型重新连接。',
+  subagentRestartConfirm: '重启',
+  subagentEmptyCandidates: '当前 Agent 未提供可选的模型列表。',
+
+  mcpChipLabel: 'MCP',
+  mcpChipOpen: '配置会话 MCP 服务器',
+  mcpSheetTitle: 'MCP 服务器',
+  mcpFollowingDefaults: '跟随默认',
+  mcpCustomSelection: '自定义选择',
+  mcpReset: '恢复默认',
+  mcpDefaultOff: '默认关闭',
+  mcpEmpty: '当前 Agent 没有可用的 MCP 服务器。',
+  mcpCacheHint: '切换会重启会话并失效模型 prompt cache；任务运行中会等当前任务结束后生效。',
+
+  sessionSettingsLoading: '正在读取会话设置…',
+  sessionSettingsFailed: '读取会话设置失败。',
+  sessionSettingsRetry: '重试',
+
   sessionMore: '更多操作',
   sessionRename: '重命名会话',
   sessionRenameTitle: '重命名会话',

@@ -837,6 +837,8 @@ export interface IAcpSession {
    * it is dead. No-op outside `exhausted`.
    */
   retryRecovery(): Promise<void>
+  /** True while a hot-reconnect is in progress; UI restart actions wait it out. */
+  readonly isReconnecting: boolean
   /**
    * Respawn the agent process, keeping this session's history and runtime
    * config. Needed for settings that only travel as spawn env — the sub-agent

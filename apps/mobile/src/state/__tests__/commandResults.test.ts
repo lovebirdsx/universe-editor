@@ -11,6 +11,7 @@ import {
   isMobileSessionHistoryList,
   isMobileSessionRef,
   isMobileSessionRefResult,
+  isMobileSessionSettings,
   isMobileSideTaskList,
   isMobileSideTaskSummary,
   isResolvePromptRefResult,
@@ -438,6 +439,116 @@ describe('command result guards', () => {
     ).toBe(false)
     expect(
       isSendableMobilePromptRef({ kind: 'file', label: 'a', uri: 'file:///w/a', start: 0, end: 0 }),
+    ).toBe(false)
+  })
+})
+
+describe('isMobileSessionSettings', () => {
+  const settings = {
+    canEdit: true,
+    subagentModel: { supported: true, current: 'opus', candidates: ['sonnet', 'opus'] },
+    mcp: {
+      pool: [
+        { name: 'shared', transport: 'stdio', defaultDisabled: false },
+        { name: 'docs', transport: 'http', defaultDisabled: true },
+      ],
+      selection: null,
+      enabled: ['shared'],
+      live: [{ name: 'shared', status: 'connected', transport: 'stdio' }],
+    },
+  }
+
+  it('accepts a full payload and a null selection', () => {
+    expect(isMobileSessionSettings(settings)).toBe(true)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        subagentModel: { supported: false, current: null, candidates: [] },
+      }),
+    ).toBe(true)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        mcp: {
+          ...settings.mcp,
+          selection: ['shared', 'docs'],
+          live: [{ name: 'shared', status: 'failed' }],
+        },
+      }),
+    ).toBe(true)
+  })
+
+  it('rejects malformed subagent fields', () => {
+    expect(isMobileSessionSettings(null)).toBe(false)
+    expect(isMobileSessionSettings({ ...settings, canEdit: 'yes' })).toBe(false)
+    expect(isMobileSessionSettings({ ...settings, subagentModel: null })).toBe(false)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        subagentModel: { supported: true, current: '', candidates: [] },
+      }),
+    ).toBe(false)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        subagentModel: { supported: true, current: null, candidates: [3] },
+      }),
+    ).toBe(false)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        subagentModel: { supported: true, current: null, candidates: new Array(65).fill('m') },
+      }),
+    ).toBe(false)
+  })
+
+  it('rejects malformed MCP fields', () => {
+    expect(isMobileSessionSettings({ ...settings, mcp: null })).toBe(false)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        mcp: {
+          ...settings.mcp,
+          pool: [{ name: 'shared', transport: 'websocket', defaultDisabled: false }],
+        },
+      }),
+    ).toBe(false)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        mcp: { ...settings.mcp, pool: [{ name: '', transport: 'stdio', defaultDisabled: false }] },
+      }),
+    ).toBe(false)
+    expect(
+      isMobileSessionSettings({ ...settings, mcp: { ...settings.mcp, selection: [''] } }),
+    ).toBe(false)
+    expect(isMobileSessionSettings({ ...settings, mcp: { ...settings.mcp, enabled: 'all' } })).toBe(
+      false,
+    )
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        mcp: { ...settings.mcp, live: [{ name: 'shared' }] },
+      }),
+    ).toBe(false)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        mcp: { ...settings.mcp, live: [{ name: 'shared', status: 'ok', transport: 'ws' }] },
+      }),
+    ).toBe(false)
+    expect(
+      isMobileSessionSettings({
+        ...settings,
+        mcp: {
+          ...settings.mcp,
+          pool: Array.from({ length: 101 }, (_, index) => ({
+            name: `s${index}`,
+            transport: 'stdio',
+            defaultDisabled: false,
+          })),
+        },
+      }),
     ).toBe(false)
   })
 })

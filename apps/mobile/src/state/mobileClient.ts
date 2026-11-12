@@ -32,6 +32,7 @@ import type {
   MobileSessionHistoryEntry,
   MobileSessionRef,
   MobileSessionRefResult,
+  MobileSessionSettings,
   MobileSideTaskSummary,
   MobileToolCallDetail,
   MobileWorkspaceCandidate,
@@ -71,6 +72,7 @@ import {
   isMobileRewindResult,
   isMobileSessionHistoryList,
   isMobileSessionRefResult,
+  isMobileSessionSettings,
   isMobileSideTaskList,
   isResolvePromptRefResult,
 } from './commandResults.js'
@@ -548,6 +550,26 @@ export class MobileClient {
 
   setConfigOption(configId: string, value: string | boolean): Promise<void> {
     return this._sessionCommand('setConfigOption', (ref) => ({ ref, configId, value }))
+  }
+
+  getSessionSettings(): Promise<MobileSessionSettings> {
+    return this._sessionCommandValue(
+      'getSessionSettings',
+      (ref) => ({ ref }),
+      isMobileSessionSettings,
+    )
+  }
+
+  setSubagentModel(model: string | null): Promise<void> {
+    return this._sessionCommand('setSubagentModel', (ref) => ({ ref, model }))
+  }
+
+  restartAgentProcess(): Promise<void> {
+    return this._sessionCommand('restartAgentProcess', (ref) => ({ ref }))
+  }
+
+  setSessionMcpServers(servers: readonly string[] | null): Promise<void> {
+    return this._sessionCommand('setSessionMcpServers', (ref) => ({ ref, servers }))
   }
 
   pauseAutoResolve(requestId: string): Promise<void> {

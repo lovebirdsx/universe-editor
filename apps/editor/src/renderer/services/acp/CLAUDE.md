@@ -1,6 +1,6 @@
 # apps/editor/src/renderer/services/acp/CLAUDE.md
 
-Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v1.2.x（ESM-only，zod schema 校验）。协议层完全在 renderer 端，main 只搬字节。
+Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v1.2.x（ESM-only，zod schema 校验）。协议层在 renderer，main 只搬字节。
 
 **关键事实**：
 - SDK 类型直接出现在 service / UI / 测试里——**没有 alias 层**，类型名就是 SDK 导出的名字
@@ -78,7 +78,7 @@ agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组还�
 - **agent 自有配置文件只读导入**：编辑器只读不写；路由门面 `IAgentMcpConfigService` 按 agentId 分发到 main 侧 `IClaudeConfigService` / `ICodexConfigService`。
 - **per-agent 隔离（行为变更）**：agent 来源条目带 `McpAgentAffinity`；`readMcpServerDefinitionsLayered` 第 4 参省略 = union 视图（picker/设置面板），传值 = 丢弃 affinity 不匹配的 agent 层（两条 wire 路径）。**`.mcp.json` 收窄为只对 claude-code 会话生效**（不留 fallback 的行为破坏性变更）。
 - **union 同名跨 agent 条目（`sharedWith`）**：`filterPoolForSession` 凭它放行，否则同名条目在另一方的 picker 里会彻底消失（尽管该方 wire 路径包含它）。
-- **UI 消费 per-agent 视图统一入口 `filterPoolForSession(pool, agentId)`**（`McpServerPicker.tsx`）：picker / ConfigOptionsBar / ConfigBarOverflowMenu 三处共用。
+- **UI 消费 per-agent 视图统一入口 `filterPoolForSession(pool, agentId)`**（`acpMcpServers.ts`）：picker / ConfigOptionsBar / ConfigBarOverflowMenu / 手机桥共用。
 - **扩展贡献层**（`contributes.mcpServers`）：`IExtensionMcpServersService` 从 manifest DTO 解析 raw record，**绝不写 settings.json**——卸载/禁用即消失。v1 仅 stdio。
 - **默认启用集 = 池中全部非 `disabled` 条目**：`disabled` 注解来自 **`IMcpServerEnablementService`**（`acp.mcpServerEnablement`，GLOBAL/WORKSPACE 双 scope），定义条目里的 `disabled` 字段一律失效。UI 共用 **`McpEnablementToggles`**（工作区级开关**三态**，坑见 cases）。两条 wire 路径 `await Promise.all([extensionMcp.whenReady, mcpEnablement.whenReady])` 消除冷启动竞态。
 - **picker 左侧勾选只是会话级 pin**（`setSessionMcpServers`），只影响当前会话，**绝不写回默认**（sticky 机制已删）。resume/fork 选择瀑布：history 行 `mcpServerNames`（undefined=跟随默认）→ 否则 `null`（非 disabled 全集）。

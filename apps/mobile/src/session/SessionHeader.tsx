@@ -10,6 +10,12 @@ export interface SessionHeaderProps {
   readonly socketState: SocketState
   readonly online: boolean
   readonly busyConfigId?: string | undefined
+  /** Effective subagent model; absent until the settings query has loaded. */
+  readonly subagentValue?: string | undefined
+  readonly onOpenSubagent?: (() => void) | undefined
+  /** `<enabled>/<pool>` once the settings query has loaded. */
+  readonly mcpValue?: string | undefined
+  readonly onOpenMcp?: (() => void) | undefined
   /** Parent session title when this session is a side task. */
   readonly parentTitle?: string | undefined
   readonly onOpenParent?: (() => void) | undefined
@@ -25,6 +31,10 @@ export function SessionHeader({
   socketState,
   online,
   busyConfigId,
+  subagentValue,
+  onOpenSubagent,
+  mcpValue,
+  onOpenMcp,
   parentTitle,
   onOpenParent,
   onBack,
@@ -90,7 +100,7 @@ export function SessionHeader({
             <span className="session-header__status">{statusText(socketState)}</span>
           )}
         </div>
-        {options.length > 0 && (
+        {(options.length > 0 || onOpenSubagent !== undefined || onOpenMcp !== undefined) && (
           <div className="session-header__config" data-testid="config-options">
             {options.map((option) =>
               option.type === 'boolean' ? (
@@ -135,6 +145,34 @@ export function SessionHeader({
                   )}
                 </button>
               ),
+            )}
+            {onOpenSubagent !== undefined && (
+              <button
+                type="button"
+                className="config-chip"
+                data-testid="subagent-chip"
+                aria-label={strings.subagentChipOpen}
+                disabled={!online}
+                onClick={onOpenSubagent}
+              >
+                <span className="config-chip__name">{strings.subagentChipLabel}</span>
+                {subagentValue !== undefined && (
+                  <span className="config-chip__value">{subagentValue}</span>
+                )}
+              </button>
+            )}
+            {onOpenMcp !== undefined && (
+              <button
+                type="button"
+                className="config-chip"
+                data-testid="mcp-chip"
+                aria-label={strings.mcpChipOpen}
+                disabled={!online}
+                onClick={onOpenMcp}
+              >
+                <span className="config-chip__name">{strings.mcpChipLabel}</span>
+                {mcpValue !== undefined && <span className="config-chip__value">{mcpValue}</span>}
+              </button>
             )}
           </div>
         )}

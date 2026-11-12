@@ -576,6 +576,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     recoveryState: observableValue('test.recovery', undefined),
     cancelRecovery: () => {},
     retryRecovery: () => Promise.resolve(),
+    isReconnecting: false,
     requestProcessRestart: () => {},
     statusObs,
     commandsObs,

@@ -28,6 +28,7 @@ import {
 } from '@universe-editor/platform'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type {
+  AcpMcpServerStatus,
   AcpMessage,
   AcpPendingElicitation,
   AcpPermissionSettledEvent,
@@ -39,6 +40,12 @@ import type {
   TimelineItem,
 } from '../../acp/session/acpSession.js'
 import type { IAcpSessionService } from '../../acp/session/acpSessionService.js'
+import type { McpServerDefinition } from '../../acp/acpMcpServers.js'
+import type {
+  ClaudeSettings,
+  ClaudeSettingsPatch,
+  IClaudeConfigService,
+} from '../../../../shared/ipc/claudeConfigService.js'
 import { AcpPromptDraftCache } from '../../acp/session/acpPromptDraftCache.js'
 import type {
   AcpSessionHistoryEntry,
@@ -97,6 +104,9 @@ interface FakeSessionHarness {
   imageSupported: ISettableObservable<boolean>
   forkSupported: ISettableObservable<boolean>
   rewindSupported: ISettableObservable<boolean>
+  mcpServerSelection: ISettableObservable<readonly string[] | null>
+  mcpServers: ISettableObservable<readonly AcpMcpServerStatus[]>
+  requestProcessRestart: ReturnType<typeof vi.fn>
 }
 
 function makeSession(
@@ -107,8 +117,12 @@ function makeSession(
     readOnly?: boolean
     authority?: string
     cwd?: string
+    agentId?: string
     forkSupported?: boolean
     rewindSupported?: boolean
+    mcpSelection?: readonly string[] | null
+    mcpStatuses?: readonly AcpMcpServerStatus[]
+    isReconnecting?: boolean
   } = {},
 ): FakeSessionHarness {
   const timeline = observableValue<readonly TimelineItem[]>('test.timeline', [])
@@ -140,10 +154,19 @@ function makeSession(
   const imageSupported = observableValue<boolean>('test.imageSupported', true)
   const forkSupported = observableValue<boolean>('test.fork', options.forkSupported ?? false)
   const rewindSupported = observableValue<boolean>('test.rewind', options.rewindSupported ?? false)
+  const mcpServerSelection = observableValue<readonly string[] | null>(
+    'test.mcpSelection',
+    options.mcpSelection ?? null,
+  )
+  const mcpServers = observableValue<readonly AcpMcpServerStatus[]>(
+    'test.mcpServers',
+    options.mcpStatuses ?? [],
+  )
+  const requestProcessRestart = vi.fn()
   const settleEmitter = new Emitter<AcpPermissionSettledEvent>()
   const session = {
     id,
-    agentId: 'fake',
+    agentId: options.agentId ?? 'fake',
     title: options.title ?? `Session ${id}`,
     cwd: options.cwd ?? '/workspace/demo',
     authority: options.authority,
@@ -166,6 +189,10 @@ function makeSession(
     imageSupported,
     forkSupported,
     rewindSupported,
+    mcpServerSelection,
+    mcpServers,
+    isReconnecting: options.isReconnecting ?? false,
+    requestProcessRestart,
     onDidSettlePermission: settleEmitter.event,
     onDidSettleElicitation: Event.None,
     sendPrompt: vi.fn(async () => {}),
@@ -193,6 +220,9 @@ function makeSession(
     imageSupported,
     forkSupported,
     rewindSupported,
+    mcpServerSelection,
+    mcpServers,
+    requestProcessRestart,
   }
 }
 
@@ -257,6 +287,11 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   chatProviders: Array<{ handle: number; provider: Record<string, unknown> }>
   delivery: ISessionDeliveryService
   deliveryChanges: Emitter<SessionDeliveryChange>
+  claudeSettings: ClaudeSettings
+  claudeRead: ReturnType<typeof vi.fn>
+  claudePatch: ReturnType<typeof vi.fn>
+  mcpServerDefinitions: ISettableObservable<readonly McpServerDefinition[]>
+  setSessionMcpServers: ReturnType<typeof vi.fn>
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
@@ -269,6 +304,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   const rewindSession = vi.fn()
   const forkSideTask = vi.fn()
   const resumeSession = vi.fn()
+  const mcpServerDefinitions = observableValue<readonly McpServerDefinition[]>('test.mcpPool', [])
+  const setSessionMcpServers = vi.fn()
   const sessionService = {
     sessions,
     getById: (id: string) =>
@@ -280,6 +317,9 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     rewindSession,
     forkSideTask,
     resumeSession,
+    mcpServerDefinitions,
+    refreshMcpServerDefinitions: vi.fn(async () => {}),
+    setSessionMcpServers,
   } as unknown as IAcpSessionService
   const historyService = {
     entries: history,
@@ -300,6 +340,21 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     defaultAgentId: () => 'fake',
   } as unknown as IAcpAgentRegistry
   const loggerService = { createLogger: () => NULL_LOGGER } as unknown as ILoggerService
+  const claudeSettings: ClaudeSettings = {}
+  const claudeRead = vi.fn(async () => claudeSettings)
+  const claudePatch = vi.fn(async (patch: ClaudeSettingsPatch) => {
+    const env = { ...(claudeSettings.env ?? {}) }
+    for (const [key, value] of Object.entries(patch.env ?? {})) {
+      if (value === null) delete env[key]
+      else env[key] = value
+    }
+    claudeSettings.env = env
+  })
+  const claudeConfig = {
+    read: claudeRead,
+    patch: claudePatch,
+    onDidChangeConfig: Event.None,
+  } as unknown as IClaudeConfigService
   const workspace = { current: null } as unknown as IWorkspaceService & {
     current: { folder: URI; name: string } | null
   }
@@ -397,6 +452,7 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     docs,
     commands,
     chatContext,
+    claudeConfig,
     loggerService,
   )
   const events: MobileBridgeEvent[] = []
@@ -424,6 +480,11 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     chatProviders,
     delivery,
     deliveryChanges,
+    claudeSettings,
+    claudeRead,
+    claudePatch,
+    mcpServerDefinitions,
+    setSessionMcpServers,
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -2448,6 +2509,336 @@ describe('MobileBridgeService commands', () => {
       { id: 'fake', name: 'Fake Agent', isDefault: true },
       { id: 'other', name: 'Other Agent', isDefault: false },
     ])
+  })
+})
+
+describe('MobileBridgeService session settings', () => {
+  function modelOption(...values: string[]): SessionConfigOption {
+    return {
+      id: 'model',
+      category: 'model',
+      type: 'select',
+      name: 'Model',
+      currentValue: values[0] ?? 'sonnet',
+      options: values.map((value) => ({ value, name: value })),
+    } as unknown as SessionConfigOption
+  }
+
+  function mcpDef(
+    name: string,
+    options: {
+      disabled?: boolean
+      agentAffinity?: 'claude-code' | 'codex'
+      sharedWith?: readonly ('claude-code' | 'codex')[]
+    } = {},
+  ): McpServerDefinition {
+    return {
+      name,
+      transport: 'stdio',
+      disabled: options.disabled ?? false,
+      source: options.agentAffinity === undefined ? 'global' : 'agent-user',
+      ...(options.agentAffinity !== undefined ? { agentAffinity: options.agentAffinity } : {}),
+      ...(options.sharedWith !== undefined ? { sharedWith: options.sharedWith } : {}),
+    } as McpServerDefinition
+  }
+
+  it('projects claude subagent settings and the filtered MCP pool', async () => {
+    const harness = makeHarness()
+    harness.claudeSettings.env = { CLAUDE_CODE_SUBAGENT_MODEL: 'haiku' }
+    harness.mcpServerDefinitions.set(
+      [
+        mcpDef('shared'),
+        mcpDef('claude-only', { agentAffinity: 'claude-code' }),
+        mcpDef('codex-only', { agentAffinity: 'codex' }),
+        mcpDef('off-by-default', { disabled: true }),
+      ],
+      undefined,
+    )
+    const first = makeSession('s1', {
+      agentId: 'claude-code',
+      authority: 'ssh-remote+host-a',
+      mcpStatuses: [
+        { name: 'shared', status: 'connected', transport: 'stdio' },
+        { name: 'claude-only', status: 'failed' },
+      ],
+    })
+    first.configOptions.set([modelOption('sonnet', 'opus')], undefined)
+    harness.add(first)
+
+    await expect(harness.service.getSessionSettings('s1')).resolves.toStrictEqual({
+      ok: true,
+      value: {
+        canEdit: true,
+        subagentModel: {
+          supported: true,
+          current: 'haiku',
+          candidates: ['sonnet', 'opus', 'haiku'],
+        },
+        mcp: {
+          pool: [
+            { name: 'shared', transport: 'stdio', defaultDisabled: false },
+            { name: 'claude-only', transport: 'stdio', defaultDisabled: false },
+            { name: 'off-by-default', transport: 'stdio', defaultDisabled: true },
+          ],
+          selection: null,
+          enabled: ['shared', 'claude-only'],
+          live: [
+            { name: 'shared', status: 'connected', transport: 'stdio' },
+            { name: 'claude-only', status: 'failed' },
+          ],
+        },
+      },
+    })
+    expect(harness.claudeRead).toHaveBeenCalledWith('ssh-remote+host-a')
+    expect(harness.sessionService.refreshMcpServerDefinitions).toHaveBeenCalled()
+  })
+
+  it('reports an explicit MCP selection and read-only sessions', async () => {
+    const harness = makeHarness()
+    harness.mcpServerDefinitions.set(
+      [mcpDef('a'), mcpDef('b', { disabled: true }), mcpDef('c')],
+      undefined,
+    )
+    harness.add(
+      makeSession('s1', {
+        agentId: 'claude-code',
+        readOnly: true,
+        mcpSelection: ['b'],
+      }),
+    )
+
+    const result = await harness.service.getSessionSettings('s1')
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        canEdit: false,
+        mcp: { selection: ['b'], enabled: ['b'] },
+      },
+    })
+  })
+
+  it('skips the claude settings read for non-claude agents', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { agentId: 'fake' }))
+
+    const result = await harness.service.getSessionSettings('s1')
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        subagentModel: { supported: false, current: null, candidates: [] },
+      },
+    })
+    expect(harness.claudeRead).not.toHaveBeenCalled()
+  })
+
+  it('returns internal when the claude settings read fails', async () => {
+    const harness = makeHarness()
+    harness.claudeRead.mockRejectedValueOnce(new Error('disk on fire'))
+    harness.add(makeSession('s1', { agentId: 'claude-code' }))
+
+    await expect(harness.service.getSessionSettings('s1')).resolves.toMatchObject({
+      ok: false,
+      code: 'internal',
+    })
+  })
+
+  it('writes the subagent model with the force flag on the session authority', async () => {
+    const harness = makeHarness()
+    harness.claudeSettings.env = { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' }
+    const first = makeSession('s1', { agentId: 'claude-code', authority: 'host-a' })
+    first.configOptions.set([modelOption('sonnet', 'opus')], undefined)
+    harness.add(first)
+
+    await expect(harness.service.setSubagentModel('s1', ' opus ')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.claudePatch).toHaveBeenCalledWith(
+      {
+        env: {
+          CLAUDE_CODE_SUBAGENT_MODEL: 'opus',
+          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1',
+        },
+      },
+      'host-a',
+    )
+  })
+
+  it('clears both subagent env keys when following the main model', async () => {
+    const harness = makeHarness()
+    harness.claudeSettings.env = {
+      CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
+      CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1',
+    }
+    harness.add(makeSession('s1', { agentId: 'claude-code', authority: 'host-a' }))
+
+    await expect(harness.service.setSubagentModel('s1', null)).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.claudePatch).toHaveBeenCalledWith(
+      {
+        env: {
+          CLAUDE_CODE_SUBAGENT_MODEL: null,
+          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: null,
+        },
+      },
+      'host-a',
+    )
+    expect(harness.claudeRead).not.toHaveBeenCalled()
+  })
+
+  it('accepts a model already on disk even when it is no longer offered', async () => {
+    const harness = makeHarness()
+    harness.claudeSettings.env = { CLAUDE_CODE_SUBAGENT_MODEL: 'legacy-model' }
+    harness.add(makeSession('s1', { agentId: 'claude-code' }))
+
+    await expect(harness.service.setSubagentModel('s1', 'legacy-model')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.claudePatch).toHaveBeenCalled()
+  })
+
+  it('rejects unknown models without touching the settings', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { agentId: 'claude-code' })
+    first.configOptions.set([modelOption('sonnet')], undefined)
+    harness.add(first)
+
+    await expect(harness.service.setSubagentModel('s1', 'gpt-5')).resolves.toMatchObject({
+      ok: false,
+      code: 'bad_request',
+    })
+    expect(harness.claudePatch).not.toHaveBeenCalled()
+  })
+
+  it('guards subagent writes by agent and read-only state', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { agentId: 'fake' }))
+    harness.add(makeSession('s2', { agentId: 'claude-code', readOnly: true }))
+
+    await expect(harness.service.setSubagentModel('s1', 'opus')).resolves.toMatchObject({
+      ok: false,
+      code: 'unsupported_by_agent',
+    })
+    await expect(harness.service.setSubagentModel('s2', 'opus')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_read_only',
+    })
+    expect(harness.claudePatch).not.toHaveBeenCalled()
+  })
+
+  it('returns internal when the claude settings write fails', async () => {
+    const harness = makeHarness()
+    harness.claudePatch.mockRejectedValueOnce(new Error('locked'))
+    const first = makeSession('s1', { agentId: 'claude-code' })
+    first.configOptions.set([modelOption('opus')], undefined)
+    harness.add(first)
+
+    await expect(harness.service.setSubagentModel('s1', 'opus')).resolves.toMatchObject({
+      ok: false,
+      code: 'internal',
+    })
+  })
+
+  it('requests an agent process restart', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { agentId: 'claude-code', durableId: 'durable-1' })
+    harness.add(first)
+
+    await expect(harness.service.restartAgentProcess('s1')).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(first.requestProcessRestart).toHaveBeenCalledTimes(1)
+  })
+
+  it('refuses a restart without a durable id or while reconnecting', async () => {
+    const harness = makeHarness()
+    const noDurable = makeSession('s1', { agentId: 'claude-code' })
+    const reconnecting = makeSession('s2', {
+      agentId: 'claude-code',
+      durableId: 'durable-2',
+      isReconnecting: true,
+    })
+    harness.add(noDurable)
+    harness.add(reconnecting)
+
+    await expect(harness.service.restartAgentProcess('s1')).resolves.toMatchObject({
+      ok: false,
+      code: 'not_supported',
+    })
+    await expect(harness.service.restartAgentProcess('s2')).resolves.toMatchObject({
+      ok: false,
+      code: 'session_busy',
+    })
+    expect(noDurable.requestProcessRestart).not.toHaveBeenCalled()
+    expect(reconnecting.requestProcessRestart).not.toHaveBeenCalled()
+  })
+
+  it('forwards a deduped MCP whitelist for the session agent', async () => {
+    const harness = makeHarness()
+    harness.mcpServerDefinitions.set(
+      [
+        mcpDef('shared'),
+        mcpDef('claude-only', { agentAffinity: 'claude-code' }),
+        mcpDef('codex-only', { agentAffinity: 'codex' }),
+      ],
+      undefined,
+    )
+    harness.add(makeSession('s1', { agentId: 'claude-code' }))
+
+    await expect(
+      harness.service.setSessionMcpServers('s1', ['shared', 'claude-only', 'shared', 'gone']),
+    ).resolves.toEqual({ ok: true, value: undefined })
+    expect(harness.setSessionMcpServers).toHaveBeenCalledWith('s1', [
+      'shared',
+      'claude-only',
+      'gone',
+    ])
+  })
+
+  it('forwards null to restore the default MCP selection', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { agentId: 'claude-code' }))
+
+    await expect(harness.service.setSessionMcpServers('s1', null)).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    })
+    expect(harness.setSessionMcpServers).toHaveBeenCalledWith('s1', null)
+  })
+
+  it('rejects MCP names owned by another agent', async () => {
+    const harness = makeHarness()
+    harness.mcpServerDefinitions.set(
+      [mcpDef('shared'), mcpDef('codex-only', { agentAffinity: 'codex' })],
+      undefined,
+    )
+    harness.add(makeSession('s1', { agentId: 'claude-code' }))
+
+    await expect(harness.service.setSessionMcpServers('s1', ['codex-only'])).resolves.toMatchObject(
+      { ok: false, code: 'bad_request' },
+    )
+    expect(harness.setSessionMcpServers).not.toHaveBeenCalled()
+  })
+
+  it('rejects an oversized MCP whitelist and read-only sessions', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { agentId: 'claude-code' }))
+    harness.add(makeSession('s2', { agentId: 'claude-code', readOnly: true }))
+
+    const tooMany = Array.from({ length: 101 }, (_, index) => `server-${index}`)
+    await expect(harness.service.setSessionMcpServers('s1', tooMany)).resolves.toMatchObject({
+      ok: false,
+      code: 'bad_request',
+    })
+    await expect(harness.service.setSessionMcpServers('s2', ['shared'])).resolves.toMatchObject({
+      ok: false,
+      code: 'session_read_only',
+    })
+    expect(harness.setSessionMcpServers).not.toHaveBeenCalled()
   })
 })
 

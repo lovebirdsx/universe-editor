@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   filterMcpServersByCapabilities,
+  filterPoolForSession,
   filterWireByNames,
   findMcpServerByName,
   mcpServerRawToRecord,
@@ -347,6 +348,51 @@ describe('resolveMcpServerSelection', () => {
   it('an empty list disables everything', () => {
     const { enabledNames } = resolveMcpServerSelection(pool, [])
     expect(enabledNames).toEqual([])
+  })
+})
+
+describe('filterPoolForSession', () => {
+  const shared = {
+    name: 'shared',
+    transport: 'stdio' as const,
+    disabled: false,
+    source: 'global' as const,
+  }
+  const claudeOnly = {
+    name: 'claude',
+    transport: 'stdio' as const,
+    disabled: false,
+    source: 'agent-user' as const,
+    agentAffinity: 'claude-code' as const,
+  }
+  const codexOnly = {
+    name: 'codex',
+    transport: 'stdio' as const,
+    disabled: false,
+    source: 'agent-user' as const,
+    agentAffinity: 'codex' as const,
+  }
+  const sharedName = {
+    name: 'both',
+    transport: 'stdio' as const,
+    disabled: false,
+    source: 'agent-user' as const,
+    agentAffinity: 'codex' as const,
+    sharedWith: ['claude-code' as const],
+  }
+  const pool = [shared, claudeOnly, codexOnly, sharedName]
+
+  it('keeps shared entries plus the session agent affinity', () => {
+    expect(filterPoolForSession(pool, 'claude-code')).toEqual([shared, claudeOnly, sharedName])
+  })
+
+  it('keeps entries the other agent also defines via sharedWith', () => {
+    expect(filterPoolForSession(pool, 'codex')).toEqual([shared, codexOnly, sharedName])
+  })
+
+  it('keeps only affinity-free entries for custom agents', () => {
+    expect(filterPoolForSession(pool, 'my-agent')).toEqual([shared])
+    expect(filterPoolForSession(pool, undefined)).toEqual([shared])
   })
 })
 

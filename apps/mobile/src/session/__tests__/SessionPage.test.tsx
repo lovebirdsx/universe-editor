@@ -1268,3 +1268,176 @@ function frameType(frame: unknown): string | undefined {
   const type = (frame as Record<string, unknown>)['type']
   return typeof type === 'string' ? type : undefined
 }
+
+describe('SessionPage session settings', () => {
+  const settingsResult = {
+    canEdit: true,
+    subagentModel: { supported: true, current: 'sonnet', candidates: ['sonnet', 'opus'] },
+    mcp: {
+      pool: [
+        { name: 'shared', transport: 'stdio', defaultDisabled: false },
+        { name: 'docs', transport: 'http', defaultDisabled: true },
+      ],
+      selection: null,
+      enabled: ['shared'],
+      live: [{ name: 'shared', status: 'connected', transport: 'stdio' }],
+    },
+  }
+
+  function commands(socket: FakeWebSocket): Array<{
+    requestId: string
+    kind: string
+    payload: Record<string, unknown>
+  }> {
+    return sentFrames(socket).filter((frame) => frameType(frame) === 'command') as Array<{
+      requestId: string
+      kind: string
+      payload: Record<string, unknown>
+    }>
+  }
+
+  function openSessionPage(
+    summaryOverrides: Partial<Parameters<typeof sessionSummary>[1]> = {},
+  ): Harness {
+    const page = openPage()
+    feed(
+      page.harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', summaryOverrides),
+        timeline: [],
+      }),
+    )
+    return page.harness
+  }
+
+  function replySettings(socket: FakeWebSocket, requestId: string, result: unknown): void {
+    feed(socket, { type: 'command_result', requestId, ok: true, result })
+  }
+
+  it('queries settings only after a chip is opened', async () => {
+    const harness = openSessionPage()
+    expect(commands(harness.socket)).toHaveLength(0)
+
+    fireEvent.click(screen.getByTestId('mcp-chip'))
+    const command = commands(harness.socket).at(-1)!
+    expect(command).toMatchObject({
+      kind: 'getSessionSettings',
+      payload: { ref: { windowId: 1, localId: 's1' } },
+    })
+    replySettings(harness.socket, command.requestId, settingsResult)
+
+    await waitFor(() => expect(screen.getByTestId('mcp-sheet')).toBeTruthy())
+    expect(screen.getByTestId('mcp-chip').textContent).toContain('1/2')
+  })
+
+  it('shows the subagent chip only for claude-code sessions', async () => {
+    const harness = openSessionPage({ agentId: 'claude-code' })
+    expect(screen.getByTestId('subagent-chip')).toBeTruthy()
+    expect(screen.getByTestId('mcp-chip')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('subagent-chip'))
+    const command = commands(harness.socket).at(-1)!
+    expect(command.kind).toBe('getSessionSettings')
+    replySettings(harness.socket, command.requestId, settingsResult)
+
+    await waitFor(() => expect(screen.getByTestId('subagent-sheet')).toBeTruthy())
+    expect(screen.getByTestId('subagent-chip').textContent).toContain('sonnet')
+  })
+
+  it('has no subagent chip for other agents', () => {
+    const harness = openSessionPage()
+    expect(harness.client).toBeTruthy()
+    expect(screen.queryByTestId('subagent-chip')).toBeNull()
+    expect(screen.getByTestId('mcp-chip')).toBeTruthy()
+  })
+
+  it('hides both chips on a read-only session', async () => {
+    openSessionPage({ readOnly: true })
+    expect(screen.queryByTestId('subagent-chip')).toBeNull()
+    expect(screen.queryByTestId('mcp-chip')).toBeNull()
+  })
+
+  it('retries a failed settings load', async () => {
+    const harness = openSessionPage()
+    fireEvent.click(screen.getByTestId('mcp-chip'))
+    const first = commands(harness.socket).at(-1)!
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: first.requestId,
+      ok: false,
+      error: 'internal',
+    })
+    await waitFor(() => expect(screen.getByTestId('session-settings-error')).toBeTruthy())
+
+    fireEvent.click(screen.getByTestId('session-settings-retry'))
+    const second = commands(harness.socket).at(-1)!
+    expect(second.kind).toBe('getSessionSettings')
+    expect(second.requestId).not.toBe(first.requestId)
+    replySettings(harness.socket, second.requestId, settingsResult)
+
+    await waitFor(() => expect(screen.getByTestId('mcp-sheet')).toBeTruthy())
+  })
+
+  it('sends a toggled MCP whitelist and updates the chip optimistically', async () => {
+    const harness = openSessionPage()
+    fireEvent.click(screen.getByTestId('mcp-chip'))
+    const settingsCommand = commands(harness.socket).at(-1)!
+    replySettings(harness.socket, settingsCommand.requestId, settingsResult)
+    await waitFor(() => expect(screen.getByTestId('mcp-sheet')).toBeTruthy())
+
+    const docsRow = screen
+      .getAllByTestId('mcp-server-row')
+      .find((row) => row.getAttribute('data-name') === 'docs')!
+    fireEvent.click(docsRow.querySelector('input')!)
+
+    const write = commands(harness.socket).at(-1)!
+    expect(write).toMatchObject({
+      kind: 'setSessionMcpServers',
+      payload: { ref: { windowId: 1, localId: 's1' }, servers: ['shared', 'docs'] },
+    })
+    expect((docsRow.querySelector('input') as HTMLInputElement).checked).toBe(true)
+    expect(screen.getByTestId('mcp-chip').textContent).toContain('2/2')
+
+    feed(harness.socket, { type: 'command_result', requestId: write.requestId, ok: true })
+    await waitFor(() => expect(screen.getByTestId('mcp-chip').textContent).toContain('2/2'))
+  })
+
+  it('rolls an MCP toggle back when the write fails', async () => {
+    const harness = openSessionPage()
+    fireEvent.click(screen.getByTestId('mcp-chip'))
+    const settingsCommand = commands(harness.socket).at(-1)!
+    replySettings(harness.socket, settingsCommand.requestId, settingsResult)
+    await waitFor(() => expect(screen.getByTestId('mcp-sheet')).toBeTruthy())
+
+    const docsRow = screen
+      .getAllByTestId('mcp-server-row')
+      .find((row) => row.getAttribute('data-name') === 'docs')!
+    fireEvent.click(docsRow.querySelector('input')!)
+    const write = commands(harness.socket).at(-1)!
+    feed(harness.socket, {
+      type: 'command_result',
+      requestId: write.requestId,
+      ok: false,
+      error: 'session_read_only',
+    })
+
+    await waitFor(() =>
+      expect((docsRow.querySelector('input') as HTMLInputElement).checked).toBe(false),
+    )
+    expect(screen.getByTestId('mcp-chip').textContent).toContain('1/2')
+  })
+
+  it('hides the MCP chip once the pool turns out to be empty', async () => {
+    const harness = openSessionPage()
+    fireEvent.click(screen.getByTestId('mcp-chip'))
+    const command = commands(harness.socket).at(-1)!
+    replySettings(harness.socket, command.requestId, {
+      ...settingsResult,
+      mcp: { pool: [], selection: null, enabled: [], live: [] },
+    })
+
+    await waitFor(() => expect(screen.getByTestId('mcp-sheet')).toBeTruthy())
+    expect(screen.getByText(strings.mcpEmpty)).toBeTruthy()
+    expect(screen.queryByTestId('mcp-chip')).toBeNull()
+  })
+})
