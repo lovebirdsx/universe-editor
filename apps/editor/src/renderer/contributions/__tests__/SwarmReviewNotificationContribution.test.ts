@@ -1288,7 +1288,7 @@ describe('SwarmReviewNotificationContribution', () => {
   })
 
   describe('trigger reporting', () => {
-    it('reports the displayed needs-action list with the review version', async () => {
+    it('reports the displayed needs-action list with the review version and updated stamp', async () => {
       const t = await setup({
         triggers: [triggerSummary()],
         initialNeedsAction: [
@@ -1304,6 +1304,7 @@ describe('SwarmReviewNotificationContribution', () => {
           author: 'bob',
           description: 'fix the flaky test',
           state: 'needsReview',
+          updated: 5,
           version: 3,
         },
       ])

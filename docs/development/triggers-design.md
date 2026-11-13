@@ -1,6 +1,6 @@
 # Agent 触发器（Triggers）设计稿
 
-> 状态：门 2 评审稿（未实现）。需求来源：《Agent 触发器需求与设计任务书》；P0 调研结论见本文「附录 A」。
+> 状态：已实现，权威说明见 [triggers.md](triggers.md)。需求来源：《Agent 触发器需求与设计任务书》；P0 调研结论见本文「附录 A」。
 > 已拍板：方案顺序「先地基 → X 最小版 → 后开放 Y」；配置落 `<userData>/triggers/`；`onMissed` 默认 `skip`；poll 首期仅命令取数；判决走结果文件；**自动动作首期含 Swarm 投票 / 评论 / approve（不含 commit）**。
 
 ## 1. 总体架构

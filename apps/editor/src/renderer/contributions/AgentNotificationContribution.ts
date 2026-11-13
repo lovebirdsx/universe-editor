@@ -74,6 +74,12 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
   private _fire(event: AgentAttentionEvent): void {
     if (!this._enabled()) return
     const { kind, session } = event
+    // Automated (trigger) runs have their own result notification
+    // (TriggerRunNotificationContribution); a generic "finished" toast on top of
+    // it would duplicate the same run. Permission / question / error toasts stay:
+    // an unattended run may have no other way to reach the user. The phone bridge
+    // consumes the raw signal, so its completed push is unaffected.
+    if (kind === 'completed' && session.automation !== undefined) return
     const title = titleFor(kind)
     const lines = [truncateTitle(session.title)]
     const workspaceName = this._workspace.current?.name

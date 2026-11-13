@@ -21,7 +21,7 @@ export function hasEnabledSwarmTrigger(triggers: readonly TriggerSummary[]): boo
 }
 
 export function toSwarmNeedsActionReview(
-  review: Pick<SwarmReviewDto, 'id' | 'author' | 'description' | 'state'>,
+  review: Pick<SwarmReviewDto, 'id' | 'author' | 'description' | 'state' | 'updated'>,
   version: number | undefined,
 ): SwarmNeedsActionReview {
   return {
@@ -29,6 +29,7 @@ export function toSwarmNeedsActionReview(
     author: review.author,
     description: review.description.slice(0, SWARM_NEEDS_ACTION_DESCRIPTION_MAX),
     state: review.state,
+    updated: review.updated,
     ...(version !== undefined ? { version } : {}),
   }
 }

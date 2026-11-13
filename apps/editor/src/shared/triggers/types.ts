@@ -93,6 +93,8 @@ export const TRIGGER_DEFAULTS = {
   pollTimeoutSec: 60,
   failurePauseThreshold: 5,
   startupGraceMs: 60_000,
+  /** Renderer `startRun` RPC has no transport timeout; a wedged window must not hold a slot forever. */
+  startRunTimeoutMs: 120_000,
   processedKeyLimit: 2000,
   processedKeyTtlMs: 30 * 24 * 60 * 60 * 1000,
 } as const

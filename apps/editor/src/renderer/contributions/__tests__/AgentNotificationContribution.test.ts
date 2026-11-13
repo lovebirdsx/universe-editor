@@ -23,6 +23,7 @@ import type {
   AcpPendingPermission,
   AcpPendingElicitation,
 } from '../../services/acp/session/acpSession.js'
+import type { AutomationOrigin } from '../../../shared/triggers/types.js'
 
 interface FakeSession {
   id: string
@@ -34,6 +35,11 @@ interface FakeSession {
   isDormant: ISettableObservable<boolean>
   backgroundTaskCount: ISettableObservable<number>
   sessionIdOnAgent: ISettableObservable<string | undefined>
+  automation?: AutomationOrigin
+}
+
+function automationOrigin(): AutomationOrigin {
+  return { triggerId: 'triage', triggerName: 'Swarm 分诊', eventKey: 'swarm:1', runId: 'run-1' }
 }
 
 function makeSession(id: string, title = id): FakeSession {
@@ -269,6 +275,40 @@ describe('AgentNotificationContribution', () => {
     s.status.set('idle', undefined)
     await settleCompletion()
     expect(t.notify).not.toHaveBeenCalled()
+  })
+
+  // Automated runs notify through TriggerRunNotificationContribution; a generic
+  // "finished" toast would show the same run twice. The other edges stay — an
+  // unattended run may be the only reason the user is away from the PC.
+  describe('automated sessions', () => {
+    it('suppresses the generic completion toast', async () => {
+      const t = setup()
+      const s = makeSession('a')
+      s.automation = automationOrigin()
+      t.addSession(s)
+      s.status.set('running', undefined)
+      s.status.set('idle', undefined)
+      await settleCompletion()
+      expect(t.notify).not.toHaveBeenCalled()
+    })
+
+    it('keeps permission, question and error notifications', () => {
+      const t = setup()
+      const s = makeSession('a')
+      s.automation = automationOrigin()
+      t.addSession(s)
+      s.pendingPermission.set({ toolCallId: 't', title: 'x', options: [] } as never, undefined)
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      t.notify.mockClear()
+      s.pendingPermission.set(undefined, undefined)
+      s.pendingElicitation.set({ request: {} } as never, undefined)
+      expect(t.notify).toHaveBeenCalledTimes(1)
+      t.notify.mockClear()
+      s.pendingElicitation.set(undefined, undefined)
+      s.status.set('running', undefined)
+      s.status.set('errored', undefined)
+      expect(t.notify).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('on click: activates the session and reveals its chat with the input focused', async () => {

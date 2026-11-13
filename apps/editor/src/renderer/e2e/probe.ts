@@ -142,6 +142,7 @@ import {
   type E2ETerminalLink,
   type E2ETimelineItem,
   type E2ETreeItem,
+  type E2ETriggerAutomationRow,
   type E2EWorkingTreeHint,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
@@ -157,6 +158,7 @@ import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { IDiagnosticsService } from '../../shared/ipc/services.js'
 import type { IMobileGatewayService } from '../../shared/ipc/mobileGatewayService.js'
+import type { ITriggerMainService } from '../../shared/ipc/triggerService.js'
 import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import type { EditorGroupsService } from '../services/editor/EditorGroupsService.js'
 import type { IExtensionManagementService } from '../../shared/ipc/extensionManagementService.js'
@@ -236,6 +238,7 @@ export interface E2EProbeServices {
   readonly themeService: WorkbenchThemeService
   readonly fileClipboardService: IFileClipboardService
   readonly mobileGatewayService: IMobileGatewayService
+  readonly triggerMainService: ITriggerMainService
   /**
    * Resolves once the one-shot bootstrap focus restore has landed. That restore
    * is fire-and-forget and runs AFTER LifecyclePhase.Restored, so specs must
@@ -1323,6 +1326,34 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     cancelAcpElicitation: () => {
       const s = services.acpSessionService.activeSession.get()
       s?.pendingElicitation.get()?.cancel()
+    },
+    listTriggers: () => services.triggerMainService.listTriggers(),
+    runTriggerNow: (triggerId) => services.triggerMainService.runNow(triggerId),
+    getTriggersConfigPath: async () =>
+      URI.parse(await services.triggerMainService.getConfigFileUri()).fsPath,
+    getAcpAutomationRows: (): E2ETriggerAutomationRow[] => {
+      const rows: E2ETriggerAutomationRow[] = []
+      for (const entry of services.acpSessionHistoryService.list()) {
+        const automation = entry.automation
+        if (automation === undefined) continue
+        rows.push({
+          sessionId: entry.id,
+          title: entry.title,
+          agentId: entry.agentId,
+          ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
+          automation: {
+            triggerId: automation.triggerId,
+            triggerName: automation.triggerName,
+            eventKey: automation.eventKey,
+            runId: automation.runId,
+            ...(automation.verdict !== undefined ? { verdict: automation.verdict } : {}),
+            ...(automation.summary !== undefined ? { summary: automation.summary } : {}),
+            ...(automation.outcome !== undefined ? { outcome: automation.outcome } : {}),
+          },
+          ...(entry.firstPrompt !== undefined ? { firstPrompt: entry.firstPrompt } : {}),
+        })
+      }
+      return rows
     },
     getActiveOutputChannelName: () => services.outputService.activeChannelName.get(),
     getOutputChannelNames: () => services.outputService.channelNames.get(),

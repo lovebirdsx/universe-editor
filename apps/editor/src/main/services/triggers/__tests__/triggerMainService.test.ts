@@ -131,6 +131,7 @@ function review(reviewId: string): SwarmNeedsActionReview {
     description: 'a review',
     state: 'needsReview',
     version: 1,
+    updated: 1,
   }
 }
 
@@ -141,6 +142,8 @@ interface HarnessOptions {
   readonly fetch?: PollCommandFetcher
   readonly trusted?: boolean
   readonly startRunError?: Error
+  readonly holdStartRun?: boolean
+  readonly startRunTimeoutMs?: number
   readonly registerHost?: boolean
   readonly openRegistersHost?: boolean
   readonly hostWaitTimeoutMs?: number
@@ -158,12 +161,14 @@ interface Harness {
   readonly loggerLines: string[]
   readonly notify: ReturnType<typeof vi.fn>
   readonly startRun: ReturnType<typeof vi.fn>
+  readonly cancelRun: ReturnType<typeof vi.fn>
   readonly isWorkspaceTrusted: ReturnType<typeof vi.fn>
   readonly openWindow: ReturnType<typeof vi.fn>
   readonly host: ITriggerRunHost
   readonly openWindows: IOpenWindowInfo[]
   readonly requests: TriggerRunRequest[]
   registerHost(windowId?: number): void
+  releaseStartRun(): void
 }
 
 async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
@@ -186,16 +191,23 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const clock = new FakeClock()
   const { logger, lines } = createLogger()
   const requests: TriggerRunRequest[] = []
+  let releaseStart: (() => void) | undefined
   const startRun = vi.fn(async (request: TriggerRunRequest) => {
     requests.push(request)
+    if (options.holdStartRun === true) {
+      await new Promise<void>((resolve) => {
+        releaseStart = resolve
+      })
+    }
     if (options.startRunError !== undefined) throw options.startRunError
     return { sessionId: `session-${requests.length}` }
   })
   const isWorkspaceTrusted = vi.fn(async () => options.trusted ?? true)
+  const cancelRun = vi.fn(async () => undefined)
   const host: ITriggerRunHost = {
     _serviceBrand: undefined,
     startRun,
-    cancelRun: vi.fn(async () => undefined),
+    cancelRun,
     isWorkspaceTrusted,
   }
   const openWindows: IOpenWindowInfo[] = []
@@ -209,6 +221,9 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     startupGraceMs: options.startupGraceMs ?? GRACE_MS,
     hostWaitTimeoutMs: options.hostWaitTimeoutMs ?? 20,
     hostWaitPollMs: 5,
+    ...(options.startRunTimeoutMs === undefined
+      ? {}
+      : { startRunTimeoutMs: options.startRunTimeoutMs }),
     stateDebounceMs: options.stateDebounceMs ?? 0,
     uuid: (() => {
       let counter = 0
@@ -244,12 +259,14 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     loggerLines: lines,
     notify,
     startRun,
+    cancelRun,
     isWorkspaceTrusted,
     openWindow,
     host,
     openWindows,
     requests,
     registerHost,
+    releaseStartRun: () => releaseStart?.(),
   }
 }
 
@@ -461,6 +478,14 @@ describe('TriggerMainService dedupe', () => {
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
     expect(harness.requests[0]?.origin.eventKey).toBe('swarm:2')
+    expect(harness.requests[0]?.payload).toEqual({
+      reviewId: '2',
+      author: 'testuser',
+      description: 'a review',
+      state: 'needsReview',
+      version: 1,
+      updated: 1,
+    })
 
     await harness.service.reportSwarmNeedsAction([review('1'), review('2')])
     await settle()
@@ -587,7 +612,7 @@ describe('TriggerMainService failures', () => {
     expect(item.consecutiveFailures).toBe(1)
   })
 
-  it('fails runs whose window closes', async () => {
+  it('fails a run whose window closes', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [makeTrigger(workspace)],
     })
@@ -600,6 +625,74 @@ describe('TriggerMainService failures', () => {
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(item.lastError).toContain('closed')
     expect(item.consecutiveFailures).toBe(1)
+  })
+
+  it('times out a wedged startRun, releases the slot and cancels the late session', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace)],
+      startRunTimeoutMs: 1_000,
+      holdStartRun: true,
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    const runId = harness.requests[0]!.origin.runId
+
+    await harness.clock.advance(1_000)
+    await settle()
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.running).toBe(0)
+    expect(item.consecutiveFailures).toBe(1)
+    expect(item.lastError).toContain('did not start')
+    expect(harness.cancelRun).not.toHaveBeenCalled()
+
+    // The renderer finally answers: the session must be cancelled, not adopted.
+    harness.releaseStartRun()
+    await settle()
+    expect(harness.cancelRun).toHaveBeenCalledWith(runId)
+    expect(harness.loggerLines.some((line) => line.includes('after the timeout'))).toBe(true)
+  })
+
+  it('accepts a start that returns within the timeout and never cancels it', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      startRunTimeoutMs: 1_000,
+      holdStartRun: true,
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    await harness.clock.advance(500)
+    harness.releaseStartRun()
+    await settle()
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.running).toBe(1)
+    expect(item.consecutiveFailures).toBe(0)
+    expect(harness.cancelRun).not.toHaveBeenCalled()
+  })
+
+  it('frees the slot for a queued run after the start times out', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace)],
+      startRunTimeoutMs: 1_000,
+      holdStartRun: true,
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    await harness.service.runNow('trigger-1')
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
+
+    await harness.clock.advance(1_000)
+    await settle()
+    // The timed-out run released its slot, so the queued one now holds it.
+    expect(harness.startRun).toHaveBeenCalledTimes(2)
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').running).toBe(1)
   })
 })
 

@@ -77,16 +77,28 @@ describe('hasEnabledSwarmTrigger', () => {
 describe('toSwarmNeedsActionReview', () => {
   it('truncates descriptions and omits an unknown version', () => {
     const long = 'x'.repeat(SWARM_NEEDS_ACTION_DESCRIPTION_MAX + 50)
-    expect(toSwarmNeedsActionReview(review({ id: '1', description: long }), undefined)).toEqual({
+    expect(
+      toSwarmNeedsActionReview(review({ id: '1', description: long, updated: 7 }), undefined),
+    ).toEqual({
       reviewId: '1',
       author: 'alice',
       description: 'x'.repeat(SWARM_NEEDS_ACTION_DESCRIPTION_MAX),
       state: 'needsReview',
+      updated: 7,
     })
   })
 
   it('carries the version when one was found', () => {
     expect(toSwarmNeedsActionReview(review({ id: '1' }), 3)).toMatchObject({ version: 3 })
+  })
+
+  // A re-shelve of an unapproved review keeps the version, so approve needs the
+  // updated stamp to tell that the author pushed new changes.
+  it('carries the review updated stamp so approve can detect a silent re-shelve', () => {
+    expect(toSwarmNeedsActionReview(review({ id: '1', updated: 42 }), 3)).toMatchObject({
+      version: 3,
+      updated: 42,
+    })
   })
 })
 
@@ -99,16 +111,20 @@ describe('SwarmTriggerReporter', () => {
     expect(getReviewVersion).not.toHaveBeenCalled()
   })
 
-  it('reports the full list with each review version', async () => {
+  it('reports the full list with each review version and updated stamp', async () => {
     const { reporter, report } = makeReporter(async (id) => ({ version: Number(id) }))
     reporter.setTriggers([summary()])
-    await reporter.report([review({ id: '101', author: 'bob' }), review({ id: '102' })])
+    await reporter.report([
+      review({ id: '101', author: 'bob', updated: 11 }),
+      review({ id: '102', updated: 12 }),
+    ])
     expect(report).toHaveBeenCalledWith([
       {
         reviewId: '101',
         author: 'bob',
         description: 'desc',
         state: 'needsReview',
+        updated: 11,
         version: 101,
       },
       {
@@ -116,6 +132,7 @@ describe('SwarmTriggerReporter', () => {
         author: 'alice',
         description: 'desc',
         state: 'needsReview',
+        updated: 12,
         version: 102,
       },
     ])

@@ -84,6 +84,27 @@ export async function executeTriggerVerdict(
   }
 
   const version = payloadVersion(request)
+  const approveCheck = await checkApproveGuard(
+    validated.verdict.actions,
+    version,
+    payloadUpdated(request),
+    options,
+  )
+  if (approveCheck !== undefined) {
+    audits.push({
+      type: 'swarm.approve',
+      target: approveCheck.target,
+      result: 'rejected',
+      reason: approveCheck.reason,
+    })
+    logger?.debug(`trigger action swarm.approve rejected: ${approveCheck.reason}`)
+    return {
+      verdict: 'escalate',
+      summary: clampSummary(`动作未执行，已降级为 escalate：${approveCheck.reason}`),
+      actions: audits,
+    }
+  }
+
   for (const action of validated.verdict.actions) {
     let outcome: ActionOutcome
     try {
@@ -133,6 +154,48 @@ function payloadVersion(request: TriggerRunRequest): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
+function payloadUpdated(request: TriggerRunRequest): number | undefined {
+  const value = request.payload['updated']
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
+/**
+ * Validates the approve TOCTOU guard before ANY action runs.
+ *
+ * Checking inside `swarm.approve` would misread our own vote / comment as an
+ * author re-shelve: both bump the review's `updated` stamp. Running approve
+ * first to dodge that is not an option either — Swarm only exposes the approval
+ * transition once the required reviewer's own vote landed, so the agent's
+ * declared order matters. One pre-flight check keeps that order and still
+ * catches changes made during the analysis, which is what the guard is for;
+ * the remaining window is the few RPCs spent executing our own actions.
+ */
+async function checkApproveGuard(
+  actions: readonly TriggerVerdictAction[],
+  version: number | undefined,
+  updated: number | undefined,
+  options: TriggerActionExecutorOptions,
+): Promise<{ readonly target: string; readonly reason: string } | undefined> {
+  const approve = actions.find((action) => action.type === 'swarm.approve')
+  if (approve === undefined) return undefined
+  const rejected = (reason: string) => ({ target: approve.target, reason })
+  if (version === undefined) return rejected('事件缺少审核版本号，无法确认审核未被更新')
+  if (updated === undefined) return rejected('事件缺少审核更新时间，无法确认审核未被更新')
+  // Re-fetch before approving: the author may have re-shelved between the
+  // analysis and this action (TOCTOU), which invalidates the agent's verdict.
+  const detail = await options.commands.executeCommand<SwarmReviewDetailDto | undefined>(
+    SwarmCommands.getReview,
+    { reviewId: approve.target },
+    true,
+  )
+  if (detail === undefined) return rejected('重新拉取审核失败')
+  if (!canApproveReview(detail.transitions)) return rejected('当前审核已不可 approve')
+  if (latestReviewVersion(detail) !== version) return rejected('审核版本已变化')
+  // A re-shelve of an unapproved review keeps the version but moves `updated`.
+  if (detail.updated !== updated) return rejected('审核已更新，分析之后作者又提交了改动')
+  return undefined
+}
+
 async function executeAction(
   action: TriggerVerdictAction,
   request: TriggerRunRequest,
@@ -160,7 +223,7 @@ async function executeAction(
       return comment !== undefined ? { ok: true } : failed('评论命令返回失败')
     }
     case 'swarm.approve':
-      return executeApprove(action.target, version, options)
+      return executeApprove(action.target, options)
     default:
       return rejected(`不支持的动作类型 ${action.type}`)
   }
@@ -168,20 +231,9 @@ async function executeAction(
 
 async function executeApprove(
   reviewId: string,
-  version: number | undefined,
   options: TriggerActionExecutorOptions,
 ): Promise<ActionOutcome> {
-  if (version === undefined) return rejected('事件缺少审核版本号，无法确认审核未被更新')
-  // Re-fetch before approving: the review may have been re-shelved between the
-  // analysis and this action (TOCTOU), which invalidates the agent's verdict.
-  const detail = await options.commands.executeCommand<SwarmReviewDetailDto | undefined>(
-    SwarmCommands.getReview,
-    { reviewId },
-    true,
-  )
-  if (detail === undefined) return rejected('重新拉取审核失败')
-  if (!canApproveReview(detail.transitions)) return rejected('当前审核已不可 approve')
-  if (latestReviewVersion(detail) !== version) return rejected('审核版本已变化')
+  // The TOCTOU guard already re-fetched the review for the whole action batch.
   const result = await options.commands.executeCommand<boolean>(SwarmCommands.transition, {
     reviewId,
     state: 'approved',

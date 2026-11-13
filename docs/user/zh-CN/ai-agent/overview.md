@@ -48,6 +48,7 @@
 - **[模式](../reference/glossary.md#模式agent-模式) / [思考等级](../reference/glossary.md#思考等级)**：Agent 的行为方式与推理深度 → [模式与思考等级](./modes-and-thinking.md)
 - **[技能](../reference/glossary.md#技能skill) / [记忆](../reference/glossary.md#记忆memory) / [MCP](../reference/glossary.md#mcp)**：让 Agent 更懂你的项目 → [技能、记忆与 MCP](./skills-memory-mcp.md)
 - **会话管理**：历史、恢复、切换、查找 → [管理会话](./managing-sessions.md)
+- **触发器**：让 Agent 按定时 / 轮询 / 审核事件自动开工 → [Agent 触发器](./triggers.md)
 
 **本页涉及的命令：**
 

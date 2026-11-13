@@ -52,6 +52,13 @@ export interface SwarmNeedsActionReview {
   readonly state: string
   /** Latest review version at detection time; approve requires it unchanged. */
   readonly version?: number
+  /**
+   * Last-updated stamp (Unix ms) at detection time. Swarm does NOT bump the
+   * version when an unapproved review is re-shelved (it only moves on approve),
+   * so the version alone cannot detect the author pushing new changes; approve
+   * requires this stamp unchanged too.
+   */
+  readonly updated?: number
 }
 
 export interface ITriggerRunHost {
@@ -78,5 +85,6 @@ export function swarmReviewEvent(
     state: review.state,
   }
   if (review.version !== undefined) payload['version'] = review.version
+  if (review.updated !== undefined) payload['updated'] = review.updated
   return { triggerId, key: `swarm:${review.reviewId}`, payload, firedAt: now }
 }

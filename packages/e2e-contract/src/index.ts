@@ -890,6 +890,41 @@ export interface E2EMobileDevice {
   readonly notificationsEnabled: boolean
 }
 
+/** One trigger as listed by the main-process scheduler. */
+export interface E2ETriggerSummary {
+  readonly id: string
+  readonly name: string
+  readonly sourceType: 'manual' | 'schedule' | 'poll' | 'swarm-review' | 'unknown'
+  readonly status: 'disabled' | 'idle' | 'running' | 'paused' | 'invalid' | 'needs-confirmation'
+  readonly enabled: boolean
+  readonly paused: boolean
+  readonly elevatedMode: boolean
+  readonly elevatedModeConfirmed: boolean
+  readonly running: number
+  readonly queued: number
+  readonly consecutiveFailures: number
+  readonly errors?: readonly string[]
+}
+
+/** A durable session-history row stamped by an automated trigger run. */
+export interface E2ETriggerAutomationRow {
+  readonly sessionId: string
+  readonly title: string
+  readonly agentId: string
+  readonly cwd?: string
+  readonly automation: {
+    readonly triggerId: string
+    readonly triggerName: string
+    readonly eventKey: string
+    readonly runId: string
+    readonly verdict?: string
+    readonly summary?: string
+    readonly outcome?: string
+  }
+  /** The session's recorded first prompt, including the rendered data fence. */
+  readonly firstPrompt?: string
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -1433,6 +1468,20 @@ export interface E2EProbe {
   resolveAcpElicitation(content: Record<string, unknown>): void
   /** Dismiss the active session's pending elicitation (settles as cancel). */
   cancelAcpElicitation(): void
+  // -- Agent trigger probe -------------------------------------------------
+  /** Triggers as the main-process scheduler currently lists them (config + live state). */
+  listTriggers(): Promise<readonly E2ETriggerSummary[]>
+  /**
+   * Fire a manual event for a trigger. Resolves once the event was accepted and
+   * queued — NOT when the automated session exists (poll the history rows).
+   * Rejects when the trigger is paused, invalid or needs an elevated-mode
+   * confirmation.
+   */
+  runTriggerNow(triggerId: string): Promise<void>
+  /** Absolute fs path of `<userData>/triggers/triggers.json`; the file may not exist yet. */
+  getTriggersConfigPath(): Promise<string>
+  /** Durable history rows started by an agent trigger, with their automation provenance. */
+  getAcpAutomationRows(): readonly E2ETriggerAutomationRow[]
   // -- Output probe --------------------------------------------------------
   /** Name of the currently active output channel, or undefined if none. */
   getActiveOutputChannelName(): string | undefined

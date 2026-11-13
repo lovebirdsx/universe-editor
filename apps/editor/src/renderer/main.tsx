@@ -1271,6 +1271,7 @@ async function bootstrapWorkbench(): Promise<void> {
     themeService,
     fileClipboardService: services.get(IFileClipboardService) as IFileClipboardService,
     mobileGatewayService: services.get(IMobileGatewayService) as IMobileGatewayService,
+    triggerMainService: instantiation.invokeFunction((a) => a.get(ITriggerMainService)),
     bootstrapFocusSettled,
     computeTeardownLeakReport: snapshotLeaks,
   })

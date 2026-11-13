@@ -32,7 +32,7 @@ function makeRequest(overrides: Partial<TriggerRunRequest> = {}): TriggerRunRequ
     budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 1440 },
     allowedActions: ['swarm.vote', 'swarm.comment', 'swarm.approve'],
     approveConfirmed: true,
-    payload: { reviewId: '1001', version: 2 },
+    payload: { reviewId: '1001', version: 2, updated: 100 },
     ...overrides,
   }
 }
@@ -44,7 +44,7 @@ function reviewDetail(overrides: Partial<SwarmReviewDetailDto> = {}): SwarmRevie
     stateLabel: 'Needs Review',
     author: 'alice',
     description: 'fix stuff',
-    updated: 1,
+    updated: 100,
     versions: [{ version: 2, change: '12', pending: true, time: 1 }],
     participants: [],
     transitions: [{ state: 'approved', label: 'Approve' }],
@@ -153,6 +153,103 @@ describe('executeTriggerVerdict', () => {
       commit: false,
     })
     expect(resolution.verdict).toBe('auto-approve')
+  })
+
+  it('refuses to approve when the event has no updated stamp', async () => {
+    const raw = JSON.stringify({
+      verdict: 'auto-approve',
+      summary: '',
+      actions: [{ type: 'swarm.approve', target: '1001' }],
+    })
+    const { commands, executeCommand } = makeCommands({
+      [SwarmCommands.getReview]: () => reviewDetail(),
+      [SwarmCommands.transition]: () => true,
+    })
+    const resolution = await executeTriggerVerdict(
+      raw,
+      makeRequest({ payload: { reviewId: '1001', version: 2 } }),
+      { commands },
+    )
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(resolution.verdict).toBe('escalate')
+    expect(resolution.summary).toContain('更新时间')
+    expect(resolution.actions).toEqual([
+      { type: 'swarm.approve', target: '1001', result: 'rejected', reason: expect.any(String) },
+    ])
+  })
+
+  // A re-shelve of an unapproved review keeps the same version, so the version
+  // check alone would approve changes the agent never saw.
+  it('refuses to approve when the review was re-shelved without a version bump', async () => {
+    const raw = JSON.stringify({
+      verdict: 'auto-approve',
+      summary: '',
+      actions: [{ type: 'swarm.approve', target: '1001' }],
+    })
+    const { commands, executeCommand } = makeCommands({
+      [SwarmCommands.getReview]: () => reviewDetail({ updated: 101 }),
+      [SwarmCommands.transition]: () => true,
+    })
+    const resolution = await executeTriggerVerdict(raw, makeRequest(), { commands })
+    expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.transition, expect.anything())
+    expect(resolution.verdict).toBe('escalate')
+    expect(resolution.summary).toContain('审核已更新')
+  })
+
+  // The guard runs before any action: our own vote / comment bumps the review's
+  // updated stamp, so a per-action check would reject a legitimate batch.
+  it('runs the approve guard before its own vote in the same batch', async () => {
+    const raw = JSON.stringify({
+      verdict: 'auto-approve',
+      summary: '',
+      actions: [
+        { type: 'swarm.vote', target: '1001', detail: 'up' },
+        { type: 'swarm.approve', target: '1001' },
+      ],
+    })
+    const { commands, executeCommand } = makeCommands({
+      [SwarmCommands.getReview]: () => reviewDetail(),
+      [SwarmCommands.vote]: () => true,
+      [SwarmCommands.transition]: () => true,
+    })
+    const resolution = await executeTriggerVerdict(raw, makeRequest(), { commands })
+    expect(executeCommand.mock.calls.map((call) => call[0])).toEqual([
+      SwarmCommands.getReview,
+      SwarmCommands.vote,
+      SwarmCommands.transition,
+    ])
+    expect(resolution.verdict).toBe('auto-approve')
+    expect(resolution.actions).toEqual([
+      { type: 'swarm.vote', target: '1001', result: 'ok' },
+      { type: 'swarm.approve', target: '1001', result: 'ok' },
+    ])
+  })
+
+  it('executes no action when the pre-flight approve guard fails', async () => {
+    const raw = JSON.stringify({
+      verdict: 'auto-approve',
+      summary: '',
+      actions: [
+        { type: 'swarm.vote', target: '1001', detail: 'up' },
+        { type: 'swarm.approve', target: '1001' },
+      ],
+    })
+    const { commands, executeCommand } = makeCommands({
+      [SwarmCommands.getReview]: () => reviewDetail({ transitions: [] }),
+      [SwarmCommands.vote]: () => true,
+      [SwarmCommands.transition]: () => true,
+    })
+    const resolution = await executeTriggerVerdict(raw, makeRequest(), { commands })
+    expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.vote, expect.anything())
+    expect(resolution.verdict).toBe('escalate')
+    expect(resolution.actions).toEqual([
+      {
+        type: 'swarm.approve',
+        target: '1001',
+        result: 'rejected',
+        reason: '当前审核已不可 approve',
+      },
+    ])
   })
 
   it('refuses to approve when the event has no version', async () => {

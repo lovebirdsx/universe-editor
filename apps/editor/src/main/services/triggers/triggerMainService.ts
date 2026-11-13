@@ -116,6 +116,7 @@ export interface TriggerMainServiceOptions {
   readonly startupGraceMs?: number
   readonly hostWaitTimeoutMs?: number
   readonly hostWaitPollMs?: number
+  readonly startRunTimeoutMs?: number
   readonly stateDebounceMs?: number
   readonly maxRunDirectories?: number
 }
@@ -157,6 +158,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private readonly _startupGraceMs: number
   private readonly _hostWaitTimeoutMs: number
   private readonly _hostWaitPollMs: number | undefined
+  private readonly _startRunTimeoutMs: number
   private readonly _maxRunDirectories: number
   private readonly _dir: string
   private readonly _configFile: string
@@ -196,6 +198,10 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._startupGraceMs = Math.max(0, options.startupGraceMs ?? TRIGGER_DEFAULTS.startupGraceMs)
     this._hostWaitTimeoutMs = Math.max(0, options.hostWaitTimeoutMs ?? DEFAULT_HOST_WAIT_TIMEOUT_MS)
     this._hostWaitPollMs = options.hostWaitPollMs
+    this._startRunTimeoutMs = Math.max(
+      0,
+      options.startRunTimeoutMs ?? TRIGGER_DEFAULTS.startRunTimeoutMs,
+    )
     this._maxRunDirectories = Math.max(1, options.maxRunDirectories ?? DEFAULT_MAX_RUN_DIRECTORIES)
     this._dir = triggersDirectory(options.userDataDir)
     this._configFile = triggersConfigPath(options.userDataDir)
@@ -882,7 +888,15 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           localize('triggers.error.workspaceUntrusted', 'The workspace is not trusted'),
         )
       }
-      const result = await host.startRun(request)
+      const result = await this._startHostRun(host, request, pending.runId)
+      if (result === undefined) {
+        throw new Error(
+          localize(
+            'triggers.error.startRunTimeout',
+            'The editor window did not start the run in time',
+          ),
+        )
+      }
       if (!this._active.has(pending.runId)) {
         void host.cancelRun(pending.runId).catch(() => undefined)
         return
@@ -910,6 +924,49 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       )
       this._failActiveRun(pending.runId, message)
     }
+  }
+
+  /**
+   * `host.startRun` has no transport timeout, so a wedged renderer would hold its
+   * queue slot forever. On timeout the run is failed by the caller (slot released,
+   * backoff recorded); a renderer that finishes starting later must not resurrect
+   * an untracked session, so its session is cancelled and the result dropped.
+   */
+  private async _startHostRun(
+    host: ITriggerRunHost,
+    request: TriggerRunRequest,
+    runId: string,
+  ): Promise<{ readonly sessionId: string } | undefined> {
+    let timedOut = false
+    let timer: TriggerTimerHandle | undefined
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = this._clock.setTimeout(() => {
+        timedOut = true
+        resolve(undefined)
+      }, this._startRunTimeoutMs)
+    })
+    const started = host.startRun(request).then(
+      (result) => {
+        if (timedOut) {
+          this._logger.warn(`run ${runId}: renderer started it after the timeout; cancelling`)
+          void host.cancelRun(runId).catch((err: unknown) => {
+            this._logger.warn(`run ${runId}: late cancel failed: ${describeError(err)}`)
+          })
+          return undefined
+        }
+        return result
+      },
+      (err: unknown) => {
+        if (timedOut) {
+          this._logger.warn(`run ${runId}: renderer reported a start failure after the timeout`)
+          return undefined
+        }
+        throw err
+      },
+    )
+    const result = await Promise.race([started, timeout])
+    if (timer !== undefined) this._clock.clearTimeout(timer)
+    return result
   }
 
   private async _resolveHost(
