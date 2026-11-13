@@ -7,7 +7,7 @@
 import { exec } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { totalmem as osTotalmem } from 'node:os'
-import { redactProcessName } from './processNameSafety.js'
+import { redactProcessName, USER_PROCESS_PREFIX } from './processNameSafety.js'
 
 export interface ProcessItem {
   name: string
@@ -360,17 +360,84 @@ export function flattenProcessTree(root: ProcessItem): ProcessItem[] {
 }
 
 /**
+ * Executables that only a shell — an integrated terminal, or a script runner that goes
+ * through one — puts in the tree. They are the user's processes, not editor-managed
+ * children: `node --max-old-space-size=32768 …/backend/main.js` under bash is the user's
+ * backend, not an editor OOM signal.
+ */
+const USER_SHELL_NAMES: ReadonlySet<string> = new Set([
+  'bash',
+  'bash.exe',
+  'sh',
+  'sh.exe',
+  'zsh',
+  'zsh.exe',
+  'fish',
+  'fish.exe',
+  'pwsh',
+  'pwsh.exe',
+  'powershell',
+  'powershell.exe',
+  'cmd',
+  'cmd.exe',
+  'wsl',
+  'wsl.exe',
+  'git-bash',
+  'git-bash.exe',
+])
+
+/**
+ * A shell node counts as user-owned unless the role registry already names its tree: an
+ * editor-managed `cmd.exe /d /s /c …` wrapper has an `acp-agent`/`acp-terminal` ancestor,
+ * whereas an integrated-terminal shell has no role-annotated ancestor at all. On POSIX
+ * the pty spawn reports a real pid, so its `pty` role is the direct marker; Windows conpty
+ * reports pid 0, which makes the executable name the only signal that survives.
+ */
+function isUserShellName(item: ProcessItem): boolean {
+  const stem = redactProcessName(item.name)
+  return stem !== undefined && USER_SHELL_NAMES.has(stem.toLowerCase())
+}
+
+function isUserLaunched(item: ProcessItem, byPid: ReadonlyMap<number, ProcessItem>): boolean {
+  let current: ProcessItem | undefined = item
+  let userShell = false
+  const visited = new Set<number>()
+  while (current && !visited.has(current.pid)) {
+    if (current.role === 'pty') return true
+    // Any other role means an editor/agent-owned tree, whatever executables it wraps.
+    // `main` is only the root of this walk, not an owner annotation.
+    if (current.role !== undefined && current.role !== 'main') return false
+    userShell ||= isUserShellName(current)
+    visited.add(current.pid)
+    current = byPid.get(current.ppid)
+  }
+  return userShell
+}
+
+/** Pids whose ancestor chain passes through a user shell — the user launched them. */
+export function findUserProcessPids(items: readonly ProcessItem[]): ReadonlySet<number> {
+  const byPid = new Map<number, ProcessItem>()
+  for (const item of items) byPid.set(item.pid, item)
+  const user = new Set<number>()
+  for (const item of items) {
+    if (isUserLaunched(item, byPid)) user.add(item.pid)
+  }
+  return user
+}
+
+/**
  * One-line memory/CPU summary of a process tree. Single line on purpose: it shares the
  * process-metrics log with the app-metrics line, and a multi-line dump every few seconds
  * would bury the curve it exists to make readable.
  */
 export function formatProcessTreeMemory(items: readonly ProcessItem[]): string {
+  const userPids = findUserProcessPids(items)
   // `findName` falls back to the raw command line, and this string goes straight
   // into processMetrics.log and the diagnostics bundle — redact before writing.
   return items
     .map(
       (item) =>
-        `${redactProcessName(item.name) ?? 'unknown-process'}#${item.pid}=${Math.round(item.mem / MB)}MB/${Math.round(item.load)}%`,
+        `${userPids.has(item.pid) ? USER_PROCESS_PREFIX : ''}${redactProcessName(item.name) ?? 'unknown-process'}#${item.pid}=${Math.round(item.mem / MB)}MB/${Math.round(item.load)}%`,
     )
     .join(' | ')
 }

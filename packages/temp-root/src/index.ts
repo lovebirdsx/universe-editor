@@ -68,6 +68,7 @@ export const TEMP_PREFIXES: readonly string[] = [
   'cue-scaffold-',
   'diagnostics-',
   'error-sink-test-',
+  'main-exit-',
   'ext-engine-',
   'ext-gallery-',
   'ext-icon-',

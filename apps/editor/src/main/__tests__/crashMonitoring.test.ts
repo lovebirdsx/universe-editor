@@ -237,13 +237,15 @@ describe('installProcessMetricsLogging', () => {
       pid: number,
       mb: number,
       children?: ProcessItem[],
+      extra: { ppid?: number; role?: string } = {},
     ): ProcessItem => ({
       name,
       cmd: name,
       pid,
-      ppid: 0,
+      ppid: extra.ppid ?? 0,
       load: 1,
       mem: mb * 1024 * 1024,
+      ...(extra.role !== undefined ? { role: extra.role } : {}),
       ...(children ? { children } : {}),
     })
 
@@ -258,6 +260,26 @@ describe('installProcessMetricsLogging', () => {
         },
         { listProcessTree: async () => root },
       )
+    }
+
+    function installWithTreeLevels(root: ProcessItem): {
+      info: string[]
+      warn: string[]
+      dispose: () => void
+    } {
+      const info: string[] = []
+      const warn: string[] = []
+      const disposable = installProcessMetricsLogging(
+        {
+          createLogger: () =>
+            ({
+              info: (line: string) => info.push(line),
+              warn: (line: string) => warn.push(line),
+            }) as never,
+        },
+        { listProcessTree: async () => root },
+      )
+      return { info, warn, dispose: () => disposable.dispose() }
     }
 
     it('logs the tree, because app metrics cannot see spawned Node children', async () => {
@@ -299,6 +321,56 @@ describe('installProcessMetricsLogging', () => {
         expect(flagged).not.toContain('main#')
       } finally {
         disposable.dispose()
+      }
+    })
+
+    it('does not warn for a heavy process the user launched in a terminal', async () => {
+      // The shipped diagnostic: a `node --max-old-space-size=32768` backend started in an
+      // integrated terminal (below bash.exe) crossed 2GB and warned every 15s forever,
+      // even though the editor neither spawned nor owns it.
+      const lines = installWithTreeLevels(
+        node('main', process.pid, 300, [
+          node('bash.exe', 50, 20, [node('node', 51, 2600, undefined, { ppid: 50 })], {
+            ppid: process.pid,
+          }),
+        ]),
+      )
+      try {
+        await vi.waitFor(() => {
+          expect(lines.info.some((l) => l.startsWith('hosted-processes'))).toBe(true)
+        })
+        const hosted = lines.info.find((l) => l.startsWith('hosted-processes'))!
+        expect(hosted).toContain('user:bash.exe#50=')
+        expect(hosted).toContain('user:node#51=2600MB')
+        // Still recorded as an observation, but not as an editor OOM warning.
+        expect(hosted).toContain('— above 2048MB: user:node#51')
+        expect(lines.warn).toEqual([])
+      } finally {
+        lines.dispose()
+      }
+    })
+
+    it('still warns when an editor-owned process is over the line beside the user backend', async () => {
+      const lines = installWithTreeLevels(
+        node('main', process.pid, 300, [
+          node('bash.exe', 50, 20, [node('node', 51, 2600, undefined, { ppid: 50 })], {
+            ppid: process.pid,
+          }),
+          node('acp-agent', 99, HOSTED_PROCESS_WARN_BYTES / 1024 / 1024 + 1, undefined, {
+            ppid: process.pid,
+          }),
+        ]),
+      )
+      try {
+        await vi.waitFor(() => {
+          expect(lines.warn.some((l) => l.includes('— above'))).toBe(true)
+        })
+        const warn = lines.warn.find((l) => l.includes('— above'))!
+        expect(warn).toContain('acp-agent#99')
+        // The user process stays visible in the same observation, marked as theirs.
+        expect(warn).toContain('user:node#51')
+      } finally {
+        lines.dispose()
       }
     })
 

@@ -148,6 +148,42 @@ describe('parseExitScene', () => {
     expect(JSON.stringify(scene)).not.toContain('ak-1')
   })
 
+  it('marks user-launched over-threshold processes as observations, not editor risk', () => {
+    const text = [
+      '[12:00:00] [info] hosted-processes cnt=2 user:bash.exe#50=20MB/0% | user:node#51=2554MB/0% | acp-agent (claude)#99=200MB/0% — above 2048MB: user:node#51',
+      '[12:00:10] [info] pid=1 type=Browser mem=100MB cpu=0%',
+    ].join('\n')
+    const scene = {
+      ...parseExitScene(text, { sessionStartMs: SESSION_START_MS }),
+      source: 'live' as const,
+      truncated: false,
+    }
+    const backend = scene.hosted.find((process) => process.pid === 51)
+    expect(backend?.name).toBe('node')
+    expect(backend?.userLaunched).toBe(true)
+    expect(backend?.flaggedSamples).toBe(1)
+    expect(scene.hosted.find((process) => process.pid === 99)?.userLaunched).toBe(false)
+
+    const line = describeSceneForTest(scene)
+    expect(line).toContain('other over-threshold: none')
+    expect(line).toContain(
+      'user-launched over-threshold (not counted as editor risk): node#51 peak 2554MB',
+    )
+  })
+
+  it('counts hosted-processes samples in the last-sample timestamp', () => {
+    // The hosted tree is sampled every 15s and can land after the 30s app-metrics
+    // line; the old reader stopped at the metrics line and reported a sample 19s
+    // older than the one that actually closed out the session.
+    const text = [
+      '[12:15:22] [info] pid=1 type=Browser mem=100MB cpu=0%',
+      '[12:15:37] [info] hosted-processes cnt=1 user:bash.exe#50=20MB/0%',
+    ].join('\n')
+    const scene = parseExitScene(text, { sessionStartMs: SESSION_START_MS })
+    expect(scene.sampleCount).toBe(1)
+    expect(scene.lastSampleAt).toBe(new Date(2026, 8, 12, 12, 15, 37).getTime())
+  })
+
   it('rolls the date over midnight', () => {
     const text = [
       '[23:59:30] [info] pid=1 type=Browser mem=100MB cpu=0%',

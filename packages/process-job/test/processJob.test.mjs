@@ -16,6 +16,8 @@ const addon = runnable ? createRequire(import.meta.url)(addonPath) : undefined
 // old binary; only the snapshot cases need the new export.
 const hasSnapshot = typeof addon?.listProcesses === 'function'
 const needsSnapshot = { skip: !hasSnapshot && 'addon predates listProcesses; rebuild it' }
+const hasWait = typeof addon?.waitForProcessExit === 'function'
+const needsWait = { skip: !hasWait && 'addon predates waitForProcessExit; rebuild it' }
 
 const SLEEPER = 'setInterval(() => {}, 1000)'
 // 等 stdin 的 "go" 再生孙进程：保证测试先把本进程 assign 进 job，孙进程才会继承。
@@ -92,6 +94,9 @@ describe('process_job addon', { skip: !runnable && 'win32 + built addon only' },
       assert.ok(rows.length > 1)
       assert.equal(rows.find((p) => p.pid === process.pid)?.ppid, process.ppid)
       assert.equal(rows.find((p) => p.pid === child.pid)?.ppid, process.pid)
+      // The orphan-sweep log names what it kills; the process snapshot already carries
+      // the executable name, so expose it instead of making the caller spawn tasklist.
+      assert.equal(rows.find((p) => p.pid === child.pid)?.name.toLowerCase(), 'node.exe')
       // 重复调用必须释放快照句柄，不报错（不比较条数：机器上并发的进程出生/退出会让它变化）。
       assert.ok(addon.listProcesses().some((p) => p.pid === child.pid))
     } finally {
@@ -99,28 +104,32 @@ describe('process_job addon', { skip: !runnable && 'win32 + built addon only' },
     }
   })
 
-  it('keeps the dead parent pid on the surviving child (orphan signal)', needsSnapshot, async () => {
-    const parent = spawnOrphanMaker()
-    let grandchild
-    try {
-      const exited = new Promise((resolve) => parent.once('exit', resolve))
-      grandchild = await readLine(parent, 'grandchild')
-      await exited
-      assert.ok(
-        await waitUntil(() => {
-          const rows = addon.listProcesses()
-          const alive = new Set(rows.map((p) => p.pid))
-          const survivor = rows.find((p) => p.pid === grandchild)
-          return survivor !== undefined && !alive.has(survivor.ppid)
-        }),
-        'child must stay visible with its exited parent still recorded as ppid',
-      )
-    } finally {
+  it(
+    'keeps the dead parent pid on the surviving child (orphan signal)',
+    needsSnapshot,
+    async () => {
+      const parent = spawnOrphanMaker()
+      let grandchild
       try {
-        process.kill(grandchild)
-      } catch {}
-    }
-  })
+        const exited = new Promise((resolve) => parent.once('exit', resolve))
+        grandchild = await readLine(parent, 'grandchild')
+        await exited
+        assert.ok(
+          await waitUntil(() => {
+            const rows = addon.listProcesses()
+            const alive = new Set(rows.map((p) => p.pid))
+            const survivor = rows.find((p) => p.pid === grandchild)
+            return survivor !== undefined && !alive.has(survivor.ppid)
+          }),
+          'child must stay visible with its exited parent still recorded as ppid',
+        )
+      } finally {
+        try {
+          process.kill(grandchild)
+        } catch {}
+      }
+    },
+  )
 
   it('assigns a spawned child (already in the inherited launch job) and terminates it', async () => {
     const job = addon.createJob()
@@ -211,6 +220,29 @@ describe('process_job addon', { skip: !runnable && 'win32 + built addon only' },
     } finally {
       addon.close(job)
     }
+  })
+
+  it('waits for a process to exit and returns its exit code', needsWait, async () => {
+    // Detached child so the test runner's own lifecycle does not race the wait; the
+    // 300ms delay leaves the async work queued before the process object disappears.
+    const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(7), 300)'], {
+      stdio: 'ignore',
+    })
+    try {
+      assert.equal(await addon.waitForProcessExit(child.pid), 7)
+    } finally {
+      try {
+        process.kill(child.pid)
+      } catch {}
+    }
+  })
+
+  it('rejects when the target process object is already gone', needsWait, async () => {
+    await assert.rejects(addon.waitForProcessExit(0x7ffffff0), /win32 error/)
+  })
+
+  it('refuses to wait for the calling process', needsWait, () => {
+    assert.throws(() => addon.waitForProcessExit(process.pid), /calling process/)
   })
 
   it('kills the whole tree when the owning process is force-killed', async () => {

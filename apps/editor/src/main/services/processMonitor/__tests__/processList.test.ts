@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   findName,
+  findUserProcessPids,
   formatProcessList,
   formatProcessTreeMemory,
   listProcesses,
@@ -172,6 +173,61 @@ describe('listProcesses (unix, injected ps output)', () => {
     await expect(
       listProcesses(7, new Map(), { platform: 'linux', execPs: async () => psOutput, totalmem }),
     ).rejects.toThrow('Root process 7 not found')
+  })
+})
+
+describe('user-launched processes', () => {
+  const proc = (overrides: Partial<ProcessItem> & Pick<ProcessItem, 'pid'>): ProcessItem => ({
+    name: 'node',
+    cmd: 'node',
+    ppid: 100,
+    load: 0,
+    mem: 10 * 1024 * 1024,
+    ...overrides,
+  })
+
+  it('marks the pty shell and everything below it, by role or by shell name', () => {
+    const items: ProcessItem[] = [
+      // The tree root is role-annotated as `main`; it must not veto the shells below it.
+      proc({ pid: 100, name: 'main', role: 'main', ppid: 0 }),
+      // POSIX: the pty spawn reports a pid, so the role is the marker.
+      proc({ pid: 200, name: 'pty (bash)', role: 'pty', ppid: 100 }),
+      proc({ pid: 201, name: 'node', ppid: 200 }),
+      // Windows conpty reports pid 0 for the pty, so the shell name is all we have.
+      proc({ pid: 300, name: '"C:\\Program Files\\Git\\bin\\bash.exe" -l', ppid: 100 }),
+      proc({ pid: 301, name: 'node', ppid: 300 }),
+      proc({ pid: 302, name: 'bash.exe', ppid: 301 }),
+      proc({ pid: 400, name: 'extension-host (h)', role: 'extension-host', ppid: 100 }),
+    ]
+
+    const user = findUserProcessPids(items)
+    expect([...user].sort()).toEqual([200, 201, 300, 301, 302])
+  })
+
+  it('does not mistake an editor-managed cmd.exe (role-annotated) for a user shell', () => {
+    const items: ProcessItem[] = [
+      proc({ pid: 100, name: 'main', ppid: 0 }),
+      proc({ pid: 200, name: 'acp-agent (claude)', role: 'acp-agent', ppid: 100 }),
+      proc({ pid: 201, name: 'cmd.exe /d /s /c claude', ppid: 200 }),
+      proc({ pid: 202, name: 'node', ppid: 201 }),
+    ]
+
+    expect(findUserProcessPids(items)).toEqual(new Set())
+  })
+
+  it('prefixes user processes in the metrics line so the log reader can tell them apart', () => {
+    const items: ProcessItem[] = [
+      proc({ pid: 100, name: 'main', ppid: 0, mem: 200 * 1024 * 1024 }),
+      proc({ pid: 300, name: 'bash.exe', ppid: 100 }),
+      proc({ pid: 301, name: 'node', ppid: 300, mem: 2554 * 1024 * 1024 }),
+      proc({ pid: 400, name: 'acp-agent (claude)', role: 'acp-agent', ppid: 100 }),
+    ]
+
+    const line = formatProcessTreeMemory(items)
+    expect(line).toContain('user:bash.exe#300=')
+    expect(line).toContain('user:node#301=2554MB')
+    expect(line).toContain('acp-agent (claude)#400=')
+    expect(line).not.toContain('user:acp-agent')
   })
 })
 

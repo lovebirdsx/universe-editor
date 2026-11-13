@@ -1,7 +1,8 @@
-// Windows Job Object bindings for process-tree containment (Node-API, no
-// node-addon-api). Every job is created with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and
-// WITHOUT any breakaway flag: members' descendants stay in the job, and the OS kills
-// the whole tree when the last handle closes (including when the main process dies).
+// Windows process bindings for process-tree containment and exit observation
+// (Node-API, no node-addon-api). Every job is created with
+// JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE and WITHOUT any breakaway flag: members'
+// descendants stay in the job, and the OS kills the whole tree when the last handle
+// closes (including when the main process dies).
 //
 // Handles cross the JS boundary as BigInt. JS owns their lifetime and never reuses a
 // handle after close(), so no finalizer/external is needed.
@@ -10,8 +11,9 @@
 #include <tlhelp32.h>
 
 #include <cstdint>
+#include <cwchar>
+#include <new>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace {
@@ -164,6 +166,26 @@ napi_value ListPids(napi_env env, napi_callback_info cbinfo) {
 // parent exited is no longer reachable from getProcessList(root): the link is gone, not
 // the process. Deliberately has no fixed capacity: truncating the snapshot would make a
 // still-alive parent look dead and turn its children into false orphans.
+//
+// szExeFile comes from the same PROCESSENTRY32W row, so the executable name is free: the
+// sweep can log what it killed without spawning tasklist for names the snapshot already
+// holds.
+struct ProcessRow {
+  uint32_t pid;
+  uint32_t ppid;
+  std::wstring name;
+};
+
+std::string WideToUtf8(const wchar_t* wide) {
+  const int length = static_cast<int>(wcslen(wide));
+  if (length == 0) return {};
+  const int bytes = WideCharToMultiByte(CP_UTF8, 0, wide, length, nullptr, 0, nullptr, nullptr);
+  if (bytes <= 0) return {};
+  std::string out(static_cast<size_t>(bytes), '\0');
+  WideCharToMultiByte(CP_UTF8, 0, wide, length, out.data(), bytes, nullptr, nullptr);
+  return out;
+}
+
 napi_value ListProcesses(napi_env env, napi_callback_info) {
   HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (snapshot == INVALID_HANDLE_VALUE) {
@@ -172,7 +194,7 @@ napi_value ListProcesses(napi_env env, napi_callback_info) {
 
   PROCESSENTRY32W entry = {};
   entry.dwSize = sizeof(entry);
-  std::vector<std::pair<uint32_t, uint32_t>> rows;
+  std::vector<ProcessRow> rows;
   if (!Process32FirstW(snapshot, &entry)) {
     DWORD err = GetLastError();
     CloseHandle(snapshot);
@@ -180,7 +202,7 @@ napi_value ListProcesses(napi_env env, napi_callback_info) {
   }
   do {
     if (entry.th32ProcessID != 0) {
-      rows.emplace_back(entry.th32ProcessID, entry.th32ParentProcessID);
+      rows.push_back({entry.th32ProcessID, entry.th32ParentProcessID, entry.szExeFile});
     }
   } while (Process32NextW(snapshot, &entry));
   DWORD err = GetLastError();
@@ -194,14 +216,110 @@ napi_value ListProcesses(napi_env env, napi_callback_info) {
     napi_value item;
     napi_create_object(env, &item);
     napi_value pid;
-    napi_create_uint32(env, rows[i].first, &pid);
+    napi_create_uint32(env, rows[i].pid, &pid);
     napi_set_named_property(env, item, "pid", pid);
     napi_value ppid;
-    napi_create_uint32(env, rows[i].second, &ppid);
+    napi_create_uint32(env, rows[i].ppid, &ppid);
     napi_set_named_property(env, item, "ppid", ppid);
+    const std::string name = WideToUtf8(rows[i].name.c_str());
+    if (!name.empty()) {
+      napi_value value;
+      napi_create_string_utf8(env, name.c_str(), name.size(), &value);
+      napi_set_named_property(env, item, "name", value);
+    }
     napi_set_element(env, array, static_cast<uint32_t>(i), item);
   }
   return array;
+}
+
+// Async wait for another process to exit, so the JS watchdog can record the code
+// without a polling loop and without blocking its event loop. The wait runs on the
+// libuv thread pool; the returned promise settles with the raw DWORD exit code
+// (unsigned 32-bit — NTSTATUS values such as 0xC0000005 stay intact).
+struct WaitExitData {
+  napi_async_work work = nullptr;
+  napi_deferred deferred = nullptr;
+  uint32_t pid = 0;
+  DWORD exitCode = 0;
+  DWORD error = 0;
+};
+
+void ExecuteWaitExit(napi_env, void* raw) {
+  auto* data = static_cast<WaitExitData*>(raw);
+  // QUERY_LIMITED_INFORMATION is enough for GetExitCodeProcess and works on
+  // same-user processes the caller can see. A process that already vanished has
+  // no process object left; there is no exit code to recover, so report the error.
+  HANDLE proc =
+      OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, data->pid);
+  if (proc == nullptr) {
+    data->error = GetLastError();
+    return;
+  }
+  DWORD wait = WaitForSingleObject(proc, INFINITE);
+  if (wait == WAIT_OBJECT_0) {
+    if (!GetExitCodeProcess(proc, &data->exitCode)) data->error = GetLastError();
+  } else {
+    data->error = wait == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE;
+  }
+  CloseHandle(proc);
+}
+
+void CompleteWaitExit(napi_env env, napi_status status, void* raw) {
+  auto* data = static_cast<WaitExitData*>(raw);
+  if (status == napi_ok && data->error == 0) {
+    napi_value result;
+    napi_create_uint32(env, data->exitCode, &result);
+    napi_resolve_deferred(env, data->deferred, result);
+  } else {
+    const DWORD err = data->error == 0 ? ERROR_GEN_FAILURE : data->error;
+    std::string msg =
+        "waitForProcessExit failed: win32 error " + std::to_string(err);
+    napi_value message;
+    napi_value error;
+    napi_create_string_utf8(env, msg.c_str(), msg.size(), &message);
+    napi_create_error(env, nullptr, message, &error);
+    napi_reject_deferred(env, data->deferred, error);
+  }
+  napi_delete_async_work(env, data->work);
+  delete data;
+}
+
+napi_value WaitForProcessExit(napi_env env, napi_callback_info cbinfo) {
+  size_t argc = 1;
+  napi_value argv[1];
+  napi_get_cb_info(env, cbinfo, &argc, argv, nullptr, nullptr);
+  uint32_t pid = 0;
+  if (argc < 1 || napi_get_value_uint32(env, argv[0], &pid) != napi_ok || pid == 0) {
+    napi_throw_type_error(env, nullptr, "waitForProcessExit(pid: number)");
+    return nullptr;
+  }
+  // Waiting on ourselves never completes: the thread pool would pin one thread
+  // for the lifetime of the process and the promise could never settle.
+  if (pid == GetCurrentProcessId()) {
+    napi_throw_error(env, nullptr, "waitForProcessExit cannot wait for the calling process");
+    return nullptr;
+  }
+
+  auto* data = new (std::nothrow) WaitExitData();
+  if (data == nullptr) {
+    napi_throw_error(env, nullptr, "waitForProcessExit: out of memory");
+    return nullptr;
+  }
+  data->pid = pid;
+
+  napi_value promise;
+  napi_create_promise(env, &data->deferred, &promise);
+  napi_value resourceName;
+  napi_create_string_utf8(env, "waitForProcessExit", NAPI_AUTO_LENGTH, &resourceName);
+  if (napi_create_async_work(env, nullptr, resourceName, ExecuteWaitExit, CompleteWaitExit, data,
+                              &data->work) != napi_ok ||
+      napi_queue_async_work(env, data->work) != napi_ok) {
+    if (data->work != nullptr) napi_delete_async_work(env, data->work);
+    delete data;
+    napi_throw_error(env, nullptr, "waitForProcessExit: failed to queue async work");
+    return nullptr;
+  }
+  return promise;
 }
 
 napi_value Init(napi_env env, napi_value exports) {
@@ -212,6 +330,8 @@ napi_value Init(napi_env env, napi_value exports) {
       {"close", nullptr, Close, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"listPids", nullptr, ListPids, nullptr, nullptr, nullptr, napi_default, nullptr},
       {"listProcesses", nullptr, ListProcesses, nullptr, nullptr, nullptr, napi_default, nullptr},
+      {"waitForProcessExit", nullptr, WaitForProcessExit, nullptr, nullptr, nullptr, napi_default,
+       nullptr},
   };
   napi_define_properties(env, exports, sizeof(props) / sizeof(props[0]), props);
   return exports;

@@ -29,7 +29,7 @@ class FakeBackend implements JobBackend {
   terminateResult = true
   terminateThrows = false
   /** Whole-machine snapshot served by listProcesses(); tests set this directly. */
-  processTable: Array<{ pid: number; ppid: number }> = []
+  processTable: Array<{ pid: number; ppid: number; name?: string }> = []
   listProcessesCalls = 0
 
   createJob(): bigint {
@@ -59,7 +59,7 @@ class FakeBackend implements JobBackend {
     if (this.closed.has(job)) throw new Error(`job ${job} is closed`)
     return [...(this.members.get(job) ?? [])]
   }
-  listProcesses(): ReadonlyArray<{ pid: number; ppid: number }> {
+  listProcesses(): ReadonlyArray<{ pid: number; ppid: number; name?: string }> {
     this.listProcessesCalls++
     return this.processTable
   }
@@ -596,6 +596,31 @@ describe('ProcessLifecycleRegistry orphan sweep (win32)', () => {
     registry.sweepOrphans()
 
     expect(killPid.mock.calls.map((c) => c[0]).sort()).toEqual([11, 13])
+  })
+
+  it('logs the killed pids with the executable names from the same snapshot', () => {
+    const backend = new FakeBackend()
+    const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
+    const killPid = vi.fn<(pid: number) => void>()
+    const registry = new ProcessLifecycleRegistry({
+      backend,
+      logger: logger as never,
+      platform: 'win32',
+      selfPid: 1,
+      killPid,
+    })
+    trackReap(registry)
+    backend.members.set(100n, [10, 11, 13])
+    backend.processTable = [
+      { pid: 10, ppid: 5, name: 'node.exe' },
+      { pid: 11, ppid: 98, name: 'bash.exe' },
+      // A snapshot row without a name must still be reported, by pid alone.
+      { pid: 13, ppid: 99 },
+    ]
+
+    registry.sweepOrphans()
+
+    expect(logger.info).toHaveBeenCalledWith('orphan sweep owner=app killedPids=[11:bash.exe,13]')
   })
 
   it('never kills the registry process itself', () => {

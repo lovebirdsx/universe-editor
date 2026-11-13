@@ -16,6 +16,14 @@
 const ROLE_NAME_RE = /^[A-Za-z0-9_.-]+(?: \([A-Za-z0-9_. -]+\))?$/
 const EXECUTABLE_STEM_RE = /^[A-Za-z0-9_.-]+$/
 
+/**
+ * Marker the metrics writer puts in front of a hosted process that the user launched
+ * (an integrated-terminal shell and everything under it). The death-scene reader strips
+ * it before redacting, so the marker survives the round trip without becoming part of
+ * the process name. Windows file names cannot contain `:`, so no real name collides.
+ */
+export const USER_PROCESS_PREFIX = 'user:'
+
 export function redactProcessName(raw: string): string | undefined {
   const trimmed = raw.trim()
   if (ROLE_NAME_RE.test(trimmed)) return trimmed

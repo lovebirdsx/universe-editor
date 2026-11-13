@@ -65,6 +65,7 @@ export const TEMP_PREFIXES = [
   'cue-scaffold-',
   'diagnostics-',
   'error-sink-test-',
+  'main-exit-',
   'ext-engine-',
   'ext-gallery-',
   'ext-icon-',

@@ -17,7 +17,10 @@
 
 import { open, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { redactProcessName } from './services/processMonitor/processNameSafety.js'
+import {
+  redactProcessName,
+  USER_PROCESS_PREFIX,
+} from './services/processMonitor/processNameSafety.js'
 
 export interface SceneProcess {
   readonly pid: number
@@ -27,6 +30,12 @@ export interface SceneProcess {
   readonly window: number | undefined
   /** `type=` from the app-metrics line (`Tab` / `GPU` / `Utility` …). */
   readonly type: string | undefined
+  /**
+   * The user launched this process themselves (an integrated-terminal shell or one of
+   * its descendants). Its memory is an observation about the user's programs, not an
+   * editor OOM signal.
+   */
+  readonly userLaunched: boolean
   readonly peakMB: number
   readonly lastMB: number
   readonly lastSeenAt: number | undefined
@@ -114,6 +123,7 @@ interface SceneAccumulator {
   flaggedFromAt: number | undefined
   flaggedToAt: number | undefined
   thresholdMB: number | undefined
+  userLaunched: boolean
   inMetrics: boolean
   inHosted: boolean
 }
@@ -168,6 +178,14 @@ export function parseExitScene(
     return candidate
   }
 
+  // Any periodic sampling line refines the last-seen moment, not just the 30s app
+  // metrics: the 15s hosted-processes walk can be the final witness before a kill.
+  const noteSampleTime = (at: number | undefined): void => {
+    if (at === undefined) return
+    firstSampleAt ??= at
+    if (lastSampleAt === undefined || at > lastSampleAt) lastSampleAt = at
+  }
+
   const windowOf = (name: string | undefined): number | undefined => {
     if (name === undefined) return undefined
     const m = WINDOW_NAME_RE.exec(name)
@@ -195,6 +213,7 @@ export function parseExitScene(
       flaggedFromAt: undefined,
       flaggedToAt: undefined,
       thresholdMB: undefined,
+      userLaunched: false,
       inMetrics: false,
       inHosted: false,
     }
@@ -271,6 +290,7 @@ export function parseExitScene(
       const rss = Number(mainHeap[4])
       mainHeapUsedPeakMB = Math.max(mainHeapUsedPeakMB ?? 0, heapUsed)
       mainRssPeakMB = Math.max(mainRssPeakMB ?? 0, rss)
+      noteSampleTime(at)
       continue
     }
 
@@ -279,18 +299,26 @@ export function parseExitScene(
       for (const part of (hosted[2] ?? '').split(' | ')) {
         const item = HOSTED_ITEM_RE.exec(part.trim())
         if (!item) continue
-        const name = redactProcessName(item[1] ?? '')
+        const raw = item[1] ?? ''
+        const userLaunched = raw.startsWith(USER_PROCESS_PREFIX)
+        const name = redactProcessName(userLaunched ? raw.slice(USER_PROCESS_PREFIX.length) : raw)
         const acc = entry(Number(item[2]), windowOf(name))
         acc.inHosted = true
+        if (userLaunched) acc.userLaunched = true
         recordMemory(acc, Number(item[3]), at, undefined, name)
       }
       if (hosted[3] !== undefined) {
         const threshold = Number(hosted[3])
         for (const part of (hosted[4] ?? '').split(',')) {
           const over = HOSTED_OVER_RE.exec(part.trim())
-          if (over) markFlagged(Number(over[2]), threshold, at)
+          if (over) {
+            const acc = entry(Number(over[2]))
+            if ((over[1] ?? '').startsWith(USER_PROCESS_PREFIX)) acc.userLaunched = true
+            markFlagged(acc.pid, threshold, at)
+          }
         }
       }
+      noteSampleTime(at)
       continue
     }
 
@@ -303,10 +331,7 @@ export function parseExitScene(
     }
     if (sawMetrics) {
       sampleCount += 1
-      if (at !== undefined) {
-        firstSampleAt ??= at
-        lastSampleAt = at
-      }
+      noteSampleTime(at)
     }
   }
 
@@ -323,6 +348,7 @@ export function parseExitScene(
     flaggedFromAt: acc.flaggedFromAt,
     flaggedToAt: acc.flaggedToAt,
     thresholdMB: acc.thresholdMB,
+    userLaunched: acc.userLaunched,
   })
   const isRenderer = (acc: SceneAccumulator): boolean =>
     acc.type === 'Tab' || (acc.type === undefined && acc.window !== undefined)
@@ -423,14 +449,25 @@ export function describeExitScene(
   }
 
   const flaggedHosted = scene.hosted.filter((process) => process.flaggedSamples > 0)
+  const flaggedEditorHosted = flaggedHosted.filter((process) => !process.userLaunched)
+  const flaggedUserHosted = flaggedHosted.filter((process) => process.userLaunched)
+  const describeHosted = (process: SceneProcess): string =>
+    `${process.name ?? 'unknown'}#${process.pid} peak ${process.peakMB}MB`
   parts.push(
-    flaggedHosted.length > 0
-      ? `other over-threshold: ${flaggedHosted
-          .slice(0, 3)
-          .map((process) => `${process.name ?? 'unknown'}#${process.pid} peak ${process.peakMB}MB`)
-          .join('; ')}`
+    flaggedEditorHosted.length > 0
+      ? `other over-threshold: ${flaggedEditorHosted.slice(0, 3).map(describeHosted).join('; ')}`
       : 'other over-threshold: none',
   )
+  if (flaggedUserHosted.length > 0) {
+    // Kept as a footnote: the curve is real, but the memory belongs to a program the
+    // user started in a terminal — it says nothing about the editor's own headroom.
+    parts.push(
+      `user-launched over-threshold (not counted as editor risk): ${flaggedUserHosted
+        .slice(0, 3)
+        .map(describeHosted)
+        .join('; ')}`,
+    )
+  }
 
   let line = `${scene.source === 'rotated' ? 'previous-session rotated log' : 'previous-session log tail'}: ${parts.join('; ')}`
   if (scene.truncated) line += ' (tail only)'

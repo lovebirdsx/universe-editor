@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Windows Job Object N-API addon (win32 only; no-op build elsewhere). Loaded by absolute path from apps/editor main — see docs/development/process-lifecycle.md.",
+  "description": "Windows process containment + exit-code N-API addon (win32 only; no-op build elsewhere). Loaded by absolute path from apps/editor main — see docs/development/process-lifecycle.md.",
   "scripts": {
     "install": "node scripts/build.mjs",
     "build": "node scripts/build.mjs",

@@ -62,6 +62,8 @@ export interface JobBackend {
 export interface ProcessIdPair {
   readonly pid: number
   readonly ppid: number
+  /** Executable name from the same snapshot, when the addon provides it. */
+  readonly name?: string
 }
 
 /** What the registry needs from a tracked process in order to stop it gracefully. */
@@ -346,10 +348,12 @@ export class ProcessLifecycleRegistry implements IDisposable {
     }
     const alive = new Set<number>()
     const parentOf = new Map<number, number>()
+    const nameOf = new Map<number, string>()
     for (const row of rows) {
       if (!Number.isInteger(row.pid) || row.pid <= 0) continue
       alive.add(row.pid)
       if (Number.isInteger(row.ppid)) parentOf.set(row.pid, row.ppid)
+      if (typeof row.name === 'string' && row.name.length > 0) nameOf.set(row.pid, row.name)
     }
 
     for (const slot of this._slots.values()) {
@@ -363,6 +367,7 @@ export class ProcessLifecycleRegistry implements IDisposable {
           continue
         }
         const killed: number[] = []
+        const labels: string[] = []
         for (const pid of members) {
           if (pid <= 0 || pid === this._selfPid || pid === root.pid) continue
           const ppid = parentOf.get(pid)
@@ -372,12 +377,16 @@ export class ProcessLifecycleRegistry implements IDisposable {
           try {
             this._killPid(pid)
             killed.push(pid)
+            // Name from the snapshot already in hand: no extra process for diagnostics,
+            // and a pid alone is useless once the process is gone.
+            const name = nameOf.get(pid)
+            labels.push(name === undefined ? String(pid) : `${pid}:${name}`)
           } catch (err) {
             this._logger?.warn(`orphan kill failed pid=${pid}: ${String(err)}`)
           }
         }
         if (killed.length === 0) continue
-        this._logger?.info(`orphan sweep owner=${slot.key} killedPids=[${killed.join(',')}]`)
+        this._logger?.info(`orphan sweep owner=${slot.key} killedPids=[${labels.join(',')}]`)
         try {
           // Close an emptied job only when its root is gone too: listPids can come back
           // empty on error, and closing a job with a live root would kill the agent.

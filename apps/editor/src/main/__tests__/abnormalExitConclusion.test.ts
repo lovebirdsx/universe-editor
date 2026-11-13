@@ -39,9 +39,22 @@ function facts(overrides: Partial<AbnormalExitFacts> = {}): AbnormalExitFacts {
     platform: 'win32',
     werEvents: parseWerEvents(LEAK_WARNING_XML, EXE),
     scene: scene(),
+    mainExit: undefined,
     previousSessionId: SESSION_ID,
     lastAliveAt: LAST_ALIVE_MS,
     ...overrides,
+  }
+}
+
+function mainExit(
+  exitCode: number,
+  exitedAt = LAST_ALIVE_MS,
+): NonNullable<AbnormalExitFacts['mainExit']> {
+  return {
+    pid: 4242,
+    exitCode,
+    exitCodeHex: `0x${(exitCode >>> 0).toString(16).toUpperCase().padStart(8, '0')}`,
+    exitedAt,
   }
 }
 
@@ -89,6 +102,31 @@ describe('concludeAbnormalExit', () => {
     expect(verdictLine?.text).not.toContain('still over its')
     expect(verdictLine?.text).toContain('the final sample read 687MB')
     expect(verdictLine?.text).toContain('does not explain the exit')
+  })
+
+  it('does not turn a user-launched over-threshold process into an editor verdict scene', () => {
+    // The user's own backend (node under an integrated-terminal bash) crossed 2GB. It is
+    // still in the scene as a footnote, but it is not evidence about the editor's memory.
+    const userHeavy = {
+      ...parseExitScene(
+        [
+          '[12:02:56] [info] hosted-processes cnt=2 user:bash.exe#50=20MB/0% | user:node#51=2554MB/0% — above 2048MB: user:node#51',
+          '[12:15:22] [info] pid=29676 type=Tab mem=687MB cpu=0%',
+        ].join('\n'),
+        { sessionStartMs: SESSION_START_MS },
+      ),
+      source: 'live' as const,
+      truncated: false,
+    }
+
+    const conclusion = concludeAbnormalExit(facts({ scene: userHeavy }))
+    expect(conclusion.record).toContain('scene=calm')
+    const sceneLine = conclusion.lines.find((line) =>
+      line.text.includes('previous-session log tail'),
+    )
+    expect(sceneLine?.level).toBe('info')
+    expect(sceneLine?.text).toContain('not counted as editor risk')
+    expect(conclusion.lines.at(-1)?.text).not.toContain('peaked at')
   })
 
   it('never lets the memory clause name the cause of death', () => {
@@ -182,13 +220,112 @@ describe('concludeAbnormalExit', () => {
   })
 
   it('keeps the record free of values that change between identical deaths', () => {
-    const first = concludeAbnormalExit(facts())
+    const first = concludeAbnormalExit(facts({ mainExit: mainExit(0xc0000005, LAST_ALIVE_MS) }))
     const second = concludeAbnormalExit(
-      facts({ lastAliveAt: LAST_ALIVE_MS + 90_000, previousSessionId: '20260913T090000' }),
+      facts({
+        mainExit: mainExit(0xc0000005, LAST_ALIVE_MS + 12_345),
+        lastAliveAt: LAST_ALIVE_MS + 90_000,
+        previousSessionId: '20260913T090000',
+      }),
     )
     expect(first.record).toBe(second.record)
     expect(first.record).toBe(
-      'verdict=indeterminate; platform=win32; wer=leak-warning; dumps=0; scene=renderer-over-threshold',
+      'verdict=native-death; platform=win32; wer=leak-warning; dumps=0; scene=renderer-over-threshold; mainExit=native-crash/0xC0000005',
     )
+  })
+
+  it('attributes exit code 1 to an external TerminateProcess', () => {
+    const conclusion = concludeAbnormalExit(facts({ mainExit: mainExit(1) }))
+    expect(conclusion.verdict).toBe('external-kill')
+    expect(conclusion.record).toContain('mainExit=external-terminate/0x00000001')
+    expect(
+      conclusion.lines.some(
+        (line) =>
+          line.text.includes('external TerminateProcess') && line.text.includes('taskkill /F'),
+      ),
+    ).toBe(true)
+    // 归因要给，但不能把「进程自己 exit(1)」这个形状说死。
+    expect(conclusion.lines.some((line) => line.text.includes('would look identical'))).toBe(true)
+  })
+
+  it('turns a known NTSTATUS into native-death even without WER evidence', () => {
+    const conclusion = concludeAbnormalExit(
+      facts({ werEvents: [], mainExit: mainExit(0xc0000005) }),
+    )
+    expect(conclusion.verdict).toBe('native-death')
+    expect(conclusion.record).toContain('mainExit=native-crash/0xC0000005')
+    expect(
+      conclusion.lines.some(
+        (line) =>
+          line.level === 'error' &&
+          line.text.includes('STATUS_ACCESS_VIOLATION') &&
+          line.text.includes('access violation'),
+      ),
+    ).toBe(true)
+    expect(conclusion.lines.some((line) => line.text.includes('not from an external kill'))).toBe(
+      true,
+    )
+  })
+
+  it('names the Chromium OOM termination code', () => {
+    const conclusion = concludeAbnormalExit(
+      facts({ werEvents: [], mainExit: mainExit(0xe0000008) }),
+    )
+    expect(conclusion.verdict).toBe('native-death')
+    expect(conclusion.record).toContain('mainExit=native-crash/0xE0000008')
+    expect(
+      conclusion.lines.some(
+        (line) => line.text.includes('OOM') && line.text.includes('out of memory'),
+      ),
+    ).toBe(true)
+  })
+
+  it('explains exit code 0 without clean shutdown as a non-crash', () => {
+    const conclusion = concludeAbnormalExit(facts({ mainExit: mainExit(0) }))
+    expect(conclusion.verdict).toBe('exit-zero')
+    expect(conclusion.record).toContain('mainExit=clean/0x00000000')
+    const verdictLine = conclusion.lines.at(-1)
+    expect(verdictLine?.level).toBe('warn')
+    expect(verdictLine?.text).toContain('never reached will-quit')
+    expect(verdictLine?.text).toContain('not a crash')
+  })
+
+  it('does not invent a cause for an unrecognised exit code', () => {
+    const conclusion = concludeAbnormalExit(facts({ mainExit: mainExit(2) }))
+    expect(conclusion.verdict).toBe('indeterminate')
+    expect(conclusion.record).toContain('mainExit=unknown/0x00000002')
+    expect(conclusion.lines.at(-1)?.text).toContain(
+      'is not a known crash or external-termination code',
+    )
+    expect(conclusion.lines.at(-1)?.text).not.toContain('external TerminateProcess')
+  })
+
+  it('says a missing watchdog record could be a whole-tree kill or power loss', () => {
+    const conclusion = concludeAbnormalExit(facts({ werEvents: [] }))
+    expect(conclusion.verdict).toBe('indeterminate')
+    expect(conclusion.record).toContain('mainExit=unrecorded')
+    expect(
+      conclusion.lines.some(
+        (line) =>
+          line.level === 'warn' &&
+          line.text.includes('exit watchdog left no record') &&
+          line.text.includes('taskkill /T') &&
+          line.text.includes('lost power'),
+      ),
+    ).toBe(true)
+    expect(conclusion.lines.at(-1)?.text).toContain('whole-tree kill')
+  })
+
+  it('does not call the watchdog missing when the platform has none', () => {
+    const conclusion = concludeAbnormalExit(
+      facts({ platform: 'linux', werEvents: [], mainExit: undefined }),
+    )
+    expect(
+      conclusion.lines.some(
+        (line) => line.level === 'info' && line.text.includes('not available on linux'),
+      ),
+    ).toBe(true)
+    expect(conclusion.lines.some((line) => line.text.includes('lost power'))).toBe(false)
+    expect(conclusion.lines.at(-1)?.text).not.toContain('whole-tree kill')
   })
 })

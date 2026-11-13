@@ -137,6 +137,8 @@ import {
 } from './sessionSentinel.js'
 import { concludeAbnormalExit, type ForensicsLine } from './abnormalExitConclusion.js'
 import { readExitScene } from './exitSceneForensics.js'
+import { readMainExitRecord } from './mainExitForensics.js'
+import { startMainExitWatchdog } from './mainExitWatchdog.js'
 import { collectWerEvents } from './werForensics.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
@@ -150,7 +152,11 @@ import {
   readShutdownTrace,
   recordShutdownMark,
 } from './services/update/updateShutdownTrace.js'
-import { initProcessLifecycle, processLifecycle } from './services/process/processLifecycle.js'
+import {
+  initProcessLifecycle,
+  processLifecycle,
+  resolveProcessJobAddonPath,
+} from './services/process/processLifecycle.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 // Side-effect: registers all application-singleton main services with registerSingleton.
 import './services/main-services.js'
@@ -932,11 +938,23 @@ void app.whenReady().then(async () => {
   // will-quit (native crash / external kill). Say so up front, with any crash
   // dumps written since — the difference tells "crashed" apart from "killed".
   const abnormalExit = readAbnormalExitReport(app.getPath('userData'), app.getPath('crashDumps'))
+  // The exit watchdog's record is the only witness that separates an external
+  // TerminateProcess from a native crash when there is no dump and no WER event.
+  // Read it before concluding anything; a missing file is itself evidence (the
+  // watchdog was killed with the tree, or the machine went down).
+  const previousMainExit = abnormalExit
+    ? readMainExitRecord(join(logMainService.getLogRoot(), abnormalExit.previousSessionId))
+    : undefined
   if (abnormalExit) {
     const lastAlive = new Date(abnormalExit.previousLastAliveAt).toISOString()
+    const mainExitText =
+      previousMainExit === undefined
+        ? 'no exit-code record'
+        : `exit code ${previousMainExit.exitCode} (${previousMainExit.exitCodeHex}) at ${new Date(previousMainExit.exitedAt).toISOString()}`
     mainLogger.error(
       `previous session ${abnormalExit.previousSessionId} terminated abnormally (no clean-shutdown record); ` +
         `last alive ≈ ${lastAlive}; ` +
+        `main-process ${mainExitText}; ` +
         `consecutive=${abnormalExit.consecutiveAbnormalExits}; ` +
         (abnormalExit.crashDumps.length > 0
           ? `crash dumps: ${abnormalExit.crashDumps.join(', ')}`
@@ -944,7 +962,7 @@ void app.whenReady().then(async () => {
     )
     errorSink.recordLocal(
       'abnormalExit',
-      `previous session ${abnormalExit.previousSessionId} terminated abnormally; lastAlive=${lastAlive}; consecutive=${abnormalExit.consecutiveAbnormalExits}; crashDumps=${abnormalExit.crashDumps.length}`,
+      `previous session ${abnormalExit.previousSessionId} terminated abnormally; lastAlive=${lastAlive}; consecutive=${abnormalExit.consecutiveAbnormalExits}; crashDumps=${abnormalExit.crashDumps.length}; mainExit=${previousMainExit?.exitCodeHex ?? 'unrecorded'}`,
     )
     // With no dump the cause has to be reconstructed from two witnesses the logs
     // already hold: the Windows event log separates crash/hang records from mere
@@ -968,6 +986,7 @@ void app.whenReady().then(async () => {
             platform: process.platform,
             werEvents,
             scene,
+            mainExit: previousMainExit,
             previousSessionId: abnormalExit.previousSessionId,
             lastAliveAt: abnormalExit.previousLastAliveAt,
           })
@@ -986,6 +1005,17 @@ void app.whenReady().then(async () => {
     logMainService.getSessionId(),
     abnormalExit?.consecutiveAbnormalExits ?? 0,
   )
+  // The watchdog is the only witness to the real exit code after a native crash or
+  // TerminateProcess. E2E deliberately kills/quits main as part of its checks and
+  // asserts process-tree cleanup, so it runs without the extra detached child.
+  if (!e2eEnabled) {
+    startMainExitWatchdog({
+      sessionDir: logMainService.getSessionDir(),
+      execPath: process.execPath,
+      addonPath: resolveProcessJobAddonPath(),
+      logger: mainLogger,
+    })
+  }
 
   // Drop Electron's built-in application menu on Windows/Linux. Those platforms
   // render a self-drawn title bar (frame:false), so the default menu is invisible

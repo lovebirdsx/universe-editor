@@ -16,10 +16,15 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import {
+  findUserProcessPids,
   flattenProcessTree,
   formatProcessTreeMemory,
   type ProcessItem,
 } from './services/processMonitor/processList.js'
+import {
+  redactProcessName,
+  USER_PROCESS_PREFIX,
+} from './services/processMonitor/processNameSafety.js'
 import {
   formatSystemMemoryLine,
   type SystemMemorySample,
@@ -243,6 +248,7 @@ export function installProcessMetricsLogging(
       const root = await options.listProcessTree?.()
       if (root) {
         const items = flattenProcessTree(root)
+        const userPids = findUserProcessPids(items)
         const line = `hosted-processes cnt=${items.length} ${formatProcessTreeMemory(items)}`
         // The main process has its own heap line above; counting its RSS as a runaway
         // hosted child would fire the warning on every healthy launch.
@@ -250,10 +256,23 @@ export function installProcessMetricsLogging(
           (item) => item.pid !== process.pid && item.mem > HOSTED_PROCESS_WARN_BYTES,
         )
         if (over.length > 0) {
+          // Keep sampling densely while anything is over the line, even a user process:
+          // its curve is still useful evidence in the diagnostics bundle.
           heavy = true
-          logger.warn(
-            `${line} — above ${Math.round(HOSTED_PROCESS_WARN_BYTES / 1024 / 1024)}MB: ${over.map((item) => `${item.name}#${item.pid}`).join(', ')}`,
-          )
+          const detail = over
+            .map(
+              (item) =>
+                `${userPids.has(item.pid) ? USER_PROCESS_PREFIX : ''}${redactProcessName(item.name) ?? 'unknown-process'}#${item.pid}`,
+            )
+            .join(', ')
+          const text = `${line} — above ${Math.round(HOSTED_PROCESS_WARN_BYTES / 1024 / 1024)}MB: ${detail}`
+          // A backend the user started in an integrated terminal is the user's memory,
+          // not the editor's: record it, but do not turn it into an editor OOM warning.
+          if (over.some((item) => !userPids.has(item.pid))) {
+            logger.warn(text)
+          } else {
+            logger.info(text)
+          }
         } else {
           logger.info(line)
         }
