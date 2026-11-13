@@ -1044,6 +1044,40 @@ describe('TriggerMainService window reload / watchdog', () => {
   })
 })
 
+describe('TriggerMainService manual runs', () => {
+  it('runs a disabled trigger on demand (runNow does not require enabled)', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { enabled: false })],
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    expect(harness.requests[0]?.origin.eventKey).toMatch(/^manual:/)
+  })
+
+  it('starts a queued manual run of a disabled trigger once a slot frees', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace, { enabled: false })],
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    await harness.service.runNow('trigger-1')
+    await vi.waitFor(async () =>
+      expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1),
+    )
+    const first = harness.requests[0]!.origin
+    await harness.service.reportRunEnd({
+      runId: first.runId,
+      triggerId: first.triggerId,
+      outcome: 'completed',
+      actions: [],
+    })
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
+  })
+})
+
 describe('TriggerMainService backoff gate', () => {
   const backoffUntil = START + GRACE_MS + 10 * 60_000
 

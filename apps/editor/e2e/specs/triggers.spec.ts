@@ -48,11 +48,13 @@ async function waitForTriggerStatus(page: Page, id: string, status: string): Pro
     .toBe(status)
 }
 
+/** configOptions on: the run verifies the pinned mode landed before prompting. */
 async function installEchoAgent(page: Page): Promise<void> {
-  await page.evaluate(([agentId, jsPath]) => window.__E2E__!.installAcpEchoAgent(agentId, jsPath), [
-    'echo',
-    ECHO_AGENT_PATH,
-  ] as const)
+  await page.evaluate(
+    ([agentId, jsPath]) =>
+      window.__E2E__!.installAcpEchoAgent(agentId, jsPath, { ECHO_AGENT_CONFIG_OPTIONS: '1' }),
+    ['echo', ECHO_AGENT_PATH] as const,
+  )
 }
 
 function manualTrigger(workspace: string, id: string = MANUAL_ID): Record<string, unknown> {
@@ -62,7 +64,8 @@ function manualTrigger(workspace: string, id: string = MANUAL_ID): Record<string
     enabled: false,
     workspace,
     source: { type: 'manual' },
-    session: { agent: 'echo', prompt: 'Handle this E2E trigger event' },
+    // An unknown agent has no conservative default, so the mode must be explicit.
+    session: { agent: 'echo', mode: 'plan', prompt: 'Handle this E2E trigger event' },
     allowedActions: [],
     concurrency: 1,
     overflow: 'queue',

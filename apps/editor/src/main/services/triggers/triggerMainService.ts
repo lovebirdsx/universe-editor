@@ -684,14 +684,18 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   /**
    * `ignoreBackoff` is for callers that must still advance their own cadence while
-   * the trigger is cooling down (schedule skip accounting, poll re-arming and a
-   * user-initiated manual run).
+   * the trigger is cooling down (schedule skip accounting, poll re-arming).
+   * `manual` is a user-initiated run: like `runNow` it neither requires `enabled`
+   * nor honours the backoff, but pause and confirmation still gate it.
    */
-  private _isRunnable(trigger: TriggerConfig, options: { ignoreBackoff?: boolean } = {}): boolean {
-    if (!trigger.enabled || this._state.pausedAll) return false
+  private _isRunnable(
+    trigger: TriggerConfig,
+    options: { ignoreBackoff?: boolean; manual?: boolean } = {},
+  ): boolean {
+    if ((!trigger.enabled && !options.manual) || this._state.pausedAll) return false
     const state = this._stateFor(trigger.id)
     if (state.paused) return false
-    if (!options.ignoreBackoff) {
+    if (!options.ignoreBackoff && !options.manual) {
       const backoffUntil = state.backoffUntil
       if (backoffUntil !== undefined && this._clock.now() < backoffUntil) return false
     }
@@ -1009,7 +1013,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     // Pause / disable / confirmation may have landed while the run sat in the queue:
     // those are not failures, so release the slot and forget the key quietly.
     const manual = pending.eventKey.startsWith('manual:')
-    if (trigger === undefined || !this._isRunnable(trigger, { ignoreBackoff: manual })) {
+    if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
       this._logger.info(
         `run ${pending.runId}: not started trigger=${pending.triggerId} key=${pending.eventKey} (no longer runnable)`,
       )
@@ -1340,7 +1344,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (this._active.has(item.runId)) return
     const trigger = this._findTrigger(item.triggerId)
     const manual = item.eventKey.startsWith('manual:')
-    if (trigger === undefined || !this._isRunnable(trigger, { ignoreBackoff: manual })) {
+    if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
       // Paused / disabled while queued: not a failure, just drop the reservation.
       this._logger.info(
         `run ${item.runId}: dropped trigger=${item.triggerId} key=${item.eventKey} (no longer runnable)`,
@@ -1448,7 +1452,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         }
         const trigger = this._findTrigger(record.triggerId)
         const manual = record.eventKey.startsWith('manual:')
-        if (trigger === undefined || !this._isRunnable(trigger, { ignoreBackoff: manual })) {
+        if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
           // Keep the record untouched: a later resume / confirmation / backoff
           // expiry replays it.
           this._logger.info(
