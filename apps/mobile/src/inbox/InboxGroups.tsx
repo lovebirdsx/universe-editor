@@ -1,12 +1,14 @@
 import type { MobileSessionSummary } from '@universe-editor/mobile-protocol'
 import { useEffect, useRef, useState } from 'react'
-import { sessionRouteKey } from '../state/refs.js'
+import { localRefKey, sessionRouteKey } from '../state/refs.js'
 import { strings } from '../strings.js'
 import { formatUpdatedAt, groupSessions } from './groupSessions.js'
+import { selectInboxDeliveryOwnership, type InboxDeliveryOwnership } from './deliveryOwnership.js'
 import { SessionDeliveryControls } from './DeliveryBadge.js'
 import { SwipeableSessionRow } from './SwipeableSessionRow.js'
 
 export interface InboxGroupsProps {
+  /** Inbox rows after `selectInboxSessions` (side tasks already removed). */
   readonly sessions: readonly MobileSessionSummary[]
   readonly onOpenSession?: ((sessionKey: string, focusPending: boolean) => void) | undefined
   readonly onCloseSession?: ((session: MobileSessionSummary) => void) | undefined
@@ -14,7 +16,10 @@ export interface InboxGroupsProps {
   readonly onShowSessionActions?: ((session: MobileSessionSummary) => void) | undefined
   /** Open the delivery confirmation flow for an inbox row. */
   readonly onStartDelivery?: ((session: MobileSessionSummary) => void) | undefined
-  /** Open the status sheet of the row's latest delivery. */
+  /**
+   * Open the status sheet of the delivery shown on the row; it may belong to
+   * another session in the same window.
+   */
   readonly onOpenDelivery?: ((session: MobileSessionSummary) => void) | undefined
   /** startDelivery was fired and the record has not appeared in the inbox yet. */
   readonly isDeliveryStarting?: ((session: MobileSessionSummary) => boolean) | undefined
@@ -43,7 +48,9 @@ export function InboxGroups({
   const [gestureActive, setGestureActive] = useState(false)
   const frozenSessions = useRef(sessions)
   if (!gestureActive) frozenSessions.current = sessions
-  const groups = groupSessions(gestureActive ? frozenSessions.current : sessions)
+  const activeSessions = gestureActive ? frozenSessions.current : sessions
+  const groups = groupSessions(activeSessions)
+  const deliveryOwnership = selectInboxDeliveryOwnership(activeSessions)
   const actionsEnabled =
     onCloseSession !== undefined ||
     onRemoveSession !== undefined ||
@@ -98,6 +105,7 @@ export function InboxGroups({
             {group.sessions.map((session) => {
               const key = sessionRouteKey(session.ref)
               const visible = actionsEnabled && !session.readOnly
+              const ownership = deliveryOwnership.get(localRefKey(session.ref))
               return (
                 <li key={key}>
                   {visible ? (
@@ -131,6 +139,7 @@ export function InboxGroups({
                         actionsOpen={openKey === key}
                         onShowActions={() => runAction(session, onShowSessionActions)}
                         workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
+                        deliveryOwnership={ownership}
                         onStartDelivery={onStartDelivery}
                         onOpenDelivery={onOpenDelivery}
                         starting={isDeliveryStarting?.(session) === true}
@@ -142,6 +151,7 @@ export function InboxGroups({
                       onOpenSession={onOpenSession}
                       disabled={stale === true}
                       workspaceDirty={dirtyWindowIds?.has(session.ref.windowId) === true}
+                      deliveryOwnership={ownership}
                       onStartDelivery={onStartDelivery}
                       onOpenDelivery={onOpenDelivery}
                       starting={isDeliveryStarting?.(session) === true}
@@ -163,6 +173,7 @@ interface SessionRowProps {
   readonly disabled: boolean
   readonly actionsOpen?: boolean | undefined
   readonly workspaceDirty?: boolean | undefined
+  readonly deliveryOwnership?: InboxDeliveryOwnership | undefined
   readonly onShowActions?: (() => void) | undefined
   readonly onStartDelivery?: ((session: MobileSessionSummary) => void) | undefined
   readonly onOpenDelivery?: ((session: MobileSessionSummary) => void) | undefined
@@ -175,6 +186,7 @@ function SessionRow({
   disabled,
   actionsOpen,
   workspaceDirty,
+  deliveryOwnership,
   onShowActions,
   onStartDelivery,
   onOpenDelivery,
@@ -195,8 +207,11 @@ function SessionRow({
   if (session.readOnly) badges.push(strings.badgeReadOnly)
   if (workspaceDirty === true) badges.push(strings.badgeWorkspaceDirty)
   // Delivery badges share the row with the rest so a synced row stays compact.
-  const hasDelivery =
-    session.delivery !== undefined || session.deliveryAvailable === true || starting === true
+  // Only the window's representative row renders delivery UI.
+  const delivery = deliveryOwnership?.delivery
+  const available = deliveryOwnership?.available === true
+  const startingVisible = deliveryOwnership !== undefined && starting === true
+  const showDeliveryControls = delivery !== undefined || available || startingVisible
 
   return (
     <button
@@ -237,20 +252,22 @@ function SessionRow({
             )}
           </span>
         )}
-        {(badges.length > 0 || hasDelivery) && (
+        {(badges.length > 0 || showDeliveryControls) && (
           <span className="session-card__badges">
             {badges.map((badge) => (
               <span key={badge} className="session-badge">
                 {badge}
               </span>
             ))}
-            {hasDelivery && (
+            {showDeliveryControls && (
               <SessionDeliveryControls
-                delivery={session.delivery}
-                available={session.deliveryAvailable}
-                starting={starting}
+                delivery={delivery}
+                available={available}
+                starting={startingVisible}
                 onStartDelivery={() => onStartDelivery?.(session)}
-                onOpenDelivery={() => onOpenDelivery?.(session)}
+                onOpenDelivery={() =>
+                  onOpenDelivery?.(deliveryOwnership?.deliverySource ?? session)
+                }
               />
             )}
           </span>

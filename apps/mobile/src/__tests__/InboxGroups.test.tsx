@@ -1,9 +1,29 @@
-import type { MobileSessionBucket, MobileSessionSummary } from '@universe-editor/mobile-protocol'
+import type {
+  MobileDeliverySummary,
+  MobileSessionBucket,
+  MobileSessionSummary,
+} from '@universe-editor/mobile-protocol'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { groupSessions, selectInboxSessions } from '../inbox/groupSessions.js'
 import { InboxGroups } from '../inbox/InboxGroups.js'
 import { strings } from '../strings.js'
+
+function delivery(overrides: Partial<MobileDeliverySummary> = {}): MobileDeliverySummary {
+  return {
+    deliveryId: 'd-1',
+    phase: 'awaiting_push',
+    commitCount: 1,
+    dirtySource: false,
+    mainBranch: 'main',
+    updatedAt: 1_000,
+    canConfirmPush: true,
+    canRetry: false,
+    canUndo: true,
+    sync: { synced: 0, upToDate: 0, skipped: 0, failed: 0 },
+    ...overrides,
+  }
+}
 
 function session(
   localId: string,
@@ -41,6 +61,12 @@ function actionsOpen(title: string): boolean {
   const swipeRow = screen.getByText(title).closest('[data-testid="inbox-swipe-row"]')
   const action = swipeRow?.querySelector('[data-testid="inbox-session-close-action"]')
   return action?.getAttribute('tabindex') === '0'
+}
+
+function rowFor(title: string): Element {
+  const row = screen.getByText(title).closest('[data-testid="inbox-session-row"]')
+  if (row === null) throw new Error(`row not found: ${title}`)
+  return row
 }
 
 function firePointerAt(
@@ -370,6 +396,35 @@ describe('InboxGroups', () => {
     fireEvent.pointerUp(row, { clientX: 120, clientY: 22, pointerId: 1 })
     expect(visibleTitles()).toEqual(['Bravo', 'Alpha'])
     expect(actionsOpen('Alpha')).toBe(true)
+  })
+
+  it('holds the delivery badge on the same row while a swipe freezes the list', () => {
+    const alpha = { ...session('alpha', 'completed', 'Alpha'), updatedAt: 2_000 }
+    const bravo = {
+      ...session('bravo', 'completed', 'Bravo'),
+      updatedAt: 1_000,
+      delivery: delivery({ deliveryId: 'd-bravo' }),
+    }
+    const props = { onCloseSession: vi.fn(), onRemoveSession: vi.fn() }
+    const { rerender } = render(<InboxGroups sessions={[alpha, bravo]} {...props} />)
+    expect(rowFor('Alpha').querySelector('[data-testid="inbox-delivery-badge"]')).not.toBeNull()
+
+    const row = rowFor('Alpha')
+    fireEvent.pointerDown(row, { clientX: 240, clientY: 20, button: 0, pointerId: 1 })
+    fireEvent.pointerMove(row, { clientX: 120, clientY: 22, pointerId: 1 })
+
+    rerender(
+      <InboxGroups
+        sessions={[{ ...bravo, updatedAt: alpha.updatedAt + 1_000 }, alpha]}
+        {...props}
+      />,
+    )
+    expect(rowFor('Alpha').querySelector('[data-testid="inbox-delivery-badge"]')).not.toBeNull()
+    expect(rowFor('Bravo').querySelector('[data-testid="inbox-delivery-badge"]')).toBeNull()
+
+    fireEvent.pointerUp(row, { clientX: 120, clientY: 22, pointerId: 1 })
+    expect(rowFor('Bravo').querySelector('[data-testid="inbox-delivery-badge"]')).not.toBeNull()
+    expect(rowFor('Alpha').querySelector('[data-testid="inbox-delivery-badge"]')).toBeNull()
   })
 
   it('holds a swiped row in place when its bucket changes mid-gesture', () => {

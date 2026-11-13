@@ -42,6 +42,18 @@ function deliverySummary(overrides: Partial<MobileDeliverySummary> = {}): Mobile
   }
 }
 
+function idle(
+  localId: string,
+  overrides: Partial<MobileSessionSummary> = {},
+): MobileSessionSummary {
+  return sessionSummary(localId, {
+    status: 'idle',
+    displayStatus: 'completed',
+    bucket: 'completed',
+    ...overrides,
+  })
+}
+
 const commit = {
   sha: 'abc12345',
   shortSha: 'abc12345',
@@ -441,5 +453,116 @@ describe('InboxPage delivery', () => {
         'd-2',
       ),
     )
+  })
+
+  it('keeps the delivery action off a running representative', () => {
+    const running = sessionSummary('running', { updatedAt: 1_000 })
+    const sibling = idle('sibling', { updatedAt: 5_000, deliveryAvailable: true })
+    const client = createClient([running, sibling])
+    renderPage(client)
+
+    expect(screen.queryByTestId('inbox-delivery-action')).toBeNull()
+  })
+
+  it('opens a borrowed record with its source session', async () => {
+    const representative = idle('rep', { updatedAt: 3_000 })
+    const source = idle('source', {
+      updatedAt: 1_000,
+      delivery: deliverySummary({ deliveryId: 'd-2' }),
+    })
+    const client = createClient([representative, source])
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+
+    expect(await screen.findByTestId('delivery-detail-sheet')).toBeTruthy()
+    expect(client.getDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ localId: 'source' }),
+      'd-2',
+    )
+  })
+
+  it("prefers the representative's own record over a newer sibling one", async () => {
+    const representative = idle('rep', {
+      updatedAt: 3_000,
+      delivery: deliverySummary({ deliveryId: 'd-own', updatedAt: 1_000 }),
+    })
+    const sibling = idle('sibling', {
+      updatedAt: 1_000,
+      delivery: deliverySummary({ deliveryId: 'd-new', updatedAt: 9_000 }),
+    })
+    const client = createClient([representative, sibling])
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+
+    expect(await screen.findByTestId('delivery-detail-sheet')).toBeTruthy()
+    expect(client.getDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ localId: 'rep' }),
+      'd-own',
+    )
+  })
+
+  it('re-delivers a borrowed synced record through its source session', async () => {
+    const synced = deliverySummary({ phase: 'synced', canConfirmPush: false, canRetry: false })
+    const representative = idle('rep', { updatedAt: 3_000 })
+    const source = idle('source', { updatedAt: 1_000, delivery: synced })
+    const client = createClient([representative, source], { ...detailFixture, summary: synced })
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    fireEvent.click(await screen.findByTestId('delivery-start-again'))
+
+    expect(client.previewDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({ localId: 'source' }),
+    )
+    expect(await screen.findByTestId('delivery-confirm-sheet')).toBeTruthy()
+  })
+
+  it('hides the starting state when the representative changes', async () => {
+    const first = idle('first', { updatedAt: 2_000, deliveryAvailable: true })
+    const second = idle('second', { updatedAt: 1_000 })
+    const client = createClient([first, second])
+    let resolveStart: (value: { deliveryId: string }) => void = () => undefined
+    vi.mocked(client.startDelivery).mockReturnValue(
+      new Promise((resolve) => {
+        resolveStart = resolve
+      }),
+    )
+    renderPage(client)
+
+    fireEvent.click(screen.getByTestId('inbox-delivery-action'))
+    fireEvent.click(await screen.findByTestId('delivery-start'))
+    expect(screen.getByTestId('inbox-delivery-starting')).toBeTruthy()
+
+    act(() => {
+      client.getInboxStore().setState({
+        sessions: [
+          { ...first, updatedAt: 1_000 },
+          { ...second, updatedAt: 9_000 },
+        ],
+        seq: 2,
+        hasSnapshot: true,
+      })
+    })
+    expect(screen.queryByTestId('inbox-delivery-starting')).toBeNull()
+
+    resolveStart({ deliveryId: 'd-1' })
+  })
+
+  it('keeps the summary bar counting records outside the representative row', () => {
+    const representative = idle('rep', {
+      updatedAt: 3_000,
+      delivery: deliverySummary({ phase: 'synced', canConfirmPush: false }),
+    })
+    const sibling = idle('sibling', {
+      updatedAt: 1_000,
+      delivery: deliverySummary({ deliveryId: 'd-2' }),
+    })
+    const client = createClient([representative, sibling])
+    renderPage(client)
+
+    expect(screen.getAllByTestId('inbox-delivery-badge')).toHaveLength(1)
+    expect(screen.getByTestId('inbox-delivery-summary').textContent).toContain('1 条待推送')
   })
 })

@@ -725,6 +725,17 @@ Toast；首次观察只建立 baseline，重连 snapshot 不会误弹，不新�
 路径**，只给 worktree 目录名；交付错误只带 `code` 与裁剪后的 message，扩展侧 detail 不投影。
 交付变化经 `summary_changed` 增量与收件箱 upsert 同步到手机。
 
+**手机端按工作区收敛交付 UI（无 wire 变化）**：协议仍按会话下发 `delivery` / `deliveryAvailable`。
+手机收件箱以 `ref.windowId` 分组（一个 PC 窗口 = 一个工作区），每组选一个代表行：优先
+`bucket === 'in_progress'`，同桶取 `updatedAt` 最大，否则取 `updatedAt` 最大；`updatedAt` 相同
+按 `localId` 升序稳定。只有代表行渲染交付元素：入口仍只看代表自己的 `deliveryAvailable`
+（不聚合、不搬移，运行中的代表因此没有入口）；徽标优先代表自己的 `delivery`，没有则取组内
+`delivery.updatedAt` 最大的记录，并把来源会话的 ref 交给 `getDelivery` / `confirmDeliveryPush` /
+`retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree`。非代表行的 `delivery` /
+`deliveryAvailable` / 本地 `starting` 一律不渲染。顶部汇总条与全局提醒保持按 `deliveryId` 去重、
+不按窗口收敛。实现见 `apps/mobile/src/inbox/deliveryOwnership.ts`；PC 端
+`SessionDeliveryService` 与协议不变。
+
 **刻意限制**：合并提交不支持；单次交付最多 200 个提交（preview 直接给 `unsupported` blocker）；
 main worktree 必须存在且不在 detached HEAD，目标分支须有唯一 upstream；v1 不做自动交付、
 自动 review 或分叉 worktree 自动 rebase。
