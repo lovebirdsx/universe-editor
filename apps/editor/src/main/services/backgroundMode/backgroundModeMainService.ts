@@ -39,6 +39,7 @@ import {
   decideActivateAction,
   decidePrimaryWindowAction,
   isBackgroundModeActive,
+  supportsLoginItem,
   updateIdleState,
   type IdleWindowCandidate,
 } from './backgroundModePolicy.js'
@@ -85,6 +86,12 @@ export interface BackgroundModeMainServiceOptions {
   /** E2E drives the mode through the main-process probe; a missing tray must not disable it. */
   readonly e2eEnabled: boolean
   readonly platform: NodeJS.Platform
+  /** Login items only exist in installed builds. */
+  readonly isPackaged: boolean
+  /** Test seam; defaults to Electron's `app.setLoginItemSettings`. */
+  readonly setLoginItem?: (settings: { openAtLogin: boolean; args?: string[] }) => void
+  /** Optional OS-state read; lets startup skip a redundant login-item write. */
+  readonly getLoginItemOpenAtLogin?: () => boolean
   /** Absolute `icon.ico` path (dev: apps/editor/public, packaged: resources/tray). */
   readonly trayIconPath: string
   /** Test seam; production constructs a real Electron Tray. */
@@ -194,6 +201,10 @@ function defaultOnSystemResume(listener: () => void): IDisposable {
   return { dispose: () => powerMonitor.removeListener('resume', listener) }
 }
 
+function defaultSetLoginItem(settings: { openAtLogin: boolean; args?: string[] }): void {
+  app.setLoginItemSettings(settings)
+}
+
 /**
  * Extract the largest PNG-compressed image from an ICO file. Electron's
  * `nativeImage.createFromPath` handles ICO only on Windows, so macOS/Linux get
@@ -244,6 +255,8 @@ export class BackgroundModeMainService {
   private _idleSince = new Map<number, number>()
   private _idleTimer: ReturnType<typeof setInterval> | undefined
   private _readyResolved = false
+  private _lastLoginItemOpenAtLogin: boolean | undefined
+  private _loginItemStateRead = false
   private readonly _ready: Promise<void>
   private _resolveReady!: () => void
 
@@ -378,10 +391,12 @@ export class BackgroundModeMainService {
 
   private async _applyConfig(config: MobileGatewayConfig): Promise<void> {
     if (this._disposed) return
+    const gatewayEnabled = isMobileGatewayEnabled(config, gatewayEnvironmentFromProcess())
     const desired = isBackgroundModeActive({
-      gatewayEnabled: isMobileGatewayEnabled(config, gatewayEnvironmentFromProcess()),
+      gatewayEnabled,
       keepRunningInBackground: config.keepRunningInBackground,
     })
+    this._applyLoginItem(config, gatewayEnabled)
     const wasDesired = this._desiredActive
     this._desiredActive = desired
     this._logger.info(`background mode desired=${desired} was=${wasDesired}`)
@@ -393,6 +408,39 @@ export class BackgroundModeMainService {
     this._trayFailed = false
     this._stopIdleScan()
     if (wasDesired) this._deactivate()
+  }
+
+  /**
+   * The login item is meaningful only while the gateway AND background mode are
+   * on: otherwise a login launch would start an invisible process with no tray
+   * to bring it back. Turning either switch off therefore unregisters it.
+   */
+  private _applyLoginItem(config: MobileGatewayConfig, gatewayEnabled: boolean): void {
+    if (
+      !supportsLoginItem({
+        isPackaged: this._opts.isPackaged,
+        platform: this._opts.platform,
+        e2e: this._opts.e2eEnabled,
+      })
+    ) {
+      return
+    }
+    const desired = config.launchAtLogin && config.keepRunningInBackground && gatewayEnabled
+    if (!this._loginItemStateRead) {
+      this._loginItemStateRead = true
+      this._lastLoginItemOpenAtLogin = this._opts.getLoginItemOpenAtLogin?.()
+    }
+    if (this._lastLoginItemOpenAtLogin === desired) {
+      this._logger.info(`background login item unchanged openAtLogin=${desired}`)
+      return
+    }
+    this._lastLoginItemOpenAtLogin = desired
+    const settings =
+      this._opts.platform === 'win32'
+        ? { openAtLogin: desired, args: ['--background'] }
+        : { openAtLogin: desired }
+    ;(this._opts.setLoginItem ?? defaultSetLoginItem)(settings)
+    this._logger.info(`background login item updated openAtLogin=${desired}`)
   }
 
   private _activateTray(): void {

@@ -42,6 +42,7 @@ import {
 } from './ipc/electronProtocol.js'
 import {
   hasAgentSessionsFlag,
+  hasBackgroundFlag,
   hasQuitFlag,
   parseFileToOpen,
   parseQuitSkipSession,
@@ -215,6 +216,14 @@ const startupPath = parseFileToOpen(process.argv, app.isPackaged)
 const startupDeepLink = parseDeepLinkArg(process.argv)
 const startupQuitRequested = hasQuitFlag(process.argv)
 const startupAgentSessionsRequested = hasAgentSessionsFlag(process.argv)
+// macOS launches login items itself (no argv flag), so ask LaunchServices.
+const loginItemBackground =
+  process.platform === 'darwin' &&
+  app.isPackaged &&
+  app.getLoginItemSettings().wasOpenedAtLogin === true
+// Either way this is only a request: the windowless path is taken later and
+// only when background mode is really active and no explicit target was given.
+const requestedBackground = environmentService.background || loginItemBackground
 
 // Resolve product identity once (pure): reused for the --version/--help banner
 // and for applyProductIdentity below.
@@ -510,6 +519,16 @@ if (!hasSingleInstanceLock) {
     if (hasAgentSessionsFlag(argv)) {
       mainLogger.info('second-instance --agent-sessions')
       void answerAgentSessionsQuery(additionalData)
+      return
+    }
+    // A login-item launch while the app is already running must not surface a
+    // window. With an explicit target the branches below still route it.
+    if (
+      hasBackgroundFlag(argv) &&
+      parseDeepLinkArg(argv) === undefined &&
+      parseFileToOpen(argv, app.isPackaged) === undefined
+    ) {
+      mainLogger.info('second-instance --background: no target, ignored')
       return
     }
     const deepLink = parseDeepLinkArg(argv)
@@ -833,6 +852,8 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       logger: logMainService.createLogger({ id: 'backgroundMode', name: 'Background Mode' }),
       e2eEnabled,
       platform: process.platform,
+      isPackaged: app.isPackaged,
+      getLoginItemOpenAtLogin: () => app.getLoginItemSettings().openAtLogin,
       trayIconPath,
       quit: () => app.quit(),
       sessionCounts: (windowId) =>
@@ -970,54 +991,13 @@ void app.whenReady().then(async () => {
   appServices.diagnostics.setAbnormalExitReport(abnormalExit)
   mark(PerfMarks.mainDidCreateServices)
 
-  let sessionList = await loadSession(getDefaultStorage())
+  // getOrCreateServices() constructs and starts the background service; the
+  // first config read is async, so the tray/active state is not final until now.
+  if (requestedBackground) await backgroundMode?.whenReady()
 
-  // Two or more abnormal exits in a row with a workspace waiting to be restored
-  // usually means the restore itself feeds the crash (e.g. a workspace whose
-  // startup walk OOMs the main process). Offer a restore-free start to break
-  // the loop before touching that workspace again. Recents keep the folders
-  // reachable. Skipped in E2E: a native modal would deadlock the driver.
-  if (
-    abnormalExit &&
-    shouldOfferRestoreSkip(abnormalExit.consecutiveAbnormalExits) &&
-    sessionList.some((w) => w.workspace) &&
-    !e2eEnabled
-  ) {
-    const defaultToSkip = shouldDefaultToRestoreSkip(abnormalExit.consecutiveAbnormalExits)
-    const { response } = await dialog.showMessageBox({
-      type: 'warning',
-      buttons: [
-        localize('crashLoop.restore', 'Start Normally (Restore Workspace)'),
-        localize('crashLoop.skip', 'Skip Restore (Open Empty Window)'),
-      ],
-      defaultId: defaultToSkip ? 1 : 0,
-      cancelId: defaultToSkip ? 1 : 0,
-      noLink: true,
-      title: localize('crashLoop.title', 'Repeated Abnormal Exits'),
-      message: localize(
-        'crashLoop.message',
-        'The application has exited abnormally {count} times in a row.',
-        {
-          count: String(abnormalExit.consecutiveAbnormalExits),
-        },
-      ),
-      detail: localize(
-        'crashLoop.detail',
-        'The crashes may have been triggered by the previously opened workspace (for example, a directory containing a huge number of files). You can skip workspace restore this time and start with an empty window for troubleshooting; the previous folders remain reachable from "Recent".',
-      ),
-    })
-    if (response === 1) {
-      mainLogger.warn(
-        `workspace restore skipped by user after ${abnormalExit.consecutiveAbnormalExits} consecutive abnormal exits`,
-      )
-      sessionList = []
-    } else {
-      mainLogger.info(
-        `workspace restore kept despite ${abnormalExit.consecutiveAbnormalExits} consecutive abnormal exits`,
-      )
-    }
-  }
-
+  // Resolve an explicit startup target before any window decision: a launch
+  // carrying a file/folder/deep link must restore normally even if it also has
+  // `--background` (a stale or user-modified login item).
   let startupFolderUri: URI | undefined
   let startupFilePath: string | undefined
   if (startupPath) {
@@ -1029,7 +1009,70 @@ void app.whenReady().then(async () => {
     }
   }
 
-  if (startupFolderUri) {
+  // Windowless only when the feature is actually active (tray ready) and the
+  // launch asked for no specific target; otherwise a leftover login item would
+  // leave an invisible process with no way to bring up a window.
+  const backgroundLaunch =
+    requestedBackground &&
+    backgroundMode?.isActive() === true &&
+    startupFolderUri === undefined &&
+    startupFilePath === undefined &&
+    startupDeepLink === undefined
+
+  let sessionList: Awaited<ReturnType<typeof loadSession>> = []
+  if (!backgroundLaunch) {
+    sessionList = await loadSession(getDefaultStorage())
+
+    // Two or more abnormal exits in a row with a workspace waiting to be restored
+    // usually means the restore itself feeds the crash (e.g. a workspace whose
+    // startup walk OOMs the main process). Offer a restore-free start to break
+    // the loop before touching that workspace again. Recents keep the folders
+    // reachable. Skipped in E2E: a native modal would deadlock the driver.
+    if (
+      abnormalExit &&
+      shouldOfferRestoreSkip(abnormalExit.consecutiveAbnormalExits) &&
+      sessionList.some((w) => w.workspace) &&
+      !e2eEnabled
+    ) {
+      const defaultToSkip = shouldDefaultToRestoreSkip(abnormalExit.consecutiveAbnormalExits)
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: [
+          localize('crashLoop.restore', 'Start Normally (Restore Workspace)'),
+          localize('crashLoop.skip', 'Skip Restore (Open Empty Window)'),
+        ],
+        defaultId: defaultToSkip ? 1 : 0,
+        cancelId: defaultToSkip ? 1 : 0,
+        noLink: true,
+        title: localize('crashLoop.title', 'Repeated Abnormal Exits'),
+        message: localize(
+          'crashLoop.message',
+          'The application has exited abnormally {count} times in a row.',
+          {
+            count: String(abnormalExit.consecutiveAbnormalExits),
+          },
+        ),
+        detail: localize(
+          'crashLoop.detail',
+          'The crashes may have been triggered by the previously opened workspace (for example, a directory containing a huge number of files). You can skip workspace restore this time and start with an empty window for troubleshooting; the previous folders remain reachable from "Recent".',
+        ),
+      })
+      if (response === 1) {
+        mainLogger.warn(
+          `workspace restore skipped by user after ${abnormalExit.consecutiveAbnormalExits} consecutive abnormal exits`,
+        )
+        sessionList = []
+      } else {
+        mainLogger.info(
+          `workspace restore kept despite ${abnormalExit.consecutiveAbnormalExits} consecutive abnormal exits`,
+        )
+      }
+    }
+  }
+
+  if (backgroundLaunch) {
+    mainLogger.info('background launch: skipping session restore and window creation')
+  } else if (startupFolderUri) {
     if (sessionList.length > 0) await windows.restoreSession(sessionList)
     await windows.openWindowForFolder(startupFolderUri)
   } else {

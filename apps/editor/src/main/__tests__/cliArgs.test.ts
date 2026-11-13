@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import { win32 } from 'node:path'
 import {
   hasAgentSessionsFlag,
+  hasBackgroundFlag,
   hasQuitFlag,
   parseFileToOpen,
   parseQuitSkipSession,
@@ -69,6 +70,11 @@ describe('parseFileToOpen', () => {
     expect(parseFileToOpen(['node', 'main.js', '--agent-sessions', '/project'], false)).toBe(
       '/project',
     )
+  })
+
+  it('never treats --background as a path and keeps a following path', () => {
+    expect(parseFileToOpen(['node', 'main.js', '--background'], false)).toBeUndefined()
+    expect(parseFileToOpen(['node', 'main.js', '--background', '/project'], false)).toBe('/project')
   })
 
   it('slices argv[1+] when packaged', () => {
@@ -152,6 +158,15 @@ describe('hasAgentSessionsFlag', () => {
     expect(hasAgentSessionsFlag(['app.exe', '/project', '--agent-sessions'])).toBe(true)
     expect(hasAgentSessionsFlag(['app.exe', '--agent-sessions-other'])).toBe(false)
     expect(hasAgentSessionsFlag(['app.exe'])).toBe(false)
+  })
+})
+
+describe('hasBackgroundFlag', () => {
+  it('detects the exact flag anywhere in argv', () => {
+    expect(hasBackgroundFlag(['app.exe', '--background'])).toBe(true)
+    expect(hasBackgroundFlag(['app.exe', '/project', '--background'])).toBe(true)
+    expect(hasBackgroundFlag(['app.exe', '--background-other'])).toBe(false)
+    expect(hasBackgroundFlag(['app.exe'])).toBe(false)
   })
 })
 

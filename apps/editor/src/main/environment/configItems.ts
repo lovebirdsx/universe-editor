@@ -25,6 +25,18 @@ export const VERSION: ConfigItem<'boolean'> = {
   description: 'Print the version and exit',
 }
 
+/**
+ * Passed by the OS login item. Only suppresses window restore/creation when
+ * background mode is actually active; otherwise it degrades to a normal launch.
+ */
+export const BACKGROUND: ConfigItem<'boolean'> = {
+  id: 'background',
+  type: 'boolean',
+  cli: 'background',
+  description:
+    'Start in the background without restoring or creating any window (used by the login item)',
+}
+
 /** userData directory override. CLI wins over env (matches legacy productPaths). */
 export const USER_DATA_DIR: ConfigItem<'string'> = {
   id: 'userDataDir',
@@ -199,6 +211,7 @@ export const USER_PROFILE: ConfigItem<'string'> = {
 export const CLI_OPTIONS: readonly ConfigItem[] = [
   HELP,
   VERSION,
+  BACKGROUND,
   USER_DATA_DIR,
   CONFIG_DIR,
   UPDATE_URL,

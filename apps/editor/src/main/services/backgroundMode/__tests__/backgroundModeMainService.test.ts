@@ -16,7 +16,7 @@ import {
 } from '../../../../shared/ipc/mobileGatewayService.js'
 
 vi.mock('electron', () => ({
-  app: { quit: vi.fn() },
+  app: { quit: vi.fn(), setLoginItemSettings: vi.fn() },
   Menu: { buildFromTemplate: vi.fn((template: unknown) => template) },
   nativeImage: {
     createFromPath: vi.fn(),
@@ -121,6 +121,9 @@ function makeHarness(
     config?: MobileGatewayConfig
     e2eEnabled?: boolean
     platform?: NodeJS.Platform
+    isPackaged?: boolean
+    setLoginItem?: (settings: { openAtLogin: boolean; args?: string[] }) => void
+    getLoginItemOpenAtLogin?: () => boolean
     tray?: FakeTray
     createTrayError?: Error
     nativeImageEmpty?: boolean
@@ -150,6 +153,7 @@ function makeHarness(
     return tray
   })
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+  const setLoginItem = options.setLoginItem ?? vi.fn()
 
   const emptyImage = { isEmpty: () => true, resize: () => emptyImage }
   const image = { isEmpty: () => false, resize: () => image }
@@ -174,6 +178,11 @@ function makeHarness(
     logger: logger as never,
     e2eEnabled: options.e2eEnabled ?? false,
     platform: options.platform ?? 'win32',
+    isPackaged: options.isPackaged ?? true,
+    setLoginItem,
+    ...(options.getLoginItemOpenAtLogin !== undefined
+      ? { getLoginItemOpenAtLogin: options.getLoginItemOpenAtLogin }
+      : {}),
     trayIconPath: options.trayIconPath ?? '/tmp/icon.ico',
     createTray,
     quit,
@@ -203,6 +212,7 @@ function makeHarness(
     createTray,
     sessionCounts,
     hasSessionSubscribers,
+    setLoginItem,
     logger,
     disposeEmitters: () => {
       configEmitter.dispose()
@@ -437,6 +447,119 @@ describe('BackgroundModeMainService', () => {
     h.service.dispose()
     expect(h.tray.destroy).toHaveBeenCalledTimes(1)
     h.disposeEmitters()
+  })
+})
+
+describe('login item', () => {
+  const LOGIN_CONFIG = enabledConfig({ launchAtLogin: true })
+
+  it('registers the Windows login item with the --background flag', async () => {
+    const setLoginItem = vi.fn()
+    const h = makeHarness({ config: LOGIN_CONFIG, platform: 'win32', setLoginItem })
+    try {
+      await h.service.initialize()
+      expect(setLoginItem).toHaveBeenCalledTimes(1)
+      expect(setLoginItem).toHaveBeenCalledWith({ openAtLogin: true, args: ['--background'] })
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+
+  it('registers the macOS login item without args', async () => {
+    const setLoginItem = vi.fn()
+    const icon = tempTrayIcon()
+    const h = makeHarness({
+      config: LOGIN_CONFIG,
+      platform: 'darwin',
+      trayIconPath: icon.path,
+      setLoginItem,
+    })
+    try {
+      await h.service.initialize()
+      expect(setLoginItem).toHaveBeenCalledTimes(1)
+      const settings = setLoginItem.mock.calls[0]![0] as { openAtLogin: boolean }
+      expect(settings.openAtLogin).toBe(true)
+      expect(settings).not.toHaveProperty('args')
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+      icon.dispose()
+    }
+  })
+
+  it('does not touch a login item on unsupported platforms or unpackaged builds', async () => {
+    for (const options of [{ platform: 'linux' as const }, { isPackaged: false }]) {
+      const setLoginItem = vi.fn()
+      const h = makeHarness({ config: LOGIN_CONFIG, ...options, setLoginItem })
+      try {
+        await h.service.initialize()
+        expect(setLoginItem).not.toHaveBeenCalled()
+      } finally {
+        h.service.dispose()
+        h.disposeEmitters()
+      }
+    }
+  })
+
+  it('unregisters when keep-running-in-background is turned off', async () => {
+    const setLoginItem = vi.fn()
+    const h = makeHarness({ config: LOGIN_CONFIG, platform: 'win32', setLoginItem })
+    try {
+      await h.service.initialize()
+      expect(setLoginItem).toHaveBeenCalledWith({ openAtLogin: true, args: ['--background'] })
+
+      h.configEmitter.fire({
+        config: enabledConfig({ launchAtLogin: true, keepRunningInBackground: false }),
+      })
+      await vi.waitFor(() => expect(setLoginItem).toHaveBeenCalledTimes(2))
+      expect(setLoginItem).toHaveBeenLastCalledWith({
+        openAtLogin: false,
+        args: ['--background'],
+      })
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+
+  it('does not rewrite an unchanged value', async () => {
+    const setLoginItem = vi.fn()
+    const h = makeHarness({ config: LOGIN_CONFIG, platform: 'win32', setLoginItem })
+    try {
+      await h.service.initialize()
+      expect(setLoginItem).toHaveBeenCalledTimes(1)
+
+      h.configEmitter.fire({ config: LOGIN_CONFIG })
+      await vi.waitFor(() =>
+        expect(h.logger.info).toHaveBeenCalledWith(
+          'background login item unchanged openAtLogin=true',
+        ),
+      )
+      expect(setLoginItem).toHaveBeenCalledTimes(1)
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+
+  it('skips the first write when the OS state already matches', async () => {
+    const setLoginItem = vi.fn()
+    const getLoginItemOpenAtLogin = vi.fn(() => true)
+    const h = makeHarness({
+      config: LOGIN_CONFIG,
+      platform: 'win32',
+      setLoginItem,
+      getLoginItemOpenAtLogin,
+    })
+    try {
+      await h.service.initialize()
+      expect(getLoginItemOpenAtLogin).toHaveBeenCalledTimes(1)
+      expect(setLoginItem).not.toHaveBeenCalled()
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
   })
 })
 

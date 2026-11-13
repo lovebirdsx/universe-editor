@@ -57,6 +57,15 @@ export function hasAgentSessionsFlag(argv: readonly string[]): boolean {
 }
 
 /**
+ * `--background` is passed by the OS login item. A second launch carrying only
+ * this flag (no file/folder/deep link) must be ignored instead of opening a
+ * window; a cold launch decides separately whether background mode is active.
+ */
+export function hasBackgroundFlag(argv: readonly string[]): boolean {
+  return argv.includes('--background')
+}
+
+/**
  * Explorer builds the directory command as `"<exe>" "%V"`. At a drive root
  * `%V` is `D:\`, so the trailing backslash escapes the closing quote and argv
  * receives `D:"`. Windows file names cannot contain `"`, so dropping it is

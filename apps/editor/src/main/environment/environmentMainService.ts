@@ -22,6 +22,7 @@ import {
 } from '@universe-editor/platform'
 import {
   APP_DATA,
+  BACKGROUND,
   CLI_OPTIONS,
   CONFIG_DIR,
   CONFIGURATION_DEFAULTS,
@@ -107,6 +108,11 @@ export class EnvironmentMainService {
 
   get rendererDebug(): boolean {
     return this._resolver.get(RENDERER_DEBUG) ?? false
+  }
+
+  /** `--background` (also passed by the OS login item): start windowless if possible. */
+  get background(): boolean {
+    return this._resolver.get(BACKGROUND) ?? false
   }
 
   /**

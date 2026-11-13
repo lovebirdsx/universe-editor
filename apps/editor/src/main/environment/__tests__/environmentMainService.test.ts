@@ -63,6 +63,15 @@ describe('rendererUrl / rendererDebug', () => {
   })
 })
 
+describe('background', () => {
+  it('is true only for --background', () => {
+    expect(make({ argv: ['node', 'main.js', '--background'] }).background).toBe(true)
+    expect(make({ argv: ['node', 'main.js', '--background=true'] }).background).toBe(true)
+    expect(make({ argv: ['node', 'main.js', '--background-mode'] }).background).toBe(false)
+    expect(make({}).background).toBe(false)
+  })
+})
+
 describe('updateUrl', () => {
   it('resolves cli > env', () => {
     const env = make({
@@ -367,6 +376,7 @@ describe('cli commands', () => {
     expect(help).toContain('--user-data-dir')
     expect(help).toContain('--config-dir')
     expect(help).toContain('--update-url')
+    expect(help).toContain('--background')
   })
 
   it('formatVersion includes product name, version and extra lines', () => {
