@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import { NullLogger } from '@universe-editor/platform'
 import { mkTempDir, removeDirWithRetry } from '@universe-editor/temp-root'
-import { SessionReportReader } from '../sessionReportReader.js'
+import { SessionReportReader } from '../runReportReader.js'
 
 const RUN_ID = '123e4567-e89b-42d3-a456-426614174000'
 const cleanup: Array<() => Promise<void> | void> = []
@@ -39,10 +39,13 @@ describe('SessionReportReader', () => {
 
     const result = await reader(runsDir).read(RUN_ID)
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       ok: true,
       bytes: Buffer.from('# Report\n\nbody', 'utf8'),
     })
+    if (!result.ok) throw new Error('expected a readable report')
+    expect(result.runDir.endsWith(RUN_ID)).toBe(true)
+    expect(result.modifiedAt).toBeGreaterThan(0)
   })
 
   it('returns an empty report as-is', async () => {
@@ -53,7 +56,7 @@ describe('SessionReportReader', () => {
 
     const result = await reader(runsDir).read(RUN_ID)
 
-    expect(result).toEqual({ ok: true, bytes: Buffer.alloc(0) })
+    expect(result).toMatchObject({ ok: true, bytes: Buffer.alloc(0) })
   })
 
   it('rejects run ids that are not UUIDs', async () => {

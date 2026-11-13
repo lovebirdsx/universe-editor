@@ -186,6 +186,25 @@ export interface TriggerRunEnd {
   readonly error?: string
 }
 
+/**
+ * Renderer-facing read of one run's `report.md`. The renderer supplies only a
+ * run id; main rebuilds and validates the path on disk.
+ */
+export type TriggerRunReportReadResult =
+  | {
+      readonly kind: 'ok'
+      readonly text: string
+      /** Resolved run directory, used as the Markdown base for relative resources. */
+      readonly runDir: string
+      /** Report file mtime (Unix ms). */
+      readonly modifiedAt: number
+    }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'too-large' }
+
+/** Upper bound for `report.md` on both the phone gateway and the desktop reader. */
+export const MAX_TRIGGER_REPORT_BYTES = 512 * 1024
+
 export type TriggerStatus =
   | 'disabled'
   | 'idle'

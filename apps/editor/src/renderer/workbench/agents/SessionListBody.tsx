@@ -100,7 +100,9 @@ import {
   ForkAgentSessionAction,
   RewindAgentSessionAction,
 } from '../../actions/agentRewindActions.js'
+import { ViewTriggerReportAction } from '../../actions/triggerActions.js'
 import { AgentIcon } from './agentIcon.js'
+import { automationVerdictLabel } from './automationLabels.js'
 import { SideTaskCountBadge } from './SideTaskCountBadge.js'
 import { pathTail, shortenScopeLabel } from './scopeLabel.js'
 import {
@@ -281,23 +283,6 @@ function LiveSessionEffort({ session }: { session: IAcpSession }) {
 
 function formatModelId(id: string): string {
   return id.replace(/^claude-/, '').replace(/-\d{8}$/, '')
-}
-
-function automationVerdictLabel(
-  verdict: NonNullable<AcpSessionHistoryEntry['automation']>['verdict'],
-): string | undefined {
-  switch (verdict) {
-    case 'auto-approve':
-      return localize('acp.sessions.verdict.autoApprove', 'Auto-approved')
-    case 'escalate':
-      return localize('acp.sessions.verdict.escalate', 'Needs review')
-    case 'reject':
-      return localize('acp.sessions.verdict.reject', 'Rejected')
-    case 'info':
-      return localize('acp.sessions.verdict.info', 'Info')
-    default:
-      return undefined
-  }
 }
 
 export interface SessionListBodyProps {
@@ -1137,6 +1122,19 @@ export function SessionListBody({
                     icon: 'edit',
                     label: localize('acp.sessions.renameMenu', 'Rename Session'),
                     run: onRename,
+                  })
+                }
+                if (entry.automation !== undefined) {
+                  items.push({
+                    kind: 'item',
+                    id: 'view-report',
+                    icon: 'open-preview',
+                    label: localize('acp.sessions.viewReport', 'View Report'),
+                    run: () => {
+                      void commandService.executeCommand(ViewTriggerReportAction.ID, {
+                        sessionId: entry.id,
+                      })
+                    },
                   })
                 }
                 // A history-only row has no local message list; forking it from

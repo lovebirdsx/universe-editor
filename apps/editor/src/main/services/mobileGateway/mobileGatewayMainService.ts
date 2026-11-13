@@ -65,7 +65,7 @@ import {
 } from './gatewayConfig.js'
 import { MOBILE_GATEWAY_CONFIG_FILE } from './gatewayConfigFile.js'
 import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
-import { SessionReportReader } from './sessionReportReader.js'
+import { SessionReportReader } from '../triggers/runReportReader.js'
 import { triggersDirectory } from '../triggers/triggersConfigFile.js'
 import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
 import { WorkspaceDirectoryBrowser } from './workspaceDirectoryBrowser.js'

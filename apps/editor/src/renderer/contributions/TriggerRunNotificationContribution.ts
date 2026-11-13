@@ -9,6 +9,7 @@
 
 import {
   Disposable,
+  ICommandService,
   IEditorGroupsService,
   IInstantiationService,
   ILoggerService,
@@ -19,6 +20,7 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import type { TriggerRunEnd } from '../../shared/triggers/types.js'
+import { ViewTriggerReportAction } from '../actions/triggerActions.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import type { IAcpSession } from '../services/acp/session/acpSessionModel.js'
@@ -40,6 +42,7 @@ export class TriggerRunNotificationContribution
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
     @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
     @INotificationService private readonly _notification: INotificationService,
+    @ICommandService private readonly _commands: ICommandService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -55,6 +58,7 @@ export class TriggerRunNotificationContribution
     )
     const session = end.sessionId !== undefined ? this._sessions.getById(end.sessionId) : undefined
     const triggerName = session?.automation?.triggerName ?? end.triggerId
+    const eventKey = session?.automation?.eventKey
     const summary = end.summary ?? ''
     const { severity, message } = describeRun(end, triggerName, summary)
     const handle = this._notification.notify({
@@ -65,6 +69,20 @@ export class TriggerRunNotificationContribution
           label: localize('trigger.run.notify.openSession', 'Open Session'),
           run: () => {
             this._openSession(end, session)
+            this._notification.dismiss(handle.id)
+          },
+        },
+        {
+          label: localize('trigger.run.notify.viewReport', 'View Report'),
+          run: () => {
+            // The run is terminal here, so the report is safe to open; a missing
+            // file is explained by the report tab's own state page.
+            void this._commands.executeCommand(ViewTriggerReportAction.ID, {
+              ...(end.sessionId !== undefined ? { sessionId: end.sessionId } : {}),
+              runId: end.runId,
+              triggerName,
+              ...(eventKey !== undefined ? { eventKey } : {}),
+            })
             this._notification.dismiss(handle.id)
           },
         },

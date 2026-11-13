@@ -27,7 +27,7 @@ import { MobileAttachmentStore } from '../mobileAttachmentStore.js'
 import { MobileGatewayHub } from '../mobileGatewayHub.js'
 import { MobileGatewayServer, type MobileGatewayServerOptions } from '../mobileGatewayServer.js'
 import { PairingService } from '../pairingService.js'
-import type { SessionReportReadResult } from '../sessionReportReader.js'
+import type { SessionReportReadResult } from '../../triggers/runReportReader.js'
 import type { MobileBridgeImage } from '../../../../shared/ipc/mobileGatewayService.js'
 
 interface GatewayHarness {
@@ -1327,7 +1327,12 @@ describe('mobile gateway session report api', () => {
   }> {
     const readSessionReportRunId = vi.fn(async (): Promise<string | undefined> => runId)
     const readReport = vi.fn(
-      async (): Promise<SessionReportReadResult> => ({ ok: true, bytes: report }),
+      async (): Promise<SessionReportReadResult> => ({
+        ok: true,
+        bytes: report,
+        runDir: '',
+        modifiedAt: 0,
+      }),
     )
     const hub = { readSessionReportRunId } as unknown as MobileGatewayHub
     const gateway = await startGateway({

@@ -1497,6 +1497,31 @@ describe('SessionListBody — automation provenance', () => {
     expect(screen.queryByTestId('session-row-manual-1-automation-summary')).toBeNull()
   })
 
+  it('offers View Report on an automated row and dispatches the command', () => {
+    addEntry(harness.history, 'auto-1', 'triggered session', 1000, 'fake', '/work', {
+      automation: {
+        triggerId: 'swarm-triage',
+        triggerName: 'Swarm 分诊',
+        eventKey: 'swarm:42',
+        runId: 'run-1',
+      },
+    })
+    fireEvent.contextMenu(screen.getByTestId('session-row-auto-1'), { detail: 1 })
+
+    fireEvent.click(screen.getByText('View Report'))
+
+    expect(harness.executeCommand).toHaveBeenCalledWith('workbench.action.triggers.viewReport', {
+      sessionId: 'auto-1',
+    })
+  })
+
+  it('hides View Report on a manual row', () => {
+    addEntry(harness.history, 'manual-1', 'manual session', 1000)
+    fireEvent.contextMenu(screen.getByTestId('session-row-manual-1'), { detail: 1 })
+
+    expect(screen.queryByText('View Report')).toBeNull()
+  })
+
   it('filters the list by session source', () => {
     const { history, filterService } = harness
     addEntry(history, 'manual-1', 'manual session', 1000)

@@ -29,11 +29,13 @@ import {
 } from '../../../shared/ipc/triggerService.js'
 import {
   isElevatedModeId,
+  MAX_TRIGGER_REPORT_BYTES,
   TRIGGER_DEFAULTS,
   type TriggerConfig,
   type TriggerEvent,
   type TriggerPayloadValue,
   type TriggerRunEnd,
+  type TriggerRunReportReadResult,
   type TriggerRunRequest,
   type TriggerSourceConfig,
   type TriggerStatus,
@@ -84,6 +86,7 @@ import {
   type TriggerStateFile,
 } from './triggerStateStore.js'
 import { createPollCommandFetcher, type PollCommandFetcher } from './pollCommandFetcher.js'
+import { SessionReportReader } from './runReportReader.js'
 
 export type TriggerTimerHandle = unknown
 
@@ -172,6 +175,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private readonly _configFile: string
   private readonly _runsDir: string
   private readonly _pendingDir: string
+  private readonly _reportReader: SessionReportReader
   private readonly _auditLog: AuditLog
   private readonly _configStore: JsonConfigFileStore<TriggersConfig>
   private readonly _stateStore: TriggerStateStore
@@ -216,6 +220,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._configFile = triggersConfigPath(options.userDataDir)
     this._runsDir = join(this._dir, 'runs')
     this._pendingDir = join(this._dir, 'pending')
+    this._reportReader = new SessionReportReader({
+      runsDir: this._runsDir,
+      maxBytes: MAX_TRIGGER_REPORT_BYTES,
+      logger: options.logger,
+    })
     this._startedAt = this._clock.now()
     this._auditLog =
       options.auditLog ??
@@ -456,6 +465,19 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       this._setTriggerState(entry.triggerId, { lastRunAt: now })
     }
     this._fireChange()
+  }
+
+  async readRunReport(runId: string): Promise<TriggerRunReportReadResult> {
+    const result = await this._reportReader.read(runId)
+    if (!result.ok) {
+      return { kind: result.reason === 'too_large' ? 'too-large' : 'not-found' }
+    }
+    return {
+      kind: 'ok',
+      text: Buffer.from(result.bytes).toString('utf8'),
+      runDir: result.runDir,
+      modifiedAt: result.modifiedAt,
+    }
   }
 
   async reportSwarmNeedsAction(reviews: readonly SwarmNeedsActionReview[]): Promise<void> {

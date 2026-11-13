@@ -65,7 +65,7 @@ import {
 import type { PairingService } from './pairingService.js'
 import { isAllowedPushEndpoint } from './pushEndpoint.js'
 import { checkRequestHeaders } from './requestSecurity.js'
-import type { SessionReportReader } from './sessionReportReader.js'
+import type { SessionReportReader } from '../triggers/runReportReader.js'
 import {
   contentTypeFor,
   isNoCacheAsset,

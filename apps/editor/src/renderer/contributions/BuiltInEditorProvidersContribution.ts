@@ -25,6 +25,7 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
 import { ImageEditorInput } from '../services/editor/ImageEditorInput.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
+import { TriggerReportEditorInput } from '../services/triggers/triggerReportEditorInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { MobileDevicesEditorInput } from '../services/editor/MobileDevicesEditorInput.js'
@@ -57,6 +58,7 @@ import { MarkdownPreviewEditor } from '../workbench/editor/MarkdownPreviewEditor
 import { HtmlPreviewEditor } from '../workbench/editor/HtmlPreviewEditor.js'
 import { ImageEditor } from '../workbench/editor/ImageEditor.js'
 import { ReleaseNotesEditor } from '../workbench/editor/ReleaseNotesEditor.js'
+import { TriggerReportEditor } from '../workbench/triggers/TriggerReportEditor.js'
 import { StartupPerformanceEditor } from '../workbench/editor/StartupPerformanceEditor.js'
 import { InteractionPerformanceEditor } from '../workbench/editor/InteractionPerformanceEditor.js'
 import { ProcessExplorerEditor } from '../workbench/editor/ProcessExplorerEditor.js'
@@ -231,6 +233,15 @@ export class BuiltInEditorProvidersContribution
           deserialize: (data) => ReleaseNotesInput.deserialize(data),
         },
         ReleaseNotesEditor,
+      ),
+    )
+    this._register(
+      registerEditorWithComponent(
+        {
+          typeId: TriggerReportEditorInput.TYPE_ID,
+          deserialize: (data) => TriggerReportEditorInput.deserialize(data),
+        },
+        TriggerReportEditor,
       ),
     )
     this._register(

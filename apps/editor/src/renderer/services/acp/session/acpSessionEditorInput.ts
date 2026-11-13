@@ -174,6 +174,14 @@ export class AcpSessionEditorInput extends EditorInput {
     return this._history.get(this._durableSessionId())?.archived === true
   }
 
+  /** True when an agent trigger started this session, for the tab context-menu `when`. */
+  get hasAutomation(): boolean {
+    return (
+      this._sessions.getById(this.sessionId)?.automation !== undefined ||
+      this._history.get(this._durableSessionId())?.automation !== undefined
+    )
+  }
+
   /** A fresh session still holds its local uuid; history is keyed by the agent id. */
   private _durableSessionId(): string {
     return this._sessions.getById(this.sessionId)?.sessionIdOnAgent.get() ?? this.sessionId

@@ -341,6 +341,7 @@ import {
   ResumeTriggerAction,
   RunTriggerNowAction,
   ShowTriggersLogAction,
+  ViewTriggerReportAction,
 } from './triggerActions.js'
 import {
   CheckForUpdatesAction,
@@ -1072,3 +1073,4 @@ registerAction2(OpenTriggersConfigAction)
 registerAction2(ShowTriggersLogAction)
 registerAction2(ConfirmTriggerElevatedModeAction)
 registerAction2(ConfirmTriggerAutoApproveAction)
+registerAction2(ViewTriggerReportAction)

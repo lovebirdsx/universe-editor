@@ -12,6 +12,7 @@ import type {
   TriggerEvent,
   TriggerPayloadValue,
   TriggerRunEnd,
+  TriggerRunReportReadResult,
   TriggerRunRequest,
   TriggerSummary,
 } from '../triggers/types.js'
@@ -33,6 +34,11 @@ export interface ITriggerMainService {
   getConfigFileUri(): Promise<string>
   /** Called by a window when its run reaches a terminal state. */
   reportRunEnd(end: TriggerRunEnd): Promise<void>
+  /**
+   * Read one run's `report.md` by run id. The file name and directory are
+   * rebuilt in main; callers never pass a path.
+   */
+  readRunReport(runId: string): Promise<TriggerRunReportReadResult>
   /**
    * The full current "needs me" review list seen by a window's swarm poller (same
    * filter as the sidebar notification). main applies the persistent per-trigger

@@ -146,6 +146,25 @@ test.describe('agent triggers', () => {
     expect(await page.evaluate(() => window.__E2E__!.getActiveGroupEditorCount())).toBe(
       editorsBefore,
     )
+
+    // The report tab reads this run's report.md by run id; the renderer never
+    // receives a path. Write the report where the run directory lives.
+    const triggersDir = dirname(await page.evaluate(() => window.__E2E__!.getTriggersConfigPath()))
+    const runDir = join(triggersDir, 'runs', row!.automation.runId)
+    mkdirSync(runDir, { recursive: true })
+    writeFileSync(join(runDir, 'report.md'), '# E2E run report\n\nReport body.\n')
+    await workbench.runCommand('workbench.action.triggers.viewReport', {
+      sessionId: row!.sessionId,
+      runId: row!.automation.runId,
+      triggerName: row!.automation.triggerName,
+      eventKey: row!.automation.eventKey,
+    })
+    await expect
+      .poll(() => workbench.getActiveEditorUri())
+      .toBe(`trigger-report:${row!.automation.runId}`)
+    expect(await page.evaluate(() => window.__E2E__!.getActiveEditorTypeId())).toBe(
+      'trigger.report',
+    )
   })
 
   test('an elevated mode is refused until the user confirms it @p0', async ({

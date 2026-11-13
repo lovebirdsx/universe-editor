@@ -31,6 +31,7 @@ function setup() {
     dispose: () => {},
   }))
   const notification = { notify, dismiss: vi.fn() } as unknown as INotificationService
+  const commands = { executeCommand: vi.fn() }
   const sessions = {
     getById: () => ({
       id: 'local-1',
@@ -51,9 +52,10 @@ function setup() {
     { focusSessionInput: vi.fn() } as never,
     { focusGroup: vi.fn() } as never,
     notification,
+    commands as never,
     { createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) } as never,
   )
-  return { contribution, emitter, notify }
+  return { contribution, emitter, notify, commands }
 }
 
 describe('TriggerRunNotificationContribution', () => {
@@ -74,6 +76,27 @@ describe('TriggerRunNotificationContribution', () => {
     const options = notify.mock.calls[0]![0] as { severity: number; message: string }
     expect(options.severity).toBe(0)
     expect(options.message).toBe('Completed: Swarm triage')
+  })
+
+  it('offers a report action that opens the run by id', () => {
+    const { emitter, notify, commands } = setup()
+    emitter.fire(runEnd({ verdict: 'info' }))
+    const options = notify.mock.calls[0]![0] as {
+      actions: { label: string; run: () => void }[]
+    }
+    expect(options.actions.map((action) => action.label)).toEqual(['Open Session', 'View Report'])
+
+    options.actions[1]!.run()
+
+    expect(commands.executeCommand).toHaveBeenCalledWith(
+      'workbench.action.triggers.viewReport',
+      expect.objectContaining({
+        runId: 'run-1',
+        sessionId: 'durable-1',
+        triggerName: 'Swarm triage',
+        eventKey: 'swarm:1001',
+      }),
+    )
   })
 
   it('warns when the run did not complete', () => {
@@ -107,6 +130,7 @@ describe('TriggerRunNotificationContribution', () => {
       { focusSessionInput: vi.fn() } as never,
       { focusGroup: vi.fn() } as never,
       { notify, dismiss: vi.fn() } as never,
+      { executeCommand: vi.fn() } as never,
       { createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) } as never,
     )
     emitter.fire(runEnd({ verdict: 'reject' }))

@@ -13,6 +13,7 @@ import type {
   SwarmNeedsActionReview,
 } from '../../../../shared/ipc/triggerService.js'
 import type { TriggerRunRequest, TriggerSummary } from '../../../../shared/triggers/types.js'
+import { MAX_TRIGGER_REPORT_BYTES } from '../../../../shared/triggers/types.js'
 import { TriggerMainService, type TriggerClock } from '../triggerMainService.js'
 import type { PollCommandFetcher, PollFetchResult } from '../pollCommandFetcher.js'
 
@@ -1328,6 +1329,41 @@ describe('TriggerMainService list / pause', () => {
     expect(text).toContain('"version": 1')
     await harness.service.ensureConfigFile()
     expect(await readFile(harness.configFile, 'utf8')).toBe(text)
+  })
+})
+
+describe('TriggerMainService run reports', () => {
+  const RUN_ID = '123e4567-e89b-42d3-a456-426614174000'
+
+  it('reads report.md by run id and decodes UTF-8', async () => {
+    const harness = await createHarness()
+    const runDir = join(harness.dir, 'triggers', 'runs', RUN_ID)
+    await mkdir(runDir, { recursive: true })
+    await writeFile(join(runDir, 'report.md'), '# 报告\n\n正文', 'utf8')
+
+    const result = await harness.service.readRunReport(RUN_ID)
+
+    expect(result.kind).toBe('ok')
+    if (result.kind !== 'ok') throw new Error('expected a readable report')
+    expect(result.text).toBe('# 报告\n\n正文')
+    expect(result.runDir.endsWith(RUN_ID)).toBe(true)
+    expect(result.modifiedAt).toBeGreaterThan(0)
+  })
+
+  it('returns not-found for unknown or malformed run ids', async () => {
+    const harness = await createHarness()
+
+    expect(await harness.service.readRunReport(RUN_ID)).toEqual({ kind: 'not-found' })
+    expect(await harness.service.readRunReport('../escape')).toEqual({ kind: 'not-found' })
+  })
+
+  it('returns too-large above the shared byte cap', async () => {
+    const harness = await createHarness()
+    const runDir = join(harness.dir, 'triggers', 'runs', RUN_ID)
+    await mkdir(runDir, { recursive: true })
+    await writeFile(join(runDir, 'report.md'), 'x'.repeat(MAX_TRIGGER_REPORT_BYTES + 1), 'utf8')
+
+    expect(await harness.service.readRunReport(RUN_ID)).toEqual({ kind: 'too-large' })
   })
 })
 

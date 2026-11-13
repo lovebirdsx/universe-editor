@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Reads one trigger run's report.md for the phone gateway.
+ *  Reads one trigger run's report.md for the phone gateway and the desktop report tab.
  *
  *  The caller supplies only a run id resolved from server-owned session
  *  metadata. The file name is fixed, the path is rebuilt from the configured
@@ -23,7 +23,14 @@ const DEFAULT_TIMEOUT_MS = 10_000
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export type SessionReportReadResult =
-  | { readonly ok: true; readonly bytes: Uint8Array }
+  | {
+      readonly ok: true
+      readonly bytes: Uint8Array
+      /** Resolved run directory (the report's base URI for relative resources). */
+      readonly runDir: string
+      /** Report file mtime; the closest thing to the run's completion time. */
+      readonly modifiedAt: number
+    }
   | { readonly ok: false; readonly reason: 'not_found' | 'too_large' }
 
 export interface SessionReportReaderOptions {
@@ -76,7 +83,7 @@ export class SessionReportReader {
     }
     const file = await stat(reportPath)
     if (!file.isFile()) return notFound()
-    return { ok: true, bytes: report }
+    return { ok: true, bytes: report, runDir, modifiedAt: file.mtimeMs }
   }
 }
 

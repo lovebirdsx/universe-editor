@@ -1142,7 +1142,8 @@ file / openEditor / scmChange → `resource_link`，symbol / docs / commit / cha
 | `GET` / `HEAD` | `/api/sessions/report?windowId&localId[&durableId]` | 读取该会话触发器 run 的完整报告 |
 
 链路：网关先 `hub.readSessionReportRunId(ref)`，经 renderer 桥取 live 会话的
-`session.automation.runId`；main 再用 `SessionReportReader` 读取
+`session.automation.runId`；main 再用 `SessionReportReader`
+（`main/services/triggers/runReportReader.ts`，PC 报告标签页共用）读取
 `<userData>/triggers/runs/<runId>/report.md`。找不到会话、会话不是触发器启动、没有 runId 或 run
 目录已清理时统一 404 `attachment_not_found`，不区分原因。缺参数 400；其他方法 405。
 

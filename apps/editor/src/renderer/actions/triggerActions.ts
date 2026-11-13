@@ -9,12 +9,14 @@ import {
   Action2,
   IDialogService,
   IEditorResolverService,
+  IEditorService,
   ILayoutService,
   ILoggerService,
   INotificationService,
   IOutputService,
   IQuickInputService,
   IViewsService,
+  MenuId,
   Severity,
   URI,
   localize,
@@ -25,7 +27,15 @@ import {
 import { ILogFilesService } from '../../shared/ipc/services.js'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
 import type { TriggerSummary } from '../../shared/triggers/types.js'
+import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
+import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import {
+  TriggerReportEditorInput,
+  fallbackTriggerName,
+} from '../services/triggers/triggerReportEditorInput.js'
 import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
+import { resolveSessionTargetId } from './_agentShared.js'
 import {
   buildTriggerActionItems,
   buildTriggerPickItems,
@@ -346,6 +356,96 @@ export class ListTriggersAction extends Action2 {
       await executeItemAction(services, summary, selected.action)
     })
   }
+}
+
+export interface ViewTriggerReportArgs {
+  readonly sessionId?: string
+  readonly runId?: string
+  readonly triggerName?: string
+  readonly eventKey?: string
+}
+
+/**
+ * Opens the read-only report tab for one trigger run. Target resolution follows
+ * the session commands: explicit `sessionId`, the clicked tab's `resource`, the
+ * active session tab, then the active session. The notification passes a runId
+ * so the report remains reachable when its session is already gone.
+ */
+export class ViewTriggerReportAction extends Action2 {
+  static readonly ID = 'workbench.action.triggers.viewReport'
+
+  constructor() {
+    super({
+      id: ViewTriggerReportAction.ID,
+      title: localize2('action.trigger.viewReport', 'View Trigger Run Report'),
+      category: CATEGORY,
+      icon: 'open-preview',
+      menu: [
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && acpSessionHasAutomation`,
+          group: '1_session',
+          order: 3,
+          title: localize2('acp.sessions.viewReport', 'View Report'),
+        },
+      ],
+      f1: false,
+    })
+  }
+
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    // Synchronous throughout: no service access after an await is possible here.
+    const editors = accessor.get(IEditorService)
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const args = argsRecord(arg)
+    const explicitRunId = stringArg(args, 'runId')
+    // A notification supplies the run id; never borrow an unrelated active
+    // session just because no session id was passed with it.
+    const sessionId =
+      explicitRunId !== undefined
+        ? stringArg(args, 'sessionId')
+        : resolveSessionTargetId(args, editors, sessions)
+    const live = sessionId !== undefined ? sessions.getById(sessionId) : undefined
+    const durableId = live?.sessionIdOnAgent.get() ?? sessionId
+    const historyEntry = durableId !== undefined ? history.get(durableId) : undefined
+    const automation = live?.automation ?? historyEntry?.automation
+
+    const runId = explicitRunId ?? automation?.runId
+    if (runId === undefined) return
+    const triggerName =
+      stringArg(args, 'triggerName') ?? automation?.triggerName ?? fallbackTriggerName()
+    const eventKey = stringArg(args, 'eventKey') ?? automation?.eventKey
+    const known = historyEntry?.automation
+    const snapshot =
+      known?.outcome !== undefined || known?.verdict !== undefined || known?.summary !== undefined
+        ? {
+            ...(known.outcome !== undefined ? { outcome: known.outcome } : {}),
+            ...(known.verdict !== undefined ? { verdict: known.verdict } : {}),
+            ...(known.summary !== undefined ? { summary: known.summary } : {}),
+          }
+        : undefined
+
+    editors.openEditor(
+      new TriggerReportEditorInput({
+        runId,
+        triggerName,
+        ...(sessionId !== undefined ? { sessionId } : {}),
+        ...(eventKey !== undefined ? { eventKey } : {}),
+        ...(snapshot !== undefined ? { snapshot } : {}),
+      }),
+      { pinned: true },
+    )
+  }
+}
+
+function argsRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+}
+
+function stringArg(args: Record<string, unknown>, key: string): string | undefined {
+  const value = args[key]
+  return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
 export class RunTriggerNowAction extends Action2 {

@@ -48,7 +48,7 @@ main（应用级单例）                                    renderer（每窗�
 
 | 通道 | 方向 | 契约 |
 | --- | --- | --- |
-| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`：列表 / 手动运行 / 暂停 / 确认 / 打开配置 / 运行结束上报 / Swarm 审核上报 / `onDidChangeTriggers` |
+| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`：列表 / 手动运行 / 暂停 / 确认 / 打开配置 / 运行结束上报 / Swarm 审核上报 / `readRunReport`（PC 按 runId 读 `report.md`） / `onDidChangeTriggers` |
 | `ServiceChannels.TriggerRunHost`（`'triggerRunHost'`） | main → renderer | `ITriggerRunHost`：`startRun` / `cancelRun` / `isWorkspaceTrusted` |
 
 - main 侧：`registerMainServices.ts` 注册 `ProxyChannel.fromService(app.triggers)`，并 `toService` 得到每个窗口的 `rendererTriggerRunHost`；`windowScopeFactory.ts` 在窗口创建后调用 `appServices.triggers.registerWindowHost(win.id, host)`，窗口销毁时 `windowMainService` 调 `unregisterWindowHost`。
@@ -61,8 +61,9 @@ main（应用级单例）                                    renderer（每窗�
 | --- | --- |
 | `apps/editor/src/shared/triggers/` | 纯逻辑（无 node / electron 依赖）：`types.ts`（契约与默认值）、`configParse.ts`（校验 + 指纹）、`cron.ts`、`scheduler.ts`、`dedupe.ts`、`runQueue.ts`、`backoff.ts`、`promptTemplate.ts`、`verdict.ts` |
 | `apps/editor/src/shared/ipc/triggerService.ts` | `ITriggerMainService` / `ITriggerRunHost` 契约、`SwarmNeedsActionReview`、`swarmReviewEvent` |
-| `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（调度器）、`triggersConfigFile.ts`（JSONC 读写 + 示例）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts` |
-| `apps/editor/src/renderer/services/triggers/` | `TriggerRunHost.ts`、`automatedSessionService.ts`、`automatedPermissionPolicy.ts`、`automatedRunWatcher.ts`、`triggerActionExecutor.ts` |
+| `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（调度器）、`triggersConfigFile.ts`（JSONC 读写 + 示例）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts`、`runReportReader.ts`（`SessionReportReader`：UUID / realpath / 符号链接 / 512 KB / 10s 超时安全读取，手机网关与 PC 共用） |
+| `apps/editor/src/renderer/services/triggers/` | `TriggerRunHost.ts`、`automatedSessionService.ts`、`automatedPermissionPolicy.ts`、`automatedRunWatcher.ts`、`triggerActionExecutor.ts`、`triggerReportEditorInput.ts`（报告标签页的虚拟 EditorInput） |
+| `apps/editor/src/renderer/workbench/triggers/` | `TriggerReportEditor.tsx` + module.css（报告标签页：摘要条、状态页、Markdown 正文） |
 | `apps/editor/src/renderer/actions/triggerActions.ts` + `triggerPickItems.ts` | 命令面板与 QuickPick 文案 |
 | `apps/editor/src/renderer/contributions/` | `TriggersConfigurationContribution.ts`（JSON schema）、`TriggerVerdictContribution.ts`（安装 resolver）、`TriggerRunNotificationContribution.ts`（结束通知） |
 | `apps/editor/src/renderer/services/swarm/swarmTriggerReporter.ts` | Swarm 列表 → 触发器上报（同一过滤口径） |
@@ -74,7 +75,7 @@ main（应用级单例）                                    renderer（每窗�
 | `<userData>/triggers/triggers.json` | 用户 / `ensureConfigFile` | JSONC 配置；外部编辑热加载（目录 watcher）。 |
 | `<userData>/triggers/state.json` | `TriggerStateStore`（独占） | `pausedAll`、每触发器 `processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`sourceFingerprint`、`elevatedConfirmed` / `approveConfirmed` 指纹、`pending` 记录。防抖 + 原子写（0600）。加载时丢弃 `runId` 不是 UUID 形态的 pending 记录（会拼进文件路径）。 |
 | `<userData>/triggers/audit.jsonl` | `AuditLog` | `action` / `result` / `detail`（标识性文本，无 payload / prompt / 摘要）。每条执行 / 拒绝的动作单独成行。 |
-| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），目录被清理后入口显示空状态。 |
+| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），PC 端经 `readRunReport` 按 runId 读取（同一 reader），目录被清理后入口显示空状态。 |
 | `<userData>/triggers/pending/<runId>.json` | `TriggerMainService` | 排队事件的临时负载；run 开始或丢弃后删除。 |
 
 `state.json` 里的去重 key 每条最多保留 **2000** 个、**30 天**（`prune`）。
@@ -337,6 +338,7 @@ _startRun
 - `SessionListBody`：⚡ 图标 + tooltip（`acp.sessions.automationBadge`，中文「由触发器 {name} 启动 · {key}」）、判决标签与摘要行；`acpSessionFilterService` 的 `sourceFilter: 'all' | 'manual' | 'trigger'`。
 - 手机：`MobileBridgeSessionSummary.automation`（triggerName / verdict / summary / outcome），由 `mobileBridgeProjection.ts` 投影；自动化会话的 attention 事件带 `alwaysNotify: true`，忽略「PC 聚焦时不推送」。该字段属于手机协议 v24（`MOBILE_PROTOCOL_VERSION = 24`）。**手机页面由编辑器网关下发**，随编辑器一起更新，不需要单独发手机端；协议版本不匹配时手机会提示刷新页面。
 - 手机「查看报告」：客户端只传 session ref，main 经 renderer 桥取 live `session.automation.runId`，读取固定路径 `<userData>/triggers/runs/<runId>/report.md`。runId / 路径 / `result.json` 不上 wire；run 目录被保留策略清理后返回 404，手机显示「未生成或已清理」。详见 `mobile-gateway.md` §7e。
+- PC「查看报告」：`ViewTriggerReportAction` 打开 `TriggerReportEditorInput`（`typeId = 'trigger.report'`，`id = trigger-report:<runId>`，按 runId 去重）→ `TriggerReportEditor` 调 `ITriggerMainService.readRunReport(runId)`（renderer 只传 runId，main 复用 `SessionReportReader` 重建并校验路径），正文用 `MarkdownView` 渲染、`baseUri` 指向 run 目录。摘要优先取 live session / history 的 `automation`，缺失时回退输入快照；`not-found` 时按 `outcome` 区分「运行中」与「未生成 / 已清理」。打开期间订阅 `IAutomatedSessionService.onDidEndRun`，`runId` 匹配时自动重读；另有手动刷新。入口三处：Sessions 行右键（`entry.automation !== undefined`）、AcpSession 标签页右键（scoped context key `acpSessionHasAutomation`）、run 结束通知按钮。
 
 ## 13. 通知
 
@@ -345,7 +347,7 @@ _startRun
   - `outcome !== completed` → Warning「触发器运行未完成：{name}（{outcome}）」；
   - `verdict === 'escalate'` → Warning「需要你处理：{name} · {summary}」；
   - 其余 → Info「已完成：{name}」；
-  - 统一带「打开会话」动作。
+  - 统一带「打开会话」与「查看报告」两个动作（后者对所有非 `cancelled` 的 run 显示，调用 `workbench.action.triggers.viewReport` 并传 runId / sessionId / triggerName / eventKey）。
 - `AgentNotificationContribution` 对自动化会话**抑制通用的 `completed` 提示**（避免与上面的运行结果通知重复）；审批 / 提问 / 错误提示仍照常发送。手机桥消费原始信号，因此手机的完成推送不受影响。
 - main 侧 `electronNotifier`：自动暂停用系统 `Notification`（无窗口也能弹）。
 - Swarm 后台轮询提示由 `SwarmReviewNotificationContribution` 发一次 sticky 通知。
@@ -366,6 +368,7 @@ _startRun
 | `ShowTriggersLogAction` | `workbench.action.triggers.showLog` | 触发器: 查看日志 |
 | `ConfirmTriggerElevatedModeAction` | `workbench.action.triggers.confirmElevatedMode` | 触发器: 确认高权限模式… |
 | `ConfirmTriggerAutoApproveAction` | `workbench.action.triggers.confirmAutoApprove` | 触发器: 确认自动 approve… |
+| `ViewTriggerReportAction` | `workbench.action.triggers.viewReport` | 触发器: 查看触发器运行报告 |
 
 `triggerPickItems.ts` 是纯函数，集中状态 / 来源标签、运行计数、上次 / 下次运行、错误与 ⚠ 标记。`RunTriggerNowAction` 支持直接传 triggerId（供列表 / e2e 调用）。
 
@@ -402,9 +405,9 @@ _startRun
 | 域 | 文件 |
 | --- | --- |
 | 纯逻辑 | `shared/triggers/__tests__/{cron,scheduler,dedupe,runQueue,backoff,configParse,promptTemplate,verdict}.test.ts` |
-| main | `main/services/triggers/__tests__/{triggerMainService,triggerFiles,pollCommandFetcher}.test.ts` |
-| renderer | `renderer/services/triggers/__tests__/{TriggerRunHost,automatedPermissionPolicy,automatedRunWatcher,automatedSessionService,triggerActionExecutor}.test.ts` |
-| UI / 集成 | `renderer/contributions/__tests__/{TriggerRunNotificationContribution,SwarmReviewNotificationContribution}.test.ts`、`workbench/agents/__tests__/SessionListBody.test.tsx`、`services/acp/session/__tests__/acpSessionHistory.test.ts`、`services/mobileGateway/__tests__/MobileBridgeService.test.ts` |
+| main | `main/services/triggers/__tests__/{triggerMainService,triggerFiles,pollCommandFetcher,runReportReader}.test.ts` |
+| renderer | `renderer/services/triggers/__tests__/{TriggerRunHost,automatedPermissionPolicy,automatedRunWatcher,automatedSessionService,triggerActionExecutor,triggerReportEditorInput}.test.ts` |
+| UI / 集成 | `renderer/contributions/__tests__/{TriggerRunNotificationContribution,SwarmReviewNotificationContribution}.test.ts`、`renderer/workbench/triggers/__tests__/TriggerReportEditor.test.tsx`、`workbench/agents/__tests__/SessionListBody.test.tsx`、`services/acp/session/__tests__/acpSessionHistory.test.ts`、`services/mobileGateway/__tests__/MobileBridgeService.test.ts` |
 
 要点：
 
@@ -451,8 +454,10 @@ pnpm e2e:smoke
 ## 19. 关键参考路径
 
 - `apps/editor/src/main/services/triggers/triggerMainService.ts` — 调度、去重、队列、窗口路由、审计
+- `apps/editor/src/main/services/triggers/runReportReader.ts` — 运行报告的受限读取（手机网关与 PC 共用）
 - `apps/editor/src/shared/triggers/{types,configParse,promptTemplate,verdict}.ts` — 契约、校验、渲染、判决
-- `apps/editor/src/renderer/services/triggers/{automatedSessionService,automatedRunWatcher,automatedPermissionPolicy,triggerActionExecutor,TriggerRunHost}.ts`
+- `apps/editor/src/renderer/services/triggers/{automatedSessionService,automatedRunWatcher,automatedPermissionPolicy,triggerActionExecutor,TriggerRunHost,triggerReportEditorInput}.ts`
+- `apps/editor/src/renderer/workbench/triggers/TriggerReportEditor.tsx` — PC 报告标签页
 - `apps/editor/src/renderer/services/acp/session/acpSessionService.ts` — `onRequestPermission` 的自动化分支
 - `apps/editor/src/renderer/services/acp/session/acpSessionHistory.ts` — `automation` 字段、30 条上限
 - `apps/editor/src/renderer/contributions/{TriggerVerdictContribution,TriggerRunNotificationContribution,TriggersConfigurationContribution}.ts`

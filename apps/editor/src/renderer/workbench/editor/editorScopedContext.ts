@@ -119,5 +119,6 @@ export function editorScopedContextValues(
     // Seeded unconditionally so the scoped key set never varies.
     acpSessionPinned: editor instanceof AcpSessionEditorInput ? editor.isPinned : false,
     acpSessionArchived: editor instanceof AcpSessionEditorInput ? editor.isArchived : false,
+    acpSessionHasAutomation: editor instanceof AcpSessionEditorInput ? editor.hasAutomation : false,
   }
 }

@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ITriggerMainService } from '../../../../shared/ipc/triggerService.js'
 import type {
   TriggerRunEnd,
+  TriggerRunReportReadResult,
   TriggerRunRequest,
   TriggerSummary,
 } from '../../../../shared/triggers/types.js'
@@ -73,6 +74,9 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly confirmAutoApprove = vi.fn(async (): Promise<void> => undefined)
   readonly ensureConfigFile = vi.fn(async (): Promise<string> => 'file:///triggers.json')
   readonly getConfigFileUri = vi.fn(async (): Promise<string> => 'file:///triggers.json')
+  readonly readRunReport = vi.fn(
+    async (): Promise<TriggerRunReportReadResult> => ({ kind: 'not-found' }),
+  )
   readonly reportSwarmNeedsAction = vi.fn(async (): Promise<void> => undefined)
 }
 

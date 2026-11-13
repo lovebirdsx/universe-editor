@@ -185,6 +185,7 @@ describe('editorScopedContextValues', () => {
 
     expect(values['acpSessionPinned']).toBe(false)
     expect(values['acpSessionArchived']).toBe(false)
+    expect(values['acpSessionHasAutomation']).toBe(false)
   })
 
   it('reads the pin/archive flags from the session history row', () => {
@@ -206,6 +207,30 @@ describe('editorScopedContextValues', () => {
 
     expect(values['acpSessionPinned']).toBe(true)
     expect(values['acpSessionArchived']).toBe(true)
+  })
+
+  it('seeds acpSessionHasAutomation from the session history row', () => {
+    const entry: AcpSessionHistoryEntry = {
+      id: 'durable-1',
+      agentId: 'fake',
+      sessionIdOnAgent: 'durable-1',
+      title: 'session',
+      createdAt: 1,
+      lastUsedAt: 1,
+      automation: {
+        triggerId: 'triage',
+        triggerName: 'Triage',
+        eventKey: 'swarm:1',
+        runId: 'run-1',
+      },
+    }
+    const input = makeSessionInput(entry)
+    disposables.push(input)
+    const groups = groupsWith(input)
+
+    const values = editorScopedContextValues(groups.activeGroup, input)
+
+    expect(values['acpSessionHasAutomation']).toBe(true)
   })
 })
 
