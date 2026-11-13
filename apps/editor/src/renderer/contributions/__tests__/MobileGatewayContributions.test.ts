@@ -56,6 +56,8 @@ describe('MobileGatewayConfigurationContribution', () => {
       'allowedHosts',
       'vapidSubject',
       'sessionHistoryWorkspaceLimit',
+      'keepRunningInBackground',
+      'launchAtLogin',
     ])
     expect(registered?.schema.properties?.['bind']?.enum).toEqual(['loopback', 'lan'])
     expect(registered?.schema.properties?.['port']?.minimum).toBe(1)
@@ -66,6 +68,8 @@ describe('MobileGatewayConfigurationContribution', () => {
     expect(registered?.schema.properties?.['sessionHistoryWorkspaceLimit']?.maximum).toBe(
       MOBILE_GATEWAY_MAX_SESSION_HISTORY_WORKSPACE_LIMIT,
     )
+    expect(registered?.schema.properties?.['keepRunningInBackground']?.default).toBe(false)
+    expect(registered?.schema.properties?.['launchAtLogin']?.default).toBe(false)
   })
 
   it('does not register when the config file uri is unavailable', async () => {

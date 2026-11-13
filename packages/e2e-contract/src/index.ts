@@ -872,6 +872,8 @@ export interface E2EMobileGatewayStatus {
   readonly listenAddress?: string
   readonly origins: readonly string[]
   readonly connectedDeviceCount: number
+  /** This build can register an OS login item (packaged Windows / macOS only). */
+  readonly supportsLaunchAtLogin: boolean
   readonly capabilities?: { readonly installable: boolean; readonly push: boolean }
   readonly certificate?: {
     readonly fingerprint: string
@@ -2279,6 +2281,15 @@ export interface E2EProbe {
    * one in e2e), and `origins[0]` is the loopback origin the PWA is served at.
    */
   getMobileGatewayStatus(): Promise<E2EMobileGatewayStatus>
+  /**
+   * Merge a field-level patch into `gateway.json` through the same service path
+   * the settings page uses. Resolves with the validation outcome.
+   */
+  updateMobileGatewayConfig(patch: {
+    enabled?: boolean
+    keepRunningInBackground?: boolean
+    launchAtLogin?: boolean
+  }): Promise<{ ok: boolean; errors: string[] }>
   /** Paired devices with their live notification switch (no tokens leave main). */
   listMobileDevices(): Promise<readonly E2EMobileDevice[]>
 }

@@ -53,6 +53,7 @@ const RUNNING_STATUS: MobileGatewayStatus = {
   bind: 'loopback',
   capabilities: { installable: true, push: true },
   connectedDeviceCount: 1,
+  supportsLaunchAtLogin: true,
 }
 
 const STOPPED_STATUS: MobileGatewayStatus = {
@@ -63,6 +64,7 @@ const STOPPED_STATUS: MobileGatewayStatus = {
   bind: 'loopback',
   capabilities: { installable: false, push: false },
   connectedDeviceCount: 0,
+  supportsLaunchAtLogin: false,
 }
 
 const DEVICE: MobileDeviceInfo = {
@@ -250,6 +252,38 @@ describe('MobileDevicesEditor', () => {
     expect(gateway.updateConfig).toHaveBeenCalledWith({ enabled: true })
     await flush()
     expect(screen.getByTestId('mobile-gateway-enabled').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('updates the background mode toggles through the service', async () => {
+    const { gateway } = renderEditor()
+    await screen.findByTestId('mobile-gateway-state')
+    await flush()
+
+    fireEvent.click(screen.getByTestId('mobile-gateway-keep-running'))
+    expect(gateway.updateConfig).toHaveBeenCalledWith({ keepRunningInBackground: true })
+    await flush()
+    expect(screen.getByTestId('mobile-gateway-keep-running').getAttribute('aria-checked')).toBe(
+      'true',
+    )
+
+    fireEvent.click(screen.getByTestId('mobile-gateway-launch-at-login'))
+    expect(gateway.updateConfig).toHaveBeenCalledWith({ launchAtLogin: true })
+    await flush()
+    expect(screen.getByTestId('mobile-gateway-launch-at-login').getAttribute('aria-checked')).toBe(
+      'true',
+    )
+  })
+
+  it('disables launch at login when the build cannot register a login item', async () => {
+    renderEditor({ status: { ...RUNNING_STATUS, supportsLaunchAtLogin: false } })
+    await screen.findByTestId('mobile-gateway-state')
+    await flush()
+
+    const toggle = screen.getByTestId('mobile-gateway-launch-at-login') as HTMLButtonElement
+    expect(toggle.disabled).toBe(true)
+    expect(screen.getByTestId('mobile-gateway-launch-at-login-unsupported').textContent).toContain(
+      'installed Windows / macOS',
+    )
   })
 
   it('updates the bind mode through the service', async () => {

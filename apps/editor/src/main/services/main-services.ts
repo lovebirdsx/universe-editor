@@ -282,6 +282,7 @@ registerSingletonFactory(
       acc.get(IRecentWorkspacesService),
       acc.get(ILoggerService),
       acc.get(IFileService),
+      acc.get(IEnvironmentMainService),
     ),
 )
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))

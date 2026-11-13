@@ -33,6 +33,8 @@ const CONFIG_KEYS = new Set([
   'certificateMode',
   'vapidSubject',
   'sessionHistoryWorkspaceLimit',
+  'keepRunningInBackground',
+  'launchAtLogin',
 ])
 
 export type MobileGatewayConfigFileReadResult =
@@ -108,6 +110,18 @@ export function parseMobileGatewayConfigFile(raw: unknown): MobileGatewayConfigP
     }
   }
 
+  if (hasOwn(raw, 'keepRunningInBackground')) {
+    const value = raw['keepRunningInBackground']
+    if (typeof value === 'boolean') config = { ...config, keepRunningInBackground: value }
+    else errors.push('"keepRunningInBackground" must be a boolean')
+  }
+
+  if (hasOwn(raw, 'launchAtLogin')) {
+    const value = raw['launchAtLogin']
+    if (typeof value === 'boolean') config = { ...config, launchAtLogin: value }
+    else errors.push('"launchAtLogin" must be a boolean')
+  }
+
   return errors.length === 0 ? { ok: true, config } : { ok: false, errors }
 }
 
@@ -129,6 +143,8 @@ export function validateMobileGatewayConfigPatch(raw: unknown): MobileGatewayCon
     certificateMode?: MobileGatewayCertificateMode
     vapidSubject?: string
     sessionHistoryWorkspaceLimit?: number
+    keepRunningInBackground?: boolean
+    launchAtLogin?: boolean
   } = {}
 
   if (hasOwn(raw, 'enabled')) {
@@ -203,6 +219,22 @@ export function validateMobileGatewayConfigPatch(raw: unknown): MobileGatewayCon
     }
   }
 
+  if (hasOwn(raw, 'keepRunningInBackground')) {
+    const value = raw['keepRunningInBackground']
+    if (value !== undefined) {
+      if (typeof value === 'boolean') patch.keepRunningInBackground = value
+      else errors.push('"keepRunningInBackground" must be a boolean')
+    }
+  }
+
+  if (hasOwn(raw, 'launchAtLogin')) {
+    const value = raw['launchAtLogin']
+    if (value !== undefined) {
+      if (typeof value === 'boolean') patch.launchAtLogin = value
+      else errors.push('"launchAtLogin" must be a boolean')
+    }
+  }
+
   return errors.length === 0 ? { ok: true, patch } : { ok: false, errors }
 }
 
@@ -220,6 +252,8 @@ export function mergeMobileGatewayConfig(
     vapidSubject: patch.vapidSubject ?? base.vapidSubject,
     sessionHistoryWorkspaceLimit:
       patch.sessionHistoryWorkspaceLimit ?? base.sessionHistoryWorkspaceLimit,
+    keepRunningInBackground: patch.keepRunningInBackground ?? base.keepRunningInBackground,
+    launchAtLogin: patch.launchAtLogin ?? base.launchAtLogin,
   }
 }
 
@@ -234,6 +268,8 @@ export function serializeMobileGatewayConfig(config: MobileGatewayConfig): Mobil
     certificateMode: config.certificateMode,
     vapidSubject: config.vapidSubject,
     sessionHistoryWorkspaceLimit: config.sessionHistoryWorkspaceLimit,
+    keepRunningInBackground: config.keepRunningInBackground,
+    launchAtLogin: config.launchAtLogin,
   }
 }
 

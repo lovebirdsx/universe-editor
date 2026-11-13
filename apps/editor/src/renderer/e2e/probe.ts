@@ -2920,6 +2920,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         state: status.state,
         origins: [...status.origins],
         connectedDeviceCount: status.connectedDeviceCount,
+        supportsLaunchAtLogin: status.supportsLaunchAtLogin,
         capabilities: {
           installable: status.capabilities.installable,
           push: status.capabilities.push,
@@ -2935,6 +2936,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
             }
           : {}),
       }
+    },
+    updateMobileGatewayConfig: async (patch) => {
+      const result = await services.mobileGatewayService.updateConfig(patch)
+      return result.ok ? { ok: true, errors: [] } : { ok: false, errors: [...result.errors] }
     },
     listMobileDevices: async () => {
       const devices = await services.mobileGatewayService.listDevices()

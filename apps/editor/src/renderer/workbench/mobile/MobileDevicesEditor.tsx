@@ -256,6 +256,71 @@ export function MobileDevicesEditor() {
               />
             </div>
 
+            <div className={styles['settingRow']}>
+              <div className={styles['settingText']}>
+                <div className={styles['label']}>
+                  {localize(
+                    'mobileDevices.gateway.keepRunningInBackground',
+                    'Keep running in the background after closing the window',
+                  )}
+                </div>
+                <div className={styles['description']}>
+                  {localize(
+                    'mobileDevices.gateway.keepRunningInBackgroundDescription',
+                    'Only takes effect while the gateway is enabled. Closing the window just hides it to the system tray, so your phone can keep using it. A hidden window with no session activity for 10 minutes is closed automatically.',
+                  )}
+                </div>
+              </div>
+              <Toggle
+                checked={settings.keepRunningInBackground}
+                onChange={(checked) => void config.update({ keepRunningInBackground: checked })}
+                disabled={config.state === undefined}
+                data-testid="mobile-gateway-keep-running"
+                aria-label={localize(
+                  'mobileDevices.gateway.keepRunningInBackground',
+                  'Keep running in the background after closing the window',
+                )}
+              />
+            </div>
+
+            <div className={styles['settingRow']}>
+              <div className={styles['settingText']}>
+                <div className={styles['label']}>
+                  {localize(
+                    'mobileDevices.gateway.launchAtLogin',
+                    'Start in the background at login',
+                  )}
+                </div>
+                <div className={styles['description']}>
+                  {localize(
+                    'mobileDevices.gateway.launchAtLoginDescription',
+                    'Starts the editor in the background when you sign in (without opening a window). Requires "Keep running in the background" to take effect.',
+                  )}
+                </div>
+                {status?.supportsLaunchAtLogin !== true && (
+                  <div
+                    className={styles['description']}
+                    data-testid="mobile-gateway-launch-at-login-unsupported"
+                  >
+                    {localize(
+                      'mobileDevices.gateway.launchAtLoginUnsupported',
+                      'Only supported in installed Windows / macOS builds.',
+                    )}
+                  </div>
+                )}
+              </div>
+              <Toggle
+                checked={settings.launchAtLogin}
+                onChange={(checked) => void config.update({ launchAtLogin: checked })}
+                disabled={config.state === undefined || status?.supportsLaunchAtLogin !== true}
+                data-testid="mobile-gateway-launch-at-login"
+                aria-label={localize(
+                  'mobileDevices.gateway.launchAtLogin',
+                  'Start in the background at login',
+                )}
+              />
+            </div>
+
             {config.error !== undefined && (
               <div className={styles['errorText']} data-testid="mobile-gateway-config-error">
                 {localize(

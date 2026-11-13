@@ -93,6 +93,22 @@ const MOBILE_GATEWAY_SCHEMA: IJSONSchema = {
         'How many recently opened but currently closed workspaces contribute session history to the phone catalog. Open windows are always included. Raising it reads more local history files and can slow the catalog.',
       ),
     },
+    keepRunningInBackground: {
+      type: 'boolean',
+      default: false,
+      description: localize(
+        'settings.mobileGateway.keepRunningInBackground',
+        'Keep the editor and phone gateway running after the last window closes. Closing a window hides it to the system tray, so paired phones stay connected; hidden windows without session activity are closed after 10 minutes. Requires the gateway to be enabled.',
+      ),
+    },
+    launchAtLogin: {
+      type: 'boolean',
+      default: false,
+      description: localize(
+        'settings.mobileGateway.launchAtLogin',
+        'Start the editor in the background (without opening a window) when you sign in to this computer. Only available in installed Windows and macOS builds, and requires "Keep running in the background".',
+      ),
+    },
   },
 }
 

@@ -53,6 +53,8 @@ describe('parseMobileGatewayConfigFile', () => {
         certificateMode: 'root-ca',
         vapidSubject: '  mailto:dev@example.com  ',
         sessionHistoryWorkspaceLimit: 12,
+        keepRunningInBackground: true,
+        launchAtLogin: true,
       }),
     ).toEqual({
       ok: true,
@@ -65,6 +67,8 @@ describe('parseMobileGatewayConfigFile', () => {
         certificateMode: 'root-ca',
         vapidSubject: 'mailto:dev@example.com',
         sessionHistoryWorkspaceLimit: 12,
+        keepRunningInBackground: true,
+        launchAtLogin: true,
       },
     })
   })
@@ -103,6 +107,8 @@ describe('parseMobileGatewayConfigFile', () => {
       { sessionHistoryWorkspaceLimit: '20' },
       '"sessionHistoryWorkspaceLimit" must be an integer between 1 and 100',
     ],
+    [{ keepRunningInBackground: 'true' }, '"keepRunningInBackground" must be a boolean'],
+    [{ launchAtLogin: 1 }, '"launchAtLogin" must be a boolean'],
   ])('rejects invalid known fields: %j', (raw, message) => {
     const result = parseMobileGatewayConfigFile(raw)
     expect(result.ok).toBe(false)
@@ -140,6 +146,8 @@ describe('validateMobileGatewayConfigPatch', () => {
         allowedHosts: [' pc.example.ts.net '],
         certificateMode: 'root-ca',
         sessionHistoryWorkspaceLimit: 8,
+        keepRunningInBackground: true,
+        launchAtLogin: true,
       }),
     ).toEqual({
       ok: true,
@@ -148,6 +156,8 @@ describe('validateMobileGatewayConfigPatch', () => {
         allowedHosts: ['pc.example.ts.net'],
         certificateMode: 'root-ca',
         sessionHistoryWorkspaceLimit: 8,
+        keepRunningInBackground: true,
+        launchAtLogin: true,
       },
     })
   })
@@ -165,6 +175,14 @@ describe('mergeMobileGatewayConfig', () => {
     expect(mergeMobileGatewayConfig(base, { certificateMode: 'root-ca' })).toEqual({
       ...base,
       certificateMode: 'root-ca',
+    })
+    expect(mergeMobileGatewayConfig(base, { keepRunningInBackground: true })).toEqual({
+      ...base,
+      keepRunningInBackground: true,
+    })
+    expect(mergeMobileGatewayConfig(base, { launchAtLogin: true })).toEqual({
+      ...base,
+      launchAtLogin: true,
     })
   })
 })
@@ -188,6 +206,8 @@ describe('serializeMobileGatewayConfig', () => {
       'certificateMode',
       'vapidSubject',
       'sessionHistoryWorkspaceLimit',
+      'keepRunningInBackground',
+      'launchAtLogin',
     ])
   })
 })

@@ -78,6 +78,10 @@ export interface MobileGatewayConfig {
    * resumable history to the phone catalog. Open windows are always included.
    */
   readonly sessionHistoryWorkspaceLimit: number
+  /** Keep the gateway (and the editor process) alive after the last window closes. */
+  readonly keepRunningInBackground: boolean
+  /** Register an OS login item that starts the editor in the background. */
+  readonly launchAtLogin: boolean
 }
 
 export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
@@ -91,6 +95,8 @@ export const DEFAULT_MOBILE_GATEWAY_CONFIG: MobileGatewayConfig = {
   // `mailto:` or `https:` URL before relying on push in the field.
   vapidSubject: 'https://universe-editor.example.com',
   sessionHistoryWorkspaceLimit: MOBILE_GATEWAY_DEFAULT_SESSION_HISTORY_WORKSPACE_LIMIT,
+  keepRunningInBackground: false,
+  launchAtLogin: false,
 }
 
 /** Field-level update. `allowedHosts` replaces the whole list. */
@@ -103,6 +109,8 @@ export interface MobileGatewayConfigPatch {
   readonly certificateMode?: MobileGatewayCertificateMode
   readonly vapidSubject?: string
   readonly sessionHistoryWorkspaceLimit?: number
+  readonly keepRunningInBackground?: boolean
+  readonly launchAtLogin?: boolean
 }
 
 /**
@@ -177,6 +185,8 @@ export interface MobileGatewayStatus {
   readonly bind: MobileGatewayBindMode
   readonly capabilities: MobileGatewayCapabilities
   readonly connectedDeviceCount: number
+  /** This build can register an OS login item: packaged Windows / macOS only. */
+  readonly supportsLaunchAtLogin: boolean
   /** Present on the LAN tier while its TLS certificate is loaded. */
   readonly certificate?: MobileGatewayCertificateInfo
   /** Same-origin download URL for the root CA (root-ca + LAN + TLS only). */

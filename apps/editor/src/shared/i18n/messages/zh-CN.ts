@@ -108,6 +108,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'mobileDevices.gateway.enableDescription': '监听已配对手机的连接并提供手机网页。默认关闭。',
   'mobileDevices.gateway.insecure':
     '明文 HTTP 已绑定到非回环地址，网络中的任何人都能读取设备凭据。仅限开发使用。',
+  'mobileDevices.gateway.keepRunningInBackground': '关闭窗口后保持后台运行',
+  'mobileDevices.gateway.keepRunningInBackgroundDescription':
+    '仅在网关启用时生效；关闭窗口只是隐藏到系统托盘，手机仍可继续使用；空闲 10 分钟且无会话活动的隐藏窗口会被自动关闭。',
+  'mobileDevices.gateway.launchAtLogin': '登录时在后台启动',
+  'mobileDevices.gateway.launchAtLoginDescription':
+    '登录系统后自动在后台启动编辑器（不打开窗口），需同时开启“保持后台运行”才有效。',
+  'mobileDevices.gateway.launchAtLoginUnsupported': '仅安装版 Windows / macOS 支持',
   'mobileDevices.gateway.listenAddress': '正在监听',
   'mobileDevices.gateway.loading': '正在读取状态…',
   'mobileDevices.gateway.openInBrowser': '在电脑浏览器中打开手机版',
@@ -1270,6 +1277,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '网关监听的位置。"loopback" 是推荐的 Tailscale 模式：网关监听 127.0.0.1，由 Tailscale Serve 以 HTTPS 对外提供。"lan" 直接绑定局域网地址，并使用本机生成的自签名 HTTPS 证书。',
   'settings.mobileGateway.enabled':
     '在这台电脑上提供手机 PWA 并从已配对的手机接受连接。默认关闭；请在“手机设备”设置页配对设备。',
+  'settings.mobileGateway.keepRunningInBackground':
+    '关闭最后一个窗口后仍保持编辑器和手机网关运行。关闭窗口只是隐藏到系统托盘，已配对手机保持连接；无会话活动的隐藏窗口 10 分钟后自动关闭。需启用网关。',
+  'settings.mobileGateway.launchAtLogin':
+    '登录系统后自动在后台启动编辑器（不打开窗口）。仅安装版 Windows / macOS 支持，且需同时开启“保持后台运行”。',
   'settings.mobileGateway.lanAddress':
     '"lan" 模式下绑定的 IPv4 地址。留空则自动选择最合适的局域网网卡：优先私有地址与物理网卡，忽略 169.254 开头的链路本地地址。',
   'settings.mobileGateway.port':

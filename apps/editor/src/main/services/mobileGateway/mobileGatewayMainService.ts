@@ -43,8 +43,13 @@ import type {
   MobilePairingSession,
 } from '../../../shared/ipc/mobileGatewayService.js'
 import { DEFAULT_MOBILE_GATEWAY_CONFIG } from '../../../shared/ipc/mobileGatewayService.js'
+import {
+  IEnvironmentMainService,
+  type EnvironmentMainService,
+} from '../../environment/environmentMainService.js'
 import { IRecentWorkspacesService } from '../workspace/recentWorkspacesMainService.js'
 import type { RecentWorkspacesMainService } from '../workspace/recentWorkspacesMainService.js'
+import { supportsLoginItem } from '../backgroundMode/backgroundModePolicy.js'
 import { getAppVersion } from '../../appVersion.js'
 import { resolveFromRepo } from '../../repoPaths.js'
 import { AuditLog, type AuditInput } from './auditLog.js'
@@ -152,6 +157,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     @IRecentWorkspacesService private readonly _recent: RecentWorkspacesMainService,
     @ILoggerService loggerService?: ILoggerService,
     @IFileService private readonly _files?: IFileService,
+    @IEnvironmentMainService private readonly _environment?: EnvironmentMainService,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, {
@@ -688,6 +694,11 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       bind: this._bind,
       capabilities: capabilitiesForOrigins(this._originsInfo),
       connectedDeviceCount: this._server?.getConnectedDeviceCount() ?? 0,
+      supportsLaunchAtLogin: supportsLoginItem({
+        isPackaged: app.isPackaged,
+        platform: process.platform,
+        e2e: this._environment?.isE2E ?? process.env['UNIVERSE_E2E'] === '1',
+      }),
       ...(this._certificate !== undefined
         ? {
             certificate: {
