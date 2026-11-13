@@ -1983,5 +1983,65 @@ describe('WindowMainService', () => {
       expect(windowAt(0).show).toHaveBeenCalledTimes(1)
       expect(windowAt(0).close).not.toHaveBeenCalled()
     })
+
+    describe('openWindowForFolderInBackground', () => {
+      it('creates a hidden window when no visible window exists', async () => {
+        const svc = makeService(withBackgroundMode(makeOpts()))
+
+        await svc.openWindowForFolderInBackground(URI.file('/tmp/phone'))
+
+        expect(svc.getWindows()).toHaveLength(1)
+        expect(svc.isWindowHidden(svc.getWindows()[0]!.id)).toBe(true)
+        expect(windowAt(0).show).not.toHaveBeenCalled()
+      })
+
+      it('creates a visible window when another window is already visible', async () => {
+        const svc = makeService(withBackgroundMode(makeOpts()))
+        await svc.createWindow()
+
+        await svc.openWindowForFolderInBackground(URI.file('/tmp/phone-2'))
+
+        expect(svc.getWindows()).toHaveLength(2)
+        expect(svc.isWindowHidden(svc.getWindows()[1]!.id)).toBe(false)
+      })
+
+      it('messages an already hidden target window without revealing it', async () => {
+        const opts = withBackgroundMode(makeOpts())
+        const addRecent = vi.fn().mockResolvedValue(undefined)
+        ;(opts.appServices as { recentWorkspaces: unknown }).recentWorkspaces = { add: addRecent }
+        const svc = makeService(opts)
+        const folder = URI.file('/tmp/phone-ws')
+        const id = await svc.createWindow({ workspace: { folder, name: 'phone-ws' } })
+        const workspace = vi.mocked(WorkspaceMainService).mock.results.at(-1)?.value as {
+          current: unknown
+        }
+        workspace.current = { folder, name: 'phone-ws' }
+
+        svc.hideWindow(id)
+        windowAt(0).show.mockClear()
+        windowAt(0).focus.mockClear()
+
+        await svc.openWindowForFolderInBackground(folder, 'session-1')
+
+        expect(windowAt(0).show).not.toHaveBeenCalled()
+        expect(windowAt(0).focus).not.toHaveBeenCalled()
+        expect(windowAt(0).webContents.send).toHaveBeenCalledWith('ue:open-session', 'session-1')
+        expect(svc.isWindowHidden(id)).toBe(true)
+        expect(addRecent).toHaveBeenCalledTimes(1)
+      })
+
+      it('behaves like a normal open when background mode is inactive', async () => {
+        const opts: ReturnType<typeof makeOpts> & {
+          backgroundMode?: { isActive(): boolean; shouldHideOnClose(): boolean }
+        } = makeOpts()
+        opts.backgroundMode = { isActive: () => false, shouldHideOnClose: () => false }
+        const svc = makeService(opts)
+
+        await svc.openWindowForFolderInBackground(URI.file('/tmp/phone-visible'))
+
+        expect(svc.getWindows()).toHaveLength(1)
+        expect(svc.isWindowHidden(svc.getWindows()[0]!.id)).toBe(false)
+      })
+    })
   })
 })

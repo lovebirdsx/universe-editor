@@ -126,3 +126,57 @@ export function planSessionPersist<T>(entries: readonly SessionPersistCandidate<
   }
   return [latest.entry]
 }
+
+export interface IdleWindowCandidate {
+  readonly windowId: number
+  readonly hidden: boolean
+  readonly running: number
+  readonly ask: number
+  readonly hasSubscribers: boolean
+}
+
+export interface UpdateIdleStateInput {
+  /** `windowId → epoch ms when the window first became idle`. */
+  readonly idleSince: ReadonlyMap<number, number>
+  readonly candidates: readonly IdleWindowCandidate[]
+  readonly now: number
+  readonly thresholdMs: number
+}
+
+export interface IdleStateUpdate {
+  /** Idle windows still inside the budget, with their original start time. */
+  readonly idleSince: Map<number, number>
+  /** Windows that stayed idle for at least `thresholdMs`; no longer tracked. */
+  readonly reclaim: number[]
+}
+
+/**
+ * A hidden window may be closed for real only when it has no running or
+ * awaiting sessions and no phone is watching it. Any break in those conditions
+ * restarts its idle clock; windows that disappear from the candidate list (shown
+ * again, or gone) stop being tracked.
+ */
+export function updateIdleState({
+  idleSince,
+  candidates,
+  now,
+  thresholdMs,
+}: UpdateIdleStateInput): IdleStateUpdate {
+  const next = new Map<number, number>()
+  const reclaim: number[] = []
+  for (const candidate of candidates) {
+    const idle =
+      candidate.hidden &&
+      candidate.running === 0 &&
+      candidate.ask === 0 &&
+      !candidate.hasSubscribers
+    if (!idle) continue
+    const since = idleSince.get(candidate.windowId) ?? now
+    if (now - since >= thresholdMs) {
+      reclaim.push(candidate.windowId)
+      continue
+    }
+    next.set(candidate.windowId, since)
+  }
+  return { idleSince: next, reclaim }
+}

@@ -617,6 +617,20 @@ export class MobileGatewayHub {
     this._updateStreaming()
   }
 
+  /**
+   * Whether any phone is watching a live session in `windowId`. Only session
+   * subscriptions count: the inbox and attention listeners are passive views
+   * and must not keep an otherwise idle hidden window alive.
+   */
+  hasSessionSubscribers(windowId: number): boolean {
+    for (const state of this._connections) {
+      for (const subscription of state.sessions.values()) {
+        if (subscription.windowId === windowId) return true
+      }
+    }
+    return false
+  }
+
   dispose(): void {
     for (const entry of this._windows.values()) {
       this._disposeWindowWatch(entry)

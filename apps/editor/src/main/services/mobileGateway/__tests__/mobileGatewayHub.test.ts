@@ -4535,4 +4535,47 @@ describe('MobileGatewayHub delivery commands', () => {
       error: 'delivery_busy',
     })
   })
+
+  describe('hasSessionSubscribers', () => {
+    function setup() {
+      const hub = new MobileGatewayHub(NULL_LOGGER)
+      const bridge = new FakeBridge()
+      bridge.sessions = [summary('s1')]
+      bridge.snapshots.set('s1', snapshot('s1'))
+      hub.registerWindow(1, bridge)
+      const connection = makeConnection()
+      hub.addConnection(connection)
+      return { hub, bridge, connection }
+    }
+
+    it('is true while a phone subscribes to a session in that window', async () => {
+      const { hub, connection } = setup()
+      await hub.subscribeSession(connection, { windowId: 1, localId: 's1' })
+      expect(hub.hasSessionSubscribers(1)).toBe(true)
+      expect(hub.hasSessionSubscribers(2)).toBe(false)
+
+      hub.unsubscribeSession(connection, { windowId: 1, localId: 's1' })
+      expect(hub.hasSessionSubscribers(1)).toBe(false)
+    })
+
+    it('ignores inbox-only and attention-only connections', async () => {
+      const { hub, connection } = setup()
+      hub.subscribeInbox(connection)
+      hub.setAttentionNeeded(true)
+      await tick()
+      expect(hub.hasSessionSubscribers(1)).toBe(false)
+    })
+
+    it('is false after the connection or the window goes away', async () => {
+      const first = setup()
+      await first.hub.subscribeSession(first.connection, { windowId: 1, localId: 's1' })
+      first.hub.removeConnection(first.connection)
+      expect(first.hub.hasSessionSubscribers(1)).toBe(false)
+
+      const second = setup()
+      await second.hub.subscribeSession(second.connection, { windowId: 1, localId: 's1' })
+      second.hub.unregisterWindow(1)
+      expect(second.hub.hasSessionSubscribers(1)).toBe(false)
+    })
+  })
 })

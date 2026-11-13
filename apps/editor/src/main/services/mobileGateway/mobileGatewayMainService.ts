@@ -96,7 +96,8 @@ const MAX_AUDIT_LIMIT = 200
 /** Subset of `WindowMainService` the gateway needs; set after windows are constructed. */
 export interface MobileGatewayWindowProvider {
   getOpenWindowInfos(): readonly IOpenWindowInfo[]
-  openWindowForFolder(folder?: URI): Promise<void>
+  /** Open a recently used workspace without stealing focus from a visible window. */
+  openWindowForFolderInBackground(folder: URI): Promise<void>
 }
 
 const BRIDGE_WAIT_INTERVAL_MS = 100
@@ -196,7 +197,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
             ...(entry.folder.authority ? { authority: entry.folder.authority } : {}),
           })),
         openWorkspace: (folder) =>
-          this._windows?.openWindowForFolder(URI.parse(folder)) ?? Promise.resolve(),
+          this._windows?.openWindowForFolderInBackground(URI.parse(folder)) ?? Promise.resolve(),
         waitForBridge: (folder, authority, timeoutMs) =>
           this._waitForBridge(folder, authority, timeoutMs),
         workspaceGitDirty: createWorkspaceGitDirtyProbe({
@@ -377,6 +378,14 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   unregisterWindowBridge(windowId: number): void {
     this._windowBridges.delete(windowId)
     this._hub.unregisterWindow(windowId)
+  }
+
+  /**
+   * Main-only: whether a phone currently subscribes to a live session in this
+   * window. Background idle reclaim keeps such a hidden window alive.
+   */
+  hasSessionSubscribers(windowId: number): boolean {
+    return this._hub.hasSessionSubscribers(windowId)
   }
 
   /**

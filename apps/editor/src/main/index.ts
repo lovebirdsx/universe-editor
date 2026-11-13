@@ -835,6 +835,10 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       platform: process.platform,
       trayIconPath,
       quit: () => app.quit(),
+      sessionCounts: (windowId) =>
+        applicationServices!.sessionSwitcher.getWindowSessionCounts(windowId),
+      hasSessionSubscribers: (windowId) =>
+        applicationServices!.mobileGateway.hasSessionSubscribers(windowId),
     })
     void backgroundMode.initialize()
     installE2EMainProbe(windows)

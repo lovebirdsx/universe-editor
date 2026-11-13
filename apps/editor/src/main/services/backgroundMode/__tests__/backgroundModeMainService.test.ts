@@ -23,6 +23,7 @@ vi.mock('electron', () => ({
     createFromBuffer: vi.fn(),
     createEmpty: vi.fn(),
   },
+  powerMonitor: { on: vi.fn(), removeListener: vi.fn() },
   Tray: vi.fn(),
 }))
 
@@ -124,16 +125,26 @@ function makeHarness(
     createTrayError?: Error
     nativeImageEmpty?: boolean
     trayIconPath?: string
+    sessionCounts?: (windowId: number) => { running: number; ask: number }
+    hasSessionSubscribers?: (windowId: number) => boolean
+    idleReclaimAfterMs?: number
+    idleScanIntervalMs?: number
+    onSystemResume?: (listener: () => void) => { dispose(): void }
   } = {},
 ) {
   const windows = makeWindows()
   const tray = options.tray ?? makeTray()
   const configEmitter = new Emitter<MobileGatewayConfigState>()
   const statusEmitter = new Emitter<MobileGatewayStatus>()
+  const resumeEmitter = new Emitter<void>()
   const config = options.config ?? enabledConfig()
   const restoreSession = vi.fn(async () => undefined)
   const createWindow = vi.fn(async () => 1)
   const quit = vi.fn()
+  const sessionCounts = options.sessionCounts ?? (() => ({ running: 0, ask: 0 }))
+  const hasSessionSubscribers = options.hasSessionSubscribers ?? (() => false)
+  const onSystemResume =
+    options.onSystemResume ?? ((listener: () => void) => resumeEmitter.event(listener))
   const createTray = vi.fn(() => {
     if (options.createTrayError) throw options.createTrayError
     return tray
@@ -166,6 +177,15 @@ function makeHarness(
     trayIconPath: options.trayIconPath ?? '/tmp/icon.ico',
     createTray,
     quit,
+    sessionCounts,
+    hasSessionSubscribers,
+    ...(options.idleReclaimAfterMs !== undefined
+      ? { idleReclaimAfterMs: options.idleReclaimAfterMs }
+      : {}),
+    ...(options.idleScanIntervalMs !== undefined
+      ? { idleScanIntervalMs: options.idleScanIntervalMs }
+      : {}),
+    onSystemResume,
   })
 
   return {
@@ -175,15 +195,19 @@ function makeHarness(
     tray,
     configEmitter,
     statusEmitter,
+    resumeEmitter,
     config,
     restoreSession,
     createWindow,
     quit,
     createTray,
+    sessionCounts,
+    hasSessionSubscribers,
     logger,
     disposeEmitters: () => {
       configEmitter.dispose()
       statusEmitter.dispose()
+      resumeEmitter.dispose()
     },
   }
 }
@@ -474,6 +498,120 @@ describe('buildTrayMenuTemplate', () => {
     expect(labelFor('starting')).toContain('starting')
     expect(labelFor('error')).toContain('error')
     expect(labelFor('stopped')).toContain('stopped')
+  })
+
+  describe('idle reclaim', () => {
+    const RECLAIM_MS = 10 * 60_000
+    const SCAN_MS = 30_000
+
+    it('closes a hidden idle window once the budget elapses', async () => {
+      vi.useFakeTimers()
+      const h = makeHarness()
+      try {
+        await h.service.initialize()
+        h.windowState.hidden = [{ id: 7, name: 'project', hiddenSeq: 1 }]
+
+        await vi.advanceTimersByTimeAsync(SCAN_MS)
+        expect(h.windows.closeWindowWithoutVeto).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS - 1)
+        expect(h.windows.closeWindowWithoutVeto).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(h.windows.closeWindowWithoutVeto).toHaveBeenCalledWith(7)
+      } finally {
+        h.service.dispose()
+        h.disposeEmitters()
+        vi.useRealTimers()
+      }
+    })
+
+    let counts = { running: 0, ask: 0 }
+    let subscribers = false
+    const blockers: Array<{ label: string; block: () => void; unblock: () => void }> = [
+      {
+        label: 'running sessions',
+        block: () => (counts.running = 1),
+        unblock: () => (counts.running = 0),
+      },
+      {
+        label: 'a waiting prompt',
+        block: () => (counts.ask = 1),
+        unblock: () => (counts.ask = 0),
+      },
+      {
+        label: 'a phone subscriber',
+        block: () => (subscribers = true),
+        unblock: () => (subscribers = false),
+      },
+    ]
+
+    it.each(blockers)('does not reclaim while there is $label', async ({ block, unblock }) => {
+      counts = { running: 0, ask: 0 }
+      subscribers = false
+      vi.useFakeTimers()
+      const h = makeHarness({
+        sessionCounts: () => counts,
+        hasSessionSubscribers: () => subscribers,
+      })
+      try {
+        await h.service.initialize()
+        h.windowState.hidden = [{ id: 7, name: 'project', hiddenSeq: 1 }]
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS / 2)
+
+        block()
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS)
+        expect(h.windows.closeWindowWithoutVeto).not.toHaveBeenCalled()
+
+        unblock()
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS + SCAN_MS)
+        expect(h.windows.closeWindowWithoutVeto).toHaveBeenCalledWith(7)
+      } finally {
+        h.service.dispose()
+        h.disposeEmitters()
+        vi.useRealTimers()
+      }
+    })
+
+    it('stops scanning after the mode is deactivated', async () => {
+      vi.useFakeTimers()
+      const h = makeHarness()
+      try {
+        await h.service.initialize()
+        h.windowState.hidden = [{ id: 7, name: 'project', hiddenSeq: 1 }]
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS / 2)
+
+        h.configEmitter.fire({ config: enabledConfig({ keepRunningInBackground: false }) })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(h.tray.destroy).toHaveBeenCalledTimes(1)
+
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS * 2)
+        expect(h.windows.closeWindowWithoutVeto).not.toHaveBeenCalled()
+      } finally {
+        h.service.dispose()
+        h.disposeEmitters()
+        vi.useRealTimers()
+      }
+    })
+
+    it('resets the idle clock after the system resumes', async () => {
+      vi.useFakeTimers()
+      const h = makeHarness()
+      try {
+        await h.service.initialize()
+        h.windowState.hidden = [{ id: 7, name: 'project', hiddenSeq: 1 }]
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS / 2)
+
+        h.resumeEmitter.fire()
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS / 2)
+        expect(h.windows.closeWindowWithoutVeto).not.toHaveBeenCalled()
+
+        await vi.advanceTimersByTimeAsync(RECLAIM_MS)
+        expect(h.windows.closeWindowWithoutVeto).toHaveBeenCalledWith(7)
+      } finally {
+        h.service.dispose()
+        h.disposeEmitters()
+        vi.useRealTimers()
+      }
+    })
   })
 })
 

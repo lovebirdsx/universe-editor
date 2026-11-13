@@ -10,12 +10,19 @@ import {
   app,
   Menu,
   nativeImage,
+  powerMonitor,
   Tray,
   type MenuItemConstructorOptions,
   type NativeImage,
 } from 'electron'
 import { readFileSync } from 'node:fs'
-import { DisposableStore, localize, type Event, type ILogger } from '@universe-editor/platform'
+import {
+  DisposableStore,
+  localize,
+  type Event,
+  type IDisposable,
+  type ILogger,
+} from '@universe-editor/platform'
 import type {
   MobileGatewayConfig,
   MobileGatewayConfigState,
@@ -27,9 +34,13 @@ import {
   isMobileGatewayEnabled,
 } from '../mobileGateway/gatewayConfig.js'
 import {
+  BACKGROUND_IDLE_RECLAIM_MS,
+  BACKGROUND_IDLE_SCAN_INTERVAL_MS,
   decideActivateAction,
   decidePrimaryWindowAction,
   isBackgroundModeActive,
+  updateIdleState,
+  type IdleWindowCandidate,
 } from './backgroundModePolicy.js'
 
 /** Minimum gap between two "show" actions from repeated tray clicks. */
@@ -80,6 +91,16 @@ export interface BackgroundModeMainServiceOptions {
   readonly createTray?: (image: NativeImage) => BackgroundModeTray
   /** Test seam / late-bound quit; defaults to `app.quit()`. */
   readonly quit?: () => void
+  /** Live per-window session counts; a hidden window with work must never be reclaimed. */
+  readonly sessionCounts: (windowId: number) => { readonly running: number; readonly ask: number }
+  /** Whether a phone is currently subscribed to one of the window's sessions. */
+  readonly hasSessionSubscribers: (windowId: number) => boolean
+  /** Test seam; defaults to {@link BACKGROUND_IDLE_RECLAIM_MS}. */
+  readonly idleReclaimAfterMs?: number
+  /** Test seam; defaults to {@link BACKGROUND_IDLE_SCAN_INTERVAL_MS}. */
+  readonly idleScanIntervalMs?: number
+  /** Test seam; defaults to Electron's `powerMonitor`. */
+  readonly onSystemResume?: (listener: () => void) => IDisposable
 }
 
 export interface TrayMenuWindow {
@@ -168,6 +189,11 @@ function defaultCreateTray(image: NativeImage): BackgroundModeTray {
   return new Tray(image) as unknown as BackgroundModeTray
 }
 
+function defaultOnSystemResume(listener: () => void): IDisposable {
+  powerMonitor.on('resume', listener)
+  return { dispose: () => powerMonitor.removeListener('resume', listener) }
+}
+
 /**
  * Extract the largest PNG-compressed image from an ICO file. Electron's
  * `nativeImage.createFromPath` handles ICO only on Windows, so macOS/Linux get
@@ -215,6 +241,8 @@ export class BackgroundModeMainService {
   private _started = false
   private _disposed = false
   private _gatewayStatus: MobileGatewayStatus | undefined
+  private _idleSince = new Map<number, number>()
+  private _idleTimer: ReturnType<typeof setInterval> | undefined
   private _readyResolved = false
   private readonly _ready: Promise<void>
   private _resolveReady!: () => void
@@ -301,6 +329,7 @@ export class BackgroundModeMainService {
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
+    this._stopIdleScan()
     if (this._clickTimer !== undefined) {
       clearTimeout(this._clickTimer)
       this._clickTimer = undefined
@@ -313,6 +342,15 @@ export class BackgroundModeMainService {
 
   private async _initialize(): Promise<void> {
     try {
+      const onSystemResume = this._opts.onSystemResume ?? defaultOnSystemResume
+      this._disposables.add(
+        onSystemResume(() => {
+          // Sleeping for a long time must not count as idle time; otherwise the
+          // first scan after wake would reclaim every hidden window at once.
+          this._idleSince.clear()
+          this._logger.info('background idle timer reset after system resume')
+        }),
+      )
       this._disposables.add(
         this._opts.gateway.onDidChangeConfig((state) => {
           void this._applyConfig(state.config).catch((err: unknown) => {
@@ -349,9 +387,11 @@ export class BackgroundModeMainService {
     this._logger.info(`background mode desired=${desired} was=${wasDesired}`)
     if (desired) {
       if (this._tray === undefined && !this._trayFailed) this._activateTray()
+      if (this.isActive()) this._startIdleScan()
       return
     }
     this._trayFailed = false
+    this._stopIdleScan()
     if (wasDesired) this._deactivate()
   }
 
@@ -383,6 +423,7 @@ export class BackgroundModeMainService {
    */
   private _deactivate(): void {
     this._logger.info('background mode deactivating')
+    this._stopIdleScan()
     this._opts.windows.revealAllHiddenWindows()
     if (this._tray !== undefined) {
       this._tray.destroy()
@@ -390,6 +431,49 @@ export class BackgroundModeMainService {
     }
     this._trayFailed = false
     if (this._opts.windows.getWindowCount() === 0) void this.showPrimaryWindow()
+  }
+
+  private _startIdleScan(): void {
+    if (this._idleTimer !== undefined) return
+    const intervalMs = this._opts.idleScanIntervalMs ?? BACKGROUND_IDLE_SCAN_INTERVAL_MS
+    this._idleTimer = setInterval(() => this._scanIdleWindows(), intervalMs)
+    this._idleTimer.unref?.()
+    this._logger.info(`background idle scan started intervalMs=${intervalMs}`)
+  }
+
+  private _stopIdleScan(): void {
+    if (this._idleTimer !== undefined) {
+      clearInterval(this._idleTimer)
+      this._idleTimer = undefined
+    }
+    this._idleSince.clear()
+  }
+
+  private _scanIdleWindows(): void {
+    if (!this.isActive()) return
+    const candidates: IdleWindowCandidate[] = this._opts.windows
+      .getHiddenWindowInfos()
+      .map((info) => {
+        const counts = this._opts.sessionCounts(info.id)
+        return {
+          windowId: info.id,
+          hidden: true,
+          running: counts.running,
+          ask: counts.ask,
+          hasSubscribers: this._opts.hasSessionSubscribers(info.id),
+        }
+      })
+    const { idleSince, reclaim } = updateIdleState({
+      idleSince: this._idleSince,
+      candidates,
+      now: Date.now(),
+      thresholdMs: this._opts.idleReclaimAfterMs ?? BACKGROUND_IDLE_RECLAIM_MS,
+    })
+    this._idleSince = idleSince
+    for (const windowId of reclaim) {
+      this._logger.info(`background idle reclaim window=${windowId}`)
+      this._opts.windows.closeWindowWithoutVeto(windowId)
+    }
   }
 
   private _loadTrayImage(): NativeImage {

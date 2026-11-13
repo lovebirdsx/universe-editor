@@ -7,6 +7,8 @@ import {
   isBackgroundModeActive,
   planSessionPersist,
   supportsLoginItem,
+  updateIdleState,
+  type IdleWindowCandidate,
 } from '../backgroundModePolicy.js'
 
 describe('supportsLoginItem', () => {
@@ -133,6 +135,110 @@ describe('planSessionPersist', () => {
 
   it('returns empty for an empty window set', () => {
     expect(planSessionPersist([])).toEqual([])
+  })
+})
+
+describe('updateIdleState', () => {
+  const THRESHOLD = 10 * 60_000
+  const candidate = (
+    windowId: number,
+    overrides: Partial<IdleWindowCandidate> = {},
+  ): IdleWindowCandidate => ({
+    windowId,
+    hidden: true,
+    running: 0,
+    ask: 0,
+    hasSubscribers: false,
+    ...overrides,
+  })
+
+  it('starts tracking an idle hidden window and reclaims it at the threshold', () => {
+    const start = updateIdleState({
+      idleSince: new Map(),
+      candidates: [candidate(1)],
+      now: 1_000,
+      thresholdMs: THRESHOLD,
+    })
+    expect(start.reclaim).toEqual([])
+    expect(start.idleSince.get(1)).toBe(1_000)
+
+    const before = updateIdleState({
+      idleSince: start.idleSince,
+      candidates: [candidate(1)],
+      now: 1_000 + THRESHOLD - 1,
+      thresholdMs: THRESHOLD,
+    })
+    expect(before.reclaim).toEqual([])
+    expect(before.idleSince.get(1)).toBe(1_000)
+
+    const atThreshold = updateIdleState({
+      idleSince: before.idleSince,
+      candidates: [candidate(1)],
+      now: 1_000 + THRESHOLD,
+      thresholdMs: THRESHOLD,
+    })
+    expect(atThreshold.reclaim).toEqual([1])
+    expect(atThreshold.idleSince.has(1)).toBe(false)
+  })
+
+  it.each([
+    ['running sessions', { running: 1 }],
+    ['a waiting prompt', { ask: 1 }],
+    ['a phone subscriber', { hasSubscribers: true }],
+    ['a visible window', { hidden: false }],
+  ])('resets the idle clock when there is %s', (_label, overrides) => {
+    const result = updateIdleState({
+      idleSince: new Map([[1, 1_000]]),
+      candidates: [candidate(1, overrides)],
+      now: 1_000 + THRESHOLD,
+      thresholdMs: THRESHOLD,
+    })
+    expect(result.reclaim).toEqual([])
+    expect(result.idleSince.has(1)).toBe(false)
+  })
+
+  it('restarts the clock once a window becomes idle again', () => {
+    const reset = updateIdleState({
+      idleSince: new Map([[1, 1_000]]),
+      candidates: [candidate(1, { running: 1 })],
+      now: 2_000,
+      thresholdMs: THRESHOLD,
+    })
+    const restart = updateIdleState({
+      idleSince: reset.idleSince,
+      candidates: [candidate(1)],
+      now: 3_000,
+      thresholdMs: THRESHOLD,
+    })
+    expect(restart.idleSince.get(1)).toBe(3_000)
+  })
+
+  it('drops records for windows no longer present', () => {
+    const result = updateIdleState({
+      idleSince: new Map([
+        [1, 1_000],
+        [2, 2_000],
+      ]),
+      candidates: [candidate(2)],
+      now: 3_000,
+      thresholdMs: THRESHOLD,
+    })
+    expect([...result.idleSince.keys()]).toEqual([2])
+    expect(result.reclaim).toEqual([])
+  })
+
+  it('reclaims several windows independently', () => {
+    const result = updateIdleState({
+      idleSince: new Map([
+        [1, 1_000],
+        [2, 6_000],
+      ]),
+      candidates: [candidate(1), candidate(2)],
+      now: 7_000,
+      thresholdMs: 5_000,
+    })
+    expect(result.reclaim).toEqual([1])
+    expect(result.idleSince.get(2)).toBe(6_000)
   })
 })
 

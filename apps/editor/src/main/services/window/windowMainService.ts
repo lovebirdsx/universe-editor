@@ -140,6 +140,17 @@ export interface IWindowMainService {
     deepLink?: string,
     newAgentSession?: IOpenWindowNewAgentSession,
   ): Promise<void>
+  /**
+   * Open a workspace on behalf of the phone gateway. Unlike the normal path this
+   * never steals focus: a workspace opened while every window is hidden stays
+   * hidden, and an already-open (hidden) window is messaged without being shown.
+   */
+  openWindowForFolderInBackground(
+    folder: URI,
+    sessionToOpen?: string,
+    deepLink?: string,
+    newAgentSession?: IOpenWindowNewAgentSession,
+  ): Promise<void>
   closeWindowsForRemoteAuthority(authority: string): Promise<boolean>
   captureSessionForQuit(): Promise<void>
   confirmQuit(requestingWindowId?: number, skipSessionIds?: readonly string[]): Promise<boolean>
@@ -1098,7 +1109,31 @@ export class WindowMainService implements IWindowMainService {
     deepLink?: string,
     newAgentSession?: IOpenWindowNewAgentSession,
   ): Promise<void> {
+    await this._openWindowForFolder(folder, sessionToOpen, deepLink, newAgentSession, {
+      background: false,
+    })
+  }
+
+  async openWindowForFolderInBackground(
+    folder: URI,
+    sessionToOpen?: string,
+    deepLink?: string,
+    newAgentSession?: IOpenWindowNewAgentSession,
+  ): Promise<void> {
+    await this._openWindowForFolder(folder, sessionToOpen, deepLink, newAgentSession, {
+      background: true,
+    })
+  }
+
+  private async _openWindowForFolder(
+    folder: URI | undefined,
+    sessionToOpen: string | undefined,
+    deepLink: string | undefined,
+    newAgentSession: IOpenWindowNewAgentSession | undefined,
+    placement: { readonly background: boolean },
+  ): Promise<void> {
     const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
+    const background = placement.background && this._opts.backgroundMode?.isActive() === true
     let resolved = folder ?? null
     if (!resolved) {
       const parent = BrowserWindow.getFocusedWindow()
@@ -1132,7 +1167,10 @@ export class WindowMainService implements IWindowMainService {
     const existing = this._findWindowForWorkspace(workspaceId)
     if (existing) {
       if (!existing.win.isDestroyed()) {
-        this.focusWindow(existing.win.id)
+        // A phone-opened workspace must not surface a window the user hid.
+        if (!background || !this._hiddenSeq.has(existing.win.id)) {
+          this.focusWindow(existing.win.id)
+        }
         if (sessionToOpen) existing.win.webContents.send('ue:open-session', sessionToOpen)
         if (newAgentSession) {
           existing.win.webContents.send('ue:new-agent-session', newAgentSession)
@@ -1149,7 +1187,9 @@ export class WindowMainService implements IWindowMainService {
     if (newAgentSession) {
       const ancestor = this._findWindowForAncestorWorkspace(resolved)
       if (ancestor && !ancestor.win.isDestroyed()) {
-        this.focusWindow(ancestor.win.id)
+        if (!background || !this._hiddenSeq.has(ancestor.win.id)) {
+          this.focusWindow(ancestor.win.id)
+        }
         ancestor.win.webContents.send('ue:new-agent-session', newAgentSession)
         await this._opts.appServices.recentWorkspaces.add(workspace)
         return
@@ -1159,9 +1199,16 @@ export class WindowMainService implements IWindowMainService {
     // the shared recent list itself, so no need to add() again here.
     // Restore the geometry this workspace was last seen at, so reopening a closed
     // folder returns to where the user left it (falls back to default if none).
+    const hiddenCreate = background && this.getVisibleWindowCount() === 0
+    if (hiddenCreate) {
+      logger.info(
+        `openWindowForFolderInBackground creating hidden window folder=${resolved.toString()}`,
+      )
+    }
     const uiState = await loadWorkspaceGeometry(getDefaultStorage(), workspaceId)
     await this.createWindow({
       workspace,
+      ...(hiddenCreate ? { hidden: true } : {}),
       ...(uiState ? { uiState } : {}),
       ...(sessionToOpen ? { sessionToOpen } : {}),
       ...(newAgentSession ? { newAgentSession } : {}),
