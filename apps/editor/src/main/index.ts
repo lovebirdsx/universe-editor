@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, Menu, protocol } from 'electron'
+import { app, dialog, Menu, protocol } from 'electron'
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
@@ -62,6 +62,7 @@ import { IBugRecorderService } from '../shared/ipc/bugRecorderService.js'
 import type { BugRecordingMainService } from './services/bugRecording/bugRecordingMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import { WindowsJumpList } from './services/window/windowsJumpList.js'
+import { BackgroundModeMainService } from './services/backgroundMode/backgroundModeMainService.js'
 import { UpdateMainService } from './services/update/updateMainService.js'
 import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
 import type { ConfigLocationMainService } from './services/configLocation/configLocationMainService.js'
@@ -532,14 +533,19 @@ if (!hasSingleInstanceLock) {
         }
       } else {
         // A bare re-launch (e.g. clicking the app icon while already running)
-        // carries no file/folder. Match VSCode and open a fresh empty window
-        // instead of only focusing the existing one.
+        // carries no file/folder. Background mode restores the most recently
+        // hidden window; otherwise match VSCode and open a fresh empty window.
+        if (backgroundMode?.isActive() === true) {
+          await backgroundMode.showPrimaryWindow()
+          return
+        }
         await services.windows.createWindow({})
         return
       }
 
-      // Route the file to the window whose workspace contains it; else first window.
-      let targetWin: BrowserWindow | undefined
+      // Route the file to the window whose workspace contains it; else the
+      // focused/first window. focusWindow reveals a hidden target (background mode).
+      let targetWindowId: number | undefined
       if (resolvedPath) {
         const fileUri = URI.file(resolvedPath)
         for (const info of services.windows.getOpenWindowInfos()) {
@@ -548,19 +554,24 @@ if (!hasSingleInstanceLock) {
             const revived = URI.revive(folder)
             if (!revived) continue
             if (isEqualOrParentResource(fileUri, revived, normalizePlatform(process.platform))) {
-              targetWin = services.windows.getWindowById(info.id)
+              targetWindowId = info.id
               break
             }
           }
         }
       }
-      if (!targetWin) targetWin = services.windows.getWindows()[0]
+      if (targetWindowId === undefined) {
+        targetWindowId =
+          services.windows.getFocusedWindowId() ?? services.windows.getWindows()[0]?.id
+      }
 
-      if (targetWin) {
-        if (targetWin.isMinimized()) targetWin.restore()
-        if (silentE2E) targetWin.showInactive()
-        else targetWin.focus()
-        if (resolvedPath) targetWin.webContents.send('ue:open-file', resolvedPath)
+      if (targetWindowId !== undefined) {
+        services.windows.focusWindow(targetWindowId)
+        if (resolvedPath) {
+          services.windows
+            .getWindowById(targetWindowId)
+            ?.webContents.send('ue:open-file', resolvedPath)
+        }
       } else {
         void services.windows.createWindow(resolvedPath ? { fileToOpen: resolvedPath } : {})
       }
@@ -605,28 +616,26 @@ function routeDeepLink(target: DeepLinkTarget): void {
 
   const filePath = deepLinkFilePath(target)
 
-  let targetWin: BrowserWindow | undefined
+  let targetWindowId: number | undefined
   if (filePath) {
     const fileUri = URI.file(filePath)
     for (const info of services.windows.getOpenWindowInfos()) {
       const folder = info.folder ? URI.revive(info.folder) : undefined
       if (folder && isEqualOrParentResource(fileUri, folder, normalizePlatform(process.platform))) {
-        targetWin = services.windows.getWindowById(info.id)
+        targetWindowId = info.id
         break
       }
     }
   }
-  if (!targetWin) {
-    const focusedId = services.windows.getFocusedWindowId()
-    targetWin = focusedId !== null ? services.windows.getWindowById(focusedId) : undefined
+  if (targetWindowId === undefined) {
+    targetWindowId = services.windows.getFocusedWindowId() ?? services.windows.getWindows()[0]?.id
   }
-  if (!targetWin) targetWin = services.windows.getWindows()[0]
 
-  if (targetWin) {
-    if (targetWin.isMinimized()) targetWin.restore()
-    if (silentE2E) targetWin.showInactive()
-    else targetWin.focus()
-    targetWin.webContents.send('ue:open-uri', deepLinkToOpenerTarget(target))
+  if (targetWindowId !== undefined) {
+    services.windows.focusWindow(targetWindowId)
+    services.windows
+      .getWindowById(targetWindowId)
+      ?.webContents.send('ue:open-uri', deepLinkToOpenerTarget(target))
   } else {
     void services.windows.createWindow({ deepLink: deepLinkToOpenerTarget(target) })
   }
@@ -638,6 +647,7 @@ let rootInstantiation: InstantiationService | null = null
 let applicationServices: ApplicationServices | null = null
 let windowMainService: WindowMainService | null = null
 let windowsJumpList: WindowsJumpList | null = null
+let backgroundMode: BackgroundModeMainService | null = null
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
 // 所以仅在 dev（运行的是通用 electron.exe）下显式设置，并使用专属的 dev 图标以区分发布版。
@@ -645,6 +655,37 @@ const appIconPath =
   process.platform === 'win32' && !app.isPackaged
     ? join(import.meta.dirname, '../../public/icon-dev.ico')
     : undefined
+
+// The tray icon must live outside app.asar (same reason as appIconPath); dev
+// reads the source tree, packaged reads the staged runtime resources.
+const trayIconPath = app.isPackaged
+  ? join(process.resourcesPath, 'tray/icon.ico')
+  : join(import.meta.dirname, '../../public/icon.ico')
+
+interface E2EMainBackgroundModeProbe {
+  isActive(): boolean
+  show(): Promise<void>
+  exit(): void
+  hiddenWindowIds(): readonly number[]
+}
+
+interface E2EMainProbe {
+  readonly backgroundMode: E2EMainBackgroundModeProbe
+}
+
+/** Main-process probe for specs that must run with zero visible windows. */
+function installE2EMainProbe(windows: WindowMainService): void {
+  if (!e2eEnabled) return
+  const probe: E2EMainProbe = {
+    backgroundMode: {
+      isActive: () => backgroundMode?.isActive() === true,
+      show: () => backgroundMode?.showPrimaryWindow() ?? Promise.resolve(),
+      exit: () => backgroundMode?.exit(),
+      hiddenWindowIds: () => windows.getHiddenWindowInfos().map((info) => info.id),
+    },
+  }
+  ;(globalThis as unknown as { __E2E_MAIN__?: E2EMainProbe }).__E2E_MAIN__ = probe
+}
 
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
   if (!applicationServices) {
@@ -733,6 +774,14 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       rendererUrl: environmentService.rendererUrl,
       getConfigDir: () => applicationServices!.configLocation.currentDir,
       getConfigurationDefaults: () => environmentService.configurationDefaults,
+      backgroundMode: {
+        // Late-bound: BackgroundModeMainService is constructed after this service
+        // and reads the same closures at call time.
+        isActive: () => backgroundMode?.isActive() === true,
+        shouldHideOnClose: () => backgroundMode?.shouldHideOnClose() === true,
+      },
+      hasRunningSessions: (windowId) =>
+        applicationServices!.sessionSwitcher.getWindowSessionCounts(windowId).running > 0,
     })
     // Gate quitAndInstall behind the same running-session veto a normal quit runs.
     // Without this, electron-updater spawns the installer before before-quit can
@@ -773,6 +822,22 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     // Windows taskbar Jump List (right-click the pinned icon). Tracks the shared
     // recent-workspaces list; no-op on non-Windows platforms.
     windowsJumpList = new WindowsJumpList(applicationServices.recentWorkspaces, logMainService)
+    backgroundMode = new BackgroundModeMainService({
+      windows,
+      gateway: applicationServices.mobileGateway,
+      restoreSession: async () => {
+        const list = await loadSession(getDefaultStorage())
+        await windows.restoreSession(list)
+      },
+      createWindow: () => windows.createWindow({}),
+      logger: logMainService.createLogger({ id: 'backgroundMode', name: 'Background Mode' }),
+      e2eEnabled,
+      platform: process.platform,
+      trayIconPath,
+      quit: () => app.quit(),
+    })
+    void backgroundMode.initialize()
+    installE2EMainProbe(windows)
   }
   return { app: applicationServices, windows: windowMainService }
 }
@@ -979,6 +1044,10 @@ void app.whenReady().then(async () => {
 
   app.on('activate', () => {
     mainLogger.info('app activate')
+    if (backgroundMode?.isActive() === true) {
+      void backgroundMode.handleActivate()
+      return
+    }
     if (getOrCreateServices().windows.getWindows().length === 0) {
       void getOrCreateServices().windows.createWindow({})
     }
@@ -987,7 +1056,15 @@ void app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   mainLogger.info(`window-all-closed platform=${process.platform}`)
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin') {
+    // Background mode keeps the process alive with no visible windows (the
+    // gateway and tray are the UI). A confirmed quit must still exit.
+    if (backgroundMode?.isActive() === true && windowMainService?.isQuitConfirmed() !== true) {
+      mainLogger.info('window-all-closed: background mode keeps the app alive')
+      return
+    }
+    app.quit()
+  }
 })
 
 app.on('before-quit', (e) => {
@@ -1035,6 +1112,8 @@ app.on('will-quit', () => {
   recordShutdownMark('willQuit.start')
   // Reaching will-quit at all is what "clean shutdown" means to the sentinel.
   disarmSessionSentinel(app.getPath('userData'))
+  backgroundMode?.dispose()
+  backgroundMode = null
   windowsJumpList?.dispose()
   windowMainService?.dispose()
   // Disposes every materialized application service (acpHost kills child

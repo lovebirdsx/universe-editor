@@ -131,6 +131,11 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'product.json',
   },
   {
+    label: 'background mode tray icon',
+    source: join(editorRoot, 'public/icon.ico'),
+    packaged: 'tray/icon.ico',
+  },
+  {
     label: 'mobile PWA shell',
     source: join(repoRoot, 'apps/mobile/dist/index.html'),
     packaged: 'mobile/index.html',
@@ -344,6 +349,10 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   copyPath(join(tsgoPkgDir, 'package.json'), join(stageDir, 'tsgo/package.json'))
   copyPath(releaseNotesSource().source, join(stageDir, 'release-notes.json'))
   stageProductJson(stageDir)
+  // Tray icon for background mode. It must live outside app.asar: Electron's
+  // nativeImage cannot read an asar-embedded .ico reliably (same reason as the
+  // BrowserWindow icon in the main process).
+  copyPath(join(editorRoot, 'public/icon.ico'), join(stageDir, 'tray/icon.ico'))
 
   // User guide docs (docs/user/<locale>/**/*.md) ship as plain files beside
   // app.asar so agents can read them off disk; the renderer loads them via

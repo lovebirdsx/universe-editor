@@ -126,6 +126,8 @@ interface AuxiliaryWindowEntry {
   readonly disposables: DisposableStore
   readonly initialState: IWindowState
   destroying: boolean
+  /** Hidden together with its parent window by background mode (not by the user). */
+  hiddenByParent: boolean
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -264,6 +266,33 @@ export class AuxiliaryWindowsMainService implements IDisposable {
     return [...this._windows.values()]
       .filter((entry) => entry.parentWindowId === parentWindowId && !entry.win.isDestroyed())
       .map((entry) => this._captureState(entry))
+  }
+
+  /**
+   * Hide every auxiliary window owned by `parentWindowId` without destroying it.
+   * Auxiliary windows have no OS parent link, so hiding the workspace window
+   * would otherwise leave these portals floating on screen.
+   */
+  hideForParent(parentWindowId: number): void {
+    for (const entry of this._windows.values()) {
+      if (entry.parentWindowId !== parentWindowId) continue
+      if (entry.win.isDestroyed() || entry.destroying || entry.hiddenByParent) continue
+      entry.hiddenByParent = true
+      entry.win.hide()
+    }
+    this._logger.info(`hide auxiliaries parent=${parentWindowId}`)
+  }
+
+  /** Show exactly the auxiliary windows previously hidden by {@link hideForParent}. */
+  showForParent(parentWindowId: number): void {
+    for (const entry of this._windows.values()) {
+      if (entry.parentWindowId !== parentWindowId) continue
+      if (entry.win.isDestroyed() || entry.destroying || !entry.hiddenByParent) continue
+      entry.hiddenByParent = false
+      if (this._options.silentE2E) entry.win.showInactive()
+      else entry.win.show()
+    }
+    this._logger.info(`show auxiliaries parent=${parentWindowId}`)
   }
 
   getWindowState(parentWindowId: number, token: string): AuxiliaryWindowState | null {
@@ -437,6 +466,7 @@ export class AuxiliaryWindowsMainService implements IDisposable {
       disposables,
       initialState: prepared.state,
       destroying: false,
+      hiddenByParent: false,
     }
     this._windows.set(entry.token, entry)
 
@@ -725,6 +755,7 @@ export class AuxiliaryWindowsMainService implements IDisposable {
   private _cleanupEntry(entry: AuxiliaryWindowEntry): void {
     if (!this._windows.has(entry.token)) return
     this._windows.delete(entry.token)
+    entry.hiddenByParent = false
     entry.disposables.dispose()
     this._logger.info(`closed parent=${entry.parentWindowId}`)
     this._onDidCloseWindow.fire({

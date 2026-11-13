@@ -7,6 +7,19 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'app.description': '一个遵循 VSCode 范式的游戏内容编辑器。',
   'app.name': 'Universe Editor',
 
+  // --- Background mode / tray ---
+  'background.untitledWindow': '未命名窗口',
+  'tray.tooltip': 'Universe Editor 正在后台运行',
+  'tray.show': '显示 Universe Editor',
+  'tray.hiddenWindows': '隐藏的窗口',
+  'tray.noHiddenWindows': '没有隐藏的窗口',
+  'tray.gateway.running': '手机网关：运行中（{address}）',
+  'tray.gateway.runningNoAddress': '手机网关：运行中',
+  'tray.gateway.starting': '手机网关：正在启动…',
+  'tray.gateway.error': '手机网关：错误',
+  'tray.gateway.stopped': '手机网关：已停止',
+  'tray.exit': '退出',
+
   // --- Agent settings ---
   'agentSettings.showFable': '在模型选择器中显示 Fable',
   'agentSettings.showFable.desc':

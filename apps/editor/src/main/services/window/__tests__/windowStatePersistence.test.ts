@@ -81,7 +81,17 @@ class FakeWindow extends EventEmitter {
     height: 800,
   })
   getBounds = this.getNormalBounds
-  show = vi.fn()
+  visible = false
+  show = vi.fn(() => {
+    this.visible = true
+  })
+  showInactive = vi.fn(() => {
+    this.visible = true
+  })
+  hide = vi.fn(() => {
+    this.visible = false
+  })
+  isVisible = (): boolean => this.visible
   focus = vi.fn()
   restore = vi.fn()
   maximize = vi.fn()
@@ -117,12 +127,18 @@ vi.mock('electron', () => ({
 
 const { WindowMainService } = await import('../windowMainService.js')
 const { LogMainService } = await import('../../log/logMainService.js')
+const { WorkspaceMainService } = await import('../../workspace/workspaceMainService.js')
+const { bootstrapWindowIpc } = await import('../../../ipc/registerMainServices.js')
 const { createStubWatcherProcessClient } = await import('@universe-editor/node-services')
 
 function makeOpts() {
   return {
     appServices: {
-      sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} },
+      sessionSwitcher: {
+        registerWindow: () => {},
+        unregisterWindow: () => {},
+        getAllSessions: vi.fn().mockResolvedValue([]),
+      },
       mobileGateway: { registerWindowBridge: () => {}, unregisterWindowBridge: () => {} },
       // Closing a window reclaims its local child processes; these tests spawn none.
       acpHost: {},
@@ -184,5 +200,81 @@ describe('window state persistence on teardown', () => {
     await svc.captureSessionForQuit()
 
     expect(persisted.list?.[0]?.uiState?.isFullscreen).toBe(true)
+  })
+
+  function setWindowWorkspace(index: number, name: string): void {
+    vi.mocked(WorkspaceMainService).mock.results[index]!.value.current = {
+      folder: URI.file(`/tmp/${name}`),
+      name,
+    }
+  }
+
+  function lifecycle(confirmed: boolean) {
+    return { _serviceBrand: undefined, confirmShutdown: vi.fn().mockResolvedValue(confirmed) }
+  }
+
+  function mockRendererLifecycles(first: boolean, second?: boolean): void {
+    vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+      disposable: combinedDisposable(),
+      rendererLifecycle: lifecycle(first),
+      rendererSessions: {} as never,
+      rendererMobileBridge: {} as never,
+    }))
+    if (second !== undefined) {
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: lifecycle(second),
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+    }
+  }
+
+  it('persists only visible windows and forgets windows hidden in the tray', async () => {
+    svc = new WindowMainService(makeOpts())
+    await svc.createWindow({ workspace: { folder: URI.file('/tmp/a'), name: 'a' } })
+    await svc.createWindow({ workspace: { folder: URI.file('/tmp/b'), name: 'b' } })
+    setWindowWorkspace(0, 'a')
+    setWindowWorkspace(1, 'b')
+
+    svc.hideWindow(svc.getWindows()[1]!.id)
+    await settlePersist()
+
+    expect(persisted.list?.map((entry) => entry.workspace?.name)).toEqual(['a'])
+  })
+
+  it('keeps only the most recently hidden window when every window is hidden', async () => {
+    svc = new WindowMainService(makeOpts())
+    await svc.createWindow({ workspace: { folder: URI.file('/tmp/a'), name: 'a' } })
+    await svc.createWindow({ workspace: { folder: URI.file('/tmp/b'), name: 'b' } })
+    setWindowWorkspace(0, 'a')
+    setWindowWorkspace(1, 'b')
+
+    svc.hideWindow(svc.getWindows()[0]!.id)
+    svc.hideWindow(svc.getWindows()[1]!.id)
+    await settlePersist()
+
+    expect(persisted.list?.map((entry) => entry.workspace?.name)).toEqual(['b'])
+  })
+
+  it('keeps a hidden requester out of the persisted session after a vetoed quit', async () => {
+    mockRendererLifecycles(true, false)
+    svc = new WindowMainService(makeOpts())
+    await svc.createWindow({ workspace: { folder: URI.file('/tmp/a'), name: 'a' } })
+    await svc.createWindow({ workspace: { folder: URI.file('/tmp/b'), name: 'b' } })
+    setWindowWorkspace(0, 'a')
+    setWindowWorkspace(1, 'b')
+    const hiddenWindow = svc.getWindows()[1] as unknown as FakeWindow
+    const hiddenId = hiddenWindow.id
+    svc.hideWindow(hiddenId)
+
+    await expect(svc.confirmQuit(hiddenId)).resolves.toBe(false)
+
+    // Temporarily shown for the prompt, hidden again afterwards, and still
+    // excluded from persistence in favor of the visible window.
+    expect(hiddenWindow.isVisible()).toBe(false)
+    expect(svc.isWindowHidden(hiddenId)).toBe(true)
+    await settlePersist()
+    expect(persisted.list?.map((entry) => entry.workspace?.name)).toEqual(['a'])
   })
 }, 20000)

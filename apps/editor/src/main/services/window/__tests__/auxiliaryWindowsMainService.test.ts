@@ -79,6 +79,10 @@ class FakeWindow extends EventEmitter {
     this.visible = true
   }
 
+  hide(): void {
+    this.visible = false
+  }
+
   focus(): void {
     this.visible = true
     this.focused = true
@@ -864,5 +868,49 @@ describe('AuxiliaryWindowsMainService', () => {
 
     child.destroy()
     expect(service.getWindowForToken(parent.id, token)).toBeUndefined()
+  })
+
+  it('hides and re-shows only the auxiliary windows owned by a parent', () => {
+    const parent = makeParent(service)
+    const otherParent = makeParent(service)
+    const { child } = createWindow(service, parent)
+    const { child: otherChild } = createWindow(service, otherParent)
+    child.show()
+    otherChild.show()
+
+    service.hideForParent(parent.id)
+
+    expect(child.isVisible()).toBe(false)
+    expect(otherChild.isVisible()).toBe(true)
+
+    service.showForParent(parent.id)
+    expect(child.isVisible()).toBe(true)
+  })
+
+  it('does not re-show an auxiliary window the user brought back manually', () => {
+    const parent = makeParent(service)
+    const { child } = createWindow(service, parent)
+    child.show()
+
+    service.hideForParent(parent.id)
+    child.show() // e.g. focused from another command while the parent was hidden
+
+    service.showForParent(parent.id)
+    // It was already visible; showForParent must not treat it as parent-hidden.
+    expect(child.isVisible()).toBe(true)
+  })
+
+  it('drops parent-hidden state when the auxiliary window is disposed', () => {
+    const parent = makeParent(service)
+    const { child } = createWindow(service, parent)
+    child.show()
+    service.hideForParent(parent.id)
+
+    service.disposeParent(parent.id, 'test')
+    expect(child.isDestroyed()).toBe(true)
+
+    // Re-registering the same parent id must not re-show anything stale.
+    service.showForParent(parent.id)
+    expect(child.isVisible()).toBe(false)
   })
 })

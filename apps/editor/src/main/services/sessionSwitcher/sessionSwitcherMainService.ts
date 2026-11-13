@@ -124,6 +124,15 @@ export class SessionSwitcherMainService implements ISessionSwitcherService {
     return Promise.resolve(this._aggregateCounts())
   }
 
+  /**
+   * Latest reported counts for one window (zeros until its renderer reports).
+   * Synchronous because background mode asks inside a synchronous close/quit
+   * decision; the value comes from the in-memory map, not a renderer round-trip.
+   */
+  getWindowSessionCounts(windowId: number): SessionStatusCounts {
+    return this._counts.get(windowId) ?? { running: 0, ask: 0 }
+  }
+
   private _broadcastCounts(): void {
     this._onDidChangeCounts.fire(this._aggregateCounts())
   }

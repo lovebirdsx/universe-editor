@@ -56,10 +56,14 @@ vi.mock('electron', () => ({
       removeListener: vi.fn(),
       show: vi.fn(),
       showInactive: vi.fn(),
+      hide: vi.fn(),
       focus: vi.fn(),
       restore: vi.fn(),
       reload: vi.fn(),
       close: vi.fn(),
+      maximize: vi.fn(),
+      setFullScreen: vi.fn(),
+      setPosition: vi.fn(),
       loadURL: vi.fn().mockResolvedValue(undefined),
       loadFile: vi.fn().mockResolvedValue(undefined),
       isDestroyed: vi.fn().mockReturnValue(false),
@@ -1672,6 +1676,312 @@ describe('WindowMainService', () => {
 
       expect(listener).toHaveBeenCalledTimes(2)
       expect(listener).toHaveBeenLastCalledWith(id1)
+    })
+  })
+
+  describe('background-mode hiding', () => {
+    interface WindowMock {
+      show: ReturnType<typeof vi.fn>
+      showInactive: ReturnType<typeof vi.fn>
+      hide: ReturnType<typeof vi.fn>
+      focus: ReturnType<typeof vi.fn>
+      close: ReturnType<typeof vi.fn>
+      maximize: ReturnType<typeof vi.fn>
+      webContents: { send: ReturnType<typeof vi.fn> }
+      on: { mock: { calls: Array<[string, (...args: never[]) => void]> } }
+    }
+
+    function windowAt(index: number): WindowMock {
+      return vi.mocked(BrowserWindow).mock.results[index]?.value as WindowMock
+    }
+
+    function closeHandlerAt(index: number): (e: { preventDefault: () => void }) => void {
+      const win = windowAt(index)
+      const call = win.on.mock.calls.filter(([event]) => event === 'close').at(-1)
+      if (!call) throw new Error('no close handler registered')
+      return call[1] as (e: { preventDefault: () => void }) => void
+    }
+
+    function withBackgroundMode(opts: ReturnType<typeof makeOpts>) {
+      return {
+        ...opts,
+        backgroundMode: {
+          isActive: () => true,
+          shouldHideOnClose: () => true,
+        },
+      }
+    }
+
+    it('turns a window close into a hide without asking the renderer', async () => {
+      const lifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn().mockResolvedValue(true),
+      }
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: lifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      const svc = makeService(withBackgroundMode(makeOpts()))
+      const id = await svc.createWindow()
+
+      closeHandlerAt(0)({ preventDefault: () => {} })
+
+      expect(windowAt(0).hide).toHaveBeenCalledTimes(1)
+      expect(lifecycle.confirmShutdown).not.toHaveBeenCalled()
+      expect(svc.isWindowHidden(id)).toBe(true)
+      expect(svc.getVisibleWindowCount()).toBe(0)
+    })
+
+    it('never hides a window that is already cleared to close', async () => {
+      const svc = makeService(withBackgroundMode(makeOpts()))
+      await svc.createWindow()
+      svc.markQuitConfirmed()
+
+      closeHandlerAt(0)({ preventDefault: () => {} })
+
+      expect(windowAt(0).hide).not.toHaveBeenCalled()
+    })
+
+    it('never hides while a quit confirmation is in flight', async () => {
+      const gate = deferred<boolean>()
+      const lifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn(() => gate.promise),
+      }
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: lifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      const svc = makeService(withBackgroundMode(makeOpts()))
+      const id = await svc.createWindow()
+
+      const pending = svc.confirmQuit(id)
+      await vi.waitFor(() => expect(lifecycle.confirmShutdown).toHaveBeenCalledTimes(1))
+
+      const preventDefault = vi.fn()
+      closeHandlerAt(0)({ preventDefault })
+      expect(preventDefault).toHaveBeenCalledTimes(1)
+      expect(windowAt(0).hide).not.toHaveBeenCalled()
+      expect(svc.isWindowHidden(id)).toBe(false)
+
+      gate.resolve(true)
+      await expect(pending).resolves.toBe(true)
+    })
+
+    it('never hides after the quit teardown has started', async () => {
+      const svc = makeService(withBackgroundMode(makeOpts()))
+      await svc.createWindow()
+      await svc.captureSessionForQuit()
+
+      closeHandlerAt(0)({ preventDefault: () => {} })
+
+      expect(windowAt(0).hide).not.toHaveBeenCalled()
+    })
+
+    it('keeps a hidden-created window invisible through every readiness signal and reveal applies its geometry', async () => {
+      vi.useFakeTimers()
+      try {
+        const svc = makeService()
+        const id = await svc.createWindow({
+          hidden: true,
+          uiState: {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 800,
+            isMaximized: true,
+            isFullscreen: false,
+            displayId: 1,
+          },
+        })
+
+        expect(svc.isWindowHidden(id)).toBe(true)
+        grabReadyToShowHandler()()
+        grabDidFinishLoadHandler()()
+        await vi.advanceTimersByTimeAsync(READY_TO_SHOW_TIMEOUT_MS + 1000)
+        expect(windowAt(0).show).not.toHaveBeenCalled()
+        expect(windowAt(0).showInactive).not.toHaveBeenCalled()
+        expect(windowAt(0).maximize).not.toHaveBeenCalled()
+
+        svc.revealWindow(id)
+
+        expect(svc.isWindowHidden(id)).toBe(false)
+        expect(windowAt(0).show).toHaveBeenCalledTimes(1)
+        expect(windowAt(0).maximize).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('focusWindow reveals a hidden window before focusing it', async () => {
+      const svc = makeService()
+      const id = await svc.createWindow({ hidden: true })
+
+      svc.focusWindow(id)
+
+      expect(windowAt(0).show).toHaveBeenCalled()
+      expect(windowAt(0).focus).toHaveBeenCalled()
+      expect(svc.isWindowHidden(id)).toBe(false)
+      expect(windowAt(0).show.mock.invocationCallOrder[0]).toBeLessThan(
+        windowAt(0).focus.mock.invocationCallOrder[0]!,
+      )
+    })
+
+    it('skips hidden windows in focus fallbacks', async () => {
+      const svc = makeService()
+      const firstId = await svc.createWindow()
+      const secondId = await svc.createWindow()
+      svc.focusWindow(secondId)
+
+      svc.hideWindow(secondId)
+
+      expect(svc.getFocusedWindowId()).toBe(firstId)
+      svc.hideWindow(firstId)
+      expect(svc.getFocusedWindowId()).toBeNull()
+    })
+
+    it('reports hidden windows with workspace names and a stable hide order', async () => {
+      const svc = makeService()
+      await svc.createWindow()
+      const secondId = await svc.createWindow()
+      const project = { folder: URI.file('/tmp/project'), name: 'project' }
+      vi.mocked(WorkspaceMainService).mock.results[1]!.value.current = project
+
+      svc.hideWindow(secondId)
+
+      expect(svc.getHiddenWindowInfos()).toEqual([
+        { id: secondId, name: 'project', hiddenSeq: expect.any(Number) },
+      ])
+    })
+
+    it('temporarily shows a hidden requester for the quit prompt and hides it again on veto', async () => {
+      const lifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn().mockImplementation(() => {
+          // The native prompt is window-modal; it must be visible while asking.
+          expect(windowAt(1).show).toHaveBeenCalled()
+          return Promise.resolve(false)
+        }),
+      }
+      vi.mocked(bootstrapWindowIpc)
+        .mockImplementationOnce(() => ({
+          disposable: combinedDisposable(),
+          rendererLifecycle: {
+            _serviceBrand: undefined,
+            confirmShutdown: vi.fn().mockResolvedValue(true),
+          },
+          rendererSessions: {} as never,
+          rendererMobileBridge: {} as never,
+        }))
+        .mockImplementationOnce(() => ({
+          disposable: combinedDisposable(),
+          rendererLifecycle: lifecycle,
+          rendererSessions: {} as never,
+          rendererMobileBridge: {} as never,
+        }))
+      const svc = makeService()
+      await svc.createWindow()
+      const requesterId = await svc.createWindow({ hidden: true })
+
+      await expect(svc.confirmQuit(requesterId)).resolves.toBe(false)
+
+      expect(windowAt(1).show).toHaveBeenCalledTimes(1)
+      expect(windowAt(1).hide).toHaveBeenCalledTimes(1)
+      // The window is still tracked as hidden so persistence never resurrects it.
+      expect(svc.isWindowHidden(requesterId)).toBe(true)
+    })
+
+    it('closes a window without the renderer veto', async () => {
+      const lifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn().mockResolvedValue(true),
+      }
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: lifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      const svc = makeService()
+      const id = await svc.createWindow()
+
+      svc.closeWindowWithoutVeto(id)
+
+      expect(windowAt(0).close).toHaveBeenCalledTimes(1)
+      expect(lifecycle.confirmShutdown).not.toHaveBeenCalled()
+    })
+
+    it('does not bypass the veto while quitting or while a quit confirmation is pending', async () => {
+      const gate = deferred<boolean>()
+      const lifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn(() => gate.promise),
+      }
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: lifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      const pendingSvc = makeService()
+      const pendingId = await pendingSvc.createWindow()
+      const pending = pendingSvc.confirmQuit(pendingId)
+      await vi.waitFor(() => expect(lifecycle.confirmShutdown).toHaveBeenCalledTimes(1))
+
+      pendingSvc.closeWindowWithoutVeto(pendingId)
+      expect(windowAt(0).close).not.toHaveBeenCalled()
+
+      gate.resolve(false)
+      await expect(pending).resolves.toBe(false)
+    })
+
+    it('reveals hidden remote windows before the close veto and skips the replacement window', async () => {
+      const lifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn().mockResolvedValue(true),
+      }
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: lifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      const svc = makeService(withBackgroundMode(makeOpts()))
+      await svc.createWindow({ remoteAuthority: 'myhost', hidden: true })
+
+      await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(true)
+
+      expect(windowAt(0).show).toHaveBeenCalledTimes(1)
+      expect(windowAt(0).show.mock.invocationCallOrder[0]).toBeLessThan(
+        lifecycle.confirmShutdown.mock.invocationCallOrder[0]!,
+      )
+      expect(windowAt(0).close).toHaveBeenCalledTimes(1)
+      // Background mode keeps the process alive, so no replacement empty window.
+      expect(vi.mocked(BrowserWindow)).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps a vetoed remote window visible state intact until the user retries', async () => {
+      const lifecycle = {
+        _serviceBrand: undefined,
+        confirmShutdown: vi.fn().mockResolvedValue(false),
+      }
+      vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
+        disposable: combinedDisposable(),
+        rendererLifecycle: lifecycle,
+        rendererSessions: {} as never,
+        rendererMobileBridge: {} as never,
+      }))
+      const svc = makeService(withBackgroundMode(makeOpts()))
+      await svc.createWindow({ remoteAuthority: 'myhost', hidden: true })
+
+      await expect(svc.closeWindowsForRemoteAuthority('myhost')).resolves.toBe(false)
+
+      expect(windowAt(0).show).toHaveBeenCalledTimes(1)
+      expect(windowAt(0).close).not.toHaveBeenCalled()
     })
   })
 })

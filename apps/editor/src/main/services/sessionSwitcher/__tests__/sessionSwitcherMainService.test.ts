@@ -185,6 +185,14 @@ describe('SessionSwitcherMainService', () => {
     await scoped2.reportSessionCounts({ running: 3, ask: 1 })
     expect(await scoped1.getSessionCounts()).toEqual({ running: 4, ask: 1 })
   })
+
+  it('reports per-window counts synchronously and zeros for unknown windows', async () => {
+    const svc = new SessionSwitcherMainService()
+    await svc.reportSessionCounts({ running: 2, ask: 1 }, 7)
+
+    expect(svc.getWindowSessionCounts(7)).toEqual({ running: 2, ask: 1 })
+    expect(svc.getWindowSessionCounts(8)).toEqual({ running: 0, ask: 0 })
+  })
 })
 
 describe('summarizeRunningSessionsForPrompt', () => {

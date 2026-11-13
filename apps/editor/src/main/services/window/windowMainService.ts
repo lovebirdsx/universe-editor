@@ -49,10 +49,11 @@ import { getDefaultStorage, workspaceIdFromUri } from '../../storage.js'
 import { loadWorkspaceGeometry, type IRestoreWindow } from '../../windowsSession.js'
 import { canonicalizeWorkspaceFolderUri } from '../remote/remoteUri.js'
 import { deriveWindowRemoteAuthority } from './windowRemoteAuthority.js'
-import { WindowSessionStore } from './windowSessionStore.js'
+import { WindowSessionStore, type IWindowSnapshotEntry } from './windowSessionStore.js'
 import { createWindowScopedServices } from './windowScopeFactory.js'
 import { AuxiliaryWindowsMainService } from './auxiliaryWindowsMainService.js'
 import { summarizeRunningSessionsForPrompt } from '../sessionSwitcher/sessionSwitcherMainService.js'
+import { planSessionPersist } from '../backgroundMode/backgroundModePolicy.js'
 import { processRoleRegistry } from '../process/processRoleRegistry.js'
 import { processLifecycle } from '../process/processLifecycle.js'
 import { windowOwner } from '@universe-editor/node-services'
@@ -75,6 +76,25 @@ export interface ICreateWindowOptions {
   readonly deepLink?: string
   /** remote-ssh authority to scope an empty window to; a workspace folder wins when both are given. */
   readonly remoteAuthority?: string
+  /** Create the window without showing it (tray background mode / phone-opened workspace). */
+  readonly hidden?: boolean
+}
+
+/** One hidden window as reported to the tray menu. */
+export interface IHiddenWindowInfo {
+  readonly id: number
+  readonly name: string
+  readonly hiddenSeq: number
+}
+
+/**
+ * Background-mode hooks injected as closures: WindowMainService is constructed
+ * before BackgroundModeMainService, and the latter needs the service itself, so
+ * a direct dependency would be circular.
+ */
+export interface IWindowBackgroundModeHooks {
+  isActive(): boolean
+  shouldHideOnClose(): boolean
 }
 
 export interface IWindowMainService {
@@ -99,6 +119,21 @@ export interface IWindowMainService {
    */
   getRendererEpoch(windowId: number): number
   getOpenWindowInfos(): IOpenWindowInfo[]
+  /** Hide a window without closing it; its renderer and sessions stay alive. */
+  hideWindow(id: number): void
+  /** Show a hidden window again (applies its saved geometry on first show). */
+  revealWindow(id: number): void
+  isWindowHidden(id: number): boolean
+  /** Hidden windows, oldest hide first, for the tray's "hidden windows" submenu. */
+  getHiddenWindowInfos(): readonly IHiddenWindowInfo[]
+  getVisibleWindowCount(): number
+  getWindowCount(): number
+  revealAllHiddenWindows(): void
+  /**
+   * Close a window without the renderer shutdown veto. No-op while a quit is
+   * already in flight or its confirmation is pending.
+   */
+  closeWindowWithoutVeto(id: number): void
   openWindowForFolder(
     folder?: URI,
     sessionToOpen?: string,
@@ -129,6 +164,8 @@ interface WindowEntry {
   readonly rendererLifecycle: IRendererLifecycleService
   /** Window-level remote authority (empty windows only; a workspace folder wins). */
   readonly remoteAuthority: string | undefined
+  /** Show the window now, applying saved geometry/devtools on its first reveal. */
+  readonly reveal: () => void
 }
 
 export interface WindowMainServiceOptions {
@@ -155,6 +192,16 @@ export interface WindowMainServiceOptions {
   readonly getConfigurationDefaults: () => ConfigurationDefaults
   /** Test seam; production builds the Electron-backed guard in the constructor. */
   readonly folderOpenGuard?: IWorkspaceFolderOpenGuard
+  /**
+   * Tray background mode, as closures (see {@link IWindowBackgroundModeHooks}).
+   * Absent until the background service is constructed; reads must stay late-bound.
+   */
+  readonly backgroundMode?: IWindowBackgroundModeHooks
+  /**
+   * Whether a window has running sessions. Used to reveal hidden windows before
+   * the quit confirmation so its prompt is never parented to an invisible window.
+   */
+  readonly hasRunningSessions?: (windowId: number) => boolean
 }
 
 // Upper bound on the renderer's shutdown-veto round-trip. Long enough for a busy
@@ -238,7 +285,10 @@ export class WindowMainService implements IWindowMainService {
    * 透明，只有「相同与否」有意义。
    */
   private readonly _rendererEpochs = new Map<number, number>()
-  private readonly _sessionStore = new WindowSessionStore(() => this._windows.values())
+  /** Window id → monotonic hide order. Present means the window is hidden (not closed). */
+  private readonly _hiddenSeq = new Map<number, number>()
+  private _hiddenSeqCounter = 0
+  private readonly _sessionStore = new WindowSessionStore(() => this._persistableWindowEntries())
   private _hasCreatedFirstWindow = false
   /** Window id that last had OS focus (or was programmatically focused). */
   private _lastFocusedWindowId: number | undefined
@@ -446,6 +496,9 @@ export class WindowMainService implements IWindowMainService {
       if (this._crashHandled.has(win.id)) return
       this._crashHandled.add(win.id)
       if (win.isDestroyed()) return
+      // The recovery dialog is window-modal; a hidden window would show it
+      // nowhere and leave the renderer wedged behind an unseen prompt.
+      if (this._hiddenSeq.has(win.id)) this.revealWindow(win.id)
       const storming = recentCrashes.length >= CRASH_STORM_THRESHOLD
       // One action per crash, whichever arrives first — the dialog answer or the
       // auto-reload deadline. Without this, a user who clicks at the 20s mark would
@@ -544,17 +597,36 @@ export class WindowMainService implements IWindowMainService {
     // Assigned after loadURL below; read by showWindow's cleanup. Declaration
     // must precede showWindow's closure even though assignment happens later.
     let readyToShowTimer: ReturnType<typeof setTimeout> | undefined = undefined
+    // Hidden-created windows (background mode) never show on their own; the
+    // three readiness signals would otherwise pop the window into the foreground.
+    const allowShow = opts?.hidden !== true
     let shown = false
-    const showWindow = (reason: 'ready' | 'load' | 'timeout'): void => {
-      if (shown || win.isDestroyed()) return
-      shown = true
-      if (readyToShowTimer !== undefined) clearTimeout(readyToShowTimer)
+    const applyInitialShowState = (): void => {
       if (uiState) applyWindowState(win, uiState)
-      if (this._opts.silentE2E) win.showInactive()
-      else win.show()
       if (opts?.devToolsOpen) win.webContents.openDevTools()
       mark(PerfMarks.mainDidShowWindow)
+    }
+    const showNow = (): void => {
+      if (this._opts.silentE2E) win.showInactive()
+      else win.show()
+    }
+    const showWindow = (reason: 'ready' | 'load' | 'timeout'): void => {
+      if (!allowShow || shown || win.isDestroyed()) return
+      shown = true
+      if (readyToShowTimer !== undefined) clearTimeout(readyToShowTimer)
+      applyInitialShowState()
+      showNow()
       logger.info(`readyToShow id=${win.id} reason=${reason} silent=${this._opts.silentE2E}`)
+    }
+    const reveal = (): void => {
+      if (win.isDestroyed()) return
+      if (!shown) {
+        shown = true
+        if (readyToShowTimer !== undefined) clearTimeout(readyToShowTimer)
+        applyInitialShowState()
+      }
+      showNow()
+      logger.info(`reveal id=${win.id} hidden=${this._hiddenSeq.has(win.id)}`)
     }
     win.once('ready-to-show', () => showWindow('ready'))
     // did-finish-load fires on the main frame's onload without waiting for the
@@ -604,9 +676,13 @@ export class WindowMainService implements IWindowMainService {
       disposables,
       rendererLifecycle,
       remoteAuthority: windowRemoteAuthority,
+      reveal,
     }
     this._windows.set(win.id, entry)
-    logger.info(`createWindow created id=${win.id}`)
+    if (opts?.hidden === true) {
+      this._hiddenSeq.set(win.id, ++this._hiddenSeqCounter)
+    }
+    logger.info(`createWindow created id=${win.id} hidden=${opts?.hidden === true}`)
     this._scheduleSessionPersist()
     this._onDidChangeWindows.fire()
 
@@ -651,6 +727,14 @@ export class WindowMainService implements IWindowMainService {
         e.preventDefault()
         return
       }
+      // Background mode: X hides instead of closing, so the renderer, its
+      // sessions and the phone gateway stay alive. Quit paths are excluded —
+      // _allowClose above and _quitting below must still tear the window down.
+      if (!this._quitting && this._opts.backgroundMode?.shouldHideOnClose() === true) {
+        e.preventDefault()
+        this.hideWindow(win.id)
+        return
+      }
       e.preventDefault()
       void this._confirmAndClose(entry)
     })
@@ -658,6 +742,7 @@ export class WindowMainService implements IWindowMainService {
       roleRegistration?.dispose()
       this._auxiliaryWindows.disposeParent(win.id, 'parent-closed')
       this._windows.delete(win.id)
+      this._hiddenSeq.delete(win.id)
       this._allowClose.delete(win.id)
       this._crashHandled.delete(win.id)
       this._lastRenderCrash.delete(win.id)
@@ -716,7 +801,7 @@ export class WindowMainService implements IWindowMainService {
     // measures only first-paint, not the createWindowScopedServices await nor the
     // dev-only 3s debugger wait.
     readyToShowTimer = setTimeout(() => {
-      if (shown || win.isDestroyed()) return
+      if (!allowShow || shown || win.isDestroyed()) return
       logger.warn(
         `ready-to-show timeout id=${win.id} after ${READY_TO_SHOW_TIMEOUT_MS}ms; forcing show`,
       )
@@ -793,7 +878,10 @@ export class WindowMainService implements IWindowMainService {
       // focus() on a minimized window is a no-op on Windows; restore first so
       // "reveal this editor" can bring a minimized workspace window back.
       if (entry.win.isMinimized()) entry.win.restore()
-      if (this._opts.silentE2E) entry.win.showInactive()
+      if (this._hiddenSeq.has(id)) {
+        this.revealWindow(id)
+        if (!this._opts.silentE2E) entry.win.focus()
+      } else if (this._opts.silentE2E) entry.win.showInactive()
       else entry.win.focus()
       this._opts.logService.createLogger({ id: 'window', name: 'Window' }).debug(`focus id=${id}`)
     }
@@ -840,17 +928,33 @@ export class WindowMainService implements IWindowMainService {
   getFocusedWindowId(): number | null {
     const focused = BrowserWindow.getFocusedWindow()
     if (focused && !focused.isDestroyed()) {
-      if (this._windows.has(focused.id)) return focused.id
+      if (this._windows.has(focused.id) && !this._hiddenSeq.has(focused.id)) return focused.id
       // An auxiliary window shares the parent renderer's services; map it back
-      // to the workspace window that owns it.
+      // to the workspace window that owns it. A hidden parent owns no visible UI.
       const parent = this._auxiliaryWindows.getParentWindowId(focused.id)
-      if (parent !== undefined && this._windows.has(parent)) return parent
+      if (parent !== undefined && this._windows.has(parent) && !this._hiddenSeq.has(parent)) {
+        return parent
+      }
     }
-    if (this._lastFocusedWindowId !== undefined && this._windows.has(this._lastFocusedWindowId)) {
+    if (
+      this._lastFocusedWindowId !== undefined &&
+      this._windows.has(this._lastFocusedWindowId) &&
+      !this._hiddenSeq.has(this._lastFocusedWindowId)
+    ) {
       return this._lastFocusedWindowId
     }
-    const first = this._windows.keys().next().value
+    const first = this._nextVisibleWindowId()
     return first === undefined ? null : first
+  }
+
+  /** First live, non-hidden window id (insertion order). */
+  private _nextVisibleWindowId(excludeId?: number): number | undefined {
+    for (const [id, entry] of this._windows) {
+      if (id === excludeId) continue
+      if (entry.win.isDestroyed() || this._hiddenSeq.has(id)) continue
+      return id
+    }
+    return undefined
   }
 
   getWindowById(id: number): BrowserWindow | undefined {
@@ -880,6 +984,87 @@ export class WindowMainService implements IWindowMainService {
       })
     }
     return infos
+  }
+
+  hideWindow(id: number): void {
+    const entry = this._windows.get(id)
+    if (!entry || entry.win.isDestroyed() || this._hiddenSeq.has(id)) return
+    this._hiddenSeq.set(id, ++this._hiddenSeqCounter)
+    if (this._lastFocusedWindowId === id) {
+      const next = this._nextVisibleWindowId()
+      this._lastFocusedWindowId = next
+      if (next !== undefined) this._onDidChangeFocusedWindow.fire(next)
+    }
+    this._auxiliaryWindows.hideForParent(id)
+    entry.win.hide()
+    this._scheduleSessionPersist()
+    this._opts.logService
+      .createLogger({ id: 'window', name: 'Window' })
+      .info(`hide id=${id} hiddenWindows=${this._hiddenSeq.size}`)
+  }
+
+  revealWindow(id: number): void {
+    const entry = this._windows.get(id)
+    if (!entry || entry.win.isDestroyed()) return
+    const wasHidden = this._hiddenSeq.delete(id)
+    if (!wasHidden) return
+    this._auxiliaryWindows.showForParent(id)
+    entry.reveal()
+    this._noteFocused(id)
+    this._scheduleSessionPersist()
+    this._opts.logService
+      .createLogger({ id: 'window', name: 'Window' })
+      .info(`reveal id=${id} hiddenWindows=${this._hiddenSeq.size}`)
+  }
+
+  isWindowHidden(id: number): boolean {
+    const entry = this._windows.get(id)
+    return entry !== undefined && !entry.win.isDestroyed() && this._hiddenSeq.has(id)
+  }
+
+  getHiddenWindowInfos(): readonly IHiddenWindowInfo[] {
+    const infos: IHiddenWindowInfo[] = []
+    for (const [id, entry] of this._windows) {
+      if (entry.win.isDestroyed()) continue
+      const hiddenSeq = this._hiddenSeq.get(id)
+      if (hiddenSeq === undefined) continue
+      infos.push({
+        id,
+        name:
+          entry.workspace.current?.name ?? localize('background.untitledWindow', 'Untitled Window'),
+        hiddenSeq,
+      })
+    }
+    return infos.sort((a, b) => a.hiddenSeq - b.hiddenSeq)
+  }
+
+  getVisibleWindowCount(): number {
+    let count = 0
+    for (const [id, entry] of this._windows) {
+      if (!entry.win.isDestroyed() && !this._hiddenSeq.has(id)) count++
+    }
+    return count
+  }
+
+  getWindowCount(): number {
+    let count = 0
+    for (const entry of this._windows.values()) {
+      if (!entry.win.isDestroyed()) count++
+    }
+    return count
+  }
+
+  revealAllHiddenWindows(): void {
+    for (const id of [...this._hiddenSeq.keys()]) this.revealWindow(id)
+  }
+
+  closeWindowWithoutVeto(id: number): void {
+    if (this._quitting || this._quitConfirmation !== undefined) return
+    const entry = this._windows.get(id)
+    if (!entry || entry.win.isDestroyed()) return
+    this._allowClose.add(id)
+    entry.win.close()
+    this._opts.logService.createLogger({ id: 'window', name: 'Window' }).info(`close id=${id}`)
   }
 
   getLastRenderCrash(windowId: number): IWindowRenderCrashInfo | null {
@@ -947,9 +1132,7 @@ export class WindowMainService implements IWindowMainService {
     const existing = this._findWindowForWorkspace(workspaceId)
     if (existing) {
       if (!existing.win.isDestroyed()) {
-        if (existing.win.isMinimized()) existing.win.restore()
-        if (this._opts.silentE2E) existing.win.showInactive()
-        else existing.win.focus()
+        this.focusWindow(existing.win.id)
         if (sessionToOpen) existing.win.webContents.send('ue:open-session', sessionToOpen)
         if (newAgentSession) {
           existing.win.webContents.send('ue:new-agent-session', newAgentSession)
@@ -966,9 +1149,7 @@ export class WindowMainService implements IWindowMainService {
     if (newAgentSession) {
       const ancestor = this._findWindowForAncestorWorkspace(resolved)
       if (ancestor && !ancestor.win.isDestroyed()) {
-        if (ancestor.win.isMinimized()) ancestor.win.restore()
-        if (this._opts.silentE2E) ancestor.win.showInactive()
-        else ancestor.win.focus()
+        this.focusWindow(ancestor.win.id)
         ancestor.win.webContents.send('ue:new-agent-session', newAgentSession)
         await this._opts.appServices.recentWorkspaces.add(workspace)
         return
@@ -1007,6 +1188,11 @@ export class WindowMainService implements IWindowMainService {
     logger.info(
       `closeWindowsForRemoteAuthority authority=${normalized} windows=[${related.map((e) => e.win.id).join(',')}]`,
     )
+    // The shutdown veto prompts are window-modal; hidden windows must be visible
+    // before asking (and the user should see which windows are about to close).
+    for (const entry of related) {
+      if (this._hiddenSeq.has(entry.win.id)) this.revealWindow(entry.win.id)
+    }
     for (const entry of related) {
       const proceed = await this._canProceed(
         entry.win.id,
@@ -1019,7 +1205,7 @@ export class WindowMainService implements IWindowMainService {
       }
     }
     const liveCount = [...this._windows.values()].filter((e) => !e.win.isDestroyed()).length
-    if (related.length >= liveCount) {
+    if (related.length >= liveCount && this._opts.backgroundMode?.shouldHideOnClose() !== true) {
       logger.info(
         'closeWindowsForRemoteAuthority would close every window; opening an empty local window first',
       )
@@ -1123,8 +1309,16 @@ export class WindowMainService implements IWindowMainService {
       return true
     }
 
+    // A hidden window cannot show the shutdown prompt (and a hidden window with
+    // running sessions deserves a visible decision). Temporarily show it without
+    // touching _hiddenSeq: a vetoed quit must hide it again, and the session
+    // snapshot must still treat it as hidden.
+    const prompted = this._revealHiddenForQuitPrompt(requester.win.id)
+    const restorePrompted = (): void => this._hideAfterQuitPrompt(prompted)
+
     const sessions = await this._opts.appServices.sessionSwitcher.getAllSessions()
     if (requester.win.isDestroyed()) {
+      restorePrompted()
       return this._resolveQuitAfterRequesterGone()
     }
     const runningSessions = summarizeRunningSessionsForPrompt(
@@ -1150,11 +1344,13 @@ export class WindowMainService implements IWindowMainService {
         shutdownContext,
       ))
     ) {
+      restorePrompted()
       return false
     }
     // The requester owned the application-wide decision; if it vanished while
     // the user was deciding, do not commit on its behalf.
     if (requester.win.isDestroyed()) {
+      restorePrompted()
       return this._resolveQuitAfterRequesterGone()
     }
 
@@ -1165,11 +1361,38 @@ export class WindowMainService implements IWindowMainService {
           skipRunningSessionPrompt: true,
         }))
       ) {
+        restorePrompted()
         return false
       }
     }
     this.markQuitConfirmed()
     return true
+  }
+
+  /**
+   * Show hidden windows that must be visible for the quit confirmation: the
+   * requester itself, plus any hidden window with running sessions. The windows
+   * stay in `_hiddenSeq`, so persistence and a later veto both still see them as
+   * hidden (only `_hideAfterQuitPrompt` masks their temporary visibility).
+   */
+  private _revealHiddenForQuitPrompt(requesterId: number): WindowEntry[] {
+    const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
+    const revealed: WindowEntry[] = []
+    for (const [id, entry] of this._windows) {
+      if (entry.win.isDestroyed() || !this._hiddenSeq.has(id)) continue
+      if (id !== requesterId && this._opts.hasRunningSessions?.(id) !== true) continue
+      entry.reveal()
+      revealed.push(entry)
+      logger.info(`quit prompt show hidden id=${id} requester=${id === requesterId}`)
+    }
+    return revealed
+  }
+
+  private _hideAfterQuitPrompt(entries: readonly WindowEntry[]): void {
+    for (const entry of entries) {
+      if (entry.win.isDestroyed()) continue
+      entry.win.hide()
+    }
   }
 
   /** Explicit initiator if alive, else the focused window, else any live window. */
@@ -1303,11 +1526,7 @@ export class WindowMainService implements IWindowMainService {
   private _focusWindowForWorkspace(workspaceId: string): boolean {
     const entry = this._findWindowForWorkspace(workspaceId)
     if (!entry) return false
-    if (!entry.win.isDestroyed()) {
-      if (entry.win.isMinimized()) entry.win.restore()
-      if (this._opts.silentE2E) entry.win.showInactive()
-      else entry.win.focus()
-    }
+    if (!entry.win.isDestroyed()) this.focusWindow(entry.win.id)
     return true
   }
 
@@ -1344,6 +1563,34 @@ export class WindowMainService implements IWindowMainService {
     this._sessionStore.schedule()
   }
 
+  /**
+   * Snapshot source for the session store. Hidden windows are filtered here, not
+   * in the store: visible windows always persist, and an all-hidden set keeps
+   * only the most recently hidden window so a tray full of closed windows is
+   * not restored en masse on the next start.
+   */
+  private _persistableWindowEntries(): IWindowSnapshotEntry[] {
+    const candidates: Array<{
+      entry: IWindowSnapshotEntry
+      hidden: boolean
+      hiddenSeq: number
+    }> = []
+    for (const [id, entry] of this._windows) {
+      if (entry.win.isDestroyed()) continue
+      const hiddenSeq = this._hiddenSeq.get(id)
+      candidates.push({
+        entry: {
+          win: entry.win,
+          workspace: entry.workspace,
+          remoteAuthority: entry.remoteAuthority,
+        },
+        hidden: hiddenSeq !== undefined,
+        hiddenSeq: hiddenSeq ?? 0,
+      })
+    }
+    return planSessionPersist(candidates)
+  }
+
   private _persistSessionNow(): Promise<void> {
     return this._sessionStore.persistNow()
   }
@@ -1357,6 +1604,7 @@ export class WindowMainService implements IWindowMainService {
       disposables.dispose()
     }
     this._windows.clear()
+    this._hiddenSeq.clear()
     this._onDidChangeWindows.dispose()
     this._onDidChangeFocusedWindow.dispose()
   }
