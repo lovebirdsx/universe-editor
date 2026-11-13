@@ -6,6 +6,7 @@ import {
   MOBILE_DRAFT_IMAGE_PATH,
   MOBILE_SESSION_FILE_PATH,
   MOBILE_SESSION_IMAGE_PATH,
+  MOBILE_SESSION_REPORT_PATH,
   isMobileAttachmentKind,
   isMobileErrorCode,
   type MobileAttachmentKind,
@@ -102,6 +103,28 @@ export class AttachmentClient {
   /** Bytes of a markdown-referenced workspace image, resolved on the PC. */
   async fetchWorkspaceImage(ref: MobileSessionRef, src: string): Promise<Blob> {
     return this._fetchBlob(MOBILE_SESSION_FILE_PATH, { ...refQuery(ref), path: src })
+  }
+
+  /** Full trigger-run report for a session; main resolves the run and file. */
+  async fetchSessionReport(ref: MobileSessionRef): Promise<string> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this._downloadTimeoutMs)
+    try {
+      const response = await this._fetch(
+        `${this._origin}${MOBILE_SESSION_REPORT_PATH}?${new URLSearchParams(refQuery(ref)).toString()}`,
+        {
+          headers: { Authorization: `Bearer ${this._token}` },
+          cache: 'no-store',
+          signal: controller.signal,
+        },
+      )
+      if (!response.ok) throw await this._errorFromResponse(response)
+      return await response.text()
+    } catch (err) {
+      throw this._normalizeError(err)
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   /** Bytes of a picture the PC pasted into the shared draft. */

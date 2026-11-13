@@ -74,7 +74,7 @@ main（应用级单例）                                    renderer（每窗�
 | `<userData>/triggers/triggers.json` | 用户 / `ensureConfigFile` | JSONC 配置；外部编辑热加载（目录 watcher）。 |
 | `<userData>/triggers/state.json` | `TriggerStateStore`（独占） | `pausedAll`、每触发器 `processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`sourceFingerprint`、`elevatedConfirmed` / `approveConfirmed` 指纹、`pending` 记录。防抖 + 原子写（0600）。加载时丢弃 `runId` 不是 UUID 形态的 pending 记录（会拼进文件路径）。 |
 | `<userData>/triggers/audit.jsonl` | `AuditLog` | `action` / `result` / `detail`（标识性文本，无 payload / prompt / 摘要）。每条执行 / 拒绝的动作单独成行。 |
-| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。 |
+| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），目录被清理后入口显示空状态。 |
 | `<userData>/triggers/pending/<runId>.json` | `TriggerMainService` | 排队事件的临时负载；run 开始或丢弃后删除。 |
 
 `state.json` 里的去重 key 每条最多保留 **2000** 个、**30 天**（`prune`）。
@@ -336,6 +336,7 @@ _startRun
 - 历史上限 100；**非置顶自动化行最多 30 条**（`MAX_AUTOMATION_ENTRIES`），超额优先淘汰最旧自动化行；置顶行不受 30 限制。
 - `SessionListBody`：⚡ 图标 + tooltip（`acp.sessions.automationBadge`，中文「由触发器 {name} 启动 · {key}」）、判决标签与摘要行；`acpSessionFilterService` 的 `sourceFilter: 'all' | 'manual' | 'trigger'`。
 - 手机：`MobileBridgeSessionSummary.automation`（triggerName / verdict / summary / outcome），由 `mobileBridgeProjection.ts` 投影；自动化会话的 attention 事件带 `alwaysNotify: true`，忽略「PC 聚焦时不推送」。该字段属于手机协议 v24（`MOBILE_PROTOCOL_VERSION = 24`）。**手机页面由编辑器网关下发**，随编辑器一起更新，不需要单独发手机端；协议版本不匹配时手机会提示刷新页面。
+- 手机「查看报告」：客户端只传 session ref，main 经 renderer 桥取 live `session.automation.runId`，读取固定路径 `<userData>/triggers/runs/<runId>/report.md`。runId / 路径 / `result.json` 不上 wire；run 目录被保留策略清理后返回 404，手机显示「未生成或已清理」。详见 `mobile-gateway.md` §7e。
 
 ## 13. 通知
 

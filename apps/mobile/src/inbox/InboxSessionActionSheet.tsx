@@ -24,6 +24,8 @@ export interface InboxSessionActionSheetProps {
   readonly onNotice: (text: string) => void
   /** Opens the branch-publishing sheet; absent hides the entry. */
   readonly onPushBranch?: ((session: MobileSessionSummary) => void) | undefined
+  /** Opens the trigger-run report; absent hides the entry. */
+  readonly onOpenReport?: ((session: MobileSessionSummary) => void) | undefined
 }
 
 /** Long-press menu and swipe-action confirmations for one inbox row. */
@@ -35,6 +37,7 @@ export function InboxSessionActionSheet({
   onDismiss,
   onNotice,
   onPushBranch,
+  onOpenReport,
 }: InboxSessionActionSheetProps) {
   const [view, setView] = useState<InboxSessionSheetView>(initialView)
   const [busy, setBusy] = useState(false)
@@ -130,6 +133,17 @@ export function InboxSessionActionSheet({
       expandKey="inbox-session-menu"
     >
       <div className="sheet-options">
+        {session.automation !== undefined && onOpenReport !== undefined && (
+          <button
+            type="button"
+            className="sheet-option sheet-option--neutral"
+            data-testid="inbox-session-report"
+            disabled={!online || busy}
+            onClick={() => onOpenReport(session)}
+          >
+            {strings.sessionReportAction}
+          </button>
+        )}
         {onPushBranch !== undefined && (
           <button
             type="button"

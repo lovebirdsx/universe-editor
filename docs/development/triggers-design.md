@@ -204,7 +204,7 @@ payload 全文只进 prompt，**不进日志、审计、state**（日志只记 k
 | `swarm.approve` | `perforce.swarm.transition(id, 'approved')` | **强制 `commit:false`**（不存在带 commit 的动作类型）；需用户对该触发器执行「Triggers: 确认自动 approve」（同 bypass 的指纹机制）；执行前重新拉取审核，必须仍满足 `canApproveReview` 且**版本未变**（防 TOCTOU：分析后作者又推了新改动），否则降级 `escalate` |
 
 - 每个动作写审计：`{ triggerId, eventKey, runId, sessionId, action, target, result }`（不含正文）。
-- 展示：判决写回会话历史的 `automation.verdict/summary`，Sessions 列表行显示一行摘要；`escalate/info` 发一条「需要你处理 / 已完成」通知并进手机收件箱。
+- 展示：判决写回会话历史的 `automation.verdict/summary`，Sessions 列表行显示一行摘要；`escalate/info` 发一条「需要你处理 / 已完成」通知并进手机收件箱。手机端另提供「查看报告」入口：客户端只传会话 ref，main 解析 live `automation.runId` 后读取本次 run 的 `report.md`；`reportPath`、runId 与目录路径不进入客户端协议。
 
 ## 7. 会话元数据
 

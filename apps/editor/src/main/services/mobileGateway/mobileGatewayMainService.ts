@@ -65,6 +65,8 @@ import {
 } from './gatewayConfig.js'
 import { MOBILE_GATEWAY_CONFIG_FILE } from './gatewayConfigFile.js'
 import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
+import { SessionReportReader } from './sessionReportReader.js'
+import { triggersDirectory } from '../triggers/triggersConfigFile.js'
 import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
 import { WorkspaceDirectoryBrowser } from './workspaceDirectoryBrowser.js'
 import { WorkspaceGitStatusService } from './workspaceGitStatus.js'
@@ -147,6 +149,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _server: MobileGatewayServer | undefined
   private _router: MobileNotificationRouter | undefined
   private readonly _directoryBrowser: WorkspaceDirectoryBrowser | undefined
+  private readonly _reports: SessionReportReader
   private readonly _newSessionOptions: WorkspaceNewSessionOptionsReader
   private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
   private readonly _pushSender: WebPushSender
@@ -175,6 +178,10 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._gitStatus = this._register(new WorkspaceGitStatusService({ logger: this._logger }))
     this._sessionHistoryReader = new WorkspaceSessionHistoryReader({
       userDataDir: app.getPath('userData'),
+      logger: this._logger,
+    })
+    this._reports = new SessionReportReader({
+      runsDir: join(triggersDirectory(app.getPath('userData')), 'runs'),
       logger: this._logger,
     })
     this._directoryBrowser =
@@ -544,6 +551,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       onDiagnostic: (event) => this._handleDiagnostic(event),
       hub: this._hub,
       attachments: this._attachments,
+      reports: this._reports,
     })
     try {
       const { port } = await server.start()

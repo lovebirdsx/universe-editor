@@ -1132,6 +1132,34 @@ file / openEditor / scmChange → `resource_link`，symbol / docs / commit / cha
   多仓库沿用 PC 当前选中仓库。v1 仍不支持文件夹与编辑选区上下文。
 - v22 与旧 PWA 不兼容，握手精确匹配版本；升级网关后手机需刷新页面。
 
+## 7e. 会话触发器报告读取（HTTP 增量）
+
+触发器会话的手机端提供「查看报告」入口，用于阅读本次 run 的 `report.md`。报告是**按会话身份**
+读取的，客户端不传 runId、路径或文件名：
+
+| 方法           | 路径                                                | 说明                           |
+| -------------- | --------------------------------------------------- | ------------------------------ |
+| `GET` / `HEAD` | `/api/sessions/report?windowId&localId[&durableId]` | 读取该会话触发器 run 的完整报告 |
+
+链路：网关先 `hub.readSessionReportRunId(ref)`，经 renderer 桥取 live 会话的
+`session.automation.runId`；main 再用 `SessionReportReader` 读取
+`<userData>/triggers/runs/<runId>/report.md`。找不到会话、会话不是触发器启动、没有 runId 或 run
+目录已清理时统一 404 `attachment_not_found`，不区分原因。缺参数 400；其他方法 405。
+
+**安全边界**：runId 必须是标准 UUID；固定文件名 `report.md`；`realpath` 后必须仍在 runs 根目录
+之下；拒绝符号链接与非普通文件；大小上限 `MAX_SESSION_REPORT_BYTES`（512 KB），超限 413；整次
+读取有 10s 超时。报告内容按不可信输入处理，手机侧只经 `MarkdownView` 的 AST 渲染，不执行 raw
+HTML / 脚本。
+
+响应头：`Content-Type: text/markdown; charset=utf-8`、`Content-Length`、
+`Content-Disposition: inline; filename="report.md"`，并由统一安全头带 `Cache-Control: no-store`；
+`HEAD` 不发送 body。空报告返回 200 + 空 body，由客户端显示空状态。
+
+**协议兼容**：这是纯 HTTP 增量端点，不改变任何 WS 帧，因此**不 bump
+`MOBILE_PROTOCOL_VERSION`**；旧 PWA 不会调用它，新 PWA 由网关同源托管。报告可用性受 run 目录
+保留策略影响（默认最近 200 个且跳过运行中目录）；已关闭的历史会话需先 resume 打开一次，手机才
+能读到其 live `automation`。
+
 ## 8. 配对与安全
 
 **开关**：网关默认关闭，必须在 PC 设置页显式开启。

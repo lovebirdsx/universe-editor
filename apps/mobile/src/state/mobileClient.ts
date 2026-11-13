@@ -493,6 +493,11 @@ export class MobileClient {
     return this._attachments.fetchWorkspaceImage(ref, src)
   }
 
+  /** Full trigger-run report; the ref is explicit so the inbox can open it too. */
+  fetchSessionReport(ref: MobileSessionRef): Promise<string> {
+    return this._attachments.fetchSessionReport(ref)
+  }
+
   fetchDraftImageBlob(imageId: string): Promise<Blob> {
     const ref = this._currentRef
     if (ref === undefined) {

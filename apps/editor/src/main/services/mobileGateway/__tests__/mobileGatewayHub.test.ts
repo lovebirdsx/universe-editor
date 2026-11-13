@@ -80,6 +80,7 @@ class FakeBridge implements IMobileBridgeService {
   readonly getToolCallDetail = vi.fn(async () => this.detail)
   readonly getMessageImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
   readonly getWorkspaceImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
+  readonly getAutomationRunId = vi.fn(async (): Promise<string | undefined> => undefined)
   readonly ping = vi.fn(async () => 'pong' as const)
   readonly getWorkspaceGitDirty = vi.fn(async (): Promise<boolean | undefined> => undefined)
   readonly applyDraft = vi.fn(async () => ({ ok: true as const, value: undefined }))
@@ -3991,6 +3992,25 @@ describe('MobileGatewayHub attachment resolution', () => {
       hub.readSessionImage({ windowId: 9, localId: 's1' }, 'm1', 0),
     ).resolves.toBeUndefined()
     await expect(hub.readSessionWorkspaceImage(ref, 'missing.png')).resolves.toEqual(image)
+  })
+
+  it('resolves a session report run id through the owning window bridge', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.getAutomationRunId.mockResolvedValue('run-1')
+    hub.registerWindow(1, bridge)
+
+    const ref: MobileSessionRef = { windowId: 1, localId: 's1', durableId: 'd1' }
+    await expect(hub.readSessionReportRunId(ref)).resolves.toBe('run-1')
+    expect(bridge.getAutomationRunId).toHaveBeenCalledWith('s1', expect.anything())
+
+    await expect(
+      hub.readSessionReportRunId({ windowId: 9, localId: 's1' }),
+    ).resolves.toBeUndefined()
+
+    bridge.getAutomationRunId.mockResolvedValue(undefined)
+    await expect(hub.readSessionReportRunId(ref)).resolves.toBeUndefined()
   })
 
   it('materializes uploaded draft attachments once per id', async () => {

@@ -993,6 +993,43 @@ describe('SessionPage snapshot rendering', () => {
   })
 })
 
+describe('SessionPage trigger report', () => {
+  it('opens the trigger-run report from the header', async () => {
+    const fetchMock = vi.fn(async () => new Response('# 报告标题', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      const { harness } = openPage()
+      feed(
+        harness.socket,
+        sessionSnapshotFrame(1, {
+          summary: sessionSummary('s1', { automation: { triggerName: 'Nightly review' } }),
+        }),
+      )
+
+      fireEvent.click(screen.getByTestId('session-report'))
+      expect(await screen.findByTestId('session-report-overlay')).toBeTruthy()
+      expect(await screen.findByTestId('session-report-markdown')).toBeTruthy()
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/sessions/report'),
+        expect.objectContaining({
+          headers: { Authorization: 'Bearer token-1' },
+          cache: 'no-store',
+        }),
+      )
+      expect(screen.getByTestId('session-report-markdown').textContent).toContain('报告标题')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('hides the report entry for an ordinary session', () => {
+    const { harness } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1))
+
+    expect(screen.queryByTestId('session-report')).toBeNull()
+  })
+})
+
 interface SentCommand {
   readonly requestId: string
   readonly kind: string

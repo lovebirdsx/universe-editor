@@ -30,6 +30,7 @@ import { DeliverySummaryBar } from '../inbox/DeliverySummaryBar.js'
 import { DeliveryConfirmSheet } from '../inbox/DeliveryConfirmSheet.js'
 import { DeliveryDetailSheet } from '../inbox/DeliveryDetailSheet.js'
 import { PushBranchSheet } from '../git/PushBranchSheet.js'
+import { SessionReportOverlay } from '../report/SessionReportOverlay.js'
 import { useShellCacheFallback } from '../shellCache.js'
 import { useEffect, useRef, useState } from 'react'
 
@@ -80,6 +81,7 @@ export function InboxPage({
   const [startingKeys, setStartingKeys] = useState<ReadonlySet<string>>(() => new Set())
   const startingKeysRef = useRef<Set<string>>(new Set())
   const [pushSession, setPushSession] = useState<MobileSessionSummary | undefined>(undefined)
+  const [reportSession, setReportSession] = useState<MobileSessionSummary | undefined>(undefined)
   // The sheet stays open while the inbox keeps moving; judge "is it working?"
   // against the latest summary, not the one captured on long-press.
   const actionSession =
@@ -101,6 +103,11 @@ export function InboxPage({
     pushSession === undefined
       ? undefined
       : (inbox.sessions.find((session) => refMatches(session.ref, pushSession.ref)) ?? pushSession)
+  const reportTarget =
+    reportSession === undefined
+      ? undefined
+      : (inbox.sessions.find((session) => refMatches(session.ref, reportSession.ref)) ??
+        reportSession)
 
   // One-shot on entry / reconnect: the badge is advisory, so a failure keeps
   // the previous set rather than replacing it with "everything clean".
@@ -250,6 +257,10 @@ export function InboxPage({
             setSessionAction(undefined)
             setPushSession(session)
           }}
+          onOpenReport={(session) => {
+            setSessionAction(undefined)
+            setReportSession(session)
+          }}
         />
       )}
       {pushTarget !== undefined && (
@@ -260,6 +271,14 @@ export function InboxPage({
           online={socketState === 'connected'}
           onDismiss={() => setPushSession(undefined)}
           onNotice={onNotice}
+        />
+      )}
+      {reportTarget !== undefined && reportTarget.automation !== undefined && (
+        <SessionReportOverlay
+          client={client}
+          sessionRef={reportTarget.ref}
+          automation={reportTarget.automation}
+          onClose={() => setReportSession(undefined)}
         />
       )}
       {deliverySheet?.mode === 'confirm' && deliverySession !== undefined && (

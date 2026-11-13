@@ -51,6 +51,7 @@ import type {
   AcpSessionHistoryEntry,
   IAcpSessionHistoryService,
 } from '../../acp/session/acpSessionHistory.js'
+import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
 import type { IAcpAgentRegistry } from '../../acp/acpAgentRegistry.js'
 import type { IUserSettingsSyncService } from '../../configuration/UserSettingsSync.js'
 import type { IScmService, IScmSourceControlModel } from '../../extensions/ScmService.js'
@@ -123,6 +124,7 @@ function makeSession(
     mcpSelection?: readonly string[] | null
     mcpStatuses?: readonly AcpMcpServerStatus[]
     isReconnecting?: boolean
+    automation?: AutomationOrigin
   } = {},
 ): FakeSessionHarness {
   const timeline = observableValue<readonly TimelineItem[]>('test.timeline', [])
@@ -171,6 +173,7 @@ function makeSession(
     cwd: options.cwd ?? '/workspace/demo',
     authority: options.authority,
     readOnly: options.readOnly ?? false,
+    automation: options.automation,
     timeline,
     messages,
     toolCalls,
@@ -926,6 +929,24 @@ describe('MobileBridgeService', () => {
       summary: 'needs a human',
       outcome: 'completed',
     })
+  })
+
+  it('returns the trigger run id only for live automated sessions', async () => {
+    const harness = makeHarness()
+    const origin: AutomationOrigin = {
+      triggerId: 'swarm-triage',
+      triggerName: 'Swarm triage',
+      eventKey: 'swarm:1001',
+      runId: 'run-1',
+    }
+    const automated = makeSession('s1', { durableId: 'd1', automation: origin })
+    const manual = makeSession('s2')
+    harness.add(automated)
+    harness.add(manual)
+
+    await expect(harness.service.getAutomationRunId('s1')).resolves.toBe('run-1')
+    await expect(harness.service.getAutomationRunId('s2')).resolves.toBeUndefined()
+    await expect(harness.service.getAutomationRunId('missing')).resolves.toBeUndefined()
   })
 
   it('streams command-list changes once and skips identical projections', async () => {

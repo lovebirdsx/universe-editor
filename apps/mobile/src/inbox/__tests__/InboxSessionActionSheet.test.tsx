@@ -57,6 +57,47 @@ describe('InboxSessionActionSheet', () => {
     expect(screen.queryByTestId('inbox-session-push-branch')).toBeNull()
   })
 
+  it('opens the trigger report for an automated session', () => {
+    const onOpenReport = vi.fn()
+    render(
+      <InboxSessionActionSheet
+        client={createClient()}
+        session={sessionSummary('s1', {
+          automation: { triggerName: 'Nightly review' },
+        })}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onOpenReport={onOpenReport}
+      />,
+    )
+
+    fireEvent.click(screen.getByTestId('inbox-session-report'))
+    expect(onOpenReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ref: expect.objectContaining({ localId: 's1' }),
+        automation: { triggerName: 'Nightly review' },
+      }),
+    )
+  })
+
+  it('hides the report entry for a session no trigger started', () => {
+    render(
+      <InboxSessionActionSheet
+        client={createClient()}
+        session={sessionSummary('s1')}
+        initialView="menu"
+        online
+        onDismiss={vi.fn()}
+        onNotice={vi.fn()}
+        onOpenReport={vi.fn()}
+      />,
+    )
+
+    expect(screen.queryByTestId('inbox-session-report')).toBeNull()
+  })
+
   it('closes an idle session directly from the long-press menu', async () => {
     const client = createClient()
     const onDismiss = vi.fn()

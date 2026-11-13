@@ -154,6 +154,10 @@ describe('AttachmentClient upload', () => {
     const download = client.fetchBlob({ id: 'a1' }).catch((err) => err)
     await vi.advanceTimersByTimeAsync(ATTACHMENT_DOWNLOAD_TIMEOUT_MS)
     await expect(download).resolves.toMatchObject({ code: 'timeout' })
+
+    const report = client.fetchSessionReport({ windowId: 1, localId: 's1' }).catch((err) => err)
+    await vi.advanceTimersByTimeAsync(ATTACHMENT_DOWNLOAD_TIMEOUT_MS)
+    await expect(report).resolves.toMatchObject({ code: 'timeout' })
   })
 })
 
@@ -241,5 +245,57 @@ describe('AttachmentClient download', () => {
     await expect(
       client.fetchSessionImage({ windowId: 1, localId: 's1' }, 'm1', 0),
     ).rejects.toMatchObject({ code: 'attachment_not_found' })
+  })
+
+  it('fetches a trigger report as text with the session ref and no-store', async () => {
+    const fetchImpl = vi.fn(
+      async (..._args: Parameters<typeof fetch>) =>
+        new Response('# Report\n\nbody', {
+          headers: { 'content-type': 'text/markdown; charset=utf-8' },
+        }),
+    )
+    const client = new AttachmentClient({
+      origin: 'http://pc.example.com',
+      token: 'tok-1',
+      fetchImpl,
+    })
+
+    const report = await client.fetchSessionReport({
+      windowId: 7,
+      localId: 'local-1',
+      durableId: 'durable-1',
+    })
+    expect(report).toBe('# Report\n\nbody')
+    const url = new URL(fetchImpl.mock.calls[0]?.[0] as string)
+    expect(url.pathname).toBe('/api/sessions/report')
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      windowId: '7',
+      localId: 'local-1',
+      durableId: 'durable-1',
+    })
+    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({
+      headers: { Authorization: 'Bearer tok-1' },
+      cache: 'no-store',
+    })
+  })
+
+  it('maps report misses and size limits to their protocol codes', async () => {
+    const missing = new AttachmentClient({
+      origin: 'http://pc.example.com',
+      token: 'tok-1',
+      fetchImpl: async () => jsonResponse({ code: 'attachment_not_found' }, 404),
+    })
+    await expect(missing.fetchSessionReport({ windowId: 1, localId: 's1' })).rejects.toMatchObject({
+      code: 'attachment_not_found',
+    })
+
+    const tooLarge = new AttachmentClient({
+      origin: 'http://pc.example.com',
+      token: 'tok-1',
+      fetchImpl: async () => jsonResponse({ code: 'bad_request' }, 413),
+    })
+    await expect(tooLarge.fetchSessionReport({ windowId: 1, localId: 's1' })).rejects.toMatchObject(
+      { code: 'bad_request' },
+    )
   })
 })

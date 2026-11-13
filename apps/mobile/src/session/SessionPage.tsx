@@ -33,6 +33,7 @@ import { MessageActionsSheet } from './MessageActionsSheet.js'
 import { McpServersSheet } from './McpServersSheet.js'
 import { PermissionSheet } from './PermissionSheet.js'
 import { PlanPanel } from './PlanPanel.js'
+import { SessionReportOverlay } from '../report/SessionReportOverlay.js'
 import { RewindPreviewSheet } from './RewindPreviewSheet.js'
 import { SessionHeader } from './SessionHeader.js'
 import { SessionMenuSheet } from './SessionMenuSheet.js'
@@ -124,6 +125,7 @@ export function SessionPage({
   const [copyImagePreview, setCopyImagePreview] = useState<Blob | undefined>(undefined)
   const [rewindMessageId, setRewindMessageId] = useState<string | undefined>(undefined)
   const [sideTasksOpen, setSideTasksOpen] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
   const [prefill, setPrefill] = useState<ComposerPrefill | undefined>(undefined)
   const [reopening, setReopening] = useState(false)
   const handledCleared = useRef<PermissionClearedInfo | undefined>(undefined)
@@ -145,6 +147,7 @@ export function SessionPage({
     setSettingsView(undefined)
     setMessageActions(undefined)
     setCopyImagePreview(undefined)
+    setReportOpen(false)
   }, [sessionKey])
 
   const notice = (text: string): void => setToast(text)
@@ -183,6 +186,10 @@ export function SessionPage({
     const timer = setTimeout(() => setLoadTimedOut(true), SESSION_LOAD_TIMEOUT_MS)
     return () => clearTimeout(timer)
   }, [waitingForSnapshot, sessionKey, retryToken])
+
+  useEffect(() => {
+    if (state.removed) setReportOpen(false)
+  }, [state.removed])
 
   // `permission_cleared` lands after the sheet has already unmounted; the
   // source tells us whether the phone acted or the request was handled elsewhere.
@@ -435,6 +442,9 @@ export function SessionPage({
         onOpenMcp={showMcp ? () => openSettings('mcp') : undefined}
         parentTitle={parentSummary?.title}
         onOpenParent={parentSummary === undefined ? undefined : () => openRef(parentSummary.ref)}
+        onOpenReport={
+          state.summary?.automation === undefined ? undefined : () => setReportOpen(true)
+        }
         onBack={onBack}
         onOpenConfig={(id) => setConfigSheetId(id)}
         onToggleBoolean={(option) => void toggleBoolean(option.id, option.currentValue !== 'On')}
@@ -564,6 +574,14 @@ export function SessionPage({
           onClose={() => setSideTasksOpen(false)}
           onOpen={openSideTaskRef}
           onNotice={notice}
+        />
+      )}
+      {reportOpen && state.summary?.automation !== undefined && (
+        <SessionReportOverlay
+          client={client}
+          sessionRef={state.summary.ref}
+          automation={state.summary.automation}
+          onClose={() => setReportOpen(false)}
         />
       )}
       {configOption !== undefined && (

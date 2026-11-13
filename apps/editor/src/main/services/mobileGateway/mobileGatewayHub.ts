@@ -330,6 +330,8 @@ const HISTORY_DISK_READ_CONCURRENCY = 4
 const HISTORY_OWNER_TIMEOUT_MS = 5_000
 /** Reading image bytes is a renderer round-trip (and, for workspace files, a disk read). */
 const SESSION_IMAGE_TIMEOUT_MS = 15_000
+/** A report lookup is one renderer round-trip; the disk read happens in main afterwards. */
+const SESSION_REPORT_TIMEOUT_MS = 10_000
 /** Keep the phone list responsive even with many open workspaces. */
 const MAX_HISTORY_RESULTS = 200
 /** Cap how many workspace candidates pay for a `git status` probe. */
@@ -672,6 +674,19 @@ export class MobileGatewayHub {
     )
   }
 
+  /**
+   * Trigger run id recorded on the session, or undefined for a manual session /
+   * a session owned by another window. Main reads the report itself so the
+   * renderer never exposes a run directory to the phone.
+   */
+  readSessionReportRunId(ref: MobileSessionRef): Promise<string | undefined> {
+    return this._readSessionValue(
+      ref,
+      (bridge, localId, token) => bridge.getAutomationRunId(localId, token),
+      SESSION_REPORT_TIMEOUT_MS,
+    )
+  }
+
   /** Bytes for a picture the PC pasted into the draft (phone preview only). */
   readDraftImage(ref: MobileSessionRef, imageId: string): Promise<MobileBridgeImage | undefined> {
     const draft = this._drafts.get(sessionKey(ref.windowId, ref.localId))
@@ -689,11 +704,19 @@ export class MobileGatewayHub {
       token: CancellationToken,
     ) => Promise<MobileBridgeImage | undefined>,
   ): Promise<MobileBridgeImage | undefined> {
+    return this._readSessionValue(ref, call, SESSION_IMAGE_TIMEOUT_MS)
+  }
+
+  private async _readSessionValue<T>(
+    ref: MobileSessionRef,
+    call: (bridge: IMobileBridgeService, localId: string, token: CancellationToken) => Promise<T>,
+    timeoutMs: number,
+  ): Promise<T | undefined> {
     const resolved = this._resolveSession(ref)
     if (resolved === undefined) return undefined
     const entry = this._windows.get(resolved.windowId)
     if (entry === undefined) return undefined
-    const deadline = Date.now() + SESSION_IMAGE_TIMEOUT_MS
+    const deadline = Date.now() + timeoutMs
     if (!(await this._ensureWindowReady(entry, deadline))) return undefined
     if (this._windows.get(resolved.windowId) !== entry) return undefined
     try {
@@ -702,7 +725,7 @@ export class MobileGatewayHub {
         Math.max(1, deadline - Date.now()),
       )
     } catch (err) {
-      this._logger.warn(`mobile session image read failed: ${String(err)}`)
+      this._logger.warn(`mobile session resource read failed: ${String(err)}`)
       return undefined
     }
   }

@@ -408,6 +408,17 @@ export const strings = {
   sessionNeverAskAgain: '不再提示',
   sessionActionFailed: '操作失败，请重试。',
 
+  sessionReportAction: '查看报告',
+  sessionReportTitle: '运行报告',
+  sessionReportLoading: '正在读取报告…',
+  sessionReportEmpty: '本次运行没有生成报告内容。',
+  sessionReportRunning: '本次运行尚未结束，报告生成后可在这里查看。',
+  sessionReportUnavailable: '本次运行没有可查看的报告（可能尚未生成或已被清理）。',
+  sessionReportTooLarge: '报告过大，无法在手机上打开。',
+  sessionReportFailed: '读取报告失败，请稍后重试。',
+  sessionReportRefresh: '刷新',
+  sessionReportClose: '关闭报告',
+
   deliveryAction: '交付',
   deliveryPendingBadge: '待交付',
   deliveryConfirmTitle: '交付到 main',

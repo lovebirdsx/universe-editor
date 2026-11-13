@@ -13,6 +13,7 @@ import {
   MOBILE_ATTACHMENT_NAME_HEADER,
   MOBILE_CLOSE_CODES,
   MOBILE_PROTOCOL_VERSION,
+  MOBILE_SESSION_REPORT_PATH,
   parseServerFrame,
   type PairResponse,
   type ServerFrame,
@@ -26,6 +27,7 @@ import { MobileAttachmentStore } from '../mobileAttachmentStore.js'
 import { MobileGatewayHub } from '../mobileGatewayHub.js'
 import { MobileGatewayServer, type MobileGatewayServerOptions } from '../mobileGatewayServer.js'
 import { PairingService } from '../pairingService.js'
+import type { SessionReportReadResult } from '../sessionReportReader.js'
 import type { MobileBridgeImage } from '../../../../shared/ipc/mobileGatewayService.js'
 
 interface GatewayHarness {
@@ -1311,5 +1313,146 @@ describe('mobile gateway session image api', () => {
     )
     expect(response.status).toBe(404)
     expect(await response.json()).toMatchObject({ code: 'not_supported' })
+  })
+})
+
+describe('mobile gateway session report api', () => {
+  const runId = '123e4567-e89b-42d3-a456-426614174000'
+  const report = new TextEncoder().encode('# Report\n\nbody')
+
+  async function startWithReportHub(): Promise<{
+    gateway: GatewayHarness
+    readSessionReportRunId: ReturnType<typeof vi.fn>
+    readReport: ReturnType<typeof vi.fn>
+  }> {
+    const readSessionReportRunId = vi.fn(async (): Promise<string | undefined> => runId)
+    const readReport = vi.fn(
+      async (): Promise<SessionReportReadResult> => ({ ok: true, bytes: report }),
+    )
+    const hub = { readSessionReportRunId } as unknown as MobileGatewayHub
+    const gateway = await startGateway({
+      hub,
+      reports: { read: readReport },
+    })
+    return { gateway, readSessionReportRunId, readReport }
+  }
+
+  it('requires a device token and allows only GET/HEAD', async () => {
+    const { gateway } = await startWithReportHub()
+    const paired = await pair(gateway.base)
+    const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`
+
+    const unauthenticated = await fetch(`${gateway.base}${path}`)
+    expect(unauthenticated.status).toBe(401)
+    expect(await unauthenticated.json()).toMatchObject({ code: 'unauthorized' })
+
+    const invalid = await fetch(`${gateway.base}${path}`, {
+      headers: { authorization: 'Bearer not-a-token' },
+    })
+    expect(invalid.status).toBe(401)
+
+    const post = await fetch(`${gateway.base}${path}`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(post.status).toBe(405)
+  })
+
+  it('rejects malformed session refs', async () => {
+    const { gateway } = await startWithReportHub()
+    const paired = await pair(gateway.base)
+    const auth = { authorization: `Bearer ${paired.token}` }
+    for (const path of [
+      MOBILE_SESSION_REPORT_PATH,
+      `${MOBILE_SESSION_REPORT_PATH}?localId=s1`,
+      `${MOBILE_SESSION_REPORT_PATH}?windowId=1`,
+    ]) {
+      const response = await fetch(`${gateway.base}${path}`, { headers: auth })
+      expect(response.status, path).toBe(400)
+      expect(await response.json()).toMatchObject({ code: 'bad_request' })
+    }
+  })
+
+  it('serves the report with no-store headers and a HEAD variant', async () => {
+    const { gateway, readSessionReportRunId, readReport } = await startWithReportHub()
+    const paired = await pair(gateway.base)
+    const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=2&localId=s1&durableId=d1`
+
+    const response = await fetch(`${gateway.base}${path}`, {
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
+    expect(response.headers.get('content-length')).toBe(String(report.byteLength))
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(response.headers.get('content-disposition')).toBe('inline; filename="report.md"')
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(report)
+    expect(readSessionReportRunId).toHaveBeenCalledWith({
+      windowId: 2,
+      localId: 's1',
+      durableId: 'd1',
+    })
+    expect(readReport).toHaveBeenCalledWith(runId)
+
+    const head = await fetch(`${gateway.base}${path}`, {
+      method: 'HEAD',
+      headers: { authorization: `Bearer ${paired.token}` },
+    })
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-type')).toBe('text/markdown; charset=utf-8')
+    expect((await head.arrayBuffer()).byteLength).toBe(0)
+  })
+
+  it('hides sessions without a run and reports that are gone', async () => {
+    const { gateway, readSessionReportRunId, readReport } = await startWithReportHub()
+    const paired = await pair(gateway.base)
+    const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`
+    const auth = { authorization: `Bearer ${paired.token}` }
+
+    readSessionReportRunId.mockResolvedValueOnce(undefined)
+    const noRun = await fetch(`${gateway.base}${path}`, { headers: auth })
+    expect(noRun.status).toBe(404)
+    expect(await noRun.json()).toMatchObject({ code: 'attachment_not_found' })
+    expect(readReport).not.toHaveBeenCalled()
+
+    readReport.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
+    const missing = await fetch(`${gateway.base}${path}`, { headers: auth })
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toMatchObject({ code: 'attachment_not_found' })
+  })
+
+  it('answers 413 for reports above the size limit', async () => {
+    const { gateway, readReport } = await startWithReportHub()
+    const paired = await pair(gateway.base)
+    readReport.mockResolvedValueOnce({ ok: false, reason: 'too_large' })
+
+    const response = await fetch(
+      `${gateway.base}${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`,
+      { headers: { authorization: `Bearer ${paired.token}` } },
+    )
+    expect(response.status).toBe(413)
+    expect(await response.json()).toMatchObject({ code: 'bad_request' })
+  })
+
+  it('answers 404 when the hub or reader is not wired', async () => {
+    const withoutHub = await startGateway({ reports: { read: vi.fn() } })
+    const pairedHub = await pair(withoutHub.base)
+    const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`
+    const response = await fetch(`${withoutHub.base}${path}`, {
+      headers: { authorization: `Bearer ${pairedHub.token}` },
+    })
+    expect(response.status).toBe(404)
+    expect(await response.json()).toMatchObject({ code: 'not_supported' })
+
+    const withoutReports = await startGateway({
+      hub: { readSessionReportRunId: vi.fn() } as unknown as MobileGatewayHub,
+    })
+    const second = await pair(withoutReports.base)
+    const noReports = await fetch(`${withoutReports.base}${path}`, {
+      headers: { authorization: `Bearer ${second.token}` },
+    })
+    expect(noReports.status).toBe(404)
+    expect(await noReports.json()).toMatchObject({ code: 'not_supported' })
   })
 })

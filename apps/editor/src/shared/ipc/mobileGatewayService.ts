@@ -605,6 +605,13 @@ export interface IMobileBridgeService {
   ): Promise<MobileBridgeImage | undefined>
 
   /**
+   * Run id recorded on a live session started by a trigger. Main uses it to
+   * locate `<userData>/triggers/runs/<runId>/report.md`; renderers never return
+   * the run directory itself.
+   */
+  getAutomationRunId(localId: string, token?: CancellationToken): Promise<string | undefined>
+
+  /**
    * Apply a draft authored by the phone. Writes the renderer's draft cache even
    * when no PromptInput is mounted; the next mount restores it.
    */

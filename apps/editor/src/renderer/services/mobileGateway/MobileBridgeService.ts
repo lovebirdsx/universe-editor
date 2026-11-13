@@ -558,6 +558,10 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return undefined
   }
 
+  getAutomationRunId(localId: string): Promise<string | undefined> {
+    return Promise.resolve(this._liveSession(localId)?.automation?.runId)
+  }
+
   async applyDraft(localId: string, draft: MobileBridgeDraft): Promise<MobileBridgeResult<void>> {
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')

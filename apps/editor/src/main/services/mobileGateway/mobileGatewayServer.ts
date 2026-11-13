@@ -33,6 +33,8 @@ import {
   MOBILE_PROTOCOL_VERSION,
   MOBILE_SESSION_FILE_PATH,
   MOBILE_SESSION_IMAGE_PATH,
+  MOBILE_SESSION_REPORT_MIME,
+  MOBILE_SESSION_REPORT_PATH,
   MOBILE_WS_PATH,
   isMobileAttachmentKind,
   isPreviewableImageMimeType,
@@ -63,6 +65,7 @@ import {
 import type { PairingService } from './pairingService.js'
 import { isAllowedPushEndpoint } from './pushEndpoint.js'
 import { checkRequestHeaders } from './requestSecurity.js'
+import type { SessionReportReader } from './sessionReportReader.js'
 import {
   contentTypeFor,
   isNoCacheAsset,
@@ -142,6 +145,8 @@ export interface MobileGatewayServerOptions {
   readonly hub?: MobileGatewayHub
   /** Attachment upload/download store; absent when the gateway runs without files. */
   readonly attachments?: MobileGatewayAttachmentHttpStore
+  /** Trigger-run report reader; absent when the gateway runs without triggers. */
+  readonly reports?: Pick<SessionReportReader, 'read'>
 }
 
 interface ConnectionState {
@@ -405,6 +410,10 @@ export class MobileGatewayServer {
     }
     if (pathname === MOBILE_SESSION_FILE_PATH) {
       await this._handleSessionWorkspaceImage(req, res, url.searchParams)
+      return
+    }
+    if (pathname === MOBILE_SESSION_REPORT_PATH) {
+      await this._handleSessionReport(req, res, url.searchParams)
       return
     }
     if (pathname === MOBILE_WS_PATH) {
@@ -714,7 +723,7 @@ export class MobileGatewayServer {
   ): Promise<void> {
     const deviceId = await this._authenticateDevice(req, res)
     if (deviceId === undefined) return
-    if (!this._allowImageRead(req, res)) return
+    if (!this._allowRead(req, res)) return
     const hub = this._options.hub
     if (hub === undefined) {
       this._sendJson(res, 404, { code: 'not_supported', message: 'image api is unavailable' })
@@ -753,7 +762,7 @@ export class MobileGatewayServer {
   ): Promise<void> {
     const deviceId = await this._authenticateDevice(req, res)
     if (deviceId === undefined) return
-    if (!this._allowImageRead(req, res)) return
+    if (!this._allowRead(req, res)) return
     const hub = this._options.hub
     if (hub === undefined) {
       this._sendJson(res, 404, { code: 'not_supported', message: 'image api is unavailable' })
@@ -784,7 +793,7 @@ export class MobileGatewayServer {
   ): Promise<void> {
     const deviceId = await this._authenticateDevice(req, res)
     if (deviceId === undefined) return
-    if (!this._allowImageRead(req, res)) return
+    if (!this._allowRead(req, res)) return
     const hub = this._options.hub
     if (hub === undefined) {
       this._sendJson(res, 404, { code: 'not_supported', message: 'image api is unavailable' })
@@ -807,7 +816,54 @@ export class MobileGatewayServer {
     this._sendImage(req, res, image.mimeType, image.bytes)
   }
 
-  private _allowImageRead(req: IncomingMessage, res: ServerResponse): boolean {
+  /**
+   * Full trigger-run report for a session. The phone supplies a session ref
+   * only; main resolves the run id from that session's automation metadata and
+   * reads a fixed report file from the configured runs root.
+   */
+  private async _handleSessionReport(
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: URLSearchParams,
+  ): Promise<void> {
+    const deviceId = await this._authenticateDevice(req, res)
+    if (deviceId === undefined) return
+    if (!this._allowRead(req, res)) return
+    const hub = this._options.hub
+    const reports = this._options.reports
+    if (hub === undefined || reports === undefined) {
+      this._sendJson(res, 404, { code: 'not_supported', message: 'report api is unavailable' })
+      return
+    }
+    const ref = sessionRefFromQuery(params)
+    if (ref === undefined) {
+      this._sendJson(res, 400, { code: 'bad_request', message: 'invalid report request' })
+      return
+    }
+    const runId = await hub.readSessionReportRunId(ref)
+    if (runId === undefined) {
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'report is not available',
+      })
+      return
+    }
+    const report = await reports.read(runId)
+    if (!report.ok) {
+      if (report.reason === 'too_large') {
+        this._sendJson(res, 413, { code: 'bad_request', message: 'report is too large' })
+        return
+      }
+      this._sendJson(res, 404, {
+        code: 'attachment_not_found',
+        message: 'report is not available',
+      })
+      return
+    }
+    this._sendReport(req, res, report.bytes)
+  }
+
+  private _allowRead(req: IncomingMessage, res: ServerResponse): boolean {
     if (req.method === 'GET' || req.method === 'HEAD') return true
     this._sendText(res, 405, 'Method Not Allowed', { Allow: 'GET, HEAD' })
     return false
@@ -833,6 +889,17 @@ export class MobileGatewayServer {
     res.setHeader('Content-Type', normalized)
     res.setHeader('Content-Length', body.byteLength)
     res.setHeader('Content-Disposition', `inline; filename="image.${imageExtension(normalized)}"`)
+    if (req.method === 'HEAD') res.end()
+    else res.end(body)
+  }
+
+  private _sendReport(req: IncomingMessage, res: ServerResponse, bytes: Uint8Array): void {
+    const body = Buffer.from(bytes)
+    this._applySecurityHeaders(res, 'no-store')
+    res.statusCode = 200
+    res.setHeader('Content-Type', MOBILE_SESSION_REPORT_MIME)
+    res.setHeader('Content-Length', body.byteLength)
+    res.setHeader('Content-Disposition', 'inline; filename="report.md"')
     if (req.method === 'HEAD') res.end()
     else res.end(body)
   }

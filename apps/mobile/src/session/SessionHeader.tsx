@@ -19,6 +19,8 @@ export interface SessionHeaderProps {
   /** Parent session title when this session is a side task. */
   readonly parentTitle?: string | undefined
   readonly onOpenParent?: (() => void) | undefined
+  /** Opens the trigger-run report; absent for sessions no trigger started. */
+  readonly onOpenReport?: (() => void) | undefined
   readonly onBack: () => void
   readonly onOpenConfig: (configOptionId: string) => void
   readonly onToggleBoolean: (option: MobileConfigOption) => void
@@ -37,6 +39,7 @@ export function SessionHeader({
   onOpenMcp,
   parentTitle,
   onOpenParent,
+  onOpenReport,
   onBack,
   onOpenConfig,
   onToggleBoolean,
@@ -92,6 +95,17 @@ export function SessionHeader({
                   onClick={onOpenParent}
                 >
                   {strings.sideTaskParent(parentTitle)}
+                </button>
+              )}
+              {onOpenReport !== undefined && (
+                <button
+                  type="button"
+                  className="session-parent-chip"
+                  data-testid="session-report"
+                  disabled={!online}
+                  onClick={onOpenReport}
+                >
+                  {strings.sessionReportAction}
                 </button>
               )}
             </>
