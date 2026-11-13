@@ -4259,6 +4259,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'color.agent.sendTrackBackground': '发送按钮轨道的背景色。',
   'color.agent.sendHoverBackground': '悬停时发送按钮的背景色。',
   'color.agent.sendIconRing': '发送按钮图标的圆环颜色。',
+  'color.charts.purple': '图表可视化中使用的紫色。',
   'color.errorForeground': '错误消息的整体前景色。',
   'color.error.background': '错误区块的背景色。',
   'color.success.foreground': '成功消息的前景色。',
