@@ -150,9 +150,11 @@ export function describePollExecError(err: ExecFailure, timeoutSec: number): str
  * killed, the real work kept running). Spawn explicitly and kill the whole tree:
  * `taskkill /T` on Windows, the process group on POSIX (`detached: true`).
  */
-function killProcessTree(child: ChildProcess): void {
+export function killProcessTree(child: ChildProcess): void {
   const pid = child.pid
-  if (pid === undefined) return
+  // A dead child's pid can already belong to an unrelated process (Windows
+  // recycles pids fast), and `taskkill /T` would take that whole tree down.
+  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return
   try {
     if (process.platform === 'win32') {
       // Synchronous: the caller reports the failure immediately, and an async
@@ -188,6 +190,7 @@ export function createPollCommandFetcher(logger?: ILogger): PollCommandFetcher {
         resolve(result)
       }
       const fail = (error: string): void => {
+        if (settled) return
         killProcessTree(child)
         finish({ ok: false, error })
       }
@@ -212,6 +215,7 @@ export function createPollCommandFetcher(logger?: ILogger): PollCommandFetcher {
       })
       child.stdout?.setEncoding('utf8')
       child.stdout?.on('data', (chunk: string) => {
+        if (settled) return
         outputBytes += Buffer.byteLength(chunk)
         if (outputBytes > POLL_MAX_STDOUT_BYTES) {
           fail(

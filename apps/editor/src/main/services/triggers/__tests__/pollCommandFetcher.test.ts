@@ -4,12 +4,14 @@
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ChildProcess } from 'node:child_process'
 import { mkTempDir } from '@universe-editor/temp-root'
 import type { ILogger } from '@universe-editor/platform'
 import {
   createPollCommandFetcher,
   describePollExecError,
+  killProcessTree,
   parsePollStdout,
   POLL_MAX_PAYLOAD_VALUE_LENGTH,
   toPayloadValue,
@@ -203,5 +205,12 @@ describe('createPollCommandFetcher', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toContain('1 MB')
+  })
+
+  it('never kills by pid once the child has exited (the pid may be recycled)', () => {
+    const kill = vi.fn()
+    const exited = { pid: 2147483646, exitCode: 0, signalCode: null, kill }
+    killProcessTree(exited as unknown as ChildProcess)
+    expect(kill).not.toHaveBeenCalled()
   })
 })
