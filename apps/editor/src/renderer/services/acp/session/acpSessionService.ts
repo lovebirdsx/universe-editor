@@ -1308,7 +1308,17 @@ export class AcpSessionService
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
         ...(options?.aiFix === true ? { aiFix: true } : {}),
         ...(options?.internal === true ? { internal: true } : {}),
-        ...(options?.automation !== undefined ? { automation: options.automation } : {}),
+        ...(options?.automation !== undefined
+          ? {
+              automation: {
+                ...options.automation,
+                // Persisted so a resume keeps the runDir permission scope.
+                ...(options.automationRunDir !== undefined
+                  ? { runDir: options.automationRunDir }
+                  : {}),
+              },
+            }
+          : {}),
       })
       profile.step('didHistoryAdd')
       this._mcpSelectionAtAttach.set(session.id, selection)
@@ -1585,10 +1595,16 @@ export class AcpSessionService
         ...(entry.aiFix === true || entry.sideTaskOf !== undefined
           ? { suppressConfigDefaults: true }
           : {}),
-        // A resumed automated session keeps its restricted permission policy;
-        // the runDir scope is not persisted, so only the non-path restrictions
-        // apply after a restart.
-        ...(entry.automation !== undefined ? { automation: entry.automation } : {}),
+        // A resumed automated session keeps its restricted permission policy and
+        // the runDir scope persisted at creation.
+        ...(entry.automation !== undefined
+          ? {
+              automation: entry.automation,
+              ...(entry.automation.runDir !== undefined
+                ? { automationRunDir: entry.automation.runDir }
+                : {}),
+            }
+          : {}),
       })
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)

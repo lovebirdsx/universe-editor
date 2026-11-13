@@ -168,6 +168,30 @@ describe('TriggerStateStore', () => {
     expect(warns).toHaveLength(1)
   })
 
+  it('drops pending records whose runId is not a UUID', async () => {
+    const dir = await tempDir()
+    const { logger, warns } = createLogger()
+    const file = join(dir, 'state.json')
+    const valid = '11111111-2222-4333-8444-555555555555'
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        pausedAll: false,
+        triggers: {},
+        pending: [
+          { runId: valid, triggerId: 'a', eventKey: 'poll:1', firedAt: 5 },
+          { runId: '../../escape', triggerId: 'a', eventKey: 'poll:2', firedAt: 6 },
+        ],
+      }),
+      'utf8',
+    )
+    const store = new TriggerStateStore({ file, logger })
+    const loaded = await store.load()
+    expect(loaded.pending.map((record) => record.runId)).toEqual([valid])
+    expect(warns.some((line) => line.includes('invalid runId'))).toBe(true)
+  })
+
   it('normalizes the persisted shape and drops malformed entries', () => {
     const normalized = normalizeTriggerStateFile({
       version: 1,
@@ -183,6 +207,7 @@ describe('TriggerStateStore', () => {
           backoffUntil: 50,
           lastError: 'boom',
           baselineDone: true,
+          sourceFingerprint: 'poll|id|cmd|30',
           elevatedConfirmed: 'fp',
         },
         b: 'garbage',
@@ -192,6 +217,7 @@ describe('TriggerStateStore', () => {
     expect(normalized.pausedAll).toBe(true)
     expect(normalized.triggers['a']?.processed).toEqual({ 'poll:1': { at: 10, status: 'started' } })
     expect(normalized.triggers['a']?.consecutiveFailures).toBe(2)
+    expect(normalized.triggers['a']?.sourceFingerprint).toBe('poll|id|cmd|30')
     expect(normalized.triggers['b']?.processed).toEqual({})
     expect(normalized.pending).toEqual([
       { runId: 'r1', triggerId: 'a', eventKey: 'poll:1', firedAt: 5 },
@@ -227,6 +253,19 @@ describe('pruneRunDirectories', () => {
     await pruneRunDirectories(dir, 2)
     const remaining = (await readdir(dir)).sort()
     expect(remaining).toEqual(['run-2', 'run-3'])
+  })
+
+  it('never deletes a protected (active / queued) run directory', async () => {
+    const dir = await tempDir()
+    for (let index = 0; index < 4; index++) {
+      const runDir = join(dir, `run-${index}`)
+      await mkdir(runDir, { recursive: true })
+      const stamp = new Date(Date.now() + index * 1000)
+      await utimes(runDir, stamp, stamp)
+    }
+    await pruneRunDirectories(dir, 1, undefined, new Set(['run-0', 'run-2']))
+    const remaining = (await readdir(dir)).sort()
+    expect(remaining).toEqual(['run-0', 'run-2', 'run-3'])
   })
 
   it('is a no-op for a missing root', async () => {

@@ -26,10 +26,10 @@ import type { IAcpSession } from '../acp/session/acpSessionModel.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import {
   CONSERVATIVE_MODE_BY_AGENT,
+  isElevatedModeId,
   type TriggerRunEnd,
   type TriggerRunRequest,
 } from '../../../shared/triggers/types.js'
-import { isElevatedModeId } from './automatedPermissionPolicy.js'
 import {
   AutomatedRunWatcher,
   defaultAutomatedVerdictResolver,
@@ -66,6 +66,11 @@ export const IAutomatedSessionService =
 interface ActiveRun {
   readonly session: IAcpSession
   readonly watcher: AutomatedRunWatcher
+}
+
+/** Case-insensitive + trimmed comparison of two agent mode ids. */
+function sameMode(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase()
 }
 
 /** The mode the agent actually applied, resolved by config id then mode category. */
@@ -108,7 +113,12 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     const runId = request.origin.runId
     if (this._runs.has(runId)) throw new Error(`Trigger run ${runId} is already started`)
     const agentId = request.agentId ?? this._registry.defaultAgentId()
-    const requestedMode = request.mode ?? CONSERVATIVE_MODE_BY_AGENT[agentId]
+    const requestedMode = request.mode?.trim() ?? CONSERVATIVE_MODE_BY_AGENT[agentId]
+    // No explicit mode and no known conservative default: accepting whatever the
+    // agent starts with would let an unattended run inherit a permissive mode.
+    if (requestedMode === undefined || requestedMode.length === 0) {
+      throw new Error('未知 agent 需在触发器中显式配置 mode')
+    }
     if (isElevatedModeId(requestedMode) && !request.allowElevatedMode) {
       throw new Error(
         `Refusing elevated mode "${requestedMode}" for trigger ${request.origin.triggerId}: confirmation missing`,
@@ -138,20 +148,26 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
       }
       await session.whenConfigOptionsSettled()
       const actualMode = readSessionModeId(session)
-      if (requestedMode !== undefined && actualMode !== requestedMode) {
+      // Mode ids are agent-defined case conventions; a case/whitespace diff is
+      // not a mismatch, but any other divergence means the agent ignored the pin.
+      if (actualMode === undefined || !sameMode(actualMode, requestedMode)) {
         throw new Error(
           `Automated session mode mismatch: requested ${requestedMode}, agent applied ${actualMode ?? '(unknown)'}`,
         )
-      }
-      // No explicit/conservative mode configured: accept whatever the session
-      // starts with, but never an elevated one.
-      if (requestedMode === undefined && isElevatedModeId(actualMode)) {
-        throw new Error(`Automated session started in elevated mode "${actualMode}"`)
       }
     } catch (err) {
       this._logger.warn(`automated session setup failed: ${(err as Error).message}`)
       await session.close().catch(() => undefined)
       throw err
+    }
+
+    // History rows (and `TriggerRunEnd.sessionId`) key on the agent-issued
+    // durable id, never the local uuid the UI briefly holds.
+    const durableSessionId = session.sessionIdOnAgent.get()
+    if (durableSessionId === undefined) {
+      this._logger.warn('automated session setup failed: missing durable session id')
+      await session.close().catch(() => undefined)
+      throw new Error('Automated session did not report a durable session id')
     }
 
     const watcher = new AutomatedRunWatcher({
@@ -160,17 +176,19 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
       readResultFile: (runDir) => this._readResultFile(runDir),
       resolveVerdict: this._verdictResolver,
       onRunEnd: (end, resolution) => this._handleRunEnd(end, resolution),
+      logger: this._logger,
     })
     this._runs.set(runId, { session, watcher })
     watcher.start()
     void session.sendPrompt(request.prompt).then(
       () => watcher.notifyTurnSettled(),
       (err: unknown) => {
-        this._logger.warn(`automated prompt failed: ${String(err)}`)
-        watcher.notifyTurnSettled()
+        const message = err instanceof Error ? err.message : String(err)
+        this._logger.warn(`automated prompt failed: ${message}`)
+        watcher.notifyTurnFailed(message)
       },
     )
-    return { sessionId: session.id }
+    return { sessionId: durableSessionId }
   }
 
   cancelRun(runId: string): void {

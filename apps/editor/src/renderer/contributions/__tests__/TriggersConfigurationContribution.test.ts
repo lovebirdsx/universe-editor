@@ -7,7 +7,7 @@
 
 import type { IJSONSchema } from '@universe-editor/platform'
 import { describe, expect, it } from 'vitest'
-import { TRIGGER_ACTION_TYPES } from '../../../shared/triggers/types.js'
+import { ELEVATED_MODE_IDS, TRIGGER_ACTION_TYPES } from '../../../shared/triggers/types.js'
 import { TRIGGERS_SCHEMA } from '../TriggersConfigurationContribution.js'
 
 function triggerSchema(): IJSONSchema {
@@ -47,8 +47,8 @@ describe('triggers.json schema', () => {
     }
   })
 
-  it('requires id / workspace / source on a trigger', () => {
-    expect(triggerSchema().required).toEqual(['id', 'workspace', 'source'])
+  it('requires id / workspace / source / session on a trigger', () => {
+    expect(triggerSchema().required).toEqual(['id', 'workspace', 'source', 'session'])
     expect(triggerSchema().properties?.['id']?.pattern).toBe('^[a-z0-9][a-z0-9-]{0,63}$')
     expect(triggerSchema().properties?.['enabled']?.default).toBe(false)
   })
@@ -71,6 +71,20 @@ describe('triggers.json schema', () => {
       'maxCostUsd',
       'timeoutMin',
     ])
+    for (const field of ['approvalTimeoutMin', 'maxCostUsd', 'timeoutMin'] as const) {
+      const schema = budget?.properties?.[field] as
+        | (IJSONSchema & { exclusiveMinimum?: number })
+        | undefined
+      expect(schema?.exclusiveMinimum).toBe(0)
+    }
+  })
+
+  it('warns that elevated modes need confirmation', () => {
+    const mode = triggerSchema().properties?.['session']?.properties?.['mode']
+    for (const id of ELEVATED_MODE_IDS) {
+      expect(mode?.description).toContain(id)
+    }
+    expect(mode?.description).toContain('确认高权限模式')
   })
 
   it('restricts the schedule to one of cron / everyMin with a missed-run policy', () => {
@@ -79,6 +93,7 @@ describe('triggers.json schema', () => {
     )
     expect(schedule?.properties?.['onMissed']?.enum).toEqual(['skip', 'catch-up-once'])
     expect(schedule?.properties?.['onMissed']?.default).toBe('skip')
+    expect(schedule?.oneOf).toEqual([{ required: ['cron'] }, { required: ['everyMin'] }])
     expect(Object.keys(schedule?.properties ?? {}).sort()).toEqual([
       'cron',
       'everyMin',
@@ -93,7 +108,9 @@ describe('triggers.json schema', () => {
     )
     expect(poll?.required).toEqual(['type', 'intervalSec', 'fetch', 'keyField'])
     expect(poll?.properties?.['intervalSec']?.minimum).toBe(30)
+    expect(poll?.properties?.['intervalSec']?.type).toBe('integer')
     expect(poll?.properties?.['fetch']?.required).toEqual(['type', 'command'])
     expect(poll?.properties?.['fetch']?.properties?.['timeoutSec']?.default).toBe(60)
+    expect(poll?.properties?.['fetch']?.description).toContain('items')
   })
 })

@@ -255,6 +255,7 @@ describe('AcpSessionHistoryService — add / list', () => {
       triggerName: 'Swarm 分诊',
       eventKey: 'swarm:42',
       runId: 'run-1',
+      runDir: '/userData/triggers/runs/run-1',
     }
     svc.add({ agentId: 'a', sessionIdOnAgent: 'auto-1', title: 't', automation })
     svc.setAutomationResult('auto-1', {
@@ -285,6 +286,7 @@ describe('AcpSessionHistoryService — add / list', () => {
       triggerName: 'Swarm 分诊',
       eventKey: 'swarm:42',
       runId: 'run-1',
+      runDir: '/userData/triggers/runs/run-1',
     }
     svc.add({ agentId: 'a', sessionIdOnAgent: 'auto-1', title: 't', automation })
     svc.setAutomationResult('auto-1', { verdict: 'info', summary: 'done', outcome: 'completed' })
@@ -304,6 +306,29 @@ describe('AcpSessionHistoryService — add / list', () => {
     }
   })
 
+  it('keeps an automation row without runDir (older v8 payloads)', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'auto-legacy',
+      title: 't',
+      automation: {
+        triggerId: 'trig',
+        triggerName: 'Trigger',
+        eventKey: 'event:1',
+        runId: 'run-1',
+      },
+    })
+    await flushWrite()
+    const restarted = makeService({ storage }).svc
+    try {
+      await restarted.initialize()
+      expect(restarted.get('auto-legacy')?.automation?.runDir).toBeUndefined()
+    } finally {
+      restarted.dispose()
+    }
+  })
+
   it('drops a malformed automation field during hydration', async () => {
     storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 8,
@@ -316,6 +341,31 @@ describe('AcpSessionHistoryService — add / list', () => {
           createdAt: 1,
           lastUsedAt: 2,
           automation: { triggerId: 'x' },
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list()).toEqual([])
+  })
+
+  it('drops an automation row whose runDir is not a string during hydration', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 8,
+      entries: [
+        {
+          id: 'auto-1',
+          agentId: 'a',
+          sessionIdOnAgent: 'auto-1',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          automation: {
+            triggerId: 'trig',
+            triggerName: 'Trigger',
+            eventKey: 'event:1',
+            runId: 'run-1',
+            runDir: 42,
+          },
         },
       ],
     })

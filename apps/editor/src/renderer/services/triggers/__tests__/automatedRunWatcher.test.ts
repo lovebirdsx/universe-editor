@@ -142,6 +142,7 @@ function makeRequest(overrides: Partial<TriggerRunRequest['budget']> = {}): Trig
     allowedActions: [],
     approveConfirmed: false,
     payload: {},
+    sourceType: 'manual',
   }
 }
 
@@ -150,6 +151,7 @@ function setup(
     request?: TriggerRunRequest
     raw?: string
     resolveVerdict?: AutomatedVerdictResolver
+    logger?: { warn(message: string): void }
   } = {},
 ) {
   const clock = new FakeClock()
@@ -165,6 +167,7 @@ function setup(
     readResultFile: async () => options.raw,
     resolveVerdict: resolver,
     onRunEnd: (end) => ends.push(end),
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
     now: clock.now,
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
@@ -209,6 +212,69 @@ describe('AutomatedRunWatcher', () => {
     await flush()
     expect(ends[0]!.outcome).toBe('budget-exceeded')
     expect(fake.cancelTurn).toHaveBeenCalled()
+  })
+
+  it('compares the cost ceiling case-insensitively when the currency is USD', async () => {
+    const { fake, watcher, ends } = setup()
+    watcher.start()
+    fake.status.set('running', undefined)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 2, currency: 'usd' } }, undefined)
+    await flush()
+    expect(ends[0]!.outcome).toBe('budget-exceeded')
+  })
+
+  it('compares the cost ceiling when the agent omits a currency', async () => {
+    const { fake, watcher, ends } = setup()
+    watcher.start()
+    fake.status.set('running', undefined)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 2 } as never }, undefined)
+    await flush()
+    expect(ends[0]!.outcome).toBe('budget-exceeded')
+  })
+
+  it('skips the cost ceiling for a non-USD currency and warns once', async () => {
+    const warnings: string[] = []
+    const { clock, fake, watcher, ends } = setup({
+      request: makeRequest({ timeoutMin: 1 }),
+      logger: { warn: (message) => warnings.push(message) },
+    })
+    watcher.start()
+    fake.status.set('running', undefined)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 999, currency: 'CNY' } }, undefined)
+    await flush()
+    expect(ends).toHaveLength(0)
+    expect(fake.cancelTurn).not.toHaveBeenCalled()
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('CNY')
+    // Repeated usage updates do not spam the warning.
+    fake.usage.set({ used: 11, size: 100, cost: { amount: 1000, currency: 'CNY' } }, undefined)
+    await flush()
+    expect(warnings).toHaveLength(1)
+    // The time limit still applies.
+    clock.advance(60_000)
+    await flush()
+    expect(ends[0]!.outcome).toBe('timeout')
+  })
+
+  it('reports a failed prompt with its error as the terminal outcome', async () => {
+    const { watcher, ends } = setup()
+    watcher.start()
+    watcher.notifyTurnFailed('prompt RPC exploded')
+    await flush()
+    expect(ends).toHaveLength(1)
+    expect(ends[0]).toMatchObject({ outcome: 'failed', error: 'prompt RPC exploded' })
+  })
+
+  it('ignores a failure notification after a terminal outcome', async () => {
+    const { fake, watcher, ends } = setup()
+    watcher.start()
+    fake.status.set('running', undefined)
+    watcher.notifyTurnSettled()
+    await flush()
+    watcher.notifyTurnFailed('late error')
+    await flush()
+    expect(ends).toHaveLength(1)
+    expect(ends[0]!.outcome).toBe('completed')
   })
 
   it('reports timeout after the active-time budget', async () => {

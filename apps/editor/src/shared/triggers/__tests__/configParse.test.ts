@@ -1,12 +1,12 @@
 import { parse } from 'jsonc-parser'
 import { describe, expect, it } from 'vitest'
+import { parseTriggersConfig, triggerFingerprint, TRIGGERS_CONFIG_EXAMPLE } from '../configParse.js'
 import {
-  isElevatedMode,
-  parseTriggersConfig,
-  triggerFingerprint,
-  TRIGGERS_CONFIG_EXAMPLE,
-} from '../configParse.js'
-import { TRIGGER_DEFAULTS, type TriggerConfig, type TriggersConfig } from '../types.js'
+  isElevatedModeId,
+  TRIGGER_DEFAULTS,
+  type TriggerConfig,
+  type TriggersConfig,
+} from '../types.js'
 
 const rawTrigger = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: 't1',
@@ -314,12 +314,16 @@ describe('triggerFingerprint', () => {
   })
 })
 
-describe('isElevatedMode', () => {
-  it('recognizes bypass-class mode ids only', () => {
-    expect(isElevatedMode('bypassPermissions')).toBe(true)
-    expect(isElevatedMode('danger-full-access')).toBe(true)
-    expect(isElevatedMode('default')).toBe(false)
-    expect(isElevatedMode(undefined)).toBe(false)
+describe('isElevatedModeId', () => {
+  it('recognizes bypass-class mode ids case-insensitively', () => {
+    expect(isElevatedModeId('bypassPermissions')).toBe(true)
+    expect(isElevatedModeId('BypassPermissions')).toBe(true)
+    expect(isElevatedModeId('danger-full-access')).toBe(true)
+    expect(isElevatedModeId('auto')).toBe(true)
+    expect(isElevatedModeId('acceptEdits')).toBe(true)
+    expect(isElevatedModeId('agent')).toBe(true)
+    expect(isElevatedModeId('default')).toBe(false)
+    expect(isElevatedModeId(undefined)).toBe(false)
   })
 })
 

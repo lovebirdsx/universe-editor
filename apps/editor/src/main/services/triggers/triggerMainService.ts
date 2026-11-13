@@ -28,12 +28,14 @@ import {
   type SwarmNeedsActionReview,
 } from '../../../shared/ipc/triggerService.js'
 import {
+  isElevatedModeId,
   TRIGGER_DEFAULTS,
   type TriggerConfig,
   type TriggerEvent,
   type TriggerPayloadValue,
   type TriggerRunEnd,
   type TriggerRunRequest,
+  type TriggerSourceConfig,
   type TriggerStatus,
   type TriggerSummary,
   type TriggersConfig,
@@ -54,7 +56,7 @@ import {
 import { RunQueue, type RunQueueOptions } from '../../../shared/triggers/runQueue.js'
 import { nextBackoffMs, shouldAutoPause } from '../../../shared/triggers/backoff.js'
 import { renderTriggerPrompt } from '../../../shared/triggers/promptTemplate.js'
-import { isElevatedMode, triggerFingerprint } from '../../../shared/triggers/configParse.js'
+import { triggerFingerprint } from '../../../shared/triggers/configParse.js'
 import { AuditLog } from '../mobileGateway/auditLog.js'
 import { JsonConfigFileStore, type JsonConfigFileState } from '../jsonConfig/jsonConfigFileStore.js'
 import { writeJsonAtomic } from '../jsonConfig/atomicFile.js'
@@ -133,6 +135,7 @@ interface ActiveRun extends PendingRun {
   phase: 'starting' | 'running'
   windowId?: number
   sessionId?: string
+  watchdogTimer?: TriggerTimerHandle
 }
 
 type RuntimeStatePatch = {
@@ -146,6 +149,11 @@ const PRUNE_OPTIONS = {
 
 const DEFAULT_MAX_RUN_DIRECTORIES = 200
 const DEFAULT_HOST_WAIT_TIMEOUT_MS = 60_000
+/** Beyond the configured budget before a silent renderer is presumed stuck. */
+const WATCHDOG_GRACE_MS = 10 * 60_000
+
+/** Filesystem-visible prefixes owned by a single trigger source. */
+const PREFETCHED_KEY_PREFIXES = ['poll:', 'swarm:'] as const
 
 export class TriggerMainService extends Disposable implements ITriggerMainService {
   declare readonly _serviceBrand: undefined
@@ -185,6 +193,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private _gateTimer: TriggerTimerHandle | undefined
   private _gateOpen = false
   private _wakeTimer: TriggerTimerHandle | undefined
+  private _replaying = false
   private readonly _ready: Promise<void>
   private _disposed = false
 
@@ -267,7 +276,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       firedAt: this._clock.now(),
     }
     this._logger.info(`trigger ${trigger.id}: manual event ${event.key}`)
-    await this._acceptEvent(trigger, event)
+    // A user-initiated run is an explicit override of the failure backoff.
+    await this._acceptEvent(trigger, event, { ignoreBackoff: true })
   }
 
   async setPaused(triggerId: string, paused: boolean): Promise<void> {
@@ -279,9 +289,20 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         ? { paused: true, lastError: undefined }
         : { paused: false, consecutiveFailures: 0, backoffUntil: undefined, lastError: undefined },
     )
+    if (paused) {
+      // Pausing is the final gate: queued events are dropped (their keys forgotten
+      // so they can fire again after resume) and no new timing is armed.
+      this._queue.clear(trigger.id)
+      for (const pending of [...this._queued.values()]) {
+        if (pending.triggerId === trigger.id) this._dropPending(pending)
+      }
+      this._armedSchedule.delete(trigger.id)
+      this._nextPoll.delete(trigger.id)
+    }
     this._logger.info(`trigger ${trigger.id}: ${paused ? 'paused' : 'resumed'} by the user`)
     this._audit(paused ? 'trigger-paused' : 'trigger-resumed', 'success', `trigger=${trigger.id}`)
     this._syncTiming(this._clock.now())
+    if (!paused) void this._replayPendingRuns()
     this._fireChange()
   }
 
@@ -296,6 +317,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       this._rescheduleWake()
     } else {
       this._syncTiming(this._clock.now())
+      void this._replayPendingRuns()
     }
     this._logger.info(`all triggers ${paused ? 'paused' : 'resumed'} by the user`)
     this._audit(paused ? 'all-paused' : 'all-resumed', 'success')
@@ -305,7 +327,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   async confirmElevatedMode(triggerId: string): Promise<void> {
     await this._awaitReady()
     const trigger = this._requireTrigger(triggerId)
-    if (!isElevatedMode(trigger.session.mode)) {
+    if (!isElevatedModeId(trigger.session.mode)) {
       throw new Error(
         localize('triggers.error.notElevatedMode', 'This trigger does not use a bypass-class mode'),
       )
@@ -318,6 +340,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       'success',
       `trigger=${trigger.id} fingerprint=${fingerprint}`,
     )
+    void this._replayPendingRuns()
     this._fireChange()
   }
 
@@ -342,6 +365,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       'success',
       `trigger=${trigger.id} fingerprint=${fingerprint}`,
     )
+    void this._replayPendingRuns()
     this._fireChange()
   }
 
@@ -373,6 +397,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       this._logger.warn(`run ${end.runId}: end report ignored (not tracked)`)
       return
     }
+    this._clearWatchdog(entry)
     this._active.delete(end.runId)
     this._releaseSlot(end.runId)
 
@@ -391,6 +416,24 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       `actions=${formatActions(end)}`,
     ].join(' ')
     this._audit('run-end', failed ? 'failure' : 'success', detail)
+    for (const action of end.actions) {
+      // One line per executed / rejected action. `reason` is a validation or
+      // execution error only — never the comment body the action carried.
+      this._audit(
+        'action',
+        action.result === 'ok' ? 'success' : 'failure',
+        [
+          `trigger=${entry.triggerId}`,
+          `key=${entry.eventKey}`,
+          `run=${end.runId}`,
+          `session=${end.sessionId ?? '-'}`,
+          `type=${action.type}`,
+          `target=${action.target}`,
+          `result=${action.result}`,
+          ...(action.reason === undefined ? [] : [`reason=${sanitizeAuditReason(action.reason)}`]),
+        ].join(' '),
+      )
+    }
     this._logger.info(
       `run ${end.runId}: ended trigger=${entry.triggerId} key=${entry.eventKey} outcome=${end.outcome}`,
     )
@@ -418,24 +461,31 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   async reportSwarmNeedsAction(reviews: readonly SwarmNeedsActionReview[]): Promise<void> {
     await this._awaitReady()
     const now = this._clock.now()
+    // Concurrent reports (two windows) can interleave; the persistent key check is
+    // authoritative, but de-duplicating the batch also keeps one report from
+    // enqueueing the same review twice.
+    const seen = new Set<string>()
+    const unique = reviews.filter((review) => {
+      if (seen.has(review.reviewId)) return false
+      seen.add(review.reviewId)
+      return true
+    })
     for (const trigger of this._config.triggers) {
       if (!trigger.enabled || trigger.source.type !== 'swarm-review') continue
       const state = this._stateFor(trigger.id)
       if (!state.baselineDone) {
         let processed = state.processed
-        for (const review of reviews) {
+        for (const review of unique) {
           processed = markStarted(processed, `swarm:${review.reviewId}`, now)
         }
         this._setTriggerState(trigger.id, {
           processed: prune(processed, now, PRUNE_OPTIONS),
           baselineDone: true,
         })
-        this._logger.info(
-          `trigger ${trigger.id}: swarm baseline recorded reviews=${reviews.length}`,
-        )
+        this._logger.info(`trigger ${trigger.id}: swarm baseline recorded reviews=${unique.length}`)
         continue
       }
-      for (const review of reviews) {
+      for (const review of unique) {
         const event = swarmReviewEvent(trigger.id, review, now)
         if (isProcessed(this._stateFor(trigger.id).processed, event.key)) continue
         await this._acceptEvent(trigger, event)
@@ -447,8 +497,25 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   // ---- main-internal wiring ------------------------------------------------
 
   registerWindowHost(windowId: number, host: ITriggerRunHost): void {
+    // A renderer reload re-registers on the same window id; its previous sessions
+    // are gone, so nobody will ever report their end. Fail them instead of leaking
+    // the slot (a fresh app-level window registration has no previous host).
+    const reloaded = this._hosts.has(windowId)
     this._hosts.set(windowId, host)
     this._logger.info(`window host registered id=${windowId}`)
+    if (reloaded) {
+      const message = localize(
+        'triggers.error.windowReloaded',
+        'The window running this trigger reloaded',
+      )
+      for (const entry of [...this._active.values()]) {
+        if (entry.windowId !== windowId) continue
+        this._logger.warn(
+          `run ${entry.runId}: failed trigger=${entry.triggerId} key=${entry.eventKey} (window reloaded)`,
+        )
+        this._failActiveRun(entry.runId, message)
+      }
+    }
     if (this._gateOpen) return
     if (this._firstHostAt === undefined) {
       this._firstHostAt = this._clock.now()
@@ -490,6 +557,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       this._clock.clearTimeout(this._gateTimer)
       this._gateTimer = undefined
     }
+    for (const run of this._active.values()) this._clearWatchdog(run)
     this._stateStore.dispose()
     super.dispose()
   }
@@ -548,6 +616,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (this._config.invalid.length > 0) {
       this._logger.warn(`triggers.json: ${this._config.invalid.length} invalid trigger entr(ies)`)
     }
+    for (const trigger of this._config.triggers) this._syncSourceFingerprint(trigger)
     for (const item of this._queue.setGlobalLimit(this._config.maxConcurrentRuns)) {
       this._beginQueuedRun(item)
     }
@@ -563,6 +632,36 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   private _findTrigger(triggerId: string): TriggerConfig | undefined {
     return this._config.triggers.find((trigger) => trigger.id === triggerId)
+  }
+
+  /**
+   * A poll / swarm baseline (and its dedupe keys) only makes sense for the exact
+   * source it was seeded from: changing `keyField` / command / interval must seed
+   * again, otherwise every new item would look "already seen".
+   */
+  private _syncSourceFingerprint(trigger: TriggerConfig): void {
+    const runtime = this._stateFor(trigger.id)
+    const next = sourceFingerprintOf(trigger.source)
+    if (runtime.sourceFingerprint === next) return
+    if (runtime.sourceFingerprint === undefined) {
+      // State written before the fingerprint existed: adopt it without discarding
+      // the dedupe keys the user already accumulated.
+      this._setTriggerState(trigger.id, { sourceFingerprint: next })
+      return
+    }
+    let processed = runtime.processed
+    for (const key of Object.keys(processed)) {
+      if (PREFETCHED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        processed = forget(processed, key)
+      }
+    }
+    const now = this._clock.now()
+    this._setTriggerState(trigger.id, {
+      processed: prune(processed, now, PRUNE_OPTIONS),
+      baselineDone: false,
+      sourceFingerprint: next,
+    })
+    this._logger.info(`trigger ${trigger.id}: source changed; baseline and dedupe keys reset`)
   }
 
   private _requireTrigger(triggerId: string): TriggerConfig {
@@ -583,9 +682,19 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   // ---- scheduling ---------------------------------------------------------
 
-  private _isRunnable(trigger: TriggerConfig): boolean {
+  /**
+   * `ignoreBackoff` is for callers that must still advance their own cadence while
+   * the trigger is cooling down (schedule skip accounting, poll re-arming and a
+   * user-initiated manual run).
+   */
+  private _isRunnable(trigger: TriggerConfig, options: { ignoreBackoff?: boolean } = {}): boolean {
     if (!trigger.enabled || this._state.pausedAll) return false
-    if (this._stateFor(trigger.id).paused) return false
+    const state = this._stateFor(trigger.id)
+    if (state.paused) return false
+    if (!options.ignoreBackoff) {
+      const backoffUntil = state.backoffUntil
+      if (backoffUntil !== undefined && this._clock.now() < backoffUntil) return false
+    }
     return !this._needsConfirmation(trigger)
   }
 
@@ -593,10 +702,13 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._pruneTiming()
     if (!this._gateOpen || this._disposed) return
     for (const trigger of this._config.triggers) {
-      if (trigger.source.type !== 'poll' || !this._isRunnable(trigger)) continue
+      if (trigger.source.type !== 'poll' || !this._isRunnable(trigger, { ignoreBackoff: true }))
+        continue
       if (this._nextPoll.has(trigger.id)) continue
-      // The first poll right after the startup grace seeds the baseline.
-      this._nextPoll.set(trigger.id, now)
+      // The first poll right after the startup grace seeds the baseline; a trigger
+      // already cooling down waits for the end of its backoff.
+      const backoffUntil = this._stateFor(trigger.id).backoffUntil ?? now
+      this._nextPoll.set(trigger.id, Math.max(now, backoffUntil))
     }
     this._processDueSchedules(now)
     this._rescheduleWake()
@@ -608,14 +720,20 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       if (
         trigger === undefined ||
         trigger.source.type !== 'schedule' ||
-        !this._isRunnable(trigger)
+        // Backoff must not delete the anchor: the wake-up still has to happen so
+        // the slot can be counted as skipped and the next one armed.
+        !this._isRunnable(trigger, { ignoreBackoff: true })
       ) {
         this._armedSchedule.delete(triggerId)
       }
     }
     for (const triggerId of [...this._nextPoll.keys()]) {
       const trigger = this._findTrigger(triggerId)
-      if (trigger === undefined || trigger.source.type !== 'poll' || !this._isRunnable(trigger)) {
+      if (
+        trigger === undefined ||
+        trigger.source.type !== 'poll' ||
+        !this._isRunnable(trigger, { ignoreBackoff: true })
+      ) {
         this._nextPoll.delete(triggerId)
       }
     }
@@ -623,9 +741,18 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   private _processDueSchedules(now: number): void {
     for (const trigger of this._config.triggers) {
-      if (trigger.source.type !== 'schedule' || !this._isRunnable(trigger)) continue
+      if (trigger.source.type !== 'schedule') continue
+      // Timing is evaluated even in backoff so the slot is consumed ("skipped")
+      // instead of being replayed the moment the backoff ends.
+      if (!this._isRunnable(trigger, { ignoreBackoff: true })) continue
       const armed = this._armedSchedule.get(trigger.id)
       if (armed !== undefined && armed > now) continue
+      const backoffUntil = this._stateFor(trigger.id).backoffUntil
+      if (backoffUntil !== undefined && now < backoffUntil) {
+        this._logger.info(
+          `trigger ${trigger.id}: schedule slot skipped (backoff until ${new Date(backoffUntil).toISOString()})`,
+        )
+      }
       this._evaluateSchedule(trigger, trigger.source, now)
     }
   }
@@ -684,9 +811,18 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   private _processDuePolls(now: number): void {
     for (const trigger of this._config.triggers) {
-      if (trigger.source.type !== 'poll' || !this._isRunnable(trigger)) continue
+      if (trigger.source.type !== 'poll') continue
+      if (!this._isRunnable(trigger, { ignoreBackoff: true })) continue
       const due = this._nextPoll.get(trigger.id)
       if (due === undefined || due > now) continue
+      const backoffUntil = this._stateFor(trigger.id).backoffUntil
+      if (backoffUntil !== undefined && now < backoffUntil) {
+        // Do not fetch during backoff and do not leave the anchor in the past
+        // (that would spin the wake timer); resume at the end of the backoff.
+        this._nextPoll.set(trigger.id, backoffUntil)
+        this._logger.info(`trigger ${trigger.id}: poll skipped (backoff)`)
+        continue
+      }
       void this._runPoll(trigger)
     }
   }
@@ -706,14 +842,14 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     })
     const now = this._clock.now()
     const current = this._findTrigger(trigger.id)
-    if (current === undefined || !this._isRunnable(current)) {
+    if (current === undefined || !this._isRunnable(current, { ignoreBackoff: true })) {
       this._logger.info(`trigger ${trigger.id}: poll result ignored (trigger no longer runnable)`)
       return
     }
     if (!result.ok) {
       this._logger.warn(`trigger ${trigger.id}: poll failed: ${result.error}`)
       this._recordFailure(current, result.error, now)
-      if (this._isRunnable(current)) {
+      if (this._isRunnable(current, { ignoreBackoff: true })) {
         const backoffUntil = this._stateFor(trigger.id).backoffUntil ?? now
         this._nextPoll.set(trigger.id, Math.max(now + intervalMs, backoffUntil))
       }
@@ -778,7 +914,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   // ---- events → runs ------------------------------------------------------
 
-  private async _acceptEvent(trigger: TriggerConfig, event: TriggerEvent): Promise<boolean> {
+  private async _acceptEvent(
+    trigger: TriggerConfig,
+    event: TriggerEvent,
+    options: { ignoreBackoff?: boolean } = {},
+  ): Promise<boolean> {
     if (this._disposed) return false
     const state = this._stateFor(trigger.id)
     if (this._state.pausedAll || state.paused) {
@@ -787,6 +927,13 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
     if (this._needsConfirmation(trigger)) {
       this._logger.info(`trigger ${trigger.id}: event ${event.key} dropped (needs confirmation)`)
+      return false
+    }
+    const backoffUntil = state.backoffUntil
+    if (!options.ignoreBackoff && backoffUntil !== undefined && this._clock.now() < backoffUntil) {
+      // Swarm events in particular must stay unconsumed: no key is marked, so the
+      // next report after the backoff ends triggers them normally.
+      this._logger.info(`trigger ${trigger.id}: event ${event.key} dropped (backoff)`)
       return false
     }
     if (isProcessed(state.processed, event.key)) {
@@ -800,12 +947,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       eventKey: event.key,
       firedAt: event.firedAt,
     }
+    // Reserve the key synchronously, before the await below: two concurrent
+    // reports must not both pass the dedupe check.
+    this._markProcessed(trigger.id, event.key, 'queued')
     try {
       await writeJsonAtomic(this._pendingPayloadPath(pending.runId), event)
     } catch (err) {
       this._logger.warn(
         `trigger ${trigger.id}: cannot stage event ${event.key}: ${describeError(err)}`,
       )
+      this._forgetKey(trigger.id, event.key)
       this._recordFailure(
         trigger,
         localize('triggers.error.pendingWriteFailed', 'Could not stage the trigger event on disk'),
@@ -813,7 +964,6 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       return false
     }
 
-    this._markProcessed(trigger.id, event.key, 'queued')
     this._state = {
       ...this._state,
       pending: [...this._state.pending, toPendingRecord(pending)],
@@ -856,9 +1006,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   private async _startRun(pending: PendingRun): Promise<void> {
     const trigger = this._findTrigger(pending.triggerId)
-    if (trigger === undefined) {
-      this._logger.warn(
-        `run ${pending.runId}: trigger ${pending.triggerId} is no longer configured`,
+    // Pause / disable / confirmation may have landed while the run sat in the queue:
+    // those are not failures, so release the slot and forget the key quietly.
+    const manual = pending.eventKey.startsWith('manual:')
+    if (trigger === undefined || !this._isRunnable(trigger, { ignoreBackoff: manual })) {
+      this._logger.info(
+        `run ${pending.runId}: not started trigger=${pending.triggerId} key=${pending.eventKey} (no longer runnable)`,
       )
       this._active.delete(pending.runId)
       this._releaseSlot(pending.runId)
@@ -876,18 +1029,19 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           ),
         )
       }
-      const runDir = await this._createRunDir(pending.runId)
-      const request = this._buildRunRequest(trigger, pending, event, runDir)
       const { host, windowId } = await this._resolveHost(trigger)
       const beforeStart = this._active.get(pending.runId)
       if (beforeStart === undefined) return
       beforeStart.windowId = windowId
+      // Trust is checked before anything is written to disk for this run.
       const trusted = await host.isWorkspaceTrusted()
       if (!trusted) {
         throw new Error(
           localize('triggers.error.workspaceUntrusted', 'The workspace is not trusted'),
         )
       }
+      const runDir = await this._createRunDir(pending.runId)
+      const request = this._buildRunRequest(trigger, pending, event, runDir)
       const result = await this._startHostRun(host, request, pending.runId)
       if (result === undefined) {
         throw new Error(
@@ -907,6 +1061,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       if (active !== undefined) {
         active.phase = 'running'
         active.sessionId = result.sessionId
+        this._armWatchdog(active, trigger)
       }
       this._logger.info(
         `run ${pending.runId}: started trigger=${trigger.id} key=${pending.eventKey} session=${result.sessionId}`,
@@ -924,6 +1079,52 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       )
       this._failActiveRun(pending.runId, message)
     }
+  }
+
+  /**
+   * A renderer that dies without closing its window (reload loop, OOM without a
+   * clean unload) never reports its run end. Past the configured budget plus a
+   * grace period the run is failed and the host is asked to cancel.
+   */
+  private _armWatchdog(run: ActiveRun, trigger: TriggerConfig): void {
+    this._clearWatchdog(run)
+    const budgetMs =
+      (trigger.session.budget.timeoutMin + trigger.session.budget.approvalTimeoutMin) * 60_000
+    const deadline = this._clock.now() + Math.max(0, budgetMs) + WATCHDOG_GRACE_MS
+    run.watchdogTimer = this._clock.setTimeout(
+      () => {
+        run.watchdogTimer = undefined
+        this._onWatchdog(run.runId)
+      },
+      Math.max(0, deadline - this._clock.now()),
+    )
+  }
+
+  private _clearWatchdog(run: ActiveRun): void {
+    if (run.watchdogTimer !== undefined) {
+      this._clock.clearTimeout(run.watchdogTimer)
+      run.watchdogTimer = undefined
+    }
+  }
+
+  private _onWatchdog(runId: string): void {
+    const entry = this._active.get(runId)
+    if (entry === undefined) return
+    const trigger = this._findTrigger(entry.triggerId)
+    const budget = trigger?.session.budget ?? TRIGGER_DEFAULTS.budget
+    this._logger.warn(
+      `run ${runId}: no end report after ${budget.timeoutMin + budget.approvalTimeoutMin}min budget + ${WATCHDOG_GRACE_MS}ms grace trigger=${entry.triggerId} key=${entry.eventKey}`,
+    )
+    const host = entry.windowId === undefined ? undefined : this._hosts.get(entry.windowId)
+    if (host !== undefined) {
+      void host.cancelRun(runId).catch((err: unknown) => {
+        this._logger.warn(`run ${runId}: watchdog cancel failed: ${describeError(err)}`)
+      })
+    }
+    this._failActiveRun(
+      runId,
+      localize('triggers.error.runWatchdog', 'The automated run did not report its end in time'),
+    )
   }
 
   /**
@@ -1052,7 +1253,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     })
     const fingerprint = triggerFingerprint(trigger)
     const state = this._stateFor(trigger.id)
-    const elevated = isElevatedMode(session.mode) && state.elevatedConfirmed === fingerprint
+    const elevated = isElevatedModeId(session.mode) && state.elevatedConfirmed === fingerprint
     const approve =
       trigger.allowedActions.includes('swarm.approve') && state.approveConfirmed === fingerprint
     return {
@@ -1074,6 +1275,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       allowedActions: trigger.allowedActions,
       approveConfirmed: approve,
       payload: event.payload,
+      sourceType: trigger.source.type,
     }
   }
 
@@ -1115,7 +1317,13 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private async _createRunDir(runId: string): Promise<string> {
     const runDir = join(this._runsDir, runId)
     await mkdir(runDir, { recursive: true })
-    await pruneRunDirectories(this._runsDir, this._maxRunDirectories, this._logger)
+    // Retention must never delete a directory whose run is still alive.
+    const protectedRunIds = new Set<string>([
+      ...this._active.keys(),
+      ...this._queued.keys(),
+      ...this._state.pending.map((record) => record.runId),
+    ])
+    await pruneRunDirectories(this._runsDir, this._maxRunDirectories, this._logger, protectedRunIds)
     return runDir
   }
 
@@ -1130,6 +1338,18 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private _beginQueuedRun(item: PendingRun): void {
     this._queued.delete(item.runId)
     if (this._active.has(item.runId)) return
+    const trigger = this._findTrigger(item.triggerId)
+    const manual = item.eventKey.startsWith('manual:')
+    if (trigger === undefined || !this._isRunnable(trigger, { ignoreBackoff: manual })) {
+      // Paused / disabled while queued: not a failure, just drop the reservation.
+      this._logger.info(
+        `run ${item.runId}: dropped trigger=${item.triggerId} key=${item.eventKey} (no longer runnable)`,
+      )
+      this._forgetKey(item.triggerId, item.eventKey, item.runId)
+      this._releaseSlot(item.runId)
+      this._fireChange()
+      return
+    }
     this._active.set(item.runId, { ...item, phase: 'starting' })
     void this._startRun(item)
   }
@@ -1148,6 +1368,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private _failActiveRun(runId: string, message: string): void {
     const entry = this._active.get(runId)
     if (entry === undefined) return
+    this._clearWatchdog(entry)
     this._active.delete(runId)
     this._releaseSlot(runId)
     this._forgetKey(entry.triggerId, entry.eventKey, runId)
@@ -1214,49 +1435,59 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   }
 
   private async _replayPendingRuns(): Promise<void> {
-    for (const record of [...this._state.pending]) {
-      const entry = this._stateFor(record.triggerId).processed[record.eventKey]
-      if (entry === undefined || entry.status !== 'queued') {
-        // Already started before the restart: never replay.
-        this._removePendingRecord(record.runId)
-        continue
+    if (!this._gateOpen || this._disposed || this._replaying) return
+    this._replaying = true
+    try {
+      for (const record of [...this._state.pending]) {
+        if (this._queued.has(record.runId) || this._active.has(record.runId)) continue
+        const entry = this._stateFor(record.triggerId).processed[record.eventKey]
+        if (entry === undefined || entry.status !== 'queued') {
+          // Already started before the restart: never replay.
+          this._removePendingRecord(record.runId)
+          continue
+        }
+        const trigger = this._findTrigger(record.triggerId)
+        const manual = record.eventKey.startsWith('manual:')
+        if (trigger === undefined || !this._isRunnable(trigger, { ignoreBackoff: manual })) {
+          // Keep the record untouched: a later resume / confirmation / backoff
+          // expiry replays it.
+          this._logger.info(
+            `pending run ${record.runId}: kept for trigger ${record.triggerId} (not runnable)`,
+          )
+          continue
+        }
+        const pending: PendingRun = {
+          runId: record.runId,
+          triggerId: record.triggerId,
+          eventKey: record.eventKey,
+          firedAt: record.firedAt,
+        }
+        if ((await this._readPendingEvent(pending)) === undefined) {
+          this._logger.warn(`pending run ${record.runId}: payload missing, forgetting the event`)
+          this._forgetKey(record.triggerId, record.eventKey, record.runId)
+          continue
+        }
+        const result = this._queue.enqueue(pending, this._queueOptions(trigger))
+        switch (result.status) {
+          case 'started':
+            this._active.set(pending.runId, { ...pending, phase: 'starting' })
+            void this._startRun(pending)
+            break
+          case 'queued':
+            this._queued.set(pending.runId, pending)
+            break
+          case 'dropped':
+            this._dropPending(pending)
+            break
+          case 'dropped-oldest':
+            this._dropPending(result.dropped)
+            this._queued.set(pending.runId, pending)
+            break
+        }
+        this._logger.info(`pending run ${record.runId}: re-enqueued trigger=${record.triggerId}`)
       }
-      const trigger = this._findTrigger(record.triggerId)
-      if (trigger === undefined || !trigger.enabled) {
-        this._logger.info(
-          `pending run ${record.runId}: kept for trigger ${record.triggerId} (unavailable)`,
-        )
-        continue
-      }
-      const pending: PendingRun = {
-        runId: record.runId,
-        triggerId: record.triggerId,
-        eventKey: record.eventKey,
-        firedAt: record.firedAt,
-      }
-      if ((await this._readPendingEvent(pending)) === undefined) {
-        this._logger.warn(`pending run ${record.runId}: payload missing, forgetting the event`)
-        this._forgetKey(record.triggerId, record.eventKey, record.runId)
-        continue
-      }
-      const result = this._queue.enqueue(pending, this._queueOptions(trigger))
-      switch (result.status) {
-        case 'started':
-          this._active.set(pending.runId, { ...pending, phase: 'starting' })
-          void this._startRun(pending)
-          break
-        case 'queued':
-          this._queued.set(pending.runId, pending)
-          break
-        case 'dropped':
-          this._dropPending(pending)
-          break
-        case 'dropped-oldest':
-          this._dropPending(result.dropped)
-          this._queued.set(pending.runId, pending)
-          break
-      }
-      this._logger.info(`pending run ${record.runId}: re-enqueued trigger=${record.triggerId}`)
+    } finally {
+      this._replaying = false
     }
   }
 
@@ -1303,7 +1534,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   // ---- summaries ----------------------------------------------------------
 
   private _needsConfirmation(trigger: TriggerConfig): boolean {
-    if (!isElevatedMode(trigger.session.mode)) return false
+    if (!isElevatedModeId(trigger.session.mode)) return false
     return this._stateFor(trigger.id).elevatedConfirmed !== triggerFingerprint(trigger)
   }
 
@@ -1313,7 +1544,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       const state = this._stateFor(trigger.id)
       const stats = this._queue.stats(trigger.id)
       const fingerprint = triggerFingerprint(trigger)
-      const elevatedMode = isElevatedMode(trigger.session.mode)
+      const elevatedMode = isElevatedModeId(trigger.session.mode)
       const elevatedModeConfirmed = elevatedMode && state.elevatedConfirmed === fingerprint
       const approveAction = trigger.allowedActions.includes('swarm.approve')
       const approveConfirmed = approveAction && state.approveConfirmed === fingerprint
@@ -1405,11 +1636,31 @@ function formatActions(end: TriggerRunEnd): string {
   return end.actions.map((action) => `${action.type}@${action.target}=${action.result}`).join(',')
 }
 
+/** Audit details are single-line; action reasons are validation/error text only. */
+function sanitizeAuditReason(reason: string): string {
+  return reason.replace(/\s+/g, ' ').trim().slice(0, 300)
+}
+
+/** Normalized source identity; changing it invalidates a poll / swarm baseline. */
+function sourceFingerprintOf(source: TriggerSourceConfig): string {
+  switch (source.type) {
+    case 'poll':
+      return `poll|${source.keyField}|${source.fetch.command}|${source.intervalSec}`
+    case 'swarm-review':
+      return 'swarm-review'
+    case 'schedule':
+      return `schedule|${source.cron ?? ''}|${source.everyMin ?? ''}`
+    case 'manual':
+      return 'manual'
+  }
+}
+
 /** Keeps the newest `keep` run directories (by mtime) and deletes the rest. */
 export async function pruneRunDirectories(
   root: string,
   keep: number,
   logger?: ILogger,
+  protectedRunIds: ReadonlySet<string> = new Set<string>(),
 ): Promise<void> {
   let names: string[]
   try {
@@ -1431,7 +1682,7 @@ export async function pruneRunDirectories(
   const ordered = stats
     .filter((entry): entry is { name: string; at: number } => entry !== undefined)
     .sort((left, right) => right.at - left.at || right.name.localeCompare(left.name))
-  const doomed = ordered.slice(keep)
+  const doomed = ordered.filter((entry) => !protectedRunIds.has(entry.name)).slice(keep)
   for (const entry of doomed) {
     try {
       await rm(join(root, entry.name), { recursive: true, force: true })

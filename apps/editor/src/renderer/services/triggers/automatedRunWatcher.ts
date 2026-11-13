@@ -47,6 +47,8 @@ export interface AutomatedRunWatcherOptions {
   readonly readResultFile: (runDir: string) => Promise<string | undefined>
   readonly resolveVerdict?: AutomatedVerdictResolver
   readonly onRunEnd: (end: TriggerRunEnd, resolution: AutomatedVerdictResolution) => void
+  /** Warns once when the agent reports cost in a currency the budget cannot compare. */
+  readonly logger?: { warn(message: string): void }
   /** Injected for tests. */
   readonly now?: () => number
   readonly setTimeout?: (handler: () => void, ms: number) => AutomatedTimerHandle
@@ -59,6 +61,7 @@ export class AutomatedRunWatcher {
   private readonly _readResultFile: (runDir: string) => Promise<string | undefined>
   private readonly _resolveVerdict: AutomatedVerdictResolver
   private readonly _onRunEnd: AutomatedRunWatcherOptions['onRunEnd']
+  private readonly _logger: { warn(message: string): void } | undefined
   private readonly _now: () => number
   private readonly _setTimeout: (handler: () => void, ms: number) => AutomatedTimerHandle
   private readonly _clearTimeout: (handle: AutomatedTimerHandle) => void
@@ -72,6 +75,7 @@ export class AutomatedRunWatcher {
   private _budgetTimer: AutomatedTimerHandle | undefined
   private _approvalTimer: AutomatedTimerHandle | undefined
   private _cardOpen = false
+  private _warnedNonUsdCurrency = false
 
   constructor(options: AutomatedRunWatcherOptions) {
     this._request = options.request
@@ -79,6 +83,7 @@ export class AutomatedRunWatcher {
     this._readResultFile = options.readResultFile
     this._resolveVerdict = options.resolveVerdict ?? defaultAutomatedVerdictResolver
     this._onRunEnd = options.onRunEnd
+    this._logger = options.logger
     this._now = options.now ?? Date.now
     this._setTimeout =
       options.setTimeout ?? ((handler, ms) => setTimeout(handler, ms) as AutomatedTimerHandle)
@@ -97,6 +102,16 @@ export class AutomatedRunWatcher {
     if (this._finished) return
     this._turnSettled = true
     this._evaluate()
+  }
+
+  /**
+   * The prompt RPC rejected: the turn did not run to completion. Reported as
+   * `failed` with the error, unless a terminal outcome already won the race.
+   */
+  notifyTurnFailed(error: string): void {
+    if (this._finished) return
+    this._turnSettled = true
+    this._finish('failed', error)
   }
 
   /** Explicit `cancelRun`: one terminal outcome, then cancel the turn. */
@@ -131,11 +146,23 @@ export class AutomatedRunWatcher {
     this._cardOpen = cardOpen
 
     const maxCostUsd = this._request.budget.maxCostUsd
-    const spent = usage?.cost?.amount
-    if (spent !== undefined && Number.isFinite(spent) && spent >= maxCostUsd) {
-      this._finish('budget-exceeded')
-      void this._session.cancelTurn().catch(() => undefined)
-      return
+    const cost = usage?.cost
+    if (cost !== undefined && Number.isFinite(cost.amount)) {
+      // The budget is denominated in USD; comparing another currency's amount
+      // would trip the ceiling at an arbitrary exchange rate. Timeouts still apply.
+      const currency = cost.currency?.trim()
+      if (currency === undefined || currency.length === 0 || currency.toLowerCase() === 'usd') {
+        if (cost.amount >= maxCostUsd) {
+          this._finish('budget-exceeded')
+          void this._session.cancelTurn().catch(() => undefined)
+          return
+        }
+      } else if (!this._warnedNonUsdCurrency) {
+        this._warnedNonUsdCurrency = true
+        this._logger?.warn(
+          `cost ceiling skipped: agent reports ${currency}, budget is in USD (cost will not stop this run)`,
+        )
+      }
     }
 
     if (status === 'errored') {
@@ -198,14 +225,14 @@ export class AutomatedRunWatcher {
     }, this._request.budget.approvalTimeoutMin * 60_000)
   }
 
-  private _finish(outcome: TriggerRunOutcome): void {
+  private _finish(outcome: TriggerRunOutcome, error?: string): void {
     if (this._finished) return
     this._finished = true
     this._disposeTimers()
-    void this._finalize(outcome)
+    void this._finalize(outcome, error)
   }
 
-  private async _finalize(outcome: TriggerRunOutcome): Promise<void> {
+  private async _finalize(outcome: TriggerRunOutcome, error?: string): Promise<void> {
     let raw: string | undefined
     try {
       raw = await this._readResultFile(this._request.runDir)
@@ -224,6 +251,7 @@ export class AutomatedRunWatcher {
       ...(resolution.verdict !== undefined ? { verdict: resolution.verdict } : {}),
       ...(resolution.summary !== undefined ? { summary: resolution.summary } : {}),
       actions: resolution.actions,
+      ...(error !== undefined ? { error } : {}),
     }
     this._subscription?.dispose()
     this._subscription = undefined

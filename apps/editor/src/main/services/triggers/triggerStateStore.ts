@@ -21,6 +21,8 @@ export interface TriggerRuntimeState {
   readonly lastError?: string
   /** poll / swarm-review: the first observed result only seeds the dedupe keys. */
   readonly baselineDone: boolean
+  /** Normalized fingerprint of the trigger `source`; a change resets the baseline. */
+  readonly sourceFingerprint?: string
   /** Config fingerprint confirmed for a bypass-class mode; a config edit invalidates it. */
   readonly elevatedConfirmed?: string
   /** Config fingerprint confirmed for automatic `swarm.approve`. */
@@ -86,7 +88,7 @@ export class TriggerStateStore {
   async load(): Promise<TriggerStateFile> {
     try {
       const text = await readFile(this._file, 'utf8')
-      this._state = normalizeTriggerStateFile(JSON.parse(text))
+      this._state = sanitizeLoadedState(normalizeTriggerStateFile(JSON.parse(text)), this._logger)
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code
       if (code !== 'ENOENT') {
@@ -181,6 +183,7 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
   const lastError = optionalString(raw['lastError'])
   const elevatedConfirmed = optionalString(raw['elevatedConfirmed'])
   const approveConfirmed = optionalString(raw['approveConfirmed'])
+  const sourceFingerprint = optionalString(raw['sourceFingerprint'])
   return {
     processed: normalizeProcessed(raw['processed']),
     paused: raw['paused'] === true,
@@ -191,9 +194,26 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
     ...(lastRunAt === undefined ? {} : { lastRunAt }),
     ...(lastError === undefined ? {} : { lastError }),
     baselineDone: raw['baselineDone'] === true,
+    ...(sourceFingerprint === undefined ? {} : { sourceFingerprint }),
     ...(elevatedConfirmed === undefined ? {} : { elevatedConfirmed }),
     ...(approveConfirmed === undefined ? {} : { approveConfirmed }),
   }
+}
+
+const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Pending run ids become filesystem paths (`runs/<runId>`, `pending/<runId>.json`),
+ * so a hand-edited or corrupted state file must not smuggle in separators / `..`.
+ */
+function sanitizeLoadedState(state: TriggerStateFile, logger: ILogger): TriggerStateFile {
+  const pending = state.pending.filter((record) => {
+    if (RUN_ID_PATTERN.test(record.runId)) return true
+    logger.warn(`state.json: dropped a pending run with an invalid runId (${record.triggerId})`)
+    return false
+  })
+  if (pending.length === state.pending.length) return state
+  return { ...state, pending }
 }
 
 function normalizePending(raw: unknown): PendingRunRecord[] {

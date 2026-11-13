@@ -48,6 +48,8 @@ import type {
 
 /** Provenance of a session started by an agent trigger, plus its verdict result. */
 export type AcpSessionAutomation = AutomationOrigin & {
+  /** Permission scope of the run; restored on resume so runDir writes stay auto-approved. */
+  readonly runDir?: string
   readonly verdict?: TriggerVerdictKind
   readonly summary?: string
   readonly outcome?: TriggerRunOutcome
@@ -1236,6 +1238,7 @@ export class AcpSessionHistoryService
       triggerName: cur.automation.triggerName,
       eventKey: cur.automation.eventKey,
       runId: cur.automation.runId,
+      ...(cur.automation.runDir !== undefined ? { runDir: cur.automation.runDir } : {}),
       ...(result.verdict !== undefined ? { verdict: result.verdict } : {}),
       ...(result.summary !== undefined ? { summary: result.summary } : {}),
       ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
@@ -1706,6 +1709,7 @@ function isValidAutomation(v: unknown): v is AcpSessionAutomation {
     typeof o['triggerName'] === 'string' &&
     typeof o['eventKey'] === 'string' &&
     typeof o['runId'] === 'string' &&
+    (o['runDir'] === undefined || typeof o['runDir'] === 'string') &&
     (o['verdict'] === undefined ||
       (typeof o['verdict'] === 'string' && TRIGGER_VERDICT_KINDS.has(o['verdict']))) &&
     (o['summary'] === undefined || typeof o['summary'] === 'string') &&
@@ -1720,6 +1724,7 @@ function sameAutomation(a: AcpSessionAutomation, b: AcpSessionAutomation): boole
     a.triggerName === b.triggerName &&
     a.eventKey === b.eventKey &&
     a.runId === b.runId &&
+    a.runDir === b.runDir &&
     a.verdict === b.verdict &&
     a.summary === b.summary &&
     a.outcome === b.outcome

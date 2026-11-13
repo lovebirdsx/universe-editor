@@ -7,30 +7,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { RequestPermissionRequest } from '@agentclientprotocol/sdk'
-import { ELEVATED_MODE_IDS } from '../../../shared/triggers/types.js'
 
 /** Structural subset of `IUriIdentityService`; path identity is never compared by hand. */
 export interface AutomatedPathIdentity {
   relativePathUnder(parent: string, child: string): string | null
 }
 
-/**
- * Only file writes are ever approved on the user's behalf, and only when the
- * request names its targets. Reads omit locations (the fs gateway enforces its
- * own sandbox), and location-less writes could touch arbitrary paths.
- */
-const AUTOMATED_WRITE_KINDS: ReadonlySet<string> = new Set(['edit', 'delete', 'move'])
-
-/** True for the bypass-class mode ids a trigger may use only after confirmation. */
-export function isElevatedModeId(mode: string | undefined): boolean {
-  return mode !== undefined && ELEVATED_MODE_IDS.includes(mode)
+/** True when any path segment is `..` — a traversal attempt, not a runDir write. */
+function hasParentSegment(path: string): boolean {
+  return path.split(/[\\/]+/).some((segment) => segment === '..')
 }
 
 /**
- * The option an automated session may select without asking: a one-shot
- * `allow_once` when every location of the request lies inside `runDir`. Never
- * `allow_always` — that would persist a rule onto the user's real agent
- * defaults and affect every later (manual) session.
+ * Only file writes are ever approved on the user's behalf, only for `edit`, and
+ * only when the request names its targets. Reads omit locations (the fs gateway
+ * enforces its own sandbox), location-less writes could touch arbitrary paths,
+ * and `delete` / `move` are destructive regardless of where they point.
  */
 export function decideAutomatedPermission(
   params: RequestPermissionRequest,
@@ -38,10 +30,10 @@ export function decideAutomatedPermission(
   pathIdentity: AutomatedPathIdentity,
 ): string | undefined {
   if (runDir === undefined) return undefined
-  const kind = params.toolCall.kind
-  if (kind == null || !AUTOMATED_WRITE_KINDS.has(kind)) return undefined
+  if (params.toolCall.kind !== 'edit') return undefined
   const locations = params.toolCall.locations ?? []
   if (locations.length === 0) return undefined
+  if (locations.some((location) => hasParentSegment(location.path))) return undefined
   const allInsideRunDir = locations.every(
     (location) => pathIdentity.relativePathUnder(runDir, location.path) !== null,
   )

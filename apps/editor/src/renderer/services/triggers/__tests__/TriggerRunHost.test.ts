@@ -35,6 +35,7 @@ function makeRequest(runId = 'run-1'): TriggerRunRequest {
     allowedActions: [],
     approveConfirmed: false,
     payload: { reviewId: '1' },
+    sourceType: 'swarm-review',
   }
 }
 

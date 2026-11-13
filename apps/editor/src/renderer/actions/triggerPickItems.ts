@@ -90,7 +90,7 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
       detail.push(
         localize(
           'triggers.item.elevatedUnconfirmed',
-          '⚠ High-privilege mode is configured but not confirmed; runs use the conservative default until you confirm it.',
+          '⚠ High-privilege mode is configured but not confirmed; this trigger will not run until you confirm it.',
         ),
       )
     }

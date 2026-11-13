@@ -9159,3 +9159,263 @@ describe('Claude plan permission policy (agentSettings.claude.planPermissionPoli
     })
   })
 })
+
+describe('AcpSessionService — automated session permissions', () => {
+  const RUN_DIR = '/userData/triggers/runs/run-1'
+  const ORIGIN = {
+    triggerId: 'swarm-triage',
+    triggerName: 'Swarm 分诊',
+    eventKey: 'swarm:42',
+    runId: 'run-1',
+  }
+
+  function modeConfig(currentValue: 'plan' | 'default'): readonly SessionConfigOption[] {
+    return [
+      {
+        id: 'mode',
+        name: 'Mode',
+        category: 'mode',
+        type: 'select',
+        currentValue,
+        options: [
+          { value: 'default', name: 'Default' },
+          { value: 'plan', name: 'Plan' },
+        ],
+      } as unknown as SessionConfigOption,
+    ]
+  }
+
+  const options: RequestPermissionRequest['options'] = [
+    { optionId: 'once', name: 'Allow once', kind: 'allow_once' },
+    { optionId: 'always', name: 'Always', kind: 'allow_always' },
+    { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+  ]
+
+  const planOptions: RequestPermissionRequest['options'] = [
+    { optionId: 'exit-plan-auto', name: 'Yes, and use auto mode', kind: 'allow_always' },
+    { optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' },
+    { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' },
+  ]
+
+  const services: AcpSessionService[] = []
+  afterEach(() => {
+    for (const service of services.splice(0)) service.dispose()
+  })
+
+  function makeHarness(stubOptions: StubAgentOptions = {}) {
+    const client = new FakeAcpClientService({ stubOptions })
+    const notifications = new StubNotificationService()
+    const permission = new StubPermissionHandler()
+    const config = new ConfigurationService()
+    const telemetry = new NoopTelemetryService()
+    const history = makeHistory()
+    const agentDefaults = makeAgentDefaults()
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      permission,
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      agentDefaults,
+      new StubConfigOptionsCache(),
+      FAKE_URI_IDENTITY,
+      new AcpAuthGuidanceService(notifications, { executeCommand: async () => undefined } as never),
+      stubAcpCodexAutoReviewGuard(),
+      new AcpSessionFactory(
+        telemetry,
+        history,
+        agentDefaults,
+        new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
+        makeCompactionStats(),
+      ),
+      new StubFileService(),
+      new StubExtensionMcpServersService(),
+      new StubMcpServerEnablementService(),
+      new StubAgentMcpConfigService(),
+      stubWindowsService(),
+      stubEnvSnapshotService(),
+      stubAcpModelCandidateService(),
+      stubSubProjectService(),
+      stubLastSessionCwdServiceForTest(),
+    )
+    services.push(svc)
+    return { svc, client, permission, config }
+  }
+
+  async function connectAutomated(svc: AcpSessionService): Promise<IAcpSession> {
+    const session = await svc.createSession('claude-code', {
+      automation: ORIGIN,
+      automationRunDir: RUN_DIR,
+    })
+    await session.whenConnected()
+    return session
+  }
+
+  async function connectManual(svc: AcpSessionService): Promise<IAcpSession> {
+    const session = await svc.createSession('claude-code')
+    await session.whenConnected()
+    return session
+  }
+
+  function permissionRequest(
+    session: IAcpSession,
+    kind: RequestPermissionRequest['toolCall']['kind'] = 'execute',
+    locations: readonly { path: string }[] = [],
+    requestOptions: RequestPermissionRequest['options'] = options,
+  ): RequestPermissionRequest {
+    return {
+      sessionId: session.id,
+      toolCall: {
+        toolCallId: 'tc-1',
+        title: 'Do something',
+        kind,
+        ...(locations.length > 0 ? { locations } : {}),
+      },
+      options: requestOptions,
+    } as RequestPermissionRequest
+  }
+
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+  /** Asserts the request produced a human card, then dismisses it. */
+  async function expectCard(
+    svc: AcpSessionService,
+    session: IAcpSession,
+    params: RequestPermissionRequest,
+  ): Promise<AcpPendingPermission> {
+    const promise = svc.onRequestPermission(params)
+    await tick()
+    const pending = session.pendingPermission.get()
+    expect(pending).toBeDefined()
+    pending!.cancel()
+    await expect(promise).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
+    return pending!
+  }
+
+  it('does not auto-approve a configured kind and hides allow_always', async () => {
+    const h = makeHarness()
+    h.permission.autoApproveResult = {
+      outcome: { outcome: 'selected', optionId: 'always' },
+    }
+    const session = await connectAutomated(h.svc)
+
+    const pending = await expectCard(h.svc, session, permissionRequest(session))
+
+    expect(pending.options.map((option) => option.optionId)).toEqual(['once', 'deny'])
+    expect(h.permission.persisted).toEqual([])
+  })
+
+  it('still shows the card for a Claude plan session under planPermissionPolicy=skip', async () => {
+    const h = makeHarness({ newSessionConfigOptions: modeConfig('plan') })
+    h.config.update(PLAN_PERMISSION_POLICY_KEY, 'skip', ConfigurationTarget.User)
+    const session = await connectAutomated(h.svc)
+
+    await expectCard(
+      h.svc,
+      session,
+      permissionRequest(
+        session,
+        'execute',
+        [],
+        [
+          { optionId: 'allow-once', name: 'Yes', kind: 'allow_once' },
+          { optionId: 'reject', name: 'No', kind: 'reject_once' },
+        ],
+      ),
+    )
+    expect(h.permission.persisted).toEqual([])
+  })
+
+  it('never arms plan auto-execute on an automated session', async () => {
+    const h = makeHarness({ newSessionConfigOptions: modeConfig('plan') })
+    h.config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+    const session = await connectAutomated(h.svc)
+
+    const pending = await expectCard(
+      h.svc,
+      session,
+      permissionRequest(session, 'switch_mode', [], planOptions),
+    )
+    expect(pending.autoResolve).toBeUndefined()
+  })
+
+  it('auto-selects allow_once for an edit fully inside the run directory', async () => {
+    const h = makeHarness()
+    const session = await connectAutomated(h.svc)
+
+    const result = await h.svc.onRequestPermission(
+      permissionRequest(session, 'edit', [
+        { path: `${RUN_DIR}/result.json` },
+        { path: `${RUN_DIR}/report.md` },
+      ]),
+    )
+
+    expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+    expect(session.pendingPermission.get()).toBeUndefined()
+    expect(h.permission.persisted).toEqual([])
+  })
+
+  it('shows a card when an edit leaves the run directory or uses ".."', async () => {
+    const h = makeHarness()
+    const session = await connectAutomated(h.svc)
+
+    await expectCard(
+      h.svc,
+      session,
+      permissionRequest(session, 'edit', [
+        { path: `${RUN_DIR}/result.json` },
+        { path: '/repo/src/a.ts' },
+      ]),
+    )
+    await expectCard(
+      h.svc,
+      session,
+      permissionRequest(session, 'edit', [{ path: `${RUN_DIR}/sub/../result.json` }]),
+    )
+  })
+
+  it('keeps manual sessions on the personal auto-approve / allow_always behavior', async () => {
+    const h = makeHarness()
+    h.permission.autoApproveResult = {
+      outcome: { outcome: 'selected', optionId: 'once' },
+    }
+    const session = await connectManual(h.svc)
+
+    await expect(h.svc.onRequestPermission(permissionRequest(session, 'execute'))).resolves.toEqual(
+      { outcome: { outcome: 'selected', optionId: 'once' } },
+    )
+    expect(session.pendingPermission.get()).toBeUndefined()
+
+    h.permission.autoApproveResult = undefined
+    const promise = h.svc.onRequestPermission(permissionRequest(session, 'edit'))
+    await tick()
+    const pending = session.pendingPermission.get()!
+    expect(pending.options.map((option) => option.optionId)).toEqual(['once', 'always', 'deny'])
+    pending.resolve('always')
+    await expect(promise).resolves.toEqual({
+      outcome: { outcome: 'selected', optionId: 'always' },
+    })
+    expect(h.permission.persisted).toEqual(['edit'])
+  })
+
+  it('keeps the plan auto-execute countdown on manual sessions', async () => {
+    const h = makeHarness({ newSessionConfigOptions: modeConfig('plan') })
+    h.config.update('acp.plan.autoExecute', 'auto', ConfigurationTarget.Memory)
+    const session = await connectManual(h.svc)
+
+    const promise = h.svc.onRequestPermission(
+      permissionRequest(session, 'switch_mode', [], planOptions),
+    )
+    await tick()
+    const pending = session.pendingPermission.get()!
+    expect(pending.autoResolve?.optionId).toBe('exit-plan-auto')
+    pending.cancel()
+    await promise
+  })
+})

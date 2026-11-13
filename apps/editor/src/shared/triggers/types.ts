@@ -162,6 +162,8 @@ export interface TriggerRunRequest {
   readonly approveConfirmed: boolean
   /** Event payload (needed by action guards, e.g. reviewId / version); never logged. */
   readonly payload: Readonly<Record<string, TriggerPayloadValue>>
+  /** Swarm actions are only honored for `swarm-review` runs, whose target is the event's review. */
+  readonly sourceType: TriggerSourceType
 }
 
 export interface TriggerActionAudit {
@@ -213,13 +215,28 @@ export interface TriggerSummary {
   readonly errors?: readonly string[]
 }
 
-/** Mode ids treated as bypass-class for every agent (claude + codex forks). */
+/**
+ * Mode ids that let an agent act without a human approving each step, for every
+ * agent (claude + codex forks). Not only bypass: claude `auto` / `acceptEdits` and
+ * codex `agent` (auto-review) also skip the approval card, so all of them need the
+ * per-trigger confirmation.
+ */
 export const ELEVATED_MODE_IDS: readonly string[] = [
   'bypassPermissions',
+  'auto',
+  'acceptEdits',
+  'agent',
   'full-access',
   'agent-full-access',
   'danger-full-access',
 ]
+
+/** Case-insensitive, so a mistyped `BypassPermissions` cannot dodge the confirmation. */
+export function isElevatedModeId(mode: string | undefined): boolean {
+  if (mode === undefined) return false
+  const normalized = mode.trim().toLowerCase()
+  return ELEVATED_MODE_IDS.some((id) => id.toLowerCase() === normalized)
+}
 
 /** Conservative default mode per agent when a trigger leaves `session.mode` unset. */
 export const CONSERVATIVE_MODE_BY_AGENT: Readonly<Record<string, string>> = {

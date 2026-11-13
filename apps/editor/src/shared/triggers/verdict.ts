@@ -43,14 +43,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/** Relative, forward/backward slash agnostic, no drive letters, no `..` segment. */
+/**
+ * Relative, forward/backward slash agnostic, no drive letters, no `..` segment,
+ * no `:` (drive / NTFS alternate data stream) and no segment Windows would
+ * silently rewrite (trailing dots / spaces).
+ */
 export function isSafeRelativePath(path: string): boolean {
   const value = path.trim()
   if (value.length === 0) return false
   if (value.includes('://')) return false
   if (value.startsWith('/') || value.startsWith('\\')) return false
   if (/^[A-Za-z]:/.test(value)) return false
-  return value.split(/[\\/]/).every((segment) => segment !== '..')
+  if (value.includes(':')) return false
+  return value.split(/[\\/]/).every((segment) => {
+    const trimmed = segment.trim()
+    if (trimmed !== segment) return false
+    if (trimmed === '..') return false
+    // A single `.` is a harmless current-directory marker; `foo.` is rewritten to
+    // `foo` by Windows and can therefore address a different file than declared.
+    return trimmed === '.' || !trimmed.endsWith('.')
+  })
 }
 
 function parseAction(

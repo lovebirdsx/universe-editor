@@ -61,6 +61,26 @@ export async function executeTriggerVerdict(
     }
   }
 
+  // Swarm actions target the event's review; a schedule / poll / manual run has
+  // no such target, so the whole action batch is rejected before any guard runs.
+  if (parsed.verdict.verdict === 'auto-approve' && request.sourceType !== 'swarm-review') {
+    const swarmActions = parsed.verdict.actions.filter((action) => action.type.startsWith('swarm.'))
+    if (swarmActions.length > 0) {
+      const reason = '仅 swarm-review 触发器可执行 Swarm 动作'
+      logger?.debug(`trigger actions rejected: ${reason}`)
+      return {
+        verdict: 'escalate',
+        summary: clampSummary(`动作未执行，已降级为 escalate：${reason}`),
+        actions: swarmActions.map((action) => ({
+          type: action.type,
+          target: action.target,
+          result: 'rejected' as const,
+          reason,
+        })),
+      }
+    }
+  }
+
   const reviewId = request.payload['reviewId']
   const eventTarget = reviewId === undefined ? undefined : String(reviewId)
   const validated = validateActions(parsed.verdict, {
@@ -123,12 +143,18 @@ export async function executeTriggerVerdict(
       reason: outcome.reason,
     })
     logger?.debug(`trigger action ${action.type} ${outcome.kind}: ${outcome.reason}`)
+    // Actions are not transactional: what already ran stays applied, so the
+    // escalation must state exactly which side effects the user now owns.
+    const executed = audits
+      .filter((audit) => audit.result === 'ok')
+      .map((audit) => `${audit.type}@${audit.target}`)
+    const executedNote = executed.length > 0 ? `。已执行：${executed.join(',')}（不可回滚）` : ''
     return {
       verdict: 'escalate',
       summary: clampSummary(
         outcome.kind === 'rejected'
-          ? `动作未执行，已降级为 escalate：${outcome.reason}`
-          : `动作执行失败，已降级为 escalate：${outcome.reason}`,
+          ? `动作未执行，已降级为 escalate：${outcome.reason}${executedNote}`
+          : `动作执行失败，已降级为 escalate：${outcome.reason}${executedNote}`,
       ),
       actions: audits,
     }

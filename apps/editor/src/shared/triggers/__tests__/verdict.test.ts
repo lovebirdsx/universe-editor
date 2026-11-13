@@ -66,10 +66,26 @@ describe('parseVerdict', () => {
   it('only accepts relative report paths without ".."', () => {
     expect(isSafeRelativePath('report.md')).toBe(true)
     expect(isSafeRelativePath('reports\\sub\\a.md')).toBe(true)
-    for (const path of ['/abs.md', 'C:/abs.md', '\\\\server\\x', '../a.md', 'a/../../b.md', '']) {
+    expect(isSafeRelativePath('my report.md')).toBe(true)
+    expect(isSafeRelativePath('./report.md')).toBe(true)
+    for (const path of [
+      '/abs.md',
+      'C:/abs.md',
+      '\\\\server\\x',
+      '../a.md',
+      'a/../../b.md',
+      '',
+      // Windows silently strips trailing dots/spaces and treats `:` as ADS/drive.
+      'report.md.',
+      'a/b.md. ',
+      'trailing /b.md',
+      'stream:name',
+      'a\\.. /b.md',
+    ]) {
       expect(isSafeRelativePath(path), path).toBe(false)
     }
     expect(parseVerdict(JSON.stringify({ verdict: 'info', reportPath: '../a.md' })).ok).toBe(false)
+    expect(parseVerdict(JSON.stringify({ verdict: 'info', reportPath: 'a:b.md' })).ok).toBe(false)
   })
 })
 

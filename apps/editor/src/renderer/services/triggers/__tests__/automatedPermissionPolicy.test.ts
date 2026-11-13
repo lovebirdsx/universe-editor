@@ -7,7 +7,6 @@ import { UriIdentityService } from '@universe-editor/platform'
 import { describe, expect, it } from 'vitest'
 import {
   decideAutomatedPermission,
-  isElevatedModeId,
   visibleAutomatedPermissionOptions,
 } from '../automatedPermissionPolicy.js'
 
@@ -46,17 +45,17 @@ describe('decideAutomatedPermission', () => {
     ).toBe('once')
   })
 
-  it('allows delete/move inside the run directory', () => {
+  it('only auto-approves edit; delete and move stay manual', () => {
     expect(
       decideAutomatedPermission(
         request('delete', [{ path: `${runDir}/tmp.txt` }]),
         runDir,
         identity,
       ),
-    ).toBe('once')
+    ).toBeUndefined()
     expect(
       decideAutomatedPermission(request('move', [{ path: `${runDir}/tmp.txt` }]), runDir, identity),
-    ).toBe('once')
+    ).toBeUndefined()
   })
 
   it('rejects when any target lies outside the run directory', () => {
@@ -79,9 +78,19 @@ describe('decideAutomatedPermission', () => {
     ).toBeUndefined()
   })
 
+  it('rejects any path that still contains a ".." segment after normalizing', () => {
+    expect(
+      decideAutomatedPermission(
+        request('edit', [{ path: `${runDir}/sub/../result.json` }]),
+        runDir,
+        identity,
+      ),
+    ).toBeUndefined()
+  })
+
   it('rejects location-less writes and non-write kinds', () => {
     expect(decideAutomatedPermission(request('edit'), runDir, identity)).toBeUndefined()
-    for (const kind of ['read', 'search', 'execute', 'fetch', 'switch_mode']) {
+    for (const kind of ['read', 'search', 'execute', 'fetch', 'switch_mode', 'delete', 'move']) {
       expect(
         decideAutomatedPermission(request(kind, [{ path: `${runDir}/a.txt` }]), runDir, identity),
       ).toBeUndefined()
@@ -115,15 +124,5 @@ describe('visibleAutomatedPermissionOptions', () => {
       'once',
       'deny',
     ])
-  })
-})
-
-describe('isElevatedModeId', () => {
-  it('recognizes the bypass-class ids from the shared contract', () => {
-    expect(isElevatedModeId('bypassPermissions')).toBe(true)
-    expect(isElevatedModeId('full-access')).toBe(true)
-    expect(isElevatedModeId('danger-full-access')).toBe(true)
-    expect(isElevatedModeId('default')).toBe(false)
-    expect(isElevatedModeId(undefined)).toBe(false)
   })
 })

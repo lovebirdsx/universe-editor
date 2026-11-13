@@ -548,6 +548,35 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     expect(svc.getById(sessionId)?.id).toBe(resumed.id)
   })
 
+  it('restores the runDir permission scope of a resumed automated session', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const automation = {
+      triggerId: 'swarm-triage',
+      triggerName: 'Swarm 分诊',
+      eventKey: 'swarm:42',
+      runId: 'run-1',
+    }
+    const original = await svc.createSession('fake', {
+      automation,
+      automationRunDir: '/userData/triggers/runs/run-1',
+    })
+    await original.whenConnected()
+    const sessionId = original.sessionIdOnAgent.get()!
+    expect(built.history.get(sessionId)?.automation).toEqual({
+      ...automation,
+      runDir: '/userData/triggers/runs/run-1',
+    })
+    await svc.closeSession(original.id)
+    const resumed = await svc.resumeSession(sessionId)
+    expect(resumed.automation).toEqual({
+      ...automation,
+      runDir: '/userData/triggers/runs/run-1',
+    })
+    expect(resumed.automationRunDir).toBe('/userData/triggers/runs/run-1')
+  })
+
   it('refuses to resume a session whose cwd differs from the open workspace (split-brain guard)', async () => {
     // Open folder is /repo/main; the session belongs to a sibling worktree.
     const built = buildService({ loadSessionResult: {} }, '/repo/main')

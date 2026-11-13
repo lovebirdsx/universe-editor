@@ -106,6 +106,7 @@ describe('buildTriggerPickItems', () => {
     ])
     expect(item?.label).toBe('⚠ Triage')
     expect(item?.detail).toContain('not confirmed')
+    expect(item?.detail).toContain('will not run until you confirm it')
   })
 
   it('marks a confirmed high-privilege mode without the confirmation note', () => {

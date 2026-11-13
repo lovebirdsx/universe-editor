@@ -72,9 +72,9 @@ main（应用级单例）                                    renderer（每窗�
 | 路径 | 写入方 | 内容 |
 | --- | --- | --- |
 | `<userData>/triggers/triggers.json` | 用户 / `ensureConfigFile` | JSONC 配置；外部编辑热加载（目录 watcher）。 |
-| `<userData>/triggers/state.json` | `TriggerStateStore`（独占） | `pausedAll`、每触发器 `processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`elevatedConfirmed` / `approveConfirmed` 指纹、`pending` 记录。防抖 + 原子写（0600）。 |
-| `<userData>/triggers/audit.jsonl` | `AuditLog` | `action` / `result` / `detail`（标识性文本，无 payload / prompt / 摘要）。 |
-| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录。 |
+| `<userData>/triggers/state.json` | `TriggerStateStore`（独占） | `pausedAll`、每触发器 `processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`sourceFingerprint`、`elevatedConfirmed` / `approveConfirmed` 指纹、`pending` 记录。防抖 + 原子写（0600）。加载时丢弃 `runId` 不是 UUID 形态的 pending 记录（会拼进文件路径）。 |
+| `<userData>/triggers/audit.jsonl` | `AuditLog` | `action` / `result` / `detail`（标识性文本，无 payload / prompt / 摘要）。每条执行 / 拒绝的动作单独成行。 |
+| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。 |
 | `<userData>/triggers/pending/<runId>.json` | `TriggerMainService` | 排队事件的临时负载；run 开始或丢弃后删除。 |
 
 `state.json` 里的去重 key 每条最多保留 **2000** 个、**30 天**（`prune`）。
@@ -85,7 +85,7 @@ main（应用级单例）                                    renderer（每窗�
 
 - 顶层 `version` 必须是 `1`（缺省可）；`maxConcurrentRuns` 为 1–10 整数；`triggers` 必须是数组。
 - 单个触发器：`id` 匹配 `^[a-z0-9][a-z0-9-]{0,63}$` 且唯一；`workspace` 必须是本机绝对路径（含盘符或 `/` 开头，拒绝 UNC / URI）；`source` 必填；`session` 至少要给出 `skill` 或非空 `prompt`。
-- `session.cwd` 必须是相对路径且不含 `..`；`skill` 匹配 `^[A-Za-z0-9][A-Za-z0-9:_-]*$`；`mcpServers` 为非空字符串数组。
+- `session.cwd` 必须是相对路径、不含 `..`、不含 `:`（Windows 盘符 / ADS），且没有任何段被 Windows 静默改写（trailing `.` / 空格）；`skill` 匹配 `^[A-Za-z0-9][A-Za-z0-9:_-]*$`；`mcpServers` 为非空字符串数组。
 - `budget` 三个字段必须是正数（0 不合法）；`allowedActions` 只接受三个枚举值并去重；`concurrency` 1–10；`overflow` 只能是 `queue` / `drop`。
 - **已知字段非法 → 整个触发器进入 `invalid`**，其它触发器不受影响；未知字段忽略。
 - 顶层非法（JSON 语法、版本、`maxConcurrentRuns` 越界、`triggers` 非数组）→ 整份文件按无效处理：
@@ -128,11 +128,20 @@ main（应用级单例）                                    renderer（每窗�
 - 成功但 `baselineDone === false`：把当前所有 `poll:<key>` 记为 `started`，写 `baselineDone: true`，**不产生 run**。
 - 之后对每个 item 走 `_acceptEvent`，key 为 `poll:<keyField>`。
 - `pollCommandFetcher.ts`：
-  - `exec`（shell）在 `workspace` 下运行，硬超时、`windowsHide`、`maxBuffer = 1MB`；
+  - `spawn`（shell）在 `workspace` 下运行，硬超时、`windowsHide`；
+  - 超时 / stdout 超过 1 MB 时**杀掉整个进程树**（Windows `taskkill /T /F`，POSIX `detached` 进程组 + `SIGKILL`），避免孙进程继续持有工作区；
   - 接受 JSON 数组或 `{ items: [] }`；
   - item 必须是对象，`keyField` 必须是字符串 / 数字且非空；
   - 其它字段经 `toPayloadValue` 归一：字符串 / 布尔 / 有限数字原样；对象 / 数组 `JSON.stringify` 后截断 4000 字符；`null` / `undefined` 丢弃；
   - 错误文本本地化，不把 stdout 写进日志。
+
+### 失败退避门
+
+`_recordFailure` 写入 `backoffUntil` 后，`_isRunnable` 会把退避期内的触发器视为不可运行（`manual` 事件与用户 `runNow` 除外）：
+
+- schedule：退避中的到期槽位按 **skip** 处理并记日志（`_evaluateSchedule` 仍推进 `lastScheduledAt`，退避结束后从下一槽继续）；
+- poll：退避期不执行命令，`_nextPoll` 推进到 `backoffUntil`；
+- swarm-review：退避期内上报的事件**不消费**（不标记 processed），退避结束后的下一次上报再正常触发。
 
 ### swarm-review
 
@@ -153,11 +162,12 @@ main（应用级单例）                                    renderer（每窗�
 
 `processed: { [key]: { at, status: 'queued' | 'started' } }`：
 
-- **先记 key 再建会话**：事件入队时写 `queued`；会话建成后写 `started`。
-- 启动 / 排队失败、队列丢弃、窗口关闭导致失败 → `forget(key)`，之后同一 key 可重新触发。
+- **先记 key 再写 pending**：`_acceptEvent` 在 `await writeJsonAtomic` **之前**同步写 `queued`（占位），并发上报不会双双通过去重检查；写盘失败则 `forget(key)` 回滚。
+- 启动 / 排队失败、队列丢弃、窗口关闭 / reload 导致失败 → `forget(key)`，之后同一 key 可重新触发。
 - 重启后 `pending` 里 status 仍为 `queued` 的记录会重新入队；`started` 的绝不重放。
 - 事件负载不写 `state.json`，而是单独写 `pending/<runId>.json`（`TriggerEvent` 的 JSON），run 开始后删除。
 - 去重 key 每触发器上限 2000、TTL 30 天。
+- `baselineDone` 与 `sourceFingerprint` 绑定：配置热加载时比较 `source` 的归一指纹（poll = `keyField` + `command` + `intervalSec`，swarm-review / schedule 同理），变化时清空 `baselineDone` 与该触发器 `poll:` / `swarm:` 前缀的去重 key，让新源重新建基线。
 
 ### 队列
 
@@ -174,8 +184,10 @@ main（应用级单例）                                    renderer（每窗�
 ```
 事件 → _acceptEvent
   ├─ 已暂停 / 全局暂停 / 需确认 → 丢弃
+  ├─ 退避中（manual / runNow 除外）→ 丢弃且不标记
   ├─ 去重命中 → 忽略
-  ├─ 写 pending/<runId>.json + 记 queued + 加入 state.pending
+  ├─ 同步记 queued（占位，防并发双报）
+  ├─ 写 pending/<runId>.json + 加入 state.pending（写失败则 forget 回滚）
   ├─ RunQueue.enqueue
   │    ├─ started → _startRun
   │    ├─ queued → 记录
@@ -183,25 +195,28 @@ main（应用级单例）                                    renderer（每窗�
   └─ fire onDidChangeTriggers
 
 _startRun
+  ├─ 入口再查一次 _isRunnable（暂停 / 禁用 / 待确认 → 释放槽位、forget key、不计失败）
   ├─ 读 pending 事件
+  ├─ _resolveHost（找窗口 / 后台开窗 / 等 host）
+  ├─ host.isWorkspaceTrusted() → false 则失败（在创建 runDir 之前）
   ├─ 建 runs/<runId>/ 目录
   ├─ _buildRunRequest（渲染 prompt、解析 elevated/approve 确认）
-  ├─ _resolveHost（找窗口 / 后台开窗 / 等 host）
-  ├─ host.isWorkspaceTrusted() → false 则失败
   ├─ host.startRun(request) → { sessionId }（超时 120s；见下）
   │    ├─ 期间 run 已被移除 → host.cancelRun
-  │    └─ 成功 → 记 started、删 pending、phase=running、审计 run-start
+  │    └─ 成功 → 记 started、删 pending、phase=running、审计 run-start、arm watchdog
   └─ 失败 → _failActiveRun（释放槽、forget key、记失败/退避）
 ```
 
 `host.startRun` 是反向 RPC，没有自带传输超时。`_startHostRun()` 用 `startRunTimeoutMs`（默认 120s）做 `Promise.race`：超时则上层按失败处理并释放槽位；如果 renderer 之后才启动成功，main 会立即 `cancelRun` 并丢弃该 sessionId，避免出现不在调度器账上的会话。
 
-- **窗口关闭**：`unregisterWindowHost` 会把它负责的所有 active run 标为失败（`The window running this trigger closed`），释放槽位。
+- **暂停是最终关卡**：`setPaused(id, true)` 清掉该触发器的排队项并 `forget` 其 key（不计失败）；恢复 / 全局恢复 / 确认高权限后都会再跑一次 `_replayPendingRuns`，把此前因暂停保留的 pending 记录入队。
+- **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。
+- **running 看门狗**：run 启动后按 `budget.timeoutMin + budget.approvalTimeoutMin + 10 分钟宽限` 设时；到期仍未 `reportRunEnd` → 记失败、释放槽位，并调用该窗口的 `host.cancelRun`（若 host 还在）。`reportRunEnd` 会清掉定时器。
 - **运行结束**：renderer `TriggerRunHost` 订阅 `AutomatedSessionService.onDidEndRun`，调 `reportRunEnd`。main：
   - `completed` → 清零失败计数、清退避、更新 `lastRunAt`；
   - `failed` → `_recordFailure`（可能自动暂停）；
   - 其它（预算 / 超时 / 审批超时 / 取消）→ 只更新 `lastRunAt`，不计失败；
-  - 所有结果写审计 `run-end`（含 outcome / verdict / actions 摘要）。
+  - 所有结果写审计 `run-end`（含 outcome / verdict / actions 摘要）；`end.actions` 的**每条动作再单独写一行 `action`**（trigger / key / run / session / type / target / result / reason），reason 只含校验或执行错误，不含评论正文。
 
 ### 窗口路由
 
@@ -223,6 +238,7 @@ _startRun
 - `prompt`：`renderTriggerPrompt(...)` 渲染结果。
 - `runDir`：绝对路径；main 已创建。
 - `payload`：原始事件负载（动作守卫需要 `reviewId` / `version`；只在 main → renderer IPC 中传递，不写日志 / 审计 / state）。
+- `sourceType`：触发器源类型；renderer 只对 `swarm-review` 运行执行动作。
 
 `promptTemplate.ts` 的输出顺序：
 
@@ -414,11 +430,8 @@ pnpm e2e:smoke
 
 ## 18. 已知限制
 
-- **退避只对 poll 生效**：`_recordFailure` 会记录 `backoffUntil`，但 `_isRunnable` 不检查它；schedule / manual / swarm 事件仍按自身节奏产生。设计上的「所有失败统一退避」尚未完全落地。
-- **高权限未确认时是硬阻止**：`_isRunnable` / `_acceptEvent` / `runNow` 都会阻止运行，而不是降级到保守模式。QuickPick 的提示文案（「runs use the conservative default until you confirm it」）与此不一致。
-- **动作审计粒度**：设计稿要求每条动作写独立审计；当前只在 `run-end` 里记录 `type@target=result` 摘要，不单独成行。
+- **高权限未确认时是硬阻止**：`_isRunnable` / `_acceptEvent` / `runNow` 都会阻止运行，而不是降级到保守模式。
 - **schema 与运行时校验有差异**：schema 没有把 `session` 标为 required（运行时实际必需）；`budget` 的 schema `minimum: 0` 而运行时要求 `> 0`；poll 的 schema 描述只写「必须是 JSON 数组」，运行时也接受 `{ items: [] }`。
-- **`baselineDone` 不随源变化重置**：改 `keyField` / 更换源类型后，可能不会重新建基线；此时会按已有 key 去重，表现为「新条目可能被当成已见」或反之。改这类配置后建议观察一次日志。
 - **配置指纹失效范围较大**：改任何字段（包括 `prompt` 文案）都会让高权限 / 自动 approve 确认失效，需要重新确认。
 - **恢复自动化会话不保留 runDir 范围**：resume 后写 runDir 不再自动放行（只保留非路径限制）。
 - **运行目录保留 200 个**：超出按 mtime 删除，可能早于历史会话上限；需要长期留档请自行复制。

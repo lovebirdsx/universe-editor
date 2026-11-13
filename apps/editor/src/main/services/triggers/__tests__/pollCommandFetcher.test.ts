@@ -19,14 +19,14 @@ const dirs: string[] = []
 
 afterEach(async () => {
   for (const dir of dirs.splice(0)) {
-    // A killed child can still hold the cwd on Windows for a moment.
+    // A killed child tree can still hold the cwd on Windows for a moment.
     for (let attempt = 0; ; attempt++) {
       try {
         await rm(dir, { recursive: true, force: true })
         break
       } catch (err) {
-        if (attempt >= 10) throw err
-        await new Promise((resolve) => setTimeout(resolve, 50))
+        if (attempt >= 60) throw err
+        await new Promise((resolve) => setTimeout(resolve, 100))
       }
     }
   }
@@ -168,5 +168,40 @@ describe('createPollCommandFetcher', () => {
     expect(result).toEqual({ ok: true, items: [] })
     expect(warns).toHaveLength(1)
     expect(warns[0]).not.toContain('nope')
+  })
+
+  it('times out and kills the process tree of a command that spawns a child', async () => {
+    const dir = await scriptDir(
+      [
+        "const { spawn } = require('node:child_process')",
+        "spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: 'ignore' })",
+        'setTimeout(() => {}, 30000)',
+        '',
+      ].join('\n'),
+    )
+    const fetch = createPollCommandFetcher()
+    const result = await fetch({
+      command: 'node fetch.js',
+      cwd: dir,
+      timeoutSec: 1,
+      keyField: 'id',
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('timed out')
+  })
+
+  it('stops a command that prints more than 1 MB and reports the size limit', async () => {
+    const dir = await scriptDir(
+      "process.stdout.write('x'.repeat(1024 * 1024 + 16)); setTimeout(() => {}, 30000)\n",
+    )
+    const fetch = createPollCommandFetcher()
+    const result = await fetch({
+      command: 'node fetch.js',
+      cwd: dir,
+      timeoutSec: 20,
+      keyField: 'id',
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain('1 MB')
   })
 })

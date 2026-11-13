@@ -7,7 +7,6 @@
 
 import { parseCron } from './cron.js'
 import {
-  ELEVATED_MODE_IDS,
   TRIGGER_ACTION_TYPES,
   TRIGGER_DEFAULTS,
   type InvalidTriggerConfig,
@@ -432,10 +431,6 @@ function fnv1a32(text: string): string {
 /** Stable fingerprint of the canonical (key-order independent) trigger JSON. */
 export function triggerFingerprint(trigger: TriggerConfig): string {
   return fnv1a32(JSON.stringify(canonicalize(trigger)))
-}
-
-export function isElevatedMode(mode?: string): boolean {
-  return mode !== undefined && ELEVATED_MODE_IDS.includes(mode)
 }
 
 /** JSONC template written by "Triggers: 打开配置" when the file does not exist yet. */

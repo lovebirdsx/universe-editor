@@ -227,7 +227,8 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     stateDebounceMs: options.stateDebounceMs ?? 0,
     uuid: (() => {
       let counter = 0
-      return () => `run-${++counter}`
+      // UUID-shaped so the state loader keeps replayed pending records.
+      return () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`
     })(),
   })
   services.push(service)
@@ -290,6 +291,24 @@ function summary(list: readonly TriggerSummary[], id: string): TriggerSummary {
   const found = list.find((entry) => entry.id === id)
   if (found === undefined) throw new Error(`summary ${id} missing`)
   return found
+}
+
+interface RawState {
+  readonly pending: readonly { readonly runId: string }[]
+  readonly triggers: Readonly<
+    Record<
+      string,
+      {
+        readonly processed: Record<string, unknown>
+        readonly baselineDone?: boolean
+        readonly sourceFingerprint?: string
+      }
+    >
+  >
+}
+
+function stateOf(service: TriggerMainService): RawState {
+  return (service as unknown as { _state: RawState })._state
 }
 
 describe('TriggerMainService scheduling', () => {
@@ -490,6 +509,28 @@ describe('TriggerMainService dedupe', () => {
     await harness.service.reportSwarmNeedsAction([review('1'), review('2')])
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
+    expect(harness.requests[0]?.sourceType).toBe('swarm-review')
+  })
+
+  it('produces a single run for two concurrent reports of the same review', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+      ],
+    })
+    await openGate(harness)
+    // First report seeds the baseline with review 0.
+    await harness.service.reportSwarmNeedsAction([review('0')])
+    await settle()
+    expect(harness.startRun).not.toHaveBeenCalled()
+
+    await Promise.all([
+      harness.service.reportSwarmNeedsAction([review('1')]),
+      harness.service.reportSwarmNeedsAction([review('1')]),
+    ])
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    expect(harness.requests[0]?.origin.eventKey).toBe('swarm:1')
   })
 })
 
@@ -856,6 +897,335 @@ describe('TriggerMainService window routing', () => {
   })
 })
 
+describe('TriggerMainService pause gate', () => {
+  it('drops queued runs when a trigger is paused and forgets their keys', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    await harness.service.runNow('trigger-1')
+    await settle()
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
+    const firstKey = harness.requests[0]!.origin.eventKey
+
+    await harness.service.setPaused('trigger-1', true)
+    await settle()
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.queued).toBe(0)
+    // The running run is not cancelled; the queued one is dropped without a failure.
+    expect(item.running).toBe(1)
+    expect(item.consecutiveFailures).toBe(0)
+
+    const state = stateOf(harness.service)
+    expect(state.pending).toEqual([])
+    expect(Object.keys(state.triggers['trigger-1']?.processed ?? {})).toEqual([firstKey])
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a pending run while paused and replays it on resume', async () => {
+    const runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+    const eventKey = 'manual:pending-1'
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      state: {
+        version: 1,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: { [eventKey]: { at: START, status: 'queued' } },
+            paused: true,
+            consecutiveFailures: 0,
+            baselineDone: false,
+          },
+        },
+        pending: [{ runId, triggerId: 'trigger-1', eventKey, firedAt: START }],
+      },
+    })
+    const pendingDir = join(harness.dir, 'triggers', 'pending')
+    await mkdir(pendingDir, { recursive: true })
+    await writeFile(
+      join(pendingDir, `${runId}.json`),
+      JSON.stringify({ triggerId: 'trigger-1', key: eventKey, payload: {}, firedAt: START }),
+      'utf8',
+    )
+
+    await openGate(harness)
+    expect(harness.startRun).not.toHaveBeenCalled()
+    expect(stateOf(harness.service).pending).toHaveLength(1)
+
+    await harness.service.setPaused('trigger-1', false)
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    expect(harness.requests[0]?.origin.runId).toBe(runId)
+  })
+})
+
+describe('TriggerMainService window reload / watchdog', () => {
+  it('fails a window’s active runs when the same window re-registers its host', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    await harness.service.runNow('trigger-1')
+    await settle()
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
+
+    harness.service.registerWindowHost(1, harness.host)
+    await settle()
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.lastError).toContain('reloaded')
+    expect(item.consecutiveFailures).toBe(1)
+    // The reload released the slot, so the queued run started on the new host.
+    expect(harness.startRun).toHaveBeenCalledTimes(2)
+    expect(item.running).toBe(1)
+  })
+
+  it('fails a run that never reports its end and asks its host to cancel', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, {
+          session: {
+            prompt: 'Do it',
+            budget: { maxCostUsd: 1, timeoutMin: 1, approvalTimeoutMin: 1 },
+          },
+        }),
+      ],
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    const runId = harness.requests[0]!.origin.runId
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').running).toBe(1)
+
+    await harness.clock.advance(12 * 60_000 + 1)
+    await settle()
+    expect(harness.cancelRun).toHaveBeenCalledWith(runId)
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.running).toBe(0)
+    expect(item.consecutiveFailures).toBe(1)
+    expect(item.lastError).toContain('did not report')
+  })
+
+  it('clears the watchdog when the run reports its end in time', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, {
+          session: {
+            prompt: 'Do it',
+            budget: { maxCostUsd: 1, timeoutMin: 1, approvalTimeoutMin: 1 },
+          },
+        }),
+      ],
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'trigger-1',
+      outcome: 'completed',
+      actions: [],
+    })
+    await harness.clock.advance(12 * 60_000 + 1)
+    await settle()
+    expect(harness.cancelRun).not.toHaveBeenCalled()
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').consecutiveFailures).toBe(0)
+  })
+})
+
+describe('TriggerMainService backoff gate', () => {
+  const backoffUntil = START + GRACE_MS + 10 * 60_000
+
+  it('skips schedule slots during backoff and resumes after it', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, {
+          source: { type: 'schedule', everyMin: 5, onMissed: 'skip' },
+        }),
+      ],
+      state: {
+        version: 1,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: {},
+            paused: false,
+            consecutiveFailures: 1,
+            baselineDone: false,
+            backoffUntil,
+          },
+        },
+        pending: [],
+      },
+    })
+    await openGate(harness)
+    await harness.clock.advance(5 * 60_000)
+    await settle()
+    expect(harness.startRun).not.toHaveBeenCalled()
+    expect(harness.loggerLines.some((line) => line.includes('(backoff'))).toBe(true)
+
+    await harness.clock.advance(5 * 60_000)
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not consume swarm events during backoff but fires them afterwards', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+      ],
+      state: {
+        version: 1,
+        pausedAll: false,
+        triggers: {
+          swarm: {
+            processed: {},
+            paused: false,
+            consecutiveFailures: 1,
+            baselineDone: true,
+            backoffUntil: START + GRACE_MS + 2 * 60_000,
+          },
+        },
+        pending: [],
+      },
+    })
+    await openGate(harness)
+    await harness.service.reportSwarmNeedsAction([review('1')])
+    await settle()
+    expect(harness.startRun).not.toHaveBeenCalled()
+    expect(
+      Object.hasOwn(stateOf(harness.service).triggers['swarm']?.processed ?? {}, 'swarm:1'),
+    ).toBe(false)
+
+    await harness.clock.advance(2 * 60_000)
+    await harness.service.reportSwarmNeedsAction([review('1')])
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not poll during backoff and polls again at its end', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+      state: {
+        version: 1,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: {},
+            paused: false,
+            consecutiveFailures: 1,
+            baselineDone: false,
+            backoffUntil: START + GRACE_MS + 5 * 60_000,
+          },
+        },
+        pending: [],
+      },
+    })
+    await openGate(harness)
+    await harness.clock.advance(30_000)
+    await settle()
+    expect(fetch).not.toHaveBeenCalled()
+
+    await harness.clock.advance(5 * 60_000 - 30_000)
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('still runs a manual runNow during backoff', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      state: {
+        version: 1,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: {},
+            paused: false,
+            consecutiveFailures: 1,
+            baselineDone: false,
+            backoffUntil: START + GRACE_MS + 10 * 60_000,
+          },
+        },
+        pending: [],
+      },
+    })
+    await openGate(harness)
+    await harness.service.runNow('trigger-1')
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('TriggerMainService baseline reset', () => {
+  const currentFingerprint = 'poll|id|node fetch.js|30'
+
+  it('resets baselineDone and poll keys when the source fingerprint changes', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+      state: {
+        version: 1,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: { 'poll:A': { at: START, status: 'started' } },
+            paused: false,
+            consecutiveFailures: 0,
+            baselineDone: true,
+            sourceFingerprint: 'poll|old-key-field|node fetch.js|30',
+          },
+        },
+        pending: [],
+      },
+    })
+    await harness.service.initialize()
+    await settle()
+    const state = stateOf(harness.service)
+    expect(state.triggers['trigger-1']?.baselineDone).toBe(false)
+    expect(state.triggers['trigger-1']?.processed).toEqual({})
+    expect(state.triggers['trigger-1']?.sourceFingerprint).toBe(currentFingerprint)
+    expect(harness.loggerLines.some((line) => line.includes('source changed'))).toBe(true)
+  })
+
+  it('keeps the baseline when the source fingerprint is unchanged', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch: async () => ({ ok: true, items: [] }),
+      state: {
+        version: 1,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: { 'poll:A': { at: START, status: 'started' } },
+            paused: false,
+            consecutiveFailures: 0,
+            baselineDone: true,
+            sourceFingerprint: currentFingerprint,
+          },
+        },
+        pending: [],
+      },
+    })
+    await harness.service.initialize()
+    await settle()
+    const state = stateOf(harness.service)
+    expect(state.triggers['trigger-1']?.baselineDone).toBe(true)
+    expect(state.triggers['trigger-1']?.processed).toEqual({
+      'poll:A': { at: START, status: 'started' },
+    })
+    expect(harness.loggerLines.some((line) => line.includes('source changed'))).toBe(false)
+  })
+})
+
 describe('TriggerMainService privacy', () => {
   it('keeps the payload out of logs, audit and state while the prompt still carries it', async () => {
     const secret = 'TOP-SECRET-PAYLOAD-TEXT'
@@ -882,7 +1252,10 @@ describe('TriggerMainService privacy', () => {
       sessionId: 'session-1',
       outcome: 'completed',
       verdict: 'escalate',
-      actions: [{ type: 'swarm.vote', target: 'A', result: 'ok' }],
+      actions: [
+        { type: 'swarm.vote', target: 'A', result: 'ok' },
+        { type: 'swarm.comment', target: 'A', result: 'rejected', reason: '评论内容不能为空' },
+      ],
     })
     await settle()
     harness.service.dispose()
@@ -892,6 +1265,10 @@ describe('TriggerMainService privacy', () => {
     const audit = await readFile(join(harness.dir, 'triggers', 'audit.jsonl'), 'utf8')
     expect(audit).not.toContain(secret)
     expect(audit).toContain('run-end')
+    // One line per action, including the validation reason but never the payload.
+    expect(audit).toContain('"action":"action"')
+    expect(audit).toContain('type=swarm.vote target=A result=ok')
+    expect(audit).toContain('type=swarm.comment target=A result=rejected reason=评论内容不能为空')
     const state = await readFile(join(harness.dir, 'triggers', 'state.json'), 'utf8')
     expect(state).not.toContain(secret)
   })

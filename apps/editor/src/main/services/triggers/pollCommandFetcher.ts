@@ -6,7 +6,7 @@
  *  reaches the prompt), so a failing command cannot leak data into logs/audit.
  *--------------------------------------------------------------------------------------------*/
 
-import { exec } from 'node:child_process'
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import { localize, type ILogger } from '@universe-editor/platform'
 import type { TriggerPayloadValue } from '../../../shared/triggers/types.js'
 
@@ -145,28 +145,110 @@ export function describePollExecError(err: ExecFailure, timeoutSec: number): str
       })
 }
 
-/** Default fetcher: `exec` (shell), workspace cwd, hard timeout, 1 MB stdout cap. */
+/**
+ * `exec`-style shell execution left grandchildren alive on timeout (the shell was
+ * killed, the real work kept running). Spawn explicitly and kill the whole tree:
+ * `taskkill /T` on Windows, the process group on POSIX (`detached: true`).
+ */
+function killProcessTree(child: ChildProcess): void {
+  const pid = child.pid
+  if (pid === undefined) return
+  try {
+    if (process.platform === 'win32') {
+      // Synchronous: the caller reports the failure immediately, and an async
+      // taskkill could still be running when the run directory is cleaned up.
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      })
+    } else {
+      process.kill(-pid, 'SIGKILL')
+    }
+  } catch {
+    // The child may already be gone.
+  }
+  try {
+    child.kill()
+  } catch {
+    // Same.
+  }
+}
+
+/** Default fetcher: shell command, workspace cwd, hard timeout, 1 MB stdout cap. */
 export function createPollCommandFetcher(logger?: ILogger): PollCommandFetcher {
   return (request) =>
     new Promise<PollFetchResult>((resolve) => {
-      exec(
-        request.command,
-        {
-          cwd: request.cwd,
-          timeout: request.timeoutSec * 1000,
-          maxBuffer: POLL_MAX_STDOUT_BYTES,
-          windowsHide: true,
-          encoding: 'utf8',
-        },
-        (err, stdout) => {
-          if (err) {
-            resolve({ ok: false, error: describePollExecError(err, request.timeoutSec) })
-            return
-          }
-          resolve(
-            parsePollStdout(typeof stdout === 'string' ? stdout : '', request.keyField, logger),
-          )
-        },
+      let settled = false
+      let output = ''
+      let outputBytes = 0
+      const finish = (result: PollFetchResult): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(result)
+      }
+      const fail = (error: string): void => {
+        killProcessTree(child)
+        finish({ ok: false, error })
+      }
+      const timer = setTimeout(
+        () =>
+          fail(
+            localize('triggers.error.pollTimeout', 'The poll command timed out after {seconds}s', {
+              seconds: request.timeoutSec,
+            }),
+          ),
+        request.timeoutSec * 1000,
       )
+      timer.unref?.()
+
+      const child = spawn(request.command, {
+        cwd: request.cwd,
+        shell: true,
+        windowsHide: true,
+        // A POSIX process group lets us kill the shell *and* its descendants.
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      child.stdout?.setEncoding('utf8')
+      child.stdout?.on('data', (chunk: string) => {
+        outputBytes += Buffer.byteLength(chunk)
+        if (outputBytes > POLL_MAX_STDOUT_BYTES) {
+          fail(
+            localize(
+              'triggers.error.pollTooLarge',
+              'The poll command printed more than 1 MB and was stopped',
+            ),
+          )
+          return
+        }
+        output += chunk
+      })
+      // Drain stderr so a chatty command cannot block on a full pipe; content is
+      // deliberately never logged.
+      child.stderr?.resume()
+      child.on('error', () =>
+        finish({
+          ok: false,
+          error: localize(
+            'triggers.error.pollCommandStart',
+            'The poll command could not be started',
+          ),
+        }),
+      )
+      child.on('close', (code, signal) => {
+        if (settled) return
+        if (code === 0) {
+          finish(parsePollStdout(output, request.keyField, logger))
+          return
+        }
+        finish({
+          ok: false,
+          error: describePollExecError(
+            { ...(code === null ? {} : { code }), ...(signal === null ? {} : { signal }) },
+            request.timeoutSec,
+          ),
+        })
+      })
     })
 }

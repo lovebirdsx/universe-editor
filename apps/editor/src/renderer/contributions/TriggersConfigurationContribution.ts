@@ -16,12 +16,26 @@ import {
   URI,
 } from '@universe-editor/platform'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
-import { TRIGGER_ACTION_TYPES, TRIGGER_DEFAULTS } from '../../shared/triggers/types.js'
+import {
+  ELEVATED_MODE_IDS,
+  TRIGGER_ACTION_TYPES,
+  TRIGGER_DEFAULTS,
+} from '../../shared/triggers/types.js'
 import { schemaFileMatchForUri } from '../services/preferences/schemaFileMatch.js'
 
 const TRIGGERS_SCHEMA_URI = 'universe-editor://schemas/triggers'
 
-const SOURCE_SCHEMA: IJSONSchema = {
+/** Adds draft-7 `exclusiveMinimum` and `minLength`, which Monaco's JSON service accepts. */
+type TriggerJSONSchema = Omit<IJSONSchema, 'properties' | 'items' | 'oneOf' | 'anyOf'> & {
+  properties?: Record<string, TriggerJSONSchema>
+  items?: TriggerJSONSchema
+  oneOf?: TriggerJSONSchema[]
+  anyOf?: TriggerJSONSchema[]
+  exclusiveMinimum?: number
+  minLength?: number
+}
+
+const SOURCE_SCHEMA: TriggerJSONSchema = {
   type: 'object',
   description: '触发源：四选一，由 type 区分。',
   required: ['type'],
@@ -45,13 +59,19 @@ const SOURCE_SCHEMA: IJSONSchema = {
       type: 'object',
       description: '定时触发：cron 与 everyMin 必须且只能设置一个。',
       required: ['type'],
+      oneOf: [{ required: ['cron'] }, { required: ['everyMin'] }],
       properties: {
         type: { type: 'string', enum: ['schedule'] },
         cron: {
           type: 'string',
+          minLength: 1,
           description: '5 字段 cron（分 时 日 月 周），如 "0 9 * * 1"；支持 * , - /。',
         },
-        everyMin: { type: 'number', minimum: 1, description: '固定间隔（分钟），与 cron 二选一。' },
+        everyMin: {
+          type: 'integer',
+          minimum: 1,
+          description: '固定间隔（分钟，整数），与 cron 二选一。',
+        },
         onMissed: {
           type: 'string',
           enum: ['skip', 'catch-up-once'],
@@ -69,29 +89,31 @@ const SOURCE_SCHEMA: IJSONSchema = {
       properties: {
         type: { type: 'string', enum: ['poll'] },
         intervalSec: {
-          type: 'number',
+          type: 'integer',
           minimum: 30,
-          description: '轮询间隔（秒），至少 30。',
+          description: '轮询间隔（秒，整数），至少 30。',
         },
         fetch: {
           type: 'object',
-          description: '取数命令：在 main 进程执行，stdout 必须是 JSON 数组。',
+          description:
+            '取数命令：在 main 进程执行；stdout 必须是 JSON 数组，或包含 items 数组的对象。',
           required: ['type', 'command'],
           properties: {
             type: { type: 'string', enum: ['command'] },
-            command: { type: 'string', description: '要执行的命令行。' },
+            command: { type: 'string', minLength: 1, description: '要执行的命令行。' },
             timeoutSec: {
-              type: 'number',
+              type: 'integer',
               minimum: 1,
               maximum: 600,
               default: TRIGGER_DEFAULTS.pollTimeoutSec,
-              description: '命令超时（秒），默认 60。',
+              description: '命令超时（秒，整数），默认 60。',
             },
           },
           additionalProperties: false,
         },
         keyField: {
           type: 'string',
+          minLength: 1,
           description: '数组元素中用作去重键的字段名，如 "id"。',
         },
       },
@@ -107,25 +129,25 @@ const SOURCE_SCHEMA: IJSONSchema = {
   ],
 }
 
-const BUDGET_SCHEMA: IJSONSchema = {
+const BUDGET_SCHEMA: TriggerJSONSchema = {
   type: 'object',
-  description: '单次运行预算。',
+  description: '单次运行预算：三个字段都必须大于 0。',
   properties: {
     maxCostUsd: {
       type: 'number',
-      minimum: 0,
+      exclusiveMinimum: 0,
       default: TRIGGER_DEFAULTS.budget.maxCostUsd,
       description: '单次运行费用上限（美元），超出后取消该轮。',
     },
     timeoutMin: {
       type: 'number',
-      minimum: 0,
+      exclusiveMinimum: 0,
       default: TRIGGER_DEFAULTS.budget.timeoutMin,
       description: '会话活跃时间上限（分钟）；等待审批/提问的时间不计入。',
     },
     approvalTimeoutMin: {
       type: 'number',
-      minimum: 0,
+      exclusiveMinimum: 0,
       default: TRIGGER_DEFAULTS.budget.approvalTimeoutMin,
       description: '审批卡等待上限（分钟），超时后取消该轮并记为 approval-timeout。',
     },
@@ -133,22 +155,27 @@ const BUDGET_SCHEMA: IJSONSchema = {
   additionalProperties: false,
 }
 
-const SESSION_SCHEMA: IJSONSchema = {
+const SESSION_SCHEMA: TriggerJSONSchema = {
   type: 'object',
   description: '会话配置：prompt 与 skill 至少设置一个。',
   anyOf: [{ required: ['prompt'] }, { required: ['skill'] }],
   properties: {
-    agent: { type: 'string', description: 'Agent id，缺省使用默认 agent。' },
+    agent: {
+      type: 'string',
+      minLength: 1,
+      description: 'Agent id，缺省使用默认 agent。',
+    },
     cwd: {
       type: 'string',
-      description: '相对 workspace 的工作目录，必须位于其下（不允许 ".."）。',
+      minLength: 1,
+      description: '相对 workspace 的工作目录，必须位于其下（不允许 ".." 或绝对路径）。',
     },
     mode: {
       type: 'string',
-      description:
-        '显式 mode id；缺省使用该 agent 的保守档。bypass 类 mode 需先执行「确认高权限模式」。',
+      minLength: 1,
+      description: `显式 mode id；缺省使用该 agent 的保守档。高权限 mode（${ELEVATED_MODE_IDS.join(' / ')}）需先执行「确认高权限模式」，否则该触发器不会运行。`,
     },
-    model: { type: 'string', description: '模型 id，缺省使用默认模型。' },
+    model: { type: 'string', minLength: 1, description: '模型 id，缺省使用默认模型。' },
     skill: {
       type: 'string',
       pattern: '^[A-Za-z0-9][A-Za-z0-9:_-]*$',
@@ -160,7 +187,7 @@ const SESSION_SCHEMA: IJSONSchema = {
     },
     mcpServers: {
       type: 'array',
-      items: { type: 'string' },
+      items: { type: 'string', minLength: 1 },
       description: '创建会话时 pin 的 MCP 服务器名；之后不会随设置变化。',
     },
     budget: BUDGET_SCHEMA,
@@ -168,16 +195,20 @@ const SESSION_SCHEMA: IJSONSchema = {
   additionalProperties: false,
 }
 
-const TRIGGER_SCHEMA: IJSONSchema = {
+const TRIGGER_SCHEMA: TriggerJSONSchema = {
   type: 'object',
-  required: ['id', 'workspace', 'source'],
+  required: ['id', 'workspace', 'source', 'session'],
   properties: {
     id: {
       type: 'string',
       pattern: '^[a-z0-9][a-z0-9-]{0,63}$',
       description: '唯一 id：小写字母、数字与连字符。',
     },
-    name: { type: 'string', description: '显示名称；缺省使用 id。' },
+    name: {
+      type: 'string',
+      minLength: 1,
+      description: '显示名称；缺省使用 id。',
+    },
     enabled: {
       type: 'boolean',
       default: false,
@@ -191,15 +222,15 @@ const TRIGGER_SCHEMA: IJSONSchema = {
     session: SESSION_SCHEMA,
     allowedActions: {
       type: 'array',
-      items: { type: 'string', enum: [...TRIGGER_ACTION_TYPES] },
+      items: { type: 'string', enum: [...TRIGGER_ACTION_TYPES], minLength: 1 },
       description: '判决可自动执行的动作白名单；不在列表内的动作会降级为 escalate。',
     },
     concurrency: {
-      type: 'number',
+      type: 'integer',
       minimum: 1,
       maximum: 10,
       default: TRIGGER_DEFAULTS.concurrency,
-      description: '该触发器的并发上限；缺省 1。',
+      description: '该触发器的并发上限（整数）；缺省 1。',
     },
     overflow: {
       type: 'string',
@@ -211,7 +242,7 @@ const TRIGGER_SCHEMA: IJSONSchema = {
   additionalProperties: false,
 }
 
-export const TRIGGERS_SCHEMA: IJSONSchema = {
+export const TRIGGERS_SCHEMA: TriggerJSONSchema = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -222,11 +253,11 @@ export const TRIGGERS_SCHEMA: IJSONSchema = {
       description: '配置格式版本，当前固定为 1。',
     },
     maxConcurrentRuns: {
-      type: 'number',
+      type: 'integer',
       minimum: 1,
       maximum: 10,
       default: TRIGGER_DEFAULTS.maxConcurrentRuns,
-      description: '全局并发运行上限；缺省 2。',
+      description: '全局并发运行上限（整数）；缺省 2。',
     },
     triggers: {
       type: 'array',

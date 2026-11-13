@@ -33,6 +33,7 @@ function makeRequest(overrides: Partial<TriggerRunRequest> = {}): TriggerRunRequ
     allowedActions: ['swarm.vote', 'swarm.comment', 'swarm.approve'],
     approveConfirmed: true,
     payload: { reviewId: '1001', version: 2, updated: 100 },
+    sourceType: 'swarm-review',
     ...overrides,
   }
 }
@@ -361,6 +362,59 @@ describe('executeTriggerVerdict', () => {
     expect(resolution.verdict).toBe('escalate')
     expect(resolution.actions).toEqual([
       { type: 'swarm.vote', target: '1001', result: 'failed', reason: '投票命令返回失败' },
+    ])
+  })
+
+  it('lists the actions that already ran when a later one fails', async () => {
+    const raw = JSON.stringify({
+      verdict: 'auto-approve',
+      summary: '',
+      actions: [
+        { type: 'swarm.vote', target: '1001', detail: 'up' },
+        { type: 'swarm.comment', target: '1001', detail: 'hello' },
+        { type: 'swarm.approve', target: '1001' },
+      ],
+    })
+    const { commands, executeCommand } = makeCommands({
+      [SwarmCommands.getReview]: () => reviewDetail(),
+      [SwarmCommands.vote]: () => true,
+      [SwarmCommands.addComment]: () => {
+        throw new Error('comment service down')
+      },
+      [SwarmCommands.transition]: () => true,
+    })
+    const resolution = await executeTriggerVerdict(raw, makeRequest(), { commands })
+    expect(resolution.verdict).toBe('escalate')
+    expect(resolution.summary).toContain('已执行：swarm.vote@1001（不可回滚）')
+    expect(resolution.summary).toContain('comment service down')
+    // The action after the failure never ran.
+    expect(executeCommand).not.toHaveBeenCalledWith(SwarmCommands.transition, expect.anything())
+    expect(resolution.actions).toEqual([
+      { type: 'swarm.vote', target: '1001', result: 'ok' },
+      { type: 'swarm.comment', target: '1001', result: 'failed', reason: 'comment service down' },
+    ])
+  })
+
+  it('rejects every swarm action for a non-swarm source before executing anything', async () => {
+    const raw = JSON.stringify({
+      verdict: 'auto-approve',
+      summary: '',
+      actions: [{ type: 'swarm.vote', target: '1001', detail: 'up' }],
+    })
+    const { commands, executeCommand } = makeCommands({ [SwarmCommands.vote]: () => true })
+    const resolution = await executeTriggerVerdict(raw, makeRequest({ sourceType: 'schedule' }), {
+      commands,
+    })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(resolution.verdict).toBe('escalate')
+    expect(resolution.summary).toContain('仅 swarm-review 触发器可执行 Swarm 动作')
+    expect(resolution.actions).toEqual([
+      {
+        type: 'swarm.vote',
+        target: '1001',
+        result: 'rejected',
+        reason: '仅 swarm-review 触发器可执行 Swarm 动作',
+      },
     ])
   })
 

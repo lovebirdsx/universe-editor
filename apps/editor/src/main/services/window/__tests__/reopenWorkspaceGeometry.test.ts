@@ -150,6 +150,11 @@ function makeOpts() {
       // Closing a window ends its heap-snapshot round; these tests never start one.
       diagnostics: { invalidateWindowRenderer: () => {} },
       watcherProcess: createStubWatcherProcessClient(),
+      triggers: {
+        registerWindowHost: () => {},
+        unregisterWindowHost: () => {},
+        setWindowProvider: () => {},
+      },
     } as never,
     logService: new LogMainService(),
     e2eEnabled: false,

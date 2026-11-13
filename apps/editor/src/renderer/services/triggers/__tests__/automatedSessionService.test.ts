@@ -41,7 +41,10 @@ function modeOption(value: string): SdkSessionConfigOption {
   } as unknown as SdkSessionConfigOption
 }
 
-function makeFakeSession(initialMode: string, pendingPrompt = false): FakeSession {
+function makeFakeSession(
+  initialMode: string,
+  options: { pendingPrompt?: boolean; promptError?: string } = {},
+): FakeSession {
   const status = observableValue<AcpSessionStatus>('test.status', 'idle')
   const configBag = observableValue<readonly SdkSessionConfigOption[]>('test.config', [
     modeOption(initialMode),
@@ -68,7 +71,8 @@ function makeFakeSession(initialMode: string, pendingPrompt = false): FakeSessio
     sendPrompt: async (text: string) => {
       prompts.push(text)
       status.set('running', undefined)
-      if (pendingPrompt) await new Promise(() => undefined)
+      if (options.promptError !== undefined) throw new Error(options.promptError)
+      if (options.pendingPrompt === true) await new Promise(() => undefined)
       status.set('idle', undefined)
     },
     close,
@@ -86,9 +90,17 @@ interface Harness {
 }
 
 function makeHarness(
-  options: { initialMode?: string; resultRaw?: string; pendingPrompt?: boolean } = {},
+  options: {
+    initialMode?: string
+    resultRaw?: string
+    pendingPrompt?: boolean
+    promptError?: string
+  } = {},
 ): Harness {
-  const fake = makeFakeSession(options.initialMode ?? 'default', options.pendingPrompt === true)
+  const fake = makeFakeSession(options.initialMode ?? 'default', {
+    ...(options.pendingPrompt !== undefined ? { pendingPrompt: options.pendingPrompt } : {}),
+    ...(options.promptError !== undefined ? { promptError: options.promptError } : {}),
+  })
   const createSession = vi.fn(async () => fake.session)
   const sessions = { createSession } as unknown as IAcpSessionService
   const registry = { defaultAgentId: () => 'claude-code' } as unknown as IAcpAgentRegistry
@@ -124,6 +136,7 @@ function request(overrides: Partial<TriggerRunRequest> = {}): TriggerRunRequest 
     allowedActions: [],
     approveConfirmed: false,
     payload: {},
+    sourceType: 'manual',
     ...overrides,
   }
 }
@@ -144,7 +157,7 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     const result = await h.service.startAutomatedSession(
       request({ mode: 'bypassPermissions', allowElevatedMode: true }),
     )
-    expect(result.sessionId).toBe('local-1')
+    expect(result.sessionId).toBe('agent-1')
     expect(h.createSession).toHaveBeenCalledWith(
       'claude-code',
       expect.objectContaining({
@@ -202,7 +215,7 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     expect(fake.prompts).toEqual([])
   })
 
-  it('rejects an elevated actual mode when no mode was requested', async () => {
+  it('refuses an unknown agent when no mode was configured', async () => {
     const fake = makeFakeSession('danger-full-access')
     const createSession = vi.fn(async () => fake.session)
     const service = new AutomatedSessionService(
@@ -212,20 +225,47 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
       { readFileText: vi.fn() } as never,
       new StubLoggerService(),
     )
-    await expect(service.startAutomatedSession(request())).rejects.toThrow(/elevated mode/)
-    expect(fake.close).toHaveBeenCalled()
+    await expect(service.startAutomatedSession(request())).rejects.toThrow(/未知 agent/)
+    expect(createSession).not.toHaveBeenCalled()
+    expect(fake.close).not.toHaveBeenCalled()
+  })
+
+  it('compares the requested and applied modes case-insensitively', async () => {
+    const h = makeHarness({ initialMode: 'default' })
+    const result = await h.service.startAutomatedSession(request({ mode: ' Default ' }))
+    expect(result.sessionId).toBe('agent-1')
+    expect(h.createSession).toHaveBeenCalledWith(
+      'claude-code',
+      expect.objectContaining({ configDesiredOverrides: { mode: 'Default' } }),
+    )
   })
 
   it('dispatches the prompt after the handshake and reports the run end', async () => {
     const h = makeHarness({ resultRaw: '{"verdict":"info"}' })
     const started = await h.service.startAutomatedSession(request())
-    expect(started.sessionId).toBe('local-1')
+    expect(started.sessionId).toBe('agent-1')
     await flush()
     expect(h.ends).toHaveLength(1)
     expect(h.ends[0]).toMatchObject({ runId: 'run-1', sessionId: 'agent-1', outcome: 'completed' })
     expect(h.setAutomationResult).toHaveBeenCalledWith(
       'agent-1',
       expect.objectContaining({ outcome: 'completed' }),
+    )
+  })
+
+  it('reports a rejected prompt as failed with the error', async () => {
+    const h = makeHarness({ promptError: 'prompt bridge down' })
+    await h.service.startAutomatedSession(request())
+    await flush()
+    expect(h.ends).toHaveLength(1)
+    expect(h.ends[0]).toMatchObject({
+      outcome: 'failed',
+      error: 'prompt bridge down',
+      sessionId: 'agent-1',
+    })
+    expect(h.setAutomationResult).toHaveBeenCalledWith(
+      'agent-1',
+      expect.objectContaining({ outcome: 'failed' }),
     )
   })
 
