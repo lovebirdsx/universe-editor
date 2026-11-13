@@ -58,6 +58,7 @@ import {
   hasEnabledSwarmTrigger,
 } from '../services/swarm/swarmTriggerReporter.js'
 import { OpenSwarmReviewAction, OpenSwarmReviewsAction } from '../actions/swarmActions.js'
+import { IUserSettingsSyncService } from '../services/configuration/UserSettingsSync.js'
 import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
@@ -155,8 +156,14 @@ export class SwarmReviewNotificationContribution
   private readonly _triggerReporter: SwarmTriggerReporter
   /** Last known trigger list; drives the background-poll hint. */
   private _triggers: readonly TriggerSummary[] = []
-  /** One hint per app start, no matter how often the config / trigger list changes. */
+  /** One hint per window, no matter how often the config / trigger list changes. */
   private _backgroundPollHintShown = false
+  /** The User settings layer hydrates asynchronously after this contribution is
+   *  constructed (ConfigInitContribution fires initialize() without awaiting),
+   *  so before it lands `perforce.swarm.backgroundPoll.enabled` reads the schema
+   *  default (false). The trigger list usually arrives first, so without this
+   *  gate every new window hints even though the user has the switch on. */
+  private _configHydrated = false
 
   constructor(
     @ICommandService private readonly _commands: ICommandService,
@@ -167,6 +174,7 @@ export class SwarmReviewNotificationContribution
     @INotificationService private readonly _notification: INotificationService,
     @ILoggerService loggerService: ILoggerService,
     @ITriggerMainService private readonly _triggerMain: ITriggerMainService,
+    @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'swarmNotify', name: 'Swarm Notifications' })
@@ -179,6 +187,14 @@ export class SwarmReviewNotificationContribution
       this._triggerMain.onDidChangeTriggers((triggers) => this._applyTriggers(triggers)),
     )
     void this._loadTriggers()
+    // The trigger list usually lands before the settings hydration (several
+    // sequential file reads, possibly on a slow mapped drive), so the first
+    // hint pass must wait for it or it would judge by the schema default.
+    void this._userSettings.whenInitialized.then(() => {
+      if (this._store.isDisposed) return
+      this._configHydrated = true
+      this._maybeHintBackgroundPoll()
+    })
     // The ignore set feeds the "final displayed" computation; attach is idempotent
     // (the view / detail tab / view contribution may already have attached it).
     void swarmIgnoreStore.attach(storage)
@@ -406,9 +422,10 @@ export class SwarmReviewNotificationContribution
 
   /** A swarm-review trigger is useless while the background poll is off — the
    *  reviews list is only refreshed on open/manual refresh then, so nobody
-   *  reports "needs action" reviews. Point that out once per app start. */
+   *  reports "needs action" reviews. Point that out once per window, after the
+   *  User layer has hydrated (before that the switch reads its default). */
   private _maybeHintBackgroundPoll(): void {
-    if (this._backgroundPollHintShown || this._pollEnabled()) return
+    if (!this._configHydrated || this._backgroundPollHintShown || this._pollEnabled()) return
     if (!hasEnabledSwarmTrigger(this._triggers)) return
     this._backgroundPollHintShown = true
     this._logger.info('swarm-review trigger enabled while background polling is off → hint shown')

@@ -163,6 +163,9 @@ interface SetupOpts {
   triggers?: readonly TriggerSummary[]
   /** `perforce.swarm.getReview` responses keyed by review id (version lookups). */
   reviewDetails?: Record<string, SwarmReviewDetailDto>
+  /** User-settings hydration gate. Defaults to already resolved; hold it back to
+   *  reproduce the startup race where the trigger list lands first. */
+  userSettingsReady?: Promise<void>
 }
 
 async function setup(opts: SetupOpts = {}) {
@@ -265,6 +268,7 @@ async function setup(opts: SetupOpts = {}) {
     notification,
     loggerService,
     triggerMain,
+    { whenInitialized: opts.userSettingsReady ?? Promise.resolve() } as never,
   )
   // Let the constructor's priming poll complete (baseline, no notification).
   await flush()
@@ -314,6 +318,7 @@ describe('SwarmReviewNotificationContribution', () => {
       { notify: vi.fn(), dismiss: vi.fn() } as never,
       fakeLoggerService().service,
       fakeTriggerMain(),
+      { whenInitialized: Promise.resolve() } as never,
     )
     await flush()
     await instance.refresh()
@@ -388,6 +393,7 @@ describe('SwarmReviewNotificationContribution', () => {
       { notify: vi.fn(), dismiss: vi.fn() } as never,
       fakeLoggerService().service,
       fakeTriggerMain(),
+      { whenInitialized: Promise.resolve() } as never,
     )
     await flush()
     // Full snapshot: the enabled switch, the RAW poll-interval seconds (ms
@@ -458,6 +464,7 @@ describe('SwarmReviewNotificationContribution', () => {
         { notify: vi.fn(), dismiss: vi.fn() } as never,
         fakeLoggerService().service,
         fakeTriggerMain(),
+        { whenInitialized: Promise.resolve() } as never,
       )
       await vi.advanceTimersByTimeAsync(0)
       expect(pushCalls().length).toBe(0)
@@ -500,6 +507,7 @@ describe('SwarmReviewNotificationContribution', () => {
         { notify: vi.fn(), dismiss: vi.fn() } as never,
         fakeLoggerService().service,
         fakeTriggerMain(),
+        { whenInitialized: Promise.resolve() } as never,
       )
       await vi.advanceTimersByTimeAsync(0)
       instance.dispose()
@@ -532,6 +540,7 @@ describe('SwarmReviewNotificationContribution', () => {
         { notify: vi.fn(), dismiss: vi.fn() } as never,
         fakeLoggerService().service,
         fakeTriggerMain(),
+        { whenInitialized: Promise.resolve() } as never,
       )
       // Exhaust the 20 x 250ms retry budget with the command still unregistered.
       await vi.advanceTimersByTimeAsync(20 * 250 + 500)
@@ -1350,6 +1359,46 @@ describe('SwarmReviewNotificationContribution', () => {
     it('does not hint while background polling is already on', async () => {
       const t = await setup({ pollEnabled: true, triggers: [triggerSummary()] })
       expect(t.inAppNotify).not.toHaveBeenCalled()
+      t.dispose()
+    })
+
+    it('waits for the user-settings hydration before hinting', async () => {
+      let hydrate!: () => void
+      const userSettingsReady = new Promise<void>((resolve) => {
+        hydrate = resolve
+      })
+      const t = await setup({
+        pollEnabled: false,
+        triggers: [triggerSummary()],
+        userSettingsReady,
+      })
+      // The trigger list landed first; the key still reads its schema default.
+      expect(t.inAppNotify).not.toHaveBeenCalled()
+
+      // Hydration brings the real value: the user has the switch on.
+      t.configValues['perforce.swarm.backgroundPoll.enabled'] = true
+      hydrate()
+      t.fireConfigChange('perforce.swarm.backgroundPoll.enabled')
+      await flush()
+      expect(t.inAppNotify).not.toHaveBeenCalled()
+      t.dispose()
+    })
+
+    it('hints after hydration when polling is really off', async () => {
+      let hydrate!: () => void
+      const userSettingsReady = new Promise<void>((resolve) => {
+        hydrate = resolve
+      })
+      const t = await setup({
+        pollEnabled: false,
+        triggers: [triggerSummary()],
+        userSettingsReady,
+      })
+      expect(t.inAppNotify).not.toHaveBeenCalled()
+
+      hydrate()
+      await flush()
+      expect(t.inAppNotify).toHaveBeenCalledTimes(1)
       t.dispose()
     })
 
