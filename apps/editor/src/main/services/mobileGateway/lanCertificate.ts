@@ -17,7 +17,7 @@ import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import { join } from 'node:path'
 import selfsigned from 'selfsigned'
-import { chmodPrivate, writeFileAtomic } from './atomicFile.js'
+import { chmodPrivate, writeFileAtomic } from '../jsonConfig/atomicFile.js'
 
 export const LAN_CERTIFICATE_FILE = 'cert.pem'
 export const LAN_PRIVATE_KEY_FILE = 'key.pem'

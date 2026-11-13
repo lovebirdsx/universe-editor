@@ -25,7 +25,7 @@ import {
 import { URI } from '@universe-editor/platform'
 import type { MobileBridgePromptAttachment } from '../../../shared/ipc/mobileGatewayService.js'
 import { sanitizeAttachmentFileName } from './attachmentNames.js'
-import { writeBytesAtomic } from './atomicFile.js'
+import { writeBytesAtomic } from '../jsonConfig/atomicFile.js'
 
 export const ATTACHMENT_PENDING_TTL_MS = 60 * 60 * 1000
 export const ATTACHMENT_SENT_TTL_MS = 7 * 24 * 60 * 60 * 1000

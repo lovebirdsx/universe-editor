@@ -7,7 +7,7 @@
 
 import { readFile } from 'node:fs/promises'
 import { generateVAPIDKeys } from 'web-push'
-import { writeJsonAtomic } from './atomicFile.js'
+import { writeJsonAtomic } from '../jsonConfig/atomicFile.js'
 
 const FILE_VERSION = 1
 

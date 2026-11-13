@@ -15,7 +15,7 @@ import type {
   MobileNotificationPrefs,
   MobilePushSubscription,
 } from '@universe-editor/mobile-protocol'
-import { writeJsonAtomic } from './atomicFile.js'
+import { writeJsonAtomic } from '../jsonConfig/atomicFile.js'
 
 const FILE_VERSION = 2
 const TOKEN_BYTES = 32
