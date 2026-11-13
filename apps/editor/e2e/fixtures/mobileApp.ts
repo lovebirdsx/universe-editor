@@ -19,7 +19,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 export const MOBILE_ASSETS_DIR = join(__dirname, '..', '..', '..', 'mobile', 'dist')
 export const MOBILE_E2E_CODE = '1234ABCD'
 
-async function findFreePort(): Promise<number> {
+export async function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const server = createServer()
     server.once('error', reject)

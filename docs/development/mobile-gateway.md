@@ -23,7 +23,9 @@
 > 「项目根」快捷区）；**M16 手机 `#` 两步引用已落地**（协议 v22：`commit` / `chatContext`
 > 搜索入口与 `resolvePromptRef`，commit 走手机列表，扩展在 PC 弹选择器后回传结果）；**M17
 > 会话内参数配置已落地**（协议 v23：只读 `getSessionSettings` + 子模型写入 / 立即重启 +
-> 会话级 MCP 启停，见 §6h）。
+> 会话级 MCP 启停，见 §6h）；**M18 手机权限与 PC 一致已落地**（协议 v23：移除设备 trust，
+> 手机可直接切换 bypass 与持久授权，见 §8）；**M19 手机后台常驻已落地**（托盘、关窗隐藏、
+> 后台模式下的隐藏开窗、空闲回收、登录自启与 `--background` 无窗口启动，见 §2 / §11 / 决策 16–22）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -31,14 +33,15 @@
 ## 1. 产品定位与范围
 
 手机是 PC 编辑器里 ACP agent 会话的**遥控器**：不跑 agent、不存会话、不做第二套 agent 运行时。
-PC 编辑器关闭时手机显示离线，不接管执行。
+编辑器**进程**完全退出时手机才离线；开启后台模式后关闭窗口只是隐藏到托盘，窗口里的 renderer、
+会话与网关都继续运行，手机保持在线。手机不接管执行。
 
 | 维度     | 定位                                                                |
 | -------- | ------------------------------------------------------------------- |
 | 形态     | PWA，由 PC 编辑器内置网关提供页面；手机浏览器打开后「添加到主屏幕」 |
 | 数据归属 | 会话、agent 进程、工作区全部留在 PC；手机只持设备凭据与本地缓存     |
 | 核心场景 | 离开工位后收到审批/提问，远程看一眼、批一下、发一句话               |
-| 离线语义 | PC 编辑器不在线即整体离线，手机不做离线队列与本地执行               |
+| 离线语义 | 编辑器**进程**退出才整体离线；后台模式下关窗只是隐藏，仍在线；手机不做离线队列与本地执行 |
 
 **第一期界面**
 
@@ -83,6 +86,14 @@ ACP 生态目前没有成熟的移动客户端，因此协议与 view-model 需�
 **桥放 renderer**：会话状态与权限 Promise 只存在于 renderer（见
 `apps/editor/src/renderer/services/acp/CLAUDE.md` 的跨进程边界），桥只做投影与命令转发，**不复制状态**。
 main 侧不直接读 `AcpSession`。
+
+**后台常驻（M19）**：`BackgroundModeMainService` 拥有托盘与「关闭窗口后保持后台运行」判定，**不直接
+操作 BrowserWindow**——窗口服务经窄接口 `{ isActive, shouldHideOnClose }` 读取它（两者固定顺序构造，
+避免循环依赖）。后台模式 = 网关启用（`gateway.json` 的 `enabled` 或 `UNIVERSE_MOBILE_GATEWAY=1`）
+且 `keepRunningInBackground` 为真，并且托盘创建成功（E2E 下以主进程探针放行）。激活时建托盘、启
+30 秒空闲扫描；停用时先恢复全部隐藏窗口再销毁托盘，若已无窗口则创建主窗口，杜绝「无窗口又无
+托盘」的隐形进程。关窗只隐藏不销毁窗口，因此 renderer、ACP 会话与网关都继续运行；详见 §11 工程
+结构与决策 16–22。
 
 **通道与注册**：
 
@@ -471,8 +482,16 @@ renderer 桥的 `getWorkspaceGitDirty`——git 扩展跑在远端 extension hos
 | 目标工作区状态                        | 行为                                                                                                                                   |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
 | 已有匹配窗口                          | ping 探活通过后调用该窗口桥的 `newSession`（覆盖 renderer reload）                                                                     |
-| 仅在最近列表                          | `openWindowForFolder` 自动开窗（会把窗口带到前台，已接受），等 main 侧桥注册，再 ping 到 renderer 的 `MobileBridge` 通道应答后才发命令 |
+| 仅在最近列表                          | `openWindowForFolderInBackground` 自动开窗；**后台模式且当前无可见窗口时以隐藏方式创建**（不带到前台），有可见窗口时保持原有「带到前台」，复用已隐藏窗口时只发命令、不 show/focus。等 main 侧桥注册，再 ping 到 renderer 的 `MobileBridge` 通道应答后才发命令 |
 | 都不在 / 等待桥超时 / ping 始终无应答 | 返回 `workspace_not_open`                                                                                                              |
+
+**后台模式下的开窗**：`MobileGatewayHub._newSession` 调 `MobileGatewayWindowProvider.openWindowForFolderInBackground`
+→ `WindowMainService.openWindowForFolderInBackground(folder)`，其中
+`hiddenCreate = backgroundMode.isActive() && getVisibleWindowCount() === 0`。隐藏创建时 `createWindow`
+传 `{ hidden: true }`，ready-to-show / did-finish-load / 4 秒兜底三处都受 `allowShow` 守卫，不会
+在会话建立过程中闪出窗口。目标工作区或祖先工作区已由某个隐藏窗口持有时，只向它发送
+`ue:open-session` / `ue:new-agent-session`，**不 restore / focus**——用户在工位外操作手机时，不应把
+他刚刚关掉的窗口又弹回前台。
 
 **为什么必须 ping**：`createWindowScopedServices` 在 `loadURL` **之前**就调用了
 `mobileGateway.registerWindowBridge(...)`，`waitForBridge` 只能证明 main 侧反向代理存在；
@@ -1187,7 +1206,8 @@ MCP 写入的 `detail` 不含 server 名单。
   使用当前选中的 `pairing.selectedUrl`，一次性码仍保留在 fragment。WSLg 下
   `shell.openExternal` 不保证拉起 Windows 浏览器，UI 与用户文档保留手动打开地址的兜底。
   **配置持久化（机器本地）**：`enabled` / `bind` / `lanAddress` / `port` / `allowedHosts` /
-  `certificateMode` / `vapidSubject` / `sessionHistoryWorkspaceLimit` 存 `<userData>/mobile/gateway.json`
+  `certificateMode` / `vapidSubject` / `sessionHistoryWorkspaceLimit` / `keepRunningInBackground` /
+  `launchAtLogin` 存 `<userData>/mobile/gateway.json`
   （`0600`、原子写入），**不进
   `settings.json`、不跟随 configDir 重定位**，因此多台机器共享 configDir 时各自独立。旧
   `settings.json` 里的 `mobileGateway.*` 不读取、不迁移、不清理——做一次性迁移会把 A 机器的值带给首次
@@ -1206,6 +1226,13 @@ MCP 写入的 `detail` 不含 server 名单。
 JSON schema 由 `MobileGatewayConfigurationContribution` 按 `getConfigFileUri()` 注册。
 `sessionHistoryWorkspaceLimit` 控制手机会话目录读取多少个最近打开但当前关闭的工作区（默认 20，
 1–100；已打开窗口不占名额）；调大意味着更多本地历史文件读取，目录刷新会更慢。
+
+**后台常驻字段（M19）**：
+
+| 字段                      | 默认    | 语义                                                                                                                                                                                                                                                                             |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `keepRunningInBackground` | `false` | 仅在网关启用时生效。为真且托盘就绪时进入后台模式：关闭窗口只是隐藏到托盘，手机保持在线；隐藏窗口空闲 10 分钟且无运行中 / 待审批 / 手机会话订阅时真正关闭。改该字段**不重启网关**（不在 `_applyConfig` 的 `runningKey` 里），只切换后台模式。                                                |
+| `launchAtLogin`           | `false` | 登录系统时以 `--background` 无窗口启动。仅**安装版 Windows / macOS** 支持（`supportsLoginItem`：`isPackaged && !e2e && win32/darwin`），且必须同时启用网关与 `keepRunningInBackground` 才会注册登录项——否则登录启动会留下没有托盘入口的隐形进程。Windows 通过 `app.setLoginItemSettings({ args: ['--background'] })` 传参（`args` 仅 Windows 生效）；macOS 不传 args，用 `app.getLoginItemSettings().wasOpenedAtLogin` 判定本次是否登录启动。关闭任一相关开关都会注销登录项，修改同样**不触发网关重启**。 |
 
 ## 9. 传输档位与证书
 
@@ -1422,6 +1449,17 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | `apps/editor/src/renderer/contributions/MobileGatewayContributions.ts` | `gateway.json` 的 JSON schema 注册                                           |
 | `apps/editor/src/renderer/actions/mobileActions.ts`                    | `workbench.action.mobile.openGatewayConfigJson`                              |
 
+**后台常驻实现位置（M19）**：
+
+| 位置                                                                      | 职责                                                                                                                                                                                  |
+| ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `apps/editor/src/main/services/backgroundMode/backgroundModePolicy.ts`    | 纯决策（全单测）：`isBackgroundModeActive`、`decidePrimaryWindowAction` / `decideActivateAction`、`planSessionPersist`、`updateIdleState`、`supportsLoginItem`；固定 10 分钟回收 / 30 秒扫描 |
+| `apps/editor/src/main/services/backgroundMode/backgroundModeMainService.ts` | 托盘生命周期、配置订阅、空闲扫描、登录项对齐；只经窄接口驱动窗口服务                                                                                                                  |
+| `apps/editor/src/main/services/window/windowMainService.ts`               | `hidden` 创建、`hideWindow` / `revealWindow` / `getHiddenWindowInfos` / `getVisibleWindowCount`、close 拦截顺序、退出确认前临时显示、持久化过滤、`openWindowForFolderInBackground`（见 §6） |
+| `apps/editor/src/main/environment/configItems.ts` + `apps/editor/src/main/cliArgs.ts` | `--background` 启动项；`environmentMainService.background` 与 `hasBackgroundFlag`；macOS 另看 `wasOpenedAtLogin`                                                                    |
+| `apps/editor/src/main/index.ts`                                           | `window-all-closed` 的后台模式守卫、second-instance / `activate` 路由、`--background` 无窗口启动、`__E2E_MAIN__` 主进程探针                                                              |
+| `scripts/release/runtime-resources.mjs`                                   | 把 `public/icon.ico` stage 到 `resources/tray/icon.ico`（托盘图标必须在 asar 外）                                                                                                        |
+
 **构建与打包**（M5 已落地）：
 
 1. `runtime:stage` 先跑 `pnpm --filter @universe-editor/mobile build`，产出 `apps/mobile/dist`
@@ -1481,6 +1519,10 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
   由单测覆盖。
 - 冒烟：`@p0` 覆盖网关启动、原生 WS「配对 → hello → 收件箱快照」与手机 PWA 配对路径，纳入
   `pnpm e2e:smoke`。
+- 后台常驻：`mobile.backgroundMode.spec.ts`（@p1）覆盖「关最后一个窗口 → 隐藏且网关 / 手机 WS 仍
+  在线」、无可见窗口时 recent-only 工作区隐藏开窗且不弹回已隐藏窗口、主进程 `exit()` 正常退出、
+  `--background` 冷启动 0 窗口与 `show()` 恢复；空闲回收、持久化过滤与登录项平台分支由
+  `backgroundModePolicy` / `backgroundModeMainService` 单测覆盖。
 - 协议负向测试：未授权、超长帧、坏 JSON、越权命令、非允许列表的 push endpoint。
 - 附件：`mobileAttachmentStore` / `attachmentNames` / 网关 HTTP API 单测覆盖配额、TTL、设备隔离、
   越权与 413；`mobile.gateway.spec.ts` 的 `@p0` 用例从手机 UI 上传图片 + 文件，断言 PC 收到
@@ -1519,11 +1561,12 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 | M16    | `#` 两步引用：协议 v22、`commit` / `chatContext` 搜索入口与 `resolvePromptRef`、git-graph 串行取提交、扩展在 PC 弹选择器、发送重建（已落地）                                      | 手机可选最近提交并发送 `_meta.commit`；扩展入口结果回传后自动插入；PC 取消 / 超时保留 token；协议与三层 clamp 覆盖坏字段                                                                     |
 | M17    | 会话内参数配置：协议 v23、`getSessionSettings` / `setSubagentModel` / `restartAgentProcess` / `setSessionMcpServers`、子模型 FORCE 成对写入、MCP 会话白名单与 live 状态（已落地） | 手机可查看候选并写会话主机 settings；非 claude / 只读 / 跨 agent 名字被拒；运行中重启先确认；MCP 切换在 idle 后收敛                                                                          |
 | M18    | 手机权限与 PC 一致：协议 v23、删除设备 trust / `allowedOnMobile` / 高风险值门控，手机可直接切换 bypass 与持久授权（已落地）                                                   | 手机审批卡片与配置选择器不再隐藏选项；未下发选项仍回 `forbidden_operation`；PC 设置页无「允许高风险操作」开关                                                                                |
+| M19    | 手机后台常驻：托盘、关窗隐藏、后台模式下的隐藏开窗、空闲回收、登录自启与 `--background` 无窗口启动（已落地）                                                                      | 关最后一个窗口后手机仍在线；无可见窗口时手机新建会话隐藏开窗且不弹回已关窗口；退出走正常确认流程；`--background` 冷启动 0 窗口，托盘「显示」恢复可见窗口                                         |
 
 ## 13. 已确认的决策记录
 
 日期：第 1–7 条为 **2026-11-08**，第 8–11 条为 **2026-11-09**，第 12 条为 **2026-11-10**，
-第 13 条为 **2026-11-11**，第 14–15 条为 **2026-11-12**。
+第 13 条为 **2026-11-11**，第 14–15 条为 **2026-11-12**，第 16–22 条为 **2026-11-13**。
 
 1. **局域网档接受降级**：只保证遥控 + 加密；完整 PWA / 推送能力限 Tailscale 档。
 2. **手机与 PC 权限一致（v23 修订）**：手机是同一会话的遥控器，不单独设高风险门控；
@@ -1532,7 +1575,8 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 3. **plan 自动执行倒计时下沉到 service**：接受「会话 tab 未打开也会自动执行」的行为变化，并同步测试与用户文档。
    实现见 §5：`AcpPendingPermission.autoResolve` 由 service 持有，状态 observable，PC 卡片只转发
    pause / resume / cancel。
-4. **手机新建会话允许自动开窗**：窗口会被带到前台，已接受。
+4. **手机新建会话允许自动开窗**：窗口会被带到前台，已接受。**M19 修订**：仅当 PC 已有可见窗口时
+   才带到前台；后台模式且无可见窗口时改为隐藏创建，复用已隐藏窗口时只发命令、不 show/focus（见决策 16）。
 5. **默认值**：PC 聚焦时不发任何手机通知；远程会话可镜像；手机新建会话与本地一致，可自动打开最近列表里的远程工作区（远程连接异步建立）；详情按需拉取。
 6. **协议 v3 的幂等与超时**：会修改状态的命令支持 `idempotencyKey`（结果缓存 5 分钟、并发去重）；
    网关按命令设 5s / 10s / 30s 三档超时，超时回 `internal`，不让一次坏调用挂住连接。
@@ -1559,7 +1603,8 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
     `resumeSession(..., { activate:false })`，不抢 PC 会话焦点（开窗本身会带到前台，与决策 4 一致）。
     payload 缺 `folder` 时（深链 / 刷新）按 durable id 在前 N 个关闭工作区的落盘历史中反查。
     远程工作区沿用同一链路，开窗失败回 `workspace_not_open`。落盘有 100ms 防抖，目录可能短暂滞后，
-    已打开窗口不受影响。收件箱仍只显示 live 会话。
+    已打开窗口不受影响。收件箱仍只显示 live 会话。**M19 修订**：后台模式下复用已隐藏窗口不再
+    `focusWindow`；未打开工作区在无可见窗口时隐藏创建（见决策 16）。
 12. **设备信任在高风险门控上无法形成边界（v23 移除）**：只要工作区在 PC 上可以开 bypass，
     针对某台设备的限制就是徒劳的；设备级 trust 还带来按连接宽化投影、`resync_required` 与
     双重策略校验的复杂度。v23 删除 `trusted`、`device_trust_changed`、`allowedOnMobile` 与
@@ -1581,6 +1626,30 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
     启动 env，保存后不假装热生效，而是提示下次会话并给显式重启（运行中先确认）。MCP 运行中切换
     不立即重启，等既有 drift 机制在 idle 后 `session/load` 收敛，避免打断当前任务。查询用按需
     命令而非快照流：数据来自异步文件 / 远端 IPC，纳入快照会新增 delta 与 resync 面。
+16. **后台模式的定义与边界**：后台模式 = 网关启用（`enabled` 或 `UNIVERSE_MOBILE_GATEWAY=1`）且
+    `keepRunningInBackground` 为真，并且托盘创建成功；E2E 下以主进程探针放行。它只把「关窗」改成
+    「隐藏」，进程、会话与网关都继续运行，不新增 daemon、不改手机协议。手机开窗在无可见窗口时
+    隐藏创建（避免用户在工位外被意外弹窗），有可见窗口时保持原有「带到前台」。
+17. **后台模式下点 X 一律隐藏，不跑 renderer veto**：关窗拦截顺序固定为
+    `_allowClose` → `_quitConfirmation` → `!_quitting && shouldHideOnClose()` → 原 renderer veto。
+    隐藏不销毁窗口，会话不中断；托盘创建失败时 `shouldHideOnClose` 为假，回退正常关闭，绝不把
+    所有窗口藏进一个没有托盘入口的隐形进程。
+18. **退出确认前临时显示隐藏窗口**：确认 quit / `quitAndInstall` 前，把 requester 以及有运行中会话
+    （或即将成为 requester）的隐藏窗口 `reveal()`，让原生确认框有可见的父窗口；这些窗口**不**移出
+    `_hiddenSeq`，veto 后重新 hide，持久化仍按隐藏处理，避免下次把所有「用户已关」的窗口都恢复。
+19. **隐藏窗口空闲回收条件固定**：只有同时满足 hidden、`running === 0`、`ask === 0`、无手机会话
+    订阅时才计时；任一条件被打破即重置计时。持续 10 分钟才真正关闭，扫描间隔固定 30 秒，不做
+    配置项（构造器留测试 seam）。系统 resume 清空计时，避免睡眠时长被算作空闲。
+20. **多窗口会话的持久化规则**：有可见窗口时只持久化可见窗口；全部隐藏时只保留最近隐藏的一个
+    （`hiddenSeq` 最大），与「关最后一个窗口保留恢复」一致，不会在下次启动时恢复一串用户主动
+    关掉的窗口。
+21. **托盘图标必须在 asar 外**：与窗口图标同理，asar 内路径会得到一个加载失败的空图标。
+    `runtime-resources` stage `public/icon.ico → resources/tray/icon.ico`，开发态读
+    `apps/editor/public/icon.ico`；图标 `isEmpty()` 或 Tray 构造抛错都视为托盘失败（回到决策 17
+    的回退）。登录项的平台限制与固定阈值同属本决策：仅安装版 Win/mac、三开关齐备才注册。
+22. **后台模式下的 `window-all-closed` 不退出**：空闲回收真正关闭最后一个隐藏窗口时，进程必须
+    继续存活（托盘与网关就是 UI），直到用户从托盘「退出」或显式确认 quit；确认过的 quit 仍正常
+    退出。登录自启：Windows 传 `--background` 参数，macOS 用 `wasOpenedAtLogin` 判定。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。

@@ -43,7 +43,7 @@ E2E 已按「内核 vs 插件」物理拆分：
 
 > 判归属：某能力是**扩展提供**的（LSP 符号/定义/诊断、SCM quick-diff、tsserver 语义）才需 scoped fixture 或迁到扩展目录；markdown/mermaid **预览渲染**与 **ACP/agents** 是**核心**，其 spec 用基线 `[]` 即可。
 
-共享 driver（fixture 工厂 + 6 个 PO + 启动/泄漏门禁）抽在 `packages/e2e-harness`；探针类型契约（`E2EProbe` + `window.__E2E__` 全局）抽在零依赖包 `packages/e2e-contract`（app 与 harness 单一事实源）。
+共享 driver（fixture 工厂 + 6 个 PO + 启动/泄漏门禁）抽在 `packages/e2e-harness`；探针类型契约（`E2EProbe` + `window.__E2E__` 全局）抽在零依赖包 `packages/e2e-contract`（app 与 harness 单一事实源）。少数必须在无窗口 / 无 renderer 时断言的主进程场景另用 `globalThis.__E2E_MAIN__`（如后台模式探针，见 [`backgroundMode/CLAUDE.md`](../../apps/editor/src/main/services/backgroundMode/CLAUDE.md)），它不属于 e2e-contract 契约。
 
 ### 最小扩展集启动
 
