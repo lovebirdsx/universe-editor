@@ -57,6 +57,8 @@ export const ServiceChannels = {
   BugRecorder: 'bugRecorder',
   MobileGateway: 'mobileGateway',
   MobileBridge: 'mobileBridge',
+  Triggers: 'triggers',
+  TriggerRunHost: 'triggerRunHost',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]
