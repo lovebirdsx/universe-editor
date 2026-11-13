@@ -361,13 +361,11 @@ describe('TriggerMainService scheduling', () => {
     })
     await openGate(harness)
     await harness.clock.advance(5 * 60_000)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toMatch(/^schedule:/)
 
     await harness.clock.advance(5 * 60_000)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
     expect(harness.requests[1]?.origin.eventKey).not.toBe(harness.requests[0]?.origin.eventKey)
   })
 
@@ -423,7 +421,7 @@ describe('TriggerMainService scheduling', () => {
       },
     })
     await openGate(harness)
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 })
 
@@ -441,8 +439,7 @@ describe('TriggerMainService dedupe', () => {
 
     items.push({ key: 'R-2', payload: { id: 'R-2' } })
     await harness.clock.advance(30_000)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('poll:R-2')
 
     await harness.clock.advance(30_000)
@@ -494,8 +491,7 @@ describe('TriggerMainService dedupe', () => {
     expect(harness.startRun).not.toHaveBeenCalled()
 
     await harness.service.reportSwarmNeedsAction([review('1'), review('2')])
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('swarm:2')
     expect(harness.requests[0]?.payload).toEqual({
       reviewId: '2',
@@ -528,8 +524,7 @@ describe('TriggerMainService dedupe', () => {
       harness.service.reportSwarmNeedsAction([review('1')]),
       harness.service.reportSwarmNeedsAction([review('1')]),
     ])
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('swarm:1')
   })
 })
@@ -551,8 +546,7 @@ describe('TriggerMainService queueing', () => {
     })
     await openGate(harness)
     await harness.clock.advance(5 * 60_000)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const runningId = harness.requests[0]!.origin.triggerId
     const otherId = runningId === 'a' ? 'b' : 'a'
     const list = await harness.service.listTriggers()
@@ -565,8 +559,7 @@ describe('TriggerMainService queueing', () => {
       outcome: 'completed',
       actions: [],
     })
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
     expect(harness.requests[1]?.origin.triggerId).toBe(otherId)
   })
 
@@ -579,8 +572,7 @@ describe('TriggerMainService queueing', () => {
     await harness.service.runNow('trigger-1')
     await settle()
     await harness.service.runNow('trigger-1')
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const firstRunId = harness.requests[0]!.origin.runId
 
     harness.service.dispose()
@@ -603,8 +595,7 @@ describe('TriggerMainService queueing', () => {
     restarted.registerWindowHost(1, harness.host)
     await restarted.initialize()
     await harness.clock.advance(GRACE_MS)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
     expect(harness.requests[1]?.origin.runId).not.toBe(firstRunId)
   })
 })
@@ -664,8 +655,7 @@ describe('TriggerMainService failures', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     harness.service.unregisterWindowHost(1)
     await settle()
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
@@ -682,8 +672,7 @@ describe('TriggerMainService failures', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const runId = harness.requests[0]!.origin.runId
 
     await harness.clock.advance(1_000)
@@ -709,7 +698,7 @@ describe('TriggerMainService failures', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     await harness.clock.advance(500)
     harness.releaseStartRun()
     await settle()
@@ -728,16 +717,14 @@ describe('TriggerMainService failures', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     await harness.service.runNow('trigger-1')
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
 
     await harness.clock.advance(1_000)
-    await settle()
-    // The timed-out run released its slot, so the queued one now holds it.
-    expect(harness.startRun).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
     expect(summary(await harness.service.listTriggers(), 'trigger-1').running).toBe(1)
   })
 })
@@ -763,8 +750,7 @@ describe('TriggerMainService elevated mode', () => {
 
     await harness.service.confirmElevatedMode('trigger-1')
     await harness.service.runNow('trigger-1')
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.allowElevatedMode).toBe(true)
     expect(summary(await harness.service.listTriggers(), 'trigger-1').elevatedModeConfirmed).toBe(
       true,
@@ -822,8 +808,7 @@ describe('TriggerMainService poll source', () => {
 
     items.push({ key: 'B', payload: { id: 'B' } })
     await harness.clock.advance(30_000)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('poll:B')
     expect(harness.requests[0]?.payload).toEqual({ id: 'B' })
   })
@@ -863,9 +848,8 @@ describe('TriggerMainService window routing', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.openWindow).not.toHaveBeenCalled()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
     expect(harness.requests[0]?.cwd).toBe(harness.workspace)
   })
 
@@ -877,12 +861,11 @@ describe('TriggerMainService window routing', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle(20)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.openWindow).toHaveBeenCalledTimes(1)
     expect(harness.openWindow.mock.calls[0]?.[0]?.toString()).toBe(
       URI.file(harness.workspace).toString(),
     )
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
   })
 
   it('fails the run and backs off when the opened window never registers a host', async () => {
@@ -910,7 +893,7 @@ describe('TriggerMainService pause gate', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     await harness.service.runNow('trigger-1')
     await settle()
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
@@ -976,18 +959,17 @@ describe('TriggerMainService window reload / watchdog', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     await harness.service.runNow('trigger-1')
     await settle()
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
 
     harness.service.registerWindowHost(1, harness.host)
-    await settle()
+    // The reload released the slot, so the queued run started on the new host.
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(item.lastError).toContain('reloaded')
     expect(item.consecutiveFailures).toBe(1)
-    // The reload released the slot, so the queued run started on the new host.
-    expect(harness.startRun).toHaveBeenCalledTimes(2)
     expect(item.running).toBe(1)
   })
 
@@ -1004,7 +986,7 @@ describe('TriggerMainService window reload / watchdog', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const runId = harness.requests[0]!.origin.runId
     expect(summary(await harness.service.listTriggers(), 'trigger-1').running).toBe(1)
 
@@ -1030,7 +1012,7 @@ describe('TriggerMainService window reload / watchdog', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     await harness.service.reportRunEnd({
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'trigger-1',
@@ -1110,8 +1092,7 @@ describe('TriggerMainService backoff gate', () => {
     expect(harness.loggerLines.some((line) => line.includes('(backoff'))).toBe(true)
 
     await harness.clock.advance(5 * 60_000)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 
   it('does not consume swarm events during backoff but fires them afterwards', async () => {
@@ -1144,8 +1125,7 @@ describe('TriggerMainService backoff gate', () => {
 
     await harness.clock.advance(2 * 60_000)
     await harness.service.reportSwarmNeedsAction([review('1')])
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 
   it('does not poll during backoff and polls again at its end', async () => {
@@ -1198,8 +1178,7 @@ describe('TriggerMainService backoff gate', () => {
     })
     await openGate(harness)
     await harness.service.runNow('trigger-1')
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 })
 
@@ -1279,8 +1258,7 @@ describe('TriggerMainService privacy', () => {
     await openGate(harness)
     items.push({ key: 'B', payload: { id: 'B', description: secret } })
     await harness.clock.advance(30_000)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.prompt).toContain(secret)
     expect(harness.requests[0]?.payload['description']).toBe(secret)
 
@@ -1320,8 +1298,7 @@ describe('TriggerMainService list / pause', () => {
     })
     await openGate(harness)
     await harness.service.runNow('ok')
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
 
     await harness.service.setAllPaused(true)
     const list = await harness.service.listTriggers()
