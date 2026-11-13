@@ -39,6 +39,7 @@ App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后�
 - [远程开发（remote-ssh / WSL）](remote-dev.md) — daemon+TCP 传输与协议 bump 自愈链、URI/scheme 与 authority 规范形、部署链（tar/scp 盘符、bundle 哈希）、Windows 远端主机（平台探测 / cmd 契约 / WMI 逃 job kill / 路径展示）、WSL 直连、远端终端与 extension host、远端 agent 二进制受管下载、实机验收方法论与已知限制。
 - [手机网关（手机遥控 ACP 会话）](mobile-gateway.md) — PWA 遥控器定位与第一期范围、main 网关 + renderer 桥架构、快照/增量与 seq、协议包、双端审批仲裁与 plan 倒计时下沉、配对与安全、Tailscale/局域网传输档位、通知与里程碑（设计已定稿，未实现）。
 - [Agent 触发器（Triggers）](triggers.md) — main 单例调度 + 窗口反向运行宿主；四类源（manual / schedule / poll / swarm-review）、持久去重与排队退避、自动化会话权限策略（覆盖个人自动放行、runDir 一次性放行）、预算与审批超时看门狗、`result.json` 判决与 Swarm 白名单动作、会话徽标与手机协议、30 条自动化历史上限。
+- [需求自动处理（tracker 自动化）](tracker-automation.md) — 零依赖 MCP 适配器（Stdio JSON-RPC + board 映射）、poll 触发器 + skill 的认领/分级/实现/推送链路、push 前范围闸门（文件数/行数/禁改路径/每日配额）与专用 bot clone 部署。
 - [AI 模型层：定向解析、发现超时与枚举缓存](ai-model-layer.md) — 热路径按 modelId 定向解析（禁「拉全量再 find」）、discovery deadline 2.5s 与失败冷却 30s（只记 timeout）、枚举缓存的 provider 指纹与 knowledge 全量失效。
 - [文件监视：UtilityProcess 隔离与 win32 崩溃复盘](file-watcher.md) — parcel watcher 的 win32 unsubscribe UAF 证据链（两 dump 同偏移）、native 崩溃为何不能留在 main 进程、desired-state 重放自愈链与 re-subscribe 合并常量、崩溃复现的 e2e 视角交叉引用。
 - [Ctrl+P 与工作区文件清单](file-search-and-listing.md) — 巨型工作区「慢在 IPC 解码不在业务」的判序、DTO 判别联合与截断整份丢弃、预热双常量与 200ms 单闸门防抖、rg `--iglob` / `-g` 优先级红线。
