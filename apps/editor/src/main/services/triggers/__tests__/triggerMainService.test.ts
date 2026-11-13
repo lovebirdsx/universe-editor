@@ -618,7 +618,12 @@ describe('TriggerMainService failures', () => {
     await openGate(harness)
     for (let attempt = 1; attempt <= 5; attempt++) {
       await harness.service.runNow('trigger-1')
-      await settle()
+      // A fixed tick count is not enough under load: the next runNow would hit the
+      // still-occupied concurrency slot before this failure is recorded.
+      await vi.waitFor(async () => {
+        const current = summary(await harness.service.listTriggers(), 'trigger-1')
+        expect(current.consecutiveFailures).toBe(attempt)
+      })
     }
     const list = await harness.service.listTriggers()
     const item = summary(list, 'trigger-1')
@@ -957,8 +962,8 @@ describe('TriggerMainService pause gate', () => {
     expect(stateOf(harness.service).pending).toHaveLength(1)
 
     await harness.service.setPaused('trigger-1', false)
-    await settle()
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    // The replay reads the pending file from disk, which can outlast fixed ticks.
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.runId).toBe(runId)
   })
 })
