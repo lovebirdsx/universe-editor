@@ -248,6 +248,92 @@ describe('Composer', () => {
     expect(onUploadAttachment).not.toHaveBeenCalled()
   })
 
+  describe('pasting images', () => {
+    function pasteImage(type = 'image/png'): boolean {
+      const file = new File(['abc'], 'shot.png', { type })
+      return fireEvent.paste(screen.getByTestId('composer-input'), {
+        clipboardData: {
+          items: [{ kind: 'file', type, getAsFile: () => file }],
+          files: [file],
+        },
+      })
+    }
+
+    it('uploads a pasted image through the picker path', async () => {
+      const { onSend, onUploadAttachment } = renderComposer()
+
+      expect(pasteImage()).toBe(false)
+      await waitFor(() =>
+        expect(onUploadAttachment).toHaveBeenCalledWith(expect.any(File), 'image'),
+      )
+
+      const send = screen.getByTestId('composer-send') as HTMLButtonElement
+      await waitFor(() => expect(send.disabled).toBe(false))
+      fireEvent.click(send)
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('', ['att-1'], [], [], []))
+    })
+
+    it('uploads from files when items expose no image', async () => {
+      const { onUploadAttachment } = renderComposer()
+      const file = new File(['abc'], 'shot.png', { type: 'image/png' })
+
+      fireEvent.paste(screen.getByTestId('composer-input'), {
+        clipboardData: { items: [], files: [file] },
+      })
+
+      await waitFor(() =>
+        expect(onUploadAttachment).toHaveBeenCalledWith(expect.any(File), 'image'),
+      )
+    })
+
+    it('leaves a plain text paste to the textarea', () => {
+      const { onUploadAttachment } = renderComposer()
+
+      const prevented = fireEvent.paste(screen.getByTestId('composer-input'), {
+        clipboardData: {
+          items: [{ kind: 'string', type: 'text/plain', getAsString: () => undefined }],
+          files: [],
+        },
+      })
+
+      expect(prevented).toBe(true)
+      expect(onUploadAttachment).not.toHaveBeenCalled()
+    })
+
+    it('ignores pasted non-image files', () => {
+      const { onUploadAttachment } = renderComposer()
+      const file = new File(['abc'], 'notes.txt', { type: 'text/plain' })
+
+      const prevented = fireEvent.paste(screen.getByTestId('composer-input'), {
+        clipboardData: {
+          items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+          files: [file],
+        },
+      })
+
+      expect(prevented).toBe(true)
+      expect(onUploadAttachment).not.toHaveBeenCalled()
+    })
+
+    it('treats a pasted photo as a file when the agent has no image support', async () => {
+      const { onUploadAttachment } = renderComposer({ imageSupported: false })
+
+      pasteImage()
+
+      await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith(expect.any(File), 'file'))
+    })
+
+    it('does not intercept paste when attachments are unavailable', () => {
+      const { onUploadAttachment } = renderComposer({
+        imageSupported: false,
+        fileSupported: false,
+      })
+
+      expect(pasteImage()).toBe(true)
+      expect(onUploadAttachment).not.toHaveBeenCalled()
+    })
+  })
+
   it('keeps a failed upload visible and blocks sending until it is removed', async () => {
     const onUploadAttachment = vi.fn(async () => {
       throw Object.assign(new Error('offline'), { code: 'network' })

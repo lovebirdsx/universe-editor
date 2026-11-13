@@ -80,7 +80,7 @@ describe('planMessageCapture', () => {
 })
 
 describe('renderMessageImage', () => {
-  it('captures the live node without the action button', async () => {
+  it('captures the live node without the action button and adds a frame', async () => {
     const element = makeElement(300, 200, { actionHeight: 44 })
 
     const blob = await renderMessageImage(element)
@@ -89,13 +89,30 @@ describe('renderMessageImage', () => {
     expect(toBlobMock).toHaveBeenCalledTimes(1)
     const [, options] = toBlobMock.mock.calls[0]!
     expect(options).toMatchObject({
-      width: 300,
-      height: 156,
+      width: 332,
+      height: 188,
       pixelRatio: 2,
       type: 'image/png',
+      backgroundColor: '#ffffff',
       skipFonts: true,
       imagePlaceholder: expect.stringMatching(/^data:image\/png;base64,/),
-      style: { maxWidth: 'none' },
+      style: {
+        maxWidth: 'none',
+        boxSizing: 'border-box',
+        border: '16px solid transparent',
+        borderBlock: '16px solid transparent',
+        borderInline: '16px solid transparent',
+        backgroundClip: 'padding-box',
+        backgroundColor: 'transparent',
+        borderTopLeftRadius: '16px',
+        borderTopRightRadius: '16px',
+        borderBottomRightRadius: '16px',
+        borderBottomLeftRadius: '16px',
+        borderStartStartRadius: '16px',
+        borderStartEndRadius: '16px',
+        borderEndEndRadius: '16px',
+        borderEndStartRadius: '16px',
+      },
     })
     const filter = options?.filter as (node: Node) => boolean
     expect(filter(element.querySelector<HTMLElement>('.message__actions')!)).toBe(false)
@@ -105,24 +122,62 @@ describe('renderMessageImage', () => {
 
   it('does not subtract height when the action button is absent', async () => {
     await renderMessageImage(makeElement(300, 200))
-    expect(toBlobMock.mock.calls[0]?.[1]).toMatchObject({ height: 200 })
+    expect(toBlobMock.mock.calls[0]?.[1]).toMatchObject({ height: 232 })
   })
 
-  it('leaves an opaque message background alone', async () => {
+  it('keeps an opaque message background inside the frame', async () => {
     const element = makeElement(300, 200, { background: 'rgb(59, 130, 246)' })
     await renderMessageImage(element)
-    expect(toBlobMock.mock.calls[0]?.[1]?.backgroundColor).toBeUndefined()
+    const options = toBlobMock.mock.calls[0]?.[1]
+    expect(options?.backgroundColor).toBe('#ffffff')
+    expect(options?.style).toMatchObject({ backgroundColor: 'rgb(59, 130, 246)' })
   })
 
-  it('uses the page background for a transparent message', async () => {
+  it('uses the page background for the frame', async () => {
     document.body.style.backgroundColor = 'rgb(18, 18, 18)'
     await renderMessageImage(makeElement(300, 200))
-    expect(toBlobMock.mock.calls[0]?.[1]?.backgroundColor).toBe('rgb(18, 18, 18)')
+    const options = toBlobMock.mock.calls[0]?.[1]
+    expect(options?.backgroundColor).toBe('rgb(18, 18, 18)')
+    expect(options?.style).toMatchObject({ backgroundColor: 'transparent' })
   })
 
   it('falls back to white when the page background is transparent too', async () => {
     await renderMessageImage(makeElement(300, 200))
     expect(toBlobMock.mock.calls[0]?.[1]?.backgroundColor).toBe('#ffffff')
+  })
+
+  it('adds the frame width to every corner radius', async () => {
+    const element = makeElement(300, 200)
+    element.style.borderTopLeftRadius = '16px'
+    element.style.borderTopRightRadius = '16px'
+    element.style.borderBottomRightRadius = '4px'
+    element.style.borderBottomLeftRadius = '16px'
+
+    await renderMessageImage(element)
+
+    expect(toBlobMock.mock.calls[0]?.[1]?.style).toMatchObject({
+      borderTopLeftRadius: '32px',
+      borderTopRightRadius: '32px',
+      borderBottomRightRadius: '20px',
+      borderBottomLeftRadius: '32px',
+    })
+  })
+
+  it('counts the frame when choosing the pixel ratio', async () => {
+    // 2040 * 2 fits the side limit, but (2040 + 32) * 2 does not.
+    await renderMessageImage(makeElement(300, 2_040))
+    expect(toBlobMock.mock.calls[0]?.[1]).toMatchObject({
+      width: 332,
+      height: 2_072,
+      pixelRatio: 1,
+    })
+  })
+
+  it('rejects a message that only fits without the frame', async () => {
+    await expect(renderMessageImage(makeElement(300, 4_080))).rejects.toBeInstanceOf(
+      MessageImageTooLargeError,
+    )
+    expect(toBlobMock).not.toHaveBeenCalled()
   })
 
   it('rejects an empty capture and retries once at 1x', async () => {

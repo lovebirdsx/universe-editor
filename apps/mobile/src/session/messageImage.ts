@@ -4,6 +4,8 @@ type CaptureOptions = NonNullable<Parameters<typeof import('html-to-image').toBl
 const MAX_CANVAS_SIDE = 4096
 const MAX_CANVAS_AREA = 16_777_216
 const PREFERRED_SCALE = 2
+/** Page-colored breathing room around a captured message, in CSS px. */
+const CAPTURE_PADDING = 16
 /** Valid 1x1 transparent PNG; failed image fetches (remote CORS/CSP) use it. */
 const TRANSPARENT_PIXEL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
@@ -50,8 +52,9 @@ export function planMessageCapture(width: number, height: number): MessageCaptur
 
 /**
  * Rasterizes one rendered message. The live node is captured (WYSIWYG) with the
- * action button filtered out; a failed 2x attempt retries at 1x because canvas
- * size limits fail late on mobile Safari.
+ * action button filtered out and a page-colored margin added around it; a
+ * failed 2x attempt retries at 1x because canvas size limits fail late on
+ * mobile Safari.
  */
 export async function renderMessageImage(element: HTMLElement): Promise<Blob> {
   const rect = element.getBoundingClientRect()
@@ -60,7 +63,10 @@ export async function renderMessageImage(element: HTMLElement): Promise<Blob> {
   }
   const action = element.querySelector<HTMLElement>('.message__actions')
   const actionHeight = action === null ? 0 : action.getBoundingClientRect().height
-  const plan = planMessageCapture(rect.width, rect.height - actionHeight)
+  const plan = planMessageCapture(
+    rect.width + CAPTURE_PADDING * 2,
+    rect.height - actionHeight + CAPTURE_PADDING * 2,
+  )
 
   let capture: typeof import('html-to-image')
   try {
@@ -79,12 +85,17 @@ export async function renderMessageImage(element: HTMLElement): Promise<Blob> {
 }
 
 function buildOptions(element: HTMLElement, plan: MessageCapturePlan): CaptureOptions {
-  const background = captureBackground(element)
+  const computed = getComputedStyle(element)
+  const background = computed.backgroundColor
+  const border = `${CAPTURE_PADDING}px solid transparent`
   const options: CaptureOptions = {
     width: plan.width,
     height: plan.height,
     pixelRatio: plan.scale,
     type: 'image/png',
+    // html-to-image fills the canvas with this color before drawing the clone,
+    // so the transparent border below lets it show as the outer margin.
+    backgroundColor: pageBackgroundColor(),
     // Mobile renders with system fonts only; embedding web fonts would fetch
     // stylesheets the gateway CSP does not need to expose.
     skipFonts: true,
@@ -92,19 +103,53 @@ function buildOptions(element: HTMLElement, plan: MessageCapturePlan): CaptureOp
     // The filter receives text nodes too, hence the Element guard.
     filter: (node: HTMLElement) =>
       !(node instanceof Element && node.classList.contains('message__actions')),
-    // A user bubble's max-width: 86% resolves again against the foreignObject
-    // width and would narrow/reflow the captured bubble.
-    style: { maxWidth: 'none' },
+    style: {
+      // A user bubble's max-width: 86% resolves again against the foreignObject
+      // width and would narrow/reflow the captured bubble.
+      maxWidth: 'none',
+      // The transparent border reserves the page-colored frame; background-clip
+      // keeps a bubble's own background at its original edge.
+      boxSizing: 'border-box',
+      border,
+      // Logical and physical shorthands must agree: the computed styles copied
+      // by html-to-image contain both, and their serialized order in the SVG
+      // style attribute decides which one wins when it is parsed back. With
+      // only the physical `border` set, `border-inline: 0` zeroes left/right.
+      borderBlock: border,
+      borderInline: border,
+      backgroundClip: 'padding-box',
+      // applyStyle writes options.backgroundColor first; this override restores
+      // an opaque bubble's accent color inside the frame.
+      backgroundColor: isTransparentColor(background) ? 'transparent' : background,
+      ...paddedBorderRadii(computed),
+    },
   }
-  if (background !== undefined) options.backgroundColor = background
   return options
 }
 
-function captureBackground(element: HTMLElement): string | undefined {
-  // html-to-image writes backgroundColor onto the cloned root; skipping it for
-  // an opaque bubble keeps its accent background and white text intact.
-  if (!isTransparentColor(getComputedStyle(element).backgroundColor)) return undefined
-  if (typeof document === 'undefined') return undefined
+function paddedBorderRadii(style: CSSStyleDeclaration): Partial<CSSStyleDeclaration> {
+  // Inner radii stay unchanged once the frame border is subtracted. Logical
+  // radii get the same treatment so neither naming can override the other.
+  const pad = (radius: string): string => `${cssPx(radius) + CAPTURE_PADDING}px`
+  return {
+    borderTopLeftRadius: pad(style.borderTopLeftRadius),
+    borderTopRightRadius: pad(style.borderTopRightRadius),
+    borderBottomRightRadius: pad(style.borderBottomRightRadius),
+    borderBottomLeftRadius: pad(style.borderBottomLeftRadius),
+    borderStartStartRadius: pad(style.borderStartStartRadius),
+    borderStartEndRadius: pad(style.borderStartEndRadius),
+    borderEndEndRadius: pad(style.borderEndEndRadius),
+    borderEndStartRadius: pad(style.borderEndStartRadius),
+  }
+}
+
+function cssPx(value: string): number {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function pageBackgroundColor(): string {
+  if (typeof document === 'undefined') return '#ffffff'
   const body = getComputedStyle(document.body).backgroundColor
   return isTransparentColor(body) ? '#ffffff' : body
 }

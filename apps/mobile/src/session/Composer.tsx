@@ -26,6 +26,7 @@ import {
   useRef,
   useState,
   type ChangeEvent,
+  type ClipboardEvent,
   type KeyboardEvent,
 } from 'react'
 import { errorCode } from '../errors.js'
@@ -33,6 +34,7 @@ import { isSendableMobilePromptRef } from '../state/commandResults.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { ComposerAttachmentChip } from './ComposerAttachmentChip.js'
+import { pastedImageFiles } from './pastedImages.js'
 import { PROMPT_REF_LIST_ID, PromptRefPanel, promptRefOptionId } from './PromptRefPanel.js'
 import {
   applyTextEdit,
@@ -1025,6 +1027,16 @@ export function Composer({
     acceptFiles(files)
   }
 
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    if (!canAttach || attaching) return
+    const files = pastedImageFiles(event.clipboardData)
+    if (files.length === 0) return
+    // An image paste carries nothing the textarea can insert; hand it to the
+    // same validation/upload path as the system picker.
+    event.preventDefault()
+    acceptFiles(files)
+  }
+
   const uploadAll = async (
     accepted: ReadonlyArray<{ readonly file: File; readonly kind: MobileAttachmentKind }>,
     pending: readonly ComposerAttachment[],
@@ -1239,6 +1251,7 @@ export function Composer({
           onCompositionEnd={handleCompositionEnd}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           onFocus={handleFocus}
           onBlur={handleBlur}
         />
