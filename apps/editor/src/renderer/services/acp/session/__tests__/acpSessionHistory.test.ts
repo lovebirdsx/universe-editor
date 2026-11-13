@@ -125,8 +125,11 @@ async function flushWrite(): Promise<void> {
 
 describe('AcpSessionHistoryService — add / list', () => {
   let svc: AcpSessionHistoryService
+  let storage: FakeStorage
   beforeEach(() => {
-    svc = makeService().svc
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
   })
   afterEach(() => {
     svc.dispose()
@@ -230,6 +233,155 @@ describe('AcpSessionHistoryService — add / list', () => {
     expect(svc.entries.get()).toEqual([])
     svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
     expect(svc.entries.get()).toHaveLength(1)
+  })
+
+  it('stores an automation stamp and carries it across re-adds', async () => {
+    await svc.initialize()
+    const automation = {
+      triggerId: 'swarm-triage',
+      triggerName: 'Swarm 分诊',
+      eventKey: 'swarm:42',
+      runId: 'run-1',
+    }
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'auto-1', title: 't', automation })
+    const readded = svc.add({ agentId: 'a', sessionIdOnAgent: 'auto-1', title: 't2' })
+    expect(readded.automation).toEqual(automation)
+  })
+
+  it('setAutomationResult records verdict / summary / outcome and keeps the origin', async () => {
+    await svc.initialize()
+    const automation = {
+      triggerId: 'swarm-triage',
+      triggerName: 'Swarm 分诊',
+      eventKey: 'swarm:42',
+      runId: 'run-1',
+    }
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'auto-1', title: 't', automation })
+    svc.setAutomationResult('auto-1', {
+      verdict: 'escalate',
+      summary: 'needs a human',
+      outcome: 'completed',
+    })
+    expect(svc.get('auto-1')?.automation).toEqual({
+      ...automation,
+      verdict: 'escalate',
+      summary: 'needs a human',
+      outcome: 'completed',
+    })
+  })
+
+  it('setAutomationResult is a no-op for manual rows and unknown ids', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'manual-1', title: 't' })
+    svc.setAutomationResult('manual-1', { outcome: 'completed' })
+    svc.setAutomationResult('missing', { outcome: 'completed' })
+    expect(svc.get('manual-1')?.automation).toBeUndefined()
+  })
+
+  it('persists automation and restores it after a restart', async () => {
+    await svc.initialize()
+    const automation = {
+      triggerId: 'swarm-triage',
+      triggerName: 'Swarm 分诊',
+      eventKey: 'swarm:42',
+      runId: 'run-1',
+    }
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'auto-1', title: 't', automation })
+    svc.setAutomationResult('auto-1', { verdict: 'info', summary: 'done', outcome: 'completed' })
+    await flushWrite()
+
+    const restarted = makeService({ storage }).svc
+    try {
+      await restarted.initialize()
+      expect(restarted.get('auto-1')?.automation).toEqual({
+        ...automation,
+        verdict: 'info',
+        summary: 'done',
+        outcome: 'completed',
+      })
+    } finally {
+      restarted.dispose()
+    }
+  })
+
+  it('drops a malformed automation field during hydration', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 8,
+      entries: [
+        {
+          id: 'auto-1',
+          agentId: 'a',
+          sessionIdOnAgent: 'auto-1',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 2,
+          automation: { triggerId: 'x' },
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list()).toEqual([])
+  })
+
+  it('caps non-pinned automation rows at 30 without evicting manual rows', async () => {
+    await svc.initialize()
+    for (let i = 0; i < 60; i++) {
+      svc.add({
+        agentId: 'a',
+        sessionIdOnAgent: `auto-${i}`,
+        title: `a${i}`,
+        automation: {
+          triggerId: 'trig',
+          triggerName: 'Trigger',
+          eventKey: `event:${i}`,
+          runId: `run-${i}`,
+        },
+      })
+    }
+    for (let i = 0; i < 60; i++) {
+      svc.add({ agentId: 'a', sessionIdOnAgent: `manual-${i}`, title: `m${i}` })
+    }
+    const list = svc.list()
+    expect(list.filter((e) => e.automation !== undefined)).toHaveLength(30)
+    expect(list.filter((e) => e.automation === undefined)).toHaveLength(60)
+    // The newest 30 automated rows survive; the oldest are evicted first.
+    const automationIds = list
+      .filter((e) => e.automation !== undefined)
+      .map((e) => e.sessionIdOnAgent)
+    expect(automationIds).toContain('auto-59')
+    expect(automationIds).not.toContain('auto-29')
+  })
+
+  it('pinned automation rows are exempt from the 30-row cap', async () => {
+    await svc.initialize()
+    svc.add({
+      agentId: 'a',
+      sessionIdOnAgent: 'auto-pinned',
+      title: 'pinned',
+      automation: {
+        triggerId: 'trig',
+        triggerName: 'Trigger',
+        eventKey: 'event:pinned',
+        runId: 'run-pinned',
+      },
+    })
+    svc.setHistoryPinned('auto-pinned', true)
+    for (let i = 0; i < 110; i++) {
+      svc.add({
+        agentId: 'a',
+        sessionIdOnAgent: `auto-${i}`,
+        title: `a${i}`,
+        automation: {
+          triggerId: 'trig',
+          triggerName: 'Trigger',
+          eventKey: `event:${i}`,
+          runId: `run-${i}`,
+        },
+      })
+    }
+    const list = svc.list()
+    expect(list.find((e) => e.sessionIdOnAgent === 'auto-pinned')).toBeDefined()
+    expect(list.filter((e) => e.automation !== undefined)).toHaveLength(31)
   })
 
   it('add stores sideTaskOf / sideTaskQuote verbatim', async () => {
@@ -480,7 +632,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(7)
+    expect(persisted.schemaVersion).toBe(8)
     expect(persisted.entries).toHaveLength(1)
   })
 

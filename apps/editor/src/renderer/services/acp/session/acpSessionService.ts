@@ -194,6 +194,11 @@ import { selectOptionHasValue, snapshotConfigSelections } from '../configOptionL
 import { buildSideTaskModelOverrides, readSideTaskModels } from '../sideTaskConfig.js'
 import { IExtensionMcpServersService } from '../../extensions/extensionMcpServersService.js'
 import { IMcpServerEnablementService } from '../mcpServerEnablementService.js'
+import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
+import {
+  decideAutomatedPermission,
+  visibleAutomatedPermissionOptions,
+} from '../../triggers/automatedPermissionPolicy.js'
 
 /**
  * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
@@ -267,6 +272,23 @@ export interface IAcpCreateSessionOptions {
    * internal sessions always stay inactive.
    */
   readonly activate?: boolean
+  /**
+   * Trigger provenance. An automated session runs under the restricted
+   * permission policy (`services/triggers/automatedPermissionPolicy.ts`);
+   * manual sessions leave this unset and keep their existing behavior.
+   */
+  readonly automation?: AutomationOrigin
+  /**
+   * Absolute run directory of an automated session. Writes whose every target
+   * lies inside it are auto-approved once; nothing else is.
+   */
+  readonly automationRunDir?: string
+  /**
+   * Extra `additionalDirectories` to advertise to the local agent (merged with
+   * the editor's bundled agent-skills root). Ignored for remote sessions, whose
+   * agent cannot see local paths.
+   */
+  readonly additionalDirectories?: readonly string[]
 }
 
 export type McpServerConnectionResolution =
@@ -1025,6 +1047,10 @@ export class AcpSessionService
       ...(cwd !== undefined ? { cwd } : {}),
       ...(authority !== undefined ? { authority } : {}),
       ...(options?.aiFix === true ? { suppressConfigDefaults: true } : {}),
+      ...(options?.automation !== undefined ? { automation: options.automation } : {}),
+      ...(options?.automationRunDir !== undefined
+        ? { automationRunDir: options.automationRunDir }
+        : {}),
     })
     this._register(session)
     this._wireAuthGuidance(session)
@@ -1088,6 +1114,23 @@ export class AcpSessionService
     )
     const root = await this._builtinSkillsRoot
     return root !== undefined ? { additionalDirectories: [root] } : {}
+  }
+
+  /**
+   * The `additionalDirectories` wire field: the bundled agent-skills root (local
+   * sessions only) plus any caller-supplied roots (an automated run's `runDir`).
+   * A remote agent runs on another host and cannot see local paths, so both
+   * sides are omitted there. Duplicates are collapsed so a caller passing the
+   * skills root does not advertise it twice.
+   */
+  private async _additionalDirectories(
+    authority: string | undefined,
+    extra: readonly string[] | undefined,
+  ): Promise<{ additionalDirectories?: string[] }> {
+    if (authority !== undefined) return {}
+    const builtin = await this._builtinAgentDirs(authority)
+    const merged = [...new Set([...(builtin.additionalDirectories ?? []), ...(extra ?? [])])]
+    return merged.length > 0 ? { additionalDirectories: merged } : {}
   }
 
   /**
@@ -1223,7 +1266,7 @@ export class AcpSessionService
       const newParams: NewSessionRequest = {
         cwd: cwd ?? '',
         mcpServers: kept,
-        ...(await this._builtinAgentDirs(authority)),
+        ...(await this._additionalDirectories(authority, options?.additionalDirectories)),
         _meta: buildNewSessionMeta(extraModels, pick, planPolicy),
       }
       profile.step('willNewSession')
@@ -1265,6 +1308,7 @@ export class AcpSessionService
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
         ...(options?.aiFix === true ? { aiFix: true } : {}),
         ...(options?.internal === true ? { internal: true } : {}),
+        ...(options?.automation !== undefined ? { automation: options.automation } : {}),
       })
       profile.step('didHistoryAdd')
       this._mcpSelectionAtAttach.set(session.id, selection)
@@ -1541,6 +1585,10 @@ export class AcpSessionService
         ...(entry.aiFix === true || entry.sideTaskOf !== undefined
           ? { suppressConfigDefaults: true }
           : {}),
+        // A resumed automated session keeps its restricted permission policy;
+        // the runDir scope is not persisted, so only the non-path restrictions
+        // apply after a restart.
+        ...(entry.automation !== undefined ? { automation: entry.automation } : {}),
       })
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
@@ -2677,11 +2725,29 @@ export class AcpSessionService
       return { outcome: { outcome: 'cancelled' } }
     }
     if (session.internal) return this._resolveInternalPermission(params, session)
-    // Claude 的计划会话由三档权限策略（agentSettings.claude.planPermissionPolicy）
-    // 接管，且不走旧的通用 kind 自动批准旁路：manual/auto 一律人工，skip 只选
-    // Agent 给的一次性「允许」选项——都不写永久规则。
+    // Automated sessions override the user's personal auto-approval settings
+    // (design §4): no generic kind approval, no plan-policy skip, no plan
+    // auto-execute countdown, and `allow_always` is neither offered nor
+    // persisted. The only silent approval is a one-shot write entirely inside
+    // the run directory.
+    const automated = session.automation !== undefined
     const claudePlan = isClaudeAgent(session.agentId) && this._isPlanMode(session)
-    if (claudePlan) {
+    if (automated) {
+      const optionId = decideAutomatedPermission(
+        params,
+        session.automationRunDir,
+        this._uriIdentity,
+      )
+      if (optionId !== undefined) {
+        this._telemetry.publicLog('acp.permission_automated_run_dir_approved', {
+          kind: params.toolCall.kind ?? 'unknown',
+        })
+        return { outcome: { outcome: 'selected', optionId } }
+      }
+    } else if (claudePlan) {
+      // Claude 的计划会话由三档权限策略（agentSettings.claude.planPermissionPolicy）
+      // 接管，且不走旧的通用 kind 自动批准旁路：manual/auto 一律人工，skip 只选
+      // Agent 给的一次性「允许」选项——都不写永久规则。
       const policy = this._planPolicy(session.id)
       if (policy === 'skip') {
         const optionId = selectSkipOneShotOption(params)
@@ -2711,10 +2777,13 @@ export class AcpSessionService
         return auto
       }
     }
-    const allowAlways = params.options.find((o) => o.kind === 'allow_always')
+    const allowAlways = automated
+      ? undefined
+      : params.options.find((o) => o.kind === 'allow_always')
     // plan 审查的自动执行：设置非 off 且目标选项确实在本次 options 里才附加
     // （例如 ALLOW_BYPASS 关闭时 bypassPermissions 缺席，降级为普通弹卡）。
-    const autoResolveSpec = this._planAutoResolve(params)
+    // Automated sessions always wait for a human on the plan-approval card.
+    const autoResolveSpec = automated ? undefined : this._planAutoResolve(params)
     const requestId = generateUuid()
     return await new Promise<RequestPermissionResponse>((resolve) => {
       let settled = false
@@ -2750,6 +2819,7 @@ export class AcpSessionService
       ): void => {
         if (settled) return
         if (
+          !automated &&
           allowAlways &&
           optionId === allowAlways.optionId &&
           params.toolCall.kind &&
@@ -2798,7 +2868,10 @@ export class AcpSessionService
         toolCallId: params.toolCall.toolCallId,
         title: params.toolCall.title ?? params.toolCall.toolCallId,
         ...(params.toolCall.kind != null ? { kind: params.toolCall.kind } : {}),
-        options: params.options.map((o) => ({
+        options: (automated
+          ? visibleAutomatedPermissionOptions(params.options)
+          : params.options
+        ).map((o) => ({
           optionId: o.optionId,
           name: o.name,
           ...(o.kind !== undefined ? { kind: o.kind } : {}),
@@ -2929,6 +3002,9 @@ export class AcpSessionService
    * the CLI.
    */
   private _planPolicy(sessionId: string): PlanPermissionPolicy {
+    // Automated sessions always wait for a human on plan approvals, regardless
+    // of the personal `planPermissionPolicy` / native-plan-auto setting.
+    if (this._findSession(sessionId)?.automation !== undefined) return 'manual'
     const existing = this._planPolicyBySession.get(sessionId)
     if (existing !== undefined) return existing
     const policy = readPlanPermissionPolicy(this._config)

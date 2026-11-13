@@ -42,6 +42,8 @@ export interface AttentionNotificationInput {
   readonly title: string
   readonly agentName?: string
   readonly permissionTitle?: string
+  /** Automated session: deliver even while a PC window is focused. */
+  readonly alwaysNotify?: boolean
 }
 
 export interface MobileNotificationRouterOptions {
@@ -95,7 +97,9 @@ export class MobileNotificationRouter {
 
     for (const target of targets) {
       if (!wantsKind(target.notifications, input.kind)) continue
-      if (focused && !target.notifications.alwaysNotify) continue
+      // Automated-session attention bypasses the focus suppression: the trigger
+      // may be waiting on an approval nobody is watching the PC for.
+      if (focused && input.alwaysNotify !== true && !target.notifications.alwaysNotify) continue
 
       if (safeBoolean(() => this._options.isDeviceVisible(target.deviceId))) {
         const sent = this._options.sendToVisibleDevices(target.deviceId, {

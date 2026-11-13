@@ -29,6 +29,7 @@ import {
 } from './acpMessageAttachmentStore.js'
 import { IAcpSessionProviderContext } from './acpSessionProviderContext.js'
 import { sharedResidentBudget } from './acpResidentBudget.js'
+import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
 
 export interface IAcpSessionCreateOptions {
   readonly id: string
@@ -64,6 +65,10 @@ export interface IAcpSessionCreateOptions {
   readonly internal?: boolean
   /** Internal session allowed to edit files inside its own cwd. */
   readonly internalWritable?: boolean
+  /** Trigger provenance when this session is started by an agent trigger. */
+  readonly automation?: AutomationOrigin
+  /** Absolute run directory of an automated session (permission policy scope). */
+  readonly automationRunDir?: string
 }
 
 export interface IAcpSessionFactory {
@@ -145,6 +150,8 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       sharedResidentBudget,
       opts.internal ?? false,
       opts.internalWritable ?? false,
+      opts.automation,
+      opts.automationRunDir,
     )
   }
 }

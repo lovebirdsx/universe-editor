@@ -399,6 +399,12 @@ export interface MobileBridgeAttentionEvent {
   readonly title: string
   readonly agentName?: string
   readonly permissionTitle?: string
+  /**
+   * Automated (trigger-started) sessions are used by people who are away from
+   * the PC, so their permission/question edges bypass the "PC focused ⇒ skip"
+   * rule and always reach the phone.
+   */
+  readonly alwaysNotify?: boolean
 }
 
 export interface MobileBridgeDraftChange {

@@ -306,6 +306,25 @@ describe('MobileNotificationRouter', () => {
     expect(sender.calls[0]?.subscription.endpoint).toBe(ENDPOINT)
   })
 
+  it('delivers automated-session attention even while the PC is focused', async () => {
+    const sender = fakeSender()
+    const h = setup({
+      focused: true,
+      targets: [target({ deviceId: 'quiet' })],
+      sender: sender.sender,
+    })
+
+    await h.router.notify({
+      ...COMPLETED,
+      kind: 'permission',
+      permissionTitle: 'Write result.json',
+      alwaysNotify: true,
+    })
+
+    expect(sender.send).toHaveBeenCalledTimes(1)
+    expect(sender.calls[0]?.subscription.endpoint).toBe(ENDPOINT)
+  })
+
   it('sends an in-app frame when the device declares itself visible', async () => {
     const sender = fakeSender()
     const h = setup({

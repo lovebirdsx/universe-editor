@@ -66,6 +66,18 @@ describe('AcpSessionFilterService', () => {
     expect(service.sortMode.get()).toBe('updated')
     expect(service.excludedAgentIds.get().size).toBe(0)
     expect(service.excludedStatuses.get().size).toBe(0)
+    expect(service.sourceFilter.get()).toBe('all')
+    expect(service.isFilterDefault.get()).toBe(true)
+  })
+
+  it('setSourceFilter switches the origin filter and reset restores all', () => {
+    service.setSourceFilter('trigger')
+    expect(service.sourceFilter.get()).toBe('trigger')
+    expect(service.isFilterDefault.get()).toBe(false)
+    service.setSourceFilter('manual')
+    expect(service.sourceFilter.get()).toBe('manual')
+    service.resetFilters()
+    expect(service.sourceFilter.get()).toBe('all')
     expect(service.isFilterDefault.get()).toBe(true)
   })
 
@@ -140,6 +152,7 @@ describe('AcpSessionFilterService', () => {
     a.toggleAgent('codex')
     a.toggleStatus('failed')
     a.toggleArchived()
+    a.setSourceFilter('trigger')
     await flush() // let the 100ms debounced write fire
     await new Promise((r) => setTimeout(r, 150))
 
@@ -149,7 +162,23 @@ describe('AcpSessionFilterService', () => {
     expect(b.excludedAgentIds.get().has('codex')).toBe(true)
     expect(b.excludedStatuses.get().has('failed')).toBe(true)
     expect(b.showArchived.get()).toBe(true)
+    expect(b.sourceFilter.get()).toBe('trigger')
     expect(b.isFilterDefault.get()).toBe(false)
+  })
+
+  it('defaults the source filter to all for payloads that predate the field', async () => {
+    const storage = new FakeStorage()
+    await storage.set('acp.sessionFilter', {
+      schemaVersion: 1,
+      sortMode: 'created',
+      excludedAgentIds: [],
+      excludedStatuses: [],
+      showArchived: true,
+    })
+    const b = make(storage).service
+    await b.initialize()
+    expect(b.sourceFilter.get()).toBe('all')
+    expect(b.showArchived.get()).toBe(true)
   })
 
   it('defaults showArchived to false for payloads that predate the field', async () => {

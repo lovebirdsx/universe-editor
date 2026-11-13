@@ -49,6 +49,11 @@ export const SESSION_STATUS_BUCKETS: readonly SessionStatusBucket[] = [
   'failed',
 ]
 
+/** Session origin filter: trigger-started sessions are stamped `automation`. */
+export type SessionSourceFilter = 'all' | 'manual' | 'trigger'
+
+export const SESSION_SOURCE_FILTERS: readonly SessionSourceFilter[] = ['all', 'manual', 'trigger']
+
 /** Fold a session's display status into the coarse bucket the filter uses. */
 export function statusBucketFor(status: AcpSessionDisplayStatus): SessionStatusBucket {
   switch (status) {
@@ -76,6 +81,8 @@ export interface IAcpSessionFilterService {
   readonly excludedStatuses: IObservable<ReadonlySet<SessionStatusBucket>>
   /** True when archived sessions are shown (default false = hidden). */
   readonly showArchived: IObservable<boolean>
+  /** Which session origin to show: all, user-started, or trigger-started. */
+  readonly sourceFilter: IObservable<SessionSourceFilter>
   /** True when sort + excludes are all at their defaults (used to dim the funnel). */
   readonly isFilterDefault: IObservable<boolean>
 
@@ -88,6 +95,7 @@ export interface IAcpSessionFilterService {
   toggleAgent(agentId: string): void
   toggleStatus(bucket: SessionStatusBucket): void
   toggleArchived(): void
+  setSourceFilter(source: SessionSourceFilter): void
   /** Restore sort + excludes to defaults. Does not touch the search box. */
   resetFilters(): void
   /** Idempotent async load of the persisted filter state. */
@@ -108,6 +116,8 @@ interface PersistedShape {
   readonly excludedStatuses: readonly SessionStatusBucket[]
   /** Added after v1 shipped — absent in older payloads; read leniently. */
   readonly showArchived?: boolean
+  /** Added after v1 shipped — absent in older payloads; read leniently. */
+  readonly sourceFilter?: SessionSourceFilter
 }
 
 export class AcpSessionFilterService extends Disposable implements IAcpSessionFilterService {
@@ -135,6 +145,10 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
     'acp.sessionShowArchived',
     false,
   )
+  private readonly _sourceFilter: ISettableObservable<SessionSourceFilter> = observableValue(
+    'acp.sessionSourceFilter',
+    'all',
+  )
   private readonly _isFilterDefault: ISettableObservable<boolean> = observableValue(
     'acp.sessionFilterDefault',
     true,
@@ -146,6 +160,7 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
   readonly excludedAgentIds: IObservable<ReadonlySet<string>> = this._excludedAgentIds
   readonly excludedStatuses: IObservable<ReadonlySet<SessionStatusBucket>> = this._excludedStatuses
   readonly showArchived: IObservable<boolean> = this._showArchived
+  readonly sourceFilter: IObservable<SessionSourceFilter> = this._sourceFilter
   readonly isFilterDefault: IObservable<boolean> = this._isFilterDefault
 
   private readonly _logger: ILogger
@@ -219,12 +234,20 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
     this._scheduleWrite()
   }
 
+  setSourceFilter(source: SessionSourceFilter): void {
+    if (this._sourceFilter.get() === source) return
+    this._sourceFilter.set(source, undefined)
+    this._refreshDefault()
+    this._scheduleWrite()
+  }
+
   resetFilters(): void {
     if (this.isFilterDefault.get()) return
     this._sortMode.set(DEFAULT_SORT, undefined)
     this._excludedAgentIds.set(new Set<string>(), undefined)
     this._excludedStatuses.set(new Set<SessionStatusBucket>(), undefined)
     this._showArchived.set(false, undefined)
+    this._sourceFilter.set('all', undefined)
     this._refreshDefault()
     this._scheduleWrite()
   }
@@ -245,7 +268,8 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
       this._sortMode.get() === DEFAULT_SORT &&
       this._excludedAgentIds.get().size === 0 &&
       this._excludedStatuses.get().size === 0 &&
-      this._showArchived.get() === false
+      this._showArchived.get() === false &&
+      this._sourceFilter.get() === 'all'
     this._isFilterDefault.set(isDefault, undefined)
   }
 
@@ -267,6 +291,9 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
         }
         if (typeof raw.showArchived === 'boolean') {
           this._showArchived.set(raw.showArchived, undefined)
+        }
+        if (raw.sourceFilter !== undefined && SESSION_SOURCE_FILTERS.includes(raw.sourceFilter)) {
+          this._sourceFilter.set(raw.sourceFilter, undefined)
         }
         this._refreshDefault()
       } else if (raw !== undefined) {
@@ -297,6 +324,7 @@ export class AcpSessionFilterService extends Disposable implements IAcpSessionFi
         excludedAgentIds: [...this._excludedAgentIds.get()],
         excludedStatuses: [...this._excludedStatuses.get()],
         showArchived: this._showArchived.get(),
+        sourceFilter: this._sourceFilter.get(),
       }
       await this._storage.set(STORAGE_KEY, payload, StorageScope.GLOBAL)
     } catch (err) {

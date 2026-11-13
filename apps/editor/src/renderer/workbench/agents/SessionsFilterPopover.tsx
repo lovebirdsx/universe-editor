@@ -15,8 +15,10 @@ import { useObservable, useService } from '../useService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   IAcpSessionFilterService,
+  SESSION_SOURCE_FILTERS,
   SESSION_STATUS_BUCKETS,
   type SessionSortMode,
+  type SessionSourceFilter,
   type SessionStatusBucket,
 } from '../../services/acp/session/acpSessionFilterService.js'
 import styles from './agents.module.css'
@@ -40,6 +42,17 @@ function statusLabel(bucket: SessionStatusBucket): string {
       return localize('acp.filter.status.inputNeeded', 'Input Needed')
     case 'failed':
       return localize('acp.filter.status.failed', 'Failed')
+  }
+}
+
+function sourceLabel(source: SessionSourceFilter): string {
+  switch (source) {
+    case 'all':
+      return localize('acp.filter.source.all', 'All Sessions')
+    case 'manual':
+      return localize('acp.filter.source.manual', 'Manual')
+    case 'trigger':
+      return localize('acp.filter.source.trigger', 'Triggers')
   }
 }
 
@@ -77,6 +90,7 @@ export function SessionsFilterPopover({ onDismiss }: SessionsFilterPopoverProps)
   const excludedAgents = useObservable(filterService.excludedAgentIds)
   const excludedStatuses = useObservable(filterService.excludedStatuses)
   const showArchived = useObservable(filterService.showArchived)
+  const sourceFilter = useObservable(filterService.sourceFilter)
   const isDefault = useObservable(filterService.isFilterDefault)
 
   const agents = registry.list()
@@ -134,6 +148,16 @@ export function SessionsFilterPopover({ onDismiss }: SessionsFilterPopoverProps)
           ))}
         </ul>
       ) : null}
+      <ul className={styles['filterGroup']}>
+        {SESSION_SOURCE_FILTERS.map((source) => (
+          <FilterRow
+            key={source}
+            label={sourceLabel(source)}
+            checked={sourceFilter === source}
+            onClick={() => filterService.setSourceFilter(source)}
+          />
+        ))}
+      </ul>
       <ul className={styles['filterGroup']}>
         {SESSION_STATUS_BUCKETS.map((bucket) => (
           <FilterRow

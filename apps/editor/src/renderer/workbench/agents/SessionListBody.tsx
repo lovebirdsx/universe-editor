@@ -45,6 +45,7 @@ import {
   AlertCircle,
   Moon,
   Hourglass,
+  Zap,
 } from 'lucide-react'
 import {
   IconButton,
@@ -282,6 +283,23 @@ function formatModelId(id: string): string {
   return id.replace(/^claude-/, '').replace(/-\d{8}$/, '')
 }
 
+function automationVerdictLabel(
+  verdict: NonNullable<AcpSessionHistoryEntry['automation']>['verdict'],
+): string | undefined {
+  switch (verdict) {
+    case 'auto-approve':
+      return localize('acp.sessions.verdict.autoApprove', 'Auto-approved')
+    case 'escalate':
+      return localize('acp.sessions.verdict.escalate', 'Needs review')
+    case 'reject':
+      return localize('acp.sessions.verdict.reject', 'Rejected')
+    case 'info':
+      return localize('acp.sessions.verdict.info', 'Info')
+    default:
+      return undefined
+  }
+}
+
 export interface SessionListBodyProps {
   /** Suppress the inline "no sessions" line — popovers render their own. */
   hideEmptyState?: boolean
@@ -384,6 +402,14 @@ function SessionRow({
   const pinLabel = isPinned
     ? localize('acp.sessions.unpin', 'Unpin session')
     : localize('acp.sessions.pin', 'Pin session')
+  const automationLabel =
+    entry.automation !== undefined
+      ? localize('acp.sessions.automationBadge', 'Started by trigger {name} · {key}', {
+          name: entry.automation.triggerName,
+          key: entry.automation.eventKey,
+        })
+      : undefined
+  const verdictLabel = automationVerdictLabel(entry.automation?.verdict)
   return (
     <li
       {...rowProps}
@@ -409,6 +435,16 @@ function SessionRow({
             count={sideTaskCount}
             testId={`session-row-${entry.id}-side-task-count`}
           />
+          {automationLabel !== undefined ? (
+            <Zap
+              size={12}
+              strokeWidth={2}
+              className={styles['sessionRowAutomation']}
+              data-testid={`session-row-${entry.id}-automation`}
+              aria-label={automationLabel}
+              data-tooltip={automationLabel}
+            />
+          ) : null}
           {isPinned ? (
             <Pin
               size={12}
@@ -418,6 +454,18 @@ function SessionRow({
             />
           ) : null}
         </span>
+        {entry.automation !== undefined &&
+        (verdictLabel !== undefined || entry.automation.summary !== undefined) ? (
+          <span
+            className={styles['sessionRowAutomationSummary']}
+            data-testid={`session-row-${entry.id}-automation-summary`}
+          >
+            {verdictLabel !== undefined ? (
+              <span className={styles['sessionRowAutomationVerdict']}>{verdictLabel}</span>
+            ) : null}
+            {entry.automation.summary !== undefined ? entry.automation.summary : null}
+          </span>
+        ) : null}
         <span className={styles['sessionRowMeta']}>
           {liveSession !== undefined ? <LiveSessionStatus session={liveSession} /> : null}
           <span className={styles['sessionRowTime']}>{relativeTime(entry.lastUsedAt)}</span>
@@ -564,6 +612,7 @@ export function SessionListBody({
   const excludedAgents = useObservable(filterService.excludedAgentIds)
   const excludedStatuses = useObservable(filterService.excludedStatuses)
   const showArchived = useObservable(filterService.showArchived)
+  const sourceFilter = useObservable(filterService.sourceFilter)
 
   // The config service exposes an Event, not an observable — mirror the scope
   // into local state so the list re-renders (and re-filters) when it changes.
@@ -660,6 +709,8 @@ export function SessionListBody({
       // even under the Archived toggle.
       if (entry.sideTaskOf !== undefined) return false
       if (excludedAgents.has(entry.agentId)) return false
+      if (sourceFilter === 'manual' && entry.automation !== undefined) return false
+      if (sourceFilter === 'trigger' && entry.automation === undefined) return false
       if (excludedStatuses.size > 0) {
         const live = service.getById(entry.id)
         const bucket =
@@ -686,6 +737,7 @@ export function SessionListBody({
     showArchived,
     excludedAgents,
     excludedStatuses,
+    sourceFilter,
     sortMode,
     query,
     service,
@@ -808,7 +860,7 @@ export function SessionListBody({
   // tree's focus recovery, hand the cursor to the row that slid into its seat
   // instead of clamping it away (which sent the next arrow key to row 0). Only
   // user-initiated removals set this; filtering still drops the cursor as before.
-  const filterKey = `${query}\0${showArchived ? 1 : 0}\0${[...excludedAgents].sort().join('\0')}\0${[...excludedStatuses].sort().join('\0')}`
+  const filterKey = `${query}\0${showArchived ? 1 : 0}\0${sourceFilter}\0${[...excludedAgents].sort().join('\0')}\0${[...excludedStatuses].sort().join('\0')}`
   const pendingCursorRef = useRef<{
     readonly id: string
     readonly index: number

@@ -6,9 +6,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 export const ACP_SESSION_HISTORY_STORAGE_KEY = 'acp.sessionHistory'
-export const ACP_SESSION_HISTORY_SCHEMA_VERSION = 7
+export const ACP_SESSION_HISTORY_SCHEMA_VERSION = 8
 /** Old payloads stay readable: no field added since v1 requires migration. */
-export const ACP_SESSION_HISTORY_ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [1, 2, 3, 4, 5, 6, 7]
+export const ACP_SESSION_HISTORY_ACCEPTED_SCHEMA_VERSIONS: readonly number[] = [
+  1, 2, 3, 4, 5, 6, 7, 8,
+]
 
 /** The minimum persisted shape the catalog filter needs. */
 export interface ResumableHistoryEntry {

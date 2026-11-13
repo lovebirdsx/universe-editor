@@ -69,6 +69,7 @@ import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostS
 import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import { priceSessionModel, type IAcpSessionProviderContext } from './acpSessionProviderContext.js'
 import { inputTokensIncludeCached } from '../../../../shared/ai/catalog/index.js'
+import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
 import {
   LIVE_INGESTION_BUDGET,
   MAX_AVAILABLE_COMMANDS,
@@ -1282,6 +1283,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     readonly internal: boolean = false,
     /** Internal session that may edit files inside its cwd (conflict resolver). */
     readonly internalWritable: boolean = false,
+    /** Trigger provenance for an automated session; undefined = user-started. */
+    readonly automation: AutomationOrigin | undefined = undefined,
+    /** Absolute run directory of an automated session (permission policy scope). */
+    readonly automationRunDir: string | undefined = undefined,
   ) {
     super()
     this._budgetHolder = {

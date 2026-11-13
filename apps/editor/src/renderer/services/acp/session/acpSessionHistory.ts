@@ -40,6 +40,25 @@ import { IAcpSideTaskIndexService } from './acpSideTaskIndex.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { AcpPlanEntry } from './acpSessionModel.js'
 import { isPromptEchoTitle } from './acpSessionTitleEcho.js'
+import type {
+  AutomationOrigin,
+  TriggerRunOutcome,
+  TriggerVerdictKind,
+} from '../../../../shared/triggers/types.js'
+
+/** Provenance of a session started by an agent trigger, plus its verdict result. */
+export type AcpSessionAutomation = AutomationOrigin & {
+  readonly verdict?: TriggerVerdictKind
+  readonly summary?: string
+  readonly outcome?: TriggerRunOutcome
+}
+
+/** The mutable half of {@link AcpSessionAutomation}, as written by the run watcher. */
+export interface AcpSessionAutomationResult {
+  readonly verdict?: TriggerVerdictKind
+  readonly summary?: string
+  readonly outcome?: TriggerRunOutcome
+}
 
 /**
  * Which sessions the agent session history surfaces:
@@ -242,6 +261,12 @@ export interface AcpSessionHistoryEntry {
    * so `session/load` can rebuild the fork.
    */
   readonly internal?: boolean
+  /**
+   * Set when an agent trigger started this session. Absent for user-started
+   * sessions. `verdict` / `summary` / `outcome` are filled in when the run ends
+   * (see {@link IAcpSessionHistoryService.setAutomationResult}).
+   */
+  readonly automation?: AcpSessionAutomation
 }
 
 export interface IAcpSessionHistoryService {
@@ -387,6 +412,12 @@ export interface IAcpSessionHistoryService {
    * is unknown or the value is unchanged.
    */
   setHistoryPinned(sessionId: string, pinned: boolean): void
+  /**
+   * Record the verdict result of an automated run on its automation row
+   * (see {@link AcpSessionHistoryEntry.automation}). No-op for an unknown id or
+   * a row that was not started by a trigger.
+   */
+  setAutomationResult(sessionId: string, result: AcpSessionAutomationResult): void
   /**
    * Record the session's transcript file path (see
    * {@link AcpSessionHistoryEntry.transcriptPath}). Idempotent; no-op if the id
@@ -682,6 +713,12 @@ const STORAGE_KEY = 'acp.sessionHistory'
 const SCHEMA_VERSION = ACP_SESSION_HISTORY_SCHEMA_VERSION
 const MAX_ENTRIES = 100
 /**
+ * Non-pinned automated rows are capped well below {@link MAX_ENTRIES}: triggers
+ * can create a row per event, and they must never evict the user's manual
+ * sessions. Pinned rows are exempt (the user explicitly asked to keep them).
+ */
+const MAX_AUTOMATION_ENTRIES = 30
+/**
  * Bound on remembered tombstones. A user-deleted session must never be rebuilt
  * by a `session/list` sweep, but the list must not grow without limit across
  * years of sessions; oldest-first eviction mirrors the history ceiling.
@@ -838,6 +875,10 @@ export class AcpSessionHistoryService
       entry.authority ?? (existingIdx >= 0 ? this._state[existingIdx]!.authority : undefined)
     const carriedInternal =
       entry.internal ?? (existingIdx >= 0 ? this._state[existingIdx]!.internal : undefined)
+    // Trigger provenance is stamped once at creation; a re-add (resume / merge)
+    // must keep it and any verdict result already recorded on the row.
+    const carriedAutomation =
+      entry.automation ?? (existingIdx >= 0 ? this._state[existingIdx]!.automation : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -866,6 +907,7 @@ export class AcpSessionHistoryService
         : {}),
       ...(carriedTranscriptPath !== undefined ? { transcriptPath: carriedTranscriptPath } : {}),
       ...(carriedAiFix !== undefined ? { aiFix: carriedAiFix } : {}),
+      ...(carriedAutomation !== undefined ? { automation: carriedAutomation } : {}),
       ...(carriedInternal === true ? { internal: true } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
       ...(existingManualTitle === true ? { manualTitle: true } : {}),
@@ -1179,6 +1221,27 @@ export class AcpSessionHistoryService
     if ((cur.pinned === true) === pinned) return
     const { pinned: _drop, ...base } = cur
     const next: AcpSessionHistoryEntry = pinned ? { ...base, pinned: true } : base
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setAutomationResult(sessionId: string, result: AcpSessionAutomationResult): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.automation === undefined) return
+    const nextAutomation: AcpSessionAutomation = {
+      triggerId: cur.automation.triggerId,
+      triggerName: cur.automation.triggerName,
+      eventKey: cur.automation.eventKey,
+      runId: cur.automation.runId,
+      ...(result.verdict !== undefined ? { verdict: result.verdict } : {}),
+      ...(result.summary !== undefined ? { summary: result.summary } : {}),
+      ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
+    }
+    if (sameAutomation(cur.automation, nextAutomation)) return
+    const next: AcpSessionHistoryEntry = { ...cur, automation: nextAutomation }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -1500,12 +1563,13 @@ export class AcpSessionHistoryService
     // sessions deleted before the upgrade stay re-importable, as before.
     // v6 → v7: `internal` is optional and internal rows are never serialized;
     // old payloads are ordinary user sessions.
+    // v7 → v8: `automation` is optional, old rows are ordinary user sessions —
+    // no data migration needed.
     // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
     // 否则 history.get(sessionIdOnAgent) 永远 miss。
-    this._loadedDeleted =
-      o.schemaVersion === SCHEMA_VERSION && Array.isArray(o.deleted)
-        ? o.deleted.filter((id): id is string => typeof id === 'string' && id.length > 0)
-        : []
+    this._loadedDeleted = Array.isArray(o.deleted)
+      ? o.deleted.filter((id): id is string => typeof id === 'string' && id.length > 0)
+      : []
     return o.entries
       .filter(isValidEntry)
       .map((e) => (e.id === e.sessionIdOnAgent ? e : { ...e, id: e.sessionIdOnAgent }))
@@ -1542,20 +1606,35 @@ export class AcpSessionHistoryService
   }
 
   /**
-   * Bound the state to MAX_ENTRIES, evicting oldest-first but exempting pinned
-   * entries — pinning is the user's explicit "do not lose this" marker. If the
-   * pinned set alone exceeds MAX_ENTRIES the oldest pinned rows are evicted
-   * too (the cap is not grown). Input is expected lastUsedAt-desc; the result
-   * keeps that order.
+   * Bound the state to MAX_ENTRIES. Pinned rows are exempt (pinning is the
+   * user's explicit "do not lose this" marker) and are kept newest-first until
+   * the cap; if the pinned set alone exceeds MAX_ENTRIES the oldest pinned rows
+   * are evicted too (the cap is not grown). Of the remaining slots, non-pinned
+   * automated rows get at most MAX_AUTOMATION_ENTRIES — overflow evicts the
+   * oldest automated rows first, while manual rows keep filling whatever is
+   * left. Input is expected lastUsedAt-desc; the result keeps that order.
    */
   private _evictOverflow(entries: AcpSessionHistoryEntry[]): AcpSessionHistoryEntry[] {
-    if (entries.length <= MAX_ENTRIES) return entries
+    const automationOverflow =
+      entries.filter((e) => e.pinned !== true && e.automation !== undefined).length >
+      MAX_AUTOMATION_ENTRIES
+    if (entries.length <= MAX_ENTRIES && !automationOverflow) return entries
     const pinned = entries.filter((e) => e.pinned === true)
+    if (pinned.length >= MAX_ENTRIES) {
+      const keptPinned = pinned.slice(0, MAX_ENTRIES)
+      keptPinned.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+      return keptPinned
+    }
     const unpinned = entries.filter((e) => e.pinned !== true)
-    const kept = [
-      ...pinned.slice(0, MAX_ENTRIES),
-      ...unpinned.slice(0, Math.max(0, MAX_ENTRIES - pinned.length)),
-    ]
+    const automated = unpinned.filter((e) => e.automation !== undefined)
+    const manual = unpinned.filter((e) => e.automation === undefined)
+    const slots = MAX_ENTRIES - pinned.length
+    // The automation cap applies at every size, not just when the total cap is
+    // reached — otherwise a burst of trigger rows could refill the history
+    // between evictions.
+    const keptAutomated = automated.slice(0, Math.min(MAX_AUTOMATION_ENTRIES, slots))
+    const keptManual = manual.slice(0, Math.max(0, slots - keptAutomated.length))
+    const kept = [...pinned, ...keptAutomated, ...keptManual]
     kept.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     return kept
   }
@@ -1598,7 +1677,52 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['sideTaskAnchorMessageId'] === undefined ||
       typeof o['sideTaskAnchorMessageId'] === 'string') &&
     (o['retractedMessageIds'] === undefined || isStringArray(o['retractedMessageIds'])) &&
-    (o['aiFix'] === undefined || typeof o['aiFix'] === 'boolean')
+    (o['aiFix'] === undefined || typeof o['aiFix'] === 'boolean') &&
+    (o['automation'] === undefined || isValidAutomation(o['automation']))
+  )
+}
+
+const TRIGGER_VERDICT_KINDS: ReadonlySet<string> = new Set([
+  'auto-approve',
+  'escalate',
+  'reject',
+  'info',
+])
+
+const TRIGGER_RUN_OUTCOMES: ReadonlySet<string> = new Set([
+  'completed',
+  'budget-exceeded',
+  'timeout',
+  'approval-timeout',
+  'cancelled',
+  'failed',
+])
+
+function isValidAutomation(v: unknown): v is AcpSessionAutomation {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  return (
+    typeof o['triggerId'] === 'string' &&
+    typeof o['triggerName'] === 'string' &&
+    typeof o['eventKey'] === 'string' &&
+    typeof o['runId'] === 'string' &&
+    (o['verdict'] === undefined ||
+      (typeof o['verdict'] === 'string' && TRIGGER_VERDICT_KINDS.has(o['verdict']))) &&
+    (o['summary'] === undefined || typeof o['summary'] === 'string') &&
+    (o['outcome'] === undefined ||
+      (typeof o['outcome'] === 'string' && TRIGGER_RUN_OUTCOMES.has(o['outcome'])))
+  )
+}
+
+function sameAutomation(a: AcpSessionAutomation, b: AcpSessionAutomation): boolean {
+  return (
+    a.triggerId === b.triggerId &&
+    a.triggerName === b.triggerName &&
+    a.eventKey === b.eventKey &&
+    a.runId === b.runId &&
+    a.verdict === b.verdict &&
+    a.summary === b.summary &&
+    a.outcome === b.outcome
   )
 }
 

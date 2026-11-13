@@ -23,6 +23,7 @@ import type { SelectionContext } from '../promptContext.js'
 import type { PromptFileAttachment } from '../promptAttachment.js'
 import type { PromptImage } from '../promptImage.js'
 import type { PlacedRef } from '../promptRef.js'
+import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
 
 export type AcpMessageRole = 'user' | 'agent' | 'thought'
 
@@ -692,6 +693,19 @@ export interface IAcpSession {
    */
   readonly internalWritable: boolean
   /**
+   * Trigger provenance when this session was started by an agent trigger.
+   * Automated sessions run under the restricted permission policy in
+   * `services/triggers/automatedPermissionPolicy.ts`. Undefined for
+   * user-started sessions (whose behavior is unchanged).
+   */
+  readonly automation: AutomationOrigin | undefined
+  /**
+   * Absolute run directory for an automated session. The permission sink
+   * auto-approves writes that stay inside it (and only those). Undefined for
+   * user-started sessions.
+   */
+  readonly automationRunDir: string | undefined
+  /**
    * The agent-issued `sessionId` from `session/new` (a.k.a. `sessionIdOnAgent`).
    * `undefined` while the session is still connecting; set once
    * `attachConnection` runs. Durable across editor restarts and the key every
@@ -874,6 +888,12 @@ export interface IAcpSession {
    * session is already settled.
    */
   whenConnected(): Promise<void>
+  /**
+   * Resolves once every queued configOption push-back has landed on the agent.
+   * Callers that need the requested mode / model to be in effect before sending
+   * a prompt (automated trigger runs) await this after the handshake.
+   */
+  whenConfigOptionsSettled(): Promise<void>
   /**
    * Mark the start of a history replay — the `session/load` resume and the
    * `rewindTo` truncated-history replay alike. Flips {@link isReplayingHistory}

@@ -2175,6 +2175,28 @@
   color: var(--vscode-agent-messageRoleForeground, #888);
 }
 
+.sessionRowAutomation {
+  flex-shrink: 0;
+  color: var(--vscode-charts-purple, #b180d7);
+}
+
+.sessionRowAutomationSummary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  color: var(--vscode-agent-messageRoleForeground, #888);
+}
+
+.sessionRowAutomationVerdict {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
 /* The pin indicator swaps for the inline pin button on hover / keyboard focus,
    mirroring VSCode's agentSessions viewer. */
 .sessionRow:hover .sessionRowPin,

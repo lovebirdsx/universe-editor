@@ -323,7 +323,9 @@ function addEntry(
   lastUsedAt: number,
   agentId = 'fake',
   cwd: string | undefined = '/work',
-  extra: Partial<Pick<AcpSessionHistoryEntry, 'sideTaskOf' | 'sideTaskQuote' | 'authority'>> = {},
+  extra: Partial<
+    Pick<AcpSessionHistoryEntry, 'sideTaskOf' | 'sideTaskQuote' | 'authority' | 'automation'>
+  > = {},
 ): AcpSessionHistoryEntry {
   let entry!: AcpSessionHistoryEntry
   // Flush the entries-observable update synchronously so the row exists by the
@@ -1451,5 +1453,69 @@ describe('SessionListBody — activating an already-open session', () => {
     expect((harness.auxCalls[0]?.options as { mode?: string }).mode).toBe('open')
     expect(harness.groups.groups).toHaveLength(1)
     harness.dispose()
+  })
+})
+
+describe('SessionListBody — automation provenance', () => {
+  let harness: Harness
+  beforeEach(async () => {
+    harness = await makeHarness()
+  })
+  afterEach(() => {
+    harness.dispose()
+  })
+
+  it('shows a trigger badge and the verdict summary on an automated row', () => {
+    const { history } = harness
+    addEntry(history, 'auto-1', 'triggered session', 1000, 'fake', '/work', {
+      automation: {
+        triggerId: 'swarm-triage',
+        triggerName: 'Swarm 分诊',
+        eventKey: 'swarm:42',
+        runId: 'run-1',
+      },
+    })
+    act(() => {
+      history.setAutomationResult('auto-1', {
+        verdict: 'escalate',
+        summary: 'needs a human',
+        outcome: 'completed',
+      })
+    })
+
+    const badge = screen.getByTestId('session-row-auto-1-automation')
+    expect(badge.getAttribute('aria-label')).toContain('Swarm 分诊')
+    expect(badge.getAttribute('aria-label')).toContain('swarm:42')
+    const summary = screen.getByTestId('session-row-auto-1-automation-summary')
+    expect(summary.textContent).toContain('Needs review')
+    expect(summary.textContent).toContain('needs a human')
+  })
+
+  it('omits the badge and summary for manual rows', () => {
+    addEntry(harness.history, 'manual-1', 'manual session', 1000)
+    expect(screen.queryByTestId('session-row-manual-1-automation')).toBeNull()
+    expect(screen.queryByTestId('session-row-manual-1-automation-summary')).toBeNull()
+  })
+
+  it('filters the list by session source', () => {
+    const { history, filterService } = harness
+    addEntry(history, 'manual-1', 'manual session', 1000)
+    addEntry(history, 'auto-1', 'triggered session', 2000, 'fake', '/work', {
+      automation: {
+        triggerId: 'swarm-triage',
+        triggerName: 'Swarm 分诊',
+        eventKey: 'swarm:42',
+        runId: 'run-1',
+      },
+    })
+
+    act(() => filterService.setSourceFilter('trigger'))
+    expect(rowOrder()).toEqual(['auto-1'])
+
+    act(() => filterService.setSourceFilter('manual'))
+    expect(rowOrder()).toEqual(['manual-1'])
+
+    act(() => filterService.setSourceFilter('all'))
+    expect(rowOrder()).toEqual(['auto-1', 'manual-1'])
   })
 })

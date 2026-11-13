@@ -2014,6 +2014,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       title: this._titleFor(session),
       ...(agentName !== undefined ? { agentName } : {}),
       ...(permissionTitle !== undefined && permissionTitle !== '' ? { permissionTitle } : {}),
+      // Automated sessions must reach the phone even when the PC has focus.
+      ...(session.automation !== undefined ? { alwaysNotify: true } : {}),
     }
   }
 

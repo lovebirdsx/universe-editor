@@ -132,6 +132,8 @@ export interface MobileGatewayAttention {
   readonly title: string
   readonly agentName?: string
   readonly permissionTitle?: string
+  /** Automated session: ignore the "PC focused" suppression. */
+  readonly alwaysNotify?: boolean
 }
 
 interface SessionSubscription {
@@ -2851,6 +2853,7 @@ export class MobileGatewayHub {
         ? { agentName: cached?.agentName ?? event.agentName }
         : {}),
       ...(event.permissionTitle !== undefined ? { permissionTitle: event.permissionTitle } : {}),
+      ...(event.alwaysNotify === true ? { alwaysNotify: true } : {}),
     })
   }
 
