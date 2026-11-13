@@ -29,11 +29,15 @@ export interface ITriggerMainService {
   confirmAutoApprove(triggerId: string): Promise<void>
   /** Create `triggers.json` with an example when absent; returns its file URI string. */
   ensureConfigFile(): Promise<string>
+  /** File URI string of `triggers.json` (for JSON schema association); the file may not exist. */
+  getConfigFileUri(): Promise<string>
   /** Called by a window when its run reaches a terminal state. */
   reportRunEnd(end: TriggerRunEnd): Promise<void>
   /**
-   * A window's swarm poller saw reviews that newly "need me". main applies the
-   * persistent per-trigger dedupe, so duplicate reports from several windows are harmless.
+   * The full current "needs me" review list seen by a window's swarm poller (same
+   * filter as the sidebar notification). main applies the persistent per-trigger
+   * dedupe and the first-report baseline, so repeated or multi-window reports are harmless
+   * and reviews that appeared while the editor was closed still fire after a restart.
    */
   reportSwarmNeedsAction(reviews: readonly SwarmNeedsActionReview[]): Promise<void>
   readonly onDidChangeTriggers: Event<readonly TriggerSummary[]>
