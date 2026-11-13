@@ -22,6 +22,7 @@ description: 分诊一条 Swarm 待处理审核：读改动与上下文、给出
 | `description` | 审核描述（最多 2000 字符）。 |
 | `state` | 审核状态。 |
 | `version` | 检测时的最新版本号；approve 守卫会要求它不变。 |
+| `updated` | 检测时的审核更新时间戳；approve 守卫也会要求它不变（未批准的审核被重新 shelve 时版本号不变，只能靠它识别）。 |
 
 需要更多信息时，用你已 pin 的 Swarm MCP 或 Perforce 命令**只读**拉取审核详情、文件列表与 diff。
 
@@ -45,7 +46,7 @@ description: 分诊一条 Swarm 待处理审核：读改动与上下文、给出
 - **只有简单明确才 `auto-approve`，否则 `escalate`**。宁可多升级，不要自动批准你看不透的改动。
 - **不要自己调用 Swarm 写接口**：投票、评论、approve 都由编辑器在会话结束后执行；你只产出判决。
 - `swarm.vote` 的 `detail` 只能是 `up` 或 `down`；`swarm.comment` 的 `detail` 是正文（编辑器会自动加「由触发器自动生成」前缀）。
-- `swarm.approve` 额外需要人工在编辑器里确认过「自动 approve」，并且会再次校验版本号；不要假设它一定会执行。
+- `swarm.approve` 额外需要人工在编辑器里确认过「自动 approve」，并且会再次校验版本号与更新时间；不要假设它一定会执行。
 - 永远不要建议 `commit` 类操作；自动 approve 不会提交代码。
 
 ## result.json 示例

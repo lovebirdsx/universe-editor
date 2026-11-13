@@ -1478,6 +1478,8 @@ export interface E2EProbe {
    * confirmation.
    */
   runTriggerNow(triggerId: string): Promise<void>
+  /** Pause / resume one trigger through the same main-process entry the list QuickPick uses. */
+  setTriggerPaused(triggerId: string, paused: boolean): Promise<void>
   /** Absolute fs path of `<userData>/triggers/triggers.json`; the file may not exist yet. */
   getTriggersConfigPath(): Promise<string>
   /** Durable history rows started by an agent trigger, with their automation provenance. */

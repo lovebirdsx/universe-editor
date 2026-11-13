@@ -178,6 +178,33 @@ test.describe('agent triggers', () => {
     expect(await page.evaluate(() => window.__E2E__!.getAcpAutomationRows())).toHaveLength(0)
   })
 
+  test('a paused trigger refuses runNow and creates no session @p0', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
+    await workbench.waitForRestored()
+    await installEchoAgent(page)
+    await writeTriggersConfig(page, [manualTrigger(launchWorkspace.dir)])
+    await waitForTriggerStatus(page, MANUAL_ID, 'disabled')
+
+    await page.evaluate((id) => window.__E2E__!.setTriggerPaused(id, true), MANUAL_ID)
+    await waitForTriggerStatus(page, MANUAL_ID, 'paused')
+
+    const error = await runNowRejection(page, MANUAL_ID)
+    expect(error).toBeDefined()
+    expect(error).toMatch(/paused/i)
+
+    // The pause gate rejects before the run host is asked to create a session.
+    expect(await page.evaluate(() => window.__E2E__!.getAcpSessionCount())).toBe(0)
+    expect(await page.evaluate(() => window.__E2E__!.getAcpAutomationRows())).toHaveLength(0)
+
+    // Resuming clears the pause; the trigger is runnable again (still disabled as configured).
+    await page.evaluate((id) => window.__E2E__!.setTriggerPaused(id, false), MANUAL_ID)
+    await waitForTriggerStatus(page, MANUAL_ID, 'disabled')
+  })
+
   test('invalid entries are listed with their errors and never run @regression', async ({
     page,
     workbench,

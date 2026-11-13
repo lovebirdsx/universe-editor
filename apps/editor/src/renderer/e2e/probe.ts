@@ -1329,6 +1329,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     listTriggers: () => services.triggerMainService.listTriggers(),
     runTriggerNow: (triggerId) => services.triggerMainService.runNow(triggerId),
+    setTriggerPaused: (triggerId, paused) =>
+      services.triggerMainService.setPaused(triggerId, paused),
     getTriggersConfigPath: async () =>
       URI.parse(await services.triggerMainService.getConfigFileUri()).fsPath,
     getAcpAutomationRows: (): E2ETriggerAutomationRow[] => {

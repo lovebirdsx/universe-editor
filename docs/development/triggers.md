@@ -22,7 +22,7 @@ main（应用级单例）                                    renderer（每窗�
 │ RunQueue  (全局 / 每触发器并发)                             │
 │ 调度：单个 wake 定时器 + 启动门控                            │
 │ 源：manual / schedule / poll / swarm-review                 │
-│ PollCommandFetcher (exec + 超时 + 1MB 上限)                 │
+│ PollCommandFetcher (spawn + 超时/超限杀进程树 + 1MB 上限)  │
 │ AuditLog → audit.jsonl                                      │
 │ 窗口路由：findWorkspaceHost / waitForWorkspaceHost          │
 └───────────────┬─────────────────────────────────────────────┘
@@ -104,6 +104,7 @@ main（应用级单例）                                    renderer（每窗�
   1. `_replayPendingRuns()` 重放**尚未开始**的排队事件；
   2. `_syncTiming(now)` 计算下一次 schedule / poll；
   3. 只保留**一个** `setTimeout`，指向最近的唤醒点（`_rescheduleWake`）。没有可运行触发器时不再有调度定时器。
+- **门控只管定时器，不管手动运行**：`runNow` 直接进入 `_acceptEvent(..., { ignoreBackoff: true })`，不检查 `_gateOpen`，因此启动宽限期内手动「立即运行」也会执行（e2e 依赖该行为）。`_replayPendingRuns` 仍要求门控开放。
 - `_applyConfig()` 在配置热加载时清空 `_armedSchedule` / `_nextPoll` 锚点，让新的 cron / 间隔立即生效；已持久化的 `lastScheduledAt` 仍用于错过槽位计算。
 
 ### schedule
@@ -143,6 +144,8 @@ main（应用级单例）                                    renderer（每窗�
 - poll：退避期不执行命令，`_nextPoll` 推进到 `backoffUntil`；
 - swarm-review：退避期内上报的事件**不消费**（不标记 processed），退避结束后的下一次上报再正常触发。
 
+`runNow` 传 `ignoreBackoff: true`；`_startRun` 入口重查 `_isRunnable` 时也按 `manual:` 前缀放行退避，所以用户显式「立即运行」不会被退避门挡住。高权限未确认则是**硬阻止**：`_isRunnable` / `_acceptEvent` / `runNow` 都直接拒绝，不会降级到保守档。
+
 ### swarm-review
 
 - renderer 的 `SwarmReviewNotificationContribution` 在每次轮询后，经 `SwarmTriggerReporter` 把**当前显示的审核列表**（与通知同一 `_computeDisplayed` 口径，含忽略集、作者过滤、可批准过滤）上报 `reportSwarmNeedsAction`。
@@ -167,7 +170,7 @@ main（应用级单例）                                    renderer（每窗�
 - 重启后 `pending` 里 status 仍为 `queued` 的记录会重新入队；`started` 的绝不重放。
 - 事件负载不写 `state.json`，而是单独写 `pending/<runId>.json`（`TriggerEvent` 的 JSON），run 开始后删除。
 - 去重 key 每触发器上限 2000、TTL 30 天。
-- `baselineDone` 与 `sourceFingerprint` 绑定：配置热加载时比较 `source` 的归一指纹（poll = `keyField` + `command` + `intervalSec`，swarm-review / schedule 同理），变化时清空 `baselineDone` 与该触发器 `poll:` / `swarm:` 前缀的去重 key，让新源重新建基线。
+- `baselineDone` 与 `sourceFingerprint` 绑定：配置热加载时比较 `source` 的归一指纹（poll = `keyField` | `command` | `intervalSec`；schedule = `cron` | `everyMin`；swarm-review / manual = 类型常量）。变化时清空 `baselineDone` 与该触发器 `poll:` / `swarm:` 前缀的去重 key，让新源重新建基线。旧版 state 没有 `sourceFingerprint` 时只补写指纹、不丢已有 key（避免升级即清空历史去重）。
 
 ### 队列
 
@@ -209,7 +212,7 @@ _startRun
 
 `host.startRun` 是反向 RPC，没有自带传输超时。`_startHostRun()` 用 `startRunTimeoutMs`（默认 120s）做 `Promise.race`：超时则上层按失败处理并释放槽位；如果 renderer 之后才启动成功，main 会立即 `cancelRun` 并丢弃该 sessionId，避免出现不在调度器账上的会话。
 
-- **暂停是最终关卡**：`setPaused(id, true)` 清掉该触发器的排队项并 `forget` 其 key（不计失败）；恢复 / 全局恢复 / 确认高权限后都会再跑一次 `_replayPendingRuns`，把此前因暂停保留的 pending 记录入队。
+- **暂停是最终关卡**：`setPaused(id, true)` 清掉该触发器的排队项并 `forget` 其 key（不计失败）；`setAllPaused(true)` 同样清空全部排队项。`state.pending` 里尚未入队的记录不会被删除，恢复 / 全局恢复 / 确认高权限后都会再跑一次 `_replayPendingRuns`，把此前因暂停保留的 pending 记录入队。
 - **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。
 - **running 看门狗**：run 启动后按 `budget.timeoutMin + budget.approvalTimeoutMin + 10 分钟宽限` 设时；到期仍未 `reportRunEnd` → 记失败、释放槽位，并调用该窗口的 `host.cancelRun`（若 host 还在）。`reportRunEnd` 会清掉定时器。
 - **运行结束**：renderer `TriggerRunHost` 订阅 `AutomatedSessionService.onDidEndRun`，调 `reportRunEnd`。main：
@@ -254,14 +257,15 @@ _startRun
 
 1. 验证同一 `runId` 未启动。
 2. `agentId = request.agentId ?? registry.defaultAgentId()`。
-3. `requestedMode = request.mode ?? CONSERVATIVE_MODE_BY_AGENT[agentId]`（`claude-code → default`，`codex → read-only`）。
-4. 若 `requestedMode` 是高权限类且 `allowElevatedMode !== true` → 直接抛错（main 正常不会发这种请求）。
-5. `createSession(agentId, { cwd, activate: false, title: '触发器名 · eventKey', automation: origin, automationRunDir: runDir, additionalDirectories: [runDir], mcpServerNames, configDesiredOverrides: { mode, model? } })`。
+3. `requestedMode = request.mode?.trim() ?? CONSERVATIVE_MODE_BY_AGENT[agentId]`（`claude-code → default`，`codex → read-only`）。
+4. `requestedMode` 为空 → 抛错：未知 agent 的默认模式未知，必须由触发器显式配置 `mode`，否则无人值守会话可能继承宽松档。
+5. 若 `requestedMode` 是高权限类（`isElevatedModeId`，大小写不敏感）且 `allowElevatedMode !== true` → 直接抛错（main 正常不会发这种请求）。
+6. `createSession(agentId, { cwd, activate: false, title: '触发器名 · eventKey', automation: origin, automationRunDir: runDir, additionalDirectories: [runDir], mcpServerNames, configDesiredOverrides: { mode, model? } })`。
    - 非 `internal`：会话落盘、进列表、可恢复。
    - `additionalDirectories` 让 Agent 能写 `runDir`。
-6. `whenConnected()` → 失败则关闭会话并抛错。
-7. `whenConfigOptionsSettled()` → 用 `readSessionModeId()` 读实际 mode（按 id=`mode` 或 mode 类别），**必须与请求值一致**；不一致关闭会话并抛错。未显式配置 mode 时，也拒绝落在高权限模式。
-8. 建 `AutomatedRunWatcher`，`start()`，`sendPrompt(prompt)`；prompt RPC 结束（成功或失败）时 `notifyTurnSettled()`。
+7. `whenConnected()` → 失败则关闭会话并抛错。
+8. `whenConfigOptionsSettled()` → 用 `readSessionModeId()` 读实际 mode（按 id=`mode` 或 mode 类别），**必须与请求值一致**（大小写 / 空白差异不算不一致）；不一致关闭会话并抛错。
+9. 建 `AutomatedRunWatcher`，`start()`，`sendPrompt(prompt)`；prompt RPC 结束（成功或失败）时 `notifyTurnSettled()`。
 
 `TriggerRunHost.startRun` 只等「prompt 已发出」，不等整轮结束；结束走 `onDidEndRun`。
 
@@ -270,8 +274,8 @@ _startRun
 `acpSessionService.onRequestPermission()` 里，`session.automation !== undefined` 走自动化分支：
 
 1. 先调 `decideAutomatedPermission(params, session.automationRunDir, uriIdentity)`：
-   - 只处理 `toolCall.kind ∈ { edit, delete, move }`；
-   - 必须带 `locations` 且**全部**位于 `runDir` 下（用 `IUriIdentityService.relativePathUnder`）；
+   - 只处理 `toolCall.kind === 'edit'`（只自动放行写文件；`delete` / `move` 是破坏性操作，无论指向哪里都不自动放行）；
+   - 必须带非空 `locations`、任何路径段都不是 `..`，且**全部**位于 `runDir` 下（用 `IUriIdentityService.relativePathUnder`）；
    - 返回 `allow_once` 的 `optionId`，否则 `undefined`。
 2. 自动化会话**不进入**个人自动批准分支（`acpPermissionHandler.tryAutoApprove` 不会被调用），也不进入 Claude 计划权限策略的 `skip` 分支。
 3. `_planPolicy(sessionId)` 对自动化会话恒返回 `'manual'`。
@@ -280,6 +284,8 @@ _startRun
 
 因此自动化会话唯一的静默批准是「写 runDir 的一次性 allow_once」；其余全部走人工卡片，等待受 `approvalTimeoutMin` 限制。
 
+> 路径检查只做字面 `relativePathUnder`，不解析符号链接：若 `runDir` 内已有指向外部的链接，写它会被当成 runDir 内写入。当前安全性依赖「自动化会话不能无审批执行命令」——创建符号链接本身要走命令审批（见 §18）。
+
 > 恢复（resume）自动化会话时，`automation` 会随历史字段恢复，`automationRunDir` 不持久化，因此 runDir 自动放行失效，仅保留「个人自动批准 / 计划策略 / allow_always」这些非路径限制。
 
 ## 10. 预算与生命周期 watcher
@@ -287,7 +293,7 @@ _startRun
 `AutomatedRunWatcher` 每轮 `autorun` 读 session 的 `status`、`usage`、`pendingPermission`、`pendingElicitation`：
 
 - **活跃时间**：`status === 'running'` 且没有挂起卡片时累计；卡片打开期间暂停计时，关闭后继续。
-- **费用**：`usage.cost.amount >= budget.maxCostUsd` → `budget-exceeded` + `cancelTurn()`。
+- **费用**：`usage.cost.amount >= budget.maxCostUsd` → `budget-exceeded` + `cancelTurn()`。只有币种为空或 `USD` 时才比较；其它币种不中止运行（汇率换算不可靠），首次遇到时告警一次。
 - **审批超时**：卡片从无到有时起一个定时器；卡片关闭即清除；超时 → `approval-timeout` + `cancelTurn()`。
 - **状态**：`errored` → `failed`；`closed` → `cancelled`。
 - **正常结束**：`notifyTurnSettled()` 且没有挂起卡片 → `completed`。
@@ -311,14 +317,15 @@ _startRun
 
 `triggerActionExecutor.ts`：
 
-- 只有 `auto-approve` 才执行。
+- 只有判决为 `auto-approve` 才执行动作。
+- **只有 `swarm-review` 源执行动作**：`request.sourceType !== 'swarm-review'` 时，`auto-approve` 判决里任何 `swarm.*` 动作都会让整批动作被拒绝并降级为 `escalate`（每条记 `rejected`，reason 为「仅 swarm-review 触发器可执行 Swarm 动作」）。其它判决本来就不执行动作；非 Swarm 动作类型仍只受白名单约束。
 - **approve 预检先于所有动作**：`checkApproveGuard()` 在循环前检查本批 actions 里是否有 `swarm.approve`；若有，则要求事件同时带数字 `version` 与数字 `updated`，重新 `SwarmCommands.getReview`，并要求 `canApproveReview(detail.transitions)`、`latestReviewVersion(detail) === version`、`detail.updated === updated`。任一失败 → 整批动作一条都不执行，判决降级 `escalate`（审计里记一条 `swarm.approve` 的 `rejected`）。
   - 放在循环前而不是 `executeApprove` 里，是因为本批自己的 vote / comment 也会移动审核的 `updated`；如果先执行再检查，会把「我们自己的动作」误判成作者 re-shelve。
 - `swarm.vote` → `SwarmCommands.vote({ reviewId, vote, version? })`，返回非 `true` 算失败。
 - `swarm.comment` → `automatedCommentBody(triggerName, detail)` 加前缀，`SwarmCommands.addComment`。
 - `swarm.approve` → 直接 `SwarmCommands.transition({ reviewId, state: 'approved', commit: false })`（守卫已在预检完成）。
-- 每条动作结果写 `TriggerActionAudit`（`ok` / `rejected` / `failed` + reason）；预检通过后某条动作执行失败 → 立即返回 `escalate`（之前的成功动作保留在 audits 里，已执行）。
-- 审计最终由 main 的 `run-end` 记录，格式 `type@target=result`，**不含正文**。
+- 每条动作结果写 `TriggerActionAudit`（`ok` / `rejected` / `failed` + reason）；预检通过后某条动作执行失败 → 立即停止后续动作并返回 `escalate`（之前的成功动作保留在 audits 里，已执行）；摘要追加「已执行：type@target,...（不可回滚）」。
+- main 在 `run-end` 里记录 outcome / verdict / actions 摘要，并对 `end.actions` 的**每条动作再单独写一行 `action`**（trigger / key / run / session / type / target / result / reason）；reason 只含校验或执行错误，**不含评论正文**。
 
 ## 12. 会话历史、列表与手机
 
@@ -328,7 +335,7 @@ _startRun
 - `setAutomationResult(sessionId, result)` 只更新自动化行。
 - 历史上限 100；**非置顶自动化行最多 30 条**（`MAX_AUTOMATION_ENTRIES`），超额优先淘汰最旧自动化行；置顶行不受 30 限制。
 - `SessionListBody`：⚡ 图标 + tooltip（`acp.sessions.automationBadge`，中文「由触发器 {name} 启动 · {key}」）、判决标签与摘要行；`acpSessionFilterService` 的 `sourceFilter: 'all' | 'manual' | 'trigger'`。
-- 手机：`MobileBridgeSessionSummary.automation`（triggerName / verdict / summary / outcome），由 `mobileBridgeProjection.ts` 投影；自动化会话的 attention 事件带 `alwaysNotify: true`，忽略「PC 聚焦时不推送」。
+- 手机：`MobileBridgeSessionSummary.automation`（triggerName / verdict / summary / outcome），由 `mobileBridgeProjection.ts` 投影；自动化会话的 attention 事件带 `alwaysNotify: true`，忽略「PC 聚焦时不推送」。该字段属于手机协议 v24（`MOBILE_PROTOCOL_VERSION = 24`）。**手机页面由编辑器网关下发**，随编辑器一起更新，不需要单独发手机端；协议版本不匹配时手机会提示刷新页面。
 
 ## 13. 通知
 
@@ -409,12 +416,14 @@ E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regress
 - 没有 `triggers.json` 时不列出任何触发器、不创建会话；
 - manual 触发 → 用 echo agent 建一个 **inactive** 会话（不占用编辑区、不切 active），历史行带 `automation` 溯源，`firstPrompt` 含完整的 `<event-data>` 围栏；
 - 高权限 mode 未确认时 `runNow` 拒绝，且不会创建会话；
+- 暂停的触发器 `runNow` 拒绝（错误含 paused），且不会创建会话；
 - 非法配置条目出现在列表里、带错误、`runNow` 拒绝。
 
 探针（`window.__E2E__`，契约在 `packages/e2e-contract`）：
 
 - `listTriggers()` → `E2ETriggerSummary[]`
 - `runTriggerNow(triggerId)` → 只等到事件被接受 / 入队，不等到会话创建（用 `getAcpAutomationRows` 轮询结果）
+- `setTriggerPaused(triggerId, paused)` → 从主进程暂停 / 恢复单个触发器（与列表 QuickPick 同一入口），用于验证暂停门控
 - `getTriggersConfigPath()` → `<userData>/triggers/triggers.json` 的绝对路径（测试直接写文件）
 - `getAcpAutomationRows()` → 带 `automation` 溯源与 `firstPrompt` 的历史行
 
@@ -430,13 +439,13 @@ pnpm e2e:smoke
 
 ## 18. 已知限制
 
-- **高权限未确认时是硬阻止**：`_isRunnable` / `_acceptEvent` / `runNow` 都会阻止运行，而不是降级到保守模式。
-- **schema 与运行时校验有差异**：schema 没有把 `session` 标为 required（运行时实际必需）；`budget` 的 schema `minimum: 0` 而运行时要求 `> 0`；poll 的 schema 描述只写「必须是 JSON 数组」，运行时也接受 `{ items: [] }`。
+- **schema 与运行时校验仍有少量差异**：schema 没有校验 `workspace` 必须是本机绝对路径 / 拒绝 UNC，也不校验 `id` 唯一；两者最终仍由 `parseTriggersConfig()` 兜底（非法条目进入 `invalid`）。`session` required、`budget` 三个正数（`exclusiveMinimum: 0`）、poll 的两种输出形态已与运行时对齐。
 - **配置指纹失效范围较大**：改任何字段（包括 `prompt` 文案）都会让高权限 / 自动 approve 确认失效，需要重新确认。
 - **恢复自动化会话不保留 runDir 范围**：resume 后写 runDir 不再自动放行（只保留非路径限制）。
-- **运行目录保留 200 个**：超出按 mtime 删除，可能早于历史会话上限；需要长期留档请自行复制。
+- **runDir 自动放行不解析符号链接**：路径检查只做字面 `relativePathUnder`；若 `runDir` 内已有指向外部的符号链接，写它会被当成 runDir 内写入。当前安全性依赖「自动化会话不能无审批执行命令」这一前提——创建符号链接本身要走命令审批（§9）。
+- **运行目录保留 200 个**：超出按 mtime 删除，会跳过 active / queued / pending 的 runId，可能早于历史会话上限；需要长期留档请自行复制。
 - **工作区级触发器未实现**：只读用户级文件；远程工作区不支持。
-- **e2e 只覆盖 manual 路径**：schedule / poll / swarm-review 的定时与外部依赖目前靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
+- **e2e 只覆盖手动事件路径**：manual / 高权限拒绝 / 非法配置 / 暂停拒绝走真实窗口；schedule / poll / swarm-review 的定时与外部依赖仍靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
 
 ## 19. 关键参考路径
 
