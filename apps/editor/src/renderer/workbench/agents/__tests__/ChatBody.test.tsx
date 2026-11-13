@@ -117,6 +117,7 @@ function makeSession(
     status?: AcpSessionStatus
     plan?: readonly AcpPlanEntry[]
     cwd?: string
+    automation?: IAcpSession['automation']
   } = {},
 ): IAcpSession {
   const collapseMode = observableValue<CollapseMode>('t.collapse', 'default')
@@ -126,6 +127,7 @@ function makeSession(
     title: 'Fake',
     sessionIdOnAgent: observableValue<string | undefined>('t.sidOnAgent', id),
     authority: undefined,
+    automation: opts.automation,
     cwd: opts.cwd,
     messages: observableValue<readonly AcpMessage[]>('t.messages', []),
     toolCalls: observableValue<readonly AcpToolCall[]>('t.toolCalls', []),
@@ -263,6 +265,7 @@ function makeInstantiation(
     setHasSelection: () => {},
     setForkSupported: () => {},
     setRewindSupported: () => {},
+    setSessionAutomation: () => {},
     setSlotTarget: () => {},
     setContextTarget: () => {},
     setPopoverOpen: () => {},
@@ -3032,6 +3035,47 @@ describe('ChatBody — side task affordances', () => {
 
       fireEvent.contextMenu(slotEl(container, 'm:a'), { detail: 1 })
       expect(setForkSupported).toHaveBeenCalledWith(false)
+    })
+  })
+
+  describe('context menu automation gating', () => {
+    it('reports automation when the session was started by a trigger', () => {
+      const setSessionAutomation = vi.fn()
+      const inst = makeInstantiation(undefined, undefined, {
+        widget: { setSessionAutomation },
+      })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody
+            session={makeSession('s1', items, {
+              automation: {
+                triggerId: 'triage',
+                triggerName: 'Triage',
+                eventKey: 'swarm:1',
+                runId: 'run-1',
+              },
+            })}
+          />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.contextMenu(slotEl(container, 'm:a'), { detail: 1 })
+      expect(setSessionAutomation).toHaveBeenCalledWith(true)
+    })
+
+    it('reports no automation for a manually created session', () => {
+      const setSessionAutomation = vi.fn()
+      const inst = makeInstantiation(undefined, undefined, {
+        widget: { setSessionAutomation },
+      })
+      const { container } = render(
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', items)} />
+        </ServicesContext.Provider>,
+      )
+
+      fireEvent.contextMenu(slotEl(container, 'm:a'), { detail: 1 })
+      expect(setSessionAutomation).toHaveBeenCalledWith(false)
     })
   })
 

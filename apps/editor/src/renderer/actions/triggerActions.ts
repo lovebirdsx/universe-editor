@@ -35,7 +35,7 @@ import {
   fallbackTriggerName,
 } from '../services/triggers/triggerReportEditorInput.js'
 import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
-import { resolveSessionTargetId } from './_agentShared.js'
+import { ACP_CHAT_SESSION_GROUP, resolveSessionTargetId } from './_agentShared.js'
 import {
   buildTriggerActionItems,
   buildTriggerPickItems,
@@ -381,6 +381,13 @@ export class ViewTriggerReportAction extends Action2 {
       category: CATEGORY,
       icon: 'open-preview',
       menu: [
+        {
+          id: MenuId.AcpChatContext,
+          when: 'acpChatSessionAutomation',
+          group: ACP_CHAT_SESSION_GROUP,
+          order: 6,
+          title: localize2('acp.sessions.viewReport', 'View Report'),
+        },
         {
           id: MenuId.EditorTabContext,
           when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && acpSessionHasAutomation`,

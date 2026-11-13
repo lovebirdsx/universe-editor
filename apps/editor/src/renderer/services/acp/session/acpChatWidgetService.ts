@@ -34,6 +34,10 @@
  *  the fragment under the cursor (`setContextTarget`) and the card it sits in
  *  (`setSlotTarget`). Pushed by the host just before the menu opens and cleared
  *  on close; the menu items' `when` clauses read them.
+ *
+ *  And `acpChatSessionAutomation`: true at context-menu time when the menu's
+ *  session was started by an agent trigger. Set alongside the other menu keys;
+ *  gates the "View Report" row.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -183,6 +187,11 @@ export interface IAcpChatWidgetService {
    */
   setRewindSupported(rewindSupported: boolean): void
   /**
+   * Set `acpChatSessionAutomation` — true at context-menu time when the menu's
+   * session was started by an agent trigger. Gates the "View Report" item.
+   */
+  setSessionAutomation(automation: boolean): void
+  /**
    * Set the `acpChatContextCard*` group in one call — the shape of the card the
    * timeline menu was raised on (the *slot*), which is orthogonal to
    * {@link setContextTarget}'s fragment: right-clicking a selection inside a
@@ -233,6 +242,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _selectionKey: IContextKey<boolean>
   private readonly _forkSupportedKey: IContextKey<boolean>
   private readonly _rewindSupportedKey: IContextKey<boolean>
+  private readonly _sessionAutomationKey: IContextKey<boolean>
   private readonly _contextImageKey: IContextKey<boolean>
   private readonly _contextPathKey: IContextKey<boolean>
   private readonly _contextChipTextKey: IContextKey<boolean>
@@ -266,6 +276,10 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._selectionKey = contextKeyService.createKey<boolean>('acpChatHasSelection', false)
     this._forkSupportedKey = contextKeyService.createKey<boolean>('acpChatForkSupported', false)
     this._rewindSupportedKey = contextKeyService.createKey<boolean>('acpChatRewindSupported', false)
+    this._sessionAutomationKey = contextKeyService.createKey<boolean>(
+      'acpChatSessionAutomation',
+      false,
+    )
     this._contextImageKey = contextKeyService.createKey<boolean>('acpChatContextImage', false)
     this._contextPathKey = contextKeyService.createKey<boolean>('acpChatContextPath', false)
     this._contextChipTextKey = contextKeyService.createKey<boolean>('acpChatContextChipText', false)
@@ -431,6 +445,10 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
 
   setRewindSupported(rewindSupported: boolean): void {
     this._rewindSupportedKey.set(rewindSupported)
+  }
+
+  setSessionAutomation(automation: boolean): void {
+    this._sessionAutomationKey.set(automation)
   }
 
   setSlotTarget(slot: AcpChatSlot | undefined): void {

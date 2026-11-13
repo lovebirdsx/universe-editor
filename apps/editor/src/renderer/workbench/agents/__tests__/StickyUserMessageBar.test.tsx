@@ -109,6 +109,7 @@ function renderWithServices(node: React.ReactNode) {
   services.set(IAcpChatWidgetService, {
     setHasSelection: () => {},
     setForkSupported: () => {},
+    setSessionAutomation: () => {},
     setContextTarget: () => {},
   } as unknown as IAcpChatWidgetService)
   services.set(IOpenerService, { open } as unknown as IOpenerService)
@@ -267,6 +268,7 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
         setHasSelection: () => {},
         setForkSupported: () => {},
         setRewindSupported: () => {},
+        setSessionAutomation: () => {},
         setSlotTarget: () => {},
         setContextTarget,
       } as unknown as IAcpChatWidgetService)
@@ -313,6 +315,7 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
         setHasSelection: () => {},
         setForkSupported: () => {},
         setRewindSupported: () => {},
+        setSessionAutomation: () => {},
         setSlotTarget: () => {},
         setContextTarget: () => {},
       } as unknown as IAcpChatWidgetService)
@@ -350,6 +353,7 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
         setHasSelection: () => {},
         setForkSupported: () => {},
         setRewindSupported: () => {},
+        setSessionAutomation: () => {},
         setSlotTarget: () => {},
         setContextTarget: () => {},
       } as unknown as IAcpChatWidgetService)
@@ -396,6 +400,7 @@ describe('StickyUserMessageBar — context menu fragment targets', () => {
         setHasSelection: () => {},
         setForkSupported: () => {},
         setRewindSupported: () => {},
+        setSessionAutomation: () => {},
         setSlotTarget,
         setContextTarget: () => {},
       } as unknown as IAcpChatWidgetService)

@@ -135,6 +135,8 @@ export function StickyUserMessageBar({
     // Mirrors ChatBody's context menu: gates "New Side Task".
     widgetService.setForkSupported(!session.readOnly && session.forkSupported.get())
     widgetService.setRewindSupported(!session.readOnly && session.rewindSupported.get())
+    // Same gate, for the "View Report" menu item.
+    widgetService.setSessionAutomation(session.automation !== undefined)
     // The bar *is* a card (the first user message, rendered outside the scroll
     // container) — describe it exactly like ChatBody does, from the same item
     // shape, so the two hosts can't offer different menu items.
@@ -218,6 +220,7 @@ export function StickyUserMessageBar({
             widgetService.setHasSelection(false)
             widgetService.setForkSupported(false)
             widgetService.setRewindSupported(false)
+            widgetService.setSessionAutomation(false)
             widgetService.setContextTarget(undefined)
             widgetService.setSlotTarget(undefined)
           }}

@@ -422,6 +422,16 @@ describe('AcpChatWidgetService', () => {
     expect(cks.get('acpChatContextChipText')).toBe(false)
   })
 
+  it('setSessionAutomation flips acpChatSessionAutomation', () => {
+    expect(cks.get('acpChatSessionAutomation')).toBe(false)
+
+    svc.setSessionAutomation(true)
+    expect(cks.get('acpChatSessionAutomation')).toBe(true)
+
+    svc.setSessionAutomation(false)
+    expect(cks.get('acpChatSessionAutomation')).toBe(false)
+  })
+
   it('setPromptContextTarget flips the acpPromptContext* group as a set', () => {
     expect(cks.get('acpPromptContextImage')).toBe(false)
     expect(cks.get('acpPromptContextRef')).toBe(false)

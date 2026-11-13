@@ -1138,6 +1138,8 @@ function ChatScroll({
     widgetService.setForkSupported(!readOnly && session.forkSupported.get())
     // Same gate, for the user-message "Rewind to Here" item.
     widgetService.setRewindSupported(!readOnly && session.rewindSupported.get())
+    // Same gate, for the "View Report" menu item.
+    widgetService.setSessionAutomation(session.automation !== undefined)
     // The card the menu was raised on. Resolved through the same store the
     // collapse commands write, so the Collapse/Expand labels and the command
     // itself can never disagree.
@@ -2185,6 +2187,7 @@ function ChatScroll({
               widgetService.setHasSelection(false)
               widgetService.setForkSupported(false)
               widgetService.setRewindSupported(false)
+              widgetService.setSessionAutomation(false)
               widgetService.setContextTarget(undefined)
               widgetService.setSlotTarget(undefined)
             }}
