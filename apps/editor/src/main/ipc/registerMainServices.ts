@@ -16,6 +16,7 @@ import { ServiceChannels } from '../../shared/ipc/channelNames.js'
 import { type IRendererLifecycleService } from '../../shared/ipc/lifecycleService.js'
 import { type IRendererSessionsService } from '../../shared/ipc/sessionSwitcher.js'
 import { type IMobileBridgeService } from '../../shared/ipc/mobileGatewayService.js'
+import { type ITriggerRunHost } from '../../shared/ipc/triggerService.js'
 import { createWindowScopedSessionSwitcher } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
 import { createWindowScopedAcpHost } from '../services/acpHost/acpHostMainService.js'
 import { createWindowScopedAcpTerminal } from '../services/acpTerminal/acpTerminalMainService.js'
@@ -35,6 +36,8 @@ export interface WindowIpcBootstrap {
   readonly rendererSessions: IRendererSessionsService
   /** Reverse proxy: lets the mobile gateway call into this renderer (M2). */
   readonly rendererMobileBridge: IMobileBridgeService
+  /** Reverse proxy: lets the trigger scheduler start automated runs in this renderer. */
+  readonly rendererTriggerRunHost: ITriggerRunHost
 }
 
 /**
@@ -152,6 +155,7 @@ export function bootstrapWindowIpc(
     ProxyChannel.fromService(createWindowScopedSessionSwitcher(app.sessionSwitcher, win.id)),
   )
   server.registerChannel(ServiceChannels.MobileGateway, ProxyChannel.fromService(app.mobileGateway))
+  server.registerChannel(ServiceChannels.Triggers, ProxyChannel.fromService(app.triggers))
 
   const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(
     client.getChannel(ServiceChannels.Lifecycle),
@@ -162,11 +166,15 @@ export function bootstrapWindowIpc(
   const rendererMobileBridge = ProxyChannel.toService<IMobileBridgeService>(
     client.getChannel(ServiceChannels.MobileBridge),
   )
+  const rendererTriggerRunHost = ProxyChannel.toService<ITriggerRunHost>(
+    client.getChannel(ServiceChannels.TriggerRunHost),
+  )
 
   return {
     disposable: combinedDisposable(pair, protoDisposable),
     rendererLifecycle,
     rendererSessions,
     rendererMobileBridge,
+    rendererTriggerRunHost,
   }
 }

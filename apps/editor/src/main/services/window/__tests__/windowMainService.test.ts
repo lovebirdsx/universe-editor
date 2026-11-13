@@ -254,6 +254,11 @@ function makeOpts() {
         registerWindowBridge: () => {},
         unregisterWindowBridge: () => {},
       } as never,
+      triggers: {
+        registerWindowHost: () => {},
+        unregisterWindowHost: () => {},
+        setWindowProvider: () => {},
+      } as never,
     },
     logService,
     e2eEnabled: false,
@@ -650,12 +655,14 @@ describe('WindowMainService', () => {
         rendererLifecycle: backgroundLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       .mockImplementationOnce(() => ({
         disposable: combinedDisposable(),
         rendererLifecycle: requestingLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
     const opts = makeOpts()
     const getAllSessions = vi.fn().mockResolvedValue([
@@ -708,12 +715,14 @@ describe('WindowMainService', () => {
         rendererLifecycle: otherLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       .mockImplementationOnce(() => ({
         disposable: combinedDisposable(),
         rendererLifecycle: requestingLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
     const opts = makeOpts()
     const getAllSessions = vi.fn().mockResolvedValue([
@@ -778,12 +787,14 @@ describe('WindowMainService', () => {
         rendererLifecycle: otherLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       .mockImplementationOnce(() => ({
         disposable: combinedDisposable(),
         rendererLifecycle: requestingLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
     const opts = makeOpts()
     const getAllSessions = vi.fn().mockResolvedValue([
@@ -839,12 +850,14 @@ describe('WindowMainService', () => {
         rendererLifecycle: firstLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       .mockImplementationOnce(() => ({
         disposable: combinedDisposable(),
         rendererLifecycle: focusedLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
     const svc = makeService()
     await svc.createWindow()
@@ -874,6 +887,7 @@ describe('WindowMainService', () => {
       rendererLifecycle: lifecycle,
       rendererSessions: {} as never,
       rendererMobileBridge: {} as never,
+      rendererTriggerRunHost: {} as never,
     }))
     const opts = makeOpts()
     const getAllSessions = vi.fn().mockResolvedValue([])
@@ -903,6 +917,7 @@ describe('WindowMainService', () => {
       rendererLifecycle: lifecycle,
       rendererSessions: {} as never,
       rendererMobileBridge: {} as never,
+      rendererTriggerRunHost: {} as never,
     }))
     const svc = makeService()
     const windowId = await svc.createWindow()
@@ -934,6 +949,7 @@ describe('WindowMainService', () => {
       rendererLifecycle: lifecycle,
       rendererSessions: {} as never,
       rendererMobileBridge: {} as never,
+      rendererTriggerRunHost: {} as never,
     }))
     const svc = makeService()
     const windowId = await svc.createWindow()
@@ -972,12 +988,14 @@ describe('WindowMainService', () => {
         rendererLifecycle: otherLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       .mockImplementationOnce(() => ({
         disposable: combinedDisposable(),
         rendererLifecycle: requestingLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
     const svc = makeService()
     await svc.createWindow()
@@ -1286,6 +1304,7 @@ describe('WindowMainService', () => {
       rendererLifecycle: wedgedLifecycle,
       rendererSessions: {} as never,
       rendererMobileBridge: {} as never,
+      rendererTriggerRunHost: {} as never,
     }))
     const svc = makeService()
     await svc.createWindow()
@@ -1493,6 +1512,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: vetoingLifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       const svc = makeService()
       await svc.createWindow({ remoteAuthority: 'myhost' })
@@ -1726,6 +1746,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: lifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       const svc = makeService(withBackgroundMode(makeOpts()))
       const id = await svc.createWindow()
@@ -1772,6 +1793,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: lifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       const svc = makeService(withBackgroundMode(makeOpts()))
       const id = await svc.createWindow()
@@ -1893,12 +1915,14 @@ describe('WindowMainService', () => {
           },
           rendererSessions: {} as never,
           rendererMobileBridge: {} as never,
+          rendererTriggerRunHost: {} as never,
         }))
         .mockImplementationOnce(() => ({
           disposable: combinedDisposable(),
           rendererLifecycle: lifecycle,
           rendererSessions: {} as never,
           rendererMobileBridge: {} as never,
+          rendererTriggerRunHost: {} as never,
         }))
       const svc = makeService()
       await svc.createWindow()
@@ -1922,6 +1946,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: lifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       const svc = makeService()
       const id = await svc.createWindow()
@@ -1943,6 +1968,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: lifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       const pendingSvc = makeService()
       const pendingId = await pendingSvc.createWindow()
@@ -1966,6 +1992,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: lifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       const svc = makeService(withBackgroundMode(makeOpts()))
       await svc.createWindow({ remoteAuthority: 'myhost', hidden: true })
@@ -1991,6 +2018,7 @@ describe('WindowMainService', () => {
         rendererLifecycle: lifecycle,
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
       const svc = makeService(withBackgroundMode(makeOpts()))
       await svc.createWindow({ remoteAuthority: 'myhost', hidden: true })

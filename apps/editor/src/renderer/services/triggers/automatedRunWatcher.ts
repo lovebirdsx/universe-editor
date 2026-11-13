@@ -34,7 +34,7 @@ export interface AutomatedVerdictResolution {
 export type AutomatedVerdictResolver = (
   raw: string | undefined,
   request: TriggerRunRequest,
-) => AutomatedVerdictResolution
+) => AutomatedVerdictResolution | Promise<AutomatedVerdictResolution>
 
 export const defaultAutomatedVerdictResolver: AutomatedVerdictResolver = () => ({ actions: [] })
 
@@ -212,7 +212,9 @@ export class AutomatedRunWatcher {
     } catch {
       raw = undefined
     }
-    const resolution = this._resolveVerdict(raw, this._request)
+    // Actions execute here, so the resolver may be async; `_finished` already
+    // guarantees exactly one terminal outcome per run.
+    const resolution = await this._resolveVerdict(raw, this._request)
     const sessionId = this._session.sessionIdOnAgent.get() ?? this._session.id
     const end: TriggerRunEnd = {
       runId: this._request.origin.runId,

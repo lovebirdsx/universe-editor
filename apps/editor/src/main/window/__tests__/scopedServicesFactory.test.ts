@@ -46,8 +46,9 @@ describe('ApplicationServices type', () => {
       remoteConnection: {} as ApplicationServices['remoteConnection'],
       remoteStatus: {} as ApplicationServices['remoteStatus'],
       mobileGateway: {} as ApplicationServices['mobileGateway'],
+      triggers: {} as ApplicationServices['triggers'],
     }
-    expect(Object.keys(svc)).toHaveLength(38)
+    expect(Object.keys(svc)).toHaveLength(39)
   })
 })
 

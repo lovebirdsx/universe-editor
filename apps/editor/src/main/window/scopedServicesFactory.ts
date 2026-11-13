@@ -55,6 +55,7 @@ import type { WatcherProcessClient } from '@universe-editor/node-services'
 import type { IRemoteConnectionService } from '../services/remote/remoteConnectionMainService.js'
 import type { RemoteStatusMainService } from '../services/remoteStatus/remoteStatusMainService.js'
 import type { MobileGatewayMainService } from '../services/mobileGateway/mobileGatewayMainService.js'
+import type { TriggerMainService } from '../services/triggers/triggerMainService.js'
 import type { IFileClipboardService } from '../../shared/ipc/fileClipboardService.js'
 import type { IAuxiliaryWindowsService } from '../../shared/ipc/auxiliaryWindowService.js'
 import type { ISessionChangesStoreService } from '../../shared/ipc/sessionChangesStoreService.js'
@@ -136,6 +137,12 @@ export interface ApplicationServices {
    * with it, and window close unregisters it (M2 uses the bridges).
    */
   readonly mobileGateway: MobileGatewayMainService
+  /**
+   * Concrete type: the window IPC bootstrap registers each window's reverse run
+   * host with it, window close unregisters it, and WindowMainService is injected
+   * as the window provider once it exists.
+   */
+  readonly triggers: TriggerMainService
 }
 
 /**

@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator, type CancellationToken, type Event } from '@universe-editor/platform'
+import type { TriggerRunOutcome, TriggerVerdictKind } from '../triggers/types.js'
 import type {
   MobileAgentCandidate,
   MobileAttentionKind,
@@ -284,6 +285,16 @@ export interface MobileBridgeSessionRef {
  * Inbox row as produced by one renderer. Same fields as the wire summary minus
  * the main-owned `ref.windowId` / `workspaceName`.
  */
+/** Trigger provenance + verdict of an automated run, shown on the phone's inbox
+ *  row. Only `triggerName` is required: verdict / summary / outcome arrive when
+ *  the run ends. */
+export interface MobileBridgeAutomationSummary {
+  readonly triggerName: string
+  readonly verdict?: TriggerVerdictKind
+  readonly summary?: string
+  readonly outcome?: TriggerRunOutcome
+}
+
 export interface MobileBridgeSessionSummary {
   readonly localId: string
   readonly durableId?: string
@@ -315,6 +326,8 @@ export interface MobileBridgeSessionSummary {
   readonly delivery?: MobileDeliverySummary
   /** Idle, writable session whose worktree is dirty or holds commits main lacks. */
   readonly deliveryAvailable?: boolean
+  /** Set when an agent trigger started this session. */
+  readonly automation?: MobileBridgeAutomationSummary
   readonly updatedAt: number
 }
 

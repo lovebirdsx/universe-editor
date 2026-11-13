@@ -50,6 +50,8 @@ import {
 import { AgentNotificationContribution } from '../AgentNotificationContribution.js'
 import { SessionStatusCountsContribution } from '../SessionStatusCountsContribution.js'
 import { SwarmReviewNotificationContribution } from '../SwarmReviewNotificationContribution.js'
+import { TriggerVerdictContribution } from '../TriggerVerdictContribution.js'
+import { TriggerRunNotificationContribution } from '../TriggerRunNotificationContribution.js'
 import { FirstRunAgentOnboardingContribution } from '../FirstRunAgentOnboardingContribution.js'
 import { SessionShutdownParticipant } from '../SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from '../StartupPerformanceStatusContribution.js'
@@ -450,6 +452,23 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.swarmReviewNotification',
   SwarmReviewNotificationContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Installs the trigger verdict parser + Swarm action executor. AfterRestore so it
+// is in place before the run host can start an automated session.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.triggerVerdict',
+  TriggerVerdictContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// "Needs your action / completed / did not complete" toast for automated trigger
+// runs, with an Open Session action. AfterRestore so the session + chat widget
+// services are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.triggerRunNotification',
+  TriggerRunNotificationContribution,
   WorkbenchPhase.AfterRestore,
 )
 

@@ -1877,6 +1877,47 @@ describe('parseServerFrame', () => {
     )
   })
 
+  it('parses the trigger automation summary and rejects unknown verdicts', () => {
+    const summary = summaryJson({
+      automation: {
+        triggerName: 'Swarm triage',
+        verdict: 'escalate',
+        summary: 'needs a human',
+        outcome: 'completed',
+      },
+    })
+    const frame = { type: 'inbox_snapshot', seq: 1, sessions: [summary] }
+    expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+
+    // Only the trigger name is required; verdict / summary / outcome arrive later.
+    const partial = summaryJson({ automation: { triggerName: 'Swarm triage' } })
+    const partialFrame = { type: 'inbox_snapshot', seq: 1, sessions: [partial] }
+    expect(parseServerFrame(JSON.stringify(partialFrame))).toStrictEqual({
+      ok: true,
+      value: partialFrame,
+    })
+
+    const withSummary = (automation: unknown): string =>
+      JSON.stringify({
+        type: 'inbox_snapshot',
+        seq: 1,
+        sessions: [summaryJson({ automation })],
+      })
+
+    expect(errorCode(parseServerFrame(withSummary('triage')))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({})))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ triggerName: '' })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ triggerName: 'x', verdict: 'maybe' })))).toBe(
+      'bad_request',
+    )
+    expect(
+      errorCode(parseServerFrame(withSummary({ triggerName: 'x', outcome: 'exploded' }))),
+    ).toBe('bad_request')
+    expect(errorCode(parseServerFrame(withSummary({ triggerName: 'x', summary: 3 })))).toBe(
+      'bad_request',
+    )
+  })
+
   it('parses message anchors and fork eligibility', () => {
     const message = {
       kind: 'message',

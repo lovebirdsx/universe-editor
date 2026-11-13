@@ -216,6 +216,10 @@ export async function createWindowScopedServices(opts: {
     () => workspace.current?.name ?? '',
   )
 
+  // Give the trigger scheduler this window's run host. Window close calls
+  // unregisterWindowHost alongside mobileGateway.unregisterWindowBridge.
+  appServices.triggers.registerWindowHost(win.id, ipc.rendererTriggerRunHost)
+
   return {
     disposables,
     workspace,

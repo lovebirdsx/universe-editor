@@ -2411,6 +2411,9 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const durableId = r ? session.sessionIdOnAgent.read(r) : session.sessionIdOnAgent.get()
     const entries = r ? this._history.entries.read(r) : this._history.entries.get()
     const entry = durableId !== undefined ? entries.find((row) => row.id === durableId) : undefined
+    // Fall back to the live session's origin before its history row exists, so
+    // the phone shows the trigger badge from the first render.
+    const automation = entry?.automation ?? session.automation
     let childCount = 0
     if (durableId !== undefined) {
       for (const row of entries) {
@@ -2425,6 +2428,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       // refresh) would relabel all rows as "just now".
       ...(entry !== undefined ? { now: entry.lastUsedAt } : {}),
       ...(entry?.sideTaskOf !== undefined ? { sideTaskOf: entry.sideTaskOf } : {}),
+      ...(automation !== undefined ? { automation } : {}),
       ...(childCount > 0 ? { sideTaskChildCount: childCount } : {}),
     }
   }

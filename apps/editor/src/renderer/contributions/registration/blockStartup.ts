@@ -24,6 +24,7 @@ import { ThemesContribution } from '../ThemesContribution.js'
 import { AiConfigurationContribution } from '../AiConfigurationContribution.js'
 import { UpdateConfigurationContribution } from '../UpdateConfigurationContribution.js'
 import { MobileGatewayConfigurationContribution } from '../MobileGatewayContributions.js'
+import { TriggersConfigurationContribution } from '../TriggersConfigurationContribution.js'
 import { WorkbenchFontContribution } from '../WorkbenchFontContribution.js'
 import { AgentFontContribution } from '../AgentFontContribution.js'
 import { JsonSchemaBridgeContribution } from '../JsonSchemaBridgeContribution.js'
@@ -205,6 +206,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.mobileGatewayConfiguration',
   MobileGatewayConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// JSON schema for <userData>/triggers/triggers.json. BlockStartup so the schema
+// is registered before the user opens the config file from a trigger command.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.triggersConfiguration',
+  TriggersConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

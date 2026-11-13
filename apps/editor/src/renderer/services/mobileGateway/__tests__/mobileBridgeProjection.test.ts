@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import {
   diffAvailableCommands,
   diffMessage,
+  projectAutomationSummary,
   projectAvailableCommands,
   projectMessage,
   projectToolCall,
@@ -40,6 +41,38 @@ const childMessage: AcpChildItem = {
     streaming: false,
   },
 }
+
+describe('projectAutomationSummary', () => {
+  it('projects trigger provenance plus the finished verdict', () => {
+    expect(
+      projectAutomationSummary({
+        triggerId: 'swarm-triage',
+        triggerName: 'Swarm triage',
+        eventKey: 'swarm:1001',
+        runId: 'run-1',
+        verdict: 'escalate',
+        summary: 'needs a human',
+        outcome: 'completed',
+      }),
+    ).toStrictEqual({
+      triggerName: 'Swarm triage',
+      verdict: 'escalate',
+      summary: 'needs a human',
+      outcome: 'completed',
+    })
+  })
+
+  it('omits the result fields while the run is still in flight', () => {
+    expect(
+      projectAutomationSummary({
+        triggerId: 'swarm-triage',
+        triggerName: 'Swarm triage',
+        eventKey: 'swarm:1001',
+        runId: 'run-1',
+      }),
+    ).toStrictEqual({ triggerName: 'Swarm triage' })
+  })
+})
 
 describe('projectAvailableCommands', () => {
   const command = (overrides: Record<string, unknown> = {}): AvailableCommand =>

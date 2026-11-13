@@ -80,11 +80,13 @@ import {
   MobileGatewayServer,
   type MobileGatewayDiagnosticEvent,
 } from './mobileGatewayServer.js'
+import { MobileGatewayHub, type MobileGatewayAttention } from './mobileGatewayHub.js'
 import {
-  MobileGatewayHub,
-  isSameWorkspace,
-  type MobileGatewayAttention,
-} from './mobileGatewayHub.js'
+  listWorkspaceWindows,
+  waitForWorkspaceHost,
+  type WorkspaceHostDirectory,
+  type WorkspaceWindowCandidate,
+} from '../window/workspaceWindowRouting.js'
 import { MobileAttachmentStore } from './mobileAttachmentStore.js'
 import { MobileNotificationRouter } from './mobileNotificationRouter.js'
 import { PairingService } from './pairingService.js'
@@ -99,8 +101,6 @@ export interface MobileGatewayWindowProvider {
   /** Open a recently used workspace without stealing focus from a visible window. */
   openWindowForFolderInBackground(folder: URI): Promise<void>
 }
-
-const BRIDGE_WAIT_INTERVAL_MS = 100
 
 export class MobileGatewayMainService extends Disposable implements IMobileGatewayService {
   declare readonly _serviceBrand: undefined
@@ -397,34 +397,8 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._windows = provider
   }
 
-  private _openWorkspaces(): readonly {
-    windowId: number
-    folder: string
-    name: string
-    authority?: string
-  }[] {
-    const infos = this._windows?.getOpenWindowInfos() ?? []
-    const result: {
-      windowId: number
-      folder: string
-      name: string
-      authority?: string
-    }[] = []
-    for (const info of infos) {
-      if (info.folder === null) continue
-      const folder = URI.from(info.folder)
-      result.push({
-        windowId: info.id,
-        folder: folder.toString(),
-        name: info.name ?? folder.fsPath,
-        ...(info.remoteAuthority !== undefined
-          ? { authority: info.remoteAuthority }
-          : folder.authority
-            ? { authority: folder.authority }
-            : {}),
-      })
-    }
-    return result
+  private _openWorkspaces(): readonly WorkspaceWindowCandidate[] {
+    return listWorkspaceWindows(this._windows?.getOpenWindowInfos() ?? [])
   }
 
   private async _waitForBridge(
@@ -432,15 +406,17 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     authority: string | undefined,
     timeoutMs: number,
   ): Promise<number | undefined> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      const match = this._openWorkspaces().find((workspace) =>
-        isSameWorkspace(workspace, { folder, ...(authority !== undefined ? { authority } : {}) }),
-      )
-      if (match !== undefined && this._windowBridges.has(match.windowId)) return match.windowId
-      await new Promise((resolve) => setTimeout(resolve, BRIDGE_WAIT_INTERVAL_MS))
+    return waitForWorkspaceHost(this._directory(), {
+      target: { folder, ...(authority !== undefined ? { authority } : {}) },
+      timeoutMs,
+    })
+  }
+
+  private _directory(): WorkspaceHostDirectory {
+    return {
+      listOpenWorkspaces: () => this._openWorkspaces(),
+      hasHost: (windowId) => this._windowBridges.has(windowId),
     }
-    return undefined
   }
 
   /** M2 uses this to fan the inbox projection out to every window. */

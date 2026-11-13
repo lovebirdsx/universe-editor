@@ -896,6 +896,38 @@ describe('MobileBridgeService', () => {
     ])
   })
 
+  it('projects the trigger automation summary from the history row', async () => {
+    const harness = makeHarness()
+    const first = makeSession('s1', { durableId: 'd1' })
+    harness.history.set(
+      [
+        makeHistoryEntry('d1', {
+          automation: {
+            triggerId: 'swarm-triage',
+            triggerName: 'Swarm triage',
+            eventKey: 'swarm:1001',
+            runId: 'run-1',
+            verdict: 'escalate',
+            summary: 'needs a human',
+            outcome: 'completed',
+          },
+        }),
+      ],
+      undefined,
+    )
+    harness.add(first)
+    first.sessionIdOnAgent.set('d1', undefined)
+
+    const snapshot = await harness.service.getSnapshot('s1')
+
+    expect(snapshot?.summary.automation).toStrictEqual({
+      triggerName: 'Swarm triage',
+      verdict: 'escalate',
+      summary: 'needs a human',
+      outcome: 'completed',
+    })
+  })
+
   it('streams command-list changes once and skips identical projections', async () => {
     const harness = makeHarness()
     const first = makeSession('s1')

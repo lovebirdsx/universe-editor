@@ -54,6 +54,9 @@ import { IDocsService } from '../../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IMobileGatewayService } from '../../shared/ipc/mobileGatewayService.js'
 import { MobileGatewayMainService } from './mobileGateway/mobileGatewayMainService.js'
+import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
+import { TriggerMainService } from './triggers/triggerMainService.js'
+import { createTriggerNotifier } from './triggers/electronNotifier.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
@@ -285,6 +288,17 @@ registerSingletonFactory(
       acc.get(IEnvironmentMainService),
     ),
 )
+registerSingletonFactory(ITriggerMainService, (acc) => {
+  const logger = createNamedLogger(acc.get(ILoggerService), {
+    id: 'triggers',
+    name: 'Triggers',
+  })
+  return new TriggerMainService({
+    userDataDir: app.getPath('userData'),
+    logger,
+    notify: createTriggerNotifier(logger),
+  })
+})
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))
 registerSingleton(
   IAiModelMainService,

@@ -80,6 +80,9 @@ import type {
   MobileTimelineToolCallItem,
   MobileToolCallDiffStat,
   MobileToolCallLocation,
+  MobileTriggerAutomationSummary,
+  MobileTriggerRunOutcome,
+  MobileTriggerVerdict,
   MobileUsage,
   NotificationFrame,
   PingFrame,
@@ -117,6 +120,8 @@ import {
   MOBILE_RESYNC_SCOPES,
   MOBILE_SESSION_BUCKETS,
   MOBILE_TIMELINE_ITEM_KINDS,
+  MOBILE_TRIGGER_RUN_OUTCOMES,
+  MOBILE_TRIGGER_VERDICTS,
   promptRefPrefix,
 } from './frames.js'
 import type { PairDevicePlatform, PairRequest } from './pairing.js'
@@ -2169,6 +2174,8 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
     'session.deliveryAvailable',
   )
   if (!deliveryAvailable.ok) return deliveryAvailable
+  const automation = parseOptional(value.automation, parseTriggerAutomationSummary)
+  if (!automation.ok) return automation
   const updatedAt = value.updatedAt
   if (!isFiniteNumber(updatedAt)) {
     return fail('bad_request', 'session.updatedAt must be a finite number')
@@ -2199,7 +2206,44 @@ function parseSessionSummary(value: unknown): Result<MobileSessionSummary> {
     ...(deliveryAvailable.value !== undefined
       ? { deliveryAvailable: deliveryAvailable.value }
       : {}),
+    ...(automation.value !== undefined ? { automation: automation.value } : {}),
     updatedAt,
+  })
+}
+
+const MOBILE_TRIGGER_VERDICT_SET: ReadonlySet<string> = new Set(MOBILE_TRIGGER_VERDICTS)
+const MOBILE_TRIGGER_RUN_OUTCOME_SET: ReadonlySet<string> = new Set(MOBILE_TRIGGER_RUN_OUTCOMES)
+
+function parseTriggerAutomationSummary(value: unknown): Result<MobileTriggerAutomationSummary> {
+  if (!isRecord(value)) return fail('bad_request', 'session.automation must be an object')
+  const triggerName = value.triggerName
+  if (!isNonEmptyBoundedString(triggerName, MAX_TITLE_LENGTH)) {
+    return fail(
+      'bad_request',
+      `session.automation.triggerName must be 1–${MAX_TITLE_LENGTH} characters`,
+    )
+  }
+  const verdict = value.verdict
+  if (
+    verdict !== undefined &&
+    (typeof verdict !== 'string' || !MOBILE_TRIGGER_VERDICT_SET.has(verdict))
+  ) {
+    return fail('bad_request', 'session.automation.verdict is not known')
+  }
+  const summary = parseOptionalString(value.summary, MAX_TITLE_LENGTH, 'session.automation.summary')
+  if (!summary.ok) return summary
+  const outcome = value.outcome
+  if (
+    outcome !== undefined &&
+    (typeof outcome !== 'string' || !MOBILE_TRIGGER_RUN_OUTCOME_SET.has(outcome))
+  ) {
+    return fail('bad_request', 'session.automation.outcome is not known')
+  }
+  return ok({
+    triggerName,
+    ...(verdict !== undefined ? { verdict: verdict as MobileTriggerVerdict } : {}),
+    ...(summary.value !== undefined ? { summary: summary.value } : {}),
+    ...(outcome !== undefined ? { outcome: outcome as MobileTriggerRunOutcome } : {}),
   })
 }
 

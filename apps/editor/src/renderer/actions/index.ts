@@ -331,6 +331,18 @@ import { FindMarkdownFileReferencesAction } from './markdownFileReferencesAction
 import { FindTypeScriptFileReferencesAction } from './typescriptFileReferencesActions.js'
 import { ShowJsonSchemaAction } from './jsonSchemaActions.js'
 import {
+  ConfirmTriggerAutoApproveAction,
+  ConfirmTriggerElevatedModeAction,
+  ListTriggersAction,
+  OpenTriggersConfigAction,
+  PauseAllTriggersAction,
+  PauseTriggerAction,
+  ResumeAllTriggersAction,
+  ResumeTriggerAction,
+  RunTriggerNowAction,
+  ShowTriggersLogAction,
+} from './triggerActions.js'
+import {
   CheckForUpdatesAction,
   DownloadUpdateAction,
   InstallUpdateAction,
@@ -1048,3 +1060,15 @@ registerAction2(CloseConnectionAction)
 registerAction2(RetryConnectionAction)
 registerAction2(StopRemoteServerAction)
 registerAction2(RemoveManualHostAction)
+
+// Agent triggers — the scheduler lives in main; these commands are its palette UI.
+registerAction2(ListTriggersAction)
+registerAction2(RunTriggerNowAction)
+registerAction2(PauseTriggerAction)
+registerAction2(ResumeTriggerAction)
+registerAction2(PauseAllTriggersAction)
+registerAction2(ResumeAllTriggersAction)
+registerAction2(OpenTriggersConfigAction)
+registerAction2(ShowTriggersLogAction)
+registerAction2(ConfirmTriggerElevatedModeAction)
+registerAction2(ConfirmTriggerAutoApproveAction)

@@ -112,6 +112,8 @@ import { IDocsService } from '../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
 import { IMobileGatewayService } from '../shared/ipc/mobileGatewayService.js'
 import type { MobileGatewayMainService } from './services/mobileGateway/mobileGatewayMainService.js'
+import { ITriggerMainService } from '../shared/ipc/triggerService.js'
+import type { TriggerMainService } from './services/triggers/triggerMainService.js'
 import { ITextSearchMainService } from '@universe-editor/platform'
 import { installMainErrorHandlers } from './errors.js'
 import {
@@ -780,6 +782,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       remoteConnection: accessor.get(IRemoteConnectionService),
       remoteStatus: accessor.get(IRemoteStatusService) as RemoteStatusMainService,
       mobileGateway: accessor.get(IMobileGatewayService) as MobileGatewayMainService,
+      triggers: accessor.get(ITriggerMainService) as TriggerMainService,
     }))
   }
   if (!windowMainService) {
@@ -811,6 +814,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     // veto, so a cancelled confirm still installs. confirmQuit polls every window.
     const windows = windowMainService
     applicationServices.mobileGateway.setWindowProvider(windows)
+    applicationServices.triggers.setWindowProvider(windows)
     applicationServices.update.setQuitConfirmer((requestingWindowId) =>
       windows.confirmQuit(requestingWindowId),
     )

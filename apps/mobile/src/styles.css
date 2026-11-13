@@ -960,6 +960,29 @@ input:focus-visible {
   max-width: 100%;
 }
 
+.session-card__trigger {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 10px;
+  margin-top: 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.session-card__trigger-name {
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.session-card__trigger-summary {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 .session-card__badges {
   display: flex;
   flex-wrap: wrap;

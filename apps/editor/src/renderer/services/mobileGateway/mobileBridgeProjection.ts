@@ -54,6 +54,7 @@ import {
   type MobileTimelineToolCallItem,
   type MobileToolCallDiffStat,
   type MobileToolCallUpsertEvent,
+  type MobileTriggerAutomationSummary,
   type MobileUsage,
 } from '@universe-editor/mobile-protocol'
 import { computeLineDiff, MEDIA_TRUNCATED_META_KEY } from '@universe-editor/acp-view-model'
@@ -68,6 +69,7 @@ import type {
   IAcpSession,
   TimelineItem,
 } from '../acp/session/acpSession.js'
+import type { AcpSessionAutomation } from '../acp/session/acpSessionHistory.js'
 import { normalizeElicitationForm } from '../acp/acpElicitationForm.js'
 import { statusBucketFor } from '../acp/session/acpSessionFilterService.js'
 import { computeSessionDisplayStatus } from '../acp/session/acpSessionStatus.js'
@@ -85,6 +87,8 @@ export interface SessionProjectionOptions {
   readonly sideTaskOf?: string
   /** Number of direct side-task children (parent rows only). */
   readonly sideTaskChildCount?: number
+  /** Trigger provenance + verdict, when this session was started by a trigger. */
+  readonly automation?: AcpSessionAutomation
 }
 
 /**
@@ -137,7 +141,23 @@ export function toBridgeSummary(
     ...(options.sideTaskChildCount !== undefined && options.sideTaskChildCount > 0
       ? { sideTaskChildCount: options.sideTaskChildCount }
       : {}),
+    ...(options.automation !== undefined
+      ? { automation: projectAutomationSummary(options.automation) }
+      : {}),
     updatedAt: options.now ?? Date.now(),
+  }
+}
+
+export function projectAutomationSummary(
+  automation: AcpSessionAutomation,
+): MobileTriggerAutomationSummary {
+  return {
+    triggerName: clampText(automation.triggerName, MAX_TITLE_LENGTH),
+    ...(automation.verdict !== undefined ? { verdict: automation.verdict } : {}),
+    ...(automation.summary !== undefined
+      ? { summary: clampText(automation.summary, MAX_TITLE_LENGTH) }
+      : {}),
+    ...(automation.outcome !== undefined ? { outcome: automation.outcome } : {}),
   }
 }
 

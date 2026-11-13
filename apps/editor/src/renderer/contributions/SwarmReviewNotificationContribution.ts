@@ -21,6 +21,7 @@
 
 import {
   CommandsRegistry,
+  ConfigurationTarget,
   Disposable,
   ICommandService,
   IConfigurationService,
@@ -37,9 +38,12 @@ import {
 import {
   SwarmCommands,
   type SwarmDashboardResult,
+  type SwarmReviewDetailDto,
   type SwarmReviewDto,
   type SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
+import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
+import type { TriggerSummary } from '../../shared/triggers/types.js'
 import { swarmIgnoreStore, splitIgnored } from '../services/swarm/swarmIgnoreStore.js'
 import {
   requestSwarmReviewsRefresh,
@@ -49,6 +53,10 @@ import {
 import { filterNeedsAction, readSwarmFilterConfig } from '../services/swarm/swarmReviewFilter.js'
 import { swarmNotificationE2E } from '../services/swarm/swarmNotificationE2E.js'
 import { setSwarmNotificationTickHandler } from '../services/swarm/swarmNotificationTick.js'
+import {
+  SwarmTriggerReporter,
+  hasEnabledSwarmTrigger,
+} from '../services/swarm/swarmTriggerReporter.js'
 import { OpenSwarmReviewAction, OpenSwarmReviewsAction } from '../actions/swarmActions.js'
 import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
@@ -143,6 +151,12 @@ export class SwarmReviewNotificationContribution
   /** Coalesces foreground catch-ups when several windows become visible together. */
   private _foregroundTimer: ReturnType<typeof setTimeout> | undefined
   private readonly _logger: ILogger
+  /** Bridges the displayed list to the trigger scheduler; inert with no trigger enabled. */
+  private readonly _triggerReporter: SwarmTriggerReporter
+  /** Last known trigger list; drives the background-poll hint. */
+  private _triggers: readonly TriggerSummary[] = []
+  /** One hint per app start, no matter how often the config / trigger list changes. */
+  private _backgroundPollHintShown = false
 
   constructor(
     @ICommandService private readonly _commands: ICommandService,
@@ -152,9 +166,19 @@ export class SwarmReviewNotificationContribution
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @INotificationService private readonly _notification: INotificationService,
     @ILoggerService loggerService: ILoggerService,
+    @ITriggerMainService private readonly _triggerMain: ITriggerMainService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'swarmNotify', name: 'Swarm Notifications' })
+    this._triggerReporter = new SwarmTriggerReporter({
+      report: (reviews) => this._triggerMain.reportSwarmNeedsAction(reviews),
+      getReviewVersion: (reviewId) => this._loadReviewVersion(reviewId),
+      logger: this._logger,
+    })
+    this._register(
+      this._triggerMain.onDidChangeTriggers((triggers) => this._applyTriggers(triggers)),
+    )
+    void this._loadTriggers()
     // The ignore set feeds the "final displayed" computation; attach is idempotent
     // (the view / detail tab / view contribution may already have attached it).
     void swarmIgnoreStore.attach(storage)
@@ -364,6 +388,71 @@ export class SwarmReviewNotificationContribution
     return this._config.get<boolean>(BACKGROUND_POLL_CONFIG_KEY) ?? false
   }
 
+  private async _loadTriggers(): Promise<void> {
+    try {
+      this._applyTriggers(await this._triggerMain.listTriggers())
+    } catch (err) {
+      this._logger.warn(
+        `loading triggers failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  }
+
+  private _applyTriggers(triggers: readonly TriggerSummary[]): void {
+    this._triggers = triggers
+    this._triggerReporter.setTriggers(triggers)
+    this._maybeHintBackgroundPoll()
+  }
+
+  /** A swarm-review trigger is useless while the background poll is off — the
+   *  reviews list is only refreshed on open/manual refresh then, so nobody
+   *  reports "needs action" reviews. Point that out once per app start. */
+  private _maybeHintBackgroundPoll(): void {
+    if (this._backgroundPollHintShown || this._pollEnabled()) return
+    if (!hasEnabledSwarmTrigger(this._triggers)) return
+    this._backgroundPollHintShown = true
+    this._logger.info('swarm-review trigger enabled while background polling is off → hint shown')
+    const handle = this._notification.notify({
+      severity: Severity.Info,
+      message: localize(
+        'trigger.swarm.poll.hint',
+        'Triggers need the Swarm background poll to discover reviews that need your action.',
+      ),
+      sticky: true,
+      actions: [
+        {
+          label: localize('trigger.swarm.poll.hint.enable', 'Turn On'),
+          run: () => {
+            this._config.update(BACKGROUND_POLL_CONFIG_KEY, true, ConfigurationTarget.User)
+            this._notification.dismiss(handle.id)
+          },
+        },
+      ],
+    })
+  }
+
+  /** Latest version of a review, used by the `swarm.approve` TOCTOU guard. Any
+   *  failure leaves the version absent, which makes approve refuse to run. */
+  private async _loadReviewVersion(
+    reviewId: string,
+  ): Promise<{ readonly version?: number } | undefined> {
+    const detail = await withDeadline(
+      this._commands.executeCommand<SwarmReviewDetailDto | undefined>(
+        SwarmCommands.getReview,
+        { reviewId },
+        /* silent */ true,
+      ),
+      TRANSITIONS_DEADLINE_MS,
+      `getReview RPC (review #${reviewId})`,
+    ).catch((err: unknown) => {
+      if (err instanceof DeadlineError) this._logger.warn(err.message)
+      return undefined
+    })
+    if (detail === undefined) return undefined
+    const last = detail.versions[detail.versions.length - 1]
+    return last !== undefined ? { version: last.version } : {}
+  }
+
   /** Re-poll the dashboard and notify on newly-actionable reviews. Public so a test
    *  can drive it deterministically. Serialized: overlapping timer ticks are dropped. */
   async refresh(): Promise<void> {
@@ -436,6 +525,7 @@ export class SwarmReviewNotificationContribution
       }
       this._lastPollCounts = counts
       this._notifyNew(actionable)
+      if (this._triggerReporter.enabled) void this._triggerReporter.report(actionable)
     } catch (err) {
       // Swarm unconfigured / offline / timed out — stay quiet on the UI, but NOT
       // in the log: a failing poll that swallows its error is invisible (the

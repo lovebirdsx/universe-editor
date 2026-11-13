@@ -78,6 +78,7 @@ import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
 import { IFileClipboardService } from '../shared/ipc/fileClipboardService.js'
 import { IMobileGatewayService } from '../shared/ipc/mobileGatewayService.js'
+import { ITriggerMainService } from '../shared/ipc/triggerService.js'
 import { IExtensionManagementService } from '../shared/ipc/extensionManagementService.js'
 import { IExtensionGalleryService } from '../shared/ipc/extensionGalleryService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
@@ -286,6 +287,7 @@ import {
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { MobileBridgeService } from './services/mobileGateway/MobileBridgeService.js'
+import { TriggerRunHost } from './services/triggers/TriggerRunHost.js'
 import {
   ISessionDeliveryService,
   SessionDeliveryService,
@@ -594,6 +596,15 @@ async function bootstrapWorkbench(): Promise<void> {
   // main-side channel. The full table lives in registerProxyServices.ts.
   const platform = normalizePlatform(window.ipc?.platform)
   registerProxyChannelServices(services, ipcService, platform)
+
+  // The agent-trigger scheduler is a main-process singleton (one copy per app,
+  // not per window). The palette / list commands and TriggerRunHost talk to it
+  // through this proxy; it is registered here so the reverse host below can
+  // inject the token while it is being constructed.
+  services.set(
+    ITriggerMainService,
+    ProxyChannel.toService<ITriggerMainService>(ipcService.getChannel(ServiceChannels.Triggers)),
+  )
 
   // 文本剪贴板走主进程：辅助窗口获得焦点时主文档 hasFocus() 为 false，
   // Chromium 会拒绝 navigator.clipboard；主进程 clipboard 无此门槛。
@@ -1042,6 +1053,15 @@ async function bootstrapWorkbench(): Promise<void> {
   ipcService.registerChannel(
     ServiceChannels.MobileBridge,
     ProxyChannel.fromService(workbenchStore.add(instantiation.createInstance(MobileBridgeService))),
+  )
+
+  // Reverse channel for agent triggers: main's scheduler starts / cancels runs
+  // in the window that owns the trigger's workspace and probes its trust state.
+  // Constructed through DI (it injects the automated-session service) and
+  // registered after MobileBridge so the ACP session service already exists.
+  ipcService.registerChannel(
+    ServiceChannels.TriggerRunHost,
+    ProxyChannel.fromService(workbenchStore.add(instantiation.createInstance(TriggerRunHost))),
   )
 
   // Timeline model (file-history providers from extensions); the built-in

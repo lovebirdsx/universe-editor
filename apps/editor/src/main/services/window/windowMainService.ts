@@ -780,6 +780,7 @@ export class WindowMainService implements IWindowMainService {
       }
       this._opts.appServices.sessionSwitcher.unregisterWindow(win.id)
       this._opts.appServices.mobileGateway.unregisterWindowBridge(win.id)
+      this._opts.appServices.triggers.unregisterWindowHost(win.id)
       logger.info(`closed id=${win.id}`)
       this._onDidChangeWindows.fire()
       // Persist the remaining windows when the user closes one of several. When

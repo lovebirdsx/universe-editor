@@ -7,7 +7,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  arePathsEqual,
   CancellationTokenSource,
   normalizePlatform,
   relativePathUnder,
@@ -93,6 +92,9 @@ import {
   MobileAttachmentError,
   type MobileGatewayAttachmentResolver,
 } from './mobileAttachmentStore.js'
+import { isSameWorkspace } from '../window/workspaceWindowRouting.js'
+
+export { isSameWorkspace } from '../window/workspaceWindowRouting.js'
 import { MobileDraftRegistry, isDraftEmpty } from './mobileDraftRegistry.js'
 import { WorkspaceDirectoryBrowseError } from './workspaceDirectoryBrowser.js'
 import { describeFsError } from '../../../shared/mobileGateway/workspaceFsErrors.js'
@@ -2800,6 +2802,7 @@ export class MobileGatewayHub {
         : {}),
       ...(summary.delivery !== undefined ? { delivery: summary.delivery } : {}),
       ...(summary.deliveryAvailable === true ? { deliveryAvailable: true } : {}),
+      ...(summary.automation !== undefined ? { automation: summary.automation } : {}),
       updatedAt: summary.updatedAt,
     }
   }
@@ -2999,23 +3002,6 @@ function isPathInside(root: string, cwd: string, authority: string | undefined):
     return cwd.startsWith(root.endsWith('/') ? root : `${root}/`)
   }
   return relativePathUnder(root, cwd, HOST_PLATFORM) !== null
-}
-
-export function isSameWorkspace(
-  a: { folder: string; authority?: string },
-  b: { folder: string; authority?: string },
-): boolean {
-  let first: URI
-  let second: URI
-  try {
-    first = URI.parse(a.folder)
-    second = URI.parse(b.folder)
-  } catch {
-    return a.folder === b.folder
-  }
-  if (first.scheme !== second.scheme) return false
-  if ((a.authority ?? first.authority) !== (b.authority ?? second.authority)) return false
-  return arePathsEqual(first.fsPath, second.fsPath, HOST_PLATFORM)
 }
 
 /** Shared ordering rule for duplicate history rows (pinned first, then freshest). */

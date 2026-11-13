@@ -140,6 +140,7 @@ function makeOpts() {
         getAllSessions: vi.fn().mockResolvedValue([]),
       },
       mobileGateway: { registerWindowBridge: () => {}, unregisterWindowBridge: () => {} },
+      triggers: { registerWindowHost: () => {}, unregisterWindowHost: () => {} },
       // Closing a window reclaims its local child processes; these tests spawn none.
       acpHost: {},
       mcpClient: { stopAllForWindow: () => Promise.resolve() },
@@ -219,6 +220,7 @@ describe('window state persistence on teardown', () => {
       rendererLifecycle: lifecycle(first),
       rendererSessions: {} as never,
       rendererMobileBridge: {} as never,
+      rendererTriggerRunHost: {} as never,
     }))
     if (second !== undefined) {
       vi.mocked(bootstrapWindowIpc).mockImplementationOnce(() => ({
@@ -226,6 +228,7 @@ describe('window state persistence on teardown', () => {
         rendererLifecycle: lifecycle(second),
         rendererSessions: {} as never,
         rendererMobileBridge: {} as never,
+        rendererTriggerRunHost: {} as never,
       }))
     }
   }

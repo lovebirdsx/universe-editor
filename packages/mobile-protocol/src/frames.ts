@@ -12,6 +12,29 @@ export const MOBILE_SESSION_BUCKETS = [
 
 export type MobileSessionBucket = (typeof MOBILE_SESSION_BUCKETS)[number]
 
+/** Verdicts an automated trigger run can produce (mirrors the desktop contract). */
+export const MOBILE_TRIGGER_VERDICTS = ['auto-approve', 'escalate', 'reject', 'info'] as const
+export type MobileTriggerVerdict = (typeof MOBILE_TRIGGER_VERDICTS)[number]
+
+/** Terminal outcomes of an automated trigger run. */
+export const MOBILE_TRIGGER_RUN_OUTCOMES = [
+  'completed',
+  'budget-exceeded',
+  'timeout',
+  'approval-timeout',
+  'cancelled',
+  'failed',
+] as const
+export type MobileTriggerRunOutcome = (typeof MOBILE_TRIGGER_RUN_OUTCOMES)[number]
+
+/** Inbox-row provenance of a session started by an agent trigger. */
+export interface MobileTriggerAutomationSummary {
+  triggerName: string
+  verdict?: MobileTriggerVerdict
+  summary?: string
+  outcome?: MobileTriggerRunOutcome
+}
+
 /** Stable session key: prefer `durableId` once the agent has attached. */
 export interface MobileSessionRef {
   windowId: number
@@ -54,6 +77,8 @@ export interface MobileSessionSummary {
   delivery?: MobileDeliverySummary
   /** Idle, writable session whose worktree is dirty or holds commits main lacks. */
   deliveryAvailable?: boolean
+  /** Present when an agent trigger started this session. */
+  automation?: MobileTriggerAutomationSummary
   /** Epoch milliseconds. */
   updatedAt: number
 }

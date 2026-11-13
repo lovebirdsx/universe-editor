@@ -15,7 +15,11 @@ import type {
   IAcpSession,
 } from '../../acp/session/acpSessionModel.js'
 import type { TriggerRunEnd, TriggerRunRequest } from '../../../../shared/triggers/types.js'
-import { AutomatedRunWatcher, type AutomatedVerdictResolution } from '../automatedRunWatcher.js'
+import {
+  AutomatedRunWatcher,
+  type AutomatedVerdictResolution,
+  type AutomatedVerdictResolver,
+} from '../automatedRunWatcher.js'
 
 class FakeClock {
   private _now = 0
@@ -145,10 +149,7 @@ function setup(
   options: {
     request?: TriggerRunRequest
     raw?: string
-    resolveVerdict?: (
-      raw: string | undefined,
-      request: TriggerRunRequest,
-    ) => AutomatedVerdictResolution
+    resolveVerdict?: AutomatedVerdictResolver
   } = {},
 ) {
   const clock = new FakeClock()
@@ -312,6 +313,27 @@ describe('AutomatedRunWatcher', () => {
       verdict: 'auto-approve',
       summary: 'ok',
       actions: [{ type: 'swarm.vote', target: '42', result: 'ok' }],
+    })
+  })
+
+  it('awaits an async resolver before firing the single run-end event', async () => {
+    let release!: (value: AutomatedVerdictResolution) => void
+    const gate = new Promise<AutomatedVerdictResolution>((resolve) => {
+      release = resolve
+    })
+    const { watcher, ends } = setup({ raw: '{"verdict":"info"}', resolveVerdict: () => gate })
+    watcher.start()
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(ends).toHaveLength(0)
+    release({ verdict: 'escalate', summary: 'later', actions: [] })
+    await flush()
+    expect(ends).toHaveLength(1)
+    expect(ends[0]).toMatchObject({
+      outcome: 'completed',
+      verdict: 'escalate',
+      summary: 'later',
+      actions: [],
     })
   })
 

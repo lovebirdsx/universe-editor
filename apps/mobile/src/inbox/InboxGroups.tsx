@@ -227,6 +227,16 @@ function SessionRow({
           <span className="session-card__agent">{agent}</span>
           <span className="session-card__workspace">{session.workspaceName}</span>
         </span>
+        {session.automation !== undefined && (
+          <span className="session-card__trigger">
+            <span className="session-card__trigger-name">
+              {`⚡ ${session.automation.triggerName}`}
+            </span>
+            {(session.automation.summary ?? '').length > 0 && (
+              <span className="session-card__trigger-summary">{session.automation.summary}</span>
+            )}
+          </span>
+        )}
         {(badges.length > 0 || hasDelivery) && (
           <span className="session-card__badges">
             {badges.map((badge) => (

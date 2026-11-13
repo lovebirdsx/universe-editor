@@ -10,9 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Emitter, StorageScope, type IStorageService } from '@universe-editor/platform'
 import type {
   SwarmDashboardResult,
+  SwarmReviewDetailDto,
   SwarmReviewDto,
   SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
+import type { SwarmNeedsActionReview } from '../../../shared/ipc/triggerService.js'
+import type { TriggerSummary } from '../../../shared/triggers/types.js'
 
 // Avoid pulling the editor/platform-heavy swarmActions graph; the contribution only
 // needs the two command ids to route a notification click.
@@ -42,6 +45,42 @@ function dashboard(
   authored: SwarmReviewDto[] = [],
 ): SwarmDashboardResult {
   return { needsAction, authored, participating: [] }
+}
+
+function triggerSummary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
+  return {
+    id: 'swarm-triage',
+    name: 'Swarm 分诊',
+    sourceType: 'swarm-review',
+    status: 'idle',
+    enabled: true,
+    paused: false,
+    elevatedMode: false,
+    elevatedModeConfirmed: false,
+    approveAction: false,
+    approveConfirmed: false,
+    running: 0,
+    queued: 0,
+    consecutiveFailures: 0,
+    ...overrides,
+  }
+}
+
+function reviewDetail(version: number): SwarmReviewDetailDto {
+  return {
+    id: '1',
+    state: 'needsReview',
+    stateLabel: 'Needs Review',
+    author: 'alice',
+    description: 'desc',
+    updated: 1,
+    versions: [{ version, change: '12', pending: true, time: 1 }],
+    participants: [],
+    transitions: [{ state: 'approved', label: 'Approve' }],
+    commentCount: 0,
+    openTaskCount: 0,
+    testStatus: 'none',
+  }
 }
 
 function fakeStorage(seed: Record<string, unknown> = {}): IStorageService {
@@ -81,6 +120,15 @@ function fakeLoggerService() {
   return { service: { createLogger: vi.fn(() => logger) } as never, logger }
 }
 
+/** Minimal trigger-service double: no triggers, nothing reported. */
+function fakeTriggerMain() {
+  return {
+    listTriggers: vi.fn(async () => [] as readonly TriggerSummary[]),
+    reportSwarmNeedsAction: vi.fn(async () => undefined),
+    onDidChangeTriggers: new Emitter<readonly TriggerSummary[]>().event,
+  } as never
+}
+
 async function freshModules() {
   vi.resetModules()
   // After resetModules the contribution imports a FRESH platform instance whose
@@ -111,6 +159,10 @@ interface SetupOpts {
   workspaceName?: string
   /** Reviews already actionable at construction time (seed the priming baseline). */
   initialNeedsAction?: SwarmReviewDto[]
+  /** Trigger summaries the fake trigger service returns (default: none). */
+  triggers?: readonly TriggerSummary[]
+  /** `perforce.swarm.getReview` responses keyed by review id (version lookups). */
+  reviewDetails?: Record<string, SwarmReviewDetailDto>
 }
 
 async function setup(opts: SetupOpts = {}) {
@@ -142,6 +194,10 @@ async function setup(opts: SetupOpts = {}) {
     if (id === 'perforce.swarm.dashboard') return current
     if (id === 'perforce.swarm.getTransitions')
       return transitionsById[String(arg)] ?? ([] as SwarmTransitionDto[])
+    if (id === 'perforce.swarm.getReview') {
+      const reviewId = (arg as { reviewId?: string } | undefined)?.reviewId
+      return reviewId !== undefined ? opts.reviewDetails?.[reviewId] : undefined
+    }
     return undefined
   })
   const notify = vi.fn(async (_opts: { title: string; body: string }) => ({
@@ -179,10 +235,24 @@ async function setup(opts: SetupOpts = {}) {
   }
   const config = {
     get: (key: string) => configValues[key],
+    update: vi.fn((key: string, value: unknown) => {
+      configValues[key] = value
+    }),
     onDidChangeConfiguration: configChange.event,
   } as never
   const workspace = {
     current: opts.workspaceName !== undefined ? { name: opts.workspaceName } : null,
+  } as never
+
+  const triggerChange = new Emitter<readonly TriggerSummary[]>()
+  const listTriggers = vi.fn(async () => opts.triggers ?? [])
+  const reportSwarmNeedsAction = vi.fn(
+    async (_reviews: readonly SwarmNeedsActionReview[]) => undefined,
+  )
+  const triggerMain = {
+    listTriggers,
+    reportSwarmNeedsAction,
+    onDidChangeTriggers: triggerChange.event,
   } as never
 
   const { service: loggerService, logger } = fakeLoggerService()
@@ -194,6 +264,7 @@ async function setup(opts: SetupOpts = {}) {
     workspace,
     notification,
     loggerService,
+    triggerMain,
   )
   // Let the constructor's priming poll complete (baseline, no notification).
   await flush()
@@ -209,6 +280,9 @@ async function setup(opts: SetupOpts = {}) {
     platform,
     configValues,
     fireConfigChange,
+    listTriggers,
+    reportSwarmNeedsAction,
+    triggerChange,
     logger,
     dispose: () => {
       instance.dispose()
@@ -239,6 +313,7 @@ describe('SwarmReviewNotificationContribution', () => {
       { current: null } as never,
       { notify: vi.fn(), dismiss: vi.fn() } as never,
       fakeLoggerService().service,
+      fakeTriggerMain(),
     )
     await flush()
     await instance.refresh()
@@ -312,6 +387,7 @@ describe('SwarmReviewNotificationContribution', () => {
       { current: null } as never,
       { notify: vi.fn(), dismiss: vi.fn() } as never,
       fakeLoggerService().service,
+      fakeTriggerMain(),
     )
     await flush()
     // Full snapshot: the enabled switch, the RAW poll-interval seconds (ms
@@ -381,6 +457,7 @@ describe('SwarmReviewNotificationContribution', () => {
         { current: null } as never,
         { notify: vi.fn(), dismiss: vi.fn() } as never,
         fakeLoggerService().service,
+        fakeTriggerMain(),
       )
       await vi.advanceTimersByTimeAsync(0)
       expect(pushCalls().length).toBe(0)
@@ -422,6 +499,7 @@ describe('SwarmReviewNotificationContribution', () => {
         { current: null } as never,
         { notify: vi.fn(), dismiss: vi.fn() } as never,
         fakeLoggerService().service,
+        fakeTriggerMain(),
       )
       await vi.advanceTimersByTimeAsync(0)
       instance.dispose()
@@ -453,6 +531,7 @@ describe('SwarmReviewNotificationContribution', () => {
         { current: null } as never,
         { notify: vi.fn(), dismiss: vi.fn() } as never,
         fakeLoggerService().service,
+        fakeTriggerMain(),
       )
       // Exhaust the 20 x 250ms retry budget with the command still unregistered.
       await vi.advanceTimersByTimeAsync(20 * 250 + 500)
@@ -1204,6 +1283,81 @@ describe('SwarmReviewNotificationContribution', () => {
       // still notifies alongside #2 (whose transitions loaded fine).
       expect(t.notify).toHaveBeenCalledTimes(1)
       expect(t.notify.mock.calls[0]![0]).toMatchObject({ body: '2 new reviews need your action' })
+      t.dispose()
+    })
+  })
+
+  describe('trigger reporting', () => {
+    it('reports the displayed needs-action list with the review version', async () => {
+      const t = await setup({
+        triggers: [triggerSummary()],
+        initialNeedsAction: [
+          review('1', { author: 'bob', description: 'fix the flaky test', updated: 5 }),
+        ],
+        reviewDetails: { '1': reviewDetail(3) },
+      })
+      await t.refresh()
+      await flush()
+      expect(t.reportSwarmNeedsAction).toHaveBeenCalledWith([
+        {
+          reviewId: '1',
+          author: 'bob',
+          description: 'fix the flaky test',
+          state: 'needsReview',
+          version: 3,
+        },
+      ])
+      t.dispose()
+    })
+
+    it('sends no IPC at all without an enabled swarm-review trigger', async () => {
+      const t = await setup({
+        triggers: [triggerSummary({ enabled: false })],
+        initialNeedsAction: [review('1')],
+      })
+      await t.refresh()
+      expect(t.reportSwarmNeedsAction).not.toHaveBeenCalled()
+      t.dispose()
+    })
+
+    it('excludes reviews authored by the user, matching the notification set', async () => {
+      const t = await setup({ triggers: [triggerSummary()] })
+      await flush()
+      expect(t.reportSwarmNeedsAction).toHaveBeenCalledTimes(1)
+      t.reportSwarmNeedsAction.mockClear()
+      t.setDashboard([review('1'), review('2', { author: 'me' })], [review('2', { author: 'me' })])
+      await t.refresh()
+      await flush()
+      const payload = t.reportSwarmNeedsAction.mock.calls.at(-1)![0]
+      expect(payload.map((entry) => entry.reviewId)).toEqual(['1'])
+      t.dispose()
+    })
+
+    it('hints once when a swarm trigger is enabled but background polling is off', async () => {
+      const t = await setup({ pollEnabled: false, triggers: [triggerSummary()] })
+      expect(t.inAppNotify).toHaveBeenCalledTimes(1)
+      expect(t.inAppNotify.mock.calls[0]![0]).toMatchObject({
+        message: expect.stringContaining('Swarm'),
+      })
+
+      t.triggerChange.fire([triggerSummary()])
+      await flush()
+      expect(t.inAppNotify).toHaveBeenCalledTimes(1)
+      t.dispose()
+    })
+
+    it('does not hint while background polling is already on', async () => {
+      const t = await setup({ pollEnabled: true, triggers: [triggerSummary()] })
+      expect(t.inAppNotify).not.toHaveBeenCalled()
+      t.dispose()
+    })
+
+    it('turns background polling on from the hint action', async () => {
+      const t = await setup({ pollEnabled: false, triggers: [triggerSummary()] })
+      const hint = t.inAppNotify.mock.calls[0]![0] as { actions: ReadonlyArray<{ run(): void }> }
+      hint.actions[0]!.run()
+      expect(t.configValues['perforce.swarm.backgroundPoll.enabled']).toBe(true)
+      expect(t.dismiss).toHaveBeenCalledWith('n1')
       t.dispose()
     })
   })
