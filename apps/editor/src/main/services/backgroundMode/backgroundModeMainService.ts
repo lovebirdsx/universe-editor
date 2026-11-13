@@ -10,6 +10,7 @@ import {
   app,
   Menu,
   nativeImage,
+  Notification,
   powerMonitor,
   Tray,
   type MenuItemConstructorOptions,
@@ -29,6 +30,7 @@ import type {
   MobileGatewayState,
   MobileGatewayStatus,
 } from '../../../shared/ipc/mobileGatewayService.js'
+import type { UpdateState } from '../../../shared/ipc/updateService.js'
 import {
   gatewayEnvironmentFromProcess,
   isMobileGatewayEnabled,
@@ -46,6 +48,16 @@ import {
 
 /** Minimum gap between two "show" actions from repeated tray clicks. */
 export const TRAY_CLICK_DEBOUNCE_MS = 400
+
+/** Global (`getDefaultStorage`) marker: the first-hide notice is shown once per install. */
+export const HIDDEN_NOTICE_STORAGE_KEY = 'backgroundMode.hiddenNoticeShown'
+
+/** Narrow update surface; the real implementation is UpdateMainService. */
+export interface BackgroundModeUpdate {
+  getState(): Promise<UpdateState>
+  readonly onDidChangeState: Event<UpdateState>
+  quitAndInstall(): Promise<void>
+}
 
 /** Narrow window surface; the real implementation is WindowMainService. */
 export interface BackgroundModeWindows {
@@ -73,6 +85,8 @@ export interface BackgroundModeTray {
   popUpContextMenu(menu: unknown): void
   destroy(): void
   on(event: 'click' | 'right-click', listener: () => void): unknown
+  /** Windows-only balloon; absent on other platforms and in most test fakes. */
+  displayBalloon?(options: { title: string; content: string; iconType: 'info' }): void
 }
 
 export interface BackgroundModeMainServiceOptions {
@@ -102,6 +116,13 @@ export interface BackgroundModeMainServiceOptions {
   readonly sessionCounts: (windowId: number) => { readonly running: number; readonly ask: number }
   /** Whether a phone is currently subscribed to one of the window's sessions. */
   readonly hasSessionSubscribers: (windowId: number) => boolean
+  /** Downloaded-update surface; absent when auto-update is disabled. */
+  readonly update?: BackgroundModeUpdate
+  /** First-hide marker read; defaults to the global state.json in index.ts. */
+  readonly readHiddenNoticeShown?: () => Promise<boolean>
+  readonly markHiddenNoticeShown?: () => Promise<void>
+  /** Test seam; production falls back to Electron's Notification. */
+  readonly showNotification?: (title: string, body: string) => void
   /** Test seam; defaults to {@link BACKGROUND_IDLE_RECLAIM_MS}. */
   readonly idleReclaimAfterMs?: number
   /** Test seam; defaults to {@link BACKGROUND_IDLE_SCAN_INTERVAL_MS}. */
@@ -126,10 +147,18 @@ export interface TrayMenuActions {
   exit(): void
 }
 
+export interface TrayMenuUpdate {
+  /** Absent when the state does not name a version; the label then omits it. */
+  readonly version?: string
+  restartToInstall(): void
+}
+
 export interface TrayMenuInput {
   readonly hiddenWindows: readonly TrayMenuWindow[]
   readonly gateway: TrayMenuGateway
   readonly actions: TrayMenuActions
+  /** Present only while a downloaded update can be installed. */
+  readonly update?: TrayMenuUpdate
 }
 
 /** Electron-compatible menu item shape, kept platform-free for tests. */
@@ -156,11 +185,27 @@ export function buildTrayMenuTemplate(input: TrayMenuInput): TrayMenuItem[] {
           click: () => input.actions.revealWindow(window.id),
         }))
 
+  const restartToUpdate: TrayMenuItem[] =
+    input.update === undefined
+      ? []
+      : [
+          {
+            label:
+              input.update.version !== undefined
+                ? localize('tray.restartToUpdate', 'Restart to Update ({version})', {
+                    version: input.update.version,
+                  })
+                : localize('tray.restartToUpdateNoVersion', 'Restart to Update'),
+            click: () => input.update?.restartToInstall(),
+          },
+        ]
+
   return [
     {
       label: localize('tray.show', 'Show Universe Editor'),
       click: () => input.actions.showPrimary(),
     },
+    ...restartToUpdate,
     {
       label: localize('tray.hiddenWindows', 'Hidden Windows'),
       submenu: hiddenItems,
@@ -257,6 +302,11 @@ export class BackgroundModeMainService {
   private _readyResolved = false
   private _lastLoginItemOpenAtLogin: boolean | undefined
   private _loginItemStateRead = false
+  /** Version of a downloaded-and-installable update, cleared when the state moves on. */
+  private _downloadedVersion: string | undefined
+  /** One tray notice per version; memory-only as the app restarts into the new build. */
+  private readonly _notifiedUpdateVersions = new Set<string>()
+  private _hiddenNoticeShown = false
   private readonly _ready: Promise<void>
   private _resolveReady!: () => void
 
@@ -339,6 +389,19 @@ export class BackgroundModeMainService {
     else app.quit()
   }
 
+  /**
+   * WindowMainService's close handler hid a window because the user clicked X.
+   * Other hide paths (phone-created hidden windows, a vetoed quit re-hiding) must
+   * not reach here: the notice explains this specific action, once per install.
+   */
+  onWindowHiddenByUser(windowId: number): void {
+    if (!this.isActive() || this._hiddenNoticeShown) return
+    if (!this._opts.e2eEnabled && this._tray === undefined) return
+    this._hiddenNoticeShown = true
+    this._logger.info(`background first user hide window=${windowId}: showing tray notice`)
+    void this._showHiddenNoticeOnce()
+  }
+
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
@@ -376,12 +439,25 @@ export class BackgroundModeMainService {
           this._gatewayStatus = status
         }),
       )
+      const update = this._opts.update
+      if (update !== undefined) {
+        this._disposables.add(update.onDidChangeState((state) => this._applyUpdateState(state)))
+      }
       const [configState, status] = await Promise.all([
         this._opts.gateway.getConfig(),
         this._opts.gateway.getStatus().catch(() => undefined),
       ])
       this._gatewayStatus = status
       await this._applyConfig(configState.config)
+      if (update !== undefined) {
+        // Seed after the first config apply: isActive() is false until then, and a
+        // downloaded state would be mistaken for "background mode is off".
+        void update.getState().then(
+          (state) => this._applyUpdateState(state),
+          (err: unknown) =>
+            this._logger.warn(`background update state read failed: ${String(err)}`),
+        )
+      }
     } catch (err) {
       this._logger.warn(`background mode initialization failed: ${String(err)}`)
     } finally {
@@ -556,6 +632,8 @@ export class BackgroundModeMainService {
   private _popupTrayMenu(): void {
     const tray = this._tray
     if (tray === undefined) return
+    const update = this._opts.update
+    const downloadedVersion = this._downloadedVersion
     const template = buildTrayMenuTemplate({
       hiddenWindows: this._hiddenWindowInfos().map(({ id, name }) => ({ id, name })),
       gateway: {
@@ -564,6 +642,17 @@ export class BackgroundModeMainService {
           ? { listenAddress: this._gatewayStatus.listenAddress }
           : {}),
       },
+      ...(update !== undefined && downloadedVersion !== undefined
+        ? {
+            update: {
+              version: downloadedVersion,
+              restartToInstall: () => {
+                this._logger.info(`background restart to install version=${downloadedVersion}`)
+                void update.quitAndInstall()
+              },
+            },
+          }
+        : {}),
       actions: {
         showPrimary: () => {
           void this.showPrimaryWindow()
@@ -574,6 +663,70 @@ export class BackgroundModeMainService {
     })
     const menu = Menu.buildFromTemplate(template as unknown as MenuItemConstructorOptions[])
     tray.popUpContextMenu(menu)
+  }
+
+  private _applyUpdateState(state: UpdateState): void {
+    if (state.type !== 'downloaded') {
+      this._downloadedVersion = undefined
+      return
+    }
+    this._downloadedVersion = state.version
+    if (!this.isActive()) return
+    if (this._opts.windows.getVisibleWindowCount() > 0) return
+    if (this._notifiedUpdateVersions.has(state.version)) return
+    this._notifiedUpdateVersions.add(state.version)
+    this._logger.info(`background update ready version=${state.version}: notifying via tray`)
+    this._showTrayNotification(
+      localize('tray.updateReady.title', 'Update Downloaded'),
+      localize(
+        'tray.updateReady.body',
+        'A new version has been downloaded. Right-click the tray icon and choose "Restart to Update".',
+      ),
+    )
+  }
+
+  private async _showHiddenNoticeOnce(): Promise<void> {
+    try {
+      if ((await this._opts.readHiddenNoticeShown?.()) === true) {
+        this._logger.info('background hidden notice already shown')
+        return
+      }
+      this._showTrayNotification(
+        localize('tray.hiddenNotice.title', 'Universe Editor is still running'),
+        localize(
+          'tray.hiddenNotice.body',
+          'The window was hidden to the system tray. The phone gateway and agent sessions keep running. Right-click the tray icon to show windows or exit.',
+        ),
+      )
+      await this._opts.markHiddenNoticeShown?.()
+    } catch (err) {
+      this._logger.warn(`background hidden notice failed: ${String(err)}`)
+    }
+  }
+
+  /**
+   * Windows balloons anchor to the tray icon; everything else (or a fake tray
+   * without displayBalloon) falls back to Electron's Notification. E2E skips the
+   * UI entirely — native bubbles would leak into unrelated specs.
+   */
+  private _showTrayNotification(title: string, body: string): void {
+    if (this._opts.e2eEnabled) {
+      this._logger.info('background tray notification skipped (e2e)')
+      return
+    }
+    const tray = this._tray
+    if (tray === undefined) return
+    if (this._opts.platform === 'win32' && tray.displayBalloon !== undefined) {
+      tray.displayBalloon({ title, content: body, iconType: 'info' })
+      return
+    }
+    if (this._opts.showNotification !== undefined) {
+      this._opts.showNotification(title, body)
+      return
+    }
+    if (Notification.isSupported()) {
+      new Notification({ title, body }).show()
+    }
   }
 
   private _hiddenWindowInfos(): readonly { id: number; name: string; hiddenSeq: number }[] {

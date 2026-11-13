@@ -1702,12 +1702,16 @@ describe('WindowMainService', () => {
       return call[1] as (e: { preventDefault: () => void }) => void
     }
 
-    function withBackgroundMode(opts: ReturnType<typeof makeOpts>) {
+    function withBackgroundMode(
+      opts: ReturnType<typeof makeOpts>,
+      onWindowHiddenByUser?: (windowId: number) => void,
+    ) {
       return {
         ...opts,
         backgroundMode: {
           isActive: () => true,
           shouldHideOnClose: () => true,
+          ...(onWindowHiddenByUser !== undefined ? { onWindowHiddenByUser } : {}),
         },
       }
     }
@@ -1732,6 +1736,19 @@ describe('WindowMainService', () => {
       expect(lifecycle.confirmShutdown).not.toHaveBeenCalled()
       expect(svc.isWindowHidden(id)).toBe(true)
       expect(svc.getVisibleWindowCount()).toBe(0)
+    })
+
+    it('reports a user-initiated hide but not a programmatic hideWindow', async () => {
+      const onWindowHiddenByUser = vi.fn()
+      const svc = makeService(withBackgroundMode(makeOpts(), onWindowHiddenByUser))
+      const id = await svc.createWindow()
+
+      svc.hideWindow(id)
+      expect(onWindowHiddenByUser).not.toHaveBeenCalled()
+
+      svc.revealWindow(id)
+      closeHandlerAt(0)({ preventDefault: () => {} })
+      expect(onWindowHiddenByUser).toHaveBeenCalledWith(id)
     })
 
     it('never hides a window that is already cleared to close', async () => {

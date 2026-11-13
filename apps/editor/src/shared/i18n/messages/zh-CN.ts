@@ -18,6 +18,13 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'tray.gateway.starting': '手机网关：正在启动…',
   'tray.gateway.error': '手机网关：错误',
   'tray.gateway.stopped': '手机网关：已停止',
+  'tray.restartToUpdate': '重启以安装更新（{version}）',
+  'tray.restartToUpdateNoVersion': '重启以安装更新',
+  'tray.updateReady.title': '更新已下载',
+  'tray.updateReady.body': '新版本已下载，右键托盘图标选择“重启以安装更新”。',
+  'tray.hiddenNotice.title': 'Universe Editor 仍在运行',
+  'tray.hiddenNotice.body':
+    '窗口已隐藏到系统托盘，手机网关与 Agent 会话仍在运行。右键托盘图标可显示窗口或退出。',
   'tray.exit': '退出',
 
   // --- Agent settings ---

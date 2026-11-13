@@ -44,6 +44,9 @@
 - 三开关齐备才注册登录项：`launchAtLogin` && `keepRunningInBackground` && 网关启用。Windows
   `setLoginItemSettings({ args: ['--background'] })`（`args` 仅 Windows 生效）；macOS 不传 args，
   用 `getLoginItemSettings().wasOpenedAtLogin` 判定登录启动。
+- 托盘还承载两条一次性提示：更新下载完成且无可见窗口时每个版本提示一次，菜单出现「重启以安装更新」；
+  用户首次点 X 隐藏时按 `backgroundMode.hiddenNoticeShown` 全局只弹一次。Windows 用
+  `Tray.displayBalloon`，否则回退 Electron `Notification`（E2E 只写标记不弹）。
 
 ## E2E
 

@@ -14,6 +14,8 @@ import {
   type MobileGatewayConfigState,
   type MobileGatewayStatus,
 } from '../../../../shared/ipc/mobileGatewayService.js'
+import type { UpdateState } from '../../../../shared/ipc/updateService.js'
+import type { BackgroundModeUpdate } from '../backgroundModeMainService.js'
 
 vi.mock('electron', () => ({
   app: { quit: vi.fn(), setLoginItemSettings: vi.fn() },
@@ -23,11 +25,15 @@ vi.mock('electron', () => ({
     createFromBuffer: vi.fn(),
     createEmpty: vi.fn(),
   },
+  Notification: Object.assign(
+    vi.fn().mockImplementation(() => ({ show: vi.fn() })),
+    { isSupported: vi.fn(() => true) },
+  ),
   powerMonitor: { on: vi.fn(), removeListener: vi.fn() },
   Tray: vi.fn(),
 }))
 
-const { Menu, nativeImage } = await import('electron')
+const { Menu, Notification, nativeImage } = await import('electron')
 const { BackgroundModeMainService, buildTrayMenuTemplate, extractPngFromIco } =
   await import('../backgroundModeMainService.js')
 
@@ -57,10 +63,11 @@ interface FakeTray {
   popUpContextMenu: ReturnType<typeof vi.fn>
   destroy: ReturnType<typeof vi.fn>
   on: ReturnType<typeof vi.fn>
+  displayBalloon?: ReturnType<typeof vi.fn>
   handlers: Map<string, () => void>
 }
 
-function makeTray(): FakeTray {
+function makeTray(options: { displayBalloon?: boolean } = {}): FakeTray {
   const handlers = new Map<string, () => void>()
   return {
     setToolTip: vi.fn(),
@@ -69,6 +76,7 @@ function makeTray(): FakeTray {
     on: vi.fn((event: string, listener: () => void) => {
       handlers.set(event, listener)
     }),
+    ...(options.displayBalloon === false ? {} : { displayBalloon: vi.fn() }),
     handlers,
   }
 }
@@ -130,20 +138,32 @@ function makeHarness(
     trayIconPath?: string
     sessionCounts?: (windowId: number) => { running: number; ask: number }
     hasSessionSubscribers?: (windowId: number) => boolean
+    update?: BackgroundModeUpdate
+    showNotification?: (title: string, body: string) => void
+    readHiddenNoticeShown?: () => Promise<boolean>
+    markHiddenNoticeShown?: () => Promise<void>
+    trayBalloon?: boolean
     idleReclaimAfterMs?: number
     idleScanIntervalMs?: number
     onSystemResume?: (listener: () => void) => { dispose(): void }
   } = {},
 ) {
   const windows = makeWindows()
-  const tray = options.tray ?? makeTray()
+  const tray = options.tray ?? makeTray({ displayBalloon: options.trayBalloon ?? true })
   const configEmitter = new Emitter<MobileGatewayConfigState>()
   const statusEmitter = new Emitter<MobileGatewayStatus>()
+  const updateEmitter = new Emitter<UpdateState>()
   const resumeEmitter = new Emitter<void>()
   const config = options.config ?? enabledConfig()
   const restoreSession = vi.fn(async () => undefined)
   const createWindow = vi.fn(async () => 1)
   const quit = vi.fn()
+  let currentUpdateState: UpdateState = { type: 'idle', currentVersion: '1.0.0' }
+  const update: BackgroundModeUpdate = options.update ?? {
+    getState: vi.fn(async () => currentUpdateState),
+    onDidChangeState: updateEmitter.event,
+    quitAndInstall: vi.fn(async () => undefined),
+  }
   const sessionCounts = options.sessionCounts ?? (() => ({ running: 0, ask: 0 }))
   const hasSessionSubscribers = options.hasSessionSubscribers ?? (() => false)
   const onSystemResume =
@@ -188,6 +208,16 @@ function makeHarness(
     quit,
     sessionCounts,
     hasSessionSubscribers,
+    update,
+    ...(options.showNotification !== undefined
+      ? { showNotification: options.showNotification }
+      : {}),
+    ...(options.readHiddenNoticeShown !== undefined
+      ? { readHiddenNoticeShown: options.readHiddenNoticeShown }
+      : {}),
+    ...(options.markHiddenNoticeShown !== undefined
+      ? { markHiddenNoticeShown: options.markHiddenNoticeShown }
+      : {}),
     ...(options.idleReclaimAfterMs !== undefined
       ? { idleReclaimAfterMs: options.idleReclaimAfterMs }
       : {}),
@@ -204,6 +234,12 @@ function makeHarness(
     tray,
     configEmitter,
     statusEmitter,
+    updateEmitter,
+    update,
+    fireUpdate: (state: UpdateState) => {
+      currentUpdateState = state
+      updateEmitter.fire(state)
+    },
     resumeEmitter,
     config,
     restoreSession,
@@ -217,6 +253,7 @@ function makeHarness(
     disposeEmitters: () => {
       configEmitter.dispose()
       statusEmitter.dispose()
+      updateEmitter.dispose()
       resumeEmitter.dispose()
     },
   }
@@ -563,6 +600,175 @@ describe('login item', () => {
   })
 })
 
+describe('downloaded update', () => {
+  const DOWNLOADED: Extract<UpdateState, { type: 'downloaded' }> = {
+    type: 'downloaded',
+    currentVersion: '1.0.0',
+    version: '2.0.0',
+  }
+
+  it('notifies once per version only when no window is visible', async () => {
+    const showNotification = vi.fn()
+    const h = makeHarness({ platform: 'win32', trayBalloon: false, showNotification })
+    try {
+      await h.service.initialize()
+      h.fireUpdate(DOWNLOADED)
+      expect(showNotification).not.toHaveBeenCalled()
+
+      h.windowState.visibleCount = 0
+      h.fireUpdate({ ...DOWNLOADED, version: '2.0.1' })
+      expect(showNotification).toHaveBeenCalledTimes(1)
+      expect(showNotification).toHaveBeenCalledWith(
+        'Update Downloaded',
+        expect.stringContaining('Restart to Update'),
+      )
+
+      h.fireUpdate({ ...DOWNLOADED, version: '2.0.1' })
+      expect(showNotification).toHaveBeenCalledTimes(1)
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+
+  it('adds the restart item to the live menu and installs through the update service', async () => {
+    const h = makeHarness()
+    try {
+      await h.service.initialize()
+      h.fireUpdate(DOWNLOADED)
+      h.tray.handlers.get('right-click')!()
+
+      const template = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] as Array<{
+        label?: string
+        click?: () => void
+      }>
+      const item = template.find((entry) => entry.label?.startsWith('Restart to Update'))
+      expect(item?.label).toBe('Restart to Update (2.0.0)')
+      item?.click?.()
+      expect(h.update.quitAndInstall).toHaveBeenCalledTimes(1)
+
+      h.fireUpdate({ type: 'idle', currentVersion: '1.0.0' })
+      h.tray.handlers.get('right-click')!()
+      const after = vi.mocked(Menu.buildFromTemplate).mock.calls.at(-1)?.[0] as Array<{
+        label?: string
+      }>
+      expect(after.some((entry) => entry.label?.startsWith('Restart to Update'))).toBe(false)
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+})
+
+describe('first hidden notice', () => {
+  it('shows the Windows balloon and persists the marker once', async () => {
+    const markHiddenNoticeShown = vi.fn(async () => undefined)
+    const h = makeHarness({ markHiddenNoticeShown })
+    try {
+      await h.service.initialize()
+      h.service.onWindowHiddenByUser(1)
+      await vi.waitFor(() => expect(markHiddenNoticeShown).toHaveBeenCalledTimes(1))
+
+      expect(h.tray.displayBalloon).toHaveBeenCalledWith({
+        title: 'Universe Editor is still running',
+        content: expect.stringContaining('system tray'),
+        iconType: 'info',
+      })
+
+      h.service.onWindowHiddenByUser(2)
+      await Promise.resolve()
+      expect(h.tray.displayBalloon).toHaveBeenCalledTimes(1)
+      expect(markHiddenNoticeShown).toHaveBeenCalledTimes(1)
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+
+  it('falls back to Notification on other platforms', async () => {
+    const icon = tempTrayIcon()
+    const showNotification = vi.fn()
+    const markHiddenNoticeShown = vi.fn(async () => undefined)
+    const h = makeHarness({
+      platform: 'linux',
+      trayIconPath: icon.path,
+      showNotification,
+      markHiddenNoticeShown,
+    })
+    try {
+      await h.service.initialize()
+      h.service.onWindowHiddenByUser(1)
+      await vi.waitFor(() => expect(markHiddenNoticeShown).toHaveBeenCalledTimes(1))
+      expect(showNotification).toHaveBeenCalledWith(
+        'Universe Editor is still running',
+        expect.stringContaining('phone gateway'),
+      )
+      expect(h.tray.displayBalloon).not.toHaveBeenCalled()
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+      icon.dispose()
+    }
+  })
+
+  it('uses Electron Notification when no seam is injected', async () => {
+    const icon = tempTrayIcon()
+    const h = makeHarness({ platform: 'linux', trayIconPath: icon.path })
+    try {
+      await h.service.initialize()
+      h.service.onWindowHiddenByUser(1)
+      await vi.waitFor(() => expect(Notification.isSupported).toHaveBeenCalled())
+      expect(vi.mocked(Notification)).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Universe Editor is still running' }),
+      )
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+      icon.dispose()
+    }
+  })
+
+  it('does not notify when the persisted marker is already set', async () => {
+    const showNotification = vi.fn()
+    const readHiddenNoticeShown = vi.fn(async () => true)
+    const markHiddenNoticeShown = vi.fn(async () => undefined)
+    const h = makeHarness({
+      showNotification,
+      readHiddenNoticeShown,
+      markHiddenNoticeShown,
+    })
+    try {
+      await h.service.initialize()
+      h.service.onWindowHiddenByUser(1)
+      await vi.waitFor(() => expect(readHiddenNoticeShown).toHaveBeenCalledTimes(1))
+      expect(showNotification).not.toHaveBeenCalled()
+      expect(markHiddenNoticeShown).not.toHaveBeenCalled()
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+
+  it('skips the UI under E2E but still records the marker', async () => {
+    const showNotification = vi.fn()
+    const markHiddenNoticeShown = vi.fn(async () => undefined)
+    const h = makeHarness({
+      e2eEnabled: true,
+      showNotification,
+      markHiddenNoticeShown,
+    })
+    try {
+      await h.service.initialize()
+      h.service.onWindowHiddenByUser(1)
+      await vi.waitFor(() => expect(markHiddenNoticeShown).toHaveBeenCalledTimes(1))
+      expect(showNotification).not.toHaveBeenCalled()
+    } finally {
+      h.service.dispose()
+      h.disposeEmitters()
+    }
+  })
+})
+
 describe('buildTrayMenuTemplate', () => {
   const gateway = { state: 'running' as const, listenAddress: '127.0.0.1:47321' }
 
@@ -606,6 +812,41 @@ describe('buildTrayMenuTemplate', () => {
     expect(exit).toHaveBeenCalledTimes(1)
     expect(template.some((item) => item.type === 'separator')).toBe(true)
     expect(template.find((item) => item.label?.startsWith('Phone gateway'))?.enabled).toBe(false)
+  })
+
+  it('offers restart-to-install only for a pending update, with an optional version', () => {
+    const actions = { showPrimary: vi.fn(), revealWindow: vi.fn(), exit: vi.fn() }
+    const restartToInstall = vi.fn()
+
+    const withVersion = buildTrayMenuTemplate({
+      hiddenWindows: [],
+      gateway,
+      actions,
+      update: { version: '2.0.0', restartToInstall },
+    })
+    const item = withVersion.find((entry) => entry.label?.startsWith('Restart to Update'))
+    expect(item?.label).toBe('Restart to Update (2.0.0)')
+    // Right after "Show" and before the hidden-windows submenu.
+    expect(withVersion[0]?.label).toBe('Show Universe Editor')
+    expect(withVersion[1]).toBe(item)
+    item?.click?.()
+    expect(restartToInstall).toHaveBeenCalledTimes(1)
+
+    const withoutVersion = buildTrayMenuTemplate({
+      hiddenWindows: [],
+      gateway,
+      actions,
+      update: { restartToInstall },
+    })
+    expect(
+      withoutVersion.find((entry) => entry.label?.startsWith('Restart to Update'))?.label,
+    ).toBe('Restart to Update')
+
+    expect(
+      buildTrayMenuTemplate({ hiddenWindows: [], gateway, actions }).some((entry) =>
+        entry.label?.startsWith('Restart to Update'),
+      ),
+    ).toBe(false)
   })
 
   it('renders each gateway state without leaking undefined', () => {

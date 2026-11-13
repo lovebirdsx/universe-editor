@@ -25,7 +25,7 @@
 > 会话内参数配置已落地**（协议 v23：只读 `getSessionSettings` + 子模型写入 / 立即重启 +
 > 会话级 MCP 启停，见 §6h）；**M18 手机权限与 PC 一致已落地**（协议 v23：移除设备 trust，
 > 手机可直接切换 bypass 与持久授权，见 §8）；**M19 手机后台常驻已落地**（托盘、关窗隐藏、
-> 后台模式下的隐藏开窗、空闲回收、登录自启与 `--background` 无窗口启动，见 §2 / §11 / 决策 16–22）。
+> 后台模式下的隐藏开窗、空闲回收、登录自启与 `--background` 无窗口启动，见 §2 / §11 / 决策 16–23）。
 > 相关阅读：远程开发见 [remote-dev.md](remote-dev.md)，WSL 下的 e2e 环境见
 > [wsl-e2e.md](wsl-e2e.md)，ACP 会话层见
 > [renderer/services/acp/CLAUDE.md](../../apps/editor/src/renderer/services/acp/CLAUDE.md)。
@@ -93,7 +93,7 @@ main 侧不直接读 `AcpSession`。
 且 `keepRunningInBackground` 为真，并且托盘创建成功（E2E 下以主进程探针放行）。激活时建托盘、启
 30 秒空闲扫描；停用时先恢复全部隐藏窗口再销毁托盘，若已无窗口则创建主窗口，杜绝「无窗口又无
 托盘」的隐形进程。关窗只隐藏不销毁窗口，因此 renderer、ACP 会话与网关都继续运行；详见 §11 工程
-结构与决策 16–22。
+结构与决策 16–23。
 
 **通道与注册**：
 
@@ -1650,6 +1650,11 @@ TLS 阶段失败 → SW 返回旧 shell → 页面看起来正常但永远离线
 22. **后台模式下的 `window-all-closed` 不退出**：空闲回收真正关闭最后一个隐藏窗口时，进程必须
     继续存活（托盘与网关就是 UI），直到用户从托盘「退出」或显式确认 quit；确认过的 quit 仍正常
     退出。登录自启：Windows 传 `--background` 参数，macOS 用 `wasOpenedAtLogin` 判定。
+23. **托盘提示与「重启以安装更新」**：更新进入 `downloaded` 且当前无可见窗口时，每个版本只提示
+    一次（内存记录），托盘菜单出现「重启以安装更新」并复用 `quitAndInstall` 的退出确认链路；用户
+    首次点 X 隐藏时按全局存储 `backgroundMode.hiddenNoticeShown` 只说明一次。Windows 优先
+    `Tray.displayBalloon`，其他平台或不可用时回退 `Notification.isSupported()`；E2E 跳过弹窗但仍
+    写入首次提示标记。
 
 形态层决策：采用 PWA；传输先做局域网 + Tailscale；镜像已打开编辑器窗口中的会话（编辑器需开着）；
 第一期范围即 §1。

@@ -95,6 +95,8 @@ export interface IHiddenWindowInfo {
 export interface IWindowBackgroundModeHooks {
   isActive(): boolean
   shouldHideOnClose(): boolean
+  /** The user clicked X and the window was hidden instead of closed. */
+  onWindowHiddenByUser?(windowId: number): void
 }
 
 export interface IWindowMainService {
@@ -744,6 +746,7 @@ export class WindowMainService implements IWindowMainService {
       if (!this._quitting && this._opts.backgroundMode?.shouldHideOnClose() === true) {
         e.preventDefault()
         this.hideWindow(win.id)
+        this._opts.backgroundMode.onWindowHiddenByUser?.(win.id)
         return
       }
       e.preventDefault()

@@ -63,7 +63,10 @@ import { IBugRecorderService } from '../shared/ipc/bugRecorderService.js'
 import type { BugRecordingMainService } from './services/bugRecording/bugRecordingMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import { WindowsJumpList } from './services/window/windowsJumpList.js'
-import { BackgroundModeMainService } from './services/backgroundMode/backgroundModeMainService.js'
+import {
+  BackgroundModeMainService,
+  HIDDEN_NOTICE_STORAGE_KEY,
+} from './services/backgroundMode/backgroundModeMainService.js'
 import { UpdateMainService } from './services/update/updateMainService.js'
 import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
 import type { ConfigLocationMainService } from './services/configLocation/configLocationMainService.js'
@@ -798,6 +801,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
         // and reads the same closures at call time.
         isActive: () => backgroundMode?.isActive() === true,
         shouldHideOnClose: () => backgroundMode?.shouldHideOnClose() === true,
+        onWindowHiddenByUser: (windowId) => backgroundMode?.onWindowHiddenByUser(windowId),
       },
       hasRunningSessions: (windowId) =>
         applicationServices!.sessionSwitcher.getWindowSessionCounts(windowId).running > 0,
@@ -860,6 +864,14 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
         applicationServices!.sessionSwitcher.getWindowSessionCounts(windowId),
       hasSessionSubscribers: (windowId) =>
         applicationServices!.mobileGateway.hasSessionSubscribers(windowId),
+      update: {
+        getState: () => applicationServices!.update.getState(),
+        onDidChangeState: applicationServices!.update.onDidChangeState,
+        quitAndInstall: () => applicationServices!.update.quitAndInstall(),
+      },
+      readHiddenNoticeShown: async () =>
+        (await getDefaultStorage().get<boolean>(HIDDEN_NOTICE_STORAGE_KEY)) === true,
+      markHiddenNoticeShown: () => getDefaultStorage().set(HIDDEN_NOTICE_STORAGE_KEY, true),
     })
     void backgroundMode.initialize()
     installE2EMainProbe(windows)
