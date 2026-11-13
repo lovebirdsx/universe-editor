@@ -147,7 +147,7 @@ export class AutomatedRunWatcher {
 
     const maxCostUsd = this._request.budget.maxCostUsd
     const cost = usage?.cost
-    if (cost !== undefined && Number.isFinite(cost.amount)) {
+    if (maxCostUsd !== null && cost !== undefined && Number.isFinite(cost.amount)) {
       // The budget is denominated in USD; comparing another currency's amount
       // would trip the ceiling at an arbitrary exchange rate. Timeouts still apply.
       const currency = cost.currency?.trim()

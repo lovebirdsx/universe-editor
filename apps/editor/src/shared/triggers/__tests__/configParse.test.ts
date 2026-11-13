@@ -282,6 +282,10 @@ describe('parseTriggersConfig (session)', () => {
       firstTrigger(rawTrigger({ session: { prompt: 'x', budget: { maxCostUsd: 2 } } })).session
         .budget,
     ).toEqual({ maxCostUsd: 2, timeoutMin: 30, approvalTimeoutMin: 1440 })
+    expect(
+      firstTrigger(rawTrigger({ session: { prompt: 'x', budget: { maxCostUsd: null } } })).session
+        .budget.maxCostUsd,
+    ).toBeNull()
   })
 
   it('validates agent / mode / model types', () => {

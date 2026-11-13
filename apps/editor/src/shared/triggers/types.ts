@@ -30,7 +30,8 @@ export type TriggerSourceConfig =
 export type TriggerSourceType = TriggerSourceConfig['type']
 
 export interface TriggerBudget {
-  readonly maxCostUsd: number
+  /** `null` = no cost ceiling (explicit opt-out; an omitted field still gets the default). */
+  readonly maxCostUsd: number | null
   /** Active session time; time spent waiting on a permission / question card is excluded. */
   readonly timeoutMin: number
   readonly approvalTimeoutMin: number

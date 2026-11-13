@@ -131,13 +131,13 @@ const SOURCE_SCHEMA: TriggerJSONSchema = {
 
 const BUDGET_SCHEMA: TriggerJSONSchema = {
   type: 'object',
-  description: '单次运行预算：三个字段都必须大于 0。',
+  description: '单次运行预算：数值字段都必须大于 0；maxCostUsd 写 null 表示不限费用。',
   properties: {
     maxCostUsd: {
-      type: 'number',
+      type: ['number', 'null'],
       exclusiveMinimum: 0,
       default: TRIGGER_DEFAULTS.budget.maxCostUsd,
-      description: '单次运行费用上限（美元），超出后取消该轮。',
+      description: '单次运行费用上限（美元），超出后取消该轮；null 表示不限。',
     },
     timeoutMin: {
       type: 'number',

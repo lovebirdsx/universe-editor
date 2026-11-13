@@ -214,6 +214,16 @@ describe('AutomatedRunWatcher', () => {
     expect(fake.cancelTurn).toHaveBeenCalled()
   })
 
+  it('never trips the cost ceiling when maxCostUsd is null', async () => {
+    const { fake, watcher, ends } = setup({ request: makeRequest({ maxCostUsd: null }) })
+    watcher.start()
+    fake.status.set('running', undefined)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 999, currency: 'USD' } }, undefined)
+    await flush()
+    expect(ends).toHaveLength(0)
+    expect(fake.cancelTurn).not.toHaveBeenCalled()
+  })
+
   it('compares the cost ceiling case-insensitively when the currency is USD', async () => {
     const { fake, watcher, ends } = setup()
     watcher.start()

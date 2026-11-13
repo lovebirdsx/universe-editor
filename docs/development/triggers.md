@@ -294,7 +294,7 @@ _startRun
 `AutomatedRunWatcher` 每轮 `autorun` 读 session 的 `status`、`usage`、`pendingPermission`、`pendingElicitation`：
 
 - **活跃时间**：`status === 'running'` 且没有挂起卡片时累计；卡片打开期间暂停计时，关闭后继续。
-- **费用**：`usage.cost.amount >= budget.maxCostUsd` → `budget-exceeded` + `cancelTurn()`。只有币种为空或 `USD` 时才比较；其它币种不中止运行（汇率换算不可靠），首次遇到时告警一次。
+- **费用**：`usage.cost.amount >= budget.maxCostUsd` → `budget-exceeded` + `cancelTurn()`（`maxCostUsd: null` 不检查）。只有币种为空或 `USD` 时才比较；其它币种不中止运行（汇率换算不可靠），首次遇到时告警一次。
 - **审批超时**：卡片从无到有时起一个定时器；卡片关闭即清除；超时 → `approval-timeout` + `cancelTurn()`。
 - **状态**：`errored` → `failed`；`closed` → `cancelled`。
 - **正常结束**：`notifyTurnSettled()` 且没有挂起卡片 → `completed`。

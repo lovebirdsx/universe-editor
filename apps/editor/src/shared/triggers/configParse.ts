@@ -170,7 +170,7 @@ function parseSource(raw: unknown): SourceParseResult {
 }
 
 function parseBudget(raw: unknown, errors: string[]): TriggerBudget {
-  const values: { maxCostUsd: number; timeoutMin: number; approvalTimeoutMin: number } = {
+  const values: { maxCostUsd: number | null; timeoutMin: number; approvalTimeoutMin: number } = {
     ...TRIGGER_DEFAULTS.budget,
   }
   if (!isRecord(raw)) {
@@ -181,6 +181,10 @@ function parseBudget(raw: unknown, errors: string[]): TriggerBudget {
   for (const field of fields) {
     if (!hasOwn(raw, field)) continue
     const value = raw[field]
+    if (field === 'maxCostUsd' && value === null) {
+      values.maxCostUsd = null
+      continue
+    }
     if (isPositiveNumber(value)) values[field] = value
     else errors.push(`"session.budget.${field}" must be a positive number`)
   }
