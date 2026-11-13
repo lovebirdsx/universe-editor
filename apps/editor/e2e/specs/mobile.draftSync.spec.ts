@@ -93,11 +93,16 @@ async function pairToken(origin: string, deviceName: string): Promise<string> {
   return ((await response.json()) as { token: string }).token
 }
 
-async function startEchoSession(page: Page, workbench: WorkbenchPO): Promise<void> {
+async function startEchoSession(
+  page: Page,
+  workbench: WorkbenchPO,
+  env?: Record<string, string>,
+): Promise<void> {
   await workbench.waitForRestored()
-  await page.evaluate(([id, path]) => window.__E2E__!.installAcpEchoAgent(id, path), [
+  await page.evaluate(([id, path, extra]) => window.__E2E__!.installAcpEchoAgent(id, path, extra), [
     'echo',
     ECHO_AGENT_PATH,
+    env,
   ] as const)
   await page.evaluate(() => {
     void window.__E2E__!.runCommand('workbench.action.agent.newSession')
@@ -204,6 +209,16 @@ function collectSessionEvents(ws: WebSocket): SessionDeltaEvent[] {
     events.push(...parsed.value.events)
   })
   return events
+}
+
+function lastDraftImageId(events: readonly SessionDeltaEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type === 'draft_update' && event.draft.images.length > 0) {
+      return event.draft.images[0]?.id
+    }
+  }
+  return undefined
 }
 
 test.describe('mobile draft sync', () => {
@@ -332,6 +347,93 @@ test.describe('mobile draft sync', () => {
       expect(
         await phoneInput.evaluate((element) => (element as HTMLTextAreaElement).selectionStart),
       ).toBe(2)
+    } finally {
+      await context.close()
+      await browser.close()
+    }
+  })
+
+  test('@regression converges a phone attachment deleted by another client', async ({
+    page,
+    workbench,
+  }) => {
+    await startEchoSession(page, workbench, { ECHO_AGENT_IMAGE: '1' })
+    const { browser, context, phone, origin } = await pairPhone(page, workbench)
+    try {
+      await openFirstPhoneSession(phone)
+
+      // The fixed E2E pairing code is reusable: attach a second, raw client to
+      // act as the "other side" that deletes the shared draft attachment.
+      const token = await pairToken(origin, 'E2E Draft Peer')
+      const ws = await openSocket(origin)
+      try {
+        const hello = nextFrameOfType(ws, 'hello_ok')
+        ws.send(
+          serializeFrame({
+            type: 'hello',
+            protocolVersion: MOBILE_PROTOCOL_VERSION,
+            token,
+            clientVersion: 'e2e',
+            capabilities: ['inbox', 'commands'],
+          }),
+        )
+        await hello
+        const ref = await subscribeInbox(ws)
+        const events = collectSessionEvents(ws)
+        await subscribeSession(ws, ref)
+
+        const png = Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+          'base64',
+        )
+        await phone.getByTestId('composer-attachment-input').setInputFiles({
+          name: 'shot.png',
+          mimeType: 'image/png',
+          buffer: png,
+        })
+        await expect(
+          phone.locator('[data-testid="composer-attachment-image"].composer__chip--uploaded'),
+        ).toBeVisible()
+
+        await expect.poll(() => lastDraftImageId(events), { timeout: 10_000 }).not.toBeUndefined()
+        // Only acknowledged attachments may be removed remotely: let the phone
+        // receive its own echo/ack before the peer deletes the draft entry.
+        await phone.waitForTimeout(1_000)
+
+        ws.send(
+          serializeFrame({
+            type: 'draft_update',
+            ref,
+            clientUpdateId: 'delete-attachment',
+            draft: { text: '', images: [] },
+          }),
+        )
+
+        await expect(phone.locator('[data-testid="composer-attachment-image"]')).toHaveCount(0, {
+          timeout: 10_000,
+        })
+
+        // A later phone edit must not publish the deleted attachment again.
+        await phone.getByTestId('composer-input').fill('after delete')
+        await expect
+          .poll(
+            () =>
+              [...events]
+                .reverse()
+                .find(
+                  (event) => event.type === 'draft_update' && event.draft.text === 'after delete',
+                ),
+            { timeout: 10_000 },
+          )
+          .toBeTruthy()
+        const published = [...events]
+          .reverse()
+          .find((event) => event.type === 'draft_update' && event.draft.text === 'after delete')
+        if (published?.type !== 'draft_update') throw new Error('missing published draft')
+        expect(published.draft.images).toEqual([])
+      } finally {
+        ws.close()
+      }
     } finally {
       await context.close()
       await browser.close()

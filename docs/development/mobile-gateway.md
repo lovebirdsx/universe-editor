@@ -1006,11 +1006,20 @@ refs/contexts**。**光标 / 选区是每个客户端自己的 UI 状态，不�
 - 手机仍把 `{ text, caret, updatedAt }` 写到 sessionStorage（v2 key，最多 20 条 LRU；旧版纯
   文本 key 读取后自动迁移），但 caret 仅用于本机重挂载，不参与同步。
 - 重连后仅当 hub 没有更新的草稿才补发本地内容。空草稿同样要发布（删光全部字符也是本地编辑）。
+- 本机删除已上传附件时，id 记入 `removedDraftImages` / `removedDraftFiles`：共享草稿中回显的
+  同 id 条目被过滤，后续发布也不再携带，避免删除被回弹。
+- 只有收到带 `clientUpdateId` 的回显（ack）后，本机附件 id 才视为 hub 已确认。已确认附件若在
+  更新的共享草稿中缺失，视为其他客户端删除：移除本机 chip、释放预览 URL，并排除出后续发布；
+  images / files 同等处理。未确认的附件不会被远端草稿删除（离线 / 丢包安全），下次发布仍会
+  重新上行。
 
 **hub 与快照**
 
-- `session_snapshot.draft` 带 registry 当前草稿；订阅时先用 PC bridge 快照里的草稿播种，
-  registry 优先。空草稿删除 registry 条目并广播一次空状态，避免重连后复活。
+- `session_snapshot.draft` 带 registry 当前草稿。订阅时以 renderer `getSnapshot().draft` 为准：
+  registry 没有在快照在途期间被改写（该 `windowId:localId` 的 per-key 版本未变）时，用 renderer
+  草稿覆盖或清除 registry；手机在途 `draft_update` / renderer 事件在此期间发生时保留 registry，
+  在途写入优先。快照没有 draft 时删除陈旧 registry 条目。空草稿删除 registry 条目并广播一次
+  空状态，避免重连后复活。
 - `refs/contexts` 只活在 PC cache。投影成只读摘要随草稿下发；手机改文本时 PC 清空 refs（字符
   区间失效）、保留 contexts，文本不变时两者都保留。
 - **附件**：WS 只传 id + 元数据，字节不走 WS。手机草稿里的图片 / 文件首次出现时，hub 用

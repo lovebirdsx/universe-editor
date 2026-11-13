@@ -1227,6 +1227,154 @@ describe('Composer', () => {
 
       await waitFor(() => expect(onDraftChange.mock.calls[0]?.[2]).toEqual([]))
     })
+
+    const uploadedDraftImage = {
+      id: 'att-1',
+      source: 'mobile' as const,
+      mimeType: 'image/png',
+      byteSize: 3,
+      name: 'shot.png',
+    }
+
+    it('removes a locally uploaded picture without echoing it back as a remote draft', async () => {
+      let seq = 0
+      const onDraftChange = vi.fn<ComposerProps['onDraftChange']>(() => `u${(seq += 1)}`)
+      const { rerender } = render(<Composer {...composerProps({ onDraftChange })} />)
+
+      pickFile('shot.png', 'image/png')
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalledTimes(1))
+      expect(onDraftChange.mock.calls[0]?.[1]).toEqual([
+        expect.objectContaining({ id: 'att-1', source: 'mobile' }),
+      ])
+
+      rerender(
+        <Composer
+          {...composerProps({
+            onDraftChange,
+            draft: { ...remote(1, ''), images: [uploadedDraftImage] },
+            draftAck: { clientUpdateId: 'u1', revision: 1 },
+          })}
+        />,
+      )
+      expect(screen.getByTestId('composer-attachment-image')).toBeTruthy()
+      expect(screen.queryByTestId('composer-draft-image')).toBeNull()
+
+      fireEvent.click(screen.getByLabelText(strings.attachmentRemove))
+
+      expect(screen.queryByTestId('composer-attachment-image')).toBeNull()
+      expect(screen.queryByTestId('composer-draft-image')).toBeNull()
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalledTimes(2))
+      expect(onDraftChange.mock.calls[1]?.[1]).toEqual([])
+    })
+
+    it('removes a locally uploaded file without echoing it back as a remote draft', async () => {
+      let seq = 0
+      const onDraftChange = vi.fn<ComposerProps['onDraftChange']>(() => `u${(seq += 1)}`)
+      const onUploadAttachment = vi.fn(async () => ({
+        id: 'file-1',
+        kind: 'file' as const,
+        name: 'notes.txt',
+        mimeType: 'text/plain',
+        size: 3,
+        createdAt: 1,
+      }))
+      const { rerender } = render(
+        <Composer {...composerProps({ onDraftChange, onUploadAttachment })} />,
+      )
+
+      pickFile('notes.txt', 'text/plain')
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalledTimes(1))
+      expect(onDraftChange.mock.calls[0]?.[2]).toEqual([expect.objectContaining({ id: 'file-1' })])
+
+      rerender(
+        <Composer
+          {...composerProps({
+            onDraftChange,
+            onUploadAttachment,
+            draft: {
+              ...remote(1, ''),
+              files: [{ id: 'file-1', name: 'notes.txt', mimeType: 'text/plain', byteSize: 3 }],
+            },
+            draftAck: { clientUpdateId: 'u1', revision: 1 },
+          })}
+        />,
+      )
+      expect(screen.getByTestId('composer-attachment-file')).toBeTruthy()
+
+      fireEvent.click(screen.getByLabelText(strings.attachmentRemove))
+
+      expect(screen.queryByTestId('composer-attachment-file')).toBeNull()
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalledTimes(2))
+      expect(onDraftChange.mock.calls[1]?.[2]).toEqual([])
+    })
+
+    it('drops a confirmed local picture when the shared draft omits it', async () => {
+      let seq = 0
+      const onDraftChange = vi.fn<ComposerProps['onDraftChange']>(() => `u${(seq += 1)}`)
+      const { rerender } = render(<Composer {...composerProps({ onDraftChange })} />)
+
+      pickFile('shot.png', 'image/png')
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalledTimes(1))
+
+      rerender(
+        <Composer
+          {...composerProps({
+            onDraftChange,
+            draft: { ...remote(1, ''), images: [uploadedDraftImage] },
+            draftAck: { clientUpdateId: 'u1', revision: 1 },
+          })}
+        />,
+      )
+      expect(screen.getByTestId('composer-attachment-image')).toBeTruthy()
+      onDraftChange.mockClear()
+
+      rerender(
+        <Composer
+          {...composerProps({
+            onDraftChange,
+            draft: { ...remote(2, ''), images: [] },
+            draftAck: { clientUpdateId: 'u1', revision: 1 },
+          })}
+        />,
+      )
+
+      await waitFor(() => expect(screen.queryByTestId('composer-attachment-image')).toBeNull())
+      await new Promise((resolve) => setTimeout(resolve, 350))
+      expect(onDraftChange).not.toHaveBeenCalled()
+    })
+
+    it('keeps an unacknowledged local picture until the gateway confirms it', async () => {
+      let seq = 0
+      const onDraftChange = vi.fn<ComposerProps['onDraftChange']>(() => `u${(seq += 1)}`)
+      const { rerender } = render(<Composer {...composerProps({ onDraftChange })} />)
+
+      pickFile('shot.png', 'image/png')
+      await waitFor(() => expect(onDraftChange).toHaveBeenCalledTimes(1))
+      onDraftChange.mockClear()
+
+      rerender(
+        <Composer
+          {...composerProps({
+            onDraftChange,
+            draft: { ...remote(5, ''), images: [] },
+          })}
+        />,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 350))
+      expect(screen.getByTestId('composer-attachment-image')).toBeTruthy()
+      expect(onDraftChange).not.toHaveBeenCalled()
+
+      rerender(
+        <Composer
+          {...composerProps({
+            onDraftChange,
+            draft: { ...remote(5, ''), images: [] },
+            draftAck: { clientUpdateId: 'u1', revision: 1 },
+          })}
+        />,
+      )
+      await waitFor(() => expect(screen.queryByTestId('composer-attachment-image')).toBeNull())
+    })
   })
 })
 

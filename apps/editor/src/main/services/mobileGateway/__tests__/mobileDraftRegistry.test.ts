@@ -86,5 +86,36 @@ describe('MobileDraftRegistry', () => {
 
     expect(registry.get('1:s0')).toBeUndefined()
     expect(registry.get(`1:s${MAX_DRAFT_ENTRIES}`)).toBeDefined()
+    // The evicted key still counts as a mutation for a snapshot in flight.
+    expect(registry.version('1:s0')).toBe(2)
+  })
+
+  it('tracks mutations per key and ignores unchanged echoes', () => {
+    const registry = new MobileDraftRegistry()
+
+    expect(registry.version(KEY)).toBe(0)
+    registry.setFromRenderer(KEY, { text: 'a', images: [] })
+    expect(registry.version(KEY)).toBe(1)
+
+    registry.setFromRenderer(KEY, { text: 'a', images: [] })
+    registry.setFromPhone(KEY, { text: 'a', images: [] })
+    expect(registry.version(KEY)).toBe(1)
+
+    registry.setFromPhone('1:s2', { text: 'b', images: [] })
+    expect(registry.version(KEY)).toBe(1)
+
+    registry.delete(KEY)
+    expect(registry.version(KEY)).toBe(2)
+    registry.delete(KEY)
+    expect(registry.version(KEY)).toBe(2)
+  })
+
+  it('counts a phone write followed by a clear as two mutations', () => {
+    const registry = new MobileDraftRegistry()
+    registry.setFromPhone(KEY, { text: 'hello', images: [] })
+    registry.delete(KEY)
+
+    expect(registry.get(KEY)).toBeUndefined()
+    expect(registry.version(KEY)).toBe(2)
   })
 })

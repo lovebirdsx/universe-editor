@@ -25,6 +25,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type {
   IMobileBridgeService,
   MobileBridgeDeliveryContext,
+  MobileBridgeDraft,
   MobileBridgeEvent,
   MobileBridgeImage,
   MobileBridgeNewSessionResult,
@@ -83,7 +84,23 @@ class FakeBridge implements IMobileBridgeService {
   readonly getAutomationRunId = vi.fn(async (): Promise<string | undefined> => undefined)
   readonly ping = vi.fn(async () => 'pong' as const)
   readonly getWorkspaceGitDirty = vi.fn(async (): Promise<boolean | undefined> => undefined)
-  readonly applyDraft = vi.fn(async () => ({ ok: true as const, value: undefined }))
+  // Mirror the renderer cache: a phone draft applied to PromptInput is visible
+  // in the next getSnapshot, exactly as MobileBridgeService.applyDraft does.
+  readonly applyDraft = vi.fn(
+    async (localId: string, draft: MobileBridgeDraft): Promise<MobileBridgeResult<void>> => {
+      const current = this.snapshots.get(localId)
+      if (current !== undefined) {
+        const next = { ...current }
+        if (draft.text === '' && draft.images.length === 0 && (draft.files?.length ?? 0) === 0) {
+          delete next.draft
+        } else {
+          next.draft = draft
+        }
+        this.snapshots.set(localId, next)
+      }
+      return { ok: true, value: undefined }
+    },
+  )
   readonly noteDraftRevision = vi.fn(async () => {})
   readonly ackDraftRevision = vi.fn(async () => {})
   readonly getDraftImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
@@ -4206,6 +4223,85 @@ describe('MobileGatewayHub draft updates', () => {
         draft: { text: '', images: [] },
       }),
     )
+
+    const late = makeConnection()
+    hub.addConnection(late)
+    await hub.subscribeSession(late, { windowId: 1, localId: 's1', durableId: 'd1' })
+
+    expect(framesOf(late, 'session_snapshot')[0]?.session.draft).toBeUndefined()
+  })
+
+  it('replaces a stale registry draft with the renderer snapshot on subscribe', async () => {
+    const { hub, bridge, origin, peer } = await setup()
+    const image = {
+      id: 'img-1',
+      source: 'pc' as const,
+      mimeType: 'image/png',
+      byteSize: 3,
+      name: 'shot.png',
+    }
+    await hub.handleDraftUpdate(origin, draftFrame({ draft: { text: 'hello', images: [image] } }))
+
+    // No phone is connected: the PC deletes the picture, but the hub registry
+    // never sees the renderer draft event.
+    hub.removeConnection(origin)
+    hub.removeConnection(peer)
+    bridge.snapshots.set(
+      's1',
+      snapshot('s1', {
+        summary: summary('s1', { durableId: 'd1' }),
+        draft: { text: 'hello', images: [] },
+      }),
+    )
+
+    const late = makeConnection()
+    hub.addConnection(late)
+    await hub.subscribeSession(late, { windowId: 1, localId: 's1', durableId: 'd1' })
+
+    expect(framesOf(late, 'session_snapshot')[0]?.session.draft).toMatchObject({
+      text: 'hello',
+      images: [],
+      source: 'pc',
+    })
+  })
+
+  it('keeps a phone draft published while the subscriber snapshot is in flight', async () => {
+    const { hub, bridge, origin } = await setup()
+    bridge.getSnapshot.mockImplementationOnce(async () => {
+      await hub.handleDraftUpdate(
+        origin,
+        draftFrame({ clientUpdateId: 'u2', draft: { text: 'from phone', images: [] } }),
+      )
+      return snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) })
+    })
+
+    const late = makeConnection()
+    hub.addConnection(late)
+    await hub.subscribeSession(late, { windowId: 1, localId: 's1', durableId: 'd1' })
+
+    expect(framesOf(late, 'session_snapshot')[0]?.session.draft).toMatchObject({
+      text: 'from phone',
+      source: 'mobile',
+    })
+  })
+
+  it('does not resurrect a draft after an in-flight write followed by a clear', async () => {
+    const { hub, bridge, origin } = await setup()
+    const stale = snapshot('s1', {
+      summary: summary('s1', { durableId: 'd1' }),
+      draft: {
+        text: 'stale',
+        images: [{ id: 'img-1', source: 'mobile', mimeType: 'image/png', byteSize: 3 }],
+      },
+    })
+    bridge.getSnapshot.mockImplementationOnce(async () => {
+      await hub.handleDraftUpdate(origin, draftFrame({ clientUpdateId: 'u2' }))
+      await hub.handleDraftUpdate(
+        origin,
+        draftFrame({ clientUpdateId: 'u3', draft: { text: '', images: [] } }),
+      )
+      return stale
+    })
 
     const late = makeConnection()
     hub.addConnection(late)

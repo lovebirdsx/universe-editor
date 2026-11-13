@@ -94,6 +94,20 @@ function localDraftKey(
   ])
 }
 
+/**
+ * A confirmed attachment missing from the latest shared draft was deleted by
+ * another client; publishing it again would undo that deletion. No draft yet
+ * means there is no newer knowledge, so keep everything.
+ */
+function keepAttachmentsInDraft<T extends { readonly id: string }>(
+  refs: readonly T[],
+  present: ReadonlySet<string> | undefined,
+  confirmed: ReadonlySet<string>,
+): readonly T[] {
+  if (present === undefined) return refs
+  return refs.filter((ref) => !confirmed.has(ref.id) || present.has(ref.id))
+}
+
 export type ComposerAttachmentStatus = 'uploading' | 'uploaded' | 'failed'
 
 export interface ComposerAttachment {
@@ -245,6 +259,12 @@ export function Composer({
   const lastIncorporatedRevision = useRef(0)
   /** Local publishes in flight, by the id the gateway will echo back. */
   const pendingSends = useRef<Set<string>>(new Set())
+  /** Local attachments the gateway acknowledged; only these may be deleted remotely. */
+  const confirmedLocalIds = useRef<Set<string>>(new Set())
+  /** Local attachment ids carried by each publish, keyed by its clientUpdateId. */
+  const pendingPublishLocalIds = useRef<
+    Map<string, { readonly images: readonly string[]; readonly files: readonly string[] }>
+  >(new Map())
   /** Local field snapshot considered already published (see localDraftKey). */
   const lastPublishedKey = useRef(
     localDraftKey(initialDraft.text, [], [], EMPTY_ID_SET, EMPTY_ID_SET),
@@ -451,6 +471,7 @@ export function Composer({
   // inputs without depending on remote drafts (which would cancel a PC edit).
   const snapshotRef = useRef({
     value: initialDraft.text,
+    attachments: [] as readonly ComposerAttachment[],
     localImages: [] as readonly MobileDraftImageRef[],
     localFiles: [] as readonly MobileDraftFileRef[],
     remoteDraftImages: [] as readonly MobileDraftImageRef[],
@@ -463,6 +484,7 @@ export function Composer({
   useLayoutEffect(() => {
     snapshotRef.current = {
       value,
+      attachments,
       localImages,
       localFiles,
       remoteDraftImages,
@@ -481,13 +503,28 @@ export function Composer({
     const snapshot = snapshotRef.current
     if (!mounted.current || composing.current) return false
     if (!force && snapshot.key === lastPublishedKey.current) return false
+    const latest = draftRef.current
+    const localImages = keepAttachmentsInDraft(
+      snapshot.localImages,
+      latest === undefined ? undefined : new Set(latest.images.map((image) => image.id)),
+      confirmedLocalIds.current,
+    )
+    const localFiles = keepAttachmentsInDraft(
+      snapshot.localFiles,
+      latest === undefined ? undefined : new Set((latest.files ?? []).map((file) => file.id)),
+      confirmedLocalIds.current,
+    )
     const clientUpdateId = onDraftChangeRef.current(
       snapshot.value,
-      [...snapshot.remoteDraftImages, ...snapshot.localImages],
-      [...snapshot.remoteDraftFiles, ...snapshot.localFiles],
+      [...snapshot.remoteDraftImages, ...localImages],
+      [...snapshot.remoteDraftFiles, ...localFiles],
     )
     if (clientUpdateId === undefined) return false
     pendingSends.current.add(clientUpdateId)
+    pendingPublishLocalIds.current.set(clientUpdateId, {
+      images: localImages.map((image) => image.id),
+      files: localFiles.map((file) => file.id),
+    })
     lastPublishedKey.current = snapshot.key
     return true
   }, [])
@@ -539,15 +576,25 @@ export function Composer({
   }, [value, textareaRef])
 
   // A dropped connection loses the echo that would settle these ids; the
-  // resubscribed snapshot is the new baseline.
+  // resubscribed snapshot is the new baseline. Confirmed ids survive because
+  // the snapshot still drives their remote deletions.
   useEffect(() => {
-    if (!online) pendingSends.current.clear()
+    if (!online) {
+      pendingSends.current.clear()
+      pendingPublishLocalIds.current.clear()
+    }
   }, [online])
 
   // Our own update echoed by the gateway is an ack, never remote text.
   useEffect(() => {
     if (draftAck === undefined) return
     pendingSends.current.delete(draftAck.clientUpdateId)
+    const published = pendingPublishLocalIds.current.get(draftAck.clientUpdateId)
+    if (published !== undefined) {
+      pendingPublishLocalIds.current.delete(draftAck.clientUpdateId)
+      for (const id of published.images) confirmedLocalIds.current.add(id)
+      for (const id of published.files) confirmedLocalIds.current.add(id)
+    }
     lastIncorporatedRevision.current = Math.max(lastIncorporatedRevision.current, draftAck.revision)
     setSyncTick((tick) => tick + 1)
   }, [draftAck])
@@ -572,6 +619,63 @@ export function Composer({
     syncTick,
     applyRemoteDraft,
   ])
+
+  // Another client deleted an attachment this phone had already published.
+  // Converging here (rather than only in applyRemoteDraft) matters: the text
+  // admission above may stay blocked by an unpublished local edit, and a later
+  // local publish would otherwise resurrect the attachment.
+  useEffect(() => {
+    if (disabled || pendingSends.current.size > 0) return
+    const latest = draftRef.current
+    if (latest === undefined) return
+    const snapshot = snapshotRef.current
+    const latestImageIds = new Set(latest.images.map((image) => image.id))
+    const latestFileIds = new Set((latest.files ?? []).map((file) => file.id))
+    const removedImageIds = new Set<string>()
+    const removedFileIds = new Set<string>()
+    for (const attachment of snapshot.attachments) {
+      const id = attachment.id
+      if (id === undefined || attachment.status !== 'uploaded') continue
+      if (!confirmedLocalIds.current.has(id)) continue
+      if (attachment.kind === 'image' ? latestImageIds.has(id) : latestFileIds.has(id)) continue
+      if (attachment.kind === 'image') removedImageIds.add(id)
+      else removedFileIds.add(id)
+    }
+    if (removedImageIds.size === 0 && removedFileIds.size === 0) return
+    for (const attachment of snapshot.attachments) {
+      const id = attachment.id
+      if (id === undefined) continue
+      if (!removedImageIds.has(id) && !removedFileIds.has(id)) continue
+      if (attachment.previewUrl !== undefined) {
+        releasePreviewUrl(previewUrls.current, attachment.previewUrl)
+      }
+      confirmedLocalIds.current.delete(id)
+    }
+    const nextLocalImages = snapshot.localImages.filter((image) => !removedImageIds.has(image.id))
+    const nextLocalFiles = snapshot.localFiles.filter((file) => !removedFileIds.has(file.id))
+    const nextKey = localDraftKey(
+      snapshot.value,
+      nextLocalImages,
+      nextLocalFiles,
+      snapshot.removedImages,
+      snapshot.removedFiles,
+    )
+    // An unpublished local edit keeps its baseline so the debounce still fires.
+    if (snapshot.key === lastPublishedKey.current) lastPublishedKey.current = nextKey
+    snapshotRef.current = {
+      ...snapshot,
+      localImages: nextLocalImages,
+      localFiles: nextLocalFiles,
+      key: nextKey,
+    }
+    setAttachments((current) =>
+      current.filter(
+        (attachment) =>
+          attachment.id === undefined ||
+          (!removedImageIds.has(attachment.id) && !removedFileIds.has(attachment.id)),
+      ),
+    )
+  }, [attachments, draft, draftAck, disabled, syncTick])
 
   // Publish local edits after a short pause. Only local fields participate:
   // caret moves and remote attachment mirrors never schedule a publish.
@@ -932,6 +1036,8 @@ export function Composer({
       setRemovedDraftImages(new Set())
       setRemovedDraftFiles(new Set())
       pendingSends.current.clear()
+      confirmedLocalIds.current.clear()
+      pendingPublishLocalIds.current.clear()
       lastPublishedKey.current = localDraftKey('', [], [], EMPTY_ID_SET, EMPTY_ID_SET)
       clearDraft(sessionKey)
     } catch (error) {
@@ -1080,6 +1186,15 @@ export function Composer({
     const removed = attachments.find((attachment) => attachment.key === key)
     if (removed?.previewUrl !== undefined) {
       releasePreviewUrl(previewUrls.current, removed.previewUrl)
+    }
+    const removedId = removed?.id
+    if (removed !== undefined && removedId !== undefined) {
+      confirmedLocalIds.current.delete(removedId)
+      if (removed.kind === 'image') {
+        setRemovedDraftImages((current) => new Set(current).add(removedId))
+      } else {
+        setRemovedDraftFiles((current) => new Set(current).add(removedId))
+      }
     }
     interacted.current = true
     setAttachments((current) => current.filter((attachment) => attachment.key !== key))

@@ -29,20 +29,26 @@ export const MAX_DRAFT_ENTRIES = 32
 
 export class MobileDraftRegistry {
   private readonly _entries = new Map<string, MobileDraftState>()
+  private readonly _versions = new Map<string, number>()
   private _revision = 0
 
   get(key: string): MobileDraftState | undefined {
     return this._entries.get(key)
   }
 
+  /** Per-key mutation counter: detects writes racing an in-flight snapshot. */
+  version(key: string): number {
+    return this._versions.get(key) ?? 0
+  }
+
   delete(key: string): void {
-    this._entries.delete(key)
+    if (this._entries.delete(key)) this._touch(key)
   }
 
   deleteWindow(windowId: number): void {
     const prefix = `${windowId}:`
     for (const key of this._entries.keys()) {
-      if (key.startsWith(prefix)) this._entries.delete(key)
+      if (key.startsWith(prefix) && this._entries.delete(key)) this._touch(key)
     }
   }
 
@@ -55,6 +61,7 @@ export class MobileDraftRegistry {
       // to subscribers, who must not treat the clear as a phone edit.
       const empty = this._stateFor({ text: '', images: [] }, 'pc', previous)
       this._entries.delete(key)
+      this._touch(key)
       return { state: empty, changed: true }
     }
     const previous = this._entries.get(key)
@@ -65,6 +72,7 @@ export class MobileDraftRegistry {
     // Re-insert so Map iteration order stays least-recently-used first.
     this._entries.delete(key)
     this._entries.set(key, next)
+    this._touch(key)
     this._evictOldest(key)
     return { state: next, changed: true }
   }
@@ -91,15 +99,20 @@ export class MobileDraftRegistry {
     const next = this._stateFor(source, 'mobile', previous)
     this._entries.delete(key)
     this._entries.set(key, next)
+    this._touch(key)
     this._evictOldest(key)
     return { state: next, changed: true }
+  }
+
+  private _touch(key: string): void {
+    this._versions.set(key, (this._versions.get(key) ?? 0) + 1)
   }
 
   private _evictOldest(keep: string): void {
     if (this._entries.size <= MAX_DRAFT_ENTRIES) return
     for (const key of this._entries.keys()) {
       if (key === keep) continue
-      this._entries.delete(key)
+      if (this._entries.delete(key)) this._touch(key)
       if (this._entries.size <= MAX_DRAFT_ENTRIES) return
     }
   }

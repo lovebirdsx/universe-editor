@@ -844,6 +844,7 @@ export class MobileGatewayHub {
       return
     }
     if (subscription.cancelled || state.sessions.get(key) !== subscription) return
+    const draftVersion = this._drafts.version(key)
     let snapshot: Awaited<ReturnType<IMobileBridgeService['getSnapshot']>>
     try {
       snapshot = await callWithToken(
@@ -870,12 +871,11 @@ export class MobileGatewayHub {
     }
     subscription.ref = summary.ref
     subscription.seq += 1
-    // The renderer snapshot is the freshest PC state; the registry may also
-    // hold a phone-authored update that has not reached the cache yet.
-    // Seed from the renderer only when this session has no registry entry; a
-    // phone update that landed while the snapshot was in flight must win.
-    if (snapshot.draft !== undefined && this._drafts.get(key) === undefined) {
-      this._drafts.setFromRenderer(key, snapshot.draft)
+    // The renderer snapshot is the freshest PC state. A phone-authored update
+    // that mutated this key while the snapshot was in flight must win instead.
+    if (this._drafts.version(key) === draftVersion) {
+      const seeded = this._drafts.setFromRenderer(key, snapshot.draft)
+      if (seeded.state !== undefined && isDraftEmpty(seeded.state)) this._drafts.delete(key)
     }
     const { draft: _snapshotDraft, ...snapshotRest } = snapshot
     const draft = this._drafts.get(key)
