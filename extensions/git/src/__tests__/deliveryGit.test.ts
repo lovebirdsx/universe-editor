@@ -483,6 +483,74 @@ describe('delivery pipeline', () => {
     await releaseDeliveryLock({ commonDir, token })
   })
 
+  it('reports a landed push as unverified when the verification fetch keeps failing', async () => {
+    const fixture = await createFixture()
+    const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: true })
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) return
+    const { commonDir, mainWorktree, targetBranch, remote } = inspected.repository
+    const lock = await acquireDeliveryLock({ commonDir, token })
+    expect(lock.ok && lock.acquired).toBe(true)
+
+    const began = await beginDelivery({
+      commonDir,
+      deliveryId: 'flaky-network-delivery',
+      token,
+      mainWorktree,
+      sourceCwd: fixture.feature,
+      targetBranch,
+      expectedMainHead: inspected.repository.mainHead,
+      expectedUpstreamHead: inspected.repository.upstreamHead,
+      expectedSourceHead: inspected.source.head,
+      remote,
+      upstreamRef: inspected.repository.upstreamRef,
+    })
+    expect(began.ok).toBe(true)
+    if (!began.ok) return
+
+    await new Promise((resolve) => setTimeout(resolve, 1100))
+
+    const picked = await preparePickDelivery({
+      commonDir,
+      deliveryId: 'flaky-network-delivery',
+      token,
+      mainWorktree,
+      sourceWorktree: fixture.feature,
+      baseSha: inspected.baseSha,
+      sourceHead: inspected.source.head,
+      commits: inspected.commits.map((commit) => commit.sha),
+    })
+    expect(picked.ok).toBe(true)
+    if (!picked.ok) return
+
+    // Break fetch only (upload-pack); push uses receive-pack and still lands.
+    await git(
+      ['config', 'remote.origin.uploadpack', join(fixture.root, 'missing-upload-pack')],
+      mainWorktree,
+    )
+
+    const promoted = await promoteAndPushDelivery({
+      commonDir,
+      deliveryId: 'flaky-network-delivery',
+      token,
+      mainWorktree,
+      targetBranch,
+      baseSha: inspected.baseSha,
+      tempWorktree: picked.tempWorktree,
+      tempHead: picked.tempHead,
+      remote,
+      upstreamRef: inspected.repository.upstreamRef,
+    })
+
+    expect(promoted.ok).toBe(false)
+    if (promoted.ok) return
+    expect(promoted.error.code).toBe('push_unverified')
+    expect((await git(['rev-parse', 'refs/heads/main'], fixture.remote)).trim()).toBe(
+      picked.tempHead,
+    )
+    await releaseDeliveryLock({ commonDir, token })
+  })
+
   it('refuses to begin when the main worktree switched branches', async () => {
     const fixture = await createFixture()
     const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: true })

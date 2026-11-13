@@ -3,6 +3,7 @@ import type {
   MobileDeliverySummary,
   MobileSessionSummary,
 } from '@universe-editor/mobile-protocol'
+import { strings } from '../strings.js'
 
 /** Phases that mean the PC is still working; prompts / new sessions wait. */
 export const ACTIVE_DELIVERY_PHASES: ReadonlySet<MobileDeliveryPhase> = new Set([
@@ -32,6 +33,20 @@ export type DeliveryTone = 'active' | 'action' | 'ok' | 'warning' | 'danger'
 
 export function isActiveDeliveryPhase(phase: MobileDeliveryPhase): boolean {
   return ACTIVE_DELIVERY_PHASES.has(phase)
+}
+
+/**
+ * A push whose verification fetch failed after the push landed is still a
+ * failure state on the PC, but the phone should say it needs confirmation
+ * rather than claiming the commits never reached the remote.
+ */
+export function deliveryPhaseText(
+  delivery: Pick<MobileDeliverySummary, 'phase' | 'error'>,
+): string {
+  if (delivery.phase === 'failed' && delivery.error?.code === 'push_unverified') {
+    return strings.deliveryPhaseUnverified
+  }
+  return strings.deliveryPhaseLabel(delivery.phase)
 }
 
 export function deliveryTone(phase: MobileDeliveryPhase): DeliveryTone {

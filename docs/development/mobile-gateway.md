@@ -670,8 +670,10 @@ worktree**，供「重试」再次推送。同实例用 `_pushInFlight` 防止�
 5. `awaiting_push`：全部提交就绪，main 仍停在交付前。手机详情页显示 commit 列表与「确认推送」。
    **只有用户确认**才 `promoteAndPush`：写前再次校验 main 仍在该目标分支、HEAD 仍为 `baseSha`、
    干净、`baseSha` 是 `tempHead` 祖先 → `reset --hard tempHead` → `git push`（绝不 `--force`）。
-   push 返回成功还不够：随后 fetch 并解析远端引用，必须等于 `tempHead`，否则按 `push_failed`
-   处理（main 已前移时不自动回滚，留给重试 / 撤销判断）。push 失败且 main 仍安全时恢复 `baseSha`。
+   push 返回成功还不够：随后 fetch 并解析远端引用，必须等于 `tempHead`。验证 fetch 用较短超时
+   重试三次以吸收网络抖动；仍失败则记为 `push_unverified`（推送多半已落地，main 已前移时不自动
+   回滚），手机提示用户「重试」确认，而不是报成 `push_failed`。push 本身失败且 main 仍安全时
+   恢复 `baseSha`。
    手机确认后弹层立即关闭，阶段转 `pushing`，后续 push 与 `syncing` 都在 renderer 后台执行；失败
    保留临时 worktree，用户可在详情里「重试」。
 6. `syncing`：源 worktree 仅在 HEAD == `expectedSourceHead`、干净、无进行中时重置到新 main；

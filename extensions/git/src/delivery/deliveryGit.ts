@@ -64,6 +64,9 @@ const DEFAULT_TEMP_DIR = '.universe-editor-delivery-worktrees'
 export const NETWORK_TIMEOUT_MS = 120_000
 export const LOCAL_TIMEOUT_MS = 60_000
 const SUBMODULE_TIMEOUT_MS = 300_000
+const VERIFY_FETCH_ATTEMPTS = 3
+const VERIFY_FETCH_RETRY_DELAY_MS = 750
+const VERIFY_FETCH_TIMEOUT_MS = 30_000
 
 /** Never let git open an editor, prompt for credentials, or wait for a password. */
 const NON_INTERACTIVE_ENV: Readonly<Record<string, string>> = {
@@ -334,6 +337,33 @@ export const fetchRemote = (
   runDeliveryGit(['fetch', remote, '--prune'], mainWorktree, log, {
     timeoutMs: NETWORK_TIMEOUT_MS,
   })
+
+const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+/**
+ * Fetch again after a successful push until the remote branch can be read.
+ * A flaky connection must not turn a landed push into a reported failure;
+ * callers treat a still-unreadable remote as unverified rather than failed.
+ * Verification uses a shorter timeout than a preparation fetch so a hung
+ * connection cannot stretch the post-push wait into minutes.
+ */
+const fetchRemoteForVerification = async (
+  mainWorktree: string,
+  remote: string,
+  log?: Log,
+): Promise<GitExecResult> => {
+  const fetchOnce = (): Promise<GitExecResult> =>
+    runDeliveryGit(['fetch', remote, '--prune'], mainWorktree, log, {
+      timeoutMs: VERIFY_FETCH_TIMEOUT_MS,
+    })
+  let result = await fetchOnce()
+  for (let attempt = 1; attempt < VERIFY_FETCH_ATTEMPTS && result.exitCode !== 0; attempt++) {
+    log?.(`[git] verification fetch failed (exit ${result.exitCode}); retrying`)
+    await wait(VERIFY_FETCH_RETRY_DELAY_MS * attempt)
+    result = await fetchOnce()
+  }
+  return result
+}
 
 const updateSubmodulesAt = async (path: string, log?: Log): Promise<GitExecResult | undefined> => {
   if (!(await hasSubmodules(path))) return undefined
@@ -1136,9 +1166,13 @@ export async function promoteAndPushDelivery(
 
   // Do not trust the push exit code alone: another process can move the target
   // branch back, and a refspec push reports success when it is already up to date.
-  const verified = await fetchRemote(input.mainWorktree, input.remote, log)
+  const verified = await fetchRemoteForVerification(input.mainWorktree, input.remote, log)
   if (verified.exitCode !== 0) {
-    return fail('push_failed', 'Could not verify the pushed commits.', gitErrorText(verified))
+    return fail(
+      'push_unverified',
+      'The commits were pushed, but the remote branch could not be verified. Retry to confirm the push.',
+      gitErrorText(verified),
+    )
   }
   const pushedHead = await resolveRef(input.mainWorktree, input.upstreamRef, log)
   if (pushedHead !== input.tempHead) {

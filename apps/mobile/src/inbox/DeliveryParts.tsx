@@ -39,7 +39,9 @@ export function DeliveryErrorList({
       <ul className="delivery-errors" data-testid="delivery-errors">
         {errors.map((error) => (
           <li key={`${error.code}:${error.message}`} className="delivery-error">
-            <span className="delivery-error__message">{error.message}</span>
+            <span className="delivery-error__message">
+              {error.code === 'push_unverified' ? strings.deliveryPushUnverified : error.message}
+            </span>
             {error.detail !== undefined && error.detail !== '' && (
               <pre className="delivery-error__detail">{error.detail}</pre>
             )}

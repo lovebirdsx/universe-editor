@@ -7,7 +7,7 @@ import { commandErrorText, strings } from '../strings.js'
 import { errorCode } from '../errors.js'
 import type { MobileClient } from '../state/mobileClient.js'
 import { localRefKey } from '../state/refs.js'
-import { deliveryTone } from './deliveryStatus.js'
+import { deliveryPhaseText, deliveryTone } from './deliveryStatus.js'
 import { DeliveryCommitList, DeliveryErrorList, DeliveryWorktreeResults } from './DeliveryParts.js'
 
 type DetailView = 'detail' | 'confirm-push' | 'confirm-undo'
@@ -226,7 +226,7 @@ export function DeliveryDetailSheet({
                 className={`delivery-badge delivery-badge--${deliveryTone(summary.phase)}`}
                 data-testid="delivery-detail-phase"
               >
-                {strings.deliveryPhaseLabel(summary.phase)}
+                {deliveryPhaseText(summary)}
               </span>
               <p className="delivery-note">
                 {strings.deliverySummaryCommits(summary.commitCount)}

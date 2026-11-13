@@ -827,6 +827,30 @@ describe('SessionDeliveryService background push', () => {
     expect(service.getSummaryForSession('s1')?.canRetry).toBe(true)
   })
 
+  it('keeps push_unverified distinct so the retry can confirm the landed push', async () => {
+    const git = makeGit({
+      promoteAndPush: vi.fn(async () => ({
+        ok: false as const,
+        error: {
+          code: 'push_unverified' as const,
+          message: 'The commits were pushed, but the remote branch could not be verified.',
+        },
+      })),
+    })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    const accepted = await service.confirmPushInBackground(deliveryId)
+    expect(accepted.ok).toBe(true)
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('failed')
+    })
+    expect(service.getSummaryForSession('s1')?.error?.code).toBe('push_unverified')
+    expect(service.getSummaryForSession('s1')?.canRetry).toBe(true)
+    expect(service.getRecord(deliveryId)?.tempWorktree).toBe('/repo/.delivery/wt')
+  })
+
   it('fails safely and keeps the temp worktree when the push throws', async () => {
     const git = makeGit({
       promoteAndPush: vi.fn(async () => {

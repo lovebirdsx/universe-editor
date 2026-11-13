@@ -1,7 +1,7 @@
 import type { KeyboardEvent } from 'react'
 import type { MobileDeliverySummary } from '@universe-editor/mobile-protocol'
 import { strings } from '../strings.js'
-import { deliveryTone } from './deliveryStatus.js'
+import { deliveryPhaseText, deliveryTone } from './deliveryStatus.js'
 
 export interface SessionDeliveryControlsProps {
   readonly delivery?: MobileDeliverySummary | undefined
@@ -56,14 +56,14 @@ export function SessionDeliveryControls({
           tabIndex={0}
           className={`delivery-badge delivery-badge--${deliveryTone(delivery.phase)}`}
           data-testid="inbox-delivery-badge"
-          aria-label={`${strings.deliveryAction}：${strings.deliveryPhaseLabel(delivery.phase)}`}
+          aria-label={`${strings.deliveryAction}：${deliveryPhaseText(delivery)}`}
           onClick={(event) => {
             event.stopPropagation()
             onOpenDelivery()
           }}
           onKeyDown={(event) => activate(event, onOpenDelivery)}
         >
-          {strings.deliveryPhaseLabel(delivery.phase)}
+          {deliveryPhaseText(delivery)}
         </span>
       )}
       {canStart && (

@@ -446,6 +446,9 @@ export const strings = {
   deliveryDetailTitle: '交付详情',
   deliveryOpenSession: '进入会话',
   deliveryErrorLabel: '错误',
+  deliveryPushUnverified:
+    '推送已完成，但暂时无法连接远端确认。请点「重试」完成验证与 worktree 同步。',
+  deliveryPhaseUnverified: '推送待确认',
   deliveryConflictLabel: (count: number): string => `冲突文件（${count}）`,
   deliveryWorktreesLabel: 'worktree 同步',
   pushBranchAction: '推送分支',

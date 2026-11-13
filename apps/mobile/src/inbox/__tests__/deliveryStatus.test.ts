@@ -1,7 +1,9 @@
 import type { MobileDeliverySummary, MobileSessionSummary } from '@universe-editor/mobile-protocol'
 import { describe, expect, it } from 'vitest'
 import { sessionSummary } from '../../test/protocolFixtures.js'
+import { strings } from '../../strings.js'
 import {
+  deliveryPhaseText,
   deliveryTone,
   isActiveDeliveryPhase,
   selectDeliveryEntries,
@@ -87,5 +89,24 @@ describe('deliveryStatus', () => {
     expect(deliveryTone('failed')).toBe('danger')
     expect(deliveryTone('synced')).toBe('ok')
     expect(deliveryTone('preflighting')).toBe('active')
+  })
+
+  it('labels an unverified push as pending confirmation instead of failed', () => {
+    expect(
+      deliveryPhaseText(
+        delivery({
+          phase: 'failed',
+          error: { code: 'push_unverified', message: 'remote could not be verified' },
+        }),
+      ),
+    ).toBe(strings.deliveryPhaseUnverified)
+    expect(deliveryPhaseText(delivery({ phase: 'failed' }))).toBe(
+      strings.deliveryPhaseLabel('failed'),
+    )
+    expect(
+      deliveryPhaseText(
+        delivery({ phase: 'synced', error: { code: 'push_unverified', message: 'stale' } }),
+      ),
+    ).toBe(strings.deliveryPhaseLabel('synced'))
   })
 })

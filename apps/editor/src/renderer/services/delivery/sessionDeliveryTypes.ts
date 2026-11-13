@@ -57,6 +57,7 @@ export type SessionDeliveryErrorCode =
   | 'conflict'
   | 'temp_worktree_failed'
   | 'push_failed'
+  | 'push_unverified'
   | 'remote_moved'
   | 'remote_diverged'
   | 'unsupported'
