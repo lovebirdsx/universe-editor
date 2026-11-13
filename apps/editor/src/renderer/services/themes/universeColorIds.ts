@@ -971,6 +971,9 @@ export const UNIVERSE_COLOR_DEFINITIONS: readonly UniverseColorDefinition[] = [
     'color-send-icon-ring',
   ),
 
+  // ---------------------------------------------------------------- Charts
+  d('charts.purple', '#b180d7', '#652d90', 'The purple color used in chart visualizations.'),
+
   // ---------------------------------------------------------------- Feedback
   d(
     'errorForeground',
