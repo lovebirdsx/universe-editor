@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { win32 } from 'node:path'
 import {
+  findAppEntryPath,
   hasAgentSessionsFlag,
   hasBackgroundFlag,
   hasQuitFlag,
@@ -80,6 +81,69 @@ describe('parseFileToOpen', () => {
   it('slices argv[1+] when packaged', () => {
     // Packaged: argv[0] is the exe; a bare positional at argv[1] is the file.
     expect(parseFileToOpen(['app.exe', '/project'], true)).toBe('/project')
+  })
+})
+
+describe('parseFileToOpen (Electron switches before the main entry)', () => {
+  // Regression: Playwright's `_electron.launch` injects
+  // `--inspect=0 --remote-debugging-port=0` ahead of the main entry, so a fixed
+  // `slice(2)` landed on `out/main/index.js` and opened it as the workspace,
+  // dropping the real positional target.
+  it('skips injected switches and the main entry (Playwright dev argv)', () => {
+    const argv = [
+      'C:\\repo\\node_modules\\electron\\dist\\electron.exe',
+      '--inspect=0',
+      '--remote-debugging-port=0',
+      'C:\\repo\\apps\\editor\\out\\main\\index.js',
+      '--user-data-dir=C:\\temp\\ue-e2e',
+      'X:\\workspace',
+    ]
+    expect(parseFileToOpen(argv, false, 'win32')).toBe('X:\\workspace')
+  })
+
+  it('returns no target when the injected argv carries none', () => {
+    const argv = [
+      'electron',
+      '--inspect=0',
+      '--remote-debugging-port=0',
+      '/repo/apps/editor/out/main/index.js',
+      '--user-data-dir=/tmp/ue-e2e',
+    ]
+    expect(parseFileToOpen(argv, false)).toBeUndefined()
+  })
+
+  it('skips value-less node switches such as --inspect-brk', () => {
+    expect(parseFileToOpen(['electron', '--inspect-brk', 'main.js', '/project'], false)).toBe(
+      '/project',
+    )
+  })
+
+  it('keeps the normal dev shape (entry at argv[1])', () => {
+    expect(parseFileToOpen(['electron', 'main.js', '/project'], false)).toBe('/project')
+    expect(parseFileToOpen(['electron', 'main.js'], false)).toBeUndefined()
+  })
+})
+
+describe('findAppEntryPath', () => {
+  it('finds the entry after injected switches', () => {
+    expect(
+      findAppEntryPath([
+        'electron',
+        '--inspect=0',
+        '--remote-debugging-port=0',
+        '/repo/apps/editor/out/main/index.js',
+        '--user-data-dir=/tmp/ue-e2e',
+      ]),
+    ).toBe('/repo/apps/editor/out/main/index.js')
+  })
+
+  it('finds a plain dev entry at argv[1]', () => {
+    expect(findAppEntryPath(['electron', 'main.js', '/project'])).toBe('main.js')
+  })
+
+  it('returns undefined when no entry token is present', () => {
+    expect(findAppEntryPath(['electron'])).toBeUndefined()
+    expect(findAppEntryPath(['electron', '--inspect=0'])).toBeUndefined()
   })
 })
 

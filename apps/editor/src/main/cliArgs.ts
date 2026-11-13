@@ -79,6 +79,37 @@ function repairWindowsArgvToken(token: string, platform: NodeJS.Platform): strin
 }
 
 /**
+ * Index of the app's main script in default-app (dev) mode. Electron/Node/
+ * Chromium switches — including ones injected by tooling such as Playwright's
+ * `--inspect=0 --remote-debugging-port=0` — precede it, so it is the first
+ * non-switch token after argv[0]; user args follow it.
+ */
+function appEntryIndex(argv: readonly string[]): number {
+  for (let i = 1; i < argv.length; i++) {
+    const a = argv[i]!
+    if (a.length > 0 && !a.startsWith('-')) return i
+  }
+  return -1
+}
+
+/** The main-script path in default-app (dev) mode; undefined when absent. */
+export function findAppEntryPath(argv: readonly string[]): string | undefined {
+  const index = appEntryIndex(argv)
+  return index === -1 ? undefined : argv[index]
+}
+
+/**
+ * Index of the first user argument. Packaged: argv[0] is the executable, so
+ * user args start at argv[1]. Dev: args start after the main script (see
+ * appEntryIndex) — a fixed slice(2) breaks as soon as switches precede it.
+ */
+function userArgsStart(argv: readonly string[], isPackaged: boolean): number {
+  if (isPackaged) return 1
+  const index = appEntryIndex(argv)
+  return index === -1 ? argv.length : index + 1
+}
+
+/**
  * Extract the first positional argument (a file or directory to open at startup).
  * Windows file associations pass the path as a plain argv entry; a drive/UNC
  * root arrives mangled by Explorer's quoted `%V` template and is repaired.
@@ -89,14 +120,14 @@ function repairWindowsArgvToken(token: string, platform: NodeJS.Platform): strin
  * next token only when it does not itself start with `-`.
  *
  * Packaged: argv[0]=exe, argv[1+]=user args.
- * Dev:      argv[0]=electron, argv[1]=main script, argv[2+]=user args.
+ * Dev:      argv[0]=electron, [switches…], entry script, user args.
  */
 export function parseFileToOpen(
   argv: readonly string[],
   isPackaged: boolean,
   platform: NodeJS.Platform = process.platform,
 ): string | undefined {
-  const args = argv.slice(isPackaged ? 1 : 2)
+  const args = argv.slice(userArgsStart(argv, isPackaged))
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!
     if (a.startsWith('-')) {

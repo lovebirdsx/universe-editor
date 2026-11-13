@@ -41,6 +41,7 @@ import {
   markRendererFramesUnreachable,
 } from './ipc/electronProtocol.js'
 import {
+  findAppEntryPath,
   hasAgentSessionsFlag,
   hasBackgroundFlag,
   hasQuitFlag,
@@ -278,10 +279,12 @@ installCrashReporter()
 // not fight over the OS-wide association).
 if (!environmentService.isE2E) {
   if (process.platform === 'win32' && !app.isPackaged) {
-    // Dev: argv[0]=electron, argv[1]=main script. Register electron.exe with the
-    // script path so `electron main.js universe-editor://…` round-trips.
+    // Dev: the main script is the first non-switch argv token, not necessarily
+    // argv[1] (debuggers and Playwright inject switches ahead of it). Register
+    // electron.exe with the script path so `electron main.js universe-editor://…`
+    // round-trips.
     app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL, process.execPath, [
-      resolve(process.argv[1] ?? ''),
+      resolve(findAppEntryPath(process.argv) ?? process.argv[1] ?? ''),
     ])
   } else {
     app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL)
