@@ -847,7 +847,8 @@ describe('mobile gateway server integration', () => {
       alwaysNotify: true,
     })
     expect(stored?.push?.keys).toEqual({ p256dh: 'p256dh-key', auth: 'auth-key' })
-    expect(changes.length).toBeGreaterThan(0)
+    // The state-change callback fires after the store write, so it can lag the poll above.
+    await expect.poll(() => changes.length).toBeGreaterThan(0)
 
     const audit = await gateway.audit.recent(50)
     const subscribe = audit.find((entry) => entry.action === 'push_subscribe')
