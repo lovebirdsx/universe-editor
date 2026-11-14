@@ -50,6 +50,9 @@
  *                                          the synthetic "Saved Explore result" card
  *                                          backed by a real markdown file in tmp
  *    - report-mcp-servers / report-cwd   → echoes session/new params
+ *    - write-run-report                  → writes result.json + report.md into the
+ *                                          prompt's「运行目录：」path (trigger E2E on
+ *                                          local and remote hosts)
  *    - report-reply-image                → emits one ACP image block as the reply
  *    - report-markdown-image             → emits a data-URI markdown image
  *    - elicit-form                       → sends elicitation/create (form mode),
@@ -488,6 +491,44 @@ async function runPrompt(id, params) {
         toolCallId: execId,
         status: 'completed',
         content: [{ type: 'content', content: { type: 'text', text: out } }],
+      },
+    })
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
+  // Test directive: "write-run-report" exercises the trigger output contract —
+  // parse the rendered prompt's run directory (on the agent's own host) and
+  // write the same result.json + report.md a real agent would produce.
+  if (userText.includes('write-run-report')) {
+    const runDirMatch = /运行目录[：:][ \t]*([^\r\n]+)/.exec(userText)
+    let text
+    if (!runDirMatch) {
+      text = 'write-run-report: no run directory in prompt'
+    } else {
+      const runDir = runDirMatch[1].trim()
+      mkdirSync(runDir, { recursive: true })
+      writeFileSync(
+        join(runDir, 'result.json'),
+        JSON.stringify(
+          {
+            verdict: 'info',
+            summary: 'E2E trigger run',
+            reportPath: 'report.md',
+            actions: [],
+          },
+          null,
+          2,
+        ),
+      )
+      writeFileSync(join(runDir, 'report.md'), '# E2E trigger run report\n\nRemote trigger body.\n')
+      text = 'write-run-report: ' + runDir
+    }
+    notify('session/update', {
+      sessionId,
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text },
       },
     })
     activeTurns.delete(sessionId)

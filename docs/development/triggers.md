@@ -570,6 +570,7 @@ E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regress
 - `setTriggerPaused(triggerKey, paused)` → 从主进程暂停 / 恢复单个触发器（与列表 QuickPick 同一入口），用于验证暂停门控
 - `confirmTriggerActivation(triggerKey)` → 走与命令相同的激活确认
 - `getTriggersRunsDir()` → `<userData>/triggers/runs` 的绝对路径（报告断言用）
+- `readTriggerRunReport(runId, authority?)` → 经 `ITriggerMainService.readRunReport` 读报告正文与 runDir URI（远程用例断言远端报告链路）
 - `getAcpAutomationRows()` → 带 `automation` 溯源（含 `workspaceName`）与 `firstPrompt` 的历史行
 
 测试通过 `workspaceSeeder` 固定工作区、`installAcpEchoAgent` 安装假 Agent，不依赖真实计时器、外部 Swarm 或轮询命令。新增场景按 `apps/editor/CLAUDE.md` 套路 F 扩探针（先改 `packages/e2e-contract`，再实现 `probe.ts`）。

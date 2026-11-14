@@ -918,6 +918,8 @@ export interface E2ETriggerAutomationRow {
   readonly title: string
   readonly agentId: string
   readonly cwd?: string
+  /** Remote host the session (and its run directory) lives on; undefined = local. */
+  readonly authority?: string
   readonly automation: {
     readonly triggerId: string
     readonly triggerName: string
@@ -931,6 +933,17 @@ export interface E2ETriggerAutomationRow {
   /** The session's recorded first prompt, including the rendered data fence. */
   readonly firstPrompt?: string
 }
+
+/** Result of reading one trigger run's report.md (mirrors the main-process shape). */
+export type E2ETriggerRunReport =
+  | {
+      readonly kind: 'ok'
+      readonly text: string
+      /** Run directory URI string (`file:` or `remote-ssh:`). */
+      readonly runDir: string
+      readonly modifiedAt: number
+    }
+  | { readonly kind: 'not-found' | 'too-large' | 'unavailable' }
 
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
@@ -1493,6 +1506,11 @@ export interface E2EProbe {
   getTriggersRunsDir(): Promise<string>
   /** Durable history rows started by an agent trigger, with their automation provenance. */
   getAcpAutomationRows(): readonly E2ETriggerAutomationRow[]
+  /**
+   * Read one run's report.md through the trigger service. `authority` addresses
+   * a remote host; the report body is read on that host, never from a local path.
+   */
+  readTriggerRunReport(runId: string, authority?: string): Promise<E2ETriggerRunReport>
   // -- Output probe --------------------------------------------------------
   /** Name of the currently active output channel, or undefined if none. */
   getActiveOutputChannelName(): string | undefined

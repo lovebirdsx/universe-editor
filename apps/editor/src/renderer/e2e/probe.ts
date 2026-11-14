@@ -143,6 +143,7 @@ import {
   type E2ETimelineItem,
   type E2ETreeItem,
   type E2ETriggerAutomationRow,
+  type E2ETriggerRunReport,
   type E2EWorkingTreeHint,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
@@ -1334,6 +1335,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     confirmTriggerActivation: (triggerKey) =>
       services.triggerMainService.confirmActivation(triggerKey),
     getTriggersRunsDir: () => services.triggerMainService.getRunsDir(),
+    readTriggerRunReport: (runId, authority): Promise<E2ETriggerRunReport> =>
+      services.triggerMainService.readRunReport(runId, authority),
     getAcpAutomationRows: (): E2ETriggerAutomationRow[] => {
       const rows: E2ETriggerAutomationRow[] = []
       for (const entry of services.acpSessionHistoryService.list()) {
@@ -1344,6 +1347,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           title: entry.title,
           agentId: entry.agentId,
           ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
+          ...(entry.authority !== undefined ? { authority: entry.authority } : {}),
           automation: {
             triggerId: automation.triggerId,
             triggerName: automation.triggerName,
