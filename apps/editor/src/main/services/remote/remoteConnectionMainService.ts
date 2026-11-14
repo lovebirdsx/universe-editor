@@ -8,10 +8,17 @@
  *
  *  Reconnects are transparent to the channel layer: on a socket drop the protocol
  *  re-attaches to a fresh socket and replays the unacknowledged queue, so the fs /
- *  search / watcher services never see a close. A permanent rejection
- *  (unknownReconnectionToken / invalidToken after a daemon restart) gives up,
- *  fires the connection's onDidClose (driving the existing service-level rebuild
- *  paths) and moves to `failed`; the next getConnection starts a fresh bring-up.
+ *  search / watcher services never see a close. A dropped socket is not always a
+ *  transient network blip though — the daemon may have been restarted (new pid,
+ *  new ephemeral port, new connection token), which no cached endpoint can reach.
+ *  After a short run of failed reconnects (or immediately when the handshake says
+ *  the reconnection token is unknown) the state machine re-runs the transport's
+ *  discovery (`check`/server.json for ssh and wsl), compares the daemon
+ *  generation and, when it changed, fires the old connection's onDidClose (driving
+ *  the service-level rebuild paths) and walks a fresh bring-up with a new
+ *  reconnection token. A daemon that only lost the network keeps the old
+ *  reconnection token and the transparent path. `userDisconnected` is never
+ *  overridden; exhausted recovery attempts land in `failed` for a user Retry.
  *--------------------------------------------------------------------------------------------*/
 
 import { StringDecoder } from 'node:string_decoder'
@@ -65,6 +72,7 @@ import {
   validateAuthority,
   waitForPort,
   type IRemoteServerOrchestrator,
+  type RemoteCheckResult,
   type RemoteSpawner,
 } from './remoteDeploy.js'
 import { WslDeployer } from './wslDeploy.js'
@@ -148,6 +156,14 @@ const HANDSHAKE_TIMEOUT_MS = 10_000
 const DIRECT_INFO_TIMEOUT_MS = 10_000
 const WSL_RELAY_TIMEOUT_MS = 10_000
 const RECONNECT_BACKOFF_MS = [250, 500, 1000, 2000, 2000] as const
+/** Failed reconnects before asking the remote host whether the daemon was replaced. */
+const RECONNECT_DAEMON_PROBE_AFTER_FAILURES = 3
+/** Probe on elapsed time too: several 10s handshake timeouts can look like few attempts. */
+const RECONNECT_DAEMON_PROBE_AFTER_MS = 15_000
+/** Re-probe cadence once a probe reported the same daemon (or could not tell). */
+const RECONNECT_DAEMON_PROBE_INTERVAL_MS = 30_000
+/** Fresh-connection recoveries allowed per outage before giving up. */
+const MAX_DAEMON_GENERATION_RECOVERIES = 2
 
 const PERMANENT_RECONNECT_CODES: ReadonlySet<string> = new Set([
   RemoteConnectionErrorCode.InvalidToken,
@@ -242,13 +258,21 @@ interface ConnectionEntry {
   /** Subscriptions on `directProcess` (stderr/exit) — disposed with it. */
   directSubs: DisposableStore | null
   daemonPort: number
+  /** Identity of the daemon behind {@link daemonPort}; a restart changes all three. */
+  daemonPid: number
   daemonToken: string
   reconnectionToken: string
   transport: RemoteTransport
   reconnectTimer: NodeJS.Timeout | null
   reconnectSocket: ISocket | null
+  /** Consecutive failed reconnect attempts in the current outage. */
   reconnectAttempt: number
+  /** When the current outage began (grace-time accounting + probe timing). */
   reconnectionStart: number
+  /** Earliest time of the next daemon-generation probe (rate-limits discovery). */
+  nextDaemonProbeAt: number
+  /** Fresh-connection recoveries performed in the current outage. */
+  daemonGenerationRecoveries: number
   closedByUser: boolean
   userDisconnected: boolean
   proxies: Map<string, ProxyRecord>
@@ -602,6 +626,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._fireState(entry, 'deploying')
     const info = await this._ensureDaemon(entry, this._deployer, entry.authority)
     entry.daemonPort = info.port
+    entry.daemonPid = info.pid
     entry.daemonToken = info.token
     this._fireState(entry, 'forwarding')
     await this._ensureForward(entry)
@@ -614,6 +639,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._fireState(entry, 'deploying')
     const info = await this._ensureDaemon(entry, this._getWslDeployer(), distro)
     entry.daemonPort = info.port
+    entry.daemonPid = info.pid
     entry.daemonToken = info.token
     // No forward: the WSL daemon's 127.0.0.1 port is directly reachable from
     // Windows (WSL1 shares the stack, WSL2 forwards localhost). But WSL2 builds
@@ -660,6 +686,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     entry.directSubs = directSubs
     const info = await this._waitForDirectInfo(entry, proc)
     entry.daemonPort = info.port
+    entry.daemonPid = info.pid
     entry.daemonToken = info.token
     this._fireState(entry, 'handshaking')
     return this._connectFresh(entry, info.port)
@@ -960,6 +987,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._fireState(entry, 'reconnecting')
     entry.reconnectAttempt = 0
     entry.reconnectionStart = Date.now()
+    entry.nextDaemonProbeAt = 0
+    entry.daemonGenerationRecoveries = 0
     this._scheduleReconnect(entry)
   }
 
@@ -975,7 +1004,6 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         this._giveUp(entry, 'reconnection grace time exceeded')
         return
       }
-      entry.reconnectAttempt++
       void this._attemptReconnect(entry)
     }, backoff)
     entry.reconnectTimer.unref?.()
@@ -986,10 +1014,10 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       if (entry.transport === 'ssh') {
         await this._ensureForward(entry)
       }
-      if (entry.closedByUser || this._disposed) return
+      if (entry.closedByUser || this._disposed || entry.userDisconnected) return
       const localPort = entry.transport === 'ssh' ? entry.forward!.localPort : entry.daemonPort
       const socket = await connectNodeSocket(localPort, '127.0.0.1')
-      if (entry.closedByUser || this._disposed) {
+      if (entry.closedByUser || this._disposed || entry.userDisconnected) {
         socket.dispose()
         return
       }
@@ -1002,7 +1030,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         socket.dispose()
         throw err
       }
-      if (entry.closedByUser || this._disposed) {
+      if (entry.closedByUser || this._disposed || entry.userDisconnected) {
         entry.reconnectSocket = null
         socket.dispose()
         return
@@ -1019,15 +1047,154 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       this._logger.info(`remote '${entry.authority}' reconnected`)
     } catch (err) {
       entry.reconnectSocket = null
-      if (this._isPermanentHandshakeError(err)) {
-        this._giveUp(entry, err instanceof Error ? err.message : String(err))
+      await this._handleReconnectFailure(entry, err)
+    }
+  }
+
+  /**
+   * A failed reconnect means different things depending on what the remote host
+   * says. A token rejection is definitive (only another daemon process answers
+   * that way), while a refused socket or a closed handshake is ambiguous — it is
+   * either transient network loss or a daemon that now listens somewhere else.
+   * For the ambiguous case we re-run transport discovery after a short run of
+   * failures and compare the advertised daemon identity: same daemon → keep the
+   * transparent path (old reconnection token, replay queue); different → rebuild.
+   */
+  private async _handleReconnectFailure(entry: ConnectionEntry, err: unknown): Promise<void> {
+    if (entry.closedByUser || this._disposed || entry.userDisconnected) return
+    const message = err instanceof Error ? err.message : String(err)
+    entry.reconnectAttempt++
+    if (this._isPermanentHandshakeError(err)) {
+      if (entry.transport === 'direct') {
+        // Direct mode owns its daemon process: a token rejection means that
+        // process is not the one we spawned (or it already died), and spawning a
+        // second one against the same data dir cannot help. Keep the historical
+        // give-up semantics; the user can Retry.
+        this._giveUp(entry, message)
         return
       }
-      this._logger.info(
-        `remote '${entry.authority}' reconnect attempt ${entry.reconnectAttempt} failed: ${err instanceof Error ? err.message : String(err)}`,
+      this._recoverDaemonGeneration(
+        entry,
+        `the daemon rejected the reconnection token (${message})`,
       )
-      this._scheduleReconnect(entry)
+      return
     }
+    if (entry.transport !== 'direct' && this._shouldProbeDaemon(entry)) {
+      entry.nextDaemonProbeAt = Date.now() + RECONNECT_DAEMON_PROBE_INTERVAL_MS
+      const generation = await this._probeDaemonGeneration(entry)
+      if (entry.closedByUser || this._disposed || entry.userDisconnected) return
+      if (entry.state !== 'reconnecting') return
+      if (generation === 'replaced') {
+        this._recoverDaemonGeneration(entry, `the remote daemon was replaced (${message})`)
+        return
+      }
+    }
+    this._logger.info(
+      `remote '${entry.authority}' reconnect attempt ${entry.reconnectAttempt} failed: ${message}`,
+    )
+    this._scheduleReconnect(entry)
+  }
+
+  private _shouldProbeDaemon(entry: ConnectionEntry): boolean {
+    if (entry.state !== 'reconnecting') return false
+    if (Date.now() < entry.nextDaemonProbeAt) return false
+    return (
+      entry.reconnectAttempt >= RECONNECT_DAEMON_PROBE_AFTER_FAILURES ||
+      Date.now() - entry.reconnectionStart >= RECONNECT_DAEMON_PROBE_AFTER_MS
+    )
+  }
+
+  /**
+   * Ask the transport's discovery endpoint whether the daemon we cached is still
+   * the one running. `error` is deliberately not treated as "replaced": ssh
+   * unreachable / wsl wedged is exactly the transient case the transparent
+   * reconnect loop exists for.
+   */
+  private async _probeDaemonGeneration(
+    entry: ConnectionEntry,
+  ): Promise<'same' | 'replaced' | 'unknown'> {
+    const orchestrator = entry.transport === 'wsl' ? this._getWslDeployer() : this._deployer
+    const target =
+      entry.transport === 'wsl' ? wslDistroFromAuthority(entry.authority) : entry.authority
+    let check: RemoteCheckResult
+    try {
+      check = await orchestrator.checkRemoteServer(target)
+    } catch (err) {
+      this._logger.info(
+        `[remote:${entry.authority}] daemon probe failed (${
+          err instanceof Error ? err.message : String(err)
+        }); keeping the transparent reconnect`,
+      )
+      return 'unknown'
+    }
+    if (check.state === 'running') {
+      const sameDaemon =
+        check.info.port === entry.daemonPort &&
+        check.info.token === entry.daemonToken &&
+        check.info.pid === entry.daemonPid
+      this._logger.info(
+        sameDaemon
+          ? `[remote:${entry.authority}] daemon probe: the cached daemon (pid ${check.info.pid}, port ${check.info.port}) is still the one advertised; keeping the transparent reconnect`
+          : `[remote:${entry.authority}] daemon probe: a new daemon generation owns the data dir (pid ${entry.daemonPid}→${check.info.pid}, port ${entry.daemonPort}→${check.info.port})`,
+      )
+      return sameDaemon ? 'same' : 'replaced'
+    }
+    if (check.state === 'error') {
+      this._logger.info(
+        `[remote:${entry.authority}] daemon probe failed (${check.message}); keeping the transparent reconnect`,
+      )
+      return 'unknown'
+    }
+    this._logger.info(
+      `[remote:${entry.authority}] daemon probe reports '${check.state}'; a fresh bring-up is required`,
+    )
+    return 'replaced'
+  }
+
+  /**
+   * The daemon we were attached to is gone for good. Fire the old connection's
+   * close (fs stream reads reject, watcher transports respawn and replay their
+   * subscriptions, terminals get a synthetic exit), drop the stale protocol and
+   * walk a full bring-up: rediscovery picks the new endpoint and
+   * `_startBringUp` mints a new reconnection token.
+   */
+  private _recoverDaemonGeneration(entry: ConnectionEntry, reason: string): void {
+    if (entry.closedByUser || this._disposed) return
+    if (entry.userDisconnected) {
+      // The user stopped the connection while a reconnect was in flight; never
+      // resurrect it behind their back.
+      this._logger.info(
+        `[remote:${entry.authority}] daemon replacement detected (${reason}) but the connection was closed by the user; not recovering`,
+      )
+      return
+    }
+    if (entry.state !== 'reconnecting') {
+      // A user Retry (or another path) already started a bring-up while the probe
+      // was in flight; it owns the entry now.
+      this._logger.info(
+        `[remote:${entry.authority}] daemon replacement detected (${reason}) but the connection already left 'reconnecting' (state '${entry.state}'); not recovering again`,
+      )
+      return
+    }
+    if (entry.daemonGenerationRecoveries >= MAX_DAEMON_GENERATION_RECOVERIES) {
+      this._giveUp(
+        entry,
+        `the daemon appears to have been replaced (${reason}) and ${MAX_DAEMON_GENERATION_RECOVERIES} fresh-connection attempts failed`,
+      )
+      return
+    }
+    entry.daemonGenerationRecoveries++
+    this._logger.info(
+      `[remote:${entry.authority}] re-establishing a fresh connection (attempt ${entry.daemonGenerationRecoveries}/${MAX_DAEMON_GENERATION_RECOVERIES}): ${reason}`,
+    )
+    // Consumers (fs streams, watcher transports, terminals, ext-host tunnels) hold
+    // the OLD connection object, so the close must fire before the teardown that
+    // disposes it.
+    entry.connection?.fireClose()
+    this._teardownConnection(entry)
+    void this._startBringUp(entry).catch(() => {
+      // _bringUp already reported the failure through onDidChangeState('failed').
+    })
   }
 
   private _isPermanentHandshakeError(err: unknown): boolean {
@@ -1215,6 +1382,7 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         directProcess: null,
         directSubs: null,
         daemonPort: 0,
+        daemonPid: 0,
         daemonToken: '',
         reconnectionToken: '',
         transport: this._transportFor(authority),
@@ -1222,6 +1390,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
         reconnectSocket: null,
         reconnectAttempt: 0,
         reconnectionStart: 0,
+        nextDaemonProbeAt: 0,
+        daemonGenerationRecoveries: 0,
         closedByUser: false,
         userDisconnected: false,
         proxies: new Map(),

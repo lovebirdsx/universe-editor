@@ -112,6 +112,32 @@ win32 整体 toLowerCase），但**所有拿它做字符串前缀匹配的对侧
 - `packages/node-services` 的 `package.json` 需要 `"sideEffects": false` 才能摇掉未用的 native import——这是
   install 独立 entry 能成立的前提。
 
+**daemon 换代后的自愈（重启 / 升级 / 崩溃）**：`bootstrap.js start` 不带 `--port` 时 daemon 监听**新的临时端口**
+并生成**新的连接 token**，server.json 随之更新；旧连接缓存里的 `port` / `token` / `reconnectionToken` 全部作废，
+继续拨旧端口只会一直 `ECONNREFUSED` 到 3h 的 `ReconnectionGraceTime`。状态机（`remoteConnectionMainService.ts`
+的 `_handleReconnectFailure` / `_probeDaemonGeneration` / `_recoverDaemonGeneration`）因此分两级判定：
+
+1. **判定换代**：握手返回 `invalidToken` / `unknownReconnectionToken` / `versionMismatch` /
+   `duplicateReconnectionToken` 属于**确定性信号**——只有另一个 daemon 进程会这样回答，立即走恢复；而连接被拒 /
+   握手期间 socket 关闭是**歧义信号**（既可能是网络抖动，也可能是 daemon 换了端口），连续失败 3 次或宕机超过 15s
+   才做一次发现探测（探测有 30s 冷却，避免每次重试都跑一次 ssh/wsl 命令）。
+2. **探测与恢复**：探测走该 transport 自己的发现链路（ssh / wsl 都是 `check` 读远端 server.json），比较
+   `pid` / `port` / `token`。**同一 daemon** → 继续透明重连（保留旧 reconnectionToken 与 replay 队列，短暂抖动不被
+   误判）；**换代或 daemon 不在** → fire 旧 connection 的 `onDidClose` → 丢弃旧 protocol / forward → 走完整
+   bring-up（发现 → 需要时 `start`，与首次连接同一套逻辑 → 新 reconnectionToken 全新建连）。状态经
+   `reconnecting → connected`，`getServiceProxy` 的 Relay 在新 connection 上重绑，消费者拿到的代理对象不变。
+   `check` 报 `error`（ssh 不可达 / wsl 卡死）**不算**换代，继续透明重连——那正是长退避存在的场景。
+
+红线与已知不完美：
+
+- **`userDisconnected` 绝不恢复**（用户点了 Stop / Close 后，即使探测到换代也不重建）。
+- **direct 模式不适用**：daemon 由编辑器自己 spawn（`UNIVERSE_REMOTE_SERVER_CMD`），子进程退出即 `failed`
+  （用户 Retry），也不会为了恢复再 spawn 第二个 daemon（同一 data-dir 的 `daemon.lock` 会撞车）。
+- 旧连接上的有状态服务随旧 daemon 一起消失：fs 流拒绝、下次调用按新连接重建；远端 watcher 以 `onExit` 通知上层
+  重放订阅；终端收到合成 `onExit`（显示进程结束，不自动重开）；ACP 远端终端 id 失效（调用报错）；远端
+  extension host 的隧道被新 daemon 拒绝后 `onDidClose`，渲染端按「正常退出」（code null）处理，**不会自动重启**
+  （要等用户重启扩展宿主）——这是当前已知的不完美点，语义上应向 VSCode 的「server 重启后扩展宿主需重建」看齐。
+
 ## 4. Windows 远端主机
 
 **平台探测状态机**（`remoteDeploy.ts` 的 `_ensurePlatform`，per-authority 缓存）：先跑 `uname -sm`

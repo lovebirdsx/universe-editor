@@ -79,6 +79,11 @@ class FakeDaemon {
   hangReconnection = false
   acceptedCount = 0
   closedCount = 0
+  /** Reject the next N accepted sockets, as a network blip or a dead listener would. */
+  rejectConnects = 0
+  rejectedCount = 0
+  /** Every decoded control frame, in arrival order. */
+  readonly requests: IRemoteConnectionRequest[] = []
   /** Increments per fresh (non-reconnection) connection — distinguishes old vs new connections. */
   connectionGeneration = 0
   /** Set once the current connection's proxy event emitter gains its first listener. */
@@ -93,6 +98,12 @@ class FakeDaemon {
   }
 
   private async _accept(raw: NetSocket): Promise<void> {
+    if (this.rejectConnects > 0) {
+      this.rejectConnects--
+      this.rejectedCount++
+      raw.destroy()
+      return
+    }
     const socket = new NodeSocket(raw)
     this.sockets.push(socket)
     this.acceptedCount++
@@ -102,6 +113,7 @@ class FakeDaemon {
     try {
       const { data, residual } = await readFirstControlFrame(socket, 10_000)
       const req = decodeControlJson<IRemoteConnectionRequest>(data)
+      this.requests.push(req)
       const response = this.handshakeResponse?.(req) ?? { type: 'ok' }
       if (this.hangReconnection && req.isReconnection) {
         // Keep the socket open and never write the response — the client's
@@ -119,6 +131,10 @@ class FakeDaemon {
         }
         return
       }
+      // A fresh connection replaces whatever the previous generation left
+      // behind; dispose it so its keep-alive timer cannot outlive the test.
+      this.channelServer?.dispose()
+      this.protocol?.dispose()
       this.acceptedToken = req.reconnectionToken
       this.protocol = new PersistentProtocol({ socket, initialChunk: residual })
       this.channelServer = new ChannelServer(this.protocol, true, binaryCodec)
@@ -196,6 +212,9 @@ class FakeProc extends EventEmitter {
   }
   emitStdout(data: string): void {
     this.stdout.emit('data', Buffer.from(data, 'utf8'))
+  }
+  emitExit(code: number | null, signal: NodeJS.Signals | null = null): void {
+    this.emit('exit', code, signal)
   }
 }
 
@@ -442,6 +461,30 @@ describe('RemoteConnectionMainService direct mode', () => {
     })
     await expect(made.svc.getConnection('host')).resolves.toBeTruthy()
   })
+
+  it('gives up when the direct daemon process exits, and a retry spawns a new one', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    const conn = await made.svc.getConnection('host')
+    let closed = false
+    conn.onDidClose(() => {
+      closed = true
+    })
+
+    // Direct mode owns the daemon process; its exit is the documented terminal
+    // state (no auto-respawn, unlike a replaced remote daemon over ssh/wsl).
+    made.procs[0]!.emitExit(1)
+    await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('failed'), { timeout: 5000 })
+    expect(made.states.at(-1)?.error).toContain('direct daemon exited')
+    expect(closed).toBe(true)
+
+    made.svc.retryConnection('host')
+    await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('connected'), {
+      timeout: 5000,
+    })
+    expect(made.procs).toHaveLength(2)
+  })
 })
 
 interface FakeWsl {
@@ -449,18 +492,21 @@ interface FakeWsl {
   calls: string[]
 }
 
-function makeFakeWslDeployer(
-  daemon: FakeDaemon,
-  opts: {
-    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
-    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
-    localBundleHash?: string
-    deployedBundleHash?: string
-    provisionError?: string
-    runningProtocolVersion?: number
-    startError?: string
-  } = {},
-): FakeWsl {
+interface FakeDeployerOptions {
+  firstCheck?: 'running' | 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
+  secondCheck?: 'running' | 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
+  /** Reported for every check after the scripted ones are used up (default: running). */
+  fallbackCheck?: 'running' | 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
+  /** Dynamic daemon identity — lets a test swap in a restarted daemon generation. */
+  generation?: () => { port?: number; token?: string; pid?: number }
+  localBundleHash?: string
+  deployedBundleHash?: string
+  provisionError?: string
+  runningProtocolVersion?: number
+  startError?: string
+}
+
+function makeFakeWslDeployer(daemon: FakeDaemon, opts: FakeDeployerOptions = {}): FakeWsl {
   const calls: string[] = []
   const checks = [
     ...(opts.firstCheck !== undefined ? [opts.firstCheck] : []),
@@ -468,13 +514,16 @@ function makeFakeWslDeployer(
   ]
   let checkIndex = 0
   let startError = opts.startError
-  const info = (): unknown => ({
-    serverVersion: '0.0.0',
-    protocolVersion: opts.runningProtocolVersion ?? REMOTE_PROTOCOL_VERSION,
-    port: daemon.port,
-    token: daemon.token,
-    pid: 1,
-  })
+  const info = (): unknown => {
+    const generation = opts.generation?.() ?? {}
+    return {
+      serverVersion: '0.0.0',
+      protocolVersion: opts.runningProtocolVersion ?? REMOTE_PROTOCOL_VERSION,
+      port: generation.port ?? daemon.port,
+      token: generation.token ?? daemon.token,
+      pid: generation.pid ?? 1,
+    }
+  }
   const hashField = (): { deployedBundleHash?: string } =>
     opts.deployedBundleHash !== undefined ? { deployedBundleHash: opts.deployedBundleHash } : {}
   const deployer = {
@@ -482,7 +531,7 @@ function makeFakeWslDeployer(
     localBundleHash: () => opts.localBundleHash,
     checkRemoteServer: async (distro: string) => {
       calls.push(`check:${distro}`)
-      const next = checks[checkIndex]
+      const next = checkIndex < checks.length ? checks[checkIndex] : opts.fallbackCheck
       checkIndex++
       if (next === 'node-missing') return { state: 'node-missing' }
       if (next === 'not-deployed') return { state: 'not-deployed', reason: 'missing' }
@@ -527,18 +576,7 @@ interface MadeWsl {
   states: IRemoteConnectionStateChange[]
 }
 
-function makeWslService(
-  daemon: FakeDaemon,
-  opts: {
-    firstCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
-    secondCheck?: 'not-deployed' | 'not-running' | 'node-missing' | 'stale'
-    localBundleHash?: string
-    deployedBundleHash?: string
-    provisionError?: string
-    runningProtocolVersion?: number
-    startError?: string
-  } = {},
-): MadeWsl {
+function makeWslService(daemon: FakeDaemon, opts: FakeDeployerOptions = {}): MadeWsl {
   const { deployer, calls } = makeFakeWslDeployer(daemon, opts)
   const states: IRemoteConnectionStateChange[] = []
   const svc = new RemoteConnectionMainService(
@@ -1018,6 +1056,177 @@ describe('RemoteConnectionMainService wsl mode', () => {
       removeDirWithRetry(bundleDir)
     }
   })
+})
+
+describe('RemoteConnectionMainService daemon generation recovery', () => {
+  let made: MadeWsl | undefined
+
+  afterEach(() => {
+    made?.svc.dispose()
+    made = undefined
+  })
+
+  it('recovers to a restarted daemon on a new port and rebinds relay proxies', async () => {
+    const first = await startDaemon()
+    const restarted = await startDaemon()
+    const generation = { port: first.port, token: first.token, pid: 11 }
+    const wsl = (made = makeWslService(first, { generation: () => generation }))
+
+    const conn = await wsl.svc.getConnection('wsl+ubuntu')
+    const proxy = wsl.svc.getServiceProxy<{ ping(): Promise<string>; onEvent: Event<string> }>(
+      'wsl+ubuntu',
+      'proxy',
+    )
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+    let closed = false
+    conn.onDidClose(() => {
+      closed = true
+    })
+    const received: string[] = []
+    proxy.onEvent((e) => received.push(e))
+    await vi.waitFor(() => expect(first.proxyEventSubscribed).toBe(true), { timeout: 5000 })
+    first.fireProxyEvent('before')
+    await vi.waitFor(() => expect(received).toEqual(['before']), { timeout: 5000 })
+
+    // The daemon dies; `bootstrap.js start` brings up a new one on a fresh
+    // ephemeral port with a fresh token. server.json now advertises the new one.
+    await first.close()
+    generation.port = restarted.port
+    generation.token = restarted.token
+    generation.pid = 22
+
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('reconnecting'), {
+      timeout: 5000,
+    })
+
+    // Repeated connect failures trigger the discovery probe, which sees a new
+    // generation and walks a full bring-up instead of dialing the dead port.
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('connected'), {
+      timeout: 15_000,
+    })
+    expect(closed).toBe(true)
+
+    // Relay proxy calls route to the new connection (the restarted fake starts
+    // its own generation counter at 1).
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+
+    // Event relays were re-subscribed on the new connection.
+    await vi.waitFor(() => expect(restarted.proxyEventSubscribed).toBe(true), { timeout: 5000 })
+    restarted.fireProxyEvent('after')
+    await vi.waitFor(() => expect(received).toEqual(['before', 'after']), { timeout: 5000 })
+
+    expect(wsl.calls).toEqual(['check:ubuntu', 'check:ubuntu', 'check:ubuntu'])
+    expect(restarted.requests.filter((r) => !r.isReconnection)).toHaveLength(1)
+  }, 30_000)
+
+  it('recovers with a fresh reconnection token when the daemon no longer knows ours', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    const proxy = wsl.svc.getServiceProxy<{ ping(): Promise<string> }>('wsl+ubuntu', 'proxy')
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+
+    daemon.handshakeResponse = (req) =>
+      req.isReconnection
+        ? {
+            type: 'error',
+            code: RemoteConnectionErrorCode.UnknownReconnectionToken,
+            message: 'unknown reconnection token',
+          }
+        : { type: 'ok' }
+
+    wsl.svc.dropSocketForTesting('wsl+ubuntu')
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('connected'), { timeout: 10_000 })
+
+    await expect(proxy.ping()).resolves.toBe('pong-2')
+
+    // A token rejection is definitive evidence of another daemon process, so the
+    // fresh bring-up happens without waiting for the probe threshold. Exactly two
+    // discovery checks: the original bring-up and the recovery bring-up.
+    expect(wsl.calls).toEqual(['check:ubuntu', 'check:ubuntu'])
+
+    const freshTokens = daemon.requests
+      .filter((r) => !r.isReconnection)
+      .map((r) => r.reconnectionToken)
+    expect(freshTokens).toHaveLength(2)
+    expect(freshTokens[0]).not.toBe(freshTokens[1])
+    expect(
+      daemon.requests.some((r) => r.isReconnection && r.reconnectionToken === freshTokens[0]),
+    ).toBe(true)
+  }, 20_000)
+
+  it('never recovers after the user disconnected the connection', async () => {
+    const first = await startDaemon()
+    const restarted = await startDaemon()
+    const generation = { port: first.port, token: first.token, pid: 11 }
+    const wsl = (made = makeWslService(first, { generation: () => generation }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    await first.close()
+    generation.port = restarted.port
+    generation.token = restarted.token
+    generation.pid = 22
+
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('reconnecting'), {
+      timeout: 5000,
+    })
+
+    await wsl.svc.stopServer('wsl+ubuntu')
+    expect(wsl.states.at(-1)?.state).toBe('idle')
+    const callsAfterStop = wsl.calls.length
+
+    // No probe, no recovery bring-up, no connection state churn after the stop.
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    expect(wsl.states.at(-1)?.state).toBe('idle')
+    expect(wsl.calls).toHaveLength(callsAfterStop)
+    await expect(wsl.svc.getConnection('wsl+ubuntu')).rejects.toThrow(/disconnected by user/)
+  }, 20_000)
+
+  it('keeps the transparent reconnect (and its token) across a single refused attempt', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    const proxy = wsl.svc.getServiceProxy<{ ping(): Promise<string> }>('wsl+ubuntu', 'proxy')
+    await expect(proxy.ping()).resolves.toBe('pong-1')
+
+    // One dropped attempt is a blip, not a daemon restart: no discovery probe and
+    // the PersistentProtocol re-attaches with the original reconnection token.
+    daemon.rejectConnects = 1
+    const inFlight = proxy.ping()
+    wsl.svc.dropSocketForTesting('wsl+ubuntu')
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('connected'), { timeout: 10_000 })
+
+    await expect(inFlight).resolves.toBe('pong-1')
+    expect(daemon.rejectedCount).toBe(1)
+    expect(daemon.connectionGeneration).toBe(1)
+    expect(wsl.calls).toEqual(['check:ubuntu'])
+    const reconnections = daemon.requests.filter((r) => r.isReconnection)
+    expect(reconnections).toHaveLength(1)
+    expect(reconnections[0]!.reconnectionToken).toBe(daemon.requests[0]!.reconnectionToken)
+  }, 20_000)
+
+  it('lands in failed (user-retryable) when the daemon is gone and cannot be restarted', async () => {
+    const first = await startDaemon()
+    const generation = { port: first.port, token: first.token, pid: 11 }
+    const wsl = (made = makeWslService(first, {
+      firstCheck: 'running',
+      fallbackCheck: 'not-running',
+      startError: "failed to start WSL daemon in 'ubuntu': timed out waiting for server.json",
+      generation: () => generation,
+    }))
+
+    await wsl.svc.getConnection('wsl+ubuntu')
+    await first.close()
+
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('failed'), { timeout: 15_000 })
+    expect(wsl.states.at(-1)?.error).toContain('timed out waiting')
+    // initial check → probe → recovery check → start (which fails)
+    expect(wsl.calls).toEqual(['check:ubuntu', 'check:ubuntu', 'check:ubuntu', 'start:ubuntu'])
+    // It reports the failure once and stops; Retry is the user's move.
+    expect(wsl.states.filter((s) => s.state === 'failed')).toHaveLength(1)
+  }, 30_000)
 })
 
 describe('RemoteConnectionMainService getServiceProxy', () => {
