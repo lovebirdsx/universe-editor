@@ -141,7 +141,7 @@ node scripts/tracker/gate.mjs --install-hook
 
 - `scripts/sensitive-rules.json` 被 gitignore，不会随 clone 带过来；从可信的开发 checkout 复制一份。
   仅做链路冒烟时可临时 `cp scripts/sensitive-rules.example.json scripts/sensitive-rules.json`，示例规则不覆盖内部串。
-- `pnpm --filter @universe-editor/extension-packaging build`：`scripts/server` / `scripts/release`
+- `pnpm --filter "@universe-editor/extension-packaging..." build`（带 `...` 连同上游包一起构建）：`scripts/server` / `scripts/release`
   的 node:test 会 import 该包的 `dist/`，未构建时 `test:scripts` 报 500 / 模块找不到。
 
 `gate.mjs --install-hook` 已在 hooks 目录的 `pre-push` 若不是本脚本生成，会拒绝覆盖；
