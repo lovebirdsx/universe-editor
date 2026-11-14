@@ -25,7 +25,8 @@
 - [日志、状态与审计](#日志状态与审计)
 - [安全与隐私](#安全与隐私)
 - [与看门狗、空闲回收和历史上限的交互](#与看门狗空闲回收和历史上限的交互)
-- [示例：三个可直接改造的技能模板](#示例三个可直接改造的技能模板)
+- [示例：可直接改造的技能模板](#示例可直接改造的技能模板)
+- [示例：CI 失败自动修复](#示例ci-失败自动修复github-actions)
 - [常见问题](#常见问题)
 
 ## 它是怎么工作的
@@ -508,15 +509,16 @@ cron 的写法：
 - **历史上限**：自动化会话最多保留 30 条非置顶记录，不挤占手动会话；置顶不受限。
 - **退出确认**：运行中的自动化会话照常计入「有运行中会话」，退出时可能被中断并给出提示。
 
-## 示例：三个可直接改造的技能模板
+## 示例：可直接改造的技能模板
 
-仓库里附了三份 **skill 骨架**，帮你快速起步。它们只是骨架，业务细节需要你自己补：
+仓库里附了几份 **skill 骨架**，帮你快速起步。它们只是骨架，业务细节需要你自己补：
 
 | 模板 | 适合的源 | 默认判决倾向 |
 | --- | --- | --- |
 | [`trigger-templates/swarm-triage/SKILL.md`](./trigger-templates/swarm-triage/SKILL.md) | `swarm-review` | 简单明确才 `auto-approve`，否则 `escalate`。 |
 | [`trigger-templates/biweekly-report/SKILL.md`](./trigger-templates/biweekly-report/SKILL.md) | `schedule` / `manual` | 写回外部文档前必须 `escalate` 让你过目，不自动写。 |
 | [`trigger-templates/team-weekly-digest/SKILL.md`](./trigger-templates/team-weekly-digest/SKILL.md) | `schedule` | 仅 `info`，不产生动作。 |
+| [`trigger-templates/fix-ci-failure/SKILL.md`](./trigger-templates/fix-ci-failure/SKILL.md) | `poll` | flake 先 rerun，真回归本地修复；只 `info` / `escalate`。 |
 
 **使用前必须把对应目录复制到项目的 `.claude/skills/<name>/` 下**（例如 `X:/workspace/.claude/skills/swarm-triage/`）。这些文件放在用户文档目录里只是给你看的模板，Agent 不会自动加载它们。
 
@@ -568,6 +570,55 @@ cron 的写法：
 ```
 
 > 如果要让 `swarm-triage` 自动 approve，除了把 `swarm.approve` 加进 `allowedActions`，还必须执行 **触发器: 确认自动 approve…**；否则任何 approve 动作都会让整份判决降级为 `escalate`。
+
+## 示例：CI 失败自动修复
+
+这是一个**仓库级自动化配方**（不是编辑器内置功能）：轮询 GitHub Actions 上 main 分支 `ci.yml` 的失败，让 Agent 判断是偶发 flake 还是真回归，修复后直接 push `main`。完整部署说明（bot clone、`gh` 权限、push 闸门、本机确认步骤）见仓库开发文档 `docs/development/ci-automation.md`；这里的模板只是帮你理解配置结构。
+
+这条触发器随仓库提交在 `.universe-editor/triggers.json` 里，bot clone 拉下来即有，不需要手工创建：
+
+```jsonc
+{
+  "id": "ci-fix",
+  "name": "CI 失败自动修复",
+  "enabled": true,
+  "source": {
+    "type": "poll",
+    "intervalSec": 300,
+    "fetch": {
+      "type": "command",
+      "command": "node scripts/github/ci-failures.mjs",
+      "timeoutSec": 60
+    },
+    "keyField": "id"
+  },
+  "session": {
+    "agent": "claude-code",
+    "mode": "bypassPermissions",
+    "skill": "fix-ci-failure",
+    "prompt": "修复 CI run {{event.runId}}（attempt {{event.attempt}}，{{event.title}}）。",
+    "budget": { "maxCostUsd": null, "timeoutMin": 90, "approvalTimeoutMin": 1440 }
+  },
+  "concurrency": 1,
+  "overflow": "queue",
+  "allowedActions": []
+}
+```
+
+工作方式：
+
+- 取数脚本只输出 **main 上最新一条已完成 run 是失败** 的那一条；key 是 `<runId>:<attempt>`，rerun 后 attempt 变化会再次触发。
+- 仓库里同一份文件还有 `tracker-implement`。**每台机器只确认自己要跑的那条**：CI bot 只确认 `ci-fix`，普通开发者的工作区会看到两条「待确认」，不确认就不会运行。`enabled: true` 是安全的——未确认的触发器根本不调度；机器上临时停用请用 **触发器: 暂停触发器…**（本机状态，不动仓库）。
+- 运行前要在本机完成**两道**确认：**触发器: 确认工作区触发器…**，以及（因为 `mode: bypassPermissions`）**触发器: 确认高权限模式…**。配置的任何改动推送后，各机器都要重新确认。
+- 第一次成功取数只建基线：确认前已经存在的失败 run 不会被自动处理。**不要用「立即运行」代替真实事件**——poll 触发器的「立即运行」没有事件数据（没有 `runId`），skill 会直接 `escalate`。
+- 疑似 flake 且第一次失败时，skill 会先 `gh run rerun --failed`；第二次仍失败才做代码修复（e2e 偶发走 `fix-ci-e2e-flake` 的鲁棒化流程）。
+- bot 自己的修复提交正文带 `Refs: ci#<runId>`；如果这类提交之后 CI 还失败，skill 会直接升级给人，不再重试。
+- push 前有范围闸门：文件数、增删行、禁改路径（含 `.universe-editor/triggers.json`）、每日提交配额（`Refs: ci#` 独立计数，建议 ≤3 条/24h）。
+- 必须使用**独立的 bot clone**，不要和普通开发工作区或其它自动化共用。配置变更走人工提交，bot 不得修改它。
+
+模板骨架见 [`trigger-templates/fix-ci-failure/SKILL.md`](./trigger-templates/fix-ci-failure/SKILL.md)（随编辑器发布的仓库里，真实 skill 位于 `.claude/skills/fix-ci-failure/`）。
+
+> 风险提示：这条流程会在无人值守下修改代码并直接推送 `main`。请只在隔离 clone、受控账号与明确接受「自动 push」的仓库里启用；CI 日志与 run 标题是不可信输入，不要在其中放凭据。
 
 ## 常见问题
 

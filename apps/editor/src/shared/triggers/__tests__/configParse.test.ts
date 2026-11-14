@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { parse } from 'jsonc-parser'
 import { describe, expect, it } from 'vitest'
 import { parseTriggersConfig, TRIGGERS_CONFIG_EXAMPLE } from '../configParse.js'
@@ -312,6 +314,18 @@ describe('isElevatedModeId', () => {
     expect(isElevatedModeId('agent')).toBe(true)
     expect(isElevatedModeId('default')).toBe(false)
     expect(isElevatedModeId(undefined)).toBe(false)
+  })
+})
+
+describe('repository trigger definitions', () => {
+  it('parses the committed .universe-editor/triggers.json without invalid entries', () => {
+    const configPath = fileURLToPath(
+      new URL('../../../../../../.universe-editor/triggers.json', import.meta.url),
+    )
+    const parsed = parse(readFileSync(configPath, 'utf8'), [], { allowTrailingComma: true })
+    const config = parseOk(parsed as unknown)
+    expect(config.invalid).toEqual([])
+    expect(config.triggers.map((trigger) => trigger.id)).toEqual(['tracker-implement', 'ci-fix'])
   })
 })
 

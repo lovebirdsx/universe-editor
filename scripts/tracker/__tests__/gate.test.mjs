@@ -17,6 +17,8 @@ import {
   isForbiddenPath,
   parseArgs,
   parseNumstat,
+  resolveDailyLimit,
+  resolveRefsPrefix,
   resolveThresholds,
   runGate,
 } from '../gate.mjs'
@@ -73,10 +75,17 @@ test('isForbiddenPath: 覆盖所有禁改路径族', () => {
     'scripts/sensitive-rules.json',
     'CLAUDE.md',
     'apps/editor/CLAUDE.md',
+    '.universe-editor/triggers.json',
+    'apps/editor/.universe-editor/triggers.json',
   ]) {
     assert.equal(isForbiddenPath(path), true, path)
   }
-  for (const path of ['scripts/tool.mjs', 'apps/editor/src/main.ts', 'docs/development/x.md']) {
+  for (const path of [
+    'scripts/tool.mjs',
+    'apps/editor/src/main.ts',
+    'docs/development/x.md',
+    '.universe-editor/settings.json',
+  ]) {
     assert.equal(isForbiddenPath(path), false, path)
   }
 })
@@ -99,6 +108,18 @@ test('parseNumstat: 识别二进制改动', () => {
   ])
 })
 
+test('resolveRefsPrefix / resolveDailyLimit: 每个前缀独立硬上限，只能调低', () => {
+  assert.equal(resolveRefsPrefix(), 'tracker#')
+  assert.equal(resolveRefsPrefix('ci#'), 'ci#')
+  assert.throws(() => resolveRefsPrefix('other#'), /只支持 tracker# \/ ci#/)
+
+  assert.equal(resolveDailyLimit('tracker#'), 5)
+  assert.equal(resolveDailyLimit('ci#'), 3)
+  assert.equal(resolveDailyLimit('ci#', 1), 1)
+  assert.throws(() => resolveDailyLimit('ci#', 4), /不能超过 ci# 的硬上限 3/)
+  assert.throws(() => resolveDailyLimit('ci#', 0), /正整数/)
+})
+
 test('evaluateGate: 逐项给出违规', () => {
   const files = Array.from({ length: 9 }, (_, index) => ({
     path: `src/f${index}.ts`,
@@ -113,7 +134,7 @@ test('evaluateGate: 逐项给出违规', () => {
     mergeCommits: ['abc123'],
     files,
     pendingCommits: 2,
-    dailyTrackerCommits: 4,
+    dailyRefCommits: 4,
     thresholds: { maxFiles: 8, maxLines: 300 },
   })
 
@@ -127,13 +148,35 @@ test('evaluateGate: 逐项给出违规', () => {
   assert.match(joined, /每日上限 5/)
 })
 
+test('evaluateGate: ci# 前缀按 3 条/天独立计数', () => {
+  const result = evaluateGate({
+    mergeCommits: [],
+    files: [],
+    pendingCommits: 1,
+    dailyRefCommits: 3,
+    refsPrefix: 'ci#',
+    thresholds: { maxFiles: 8, maxLines: 300 },
+  })
+  assert.equal(result.ok, false)
+  assert.match(result.violations.join('\n'), /Refs: ci# 提交/)
+  assert.match(result.violations.join('\n'), /每日上限 3/)
+  assert.equal(result.stats.dailyLimit, 3)
+  assert.equal(result.stats.refsPrefix, 'ci#')
+})
+
 test('parseArgs: 基准、阈值与 hook 参数', () => {
   assert.deepEqual(parseArgs(['--base', 'main', '--max-files', '4', '--install-hook']), {
     base: 'main',
     maxFiles: 4,
     installHook: true,
   })
+  assert.deepEqual(parseArgs(['--refs-prefix', 'ci#', '--daily-limit', '2']), {
+    base: 'origin/main',
+    refsPrefix: 'ci#',
+    dailyLimit: 2,
+  })
   assert.throws(() => parseArgs(['--max-files', 'x']), /整数/)
+  assert.throws(() => parseArgs(['--refs-prefix']), /需要前缀/)
   assert.throws(() => parseArgs(['--unknown']), /未知参数/)
 })
 
@@ -202,9 +245,44 @@ test('集成: 每日配额统计 origin/main 最近 24h 的 Refs: tracker# 提�
   git(root, ['commit', '-m', 'feat: next\n\nRefs: tracker#99'])
 
   const result = runGate({ repoRoot: root })
-  assert.equal(result.stats.dailyTrackerCommits, 5)
+  assert.equal(result.stats.dailyRefCommits, 5)
   assert.equal(result.ok, false)
   assert.match(result.violations.join('\n'), /每日上限 5/)
+})
+
+test('集成: ci# 每日配额与 tracker# 独立计数', { skip: !HAS_GIT }, () => {
+  const root = makeRepo()
+  for (let index = 1; index <= 5; index++) {
+    writeFile(root, `base-${index}.txt`, 'x\n')
+    git(root, ['add', '-A'])
+    git(root, ['commit', '-m', `chore: tracker ${index}\n\nRefs: tracker#${index}`])
+  }
+  git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD'])
+
+  writeFile(root, 'scripts/tool.mjs', 'export const x = 1\n')
+  git(root, ['add', '-A'])
+  git(root, ['commit', '-m', 'fix(ci): first\n\nRefs: ci#100'])
+
+  const first = runGate({ repoRoot: root, refsPrefix: 'ci#' })
+  assert.equal(first.stats.dailyRefCommits, 0)
+  assert.equal(first.ok, true, first.violations.join('; '))
+
+  for (let index = 2; index <= 3; index++) {
+    writeFile(root, `scripts/tool-${index}.mjs`, 'export const y = 1\n')
+    git(root, ['add', '-A'])
+    git(root, ['commit', '-m', `fix(ci): ${index}\n\nRefs: ci#10${index}`])
+  }
+  git(root, ['update-ref', 'refs/remotes/origin/main', 'HEAD'])
+
+  writeFile(root, 'scripts/tool-4.mjs', 'export const z = 1\n')
+  git(root, ['add', '-A'])
+  git(root, ['commit', '-m', 'fix(ci): fourth\n\nRefs: ci#104'])
+
+  const result = runGate({ repoRoot: root, refsPrefix: 'ci#' })
+  assert.equal(result.stats.dailyRefCommits, 3)
+  assert.equal(result.ok, false)
+  assert.match(result.violations.join('\n'), /Refs: ci# 提交/)
+  assert.match(result.violations.join('\n'), /每日上限 3/)
 })
 
 test('集成: --install-hook 拒绝覆盖第三方 hook', { skip: !HAS_GIT }, () => {
@@ -218,4 +296,8 @@ test('集成: --install-hook 拒绝覆盖第三方 hook', { skip: !HAS_GIT }, ()
   rmSync(join(hooksDir, 'pre-push'))
   const hookPath = installHook({ repoRoot: root })
   assert.match(readFileSync(hookPath, 'utf8'), /UE_TRACKER_GATE/)
+  assert.match(readFileSync(hookPath, 'utf8'), /--refs-prefix 'tracker#'/)
+
+  const ciHookPath = installHook({ repoRoot: root, refsPrefix: 'ci#' })
+  assert.match(readFileSync(ciHookPath, 'utf8'), /--refs-prefix 'ci#'/)
 })

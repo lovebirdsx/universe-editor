@@ -24,5 +24,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** Stable SHA-256 of the canonical (key-order independent) trigger JSON. */
 export function triggerFingerprint(trigger: TriggerConfig): string {
-  return createHash('sha256').update(JSON.stringify(canonicalize(trigger))).digest('hex')
+  return createHash('sha256')
+    .update(JSON.stringify(canonicalize(trigger)))
+    .digest('hex')
 }

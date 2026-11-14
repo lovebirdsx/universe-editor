@@ -3,7 +3,11 @@
 把外部 tracker 上的需求变成受范围闸门约束的自动化实现。正式部署下，agent 通过
 **原生 HTTP MCP** 直连需求系统；`gate.mjs` 负责「这条需求能不能自动做」，skill 负责
 「怎么实现与推送」，仓库脚本只承担 **poll 取数** 和「无原生 MCP 系统的参考实现」。
-三者都不修改编辑器内核，全部是仓库脚本 + 用户级配置。
+三者都不修改编辑器内核：脚本与 skill 随仓库分发，触发器定义在仓库的
+`.universe-editor/triggers.json`，只有凭据与机器设置留在本机。
+
+> GitHub Actions 失败的自动修复是同族机制（poll + skill + gate + 专用 bot clone），
+> 见 [CI 失败自动修复](ci-automation.md)。两者共用 `gate.mjs`，但每日配额前缀与 clone 相互独立。
 
 ```
 poll: tracker-mcp list ──► Agent Trigger（poll 源，mcp 适配器）
@@ -24,7 +28,7 @@ poll: tracker-mcp list ──► Agent Trigger（poll 源，mcp 适配器）
 | `scripts/tracker/adapters/board.mjs`                    | board 型系统的 REST 映射，**没有原生 MCP 时的参考实现**。                            |
 | `scripts/tracker/contract.mjs`                          | 契约 v1 共享常量与校验（状态、错误码、幂等标记、游标）。                             |
 | `scripts/tracker/config.mjs`                            | 读取 `~/.config/universe-editor/tracker.json`（可用 `UE_TRACKER_CONFIG` 覆盖）。     |
-| `scripts/tracker/gate.mjs`                              | push 前范围检查与 `--install-hook`。                                                 |
+| `scripts/tracker/gate.mjs`                              | push 前范围检查与 `--install-hook`；`--refs-prefix` 支持按 `tracker#` / `ci#` 分别计配额。 |
 | `.claude/skills/implement-tracker-requirement/SKILL.md` | 自动处理流程（认领、分级、实现、gate、推送、回执）。                                 |
 
 所有脚本只用 node 内置模块，不引入 npm 依赖；日志只写 stderr。凭据只在进程内存里使用，
@@ -208,57 +212,55 @@ chmod 600 ~/.config/universe-editor/tracker.json
 - 只支持 stdio 的客户端可改用桥接：`node scripts/tracker/tracker-mcp.mjs serve`，配置
   `adapter: "mcp"` + read PAT（或直接给写 PAT），由它把 stdio 转成远程 HTTP MCP。
 
-### 5. 触发器
+### 5. 触发器（仓库内，已入库）
 
-在 bot 工作区里创建（或执行命令面板 **触发器: 打开配置**）`<workspace>/.universe-editor/triggers.json`，
-先保持 `enabled: false`。工作区由文件所在目录隐式确定，文件里不再有 `workspace` 字段：
+触发器定义随仓库提交在 `.universe-editor/triggers.json`（`tracker-implement` 与 `ci-fix` 两条），
+bot clone 拉下来即有，**不需要在工作区里手工创建**。本仓库里与 tracker 有关的是这一条：
 
 ```jsonc
 {
-  "version": 1,
-  "triggers": [
-    {
-      "id": "tracker-implement",
-      "name": "Tracker 需求自动处理",
-      "enabled": false,
-      "source": {
-        "type": "poll",
-        "intervalSec": 300,
-        "fetch": {
-          "type": "command",
-          "command": "node scripts/tracker/tracker-mcp.mjs list",
-          "timeoutSec": 60,
-        },
-        "keyField": "id",
-      },
-      "session": {
-        "agent": "claude-code",
-        "mode": "bypassPermissions",
-        "skill": "implement-tracker-requirement",
-        "prompt": "处理需求 {{event.id}}：{{event.title}}。先 claim；不可认领就结束。",
-        "mcpServers": ["tracker"],
-        "budget": { "maxCostUsd": null, "timeoutMin": 90, "approvalTimeoutMin": 1440 },
-      },
-      "concurrency": 1,
-      "overflow": "queue",
-      "allowedActions": [],
+  "id": "tracker-implement",
+  "name": "Tracker 需求自动处理",
+  "enabled": true,
+  "source": {
+    "type": "poll",
+    "intervalSec": 300,
+    "fetch": {
+      "type": "command",
+      "command": "node scripts/tracker/tracker-mcp.mjs list",
+      "timeoutSec": 60,
     },
-  ],
+    "keyField": "id",
+  },
+  "session": {
+    "agent": "claude-code",
+    "mode": "bypassPermissions",
+    "skill": "implement-tracker-requirement",
+    "prompt": "处理需求 {{event.id}}：{{event.title}}。先 claim；不可认领就结束。",
+    "mcpServers": ["tracker"],
+    "budget": { "maxCostUsd": null, "timeoutMin": 90, "approvalTimeoutMin": 1440 },
+  },
+  "concurrency": 1,
+  "overflow": "queue",
+  "allowedActions": [],
 }
 ```
 
 要点：
 
-- 配置文件在工作区内，可随 bot 工作区一起入库；打开过该工作区（或执行「触发器: 打开配置」）
-  后编辑器会把工作区登记到本机 `<userData>/triggers/workspaces.json`，窗口关闭也继续调度。
-- 全局并发上限不在工作区文件里：它是用户设置 `triggers.maxConcurrentRuns`（本机
-  `settings.json`，1–10，默认 2）。bot 机器上通常设成 1。
+- 同一份文件里还有 `ci-fix`。**每台机器只确认自己要跑的那条**：tracker bot 只确认
+  `tracker-implement`，CI bot 只确认 `ci-fix`；普通开发者的工作区会看到两条「待确认」，不确认就
+  不会运行。
+- 配置入库后 `enabled: true` 是安全的：未在本机确认的触发器根本不调度。机器上想临时停用请用
+  **触发器: 暂停触发器…**（写本机 `state.json`，不动仓库），不要改 `enabled`。
+- 全局并发上限不在工作区文件里：它是用户设置 `triggers.maxConcurrentRuns`（本机 `settings.json`，
+  1–10，默认 2）。bot 机器上通常设成 1。
 - `session.skill` 只写 skill 名；skill 必须放在 bot 工作区的
   `.claude/skills/implement-tracker-requirement/` 下，触发器会在 prompt 首行自动加
   `/implement-tracker-requirement`。
 - `mcpServers` 会把 `tracker` 固定（pin）到该会话，后续设置变化不影响已在跑的自动化。
-- 首次启用前必须在本机确认一次：命令面板 **触发器: 确认工作区触发器…**（或在触发器列表里
-  选「确认工作区触发器」）。`mode: bypassPermissions` 还额外属于高权限模式，必须再执行
+- 首次运行前必须在本机确认一次：命令面板 **触发器: 确认工作区触发器…**（或在触发器列表里选
+  「确认工作区触发器」）。`mode: bypassPermissions` 还额外属于高权限模式，必须再执行
   **触发器: 确认高权限模式…**；任何配置改动（包括 `enabled` 与 `name`）都会让这些确认失效。
 - 未确认的触发器显示「待确认」，不会调度、不会执行 poll 取数命令，也不能「立即运行」。
 - `poll` 第一次成功取数只建基线，不会把历史需求全部跑一遍；未确认前连取数命令都不会执行。
@@ -266,12 +268,28 @@ chmod 600 ~/.config/universe-editor/tracker.json
 - `maxCostUsd: null` 表示不限费用（不写则默认 1 美元，实现 + `pnpm check` 会被 `budget-exceeded` 中途取消）；时长仍由 `timeoutMin` 兜底。
 - 只支持本地文件夹工作区；远程工作区不登记、不调度。
 
+> **改配置 = 改仓库版本并提交**。在开发工作区编辑 `.universe-editor/triggers.json`，走正常提交 / 推送；
+> bot clone 下次 `reset --hard origin/main` 后生效。机器人自己不得修改它——`scripts/tracker/gate.mjs`
+> 已把 `**/.universe-editor/triggers.json` 列为禁改路径，自动改会 push 失败。
+
+> **每台机器仍需各自确认**。配置是仓库内容，可能被任何人改动；每条触发器都要在机器上执行
+> **触发器: 确认工作区触发器…**，高权限模式再加 **触发器: 确认高权限模式…**。配置任何改动推送后
+> 各机器都要重新确认，未确认前不调度——这正好是配置变更的天然人工复核点。
+
 ### 6. 先观察再放开
 
-保持 `enabled: false`，用 **触发器: 立即运行触发器…** 手动跑一轮，检查 Sessions、审计日志
-与运行报告（`report.md`）里的认领、评论、提交、gate 结果。手动运行同样要求先完成本机激活
-确认。确认无误后改成 `enabled: true`——改 `enabled` 会让旧确认失效，需再执行一次
-**触发器: 确认工作区触发器…**（高权限模式另需重新确认）。
+不能再靠本地改 `enabled` 来「先观察」：定义已入库，bot clone 的本地改动会弄脏工作区（skill 的
+`git status --porcelain` 检查会失败），也留不下来。实际做法：
+
+- 先手动跑一次取数，确认配置、凭据与输出正常：`node scripts/tracker/tracker-mcp.mjs list`。
+- 完成上一节的两道确认后，**第一次成功取数只建基线**，不会把历史需求全部跑一遍；这段窗口本身
+  就是观察期。之后第一条新需求会自动触发，在旁边看 Sessions、`report.md`、审计与 push 结果。
+- 想收紧首批范围时改本机的 tracker 配置（`eligible.labels` / `eligible.statuses`，不是仓库里的
+  触发器定义）；需要临时停用某台机器用 **触发器: 暂停触发器…**，恢复用
+  **触发器: 恢复触发器…**。
+- **不要用「立即运行」代替真实事件**：poll 触发器的「立即运行」产生空事件数据，skill 拿不到需求
+  id 会直接结束（判决兜底为 `escalate`）。基线里已有的需求不会再次触发，需要处理就人工做完；
+  之后**新出现**的需求才会自动触发。
 
 ## 原生 MCP 传输细节
 

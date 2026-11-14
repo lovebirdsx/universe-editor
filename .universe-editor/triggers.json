@@ -1,0 +1,62 @@
+// Agent 触发器定义（工作区级，随仓库提交）。是否运行由每台机器的确认决定：
+// 每条触发器都要在本机执行「触发器: 确认工作区触发器…」，高权限模式还要再确认一次；
+// 未确认时不调度、不执行 poll 命令。临时停用请用「触发器: 暂停触发器」（本机状态，不动本文件）。
+// 修改本文件要走正常的人工提交，bot 的 push 闸门禁止自动改动它。
+{
+  "version": 1,
+  "triggers": [
+    {
+      // 需求自动处理：在 tracker bot clone 上跑。部署见 docs/development/tracker-automation.md。
+      "id": "tracker-implement",
+      "name": "Tracker 需求自动处理",
+      "enabled": true,
+      "source": {
+        "type": "poll",
+        "intervalSec": 300,
+        "fetch": {
+          "type": "command",
+          "command": "node scripts/tracker/tracker-mcp.mjs list",
+          "timeoutSec": 60
+        },
+        "keyField": "id"
+      },
+      "session": {
+        "agent": "claude-code",
+        "mode": "bypassPermissions",
+        "skill": "implement-tracker-requirement",
+        "prompt": "处理需求 {{event.id}}：{{event.title}}。先 claim；不可认领就结束。",
+        "mcpServers": ["tracker"],
+        "budget": { "maxCostUsd": null, "timeoutMin": 90, "approvalTimeoutMin": 1440 }
+      },
+      "concurrency": 1,
+      "overflow": "queue",
+      "allowedActions": []
+    },
+    {
+      // CI 失败自动修复：在 CI bot clone 上跑。部署见 docs/development/ci-automation.md。
+      "id": "ci-fix",
+      "name": "CI 失败自动修复",
+      "enabled": true,
+      "source": {
+        "type": "poll",
+        "intervalSec": 300,
+        "fetch": {
+          "type": "command",
+          "command": "node scripts/github/ci-failures.mjs",
+          "timeoutSec": 60
+        },
+        "keyField": "id"
+      },
+      "session": {
+        "agent": "claude-code",
+        "mode": "bypassPermissions",
+        "skill": "fix-ci-failure",
+        "prompt": "修复 CI run {{event.runId}}（attempt {{event.attempt}}，{{event.title}}）。失败 job 见事件数据。",
+        "budget": { "maxCostUsd": null, "timeoutMin": 90, "approvalTimeoutMin": 1440 }
+      },
+      "concurrency": 1,
+      "overflow": "queue",
+      "allowedActions": []
+    }
+  ]
+}

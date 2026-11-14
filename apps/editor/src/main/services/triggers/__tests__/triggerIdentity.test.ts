@@ -47,7 +47,11 @@ describe('trigger identity', () => {
     expect(parseTriggerKey(`${getPathComparisonKey('X:/w', 'win32')}\u0000`)).toBeUndefined()
 
     const workspaceKey = workspaceComparisonKey('X:/workspace/one', 'win32')
-    expect(triggerKeyBelongsToWorkspace(triggerKeyFor('X:/Workspace/One', 'a', 'win32'), workspaceKey)).toBe(true)
-    expect(triggerKeyBelongsToWorkspace(triggerKeyFor('X:/workspace/two', 'a', 'win32'), workspaceKey)).toBe(false)
+    expect(
+      triggerKeyBelongsToWorkspace(triggerKeyFor('X:/Workspace/One', 'a', 'win32'), workspaceKey),
+    ).toBe(true)
+    expect(
+      triggerKeyBelongsToWorkspace(triggerKeyFor('X:/workspace/two', 'a', 'win32'), workspaceKey),
+    ).toBe(false)
   })
 })

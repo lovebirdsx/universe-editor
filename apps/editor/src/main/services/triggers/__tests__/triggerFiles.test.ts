@@ -179,11 +179,7 @@ describe('readMaxConcurrentRunsSetting', () => {
 
   it('accepts JSONC with a trailing comma in settings.json', async () => {
     const dir = await tempDir()
-    await writeFile(
-      join(dir, 'settings.json'),
-      '{ "triggers.maxConcurrentRuns": 4, }\n',
-      'utf8',
-    )
+    await writeFile(join(dir, 'settings.json'), '{ "triggers.maxConcurrentRuns": 4, }\n', 'utf8')
     expect(await readMaxConcurrentRunsSetting(dir)).toBe(4)
   })
 })

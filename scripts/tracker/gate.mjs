@@ -8,7 +8,10 @@
  *    node scripts/tracker/gate.mjs
  *    node scripts/tracker/gate.mjs --base origin/main --max-files 5 --max-lines 200
  *    node scripts/tracker/gate.mjs --install-hook
+ *    node scripts/tracker/gate.mjs --install-hook --refs-prefix ci#   # CI 修复 bot clone
  *
+ *  每日配额按 `Refs: <prefix>` 分别计数：tracker# 上限 5，ci# 上限 3；阈值只能调低。
+ *  hook 安装时把前缀写进 hook，push 时无需再传参数。
  *  纯判定逻辑以导出函数形式提供，便于 node:test 单测。
  *--------------------------------------------------------------------------------------------*/
 
@@ -26,8 +29,9 @@ import { fileURLToPath } from 'node:url'
 
 export const HARD_MAX_FILES = 8
 export const HARD_MAX_LINES = 300
-export const DAILY_TRACKER_COMMIT_LIMIT = 5
 export const DEFAULT_BASE = 'origin/main'
+export const DEFAULT_REFS_PREFIX = 'tracker#'
+export const DAILY_COMMIT_LIMITS = Object.freeze({ 'tracker#': 5, 'ci#': 3 })
 const HOOK_MARKER = 'UE_TRACKER_GATE'
 
 export const FORBIDDEN_PATTERNS = [
@@ -44,6 +48,7 @@ export const FORBIDDEN_PATTERNS = [
   '**/.env*',
   'scripts/sensitive-*',
   '**/CLAUDE.md',
+  '**/.universe-editor/triggers.json',
 ]
 
 function escapeRegExpChar(ch) {
@@ -127,12 +132,35 @@ export function resolveThresholds({ maxFiles, maxLines } = {}) {
   return result
 }
 
+export function resolveRefsPrefix(value = DEFAULT_REFS_PREFIX) {
+  if (!Object.hasOwn(DAILY_COMMIT_LIMITS, value)) {
+    throw new Error(
+      `--refs-prefix 只支持 ${Object.keys(DAILY_COMMIT_LIMITS).join(' / ')}，收到 ${value}`,
+    )
+  }
+  return value
+}
+
+export function resolveDailyLimit(refsPrefix = DEFAULT_REFS_PREFIX, value) {
+  const hardLimit = DAILY_COMMIT_LIMITS[resolveRefsPrefix(refsPrefix)]
+  if (value === undefined) return hardLimit
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error('--daily-limit 必须是正整数')
+  }
+  if (value > hardLimit) {
+    throw new Error(`--daily-limit 不能超过 ${refsPrefix} 的硬上限 ${hardLimit}`)
+  }
+  return value
+}
+
 /**
  * @param {{
  *   mergeCommits: string[],
  *   files: ReturnType<typeof parseNumstat>,
  *   pendingCommits: number,
- *   dailyTrackerCommits: number,
+ *   dailyRefCommits: number,
+ *   refsPrefix?: string,
+ *   dailyLimit?: number,
  *   thresholds: {maxFiles: number, maxLines: number},
  * }} input
  */
@@ -140,9 +168,13 @@ export function evaluateGate({
   mergeCommits,
   files,
   pendingCommits,
-  dailyTrackerCommits,
+  dailyRefCommits = 0,
+  refsPrefix = DEFAULT_REFS_PREFIX,
+  dailyLimit = DAILY_COMMIT_LIMITS[refsPrefix],
   thresholds,
 }) {
+  const prefix = resolveRefsPrefix(refsPrefix)
+  const limit = resolveDailyLimit(prefix, dailyLimit)
   const additions = files.reduce((sum, file) => sum + (file.additions ?? 0), 0)
   const deletions = files.reduce((sum, file) => sum + (file.deletions ?? 0), 0)
   const lines = additions + deletions
@@ -167,9 +199,9 @@ export function evaluateGate({
   if (forbiddenFiles.length > 0) {
     violations.push(`修改了禁改路径: ${forbiddenFiles.join(', ')}`)
   }
-  if (dailyTrackerCommits + pendingCommits > DAILY_TRACKER_COMMIT_LIMIT) {
+  if (dailyRefCommits + pendingCommits > limit) {
     violations.push(
-      `最近 24h 已推 ${dailyTrackerCommits} 个 Refs: tracker# 提交，本次 ${pendingCommits} 个，超过每日上限 ${DAILY_TRACKER_COMMIT_LIMIT}`,
+      `最近 24h 已推 ${dailyRefCommits} 个 Refs: ${prefix} 提交，本次 ${pendingCommits} 个，超过每日上限 ${limit}`,
     )
   }
 
@@ -184,7 +216,9 @@ export function evaluateGate({
       lines,
       binaryFiles: binaryFiles.length,
       forbiddenFiles: forbiddenFiles.length,
-      dailyTrackerCommits,
+      dailyRefCommits,
+      refsPrefix: prefix,
+      dailyLimit: limit,
     },
   }
 }
@@ -220,8 +254,12 @@ export function runGate({
   base = DEFAULT_BASE,
   maxFiles,
   maxLines,
+  refsPrefix = DEFAULT_REFS_PREFIX,
+  dailyLimit,
 } = {}) {
   const thresholds = resolveThresholds({ maxFiles, maxLines })
+  const prefix = resolveRefsPrefix(refsPrefix)
+  const limit = resolveDailyLimit(prefix, dailyLimit)
   const root = repoRootOf(repoRoot)
 
   const baseCheck = git(root, ['rev-parse', '--verify', '--quiet', base], { allowFailure: true })
@@ -235,13 +273,13 @@ export function runGate({
     allowFailure: true,
   })
   const dailyRef = originMain.status === 0 ? 'origin/main' : base
-  const dailyTrackerCommits = lines(
+  const dailyRefCommits = lines(
     git(root, [
       'log',
       dailyRef,
       '--since=24.hours',
       '--fixed-strings',
-      '--grep=Refs: tracker#',
+      `--grep=Refs: ${prefix}`,
       '--format=%H',
     ]).stdout,
   ).length
@@ -259,7 +297,9 @@ export function runGate({
         lines: 0,
         binaryFiles: 0,
         forbiddenFiles: 0,
-        dailyTrackerCommits,
+        dailyRefCommits,
+        refsPrefix: prefix,
+        dailyLimit: limit,
       },
       base,
       dailyRef,
@@ -277,7 +317,9 @@ export function runGate({
     mergeCommits,
     files,
     pendingCommits: pendingCommits.length,
-    dailyTrackerCommits,
+    dailyRefCommits,
+    refsPrefix: prefix,
+    dailyLimit: limit,
     thresholds,
   })
   return { ...result, base, dailyRef, thresholds, pendingCommits: pendingCommits.length }
@@ -286,7 +328,7 @@ export function runGate({
 export function formatGateResult(result) {
   const { stats } = result
   const lines = [
-    `[tracker-gate] base=${result.base} commits=${stats.commits} files=${stats.files} lines=+${stats.additions}/-${stats.deletions} dailyTrackerCommits=${stats.dailyTrackerCommits}`,
+    `[tracker-gate] base=${result.base} commits=${stats.commits} files=${stats.files} lines=+${stats.additions}/-${stats.deletions} refsPrefix=${stats.refsPrefix} dailyRefCommits=${stats.dailyRefCommits}`,
   ]
   if (result.ok) {
     lines.push(
@@ -302,12 +344,12 @@ export function formatGateResult(result) {
   return lines.join('\n')
 }
 
-const HOOK_CONTENT = `#!/bin/sh
+const HOOK_CONTENT_PREFIX = `#!/bin/sh
 # ${HOOK_MARKER}: generated by scripts/tracker/gate.mjs --install-hook
-exec node "$(git rev-parse --show-toplevel)/scripts/tracker/gate.mjs"
-`
+exec node "$(git rev-parse --show-toplevel)/scripts/tracker/gate.mjs" --refs-prefix '`
 
-export function installHook({ repoRoot = process.cwd() } = {}) {
+export function installHook({ repoRoot = process.cwd(), refsPrefix = DEFAULT_REFS_PREFIX } = {}) {
+  const prefix = resolveRefsPrefix(refsPrefix)
   const root = repoRootOf(repoRoot)
   const hooksPath = git(root, ['rev-parse', '--git-path', 'hooks']).stdout.trim()
   const hooksDir = isAbsolute(hooksPath) ? hooksPath : resolve(root, hooksPath)
@@ -323,7 +365,7 @@ export function installHook({ repoRoot = process.cwd() } = {}) {
     }
   }
 
-  writeFileSync(hookPath, HOOK_CONTENT, 'utf8')
+  writeFileSync(hookPath, `${HOOK_CONTENT_PREFIX}${prefix}'\n`, 'utf8')
   chmodSync(hookPath, 0o755)
   return hookPath
 }
@@ -336,12 +378,20 @@ export function parseArgs(argv) {
       const value = argv[++i]
       if (value === undefined || value.startsWith('--')) throw new Error('--base 需要基准 ref')
       options.base = value
-    } else if (arg === '--max-files' || arg === '--max-lines') {
+    } else if (arg === '--max-files' || arg === '--max-lines' || arg === '--daily-limit') {
       const value = argv[++i]
       if (value === undefined) throw new Error(`${arg} 需要数字`)
       const number = Number(value)
       if (!Number.isInteger(number)) throw new Error(`${arg} 需要整数`)
-      options[arg === '--max-files' ? 'maxFiles' : 'maxLines'] = number
+      const key =
+        arg === '--max-files' ? 'maxFiles' : arg === '--max-lines' ? 'maxLines' : 'dailyLimit'
+      options[key] = number
+    } else if (arg === '--refs-prefix') {
+      const value = argv[++i]
+      if (value === undefined || value.startsWith('--')) {
+        throw new Error('--refs-prefix 需要前缀（tracker# 或 ci#）')
+      }
+      options.refsPrefix = value
     } else if (arg === '--install-hook') {
       options.installHook = true
     } else if (arg === '--help' || arg === '-h') {
@@ -357,10 +407,12 @@ function usage() {
   process.stdout.write(
     [
       '用法: node scripts/tracker/gate.mjs [选项]',
-      '  --base <ref>        基准（默认 origin/main）',
-      '  --max-files <n>     文件数上限（默认 8，不能调高）',
-      '  --max-lines <n>     增删行上限（默认 300，不能调高）',
-      '  --install-hook      写入 .git/hooks/pre-push',
+      '  --base <ref>          基准（默认 origin/main）',
+      '  --max-files <n>       文件数上限（默认 8，不能调高）',
+      '  --max-lines <n>       增删行上限（默认 300，不能调高）',
+      '  --refs-prefix <前缀>  每日配额统计的提交前缀：tracker#（默认，上限 5）或 ci#（上限 3）',
+      '  --daily-limit <n>     每日提交上限（只能调低）',
+      '  --install-hook        写入 .git/hooks/pre-push（把 --refs-prefix 写进 hook）',
       '',
     ].join('\n'),
   )
@@ -383,8 +435,11 @@ function main() {
 
   try {
     if (options.installHook) {
-      const hookPath = installHook()
-      process.stdout.write(`[tracker-gate] 已写入 pre-push hook: ${hookPath}\n`)
+      const refsPrefix = resolveRefsPrefix(options.refsPrefix)
+      const hookPath = installHook({ refsPrefix })
+      process.stdout.write(
+        `[tracker-gate] 已写入 pre-push hook: ${hookPath}（refsPrefix=${refsPrefix}）\n`,
+      )
       return
     }
     const result = runGate(options)

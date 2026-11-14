@@ -141,7 +141,10 @@ describe('buildTriggerPickItems', () => {
       'X:/workspace\u0000triage',
       'X:/workspace\u0000weekly',
     ])
-    expect(items.map((item) => item.description?.startsWith('X:/workspace · '))).toEqual([true, true])
+    expect(items.map((item) => item.description?.startsWith('X:/workspace · '))).toEqual([
+      true,
+      true,
+    ])
   })
 })
 
@@ -195,14 +198,7 @@ describe('triggersForAction', () => {
   ]
 
   it('filters pause candidates to unpaused triggers', () => {
-    expect(triggersForAction('pause', all).map((s) => s.id)).toEqual([
-      'a',
-      'c',
-      'd',
-      'e',
-      'f',
-      'g',
-    ])
+    expect(triggersForAction('pause', all).map((s) => s.id)).toEqual(['a', 'c', 'd', 'e', 'f', 'g'])
   })
 
   it('filters resume candidates to paused triggers', () => {
