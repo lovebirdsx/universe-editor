@@ -52,13 +52,9 @@ describe('trigger identity', () => {
     const key = workspaceComparisonKey(remoteUri('acme-host', '/home/dev/repo'), 'win32')
     expect(key).toBe('remote-ssh://acme-host/home/dev/repo')
     // Windows' case folding must not leak into the remote host's path identity.
-    expect(workspaceComparisonKey(remoteUri('acme-host', '/home/DEV/repo'), 'win32')).not.toBe(
-      key,
-    )
+    expect(workspaceComparisonKey(remoteUri('acme-host', '/home/DEV/repo'), 'win32')).not.toBe(key)
     // Same path, different host: separate workspaces.
-    expect(workspaceComparisonKey(remoteUri('other-host', '/home/dev/repo'), 'win32')).not.toBe(
-      key,
-    )
+    expect(workspaceComparisonKey(remoteUri('other-host', '/home/dev/repo'), 'win32')).not.toBe(key)
   })
 
   it('normalizes the remote authority spelling without touching the path', () => {

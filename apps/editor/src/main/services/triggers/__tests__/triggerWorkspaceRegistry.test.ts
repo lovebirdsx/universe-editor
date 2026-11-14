@@ -115,11 +115,7 @@ describe('TriggerWorkspaceRegistry', () => {
     const dir = mkTempDir('ue-trigger-registry-')
     dirs.push(dir)
     const { file } = createRegistry(dir)
-    await writeFile(
-      file,
-      JSON.stringify({ version: 1, workspaces: ['X:/workspace/one'] }),
-      'utf8',
-    )
+    await writeFile(file, JSON.stringify({ version: 1, workspaces: ['X:/workspace/one'] }), 'utf8')
     const loaded = createRegistry(dir)
     expect(await loaded.registry.load()).toEqual([])
   })

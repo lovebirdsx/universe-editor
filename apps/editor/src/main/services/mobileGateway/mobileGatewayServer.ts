@@ -149,10 +149,7 @@ export interface MobileGatewayServerOptions {
    * Trigger-run report reader. `authority` selects the host holding the run
    * directory; absent when the gateway runs without triggers.
    */
-  readonly readReport?: (
-    runId: string,
-    authority?: string,
-  ) => Promise<TriggerRunReportReadResult>
+  readonly readReport?: (runId: string, authority?: string) => Promise<TriggerRunReportReadResult>
 }
 
 interface ConnectionState {

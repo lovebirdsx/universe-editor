@@ -680,9 +680,7 @@ export class MobileGatewayHub {
    * session / a session owned by another window. Main reads the report itself so
    * the renderer never exposes a run directory to the phone.
    */
-  readSessionReportRef(
-    ref: MobileSessionRef,
-  ): Promise<MobileBridgeAutomationRunRef | undefined> {
+  readSessionReportRef(ref: MobileSessionRef): Promise<MobileBridgeAutomationRunRef | undefined> {
     return this._readSessionValue(
       ref,
       (bridge, localId, token) => bridge.getAutomationRunRef(localId, token),
