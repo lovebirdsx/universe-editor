@@ -683,6 +683,8 @@ describe('Repository.discardPaths', () => {
     const root = mkTempDir('ue-git-discard-')
     tmpRoots.push(root)
     await git(['init', root])
+    // A global `core.autocrlf=true` would make the restore write CRLF and break the byte checks.
+    await git(['config', 'core.autocrlf', 'false'], root)
     const tracked = join(root, 'tracked.txt')
     const other = join(root, 'other.txt')
     await writeFile(tracked, 'head\n')
