@@ -7602,6 +7602,23 @@ describe('AcpSessionService builtin agent skills injection', () => {
     }
   })
 
+  it('still advertises caller-supplied roots to remote-authority sessions', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, stubEnvSnapshotService(SKILLS_ROOT))
+    try {
+      const runDir = '/home/user/triggers/runs/run-1'
+      const session = await svc.createSession(undefined, {
+        cwd: '/w',
+        authority: 'ssh-remote+box',
+        additionalDirectories: [runDir],
+      })
+      await session.whenConnected()
+      expect(client.connected[0]!.agent.newSessionCalls[0]!.additionalDirectories).toEqual([runDir])
+    } finally {
+      svc.dispose()
+    }
+  })
+
   it('omits additionalDirectories when the snapshot has no skills root', async () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, stubEnvSnapshotService())

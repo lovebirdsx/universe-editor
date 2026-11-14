@@ -14,6 +14,7 @@ import {
   InstantiationType,
   URI,
   createDecorator,
+  fsPathToWorkspaceUri,
   registerSingleton,
   type Event,
   type ILogger,
@@ -149,6 +150,9 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     )
     const session = await this._sessions.createSession(agentId, {
       cwd: request.cwd,
+      // The run's own host, not the window's: this window may show a local
+      // workspace while a remote workspace's trigger is dispatching here.
+      ...(request.authority !== undefined ? { authority: request.authority } : {}),
       activate: false,
       // Not `internal`: an automated session is persisted and listed so the
       // user can inspect what the trigger did.
@@ -193,7 +197,7 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     const watcher = new AutomatedRunWatcher({
       request,
       session,
-      readResultFile: (runDir) => this._readResultFile(runDir),
+      readResultFile: (runRequest) => this._readResultFile(runRequest),
       resolveVerdict: this._verdictResolver,
       onRunEnd: (end, resolution) => this._handleRunEnd(end, resolution),
       logger: this._logger,
@@ -245,15 +249,22 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
       fence(firstPrompt),
     ].join('\n')
     try {
-      await this._files.writeFile(URI.joinPath(URI.file(request.runDir), 'prompt.md'), content)
+      await this._files.writeFile(
+        URI.joinPath(fsPathToWorkspaceUri(request.runDir, request.authority), 'prompt.md'),
+        content,
+      )
     } catch (err) {
       this._logger.warn(`failed to write prompt audit: ${(err as Error).message}`)
     }
   }
 
-  private async _readResultFile(runDir: string): Promise<string | undefined> {
+  private async _readResultFile(request: TriggerRunRequest): Promise<string | undefined> {
     try {
-      return await this._files.readFileText(URI.joinPath(URI.file(runDir), 'result.json'))
+      const resultUri = URI.joinPath(
+        fsPathToWorkspaceUri(request.runDir, request.authority),
+        'result.json',
+      )
+      return await this._files.readFileText(resultUri)
     } catch {
       return undefined
     }

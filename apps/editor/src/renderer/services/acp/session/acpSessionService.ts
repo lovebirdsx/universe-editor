@@ -1145,16 +1145,17 @@ export class AcpSessionService
 
   /**
    * The `additionalDirectories` wire field: the bundled agent-skills root (local
-   * sessions only) plus any caller-supplied roots (an automated run's `runDir`).
-   * A remote agent runs on another host and cannot see local paths, so both
-   * sides are omitted there. Duplicates are collapsed so a caller passing the
-   * skills root does not advertise it twice.
+   * sessions only, via {@link _builtinAgentDirs}) plus any caller-supplied roots
+   * (an automated run's `runDir`). A remote agent cannot see local paths, so the
+   * bundled root is skipped there — but caller roots already live on the remote
+   * host (main creates them per authority) and must still be advertised, or the
+   * agent could not write its run directory. Duplicates are collapsed so a
+   * caller passing the skills root does not advertise it twice.
    */
   private async _additionalDirectories(
     authority: string | undefined,
     extra: readonly string[] | undefined,
   ): Promise<{ additionalDirectories?: string[] }> {
-    if (authority !== undefined) return {}
     const builtin = await this._builtinAgentDirs(authority)
     const merged = [...new Set([...(builtin.additionalDirectories ?? []), ...(extra ?? [])])]
     return merged.length > 0 ? { additionalDirectories: merged } : {}
@@ -2806,6 +2807,7 @@ export class AcpSessionService
       const optionId = decideAutomatedPermission(
         params,
         session.automationRunDir,
+        session.authority,
         this._uriIdentity,
       )
       if (optionId !== undefined) {

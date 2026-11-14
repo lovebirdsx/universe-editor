@@ -172,8 +172,13 @@ export interface TriggerRunRequest {
    * window is visible; hidden / minimized windows are never raised.
    */
   readonly showSession: boolean
-  /** Absolute local path. */
+  /** Absolute host-native path (local machine for local workspaces, remote host for remote ones). */
   readonly cwd: string
+  /**
+   * Remote workspace authority (`remote-ssh`); undefined for a local workspace.
+   * `cwd` / `runDir` are then paths on that remote host.
+   */
+  readonly authority?: string
   /** Explicit mode id; undefined = the agent's conservative default (resolved in renderer). */
   readonly mode?: string
   /** True only after the user confirmed a bypass-class mode for this trigger. */
@@ -187,7 +192,10 @@ export interface TriggerRunRequest {
    * their system prompt: no `## 输出要求` section, only the run directory.
    */
   readonly promptForSystemContract: string
-  /** Absolute `<userData>/triggers/runs/<runId>`; already created by main. */
+  /**
+   * Absolute host-native `<runs dir>/<runId>`; already created by main. On the
+   * remote host when `authority` is set.
+   */
   readonly runDir: string
   readonly budget: TriggerBudget
   readonly allowedActions: readonly TriggerActionType[]

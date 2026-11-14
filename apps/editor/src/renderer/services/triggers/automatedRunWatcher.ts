@@ -43,8 +43,12 @@ export type AutomatedTimerHandle = unknown
 export interface AutomatedRunWatcherOptions {
   readonly request: TriggerRunRequest
   readonly session: IAcpSession
-  /** Reads `<runDir>/result.json` verbatim; resolves undefined when absent/unreadable. */
-  readonly readResultFile: (runDir: string) => Promise<string | undefined>
+  /**
+   * Reads `result.json` from the run's directory verbatim; resolves undefined
+   * when absent/unreadable. Takes the whole request so the reader can resolve
+   * `runDir` on the run's own host (`authority` for remote runs).
+   */
+  readonly readResultFile: (request: TriggerRunRequest) => Promise<string | undefined>
   readonly resolveVerdict?: AutomatedVerdictResolver
   readonly onRunEnd: (end: TriggerRunEnd, resolution: AutomatedVerdictResolution) => void
   /** Warns once when the agent reports cost in a currency the budget cannot compare. */
@@ -58,7 +62,7 @@ export interface AutomatedRunWatcherOptions {
 export class AutomatedRunWatcher {
   private readonly _request: TriggerRunRequest
   private readonly _session: IAcpSession
-  private readonly _readResultFile: (runDir: string) => Promise<string | undefined>
+  private readonly _readResultFile: (request: TriggerRunRequest) => Promise<string | undefined>
   private readonly _resolveVerdict: AutomatedVerdictResolver
   private readonly _onRunEnd: AutomatedRunWatcherOptions['onRunEnd']
   private readonly _logger: { warn(message: string): void } | undefined
@@ -235,7 +239,7 @@ export class AutomatedRunWatcher {
   private async _finalize(outcome: TriggerRunOutcome, error?: string): Promise<void> {
     let raw: string | undefined
     try {
-      raw = await this._readResultFile(this._request.runDir)
+      raw = await this._readResultFile(this._request)
     } catch {
       raw = undefined
     }

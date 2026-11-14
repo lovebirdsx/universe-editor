@@ -192,6 +192,31 @@ describe('AutomatedRunWatcher', () => {
     expect(ends[0]!.sessionId).toBe('agent-1')
   })
 
+  it('hands the whole run request to the result reader so remote runs read on their host', async () => {
+    const clock = new FakeClock()
+    const fake = makeSession()
+    const readResultFile = vi.fn(async () => undefined)
+    const remoteRequest: TriggerRunRequest = {
+      ...makeRequest(),
+      authority: 'ssh-remote+host.example.com',
+      runDir: '/home/user/triggers/runs/run-1',
+    }
+    const watcher = new AutomatedRunWatcher({
+      request: remoteRequest,
+      session: fake.session,
+      readResultFile,
+      onRunEnd: () => undefined,
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    })
+    watcher.start()
+    fake.status.set('running', undefined)
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(readResultFile).toHaveBeenCalledWith(remoteRequest)
+  })
+
   it('waits for an open card before completing', async () => {
     const { fake, watcher, ends } = setup()
     watcher.start()

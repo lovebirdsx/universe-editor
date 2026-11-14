@@ -388,4 +388,39 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     await h.service.startAutomatedSession(request())
     await expect(h.service.startAutomatedSession(request())).rejects.toThrow(/already started/)
   })
+
+  it('leaves the authority unset for a local workspace and uses file URIs', async () => {
+    const h = makeHarness({ resultRaw: '{"verdict":"info"}' })
+    await h.service.startAutomatedSession(request())
+    await flush()
+    const [, options] = h.createSession.mock.calls[0]!
+    expect(Object.hasOwn(options as object, 'authority')).toBe(false)
+    expect(String(h.writeFile.mock.calls[0]?.[0])).toBe(
+      'file:///userData/triggers/runs/run-1/prompt.md',
+    )
+    expect(String(h.readFileText.mock.calls[0]?.[0])).toBe(
+      'file:///userData/triggers/runs/run-1/result.json',
+    )
+  })
+
+  it('runs a remote trigger on its own authority and reads/writes the remote run dir', async () => {
+    const h = makeHarness({ resultRaw: '{"verdict":"info"}' })
+    const authority = 'ssh-remote+host.example.com'
+    const runDir = '/home/user/triggers/runs/run-1'
+    await h.service.startAutomatedSession(request({ authority, cwd: '/home/user/repo', runDir }))
+    await flush()
+    expect(h.createSession).toHaveBeenCalledWith(
+      'claude-code',
+      expect.objectContaining({
+        authority,
+        cwd: '/home/user/repo',
+        automationRunDir: runDir,
+        additionalDirectories: [runDir],
+      }),
+    )
+    const prefix = `remote-ssh://${authority}${runDir}`
+    expect(String(h.writeFile.mock.calls[0]?.[0])).toBe(`${prefix}/prompt.md`)
+    expect(String(h.readFileText.mock.calls[0]?.[0])).toBe(`${prefix}/result.json`)
+    expect(h.ends[0]).toMatchObject({ outcome: 'completed' })
+  })
 })
