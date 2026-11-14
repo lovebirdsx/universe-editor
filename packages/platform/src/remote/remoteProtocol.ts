@@ -74,8 +74,15 @@ import type { WatcherHostRequest, WatcherHostResponse } from '../files/watcherPr
  * created ("File does not exist" for an existing file), and rejects the unknown
  * method. Restart the daemon after upgrading: an old daemon fails the handshake
  * with `protocol version 14 != 15`.
+ * v15 → v16: the new triggerPoll channel carries trigger polling, remote run
+ * directories and report reads for remote workspaces. An older daemon does not
+ * register the channel, so the client's first call fails with an
+ * unknown-channel error and a remote trigger never starts — loud, never a
+ * silent fallback to the client host's paths. Restart the daemon after
+ * upgrading: an old daemon fails the handshake with
+ * `protocol version 15 != 16`.
  */
-export const REMOTE_PROTOCOL_VERSION = 15
+export const REMOTE_PROTOCOL_VERSION = 16
 
 /** Scheme of remote workspace resources: `remote-ssh://<authority>/<path>`. */
 export const REMOTE_SCHEME = 'remote-ssh'
@@ -180,6 +187,15 @@ export const RemoteChannels = {
    * so the server never needs gallery/network access.
    */
   ExtensionManagement: 'extensionManagement',
+  /**
+   * Remote trigger execution plumbing (poll command / per-run directory /
+   * report read). The scheduler stays in the client's main process; only these
+   * host-bound pieces cross the tunnel. Contract lives in
+   * `@universe-editor/node-services` (`triggers/triggerProtocol`) — like
+   * ExtensionManagement, both the editor main process and the server implement
+   * against it. DTOs carry URIs only; the server derives every path itself.
+   */
+  TriggerPoll: 'triggerPoll',
 } as const
 
 export type RemoteChannelName = (typeof RemoteChannels)[keyof typeof RemoteChannels]

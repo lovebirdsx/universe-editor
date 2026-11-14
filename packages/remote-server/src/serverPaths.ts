@@ -16,3 +16,8 @@ export function resolveUserExtensionsDir(dataDir: string): string {
 export function resolveExtensionGlobalStorageDir(dataDir: string): string {
   return path.join(dataDir, 'data', 'extensionGlobalStorage')
 }
+
+/** Trigger run directories: `<dataDir>/triggers/runs/<clientId>/<runId>`. */
+export function resolveTriggersRunsDir(dataDir: string): string {
+  return path.join(dataDir, 'triggers', 'runs')
+}

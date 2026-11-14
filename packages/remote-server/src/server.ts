@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Remote server assembly: registers the five remote channels on an IChannelServer.
+ *  Remote server assembly: registers the remote channels on an IChannelServer.
  *  Everything here is a headless local file-service stack — the server never sees a
  *  non-`file:` URI (the per-connection IPC codec translates remote-ssh URIs at the
  *  tunnel boundary). Services are built fresh for each connection so no state is
@@ -53,6 +53,7 @@ import { RemoteTerminalService } from './terminalService.js'
 import { RemoteAgentConfigService } from './agentConfigService.js'
 import { RemoteAgentBinaryService } from './agentBinaryService.js'
 import { RemoteExtensionManagementService } from './extensionManagementService.js'
+import { RemoteTriggerService } from './triggerService.js'
 import { resolveVendorAgentEntry } from './vendorAgentEntry.js'
 import { SERVER_VERSION } from './version.js'
 
@@ -221,6 +222,10 @@ export function createRemoteServer(
     ProxyChannel.fromService(
       disposables.add(new RemoteExtensionManagementService({ dataDir, loggerService })),
     ),
+  )
+  server.registerChannel(
+    RemoteChannels.TriggerPoll,
+    ProxyChannel.fromService(new RemoteTriggerService({ dataDir, loggerService })),
   )
 
   log.info(`[remote-server] channels assembled: ${Object.values(RemoteChannels).join(', ')}`)
