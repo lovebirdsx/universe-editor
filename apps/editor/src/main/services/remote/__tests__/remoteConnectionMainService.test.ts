@@ -272,6 +272,23 @@ describe('RemoteConnectionMainService direct mode', () => {
     await expect(made.svc.getConnection('host')).resolves.toBe(conn)
   })
 
+  it('reports the last known state synchronously without creating an entry', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    // Unknown authority: no entry, no state event, no process / bring-up.
+    expect(made.svc.getState('unknown-host')).toBeUndefined()
+    expect(made.states).toEqual([])
+    expect(made.procs).toHaveLength(0)
+
+    await made.svc.getConnection('host')
+    expect(made.svc.getState('host')).toBe('connected')
+    expect(made.states.map((s) => s.state)).toEqual(['deploying', 'handshaking', 'connected'])
+
+    made.svc.dropSocketForTesting('host')
+    expect(made.svc.getState('host')).toBe('reconnecting')
+  })
+
   it('fails with a handshake error and can be retried', async () => {
     const daemon = await startDaemon()
     daemon.handshakeResponse = () => ({

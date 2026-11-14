@@ -21,8 +21,11 @@ import {
   Emitter,
   generateUuid,
   localize,
+  normalizeRemoteAuthority,
+  REMOTE_SCHEME,
   URI,
   type Event,
+  type IFileService,
   type ILogger,
   type IOpenWindowInfo,
 } from '@universe-editor/platform'
@@ -64,7 +67,7 @@ import {
 import { RunQueue, type RunQueueOptions } from '../../../shared/triggers/runQueue.js'
 import { nextBackoffMs, shouldAutoPause } from '../../../shared/triggers/backoff.js'
 import { renderTriggerPrompt } from '../../../shared/triggers/promptTemplate.js'
-import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
+import { parseWorkspaceUri, TRIGGERS_CONFIG_EXAMPLE } from '../../../shared/triggers/configParse.js'
 import { AuditLog } from '../mobileGateway/auditLog.js'
 import { JsonConfigFileStore, type JsonConfigFileState } from '../jsonConfig/jsonConfigFileStore.js'
 import { writeJsonAtomic } from '../jsonConfig/atomicFile.js'
@@ -82,8 +85,17 @@ import {
   readTriggersConfigFile,
   serializeTriggersConfig,
   triggersDirectory,
+  workspaceTriggersConfigDirUri,
+  workspaceTriggersConfigLocation,
   workspaceTriggersConfigPath,
+  workspaceTriggersConfigUri,
 } from './triggersConfigFile.js'
+import {
+  RemoteTriggerConfigStore,
+  isRemoteWorkspaceUri,
+  type RemoteTriggerConfigStoreOptions,
+  type TriggerConfigStore,
+} from './triggerConfigStore.js'
 import { TriggerWorkspaceRegistry } from './triggerWorkspaceRegistry.js'
 import { triggerFingerprint } from './triggerFingerprint.js'
 import {
@@ -103,6 +115,10 @@ import {
 } from './triggerStateStore.js'
 import { createPollCommandFetcher, type PollCommandFetcher } from './pollCommandFetcher.js'
 import { SessionReportReader } from './runReportReader.js'
+import type {
+  IRemoteConnectionService,
+  IRemoteConnectionStateChange,
+} from '../remote/remoteConnectionMainService.js'
 
 export type TriggerTimerHandle = unknown
 
@@ -146,6 +162,14 @@ export interface TriggerMainServiceOptions {
   readonly configDirChanged?: Event<string>
   /** Machine-local trusted-folder probe used before running a poll command. */
   readonly isWorkspaceTrusted?: (workspace: string) => Promise<boolean>
+  /** Scheme-routed filesystem gateway; remote workspace configs need it. */
+  readonly fileService?: IFileService
+  /** Gate and lifecycle source for remote workspace configs. */
+  readonly remoteConnections?: IRemoteConnectionService
+  /** Test seam: override the remote store (default: RemoteTriggerConfigStore). */
+  readonly createRemoteConfigStore?: (
+    options: RemoteTriggerConfigStoreOptions,
+  ) => TriggerConfigStore
 }
 
 /** A trigger config resolved against the workspace entry that owns it. */
@@ -164,10 +188,18 @@ interface WorkspaceEntry {
   readonly workspace: string
   readonly workspaceUri: URI
   readonly key: string
-  readonly store: JsonConfigFileStore<TriggersConfig>
+  /** Set for remote-ssh workspaces; undefined for local folders. */
+  readonly authority: string | undefined
+  readonly store: TriggerConfigStore
   /** Owns the store and its subscriptions; detach disposes exactly this entry. */
   readonly disposables: DisposableStore
   config: TriggersConfig
+  /**
+   * Remote workspace whose connection left `connected`. The config snapshot stays
+   * listable (so the user still sees the definitions) but the store and watcher are
+   * gone and nothing is scheduled until the connection returns.
+   */
+  offline: boolean
 }
 
 /** Mirrors `RunQueueItem`; the queue only needs runId + triggerKey. */
@@ -228,12 +260,20 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private readonly _stateStore: TriggerStateStore
   private readonly _readMaxConcurrentRuns: () => Promise<number>
   private readonly _isWorkspaceTrusted: ((workspace: string) => Promise<boolean>) | undefined
+  private readonly _fileService: IFileService | undefined
+  private readonly _remoteConnections: IRemoteConnectionService | undefined
+  private readonly _createRemoteConfigStore: (
+    options: RemoteTriggerConfigStoreOptions,
+  ) => TriggerConfigStore
   private readonly _queue = new RunQueue<PendingRun>(TRIGGER_DEFAULTS.maxConcurrentRuns)
   private readonly _onDidChangeTriggers = this._register(new Emitter<readonly TriggerSummary[]>())
   readonly onDidChangeTriggers: Event<readonly TriggerSummary[]> = this._onDidChangeTriggers.event
 
   private readonly _workspaces = new Map<string, WorkspaceEntry>()
   private readonly _attaching = new Map<string, Promise<void>>()
+  private readonly _reloading = new Map<string, Promise<void>>()
+  /** Windows currently holding a workspace folder; drives remote attach/detach. */
+  private readonly _windowFolders = new Map<number, string>()
   private _state: TriggerStateFile = createEmptyTriggerStateFile()
   private _windows: TriggerWindowProvider | undefined
   private readonly _hosts = new Map<number, ITriggerRunHost>()
@@ -272,6 +312,18 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._readMaxConcurrentRuns =
       options.readMaxConcurrentRuns ?? (() => Promise.resolve(TRIGGER_DEFAULTS.maxConcurrentRuns))
     this._isWorkspaceTrusted = options.isWorkspaceTrusted
+    this._fileService = options.fileService
+    this._remoteConnections = options.remoteConnections
+    this._createRemoteConfigStore =
+      options.createRemoteConfigStore ??
+      ((storeOptions) => new RemoteTriggerConfigStore(storeOptions))
+    if (options.remoteConnections !== undefined) {
+      this._register(
+        options.remoteConnections.onDidChangeState((change) =>
+          this._onRemoteConnectionStateChange(change),
+        ),
+      )
+    }
     if (options.configDirChanged !== undefined) {
       this._register(options.configDirChanged(() => void this._reloadMaxConcurrentRuns()))
     }
@@ -316,7 +368,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       return {
         workspace,
         name: workspaceFolderName(workspace),
-        configPath: workspaceTriggersConfigPath(workspaceFsPath(workspace)),
+        configPath: workspaceTriggersConfigLocation(workspace),
         available: entry !== undefined,
         triggerCount: entry?.config.triggers.length ?? 0,
       }
@@ -344,6 +396,14 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
     if (this._stateFor(trigger.key).paused) {
       throw new Error(localize('triggers.error.triggerPaused', 'This trigger is paused'))
+    }
+    if (this._isWorkspaceOffline(trigger)) {
+      throw new Error(
+        localize(
+          'triggers.error.remoteNotConnected',
+          'The remote host for this trigger is not connected. Reconnect and try again.',
+        ),
+      )
     }
     if (!this._isActivated(trigger)) {
       throw new Error(
@@ -491,19 +551,20 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
    * Create `<workspace>/.universe-editor/triggers.json` with the example when absent,
    * register the workspace and start watching it. The caller supplies the window's
    * current folder — main has no way to tell which window issued the command.
+   * Remote folders go through IFileService and require a live connection.
    */
   async ensureConfigFile(workspaceFolder?: string): Promise<string> {
     await this._awaitReady()
     const folder = parseWorkspaceUri(workspaceFolder)
-    // Remote definitions land with the remote config store; this phase stays local.
-    if (folder === undefined || folder.scheme !== 'file') {
+    if (folder === undefined) {
       throw new Error(
         localize(
           'triggers.error.noLocalWorkspace',
-          'Open a local folder workspace first — triggers live inside a workspace',
+          'Open a folder workspace first — triggers live inside a workspace',
         ),
       )
     }
+    if (folder.scheme === REMOTE_SCHEME) return this._ensureRemoteConfigFile(folder)
     const file = workspaceTriggersConfigPath(folder.fsPath)
     try {
       const created = await ensureTriggersConfigFile(file)
@@ -521,6 +582,41 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     await this._registry.register(workspace)
     await this._attachWorkspace(workspace)
     return URI.file(file).toString()
+  }
+
+  private async _ensureRemoteConfigFile(folder: URI): Promise<string> {
+    const authority = folder.authority
+    const fileService = this._fileService
+    if (fileService === undefined || !this._remoteIoAllowed(authority)) {
+      throw new Error(remoteNotConnectedMessage())
+    }
+    const dirUri = workspaceTriggersConfigDirUri(folder)
+    const fileUri = workspaceTriggersConfigUri(folder)
+    let created = false
+    try {
+      if (!(await fileService.exists(fileUri))) {
+        await fileService.createDirectory(dirUri)
+        // Creating the directory and writing are two round trips; re-check so a
+        // file created concurrently is never overwritten.
+        if (!(await fileService.exists(fileUri))) {
+          await fileService.writeFile(fileUri, TRIGGERS_CONFIG_EXAMPLE)
+          created = true
+        }
+      }
+    } catch (err) {
+      this._logger.warn(`failed to create ${fileUri.toString()}: ${describeError(err)}`)
+      throw new Error(
+        localize(
+          'triggers.error.configWriteFailed',
+          'Could not create the trigger configuration file',
+        ),
+      )
+    }
+    if (created) this._logger.info(`created the example trigger config in ${folder.toString()}`)
+    const workspace = folder.toString()
+    await this._registry.register(workspace)
+    await this._attachWorkspace(workspace)
+    return fileUri.toString()
   }
 
   /** Stop watching a workspace and drop its queued events; running sessions finish. */
@@ -630,7 +726,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
     // A swarm trigger belongs to the workspace whose window reported the reviews;
     // another open workspace must not consume them (or seed its baseline with them).
-    // A remote workspace simply matches nothing until discovery supports it.
+    // A remote workspace whose connection is down matches but is skipped below.
     const reporterKey = workspaceComparisonKey(folder.toString())
     const now = this._clock.now()
     // Concurrent reports (two windows) can interleave; the persistent key check is
@@ -645,6 +741,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     for (const trigger of this._allTriggers()) {
       if (!trigger.enabled || trigger.source.type !== 'swarm-review') continue
       if (workspaceComparisonKey(trigger.workspace) !== reporterKey) continue
+      // Offline remote workspaces must not seed a baseline from reviews that
+      // arrive while nothing can run; the first report after reconnect seeds it.
+      if (this._isWorkspaceOffline(trigger)) continue
       // Unconfirmed triggers must not consume the baseline: the first report after
       // confirmation has to seed it, otherwise every historical review fires.
       if (!this._isActivated(trigger)) continue
@@ -682,6 +781,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     // the slot (a fresh app-level window registration has no previous host).
     const reloaded = this._hosts.has(windowId)
     this._hosts.set(windowId, host)
+    this._noteWindowFolder(windowId, workspaceFolder)
     this._logger.info(`window host registered id=${windowId}`)
     if (reloaded) {
       const message = localize(
@@ -711,15 +811,22 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   }
 
   /**
-   * A window opened (or switched to) `folder`. Best-effort: a local folder with
-   * `.universe-editor/triggers.json` is registered for background scheduling.
+   * A window opened (or switched to) `folder`. Best-effort: a folder with
+   * `.universe-editor/triggers.json` is registered for scheduling. `windowId` is
+   * optional for backward compatibility, but remote attach/detach needs it to know
+   * when the last window for a workspace went away.
    */
-  noteWindowWorkspace(folder: URI | null): void {
+  noteWindowWorkspace(folder: URI | null, windowId?: number): void {
+    if (windowId !== undefined) {
+      this._noteWindowFolder(windowId, folder)
+      this._detachRemoteWorkspacesWithoutWindow()
+    }
     void this._discoverWorkspace(folder)
   }
 
   unregisterWindowHost(windowId: number): void {
     this._hosts.delete(windowId)
+    this._windowFolders.delete(windowId)
     this._logger.info(`window host unregistered id=${windowId}`)
     const message = localize(
       'triggers.error.windowClosed',
@@ -732,6 +839,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       )
       this._failActiveRun(entry.runId, message)
     }
+    // Remote workspaces are only scheduled while one of their windows is open.
+    this._detachRemoteWorkspacesWithoutWindow()
   }
 
   setWindowProvider(provider: TriggerWindowProvider): void {
@@ -772,7 +881,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     } catch (err) {
       this._logger.warn(`trigger workspace registry load failed: ${describeError(err)}`)
     }
-    for (const workspace of registered) await this._attachWorkspace(workspace)
+    for (const workspace of registered) {
+      // Remote workspaces attach only while one of their windows is open; a
+      // restored registry entry must not start a background watcher (or SSH).
+      const uri = parseWorkspaceUri(workspace)
+      if (uri !== undefined && isRemoteWorkspaceUri(uri)) {
+        this._logger.info(`registered remote trigger workspace ${workspace} waits for a window`)
+        continue
+      }
+      await this._attachWorkspace(workspace)
+    }
     this._armGate()
   }
 
@@ -819,26 +937,43 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   // ---- workspace discovery / config stores --------------------------------
 
-  /** Register a local folder and start watching its trigger file (when it exists). */
+  /** Register a folder and start watching its trigger file (when it exists). */
   private async _discoverWorkspace(folder: URI | null): Promise<void> {
     if (folder === null) return
-    // Remote discovery lands with the remote config store; this phase stays local.
-    if (folder.scheme !== 'file' || folder.authority.length > 0) {
-      this._logger.info(`trigger workspace discovery skipped (not a local folder): ${folder}`)
+    const uri = parseWorkspaceUri(folder.toString())
+    if (uri === undefined) {
+      this._logger.info(`trigger workspace discovery skipped (unsupported folder): ${folder}`)
+      return
+    }
+    if (isRemoteWorkspaceUri(uri) && !this._remoteIoAllowed(uri.authority)) {
+      // Not connected (yet): deferred discovery runs from onDidChangeState.
+      this._logger.info(
+        `trigger workspace discovery deferred (remote '${uri.authority}' is not connected): ${uri}`,
+      )
       return
     }
     // Window hosts register before the registry/state load completes; waiting keeps
     // discovery from being overwritten by the in-flight `load()` snapshot.
     await this._awaitReady()
-    await this._registerDiscoveredWorkspace(folder.toString())
+    await this._registerDiscoveredWorkspace(uri.toString())
   }
 
   private async _registerDiscoveredWorkspace(workspace: string): Promise<void> {
     const uri = parseWorkspaceUri(workspace)
     if (uri === undefined) return
     try {
-      const file = workspaceTriggersConfigPath(uri.fsPath)
-      if (!(await fileExists(file))) return
+      if (isRemoteWorkspaceUri(uri)) {
+        if (!this._remoteIoAllowed(uri.authority)) {
+          this._logger.info(
+            `trigger workspace discovery skipped (remote '${uri.authority}' is not connected): ${workspace}`,
+          )
+          return
+        }
+        if (!(await this._remoteConfigExists(uri))) return
+      } else {
+        const file = workspaceTriggersConfigPath(uri.fsPath)
+        if (!(await fileExists(file))) return
+      }
       await this._registry.register(workspace)
       await this._attachWorkspace(workspace)
     } catch (err) {
@@ -867,19 +1002,44 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     key: string,
   ): Promise<void> {
     if (this._disposed || this._workspaces.has(key)) return
-    const file = workspaceTriggersConfigPath(workspaceUri.fsPath)
-    if (!(await fileExists(file))) {
-      this._logger.warn(`trigger workspace skipped (no ${file}); it stays registered until removed`)
-      return
+    const authority = isRemoteWorkspaceUri(workspaceUri) ? workspaceUri.authority : undefined
+    let store: TriggerConfigStore
+    if (authority === undefined) {
+      const file = workspaceTriggersConfigPath(workspaceUri.fsPath)
+      if (!(await fileExists(file))) {
+        this._logger.warn(
+          `trigger workspace skipped (no ${file}); it stays registered until removed`,
+        )
+        return
+      }
+      store = new JsonConfigFileStore<TriggersConfig>({
+        file,
+        logger: this._logger,
+        directoryLabel: 'workspace trigger config',
+        createDefault: createEmptyTriggersConfig,
+        read: readTriggersConfigFile,
+        serialize: serializeTriggersConfig,
+      })
+    } else {
+      // Hard gate: every remote read / watcher start below requires a live tunnel.
+      if (!this._remoteIoAllowed(authority)) {
+        this._logger.info(
+          `trigger workspace skipped (remote '${authority}' is not connected): ${workspace}`,
+        )
+        return
+      }
+      if (!(await this._remoteConfigExists(workspaceUri))) return
+      if (this._disposed || !this._remoteIoAllowed(authority)) return
+      const fileService = this._fileService
+      const connections = this._remoteConnections
+      if (fileService === undefined || connections === undefined) return
+      store = this._createRemoteConfigStore({
+        workspaceUri,
+        logger: this._logger,
+        fileService,
+        connections,
+      })
     }
-    const store = new JsonConfigFileStore<TriggersConfig>({
-      file,
-      logger: this._logger,
-      directoryLabel: 'workspace trigger config',
-      createDefault: createEmptyTriggersConfig,
-      read: readTriggersConfigFile,
-      serialize: serializeTriggersConfig,
-    })
     if (this._disposed) {
       store.dispose()
       return
@@ -888,9 +1048,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       workspace,
       workspaceUri,
       key,
+      authority,
       store,
       disposables: new DisposableStore(),
       config: createEmptyTriggersConfig(),
+      offline: false,
     }
     this._workspaces.set(key, entry)
     entry.disposables.add(store)
@@ -938,6 +1100,144 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._rescheduleWake()
   }
 
+  // ---- remote workspace lifecycle -----------------------------------------
+
+  private _noteWindowFolder(windowId: number, folder: URI | null): void {
+    const workspace = folder === null ? undefined : parseWorkspaceUri(folder.toString())?.toString()
+    if (workspace === undefined) this._windowFolders.delete(windowId)
+    else this._windowFolders.set(windowId, workspace)
+  }
+
+  /** Whether any window currently holds `key` (remote scheduling needs one). */
+  private _hasOpenWindowFor(key: string): boolean {
+    for (const folder of this._windowFolders.values()) {
+      if (workspaceComparisonKey(folder) === key) return true
+    }
+    return false
+  }
+
+  /** Remote definitions live only while one of their windows is open. */
+  private _detachRemoteWorkspacesWithoutWindow(): void {
+    for (const [key, entry] of [...this._workspaces]) {
+      if (entry.authority === undefined || this._hasOpenWindowFor(key)) continue
+      this._logger.info(`remote trigger workspace detached (no window open): ${entry.workspace}`)
+      this._detachWorkspace(key)
+    }
+    this._fireChange()
+  }
+
+  /** The hard gate for every remote read / watcher start (never triggers bring-up). */
+  private _remoteIoAllowed(authority: string): boolean {
+    if (this._fileService === undefined || this._remoteConnections === undefined) return false
+    return this._remoteConnections.getState(authority) === 'connected'
+  }
+
+  private async _remoteConfigExists(workspaceUri: URI): Promise<boolean> {
+    const fileService = this._fileService
+    if (fileService === undefined) return false
+    try {
+      return await fileService.exists(workspaceTriggersConfigUri(workspaceUri))
+    } catch (err) {
+      this._logger.debug(
+        `cannot stat the remote trigger config of ${workspaceUri}: ${describeError(err)}`,
+      )
+      return false
+    }
+  }
+
+  private _isWorkspaceOffline(trigger: RoutedTrigger): boolean {
+    const parsed = parseTriggerKey(trigger.key)
+    return parsed !== undefined && this._workspaces.get(parsed.workspaceKey)?.offline === true
+  }
+
+  private _onRemoteConnectionStateChange(change: IRemoteConnectionStateChange): void {
+    if (this._disposed) return
+    const authority = normalizeRemoteAuthority(change.authority)
+    if (change.state === 'connected') {
+      const candidates = new Map<string, string>()
+      for (const workspace of this._remoteWorkspacesForAuthority(authority)) {
+        candidates.set(workspaceComparisonKey(workspace), workspace)
+      }
+      // An offline entry (e.g. opened via `openConfig`) reloads even if the
+      // window mapping was not recorded for it.
+      for (const [key, entry] of this._workspaces) {
+        if (entry.authority === authority && entry.offline) candidates.set(key, entry.workspace)
+      }
+      for (const workspace of candidates.values()) {
+        const entry = this._workspaces.get(workspaceComparisonKey(workspace))
+        if (entry !== undefined && !entry.offline) continue
+        void this._reloadRemoteWorkspace(workspace)
+      }
+      return
+    }
+    // Leaving `connected` (reconnecting / failed / idle): stop remote I/O now.
+    // The definitions stay listable as an offline snapshot.
+    for (const entry of [...this._workspaces.values()]) {
+      if (entry.authority !== authority || entry.offline) continue
+      this._setWorkspaceOffline(entry)
+    }
+  }
+
+  /** Remote workspaces of `authority` that a currently open window holds. */
+  private _remoteWorkspacesForAuthority(authority: string): readonly string[] {
+    const workspaces = new Map<string, string>()
+    for (const folder of this._windowFolders.values()) {
+      const uri = parseWorkspaceUri(folder)
+      if (uri === undefined || !isRemoteWorkspaceUri(uri)) continue
+      if (normalizeRemoteAuthority(uri.authority) !== authority) continue
+      workspaces.set(workspaceComparisonKey(folder), folder)
+    }
+    return [...workspaces.values()]
+  }
+
+  /**
+   * Detach the remote store/watcher but keep the last config snapshot so the
+   * trigger list still shows the definitions with an "offline" marker.
+   */
+  private _setWorkspaceOffline(entry: WorkspaceEntry): void {
+    if (entry.offline) return
+    entry.offline = true
+    entry.disposables.dispose()
+    for (const triggerKey of [...this._armedSchedule.keys()]) {
+      if (parseTriggerKey(triggerKey)?.workspaceKey === entry.key) {
+        this._armedSchedule.delete(triggerKey)
+      }
+    }
+    for (const triggerKey of [...this._nextPoll.keys()]) {
+      if (parseTriggerKey(triggerKey)?.workspaceKey === entry.key) this._nextPoll.delete(triggerKey)
+    }
+    this._logger.info(`remote trigger workspace offline: ${entry.workspace}`)
+    this._pruneTiming()
+    this._rescheduleWake()
+    this._fireChange()
+  }
+
+  /** Re-read a remote workspace after reconnecting (also revives the offline entry). */
+  private _reloadRemoteWorkspace(workspace: string): Promise<void> {
+    const key = workspaceComparisonKey(workspace)
+    const pending = this._reloading.get(key)
+    if (pending !== undefined) return pending
+    const task = this._doReloadRemoteWorkspace(workspace, key).finally(() =>
+      this._reloading.delete(key),
+    )
+    this._reloading.set(key, task)
+    return task
+  }
+
+  private async _doReloadRemoteWorkspace(workspace: string, key: string): Promise<void> {
+    await this._awaitReady()
+    if (this._disposed) return
+    const entry = this._workspaces.get(key)
+    if (entry !== undefined) {
+      entry.disposables.dispose()
+      this._workspaces.delete(key)
+      // Queued/pending records stay: the next scheduling pass drops them quietly
+      // while offline, and a reconnect lets the normal replay decide.
+    }
+    await this._registerDiscoveredWorkspace(workspace)
+    this._fireChange()
+  }
+
   /** removeWorkspace drops every queued event: pending payload files included. */
   private _dropPendingRecordsForWorkspace(key: string): void {
     const removed = this._state.pending.filter((record) =>
@@ -963,15 +1263,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     state: JsonConfigFileState<TriggersConfig>,
   ): void {
     entry.config = state.value
+    const location = workspaceTriggersConfigLocation(entry.workspace)
     if (state.error !== undefined) {
-      this._logger.warn(
-        `${workspaceTriggersConfigPath(entry.workspaceUri.fsPath)} is invalid: ${state.error}`,
-      )
+      this._logger.warn(`${location} is invalid: ${state.error}`)
     }
     if (entry.config.invalid.length > 0) {
-      this._logger.warn(
-        `${workspaceTriggersConfigPath(entry.workspaceUri.fsPath)}: ${entry.config.invalid.length} invalid trigger entr(ies)`,
-      )
+      this._logger.warn(`${location}: ${entry.config.invalid.length} invalid trigger entr(ies)`)
     }
     for (const trigger of this._routedTriggers(entry)) this._syncSourceFingerprint(trigger)
     // Schedule/poll cadence is config-derived: drop this workspace's wake anchors so
@@ -1090,6 +1387,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     trigger: RoutedTrigger,
     options: { ignoreBackoff?: boolean; manual?: boolean } = {},
   ): boolean {
+    // A remote workspace without a live connection is "missed time": nothing is
+    // consumed and no cadence advances until it is back.
+    if (this._isWorkspaceOffline(trigger)) return false
     if ((!trigger.enabled && !options.manual) || this._state.pausedAll) return false
     const state = this._stateFor(trigger.key)
     if (state.paused) return false
@@ -1349,6 +1649,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
     if (this._needsConfirmation(trigger)) {
       this._logger.info(`trigger ${trigger.id}: event ${event.key} dropped (needs confirmation)`)
+      return false
+    }
+    if (this._isWorkspaceOffline(trigger)) {
+      // Disconnected remote workspace = missed time; do not consume the event.
+      this._logger.info(`trigger ${trigger.id}: event ${event.key} dropped (remote offline)`)
       return false
     }
     const backoffUntil = state.backoffUntil
@@ -2013,6 +2318,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         workspaceName: workspaceFolderName(trigger.workspace),
         sourceType: trigger.source.type,
         status,
+        offline: this._isWorkspaceOffline(trigger),
         enabled: trigger.enabled,
         paused,
         activationConfirmed,
@@ -2038,6 +2344,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           workspaceName: workspaceFolderName(entry.workspace),
           sourceType: 'unknown',
           status: 'invalid',
+          offline: entry.offline,
           enabled: false,
           paused: false,
           activationConfirmed: false,
@@ -2148,8 +2455,11 @@ export async function pruneRunDirectories(
   if (doomed.length > 0) logger?.info(`removed ${doomed.length} old run director(ies)`)
 }
 
-function workspaceFsPath(workspace: string): string {
-  return parseWorkspaceUri(workspace)?.fsPath ?? workspace
+function remoteNotConnectedMessage(): string {
+  return localize(
+    'triggers.error.remoteNotConnected',
+    'The remote host for this trigger is not connected. Reconnect and try again.',
+  )
 }
 
 function workspaceFolderName(workspace: string): string {

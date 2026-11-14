@@ -70,6 +70,9 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
       triggerStatusLabel(summary.status),
       triggerSourceLabel(summary.sourceType),
     ]
+    if (summary.offline === true) {
+      description.push(localize('triggers.item.offline', 'Remote host not connected'))
+    }
     if (summary.running > 0) {
       description.push(
         localize('triggers.item.running', '{count} running', { count: summary.running }),
@@ -96,6 +99,14 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
     }
 
     const detail: string[] = []
+    if (summary.offline === true) {
+      detail.push(
+        localize(
+          'triggers.item.offlineDetail',
+          'The remote host is disconnected. This trigger resumes automatically after you reconnect; missed events are handled per the trigger source.',
+        ),
+      )
+    }
     if (needsActivation) {
       detail.push(
         localize(

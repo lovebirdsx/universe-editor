@@ -227,7 +227,7 @@ export async function createWindowScopedServices(opts: {
   )
   disposables.add(
     workspace.onDidChangeWorkspace(() => {
-      appServices.triggers.noteWindowWorkspace(workspace.current?.folder ?? null)
+      appServices.triggers.noteWindowWorkspace(workspace.current?.folder ?? null, win.id)
     }),
   )
 

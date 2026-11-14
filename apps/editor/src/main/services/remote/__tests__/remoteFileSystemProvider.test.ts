@@ -90,6 +90,7 @@ function makeHarness(channels: Record<string, unknown>): {
   }
   const connService: IRemoteConnectionService = {
     _serviceBrand: undefined,
+    getState: () => undefined,
     getConnection: async () => {
       calls++
       return conn

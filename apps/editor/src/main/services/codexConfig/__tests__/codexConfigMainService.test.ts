@@ -611,6 +611,7 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
     }
     const connService: IRemoteConnectionService = {
       _serviceBrand: undefined,
+      getState: () => undefined,
       getConnection: async () => conn,
       connect: async () => conn,
       openExtensionHostConnection: async () => {

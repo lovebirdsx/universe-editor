@@ -70,6 +70,7 @@ function makeConnectionService(): {
   const startArgs: IRemoteExtensionHostStartArgs[] = []
   const connService: IRemoteConnectionServiceType = {
     _serviceBrand: undefined,
+    getState: () => undefined,
     getConnection: async () => {
       throw new Error('not used')
     },

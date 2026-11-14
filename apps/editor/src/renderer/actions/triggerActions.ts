@@ -223,14 +223,13 @@ async function setTriggerPaused(
 
 async function openTriggerConfig(services: TriggerActionServices): Promise<void> {
   const folder = services.workspace.current?.folder
-  // Definitions live inside a local workspace; remote (and empty) windows have nowhere
-  // to put them, so tell the user instead of failing inside main.
-  if (folder === undefined || folder.scheme !== 'file' || folder.authority.length > 0) {
+  // Definitions live inside a workspace; an empty window has nowhere to put them.
+  if (folder === undefined) {
     services.notifications.notify({
       severity: Severity.Warning,
       message: localize(
         'triggers.openConfig.noWorkspace',
-        'Open a local folder workspace first. Trigger definitions live in {path} inside the workspace and are not supported for remote workspaces.',
+        'Open a folder workspace first. Trigger definitions live in {path} inside the workspace.',
         { path: '.universe-editor/triggers.json' },
       ),
     })

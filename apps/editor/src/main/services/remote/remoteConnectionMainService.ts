@@ -116,6 +116,12 @@ export interface IRemoteConnectionService {
   readonly _serviceBrand: undefined
   getConnection(authority: string): Promise<IRemoteConnection>
   connect(authority: string): Promise<IRemoteConnection>
+  /**
+   * Synchronous snapshot of the last known state. Never creates an entry and
+   * never starts a bring-up, so background work can gate every remote I/O call
+   * on `getState(authority) === 'connected'` without dialing SSH by accident.
+   */
+  getState(authority: string): RemoteConnectionState | undefined
   /** Stable per-(authority, channel) service proxy. Calls always route to the
    *  current live connection (implicit bring-up); events survive stop/reconnect. */
   getServiceProxy<T extends object>(authority: string, channelName: string): T
@@ -362,6 +368,10 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     const entry = this._entries.get(authority)
     if (entry) entry.userDisconnected = false
     return this.getConnection(authority)
+  }
+
+  getState(authority: string): RemoteConnectionState | undefined {
+    return this._entries.get(normalizeRemoteAuthority(authority))?.state
   }
 
   getServiceProxy<T extends object>(authority: string, channelName: string): T {

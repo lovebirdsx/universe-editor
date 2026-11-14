@@ -599,6 +599,7 @@ function makeRemoteFixture(opts?: { leakSafe?: boolean }): RemoteFixture {
   }
   const connService: IRemoteConnectionService = {
     _serviceBrand: undefined,
+    getState: () => undefined,
     getConnection: async () => {
       connectionCalls++
       await gate

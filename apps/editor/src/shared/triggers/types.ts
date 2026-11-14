@@ -265,6 +265,11 @@ export interface TriggerSummary {
   readonly workspaceName: string
   readonly sourceType: TriggerSourceType | 'unknown'
   readonly status: TriggerStatus
+  /**
+   * The owning remote workspace is disconnected. The definition stays listed from
+   * the last snapshot but nothing is scheduled until the connection returns.
+   */
+  readonly offline?: boolean
   readonly enabled: boolean
   readonly paused: boolean
   /** The user confirmed this workspace-defined trigger (bound to the config fingerprint). */

@@ -95,6 +95,18 @@ describe('buildTriggerPickItems', () => {
     expect(item?.detail).toBeUndefined()
   })
 
+  it('marks an offline remote workspace in the description and detail', () => {
+    const [item] = buildTriggerPickItems([
+      summary({
+        offline: true,
+        workspace: 'remote-ssh://dev/home/testuser/proj',
+        workspaceName: 'proj',
+      }),
+    ])
+    expect(item?.description).toContain('Remote host not connected')
+    expect(item?.detail).toContain('The remote host is disconnected')
+  })
+
   it('renders the last run relatively and the next run as clock time', () => {
     const now = Date.now()
     const next = new Date(2026, 0, 1, 9, 5).getTime()

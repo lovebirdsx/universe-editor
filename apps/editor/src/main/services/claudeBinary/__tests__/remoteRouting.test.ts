@@ -106,6 +106,7 @@ function makeFixture(): Fixture {
   const proxyCalls: Array<{ authority: string; channel: string }> = []
   const connService: IRemoteConnectionService = {
     _serviceBrand: undefined,
+    getState: () => undefined,
     getConnection: async () => {
       throw new Error('getConnection must not be used')
     },

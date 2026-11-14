@@ -307,6 +307,8 @@ registerSingletonFactory(ITriggerMainService, (acc) => {
       storage: acc.get(IMainStorageService),
       logger,
     }),
+    fileService: acc.get(IFileService),
+    remoteConnections: acc.get(IRemoteConnectionService),
   })
 })
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))

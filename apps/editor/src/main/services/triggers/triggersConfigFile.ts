@@ -11,8 +11,10 @@
 import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { parse, type ParseError } from 'jsonc-parser'
+import { REMOTE_SCHEME, URI } from '@universe-editor/platform'
 import {
   parseTriggersConfig,
+  parseWorkspaceUri,
   TRIGGERS_CONFIG_EXAMPLE,
 } from '../../../shared/triggers/configParse.js'
 import {
@@ -36,6 +38,27 @@ export function triggersDirectory(userDataDir: string): string {
 /** Trigger definitions live inside the workspace so they can be committed. */
 export function workspaceTriggersConfigPath(workspace: string): string {
   return join(workspace, TRIGGERS_WORKSPACE_DIR, TRIGGERS_WORKSPACE_CONFIG_FILE)
+}
+
+/** Provider-facing location (remote workspaces have no local path). */
+export function workspaceTriggersConfigUri(workspaceUri: URI): URI {
+  return URI.joinPath(workspaceUri, TRIGGERS_WORKSPACE_DIR, TRIGGERS_WORKSPACE_CONFIG_FILE)
+}
+
+/** Directory the remote watcher prefers; it may not exist yet. */
+export function workspaceTriggersConfigDirUri(workspaceUri: URI): URI {
+  return URI.joinPath(workspaceUri, TRIGGERS_WORKSPACE_DIR)
+}
+
+/**
+ * Where the trigger file lives for a workspace identity: a local filesystem path
+ * for `file:` workspaces, the provider URI string for remote ones.
+ */
+export function workspaceTriggersConfigLocation(workspace: string): string {
+  const uri = parseWorkspaceUri(workspace)
+  if (uri === undefined) return workspaceTriggersConfigPath(workspace)
+  if (uri.scheme === REMOTE_SCHEME) return workspaceTriggersConfigUri(uri).toString()
+  return workspaceTriggersConfigPath(uri.fsPath)
 }
 
 export function createEmptyTriggersConfig(): TriggersConfig {
@@ -79,10 +102,19 @@ export async function readTriggersConfigFile(
   }
 
   text = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
-  if (text.trim() === '') return { kind: 'ok', value: createEmptyTriggersConfig() }
+  return parseTriggersConfigText(text)
+}
+
+/**
+ * JSONC parse + validation shared by the local file reader and the remote store,
+ * so both surfaces accept exactly the same shape and report the same errors.
+ */
+export function parseTriggersConfigText(text: string): JsonConfigReadResult<TriggersConfig> {
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  if (body.trim() === '') return { kind: 'ok', value: createEmptyTriggersConfig() }
 
   const errors: ParseError[] = []
-  const raw: unknown = parse(text, errors, { allowTrailingComma: true })
+  const raw: unknown = parse(body, errors, { allowTrailingComma: true })
   const firstError = errors[0]
   if (firstError !== undefined) {
     return {
