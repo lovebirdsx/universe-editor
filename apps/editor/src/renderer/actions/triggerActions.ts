@@ -825,7 +825,7 @@ export class RemoveTriggerWorkspaceAction extends Action2 {
         detail: localize(
           'triggers.workspace.remove.detail',
           'The workspace is removed from this machine only; {path} is left untouched. It is registered again the next time a window opens it.',
-          { path: target.configPath },
+          { path: workspaceDisplayPath(target.workspace) },
         ),
         primaryButton: localize('triggers.workspace.remove.primary', 'Stop Scheduling'),
       })

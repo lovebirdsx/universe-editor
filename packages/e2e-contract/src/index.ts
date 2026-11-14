@@ -904,6 +904,8 @@ export interface E2ETriggerSummary {
   readonly status: 'disabled' | 'idle' | 'running' | 'paused' | 'invalid' | 'needs-confirmation'
   readonly enabled: boolean
   readonly paused: boolean
+  /** The owning remote workspace is disconnected; nothing is scheduled until it reconnects. */
+  readonly offline?: boolean
   readonly elevatedMode: boolean
   readonly elevatedModeConfirmed: boolean
   readonly running: number

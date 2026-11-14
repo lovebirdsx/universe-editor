@@ -6,7 +6,7 @@
  *  location, so there is no `workspace` field and ids are unique per file only.
  *--------------------------------------------------------------------------------------------*/
 
-import { REMOTE_SCHEME, URI } from '@universe-editor/platform'
+import { REMOTE_SCHEME, URI, remoteAuthorityLabel } from '@universe-editor/platform'
 import { parseCron } from './cron.js'
 import {
   TRIGGER_ACTION_TYPES,
@@ -85,9 +85,18 @@ export function parseWorkspaceUri(value: unknown): URI | undefined {
   return undefined
 }
 
-/** Human-facing path for a workspace URI string; never render the raw URI in UI. */
+/**
+ * Human-facing path for a workspace URI string; never render the raw URI in UI.
+ * Remote workspaces keep the authority in parentheses: several hosts can mount
+ * the same path, and the path alone would make them indistinguishable.
+ */
 export function workspaceDisplayPath(workspace: string): string {
-  return parseWorkspaceUri(workspace)?.fsPath ?? workspace
+  const uri = parseWorkspaceUri(workspace)
+  if (uri === undefined) return workspace
+  if (uri.scheme === REMOTE_SCHEME) {
+    return `${uri.fsPath} (${remoteAuthorityLabel(uri.authority)})`
+  }
+  return uri.fsPath
 }
 
 interface ParseErrors {

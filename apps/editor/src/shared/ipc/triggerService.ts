@@ -24,7 +24,7 @@ export interface ITriggerMainService {
   listTriggers(): Promise<readonly TriggerSummary[]>
   /** Registered workspaces; `workspace` is a workspace URI string, not a bare path. */
   listWorkspaces(): Promise<readonly TriggerWorkspaceSummary[]>
-  /** Machine-local run directory (`<userData>/triggers/runs`); reports live there. */
+  /** Machine-local run directory (`<userData>/triggers/runs`); only local runs' reports live there. */
   getRunsDir(): Promise<string>
   /** Apply the `triggers.maxConcurrentRuns` setting change without restarting main. */
   setMaxConcurrentRuns(limit: number): Promise<void>
@@ -45,7 +45,8 @@ export interface ITriggerMainService {
    * Create `<workspace>/.universe-editor/triggers.json` with an example when absent,
    * register the workspace for background scheduling and return the file URI string.
    * `workspaceFolder` is the calling window's workspace URI string (`URI.toString()`);
-   * main cannot infer it. Only local `file:` workspaces are accepted in this phase.
+   * main cannot infer it. Local `file:` and `remote-ssh:` workspaces are accepted;
+   * a remote workspace must be connected.
    */
   ensureConfigFile(workspaceFolder?: string): Promise<string>
   /** Stop watching a registered workspace (URI string) and drop its queued events. */

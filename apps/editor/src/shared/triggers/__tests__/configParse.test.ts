@@ -70,9 +70,14 @@ describe('parseWorkspaceUri', () => {
     expect(parseWorkspaceUri(42)).toBeUndefined()
   })
 
-  it('renders a friendly path for the UI', () => {
+  it('renders a friendly path for the UI, keeping the remote authority', () => {
     expect(workspaceDisplayPath('file:///X:/workspace/one')).toBe('X:/workspace/one')
-    expect(workspaceDisplayPath('remote-ssh://acme-host/work/one')).toBe('/work/one')
+    expect(workspaceDisplayPath('remote-ssh://acme-host/work/one')).toBe(
+      '/work/one (SSH: acme-host)',
+    )
+    expect(workspaceDisplayPath('remote-ssh://wsl+ubuntu-24.04/work/one')).toBe(
+      '/work/one (WSL: ubuntu-24.04)',
+    )
     expect(workspaceDisplayPath('not a uri')).toBe('not a uri')
   })
 })
