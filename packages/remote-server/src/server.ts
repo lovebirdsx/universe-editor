@@ -119,7 +119,9 @@ export function createRemoteServer(
   // Watcher tunnel: the local side reuses its WatcherProcessClient seq/ack
   // machinery unchanged, so this end forwards the raw message protocol and lets
   // its own WatcherProcessClient own the forked child + crash replay. Subscribes
-  // use the remote client's id verbatim so events route back to the same watcher.
+  // use the remote client's id verbatim so events route back to the same watcher;
+  // this per-connection host is shared by every watcher client in the editor
+  // process, which is why those clients allocate ids from one global sequence.
   const watcherEvents = new Emitter<WatcherHostResponse>()
   const watcherClient = disposables.add(
     new WatcherProcessClient(

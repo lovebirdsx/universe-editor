@@ -23,6 +23,7 @@ import {
 import {
   createPollCommandFetcher,
   isValidTriggerClientId,
+  isValidTriggerPollTimeout,
   isValidTriggerRunId,
   pruneRunDirectories,
   SessionReportReader,
@@ -66,7 +67,7 @@ export class RemoteTriggerService implements IRemoteTriggerService {
     if (typeof keyField !== 'string' || keyField === '') {
       throw new Error('triggerPoll.poll: keyField must be a non-empty string')
     }
-    if (typeof timeoutSec !== 'number' || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
+    if (!isValidTriggerPollTimeout(timeoutSec)) {
       throw new Error(`triggerPoll.poll: invalid timeoutSec ${String(timeoutSec)}`)
     }
     if (!URI.isUri(cwd)) {
@@ -110,16 +111,6 @@ export class RemoteTriggerService implements IRemoteTriggerService {
       `created run dir ${clientId}/${runId} (pruned ${removed.length} old run director(ies))`,
     )
     return { runDir: URI.file(runDir) }
-  }
-
-  async cleanupRuns(
-    clientId: string,
-    options: TriggerRunDirectoryOptions,
-  ): Promise<{ readonly removed: readonly string[] }> {
-    assertIds(clientId)
-    const { removed } = await this._prune(clientId, options)
-    this._log.debug(`cleaned ${removed.length} run director(ies) for client ${clientId}`)
-    return { removed }
   }
 
   async readReport(

@@ -50,6 +50,7 @@ async function flushMicrotasks(n = 20): Promise<void> {
 
 function makeWatcherHarness(): {
   svc: FileWatcherMainService
+  newService: () => FileWatcherMainService
   tunnelMessages: Emitter<WatcherHostResponse>
   tunnelPosts: WatcherHostRequest[]
   close: Emitter<void>
@@ -95,14 +96,21 @@ function makeWatcherHarness(): {
   const localHost = new WatcherProcessClient(() => {
     throw new Error('local watcher transport must not be used in remote tests')
   })
-  const svc = new FileWatcherMainService(localHost, undefined, connService)
+  const services: FileWatcherMainService[] = []
+  const newService = (): FileWatcherMainService => {
+    const service = new FileWatcherMainService(localHost, undefined, connService)
+    services.push(service)
+    return service
+  }
+  const svc = newService()
   return {
     svc,
+    newService,
     tunnelMessages,
     tunnelPosts,
     close,
     cleanup: () => {
-      svc.dispose()
+      for (const service of services.splice(0)) service.dispose()
       localHost.dispose()
       close.dispose()
       tunnelMessages.dispose()
@@ -142,6 +150,56 @@ describe('FileWatcherMainService remote routing', () => {
     h.cleanup()
   })
 
+  it('gives windows sharing an authority distinct watcher ids and isolated subscriptions', async () => {
+    const h = makeWatcherHarness()
+    const svcB = h.newService()
+    const changesA: IFileChangeEvent[] = []
+    const changesB: IFileChangeEvent[] = []
+    h.svc.onDidChangeFiles((e) => changesA.push(...e))
+    svcB.onDidChangeFiles((e) => changesB.push(...e))
+
+    const watchingA = h.svc.watch(remote('host', '/home/user/a'))
+    const watchingB = svcB.watch(remote('host', '/home/user/b'))
+    await flushMicrotasks()
+    const subs = h.tunnelPosts.filter(
+      (msg): msg is WatcherSubscribeRequest => msg.kind === 'subscribe',
+    )
+    expect(subs).toHaveLength(2)
+    const [subA, subB] = subs
+    // Both windows tunnel into the same connection, so the server sees one
+    // watcher keyed by id; duplicate ids would have them evict each other.
+    expect(subA!.id).not.toBe(subB!.id)
+
+    h.tunnelMessages.fire({ kind: 'ack', seq: subA!.seq })
+    h.tunnelMessages.fire({ kind: 'ack', seq: subB!.seq })
+    await Promise.all([watchingA, watchingB])
+
+    h.tunnelMessages.fire({
+      kind: 'events',
+      id: subA!.id,
+      events: [{ path: '/home/user/a/only-a.txt', type: 'create' }],
+    })
+    h.svc._flushForTests()
+    svcB._flushForTests()
+    expect(changesA.map((c) => c.resource.path)).toEqual(['/home/user/a/only-a.txt'])
+    expect(changesB).toHaveLength(0)
+
+    h.svc.dispose()
+    await flushMicrotasks()
+    const unsubscribed = h.tunnelPosts.filter((msg) => msg.kind === 'unsubscribe')
+    expect(unsubscribed.map((msg) => msg.id)).toEqual([subA!.id])
+
+    h.tunnelMessages.fire({
+      kind: 'events',
+      id: subB!.id,
+      events: [{ path: '/home/user/b/still-watched.txt', type: 'update' }],
+    })
+    svcB._flushForTests()
+    expect(changesB.map((c) => c.resource.path)).toEqual(['/home/user/b/still-watched.txt'])
+
+    h.cleanup()
+  })
+
   it('replays the subscription after the connection closes', async () => {
     vi.useFakeTimers()
     try {
@@ -163,6 +221,8 @@ describe('FileWatcherMainService remote routing', () => {
       const replay = h.tunnelPosts[h.tunnelPosts.length - 1] as WatcherSubscribeRequest
       expect(replay.kind).toBe('subscribe')
       expect(replay.dir).toBe('/home/user')
+      // Reconnected transports must resume the same id, not allocate a new one.
+      expect(replay.id).toBe(sub.id)
       h.cleanup()
     } finally {
       vi.useRealTimers()

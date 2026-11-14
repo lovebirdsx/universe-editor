@@ -23,12 +23,12 @@ import {
   type IFileService,
   type ILogger,
 } from '@universe-editor/platform'
-import { WatcherProcessClient } from '@universe-editor/node-services'
+import type { WatcherProcessClient } from '@universe-editor/node-services'
 import {
   TRIGGERS_WORKSPACE_CONFIG_FILE,
   type TriggersConfig,
 } from '../../../shared/triggers/types.js'
-import { RemoteWatcherTransport } from '../remote/remoteWatcherTransport.js'
+import { createRemoteWatcherClient } from '../remote/remoteWatcherTransport.js'
 import type { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 import { remoteFsPathToUri, remotePathFromUri } from '../remote/remoteUri.js'
 import type { JsonConfigFileState } from '../jsonConfig/jsonConfigFileStore.js'
@@ -119,10 +119,7 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
     this._debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS
     this._createWatcherClient =
       options.createWatcherClient ??
-      (() =>
-        new WatcherProcessClient(
-          () => new RemoteWatcherTransport(this._authority, this._connections, this._logger),
-        ))
+      (() => createRemoteWatcherClient(this._authority, this._connections, this._logger))
   }
 
   get state(): JsonConfigFileState<TriggersConfig> {

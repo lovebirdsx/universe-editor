@@ -41,6 +41,16 @@ export interface IWatcherTransport {
 
 export type WatcherTransportFactory = () => IWatcherTransport
 
+export interface WatcherProcessClientOptions {
+  /**
+   * Where `allocateId()` draws from. Clients that share one server-side watcher
+   * (every remote client on a connection tunnels into the same host) must use
+   * the same process-wide sequence; their private counters would both start at
+   * 1, so the second subscriber would silently replace the first.
+   */
+  readonly allocateId?: () => number
+}
+
 const RESTART_DELAY_MS = 300
 const RESTART_WINDOW_MS = 60_000
 const MAX_RESTARTS = 3
@@ -71,13 +81,16 @@ export class WatcherProcessClient implements IDisposable {
   private _restartTimes: number[] = []
   private _seq = 0
   private _idCounter = 1
+  private readonly _allocateId: (() => number) | undefined
   private _broken = false
   private _disposed = false
 
   constructor(
     private readonly _createTransport: WatcherTransportFactory,
     @ILoggerService loggerService?: ILoggerService,
+    options?: WatcherProcessClientOptions,
   ) {
+    this._allocateId = options?.allocateId
     // Only the no-service fallback (NullLogger) is owned by this client; a
     // logger from ILoggerService is cached/owned by the service.
     this._ownsLogger = loggerService === undefined
@@ -86,7 +99,7 @@ export class WatcherProcessClient implements IDisposable {
 
   /** One stable id per FileWatcherMainService instance. */
   allocateId(): number {
-    return this._idCounter++
+    return this._allocateId ? this._allocateId() : this._idCounter++
   }
 
   async watch(id: number, dir: string, ignore: readonly string[]): Promise<void> {

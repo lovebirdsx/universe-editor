@@ -26,6 +26,7 @@ const CLIENT_ID = 'testuser-install-1'
 const OTHER_CLIENT_ID = 'testuser-install-2'
 const RUN_ID = '123e4567-e89b-42d3-a456-426614174000'
 const OTHER_RUN_ID = '223e4567-e89b-42d3-a456-426614174000'
+const NEW_RUN_ID = '323e4567-e89b-42d3-a456-426614174000'
 
 const tempRoots: string[] = []
 
@@ -176,9 +177,6 @@ describe('remote triggerPoll channel', () => {
         await expect(
           triggers.createRunDir(clientId, RUN_ID, { keep: 1, protectedRunIds: [] }),
         ).rejects.toThrow(/invalid clientId/)
-        await expect(
-          triggers.cleanupRuns(clientId, { keep: 1, protectedRunIds: [] }),
-        ).rejects.toThrow(/invalid clientId/)
         await expect(triggers.readReport(clientId, RUN_ID)).rejects.toThrow(/invalid clientId/)
       }
       for (const runId of ['', '..', '../escape', 'run-1', RUN_ID.replace('42d3', '62d3')]) {
@@ -192,20 +190,16 @@ describe('remote triggerPoll channel', () => {
     }
   })
 
-  it('cleanupRuns prunes only the given client namespace', async () => {
+  it('prunes only the given client namespace when creating a run directory', async () => {
     const dataDir = await makeTempRoot()
     await seedRun(dataDir, CLIENT_ID, RUN_ID, { mtimeMs: 1_000 })
     await seedRun(dataDir, CLIENT_ID, OTHER_RUN_ID, { mtimeMs: 2_000 })
     await seedRun(dataDir, OTHER_CLIENT_ID, RUN_ID, { mtimeMs: 1_000 })
     const { triggers, dispose } = connect({ dataDir })
     try {
-      const { removed } = await triggers.cleanupRuns(CLIENT_ID, {
-        keep: 1,
-        protectedRunIds: [],
-      })
-      expect(removed).toEqual([RUN_ID])
+      await triggers.createRunDir(CLIENT_ID, NEW_RUN_ID, { keep: 1, protectedRunIds: [] })
       const own = await fs.readdir(path.join(dataDir, 'triggers', 'runs', CLIENT_ID))
-      expect(own).toEqual([OTHER_RUN_ID])
+      expect(own).toEqual([NEW_RUN_ID])
       const other = await fs.readdir(path.join(dataDir, 'triggers', 'runs', OTHER_CLIENT_ID))
       expect(other).toEqual([RUN_ID])
     } finally {
@@ -219,13 +213,12 @@ describe('remote triggerPoll channel', () => {
     await seedRun(dataDir, CLIENT_ID, OTHER_RUN_ID, { mtimeMs: 2_000 })
     const { triggers, dispose } = connect({ dataDir })
     try {
-      const { removed } = await triggers.cleanupRuns(CLIENT_ID, {
+      await triggers.createRunDir(CLIENT_ID, NEW_RUN_ID, {
         keep: 1,
         protectedRunIds: [RUN_ID],
       })
-      expect(removed).toEqual([])
       const own = await fs.readdir(path.join(dataDir, 'triggers', 'runs', CLIENT_ID))
-      expect(own.sort()).toEqual([OTHER_RUN_ID, RUN_ID].sort())
+      expect(own.sort()).toEqual([NEW_RUN_ID, RUN_ID].sort())
     } finally {
       dispose()
     }
@@ -257,6 +250,26 @@ describe('remote triggerPoll channel', () => {
         ok: false,
         reason: 'too_large',
       })
+    } finally {
+      dispose()
+    }
+  })
+
+  it('rejects poll timeouts outside the client schema range', async () => {
+    const dataDir = await makeTempRoot()
+    const workspace = await makeTempRoot()
+    const { triggers, dispose } = connect({ dataDir })
+    try {
+      for (const timeoutSec of [0, -1, 601, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        await expect(
+          triggers.poll({
+            command: 'node -v',
+            cwd: URI.file(workspace),
+            timeoutSec,
+            keyField: 'id',
+          }),
+        ).rejects.toThrow(/invalid timeoutSec/)
+      }
     } finally {
       dispose()
     }

@@ -65,6 +65,19 @@ export type TriggerRunReportReadResult =
     }
   | { readonly ok: false; readonly reason: 'not_found' | 'too_large' }
 
+/** Poll command timeout bounds; the client config schema enforces the same range. */
+export const TRIGGER_POLL_TIMEOUT_MIN_SEC = 1
+export const TRIGGER_POLL_TIMEOUT_MAX_SEC = 600
+
+export function isValidTriggerPollTimeout(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= TRIGGER_POLL_TIMEOUT_MIN_SEC &&
+    value <= TRIGGER_POLL_TIMEOUT_MAX_SEC
+  )
+}
+
 export interface IRemoteTriggerService {
   /** Run the poll command on the server host and normalize its stdout. */
   poll(request: TriggerPollRequest): Promise<TriggerPollResult>
@@ -78,12 +91,6 @@ export interface IRemoteTriggerService {
     runId: string,
     options: TriggerRunDirectoryOptions,
   ): Promise<{ readonly runDir: URI }>
-
-  /** Prune one client's runs; returns the run ids that were removed. */
-  cleanupRuns(
-    clientId: string,
-    options: TriggerRunDirectoryOptions,
-  ): Promise<{ readonly removed: readonly string[] }>
 
   /** Read `<runsDir>/<clientId>/<runId>/report.md` under a byte cap. */
   readReport(

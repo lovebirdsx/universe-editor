@@ -72,6 +72,19 @@ describe('WatcherProcessClient', () => {
     ])
   })
 
+  it('delegates id allocation to an injected allocator while the default stays per-client', () => {
+    let next = 10
+    const shared = new WatcherProcessClient(() => new FakeTransport(), undefined, {
+      allocateId: () => next++,
+    })
+    try {
+      expect([shared.allocateId(), shared.allocateId()]).toEqual([10, 11])
+      expect([client.allocateId(), client.allocateId()]).toEqual([1, 2])
+    } finally {
+      shared.dispose()
+    }
+  })
+
   it('rejects the watch when the host acks with an error', async () => {
     // First watch creates the transport, so autoAck can be flipped off for the next one.
     await client.watch(1, '/ok', [])

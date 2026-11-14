@@ -43,9 +43,9 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { PerfMarks } from '../../../shared/perf/marks.js'
-import { WatcherProcessClient } from '@universe-editor/node-services'
+import type { WatcherProcessClient } from '@universe-editor/node-services'
 import type { WatcherRawEventType } from '@universe-editor/platform'
-import { RemoteWatcherTransport } from '../remote/remoteWatcherTransport.js'
+import { createRemoteWatcherClient } from '../remote/remoteWatcherTransport.js'
 import { IRemoteConnectionService } from '../remote/remoteConnectionMainService.js'
 import { remoteFsPathToUri, remotePathFromUri } from '../remote/remoteUri.js'
 
@@ -420,9 +420,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
     let entry = this._remoteWatchers.get(authority)
     if (!entry) {
-      const client = new WatcherProcessClient(
-        () => new RemoteWatcherTransport(authority, this._connections!, this._logger),
-      )
+      const client = createRemoteWatcherClient(authority, this._connections, this._logger)
       const watchId = client.allocateId()
       const listening = [
         client.onFileEvents((msg) => {

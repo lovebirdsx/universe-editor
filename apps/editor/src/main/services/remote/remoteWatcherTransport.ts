@@ -18,8 +18,31 @@ import {
   type WatcherHostRequest,
   type WatcherHostResponse,
 } from '@universe-editor/platform'
-import type { IWatcherTransport } from '@universe-editor/node-services'
+import { WatcherProcessClient, type IWatcherTransport } from '@universe-editor/node-services'
 import type { IRemoteConnection, IRemoteConnectionService } from './remoteConnectionMainService.js'
+
+// Every remote watcher client on one authority tunnels into the SAME server-side
+// watcher, which keys subscriptions by the id the client sends. Per-client
+// counters all start at 1, so two windows (or a window and a trigger config
+// store) would overwrite each other's subscription and unwatch each other's
+// events. One process-wide sequence keeps the ids unique for the whole app.
+let nextRemoteWatchId = 1
+
+export function allocateRemoteWatchId(): number {
+  return nextRemoteWatchId++
+}
+
+export function createRemoteWatcherClient(
+  authority: string,
+  connections: IRemoteConnectionService,
+  logger: ILogger,
+): WatcherProcessClient {
+  return new WatcherProcessClient(
+    () => new RemoteWatcherTransport(authority, connections, logger),
+    undefined,
+    { allocateId: allocateRemoteWatchId },
+  )
+}
 
 export class RemoteWatcherTransport implements IWatcherTransport {
   private readonly _onMessage = new Emitter<WatcherHostResponse>()
