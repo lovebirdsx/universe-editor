@@ -79,6 +79,8 @@ function pollSource(overrides: Record<string, unknown> = {}): Record<string, unk
 interface ConfigOverrides {
   readonly source?: unknown
   readonly session?: Record<string, unknown>
+  readonly concurrency?: number
+  readonly overflow?: 'queue' | 'drop'
 }
 
 function configText(id: string, overrides: ConfigOverrides = {}): string {
@@ -93,8 +95,8 @@ function configText(id: string, overrides: ConfigOverrides = {}): string {
         source: (overrides.source ?? { type: 'manual' }) as TriggerConfig['source'],
         session: { prompt: 'Do it', budget: BUDGET, ...(overrides.session ?? {}) },
         allowedActions: [],
-        concurrency: 1,
-        overflow: 'queue',
+        concurrency: overrides.concurrency ?? 1,
+        overflow: overrides.overflow ?? 'queue',
       },
     ],
     invalid: [],
@@ -201,9 +203,9 @@ class FakeConnections {
     return this._service as unknown as T
   }
 
-  setState(state: RemoteConnectionState): void {
+  setState(state: RemoteConnectionState, authority = AUTHORITY): void {
     this.state = state
-    this._onDidChangeState.fire({ authority: AUTHORITY, state })
+    this._onDidChangeState.fire({ authority, state })
   }
 }
 
@@ -247,10 +249,13 @@ class FakeClock implements TriggerClock {
 interface HarnessOptions {
   readonly state?: RemoteConnectionState
   readonly config?: string | null
+  readonly workspace?: URI
   readonly registerWindow?: boolean
   /** Register the host without exposing the window to the window provider. */
   readonly windowVisible?: boolean
   readonly clientId?: string
+  /** Resolve the client id lazily (lets a test flip the connection mid-await). */
+  readonly clientIdImpl?: () => Promise<string>
   readonly remotePollGraceMs?: number
   /** Override the remote poll RPC (default: an empty result). */
   readonly pollImpl?: () => Promise<TriggerPollResult>
@@ -270,6 +275,7 @@ interface Harness {
   readonly proxyChannels: string[]
   readonly openWindow: ReturnType<typeof vi.fn>
   pendingCount(): number
+  lastScheduledAt(triggerKey: string): number | undefined
   showWindow(): void
 }
 
@@ -309,10 +315,13 @@ async function discoverAndConfirm(harness: Harness): Promise<void> {
 async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const dir = mkTempDir('ue-triggers-remote-')
   dirs.push(dir)
+  const workspace = options.workspace ?? WORKSPACE
+  const configUri = workspaceTriggersConfigUri(workspace)
+  const dirUri = workspaceTriggersConfigDirUri(workspace)
   const files = new FakeFileService()
   if (options.config !== null && options.config !== undefined) {
-    files.files.set(CONFIG_URI.toString(), options.config)
-    files.directories.add(DIR_URI.toString())
+    files.files.set(configUri.toString(), options.config)
+    files.directories.add(dirUri.toString())
   }
   const connections = new FakeConnections()
   connections.state = options.state ?? 'connected'
@@ -338,7 +347,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     readMaxConcurrentRuns: async () => 2,
     fileService: files as unknown as IFileService,
     remoteConnections: connections as unknown as IRemoteConnectionService,
-    clientId: async () => options.clientId ?? CLIENT_ID,
+    clientId: options.clientIdImpl ?? (async () => options.clientId ?? CLIENT_ID),
     ...(options.remotePollGraceMs === undefined
       ? {}
       : { remotePollGraceMs: options.remotePollGraceMs }),
@@ -353,12 +362,12 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   service.setWindowProvider(provider)
   const showWindow = (): void => {
     if (!windows.some((entry) => entry.id === 1)) {
-      windows.push({ id: 1, folder: WORKSPACE.toJSON(), name: 'remote' })
+      windows.push({ id: 1, folder: workspace.toJSON(), name: 'remote' })
     }
   }
   if (options.registerWindow !== false) {
     if (options.windowVisible !== false) showWindow()
-    service.registerWindowHost(1, host, WORKSPACE)
+    service.registerWindowHost(1, host, workspace)
   }
   await service.initialize()
   await settle()
@@ -380,9 +389,15 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     openWindow,
     pendingCount: () =>
       (service as unknown as { _state: { pending: readonly unknown[] } })._state.pending.length,
+    lastScheduledAt: (triggerKey: string) =>
+      (
+        service as unknown as {
+          _state: { triggers: Record<string, { lastScheduledAt?: number }> }
+        }
+      )._state.triggers[triggerKey]?.lastScheduledAt,
     showWindow: () => {
       showWindow()
-      service.registerWindowHost(1, host, WORKSPACE)
+      service.registerWindowHost(1, host, workspace)
     },
   }
 }
@@ -475,7 +490,7 @@ describe('TriggerMainService remote workspaces', () => {
   })
 
   it('writes the example config remotely once and never overwrites it', async () => {
-    const harness = await createHarness({ config: null, registerWindow: false })
+    const harness = await createHarness({ config: null })
 
     const created = await harness.service.ensureConfigFile(WORKSPACE.toString())
 
@@ -732,5 +747,277 @@ describe('TriggerMainService remote run reports', () => {
       kind: 'not-found',
     })
     expect(harness.readReport).not.toHaveBeenCalled()
+  })
+})
+
+describe('TriggerMainService remote run queue slots', () => {
+  it('releases the slot when a queued run is deferred by a disconnect and replays it on reconnect', async () => {
+    const harness = await createHarness({ config: configText('remote-a') })
+    await discoverAndConfirm(harness)
+    const [summary] = await harness.service.listTriggers()
+
+    await harness.service.runNow(summary!.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    await harness.service.runNow(summary!.key)
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.queued === 1)
+
+    harness.connections.setState('reconnecting')
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.offline === true)
+
+    // Ending the active run drains the queue while the workspace is offline.
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'remote-a',
+      outcome: 'completed',
+      actions: [],
+    })
+    await settle()
+
+    const [deferred] = await harness.service.listTriggers()
+    expect(deferred?.running).toBe(0)
+    expect(deferred?.queued).toBe(0)
+    expect(deferred?.consecutiveFailures).toBe(0)
+    expect(harness.pendingCount()).toBe(1)
+
+    harness.connections.setState('connected')
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
+    expect(harness.pendingCount()).toBe(0)
+  })
+})
+
+describe('TriggerMainService remote I/O gate', () => {
+  it('stops creating the remote config when the connection drops between calls', async () => {
+    const harness = await createHarness({ config: null })
+    const exists = harness.files.exists.bind(harness.files)
+    vi.spyOn(harness.files, 'exists').mockImplementationOnce(async (uri) => {
+      harness.connections.setState('reconnecting')
+      return exists(uri)
+    })
+
+    await expect(harness.service.ensureConfigFile(WORKSPACE.toString())).rejects.toThrow(
+      /not connected/,
+    )
+    expect(harness.files.writes).toBe(0)
+    expect(harness.files.directories.has(DIR_URI.toString())).toBe(false)
+  })
+
+  it('does not read the report when the connection drops while resolving the client id', async () => {
+    const state: { connections?: FakeConnections } = {}
+    const harness = await createHarness({
+      config: configText('remote-a'),
+      clientIdImpl: async () => {
+        state.connections?.setState('reconnecting')
+        return CLIENT_ID
+      },
+    })
+    state.connections = harness.connections
+
+    expect(await harness.service.readRunReport(RUN_ID, AUTHORITY)).toEqual({
+      kind: 'unavailable',
+    })
+    expect(harness.readReport).not.toHaveBeenCalled()
+  })
+
+  it('defers the run instead of creating the run dir when the connection drops mid-start', async () => {
+    const state: { connections?: FakeConnections } = {}
+    const harness = await createHarness({
+      config: configText('remote-a'),
+      clientIdImpl: async () => {
+        state.connections?.setState('reconnecting')
+        return CLIENT_ID
+      },
+    })
+    state.connections = harness.connections
+    await discoverAndConfirm(harness)
+    const [summary] = await harness.service.listTriggers()
+
+    await harness.service.runNow(summary!.key)
+    await waitFor(() => harness.loggerLines.some((line) => line.includes('deferred')))
+
+    expect(harness.createRunDir).not.toHaveBeenCalled()
+    expect(harness.pendingCount()).toBe(1)
+    expect((await harness.service.listTriggers())[0]?.running).toBe(0)
+  })
+})
+
+describe('TriggerMainService remote reload races', () => {
+  it('does not attach a workspace whose window closed while the config was loading', async () => {
+    const harness = await createHarness({ config: configText('remote-a') })
+    await waitFor(async () => (await harness.service.listTriggers()).length === 1)
+    harness.connections.setState('reconnecting')
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.offline === true)
+
+    const read = harness.files.readFileText.bind(harness.files)
+    vi.spyOn(harness.files, 'readFileText').mockImplementationOnce(async (uri) => {
+      harness.service.unregisterWindowHost(1)
+      return read(uri)
+    })
+
+    harness.connections.setState('connected')
+    await waitFor(() =>
+      harness.loggerLines.some((line) => line.includes('window host unregistered')),
+    )
+    await settle()
+
+    expect(await harness.service.listTriggers()).toEqual([])
+    expect((await harness.service.listWorkspaces())[0]?.available).toBe(false)
+  })
+
+  it('keeps the offline snapshot when the connection drops again during a reload', async () => {
+    const harness = await createHarness({ config: configText('remote-a') })
+    await waitFor(async () => (await harness.service.listTriggers()).length === 1)
+    harness.connections.setState('reconnecting')
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.offline === true)
+
+    const read = harness.files.readFileText.bind(harness.files)
+    vi.spyOn(harness.files, 'readFileText').mockImplementationOnce(async (uri) => {
+      harness.connections.setState('reconnecting')
+      return read(uri)
+    })
+
+    harness.connections.setState('connected')
+    await settle(20)
+
+    const list = await harness.service.listTriggers()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.id).toBe('remote-a')
+    expect(list[0]?.offline).toBe(true)
+  })
+
+  it('keeps the offline snapshot when the config is missing on reconnect', async () => {
+    const harness = await createHarness({ config: configText('remote-a') })
+    await waitFor(async () => (await harness.service.listTriggers()).length === 1)
+    harness.connections.setState('reconnecting')
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.offline === true)
+
+    harness.files.files.delete(CONFIG_URI.toString())
+    harness.connections.setState('connected')
+    await settle(20)
+
+    const list = await harness.service.listTriggers()
+    expect(list).toHaveLength(1)
+    expect(list[0]?.id).toBe('remote-a')
+    expect(list[0]?.offline).toBe(true)
+  })
+})
+
+describe('TriggerMainService remote schedule catch-up', () => {
+  async function stageMissedSlot(
+    onMissed: 'skip' | 'catch-up-once',
+  ): Promise<{ harness: Harness; triggerKey: string; lastScheduledAt: number }> {
+    const harness = await createHarness({
+      config: configText('remote-sched', {
+        source: { type: 'schedule', everyMin: 5, onMissed },
+      }),
+    })
+    await discoverAndConfirm(harness)
+    const [summary] = await harness.service.listTriggers()
+    await harness.clock.advance(5 * 60_000)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'remote-sched',
+      outcome: 'completed',
+      actions: [],
+    })
+    const lastScheduledAt = harness.lastScheduledAt(summary!.key)
+    expect(lastScheduledAt).toBeDefined()
+
+    harness.connections.setState('reconnecting')
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.offline === true)
+    // 33 minutes is not a multiple of the interval: the latest missed occurrence
+    // is 3 minutes stale, past the 2-minute grace.
+    await harness.clock.advance(33 * 60_000)
+    expect(harness.lastScheduledAt(summary!.key)).toBe(lastScheduledAt)
+    return { harness, triggerKey: summary!.key, lastScheduledAt: lastScheduledAt! }
+  }
+
+  it('skips the missed slots after reconnect without advancing lastScheduledAt offline', async () => {
+    const { harness, triggerKey } = await stageMissedSlot('skip')
+    harness.connections.setState('connected')
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.offline === false)
+    await settle()
+
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    expect(harness.loggerLines.some((line) => line.includes('skipped'))).toBe(true)
+    expect(harness.lastScheduledAt(triggerKey)).toBeDefined()
+  })
+
+  it('fires exactly one catch-up run after reconnect with onMissed=catch-up-once', async () => {
+    const { harness } = await stageMissedSlot('catch-up-once')
+    harness.connections.setState('connected')
+
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
+    expect(harness.requests[1]?.origin.eventKey).toMatch(/^schedule:/)
+  })
+})
+
+describe('TriggerMainService remote run id protection', () => {
+  it('protects a pending run id after the workspace entry is detached', async () => {
+    const harness = await createHarness({
+      config: configText('remote-a'),
+      windowVisible: false,
+    })
+    await discoverAndConfirm(harness)
+    const [summary] = await harness.service.listTriggers()
+    await harness.service.runNow(summary!.key)
+    await waitFor(() => harness.pendingCount() === 1)
+    const pendingRunId = (
+      harness.service as unknown as { _state: { pending: readonly { runId: string }[] } }
+    )._state.pending[0]!.runId
+
+    harness.service.unregisterWindowHost(1)
+    await settle()
+    expect((await harness.service.listWorkspaces())[0]?.available).toBe(false)
+
+    const protectedIds = (
+      harness.service as unknown as {
+        _protectedRunIdsForAuthority(authority: string): readonly string[]
+      }
+    )._protectedRunIdsForAuthority(AUTHORITY)
+    expect(protectedIds).toContain(pendingRunId)
+  })
+
+  it('protects an active run id after the workspace is removed', async () => {
+    const harness = await createHarness({ config: configText('remote-a') })
+    await discoverAndConfirm(harness)
+    const [summary] = await harness.service.listTriggers()
+    await harness.service.runNow(summary!.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    const runId = harness.requests[0]!.origin.runId
+
+    await harness.service.removeWorkspace(WORKSPACE.toString())
+    await settle()
+
+    const protectedIds = (
+      harness.service as unknown as {
+        _protectedRunIdsForAuthority(authority: string): readonly string[]
+      }
+    )._protectedRunIdsForAuthority(AUTHORITY)
+    expect(protectedIds).toContain(runId)
+  })
+})
+
+describe('TriggerMainService remote workspace identity', () => {
+  it('marks a WSL workspace offline when the disconnect reports the normalized authority', async () => {
+    const workspace = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'wsl+Ubuntu-24.04',
+      path: '/home/testuser/proj',
+    })
+    const harness = await createHarness({ workspace, config: configText('remote-a') })
+    await waitFor(async () => (await harness.service.listTriggers()).length === 1)
+    expect((await harness.service.listTriggers())[0]?.offline).toBe(false)
+
+    harness.connections.setState('reconnecting', 'wsl+ubuntu-24.04')
+    await waitFor(async () => (await harness.service.listTriggers())[0]?.offline === true)
+  })
+
+  it('disambiguates the workspace name by authority', async () => {
+    const harness = await createHarness({ config: configText('remote-a') })
+    await waitFor(async () => (await harness.service.listTriggers()).length === 1)
+
+    expect((await harness.service.listTriggers())[0]?.workspaceName).toBe('proj (dev)')
+    expect((await harness.service.listWorkspaces())[0]?.name).toBe('proj (dev)')
   })
 })

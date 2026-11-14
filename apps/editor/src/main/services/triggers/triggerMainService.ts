@@ -264,6 +264,14 @@ class DeferredRunError extends Error {
   }
 }
 
+/** A remote call was about to run after the connection left `connected`. */
+class RemoteIoUnavailableError extends Error {
+  constructor(readonly authority: string) {
+    super(`remote '${authority}' is not connected`)
+    this.name = 'RemoteIoUnavailableError'
+  }
+}
+
 type RemotePollOutcome =
   | { readonly kind: 'result'; readonly result: PollFetchResult }
   | { readonly kind: 'skipped'; readonly reason: string }
@@ -305,6 +313,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private readonly _workspaces = new Map<string, WorkspaceEntry>()
   private readonly _attaching = new Map<string, Promise<void>>()
   private readonly _reloading = new Map<string, Promise<void>>()
+  /** Invalidates an in-flight attach when its workspace is detached / removed. */
+  private readonly _workspaceEpochs = new Map<string, number>()
   /** Windows currently holding a workspace folder; drives remote attach/detach. */
   private readonly _windowFolders = new Map<number, string>()
   private _state: TriggerStateFile = createEmptyTriggerStateFile()
@@ -621,25 +631,28 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   }
 
   private async _ensureRemoteConfigFile(folder: URI): Promise<string> {
-    const authority = folder.authority
+    const authority = this._workspaceAuthority(folder)
     const fileService = this._fileService
-    if (fileService === undefined || !this._remoteIoAllowed(authority)) {
+    if (fileService === undefined || authority === undefined || !this._remoteIoAllowed(authority)) {
       throw new Error(remoteNotConnectedMessage())
     }
     const dirUri = workspaceTriggersConfigDirUri(folder)
     const fileUri = workspaceTriggersConfigUri(folder)
     let created = false
     try {
-      if (!(await fileService.exists(fileUri))) {
-        await fileService.createDirectory(dirUri)
+      if (!(await this._withRemote(authority, () => fileService.exists(fileUri)))) {
+        await this._withRemote(authority, () => fileService.createDirectory(dirUri))
         // Creating the directory and writing are two round trips; re-check so a
         // file created concurrently is never overwritten.
-        if (!(await fileService.exists(fileUri))) {
-          await fileService.writeFile(fileUri, TRIGGERS_CONFIG_EXAMPLE)
+        if (!(await this._withRemote(authority, () => fileService.exists(fileUri)))) {
+          await this._withRemote(authority, () =>
+            fileService.writeFile(fileUri, TRIGGERS_CONFIG_EXAMPLE),
+          )
           created = true
         }
       }
     } catch (err) {
+      if (err instanceof RemoteIoUnavailableError) throw new Error(remoteNotConnectedMessage())
       this._logger.warn(`failed to create ${fileUri.toString()}: ${describeError(err)}`)
       throw new Error(
         localize(
@@ -752,13 +765,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
     // Reading must never dial the remote host: only an already connected tunnel
     // can answer, otherwise the report tab / phone shows "unavailable".
-    if (!this._remoteConnected(authority)) return { kind: 'unavailable' }
     if (!isValidTriggerRunId(runId)) return { kind: 'not-found' }
     try {
+      // Resolve every local prerequisite before the gate; the call itself is
+      // re-checked synchronously so a disconnect during the await is not ignored.
       const clientId = await this._resolveClientId()
-      const result = await this._remoteTriggerService(authority).readReport(clientId, runId, {
-        maxBytes: MAX_TRIGGER_REPORT_BYTES,
-      })
+      const result = await this._withRemote(authority, () =>
+        this._remoteTriggerService(authority).readReport(clientId, runId, {
+          maxBytes: MAX_TRIGGER_REPORT_BYTES,
+        }),
+      )
       if (!result.ok) {
         return { kind: result.reason === 'too_large' ? 'too-large' : 'not-found' }
       }
@@ -769,6 +785,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         modifiedAt: result.modifiedAt,
       }
     } catch (err) {
+      if (err instanceof RemoteIoUnavailableError) return { kind: 'unavailable' }
       this._logger.warn(
         `run ${runId}: cannot read the remote report from '${authority}': ${describeError(err)}`,
       )
@@ -1020,7 +1037,10 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     await this._registerDiscoveredWorkspace(uri.toString())
   }
 
-  private async _registerDiscoveredWorkspace(workspace: string): Promise<void> {
+  private async _registerDiscoveredWorkspace(
+    workspace: string,
+    previous?: WorkspaceEntry,
+  ): Promise<void> {
     const uri = parseWorkspaceUri(workspace)
     if (uri === undefined) return
     try {
@@ -1037,7 +1057,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         if (!(await fileExists(file))) return
       }
       await this._registry.register(workspace)
-      await this._attachWorkspace(workspace)
+      await this._attachWorkspace(workspace, previous)
       const key = workspaceComparisonKey(workspace)
       // A remote workspace only becomes startable again once it is attached,
       // connected and held by a window: then deferred events can replay.
@@ -1051,13 +1071,14 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
   }
 
-  private _attachWorkspace(workspace: string): Promise<void> {
+  private _attachWorkspace(workspace: string, previous?: WorkspaceEntry): Promise<void> {
     const uri = parseWorkspaceUri(workspace)
     if (uri === undefined) return Promise.resolve()
     const key = workspaceComparisonKey(workspace)
     const pending = this._attaching.get(key)
     if (pending !== undefined) return pending
-    const task = this._doAttachWorkspace(workspace, uri, key).finally(() =>
+    const epoch = this._workspaceEpochs.get(key) ?? 0
+    const task = this._doAttachWorkspace(workspace, uri, key, epoch, previous).finally(() =>
       this._attaching.delete(key),
     )
     this._attaching.set(key, task)
@@ -1068,9 +1089,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     workspace: string,
     workspaceUri: URI,
     key: string,
+    epoch: number,
+    previous?: WorkspaceEntry,
   ): Promise<void> {
-    if (this._disposed || this._workspaces.has(key)) return
-    const authority = isRemoteWorkspaceUri(workspaceUri) ? workspaceUri.authority : undefined
+    if (this._disposed) return
+    if (previous === undefined && this._workspaces.has(key)) return
+    const authority = this._workspaceAuthority(workspaceUri)
     let store: TriggerConfigStore
     if (authority === undefined) {
       const file = workspaceTriggersConfigPath(workspaceUri.fsPath)
@@ -1122,7 +1146,6 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       config: createEmptyTriggersConfig(),
       offline: false,
     }
-    this._workspaces.set(key, entry)
     entry.disposables.add(store)
     entry.disposables.add(
       store.onDidChangeExternal((state) => {
@@ -1131,7 +1154,31 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       }),
     )
     const state = await store.load()
-    if (this._workspaces.get(key) !== entry) return
+    if (this._disposed || (this._workspaceEpochs.get(key) ?? 0) !== epoch) {
+      entry.disposables.dispose()
+      return
+    }
+    if (
+      authority !== undefined &&
+      (!this._remoteIoAllowed(authority) || !this._hasOpenWindowFor(key))
+    ) {
+      // The window closed or the link dropped while the config was loading: drop
+      // the fresh entry rather than keep one that polls without a window. A
+      // failed reload leaves the caller's previous offline snapshot in place.
+      entry.disposables.dispose()
+      if (
+        previous !== undefined &&
+        this._workspaces.get(key) === previous &&
+        !this._remoteIoAllowed(authority)
+      ) {
+        this._setWorkspaceOffline(previous)
+      }
+      return
+    }
+    // Swap in the freshly loaded entry only now: a failed reload keeps the old
+    // snapshot (and its already-visible definitions) instead of losing it.
+    this._workspaces.set(key, entry)
+    previous?.disposables.dispose()
     this._applyWorkspaceConfig(entry, state)
     this._logger.info(`trigger workspace attached: ${workspace}`)
   }
@@ -1142,6 +1189,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
    * events stay durable so reopening the window (while connected) replays them.
    */
   private _detachWorkspace(key: string, options: { keepPending?: boolean } = {}): void {
+    // Invalidate any attach that is still loading this workspace's config.
+    this._workspaceEpochs.set(key, (this._workspaceEpochs.get(key) ?? 0) + 1)
     const entry = this._workspaces.get(key)
     if (entry === undefined) return
     const keepPending = options.keepPending === true
@@ -1207,6 +1256,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     return this._remoteConnected(authority)
   }
 
+  /**
+   * Run one remote I/O call. The gate is synchronous and re-checked immediately
+   * before the call, so a `connected` -> `reconnecting` transition during an
+   * earlier await aborts instead of dialling the host.
+   */
+  private async _withRemote<T>(authority: string, call: () => Promise<T>): Promise<T> {
+    if (!this._remoteIoAllowed(authority)) throw new RemoteIoUnavailableError(authority)
+    return call()
+  }
+
   /** Connection-state-only gate for calls that need nothing but the tunnel. */
   private _remoteConnected(authority: string): boolean {
     return this._remoteConnections?.getState(authority) === 'connected'
@@ -1257,10 +1316,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     return [...ids]
   }
 
+  /**
+   * Authority of a trigger key's workspace. Derived from the key itself — its
+   * workspace part is already the normalized URI — so ids stay protected even
+   * after the workspace entry was detached while its records remain.
+   */
   private _authorityOfKey(triggerKey: string): string | undefined {
     const parsed = parseTriggerKey(triggerKey)
-    const entry = parsed === undefined ? undefined : this._workspaces.get(parsed.workspaceKey)
-    return entry?.authority === undefined ? undefined : normalizeRemoteAuthority(entry.authority)
+    if (parsed === undefined) return undefined
+    const workspaceUri = parseWorkspaceUri(parsed.workspaceKey)
+    return workspaceUri === undefined ? undefined : this._workspaceAuthority(workspaceUri)
   }
 
   /**
@@ -1325,6 +1390,14 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private _isWorkspaceOffline(trigger: RoutedTrigger): boolean {
     const parsed = parseTriggerKey(trigger.key)
     return parsed !== undefined && this._workspaces.get(parsed.workspaceKey)?.offline === true
+  }
+
+  /** Remote definitions never run (or schedule) without a window holding them. */
+  private _remoteWindowMissing(trigger: RoutedTrigger): boolean {
+    return (
+      isRemoteWorkspaceUri(trigger.workspaceUri) &&
+      !this._hasOpenWindowFor(workspaceComparisonKey(trigger.workspace))
+    )
   }
 
   private _onRemoteConnectionStateChange(change: IRemoteConnectionStateChange): void {
@@ -1415,14 +1488,10 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private async _doReloadRemoteWorkspace(workspace: string, key: string): Promise<void> {
     await this._awaitReady()
     if (this._disposed) return
-    const entry = this._workspaces.get(key)
-    if (entry !== undefined) {
-      entry.disposables.dispose()
-      this._workspaces.delete(key)
-      // Queued/pending records stay: the next scheduling pass drops them quietly
-      // while offline, and a reconnect lets the normal replay decide.
-    }
-    await this._registerDiscoveredWorkspace(workspace)
+    // Keep the offline snapshot in place until the fresh entry has loaded: a
+    // reconnect flap that fails again must not erase the visible definitions.
+    const previous = this._workspaces.get(key)
+    await this._registerDiscoveredWorkspace(workspace, previous)
     this._fireChange()
   }
 
@@ -1578,6 +1647,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     // A remote workspace without a live connection is "missed time": nothing is
     // consumed and no cadence advances until it is back.
     if (this._isWorkspaceOffline(trigger)) return false
+    // Remote work is never headless: a workspace whose window is gone stays a
+    // snapshot until a window holds it again.
+    if (this._remoteWindowMissing(trigger)) return false
     if ((!trigger.enabled && !options.manual) || this._state.pausedAll) return false
     const state = this._stateFor(trigger.key)
     if (state.paused) return false
@@ -1942,6 +2014,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       if (trigger !== undefined && this._isWorkspaceOffline(trigger)) {
         // Disconnect after acceptance: the event stays pending for a replay.
         this._deferRun(pending, 'remote workspace went offline')
+        return
+      }
+      if (trigger !== undefined && this._remoteWindowMissing(trigger)) {
+        // The window went away after acceptance: keep the event for its return.
+        this._deferRun(pending, 'no open window holds this remote workspace')
         return
       }
       this._logger.info(
@@ -2325,20 +2402,21 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
    * policy only. The returned URI is host-native via `remotePathFromUri`.
    */
   private async _createRemoteRunDir(authority: string, runId: string): Promise<string> {
-    if (!this._remoteConnected(authority)) {
-      throw new DeferredRunError(`remote '${authority}' is not connected`)
-    }
+    // Resolve local prerequisites before the gate; the RPC itself is re-checked
+    // synchronously so a disconnect during the await aborts instead of dialling.
     const clientId = await this._resolveClientId()
     try {
-      const { runDir } = await this._remoteTriggerService(authority).createRunDir(clientId, runId, {
-        keep: this._maxRunDirectories,
-        protectedRunIds: this._protectedRunIdsForAuthority(authority),
-      })
+      const { runDir } = await this._withRemote(authority, () =>
+        this._remoteTriggerService(authority).createRunDir(clientId, runId, {
+          keep: this._maxRunDirectories,
+          protectedRunIds: this._protectedRunIdsForAuthority(authority),
+        }),
+      )
       const path = remotePathFromUri(runDir)
       this._logger.info(`run ${runId}: remote run directory ${path} (client ${clientId})`)
       return path
     } catch (err) {
-      if (!this._remoteConnected(authority)) {
+      if (err instanceof RemoteIoUnavailableError || !this._remoteConnected(authority)) {
         throw new DeferredRunError(`remote '${authority}' disconnected while creating the run dir`)
       }
       throw err
@@ -2359,13 +2437,20 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     const trigger = this._findTrigger(item.triggerKey)
     const manual = item.eventKey.startsWith('manual:')
     if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
-      if (trigger !== undefined && this._isWorkspaceOffline(trigger)) {
-        // The queue slot is already released by the drain that produced this item;
-        // keep the pending record so a reconnect replays it.
-        this._queued.delete(item.runId)
+      if (
+        trigger !== undefined &&
+        (this._isWorkspaceOffline(trigger) || this._remoteWindowMissing(trigger))
+      ) {
+        // The drain that produced this item already claimed a slot: release it.
+        // Keep the pending record and its `queued` dedupe status so a reconnect
+        // (plus an open window) replays the event; never a failure.
+        const reason = this._isWorkspaceOffline(trigger)
+          ? 'remote workspace went offline'
+          : 'no open window holds this remote workspace'
         this._logger.info(
-          `run ${item.runId}: deferred trigger=${item.triggerId} key=${item.eventKey} (remote workspace went offline)`,
+          `run ${item.runId}: deferred trigger=${item.triggerId} key=${item.eventKey} (${reason})`,
         )
+        this._releaseSlot(item.runId)
         this._fireChange()
         return
       }
@@ -2717,7 +2802,16 @@ function remoteNotConnectedMessage(): string {
 
 function workspaceFolderName(workspace: string): string {
   const uri = parseWorkspaceUri(workspace)
-  const name = uri === undefined ? basename(workspace) : basename(uri.path)
+  if (uri === undefined) {
+    const name = basename(workspace)
+    return name.length > 0 ? name : workspace
+  }
+  const name = basename(uri.path)
+  // Two hosts can expose the same path; keep the authority in the label. The
+  // renderer shows the same `name (authority)` shape for remote workspaces.
+  if (isRemoteWorkspaceUri(uri)) {
+    return name.length > 0 ? `${name} (${uri.authority})` : `${uri.authority}`
+  }
   return name.length > 0 ? name : workspace
 }
 
