@@ -12,6 +12,8 @@ import type {
   TriggerEvent,
   TriggerPayloadValue,
   TriggerRunEnd,
+  TriggerRunFilter,
+  TriggerRunHistoryEntry,
   TriggerRunReportReadResult,
   TriggerRunRequest,
   TriggerSummary,
@@ -53,6 +55,11 @@ export interface ITriggerMainService {
   removeWorkspace(workspace: string): Promise<void>
   /** Called by a window when its run reaches a terminal state. */
   reportRunEnd(end: TriggerRunEnd): Promise<void>
+  /**
+   * Machine-local run history (`<userData>/triggers/history.jsonl`), newest first.
+   * Malformed lines (hand-edited file) are skipped; `limit` defaults to 100, max 500.
+   */
+  listRuns(filter?: TriggerRunFilter): Promise<readonly TriggerRunHistoryEntry[]>
   /**
    * Read one run's `report.md` by run id. The file name and directory are
    * rebuilt in main; callers never pass a path. `authority` selects the remote

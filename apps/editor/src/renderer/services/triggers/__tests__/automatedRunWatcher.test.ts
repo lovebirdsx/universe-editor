@@ -192,6 +192,39 @@ describe('AutomatedRunWatcher', () => {
     expect(ends[0]!.sessionId).toBe('agent-1')
   })
 
+  it('reports the active duration and a USD cost on the end report', async () => {
+    const { clock, fake, watcher, ends } = setup({ raw: '{"verdict":"info"}' })
+    watcher.start()
+    fake.status.set('running', undefined)
+    clock.advance(1_500)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 0.4, currency: 'USD' } }, undefined)
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(ends[0]).toMatchObject({ durationMs: 1_500, costUsd: 0.4 })
+  })
+
+  it('reports cost when the agent omits the currency', async () => {
+    const { fake, watcher, ends } = setup()
+    watcher.start()
+    fake.status.set('running', undefined)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 0.2 } as never }, undefined)
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(ends[0]?.costUsd).toBe(0.2)
+  })
+
+  it('keeps the duration but drops a non-USD cost', async () => {
+    const { clock, fake, watcher, ends } = setup()
+    watcher.start()
+    fake.status.set('running', undefined)
+    clock.advance(800)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 9, currency: 'CNY' } }, undefined)
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(ends[0]?.durationMs).toBe(800)
+    expect(ends[0]?.costUsd).toBeUndefined()
+  })
+
   it('hands the whole run request to the result reader so remote runs read on their host', async () => {
     const clock = new FakeClock()
     const fake = makeSession()

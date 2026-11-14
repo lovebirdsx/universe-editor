@@ -10,7 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { autorun, type IDisposable, type IReader } from '@universe-editor/platform'
-import type { IAcpSession } from '../acp/session/acpSessionModel.js'
+import type { AcpUsage, IAcpSession } from '../acp/session/acpSessionModel.js'
 import type {
   TriggerActionAudit,
   TriggerRunEnd,
@@ -232,11 +232,20 @@ export class AutomatedRunWatcher {
   private _finish(outcome: TriggerRunOutcome, error?: string): void {
     if (this._finished) return
     this._finished = true
+    // Snapshot at the terminal moment: the session may report more usage while
+    // the async result-file read / action execution below is in flight.
+    const durationMs = Math.max(0, Math.round(this._activeTotal(this._now())))
+    const costUsd = usdCost(this._session.usage.get())
     this._disposeTimers()
-    void this._finalize(outcome, error)
+    void this._finalize(outcome, error, durationMs, costUsd)
   }
 
-  private async _finalize(outcome: TriggerRunOutcome, error?: string): Promise<void> {
+  private async _finalize(
+    outcome: TriggerRunOutcome,
+    error: string | undefined,
+    durationMs: number,
+    costUsd: number | undefined,
+  ): Promise<void> {
     let raw: string | undefined
     try {
       raw = await this._readResultFile(this._request)
@@ -256,6 +265,8 @@ export class AutomatedRunWatcher {
       ...(resolution.summary !== undefined ? { summary: resolution.summary } : {}),
       actions: resolution.actions,
       ...(error !== undefined ? { error } : {}),
+      durationMs,
+      ...(costUsd === undefined ? {} : { costUsd }),
     }
     this._subscription?.dispose()
     this._subscription = undefined
@@ -278,4 +289,13 @@ export class AutomatedRunWatcher {
     this._clearBudgetTimer()
     this._clearApprovalTimer()
   }
+}
+
+/** The budget is USD-denominated; another currency's amount is not comparable. */
+function usdCost(usage: AcpUsage | undefined): number | undefined {
+  const cost = usage?.cost
+  if (cost === undefined || !Number.isFinite(cost.amount)) return undefined
+  const currency = cost.currency?.trim() ?? ''
+  if (currency.length > 0 && currency.toLowerCase() !== 'usd') return undefined
+  return cost.amount
 }

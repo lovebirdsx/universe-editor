@@ -50,6 +50,8 @@ import {
   type TriggerEvent,
   type TriggerPayloadValue,
   type TriggerRunEnd,
+  type TriggerRunFilter,
+  type TriggerRunHistoryEntry,
   type TriggerRunReportReadResult,
   type TriggerRunRequest,
   type TriggerSourceConfig,
@@ -122,6 +124,7 @@ import {
 } from './triggerStateStore.js'
 import { createPollCommandFetcher, type PollCommandFetcher } from './pollCommandFetcher.js'
 import { SessionReportReader } from './runReportReader.js'
+import { TriggerHistoryStore } from './triggerHistoryStore.js'
 import { getMachineId } from '../host/machineId.js'
 import { remotePathFromUri } from '../remote/remoteUri.js'
 import type {
@@ -158,6 +161,8 @@ export interface TriggerMainServiceOptions {
   readonly notify?: (title: string, body: string) => void
   readonly fetchPollItems?: PollCommandFetcher
   readonly auditLog?: AuditLog
+  /** Test seam for the run history file (default: `<userData>/triggers/history.jsonl`). */
+  readonly historyStore?: TriggerHistoryStore
   readonly uuid?: () => string
   readonly startupGraceMs?: number
   readonly hostWaitTimeoutMs?: number
@@ -229,6 +234,8 @@ interface PendingRun {
 
 interface ActiveRun extends PendingRun {
   phase: 'starting' | 'running'
+  /** When the host accepted the run; `firedAt` is the event time and may be earlier. */
+  startedAt?: number
   windowId?: number
   sessionId?: string
   watchdogTimer?: TriggerTimerHandle
@@ -294,6 +301,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private readonly _pendingDir: string
   private readonly _reportReader: SessionReportReader
   private readonly _auditLog: AuditLog
+  private readonly _historyStore: TriggerHistoryStore
   private readonly _registry: TriggerWorkspaceRegistry
   private readonly _stateStore: TriggerStateStore
   private readonly _readMaxConcurrentRuns: () => Promise<number>
@@ -382,6 +390,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._auditLog =
       options.auditLog ??
       new AuditLog(join(this._dir, 'audit.jsonl'), { now: () => this._clock.now() })
+    this._historyStore =
+      options.historyStore ??
+      new TriggerHistoryStore({
+        file: join(this._dir, 'history.jsonl'),
+        logger: options.logger,
+      })
     this._stateStore = new TriggerStateStore({
       file: join(this._dir, 'state.json'),
       logger: options.logger,
@@ -485,7 +499,13 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       trigger.key,
       paused
         ? { paused: true, lastError: undefined }
-        : { paused: false, consecutiveFailures: 0, backoffUntil: undefined, lastError: undefined },
+        : {
+            paused: false,
+            autoPaused: undefined,
+            consecutiveFailures: 0,
+            backoffUntil: undefined,
+            lastError: undefined,
+          },
     )
     if (paused) {
       // Pausing is the final gate: queued events are dropped (their keys forgotten
@@ -694,8 +714,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
     const now = this._clock.now()
     const failed = end.outcome === 'failed'
+    const lastRunError = end.error === undefined ? undefined : truncateText(end.error, 500)
     const message = failed
-      ? (end.error ?? localize('triggers.error.runFailed', 'The automated run failed'))
+      ? (lastRunError ?? localize('triggers.error.runFailed', 'The automated run failed'))
       : undefined
     const detail = [
       `trigger=${entry.triggerId}`,
@@ -730,24 +751,66 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       `run ${end.runId}: ended trigger=${entry.triggerId} key=${entry.eventKey} outcome=${end.outcome}`,
     )
 
+    const trigger = this._findTrigger(entry.triggerKey)
+    const lastRunSummary = end.summary === undefined ? undefined : truncateText(end.summary, 200)
+    try {
+      await this._historyStore.append({
+        runId: end.runId,
+        triggerKey: entry.triggerKey,
+        triggerId: entry.triggerId,
+        // The definition may have been deleted / renamed while the run was active.
+        triggerName: trigger?.name ?? entry.triggerId,
+        workspace: entry.workspace,
+        workspaceName: workspaceFolderName(entry.workspace),
+        ...(end.sessionId === undefined ? {} : { sessionId: end.sessionId }),
+        startedAt: entry.startedAt ?? entry.firedAt,
+        endedAt: now,
+        outcome: end.outcome,
+        ...(end.verdict === undefined ? {} : { verdict: end.verdict }),
+        ...(lastRunSummary === undefined ? {} : { summary: lastRunSummary }),
+        ...(lastRunError === undefined ? {} : { error: lastRunError }),
+        ...(end.costUsd === undefined ? {} : { costUsd: end.costUsd }),
+        ...(end.durationMs === undefined ? {} : { durationMs: end.durationMs }),
+      })
+    } catch (err) {
+      this._logger.warn(`run ${end.runId}: cannot append run history: ${describeError(err)}`)
+    }
+
+    // Persisted per-trigger synopsis; explicit undefined clears a field that the
+    // previous run set (e.g. a verdict) — `_setTriggerState` deletes those keys.
+    const lastRunPatch: RuntimeStatePatch = {
+      lastRunId: end.runId,
+      lastSessionId: end.sessionId,
+      lastRunOutcome: end.outcome,
+      lastRunVerdict: end.verdict,
+      lastRunSummary,
+      lastRunCostUsd: end.costUsd,
+      lastRunDurationMs: end.durationMs,
+    }
+
     if (end.outcome === 'completed') {
       this._setTriggerState(entry.triggerKey, {
         lastRunAt: now,
         consecutiveFailures: 0,
         backoffUntil: undefined,
         lastError: undefined,
+        autoPaused: undefined,
+        ...lastRunPatch,
       })
       this._fireChange()
       return
     }
+    this._setTriggerState(entry.triggerKey, { lastRunAt: now, ...lastRunPatch })
     if (failed) {
-      const trigger = this._findTrigger(entry.triggerKey)
       if (trigger !== undefined) this._recordFailure(trigger, message ?? '', now)
-      else this._setTriggerState(entry.triggerKey, { lastRunAt: now, lastError: message })
-    } else {
-      this._setTriggerState(entry.triggerKey, { lastRunAt: now })
+      else this._setTriggerState(entry.triggerKey, { lastError: message })
     }
     this._fireChange()
+  }
+
+  async listRuns(filter?: TriggerRunFilter): Promise<readonly TriggerRunHistoryEntry[]> {
+    await this._awaitReady()
+    return this._historyStore.recent(filter)
   }
 
   async readRunReport(runId: string, authority?: string): Promise<TriggerRunReportReadResult> {
@@ -940,6 +1003,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     for (const run of this._active.values()) this._clearWatchdog(run)
     for (const entry of this._workspaces.values()) entry.disposables.dispose()
     this._workspaces.clear()
+    void this._historyStore
+      .flush()
+      .catch((err) => this._logger.warn(`run history flush failed: ${describeError(err)}`))
     this._stateStore.dispose()
     super.dispose()
   }
@@ -2075,6 +2141,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       const active = this._active.get(pending.runId)
       if (active !== undefined) {
         active.phase = 'running'
+        active.startedAt = this._clock.now()
         active.sessionId = result.sessionId
         this._armWatchdog(active, trigger)
       }
@@ -2619,7 +2686,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       consecutiveFailures,
       backoffUntil,
       lastError: message,
-      ...(autoPause ? { paused: true } : {}),
+      ...(autoPause ? { paused: true, autoPaused: true } : {}),
     })
     this._logger.warn(
       `trigger ${trigger.id}: failure ${consecutiveFailures} backoff=${backoffUntil - now}ms: ${message}`,
@@ -2636,7 +2703,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           }),
           localize(
             'triggers.notification.autoPaused.body',
-            '"{name}" failed {count} times in a row and was paused. Run "Triggers: List Triggers" to resume it.',
+            '"{name}" failed {count} times in a row and was paused. Run "Triggers: Open Manager" to review it and resume it.',
             { name: trigger.name, count: consecutiveFailures },
           ),
         )
@@ -2697,6 +2764,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         offline: this._isWorkspaceOffline(trigger),
         enabled: trigger.enabled,
         paused,
+        pausedAll: this._state.pausedAll,
+        autoPaused: state.autoPaused === true,
+        source: trigger.source,
         activationConfirmed,
         elevatedMode,
         elevatedModeConfirmed,
@@ -2708,6 +2778,15 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         ...(state.lastRunAt === undefined ? {} : { lastRunAt: state.lastRunAt }),
         ...(nextRunAt === undefined ? {} : { nextRunAt }),
         ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+        ...(state.lastRunId === undefined ? {} : { lastRunId: state.lastRunId }),
+        ...(state.lastSessionId === undefined ? {} : { lastSessionId: state.lastSessionId }),
+        ...(state.lastRunOutcome === undefined ? {} : { lastRunOutcome: state.lastRunOutcome }),
+        ...(state.lastRunVerdict === undefined ? {} : { lastRunVerdict: state.lastRunVerdict }),
+        ...(state.lastRunSummary === undefined ? {} : { lastRunSummary: state.lastRunSummary }),
+        ...(state.lastRunCostUsd === undefined ? {} : { lastRunCostUsd: state.lastRunCostUsd }),
+        ...(state.lastRunDurationMs === undefined
+          ? {}
+          : { lastRunDurationMs: state.lastRunDurationMs }),
       })
     }
     for (const entry of this._workspaces.values()) {
@@ -2723,6 +2802,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           offline: entry.offline,
           enabled: false,
           paused: false,
+          pausedAll: this._state.pausedAll,
+          autoPaused: false,
           activationConfirmed: false,
           elevatedMode: false,
           elevatedModeConfirmed: false,
@@ -2777,6 +2858,10 @@ function formatActions(end: TriggerRunEnd): string {
 /** Audit details are single-line; action reasons are validation/error text only. */
 function sanitizeAuditReason(reason: string): string {
   return reason.replace(/\s+/g, ' ').trim().slice(0, 300)
+}
+
+function truncateText(text: string, max: number): string {
+  return text.slice(0, max)
 }
 
 /** Normalized source identity; changing it invalidates a poll / swarm baseline. */

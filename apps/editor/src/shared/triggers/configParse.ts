@@ -7,10 +7,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { REMOTE_SCHEME, URI, remoteAuthorityLabel } from '@universe-editor/platform'
+import { parse, type ParseError } from 'jsonc-parser'
 import { parseCron } from './cron.js'
 import {
   TRIGGER_ACTION_TYPES,
   TRIGGER_DEFAULTS,
+  TRIGGERS_WORKSPACE_CONFIG_FILE,
   type InvalidTriggerConfig,
   type TriggerActionType,
   type TriggerBudget,
@@ -29,6 +31,11 @@ export type ParseTriggersConfigResult =
 
 const TRIGGER_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 const SKILL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9:_-]*$/
+
+/** Same rule the parser applies, exposed so the create wizard can validate as the user types. */
+export function isValidTriggerId(value: string): boolean {
+  return TRIGGER_ID_PATTERN.test(value)
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -444,8 +451,47 @@ export function parseTriggersConfig(raw: unknown): ParseTriggersConfigResult {
   return { ok: true, config: { version: 1, triggers, invalid } }
 }
 
+export function createEmptyTriggersConfig(): TriggersConfig {
+  return { version: 1, triggers: [], invalid: [] }
+}
+
+/** Result of parsing trigger-file text; `missing` is never returned for text input. */
+export type ParsedTriggerConfigText =
+  | { readonly kind: 'ok'; readonly value: TriggersConfig }
+  | { readonly kind: 'missing' }
+  | { readonly kind: 'invalid'; readonly error: string }
+
+/**
+ * JSONC parse + validation shared by main (local / remote config stores) and the
+ * renderer config editor, so both surfaces accept exactly the same shape and
+ * report the same errors. Lives here rather than next to the fs adapters because
+ * it has no Node dependency.
+ */
+export function parseTriggersConfigText(text: string): ParsedTriggerConfigText {
+  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+  if (body.trim() === '') return { kind: 'ok', value: createEmptyTriggersConfig() }
+
+  const errors: ParseError[] = []
+  const raw: unknown = parse(body, errors, { allowTrailingComma: true })
+  const firstError = errors[0]
+  if (firstError !== undefined) {
+    return {
+      kind: 'invalid',
+      error: `${TRIGGERS_WORKSPACE_CONFIG_FILE} is not valid JSON (offset ${firstError.offset})`,
+    }
+  }
+
+  const parsed = parseTriggersConfig(raw)
+  if (!parsed.ok) return { kind: 'invalid', error: parsed.error }
+  return { kind: 'ok', value: parsed.config }
+}
+
+/** File header shared by the example template and the wizard's empty config. */
+export const TRIGGERS_CONFIG_HEADER_COMMENT =
+  '// Agent 触发器配置（保存在工作区 .universe-editor/ 下，可提交入库；保存后热加载）。'
+
 /** JSONC template written by "Triggers: Open Configuration" when the file does not exist yet. */
-export const TRIGGERS_CONFIG_EXAMPLE = `// Agent 触发器配置（保存在工作区 .universe-editor/ 下，可提交入库；保存后热加载）。
+export const TRIGGERS_CONFIG_EXAMPLE = `${TRIGGERS_CONFIG_HEADER_COMMENT}
 // 触发器只对此工作区生效；所有示例默认关闭（enabled: false）。
 {
   "version": 1,

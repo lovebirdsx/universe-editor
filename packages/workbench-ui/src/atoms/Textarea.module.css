@@ -1,0 +1,33 @@
+.textarea {
+  width: 100%;
+  min-height: 72px;
+  box-sizing: border-box;
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--vscode-quickInput-background, #242427);
+  color: var(--vscode-foreground, #c8c8c8);
+  border: 1px solid var(--vscode-quickInput-border, #2f2f35);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  resize: vertical;
+}
+
+.textarea::placeholder {
+  color: var(--vscode-input-placeholderForeground, #5a5a5e);
+}
+
+.textarea:focus {
+  outline: none;
+  border-color: var(--vscode-focusBorder, #0070e0);
+}
+
+.textarea:disabled {
+  opacity: 0.5;
+  cursor: default;
+  resize: none;
+}
+
+.invalid {
+  border-color: var(--vscode-inputValidation-errorBorder, #be1100);
+}

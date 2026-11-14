@@ -45,6 +45,8 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
     status: 'idle',
     enabled: true,
     paused: false,
+    pausedAll: false,
+    autoPaused: false,
     elevatedMode: false,
     elevatedModeConfirmed: false,
     approveAction: false,

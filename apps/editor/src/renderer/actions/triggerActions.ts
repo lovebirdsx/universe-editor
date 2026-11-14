@@ -7,6 +7,7 @@
 
 import {
   Action2,
+  ICommandService,
   IDialogService,
   IEditorResolverService,
   IEditorService,
@@ -32,11 +33,19 @@ import type { TriggerSummary } from '../../shared/triggers/types.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
+import { invocationOpenTarget } from '../services/editor/openTarget.js'
+import { revealEditorInGroups } from '../services/editor/revealEditorInGroups.js'
+import {
+  openPinnedSingletonEditor,
+  openTargetServicesFrom,
+} from '../services/editor/openWithTarget.js'
 import {
   TriggerReportEditorInput,
   fallbackTriggerName,
 } from '../services/triggers/triggerReportEditorInput.js'
+import { TriggerManagerEditorInput } from '../services/triggers/triggerManagerEditorInput.js'
 import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
+import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { ACP_CHAT_SESSION_GROUP, resolveSessionTargetId } from './_agentShared.js'
 import {
   buildTriggerActionItems,
@@ -51,7 +60,7 @@ const TRIGGER_LOG_CHANNEL_ID = 'triggers'
 
 const CATEGORY = localize2('command.category.triggers', 'Triggers')
 
-interface TriggerActionServices {
+export interface TriggerActionServices {
   readonly triggers: ITriggerMainService
   readonly quickInput: IQuickInputService
   readonly notifications: INotificationService
@@ -62,6 +71,7 @@ interface TriggerActionServices {
   readonly layout: ILayoutService
   readonly views: IViewsService
   readonly workspace: IWorkspaceService
+  readonly commands: ICommandService
   readonly logger: ILogger
 }
 
@@ -78,6 +88,7 @@ function triggerActionServices(accessor: ServicesAccessor): TriggerActionService
     layout: accessor.get(ILayoutService),
     views: accessor.get(IViewsService),
     workspace: accessor.get(IWorkspaceService),
+    commands: accessor.get(ICommandService),
     logger: accessor.get(ILoggerService).createLogger({ id: 'triggerActions', name: 'Triggers' }),
   }
 }
@@ -86,7 +97,8 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-async function runWithErrorNotification(
+/** Shared by the palette commands and the manager's in-panel actions. */
+export async function runTriggerAction(
   services: TriggerActionServices,
   task: () => Promise<void>,
 ): Promise<void> {
@@ -192,7 +204,7 @@ async function pickTriggerForAction(
   return pickTrigger(services, candidates, pickId, placeholder())
 }
 
-async function runTriggerNow(
+export async function runTriggerNow(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
@@ -206,7 +218,7 @@ async function runTriggerNow(
   })
 }
 
-async function setTriggerPaused(
+export async function setTriggerPaused(
   services: TriggerActionServices,
   summary: TriggerSummary,
   paused: boolean,
@@ -221,7 +233,7 @@ async function setTriggerPaused(
   })
 }
 
-async function openTriggerConfig(services: TriggerActionServices): Promise<void> {
+export async function openTriggerConfig(services: TriggerActionServices): Promise<void> {
   const folder = services.workspace.current?.folder
   // Definitions live inside a workspace; an empty window has nowhere to put them.
   if (folder === undefined) {
@@ -239,7 +251,7 @@ async function openTriggerConfig(services: TriggerActionServices): Promise<void>
   await services.editors.openEditor(uri, { pinned: true })
 }
 
-async function showTriggerLog(services: TriggerActionServices): Promise<void> {
+export async function showTriggerLog(services: TriggerActionServices): Promise<void> {
   const descriptors = await services.logFiles.listLogFiles()
   const descriptor = descriptors.find((entry) => entry.channelId === TRIGGER_LOG_CHANNEL_ID)
   if (descriptor === undefined) {
@@ -259,7 +271,7 @@ async function showTriggerLog(services: TriggerActionServices): Promise<void> {
   revealOutputPanel(services.layout, services.views)
 }
 
-async function confirmTriggerActivation(
+export async function confirmTriggerActivation(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
@@ -289,7 +301,7 @@ async function confirmTriggerActivation(
   })
 }
 
-async function confirmElevatedMode(
+export async function confirmElevatedMode(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
@@ -318,7 +330,7 @@ async function confirmElevatedMode(
   })
 }
 
-async function confirmAutoApprove(
+export async function confirmAutoApprove(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
@@ -353,6 +365,9 @@ async function executeItemAction(
   action: TriggerItemAction,
 ): Promise<void> {
   switch (action) {
+    case 'openManager':
+      await services.commands.executeCommand(OpenTriggerManagerAction.ID, summary.key)
+      return
     case 'runNow':
       await runTriggerNow(services, summary)
       return
@@ -380,6 +395,54 @@ async function executeItemAction(
   }
 }
 
+/**
+ * Opens the single Trigger Manager tab. The optional argument is a composite
+ * workspace + trigger key. An instance already open in any group is revealed
+ * there (the default open path only dedupes inside the active group, which would
+ * put a second copy in each split), and the key is delivered through the input's
+ * selection event.
+ */
+export class OpenTriggerManagerAction extends Action2 {
+  static readonly ID = 'workbench.action.triggers.openManager'
+
+  constructor() {
+    super({
+      id: OpenTriggerManagerAction.ID,
+      title: localize2('action.triggers.openManager.title', 'Open Manager'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor, arg?: unknown): Promise<boolean> {
+    // Everything below is resolved synchronously; openPinnedSingletonEditor may
+    // await for side/new-window targets, but the accessor is already unused.
+    const services = openTargetServicesFrom(accessor)
+    const windowFocus = accessor.get(IWindowFocusService)
+    const target = invocationOpenTarget()
+    const triggerKey = typeof arg === 'string' && arg.length > 0 ? arg : undefined
+    let existing: TriggerManagerEditorInput | undefined
+    const revealed = revealEditorInGroups(
+      services.groups,
+      (editor) => {
+        if (!(editor instanceof TriggerManagerEditorInput)) return false
+        existing = editor
+        return true
+      },
+      windowFocus,
+    )
+    if (revealed && existing !== undefined) {
+      if (triggerKey !== undefined) existing.select(triggerKey)
+      return Promise.resolve(true)
+    }
+    return openPinnedSingletonEditor(services, target, () =>
+      triggerKey === undefined
+        ? new TriggerManagerEditorInput()
+        : new TriggerManagerEditorInput({ pendingSelection: triggerKey }),
+    )
+  }
+}
+
 export class ListTriggersAction extends Action2 {
   static readonly ID = 'workbench.action.triggers.list'
 
@@ -394,7 +457,7 @@ export class ListTriggersAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const summaries = await services.triggers.listTriggers()
       if (summaries.length === 0) {
         notifyNoTriggers(services)
@@ -535,7 +598,7 @@ export class RunTriggerNowAction extends Action2 {
 
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const requested = args[0]
       const summaries = await services.triggers.listTriggers()
       if (summaries.length === 0) {
@@ -576,7 +639,7 @@ export class PauseTriggerAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const summary = await pickTriggerForAction(services, 'pause')
       if (summary === undefined) return
       await setTriggerPaused(services, summary, true)
@@ -598,7 +661,7 @@ export class ResumeTriggerAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const summary = await pickTriggerForAction(services, 'resume')
       if (summary === undefined) return
       await setTriggerPaused(services, summary, false)
@@ -606,7 +669,7 @@ export class ResumeTriggerAction extends Action2 {
   }
 }
 
-async function setAllTriggersPaused(
+export async function setAllTriggersPaused(
   services: TriggerActionServices,
   paused: boolean,
 ): Promise<void> {
@@ -634,7 +697,7 @@ export class PauseAllTriggersAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, () => setAllTriggersPaused(services, true))
+    await runTriggerAction(services, () => setAllTriggersPaused(services, true))
   }
 }
 
@@ -652,7 +715,7 @@ export class ResumeAllTriggersAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, () => setAllTriggersPaused(services, false))
+    await runTriggerAction(services, () => setAllTriggersPaused(services, false))
   }
 }
 
@@ -670,7 +733,7 @@ export class OpenTriggersConfigAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, () => openTriggerConfig(services))
+    await runTriggerAction(services, () => openTriggerConfig(services))
   }
 }
 
@@ -688,7 +751,7 @@ export class ShowTriggersLogAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, () => showTriggerLog(services))
+    await runTriggerAction(services, () => showTriggerLog(services))
   }
 }
 
@@ -709,7 +772,7 @@ export class ConfirmTriggerElevatedModeAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const summary = await pickTriggerForAction(services, 'confirmElevatedMode')
       if (summary === undefined) return
       await confirmElevatedMode(services, summary)
@@ -731,7 +794,7 @@ export class ConfirmTriggerAutoApproveAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const summary = await pickTriggerForAction(services, 'confirmAutoApprove')
       if (summary === undefined) return
       await confirmAutoApprove(services, summary)
@@ -753,7 +816,7 @@ export class ConfirmTriggerActivationAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const summary = await pickTriggerForAction(services, 'confirmActivation')
       if (summary === undefined) return
       await confirmTriggerActivation(services, summary)
@@ -779,7 +842,7 @@ export class RemoveTriggerWorkspaceAction extends Action2 {
 
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
-    await runWithErrorNotification(services, async () => {
+    await runTriggerAction(services, async () => {
       const workspaces = await services.triggers.listWorkspaces()
       if (workspaces.length === 0) {
         services.notifications.notify({

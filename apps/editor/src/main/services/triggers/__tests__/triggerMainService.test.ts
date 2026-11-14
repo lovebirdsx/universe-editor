@@ -706,6 +706,183 @@ describe('TriggerMainService queueing', () => {
   })
 })
 
+describe('TriggerMainService summaries and run history', () => {
+  it('exposes pausedAll, autoPaused and the parsed source', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    const initial = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(initial.pausedAll).toBe(false)
+    expect(initial.autoPaused).toBe(false)
+    expect(initial.source).toEqual({ type: 'manual' })
+
+    await harness.service.setAllPaused(true)
+    const paused = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(paused.pausedAll).toBe(true)
+    expect(paused.paused).toBe(true)
+    expect(paused.status).toBe('paused')
+
+    await harness.service.setAllPaused(false)
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').pausedAll).toBe(false)
+  })
+
+  it('marks invalid entries with the global pause state', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { id: 'broken', enabled: 'yes' })],
+    })
+    await harness.service.setAllPaused(true)
+    const broken = summary(await harness.service.listTriggers(), 'broken')
+    expect(broken.status).toBe('invalid')
+    expect(broken.pausedAll).toBe(true)
+    expect(broken.autoPaused).toBe(false)
+  })
+
+  it('appends every run end to the history and keeps the newest first', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    const longSummary = 'x'.repeat(300)
+
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    const firstRunId = harness.requests[0]!.origin.runId
+    await harness.service.reportRunEnd({
+      runId: firstRunId,
+      triggerId: 'trigger-1',
+      sessionId: 'session-1',
+      outcome: 'completed',
+      verdict: 'escalate',
+      summary: longSummary,
+      actions: [],
+      durationMs: 12_345,
+      costUsd: 0.25,
+    })
+
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
+    const secondRunId = harness.requests[1]!.origin.runId
+    await harness.service.reportRunEnd({
+      runId: secondRunId,
+      triggerId: 'trigger-1',
+      outcome: 'timeout',
+      actions: [],
+    })
+
+    const runs = await harness.service.listRuns()
+    expect(runs.map((run) => run.runId)).toEqual([secondRunId, firstRunId])
+    const first = runs[1]!
+    expect(first).toMatchObject({
+      triggerKey: harness.key,
+      triggerId: 'trigger-1',
+      triggerName: 'Trigger One',
+      workspace: localUri(harness.workspace),
+      workspaceName: 'workspace',
+      sessionId: 'session-1',
+      startedAt: START,
+      endedAt: START,
+      outcome: 'completed',
+      verdict: 'escalate',
+      costUsd: 0.25,
+      durationMs: 12_345,
+    })
+    expect(first.summary).toHaveLength(200)
+    expect(first.summary?.startsWith('x'.repeat(200))).toBe(true)
+
+    expect(await harness.service.listRuns({ outcome: 'timeout' })).toEqual([runs[0]])
+    expect(await harness.service.listRuns({ limit: 1 })).toEqual([runs[0]])
+
+    // The per-trigger synopsis mirrors the newest run; a missing verdict clears
+    // the previous one instead of leaving a stale value in the overview.
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.lastRunId).toBe(secondRunId)
+    expect(item.lastRunOutcome).toBe('timeout')
+    expect(item.lastRunVerdict).toBeUndefined()
+    expect(item.lastRunSummary).toBeUndefined()
+    expect(item.lastRunCostUsd).toBeUndefined()
+    expect(item.lastRunDurationMs).toBeUndefined()
+  })
+
+  it('writes a history row for a failed run including its error', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'trigger-1',
+      sessionId: 'session-9',
+      outcome: 'failed',
+      verdict: 'reject',
+      summary: 'rejected',
+      actions: [],
+      error: 'agent crashed',
+      durationMs: 42,
+    })
+
+    const [run] = await harness.service.listRuns()
+    expect(run).toMatchObject({
+      outcome: 'failed',
+      verdict: 'reject',
+      summary: 'rejected',
+      error: 'agent crashed',
+      sessionId: 'session-9',
+      durationMs: 42,
+    })
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.lastRunOutcome).toBe('failed')
+    expect(item.consecutiveFailures).toBe(1)
+    expect(item.lastError).toBe('agent crashed')
+  })
+
+  it('truncates a long failure message for history and lastError alike', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    const longError = 'boom '.repeat(200)
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'trigger-1',
+      outcome: 'failed',
+      actions: [],
+      error: longError,
+    })
+
+    const [run] = await harness.service.listRuns()
+    expect(run?.error).toHaveLength(500)
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.lastError).toHaveLength(500)
+    expect(item.lastError).toBe(run?.error)
+  })
+
+  it('keeps the history entry when the trigger definition was removed', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    // Simulate the file edit that deleted the definition while the run was active.
+    await writeFile(harness.configFile, `${JSON.stringify({ version: 1, triggers: [] })}\n`, 'utf8')
+    await vi.waitFor(async () => {
+      expect((await harness.service.listTriggers()).find((entry) => entry.id === 'trigger-1')).toBe(
+        undefined,
+      )
+    })
+
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'trigger-1',
+      outcome: 'completed',
+      actions: [],
+    })
+    const [run] = await harness.service.listRuns()
+    expect(run?.triggerId).toBe('trigger-1')
+    expect(run?.triggerName).toBe('trigger-1')
+  })
+})
+
 describe('TriggerMainService failures', () => {
   it('backs off and auto-pauses after five consecutive failures with a notification', async () => {
     const harness = await createHarness({
@@ -725,6 +902,7 @@ describe('TriggerMainService failures', () => {
     const list = await harness.service.listTriggers()
     const item = summary(list, 'trigger-1')
     expect(item.status).toBe('paused')
+    expect(item.autoPaused).toBe(true)
     expect(item.consecutiveFailures).toBe(5)
     expect(harness.notify).toHaveBeenCalledTimes(1)
     expect(harness.loggerLines.some((line) => line.includes('auto-paused'))).toBe(true)
@@ -733,12 +911,75 @@ describe('TriggerMainService failures', () => {
     await settle()
     const state = JSON.parse(
       await readFile(join(harness.dir, 'triggers', 'state.json'), 'utf8'),
-    ) as { triggers: Record<string, { paused: boolean; backoffUntil: number }> }
+    ) as {
+      triggers: Record<string, { paused: boolean; autoPaused?: boolean; backoffUntil: number }>
+    }
     expect(state.triggers[harness.key]?.paused).toBe(true)
+    expect(state.triggers[harness.key]?.autoPaused).toBe(true)
     expect(state.triggers[harness.key]?.backoffUntil).toBeGreaterThan(harness.clock.now())
 
     const audit = await readFile(join(harness.dir, 'triggers', 'audit.jsonl'), 'utf8')
     expect(audit).toContain('auto-pause')
+  })
+
+  it('clears the auto-pause marker when the user resumes the trigger', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      state: {
+        version: 2,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: {},
+            paused: true,
+            autoPaused: true,
+            consecutiveFailures: 5,
+            baselineDone: false,
+          },
+        },
+        pending: [],
+      },
+    })
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').autoPaused).toBe(true)
+
+    await harness.service.setPaused(harness.key, false)
+    const resumed = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(resumed.paused).toBe(false)
+    expect(resumed.autoPaused).toBe(false)
+    expect(resumed.consecutiveFailures).toBe(0)
+  })
+
+  it('clears the auto-pause marker when a run completes successfully', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      state: {
+        version: 2,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: {},
+            paused: false,
+            // Stale marker from an older build / hand-edited state: a success must clear it.
+            autoPaused: true,
+            consecutiveFailures: 4,
+            baselineDone: false,
+          },
+        },
+        pending: [],
+      },
+    })
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'trigger-1',
+      outcome: 'completed',
+      actions: [],
+    })
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.autoPaused).toBe(false)
+    expect(item.consecutiveFailures).toBe(0)
+    expect(item.lastRunOutcome).toBe('completed')
   })
 
   it('refuses to run when the workspace is untrusted', async () => {

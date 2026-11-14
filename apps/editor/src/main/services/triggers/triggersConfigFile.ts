@@ -10,10 +10,11 @@
 
 import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { parse, type ParseError } from 'jsonc-parser'
+import { parse } from 'jsonc-parser'
 import { REMOTE_SCHEME, URI } from '@universe-editor/platform'
 import {
-  parseTriggersConfig,
+  createEmptyTriggersConfig,
+  parseTriggersConfigText,
   parseWorkspaceUri,
   TRIGGERS_CONFIG_EXAMPLE,
 } from '../../../shared/triggers/configParse.js'
@@ -26,6 +27,8 @@ import {
 } from '../../../shared/triggers/types.js'
 import type { JsonConfigReadResult } from '../jsonConfig/jsonConfigFileStore.js'
 import { writeFileAtomic } from '../jsonConfig/atomicFile.js'
+
+export { createEmptyTriggersConfig, parseTriggersConfigText }
 
 /** Machine-local trigger data (state, audit, runs, the workspace registry). */
 export const TRIGGERS_DIR_NAME = 'triggers'
@@ -61,11 +64,6 @@ export function workspaceTriggersConfigLocation(workspace: string): string {
   return workspaceTriggersConfigPath(uri.fsPath)
 }
 
-export function createEmptyTriggersConfig(): TriggersConfig {
-  return { version: 1, triggers: [], invalid: [] }
-}
-
-/** Fixed shape keeps the store's external-edit comparison stable. */
 export function serializeTriggersConfig(config: TriggersConfig): unknown {
   return {
     version: config.version,
@@ -103,29 +101,6 @@ export async function readTriggersConfigFile(
 
   text = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
   return parseTriggersConfigText(text)
-}
-
-/**
- * JSONC parse + validation shared by the local file reader and the remote store,
- * so both surfaces accept exactly the same shape and report the same errors.
- */
-export function parseTriggersConfigText(text: string): JsonConfigReadResult<TriggersConfig> {
-  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
-  if (body.trim() === '') return { kind: 'ok', value: createEmptyTriggersConfig() }
-
-  const errors: ParseError[] = []
-  const raw: unknown = parse(body, errors, { allowTrailingComma: true })
-  const firstError = errors[0]
-  if (firstError !== undefined) {
-    return {
-      kind: 'invalid',
-      error: `${TRIGGERS_CONFIG_FILE_NAME} is not valid JSON (offset ${firstError.offset})`,
-    }
-  }
-
-  const parsed = parseTriggersConfig(raw)
-  if (!parsed.ok) return { kind: 'invalid', error: parsed.error }
-  return { kind: 'ok', value: parsed.config }
 }
 
 /** Writes the commented example only when the file is absent; never overwrites an edit. */

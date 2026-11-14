@@ -31,6 +31,8 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
     status: 'idle',
     enabled: true,
     paused: false,
+    pausedAll: false,
+    autoPaused: false,
     elevatedMode: false,
     elevatedModeConfirmed: false,
     approveAction: false,
@@ -164,8 +166,8 @@ describe('buildTriggerActionItems', () => {
   const actions = (overrides: Partial<TriggerSummary>): readonly string[] =>
     buildTriggerActionItems(summary(overrides)).map((item) => item.action)
 
-  it('offers run / pause / config / log for a plain trigger', () => {
-    expect(actions({})).toEqual(['runNow', 'pause', 'openConfig', 'showLog'])
+  it('offers manager / run / pause / config / log for a plain trigger', () => {
+    expect(actions({})).toEqual(['openManager', 'runNow', 'pause', 'openConfig', 'showLog'])
   })
 
   it('offers resume for a paused trigger', () => {

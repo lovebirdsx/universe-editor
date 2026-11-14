@@ -6,6 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  ICommandService,
   IDialogService,
   IEditorResolverService,
   ILayoutService,
@@ -93,6 +94,9 @@ describe('OpenTriggersConfigAction', () => {
         },
       ],
       [ILoggerService, { _serviceBrand: undefined, createLogger: () => logger }],
+      // The trigger action snapshot includes the command service (the action
+      // menu's "Open trigger manager" entry routes through the command).
+      [ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() }],
     ])
     const accessor = {
       get: (id: unknown) => {

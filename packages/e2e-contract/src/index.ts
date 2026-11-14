@@ -914,6 +914,31 @@ export interface E2ETriggerSummary {
   readonly errors?: readonly string[]
 }
 
+/** One row of the machine-local trigger run history (`history.jsonl`). */
+export interface E2ETriggerRunHistoryEntry {
+  readonly runId: string
+  readonly triggerKey: string
+  readonly triggerId: string
+  readonly triggerName: string
+  readonly workspace: string
+  readonly workspaceName: string
+  readonly sessionId?: string
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly outcome:
+    | 'completed'
+    | 'budget-exceeded'
+    | 'timeout'
+    | 'approval-timeout'
+    | 'cancelled'
+    | 'failed'
+  readonly verdict?: 'auto-approve' | 'escalate' | 'reject' | 'info'
+  readonly summary?: string
+  readonly error?: string
+  readonly costUsd?: number
+  readonly durationMs?: number
+}
+
 /** A durable session-history row stamped by an automated trigger run. */
 export interface E2ETriggerAutomationRow {
   readonly sessionId: string
@@ -1502,6 +1527,8 @@ export interface E2EProbe {
   runTriggerNow(triggerKey: string): Promise<void>
   /** Pause / resume one trigger through the same main-process entry the list QuickPick uses. */
   setTriggerPaused(triggerKey: string, paused: boolean): Promise<void>
+  /** Newest-first run history rows for one trigger (composite key); at most 100. */
+  listTriggerRuns(triggerKey: string): Promise<readonly E2ETriggerRunHistoryEntry[]>
   /** Confirm a workspace-defined trigger on this machine (the activation gate). */
   confirmTriggerActivation(triggerKey: string): Promise<void>
   /** Absolute fs path of `<userData>/triggers/runs`; run directories live under it. */

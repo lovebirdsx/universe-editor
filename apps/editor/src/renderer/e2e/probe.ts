@@ -143,6 +143,7 @@ import {
   type E2ETimelineItem,
   type E2ETreeItem,
   type E2ETriggerAutomationRow,
+  type E2ETriggerRunHistoryEntry,
   type E2ETriggerRunReport,
   type E2EWorkingTreeHint,
 } from '../../shared/e2e/contract.js'
@@ -1345,6 +1346,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     runTriggerNow: (triggerKey) => services.triggerMainService.runNow(triggerKey),
     setTriggerPaused: (triggerKey, paused) =>
       services.triggerMainService.setPaused(triggerKey, paused),
+    listTriggerRuns: (triggerKey): Promise<readonly E2ETriggerRunHistoryEntry[]> =>
+      services.triggerMainService.listRuns({ triggerKey, limit: 100 }),
     confirmTriggerActivation: (triggerKey) =>
       services.triggerMainService.confirmActivation(triggerKey),
     getTriggersRunsDir: () => services.triggerMainService.getRunsDir(),

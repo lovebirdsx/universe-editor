@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ITriggerMainService } from '../../../../shared/ipc/triggerService.js'
 import type {
   TriggerRunEnd,
+  TriggerRunHistoryEntry,
   TriggerRunReportReadResult,
   TriggerRunRequest,
   TriggerSummary,
@@ -75,6 +76,7 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly onDidChangeTriggers = this._onDidChangeTriggers.event
   readonly reportRunEnd = vi.fn(async (_end: TriggerRunEnd): Promise<void> => undefined)
   readonly listTriggers = vi.fn(async (): Promise<readonly TriggerSummary[]> => [])
+  readonly listRuns = vi.fn(async (): Promise<readonly TriggerRunHistoryEntry[]> => [])
   readonly listWorkspaces = vi.fn(async () => [])
   readonly getRunsDir = vi.fn(async (): Promise<string> => 'X:/workspace/triggers/runs')
   readonly setMaxConcurrentRuns = vi.fn(async (): Promise<void> => undefined)

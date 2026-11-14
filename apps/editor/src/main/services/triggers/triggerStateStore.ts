@@ -9,16 +9,27 @@
 import { readFile } from 'node:fs/promises'
 import type { ILogger } from '@universe-editor/platform'
 import type { ProcessedKeys } from '../../../shared/triggers/dedupe.js'
+import type { TriggerRunOutcome, TriggerVerdictKind } from '../../../shared/triggers/types.js'
 import { writeJsonAtomic } from '../jsonConfig/atomicFile.js'
 
 export interface TriggerRuntimeState {
   readonly processed: ProcessedKeys
   readonly paused: boolean
+  /** Paused automatically by the failure threshold; cleared by a manual resume or a success. */
+  readonly autoPaused?: boolean
   readonly consecutiveFailures: number
   readonly backoffUntil?: number
   readonly lastScheduledAt?: number
   readonly lastRunAt?: number
   readonly lastError?: string
+  /** Summary of the most recent run, rendered in the trigger manager's overview. */
+  readonly lastRunId?: string
+  readonly lastSessionId?: string
+  readonly lastRunOutcome?: TriggerRunOutcome
+  readonly lastRunVerdict?: TriggerVerdictKind
+  readonly lastRunSummary?: string
+  readonly lastRunCostUsd?: number
+  readonly lastRunDurationMs?: number
   /** poll / swarm-review: the first observed result only seeds the dedupe keys. */
   readonly baselineDone: boolean
   /** Normalized fingerprint of the trigger `source`; a change resets the baseline. */
@@ -163,6 +174,29 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined
 }
 
+const TRIGGER_RUN_OUTCOMES: readonly TriggerRunOutcome[] = [
+  'completed',
+  'budget-exceeded',
+  'timeout',
+  'approval-timeout',
+  'cancelled',
+  'failed',
+]
+
+const TRIGGER_VERDICT_KINDS: readonly TriggerVerdictKind[] = [
+  'auto-approve',
+  'escalate',
+  'reject',
+  'info',
+]
+
+/** A hand-edited state file must not smuggle in an enum value the UI cannot render. */
+function asEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
+  return typeof value === 'string' && (allowed as readonly string[]).includes(value)
+    ? (value as T)
+    : undefined
+}
+
 function normalizeProcessed(raw: unknown): ProcessedKeys {
   if (!isRecord(raw)) return {}
   const processed: Record<string, { at: number; status: 'queued' | 'started' }> = {}
@@ -184,6 +218,15 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
   const lastScheduledAt = finiteNumber(raw['lastScheduledAt'])
   const lastRunAt = finiteNumber(raw['lastRunAt'])
   const lastError = optionalString(raw['lastError'])
+  const lastRunId = optionalString(raw['lastRunId'])
+  const lastSessionId = optionalString(raw['lastSessionId'])
+  const lastRunOutcome = asEnum(raw['lastRunOutcome'], TRIGGER_RUN_OUTCOMES)
+  const lastRunVerdict = asEnum(raw['lastRunVerdict'], TRIGGER_VERDICT_KINDS)
+  const lastRunSummaryRaw = raw['lastRunSummary']
+  const lastRunSummary =
+    typeof lastRunSummaryRaw === 'string' ? lastRunSummaryRaw.slice(0, 200) : undefined
+  const lastRunCostUsd = finiteNumber(raw['lastRunCostUsd'])
+  const lastRunDurationMs = finiteNumber(raw['lastRunDurationMs'])
   const elevatedConfirmed = optionalString(raw['elevatedConfirmed'])
   const activationConfirmed = optionalString(raw['activationConfirmed'])
   const approveConfirmed = optionalString(raw['approveConfirmed'])
@@ -191,12 +234,20 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
   return {
     processed: normalizeProcessed(raw['processed']),
     paused: raw['paused'] === true,
+    ...(raw['autoPaused'] === true ? { autoPaused: true } : {}),
     consecutiveFailures:
       consecutiveFailures === undefined ? 0 : Math.max(0, Math.floor(consecutiveFailures)),
     ...(backoffUntil === undefined ? {} : { backoffUntil }),
     ...(lastScheduledAt === undefined ? {} : { lastScheduledAt }),
     ...(lastRunAt === undefined ? {} : { lastRunAt }),
     ...(lastError === undefined ? {} : { lastError }),
+    ...(lastRunId === undefined ? {} : { lastRunId }),
+    ...(lastSessionId === undefined ? {} : { lastSessionId }),
+    ...(lastRunOutcome === undefined ? {} : { lastRunOutcome }),
+    ...(lastRunVerdict === undefined ? {} : { lastRunVerdict }),
+    ...(lastRunSummary === undefined ? {} : { lastRunSummary }),
+    ...(lastRunCostUsd === undefined ? {} : { lastRunCostUsd }),
+    ...(lastRunDurationMs === undefined ? {} : { lastRunDurationMs }),
     baselineDone: raw['baselineDone'] === true,
     ...(sourceFingerprint === undefined ? {} : { sourceFingerprint }),
     ...(elevatedConfirmed === undefined ? {} : { elevatedConfirmed }),

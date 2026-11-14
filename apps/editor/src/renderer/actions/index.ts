@@ -335,6 +335,7 @@ import {
   ConfirmTriggerAutoApproveAction,
   ConfirmTriggerElevatedModeAction,
   ListTriggersAction,
+  OpenTriggerManagerAction,
   OpenTriggersConfigAction,
   PauseAllTriggersAction,
   PauseTriggerAction,
@@ -1065,6 +1066,7 @@ registerAction2(StopRemoteServerAction)
 registerAction2(RemoveManualHostAction)
 
 // Agent triggers — the scheduler lives in main; these commands are its palette UI.
+registerAction2(OpenTriggerManagerAction)
 registerAction2(ListTriggersAction)
 registerAction2(RunTriggerNowAction)
 registerAction2(PauseTriggerAction)

@@ -64,7 +64,7 @@ main（应用级单例）                                    renderer（每窗�
 
 | 通道 | 方向 | 契约 |
 | --- | --- | --- |
-| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`：触发器列表（按复合键）/ 工作区列表 / 手动运行 / 暂停 / 激活确认 / 高权限与自动 approve 确认 / 打开配置 / 移除工作区 / 运行目录 / 运行结束上报 / Swarm 审核上报 / `readRunReport`（PC 按 runId + 可选 authority 读 `report.md`） / `onDidChangeTriggers` |
+| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`：触发器列表（按复合键）/ 工作区列表 / 手动运行 / 暂停 / 激活确认 / 高权限与自动 approve 确认 / 打开配置 / 移除工作区 / 运行目录 / 运行结束上报 / `listRuns`（本机运行历史，按复合键与 outcome 过滤）/ Swarm 审核上报 / `readRunReport`（PC 按 runId + 可选 authority 读 `report.md`） / `onDidChangeTriggers` |
 | `ServiceChannels.TriggerRunHost`（`'triggerRunHost'`） | main → renderer | `ITriggerRunHost`：`startRun` / `cancelRun` / `isWorkspaceTrusted` |
 | `RemoteChannels.TriggerPoll`（`'triggerPoll'`） | main → 远端 server | `IRemoteTriggerService`：`poll` / `createRunDir` / `readReport`。DTO 路径一律 URI；runDir 布局由 server 拥有，客户端只传 `clientId` / `runId` 与保留策略（`keep` / `protectedRunIds`），清理由 `createRunDir` 一并完成 |
 
@@ -77,14 +77,14 @@ main（应用级单例）                                    renderer（每窗�
 
 | 位置 | 内容 |
 | --- | --- |
-| `apps/editor/src/shared/triggers/` | 纯逻辑（无 node / electron 依赖）：`types.ts`（契约与默认值）、`configParse.ts`（校验 + 示例）、`cron.ts`、`scheduler.ts`、`dedupe.ts`、`runQueue.ts`、`backoff.ts`、`promptTemplate.ts`、`verdict.ts` |
+| `apps/editor/src/shared/triggers/` | 纯逻辑（无 node / electron 依赖）：`types.ts`（契约与默认值）、`configParse.ts`（校验 + 示例）、`configDocument.ts`（JSONC 定位 / 字段写回 / 行号）、`triggerPresentation.ts`（状态徽标 / 工作区分组 / 计数）、`cron.ts`、`scheduler.ts`、`dedupe.ts`、`runQueue.ts`、`backoff.ts`、`promptTemplate.ts`、`verdict.ts` |
 | `packages/node-services/src/triggers/` | main 与远端 server 共用：`triggerProtocol.ts`（`triggerPoll` 契约）、`pollCommandFetcher.ts`、`runDirectories.ts`、`sessionReportReader.ts` |
 | `apps/editor/src/shared/ipc/triggerService.ts` | `ITriggerMainService` / `ITriggerRunHost` 契约、`SwarmNeedsActionReview`、`swarmReviewEvent` |
-| `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（调度器）、`triggerWorkspaceRegistry.ts`（登记表）、`triggerIdentity.ts`（复合键）、`workspaceTrustReader.ts`（main 侧信任探针）、`triggersConfigFile.ts`（JSONC 读写 + 示例 + 用户设置读取）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts`、`runReportReader.ts`（`SessionReportReader`：UUID / realpath / 符号链接 / 512 KB / 10s 超时安全读取，手机网关与 PC 共用） |
-| `apps/editor/src/renderer/services/triggers/` | `TriggerRunHost.ts`、`automatedSessionService.ts`、`automatedPermissionPolicy.ts`、`automatedRunWatcher.ts`、`triggerActionExecutor.ts`、`triggerReportEditorInput.ts`（报告标签页的虚拟 EditorInput）、`triggerSessionRevealService.ts`（`showSession` 的会话切换） |
-| `apps/editor/src/renderer/workbench/triggers/` | `TriggerReportEditor.tsx` + module.css（报告标签页：摘要条、状态页、Markdown 正文） |
-| `apps/editor/src/renderer/actions/triggerActions.ts` + `triggerPickItems.ts` | 命令面板与 QuickPick 文案 |
-| `apps/editor/src/renderer/contributions/` | `TriggersConfigurationContribution.ts`（JSON schema）、`TriggerVerdictContribution.ts`（安装 resolver）、`TriggerRunNotificationContribution.ts`（结束通知） |
+| `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（调度器）、`triggerWorkspaceRegistry.ts`（登记表）、`triggerIdentity.ts`（复合键）、`workspaceTrustReader.ts`（main 侧信任探针）、`triggersConfigFile.ts`（JSONC 读取 + 示例 + 用户设置读取）、`triggerHistoryStore.ts`（`history.jsonl` 追加 / 轮转 / 读取）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts`、`runReportReader.ts`（`SessionReportReader`：UUID / realpath / 符号链接 / 512 KB / 10s 超时安全读取，手机网关与 PC 共用） |
+| `apps/editor/src/renderer/services/triggers/` | `TriggerRunHost.ts`、`automatedSessionService.ts`、`automatedPermissionPolicy.ts`、`automatedRunWatcher.ts`、`triggerActionExecutor.ts`、`triggerReportEditorInput.ts`（报告标签页的虚拟 EditorInput）、`triggerManagerEditorInput.ts`（管理器单例 tab + 待选触发器传递）、`triggerConfigFileService.ts`（`IFileService` 读 / 写 `triggers.json` + mtime 冲突）、`revealTriggerConfig.ts`（打开并定位到触发器所在行）、`triggerSessionRevealService.ts`（`showSession` 的会话切换） |
+| `apps/editor/src/renderer/workbench/triggers/` | `TriggerReportEditor.tsx` + module.css（报告标签页）、`TriggerManagerEditor.tsx`（左列表 / 右标签页外壳）、`TriggerOverviewPanel.tsx`、`TriggerConfigPanel.tsx`、`TriggerCreateWizard.tsx`、`TriggerRunsPanel.tsx`、`TriggerManager.module.css` |
+| `apps/editor/src/renderer/actions/triggerActions.ts` + `triggerPickItems.ts` | 命令面板与 QuickPick 文案；`OpenTriggerManagerAction` 打开单例管理器 |
+| `apps/editor/src/renderer/contributions/` | `TriggersConfigurationContribution.ts`（JSON schema）、`TriggerVerdictContribution.ts`（安装 resolver）、`TriggerRunNotificationContribution.ts`（结束通知）、`TriggerManagerStatusContribution.ts`（状态栏条目） |
 | `apps/editor/src/renderer/services/swarm/swarmTriggerReporter.ts` | Swarm 列表 → 触发器上报（同一过滤口径） |
 
 ### 文件与状态
@@ -95,6 +95,7 @@ main（应用级单例）                                    renderer（每窗�
 | `<userData>/triggers/workspaces.json` | `TriggerWorkspaceRegistry`（独占） | 本机登记的工作区 **URI** 列表（version 2，本地 `file:` 与远程 `remote-ssh:` 都收；**不入库**）。窗口打开工作区 / `openConfig` 时登记；`removeWorkspace` 移除。加载时丢弃非绝对 `file:` 路径与非 `remote-ssh:` 的项，旧 version 数据直接作废。 |
 | `<userData>/triggers/state.json` | `TriggerStateStore`（独占） | version 2；`pausedAll`、每触发器（键为**复合键**，工作区部分是 URI 比较键）`processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`sourceFingerprint`、`activationConfirmed` / `elevatedConfirmed` / `approveConfirmed` 指纹、`pending` 记录（`triggerKey`）。防抖 + 原子写（0600）。加载时丢弃 `runId` 不是 UUID 形态的 pending 记录（会拼进文件路径）。 |
 | `<userData>/triggers/audit.jsonl` | `AuditLog` | `action` / `result` / `detail`（标识性文本，无 payload / prompt / 摘要）。每条执行 / 拒绝的动作单独成行。 |
+| `<userData>/triggers/history.jsonl` | `TriggerHistoryStore`（独占） | 每次运行结束追加一行：`runId` / `triggerKey` / `triggerId` / `triggerName` / `workspace` / `workspaceName` / `sessionId?` / `startedAt` / `endedAt` / `outcome` / `verdict?` / `summary?` / `error?` / `costUsd?` / `durationMs?`。达到 1 MB 时轮转为 `.1` … `.3`（最多 4 份）；`listRuns` 按写入顺序读最新在前，坏行 / 未知枚举跳过。纯文本渲染，不写 payload / prompt / Agent 输出正文。 |
 | `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | 本地运行的 `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），PC 端经 `readRunReport` 按 runId 读取（同一 reader），目录被清理后入口显示空状态。 |
 | `<远端 serverDataDir>/triggers/runs/<clientId>/<runId>/` | 远端 server（`triggerPoll.createRunDir`），Agent 写文件 | 远程运行的 `result.json`、`report.md`、`prompt.md`。`clientId` 为本机安装 ID；保留策略按 clientId 命名空间各留 200 个，客户端的保留请求只影响自己的子目录。 |
 | `<userData>/triggers/pending/<runId>.json` | `TriggerMainService` | 排队事件的临时负载；run 开始或丢弃后删除。 |
@@ -135,6 +136,22 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 - **本地工作区**：`JsonConfigFileStore` 直接读 `<workspace>/.universe-editor/triggers.json`，由该目录 watcher 驱动外部编辑热加载。
 - **远程工作区**：同一份文件经远程文件服务读取，热加载由远端目录 watcher 驱动；每次远程 I/O 前先看该 authority 的连接状态，只有 `connected` 才发起（状态查询是同步读，不建连接、不触发 SSH bring-up），断连时 watcher 传输同步 dispose，避免旧代理在重连后继续悬挂。重连后重新挂载并重读配置。
 - 两种形态共用 `parseTriggersConfig()` / 指纹 / 无效配置降级规则（见上）；远程配置的「已打开窗口里新建文件不会自动登记」等发现语义与本地一致（见 §18）。
+
+### 配置写回（管理器）
+
+管理器的配置表单与新建向导不是重新序列化整份文件，而是通过 `shared/triggers/configDocument.ts` 对原文做最小 JSONC 编辑：
+
+- `locateTrigger(text, id)` 用 `parseTree` / `findNodeAtLocation` 定位 `triggers[i]`，每次保存前重新定位（文件可能已被外部修改）。
+- 只对**真正变化的字段**生成 `modify` 编辑：标量（name / enabled / showSession / concurrency / overflow）、`session` 子字段、`budget` 子字段；`source` 与 `allowedActions` **整体替换**，因此它们内部的注释会在写回时丢失（表单保存前额外提示）。
+- 未识别字段与未改动行（含注释、缩进、eol）保持不变；格式选项尽量从原文探测。
+- 新建触发器用 `appendTrigger`；`triggers` 缺失时先补数组，文件不存在时写空配置（`{ "triggers": [] }`，带可选注释头）。
+- 写盘前流程（`renderer/services/triggers/triggerConfigFileService.ts`）：
+  1. `stat.mtime` 与打开时的快照不一致 → `conflict`，不写；
+  2. JSON 编辑器里有未保存修改 → 调用方（面板）先拒绝（`dirty-editor`）；
+  3. 目标触发器已不存在 → `missing-trigger`；
+  4. `applyEdits` 后必须能用同一份 `parseTriggersConfig` 解析且目标触发器可解析，否则 `invalid` 不写盘；
+  5. `IFileService.writeFile` 后重新 `stat` 返回新 mtime，面板据此刷新基线。
+- 根节点非法（不是对象 / `triggers` 不是数组）时表单只读，不提供写回；只含注释的文件也不做 `modify`（会产出畸形结果），只在空文件上写新对象。
 
 ## 4. 启动门控与调度
 
@@ -277,9 +294,11 @@ _startRun
 - **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。**登记表不受影响**：本地工作区继续调度、需要时会重新开后台窗口；远程工作区不会后台开窗，因此在窗口重新打开且连接 `connected` 之前不再调度。
 - **running 看门狗**：run 启动后按 `budget.timeoutMin + budget.approvalTimeoutMin + 10 分钟宽限` 设时；到期仍未 `reportRunEnd` → 记失败、释放槽位，并调用该窗口的 `host.cancelRun`（若 host 还在）。`reportRunEnd` 会清掉定时器。
 - **运行结束**：renderer `TriggerRunHost` 订阅 `AutomatedSessionService.onDidEndRun`，调 `reportRunEnd`。main：
-  - `completed` → 清零失败计数、清退避、更新 `lastRunAt`；
-  - `failed` → `_recordFailure`（可能自动暂停）；
+  - `completed` → 清零失败计数、清退避、更新 `lastRunAt`，并清 `autoPaused`；
+  - `failed` → `_recordFailure`（连续失败达阈值时 `paused: true` + 持久化 `autoPaused: true`）；
   - 其它（预算 / 超时 / 审批超时 / 取消）→ 只更新 `lastRunAt`，不计失败；
+  - 所有结果都向 `TriggerHistoryStore` **追加一行 `history.jsonl`**（triggerName 找不到时用 triggerId；`startedAt` 取运行记录的开始 / firedAt；`durationMs` / `costUsd` 来自 `TriggerRunEnd`）；
+  - 同时把最近一次运行的摘要写进 `state.json`（`lastRunId` / `lastSessionId` / `lastRunOutcome` / `lastRunVerdict` / `lastRunSummary`（截断 200）/ `lastRunCostUsd` / `lastRunDurationMs`），供重启后的列表与概览使用；
   - 所有结果写审计 `run-end`（含 outcome / verdict / actions 摘要）；`end.actions` 的**每条动作再单独写一行 `action`**（trigger / key / run / session / type / target / result / reason），reason 只含校验或执行错误，不含评论正文。
 
 ### 窗口路由
@@ -466,6 +485,8 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 
 ## 12. 会话历史、列表与手机
 
+`TriggerSummary` 是 renderer 看到的唯一状态快照：除既有字段外，新增必填 `pausedAll` / `autoPaused`，以及可选的 `source`（解析后的源配置，供列表措辞与下次运行展示）、`lastRunId` / `lastSessionId` / `lastRunOutcome` / `lastRunVerdict` / `lastRunSummary`（截断 200）/ `lastRunCostUsd` / `lastRunDurationMs`。`autoPaused` 持久化在 `state.json`，不在 renderer 推导；`setPaused(key, false)` 与成功完成都会清掉它。invalid 条目同样给出 `pausedAll` 且 `autoPaused: false`。
+
 `AcpSessionHistoryEntry.automation?: { triggerId, triggerName, eventKey, runId, workspaceName?, verdict?, summary?, outcome? }`：
 
 - schemaVersion 8；新增 `workspaceName` 是可选字段，不 bump（旧历史照常恢复）；`add()` 时 carry-over，恢复 / 合并不会丢。
@@ -494,6 +515,7 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 
 | 类 | 命令 id | 面板名 |
 | --- | --- | --- |
+| `OpenTriggerManagerAction` | `workbench.action.triggers.openManager` | 触发器: 打开管理器（单例 tab；可选参数是复合键。已打开时先在所有分屏中定位已有 tab 并 reveal，再把选中项经 `select` / `updateFrom` 交给已挂载视图，不会在另一个分屏再开一份） |
 | `ListTriggersAction` | `workbench.action.triggers.list` | 触发器: 列出触发器 |
 | `RunTriggerNowAction` | `workbench.action.triggers.runNow` | 触发器: 立即运行触发器… |
 | `PauseTriggerAction` | `workbench.action.triggers.pause` | 触发器: 暂停触发器… |
@@ -511,6 +533,19 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 `triggerPickItems.ts` 是纯函数，集中状态 / 来源标签、运行计数、上次 / 下次运行、错误与 ⚠ 标记；description 以所在工作区名开头（多工作区同名 id 时靠它区分），未确认的触发器额外显示「待确认」动作与 detail 提示。`RunTriggerNowAction` 支持直接传复合键（供列表 / e2e 调用）。
 
 > 异步 `run` 必须在第一个 `await` 前用 `triggerActionServices(accessor)` 取完 service 快照——`ServicesAccessor` 在 await 后失效（见根 CLAUDE.md 红线）。
+
+### 管理器组件结构
+
+入口：命令 `workbench.action.triggers.openManager`、Sessions 标题栏按钮、状态栏条目、列表 QuickPick 的第一项。标签页身份由 `TriggerManagerEditorInput` 固定（`resource = universe:/triggerManager`）；`OpenTriggerManagerAction` 先在所有编辑器组里查找这个 input（`revealEditorInGroups`），命中就切换到该组并通过 selection 事件传复合键，未命中才经 `openPinnedSingletonEditor` 打开。
+
+- `TriggerManagerEditor`：订阅 `onDidChangeTriggers` **先于**首次 `listTriggers`，`cancelled` 标记防止卸载后 setState；左栏搜索 / 新建 / 全部暂停 / 打开配置 / 查看日志；列表按工作区分组，键盘上下导航走 `useFlatListNavigation`。行尾 `Toggle` 调 `setPaused`（不改 `enabled`），`pausedAll` 时禁用。
+- `TriggerOverviewPanel`：状态、闸门说明（激活 / 高权限 / approve / 离线 / 自动暂停）、操作按钮（立即运行、暂停 / 恢复、三种确认、查看日志、在 JSON 中定位）。「在 JSON 中定位」走 `revealTriggerConfig`，用 `configDocument.triggerSectionLine(..., 'trigger')` 定位到该条定义。
+- `TriggerConfigPanel`：分区表单（基本 / 触发源 / 会话 / 预算 / 允许的动作），所有控件来自 `@universe-editor/workbench-ui`（含 `Textarea`）。保存前 `IDialogService.confirm`；`source` / `allowedActions` 有变化时额外提示内部注释会丢。外部热加载时只在与选中触发器相关的签名变化时重读，dirty 显示「文件已在外部修改」banner；自动重读失败不会把表单换成阻断性错误页，离线期间跳过自动重读。
+- `TriggerCreateWizard`：模板 → 基本信息 → 会话 → 预算 / 权限 / 动作；写入工作区文件后经列表刷新选中新触发器（等待有 15s 超时兜底）。写入前若 `triggers.json` 的 JSON 标签页有未保存修改则拒绝；`ensureConfigFile` 失败会 Warning 提示补救方式，不再静默吞错。
+- `TriggerRunsPanel`：`listRuns({ triggerKey, outcome?, limit: 100 })`；outcome 筛选下推到 main（选「全部」时不带该字段），切换筛选以请求序号丢弃过期响应；行点击有 `sessionId` 时复用 `revealSessionChat`，否则打开 `TriggerReportEditorInput`（authority 由 workspace URI 推出）；同时提供「打开会话 / 查看报告」按钮。`summary.running` 由 >0 归零或 `lastRunId` 变化时自动刷新，切换触发器时同步重置基线避免重复请求，另有手动刷新与加载 / 空 / 错误状态。
+- `TriggerManagerStatusContribution`（`AfterRestore`）：`summarizeTriggerCounts` 只在 running / 待确认 / 自动暂停 / 离线 / 错误时显示 `⚡ …`，点击执行 `openManager`；订阅与 accessor 在 dispose 时释放。
+
+> 展示口径差异是有意的：管理器列表 / 状态栏 badge 优先展示「自动暂停」「待确认」等更可行动的信号，而 `TriggerSummary.status`（main 产出）在暂停时仍以 `paused` 优先。不要为对齐两者去改 main 的状态优先级。
 
 ## 15. 如何新增一种触发源
 
@@ -542,12 +577,12 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 
 | 域 | 文件 |
 | --- | --- |
-| 纯逻辑 | `shared/triggers/__tests__/{cron,scheduler,dedupe,runQueue,backoff,configParse,promptTemplate,verdict}.test.ts` |
-| main | `main/services/triggers/__tests__/{triggerMainService,triggerFiles,triggerWorkspaceRegistry,triggerIdentity,pollCommandFetcher,runReportReader,workspaceTrustReader}.test.ts` |
+| 纯逻辑 | `shared/triggers/__tests__/{cron,scheduler,dedupe,runQueue,backoff,configParse,configDocument,triggerPresentation,promptTemplate,verdict}.test.ts` |
+| main | `main/services/triggers/__tests__/{triggerMainService,triggerHistoryStore,triggerStateStore,triggerFiles,triggerWorkspaceRegistry,triggerIdentity,pollCommandFetcher,runReportReader,workspaceTrustReader}.test.ts` |
 | 共享 node-services | `packages/node-services/src/triggers/__tests__/{pollCommandFetcher,runDirectories,sessionReportReader}.test.ts` |
 | 远端 server | `packages/remote-server/src/__tests__/triggerService.test.ts`（clientId / runId 校验、runDir 布局、报告读取与上限） |
-| renderer | `renderer/services/triggers/__tests__/{TriggerRunHost,automatedPermissionPolicy,automatedRunWatcher,automatedSessionService,triggerActionExecutor,triggerReportEditorInput,triggerSessionRevealService}.test.ts` |
-| UI / 集成 | `renderer/contributions/__tests__/{TriggerRunNotificationContribution,SwarmReviewNotificationContribution}.test.ts`、`renderer/workbench/triggers/__tests__/TriggerReportEditor.test.tsx`、`workbench/agents/__tests__/SessionListBody.test.tsx`、`services/acp/session/__tests__/acpSessionHistory.test.ts`、`services/mobileGateway/__tests__/MobileBridgeService.test.ts` |
+| renderer | `renderer/services/triggers/__tests__/{TriggerRunHost,automatedPermissionPolicy,automatedRunWatcher,automatedSessionService,triggerActionExecutor,triggerReportEditorInput,triggerConfigFileService,triggerSessionRevealService}.test.ts` |
+| UI / 集成 | `renderer/contributions/__tests__/{TriggerRunNotificationContribution,TriggerManagerStatusContribution,SwarmReviewNotificationContribution}.test.ts`、`renderer/workbench/triggers/__tests__/{TriggerReportEditor,TriggerManagerEditor,TriggerConfigPanel,TriggerCreateWizard,TriggerRunsPanel}.test.tsx`、`workbench/agents/__tests__/SessionListBody.test.tsx`、`services/acp/session/__tests__/acpSessionHistory.test.ts`、`services/mobileGateway/__tests__/MobileBridgeService.test.ts` |
 
 要点：
 
@@ -557,7 +592,7 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 - 远程门禁用例覆盖：offline 时 `schedule` 不推进、重连后按 `onMissed` 处理（`skip` 丢弃 / `catch-up-once` 只补最近一次）、`poll` 跳过且不记失败、`runNow` 报错；已接受但启动前断连或窗口消失的事件以 deferred 保留在 pending（释放队列槽位、不 forget key、不退避），重连 + 窗口回来时重放；队列出队时若已离线，槽位立即释放并留待重放；连接状态 / 窗口存在性变化驱动 attach / detach；远程 runDir 带 clientId 命名空间且各客户端只清理自己的子目录（`createRunDir` 的保护集按同一 authority 的 active / queued / pending 收集，不依赖工作区 entry 是否还在）；远程报告只有 `connected` 时可读，否则 `unavailable`。
 - 会话启动测试用 `inMemoryAcpPair` 或假 session（见 `services/acp/CLAUDE.md` 测试套路）。
 
-E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：
+E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/triggerManager.spec.ts`（`@p1`）覆盖管理器：命令打开的单例 tab、列表行、行内暂停 / 恢复、配置表单写回（注释保留 + 保存后回到待确认）、待确认时的状态栏条目及点击打开、一次真实运行后的运行历史行；`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：
 
 - 没有 `.universe-editor/triggers.json` 时不列出任何触发器、不创建会话；
 - 写文件后经 `openConfig` 登记工作区；
@@ -571,6 +606,7 @@ E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regress
 - `listTriggers()` → `E2ETriggerSummary[]`（含 `key` / `workspace` / `workspaceName` / `activationConfirmed`）
 - `runTriggerNow(triggerKey)` → 只等到事件被接受 / 入队，不等到会话创建（用 `getAcpAutomationRows` 轮询结果）
 - `setTriggerPaused(triggerKey, paused)` → 从主进程暂停 / 恢复单个触发器（与列表 QuickPick 同一入口），用于验证暂停门控
+- `listTriggerRuns(triggerKey)` → 该触发器最新在前的运行历史（`history.jsonl`，最多 100 条），用于断言运行结束后写入与管理器表格
 - `confirmTriggerActivation(triggerKey)` → 走与命令相同的激活确认
 - `getTriggersRunsDir()` → `<userData>/triggers/runs` 的绝对路径（报告断言用）
 - `readTriggerRunReport(runId, authority?)` → 经 `ITriggerMainService.readRunReport` 读报告正文与 runDir URI（远程用例断言远端报告链路）
@@ -582,13 +618,15 @@ E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regress
 
 ```bash
 pnpm check
-pnpm e2e specs/triggers.spec.ts
+pnpm e2e specs/triggers.spec.ts specs/triggerManager.spec.ts
 pnpm e2ea specs/remote.triggers.spec.ts
 pnpm e2e:smoke
 ```
 
 ## 18. 已知限制
 
+- **管理器写回只覆盖已知字段**：表单只能编辑基本 / 触发源 / 会话 / 预算 / 允许的动作里的已知字段；`source` 与 `allowedActions` 整体替换会丢掉它们内部的注释，未知字段与未改动行保留。根节点非法或文件只有注释时不做 `modify`，表单只读。
+- **运行历史是机器本地且会轮转**：`history.jsonl` 1 MB 轮转、最多 4 份，`listRuns` 最多返回 500 条（管理器取 100 条）；手工改坏的行会被跳过，不会修复文件。历史只记摘要，完整内容仍在 `runs/<runId>/`（保留 200 个目录）。
 - **schema 与运行时校验仍有少量差异**：schema 不校验单文件内 `id` 唯一，也不校验 `session.cwd` 的路径形态；两者最终仍由 `parseTriggersConfig()` 兜底（非法条目进入 `invalid`）。`session` required、`budget` 三个正数（`exclusiveMinimum: 0`）、poll 的两种输出形态已与运行时对齐。
 - **指纹失效范围较大**：指纹覆盖整份触发器定义（含 `enabled` 与 `name`），改任何字段（包括只改 `prompt` 文案、启用触发器或改名）都会让激活 / 高权限 / 自动 approve 确认失效，需要重新确认。这是有意的：否则仓库里一次 pull 就能把已确认的触发器悄悄打开或换个用途。
 - **运行中删除并重建 `.universe-editor` 目录会停止热加载**：`JsonConfigFileStore` 的目录 watcher 绑定在原目录上，重建后不再收到外部编辑事件；重新打开工作区、执行 openConfig 或重启编辑器即可恢复。
@@ -601,21 +639,23 @@ pnpm e2e:smoke
 - **远端路径一律按大小写敏感比较**：远程工作区身份按远端文件系统语义。Windows 远端上同一个目录写成不同大小写会被视为**不同工作区**（各自登记、确认、暂停与调度）；这是与本地 Windows 工作区（大小写不敏感）的刻意差异。
 - **远端协议 v16**：`triggerPoll` 是新增远端通道（`REMOTE_PROTOCOL_VERSION` 15 → 16）。升级编辑器后旧 daemon 会握手失败（`protocol version 15 != 16`），重连会触发自动重部署；若未自动恢复，用 **Remote-SSH: 停止远程服务器** 后重开该工作区。
 - **登记表是本机状态**：`workspaces.json` 不入库；换机器后需要重新打开工作区（或 `openConfig`）才会重新登记。工作区目录被删除时调度器保留登记但跳过（日志告警），可用 `removeWorkspace` 清理。远程工作区的连接状态与运行目录也不入库，由本机与远端 server 各自维护。
-- **e2e 覆盖范围有限**：本地 `triggers.spec.ts` 覆盖 manual / 激活闸门 / 高权限拒绝 / 非法配置 / 暂停拒绝；远程 `remote.triggers.spec.ts` 用直连 server 覆盖 poll、runDir 与报告主链路（断连 / deferred 走单测）。schedule / swarm-review 的定时与外部依赖仍靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
+- **e2e 覆盖范围有限**：本地 `triggers.spec.ts` 覆盖 manual / 激活闸门 / 高权限拒绝 / 非法配置 / 暂停拒绝；`triggerManager.spec.ts` 覆盖管理器单例、列表、暂停开关、配置写回、状态栏与运行历史；远程 `remote.triggers.spec.ts` 用直连 server 覆盖 poll、runDir 与报告主链路（断连 / deferred 走单测）。schedule / swarm-review 的定时与外部依赖仍靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
 
 ## 19. 关键参考路径
 
 - `apps/editor/src/main/services/triggers/triggerFingerprint.ts` — main 侧 SHA-256 定义指纹（确认闸门绑定它）
 - `apps/editor/src/main/services/triggers/triggerMainService.ts` — 调度、去重、队列、窗口路由、审计、激活闸门
 - `apps/editor/src/main/services/triggers/triggerWorkspaceRegistry.ts` — 本机工作区登记表（`workspaces.json`）
+- `apps/editor/src/main/services/triggers/triggerHistoryStore.ts` — 运行历史 `history.jsonl` 的追加 / 轮转 / 过滤读取
 - `apps/editor/src/main/services/triggers/triggerIdentity.ts` — 工作区 + id 复合键
 - `apps/editor/src/main/services/triggers/workspaceTrustReader.ts` — main 侧工作区信任探针（poll 取数前判定）
 - `apps/editor/src/main/services/triggers/runReportReader.ts` — 运行报告受限读取的本地入口（实现下沉 `node-services`，手机网关、PC 与远端 server 共用）
 - `packages/node-services/src/triggers/` — `triggerProtocol.ts` 远端 `triggerPoll` 契约 + 共享的 poll fetcher / runDir 保留 / 报告读取实现
 - `packages/remote-server/src/triggerService.ts` — 远端 `triggerPoll` 通道：在远端执行 poll、创建 / 清理 runDir、读报告
 - `apps/editor/src/shared/triggers/{types,configParse,promptTemplate,verdict}.ts` — 契约、校验、渲染、判决
-- `apps/editor/src/renderer/services/triggers/{automatedSessionService,automatedRunWatcher,automatedPermissionPolicy,triggerActionExecutor,TriggerRunHost,triggerReportEditorInput}.ts`
+- `apps/editor/src/renderer/services/triggers/{automatedSessionService,automatedRunWatcher,automatedPermissionPolicy,triggerActionExecutor,TriggerRunHost,triggerReportEditorInput,triggerConfigFileService,revealTriggerConfig,triggerManagerEditorInput}.ts`
 - `apps/editor/src/renderer/workbench/triggers/TriggerReportEditor.tsx` — PC 报告标签页
+- `apps/editor/src/renderer/workbench/triggers/{TriggerManagerEditor,TriggerOverviewPanel,TriggerConfigPanel,TriggerCreateWizard,TriggerRunsPanel}.tsx` — 触发器管理器
 - `apps/editor/src/renderer/services/acp/session/acpSessionService.ts` — `onRequestPermission` 的自动化分支
 - `apps/editor/src/renderer/services/acp/session/acpSessionHistory.ts` — `automation` 字段、30 条上限
 - `apps/editor/src/renderer/contributions/{TriggerVerdictContribution,TriggerRunNotificationContribution,TriggersConfigurationContribution}.ts`

@@ -225,6 +225,39 @@ export interface TriggerRunEnd {
   readonly summary?: string
   readonly actions: readonly TriggerActionAudit[]
   readonly error?: string
+  /** Active session time in milliseconds (time parked on a card is excluded). */
+  readonly durationMs?: number
+  /** Session cost when the agent reported it in USD (other currencies are dropped). */
+  readonly costUsd?: number
+}
+
+/** One row of the machine-local `<userData>/triggers/history.jsonl`. */
+export interface TriggerRunHistoryEntry {
+  readonly runId: string
+  /** Composite workspace + id; the same trigger id can exist in several workspaces. */
+  readonly triggerKey: string
+  readonly triggerId: string
+  readonly triggerName: string
+  /** Workspace URI string (`file:///…` / `remote-ssh://…`). */
+  readonly workspace: string
+  readonly workspaceName: string
+  readonly sessionId?: string
+  readonly startedAt: number
+  readonly endedAt: number
+  readonly outcome: TriggerRunOutcome
+  readonly verdict?: TriggerVerdictKind
+  readonly summary?: string
+  readonly error?: string
+  readonly costUsd?: number
+  readonly durationMs?: number
+}
+
+/** Query for the run history; `limit` defaults to 100 and is capped at 500. */
+export interface TriggerRunFilter {
+  readonly limit?: number
+  readonly triggerKey?: string
+  readonly workspace?: string
+  readonly outcome?: TriggerRunOutcome
 }
 
 /**
@@ -274,6 +307,12 @@ export interface TriggerSummary {
   readonly offline?: boolean
   readonly enabled: boolean
   readonly paused: boolean
+  /** Machine-wide pause (`pausedAll`); every trigger row is paused regardless of `paused`. */
+  readonly pausedAll: boolean
+  /** Paused automatically after repeated failures (persisted, not derived). */
+  readonly autoPaused: boolean
+  /** The parsed source config, for presentation (next-run / source wording). */
+  readonly source?: TriggerSourceConfig
   /** The user confirmed this workspace-defined trigger (bound to the config fingerprint). */
   readonly activationConfirmed: boolean
   /** Configured mode is bypass-class (shown with a warning marker). */
@@ -288,6 +327,15 @@ export interface TriggerSummary {
   readonly nextRunAt?: number
   readonly lastError?: string
   readonly errors?: readonly string[]
+  /** Synopsis of the most recent run (persisted in `state.json`, survives restarts). */
+  readonly lastRunId?: string
+  readonly lastSessionId?: string
+  readonly lastRunOutcome?: TriggerRunOutcome
+  readonly lastRunVerdict?: TriggerVerdictKind
+  /** Truncated to 200 characters. */
+  readonly lastRunSummary?: string
+  readonly lastRunCostUsd?: number
+  readonly lastRunDurationMs?: number
 }
 
 /**

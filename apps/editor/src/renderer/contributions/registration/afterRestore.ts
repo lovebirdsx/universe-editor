@@ -52,6 +52,7 @@ import { SessionStatusCountsContribution } from '../SessionStatusCountsContribut
 import { SwarmReviewNotificationContribution } from '../SwarmReviewNotificationContribution.js'
 import { TriggerVerdictContribution } from '../TriggerVerdictContribution.js'
 import { TriggerRunNotificationContribution } from '../TriggerRunNotificationContribution.js'
+import { TriggerManagerStatusContribution } from '../TriggerManagerStatusContribution.js'
 import { FirstRunAgentOnboardingContribution } from '../FirstRunAgentOnboardingContribution.js'
 import { SessionShutdownParticipant } from '../SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from '../StartupPerformanceStatusContribution.js'
@@ -469,6 +470,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.triggerRunNotification',
   TriggerRunNotificationContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// "⚡ N running · M needs confirmation" in the status bar, visible only while a
+// trigger needs the user; clicking opens the manager. AfterRestore so the status
+// bar is live and the trigger IPC proxy is connected.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.triggerManagerStatus',
+  TriggerManagerStatusContribution,
   WorkbenchPhase.AfterRestore,
 )
 

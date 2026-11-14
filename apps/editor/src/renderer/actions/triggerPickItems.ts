@@ -8,44 +8,14 @@
 
 import { localize, type IQuickPickItem } from '@universe-editor/platform'
 import { workspaceDisplayPath } from '../../shared/triggers/configParse.js'
-import type {
-  TriggerSourceType,
-  TriggerStatus,
-  TriggerSummary,
-} from '../../shared/triggers/types.js'
+import {
+  triggerSourceLabel,
+  triggerStatusLabel,
+} from '../../shared/triggers/triggerPresentation.js'
+import type { TriggerSummary } from '../../shared/triggers/types.js'
 import { relativeTime } from '../relativeTime.js'
 
-export function triggerStatusLabel(status: TriggerStatus): string {
-  switch (status) {
-    case 'disabled':
-      return localize('triggers.status.disabled', 'Disabled')
-    case 'idle':
-      return localize('triggers.status.idle', 'Idle')
-    case 'running':
-      return localize('triggers.status.running', 'Running')
-    case 'paused':
-      return localize('triggers.status.paused', 'Paused')
-    case 'invalid':
-      return localize('triggers.status.invalid', 'Invalid')
-    case 'needs-confirmation':
-      return localize('triggers.status.needsConfirmation', 'Needs confirmation')
-  }
-}
-
-export function triggerSourceLabel(sourceType: TriggerSourceType | 'unknown'): string {
-  switch (sourceType) {
-    case 'manual':
-      return localize('triggers.source.manual', 'Manual')
-    case 'schedule':
-      return localize('triggers.source.schedule', 'Schedule')
-    case 'poll':
-      return localize('triggers.source.poll', 'Command poll')
-    case 'swarm-review':
-      return localize('triggers.source.swarmReview', 'Swarm review')
-    case 'unknown':
-      return localize('triggers.source.unknown', 'Unknown source')
-  }
-}
+export { triggerSourceLabel, triggerStatusLabel }
 
 function clockTime(timestamp: number): string {
   const date = new Date(timestamp)
@@ -141,6 +111,7 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
 }
 
 export type TriggerItemAction =
+  | 'openManager'
   | 'runNow'
   | 'pause'
   | 'resume'
@@ -155,7 +126,13 @@ export interface TriggerActionPickItem extends IQuickPickItem {
 }
 
 export function buildTriggerActionItems(summary: TriggerSummary): TriggerActionPickItem[] {
-  const items: TriggerActionPickItem[] = []
+  const items: TriggerActionPickItem[] = [
+    {
+      id: 'openManager',
+      action: 'openManager',
+      label: localize('triggers.action.openManager', 'Open trigger manager'),
+    },
+  ]
   if (summary.status !== 'invalid') {
     items.push({
       id: 'runNow',

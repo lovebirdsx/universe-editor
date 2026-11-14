@@ -8,8 +8,9 @@
 import { useState } from 'react'
 import { ICommandService, localize, runWithInvocationModifiers } from '@universe-editor/platform'
 import { resolveOpenTarget } from '../../services/editor/openTarget.js'
-import { ChevronDown, Filter, Plus, RefreshCw, Search } from 'lucide-react'
+import { ChevronDown, Filter, Plus, RefreshCw, Search, Zap } from 'lucide-react'
 import { IconButton } from '@universe-editor/workbench-ui'
+import { OpenTriggerManagerAction } from '../../actions/triggerActions.js'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
@@ -37,6 +38,14 @@ export function SessionsViewToolbar() {
 
   return (
     <span className={styles['viewToolbar']}>
+      <IconButton
+        label={localize('trigger.manager.openFromSessions', 'Trigger manager')}
+        command={OpenTriggerManagerAction.ID}
+        onClick={() => void commands.executeCommand(OpenTriggerManagerAction.ID)}
+        data-testid="sessions-open-trigger-manager"
+      >
+        <Zap size={14} strokeWidth={1.75} />
+      </IconButton>
       <IconButton
         label={localize('acp.sessions.search', 'Search sessions')}
         active={searchOpen}
