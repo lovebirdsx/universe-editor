@@ -28,6 +28,11 @@ function keyOf(workspace: string, id = 'trigger-1'): string {
   return triggerKeyFor(workspace, id)
 }
 
+/** Swarm reports identify the window's workspace by URI string. */
+function localUri(workspace: string): string {
+  return URI.file(workspace).toString()
+}
+
 /**
  * Fixtures name triggers by bare id for readability; state.json is keyed by the
  * composite workspace + id. Already-composite keys pass through untouched.
@@ -559,15 +564,18 @@ describe('TriggerMainService dedupe', () => {
     })
     await openGate(harness)
 
-    await harness.service.reportSwarmNeedsAction([review('1')])
+    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
 
-    await harness.service.reportSwarmNeedsAction([review('1')])
+    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
 
-    await harness.service.reportSwarmNeedsAction([review('1'), review('2')])
+    await harness.service.reportSwarmNeedsAction(
+      [review('1'), review('2')],
+      localUri(harness.workspace),
+    )
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('swarm:2')
     expect(harness.requests[0]?.payload).toEqual({
@@ -579,7 +587,10 @@ describe('TriggerMainService dedupe', () => {
       updated: 1,
     })
 
-    await harness.service.reportSwarmNeedsAction([review('1'), review('2')])
+    await harness.service.reportSwarmNeedsAction(
+      [review('1'), review('2')],
+      localUri(harness.workspace),
+    )
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
     expect(harness.requests[0]?.sourceType).toBe('swarm-review')
@@ -593,13 +604,13 @@ describe('TriggerMainService dedupe', () => {
     })
     await openGate(harness)
     // First report seeds the baseline with review 0.
-    await harness.service.reportSwarmNeedsAction([review('0')])
+    await harness.service.reportSwarmNeedsAction([review('0')], localUri(harness.workspace))
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
 
     await Promise.all([
-      harness.service.reportSwarmNeedsAction([review('1')]),
-      harness.service.reportSwarmNeedsAction([review('1')]),
+      harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace)),
+      harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace)),
     ])
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('swarm:1')
@@ -650,7 +661,7 @@ describe('TriggerMainService queueing', () => {
     })
     await harness.service.runNow(harness.keyOf('a'))
     await harness.service.runNow(harness.keyOf('b'))
-    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
 
     await harness.service.setMaxConcurrentRuns(2)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
@@ -1255,7 +1266,7 @@ describe('TriggerMainService backoff gate', () => {
       },
     })
     await openGate(harness)
-    await harness.service.reportSwarmNeedsAction([review('1')])
+    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
     expect(
@@ -1266,7 +1277,7 @@ describe('TriggerMainService backoff gate', () => {
     ).toBe(false)
 
     await harness.clock.advance(2 * 60_000)
-    await harness.service.reportSwarmNeedsAction([review('1')])
+    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 
@@ -1673,13 +1684,57 @@ describe('TriggerMainService workspace activation gate', () => {
     )!.key
     await harness.service.confirmActivation(secondKey)
 
-    await harness.service.reportSwarmNeedsAction([review('1')], second)
+    await harness.service.reportSwarmNeedsAction([review('1')], URI.file(second).toString())
 
     const state = stateOf(harness.service)
     expect(state.triggers[secondKey]?.baselineDone).toBe(true)
     expect(state.triggers[harness.keyOf('swarm-a')]?.baselineDone).toBe(false)
     expect(state.triggers[harness.keyOf('swarm-a')]?.processed?.['swarm:1']).toBeUndefined()
     expect(harness.startRun).not.toHaveBeenCalled()
+  })
+
+  it('ignores a remote workspace report instead of consuming a local trigger', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+      ],
+    })
+    await openGate(harness)
+
+    const remote = URI.from({
+      scheme: 'remote-ssh',
+      authority: 'dev',
+      path: '/home/testuser/proj',
+    })
+    await harness.service.reportSwarmNeedsAction([review('1')], remote.toString())
+    await settle()
+
+    const state = stateOf(harness.service)
+    expect(state.triggers[harness.keyOf('swarm')]?.baselineDone).not.toBe(true)
+    expect(state.triggers[harness.keyOf('swarm')]?.processed?.['swarm:1']).toBeUndefined()
+    expect(harness.startRun).not.toHaveBeenCalled()
+    expect(harness.loggerLines.some((line) => line.includes('scheme=remote-ssh'))).toBe(true)
+  })
+
+  it('warns and ignores a report whose workspace URI is empty or unparseable', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+      ],
+    })
+    await openGate(harness)
+
+    await harness.service.reportSwarmNeedsAction([review('1')], '')
+    await settle()
+
+    const state = stateOf(harness.service)
+    expect(state.triggers[harness.keyOf('swarm')]?.baselineDone).not.toBe(true)
+    expect(harness.startRun).not.toHaveBeenCalled()
+    expect(
+      harness.loggerLines.some(
+        (line) => line.startsWith('warn:') && line.includes('swarm report ignored'),
+      ),
+    ).toBe(true)
   })
 })
 

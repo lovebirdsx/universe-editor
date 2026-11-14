@@ -181,13 +181,12 @@ export class SwarmReviewNotificationContribution
     this._triggerReporter = new SwarmTriggerReporter({
       report: (reviews) => {
         const folder = this._workspace.current?.folder
-        const workspace =
-          folder !== undefined && folder.scheme === 'file' && folder.authority.length === 0
-            ? folder.fsPath
-            : undefined
-        return workspace === undefined
-          ? this._triggerMain.reportSwarmNeedsAction(reviews)
-          : this._triggerMain.reportSwarmNeedsAction(reviews, workspace)
+        // No folder means nothing to scope the report to; main must not fall back
+        // to an unscoped match. Pass the URI (not fsPath) so remote windows keep
+        // their own workspace identity.
+        return folder === undefined
+          ? Promise.resolve()
+          : this._triggerMain.reportSwarmNeedsAction(reviews, folder.toString())
       },
       getReviewVersion: (reviewId) => this._loadReviewVersion(reviewId),
       logger: this._logger,

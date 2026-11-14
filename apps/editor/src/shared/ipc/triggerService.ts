@@ -60,12 +60,13 @@ export interface ITriggerMainService {
    * filter as the sidebar notification). main applies the persistent per-trigger
    * dedupe and the first-report baseline, so repeated or multi-window reports are harmless
    * and reviews that appeared while the editor was closed still fire after a restart.
-   * `workspaceFolder` scopes the report to the triggers of the reporting window's
-   * workspace; omitted means every registered workspace (e2e / legacy callers).
+   * `workspaceFolder` is the reporting window's workspace URI string (`URI.toString()`);
+   * main scopes the report to that workspace's triggers and rejects an unresolvable
+   * URI. A window without a folder must not report at all.
    */
   reportSwarmNeedsAction(
     reviews: readonly SwarmNeedsActionReview[],
-    workspaceFolder?: string,
+    workspaceFolder: string,
   ): Promise<void>
   readonly onDidChangeTriggers: Event<readonly TriggerSummary[]>
 }

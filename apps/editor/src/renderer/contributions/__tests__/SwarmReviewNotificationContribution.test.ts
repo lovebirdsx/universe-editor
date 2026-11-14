@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Emitter, StorageScope, type IStorageService } from '@universe-editor/platform'
+import { Emitter, StorageScope, URI, type IStorageService } from '@universe-editor/platform'
 import type {
   SwarmDashboardResult,
   SwarmReviewDetailDto,
@@ -162,6 +162,8 @@ interface SetupOpts {
   transitions?: Record<string, SwarmTransitionDto[]>
   ignoredIds?: string[]
   workspaceName?: string
+  /** The window's workspace folder. Omitted means no workspace is open. */
+  workspaceFolder?: URI
   /** Reviews already actionable at construction time (seed the priming baseline). */
   initialNeedsAction?: SwarmReviewDto[]
   /** Trigger summaries the fake trigger service returns (default: none). */
@@ -249,13 +251,18 @@ async function setup(opts: SetupOpts = {}) {
     onDidChangeConfiguration: configChange.event,
   } as never
   const workspace = {
-    current: opts.workspaceName !== undefined ? { name: opts.workspaceName } : null,
+    current:
+      opts.workspaceFolder === undefined
+        ? opts.workspaceName !== undefined
+          ? { name: opts.workspaceName }
+          : null
+        : { name: opts.workspaceName ?? 'workspace', folder: opts.workspaceFolder },
   } as never
 
   const triggerChange = new Emitter<readonly TriggerSummary[]>()
   const listTriggers = vi.fn(async () => opts.triggers ?? [])
   const reportSwarmNeedsAction = vi.fn(
-    async (_reviews: readonly SwarmNeedsActionReview[]) => undefined,
+    async (_reviews: readonly SwarmNeedsActionReview[], _workspaceUri: string) => undefined,
   )
   const triggerMain = {
     listTriggers,
@@ -1303,7 +1310,9 @@ describe('SwarmReviewNotificationContribution', () => {
 
   describe('trigger reporting', () => {
     it('reports the displayed needs-action list with the review version and updated stamp', async () => {
+      const folder = URI.file('X:/workspace')
       const t = await setup({
+        workspaceFolder: folder,
         triggers: [triggerSummary()],
         initialNeedsAction: [
           review('1', { author: 'bob', description: 'fix the flaky test', updated: 5 }),
@@ -1312,21 +1321,56 @@ describe('SwarmReviewNotificationContribution', () => {
       })
       await t.refresh()
       await flush()
-      expect(t.reportSwarmNeedsAction).toHaveBeenCalledWith([
-        {
-          reviewId: '1',
-          author: 'bob',
-          description: 'fix the flaky test',
-          state: 'needsReview',
-          updated: 5,
-          version: 3,
-        },
-      ])
+      expect(t.reportSwarmNeedsAction).toHaveBeenCalledWith(
+        [
+          {
+            reviewId: '1',
+            author: 'bob',
+            description: 'fix the flaky test',
+            state: 'needsReview',
+            updated: 5,
+            version: 3,
+          },
+        ],
+        folder.toString(),
+      )
+      t.dispose()
+    })
+
+    it('scopes a remote workspace report by its URI string', async () => {
+      const folder = URI.from({
+        scheme: 'remote-ssh',
+        authority: 'dev',
+        path: '/home/testuser/proj',
+      })
+      const t = await setup({
+        workspaceFolder: folder,
+        triggers: [triggerSummary()],
+        initialNeedsAction: [review('1')],
+      })
+      await flush()
+      t.reportSwarmNeedsAction.mockClear()
+      await t.refresh()
+      await flush()
+      expect(t.reportSwarmNeedsAction).toHaveBeenCalledTimes(1)
+      expect(t.reportSwarmNeedsAction.mock.calls[0]![1]).toBe(folder.toString())
+      t.dispose()
+    })
+
+    it('sends nothing when no workspace folder is open', async () => {
+      const t = await setup({
+        triggers: [triggerSummary()],
+        initialNeedsAction: [review('1')],
+      })
+      await t.refresh()
+      await flush()
+      expect(t.reportSwarmNeedsAction).not.toHaveBeenCalled()
       t.dispose()
     })
 
     it('sends no IPC at all without an enabled swarm-review trigger', async () => {
       const t = await setup({
+        workspaceFolder: URI.file('X:/workspace'),
         triggers: [triggerSummary({ enabled: false })],
         initialNeedsAction: [review('1')],
       })
@@ -1336,7 +1380,10 @@ describe('SwarmReviewNotificationContribution', () => {
     })
 
     it('excludes reviews authored by the user, matching the notification set', async () => {
-      const t = await setup({ triggers: [triggerSummary()] })
+      const t = await setup({
+        workspaceFolder: URI.file('X:/workspace'),
+        triggers: [triggerSummary()],
+      })
       await flush()
       expect(t.reportSwarmNeedsAction).toHaveBeenCalledTimes(1)
       t.reportSwarmNeedsAction.mockClear()

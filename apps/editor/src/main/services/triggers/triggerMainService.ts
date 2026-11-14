@@ -614,14 +614,33 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
 
   async reportSwarmNeedsAction(
     reviews: readonly SwarmNeedsActionReview[],
-    workspaceFolder?: string,
+    workspaceFolder: string,
   ): Promise<void> {
     await this._awaitReady()
-    const now = this._clock.now()
+    let folder: URI
+    try {
+      folder = URI.parse(workspaceFolder)
+    } catch (err) {
+      this._logger.warn(
+        `swarm report ignored: invalid workspace uri (${err instanceof Error ? err.message : String(err)})`,
+      )
+      return
+    }
+    if (folder.scheme.length === 0) {
+      this._logger.warn('swarm report ignored: invalid workspace uri')
+      return
+    }
+    // Trigger identity is still a local fsPath (URI-based identity lands later);
+    // other schemes cannot match any trigger yet. Never fall through unfiltered:
+    // that let a remote window consume a local workspace's reviews and seed its baseline.
+    if (folder.scheme !== 'file' || folder.authority.length > 0) {
+      this._logger.debug(`swarm report ignored: unsupported workspace scheme=${folder.scheme}`)
+      return
+    }
     // A swarm trigger belongs to the workspace whose window reported the reviews;
     // another open workspace must not consume them (or seed its baseline with them).
-    const reporterKey =
-      workspaceFolder === undefined ? undefined : workspaceComparisonKey(workspaceFolder)
+    const reporterKey = workspaceComparisonKey(folder.fsPath)
+    const now = this._clock.now()
     // Concurrent reports (two windows) can interleave; the persistent key check is
     // authoritative, but de-duplicating the batch also keeps one report from
     // enqueueing the same review twice.
@@ -633,9 +652,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     })
     for (const trigger of this._allTriggers()) {
       if (!trigger.enabled || trigger.source.type !== 'swarm-review') continue
-      if (reporterKey !== undefined && workspaceComparisonKey(trigger.workspace) !== reporterKey) {
-        continue
-      }
+      if (workspaceComparisonKey(trigger.workspace) !== reporterKey) continue
       // Unconfirmed triggers must not consume the baseline: the first report after
       // confirmation has to seed it, otherwise every historical review fires.
       if (!this._isActivated(trigger)) continue
