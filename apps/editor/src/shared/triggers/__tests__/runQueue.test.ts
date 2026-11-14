@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { RunQueue, type RunQueueItem, type RunQueueOptions } from '../runQueue.js'
 
-const item = (runId: string, triggerId = 'a'): RunQueueItem => ({ runId, triggerId })
+const item = (runId: string, triggerKey = 'a'): RunQueueItem => ({ runId, triggerKey })
 
 const options = (overrides: Partial<RunQueueOptions> = {}): RunQueueOptions => ({
   concurrency: 1,

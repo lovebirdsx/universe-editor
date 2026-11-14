@@ -706,6 +706,12 @@ export interface IAcpSession {
    */
   readonly automationRunDir: string | undefined
   /**
+   * Static text appended to the agent's preset system prompt. Carried on every
+   * later `session/load` / `session/resume` / reconnect handshake of this
+   * session — see `ACP_META_KEYS.systemPrompt`.
+   */
+  readonly systemPromptAppend: string | undefined
+  /**
    * The agent-issued `sessionId` from `session/new` (a.k.a. `sessionIdOnAgent`).
    * `undefined` while the session is still connecting; set once
    * `attachConnection` runs. Durable across editor restarts and the key every

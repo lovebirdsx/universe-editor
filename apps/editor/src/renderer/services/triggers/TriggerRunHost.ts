@@ -16,6 +16,7 @@ import {
 import { ITriggerMainService, type ITriggerRunHost } from '../../../shared/ipc/triggerService.js'
 import type { TriggerRunRequest } from '../../../shared/triggers/types.js'
 import { IAutomatedSessionService } from './automatedSessionService.js'
+import { ITriggerSessionRevealService } from './triggerSessionRevealService.js'
 
 export class TriggerRunHost extends Disposable implements ITriggerRunHost {
   declare readonly _serviceBrand: undefined
@@ -28,6 +29,8 @@ export class TriggerRunHost extends Disposable implements ITriggerRunHost {
     @ITriggerMainService private readonly _triggers: ITriggerMainService,
     @IWorkspaceTrustManagementService
     private readonly _trust: IWorkspaceTrustManagementService,
+    @ITriggerSessionRevealService
+    private readonly _reveal: ITriggerSessionRevealService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -50,6 +53,15 @@ export class TriggerRunHost extends Disposable implements ITriggerRunHost {
     try {
       const { sessionId } = await this._sessions.startAutomatedSession(request)
       this._logger.info(`started run ${origin.runId} as session ${sessionId}`)
+      // Reveal is a convenience, not part of the run: a failure here must not
+      // turn a started run into a failed one, and it must not delay the result.
+      try {
+        this._reveal.revealOnRunStart(sessionId, request.showSession)
+      } catch (err) {
+        this._logger.warn(
+          `failed to reveal session ${sessionId}: ${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
       return { sessionId }
     } catch (err) {
       this._logger.warn(

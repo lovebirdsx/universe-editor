@@ -69,6 +69,8 @@ export interface IAcpSessionCreateOptions {
   readonly automation?: AutomationOrigin
   /** Absolute run directory of an automated session (permission policy scope). */
   readonly automationRunDir?: string
+  /** Static text appended to the agent's preset system prompt (claude fork). */
+  readonly systemPromptAppend?: string
 }
 
 export interface IAcpSessionFactory {
@@ -152,6 +154,7 @@ export class AcpSessionFactory implements IAcpSessionFactory {
       opts.internalWritable ?? false,
       opts.automation,
       opts.automationRunDir,
+      opts.systemPromptAppend,
     )
   }
 }

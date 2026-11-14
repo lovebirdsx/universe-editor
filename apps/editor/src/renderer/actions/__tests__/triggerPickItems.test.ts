@@ -19,9 +19,14 @@ import {
 } from '../triggerPickItems.js'
 
 function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
+  const id = overrides.id ?? 'triage'
   return {
-    id: 'triage',
+    key: `X:/workspace\u0000${id}`,
+    id,
     name: 'Triage',
+    workspace: 'X:/workspace',
+    workspaceName: 'workspace',
+    activationConfirmed: true,
     sourceType: 'swarm-review',
     status: 'idle',
     enabled: true,
@@ -78,15 +83,15 @@ describe('triggerSourceLabel', () => {
 })
 
 describe('buildTriggerPickItems', () => {
-  it('shows status, source and run counts in the description', () => {
+  it('shows the workspace path, status, source and run counts in the description', () => {
     const [item] = buildTriggerPickItems([summary({ status: 'running', running: 2, queued: 3 })])
     expect(item?.label).toBe('Triage')
-    expect(item?.description).toBe('Running · Swarm review · 2 running · 3 queued')
+    expect(item?.description).toBe('X:/workspace · Running · Swarm review · 2 running · 3 queued')
   })
 
   it('omits zero counts and absent timestamps', () => {
     const [item] = buildTriggerPickItems([summary()])
-    expect(item?.description).toBe('Idle · Swarm review')
+    expect(item?.description).toBe('X:/workspace · Idle · Swarm review')
     expect(item?.detail).toBeUndefined()
   })
 
@@ -109,6 +114,12 @@ describe('buildTriggerPickItems', () => {
     expect(item?.detail).toContain('will not run until you confirm it')
   })
 
+  it('explains that a workspace trigger awaits its activation confirmation', () => {
+    const [item] = buildTriggerPickItems([summary({ activationConfirmed: false })])
+    expect(item?.detail).toContain('Awaiting confirmation')
+    expect(item?.detail).toContain('will not run until you confirm it on this machine')
+  })
+
   it('marks a confirmed high-privilege mode without the confirmation note', () => {
     const [item] = buildTriggerPickItems([
       summary({ elevatedMode: true, elevatedModeConfirmed: true }),
@@ -124,9 +135,13 @@ describe('buildTriggerPickItems', () => {
     expect(item?.detail).toBe('Error: fetch failed · bad cron · missing workspace')
   })
 
-  it('carries the trigger id on every item', () => {
+  it('carries the composite workspace + id key on every item', () => {
     const items = buildTriggerPickItems([summary(), summary({ id: 'weekly', name: 'Weekly' })])
-    expect(items.map((item) => item.triggerId)).toEqual(['triage', 'weekly'])
+    expect(items.map((item) => item.triggerKey)).toEqual([
+      'X:/workspace\u0000triage',
+      'X:/workspace\u0000weekly',
+    ])
+    expect(items.map((item) => item.description?.startsWith('X:/workspace · '))).toEqual([true, true])
   })
 })
 
@@ -154,9 +169,17 @@ describe('buildTriggerActionItems', () => {
     )
   })
 
+  it('offers the workspace activation confirmation only while unconfirmed', () => {
+    expect(actions({ activationConfirmed: false })).toContain('confirmActivation')
+    expect(actions({})).not.toContain('confirmActivation')
+  })
+
   it('does not offer to run an invalid trigger', () => {
     expect(actions({ status: 'invalid' })).not.toContain('runNow')
     expect(actions({ status: 'invalid' })).toContain('openConfig')
+    expect(actions({ status: 'invalid', activationConfirmed: false })).not.toContain(
+      'confirmActivation',
+    )
   })
 })
 
@@ -167,10 +190,19 @@ describe('triggersForAction', () => {
     summary({ id: 'c', elevatedMode: true }),
     summary({ id: 'd', approveAction: true }),
     summary({ id: 'e', elevatedMode: true, elevatedModeConfirmed: true }),
+    summary({ id: 'f', activationConfirmed: false }),
+    summary({ id: 'g', status: 'invalid', activationConfirmed: false }),
   ]
 
   it('filters pause candidates to unpaused triggers', () => {
-    expect(triggersForAction('pause', all).map((s) => s.id)).toEqual(['a', 'c', 'd', 'e'])
+    expect(triggersForAction('pause', all).map((s) => s.id)).toEqual([
+      'a',
+      'c',
+      'd',
+      'e',
+      'f',
+      'g',
+    ])
   })
 
   it('filters resume candidates to paused triggers', () => {
@@ -180,5 +212,6 @@ describe('triggersForAction', () => {
   it('filters confirmation candidates to unconfirmed risky triggers', () => {
     expect(triggersForAction('confirmElevatedMode', all).map((s) => s.id)).toEqual(['c'])
     expect(triggersForAction('confirmAutoApprove', all).map((s) => s.id)).toEqual(['d'])
+    expect(triggersForAction('confirmActivation', all).map((s) => s.id)).toEqual(['f'])
   })
 })

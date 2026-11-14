@@ -63,8 +63,8 @@ export interface TriggerConfig {
   readonly id: string
   readonly name: string
   readonly enabled: boolean
-  /** Local folder path (no remote authority). */
-  readonly workspace: string
+  /** Reveal the started session's chat, but only in a window the user can see. */
+  readonly showSession: boolean
   readonly source: TriggerSourceConfig
   readonly session: TriggerSessionConfig
   readonly allowedActions: readonly TriggerActionType[]
@@ -78,12 +78,29 @@ export interface InvalidTriggerConfig {
   readonly errors: readonly string[]
 }
 
+/** One workspace's `.universe-editor/triggers.json`; trigger ids are unique inside it only. */
 export interface TriggersConfig {
   readonly version: 1
-  readonly maxConcurrentRuns: number
   readonly triggers: readonly TriggerConfig[]
   readonly invalid: readonly InvalidTriggerConfig[]
 }
+
+/** Workspace-relative location of a commit-able trigger definition file. */
+export const TRIGGERS_WORKSPACE_DIR = '.universe-editor'
+export const TRIGGERS_WORKSPACE_CONFIG_FILE = 'triggers.json'
+
+/** Machine-local registry entry (`<userData>/triggers/workspaces.json`). */
+export interface TriggerWorkspaceSummary {
+  readonly workspace: string
+  readonly name: string
+  readonly configPath: string
+  /** False when the folder or its triggers.json disappeared after registration. */
+  readonly available: boolean
+  readonly triggerCount: number
+}
+
+/** User setting for the machine-wide concurrent run cap (not per workspace). */
+export const TRIGGERS_MAX_CONCURRENT_RUNS_KEY = 'triggers.maxConcurrentRuns'
 
 export const TRIGGER_DEFAULTS = {
   maxConcurrentRuns: 2,
@@ -129,6 +146,8 @@ export interface TriggerVerdict {
 export interface AutomationOrigin {
   readonly triggerId: string
   readonly triggerName: string
+  /** Workspace folder name; two workspaces may define the same trigger id. */
+  readonly workspaceName?: string
   readonly eventKey: string
   readonly runId: string
 }
@@ -145,6 +164,11 @@ export type TriggerRunOutcome =
 export interface TriggerRunRequest {
   readonly origin: AutomationOrigin
   readonly agentId?: string
+  /**
+   * Reveal the started session's chat in this window. Only honored when the
+   * window is visible; hidden / minimized windows are never raised.
+   */
+  readonly showSession: boolean
   /** Absolute local path. */
   readonly cwd: string
   /** Explicit mode id; undefined = the agent's conservative default (resolved in renderer). */
@@ -153,8 +177,13 @@ export interface TriggerRunRequest {
   readonly allowElevatedMode: boolean
   readonly model?: string
   readonly mcpServerNames?: readonly string[]
-  /** Fully rendered prompt (skill prefix + data fence + result contract). */
+  /** Fully rendered prompt with the output contract inline (skill prefix + data fence + result contract). */
   readonly prompt: string
+  /**
+   * Same prompt rendered for agents that receive the output contract through
+   * their system prompt: no `## 输出要求` section, only the run directory.
+   */
+  readonly promptForSystemContract: string
   /** Absolute `<userData>/triggers/runs/<runId>`; already created by main. */
   readonly runDir: string
   readonly budget: TriggerBudget
@@ -215,12 +244,20 @@ export type TriggerStatus =
   | 'needs-confirmation'
 
 export interface TriggerSummary {
+  /** Composite identity (workspace + id); every command takes this, never the bare id. */
+  readonly key: string
   readonly id: string
   readonly name: string
+  /** Absolute local workspace folder that owns this trigger. */
+  readonly workspace: string
+  /** Folder name, shown next to the trigger name to disambiguate equal ids. */
+  readonly workspaceName: string
   readonly sourceType: TriggerSourceType | 'unknown'
   readonly status: TriggerStatus
   readonly enabled: boolean
   readonly paused: boolean
+  /** The user confirmed this workspace-defined trigger (bound to the config fingerprint). */
+  readonly activationConfirmed: boolean
   /** Configured mode is bypass-class (shown with a warning marker). */
   readonly elevatedMode: boolean
   readonly elevatedModeConfirmed: boolean

@@ -1328,11 +1328,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       s?.pendingElicitation.get()?.cancel()
     },
     listTriggers: () => services.triggerMainService.listTriggers(),
-    runTriggerNow: (triggerId) => services.triggerMainService.runNow(triggerId),
-    setTriggerPaused: (triggerId, paused) =>
-      services.triggerMainService.setPaused(triggerId, paused),
-    getTriggersConfigPath: async () =>
-      URI.parse(await services.triggerMainService.getConfigFileUri()).fsPath,
+    runTriggerNow: (triggerKey) => services.triggerMainService.runNow(triggerKey),
+    setTriggerPaused: (triggerKey, paused) =>
+      services.triggerMainService.setPaused(triggerKey, paused),
+    confirmTriggerActivation: (triggerKey) =>
+      services.triggerMainService.confirmActivation(triggerKey),
+    getTriggersRunsDir: () => services.triggerMainService.getRunsDir(),
     getAcpAutomationRows: (): E2ETriggerAutomationRow[] => {
       const rows: E2ETriggerAutomationRow[] = []
       for (const entry of services.acpSessionHistoryService.list()) {
@@ -1346,6 +1347,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           automation: {
             triggerId: automation.triggerId,
             triggerName: automation.triggerName,
+            ...(automation.workspaceName !== undefined
+              ? { workspaceName: automation.workspaceName }
+              : {}),
             eventKey: automation.eventKey,
             runId: automation.runId,
             ...(automation.verdict !== undefined ? { verdict: automation.verdict } : {}),

@@ -53,13 +53,21 @@ function clockTime(timestamp: number): string {
 }
 
 export interface TriggerPickItem extends IQuickPickItem {
-  readonly triggerId: string
+  /** Composite workspace + trigger id; ids collide across workspaces. */
+  readonly triggerKey: string
 }
 
 export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): TriggerPickItem[] {
   return summaries.map((summary) => {
+    const needsActivation = !summary.activationConfirmed && summary.status !== 'invalid'
     const unconfirmedElevated = summary.elevatedMode && !summary.elevatedModeConfirmed
-    const description = [triggerStatusLabel(summary.status), triggerSourceLabel(summary.sourceType)]
+    // The absolute workspace path leads the description: two workspaces may
+    // define the same trigger id, and the QuickPick must make them distinguishable.
+    const description = [
+      summary.workspace,
+      triggerStatusLabel(summary.status),
+      triggerSourceLabel(summary.sourceType),
+    ]
     if (summary.running > 0) {
       description.push(
         localize('triggers.item.running', '{count} running', { count: summary.running }),
@@ -86,6 +94,14 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
     }
 
     const detail: string[] = []
+    if (needsActivation) {
+      detail.push(
+        localize(
+          'triggers.item.needsActivation',
+          'Awaiting confirmation: this trigger comes from the workspace configuration and will not run until you confirm it on this machine.',
+        ),
+      )
+    }
     if (unconfirmedElevated) {
       detail.push(
         localize(
@@ -102,8 +118,8 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
     }
 
     return {
-      id: summary.id,
-      triggerId: summary.id,
+      id: summary.key,
+      triggerKey: summary.key,
       label: summary.elevatedMode ? `⚠ ${summary.name}` : summary.name,
       description: description.join(' · '),
       ...(detail.length > 0 ? { detail: detail.join('\n') } : {}),
@@ -115,6 +131,7 @@ export type TriggerItemAction =
   | 'runNow'
   | 'pause'
   | 'resume'
+  | 'confirmActivation'
   | 'confirmElevatedMode'
   | 'confirmAutoApprove'
   | 'openConfig'
@@ -131,6 +148,13 @@ export function buildTriggerActionItems(summary: TriggerSummary): TriggerActionP
       id: 'runNow',
       action: 'runNow',
       label: localize('triggers.action.runNow', 'Run now'),
+    })
+  }
+  if (!summary.activationConfirmed && summary.status !== 'invalid') {
+    items.push({
+      id: 'confirmActivation',
+      action: 'confirmActivation',
+      label: localize('triggers.action.confirmActivation', 'Confirm workspace trigger…'),
     })
   }
   items.push(
@@ -165,7 +189,12 @@ export function buildTriggerActionItems(summary: TriggerSummary): TriggerActionP
   return items
 }
 
-export type TriggerPickerAction = 'pause' | 'resume' | 'confirmElevatedMode' | 'confirmAutoApprove'
+export type TriggerPickerAction =
+  | 'pause'
+  | 'resume'
+  | 'confirmActivation'
+  | 'confirmElevatedMode'
+  | 'confirmAutoApprove'
 
 /** Candidates for a command that needs the user to pick a trigger first. */
 export function triggersForAction(
@@ -177,6 +206,10 @@ export function triggersForAction(
       return summaries.filter((summary) => !summary.paused)
     case 'resume':
       return summaries.filter((summary) => summary.paused)
+    case 'confirmActivation':
+      return summaries.filter(
+        (summary) => !summary.activationConfirmed && summary.status !== 'invalid',
+      )
     case 'confirmElevatedMode':
       return summaries.filter((summary) => summary.elevatedMode && !summary.elevatedModeConfirmed)
     case 'confirmAutoApprove':

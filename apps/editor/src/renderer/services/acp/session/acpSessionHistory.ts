@@ -1236,6 +1236,9 @@ export class AcpSessionHistoryService
     const nextAutomation: AcpSessionAutomation = {
       triggerId: cur.automation.triggerId,
       triggerName: cur.automation.triggerName,
+      ...(cur.automation.workspaceName !== undefined
+        ? { workspaceName: cur.automation.workspaceName }
+        : {}),
       eventKey: cur.automation.eventKey,
       runId: cur.automation.runId,
       ...(cur.automation.runDir !== undefined ? { runDir: cur.automation.runDir } : {}),
@@ -1707,6 +1710,7 @@ function isValidAutomation(v: unknown): v is AcpSessionAutomation {
   return (
     typeof o['triggerId'] === 'string' &&
     typeof o['triggerName'] === 'string' &&
+    (o['workspaceName'] === undefined || typeof o['workspaceName'] === 'string') &&
     typeof o['eventKey'] === 'string' &&
     typeof o['runId'] === 'string' &&
     (o['runDir'] === undefined || typeof o['runDir'] === 'string') &&
@@ -1722,6 +1726,7 @@ function sameAutomation(a: AcpSessionAutomation, b: AcpSessionAutomation): boole
   return (
     a.triggerId === b.triggerId &&
     a.triggerName === b.triggerName &&
+    a.workspaceName === b.workspaceName &&
     a.eventKey === b.eventKey &&
     a.runId === b.runId &&
     a.runDir === b.runDir &&

@@ -89,6 +89,7 @@ import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
+import { TRIGGER_OUTPUT_CONTRACT_SYSTEM } from '../../../../../shared/triggers/promptTemplate.js'
 
 // ---------------------------------------------------------------------------
 // Stubs
@@ -97,7 +98,11 @@ import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerServ
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
   list() {
-    return [{ id: 'fake', name: 'Fake Agent', command: '/x', args: [] }]
+    return [
+      // The fake stands in for the bundled claude fork: automated-session resume
+      // re-derives the system-prompt append from the descriptor.
+      { id: 'fake', name: 'Fake Agent', command: '/x', args: [], nodeEntry: 'claude' as const },
+    ]
   }
   allAgentIds(): readonly string[] {
     // Empty on purpose — these tests exercise createSession/resumeSession in
@@ -575,6 +580,49 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
       runDir: '/userData/triggers/runs/run-1',
     })
     expect(resumed.automationRunDir).toBe('/userData/triggers/runs/run-1')
+  })
+
+  it('re-adds the static output contract to an automated session resume', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const automation = {
+      triggerId: 'swarm-triage',
+      triggerName: 'Swarm 分诊',
+      eventKey: 'swarm:42',
+      runId: 'run-1',
+    }
+    const original = await svc.createSession('fake', {
+      automation,
+      automationRunDir: '/userData/triggers/runs/run-1',
+      systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM,
+    })
+    await original.whenConnected()
+    const sessionId = original.sessionIdOnAgent.get()!
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(sessionId)
+
+    expect(resumed.systemPromptAppend).toBe(TRIGGER_OUTPUT_CONTRACT_SYSTEM)
+    expect(built.client.connected[1]!.agent.loadSessionCalls[0]?._meta).toMatchObject({
+      systemPrompt: { append: TRIGGER_OUTPUT_CONTRACT_SYSTEM },
+    })
+  })
+
+  it('leaves systemPrompt off a non-automated session resume', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession('fake')
+    await original.whenConnected()
+    const sessionId = original.sessionIdOnAgent.get()!
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(sessionId)
+
+    expect(built.client.connected[1]!.agent.loadSessionCalls[0]?._meta).not.toHaveProperty(
+      'systemPrompt',
+    )
   })
 
   it('refuses to resume a session whose cwd differs from the open workspace (split-brain guard)', async () => {

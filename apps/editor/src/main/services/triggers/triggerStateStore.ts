@@ -25,6 +25,8 @@ export interface TriggerRuntimeState {
   readonly sourceFingerprint?: string
   /** Config fingerprint confirmed for a bypass-class mode; a config edit invalidates it. */
   readonly elevatedConfirmed?: string
+  /** Config fingerprint the user confirmed for running this workspace-defined trigger. */
+  readonly activationConfirmed?: string
   /** Config fingerprint confirmed for automatic `swarm.approve`. */
   readonly approveConfirmed?: string
 }
@@ -32,7 +34,8 @@ export interface TriggerRuntimeState {
 /** A queued event whose payload is on disk; re-enqueued once the service restarts. */
 export interface PendingRunRecord {
   readonly runId: string
-  readonly triggerId: string
+  /** Composite workspace + trigger id; a bare id collides across workspaces. */
+  readonly triggerKey: string
   readonly eventKey: string
   readonly firedAt: number
 }
@@ -182,6 +185,7 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
   const lastRunAt = finiteNumber(raw['lastRunAt'])
   const lastError = optionalString(raw['lastError'])
   const elevatedConfirmed = optionalString(raw['elevatedConfirmed'])
+  const activationConfirmed = optionalString(raw['activationConfirmed'])
   const approveConfirmed = optionalString(raw['approveConfirmed'])
   const sourceFingerprint = optionalString(raw['sourceFingerprint'])
   return {
@@ -196,6 +200,7 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
     baselineDone: raw['baselineDone'] === true,
     ...(sourceFingerprint === undefined ? {} : { sourceFingerprint }),
     ...(elevatedConfirmed === undefined ? {} : { elevatedConfirmed }),
+    ...(activationConfirmed === undefined ? {} : { activationConfirmed }),
     ...(approveConfirmed === undefined ? {} : { approveConfirmed }),
   }
 }
@@ -209,7 +214,7 @@ const RUN_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 function sanitizeLoadedState(state: TriggerStateFile, logger: ILogger): TriggerStateFile {
   const pending = state.pending.filter((record) => {
     if (RUN_ID_PATTERN.test(record.runId)) return true
-    logger.warn(`state.json: dropped a pending run with an invalid runId (${record.triggerId})`)
+    logger.warn(`state.json: dropped a pending run with an invalid runId (${record.triggerKey})`)
     return false
   })
   if (pending.length === state.pending.length) return state
@@ -222,11 +227,11 @@ function normalizePending(raw: unknown): PendingRunRecord[] {
   for (const entry of raw) {
     if (!isRecord(entry)) continue
     const runId = optionalString(entry['runId'])
-    const triggerId = optionalString(entry['triggerId'])
+    const triggerKey = optionalString(entry['triggerKey'])
     const eventKey = optionalString(entry['eventKey'])
     const firedAt = finiteNumber(entry['firedAt'])
-    if (runId === undefined || triggerId === undefined || eventKey === undefined) continue
-    pending.push({ runId, triggerId, eventKey, firedAt: firedAt ?? 0 })
+    if (runId === undefined || triggerKey === undefined || eventKey === undefined) continue
+    pending.push({ runId, triggerKey, eventKey, firedAt: firedAt ?? 0 })
   }
   return pending
 }

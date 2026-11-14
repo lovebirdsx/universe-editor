@@ -1,14 +1,17 @@
 /*---------------------------------------------------------------------------------------------
- *  Shape tests for the triggers.json JSON schema: the input surface mirrors
- *  TriggersConfig (version / maxConcurrentRuns / triggers[]), each source kind is
- *  covered by one of the four `oneOf` branches, and the enums match the runtime
- *  contract (`allowedActions`, `overflow`, `onMissed`).
+ *  Shape tests for the workspace triggers.json JSON schema: the input surface mirrors
+ *  TriggersConfig (version / triggers[]), each source kind is covered by one of the
+ *  four `oneOf` branches, and the enums match the runtime contract
+ *  (`allowedActions`, `overflow`, `onMissed`).
  *--------------------------------------------------------------------------------------------*/
 
 import type { IJSONSchema } from '@universe-editor/platform'
 import { describe, expect, it } from 'vitest'
 import { ELEVATED_MODE_IDS, TRIGGER_ACTION_TYPES } from '../../../shared/triggers/types.js'
-import { TRIGGERS_SCHEMA } from '../TriggersConfigurationContribution.js'
+import {
+  TRIGGERS_SCHEMA,
+  TRIGGERS_SCHEMA_FILE_MATCH,
+} from '../TriggersConfigurationContribution.js'
 
 function triggerSchema(): IJSONSchema {
   const triggers = TRIGGERS_SCHEMA.properties?.['triggers']
@@ -28,14 +31,14 @@ function sourceTypeEnums(): readonly string[] {
 describe('triggers.json schema', () => {
   it('describes the input shape and not the parser-only `invalid` list', () => {
     expect(TRIGGERS_SCHEMA.type).toBe('object')
-    expect(Object.keys(TRIGGERS_SCHEMA.properties ?? {}).sort()).toEqual([
-      'maxConcurrentRuns',
-      'triggers',
-      'version',
-    ])
+    expect(Object.keys(TRIGGERS_SCHEMA.properties ?? {}).sort()).toEqual(['triggers', 'version'])
     expect(TRIGGERS_SCHEMA.properties?.['version']?.enum).toEqual([1])
-    expect(TRIGGERS_SCHEMA.properties?.['maxConcurrentRuns']?.minimum).toBe(1)
-    expect(TRIGGERS_SCHEMA.properties?.['maxConcurrentRuns']?.maximum).toBe(10)
+    // The global cap is a machine-local user setting, not part of the workspace file.
+    expect(TRIGGERS_SCHEMA.properties?.['maxConcurrentRuns']).toBeUndefined()
+  })
+
+  it('matches workspace trigger files at any depth', () => {
+    expect(TRIGGERS_SCHEMA_FILE_MATCH).toBe('**/.universe-editor/triggers.json')
   })
 
   it('covers all four trigger sources with a type-discriminated oneOf', () => {
@@ -47,8 +50,9 @@ describe('triggers.json schema', () => {
     }
   })
 
-  it('requires id / workspace / source / session on a trigger', () => {
-    expect(triggerSchema().required).toEqual(['id', 'workspace', 'source', 'session'])
+  it('requires id / source / session on a trigger (workspace is implied by the file)', () => {
+    expect(triggerSchema().required).toEqual(['id', 'source', 'session'])
+    expect(triggerSchema().properties?.['workspace']).toBeUndefined()
     expect(triggerSchema().properties?.['id']?.pattern).toBe('^[a-z0-9][a-z0-9-]{0,63}$')
     expect(triggerSchema().properties?.['enabled']?.default).toBe(false)
   })
@@ -112,5 +116,13 @@ describe('triggers.json schema', () => {
     expect(poll?.properties?.['fetch']?.required).toEqual(['type', 'command'])
     expect(poll?.properties?.['fetch']?.properties?.['timeoutSec']?.default).toBe(60)
     expect(poll?.properties?.['fetch']?.description).toContain('items')
+  })
+
+  it('offers showSession off by default', () => {
+    expect(triggerSchema().properties?.['showSession']).toMatchObject({
+      type: 'boolean',
+      default: false,
+    })
+    expect(triggerSchema().properties?.['showSession']?.description).toContain('窗口')
   })
 })

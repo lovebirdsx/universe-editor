@@ -1287,6 +1287,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     readonly automation: AutomationOrigin | undefined = undefined,
     /** Absolute run directory of an automated session (permission policy scope). */
     readonly automationRunDir: string | undefined = undefined,
+    /** Static text appended to the agent's preset system prompt (claude fork). */
+    readonly systemPromptAppend: string | undefined = undefined,
   ) {
     super()
     this._budgetHolder = {

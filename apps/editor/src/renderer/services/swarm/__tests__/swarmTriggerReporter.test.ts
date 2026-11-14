@@ -33,9 +33,14 @@ function review(overrides: Partial<SwarmReviewDto> & Pick<SwarmReviewDto, 'id'>)
 }
 
 function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
+  const id = overrides.id ?? 'swarm-triage'
   return {
-    id: 'swarm-triage',
+    key: `X:/workspace\u0000${id}`,
+    id,
     name: 'Swarm 分诊',
+    workspace: 'X:/workspace',
+    workspaceName: 'workspace',
+    activationConfirmed: true,
     sourceType: 'swarm-review',
     status: 'idle',
     enabled: true,

@@ -23,14 +23,17 @@ import type {
   AutomatedRunStartResult,
   IAutomatedSessionService,
 } from '../automatedSessionService.js'
+import type { ITriggerSessionRevealService } from '../triggerSessionRevealService.js'
 import { TriggerRunHost } from '../TriggerRunHost.js'
 
-function makeRequest(runId = 'run-1'): TriggerRunRequest {
+function makeRequest(runId = 'run-1', showSession = false): TriggerRunRequest {
   return {
     origin: { triggerId: 'triage', triggerName: 'Triage', eventKey: 'swarm:1', runId },
+    showSession,
     cwd: 'X:/workspace',
     allowElevatedMode: false,
     prompt: 'do the thing',
+    promptForSystemContract: 'do the thing (system)',
     runDir: 'X:/workspace/run',
     budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 60 },
     allowedActions: [],
@@ -61,19 +64,28 @@ class FakeAutomatedSessions implements IAutomatedSessionService {
   }
 }
 
+class FakeReveal implements ITriggerSessionRevealService {
+  declare readonly _serviceBrand: undefined
+  readonly revealOnRunStart = vi.fn((_sessionId: string, _showSession: boolean): void => undefined)
+}
+
 class FakeTriggerMain implements ITriggerMainService {
   declare readonly _serviceBrand: undefined
   readonly _onDidChangeTriggers = new Emitter<readonly TriggerSummary[]>()
   readonly onDidChangeTriggers = this._onDidChangeTriggers.event
   readonly reportRunEnd = vi.fn(async (_end: TriggerRunEnd): Promise<void> => undefined)
   readonly listTriggers = vi.fn(async (): Promise<readonly TriggerSummary[]> => [])
+  readonly listWorkspaces = vi.fn(async () => [])
+  readonly getRunsDir = vi.fn(async (): Promise<string> => 'X:/workspace/triggers/runs')
+  readonly setMaxConcurrentRuns = vi.fn(async (): Promise<void> => undefined)
   readonly runNow = vi.fn(async (): Promise<void> => undefined)
   readonly setPaused = vi.fn(async (): Promise<void> => undefined)
   readonly setAllPaused = vi.fn(async (): Promise<void> => undefined)
+  readonly confirmActivation = vi.fn(async (): Promise<void> => undefined)
   readonly confirmElevatedMode = vi.fn(async (): Promise<void> => undefined)
   readonly confirmAutoApprove = vi.fn(async (): Promise<void> => undefined)
   readonly ensureConfigFile = vi.fn(async (): Promise<string> => 'file:///triggers.json')
-  readonly getConfigFileUri = vi.fn(async (): Promise<string> => 'file:///triggers.json')
+  readonly removeWorkspace = vi.fn(async (): Promise<void> => undefined)
   readonly readRunReport = vi.fn(
     async (): Promise<TriggerRunReportReadResult> => ({ kind: 'not-found' }),
   )
@@ -136,14 +148,16 @@ function setup(): {
   sessions: FakeAutomatedSessions
   main: FakeTriggerMain
   trust: FakeTrust
+  reveal: FakeReveal
   logger: CapturingLoggerService
 } {
   const sessions = new FakeAutomatedSessions()
   const main = new FakeTriggerMain()
   const trust = makeTrust()
+  const reveal = new FakeReveal()
   const logger = new CapturingLoggerService()
-  const host = new TriggerRunHost(sessions, main, trust.service, logger)
-  return { host, sessions, main, trust, logger }
+  const host = new TriggerRunHost(sessions, main, trust.service, reveal, logger)
+  return { host, sessions, main, trust, reveal, logger }
 }
 
 describe('TriggerRunHost', () => {
@@ -158,6 +172,21 @@ describe('TriggerRunHost', () => {
     const { host, sessions } = setup()
     sessions.startAutomatedSession.mockRejectedValueOnce(new Error('mode mismatch'))
     await expect(host.startRun(makeRequest())).rejects.toThrow('mode mismatch')
+  })
+
+  it('passes the trigger session display choice to the reveal service', async () => {
+    const { host, reveal } = setup()
+    await host.startRun(makeRequest('run-1', true))
+    expect(reveal.revealOnRunStart).toHaveBeenCalledWith('session-1', true)
+  })
+
+  it('returns the started session even when revealing throws', async () => {
+    const { host, reveal, logger } = setup()
+    reveal.revealOnRunStart.mockImplementationOnce(() => {
+      throw new Error('no such tab')
+    })
+    await expect(host.startRun(makeRequest())).resolves.toEqual({ sessionId: 'session-1' })
+    expect(logger.warnings).toEqual([expect.stringContaining('no such tab')])
   })
 
   it('cancels a run through the automated session service', async () => {

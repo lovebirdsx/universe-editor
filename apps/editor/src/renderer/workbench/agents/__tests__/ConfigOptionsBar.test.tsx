@@ -170,6 +170,7 @@ function makeSession(
     internalWritable: false,
     automation: undefined,
     automationRunDir: undefined,
+    systemPromptAppend: undefined,
     sessionIdOnAgent: observableValue<string | undefined>('sid', 's1'),
     title: 'Fake',
     messages: observableValue<readonly AcpMessage[]>('m', []),

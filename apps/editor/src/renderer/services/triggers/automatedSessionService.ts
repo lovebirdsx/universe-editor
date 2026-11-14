@@ -19,11 +19,13 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import { IAcpAgentRegistry } from '../acp/acpAgentRegistry.js'
+import { supportsSystemPromptAppend } from '../acp/agentPromptCapabilities.js'
 import { isSessionModeCategory } from '../acp/configOptionLabel.js'
 import { IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
 import type { IAcpSession } from '../acp/session/acpSessionModel.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
+import { TRIGGER_OUTPUT_CONTRACT_SYSTEM } from '../../../shared/triggers/promptTemplate.js'
 import {
   CONSERVATIVE_MODE_BY_AGENT,
   isElevatedModeId,
@@ -71,6 +73,13 @@ interface ActiveRun {
 /** Case-insensitive + trimmed comparison of two agent mode ids. */
 function sameMode(left: string, right: string): boolean {
   return left.trim().toLowerCase() === right.trim().toLowerCase()
+}
+
+/** Wrap text in a backtick fence longer than any run of backticks inside it. */
+function fence(text: string): string {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length))
+  const ticks = '`'.repeat(Math.max(3, longest + 1))
+  return `${ticks}\n${text}\n${ticks}`
 }
 
 /** The mode the agent actually applied, resolved by config id then mode category. */
@@ -128,6 +137,16 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
       ...(requestedMode !== undefined ? { mode: requestedMode } : {}),
       ...(request.model !== undefined ? { model: request.model } : {}),
     }
+    // Resolved after the mode gates so an unknown agent without an explicit
+    // mode still gets the actionable "configure mode" error.
+    const descriptor = this._registry.get(agentId)
+    const appendSystemContract = supportsSystemPromptAppend(descriptor)
+    const firstPrompt = appendSystemContract ? request.promptForSystemContract : request.prompt
+    this._logger.debug(
+      `trigger run ${runId} agent=${agentId} outputContract=${
+        appendSystemContract ? 'system+inline-runDir' : 'inline'
+      }`,
+    )
     const session = await this._sessions.createSession(agentId, {
       cwd: request.cwd,
       activate: false,
@@ -137,6 +156,7 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
       automation: request.origin,
       automationRunDir: request.runDir,
       additionalDirectories: [request.runDir],
+      ...(appendSystemContract ? { systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM } : {}),
       ...(request.mcpServerNames !== undefined ? { mcpServerNames: request.mcpServerNames } : {}),
       ...(Object.keys(configDesiredOverrides).length > 0 ? { configDesiredOverrides } : {}),
     })
@@ -180,7 +200,10 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     })
     this._runs.set(runId, { session, watcher })
     watcher.start()
-    void session.sendPrompt(request.prompt).then(
+    // Audit copy only — nothing reads it back. Written before the first prompt
+    // so the directory always shows what the agent was actually given.
+    await this._writePromptAudit(request, firstPrompt, appendSystemContract)
+    void session.sendPrompt(firstPrompt).then(
       () => watcher.notifyTurnSettled(),
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err)
@@ -199,6 +222,33 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     for (const run of this._runs.values()) run.watcher.dispose()
     this._runs.clear()
     super.dispose()
+  }
+
+  /**
+   * Best-effort `<runDir>/prompt.md`: the system prompt append actually used
+   * (or a note that the contract was inline) plus the exact first message.
+   * Purely an audit copy, so a failure only warns.
+   */
+  private async _writePromptAudit(
+    request: TriggerRunRequest,
+    firstPrompt: string,
+    systemContract: boolean,
+  ): Promise<void> {
+    const appendSection = systemContract
+      ? TRIGGER_OUTPUT_CONTRACT_SYSTEM
+      : '未使用（输出契约已内联到首条消息）'
+    const content = [
+      '## System prompt append',
+      appendSection,
+      '',
+      '## 首条用户消息',
+      fence(firstPrompt),
+    ].join('\n')
+    try {
+      await this._files.writeFile(URI.joinPath(URI.file(request.runDir), 'prompt.md'), content)
+    } catch (err) {
+      this._logger.warn(`failed to write prompt audit: ${(err as Error).message}`)
+    }
   }
 
   private async _readResultFile(runDir: string): Promise<string | undefined> {

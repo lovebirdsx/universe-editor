@@ -118,6 +118,17 @@ export const ACP_META_KEYS = {
    */
   extraModels: 'extraModels',
   /**
+   * session/new + session/load + session/resume top-level _meta carrying an
+   * addition to the claude fork's preset system prompt (`{ append: string }`).
+   *
+   * ONLY the claude fork reads it (the codex fork ignores unknown keys). The
+   * object form is mandatory: a bare string REPLACES the claude_code preset.
+   * The value is also part of the fork's session fingerprint, so every load /
+   * resume / reconnect of the same session must send the exact same bytes — the
+   * fork otherwise tears the session down and rebuilds it without the append.
+   */
+  systemPrompt: 'systemPrompt',
+  /**
    * session/new + session/load + session/resume top-level _meta carrying the
    * reasoning-effort levels the editor knows for each extra model
    * (`Array<{ id, effortLevels: string[] }>`). Parallels `extraModels` — both

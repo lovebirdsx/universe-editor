@@ -528,6 +528,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     internalWritable: false,
     automation: undefined,
     automationRunDir: undefined,
+    systemPromptAppend: undefined,
     sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', opts.id ?? 's1'),
     title: 'Fake',
     messages,

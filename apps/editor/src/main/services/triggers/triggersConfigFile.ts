@@ -1,8 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  On-disk adapter for `<userData>/triggers/triggers.json`: JSONC read, deterministic
- *  serialization for the JsonConfigFileStore change check, and the commented example
- *  used by "Triggers: Open Config". Parsing itself lives in shared/triggers/configParse.
+ *  On-disk adapters for triggers:
+ *   - `<workspace>/.universe-editor/triggers.json` — commit-able trigger definitions
+ *     (JSONC read + deterministic serialization + the commented example),
+ *   - `<configDir>/settings.json` — the machine-local `triggers.maxConcurrentRuns`
+ *     cap, read directly because main has no IConfigurationService.
+ *  Parsing itself lives in shared/triggers/configParse.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFile, stat } from 'node:fs/promises'
@@ -12,40 +15,42 @@ import {
   parseTriggersConfig,
   TRIGGERS_CONFIG_EXAMPLE,
 } from '../../../shared/triggers/configParse.js'
-import { TRIGGER_DEFAULTS, type TriggersConfig } from '../../../shared/triggers/types.js'
+import {
+  TRIGGER_DEFAULTS,
+  TRIGGERS_MAX_CONCURRENT_RUNS_KEY,
+  TRIGGERS_WORKSPACE_CONFIG_FILE,
+  TRIGGERS_WORKSPACE_DIR,
+  type TriggersConfig,
+} from '../../../shared/triggers/types.js'
 import type { JsonConfigReadResult } from '../jsonConfig/jsonConfigFileStore.js'
 import { writeFileAtomic } from '../jsonConfig/atomicFile.js'
 
+/** Machine-local trigger data (state, audit, runs, the workspace registry). */
 export const TRIGGERS_DIR_NAME = 'triggers'
-export const TRIGGERS_CONFIG_FILE_NAME = 'triggers.json'
+export const TRIGGERS_CONFIG_FILE_NAME = TRIGGERS_WORKSPACE_CONFIG_FILE
 
 export function triggersDirectory(userDataDir: string): string {
   return join(userDataDir, TRIGGERS_DIR_NAME)
 }
 
-export function triggersConfigPath(userDataDir: string): string {
-  return join(triggersDirectory(userDataDir), TRIGGERS_CONFIG_FILE_NAME)
+/** Trigger definitions live inside the workspace so they can be committed. */
+export function workspaceTriggersConfigPath(workspace: string): string {
+  return join(workspace, TRIGGERS_WORKSPACE_DIR, TRIGGERS_WORKSPACE_CONFIG_FILE)
 }
 
 export function createEmptyTriggersConfig(): TriggersConfig {
-  return {
-    version: 1,
-    maxConcurrentRuns: TRIGGER_DEFAULTS.maxConcurrentRuns,
-    triggers: [],
-    invalid: [],
-  }
+  return { version: 1, triggers: [], invalid: [] }
 }
 
 /** Fixed shape keeps the store's external-edit comparison stable. */
 export function serializeTriggersConfig(config: TriggersConfig): unknown {
   return {
     version: config.version,
-    maxConcurrentRuns: config.maxConcurrentRuns,
     triggers: config.triggers.map((trigger) => ({
       id: trigger.id,
       name: trigger.name,
       enabled: trigger.enabled,
-      workspace: trigger.workspace,
+      showSession: trigger.showSession,
       source: trigger.source,
       session: {
         ...trigger.session,
@@ -101,4 +106,33 @@ export async function ensureTriggersConfigFile(file: string): Promise<boolean> {
   }
   await writeFileAtomic(file, TRIGGERS_CONFIG_EXAMPLE)
   return true
+}
+
+/** User-settings key for the machine-wide concurrent run cap. */
+export const MAX_CONCURRENT_RUNS_SETTING_KEY = TRIGGERS_MAX_CONCURRENT_RUNS_KEY
+
+/** Clamps a user-provided cap; anything non-integer falls back to the default. */
+export function normalizeMaxConcurrentRuns(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 10) {
+    return TRIGGER_DEFAULTS.maxConcurrentRuns
+  }
+  return value
+}
+
+/**
+ * Reads `triggers.maxConcurrentRuns` from the active config directory's
+ * settings.json. Best effort: a missing / unparsable file or an out-of-range
+ * value falls back to the default instead of failing startup.
+ */
+export async function readMaxConcurrentRunsSetting(configDir: string): Promise<number> {
+  let raw: Record<string, unknown> | undefined
+  try {
+    const text = await readFile(join(configDir, 'settings.json'), 'utf8')
+    if (text.trim() !== '') {
+      raw = parse(text, [], { allowTrailingComma: true }) as Record<string, unknown> | undefined
+    }
+  } catch {
+    return TRIGGER_DEFAULTS.maxConcurrentRuns
+  }
+  return normalizeMaxConcurrentRuns(raw?.[MAX_CONCURRENT_RUNS_SETTING_KEY])
 }

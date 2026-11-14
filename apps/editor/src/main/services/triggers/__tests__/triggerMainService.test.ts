@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
 import { URI, type ILogger, type IOpenWindowInfo } from '@universe-editor/platform'
@@ -15,6 +15,7 @@ import type {
 import type { TriggerRunRequest, TriggerSummary } from '../../../../shared/triggers/types.js'
 import { MAX_TRIGGER_REPORT_BYTES } from '../../../../shared/triggers/types.js'
 import { TriggerMainService, type TriggerClock } from '../triggerMainService.js'
+import { triggerKeyFor } from '../triggerIdentity.js'
 import type { PollCommandFetcher, PollFetchResult } from '../pollCommandFetcher.js'
 
 const START = new Date(2026, 2, 2, 8, 0, 0, 0).getTime()
@@ -22,6 +23,49 @@ const GRACE_MS = 60_000
 
 const dirs: string[] = []
 const services: TriggerMainService[] = []
+
+function keyOf(workspace: string, id = 'trigger-1'): string {
+  return triggerKeyFor(workspace, id)
+}
+
+/**
+ * Fixtures name triggers by bare id for readability; state.json is keyed by the
+ * composite workspace + id. Already-composite keys pass through untouched.
+ */
+function withCompositeKeys(state: unknown, workspace: string): unknown {
+  if (typeof state !== 'object' || state === null) return state
+  const record = state as {
+    triggers?: Record<string, unknown>
+    pending?: readonly unknown[]
+  }
+  const triggers = record.triggers
+  return {
+    ...record,
+    ...(triggers === undefined
+      ? {}
+      : {
+          triggers: Object.fromEntries(
+            Object.entries(triggers).map(([id, value]) => [
+              id.includes('\u0000') ? id : keyOf(workspace, id),
+              value,
+            ]),
+          ),
+        }),
+    ...(Array.isArray(record.pending)
+      ? {
+          pending: record.pending.map((entry) => {
+            if (typeof entry !== 'object' || entry === null) return entry
+            const { triggerId, ...rest } = entry as Record<string, unknown>
+            if (typeof triggerId !== 'string') return entry
+            return {
+              ...rest,
+              triggerKey: triggerId.includes('\u0000') ? triggerId : keyOf(workspace, triggerId),
+            }
+          }),
+        }
+      : {}),
+  }
+}
 
 afterEach(async () => {
   for (const service of services.splice(0)) service.dispose()
@@ -139,9 +183,11 @@ function review(reviewId: string): SwarmNeedsActionReview {
 interface HarnessOptions {
   readonly triggers?: (workspace: string) => readonly unknown[]
   readonly maxConcurrentRuns?: number
-  readonly state?: unknown
+  readonly state?: unknown | ((workspace: string) => unknown)
   readonly fetch?: PollCommandFetcher
   readonly trusted?: boolean
+  /** Machine-level trust probe handed to the service (defaults to untrusted). */
+  readonly machineTrusted?: boolean
   readonly startRunError?: Error
   readonly holdStartRun?: boolean
   readonly startRunTimeoutMs?: number
@@ -151,6 +197,8 @@ interface HarnessOptions {
   readonly stateDebounceMs?: number
   readonly startupGraceMs?: number
   readonly workspace?: string
+  /** Set false to exercise the activation gate (default: confirm every trigger). */
+  readonly autoConfirm?: boolean
 }
 
 interface Harness {
@@ -159,6 +207,9 @@ interface Harness {
   readonly dir: string
   readonly workspace: string
   readonly configFile: string
+  /** Composite key of the default `trigger-1`. */
+  readonly key: string
+  keyOf(id: string): string
   readonly loggerLines: string[]
   readonly notify: ReturnType<typeof vi.fn>
   readonly startRun: ReturnType<typeof vi.fn>
@@ -178,15 +229,26 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const workspace = options.workspace ?? join(dir, 'workspace')
   const triggerDir = join(dir, 'triggers')
   await mkdir(triggerDir, { recursive: true })
-  const configFile = join(triggerDir, 'triggers.json')
+  const configFile = join(workspace, '.universe-editor', 'triggers.json')
+  await mkdir(dirname(configFile), { recursive: true })
   const config = {
     version: 1,
-    maxConcurrentRuns: options.maxConcurrentRuns ?? 2,
     triggers: options.triggers?.(workspace) ?? [],
   }
   await writeFile(configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
-  if (options.state !== undefined) {
-    await writeFile(join(triggerDir, 'state.json'), JSON.stringify(options.state), 'utf8')
+  // The registry is what keeps a workspace scheduled after its windows close.
+  await writeFile(
+    join(triggerDir, 'workspaces.json'),
+    `${JSON.stringify({ version: 1, workspaces: [workspace] }, null, 2)}\n`,
+    'utf8',
+  )
+  const state = typeof options.state === 'function' ? options.state(workspace) : options.state
+  if (state !== undefined) {
+    await writeFile(
+      join(triggerDir, 'state.json'),
+      JSON.stringify(withCompositeKeys(state, workspace)),
+      'utf8',
+    )
   }
 
   const clock = new FakeClock()
@@ -226,6 +288,8 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       ? {}
       : { startRunTimeoutMs: options.startRunTimeoutMs }),
     stateDebounceMs: options.stateDebounceMs ?? 0,
+    readMaxConcurrentRuns: async () => options.maxConcurrentRuns ?? 2,
+    isWorkspaceTrusted: async () => options.machineTrusted ?? true,
     uuid: (() => {
       let counter = 0
       // UUID-shaped so the state loader keeps replayed pending records.
@@ -237,7 +301,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     if (options.openRegistersHost === false) return
     const windowId = 2
     openWindows.push({ id: windowId, folder: folder.toJSON(), name: 'opened' })
-    service.registerWindowHost(windowId, host)
+    service.registerWindowHost(windowId, host, folder)
   })
   service.setWindowProvider({
     getOpenWindowInfos: () => openWindows,
@@ -248,9 +312,18 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     if (!openWindows.some((entry) => entry.id === windowId)) {
       openWindows.push({ id: windowId, folder: URI.file(workspace).toJSON(), name: 'ws' })
     }
-    service.registerWindowHost(windowId, host)
+    service.registerWindowHost(windowId, host, URI.file(workspace))
   }
   if (options.registerHost !== false) registerHost()
+
+  await service.initialize()
+  if (options.autoConfirm !== false) {
+    // Workspace-defined triggers stay dormant until confirmed once on this machine;
+    // most scheduling tests are about what happens after that gate.
+    for (const entry of await service.listTriggers()) {
+      if (entry.status !== 'invalid') await service.confirmActivation(entry.key)
+    }
+  }
 
   return {
     service,
@@ -258,6 +331,8 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     dir,
     workspace,
     configFile,
+    key: keyOf(workspace),
+    keyOf: (id: string) => keyOf(workspace, id),
     loggerLines: lines,
     notify,
     startRun,
@@ -303,6 +378,7 @@ interface RawState {
         readonly processed: Record<string, unknown>
         readonly baselineDone?: boolean
         readonly sourceFingerprint?: string
+        readonly activationConfirmed?: string
       }
     >
   >
@@ -564,15 +640,33 @@ describe('TriggerMainService queueing', () => {
     expect(harness.requests[1]?.origin.triggerId).toBe(otherId)
   })
 
+  it('applies a renderer setting change without restarting main', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [
+        makeTrigger(workspace, { id: 'a' }),
+        makeTrigger(workspace, { id: 'b' }),
+      ],
+    })
+    await harness.service.runNow(harness.keyOf('a'))
+    await harness.service.runNow(harness.keyOf('b'))
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+
+    await harness.service.setMaxConcurrentRuns(2)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
+    harness.service.dispose()
+    await settle()
+  })
+
   it('replays a queued run after a restart from the pending payload', async () => {
     const harness = await createHarness({
       maxConcurrentRuns: 1,
       triggers: (workspace) => [makeTrigger(workspace)],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await settle()
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const firstRunId = harness.requests[0]!.origin.runId
 
@@ -609,7 +703,7 @@ describe('TriggerMainService failures', () => {
     })
     await openGate(harness)
     for (let attempt = 1; attempt <= 5; attempt++) {
-      await harness.service.runNow('trigger-1')
+      await harness.service.runNow(harness.key)
       // A fixed tick count is not enough under load: the next runNow would hit the
       // still-occupied concurrency slot before this failure is recorded.
       await vi.waitFor(async () => {
@@ -629,8 +723,8 @@ describe('TriggerMainService failures', () => {
     const state = JSON.parse(
       await readFile(join(harness.dir, 'triggers', 'state.json'), 'utf8'),
     ) as { triggers: Record<string, { paused: boolean; backoffUntil: number }> }
-    expect(state.triggers['trigger-1']?.paused).toBe(true)
-    expect(state.triggers['trigger-1']?.backoffUntil).toBeGreaterThan(harness.clock.now())
+    expect(state.triggers[harness.key]?.paused).toBe(true)
+    expect(state.triggers[harness.key]?.backoffUntil).toBeGreaterThan(harness.clock.now())
 
     const audit = await readFile(join(harness.dir, 'triggers', 'audit.jsonl'), 'utf8')
     expect(audit).toContain('auto-pause')
@@ -642,7 +736,7 @@ describe('TriggerMainService failures', () => {
       trusted: false,
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
@@ -655,7 +749,7 @@ describe('TriggerMainService failures', () => {
       triggers: (workspace) => [makeTrigger(workspace)],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     harness.service.unregisterWindowHost(1)
     await settle()
@@ -672,7 +766,7 @@ describe('TriggerMainService failures', () => {
       holdStartRun: true,
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const runId = harness.requests[0]!.origin.runId
 
@@ -698,7 +792,7 @@ describe('TriggerMainService failures', () => {
       holdStartRun: true,
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     await harness.clock.advance(500)
     harness.releaseStartRun()
@@ -717,9 +811,9 @@ describe('TriggerMainService failures', () => {
       holdStartRun: true,
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
@@ -742,15 +836,15 @@ describe('TriggerMainService elevated mode', () => {
       ],
     })
     await openGate(harness)
-    await expect(harness.service.runNow('trigger-1')).rejects.toThrow(/elevated mode/)
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/elevated mode/)
     expect(harness.startRun).not.toHaveBeenCalled()
 
     const before = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(before.status).toBe('needs-confirmation')
     expect(before.elevatedModeConfirmed).toBe(false)
 
-    await harness.service.confirmElevatedMode('trigger-1')
-    await harness.service.runNow('trigger-1')
+    await harness.service.confirmElevatedMode(harness.key)
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.allowElevatedMode).toBe(true)
     expect(summary(await harness.service.listTriggers(), 'trigger-1').elevatedModeConfirmed).toBe(
@@ -767,13 +861,12 @@ describe('TriggerMainService elevated mode', () => {
       ],
     })
     await openGate(harness)
-    await harness.service.confirmElevatedMode('trigger-1')
+    await harness.service.confirmElevatedMode(harness.key)
 
     await writeFile(
       harness.configFile,
       JSON.stringify({
         version: 1,
-        maxConcurrentRuns: 2,
         triggers: [
           makeTrigger(harness.workspace, {
             name: 'Renamed',
@@ -787,13 +880,40 @@ describe('TriggerMainService elevated mode', () => {
       const list = await harness.service.listTriggers()
       return summary(list, 'trigger-1').name === 'Renamed'
     })
-    const item = summary(await harness.service.listTriggers(), 'trigger-1')
-    expect(item.elevatedModeConfirmed).toBe(false)
-    await expect(harness.service.runNow('trigger-1')).rejects.toThrow(/elevated mode/)
+    // Editing the definition invalidates every confirmation bound to the old fingerprint.
+    const edited = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(edited.activationConfirmed).toBe(false)
+    expect(edited.elevatedModeConfirmed).toBe(false)
+
+    await harness.service.confirmActivation(harness.key)
+    const confirmed = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(confirmed.activationConfirmed).toBe(true)
+    expect(confirmed.elevatedModeConfirmed).toBe(false)
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/elevated mode/)
   })
 })
 
 describe('TriggerMainService poll source', () => {
+  it('does not spawn the poll command in an untrusted workspace', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+      machineTrusted: false,
+    })
+    await openGate(harness)
+    await vi.waitFor(() =>
+      expect(
+        harness.loggerLines.some((line) =>
+          line.includes('poll skipped (workspace is not trusted)'),
+        ),
+      ).toBe(true),
+    )
+    expect(fetch).not.toHaveBeenCalled()
+    harness.service.dispose()
+    await settle()
+  })
+
   it('seeds the baseline on the first poll and fires only new keys', async () => {
     const items: Array<{ key: string; payload: Record<string, string> }> = [
       { key: 'A', payload: { id: 'A' } },
@@ -848,7 +968,7 @@ describe('TriggerMainService window routing', () => {
       triggers: (workspace) => [makeTrigger(workspace)],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.openWindow).not.toHaveBeenCalled()
     expect(harness.requests[0]?.cwd).toBe(harness.workspace)
@@ -861,7 +981,7 @@ describe('TriggerMainService window routing', () => {
       openRegistersHost: true,
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.openWindow).toHaveBeenCalledTimes(1)
     expect(harness.openWindow.mock.calls[0]?.[0]?.toString()).toBe(
@@ -877,7 +997,7 @@ describe('TriggerMainService window routing', () => {
       hostWaitTimeoutMs: 15,
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await settle(20)
     expect(harness.startRun).not.toHaveBeenCalled()
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
@@ -893,14 +1013,14 @@ describe('TriggerMainService pause gate', () => {
       triggers: (workspace) => [makeTrigger(workspace)],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await settle()
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
     const firstKey = harness.requests[0]!.origin.eventKey
 
-    await harness.service.setPaused('trigger-1', true)
+    await harness.service.setPaused(harness.key, true)
     await settle()
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(item.queued).toBe(0)
@@ -910,7 +1030,7 @@ describe('TriggerMainService pause gate', () => {
 
     const state = stateOf(harness.service)
     expect(state.pending).toEqual([])
-    expect(Object.keys(state.triggers['trigger-1']?.processed ?? {})).toEqual([firstKey])
+    expect(Object.keys(state.triggers[harness.key]?.processed ?? {})).toEqual([firstKey])
     expect(harness.startRun).toHaveBeenCalledTimes(1)
   })
 
@@ -945,7 +1065,7 @@ describe('TriggerMainService pause gate', () => {
     expect(harness.startRun).not.toHaveBeenCalled()
     expect(stateOf(harness.service).pending).toHaveLength(1)
 
-    await harness.service.setPaused('trigger-1', false)
+    await harness.service.setPaused(harness.key, false)
     // The replay reads the pending file from disk, which can outlast fixed ticks.
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.runId).toBe(runId)
@@ -959,9 +1079,9 @@ describe('TriggerMainService window reload / watchdog', () => {
       triggers: (workspace) => [makeTrigger(workspace)],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await settle()
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
 
@@ -986,7 +1106,7 @@ describe('TriggerMainService window reload / watchdog', () => {
       ],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     const runId = harness.requests[0]!.origin.runId
     expect(summary(await harness.service.listTriggers(), 'trigger-1').running).toBe(1)
@@ -1012,7 +1132,7 @@ describe('TriggerMainService window reload / watchdog', () => {
       ],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     await harness.service.reportRunEnd({
       runId: harness.requests[0]!.origin.runId,
@@ -1033,9 +1153,27 @@ describe('TriggerMainService manual runs', () => {
       triggers: (workspace) => [makeTrigger(workspace, { enabled: false })],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toMatch(/^manual:/)
+    expect(harness.requests[0]?.showSession).toBe(false)
+    const run = harness.requests[0]!
+    expect(run.prompt).toContain('## 输出要求（始终生效，优先于任务描述）')
+    expect(run.prompt).toContain(`运行目录：${run.runDir}`)
+    expect(run.promptForSystemContract).toContain(`运行目录：${run.runDir}`)
+    expect(run.promptForSystemContract).not.toContain('## 输出要求')
+    expect(run.promptForSystemContract).toContain('## 任务\nDo the thing')
+    expect(run.promptForSystemContract).toContain('## 事件数据\n本次无外部事件数据。')
+  })
+
+  it('carries showSession into the run request', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { showSession: true })],
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    expect(harness.requests[0]?.showSession).toBe(true)
   })
 
   it('starts a queued manual run of a disabled trigger once a slot frees', async () => {
@@ -1044,9 +1182,9 @@ describe('TriggerMainService manual runs', () => {
       triggers: (workspace) => [makeTrigger(workspace, { enabled: false })],
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(async () =>
       expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1),
     )
@@ -1121,7 +1259,10 @@ describe('TriggerMainService backoff gate', () => {
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
     expect(
-      Object.hasOwn(stateOf(harness.service).triggers['swarm']?.processed ?? {}, 'swarm:1'),
+      Object.hasOwn(
+        stateOf(harness.service).triggers[harness.keyOf('swarm')]?.processed ?? {},
+        'swarm:1',
+      ),
     ).toBe(false)
 
     await harness.clock.advance(2 * 60_000)
@@ -1178,7 +1319,7 @@ describe('TriggerMainService backoff gate', () => {
       },
     })
     await openGate(harness)
-    await harness.service.runNow('trigger-1')
+    await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 })
@@ -1209,9 +1350,9 @@ describe('TriggerMainService baseline reset', () => {
     await harness.service.initialize()
     await settle()
     const state = stateOf(harness.service)
-    expect(state.triggers['trigger-1']?.baselineDone).toBe(false)
-    expect(state.triggers['trigger-1']?.processed).toEqual({})
-    expect(state.triggers['trigger-1']?.sourceFingerprint).toBe(currentFingerprint)
+    expect(state.triggers[harness.key]?.baselineDone).toBe(false)
+    expect(state.triggers[harness.key]?.processed).toEqual({})
+    expect(state.triggers[harness.key]?.sourceFingerprint).toBe(currentFingerprint)
     expect(harness.loggerLines.some((line) => line.includes('source changed'))).toBe(true)
   })
 
@@ -1237,8 +1378,8 @@ describe('TriggerMainService baseline reset', () => {
     await harness.service.initialize()
     await settle()
     const state = stateOf(harness.service)
-    expect(state.triggers['trigger-1']?.baselineDone).toBe(true)
-    expect(state.triggers['trigger-1']?.processed).toEqual({
+    expect(state.triggers[harness.key]?.baselineDone).toBe(true)
+    expect(state.triggers[harness.key]?.processed).toEqual({
       'poll:A': { at: START, status: 'started' },
     })
     expect(harness.loggerLines.some((line) => line.includes('source changed'))).toBe(false)
@@ -1298,7 +1439,7 @@ describe('TriggerMainService list / pause', () => {
       triggers: (workspace) => [makeTrigger(workspace, { id: 'ok' }), { id: 'broken' }],
     })
     await openGate(harness)
-    await harness.service.runNow('ok')
+    await harness.service.runNow(harness.keyOf('ok'))
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
 
     await harness.service.setAllPaused(true)
@@ -1322,12 +1463,12 @@ describe('TriggerMainService list / pause', () => {
   it('ensureConfigFile writes the JSONC example once and returns its URI', async () => {
     const harness = await createHarness()
     await rm(harness.configFile, { force: true })
-    const uri = await harness.service.ensureConfigFile()
+    const uri = await harness.service.ensureConfigFile(harness.workspace)
     expect(uri.startsWith('file:')).toBe(true)
     const text = await readFile(harness.configFile, 'utf8')
     expect(text).toContain('// Agent 触发器配置')
     expect(text).toContain('"version": 1')
-    await harness.service.ensureConfigFile()
+    await harness.service.ensureConfigFile(harness.workspace)
     expect(await readFile(harness.configFile, 'utf8')).toBe(text)
   })
 })
@@ -1364,6 +1505,181 @@ describe('TriggerMainService run reports', () => {
     await writeFile(join(runDir, 'report.md'), 'x'.repeat(MAX_TRIGGER_REPORT_BYTES + 1), 'utf8')
 
     expect(await harness.service.readRunReport(RUN_ID)).toEqual({ kind: 'too-large' })
+  })
+})
+
+describe('TriggerMainService workspace activation gate', () => {
+  it('keeps an unconfirmed trigger dormant: no scheduling, no poll command, no runNow', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      autoConfirm: false,
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+    })
+    await openGate(harness)
+    await harness.clock.advance(10 * 60_000)
+    await settle()
+
+    // The poll command executes shell code in main: it must not run at all.
+    expect(fetch).not.toHaveBeenCalled()
+    expect(harness.startRun).not.toHaveBeenCalled()
+    const pending = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(pending.status).toBe('needs-confirmation')
+    expect(pending.activationConfirmed).toBe(false)
+    expect(pending.nextRunAt).toBeUndefined()
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
+
+    await harness.service.confirmActivation(harness.key)
+    const confirmed = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(confirmed.activationConfirmed).toBe(true)
+    expect(confirmed.status).toBe('idle')
+    // Confirmation arms the poll immediately; until then the command never ran.
+    await harness.clock.advance(0)
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates the activation when the definition changes', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').activationConfirmed).toBe(
+      true,
+    )
+
+    await writeFile(
+      harness.configFile,
+      JSON.stringify({
+        version: 1,
+        triggers: [makeTrigger(harness.workspace, { name: 'Renamed' })],
+      }),
+      'utf8',
+    )
+    await waitFor(
+      async () => summary(await harness.service.listTriggers(), 'trigger-1').name === 'Renamed',
+    )
+    const edited = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(edited.activationConfirmed).toBe(false)
+    expect(edited.status).toBe('needs-confirmation')
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
+  })
+
+  it('registers a second workspace and keeps same-id triggers independent', async () => {
+    const harness = await createHarness({
+      autoConfirm: false,
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+
+    const second = join(harness.dir, 'workspace-b')
+    const secondConfig = join(second, '.universe-editor', 'triggers.json')
+    await mkdir(dirname(secondConfig), { recursive: true })
+    await writeFile(
+      secondConfig,
+      JSON.stringify({ version: 1, triggers: [makeTrigger(second)] }),
+      'utf8',
+    )
+    const uri = await harness.service.ensureConfigFile(second)
+    expect(uri).toContain('.universe-editor/triggers.json')
+
+    const list = await harness.service.listTriggers()
+    const sameId = list.filter((entry) => entry.id === 'trigger-1')
+    expect(sameId).toHaveLength(2)
+    expect(new Set(sameId.map((entry) => entry.key)).size).toBe(2)
+    expect(sameId.every((entry) => entry.activationConfirmed === false)).toBe(true)
+    expect(new Set(sameId.map((entry) => entry.workspaceName)).size).toBe(2)
+
+    const secondKey = sameId.find((entry) => entry.workspace === second)!.key
+    await harness.service.confirmActivation(secondKey)
+    const afterConfirm = await harness.service.listTriggers()
+    expect(afterConfirm.find((entry) => entry.key === harness.key)?.activationConfirmed).toBe(false)
+    expect(afterConfirm.find((entry) => entry.key === secondKey)?.activationConfirmed).toBe(true)
+
+    // Pause is per composite key, not per bare id.
+    await harness.service.setPaused(secondKey, true)
+    const afterPause = await harness.service.listTriggers()
+    expect(afterPause.find((entry) => entry.key === secondKey)?.paused).toBe(true)
+    expect(afterPause.find((entry) => entry.key === harness.key)?.paused).toBe(false)
+
+    const workspaces = await harness.service.listWorkspaces()
+    expect(workspaces.map((entry) => entry.workspace)).toEqual([harness.workspace, second])
+    expect(workspaces.every((entry) => entry.available)).toBe(true)
+
+    await harness.service.removeWorkspace(second)
+    expect((await harness.service.listWorkspaces()).map((entry) => entry.workspace)).toEqual([
+      harness.workspace,
+    ])
+    expect(
+      (await harness.service.listTriggers()).filter((entry) => entry.id === 'trigger-1'),
+    ).toHaveLength(1)
+  })
+
+  it('drops queued events and pending records when a workspace is removed', async () => {
+    const harness = await createHarness({
+      holdStartRun: true,
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [
+        makeTrigger(workspace, { id: 'first' }),
+        makeTrigger(workspace, { id: 'second' }),
+      ],
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.keyOf('first'))
+    await harness.service.runNow(harness.keyOf('second'))
+    expect(stateOf(harness.service).pending).toHaveLength(2)
+
+    await harness.service.removeWorkspace(harness.workspace)
+    expect(stateOf(harness.service).pending).toEqual([])
+    expect(await harness.service.listTriggers()).toEqual([])
+    harness.releaseStartRun()
+    await settle()
+  })
+
+  it('normalizes an IPC key to the canonical composite key', async () => {
+    const harness = await createHarness({
+      autoConfirm: false,
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    // Extra separators / trailing slash must not create a second state entry.
+    const nonCanonical = `${harness.workspace}/./\u0000trigger-1`
+    await harness.service.confirmActivation(nonCanonical)
+
+    const state = stateOf(harness.service)
+    expect(Object.keys(state.triggers)).toEqual([harness.key])
+    expect(state.triggers[harness.key]?.activationConfirmed).toBeDefined()
+  })
+
+  it('routes swarm reports only to the reporting workspace', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, { id: 'swarm-a', source: { type: 'swarm-review' } }),
+      ],
+    })
+    const second = join(harness.dir, 'workspace-b')
+    const secondConfig = join(second, '.universe-editor', 'triggers.json')
+    await mkdir(dirname(secondConfig), { recursive: true })
+    await writeFile(
+      secondConfig,
+      JSON.stringify({
+        version: 1,
+        triggers: [makeTrigger(second, { id: 'swarm-b', source: { type: 'swarm-review' } })],
+      }),
+      'utf8',
+    )
+    await harness.service.ensureConfigFile(second)
+    const secondKey = (await harness.service.listTriggers()).find(
+      (entry) => entry.workspace === second,
+    )!.key
+    await harness.service.confirmActivation(secondKey)
+
+    await harness.service.reportSwarmNeedsAction([review('1')], second)
+
+    const state = stateOf(harness.service)
+    expect(state.triggers[secondKey]?.baselineDone).toBe(true)
+    expect(state.triggers[harness.keyOf('swarm-a')]?.baselineDone).toBe(false)
+    expect(state.triggers[harness.keyOf('swarm-a')]?.processed?.['swarm:1']).toBeUndefined()
+    expect(harness.startRun).not.toHaveBeenCalled()
   })
 })
 

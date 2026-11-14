@@ -210,18 +210,17 @@ chmod 600 ~/.config/universe-editor/tracker.json
 
 ### 5. 触发器
 
-在 `<userData>/triggers/triggers.json` 增加触发器（先 `enabled: false`）：
+在 bot 工作区里创建（或执行命令面板 **触发器: 打开配置**）`<workspace>/.universe-editor/triggers.json`，
+先保持 `enabled: false`。工作区由文件所在目录隐式确定，文件里不再有 `workspace` 字段：
 
 ```jsonc
 {
   "version": 1,
-  "maxConcurrentRuns": 1,
   "triggers": [
     {
       "id": "tracker-implement",
       "name": "Tracker 需求自动处理",
       "enabled": false,
-      "workspace": "X:/workspace/ue-bot",
       "source": {
         "type": "poll",
         "intervalSec": 300,
@@ -250,21 +249,29 @@ chmod 600 ~/.config/universe-editor/tracker.json
 
 要点：
 
+- 配置文件在工作区内，可随 bot 工作区一起入库；打开过该工作区（或执行「触发器: 打开配置」）
+  后编辑器会把工作区登记到本机 `<userData>/triggers/workspaces.json`，窗口关闭也继续调度。
+- 全局并发上限不在工作区文件里：它是用户设置 `triggers.maxConcurrentRuns`（本机
+  `settings.json`，1–10，默认 2）。bot 机器上通常设成 1。
 - `session.skill` 只写 skill 名；skill 必须放在 bot 工作区的
   `.claude/skills/implement-tracker-requirement/` 下，触发器会在 prompt 首行自动加
   `/implement-tracker-requirement`。
 - `mcpServers` 会把 `tracker` 固定（pin）到该会话，后续设置变化不影响已在跑的自动化。
-- `mode: bypassPermissions` 属于高权限模式，必须先在命令面板执行
-  **触发器: 确认高权限模式…**；改任何触发器配置都会让确认失效。
-- `poll` 第一次成功取数只建基线，不会把历史需求全部跑一遍。
+- 首次启用前必须在本机确认一次：命令面板 **触发器: 确认工作区触发器…**（或在触发器列表里
+  选「确认工作区触发器」）。`mode: bypassPermissions` 还额外属于高权限模式，必须再执行
+  **触发器: 确认高权限模式…**；任何配置改动（包括 `enabled` 与 `name`）都会让这些确认失效。
+- 未确认的触发器显示「待确认」，不会调度、不会执行 poll 取数命令，也不能「立即运行」。
+- `poll` 第一次成功取数只建基线，不会把历史需求全部跑一遍；未确认前连取数命令都不会执行。
 - `overflow` 必须用 `queue`：`drop` 丢弃的事件 key 已记入去重，该需求不会再被触发。
 - `maxCostUsd: null` 表示不限费用（不写则默认 1 美元，实现 + `pnpm check` 会被 `budget-exceeded` 中途取消）；时长仍由 `timeoutMin` 兜底。
-- `workspace` 必须是本机绝对路径；远程工作区不支持触发器。
+- 只支持本地文件夹工作区；远程工作区不登记、不调度。
 
 ### 6. 先观察再放开
 
 保持 `enabled: false`，用 **触发器: 立即运行触发器…** 手动跑一轮，检查 Sessions、审计日志
-与运行报告（`report.md`）里的认领、评论、提交、gate 结果，再改成 `enabled: true`。
+与运行报告（`report.md`）里的认领、评论、提交、gate 结果。手动运行同样要求先完成本机激活
+确认。确认无误后改成 `enabled: true`——改 `enabled` 会让旧确认失效，需再执行一次
+**触发器: 确认工作区触发器…**（高权限模式另需重新确认）。
 
 ## 原生 MCP 传输细节
 

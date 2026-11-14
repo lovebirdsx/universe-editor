@@ -217,8 +217,19 @@ export async function createWindowScopedServices(opts: {
   )
 
   // Give the trigger scheduler this window's run host. Window close calls
-  // unregisterWindowHost alongside mobileGateway.unregisterWindowBridge.
-  appServices.triggers.registerWindowHost(win.id, ipc.rendererTriggerRunHost)
+  // unregisterWindowHost alongside mobileGateway.unregisterWindowBridge. The
+  // folder is handed over so a workspace with `.universe-editor/triggers.json`
+  // gets registered for background scheduling as soon as it is opened.
+  appServices.triggers.registerWindowHost(
+    win.id,
+    ipc.rendererTriggerRunHost,
+    workspace.current?.folder ?? null,
+  )
+  disposables.add(
+    workspace.onDidChangeWorkspace(() => {
+      appServices.triggers.noteWindowWorkspace(workspace.current?.folder ?? null)
+    }),
+  )
 
   return {
     disposables,

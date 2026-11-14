@@ -12,8 +12,9 @@ import {
   ensureTriggersConfigFile,
   readTriggersConfigFile,
   serializeTriggersConfig,
-  triggersConfigPath,
+  readMaxConcurrentRunsSetting,
   TRIGGERS_CONFIG_FILE_NAME,
+  workspaceTriggersConfigPath,
 } from '../triggersConfigFile.js'
 import {
   createEmptyTriggerStateFile,
@@ -21,6 +22,7 @@ import {
   TriggerStateStore,
 } from '../triggerStateStore.js'
 import { pruneRunDirectories } from '../triggerMainService.js'
+import { TRIGGER_DEFAULTS } from '../../../../shared/triggers/types.js'
 
 const dirs: string[] = []
 
@@ -64,7 +66,6 @@ const BASE_TRIGGER = {
   id: 'weekly',
   name: 'Weekly',
   enabled: true,
-  workspace: 'X:/workspace',
   source: { type: 'schedule', cron: '0 9 * * 1', onMissed: 'skip' },
   session: { skill: 'team-weekly-digest' },
   allowedActions: [],
@@ -93,7 +94,8 @@ describe('readTriggersConfigFile', () => {
     const result = await readTriggersConfigFile(file)
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') return
-    expect(result.value.maxConcurrentRuns).toBe(3)
+    // maxConcurrentRuns is machine-local (user settings), not part of this file.
+    expect(result.value).not.toHaveProperty('maxConcurrentRuns')
     expect(result.value.triggers.map((trigger) => trigger.id)).toEqual(['weekly'])
     expect(result.value.invalid.map((entry) => entry.id)).toEqual(['broken'])
   })
@@ -122,7 +124,7 @@ describe('readTriggersConfigFile', () => {
 describe('ensureTriggersConfigFile', () => {
   it('writes the commented example only when the file is absent', async () => {
     const dir = await tempDir()
-    const file = triggersConfigPath(dir)
+    const file = workspaceTriggersConfigPath(dir)
 
     expect(await ensureTriggersConfigFile(file)).toBe(true)
     const text = await readFile(file, 'utf8')
@@ -155,6 +157,37 @@ describe('serializeTriggersConfig', () => {
   })
 })
 
+describe('readMaxConcurrentRunsSetting', () => {
+  it('reads triggers.maxConcurrentRuns from the config dir and falls back on bad values', async () => {
+    const dir = await tempDir()
+    const file = join(dir, 'settings.json')
+    expect(await readMaxConcurrentRunsSetting(dir)).toBe(TRIGGER_DEFAULTS.maxConcurrentRuns)
+
+    await writeFile(file, JSON.stringify({ 'triggers.maxConcurrentRuns': 3 }), 'utf8')
+    expect(await readMaxConcurrentRunsSetting(dir)).toBe(3)
+
+    // Out-of-range / non-integer / unparsable input keeps the machine default.
+    for (const bad of [0, 11, 2.5, '3']) {
+      await writeFile(file, JSON.stringify({ 'triggers.maxConcurrentRuns': bad }), 'utf8')
+      expect(await readMaxConcurrentRunsSetting(dir), String(bad)).toBe(
+        TRIGGER_DEFAULTS.maxConcurrentRuns,
+      )
+    }
+    await writeFile(file, '{ not json', 'utf8')
+    expect(await readMaxConcurrentRunsSetting(dir)).toBe(TRIGGER_DEFAULTS.maxConcurrentRuns)
+  })
+
+  it('accepts JSONC with a trailing comma in settings.json', async () => {
+    const dir = await tempDir()
+    await writeFile(
+      join(dir, 'settings.json'),
+      '{ "triggers.maxConcurrentRuns": 4, }\n',
+      'utf8',
+    )
+    expect(await readMaxConcurrentRunsSetting(dir)).toBe(4)
+  })
+})
+
 describe('TriggerStateStore', () => {
   it('starts empty for a missing or corrupt file and warns on corrupt input', async () => {
     const dir = await tempDir()
@@ -180,8 +213,8 @@ describe('TriggerStateStore', () => {
         pausedAll: false,
         triggers: {},
         pending: [
-          { runId: valid, triggerId: 'a', eventKey: 'poll:1', firedAt: 5 },
-          { runId: '../../escape', triggerId: 'a', eventKey: 'poll:2', firedAt: 6 },
+          { runId: valid, triggerKey: 'k-a', eventKey: 'poll:1', firedAt: 5 },
+          { runId: '../../escape', triggerKey: 'k-a', eventKey: 'poll:2', firedAt: 6 },
         ],
       }),
       'utf8',
@@ -209,18 +242,23 @@ describe('TriggerStateStore', () => {
           baselineDone: true,
           sourceFingerprint: 'poll|id|cmd|30',
           elevatedConfirmed: 'fp',
+          activationConfirmed: 'afp',
         },
         b: 'garbage',
       },
-      pending: [{ runId: 'r1', triggerId: 'a', eventKey: 'poll:1', firedAt: 5 }, { runId: 'r2' }],
+      pending: [
+        { runId: 'r1', triggerKey: 'k-a', eventKey: 'poll:1', firedAt: 5 },
+        { runId: 'r2' },
+      ],
     })
     expect(normalized.pausedAll).toBe(true)
     expect(normalized.triggers['a']?.processed).toEqual({ 'poll:1': { at: 10, status: 'started' } })
     expect(normalized.triggers['a']?.consecutiveFailures).toBe(2)
     expect(normalized.triggers['a']?.sourceFingerprint).toBe('poll|id|cmd|30')
+    expect(normalized.triggers['a']?.activationConfirmed).toBe('afp')
     expect(normalized.triggers['b']?.processed).toEqual({})
     expect(normalized.pending).toEqual([
-      { runId: 'r1', triggerId: 'a', eventKey: 'poll:1', firedAt: 5 },
+      { runId: 'r1', triggerKey: 'k-a', eventKey: 'poll:1', firedAt: 5 },
     ])
   })
 

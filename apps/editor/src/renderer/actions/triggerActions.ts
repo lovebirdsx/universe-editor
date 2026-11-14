@@ -16,6 +16,7 @@ import {
   IOutputService,
   IQuickInputService,
   IViewsService,
+  IWorkspaceService,
   MenuId,
   Severity,
   URI,
@@ -59,6 +60,7 @@ interface TriggerActionServices {
   readonly output: IOutputService
   readonly layout: ILayoutService
   readonly views: IViewsService
+  readonly workspace: IWorkspaceService
   readonly logger: ILogger
 }
 
@@ -74,6 +76,7 @@ function triggerActionServices(accessor: ServicesAccessor): TriggerActionService
     output: accessor.get(IOutputService),
     layout: accessor.get(ILayoutService),
     views: accessor.get(IViewsService),
+    workspace: accessor.get(IWorkspaceService),
     logger: accessor.get(ILoggerService).createLogger({ id: 'triggerActions', name: 'Triggers' }),
   }
 }
@@ -104,7 +107,7 @@ function notifyNoTriggers(services: TriggerActionServices): void {
     severity: Severity.Info,
     message: localize(
       'triggers.none',
-      'No triggers are configured. Run "Triggers: Open Configuration" to create triggers.json.',
+      'No triggers are configured. Run "Triggers: Open Configuration" to create .universe-editor/triggers.json in a workspace.',
     ),
   })
 }
@@ -121,9 +124,9 @@ async function pickTrigger(
     matchOnDescription: true,
     matchOnDetail: true,
   })
-  const triggerId = selected?.triggerId
-  if (triggerId === undefined) return undefined
-  return summaries.find((summary) => summary.id === triggerId)
+  const triggerKey = selected?.triggerKey
+  if (triggerKey === undefined) return undefined
+  return summaries.find((summary) => summary.key === triggerKey)
 }
 
 const PICKER_TEXT: Record<TriggerPickerAction, { pickId: string; placeholder: () => string }> = {
@@ -134,6 +137,14 @@ const PICKER_TEXT: Record<TriggerPickerAction, { pickId: string; placeholder: ()
   resume: {
     pickId: 'workbench.triggers.resume',
     placeholder: () => localize('triggers.pick.resume', 'Select a trigger to resume'),
+  },
+  confirmActivation: {
+    pickId: 'workbench.triggers.confirmActivation',
+    placeholder: () =>
+      localize(
+        'triggers.pick.confirmActivation',
+        'Select a workspace trigger to confirm on this machine',
+      ),
   },
   confirmElevatedMode: {
     pickId: 'workbench.triggers.confirmElevatedMode',
@@ -153,6 +164,11 @@ const PICKER_TEXT: Record<TriggerPickerAction, { pickId: string; placeholder: ()
 const EMPTY_TEXT: Record<TriggerPickerAction, () => string> = {
   pause: () => localize('triggers.empty.pause', 'No triggers can be paused.'),
   resume: () => localize('triggers.empty.resume', 'No paused triggers.'),
+  confirmActivation: () =>
+    localize(
+      'triggers.empty.confirmActivation',
+      'Every trigger from the registered workspaces is already confirmed.',
+    ),
   confirmElevatedMode: () =>
     localize(
       'triggers.empty.confirmElevatedMode',
@@ -177,15 +193,14 @@ async function pickTriggerForAction(
 
 async function runTriggerNow(
   services: TriggerActionServices,
-  triggerId: string,
-  label: string,
+  summary: TriggerSummary,
 ): Promise<void> {
-  services.logger.info(`requesting manual run of trigger ${triggerId}`)
-  await services.triggers.runNow(triggerId)
+  services.logger.info(`requesting manual run of trigger ${summary.id} (${summary.workspace})`)
+  await services.triggers.runNow(summary.key)
   services.notifications.notify({
     severity: Severity.Info,
     message: localize('triggers.runRequested', 'Trigger "{name}" was queued to run.', {
-      name: label,
+      name: summary.name,
     }),
   })
 }
@@ -196,7 +211,7 @@ async function setTriggerPaused(
   paused: boolean,
 ): Promise<void> {
   services.logger.info(`setting trigger ${summary.id} paused=${String(paused)}`)
-  await services.triggers.setPaused(summary.id, paused)
+  await services.triggers.setPaused(summary.key, paused)
   services.notifications.notify({
     severity: Severity.Info,
     message: paused
@@ -206,7 +221,21 @@ async function setTriggerPaused(
 }
 
 async function openTriggerConfig(services: TriggerActionServices): Promise<void> {
-  const uri = URI.parse(await services.triggers.ensureConfigFile())
+  const folder = services.workspace.current?.folder
+  // Definitions live inside a local workspace; remote (and empty) windows have nowhere
+  // to put them, so tell the user instead of failing inside main.
+  if (folder === undefined || folder.scheme !== 'file' || folder.authority.length > 0) {
+    services.notifications.notify({
+      severity: Severity.Warning,
+      message: localize(
+        'triggers.openConfig.noWorkspace',
+        'Open a local folder workspace first. Trigger definitions live in {path} inside the workspace and are not supported for remote workspaces.',
+        { path: '.universe-editor/triggers.json' },
+      ),
+    })
+    return
+  }
+  const uri = URI.parse(await services.triggers.ensureConfigFile(folder.fsPath))
   await services.editors.openEditor(uri, { pinned: true })
 }
 
@@ -230,6 +259,36 @@ async function showTriggerLog(services: TriggerActionServices): Promise<void> {
   revealOutputPanel(services.layout, services.views)
 }
 
+async function confirmTriggerActivation(
+  services: TriggerActionServices,
+  summary: TriggerSummary,
+): Promise<void> {
+  const { confirmed } = await services.dialogs.confirm({
+    type: 'warning',
+    message: localize(
+      'triggers.confirmActivation.message',
+      'Enable trigger "{name}" from workspace "{workspace}"?',
+      { name: summary.name, workspace: summary.workspace },
+    ),
+    detail: localize(
+      'triggers.confirmActivation.detail',
+      'The trigger comes from {path}. It is defined in the workspace configuration file, so it may have arrived with a cloned or pulled repository. Once confirmed it can run unattended with your credentials. The confirmation is stored on this machine and bound to the whole definition — changing any field, including enabling it or renaming it, requires confirming again.',
+      { path: summary.workspace },
+    ),
+    primaryButton: localize('triggers.confirmActivation.primary', 'Enable Trigger'),
+  })
+  if (!confirmed) return
+  await services.triggers.confirmActivation(summary.key)
+  services.notifications.notify({
+    severity: Severity.Info,
+    message: localize(
+      'triggers.confirmActivation.done',
+      'Trigger "{name}" was confirmed and may now run.',
+      { name: summary.name },
+    ),
+  })
+}
+
 async function confirmElevatedMode(
   services: TriggerActionServices,
   summary: TriggerSummary,
@@ -248,7 +307,7 @@ async function confirmElevatedMode(
     primaryButton: localize('triggers.confirmElevated.primary', 'Enable High-Privilege Mode'),
   })
   if (!confirmed) return
-  await services.triggers.confirmElevatedMode(summary.id)
+  await services.triggers.confirmElevatedMode(summary.key)
   services.notifications.notify({
     severity: Severity.Info,
     message: localize(
@@ -277,7 +336,7 @@ async function confirmAutoApprove(
     primaryButton: localize('triggers.confirmAutoApprove.primary', 'Allow Automatic Approve'),
   })
   if (!confirmed) return
-  await services.triggers.confirmAutoApprove(summary.id)
+  await services.triggers.confirmAutoApprove(summary.key)
   services.notifications.notify({
     severity: Severity.Info,
     message: localize(
@@ -295,13 +354,16 @@ async function executeItemAction(
 ): Promise<void> {
   switch (action) {
     case 'runNow':
-      await runTriggerNow(services, summary.id, summary.name)
+      await runTriggerNow(services, summary)
       return
     case 'pause':
       await setTriggerPaused(services, summary, true)
       return
     case 'resume':
       await setTriggerPaused(services, summary, false)
+      return
+    case 'confirmActivation':
+      await confirmTriggerActivation(services, summary)
       return
     case 'confirmElevatedMode':
       await confirmElevatedMode(services, summary)
@@ -471,14 +533,18 @@ export class RunTriggerNowAction extends Action2 {
     const services = triggerActionServices(accessor)
     await runWithErrorNotification(services, async () => {
       const requested = args[0]
-      if (typeof requested === 'string' && requested.length > 0) {
-        await runTriggerNow(services, requested, requested)
-        return
-      }
       const summaries = await services.triggers.listTriggers()
       if (summaries.length === 0) {
         notifyNoTriggers(services)
         return
+      }
+      // The optional argument is a composite workspace + trigger key.
+      if (typeof requested === 'string' && requested.length > 0) {
+        const requestedSummary = summaries.find((summary) => summary.key === requested)
+        if (requestedSummary !== undefined) {
+          await runTriggerNow(services, requestedSummary)
+          return
+        }
       }
       const summary = await pickTrigger(
         services,
@@ -487,7 +553,7 @@ export class RunTriggerNowAction extends Action2 {
         localize('triggers.pick.runNow', 'Select a trigger to run now'),
       )
       if (summary === undefined) return
-      await runTriggerNow(services, summary.id, summary.name)
+      await runTriggerNow(services, summary)
     })
   }
 }
@@ -665,6 +731,110 @@ export class ConfirmTriggerAutoApproveAction extends Action2 {
       const summary = await pickTriggerForAction(services, 'confirmAutoApprove')
       if (summary === undefined) return
       await confirmAutoApprove(services, summary)
+    })
+  }
+}
+
+export class ConfirmTriggerActivationAction extends Action2 {
+  static readonly ID = 'workbench.action.triggers.confirmActivation'
+
+  constructor() {
+    super({
+      id: ConfirmTriggerActivationAction.ID,
+      title: localize2('action.triggers.confirmActivation.title', 'Confirm Workspace Trigger...'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const services = triggerActionServices(accessor)
+    await runWithErrorNotification(services, async () => {
+      const summary = await pickTriggerForAction(services, 'confirmActivation')
+      if (summary === undefined) return
+      await confirmTriggerActivation(services, summary)
+    })
+  }
+}
+
+/**
+ * Stops watching (and scheduling) a workspace registered for background triggers.
+ * Running sessions are left alone; only future scheduling stops.
+ */
+export class RemoveTriggerWorkspaceAction extends Action2 {
+  static readonly ID = 'workbench.action.triggers.removeWorkspace'
+
+  constructor() {
+    super({
+      id: RemoveTriggerWorkspaceAction.ID,
+      title: localize2('action.triggers.removeWorkspace.title', 'Remove Trigger Workspace...'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const services = triggerActionServices(accessor)
+    await runWithErrorNotification(services, async () => {
+      const workspaces = await services.triggers.listWorkspaces()
+      if (workspaces.length === 0) {
+        services.notifications.notify({
+          severity: Severity.Info,
+          message: localize(
+            'triggers.workspace.none',
+            'No workspace is registered for background triggers.',
+          ),
+        })
+        return
+      }
+      const items = workspaces.map((entry, index) => ({
+        id: String(index),
+        label: entry.name,
+        description: entry.workspace,
+        ...(entry.available
+          ? {}
+          : {
+              detail: localize(
+                'triggers.workspace.unavailable',
+                'The configuration file is missing; the workspace is registered but not scheduled.',
+              ),
+            }),
+      }))
+      const selected = await services.quickInput.pick(items, {
+        id: 'workbench.triggers.removeWorkspace',
+        placeholder: localize(
+          'triggers.workspace.pick',
+          'Select a workspace to stop scheduling triggers for',
+        ),
+        matchOnDescription: true,
+      })
+      const index = selected === undefined ? undefined : Number(selected.id)
+      const target = index === undefined ? undefined : workspaces[index]
+      if (target === undefined) return
+      const { confirmed } = await services.dialogs.confirm({
+        type: 'warning',
+        message: localize(
+          'triggers.workspace.remove.message',
+          'Stop scheduling triggers for "{name}"?',
+          { name: target.name },
+        ),
+        detail: localize(
+          'triggers.workspace.remove.detail',
+          'The workspace is removed from this machine only; {path} is left untouched. It is registered again the next time a window opens it.',
+          { path: target.configPath },
+        ),
+        primaryButton: localize('triggers.workspace.remove.primary', 'Stop Scheduling'),
+      })
+      if (!confirmed) return
+      await services.triggers.removeWorkspace(target.workspace)
+      services.notifications.notify({
+        severity: Severity.Info,
+        message: localize(
+          'triggers.workspace.removed',
+          'Triggers for "{name}" are no longer scheduled.',
+          { name: target.name },
+        ),
+      })
     })
   }
 }

@@ -209,8 +209,9 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
-// JSON schema for <userData>/triggers/triggers.json. BlockStartup so the schema
-// is registered before the user opens the config file from a trigger command.
+// JSON schema for `<workspace>/.universe-editor/triggers.json` (glob-matched) and
+// the `triggers.maxConcurrentRuns` setting. BlockStartup so both are registered
+// before the user opens the workspace config file from a trigger command.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.triggersConfiguration',
   TriggersConfigurationContribution,

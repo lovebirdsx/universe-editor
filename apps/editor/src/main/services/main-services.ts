@@ -57,6 +57,8 @@ import { MobileGatewayMainService } from './mobileGateway/mobileGatewayMainServi
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
 import { TriggerMainService } from './triggers/triggerMainService.js'
 import { createTriggerNotifier } from './triggers/electronNotifier.js'
+import { readMaxConcurrentRunsSetting } from './triggers/triggersConfigFile.js'
+import { createWorkspaceTrustProbe } from './triggers/workspaceTrustReader.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
@@ -293,10 +295,18 @@ registerSingletonFactory(ITriggerMainService, (acc) => {
     id: 'triggers',
     name: 'Triggers',
   })
+  const configLocation = acc.get(IConfigLocationService)
   return new TriggerMainService({
     userDataDir: app.getPath('userData'),
     logger,
     notify: createTriggerNotifier(logger),
+    readMaxConcurrentRuns: async () =>
+      readMaxConcurrentRunsSetting((await configLocation.getInfo()).dir),
+    configDirChanged: configLocation.onDidChangeConfigDir,
+    isWorkspaceTrusted: createWorkspaceTrustProbe({
+      storage: acc.get(IMainStorageService),
+      logger,
+    }),
   })
 })
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))

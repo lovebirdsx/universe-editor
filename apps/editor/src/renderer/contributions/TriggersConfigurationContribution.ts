@@ -1,29 +1,37 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Registers the JSON schema for `<userData>/triggers/triggers.json`. The file is
- *  pinned to userData (it does not follow a relocated config directory), so the
- *  exact fileMatch is resolved once at startup. The scheduler reads / writes the
- *  file in main; this contribution only adds completion + validation.
+ *  Registers the JSON schema for `<workspace>/.universe-editor/triggers.json` and the
+ *  machine-wide `triggers.maxConcurrentRuns` setting. The file lives in every
+ *  workspace that opts into triggers, so a glob fileMatch is used (the same shape
+ *  as `.vscode/settings.json`). The scheduler reads / writes the file in main; this
+ *  contribution adds completion + validation and forwards setting changes to main.
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  ConfigurationRegistry,
   Disposable,
+  IConfigurationService,
   type IDisposable,
   type IJSONSchema,
   type IWorkbenchContribution,
   JSONContributionRegistry,
   MutableDisposable,
-  URI,
+  localize,
 } from '@universe-editor/platform'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
 import {
   ELEVATED_MODE_IDS,
   TRIGGER_ACTION_TYPES,
   TRIGGER_DEFAULTS,
+  TRIGGERS_MAX_CONCURRENT_RUNS_KEY,
+  TRIGGERS_WORKSPACE_CONFIG_FILE,
+  TRIGGERS_WORKSPACE_DIR,
 } from '../../shared/triggers/types.js'
-import { schemaFileMatchForUri } from '../services/preferences/schemaFileMatch.js'
 
 const TRIGGERS_SCHEMA_URI = 'universe-editor://schemas/triggers'
+
+/** Workspace-relative path; `makeGlobMatcher` matches it at any depth. */
+export const TRIGGERS_SCHEMA_FILE_MATCH = `**/${TRIGGERS_WORKSPACE_DIR}/${TRIGGERS_WORKSPACE_CONFIG_FILE}`
 
 /** Adds draft-7 `exclusiveMinimum` and `minLength`, which Monaco's JSON service accepts. */
 type TriggerJSONSchema = Omit<IJSONSchema, 'properties' | 'items' | 'oneOf' | 'anyOf'> & {
@@ -197,12 +205,12 @@ const SESSION_SCHEMA: TriggerJSONSchema = {
 
 const TRIGGER_SCHEMA: TriggerJSONSchema = {
   type: 'object',
-  required: ['id', 'workspace', 'source', 'session'],
+  required: ['id', 'source', 'session'],
   properties: {
     id: {
       type: 'string',
       pattern: '^[a-z0-9][a-z0-9-]{0,63}$',
-      description: '唯一 id：小写字母、数字与连字符。',
+      description: '唯一 id：小写字母、数字与连字符；在同一工作区的 triggers.json 内唯一。',
     },
     name: {
       type: 'string',
@@ -212,11 +220,13 @@ const TRIGGER_SCHEMA: TriggerJSONSchema = {
     enabled: {
       type: 'boolean',
       default: false,
-      description: '是否启用；缺省关闭。',
+      description: '是否启用；缺省关闭。首次启用前需在本机确认一次。',
     },
-    workspace: {
-      type: 'string',
-      description: '本机绝对文件夹路径（如 X:/workspace）；不支持远程 authority。',
+    showSession: {
+      type: 'boolean',
+      default: false,
+      description:
+        '启动会话后自动切到该会话。仅当窗口已可见时生效：后台打开的隐藏窗口、最小化/不可见窗口不会被唤醒或拉到前台。修改它会改变配置指纹，需要重新确认。',
     },
     source: SOURCE_SCHEMA,
     session: SESSION_SCHEMA,
@@ -252,13 +262,6 @@ export const TRIGGERS_SCHEMA: TriggerJSONSchema = {
       default: 1,
       description: '配置格式版本，当前固定为 1。',
     },
-    maxConcurrentRuns: {
-      type: 'integer',
-      minimum: 1,
-      maximum: 10,
-      default: TRIGGER_DEFAULTS.maxConcurrentRuns,
-      description: '全局并发运行上限（整数）；缺省 2。',
-    },
     triggers: {
       type: 'array',
       items: TRIGGER_SCHEMA,
@@ -273,22 +276,40 @@ export class TriggersConfigurationContribution
 {
   private readonly _schema = this._register(new MutableDisposable<IDisposable>())
 
-  constructor(@ITriggerMainService private readonly _triggers: ITriggerMainService) {
+  constructor(
+    @IConfigurationService config: IConfigurationService,
+    @ITriggerMainService triggers: ITriggerMainService,
+  ) {
     super()
-    void this._refresh()
-  }
-
-  private async _refresh(): Promise<void> {
-    let uri: URI
-    try {
-      uri = URI.parse(await this._triggers.getConfigFileUri())
-    } catch {
-      return
-    }
     this._schema.value = JSONContributionRegistry.registerSchema({
       uri: TRIGGERS_SCHEMA_URI,
-      fileMatch: [schemaFileMatchForUri(uri)],
+      fileMatch: [TRIGGERS_SCHEMA_FILE_MATCH],
       schema: TRIGGERS_SCHEMA,
     })
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'triggers',
+        title: localize('settings.triggers', 'Agent Triggers'),
+        properties: {
+          [TRIGGERS_MAX_CONCURRENT_RUNS_KEY]: {
+            type: 'integer',
+            default: TRIGGER_DEFAULTS.maxConcurrentRuns,
+            minimum: 1,
+            maximum: 10,
+            description: localize(
+              'settings.triggers.maxConcurrentRuns',
+              'Maximum number of trigger-initiated agent runs that may execute at the same time on this machine. Individual triggers also have their own `concurrency` limit.',
+            ),
+          },
+        },
+      }),
+    )
+    this._register(
+      config.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration(TRIGGERS_MAX_CONCURRENT_RUNS_KEY)) return
+        const value = config.get<number>(TRIGGERS_MAX_CONCURRENT_RUNS_KEY)
+        void triggers.setMaxConcurrentRuns(value ?? TRIGGER_DEFAULTS.maxConcurrentRuns)
+      }),
+    )
   }
 }

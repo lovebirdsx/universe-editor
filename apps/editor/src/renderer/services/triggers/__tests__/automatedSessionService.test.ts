@@ -18,6 +18,7 @@ import type {
 } from '../../acp/session/acpSessionModel.js'
 import type { IAcpSessionService } from '../../acp/session/acpSessionService.js'
 import type { TriggerRunEnd, TriggerRunRequest } from '../../../../shared/triggers/types.js'
+import { TRIGGER_OUTPUT_CONTRACT_SYSTEM } from '../../../../shared/triggers/promptTemplate.js'
 import { AutomatedSessionService } from '../automatedSessionService.js'
 import { StubLoggerService } from '../../../__tests__/_helpers/stubLoggerService.js'
 
@@ -86,7 +87,33 @@ interface Harness {
   readonly createSession: ReturnType<typeof vi.fn>
   readonly setAutomationResult: ReturnType<typeof vi.fn>
   readonly readFileText: ReturnType<typeof vi.fn>
+  readonly writeFile: ReturnType<typeof vi.fn>
+  readonly prompts: string[]
   readonly ends: TriggerRunEnd[]
+}
+
+function fakeRegistry(defaultAgentId = 'claude-code'): IAcpAgentRegistry {
+  const descriptors: Record<string, unknown> = {
+    'claude-code': {
+      id: 'claude-code',
+      name: 'Claude',
+      command: 'claude',
+      args: [],
+      nodeEntry: 'claude',
+    },
+    codex: { id: 'codex', name: 'Codex', command: 'codex', args: [], nodeEntry: 'codex' },
+    // A user entry (no nodeEntry) — even with a built-in id it must not inherit
+    // the fork's prompt capabilities.
+    'third-party': { id: 'third-party', name: 'Third Party', command: 'tp', args: [] },
+  }
+  return {
+    defaultAgentId: () => defaultAgentId,
+    get: (agentId: string) => {
+      const descriptor = descriptors[agentId]
+      if (descriptor === undefined) throw new Error(`unknown agent ${agentId}`)
+      return descriptor
+    },
+  } as unknown as IAcpAgentRegistry
 }
 
 function makeHarness(
@@ -95,6 +122,7 @@ function makeHarness(
     resultRaw?: string
     pendingPrompt?: boolean
     promptError?: string
+    writeFileError?: string
   } = {},
 ): Harness {
   const fake = makeFakeSession(options.initialMode ?? 'default', {
@@ -103,21 +131,31 @@ function makeHarness(
   })
   const createSession = vi.fn(async () => fake.session)
   const sessions = { createSession } as unknown as IAcpSessionService
-  const registry = { defaultAgentId: () => 'claude-code' } as unknown as IAcpAgentRegistry
   const setAutomationResult = vi.fn()
   const history = { setAutomationResult } as unknown as IAcpSessionHistoryService
   const readFileText = vi.fn(async () => options.resultRaw ?? '{"anything":true}')
-  const files = { readFileText } as never
+  const writeFile = vi.fn(async () => {
+    if (options.writeFileError !== undefined) throw new Error(options.writeFileError)
+  })
+  const files = { readFileText, writeFile } as never
   const service = new AutomatedSessionService(
     sessions,
-    registry,
+    fakeRegistry(),
     history,
     files,
     new StubLoggerService(),
   )
   const ends: TriggerRunEnd[] = []
   service.onDidEndRun((end) => ends.push(end))
-  return { service, createSession, setAutomationResult, readFileText, ends }
+  return {
+    service,
+    createSession,
+    setAutomationResult,
+    readFileText,
+    writeFile,
+    prompts: fake.prompts,
+    ends,
+  }
 }
 
 function request(overrides: Partial<TriggerRunRequest> = {}): TriggerRunRequest {
@@ -130,7 +168,9 @@ function request(overrides: Partial<TriggerRunRequest> = {}): TriggerRunRequest 
     },
     cwd: '/repo',
     allowElevatedMode: false,
+    showSession: false,
     prompt: 'do it',
+    promptForSystemContract: 'do it (system contract)',
     runDir: '/userData/triggers/runs/run-1',
     budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 60 },
     allowedActions: [],
@@ -203,7 +243,7 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     const createSession = vi.fn(async () => fake.session)
     const service = new AutomatedSessionService(
       { createSession } as unknown as IAcpSessionService,
-      { defaultAgentId: () => 'claude-code' } as unknown as IAcpAgentRegistry,
+      fakeRegistry(),
       { setAutomationResult: vi.fn() } as unknown as IAcpSessionHistoryService,
       { readFileText: vi.fn() } as never,
       new StubLoggerService(),
@@ -220,7 +260,7 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     const createSession = vi.fn(async () => fake.session)
     const service = new AutomatedSessionService(
       { createSession } as unknown as IAcpSessionService,
-      { defaultAgentId: () => 'third-party' } as unknown as IAcpAgentRegistry,
+      fakeRegistry('third-party'),
       { setAutomationResult: vi.fn() } as unknown as IAcpSessionHistoryService,
       { readFileText: vi.fn() } as never,
       new StubLoggerService(),
@@ -251,6 +291,56 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
       'agent-1',
       expect.objectContaining({ outcome: 'completed' }),
     )
+  })
+
+  it('sends the system-contract variant and appends it for claude', async () => {
+    const h = makeHarness()
+    await h.service.startAutomatedSession(request())
+
+    const [, options] = h.createSession.mock.calls[0]!
+    expect(options).toMatchObject({ systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM })
+    expect(h.prompts).toEqual(['do it (system contract)'])
+
+    const audit = String(h.writeFile.mock.calls[0]?.[1])
+    expect(audit).toContain(`## System prompt append\n${TRIGGER_OUTPUT_CONTRACT_SYSTEM}`)
+    expect(audit).toContain('## 首条用户消息')
+    expect(audit).toContain('do it (system contract)')
+    expect(audit).not.toContain('未使用')
+  })
+
+  it('keeps the contract inline for codex and agents without the capability', async () => {
+    for (const requestOverride of [
+      { agentId: 'codex', mode: 'default' },
+      { agentId: 'third-party', mode: 'default' },
+    ]) {
+      const h = makeHarness()
+      await h.service.startAutomatedSession(request(requestOverride))
+
+      const [, options] = h.createSession.mock.calls[0]!
+      expect(Object.hasOwn(options as object, 'systemPromptAppend')).toBe(false)
+      expect(h.prompts).toEqual(['do it'])
+
+      const audit = String(h.writeFile.mock.calls[0]?.[1])
+      expect(audit).toContain('## System prompt append\n未使用（输出契约已内联到首条消息）')
+      expect(audit).toContain('## 首条用户消息')
+      expect(audit).toContain('do it')
+    }
+  })
+
+  it('fences the audit prompt longer than backticks inside it', async () => {
+    const h = makeHarness()
+    await h.service.startAutomatedSession(request({ promptForSystemContract: '```\ncode\n```' }))
+    const audit = String(h.writeFile.mock.calls[0]?.[1])
+    expect(audit).toContain('````\n```\ncode\n```\n````')
+  })
+
+  it('still starts the run when the prompt audit cannot be written', async () => {
+    const h = makeHarness({ writeFileError: 'disk full' })
+    const started = await h.service.startAutomatedSession(request())
+    expect(started.sessionId).toBe('agent-1')
+    expect(h.prompts).toEqual(['do it (system contract)'])
+    await flush()
+    expect(h.ends[0]).toMatchObject({ outcome: 'completed' })
   })
 
   it('reports a rejected prompt as failed with the error', async () => {

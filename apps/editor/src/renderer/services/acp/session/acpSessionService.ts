@@ -77,6 +77,8 @@ import {
   type IAcpClientNotificationSink,
 } from '../acpClientService.js'
 import { IAcpAgentRegistry } from '../acpAgentRegistry.js'
+import { supportsSystemPromptAppend } from '../agentPromptCapabilities.js'
+import { TRIGGER_OUTPUT_CONTRACT_SYSTEM } from '../../../../shared/triggers/promptTemplate.js'
 import { IEnvironmentSnapshotService } from '../../../../shared/ipc/environmentSnapshotService.js'
 import {
   AcpSessionCreateProfiler,
@@ -289,6 +291,13 @@ export interface IAcpCreateSessionOptions {
    * agent cannot see local paths.
    */
   readonly additionalDirectories?: readonly string[]
+  /**
+   * Static text appended to the agent's preset system prompt
+   * (`_meta.systemPrompt: { append }`, claude fork only). Persisted with the
+   * session: every later load / resume / reconnect must carry the same value or
+   * the fork's fingerprint check rebuilds the session and drops it.
+   */
+  readonly systemPromptAppend?: string
 }
 
 export type McpServerConnectionResolution =
@@ -547,6 +556,17 @@ function claudeCodeMeta(
 }
 
 /**
+ * Top-level `_meta.systemPrompt` for the claude fork. `{ append }` (never a
+ * bare string) keeps the claude_code preset; omitted entirely when the session
+ * has no append. See `ACP_META_KEYS.systemPrompt`.
+ */
+function systemPromptMeta(systemPromptAppend: string | undefined): Record<string, unknown> {
+  return systemPromptAppend === undefined
+    ? {}
+    : { [ACP_META_KEYS.systemPrompt]: { append: systemPromptAppend } }
+}
+
+/**
  * `_meta` for session/load + session/resume: the init-message filter above,
  * plus the model this session is remembered to run (`history.configOptions.model`).
  * The fork re-asserts it after load — a resume otherwise lands on the
@@ -557,12 +577,14 @@ function buildResumeMeta(
   entry: AcpSessionHistoryEntry | undefined,
   candidates: readonly AcpModelCandidate[],
   planPolicy: PlanPermissionPolicy | undefined,
+  systemPromptAppend: string | undefined,
 ): Record<string, unknown> {
   const resumeModel = entry?.configOptions?.['model']
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, resumeModel)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
+    ...systemPromptMeta(systemPromptAppend),
     claudeCode: claudeCodeMeta(planPolicy, resumeModel !== undefined ? { resumeModel } : undefined),
     // Every load/resume rebuilds the fork's model picker from scratch, so the
     // extra candidates must ride along or gateway models vanish from the
@@ -589,11 +611,13 @@ function buildNewSessionMeta(
   candidates: readonly AcpModelCandidate[],
   pick: string | undefined,
   planPolicy: PlanPermissionPolicy | undefined,
+  systemPromptAppend: string | undefined,
 ): Record<string, unknown> {
   const extraModels = candidates.map((c) => c.id)
   const contextWindow = contextWindowFor(candidates, pick)
   const extraModelEffort = buildExtraModelEffortMeta(candidates)
   return {
+    ...systemPromptMeta(systemPromptAppend),
     claudeCode: claudeCodeMeta(planPolicy),
     ...(extraModels.length > 0 ? { [ACP_META_KEYS.extraModels]: extraModels } : {}),
     ...(contextWindow !== undefined ? { [ACP_META_KEYS.modelContextWindow]: contextWindow } : {}),
@@ -1051,6 +1075,9 @@ export class AcpSessionService
       ...(options?.automationRunDir !== undefined
         ? { automationRunDir: options.automationRunDir }
         : {}),
+      ...(options?.systemPromptAppend !== undefined
+        ? { systemPromptAppend: options.systemPromptAppend }
+        : {}),
     })
     this._register(session)
     this._wireAuthGuidance(session)
@@ -1151,6 +1178,18 @@ export class AcpSessionService
       this._logger.warn(`extraModelsForAgent failed: ${(err as Error).message}`)
       return { pick: undefined, candidates: [] }
     }
+  }
+
+  /**
+   * The system-prompt append a resumed automated session must carry. Only the
+   * claude fork understands it; other agents ran with the contract inlined, so
+   * re-sending would be meaningless (and codex ignores it anyway).
+   */
+  private _automationSystemPromptAppend(entry: AcpSessionHistoryEntry): string | undefined {
+    if (entry.automation === undefined) return undefined
+    return supportsSystemPromptAppend(this._registry.get(entry.agentId))
+      ? TRIGGER_OUTPUT_CONTRACT_SYSTEM
+      : undefined
   }
 
   /**
@@ -1267,7 +1306,7 @@ export class AcpSessionService
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._additionalDirectories(authority, options?.additionalDirectories)),
-        _meta: buildNewSessionMeta(extraModels, pick, planPolicy),
+        _meta: buildNewSessionMeta(extraModels, pick, planPolicy, session.systemPromptAppend),
       }
       profile.step('willNewSession')
       const result = await withTimeout(
@@ -1555,6 +1594,10 @@ export class AcpSessionService
         throw new Error('Agent does not advertise agentCapabilities.loadSession — cannot resume')
       }
       const title = entry.title
+      // Automated sessions get the static trigger contract back on every
+      // resume: it is byte-identical by construction, so the fork's fingerprint
+      // matches the session created before the editor restart.
+      const systemPromptAppend = this._automationSystemPromptAppend(entry)
       // Construct the AcpSession BEFORE session/load so any session/update
       // notifications the agent emits during replay route to the right
       // session. Resumed sessions are keyed by the agent-issued id (id ===
@@ -1605,6 +1648,7 @@ export class AcpSessionService
                 : {}),
             }
           : {}),
+        ...(systemPromptAppend !== undefined ? { systemPromptAppend } : {}),
       })
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
@@ -1686,7 +1730,7 @@ export class AcpSessionService
         cwd: cwd ?? '',
         mcpServers: kept,
         ...(await this._builtinAgentDirs(effectiveAuthority)),
-        _meta: buildResumeMeta(entry, extraModels, planPolicy),
+        _meta: buildResumeMeta(entry, extraModels, planPolicy, systemPromptAppend),
       }
       // Replays take turns across sessions (see _replayQueue). The slot wraps
       // only the session/load RPC — the spawn/initialize handshake above and
@@ -1891,7 +1935,12 @@ export class AcpSessionService
                   cwd: cwd ?? '',
                   mcpServers: kept,
                   ...agentDirs,
-                  _meta: buildNewSessionMeta(extraModels, pick, planPolicy),
+                  _meta: buildNewSessionMeta(
+                    extraModels,
+                    pick,
+                    planPolicy,
+                    session.systemPromptAppend,
+                  ),
                 }),
                 timeoutMs,
                 'ACP session/new',
@@ -1906,7 +1955,12 @@ export class AcpSessionService
                   cwd: cwd ?? '',
                   mcpServers: kept,
                   ...agentDirs,
-                  _meta: buildResumeMeta(entry, extraModels, planPolicy),
+                  _meta: buildResumeMeta(
+                    entry,
+                    extraModels,
+                    planPolicy,
+                    session.systemPromptAppend,
+                  ),
                 }),
                 timeoutMs,
                 'ACP session/resume',

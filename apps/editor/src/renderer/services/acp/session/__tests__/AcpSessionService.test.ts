@@ -9158,6 +9158,77 @@ describe('Claude plan permission policy (agentSettings.claude.planPermissionPoli
       await expectSelected(h.svc, resumed, request(resumed), 'allow-once')
     })
   })
+
+  describe('系统提示词 append 写入各生命周期 _meta', () => {
+    const APPEND = 'STATIC SYSTEM CONTRACT'
+
+    it('session/new 带顶层 systemPrompt，且不放进 claudeCode', async () => {
+      const h = await makeHarness()
+      const session = await h.svc.createSession('claude-code', {
+        systemPromptAppend: APPEND,
+      })
+      await session.whenConnected()
+
+      const meta = h.client.connected[0]!.agent.newSessionCalls[0]!._meta as Record<
+        string,
+        Record<string, unknown>
+      >
+      expect(meta['systemPrompt']).toEqual({ append: APPEND })
+      expect(meta['claudeCode']).not.toHaveProperty('systemPrompt')
+    })
+
+    it('未提供 append 时不出现该键', async () => {
+      const h = await makeHarness()
+      await h.connect()
+
+      expect(h.client.connected[0]!.agent.newSessionCalls[0]!._meta).not.toHaveProperty(
+        'systemPrompt',
+      )
+    })
+
+    it('空会话重连 rebuild 时 session/new 仍带同一 append', async () => {
+      const h = await makeHarness()
+      const session = await h.svc.createSession('claude-code', {
+        systemPromptAppend: APPEND,
+      })
+      await session.whenConnected()
+
+      h.client.connected[0]!.disposeLease()
+      await vi.waitFor(() => {
+        expect(session.status.get()).toBe('closed')
+      })
+      await h.svc.resumeSession(session.sessionIdOnAgent.get()!)
+
+      await vi.waitFor(() => {
+        expect(h.client.connected[1]?.agent.newSessionCalls.length).toBe(1)
+      })
+      expect(h.client.connected[1]!.agent.newSessionCalls[0]!._meta).toMatchObject({
+        systemPrompt: { append: APPEND },
+      })
+    })
+
+    it('有 transcript 的会话重连 resume 时 session/resume 仍带同一 append', async () => {
+      const h = await makeHarness({ stubOptions: { loadSession: true } })
+      const session = await h.svc.createSession('claude-code', {
+        systemPromptAppend: APPEND,
+      })
+      await session.whenConnected()
+      await session.sendPrompt('first turn')
+
+      h.client.connected[0]!.disposeLease()
+      await vi.waitFor(() => {
+        expect(session.status.get()).toBe('closed')
+      })
+      await h.svc.resumeSession(session.sessionIdOnAgent.get()!)
+
+      await vi.waitFor(() => {
+        expect(h.client.connected[1]?.agent.resumeSessionCalls.length).toBe(1)
+      })
+      expect(h.client.connected[1]!.agent.resumeSessionCalls[0]!._meta).toMatchObject({
+        systemPrompt: { append: APPEND },
+      })
+    })
+  })
 })
 
 describe('AcpSessionService — automated session permissions', () => {

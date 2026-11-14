@@ -892,8 +892,14 @@ export interface E2EMobileDevice {
 
 /** One trigger as listed by the main-process scheduler. */
 export interface E2ETriggerSummary {
+  /** Composite workspace + trigger id; the argument every trigger command takes. */
+  readonly key: string
   readonly id: string
   readonly name: string
+  /** Absolute local workspace folder that owns the definition. */
+  readonly workspace: string
+  readonly workspaceName: string
+  readonly activationConfirmed: boolean
   readonly sourceType: 'manual' | 'schedule' | 'poll' | 'swarm-review' | 'unknown'
   readonly status: 'disabled' | 'idle' | 'running' | 'paused' | 'invalid' | 'needs-confirmation'
   readonly enabled: boolean
@@ -915,6 +921,7 @@ export interface E2ETriggerAutomationRow {
   readonly automation: {
     readonly triggerId: string
     readonly triggerName: string
+    readonly workspaceName?: string
     readonly eventKey: string
     readonly runId: string
     readonly verdict?: string
@@ -1472,16 +1479,18 @@ export interface E2EProbe {
   /** Triggers as the main-process scheduler currently lists them (config + live state). */
   listTriggers(): Promise<readonly E2ETriggerSummary[]>
   /**
-   * Fire a manual event for a trigger. Resolves once the event was accepted and
-   * queued — NOT when the automated session exists (poll the history rows).
-   * Rejects when the trigger is paused, invalid or needs an elevated-mode
-   * confirmation.
+   * Fire a manual event for a trigger (composite workspace + id key). Resolves once
+   * the event was accepted and queued — NOT when the automated session exists.
+   * Rejects when the trigger is paused, unconfirmed, invalid or needs an
+   * elevated-mode confirmation.
    */
-  runTriggerNow(triggerId: string): Promise<void>
+  runTriggerNow(triggerKey: string): Promise<void>
   /** Pause / resume one trigger through the same main-process entry the list QuickPick uses. */
-  setTriggerPaused(triggerId: string, paused: boolean): Promise<void>
-  /** Absolute fs path of `<userData>/triggers/triggers.json`; the file may not exist yet. */
-  getTriggersConfigPath(): Promise<string>
+  setTriggerPaused(triggerKey: string, paused: boolean): Promise<void>
+  /** Confirm a workspace-defined trigger on this machine (the activation gate). */
+  confirmTriggerActivation(triggerKey: string): Promise<void>
+  /** Absolute fs path of `<userData>/triggers/runs`; run directories live under it. */
+  getTriggersRunsDir(): Promise<string>
   /** Durable history rows started by an agent trigger, with their automation provenance. */
   getAcpAutomationRows(): readonly E2ETriggerAutomationRow[]
   // -- Output probe --------------------------------------------------------

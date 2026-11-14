@@ -1,6 +1,6 @@
 import { parse } from 'jsonc-parser'
 import { describe, expect, it } from 'vitest'
-import { parseTriggersConfig, triggerFingerprint, TRIGGERS_CONFIG_EXAMPLE } from '../configParse.js'
+import { parseTriggersConfig, TRIGGERS_CONFIG_EXAMPLE } from '../configParse.js'
 import {
   isElevatedModeId,
   TRIGGER_DEFAULTS,
@@ -10,7 +10,6 @@ import {
 
 const rawTrigger = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   id: 't1',
-  workspace: 'X:/workspace',
   source: { type: 'manual' },
   session: { prompt: 'go' },
   ...overrides,
@@ -44,11 +43,13 @@ describe('parseTriggersConfig (top level)', () => {
     expect(parseOk({ triggers: [] }).version).toBe(1)
   })
 
-  it('validates maxConcurrentRuns', () => {
-    expect(parseTriggersConfig({ maxConcurrentRuns: 0 }).ok).toBe(false)
-    expect(parseTriggersConfig({ maxConcurrentRuns: 11 }).ok).toBe(false)
-    expect(parseOk({ maxConcurrentRuns: 5 }).maxConcurrentRuns).toBe(5)
-    expect(parseOk({}).maxConcurrentRuns).toBe(TRIGGER_DEFAULTS.maxConcurrentRuns)
+  it('ignores the machine-local maxConcurrentRuns and the legacy workspace fields', () => {
+    // Both moved out of the workspace file: the global limit is a user setting and
+    // the workspace is implied by the file's location.
+    const config = parseOk({ maxConcurrentRuns: 5, triggers: [] })
+    expect(config).not.toHaveProperty('maxConcurrentRuns')
+    const trigger = firstTrigger(rawTrigger({ workspace: 'X:/workspace' }))
+    expect(trigger).not.toHaveProperty('workspace')
   })
 
   it('rejects a non-array triggers field', () => {
@@ -63,7 +64,7 @@ describe('parseTriggersConfig (defaults)', () => {
       id: 't1',
       name: 't1',
       enabled: false,
-      workspace: 'X:/workspace',
+      showSession: false,
       allowedActions: [],
       concurrency: 1,
       overflow: 'queue',
@@ -97,19 +98,22 @@ describe('parseTriggersConfig (trigger fields)', () => {
     expect(invalidErrors(rawTrigger({ enabled: 'yes' })).length).toBeGreaterThan(0)
   })
 
-  it('requires an absolute local workspace path', () => {
-    for (const workspace of [
-      undefined,
-      '',
-      'relative/path',
-      'file:///X:/workspace',
-      '\\\\server\\share',
-      '//server/share',
-    ]) {
-      expect(invalidErrors(rawTrigger({ workspace })).length, String(workspace)).toBeGreaterThan(0)
-    }
-    expect(firstTrigger(rawTrigger({ workspace: '/workspace' })).workspace).toBe('/workspace')
-    expect(firstTrigger(rawTrigger({ workspace: 'C:\\work' })).workspace).toBe('C:\\work')
+  it('defaults showSession to false, passes booleans through and rejects other types', () => {
+    expect(firstTrigger(rawTrigger()).showSession).toBe(false)
+    expect(firstTrigger(rawTrigger({ showSession: true })).showSession).toBe(true)
+    expect(firstTrigger(rawTrigger({ showSession: false })).showSession).toBe(false)
+    expect(invalidErrors(rawTrigger({ showSession: 'yes' })).length).toBeGreaterThan(0)
+    expect(invalidErrors(rawTrigger({ showSession: 1 })).length).toBeGreaterThan(0)
+  })
+
+  it('enforces id uniqueness inside one file', () => {
+    const duplicated = parseOk({
+      version: 1,
+      triggers: [rawTrigger({ id: 'same' }), rawTrigger({ id: 'same' })],
+    })
+    expect(duplicated.triggers).toHaveLength(0)
+    expect(duplicated.invalid).toHaveLength(2)
+    expect(duplicated.invalid[0]?.errors.join(' ')).toContain('duplicate')
   })
 
   it('validates concurrency and overflow', () => {
@@ -295,26 +299,6 @@ describe('parseTriggersConfig (session)', () => {
         key,
       ).toBeGreaterThan(0)
     }
-  })
-})
-
-describe('triggerFingerprint', () => {
-  it('is stable across field order and changes with config', () => {
-    const trigger = firstTrigger(rawTrigger({ enabled: true }))
-    const reordered: TriggerConfig = {
-      overflow: trigger.overflow,
-      session: trigger.session,
-      source: trigger.source,
-      workspace: trigger.workspace,
-      enabled: trigger.enabled,
-      name: trigger.name,
-      id: trigger.id,
-      allowedActions: trigger.allowedActions,
-      concurrency: trigger.concurrency,
-    }
-    expect(triggerFingerprint(reordered)).toBe(triggerFingerprint(trigger))
-    expect(triggerFingerprint({ ...trigger, enabled: false })).not.toBe(triggerFingerprint(trigger))
-    expect(triggerFingerprint(trigger)).toMatch(/^[0-9a-f]{8}$/)
   })
 })
 

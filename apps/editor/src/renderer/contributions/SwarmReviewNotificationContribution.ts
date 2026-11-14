@@ -179,7 +179,16 @@ export class SwarmReviewNotificationContribution
     super()
     this._logger = loggerService.createLogger({ id: 'swarmNotify', name: 'Swarm Notifications' })
     this._triggerReporter = new SwarmTriggerReporter({
-      report: (reviews) => this._triggerMain.reportSwarmNeedsAction(reviews),
+      report: (reviews) => {
+        const folder = this._workspace.current?.folder
+        const workspace =
+          folder !== undefined && folder.scheme === 'file' && folder.authority.length === 0
+            ? folder.fsPath
+            : undefined
+        return workspace === undefined
+          ? this._triggerMain.reportSwarmNeedsAction(reviews)
+          : this._triggerMain.reportSwarmNeedsAction(reviews, workspace)
+      },
       getReviewVersion: (reviewId) => this._loadReviewVersion(reviewId),
       logger: this._logger,
     })

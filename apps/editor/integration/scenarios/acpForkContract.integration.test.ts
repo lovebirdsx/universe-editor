@@ -229,6 +229,11 @@ const EXPECTED_DIST_METHODS: Record<ForkId, readonly string[]> = {
     'universe-editor/capabilities',
     'extraModels',
     'extraModelEffort',
+    // Top-level `_meta.systemPrompt: { append }` read by session/new, load and
+    // resume. Automated runs use it to keep the result-file contract out of the
+    // user message; dropping the reader silently strands every trigger run on
+    // an agent that never learns where to write result.json.
+    'systemPrompt',
     // The catalog entry the editor's read-only side-task pin depends on: a
     // catalog without it silently drops the pin and the fork inherits the
     // parent's (possibly writable) mode. Scan the label, not `dontAsk` — the

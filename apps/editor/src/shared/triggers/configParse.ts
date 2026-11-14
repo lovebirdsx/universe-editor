@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Parser / validator for the user-edited `<userData>/triggers/triggers.json`.
+ *  Parser / validator for a workspace's `.universe-editor/triggers.json`.
  *  A known field that is present but invalid rejects only that trigger (listed under
- *  `invalid`); unknown fields are ignored.
+ *  `invalid`); unknown fields are ignored. The workspace is implied by the file's
+ *  location, so there is no `workspace` field and ids are unique per file only.
  *--------------------------------------------------------------------------------------------*/
 
 import { parseCron } from './cron.js'
@@ -49,7 +50,7 @@ function isPositiveNumber(value: unknown): value is number {
 }
 
 /** Windows drive or POSIX root; UNC shares and URI forms are rejected. */
-function isAbsoluteLocalPath(path: string): boolean {
+export function isAbsoluteLocalPath(path: string): boolean {
   const value = path.trim()
   if (value.length === 0) return false
   if (value.includes('://')) return false
@@ -318,14 +319,11 @@ function parseTrigger(raw: unknown, index: number): ParsedTrigger {
     else errors.push('"enabled" must be a boolean')
   }
 
-  let workspace = ''
-  const workspaceRaw = raw['workspace']
-  if (!isNonEmptyString(workspaceRaw)) {
-    errors.push('"workspace" must be a non-empty string')
-  } else if (!isAbsoluteLocalPath(workspaceRaw)) {
-    errors.push('"workspace" must be an absolute local folder path')
-  } else {
-    workspace = workspaceRaw.trim()
+  let showSession = false
+  if (hasOwn(raw, 'showSession')) {
+    const value = raw['showSession']
+    if (typeof value === 'boolean') showSession = value
+    else errors.push('"showSession" must be a boolean')
   }
 
   const sourceResult = parseSource(raw['source'])
@@ -364,7 +362,7 @@ function parseTrigger(raw: unknown, index: number): ParsedTrigger {
       id,
       name,
       enabled,
-      workspace,
+      showSession,
       source: sourceResult.source,
       session: sessionResult.session,
       allowedActions,
@@ -379,13 +377,6 @@ export function parseTriggersConfig(raw: unknown): ParseTriggersConfigResult {
 
   if (hasOwn(raw, 'version') && raw['version'] !== 1) {
     return { ok: false, error: '"version" must be 1' }
-  }
-
-  let maxConcurrentRuns: number = TRIGGER_DEFAULTS.maxConcurrentRuns
-  if (hasOwn(raw, 'maxConcurrentRuns')) {
-    const value = raw['maxConcurrentRuns']
-    if (isIntegerInRange(value, 1, 10)) maxConcurrentRuns = value
-    else return { ok: false, error: '"maxConcurrentRuns" must be an integer between 1 and 10' }
   }
 
   const triggersRaw = hasOwn(raw, 'triggers') ? raw['triggers'] : []
@@ -410,46 +401,22 @@ export function parseTriggersConfig(raw: unknown): ParseTriggersConfigResult {
     else invalid.push({ id: displayId, errors })
   }
 
-  return { ok: true, config: { version: 1, maxConcurrentRuns, triggers, invalid } }
+  return { ok: true, config: { version: 1, triggers, invalid } }
 }
 
-function canonicalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalize)
-  if (isRecord(value)) {
-    const sorted: Record<string, unknown> = {}
-    for (const key of Object.keys(value).sort()) sorted[key] = canonicalize(value[key])
-    return sorted
-  }
-  return value
-}
-
-function fnv1a32(text: string): string {
-  let hash = 0x811c9dc5
-  for (let index = 0; index < text.length; index++) {
-    hash ^= text.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-  return hash.toString(16).padStart(8, '0')
-}
-
-/** Stable fingerprint of the canonical (key-order independent) trigger JSON. */
-export function triggerFingerprint(trigger: TriggerConfig): string {
-  return fnv1a32(JSON.stringify(canonicalize(trigger)))
-}
-
-/** JSONC template written by "Triggers: 打开配置" when the file does not exist yet. */
-export const TRIGGERS_CONFIG_EXAMPLE = `// Agent 触发器配置（保存后热加载）。
-// workspace 必须是本机绝对路径；所有示例默认关闭（enabled: false）。
+/** JSONC template written by "Triggers: Open Configuration" when the file does not exist yet. */
+export const TRIGGERS_CONFIG_EXAMPLE = `// Agent 触发器配置（保存在工作区 .universe-editor/ 下，可提交入库；保存后热加载）。
+// 触发器只对此工作区生效；所有示例默认关闭（enabled: false）。
 {
   "version": 1,
-  "maxConcurrentRuns": 2,
   "triggers": [
     {
       // Swarm 审核分诊：每个待处理审核触发一次
       "id": "swarm-review",
       "name": "Swarm 审核分诊",
       "enabled": false,
-      "workspace": "X:/workspace",
+      // 运行开始时切到会话（仅在窗口已可见时生效；后台/最小化窗口不会被唤醒）
+      "showSession": false,
       "source": { "type": "swarm-review" },
       "session": {
         "agent": "claude-code",
@@ -467,7 +434,6 @@ export const TRIGGERS_CONFIG_EXAMPLE = `// Agent 触发器配置（保存后热�
       "id": "weekly-digest",
       "name": "团队周报",
       "enabled": false,
-      "workspace": "X:/workspace",
       "source": { "type": "schedule", "cron": "0 9 * * 1", "onMissed": "skip" },
       "session": { "skill": "team-weekly-digest" }
     },
@@ -476,7 +442,6 @@ export const TRIGGERS_CONFIG_EXAMPLE = `// Agent 触发器配置（保存后热�
       "id": "reqs-watch",
       "name": "需求轮询",
       "enabled": false,
-      "workspace": "X:/workspace",
       "source": {
         "type": "poll",
         "intervalSec": 600,
