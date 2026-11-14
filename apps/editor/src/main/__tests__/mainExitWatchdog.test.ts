@@ -72,7 +72,7 @@ describe.skipIf(!runnable)('startMainExitWatchdog', () => {
           addonPath,
           targetPid,
         }),
-      ).toBe(true)
+      ).toBeDefined()
       // Let the detached child open the target before force-killing it; production
       // starts the watchdog minutes before a death, this is only test-time pressure.
       await new Promise((resolve) => setTimeout(resolve, 1500))
@@ -108,13 +108,45 @@ describe.skipIf(!runnable)('startMainExitWatchdog', () => {
           addonPath,
           targetPid,
         }),
-      ).toBe(true)
+      ).toBeDefined()
       const record = await waitForRecord(dir)
       expect(record).toMatchObject({
         pid: targetPid,
         exitCode: 0xc0000005,
         exitCodeHex: '0xC0000005',
       })
+    } finally {
+      if (isAlive(targetPid)) {
+        try {
+          process.kill(targetPid)
+        } catch {}
+      }
+    }
+  })
+
+  it('stop reaps the watchdog without recording anything', async () => {
+    const dir = sessionDir()
+    const target = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+      stdio: 'ignore',
+    })
+    const targetPid = requirePid(target)
+    try {
+      const watchdog = startMainExitWatchdog({
+        sessionDir: dir,
+        execPath: process.execPath,
+        addonPath,
+        targetPid,
+      })
+      expect(watchdog).toBeDefined()
+      // Let the detached child open the target handle, matching the production
+      // case where the watchdog has been waiting for the whole session.
+      await new Promise((resolve) => setTimeout(resolve, 1500))
+      const watchdogPid = watchdog?.pid
+      await watchdog?.stop()
+      expect(watchdogPid === undefined || !isAlive(watchdogPid)).toBe(true)
+      // A clean quit: the target is still running, so there is no exit code to record.
+      expect(readMainExitRecord(dir)).toBeUndefined()
+      expect(isAlive(targetPid)).toBe(true)
     } finally {
       if (isAlive(targetPid)) {
         try {
@@ -132,6 +164,6 @@ describe.skipIf(!runnable)('startMainExitWatchdog', () => {
         execPath: process.execPath,
         addonPath: join(dir, 'missing', 'process_job.node'),
       }),
-    ).toBe(false)
+    ).toBeUndefined()
   })
 })

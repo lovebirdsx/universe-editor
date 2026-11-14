@@ -84,15 +84,37 @@ waitForProcessExit(pid).then(
 )
 `
 
+/** How long a clean quit waits for the killed watchdog to be reaped. */
+const STOP_TIMEOUT_MS = 2000
+
 /**
- * Spawn the watchdog. Returns whether a process was started; callers treat the
- * whole feature as best-effort and must not branch startup on it.
+ * Handle on the running watchdog. A clean quit must call {@link stop}: a live
+ * child process at teardown leaves Electron's native shutdown waiting on it
+ * forever (the browser process quits, but the OS process object never does).
  */
-export function startMainExitWatchdog(options: MainExitWatchdogOptions): boolean {
-  if (process.platform !== 'win32') return false
+export interface MainExitWatchdog {
+  readonly pid: number | undefined
+  /**
+   * Terminate the watchdog. Only for a quit that is already committed — the
+   * exit-code record is meaningless afterwards (will-quit removes the sentinel,
+   * so the next launch never reads it). Resolves once the child is reaped, or
+   * after a bounded timeout so quit can never wedge on it.
+   */
+  stop(): Promise<void>
+}
+
+/**
+ * Spawn the watchdog. Returns the handle, or undefined when the platform/addon
+ * cannot support it; callers treat the whole feature as best-effort and must
+ * not branch startup on it.
+ */
+export function startMainExitWatchdog(
+  options: MainExitWatchdogOptions,
+): MainExitWatchdog | undefined {
+  if (process.platform !== 'win32') return undefined
   if (!existsSync(options.addonPath)) {
     options.logger?.warn('exit watchdog disabled: native addon missing')
-    return false
+    return undefined
   }
   const env: NodeJS.ProcessEnv = { ...process.env }
   // A user/tooling NODE_OPTIONS can inject --require hooks the watchdog does not
@@ -109,6 +131,10 @@ export function startMainExitWatchdog(options: MainExitWatchdogOptions): boolean
       stdio: 'ignore',
       env,
     })
+    let exited = false
+    child.once('exit', () => {
+      exited = true
+    })
     // An async spawn error (e.g. execPath vanished) must not become an
     // uncaughtException in the process the watchdog is meant to observe. Log only
     // the error code: the message usually embeds the (user-visible) exec path.
@@ -120,13 +146,32 @@ export function startMainExitWatchdog(options: MainExitWatchdogOptions): boolean
     options.logger?.info(
       `exit watchdog started pid=${child.pid ?? '?'} target=${env['UE_WATCHDOG_PID']}`,
     )
-    return true
+    return {
+      pid: child.pid,
+      stop: () => {
+        if (exited) return Promise.resolve()
+        return new Promise<void>((resolve) => {
+          const timer = setTimeout(done, STOP_TIMEOUT_MS)
+          timer.unref?.()
+          function done(): void {
+            clearTimeout(timer)
+            resolve()
+          }
+          child.once('exit', done)
+          try {
+            child.kill()
+          } catch {
+            done()
+          }
+        })
+      },
+    }
   } catch (error) {
     const code =
       error instanceof Error && 'code' in error
         ? String((error as NodeJS.ErrnoException).code ?? 'unknown')
         : 'unknown'
     options.logger?.warn(`exit watchdog failed to start (${code})`)
-    return false
+    return undefined
   }
 }

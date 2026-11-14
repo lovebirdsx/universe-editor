@@ -28,7 +28,7 @@ POSIX 评估过 `PR_SET_PDEATHSIG`：它只对**直接**子进程生效、在 ma
 
 ## 组成
 
-- `packages/process-job/`：极小的 Windows-only N-API addon（`createJob/assign/terminate/close/listPids`，句柄走 BigInt）。`install` 即 node-gyp 构建，非 win32 跳过；`CI=true` 或 `--require` 时构建失败直接报错，`UNIVERSE_SKIP_NATIVE_BUILD=1` 跳过。`listProcesses`（全量 pid→ppid 快照）是**可选导出**：旧 addon 缺失时只禁用孤儿清扫，job containment 不受影响。`waitForProcessExit(pid)`（异步，线程池里 `WaitForSingleObject`）供退出码 watchdog 使用，**不参与** job containment；watchdog 自身 `detached` spawn 以逃出 libuv 全局 job，也从不登记进 registry。
+- `packages/process-job/`：极小的 Windows-only N-API addon（`createJob/assign/terminate/close/listPids`，句柄走 BigInt）。`install` 即 node-gyp 构建，非 win32 跳过；`CI=true` 或 `--require` 时构建失败直接报错，`UNIVERSE_SKIP_NATIVE_BUILD=1` 跳过。`listProcesses`（全量 pid→ppid 快照）是**可选导出**：旧 addon 缺失时只禁用孤儿清扫，job containment 不受影响。`waitForProcessExit(pid)`（异步，线程池里 `WaitForSingleObject`）供退出码 watchdog 使用，**不参与** job containment；watchdog 自身 `detached` spawn 以逃出 libuv 全局 job，也从不登记进 registry；干净退出时由 main 在 `before-quit` 里 `stop()` 并等待回收（存活的子进程会让 Electron 原生 teardown 永远等下去），崩溃/强杀则走不到这里，记录仍由 watchdog 完成。
 - `packages/node-services/src/process/processLifecycle.ts`：`ProcessLifecycleRegistry`。owner = `{window,id}` 或 `app`，role 是字符串标签；slot 按 owner 聚合条目与 job 句柄（Windows 上每个进程树一个 job，见上）。`startOrphanSweep()` 启动 P1 的定时清扫（见下）。
 - `jobBackend.ts`：加载 addon，缺失 / 形状不对 / `UNIVERSE_DISABLE_PROCESS_JOB=1` 时返回 `undefined`（全部降级，行为等同改动前）。
 - `ManagedChildProcess` 的 `lifecycle: { registry, owner, role, stop, reapDescendantsOnRelease }` 选项：构造即登记、退出即释放；`stop: 'stdin-eof'`（ext host）回收时先关 stdin，宽限后升级为 kill；`reapDescendantsOnRelease` 透传为跟踪条目的释放语义。

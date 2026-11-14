@@ -139,7 +139,7 @@ import {
 import { concludeAbnormalExit, type ForensicsLine } from './abnormalExitConclusion.js'
 import { readExitScene } from './exitSceneForensics.js'
 import { readMainExitRecord } from './mainExitForensics.js'
-import { startMainExitWatchdog } from './mainExitWatchdog.js'
+import { startMainExitWatchdog, type MainExitWatchdog } from './mainExitWatchdog.js'
 import { collectWerEvents } from './werForensics.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
@@ -681,6 +681,8 @@ let applicationServices: ApplicationServices | null = null
 let windowMainService: WindowMainService | null = null
 let windowsJumpList: WindowsJumpList | null = null
 let backgroundMode: BackgroundModeMainService | null = null
+let mainExitWatchdog: MainExitWatchdog | undefined
+let mainExitWatchdogStop: Promise<void> | undefined
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
 // 所以仅在 dev（运行的是通用 electron.exe）下显式设置，并使用专属的 dev 图标以区分发布版。
@@ -1012,7 +1014,7 @@ void app.whenReady().then(async () => {
   // TerminateProcess. E2E deliberately kills/quits main as part of its checks and
   // asserts process-tree cleanup, so it runs without the extra detached child.
   if (!e2eEnabled) {
-    startMainExitWatchdog({
+    mainExitWatchdog = startMainExitWatchdog({
       sessionDir: logMainService.getSessionDir(),
       execPath: process.execPath,
       addonPath: resolveProcessJobAddonPath(),
@@ -1150,6 +1152,28 @@ void app.whenReady().then(async () => {
   })
 })
 
+/**
+ * Reap the exit-code watchdog before the quit is finalized. Electron's native
+ * teardown waits on every live child process, so a still-running watchdog (it
+ * waits for us by design) leaves the browser window gone but the OS process
+ * alive forever. Called only once the quit is committed — will-quit disarms the
+ * sentinel, so no later launch reads the record the watchdog would have written.
+ */
+function stopMainExitWatchdog(): Promise<void> {
+  if (mainExitWatchdogStop !== undefined) return mainExitWatchdogStop
+  const watchdog = mainExitWatchdog
+  mainExitWatchdog = undefined
+  if (watchdog === undefined) return Promise.resolve()
+  mainLogger.info('stopping exit watchdog for shutdown')
+  mainExitWatchdogStop = watchdog.stop().then(() => {
+    mainLogger.info('exit watchdog stopped')
+    // Cleared only after the child is gone, so the re-entrant quit below passes
+    // the guard instead of preventing itself forever.
+    mainExitWatchdogStop = undefined
+  })
+  return mainExitWatchdogStop
+}
+
 app.on('window-all-closed', () => {
   mainLogger.info(`window-all-closed platform=${process.platform}`)
   if (process.platform !== 'darwin') {
@@ -1171,6 +1195,12 @@ app.on('before-quit', (e) => {
     mainLogger.info('before-quit proceed')
     recordShutdownMark('beforeQuit.proceed')
     void windowMainService?.captureSessionForQuit()
+    // A live watchdog child keeps Electron's native shutdown waiting on it forever
+    // (the browser quits, the process never does). Reap it first, then quit again.
+    if (mainExitWatchdog !== undefined || mainExitWatchdogStop !== undefined) {
+      e.preventDefault()
+      void stopMainExitWatchdog().then(() => app.quit())
+    }
     return
   }
   // First pass: ask every window's renderer before committing to the quit, so
@@ -1199,6 +1229,9 @@ app.on('before-quit', (e) => {
     // is synchronous and can only hard-kill, which orphans a slow-starting
     // tsserver; draining the cascade here reaps the whole tree cleanly.
     await applicationServices?.extensionHost.stopAll().catch(() => undefined)
+    // Same reason as the proceed branch above: the quit is committed, so the
+    // exit-code watchdog has nothing left to record and must not outlive us.
+    await stopMainExitWatchdog()
     app.quit()
   })()
 })

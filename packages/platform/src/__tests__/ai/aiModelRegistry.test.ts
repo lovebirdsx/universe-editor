@@ -673,3 +673,54 @@ describe('AiModelRegistry — one unreachable endpoint stays contained', () => {
     }
   })
 })
+
+describe('AiModelRegistry — dispose', () => {
+  it('releases the parent-token subscription of a discovery still in flight', async () => {
+    // A token that counts how many cancellation listeners are still attached.
+    let listeners = 0
+    const parent: CancellationToken = {
+      isCancellationRequested: false,
+      onCancellationRequested: () => {
+        listeners++
+        let active = true
+        return {
+          dispose: () => {
+            if (!active) return
+            active = false
+            listeners--
+          },
+        }
+      },
+    }
+
+    vi.useFakeTimers()
+    try {
+      let release: ((models: readonly string[]) => void) | undefined
+      const reg = new AiModelRegistry()
+      reg.registerProvider(
+        'ollama',
+        fakeProvider(
+          () =>
+            new Promise<readonly string[]>((resolve) => {
+              release = resolve
+            }),
+        ),
+      )
+      reg.setProviders([provider('dead', [discovering('ollama')])])
+
+      // Discovery subscribes to the parent token synchronously, then hangs on an
+      // endpoint that never answers — its `finally` only runs after dispose.
+      const pending = reg.getModels(parent)
+      expect(listeners).toBe(1)
+
+      reg.dispose()
+      expect(listeners).toBe(0)
+
+      // Settle the abandoned discovery so the test leaves nothing dangling.
+      release?.([])
+      await pending
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

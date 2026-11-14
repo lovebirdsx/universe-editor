@@ -68,6 +68,8 @@ export class AiModelRegistry extends Disposable {
   private _knowledgeFingerprint = computeKnowledgeFingerprint({})
   /** provider id → when its last discovery attempt failed (see _discover). */
   private readonly _discoveryFailedAt = new Map<string, number>()
+  /** Discovery sources still in flight, torn down synchronously on dispose. */
+  private readonly _discoverySources = new Set<CancellationTokenSource>()
 
   private readonly _onDidChangeModels = this._register(new Emitter<void>())
   readonly onDidChangeModels: Event<void> = this._onDidChangeModels.event
@@ -268,6 +270,7 @@ export class AiModelRegistry extends Disposable {
       return { models: [], failed: true }
     }
     const cts = new CancellationTokenSource(token)
+    this._discoverySources.add(cts)
     let timer: ReturnType<typeof setTimeout> | undefined
     // Race rather than await: cancelling asks the provider to stop, but a provider
     // that ignores its token would otherwise still stall every other entry.
@@ -291,6 +294,7 @@ export class AiModelRegistry extends Disposable {
       return { models: [], failed: true }
     } finally {
       clearTimeout(timer)
+      this._discoverySources.delete(cts)
       cts.dispose()
     }
   }
@@ -304,6 +308,15 @@ export class AiModelRegistry extends Disposable {
   }
 
   override dispose(): void {
+    // A discovery still waiting on a dead endpoint only releases its parent-token
+    // subscription from the request's own `finally` — a microtask that would run
+    // after the process-exit leak check. Cancel (so the provider's abort pipeline
+    // tears down in this tick) and dispose here instead; `finally` stays correct.
+    for (const cts of this._discoverySources) {
+      cts.cancel()
+      cts.dispose()
+    }
+    this._discoverySources.clear()
     this._providers.clear()
     this._entries.clear()
     this._discoveryFailedAt.clear()
