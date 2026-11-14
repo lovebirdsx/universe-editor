@@ -235,13 +235,15 @@ export type TriggerRunReportReadResult =
   | {
       readonly kind: 'ok'
       readonly text: string
-      /** Resolved run directory, used as the Markdown base for relative resources. */
+      /** Run directory URI string (file: or remote-ssh:), the Markdown base for relative resources. */
       readonly runDir: string
       /** Report file mtime (Unix ms). */
       readonly modifiedAt: number
     }
   | { readonly kind: 'not-found' }
   | { readonly kind: 'too-large' }
+  /** The run lives on a remote host that is not connected right now. */
+  | { readonly kind: 'unavailable' }
 
 /** Upper bound for `report.md` on both the phone gateway and the desktop reader. */
 export const MAX_TRIGGER_REPORT_BYTES = 512 * 1024

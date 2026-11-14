@@ -4372,6 +4372,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'triggers.item.elevatedUnconfirmed': '⚠ 已配置高权限模式但尚未确认；未确认前该触发器不会运行。',
   'triggers.item.needsActivation': '待确认：该触发器来自工作区配置，在本机确认前不会运行。',
   'triggers.item.error': '错误：{error}',
+  'triggers.item.offline': '远程主机未连接',
+  'triggers.item.offlineDetail':
+    '远程主机已断开。重新连接后该触发器会自动恢复；错过的事件按触发源规则处理。',
   'triggers.action.runNow': '立即运行',
   'triggers.action.resume': '恢复',
   'triggers.action.pause': '暂停',
@@ -4446,6 +4449,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'triggers.error.notElevatedMode': '该触发器未使用高权限模式。',
   'triggers.error.approveNotAllowed': '该触发器未允许 swarm.approve 动作。',
   'triggers.error.configWriteFailed': '无法创建触发器配置文件。',
+  'triggers.error.remoteNotConnected': '该触发器的远程主机未连接。请重新连接后再试。',
   'triggers.error.triggerInvalid': '触发器配置无效：{errors}',
   'triggers.error.triggerNotFound': '未找到触发器：{id}',
   'triggers.error.runFailed': '自动化运行失败。',

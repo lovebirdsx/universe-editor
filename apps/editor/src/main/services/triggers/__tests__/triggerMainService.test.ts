@@ -1499,7 +1499,7 @@ describe('TriggerMainService run reports', () => {
     expect(result.kind).toBe('ok')
     if (result.kind !== 'ok') throw new Error('expected a readable report')
     expect(result.text).toBe('# 报告\n\n正文')
-    expect(result.runDir.endsWith(RUN_ID)).toBe(true)
+    expect(result.runDir).toBe(URI.file(runDir).toString())
     expect(result.modifiedAt).toBeGreaterThan(0)
   })
 
@@ -1602,9 +1602,7 @@ describe('TriggerMainService workspace activation gate', () => {
     expect(sameId.every((entry) => entry.activationConfirmed === false)).toBe(true)
     expect(new Set(sameId.map((entry) => entry.workspaceName)).size).toBe(2)
 
-    const secondKey = sameId.find(
-      (entry) => entry.workspace === URI.file(second).toString(),
-    )!.key
+    const secondKey = sameId.find((entry) => entry.workspace === URI.file(second).toString())!.key
     await harness.service.confirmActivation(secondKey)
     const afterConfirm = await harness.service.listTriggers()
     expect(afterConfirm.find((entry) => entry.key === harness.key)?.activationConfirmed).toBe(false)

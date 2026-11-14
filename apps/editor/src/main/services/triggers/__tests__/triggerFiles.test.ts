@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for the trigger file adapters: triggers.json (JSONC) + state.json + run dir retention.
+ *  Tests for the trigger file adapters: triggers.json (JSONC) + state.json.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
+import { readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
@@ -21,7 +21,6 @@ import {
   normalizeTriggerStateFile,
   TriggerStateStore,
 } from '../triggerStateStore.js'
-import { pruneRunDirectories } from '../triggerMainService.js'
 import { TRIGGER_DEFAULTS } from '../../../../shared/triggers/types.js'
 
 const dirs: string[] = []
@@ -283,38 +282,5 @@ describe('TriggerStateStore', () => {
       const text = await readFile(file, 'utf8')
       expect(JSON.parse(text)).toMatchObject({ pausedAll: true })
     })
-  })
-})
-
-describe('pruneRunDirectories', () => {
-  it('keeps the newest directories and removes the rest', async () => {
-    const dir = await tempDir()
-    for (let index = 0; index < 4; index++) {
-      const runDir = join(dir, `run-${index}`)
-      await mkdir(runDir, { recursive: true })
-      await writeFile(join(runDir, 'result.json'), '{}', 'utf8')
-      const stamp = new Date(Date.now() + index * 1000)
-      await utimes(runDir, stamp, stamp)
-    }
-    await pruneRunDirectories(dir, 2)
-    const remaining = (await readdir(dir)).sort()
-    expect(remaining).toEqual(['run-2', 'run-3'])
-  })
-
-  it('never deletes a protected (active / queued) run directory', async () => {
-    const dir = await tempDir()
-    for (let index = 0; index < 4; index++) {
-      const runDir = join(dir, `run-${index}`)
-      await mkdir(runDir, { recursive: true })
-      const stamp = new Date(Date.now() + index * 1000)
-      await utimes(runDir, stamp, stamp)
-    }
-    await pruneRunDirectories(dir, 1, undefined, new Set(['run-0', 'run-2']))
-    const remaining = (await readdir(dir)).sort()
-    expect(remaining).toEqual(['run-0', 'run-2', 'run-3'])
-  })
-
-  it('is a no-op for a missing root', async () => {
-    await expect(pruneRunDirectories(join(await tempDir(), 'nope'), 2)).resolves.toBeUndefined()
   })
 })

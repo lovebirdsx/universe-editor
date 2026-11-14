@@ -54,9 +54,10 @@ export interface ITriggerMainService {
   reportRunEnd(end: TriggerRunEnd): Promise<void>
   /**
    * Read one run's `report.md` by run id. The file name and directory are
-   * rebuilt in main; callers never pass a path.
+   * rebuilt in main; callers never pass a path. `authority` selects the remote
+   * host whose run directory holds the report; it never triggers a connection.
    */
-  readRunReport(runId: string): Promise<TriggerRunReportReadResult>
+  readRunReport(runId: string, authority?: string): Promise<TriggerRunReportReadResult>
   /**
    * The full current "needs me" review list seen by a window's swarm poller (same
    * filter as the sidebar notification). main applies the persistent per-trigger

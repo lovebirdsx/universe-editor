@@ -13,7 +13,7 @@
  *  an event payload, prompt, verdict summary or command output.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, readFile, readdir, rm, stat } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import {
   Disposable,
@@ -22,6 +22,7 @@ import {
   generateUuid,
   localize,
   normalizeRemoteAuthority,
+  RemoteChannels,
   REMOTE_SCHEME,
   URI,
   type Event,
@@ -29,6 +30,12 @@ import {
   type ILogger,
   type IOpenWindowInfo,
 } from '@universe-editor/platform'
+import {
+  isValidTriggerRunId,
+  pruneRunDirectories,
+  type IRemoteTriggerService,
+  type PollFetchResult,
+} from '@universe-editor/node-services'
 import {
   swarmReviewEvent,
   type ITriggerRunHost,
@@ -115,6 +122,8 @@ import {
 } from './triggerStateStore.js'
 import { createPollCommandFetcher, type PollCommandFetcher } from './pollCommandFetcher.js'
 import { SessionReportReader } from './runReportReader.js'
+import { getMachineId } from '../host/machineId.js'
+import { remotePathFromUri } from '../remote/remoteUri.js'
 import type {
   IRemoteConnectionService,
   IRemoteConnectionStateChange,
@@ -161,7 +170,7 @@ export interface TriggerMainServiceOptions {
   /** Re-read the user setting when the config directory moves. */
   readonly configDirChanged?: Event<string>
   /** Machine-local trusted-folder probe used before running a poll command. */
-  readonly isWorkspaceTrusted?: (workspace: string) => Promise<boolean>
+  readonly isWorkspaceTrusted?: (workspaceUri: string) => Promise<boolean>
   /** Scheme-routed filesystem gateway; remote workspace configs need it. */
   readonly fileService?: IFileService
   /** Gate and lifecycle source for remote workspace configs. */
@@ -170,6 +179,10 @@ export interface TriggerMainServiceOptions {
   readonly createRemoteConfigStore?: (
     options: RemoteTriggerConfigStoreOptions,
   ) => TriggerConfigStore
+  /** This installation's id; namespaces its run directories on a shared remote host. */
+  readonly clientId?: () => Promise<string>
+  /** Extra wait on top of the poll command's own timeout before the RPC is abandoned. */
+  readonly remotePollGraceMs?: number
 }
 
 /** A trigger config resolved against the workspace entry that owns it. */
@@ -238,6 +251,23 @@ const WATCHDOG_GRACE_MS = 10 * 60_000
 /** Filesystem-visible prefixes owned by a single trigger source. */
 const PREFETCHED_KEY_PREFIXES = ['poll:', 'swarm:'] as const
 
+const DEFAULT_REMOTE_POLL_GRACE_MS = 10_000
+
+/**
+ * The event was accepted but cannot start right now (remote workspace offline /
+ * no window): keep it pending, release the slot, and do not count a failure.
+ */
+class DeferredRunError extends Error {
+  constructor(readonly reason: string) {
+    super(reason)
+    this.name = 'DeferredRunError'
+  }
+}
+
+type RemotePollOutcome =
+  | { readonly kind: 'result'; readonly result: PollFetchResult }
+  | { readonly kind: 'skipped'; readonly reason: string }
+
 export class TriggerMainService extends Disposable implements ITriggerMainService {
   declare readonly _serviceBrand: undefined
 
@@ -265,6 +295,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private readonly _createRemoteConfigStore: (
     options: RemoteTriggerConfigStoreOptions,
   ) => TriggerConfigStore
+  private readonly _clientId: () => Promise<string>
+  private readonly _remotePollGraceMs: number
+  private _clientIdPromise: Promise<string> | undefined
   private readonly _queue = new RunQueue<PendingRun>(TRIGGER_DEFAULTS.maxConcurrentRuns)
   private readonly _onDidChangeTriggers = this._register(new Emitter<readonly TriggerSummary[]>())
   readonly onDidChangeTriggers: Event<readonly TriggerSummary[]> = this._onDidChangeTriggers.event
@@ -317,6 +350,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._createRemoteConfigStore =
       options.createRemoteConfigStore ??
       ((storeOptions) => new RemoteTriggerConfigStore(storeOptions))
+    const userDataDir = options.userDataDir
+    this._clientId = options.clientId ?? (() => getMachineId(userDataDir))
+    this._remotePollGraceMs = Math.max(0, options.remotePollGraceMs ?? DEFAULT_REMOTE_POLL_GRACE_MS)
     if (options.remoteConnections !== undefined) {
       this._register(
         options.remoteConnections.onDidChangeState((change) =>
@@ -701,16 +737,42 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._fireChange()
   }
 
-  async readRunReport(runId: string): Promise<TriggerRunReportReadResult> {
-    const result = await this._reportReader.read(runId)
-    if (!result.ok) {
-      return { kind: result.reason === 'too_large' ? 'too-large' : 'not-found' }
+  async readRunReport(runId: string, authority?: string): Promise<TriggerRunReportReadResult> {
+    if (authority === undefined) {
+      const result = await this._reportReader.read(runId)
+      if (!result.ok) {
+        return { kind: result.reason === 'too_large' ? 'too-large' : 'not-found' }
+      }
+      return {
+        kind: 'ok',
+        text: Buffer.from(result.bytes).toString('utf8'),
+        runDir: URI.file(result.runDir).toString(),
+        modifiedAt: result.modifiedAt,
+      }
     }
-    return {
-      kind: 'ok',
-      text: Buffer.from(result.bytes).toString('utf8'),
-      runDir: result.runDir,
-      modifiedAt: result.modifiedAt,
+    // Reading must never dial the remote host: only an already connected tunnel
+    // can answer, otherwise the report tab / phone shows "unavailable".
+    if (!this._remoteConnected(authority)) return { kind: 'unavailable' }
+    if (!isValidTriggerRunId(runId)) return { kind: 'not-found' }
+    try {
+      const clientId = await this._resolveClientId()
+      const result = await this._remoteTriggerService(authority).readReport(clientId, runId, {
+        maxBytes: MAX_TRIGGER_REPORT_BYTES,
+      })
+      if (!result.ok) {
+        return { kind: result.reason === 'too_large' ? 'too-large' : 'not-found' }
+      }
+      return {
+        kind: 'ok',
+        text: Buffer.from(result.bytes).toString('utf8'),
+        runDir: result.runDir.toString(),
+        modifiedAt: result.modifiedAt,
+      }
+    } catch (err) {
+      this._logger.warn(
+        `run ${runId}: cannot read the remote report from '${authority}': ${describeError(err)}`,
+      )
+      return { kind: 'unavailable' }
     }
   }
 
@@ -976,6 +1038,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       }
       await this._registry.register(workspace)
       await this._attachWorkspace(workspace)
+      const key = workspaceComparisonKey(workspace)
+      // A remote workspace only becomes startable again once it is attached,
+      // connected and held by a window: then deferred events can replay.
+      if (isRemoteWorkspaceUri(uri) && this._workspaces.has(key) && this._hasOpenWindowFor(key)) {
+        this._replayDeferredEvents(workspace)
+      }
     } catch (err) {
       this._logger.warn(
         `trigger workspace discovery failed for ${workspace}: ${describeError(err)}`,
@@ -1068,10 +1136,15 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._logger.info(`trigger workspace attached: ${workspace}`)
   }
 
-  /** Stop scheduling a workspace; its queued events are dropped, running runs finish. */
-  private _detachWorkspace(key: string): void {
+  /**
+   * Stop scheduling a workspace; its queued events are dropped, running runs finish.
+   * `keepPending` is for a remote workspace whose last window closed: accepted
+   * events stay durable so reopening the window (while connected) replays them.
+   */
+  private _detachWorkspace(key: string, options: { keepPending?: boolean } = {}): void {
     const entry = this._workspaces.get(key)
     if (entry === undefined) return
+    const keepPending = options.keepPending === true
     const triggerKeys = new Set<string>()
     for (const trigger of entry.config.triggers) {
       triggerKeys.add(triggerKeyFor(entry.workspace, trigger.id))
@@ -1093,9 +1166,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       this._nextPoll.delete(triggerKey)
     }
     for (const pending of [...this._queued.values()]) {
-      if (triggerKeyBelongsToWorkspace(pending.triggerKey, key)) this._dropPending(pending)
+      if (!triggerKeyBelongsToWorkspace(pending.triggerKey, key)) continue
+      this._queued.delete(pending.runId)
+      if (!keepPending) this._forgetKey(pending.triggerKey, pending.eventKey, pending.runId)
     }
-    this._dropPendingRecordsForWorkspace(key)
+    if (!keepPending) this._dropPendingRecordsForWorkspace(key)
     this._pruneTiming()
     this._rescheduleWake()
   }
@@ -1121,7 +1196,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     for (const [key, entry] of [...this._workspaces]) {
       if (entry.authority === undefined || this._hasOpenWindowFor(key)) continue
       this._logger.info(`remote trigger workspace detached (no window open): ${entry.workspace}`)
-      this._detachWorkspace(key)
+      this._detachWorkspace(key, { keepPending: true })
     }
     this._fireChange()
   }
@@ -1129,7 +1204,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   /** The hard gate for every remote read / watcher start (never triggers bring-up). */
   private _remoteIoAllowed(authority: string): boolean {
     if (this._fileService === undefined || this._remoteConnections === undefined) return false
-    return this._remoteConnections.getState(authority) === 'connected'
+    return this._remoteConnected(authority)
+  }
+
+  /** Connection-state-only gate for calls that need nothing but the tunnel. */
+  private _remoteConnected(authority: string): boolean {
+    return this._remoteConnections?.getState(authority) === 'connected'
   }
 
   private async _remoteConfigExists(workspaceUri: URI): Promise<boolean> {
@@ -1143,6 +1223,103 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       )
       return false
     }
+  }
+
+  /** Fresh proxy per call: the connection service owns reuse and re-binding. */
+  private _remoteTriggerService(authority: string): IRemoteTriggerService {
+    const connections = this._remoteConnections
+    if (connections === undefined) {
+      throw new Error('triggers: the remote connection service is not available')
+    }
+    return connections.getServiceProxy<IRemoteTriggerService>(authority, RemoteChannels.TriggerPoll)
+  }
+
+  private _resolveClientId(): Promise<string> {
+    this._clientIdPromise ??= this._clientId()
+    return this._clientIdPromise
+  }
+
+  private _workspaceAuthority(workspaceUri: URI): string | undefined {
+    return workspaceUri.scheme === REMOTE_SCHEME
+      ? normalizeRemoteAuthority(workspaceUri.authority)
+      : undefined
+  }
+
+  /** Run ids a per-client remote prune must never delete, for one authority. */
+  private _protectedRunIdsForAuthority(authority: string): readonly string[] {
+    const ids = new Set<string>()
+    const collect = (runId: string, triggerKey: string): void => {
+      if (this._authorityOfKey(triggerKey) === authority) ids.add(runId)
+    }
+    for (const run of this._active.values()) collect(run.runId, run.triggerKey)
+    for (const run of this._queued.values()) collect(run.runId, run.triggerKey)
+    for (const record of this._state.pending) collect(record.runId, record.triggerKey)
+    return [...ids]
+  }
+
+  private _authorityOfKey(triggerKey: string): string | undefined {
+    const parsed = parseTriggerKey(triggerKey)
+    const entry = parsed === undefined ? undefined : this._workspaces.get(parsed.workspaceKey)
+    return entry?.authority === undefined ? undefined : normalizeRemoteAuthority(entry.authority)
+  }
+
+  /**
+   * Poll on the remote host through `triggerPoll`. A disconnected transport or an
+   * RPC that never answers is skipped — never a trigger failure — because the
+   * workspace simply was not reachable during this round.
+   */
+  private async _pollRemote(
+    authority: string,
+    trigger: RoutedTrigger,
+    source: Extract<TriggerSourceConfig, { type: 'poll' }>,
+  ): Promise<RemotePollOutcome> {
+    if (!this._remoteIoAllowed(authority)) {
+      return { kind: 'skipped', reason: `remote '${authority}' is not connected` }
+    }
+    const command = source.fetch
+    const timeoutMs = Math.max(0, command.timeoutSec * 1000) + this._remotePollGraceMs
+    this._logger.debug(
+      `trigger ${trigger.id}: remote poll in ${trigger.workspace} (timeout ${command.timeoutSec}s)`,
+    )
+    try {
+      const call = this._remoteTriggerService(authority).poll({
+        command: command.command,
+        cwd: trigger.workspaceUri,
+        timeoutSec: command.timeoutSec,
+        keyField: source.keyField,
+      })
+      const result = await this._raceRemotePoll(call, timeoutMs)
+      if (result === undefined) {
+        return { kind: 'skipped', reason: `no answer within ${timeoutMs}ms` }
+      }
+      return { kind: 'result', result }
+    } catch (err) {
+      return { kind: 'skipped', reason: `transport error: ${describeError(err)}` }
+    }
+  }
+
+  private async _raceRemotePoll(
+    call: Promise<PollFetchResult>,
+    timeoutMs: number,
+  ): Promise<PollFetchResult | undefined> {
+    let timedOut = false
+    let timer: TriggerTimerHandle | undefined
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = this._clock.setTimeout(() => {
+        timedOut = true
+        resolve(undefined)
+      }, timeoutMs)
+    })
+    const answered = call.then(
+      (result) => (timedOut ? undefined : result),
+      (err: unknown) => {
+        if (timedOut) return undefined
+        throw err
+      },
+    )
+    const result = await Promise.race([answered, timeout])
+    if (timer !== undefined) this._clock.clearTimeout(timer)
+    return result
   }
 
   private _isWorkspaceOffline(trigger: RoutedTrigger): boolean {
@@ -1210,6 +1387,17 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._pruneTiming()
     this._rescheduleWake()
     this._fireChange()
+  }
+
+  /**
+   * Re-run the pending-event pass now that a remote workspace is attached,
+   * connected and held by a window. Events deferred earlier (accepted, then
+   * disconnected / window gone) are re-enqueued by the normal replay path.
+   */
+  private _replayDeferredEvents(workspace: string): void {
+    if (!this._gateOpen || this._disposed) return
+    this._logger.info(`replaying pending trigger events for ${workspace}`)
+    void this._replayPendingRuns()
   }
 
   /** Re-read a remote workspace after reconnecting (also revives the offline entry). */
@@ -1536,20 +1724,32 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._nextPoll.set(trigger.key, this._clock.now() + intervalMs)
     this._rescheduleWake()
 
-    // The poll command runs in main with the user's privileges: never execute it
-    // for an untrusted workspace, independently of the per-window trust check at
-    // run start (a background window may not exist until a run actually starts).
-    if (!(await this._trustedForPoll(trigger.workspaceUri.fsPath))) {
+    // The poll command runs in main (or on the remote host) with the user's
+    // privileges: never execute it for an untrusted workspace, independently of
+    // the per-window trust check at run start (a background window may not exist
+    // until a run actually starts).
+    if (!(await this._trustedForPoll(trigger.workspaceUri.toString()))) {
       this._logger.info(`trigger ${trigger.id}: poll skipped (workspace is not trusted)`)
       return
     }
 
-    const result = await this._fetchPollItems({
-      command: source.fetch.command,
-      cwd: trigger.workspaceUri.fsPath,
-      timeoutSec: source.fetch.timeoutSec,
-      keyField: source.keyField,
-    })
+    const authority = this._workspaceAuthority(trigger.workspaceUri)
+    let result: PollFetchResult
+    if (authority === undefined) {
+      result = await this._fetchPollItems({
+        command: source.fetch.command,
+        cwd: trigger.workspaceUri.fsPath,
+        timeoutSec: source.fetch.timeoutSec,
+        keyField: source.keyField,
+      })
+    } else {
+      const outcome = await this._pollRemote(authority, trigger, source)
+      if (outcome.kind === 'skipped') {
+        this._logger.info(`trigger ${trigger.id}: remote poll skipped (${outcome.reason})`)
+        return
+      }
+      result = outcome.result
+    }
     const now = this._clock.now()
     const current = this._findTrigger(trigger.key)
     if (current === undefined || !this._isRunnable(current, { ignoreBackoff: true })) {
@@ -1597,13 +1797,13 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   }
 
   /** Unknown checker (tests / embedding) keeps the pre-existing behavior. */
-  private async _trustedForPoll(workspace: string): Promise<boolean> {
+  private async _trustedForPoll(workspaceUri: string): Promise<boolean> {
     const check = this._isWorkspaceTrusted
     if (check === undefined) return true
     try {
-      return await check(workspace)
+      return await check(workspaceUri)
     } catch (err) {
-      this._logger.warn(`workspace trust check failed for ${workspace}: ${describeError(err)}`)
+      this._logger.warn(`workspace trust check failed for ${workspaceUri}: ${describeError(err)}`)
       return false
     }
   }
@@ -1739,6 +1939,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     // those are not failures, so release the slot and forget the key quietly.
     const manual = pending.eventKey.startsWith('manual:')
     if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
+      if (trigger !== undefined && this._isWorkspaceOffline(trigger)) {
+        // Disconnect after acceptance: the event stays pending for a replay.
+        this._deferRun(pending, 'remote workspace went offline')
+        return
+      }
       this._logger.info(
         `run ${pending.runId}: not started trigger=${pending.triggerId} key=${pending.eventKey} (no longer runnable)`,
       )
@@ -1769,8 +1974,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           localize('triggers.error.workspaceUntrusted', 'The workspace is not trusted'),
         )
       }
-      const runDir = await this._createRunDir(pending.runId)
-      const request = this._buildRunRequest(trigger, pending, event, runDir)
+      const authority = this._workspaceAuthority(trigger.workspaceUri)
+      const runDir =
+        authority === undefined
+          ? await this._createLocalRunDir(pending.runId)
+          : await this._createRemoteRunDir(authority, pending.runId)
+      const request = this._buildRunRequest(trigger, pending, event, runDir, authority)
       const result = await this._startHostRun(host, request, pending.runId)
       if (result === undefined) {
         throw new Error(
@@ -1802,12 +2011,34 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       )
       this._fireChange()
     } catch (err) {
+      if (err instanceof DeferredRunError) {
+        this._deferRun(pending, err.reason)
+        return
+      }
       const message = err instanceof Error ? err.message : String(err)
       this._logger.warn(
         `run ${pending.runId}: start failed trigger=${pending.triggerId} key=${pending.eventKey}: ${message}`,
       )
       this._failActiveRun(pending.runId, message)
     }
+  }
+
+  /**
+   * Release the queue slot but keep the durable pending record and its `queued`
+   * dedupe status: reconnect + an open window replays it. Never a failure, never
+   * a backoff (docs/development/triggers.md §4 "deferred").
+   */
+  private _deferRun(pending: PendingRun, reason: string): void {
+    const active = this._active.get(pending.runId)
+    if (active !== undefined) {
+      this._clearWatchdog(active)
+      this._active.delete(pending.runId)
+    }
+    this._releaseSlot(pending.runId)
+    this._logger.info(
+      `run ${pending.runId}: deferred trigger=${pending.triggerId} key=${pending.eventKey} (${reason}); the event stays pending`,
+    )
+    this._fireChange()
   }
 
   /**
@@ -1910,6 +2141,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       if (host !== undefined) return { host, windowId: immediate }
     }
 
+    if (trigger.workspaceUri.scheme === REMOTE_SCHEME) {
+      // Remote workspaces are never woken up in the background and never dial SSH:
+      // without a live connection and an already open window the event is deferred.
+      const authority = normalizeRemoteAuthority(trigger.workspaceUri.authority)
+      if (!this._remoteIoAllowed(authority)) {
+        throw new DeferredRunError(`remote '${authority}' is not connected`)
+      }
+      throw new DeferredRunError('no open window holds this remote workspace')
+    }
+
     const provider = this._windows
     if (provider === undefined) {
       throw new Error(
@@ -1971,8 +2212,15 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     pending: PendingRun,
     event: TriggerEvent,
     runDir: string,
+    authority: string | undefined,
   ): TriggerRunRequest {
     const session = trigger.session
+    // Host-native paths: the renderer hands them to the agent session as-is.
+    // Remote cwd is derived from the workspace URI, never with a local path.join.
+    const cwd =
+      authority === undefined
+        ? join(trigger.workspaceUri.fsPath, session.cwd ?? '')
+        : remotePathFromUri(URI.joinPath(trigger.workspaceUri, session.cwd ?? ''))
     const promptOptions = {
       trigger: { id: trigger.id, name: trigger.name },
       template: session.prompt,
@@ -2000,7 +2248,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       },
       ...(session.agent === undefined ? {} : { agentId: session.agent }),
       showSession: trigger.showSession,
-      cwd: join(trigger.workspaceUri.fsPath, session.cwd ?? ''),
+      cwd,
+      ...(authority === undefined ? {} : { authority }),
       ...(session.mode === undefined ? {} : { mode: session.mode }),
       allowElevatedMode: elevated,
       ...(session.model === undefined ? {} : { model: session.model }),
@@ -2051,17 +2300,49 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
   }
 
-  private async _createRunDir(runId: string): Promise<string> {
+  private async _createLocalRunDir(runId: string): Promise<string> {
     const runDir = join(this._runsDir, runId)
     await mkdir(runDir, { recursive: true })
     // Retention must never delete a directory whose run is still alive.
-    const protectedRunIds = new Set<string>([
+    await pruneRunDirectories(this._runsDir, {
+      keep: this._maxRunDirectories,
+      protectedRunIds: this._protectedRunIds(),
+      logger: this._logger,
+    })
+    return runDir
+  }
+
+  private _protectedRunIds(): ReadonlySet<string> {
+    return new Set<string>([
       ...this._active.keys(),
       ...this._queued.keys(),
       ...this._state.pending.map((record) => record.runId),
     ])
-    await pruneRunDirectories(this._runsDir, this._maxRunDirectories, this._logger, protectedRunIds)
-    return runDir
+  }
+
+  /**
+   * Remote run directories are owned by the server: send ids and the retention
+   * policy only. The returned URI is host-native via `remotePathFromUri`.
+   */
+  private async _createRemoteRunDir(authority: string, runId: string): Promise<string> {
+    if (!this._remoteConnected(authority)) {
+      throw new DeferredRunError(`remote '${authority}' is not connected`)
+    }
+    const clientId = await this._resolveClientId()
+    try {
+      const { runDir } = await this._remoteTriggerService(authority).createRunDir(clientId, runId, {
+        keep: this._maxRunDirectories,
+        protectedRunIds: this._protectedRunIdsForAuthority(authority),
+      })
+      const path = remotePathFromUri(runDir)
+      this._logger.info(`run ${runId}: remote run directory ${path} (client ${clientId})`)
+      return path
+    } catch (err) {
+      if (!this._remoteConnected(authority)) {
+        throw new DeferredRunError(`remote '${authority}' disconnected while creating the run dir`)
+      }
+      throw err
+    }
   }
 
   private _pendingPayloadPath(runId: string): string {
@@ -2078,6 +2359,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     const trigger = this._findTrigger(item.triggerKey)
     const manual = item.eventKey.startsWith('manual:')
     if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
+      if (trigger !== undefined && this._isWorkspaceOffline(trigger)) {
+        // The queue slot is already released by the drain that produced this item;
+        // keep the pending record so a reconnect replays it.
+        this._queued.delete(item.runId)
+        this._logger.info(
+          `run ${item.runId}: deferred trigger=${item.triggerId} key=${item.eventKey} (remote workspace went offline)`,
+        )
+        this._fireChange()
+        return
+      }
       // Paused / disabled while queued: not a failure, just drop the reservation.
       this._logger.info(
         `run ${item.runId}: dropped trigger=${item.triggerId} key=${item.eventKey} (no longer runnable)`,
@@ -2415,44 +2706,6 @@ function sourceFingerprintOf(source: TriggerSourceConfig): string {
     case 'manual':
       return 'manual'
   }
-}
-
-/** Keeps the newest `keep` run directories (by mtime) and deletes the rest. */
-export async function pruneRunDirectories(
-  root: string,
-  keep: number,
-  logger?: ILogger,
-  protectedRunIds: ReadonlySet<string> = new Set<string>(),
-): Promise<void> {
-  let names: string[]
-  try {
-    const entries = await readdir(root, { withFileTypes: true })
-    names = entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
-  } catch {
-    return
-  }
-  if (names.length <= keep) return
-  const stats = await Promise.all(
-    names.map(async (name) => {
-      try {
-        return { name, at: (await stat(join(root, name))).mtimeMs }
-      } catch {
-        return undefined
-      }
-    }),
-  )
-  const ordered = stats
-    .filter((entry): entry is { name: string; at: number } => entry !== undefined)
-    .sort((left, right) => right.at - left.at || right.name.localeCompare(left.name))
-  const doomed = ordered.filter((entry) => !protectedRunIds.has(entry.name)).slice(keep)
-  for (const entry of doomed) {
-    try {
-      await rm(join(root, entry.name), { recursive: true, force: true })
-    } catch (err) {
-      logger?.warn(`cannot remove old run directory ${entry.name}: ${describeError(err)}`)
-    }
-  }
-  if (doomed.length > 0) logger?.info(`removed ${doomed.length} old run director(ies)`)
 }
 
 function remoteNotConnectedMessage(): string {
