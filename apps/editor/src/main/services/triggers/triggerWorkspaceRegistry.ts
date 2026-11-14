@@ -2,20 +2,24 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Machine-local registry of workspaces whose `.universe-editor/triggers.json` the
  *  scheduler keeps watching (`<userData>/triggers/workspaces.json`). A workspace is
- *  registered the first time a local window opens it with that file present, and it
- *  keeps running after every window for it closes. Never committed.
+ *  registered the first time a window opens it with that file present, and it
+ *  keeps running after every window for it closes. Entries are workspace URI
+ *  strings (`file:` / `remote-ssh:`). Version 1 files held bare local paths and are
+ *  discarded on load — this file is machine-local, re-opening the workspace
+ *  registers it again. Never committed.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFile } from 'node:fs/promises'
 import type { ILogger } from '@universe-editor/platform'
-import { isAbsoluteLocalPath } from '../../../shared/triggers/configParse.js'
+import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
 import { writeJsonAtomic } from '../jsonConfig/atomicFile.js'
 import { workspaceComparisonKey } from './triggerIdentity.js'
 
 export const TRIGGERS_WORKSPACES_FILE_NAME = 'workspaces.json'
+const FILE_VERSION = 2
 
 interface RegistryFile {
-  readonly version: 1
+  readonly version: 2
   readonly workspaces: readonly string[]
 }
 
@@ -39,7 +43,7 @@ export class TriggerWorkspaceRegistry {
     return this._file
   }
 
-  /** Absolute local workspace folders, in registration order. */
+  /** Workspace URI strings, in registration order. */
   list(): readonly string[] {
     return [...this._workspaces]
   }
@@ -64,16 +68,17 @@ export class TriggerWorkspaceRegistry {
 
   /** Idempotent; returns true when the registry changed. */
   register(workspace: string): Promise<boolean> {
-    if (!isAbsoluteLocalPath(workspace)) {
-      this._logger.warn(`refusing to register a non-local workspace path: ${workspace}`)
+    const value = toWorkspaceUriString(workspace)
+    if (value === undefined) {
+      this._logger.warn(`refusing to register an unsupported workspace uri: ${workspace}`)
       return Promise.resolve(false)
     }
-    const key = workspaceComparisonKey(workspace)
+    const key = workspaceComparisonKey(value)
     if (this._workspaces.some((entry) => workspaceComparisonKey(entry) === key)) {
       return Promise.resolve(false)
     }
-    this._workspaces = [...this._workspaces, workspace]
-    this._logger.info(`trigger workspace registered: ${workspace}`)
+    this._workspaces = [...this._workspaces, value]
+    this._logger.info(`trigger workspace registered: ${value}`)
     return this._write().then(() => true)
   }
 
@@ -88,7 +93,7 @@ export class TriggerWorkspaceRegistry {
   }
 
   private _write(): Promise<void> {
-    const value: RegistryFile = { version: 1, workspaces: this._workspaces }
+    const value: RegistryFile = { version: FILE_VERSION, workspaces: this._workspaces }
     this._serial = this._serial.then(
       () => writeJsonAtomic(this._file, value),
       () => writeJsonAtomic(this._file, value),
@@ -101,19 +106,34 @@ export class TriggerWorkspaceRegistry {
 
 function normalizeRegistry(raw: unknown, logger: ILogger): string[] {
   if (typeof raw !== 'object' || raw === null) return []
-  const workspaces = (raw as { workspaces?: unknown }).workspaces
-  if (!Array.isArray(workspaces)) return []
+  const file = raw as { version?: unknown; workspaces?: unknown }
+  if (file.version !== FILE_VERSION) {
+    if (file.version !== undefined) {
+      logger.info(
+        `${TRIGGERS_WORKSPACES_FILE_NAME} version ${String(file.version)} is obsolete; starting empty`,
+      )
+    }
+    return []
+  }
+  if (!Array.isArray(file.workspaces)) return []
   const result: string[] = []
-  for (const entry of workspaces) {
-    if (typeof entry !== 'string' || !isAbsoluteLocalPath(entry)) {
+  for (const entry of file.workspaces) {
+    const value = toWorkspaceUriString(entry)
+    if (value === undefined) {
       logger.warn(`dropping an invalid workspace entry from ${TRIGGERS_WORKSPACES_FILE_NAME}`)
       continue
     }
-    const key = workspaceComparisonKey(entry)
+    const key = workspaceComparisonKey(value)
     if (result.some((existing) => workspaceComparisonKey(existing) === key)) continue
-    result.push(entry)
+    result.push(value)
   }
   return result
+}
+
+/** Registered entries are URI strings; a bare path is not a workspace identity here. */
+function toWorkspaceUriString(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.includes('://')) return undefined
+  return parseWorkspaceUri(value)?.toString()
 }
 
 function describeError(err: unknown): string {

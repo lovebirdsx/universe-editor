@@ -6,6 +6,7 @@
  *  location, so there is no `workspace` field and ids are unique per file only.
  *--------------------------------------------------------------------------------------------*/
 
+import { REMOTE_SCHEME, URI } from '@universe-editor/platform'
 import { parseCron } from './cron.js'
 import {
   TRIGGER_ACTION_TYPES,
@@ -50,13 +51,43 @@ function isPositiveNumber(value: unknown): value is number {
 }
 
 /** Windows drive or POSIX root; UNC shares and URI forms are rejected. */
-export function isAbsoluteLocalPath(path: string): boolean {
+function isAbsoluteLocalPath(path: string): boolean {
   const value = path.trim()
   if (value.length === 0) return false
   if (value.includes('://')) return false
   if (value.startsWith('\\\\') || value.startsWith('//')) return false
   if (/^[A-Za-z]:[\\/]/.test(value)) return true
   return value.startsWith('/')
+}
+
+/**
+ * A workspace folder identity is a URI string: `file:` without an authority (a
+ * bare path from an older caller is accepted for the composite-key rebuild) or
+ * `remote-ssh:` with an authority and an absolute path. Anything else — relative
+ * paths, UNC file URIs, unsupported schemes — is not a scheduler workspace.
+ */
+export function parseWorkspaceUri(value: unknown): URI | undefined {
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return undefined
+  if (!trimmed.includes('://')) {
+    return isAbsoluteLocalPath(trimmed) ? URI.file(trimmed) : undefined
+  }
+  const uri = URI.parse(trimmed)
+  if (uri.scheme === 'file') {
+    if (uri.authority.length > 0) return undefined
+    return isAbsoluteLocalPath(uri.fsPath) ? uri : undefined
+  }
+  if (uri.scheme === REMOTE_SCHEME) {
+    if (uri.authority.length === 0) return undefined
+    return uri.path.startsWith('/') ? uri : undefined
+  }
+  return undefined
+}
+
+/** Human-facing path for a workspace URI string; never render the raw URI in UI. */
+export function workspaceDisplayPath(workspace: string): string {
+  return parseWorkspaceUri(workspace)?.fsPath ?? workspace
 }
 
 interface ParseErrors {

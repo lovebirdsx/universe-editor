@@ -25,7 +25,7 @@ const dirs: string[] = []
 const services: TriggerMainService[] = []
 
 function keyOf(workspace: string, id = 'trigger-1'): string {
-  return triggerKeyFor(workspace, id)
+  return triggerKeyFor(URI.file(workspace).toString(), id)
 }
 
 /** Swarm reports identify the window's workspace by URI string. */
@@ -244,7 +244,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   // The registry is what keeps a workspace scheduled after its windows close.
   await writeFile(
     join(triggerDir, 'workspaces.json'),
-    `${JSON.stringify({ version: 1, workspaces: [workspace] }, null, 2)}\n`,
+    `${JSON.stringify({ version: 2, workspaces: [URI.file(workspace).toString()] }, null, 2)}\n`,
     'utf8',
   )
   const state = typeof options.state === 'function' ? options.state(workspace) : options.state
@@ -460,7 +460,7 @@ describe('TriggerMainService scheduling', () => {
         }),
       ],
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -488,7 +488,7 @@ describe('TriggerMainService scheduling', () => {
         }),
       ],
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -1051,7 +1051,7 @@ describe('TriggerMainService pause gate', () => {
     const harness = await createHarness({
       triggers: (workspace) => [makeTrigger(workspace)],
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -1221,7 +1221,7 @@ describe('TriggerMainService backoff gate', () => {
         }),
       ],
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -1251,7 +1251,7 @@ describe('TriggerMainService backoff gate', () => {
         makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
       ],
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           swarm: {
@@ -1287,7 +1287,7 @@ describe('TriggerMainService backoff gate', () => {
       triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
       fetch,
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -1315,7 +1315,7 @@ describe('TriggerMainService backoff gate', () => {
     const harness = await createHarness({
       triggers: (workspace) => [makeTrigger(workspace)],
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -1344,7 +1344,7 @@ describe('TriggerMainService baseline reset', () => {
       triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
       fetch,
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -1372,7 +1372,7 @@ describe('TriggerMainService baseline reset', () => {
       triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
       fetch: async () => ({ ok: true, items: [] }),
       state: {
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {
           'trigger-1': {
@@ -1474,12 +1474,13 @@ describe('TriggerMainService list / pause', () => {
   it('ensureConfigFile writes the JSONC example once and returns its URI', async () => {
     const harness = await createHarness()
     await rm(harness.configFile, { force: true })
-    const uri = await harness.service.ensureConfigFile(harness.workspace)
+    const workspace = URI.file(harness.workspace).toString()
+    const uri = await harness.service.ensureConfigFile(workspace)
     expect(uri.startsWith('file:')).toBe(true)
     const text = await readFile(harness.configFile, 'utf8')
     expect(text).toContain('// Agent 触发器配置')
     expect(text).toContain('"version": 1')
-    await harness.service.ensureConfigFile(harness.workspace)
+    await harness.service.ensureConfigFile(workspace)
     expect(await readFile(harness.configFile, 'utf8')).toBe(text)
   })
 })
@@ -1591,7 +1592,7 @@ describe('TriggerMainService workspace activation gate', () => {
       JSON.stringify({ version: 1, triggers: [makeTrigger(second)] }),
       'utf8',
     )
-    const uri = await harness.service.ensureConfigFile(second)
+    const uri = await harness.service.ensureConfigFile(URI.file(second).toString())
     expect(uri).toContain('.universe-editor/triggers.json')
 
     const list = await harness.service.listTriggers()
@@ -1601,7 +1602,9 @@ describe('TriggerMainService workspace activation gate', () => {
     expect(sameId.every((entry) => entry.activationConfirmed === false)).toBe(true)
     expect(new Set(sameId.map((entry) => entry.workspaceName)).size).toBe(2)
 
-    const secondKey = sameId.find((entry) => entry.workspace === second)!.key
+    const secondKey = sameId.find(
+      (entry) => entry.workspace === URI.file(second).toString(),
+    )!.key
     await harness.service.confirmActivation(secondKey)
     const afterConfirm = await harness.service.listTriggers()
     expect(afterConfirm.find((entry) => entry.key === harness.key)?.activationConfirmed).toBe(false)
@@ -1613,13 +1616,17 @@ describe('TriggerMainService workspace activation gate', () => {
     expect(afterPause.find((entry) => entry.key === secondKey)?.paused).toBe(true)
     expect(afterPause.find((entry) => entry.key === harness.key)?.paused).toBe(false)
 
+    const localUriOf = (path: string): string => URI.file(path).toString()
     const workspaces = await harness.service.listWorkspaces()
-    expect(workspaces.map((entry) => entry.workspace)).toEqual([harness.workspace, second])
+    expect(workspaces.map((entry) => entry.workspace)).toEqual([
+      localUriOf(harness.workspace),
+      localUriOf(second),
+    ])
     expect(workspaces.every((entry) => entry.available)).toBe(true)
 
-    await harness.service.removeWorkspace(second)
+    await harness.service.removeWorkspace(localUriOf(second))
     expect((await harness.service.listWorkspaces()).map((entry) => entry.workspace)).toEqual([
-      harness.workspace,
+      localUriOf(harness.workspace),
     ])
     expect(
       (await harness.service.listTriggers()).filter((entry) => entry.id === 'trigger-1'),
@@ -1640,7 +1647,7 @@ describe('TriggerMainService workspace activation gate', () => {
     await harness.service.runNow(harness.keyOf('second'))
     expect(stateOf(harness.service).pending).toHaveLength(2)
 
-    await harness.service.removeWorkspace(harness.workspace)
+    await harness.service.removeWorkspace(URI.file(harness.workspace).toString())
     expect(stateOf(harness.service).pending).toEqual([])
     expect(await harness.service.listTriggers()).toEqual([])
     harness.releaseStartRun()
@@ -1678,9 +1685,9 @@ describe('TriggerMainService workspace activation gate', () => {
       }),
       'utf8',
     )
-    await harness.service.ensureConfigFile(second)
+    await harness.service.ensureConfigFile(URI.file(second).toString())
     const secondKey = (await harness.service.listTriggers()).find(
-      (entry) => entry.workspace === second,
+      (entry) => entry.workspace === URI.file(second).toString(),
     )!.key
     await harness.service.confirmActivation(secondKey)
 
@@ -1713,7 +1720,8 @@ describe('TriggerMainService workspace activation gate', () => {
     expect(state.triggers[harness.keyOf('swarm')]?.baselineDone).not.toBe(true)
     expect(state.triggers[harness.keyOf('swarm')]?.processed?.['swarm:1']).toBeUndefined()
     expect(harness.startRun).not.toHaveBeenCalled()
-    expect(harness.loggerLines.some((line) => line.includes('scheme=remote-ssh'))).toBe(true)
+    // A remote URI is a valid identity now; it simply matches no registered workspace.
+    expect(harness.loggerLines.some((line) => line.includes('swarm report ignored'))).toBe(false)
   })
 
   it('warns and ignores a report whose workspace URI is empty or unparseable', async () => {

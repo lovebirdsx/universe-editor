@@ -91,8 +91,11 @@ export const TRIGGERS_WORKSPACE_CONFIG_FILE = 'triggers.json'
 
 /** Machine-local registry entry (`<userData>/triggers/workspaces.json`). */
 export interface TriggerWorkspaceSummary {
+  /** Workspace URI string (`file:///…` / `remote-ssh://…`). */
   readonly workspace: string
+  /** Folder name, shown instead of the raw URI. */
   readonly name: string
+  /** Path of the workspace trigger file on the host that owns the folder. */
   readonly configPath: string
   /** False when the folder or its triggers.json disappeared after registration. */
   readonly available: boolean
@@ -248,7 +251,7 @@ export interface TriggerSummary {
   readonly key: string
   readonly id: string
   readonly name: string
-  /** Absolute local workspace folder that owns this trigger. */
+  /** Workspace URI string (`file:///…` / `remote-ssh://…`) that owns this trigger. */
   readonly workspace: string
   /** Folder name, shown next to the trigger name to disambiguate equal ids. */
   readonly workspaceName: string

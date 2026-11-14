@@ -64,7 +64,7 @@ import {
 import { RunQueue, type RunQueueOptions } from '../../../shared/triggers/runQueue.js'
 import { nextBackoffMs, shouldAutoPause } from '../../../shared/triggers/backoff.js'
 import { renderTriggerPrompt } from '../../../shared/triggers/promptTemplate.js'
-import { isAbsoluteLocalPath } from '../../../shared/triggers/configParse.js'
+import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
 import { AuditLog } from '../mobileGateway/auditLog.js'
 import { JsonConfigFileStore, type JsonConfigFileState } from '../jsonConfig/jsonConfigFileStore.js'
 import { writeJsonAtomic } from '../jsonConfig/atomicFile.js'
@@ -152,14 +152,17 @@ export interface TriggerMainServiceOptions {
 export interface RoutedTrigger extends TriggerConfig {
   /** Composite workspace + id; the only identity used for state and the public API. */
   readonly key: string
-  /** Absolute local workspace folder. */
+  /** Workspace URI string (`file:///…` / `remote-ssh://…`). */
   readonly workspace: string
+  readonly workspaceUri: URI
   /** Fingerprint of the bare config; confirmations bind to this. */
   readonly fingerprint: string
 }
 
 interface WorkspaceEntry {
+  /** Workspace URI string; the identity shared with the renderer and state keys. */
   readonly workspace: string
+  readonly workspaceUri: URI
   readonly key: string
   readonly store: JsonConfigFileStore<TriggersConfig>
   /** Owns the store and its subscriptions; detach disposes exactly this entry. */
@@ -173,7 +176,7 @@ interface PendingRun {
   readonly triggerKey: string
   /** Bare trigger id (prompt fence, logs, audit). */
   readonly triggerId: string
-  /** Absolute workspace folder (logs / audit only). */
+  /** Workspace URI string (logs / audit only). */
   readonly workspace: string
   readonly eventKey: string
   readonly firedAt: number
@@ -312,8 +315,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       const entry = this._workspaces.get(workspaceComparisonKey(workspace))
       return {
         workspace,
-        name: basename(workspace) || workspace,
-        configPath: workspaceTriggersConfigPath(workspace),
+        name: workspaceFolderName(workspace),
+        configPath: workspaceTriggersConfigPath(workspaceFsPath(workspace)),
         available: entry !== undefined,
         triggerCount: entry?.config.triggers.length ?? 0,
       }
@@ -491,7 +494,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
    */
   async ensureConfigFile(workspaceFolder?: string): Promise<string> {
     await this._awaitReady()
-    if (workspaceFolder === undefined || !isAbsoluteLocalPath(workspaceFolder)) {
+    const folder = parseWorkspaceUri(workspaceFolder)
+    // Remote definitions land with the remote config store; this phase stays local.
+    if (folder === undefined || folder.scheme !== 'file') {
       throw new Error(
         localize(
           'triggers.error.noLocalWorkspace',
@@ -499,10 +504,10 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         ),
       )
     }
-    const file = workspaceTriggersConfigPath(workspaceFolder)
+    const file = workspaceTriggersConfigPath(folder.fsPath)
     try {
       const created = await ensureTriggersConfigFile(file)
-      if (created) this._logger.info(`created the example trigger config in ${workspaceFolder}`)
+      if (created) this._logger.info(`created the example trigger config in ${folder.toString()}`)
     } catch (err) {
       this._logger.warn(`failed to create ${file}: ${describeError(err)}`)
       throw new Error(
@@ -512,8 +517,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         ),
       )
     }
-    await this._registry.register(workspaceFolder)
-    await this._attachWorkspace(workspaceFolder)
+    const workspace = folder.toString()
+    await this._registry.register(workspace)
+    await this._attachWorkspace(workspace)
     return URI.file(file).toString()
   }
 
@@ -617,29 +623,15 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     workspaceFolder: string,
   ): Promise<void> {
     await this._awaitReady()
-    let folder: URI
-    try {
-      folder = URI.parse(workspaceFolder)
-    } catch (err) {
-      this._logger.warn(
-        `swarm report ignored: invalid workspace uri (${err instanceof Error ? err.message : String(err)})`,
-      )
-      return
-    }
-    if (folder.scheme.length === 0) {
-      this._logger.warn('swarm report ignored: invalid workspace uri')
-      return
-    }
-    // Trigger identity is still a local fsPath (URI-based identity lands later);
-    // other schemes cannot match any trigger yet. Never fall through unfiltered:
-    // that let a remote window consume a local workspace's reviews and seed its baseline.
-    if (folder.scheme !== 'file' || folder.authority.length > 0) {
-      this._logger.debug(`swarm report ignored: unsupported workspace scheme=${folder.scheme}`)
+    const folder = parseWorkspaceUri(workspaceFolder)
+    if (folder === undefined) {
+      this._logger.warn(`swarm report ignored: not a workspace uri (${workspaceFolder})`)
       return
     }
     // A swarm trigger belongs to the workspace whose window reported the reviews;
     // another open workspace must not consume them (or seed its baseline with them).
-    const reporterKey = workspaceComparisonKey(folder.fsPath)
+    // A remote workspace simply matches nothing until discovery supports it.
+    const reporterKey = workspaceComparisonKey(folder.toString())
     const now = this._clock.now()
     // Concurrent reports (two windows) can interleave; the persistent key check is
     // authoritative, but de-duplicating the batch also keeps one report from
@@ -830,6 +822,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   /** Register a local folder and start watching its trigger file (when it exists). */
   private async _discoverWorkspace(folder: URI | null): Promise<void> {
     if (folder === null) return
+    // Remote discovery lands with the remote config store; this phase stays local.
     if (folder.scheme !== 'file' || folder.authority.length > 0) {
       this._logger.info(`trigger workspace discovery skipped (not a local folder): ${folder}`)
       return
@@ -837,12 +830,14 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     // Window hosts register before the registry/state load completes; waiting keeps
     // discovery from being overwritten by the in-flight `load()` snapshot.
     await this._awaitReady()
-    await this._registerDiscoveredWorkspace(folder.fsPath)
+    await this._registerDiscoveredWorkspace(folder.toString())
   }
 
   private async _registerDiscoveredWorkspace(workspace: string): Promise<void> {
+    const uri = parseWorkspaceUri(workspace)
+    if (uri === undefined) return
     try {
-      const file = workspaceTriggersConfigPath(workspace)
+      const file = workspaceTriggersConfigPath(uri.fsPath)
       if (!(await fileExists(file))) return
       await this._registry.register(workspace)
       await this._attachWorkspace(workspace)
@@ -854,17 +849,25 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   }
 
   private _attachWorkspace(workspace: string): Promise<void> {
+    const uri = parseWorkspaceUri(workspace)
+    if (uri === undefined) return Promise.resolve()
     const key = workspaceComparisonKey(workspace)
     const pending = this._attaching.get(key)
     if (pending !== undefined) return pending
-    const task = this._doAttachWorkspace(workspace, key).finally(() => this._attaching.delete(key))
+    const task = this._doAttachWorkspace(workspace, uri, key).finally(() =>
+      this._attaching.delete(key),
+    )
     this._attaching.set(key, task)
     return task
   }
 
-  private async _doAttachWorkspace(workspace: string, key: string): Promise<void> {
+  private async _doAttachWorkspace(
+    workspace: string,
+    workspaceUri: URI,
+    key: string,
+  ): Promise<void> {
     if (this._disposed || this._workspaces.has(key)) return
-    const file = workspaceTriggersConfigPath(workspace)
+    const file = workspaceTriggersConfigPath(workspaceUri.fsPath)
     if (!(await fileExists(file))) {
       this._logger.warn(`trigger workspace skipped (no ${file}); it stays registered until removed`)
       return
@@ -883,6 +886,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     }
     const entry: WorkspaceEntry = {
       workspace,
+      workspaceUri,
       key,
       store,
       disposables: new DisposableStore(),
@@ -961,12 +965,12 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     entry.config = state.value
     if (state.error !== undefined) {
       this._logger.warn(
-        `${workspaceTriggersConfigPath(entry.workspace)} is invalid: ${state.error}`,
+        `${workspaceTriggersConfigPath(entry.workspaceUri.fsPath)} is invalid: ${state.error}`,
       )
     }
     if (entry.config.invalid.length > 0) {
       this._logger.warn(
-        `${workspaceTriggersConfigPath(entry.workspace)}: ${entry.config.invalid.length} invalid trigger entr(ies)`,
+        `${workspaceTriggersConfigPath(entry.workspaceUri.fsPath)}: ${entry.config.invalid.length} invalid trigger entr(ies)`,
       )
     }
     for (const trigger of this._routedTriggers(entry)) this._syncSourceFingerprint(trigger)
@@ -991,6 +995,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       ...config,
       key: triggerKeyFor(entry.workspace, config.id),
       workspace: entry.workspace,
+      workspaceUri: entry.workspaceUri,
       fingerprint: triggerFingerprint(config),
     }))
   }
@@ -1014,6 +1019,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       ...config,
       key: canonical,
       workspace: entry.workspace,
+      workspaceUri: entry.workspaceUri,
       fingerprint: triggerFingerprint(config),
     }
   }
@@ -1233,14 +1239,14 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     // The poll command runs in main with the user's privileges: never execute it
     // for an untrusted workspace, independently of the per-window trust check at
     // run start (a background window may not exist until a run actually starts).
-    if (!(await this._trustedForPoll(trigger.workspace))) {
+    if (!(await this._trustedForPoll(trigger.workspaceUri.fsPath))) {
       this._logger.info(`trigger ${trigger.id}: poll skipped (workspace is not trusted)`)
       return
     }
 
     const result = await this._fetchPollItems({
       command: source.fetch.command,
-      cwd: trigger.workspace,
+      cwd: trigger.workspaceUri.fsPath,
       timeoutSec: source.fetch.timeoutSec,
       keyField: source.keyField,
     })
@@ -1591,7 +1597,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private async _resolveHost(
     trigger: RoutedTrigger,
   ): Promise<{ host: ITriggerRunHost; windowId: number }> {
-    const target = { folder: URI.file(trigger.workspace).toString() }
+    const target = { folder: trigger.workspace }
     const directory = this._hostDirectory()
     const immediate = findWorkspaceHost(directory, target)
     if (immediate !== undefined) {
@@ -1614,7 +1620,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (!alreadyOpen) {
       this._logger.info(`trigger ${trigger.id}: opening a background window for its workspace`)
       try {
-        await provider.openWindowForFolderInBackground(URI.file(trigger.workspace))
+        await provider.openWindowForFolderInBackground(trigger.workspaceUri)
       } catch (err) {
         throw new Error(
           localize(
@@ -1683,13 +1689,13 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       origin: {
         triggerId: trigger.id,
         triggerName: trigger.name,
-        workspaceName: basename(trigger.workspace) || trigger.workspace,
+        workspaceName: workspaceFolderName(trigger.workspace),
         eventKey: pending.eventKey,
         runId: pending.runId,
       },
       ...(session.agent === undefined ? {} : { agentId: session.agent }),
       showSession: trigger.showSession,
-      cwd: join(trigger.workspace, session.cwd ?? ''),
+      cwd: join(trigger.workspaceUri.fsPath, session.cwd ?? ''),
       ...(session.mode === undefined ? {} : { mode: session.mode }),
       allowElevatedMode: elevated,
       ...(session.model === undefined ? {} : { model: session.model }),
@@ -2004,7 +2010,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         id: trigger.id,
         name: trigger.name,
         workspace: trigger.workspace,
-        workspaceName: basename(trigger.workspace) || trigger.workspace,
+        workspaceName: workspaceFolderName(trigger.workspace),
         sourceType: trigger.source.type,
         status,
         enabled: trigger.enabled,
@@ -2029,7 +2035,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           id: invalid.id,
           name: invalid.id,
           workspace: entry.workspace,
-          workspaceName: basename(entry.workspace) || entry.workspace,
+          workspaceName: workspaceFolderName(entry.workspace),
           sourceType: 'unknown',
           status: 'invalid',
           enabled: false,
@@ -2140,6 +2146,16 @@ export async function pruneRunDirectories(
     }
   }
   if (doomed.length > 0) logger?.info(`removed ${doomed.length} old run director(ies)`)
+}
+
+function workspaceFsPath(workspace: string): string {
+  return parseWorkspaceUri(workspace)?.fsPath ?? workspace
+}
+
+function workspaceFolderName(workspace: string): string {
+  const uri = parseWorkspaceUri(workspace)
+  const name = uri === undefined ? basename(workspace) : basename(uri.path)
+  return name.length > 0 ? name : workspace
 }
 
 function describeError(err: unknown): string {

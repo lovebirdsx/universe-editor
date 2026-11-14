@@ -27,6 +27,7 @@ import {
 } from '@universe-editor/platform'
 import { ILogFilesService } from '../../shared/ipc/services.js'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
+import { workspaceDisplayPath } from '../../shared/triggers/configParse.js'
 import type { TriggerSummary } from '../../shared/triggers/types.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
@@ -235,7 +236,7 @@ async function openTriggerConfig(services: TriggerActionServices): Promise<void>
     })
     return
   }
-  const uri = URI.parse(await services.triggers.ensureConfigFile(folder.fsPath))
+  const uri = URI.parse(await services.triggers.ensureConfigFile(folder.toString()))
   await services.editors.openEditor(uri, { pinned: true })
 }
 
@@ -268,12 +269,12 @@ async function confirmTriggerActivation(
     message: localize(
       'triggers.confirmActivation.message',
       'Enable trigger "{name}" from workspace "{workspace}"?',
-      { name: summary.name, workspace: summary.workspace },
+      { name: summary.name, workspace: workspaceDisplayPath(summary.workspace) },
     ),
     detail: localize(
       'triggers.confirmActivation.detail',
       'The trigger comes from {path}. It is defined in the workspace configuration file, so it may have arrived with a cloned or pulled repository. Once confirmed it can run unattended with your credentials. The confirmation is stored on this machine and bound to the whole definition — changing any field, including enabling it or renaming it, requires confirming again.',
-      { path: summary.workspace },
+      { path: workspaceDisplayPath(summary.workspace) },
     ),
     primaryButton: localize('triggers.confirmActivation.primary', 'Enable Trigger'),
   })
@@ -790,7 +791,7 @@ export class RemoveTriggerWorkspaceAction extends Action2 {
       const items = workspaces.map((entry, index) => ({
         id: String(index),
         label: entry.name,
-        description: entry.workspace,
+        description: workspaceDisplayPath(entry.workspace),
         ...(entry.available
           ? {}
           : {

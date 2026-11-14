@@ -41,7 +41,7 @@ export interface PendingRunRecord {
 }
 
 export interface TriggerStateFile {
-  readonly version: 1
+  readonly version: 2
   readonly pausedAll: boolean
   readonly triggers: Readonly<Record<string, TriggerRuntimeState>>
   readonly pending: readonly PendingRunRecord[]
@@ -55,7 +55,7 @@ export const DEFAULT_TRIGGER_RUNTIME_STATE: TriggerRuntimeState = {
 }
 
 export function createEmptyTriggerStateFile(): TriggerStateFile {
-  return { version: 1, pausedAll: false, triggers: {}, pending: [] }
+  return { version: 2, pausedAll: false, triggers: {}, pending: [] }
 }
 
 export interface TriggerStateStoreOptions {
@@ -236,8 +236,13 @@ function normalizePending(raw: unknown): PendingRunRecord[] {
   return pending
 }
 
+/**
+ * Version 1 keyed triggers by a local workspace path; workspace identity is now a
+ * URI string, so an old snapshot cannot be reinterpreted. It is machine-local
+ * dedupe / pause state — dropping it just re-seeds baselines.
+ */
 export function normalizeTriggerStateFile(raw: unknown): TriggerStateFile {
-  if (!isRecord(raw)) return createEmptyTriggerStateFile()
+  if (!isRecord(raw) || raw['version'] !== 2) return createEmptyTriggerStateFile()
   const triggers: Record<string, TriggerRuntimeState> = {}
   if (isRecord(raw['triggers'])) {
     for (const [id, value] of Object.entries(raw['triggers'])) {
@@ -245,7 +250,7 @@ export function normalizeTriggerStateFile(raw: unknown): TriggerStateFile {
     }
   }
   return {
-    version: 1,
+    version: 2,
     pausedAll: raw['pausedAll'] === true,
     triggers,
     pending: normalizePending(raw['pending']),

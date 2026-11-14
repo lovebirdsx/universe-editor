@@ -22,6 +22,7 @@ import type {
 export interface ITriggerMainService {
   readonly _serviceBrand: undefined
   listTriggers(): Promise<readonly TriggerSummary[]>
+  /** Registered workspaces; `workspace` is a workspace URI string, not a bare path. */
   listWorkspaces(): Promise<readonly TriggerWorkspaceSummary[]>
   /** Machine-local run directory (`<userData>/triggers/runs`); reports live there. */
   getRunsDir(): Promise<string>
@@ -43,10 +44,11 @@ export interface ITriggerMainService {
   /**
    * Create `<workspace>/.universe-editor/triggers.json` with an example when absent,
    * register the workspace for background scheduling and return the file URI string.
-   * The workspace comes from the calling window (main cannot infer it).
+   * `workspaceFolder` is the calling window's workspace URI string (`URI.toString()`);
+   * main cannot infer it. Only local `file:` workspaces are accepted in this phase.
    */
   ensureConfigFile(workspaceFolder?: string): Promise<string>
-  /** Stop watching a registered workspace and drop its queued events. */
+  /** Stop watching a registered workspace (URI string) and drop its queued events. */
   removeWorkspace(workspace: string): Promise<void>
   /** Called by a window when its run reaches a terminal state. */
   reportRunEnd(end: TriggerRunEnd): Promise<void>

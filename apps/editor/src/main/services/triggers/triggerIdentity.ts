@@ -2,24 +2,58 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Composite trigger identity. A trigger id is only unique inside one workspace's
  *  `.universe-editor/triggers.json`, so every persisted record, queue entry and IPC
- *  argument uses the composite key instead of the bare id. Path identity goes through
- *  the kernel helpers — never hand-rolled casing / separator folding.
+ *  argument uses the composite key instead of the bare id. The workspace identity is
+ *  a URI string; path identity goes through the kernel helpers — never hand-rolled
+ *  casing / separator folding.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   getPathComparisonKey,
+  getResourceComparisonKey,
+  normalizeFsPath,
   normalizePlatform,
+  normalizeRemoteAuthority,
+  REMOTE_SCHEME,
+  URI,
   type HostPlatform,
 } from '@universe-editor/platform'
+import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
 
 /** NUL cannot appear in a folder path or a trigger id, so it is an unambiguous separator. */
 const SEPARATOR = '\u0000'
 
+/** A scheme is `scheme:` with at least two characters; single letters are Windows drives. */
+const SCHEME_PREFIX = /^[A-Za-z][A-Za-z0-9+.-]+:/
+
+/**
+ * Identity key for a workspace URI string.
+ *
+ * - `file:` folders use the host-platform path key (case / separators folded).
+ * - `remote-ssh:` folders are compared against the *remote* filesystem: the path
+ *   stays case-sensitive whatever the local platform, while the scheme and the
+ *   authority are normalized by the kernel helpers.
+ * - A bare absolute path is accepted because {@link canonicalTriggerKey} rebuilds
+ *   keys from their already-normalized workspace part; a file key *is* a path.
+ */
 export function workspaceComparisonKey(
   workspace: string,
   platform: HostPlatform = normalizePlatform(process.platform),
 ): string {
-  return getPathComparisonKey(workspace, platform)
+  const value = workspace.trim()
+  if (value.length === 0) return value
+  if (!SCHEME_PREFIX.test(value)) return getPathComparisonKey(value, platform)
+  const uri = parseWorkspaceUri(value) ?? URI.parse(value)
+  const scheme = uri.scheme.toLowerCase()
+  if (scheme === 'file') return getPathComparisonKey(uri.fsPath, platform)
+  if (scheme === REMOTE_SCHEME) {
+    const normalized = uri.with({
+      scheme: REMOTE_SCHEME,
+      authority: normalizeRemoteAuthority(uri.authority),
+      path: normalizeFsPath(uri.path),
+    })
+    return getResourceComparisonKey(normalized, platform, () => true)
+  }
+  return uri.toString()
 }
 
 export function triggerKeyFor(

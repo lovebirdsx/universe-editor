@@ -8,6 +8,7 @@
 
 import {
   arePathsEqual,
+  normalizeFsPath,
   normalizePlatform,
   URI,
   type IOpenWindowInfo,
@@ -61,7 +62,11 @@ export function isSameWorkspace(
   }
   if (first.scheme !== second.scheme) return false
   if ((a.authority ?? first.authority) !== (b.authority ?? second.authority)) return false
-  return arePathsEqual(first.fsPath, second.fsPath, HOST_PLATFORM)
+  // A `file:` folder follows the local filesystem. Every other scheme addresses a
+  // provider (e.g. a remote host) whose filesystem policy is not the local one:
+  // compare its path case-sensitively instead of folding Windows casing into it.
+  if (first.scheme === 'file') return arePathsEqual(first.fsPath, second.fsPath, HOST_PLATFORM)
+  return normalizeFsPath(first.path) === normalizeFsPath(second.path)
 }
 
 export interface WorkspaceHostDirectory {

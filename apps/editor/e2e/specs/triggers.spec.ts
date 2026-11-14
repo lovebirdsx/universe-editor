@@ -137,7 +137,8 @@ test.describe('agent triggers', () => {
     await waitForTriggerStatus(page, MANUAL_ID, 'needs-confirmation')
 
     const summary = await findTrigger(page, MANUAL_ID)
-    expect(summary?.workspace).toBeTruthy()
+    // Workspace identity is a URI string; the friendly name stays separate.
+    expect(summary?.workspace).toMatch(/^file:/)
     expect(summary?.workspaceName).toBeTruthy()
     expect(summary?.activationConfirmed).toBe(false)
 

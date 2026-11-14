@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize, type IQuickPickItem } from '@universe-editor/platform'
+import { workspaceDisplayPath } from '../../shared/triggers/configParse.js'
 import type {
   TriggerSourceType,
   TriggerStatus,
@@ -61,10 +62,11 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
   return summaries.map((summary) => {
     const needsActivation = !summary.activationConfirmed && summary.status !== 'invalid'
     const unconfirmedElevated = summary.elevatedMode && !summary.elevatedModeConfirmed
-    // The absolute workspace path leads the description: two workspaces may
-    // define the same trigger id, and the QuickPick must make them distinguishable.
+    // The workspace path leads the description: two workspaces may define the same
+    // trigger id, and the QuickPick must make them distinguishable. The summary
+    // carries a workspace URI string; users see its friendly path.
     const description = [
-      summary.workspace,
+      workspaceDisplayPath(summary.workspace),
       triggerStatusLabel(summary.status),
       triggerSourceLabel(summary.sourceType),
     ]

@@ -1,12 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for the machine-local registered-workspace list (`<userData>/triggers/workspaces.json`).
+ *  Version 2 stores workspace URI strings; version 1 (bare local paths) is discarded.
  *--------------------------------------------------------------------------------------------*/
 
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
-import type { ILogger } from '@universe-editor/platform'
+import { URI, type ILogger } from '@universe-editor/platform'
 import {
   TRIGGERS_WORKSPACES_FILE_NAME,
   TriggerWorkspaceRegistry,
@@ -46,50 +47,90 @@ function createRegistry(dir: string): {
   return { registry: new TriggerWorkspaceRegistry({ file, logger }), warns, file }
 }
 
+const local = (path: string): string => URI.file(path).toString()
+const remote = (authority: string, path: string): string =>
+  URI.from({ scheme: 'remote-ssh', authority, path }).toString()
+
 describe('TriggerWorkspaceRegistry', () => {
-  it('registers, de-duplicates and reloads absolute local workspaces', async () => {
+  it('registers, de-duplicates and reloads workspace URIs', async () => {
     const dir = mkTempDir('ue-trigger-registry-')
     dirs.push(dir)
     const { registry, file } = createRegistry(dir)
     expect(await registry.load()).toEqual([])
 
-    expect(await registry.register('X:/workspace/one')).toBe(true)
-    expect(await registry.register('X:/workspace/one')).toBe(false)
-    expect(await registry.register('X:/workspace/two')).toBe(true)
-    expect(registry.list()).toEqual(['X:/workspace/one', 'X:/workspace/two'])
+    expect(await registry.register(local('X:/workspace/one'))).toBe(true)
+    expect(await registry.register(local('X:/workspace/one'))).toBe(false)
+    expect(await registry.register(remote('acme-host', '/work/two'))).toBe(true)
+    expect(registry.list()).toEqual([local('X:/workspace/one'), remote('acme-host', '/work/two')])
 
     const reloaded = createRegistry(dir).registry
-    expect(await reloaded.load()).toEqual(['X:/workspace/one', 'X:/workspace/two'])
+    expect(await reloaded.load()).toEqual([
+      local('X:/workspace/one'),
+      remote('acme-host', '/work/two'),
+    ])
 
-    const written = JSON.parse(await readFile(file, 'utf8')) as { workspaces: string[] }
-    expect(written.workspaces).toEqual(['X:/workspace/one', 'X:/workspace/two'])
+    const written = JSON.parse(await readFile(file, 'utf8')) as {
+      version: number
+      workspaces: string[]
+    }
+    expect(written.version).toBe(2)
+    expect(written.workspaces).toEqual([
+      local('X:/workspace/one'),
+      remote('acme-host', '/work/two'),
+    ])
   })
 
-  it('refuses relative paths and drops invalid persisted entries', async () => {
+  it('refuses unsupported URIs and drops invalid persisted entries', async () => {
     const dir = mkTempDir('ue-trigger-registry-')
     dirs.push(dir)
     const { registry, warns, file } = createRegistry(dir)
     expect(await registry.register('../not-absolute')).toBe(false)
+    expect(await registry.register('untitled:Untitled-1')).toBe(false)
+    expect(await registry.register(remote('', '/missing-authority'))).toBe(false)
     expect(registry.list()).toEqual([])
-    expect(warns.some((line) => line.includes('non-local'))).toBe(true)
+    expect(warns.some((line) => line.includes('unsupported workspace uri'))).toBe(true)
 
     await writeFile(
       file,
-      JSON.stringify({ version: 1, workspaces: ['../relative', 'X:/workspace/ok', 42] }),
+      JSON.stringify({
+        version: 2,
+        workspaces: [
+          '../relative',
+          'X:/workspace/bare-path',
+          'file://acme-host/share',
+          remote('', '/missing-authority'),
+          remote('acme-host', 'relative'),
+          local('X:/workspace/ok'),
+          42,
+        ],
+      }),
       'utf8',
     )
     const loaded = createRegistry(dir)
-    expect(await loaded.registry.load()).toEqual(['X:/workspace/ok'])
+    expect(await loaded.registry.load()).toEqual([local('X:/workspace/ok')])
     expect(loaded.warns.some((line) => line.includes('invalid workspace entry'))).toBe(true)
+  })
+
+  it('discards a version 1 registry instead of migrating bare paths', async () => {
+    const dir = mkTempDir('ue-trigger-registry-')
+    dirs.push(dir)
+    const { file } = createRegistry(dir)
+    await writeFile(
+      file,
+      JSON.stringify({ version: 1, workspaces: ['X:/workspace/one'] }),
+      'utf8',
+    )
+    const loaded = createRegistry(dir)
+    expect(await loaded.registry.load()).toEqual([])
   })
 
   it('removes entries idempotently and starts empty on unreadable input', async () => {
     const dir = mkTempDir('ue-trigger-registry-')
     dirs.push(dir)
     const { registry, file } = createRegistry(dir)
-    await registry.register('X:/workspace/one')
-    expect(await registry.remove('X:/workspace/one')).toBe(true)
-    expect(await registry.remove('X:/workspace/one')).toBe(false)
+    await registry.register(local('X:/workspace/one'))
+    expect(await registry.remove(local('X:/workspace/one'))).toBe(true)
+    expect(await registry.remove(local('X:/workspace/one'))).toBe(false)
     expect(registry.list()).toEqual([])
 
     await writeFile(file, 'not json', 'utf8')

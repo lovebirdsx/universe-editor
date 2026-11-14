@@ -205,7 +205,7 @@ describe('TriggerStateStore', () => {
     await writeFile(
       file,
       JSON.stringify({
-        version: 1,
+        version: 2,
         pausedAll: false,
         triggers: {},
         pending: [
@@ -221,9 +221,21 @@ describe('TriggerStateStore', () => {
     expect(warns.some((line) => line.includes('invalid runId'))).toBe(true)
   })
 
+  it('discards a version 1 state file instead of reinterpreting path-keyed records', () => {
+    expect(
+      normalizeTriggerStateFile({
+        version: 1,
+        pausedAll: true,
+        triggers: { 'X:/workspace weekly': { processed: {}, paused: false } },
+        pending: [],
+      }),
+    ).toEqual(createEmptyTriggerStateFile())
+    expect(normalizeTriggerStateFile({ pausedAll: true })).toEqual(createEmptyTriggerStateFile())
+  })
+
   it('normalizes the persisted shape and drops malformed entries', () => {
     const normalized = normalizeTriggerStateFile({
-      version: 1,
+      version: 2,
       pausedAll: true,
       triggers: {
         a: {

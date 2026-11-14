@@ -2,7 +2,12 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { parse } from 'jsonc-parser'
 import { describe, expect, it } from 'vitest'
-import { parseTriggersConfig, TRIGGERS_CONFIG_EXAMPLE } from '../configParse.js'
+import {
+  parseTriggersConfig,
+  parseWorkspaceUri,
+  TRIGGERS_CONFIG_EXAMPLE,
+  workspaceDisplayPath,
+} from '../configParse.js'
 import {
   isElevatedModeId,
   TRIGGER_DEFAULTS,
@@ -36,6 +41,41 @@ function firstTrigger(raw: unknown): TriggerConfig {
   if (trigger === undefined) throw new Error(`expected a valid trigger: ${String(raw)}`)
   return trigger
 }
+
+describe('parseWorkspaceUri', () => {
+  it('accepts a local file URI only without an authority', () => {
+    const uri = parseWorkspaceUri('file:///X:/workspace/one')
+    expect(uri?.scheme).toBe('file')
+    expect(uri?.fsPath).toBe('X:/workspace/one')
+    expect(parseWorkspaceUri('file:///home/dev/repo')?.fsPath).toBe('/home/dev/repo')
+    // UNC shares and relative file URIs are not scheduler workspaces.
+    expect(parseWorkspaceUri('file://acme-host/share')).toBeUndefined()
+    expect(parseWorkspaceUri('file:relative')).toBeUndefined()
+  })
+
+  it('accepts a remote-ssh URI only with an authority and an absolute path', () => {
+    const uri = parseWorkspaceUri('remote-ssh://acme-host/work/one')
+    expect(uri?.scheme).toBe('remote-ssh')
+    expect(uri?.authority).toBe('acme-host')
+    expect(uri?.path).toBe('/work/one')
+    expect(parseWorkspaceUri('remote-ssh:///work/one')).toBeUndefined()
+    expect(parseWorkspaceUri('remote-ssh://acme-hostrelative')).toBeUndefined()
+  })
+
+  it('accepts a bare absolute local path for composite-key rebuilds', () => {
+    expect(parseWorkspaceUri('X:/workspace/one')?.fsPath).toBe('X:/workspace/one')
+    expect(parseWorkspaceUri('/home/dev/repo')?.fsPath).toBe('/home/dev/repo')
+    expect(parseWorkspaceUri('../relative')).toBeUndefined()
+    expect(parseWorkspaceUri('')).toBeUndefined()
+    expect(parseWorkspaceUri(42)).toBeUndefined()
+  })
+
+  it('renders a friendly path for the UI', () => {
+    expect(workspaceDisplayPath('file:///X:/workspace/one')).toBe('X:/workspace/one')
+    expect(workspaceDisplayPath('remote-ssh://acme-host/work/one')).toBe('/work/one')
+    expect(workspaceDisplayPath('not a uri')).toBe('not a uri')
+  })
+})
 
 describe('parseTriggersConfig (top level)', () => {
   it('requires a JSON object and version 1', () => {

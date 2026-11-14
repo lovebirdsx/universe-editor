@@ -896,7 +896,7 @@ export interface E2ETriggerSummary {
   readonly key: string
   readonly id: string
   readonly name: string
-  /** Absolute local workspace folder that owns the definition. */
+  /** Workspace URI string (`file:///…` / `remote-ssh://…`) that owns the definition. */
   readonly workspace: string
   readonly workspaceName: string
   readonly activationConfirmed: boolean

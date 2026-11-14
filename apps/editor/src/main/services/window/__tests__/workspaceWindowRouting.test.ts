@@ -62,6 +62,23 @@ describe('isSameWorkspace', () => {
       ),
     ).toBe(false)
   })
+
+  it('compares non-file paths case-sensitively even on a case-folding host', () => {
+    const remote = (path: string): string =>
+      URI.from({ scheme: 'remote-ssh', authority: 'acme-host', path }).toString()
+    expect(isSameWorkspace({ folder: remote('/work/repo') }, { folder: remote('/work/repo') })).toBe(
+      true,
+    )
+    expect(isSameWorkspace({ folder: remote('/work/repo') }, { folder: remote('/work/Repo') })).toBe(
+      false,
+    )
+    expect(
+      isSameWorkspace(
+        { folder: remote('/work/repo') },
+        { folder: URI.from({ scheme: 'remote-ssh', authority: 'other', path: '/work/repo' }).toString() },
+      ),
+    ).toBe(false)
+  })
 })
 
 describe('waitForWorkspaceHost', () => {
