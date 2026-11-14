@@ -1161,16 +1161,18 @@ file / openEditor / scmChange → `resource_link`，symbol / docs / commit / cha
 | -------------- | --------------------------------------------------- | ------------------------------ |
 | `GET` / `HEAD` | `/api/sessions/report?windowId&localId[&durableId]` | 读取该会话触发器 run 的完整报告 |
 
-链路：网关先 `hub.readSessionReportRunId(ref)`，经 renderer 桥取 live 会话的
-`session.automation.runId`；main 再用 `SessionReportReader`
-（`main/services/triggers/runReportReader.ts`，PC 报告标签页共用）读取
-`<userData>/triggers/runs/<runId>/report.md`。找不到会话、会话不是触发器启动、没有 runId 或 run
-目录已清理时统一 404 `attachment_not_found`，不区分原因。缺参数 400；其他方法 405。
+链路：网关先 `hub.readSessionReportRef(ref)`，经 renderer 桥取 live 会话的
+`{ runId, authority? }`（`session.automation.runId` + `session.authority`）；main 再交给触发器
+调度器的 `readRunReport(runId, authority)`（PC 报告标签页共用）读取
+`<userData>/triggers/runs/<runId>/report.md`，远程 run 经 `triggerPoll` 通道读远端报告。
+找不到会话、会话不是触发器启动、没有 runId 或 run 目录已清理时统一 404
+`attachment_not_found`，不区分原因；**远程 host 未连接时返回 503 `workspace_not_open`**，
+手机据此显示「远程主机未连接，报告暂不可用」而不是「已清理」。缺参数 400；其他方法 405。
 
 **安全边界**：runId 必须是标准 UUID；固定文件名 `report.md`；`realpath` 后必须仍在 runs 根目录
 之下；拒绝符号链接与非普通文件；大小上限 `MAX_SESSION_REPORT_BYTES`（512 KB），超限 413；整次
 读取有 10s 超时。报告内容按不可信输入处理，手机侧只经 `MarkdownView` 的 AST 渲染，不执行 raw
-HTML / 脚本。
+HTML / 脚本。远程报告的 runId 与路径都不上市线：`authority` 只在 main ↔ renderer 的内部桥上出现。
 
 响应头：`Content-Type: text/markdown; charset=utf-8`、`Content-Length`、
 `Content-Disposition: inline; filename="report.md"`，并由统一安全头带 `Cache-Control: no-store`；

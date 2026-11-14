@@ -17,6 +17,7 @@ type ReportState =
   | { readonly status: 'empty' }
   | { readonly status: 'running' }
   | { readonly status: 'missing' }
+  | { readonly status: 'host-offline' }
   | { readonly status: 'too-large' }
   | { readonly status: 'error' }
 
@@ -81,6 +82,12 @@ export function SessionReportOverlay({
           setState(automation.outcome === undefined ? { status: 'running' } : { status: 'missing' })
           return
         }
+        if (code === 'workspace_not_open') {
+          // The run lives on a remote host that is not connected right now; a
+          // retry becomes possible after the PC reconnects.
+          setState({ status: 'host-offline' })
+          return
+        }
         setState(code === 'bad_request' ? { status: 'too-large' } : { status: 'error' })
       })
     return () => {
@@ -89,7 +96,10 @@ export function SessionReportOverlay({
   }, [attempt, automation.outcome, client, durableId, localId, windowId])
 
   const canRefresh =
-    state.status === 'running' || state.status === 'missing' || state.status === 'error'
+    state.status === 'running' ||
+    state.status === 'missing' ||
+    state.status === 'host-offline' ||
+    state.status === 'error'
 
   return createPortal(
     <div
@@ -160,6 +170,12 @@ function renderState(state: ReportState) {
       return (
         <div className="state-card" data-testid="session-report-missing">
           <p>{strings.sessionReportUnavailable}</p>
+        </div>
+      )
+    case 'host-offline':
+      return (
+        <div className="state-card" data-testid="session-report-host-offline">
+          <p>{strings.sessionReportHostOffline}</p>
         </div>
       )
     case 'too-large':

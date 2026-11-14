@@ -826,6 +826,10 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     const windows = windowMainService
     applicationServices.mobileGateway.setWindowProvider(windows)
     applicationServices.triggers.setWindowProvider(windows)
+    // Phone report reads follow the trigger scheduler's local/remote routing.
+    applicationServices.mobileGateway.setTriggerReportReader((runId, authority) =>
+      applicationServices!.triggers.readRunReport(runId, authority),
+    )
     applicationServices.update.setQuitConfirmer((requestingWindowId) =>
       windows.confirmQuit(requestingWindowId),
     )

@@ -24,6 +24,7 @@ import {
 import { describe, expect, it, vi } from 'vitest'
 import type {
   IMobileBridgeService,
+  MobileBridgeAutomationRunRef,
   MobileBridgeDeliveryContext,
   MobileBridgeDraft,
   MobileBridgeEvent,
@@ -81,7 +82,9 @@ class FakeBridge implements IMobileBridgeService {
   readonly getToolCallDetail = vi.fn(async () => this.detail)
   readonly getMessageImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
   readonly getWorkspaceImage = vi.fn(async (): Promise<MobileBridgeImage | undefined> => undefined)
-  readonly getAutomationRunId = vi.fn(async (): Promise<string | undefined> => undefined)
+  readonly getAutomationRunRef = vi.fn(
+    async (): Promise<MobileBridgeAutomationRunRef | undefined> => undefined,
+  )
   readonly ping = vi.fn(async () => 'pong' as const)
   readonly getWorkspaceGitDirty = vi.fn(async (): Promise<boolean | undefined> => undefined)
   // Mirror the renderer cache: a phone draft applied to PromptInput is visible
@@ -4011,23 +4014,30 @@ describe('MobileGatewayHub attachment resolution', () => {
     await expect(hub.readSessionWorkspaceImage(ref, 'missing.png')).resolves.toEqual(image)
   })
 
-  it('resolves a session report run id through the owning window bridge', async () => {
+  it('resolves a session report ref through the owning window bridge', async () => {
     const hub = new MobileGatewayHub(NULL_LOGGER)
     const bridge = new FakeBridge()
     bridge.sessions = [summary('s1', { durableId: 'd1' })]
-    bridge.getAutomationRunId.mockResolvedValue('run-1')
+    bridge.getAutomationRunRef.mockResolvedValue({ runId: 'run-1' })
     hub.registerWindow(1, bridge)
 
     const ref: MobileSessionRef = { windowId: 1, localId: 's1', durableId: 'd1' }
-    await expect(hub.readSessionReportRunId(ref)).resolves.toBe('run-1')
-    expect(bridge.getAutomationRunId).toHaveBeenCalledWith('s1', expect.anything())
+    await expect(hub.readSessionReportRef(ref)).resolves.toEqual({ runId: 'run-1' })
+    expect(bridge.getAutomationRunRef).toHaveBeenCalledWith('s1', expect.anything())
 
-    await expect(
-      hub.readSessionReportRunId({ windowId: 9, localId: 's1' }),
-    ).resolves.toBeUndefined()
+    await expect(hub.readSessionReportRef({ windowId: 9, localId: 's1' })).resolves.toBeUndefined()
 
-    bridge.getAutomationRunId.mockResolvedValue(undefined)
-    await expect(hub.readSessionReportRunId(ref)).resolves.toBeUndefined()
+    bridge.getAutomationRunRef.mockResolvedValue({
+      runId: 'run-2',
+      authority: 'e2e-local',
+    })
+    await expect(hub.readSessionReportRef(ref)).resolves.toEqual({
+      runId: 'run-2',
+      authority: 'e2e-local',
+    })
+
+    bridge.getAutomationRunRef.mockResolvedValue(undefined)
+    await expect(hub.readSessionReportRef(ref)).resolves.toBeUndefined()
   })
 
   it('materializes uploaded draft attachments once per id', async () => {

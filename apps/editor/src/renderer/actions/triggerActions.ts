@@ -482,6 +482,9 @@ export class ViewTriggerReportAction extends Action2 {
 
     const runId = explicitRunId ?? automation?.runId
     if (runId === undefined) return
+    // The report lives on the session's host; the input keeps it so restoring a
+    // tab can still address the run before history hydrates.
+    const authority = live?.authority ?? historyEntry?.authority
     const triggerName =
       stringArg(args, 'triggerName') ?? automation?.triggerName ?? fallbackTriggerName()
     const eventKey = stringArg(args, 'eventKey') ?? automation?.eventKey
@@ -500,6 +503,7 @@ export class ViewTriggerReportAction extends Action2 {
         runId,
         triggerName,
         ...(sessionId !== undefined ? { sessionId } : {}),
+        ...(authority !== undefined ? { authority } : {}),
         ...(eventKey !== undefined ? { eventKey } : {}),
         ...(snapshot !== undefined ? { snapshot } : {}),
       }),

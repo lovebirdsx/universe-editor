@@ -47,6 +47,7 @@ type ReportState =
   | { readonly status: 'empty' }
   | { readonly status: 'running' }
   | { readonly status: 'missing' }
+  | { readonly status: 'unavailable' }
   | { readonly status: 'too-large' }
   | { readonly status: 'error' }
 
@@ -72,6 +73,7 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
   const durableId = live?.sessionIdOnAgent.get() ?? sessionId
   const historyEntry = durableId !== undefined ? history.get(durableId) : undefined
   const automation = live?.automation ?? historyEntry?.automation
+  const authority = live?.authority ?? historyEntry?.authority ?? target?.authority
   const triggerName = automation?.triggerName ?? target?.triggerName ?? fallbackTriggerName()
   const eventKey = automation?.eventKey ?? target?.eventKey
   const outcome: TriggerRunOutcome | undefined =
@@ -90,7 +92,7 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
     }
     let cancelled = false
     setState({ status: 'loading' })
-    void triggers.readRunReport(runId).then(
+    void triggers.readRunReport(runId, authority).then(
       (result) => {
         if (!cancelled) setState(reportStateFrom(result, outcome))
       },
@@ -101,7 +103,7 @@ export function TriggerReportEditor({ input }: { input: IEditorInput }) {
     return () => {
       cancelled = true
     }
-  }, [attempt, outcome, runId, triggers])
+  }, [attempt, authority, outcome, runId, triggers])
 
   useEffect(() => {
     if (runId === undefined) return
@@ -201,6 +203,8 @@ function reportStateFrom(
           }
     case 'too-large':
       return { status: 'too-large' }
+    case 'unavailable':
+      return { status: 'unavailable' }
     case 'not-found':
       return outcome === undefined ? { status: 'running' } : { status: 'missing' }
   }
@@ -219,7 +223,7 @@ function renderState(state: ReportState) {
         <MarkdownView
           text={state.text}
           className={styles['markdown'] ?? ''}
-          baseUri={URI.file(state.runDir)}
+          baseUri={URI.parse(state.runDir)}
           testId="trigger-report-markdown"
         />
       )
@@ -244,6 +248,15 @@ function renderState(state: ReportState) {
           {localize(
             'trigger.report.missing',
             'The report was not generated or has already been cleaned up.',
+          )}
+        </div>
+      )
+    case 'unavailable':
+      return (
+        <div className={styles['state']} data-testid="trigger-report-unavailable">
+          {localize(
+            'trigger.report.unavailable',
+            'The remote host is not connected; the report is unavailable for now.',
           )}
         </div>
       )

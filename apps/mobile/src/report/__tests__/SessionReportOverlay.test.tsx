@@ -78,6 +78,20 @@ describe('SessionReportOverlay', () => {
     await waitFor(() => expect(screen.getByTestId('session-report-missing')).toBeTruthy())
   })
 
+  it('distinguishes an unconnected remote host from a cleaned-up report', async () => {
+    renderOverlay({
+      automation: { triggerName: 'Nightly review', outcome: 'completed' },
+      client: {
+        fetchSessionReport: vi.fn(async () => {
+          throw new CommandError('workspace_not_open', 'report host is not connected')
+        }),
+      },
+    })
+    await waitFor(() => expect(screen.getByTestId('session-report-host-offline')).toBeTruthy())
+    expect(screen.getByTestId('session-report-retry')).toBeTruthy()
+    expect(screen.queryByTestId('session-report-missing')).toBeNull()
+  })
+
   it('renders a size-limit state when the gateway answers 413', async () => {
     renderOverlay({
       client: {

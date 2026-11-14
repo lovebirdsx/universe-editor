@@ -4138,6 +4138,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'trigger.report.tabTitle': '运行报告 · {0}',
   'trigger.report.tooLarge': '报告超过 {kb} KB 上限，无法打开。',
   'trigger.report.unknownTrigger': '触发器',
+  'trigger.report.unavailable': '远程主机未连接，报告暂不可用。',
   'trigger.swarm.poll.hint': '触发器需要开启 Swarm 后台轮询，才能发现待你处理的审核。',
   'trigger.swarm.poll.hint.enable': '开启',
 

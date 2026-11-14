@@ -71,6 +71,7 @@ import {
 } from '../../../shared/mobileGateway/workspaceFsErrors.js'
 import type {
   MobileBridgeAttentionEvent,
+  MobileBridgeAutomationRunRef,
   MobileBridgeCommandError,
   MobileBridgeDraft,
   MobileBridgeEvent,
@@ -558,8 +559,14 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     return undefined
   }
 
-  getAutomationRunId(localId: string): Promise<string | undefined> {
-    return Promise.resolve(this._liveSession(localId)?.automation?.runId)
+  getAutomationRunRef(localId: string): Promise<MobileBridgeAutomationRunRef | undefined> {
+    const session = this._liveSession(localId)
+    const automation = session?.automation
+    if (session === undefined || automation === undefined) return Promise.resolve(undefined)
+    return Promise.resolve({
+      runId: automation.runId,
+      ...(session.authority !== undefined ? { authority: session.authority } : {}),
+    })
   }
 
   async applyDraft(localId: string, draft: MobileBridgeDraft): Promise<MobileBridgeResult<void>> {

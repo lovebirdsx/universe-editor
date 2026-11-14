@@ -66,6 +66,7 @@ import {
 import { MOBILE_GATEWAY_CONFIG_FILE } from './gatewayConfigFile.js'
 import { MobileGatewayConfigStore } from './gatewayConfigStore.js'
 import { SessionReportReader } from '../triggers/runReportReader.js'
+import type { TriggerRunReportReadResult } from '../../../shared/triggers/types.js'
 import { triggersDirectory } from '../triggers/triggersConfigFile.js'
 import { createWorkspaceGitDirtyProbe } from './workspaceGitDirtyProbe.js'
 import { WorkspaceDirectoryBrowser } from './workspaceDirectoryBrowser.js'
@@ -150,6 +151,9 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
   private _router: MobileNotificationRouter | undefined
   private readonly _directoryBrowser: WorkspaceDirectoryBrowser | undefined
   private readonly _reports: SessionReportReader
+  private _triggerReportReader:
+    | ((runId: string, authority?: string) => Promise<TriggerRunReportReadResult>)
+    | undefined
   private readonly _newSessionOptions: WorkspaceNewSessionOptionsReader
   private readonly _vapidPromise: Promise<VapidKeyPair | undefined>
   private readonly _pushSender: WebPushSender
@@ -404,6 +408,37 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
     this._windows = provider
   }
 
+  /**
+   * Late-bound trigger service entry: the trigger scheduler owns local + remote
+   * report routing, so the gateway delegates instead of reading paths itself.
+   * Without it the gateway still reads local runs directly.
+   */
+  setTriggerReportReader(
+    reader: (runId: string, authority?: string) => Promise<TriggerRunReportReadResult>,
+  ): void {
+    this._triggerReportReader = reader
+  }
+
+  private async _readReport(
+    runId: string,
+    authority?: string,
+  ): Promise<TriggerRunReportReadResult> {
+    if (this._triggerReportReader !== undefined) {
+      return this._triggerReportReader(runId, authority)
+    }
+    if (authority !== undefined) return { kind: 'unavailable' }
+    const result = await this._reports.read(runId)
+    if (!result.ok) {
+      return { kind: result.reason === 'too_large' ? 'too-large' : 'not-found' }
+    }
+    return {
+      kind: 'ok',
+      text: Buffer.from(result.bytes).toString('utf8'),
+      runDir: URI.file(result.runDir).toString(),
+      modifiedAt: result.modifiedAt,
+    }
+  }
+
   private _openWorkspaces(): readonly WorkspaceWindowCandidate[] {
     return listWorkspaceWindows(this._windows?.getOpenWindowInfos() ?? [])
   }
@@ -551,7 +586,7 @@ export class MobileGatewayMainService extends Disposable implements IMobileGatew
       onDiagnostic: (event) => this._handleDiagnostic(event),
       hub: this._hub,
       attachments: this._attachments,
-      reports: this._reports,
+      readReport: (runId, authority) => this._readReport(runId, authority),
     })
     try {
       const { port } = await server.start()

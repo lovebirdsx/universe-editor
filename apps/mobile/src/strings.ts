@@ -414,6 +414,7 @@ export const strings = {
   sessionReportEmpty: '本次运行没有生成报告内容。',
   sessionReportRunning: '本次运行尚未结束，报告生成后可在这里查看。',
   sessionReportUnavailable: '本次运行没有可查看的报告（可能尚未生成或已被清理）。',
+  sessionReportHostOffline: '远程主机未连接，报告暂不可用。',
   sessionReportTooLarge: '报告过大，无法在手机上打开。',
   sessionReportFailed: '读取报告失败，请稍后重试。',
   sessionReportRefresh: '刷新',

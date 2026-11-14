@@ -65,7 +65,7 @@ import {
 import type { PairingService } from './pairingService.js'
 import { isAllowedPushEndpoint } from './pushEndpoint.js'
 import { checkRequestHeaders } from './requestSecurity.js'
-import type { SessionReportReader } from '../triggers/runReportReader.js'
+import type { TriggerRunReportReadResult } from '../../../shared/triggers/types.js'
 import {
   contentTypeFor,
   isNoCacheAsset,
@@ -145,8 +145,14 @@ export interface MobileGatewayServerOptions {
   readonly hub?: MobileGatewayHub
   /** Attachment upload/download store; absent when the gateway runs without files. */
   readonly attachments?: MobileGatewayAttachmentHttpStore
-  /** Trigger-run report reader; absent when the gateway runs without triggers. */
-  readonly reports?: Pick<SessionReportReader, 'read'>
+  /**
+   * Trigger-run report reader. `authority` selects the host holding the run
+   * directory; absent when the gateway runs without triggers.
+   */
+  readonly readReport?: (
+    runId: string,
+    authority?: string,
+  ) => Promise<TriggerRunReportReadResult>
 }
 
 interface ConnectionState {
@@ -830,8 +836,8 @@ export class MobileGatewayServer {
     if (deviceId === undefined) return
     if (!this._allowRead(req, res)) return
     const hub = this._options.hub
-    const reports = this._options.reports
-    if (hub === undefined || reports === undefined) {
+    const readReport = this._options.readReport
+    if (hub === undefined || readReport === undefined) {
       this._sendJson(res, 404, { code: 'not_supported', message: 'report api is unavailable' })
       return
     }
@@ -840,27 +846,36 @@ export class MobileGatewayServer {
       this._sendJson(res, 400, { code: 'bad_request', message: 'invalid report request' })
       return
     }
-    const runId = await hub.readSessionReportRunId(ref)
-    if (runId === undefined) {
+    const runRef = await hub.readSessionReportRef(ref)
+    if (runRef === undefined) {
       this._sendJson(res, 404, {
         code: 'attachment_not_found',
         message: 'report is not available',
       })
       return
     }
-    const report = await reports.read(runId)
-    if (!report.ok) {
-      if (report.reason === 'too_large') {
-        this._sendJson(res, 413, { code: 'bad_request', message: 'report is too large' })
-        return
-      }
+    const report = await readReport(runRef.runId, runRef.authority)
+    if (report.kind === 'too-large') {
+      this._sendJson(res, 413, { code: 'bad_request', message: 'report is too large' })
+      return
+    }
+    if (report.kind === 'unavailable') {
+      // The run lives on a remote host that is not connected. Kept distinct from
+      // not-found so the phone can say "unavailable" instead of "cleaned up".
+      this._sendJson(res, 503, {
+        code: 'workspace_not_open',
+        message: 'report host is not connected',
+      })
+      return
+    }
+    if (report.kind === 'not-found') {
       this._sendJson(res, 404, {
         code: 'attachment_not_found',
         message: 'report is not available',
       })
       return
     }
-    this._sendReport(req, res, report.bytes)
+    this._sendReport(req, res, Buffer.from(report.text, 'utf8'))
   }
 
   private _allowRead(req: IncomingMessage, res: ServerResponse): boolean {

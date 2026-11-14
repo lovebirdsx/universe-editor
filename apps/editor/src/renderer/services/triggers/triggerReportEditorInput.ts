@@ -31,6 +31,8 @@ export interface TriggerReportTarget {
   readonly triggerName: string
   /** Durable or local session id; used for the summary and "Open Session". */
   readonly sessionId?: string
+  /** Host owning the run directory (remote-ssh authority); undefined = local. */
+  readonly authority?: string
   readonly eventKey?: string
   /** Last known automation fields, used before history hydrates. */
   readonly snapshot?: TriggerReportSnapshot
@@ -41,6 +43,7 @@ interface SerializedTriggerReport {
   readonly runId: string
   readonly triggerName: string
   readonly sessionId?: string
+  readonly authority?: string
   readonly eventKey?: string
   readonly snapshot?: TriggerReportSnapshot
 }
@@ -75,6 +78,7 @@ export class TriggerReportEditorInput extends EditorInput {
       runId: target.runId,
       triggerName: target.triggerName,
       ...(target.sessionId !== undefined ? { sessionId: target.sessionId } : {}),
+      ...(target.authority !== undefined ? { authority: target.authority } : {}),
       ...(target.eventKey !== undefined ? { eventKey: target.eventKey } : {}),
       ...(target.snapshot !== undefined ? { snapshot: target.snapshot } : {}),
     }
@@ -96,6 +100,9 @@ export class TriggerReportEditorInput extends EditorInput {
       runId: value.runId,
       triggerName: value.triggerName.length > 0 ? value.triggerName : fallbackTriggerName(),
       ...(typeof value.sessionId === 'string' ? { sessionId: value.sessionId } : {}),
+      ...(typeof value.authority === 'string' && value.authority.length > 0
+        ? { authority: value.authority }
+        : {}),
       ...(typeof value.eventKey === 'string' ? { eventKey: value.eventKey } : {}),
       ...(snapshot !== undefined ? { snapshot } : {}),
     })

@@ -25,8 +25,18 @@ import { ServicesContext } from '../../useService.js'
 import { TriggerReportEditor } from '../TriggerReportEditor.js'
 
 vi.mock('../../markdown/MarkdownView.js', () => ({
-  MarkdownView: ({ text, testId }: { text: string; testId?: string }) => (
-    <div data-testid={testId ?? 'markdown-view'}>{text}</div>
+  MarkdownView: ({
+    text,
+    testId,
+    baseUri,
+  }: {
+    text: string
+    testId?: string
+    baseUri?: { toString(): string }
+  }) => (
+    <div data-testid={testId ?? 'markdown-view'} data-base-uri={baseUri?.toString()}>
+      {text}
+    </div>
   ),
 }))
 
@@ -46,6 +56,7 @@ interface EditorOptions {
   outcome?: 'completed' | 'failed'
   verdict?: 'auto-approve' | 'escalate' | 'reject' | 'info'
   summary?: string
+  authority?: string
 }
 
 function renderEditor(options: EditorOptions) {
@@ -58,6 +69,7 @@ function renderEditor(options: EditorOptions) {
     title: 'Session',
     createdAt: 1,
     lastUsedAt: 1,
+    ...(options.authority !== undefined ? { authority: options.authority } : {}),
     automation: {
       triggerId: 'triage',
       triggerName: 'Triage',
@@ -105,6 +117,7 @@ function renderEditor(options: EditorOptions) {
             triggerName: 'Triage',
             sessionId: 'session-1',
             eventKey: 'swarm:1',
+            ...(options.authority !== undefined ? { authority: options.authority } : {}),
           })
         }
       />
@@ -198,6 +211,29 @@ describe('TriggerReportEditor', () => {
 
     await screen.findByTestId('trigger-report-markdown')
     expect(harness.readRunReport).toHaveBeenCalledTimes(2)
+  })
+
+  it('passes the session host authority and uses the runDir URI as the markdown base', async () => {
+    const harness = renderEditor({
+      authority: 'e2e-local',
+      report: {
+        kind: 'ok',
+        text: '# Remote report',
+        runDir: 'remote-ssh://e2e-local/C:/runs/run-1',
+        modifiedAt: Date.now(),
+      },
+    })
+
+    const markdown = await screen.findByTestId('trigger-report-markdown')
+    expect(markdown.getAttribute('data-base-uri')).toBe('remote-ssh://e2e-local/C:/runs/run-1')
+    expect(harness.readRunReport).toHaveBeenCalledWith('run-1', 'e2e-local')
+  })
+
+  it('shows the unavailable state when the remote host is not connected', async () => {
+    renderEditor({ authority: 'e2e-local', report: { kind: 'unavailable' } })
+
+    await screen.findByTestId('trigger-report-unavailable')
+    expect(screen.queryByTestId('trigger-report-missing')).toBeNull()
   })
 
   it('opens the session from the summary bar', async () => {

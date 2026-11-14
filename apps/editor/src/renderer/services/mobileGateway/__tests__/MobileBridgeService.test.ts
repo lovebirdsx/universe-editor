@@ -931,7 +931,7 @@ describe('MobileBridgeService', () => {
     })
   })
 
-  it('returns the trigger run id only for live automated sessions', async () => {
+  it('returns the trigger run ref only for live automated sessions', async () => {
     const harness = makeHarness()
     const origin: AutomationOrigin = {
       triggerId: 'swarm-triage',
@@ -941,12 +941,22 @@ describe('MobileBridgeService', () => {
     }
     const automated = makeSession('s1', { durableId: 'd1', automation: origin })
     const manual = makeSession('s2')
+    const remote = makeSession('s3', {
+      durableId: 'd3',
+      automation: { ...origin, runId: 'run-3' },
+      authority: 'e2e-local',
+    })
     harness.add(automated)
     harness.add(manual)
+    harness.add(remote)
 
-    await expect(harness.service.getAutomationRunId('s1')).resolves.toBe('run-1')
-    await expect(harness.service.getAutomationRunId('s2')).resolves.toBeUndefined()
-    await expect(harness.service.getAutomationRunId('missing')).resolves.toBeUndefined()
+    await expect(harness.service.getAutomationRunRef('s1')).resolves.toEqual({ runId: 'run-1' })
+    await expect(harness.service.getAutomationRunRef('s3')).resolves.toEqual({
+      runId: 'run-3',
+      authority: 'e2e-local',
+    })
+    await expect(harness.service.getAutomationRunRef('s2')).resolves.toBeUndefined()
+    await expect(harness.service.getAutomationRunRef('missing')).resolves.toBeUndefined()
   })
 
   it('streams command-list changes once and skips identical projections', async () => {

@@ -74,6 +74,7 @@ import {
 import type {
   IMobileBridgeService,
   MobileBridgeAttentionEvent,
+  MobileBridgeAutomationRunRef,
   MobileBridgeDeliveryContext,
   MobileBridgeEvent,
   MobileBridgeImage,
@@ -675,14 +676,16 @@ export class MobileGatewayHub {
   }
 
   /**
-   * Trigger run id recorded on the session, or undefined for a manual session /
-   * a session owned by another window. Main reads the report itself so the
-   * renderer never exposes a run directory to the phone.
+   * Trigger run reference recorded on the session, or undefined for a manual
+   * session / a session owned by another window. Main reads the report itself so
+   * the renderer never exposes a run directory to the phone.
    */
-  readSessionReportRunId(ref: MobileSessionRef): Promise<string | undefined> {
+  readSessionReportRef(
+    ref: MobileSessionRef,
+  ): Promise<MobileBridgeAutomationRunRef | undefined> {
     return this._readSessionValue(
       ref,
-      (bridge, localId, token) => bridge.getAutomationRunId(localId, token),
+      (bridge, localId, token) => bridge.getAutomationRunRef(localId, token),
       SESSION_REPORT_TIMEOUT_MS,
     )
   }

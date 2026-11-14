@@ -25,6 +25,7 @@ describe('TriggerReportEditorInput', () => {
       runId: 'run-1',
       triggerName: 'Swarm triage',
       sessionId: 'session-1',
+      authority: 'e2e-local',
       eventKey: 'swarm:1001',
       snapshot: { outcome: 'completed', verdict: 'escalate', summary: 'needs review' },
     })
@@ -44,6 +45,14 @@ describe('TriggerReportEditorInput', () => {
     })
 
     expect(restored?.target.snapshot).toEqual({ verdict: 'info' })
+    expect(
+      TriggerReportEditorInput.deserialize({
+        schema: 1,
+        runId: 'run-1',
+        triggerName: 'Triage',
+        authority: '',
+      })?.target.authority,
+    ).toBeUndefined()
     expect(TriggerReportEditorInput.deserialize(null)).toBeNull()
     expect(
       TriggerReportEditorInput.deserialize({ schema: 2, runId: 'r', triggerName: 't' }),

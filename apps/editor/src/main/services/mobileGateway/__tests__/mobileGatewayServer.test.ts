@@ -27,8 +27,11 @@ import { MobileAttachmentStore } from '../mobileAttachmentStore.js'
 import { MobileGatewayHub } from '../mobileGatewayHub.js'
 import { MobileGatewayServer, type MobileGatewayServerOptions } from '../mobileGatewayServer.js'
 import { PairingService } from '../pairingService.js'
-import type { SessionReportReadResult } from '../../triggers/runReportReader.js'
-import type { MobileBridgeImage } from '../../../../shared/ipc/mobileGatewayService.js'
+import type { TriggerRunReportReadResult } from '../../../../shared/triggers/types.js'
+import type {
+  MobileBridgeAutomationRunRef,
+  MobileBridgeImage,
+} from '../../../../shared/ipc/mobileGatewayService.js'
 
 interface GatewayHarness {
   readonly server: MobileGatewayServer
@@ -1318,28 +1321,31 @@ describe('mobile gateway session image api', () => {
 
 describe('mobile gateway session report api', () => {
   const runId = '123e4567-e89b-42d3-a456-426614174000'
-  const report = new TextEncoder().encode('# Report\n\nbody')
+  const reportText = '# Report\n\nbody'
+  const report = new TextEncoder().encode(reportText)
 
   async function startWithReportHub(): Promise<{
     gateway: GatewayHarness
-    readSessionReportRunId: ReturnType<typeof vi.fn>
+    readSessionReportRef: ReturnType<typeof vi.fn>
     readReport: ReturnType<typeof vi.fn>
   }> {
-    const readSessionReportRunId = vi.fn(async (): Promise<string | undefined> => runId)
+    const readSessionReportRef = vi.fn(
+      async (): Promise<MobileBridgeAutomationRunRef | undefined> => ({ runId }),
+    )
     const readReport = vi.fn(
-      async (): Promise<SessionReportReadResult> => ({
-        ok: true,
-        bytes: report,
-        runDir: '',
+      async (): Promise<TriggerRunReportReadResult> => ({
+        kind: 'ok',
+        text: reportText,
+        runDir: `file:///runs/${runId}`,
         modifiedAt: 0,
       }),
     )
-    const hub = { readSessionReportRunId } as unknown as MobileGatewayHub
+    const hub = { readSessionReportRef } as unknown as MobileGatewayHub
     const gateway = await startGateway({
       hub,
-      reports: { read: readReport },
+      readReport,
     })
-    return { gateway, readSessionReportRunId, readReport }
+    return { gateway, readSessionReportRef, readReport }
   }
 
   it('requires a device token and allows only GET/HEAD', async () => {
@@ -1379,7 +1385,7 @@ describe('mobile gateway session report api', () => {
   })
 
   it('serves the report with no-store headers and a HEAD variant', async () => {
-    const { gateway, readSessionReportRunId, readReport } = await startWithReportHub()
+    const { gateway, readSessionReportRef, readReport } = await startWithReportHub()
     const paired = await pair(gateway.base)
     const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=2&localId=s1&durableId=d1`
 
@@ -1393,12 +1399,12 @@ describe('mobile gateway session report api', () => {
     expect(response.headers.get('content-disposition')).toBe('inline; filename="report.md"')
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(report)
-    expect(readSessionReportRunId).toHaveBeenCalledWith({
+    expect(readSessionReportRef).toHaveBeenCalledWith({
       windowId: 2,
       localId: 's1',
       durableId: 'd1',
     })
-    expect(readReport).toHaveBeenCalledWith(runId)
+    expect(readReport).toHaveBeenCalledWith(runId, undefined)
 
     const head = await fetch(`${gateway.base}${path}`, {
       method: 'HEAD',
@@ -1410,27 +1416,41 @@ describe('mobile gateway session report api', () => {
   })
 
   it('hides sessions without a run and reports that are gone', async () => {
-    const { gateway, readSessionReportRunId, readReport } = await startWithReportHub()
+    const { gateway, readSessionReportRef, readReport } = await startWithReportHub()
     const paired = await pair(gateway.base)
     const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`
     const auth = { authorization: `Bearer ${paired.token}` }
 
-    readSessionReportRunId.mockResolvedValueOnce(undefined)
+    readSessionReportRef.mockResolvedValueOnce(undefined)
     const noRun = await fetch(`${gateway.base}${path}`, { headers: auth })
     expect(noRun.status).toBe(404)
     expect(await noRun.json()).toMatchObject({ code: 'attachment_not_found' })
     expect(readReport).not.toHaveBeenCalled()
 
-    readReport.mockResolvedValueOnce({ ok: false, reason: 'not_found' })
+    readReport.mockResolvedValueOnce({ kind: 'not-found' })
     const missing = await fetch(`${gateway.base}${path}`, { headers: auth })
     expect(missing.status).toBe(404)
     expect(await missing.json()).toMatchObject({ code: 'attachment_not_found' })
   })
 
+  it('forwards the run authority and keeps an offline host distinct from not-found', async () => {
+    const { gateway, readSessionReportRef, readReport } = await startWithReportHub()
+    const paired = await pair(gateway.base)
+    const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`
+    const auth = { authorization: `Bearer ${paired.token}` }
+
+    readSessionReportRef.mockResolvedValueOnce({ runId, authority: 'e2e-local' })
+    readReport.mockResolvedValueOnce({ kind: 'unavailable' })
+    const offline = await fetch(`${gateway.base}${path}`, { headers: auth })
+    expect(offline.status).toBe(503)
+    expect(await offline.json()).toMatchObject({ code: 'workspace_not_open' })
+    expect(readReport).toHaveBeenCalledWith(runId, 'e2e-local')
+  })
+
   it('answers 413 for reports above the size limit', async () => {
     const { gateway, readReport } = await startWithReportHub()
     const paired = await pair(gateway.base)
-    readReport.mockResolvedValueOnce({ ok: false, reason: 'too_large' })
+    readReport.mockResolvedValueOnce({ kind: 'too-large' })
 
     const response = await fetch(
       `${gateway.base}${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`,
@@ -1441,7 +1461,7 @@ describe('mobile gateway session report api', () => {
   })
 
   it('answers 404 when the hub or reader is not wired', async () => {
-    const withoutHub = await startGateway({ reports: { read: vi.fn() } })
+    const withoutHub = await startGateway({ readReport: vi.fn() })
     const pairedHub = await pair(withoutHub.base)
     const path = `${MOBILE_SESSION_REPORT_PATH}?windowId=1&localId=s1`
     const response = await fetch(`${withoutHub.base}${path}`, {
@@ -1451,7 +1471,7 @@ describe('mobile gateway session report api', () => {
     expect(await response.json()).toMatchObject({ code: 'not_supported' })
 
     const withoutReports = await startGateway({
-      hub: { readSessionReportRunId: vi.fn() } as unknown as MobileGatewayHub,
+      hub: { readSessionReportRef: vi.fn() } as unknown as MobileGatewayHub,
     })
     const second = await pair(withoutReports.base)
     const noReports = await fetch(`${withoutReports.base}${path}`, {

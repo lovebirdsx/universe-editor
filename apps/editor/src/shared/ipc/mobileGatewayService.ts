@@ -454,6 +454,15 @@ export interface MobileBridgeNewSessionResult {
   readonly durableId?: string
 }
 
+/**
+ * Trigger run a session belongs to. `authority` is the host that owns the run
+ * directory; undefined means this machine.
+ */
+export interface MobileBridgeAutomationRunRef {
+  readonly runId: string
+  readonly authority?: string
+}
+
 export interface MobileBridgeNewSessionWorkspace {
   /** Workspace folder as a URI string; the bridge stores it as the session cwd. */
   readonly folder: string
@@ -605,11 +614,14 @@ export interface IMobileBridgeService {
   ): Promise<MobileBridgeImage | undefined>
 
   /**
-   * Run id recorded on a live session started by a trigger. Main uses it to
-   * locate `<userData>/triggers/runs/<runId>/report.md`; renderers never return
-   * the run directory itself.
+   * Run reference recorded on a live session started by a trigger. `authority`
+   * pins the report to the session's host (undefined = local); renderers never
+   * return the run directory itself.
    */
-  getAutomationRunId(localId: string, token?: CancellationToken): Promise<string | undefined>
+  getAutomationRunRef(
+    localId: string,
+    token?: CancellationToken,
+  ): Promise<MobileBridgeAutomationRunRef | undefined>
 
   /**
    * Apply a draft authored by the phone. Writes the renderer's draft cache even
