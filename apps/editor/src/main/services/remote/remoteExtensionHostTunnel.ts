@@ -27,6 +27,12 @@ export interface IRemoteExtensionHostTunnel {
   readonly onData: Event<Uint8Array>
   readonly onExit: Event<{ code: number | null }>
   readonly onDidClose: Event<void>
+  /**
+   * Tear down because the daemon generation behind the tunnel is gone: fires
+   * `onDidClose` (so consumers see an abnormal end and rebuild) and then
+   * disposes. Unlike {@link dispose}, which is the user-initiated silent close.
+   */
+  closeForConnectionLoss(): void
   /** Drop the underlying socket (E2E only) to exercise transparent reconnection. */
   dropSocketForTesting(): void
   dispose(): void
@@ -103,6 +109,10 @@ export class RemoteExtensionHostTunnel extends Disposable implements IRemoteExte
 
   send(data: Uint8Array): void {
     this._protocol?.send(data)
+  }
+
+  closeForConnectionLoss(): void {
+    this._fireClose()
   }
 
   dropSocketForTesting(): void {

@@ -106,7 +106,12 @@ export class RemoteExtensionHostService extends Disposable implements IExtension
       }),
     )
     store.add(tunnel.onExit(({ code }) => this._settleExit(handle, entry, code, null)))
-    store.add(tunnel.onDidClose(() => this._settleExit(handle, entry, null, null)))
+    // A tunnel close is main-initiated (daemon generation change) or a permanent
+    // handshake rejection. Either way there is no child exit code, so flag it as
+    // connection loss — otherwise the renderer reads code null as a clean exit.
+    store.add(
+      tunnel.onDidClose(() => this._settleExit(handle, entry, null, null, 'connection-lost')),
+    )
 
     this._logger.info(`start handle=${handle} authority=${authority}`)
     return { handle }
@@ -117,11 +122,12 @@ export class RemoteExtensionHostService extends Disposable implements IExtension
     entry: TunnelEntry,
     code: number | null,
     signal: string | null,
+    reason?: 'connection-lost',
   ): void {
     if (entry.exited) return
     entry.exited = true
     this._entries.delete(handle)
-    this._onExit.fire({ handle, code, signal })
+    this._onExit.fire({ handle, code, signal, ...(reason !== undefined ? { reason } : {}) })
     entry.store.dispose()
   }
 

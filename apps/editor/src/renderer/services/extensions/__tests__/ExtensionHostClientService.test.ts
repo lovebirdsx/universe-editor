@@ -48,7 +48,10 @@ import {
   URI,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
-import type { IExtensionHostService } from '../../../../shared/ipc/extensionHostService.js'
+import type {
+  ExtHostExitEvent,
+  IExtensionHostService,
+} from '../../../../shared/ipc/extensionHostService.js'
 import type { IExtensionManagementService } from '../../../../shared/ipc/extensionManagementService.js'
 import type { IRemoteStatusService } from '../../../../shared/ipc/remoteStatusService.js'
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
@@ -171,10 +174,10 @@ vi.mock('../HostConnection.js', () => {
 
 const { ExtensionHostClientService } = await import('../ExtensionHostClientService.js')
 
-function fakeHost(): IExtensionHostService {
+function fakeHost(onExit: Event<ExtHostExitEvent> = Event.None): IExtensionHostService {
   let n = 0
   return {
-    onExit: Event.None,
+    onExit,
     onStdout: Event.None,
     onStderr: Event.None,
     start: vi.fn().mockImplementation(() => Promise.resolve({ handle: `h${++n}` })),
@@ -746,6 +749,66 @@ describe('ExtensionHostClientService', () => {
     expect(String(arg?.message)).toContain('boom')
 
     svc.dispose()
+  })
+})
+
+describe('ExtensionHostClientService remote connection loss', () => {
+  it('restarts the host when main reports a connection-lost exit with code null', async () => {
+    const exit = new Emitter<ExtHostExitEvent>()
+    const notify = vi.fn()
+    const host = fakeHost(exit.event)
+    const svc = makeServiceWith(
+      host,
+      vi.fn(),
+      Event.None,
+      Event.None,
+      { current: undefined },
+      { notification: { notify } as unknown as INotificationService },
+    )
+
+    await svc.start()
+    expect(host.start).toHaveBeenCalledTimes(1)
+
+    // Main closes the tunnel on a daemon generation change: no exit code, but
+    // the reason marks it abnormal, so the crash recovery path must run.
+    exit.fire({ handle: 'h1', code: null, signal: null, reason: 'connection-lost' })
+
+    expect(notify).toHaveBeenCalledTimes(1)
+    const arg = notify.mock.calls[0]?.[0] as { severity?: unknown; message?: unknown }
+    expect(arg?.severity).toBe(Severity.Warning)
+    expect(String(arg?.message)).toMatch(/connection was lost/i)
+
+    // Base restart delay is 1s; the relaunch then re-indexes and re-runs
+    // startup activation.
+    await vi.waitFor(() => expect(host.start).toHaveBeenCalledTimes(2), { timeout: 4000 })
+
+    svc.dispose()
+  })
+
+  it('still treats a plain code-null exit as a clean, planned stop', async () => {
+    const exit = new Emitter<ExtHostExitEvent>()
+    const notify = vi.fn()
+    const host = fakeHost(exit.event)
+    const svc = makeServiceWith(
+      host,
+      vi.fn(),
+      Event.None,
+      Event.None,
+      { current: undefined },
+      { notification: { notify } as unknown as INotificationService },
+    )
+
+    await svc.start()
+    vi.useFakeTimers()
+    try {
+      exit.fire({ handle: 'h1', code: null, signal: null })
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(host.start).toHaveBeenCalledTimes(1)
+      expect(notify).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+      svc.dispose()
+    }
   })
 })
 

@@ -623,6 +623,7 @@ describe('CodexConfigMainService — remote resolveActiveAuth', () => {
       closeConnection: async () => undefined,
       dropSocketForTesting: () => undefined,
       dropExtensionHostSocketForTesting: () => undefined,
+      restartRemoteDaemonForTesting: async () => undefined,
       dispose: () => undefined,
       getServiceProxy: <T extends object>(authority: string, channelName: string): T => {
         proxyCalls.push({ authority, channel: channelName })

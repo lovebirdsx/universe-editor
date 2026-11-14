@@ -25,6 +25,7 @@ import {
   IStorageService,
   IWorkspaceService,
   joinPath,
+  localize,
   observableValue,
   autorun,
   registerSingleton,
@@ -90,6 +91,12 @@ export interface ITerminalGroup {
   readonly terminals: readonly string[]
 }
 
+/** A lost terminal got a fresh pty; `id` is the stable terminal id, `ptyId` the new backend id. */
+export interface ITerminalRestartEvent {
+  readonly id: string
+  readonly ptyId: string
+}
+
 export interface ITerminalManagerService {
   readonly _serviceBrand: undefined
 
@@ -115,6 +122,13 @@ export interface ITerminalManagerService {
   readonly onDidTerminalExit: Event<ITerminalExitEvent>
   /** Fires after a terminal is removed (user close or process exit). */
   readonly onDidRemoveTerminal: Event<{ id: string }>
+  /**
+   * Fires after a terminal whose remote connection was lost has been restarted
+   * on reconnect. The terminal id (and its xterm instance) is unchanged, but the
+   * fresh pty was spawned at the host default size — the xterm must push its
+   * current dimensions to it.
+   */
+  readonly onDidRestartTerminal: Event<ITerminalRestartEvent>
 
   newTerminal(spec?: ITerminalNewSpec): Promise<string | null>
   /** Spawn a panel terminal alongside the active one in the same split group. */
@@ -294,8 +308,21 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   private readonly _onDidRemoveTerminal = this._register(new Emitter<{ id: string }>())
   readonly onDidRemoveTerminal: Event<{ id: string }> = this._onDidRemoveTerminal.event
 
+  private readonly _onDidRestartTerminal = this._register(new Emitter<ITerminalRestartEvent>())
+  readonly onDidRestartTerminal: Event<ITerminalRestartEvent> = this._onDidRestartTerminal.event
+
   private readonly _clients = new Map<string, TermClient>()
   private readonly _specs = new Map<string, TermSpec>()
+  /**
+   * Terminal id → backend pty id. Equal until a lost terminal is restarted on
+   * reconnect, at which point the id stays stable (group position / xterm
+   * instance / editor tab all keep pointing at it) while the pty is replaced.
+   */
+  private readonly _ptyIds = new Map<string, string>()
+  /** Backend pty id → terminal id, for routing multiplexed events back. */
+  private readonly _viewIdByPtyId = new Map<string, string>()
+  /** Terminal id → remote authority whose connection went away (undefined if unknown). */
+  private readonly _lost = new Map<string, string | undefined>()
   private readonly _logger: ILogger
 
   /** Ordered panel split groups; each holds the left-to-right terminal ids. */
@@ -319,8 +346,24 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'terminal', name: 'Terminal' })
-    this._register(this._terminal.onData(({ id, data }) => this._dispatch(id, data)))
-    this._register(this._terminal.onExit(({ id, exitCode }) => this._onExit(id, exitCode)))
+    this._register(
+      this._terminal.onData(({ id, data }) => {
+        const viewId = this._viewIdForPty(id)
+        if (viewId !== undefined) this._dispatch(viewId, data)
+      }),
+    )
+    this._register(
+      this._terminal.onExit(({ id, exitCode, reason }) => {
+        const viewId = this._viewIdForPty(id)
+        if (viewId !== undefined) this._onExit(viewId, exitCode, reason)
+      }),
+    )
+    // A lost terminal is restarted once its authority is reachable again.
+    this._register(
+      this._remoteStatus.onDidChangeState(({ authority, state }) => {
+        if (state === 'connected') void this._restartLostTerminals(authority)
+      }),
+    )
     // The cold-start scope event is consumed by reconcileFromStorage()'s settle;
     // only genuine runtime workspace switches (after initial load) reload here.
     this._register(
@@ -498,6 +541,8 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     try {
       const info = await this._terminal.create(ipcSpec)
       this._clients.set(info.id, { buffer: [], lineCount: 0, writer: undefined, target })
+      this._ptyIds.set(info.id, info.id)
+      this._viewIdByPtyId.set(info.id, info.id)
       this._specs.set(info.id, {
         shell: info.shell,
         ...(cwd !== undefined ? { cwd } : {}),
@@ -571,7 +616,9 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   closeTerminal(id: string): void {
-    void this._terminal.release(id)
+    // A lost terminal has no live pty: its id was already unmapped.
+    const ptyId = this._ptyIds.get(id)
+    if (ptyId !== undefined) void this._terminal.release(ptyId)
     this._remove(id)
     this._schedulePersist()
   }
@@ -597,17 +644,19 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   input(id: string, data: string): void {
-    if (!this._clients.has(id)) return
+    const ptyId = this._ptyIds.get(id)
+    if (ptyId === undefined) return
     void this._terminal
-      .input(id, data)
-      .catch((err) => this._handleTerminalCallError('input', id, err))
+      .input(ptyId, data)
+      .catch((err) => this._handleTerminalCallError('input', ptyId, err))
   }
 
   resize(id: string, cols: number, rows: number): void {
-    if (!this._clients.has(id)) return
+    const ptyId = this._ptyIds.get(id)
+    if (ptyId === undefined) return
     void this._terminal
-      .resize(id, cols, rows)
-      .catch((err) => this._handleTerminalCallError('resize', id, err))
+      .resize(ptyId, cols, rows)
+      .catch((err) => this._handleTerminalCallError('resize', ptyId, err))
   }
 
   focus(): void {
@@ -725,9 +774,12 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   override dispose(): void {
-    for (const id of this._clients.keys()) void this._terminal.release(id)
+    for (const ptyId of this._ptyIds.values()) void this._terminal.release(ptyId)
     this._clients.clear()
     this._specs.clear()
+    this._ptyIds.clear()
+    this._viewIdByPtyId.clear()
+    this._lost.clear()
     super.dispose()
   }
 
@@ -756,12 +808,123 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     client.lineCount = kept.length - 1
   }
 
-  private _onExit(id: string, exitCode: number): void {
+  private _onExit(id: string, exitCode: number, reason?: 'connection-lost'): void {
     const client = this._clients.get(id)
-    if (client?.writer) client.writer(`\r\n[process exited with code ${exitCode}]\r\n`)
-    this._onDidTerminalExit.fire({ id, exitCode, target: client?.target ?? 'panel' })
+    if (!client) return
+    if (reason === 'connection-lost') {
+      this._markConnectionLost(id)
+      return
+    }
+    if (client.writer) client.writer(`\r\n[process exited with code ${exitCode}]\r\n`)
+    this._onDidTerminalExit.fire({ id, exitCode, target: client.target })
     this._remove(id)
     this._schedulePersist()
+  }
+
+  /**
+   * The remote daemon holding this pty is gone (generation change or permanent
+   * close). The process did not necessarily exit, so the terminal is kept — with
+   * a notice instead of an exit code — and restarted once the authority is
+   * connected again. Its id stays stable so the split position, active state and
+   * the persistent xterm (scrollback) all survive.
+   */
+  private _markConnectionLost(id: string): void {
+    const authority = this._authorityOf(id)
+    const ptyId = this._ptyIds.get(id)
+    this._ptyIds.delete(id)
+    if (ptyId !== undefined) this._viewIdByPtyId.delete(ptyId)
+    this._lost.set(id, authority)
+    this._dispatch(
+      id,
+      `\r\n${localize(
+        'terminal.connectionLost',
+        'Remote connection lost; the terminal process is gone and will restart when the connection is restored.',
+      )}\r\n`,
+    )
+    this._logger.info(`terminal lost with remote connection id=${id} authority=${authority ?? '?'}`)
+    // The connection state may have recovered before this exit event reached
+    // us; recover right away in that case instead of waiting for a transition.
+    void this._restartLostTerminalsIfConnected(authority)
+  }
+
+  private async _restartLostTerminalsIfConnected(authority: string | undefined): Promise<void> {
+    if (authority === undefined) return
+    try {
+      const statuses = await this._remoteStatus.getConnections()
+      if (statuses.some((s) => s.authority === authority && s.state === 'connected')) {
+        await this._restartLostTerminals(authority)
+      }
+    } catch {
+      // best-effort: the state event path will retry
+    }
+  }
+
+  /** The remote authority a terminal runs against, when it is a remote terminal. */
+  private _authorityOf(id: string): string | undefined {
+    const cwd = this._specs.get(id)?.cwd
+    if (cwd) {
+      const uri = URI.revive(cwd)
+      if (uri?.scheme === REMOTE_SCHEME) return uri.authority
+    }
+    // Main maps remote ids as `remote:<authority>:<remoteId>`; the remote id is
+    // colon-free, so the authority sits between the prefix and the last colon.
+    if (id.startsWith('remote:')) {
+      const rest = id.slice('remote:'.length)
+      const sep = rest.lastIndexOf(':')
+      if (sep > 0) return rest.slice(0, sep)
+    }
+    return undefined
+  }
+
+  /** Recreate the ptys of lost terminals whose authority is connected again. */
+  private async _restartLostTerminals(authority: string): Promise<void> {
+    const ids = [...this._lost].filter(([, a]) => a === authority).map(([id]) => id)
+    for (const id of ids) {
+      if (this._lost.get(id) !== authority) continue
+      this._lost.delete(id)
+      const spec = this._specs.get(id)
+      if (!spec) continue
+      const ipcSpec = {
+        shell: spec.shell,
+        ...(spec.cwd !== undefined ? { cwd: spec.cwd } : {}),
+        ...(spec.args !== undefined && spec.args.length > 0 ? { args: spec.args } : {}),
+        ...(spec.name !== undefined ? { name: spec.name } : {}),
+        ...(spec.env !== undefined ? { env: spec.env } : {}),
+      }
+      try {
+        const info = await this._terminal.create(ipcSpec)
+        if (!this._clients.has(id)) {
+          // Closed by the user while the fresh pty was being created.
+          void this._terminal.release(info.id)
+          continue
+        }
+        this._ptyIds.set(id, info.id)
+        this._viewIdByPtyId.set(info.id, id)
+        this._updateTerminalInfo(id, info)
+        this._dispatch(
+          id,
+          `\r\n${localize(
+            'terminal.connectionRestored',
+            'Remote connection restored; the terminal has been restarted.',
+          )}\r\n`,
+        )
+        this._onDidRestartTerminal.fire({ id, ptyId: info.id })
+        this._logger.info(`terminal restarted after reconnect id=${id} pty=${info.id}`)
+      } catch (err) {
+        this._logger.warn(`terminal restart failed id=${id}: ${(err as Error).message}`)
+        this._lost.set(id, authority)
+      }
+    }
+  }
+
+  /** Keep the view id stable while refreshing pid / pty backend from a respawn. */
+  private _updateTerminalInfo(id: string, info: ITerminalCreatedInfo): void {
+    this._setAllTerminals(this._terminals.get().map((t) => (t.id === id ? { ...info, id } : t)))
+  }
+
+  /** Backend pty id → terminal id for multiplexed event routing. */
+  private _viewIdForPty(ptyId: string): string | undefined {
+    return this._viewIdByPtyId.get(ptyId)
   }
 
   private _handleTerminalCallError(operation: 'input' | 'resize', id: string, err: unknown): void {
@@ -772,6 +935,11 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
   private _remove(id: string): void {
     if (!this._clients.delete(id)) return
+    const ptyId = this._ptyIds.get(id)
+    this._ptyIds.delete(id)
+    if (ptyId !== undefined) this._viewIdByPtyId.delete(ptyId)
+    this._viewIdByPtyId.delete(id)
+    this._lost.delete(id)
     this._specs.delete(id)
     this._onDidRemoveTerminal.fire({ id })
     const next = this._terminals.get().filter((t) => t.id !== id)
@@ -851,7 +1019,8 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         .filter(([, c]) => c.target === 'panel')
         .map(([id]) => id)
       for (const id of panelIds) {
-        void this._terminal.release(id)
+        const ptyId = this._ptyIds.get(id)
+        if (ptyId !== undefined) void this._terminal.release(ptyId)
         this._remove(id)
       }
     } finally {

@@ -23,6 +23,12 @@ export interface ExtHostExitEvent {
   readonly signal: string | null
   /** Present when the child failed to spawn (e.g. ENOENT); code/signal are null. */
   readonly error?: string
+  /**
+   * Present when the host did not exit on its own: the remote tunnel was closed
+   * by main because its daemon generation went away. `code` is null in that
+   * case, so consumers must treat it as abnormal despite the null code.
+   */
+  readonly reason?: 'connection-lost'
 }
 
 export interface ExtHostStartResult {

@@ -105,6 +105,11 @@ export interface IRemoteStatusService {
   dropSocketForTesting(authority: string): Promise<void>
   /** Drop the extension-host tunnel socket for `authority` (E2E only). */
   dropExtensionHostSocketForTesting(authority: string): Promise<void>
+  /**
+   * Restart the daemon behind `authority` as a brand-new generation and walk the
+   * normal recovery path (E2E only). Backs the remote ext-host restart spec.
+   */
+  restartRemoteDaemonForTesting(authority: string): Promise<void>
 }
 
 export const IRemoteStatusService = createDecorator<IRemoteStatusService>('remoteStatusService')

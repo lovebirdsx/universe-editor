@@ -105,6 +105,7 @@ function makeHarness(channels: Record<string, unknown>): {
     closeConnection: async () => undefined,
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
+    restartRemoteDaemonForTesting: async () => undefined,
     dispose: () => undefined,
     getServiceProxy: (() => {
       const proxies = new Map<string, unknown>()

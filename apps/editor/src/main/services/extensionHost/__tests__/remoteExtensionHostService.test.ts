@@ -56,6 +56,10 @@ class FakeTunnel implements IRemoteExtensionHostTunnel {
   dropSocketForTesting(): void {
     // No-op for the fake — reconnection is exercised at the connection-service level.
   }
+  closeForConnectionLoss(): void {
+    this.fireClose()
+    this.dispose()
+  }
   dispose(): void {
     this.disposed = true
   }
@@ -89,6 +93,7 @@ function makeConnectionService(): {
     closeConnection: async () => undefined,
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
+    restartRemoteDaemonForTesting: async () => undefined,
     dispose: () => undefined,
     getServiceProxy: () => {
       throw new Error('not stubbed')
@@ -178,7 +183,7 @@ describe('RemoteExtensionHostService', () => {
     ])
   })
 
-  it('maps onDidClose to a code-null exit (permanent connection loss)', async () => {
+  it('maps onDidClose to a connection-lost, code-null exit', async () => {
     const made = makeConnectionService()
     connService = made.connService
     tunnels = made.tunnels
@@ -189,7 +194,7 @@ describe('RemoteExtensionHostService', () => {
 
     const { handle } = await svc.start({ authority: 'host' })
     tunnels[0]!.fireClose()
-    expect(exits).toEqual([{ handle, code: null, signal: null }])
+    expect(exits).toEqual([{ handle, code: null, signal: null, reason: 'connection-lost' }])
   })
 
   it('rejects writeStdin for an unknown handle', async () => {

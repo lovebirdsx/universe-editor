@@ -1601,6 +1601,8 @@ export interface E2EProbe {
   terminalClose(id: string): Promise<void>
   /** All output observed for a terminal id since creation. */
   terminalReadBuffer(id: string): string
+  /** How often a terminal got a fresh pty after its remote connection was lost (id unchanged). */
+  terminalRestartCount(id: string): number
   /**
    * Ask the terminal's real link provider what links it reports for a buffer
    * row, and return their ranges. Read-only: it queries the live provider
@@ -2322,6 +2324,12 @@ export interface E2EProbe {
   dropRemoteSocket(authority: string): Promise<void>
   /** Drop the extension-host tunnel socket for an authority (E2E only). */
   dropRemoteExtensionHostSocket(authority: string): Promise<void>
+  /**
+   * Restart the remote daemon behind an authority as a new generation (new
+   * port/token) and walk the normal recovery path, as if it had been restarted
+   * or upgraded out-of-band (E2E only). Backs the remote ext-host rebuild spec.
+   */
+  restartRemoteDaemon(authority: string): Promise<void>
   // -- Remote workspace UI probe --------------------------------------------
   /**
    * Open a workspace folder by URI string (any scheme, incl. remote-ssh), going

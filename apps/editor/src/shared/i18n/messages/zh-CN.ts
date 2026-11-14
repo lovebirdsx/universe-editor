@@ -271,6 +271,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'extensions.activation.failed': '扩展"{name}"激活失败：{error}',
   'extHost.crash.restarting': '扩展宿主已崩溃（代码 {code}），正在重启…',
   'extHost.crash.noMoreRestarts': '扩展宿主持续崩溃（代码 {code}），将不再自动重启。',
+  'extHost.connectionLost.restarting': '远程扩展宿主连接已断开，正在重启…',
   'extManagement.error.noMarketplace': '扩展市场不可用。',
   'extManagement.error.packageMismatch':
     '下载的扩展包（{downloadedId}@{downloadedVersion}）与市场条目（{expectedId}@{expectedVersion}）不一致。',
@@ -1993,6 +1994,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Terminal ---
   'terminal.close': '关闭终端',
+  'terminal.connectionLost': '远程连接已断开，终端进程已不存在；连接恢复后将自动重新启动。',
+  'terminal.connectionRestored': '远程连接已恢复，终端已重新启动。',
   'terminal.empty': '没有终端。',
   'terminal.noTerminals': '没有终端',
   'terminal.profiles.default': '（默认）',

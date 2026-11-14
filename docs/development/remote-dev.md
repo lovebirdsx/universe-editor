@@ -134,9 +134,15 @@ win32 整体 toLowerCase），但**所有拿它做字符串前缀匹配的对侧
 - **direct 模式不适用**：daemon 由编辑器自己 spawn（`UNIVERSE_REMOTE_SERVER_CMD`），子进程退出即 `failed`
   （用户 Retry），也不会为了恢复再 spawn 第二个 daemon（同一 data-dir 的 `daemon.lock` 会撞车）。
 - 旧连接上的有状态服务随旧 daemon 一起消失：fs 流拒绝、下次调用按新连接重建；远端 watcher 以 `onExit` 通知上层
-  重放订阅；终端收到合成 `onExit`（显示进程结束，不自动重开）；ACP 远端终端 id 失效（调用报错）；远端
-  extension host 的隧道被新 daemon 拒绝后 `onDidClose`，渲染端按「正常退出」（code null）处理，**不会自动重启**
-  （要等用户重启扩展宿主）——这是当前已知的不完美点，语义上应向 VSCode 的「server 重启后扩展宿主需重建」看齐。
+  重放订阅；终端收到带 `reason: 'connection-lost'` 的合成 `onExit`——渲染端不当作进程退出，保留终端并提示
+  「连接恢复后自动重启」，待该 authority 回到 `connected` 时按原 spec 重建 pty（终端 id、分组位置与 xterm
+  scrollback 均保留）；ACP 远端终端 id 失效（调用报错）；远端 extension host 的隧道由 main 在换代恢复
+  （`_recoverDaemonGeneration`）与用户 Retry 时**主动关闭**（在新 bring-up 启动之后，重启的宿主会等它），以
+  `reason: 'connection-lost'` 上报，渲染端按异常退出处理（限次退避重启 → 贡献重译 + activation 重放），不再等
+  旧 daemon 拒绝 reconnection token 才 `onDidClose`（旧进程活着时可能拖到 3h grace）。`_giveUp` 进入 `failed`
+  时**不**关隧道：否则宿主重启的 `getConnection` 会把 failed 连接静默重连，绕过「失败后由用户 Retry」。用户
+  Close / Stop 仍走静默 `dispose`，不会触发重启。E2E 可用
+  探针 `restartRemoteDaemon`（direct 模式 kill 旧 daemon 后走同一换代恢复路径）验证这条链路。
 
 ## 4. Windows 远端主机
 

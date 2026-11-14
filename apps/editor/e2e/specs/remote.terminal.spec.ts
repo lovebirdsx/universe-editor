@@ -6,7 +6,8 @@
  *  cwd is resolved from the current workspace). The terminal must route to the
  *  remote host: the returned id carries the `remote:<authority>:` prefix, `echo`
  *  round-trips through the server's PTY, and the shell reports the remote
- *  workspace root. Direct mode, same as remote.workspaceUi:
+ *  workspace root. A second case replaces the daemon and expects the terminal
+ *  to stay under the same id and respawn its shell. Direct mode, same as remote.workspaceUi:
  *  UNIVERSE_REMOTE_SERVER_CMD runs the local daemon against the Playwright tmp
  *  dir with authority `e2e-local`.
  *--------------------------------------------------------------------------------------------*/
@@ -84,6 +85,51 @@ test.describe('remote terminal', () => {
         timeout: 15_000,
       })
       .toBe(0)
+    await workbench.page.evaluate((t) => window.__E2E__!.terminalClose(t), tid)
+  })
+
+  test('keeps the terminal across a daemon restart and respawns its shell @regression', async ({
+    workbench,
+    scratchDir,
+  }) => {
+    await workbench.waitForRestored()
+    const rootUri = remoteUri(scratchDir('ue2-remote-term-gen-'))
+    await workbench.page.evaluate((uri) => window.__E2E__!.openWorkspaceUri(uri), rootUri)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getCurrentWorkspaceUri()), {
+        timeout: 15_000,
+      })
+      .toBe(rootUri)
+
+    const tid = (await workbench.page.evaluate(() => window.__E2E__!.terminalCreateInWorkspace()))!
+    expect(tid).toContain(`remote:${AUTHORITY}:`)
+    const buffer = (): Promise<string> =>
+      workbench.page.evaluate((t) => window.__E2E__!.terminalReadBuffer(t), tid)
+    await workbench.page.evaluate(
+      ({ t, marker }) => window.__E2E__!.terminalInput(t, `echo ${marker}\r`),
+      { t: tid, marker: MARKER },
+    )
+    await expect.poll(buffer, { timeout: 15_000 }).toContain(MARKER)
+
+    await workbench.page.evaluate(
+      (authority) => window.__E2E__!.restartRemoteDaemon(authority),
+      AUTHORITY,
+    )
+    // The terminal survives under the same id (the old code synthesized an
+    // `exit 0` and removed it) and gets a fresh pty once the daemon is back.
+    await expect
+      .poll(() => workbench.page.evaluate((t) => window.__E2E__!.terminalRestartCount(t), tid), {
+        timeout: 20_000,
+      })
+      .toBe(1)
+    expect(await workbench.page.evaluate(() => window.__E2E__!.getPanelTerminalCount())).toBe(1)
+
+    const after = `${MARKER}_AFTER_RESTART`
+    await workbench.page.evaluate(
+      ({ t, marker }) => window.__E2E__!.terminalInput(t, `echo ${marker}\r`),
+      { t: tid, marker: after },
+    )
+    await expect.poll(buffer, { timeout: 15_000 }).toContain(after)
     await workbench.page.evaluate((t) => window.__E2E__!.terminalClose(t), tid)
   })
 })

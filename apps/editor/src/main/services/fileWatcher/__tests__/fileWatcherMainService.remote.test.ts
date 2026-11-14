@@ -88,6 +88,7 @@ function makeWatcherHarness(): {
     closeConnection: async () => undefined,
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
+    restartRemoteDaemonForTesting: async () => undefined,
     dispose: () => undefined,
     getServiceProxy: () => {
       throw new Error('not stubbed')

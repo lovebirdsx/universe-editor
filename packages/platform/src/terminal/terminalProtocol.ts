@@ -90,6 +90,14 @@ export interface ITerminalExitEvent {
   readonly id: string
   readonly exitCode: number
   readonly signal?: number
+  /**
+   * Set when the host synthesized the exit instead of observing the process
+   * itself. `'connection-lost'` means the remote daemon holding the pty is gone
+   * (generation change or permanent close) — the process did not necessarily
+   * exit, so a client may keep the terminal and restart it once the connection
+   * recovers instead of treating this as a normal process exit.
+   */
+  readonly reason?: 'connection-lost'
 }
 
 /** OSC-driven title change (xterm forwards this; here it originates host-side). */

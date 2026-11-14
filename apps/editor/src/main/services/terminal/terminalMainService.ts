@@ -11,9 +11,11 @@
  *
  *  Events are merged back into one `onData` / `onExit` / `onTitleChange` stream
  *  keyed by the mapped id. A permanent remote connection close fires `onExit` for
- *  every terminal that authority still held (socket drops are NOT permanent —
- *  PersistentProtocol keeps the channel alive across a reconnect, so output keeps
- *  flowing and no exit is synthesised).
+ *  every terminal that authority still held with `reason: 'connection-lost'`
+ *  (socket drops are NOT permanent — PersistentProtocol keeps the channel alive
+ *  across a reconnect, so output keeps flowing and no exit is synthesised). The
+ *  renderer uses that reason to keep the terminal and restart it after the
+ *  connection recovers instead of showing a process exit.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -262,6 +264,7 @@ export class TerminalMainService extends Disposable implements ITerminalService 
           id: mappedId,
           exitCode: e.exitCode,
           ...(e.signal != null ? { signal: e.signal } : {}),
+          ...(e.reason != null ? { reason: e.reason } : {}),
         })
       }),
       service.onTitleChange((e) => {
@@ -309,7 +312,7 @@ export class TerminalMainService extends Disposable implements ITerminalService 
     )
     for (const mappedId of ids) {
       this._dropRemoteId(mappedId)
-      this._onExit.fire({ id: mappedId, exitCode: 0 })
+      this._onExit.fire({ id: mappedId, exitCode: 0, reason: 'connection-lost' })
     }
   }
 }

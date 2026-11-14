@@ -531,10 +531,23 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
   // Accumulate every terminal's output so specs can poll it. Lives for the app's
   // lifetime — acceptable for the probe (only present under UNIVERSE_E2E=1).
   const terminalBuffers = new Map<string, string>()
+  // A terminal restarted after a lost remote connection keeps its id but talks
+  // to a new pty; specs keep using the stable id for input and output.
+  const terminalViewByPty = new Map<string, string>()
+  const terminalPtyByView = new Map<string, string>()
+  const terminalRestarts = new Map<string, number>()
   const d = services.terminalService.onData(({ id, data }) => {
-    terminalBuffers.set(id, (terminalBuffers.get(id) ?? '') + data)
+    const viewId = terminalViewByPty.get(id) ?? id
+    terminalBuffers.set(viewId, (terminalBuffers.get(viewId) ?? '') + data)
   })
   ds.add(d)
+  ds.add(
+    services.terminalManagerService.onDidRestartTerminal(({ id, ptyId }) => {
+      terminalViewByPty.set(ptyId, id)
+      terminalPtyByView.set(id, ptyId)
+      terminalRestarts.set(id, (terminalRestarts.get(id) ?? 0) + 1)
+    }),
+  )
 
   // Counts onDidChangeContributions so a spec can observe a host restart even
   // when the pre/post contribution DTOs are identical.
@@ -1431,12 +1444,13 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return id
     },
     terminalInput: (id: string, data: string): Promise<void> =>
-      services.terminalService.input(id, data),
+      services.terminalService.input(terminalPtyByView.get(id) ?? id, data),
     terminalClose: (id: string): Promise<void> => {
       services.terminalManagerService.closeTerminal(id)
       return Promise.resolve()
     },
     terminalReadBuffer: (id: string): string => terminalBuffers.get(id) ?? '',
+    terminalRestartCount: (id: string): number => terminalRestarts.get(id) ?? 0,
     terminalProvideLinks: (id: string, row: number): Promise<readonly E2ETerminalLink[]> => {
       const holder = services.terminalXtermService.get(id)
       if (!holder) return Promise.resolve([])
@@ -2939,6 +2953,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     dropRemoteSocket: (authority) => services.remoteStatusService.dropSocketForTesting(authority),
     dropRemoteExtensionHostSocket: (authority) =>
       services.remoteStatusService.dropExtensionHostSocketForTesting(authority),
+    restartRemoteDaemon: (authority) =>
+      services.remoteStatusService.restartRemoteDaemonForTesting(authority),
     openWorkspaceUri: (uri) => services.workspaceService.openFolder(URI.parse(uri)),
     openUri: (uri) => services.editorResolverService.openEditor(URI.parse(uri)),
     getCurrentWorkspaceUri: () => services.workspaceService.current?.folder.toString(),

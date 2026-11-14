@@ -170,7 +170,7 @@ describe('TerminalMainService routing', () => {
     expect(exits).toEqual([{ id: info.id, exitCode: 7 }])
   })
 
-  it('fires onExit for live terminals when the connection closes permanently', async () => {
+  it('fires a connection-lost onExit for live terminals when the connection closes permanently', async () => {
     const { svc, remote } = makeLocalHarness()
     const info = await svc.create({ cwd: remoteCwd() })
     const exits: ITerminalExitEvent[] = []
@@ -178,7 +178,7 @@ describe('TerminalMainService routing', () => {
 
     remote.onClose.fire()
 
-    expect(exits).toEqual([{ id: info.id, exitCode: 0 }])
+    expect(exits).toEqual([{ id: info.id, exitCode: 0, reason: 'connection-lost' }])
   })
 
   it('routes getProfiles to the remote host when the folder is remote', async () => {
@@ -288,7 +288,7 @@ describe('TerminalMainService — remote connection lifecycle', () => {
     const dataSub = fixture.svc.onData((e) => data.push(e))
     try {
       fixture.remote.onClose.fire()
-      expect(exits).toEqual([{ id: info.id, exitCode: 0 }])
+      expect(exits).toEqual([{ id: info.id, exitCode: 0, reason: 'connection-lost' }])
 
       // Stale endpoint fully detached: no forwarding until a rebuild.
       fixture.remote.onData.fire({ id: 'remote-uuid-1', data: 'stale' })

@@ -143,6 +143,12 @@ export interface IRemoteConnectionService {
   closeConnection(authority: string): Promise<void>
   dropSocketForTesting(authority: string): void
   dropExtensionHostSocketForTesting(authority: string): void
+  /**
+   * E2E only: kill the daemon behind `authority` and walk the same fresh-
+   * generation recovery a real daemon restart triggers. Lets a spec exercise
+   * the replacement path (new token, ext-host restart) without ssh.
+   */
+  restartRemoteDaemonForTesting(authority: string): Promise<void>
   dispose(): void
 }
 
@@ -461,6 +467,8 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       this._teardownForRetry(entry)
       this._fireState(entry, 'idle')
       void this.getConnection(authority).catch(() => undefined)
+      // After getConnection so a renderer host restart awaits the new bring-up.
+      this._closeExtensionHostTunnels(authority)
     } catch {
       // invalid authority or disposed service — nothing to retry
     }
@@ -542,6 +550,49 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     for (const [tunnel] of this._extensionHostTunnels) {
       if (tunnel.authority === authority) tunnel.dropSocketForTesting()
     }
+  }
+
+  async restartRemoteDaemonForTesting(authority: string): Promise<void> {
+    authority = normalizeRemoteAuthority(authority)
+    const entry = this._entries.get(authority)
+    // Only a live connection has a daemon to replace; idle/failed entries are
+    // brought up by getConnection/retry instead.
+    if (!entry || entry.state !== 'connected') return
+    // Leave 'connected' before touching the daemon: its socket close would
+    // otherwise start the transparent reconnect loop against the dead endpoint.
+    this._fireState(entry, 'reconnecting')
+    if (entry.transport === 'direct') {
+      const proc = entry.directProcess
+      if (proc) {
+        // Detach first: _onDirectExited would call _giveUp ('failed') while we
+        // are about to spawn the replacement generation. Also free daemon.lock
+        // by awaiting the exit before the new daemon starts.
+        entry.directSubs?.dispose()
+        entry.directSubs = null
+        entry.directProcess = null
+        proc.kill()
+        await this._waitForExit(proc)
+        proc.dispose()
+      }
+    } else {
+      const orchestrator = entry.transport === 'wsl' ? this._getWslDeployer() : this._deployer
+      const target = entry.transport === 'wsl' ? wslDistroFromAuthority(authority) : authority
+      await orchestrator.stopRemoteDaemon(target)
+    }
+    entry.closedByUser = false
+    entry.userDisconnected = false
+    entry.daemonGenerationRecoveries = 0
+    this._recoverDaemonGeneration(entry, 'the daemon was restarted by the E2E probe')
+  }
+
+  private async _waitForExit(proc: ManagedChildProcess): Promise<void> {
+    if (proc.exited) return
+    const exit = new Promise<void>((resolve) => {
+      proc.onDidExit(() => resolve())
+    })
+    // A wedged kill must not hang the probe forever; the bring-up reports the
+    // daemon.lock conflict if the old process really survived.
+    await withTimeout(exit, 10_000, 'direct daemon did not exit after kill').catch(() => undefined)
   }
 
   // ------------------------- bring-up -------------------------
@@ -1187,12 +1238,25 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._logger.info(
       `[remote:${entry.authority}] re-establishing a fresh connection (attempt ${entry.daemonGenerationRecoveries}/${MAX_DAEMON_GENERATION_RECOVERIES}): ${reason}`,
     )
-    // Consumers (fs streams, watcher transports, terminals, ext-host tunnels) hold
-    // the OLD connection object, so the close must fire before the teardown that
-    // disposes it.
+    this._rebuildDaemonGeneration(entry)
+  }
+
+  /**
+   * Drop the old generation and bring up the new one. Consumers
+   * (fs streams, watcher transports, terminals, ext-host tunnels) hold the OLD
+   * connection object, so the close must fire before the teardown that disposes
+   * it. Extension-host tunnels are closed explicitly (not just via their own
+   * reconnect loop) because an old daemon can keep the socket hanging for the
+   * 3h grace time; `_startBringUp` installs `entry.promise` synchronously, so a
+   * renderer tunnel restart arriving after the close awaits the in-flight
+   * bring-up instead of dialing the dead daemon.
+   */
+  private _rebuildDaemonGeneration(entry: ConnectionEntry): void {
     entry.connection?.fireClose()
     this._teardownConnection(entry)
-    void this._startBringUp(entry).catch(() => {
+    const bringUp = this._startBringUp(entry)
+    this._closeExtensionHostTunnels(entry.authority)
+    void bringUp.catch(() => {
       // _bringUp already reported the failure through onDidChangeState('failed').
     })
   }
@@ -1240,6 +1304,9 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
     this._logger.error(`remote '${entry.authority}' giving up: ${reason}`)
     entry.connection?.fireClose()
     this._teardownConnection(entry)
+    // Ext-host tunnels stay open here: closing them would make the renderer
+    // restart the host, whose getConnection silently reconnects a failed entry.
+    // retryConnection closes them once the user asks for a new bring-up.
     this._fireState(entry, 'failed', reason)
   }
 
@@ -1286,6 +1353,16 @@ export class RemoteConnectionMainService extends Disposable implements IRemoteCo
       this._extensionHostTunnels.delete(tunnel)
       closeSub.dispose()
       tunnel.dispose()
+    }
+  }
+
+  /** Daemon lost: fire each tunnel's onDidClose so consumers rebuild, then dispose. */
+  private _closeExtensionHostTunnels(authority: string): void {
+    for (const [tunnel, closeSub] of this._extensionHostTunnels) {
+      if (tunnel.authority !== authority) continue
+      this._extensionHostTunnels.delete(tunnel)
+      closeSub.dispose()
+      tunnel.closeForConnectionLoss()
     }
   }
 

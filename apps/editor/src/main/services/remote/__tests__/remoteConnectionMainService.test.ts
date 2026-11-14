@@ -208,6 +208,8 @@ class FakeProc extends EventEmitter {
   killCalls = 0
   kill(): boolean {
     this.killCalls++
+    // Mirror a real signal: the child reaps asynchronously, emitting exit.
+    queueMicrotask(() => this.emitExit(0))
     return true
   }
   emitStdout(data: string): void {
@@ -432,6 +434,50 @@ describe('RemoteConnectionMainService direct mode', () => {
     await vi.waitFor(() => expect(daemon.closedCount).toBe(2), { timeout: 5000 })
   })
 
+  it('closeConnection closes the extension-host tunnel silently (no onDidClose)', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    await made.svc.getConnection('host')
+    const tunnel = await made.svc.openExtensionHostConnection('host')
+    let closed = false
+    tunnel.onDidClose(() => {
+      closed = true
+    })
+
+    await made.svc.closeConnection('host')
+    await vi.waitFor(() => expect(daemon.closedCount).toBe(2), { timeout: 5000 })
+
+    // The user-initiated close must not look like a daemon loss to the renderer,
+    // which would otherwise restart the host into a user-stopped connection.
+    expect(closed).toBe(false)
+  })
+
+  it('restartRemoteDaemonForTesting kills the daemon and notifies the ext-host tunnel', async () => {
+    const daemon = await startDaemon()
+    made = makeDirectService(daemon)
+
+    const conn = await made.svc.getConnection('host')
+    let connClosed = false
+    conn.onDidClose(() => {
+      connClosed = true
+    })
+    const tunnel = await made.svc.openExtensionHostConnection('host')
+    let tunnelClosed = false
+    tunnel.onDidClose(() => {
+      tunnelClosed = true
+    })
+
+    await made.svc.restartRemoteDaemonForTesting('host')
+
+    expect(made.procs).toHaveLength(2)
+    expect(connClosed).toBe(true)
+    expect(tunnelClosed).toBe(true)
+    await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('connected'), {
+      timeout: 5000,
+    })
+  })
+
   it('connect clears the user-disconnect guard and brings up again', async () => {
     const daemon = await startDaemon()
     made = makeDirectService(daemon)
@@ -471,6 +517,10 @@ describe('RemoteConnectionMainService direct mode', () => {
     conn.onDidClose(() => {
       closed = true
     })
+    const tunnel = { authority: 'host', closeForConnectionLoss: vi.fn(), dispose: vi.fn() }
+    const tunnels = (made.svc as unknown as { _extensionHostTunnels: Map<unknown, unknown> })
+      ._extensionHostTunnels
+    tunnels.set(tunnel, { dispose: vi.fn() })
 
     // Direct mode owns the daemon process; its exit is the documented terminal
     // state (no auto-respawn, unlike a replaced remote daemon over ssh/wsl).
@@ -478,8 +528,12 @@ describe('RemoteConnectionMainService direct mode', () => {
     await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('failed'), { timeout: 5000 })
     expect(made.states.at(-1)?.error).toContain('direct daemon exited')
     expect(closed).toBe(true)
+    // Closing the tunnel on give-up would let a host restart reconnect implicitly.
+    expect(tunnel.closeForConnectionLoss).not.toHaveBeenCalled()
 
     made.svc.retryConnection('host')
+    expect(tunnel.closeForConnectionLoss).toHaveBeenCalledTimes(1)
+    expect(tunnels.size).toBe(0)
     await vi.waitFor(() => expect(made!.states.at(-1)?.state).toBe('connected'), {
       timeout: 5000,
     })
@@ -1065,6 +1119,47 @@ describe('RemoteConnectionMainService daemon generation recovery', () => {
     made?.svc.dispose()
     made = undefined
   })
+
+  it('closes the extension-host tunnel on a daemon generation change', async () => {
+    const daemon = await startDaemon()
+    const wsl = (made = makeWslService(daemon))
+    await wsl.svc.getConnection('wsl+ubuntu')
+
+    // Inject a tunnel directly: the fake daemon does not model the ExtensionHost
+    // connection type, and the recovery path only needs to prove main drives the
+    // abnormal-close API (not the silent dispose one).
+    let closed = false
+    const tunnel = {
+      authority: 'wsl+ubuntu',
+      closeForConnectionLoss: vi.fn(() => {
+        closed = true
+      }),
+      dispose: vi.fn(),
+    }
+    const tunnels = (wsl.svc as unknown as { _extensionHostTunnels: Map<unknown, unknown> })
+      ._extensionHostTunnels
+    tunnels.set(tunnel, { dispose: vi.fn() })
+
+    daemon.handshakeResponse = (req) =>
+      req.isReconnection
+        ? {
+            type: 'error',
+            code: RemoteConnectionErrorCode.UnknownReconnectionToken,
+            message: 'unknown reconnection token',
+          }
+        : { type: 'ok' }
+
+    wsl.svc.dropSocketForTesting('wsl+ubuntu')
+
+    await vi.waitFor(() => expect(closed).toBe(true), { timeout: 10_000 })
+    // The tunnel is removed before closing, so its own onDidClose cleanup cannot
+    // double-dispose; and it must not take the silent user-close path.
+    expect(tunnel.dispose).not.toHaveBeenCalled()
+    expect(tunnels.size).toBe(0)
+    await vi.waitFor(() => expect(wsl.states.at(-1)?.state).toBe('connected'), {
+      timeout: 10_000,
+    })
+  }, 20_000)
 
   it('recovers to a restarted daemon on a new port and rebinds relay proxies', async () => {
     const first = await startDaemon()

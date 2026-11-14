@@ -7,7 +7,8 @@
  *  and the host-side URI codec transforms file:<->remote-ssh so the renderer
  *  sees remote-ssh URIs throughout). Then the extension-host tunnel socket is
  *  dropped and the RPC must survive transparently — a fresh hover still resolves
- *  once the PersistentProtocol re-attaches.
+ *  once the PersistentProtocol re-attaches. Finally the daemon is replaced
+ *  (restartRemoteDaemon probe): the renderer must rebuild the host.
  *
  *  Direct mode, same as remote.workspaceUi: UNIVERSE_REMOTE_SERVER_CMD runs the
  *  local daemon against the Playwright tmp dir with authority `e2e-local`. The
@@ -99,5 +100,21 @@ test.describe('remote extension host', () => {
 
     // A fresh hover still resolves once the PersistentProtocol re-attaches.
     await expect.poll(hover, { timeout: 30_000 }).not.toBe('')
+
+    // A replaced daemon has no trace of the old host: the renderer must rebuild
+    // it (generation bump) and language features must come back.
+    const generation = await workbench.page.evaluate(() =>
+      window.__E2E__!.getExtensionHostGeneration(),
+    )
+    await workbench.page.evaluate(
+      (authority) => window.__E2E__!.restartRemoteDaemon(authority),
+      AUTHORITY,
+    )
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getExtensionHostGeneration()), {
+        timeout: 60_000,
+      })
+      .toBeGreaterThan(generation)
+    await expect.poll(hover, { timeout: 60_000 }).not.toBe('')
   })
 })

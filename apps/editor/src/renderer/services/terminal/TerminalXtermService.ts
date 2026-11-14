@@ -248,6 +248,16 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     const store = this._register(new DisposableStore())
     store.add(manager.attach(id, (data) => this.term.write(data)))
     store.add(this.term.onData((data) => manager.input(id, data)))
+    // A terminal restarted on reconnect keeps this xterm (scrollback intact),
+    // so its size is unchanged — but the fresh pty spawned at the host default.
+    // Push the current dimensions so wrapping / cursor placement match.
+    store.add(
+      manager.onDidRestartTerminal(({ id: restartedId }) => {
+        if (restartedId !== this._id) return
+        this.fit()
+        manager.resize(this._id, this.term.cols, this.term.rows)
+      }),
+    )
     store.add(
       this.term.onSelectionChange(() => {
         this._hasSelection = this.term.hasSelection()

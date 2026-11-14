@@ -616,10 +616,13 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     this._teardownConnection(conn)
 
     const planned = this._stopping.delete(evt.handle)
-    const abnormal = evt.code !== 0 && evt.code !== null
+    // A remote tunnel closed by main (daemon generation change) has no exit
+    // code, so the null code must not be read as a clean exit.
+    const abnormal = evt.reason === 'connection-lost' || (evt.code !== 0 && evt.code !== null)
     this._logger.warn(
       `extension host exited handle=${evt.handle} code=${evt.code} signal=${evt.signal}` +
-        (evt.error ? ` error=${evt.error}` : ''),
+        (evt.error ? ` error=${evt.error}` : '') +
+        (evt.reason ? ` reason=${evt.reason}` : ''),
     )
     if (!planned && abnormal) {
       this._handleCrash(evt)
@@ -682,13 +685,19 @@ export class ExtensionHostClientService extends Disposable implements IExtension
 
     this._notification.notify({
       severity: Severity.Warning,
-      message: localize(
-        'extHost.crash.restarting',
-        'The extension host crashed (code {code}). Restarting…',
-        {
-          code: evt.code ?? 'n/a',
-        },
-      ),
+      message:
+        evt.reason === 'connection-lost'
+          ? localize(
+              'extHost.connectionLost.restarting',
+              'The remote extension host connection was lost. Restarting…',
+            )
+          : localize(
+              'extHost.crash.restarting',
+              'The extension host crashed (code {code}). Restarting…',
+              {
+                code: evt.code ?? 'n/a',
+              },
+            ),
     })
     const delay = RESTART_BASE_DELAY_MS * 2 ** (state.count - 1)
     setTimeout(() => void this._restart(), delay)

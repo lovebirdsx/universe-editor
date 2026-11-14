@@ -12,7 +12,7 @@ import {
   type ITerminalCreatedInfo,
   type IThemeService,
 } from '@universe-editor/platform'
-import { ITerminalManagerService } from '../TerminalManagerService.js'
+import { ITerminalManagerService, type ITerminalRestartEvent } from '../TerminalManagerService.js'
 
 vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
 
@@ -118,6 +118,7 @@ function makeManager(
     input: () => {},
     resize: (id: string, cols: number, rows: number) => h.resizes.push({ id, cols, rows }),
     onDidRemoveTerminal: h.onDidRemoveTerminal.event,
+    onDidRestartTerminal: new Emitter<ITerminalRestartEvent>().event,
   } as unknown as ITerminalManagerService
 }
 

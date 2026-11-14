@@ -233,6 +233,7 @@ function makeFixture(opts: { gallery?: IManagementGallery } = {}): Fixture {
     closeConnection: async () => undefined,
     dropSocketForTesting: () => undefined,
     dropExtensionHostSocketForTesting: () => undefined,
+    restartRemoteDaemonForTesting: async () => undefined,
     dispose: () => undefined,
     getServiceProxy: ((authority: string, channelName: string) => {
       proxyCalls.push({ authority, channel: channelName })

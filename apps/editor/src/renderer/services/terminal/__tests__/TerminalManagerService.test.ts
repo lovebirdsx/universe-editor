@@ -3,7 +3,7 @@
  *  and drives its events via Emitters. No xterm / DOM involved.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   observableValue,
@@ -31,7 +31,10 @@ import type {
   IEnvironmentSnapshot,
   IEnvironmentSnapshotService,
 } from '../../../../shared/ipc/environmentSnapshotService.js'
-import type { IRemoteStatusService } from '../../../../shared/ipc/remoteStatusService.js'
+import type {
+  IRemoteStatusService,
+  RemoteConnectionStatusDto,
+} from '../../../../shared/ipc/remoteStatusService.js'
 import {
   TerminalManagerService,
   computeTerminalCwd,
@@ -53,6 +56,8 @@ interface Harness {
   profilesRequest: ITerminalProfilesRequest | undefined
   /** Swap the profile list the mocked ITerminalService.getProfiles returns. */
   setProfiles: (profiles: readonly ITerminalProfile[]) => void
+  /** Push a remote-connection state transition to the manager. */
+  fireRemoteState: (authority: string, state: RemoteConnectionStatusDto['state']) => void
 }
 
 function makeStorage(store: Map<string, unknown> = new Map<string, unknown>()): IStorageService {
@@ -197,6 +202,8 @@ function makeHarness(
     getSnapshot: () => Promise.resolve(snapshot),
   }
 
+  const remoteStates = new Map<string, RemoteConnectionStatusDto['state']>()
+  const remoteStateEmitter = new Emitter<RemoteConnectionStatusDto>()
   const remoteStatus = {
     _serviceBrand: undefined,
     getEnvironment: () =>
@@ -212,6 +219,9 @@ function makeHarness(
             }
           : null,
       ),
+    getConnections: () =>
+      Promise.resolve([...remoteStates].map(([authority, state]) => ({ authority, state }))),
+    onDidChangeState: remoteStateEmitter.event,
   } as unknown as IRemoteStatusService
 
   const config = makeConfig(configOverrides)
@@ -243,6 +253,10 @@ function makeHarness(
     },
     setProfiles: (p) => {
       profileHolder.current = p
+    },
+    fireRemoteState: (authority, state) => {
+      remoteStates.set(authority, state)
+      remoteStateEmitter.fire({ authority, state })
     },
   }
 }
@@ -346,6 +360,85 @@ describe('TerminalManagerService', () => {
     expect(chunks.join('')).toContain('exited with code 0')
     expect(h.manager.terminals.get()).toHaveLength(0)
     expect(h.manager.activeTerminalId.get()).toBeNull()
+  })
+
+  describe('remote connection loss', () => {
+    const remoteHarness = () =>
+      makeHarness('/remote/ws', undefined, undefined, {
+        remoteAuthority: 'e2e-local',
+        remoteOs: 'linux',
+      })
+
+    it('keeps the terminal (and shows no exit code) when the connection is lost', async () => {
+      const remote = remoteHarness()
+      const id = await remote.manager.newTerminal({ target: 'panel' })
+      const chunks: string[] = []
+      remote.manager.attach(id!, (d) => chunks.push(d))
+      const exits: string[] = []
+      remote.manager.onDidTerminalExit((e) => exits.push(e.id))
+
+      remote.onExit.fire({ id: id!, exitCode: 0, reason: 'connection-lost' })
+
+      expect(remote.manager.terminals.get().map((t) => t.id)).toEqual([id])
+      expect(remote.manager.panelTerminals.get().map((t) => t.id)).toEqual([id])
+      expect(remote.manager.activeTerminalId.get()).toBe(id)
+      expect(chunks.join('')).toContain('connection lost')
+      expect(chunks.join('')).not.toContain('code 0')
+      expect(exits).toEqual([])
+      // Input must not reach the dead pty id.
+      remote.manager.input(id!, 'ls\n')
+      expect(remote.inputs).toEqual([])
+    })
+
+    it('restarts a lost terminal after reconnect, keeping id, group slot and xterm history', async () => {
+      const remote = remoteHarness()
+      const first = await remote.manager.newTerminal()
+      const lost = await remote.manager.splitTerminal()
+      const third = await remote.manager.splitTerminal()
+      remote.manager.setActiveTerminal(lost!)
+      const chunks: string[] = []
+      remote.manager.attach(lost!, (d) => chunks.push(d))
+
+      remote.onExit.fire({ id: lost!, exitCode: 0, reason: 'connection-lost' })
+      expect(remote.created).toHaveLength(3)
+      expect(remote.released).toEqual([])
+
+      remote.fireRemoteState('e2e-local', 'connected')
+      await vi.waitFor(() => expect(remote.created).toHaveLength(4))
+
+      // Same id in the same split slot; nothing was removed or released.
+      expect(remote.manager.terminalGroups.get()[0]!.terminals).toEqual([first, lost, third])
+      expect(remote.manager.terminals.get().map((t) => t.id)).toEqual([first, lost, third])
+      expect(remote.manager.activeTerminalId.get()).toBe(lost)
+      expect(remote.released).toEqual([])
+
+      // The respawn uses the original spec (remote cwd + resolved shell).
+      const before = remote.created[1]!.spec
+      const after = remote.created[3]!.spec
+      expect(after.cwd).toEqual(before.cwd)
+      // The first spawn resolved the shell on the host ('bash'); the restart
+      // reuses that resolved value instead of re-running profile detection.
+      expect(after.shell).toBe('bash')
+
+      // Output from the new pty reaches the surviving xterm instance.
+      remote.onData.fire({ id: remote.created[3]!.info.id, data: 'after-restart' })
+      expect(chunks.join('')).toContain('after-restart')
+      expect(chunks.join('')).toContain('restarted')
+    })
+
+    it('closing a lost terminal releases nothing and suppresses the restart', async () => {
+      const remote = remoteHarness()
+      const id = await remote.manager.newTerminal()
+      remote.onExit.fire({ id: id!, exitCode: 0, reason: 'connection-lost' })
+
+      remote.manager.closeTerminal(id!)
+      expect(remote.released).toEqual([])
+      expect(remote.manager.terminals.get()).toHaveLength(0)
+
+      remote.fireRemoteState('e2e-local', 'connected')
+      await vi.waitFor(() => expect(remote.manager.terminals.get()).toHaveLength(0))
+      expect(remote.created).toHaveLength(1)
+    })
   })
 
   it('closeTerminal releases the process and drops it', async () => {
