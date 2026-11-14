@@ -6,8 +6,8 @@ Agent 触发器的实现说明：主进程单例调度器 + 每窗口反向运�
 
 ## 1. 定位与边界
 
-- **配置是工作区级的**：定义存在 `<workspace>/.universe-editor/triggers.json`（可提交入库），工作区由文件所在目录隐式确定，文件里没有 `workspace` 字段。全局并发上限属于机器资源，读用户设置 `triggers.maxConcurrentRuns`。只支持本地文件夹工作区。
-- **后台发现 = 打开过即登记**：窗口打开含该文件的工作区（或执行 `openConfig`）时，main 把工作区登记进 `<userData>/triggers/workspaces.json`，为它建一个 `JsonConfigFileStore` 并在窗口关闭后继续调度；目录 / 文件消失时跳过并在日志体现。`workbench.action.triggers.removeWorkspace` 可把工作区移出登记表（停止调度）。
+- **配置是工作区级的**：定义存在 `<workspace>/.universe-editor/triggers.json`（可提交入库），工作区由文件所在目录隐式确定，文件里没有 `workspace` 字段。全局并发上限属于机器资源，读用户设置 `triggers.maxConcurrentRuns`。工作区可以是本地文件夹，也可以是远程工作区（`remote-ssh://<authority>/<path>`）；两者共用同一套配置语义，差别只在「在哪执行」与「何时可调度」（见 §2 与 §4）。
+- **后台发现 = 打开过即登记**：窗口打开含该文件的工作区（或执行 `openConfig`）时，main 把工作区登记进 `<userData>/triggers/workspaces.json`，为它建配置读取通路；本地工作区在窗口关闭后继续调度，远程工作区则要求窗口保持打开（§4）。目录 / 文件消失时跳过并在日志体现。`workbench.action.triggers.removeWorkspace` 可把工作区移出登记表（停止调度）。登记表存**工作区 URI**（version 2，旧裸路径数据作废、不迁移）。
 - **本机激活闸门**：每条工作区触发器的定义指纹必须在本机确认一次（`workbench.action.triggers.confirmActivation`，存 `state.json` 的 `activationConfirmed`）。未确认时不调度、不执行 poll 取数命令、不允许 `runNow`；定义一改指纹即失效。
 - **默认关闭**：`enabled` 缺省 `false`；全部关闭时不创建调度 / 轮询定时器（仅保留启动门控那一个定时器）。
 - **主进程单例**：调度、去重、状态、审计都在 main。renderer 只负责建会话、跑 Agent、收结果、执行动作。
@@ -20,7 +20,8 @@ Agent 触发器的实现说明：主进程单例调度器 + 每窗口反向运�
 main（应用级单例）                                    renderer（每窗口）
 ┌──────────────────── TriggerMainService ────────────────────┐
 │ TriggerWorkspaceRegistry             ← workspaces.json     │
-│ JsonConfigFileStore<TriggersConfig> × N（每登记工作区一个） │
+│ 配置读取：本地 JsonConfigFileStore /                        │
+│           远程经文件服务 + 远端 watcher（每登记工作区一份） │
 │   ← <workspace>/.universe-editor/triggers.json             │
 │ TriggerStateStore                    ← state.json          │
 │ RunQueue  (全局 / 每触发器并发)                             │
@@ -49,12 +50,23 @@ main（应用级单例）                                    renderer（每窗�
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### 远程工作区
+
+调度仍然只发生在**本地 main**（应用级单例）：配置发现、去重、排队、状态、审计都在客户端。除通用的远程文件服务（配置读取 / 热加载与 `prompt.md` 写入）外，触发器专用的跨隧道工作只有三件，全部走 `RemoteChannels.TriggerPoll` 通道：
+
+- **poll 取数**：命令在该远程工作区目录下由远端 server 执行，超时 / 1 MB stdout / 杀进程树语义与本地逐字一致，归一后的 items 经通道回客户端。
+- **运行目录**：由远端 server 创建与清理 `<远端 serverDataDir>/triggers/runs/<clientId>/<runId>`。`clientId` 是本机安装 ID（machineId），多个客户端共用同一远端主机时各自只清理自己的子目录；保留数量与 active / queued / pending 保护规则与本地相同。客户端只传 id，不传路径，server 端自行推导并校验路径。
+- **报告读取**：远端 run 的 `report.md` 经同一通道读取（512 KB 上限），PC 报告标签页与手机网关共用。
+
+远程的 agent 会话本身也跑在远端（cwd = 远程工作区 + `session.cwd`），运行目录以**远端原生路径**作为 `additionalDirectories` 下发给会话。工作区身份统一为 URI 字符串（本地 `file:`、远程 `remote-ssh:`）；`workspaces.json` 与 `state.json` 都是 version 2（见 §3）。
+
 ### IPC 通道
 
 | 通道 | 方向 | 契约 |
 | --- | --- | --- |
-| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`：触发器列表（按复合键）/ 工作区列表 / 手动运行 / 暂停 / 激活确认 / 高权限与自动 approve 确认 / 打开配置 / 移除工作区 / 运行目录 / 运行结束上报 / Swarm 审核上报 / `readRunReport`（PC 按 runId 读 `report.md`） / `onDidChangeTriggers` |
+| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`：触发器列表（按复合键）/ 工作区列表 / 手动运行 / 暂停 / 激活确认 / 高权限与自动 approve 确认 / 打开配置 / 移除工作区 / 运行目录 / 运行结束上报 / Swarm 审核上报 / `readRunReport`（PC 按 runId + 可选 authority 读 `report.md`） / `onDidChangeTriggers` |
 | `ServiceChannels.TriggerRunHost`（`'triggerRunHost'`） | main → renderer | `ITriggerRunHost`：`startRun` / `cancelRun` / `isWorkspaceTrusted` |
+| `RemoteChannels.TriggerPoll`（`'triggerPoll'`） | main → 远端 server | `IRemoteTriggerService`：`poll` / `createRunDir` / `cleanupRuns` / `readReport`。DTO 路径一律 URI；runDir 布局由 server 拥有，客户端只传 `clientId` / `runId` 与保留策略 |
 
 - 所有按触发器寻址的参数（`runNow` / `setPaused` / 三个确认方法）都用**复合键** `workspaceComparisonKey + '\u0000' + id`，见 `triggerIdentity.ts`。IPC 上不传分离的 workspace + id，避免两处拼接口径漂移。
 - main 侧：`registerMainServices.ts` 注册 `ProxyChannel.fromService(app.triggers)`，并 `toService` 得到每个窗口的 `rendererTriggerRunHost`；`windowScopeFactory.ts` 在窗口创建后调用 `appServices.triggers.registerWindowHost(win.id, host, workspaceFolder)`，工作区切换时 `noteWindowWorkspace(workspaceFolder)`，窗口销毁时 `windowMainService` 调 `unregisterWindowHost`。
@@ -66,6 +78,7 @@ main（应用级单例）                                    renderer（每窗�
 | 位置 | 内容 |
 | --- | --- |
 | `apps/editor/src/shared/triggers/` | 纯逻辑（无 node / electron 依赖）：`types.ts`（契约与默认值）、`configParse.ts`（校验 + 示例）、`cron.ts`、`scheduler.ts`、`dedupe.ts`、`runQueue.ts`、`backoff.ts`、`promptTemplate.ts`、`verdict.ts` |
+| `packages/node-services/src/triggers/` | main 与远端 server 共用：`triggerProtocol.ts`（`triggerPoll` 契约）、`pollCommandFetcher.ts`、`runDirectories.ts`、`sessionReportReader.ts` |
 | `apps/editor/src/shared/ipc/triggerService.ts` | `ITriggerMainService` / `ITriggerRunHost` 契约、`SwarmNeedsActionReview`、`swarmReviewEvent` |
 | `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（调度器）、`triggerWorkspaceRegistry.ts`（登记表）、`triggerIdentity.ts`（复合键）、`workspaceTrustReader.ts`（main 侧信任探针）、`triggersConfigFile.ts`（JSONC 读写 + 示例 + 用户设置读取）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts`、`runReportReader.ts`（`SessionReportReader`：UUID / realpath / 符号链接 / 512 KB / 10s 超时安全读取，手机网关与 PC 共用） |
 | `apps/editor/src/renderer/services/triggers/` | `TriggerRunHost.ts`、`automatedSessionService.ts`、`automatedPermissionPolicy.ts`、`automatedRunWatcher.ts`、`triggerActionExecutor.ts`、`triggerReportEditorInput.ts`（报告标签页的虚拟 EditorInput）、`triggerSessionRevealService.ts`（`showSession` 的会话切换） |
@@ -79,10 +92,11 @@ main（应用级单例）                                    renderer（每窗�
 | 路径 | 写入方 | 内容 |
 | --- | --- | --- |
 | `<workspace>/.universe-editor/triggers.json` | 用户 / `openConfig` 的 `ensureConfigFile` | JSONC 配置（可提交入库）；外部编辑热加载（该工作区目录 watcher）。 |
-| `<userData>/triggers/workspaces.json` | `TriggerWorkspaceRegistry`（独占） | 本机登记的工作区绝对路径列表（**不入库**）。窗口打开工作区 / `openConfig` 时登记；`removeWorkspace` 移除。加载时丢弃非绝对路径项。 |
-| `<userData>/triggers/state.json` | `TriggerStateStore`（独占） | `pausedAll`、每触发器（键为**复合键**）`processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`sourceFingerprint`、`activationConfirmed` / `elevatedConfirmed` / `approveConfirmed` 指纹、`pending` 记录（`triggerKey`）。防抖 + 原子写（0600）。加载时丢弃 `runId` 不是 UUID 形态的 pending 记录（会拼进文件路径）。 |
+| `<userData>/triggers/workspaces.json` | `TriggerWorkspaceRegistry`（独占） | 本机登记的工作区 **URI** 列表（version 2，本地 `file:` 与远程 `remote-ssh:` 都收；**不入库**）。窗口打开工作区 / `openConfig` 时登记；`removeWorkspace` 移除。加载时丢弃非绝对 `file:` 路径与非 `remote-ssh:` 的项，旧 version 数据直接作废。 |
+| `<userData>/triggers/state.json` | `TriggerStateStore`（独占） | version 2；`pausedAll`、每触发器（键为**复合键**，工作区部分是 URI 比较键）`processed`（去重 key）、`paused`、`consecutiveFailures`、`backoffUntil`、`lastScheduledAt`、`lastRunAt`、`lastError`、`baselineDone`、`sourceFingerprint`、`activationConfirmed` / `elevatedConfirmed` / `approveConfirmed` 指纹、`pending` 记录（`triggerKey`）。防抖 + 原子写（0600）。加载时丢弃 `runId` 不是 UUID 形态的 pending 记录（会拼进文件路径）。 |
 | `<userData>/triggers/audit.jsonl` | `AuditLog` | `action` / `result` / `detail`（标识性文本，无 payload / prompt / 摘要）。每条执行 / 拒绝的动作单独成行。 |
-| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），PC 端经 `readRunReport` 按 runId 读取（同一 reader），目录被清理后入口显示空状态。 |
+| `<userData>/triggers/runs/<runId>/` | main 建目录，Agent 写文件 | 本地运行的 `result.json`、`report.md`；启动新 run 时按 mtime 只保留最近 200 个目录，但**跳过 active / queued / pending 的 runId**。手机端可经网关按会话读取 `report.md`（见 `mobile-gateway.md` §7e），PC 端经 `readRunReport` 按 runId 读取（同一 reader），目录被清理后入口显示空状态。 |
+| `<远端 serverDataDir>/triggers/runs/<clientId>/<runId>/` | 远端 server（`triggerPoll.createRunDir`），Agent 写文件 | 远程运行的 `result.json`、`report.md`、`prompt.md`。`clientId` 为本机安装 ID；保留策略按 clientId 命名空间各留 200 个，客户端的保留请求只影响自己的子目录。 |
 | `<userData>/triggers/pending/<runId>.json` | `TriggerMainService` | 排队事件的临时负载；run 开始或丢弃后删除。 |
 
 `state.json` 里的去重 key 每条最多保留 **2000** 个、**30 天**（`prune`）。
@@ -106,13 +120,19 @@ main（应用级单例）                                    renderer（每窗�
 
 ### 复合键
 
-`triggerIdentity.ts`：
+工作区身份是 URI 字符串（本地 `file:`，远程 `remote-ssh://<authority>/<path>`）。`triggerIdentity.ts`：
 
-- `workspaceComparisonKey(workspace, platform)` = 绝对路径经 `getPathComparisonKey` 归一（大小写 / 分隔符按平台）；
+- `workspaceComparisonKey(workspace, platform)`：`file:` 工作区按本机平台路径规则归一（大小写 / 分隔符）；非 `file:` 工作区按**远端文件系统语义**比较——路径保持大小写敏感、与本地平台无关，authority 走内核归一（WSL distro 小写，SSH Host alias 原样）；
 - `triggerKeyFor(workspace, id)` = `workspaceComparisonKey + '\u0000' + id`；
 - `parseTriggerKey` / `triggerKeyBelongsToWorkspace` 供路由与过滤。
 
 state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联全部用复合键；日志 / 审计只写裸 `id` + `workspace`，不把 NUL 带进人类可读输出。
+
+### 配置读取与热加载
+
+- **本地工作区**：`JsonConfigFileStore` 直接读 `<workspace>/.universe-editor/triggers.json`，由该目录 watcher 驱动外部编辑热加载。
+- **远程工作区**：同一份文件经远程文件服务读取，热加载由远端目录 watcher 驱动；每次远程 I/O 前先看该 authority 的连接状态，只有 `connected` 才发起（状态查询是同步读，不建连接、不触发 SSH bring-up），断连时 watcher 传输同步 dispose，避免旧代理在重连后继续悬挂。重连后重新挂载并重读配置。
+- 两种形态共用 `parseTriggersConfig()` / 指纹 / 无效配置降级规则（见上）；远程配置的「已打开窗口里新建文件不会自动登记」等发现语义与本地一致（见 §18）。
 
 ## 4. 启动门控与调度
 
@@ -126,6 +146,18 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
   3. 只保留**一个** `setTimeout`，指向最近的唤醒点（`_rescheduleWake`）。没有可运行触发器时不再有调度定时器。
 - **门控只管定时器，不管手动运行**：`runNow` 直接进入 `_acceptEvent(..., { ignoreBackoff: true })`，不检查 `_gateOpen`，因此启动宽限期内手动「立即运行」也会执行（e2e 依赖该行为）。`_replayPendingRuns` 仍要求门控开放。
 - 单个工作区配置热加载时只对**属于该工作区**的触发器清空 `_armedSchedule` / `_nextPoll` 锚点，让新的 cron / 间隔立即生效；已持久化的 `lastScheduledAt` 仍用于错过槽位计算。移除工作区会 `_detachWorkspace`（dispose store、清该工作区的 active / queued / pending 与锚点）。
+
+### 远程工作区门禁
+
+远程工作区额外要求**该工作区已有窗口打开，且连接状态为 `connected`**：
+
+- **绝不后台开窗、绝不隐式建连**：本地工作区在窗口关闭后仍会按需开后台隐藏窗口继续调度；远程工作区不会。没有已打开窗口或未连接时，调度器只是不推进，不会为你打开远程窗口，也不会主动发起 SSH bring-up。
+- 连接状态以同步查询读取（不建连接）；状态变化事件驱动 attach / detach 与 deferred 重放。
+- **断连 = 错过**：`schedule` 在 offline 时不推进 `lastScheduledAt`、不写 pending；重连后由现有 `onMissed` 决定是否补跑（`skip` / `catch-up-once`），语义与「编辑器关闭期间错过」相同。
+- **poll**：offline 期间直接跳过，不执行命令、不记失败、不退避；重连后按原间隔继续。
+- **手动运行**：offline 时 `runNow` 直接报错（远程未连接），不排队、不留 pending。
+- **deferred**：事件已被接受、但在 run 启动前断连或窗口消失时，事件以 deferred 形态保留在 pending（释放 RunQueue 槽位、不 forget 去重 key、不记失败、不退避）；连接恢复且窗口回来时重放。
+- 远程工作区的发现仍发生在窗口打开工作区或执行 `openConfig` 时；窗口关闭后登记保留，但不调度。
 
 ### schedule
 
@@ -145,7 +177,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 
 - 门控开放后立即为每个启用且已确认的触发器安排一次 poll（`_nextPoll = now`），用于建立基线；之后每 `intervalSec` 一次。
 - `_runPoll` 先推进 `_nextPoll`，再执行命令；若执行期间触发器被暂停 / 禁用 / 删除 / 工作区被移除，结果丢弃。
-- poll 取数前的信任判定只在 main 侧：`_trustedForPoll(workspace)` 通过 `WorkspaceTrustProbe` 读 workspace-trust state（`content.trust.model.key`），不信任时直接跳过、**完全不 spawn 命令**；判定用 `relativePathUnder(trustedFolder, workspace, platform)`，不手写路径比较。renderer 的 `host.isWorkspaceTrusted()` 只用于启动自动化会话前（`_startRun`），不参与 poll 取数。
+- poll 取数前的信任判定只在 main 侧：`_trustedForPoll(workspace)` 通过 `WorkspaceTrustProbe` 读 workspace-trust state（`content.trust.model.key`），不信任时直接跳过、**完全不 spawn 命令**。信任记录按 **URI** 匹配（同时支持 `file:` 与 `remote-ssh:` 信任记录），判断工作区是否等于或嵌套在受信任 URI 下；远程路径按远端语义大小写敏感，不手写路径比较。renderer 的 `host.isWorkspaceTrusted()` 只用于启动自动化会话前（`_startRun`），不参与 poll 取数。
 - 失败：`_recordFailure`，下一次 poll 取 `max(now + interval, backoffUntil)`。
 - 成功但 `baselineDone === false`：把当前所有 `poll:<key>` 记为 `started`，写 `baselineDone: true`，**不产生 run**。
 - 之后对每个 item 走 `_acceptEvent`，key 为 `poll:<keyField>`。
@@ -174,6 +206,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 - 上报前为每条审核查一次详情拿 `version`，并连同 `review.updated` 一起上报；按 `review.updated` 缓存。描述截断 2000 字符。
 - `updated` 是 approve 的第二道 TOCTOU 守卫：Swarm 在未批准的审核被重新 shelve 时**不会** bump `version`，但会移动 `updated`，只靠 version 识别不出作者推了新改动。
 - main 侧：
+  - 上报**必须带工作区 URI**（`file:` 或 `remote-ssh:`），跨工作区的列表按它路由与过滤；没有工作区时完全不上报。main 收到无法解析的工作区 URI 时只 warn 并丢弃，绝不做无过滤消费（否则一个工作区的审核会被另一个工作区的同名触发器吃掉）。
   - 第一次上报只把所有 `swarm:<reviewId>` 记为 `started` 并设置 `baselineDone`；
   - 之后对未处理的审核 `_acceptEvent`；
   - 多窗口重复上报由持久去重吸收。
@@ -222,21 +255,23 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 _startRun
   ├─ 入口再查一次 _isRunnable（暂停 / 禁用 / 待确认 → 释放槽位、forget key、不计失败）
   ├─ 读 pending 事件
-  ├─ _resolveHost（找窗口 / 后台开窗 / 等 host）
+  ├─ _resolveHost（本地：找窗口 / 后台开窗 / 等 host；远程：只找已打开窗口，不建连、不开窗）
   ├─ host.isWorkspaceTrusted() → false 则失败（在创建 runDir 之前）
-  ├─ 建 runs/<runId>/ 目录
-  ├─ _buildRunRequest（渲染 prompt、解析 elevated/approve 确认）
+  ├─ 建 runs/<runId>/ 目录（远程经 triggerPoll.createRunDir，路径由远端 server 决定）
+  ├─ _buildRunRequest（渲染 prompt、解析 elevated/approve 确认；远程带 authority 与远端原生 cwd / runDir）
   ├─ host.startRun(request) → { sessionId }（超时 120s；见下）
   │    ├─ 期间 run 已被移除 → host.cancelRun
   │    └─ 成功 → 记 started、删 pending、phase=running、审计 run-start、arm watchdog
   └─ 失败 → _failActiveRun（释放槽、forget key、记失败/退避）
 ```
 
+远程工作区在 `_resolveHost` 阶段若窗口已关闭或连接不再是 `connected`，事件不按失败处理，而是以 deferred 形态留在 pending（见 §4），等重连且窗口回来时重放。
+
 `host.startRun` 是反向 RPC，没有自带传输超时。`_startHostRun()` 用 `startRunTimeoutMs`（默认 120s）做 `Promise.race`：超时则上层按失败处理并释放槽位；如果 renderer 之后才启动成功，main 会立即 `cancelRun` 并丢弃该 sessionId，避免出现不在调度器账上的会话。
 
 - **激活闸门**：工作区来源的每条触发器必须在本机确认过一次（`state.activationConfirmed === triggerFingerprint`）。未确认时 `_isRunnable` 返回 false，`runNow` 直接抛「先确认再运行」，poll 命令完全不执行（`_runPoll` 在 spawn 前就返回），QuickPick 状态显示「待确认」。确认入口是 `confirmActivation(triggerKey)`（`workbench.action.triggers.confirmActivation` 与列表里的「确认工作区触发器」动作）；定义指纹一变，旧确认自动失效。该闸门与高权限 / 自动 approve 的确认相互独立。
 - **暂停是最终关卡**：`setPaused(triggerKey, true)` 清掉该触发器的排队项并 `forget` 其 key（不计失败）；`setAllPaused(true)` 同样清空全部排队项。`state.pending` 里尚未入队的记录不会被删除，恢复 / 全局恢复 / 完成激活确认后都会再跑一次 `_replayPendingRuns`，把此前保留的 pending 记录入队。
-- **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。**登记表不受影响**，该工作区的调度继续，需要时会重新开后台窗口。
+- **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。**登记表不受影响**：本地工作区继续调度、需要时会重新开后台窗口；远程工作区不会后台开窗，因此在窗口重新打开且连接 `connected` 之前不再调度。
 - **running 看门狗**：run 启动后按 `budget.timeoutMin + budget.approvalTimeoutMin + 10 分钟宽限` 设时；到期仍未 `reportRunEnd` → 记失败、释放槽位，并调用该窗口的 `host.cancelRun`（若 host 还在）。`reportRunEnd` 会清掉定时器。
 - **运行结束**：renderer `TriggerRunHost` 订阅 `AutomatedSessionService.onDidEndRun`，调 `reportRunEnd`。main：
   - `completed` → 清零失败计数、清退避、更新 `lastRunAt`；
@@ -248,8 +283,8 @@ _startRun
 
 `workspaceWindowRouting.ts`（与手机网关共用）：
 
-- `findWorkspaceHost(directory, target)`：在已打开工作区里找与 `workspace` 相同、且已注册 host 的窗口。
-- 没有则 `openWindowForFolderInBackground(URI.file(workspace))`（后台模式为隐藏窗口；非后台模式会开出一个不抢焦点的可见窗口）。
+- `findWorkspaceHost(directory, target)`：在已打开工作区里找与目标工作区相同（URI + authority）且已注册 host 的窗口。
+- 没有则 `openWindowForFolderInBackground(URI.file(workspace))`——**仅本地工作区**；远程工作区不会后台开窗，调用方按未找到处理（事件 deferred，见 §4）。
 - `waitForWorkspaceHost` 轮询直到 host 注册，默认超时 60s；超时 / 开窗失败 / 窗口未暴露 host 都记失败。
 
 ## 7. 运行请求与提示词
@@ -257,13 +292,14 @@ _startRun
 `_buildRunRequest()` 组装 `TriggerRunRequest`：
 
 - `origin`：`{ triggerId, triggerName, eventKey, runId, workspaceName? }`（会写进会话历史；`workspaceName` 取工作区目录名，用于多工作区下区分同名触发器）。
-- `cwd`：`join(workspace, session.cwd ?? '')`；`workspace` 来自文件所在目录，不是配置字段。
+- `cwd`：本地为 `join(workspace, session.cwd ?? '')`；远程为远程工作区 URI 与 `session.cwd` 拼接后取出的**远端原生路径**（不做本地 `path.join`）。`workspace` 来自文件所在目录，不是配置字段。
+- `authority`：远程工作区运行带该字段，renderer 据此把 `cwd` / `runDir` 还原成远端 URI 再交给会话与文件服务；本地缺省。
 - `mode`：配置值或 undefined（renderer 解析保守档）。
 - `allowElevatedMode`：仅当 mode 是高权限类**且** `state.elevatedConfirmed === fingerprint`。
 - `approveConfirmed`：`allowedActions` 含 `swarm.approve` **且** `state.approveConfirmed === fingerprint`。
 - `prompt`：`renderTriggerPrompt(...)` 的 **inline** 变体：输出契约内联在用户消息里。
 - `promptForSystemContract`：同一模板的 **system** 变体：不含输出要求节，只留运行目录行。
-- `runDir`：绝对路径；main 已创建。
+- `runDir`：宿主原生绝对路径，main 已创建。本地在 `<userData>/triggers/runs/<runId>/`；远程由远端 server 在 `<serverDataDir>/triggers/runs/<clientId>/<runId>/` 创建并回传 URI。
 - `payload`：原始事件负载（动作守卫需要 `reviewId` / `version`；只在 main → renderer IPC 中传递，不写日志 / 审计 / state）。
 - `sourceType`：触发器源类型；renderer 只对 `swarm-review` 运行执行动作。
 - `showSession`：该触发器的 `showSession`，renderer 据此决定会话启动后是否切过去（仍要求窗口可见）。
@@ -348,7 +384,7 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 5. 若 `requestedMode` 是高权限类（`isElevatedModeId`，大小写不敏感）且 `allowElevatedMode !== true` → 直接抛错（main 正常不会发这种请求）。
 6. `createSession(agentId, { cwd, activate: false, title: '触发器名 · eventKey', automation: origin, automationRunDir: runDir, additionalDirectories: [runDir], mcpServerNames, configDesiredOverrides: { mode, model? }, systemPromptAppend? })`。
    - 非 `internal`：会话落盘、进列表、可恢复。
-   - `additionalDirectories` 让 Agent 能写 `runDir`。
+   - `additionalDirectories` 让 Agent 能写 `runDir`；远程会话同样下发远端 runDir（只跳过本地内置 skills 目录，调用方传入的额外目录照常下发，且都是远端路径）。
    - `systemPromptAppend` 仅在内置 claude fork 上出现，见 §7 的能力表。
 7. `whenConnected()` → 失败则关闭会话并抛错。
 8. `whenConfigOptionsSettled()` → 用 `readSessionModeId()` 读实际 mode（按 id=`mode` 或 mode 类别），**必须与请求值一致**（大小写 / 空白差异不算不一致）；不一致关闭会话并抛错。
@@ -373,7 +409,7 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 
 1. 先调 `decideAutomatedPermission(params, session.automationRunDir, uriIdentity)`：
    - 只处理 `toolCall.kind === 'edit'`（只自动放行写文件；`delete` / `move` 是破坏性操作，无论指向哪里都不自动放行）；
-   - 必须带非空 `locations`、任何路径段都不是 `..`，且**全部**位于 `runDir` 下（用 `IUriIdentityService.relativePathUnder`）；
+   - 必须带非空 `locations`、任何路径段都不是 `..`，且**全部**位于 `runDir` 下。运行目录归属按 **URI** 比较：本地 `file:` 路径按本机平台大小写规则，远程运行按 authority 还原成 `remote-ssh:` URI 后**大小写敏感**（与远端真实文件系统一致），不折叠成小写。
    - 返回 `allow_once` 的 `optionId`，否则 `undefined`。
 2. 自动化会话**不进入**个人自动批准分支（`acpPermissionHandler.tryAutoApprove` 不会被调用），也不进入 Claude 计划权限策略的 `skip` 分支。
 3. `_planPolicy(sessionId)` 对自动化会话恒返回 `'manual'`。
@@ -434,8 +470,8 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 - 历史上限 100；**非置顶自动化行最多 30 条**（`MAX_AUTOMATION_ENTRIES`），超额优先淘汰最旧自动化行；置顶行不受 30 限制。
 - `SessionListBody`：⚡ 图标 + tooltip（`acp.sessions.automationBadge`，中文「由触发器 {name} 启动 · {key}」）、判决标签与摘要行；`acpSessionFilterService` 的 `sourceFilter: 'all' | 'manual' | 'trigger'`。
 - 手机：`MobileBridgeSessionSummary.automation`（triggerName / verdict / summary / outcome），由 `mobileBridgeProjection.ts` 投影；自动化会话的 attention 事件带 `alwaysNotify: true`，忽略「PC 聚焦时不推送」。该字段属于手机协议 v24（`MOBILE_PROTOCOL_VERSION = 24`）。**手机页面由编辑器网关下发**，随编辑器一起更新，不需要单独发手机端；协议版本不匹配时手机会提示刷新页面。
-- 手机「查看报告」：客户端只传 session ref，main 经 renderer 桥取 live `session.automation.runId`，读取固定路径 `<userData>/triggers/runs/<runId>/report.md`。runId / 路径 / `result.json` 不上 wire；run 目录被保留策略清理后返回 404，手机显示「未生成或已清理」。详见 `mobile-gateway.md` §7e。
-- PC「查看报告」：`ViewTriggerReportAction` 打开 `TriggerReportEditorInput`（`typeId = 'trigger.report'`，`id = trigger-report:<runId>`，按 runId 去重）→ `TriggerReportEditor` 调 `ITriggerMainService.readRunReport(runId)`（renderer 只传 runId，main 复用 `SessionReportReader` 重建并校验路径），正文用 `MarkdownView` 渲染、`baseUri` 指向 run 目录。摘要优先取 live session / history 的 `automation`，缺失时回退输入快照；`not-found` 时按 `outcome` 区分「运行中」与「未生成 / 已清理」。打开期间订阅 `IAutomatedSessionService.onDidEndRun`，`runId` 匹配时自动重读；另有手动刷新。入口四处：Sessions 行右键（`entry.automation !== undefined`）、会话编辑器聊天区右键（`MenuId.AcpChatContext`，菜单打开时由 `acpChatWidgetService.setSessionAutomation` 写根 context key `acpChatSessionAutomation`）、AcpSession 标签页右键（scoped context key `acpSessionHasAutomation`）、run 结束通知按钮。
+- 手机「查看报告」：客户端只传 session ref，main 经 renderer 桥取 live 的 `runId` 与 `authority`；本地 run 读 `<userData>/triggers/runs/<runId>/report.md`，远程 run 经 `triggerPoll` 通道读远端报告。runId / 路径 / `result.json` 不上 wire；run 目录被保留策略清理后返回 404，手机显示「未生成或已清理」。**远程 run 仅在连接 `connected` 时可读，否则返回「不可用」**（与 PC 一致）。详见 `mobile-gateway.md` §7e。
+- PC「查看报告」：`ViewTriggerReportAction` 打开 `TriggerReportEditorInput`（`typeId = 'trigger.report'`，`id = trigger-report:<runId>`，按 runId 去重）→ `TriggerReportEditor` 调 `ITriggerMainService.readRunReport(runId, authority?)`（renderer 只传 runId 与可选 authority，main 重建并校验路径；远程经远端通道读取），正文用 `MarkdownView` 渲染、`baseUri` 指向 run 目录。远程 run 仅在连接 `connected` 时可读，否则显示「不可用」而不是空报告。摘要优先取 live session / history 的 `automation`，缺失时回退输入快照；`not-found` 时按 `outcome` 区分「运行中」与「未生成 / 已清理」。打开期间订阅 `IAutomatedSessionService.onDidEndRun`，`runId` 匹配时自动重读；另有手动刷新。入口四处：Sessions 行右键（`entry.automation !== undefined`）、会话编辑器聊天区右键（`MenuId.AcpChatContext`，菜单打开时由 `acpChatWidgetService.setSessionAutomation` 写根 context key `acpChatSessionAutomation`）、AcpSession 标签页右键（scoped context key `acpSessionHasAutomation`）、run 结束通知按钮。
 
 ## 13. 通知
 
@@ -504,7 +540,9 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 | 域 | 文件 |
 | --- | --- |
 | 纯逻辑 | `shared/triggers/__tests__/{cron,scheduler,dedupe,runQueue,backoff,configParse,promptTemplate,verdict}.test.ts` |
-| main | `main/services/triggers/__tests__/{triggerMainService,triggerFiles,triggerWorkspaceRegistry,triggerIdentity,pollCommandFetcher,runReportReader}.test.ts` |
+| main | `main/services/triggers/__tests__/{triggerMainService,triggerFiles,triggerWorkspaceRegistry,triggerIdentity,pollCommandFetcher,runReportReader,workspaceTrustReader}.test.ts` |
+| 共享 node-services | `packages/node-services/src/triggers/__tests__/{pollCommandFetcher,runDirectories,sessionReportReader}.test.ts` |
+| 远端 server | `packages/remote-server/src/__tests__/triggerService.test.ts`（clientId / runId 校验、runDir 布局、报告读取与上限） |
 | renderer | `renderer/services/triggers/__tests__/{TriggerRunHost,automatedPermissionPolicy,automatedRunWatcher,automatedSessionService,triggerActionExecutor,triggerReportEditorInput,triggerSessionRevealService}.test.ts` |
 | UI / 集成 | `renderer/contributions/__tests__/{TriggerRunNotificationContribution,SwarmReviewNotificationContribution}.test.ts`、`renderer/workbench/triggers/__tests__/TriggerReportEditor.test.tsx`、`workbench/agents/__tests__/SessionListBody.test.tsx`、`services/acp/session/__tests__/acpSessionHistory.test.ts`、`services/mobileGateway/__tests__/MobileBridgeService.test.ts` |
 
@@ -513,9 +551,10 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 - 时间相关全部注入假时钟（`TriggerClock` / watcher 的 `now`/`setTimeout`）。
 - main 服务测试用假窗口 host、假 `PollCommandFetcher`、假 `AuditLog`、假工作区信任探针，避免真实文件系统与 Electron；配置写进临时工作区的 `.universe-editor/triggers.json`，注册表写 `<dir>/triggers/workspaces.json`。
 - 激活闸门相关用例覆盖：未确认不调度 / 不跑 poll / `runNow` 拒绝；确认后指纹变化失效；两个工作区同名 id 的确认 / 暂停 / 移除互相隔离。
+- 远程门禁用例覆盖：offline 时 `schedule` 不推进、`poll` 跳过且不记失败、`runNow` 报错；已接受但启动前断连的事件 deferred 保留并在重连 + 窗口回来时重放（释放槽位、不 forget key、不退避）；连接状态变化驱动 attach / detach；远程 runDir 带 clientId 命名空间且各客户端只清理自己的子目录；远程报告只有 `connected` 时可读，否则 `unavailable`。
 - 会话启动测试用 `inMemoryAcpPair` 或假 session（见 `services/acp/CLAUDE.md` 测试套路）。
 
-E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）。覆盖：
+E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：
 
 - 没有 `.universe-editor/triggers.json` 时不列出任何触发器、不创建会话；
 - 写文件后经 `openConfig` 登记工作区；
@@ -540,6 +579,7 @@ E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regress
 ```bash
 pnpm check
 pnpm e2e specs/triggers.spec.ts
+pnpm e2ea specs/remote.triggers.spec.ts
 pnpm e2e:smoke
 ```
 
@@ -552,9 +592,12 @@ pnpm e2e:smoke
 - **恢复自动化会话不保留 runDir 范围**：resume 后写 runDir 不再自动放行（只保留非路径限制）。
 - **runDir 自动放行不解析符号链接**：路径检查只做字面 `relativePathUnder`；若 `runDir` 内已有指向外部的符号链接，写它会被当成 runDir 内写入。当前安全性依赖「自动化会话不能无审批执行命令」这一前提——创建符号链接本身要走命令审批（§9）。
 - **运行目录保留 200 个**：超出按 mtime 删除，会跳过 active / queued / pending 的 runId，可能早于历史会话上限；需要长期留档请自行复制。
-- **只支持本地文件夹工作区**：远程（`vscode-remote`）工作区不登记、不调度；`registerWindowHost` / `openConfig` 对非 `file` 或带 authority 的 folder 直接跳过。
-- **登记表是本机状态**：`workspaces.json` 不入库；换机器后需要重新打开工作区（或 `openConfig`）才会重新登记。工作区目录被删除时调度器保留登记但跳过（日志告警），可用 `removeWorkspace` 清理。
-- **e2e 只覆盖手动事件路径**：manual / 激活闸门 / 高权限拒绝 / 非法配置 / 暂停拒绝走真实窗口；schedule / poll / swarm-review 的定时与外部依赖仍靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
+- **远程工作区必须保持窗口打开且已连接**：远程调度只在该工作区窗口存在、且连接状态为 `connected` 时进行；不会后台开窗，也不会隐式建立 SSH 连接。窗口关闭或断连期间不调度：`schedule` 按 `onMissed` 视为错过、`poll` 跳过，手动运行直接报错。需要长期无人值守的场景仍应使用本地工作区。
+- **远端 poll 依赖远端 PATH**：命令在远端执行，`node` / `gh` 等工具必须装在远端并在非交互 shell 的 PATH 中——本机 PATH、本地脚本与本地 node 运行时都不会带过去。WSL / Windows 远端经 `-lc` 或 WMI 启动时的 PATH 差异见 [remote-dev.md](remote-dev.md) §4 / §5。
+- **远端路径一律按大小写敏感比较**：远程工作区身份按远端文件系统语义。Windows 远端上同一个目录写成不同大小写会被视为**不同工作区**（各自登记、确认、暂停与调度）；这是与本地 Windows 工作区（大小写不敏感）的刻意差异。
+- **远端协议 v16**：`triggerPoll` 是新增远端通道（`REMOTE_PROTOCOL_VERSION` 15 → 16）。升级编辑器后旧 daemon 会握手失败（`protocol version 15 != 16`），重连会触发自动重部署；若未自动恢复，用 **Remote-SSH: 停止远程服务器** 后重开该工作区。
+- **登记表是本机状态**：`workspaces.json` 不入库；换机器后需要重新打开工作区（或 `openConfig`）才会重新登记。工作区目录被删除时调度器保留登记但跳过（日志告警），可用 `removeWorkspace` 清理。远程工作区的连接状态与运行目录也不入库，由本机与远端 server 各自维护。
+- **e2e 覆盖范围有限**：本地 `triggers.spec.ts` 覆盖 manual / 激活闸门 / 高权限拒绝 / 非法配置 / 暂停拒绝；远程 `remote.triggers.spec.ts` 用直连 server 覆盖 poll、runDir 与报告主链路（断连 / deferred 走单测）。schedule / swarm-review 的定时与外部依赖仍靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
 
 ## 19. 关键参考路径
 
@@ -563,7 +606,9 @@ pnpm e2e:smoke
 - `apps/editor/src/main/services/triggers/triggerWorkspaceRegistry.ts` — 本机工作区登记表（`workspaces.json`）
 - `apps/editor/src/main/services/triggers/triggerIdentity.ts` — 工作区 + id 复合键
 - `apps/editor/src/main/services/triggers/workspaceTrustReader.ts` — main 侧工作区信任探针（poll 取数前判定）
-- `apps/editor/src/main/services/triggers/runReportReader.ts` — 运行报告的受限读取（手机网关与 PC 共用）
+- `apps/editor/src/main/services/triggers/runReportReader.ts` — 运行报告受限读取的本地入口（实现下沉 `node-services`，手机网关、PC 与远端 server 共用）
+- `packages/node-services/src/triggers/` — `triggerProtocol.ts` 远端 `triggerPoll` 契约 + 共享的 poll fetcher / runDir 保留 / 报告读取实现
+- `packages/remote-server/src/triggerService.ts` — 远端 `triggerPoll` 通道：在远端执行 poll、创建 / 清理 runDir、读报告
 - `apps/editor/src/shared/triggers/{types,configParse,promptTemplate,verdict}.ts` — 契约、校验、渲染、判决
 - `apps/editor/src/renderer/services/triggers/{automatedSessionService,automatedRunWatcher,automatedPermissionPolicy,triggerActionExecutor,TriggerRunHost,triggerReportEditorInput}.ts`
 - `apps/editor/src/renderer/workbench/triggers/TriggerReportEditor.tsx` — PC 报告标签页

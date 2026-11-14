@@ -266,7 +266,7 @@ bot clone 拉下来即有，**不需要在工作区里手工创建**。本仓库
 - `poll` 第一次成功取数只建基线，不会把历史需求全部跑一遍；未确认前连取数命令都不会执行。
 - `overflow` 必须用 `queue`：`drop` 丢弃的事件 key 已记入去重，该需求不会再被触发。
 - `maxCostUsd: null` 表示不限费用（不写则默认 1 美元，实现 + `pnpm check` 会被 `budget-exceeded` 中途取消）；时长仍由 `timeoutMin` 兜底。
-- 只支持本地文件夹工作区；远程工作区不登记、不调度。
+- 触发器本身支持本地与远程工作区；本文的 bot 流程按**本地 clone** 设计——机器人应在本机打开 bot clone。远程触发器要求窗口保持打开且连接稳定，不适合无人值守机器人。
 
 > **改配置 = 改仓库版本并提交**。在开发工作区编辑 `.universe-editor/triggers.json`，走正常提交 / 推送；
 > bot clone 下次 `reset --hard origin/main` 后生效。机器人自己不得修改它——`scripts/tracker/gate.mjs`
