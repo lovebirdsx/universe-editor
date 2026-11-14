@@ -55,7 +55,7 @@ main（应用级单例）                                    renderer（每窗�
 调度仍然只发生在**本地 main**（应用级单例）：配置发现、去重、排队、状态、审计都在客户端。除通用的远程文件服务（配置读取 / 热加载与 `prompt.md` 写入）外，触发器专用的跨隧道工作只有三件，全部走 `RemoteChannels.TriggerPoll` 通道：
 
 - **poll 取数**：命令在该远程工作区目录下由远端 server 执行，超时 / 1 MB stdout / 杀进程树语义与本地逐字一致，归一后的 items 经通道回客户端。
-- **运行目录**：由远端 server 创建与清理 `<远端 serverDataDir>/triggers/runs/<clientId>/<runId>`。`clientId` 是本机安装 ID（machineId），多个客户端共用同一远端主机时各自只清理自己的子目录；保留数量与 active / queued / pending 保护规则与本地相同。客户端只传 id，不传路径，server 端自行推导并校验路径。
+- **运行目录**：由远端 server 创建与清理 `<远端 serverDataDir>/triggers/runs/<clientId>/<runId>`。`clientId` 是本机安装 ID（machineId），多个客户端共用同一远端主机时各自只清理自己的子目录；每个 client 子目录保留最近 200 个，清理发生在 `createRunDir` 时（按 `keep` + `protectedRunIds`），没有单独的清理 RPC。保护集是该 authority 下仍处于 active / queued / pending 的 runId，与该工作区是否还在登记表里无关。客户端只传 id，不传路径，server 端自行推导并校验路径。
 - **报告读取**：远端 run 的 `report.md` 经同一通道读取（512 KB 上限），PC 报告标签页与手机网关共用。
 
 远程的 agent 会话本身也跑在远端（cwd = 远程工作区 + `session.cwd`），运行目录以**远端原生路径**作为 `additionalDirectories` 下发给会话。工作区身份统一为 URI 字符串（本地 `file:`、远程 `remote-ssh:`）；`workspaces.json` 与 `state.json` 都是 version 2（见 §3）。
@@ -66,7 +66,7 @@ main（应用级单例）                                    renderer（每窗�
 | --- | --- | --- |
 | `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`：触发器列表（按复合键）/ 工作区列表 / 手动运行 / 暂停 / 激活确认 / 高权限与自动 approve 确认 / 打开配置 / 移除工作区 / 运行目录 / 运行结束上报 / Swarm 审核上报 / `readRunReport`（PC 按 runId + 可选 authority 读 `report.md`） / `onDidChangeTriggers` |
 | `ServiceChannels.TriggerRunHost`（`'triggerRunHost'`） | main → renderer | `ITriggerRunHost`：`startRun` / `cancelRun` / `isWorkspaceTrusted` |
-| `RemoteChannels.TriggerPoll`（`'triggerPoll'`） | main → 远端 server | `IRemoteTriggerService`：`poll` / `createRunDir` / `cleanupRuns` / `readReport`。DTO 路径一律 URI；runDir 布局由 server 拥有，客户端只传 `clientId` / `runId` 与保留策略 |
+| `RemoteChannels.TriggerPoll`（`'triggerPoll'`） | main → 远端 server | `IRemoteTriggerService`：`poll` / `createRunDir` / `readReport`。DTO 路径一律 URI；runDir 布局由 server 拥有，客户端只传 `clientId` / `runId` 与保留策略（`keep` / `protectedRunIds`），清理由 `createRunDir` 一并完成 |
 
 - 所有按触发器寻址的参数（`runNow` / `setPaused` / 三个确认方法）都用**复合键** `workspaceComparisonKey + '\u0000' + id`，见 `triggerIdentity.ts`。IPC 上不传分离的 workspace + id，避免两处拼接口径漂移。
 - main 侧：`registerMainServices.ts` 注册 `ProxyChannel.fromService(app.triggers)`，并 `toService` 得到每个窗口的 `rendererTriggerRunHost`；`windowScopeFactory.ts` 在窗口创建后调用 `appServices.triggers.registerWindowHost(win.id, host, workspaceFolder)`，工作区切换时 `noteWindowWorkspace(workspaceFolder)`，窗口销毁时 `windowMainService` 调 `unregisterWindowHost`。
@@ -128,6 +128,8 @@ main（应用级单例）                                    renderer（每窗�
 
 state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联全部用复合键；日志 / 审计只写裸 `id` + `workspace`，不把 NUL 带进人类可读输出。
 
+显示名：本地工作区用文件夹 basename；远程工作区用 `basename (authority)`，因为不同主机上可能存在同一路径的工作区，只显示 basename 无法区分。触发器列表与「移除工作区」选择器都同时给出带 authority 的友好路径 / 名称，不渲染原始 URI。
+
 ### 配置读取与热加载
 
 - **本地工作区**：`JsonConfigFileStore` 直接读 `<workspace>/.universe-editor/triggers.json`，由该目录 watcher 驱动外部编辑热加载。
@@ -153,6 +155,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 
 - **绝不后台开窗、绝不隐式建连**：本地工作区在窗口关闭后仍会按需开后台隐藏窗口继续调度；远程工作区不会。没有已打开窗口或未连接时，调度器只是不推进，不会为你打开远程窗口，也不会主动发起 SSH bring-up。
 - 连接状态以同步查询读取（不建连接）；状态变化事件驱动 attach / detach 与 deferred 重放。
+- **无窗口 = detach**：远程工作区除了连接状态，还要求该工作区的窗口存在；窗口关闭即 detach，`poll` 与 `schedule` 停止推进（真实环境已验证：关窗后不再轮询 / 定时）。窗口重新打开后重新 attach 并重读配置；此前已接受但未启动的事件仍以 deferred 形态留在 pending，等窗口回来再重放。
 - **断连 = 错过**：`schedule` 在 offline 时不推进 `lastScheduledAt`、不写 pending；重连后由现有 `onMissed` 决定是否补跑（`skip` / `catch-up-once`），语义与「编辑器关闭期间错过」相同。
 - **poll**：offline 期间直接跳过，不执行命令、不记失败、不退避；重连后按原间隔继续。
 - **手动运行**：offline 时 `runNow` 直接报错（远程未连接），不排队、不留 pending。
@@ -551,7 +554,7 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 - 时间相关全部注入假时钟（`TriggerClock` / watcher 的 `now`/`setTimeout`）。
 - main 服务测试用假窗口 host、假 `PollCommandFetcher`、假 `AuditLog`、假工作区信任探针，避免真实文件系统与 Electron；配置写进临时工作区的 `.universe-editor/triggers.json`，注册表写 `<dir>/triggers/workspaces.json`。
 - 激活闸门相关用例覆盖：未确认不调度 / 不跑 poll / `runNow` 拒绝；确认后指纹变化失效；两个工作区同名 id 的确认 / 暂停 / 移除互相隔离。
-- 远程门禁用例覆盖：offline 时 `schedule` 不推进、`poll` 跳过且不记失败、`runNow` 报错；已接受但启动前断连的事件 deferred 保留并在重连 + 窗口回来时重放（释放槽位、不 forget key、不退避）；连接状态变化驱动 attach / detach；远程 runDir 带 clientId 命名空间且各客户端只清理自己的子目录；远程报告只有 `connected` 时可读，否则 `unavailable`。
+- 远程门禁用例覆盖：offline 时 `schedule` 不推进、重连后按 `onMissed` 处理（`skip` 丢弃 / `catch-up-once` 只补最近一次）、`poll` 跳过且不记失败、`runNow` 报错；已接受但启动前断连或窗口消失的事件以 deferred 保留在 pending（释放队列槽位、不 forget key、不退避），重连 + 窗口回来时重放；队列出队时若已离线，槽位立即释放并留待重放；连接状态 / 窗口存在性变化驱动 attach / detach；远程 runDir 带 clientId 命名空间且各客户端只清理自己的子目录（`createRunDir` 的保护集按同一 authority 的 active / queued / pending 收集，不依赖工作区 entry 是否还在）；远程报告只有 `connected` 时可读，否则 `unavailable`。
 - 会话启动测试用 `inMemoryAcpPair` 或假 session（见 `services/acp/CLAUDE.md` 测试套路）。
 
 E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：

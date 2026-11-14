@@ -63,6 +63,11 @@ node-services 的 `TextSearchService` 把 `_onDidSearchProgress` / `_onDidSearch
 两处折叠的完整说明见 `remoteUri.ts` 头注释）。下游一律消费规范形，**勿散写 `toLowerCase`**——不归一时
 `wsl+Ubuntu-24.04` 与 `wsl+ubuntu-24.04` 会裂成两条 target 行。
 
+**远端 watcher 通道被多个特性共享**：窗口文件监听与触发器配置热加载都经同一条 `RemoteChannels.FileWatcher`
+（`IRemoteWatcherTunnel` + `WatcherHost` 协议）订阅远端目录，server 端按客户端发来的订阅 id 记账。订阅 id
+必须由 main 进程**全局唯一分配**（`allocateRemoteWatchId`）后再下发——各调用方自己的计数器都从 1 开始，
+两处撞 id 会互相顶掉订阅，表现为其中一侧的热加载 / 监听静默失效。
+
 **Remote Explorer 的 target 行**：侧栏 2026-08-15 把 4 个平铺 view（SSH Targets / WSL Targets / Connections /
 Recent）合并为单一 `workbench.view.remote.targets`（"Targets"）树，构建是纯函数 `buildRemoteTree`
 （`apps/editor/src/renderer/workbench/remote/remoteTree.ts`）。合并的 rationale：Connections 与 Targets 语义重复
