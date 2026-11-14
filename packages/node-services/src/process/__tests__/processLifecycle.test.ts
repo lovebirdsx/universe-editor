@@ -555,6 +555,7 @@ describe('ProcessLifecycleRegistry orphan sweep (win32)', () => {
         platform: 'win32',
         selfPid: 1,
         killPid,
+        killOrphanPid: killPid,
       }),
     }
   }
@@ -598,6 +599,51 @@ describe('ProcessLifecycleRegistry orphan sweep (win32)', () => {
     expect(killPid.mock.calls.map((c) => c[0]).sort()).toEqual([11, 13])
   })
 
+  // Regression: Git-Bash's MSYS `exec` emulation leaves a wrapper shell whose parent
+  // exited immediately after spawning it, while the real command runs as its child.
+  // The sweep treated that wrapper as an orphan and `taskkill /T` took down the whole
+  // agent command (pnpm e2e) mid-run, losing the Playwright summary.
+  it('keeps a dead-parent wrapper that is still parenting a live command', () => {
+    const backend = new FakeBackend()
+    const { registry, killPid } = sweepRegistry(backend)
+    trackReap(registry)
+    backend.members.set(100n, [10, 11, 12, 13])
+    backend.processTable = [
+      { pid: 10, ppid: 5 }, // agent root
+      { pid: 11, ppid: 9 }, // wrapper: parent 9 already exited
+      { pid: 12, ppid: 11 }, // the live command the wrapper is running
+      { pid: 13, ppid: 12 }, // its child
+    ]
+
+    registry.sweepOrphans()
+
+    expect(killPid).not.toHaveBeenCalled()
+  })
+
+  it('never targets a tree: the sweep uses the single-pid killer', () => {
+    const backend = new FakeBackend()
+    const treeKill = vi.fn<(pid: number) => void>()
+    const orphanKill = vi.fn<(pid: number) => void>()
+    const registry = new ProcessLifecycleRegistry({
+      backend,
+      platform: 'win32',
+      selfPid: 1,
+      killPid: treeKill,
+      killOrphanPid: orphanKill,
+    })
+    trackReap(registry)
+    backend.members.set(100n, [10, 11])
+    backend.processTable = [
+      { pid: 10, ppid: 5 },
+      { pid: 11, ppid: 98 },
+    ]
+
+    registry.sweepOrphans()
+
+    expect(treeKill).not.toHaveBeenCalled()
+    expect(orphanKill).toHaveBeenCalledWith(11)
+  })
+
   it('logs the killed pids with the executable names from the same snapshot', () => {
     const backend = new FakeBackend()
     const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() }
@@ -608,6 +654,7 @@ describe('ProcessLifecycleRegistry orphan sweep (win32)', () => {
       platform: 'win32',
       selfPid: 1,
       killPid,
+      killOrphanPid: killPid,
     })
     trackReap(registry)
     backend.members.set(100n, [10, 11, 13])
@@ -631,6 +678,7 @@ describe('ProcessLifecycleRegistry orphan sweep (win32)', () => {
       platform: 'win32',
       selfPid: 11,
       killPid,
+      killOrphanPid: killPid,
     })
     trackReap(registry)
     backend.members.set(100n, [10, 11])

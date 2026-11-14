@@ -125,6 +125,8 @@ export interface ProcessLifecycleRegistryOptions {
   readonly selfPid?: number
   /** Hard kill for a pid-only entry that is not contained. */
   readonly killPid?: (pid: number) => void
+  /** Kill for one orphan-sweep victim; must NOT kill its subtree (see defaultKillOrphanPid). */
+  readonly killOrphanPid?: (pid: number) => void
   /** POSIX group kill; injectable for tests. */
   readonly killGroup?: (pgid: number) => void
   /** POSIX probe for whether a process group still has members; injectable for tests. */
@@ -193,6 +195,27 @@ function defaultKillPid(pid: number): void {
   }
 }
 
+/**
+ * Orphan-sweep kill: the victim's own tree must survive. A wrapper shell can have a
+ * dead parent while its child is a live command (Git-Bash's MSYS `exec` emulation
+ * always leaves that shape), and `taskkill /T` on such a pid took down whole agent
+ * Bash-tool commands mid-run — the sweep must only reap the pid it identified.
+ */
+export function defaultKillOrphanPid(pid: number): void {
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/pid', String(pid), '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+    } catch {
+      // Already exited — best effort.
+    }
+    return
+  }
+  defaultKillPid(pid)
+}
+
 /** How long descendants may outlive a process-group leader before the group is reaped. */
 const ORPHAN_GROUP_REAP_MS = 5000
 
@@ -227,6 +250,7 @@ export class ProcessLifecycleRegistry implements IDisposable {
   private readonly _platform: NodeJS.Platform
   private readonly _selfPid: number
   private readonly _killPid: (pid: number) => void
+  private readonly _killOrphanPid: (pid: number) => void
   private readonly _killGroup: (pgid: number) => void
   private readonly _groupAlive: (pgid: number) => boolean
 
@@ -249,6 +273,7 @@ export class ProcessLifecycleRegistry implements IDisposable {
     this._platform = options.platform ?? process.platform
     this._selfPid = options.selfPid ?? process.pid
     this._killPid = options.killPid ?? defaultKillPid
+    this._killOrphanPid = options.killOrphanPid ?? defaultKillOrphanPid
     this._killGroup = options.killGroup ?? defaultKillGroup
     this._groupAlive = options.groupAlive ?? groupAlive
   }
@@ -355,6 +380,19 @@ export class ProcessLifecycleRegistry implements IDisposable {
       if (Number.isInteger(row.ppid)) parentOf.set(row.pid, row.ppid)
       if (typeof row.name === 'string' && row.name.length > 0) nameOf.set(row.pid, row.name)
     }
+    // A dead parent does not make a process a leftover: shell wrappers keep running
+    // the command below them (Git-Bash's MSYS `exec` emulation ALWAYS leaves a
+    // wrapper whose parent already exited). Only pids with no live descendant are
+    // true orphans; reaping the rest severed live agent tool commands mid-run. A
+    // subtree whose root still parents a live process is left to P0 / owner reclaim.
+    const hasLiveDescendant = new Set<number>()
+    for (const row of rows) {
+      let ancestor = parentOf.get(row.pid)
+      while (ancestor !== undefined && ancestor > 1 && !hasLiveDescendant.has(ancestor)) {
+        hasLiveDescendant.add(ancestor)
+        ancestor = parentOf.get(ancestor)
+      }
+    }
 
     for (const slot of this._slots.values()) {
       for (const job of [...slot.jobs]) {
@@ -374,8 +412,10 @@ export class ProcessLifecycleRegistry implements IDisposable {
           // Missing snapshot entry / missing parent / live parent: not an orphan. A reused
           // parent pid reads as live and is left alone — owner reclaim still covers it.
           if (ppid === undefined || ppid <= 0 || alive.has(ppid)) continue
+          // Still parenting a live process: it is part of a running chain, not a leftover.
+          if (hasLiveDescendant.has(pid)) continue
           try {
-            this._killPid(pid)
+            this._killOrphanPid(pid)
             killed.push(pid)
             // Name from the snapshot already in hand: no extra process for diagnostics,
             // and a pid alone is useless once the process is gone.

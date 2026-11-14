@@ -58,8 +58,10 @@ POSIX 不改为立即组杀：已有 5 秒有界组杀兜底，立即杀可能�
 
 1. 先做廉价预检：没有任何 reap job 时直接返回，不取快照。
 2. 用 addon 的 `listProcesses()` 取一次全量 pid→ppid 快照。
-3. 对每个 reap job 的 `listPids(job)` 成员，杀掉满足「不是 job 根、不是 selfPid、pid>0、在快照里有 ppid、ppid>0 且 ppid 不在快照中」的进程；成员自己不在快照里、或父 pid 被复用为其他活进程时都保守跳过（安全优先，P0/owner 回收仍是兜底）。
-4. 杀完后复查 `listPids(job)`：为空且根也不在快照中时才 `CloseHandle`，避免 `listPids` 异常返回空时误关仍含活根的 job。
+3. 对每个 reap job 的 `listPids(job)` 成员，杀掉满足「不是 job 根、不是 selfPid、pid>0、在快照里有 ppid、ppid>0、ppid 不在快照中、**且自己没有任何活体后代**」的进程；成员自己不在快照里、或父 pid 被复用为其他活进程时都保守跳过（安全优先，P0/owner 回收仍是兜底）。
+4. 只杀命中的那一个 pid（`defaultKillOrphanPid`，Windows 上 `taskkill /pid <pid> /F`），**不带 `/T`**。杀完后复查 `listPids(job)`：为空且根也不在快照中时才 `CloseHandle`，避免 `listPids` 异常返回空时误关仍含活根的 job。
+
+为什么必须同时加这两条约束（「有活体后代则跳过」+「单 pid 杀」）：Git Bash / MSYS 执行 `#!/bin/sh` 脚本（nvm4w 的 `pnpm` shim 就是）时用 `exec` 模拟，会留下一个**父进程已退出、但子进程是正在跑的命令**的包装 `sh.exe`。旧判定只看「父不在快照里」，把它当孤儿，再 `taskkill /T` 就把整棵活树带走——编辑器自己托管的 ACP agent 里，被测命令整棵树都在这个 job 下，于是一次 `pnpm e2e` 会被宿主编辑器自己的清扫静默杀死（被杀 shell 的 Windows 退出码 `0x100` 映射成 POSIX `$?`=0，表现为「无输出的绿灯」）。真正的孤儿叶子（`TaskStop` 后残留的 grep/head）没有后代，仍会被立刻清掉。
 
 默认 30s，`UNIVERSE_ORPHAN_SWEEP_MS=<正整数>` 覆盖，`UNIVERSE_DISABLE_ORPHAN_SWEEP=1` 关闭；非 win32、无 backend、旧 addon（无 `listProcesses`）时自动 no-op。`dispose()` 清理定时器。
 
@@ -75,9 +77,10 @@ ext host、ACP agent、ACP terminal、MCP stdio、pty（`ptyHostService`）、ri
 - POSIX main 崩溃不由本机制保证（见上表）。
 - POSIX 上 leader 退出后仍有后代的进程组会保留 5 秒再回收（`ORPHAN_GROUP_REAP_MS`），避免长期持有的 pgid 被 OS 复用后误杀无关进程组；若 5 秒内该 pid 被别的 owner 重新登记，则只丢弃旧 pgid、不发信号（否则会误杀新进程组）。
 - Windows 上树里仍有后代时 job 会保留到后代退出后的下一次复查，最迟 owner 回收；app owner 没有中途回收点，极端情况下保留到应用退出（仅影响句柄数量，不影响语义）。ACP agent 例外（P0）。
-- **P1 会杀掉 ACP agent 树里「父进程已退出但有意常驻」的后代**：判定只看 ppid 是否还在快照中，无法区分「孤儿」和「主动脱离父进程的守护进程」。只对带 `reapDescendantsOnRelease` 的 job 生效，其他 spawn 点不受影响。
-- **父 pid 被复用时会漏杀**：sweep 把「ppid 指向活进程」视为父仍存活而跳过；这类孤儿靠 P0 / owner 回收兜底。`taskkill /pid <pid> /T /F` 从判断到执行之间也存在 pid 被回收的窄窗口，与现有 `_killUncontained` 同类风险。
-- **sweep 的 `taskkill /T /F` 是同步调用**：30s 一次，且只在存在 reap job 时才取快照；若日后出现主线程卡顿证据再改异步。
+- **P1 不杀「父已退出但仍带着活体后代」的进程**：这是为了不误伤 MSYS `exec` 留下的包装 shell（见上），代价是「父退出后仍与其后代一起常驻」的进程树要等 P0 / owner 回收才清掉。
+- **P1 会杀掉 ACP agent 树里「父进程已退出、且自己已无后代」的有意常驻进程**（例如主动 daemonize 的叶子进程）：判定只看 ppid 与后代，无法区分「孤儿」和「主动脱离父进程的守护进程」。只对带 `reapDescendantsOnRelease` 的 job 生效，其他 spawn 点不受影响。
+- **父 pid 被复用时会漏杀**：sweep 把「ppid 指向活进程」视为父仍存活而跳过；这类孤儿靠 P0 / owner 回收兜底。`taskkill /pid <pid> /F` 从判断到执行之间也存在 pid 被回收的窄窗口，与现有 `_killUncontained` 同类风险。
+- **sweep 的 `taskkill /pid <pid> /F` 是同步调用**：30s 一次，且只在存在 reap job 时才取快照；若日后出现主线程卡顿证据再改异步。
 - 关闭终端标签会 `release()` 跟踪并随后 `pty.kill()`：Windows 上 job 里只剩 shell 时关闭 job 即结束它；若还有后台子进程则 job 保留到窗口回收（后台进程继续存活）。POSIX 上进程组在 leader 退出 5 秒后被组杀。两条路径不完全对称，别依赖「关标签」清理后台进程。
 - `remote-direct` / `ssh-forward` 在 POSIX 上只做进程级登记（未建进程组），不是树级回收；Windows 由 job 覆盖。
 - 故意不接入的短命 spawn：`defaultRemoteRunner`（ssh/scp/tar，自带超时）、版本探测、PowerShell 剪贴板、processList、WER、WSL 探测、`hostMainService` 的 detached 外部程序。
@@ -90,11 +93,12 @@ ext host、ACP agent、ACP terminal、MCP stdio、pty（`ptyHostService`）、ri
 - `status=5` 偶发出现在短命进程（正在退出）上属正常；**大量/持续**出现说明目标进程已被某个不兼容的 job 收编（例如老版本每 owner 共用一个 job 时，编辑器自身在 job 内启动的场景），检查 `docs/development/process-lifecycle.md` 的嵌套 job 规则。
 - 关掉机制对照：`UNIVERSE_DISABLE_PROCESS_JOB=1`。
 - 孤儿清扫：`job terminate on release ...` 是 P0 的释放回收；`orphan sweep ...` 是 P1 的清理日志。`UNIVERSE_ORPHAN_SWEEP_MS=<ms>` 缩短间隔便于复现，`UNIVERSE_DISABLE_ORPHAN_SWEEP=1` 关闭。旧 addon（无 `listProcesses`）启动时会有一条 warn，P1 自动禁用而 P0 仍生效。
+- 症状「在编辑器内托管 agent（Claude Code 等）的终端 / Bash 工具里跑长命令（如 `pnpm e2e`），整棵进程树突然消失、退出码却是 0、没有任何汇总」：先看编辑器日志里的 `orphan sweep` 行，确认不是 P1 误杀（旧版清扫会 `/T` 带走 MSYS 包装 shell 下面的活树）；把编辑器升级到含本修复的版本并重启，这类误杀即消失。
 - addon 路径：dev `packages/process-job/build/Release/process_job.node`；打包 `resources/process-job/process_job.node`（`runtime-resources.mjs` 在 win32 上 stage 并校验，缺失即打包失败）。
 
 ## 测试
 
-- 单测：`packages/node-services/src/process/__tests__/processLifecycle.test.ts`（mock backend）；`packages/process-job/test/processJob.test.mjs`（真 OS，Windows-only，CI 在 E2E Windows 作业里跑 `pnpm --filter @universe-editor/process-job test` 作门禁——Linux 的 `ci` 作业里这些用例全部 skip）。
+- 单测：`packages/node-services/src/process/__tests__/processLifecycle.test.ts`（mock backend；含 P1 的两条误杀护栏——「死父但仍有活体后代的包装 shell 不杀」「清扫只用单 pid 杀、不走树杀」）；`processLifecycle.orphanKill.test.ts`（Windows-only，断言 `defaultKillOrphanPid` 不向 `taskkill` 传 `/T`）；`packages/process-job/test/processJob.test.mjs`（真 OS，Windows-only，CI 在 E2E Windows 作业里跑 `pnpm --filter @universe-editor/process-job test` 作门禁——Linux 的 `ci` 作业里这些用例全部 skip）。
 - e2e：`apps/editor/e2e/specs/smoke.processLifecycle.spec.ts`。关窗用例跨平台，但 Windows 上它**不区分有无 job**（`treeKill` 的 `taskkill /T` 也能杀净），守的是整体回收链路；POSIX 上它验证进程组。**强杀 main 用例仅 Windows**，agent 夹具用 `ECHO_AGENT_IGNORE_STDIN_EOF=1` 屏蔽 stdin-EOF 看门狗，所以只有 job 能让它通过（`UNIVERSE_DISABLE_PROCESS_JOB=1` 时该用例失败，作为对照）。注意取 main pid 要用 `electronApp.evaluate(() => process.pid)`。
 - **P0 用例**（`an agent exiting on its own reaps its tree at release`，Windows-only，fixture `UNIVERSE_DISABLE_ORPHAN_SWEEP=1`）：agent 用 `ECHO_AGENT_EXIT_AFTER_MS` 自行退出，孙进程用 `ECHO_AGENT_TREE_VIA_WRAPPER=1` 经 PowerShell 启动。必须走 wrapper——每个 Node 进程有一个 libuv 全局 job（`SILENT_BREAKAWAY_OK`，只显式收编它直接 spawn 的子进程），agent 退出会级联清理直接 spawn 的孙进程并造成假阳性；wrapper 孙进程只挂在编辑器的 job 下，只有释放回收能杀掉它。关掉 sweep 是为了让这 12s 断言只归因于 P0（否则慢速 CI 上 30s 的 sweep tick 可能抢先清掉孤儿）。去掉 `reapDescendantsOnRelease` 时该用例失败，作为对照。
 - **P1 用例**（`smoke.processLifecycleOrphan.spec.ts`，Windows-only，scoped fixture `UNIVERSE_ORPHAN_SWEEP_MS=400`）：`ECHO_AGENT_ORPHAN_FILE` 让 agent 经 PowerShell 中间进程启动 sleeper，中间进程保持 3 秒再退出（给 spec 留出「父还活着、sweep 不杀」的观察窗口），随后 sleeper 成为「父已死但仍在 job 内」的孤儿；同时 `ECHO_AGENT_PID_FILE` 的直接孙进程（父 agent 存活）必须保留。`pnpm` 侧可用 `UNIVERSE_DISABLE_ORPHAN_SWEEP=1` 做失败对照。
