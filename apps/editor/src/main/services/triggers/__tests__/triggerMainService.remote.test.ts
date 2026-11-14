@@ -187,7 +187,6 @@ class FakeConnections {
   private readonly _service = {
     poll: this.poll,
     createRunDir: this.createRunDir,
-    cleanupRuns: async (): Promise<{ removed: readonly string[] }> => ({ removed: [] }),
     readReport: this.readReport,
   }
 

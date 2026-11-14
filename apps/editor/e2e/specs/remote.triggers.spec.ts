@@ -156,10 +156,11 @@ test.describe('remote agent triggers', () => {
     expect(runDir.scheme).toBe('remote-ssh')
     expect(runDir.authority).toBe(AUTHORITY)
 
-    // Direct mode puts the server data dir next to the editor's userData.
+    // Direct mode puts the server data dir at `<userData>/remote-direct/<authority>`;
+    // the local runs dir is `<userData>/triggers/runs`.
     const localRunsDir = await page.evaluate(() => window.__E2E__!.getTriggersRunsDir())
     const remoteRunsRoot = join(
-      dirname(localRunsDir),
+      dirname(dirname(localRunsDir)),
       'remote-direct',
       AUTHORITY,
       'triggers',
