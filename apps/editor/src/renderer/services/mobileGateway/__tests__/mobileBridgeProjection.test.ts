@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest'
 import {
   diffAvailableCommands,
   diffMessage,
+  diffUsage,
   projectAutomationSummary,
   projectAvailableCommands,
   projectMessage,
@@ -505,5 +506,19 @@ describe('diffMessage anchors', () => {
       type: 'message_upsert',
       canFork: false,
     })
+  })
+})
+
+describe('diffUsage', () => {
+  it('emits only when usage changes and clears with an empty event', () => {
+    const usage = { used: 10, size: 100 }
+    expect(diffUsage(undefined, undefined)).toBeUndefined()
+    expect(diffUsage(usage, { ...usage })).toBeUndefined()
+    expect(diffUsage(undefined, usage)).toEqual({ type: 'usage_changed', usage })
+    expect(diffUsage(usage, { used: 20, size: 100 })).toEqual({
+      type: 'usage_changed',
+      usage: { used: 20, size: 100 },
+    })
+    expect(diffUsage(usage, undefined)).toEqual({ type: 'usage_changed' })
   })
 })

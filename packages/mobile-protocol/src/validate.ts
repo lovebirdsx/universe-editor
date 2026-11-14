@@ -3137,6 +3137,14 @@ function parseSessionEvent(value: unknown): Result<MobileSessionEvent> {
       if (!commands.ok) return commands
       return ok({ type: 'available_commands_snapshot', commands: commands.value })
     }
+    case 'usage_changed': {
+      const usage = parseOptional(value.usage, parseUsage)
+      if (!usage.ok) return usage
+      return ok({
+        type: 'usage_changed',
+        ...(usage.value !== undefined ? { usage: usage.value } : {}),
+      })
+    }
     case 'summary_changed': {
       const summary = parseSessionSummary(value.summary)
       if (!summary.ok) return summary

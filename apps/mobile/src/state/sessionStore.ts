@@ -178,6 +178,8 @@ function applyEvent(
       return { ...state, configOptions: event.options }
     case 'available_commands_snapshot':
       return { ...state, availableCommands: event.commands }
+    case 'usage_changed':
+      return { ...state, usage: event.usage }
     case 'summary_changed':
       return { ...state, summary: event.summary, ref: event.summary.ref }
     case 'permission_upsert':

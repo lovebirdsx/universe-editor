@@ -221,6 +221,8 @@ export const strings = {
   sessionLoadFailedBody: 'PC 返回了无法识别的数据，请重试；若一直失败，请在 PC 上重新打开该会话。',
   sessionRetry: '重试',
   sessionRunning: '运行中',
+  contextUsageLabel: (used: string, size: string, percent: number): string =>
+    `上下文已用 ${used} / ${size} tokens（${percent}%）`,
   sessionTruncated: '时间线较早的内容已省略',
   activityThinking: '正在思考…',
   activityToolFallback: '正在调用工具…',

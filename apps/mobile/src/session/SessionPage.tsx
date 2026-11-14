@@ -433,6 +433,7 @@ export function SessionPage({
       <SessionHeader
         summary={state.summary}
         configOptions={state.configOptions}
+        usage={state.usage}
         socketState={socketState}
         online={online}
         busyConfigId={busyConfigId}

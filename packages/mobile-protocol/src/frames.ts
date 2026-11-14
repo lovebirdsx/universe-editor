@@ -1246,6 +1246,12 @@ export interface MobileAvailableCommandsSnapshotEvent {
   commands: readonly MobileAvailableCommand[]
 }
 
+/** Full replacement; omitted `usage` means the agent no longer reports it. */
+export interface MobileUsageChangedEvent {
+  type: 'usage_changed'
+  usage?: MobileUsage
+}
+
 export interface MobileSummaryChangedEvent {
   type: 'summary_changed'
   summary: MobileSessionSummary
@@ -1298,6 +1304,7 @@ export type MobileSessionEvent =
   | MobilePlanSnapshotEvent
   | MobileConfigOptionsSnapshotEvent
   | MobileAvailableCommandsSnapshotEvent
+  | MobileUsageChangedEvent
   | MobileSummaryChangedEvent
   | MobilePermissionUpsertEvent
   | MobilePermissionClearedEvent

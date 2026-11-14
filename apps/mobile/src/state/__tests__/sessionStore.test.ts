@@ -371,6 +371,16 @@ describe('SessionStore other events', () => {
     expect(store.getState().pendingElicitation).toBeUndefined()
   })
 
+  it('replaces and clears usage from usage_changed events', () => {
+    const store = loadedStore()
+    store.applyDelta(
+      sessionDeltaFrame(2, [{ type: 'usage_changed', usage: { used: 50, size: 100 } }]),
+    )
+    expect(store.getState().usage).toEqual({ used: 50, size: 100 })
+    store.applyDelta(sessionDeltaFrame(3, [{ type: 'usage_changed' }]))
+    expect(store.getState().usage).toBeUndefined()
+  })
+
   it('warns and ignores an unknown event without dropping the rest', () => {
     const store = loadedStore()
     const logger = { warn: vi.fn() }

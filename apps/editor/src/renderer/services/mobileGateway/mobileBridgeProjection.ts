@@ -782,6 +782,14 @@ export function diffConfigOptions(
   return sameJson(previous, next) ? undefined : { type: 'config_options_snapshot', options: next }
 }
 
+export function diffUsage(
+  previous: MobileUsage | undefined,
+  next: MobileUsage | undefined,
+): NonSummarySessionEvent | undefined {
+  if (sameJson(previous ?? null, next ?? null)) return undefined
+  return next !== undefined ? { type: 'usage_changed', usage: next } : { type: 'usage_changed' }
+}
+
 /**
  * Summary comparison ignores `updatedAt`: a session without a history row yet
  * stamps the projection time, so comparing it would emit `summary_changed` on

@@ -1,12 +1,18 @@
-import type { MobileConfigOption, MobileSessionSummary } from '@universe-editor/mobile-protocol'
+import type {
+  MobileConfigOption,
+  MobileSessionSummary,
+  MobileUsage,
+} from '@universe-editor/mobile-protocol'
 import { Spinner } from '../components/Spinner.js'
 import type { SocketState } from '../socket/mobileSocket.js'
 import { statusText } from '../components/StatusBar.js'
 import { strings } from '../strings.js'
+import { ContextUsageMeter } from './ContextUsageMeter.js'
 
 export interface SessionHeaderProps {
   readonly summary: MobileSessionSummary | undefined
   readonly configOptions?: readonly MobileConfigOption[] | undefined
+  readonly usage?: MobileUsage | undefined
   readonly socketState: SocketState
   readonly online: boolean
   readonly busyConfigId?: string | undefined
@@ -30,6 +36,7 @@ export interface SessionHeaderProps {
 export function SessionHeader({
   summary,
   configOptions,
+  usage,
   socketState,
   online,
   busyConfigId,
@@ -84,6 +91,7 @@ export function SessionHeader({
               ) : (
                 <span className="session-header__status">{bucketText(summary)}</span>
               )}
+              <ContextUsageMeter usage={usage} />
               {summary.readOnly && (
                 <span className="session-header__badge">{strings.badgeReadOnly}</span>
               )}

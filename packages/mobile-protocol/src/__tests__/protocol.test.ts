@@ -1443,6 +1443,8 @@ describe('parseServerFrame', () => {
           { name: 'status', description: 'Show status' },
         ],
       },
+      { type: 'usage_changed', usage: { used: 42_000, size: 200_000 } },
+      { type: 'usage_changed' },
       { type: 'summary_changed', summary: summaryJson({ bucket: 'input_needed' }) },
       {
         type: 'permission_upsert',
@@ -1467,6 +1469,18 @@ describe('parseServerFrame', () => {
     ]
     const frame = { type: 'session_delta', seq: 9, ref: DURABLE_REF, events }
     expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+  })
+
+  it('rejects malformed usage_changed events', () => {
+    const delta = (usage: unknown): string =>
+      JSON.stringify({
+        type: 'session_delta',
+        seq: 1,
+        ref: DURABLE_REF,
+        events: [{ type: 'usage_changed', usage }],
+      })
+    expect(errorCode(parseServerFrame(delta({ used: -1, size: 10 })))).toBe('bad_request')
+    expect(errorCode(parseServerFrame(delta('full')))).toBe('bad_request')
   })
 
   it('parses only-message flags on tool calls', () => {

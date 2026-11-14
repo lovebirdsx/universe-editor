@@ -1121,6 +1121,40 @@ input:focus-visible {
   background: var(--surface-muted);
 }
 
+.context-usage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.context-usage circle {
+  fill: none;
+  stroke-width: 2;
+}
+
+.context-usage__track {
+  stroke: var(--border);
+}
+
+.context-usage__arc {
+  stroke: var(--accent);
+  stroke-linecap: round;
+}
+
+.context-usage--near {
+  color: var(--danger);
+}
+
+.context-usage--near .context-usage__arc {
+  stroke: var(--danger);
+}
+
 .session-parent-chip {
   max-width: 100%;
   padding: 1px 8px;

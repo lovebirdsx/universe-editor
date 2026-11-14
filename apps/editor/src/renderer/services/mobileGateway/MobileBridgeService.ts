@@ -161,6 +161,7 @@ import type {
 import {
   diffAvailableCommands,
   diffConfigOptions,
+  diffUsage,
   diffElicitation,
   diffPermission,
   diffPlan,
@@ -207,6 +208,7 @@ interface SessionStream {
   publishedPlan: MobileBridgeSessionSnapshot['plan']
   publishedConfigOptions: MobileBridgeSessionSnapshot['configOptions']
   publishedCommands: MobileBridgeSessionSnapshot['availableCommands']
+  publishedUsage: MobileBridgeSessionSnapshot['usage']
   publishedPermission: MobileBridgeSessionSnapshot['pendingPermission']
   publishedElicitation: MobileBridgeSessionSnapshot['pendingElicitation']
   publishedSummary: MobileBridgeSessionSummary | undefined
@@ -2117,6 +2119,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       publishedPlan: [],
       publishedConfigOptions: [],
       publishedCommands: [],
+      publishedUsage: undefined,
       publishedPermission: undefined,
       publishedElicitation: undefined,
       publishedSummary: undefined,
@@ -2197,6 +2200,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     if (configEvent !== undefined) events.push(configEvent)
     const commandsEvent = diffAvailableCommands(stream.publishedCommands, next.availableCommands)
     if (commandsEvent !== undefined) events.push(commandsEvent)
+    const usageEvent = diffUsage(stream.publishedUsage, next.usage)
+    if (usageEvent !== undefined) events.push(usageEvent)
     const previousPermission = stream.publishedPermission
     const permissionCleared =
       previousPermission !== undefined &&
@@ -2250,6 +2255,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     stream.publishedPlan = next.plan
     stream.publishedConfigOptions = next.configOptions
     stream.publishedCommands = next.availableCommands
+    stream.publishedUsage = next.usage
     stream.publishedPermission = next.pendingPermission
     stream.publishedElicitation = next.pendingElicitation
     stream.publishedSummary = summary

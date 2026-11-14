@@ -162,7 +162,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 24`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 25`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -208,6 +208,7 @@ payload，只删除 PC 已打开窗口所属的历史行（未打开工作区的
 `MobilePermissionOption` 的 `allowedOnMobile`：手机与 PC 权限完全一致，可直接切换 bypass /
 full-access 并提交持久授权选项。v24 增加触发器会话摘要：`MobileSessionSummary.automation?`
 （`triggerName` / `verdict?` / `summary?` / `outcome?`），收件箱行显示「⚡ 触发器名」与判决摘要。
+v25 增加 `usage_changed` 增量（`usage?` 全量替换，缺省表示清空），会话头部据此实时显示上下文用量。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, notificationPrefs? }`；
@@ -372,7 +373,7 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
   false；`messageId` 只在 user 且非 autoRetry 时出现。
 - `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、
   `tool_call_upsert`、`timeline_item_added/removed`、`plan_snapshot`、
-  `config_options_snapshot`、`available_commands_snapshot`、`summary_changed`、
+  `config_options_snapshot`、`available_commands_snapshot`、`usage_changed`、`summary_changed`、
   `permission_upsert/cleared`、`elicitation_upsert/cleared`。
 - `availableCommands` 只含展示所需字段：`{ name, description, inputHint? }`。`name` 由桥在投影时
   去掉前导 `/` 并按小写去重；空名或含空白的条目直接丢弃（否则网关的整帧自校验会失败）。
@@ -382,7 +383,8 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
   `{ requestId, reason, source }`，让手机区分 PC / 手机 / 自动执行与「被新请求取代」。
 - `message_upsert.attachments` / `images` 缺省表示不变、`[]` 表示清空；`hasNonText` 只表示未被
   `attachments` / `images` 表达的非 text block（避免缩略图与「[包含附件]」占位重复）。
-- `summary_changed` 比较时忽略 `updatedAt`，避免每次合帧都发；`usage` 只在快照下发。
+- `summary_changed` 比较时忽略 `updatedAt`，避免每次合帧都发；`usage` 变化走 `usage_changed`
+  （上下文 `used/size` 与费用，手机头部元信息行显示环形百分比，点按切换为 token 数）。
 
 **错误码**
 
