@@ -341,3 +341,6 @@ curl -s https://tracker.example.com/mcp \
 - `tools/list` 只有读工具：token 是 read scope，需要 write scope 才会注册写工具。
 - gate 误报：先看违规清单；确实需要改禁改路径时，转人工处理，不要临时删 hook 或改阈值硬上限。
 - `poll` 无输出时，可先手动运行 `node scripts/tracker/tracker-mcp.mjs list`，确认取数本身是否正常。
+- **触发器: 列出触发器…** 里显示「待确认」：触发器还没在本机确认，或配置改动让定义指纹失效
+  （包括 `enabled` / `name` 这类改动）。重新执行 **触发器: 确认工作区触发器…**（用了
+  `bypassPermissions` 的还要执行 **触发器: 确认高权限模式…**）即可恢复调度。
