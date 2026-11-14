@@ -2,14 +2,16 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
  *  tracker 配置读取。默认 ~/.config/universe-editor/tracker.json，可用 UE_TRACKER_CONFIG
- *  覆盖。凭据只在本进程内存里使用，绝不写日志 / stdout / stderr。
+ *  覆盖；mcp 适配器的 token 还可用 UE_TRACKER_TOKEN 覆盖。凭据只在本进程内存里使用，
+ *  绝不写日志 / stdout / stderr。
  *--------------------------------------------------------------------------------------------*/
 
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { UNIFIED_STATUSES } from './contract.mjs'
 
-export const UNIFIED_STATUSES = ['open', 'planned', 'in_progress', 'done', 'closed']
+export { UNIFIED_STATUSES } from './contract.mjs'
 
 const DEFAULT_ELIGIBLE = { labels: ['ai-ready'], statuses: ['planned'] }
 
@@ -86,18 +88,14 @@ function normalizeEligible(value) {
   return { labels, statuses }
 }
 
-/**
- * 校验并补默认值。只返回可安全使用的对象；错误信息里不拼接 password。
- */
-export function normalizeConfig(raw, { path } = {}) {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new ConfigError('配置文件顶层必须是对象')
-  }
+function requireHttpUrl(value, field) {
+  const text = requireString(value, field)
+  if (!isHttpUrl(text)) throw new ConfigError(`配置字段 ${field} 必须是 http(s) URL`)
+  return text
+}
 
-  const adapter = requireString(raw.adapter ?? 'board', 'adapter')
-  const baseUrl = requireString(raw.baseUrl, 'baseUrl')
-  if (!isHttpUrl(baseUrl)) throw new ConfigError('配置字段 baseUrl 必须是 http(s) URL')
-
+function normalizeBoardConfig(raw) {
+  const baseUrl = requireHttpUrl(raw.baseUrl, 'baseUrl')
   const username = optionalString(raw.username, 'username')
   const password = optionalString(raw.password, 'password')
   if ((username === undefined) !== (password === undefined)) {
@@ -111,15 +109,47 @@ export function normalizeConfig(raw, { path } = {}) {
   }
 
   return {
-    ...(path === undefined ? {} : { path }),
-    adapter,
     baseUrl: baseUrl.replace(/\/+$/, ''),
     ...(username === undefined ? {} : { username }),
     ...(password === undefined ? {} : { password }),
     board,
     ...(webUrl === undefined ? {} : { webUrl: webUrl.replace(/\/+$/, '') }),
+  }
+}
+
+function normalizeMcpConfig(raw, env) {
+  const url = requireHttpUrl(raw.url, 'url')
+  const envToken = env.UE_TRACKER_TOKEN?.trim()
+  const token =
+    envToken !== undefined && envToken !== '' ? envToken : optionalString(raw.token, 'token')
+  const project = optionalString(raw.project, 'project')
+  return {
+    url: url.replace(/\/+$/, ''),
+    ...(token === undefined ? {} : { token }),
+    ...(project === undefined ? {} : { project }),
+  }
+}
+
+/**
+ * 校验并补默认值。只返回可安全使用的对象；错误信息里不拼接密码或 token。
+ */
+export function normalizeConfig(raw, { path, env = process.env } = {}) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new ConfigError('配置文件顶层必须是对象')
+  }
+
+  const adapter = requireString(raw.adapter ?? 'board', 'adapter')
+  const common = {
+    ...(path === undefined ? {} : { path }),
+    adapter,
     eligible: normalizeEligible(raw.eligible),
   }
+
+  if (adapter === 'board') return { ...common, ...normalizeBoardConfig(raw) }
+  if (adapter === 'mcp') return { ...common, ...normalizeMcpConfig(raw, env) }
+
+  // 其它适配器由 adapters/<name>.mjs 自行解释配置，这里只保留原样键。
+  return { ...raw, ...common }
 }
 
 export function loadConfig({ filePath, env = process.env } = {}) {
@@ -139,5 +169,5 @@ export function loadConfig({ filePath, env = process.env } = {}) {
   } catch (error) {
     throw new ConfigError(`tracker 配置不是合法 JSON ${path}: ${error.message}`)
   }
-  return normalizeConfig(raw, { path })
+  return normalizeConfig(raw, { path, env })
 }

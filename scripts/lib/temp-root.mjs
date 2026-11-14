@@ -92,6 +92,7 @@ export const TEMP_PREFIXES = [
   'p4-sync-history-',
   'p4cache-',
   'tracker-test-',
+  'tracker-mcp-adapter-',
   'ued-',
   'vsix-',
 ]

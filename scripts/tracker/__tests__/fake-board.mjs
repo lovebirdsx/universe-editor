@@ -33,6 +33,8 @@ function initialPosts() {
       tags: ['tag-ai'],
       priority: 2,
       effort: 3,
+      createdBy: 'u1',
+      owner: 'u2',
       createdAt: '2026-01-02T00:00:00.000Z',
       attachments: [{ name: 'spec.md', path: '/files/spec.md' }],
     },
@@ -171,7 +173,7 @@ async function handle(req, res, state) {
     let posts = state.posts.filter((post) => post.board === body?.board)
     if (body?.status !== undefined) posts = posts.filter((post) => post.status === body.status)
     if (Array.isArray(body?.tags) && body.tags.length > 0) {
-      posts = posts.filter((post) => (post.tags ?? []).some((tag) => body.tags.includes(tag)))
+      posts = posts.filter((post) => (post.tags ?? []).every((tag) => body.tags.includes(tag)))
     }
     posts = posts
       .slice()

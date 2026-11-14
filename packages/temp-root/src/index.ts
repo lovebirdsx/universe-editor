@@ -95,6 +95,7 @@ export const TEMP_PREFIXES: readonly string[] = [
   'p4-sync-history-',
   'p4cache-',
   'tracker-test-',
+  'tracker-mcp-adapter-',
   'ued-',
   'vsix-',
 ]
