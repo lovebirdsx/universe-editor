@@ -34,10 +34,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runLinuxPreflight } from './linux-preflight.mjs'
+import { mkTempDir } from '../lib/temp-root.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const editorDir = join(repoRoot, 'apps', 'editor')
@@ -141,19 +142,74 @@ function uncommittedPaths() {
   return parsePorcelainV1z(out)
 }
 
-function run(command, args, { cwd = repoRoot, env } = {}) {
+function run(command, args, { cwd = repoRoot, env, resultFile } = {}) {
   console.log(`\n> ${command} ${args.join(' ')}`)
+  if (resultFile !== undefined) removeResultFile(resultFile)
   const result = spawnSync(command, args, {
     cwd,
     stdio: 'inherit',
     env: env ? { ...process.env, ...env } : process.env,
     shell: process.platform === 'win32',
   })
-  if (result.error) {
-    console.error(`run-e2e: failed to spawn ${command}: ${result.error.message}`)
-    process.exit(1)
+  const outcome = classifyChildResult({
+    label: `${command} ${args[0] ?? ''}`.trim(),
+    status: result.status,
+    signal: result.signal,
+    error: result.error === undefined ? undefined : result.error.message,
+    ...(resultFile === undefined ? {} : { resultFileExists: existsSync(resultFile) }),
+  })
+  if (resultFile !== undefined) removeResultFile(resultFile)
+  if (outcome.message !== undefined) console.error(`run-e2e: ${outcome.message}`)
+  if (outcome.exitCode !== 0) process.exit(outcome.exitCode)
+}
+
+/**
+ * Map a finished child run onto the runner's exit. Pure so the "killed / no result"
+ * paths are unit-testable.
+ *
+ * A zero exit code is NOT evidence that Playwright ran. On Windows an externally
+ * force-killed process tree (console or job teardown, an unrelated `taskkill /T`)
+ * can leave the tracked shell exiting 0 — the e2e run then "succeeds" with no
+ * summary at all, and a real failure gets reported as green. The completion
+ * sentinel written by the harness reporter on `onEnd` is the positive evidence:
+ * a zero exit code without it is always a failure.
+ */
+export function classifyChildResult({ label, status, signal, error, resultFileExists }) {
+  if (error !== undefined) {
+    return { exitCode: 1, message: `${label} 无法启动：${error}` }
   }
-  if (result.status !== 0) process.exit(result.status ?? 1)
+  if (signal !== null && signal !== undefined) {
+    return {
+      exitCode: 1,
+      message: `${label} 被信号 ${signal} 终止（可能被外部强杀），没有可信结果，按失败处理。`,
+    }
+  }
+  if (status === null || status === undefined) {
+    return {
+      exitCode: 1,
+      message: `${label} 没有返回退出码（进程被强制终止？），没有可信结果，按失败处理。`,
+    }
+  }
+  if (status !== 0) return { exitCode: status }
+  if (resultFileExists === false) {
+    return {
+      exitCode: 1,
+      message:
+        `${label} 退出码 0 但没有产出 Playwright 结果（onEnd 未运行：进程被外部终止或结果文件被删）。` +
+        '按失败处理，避免把中断当成通过。',
+    }
+  }
+  return { exitCode: 0 }
+}
+
+/** Unique per-pass sentinel dir/file; the harness reporter writes the file when the run ends. */
+function resultFileForPass(name) {
+  return join(mkTempDir(`ue-e2e-result-${name}-`), 'result.json')
+}
+
+/** The sentinel lives in its own temp dir, so drop the whole dir. */
+function removeResultFile(resultFile) {
+  rmSync(dirname(resultFile), { recursive: true, force: true })
 }
 
 function ensureEditorBuild() {
@@ -167,19 +223,28 @@ const PW_CONFIG = ['test', '-c', 'e2e/playwright.config.ts']
 
 /** The two passes of the original editor `e2e`/`e2ea` script, optionally file-scoped. */
 function runCoreSuite(specFilters, { regression = false } = {}) {
+  const mainResult = resultFileForPass('main')
   run('pnpm', ['exec', 'playwright', ...PW_CONFIG, ...specFilters, '--pass-with-no-tests'], {
     cwd: editorDir,
     env: {
       PLAYWRIGHT_FORCE_TTY: '0',
+      UNIVERSE_E2E_RESULT_FILE: mainResult,
       ...(regression ? { UNIVERSE_E2E_INCLUDE_REGRESSION: '1' } : {}),
     },
+    resultFile: mainResult,
   })
+  const serialResult = resultFileForPass('serial')
   run(
     'pnpm',
     ['exec', 'playwright', ...PW_CONFIG, ...specFilters, '--workers=1', '--pass-with-no-tests'],
     {
       cwd: editorDir,
-      env: { PLAYWRIGHT_FORCE_TTY: '0', UNIVERSE_E2E_ONLY_TAG: '@serial' },
+      env: {
+        PLAYWRIGHT_FORCE_TTY: '0',
+        UNIVERSE_E2E_ONLY_TAG: '@serial',
+        UNIVERSE_E2E_RESULT_FILE: serialResult,
+      },
+      resultFile: serialResult,
     },
   )
 }

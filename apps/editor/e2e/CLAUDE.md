@@ -67,7 +67,7 @@ harness fixture 接收 `extensions: string[]`（allowlist）→ launch env `UNIV
 
 tag 打在**用例级** `test('... @p0')` 标题末尾（`@regression` 尤其单用例级，不打在 describe 上）。**过滤策略集中在共享 config**（`playwrightConfig.ts` 的 `grepOptions`），core 与每个扩展同一套——script/CI **不传 `--grep`**，只翻三个 env：`UNIVERSE_E2E_INCLUDE_REGRESSION=1`（@regression 并回主趟，即 `e2ea`）、`UNIVERSE_E2E_ONLY_TAG=<tag>`（只跑某 tag）、`UNIVERSE_E2E_ONLY_TAG_INVERT=<正则>`（叠加排除，`e2e:smoke` 用它把 @p0∩hazard-tag 挡在并行趟外）。加/改 tag 分流只改这一处。**加新 tag 记得同步 `turbo.json` 的 e2e/e2ea task `env` 声明**（否则 turbo strict 不透传、不入缓存 key）。
 
-**约定：`@p0` 不与 `@serial`/`@flaky`/`@perf`/`@visual` 同标**——`e2e:smoke` 语义是「可并行的主路径冒烟」，同标用例会被 INVERT 从 smoke 排除，等于白标 @p0。
+**约定：`@p0` 不与 `@serial`/`@flaky`/`@perf`/`@visual` 同标**——`e2e:smoke` 是「可并行主路径冒烟」，同标会被 INVERT 排除，等于白标。
 
 **何时打 `@serial`**：用例独占**跨 worker 的全局资源**（当前仅 OS 剪贴板：smoke.acpPasteImage / smoke.agentsMcpDraft 的粘贴图片用例）。**不要再因「打开 workspace」打 @serial**（watcher 已移入 UtilityProcess，根因已修）。
 
@@ -103,7 +103,9 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 
 > **`pnpm e2e` 走 turbo 缓存**：输入未变则命中缓存**不重跑**（缓存 key 含 `editor#build` 的 output hash）。强制真跑用 `pnpm e2e:force`。`--concurrency=1` 让 suite 串行，避免多个独立 Electron 并发的资源争抢 flake。
 
-**改了扩展代码要跑单个 suite？** 首选 `pnpm e2e:ext <包>`（走 turbo `e2e` task，结果也进缓存）；裸 `pnpm --filter <ext> e2e` 也安全，已前置 `ensure-e2e-build.mjs`（见踩坑）。core 套件的 `core*App` fixture 从各扩展 `dist` 读产物，无需单列 `#build`。
+**退出码可信**：入口要求 reporter 的完成哨兵（`UNIVERSE_E2E_RESULT_FILE`）：退出码 0 但无哨兵或被信号杀 → 非零并打印原因（`classifyChildResult`）。
+
+**改了扩展代码要跑单个 suite？** 首选 `pnpm e2e:ext <包>`（走 turbo `e2e` task，结果也进缓存）；裸 `pnpm --filter <ext> e2e` 也安全，已前置 `ensure-e2e-build.mjs`（见踩坑）。core 套件的 `core*App` fixture 从各扩展 `dist` 读产物。
 
 **CI affected**：PR 用 turbo affected（`--filter=...[origin/main]`）只跑受影响 suite；改 `platform`/`e2e-harness` → 依赖传递触发全量兜底；main/nightly 无条件全量。CI 的 core e2e job 直接调 playwright（带 `-c e2e/playwright.config.ts`；前面有独立 `pnpm build` step）。
 
@@ -127,7 +129,7 @@ pnpm --filter @universe-editor/editor test:visual    # 视觉基线（仅 Linux 
 - **E2E 默认静默不抢焦点**：`isE2E` 时主进程窗口 `showInactive()`、其余 `focus()` 降级（`UNIVERSE_E2E_SHOW=1` 恢复完整 show/focus）。
 - **驱动焦点前先等启动焦点落定**：启动焦点恢复晚于 `waitForRestored()`，要补 `await workbench.waitForBootstrapFocusSettled()`，否则中途抢焦点、用例偶发失败且像回归（先例 `smoke.outputFind`）；断言“焦点到位”用 `focusedView`，别只看 `editorFocus`。
 - **core suite 是用例级并行（`fullyParallel`）**：同一 spec 文件里的用例可能被拆到不同 worker 同时跑，**文件内用例不得共享可变资源**（module 级固定端口/路径/beforeAll 服务）——确需共享的文件加 `test.describe.configure({ mode: 'default' })` 退回文件内串行（先例 `smoke.update.spec.ts`）。扩展 suite 仍是文件级调度（每用例冷启一个 Electron）；机制见 `playwrightConfig.ts` 的 `fullyParallel` 注释。
-- **产物 build 已自动兜底**：`pnpm e2e` / `pnpm --filter <ext> e2e` 前置 `scripts/e2e/ensure-e2e-build.mjs`。裸 `playwright test` 则不：无构建守卫，在仓库根/扩展目录跑还连 globalSetup 一起绕开（WSL 下弹窗）——一律改走 `pnpm e2e`（位置参数可多个 spec）。
+- **产物 build 已自动兜底**：`pnpm e2e` / `pnpm --filter <ext> e2e` 前置 `scripts/e2e/ensure-e2e-build.mjs`。裸 `playwright test` 不跑守卫与 globalSetup（WSL 下弹窗）——一律走 `pnpm e2e`。
 - **异步 ACP 会话**：`sendAcpPrompt` 的 await 只表示**派发**完成、不等渲染——依赖 timeline 高度/滚动的断言前先 `expect.poll` 等落地（skill `fix-ci-e2e-flake` 案例 15/34/41/100）。
 - **可见性别用 `toBeVisible()`**：Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判。走 ContextKey + `expect.poll`。
 - **长任务命令 fire-and-forget**：`showCommands` 之类内部 await 用户输入的命令必须 `void window.__E2E__!.runCommand(id)`，否则死锁。

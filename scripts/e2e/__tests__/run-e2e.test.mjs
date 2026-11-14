@@ -11,7 +11,13 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseArgs, parsePorcelainV1z, planChangedSpecs, normalizeSpecArg } from '../run-e2e.mjs'
+import {
+  classifyChildResult,
+  normalizeSpecArg,
+  parseArgs,
+  parsePorcelainV1z,
+  planChangedSpecs,
+} from '../run-e2e.mjs'
 
 const SPEC = 'apps/editor/e2e/specs/smoke.foo.spec.ts'
 const SPEC2 = 'apps/editor/e2e/specs/smoke.bar.spec.ts'
@@ -114,4 +120,64 @@ test('normalizeSpecArg rejects paths outside core specs/ and non-spec files', ()
   ]) {
     assert.throws(() => normalizeSpecArg(bad), /not a core spec file/, bad)
   }
+})
+
+// A green exit code is not proof that Playwright ran: on Windows an externally
+// force-killed tree can leave the tracked shell exiting 0. The runner therefore
+// requires the harness reporter's onEnd sentinel, and never reports success for a
+// run it cannot see finish.
+test('classifyChildResult: spawn failure is a failure', () => {
+  const outcome = classifyChildResult({
+    label: 'playwright',
+    status: null,
+    signal: null,
+    error: 'spawn pnpm ENOENT',
+  })
+  assert.equal(outcome.exitCode, 1)
+  assert.match(outcome.message, /无法启动/)
+})
+
+test('classifyChildResult: a signal-killed child is a failure', () => {
+  const outcome = classifyChildResult({
+    label: 'playwright',
+    status: null,
+    signal: 'SIGKILL',
+    resultFileExists: false,
+  })
+  assert.equal(outcome.exitCode, 1)
+  assert.match(outcome.message, /SIGKILL/)
+})
+
+test('classifyChildResult: a null status without a signal is a failure', () => {
+  const outcome = classifyChildResult({ label: 'playwright', status: null, signal: null })
+  assert.equal(outcome.exitCode, 1)
+  assert.match(outcome.message, /没有返回退出码/)
+})
+
+test('classifyChildResult: preserves a non-zero exit code', () => {
+  const outcome = classifyChildResult({ label: 'playwright', status: 2, signal: null })
+  assert.equal(outcome.exitCode, 2)
+  assert.equal(outcome.message, undefined)
+})
+
+test('classifyChildResult: exit 0 without the Playwright sentinel is a failure', () => {
+  const outcome = classifyChildResult({
+    label: 'playwright',
+    status: 0,
+    signal: null,
+    resultFileExists: false,
+  })
+  assert.equal(outcome.exitCode, 1)
+  assert.match(outcome.message, /没有产出 Playwright 结果/)
+})
+
+test('classifyChildResult: exit 0 with the sentinel passes', () => {
+  assert.deepEqual(
+    classifyChildResult({ label: 'playwright', status: 0, signal: null, resultFileExists: true }),
+    { exitCode: 0 },
+  )
+})
+
+test('classifyChildResult: no sentinel expected (non-Playwright child) passes on exit 0', () => {
+  assert.equal(classifyChildResult({ label: 'turbo e2e', status: 0, signal: null }).exitCode, 0)
 })

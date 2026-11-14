@@ -99,6 +99,12 @@ xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm e2e:smoke
 
 **WSLg（已有 `DISPLAY=:0`）下零窗口离屏跑**：现在裸跑默认就是零窗口——globalSetup 检测到 WSL 后，即便有 `DISPLAY` 也会自动启动 Xvfb 离屏（见上「自动预检与自动 Xvfb」），无需再手动包裹。`DISPLAY= pnpm e2e:smoke` 前缀与 `scripts/wsl/e2e.sh` 仍有效但已非必要（`e2e.sh` 保留价值 = 与 CI 完全同参数）。想看真实窗口调试，用 `UNIVERSE_E2E_SHOW=1 pnpm e2e ...` 或 `e2e:headed` / `e2e:ui`。
 
+### 从 Windows 宿主跑（Git Bash / cmd / agent 工具）
+
+Git Bash、cmd、PowerShell 里直接 `pnpm e2e ...` 是受支持的，**不需要**用 PowerShell / `wsl.exe -e bash -lc` 之类的 interop 绕道。入口自带「完成哨兵」：Playwright reporter 在 `onEnd` 写 `UNIVERSE_E2E_RESULT_FILE`，`scripts/e2e/run-e2e.mjs` / `run-playwright.mjs` 据此判定——**退出码为 0 但没有哨兵文件（或子进程被信号杀、拿不到退出码）一律按失败退出并打印原因**，不会再出现「没有汇总的绿灯」。
+
+历史坑（已修，2026-11 前）：编辑器自己托管的 agent（Claude Code 等）的工具命令整棵树都在编辑器的 ACP agent job 里；旧版孤儿清扫把 MSYS `exec` 留下的包装 `sh.exe`（父已退出、子仍在跑）当孤儿 `taskkill /T`，连带杀掉整棵 `pnpm e2e` 树，而被杀 shell 的退出码被映射成 `$?`=0——表现为「日志 0 字节 / 停在 `Running 1 test`、退出码 0」。升级并重启编辑器后消失；机制与判定语义见 `docs/development/process-lifecycle.md`。
+
 ## 在 WSL 中运行 AI agent
 
 ### 动机

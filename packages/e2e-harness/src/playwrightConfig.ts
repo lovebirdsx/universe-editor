@@ -144,6 +144,13 @@ export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestC
     ['html', { open: 'never', outputFolder: 'playwright-report' }],
   ]
   if (jsonReportFile) ciReporters.push(['json', { outputFile: jsonReportFile }])
+  const reporters: ReporterDescription[] = isCI ? [...ciReporters] : [['list']]
+  // run-e2e.mjs opts into the completion sentinel: without the file it treats the
+  // run as interrupted even when the exit code is 0 (external kill). Appended, not
+  // substituted, so CI's github/html/json reporters stay intact.
+  if (process.env['UNIVERSE_E2E_RESULT_FILE']) {
+    reporters.push([fileURLToPath(new URL('./resultReporter.js', import.meta.url))])
+  }
   return defineConfig({
     // Unconditional: the setup itself no-ops unless linux && no DISPLAY, so the
     // core + every extension suite get headless Xvfb bootstrap for free. The .js
@@ -168,7 +175,7 @@ export function defineE2EConfig(options: E2EConfigOptions = {}): PlaywrightTestC
     // test.describe.configure({mode:'default'}) (see smoke.update.spec.ts —
     // fixed feed port + shared dev-app-update.yml).
     fullyParallel: options.fullyParallel ?? false,
-    reporter: isCI ? ciReporters : [['list']],
+    reporter: reporters,
     use: {
       trace: 'retain-on-failure',
       video: 'retain-on-failure',
