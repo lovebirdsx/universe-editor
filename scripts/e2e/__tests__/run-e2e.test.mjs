@@ -11,12 +11,16 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { existsSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { mkTempDir } from '../../lib/temp-root.mjs'
 import {
   classifyChildResult,
   normalizeSpecArg,
   parseArgs,
   parsePorcelainV1z,
   planChangedSpecs,
+  runChild,
 } from '../run-e2e.mjs'
 
 const SPEC = 'apps/editor/e2e/specs/smoke.foo.spec.ts'
@@ -180,4 +184,41 @@ test('classifyChildResult: exit 0 with the sentinel passes', () => {
 
 test('classifyChildResult: no sentinel expected (non-Playwright child) passes on exit 0', () => {
   assert.equal(classifyChildResult({ label: 'turbo e2e', status: 0, signal: null }).exitCode, 0)
+})
+
+test('runChild: the per-pass sentinel dir survives until the child writes it', () => {
+  // Regression: a pre-spawn cleanup deleted the freshly-created mkdtemp dir, so the
+  // reporter's write failed (ENOENT) and a fully green pass was reported as
+  // "exit 0 without a Playwright result".
+  const resultFile = join(mkTempDir('ue-e2e-result-test-'), 'result.json')
+  let dirAliveAtSpawn
+  let fileAtSpawn
+  const spawn = () => {
+    dirAliveAtSpawn = existsSync(dirname(resultFile))
+    fileAtSpawn = existsSync(resultFile)
+    writeFileSync(resultFile, JSON.stringify({ status: 'passed' }))
+    return { status: 0, signal: null }
+  }
+
+  const outcome = runChild({ command: 'playwright', args: ['test'], resultFile, spawn })
+
+  assert.equal(dirAliveAtSpawn, true, 'sentinel dir must not be deleted before the child runs')
+  assert.equal(fileAtSpawn, false, 'sentinel file must not exist before the run ends')
+  assert.deepEqual(outcome, { exitCode: 0 })
+  assert.equal(existsSync(dirname(resultFile)), false, 'sentinel dir is cleaned after the pass')
+})
+
+test('runChild: exit 0 with no sentinel write is reported as a failure', () => {
+  const resultFile = join(mkTempDir('ue-e2e-result-test-'), 'result.json')
+
+  const outcome = runChild({
+    command: 'playwright',
+    args: ['test'],
+    resultFile,
+    spawn: () => ({ status: 0, signal: null }),
+  })
+
+  assert.equal(outcome.exitCode, 1)
+  assert.match(outcome.message, /没有产出 Playwright 结果/)
+  assert.equal(existsSync(dirname(resultFile)), false)
 })

@@ -142,10 +142,18 @@ function uncommittedPaths() {
   return parsePorcelainV1z(out)
 }
 
-function run(command, args, { cwd = repoRoot, env, resultFile } = {}) {
+/**
+ * Spawn one child and classify its result. `spawn` is injectable so the sentinel
+ * lifecycle (the file must still be absent-then-written, never pre-deleted) is
+ * unit-testable without launching Playwright.
+ *
+ * The sentinel dir is created fresh per pass (`mkTempDir`), so it must NOT be
+ * cleaned before the child runs: doing so deleted the reporter's write target and
+ * turned a fully green pass into a false "no Playwright result" failure.
+ */
+export function runChild({ command, args, cwd = repoRoot, env, resultFile, spawn = spawnSync }) {
   console.log(`\n> ${command} ${args.join(' ')}`)
-  if (resultFile !== undefined) removeResultFile(resultFile)
-  const result = spawnSync(command, args, {
+  const result = spawn(command, args, {
     cwd,
     stdio: 'inherit',
     env: env ? { ...process.env, ...env } : process.env,
@@ -159,6 +167,11 @@ function run(command, args, { cwd = repoRoot, env, resultFile } = {}) {
     ...(resultFile === undefined ? {} : { resultFileExists: existsSync(resultFile) }),
   })
   if (resultFile !== undefined) removeResultFile(resultFile)
+  return outcome
+}
+
+function run(command, args, options = {}) {
+  const outcome = runChild({ command, args, ...options })
   if (outcome.message !== undefined) console.error(`run-e2e: ${outcome.message}`)
   if (outcome.exitCode !== 0) process.exit(outcome.exitCode)
 }

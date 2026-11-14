@@ -13,7 +13,8 @@
  *  extension suites (which do not go through run-e2e) stay untouched.
  *--------------------------------------------------------------------------------------------*/
 
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 interface ResultLike {
   readonly status: string
@@ -24,10 +25,14 @@ export default class E2EResultReporter {
     const file = process.env['UNIVERSE_E2E_RESULT_FILE']
     if (file === undefined || file === '') return
     try {
+      // Recreate the dir: a cleanup pass removing the runner's sentinel dir must not
+      // turn a completed run into a false "interrupted" verdict.
+      mkdirSync(dirname(file), { recursive: true })
       writeFileSync(file, JSON.stringify({ status: result.status }))
-    } catch {
-      // The runner's own "missing sentinel" message is the report; a finished run
-      // must not fail because a temp file could not be written.
+    } catch (err) {
+      // A finished run must not fail on a temp-file problem, but say so: the runner's
+      // "missing sentinel" verdict is otherwise indistinguishable from a real kill.
+      console.error(`[e2e-result] failed to write ${file}: ${String(err)}`)
     }
   }
 }
