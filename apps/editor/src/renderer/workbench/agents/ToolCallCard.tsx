@@ -68,7 +68,8 @@ import { roleIcon, toolCallIcon } from './timelineIcons.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { toolCallPathUri, toolCallPathUriString } from './toolCallPaths.js'
 import { isMessageRendered, resolveCollapsed, type CollapseState } from './timelineCollapse.js'
-import { filterChildItemsForDisplay } from './timelineDisplay.js'
+import { filterChildItemsForDisplay, getSubagentHiddenActivity } from './timelineDisplay.js'
+import { TimelineHiddenActivity } from './TimelineHiddenActivity.js'
 import styles from './agents.module.css'
 
 /** Config key controlling which MCP-card sections start expanded. */
@@ -106,6 +107,8 @@ export interface SubtreeCollapse {
   /** Live keyboard-focused slot key — matched against each child's composite key
    *  to render the focus ring on the focused sub-agent item. */
   readonly focusedKey?: string | null
+  /** A pending permission / elicitation hides the sub-agent activity line. */
+  readonly activitySuppressed?: boolean
 }
 
 export function ToolCallList({ session }: { session: IAcpSession }) {
@@ -400,6 +403,9 @@ export const ToolCallCard = memo(function ToolCallCard({
               ...(subtreeCollapse.focusedKey !== undefined
                 ? { focusedKey: subtreeCollapse.focusedKey }
                 : {}),
+              ...(subtreeCollapse.activitySuppressed !== undefined
+                ? { activitySuppressed: subtreeCollapse.activitySuppressed }
+                : {}),
             }}
             dataStickyKey={childKey}
             dataStickyDepth={childDepth}
@@ -408,6 +414,15 @@ export const ToolCallCard = memo(function ToolCallCard({
         )
       })}
     </ul>
+  )
+
+  // onlyMessage hides a running sub-agent's tools; surface its current step on
+  // the card itself — under the header when folded, below the children when open.
+  const mode = subtreeCollapse?.collapse.mode
+  const activitySuppressed = subtreeCollapse?.activitySuppressed === true
+  const hiddenActivity = useMemo(
+    () => (mode !== undefined ? getSubagentHiddenActivity(call, mode, activitySuppressed) : null),
+    [call, mode, activitySuppressed],
   )
 
   // A whole-file write is meant to be *read*, so offer that straight from the
@@ -658,6 +673,17 @@ export const ToolCallCard = memo(function ToolCallCard({
       {...(badge !== undefined ? { badge } : {})}
       collapsed={collapsed}
       onToggle={onToggle}
+      {...(hiddenActivity !== null
+        ? {
+            footer: (
+              <TimelineHiddenActivity
+                activity={hiddenActivity}
+                testId="acp-subagent-hidden-activity"
+                className={styles['subagentHiddenActivity']}
+              />
+            ),
+          }
+        : {})}
       rootProps={{
         className,
         'data-status': effectiveStatus,

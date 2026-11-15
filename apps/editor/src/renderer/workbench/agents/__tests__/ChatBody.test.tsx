@@ -2550,6 +2550,59 @@ describe('ChatBody — display modes', () => {
     expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
   })
 
+  it('shows a running sub-agent hidden tail on its card, not at the timeline tail', () => {
+    const task: TimelineItem = {
+      kind: 'toolCall',
+      id: 'task',
+      call: {
+        ...makeTaskCall('task', [
+          {
+            kind: 'toolCall',
+            id: 'inner-read',
+            call: {
+              id: 'inner-read',
+              title: 'inner-read',
+              kind: 'read',
+              status: 'in_progress',
+              text: '',
+              blocks: [],
+              diffs: [],
+            },
+          },
+        ]),
+        subagent: true,
+        status: 'in_progress',
+      },
+    }
+    const session = makeSession('s1', [roleMessage('u', 'user', 'question'), task], {
+      status: 'running',
+    })
+    const { queryByTestId, getByTestId } = renderChat(session)
+    act(() => session.setCollapseMode('onlyMessage'))
+    expect(queryByTestId('acp-timeline-hidden-activity')).toBeNull()
+    expect(getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe('inner-read')
+
+    const pendingPermission = session.pendingPermission as ISettableObservable<
+      AcpPendingPermission | undefined
+    >
+    act(() =>
+      pendingPermission.set(
+        {
+          requestId: 'req-perm',
+          toolCallId: 'inner-read',
+          title: 'Approve read',
+          options: [],
+          resolve: () => {},
+          cancel: () => {},
+          resolveWithSource: () => {},
+          cancelWithSource: () => {},
+        },
+        undefined,
+      ),
+    )
+    expect(queryByTestId('acp-subagent-hidden-activity')).toBeNull()
+  })
+
   it('keyboard navigation skips slots hidden by the display mode', () => {
     const session = makeSession('s1', [
       roleMessage('u', 'user', 'question'),

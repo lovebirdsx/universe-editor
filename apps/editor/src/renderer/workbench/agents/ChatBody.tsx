@@ -101,7 +101,7 @@ import { ToolCallCard } from './ToolCallCard.js'
 import { CompactionCard } from './CompactionCard.js'
 import { ResurrectionCard } from './ResurrectionCard.js'
 import { roleIcon } from './timelineIcons.js'
-import { useElapsedTime } from './elapsedTime.js'
+import { TimelineHiddenActivity } from './TimelineHiddenActivity.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
@@ -128,7 +128,6 @@ import {
   isStickyKeyHiddenByDisplayMode,
   selectTimelineForDisplay,
   selectTimelineForOutline,
-  type HiddenActivity,
 } from './timelineDisplay.js'
 import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { estimateWrappedLinesUpTo } from './contentOverflow.js'
@@ -915,16 +914,11 @@ function ChatScroll({
   // for the user, where the agent is blocked rather than working.
   const pendingPermission = useObservable(session.pendingPermission)
   const pendingElicitation = useObservable(session.pendingElicitation)
+  const awaitingDecision = pendingPermission !== undefined || pendingElicitation !== undefined
   const timelineTail = timeline[timeline.length - 1]
   const hiddenActivity = useMemo(
-    () =>
-      getHiddenActivity(
-        filteredTimeline,
-        timelineTail,
-        mode,
-        isRunning && pendingPermission === undefined && pendingElicitation === undefined,
-      ),
-    [filteredTimeline, timelineTail, mode, isRunning, pendingPermission, pendingElicitation],
+    () => getHiddenActivity(filteredTimeline, timelineTail, mode, isRunning && !awaitingDecision),
+    [filteredTimeline, timelineTail, mode, isRunning, awaitingDecision],
   )
 
   // Render-phase hookup (like timelineRef above) so the sticky first-user bar —
@@ -2116,6 +2110,7 @@ function ChatScroll({
               if (item === undefined) return null
               const key = slotKey(item)
               const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
+              const slotActivitySuppressed = awaitingDecision && item.kind === 'toolCall'
               return (
                 <div
                   key={key}
@@ -2136,6 +2131,7 @@ function ChatScroll({
                     item={item}
                     session={session}
                     sessionRunning={slotRunning}
+                    activitySuppressed={slotActivitySuppressed}
                     isFocused={key === focusedKey}
                     focusedKey={focusedKey}
                     {...bookmarkProp(bookmarkedSlots, key)}
@@ -2156,6 +2152,7 @@ function ChatScroll({
               // about it, so settled slots get a constant `false` and a session
               // start/stop no longer invalidates every memoized slot.
               const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
+              const slotActivitySuppressed = awaitingDecision && item.kind === 'toolCall'
               return (
                 <TimelineSlot
                   key={key}
@@ -2163,6 +2160,7 @@ function ChatScroll({
                   item={item}
                   session={session}
                   sessionRunning={slotRunning}
+                  activitySuppressed={slotActivitySuppressed}
                   isFocused={key === focusedKey}
                   focusedKey={focusedKey}
                   {...bookmarkProp(bookmarkedSlots, key)}
@@ -2195,82 +2193,6 @@ function ChatScroll({
         )}
       </div>
     </ContentExpansionProvider>
-  )
-}
-
-function joinActivityParts(...parts: readonly (string | null | undefined)[]): string | undefined {
-  const kept = parts.filter(
-    (part): part is string => part !== undefined && part !== null && part.length > 0,
-  )
-  return kept.length > 0 ? kept.join(' · ') : undefined
-}
-
-function hiddenActivityDetail(
-  activity: HiddenActivity,
-  elapsed: string | null,
-): string | undefined {
-  if (activity.kind === 'thinking') return activity.detail
-  if (activity.kind === 'tool') return joinActivityParts(activity.detail, elapsed)
-  const { tool } = activity
-  const previous = localize('acp.collapse.activity.previous', 'Previous: {title}', {
-    title: tool.title,
-  })
-  const status =
-    tool.status === 'failed'
-      ? tool.reason !== undefined && tool.reason.length > 0
-        ? localize('acp.collapse.activity.failedWithReason', 'failed: {reason}', {
-            reason: tool.reason,
-          })
-        : localize('acp.collapse.activity.failed', 'failed')
-      : tool.status === 'cancelled' && (tool.reason === undefined || tool.reason.length === 0)
-        ? localize('acp.collapse.activity.cancelled', 'cancelled')
-        : tool.reason
-  return joinActivityParts(previous, status, elapsed)
-}
-
-function TimelineHiddenActivity({ activity }: { activity: HiddenActivity }) {
-  const elapsed = useElapsedTime(
-    activity.kind === 'tool',
-    activity.kind === 'tool' ? activity.startedAt : undefined,
-    activity.kind === 'tool'
-      ? activity.durationMs
-      : activity.kind === 'settledTool'
-        ? activity.tool.durationMs
-        : undefined,
-  )
-  const primary =
-    activity.kind === 'tool'
-      ? activity.title
-      : localize('acp.collapse.activity.thinking', 'Thinking…')
-  const secondary = hiddenActivityDetail(activity, elapsed)
-
-  return (
-    <div
-      className={styles['timelineHiddenActivity']}
-      data-testid="acp-timeline-hidden-activity"
-      role="status"
-      aria-atomic="false"
-    >
-      <Loader2 size={12} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
-      <div className={styles['timelineHiddenActivityBody']}>
-        <span
-          className={styles['timelineHiddenActivityPrimary']}
-          data-testid="acp-timeline-hidden-activity-primary"
-          data-tooltip={primary}
-        >
-          {primary}
-        </span>
-        {secondary !== undefined && (
-          <span
-            className={styles['timelineHiddenActivityDetail']}
-            data-testid="acp-timeline-hidden-activity-detail"
-            data-tooltip={secondary}
-          >
-            {secondary}
-          </span>
-        )}
-      </div>
-    </div>
   )
 }
 
@@ -2375,6 +2297,7 @@ const TimelineSlot = memo(function TimelineSlot({
   item,
   session,
   sessionRunning,
+  activitySuppressed,
   isFocused,
   bookmark,
   exploreResultKey,
@@ -2388,6 +2311,9 @@ const TimelineSlot = memo(function TimelineSlot({
   item: TimelineItem
   session: IAcpSession
   sessionRunning: boolean
+  /** A permission / elicitation prompt owns the footer; sub-agent cards drop
+   *  their activity line so it never competes with the decision. */
+  activitySuppressed: boolean
   isFocused: boolean
   bookmark?: number
   /** Slot key + report path of the synthetic Explore result linked to this
@@ -2484,6 +2410,7 @@ const TimelineSlot = memo(function TimelineSlot({
             collapse,
             toggle: onToggleCollapse,
             focusedKey,
+            activitySuppressed,
           }}
           {...(badge !== undefined ? { badge } : {})}
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}

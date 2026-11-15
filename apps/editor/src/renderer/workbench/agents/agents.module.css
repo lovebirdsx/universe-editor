@@ -1690,6 +1690,11 @@
   color: var(--vscode-descriptionForeground, #8a8a92);
 }
 
+/* Footer of a running sub-agent card: aligned with the card body's inset. */
+.subagentHiddenActivity {
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}
+
 .sendButtonCircle {
   position: relative;
   width: var(--acp-act-btn);

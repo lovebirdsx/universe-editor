@@ -64,6 +64,9 @@ export interface CollapsibleSlotProps {
   readonly onToggle: () => void
   /** Collapsible body, rendered only when expanded. */
   readonly children: ReactNode
+  /** Rendered after the body regardless of `collapsed` (e.g. a live activity
+   *  line that must stay visible on a folded card). */
+  readonly footer?: ReactNode
   /** Spread onto the root element (data-* hooks, focus class, etc.). */
   readonly rootProps?: HTMLAttributes<HTMLElement> & Record<`data-${string}`, string>
   /** Extra class for the header button (e.g. sticky positioning inside a
@@ -83,6 +86,7 @@ export function CollapsibleSlot({
   collapsed,
   onToggle,
   children,
+  footer,
   rootProps,
   headerClassName,
   headerPrefix,
@@ -143,6 +147,7 @@ export function CollapsibleSlot({
         header
       )}
       {!collapsed && <div className={styles['slotBody']}>{children}</div>}
+      {footer}
     </Tag>
   )
 }

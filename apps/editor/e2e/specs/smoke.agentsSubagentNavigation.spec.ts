@@ -11,8 +11,10 @@
  *  胶囊对滚动容器的监听，以及 QuickPick 分区与 outline → slot key 的桥接。
  *--------------------------------------------------------------------------------------------*/
 
-import { dirname, resolve } from 'node:path'
+import { existsSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { mkTempDir } from '@universe-editor/e2e-harness'
 import { test, expect } from '../fixtures/sharedApp.js'
 import type { Page } from '@playwright/test'
 
@@ -27,12 +29,14 @@ async function openSessionWithCards(
   page: Page,
   workbench: { waitForRestored: () => Promise<void> },
   prompts: readonly string[],
+  env?: Record<string, string>,
 ): Promise<readonly string[]> {
   await workbench.waitForRestored()
 
-  await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+  await page.evaluate(([id, p, e]) => window.__E2E__!.installAcpEchoAgent(id, p, e), [
     'echo',
     ECHO_AGENT_PATH,
+    env,
   ] as const)
   await page.evaluate(() => {
     void window.__E2E__!.runCommand('workbench.action.agent.newSession')
@@ -50,7 +54,10 @@ async function openSessionWithCards(
   // Prompts are dispatched; the wait below is on the rendered cards, not on the
   // dispatch promise (ACP streaming keeps the turn alive after sendPrompt).
   for (const prompt of prompts) {
-    await page.evaluate((text) => window.__E2E__!.sendAcpPrompt(text), prompt)
+    const sent = page.evaluate((text) => window.__E2E__!.sendAcpPrompt(text), prompt)
+    // A gated turn only resolves once the spec releases it; fire and move on.
+    if (env === undefined) await sent
+    else void sent.catch(() => {})
   }
 
   const cards = page.locator(SUBAGENT_CARDS)
@@ -320,5 +327,35 @@ test.describe('@p1 sub-agent card navigation', () => {
     await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('onlyMessage'))
     await expect(childTools).toHaveCount(0)
     expect(await cardExpanded(page, key)).toBe(true)
+  })
+
+  test('a running sub-agent shows its hidden step on the folded card', async ({
+    page,
+    workbench,
+  }) => {
+    // The turn-end gate keeps the Task card in_progress after its trailing Bash
+    // call, which onlyMessage hides — the card itself must say what ran last.
+    const releasePath = join(mkTempDir('ue2-subagent-activity-'), 'release')
+    const release = (): void => {
+      if (!existsSync(releasePath)) writeFileSync(releasePath, '')
+    }
+    try {
+      const keys = await openSessionWithCards(page, workbench, ['emit-subagent-mixed:2x1'], {
+        ECHO_AGENT_TURN_END_GATE: releasePath,
+      })
+      const card = page.locator(`[data-timeline-key="${keys[0]!}"]`)
+      await page.evaluate(() => window.__E2E__!.setAcpCollapseMode('onlyMessage'))
+
+      expect(await cardExpanded(page, keys[0]!)).toBe(false)
+      const activity = card.getByTestId('acp-subagent-hidden-activity')
+      await expect(activity).toBeVisible({ timeout: 10000 })
+      await expect(card.getByTestId('acp-subagent-hidden-activity-detail')).toContainText('Bash')
+      await expect(page.getByTestId('acp-timeline-hidden-activity')).toHaveCount(0)
+
+      release()
+      await expect(activity).toHaveCount(0, { timeout: 10000 })
+    } finally {
+      release()
+    }
   })
 })

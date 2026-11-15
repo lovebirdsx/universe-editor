@@ -153,6 +153,8 @@ interface CardExtras {
   exploreResultPath?: string
   /** Drives the shared collapse store, as ChatBody does. */
   collapseMode?: CollapseMode
+  collapsed?: boolean
+  activitySuppressed?: boolean
 }
 
 function renderCard(
@@ -204,9 +206,13 @@ function renderCard(
                     openSubagent: null,
                   },
                   toggle: () => {},
+                  ...(extras.activitySuppressed !== undefined
+                    ? { activitySuppressed: extras.activitySuppressed }
+                    : {}),
                 },
               }
             : {})}
+          {...(extras.collapsed !== undefined ? { collapsed: extras.collapsed } : {})}
         />
       </ul>
     </ServicesContext.Provider>,
@@ -430,6 +436,48 @@ describe('ToolCallCard', () => {
     expect(
       screen.getAllByTestId('acp-markdown').some((el) => el.textContent?.includes('final result')),
     ).toBe(true)
+  })
+
+  it('shows the hidden tail of a running sub-agent on the card, folded or open', () => {
+    const running = makeCall({
+      kind: 'think',
+      subagent: true,
+      status: 'in_progress',
+      title: 'Explore the repo',
+      children: [
+        { kind: 'message', id: 'sm-agent', message: makeChildMessage('looking') },
+        {
+          kind: 'toolCall',
+          id: 'sc-read',
+          call: makeCall({
+            id: 'sc-read',
+            kind: 'read',
+            title: 'Read file',
+            status: 'in_progress',
+            locations: [{ path: 'src/a.ts' }],
+          }),
+        },
+      ],
+    })
+    for (const collapsed of [true, false]) {
+      renderCard(running, {}, { collapseMode: 'onlyMessage', collapsed })
+      expect(screen.getByTestId('acp-subagent-hidden-activity-primary').textContent).toBe(
+        'Read file',
+      )
+      expect(screen.getByTestId('acp-subagent-hidden-activity-detail').textContent).toContain(
+        'src/a.ts',
+      )
+      cleanup()
+    }
+
+    renderCard(running, {}, { collapseMode: 'onlyMessage', activitySuppressed: true })
+    expect(screen.queryByTestId('acp-subagent-hidden-activity')).toBeNull()
+    cleanup()
+    renderCard({ ...running, status: 'completed' }, {}, { collapseMode: 'onlyMessage' })
+    expect(screen.queryByTestId('acp-subagent-hidden-activity')).toBeNull()
+    cleanup()
+    renderCard(running, {}, { collapseMode: 'default' })
+    expect(screen.queryByTestId('acp-subagent-hidden-activity')).toBeNull()
   })
 
   it('hides the sub-agent timeline while the parent card is collapsed', () => {

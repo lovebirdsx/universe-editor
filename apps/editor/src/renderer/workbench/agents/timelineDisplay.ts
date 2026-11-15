@@ -26,6 +26,7 @@ import {
   isChildItemVisible,
   isErrorMessage,
   isMessageRendered,
+  isSubagentCall,
   visibleFocusKey,
   type CollapseState,
 } from './timelineCollapse.js'
@@ -244,6 +245,30 @@ export function getHiddenActivity(
       break
   }
   if (filteredTimeline[filteredTimeline.length - 1] === tail) return null
+  return activityForHiddenTail(tail, mode)
+}
+
+/**
+ * The same tail hint for a running sub-agent card: its own last child, when the
+ * mode hides it. A visible tail (message, nested sub-agent card that renders its
+ * own hint) yields null, mirroring the top-level rule.
+ */
+export function getSubagentHiddenActivity(
+  call: AcpToolCall,
+  mode: CollapseMode,
+  suppressed: boolean,
+): HiddenActivity | null {
+  if (suppressed || !hidesNestedContent(mode) || !isSubagentCall(call)) return null
+  if (call.status !== 'pending' && call.status !== 'in_progress') return null
+  const tail = call.children?.[call.children.length - 1]
+  if (tail === undefined || isChildItemVisible(tail, mode)) return null
+  return activityForHiddenTail(tail, mode)
+}
+
+function activityForHiddenTail(
+  tail: TimelineItem | AcpChildItem,
+  mode: CollapseMode,
+): HiddenActivity | null {
   if (tail.kind === 'message') {
     if (tail.message.role !== 'thought') return null
     // `hideThinking` must not leak the thought it exists to hide; only

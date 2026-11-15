@@ -185,4 +185,27 @@ describe('CollapsibleSlot', () => {
       expect(header.parentElement?.tagName).toBe('LI')
     })
   })
+  it('renders the footer after the body in both collapsed and expanded states', () => {
+    const renderWithFooter = (collapsed: boolean) =>
+      render(
+        <ul>
+          <CollapsibleSlot
+            icon={<span>icon</span>}
+            kindLabel="task"
+            collapsed={collapsed}
+            onToggle={vi.fn()}
+            footer={<div data-testid="slot-footer" />}
+          >
+            <div data-testid="slot-body">body</div>
+          </CollapsibleSlot>
+        </ul>,
+      )
+    renderWithFooter(true)
+    expect(screen.getByTestId('slot-footer')).toBeTruthy()
+    expect(screen.queryByTestId('slot-body')).toBeNull()
+    cleanup()
+    renderWithFooter(false)
+    const footer = screen.getByTestId('slot-footer')
+    expect(footer.previousElementSibling?.contains(screen.getByTestId('slot-body'))).toBe(true)
+  })
 })
