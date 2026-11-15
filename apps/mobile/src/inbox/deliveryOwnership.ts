@@ -1,33 +1,40 @@
 import type { MobileDeliverySummary, MobileSessionSummary } from '@universe-editor/mobile-protocol'
 import { localRefKey } from '../state/refs.js'
+import { isDeliveryInFlight, selectDeliveryEntries } from './deliveryStatus.js'
 
 /**
- * Delivery UI for a representative inbox row. Every PC window is one
- * workspace; its sessions share a single entry point and status badge so a
- * worktree with pending work does not offer the same delivery on every row.
+ * Delivery UI for one inbox row. A status badge stays on the session that owns
+ * the record; the start entry is collapsed to one representative row per PC
+ * window (= workspace) so pending work is not offered on every row.
  */
-export interface InboxDeliveryOwnership {
-  /** The representative's own `deliveryAvailable`; never aggregated from siblings. */
-  readonly available: boolean
-  /** The representative's own record, or the newest record in the same window. */
+export interface InboxDeliveryRow {
+  /** The row's own record; never borrowed from another session. */
   readonly delivery?: MobileDeliverySummary
-  /** Owner of `delivery`; delivery commands must use its ref. */
-  readonly deliverySource?: MobileSessionSummary
-}
-
-interface SessionDelivery {
-  readonly session: MobileSessionSummary
-  readonly delivery: MobileDeliverySummary
+  /** Representative row with its own pending work and no record of its own. */
+  readonly canStart: boolean
+  /** Would be `canStart`, but another session in the window holds the delivery lock. */
+  readonly busyInWorkspace: boolean
 }
 
 /**
  * Input is the inbox list after `selectInboxSessions` (side tasks already
- * removed). The returned map only holds representative rows, keyed by
- * `localRefKey`; a missing key means "do not render delivery UI".
+ * removed). Keyed by `localRefKey`; a missing key means "no delivery UI".
+ * `isStarting` marks rows whose startDelivery is in flight on the phone.
  */
-export function selectInboxDeliveryOwnership(
+export function selectInboxDeliveryRows(
   sessions: readonly MobileSessionSummary[],
-): ReadonlyMap<string, InboxDeliveryOwnership> {
+  isStarting?: (session: MobileSessionSummary) => boolean,
+): ReadonlyMap<string, InboxDeliveryRow> {
+  const rows = new Map<string, InboxDeliveryRow>()
+  // Same owner per deliveryId as the summary bar and the alerts.
+  for (const entry of selectDeliveryEntries(sessions)) {
+    rows.set(localRefKey(entry.session.ref), {
+      delivery: entry.delivery,
+      canStart: false,
+      busyInWorkspace: false,
+    })
+  }
+
   const byWindow = new Map<number, MobileSessionSummary[]>()
   for (const session of sessions) {
     const group = byWindow.get(session.ref.windowId)
@@ -35,22 +42,19 @@ export function selectInboxDeliveryOwnership(
     else group.push(session)
   }
 
-  const ownership = new Map<string, InboxDeliveryOwnership>()
   for (const group of byWindow.values()) {
     const representative = selectRepresentative(group)
     if (representative === undefined) continue
-    const record =
-      representative.delivery !== undefined
-        ? { session: representative, delivery: representative.delivery }
-        : selectNewestDelivery(group)
-    ownership.set(localRefKey(representative.ref), {
-      available: representative.deliveryAvailable === true,
-      ...(record !== undefined
-        ? { delivery: record.delivery, deliverySource: record.session }
-        : {}),
-    })
+    if (representative.deliveryAvailable !== true || representative.delivery !== undefined) continue
+    const busy = group.some(
+      (session) =>
+        session !== representative &&
+        ((session.delivery !== undefined && isDeliveryInFlight(session.delivery.phase)) ||
+          isStarting?.(session) === true),
+    )
+    rows.set(localRefKey(representative.ref), { canStart: !busy, busyInWorkspace: busy })
   }
-  return ownership
+  return rows
 }
 
 /** Prefer a running session, then the most recently updated one. */
@@ -72,27 +76,4 @@ function selectRepresentative(
 function isMoreRecent(candidate: MobileSessionSummary, current: MobileSessionSummary): boolean {
   if (candidate.updatedAt !== current.updatedAt) return candidate.updatedAt > current.updatedAt
   return candidate.ref.localId < current.ref.localId
-}
-
-function selectNewestDelivery(group: readonly MobileSessionSummary[]): SessionDelivery | undefined {
-  let newest: SessionDelivery | undefined
-  for (const session of group) {
-    const delivery = session.delivery
-    if (delivery === undefined) continue
-    if (newest === undefined || isNewerDelivery(session, delivery, newest)) {
-      newest = { session, delivery }
-    }
-  }
-  return newest
-}
-
-function isNewerDelivery(
-  session: MobileSessionSummary,
-  delivery: MobileDeliverySummary,
-  current: SessionDelivery,
-): boolean {
-  if (delivery.updatedAt !== current.delivery.updatedAt) {
-    return delivery.updatedAt > current.delivery.updatedAt
-  }
-  return localRefKey(session.ref) < localRefKey(current.session.ref)
 }

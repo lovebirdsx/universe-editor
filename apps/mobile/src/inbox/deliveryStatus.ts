@@ -16,10 +16,15 @@ export const ACTIVE_DELIVERY_PHASES: ReadonlySet<MobileDeliveryPhase> = new Set(
   'undoing',
 ])
 
-/** Phases worth surfacing in the inbox: running, waiting for the user, or broken. */
-const RELEVANT_DELIVERY_PHASES: ReadonlySet<MobileDeliveryPhase> = new Set([
+/** Phases that still hold the repository delivery lock (`awaiting_push` keeps it). */
+export const IN_FLIGHT_DELIVERY_PHASES: ReadonlySet<MobileDeliveryPhase> = new Set([
   ...ACTIVE_DELIVERY_PHASES,
   'awaiting_push',
+])
+
+/** Phases worth surfacing in the inbox: running, waiting for the user, or broken. */
+const RELEVANT_DELIVERY_PHASES: ReadonlySet<MobileDeliveryPhase> = new Set([
+  ...IN_FLIGHT_DELIVERY_PHASES,
   'partial',
   'failed',
 ])
@@ -33,6 +38,10 @@ export type DeliveryTone = 'active' | 'action' | 'ok' | 'warning' | 'danger'
 
 export function isActiveDeliveryPhase(phase: MobileDeliveryPhase): boolean {
   return ACTIVE_DELIVERY_PHASES.has(phase)
+}
+
+export function isDeliveryInFlight(phase: MobileDeliveryPhase): boolean {
+  return IN_FLIGHT_DELIVERY_PHASES.has(phase)
 }
 
 /**

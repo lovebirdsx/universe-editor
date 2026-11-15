@@ -1,6 +1,7 @@
 import type { MobileDeliverySummary, MobileSessionSummary } from '@universe-editor/mobile-protocol'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { sessionRouteKey } from '../../state/refs.js'
 import { sessionRef, sessionSummary } from '../../test/protocolFixtures.js'
 import { InboxGroups } from '../InboxGroups.js'
 
@@ -30,6 +31,14 @@ function idle(
     bucket: 'completed',
     ...overrides,
   })
+}
+
+function rowOf(session: MobileSessionSummary): HTMLElement {
+  const row = screen
+    .getAllByTestId('inbox-session-row')
+    .find((element) => element.dataset.sessionKey === sessionRouteKey(session.ref))
+  if (row === undefined) throw new Error(`row ${session.ref.localId} not rendered`)
+  return row
 }
 
 describe('InboxGroups trigger row', () => {
@@ -88,24 +97,26 @@ describe('InboxGroups delivery ownership', () => {
     expect(onStartDelivery.mock.calls[0]?.[0]?.ref).toEqual(newest.ref)
   })
 
-  it('borrows the newest sibling delivery badge and opens its source session', () => {
+  it('keeps the badge on the source row and opens that session', () => {
     const representative = idle('rep', { updatedAt: 3_000 })
     const source = idle('source', {
       updatedAt: 1_000,
-      delivery: delivery({ deliveryId: 'd-2' }),
+      delivery: delivery({ deliveryId: 'd-2', phase: 'failed' }),
     })
     const onOpenDelivery = vi.fn()
     render(<InboxGroups sessions={[representative, source]} onOpenDelivery={onOpenDelivery} />)
 
-    expect(screen.getAllByTestId('inbox-delivery-badge')).toHaveLength(1)
-    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    const badges = screen.getAllByTestId('inbox-delivery-badge')
+    expect(badges).toHaveLength(1)
+    expect(badges[0]!.closest('[data-testid="inbox-session-row"]')).toBe(rowOf(source))
+    fireEvent.click(badges[0]!)
     expect(onOpenDelivery.mock.calls[0]?.[0]?.ref).toEqual(source.ref)
   })
 
-  it('keeps its own delivery record ahead of a newer sibling record', () => {
+  it('shows a badge on each session that owns a record', () => {
     const representative = idle('rep', {
       updatedAt: 3_000,
-      delivery: delivery({ deliveryId: 'd-own', updatedAt: 1_000 }),
+      delivery: delivery({ deliveryId: 'd-own', phase: 'synced' }),
     })
     const sibling = idle('sib', {
       updatedAt: 1_000,
@@ -114,11 +125,12 @@ describe('InboxGroups delivery ownership', () => {
     const onOpenDelivery = vi.fn()
     render(<InboxGroups sessions={[representative, sibling]} onOpenDelivery={onOpenDelivery} />)
 
-    fireEvent.click(screen.getByTestId('inbox-delivery-badge'))
+    expect(screen.getAllByTestId('inbox-delivery-badge')).toHaveLength(2)
+    fireEvent.click(within(rowOf(representative)).getByTestId('inbox-delivery-badge'))
     expect(onOpenDelivery.mock.calls[0]?.[0]?.ref).toEqual(representative.ref)
   })
 
-  it('hides the starting state on non-representative rows', () => {
+  it('shows the starting state on the row that started it', () => {
     const representative = idle('rep', { updatedAt: 3_000 })
     const sibling = idle('sib', { updatedAt: 1_000 })
     render(
@@ -128,20 +140,20 @@ describe('InboxGroups delivery ownership', () => {
       />,
     )
 
-    expect(screen.queryByTestId('inbox-delivery-starting')).toBeNull()
+    expect(within(rowOf(sibling)).getByTestId('inbox-delivery-starting')).toBeTruthy()
+    expect(within(rowOf(representative)).queryByTestId('inbox-delivery-starting')).toBeNull()
   })
 
-  it('shows the starting state on the representative row', () => {
-    const representative = idle('rep', { updatedAt: 3_000 })
-    const sibling = idle('sib', { updatedAt: 1_000 })
-    render(
-      <InboxGroups
-        sessions={[representative, sibling]}
-        isDeliveryStarting={(session) => session.ref.localId === 'rep'}
-      />,
-    )
+  it('replaces the entry with a hint while a sibling delivery holds the lock', () => {
+    const representative = idle('rep', { updatedAt: 3_000, deliveryAvailable: true })
+    const sibling = idle('sib', { updatedAt: 1_000, delivery: delivery({ phase: 'pushing' }) })
+    const onStartDelivery = vi.fn()
+    render(<InboxGroups sessions={[representative, sibling]} onStartDelivery={onStartDelivery} />)
 
-    expect(screen.getByTestId('inbox-delivery-starting')).toBeTruthy()
+    expect(screen.queryByTestId('inbox-delivery-action')).toBeNull()
+    const hint = within(rowOf(representative)).getByTestId('inbox-delivery-busy')
+    fireEvent.click(hint)
+    expect(onStartDelivery).not.toHaveBeenCalled()
   })
 
   it('keeps windows independent', () => {

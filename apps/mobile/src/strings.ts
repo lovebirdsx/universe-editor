@@ -440,6 +440,7 @@ export const strings = {
   deliveryNoCommits: '源 worktree 没有需要交付的新提交。',
   deliveryStart: '开始交付',
   deliveryStarting: '正在开始交付…',
+  deliveryBusyInWorkspace: '同工作区交付中',
   deliveryCancel: '取消',
   deliveryClose: '关闭',
   deliveryLoading: '正在加载交付详情…',

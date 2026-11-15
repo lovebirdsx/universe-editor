@@ -9,6 +9,8 @@ export interface SessionDeliveryControlsProps {
   readonly available?: boolean | undefined
   /** The phone fired startDelivery and the inbox has not mirrored the record yet. */
   readonly starting?: boolean | undefined
+  /** Another session in the workspace holds the delivery lock; show a hint, not the entry. */
+  readonly busy?: boolean | undefined
   readonly onStartDelivery: () => void
   readonly onOpenDelivery: () => void
 }
@@ -29,6 +31,7 @@ export function SessionDeliveryControls({
   delivery,
   available,
   starting,
+  busy,
   onStartDelivery,
   onOpenDelivery,
 }: SessionDeliveryControlsProps) {
@@ -40,6 +43,13 @@ export function SessionDeliveryControls({
         role="status"
       >
         {strings.deliveryStarting}
+      </span>
+    )
+  }
+  if (delivery === undefined && busy === true) {
+    return (
+      <span className="session-badge" data-testid="inbox-delivery-busy" role="status">
+        {strings.deliveryBusyInWorkspace}
       </span>
     )
   }

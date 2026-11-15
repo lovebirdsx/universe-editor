@@ -2,7 +2,7 @@ import type { MobileDeliveryPhase, MobileSessionSummary } from '@universe-editor
 import { useEffect, useRef } from 'react'
 import type { MobileClient } from '../state/mobileClient.js'
 import { useStore } from '../state/useStore.js'
-import { ACTIVE_DELIVERY_PHASES, selectDeliveryEntries } from './deliveryStatus.js'
+import { isDeliveryInFlight, selectDeliveryEntries } from './deliveryStatus.js'
 
 export type DeliveryAlertPhase = 'awaiting_push' | 'failed' | 'partial'
 
@@ -11,11 +11,6 @@ export interface DeliveryAlert {
   readonly phase: DeliveryAlertPhase
   readonly sessionTitle: string
 }
-
-const IN_PROGRESS_PHASES: ReadonlySet<MobileDeliveryPhase> = new Set([
-  ...ACTIVE_DELIVERY_PHASES,
-  'awaiting_push',
-])
 
 export interface DeliveryAlertScan {
   readonly next: ReadonlyMap<string, MobileDeliveryPhase>
@@ -45,7 +40,7 @@ export function scanDeliveryAlerts(
   for (const [deliveryId, entry] of current) {
     const before = previous.get(deliveryId)
     if (before === undefined || before === entry.phase) continue
-    if (!IN_PROGRESS_PHASES.has(before)) continue
+    if (!isDeliveryInFlight(before)) continue
     if (entry.phase !== 'awaiting_push' && entry.phase !== 'failed' && entry.phase !== 'partial') {
       continue
     }

@@ -6,6 +6,7 @@ import {
   deliveryPhaseText,
   deliveryTone,
   isActiveDeliveryPhase,
+  isDeliveryInFlight,
   selectDeliveryEntries,
   summarizeDeliveries,
 } from '../deliveryStatus.js'
@@ -85,6 +86,10 @@ describe('deliveryStatus', () => {
   it('classifies phases for activity and badge tone', () => {
     expect(isActiveDeliveryPhase('syncing')).toBe(true)
     expect(isActiveDeliveryPhase('awaiting_push')).toBe(false)
+    expect(isDeliveryInFlight('awaiting_push')).toBe(true)
+    expect(isDeliveryInFlight('pushing')).toBe(true)
+    expect(isDeliveryInFlight('failed')).toBe(false)
+    expect(isDeliveryInFlight('partial')).toBe(false)
     expect(deliveryTone('awaiting_push')).toBe('action')
     expect(deliveryTone('failed')).toBe('danger')
     expect(deliveryTone('synced')).toBe('ok')

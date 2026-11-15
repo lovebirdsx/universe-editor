@@ -672,15 +672,15 @@ Toast；首次观察只建立 baseline，重连 snapshot 不会误弹，不新�
 路径**，只给 worktree 目录名；交付错误只带 `code` 与裁剪后的 message，扩展侧 detail 不投影。
 交付变化经 `summary_changed` 增量与收件箱 upsert 同步到手机。
 
-**手机端按工作区收敛交付 UI（无 wire 变化）**：协议仍按会话下发 `delivery` / `deliveryAvailable`。
-手机收件箱以 `ref.windowId` 分组（一个 PC 窗口 = 一个工作区），每组选一个代表行：优先
+**手机端交付 UI 归属（无 wire 变化）**：协议仍按会话下发 `delivery` / `deliveryAvailable`。
+状态徽标按会话渲染、**不借用**：只有自己带 `delivery` 的行显示徽标（同一 `deliveryId` 短暂出现在两行时
+取列表首行，与顶部汇总条 / 全局提醒同一 owner），点击与详情页命令一律用该行自己的 ref。「交付」入口
+按 `ref.windowId` 收敛（一个 PC 窗口 = 一个工作区），每组选一个代表行：优先
 `bucket === 'in_progress'`，同桶取 `updatedAt` 最大，否则取 `updatedAt` 最大；`updatedAt` 相同
-按 `localId` 升序稳定。只有代表行渲染交付元素：入口仍只看代表自己的 `deliveryAvailable`
-（不聚合、不搬移，运行中的代表因此没有入口）；徽标优先代表自己的 `delivery`，没有则取组内
-`delivery.updatedAt` 最大的记录，并把来源会话的 ref 交给 `getDelivery` / `confirmDeliveryPush` /
-`retryDelivery` / `undoDelivery` / `openDeliveryMainWorktree`。非代表行的 `delivery` /
-`deliveryAvailable` / 本地 `starting` 一律不渲染。顶部汇总条与全局提醒保持按 `deliveryId` 去重、
-不按窗口收敛。实现见 `apps/mobile/src/inbox/deliveryOwnership.ts`；PC 端
+按 `localId` 升序稳定。入口只看代表自己的 `deliveryAvailable` 且代表自己无记录（不聚合、不搬移，
+运行中的代表因此没有入口）；组内其他会话有 in-flight 记录（进行中阶段或 `awaiting_push`，仍持仓库锁）
+或手机本地 `starting` 时，代表行改显示不可点的「同工作区交付中」。本地 `starting` 显示在发起行本身。
+实现见 `apps/mobile/src/inbox/deliveryOwnership.ts`（`selectInboxDeliveryRows`）；PC 端
 `SessionDeliveryService` 与协议不变。
 
 **实现限制**：合并提交不支持；单次交付最多 200 个提交（preview 直接给 `unsupported` blocker）；

@@ -2,7 +2,7 @@ import type { MobileDeliverySummary, MobileSessionSummary } from '@universe-edit
 import { describe, expect, it } from 'vitest'
 import { localRefKey } from '../../state/refs.js'
 import { sessionRef, sessionSummary } from '../../test/protocolFixtures.js'
-import { selectInboxDeliveryOwnership } from '../deliveryOwnership.js'
+import { selectInboxDeliveryRows } from '../deliveryOwnership.js'
 
 function delivery(overrides: Partial<MobileDeliverySummary> = {}): MobileDeliverySummary {
   return {
@@ -32,133 +32,140 @@ function idle(
   })
 }
 
-function ownershipFor(sessions: readonly MobileSessionSummary[], target: MobileSessionSummary) {
-  return selectInboxDeliveryOwnership(sessions).get(localRefKey(target.ref))
+function rowFor(
+  sessions: readonly MobileSessionSummary[],
+  target: MobileSessionSummary,
+  isStarting?: (session: MobileSessionSummary) => boolean,
+) {
+  return selectInboxDeliveryRows(sessions, isStarting).get(localRefKey(target.ref))
 }
 
-describe('selectInboxDeliveryOwnership', () => {
+const startable = { canStart: true, busyInWorkspace: false }
+
+describe('selectInboxDeliveryRows', () => {
   it('returns an empty map without sessions', () => {
-    expect(selectInboxDeliveryOwnership([]).size).toBe(0)
+    expect(selectInboxDeliveryRows([]).size).toBe(0)
   })
 
-  it('owns the delivery UI on a single row from its own fields', () => {
+  it('offers the start entry on a single row with pending work', () => {
     const only = idle('only', { deliveryAvailable: true })
-    const map = selectInboxDeliveryOwnership([only])
-    expect(map.size).toBe(1)
-    expect(map.get(localRefKey(only.ref))).toEqual({ available: true })
+    expect(rowFor([only], only)).toEqual(startable)
   })
 
-  it('prefers a running session over a more recent idle one', () => {
+  it('omits rows without pending work or a record', () => {
+    const only = idle('only')
+    expect(selectInboxDeliveryRows([only]).size).toBe(0)
+  })
+
+  it('keeps the entry off a running representative', () => {
     const running = sessionSummary('running', { updatedAt: 1_000 })
     const idleNewest = idle('idle', { updatedAt: 5_000, deliveryAvailable: true })
-    const map = selectInboxDeliveryOwnership([running, idleNewest])
-    expect(map.has(localRefKey(running.ref))).toBe(true)
-    expect(map.get(localRefKey(running.ref))?.available).toBe(false)
-    expect(map.has(localRefKey(idleNewest.ref))).toBe(false)
+    const map = selectInboxDeliveryRows([running, idleNewest])
+    expect(map.size).toBe(0)
   })
 
-  it('picks the most recently updated running session', () => {
-    const older = sessionSummary('older', { updatedAt: 1_000 })
-    const newer = sessionSummary('newer', { updatedAt: 2_000 })
-    const map = selectInboxDeliveryOwnership([older, newer])
-    expect(map.has(localRefKey(newer.ref))).toBe(true)
+  it('offers the entry only on the most recently updated row', () => {
+    const older = idle('older', { updatedAt: 1_000, deliveryAvailable: true })
+    const newer = idle('newer', { updatedAt: 2_000, deliveryAvailable: true })
+    const map = selectInboxDeliveryRows([older, newer])
+    expect(map.get(localRefKey(newer.ref))).toEqual(startable)
     expect(map.has(localRefKey(older.ref))).toBe(false)
   })
 
   it('breaks updatedAt ties by localId so the representative is deterministic', () => {
-    const alpha = idle('alpha', { updatedAt: 1_000 })
-    const bravo = idle('bravo', { updatedAt: 1_000 })
-    const map = selectInboxDeliveryOwnership([bravo, alpha])
+    const alpha = idle('alpha', { updatedAt: 1_000, deliveryAvailable: true })
+    const bravo = idle('bravo', { updatedAt: 1_000, deliveryAvailable: true })
+    const map = selectInboxDeliveryRows([bravo, alpha])
     expect(map.has(localRefKey(alpha.ref))).toBe(true)
     expect(map.has(localRefKey(bravo.ref))).toBe(false)
-  })
-
-  it('falls back to the most recent session when nothing is running', () => {
-    const older = idle('older', { updatedAt: 1_000 })
-    const newer = idle('newer', { updatedAt: 2_000 })
-    const map = selectInboxDeliveryOwnership([older, newer])
-    expect(map.has(localRefKey(newer.ref))).toBe(true)
-    expect(map.has(localRefKey(older.ref))).toBe(false)
   })
 
   it('keeps windows independent', () => {
     const first = idle('first', { ref: sessionRef('first', 1), deliveryAvailable: true })
     const second = idle('second', { ref: sessionRef('second', 2), deliveryAvailable: true })
-    const map = selectInboxDeliveryOwnership([first, second])
-    expect(map.get(localRefKey(first.ref))).toEqual({ available: true })
-    expect(map.get(localRefKey(second.ref))).toEqual({ available: true })
+    const map = selectInboxDeliveryRows([first, second])
+    expect(map.get(localRefKey(first.ref))).toEqual(startable)
+    expect(map.get(localRefKey(second.ref))).toEqual(startable)
   })
 
   it('never moves another session availability onto the representative', () => {
     const representative = idle('rep', { updatedAt: 3_000 })
     const sibling = idle('sibling', { updatedAt: 1_000, deliveryAvailable: true })
-    const map = selectInboxDeliveryOwnership([representative, sibling])
-    expect(map.get(localRefKey(representative.ref))).toEqual({ available: false })
-    expect(map.has(localRefKey(sibling.ref))).toBe(false)
+    expect(selectInboxDeliveryRows([representative, sibling]).size).toBe(0)
   })
 
-  it("prefers the representative's own record", () => {
+  it('keeps a record on its own session instead of the representative', () => {
+    const representative = idle('rep', { updatedAt: 3_000 })
+    const source = idle('source', {
+      updatedAt: 1_000,
+      delivery: delivery({ deliveryId: 'd-fail', phase: 'failed' }),
+    })
+    const map = selectInboxDeliveryRows([representative, source])
+    expect(map.has(localRefKey(representative.ref))).toBe(false)
+    expect(map.get(localRefKey(source.ref))?.delivery?.deliveryId).toBe('d-fail')
+  })
+
+  it('gives every session its own record', () => {
+    const alpha = idle('alpha', { delivery: delivery({ deliveryId: 'd-a' }) })
+    const bravo = idle('bravo', { delivery: delivery({ deliveryId: 'd-b' }) })
+    const map = selectInboxDeliveryRows([alpha, bravo])
+    expect(map.get(localRefKey(alpha.ref))?.delivery?.deliveryId).toBe('d-a')
+    expect(map.get(localRefKey(bravo.ref))?.delivery?.deliveryId).toBe('d-b')
+  })
+
+  it('shows a mirrored delivery id on the first row only', () => {
+    const alpha = idle('alpha', { delivery: delivery({ deliveryId: 'd-1' }) })
+    const bravo = idle('bravo', { delivery: delivery({ deliveryId: 'd-1' }) })
+    const map = selectInboxDeliveryRows([bravo, alpha])
+    expect(map.get(localRefKey(bravo.ref))?.delivery?.deliveryId).toBe('d-1')
+    expect(map.has(localRefKey(alpha.ref))).toBe(false)
+  })
+
+  it('does not offer a start entry on a row that already has a record', () => {
     const representative = idle('rep', {
-      updatedAt: 3_000,
-      delivery: delivery({ deliveryId: 'd-own', updatedAt: 1_000 }),
+      deliveryAvailable: true,
+      delivery: delivery({ phase: 'synced' }),
     })
-    const sibling = idle('sibling', {
-      updatedAt: 1_000,
-      delivery: delivery({ deliveryId: 'd-new', updatedAt: 9_000 }),
+    expect(rowFor([representative], representative)).toMatchObject({
+      canStart: false,
+      busyInWorkspace: false,
     })
-    const own = ownershipFor([representative, sibling], representative)
-    expect(own?.delivery?.deliveryId).toBe('d-own')
-    expect(own?.deliverySource).toBe(representative)
   })
 
-  it('borrows the newest delivery from the same window', () => {
-    const representative = idle('rep', { updatedAt: 3_000 })
-    const olderSource = idle('older', {
-      updatedAt: 1_000,
-      delivery: delivery({ deliveryId: 'd-old', updatedAt: 1_000 }),
-    })
-    const newerSource = idle('newer', {
-      updatedAt: 500,
-      delivery: delivery({ deliveryId: 'd-new', updatedAt: 5_000 }),
-    })
-    const shared = ownershipFor([representative, olderSource, newerSource], representative)
-    expect(shared?.delivery?.deliveryId).toBe('d-new')
-    expect(shared?.deliverySource).toBe(newerSource)
-  })
+  it.each(['committing', 'awaiting_push', 'resolving_conflict'] as const)(
+    'marks the representative busy while a sibling delivery is %s',
+    (phase) => {
+      const representative = idle('rep', { updatedAt: 3_000, deliveryAvailable: true })
+      const sibling = idle('sibling', { updatedAt: 1_000, delivery: delivery({ phase }) })
+      expect(rowFor([representative, sibling], representative)).toEqual({
+        canStart: false,
+        busyInWorkspace: true,
+      })
+    },
+  )
 
-  it('breaks borrowed delivery ties by session key', () => {
-    const representative = idle('rep', { updatedAt: 3_000 })
-    const alpha = idle('alpha', {
-      updatedAt: 1_000,
-      delivery: delivery({ deliveryId: 'd-alpha', updatedAt: 5_000 }),
-    })
-    const bravo = idle('bravo', {
-      updatedAt: 1_000,
-      delivery: delivery({ deliveryId: 'd-bravo', updatedAt: 5_000 }),
-    })
-    const shared = ownershipFor([representative, bravo, alpha], representative)
-    expect(shared?.deliverySource).toBe(alpha)
-  })
+  it.each(['failed', 'partial', 'synced', 'undone'] as const)(
+    'keeps the entry when the sibling delivery is %s',
+    (phase) => {
+      const representative = idle('rep', { updatedAt: 3_000, deliveryAvailable: true })
+      const sibling = idle('sibling', { updatedAt: 1_000, delivery: delivery({ phase }) })
+      expect(rowFor([representative, sibling], representative)).toEqual(startable)
+    },
+  )
 
-  it('omits the record fields when the window has none', () => {
-    const representative = idle('rep', { updatedAt: 3_000 })
+  it('marks the representative busy while a sibling start is in flight', () => {
+    const representative = idle('rep', { updatedAt: 3_000, deliveryAvailable: true })
     const sibling = idle('sibling', { updatedAt: 1_000 })
-    const own = ownershipFor([representative, sibling], representative)
-    expect(own).toEqual({ available: false })
+    const row = rowFor([representative, sibling], representative, (s) => s === sibling)
+    expect(row).toEqual({ canStart: false, busyInWorkspace: true })
   })
 
-  it('resolves a mirrored delivery id to one deterministic owner', () => {
-    const representative = idle('rep', { updatedAt: 3_000 })
-    const alpha = idle('alpha', {
-      updatedAt: 1_000,
-      delivery: delivery({ deliveryId: 'd-1', updatedAt: 5_000 }),
+  it('ignores busy siblings in another window', () => {
+    const representative = idle('rep', { ref: sessionRef('rep', 1), deliveryAvailable: true })
+    const other = idle('other', {
+      ref: sessionRef('other', 2),
+      delivery: delivery({ phase: 'pushing' }),
     })
-    const bravo = idle('bravo', {
-      updatedAt: 900,
-      delivery: delivery({ deliveryId: 'd-1', updatedAt: 5_000 }),
-    })
-    const shared = ownershipFor([representative, bravo, alpha], representative)
-    expect(shared?.delivery?.deliveryId).toBe('d-1')
-    expect(shared?.deliverySource).toBe(alpha)
+    expect(rowFor([representative, other], representative)).toEqual(startable)
   })
 })
