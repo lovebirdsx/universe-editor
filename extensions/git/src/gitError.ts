@@ -8,13 +8,10 @@
  */
 import { window } from '@universe-editor/extension-api'
 import type { GitExecResult } from './gitService.js'
+import { gitErrorText } from './gitErrorText.js'
 import { localize } from './nls.js'
 
-/** The raw reason a git command failed: stderr first, stdout as fallback,
- *  exit-code as a last resort so the toast never ends in a bare "failed:". */
-export function gitErrorText(res: GitExecResult): string {
-  return res.stderr.trim() || res.stdout.trim() || `git exited with code ${res.exitCode}`
-}
+export { gitErrorText } from './gitErrorText.js'
 
 /**
  * A one-line, action-oriented hint for common git failures, or undefined when we

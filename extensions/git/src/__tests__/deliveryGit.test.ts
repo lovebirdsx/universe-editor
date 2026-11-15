@@ -1,5 +1,7 @@
 import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -20,6 +22,7 @@ import {
 import { readDeliveryChangeContext } from '../delivery/deliveryChangeContext.js'
 import {
   acquireDeliveryLock,
+  deliveryLockDir,
   heartbeatDeliveryLock,
   releaseDeliveryLock,
 } from '../delivery/deliveryLock.js'
@@ -551,6 +554,78 @@ describe('delivery pipeline', () => {
     await releaseDeliveryLock({ commonDir, token })
   })
 
+  it('leaves main on the delivery commit when a failed push cannot be verified', async () => {
+    const fixture = await createFixture()
+    const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: true })
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) return
+    const { commonDir, mainWorktree, targetBranch, remote, upstreamRef } = inspected.repository
+    const lock = await acquireDeliveryLock({ commonDir, token })
+    expect(lock.ok && lock.acquired).toBe(true)
+
+    const began = await beginDelivery({
+      commonDir,
+      deliveryId: 'unverified-failed-push',
+      token,
+      mainWorktree,
+      sourceCwd: fixture.feature,
+      targetBranch,
+      expectedMainHead: inspected.repository.mainHead,
+      expectedUpstreamHead: inspected.repository.upstreamHead,
+      expectedSourceHead: inspected.source.head,
+      remote,
+      upstreamRef,
+    })
+    expect(began.ok).toBe(true)
+    if (!began.ok) return
+    const picked = await preparePickDelivery({
+      commonDir,
+      deliveryId: 'unverified-failed-push',
+      token,
+      mainWorktree,
+      sourceWorktree: fixture.feature,
+      baseSha: inspected.baseSha,
+      sourceHead: inspected.source.head,
+      commits: inspected.commits.map((commit) => commit.sha),
+    })
+    expect(picked.ok).toBe(true)
+    if (!picked.ok) return
+
+    // Push goes through receive-pack; the confirmation fetch uses upload-pack.
+    // Break both so the engine cannot prove whether the push landed.
+    await git(
+      ['config', 'remote.origin.pushurl', join(fixture.root, 'missing-push.git')],
+      mainWorktree,
+    )
+    await git(
+      ['config', 'remote.origin.uploadpack', join(fixture.root, 'missing-upload-pack')],
+      mainWorktree,
+    )
+
+    const promoted = await promoteAndPushDelivery({
+      commonDir,
+      deliveryId: 'unverified-failed-push',
+      token,
+      mainWorktree,
+      targetBranch,
+      baseSha: inspected.baseSha,
+      tempWorktree: picked.tempWorktree,
+      tempHead: picked.tempHead,
+      remote,
+      upstreamRef,
+    })
+
+    expect(promoted.ok).toBe(false)
+    if (promoted.ok) return
+    expect(promoted.error.code).toBe('push_unverified')
+    expect(promoted.error.detail).toContain('missing-push.git')
+    expect(promoted.error.detail).toContain('missing-upload-pack')
+    // Main must not be rolled back: retrying has to keep the delivered commit.
+    expect(await headOf(fixture.main)).toBe(picked.tempHead)
+    expect(existsSync(picked.tempWorktree)).toBe(true)
+    await releaseDeliveryLock({ commonDir, token })
+  })
+
   it('refuses to begin when the main worktree switched branches', async () => {
     const fixture = await createFixture()
     const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: true })
@@ -1045,6 +1120,61 @@ describe('delivery lock', () => {
     expect(release.ok && release.released).toBe(true)
     const reacquired = await acquireDeliveryLock({ commonDir, token: 'token-b' })
     expect(reacquired.ok && reacquired.acquired).toBe(true)
+    await releaseDeliveryLock({ commonDir, token: 'token-b' })
+  })
+})
+
+describe('delivery lock reclamation', () => {
+  it('lets exactly one racer reclaim a stale lock', async () => {
+    const fixture = await createFixture()
+    const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: false })
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) return
+    const commonDir = inspected.repository.commonDir
+    await mkdir(deliveryLockDir(commonDir), { recursive: true })
+    await writeFile(
+      join(deliveryLockDir(commonDir), 'owner.json'),
+      JSON.stringify({
+        token: 'stale-token',
+        pid: 2_147_483_646,
+        hostname: hostname(),
+        startedAt: new Date(0).toISOString(),
+        heartbeatAt: new Date(0).toISOString(),
+      }),
+    )
+
+    const [first, second] = await Promise.all([
+      acquireDeliveryLock({ commonDir, token: 'token-a' }),
+      acquireDeliveryLock({ commonDir, token: 'token-b' }),
+    ])
+    const winners = [first, second].filter((result) => result.ok && result.acquired)
+    expect(winners).toHaveLength(1)
+    const winner = first.ok && first.acquired ? 'token-a' : 'token-b'
+
+    expect((await heartbeatDeliveryLock({ commonDir, token: winner })).ok).toBe(true)
+    const released = await releaseDeliveryLock({ commonDir, token: winner })
+    expect(released.ok && released.released).toBe(true)
+  })
+
+  it('rejects a heartbeat after another owner acquired the lock', async () => {
+    const fixture = await createFixture()
+    const inspected = await inspectDelivery({ sourceCwd: fixture.feature, fetch: false })
+    expect(inspected.ok).toBe(true)
+    if (!inspected.ok) return
+    const commonDir = inspected.repository.commonDir
+
+    await acquireDeliveryLock({ commonDir, token: 'token-a' })
+    await releaseDeliveryLock({ commonDir, token: 'token-a' })
+    const reacquired = await acquireDeliveryLock({ commonDir, token: 'token-b' })
+    expect(reacquired.ok && reacquired.acquired).toBe(true)
+
+    const stale = await heartbeatDeliveryLock({ commonDir, token: 'token-a' })
+    expect(stale.ok).toBe(false)
+    if (!stale.ok) expect(stale.error.code).toBe('lock_lost')
+    // The new owner is untouched.
+    const second = await acquireDeliveryLock({ commonDir, token: 'token-c' })
+    expect(second.ok && second.acquired).toBe(false)
+    if (second.ok && !second.acquired) expect(second.owner?.token).toBe('token-b')
     await releaseDeliveryLock({ commonDir, token: 'token-b' })
   })
 })

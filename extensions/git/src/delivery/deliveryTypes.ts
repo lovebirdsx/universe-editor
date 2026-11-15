@@ -330,6 +330,33 @@ export interface DeliveryLockOwner {
   readonly label?: string
 }
 
+/** Owner details safe to show outside the extension: never carries the token. */
+export interface DeliveryLockOwnerInfo {
+  readonly pid: number
+  readonly hostname: string
+  readonly startedAt: string
+  readonly heartbeatAt: string
+  readonly label?: string
+}
+
+export interface DeliveryProbeLockInput {
+  readonly cwd: string
+  /** Tokens held by the caller; an owner among them does not make the repo busy. */
+  readonly ownTokens?: readonly string[]
+}
+
+export interface DeliveryProbeLockData {
+  /**
+   * A lock owned by someone else is active for this repository. A lock owned by
+   * one of `ownTokens` reports `false`, so the caller can still see its own
+   * delivery without treating itself as a competing window.
+   */
+  readonly active: boolean
+  readonly owner?: DeliveryLockOwnerInfo
+}
+
+export type DeliveryProbeLockResult = DeliveryResult<DeliveryProbeLockData>
+
 export interface DeliveryAcquireLockInput {
   readonly commonDir: string
   readonly token: string

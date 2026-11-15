@@ -9,6 +9,7 @@
     "typecheck": "node scripts/dev/ensure-fresh-mtimes.mjs && turbo run typecheck",
     "test": "turbo run test test:main test:renderer-node test:renderer-dom test:integration",
     "test:changed": "node scripts/test-changed.mjs",
+    "deliver": "node extensions/git/scripts/deliver.mjs",
     "e2e": "node scripts/e2e/run-e2e.mjs",
     "e2ea": "node scripts/e2e/run-e2e.mjs --suite e2ea",
     "e2e:smoke": "pnpm --filter @universe-editor/editor e2e:smoke",

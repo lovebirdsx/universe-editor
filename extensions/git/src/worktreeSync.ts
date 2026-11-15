@@ -26,7 +26,7 @@
 import { stat } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { gitExec } from './gitService.js'
-import { gitErrorText } from './gitError.js'
+import { gitErrorText } from './gitErrorText.js'
 import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
 import { updateSubmodulesIfPresent } from './submoduleSync.js'
 

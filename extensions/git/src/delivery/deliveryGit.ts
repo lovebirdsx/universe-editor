@@ -12,13 +12,13 @@ import { mkdir, readFile, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import type { GitExecResult } from '../gitService.js'
 import { detectGitDirs, detectRepoRoot, gitExec } from '../gitService.js'
-import { gitErrorText } from '../gitError.js'
+import { gitErrorText } from '../gitErrorText.js'
 import { samePath } from '../pathUtil.js'
 import { parseStatus, type GitStatus } from '../statusParser.js'
 import { hasSubmodules } from '../submoduleSync.js'
 import { parseWorktrees, type WorktreeInfo } from '../worktreeParser.js'
 import { pendingOperation } from '../worktreeSync.js'
-import { isDeliveryLockHeld } from './deliveryLock.js'
+import { isDeliveryLockActive, isDeliveryLockHeld } from './deliveryLock.js'
 import type {
   DeliveryAbortPickInput,
   DeliveryAbortPickResult,
@@ -43,6 +43,8 @@ import type {
   DeliveryPromoteAndPushData,
   DeliveryPromoteAndPushInput,
   DeliveryPromoteAndPushResult,
+  DeliveryProbeLockInput,
+  DeliveryProbeLockResult,
   DeliveryRepositoryInfo,
   DeliveryRestoreMainData,
   DeliveryRestoreMainInput,
@@ -663,7 +665,7 @@ export async function inspectDelivery(
   }
   if (dirty) {
     warnings.push(
-      'The source worktree has uncommitted changes; the agent will generate a commit message first.',
+      'The source worktree has uncommitted changes; they will be committed before delivery.',
     )
   }
   if (sourceStatus.branch === undefined) {
@@ -770,6 +772,33 @@ export async function hasPendingWork(
       : await countCommitsInRange(sourceWorktree, `${baseSha}..${sourceHead}`, log)
   if (commitCount === undefined) return fail('git_failed', 'Could not count pending commits.')
   return okData({ pending: commitCount > 0, dirty: false, commitCount })
+}
+
+/** Cheap, read-only check used by the phone's busy guards (no fetch, no writes). */
+export async function probeDeliveryLock(
+  input: DeliveryProbeLockInput,
+  log?: Log,
+): Promise<DeliveryProbeLockResult> {
+  if (typeof input?.cwd !== 'string' || input.cwd.length === 0) {
+    return fail('not_a_repository', 'The session has no working directory.')
+  }
+  const dirs = await detectGitDirs(input.cwd, log)
+  if (dirs === undefined) {
+    return fail('not_a_repository', 'The session working directory is not inside a git repository.')
+  }
+  const owner = await isDeliveryLockActive(dirs.commonDir)
+  if (owner === undefined) return okData({ active: false })
+  if (input.ownTokens?.includes(owner.token) === true) return okData({ active: false })
+  return okData({
+    active: true,
+    owner: {
+      pid: owner.pid,
+      hostname: owner.hostname,
+      startedAt: owner.startedAt,
+      heartbeatAt: owner.heartbeatAt,
+      ...(owner.label !== undefined ? { label: owner.label } : {}),
+    },
+  })
 }
 
 export async function beginDelivery(
@@ -1145,15 +1174,21 @@ export async function promoteAndPushDelivery(
   )
   if (push.exitCode !== 0) {
     const fetched = await fetchRemote(input.mainWorktree, input.remote, log)
-    let remoteHasCommits = false
-    if (fetched.exitCode === 0) {
-      const remoteHead = await resolveRef(input.mainWorktree, input.upstreamRef, log)
-      if (remoteHead !== undefined) {
-        remoteHasCommits =
-          remoteHead === input.tempHead ||
-          (await isAncestor(input.mainWorktree, input.tempHead, remoteHead, log)) === true
-      }
+    if (fetched.exitCode !== 0) {
+      // The confirmation fetch cannot prove whether the push landed. Leave main
+      // on tempHead and the temp worktree in place so a retry can confirm the
+      // remote; rolling back here would lose a delivery that actually landed.
+      return fail(
+        'push_unverified',
+        'The push failed and the remote branch could not be verified. Retry to confirm the push.',
+        `${gitErrorText(push)}\n${gitErrorText(fetched)}`,
+      )
     }
+    const remoteHead = await resolveRef(input.mainWorktree, input.upstreamRef, log)
+    const remoteHasCommits =
+      remoteHead !== undefined &&
+      (remoteHead === input.tempHead ||
+        (await isAncestor(input.mainWorktree, input.tempHead, remoteHead, log)) === true)
     if (!remoteHasCommits) {
       const restored = await resetHard(input.mainWorktree, input.baseSha, log)
       const detail =

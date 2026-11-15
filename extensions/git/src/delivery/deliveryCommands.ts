@@ -11,6 +11,7 @@ import {
   hasPendingWork,
   inspectDelivery,
   preparePickDelivery,
+  probeDeliveryLock,
   promoteAndPushDelivery,
   restoreMainDelivery,
   syncWorktreesDelivery,
@@ -47,6 +48,8 @@ import type {
   DeliveryPendingWorkInput,
   DeliveryPendingWorkResult,
   DeliveryPreparePickInput,
+  DeliveryProbeLockInput,
+  DeliveryProbeLockResult,
   DeliveryPromoteAndPushInput,
   DeliveryPromoteAndPushResult,
   DeliveryRestoreMainInput,
@@ -104,6 +107,7 @@ export function registerDeliveryCommands(
   add<DeliveryAcquireLockInput, DeliveryAcquireLockResult>('acquireLock', acquireDeliveryLock)
   add<DeliveryLockTokenInput, DeliveryLockResult>('heartbeatLock', heartbeatDeliveryLock)
   add<DeliveryLockTokenInput, DeliveryLockResult>('releaseLock', releaseDeliveryLock)
+  add<DeliveryProbeLockInput, DeliveryProbeLockResult>('probeLock', probeDeliveryLock)
   add<DeliveryBeginInput, DeliveryBeginResult>('begin', beginDelivery)
   add<DeliveryCommitSourceInput, DeliveryCommitSourceResult>('commitSource', commitSourceDelivery)
   add<DeliveryPreparePickInput, DeliveryPickResult>('preparePick', preparePickDelivery)
