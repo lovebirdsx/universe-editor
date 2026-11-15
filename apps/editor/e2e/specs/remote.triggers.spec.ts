@@ -64,7 +64,6 @@ function manualTrigger(): Record<string, unknown> {
     enabled: false,
     source: { type: 'manual' },
     session: { agent: 'echo', mode: 'plan', prompt: 'write-run-report' },
-    allowedActions: [],
     concurrency: 1,
     overflow: 'queue',
   }

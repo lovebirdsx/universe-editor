@@ -49,8 +49,7 @@ const CONFIG_TEXT = `// Header comment.
         "agent": "claude-code",
         "prompt": "Do it",
         "budget": { "maxCostUsd": 1, "timeoutMin": 30, "approvalTimeoutMin": 1440 }
-      },
-      "allowedActions": ["swarm.vote"]
+      }
     }
   ]
 }
@@ -60,6 +59,7 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
   return {
     key: 'alpha',
     id: 'alpha',
+    fingerprint: 'fp-alpha',
     name: 'Alpha',
     workspace: WORKSPACE.toString(),
     workspaceName: 'workspace',
@@ -72,9 +72,6 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
     autoPaused: false,
     activationConfirmed: true,
     elevatedMode: false,
-    elevatedModeConfirmed: false,
-    approveAction: false,
-    approveConfirmed: false,
     running: 0,
     queued: 0,
     consecutiveFailures: 0,
@@ -206,9 +203,6 @@ describe('TriggerConfigPanel', () => {
     expect((screen.getByTestId('trigger-manager-config-max-cost') as HTMLInputElement).value).toBe(
       '1',
     )
-    expect(
-      (screen.getByTestId('trigger-manager-config-action-swarm.vote') as HTMLInputElement).checked,
-    ).toBe(true)
   })
 
   it('tracks dirty state and reverts local edits', async () => {
@@ -242,17 +236,32 @@ describe('TriggerConfigPanel', () => {
     await screen.findByTestId('trigger-manager-config-status')
   })
 
-  it('warns that rewriting source / allowedActions drops comments inside them', async () => {
+  it('warns that rewriting the source drops comments inside it', async () => {
     const harness = renderPanel()
     await loaded()
 
-    fireEvent.click(screen.getByTestId('trigger-manager-config-action-swarm.comment'))
+    fireEvent.click(screen.getByTestId('trigger-manager-config-source-type'))
+    fireEvent.click(screen.getByRole('option', { name: 'Event' }))
     fireEvent.click(screen.getByTestId('trigger-manager-config-save'))
 
     await waitFor(() => expect(harness.confirm).toHaveBeenCalledTimes(1))
     expect(harness.confirm.mock.calls[0]?.[0]).toMatchObject({
       detail: expect.stringContaining('comments'),
     })
+  })
+
+  it('shows the event name selector for an event source', async () => {
+    const harness = renderPanel()
+    await loaded()
+
+    fireEvent.click(screen.getByTestId('trigger-manager-config-source-type'))
+    fireEvent.click(screen.getByRole('option', { name: 'Event' }))
+    expect(screen.getByTestId('trigger-manager-config-event')).toBeDefined()
+    fireEvent.click(screen.getByTestId('trigger-manager-config-save'))
+
+    await waitFor(() => expect(harness.store.writes).toHaveLength(1))
+    expect(harness.configText()).toContain('"type": "event"')
+    expect(harness.configText()).toContain('"event": "swarm.reviewNeedsAction"')
   })
 
   it('does not write when the JSON editor has unsaved changes', async () => {

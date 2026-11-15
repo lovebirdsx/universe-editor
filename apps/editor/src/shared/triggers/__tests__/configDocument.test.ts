@@ -30,13 +30,12 @@ const CONFIG_TEXT = `// Header comment: agent triggers for this workspace.
         "agent": "claude-code",
         "prompt": "Do the thing",
         "budget": { "maxCostUsd": 1, "timeoutMin": 30, "approvalTimeoutMin": 1440 }
-      },
-      "allowedActions": ["swarm.vote"]
+      }
     },
     {
       "id": "beta",
       "name": "Beta",
-      "source": { "type": "swarm-review" },
+      "source": { "type": "event", "event": "swarm.reviewNeedsAction" },
       "session": { "skill": "swarm-triage" }
     }
   ]
@@ -54,7 +53,6 @@ function trigger(overrides: Partial<TriggerConfig> = {}): TriggerConfig {
       prompt: 'Run gamma',
       budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 1440 },
     },
-    allowedActions: [],
     concurrency: 1,
     overflow: 'queue',
     ...overrides,
@@ -102,9 +100,9 @@ describe('applyTriggerEdits', () => {
 
   it('replaces nested arrays and keeps surrounding comments', () => {
     const next = applyTriggerEdits(CONFIG_TEXT, [
-      { path: ['triggers', 0, 'allowedActions'], value: ['swarm.vote', 'swarm.comment'] },
+      { path: ['triggers', 0, 'session', 'mcpServers'], value: ['swarm'] },
     ])
-    expect(next).toContain('"swarm.comment"')
+    expect(next).toContain('"swarm"')
     expect(next).toContain('// Between-trigger comment.')
   })
 })
@@ -152,7 +150,6 @@ describe('triggerSectionLine', () => {
     expect(triggerSectionLine(CONFIG_TEXT, 'alpha', 'source')).toBe(10)
     expect(triggerSectionLine(CONFIG_TEXT, 'alpha', 'session')).toBe(11)
     expect(triggerSectionLine(CONFIG_TEXT, 'alpha', 'budget')).toBe(14)
-    expect(triggerSectionLine(CONFIG_TEXT, 'alpha', 'allowedActions')).toBe(16)
   })
 
   it('returns undefined for a missing section or unknown trigger', () => {

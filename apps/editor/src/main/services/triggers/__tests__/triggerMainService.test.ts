@@ -167,7 +167,6 @@ function makeTrigger(
     workspace,
     source: { type: 'manual' },
     session: { prompt: 'Do the thing', budget: BUDGET },
-    allowedActions: [],
     concurrency: 1,
     overflow: 'queue',
     ...overrides,
@@ -180,8 +179,8 @@ function review(reviewId: string): SwarmNeedsActionReview {
     author: 'testuser',
     description: 'a review',
     state: 'needsReview',
-    version: 1,
-    updated: 1,
+    swarmUrl: 'https://swarm.example.com/branch_x',
+    swarmApiVersion: 'v9',
   }
 }
 
@@ -335,7 +334,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     // most scheduling tests are about what happens after that gate.
     for (const entry of await service.listTriggers()) {
       if (entry.status === 'invalid') continue
-      await service.confirmActivation(entry.key)
+      await service.confirmActivation(entry.key, entry.fingerprint)
       // First-seen triggers start paused; tests that are not about that default
       // resume them, mirroring what the confirmation dialog offers.
       if (options.autoResume !== false && !preexistingIds.has(entry.id)) {
@@ -386,6 +385,13 @@ function summary(list: readonly TriggerSummary[], id: string): TriggerSummary {
   const found = list.find((entry) => entry.id === id)
   if (found === undefined) throw new Error(`summary ${id} missing`)
   return found
+}
+
+/** Confirm with the current fingerprint, as the dialog would. */
+async function confirmTrigger(service: TriggerMainService, triggerKey: string): Promise<void> {
+  const entry = (await service.listTriggers()).find((item) => item.key === triggerKey)
+  if (entry === undefined) throw new Error(`trigger ${triggerKey} missing`)
+  await service.confirmActivation(triggerKey, entry.fingerprint)
 }
 
 interface RawState {
@@ -574,7 +580,10 @@ describe('TriggerMainService dedupe', () => {
   it('dedupes swarm reviews across windows and keeps the first report as the baseline', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [
-        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+        makeTrigger(workspace, {
+          id: 'swarm',
+          source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        }),
       ],
     })
     await openGate(harness)
@@ -593,14 +602,10 @@ describe('TriggerMainService dedupe', () => {
     )
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('swarm:2')
-    expect(harness.requests[0]?.payload).toEqual({
-      reviewId: '2',
-      author: 'testuser',
-      description: 'a review',
-      state: 'needsReview',
-      version: 1,
-      updated: 1,
-    })
+    // The event payload now reaches the agent only through the fenced prompt section.
+    expect(harness.requests[0]?.prompt).toContain('"reviewId":"2"')
+    expect(harness.requests[0]?.prompt).toContain('"swarmUrl":"https://swarm.example.com/branch_x"')
+    expect(harness.requests[0]?.prompt).toContain('"swarmApiVersion":"v9"')
 
     await harness.service.reportSwarmNeedsAction(
       [review('1'), review('2')],
@@ -608,13 +613,15 @@ describe('TriggerMainService dedupe', () => {
     )
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
-    expect(harness.requests[0]?.sourceType).toBe('swarm-review')
   })
 
   it('produces a single run for two concurrent reports of the same review', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [
-        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+        makeTrigger(workspace, {
+          id: 'swarm',
+          source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        }),
       ],
     })
     await openGate(harness)
@@ -660,7 +667,6 @@ describe('TriggerMainService queueing', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: runningId,
       outcome: 'completed',
-      actions: [],
     })
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
     expect(harness.requests[1]?.origin.triggerId).toBe(otherId)
@@ -730,6 +736,8 @@ describe('TriggerMainService summaries and run history', () => {
     expect(initial.pausedAll).toBe(false)
     expect(initial.autoPaused).toBe(false)
     expect(initial.source).toEqual({ type: 'manual' })
+    expect(initial.session).toEqual({})
+    expect(initial).not.toHaveProperty('elevatedModeConfirmed')
 
     await harness.service.setAllPaused(true)
     const paused = summary(await harness.service.listTriggers(), 'trigger-1')
@@ -752,6 +760,31 @@ describe('TriggerMainService summaries and run history', () => {
     expect(broken.autoPaused).toBe(false)
   })
 
+  it('exposes the session settings listed in the activation confirmation', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, {
+          session: {
+            agent: 'claude-code',
+            mode: 'default',
+            skill: 'swarm-triage',
+            prompt: 'Do it',
+            mcpServers: ['swarm'],
+            budget: BUDGET,
+          },
+        }),
+      ],
+    })
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.session).toEqual({
+      agent: 'claude-code',
+      mode: 'default',
+      skill: 'swarm-triage',
+      mcpServers: ['swarm'],
+    })
+    expect(item.elevatedMode).toBe(false)
+  })
+
   it('appends every run end to the history and keeps the newest first', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [makeTrigger(workspace)],
@@ -768,7 +801,6 @@ describe('TriggerMainService summaries and run history', () => {
       outcome: 'completed',
       verdict: 'escalate',
       summary: longSummary,
-      actions: [],
       durationMs: 12_345,
       costUsd: 0.25,
     })
@@ -780,7 +812,6 @@ describe('TriggerMainService summaries and run history', () => {
       runId: secondRunId,
       triggerId: 'trigger-1',
       outcome: 'timeout',
-      actions: [],
     })
 
     const runs = await harness.service.listRuns()
@@ -828,9 +859,8 @@ describe('TriggerMainService summaries and run history', () => {
       triggerId: 'trigger-1',
       sessionId: 'session-9',
       outcome: 'failed',
-      verdict: 'reject',
+      verdict: 'escalate',
       summary: 'rejected',
-      actions: [],
       error: 'agent crashed',
       durationMs: 42,
     })
@@ -838,7 +868,7 @@ describe('TriggerMainService summaries and run history', () => {
     const [run] = await harness.service.listRuns()
     expect(run).toMatchObject({
       outcome: 'failed',
-      verdict: 'reject',
+      verdict: 'escalate',
       summary: 'rejected',
       error: 'agent crashed',
       sessionId: 'session-9',
@@ -861,7 +891,6 @@ describe('TriggerMainService summaries and run history', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'trigger-1',
       outcome: 'failed',
-      actions: [],
       error: longError,
     })
 
@@ -890,7 +919,6 @@ describe('TriggerMainService summaries and run history', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'trigger-1',
       outcome: 'completed',
-      actions: [],
     })
     const [run] = await harness.service.listRuns()
     expect(run?.triggerId).toBe('trigger-1')
@@ -989,7 +1017,6 @@ describe('TriggerMainService failures', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'trigger-1',
       outcome: 'completed',
-      actions: [],
     })
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(item.autoPaused).toBe(false)
@@ -1091,11 +1118,12 @@ describe('TriggerMainService failures', () => {
   })
 })
 
-describe('TriggerMainService elevated mode', () => {
+describe('TriggerMainService activation covers elevated mode', () => {
   const elevated = { mode: 'bypassPermissions' }
 
-  it('refuses to run an unconfirmed elevated trigger and only runs after confirmation', async () => {
+  it('refuses to run until the single activation confirmation, then allows the bypass mode', async () => {
     const harness = await createHarness({
+      autoConfirm: false,
       triggers: (workspace) => [
         makeTrigger(workspace, {
           session: { prompt: 'Do it', budget: BUDGET, ...elevated },
@@ -1103,23 +1131,25 @@ describe('TriggerMainService elevated mode', () => {
       ],
     })
     await openGate(harness)
-    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/elevated mode/)
+    await harness.service.setPaused(harness.key, false)
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
     expect(harness.startRun).not.toHaveBeenCalled()
 
     const before = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(before.status).toBe('needs-confirmation')
-    expect(before.elevatedModeConfirmed).toBe(false)
+    expect(before.activationConfirmed).toBe(false)
+    expect(before.elevatedMode).toBe(true)
 
-    await harness.service.confirmElevatedMode(harness.key)
+    await confirmTrigger(harness.service, harness.key)
     await harness.service.runNow(harness.key)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.allowElevatedMode).toBe(true)
-    expect(summary(await harness.service.listTriggers(), 'trigger-1').elevatedModeConfirmed).toBe(
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').activationConfirmed).toBe(
       true,
     )
   })
 
-  it('invalidates the confirmation when the trigger config changes', async () => {
+  it('invalidates the confirmation (and the bypass grant) when the trigger config changes', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [
         makeTrigger(workspace, {
@@ -1128,7 +1158,14 @@ describe('TriggerMainService elevated mode', () => {
       ],
     })
     await openGate(harness)
-    await harness.service.confirmElevatedMode(harness.key)
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    expect(harness.requests[0]?.allowElevatedMode).toBe(true)
+    await harness.service.reportRunEnd({
+      runId: harness.requests[0]!.origin.runId,
+      triggerId: 'trigger-1',
+      outcome: 'completed',
+    })
 
     await writeFile(
       harness.configFile,
@@ -1147,16 +1184,43 @@ describe('TriggerMainService elevated mode', () => {
       const list = await harness.service.listTriggers()
       return summary(list, 'trigger-1').name === 'Renamed'
     })
-    // Editing the definition invalidates every confirmation bound to the old fingerprint.
+    // The single confirmation is bound to the full definition fingerprint.
     const edited = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(edited.activationConfirmed).toBe(false)
-    expect(edited.elevatedModeConfirmed).toBe(false)
+    expect(edited.status).toBe('needs-confirmation')
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
 
-    await harness.service.confirmActivation(harness.key)
-    const confirmed = summary(await harness.service.listTriggers(), 'trigger-1')
-    expect(confirmed.activationConfirmed).toBe(true)
-    expect(confirmed.elevatedModeConfirmed).toBe(false)
-    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/elevated mode/)
+    await confirmTrigger(harness.service, harness.key)
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
+    expect(harness.requests[1]?.allowElevatedMode).toBe(true)
+  })
+
+  it('rejects a confirmation for a definition that changed while the dialog was open', async () => {
+    const harness = await createHarness({
+      autoConfirm: false,
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    const shown = summary(await harness.service.listTriggers(), 'trigger-1')
+
+    await writeFile(
+      harness.configFile,
+      JSON.stringify({
+        version: 1,
+        triggers: [makeTrigger(harness.workspace, { name: 'Renamed' })],
+      }),
+      'utf8',
+    )
+    await waitFor(
+      async () => summary(await harness.service.listTriggers(), 'trigger-1').name === 'Renamed',
+    )
+
+    await expect(harness.service.confirmActivation(harness.key, shown.fingerprint)).rejects.toThrow(
+      /definition changed/,
+    )
+    expect(stateOf(harness.service).triggers[harness.key]?.activationConfirmed).toBeUndefined()
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
   })
 })
 
@@ -1198,7 +1262,7 @@ describe('TriggerMainService poll source', () => {
     await harness.clock.advance(30_000)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('poll:B')
-    expect(harness.requests[0]?.payload).toEqual({ id: 'B' })
+    expect(harness.requests[0]?.prompt).toContain('"id":"B"')
   })
 
   it('backs off after a failed poll and pauses after five failures', async () => {
@@ -1518,7 +1582,6 @@ describe('TriggerMainService window reload / watchdog', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'trigger-1',
       outcome: 'completed',
-      actions: [],
     })
     await harness.clock.advance(12 * 60_000 + 1)
     await settle()
@@ -1573,7 +1636,6 @@ describe('TriggerMainService manual runs', () => {
       runId: first.runId,
       triggerId: first.triggerId,
       outcome: 'completed',
-      actions: [],
     })
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
   })
@@ -1617,7 +1679,10 @@ describe('TriggerMainService backoff gate', () => {
   it('does not consume swarm events during backoff but fires them afterwards', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [
-        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+        makeTrigger(workspace, {
+          id: 'swarm',
+          source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        }),
       ],
       state: {
         version: 2,
@@ -1782,7 +1847,6 @@ describe('TriggerMainService privacy', () => {
     await harness.clock.advance(30_000)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.prompt).toContain(secret)
-    expect(harness.requests[0]?.payload['description']).toBe(secret)
 
     const runId = harness.requests[0]!.origin.runId
     await harness.service.reportRunEnd({
@@ -1791,10 +1855,7 @@ describe('TriggerMainService privacy', () => {
       sessionId: 'session-1',
       outcome: 'completed',
       verdict: 'escalate',
-      actions: [
-        { type: 'swarm.vote', target: 'A', result: 'ok' },
-        { type: 'swarm.comment', target: 'A', result: 'rejected', reason: '评论内容不能为空' },
-      ],
+      summary: 'looked at it',
     })
     await settle()
     harness.service.dispose()
@@ -1804,10 +1865,9 @@ describe('TriggerMainService privacy', () => {
     const audit = await readFile(join(harness.dir, 'triggers', 'audit.jsonl'), 'utf8')
     expect(audit).not.toContain(secret)
     expect(audit).toContain('run-end')
-    // One line per action, including the validation reason but never the payload.
-    expect(audit).toContain('"action":"action"')
-    expect(audit).toContain('type=swarm.vote target=A result=ok')
-    expect(audit).toContain('type=swarm.comment target=A result=rejected reason=评论内容不能为空')
+    expect(audit).toContain('verdict=escalate')
+    // The verdict summary never reaches the audit log.
+    expect(audit).not.toContain('looked at it')
     const state = await readFile(join(harness.dir, 'triggers', 'state.json'), 'utf8')
     expect(state).not.toContain(secret)
   })
@@ -1834,7 +1894,6 @@ describe('TriggerMainService list / pause', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'ok',
       outcome: 'completed',
-      actions: [],
     })
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
@@ -1911,7 +1970,7 @@ describe('TriggerMainService workspace activation gate', () => {
     expect(pending.nextRunAt).toBeUndefined()
     await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
 
-    await harness.service.confirmActivation(harness.key)
+    await confirmTrigger(harness.service, harness.key)
     const confirmed = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(confirmed.activationConfirmed).toBe(true)
     await harness.service.setPaused(harness.key, false)
@@ -1976,7 +2035,7 @@ describe('TriggerMainService workspace activation gate', () => {
     expect(new Set(sameId.map((entry) => entry.workspaceName)).size).toBe(2)
 
     const secondKey = sameId.find((entry) => entry.workspace === URI.file(second).toString())!.key
-    await harness.service.confirmActivation(secondKey)
+    await confirmTrigger(harness.service, secondKey)
     const afterConfirm = await harness.service.listTriggers()
     expect(afterConfirm.find((entry) => entry.key === harness.key)?.activationConfirmed).toBe(false)
     expect(afterConfirm.find((entry) => entry.key === secondKey)?.activationConfirmed).toBe(true)
@@ -2032,7 +2091,8 @@ describe('TriggerMainService workspace activation gate', () => {
     })
     // Extra separators / trailing slash must not create a second state entry.
     const nonCanonical = `${harness.workspace}/./\u0000trigger-1`
-    await harness.service.confirmActivation(nonCanonical)
+    const fingerprint = (await harness.service.listTriggers())[0]!.fingerprint
+    await harness.service.confirmActivation(nonCanonical, fingerprint)
 
     const state = stateOf(harness.service)
     expect(Object.keys(state.triggers)).toEqual([harness.key])
@@ -2042,7 +2102,10 @@ describe('TriggerMainService workspace activation gate', () => {
   it('routes swarm reports only to the reporting workspace', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [
-        makeTrigger(workspace, { id: 'swarm-a', source: { type: 'swarm-review' } }),
+        makeTrigger(workspace, {
+          id: 'swarm-a',
+          source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        }),
       ],
     })
     const second = join(harness.dir, 'workspace-b')
@@ -2052,7 +2115,12 @@ describe('TriggerMainService workspace activation gate', () => {
       secondConfig,
       JSON.stringify({
         version: 1,
-        triggers: [makeTrigger(second, { id: 'swarm-b', source: { type: 'swarm-review' } })],
+        triggers: [
+          makeTrigger(second, {
+            id: 'swarm-b',
+            source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+          }),
+        ],
       }),
       'utf8',
     )
@@ -2060,7 +2128,7 @@ describe('TriggerMainService workspace activation gate', () => {
     const secondKey = (await harness.service.listTriggers()).find(
       (entry) => entry.workspace === URI.file(second).toString(),
     )!.key
-    await harness.service.confirmActivation(secondKey)
+    await confirmTrigger(harness.service, secondKey)
 
     await harness.service.reportSwarmNeedsAction([review('1')], URI.file(second).toString())
 
@@ -2074,7 +2142,10 @@ describe('TriggerMainService workspace activation gate', () => {
   it('ignores a remote workspace report instead of consuming a local trigger', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [
-        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+        makeTrigger(workspace, {
+          id: 'swarm',
+          source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        }),
       ],
     })
     await openGate(harness)
@@ -2098,7 +2169,10 @@ describe('TriggerMainService workspace activation gate', () => {
   it('warns and ignores a report whose workspace URI is empty or unparseable', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [
-        makeTrigger(workspace, { id: 'swarm', source: { type: 'swarm-review' } }),
+        makeTrigger(workspace, {
+          id: 'swarm',
+          source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        }),
       ],
     })
     await openGate(harness)

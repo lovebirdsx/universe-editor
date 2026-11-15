@@ -10,13 +10,13 @@ import { REMOTE_SCHEME, URI, remoteAuthorityLabel } from '@universe-editor/platf
 import { parse, type ParseError } from 'jsonc-parser'
 import { parseCron } from './cron.js'
 import {
-  TRIGGER_ACTION_TYPES,
   TRIGGER_DEFAULTS,
+  TRIGGER_EVENT_NAMES,
   TRIGGERS_WORKSPACE_CONFIG_FILE,
   type InvalidTriggerConfig,
-  type TriggerActionType,
   type TriggerBudget,
   type TriggerConfig,
+  type TriggerEventName,
   type TriggerOnMissed,
   type TriggerOverflow,
   type TriggerSessionConfig,
@@ -198,13 +198,26 @@ function parsePollSource(raw: Record<string, unknown>): SourceParseResult {
   }
 }
 
+function parseEventSource(raw: Record<string, unknown>): SourceParseResult {
+  const event = raw['event']
+  if (typeof event !== 'string' || !(TRIGGER_EVENT_NAMES as readonly string[]).includes(event)) {
+    return {
+      ok: false,
+      errors: [
+        `"source.event" must be one of ${TRIGGER_EVENT_NAMES.map((name) => `"${name}"`).join(' | ')}`,
+      ],
+    }
+  }
+  return { ok: true, source: { type: 'event', event: event as TriggerEventName } }
+}
+
 function parseSource(raw: unknown): SourceParseResult {
   if (!isRecord(raw)) return { ok: false, errors: ['"source" must be an object'] }
   switch (raw['type']) {
     case 'manual':
       return { ok: true, source: { type: 'manual' } }
-    case 'swarm-review':
-      return { ok: true, source: { type: 'swarm-review' } }
+    case 'event':
+      return parseEventSource(raw)
     case 'schedule':
       return parseScheduleSource(raw)
     case 'poll':
@@ -212,7 +225,7 @@ function parseSource(raw: unknown): SourceParseResult {
     default:
       return {
         ok: false,
-        errors: ['"source.type" must be one of "manual" | "schedule" | "poll" | "swarm-review"'],
+        errors: ['"source.type" must be one of "manual" | "schedule" | "poll" | "event"'],
       }
   }
 }
@@ -317,23 +330,6 @@ function parseSession(
   return { ok: true, session }
 }
 
-function parseAllowedActions(raw: unknown, errors: string[]): TriggerActionType[] {
-  if (!Array.isArray(raw)) {
-    errors.push('"allowedActions" must be an array')
-    return []
-  }
-  const actions: TriggerActionType[] = []
-  for (const entry of raw) {
-    if (typeof entry !== 'string' || !TRIGGER_ACTION_TYPES.includes(entry as TriggerActionType)) {
-      errors.push(`"allowedActions" contains unknown action "${String(entry)}"`)
-      continue
-    }
-    const action = entry as TriggerActionType
-    if (!actions.includes(action)) actions.push(action)
-  }
-  return actions
-}
-
 interface ParsedTrigger {
   readonly id: string
   readonly index: number
@@ -379,11 +375,6 @@ function parseTrigger(raw: unknown, index: number): ParsedTrigger {
   const sessionResult = parseSession(hasOwn(raw, 'session') ? raw['session'] : {})
   if (!sessionResult.ok) errors.push(...sessionResult.errors)
 
-  let allowedActions: TriggerActionType[] = []
-  if (hasOwn(raw, 'allowedActions')) {
-    allowedActions = parseAllowedActions(raw['allowedActions'], errors)
-  }
-
   let concurrency: number = TRIGGER_DEFAULTS.concurrency
   if (hasOwn(raw, 'concurrency')) {
     const value = raw['concurrency']
@@ -412,7 +403,6 @@ function parseTrigger(raw: unknown, index: number): ParsedTrigger {
       showSession,
       source: sourceResult.source,
       session: sessionResult.session,
-      allowedActions,
       concurrency,
       overflow,
     },
@@ -497,13 +487,13 @@ export const TRIGGERS_CONFIG_EXAMPLE = `${TRIGGERS_CONFIG_HEADER_COMMENT}
   "version": 1,
   "triggers": [
     {
-      // Swarm 审核分诊：每个待处理审核触发一次
-      "id": "swarm-review",
+      // Swarm 审核分诊：编辑器推送待处理审核事件时触发
+      "id": "swarm-triage",
       "name": "Swarm 审核分诊",
       "enabled": false,
       // 运行开始时切到会话（仅在窗口已可见时生效；后台/最小化窗口不会被唤醒）
       "showSession": false,
-      "source": { "type": "swarm-review" },
+      "source": { "type": "event", "event": "swarm.reviewNeedsAction" },
       "session": {
         "agent": "claude-code",
         "skill": "swarm-triage",
@@ -511,7 +501,6 @@ export const TRIGGERS_CONFIG_EXAMPLE = `${TRIGGERS_CONFIG_HEADER_COMMENT}
         "mcpServers": ["swarm"],
         "budget": { "maxCostUsd": 1, "timeoutMin": 30, "approvalTimeoutMin": 1440 }
       },
-      "allowedActions": ["swarm.vote", "swarm.comment"],
       "concurrency": 1,
       "overflow": "queue"
     },

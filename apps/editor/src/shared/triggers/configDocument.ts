@@ -33,7 +33,7 @@ export interface TriggerConfigEdit {
   readonly value: unknown
 }
 
-export type TriggerConfigSection = 'trigger' | 'source' | 'session' | 'budget' | 'allowedActions'
+export type TriggerConfigSection = 'trigger' | 'source' | 'session' | 'budget'
 
 function splitBom(text: string): { readonly bom: string; readonly body: string } {
   return text.startsWith(BOM) ? { bom: BOM, body: text.slice(1) } : { bom: '', body: text }

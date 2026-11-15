@@ -119,9 +119,9 @@ function same(a: unknown, b: unknown): boolean {
 }
 
 /**
- * Only the fields the form owns. `source` and `allowedActions` are replaced as a
- * whole (jsonc cannot merge arrays/objects in place), which is why the panel warns
- * that comments inside them are lost. Unknown fields are never touched.
+ * Only the fields the form owns. `source` is replaced as a whole (jsonc cannot
+ * merge objects in place), which is why the panel warns that comments inside it
+ * are lost. Unknown fields are never touched.
  */
 export function buildTriggerConfigEdits(
   base: TriggerConfig,
@@ -166,9 +166,6 @@ export function buildTriggerConfigEdits(
   }
 
   if (!same(base.source, next.source)) edits.push({ path: [...path, 'source'], value: next.source })
-  if (!same(base.allowedActions, next.allowedActions)) {
-    edits.push({ path: [...path, 'allowedActions'], value: next.allowedActions })
-  }
   return edits
 }
 

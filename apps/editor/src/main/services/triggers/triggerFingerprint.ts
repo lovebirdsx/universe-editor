@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Activation / elevated / approve confirmations bind to this fingerprint. It is
- *  main-only: a 32-bit FNV hash would be cheap to collide on purpose, so trusted
- *  folder content could otherwise reproduce a confirmed definition after a pull.
+ *  The single activation confirmation (which also covers a bypass-class mode)
+ *  binds to this fingerprint. It is main-only: a 32-bit FNV hash would be cheap
+ *  to collide on purpose, so trusted folder content could otherwise reproduce a
+ *  confirmed definition after a pull.
  *--------------------------------------------------------------------------------------------*/
 
 import { createHash } from 'node:crypto'

@@ -1924,6 +1924,13 @@ describe('parseServerFrame', () => {
     expect(errorCode(parseServerFrame(withSummary({ triggerName: 'x', verdict: 'maybe' })))).toBe(
       'bad_request',
     )
+    // Retired desktop verdict kinds are no longer part of the wire contract.
+    for (const retired of ['auto-approve', 'reject']) {
+      expect(
+        errorCode(parseServerFrame(withSummary({ triggerName: 'x', verdict: retired }))),
+        retired,
+      ).toBe('bad_request')
+    }
     expect(
       errorCode(parseServerFrame(withSummary({ triggerName: 'x', outcome: 'exploded' }))),
     ).toBe('bad_request')

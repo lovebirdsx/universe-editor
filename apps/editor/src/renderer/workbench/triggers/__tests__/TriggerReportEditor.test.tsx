@@ -54,7 +54,7 @@ afterEach(() => {
 interface EditorOptions {
   report: TriggerRunReportReadResult
   outcome?: 'completed' | 'failed'
-  verdict?: 'auto-approve' | 'escalate' | 'reject' | 'info'
+  verdict?: 'escalate' | 'info'
   summary?: string
   authority?: string
 }
@@ -205,7 +205,6 @@ describe('TriggerReportEditor', () => {
         runId: 'run-1',
         triggerId: 'triage',
         outcome: 'completed',
-        actions: [],
       })
     })
 

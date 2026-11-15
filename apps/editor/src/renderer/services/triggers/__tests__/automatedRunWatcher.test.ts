@@ -15,11 +15,7 @@ import type {
   IAcpSession,
 } from '../../acp/session/acpSessionModel.js'
 import type { TriggerRunEnd, TriggerRunRequest } from '../../../../shared/triggers/types.js'
-import {
-  AutomatedRunWatcher,
-  type AutomatedVerdictResolution,
-  type AutomatedVerdictResolver,
-} from '../automatedRunWatcher.js'
+import { AutomatedRunWatcher } from '../automatedRunWatcher.js'
 
 class FakeClock {
   private _now = 0
@@ -141,10 +137,6 @@ function makeRequest(overrides: Partial<TriggerRunRequest['budget']> = {}): Trig
     promptForSystemContract: 'do it (system)',
     runDir: '/userData/triggers/runs/run-1',
     budget: { maxCostUsd: 1, timeoutMin: 1, approvalTimeoutMin: 1, ...overrides },
-    allowedActions: [],
-    approveConfirmed: false,
-    payload: {},
-    sourceType: 'manual',
   }
 }
 
@@ -152,22 +144,17 @@ function setup(
   options: {
     request?: TriggerRunRequest
     raw?: string
-    resolveVerdict?: AutomatedVerdictResolver
+    readResultFile?: (request: TriggerRunRequest) => Promise<string | undefined>
     logger?: { warn(message: string): void }
   } = {},
 ) {
   const clock = new FakeClock()
   const fake = makeSession()
   const ends: TriggerRunEnd[] = []
-  const resolver =
-    options.resolveVerdict ??
-    ((raw: string | undefined): AutomatedVerdictResolution =>
-      raw === undefined ? { actions: [] } : { verdict: 'info', summary: raw, actions: [] })
   const watcher = new AutomatedRunWatcher({
     request: options.request ?? makeRequest(),
     session: fake.session,
-    readResultFile: async () => options.raw,
-    resolveVerdict: resolver,
+    readResultFile: options.readResultFile ?? (async () => options.raw),
     onRunEnd: (end) => ends.push(end),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     now: clock.now,
@@ -426,61 +413,30 @@ describe('AutomatedRunWatcher', () => {
     expect(ends).toHaveLength(1)
   })
 
-  it('feeds the raw result text to the injected resolver and copies its verdict', async () => {
-    const raw = '{"verdict":"auto-approve","summary":"ok"}'
-    let seenRaw: string | undefined
-    const { watcher, ends } = setup({
-      raw,
-      resolveVerdict: (text) => {
-        seenRaw = text
-        return {
-          verdict: 'auto-approve',
-          summary: 'ok',
-          actions: [{ type: 'swarm.vote', target: '42', result: 'ok' }],
-        }
-      },
+  it('does not read result.json or attach a verdict when the run did not complete', async () => {
+    const readResultFile = vi.fn(async () => '{"verdict":"info","summary":"stale"}')
+    const { fake, watcher, ends } = setup({
+      request: makeRequest({ timeoutMin: 1 }),
+      readResultFile,
     })
     watcher.start()
-    watcher.notifyTurnSettled()
+    fake.status.set('running', undefined)
+    fake.usage.set({ used: 10, size: 100, cost: { amount: 2, currency: 'USD' } }, undefined)
     await flush()
-    expect(seenRaw).toBe(raw)
-    expect(ends[0]).toMatchObject({
-      outcome: 'completed',
-      verdict: 'auto-approve',
-      summary: 'ok',
-      actions: [{ type: 'swarm.vote', target: '42', result: 'ok' }],
-    })
+    expect(ends[0]!.outcome).toBe('budget-exceeded')
+    expect(readResultFile).not.toHaveBeenCalled()
+    expect(ends[0]!.verdict).toBeUndefined()
+    expect(ends[0]!.summary).toBeUndefined()
   })
 
-  it('awaits an async resolver before firing the single run-end event', async () => {
-    let release!: (value: AutomatedVerdictResolution) => void
-    const gate = new Promise<AutomatedVerdictResolution>((resolve) => {
-      release = resolve
-    })
-    const { watcher, ends } = setup({ raw: '{"verdict":"info"}', resolveVerdict: () => gate })
-    watcher.start()
-    watcher.notifyTurnSettled()
-    await flush()
-    expect(ends).toHaveLength(0)
-    release({ verdict: 'escalate', summary: 'later', actions: [] })
-    await flush()
-    expect(ends).toHaveLength(1)
-    expect(ends[0]).toMatchObject({
-      outcome: 'completed',
-      verdict: 'escalate',
-      summary: 'later',
-      actions: [],
-    })
-  })
-
-  it('defaults to no verdict and no actions when no resolver is supplied', async () => {
+  it('escalates when the agent produced no readable result.json', async () => {
     const clock = new FakeClock()
     const fake = makeSession()
     const ends: TriggerRunEnd[] = []
     const watcher = new AutomatedRunWatcher({
       request: makeRequest(),
       session: fake.session,
-      readResultFile: async () => '{"anything":true}',
+      readResultFile: async () => undefined,
       onRunEnd: (end) => ends.push(end),
       now: clock.now,
       setTimeout: clock.setTimeout,
@@ -489,7 +445,48 @@ describe('AutomatedRunWatcher', () => {
     watcher.start()
     watcher.notifyTurnSettled()
     await flush()
-    expect(ends[0]!.verdict).toBeUndefined()
-    expect(ends[0]!.actions).toEqual([])
+    expect(ends[0]).toMatchObject({
+      verdict: 'escalate',
+      summary: '未产出结构化结果',
+    })
+  })
+
+  it('escalates with the parse error when result.json is unparseable', async () => {
+    const clock = new FakeClock()
+    const fake = makeSession()
+    const ends: TriggerRunEnd[] = []
+    const watcher = new AutomatedRunWatcher({
+      request: makeRequest(),
+      session: fake.session,
+      readResultFile: async () => '{not json',
+      onRunEnd: (end) => ends.push(end),
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    })
+    watcher.start()
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(ends[0]!.verdict).toBe('escalate')
+    expect(ends[0]!.summary).toContain('未产出结构化结果：')
+  })
+
+  it('parses the result file of a completed run', async () => {
+    const clock = new FakeClock()
+    const fake = makeSession()
+    const ends: TriggerRunEnd[] = []
+    const watcher = new AutomatedRunWatcher({
+      request: makeRequest(),
+      session: fake.session,
+      readResultFile: async () => '{"verdict":"info","summary":"all good"}',
+      onRunEnd: (end) => ends.push(end),
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    })
+    watcher.start()
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(ends[0]).toMatchObject({ verdict: 'info', summary: 'all good' })
   })
 })

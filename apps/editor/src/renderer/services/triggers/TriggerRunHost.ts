@@ -4,7 +4,7 @@
  *  trigger's workspace to start / cancel an automated run, and probes whether
  *  that workspace is trusted. A finished run is reported back to main from here
  *  so the scheduler owns all run bookkeeping (dedupe, backoff, queue slots).
- *  Design §1 / §3.4.
+ *  Docs: docs/development/triggers.md.
  *--------------------------------------------------------------------------------------------*/
 
 import {

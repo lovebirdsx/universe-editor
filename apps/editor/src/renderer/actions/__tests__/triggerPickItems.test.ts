@@ -24,19 +24,18 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
     key: `X:/workspace\u0000${id}`,
     id,
     name: 'Triage',
+    fingerprint: 'fp-triage',
     workspace: 'X:/workspace',
     workspaceName: 'workspace',
     activationConfirmed: true,
-    sourceType: 'swarm-review',
+    sourceType: 'event',
+    source: { type: 'event', event: 'swarm.reviewNeedsAction' },
     status: 'idle',
     enabled: true,
     paused: false,
     pausedAll: false,
     autoPaused: false,
     elevatedMode: false,
-    elevatedModeConfirmed: false,
-    approveAction: false,
-    approveConfirmed: false,
     running: 0,
     queued: 0,
     consecutiveFailures: 0,
@@ -67,20 +66,14 @@ describe('triggerStatusLabel', () => {
 
 describe('triggerSourceLabel', () => {
   it('labels every source type', () => {
-    const sources: (TriggerSourceType | 'unknown')[] = [
-      'manual',
-      'schedule',
-      'poll',
-      'swarm-review',
-      'unknown',
-    ]
+    const sources: (TriggerSourceType | 'unknown')[] = ['manual', 'schedule', 'poll', 'unknown']
     expect(sources.map(triggerSourceLabel)).toEqual([
       'Manual',
       'Schedule',
       'Command poll',
-      'Swarm review',
       'Unknown source',
     ])
+    expect(triggerSourceLabel('event')).toBeTruthy()
   })
 })
 
@@ -88,12 +81,13 @@ describe('buildTriggerPickItems', () => {
   it('shows the workspace path, status, source and run counts in the description', () => {
     const [item] = buildTriggerPickItems([summary({ status: 'running', running: 2, queued: 3 })])
     expect(item?.label).toBe('Triage')
-    expect(item?.description).toBe('X:/workspace · Running · Swarm review · 2 running · 3 queued')
+    expect(item?.description?.startsWith('X:/workspace · Running · ')).toBe(true)
+    expect(item?.description).toContain('2 running · 3 queued')
   })
 
   it('omits zero counts and absent timestamps', () => {
     const [item] = buildTriggerPickItems([summary()])
-    expect(item?.description).toBe('X:/workspace · Idle · Swarm review')
+    expect(item?.description?.startsWith('X:/workspace · Idle · ')).toBe(true)
     expect(item?.detail).toBeUndefined()
   })
 
@@ -119,27 +113,16 @@ describe('buildTriggerPickItems', () => {
     expect(item?.description).toMatch(/Next run at \d{2}:\d{2}/)
   })
 
-  it('marks high-privilege mode and explains an unconfirmed one', () => {
-    const [item] = buildTriggerPickItems([
-      summary({ elevatedMode: true, elevatedModeConfirmed: false }),
-    ])
+  it('marks high-privilege mode with the warning glyph', () => {
+    const [item] = buildTriggerPickItems([summary({ elevatedMode: true })])
     expect(item?.label).toBe('⚠ Triage')
-    expect(item?.detail).toContain('not confirmed')
-    expect(item?.detail).toContain('will not run until you confirm it')
+    expect(item?.detail).toBeUndefined()
   })
 
   it('explains that a workspace trigger awaits its activation confirmation', () => {
     const [item] = buildTriggerPickItems([summary({ activationConfirmed: false })])
     expect(item?.detail).toContain('Awaiting confirmation')
     expect(item?.detail).toContain('will not run until you confirm it on this machine')
-  })
-
-  it('marks a confirmed high-privilege mode without the confirmation note', () => {
-    const [item] = buildTriggerPickItems([
-      summary({ elevatedMode: true, elevatedModeConfirmed: true }),
-    ])
-    expect(item?.label).toBe('⚠ Triage')
-    expect(item?.detail).toBeUndefined()
   })
 
   it('surfaces the last error and validation errors', () => {
@@ -175,18 +158,7 @@ describe('buildTriggerActionItems', () => {
     expect(actions({ paused: true })).not.toContain('pause')
   })
 
-  it('offers confirmation only while the risk is unconfirmed', () => {
-    expect(actions({ elevatedMode: true })).toContain('confirmElevatedMode')
-    expect(actions({ elevatedMode: true, elevatedModeConfirmed: true })).not.toContain(
-      'confirmElevatedMode',
-    )
-    expect(actions({ approveAction: true })).toContain('confirmAutoApprove')
-    expect(actions({ approveAction: true, approveConfirmed: true })).not.toContain(
-      'confirmAutoApprove',
-    )
-  })
-
-  it('offers the workspace activation confirmation only while unconfirmed', () => {
+  it('offers the single workspace activation confirmation only while unconfirmed', () => {
     expect(actions({ activationConfirmed: false })).toContain('confirmActivation')
     expect(actions({})).not.toContain('confirmActivation')
   })
@@ -205,23 +177,19 @@ describe('triggersForAction', () => {
     summary({ id: 'a' }),
     summary({ id: 'b', paused: true }),
     summary({ id: 'c', elevatedMode: true }),
-    summary({ id: 'd', approveAction: true }),
-    summary({ id: 'e', elevatedMode: true, elevatedModeConfirmed: true }),
     summary({ id: 'f', activationConfirmed: false }),
     summary({ id: 'g', status: 'invalid', activationConfirmed: false }),
   ]
 
   it('filters pause candidates to unpaused triggers', () => {
-    expect(triggersForAction('pause', all).map((s) => s.id)).toEqual(['a', 'c', 'd', 'e', 'f', 'g'])
+    expect(triggersForAction('pause', all).map((s) => s.id)).toEqual(['a', 'c', 'f', 'g'])
   })
 
   it('filters resume candidates to paused triggers', () => {
     expect(triggersForAction('resume', all).map((s) => s.id)).toEqual(['b'])
   })
 
-  it('filters confirmation candidates to unconfirmed risky triggers', () => {
-    expect(triggersForAction('confirmElevatedMode', all).map((s) => s.id)).toEqual(['c'])
-    expect(triggersForAction('confirmAutoApprove', all).map((s) => s.id)).toEqual(['d'])
+  it('filters confirmation candidates to unconfirmed valid triggers', () => {
     expect(triggersForAction('confirmActivation', all).map((s) => s.id)).toEqual(['f'])
   })
 })

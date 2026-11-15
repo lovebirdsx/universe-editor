@@ -112,6 +112,7 @@ describe('TriggerHistoryStore', () => {
       '',
       JSON.stringify({ ...valid, runId: 'bad-outcome', outcome: 'exploded' }),
       JSON.stringify({ ...valid, runId: 'bad-verdict', verdict: 'maybe' }),
+      JSON.stringify({ ...valid, runId: 'retired-verdict', verdict: 'auto-approve' }),
       JSON.stringify({ ...valid, runId: 'no-workspace', workspace: undefined }),
       JSON.stringify({ ...valid, runId: 'bad-start', startedAt: 'yesterday' }),
       JSON.stringify({ ...valid, runId: 'bad-cost', costUsd: 'lots' }),

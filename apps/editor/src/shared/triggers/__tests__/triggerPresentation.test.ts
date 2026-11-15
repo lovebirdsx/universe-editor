@@ -22,9 +22,10 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
     key: `X:/workspace\u0000${id}`,
     id,
     name: 'Triage',
+    fingerprint: 'fp-triage',
     workspace: 'X:/workspace',
     workspaceName: 'workspace',
-    sourceType: 'swarm-review',
+    sourceType: 'event',
     status: 'idle',
     enabled: true,
     paused: false,
@@ -32,9 +33,6 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
     autoPaused: false,
     activationConfirmed: true,
     elevatedMode: false,
-    elevatedModeConfirmed: false,
-    approveAction: false,
-    approveConfirmed: false,
     running: 0,
     queued: 0,
     consecutiveFailures: 0,
@@ -51,19 +49,13 @@ describe('triggerNeedsConfirmation', () => {
     expect(triggerNeedsConfirmation(summary({ activationConfirmed: false }))).toBe(true)
   })
 
-  it('is true while an elevated mode or automatic approve is unconfirmed', () => {
+  it('is covered by the activation confirmation even for a bypass-class mode', () => {
     expect(
-      triggerNeedsConfirmation(summary({ elevatedMode: true, elevatedModeConfirmed: false })),
-    ).toBe(true)
-    expect(
-      triggerNeedsConfirmation(summary({ approveAction: true, approveConfirmed: false })),
-    ).toBe(true)
-    expect(
-      triggerNeedsConfirmation(summary({ elevatedMode: true, elevatedModeConfirmed: true })),
+      triggerNeedsConfirmation(summary({ activationConfirmed: true, elevatedMode: true })),
     ).toBe(false)
-    expect(triggerNeedsConfirmation(summary({ approveAction: true, approveConfirmed: true }))).toBe(
-      false,
-    )
+    expect(
+      triggerNeedsConfirmation(summary({ activationConfirmed: false, elevatedMode: true })),
+    ).toBe(true)
   })
 
   it('never flags an invalid entry, which cannot be confirmed from the list', () => {
@@ -90,7 +82,9 @@ describe('groupTriggersByWorkspace', () => {
 describe('summarizeTriggerSource', () => {
   it('describes every source shape', () => {
     expect(summarizeTriggerSource({ type: 'manual' })).toBe('Manual')
-    expect(summarizeTriggerSource({ type: 'swarm-review' })).toBe('Swarm review')
+    expect(summarizeTriggerSource({ type: 'event', event: 'swarm.reviewNeedsAction' })).toBe(
+      'Swarm review that needs action',
+    )
     expect(summarizeTriggerSource({ type: 'schedule', cron: '0 9 * * *', onMissed: 'skip' })).toBe(
       'Cron 0 9 * * *',
     )
@@ -124,6 +118,9 @@ describe('triggerSourceFacts', () => {
 
   it('lists poll details and nothing for manual sources', () => {
     expect(triggerSourceFacts({ type: 'manual' })).toEqual([])
+    expect(triggerSourceFacts({ type: 'event', event: 'swarm.reviewNeedsAction' })).toEqual([
+      { label: 'Event', value: 'swarm.reviewNeedsAction' },
+    ])
     expect(
       triggerSourceFacts({
         type: 'poll',

@@ -3,9 +3,9 @@
  *  TriggerConfigPanel — sectioned form over one workspace trigger definition.
  *  The draft is validated with the same parser the scheduler uses; saving writes
  *  only changed fields back into triggers.json (IFileService + mtime guard), so
- *  comments on untouched lines survive. Replacing `source` / `allowedActions`
- *  rewrites those objects wholesale and drops comments inside them, hence the
- *  extra confirmation. A JSON editor with unsaved edits blocks the write.
+ *  comments on untouched lines survive. Replacing `source` rewrites that object
+ *  wholesale and drops comments inside it, hence the extra confirmation. A JSON
+ *  editor with unsaved edits blocks the write.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -22,15 +22,17 @@ import {
   Severity,
   localize,
 } from '@universe-editor/platform'
-import { Badge, Button, Checkbox, Input, Select, Textarea } from '@universe-editor/workbench-ui'
+import { Badge, Button, Input, Select, Textarea } from '@universe-editor/workbench-ui'
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
+import { triggerEventLabel } from '../../../shared/triggers/triggerPresentation.js'
 import {
   parseTriggerDocument,
   type TriggerConfigSection,
 } from '../../../shared/triggers/configDocument.js'
 import {
-  TRIGGER_ACTION_TYPES,
+  TRIGGER_EVENT_NAMES,
+  type TriggerEventName,
   type TriggerOnMissed,
   type TriggerOverflow,
   type TriggerSummary,
@@ -50,7 +52,7 @@ import {
   validateTriggerDraft,
   type TriggerConfigDraft as Draft,
 } from './triggerConfigDraft.js'
-import { ACTION_LABELS, Field, ToggleField, errorText } from './triggerFormParts.js'
+import { Field, ToggleField, errorText } from './triggerFormParts.js'
 import styles from './TriggerManager.module.css'
 
 export interface TriggerConfigPanelProps {
@@ -79,7 +81,7 @@ const SOURCE_TYPES: readonly { value: SourceType; label: string }[] = [
   { value: 'manual', label: localize('triggers.source.manual', 'Manual') },
   { value: 'schedule', label: localize('triggers.source.schedule', 'Schedule') },
   { value: 'poll', label: localize('triggers.source.poll', 'Command poll') },
-  { value: 'swarm-review', label: localize('triggers.source.swarmReview', 'Swarm review') },
+  { value: 'event', label: localize('triggers.source.event', 'Event') },
 ]
 
 /**
@@ -95,7 +97,6 @@ function configSignature(summary: TriggerSummary): string {
     summary.source ?? null,
     summary.activationConfirmed,
     summary.elevatedMode,
-    summary.approveAction,
     summary.errors ?? null,
     summary.status === 'invalid',
     summary.offline === true,
@@ -273,12 +274,10 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
 
   const changedSections = useMemo(() => {
     if (rawDraft === undefined || baseline === undefined) {
-      return { source: false, allowedActions: false }
+      return { source: false }
     }
     return {
       source: signature(rawDraft['source']) !== signature(baseline['source']),
-      allowedActions:
-        signature(rawDraft['allowedActions']) !== signature(baseline['allowedActions']),
     }
   }, [rawDraft, baseline])
 
@@ -334,11 +333,11 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
         'Save changes to trigger "{name}"? Saving requires confirming the trigger again before it can run.',
         { name: summary.name },
       ),
-      ...(changedSections.source || changedSections.allowedActions
+      ...(changedSections.source
         ? {
             detail: localize(
               'trigger.manager.config.confirmSaveComments',
-              'Because the trigger source or allowed actions change, those values are rewritten as a whole and any comments inside them in triggers.json will be lost.',
+              'Because the trigger source changes, that value is rewritten as a whole and any comments inside it in triggers.json will be lost.',
             ),
           }
         : {}),
@@ -419,7 +418,6 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
     }
   }, [
     applySnapshot,
-    changedSections.allowedActions,
     changedSections.source,
     dialogs,
     files,
@@ -753,7 +751,21 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
             </Field>
           </>
         )}
-        {(draft.sourceType === 'manual' || draft.sourceType === 'swarm-review') && (
+        {draft.sourceType === 'event' && (
+          <Field label={localize('trigger.manager.config.event.name', 'Event')}>
+            <Select<TriggerEventName>
+              value={draft.eventName}
+              onChange={(eventName) => update({ eventName })}
+              options={TRIGGER_EVENT_NAMES.map((eventName) => ({
+                value: eventName,
+                label: triggerEventLabel(eventName),
+              }))}
+              aria-label={localize('trigger.manager.config.event.name', 'Event')}
+              data-testid="trigger-manager-config-event"
+            />
+          </Field>
+        )}
+        {(draft.sourceType === 'manual' || draft.sourceType === 'event') && (
           <p className={styles['note']}>
             {draft.sourceType === 'manual'
               ? localize(
@@ -888,36 +900,6 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
             />
           </Field>
         </div>
-      </Section>
-
-      <Section
-        title={localize('trigger.manager.config.allowedActions', 'Allowed actions')}
-        testId="allowed-actions"
-        onEditJson={() => openJson('allowedActions')}
-      >
-        <div className={styles['actionList']} data-testid="trigger-manager-config-actions">
-          {TRIGGER_ACTION_TYPES.map((action) => (
-            <Checkbox
-              key={action}
-              checked={draft.allowedActions.includes(action)}
-              onChange={(checked) =>
-                update({
-                  allowedActions: checked
-                    ? [...draft.allowedActions, action]
-                    : draft.allowedActions.filter((entry) => entry !== action),
-                })
-              }
-              label={ACTION_LABELS[action]}
-              data-testid={`trigger-manager-config-action-${action}`}
-            />
-          ))}
-        </div>
-        <p className={styles['note']}>
-          {localize(
-            'trigger.manager.config.allowedActionsNote',
-            'Actions not listed here are never performed by an automated run.',
-          )}
-        </p>
       </Section>
     </div>
   )

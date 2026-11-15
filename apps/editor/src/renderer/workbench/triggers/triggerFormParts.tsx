@@ -6,16 +6,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ReactNode } from 'react'
-import { localize } from '@universe-editor/platform'
 import { Toggle } from '@universe-editor/workbench-ui'
-import type { TriggerActionType } from '../../../shared/triggers/types.js'
 import styles from './TriggerManager.module.css'
-
-export const ACTION_LABELS: Readonly<Record<TriggerActionType, string>> = {
-  'swarm.vote': localize('trigger.manager.config.action.vote', 'Vote on Swarm reviews'),
-  'swarm.comment': localize('trigger.manager.config.action.comment', 'Comment on Swarm reviews'),
-  'swarm.approve': localize('trigger.manager.config.action.approve', 'Approve Swarm reviews'),
-}
 
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)

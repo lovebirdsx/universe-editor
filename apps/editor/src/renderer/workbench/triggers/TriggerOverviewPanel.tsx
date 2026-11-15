@@ -30,13 +30,10 @@ export interface TriggerOverviewPanelProps {
 export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelProps) {
   const invalid = summary.status === 'invalid'
   const needsActivation = !summary.activationConfirmed && !invalid
-  const needsElevated = summary.elevatedMode && !summary.elevatedModeConfirmed
-  const needsApprove = summary.approveAction && !summary.approveConfirmed
   const pausedAll = summary.pausedAll
   // Pausing only stops automatic scheduling; a manual run stays available unless
   // all triggers are paused.
-  const canRun =
-    !invalid && !needsActivation && !needsElevated && !pausedAll && summary.offline !== true
+  const canRun = !invalid && !needsActivation && !pausedAll && summary.offline !== true
   const badge = triggerStatusBadge(summary)
   const facts = triggerSourceFacts(summary.source)
   const outcomeLabel = triggerRunOutcomeLabel(summary.lastRunOutcome)
@@ -65,22 +62,6 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
           {localize(
             'trigger.manager.overview.gate.activation',
             'This trigger comes from the workspace configuration. Confirm it on this machine before it can run — editing any field invalidates the confirmation.',
-          )}
-        </div>
-      )}
-      {needsElevated && (
-        <div className={styles['notice']} data-testid="trigger-manager-gate-elevated">
-          {localize(
-            'trigger.manager.overview.gate.elevated',
-            'High-privilege mode is configured but not confirmed: the agent would act without asking you for approval.',
-          )}
-        </div>
-      )}
-      {needsApprove && (
-        <div className={styles['notice']} data-testid="trigger-manager-gate-approve">
-          {localize(
-            'trigger.manager.overview.gate.approve',
-            'Automatic Swarm approve is configured but not confirmed.',
           )}
         </div>
       )}
@@ -142,24 +123,6 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
               {localize('trigger.manager.action.confirmActivation', 'Confirm trigger')}
             </Button>
           )}
-          {needsElevated && (
-            <Button
-              size="sm"
-              onClick={() => void actions.confirmElevatedMode(summary)}
-              data-testid="trigger-manager-confirm-elevated"
-            >
-              {localize('trigger.manager.action.confirmElevated', 'Confirm high-privilege mode')}
-            </Button>
-          )}
-          {needsApprove && (
-            <Button
-              size="sm"
-              onClick={() => void actions.confirmAutoApprove(summary)}
-              data-testid="trigger-manager-confirm-approve"
-            >
-              {localize('trigger.manager.action.confirmApprove', 'Confirm automatic approve')}
-            </Button>
-          )}
           <Button
             size="sm"
             onClick={() => void actions.showLog()}
@@ -210,21 +173,12 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
           <Fact
             label={localize('trigger.manager.overview.elevated', 'High-privilege mode')}
             value={
-              !summary.elevatedMode
-                ? localize('trigger.manager.overview.notConfigured', 'Not configured')
-                : summary.elevatedModeConfirmed
-                  ? localize('trigger.manager.overview.confirmed', 'Confirmed')
-                  : localize('trigger.manager.overview.notConfirmed', 'Not confirmed')
-            }
-          />
-          <Fact
-            label={localize('trigger.manager.overview.approve', 'Automatic approve')}
-            value={
-              !summary.approveAction
-                ? localize('trigger.manager.overview.notConfigured', 'Not configured')
-                : summary.approveConfirmed
-                  ? localize('trigger.manager.overview.confirmed', 'Confirmed')
-                  : localize('trigger.manager.overview.notConfirmed', 'Not confirmed')
+              summary.elevatedMode
+                ? localize(
+                    'trigger.manager.overview.elevatedConfigured',
+                    '⚠ Configured — the agent runs without per-step approval',
+                  )
+                : localize('trigger.manager.overview.notConfigured', 'Not configured')
             }
           />
           <Fact
@@ -328,7 +282,7 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
         <p className={styles['note']} data-testid="trigger-manager-needs-confirmation">
           {localize(
             'trigger.manager.overview.needsConfirmation',
-            'This trigger will not run until every confirmation above is granted.',
+            'This trigger will not run until the workspace confirmation above is granted.',
           )}
         </p>
       )}

@@ -38,7 +38,6 @@ import {
 import {
   SwarmCommands,
   type SwarmDashboardResult,
-  type SwarmReviewDetailDto,
   type SwarmReviewDto,
   type SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
@@ -188,7 +187,8 @@ export class SwarmReviewNotificationContribution
           ? Promise.resolve()
           : this._triggerMain.reportSwarmNeedsAction(reviews, folder.toString())
       },
-      getReviewVersion: (reviewId) => this._loadReviewVersion(reviewId),
+      swarmUrl: () => this._swarmUrl(),
+      swarmApiVersion: () => this._swarmApiVersion(),
       logger: this._logger,
     })
     this._register(
@@ -360,9 +360,22 @@ export class SwarmReviewNotificationContribution
   /** Same verdict as the host's readSwarmConfig: `perforce.swarm.enabled`
    *  (default true) and a non-empty `perforce.swarm.url` (default empty ⇒ unconfigured). */
   private _swarmConfigured(): boolean {
-    const enabled = this._config.get<boolean>('perforce.swarm.enabled') ?? true
+    return (
+      this._swarmUrl() !== undefined &&
+      (this._config.get<boolean>('perforce.swarm.enabled') ?? true)
+    )
+  }
+
+  /** Configured Swarm base URL, or undefined when empty (then the agent uses its default). */
+  private _swarmUrl(): string | undefined {
     const url = (this._config.get<string>('perforce.swarm.url') ?? '').trim()
-    return enabled && url.length > 0
+    return url.length > 0 ? url : undefined
+  }
+
+  /** Configured Swarm API version, or undefined when empty (the agent then uses its default). */
+  private _swarmApiVersion(): string | undefined {
+    const version = (this._config.get<string>('perforce.swarm.apiVersion') ?? '').trim()
+    return version.length > 0 ? version : undefined
   }
 
   /** Renderer-side mirror of the host's resolveSwarmPollIntervalMs, minus the
@@ -428,15 +441,16 @@ export class SwarmReviewNotificationContribution
     this._maybeHintBackgroundPoll()
   }
 
-  /** A swarm-review trigger is useless while the background poll is off — the
-   *  reviews list is only refreshed on open/manual refresh then, so nobody
-   *  reports "needs action" reviews. Point that out once per window, after the
-   *  User layer has hydrated (before that the switch reads its default). */
+  /** A trigger listening for `swarm.reviewNeedsAction` is useless while the
+   *  background poll is off — the reviews list is only refreshed on open/manual
+   *  refresh then, so nobody reports "needs action" reviews. Point that out once
+   *  per window, after the User layer has hydrated (before that the switch reads
+   *  its default). */
   private _maybeHintBackgroundPoll(): void {
     if (!this._configHydrated || this._backgroundPollHintShown || this._pollEnabled()) return
     if (!hasEnabledSwarmTrigger(this._triggers)) return
     this._backgroundPollHintShown = true
-    this._logger.info('swarm-review trigger enabled while background polling is off → hint shown')
+    this._logger.info('swarm event trigger enabled while background polling is off → hint shown')
     const handle = this._notification.notify({
       severity: Severity.Info,
       message: localize(
@@ -454,28 +468,6 @@ export class SwarmReviewNotificationContribution
         },
       ],
     })
-  }
-
-  /** Latest version of a review, used by the `swarm.approve` TOCTOU guard. Any
-   *  failure leaves the version absent, which makes approve refuse to run. */
-  private async _loadReviewVersion(
-    reviewId: string,
-  ): Promise<{ readonly version?: number } | undefined> {
-    const detail = await withDeadline(
-      this._commands.executeCommand<SwarmReviewDetailDto | undefined>(
-        SwarmCommands.getReview,
-        { reviewId },
-        /* silent */ true,
-      ),
-      TRANSITIONS_DEADLINE_MS,
-      `getReview RPC (review #${reviewId})`,
-    ).catch((err: unknown) => {
-      if (err instanceof DeadlineError) this._logger.warn(err.message)
-      return undefined
-    })
-    if (detail === undefined) return undefined
-    const last = detail.versions[detail.versions.length - 1]
-    return last !== undefined ? { version: last.version } : {}
   }
 
   /** Re-poll the dashboard and notify on newly-actionable reviews. Public so a test

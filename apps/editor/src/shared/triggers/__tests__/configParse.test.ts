@@ -112,7 +112,6 @@ describe('parseTriggersConfig (defaults)', () => {
       name: 't1',
       enabled: false,
       showSession: false,
-      allowedActions: [],
       concurrency: 1,
       overflow: 'queue',
     })
@@ -174,14 +173,9 @@ describe('parseTriggersConfig (trigger fields)', () => {
     })
   })
 
-  it('validates allowedActions', () => {
-    expect(invalidErrors(rawTrigger({ allowedActions: 'swarm.vote' })).length).toBeGreaterThan(0)
-    expect(
-      invalidErrors(rawTrigger({ allowedActions: ['swarm.vote', 'swarm.delete'] })).length,
-    ).toBeGreaterThan(0)
-    expect(
-      firstTrigger(rawTrigger({ allowedActions: ['swarm.vote', 'swarm.vote'] })).allowedActions,
-    ).toEqual(['swarm.vote'])
+  it('ignores the retired allowedActions field as an unknown field', () => {
+    const trigger = firstTrigger(rawTrigger({ allowedActions: ['swarm.vote'] }))
+    expect(trigger).not.toHaveProperty('allowedActions')
   })
 
   it('isolates invalid triggers and labels non-object entries', () => {
@@ -238,7 +232,33 @@ describe('parseTriggersConfig (schedule source)', () => {
 
   it('rejects unknown source types', () => {
     expect(invalidErrors(rawTrigger({ source: { type: 'webhook' } })).length).toBeGreaterThan(0)
+    expect(invalidErrors(rawTrigger({ source: { type: 'swarm-review' } })).length).toBeGreaterThan(
+      0,
+    )
     expect(invalidErrors(rawTrigger({ source: 'manual' })).length).toBeGreaterThan(0)
+  })
+})
+
+describe('parseTriggersConfig (event source)', () => {
+  it('accepts a known editor event', () => {
+    expect(
+      firstTrigger(rawTrigger({ source: { type: 'event', event: 'swarm.reviewNeedsAction' } }))
+        .source,
+    ).toEqual({ type: 'event', event: 'swarm.reviewNeedsAction' })
+  })
+
+  it('requires a known event name and names the field in the error', () => {
+    const missing = invalidErrors(rawTrigger({ source: { type: 'event' } })).join(' ')
+    expect(missing).toContain('"source.event"')
+    expect(missing).toContain('swarm.reviewNeedsAction')
+    const unknown = invalidErrors(
+      rawTrigger({ source: { type: 'event', event: 'swarm.reviewDeleted' } }),
+    ).join(' ')
+    expect(unknown).toContain('"source.event"')
+    expect(unknown).toContain('swarm.reviewNeedsAction')
+    expect(invalidErrors(rawTrigger({ source: { type: 'event', event: 42 } })).join(' ')).toContain(
+      '"source.event"',
+    )
   })
 })
 
@@ -380,13 +400,13 @@ describe('TRIGGERS_CONFIG_EXAMPLE', () => {
     const config = parseOk(parsed)
     expect(config.invalid).toEqual([])
     expect(config.triggers.map((trigger) => trigger.id)).toEqual([
-      'swarm-review',
+      'swarm-triage',
       'weekly-digest',
       'reqs-watch',
     ])
     expect(config.triggers.every((trigger) => !trigger.enabled)).toBe(true)
     expect(config.triggers.map((trigger) => trigger.source.type)).toEqual([
-      'swarm-review',
+      'event',
       'schedule',
       'poll',
     ])

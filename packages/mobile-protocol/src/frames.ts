@@ -13,7 +13,7 @@ export const MOBILE_SESSION_BUCKETS = [
 export type MobileSessionBucket = (typeof MOBILE_SESSION_BUCKETS)[number]
 
 /** Verdicts an automated trigger run can produce (mirrors the desktop contract). */
-export const MOBILE_TRIGGER_VERDICTS = ['auto-approve', 'escalate', 'reject', 'info'] as const
+export const MOBILE_TRIGGER_VERDICTS = ['info', 'escalate'] as const
 export type MobileTriggerVerdict = (typeof MOBILE_TRIGGER_VERDICTS)[number]
 
 /** Terminal outcomes of an automated trigger run. */

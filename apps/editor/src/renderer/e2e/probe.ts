@@ -1348,8 +1348,13 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.triggerMainService.setPaused(triggerKey, paused),
     listTriggerRuns: (triggerKey): Promise<readonly E2ETriggerRunHistoryEntry[]> =>
       services.triggerMainService.listRuns({ triggerKey, limit: 100 }),
-    confirmTriggerActivation: (triggerKey) =>
-      services.triggerMainService.confirmActivation(triggerKey),
+    confirmTriggerActivation: async (triggerKey) => {
+      const summary = (await services.triggerMainService.listTriggers()).find(
+        (entry) => entry.key === triggerKey,
+      )
+      if (summary === undefined) throw new Error(`[E2E] no trigger ${triggerKey}`)
+      await services.triggerMainService.confirmActivation(triggerKey, summary.fingerprint)
+    },
     getTriggersRunsDir: () => services.triggerMainService.getRunsDir(),
     readTriggerRunReport: (runId, authority): Promise<E2ETriggerRunReport> =>
       services.triggerMainService.readRunReport(runId, authority),

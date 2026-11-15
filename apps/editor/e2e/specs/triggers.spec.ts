@@ -2,7 +2,8 @@
  *  Agent triggers end-to-end: workspace-scoped definitions, the per-machine activation
  *  gate, the main-process scheduler accepting a manual event, the owning window
  *  creating an unattended (inactive) session, the rendered prompt carrying its
- *  untrusted-data fence into durable history, and the elevated-mode confirmation.
+ *  untrusted-data fence into durable history, and the single activation gate that
+ *  also covers bypass-class modes.
  *  The config lives in `<workspace>/.universe-editor/triggers.json`; the spec writes
  *  it before running "Open Configuration", which registers the workspace.
  *--------------------------------------------------------------------------------------------*/
@@ -88,7 +89,6 @@ function manualTrigger(id: string = MANUAL_ID): Record<string, unknown> {
     source: { type: 'manual' },
     // An unknown agent has no conservative default, so the mode must be explicit.
     session: { agent: 'echo', mode: 'plan', prompt: 'Handle this E2E trigger event' },
-    allowedActions: [],
     concurrency: 1,
     overflow: 'queue',
   }
@@ -192,7 +192,7 @@ test.describe('agent triggers', () => {
     const prompt = row!.firstPrompt!
     expect(prompt).toContain('## 任务\nHandle this E2E trigger event')
     expect(prompt).toContain('## 输出要求（始终生效，优先于任务描述）')
-    expect(prompt).toContain('verdict（auto-approve | escalate | reject | info）')
+    expect(prompt).toContain('verdict（info | escalate）')
     expect(prompt.match(/运行目录：/g)).toHaveLength(1)
     expect(prompt).toContain('## 事件数据\n本次无外部事件数据。')
     expect(prompt).not.toContain('<event-data')
@@ -236,7 +236,7 @@ test.describe('agent triggers', () => {
     )
   })
 
-  test('an elevated mode is refused until the user confirms it @p0', async ({
+  test('an elevated-mode trigger needs the single activation confirmation before it runs @p0', async ({
     page,
     workbench,
     launchWorkspace,
@@ -257,25 +257,32 @@ test.describe('agent triggers', () => {
     ])
     await waitForTriggerStatus(page, ELEVATED_ID, 'paused')
 
-    // Confirming the workspace trigger does not pre-approve its bypass-class mode.
     const key = await triggerKey(page, ELEVATED_ID)
+    const before = await findTrigger(page, ELEVATED_ID)
+    expect(before?.elevatedMode).toBe(true)
+
+    // Same single gate as any other trigger: unconfirmed means no run at all.
+    const rejection = await runNowRejection(page, key)
+    expect(rejection).toBeDefined()
+    expect(rejection).toMatch(/confirm this trigger/i)
+    expect(await page.evaluate(() => window.__E2E__!.getAcpSessionCount())).toBe(0)
+    expect(await page.evaluate(() => window.__E2E__!.getAcpAutomationRows())).toHaveLength(0)
+
+    // The activation confirmation also covers the bypass-class mode.
     await page.evaluate((triggerKey) => window.__E2E__!.confirmTriggerActivation(triggerKey), key)
     await waitForActivationConfirmed(page, ELEVATED_ID)
-    // New triggers start paused; resume so the status reflects the elevated gate.
     await page.evaluate((triggerKey) => window.__E2E__!.setTriggerPaused(triggerKey, false), key)
 
     const summary = await findTrigger(page, ELEVATED_ID)
     expect(summary?.elevatedMode).toBe(true)
-    expect(summary?.elevatedModeConfirmed).toBe(false)
-    expect(summary?.status).toBe('needs-confirmation')
+    expect(summary?.status).not.toBe('needs-confirmation')
 
-    const error = await runNowRejection(page, key)
-    expect(error).toBeDefined()
-    expect(error).toMatch(/elevated mode/i)
-
-    // Rejection happens in main before the run host is asked to create a session.
-    expect(await page.evaluate(() => window.__E2E__!.getAcpSessionCount())).toBe(0)
-    expect(await page.evaluate(() => window.__E2E__!.getAcpAutomationRows())).toHaveLength(0)
+    await page.evaluate((triggerKey) => window.__E2E__!.runTriggerNow(triggerKey), key)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpAutomationRows().length), {
+        timeout: 30_000,
+      })
+      .toBe(1)
   })
 
   test('a paused trigger still runs on demand and stays paused @p0', async ({

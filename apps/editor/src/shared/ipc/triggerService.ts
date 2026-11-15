@@ -35,14 +35,13 @@ export interface ITriggerMainService {
   setPaused(triggerKey: string, paused: boolean): Promise<void>
   setAllPaused(paused: boolean): Promise<void>
   /**
-   * Record the user's one-time confirmation of a workspace-defined trigger
-   * (bound to the config fingerprint; editing the definition invalidates it).
+   * Record the user's one-time confirmation of a workspace-defined trigger, the
+   * only local gate (it also covers a bypass-class mode). Bound to the config
+   * fingerprint; editing the definition invalidates it. `fingerprint` is the one
+   * shown in the confirmation dialog — main rejects the call when the definition
+   * changed in the meantime, so an unseen definition is never confirmed.
    */
-  confirmActivation(triggerKey: string): Promise<void>
-  /** Record the user's second confirmation for a bypass-class mode (bound to the config fingerprint). */
-  confirmElevatedMode(triggerKey: string): Promise<void>
-  /** Record the user's second confirmation for automatic `swarm.approve` (bound to the config fingerprint). */
-  confirmAutoApprove(triggerKey: string): Promise<void>
+  confirmActivation(triggerKey: string, fingerprint: string): Promise<void>
   /**
    * Create `<workspace>/.universe-editor/triggers.json` with an example when absent,
    * register the workspace for background scheduling and return the file URI string.
@@ -89,15 +88,10 @@ export interface SwarmNeedsActionReview {
   readonly author: string
   readonly description: string
   readonly state: string
-  /** Latest review version at detection time; approve requires it unchanged. */
-  readonly version?: number
-  /**
-   * Last-updated stamp (Unix ms) at detection time. Swarm does NOT bump the
-   * version when an unapproved review is re-shelved (it only moves on approve),
-   * so the version alone cannot detect the author pushing new changes; approve
-   * requires this stamp unchanged too.
-   */
-  readonly updated?: number
+  /** Configured Swarm base URL, handed to the agent so its `swarm.mjs` calls hit the same server. */
+  readonly swarmUrl?: string
+  /** Configured Swarm REST API version segment, so the agent's calls match the same endpoint set. */
+  readonly swarmApiVersion?: string
 }
 
 export interface ITriggerRunHost {
@@ -123,7 +117,7 @@ export function swarmReviewEvent(
     description: review.description,
     state: review.state,
   }
-  if (review.version !== undefined) payload['version'] = review.version
-  if (review.updated !== undefined) payload['updated'] = review.updated
+  if (review.swarmUrl !== undefined) payload['swarmUrl'] = review.swarmUrl
+  if (review.swarmApiVersion !== undefined) payload['swarmApiVersion'] = review.swarmApiVersion
   return { triggerId, key: `swarm:${review.reviewId}`, payload, firedAt: now }
 }

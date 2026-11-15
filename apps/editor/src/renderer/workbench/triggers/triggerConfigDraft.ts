@@ -10,13 +10,16 @@
 import { parseTriggersConfig } from '../../../shared/triggers/configParse.js'
 import {
   TRIGGER_DEFAULTS,
-  type TriggerActionType,
+  TRIGGER_EVENT_NAMES,
   type TriggerConfig,
+  type TriggerEventName,
   type TriggerOnMissed,
   type TriggerOverflow,
 } from '../../../shared/triggers/types.js'
 
 export type TriggerSourceType = TriggerConfig['source']['type']
+
+const DEFAULT_EVENT: TriggerEventName = TRIGGER_EVENT_NAMES[0] ?? 'swarm.reviewNeedsAction'
 
 export interface TriggerConfigDraft {
   readonly name: string
@@ -32,6 +35,7 @@ export interface TriggerConfigDraft {
   readonly command: string
   readonly pollTimeoutSec: string
   readonly keyField: string
+  readonly eventName: TriggerEventName
   readonly agent: string
   readonly mode: string
   readonly model: string
@@ -41,7 +45,6 @@ export interface TriggerConfigDraft {
   readonly maxCostUsd: string
   readonly timeoutMin: string
   readonly approvalTimeoutMin: string
-  readonly allowedActions: readonly TriggerActionType[]
 }
 
 function numberText(value: number | null | undefined): string {
@@ -71,6 +74,7 @@ export function draftFromConfig(config: TriggerConfig): TriggerConfigDraft {
     command: poll?.fetch.command ?? '',
     pollTimeoutSec: String(poll?.fetch.timeoutSec ?? TRIGGER_DEFAULTS.pollTimeoutSec),
     keyField: poll?.keyField ?? 'id',
+    eventName: source.type === 'event' ? source.event : DEFAULT_EVENT,
     agent: config.session.agent ?? '',
     mode: config.session.mode ?? '',
     model: config.session.model ?? '',
@@ -80,7 +84,6 @@ export function draftFromConfig(config: TriggerConfig): TriggerConfigDraft {
     maxCostUsd: numberText(config.session.budget.maxCostUsd),
     timeoutMin: String(config.session.budget.timeoutMin),
     approvalTimeoutMin: String(config.session.budget.approvalTimeoutMin),
-    allowedActions: config.allowedActions,
   }
 }
 
@@ -101,6 +104,7 @@ export function emptyDraft(): TriggerConfigDraft {
     command: '',
     pollTimeoutSec: String(TRIGGER_DEFAULTS.pollTimeoutSec),
     keyField: 'id',
+    eventName: DEFAULT_EVENT,
     agent: '',
     mode: '',
     model: '',
@@ -110,7 +114,6 @@ export function emptyDraft(): TriggerConfigDraft {
     maxCostUsd: numberText(TRIGGER_DEFAULTS.budget.maxCostUsd),
     timeoutMin: String(TRIGGER_DEFAULTS.budget.timeoutMin),
     approvalTimeoutMin: String(TRIGGER_DEFAULTS.budget.approvalTimeoutMin),
-    allowedActions: [],
   }
 }
 
@@ -118,8 +121,8 @@ function buildSource(draft: TriggerConfigDraft): unknown {
   switch (draft.sourceType) {
     case 'manual':
       return { type: 'manual' }
-    case 'swarm-review':
-      return { type: 'swarm-review' }
+    case 'event':
+      return { type: 'event', event: draft.eventName }
     case 'schedule':
       return draft.cron.trim().length > 0
         ? { type: 'schedule', cron: draft.cron, onMissed: draft.onMissed }
@@ -163,7 +166,6 @@ export function buildRawTrigger(id: string, draft: TriggerConfigDraft): Record<s
     showSession: draft.showSession,
     source: buildSource(draft),
     session: buildSession(draft),
-    allowedActions: draft.allowedActions,
     concurrency: toDraftNumber(draft.concurrency),
     overflow: draft.overflow,
   }

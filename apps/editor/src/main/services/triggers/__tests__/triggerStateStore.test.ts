@@ -109,6 +109,31 @@ describe('TriggerStateStore normalization', () => {
     expect(state?.lastRunVerdict).toBeUndefined()
   })
 
+  it('drops retired verdict kinds and confirmation fields from an old state file', () => {
+    const normalized = normalizeTriggerStateFile({
+      version: 2,
+      pausedAll: false,
+      triggers: {
+        a: {
+          processed: {},
+          paused: false,
+          consecutiveFailures: 0,
+          baselineDone: false,
+          lastRunVerdict: 'auto-approve',
+          activationConfirmed: 'fp',
+          elevatedConfirmed: 'fp',
+          approveConfirmed: 'fp',
+        },
+      },
+      pending: [],
+    })
+    const state = normalized.triggers['a']
+    expect(state?.lastRunVerdict).toBeUndefined()
+    expect(state?.activationConfirmed).toBe('fp')
+    expect(state).not.toHaveProperty('elevatedConfirmed')
+    expect(state).not.toHaveProperty('approveConfirmed')
+  })
+
   it('treats non-boolean autoPaused and non-finite metrics as absent', () => {
     const normalized = normalizeTriggerStateFile({
       version: 2,

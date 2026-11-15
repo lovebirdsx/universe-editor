@@ -31,7 +31,7 @@ const RUN_OUTCOMES: readonly TriggerRunOutcome[] = [
   'failed',
 ]
 
-const VERDICT_KINDS: readonly TriggerVerdictKind[] = ['auto-approve', 'escalate', 'reject', 'info']
+const VERDICT_KINDS: readonly TriggerVerdictKind[] = ['info', 'escalate']
 
 export interface TriggerHistoryStoreOptions {
   readonly file: string

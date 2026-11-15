@@ -11,12 +11,8 @@ export function automationVerdictLabel(
   verdict: TriggerVerdictKind | undefined,
 ): string | undefined {
   switch (verdict) {
-    case 'auto-approve':
-      return localize('acp.sessions.verdict.autoApprove', 'Auto-approved')
     case 'escalate':
       return localize('acp.sessions.verdict.escalate', 'Needs review')
-    case 'reject':
-      return localize('acp.sessions.verdict.reject', 'Rejected')
     case 'info':
       return localize('acp.sessions.verdict.info', 'Info')
     default:

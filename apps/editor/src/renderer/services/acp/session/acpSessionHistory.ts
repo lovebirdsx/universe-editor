@@ -1688,12 +1688,7 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
   )
 }
 
-const TRIGGER_VERDICT_KINDS: ReadonlySet<string> = new Set([
-  'auto-approve',
-  'escalate',
-  'reject',
-  'info',
-])
+const TRIGGER_VERDICT_KINDS: ReadonlySet<string> = new Set(['escalate', 'info'])
 
 const TRIGGER_RUN_OUTCOMES: ReadonlySet<string> = new Set([
   'completed',

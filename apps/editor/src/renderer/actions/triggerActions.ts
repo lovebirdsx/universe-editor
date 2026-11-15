@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Command palette surface for agent triggers (design §8). Every command is a
+ *  Command palette surface for agent triggers. Every command is a
  *  thin renderer client of the main-process scheduler; the JSON config itself is
  *  edited as a file (schema registered by TriggersConfigurationContribution).
+ *  Docs: docs/development/triggers.md
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -30,7 +31,9 @@ import {
 import { ILogFilesService } from '../../shared/ipc/services.js'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
 import { workspaceDisplayPath } from '../../shared/triggers/configParse.js'
-import type { TriggerSummary } from '../../shared/triggers/types.js'
+import { summarizeTriggerSource } from '../../shared/triggers/triggerPresentation.js'
+import { CONSERVATIVE_MODE_BY_AGENT, type TriggerSummary } from '../../shared/triggers/types.js'
+import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
@@ -74,6 +77,7 @@ export interface TriggerActionServices {
   readonly workspace: IWorkspaceService
   readonly commands: ICommandService
   readonly logger: ILogger
+  readonly agents: IAcpAgentRegistry
 }
 
 /** Snapshot taken before the first await — the ServicesAccessor dies with it. */
@@ -91,6 +95,7 @@ function triggerActionServices(accessor: ServicesAccessor): TriggerActionService
     workspace: accessor.get(IWorkspaceService),
     commands: accessor.get(ICommandService),
     logger: accessor.get(ILoggerService).createLogger({ id: 'triggerActions', name: 'Triggers' }),
+    agents: accessor.get(IAcpAgentRegistry),
   }
 }
 
@@ -160,19 +165,6 @@ const PICKER_TEXT: Record<TriggerPickerAction, { pickId: string; placeholder: ()
         'Select a workspace trigger to confirm on this machine',
       ),
   },
-  confirmElevatedMode: {
-    pickId: 'workbench.triggers.confirmElevatedMode',
-    placeholder: () =>
-      localize(
-        'triggers.pick.confirmElevatedMode',
-        'Select a trigger to allow high-privilege mode',
-      ),
-  },
-  confirmAutoApprove: {
-    pickId: 'workbench.triggers.confirmAutoApprove',
-    placeholder: () =>
-      localize('triggers.pick.confirmAutoApprove', 'Select a trigger to allow automatic approve'),
-  },
 }
 
 const EMPTY_TEXT: Record<TriggerPickerAction, () => string> = {
@@ -183,13 +175,6 @@ const EMPTY_TEXT: Record<TriggerPickerAction, () => string> = {
       'triggers.empty.confirmActivation',
       'Every trigger from the registered workspaces is already confirmed.',
     ),
-  confirmElevatedMode: () =>
-    localize(
-      'triggers.empty.confirmElevatedMode',
-      'No trigger is configured with an unconfirmed high-privilege mode.',
-    ),
-  confirmAutoApprove: () =>
-    localize('triggers.empty.confirmAutoApprove', 'No trigger asks for automatic Swarm approve.'),
 }
 
 async function pickTriggerForAction(
@@ -273,12 +258,12 @@ export async function showTriggerLog(services: TriggerActionServices): Promise<v
 }
 
 /**
- * A paused trigger whose last outstanding gate this confirmation closes can be
+ * A paused trigger whose activation confirmation is being granted can be
  * resumed in the same step: new triggers start paused, so "confirm" alone would
  * leave a freshly confirmed trigger dormant.
  */
-function offersResume(summary: TriggerSummary, otherGateOpen: boolean): boolean {
-  return summary.paused && !summary.pausedAll && !otherGateOpen
+function offersResume(summary: TriggerSummary): boolean {
+  return summary.paused && !summary.pausedAll
 }
 
 function resumeAwareButtons(
@@ -310,15 +295,86 @@ function confirmationChoice(
   return { proceed: result.choiceIndex !== undefined, resume: result.choiceIndex === 0 }
 }
 
+/** Every setting the confirmation binds, so the user sees exactly what runs. */
+function activationDetail(summary: TriggerSummary, defaultAgentId: string): string {
+  const session = summary.session
+  const notSet = localize('triggers.confirmActivation.notSet', 'Not set')
+  const configuredAgent = session?.agent
+  const agent =
+    configuredAgent !== undefined && configuredAgent.length > 0 ? configuredAgent : defaultAgentId
+  const configuredMode = session?.mode
+  const conservativeMode = CONSERVATIVE_MODE_BY_AGENT[agent]
+  // Mirrors automatedSessionService: with no explicit mode, a known agent falls
+  // back to its conservative default; anything else must configure one to run.
+  const mode =
+    configuredMode !== undefined && configuredMode.length > 0
+      ? configuredMode
+      : conservativeMode !== undefined
+        ? localize('triggers.confirmActivation.defaultMode', 'Default ({mode})', {
+            mode: conservativeMode,
+          })
+        : localize(
+            'triggers.confirmActivation.modeRequired',
+            'Must be configured explicitly (this agent has no conservative default)',
+          )
+  const mcpServers = session?.mcpServers ?? []
+  const lines = [
+    localize('triggers.confirmActivation.definitionHeader', 'What will be confirmed:'),
+    localize('triggers.confirmActivation.definition.agent', 'Agent: {agent}', { agent }),
+    localize('triggers.confirmActivation.definition.mode', 'Mode: {mode}', { mode }),
+    localize('triggers.confirmActivation.definition.skill', 'Skill: {skill}', {
+      skill: session?.skill ?? notSet,
+    }),
+    ...(summary.source?.type === 'poll'
+      ? [
+          localize('triggers.confirmActivation.definition.pollCommand', 'Poll command: {command}', {
+            command: summary.source.fetch.command,
+          }),
+        ]
+      : []),
+    localize('triggers.confirmActivation.definition.source', 'Trigger source: {source}', {
+      source: summarizeTriggerSource(summary.source),
+    }),
+    localize('triggers.confirmActivation.definition.mcpServers', 'MCP servers: {servers}', {
+      servers: mcpServers.length > 0 ? mcpServers.join(', ') : notSet,
+    }),
+  ]
+  if (summary.elevatedMode) {
+    lines.push(
+      '',
+      localize(
+        'triggers.confirmActivation.warnElevated',
+        '⚠ High-privilege mode: the agent runs without asking you to approve each step.',
+      ),
+    )
+  }
+  if (summary.elevatedMode && summary.source?.type === 'event') {
+    lines.push(
+      localize(
+        'triggers.confirmActivation.warnElevatedEvent',
+        '⚠ This is an event trigger: its data comes from an external system (for example a Swarm review description) and may contain text crafted to steer the agent. Combined with approval-free execution, a malicious description could cause harmful actions.',
+      ),
+    )
+  }
+  lines.push(
+    '',
+    localize(
+      'triggers.confirmActivation.detail',
+      'The trigger comes from {path}. It is defined in the workspace configuration file, so it may have arrived with a cloned or pulled repository. Once confirmed it can run unattended with your credentials. The confirmation is stored on this machine and bound to the whole definition — changing any field, including enabling it or renaming it, requires confirming again. It does not cover the content of referenced skill or script files.',
+      { path: workspaceDisplayPath(summary.workspace) },
+    ),
+  )
+  return lines.join('\n')
+}
+
 export async function confirmTriggerActivation(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
-  const offerResume = offersResume(
-    summary,
-    (summary.elevatedMode && !summary.elevatedModeConfirmed) ||
-      (summary.approveAction && !summary.approveConfirmed),
-  )
+  const offerResume = offersResume(summary)
+  // Resolved synchronously before the dialog awaits: the dialog must show the
+  // agent that will actually run, not a hard-coded fallback.
+  const defaultAgentId = services.agents.defaultAgentId()
   const result = await services.dialogs.confirm({
     type: 'warning',
     message: localize(
@@ -326,14 +382,7 @@ export async function confirmTriggerActivation(
       'Enable trigger "{name}" from workspace "{workspace}"?',
       { name: summary.name, workspace: workspaceDisplayPath(summary.workspace) },
     ),
-    detail: resumeAwareDetail(
-      localize(
-        'triggers.confirmActivation.detail',
-        'The trigger comes from {path}. It is defined in the workspace configuration file, so it may have arrived with a cloned or pulled repository. Once confirmed it can run unattended with your credentials. The confirmation is stored on this machine and bound to the whole definition — changing any field, including enabling it or renaming it, requires confirming again.',
-        { path: workspaceDisplayPath(summary.workspace) },
-      ),
-      offerResume,
-    ),
+    detail: resumeAwareDetail(activationDetail(summary, defaultAgentId), offerResume),
     ...resumeAwareButtons(
       offerResume,
       localize('triggers.confirmActivation.primary', 'Enable Trigger'),
@@ -341,7 +390,7 @@ export async function confirmTriggerActivation(
   })
   const choice = confirmationChoice(result, offerResume)
   if (!choice.proceed) return
-  await services.triggers.confirmActivation(summary.key)
+  await services.triggers.confirmActivation(summary.key, summary.fingerprint)
   if (choice.resume) await services.triggers.setPaused(summary.key, false)
   services.notifications.notify({
     severity: Severity.Info,
@@ -354,98 +403,6 @@ export async function confirmTriggerActivation(
       : localize(
           'triggers.confirmActivation.done',
           'Trigger "{name}" was confirmed and may now run.',
-          { name: summary.name },
-        ),
-  })
-}
-
-export async function confirmElevatedMode(
-  services: TriggerActionServices,
-  summary: TriggerSummary,
-): Promise<void> {
-  const offerResume = offersResume(
-    summary,
-    !summary.activationConfirmed || (summary.approveAction && !summary.approveConfirmed),
-  )
-  const result = await services.dialogs.confirm({
-    type: 'warning',
-    message: localize(
-      'triggers.confirmElevated.message',
-      'Enable high-privilege mode for trigger "{name}"?',
-      { name: summary.name },
-    ),
-    detail: resumeAwareDetail(
-      localize(
-        'triggers.confirmElevated.detail',
-        'In a bypass-class mode the agent can execute arbitrary operations without asking you for approval. This trigger runs unattended, so nothing will stop a harmful action. The confirmation is bound to the current trigger configuration — editing the trigger requires confirming again.',
-      ),
-      offerResume,
-    ),
-    ...resumeAwareButtons(
-      offerResume,
-      localize('triggers.confirmElevated.primary', 'Enable High-Privilege Mode'),
-    ),
-  })
-  const choice = confirmationChoice(result, offerResume)
-  if (!choice.proceed) return
-  await services.triggers.confirmElevatedMode(summary.key)
-  if (choice.resume) await services.triggers.setPaused(summary.key, false)
-  services.notifications.notify({
-    severity: Severity.Info,
-    message: choice.resume
-      ? localize(
-          'triggers.confirmElevated.doneResumed',
-          'High-privilege mode was confirmed and the trigger was resumed.',
-        )
-      : localize(
-          'triggers.confirmElevated.done',
-          'High-privilege mode was confirmed for trigger "{name}".',
-          { name: summary.name },
-        ),
-  })
-}
-
-export async function confirmAutoApprove(
-  services: TriggerActionServices,
-  summary: TriggerSummary,
-): Promise<void> {
-  const offerResume = offersResume(
-    summary,
-    !summary.activationConfirmed || (summary.elevatedMode && !summary.elevatedModeConfirmed),
-  )
-  const result = await services.dialogs.confirm({
-    type: 'warning',
-    message: localize(
-      'triggers.confirmAutoApprove.message',
-      'Allow trigger "{name}" to approve Swarm reviews automatically?',
-      { name: summary.name },
-    ),
-    detail: resumeAwareDetail(
-      localize(
-        'triggers.confirmAutoApprove.detail',
-        'Automatic approve lets the agent approve external content without a human check. Anyone who can write that content may trick the trigger into approving a malicious change. Approvals never include a commit. The confirmation is bound to the current trigger configuration — editing the trigger requires confirming again.',
-      ),
-      offerResume,
-    ),
-    ...resumeAwareButtons(
-      offerResume,
-      localize('triggers.confirmAutoApprove.primary', 'Allow Automatic Approve'),
-    ),
-  })
-  const choice = confirmationChoice(result, offerResume)
-  if (!choice.proceed) return
-  await services.triggers.confirmAutoApprove(summary.key)
-  if (choice.resume) await services.triggers.setPaused(summary.key, false)
-  services.notifications.notify({
-    severity: Severity.Info,
-    message: choice.resume
-      ? localize(
-          'triggers.confirmAutoApprove.doneResumed',
-          'Automatic approve was confirmed and the trigger was resumed.',
-        )
-      : localize(
-          'triggers.confirmAutoApprove.done',
-          'Automatic approve was confirmed for trigger "{name}".',
           { name: summary.name },
         ),
   })
@@ -471,12 +428,6 @@ async function executeItemAction(
       return
     case 'confirmActivation':
       await confirmTriggerActivation(services, summary)
-      return
-    case 'confirmElevatedMode':
-      await confirmElevatedMode(services, summary)
-      return
-    case 'confirmAutoApprove':
-      await confirmAutoApprove(services, summary)
       return
     case 'openConfig':
       await openTriggerConfig(services)
@@ -844,53 +795,6 @@ export class ShowTriggersLogAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const services = triggerActionServices(accessor)
     await runTriggerAction(services, () => showTriggerLog(services))
-  }
-}
-
-export class ConfirmTriggerElevatedModeAction extends Action2 {
-  static readonly ID = 'workbench.action.triggers.confirmElevatedMode'
-
-  constructor() {
-    super({
-      id: ConfirmTriggerElevatedModeAction.ID,
-      title: localize2(
-        'action.triggers.confirmElevatedMode.title',
-        'Confirm High-Privilege Mode...',
-      ),
-      category: CATEGORY,
-      f1: true,
-    })
-  }
-
-  override async run(accessor: ServicesAccessor): Promise<void> {
-    const services = triggerActionServices(accessor)
-    await runTriggerAction(services, async () => {
-      const summary = await pickTriggerForAction(services, 'confirmElevatedMode')
-      if (summary === undefined) return
-      await confirmElevatedMode(services, summary)
-    })
-  }
-}
-
-export class ConfirmTriggerAutoApproveAction extends Action2 {
-  static readonly ID = 'workbench.action.triggers.confirmAutoApprove'
-
-  constructor() {
-    super({
-      id: ConfirmTriggerAutoApproveAction.ID,
-      title: localize2('action.triggers.confirmAutoApprove.title', 'Confirm Automatic Approve...'),
-      category: CATEGORY,
-      f1: true,
-    })
-  }
-
-  override async run(accessor: ServicesAccessor): Promise<void> {
-    const services = triggerActionServices(accessor)
-    await runTriggerAction(services, async () => {
-      const summary = await pickTriggerForAction(services, 'confirmAutoApprove')
-      if (summary === undefined) return
-      await confirmAutoApprove(services, summary)
-    })
   }
 }
 

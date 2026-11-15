@@ -173,10 +173,6 @@ function request(overrides: Partial<TriggerRunRequest> = {}): TriggerRunRequest 
     promptForSystemContract: 'do it (system contract)',
     runDir: '/userData/triggers/runs/run-1',
     budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 60 },
-    allowedActions: [],
-    approveConfirmed: false,
-    payload: {},
-    sourceType: 'manual',
     ...overrides,
   }
 }
@@ -359,13 +355,8 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     )
   })
 
-  it('feeds the raw result.json through the installed resolver', async () => {
+  it('parses result.json through the default resolver', async () => {
     const h = makeHarness({ resultRaw: '{"verdict":"escalate","summary":"look"}' })
-    h.service.setVerdictResolver((raw) => ({
-      verdict: 'escalate',
-      summary: String(raw),
-      actions: [],
-    }))
     await h.service.startAutomatedSession(request())
     await flush()
     expect(h.ends[0]).toMatchObject({ verdict: 'escalate', outcome: 'completed' })

@@ -94,7 +94,6 @@ function configText(id: string, overrides: ConfigOverrides = {}): string {
         showSession: false,
         source: (overrides.source ?? { type: 'manual' }) as TriggerConfig['source'],
         session: { prompt: 'Do it', budget: BUDGET, ...(overrides.session ?? {}) },
-        allowedActions: [],
         concurrency: overrides.concurrency ?? 1,
         overflow: overrides.overflow ?? 'queue',
       },
@@ -303,7 +302,7 @@ async function waitFor(
 async function confirmAll(service: TriggerMainService): Promise<void> {
   for (const entry of await service.listTriggers()) {
     if (entry.status === 'invalid') continue
-    await service.confirmActivation(entry.key)
+    await service.confirmActivation(entry.key, entry.fingerprint)
     // First-seen triggers start paused (the tests below are about scheduling).
     await service.setPaused(entry.key, false)
   }
@@ -556,7 +555,7 @@ describe('TriggerMainService remote poll', () => {
     await harness.clock.advance(30_000)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('poll:B')
-    expect(harness.requests[0]?.payload).toEqual({ id: 'B' })
+    expect(harness.requests[0]?.prompt).toContain('"id":"B"')
   })
 
   it('skips (without failing) when the remote host is offline', async () => {
@@ -771,7 +770,6 @@ describe('TriggerMainService remote run queue slots', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'remote-a',
       outcome: 'completed',
-      actions: [],
     })
     await settle()
 
@@ -920,7 +918,6 @@ describe('TriggerMainService remote schedule catch-up', () => {
       runId: harness.requests[0]!.origin.runId,
       triggerId: 'remote-sched',
       outcome: 'completed',
-      actions: [],
     })
     const lastScheduledAt = harness.lastScheduledAt(summary!.key)
     expect(lastScheduledAt).toBeDefined()

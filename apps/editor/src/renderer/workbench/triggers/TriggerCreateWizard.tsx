@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  TriggerCreateWizard — a four-step modal that appends a trigger definition to
- *  a workspace's triggers.json. Templates only prefill the source (and Swarm
- *  actions); everything remains editable. A missing file is created with an
- *  empty config, and validation runs through the same parser as the scheduler.
+ *  a workspace's triggers.json. Templates only prefill the source; everything
+ *  remains editable. A missing file is created with an empty config, and
+ *  validation runs through the same parser as the scheduler.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -19,7 +19,6 @@ import {
 } from '@universe-editor/platform'
 import {
   Button,
-  Checkbox,
   FocusScopeOverlay,
   Input,
   Select,
@@ -29,7 +28,6 @@ import {
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { parseTriggerDocument } from '../../../shared/triggers/configDocument.js'
 import { isValidTriggerId, workspaceDisplayPath } from '../../../shared/triggers/configParse.js'
-import { TRIGGER_ACTION_TYPES } from '../../../shared/triggers/types.js'
 import {
   createTrigger,
   isTriggerConfigEditorDirty,
@@ -38,7 +36,7 @@ import {
 } from '../../services/triggers/triggerConfigFileService.js'
 import { useService } from '../useService.js'
 import { emptyDraft, validateTriggerDraft, type TriggerConfigDraft } from './triggerConfigDraft.js'
-import { ACTION_LABELS, Field, errorText } from './triggerFormParts.js'
+import { Field, errorText } from './triggerFormParts.js'
 import styles from './TriggerManager.module.css'
 
 export interface TriggerCreateWizardProps {
@@ -90,7 +88,7 @@ const TEMPLATES: readonly Template[] = [
     label: localize('trigger.manager.wizard.template.swarm', 'Swarm review'),
     description: localize(
       'trigger.manager.wizard.template.swarmDesc',
-      'Runs once for every Swarm review that needs action.',
+      'Runs once for every Swarm review that needs action (an event source).',
     ),
   },
   {
@@ -129,7 +127,6 @@ function templatePatch(template: TemplateId): Partial<TriggerConfigDraft> {
         command: '',
         pollTimeoutSec: '60',
         keyField: 'id',
-        allowedActions: [],
       }
     case 'schedule-cron':
       return { sourceType: 'schedule', cron: '0 9 * * 1', everyMin: '', onMissed: 'skip' }
@@ -145,8 +142,8 @@ function templatePatch(template: TemplateId): Partial<TriggerConfigDraft> {
       }
     case 'swarm':
       return {
-        sourceType: 'swarm-review',
-        allowedActions: ['swarm.vote', 'swarm.comment'],
+        sourceType: 'event',
+        eventName: 'swarm.reviewNeedsAction',
       }
   }
 }
@@ -768,25 +765,6 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
                   />
                 </Field>
               </div>
-              <Field label={localize('trigger.manager.config.allowedActions', 'Allowed actions')}>
-                <div className={styles['actionList']}>
-                  {TRIGGER_ACTION_TYPES.map((action) => (
-                    <Checkbox
-                      key={action}
-                      checked={draft.allowedActions.includes(action)}
-                      onChange={(checked) =>
-                        update({
-                          allowedActions: checked
-                            ? [...draft.allowedActions, action]
-                            : draft.allowedActions.filter((entry) => entry !== action),
-                        })
-                      }
-                      label={ACTION_LABELS[action]}
-                      data-testid={`trigger-manager-wizard-action-${action}`}
-                    />
-                  ))}
-                </div>
-              </Field>
             </>
           )}
 

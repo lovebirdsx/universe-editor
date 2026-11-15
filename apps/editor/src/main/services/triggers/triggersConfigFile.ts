@@ -77,7 +77,6 @@ export function serializeTriggersConfig(config: TriggersConfig): unknown {
         ...trigger.session,
         budget: trigger.session.budget,
       },
-      allowedActions: [...trigger.allowedActions],
       concurrency: trigger.concurrency,
       overflow: trigger.overflow,
     })),

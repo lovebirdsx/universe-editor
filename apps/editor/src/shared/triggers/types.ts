@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Agent triggers: config shape, events, runs and verdicts shared by main and renderer.
- *  Design: docs/development/triggers-design.md
+ *  Docs: docs/development/triggers.md
  *--------------------------------------------------------------------------------------------*/
 
 export type TriggerOnMissed = 'skip' | 'catch-up-once'
@@ -25,9 +25,14 @@ export type TriggerSourceConfig =
       }
       readonly keyField: string
     }
-  | { readonly type: 'swarm-review' }
+  | { readonly type: 'event'; readonly event: TriggerEventName }
 
 export type TriggerSourceType = TriggerSourceConfig['type']
+
+/** Editor-pushed events (as opposed to `poll`, where the user's command fetches the data). */
+export const TRIGGER_EVENT_NAMES = ['swarm.reviewNeedsAction'] as const
+
+export type TriggerEventName = (typeof TRIGGER_EVENT_NAMES)[number]
 
 export interface TriggerBudget {
   /** `null` = no cost ceiling (explicit opt-out; an omitted field still gets the default). */
@@ -49,14 +54,6 @@ export interface TriggerSessionConfig {
   readonly budget: TriggerBudget
 }
 
-export type TriggerActionType = 'swarm.vote' | 'swarm.comment' | 'swarm.approve'
-
-export const TRIGGER_ACTION_TYPES: readonly TriggerActionType[] = [
-  'swarm.vote',
-  'swarm.comment',
-  'swarm.approve',
-]
-
 export type TriggerOverflow = 'queue' | 'drop'
 
 export interface TriggerConfig {
@@ -67,7 +64,6 @@ export interface TriggerConfig {
   readonly showSession: boolean
   readonly source: TriggerSourceConfig
   readonly session: TriggerSessionConfig
-  readonly allowedActions: readonly TriggerActionType[]
   readonly concurrency: number
   readonly overflow: TriggerOverflow
 }
@@ -129,20 +125,14 @@ export interface TriggerEvent {
   readonly firedAt: number
 }
 
-export type TriggerVerdictKind = 'auto-approve' | 'escalate' | 'reject' | 'info'
-
-export interface TriggerVerdictAction {
-  readonly type: string
-  readonly target: string
-  readonly detail?: string
-}
+/** `info` = done, no attention needed; `escalate` = the user should look at it. */
+export type TriggerVerdictKind = 'info' | 'escalate'
 
 /** Parsed `<runDir>/result.json`. */
 export interface TriggerVerdict {
   readonly verdict: TriggerVerdictKind
   readonly summary: string
   readonly reportPath?: string
-  readonly actions: readonly TriggerVerdictAction[]
 }
 
 /** Provenance stamped on an automated session (persisted in session history). */
@@ -181,7 +171,7 @@ export interface TriggerRunRequest {
   readonly authority?: string
   /** Explicit mode id; undefined = the agent's conservative default (resolved in renderer). */
   readonly mode?: string
-  /** True only after the user confirmed a bypass-class mode for this trigger. */
+  /** True only when the activation confirmation covers the current (bypass-class) mode. */
   readonly allowElevatedMode: boolean
   readonly model?: string
   readonly mcpServerNames?: readonly string[]
@@ -198,20 +188,6 @@ export interface TriggerRunRequest {
    */
   readonly runDir: string
   readonly budget: TriggerBudget
-  readonly allowedActions: readonly TriggerActionType[]
-  /** True only after the user confirmed automatic swarm approve for this trigger. */
-  readonly approveConfirmed: boolean
-  /** Event payload (needed by action guards, e.g. reviewId / version); never logged. */
-  readonly payload: Readonly<Record<string, TriggerPayloadValue>>
-  /** Swarm actions are only honored for `swarm-review` runs, whose target is the event's review. */
-  readonly sourceType: TriggerSourceType
-}
-
-export interface TriggerActionAudit {
-  readonly type: string
-  readonly target: string
-  readonly result: 'ok' | 'rejected' | 'failed'
-  readonly reason?: string
 }
 
 /** renderer → main when a run reaches a terminal state. */
@@ -220,10 +196,9 @@ export interface TriggerRunEnd {
   readonly triggerId: string
   readonly sessionId?: string
   readonly outcome: TriggerRunOutcome
-  /** After action validation (an out-of-whitelist action downgrades to escalate). */
+  /** A missing or unparseable result.json yields `escalate`. */
   readonly verdict?: TriggerVerdictKind
   readonly summary?: string
-  readonly actions: readonly TriggerActionAudit[]
   readonly error?: string
   /** Active session time in milliseconds (time parked on a card is excluded). */
   readonly durationMs?: number
@@ -289,11 +264,24 @@ export type TriggerStatus =
   | 'invalid'
   | 'needs-confirmation'
 
+export interface TriggerSessionSurface {
+  readonly agent?: string
+  readonly mode?: string
+  readonly skill?: string
+  readonly mcpServers?: readonly string[]
+}
+
 export interface TriggerSummary {
   /** Composite identity (workspace + id); every command takes this, never the bare id. */
   readonly key: string
   readonly id: string
   readonly name: string
+  /**
+   * Fingerprint of the definition the summary was built from. `confirmActivation`
+   * binds the grant to it, so a definition edited while the dialog is open cannot
+   * be confirmed unseen. Empty for invalid entries (they cannot be confirmed).
+   */
+  readonly fingerprint: string
   /** Workspace URI string (`file:///…` / `remote-ssh://…`) that owns this trigger. */
   readonly workspace: string
   /** Folder name, shown next to the trigger name to disambiguate equal ids. */
@@ -313,13 +301,15 @@ export interface TriggerSummary {
   readonly autoPaused: boolean
   /** The parsed source config, for presentation (next-run / source wording). */
   readonly source?: TriggerSourceConfig
-  /** The user confirmed this workspace-defined trigger (bound to the config fingerprint). */
+  /**
+   * The user confirmed this workspace-defined trigger (bound to the config
+   * fingerprint). The only local gate; it also covers a bypass-class mode.
+   */
   readonly activationConfirmed: boolean
   /** Configured mode is bypass-class (shown with a warning marker). */
   readonly elevatedMode: boolean
-  readonly elevatedModeConfirmed: boolean
-  readonly approveAction: boolean
-  readonly approveConfirmed: boolean
+  /** Session settings listed in the activation confirmation dialog. */
+  readonly session?: TriggerSessionSurface
   readonly running: number
   readonly queued: number
   readonly consecutiveFailures: number
@@ -341,8 +331,8 @@ export interface TriggerSummary {
 /**
  * Mode ids that let an agent act without a human approving each step, for every
  * agent (claude + codex forks). Not only bypass: claude `auto` / `acceptEdits` and
- * codex `agent` (auto-review) also skip the approval card, so all of them need the
- * per-trigger confirmation.
+ * codex `agent` (auto-review) also skip the approval card, so the activation
+ * confirmation calls them out.
  */
 export const ELEVATED_MODE_IDS: readonly string[] = [
   'bypassPermissions',

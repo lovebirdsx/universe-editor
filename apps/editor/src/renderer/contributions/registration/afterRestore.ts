@@ -50,7 +50,6 @@ import {
 import { AgentNotificationContribution } from '../AgentNotificationContribution.js'
 import { SessionStatusCountsContribution } from '../SessionStatusCountsContribution.js'
 import { SwarmReviewNotificationContribution } from '../SwarmReviewNotificationContribution.js'
-import { TriggerVerdictContribution } from '../TriggerVerdictContribution.js'
 import { TriggerRunNotificationContribution } from '../TriggerRunNotificationContribution.js'
 import { TriggerManagerStatusContribution } from '../TriggerManagerStatusContribution.js'
 import { FirstRunAgentOnboardingContribution } from '../FirstRunAgentOnboardingContribution.js'
@@ -453,14 +452,6 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.swarmReviewNotification',
   SwarmReviewNotificationContribution,
-  WorkbenchPhase.AfterRestore,
-)
-
-// Installs the trigger verdict parser + Swarm action executor. AfterRestore so it
-// is in place before the run host can start an automated session.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.triggerVerdict',
-  TriggerVerdictContribution,
   WorkbenchPhase.AfterRestore,
 )
 

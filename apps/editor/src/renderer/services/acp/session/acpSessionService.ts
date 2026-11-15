@@ -2797,9 +2797,9 @@ export class AcpSessionService
     }
     if (session.internal) return this._resolveInternalPermission(params, session)
     // Automated sessions override the user's personal auto-approval settings
-    // (design §4): no generic kind approval, no plan-policy skip, no plan
-    // auto-execute countdown, and `allow_always` is neither offered nor
-    // persisted. The only silent approval is a one-shot write entirely inside
+    // (docs/development/triggers.md): no generic kind approval, no plan-policy
+    // skip, no plan auto-execute countdown, and `allow_always` is neither offered
+    // nor persisted. The only silent approval is a one-shot write entirely inside
     // the run directory.
     const automated = session.automation !== undefined
     const claudePlan = isClaudeAgent(session.agentId) && this._isPlanMode(session)

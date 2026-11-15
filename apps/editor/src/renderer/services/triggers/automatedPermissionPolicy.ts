@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Permission policy for sessions started by an agent trigger. Automated
  *  sessions run unattended, so the user's personal auto-approval settings must
- *  not silently widen what a trigger can do (design §4). Pure helpers only:
+ *  not silently widen what a trigger can do (docs/development/triggers.md). Pure helpers only:
  *  the session facade applies them at the permission sink.
  *--------------------------------------------------------------------------------------------*/
 

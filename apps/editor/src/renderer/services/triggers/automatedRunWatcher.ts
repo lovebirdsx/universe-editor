@@ -3,40 +3,39 @@
  *  Budget and lifecycle watchdog for one automated trigger run. Owns exactly one
  *  terminal outcome per run: cost ceiling, active-time limit (time parked on a
  *  permission / question card is excluded), per-card approval timeout, normal
- *  turn completion, session error / close, and explicit cancel. Design §5.
+ *  turn completion, session error / close, and explicit cancel.
+ *  Docs: docs/development/triggers.md
  *
  *  The clock and timers are injectable so the whole matrix runs under a fake
  *  clock without sleeping.
  *--------------------------------------------------------------------------------------------*/
 
 import { autorun, type IDisposable, type IReader } from '@universe-editor/platform'
+import { parseVerdict } from '../../../shared/triggers/verdict.js'
 import type { AcpUsage, IAcpSession } from '../acp/session/acpSessionModel.js'
 import type {
-  TriggerActionAudit,
   TriggerRunEnd,
   TriggerRunOutcome,
   TriggerRunRequest,
-  TriggerVerdictKind,
 } from '../../../shared/triggers/types.js'
 
-/** What a result-file parser may contribute to a run's end report. */
-export interface AutomatedVerdictResolution {
-  readonly verdict?: TriggerVerdictKind
-  readonly summary?: string
-  readonly actions: readonly TriggerActionAudit[]
+const MAX_SUMMARY_LENGTH = 200
+
+function clampSummary(summary: string): string {
+  return summary.length > MAX_SUMMARY_LENGTH ? summary.slice(0, MAX_SUMMARY_LENGTH) : summary
 }
 
-/**
- * Extension point for the P2 verdict parser + action executor. `raw` is the
- * literal text of `<runDir>/result.json`, or undefined when the agent produced
- * no readable file. The default implementation contributes nothing.
- */
-export type AutomatedVerdictResolver = (
-  raw: string | undefined,
-  request: TriggerRunRequest,
-) => AutomatedVerdictResolution | Promise<AutomatedVerdictResolution>
-
-export const defaultAutomatedVerdictResolver: AutomatedVerdictResolver = () => ({ actions: [] })
+/** Missing or unparseable result.json escalates: the user should look at it. */
+function resolveResultVerdict(raw: string | undefined): Pick<TriggerRunEnd, 'verdict' | 'summary'> {
+  if (raw === undefined || raw.trim().length === 0) {
+    return { verdict: 'escalate', summary: '未产出结构化结果' }
+  }
+  const parsed = parseVerdict(raw)
+  if (!parsed.ok) {
+    return { verdict: 'escalate', summary: clampSummary(`未产出结构化结果：${parsed.error}`) }
+  }
+  return { verdict: parsed.verdict.verdict, summary: parsed.verdict.summary }
+}
 
 export type AutomatedTimerHandle = unknown
 
@@ -49,8 +48,7 @@ export interface AutomatedRunWatcherOptions {
    * `runDir` on the run's own host (`authority` for remote runs).
    */
   readonly readResultFile: (request: TriggerRunRequest) => Promise<string | undefined>
-  readonly resolveVerdict?: AutomatedVerdictResolver
-  readonly onRunEnd: (end: TriggerRunEnd, resolution: AutomatedVerdictResolution) => void
+  readonly onRunEnd: (end: TriggerRunEnd) => void
   /** Warns once when the agent reports cost in a currency the budget cannot compare. */
   readonly logger?: { warn(message: string): void }
   /** Injected for tests. */
@@ -63,7 +61,6 @@ export class AutomatedRunWatcher {
   private readonly _request: TriggerRunRequest
   private readonly _session: IAcpSession
   private readonly _readResultFile: (request: TriggerRunRequest) => Promise<string | undefined>
-  private readonly _resolveVerdict: AutomatedVerdictResolver
   private readonly _onRunEnd: AutomatedRunWatcherOptions['onRunEnd']
   private readonly _logger: { warn(message: string): void } | undefined
   private readonly _now: () => number
@@ -85,7 +82,6 @@ export class AutomatedRunWatcher {
     this._request = options.request
     this._session = options.session
     this._readResultFile = options.readResultFile
-    this._resolveVerdict = options.resolveVerdict ?? defaultAutomatedVerdictResolver
     this._onRunEnd = options.onRunEnd
     this._logger = options.logger
     this._now = options.now ?? Date.now
@@ -233,7 +229,7 @@ export class AutomatedRunWatcher {
     if (this._finished) return
     this._finished = true
     // Snapshot at the terminal moment: the session may report more usage while
-    // the async result-file read / action execution below is in flight.
+    // the async result-file read below is in flight.
     const durationMs = Math.max(0, Math.round(this._activeTotal(this._now())))
     const costUsd = usdCost(this._session.usage.get())
     this._disposeTimers()
@@ -246,15 +242,18 @@ export class AutomatedRunWatcher {
     durationMs: number,
     costUsd: number | undefined,
   ): Promise<void> {
-    let raw: string | undefined
-    try {
-      raw = await this._readResultFile(this._request)
-    } catch {
-      raw = undefined
+    // Only a completed turn has a result contract to read; a cancelled / timed-out
+    // / failed run must not surface whatever partial file happened to exist.
+    let resolution: Pick<TriggerRunEnd, 'verdict' | 'summary'> = {}
+    if (outcome === 'completed') {
+      let raw: string | undefined
+      try {
+        raw = await this._readResultFile(this._request)
+      } catch {
+        raw = undefined
+      }
+      resolution = resolveResultVerdict(raw)
     }
-    // Actions execute here, so the resolver may be async; `_finished` already
-    // guarantees exactly one terminal outcome per run.
-    const resolution = await this._resolveVerdict(raw, this._request)
     const sessionId = this._session.sessionIdOnAgent.get() ?? this._session.id
     const end: TriggerRunEnd = {
       runId: this._request.origin.runId,
@@ -263,14 +262,13 @@ export class AutomatedRunWatcher {
       outcome,
       ...(resolution.verdict !== undefined ? { verdict: resolution.verdict } : {}),
       ...(resolution.summary !== undefined ? { summary: resolution.summary } : {}),
-      actions: resolution.actions,
       ...(error !== undefined ? { error } : {}),
       durationMs,
       ...(costUsd === undefined ? {} : { costUsd }),
     }
     this._subscription?.dispose()
     this._subscription = undefined
-    this._onRunEnd(end, resolution)
+    this._onRunEnd(end)
   }
 
   private _clearBudgetTimer(): void {

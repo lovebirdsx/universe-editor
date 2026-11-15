@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Renders the automated-run prompt: skill invocation, user template with scalar
  *  placeholders, a fenced untrusted-data block and the result-file contract.
- *  Design: docs/development/triggers-design.md §3.5
+ *  Docs: docs/development/triggers.md
  *--------------------------------------------------------------------------------------------*/
 
 import type { TriggerEvent, TriggerPayloadValue } from './types.js'
@@ -47,16 +47,12 @@ export const TRIGGER_OUTPUT_CONTRACT_SYSTEM = [
   '- 结构化结果写入该目录下的 result.json，详细报告写入该目录下的 report.md。',
   '',
   '### result.json 字段',
-  '- `verdict`：必填，只能是 `auto-approve`、`escalate`、`reject`、`info` 之一。',
+  '- `verdict`：必填，只能是 `info`、`escalate` 之一（`info` = 已完成、无需关注；`escalate` = 需要用户查看）。',
   '- `summary`：一句话理由，不超过 200 字。',
   '- `reportPath`：可选，相对运行目录的路径，通常为 `report.md`。',
-  '- `actions`：动作数组，每项为 `{ "type", "target", "detail"? }`；没有动作时写空数组。',
-  '',
-  '### 动作执行条件',
-  '- 只有 verdict 为 `auto-approve` 时 actions 才会被执行；其它 verdict 的 actions 一律忽略。',
   '',
   '### 示例',
-  '{"verdict":"escalate","summary":"一句话理由","reportPath":"report.md","actions":[]}',
+  '{"verdict":"escalate","summary":"一句话理由","reportPath":"report.md"}',
 ].join('\n')
 
 const PLACEHOLDER_PATTERN = /\{\{\s*event\.([A-Za-z0-9_]+)\s*\}\}/g
@@ -106,10 +102,8 @@ function escapeAttribute(value: string): string {
 function inlineOutputRequirements(runDir: string, hint: string | undefined): string {
   const lines = [
     '## 输出要求（始终生效，优先于任务描述）',
-    '- 结构化结果写入运行目录下的 result.json（字段：verdict（auto-approve | escalate | reject | info）、' +
-      'summary（≤200 字）、reportPath（可选，相对运行目录）、actions（数组，每项 { "type", "target", "detail"? }）），' +
-      '详细报告写入 report.md。',
-    '- 只有 verdict 为 auto-approve 时 actions 才会被执行；没有动作时 actions 写空数组。',
+    '- 结构化结果写入运行目录下的 result.json（字段：verdict（info | escalate）、' +
+      'summary（≤200 字）、reportPath（可选，相对运行目录）），详细报告写入 report.md。',
   ]
   if (hint !== undefined && hint.trim().length > 0) lines.push(`- ${hint}`)
   lines.push(`运行目录：${runDir}`)

@@ -7,11 +7,24 @@
 
 import { localize } from '@universe-editor/platform'
 import type {
+  TriggerEventName,
   TriggerSourceConfig,
   TriggerSourceType,
   TriggerStatus,
   TriggerSummary,
 } from './types.js'
+
+/** Display name per editor-pushed event; adding an event means adding one entry. */
+const TRIGGER_EVENT_LABELS: Record<TriggerEventName, string> = {
+  'swarm.reviewNeedsAction': localize(
+    'triggers.event.swarmReviewNeedsAction',
+    'Swarm review that needs action',
+  ),
+}
+
+export function triggerEventLabel(event: TriggerEventName): string {
+  return TRIGGER_EVENT_LABELS[event]
+}
 
 export function triggerStatusLabel(status: TriggerStatus): string {
   switch (status) {
@@ -38,23 +51,20 @@ export function triggerSourceLabel(sourceType: TriggerSourceType | 'unknown'): s
       return localize('triggers.source.schedule', 'Schedule')
     case 'poll':
       return localize('triggers.source.poll', 'Command poll')
-    case 'swarm-review':
-      return localize('triggers.source.swarmReview', 'Swarm review')
+    case 'event':
+      return localize('triggers.source.event', 'Event')
     case 'unknown':
       return localize('triggers.source.unknown', 'Unknown source')
   }
 }
 
 /**
- * Any confirmation still missing, not just the workspace activation: high-privilege
- * mode and automatic Swarm approve each gate a run in main, so a trigger with one of
- * them unconfirmed must surface in the "needs me" count too.
+ * A trigger is confirmed once, bound to its full definition; that single
+ * confirmation also covers a bypass-class mode, so there is no second gate.
  */
 export function triggerNeedsConfirmation(summary: TriggerSummary): boolean {
   if (summary.status === 'invalid') return false
-  if (!summary.activationConfirmed) return true
-  if (summary.elevatedMode && !summary.elevatedModeConfirmed) return true
-  return summary.approveAction && !summary.approveConfirmed
+  return !summary.activationConfirmed
 }
 
 export interface TriggerWorkspaceGroup {
@@ -89,8 +99,8 @@ export function summarizeTriggerSource(source: TriggerSourceConfig | undefined):
   switch (source.type) {
     case 'manual':
       return localize('triggers.source.manual', 'Manual')
-    case 'swarm-review':
-      return localize('triggers.source.swarmReview', 'Swarm review')
+    case 'event':
+      return triggerEventLabel(source.event)
     case 'schedule':
       if (source.cron !== undefined) {
         return localize('trigger.manager.source.cron', 'Cron {cron}', { cron: source.cron })
@@ -120,8 +130,9 @@ export function triggerSourceFacts(
   if (source === undefined) return []
   switch (source.type) {
     case 'manual':
-    case 'swarm-review':
       return []
+    case 'event':
+      return [{ label: localize('triggers.source.event', 'Event'), value: source.event }]
     case 'schedule': {
       const facts: TriggerSourceFact[] = []
       if (source.cron !== undefined) {

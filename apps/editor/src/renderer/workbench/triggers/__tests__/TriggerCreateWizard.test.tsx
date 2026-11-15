@@ -215,7 +215,7 @@ describe('TriggerCreateWizard', () => {
     expect(text).toContain('"keyField": "id"')
   })
 
-  it('prefills Swarm actions from the Swarm template', async () => {
+  it('prefills the Swarm event source from the Swarm template', async () => {
     const harness = renderWizard()
     await waitFor(() => expect(screen.getByTestId('trigger-manager-wizard-body-0')).toBeDefined())
 
@@ -224,17 +224,12 @@ describe('TriggerCreateWizard', () => {
     fillBasics('triage', 'Triage')
     goToSession()
     goToLimits('Triage the review')
-    expect(
-      (screen.getByTestId('trigger-manager-wizard-action-swarm.vote') as HTMLInputElement).checked,
-    ).toBe(true)
-    expect(
-      (screen.getByTestId('trigger-manager-wizard-action-swarm.comment') as HTMLInputElement)
-        .checked,
-    ).toBe(true)
 
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-create'))
     await waitFor(() => expect(harness.onCreated).toHaveBeenCalledTimes(1))
-    expect(harness.store.get(CONFIG_URI)?.text ?? '').toContain('"swarm.vote"')
+    const text = harness.store.get(CONFIG_URI)?.text ?? ''
+    expect(text).toContain('"type": "event"')
+    expect(text).toContain('"event": "swarm.reviewNeedsAction"')
   })
 
   it('rejects an invalid id format and a duplicate id', async () => {

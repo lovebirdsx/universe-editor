@@ -18,7 +18,7 @@ const OUTCOMES: readonly TriggerRunOutcome[] = [
   'failed',
 ]
 
-const VERDICTS: readonly TriggerVerdictKind[] = ['auto-approve', 'escalate', 'reject', 'info']
+const VERDICTS: readonly TriggerVerdictKind[] = ['escalate', 'info']
 
 export interface TriggerReportSnapshot {
   readonly outcome?: TriggerRunOutcome

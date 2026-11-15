@@ -34,7 +34,6 @@ describe('triggerFingerprint', () => {
       showSession: base.showSession,
       name: base.name,
       id: base.id,
-      allowedActions: base.allowedActions,
       concurrency: base.concurrency,
     }
     expect(triggerFingerprint(reordered)).toBe(triggerFingerprint(base))

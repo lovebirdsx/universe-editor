@@ -41,7 +41,6 @@ function triggerEntry(id: string, name: string, prompt = 'Handle this E2E trigge
       "enabled": false,
       "source": { "type": "manual" },
       "session": { "agent": "echo", "mode": "plan", "prompt": "${prompt}" },
-      "allowedActions": [],
       "concurrency": 1,
       "overflow": "queue"
     }`

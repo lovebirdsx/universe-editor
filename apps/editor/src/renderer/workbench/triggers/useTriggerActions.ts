@@ -26,10 +26,9 @@ import {
 import { ILogFilesService } from '../../../shared/ipc/services.js'
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
+import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
-  confirmElevatedMode,
   confirmTriggerActivation,
-  confirmAutoApprove,
   openTriggerConfig,
   runTriggerAction,
   runTriggerNow,
@@ -46,8 +45,6 @@ export interface TriggerManagerActions {
   readonly setPaused: (summary: TriggerSummary, paused: boolean) => Promise<void>
   readonly setAllPaused: (paused: boolean) => Promise<void>
   readonly confirmActivation: (summary: TriggerSummary) => Promise<void>
-  readonly confirmElevatedMode: (summary: TriggerSummary) => Promise<void>
-  readonly confirmAutoApprove: (summary: TriggerSummary) => Promise<void>
   readonly openConfig: () => Promise<void>
   readonly revealInJson: (summary: TriggerSummary) => Promise<void>
   readonly showLog: () => Promise<void>
@@ -70,6 +67,7 @@ export function useTriggerActions(): TriggerManagerActions {
   const editorService = useService(IEditorService)
   const groups = useService(IEditorGroupsService)
   const uriIdentity = useService(IUriIdentityService)
+  const agents = useService(IAcpAgentRegistry)
 
   const services = useMemo<TriggerActionServices>(() => {
     const logger: ILogger = loggerService.createLogger({ id: 'triggerManager', name: 'Triggers' })
@@ -86,6 +84,7 @@ export function useTriggerActions(): TriggerManagerActions {
       workspace,
       commands,
       logger,
+      agents,
     }
   }, [
     triggers,
@@ -100,6 +99,7 @@ export function useTriggerActions(): TriggerManagerActions {
     workspace,
     commands,
     loggerService,
+    agents,
   ])
 
   return useMemo<TriggerManagerActions>(
@@ -111,10 +111,6 @@ export function useTriggerActions(): TriggerManagerActions {
         runTriggerAction(services, () => setAllTriggersPaused(services, paused)),
       confirmActivation: (summary) =>
         runTriggerAction(services, () => confirmTriggerActivation(services, summary)),
-      confirmElevatedMode: (summary) =>
-        runTriggerAction(services, () => confirmElevatedMode(services, summary)),
-      confirmAutoApprove: (summary) =>
-        runTriggerAction(services, () => confirmAutoApprove(services, summary)),
       openConfig: () => runTriggerAction(services, () => openTriggerConfig(services)),
       revealInJson: (summary) =>
         runTriggerAction(services, () =>

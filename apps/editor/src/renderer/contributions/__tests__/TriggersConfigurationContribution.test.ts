@@ -1,13 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Shape tests for the workspace triggers.json JSON schema: the input surface mirrors
  *  TriggersConfig (version / triggers[]), each source kind is covered by one of the
- *  four `oneOf` branches, and the enums match the runtime contract
- *  (`allowedActions`, `overflow`, `onMissed`).
+ *  four `oneOf` branches, and the enums match the runtime contract (`overflow`,
+ *  `onMissed`, event names).
  *--------------------------------------------------------------------------------------------*/
 
 import type { IJSONSchema } from '@universe-editor/platform'
 import { describe, expect, it } from 'vitest'
-import { ELEVATED_MODE_IDS, TRIGGER_ACTION_TYPES } from '../../../shared/triggers/types.js'
+import { ELEVATED_MODE_IDS, TRIGGER_EVENT_NAMES } from '../../../shared/triggers/types.js'
 import {
   TRIGGERS_SCHEMA,
   TRIGGERS_SCHEMA_FILE_MATCH,
@@ -42,7 +42,7 @@ describe('triggers.json schema', () => {
   })
 
   it('covers all four trigger sources with a type-discriminated oneOf', () => {
-    expect(sourceTypeEnums()).toEqual(['manual', 'schedule', 'poll', 'swarm-review'])
+    expect(sourceTypeEnums()).toEqual(['manual', 'schedule', 'poll', 'event'])
     const source = triggerSchema().properties?.['source']
     expect(source?.required).toEqual(['type'])
     for (const branch of source?.oneOf ?? []) {
@@ -57,10 +57,7 @@ describe('triggers.json schema', () => {
     expect(triggerSchema().properties?.['enabled']?.default).toBe(false)
   })
 
-  it('mirrors the runtime action enum and overflow values', () => {
-    expect(triggerSchema().properties?.['allowedActions']?.items?.enum).toEqual([
-      ...TRIGGER_ACTION_TYPES,
-    ])
+  it('mirrors the runtime overflow values', () => {
     expect(triggerSchema().properties?.['overflow']?.enum).toEqual(['queue', 'drop'])
     expect(triggerSchema().properties?.['concurrency']?.minimum).toBe(1)
     expect(triggerSchema().properties?.['concurrency']?.maximum).toBe(10)
@@ -83,12 +80,21 @@ describe('triggers.json schema', () => {
     }
   })
 
-  it('warns that elevated modes need confirmation', () => {
+  it('warns about elevated modes in the activation confirmation', () => {
     const mode = triggerSchema().properties?.['session']?.properties?.['mode']
     for (const id of ELEVATED_MODE_IDS) {
       expect(mode?.description).toContain(id)
     }
-    expect(mode?.description).toContain('确认高权限模式')
+    expect(mode?.description).toContain('无需逐步批准')
+    expect(mode?.description).not.toContain('确认高权限模式')
+  })
+
+  it('requires an event name from the runtime event list for event sources', () => {
+    const event = triggerSchema().properties?.['source']?.oneOf?.find(
+      (branch) => branch.properties?.['type']?.enum?.[0] === 'event',
+    )
+    expect(event?.required).toEqual(['type', 'event'])
+    expect(event?.properties?.['event']?.enum).toEqual([...TRIGGER_EVENT_NAMES])
   })
 
   it('restricts the schedule to one of cron / everyMin with a missed-run policy', () => {

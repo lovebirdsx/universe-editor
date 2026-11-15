@@ -54,6 +54,7 @@ import {
   type TriggerRunHistoryEntry,
   type TriggerRunReportReadResult,
   type TriggerRunRequest,
+  type TriggerSessionSurface,
   type TriggerSourceConfig,
   type TriggerStatus,
   type TriggerSummary,
@@ -470,16 +471,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (!this._isActivated(trigger)) {
       throw new Error(
         localize(
-          'triggers.error.needsActivation',
-          'Confirm this trigger before running it (it comes from a workspace configuration file)',
-        ),
-      )
-    }
-    if (this._needsElevatedConfirmation(trigger)) {
-      throw new Error(
-        localize(
           'triggers.error.needsConfirmation',
-          'Confirm the elevated mode for this trigger before running it',
+          'Confirm this trigger before running it (it comes from a workspace configuration file)',
         ),
       )
     }
@@ -554,9 +547,19 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
    * this machine; the confirmation is bound to the config fingerprint, so editing
    * the trigger (including in a git pull) invalidates it.
    */
-  async confirmActivation(triggerKey: string): Promise<void> {
+  async confirmActivation(triggerKey: string, fingerprint: string): Promise<void> {
     await this._awaitReady()
     const trigger = this._requireTrigger(triggerKey)
+    // The dialog was built from a renderer snapshot: reject a grant that no longer
+    // describes the current definition (it may now carry an unseen mode).
+    if (fingerprint !== trigger.fingerprint) {
+      throw new Error(
+        localize(
+          'triggers.error.definitionChanged',
+          'The trigger definition changed. Review it again before confirming.',
+        ),
+      )
+    }
     this._setTriggerState(trigger.key, { activationConfirmed: trigger.fingerprint })
     this._logger.info(
       `trigger ${trigger.id} (${trigger.workspace}): activation confirmed fingerprint=${trigger.fingerprint}`,
@@ -567,51 +570,6 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       `trigger=${trigger.id} workspace=${trigger.workspace} fingerprint=${trigger.fingerprint}`,
     )
     this._syncTiming(this._clock.now())
-    void this._replayPendingRuns()
-    this._fireChange()
-  }
-
-  async confirmElevatedMode(triggerKey: string): Promise<void> {
-    await this._awaitReady()
-    const trigger = this._requireTrigger(triggerKey)
-    if (!isElevatedModeId(trigger.session.mode)) {
-      throw new Error(
-        localize('triggers.error.notElevatedMode', 'This trigger does not use a bypass-class mode'),
-      )
-    }
-    this._setTriggerState(trigger.key, { elevatedConfirmed: trigger.fingerprint })
-    this._logger.info(
-      `trigger ${trigger.id}: elevated mode confirmed fingerprint=${trigger.fingerprint}`,
-    )
-    this._audit(
-      'confirm-elevated-mode',
-      'success',
-      `trigger=${trigger.id} workspace=${trigger.workspace} fingerprint=${trigger.fingerprint}`,
-    )
-    void this._replayPendingRuns()
-    this._fireChange()
-  }
-
-  async confirmAutoApprove(triggerKey: string): Promise<void> {
-    await this._awaitReady()
-    const trigger = this._requireTrigger(triggerKey)
-    if (!trigger.allowedActions.includes('swarm.approve')) {
-      throw new Error(
-        localize(
-          'triggers.error.approveNotAllowed',
-          'This trigger does not allow the swarm.approve action',
-        ),
-      )
-    }
-    this._setTriggerState(trigger.key, { approveConfirmed: trigger.fingerprint })
-    this._logger.info(
-      `trigger ${trigger.id}: automatic approve confirmed fingerprint=${trigger.fingerprint}`,
-    )
-    this._audit(
-      'confirm-auto-approve',
-      'success',
-      `trigger=${trigger.id} workspace=${trigger.workspace} fingerprint=${trigger.fingerprint}`,
-    )
     void this._replayPendingRuns()
     this._fireChange()
   }
@@ -729,27 +687,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       `session=${end.sessionId ?? '-'}`,
       `outcome=${end.outcome}`,
       `verdict=${end.verdict ?? '-'}`,
-      `actions=${formatActions(end)}`,
     ].join(' ')
     this._audit('run-end', failed ? 'failure' : 'success', detail)
-    for (const action of end.actions) {
-      // One line per executed / rejected action. `reason` is a validation or
-      // execution error only — never the comment body the action carried.
-      this._audit(
-        'action',
-        action.result === 'ok' ? 'success' : 'failure',
-        [
-          `trigger=${entry.triggerId}`,
-          `key=${entry.eventKey}`,
-          `run=${end.runId}`,
-          `session=${end.sessionId ?? '-'}`,
-          `type=${action.type}`,
-          `target=${action.target}`,
-          `result=${action.result}`,
-          ...(action.reason === undefined ? [] : [`reason=${sanitizeAuditReason(action.reason)}`]),
-        ].join(' '),
-      )
-    }
     this._logger.info(
       `run ${end.runId}: ended trigger=${entry.triggerId} key=${entry.eventKey} outcome=${end.outcome}`,
     )
@@ -884,7 +823,13 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       return true
     })
     for (const trigger of this._allTriggers()) {
-      if (!trigger.enabled || trigger.source.type !== 'swarm-review') continue
+      if (
+        !trigger.enabled ||
+        trigger.source.type !== 'event' ||
+        trigger.source.event !== 'swarm.reviewNeedsAction'
+      ) {
+        continue
+      }
       if (workspaceComparisonKey(trigger.workspace) !== reporterKey) continue
       // Offline remote workspaces must not seed a baseline from reviews that
       // arrive while nothing can run; the first report after reconnect seeds it.
@@ -1725,7 +1670,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
    * the trigger is cooling down (schedule skip accounting, poll re-arming).
    * `manual` is a user-initiated run: like `runNow` it neither requires `enabled`
    * nor honours the backoff or the per-trigger pause, but the global pause and the
-   * confirmation gates still apply.
+   * activation confirmation still apply.
    */
   private _isRunnable(
     trigger: RoutedTrigger,
@@ -2400,9 +2345,9 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     })
     const fingerprint = trigger.fingerprint
     const state = this._stateFor(trigger.key)
-    const elevated = isElevatedModeId(session.mode) && state.elevatedConfirmed === fingerprint
-    const approve =
-      trigger.allowedActions.includes('swarm.approve') && state.approveConfirmed === fingerprint
+    // Bypass-class modes are covered by the single activation confirmation; the
+    // renderer must never grant them on an unconfirmed definition.
+    const elevated = isElevatedModeId(session.mode) && state.activationConfirmed === fingerprint
     return {
       origin: {
         triggerId: trigger.id,
@@ -2423,10 +2368,6 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       promptForSystemContract,
       runDir,
       budget: session.budget,
-      allowedActions: trigger.allowedActions,
-      approveConfirmed: approve,
-      payload: event.payload,
-      sourceType: trigger.source.type,
     }
   }
 
@@ -2742,13 +2683,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     return this._stateFor(trigger.key).activationConfirmed === trigger.fingerprint
   }
 
-  private _needsElevatedConfirmation(trigger: RoutedTrigger): boolean {
-    if (!isElevatedModeId(trigger.session.mode)) return false
-    return this._stateFor(trigger.key).elevatedConfirmed !== trigger.fingerprint
-  }
-
   private _needsConfirmation(trigger: RoutedTrigger): boolean {
-    return !this._isActivated(trigger) || this._needsElevatedConfirmation(trigger)
+    return !this._isActivated(trigger)
   }
 
   private _summaries(): readonly TriggerSummary[] {
@@ -2758,12 +2694,16 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       const stats = this._queue.stats(trigger.key)
       const fingerprint = trigger.fingerprint
       const activationConfirmed = state.activationConfirmed === fingerprint
-      const elevatedMode = isElevatedModeId(trigger.session.mode)
-      const elevatedModeConfirmed = elevatedMode && state.elevatedConfirmed === fingerprint
-      const approveAction = trigger.allowedActions.includes('swarm.approve')
-      const approveConfirmed = approveAction && state.approveConfirmed === fingerprint
       const paused = state.paused || this._state.pausedAll
-      const needsConfirmation = !activationConfirmed || (elevatedMode && !elevatedModeConfirmed)
+      const needsConfirmation = !activationConfirmed
+      const session: TriggerSessionSurface = {
+        ...(trigger.session.agent === undefined ? {} : { agent: trigger.session.agent }),
+        ...(trigger.session.mode === undefined ? {} : { mode: trigger.session.mode }),
+        ...(trigger.session.skill === undefined ? {} : { skill: trigger.session.skill }),
+        ...(trigger.session.mcpServers === undefined
+          ? {}
+          : { mcpServers: trigger.session.mcpServers }),
+      }
       const status: TriggerStatus = paused
         ? 'paused'
         : needsConfirmation
@@ -2778,6 +2718,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         key: trigger.key,
         id: trigger.id,
         name: trigger.name,
+        fingerprint,
         workspace: trigger.workspace,
         workspaceName: workspaceFolderName(trigger.workspace),
         sourceType: trigger.source.type,
@@ -2789,10 +2730,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         autoPaused: state.autoPaused === true,
         source: trigger.source,
         activationConfirmed,
-        elevatedMode,
-        elevatedModeConfirmed,
-        approveAction,
-        approveConfirmed,
+        elevatedMode: isElevatedModeId(trigger.session.mode),
+        session,
         running: stats.running,
         queued: stats.queued,
         consecutiveFailures: state.consecutiveFailures,
@@ -2816,6 +2755,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           key: triggerKeyFor(entry.workspace, invalid.id),
           id: invalid.id,
           name: invalid.id,
+          fingerprint: '',
           workspace: entry.workspace,
           workspaceName: workspaceFolderName(entry.workspace),
           sourceType: 'unknown',
@@ -2827,9 +2767,6 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           autoPaused: false,
           activationConfirmed: false,
           elevatedMode: false,
-          elevatedModeConfirmed: false,
-          approveAction: false,
-          approveConfirmed: false,
           running: 0,
           queued: 0,
           consecutiveFailures: 0,
@@ -2871,27 +2808,17 @@ function toPendingRecord(pending: PendingRun): PendingRunRecord {
   }
 }
 
-function formatActions(end: TriggerRunEnd): string {
-  if (end.actions.length === 0) return '-'
-  return end.actions.map((action) => `${action.type}@${action.target}=${action.result}`).join(',')
-}
-
-/** Audit details are single-line; action reasons are validation/error text only. */
-function sanitizeAuditReason(reason: string): string {
-  return reason.replace(/\s+/g, ' ').trim().slice(0, 300)
-}
-
 function truncateText(text: string, max: number): string {
   return text.slice(0, max)
 }
 
-/** Normalized source identity; changing it invalidates a poll / swarm baseline. */
+/** Normalized source identity; changing it invalidates a poll / event baseline. */
 function sourceFingerprintOf(source: TriggerSourceConfig): string {
   switch (source.type) {
     case 'poll':
       return `poll|${source.keyField}|${source.fetch.command}|${source.intervalSec}`
-    case 'swarm-review':
-      return 'swarm-review'
+    case 'event':
+      return `event|${source.event}`
     case 'schedule':
       return `schedule|${source.cron ?? ''}|${source.everyMin ?? ''}`
     case 'manual':

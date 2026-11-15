@@ -30,16 +30,12 @@ export interface TriggerRuntimeState {
   readonly lastRunSummary?: string
   readonly lastRunCostUsd?: number
   readonly lastRunDurationMs?: number
-  /** poll / swarm-review: the first observed result only seeds the dedupe keys. */
+  /** poll / event: the first observed result only seeds the dedupe keys. */
   readonly baselineDone: boolean
   /** Normalized fingerprint of the trigger `source`; a change resets the baseline. */
   readonly sourceFingerprint?: string
-  /** Config fingerprint confirmed for a bypass-class mode; a config edit invalidates it. */
-  readonly elevatedConfirmed?: string
   /** Config fingerprint the user confirmed for running this workspace-defined trigger. */
   readonly activationConfirmed?: string
-  /** Config fingerprint confirmed for automatic `swarm.approve`. */
-  readonly approveConfirmed?: string
 }
 
 /** A queued event whose payload is on disk; re-enqueued once the service restarts. */
@@ -183,12 +179,7 @@ const TRIGGER_RUN_OUTCOMES: readonly TriggerRunOutcome[] = [
   'failed',
 ]
 
-const TRIGGER_VERDICT_KINDS: readonly TriggerVerdictKind[] = [
-  'auto-approve',
-  'escalate',
-  'reject',
-  'info',
-]
+const TRIGGER_VERDICT_KINDS: readonly TriggerVerdictKind[] = ['info', 'escalate']
 
 /** A hand-edited state file must not smuggle in an enum value the UI cannot render. */
 function asEnum<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {
@@ -227,9 +218,7 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
     typeof lastRunSummaryRaw === 'string' ? lastRunSummaryRaw.slice(0, 200) : undefined
   const lastRunCostUsd = finiteNumber(raw['lastRunCostUsd'])
   const lastRunDurationMs = finiteNumber(raw['lastRunDurationMs'])
-  const elevatedConfirmed = optionalString(raw['elevatedConfirmed'])
   const activationConfirmed = optionalString(raw['activationConfirmed'])
-  const approveConfirmed = optionalString(raw['approveConfirmed'])
   const sourceFingerprint = optionalString(raw['sourceFingerprint'])
   return {
     processed: normalizeProcessed(raw['processed']),
@@ -250,9 +239,7 @@ function normalizeRuntimeState(raw: unknown): TriggerRuntimeState {
     ...(lastRunDurationMs === undefined ? {} : { lastRunDurationMs }),
     baselineDone: raw['baselineDone'] === true,
     ...(sourceFingerprint === undefined ? {} : { sourceFingerprint }),
-    ...(elevatedConfirmed === undefined ? {} : { elevatedConfirmed }),
     ...(activationConfirmed === undefined ? {} : { activationConfirmed }),
-    ...(approveConfirmed === undefined ? {} : { approveConfirmed }),
   }
 }
 

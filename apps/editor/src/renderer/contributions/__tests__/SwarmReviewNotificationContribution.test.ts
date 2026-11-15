@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Emitter, StorageScope, URI, type IStorageService } from '@universe-editor/platform'
 import type {
   SwarmDashboardResult,
-  SwarmReviewDetailDto,
   SwarmReviewDto,
   SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
@@ -53,40 +52,22 @@ function triggerSummary(overrides: Partial<TriggerSummary> = {}): TriggerSummary
     key: `X:/workspace\u0000${id}`,
     id,
     name: 'Swarm 分诊',
+    fingerprint: 'fp-swarm',
     workspace: 'X:/workspace',
     workspaceName: 'workspace',
     activationConfirmed: true,
-    sourceType: 'swarm-review',
+    sourceType: 'event',
+    source: { type: 'event', event: 'swarm.reviewNeedsAction' },
     status: 'idle',
     enabled: true,
     paused: false,
     pausedAll: false,
     autoPaused: false,
     elevatedMode: false,
-    elevatedModeConfirmed: false,
-    approveAction: false,
-    approveConfirmed: false,
     running: 0,
     queued: 0,
     consecutiveFailures: 0,
     ...overrides,
-  }
-}
-
-function reviewDetail(version: number): SwarmReviewDetailDto {
-  return {
-    id: '1',
-    state: 'needsReview',
-    stateLabel: 'Needs Review',
-    author: 'alice',
-    description: 'desc',
-    updated: 1,
-    versions: [{ version, change: '12', pending: true, time: 1 }],
-    participants: [],
-    transitions: [{ state: 'approved', label: 'Approve' }],
-    commentCount: 0,
-    openTaskCount: 0,
-    testStatus: 'none',
   }
 }
 
@@ -170,8 +151,6 @@ interface SetupOpts {
   initialNeedsAction?: SwarmReviewDto[]
   /** Trigger summaries the fake trigger service returns (default: none). */
   triggers?: readonly TriggerSummary[]
-  /** `perforce.swarm.getReview` responses keyed by review id (version lookups). */
-  reviewDetails?: Record<string, SwarmReviewDetailDto>
   /** User-settings hydration gate. Defaults to already resolved; hold it back to
    *  reproduce the startup race where the trigger list lands first. */
   userSettingsReady?: Promise<void>
@@ -206,10 +185,6 @@ async function setup(opts: SetupOpts = {}) {
     if (id === 'perforce.swarm.dashboard') return current
     if (id === 'perforce.swarm.getTransitions')
       return transitionsById[String(arg)] ?? ([] as SwarmTransitionDto[])
-    if (id === 'perforce.swarm.getReview') {
-      const reviewId = (arg as { reviewId?: string } | undefined)?.reviewId
-      return reviewId !== undefined ? opts.reviewDetails?.[reviewId] : undefined
-    }
     return undefined
   })
   const notify = vi.fn(async (_opts: { title: string; body: string }) => ({
@@ -1311,15 +1286,18 @@ describe('SwarmReviewNotificationContribution', () => {
   })
 
   describe('trigger reporting', () => {
-    it('reports the displayed needs-action list with the review version and updated stamp', async () => {
+    it('reports the displayed needs-action list with the configured Swarm URL and API version', async () => {
       const folder = URI.file('X:/workspace')
       const t = await setup({
         workspaceFolder: folder,
+        config: {
+          'perforce.swarm.url': 'https://swarm.example.com',
+          'perforce.swarm.apiVersion': 'v11',
+        },
         triggers: [triggerSummary()],
         initialNeedsAction: [
           review('1', { author: 'bob', description: 'fix the flaky test', updated: 5 }),
         ],
-        reviewDetails: { '1': reviewDetail(3) },
       })
       await t.refresh()
       await flush()
@@ -1330,8 +1308,8 @@ describe('SwarmReviewNotificationContribution', () => {
             author: 'bob',
             description: 'fix the flaky test',
             state: 'needsReview',
-            updated: 5,
-            version: 3,
+            swarmUrl: 'https://swarm.example.com',
+            swarmApiVersion: 'v11',
           },
         ],
         folder.toString(),
@@ -1370,7 +1348,7 @@ describe('SwarmReviewNotificationContribution', () => {
       t.dispose()
     })
 
-    it('sends no IPC at all without an enabled swarm-review trigger', async () => {
+    it('sends no IPC at all without an enabled matching event trigger', async () => {
       const t = await setup({
         workspaceFolder: URI.file('X:/workspace'),
         triggers: [triggerSummary({ enabled: false })],

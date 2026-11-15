@@ -21,8 +21,8 @@ import {
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
 import {
   ELEVATED_MODE_IDS,
-  TRIGGER_ACTION_TYPES,
   TRIGGER_DEFAULTS,
+  TRIGGER_EVENT_NAMES,
   TRIGGERS_MAX_CONCURRENT_RUNS_KEY,
   TRIGGERS_WORKSPACE_CONFIG_FILE,
   TRIGGERS_WORKSPACE_DIR,
@@ -50,9 +50,9 @@ const SOURCE_SCHEMA: TriggerJSONSchema = {
   properties: {
     type: {
       type: 'string',
-      enum: ['manual', 'schedule', 'poll', 'swarm-review'],
+      enum: ['manual', 'schedule', 'poll', 'event'],
       description:
-        'manual = 手动运行；schedule = 定时；poll = 周期性执行命令取数；swarm-review = Swarm 审核。',
+        'manual = 手动运行；schedule = 定时；poll = 周期性执行命令取数；event = 编辑器推送的事件。',
     },
   },
   oneOf: [
@@ -129,9 +129,16 @@ const SOURCE_SCHEMA: TriggerJSONSchema = {
     },
     {
       type: 'object',
-      description: 'Swarm 审核源：每个待处理审核触发一次（同一审核只触发一次）。',
-      required: ['type'],
-      properties: { type: { type: 'string', enum: ['swarm-review'] } },
+      description: '编辑器事件源：事件到达时为每个事件触发一次（同一事件键只触发一次）。',
+      required: ['type', 'event'],
+      properties: {
+        type: { type: 'string', enum: ['event'] },
+        event: {
+          type: 'string',
+          enum: [...TRIGGER_EVENT_NAMES],
+          description: '事件名。当前支持 swarm.reviewNeedsAction（Swarm 审核待处理）。',
+        },
+      },
       additionalProperties: false,
     },
   ],
@@ -181,7 +188,7 @@ const SESSION_SCHEMA: TriggerJSONSchema = {
     mode: {
       type: 'string',
       minLength: 1,
-      description: `显式 mode id；缺省使用该 agent 的保守档。高权限 mode（${ELEVATED_MODE_IDS.join(' / ')}）需先执行「确认高权限模式」，否则该触发器不会运行。`,
+      description: `显式 mode id；缺省使用该 agent 的保守档。高权限 mode（${ELEVATED_MODE_IDS.join(' / ')}）会在启用确认中单独警告：该模式下 agent 无需逐步批准。`,
     },
     model: { type: 'string', minLength: 1, description: '模型 id，缺省使用默认模型。' },
     skill: {
@@ -220,7 +227,7 @@ const TRIGGER_SCHEMA: TriggerJSONSchema = {
     enabled: {
       type: 'boolean',
       default: false,
-      description: '是否启用；缺省关闭。首次启用前需在本机确认一次。',
+      description: '是否启用；缺省关闭。未在本机确认的触发器不会运行；修改定义后需要重新确认。',
     },
     showSession: {
       type: 'boolean',
@@ -230,11 +237,6 @@ const TRIGGER_SCHEMA: TriggerJSONSchema = {
     },
     source: SOURCE_SCHEMA,
     session: SESSION_SCHEMA,
-    allowedActions: {
-      type: 'array',
-      items: { type: 'string', enum: [...TRIGGER_ACTION_TYPES], minLength: 1 },
-      description: '判决可自动执行的动作白名单；不在列表内的动作会降级为 escalate。',
-    },
     concurrency: {
       type: 'integer',
       minimum: 1,

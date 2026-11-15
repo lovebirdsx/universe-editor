@@ -472,12 +472,6 @@ button.banner:hover {
   padding: var(--spacing-2) 0;
 }
 
-.actionList {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-3);
-}
-
 /* -- dialogs ------------------------------------------------------------- */
 
 .dialogBackdrop {

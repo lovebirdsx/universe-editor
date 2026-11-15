@@ -3,7 +3,7 @@
  *  Renderer side of an agent-trigger run: creates the unattended session,
  *  verifies it actually landed in the requested (conservative) mode, sends the
  *  rendered prompt, and reports the terminal outcome back to main. The budget /
- *  timeout watchdog lives in automatedRunWatcher.ts. Design §3.4 / §5.
+ *  timeout watchdog lives in automatedRunWatcher.ts. Docs: docs/development/triggers.md.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -33,12 +33,7 @@ import {
   type TriggerRunEnd,
   type TriggerRunRequest,
 } from '../../../shared/triggers/types.js'
-import {
-  AutomatedRunWatcher,
-  defaultAutomatedVerdictResolver,
-  type AutomatedVerdictResolution,
-  type AutomatedVerdictResolver,
-} from './automatedRunWatcher.js'
+import { AutomatedRunWatcher } from './automatedRunWatcher.js'
 
 export interface AutomatedRunStartResult {
   readonly sessionId: string
@@ -56,11 +51,6 @@ export interface IAutomatedSessionService {
   startAutomatedSession(request: TriggerRunRequest): Promise<AutomatedRunStartResult>
   /** Cancel an in-flight run (logs `cancelled` when it was still running). */
   cancelRun(runId: string): void
-  /**
-   * Extension point for the P2 verdict parser / action executor. Pass undefined
-   * to restore the default (no verdict, no actions).
-   */
-  setVerdictResolver(resolver: AutomatedVerdictResolver | undefined): void
 }
 
 export const IAutomatedSessionService =
@@ -102,7 +92,6 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
 
   private readonly _runs = new Map<string, ActiveRun>()
   private readonly _logger: ILogger
-  private _verdictResolver: AutomatedVerdictResolver = defaultAutomatedVerdictResolver
 
   constructor(
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
@@ -113,10 +102,6 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'triggerSessions', name: 'Triggers' })
-  }
-
-  setVerdictResolver(resolver: AutomatedVerdictResolver | undefined): void {
-    this._verdictResolver = resolver ?? defaultAutomatedVerdictResolver
   }
 
   async startAutomatedSession(request: TriggerRunRequest): Promise<AutomatedRunStartResult> {
@@ -198,8 +183,7 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
       request,
       session,
       readResultFile: (runRequest) => this._readResultFile(runRequest),
-      resolveVerdict: this._verdictResolver,
-      onRunEnd: (end, resolution) => this._handleRunEnd(end, resolution),
+      onRunEnd: (end) => this._handleRunEnd(end),
       logger: this._logger,
     })
     this._runs.set(runId, { session, watcher })
@@ -270,12 +254,12 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     }
   }
 
-  private _handleRunEnd(end: TriggerRunEnd, resolution: AutomatedVerdictResolution): void {
+  private _handleRunEnd(end: TriggerRunEnd): void {
     this._runs.delete(end.runId)
     if (end.sessionId !== undefined) {
       this._history.setAutomationResult(end.sessionId, {
-        ...(resolution.verdict !== undefined ? { verdict: resolution.verdict } : {}),
-        ...(resolution.summary !== undefined ? { summary: resolution.summary } : {}),
+        ...(end.verdict !== undefined ? { verdict: end.verdict } : {}),
+        ...(end.summary !== undefined ? { summary: end.summary } : {}),
         outcome: end.outcome,
       })
     }

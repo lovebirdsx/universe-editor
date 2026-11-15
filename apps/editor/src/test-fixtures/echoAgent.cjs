@@ -515,7 +515,6 @@ async function runPrompt(id, params) {
             verdict: 'info',
             summary: 'E2E trigger run',
             reportPath: 'report.md',
-            actions: [],
           },
           null,
           2,

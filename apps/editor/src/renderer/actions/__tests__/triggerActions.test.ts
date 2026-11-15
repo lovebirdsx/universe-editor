@@ -29,6 +29,7 @@ import {
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { ILogFilesService } from '../../../shared/ipc/services.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
+import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   OpenTriggersConfigAction,
   ViewTriggerReportAction,
@@ -105,6 +106,7 @@ describe('OpenTriggersConfigAction', () => {
       // The trigger action snapshot includes the command service (the action
       // menu's "Open trigger manager" entry routes through the command).
       [ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() }],
+      [IAcpAgentRegistry, { _serviceBrand: undefined, defaultAgentId: () => 'claude-code' }],
     ])
     const accessor = {
       get: (id: unknown) => {
@@ -147,9 +149,11 @@ describe('trigger confirmation dialogs', () => {
       key: 'ws\u0000alpha',
       id: 'alpha',
       name: 'Alpha',
+      fingerprint: 'fp-alpha',
       workspace: 'file:///X:/workspace',
       workspaceName: 'workspace',
       sourceType: 'manual',
+      source: { type: 'manual' },
       status: 'paused',
       enabled: true,
       paused: true,
@@ -157,9 +161,6 @@ describe('trigger confirmation dialogs', () => {
       autoPaused: false,
       activationConfirmed: false,
       elevatedMode: false,
-      elevatedModeConfirmed: false,
-      approveAction: false,
-      approveConfirmed: false,
       running: 0,
       queued: 0,
       consecutiveFailures: 0,
@@ -167,7 +168,7 @@ describe('trigger confirmation dialogs', () => {
     }
   }
 
-  function makeServices(result: IConfirmResult) {
+  function makeServices(result: IConfirmResult, defaultAgentId = 'claude-code') {
     const confirmActivation = vi.fn(async () => undefined)
     const setPaused = vi.fn(async () => undefined)
     const confirm = vi.fn(async (_options: IConfirmOptions) => result)
@@ -177,6 +178,7 @@ describe('trigger confirmation dialogs', () => {
       dialogs: { confirm },
       notifications: { notify },
       logger: { warn: vi.fn() },
+      agents: { defaultAgentId: () => defaultAgentId },
     } as unknown as TriggerActionServices
     return { services, confirm, confirmActivation, setPaused, notify }
   }
@@ -193,8 +195,23 @@ describe('trigger confirmation dialogs', () => {
     const options = confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions
     expect(options.buttons).toHaveLength(2)
     expect(options.primaryButton).toBeUndefined()
-    expect(confirmActivation).toHaveBeenCalledWith('ws\u0000alpha')
+    expect(confirmActivation).toHaveBeenCalledWith('ws\u0000alpha', 'fp-alpha')
     expect(setPaused).toHaveBeenCalledWith('ws\u0000alpha', false)
+  })
+
+  it('passes the fingerprint shown in the dialog so a changed definition is refused', async () => {
+    const { services, confirmActivation } = makeServices({ confirmed: true, choice: 'primary' })
+
+    await confirmTriggerActivation(
+      services,
+      summary({
+        paused: false,
+        status: 'needs-confirmation',
+        fingerprint: 'fp-shown-in-dialog',
+      }),
+    )
+
+    expect(confirmActivation).toHaveBeenCalledWith('ws\u0000alpha', 'fp-shown-in-dialog')
   })
 
   it('keeps the trigger paused when only confirmation is picked', async () => {
@@ -208,23 +225,6 @@ describe('trigger confirmation dialogs', () => {
 
     expect((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).buttons).toHaveLength(2)
     expect(confirmActivation).toHaveBeenCalledTimes(1)
-    expect(setPaused).not.toHaveBeenCalled()
-  })
-
-  it('stays a single-button dialog while another gate is still open', async () => {
-    const { services, confirm, setPaused } = makeServices({
-      confirmed: true,
-      choice: 'primary',
-    })
-
-    await confirmTriggerActivation(
-      services,
-      summary({ elevatedMode: true, elevatedModeConfirmed: false }),
-    )
-
-    const options = confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions
-    expect(options.buttons).toBeUndefined()
-    expect(options.primaryButton).toBeDefined()
     expect(setPaused).not.toHaveBeenCalled()
   })
 
@@ -243,5 +243,118 @@ describe('trigger confirmation dialogs', () => {
     expect(options.buttons).toBeUndefined()
     expect(confirmActivation).toHaveBeenCalledTimes(1)
     expect(setPaused).not.toHaveBeenCalled()
+  })
+
+  it('lists the whole definition and adds the elevated / event warnings', async () => {
+    const { services, confirm } = makeServices({ confirmed: true, choice: 'primary' })
+
+    await confirmTriggerActivation(
+      services,
+      summary({
+        paused: false,
+        status: 'needs-confirmation',
+        sourceType: 'poll',
+        source: {
+          type: 'poll',
+          intervalSec: 600,
+          fetch: { type: 'command', command: 'node scripts/fetch.js', timeoutSec: 60 },
+          keyField: 'id',
+        },
+        elevatedMode: true,
+        session: {
+          agent: 'codex',
+          mode: 'agent-full-access',
+          skill: 'triage',
+          mcpServers: ['swarm', 'git'],
+        },
+      }),
+    )
+
+    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
+    expect(detail).toContain('Agent: codex')
+    expect(detail).toContain('Mode: agent-full-access')
+    expect(detail).toContain('Skill: triage')
+    expect(detail).toContain('Poll command: node scripts/fetch.js')
+    expect(detail).toContain('MCP servers: swarm, git')
+    expect(detail).toContain('High-privilege mode')
+    expect(detail).toContain('does not cover the content of referenced skill or script files')
+  })
+
+  it('adds the external-system warning for an elevated event trigger', async () => {
+    const { services, confirm } = makeServices({ confirmed: true, choice: 'primary' })
+
+    await confirmTriggerActivation(
+      services,
+      summary({
+        paused: false,
+        sourceType: 'event',
+        source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        elevatedMode: true,
+        session: { agent: 'claude-code', mode: 'bypassPermissions' },
+      }),
+    )
+
+    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
+    expect(detail).toContain('High-privilege mode')
+    expect(detail).toContain('external system')
+  })
+
+  it('shows the conservative default mode when the session does not pin one', async () => {
+    const { services, confirm } = makeServices({ confirmed: true, choice: 'primary' })
+
+    await confirmTriggerActivation(
+      services,
+      summary({ paused: false, session: { agent: 'claude-code', skill: 'triage' } }),
+    )
+
+    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
+    expect(detail).toContain('Mode: Default (default)')
+    expect(detail).toContain('MCP servers: Not set')
+    expect(detail).not.toContain('High-privilege mode')
+    expect(detail).not.toContain('external system')
+  })
+
+  it('uses the registry default agent and its conservative mode when none is pinned', async () => {
+    const { services, confirm } = makeServices({ confirmed: true, choice: 'primary' }, 'codex')
+
+    await confirmTriggerActivation(
+      services,
+      summary({ paused: false, session: { skill: 'triage' } }),
+    )
+
+    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
+    expect(detail).toContain('Agent: codex')
+    expect(detail).toContain('Mode: Default (read-only)')
+  })
+
+  it('asks for an explicit mode when the agent has no conservative default', async () => {
+    const { services, confirm } = makeServices(
+      { confirmed: true, choice: 'primary' },
+      'custom-agent',
+    )
+
+    await confirmTriggerActivation(services, summary({ paused: false, session: {} }))
+
+    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
+    expect(detail).toContain('Agent: custom-agent')
+    expect(detail).toContain('Must be configured explicitly')
+  })
+
+  it('says no high-privilege warning for a non-elevated event trigger', async () => {
+    const { services, confirm } = makeServices({ confirmed: true, choice: 'primary' })
+
+    await confirmTriggerActivation(
+      services,
+      summary({
+        paused: false,
+        sourceType: 'event',
+        source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        session: { agent: 'claude-code', mode: 'default' },
+      }),
+    )
+
+    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
+    expect(detail).toContain('Trigger source:')
+    expect(detail).not.toContain('High-privilege mode')
   })
 })

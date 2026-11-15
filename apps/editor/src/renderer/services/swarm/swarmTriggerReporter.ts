@@ -3,8 +3,8 @@
  *  Bridge from the Swarm "Needs My Action" poll to the trigger scheduler in main.
  *  Reports the FULL displayed list (same author / approvable / ignore filters as
  *  the notification) so main can apply its persistent per-trigger dedupe; when no
- *  enabled `swarm-review` trigger exists the bridge sends nothing at all, which
- *  keeps the default (no triggers) free of extra IPC.
+ *  enabled trigger listens for `swarm.reviewNeedsAction` the bridge sends nothing
+ *  at all, which keeps the default (no triggers) free of extra IPC.
  *--------------------------------------------------------------------------------------------*/
 
 import type { ILogger } from '@universe-editor/platform'
@@ -17,43 +17,40 @@ import type { TriggerSummary } from '../../../shared/triggers/types.js'
 export const SWARM_NEEDS_ACTION_DESCRIPTION_MAX = 2000
 
 export function hasEnabledSwarmTrigger(triggers: readonly TriggerSummary[]): boolean {
-  return triggers.some((trigger) => trigger.enabled && trigger.sourceType === 'swarm-review')
+  return triggers.some(
+    (trigger) =>
+      trigger.enabled &&
+      trigger.source?.type === 'event' &&
+      trigger.source.event === 'swarm.reviewNeedsAction',
+  )
 }
 
 export function toSwarmNeedsActionReview(
-  review: Pick<SwarmReviewDto, 'id' | 'author' | 'description' | 'state' | 'updated'>,
-  version: number | undefined,
+  review: Pick<SwarmReviewDto, 'id' | 'author' | 'description' | 'state'>,
+  swarmUrl: string | undefined,
+  swarmApiVersion: string | undefined,
 ): SwarmNeedsActionReview {
   return {
     reviewId: review.id,
     author: review.author,
     description: review.description.slice(0, SWARM_NEEDS_ACTION_DESCRIPTION_MAX),
     state: review.state,
-    updated: review.updated,
-    ...(version !== undefined ? { version } : {}),
+    ...(swarmUrl !== undefined && swarmUrl.length > 0 ? { swarmUrl } : {}),
+    ...(swarmApiVersion !== undefined && swarmApiVersion.length > 0 ? { swarmApiVersion } : {}),
   }
-}
-
-/** Result of one `getReview` lookup: undefined means the lookup failed (retry
- *  next tick); an object may still lack `version` when the review has no versions. */
-export interface SwarmReviewVersionLookup {
-  readonly version?: number
 }
 
 export interface SwarmTriggerReporterOptions {
   readonly report: (reviews: readonly SwarmNeedsActionReview[]) => Promise<void>
-  readonly getReviewVersion: (reviewId: string) => Promise<SwarmReviewVersionLookup | undefined>
+  /** Configured Swarm base URL; handed to the agent so its CLI calls hit the same server. */
+  readonly swarmUrl: () => string | undefined
+  /** Configured Swarm API version segment, so the agent's calls match the same endpoints. */
+  readonly swarmApiVersion: () => string | undefined
   readonly logger?: Pick<ILogger, 'debug' | 'warn'>
-}
-
-interface CachedVersion {
-  readonly updated: number
-  readonly version?: number
 }
 
 export class SwarmTriggerReporter {
   private _triggers: readonly TriggerSummary[] = []
-  private readonly _versions = new Map<string, CachedVersion>()
   private _reporting = false
 
   constructor(private readonly _options: SwarmTriggerReporterOptions) {}
@@ -66,17 +63,17 @@ export class SwarmTriggerReporter {
     this._triggers = triggers
   }
 
-  /** Report the current displayed list. Serialized: a slow version lookup must
-   *  not stack a second report on top (main's dedupe would absorb it, but the
-   *  extra RPCs are pointless). */
+  /** Report the current displayed list. Serialized: a slow report must not
+   *  stack a second one on top (main's dedupe would absorb it, but the extra
+   *  RPCs are pointless). */
   async report(reviews: readonly SwarmReviewDto[]): Promise<void> {
     if (!this.enabled || this._reporting) return
     this._reporting = true
     try {
-      this._pruneVersions(reviews)
-      const versions = await this._loadVersions(reviews)
+      const swarmUrl = this._options.swarmUrl()
+      const swarmApiVersion = this._options.swarmApiVersion()
       await this._options.report(
-        reviews.map((review) => toSwarmNeedsActionReview(review, versions.get(review.id))),
+        reviews.map((review) => toSwarmNeedsActionReview(review, swarmUrl, swarmApiVersion)),
       )
       this._options.logger?.debug(`reported ${reviews.length} review(s) to triggers`)
     } catch (err) {
@@ -86,38 +83,5 @@ export class SwarmTriggerReporter {
     } finally {
       this._reporting = false
     }
-  }
-
-  private _pruneVersions(reviews: readonly SwarmReviewDto[]): void {
-    const live = new Set(reviews.map((review) => review.id))
-    for (const id of this._versions.keys()) {
-      if (!live.has(id)) this._versions.delete(id)
-    }
-  }
-
-  /** One detail lookup per review, reused until the review's `updated` stamp
-   *  moves — a re-shelve or vote is exactly what changes the version guard. */
-  private async _loadVersions(
-    reviews: readonly SwarmReviewDto[],
-  ): Promise<Map<string, number | undefined>> {
-    const versions = new Map<string, number | undefined>()
-    await Promise.all(
-      reviews.map(async (review) => {
-        const cached = this._versions.get(review.id)
-        if (cached !== undefined && cached.updated === review.updated) {
-          versions.set(review.id, cached.version)
-          return
-        }
-        const lookup = await this._options.getReviewVersion(review.id).catch(() => undefined)
-        if (lookup !== undefined) {
-          this._versions.set(review.id, {
-            updated: review.updated,
-            ...(lookup.version !== undefined ? { version: lookup.version } : {}),
-          })
-        }
-        versions.set(review.id, lookup?.version)
-      }),
-    )
-    return versions
   }
 }

@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for the automated-session permission policy (design §4, renderer side).
+ *  Tests for the automated-session permission policy (renderer side, docs/development/triggers.md).
  *--------------------------------------------------------------------------------------------*/
 
 import type { RequestPermissionRequest } from '@agentclientprotocol/sdk'

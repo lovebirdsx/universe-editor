@@ -32,8 +32,7 @@ const eventSection = (empty = false): string =>
 const inlineContract = (...extra: string[]): string =>
   [
     '## 输出要求（始终生效，优先于任务描述）',
-    '- 结构化结果写入运行目录下的 result.json（字段：verdict（auto-approve | escalate | reject | info）、summary（≤200 字）、reportPath（可选，相对运行目录）、actions（数组，每项 { "type", "target", "detail"? }）），详细报告写入 report.md。',
-    '- 只有 verdict 为 auto-approve 时 actions 才会被执行；没有动作时 actions 写空数组。',
+    '- 结构化结果写入运行目录下的 result.json（字段：verdict（info | escalate）、summary（≤200 字）、reportPath（可选，相对运行目录）），详细报告写入 report.md。',
     ...extra,
     `运行目录：${RUN_DIR}`,
   ].join('\n')
@@ -71,8 +70,8 @@ describe('renderTriggerPrompt (inline contract)', () => {
   })
 
   it('renders a custom schema hint as an extra list item before the run directory', () => {
-    expect(renderTriggerPrompt(options({ resultSchemaHint: 'verdict 只能取四个枚举值' }))).toBe(
-      ['## 任务\n处理审核 #42', inlineContract('- verdict 只能取四个枚举值'), eventSection()].join(
+    expect(renderTriggerPrompt(options({ resultSchemaHint: 'verdict 只能取两个枚举值' }))).toBe(
+      ['## 任务\n处理审核 #42', inlineContract('- verdict 只能取两个枚举值'), eventSection()].join(
         '\n\n',
       ),
     )
@@ -103,9 +102,9 @@ describe('renderTriggerPrompt (system contract)', () => {
   it('keeps the schema hint right after the run directory line', () => {
     expect(
       renderTriggerPrompt(
-        options({ resultSchemaHint: 'verdict 只能取四个枚举值', outputContract: 'system' }),
+        options({ resultSchemaHint: 'verdict 只能取两个枚举值', outputContract: 'system' }),
       ),
-    ).toContain(systemRunDir('- verdict 只能取四个枚举值'))
+    ).toContain(systemRunDir('- verdict 只能取两个枚举值'))
   })
 
   it('emits the run directory exactly once', () => {
@@ -126,18 +125,18 @@ describe('TRIGGER_OUTPUT_CONTRACT_SYSTEM', () => {
     for (const fragment of [
       'result.json',
       'report.md',
-      'auto-approve',
       'escalate',
-      'reject',
       'info',
       'summary',
       'reportPath',
-      'actions',
       '优先于任务描述',
-      '只有 verdict 为 `auto-approve` 时 actions 才会被执行',
     ]) {
       expect(TRIGGER_OUTPUT_CONTRACT_SYSTEM).toContain(fragment)
     }
+    expect(TRIGGER_OUTPUT_CONTRACT_SYSTEM).not.toContain('auto-approve')
+    expect(TRIGGER_OUTPUT_CONTRACT_SYSTEM).not.toContain('reject')
+    expect(TRIGGER_OUTPUT_CONTRACT_SYSTEM).not.toContain('actions')
+    expect(TRIGGER_OUTPUT_CONTRACT_SYSTEM).not.toContain('动作执行条件')
   })
 })
 

@@ -332,8 +332,6 @@ import { FindTypeScriptFileReferencesAction } from './typescriptFileReferencesAc
 import { ShowJsonSchemaAction } from './jsonSchemaActions.js'
 import {
   ConfirmTriggerActivationAction,
-  ConfirmTriggerAutoApproveAction,
-  ConfirmTriggerElevatedModeAction,
   ListTriggersAction,
   OpenTriggerManagerAction,
   OpenTriggersConfigAction,
@@ -1075,8 +1073,6 @@ registerAction2(PauseAllTriggersAction)
 registerAction2(ResumeAllTriggersAction)
 registerAction2(OpenTriggersConfigAction)
 registerAction2(ShowTriggersLogAction)
-registerAction2(ConfirmTriggerElevatedModeAction)
-registerAction2(ConfirmTriggerAutoApproveAction)
 registerAction2(ConfirmTriggerActivationAction)
 registerAction2(RemoveTriggerWorkspaceAction)
 registerAction2(ViewTriggerReportAction)

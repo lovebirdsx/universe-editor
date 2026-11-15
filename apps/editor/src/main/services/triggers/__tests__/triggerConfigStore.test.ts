@@ -48,7 +48,6 @@ function configText(id: string): string {
         showSession: false,
         source: { type: 'manual' },
         session: { prompt: 'Do it', budget: BUDGET },
-        allowedActions: [],
         concurrency: 1,
         overflow: 'queue',
       },

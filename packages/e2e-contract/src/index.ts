@@ -896,18 +896,26 @@ export interface E2ETriggerSummary {
   readonly key: string
   readonly id: string
   readonly name: string
+  /** Definition fingerprint shown in the confirmation dialog; pass it to confirm. */
+  readonly fingerprint: string
   /** Workspace URI string (`file:///…` / `remote-ssh://…`) that owns the definition. */
   readonly workspace: string
   readonly workspaceName: string
   readonly activationConfirmed: boolean
-  readonly sourceType: 'manual' | 'schedule' | 'poll' | 'swarm-review' | 'unknown'
+  readonly sourceType: 'manual' | 'schedule' | 'poll' | 'event' | 'unknown'
   readonly status: 'disabled' | 'idle' | 'running' | 'paused' | 'invalid' | 'needs-confirmation'
   readonly enabled: boolean
   readonly paused: boolean
   /** The owning remote workspace is disconnected; nothing is scheduled until it reconnects. */
   readonly offline?: boolean
   readonly elevatedMode: boolean
-  readonly elevatedModeConfirmed: boolean
+  /** Session settings listed in the activation confirmation. */
+  readonly session?: {
+    readonly agent?: string
+    readonly mode?: string
+    readonly skill?: string
+    readonly mcpServers?: readonly string[]
+  }
   readonly running: number
   readonly queued: number
   readonly consecutiveFailures: number
@@ -932,7 +940,7 @@ export interface E2ETriggerRunHistoryEntry {
     | 'approval-timeout'
     | 'cancelled'
     | 'failed'
-  readonly verdict?: 'auto-approve' | 'escalate' | 'reject' | 'info'
+  readonly verdict?: 'info' | 'escalate'
   readonly summary?: string
   readonly error?: string
   readonly costUsd?: number

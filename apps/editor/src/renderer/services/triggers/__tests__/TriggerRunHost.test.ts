@@ -37,15 +37,11 @@ function makeRequest(runId = 'run-1', showSession = false): TriggerRunRequest {
     promptForSystemContract: 'do the thing (system)',
     runDir: 'X:/workspace/run',
     budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 60 },
-    allowedActions: [],
-    approveConfirmed: false,
-    payload: { reviewId: '1' },
-    sourceType: 'swarm-review',
   }
 }
 
 function makeEnd(runId = 'run-1'): TriggerRunEnd {
-  return { runId, triggerId: 'triage', outcome: 'completed', actions: [] }
+  return { runId, triggerId: 'triage', outcome: 'completed' }
 }
 
 class FakeAutomatedSessions implements IAutomatedSessionService {
@@ -58,7 +54,6 @@ class FakeAutomatedSessions implements IAutomatedSessionService {
     }),
   )
   readonly cancelRun = vi.fn((_runId: string): void => undefined)
-  readonly setVerdictResolver = vi.fn((_resolver: unknown): void => undefined)
 
   fireEnd(end: TriggerRunEnd): void {
     this._onDidEndRun.fire(end)
@@ -84,8 +79,6 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly setPaused = vi.fn(async (): Promise<void> => undefined)
   readonly setAllPaused = vi.fn(async (): Promise<void> => undefined)
   readonly confirmActivation = vi.fn(async (): Promise<void> => undefined)
-  readonly confirmElevatedMode = vi.fn(async (): Promise<void> => undefined)
-  readonly confirmAutoApprove = vi.fn(async (): Promise<void> => undefined)
   readonly ensureConfigFile = vi.fn(async (): Promise<string> => 'file:///triggers.json')
   readonly removeWorkspace = vi.fn(async (): Promise<void> => undefined)
   readonly readRunReport = vi.fn(

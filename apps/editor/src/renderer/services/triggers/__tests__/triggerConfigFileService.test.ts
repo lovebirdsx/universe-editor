@@ -30,8 +30,7 @@ const CONFIG_TEXT = `// Header comment.
         "agent": "claude-code",
         "prompt": "Do it",
         "budget": { "maxCostUsd": 1, "timeoutMin": 30, "approvalTimeoutMin": 1440 }
-      },
-      "allowedActions": ["swarm.vote"]
+      }
     }
   ]
 }
@@ -99,7 +98,6 @@ function trigger(overrides: Partial<TriggerConfig> = {}): TriggerConfig {
       prompt: 'Do it',
       budget: { maxCostUsd: 1, timeoutMin: 30, approvalTimeoutMin: 1440 },
     },
-    allowedActions: ['swarm.vote'],
     concurrency: 1,
     overflow: 'queue',
     ...overrides,
@@ -151,7 +149,7 @@ describe('saveTriggerConfig', () => {
     expect(store.get(CONFIG_URI)?.text).toBe(result.text)
   })
 
-  it('replaces source / allowedActions and removes cleared optional fields', async () => {
+  it('replaces the source and removes cleared optional fields', async () => {
     const store = files()
     const base = await snapshot(store)
     const result = await saveTriggerConfig(
@@ -160,7 +158,6 @@ describe('saveTriggerConfig', () => {
       'alpha',
       trigger({
         source: { type: 'schedule', cron: '0 9 * * 1', onMissed: 'skip' },
-        allowedActions: ['swarm.vote', 'swarm.comment'],
         session: {
           prompt: 'Do it',
           budget: { maxCostUsd: null, timeoutMin: 45, approvalTimeoutMin: 1440 },
@@ -173,7 +170,6 @@ describe('saveTriggerConfig', () => {
     expect(result.text).toContain('"type": "schedule"')
     expect(result.text).toContain('"maxCostUsd": null')
     expect(result.text).not.toContain('"agent"')
-    expect(result.text).toContain('"swarm.comment"')
   })
 
   it('reports a conflict instead of writing when the file changed on disk', async () => {

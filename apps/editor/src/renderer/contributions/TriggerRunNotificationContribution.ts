@@ -4,7 +4,7 @@
  *  Fires in the window that started the run (the automated session service is a
  *  per-renderer singleton and the run host lives here), so the notification is
  *  never duplicated across windows. Escalations and non-completed outcomes are
- *  warnings; a clean finish (info / reject / approved actions) is informational.
+ *  warnings; a clean finish (info) is informational.
  *--------------------------------------------------------------------------------------------*/
 
 import {

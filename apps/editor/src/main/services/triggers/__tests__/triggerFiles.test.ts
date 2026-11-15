@@ -67,7 +67,6 @@ const BASE_TRIGGER = {
   enabled: true,
   source: { type: 'schedule', cron: '0 9 * * 1', onMissed: 'skip' },
   session: { skill: 'team-weekly-digest' },
-  allowedActions: [],
   concurrency: 1,
   overflow: 'queue',
 }
@@ -128,7 +127,9 @@ describe('ensureTriggersConfigFile', () => {
     expect(await ensureTriggersConfigFile(file)).toBe(true)
     const text = await readFile(file, 'utf8')
     expect(text).toContain('// Agent 触发器配置')
-    expect(text).toContain('"id": "swarm-review"')
+    expect(text).toContain('"id": "swarm-triage"')
+    expect(text).toContain('"type": "event"')
+    expect(text).not.toContain('allowedActions')
     expect(await ensureTriggersConfigFile(file)).toBe(false)
     expect(await readFile(file, 'utf8')).toBe(text)
   })
@@ -149,8 +150,10 @@ describe('serializeTriggersConfig', () => {
       JSON.stringify(serializeTriggersConfig(result.value)),
     )
     const serialized = serializeTriggersConfig(result.value) as {
+      triggers: readonly Record<string, unknown>[]
       invalid: readonly { id: string }[]
     }
+    expect(serialized.triggers[0]).not.toHaveProperty('allowedActions')
     expect(serialized.invalid[0]?.id).toBe('broken')
     expect(() => createEmptyTriggersConfig()).not.toThrow()
   })

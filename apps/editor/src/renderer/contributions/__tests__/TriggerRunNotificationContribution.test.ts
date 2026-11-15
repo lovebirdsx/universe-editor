@@ -16,7 +16,6 @@ function runEnd(overrides: Partial<TriggerRunEnd> = {}): TriggerRunEnd {
     outcome: 'completed',
     verdict: 'info',
     summary: 'nothing to do',
-    actions: [],
     ...overrides,
   }
 }
@@ -72,7 +71,7 @@ describe('TriggerRunNotificationContribution', () => {
 
   it('reports a clean finish at info level', () => {
     const { emitter, notify } = setup()
-    emitter.fire(runEnd({ verdict: 'auto-approve', summary: 'voted up' }))
+    emitter.fire(runEnd({ verdict: 'info', summary: 'voted up' }))
     const options = notify.mock.calls[0]![0] as { severity: number; message: string }
     expect(options.severity).toBe(0)
     expect(options.message).toBe('Completed: Swarm triage')
@@ -133,7 +132,7 @@ describe('TriggerRunNotificationContribution', () => {
       { executeCommand: vi.fn() } as never,
       { createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) } as never,
     )
-    emitter.fire(runEnd({ verdict: 'reject' }))
+    emitter.fire(runEnd({ verdict: 'info' }))
     expect((notify.mock.calls[0]![0] as { message: string }).message).toBe(
       'Completed: swarm-triage',
     )

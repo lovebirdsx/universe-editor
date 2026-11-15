@@ -31,7 +31,6 @@ export interface TriggerPickItem extends IQuickPickItem {
 export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): TriggerPickItem[] {
   return summaries.map((summary) => {
     const needsActivation = !summary.activationConfirmed && summary.status !== 'invalid'
-    const unconfirmedElevated = summary.elevatedMode && !summary.elevatedModeConfirmed
     // The workspace path leads the description: two workspaces may define the same
     // trigger id, and the QuickPick must make them distinguishable. The summary
     // carries a workspace URI string; users see its friendly path.
@@ -85,14 +84,6 @@ export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): Tri
         ),
       )
     }
-    if (unconfirmedElevated) {
-      detail.push(
-        localize(
-          'triggers.item.elevatedUnconfirmed',
-          '⚠ High-privilege mode is configured but not confirmed; this trigger will not run until you confirm it.',
-        ),
-      )
-    }
     const errorText = [summary.lastError, ...(summary.errors ?? [])]
       .filter((entry): entry is string => entry !== undefined && entry.length > 0)
       .join(' · ')
@@ -116,8 +107,6 @@ export type TriggerItemAction =
   | 'pause'
   | 'resume'
   | 'confirmActivation'
-  | 'confirmElevatedMode'
-  | 'confirmAutoApprove'
   | 'openConfig'
   | 'showLog'
 
@@ -152,20 +141,6 @@ export function buildTriggerActionItems(summary: TriggerSummary): TriggerActionP
       ? { id: 'resume', action: 'resume', label: localize('triggers.action.resume', 'Resume') }
       : { id: 'pause', action: 'pause', label: localize('triggers.action.pause', 'Pause') },
   )
-  if (summary.elevatedMode && !summary.elevatedModeConfirmed) {
-    items.push({
-      id: 'confirmElevatedMode',
-      action: 'confirmElevatedMode',
-      label: localize('triggers.action.confirmElevatedMode', 'Confirm high-privilege mode…'),
-    })
-  }
-  if (summary.approveAction && !summary.approveConfirmed) {
-    items.push({
-      id: 'confirmAutoApprove',
-      action: 'confirmAutoApprove',
-      label: localize('triggers.action.confirmAutoApprove', 'Confirm automatic approve…'),
-    })
-  }
   items.push({
     id: 'openConfig',
     action: 'openConfig',
@@ -179,12 +154,7 @@ export function buildTriggerActionItems(summary: TriggerSummary): TriggerActionP
   return items
 }
 
-export type TriggerPickerAction =
-  | 'pause'
-  | 'resume'
-  | 'confirmActivation'
-  | 'confirmElevatedMode'
-  | 'confirmAutoApprove'
+export type TriggerPickerAction = 'pause' | 'resume' | 'confirmActivation'
 
 /** Candidates for a command that needs the user to pick a trigger first. */
 export function triggersForAction(
@@ -200,9 +170,5 @@ export function triggersForAction(
       return summaries.filter(
         (summary) => !summary.activationConfirmed && summary.status !== 'invalid',
       )
-    case 'confirmElevatedMode':
-      return summaries.filter((summary) => summary.elevatedMode && !summary.elevatedModeConfirmed)
-    case 'confirmAutoApprove':
-      return summaries.filter((summary) => summary.approveAction && !summary.approveConfirmed)
   }
 }

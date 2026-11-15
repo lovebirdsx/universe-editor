@@ -122,7 +122,6 @@ node scripts/tracker/gate.mjs --install-hook --refs-prefix ci#
   },
   "concurrency": 1,
   "overflow": "queue",
-  "allowedActions": [],
 }
 ```
 
@@ -133,11 +132,10 @@ node scripts/tracker/gate.mjs --install-hook --refs-prefix ci#
 - 全局并发上限不在工作区文件里，而是用户设置 `triggers.maxConcurrentRuns`（本机 `settings.json`，
   1–10，默认 2）。CI bot 机器建议设成 1。
 - `session.skill` 只写名字；skill 必须放在 bot 工作区 `.claude/skills/fix-ci-failure/` 下（随仓库提交）。
-- `mode: bypassPermissions` 是高权限模式，必须单独确认（见下一节）。
+- `mode: bypassPermissions` 是高权限模式，激活确认对话框会额外警告（见下一节）。
 - `poll` 第一次成功取数只建基线，不会把历史失败全部跑一遍。`overflow` 用 `queue`；用 `drop`
   会把事件 key 记入去重，之后同一 run 不再触发。
 - `maxCostUsd: null` 表示不限费用（默认 1 美元不够跑修复 + `pnpm check`）；时长由 `timeoutMin` 兜底。
-- `allowedActions: []`：本 skill 不产生 Swarm 动作，只产出 `info` / `escalate` 判决。
 
 > **改配置 = 改仓库版本并提交**。在开发工作区编辑 `.universe-editor/triggers.json`，走正常提交 / 推送；
 > bot clone 下次 `reset --hard origin/main` 后生效。机器人自己不得修改它——`scripts/tracker/gate.mjs`
@@ -148,8 +146,8 @@ node scripts/tracker/gate.mjs --install-hook --refs-prefix ci#
 配置入库不代表会运行。未经本机确认的触发器**不调度、不执行 poll 命令、也不能「立即运行」**：
 
 1. 打开 bot clone 的工作区，命令面板执行 **触发器: 确认工作区触发器…**，选中 `ci-fix`。
-2. 再执行 **触发器: 确认高权限模式…**（`bypassPermissions` 需要的第二道闸门）。
-3. **配置每次改动推送后，各机器都要重新确认**：确认绑定整份定义的 SHA-256 指纹，改任何字段
+   这一次确认同时覆盖高权限模式：对话框会因为 `bypassPermissions` 给出额外警告，确认后即放行。
+2. **配置每次改动推送后，各机器都要重新确认**：确认绑定整份定义的 SHA-256 指纹，改任何字段
    （包括 `enabled` 与 `name`）都会让确认失效。这正是配置变更的天然人工复核点——别人 push 一条
    改过的定义，机器不会自己开工。
 
@@ -160,7 +158,7 @@ node scripts/tracker/gate.mjs --install-hook --refs-prefix ci#
 
 - 先手动跑取数脚本确认输出：`node scripts/github/ci-failures.mjs`（`[]` 表示当前没有需要处理的
   失败；有失败时输出一条 JSON 数组）。
-- 完成上一节的两道确认后，**第一次成功取数只建基线**，不会把确认前已有的失败 run 跑一遍；这段
+- 完成上一节的确认后，**第一次成功取数只建基线**，不会把确认前已有的失败 run 跑一遍；这段
   窗口本身就是观察期。
 - 需要临时停用某台机器时用 **触发器: 暂停触发器…**（写本机 `state.json`，不动仓库），恢复用
   **触发器: 恢复触发器…**。
@@ -201,7 +199,7 @@ gate 泛化方式：`--refs-prefix tracker#|ci#` 选择配额前缀，`--daily-l
 ## 排障
 
 - **触发不了**：确认仓库版 `.universe-editor/triggers.json` 里 `ci-fix` 的 `enabled` 为 `true`、本机已确认
-  工作区触发器与高权限模式、工作区已受信任、没有被「暂停触发器」；再手动运行
+  工作区触发器（这一次确认同时覆盖高权限模式）、工作区已受信任、没有被「暂停触发器」；再手动运行
   `node scripts/github/ci-failures.mjs` 看是否输出 `[]`。配置推送后其它机器都要重新确认。
 - **脚本报 `gh ... 失败`**：`gh auth status` 检查登录与 scope；确认 `--repo` / origin 指向正确仓库、
   workflow 文件名确实是 `ci.yml`。
@@ -216,6 +214,6 @@ gate 泛化方式：`--refs-prefix tracker#|ci#` 选择配额前缀，`--daily-l
 ## 相关
 
 - [需求自动处理（tracker 自动化）](tracker-automation.md) — 同族的 poll + skill + gate 部署先例。
-- [Agent 触发器](triggers.md) — poll 语义、去重 key、基线、预算、高权限确认。
+- [Agent 触发器](triggers.md) — poll 语义、去重 key、基线、预算、激活确认（同时覆盖高权限模式）。
 - [修复 CI 偶发 e2e 失败（skill）](../../.claude/skills/fix-ci-e2e-flake/SKILL.md) — flake 判定与案例库。
 - [Git 提交信息规范](git-commit-msg-rule.md) — `Refs: ci#<runId>` 之外的提交格式要求。

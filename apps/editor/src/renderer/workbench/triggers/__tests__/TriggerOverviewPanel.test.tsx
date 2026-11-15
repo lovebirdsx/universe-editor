@@ -16,6 +16,7 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
   return {
     key: 'alpha',
     id: 'alpha',
+    fingerprint: 'fp-alpha',
     name: 'Alpha',
     workspace: 'file:///X:/workspace',
     workspaceName: 'workspace',
@@ -28,9 +29,6 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
     autoPaused: false,
     activationConfirmed: true,
     elevatedMode: false,
-    elevatedModeConfirmed: false,
-    approveAction: false,
-    approveConfirmed: false,
     running: 0,
     queued: 0,
     consecutiveFailures: 0,
@@ -45,8 +43,6 @@ function makeActions(): TriggerManagerActions {
     setPaused: vi.fn(async () => undefined),
     setAllPaused: vi.fn(async () => undefined),
     confirmActivation: noop,
-    confirmElevatedMode: noop,
-    confirmAutoApprove: noop,
     openConfig: noop,
     revealInJson: noop,
     showLog: noop,
@@ -77,7 +73,6 @@ describe('TriggerOverviewPanel', () => {
   it.each([
     ['paused for all triggers', { paused: true, pausedAll: true }],
     ['needing activation', { activationConfirmed: false }],
-    ['needing high-privilege confirmation', { elevatedMode: true }],
     ['offline', { offline: true }],
     ['invalid', { status: 'invalid' as const }],
   ])('disables Run now when %s', (_label, overrides) => {
@@ -85,27 +80,20 @@ describe('TriggerOverviewPanel', () => {
     expect(runNowDisabled()).toBe(true)
   })
 
-  it('shows only the confirmation buttons whose gate is open', () => {
-    renderPanel(
-      summary({
-        activationConfirmed: false,
-        elevatedMode: true,
-        elevatedModeConfirmed: false,
-        approveAction: true,
-        approveConfirmed: false,
-      }),
-    )
-
+  it('shows the activation button only while the trigger is unconfirmed', () => {
+    renderPanel(summary({ activationConfirmed: false }))
     expect(screen.getByTestId('trigger-manager-confirm-activation')).toBeDefined()
-    expect(screen.getByTestId('trigger-manager-confirm-elevated')).toBeDefined()
-    expect(screen.getByTestId('trigger-manager-confirm-approve')).toBeDefined()
-  })
-
-  it('hides confirmation buttons once every gate is satisfied', () => {
+    cleanup()
     renderPanel(summary())
     expect(screen.queryByTestId('trigger-manager-confirm-activation')).toBeNull()
-    expect(screen.queryByTestId('trigger-manager-confirm-elevated')).toBeNull()
-    expect(screen.queryByTestId('trigger-manager-confirm-approve')).toBeNull()
+  })
+
+  it('keeps Run now available for an elevated-mode trigger and shows the warning fact', () => {
+    renderPanel(summary({ elevatedMode: true }))
+    expect(runNowDisabled()).toBe(false)
+    expect(screen.getByTestId('trigger-manager-overview').textContent).toContain(
+      'runs without per-step approval',
+    )
   })
 
   it('reveals the trigger in JSON through the shared action', () => {
