@@ -33,13 +33,10 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
   const needsElevated = summary.elevatedMode && !summary.elevatedModeConfirmed
   const needsApprove = summary.approveAction && !summary.approveConfirmed
   const pausedAll = summary.pausedAll
+  // Pausing only stops automatic scheduling; a manual run stays available unless
+  // all triggers are paused.
   const canRun =
-    !invalid &&
-    !needsActivation &&
-    !needsElevated &&
-    !pausedAll &&
-    !summary.paused &&
-    summary.offline !== true
+    !invalid && !needsActivation && !needsElevated && !pausedAll && summary.offline !== true
   const badge = triggerStatusBadge(summary)
   const facts = triggerSourceFacts(summary.source)
   const outcomeLabel = triggerRunOutcomeLabel(summary.lastRunOutcome)
@@ -100,6 +97,14 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
           {localize(
             'trigger.manager.overview.autoPaused',
             'Paused automatically after repeated failures. Resume it once the cause is fixed.',
+          )}
+        </div>
+      )}
+      {summary.paused && !summary.autoPaused && !pausedAll && (
+        <div className={styles['notice']} data-testid="trigger-manager-gate-paused">
+          {localize(
+            'trigger.manager.overview.paused',
+            'New triggers start paused on this machine. It schedules automatically again once resumed; until then you can still run it now to try it.',
           )}
         </div>
       )}

@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for TriggerManagerStatusContribution: the "⚡ …" entry appears only while
- *  a trigger needs the user, tracks updates, opens the manager and disappears on
- *  dispose / when everything is clear.
+ *  Tests for TriggerManagerStatusContribution: the entry is always present, the
+ *  icon/number track what needs the user, running shows a single spinning icon,
+ *  the tooltip carries the breakdown, and dispose releases the entry.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
@@ -38,11 +38,14 @@ function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
   }
 }
 
-async function makeContribution(summaries: readonly TriggerSummary[]) {
+async function makeContribution(summaries: readonly TriggerSummary[] | Error) {
   const emitter = new Emitter<readonly TriggerSummary[]>()
   const triggers = {
     _serviceBrand: undefined,
-    listTriggers: async () => summaries,
+    listTriggers: async () => {
+      if (summaries instanceof Error) throw summaries
+      return summaries
+    },
     onDidChangeTriggers: emitter.event,
   } as unknown as ITriggerMainService
   const statusBar = new StatusBarService()
@@ -53,44 +56,68 @@ async function makeContribution(summaries: readonly TriggerSummary[]) {
 }
 
 describe('TriggerManagerStatusContribution', () => {
-  it('stays hidden when nothing needs the user', async () => {
-    const { statusBar, contribution } = await makeContribution([summary()])
-    expect(statusBar.entries.get()).toHaveLength(0)
+  it('is always mounted, even with no triggers at all', async () => {
+    const { statusBar, contribution } = await makeContribution([])
+    const entries = statusBar.entries.get()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.entry.text).toBe('$(zap)')
+    expect(entries[0]?.entry.tooltip).toContain('No triggers')
+    expect(entries[0]?.entry.command).toBe(OpenTriggerManagerAction.ID)
+    expect(entries[0]?.entry.alignment).toBe(StatusBarAlignment.Right)
     contribution.dispose()
   })
 
-  it('shows running and unconfirmed counts and opens the manager on click', async () => {
+  it('stays mounted as a plain launcher when listing fails', async () => {
+    const { statusBar, contribution } = await makeContribution(new Error('offline'))
+    const entries = statusBar.entries.get()
+    expect(entries).toHaveLength(1)
+    expect(entries[0]?.entry.text).toBe('$(zap)')
+    expect(entries[0]?.entry.tooltip).toContain('Click to open the trigger manager')
+    contribution.dispose()
+  })
+
+  it('shows the distinct attention count with the prominent tone', async () => {
     const { statusBar, contribution } = await makeContribution([
-      summary({ running: 1 }),
-      summary({ id: 'b', activationConfirmed: false, status: 'needs-confirmation' }),
+      summary({ activationConfirmed: false, autoPaused: true }),
+      summary({ id: 'b', offline: true }),
+      summary({ id: 'c', running: 1 }),
     ])
     const entry = statusBar.entries.get()[0]?.entry
-    expect(entry?.text).toBe('⚡ 1 running · 1 needs confirmation')
-    expect(entry?.command).toBe(OpenTriggerManagerAction.ID)
-    expect(entry?.alignment).toBe(StatusBarAlignment.Right)
+    expect(entry?.text).toBe('$(zap) 2')
+    expect(entry?.kind).toBe('prominent')
+    expect(entry?.showProgress).toBeUndefined()
+    expect(entry?.tooltip).toContain('Triggers: 3 total')
+    expect(entry?.tooltip).toContain('1 running · 1 needs confirmation · 1 auto-paused')
     expect(entry?.tooltip).toContain('Click to open the trigger manager')
     contribution.dispose()
   })
 
-  it('updates the text when the trigger list changes', async () => {
-    const { emitter, statusBar, contribution } = await makeContribution([summary({ running: 1 })])
+  it('shows a single spinning icon and the active run count when nothing needs the user', async () => {
+    const { statusBar, contribution } = await makeContribution([
+      summary({ running: 2 }),
+      summary({ id: 'b' }),
+    ])
+    const entry = statusBar.entries.get()[0]?.entry
+    expect(entry?.text).toBe('$(sync~spin) 2')
+    expect(entry?.kind).toBeUndefined()
+    // The spinning glyph lives in the text; `showProgress` would add a second icon.
+    expect(entry?.showProgress).toBeUndefined()
+    contribution.dispose()
+  })
+
+  it('updates in place when the trigger list changes', async () => {
+    const { emitter, statusBar, contribution } = await makeContribution([summary()])
     expect(statusBar.entries.get()).toHaveLength(1)
+    expect(statusBar.entries.get()[0]?.entry.text).toBe('$(zap)')
 
     emitter.fire([summary({ id: 'b', autoPaused: true })])
 
     const entries = statusBar.entries.get()
     expect(entries).toHaveLength(1)
-    expect(entries[0]?.entry.text).toBe('⚡ 1 auto-paused')
-    contribution.dispose()
-  })
-
-  it('removes the entry once everything is clear again', async () => {
-    const { emitter, statusBar, contribution } = await makeContribution([summary({ running: 1 })])
-    expect(statusBar.entries.get()).toHaveLength(1)
+    expect(entries[0]?.entry.text).toBe('$(zap) 1')
 
     emitter.fire([summary()])
-
-    expect(statusBar.entries.get()).toHaveLength(0)
+    expect(statusBar.entries.get()[0]?.entry.text).toBe('$(zap)')
     contribution.dispose()
   })
 

@@ -21,12 +21,20 @@ import {
   REMOTE_SCHEME,
   URI,
   registerAction2,
+  type IConfirmOptions,
+  type IConfirmResult,
   type IDisposable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { ILogFilesService } from '../../../shared/ipc/services.js'
-import { OpenTriggersConfigAction, ViewTriggerReportAction } from '../triggerActions.js'
+import type { TriggerSummary } from '../../../shared/triggers/types.js'
+import {
+  OpenTriggersConfigAction,
+  ViewTriggerReportAction,
+  confirmTriggerActivation,
+  type TriggerActionServices,
+} from '../triggerActions.js'
 
 let registration: IDisposable | undefined
 
@@ -130,5 +138,110 @@ describe('OpenTriggersConfigAction', () => {
     expect(ensureConfigFile).not.toHaveBeenCalled()
     expect(openEditor).not.toHaveBeenCalled()
     expect(notify).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('trigger confirmation dialogs', () => {
+  function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
+    return {
+      key: 'ws\u0000alpha',
+      id: 'alpha',
+      name: 'Alpha',
+      workspace: 'file:///X:/workspace',
+      workspaceName: 'workspace',
+      sourceType: 'manual',
+      status: 'paused',
+      enabled: true,
+      paused: true,
+      pausedAll: false,
+      autoPaused: false,
+      activationConfirmed: false,
+      elevatedMode: false,
+      elevatedModeConfirmed: false,
+      approveAction: false,
+      approveConfirmed: false,
+      running: 0,
+      queued: 0,
+      consecutiveFailures: 0,
+      ...overrides,
+    }
+  }
+
+  function makeServices(result: IConfirmResult) {
+    const confirmActivation = vi.fn(async () => undefined)
+    const setPaused = vi.fn(async () => undefined)
+    const confirm = vi.fn(async (_options: IConfirmOptions) => result)
+    const notify = vi.fn()
+    const services = {
+      triggers: { confirmActivation, setPaused },
+      dialogs: { confirm },
+      notifications: { notify },
+      logger: { warn: vi.fn() },
+    } as unknown as TriggerActionServices
+    return { services, confirm, confirmActivation, setPaused, notify }
+  }
+
+  it('offers Confirm and Resume when this is the last gate and the trigger is paused', async () => {
+    const { services, confirm, confirmActivation, setPaused } = makeServices({
+      confirmed: true,
+      choice: 'primary',
+      choiceIndex: 0,
+    })
+
+    await confirmTriggerActivation(services, summary())
+
+    const options = confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions
+    expect(options.buttons).toHaveLength(2)
+    expect(options.primaryButton).toBeUndefined()
+    expect(confirmActivation).toHaveBeenCalledWith('ws\u0000alpha')
+    expect(setPaused).toHaveBeenCalledWith('ws\u0000alpha', false)
+  })
+
+  it('keeps the trigger paused when only confirmation is picked', async () => {
+    const { services, confirm, confirmActivation, setPaused } = makeServices({
+      confirmed: false,
+      choice: 'secondary',
+      choiceIndex: 1,
+    })
+
+    await confirmTriggerActivation(services, summary())
+
+    expect((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).buttons).toHaveLength(2)
+    expect(confirmActivation).toHaveBeenCalledTimes(1)
+    expect(setPaused).not.toHaveBeenCalled()
+  })
+
+  it('stays a single-button dialog while another gate is still open', async () => {
+    const { services, confirm, setPaused } = makeServices({
+      confirmed: true,
+      choice: 'primary',
+    })
+
+    await confirmTriggerActivation(
+      services,
+      summary({ elevatedMode: true, elevatedModeConfirmed: false }),
+    )
+
+    const options = confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions
+    expect(options.buttons).toBeUndefined()
+    expect(options.primaryButton).toBeDefined()
+    expect(setPaused).not.toHaveBeenCalled()
+  })
+
+  it('stays a single-button dialog when the trigger is not paused', async () => {
+    const { services, confirm, confirmActivation, setPaused } = makeServices({
+      confirmed: true,
+      choice: 'primary',
+    })
+
+    await confirmTriggerActivation(
+      services,
+      summary({ paused: false, status: 'needs-confirmation' }),
+    )
+
+    const options = confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions
+    expect(options.buttons).toBeUndefined()
+    expect(confirmActivation).toHaveBeenCalledTimes(1)
+    expect(setPaused).not.toHaveBeenCalled()
   })
 })

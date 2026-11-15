@@ -202,8 +202,12 @@ interface HarnessOptions {
   readonly stateDebounceMs?: number
   readonly startupGraceMs?: number
   readonly workspace?: string
+  /** Reuse a userData directory across harnesses to exercise a restart. */
+  readonly userDataDir?: string
   /** Set false to exercise the activation gate (default: confirm every trigger). */
   readonly autoConfirm?: boolean
+  /** Set false to keep first-seen triggers paused (default: resume them). */
+  readonly autoResume?: boolean
 }
 
 interface Harness {
@@ -229,7 +233,7 @@ interface Harness {
 }
 
 async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const dir = mkTempDir('ue-triggers-main-')
+  const dir = options.userDataDir ?? mkTempDir('ue-triggers-main-')
   dirs.push(dir)
   const workspace = options.workspace ?? join(dir, 'workspace')
   const triggerDir = join(dir, 'triggers')
@@ -255,7 +259,11 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       'utf8',
     )
   }
-
+  const preexistingIds = new Set(
+    typeof state === 'object' && state !== null && 'triggers' in state
+      ? Object.keys((state as { triggers?: Record<string, unknown> }).triggers ?? {})
+      : [],
+  )
   const clock = new FakeClock()
   const { logger, lines } = createLogger()
   const requests: TriggerRunRequest[] = []
@@ -326,7 +334,13 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     // Workspace-defined triggers stay dormant until confirmed once on this machine;
     // most scheduling tests are about what happens after that gate.
     for (const entry of await service.listTriggers()) {
-      if (entry.status !== 'invalid') await service.confirmActivation(entry.key)
+      if (entry.status === 'invalid') continue
+      await service.confirmActivation(entry.key)
+      // First-seen triggers start paused; tests that are not about that default
+      // resume them, mirroring what the confirmation dialog offers.
+      if (options.autoResume !== false && !preexistingIds.has(entry.id)) {
+        await service.setPaused(entry.key, false)
+      }
     }
   }
 
@@ -384,6 +398,7 @@ interface RawState {
         readonly baselineDone?: boolean
         readonly sourceFingerprint?: string
         readonly activationConfirmed?: string
+        readonly paused?: boolean
       }
     >
   >
@@ -1259,18 +1274,24 @@ describe('TriggerMainService window routing', () => {
 })
 
 describe('TriggerMainService pause gate', () => {
-  it('drops queued runs when a trigger is paused and forgets their keys', async () => {
+  it('drops queued automatic runs when a trigger is paused and forgets their keys', async () => {
     const harness = await createHarness({
       maxConcurrentRuns: 1,
-      triggers: (workspace) => [makeTrigger(workspace)],
+      triggers: (workspace) => [
+        makeTrigger(workspace, {
+          source: { type: 'schedule', everyMin: 1, onMissed: 'skip' },
+        }),
+      ],
     })
     await openGate(harness)
-    await harness.service.runNow(harness.key)
+    await harness.clock.advance(60_000)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
-    await harness.service.runNow(harness.key)
+    await harness.clock.advance(60_000)
     await settle()
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
     const firstKey = harness.requests[0]!.origin.eventKey
+    const processed = stateOf(harness.service).triggers[harness.key]?.processed
+    expect(Object.keys(processed ?? {})).toHaveLength(2)
 
     await harness.service.setPaused(harness.key, true)
     await settle()
@@ -1286,7 +1307,28 @@ describe('TriggerMainService pause gate', () => {
     expect(harness.startRun).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps a pending run while paused and replays it on resume', async () => {
+  it('keeps a queued manual run when its trigger is paused', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 0,
+      triggers: (workspace) => [makeTrigger(workspace)],
+      autoResume: false,
+    })
+    await harness.service.runNow(harness.key)
+    await settle()
+    expect(stateOf(harness.service).pending).toHaveLength(1)
+
+    await harness.service.setPaused(harness.key, true)
+    await settle()
+    expect(stateOf(harness.service).pending).toHaveLength(1)
+
+    await harness.service.setMaxConcurrentRuns(1)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    expect(harness.requests[0]?.origin.eventKey).toMatch(/^manual:/)
+    // The manual override does not resume the trigger.
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').paused).toBe(true)
+  })
+
+  it('replays a manual pending run while the trigger is paused', async () => {
     const runId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
     const eventKey = 'manual:pending-1'
     const harness = await createHarness({
@@ -1314,13 +1356,99 @@ describe('TriggerMainService pause gate', () => {
     )
 
     await openGate(harness)
-    expect(harness.startRun).not.toHaveBeenCalled()
-    expect(stateOf(harness.service).pending).toHaveLength(1)
-
-    await harness.service.setPaused(harness.key, false)
-    // The replay reads the pending file from disk, which can outlast fixed ticks.
+    // A manual event is an explicit user action: it runs regardless of the pause.
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.runId).toBe(runId)
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').paused).toBe(true)
+  })
+})
+
+describe('TriggerMainService first-seen pause', () => {
+  it('starts a trigger that is new to this machine paused', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      autoResume: false,
+    })
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.paused).toBe(true)
+    expect(item.autoPaused).toBe(false)
+    expect(item.status).toBe('paused')
+    expect(harness.loggerLines.some((line) => line.includes('first seen'))).toBe(true)
+    // A manually paused trigger is not the failure-driven auto pause.
+    expect(stateOf(harness.service).triggers[harness.key]?.paused).toBe(true)
+  })
+
+  it('keeps an existing key unpaused when the state file says so', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      state: {
+        version: 2,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: {},
+            paused: false,
+            consecutiveFailures: 0,
+            baselineDone: false,
+          },
+        },
+        pending: [],
+      },
+      autoResume: false,
+    })
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').paused).toBe(false)
+  })
+
+  it('does not re-judge a resumed trigger after a restart', async () => {
+    const first = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      autoResume: false,
+    })
+    expect(summary(await first.service.listTriggers(), 'trigger-1').paused).toBe(true)
+    await first.service.setPaused(first.key, false)
+    first.service.dispose()
+    await settle()
+
+    const second = await createHarness({
+      userDataDir: first.dir,
+      workspace: first.workspace,
+      triggers: (workspace) => [makeTrigger(workspace)],
+      autoConfirm: false,
+    })
+    expect(summary(await second.service.listTriggers(), 'trigger-1').paused).toBe(false)
+  })
+
+  it('does not schedule a paused trigger and runs it on demand instead', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, { source: { type: 'schedule', everyMin: 1, onMissed: 'skip' } }),
+      ],
+      autoResume: false,
+    })
+    await openGate(harness)
+    await harness.clock.advance(5 * 60_000)
+    await settle()
+    expect(harness.startRun).not.toHaveBeenCalled()
+
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    expect(harness.requests[0]?.origin.eventKey).toMatch(/^manual:/)
+
+    // A manual run neither changes the pause nor its scheduling.
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').paused).toBe(true)
+    await harness.clock.advance(5 * 60_000)
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the global pause as an emergency stop for manual runs', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      autoResume: false,
+    })
+    await harness.service.setAllPaused(true)
+    await expect(harness.service.runNow(harness.key)).rejects.toThrow(/All triggers are paused/)
+    expect(harness.startRun).not.toHaveBeenCalled()
   })
 })
 
@@ -1777,7 +1905,8 @@ describe('TriggerMainService workspace activation gate', () => {
     expect(fetch).not.toHaveBeenCalled()
     expect(harness.startRun).not.toHaveBeenCalled()
     const pending = summary(await harness.service.listTriggers(), 'trigger-1')
-    expect(pending.status).toBe('needs-confirmation')
+    // Both gates are open; a first-seen trigger reports paused first.
+    expect(pending.status).toBe('paused')
     expect(pending.activationConfirmed).toBe(false)
     expect(pending.nextRunAt).toBeUndefined()
     await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
@@ -1785,7 +1914,8 @@ describe('TriggerMainService workspace activation gate', () => {
     await harness.service.confirmActivation(harness.key)
     const confirmed = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(confirmed.activationConfirmed).toBe(true)
-    expect(confirmed.status).toBe('idle')
+    await harness.service.setPaused(harness.key, false)
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').status).toBe('idle')
     // Confirmation arms the poll immediately; until then the command never ran.
     await harness.clock.advance(0)
     await settle()
@@ -1824,6 +1954,8 @@ describe('TriggerMainService workspace activation gate', () => {
       triggers: (workspace) => [makeTrigger(workspace)],
     })
     await openGate(harness)
+    // The default first-seen pause would mask the per-key assertions below.
+    await harness.service.setPaused(harness.key, false)
 
     const second = join(harness.dir, 'workspace-b')
     const secondConfig = join(second, '.universe-editor', 'triggers.json')

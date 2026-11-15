@@ -225,14 +225,40 @@ export function triggerStatusBadge(summary: TriggerSummary): TriggerStatusBadge 
   return badge('idle', triggerStatusLabel('idle'))
 }
 
-export interface TriggerCountSummary {
-  /** Human list of what needs attention, without the leading icon. */
-  readonly text: string
-  readonly visible: boolean
+function triggerNeedsAttention(summary: TriggerSummary): boolean {
+  return (
+    triggerNeedsConfirmation(summary) ||
+    summary.autoPaused ||
+    summary.offline === true ||
+    (summary.status !== 'invalid' &&
+      summary.lastError !== undefined &&
+      summary.lastError.length > 0)
+  )
 }
 
-/** Status-bar summary: only the conditions the user should act on. */
-export function summarizeTriggerCounts(list: readonly TriggerSummary[]): TriggerCountSummary {
+export interface TriggerCountSummary {
+  readonly total: number
+  readonly running: number
+  readonly needsConfirmation: number
+  readonly autoPaused: number
+  readonly offline: number
+  readonly errors: number
+  /**
+   * Distinct triggers with at least one problem: a trigger that is both
+   * unconfirmed and auto-paused counts once, so the badge matches the row count
+   * the user has to work through.
+   */
+  readonly needsAttention: number
+  readonly nextRunAt?: number
+  /** Multi-line status-bar tooltip; empty when there is nothing to say. */
+  readonly tooltip: string
+}
+
+/** Status-bar summary: counts plus the tooltip, computed from one snapshot. */
+export function summarizeTriggerCounts(
+  list: readonly TriggerSummary[],
+  now = Date.now(),
+): TriggerCountSummary {
   const running = list.reduce((total, summary) => total + summary.running, 0)
   const needsConfirmation = list.filter(triggerNeedsConfirmation).length
   const autoPaused = list.filter((summary) => summary.autoPaused).length
@@ -243,6 +269,28 @@ export function summarizeTriggerCounts(list: readonly TriggerSummary[]): Trigger
       summary.lastError !== undefined &&
       summary.lastError.length > 0,
   ).length
+  const needsAttention = list.filter(triggerNeedsAttention).length
+  let nextRunAt: number | undefined
+  for (const summary of list) {
+    if (summary.nextRunAt === undefined) continue
+    nextRunAt = nextRunAt === undefined ? summary.nextRunAt : Math.min(nextRunAt, summary.nextRunAt)
+  }
+
+  if (list.length === 0) {
+    return {
+      total: 0,
+      running: 0,
+      needsConfirmation: 0,
+      autoPaused: 0,
+      offline: 0,
+      errors: 0,
+      needsAttention: 0,
+      tooltip: localize(
+        'trigger.manager.status.tooltip.empty',
+        'No triggers. Click to open the trigger manager to create one.',
+      ),
+    }
+  }
 
   const parts: string[] = []
   if (running > 0) {
@@ -266,7 +314,32 @@ export function summarizeTriggerCounts(list: readonly TriggerSummary[]): Trigger
   if (errors > 0) {
     parts.push(localize('trigger.manager.counts.errors', '{count} error', { count: errors }))
   }
-  return { text: parts.join(' · '), visible: parts.length > 0 }
+  const headline = localize('trigger.manager.status.tooltip.total', 'Triggers: {total} total', {
+    total: list.length,
+  })
+  const lines = [parts.length === 0 ? headline : `${headline} · ${parts.join(' · ')}`]
+  if (nextRunAt !== undefined) {
+    lines.push(
+      localize('trigger.manager.status.tooltip.nextRun', 'Next run {when}', {
+        when: relativeTimeUntil(nextRunAt, now),
+      }),
+    )
+  }
+  lines.push(
+    '',
+    localize('trigger.manager.status.tooltip.openManager', 'Click to open the trigger manager.'),
+  )
+  return {
+    total: list.length,
+    running,
+    needsConfirmation,
+    autoPaused,
+    offline,
+    errors,
+    needsAttention,
+    ...(nextRunAt === undefined ? {} : { nextRunAt }),
+    tooltip: lines.join('\n'),
+  }
 }
 
 /** Relative time toward a future instant; the renderer never computes cron itself. */

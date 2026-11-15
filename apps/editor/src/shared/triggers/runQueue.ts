@@ -96,6 +96,25 @@ export class RunQueue<T extends RunQueueItem = RunQueueItem> {
     return cleared
   }
 
+  /**
+   * Removes queued (not running) items matching `predicate` and returns them in
+   * queue order. Pausing a trigger uses this to drop automatic events while
+   * keeping explicit manual runs.
+   */
+  remove(triggerKey: string, predicate: (item: T) => boolean): T[] {
+    const queue = this._queues.get(triggerKey)
+    if (queue === undefined) return []
+    const removed: T[] = []
+    for (let index = queue.items.length - 1; index >= 0; index--) {
+      const entry = queue.items[index]
+      if (entry === undefined || !predicate(entry.item)) continue
+      queue.items.splice(index, 1)
+      removed.push(entry.item)
+    }
+    if (queue.items.length === 0) this._queues.delete(triggerKey)
+    return removed.reverse()
+  }
+
   setGlobalLimit(limit: number): T[] {
     this._globalLimit = Math.max(0, Math.floor(limit))
     return this._drain()

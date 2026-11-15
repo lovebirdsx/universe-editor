@@ -379,7 +379,7 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
             severity: Severity.Info,
             message: localize(
               'trigger.manager.wizard.created',
-              'Trigger "{name}" was created. Confirm it before it can run.',
+              'Trigger "{name}" was created. New triggers start paused on this machine; confirm it, then resume it to let it schedule automatically — or run it now to try it.',
               { name: result.config.name },
             ),
           })

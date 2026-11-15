@@ -23,6 +23,7 @@ import {
   URI,
   localize,
   localize2,
+  type IConfirmResult,
   type ILogger,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -271,33 +272,90 @@ export async function showTriggerLog(services: TriggerActionServices): Promise<v
   revealOutputPanel(services.layout, services.views)
 }
 
+/**
+ * A paused trigger whose last outstanding gate this confirmation closes can be
+ * resumed in the same step: new triggers start paused, so "confirm" alone would
+ * leave a freshly confirmed trigger dormant.
+ */
+function offersResume(summary: TriggerSummary, otherGateOpen: boolean): boolean {
+  return summary.paused && !summary.pausedAll && !otherGateOpen
+}
+
+function resumeAwareButtons(
+  offerResume: boolean,
+  primaryLabel: string,
+): { buttons: readonly string[] } | { primaryButton: string } {
+  if (!offerResume) return { primaryButton: primaryLabel }
+  return {
+    buttons: [
+      localize('triggers.confirm.resume', 'Confirm and Resume'),
+      localize('triggers.confirm.only', 'Confirm Only'),
+    ],
+  }
+}
+
+function resumeAwareDetail(detail: string, offerResume: boolean): string {
+  if (!offerResume) return detail
+  return `${detail}\n\n${localize(
+    'triggers.confirm.resumeHint',
+    'This trigger is paused. "Confirm and Resume" also resumes it so it can schedule automatically; "Confirm Only" keeps it paused, and you can still run it now.',
+  )}`
+}
+
+function confirmationChoice(
+  result: IConfirmResult,
+  offerResume: boolean,
+): { readonly proceed: boolean; readonly resume: boolean } {
+  if (!offerResume) return { proceed: result.confirmed, resume: false }
+  return { proceed: result.choiceIndex !== undefined, resume: result.choiceIndex === 0 }
+}
+
 export async function confirmTriggerActivation(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
-  const { confirmed } = await services.dialogs.confirm({
+  const offerResume = offersResume(
+    summary,
+    (summary.elevatedMode && !summary.elevatedModeConfirmed) ||
+      (summary.approveAction && !summary.approveConfirmed),
+  )
+  const result = await services.dialogs.confirm({
     type: 'warning',
     message: localize(
       'triggers.confirmActivation.message',
       'Enable trigger "{name}" from workspace "{workspace}"?',
       { name: summary.name, workspace: workspaceDisplayPath(summary.workspace) },
     ),
-    detail: localize(
-      'triggers.confirmActivation.detail',
-      'The trigger comes from {path}. It is defined in the workspace configuration file, so it may have arrived with a cloned or pulled repository. Once confirmed it can run unattended with your credentials. The confirmation is stored on this machine and bound to the whole definition — changing any field, including enabling it or renaming it, requires confirming again.',
-      { path: workspaceDisplayPath(summary.workspace) },
+    detail: resumeAwareDetail(
+      localize(
+        'triggers.confirmActivation.detail',
+        'The trigger comes from {path}. It is defined in the workspace configuration file, so it may have arrived with a cloned or pulled repository. Once confirmed it can run unattended with your credentials. The confirmation is stored on this machine and bound to the whole definition — changing any field, including enabling it or renaming it, requires confirming again.',
+        { path: workspaceDisplayPath(summary.workspace) },
+      ),
+      offerResume,
     ),
-    primaryButton: localize('triggers.confirmActivation.primary', 'Enable Trigger'),
+    ...resumeAwareButtons(
+      offerResume,
+      localize('triggers.confirmActivation.primary', 'Enable Trigger'),
+    ),
   })
-  if (!confirmed) return
+  const choice = confirmationChoice(result, offerResume)
+  if (!choice.proceed) return
   await services.triggers.confirmActivation(summary.key)
+  if (choice.resume) await services.triggers.setPaused(summary.key, false)
   services.notifications.notify({
     severity: Severity.Info,
-    message: localize(
-      'triggers.confirmActivation.done',
-      'Trigger "{name}" was confirmed and may now run.',
-      { name: summary.name },
-    ),
+    message: choice.resume
+      ? localize(
+          'triggers.confirmActivation.doneResumed',
+          'Trigger "{name}" was confirmed and resumed.',
+          { name: summary.name },
+        )
+      : localize(
+          'triggers.confirmActivation.done',
+          'Trigger "{name}" was confirmed and may now run.',
+          { name: summary.name },
+        ),
   })
 }
 
@@ -305,28 +363,45 @@ export async function confirmElevatedMode(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
-  const { confirmed } = await services.dialogs.confirm({
+  const offerResume = offersResume(
+    summary,
+    !summary.activationConfirmed || (summary.approveAction && !summary.approveConfirmed),
+  )
+  const result = await services.dialogs.confirm({
     type: 'warning',
     message: localize(
       'triggers.confirmElevated.message',
       'Enable high-privilege mode for trigger "{name}"?',
       { name: summary.name },
     ),
-    detail: localize(
-      'triggers.confirmElevated.detail',
-      'In a bypass-class mode the agent can execute arbitrary operations without asking you for approval. This trigger runs unattended, so nothing will stop a harmful action. The confirmation is bound to the current trigger configuration — editing the trigger requires confirming again.',
+    detail: resumeAwareDetail(
+      localize(
+        'triggers.confirmElevated.detail',
+        'In a bypass-class mode the agent can execute arbitrary operations without asking you for approval. This trigger runs unattended, so nothing will stop a harmful action. The confirmation is bound to the current trigger configuration — editing the trigger requires confirming again.',
+      ),
+      offerResume,
     ),
-    primaryButton: localize('triggers.confirmElevated.primary', 'Enable High-Privilege Mode'),
+    ...resumeAwareButtons(
+      offerResume,
+      localize('triggers.confirmElevated.primary', 'Enable High-Privilege Mode'),
+    ),
   })
-  if (!confirmed) return
+  const choice = confirmationChoice(result, offerResume)
+  if (!choice.proceed) return
   await services.triggers.confirmElevatedMode(summary.key)
+  if (choice.resume) await services.triggers.setPaused(summary.key, false)
   services.notifications.notify({
     severity: Severity.Info,
-    message: localize(
-      'triggers.confirmElevated.done',
-      'High-privilege mode was confirmed for trigger "{name}".',
-      { name: summary.name },
-    ),
+    message: choice.resume
+      ? localize(
+          'triggers.confirmElevated.doneResumed',
+          'High-privilege mode was confirmed and the trigger was resumed.',
+        )
+      : localize(
+          'triggers.confirmElevated.done',
+          'High-privilege mode was confirmed for trigger "{name}".',
+          { name: summary.name },
+        ),
   })
 }
 
@@ -334,28 +409,45 @@ export async function confirmAutoApprove(
   services: TriggerActionServices,
   summary: TriggerSummary,
 ): Promise<void> {
-  const { confirmed } = await services.dialogs.confirm({
+  const offerResume = offersResume(
+    summary,
+    !summary.activationConfirmed || (summary.elevatedMode && !summary.elevatedModeConfirmed),
+  )
+  const result = await services.dialogs.confirm({
     type: 'warning',
     message: localize(
       'triggers.confirmAutoApprove.message',
       'Allow trigger "{name}" to approve Swarm reviews automatically?',
       { name: summary.name },
     ),
-    detail: localize(
-      'triggers.confirmAutoApprove.detail',
-      'Automatic approve lets the agent approve external content without a human check. Anyone who can write that content may trick the trigger into approving a malicious change. Approvals never include a commit. The confirmation is bound to the current trigger configuration — editing the trigger requires confirming again.',
+    detail: resumeAwareDetail(
+      localize(
+        'triggers.confirmAutoApprove.detail',
+        'Automatic approve lets the agent approve external content without a human check. Anyone who can write that content may trick the trigger into approving a malicious change. Approvals never include a commit. The confirmation is bound to the current trigger configuration — editing the trigger requires confirming again.',
+      ),
+      offerResume,
     ),
-    primaryButton: localize('triggers.confirmAutoApprove.primary', 'Allow Automatic Approve'),
+    ...resumeAwareButtons(
+      offerResume,
+      localize('triggers.confirmAutoApprove.primary', 'Allow Automatic Approve'),
+    ),
   })
-  if (!confirmed) return
+  const choice = confirmationChoice(result, offerResume)
+  if (!choice.proceed) return
   await services.triggers.confirmAutoApprove(summary.key)
+  if (choice.resume) await services.triggers.setPaused(summary.key, false)
   services.notifications.notify({
     severity: Severity.Info,
-    message: localize(
-      'triggers.confirmAutoApprove.done',
-      'Automatic approve was confirmed for trigger "{name}".',
-      { name: summary.name },
-    ),
+    message: choice.resume
+      ? localize(
+          'triggers.confirmAutoApprove.doneResumed',
+          'Automatic approve was confirmed and the trigger was resumed.',
+        )
+      : localize(
+          'triggers.confirmAutoApprove.done',
+          'Automatic approve was confirmed for trigger "{name}".',
+          { name: summary.name },
+        ),
   })
 }
 

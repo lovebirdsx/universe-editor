@@ -168,31 +168,60 @@ describe('triggerStatusBadge', () => {
 })
 
 describe('summarizeTriggerCounts', () => {
-  it('stays hidden when nothing needs the user', () => {
-    expect(summarizeTriggerCounts([summary(), summary({ id: 'b' })])).toEqual({
-      text: '',
-      visible: false,
-    })
+  const now = 1_000_000
+
+  it('says there is nothing yet when the list is empty', () => {
+    const counts = summarizeTriggerCounts([], now)
+    expect(counts).toMatchObject({ total: 0, needsAttention: 0 })
+    expect(counts.tooltip).toContain('No triggers')
+    expect(counts.tooltip).toContain('Click to open the trigger manager')
   })
 
-  it('counts running runs and unconfirmed triggers', () => {
-    const counts = summarizeTriggerCounts([
-      summary({ running: 1 }),
-      summary({ id: 'b', activationConfirmed: false }),
-      summary({ id: 'c', running: 1 }),
-    ])
-    expect(counts.visible).toBe(true)
-    expect(counts.text).toBe('2 running · 1 needs confirmation')
+  it('counts runs and lists the attention categories in the tooltip', () => {
+    const counts = summarizeTriggerCounts(
+      [
+        summary({ running: 1 }),
+        summary({ id: 'b', activationConfirmed: false }),
+        summary({ id: 'c', running: 1 }),
+      ],
+      now,
+    )
+    expect(counts.total).toBe(3)
+    expect(counts.running).toBe(2)
+    expect(counts.needsConfirmation).toBe(1)
+    expect(counts.needsAttention).toBe(1)
+    expect(counts.tooltip).toContain('Triggers: 3 total · 2 running · 1 needs confirmation')
+    expect(counts.tooltip).toContain('Click to open the trigger manager.')
   })
 
-  it('includes auto-paused, offline and erroring triggers', () => {
-    const counts = summarizeTriggerCounts([
-      summary({ autoPaused: true }),
-      summary({ id: 'b', offline: true }),
-      summary({ id: 'c', lastError: 'boom' }),
-      summary({ id: 'd', status: 'invalid', lastError: 'ignored' }),
-    ])
-    expect(counts.text).toBe('1 auto-paused · 1 offline · 1 error')
+  it('counts a trigger with several problems once in needsAttention', () => {
+    const counts = summarizeTriggerCounts(
+      [
+        summary({ autoPaused: true, activationConfirmed: false }),
+        summary({ id: 'b', offline: true }),
+        summary({ id: 'c', lastError: 'boom' }),
+        summary({ id: 'd', status: 'invalid', lastError: 'ignored' }),
+      ],
+      now,
+    )
+    expect(counts.autoPaused).toBe(1)
+    expect(counts.offline).toBe(1)
+    expect(counts.errors).toBe(1)
+    expect(counts.needsAttention).toBe(3)
+    expect(counts.tooltip).toContain('1 needs confirmation')
+    expect(counts.tooltip).toContain('1 auto-paused · 1 offline · 1 error')
+  })
+
+  it('reports the earliest upcoming run as a relative time', () => {
+    const counts = summarizeTriggerCounts(
+      [
+        summary({ nextRunAt: now + 10 * 60_000 }),
+        summary({ id: 'b', nextRunAt: now + 5 * 60_000 }),
+      ],
+      now,
+    )
+    expect(counts.nextRunAt).toBe(now + 5 * 60_000)
+    expect(counts.tooltip).toContain('Next run in 5m')
   })
 })
 

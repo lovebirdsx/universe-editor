@@ -106,9 +106,7 @@ test.describe('trigger manager', () => {
     if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
     await workbench.waitForRestored()
     await registerConfig(page, launchWorkspace.dir, configWithComments(CONFIG_ID, 'Config Trigger'))
-    await expect
-      .poll(async () => (await findTrigger(page, CONFIG_ID))?.status)
-      .toBe('needs-confirmation')
+    await expect.poll(async () => (await findTrigger(page, CONFIG_ID))?.status).toBe('paused')
 
     await openManager(page)
     await expect(page.getByTestId('trigger-manager-row')).toHaveCount(1)
@@ -124,7 +122,7 @@ test.describe('trigger manager', () => {
     )
   })
 
-  test('the row toggle pauses and resumes through setPaused @p1', async ({
+  test('the row toggle resumes and pauses through setPaused @p1', async ({
     page,
     workbench,
     launchWorkspace,
@@ -132,17 +130,19 @@ test.describe('trigger manager', () => {
     if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
     await workbench.waitForRestored()
     await registerConfig(page, launchWorkspace.dir, configWithComments(CONFIG_ID, 'Pause Trigger'))
+    await expect.poll(async () => (await findTrigger(page, CONFIG_ID))?.status).toBe('paused')
+    await openManager(page)
+
+    // A first-seen trigger starts paused, so the toggle's first click resumes it.
+    await page.getByTestId('trigger-manager-row-toggle').click()
+    await expect.poll(async () => (await findTrigger(page, CONFIG_ID))?.paused).toBe(false)
     await expect
       .poll(async () => (await findTrigger(page, CONFIG_ID))?.status)
       .toBe('needs-confirmation')
-    await openManager(page)
 
     await page.getByTestId('trigger-manager-row-toggle').click()
     await expect.poll(async () => (await findTrigger(page, CONFIG_ID))?.paused).toBe(true)
     await expect.poll(async () => (await findTrigger(page, CONFIG_ID))?.status).toBe('paused')
-
-    await page.getByTestId('trigger-manager-row-toggle').click()
-    await expect.poll(async () => (await findTrigger(page, CONFIG_ID))?.paused).toBe(false)
   })
 
   test('the configuration form writes the field, keeps comments and invalidates confirmation @p1', async ({
@@ -158,6 +158,8 @@ test.describe('trigger manager', () => {
     await expect
       .poll(async () => (await findTrigger(page, CONFIG_ID))?.activationConfirmed)
       .toBe(true)
+    // New triggers start paused; resume so the post-edit status is the gate, not the pause.
+    await page.evaluate((triggerKey) => window.__E2E__!.setTriggerPaused(triggerKey, false), key)
 
     await openManager(page)
     await page.getByTestId('trigger-manager-tab-configuration').click()
@@ -185,18 +187,23 @@ test.describe('trigger manager', () => {
     expect((await findTrigger(page, CONFIG_ID))?.activationConfirmed).toBe(false)
   })
 
-  test('the status-bar entry appears for unconfirmed triggers and opens the manager @p1', async ({
+  test('the status-bar entry is always present and surfaces unconfirmed triggers @p1', async ({
     page,
     workbench,
     launchWorkspace,
   }) => {
     if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
     await workbench.waitForRestored()
+    const entry = page.getByTestId('statusbar-entry-triggers')
+    // Permanent launcher: it exists before any trigger does.
+    await expect(entry).toBeAttached({ timeout: 15_000 })
+    await expect(entry).toHaveAttribute('data-tooltip', /No triggers/)
+
     await registerConfig(page, launchWorkspace.dir, configWithComments(CONFIG_ID, 'Status Trigger'))
 
-    const entry = page.getByTestId('statusbar-entry-triggers')
-    await expect(entry).toBeAttached({ timeout: 15_000 })
-    await expect(entry).toContainText('needs confirmation')
+    // One unconfirmed trigger → "$(zap) 1" with the breakdown in the tooltip.
+    await expect(entry).toContainText('1')
+    await expect(entry).toHaveAttribute('data-tooltip', /1 needs confirmation/)
 
     await entry.click()
     await expect

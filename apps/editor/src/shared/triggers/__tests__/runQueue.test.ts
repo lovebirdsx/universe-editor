@@ -66,6 +66,18 @@ describe('RunQueue', () => {
     expect(queue.stats()).toEqual({ running: 1, queued: 0 })
   })
 
+  it('removes only the queued items matching the predicate', () => {
+    const queue = new RunQueue(1)
+    queue.enqueue(item('r1', 'a'), options())
+    queue.enqueue(item('r2', 'a'), options())
+    queue.enqueue(item('r3', 'a'), options())
+    queue.enqueue(item('r4', 'b'), options())
+    expect(queue.remove('a', (entry) => entry.runId !== 'r3')).toEqual([item('r2', 'a')])
+    expect(queue.stats('a')).toEqual({ running: 1, queued: 1 })
+    expect(queue.stats('b')).toEqual({ running: 0, queued: 1 })
+    expect(queue.remove('missing', () => true)).toEqual([])
+  })
+
   it('starts queued items when the global limit is raised', () => {
     const queue = new RunQueue(1)
     queue.enqueue(item('r1', 'a'), options())

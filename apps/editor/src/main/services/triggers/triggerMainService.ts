@@ -258,6 +258,11 @@ const WATCHDOG_GRACE_MS = 10 * 60_000
 /** Filesystem-visible prefixes owned by a single trigger source. */
 const PREFETCHED_KEY_PREFIXES = ['poll:', 'swarm:'] as const
 
+/** Manual events are explicit user actions: pause never gates or drops them. */
+function isManualEventKey(eventKey: string): boolean {
+  return eventKey.startsWith('manual:')
+}
+
 const DEFAULT_REMOTE_POLL_GRACE_MS = 10_000
 
 /**
@@ -454,9 +459,6 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (this._state.pausedAll) {
       throw new Error(localize('triggers.error.allPaused', 'All triggers are paused'))
     }
-    if (this._stateFor(trigger.key).paused) {
-      throw new Error(localize('triggers.error.triggerPaused', 'This trigger is paused'))
-    }
     if (this._isWorkspaceOffline(trigger)) {
       throw new Error(
         localize(
@@ -488,8 +490,10 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
       firedAt: this._clock.now(),
     }
     this._logger.info(`trigger ${trigger.id} (${trigger.workspace}): manual event ${event.key}`)
-    // A user-initiated run is an explicit override of the failure backoff.
-    await this._acceptEvent(trigger, event, { ignoreBackoff: true })
+    // A user-initiated run is an explicit override of the failure backoff and of
+    // this trigger's pause: pausing only stops automatic scheduling. The global
+    // pause stays an emergency stop and still rejects it above.
+    await this._acceptEvent(trigger, event, { ignoreBackoff: true, manual: true })
   }
 
   async setPaused(triggerKey: string, paused: boolean): Promise<void> {
@@ -508,12 +512,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           },
     )
     if (paused) {
-      // Pausing is the final gate: queued events are dropped (their keys forgotten
-      // so they can fire again after resume) and no new timing is armed.
-      this._queue.clear(trigger.key)
-      for (const pending of [...this._queued.values()]) {
-        if (pending.triggerKey === trigger.key) this._dropPending(pending)
-      }
+      // Pausing stops automatic scheduling: queued automatic events are dropped
+      // (their keys forgotten so they can fire again after resume). A manual run
+      // is an explicit user action and survives the pause.
+      const dropped = this._queue.remove(trigger.key, (item) => !isManualEventKey(item.eventKey))
+      for (const pending of dropped) this._dropPending(pending)
       this._armedSchedule.delete(trigger.key)
       this._nextPoll.delete(trigger.key)
     }
@@ -1593,6 +1596,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (entry.config.invalid.length > 0) {
       this._logger.warn(`${location}: ${entry.config.invalid.length} invalid trigger entr(ies)`)
     }
+    this._pauseFirstSeenTriggers(entry)
     for (const trigger of this._routedTriggers(entry)) this._syncSourceFingerprint(trigger)
     // Schedule/poll cadence is config-derived: drop this workspace's wake anchors so
     // an edited cron or interval takes effect immediately (the persisted
@@ -1608,6 +1612,22 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (this._gateOpen) this._syncTiming(this._clock.now())
     else this._rescheduleWake()
     this._fireChange()
+  }
+
+  /**
+   * First sighting of a trigger key on this machine starts it paused. Keys already
+   * in `state.json` keep their persisted pause flag: a resumed trigger stays
+   * resumed across restarts, and nothing is migrated. A key changes on a new
+   * trigger, a cloned workspace config or a renamed id — all count as first seen.
+   */
+  private _pauseFirstSeenTriggers(entry: WorkspaceEntry): void {
+    for (const trigger of this._routedTriggers(entry)) {
+      if (this._state.triggers[trigger.key] !== undefined) continue
+      this._setTriggerState(trigger.key, { paused: true })
+      this._logger.info(
+        `trigger ${trigger.id} (${trigger.workspace}): first seen on this machine; starting paused`,
+      )
+    }
   }
 
   private _routedTriggers(entry: WorkspaceEntry): RoutedTrigger[] {
@@ -1704,7 +1724,8 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
    * `ignoreBackoff` is for callers that must still advance their own cadence while
    * the trigger is cooling down (schedule skip accounting, poll re-arming).
    * `manual` is a user-initiated run: like `runNow` it neither requires `enabled`
-   * nor honours the backoff, but pause and confirmation still gate it.
+   * nor honours the backoff or the per-trigger pause, but the global pause and the
+   * confirmation gates still apply.
    */
   private _isRunnable(
     trigger: RoutedTrigger,
@@ -1718,7 +1739,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     if (this._remoteWindowMissing(trigger)) return false
     if ((!trigger.enabled && !options.manual) || this._state.pausedAll) return false
     const state = this._stateFor(trigger.key)
-    if (state.paused) return false
+    if (state.paused && options.manual !== true) return false
     if (!options.ignoreBackoff && !options.manual) {
       const backoffUntil = state.backoffUntil
       if (backoffUntil !== undefined && this._clock.now() < backoffUntil) return false
@@ -1977,11 +1998,11 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
   private async _acceptEvent(
     trigger: RoutedTrigger,
     event: TriggerEvent,
-    options: { ignoreBackoff?: boolean } = {},
+    options: { ignoreBackoff?: boolean; manual?: boolean } = {},
   ): Promise<boolean> {
     if (this._disposed) return false
     const state = this._stateFor(trigger.key)
-    if (this._state.pausedAll || state.paused) {
+    if (this._state.pausedAll || (state.paused && options.manual !== true)) {
       this._logger.info(`trigger ${trigger.id}: event ${event.key} dropped (paused)`)
       return false
     }
@@ -2075,7 +2096,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     const trigger = this._findTrigger(pending.triggerKey)
     // Pause / disable / confirmation may have landed while the run sat in the queue:
     // those are not failures, so release the slot and forget the key quietly.
-    const manual = pending.eventKey.startsWith('manual:')
+    const manual = isManualEventKey(pending.eventKey)
     if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
       if (trigger !== undefined && this._isWorkspaceOffline(trigger)) {
         // Disconnect after acceptance: the event stays pending for a replay.
@@ -2502,7 +2523,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._queued.delete(item.runId)
     if (this._active.has(item.runId)) return
     const trigger = this._findTrigger(item.triggerKey)
-    const manual = item.eventKey.startsWith('manual:')
+    const manual = isManualEventKey(item.eventKey)
     if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
       if (
         trigger !== undefined &&
@@ -2627,7 +2648,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
           continue
         }
         const trigger = this._findTrigger(record.triggerKey)
-        const manual = record.eventKey.startsWith('manual:')
+        const manual = isManualEventKey(record.eventKey)
         if (trigger === undefined || !this._isRunnable(trigger, { manual })) {
           // Keep the record untouched: a later resume / confirmation / backoff
           // expiry replays it.

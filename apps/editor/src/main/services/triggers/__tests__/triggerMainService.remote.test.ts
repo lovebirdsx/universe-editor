@@ -299,10 +299,13 @@ async function waitFor(
   }
 }
 
-/** Workspace-defined triggers stay dormant until confirmed once on this machine. */
+/** Workspace-defined triggers stay dormant until confirmed and resumed once on this machine. */
 async function confirmAll(service: TriggerMainService): Promise<void> {
   for (const entry of await service.listTriggers()) {
-    if (entry.status !== 'invalid') await service.confirmActivation(entry.key)
+    if (entry.status === 'invalid') continue
+    await service.confirmActivation(entry.key)
+    // First-seen triggers start paused (the tests below are about scheduling).
+    await service.setPaused(entry.key, false)
   }
 }
 

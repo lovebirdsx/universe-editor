@@ -110,9 +110,10 @@ test.describe('remote agent triggers', () => {
     // already exists, so this only adds it to the registry).
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.triggers.openConfig'))
 
+    // First seen on this machine → paused; confirmation is still required.
     await expect
       .poll(async () => (await listTriggers(page))[0]?.status, { timeout: 20_000 })
-      .toBe('needs-confirmation')
+      .toBe('paused')
     const summary = (await listTriggers(page))[0]
     expect(summary?.workspace).toBe(rootUri)
     expect(summary?.workspace.startsWith('remote-ssh:')).toBe(true)

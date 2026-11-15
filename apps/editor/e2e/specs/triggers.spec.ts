@@ -134,7 +134,7 @@ test.describe('agent triggers', () => {
     await workbench.runCommand('workbench.trust.grant')
     await installEchoAgent(page)
     await writeTriggersConfig(page, launchWorkspace.dir, [manualTrigger()])
-    await waitForTriggerStatus(page, MANUAL_ID, 'needs-confirmation')
+    await waitForTriggerStatus(page, MANUAL_ID, 'paused')
 
     const summary = await findTrigger(page, MANUAL_ID)
     // Workspace identity is a URI string; the friendly name stays separate.
@@ -161,11 +161,13 @@ test.describe('agent triggers', () => {
     await workbench.runCommand('workbench.trust.grant')
     await installEchoAgent(page)
     await writeTriggersConfig(page, launchWorkspace.dir, [manualTrigger()])
-    await waitForTriggerStatus(page, MANUAL_ID, 'needs-confirmation')
+    await waitForTriggerStatus(page, MANUAL_ID, 'paused')
 
     const key = await triggerKey(page, MANUAL_ID)
     await page.evaluate((triggerKey) => window.__E2E__!.confirmTriggerActivation(triggerKey), key)
     await waitForActivationConfirmed(page, MANUAL_ID)
+    // New triggers start paused; resume before checking the normal idle status.
+    await page.evaluate((triggerKey) => window.__E2E__!.setTriggerPaused(triggerKey, false), key)
     await waitForTriggerStatus(page, MANUAL_ID, 'disabled')
 
     const editorsBefore = await page.evaluate(() => window.__E2E__!.getActiveGroupEditorCount())
@@ -253,12 +255,14 @@ test.describe('agent triggers', () => {
         },
       },
     ])
-    await waitForTriggerStatus(page, ELEVATED_ID, 'needs-confirmation')
+    await waitForTriggerStatus(page, ELEVATED_ID, 'paused')
 
     // Confirming the workspace trigger does not pre-approve its bypass-class mode.
     const key = await triggerKey(page, ELEVATED_ID)
     await page.evaluate((triggerKey) => window.__E2E__!.confirmTriggerActivation(triggerKey), key)
     await waitForActivationConfirmed(page, ELEVATED_ID)
+    // New triggers start paused; resume so the status reflects the elevated gate.
+    await page.evaluate((triggerKey) => window.__E2E__!.setTriggerPaused(triggerKey, false), key)
 
     const summary = await findTrigger(page, ELEVATED_ID)
     expect(summary?.elevatedMode).toBe(true)
@@ -274,34 +278,37 @@ test.describe('agent triggers', () => {
     expect(await page.evaluate(() => window.__E2E__!.getAcpAutomationRows())).toHaveLength(0)
   })
 
-  test('a paused trigger refuses runNow and creates no session @p0', async ({
+  test('a paused trigger still runs on demand and stays paused @p0', async ({
     page,
     workbench,
     launchWorkspace,
   }) => {
     if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
     await workbench.waitForRestored()
+    await workbench.runCommand('workbench.trust.grant')
     await installEchoAgent(page)
     await writeTriggersConfig(page, launchWorkspace.dir, [manualTrigger()])
-    await waitForTriggerStatus(page, MANUAL_ID, 'needs-confirmation')
+    await waitForTriggerStatus(page, MANUAL_ID, 'paused')
 
     const key = await triggerKey(page, MANUAL_ID)
     await page.evaluate((triggerKey) => window.__E2E__!.confirmTriggerActivation(triggerKey), key)
     await waitForActivationConfirmed(page, MANUAL_ID)
-    await waitForTriggerStatus(page, MANUAL_ID, 'disabled')
+    // Still paused: pausing only stops automatic scheduling.
+    expect((await findTrigger(page, MANUAL_ID))?.paused).toBe(true)
 
-    await page.evaluate((triggerKey) => window.__E2E__!.setTriggerPaused(triggerKey, true), key)
+    // A manual run is an explicit override and creates its unattended session.
+    await page.evaluate((triggerKey) => window.__E2E__!.runTriggerNow(triggerKey), key)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpAutomationRows().length), {
+        timeout: 30_000,
+      })
+      .toBe(1)
+
+    // The run neither resumes the trigger nor changes its paused status.
+    expect((await findTrigger(page, MANUAL_ID))?.paused).toBe(true)
     await waitForTriggerStatus(page, MANUAL_ID, 'paused')
 
-    const error = await runNowRejection(page, key)
-    expect(error).toBeDefined()
-    expect(error).toMatch(/paused/i)
-
-    // The pause gate rejects before the run host is asked to create a session.
-    expect(await page.evaluate(() => window.__E2E__!.getAcpSessionCount())).toBe(0)
-    expect(await page.evaluate(() => window.__E2E__!.getAcpAutomationRows())).toHaveLength(0)
-
-    // Resuming clears the pause; the trigger is runnable again (still disabled as configured).
+    // Resuming clears the pause (still disabled as configured).
     await page.evaluate((triggerKey) => window.__E2E__!.setTriggerPaused(triggerKey, false), key)
     await waitForTriggerStatus(page, MANUAL_ID, 'disabled')
   })

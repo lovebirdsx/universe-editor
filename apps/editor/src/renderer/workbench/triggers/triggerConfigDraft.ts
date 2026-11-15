@@ -87,7 +87,9 @@ export function draftFromConfig(config: TriggerConfig): TriggerConfigDraft {
 export function emptyDraft(): TriggerConfigDraft {
   return {
     name: '',
-    enabled: false,
+    // New triggers start paused on the machine that first sees them; `enabled`
+    // still defaults to true so resuming is the only step left.
+    enabled: true,
     showSession: false,
     concurrency: String(TRIGGER_DEFAULTS.concurrency),
     overflow: TRIGGER_DEFAULTS.overflow,

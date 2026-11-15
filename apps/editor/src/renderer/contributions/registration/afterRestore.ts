@@ -473,9 +473,10 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-// "⚡ N running · M needs confirmation" in the status bar, visible only while a
-// trigger needs the user; clicking opens the manager. AfterRestore so the status
-// bar is live and the trigger IPC proxy is connected.
+// Permanent trigger-manager launcher in the status bar: "$(zap) N" while N
+// triggers need the user, "$(sync~spin) N" while runs are active, "$(zap)"
+// otherwise; clicking opens the manager. AfterRestore so the status bar is live
+// and the trigger IPC proxy is connected.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.triggerManagerStatus',
   TriggerManagerStatusContribution,

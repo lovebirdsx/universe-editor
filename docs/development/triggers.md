@@ -163,7 +163,8 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
   1. `_replayPendingRuns()` 重放**尚未开始**的排队事件；
   2. `_syncTiming(now)` 计算每个工作区里每个触发器的下一次 schedule / poll；
   3. 只保留**一个** `setTimeout`，指向最近的唤醒点（`_rescheduleWake`）。没有可运行触发器时不再有调度定时器。
-- **门控只管定时器，不管手动运行**：`runNow` 直接进入 `_acceptEvent(..., { ignoreBackoff: true })`，不检查 `_gateOpen`，因此启动宽限期内手动「立即运行」也会执行（e2e 依赖该行为）。`_replayPendingRuns` 仍要求门控开放。
+- **门控只管定时器，不管手动运行**：`runNow` 直接进入 `_acceptEvent(..., { ignoreBackoff: true, manual: true })`，不检查 `_gateOpen`，因此启动宽限期内手动「立即运行」也会执行（e2e 依赖该行为）。`_replayPendingRuns` 仍要求门控开放。
+- **首次发现即暂停**：`_applyWorkspaceConfig` 在每次配置加载 / 热更新时先调 `_pauseFirstSeenTriggers`——凡是复合键不在 `state.triggers` 里的触发器（新建、从仓库拉下、id 改名）初始写入 `paused: true`（不设 `autoPaused`）。启动时 `state.json` 已先加载，所以已存在的键原样保留、不迁移；state 加载没有按配置裁剪触发器键的逻辑（只裁剪 `processed` 与非法 pending），因此暂停键不会因清理被误判为首次。invalid 条目不在 `_routedTriggers` 里，不写 state。
 - 单个工作区配置热加载时只对**属于该工作区**的触发器清空 `_armedSchedule` / `_nextPoll` 锚点，让新的 cron / 间隔立即生效；已持久化的 `lastScheduledAt` 仍用于错过槽位计算。移除工作区会 `_detachWorkspace`（dispose store、清该工作区的 active / queued / pending 与锚点）。
 
 ### 远程工作区门禁
@@ -290,7 +291,8 @@ _startRun
 `host.startRun` 是反向 RPC，没有自带传输超时。`_startHostRun()` 用 `startRunTimeoutMs`（默认 120s）做 `Promise.race`：超时则上层按失败处理并释放槽位；如果 renderer 之后才启动成功，main 会立即 `cancelRun` 并丢弃该 sessionId，避免出现不在调度器账上的会话。
 
 - **激活闸门**：工作区来源的每条触发器必须在本机确认过一次（`state.activationConfirmed === triggerFingerprint`）。未确认时 `_isRunnable` 返回 false，`runNow` 直接抛「先确认再运行」，poll 命令完全不执行（`_runPoll` 在 spawn 前就返回），QuickPick 状态显示「待确认」。确认入口是 `confirmActivation(triggerKey)`（`workbench.action.triggers.confirmActivation` 与列表里的「确认工作区触发器」动作）；定义指纹一变，旧确认自动失效。该闸门与高权限 / 自动 approve 的确认相互独立。
-- **暂停是最终关卡**：`setPaused(triggerKey, true)` 清掉该触发器的排队项并 `forget` 其 key（不计失败）；`setAllPaused(true)` 同样清空全部排队项。`state.pending` 里尚未入队的记录不会被删除，恢复 / 全局恢复 / 完成激活确认后都会再跑一次 `_replayPendingRuns`，把此前保留的 pending 记录入队。
+- **暂停只阻止自动调度**：`setPaused(triggerKey, true)` 只丢弃该触发器**自动**来源的排队项并 `forget` 其 key（不计失败），手动来源（`manual:` 前缀）的排队项保留；`setAllPaused(true)` 是紧急停止，清空全部排队项（含手动）。`state.pending` 里尚未入队的记录不会被删除，恢复 / 全局恢复 / 完成激活确认后都会再跑一次 `_replayPendingRuns`，把此前保留的 pending 记录入队。
+- **暂停与手动运行**：`runNow` 不再因单触发器暂停被拒绝，`_acceptEvent` / `_isRunnable` 对 `manual: true` / `manual:` 前缀放行 `state.paused`；`pausedAll` 仍一律拒绝。手动运行结束后不改变 `paused`（成功上报只清 `autoPaused`）。
 - **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。**登记表不受影响**：本地工作区继续调度、需要时会重新开后台窗口；远程工作区不会后台开窗，因此在窗口重新打开且连接 `connected` 之前不再调度。
 - **running 看门狗**：run 启动后按 `budget.timeoutMin + budget.approvalTimeoutMin + 10 分钟宽限` 设时；到期仍未 `reportRunEnd` → 记失败、释放槽位，并调用该窗口的 `host.cancelRun`（若 host 还在）。`reportRunEnd` 会清掉定时器。
 - **运行结束**：renderer `TriggerRunHost` 订阅 `AutomatedSessionService.onDidEndRun`，调 `reportRunEnd`。main：
@@ -539,11 +541,12 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 入口：命令 `workbench.action.triggers.openManager`、Sessions 标题栏按钮、状态栏条目、列表 QuickPick 的第一项。标签页身份由 `TriggerManagerEditorInput` 固定（`resource = universe:/triggerManager`）；`OpenTriggerManagerAction` 先在所有编辑器组里查找这个 input（`revealEditorInGroups`），命中就切换到该组并通过 selection 事件传复合键，未命中才经 `openPinnedSingletonEditor` 打开。
 
 - `TriggerManagerEditor`：订阅 `onDidChangeTriggers` **先于**首次 `listTriggers`，`cancelled` 标记防止卸载后 setState；左栏搜索 / 新建 / 全部暂停 / 打开配置 / 查看日志；列表按工作区分组，键盘上下导航走 `useFlatListNavigation`。行尾 `Toggle` 调 `setPaused`（不改 `enabled`），`pausedAll` 时禁用。
-- `TriggerOverviewPanel`：状态、闸门说明（激活 / 高权限 / approve / 离线 / 自动暂停）、操作按钮（立即运行、暂停 / 恢复、三种确认、查看日志、在 JSON 中定位）。「在 JSON 中定位」走 `revealTriggerConfig`，用 `configDocument.triggerSectionLine(..., 'trigger')` 定位到该条定义。
+- `TriggerOverviewPanel`：状态、闸门说明（激活 / 高权限 / approve / 离线 / 自动暂停 / 默认暂停）、操作按钮（立即运行、暂停 / 恢复、三种确认、查看日志、在 JSON 中定位）。「立即运行」只受 `pausedAll` / 确认 / 离线 / invalid 限制，单触发器暂停不再禁用。「在 JSON 中定位」走 `revealTriggerConfig`，用 `configDocument.triggerSectionLine(..., 'trigger')` 定位到该条定义。
+- 三种确认（`confirmTriggerActivation` / `confirmElevatedMode` / `confirmAutoApprove`）在该触发器处于暂停（且非 `pausedAll`）、且这次确认之后**已无其它未完成确认**时，改用 `IConfirmOptions.buttons` 提供「确认并恢复」（`choiceIndex === 0`，确认后调 `setPaused(key, false)`）与「仅确认」；否则维持单一 `primaryButton` 形态。
 - `TriggerConfigPanel`：分区表单（基本 / 触发源 / 会话 / 预算 / 允许的动作），所有控件来自 `@universe-editor/workbench-ui`（含 `Textarea`）。保存前 `IDialogService.confirm`；`source` / `allowedActions` 有变化时额外提示内部注释会丢。外部热加载时只在与选中触发器相关的签名变化时重读，dirty 显示「文件已在外部修改」banner；自动重读失败不会把表单换成阻断性错误页，离线期间跳过自动重读。
-- `TriggerCreateWizard`：模板 → 基本信息 → 会话 → 预算 / 权限 / 动作；写入工作区文件后经列表刷新选中新触发器（等待有 15s 超时兜底）。写入前若 `triggers.json` 的 JSON 标签页有未保存修改则拒绝；`ensureConfigFile` 失败会 Warning 提示补救方式，不再静默吞错。
+- `TriggerCreateWizard`：模板 → 基本信息 → 会话 → 预算 / 权限 / 动作；`emptyDraft().enabled` 默认 `true`（新触发器仍由 main 判为首次出现而暂停）。写入工作区文件后经列表刷新选中新触发器（等待有 15s 超时兜底）。写入前若 `triggers.json` 的 JSON 标签页有未保存修改则拒绝；`ensureConfigFile` 失败会 Warning 提示补救方式，不再静默吞错。
 - `TriggerRunsPanel`：`listRuns({ triggerKey, outcome?, limit: 100 })`；outcome 筛选下推到 main（选「全部」时不带该字段），切换筛选以请求序号丢弃过期响应；行点击有 `sessionId` 时复用 `revealSessionChat`，否则打开 `TriggerReportEditorInput`（authority 由 workspace URI 推出）；同时提供「打开会话 / 查看报告」按钮。`summary.running` 由 >0 归零或 `lastRunId` 变化时自动刷新，切换触发器时同步重置基线避免重复请求，另有手动刷新与加载 / 空 / 错误状态。
-- `TriggerManagerStatusContribution`（`AfterRestore`）：`summarizeTriggerCounts` 只在 running / 待确认 / 自动暂停 / 离线 / 错误时显示 `⚡ …`，点击执行 `openManager`；订阅与 accessor 在 dispose 时释放。
+- `TriggerManagerStatusContribution`（`AfterRestore`）：状态栏**常驻**条目（构造即 `addEntry`，`listTriggers` 失败也保留基础 launcher；之后只 `update`，dispose 释放）。`summarizeTriggerCounts` 给出总数 / 运行中 / 待确认 / 自动暂停 / 离线 / 出错计数、**去重后的需要处理数**与最早 `nextRunAt`；需要处理数 >0 → 文本 `$(zap) N` + `kind: 'prominent'`；否则运行数 >0 → `$(sync~spin) N`（不用 `showProgress`，避免渲染器再插一个旋转图标形成双图标）；否则 `$(zap)`。tooltip 是多行摘要 + 「Next run …」+ 打开管理器提示，无触发器时提示去管理器新建。点击执行 `openManager`。
 
 > 展示口径差异是有意的：管理器列表 / 状态栏 badge 优先展示「自动暂停」「待确认」等更可行动的信号，而 `TriggerSummary.status`（main 产出）在暂停时仍以 `paused` 优先。不要为对齐两者去改 main 的状态优先级。
 
@@ -589,23 +592,24 @@ renderer 在发送首条消息前用 `IFileService` 写 `<runDir>/prompt.md`，�
 - 时间相关全部注入假时钟（`TriggerClock` / watcher 的 `now`/`setTimeout`）。
 - main 服务测试用假窗口 host、假 `PollCommandFetcher`、假 `AuditLog`、假工作区信任探针，避免真实文件系统与 Electron；配置写进临时工作区的 `.universe-editor/triggers.json`，注册表写 `<dir>/triggers/workspaces.json`。
 - 激活闸门相关用例覆盖：未确认不调度 / 不跑 poll / `runNow` 拒绝；确认后指纹变化失效；两个工作区同名 id 的确认 / 暂停 / 移除互相隔离。
+- 默认暂停相关用例覆盖：首次发现的键初始 `paused: true`（不设 `autoPaused`）、已有键 `paused: false` 不被改写、重启不重判、暂停时 `runNow` 成功但定时不触发、`pausedAll` 仍拒绝 `runNow`、暂停只丢弃自动排队项而保留手动排队项、暂停状态下手动 pending 仍会重放；`RunQueue.remove` 有独立单测。测试 harness 默认在确认激活后显式 resume（可用 `autoResume: false` 观察默认暂停）。
 - 远程门禁用例覆盖：offline 时 `schedule` 不推进、重连后按 `onMissed` 处理（`skip` 丢弃 / `catch-up-once` 只补最近一次）、`poll` 跳过且不记失败、`runNow` 报错；已接受但启动前断连或窗口消失的事件以 deferred 保留在 pending（释放队列槽位、不 forget key、不退避），重连 + 窗口回来时重放；队列出队时若已离线，槽位立即释放并留待重放；连接状态 / 窗口存在性变化驱动 attach / detach；远程 runDir 带 clientId 命名空间且各客户端只清理自己的子目录（`createRunDir` 的保护集按同一 authority 的 active / queued / pending 收集，不依赖工作区 entry 是否还在）；远程报告只有 `connected` 时可读，否则 `unavailable`。
 - 会话启动测试用 `inMemoryAcpPair` 或假 session（见 `services/acp/CLAUDE.md` 测试套路）。
 
-E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/triggerManager.spec.ts`（`@p1`）覆盖管理器：命令打开的单例 tab、列表行、行内暂停 / 恢复、配置表单写回（注释保留 + 保存后回到待确认）、待确认时的状态栏条目及点击打开、一次真实运行后的运行历史行；`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：
+E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/triggerManager.spec.ts`（`@p1`）覆盖管理器：命令打开的单例 tab、列表行、行内恢复 / 暂停、配置表单写回（注释保留 + 保存后回到待确认）、常驻状态栏条目（待确认时 `$(zap) N` + tooltip 摘要）及点击打开、一次真实运行后的运行历史行；`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：
 
 - 没有 `.universe-editor/triggers.json` 时不列出任何触发器、不创建会话；
 - 写文件后经 `openConfig` 登记工作区；
 - 未确认时 `runNow` 拒绝且不创建会话；确认后手动触发 → 用 echo agent 建一个 **inactive** 会话（不占用编辑区、不切 active），历史行带 `automation` 溯源，`firstPrompt` 含 `## 任务` 与空 payload 的「本次无外部事件数据。」提示，且不出现 `<event-data>` 围栏；
 - 激活确认后高权限 mode 仍需 elevated 确认，未确认时 `runNow` 拒绝且不创建会话；
-- 暂停的触发器 `runNow` 拒绝（错误含 paused），且不会创建会话；
+- 暂停的触发器仍可 `runNow`（手动覆盖暂停），运行结束后状态仍是「已暂停」；恢复后回到配置决定的状态。
 - 非法配置条目出现在列表里、带错误、`runNow` 拒绝。
 
 探针（`window.__E2E__`，契约在 `packages/e2e-contract`）：
 
 - `listTriggers()` → `E2ETriggerSummary[]`（含 `key` / `workspace` / `workspaceName` / `activationConfirmed`）
 - `runTriggerNow(triggerKey)` → 只等到事件被接受 / 入队，不等到会话创建（用 `getAcpAutomationRows` 轮询结果）
-- `setTriggerPaused(triggerKey, paused)` → 从主进程暂停 / 恢复单个触发器（与列表 QuickPick 同一入口），用于验证暂停门控
+- `setTriggerPaused(triggerKey, paused)` → 从主进程暂停 / 恢复单个触发器（与列表 QuickPick 同一入口），用于验证默认暂停与手动运行覆盖暂停
 - `listTriggerRuns(triggerKey)` → 该触发器最新在前的运行历史（`history.jsonl`，最多 100 条），用于断言运行结束后写入与管理器表格
 - `confirmTriggerActivation(triggerKey)` → 走与命令相同的激活确认
 - `getTriggersRunsDir()` → `<userData>/triggers/runs` 的绝对路径（报告断言用）

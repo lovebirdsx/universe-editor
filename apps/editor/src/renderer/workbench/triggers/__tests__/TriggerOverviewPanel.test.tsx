@@ -68,9 +68,14 @@ describe('TriggerOverviewPanel', () => {
     expect(runNowDisabled()).toBe(false)
   })
 
+  it('keeps Run now available for a paused trigger but not when all are paused', () => {
+    renderPanel(summary({ paused: true, status: 'paused' }))
+    expect(runNowDisabled()).toBe(false)
+    expect(screen.getByTestId('trigger-manager-gate-paused')).toBeDefined()
+  })
+
   it.each([
-    ['paused', { paused: true }],
-    ['paused for all triggers', { pausedAll: true }],
+    ['paused for all triggers', { paused: true, pausedAll: true }],
     ['needing activation', { activationConfirmed: false }],
     ['needing high-privilege confirmation', { elevatedMode: true }],
     ['offline', { offline: true }],
