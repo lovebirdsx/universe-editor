@@ -620,6 +620,27 @@ describe('ProcessLifecycleRegistry orphan sweep (win32)', () => {
     expect(killPid).not.toHaveBeenCalled()
   })
 
+  // Regression: every console child gets a `conhost.exe` helper in its job; `.NET
+  // Process.Start` orphans therefore look like "a wrapper still parenting a live
+  // process". Counting the helper as the wrapped command kept such orphans alive
+  // forever (smoke.processLifecycleOrphan failed deterministically).
+  it('reaps a dead-parent orphan whose only member child is the console host', () => {
+    const backend = new FakeBackend()
+    const { registry, killPid } = sweepRegistry(backend)
+    trackReap(registry)
+    backend.members.set(100n, [10, 11, 12])
+    backend.processTable = [
+      { pid: 10, ppid: 5 }, // agent root
+      { pid: 11, ppid: 98 }, // orphan: parent 98 already exited
+      { pid: 12, ppid: 11, name: 'conhost.exe' }, // console host helper, in the job
+    ]
+
+    registry.sweepOrphans()
+
+    expect(killPid).toHaveBeenCalledWith(11)
+    expect(killPid).not.toHaveBeenCalledWith(12)
+  })
+
   it('never targets a tree: the sweep uses the single-pid killer', () => {
     const backend = new FakeBackend()
     const treeKill = vi.fn<(pid: number) => void>()

@@ -147,6 +147,17 @@ function parseSweepInterval(raw: string | undefined): number {
     : DEFAULT_ORPHAN_SWEEP_MS
 }
 
+/**
+ * Console hosts every console child gets on Windows (classic and Windows Terminal).
+ * They inherit the job like any child, but they are not the command a wrapper shell
+ * runs — the orphan sweep must not treat them as a live descendant.
+ */
+const CONSOLE_HOST_EXES = new Set(['conhost.exe', 'openconsole.exe'])
+
+function isConsoleHost(name: string | undefined): boolean {
+  return name !== undefined && CONSOLE_HOST_EXES.has(name.toLowerCase())
+}
+
 interface Entry {
   readonly spec: TrackProcessSpec
   readonly slot: Slot
@@ -380,19 +391,6 @@ export class ProcessLifecycleRegistry implements IDisposable {
       if (Number.isInteger(row.ppid)) parentOf.set(row.pid, row.ppid)
       if (typeof row.name === 'string' && row.name.length > 0) nameOf.set(row.pid, row.name)
     }
-    // A dead parent does not make a process a leftover: shell wrappers keep running
-    // the command below them (Git-Bash's MSYS `exec` emulation ALWAYS leaves a
-    // wrapper whose parent already exited). Only pids with no live descendant are
-    // true orphans; reaping the rest severed live agent tool commands mid-run. A
-    // subtree whose root still parents a live process is left to P0 / owner reclaim.
-    const hasLiveDescendant = new Set<number>()
-    for (const row of rows) {
-      let ancestor = parentOf.get(row.pid)
-      while (ancestor !== undefined && ancestor > 1 && !hasLiveDescendant.has(ancestor)) {
-        hasLiveDescendant.add(ancestor)
-        ancestor = parentOf.get(ancestor)
-      }
-    }
 
     for (const slot of this._slots.values()) {
       for (const job of [...slot.jobs]) {
@@ -403,6 +401,22 @@ export class ProcessLifecycleRegistry implements IDisposable {
           members = backend.listPids(job)
         } catch {
           continue
+        }
+        // A dead parent does not make a process a leftover: shell wrappers keep running
+        // the command below them (Git-Bash's MSYS `exec` emulation ALWAYS leaves a
+        // wrapper whose parent already exited). Only members with no live descendant
+        // *inside the job* are true orphans; reaping the rest severed live agent tool
+        // commands mid-run. Console hosts (`conhost.exe`/`OpenConsole.exe`) are OS
+        // helpers every console child gets — they are not the wrapped command and must
+        // not shield an orphan, or a `Process.Start` child could never be reaped.
+        const hasLiveDescendant = new Set<number>()
+        for (const memberPid of members) {
+          if (isConsoleHost(nameOf.get(memberPid))) continue
+          let ancestor = parentOf.get(memberPid)
+          while (ancestor !== undefined && ancestor > 1 && !hasLiveDescendant.has(ancestor)) {
+            hasLiveDescendant.add(ancestor)
+            ancestor = parentOf.get(ancestor)
+          }
         }
         const killed: number[] = []
         const labels: string[] = []

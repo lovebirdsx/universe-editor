@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { getPathComparisonKey, URI } from '@universe-editor/platform'
+import { getPathComparisonKey, normalizePlatform, URI } from '@universe-editor/platform'
 import {
   canonicalTriggerKey,
   parseTriggerKey,
@@ -67,8 +67,11 @@ describe('trigger identity', () => {
   })
 
   it('rebuilds a composite key idempotently', () => {
+    // canonicalTriggerKey folds through the host platform; build the key the same way
+    // so the case assertion holds on case-sensitive CI hosts too.
+    const host = normalizePlatform(process.platform)
     for (const workspace of [fileUri('X:/workspace/one'), remoteUri('acme-host', '/work/one')]) {
-      const key = triggerKeyFor(workspace, 'weekly', 'win32')
+      const key = triggerKeyFor(workspace, 'weekly', host)
       expect(canonicalTriggerKey(key)).toBe(key)
       expect(canonicalTriggerKey(`${workspace}/./\u0000weekly`)).toBe(key)
     }

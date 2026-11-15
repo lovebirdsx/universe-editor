@@ -58,10 +58,12 @@ POSIX 不改为立即组杀：已有 5 秒有界组杀兜底，立即杀可能�
 
 1. 先做廉价预检：没有任何 reap job 时直接返回，不取快照。
 2. 用 addon 的 `listProcesses()` 取一次全量 pid→ppid 快照。
-3. 对每个 reap job 的 `listPids(job)` 成员，杀掉满足「不是 job 根、不是 selfPid、pid>0、在快照里有 ppid、ppid>0、ppid 不在快照中、**且自己没有任何活体后代**」的进程；成员自己不在快照里、或父 pid 被复用为其他活进程时都保守跳过（安全优先，P0/owner 回收仍是兜底）。
+3. 对每个 reap job 的 `listPids(job)` 成员，杀掉满足「不是 job 根、不是 selfPid、pid>0、在快照里有 ppid、ppid>0、ppid 不在快照中、**且自己在 job 内没有任何活体后代**」的进程；成员自己不在快照里、或父 pid 被复用为其他活进程时都保守跳过（安全优先，P0/owner 回收仍是兜底）。
 4. 只杀命中的那一个 pid（`defaultKillOrphanPid`，Windows 上 `taskkill /pid <pid> /F`），**不带 `/T`**。杀完后复查 `listPids(job)`：为空且根也不在快照中时才 `CloseHandle`，避免 `listPids` 异常返回空时误关仍含活根的 job。
 
-为什么必须同时加这两条约束（「有活体后代则跳过」+「单 pid 杀」）：Git Bash / MSYS 执行 `#!/bin/sh` 脚本（nvm4w 的 `pnpm` shim 就是）时用 `exec` 模拟，会留下一个**父进程已退出、但子进程是正在跑的命令**的包装 `sh.exe`。旧判定只看「父不在快照里」，把它当孤儿，再 `taskkill /T` 就把整棵活树带走——编辑器自己托管的 ACP agent 里，被测命令整棵树都在这个 job 下，于是一次 `pnpm e2e` 会被宿主编辑器自己的清扫静默杀死（被杀 shell 的 Windows 退出码 `0x100` 映射成 POSIX `$?`=0，表现为「无输出的绿灯」）。真正的孤儿叶子（`TaskStop` 后残留的 grep/head）没有后代，仍会被立刻清掉。
+为什么必须同时加这两条约束（「job 内有活体后代则跳过」+「单 pid 杀」）：Git Bash / MSYS 执行 `#!/bin/sh` 脚本（nvm4w 的 `pnpm` shim 就是）时用 `exec` 模拟，会留下一个**父进程已退出、但子进程是正在跑的命令**的包装 `sh.exe`。旧判定只看「父不在快照里」，把它当孤儿，再 `taskkill /T` 就把整棵活树带走——编辑器自己托管的 ACP agent 里，被测命令整棵树都在这个 job 下，于是一次 `pnpm e2e` 会被宿主编辑器自己的清扫静默杀死（被杀 shell 的 Windows 退出码 `0x100` 映射成 POSIX `$?`=0，表现为「无输出的绿灯」）。真正的孤儿叶子（`TaskStop` 后残留的 grep/head）没有后代，仍会被立刻清掉。
+
+「活体后代」只看 **job 成员**，且排除控制台宿主（`conhost.exe` / `OpenConsole.exe`）：每个控制台子进程都会带一个继承 job 的 conhost，它不是包装 shell 正在跑的命令，不能替孤儿挡刀（曾因此让 `.NET Process.Start` 拉起的孤儿永久存活，`smoke.processLifecycleOrphan` 在 CI 上稳定失败）。
 
 默认 30s，`UNIVERSE_ORPHAN_SWEEP_MS=<正整数>` 覆盖，`UNIVERSE_DISABLE_ORPHAN_SWEEP=1` 关闭；非 win32、无 backend、旧 addon（无 `listProcesses`）时自动 no-op。`dispose()` 清理定时器。
 
@@ -77,7 +79,7 @@ ext host、ACP agent、ACP terminal、MCP stdio、pty（`ptyHostService`）、ri
 - POSIX main 崩溃不由本机制保证（见上表）。
 - POSIX 上 leader 退出后仍有后代的进程组会保留 5 秒再回收（`ORPHAN_GROUP_REAP_MS`），避免长期持有的 pgid 被 OS 复用后误杀无关进程组；若 5 秒内该 pid 被别的 owner 重新登记，则只丢弃旧 pgid、不发信号（否则会误杀新进程组）。
 - Windows 上树里仍有后代时 job 会保留到后代退出后的下一次复查，最迟 owner 回收；app owner 没有中途回收点，极端情况下保留到应用退出（仅影响句柄数量，不影响语义）。ACP agent 例外（P0）。
-- **P1 不杀「父已退出但仍带着活体后代」的进程**：这是为了不误伤 MSYS `exec` 留下的包装 shell（见上），代价是「父退出后仍与其后代一起常驻」的进程树要等 P0 / owner 回收才清掉。
+- **P1 不杀「父已退出但 job 内仍有活体后代」的进程**：这是为了不误伤 MSYS `exec` 留下的包装 shell（见上），代价是「父退出后仍与其后代一起常驻」的进程树要等 P0 / owner 回收才清掉。
 - **P1 会杀掉 ACP agent 树里「父进程已退出、且自己已无后代」的有意常驻进程**（例如主动 daemonize 的叶子进程）：判定只看 ppid 与后代，无法区分「孤儿」和「主动脱离父进程的守护进程」。只对带 `reapDescendantsOnRelease` 的 job 生效，其他 spawn 点不受影响。
 - **父 pid 被复用时会漏杀**：sweep 把「ppid 指向活进程」视为父仍存活而跳过；这类孤儿靠 P0 / owner 回收兜底。`taskkill /pid <pid> /F` 从判断到执行之间也存在 pid 被回收的窄窗口，与现有 `_killUncontained` 同类风险。
 - **sweep 的 `taskkill /pid <pid> /F` 是同步调用**：30s 一次，且只在存在 reap job 时才取快照；若日后出现主线程卡顿证据再改异步。

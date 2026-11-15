@@ -591,7 +591,11 @@ test.describe('mobile gateway', () => {
       const snapshotPromise = nextFrameOfType(ws, 'session_snapshot')
       ws.send(serializeFrame({ type: 'subscribe_session', ref: row.ref }))
       const snapshot = await snapshotPromise
-      expect(snapshot.session.summary.ref).toEqual(row.ref)
+      // `durableId` is attached once the agent reports it; the inbox row may predate it.
+      expect(snapshot.session.summary.ref).toMatchObject({
+        windowId: row.ref.windowId,
+        localId: row.ref.localId,
+      })
       expect(snapshot.session.timeline).toEqual([])
 
       const deltas: Extract<ServerFrame, { type: 'session_delta' }>[] = []
@@ -624,16 +628,21 @@ test.describe('mobile gateway', () => {
       }
       await expect.poll(mirroredText, { timeout: 5000 }).toEqual(['hello', 'echo: hello'])
 
-      const completedTool = deltas
-        .flatMap((delta) => delta.events)
-        .flatMap((event) =>
-          event.type === 'tool_call_upsert'
-            ? [event.item]
-            : event.type === 'timeline_item_added' && event.item.kind === 'toolCall'
+      const completedToolOf = () =>
+        deltas
+          .flatMap((delta) => delta.events)
+          .flatMap((event) =>
+            event.type === 'tool_call_upsert'
               ? [event.item]
-              : [],
-        )
-        .find((item) => item.status === 'completed')
+              : event.type === 'timeline_item_added' && event.item.kind === 'toolCall'
+                ? [event.item]
+                : [],
+          )
+          .find((item) => item.status === 'completed')
+      // The agent emits the message chunks before the tool_call lifecycle; the poll
+      // above can settle on the messages while the completion delta is still in flight.
+      await expect.poll(() => completedToolOf()?.title, { timeout: 5000 }).toBe('echo')
+      const completedTool = completedToolOf()
       expect(completedTool).toMatchObject({ title: 'echo' })
       const toolCallId = completedTool?.id ?? ''
 
