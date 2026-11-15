@@ -49,6 +49,7 @@ import {
   type MobilePermissionSettleSource,
   type MobilePlanEntry,
   type MobileSessionEvent,
+  type MobileSubagentTail,
   type MobileTimelineItem,
   type MobileTimelineMessageItem,
   type MobileTimelineToolCallItem,
@@ -57,7 +58,12 @@ import {
   type MobileTriggerAutomationSummary,
   type MobileUsage,
 } from '@universe-editor/mobile-protocol'
-import { computeLineDiff, MEDIA_TRUNCATED_META_KEY } from '@universe-editor/acp-view-model'
+import {
+  computeLineDiff,
+  firstLineSummary,
+  firstNonEmptyLine,
+  MEDIA_TRUNCATED_META_KEY,
+} from '@universe-editor/acp-view-model'
 import { readMobileAttachmentMeta } from '../acp/promptAttachment.js'
 import type {
   AcpMessage,
@@ -363,6 +369,7 @@ export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
     call.settleReason !== undefined && call.settleReason.length > 0
       ? clampText(call.settleReason, MAX_REASON_LENGTH)
       : undefined
+  const subagentTail = subagent ? projectSubagentTail(call) : undefined
   return {
     kind: 'toolCall',
     id: clampText(call.id, MAX_ID_LENGTH),
@@ -380,6 +387,54 @@ export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
     ...(durationMs !== undefined ? { durationMs } : {}),
     ...(settleReason !== undefined ? { settleReason } : {}),
     ...(call.syntheticDenial === true ? { syntheticDenial: true } : {}),
+    ...(subagentTail !== undefined ? { subagentTail } : {}),
+  }
+}
+
+/**
+ * The last child of a running sub-agent when the phone's only-message filter
+ * would hide it — the wire counterpart of the desktop `getSubagentHiddenActivity`.
+ * Visible tails (agent text, kept cards) yield nothing, like the desktop rule.
+ */
+function projectSubagentTail(call: AcpToolCall): MobileSubagentTail | undefined {
+  if (call.status !== 'pending' && call.status !== 'in_progress') return undefined
+  const tail = call.children?.[call.children.length - 1]
+  if (tail === undefined) return undefined
+  if (tail.kind === 'message') {
+    if (tail.message.role !== 'thought') return undefined
+    const line = firstNonEmptyLine(tail.message.text)
+    const summary = line.length > 0 ? firstLineSummary(line) : ''
+    return summary.length > 0
+      ? { kind: 'thought', summary: clampText(summary, MAX_REASON_LENGTH) }
+      : { kind: 'thought' }
+  }
+  // Mirrors the desktop always-kept predicate in timelineCollapse.ts.
+  const child = tail.call
+  if (
+    child.subagent === true ||
+    (child.children?.length ?? 0) > 0 ||
+    child.requiresUserDecision === true ||
+    child.kind === 'switch_mode'
+  ) {
+    return undefined
+  }
+  const projected = projectToolCall(child)
+  const location = projected.locations?.[0]
+  const diff = projected.diffs?.[0]
+  return {
+    kind: 'toolCall',
+    title: projected.title,
+    toolKind: projected.toolKind,
+    status: projected.status,
+    ...(projected.status === 'failed' && projected.preview !== undefined
+      ? { preview: projected.preview }
+      : {}),
+    ...(location !== undefined ? { locations: [location] } : {}),
+    ...(diff !== undefined ? { diffs: [diff] } : {}),
+    ...(projected.startedAt !== undefined ? { startedAt: projected.startedAt } : {}),
+    ...(projected.durationMs !== undefined ? { durationMs: projected.durationMs } : {}),
+    ...(projected.settleReason !== undefined ? { settleReason: projected.settleReason } : {}),
+    ...(projected.syntheticDenial === true ? { syntheticDenial: true } : {}),
   }
 }
 

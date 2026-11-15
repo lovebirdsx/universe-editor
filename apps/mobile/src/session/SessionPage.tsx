@@ -475,6 +475,7 @@ export function SessionPage({
             displayMode={displayMode}
             truncated={state.truncated}
             active={activityActive}
+            awaitingDecision={permission !== undefined || elicitation !== undefined}
             running={sessionRunning}
             client={client}
             rewindAvailable={rewindAvailable}

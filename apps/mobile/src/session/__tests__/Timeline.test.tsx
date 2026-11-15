@@ -307,6 +307,60 @@ describe('Timeline hidden activity', () => {
   })
 })
 
+describe('Timeline sub-agent activity', () => {
+  const task = (overrides: Partial<MobileTimelineToolCallItem> = {}): MobileTimelineToolCallItem =>
+    toolCall('task', {
+      title: 'Explore the repo',
+      toolKind: 'think',
+      status: 'in_progress',
+      subagent: true,
+      subagentTail: {
+        kind: 'toolCall',
+        title: 'Bash',
+        toolKind: 'execute',
+        status: 'in_progress',
+        locations: [{ path: 'src/a.ts' }],
+        startedAt: 1_000_000,
+      },
+      ...overrides,
+    })
+
+  it('shows the hidden step on a running sub-agent card in only-message mode', () => {
+    clientMock.serverNow.mockReturnValue(1_003_000)
+    renderTimeline([userMessage('m1', 'hello'), task()], 'onlyMessage', { active: true })
+
+    const row = screen.getByTestId('tool-call-row')
+    const activity = screen.getByTestId('session-subagent-activity')
+    expect(row.contains(activity)).toBe(true)
+    expect(screen.getByTestId('session-subagent-activity-primary').textContent).toBe('Bash')
+    expect(screen.getByTestId('session-subagent-activity-detail').textContent).toBe('src/a.ts · 3s')
+    // The tail is the visible card, so the timeline-level row stays away.
+    expect(screen.queryByTestId('session-timeline-activity')).toBeNull()
+  })
+
+  it('hides the row in full mode and while awaiting a decision', () => {
+    const { unmount } = render(
+      <Timeline
+        sessionKey="1:s1"
+        timeline={[task()]}
+        displayMode="full"
+        truncated={false}
+        client={client}
+      />,
+    )
+    expect(screen.queryByTestId('session-subagent-activity')).toBeNull()
+    unmount()
+
+    renderTimeline([task()], 'onlyMessage', { awaitingDecision: true })
+    expect(screen.queryByTestId('session-subagent-activity')).toBeNull()
+  })
+
+  it('drops the row once the sub-agent settles', () => {
+    renderTimeline([task({ status: 'completed' })], 'onlyMessage')
+    expect(screen.queryByTestId('session-subagent-activity')).toBeNull()
+  })
+})
+
 describe('Timeline message actions', () => {
   it('renders no action buttons without a handler', () => {
     renderTimeline([anchoredUser('m1', 'hello', { canFork: true })], 'onlyMessage')

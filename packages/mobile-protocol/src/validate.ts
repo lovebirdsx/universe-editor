@@ -73,6 +73,8 @@ import type {
   MobileSessionRef,
   MobileSessionSnapshot,
   MobileSessionSummary,
+  MobileSubagentTail,
+  MobileSubagentToolTail,
   MobileTimelineItem,
   MobileTimelineItemKind,
   MobileTimelineMessageItem,
@@ -2593,6 +2595,8 @@ function parseTimelineToolCall(value: Record<string, unknown>): Result<MobileTim
   if (!settleReason.ok) return settleReason
   const syntheticDenial = parseOptionalBoolean(value.syntheticDenial, 'toolCall.syntheticDenial')
   if (!syntheticDenial.ok) return syntheticDenial
+  const subagentTail = parseOptional(value.subagentTail, parseSubagentTail)
+  if (!subagentTail.ok) return subagentTail
   return ok({
     kind: 'toolCall',
     id,
@@ -2608,6 +2612,74 @@ function parseTimelineToolCall(value: Record<string, unknown>): Result<MobileTim
     ...(requiresUserDecision.value !== undefined
       ? { requiresUserDecision: requiresUserDecision.value }
       : {}),
+    ...(startedAt.value !== undefined ? { startedAt: startedAt.value } : {}),
+    ...(durationMs.value !== undefined ? { durationMs: durationMs.value } : {}),
+    ...(settleReason.value !== undefined ? { settleReason: settleReason.value } : {}),
+    ...(syntheticDenial.value !== undefined ? { syntheticDenial: syntheticDenial.value } : {}),
+    ...(subagentTail.value !== undefined ? { subagentTail: subagentTail.value } : {}),
+  })
+}
+
+function parseSubagentTail(value: unknown): Result<MobileSubagentTail> {
+  if (!isRecord(value)) return fail('bad_request', 'toolCall.subagentTail must be an object')
+  if (value.kind === 'thought') {
+    const summary = parseOptionalNonEmptyString(
+      value.summary,
+      MAX_REASON_LENGTH,
+      'subagentTail.summary',
+    )
+    if (!summary.ok) return summary
+    return ok({
+      kind: 'thought',
+      ...(summary.value !== undefined ? { summary: summary.value } : {}),
+    })
+  }
+  if (value.kind === 'toolCall') return parseSubagentToolTail(value)
+  return fail('bad_request', 'subagentTail.kind is unknown')
+}
+
+function parseSubagentToolTail(value: Record<string, unknown>): Result<MobileSubagentToolTail> {
+  const title = value.title
+  if (!isBoundedString(title, MAX_TITLE_LENGTH)) {
+    return fail('bad_request', 'subagentTail.title is too large')
+  }
+  const toolKind = value.toolKind
+  if (!isBoundedString(toolKind, MAX_STATUS_LENGTH)) {
+    return fail('bad_request', 'subagentTail.toolKind is too large')
+  }
+  const status = value.status
+  if (!isNonEmptyBoundedString(status, MAX_STATUS_LENGTH)) {
+    return fail('bad_request', 'subagentTail.status must be 1–64 characters')
+  }
+  const preview = parseOptionalString(value.preview, MAX_PREVIEW_LENGTH, 'subagentTail.preview')
+  if (!preview.ok) return preview
+  const diffs = parseOptional(value.diffs, parseDiffStats)
+  if (!diffs.ok) return diffs
+  const locations = parseOptional(value.locations, parseLocations)
+  if (!locations.ok) return locations
+  const startedAt = parseOptionalNonNegativeInteger(value.startedAt, 'subagentTail.startedAt')
+  if (!startedAt.ok) return startedAt
+  const durationMs = parseOptionalNonNegativeInteger(value.durationMs, 'subagentTail.durationMs')
+  if (!durationMs.ok) return durationMs
+  const settleReason = parseOptionalNonEmptyString(
+    value.settleReason,
+    MAX_REASON_LENGTH,
+    'subagentTail.settleReason',
+  )
+  if (!settleReason.ok) return settleReason
+  const syntheticDenial = parseOptionalBoolean(
+    value.syntheticDenial,
+    'subagentTail.syntheticDenial',
+  )
+  if (!syntheticDenial.ok) return syntheticDenial
+  return ok({
+    kind: 'toolCall',
+    title,
+    toolKind,
+    status,
+    ...(preview.value !== undefined ? { preview: preview.value } : {}),
+    ...(diffs.value !== undefined ? { diffs: diffs.value } : {}),
+    ...(locations.value !== undefined ? { locations: locations.value } : {}),
     ...(startedAt.value !== undefined ? { startedAt: startedAt.value } : {}),
     ...(durationMs.value !== undefined ? { durationMs: durationMs.value } : {}),
     ...(settleReason.value !== undefined ? { settleReason: settleReason.value } : {}),

@@ -18,6 +18,8 @@ import { strings } from '../strings.js'
 export interface ToolCallRowProps {
   readonly item: MobileTimelineToolCallItem
   readonly client: Pick<MobileClient, 'requestToolCallDetail'>
+  /** Rendered below the header whether or not the row is expanded. */
+  readonly footer?: ReactNode
 }
 
 const KIND_GLYPHS: Readonly<Record<string, string>> = {
@@ -31,7 +33,7 @@ const KIND_GLYPHS: Readonly<Record<string, string>> = {
   other: '•',
 }
 
-export function ToolCallRow({ item, client }: ToolCallRowProps) {
+export function ToolCallRow({ item, client, footer }: ToolCallRowProps) {
   const [expanded, setExpanded] = useState(false)
   const [detail, setDetail] = useState<MobileToolCallDetail | undefined>(undefined)
   const [loading, setLoading] = useState(false)
@@ -81,6 +83,7 @@ export function ToolCallRow({ item, client }: ToolCallRowProps) {
           {expanded ? '▴' : '▾'}
         </span>
       </button>
+      {footer}
 
       {expanded && (
         <div className="tool-row__body">

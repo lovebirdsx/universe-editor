@@ -190,6 +190,92 @@ describe('projectToolCall activity timing', () => {
   })
 })
 
+describe('projectToolCall sub-agent tail', () => {
+  const thought = (text: string): AcpChildItem => ({
+    kind: 'message',
+    id: 'thought-1',
+    message: { id: 'thought-1', role: 'thought', text, blocks: [], streaming: true },
+  })
+  const childTool = (overrides: Partial<AcpToolCall> = {}): AcpChildItem => ({
+    kind: 'toolCall',
+    id: 'child-tool',
+    call: toolCall({ id: 'child-tool', title: 'Bash', kind: 'execute', ...overrides }),
+  })
+  const task = (children: AcpChildItem[], overrides: Partial<AcpToolCall> = {}): AcpToolCall =>
+    toolCall({
+      id: 'task',
+      kind: 'think',
+      subagent: true,
+      status: 'in_progress',
+      children,
+      ...overrides,
+    })
+
+  it('projects a hidden thought as its first-line summary', () => {
+    expect(projectToolCall(task([thought('\n  Reading the config\nmore')])).subagentTail).toEqual({
+      kind: 'thought',
+      summary: 'Reading the config',
+    })
+    expect(projectToolCall(task([thought('  ')])).subagentTail).toEqual({ kind: 'thought' })
+  })
+
+  it('projects a running hidden tool with its first target and start time', () => {
+    const tail = projectToolCall(
+      task([
+        childTool({
+          status: 'in_progress',
+          text: 'partial output',
+          startedAt: 1_700_000_000_000,
+          locations: [{ path: 'src/a.ts', line: 3 }, { path: 'src/b.ts' }],
+        }),
+      ]),
+    ).subagentTail
+    expect(tail).toStrictEqual({
+      kind: 'toolCall',
+      title: 'Bash',
+      toolKind: 'execute',
+      status: 'in_progress',
+      locations: [{ path: 'src/a.ts', line: 3 }],
+      startedAt: 1_700_000_000_000,
+    })
+  })
+
+  it('keeps the preview only for a failed settled tool', () => {
+    expect(
+      projectToolCall(task([childTool({ status: 'failed', text: 'exit 1', durationMs: 20 })]))
+        .subagentTail,
+    ).toStrictEqual({
+      kind: 'toolCall',
+      title: 'Bash',
+      toolKind: 'execute',
+      status: 'failed',
+      preview: 'exit 1',
+      durationMs: 20,
+    })
+    expect(
+      projectToolCall(task([childTool({ status: 'completed', text: 'ok' })])).subagentTail,
+    ).not.toHaveProperty('preview')
+  })
+
+  it('omits the tail when only-message keeps the last child or the sub-agent settled', () => {
+    expect(projectToolCall(task([childMessage]))).not.toHaveProperty('subagentTail')
+    expect(projectToolCall(task([childTool({ subagent: true })]))).not.toHaveProperty(
+      'subagentTail',
+    )
+    expect(projectToolCall(task([childTool({ requiresUserDecision: true })]))).not.toHaveProperty(
+      'subagentTail',
+    )
+    expect(projectToolCall(task([childTool({ kind: 'switch_mode' })]))).not.toHaveProperty(
+      'subagentTail',
+    )
+    expect(projectToolCall(task([]))).not.toHaveProperty('subagentTail')
+    expect(projectToolCall(task([childTool()], { status: 'completed' }))).not.toHaveProperty(
+      'subagentTail',
+    )
+    expect(projectToolCall(toolCall({ status: 'in_progress' }))).not.toHaveProperty('subagentTail')
+  })
+})
+
 describe('projectMessage mobile attachments', () => {
   const attachmentMeta = {
     id: 'att-1',

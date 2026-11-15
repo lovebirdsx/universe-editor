@@ -8,6 +8,7 @@ import {
   DEFAULT_SESSION_DISPLAY,
   SESSION_DISPLAY_STORAGE_KEY,
   getHiddenActivity,
+  getSubagentHiddenActivity,
   readSessionDisplayPreference,
   selectTimelineForDisplay,
   setSessionDisplayPreference,
@@ -186,6 +187,77 @@ describe('getHiddenActivity', () => {
     const agent = message('a1', 'agent', 'answer')
     expect(getHiddenActivity([agent], agent, 'onlyMessage', true)).toBeNull()
     expect(getHiddenActivity([], notice, 'onlyMessage', true)).toBeNull()
+  })
+})
+
+describe('getSubagentHiddenActivity', () => {
+  const task = (overrides: Partial<MobileTimelineToolCallItem> = {}): MobileTimelineToolCallItem =>
+    toolCall('task', {
+      toolKind: 'think',
+      status: 'in_progress',
+      subagent: true,
+      subagentTail: {
+        kind: 'toolCall',
+        title: 'Bash',
+        toolKind: 'execute',
+        status: 'in_progress',
+        locations: [{ path: 'src/a.ts' }],
+        startedAt: 1_000,
+      },
+      ...overrides,
+    })
+
+  it('describes the hidden running tool of a running sub-agent', () => {
+    expect(getSubagentHiddenActivity(task(), 'onlyMessage', false)).toStrictEqual({
+      kind: 'tool',
+      title: 'Bash',
+      detail: 'src/a.ts',
+      startedAt: 1_000,
+    })
+  })
+
+  it('maps a thought tail and a failed settled tail', () => {
+    expect(
+      getSubagentHiddenActivity(
+        task({ subagentTail: { kind: 'thought', summary: 'Reading' } }),
+        'onlyMessage',
+        false,
+      ),
+    ).toStrictEqual({ kind: 'thinking', detail: 'Reading' })
+    expect(
+      getSubagentHiddenActivity(
+        task({
+          subagentTail: {
+            kind: 'toolCall',
+            title: 'Bash',
+            toolKind: 'execute',
+            status: 'failed',
+            preview: 'exit 1',
+          },
+        }),
+        'onlyMessage',
+        false,
+      ),
+    ).toStrictEqual({
+      kind: 'settledTool',
+      tool: { title: 'Bash', status: 'failed', reason: 'exit 1' },
+    })
+  })
+
+  it('stays silent in full mode, while awaiting a decision, or once settled', () => {
+    expect(getSubagentHiddenActivity(task(), 'full', false)).toBeNull()
+    expect(getSubagentHiddenActivity(task(), 'onlyMessage', true)).toBeNull()
+    expect(
+      getSubagentHiddenActivity(task({ status: 'completed' }), 'onlyMessage', false),
+    ).toBeNull()
+    expect(
+      getSubagentHiddenActivity(
+        toolCall('task', { status: 'in_progress', subagent: true }),
+        'onlyMessage',
+        false,
+      ),
+    ).toBeNull()
+    expect(getSubagentHiddenActivity(task({ subagent: false }), 'onlyMessage', false)).toBeNull()
   })
 })
 

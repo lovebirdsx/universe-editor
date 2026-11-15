@@ -1609,6 +1609,69 @@ describe('parseServerFrame', () => {
     }
   })
 
+  it('parses the sub-agent tail of a running sub-agent card', () => {
+    const delta = (subagentTail: unknown): Record<string, unknown> => ({
+      type: 'session_delta',
+      seq: 1,
+      ref: REF,
+      events: [
+        {
+          type: 'tool_call_upsert',
+          item: {
+            kind: 'toolCall',
+            id: 'task-1',
+            title: 'Explore',
+            toolKind: 'think',
+            status: 'in_progress',
+            hasDetail: false,
+            subagent: true,
+            subagentTail,
+          },
+        },
+      ],
+    })
+    const roundTrip = (tail: unknown): void => {
+      const frame = delta(tail)
+      expect(parseServerFrame(JSON.stringify(frame))).toStrictEqual({ ok: true, value: frame })
+    }
+
+    roundTrip({ kind: 'thought', summary: 'Reading the config' })
+    roundTrip({ kind: 'thought' })
+    roundTrip({
+      kind: 'toolCall',
+      title: 'Bash',
+      toolKind: 'execute',
+      status: 'in_progress',
+      locations: [{ path: 'src/a.ts', line: 3 }],
+      diffs: [{ path: 'src/a.ts', added: 1, removed: 0 }],
+      startedAt: 1_700_000_000_000,
+    })
+    roundTrip({
+      kind: 'toolCall',
+      title: 'Bash',
+      toolKind: 'execute',
+      status: 'failed',
+      preview: 'exit 1',
+      durationMs: 20,
+      settleReason: 'cancelled',
+      syntheticDenial: true,
+    })
+
+    const tool = { kind: 'toolCall', title: 'Bash', toolKind: 'execute', status: 'pending' }
+    for (const bad of [
+      'thought',
+      { kind: 'message' },
+      { kind: 'thought', summary: '' },
+      { ...tool, status: '' },
+      { ...tool, title: 3 },
+      { ...tool, startedAt: -1 },
+      { ...tool, locations: 'a' },
+      { ...tool, syntheticDenial: 'yes' },
+    ]) {
+      expect(errorCode(parseServerFrame(JSON.stringify(delta(bad))))).toBe('bad_request')
+    }
+  })
+
   it('parses session_removed, command_result and resync_required', () => {
     expect(
       parseServerFrame(JSON.stringify({ type: 'session_removed', ref: DURABLE_REF })),

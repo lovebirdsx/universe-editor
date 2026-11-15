@@ -12,11 +12,13 @@ import { MessageAttachments } from './MessageAttachments.js'
 import { MessageImages } from './MessageImages.js'
 import {
   getHiddenActivity,
+  getSubagentHiddenActivity,
   selectTimelineForDisplay,
   type SessionDisplayPreference,
 } from './sessionDisplay.js'
 import { TimelineActivity } from './TimelineActivity.js'
 import { ToolCallGroup } from './ToolCallGroup.js'
+import { ToolCallRow } from './ToolCallRow.js'
 
 const INITIAL_VISIBLE_ITEMS = 200
 const LOAD_EARLIER_BATCH = 200
@@ -29,6 +31,8 @@ export interface TimelineProps {
   readonly truncated: boolean
   /** Agent is running and no permission / elicitation is waiting on the user. */
   readonly active?: boolean | undefined
+  /** A permission / elicitation is waiting; sub-agent cards drop their activity row. */
+  readonly awaitingDecision?: boolean | undefined
   /** Raw session status is `running`; gates the streaming caret like desktop. */
   readonly running?: boolean | undefined
   readonly client: Pick<
@@ -58,6 +62,7 @@ export function Timeline({
   displayMode,
   truncated,
   active = false,
+  awaitingDecision = false,
   running = false,
   client,
   rewindAvailable = false,
@@ -145,6 +150,8 @@ export function Timeline({
               key={`${group.item.kind}:${group.item.id}`}
               item={group.item}
               client={client}
+              displayMode={displayMode}
+              awaitingDecision={awaitingDecision}
               running={running}
               rewindAvailable={rewindAvailable}
               sideTaskAvailable={sideTaskAvailable}
@@ -192,6 +199,8 @@ function groupTimeline(items: readonly MobileTimelineItem[], groupTools: boolean
 function TimelineItem({
   item,
   client,
+  displayMode,
+  awaitingDecision,
   running,
   rewindAvailable,
   sideTaskAvailable,
@@ -204,7 +213,10 @@ function TimelineItem({
     | 'fetchAttachmentBlob'
     | 'fetchMessageImageBlob'
     | 'fetchWorkspaceImageBlob'
+    | 'serverNow'
   >
+  readonly displayMode: SessionDisplayPreference
+  readonly awaitingDecision: boolean
   readonly running: boolean
   readonly rewindAvailable: boolean
   readonly sideTaskAvailable: boolean
@@ -227,8 +239,50 @@ function TimelineItem({
     case 'notice':
       return <NoticeItem item={item} />
     case 'toolCall':
-      return <ToolCallGroup items={[item]} client={client} />
+      return (
+        <ToolCallItem
+          item={item}
+          client={client}
+          displayMode={displayMode}
+          awaitingDecision={awaitingDecision}
+        />
+      )
   }
+}
+
+function ToolCallItem({
+  item,
+  client,
+  displayMode,
+  awaitingDecision,
+}: {
+  readonly item: MobileTimelineToolCallItem
+  readonly client: Pick<MobileClient, 'requestToolCallDetail' | 'serverNow'>
+  readonly displayMode: SessionDisplayPreference
+  readonly awaitingDecision: boolean
+}) {
+  const activity = useMemo(
+    () => getSubagentHiddenActivity(item, displayMode, awaitingDecision),
+    [item, displayMode, awaitingDecision],
+  )
+  // Always a bare row (what a one-item group renders anyway), so the activity
+  // line coming and going never remounts the row and drops its expansion.
+  return (
+    <ToolCallRow
+      item={item}
+      client={client}
+      footer={
+        activity !== null && (
+          <TimelineActivity
+            activity={activity}
+            client={client}
+            testId="session-subagent-activity"
+            className="timeline-activity--subagent"
+          />
+        )
+      }
+    />
+  )
 }
 
 function MessageItem({

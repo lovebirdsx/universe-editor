@@ -6,15 +6,22 @@ import type { MobileHiddenActivity } from './sessionDisplay.js'
 export interface TimelineActivityProps {
   readonly activity: MobileHiddenActivity
   readonly client: Pick<MobileClient, 'serverNow'>
+  readonly testId?: string
+  readonly className?: string
 }
 
 /**
  * The phone's counterpart of the desktop `TimelineHiddenActivity`: a spinner plus
- * a single-line summary of the slot the only-message filter hid. The stopwatch
- * state lives here so its per-second tick re-renders this row alone, not the
- * timeline.
+ * a single-line summary of the slot the only-message filter hid — at the bottom
+ * of the timeline and inside a running sub-agent card. The stopwatch state lives
+ * here so its per-second tick re-renders this row alone, not the timeline.
  */
-export function TimelineActivity({ activity, client }: TimelineActivityProps) {
+export function TimelineActivity({
+  activity,
+  client,
+  testId = 'session-timeline-activity',
+  className,
+}: TimelineActivityProps) {
   const elapsed = useElapsedTime(
     activity.kind === 'tool',
     activity.kind === 'tool' ? activity.startedAt : undefined,
@@ -30,21 +37,18 @@ export function TimelineActivity({ activity, client }: TimelineActivityProps) {
 
   return (
     <div
-      className="timeline-activity"
-      data-testid="session-timeline-activity"
+      className={className !== undefined ? `timeline-activity ${className}` : 'timeline-activity'}
+      data-testid={testId}
       role="status"
       aria-atomic="false"
     >
       <span className="spinner spinner--small timeline-activity__spinner" aria-hidden="true" />
       <div className="timeline-activity__body">
-        <span
-          className="timeline-activity__primary"
-          data-testid="session-timeline-activity-primary"
-        >
+        <span className="timeline-activity__primary" data-testid={`${testId}-primary`}>
           {primary}
         </span>
         {/* Always mounted: the CSS slot keeps the row height stable while activity swaps. */}
-        <span className="timeline-activity__detail" data-testid="session-timeline-activity-detail">
+        <span className="timeline-activity__detail" data-testid={`${testId}-detail`}>
           {secondary}
         </span>
       </div>

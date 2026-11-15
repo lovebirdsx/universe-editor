@@ -162,7 +162,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 26`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 27`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -210,6 +210,9 @@ full-access 并提交持久授权选项。v24 增加触发器会话摘要：`Mob
 （`triggerName` / `verdict?` / `summary?` / `outcome?`），收件箱行显示「⚡ 触发器名」与判决摘要。
 v25 增加 `usage_changed` 增量（`usage?` 全量替换，缺省表示清空），会话头部据此实时显示上下文用量。
 v26 把触发器判决枚举收敛为 `info` / `escalate`：`MobileSessionSummary.automation.verdict?` 与 PC 历史同口径，旧的 `auto-approve` / `reject` 不再下发。
+v27 增加子 Agent 卡片的 `subagentTail?`：运行中子 Agent 的最后一个 child 会被「仅消息」隐藏时，PC
+下发其压缩形态（思考首行摘要，或工具的标题 / 状态 / 首个路径 / 秒表 / 失败原因字段），手机端在卡片
+底部显示该子 Agent 的当前进展，对齐桌面 `getSubagentHiddenActivity`。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, notificationPrefs? }`；
@@ -369,7 +372,8 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
   （`toolKind`、`status`、preview、diff 增删行数；可带 `subagent` / `requiresUserDecision`
   标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片；v8 另带可选的
   `startedAt` / `durationMs` / `settleReason` / `syntheticDenial`，用于底部当前进展行的
-  秒表与失败原因）/ `notice`
+  秒表与失败原因；v27 子 Agent 卡片另带可选 `subagentTail`，只在子 Agent 运行中且最后一个 child
+  会被「仅消息」隐藏时出现）/ `notice`
   （compaction / resurrection）。`canFork` 在首条用户消息、只读会话或 agent 不支持 fork 时为
   false；`messageId` 只在 user 且非 autoRetry 时出现。
 - `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、

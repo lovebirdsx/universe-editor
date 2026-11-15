@@ -1395,6 +1395,11 @@ input:focus-visible {
   color: var(--muted);
 }
 
+/* Inside a running sub-agent card: aligned with the tool-row header inset. */
+.timeline-activity--subagent {
+  padding: 0 12px 10px;
+}
+
 .message {
   max-width: 100%;
 }

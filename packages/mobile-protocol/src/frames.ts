@@ -150,7 +150,33 @@ export interface MobileTimelineToolCallItem {
   settleReason?: string
   /** The failed result is a CLI-synthesized denial; show it as an upstream interruption. */
   syntheticDenial?: boolean
+  /** Last child of a running sub-agent, present only while only-message would hide it. */
+  subagentTail?: MobileSubagentTail
 }
+
+export interface MobileSubagentThoughtTail {
+  kind: 'thought'
+  /** First-line summary of the thought. */
+  summary?: string
+}
+
+/** The fields of a hidden sub-agent tool call the activity row reads. */
+export interface MobileSubagentToolTail {
+  kind: 'toolCall'
+  title: string
+  toolKind: string
+  status: string
+  /** Only for failed calls, where it backs the failure reason. */
+  preview?: string
+  locations?: readonly MobileToolCallLocation[]
+  diffs?: readonly MobileToolCallDiffStat[]
+  startedAt?: number
+  durationMs?: number
+  settleReason?: string
+  syntheticDenial?: boolean
+}
+
+export type MobileSubagentTail = MobileSubagentThoughtTail | MobileSubagentToolTail
 
 export interface MobileTimelineNoticeItem {
   kind: 'notice'

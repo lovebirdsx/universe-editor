@@ -131,30 +131,69 @@ export function getHiddenActivity(
     const detail = thoughtSummary(tail.text)
     return detail === undefined ? { kind: 'thinking' } : { kind: 'thinking', detail }
   }
-  if (tail.kind === 'toolCall') {
-    if (tail.status === 'pending' || tail.status === 'in_progress') {
-      const title = tail.title.trim()
-      const detail = runningToolDetail(tail)
-      return {
-        kind: 'tool',
-        title: title.length > 0 ? title : strings.activityToolFallback,
-        ...(detail !== undefined ? { detail } : {}),
-        ...(tail.startedAt !== undefined ? { startedAt: tail.startedAt } : {}),
-        ...(tail.durationMs !== undefined ? { durationMs: tail.durationMs } : {}),
-      }
-    }
-    const reason = settledToolReason(tail)
+  if (tail.kind === 'toolCall') return toolActivity(tail)
+  return null
+}
+
+/**
+ * Mirrors the desktop `getSubagentHiddenActivity`: a running sub-agent card's
+ * own hidden last child, which the PC ships as `subagentTail` already filtered
+ * by the only-message rule. A pending decision owns the footer instead.
+ */
+export function getSubagentHiddenActivity(
+  item: MobileTimelineToolCallItem,
+  preference: SessionDisplayPreference,
+  awaitingDecision: boolean,
+): MobileHiddenActivity | null {
+  if (awaitingDecision || preference === 'full' || item.subagent !== true) return null
+  if (item.status !== 'pending' && item.status !== 'in_progress') return null
+  const tail = item.subagentTail
+  if (tail === undefined) return null
+  if (tail.kind === 'thought') {
+    return tail.summary === undefined
+      ? { kind: 'thinking' }
+      : { kind: 'thinking', detail: tail.summary }
+  }
+  return toolActivity(tail)
+}
+
+/** The fields both the top-level card and a sub-agent tail carry. */
+type ActivityToolFields = Pick<
+  MobileTimelineToolCallItem,
+  | 'title'
+  | 'toolKind'
+  | 'status'
+  | 'preview'
+  | 'locations'
+  | 'diffs'
+  | 'startedAt'
+  | 'durationMs'
+  | 'settleReason'
+  | 'syntheticDenial'
+>
+
+function toolActivity(tool: ActivityToolFields): MobileHiddenActivity {
+  if (tool.status === 'pending' || tool.status === 'in_progress') {
+    const title = tool.title.trim()
+    const detail = runningToolDetail(tool)
     return {
-      kind: 'settledTool',
-      tool: {
-        title: toolDisplayTitle(tail),
-        status: tail.status,
-        ...(reason !== undefined ? { reason } : {}),
-        ...(tail.durationMs !== undefined ? { durationMs: tail.durationMs } : {}),
-      },
+      kind: 'tool',
+      title: title.length > 0 ? title : strings.activityToolFallback,
+      ...(detail !== undefined ? { detail } : {}),
+      ...(tool.startedAt !== undefined ? { startedAt: tool.startedAt } : {}),
+      ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
     }
   }
-  return null
+  const reason = settledToolReason(tool)
+  return {
+    kind: 'settledTool',
+    tool: {
+      title: toolDisplayTitle(tool),
+      status: tool.status,
+      ...(reason !== undefined ? { reason } : {}),
+      ...(tool.durationMs !== undefined ? { durationMs: tool.durationMs } : {}),
+    },
+  }
 }
 
 function thoughtSummary(text: string): string | undefined {
@@ -164,12 +203,12 @@ function thoughtSummary(text: string): string | undefined {
   return summary.length > 0 ? summary : undefined
 }
 
-function toolDisplayTitle(item: MobileTimelineToolCallItem): string {
+function toolDisplayTitle(item: ActivityToolFields): string {
   const title = item.title.trim()
   return title.length > 0 ? title : item.toolKind
 }
 
-function runningToolDetail(item: MobileTimelineToolCallItem): string | undefined {
+function runningToolDetail(item: ActivityToolFields): string | undefined {
   const location = item.locations?.[0]
   if (location !== undefined) {
     return location.line !== undefined ? `${location.path}:${location.line}` : location.path
@@ -177,7 +216,7 @@ function runningToolDetail(item: MobileTimelineToolCallItem): string | undefined
   return item.diffs?.[0]?.path
 }
 
-function settledToolReason(item: MobileTimelineToolCallItem): string | undefined {
+function settledToolReason(item: ActivityToolFields): string | undefined {
   if (item.settleReason !== undefined && item.settleReason.length > 0) return item.settleReason
   if (item.status !== 'failed') return undefined
   // A synthetic denial's `preview` is the misleading "user rejected" line the CLI
