@@ -156,6 +156,8 @@ interface PromptRefSecondStep {
 export interface ComposerProps {
   readonly sessionKey: string
   readonly readOnly: boolean
+  /** The PC is rebuilding the session; input waits for the successor. */
+  readonly restarting?: boolean | undefined
   readonly running: boolean
   readonly online: boolean
   readonly imageSupported: boolean
@@ -204,6 +206,7 @@ export interface ComposerProps {
 export function Composer({
   sessionKey,
   readOnly,
+  restarting,
   running,
   online,
   imageSupported,
@@ -248,7 +251,7 @@ export function Composer({
   const pendingCaret = useRef<number | null>(null)
   const refSearchSeq = useRef(0)
   const secondStepSeq = useRef(0)
-  const disabled = !online || readOnly
+  const disabled = !online || readOnly || restarting === true
   const textareaRef = useAutoGrowTextarea(value, { maxHeightPx: MAX_HEIGHT_PX })
   const attachmentInputRef = useRef<HTMLInputElement | null>(null)
   const attachmentSeq = useRef(0)
@@ -1203,8 +1206,15 @@ export function Composer({
   return (
     <div className="composer" data-testid="composer">
       {disabled && (
-        <p className={`composer__hint${online ? '' : ' composer__hint--danger'}`}>
-          {online ? strings.composerReadOnly : strings.composerOffline}
+        <p
+          className={`composer__hint${online ? '' : ' composer__hint--danger'}`}
+          data-testid={online && restarting === true ? 'composer-restarting' : undefined}
+        >
+          {!online
+            ? strings.composerOffline
+            : restarting === true
+              ? strings.sessionRestarting
+              : strings.composerReadOnly}
         </p>
       )}
       {!disabled && running && <p className="composer__hint">{strings.composerStopHint}</p>}

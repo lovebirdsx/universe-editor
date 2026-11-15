@@ -427,11 +427,27 @@ export interface MobileBridgeDraftChange {
   readonly draft: MobileBridgeDraft | undefined
 }
 
+/**
+ * A live session is rebuilt under a possibly different id (MCP close+replace).
+ * `start` precedes the old row's removal so subscribers see a restart instead
+ * of a close; `done` names the successor — no `to` means the rebuild failed
+ * and the removal that follows is real.
+ */
+export type MobileBridgeReplaceEvent =
+  | { readonly kind: 'replace'; readonly phase: 'start'; readonly from: MobileBridgeSessionRef }
+  | {
+      readonly kind: 'replace'
+      readonly phase: 'done'
+      readonly from: MobileBridgeSessionRef
+      readonly to?: MobileBridgeSessionRef
+    }
+
 export type MobileBridgeEvent =
   | MobileBridgeInboxChange
   | MobileBridgeSessionDelta
   | MobileBridgeAttentionEvent
   | MobileBridgeDraftChange
+  | MobileBridgeReplaceEvent
 
 /** Bridge-level command failure. `code` is the protocol error code sent back to the phone. */
 export interface MobileBridgeCommandError {

@@ -236,6 +236,7 @@ export const strings = {
   sessionReopen: '重新打开',
   sessionReopening: '正在重新打开…',
   sessionReopenFailed: '重新打开失败，请重试。',
+  sessionRestarting: '正在 PC 上重启会话以应用更改…',
 
   planTitle: (completed: number, total: number): string => `计划 ${completed}/${total}`,
   planExpand: '展开计划',

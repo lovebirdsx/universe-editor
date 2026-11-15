@@ -49,6 +49,8 @@ export interface SessionState {
   readonly truncated: boolean
   readonly seq: number | undefined
   readonly removed: boolean
+  /** The PC is rebuilding the session (MCP change); the next snapshot clears it. */
+  readonly restarting: boolean
 }
 
 export type SessionApplyResult =
@@ -77,6 +79,7 @@ const EMPTY: SessionState = {
   truncated: false,
   seq: undefined,
   removed: false,
+  restarting: false,
 }
 
 export class SessionStore extends Store<SessionState> {
@@ -92,7 +95,36 @@ export class SessionStore extends Store<SessionState> {
   markRemoved(): void {
     const state = this.getState()
     if (state.removed) return
-    this.setState({ ...state, removed: true })
+    this.setState({ ...state, removed: true, restarting: false })
+  }
+
+  markRestarting(): void {
+    const state = this.getState()
+    if (state.removed || state.restarting) return
+    this.setState({
+      ...state,
+      restarting: true,
+      pendingPermission: undefined,
+      pendingElicitation: undefined,
+    })
+  }
+
+  /**
+   * Point the projection at the rebuilt session. The old timeline stays on
+   * screen until the successor's snapshot replaces it, so the page does not
+   * flash back to a spinner; `seq: undefined` makes any early delta resubscribe.
+   */
+  beginReplacement(next: MobileSessionRef): void {
+    const state = this.getState()
+    this.setState({
+      ...state,
+      ref: next,
+      seq: undefined,
+      removed: false,
+      restarting: true,
+      pendingPermission: undefined,
+      pendingElicitation: undefined,
+    })
   }
 
   applySnapshot(frame: SessionSnapshotFrame): SessionApplyResult {
@@ -115,6 +147,7 @@ export class SessionStore extends Store<SessionState> {
       truncated: snapshot.truncated === true,
       seq: frame.seq,
       removed: false,
+      restarting: false,
     })
     return { status: 'applied' }
   }
@@ -151,6 +184,7 @@ export class SessionStore extends Store<SessionState> {
     this.setState({
       ...state,
       removed: true,
+      restarting: false,
       pendingPermission: undefined,
       pendingElicitation: undefined,
     })

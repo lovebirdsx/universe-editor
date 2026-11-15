@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest'
 import type { StoredCredentials } from '../../credentials.js'
 import { RECONNECT_BASE_MS } from '../../socket/mobileSocket.js'
 import { FakeTimers, FakeWebSocket, sentFrames } from '../../test/fakes.js'
-import { sessionRef, sessionSummary } from '../../test/protocolFixtures.js'
+import {
+  sessionRef,
+  sessionSnapshotFrame,
+  sessionSummary,
+  userMessage,
+} from '../../test/protocolFixtures.js'
 import { MobileClient } from '../mobileClient.js'
 
 const credentials: StoredCredentials = {
@@ -596,6 +601,98 @@ describe('MobileClient session subscription', () => {
     socket.serverSend({ type: 'session_removed', ref: sessionRef('s1') })
 
     expect(client.getSessionStore().getState().removed).toBe(true)
+  })
+
+  it('follows a PC-side rebuild to the successor without showing the closed page', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    const oldRef = sessionRef('s1', 1, 'durable-1')
+    socket.serverSend({
+      type: 'inbox_snapshot',
+      seq: 1,
+      sessions: [sessionSummary('s1', { ref: oldRef })],
+    })
+    client.openSession('durable-1')
+    socket.serverSend(
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s1', { ref: oldRef }),
+        timeline: [userMessage('m1', 'hello')],
+      }),
+    )
+    const redirects: (string | undefined)[] = []
+    client
+      .getRouteRedirectStore()
+      .subscribe(() => redirects.push(client.getRouteRedirectStore().getState()))
+
+    socket.serverSend({ type: 'session_restarting', ref: oldRef })
+    expect(client.getSessionStore().getState().restarting).toBe(true)
+
+    // Empty-session rebuild: both ids change, the durable one is not known yet.
+    const next = sessionRef('fresh', 1)
+    socket.serverSend({ type: 'session_replaced', ref: oldRef, next })
+    let state = client.getSessionStore().getState()
+    expect(state.removed).toBe(false)
+    expect(state.restarting).toBe(true)
+    // The old timeline stays on screen until the successor's snapshot lands.
+    expect(state.timeline).toHaveLength(1)
+    expect(sentFrames(socket).at(-1)).toStrictEqual({ type: 'subscribe_session', ref: next })
+    expect(redirects).toStrictEqual(['1:fresh'])
+
+    // The successor attaches under a new durable id: the URL follows again.
+    const attached = sessionRef('fresh', 1, 'durable-2')
+    socket.serverSend(
+      sessionSnapshotFrame(1, { summary: sessionSummary('fresh', { ref: attached }) }),
+    )
+    state = client.getSessionStore().getState()
+    expect(state.restarting).toBe(false)
+    expect(state.ref).toStrictEqual(attached)
+    expect(redirects).toStrictEqual(['1:fresh', 'durable-2'])
+    expect(client.getOpenRouteKey()).toBe('durable-2')
+  })
+
+  it('reopens a removed session automatically once its row returns to the inbox', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    const ref = sessionRef('s1', 1, 'durable-1')
+    socket.serverSend({ type: 'inbox_snapshot', seq: 1, sessions: [sessionSummary('s1', { ref })] })
+    client.openSession('durable-1')
+    socket.serverSend(sessionSnapshotFrame(1, { summary: sessionSummary('s1', { ref }) }))
+
+    // PC renderer reload: the subscription is dropped, then the row leaves.
+    socket.serverSend({ type: 'session_removed', ref })
+    socket.serverSend({ type: 'inbox_delta', seq: 2, upserts: [], removes: [ref] })
+    expect(client.getSessionStore().getState().removed).toBe(true)
+    const before = sentFrames(socket).length
+
+    // The restored session comes back under the same durable id.
+    const restored = sessionRef('durable-1', 1, 'durable-1')
+    socket.serverSend({
+      type: 'inbox_delta',
+      seq: 3,
+      upserts: [sessionSummary('durable-1', { ref: restored })],
+      removes: [],
+    })
+    expect(sentFrames(socket).slice(before)).toStrictEqual([
+      { type: 'subscribe_session', ref: restored },
+    ])
+  })
+
+  it('does not retry a removed session whose row never left the inbox', () => {
+    const { client, sockets } = createHarness()
+    const socket = sockets[0]!
+    const ref = sessionRef('s1', 1, 'durable-1')
+    socket.serverSend({ type: 'inbox_snapshot', seq: 1, sessions: [sessionSummary('s1', { ref })] })
+    client.openSession('durable-1')
+    socket.serverSend({ type: 'session_removed', ref })
+    const before = sentFrames(socket).length
+
+    socket.serverSend({
+      type: 'inbox_delta',
+      seq: 2,
+      upserts: [sessionSummary('s1', { ref, updatedAt: 2_000 })],
+      removes: [],
+    })
+    expect(frameTypes(socket).slice(before)).not.toContain('subscribe_session')
   })
 
   it('treats a missing session as an already-finished close and drops the row', async () => {

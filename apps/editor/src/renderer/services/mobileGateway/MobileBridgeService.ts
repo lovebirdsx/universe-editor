@@ -81,6 +81,7 @@ import type {
   MobileBridgeSessionDelta,
   MobileBridgeSessionEvent,
   MobileBridgeSessionHistoryEntry,
+  MobileBridgeSessionRef,
   MobileBridgeSessionSnapshot,
   MobileBridgeSessionSummary,
   MobileBridgeImage,
@@ -102,7 +103,12 @@ import { IExcludeService } from '../exclude/ExcludeService.js'
 import { IChatContextService } from '../extensions/ChatContextService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IDocsService } from '../../../shared/ipc/docsService.js'
-import { AcpForeignWorktreeError, IAcpSessionService } from '../acp/session/acpSessionService.js'
+import {
+  AcpForeignWorktreeError,
+  IAcpSessionService,
+  type AcpSessionReplaceEnd,
+  type AcpSessionReplaceStart,
+} from '../acp/session/acpSessionService.js'
 import { IScmService } from '../extensions/ScmService.js'
 import {
   collectSideTaskDescendants,
@@ -245,6 +251,10 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
   private _syncScheduled = false
   private _syncHandle: ReturnType<typeof setTimeout> | undefined
   private readonly _streams = new Map<string, SessionStream>()
+  /** Local ids mid close+replace (MCP reload); their removal waits for the successor. */
+  private readonly _replacing = new Set<string>()
+  /** Removals `_syncNow` held back while their session was being replaced. */
+  private readonly _heldRemovals = new Map<string, MobileBridgeSessionRef>()
   private _draftSubscription: IDisposable | undefined
   private readonly _draftTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly _publishedDrafts = new Map<string, string>()
@@ -301,6 +311,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       chatContext: this._chatContext,
     })
     this._register(this._delivery.onDidChange((change) => this._onDeliveryChanged(change)))
+    this._register(this._sessions.onWillReplaceSession((event) => this._onWillReplace(event)))
+    this._register(this._sessions.onDidReplaceSession((event) => this._onDidReplace(event)))
   }
 
   ping(): Promise<'pong'> {
@@ -468,6 +480,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     this._syncScheduled = false
     for (const stream of this._streams.values()) this._disposeStream(stream)
     this._streams.clear()
+    this._heldRemovals.clear()
   }
 
   async startAttention(): Promise<void> {
@@ -2088,14 +2101,24 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       if (isResidentLive(session)) wanted.set(session.id, session)
     }
 
-    const removes: { localId: string; durableId?: string }[] = []
+    const removes: MobileBridgeSessionRef[] = []
     for (const [localId, stream] of this._streams) {
-      if (wanted.has(localId)) continue
-      const durableId = stream.session.sessionIdOnAgent.get()
-      removes.push({ localId, ...(durableId !== undefined ? { durableId } : {}) })
+      const live = wanted.get(localId)
+      if (live === stream.session) continue
       this._disposeStream(stream)
       this._streams.delete(localId)
       this._resetDraftSync(localId)
+      // A resumed successor reuses the local id (id === durable id) but is a new
+      // object; the old stream would keep watching the closed one. Recreated below.
+      if (live !== undefined) continue
+      const durableId = stream.session.sessionIdOnAgent.get()
+      const ref = { localId, ...(durableId !== undefined ? { durableId } : {}) }
+      if (this._replacing.has(localId)) {
+        this._heldRemovals.set(localId, ref)
+        this._logger.debug(`mobile bridge holding removal of ${localId} (being replaced)`)
+        continue
+      }
+      removes.push(ref)
       this._logger.debug(`mobile bridge dropped session ${localId}`)
     }
     if (removes.length > 0) this._emit({ kind: 'inbox', upserts: [], removes })
@@ -2105,6 +2128,47 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       this._createStream(session)
       this._logger.debug(`mobile bridge watching session ${localId}`)
     }
+  }
+
+  private _onWillReplace(event: AcpSessionReplaceStart): void {
+    this._replacing.add(event.id)
+    if (!this._streaming) return
+    this._logger.debug(`mobile bridge: session ${event.id} is being replaced`)
+    this._emit({
+      kind: 'replace',
+      phase: 'start',
+      from: { localId: event.id, durableId: event.sessionIdOnAgent },
+    })
+  }
+
+  private _onDidReplace(event: AcpSessionReplaceEnd): void {
+    this._replacing.delete(event.id)
+    const held = this._heldRemovals.get(event.id)
+    this._heldRemovals.delete(event.id)
+    if (!this._streaming) return
+    const replacement = event.replacement
+    const durableId = replacement?.sessionIdOnAgent.get()
+    const to =
+      replacement !== undefined
+        ? { localId: replacement.id, ...(durableId !== undefined ? { durableId } : {}) }
+        : undefined
+    this._logger.debug(
+      `mobile bridge: session ${event.id} replaced by ${to?.localId ?? '(none, rebuild failed)'}`,
+    )
+    // `done` must reach the gateway before the old row's removal so subscribers
+    // are migrated instead of told the session closed.
+    this._emit({
+      kind: 'replace',
+      phase: 'done',
+      from: { localId: event.id, durableId: event.sessionIdOnAgent },
+      ...(to !== undefined ? { to } : {}),
+    })
+    // Same local id: the successor's stream upserts the row; removing it would
+    // only make the inbox flicker.
+    if (held !== undefined && held.localId !== to?.localId) {
+      this._emit({ kind: 'inbox', upserts: [], removes: [held] })
+    }
+    this._scheduleSync()
   }
 
   private _createStream(session: IAcpSession): void {

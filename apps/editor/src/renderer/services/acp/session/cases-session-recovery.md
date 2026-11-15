@@ -23,7 +23,7 @@
 
 ## 空会话热重连走 `session/new` 原地重建，不照抄「关闭+替换」
 
-症状：改 Sub Agent 模型后点「立即重启」（`requestProcessRestart`），会话反复 `reconnect attempt N/3 … Resource not found`，3 次耗尽 seal 成「Automatic recovery failed」。根因：`_reconnectSession` 原来**无条件** `session/resume`，而空会话（history 行 `hasMessages === false`，从未发过 prompt）在 agent 侧没有 transcript，resume 只能回 `resourceNotFound`。修法（`acpSessionService.ts` 的 `_reconnectSession`）：按共享纯谓词 `isTranscriptlessEmptyRow(entry)`（`acpSessionHistory.ts`，即 `hasMessages === false && sideTaskOf === undefined`）分派到 `session/new` **原地重建**——不照抄 MCP 变更的 `_reloadSessionForMcpChange`「关闭+替换」，后者会关掉用户的 editor tab、清 draft/viewState、换本地 uuid 让 React 重挂载。
+症状：改 Sub Agent 模型后点「立即重启」（`requestProcessRestart`），会话反复 `reconnect attempt N/3 … Resource not found`，3 次耗尽 seal 成「Automatic recovery failed」。根因：`_reconnectSession` 原来**无条件** `session/resume`，而空会话（history 行 `hasMessages === false`，从未发过 prompt）在 agent 侧没有 transcript，resume 只能回 `resourceNotFound`。修法（`acpSessionService.ts` 的 `_reconnectSession`）：按共享纯谓词 `isTranscriptlessEmptyRow(entry)`（`acpSessionHistory.ts`，即 `hasMessages === false && sideTaskOf === undefined`）分派到 `session/new` **原地重建**——不照抄 MCP 变更的 `_reloadSessionForMcpChange`「关闭+替换」，后者会关掉用户的 editor tab、清 draft/viewState、换本地 uuid 让 React 重挂载（它用 `onWillReplaceSession` / `onDidReplaceSession` 包住整个重建，手机桥据此把空档当重启而非关闭；新增「关闭+替换」路径须同样成对 fire）。
 
 重建会换 durable id，连带四处（漏一处就出现「幽灵会话」）：① `acpSessionHistory.rekey(old, new)` 迁行保留全部字段、同时删旧行与目标 id 上的既有行；② `acpSession._priorAgentSessionIds` 别名集合（cap `MAX_PRIOR_AGENT_SESSION_IDS = 4`）+ `reattachConnection(conn, newId)`；③ `acpSessionRegistry.find()` 别名回退、`liveIds()` 带别名（防 refresh-prune 误删）；④ rebuild 分支**不传 `leaseFor`**（否则 terminal 归属绑到即将作废的死 id）。
 

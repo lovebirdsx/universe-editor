@@ -299,6 +299,16 @@ export type McpServerConnectionResolution =
   | { readonly kind: 'ok'; readonly server: McpServer }
   | { readonly kind: 'not-found' }
 
+export interface AcpSessionReplaceStart {
+  /** Local id of the session being replaced. */
+  readonly id: string
+  readonly sessionIdOnAgent: string
+}
+
+export interface AcpSessionReplaceEnd extends AcpSessionReplaceStart {
+  readonly replacement: IAcpSession | undefined
+}
+
 export interface IAcpSessionService {
   readonly _serviceBrand: undefined
   readonly sessions: IObservable<readonly IAcpSession[]>
@@ -306,6 +316,14 @@ export interface IAcpSessionService {
   readonly activeSession: IObservable<IAcpSession | undefined>
   /** Fired after a session is removed from `sessions`. Carries the closed session id. */
   readonly onDidCloseSession: Event<string>
+  /**
+   * Bracket a close+replace rebuild (MCP selection change): `Will` fires before
+   * the old session closes, `Did` once the successor is registered (or with
+   * `replacement: undefined` when the rebuild failed). Lets observers such as
+   * the mobile bridge treat the gap as a restart instead of a close.
+   */
+  readonly onWillReplaceSession: Event<AcpSessionReplaceStart>
+  readonly onDidReplaceSession: Event<AcpSessionReplaceEnd>
   createSession(agentId?: string, options?: IAcpCreateSessionOptions): Promise<IAcpSession>
   /**
    * Resume a previously-persisted session by its (agent-issued) sessionId.
@@ -716,6 +734,12 @@ export class AcpSessionService
 
   private readonly _onDidCloseSession = this._register(new Emitter<string>())
   readonly onDidCloseSession = this._onDidCloseSession.event
+
+  private readonly _onWillReplaceSession = this._register(new Emitter<AcpSessionReplaceStart>())
+  readonly onWillReplaceSession = this._onWillReplaceSession.event
+
+  private readonly _onDidReplaceSession = this._register(new Emitter<AcpSessionReplaceEnd>())
+  readonly onDidReplaceSession = this._onDidReplaceSession.event
 
   /**
    * MCP definition pool mirror (the union across agents: global config + each
@@ -3526,6 +3550,9 @@ export class AcpSessionService
     const sid = session.sessionIdOnAgent.get()
     if (sid === undefined || this._mcpReloadingSessions.has(sid)) return
     this._mcpReloadingSessions.add(sid)
+    const localId = session.id
+    let replacing = false
+    let replacement: IAcpSession | undefined
     try {
       this._notification.notify({
         severity: Severity.Info,
@@ -3548,6 +3575,8 @@ export class AcpSessionService
       // mode pin and `acp.sideTask.models` — none of which a fresh session
       // would get back, so it must take the resume path below.
       const entry = this._history.get(sid)
+      this._onWillReplaceSession.fire({ id: localId, sessionIdOnAgent: sid })
+      replacing = true
       if (entry !== undefined && isTranscriptlessEmptyRow(entry)) {
         const pin = session.mcpServerSelection.get()
         const title = session.title
@@ -3562,6 +3591,7 @@ export class AcpSessionService
           // over afterwards would be too late.
           ...(draft !== undefined ? { promptDraft: draft } : {}),
         })
+        replacement = fresh
         // The title override is unlocked, so a user-chosen (manual) title must
         // be re-locked to keep its protection against auto titles.
         if (entry.manualTitle === true) fresh.renameTitle(title)
@@ -3574,6 +3604,7 @@ export class AcpSessionService
       // activates) the session, which is what mounts the prompt input.
       if (draft !== undefined) AcpPromptDraftCache.save(sid, draft)
       const resumed = await this.resumeSession(sid)
+      replacement = resumed
       this.setActive(resumed.id)
     } catch (err) {
       this._logger.warn(`MCP session reload failed: ${(err as Error).message}`)
@@ -3585,6 +3616,9 @@ export class AcpSessionService
       })
     } finally {
       this._mcpReloadingSessions.delete(sid)
+      if (replacing) {
+        this._onDidReplaceSession.fire({ id: localId, sessionIdOnAgent: sid, replacement })
+      }
     }
   }
 

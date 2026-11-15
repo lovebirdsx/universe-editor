@@ -77,6 +77,7 @@ import type {
   MobileBridgeAutomationRunRef,
   MobileBridgeDeliveryContext,
   MobileBridgeEvent,
+  MobileBridgeReplaceEvent,
   MobileBridgeImage,
   MobileBridgeNewSessionResult,
   MobileBridgePromptAttachment,
@@ -148,6 +149,8 @@ interface SessionSubscription {
   buffered: MobileSessionEvent[]
   desynced: boolean
   cancelled: boolean
+  /** The PC is rebuilding this session; its removal is a restart, not a close. */
+  replacing?: boolean
 }
 
 interface HubConnectionState {
@@ -2531,11 +2534,61 @@ export class MobileGatewayHub {
     return undefined
   }
 
+  private _handleReplace(windowId: number, event: MobileBridgeReplaceEvent): void {
+    const key = sessionKey(windowId, event.from.localId)
+    for (const state of this._connections) {
+      const subscription = state.sessions.get(key)
+      if (subscription === undefined) continue
+      if (event.phase === 'start') {
+        subscription.replacing = true
+        this._send(
+          state.connection,
+          { type: 'session_restarting', ref: subscription.ref },
+          subscription.localId,
+        )
+        continue
+      }
+      subscription.replacing = false
+      if (event.to === undefined) {
+        // The rebuild failed. Re-subscribing settles it either way: a session
+        // that survived answers with a snapshot, a closed one with session_removed.
+        this._send(
+          state.connection,
+          {
+            type: 'resync_required',
+            scope: 'session',
+            reason: 'session_replace_failed',
+            ref: subscription.ref,
+          },
+          subscription.localId,
+        )
+        continue
+      }
+      subscription.cancelled = true
+      state.sessions.delete(key)
+      const next: MobileSessionRef = {
+        windowId,
+        localId: event.to.localId,
+        ...(event.to.durableId !== undefined ? { durableId: event.to.durableId } : {}),
+      }
+      this._send(
+        state.connection,
+        { type: 'session_replaced', ref: subscription.ref, next },
+        subscription.localId,
+      )
+    }
+    if (event.phase === 'done') this._updateStreaming()
+  }
+
   private _handleBridgeEvent(windowId: number, event: MobileBridgeEvent): void {
     const entry = this._windows.get(windowId)
     if (entry === undefined) return
     if (event.kind === 'attention') {
       this._handleAttention(windowId, event)
+      return
+    }
+    if (event.kind === 'replace') {
+      this._handleReplace(windowId, event)
       return
     }
     if (event.kind === 'inbox') {
@@ -2562,7 +2615,7 @@ export class MobileGatewayHub {
         const key = sessionKey(windowId, ref.localId)
         for (const state of this._connections) {
           const subscription = state.sessions.get(key)
-          if (subscription === undefined) continue
+          if (subscription === undefined || subscription.replacing === true) continue
           subscription.cancelled = true
           state.sessions.delete(key)
           this._send(

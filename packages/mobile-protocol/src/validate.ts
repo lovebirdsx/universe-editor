@@ -97,6 +97,8 @@ import type {
   ServerFrame,
   SessionDeltaFrame,
   SessionRemovedFrame,
+  SessionReplacedFrame,
+  SessionRestartingFrame,
   SessionSnapshotFrame,
   SetNotificationPrefsFrame,
   SubscribeInboxFrame,
@@ -344,6 +346,10 @@ export function parseServerFrame(text: string): Result<ServerFrame> {
       return parseSessionDeltaFrame(frame)
     case 'session_removed':
       return parseSessionRemovedFrame(frame)
+    case 'session_restarting':
+      return parseSessionRestartingFrame(frame)
+    case 'session_replaced':
+      return parseSessionReplacedFrame(frame)
     case 'command_result':
       return parseCommandResultFrame(frame)
     case 'notification':
@@ -3330,6 +3336,22 @@ function parseSessionRemovedFrame(frame: Record<string, unknown>): Result<Sessio
   const ref = parseSessionRef(frame.ref)
   if (!ref.ok) return ref
   return ok({ type: 'session_removed', ref: ref.value })
+}
+
+function parseSessionRestartingFrame(
+  frame: Record<string, unknown>,
+): Result<SessionRestartingFrame> {
+  const ref = parseSessionRef(frame.ref)
+  if (!ref.ok) return ref
+  return ok({ type: 'session_restarting', ref: ref.value })
+}
+
+function parseSessionReplacedFrame(frame: Record<string, unknown>): Result<SessionReplacedFrame> {
+  const ref = parseSessionRef(frame.ref)
+  if (!ref.ok) return ref
+  const next = parseSessionRef(frame.next)
+  if (!next.ok) return next
+  return ok({ type: 'session_replaced', ref: ref.value, next: next.value })
 }
 
 function parseCommandResultFrame(frame: Record<string, unknown>): Result<ServerFrame> {

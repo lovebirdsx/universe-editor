@@ -5454,6 +5454,11 @@ describe('AcpSessionService — session MCP selection', () => {
     // resumed (see the empty-session case below).
     await s.sendPrompt('first turn')
     const sid = s.sessionIdOnAgent.get()!
+    const events: string[] = []
+    svc.onWillReplaceSession((e) => events.push(`will:${e.id}:${e.sessionIdOnAgent}`))
+    svc.onDidReplaceSession((e) =>
+      events.push(`did:${e.id}:${e.sessionIdOnAgent}:${e.replacement?.id ?? 'none'}`),
+    )
 
     svc.setSessionMcpServers(s.id, ['fs'])
 
@@ -5470,6 +5475,9 @@ describe('AcpSessionService — session MCP selection', () => {
     const resumed = svc.getById(sid)
     expect(resumed?.mcpServerSelection.get()).toEqual(['fs'])
     expect(svc.activeSession.get()?.id).toBe(sid)
+    // Observers (the mobile bridge) see one bracketed replacement, not a close.
+    await vi.waitFor(() => expect(events).toHaveLength(2))
+    expect(events).toEqual([`will:${s.id}:${sid}`, `did:${s.id}:${sid}:${sid}`])
     svc.dispose()
   })
 
@@ -5520,6 +5528,8 @@ describe('AcpSessionService — session MCP selection', () => {
     await s.whenConnected()
     const sid = s.sessionIdOnAgent.get()!
     const title = s.title
+    const replaced: { id: string; replacementId: string | undefined }[] = []
+    svc.onDidReplaceSession((e) => replaced.push({ id: e.id, replacementId: e.replacement?.id }))
 
     // Never messaged: the agent has nothing to session/load, so the reload
     // swaps in a fresh session pinned to the new selection.
@@ -5547,6 +5557,29 @@ describe('AcpSessionService — session MCP selection', () => {
     const newSid = active.sessionIdOnAgent.get()!
     expect(newSid).not.toBe(sid)
     expect(history.get(newSid)?.mcpServerNames).toEqual(['fs'])
+    expect(replaced).toEqual([{ id: s.id, replacementId: active.id }])
+    svc.dispose()
+  })
+
+  it('reports a failed MCP reload as a replacement without a successor', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { loadSession: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: [] },
+      docs: { command: 'node', args: [] },
+    })
+    const { svc } = makeService(client, config)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await s.sendPrompt('first turn')
+    const replaced: { id: string; replacement: unknown }[] = []
+    svc.onDidReplaceSession((e) => replaced.push({ id: e.id, replacement: e.replacement }))
+    vi.spyOn(svc, 'resumeSession').mockRejectedValueOnce(new Error('load failed'))
+
+    svc.setSessionMcpServers(s.id, ['fs'])
+
+    await vi.waitFor(() => expect(replaced).toHaveLength(1))
+    expect(replaced[0]).toEqual({ id: s.id, replacement: undefined })
     svc.dispose()
   })
 

@@ -1679,6 +1679,16 @@ describe('parseServerFrame', () => {
       ok: true,
       value: { type: 'session_removed', ref: DURABLE_REF },
     })
+    expect(
+      parseServerFrame(JSON.stringify({ type: 'session_restarting', ref: DURABLE_REF })),
+    ).toStrictEqual({ ok: true, value: { type: 'session_restarting', ref: DURABLE_REF } })
+    const next = { windowId: 1, localId: 'next', durableId: 'next-durable' }
+    expect(
+      parseServerFrame(JSON.stringify({ type: 'session_replaced', ref: DURABLE_REF, next })),
+    ).toStrictEqual({ ok: true, value: { type: 'session_replaced', ref: DURABLE_REF, next } })
+    expect(
+      errorCode(parseServerFrame(JSON.stringify({ type: 'session_replaced', ref: DURABLE_REF }))),
+    ).toBe('bad_request')
 
     const result = {
       type: 'command_result',

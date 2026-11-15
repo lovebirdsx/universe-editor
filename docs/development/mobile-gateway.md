@@ -162,7 +162,7 @@ main 侧不直接读 `AcpSession`。
 - 不放 `packages/primitives`：primitives 有零依赖红线与 URI 内核定位，塞协议会污染其职责。
 - 不放 `packages/platform`：PWA 不应依赖编辑器内核，也不应把 Electron/Node 语义带进浏览器。
 
-**版本与握手**：`MOBILE_PROTOCOL_VERSION = 27`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
+**版本与握手**：`MOBILE_PROTOCOL_VERSION = 28`（v2 增加会话镜像帧；v3 增加交互命令、`requestId`、
 `allowedOnMobile`、`permission_cleared` 元数据与命令幂等；v4 增加 `notification` 边沿、Web Push
 订阅、`client_state` 可见性与通知偏好；v5 增加工具卡的 `subagent` / `requiresUserDecision` 标记，
 供手机端「仅消息」过滤对齐桌面语义；v6 增加附件（`sendPrompt.attachmentIds`、消息
@@ -213,6 +213,7 @@ v26 把触发器判决枚举收敛为 `info` / `escalate`：`MobileSessionSummar
 v27 增加子 Agent 卡片的 `subagentTail?`：运行中子 Agent 的最后一个 child 会被「仅消息」隐藏时，PC
 下发其压缩形态（思考首行摘要，或工具的标题 / 状态 / 首个路径 / 秒表 / 失败原因字段），手机端在卡片
 底部显示该子 Agent 的当前进展，对齐桌面 `getSubagentHiddenActivity`。
+v28 增加会话重建帧 `session_restarting { ref }` / `session_replaced { ref, next }`（MCP 变更的「关闭+替换」不再被手机当成会话关闭，见 §4「会话重建」）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
 `hello_ok { ..., serverTime, capabilities, webBuildId?, vapidPublicKey?, notificationPrefs? }`；
@@ -354,7 +355,16 @@ prompt、重复建会话或重复分叉。`resolvePromptRef` 语义只读，但�
 - 连接 `bufferedAmount` 超过 1MB 时丢弃中间增量并回 `resync_required{scope:'session', ref}`；
   该订阅随后停止转发，客户端重新 `subscribe_session` 即恢复。
 - 会话 key 优先 `durableId`（`sessionIdOnAgent`）；`ref` 始终带 `windowId + localId`，
-  `durableId` 可选。**没有 `session_rekeyed` 帧**；会话消失时发 `session_removed`。
+  `durableId` 可选。会话消失时发 `session_removed`。
+- **会话重建**（目前只有改会话 MCP 的「关闭+替换」，`_reloadSessionForMcpChange`）：
+  `IAcpSessionService.onWillReplaceSession` / `onDidReplaceSession` 包住整个重建；bridge 在此期间
+  暂扣旧行的 removal，发 `replace{phase:'start'|'done'}`；网关对订阅者发 `session_restarting`，
+  成功后发 `session_replaced { ref, next }` 并取消旧订阅（新旧 local id / durable id 都可能不同），
+  失败则回 `resync_required` 让手机重新订阅（会话已关就得到 `session_removed`）。手机收到
+  `session_replaced` 后保留旧 timeline、订阅 `next`，并用 `replaceState` 把 URL 换成新 key。
+- 手机端路由 key 跟随当前 ref：durable id 变化（空会话热重连重建）时同样 `replaceState`。
+  `session_removed` 后若收件箱先去掉该行、之后又出现同 durable id 的行（PC reload、PC 上重新打开），
+  手机自动重新订阅；行一直在则不重试，避免订阅风暴。
 - 快照超 1MB 时从最早 timeline 项开始丢弃，并带 `truncated: true`。
 
 **M2 快照与增量事件**：

@@ -544,6 +544,32 @@ describe('SessionPage snapshot rendering', () => {
     })
   })
 
+  it('keeps the timeline and blocks input while the PC rebuilds the session', () => {
+    const { harness } = openPage()
+    feed(harness.socket, sessionSnapshotFrame(1, { timeline: [userMessage('m1', 'hello')] }))
+    feed(harness.socket, { type: 'session_restarting', ref: sessionRef('s1') })
+
+    expect(screen.getByTestId('composer-restarting').textContent).toBe(strings.sessionRestarting)
+    expect(screen.getByText('hello')).toBeTruthy()
+
+    feed(harness.socket, {
+      type: 'session_replaced',
+      ref: sessionRef('s1'),
+      next: sessionRef('s2'),
+    })
+    expect(screen.queryByText(strings.sessionRemovedTitle)).toBeNull()
+    expect(screen.getByText('hello')).toBeTruthy()
+
+    feed(
+      harness.socket,
+      sessionSnapshotFrame(1, {
+        summary: sessionSummary('s2'),
+        timeline: [userMessage('m1', 'hello')],
+      }),
+    )
+    expect(screen.queryByTestId('composer-restarting')).toBeNull()
+  })
+
   it('renders a removed session and lets the user go back', () => {
     const { harness, onBack } = openPage()
     feed(harness.socket, sessionSnapshotFrame(1, { timeline: [] }))

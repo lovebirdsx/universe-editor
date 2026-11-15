@@ -91,6 +91,8 @@ function makeService(
     activeSessionId,
     activeSession,
     onDidCloseSession: onDidCloseSession.event,
+    onWillReplaceSession: Event.None,
+    onDidReplaceSession: Event.None,
     _byId: byId,
     createSession: createSession as never,
     resumeSession: resumeSession as never,

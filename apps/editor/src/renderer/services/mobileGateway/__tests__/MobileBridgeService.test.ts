@@ -39,7 +39,11 @@ import type {
   IAcpSession,
   TimelineItem,
 } from '../../acp/session/acpSession.js'
-import type { IAcpSessionService } from '../../acp/session/acpSessionService.js'
+import type {
+  AcpSessionReplaceEnd,
+  AcpSessionReplaceStart,
+  IAcpSessionService,
+} from '../../acp/session/acpSessionService.js'
 import type { McpServerDefinition } from '../../acp/acpMcpServers.js'
 import type {
   ClaudeSettings,
@@ -295,6 +299,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   claudePatch: ReturnType<typeof vi.fn>
   mcpServerDefinitions: ISettableObservable<readonly McpServerDefinition[]>
   setSessionMcpServers: ReturnType<typeof vi.fn>
+  willReplace: Emitter<AcpSessionReplaceStart>
+  didReplace: Emitter<AcpSessionReplaceEnd>
   add(session: FakeSessionHarness): void
   remove(id: string): void
 } {
@@ -309,8 +315,12 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
   const resumeSession = vi.fn()
   const mcpServerDefinitions = observableValue<readonly McpServerDefinition[]>('test.mcpPool', [])
   const setSessionMcpServers = vi.fn()
+  const willReplace = new Emitter<AcpSessionReplaceStart>()
+  const didReplace = new Emitter<AcpSessionReplaceEnd>()
   const sessionService = {
     sessions,
+    onWillReplaceSession: willReplace.event,
+    onDidReplaceSession: didReplace.event,
     getById: (id: string) =>
       live.get(id) ?? [...live.values()].find((session) => session.sessionIdOnAgent.get() === id),
     createSession: vi.fn(async () => created()),
@@ -490,6 +500,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     claudePatch,
     mcpServerDefinitions,
     setSessionMcpServers,
+    willReplace,
+    didReplace,
     add(session) {
       live.set(session.session.id, session.session)
       sessions.set([...sessions.get(), session.session], undefined)
@@ -1288,6 +1300,94 @@ describe('MobileBridgeService', () => {
       upserts: [],
       removes: [{ localId: 's1', durableId: 'd1' }],
     })
+  })
+
+  it('holds the removal of a session being replaced and announces the successor', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    await harness.service.startStreaming()
+    await flush()
+    harness.events.length = 0
+
+    harness.willReplace.fire({ id: 's1', sessionIdOnAgent: 'd1' })
+    harness.remove('s1')
+    await vi.advanceTimersByTimeAsync(5)
+    // The close half of close+replace must not read as a removal.
+    expect(harness.events).toStrictEqual([
+      { kind: 'replace', phase: 'start', from: { localId: 's1', durableId: 'd1' } },
+    ])
+
+    const successor = makeSession('d1', { durableId: 'd1' })
+    harness.add(successor)
+    harness.didReplace.fire({
+      id: 's1',
+      sessionIdOnAgent: 'd1',
+      replacement: successor.session,
+    })
+    await flush()
+
+    const done = harness.events.findIndex(
+      (event) => event.kind === 'replace' && event.phase === 'done',
+    )
+    expect(harness.events[done]).toStrictEqual({
+      kind: 'replace',
+      phase: 'done',
+      from: { localId: 's1', durableId: 'd1' },
+      to: { localId: 'd1', durableId: 'd1' },
+    })
+    const removal = harness.events.findIndex(
+      (event) => event.kind === 'inbox' && event.removes.some((ref) => ref.localId === 's1'),
+    )
+    expect(removal).toBeGreaterThan(done)
+    expect(harness.events).toContainEqual(
+      expect.objectContaining({
+        kind: 'inbox',
+        upserts: [expect.objectContaining({ localId: 'd1' })],
+      }),
+    )
+  })
+
+  it('releases the held removal when the replacement fails', async () => {
+    const harness = makeHarness()
+    harness.add(makeSession('s1', { durableId: 'd1' }))
+    await harness.service.startStreaming()
+    await flush()
+    harness.events.length = 0
+
+    harness.willReplace.fire({ id: 's1', sessionIdOnAgent: 'd1' })
+    harness.remove('s1')
+    await vi.advanceTimersByTimeAsync(5)
+    harness.didReplace.fire({ id: 's1', sessionIdOnAgent: 'd1', replacement: undefined })
+    await vi.advanceTimersByTimeAsync(5)
+
+    expect(harness.events).toStrictEqual([
+      { kind: 'replace', phase: 'start', from: { localId: 's1', durableId: 'd1' } },
+      { kind: 'replace', phase: 'done', from: { localId: 's1', durableId: 'd1' } },
+      { kind: 'inbox', upserts: [], removes: [{ localId: 's1', durableId: 'd1' }] },
+    ])
+  })
+
+  it('re-watches a successor that reuses the local id of the session it replaced', async () => {
+    const harness = makeHarness()
+    const first = makeSession('d1', { durableId: 'd1' })
+    harness.add(first)
+    await harness.service.startStreaming()
+    await flush()
+    harness.events.length = 0
+
+    // Swap the object under the same id in one step: no sync tick sees the gap.
+    const successor = makeSession('d1', { durableId: 'd1' })
+    harness.remove('d1')
+    harness.add(successor)
+    await flush()
+    harness.events.length = 0
+
+    successor.timeline.set([messageItem('m1', 'from the successor')], undefined)
+    await flush()
+    expect(harness.events.some((event) => event.kind === 'session_delta')).toBe(true)
+    first.timeline.set([messageItem('m2', 'stale')], undefined)
+    await flush()
+    expect(harness.events.filter((event) => event.kind === 'session_delta')).toHaveLength(1)
   })
 
   it('returns full tool-call detail and undefined for unknown ids', async () => {

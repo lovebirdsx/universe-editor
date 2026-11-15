@@ -266,6 +266,8 @@ export class MobileSocket {
       case 'session_snapshot':
       case 'session_delta':
       case 'session_removed':
+      case 'session_restarting':
+      case 'session_replaced':
       case 'command_result':
       case 'notification':
       case 'resync_required':

@@ -708,6 +708,66 @@ describe('MobileGatewayHub', () => {
     })
   })
 
+  it('migrates a subscriber across a session replacement instead of reporting a close', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    await hub.subscribeSession(connection, { windowId: 1, localId: 's1' })
+    connection.frames.length = 0
+
+    bridge.emit({ kind: 'replace', phase: 'start', from: { localId: 's1', durableId: 'd1' } })
+    bridge.emit({ kind: 'inbox', upserts: [], removes: [{ localId: 's1', durableId: 'd1' }] })
+    bridge.emit({
+      kind: 'replace',
+      phase: 'done',
+      from: { localId: 's1', durableId: 'd1' },
+      to: { localId: 'd1', durableId: 'd1' },
+    })
+
+    const ref = { windowId: 1, localId: 's1', durableId: 'd1' }
+    expect(framesOf(connection, 'session_removed')).toHaveLength(0)
+    expect(framesOf(connection, 'session_restarting')).toStrictEqual([
+      { type: 'session_restarting', ref },
+    ])
+    expect(framesOf(connection, 'session_replaced')).toStrictEqual([
+      { type: 'session_replaced', ref, next: { windowId: 1, localId: 'd1', durableId: 'd1' } },
+    ])
+
+    // The successor is subscribable under the announced ref before its inbox row lands.
+    bridge.snapshots.set('d1', snapshot('d1', { summary: summary('d1', { durableId: 'd1' }) }))
+    await hub.subscribeSession(connection, { windowId: 1, localId: 'd1', durableId: 'd1' })
+    expect(framesOf(connection, 'session_snapshot')).toHaveLength(1)
+  })
+
+  it('asks the subscriber to resync when a session replacement fails', async () => {
+    const hub = new MobileGatewayHub(NULL_LOGGER)
+    const bridge = new FakeBridge()
+    bridge.sessions = [summary('s1', { durableId: 'd1' })]
+    bridge.snapshots.set('s1', snapshot('s1', { summary: summary('s1', { durableId: 'd1' }) }))
+    hub.registerWindow(1, bridge)
+    const connection = makeConnection()
+    hub.addConnection(connection)
+    await hub.subscribeSession(connection, { windowId: 1, localId: 's1' })
+    connection.frames.length = 0
+
+    bridge.emit({ kind: 'replace', phase: 'start', from: { localId: 's1', durableId: 'd1' } })
+    bridge.emit({ kind: 'replace', phase: 'done', from: { localId: 's1', durableId: 'd1' } })
+    bridge.emit({ kind: 'inbox', upserts: [], removes: [{ localId: 's1', durableId: 'd1' }] })
+
+    const ref = { windowId: 1, localId: 's1', durableId: 'd1' }
+    expect(framesOf(connection, 'resync_required')).toStrictEqual([
+      { type: 'resync_required', scope: 'session', reason: 'session_replace_failed', ref },
+    ])
+    // The removal that follows a failed rebuild is a real close.
+    expect(framesOf(connection, 'session_removed')).toStrictEqual([
+      { type: 'session_removed', ref },
+    ])
+  })
+
   it('asks for a resync and drops deltas while the socket is backpressured', async () => {
     const hub = new MobileGatewayHub(NULL_LOGGER)
     const bridge = new FakeBridge()

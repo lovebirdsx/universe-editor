@@ -503,6 +503,7 @@ export function SessionPage({
               key={sessionKey}
               sessionKey={sessionKey}
               readOnly={readOnly}
+              restarting={state.restarting}
               running={running}
               online={online}
               imageSupported={state.summary?.imageSupported === true}

@@ -23,6 +23,7 @@ import {
   navigateToSessions,
   pushMobileRoute,
   readRoute,
+  replaceWithSession,
   type Route,
 } from './routing.js'
 import { SessionPage } from './session/SessionPage.js'
@@ -145,6 +146,18 @@ export function App() {
     if (client === undefined) return
     client.start()
     return () => client.stop()
+  }, [client])
+
+  // The open session was rebuilt under a new id. Only the URL follows: changing
+  // the route would remount the page and drop the subscription it just moved.
+  useEffect(() => {
+    if (client === undefined) return
+    const redirects = client.getRouteRedirectStore()
+    return redirects.subscribe(() => {
+      const key = redirects.getState()
+      if (key === undefined || readRoute(window.location.pathname).name !== 'session') return
+      replaceWithSession(key)
+    })
   }, [client])
 
   const handlePaired = (_credentials: StoredCredentials, result: SaveCredentialsResult): void => {

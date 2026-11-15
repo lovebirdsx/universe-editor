@@ -132,6 +132,17 @@ export class MobileClient {
   private _connectionEpoch = 0
   private _currentRef: MobileSessionRef | undefined
   private _routeKey: string | undefined
+  /**
+   * Route key the open session moved to (rebuild under a new id). The page
+   * mirrors it into the URL so a reload lands on the live session.
+   */
+  private readonly _routeRedirect = new Store<string | undefined>(undefined)
+  /**
+   * After a `session_removed`: whether the inbox has since dropped the row.
+   * A row that disappears and comes back (PC reload, reopened on the PC) is
+   * followed automatically; one that never left is not retried in a loop.
+   */
+  private _removedRowGone: boolean | undefined
   private _serverTimeOffsetMs = 0
   private _vapidPublicKey: string | undefined
   private _pushSubscription: MobilePushSubscription | undefined
@@ -199,6 +210,10 @@ export class MobileClient {
 
   getSessionStore(): SessionStore {
     return this._session
+  }
+
+  getRouteRedirectStore(): Store<string | undefined> {
+    return this._routeRedirect
   }
 
   getSocketStateStore(): Store<SocketState> {
@@ -313,6 +328,7 @@ export class MobileClient {
       return
     }
     this._routeKey = routeKey
+    this._removedRowGone = undefined
     this._invalidFrame.setState(undefined)
     this._session.reset()
     this._detail.clear()
@@ -336,6 +352,7 @@ export class MobileClient {
       return
     }
     this._routeKey = routeKey
+    this._removedRowGone = undefined
     this._invalidFrame.setState(undefined)
     this._session.reset()
     this._detail.clear()
@@ -351,6 +368,7 @@ export class MobileClient {
     }
     this._routeKey = undefined
     this._currentRef = undefined
+    this._removedRowGone = undefined
     this._invalidFrame.setState(undefined)
     this._session.reset()
     this._detail.clear()
@@ -960,6 +978,7 @@ export class MobileClient {
           for (const event of frame.events) {
             if (event.type === 'tool_call_upsert') this._detail.invalidate(event.item.id)
           }
+          this._syncRouteKey()
         }
         break
       }
@@ -969,6 +988,19 @@ export class MobileClient {
           // session while the phone was still loading it); mark it anyway so the
           // page shows "closed on PC" instead of timing out on a snapshot.
           if (!this._session.applyRemoved(frame.ref)) this._session.markRemoved()
+          const durableId = this._currentRef.durableId
+          this._removedRowGone =
+            durableId === undefined ? undefined : !this._inboxHasDurable(durableId)
+        }
+        break
+      case 'session_restarting':
+        if (this._currentRef !== undefined && refMatches(this._currentRef, frame.ref)) {
+          this._session.markRestarting()
+        }
+        break
+      case 'session_replaced':
+        if (this._currentRef !== undefined && refMatches(this._currentRef, frame.ref)) {
+          this._followReplacement(frame.next)
         }
         break
       case 'notification':
@@ -1004,8 +1036,60 @@ export class MobileClient {
     this._currentRef = ref
     this._session.applySnapshot(frame)
     this._invalidFrame.setState(undefined)
+    this._removedRowGone = undefined
     const state = this._session.getState()
     if (state.ref !== undefined) this._currentRef = state.ref
+    this._syncRouteKey()
+  }
+
+  /** The PC rebuilt the open session under `next`; keep the page and move the subscription. */
+  private _followReplacement(next: MobileSessionRef): void {
+    this._currentRef = next
+    this._removedRowGone = undefined
+    this._invalidFrame.setState(undefined)
+    this._detail.clear()
+    this._session.beginReplacement(next)
+    this._syncRouteKey()
+    this._subscribeCurrentSession()
+  }
+
+  /**
+   * Keep the route key on the session's current identity: a rebuild can hand
+   * it a new durable id, and the URL must follow or a reload finds nothing.
+   */
+  private _syncRouteKey(): void {
+    if (this._routeKey === undefined || this._currentRef === undefined) return
+    const key = sessionRouteKey(this._currentRef)
+    if (key === this._routeKey) return
+    this._routeKey = key
+    this._routeRedirect.setState(key)
+  }
+
+  private _inboxHasDurable(durableId: string): boolean {
+    return this._inbox.getState().sessions.some((session) => session.ref.durableId === durableId)
+  }
+
+  /**
+   * A session closed under the open page (PC reload, window re-registered,
+   * failed rebuild then reopened on the PC) is followed once its row returns.
+   */
+  private _maybeRecoverRemoved(): void {
+    if (this._removedRowGone === undefined || !this._session.getState().removed) return
+    const durableId = this._currentRef?.durableId
+    if (durableId === undefined) return
+    const row = this._inbox
+      .getState()
+      .sessions.find((session) => session.ref.durableId === durableId)
+    if (row === undefined) {
+      this._removedRowGone = true
+      return
+    }
+    if (!this._removedRowGone) return
+    this._removedRowGone = undefined
+    this._session.reset()
+    this._detail.clear()
+    this._currentRef = row.ref
+    this._subscribeCurrentSession()
   }
 
   private _afterInbox(result: InboxApplyResult): void {
@@ -1014,6 +1098,7 @@ export class MobileClient {
       return
     }
     this._maybeResolveRoute()
+    this._maybeRecoverRemoved()
   }
 
   private _resubscribeInbox(): void {

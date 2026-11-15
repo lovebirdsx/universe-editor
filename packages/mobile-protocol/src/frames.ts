@@ -1350,6 +1350,26 @@ export interface SessionRemovedFrame {
   ref: MobileSessionRef
 }
 
+/**
+ * The PC is rebuilding the session (e.g. to apply an MCP change). The current
+ * subscription stops receiving deltas; a `session_replaced` (success) or
+ * `session_removed` / `resync_required` (failure) follows.
+ */
+export interface SessionRestartingFrame {
+  type: 'session_restarting'
+  ref: MobileSessionRef
+}
+
+/**
+ * The session was rebuilt under `next` (its local and durable ids may both
+ * differ). The old subscription is gone; subscribe to `next` to continue.
+ */
+export interface SessionReplacedFrame {
+  type: 'session_replaced'
+  ref: MobileSessionRef
+  next: MobileSessionRef
+}
+
 export interface CommandResultFrame {
   type: 'command_result'
   requestId: string
@@ -1403,6 +1423,8 @@ export type ServerFrame =
   | SessionSnapshotFrame
   | SessionDeltaFrame
   | SessionRemovedFrame
+  | SessionRestartingFrame
+  | SessionReplacedFrame
   | CommandResultFrame
   | NotificationFrame
   | ResyncRequiredFrame
