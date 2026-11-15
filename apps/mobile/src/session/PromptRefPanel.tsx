@@ -2,6 +2,7 @@ import type {
   MobilePromptRefSuggestion,
   MobilePromptRefTrigger,
 } from '@universe-editor/mobile-protocol'
+import type { ReactNode } from 'react'
 import { strings } from '../strings.js'
 
 export const PROMPT_REF_LIST_ID = 'composer-ref-list'
@@ -42,6 +43,8 @@ export interface PromptRefPanelProps {
   readonly onBack?: (() => void) | undefined
   readonly loadingText?: string | undefined
   readonly emptyText?: string | undefined
+  /** Quick-entry mode switch, pinned above the scrollable list. */
+  readonly tabs?: ReactNode
 }
 
 /**
@@ -61,9 +64,11 @@ export function PromptRefPanel({
   onBack,
   loadingText,
   emptyText,
+  tabs,
 }: PromptRefPanelProps) {
   return (
     <div className="composer__commands" data-testid="composer-ref-panel">
+      {tabs}
       {(title !== undefined || onBack !== undefined) && (
         <div className="composer__ref-header">
           {onBack !== undefined && (
@@ -80,7 +85,12 @@ export function PromptRefPanel({
           {title !== undefined && <span className="composer__ref-title">{title}</span>}
         </div>
       )}
-      <div id={PROMPT_REF_LIST_ID} role="listbox" aria-label={title ?? strings.promptRefList}>
+      <div
+        id={PROMPT_REF_LIST_ID}
+        className="composer__command-list"
+        role="listbox"
+        aria-label={title ?? strings.promptRefList}
+      >
         {loading && (
           <div className="composer__ref-status" data-testid="composer-ref-loading">
             {loadingText ?? strings.promptRefLoading}

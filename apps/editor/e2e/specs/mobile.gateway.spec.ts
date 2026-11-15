@@ -1034,12 +1034,13 @@ test.describe('mobile gateway', () => {
 
       const input = phone.getByTestId('composer-input')
       const panel = phone.getByTestId('composer-command-panel')
-      // available_commands_update arrives asynchronously; the "/" button only
-      // renders once the list is non-empty, so it is the ready signal.
-      await expect(phone.getByTestId('composer-slash')).toBeVisible()
+      // available_commands_update arrives asynchronously; the quick-entry
+      // button only renders once the list is non-empty, so it is the ready signal.
+      await expect(phone.getByTestId('composer-quick-entry')).toBeVisible()
       await input.focus()
       await input.fill('/')
       await expect(panel).toBeVisible()
+      await expect(phone.getByTestId('composer-quick-tabs')).toBeVisible()
       await expect(panel.getByTestId('composer-command-option')).toHaveCount(3)
 
       await input.fill('/di')

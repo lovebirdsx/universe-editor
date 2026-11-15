@@ -2796,12 +2796,53 @@ input:focus-visible {
   display: flex;
   flex-direction: column;
   max-height: calc(52px * 4);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
+}
+
+.composer__command-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.composer__quick-tabs {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  padding: 4px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.composer__quick-tab {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.composer__quick-tab[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.composer__quick-tab-key {
+  font-weight: 700;
 }
 
 .composer__command {
@@ -2925,7 +2966,7 @@ input:focus-visible {
   opacity: 0.5;
 }
 
-.composer__slash {
+.composer__quick-entry {
   flex: none;
   display: flex;
   align-items: center;
@@ -2937,9 +2978,10 @@ input:focus-visible {
   border-radius: 12px;
   background: var(--surface-muted);
   color: var(--muted);
-  font-size: 20px;
-  font-weight: 600;
-  line-height: 1;
+}
+
+.composer__quick-entry svg {
+  display: block;
 }
 
 .composer__attachments {

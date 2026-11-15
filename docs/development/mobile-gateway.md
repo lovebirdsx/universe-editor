@@ -1088,10 +1088,18 @@ label + uri + text 的 **UTF-8 字节数**汇总不得超过 32KB（ws 帧上限
 file / openEditor / scmChange → `resource_link`，symbol / docs / commit / chatContext → `text`
 （line/column 与目录说明只有 text block 能原样传给 agent）。
 
-**手机交互（`Composer.tsx` / `PromptRefPanel.tsx`）**
+**手机交互（`Composer.tsx` / `ComposerQuickTabs.tsx` / `SlashCommandPanel.tsx` / `PromptRefPanel.tsx`）**
 
 - 面板优先级 `/` > `#` > `@`；150ms 防抖，递增 seq 丢弃过期响应；IME 合成期间不查询，
   composition end 后补一次。
+- 输入框为空且 `commands` 非空时，左侧 44×44 快捷按钮插入 `/` 并打开面板；面板顶部
+  `ComposerQuickTabs` 提供 `/ 指令`、`@ 文件`、`# 上下文` 三个模式，仅在首个 token 从
+  offset 0 开始、光标位于触发符之后且不在二级列表时显示。切换模式原地替换首字符（文本长度、
+  query 与光标不变），清除两种 dismissed 状态并关闭二级；`refSearchSeq` 随 trigger 变化递增，
+  旧搜索的迟到响应被丢弃。`commands` 为空时 `/` 模式禁用。
+- 斜杠面板在 token 存在且 `commands` 非空时保持打开，过滤为空也显示「没有匹配的指令」，
+  以便继续切到 `@`/`#`；空列表时 ↑/↓ 不循环，Enter 仍由面板消费（需先 Esc 关闭才能把
+  `/zzz` 当普通文本发送）。
 - 选中 `#Git Commit…` 后打开二级提交列表（最近 50 条），↑/↓/Enter 选择，「返回」/ Escape 回一级；
   选中扩展 `#` 入口后显示「请在电脑上完成选择…」，扩展在 PC 弹选择器，结果回传后自动插入；PC
   取消或超时（约 2 分钟）则保留原 `#` token。二级等待期间发送按钮禁用，避免把占位文本当普通

@@ -34,6 +34,7 @@ import { isSendableMobilePromptRef } from '../state/commandResults.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
 import { commandErrorText, formatAttachmentSize, strings } from '../strings.js'
 import { ComposerAttachmentChip } from './ComposerAttachmentChip.js'
+import { ComposerQuickTabs, type ComposerQuickTrigger } from './ComposerQuickTabs.js'
 import { pastedImageFiles } from './pastedImages.js'
 import { PROMPT_REF_LIST_ID, PromptRefPanel, promptRefOptionId } from './PromptRefPanel.js'
 import {
@@ -162,7 +163,7 @@ export interface ComposerProps {
   readonly online: boolean
   readonly imageSupported: boolean
   readonly fileSupported: boolean
-  /** Agent-advertised slash commands; empty hides both the button and the panel. */
+  /** Agent-advertised slash commands; empty hides the quick-entry button and the slash panel. */
   readonly commands: readonly MobileAvailableCommand[]
   readonly onUploadAttachment: (
     file: File,
@@ -319,7 +320,9 @@ export function Composer({
 
   const slash: SlashQuery | null = armed && !disabled ? extractSlashQuery(value, caret) : null
   const slashMatches = slash === null ? NO_COMMANDS : filterSlashCommands(commands, slash.query)
-  const slashOpen = focused && !slashDismissed && slash !== null && slashMatches.length > 0
+  // An empty result keeps the panel open so the user can still switch modes;
+  // Enter stays owned by the panel, matching the ref completion contract.
+  const slashOpen = focused && !slashDismissed && slash !== null && commands.length > 0
   const activeSlashIndex = Math.min(slashIndex, Math.max(slashMatches.length - 1, 0))
   const slashQuery = slash?.query
 
@@ -335,6 +338,20 @@ export function Composer({
   const activeSecondIndex = Math.min(secondIndex, Math.max(secondSuggestions.length - 1, 0))
   const refTrigger = refQuery?.trigger
   const refQueryText = refQuery?.query
+
+  // The quick-entry mode bar only makes sense while the first token owns the
+  // prompt: a later `@` / `#` cannot be rewritten to `/`. The caret guard keeps
+  // a caret parked before the trigger from switching into a panel that the
+  // next render would immediately close.
+  const quickToken =
+    slash !== null
+      ? { start: 0, end: slash.tokenEnd }
+      : refQuery === null
+        ? null
+        : { start: refQuery.start, end: refQuery.end }
+  const quickTrigger: ComposerQuickTrigger | null =
+    slash !== null ? '/' : refQuery === null ? null : refQuery.trigger
+  const quickAtStart = quickToken !== null && quickToken.start === 0 && caret > quickToken.start
 
   // A dismissed list re-arms itself once the command token disappears, so
   // backspacing into the token brings the suggestions back.
@@ -907,6 +924,35 @@ export function Composer({
     textareaRef.current?.focus()
   }
 
+  // The trigger characters are all one character wide, so switching modes
+  // rewrites value[0] and leaves the query and caret untouched. The tab bar is
+  // only rendered while the token owns offset 0 and the caret sits after it.
+  const switchQuickTrigger = (trigger: ComposerQuickTrigger): void => {
+    if (disabled || composing.current) return
+    if (trigger === '/' && commands.length === 0) return
+    if (quickToken === null || !quickAtStart) return
+    const current = value.slice(0, 1)
+    if (current === '' || current === trigger) return
+
+    const next = trigger + value.slice(1)
+    interacted.current = true
+    closeSecondStep()
+    setPlacedRefs((refs) => applyTextEdit(value, next, refs))
+    setSlashIndex(0)
+    setRefIndex(0)
+    setRefFailed(false)
+    if (trigger !== '/') setRefSuggestions(EMPTY_PROMPT_REFS)
+    pendingCaret.current = caret
+    setCaretRequest((request) => request + 1)
+    setValue(next)
+    setCaret(caret)
+    setArmed(true)
+    setFocused(true)
+    setSlashDismissed(false)
+    setRefDismissed(false)
+    textareaRef.current?.focus()
+  }
+
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
     // keyCode 229 catches IMEs that report a composition-confirming Enter as
     // isComposing=false.
@@ -941,15 +987,17 @@ export function Composer({
       return
     }
     if (slashOpen) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault()
-        setSlashIndex((activeSlashIndex + 1) % slashMatches.length)
-        return
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault()
-        setSlashIndex((activeSlashIndex - 1 + slashMatches.length) % slashMatches.length)
-        return
+      if (slashMatches.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault()
+          setSlashIndex((activeSlashIndex + 1) % slashMatches.length)
+          return
+        }
+        if (event.key === 'ArrowUp') {
+          event.preventDefault()
+          setSlashIndex((activeSlashIndex - 1 + slashMatches.length) % slashMatches.length)
+          return
+        }
       }
       if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault()
@@ -1203,6 +1251,15 @@ export function Composer({
     setAttachments((current) => current.filter((attachment) => attachment.key !== key))
   }
 
+  const quickTabs =
+    secondStep === undefined && quickTrigger !== null && quickAtStart ? (
+      <ComposerQuickTabs
+        active={quickTrigger}
+        slashEnabled={commands.length > 0}
+        onSwitch={switchQuickTrigger}
+      />
+    ) : undefined
+
   return (
     <div className="composer" data-testid="composer">
       {disabled && (
@@ -1286,6 +1343,7 @@ export function Composer({
           commands={slashMatches}
           activeIndex={activeSlashIndex}
           onPick={acceptCommand}
+          tabs={quickTabs}
         />
       )}
       {secondStep !== undefined && (
@@ -1310,6 +1368,7 @@ export function Composer({
           loading={refLoading}
           failed={refFailed}
           onPick={acceptPromptRef}
+          tabs={quickTabs}
         />
       )}
       <div className="composer__row">
@@ -1328,12 +1387,27 @@ export function Composer({
         {commands.length > 0 && value === '' && !disabled && (
           <button
             type="button"
-            className="composer__slash"
-            data-testid="composer-slash"
-            aria-label={strings.composerCommands}
+            className="composer__quick-entry"
+            data-testid="composer-quick-entry"
+            aria-label={strings.composerQuickEntry}
             onClick={insertSlash}
           >
-            /
+            <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M5 7h9M5 12h6M5 17h9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+              <path
+                d="M17.5 12.5v6M14.5 15.5h6"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+              />
+            </svg>
           </button>
         )}
         <textarea
@@ -1363,7 +1437,7 @@ export function Composer({
           }
           aria-expanded={slashOpen || refOpen || secondStep !== undefined}
           aria-activedescendant={
-            slashOpen
+            slashOpen && slashMatches.length > 0
               ? slashCommandOptionId(activeSlashIndex)
               : secondStep !== undefined && secondSuggestions.length > 0
                 ? promptRefOptionId(activeSecondIndex)

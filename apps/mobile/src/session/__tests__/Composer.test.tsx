@@ -571,7 +571,7 @@ describe('Composer', () => {
 
       type(input, '/')
       expect(screen.queryByTestId('composer-command-panel')).toBeNull()
-      expect(screen.queryByTestId('composer-slash')).toBeNull()
+      expect(screen.queryByTestId('composer-quick-entry')).toBeNull()
     })
 
     it('inserts the picked command and leaves the caret ready for arguments', async () => {
@@ -612,17 +612,18 @@ describe('Composer', () => {
       expect(screen.queryByTestId('composer-command-panel')).toBeNull()
     })
 
-    it('offers the slash shortcut only for an empty composer', () => {
+    it('offers the quick entry only for an empty composer', () => {
       renderComposer({ commands })
       const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
-      expect(screen.getByTestId('composer-slash')).toBeTruthy()
+      const entry = screen.getByTestId('composer-quick-entry')
+      expect(entry.getAttribute('aria-label')).toBe(strings.composerQuickEntry)
 
-      fireEvent.click(screen.getByTestId('composer-slash'))
+      fireEvent.click(entry)
       expect(input.value).toBe('/')
       expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
 
       type(input, '/di')
-      expect(screen.queryByTestId('composer-slash')).toBeNull()
+      expect(screen.queryByTestId('composer-quick-entry')).toBeNull()
     })
 
     it('does not pop the list for a restored draft until the user edits', () => {
@@ -636,6 +637,182 @@ describe('Composer', () => {
       expect(screen.queryByTestId('composer-command-panel')).toBeNull()
       type(input, '/dif')
       expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
+    })
+  })
+
+  describe('quick entry modes', () => {
+    const commands = [
+      { name: 'diff', description: 'Review the working tree', inputHint: 'path' },
+      { name: 'compact', description: 'Compact the conversation' },
+    ]
+    const fileRef = {
+      kind: 'file' as const,
+      label: 'src/a.ts',
+      uri: 'file:///workspace/src/a.ts',
+    }
+    const commitSearchEntry = { kind: 'commit' as const, label: 'Git Commit…', uri: '' }
+    const commitEntry = {
+      kind: 'commit' as const,
+      label: 'a1b2c3d Fix tests',
+      uri: 'file:///repo',
+      commitHash: 'a'.repeat(40),
+      text: 'Fix tests',
+    }
+
+    const type = (input: HTMLTextAreaElement, value: string): void => {
+      fireEvent.change(input, { target: { value } })
+    }
+
+    const openEntry = (): HTMLTextAreaElement => {
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      fireEvent.click(screen.getByTestId('composer-quick-entry'))
+      return input
+    }
+
+    it('shows the three modes above the slash list and keeps focus on mousedown', () => {
+      renderComposer({ commands })
+      const input = openEntry()
+
+      expect(input.value).toBe('/')
+      expect(screen.getByTestId('composer-quick-tabs')).toBeTruthy()
+      expect(screen.getByTestId('composer-quick-tab-command').getAttribute('aria-pressed')).toBe(
+        'true',
+      )
+      expect(screen.getByTestId('composer-quick-tab-file').getAttribute('aria-pressed')).toBe(
+        'false',
+      )
+      expect(screen.getByTestId('composer-quick-tab-context').getAttribute('aria-pressed')).toBe(
+        'false',
+      )
+      expect(fireEvent.mouseDown(screen.getByTestId('composer-quick-tab-file'))).toBe(false)
+    })
+
+    it('switches a bare / to @ and # and searches with an empty query', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef])
+      renderComposer({ commands, searchPromptRefs })
+      const input = openEntry()
+
+      fireEvent.click(screen.getByTestId('composer-quick-tab-file'))
+      expect(input.value).toBe('@')
+      expect(input.selectionStart).toBe(1)
+      expect(screen.getByTestId('composer-quick-tab-file').getAttribute('aria-pressed')).toBe(
+        'true',
+      )
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('@', ''))
+
+      fireEvent.click(screen.getByTestId('composer-quick-tab-context'))
+      expect(input.value).toBe('#')
+      expect(input.selectionStart).toBe(1)
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('#', ''))
+    })
+
+    it('keeps the query and caret while cycling through all three modes', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef])
+      renderComposer({ commands, searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/co')
+
+      fireEvent.click(screen.getByTestId('composer-quick-tab-file'))
+      expect(input.value).toBe('@co')
+      expect(input.selectionStart).toBe(3)
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('@', 'co'))
+
+      fireEvent.click(screen.getByTestId('composer-quick-tab-context'))
+      expect(input.value).toBe('#co')
+      expect(input.selectionStart).toBe(3)
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('#', 'co'))
+
+      fireEvent.click(screen.getByTestId('composer-quick-tab-command'))
+      expect(input.value).toBe('/co')
+      expect(input.selectionStart).toBe(3)
+      const options = screen.getAllByTestId('composer-command-option')
+      expect(options).toHaveLength(1)
+      expect(options[0]?.textContent).toContain('/compact')
+    })
+
+    it('inserts the picked file after switching to @', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef])
+      renderComposer({ commands, searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/src')
+
+      fireEvent.click(screen.getByTestId('composer-quick-tab-file'))
+      await waitFor(() => expect(searchPromptRefs).toHaveBeenCalledWith('@', 'src'))
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+
+      await waitFor(() => expect(input.value).toBe('@src/a.ts'))
+      expect(input.selectionStart).toBe('@src/a.ts'.length)
+      expect(screen.queryByTestId('composer-ref-panel')).toBeNull()
+    })
+
+    it('hides the modes for a token that does not start the prompt', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef])
+      renderComposer({ commands, searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, 'look @src')
+      await waitFor(() => expect(screen.getByTestId('composer-ref-panel')).toBeTruthy())
+      expect(screen.queryByTestId('composer-quick-tabs')).toBeNull()
+    })
+
+    it('hides the modes during the commit second step and restores them on back', async () => {
+      const searchPromptRefs = vi.fn(async () => [commitSearchEntry])
+      const resolvePromptRef = vi.fn(
+        async (): Promise<ResolvePromptRefResult> => ({ kind: 'commit', entries: [commitEntry] }),
+      )
+      renderComposer({ commands, searchPromptRefs, resolvePromptRef })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '#Git')
+      await waitFor(() => expect(screen.getByTestId('composer-quick-tabs')).toBeTruthy())
+      fireEvent.click(await waitFor(() => screen.getByTestId('composer-ref-option')))
+      expect(await waitFor(() => screen.getByText(strings.promptRefPickCommit))).toBeTruthy()
+      expect(screen.queryByTestId('composer-quick-tabs')).toBeNull()
+
+      fireEvent.click(screen.getByTestId('composer-ref-back'))
+      await waitFor(() => expect(screen.getByTestId('composer-quick-tabs')).toBeTruthy())
+    })
+
+    it('keeps the context mode available without advertised commands', async () => {
+      const searchPromptRefs = vi.fn(async () => [fileRef])
+      renderComposer({ searchPromptRefs })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '@src')
+      await waitFor(() => expect(screen.getByTestId('composer-quick-tabs')).toBeTruthy())
+      const commandTab = screen.getByTestId('composer-quick-tab-command') as HTMLButtonElement
+      expect(commandTab.disabled).toBe(true)
+      expect(screen.getByTestId('composer-quick-tab-file').getAttribute('aria-pressed')).toBe(
+        'true',
+      )
+
+      fireEvent.click(commandTab)
+      expect(input.value).toBe('@src')
+    })
+
+    it('keeps the modes reachable when the slash query matches nothing', () => {
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, '/zzz')
+      expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
+      expect(screen.getByTestId('composer-command-empty').textContent).toContain(
+        strings.composerCommandEmpty,
+      )
+      expect(screen.getByTestId('composer-quick-tabs')).toBeTruthy()
+
+      fireEvent.keyDown(input, { key: 'ArrowDown' })
+      expect(input.value).toBe('/zzz')
+
+      fireEvent.click(screen.getByTestId('composer-quick-tab-file'))
+      expect(input.value).toBe('@zzz')
     })
   })
 
