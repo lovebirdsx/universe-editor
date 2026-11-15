@@ -347,4 +347,48 @@ ${triggerEntry('beta', 'Beta Trigger')}
     await page.evaluate((command) => window.__E2E__!.runCommand(command), MANAGER_COMMAND)
     await expect(page.getByTestId('trigger-manager-row')).toHaveCount(1)
   })
+
+  test('collapses a workspace group and filters by status @p1', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
+    await workbench.waitForRestored()
+    const config = `{
+  "version": 1,
+  "triggers": [
+${triggerEntry('alpha', 'Alpha Trigger')},
+${triggerEntry('beta', 'Beta Trigger')}
+  ]
+}
+`
+    await registerConfig(page, launchWorkspace.dir, config)
+    await expect.poll(async () => (await findTrigger(page, 'alpha'))?.status).toBe('paused')
+
+    await openManager(page)
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(2)
+    const group = page.getByTestId('trigger-manager-group').first()
+    await expect(group).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByTestId('trigger-manager-group-count')).toContainText('2')
+
+    await group.click()
+    await expect(group).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(0)
+    await expect(page.getByTestId('trigger-manager-group-count')).toContainText('2')
+
+    await group.click()
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(2)
+
+    // First-seen triggers are paused but still need confirmation, so "Active"
+    // excludes them while "Paused" keeps both.
+    await page.getByTestId('trigger-manager-filter').click()
+    await page.getByRole('menuitem', { name: 'Paused' }).click()
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(2)
+
+    await page.getByTestId('trigger-manager-filter').click()
+    await page.getByRole('menuitem', { name: 'Active' }).click()
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(0)
+    await expect(page.getByTestId('trigger-manager-empty-match')).toBeVisible()
+  })
 })

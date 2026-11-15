@@ -260,6 +260,12 @@ function rowByKey(key: string): HTMLElement {
   return row
 }
 
+function visibleRowKeys(): string[] {
+  return screen
+    .getAllByTestId('trigger-manager-row')
+    .map((element) => element.getAttribute('data-trigger-key') ?? '')
+}
+
 const TWO_WORKSPACES = [
   summary({ id: 'a', name: 'Alpha', workspace: 'ws-1', workspaceName: 'alpha' }),
   summary({ id: 'b', name: 'Beta', workspace: 'ws-2', workspaceName: 'beta' }),
@@ -271,7 +277,10 @@ describe('TriggerManagerEditor', () => {
     await screen.findAllByTestId('trigger-manager-row')
 
     const groups = screen.getAllByTestId('trigger-manager-group')
-    expect(groups.map((group) => group.textContent)).toEqual(['alpha', 'beta'])
+    expect(groups.map((group) => group.getAttribute('data-workspace'))).toEqual(['ws-1', 'ws-2'])
+    expect(
+      screen.getAllByTestId('trigger-manager-group-count').map((count) => count.textContent),
+    ).toEqual(['1', '1'])
     expect(screen.getAllByTestId('trigger-manager-row')).toHaveLength(2)
   })
 
@@ -285,6 +294,215 @@ describe('TriggerManagerEditor', () => {
 
     expect(screen.getAllByTestId('trigger-manager-row')).toHaveLength(1)
     expect(rowByKey('b')).toBeDefined()
+  })
+
+  it('orders attention and active triggers above idle and paused ones', async () => {
+    renderEditor({
+      summaries: [
+        summary({
+          id: 'paused',
+          name: 'Paused',
+          workspace: 'ws-a',
+          workspaceName: 'alpha',
+          paused: true,
+          status: 'paused',
+        }),
+        summary({ id: 'idle', name: 'Idle', workspace: 'ws-b', workspaceName: 'beta' }),
+        summary({
+          id: 'attention',
+          name: 'Attention',
+          workspace: 'ws-c',
+          workspaceName: 'gamma',
+          activationConfirmed: false,
+          status: 'needs-confirmation',
+        }),
+      ],
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    expect(visibleRowKeys()).toEqual(['attention', 'idle', 'paused'])
+    expect(
+      screen
+        .getAllByTestId('trigger-manager-group')
+        .map((group) => group.getAttribute('data-workspace')),
+    ).toEqual(['ws-c', 'ws-b', 'ws-a'])
+  })
+
+  it('searches source wording, run summaries and errors with multi-term AND', async () => {
+    renderEditor({
+      summaries: [
+        summary({ id: 'merged', workspaceName: 'alpha', lastRunSummary: 'Merged the fix' }),
+        summary({ id: 'failed', workspaceName: 'beta', lastError: 'network down' }),
+      ],
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+    const search = screen.getByTestId('trigger-manager-search')
+
+    fireEvent.change(search, { target: { value: 'merged fix' } })
+    expect(visibleRowKeys()).toEqual(['merged'])
+
+    fireEvent.change(search, { target: { value: 'network' } })
+    expect(visibleRowKeys()).toEqual(['failed'])
+
+    fireEvent.change(search, { target: { value: 'merged network' } })
+    expect(screen.getByTestId('trigger-manager-empty-match')).toBeDefined()
+  })
+
+  it('filters by status through the toolbar menu and persists the choice', async () => {
+    const storage = new FakeStorage()
+    renderEditor({
+      summaries: [
+        summary({ id: 'idle', name: 'Idle', workspace: 'ws-1', workspaceName: 'alpha' }),
+        summary({
+          id: 'paused',
+          name: 'Paused',
+          workspace: 'ws-1',
+          workspaceName: 'alpha',
+          paused: true,
+          status: 'paused',
+        }),
+        summary({
+          id: 'attention',
+          name: 'Attention',
+          workspace: 'ws-1',
+          workspaceName: 'alpha',
+          activationConfirmed: false,
+          status: 'needs-confirmation',
+        }),
+      ],
+      storage,
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    fireEvent.click(screen.getByTestId('trigger-manager-filter'))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Needs attention' }))
+
+    await waitFor(() => expect(visibleRowKeys()).toEqual(['attention']))
+    expect(screen.getByTestId('trigger-manager-group-count').textContent).toBe('1')
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.filter',
+        'attention',
+        StorageScope.GLOBAL,
+      ),
+    )
+
+    fireEvent.click(screen.getByTestId('trigger-manager-filter'))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Paused' }))
+    await waitFor(() => expect(visibleRowKeys()).toEqual(['paused']))
+  })
+
+  it('collapses a workspace group and persists the choice', async () => {
+    const storage = new FakeStorage()
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+    const alphaGroup = screen
+      .getAllByTestId('trigger-manager-group')
+      .find((group) => group.getAttribute('data-workspace') === 'ws-1')
+    if (alphaGroup === undefined) throw new Error('alpha group not found')
+    expect(alphaGroup.getAttribute('aria-expanded')).toBe('true')
+
+    fireEvent.click(alphaGroup)
+
+    expect(visibleRowKeys()).toEqual(['b'])
+    expect(alphaGroup.getAttribute('aria-expanded')).toBe('false')
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.collapsedGroups',
+        ['ws-1'],
+        StorageScope.GLOBAL,
+      ),
+    )
+
+    fireEvent.click(alphaGroup)
+    expect(visibleRowKeys()).toEqual(['a', 'b'])
+    await waitFor(() =>
+      expect(storage.remove).toHaveBeenCalledWith(
+        'triggerManager.view.collapsedGroups',
+        StorageScope.GLOBAL,
+      ),
+    )
+  })
+
+  it('restores collapsed groups and the status filter from storage', async () => {
+    const storage = new FakeStorage({
+      'triggerManager.view.collapsedGroups': ['ws-1'],
+      'triggerManager.view.filter': 'active',
+    })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    await waitFor(() => expect(visibleRowKeys()).toEqual(['b']))
+    const alphaGroup = screen
+      .getAllByTestId('trigger-manager-group')
+      .find((group) => group.getAttribute('data-workspace') === 'ws-1')
+    expect(alphaGroup?.getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByTestId('trigger-manager-filter').getAttribute('data-tooltip')).toBe(
+      'Filter: Active',
+    )
+  })
+
+  it('navigates only visible rows after a group is collapsed', async () => {
+    renderEditor({
+      summaries: [
+        summary({ id: 'a1', name: 'Alpha One', workspace: 'ws-1', workspaceName: 'alpha' }),
+        summary({ id: 'a2', name: 'Alpha Two', workspace: 'ws-1', workspaceName: 'alpha' }),
+        summary({ id: 'b', name: 'Beta', workspace: 'ws-2', workspaceName: 'beta' }),
+      ],
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+    fireEvent.click(rowByKey('a1'))
+
+    const alphaGroup = screen
+      .getAllByTestId('trigger-manager-group')
+      .find((group) => group.getAttribute('data-workspace') === 'ws-1')
+    if (alphaGroup === undefined) throw new Error('alpha group not found')
+    fireEvent.click(alphaGroup)
+
+    fireEvent.keyDown(screen.getByTestId('trigger-manager-list'), { key: 'ArrowDown' })
+
+    await waitFor(() =>
+      expect(screen.getByTestId('trigger-manager-overview-name').textContent).toBe('Beta'),
+    )
+  })
+
+  it('moves the run summary into the row tooltip and falls back to the error', async () => {
+    renderEditor({
+      summaries: [
+        summary({ id: 'with-summary', lastRunSummary: 'Merged the fix', lastError: 'ignored' }),
+      ],
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+    const row = rowByKey('with-summary')
+    expect(row.getAttribute('data-tooltip')).toBe('Merged the fix')
+    expect(within(row).queryByText('Merged the fix')).toBeNull()
+
+    cleanup()
+    renderEditor({ summaries: [summary({ id: 'with-error', lastError: 'network down' })] })
+    await screen.findAllByTestId('trigger-manager-row')
+    expect(rowByKey('with-error').getAttribute('data-tooltip')).toBe('network down')
+  })
+
+  it('runs a trigger from the row action and disables it when gated', async () => {
+    const harness = renderEditor({
+      summaries: [
+        summary({ id: 'ready', name: 'Ready', workspaceName: 'alpha' }),
+        summary({
+          id: 'gated',
+          name: 'Gated',
+          workspaceName: 'alpha',
+          activationConfirmed: false,
+          status: 'needs-confirmation',
+        }),
+      ],
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    fireEvent.click(within(rowByKey('ready')).getByTestId('trigger-manager-row-run-now'))
+    await waitFor(() => expect(harness.runNow).toHaveBeenCalledWith('ready'))
+
+    const gated = within(rowByKey('gated')).getByTestId('trigger-manager-row-run-now')
+    expect((gated as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('shows the clicked row in the overview panel', async () => {

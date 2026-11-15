@@ -83,6 +83,7 @@ button.banner:hover {
   overflow-y: auto;
   padding: var(--spacing-3) 0 var(--spacing-6);
   outline: none;
+  scroll-padding-top: 28px;
 }
 
 .list:focus-visible {
@@ -123,18 +124,56 @@ button.banner:hover {
 }
 
 .groupHeader {
+  position: sticky;
+  top: 0;
   display: flex;
   align-items: center;
   gap: var(--spacing-3);
+  width: 100%;
   padding: var(--spacing-4) var(--spacing-5) var(--spacing-2);
+  border: none;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-mutedForeground);
+  font-family: inherit;
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
+  text-align: left;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--vscode-editor-mutedForeground);
+  cursor: pointer;
+}
+
+.groupHeader:hover {
+  color: var(--vscode-editor-foreground);
+}
+
+.groupHeader:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.groupChevron {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.groupCount {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 var(--spacing-2);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-badge-background, #2f2f35);
+  color: var(--vscode-badge-foreground, #c8c8c8);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: center;
+  text-transform: none;
 }
 
 .groupName {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -154,9 +193,10 @@ button.banner:hover {
   display: flex;
   align-items: center;
   gap: var(--spacing-4);
-  padding: var(--spacing-4) var(--spacing-5);
+  padding: var(--spacing-2) var(--spacing-5);
   border-left: 2px solid transparent;
   cursor: pointer;
+  scroll-margin-top: 28px;
 }
 
 .row:hover {
@@ -201,7 +241,6 @@ button.banner:hover {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
-  gap: var(--spacing-1);
   min-width: 0;
 }
 
@@ -232,18 +271,24 @@ button.banner:hover {
   color: var(--vscode-editor-mutedForeground);
 }
 
-.rowSelected .rowMeta,
-.rowSelected .rowSummary {
-  color: inherit;
-  opacity: 0.85;
+.rowActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--spacing-1);
+  opacity: 0;
+  pointer-events: none;
 }
 
-.rowSummary {
-  overflow: hidden;
-  font-size: var(--font-size-xs);
-  color: var(--vscode-editor-mutedForeground);
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.row:hover .rowActions,
+.row:focus-within .rowActions,
+.rowSelected .rowActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rowSelected .rowMeta {
+  color: inherit;
+  opacity: 0.85;
 }
 
 /* -- detail pane --------------------------------------------------------- */

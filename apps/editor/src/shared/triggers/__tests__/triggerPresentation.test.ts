@@ -8,8 +8,13 @@ import {
   formatTriggerDuration,
   groupTriggersByWorkspace,
   relativeTimeUntil,
+  sortTriggersForDisplay,
   summarizeTriggerCounts,
   summarizeTriggerSource,
+  triggerCanRun,
+  triggerDisplayRank,
+  triggerMatchesListFilter,
+  triggerMatchesSearch,
   triggerNeedsConfirmation,
   triggerSourceFacts,
   triggerStatusBadge,
@@ -76,6 +81,124 @@ describe('groupTriggersByWorkspace', () => {
     expect(groups.map((group) => group.workspaceName)).toEqual(['alpha', 'beta'])
     expect(groups[0]?.triggers.map((entry) => entry.id)).toEqual(['a', 'c'])
     expect(groups[1]?.triggers.map((entry) => entry.id)).toEqual(['b'])
+  })
+})
+
+describe('sortTriggersForDisplay', () => {
+  it('orders attention, active, idle, then paused/disabled, keeping ties stable', () => {
+    const paused = summary({ id: 'paused', paused: true, status: 'paused' })
+    const idle = summary({ id: 'idle' })
+    const running = summary({ id: 'running', running: 1, status: 'running' })
+    const attention = summary({ id: 'attention', activationConfirmed: false })
+    const disabled = summary({ id: 'disabled', enabled: false, status: 'disabled' })
+    const queued = summary({ id: 'queued', queued: 1 })
+
+    const ordered = sortTriggersForDisplay([paused, idle, running, attention, disabled, queued])
+
+    expect(ordered.map((entry) => entry.id)).toEqual([
+      'attention',
+      'running',
+      'queued',
+      'idle',
+      'paused',
+      'disabled',
+    ])
+  })
+
+  it('ranks each badge bucket and ignores the incoming order within a bucket', () => {
+    expect(triggerDisplayRank(summary({ activationConfirmed: false }))).toBe(0)
+    expect(triggerDisplayRank(summary({ running: 1 }))).toBe(1)
+    expect(triggerDisplayRank(summary())).toBe(2)
+    expect(triggerDisplayRank(summary({ paused: true, status: 'paused' }))).toBe(3)
+  })
+
+  it('moves a group whose best trigger needs attention above earlier groups', () => {
+    const groups = groupTriggersByWorkspace(
+      sortTriggersForDisplay([
+        summary({ id: 'a-paused', workspace: 'a', paused: true, status: 'paused' }),
+        summary({ id: 'b-attention', workspace: 'b', activationConfirmed: false }),
+        summary({ id: 'a-idle', workspace: 'a' }),
+      ]),
+    )
+
+    expect(groups.map((group) => group.workspace)).toEqual(['b', 'a'])
+    expect(groups[1]?.triggers.map((entry) => entry.id)).toEqual(['a-idle', 'a-paused'])
+  })
+})
+
+describe('triggerMatchesListFilter', () => {
+  it('separates all, active, attention and paused', () => {
+    expect(triggerMatchesListFilter(summary(), 'all')).toBe(true)
+    expect(triggerMatchesListFilter(summary(), 'active')).toBe(true)
+    expect(triggerMatchesListFilter(summary(), 'attention')).toBe(false)
+    expect(triggerMatchesListFilter(summary(), 'paused')).toBe(false)
+
+    expect(triggerMatchesListFilter(summary({ activationConfirmed: false }), 'attention')).toBe(
+      true,
+    )
+    expect(triggerMatchesListFilter(summary({ activationConfirmed: false }), 'active')).toBe(false)
+    expect(triggerMatchesListFilter(summary({ running: 1, status: 'running' }), 'active')).toBe(
+      true,
+    )
+    expect(triggerMatchesListFilter(summary({ queued: 1 }), 'active')).toBe(true)
+    expect(triggerMatchesListFilter(summary({ paused: true, status: 'paused' }), 'paused')).toBe(
+      true,
+    )
+  })
+
+  it('lets an auto-paused trigger match both attention and paused', () => {
+    const autoPaused = summary({ autoPaused: true, paused: true, status: 'paused' })
+    expect(triggerMatchesListFilter(autoPaused, 'attention')).toBe(true)
+    expect(triggerMatchesListFilter(autoPaused, 'paused')).toBe(true)
+  })
+
+  it('does not treat a disabled but unpaused trigger as active or paused', () => {
+    const disabled = summary({ enabled: false, status: 'disabled' })
+    expect(triggerMatchesListFilter(disabled, 'active')).toBe(false)
+    expect(triggerMatchesListFilter(disabled, 'paused')).toBe(false)
+  })
+})
+
+describe('triggerMatchesSearch', () => {
+  const item = summary({
+    name: 'Triage',
+    id: 'triage-id',
+    workspaceName: 'acme 4.0',
+    source: {
+      type: 'poll',
+      intervalSec: 300,
+      fetch: { type: 'command', command: 'gh pr list', timeoutSec: 10 },
+      keyField: 'id',
+    },
+    lastRunSummary: 'Merged the fix',
+    lastError: 'network down',
+  })
+
+  it('searches name, id, workspace, source wording, summary and error', () => {
+    expect(triggerMatchesSearch(item, 'triage')).toBe(true)
+    expect(triggerMatchesSearch(item, 'acme')).toBe(true)
+    expect(triggerMatchesSearch(item, 'every 300s')).toBe(true)
+    expect(triggerMatchesSearch(item, 'MERGED')).toBe(true)
+    expect(triggerMatchesSearch(item, 'network')).toBe(true)
+    expect(triggerMatchesSearch(item, 'triage merged')).toBe(true)
+    expect(triggerMatchesSearch(item, 'triage missing')).toBe(false)
+    expect(triggerMatchesSearch(item, '   ')).toBe(true)
+  })
+
+  it('tolerates an absent source and absent run text', () => {
+    const invalid = summary({ status: 'invalid' })
+    expect(triggerMatchesSearch(invalid, 'unknown source')).toBe(true)
+  })
+})
+
+describe('triggerCanRun', () => {
+  it('allows a paused trigger but blocks invalid, unconfirmed, paused-all and offline', () => {
+    expect(triggerCanRun(summary())).toBe(true)
+    expect(triggerCanRun(summary({ paused: true, status: 'paused' }))).toBe(true)
+    expect(triggerCanRun(summary({ status: 'invalid' }))).toBe(false)
+    expect(triggerCanRun(summary({ activationConfirmed: false }))).toBe(false)
+    expect(triggerCanRun(summary({ pausedAll: true }))).toBe(false)
+    expect(triggerCanRun(summary({ offline: true }))).toBe(false)
   })
 })
 

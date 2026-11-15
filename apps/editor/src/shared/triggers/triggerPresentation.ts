@@ -73,7 +73,11 @@ export interface TriggerWorkspaceGroup {
   readonly triggers: readonly TriggerSummary[]
 }
 
-/** Groups in first-seen order so the list does not reshuffle on every update. */
+/**
+ * Groups in first-seen order. Callers that want attention-first groups pass a
+ * list reordered with `sortTriggersForDisplay`; a group's first trigger then
+ * decides where the whole group appears.
+ */
 export function groupTriggersByWorkspace(
   list: readonly TriggerSummary[],
 ): readonly TriggerWorkspaceGroup[] {
@@ -244,6 +248,95 @@ function triggerNeedsAttention(summary: TriggerSummary): boolean {
     (summary.status !== 'invalid' &&
       summary.lastError !== undefined &&
       summary.lastError.length > 0)
+  )
+}
+
+/**
+ * Manager list buckets: action-required states first, paused/disabled last.
+ * Rows inside a bucket keep their incoming order (stable sort).
+ */
+export function triggerDisplayRank(summary: TriggerSummary): number {
+  switch (triggerStatusBadge(summary).kind) {
+    case 'needs-confirmation':
+    case 'invalid':
+    case 'offline':
+    case 'auto-paused':
+    case 'error':
+      return 0
+    case 'running':
+    case 'queued':
+      return 1
+    case 'idle':
+      return 2
+    case 'paused':
+    case 'disabled':
+      return 3
+  }
+}
+
+/** Stable attention-first ordering; grouping after this puts active groups on top. */
+export function sortTriggersForDisplay(list: readonly TriggerSummary[]): readonly TriggerSummary[] {
+  return [...list].sort((a, b) => triggerDisplayRank(a) - triggerDisplayRank(b))
+}
+
+export const TRIGGER_LIST_FILTERS = ['all', 'active', 'attention', 'paused'] as const
+export type TriggerListFilter = (typeof TRIGGER_LIST_FILTERS)[number]
+
+export function isTriggerListFilter(value: unknown): value is TriggerListFilter {
+  return typeof value === 'string' && (TRIGGER_LIST_FILTERS as readonly string[]).includes(value)
+}
+
+export function triggerMatchesListFilter(
+  summary: TriggerSummary,
+  filter: TriggerListFilter,
+): boolean {
+  switch (filter) {
+    case 'all':
+      return true
+    case 'attention':
+      return triggerStatusBadge(summary).attention
+    case 'active': {
+      // Badge first: an unconfirmed or auto-paused trigger must not leak into
+      // "active" just because its raw status still says idle.
+      const kind = triggerStatusBadge(summary).kind
+      return kind === 'running' || kind === 'queued' || kind === 'idle'
+    }
+    case 'paused':
+      return summary.paused
+  }
+}
+
+/**
+ * Space-separated terms are ANDed (case-insensitive). Only the fields a user can
+ * see or copy are searched; status filtering has its own menu.
+ */
+export function triggerMatchesSearch(summary: TriggerSummary, query: string): boolean {
+  const tokens = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((token) => token.length > 0)
+  if (tokens.length === 0) return true
+  const haystack = [
+    summary.name,
+    summary.id,
+    summary.workspaceName,
+    summarizeTriggerSource(summary.source),
+    summary.lastRunSummary ?? '',
+    summary.lastError ?? '',
+  ]
+    .join('\n')
+    .toLowerCase()
+  return tokens.every((token) => haystack.includes(token))
+}
+
+/** Manual runs stay available while paused; only the hard gates block them. */
+export function triggerCanRun(summary: TriggerSummary): boolean {
+  return (
+    summary.status !== 'invalid' &&
+    summary.activationConfirmed &&
+    !summary.pausedAll &&
+    summary.offline !== true
   )
 }
 

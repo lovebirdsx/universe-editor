@@ -10,6 +10,10 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { IStorageService, StorageScope } from '@universe-editor/platform'
 import { requestOwnerFrame } from '@universe-editor/workbench-ui'
+import {
+  isTriggerListFilter,
+  type TriggerListFilter,
+} from '../../../shared/triggers/triggerPresentation.js'
 import type { TriggerManagerEditorInput } from '../../services/triggers/triggerManagerEditorInput.js'
 import { useService } from '../useService.js'
 
@@ -22,6 +26,8 @@ export function isTriggerTab(value: unknown): value is TriggerTab {
 
 export const TriggerManagerViewKeys = {
   query: 'triggerManager.view.query',
+  filter: 'triggerManager.view.filter',
+  collapsedGroups: 'triggerManager.view.collapsedGroups',
   selectedKey: 'triggerManager.view.selectedKey',
   tab: 'triggerManager.view.tab',
   listScrollTop: 'triggerManager.view.listScrollTop',
@@ -43,6 +49,10 @@ export interface TriggerManagerViewStateOptions {
 export interface TriggerManagerViewState {
   readonly query: string
   readonly setQuery: (value: string) => void
+  readonly filter: TriggerListFilter
+  readonly setFilter: (filter: TriggerListFilter) => void
+  readonly collapsedGroups: ReadonlySet<string>
+  readonly toggleGroup: (workspace: string) => void
   readonly selectedKey: string | undefined
   /** Select a trigger (click / keyboard / external reveal); resets the detail scroll. */
   readonly selectKey: (key: string) => void
@@ -64,12 +74,16 @@ export function useTriggerManagerViewState({
 }: TriggerManagerViewStateOptions): TriggerManagerViewState {
   const storage = useService(IStorageService)
   const [query, setQueryState] = useState('')
+  const [filter, setFilterState] = useState<TriggerListFilter>('all')
+  const [collapsedGroups, setCollapsedGroupsState] = useState<ReadonlySet<string>>(() => new Set())
   const [selectedKey, setSelectedKeyState] = useState<string | undefined>(undefined)
   const [tab, setTabState] = useState<TriggerTab>('overview')
   const [restoreDone, setRestoreDone] = useState(false)
 
   // A value the user changed while the async restore was in flight must win over it.
   const queryTouched = useRef(false)
+  const filterTouched = useRef(false)
+  const collapsedGroupsTouched = useRef(false)
   const selectionTouched = useRef(false)
   const tabTouched = useRef(false)
   // A failed read leaves the stored values alone instead of rewriting defaults over them.
@@ -77,6 +91,8 @@ export function useTriggerManagerViewState({
 
   const tabRef = useRef<TriggerTab>('overview')
   tabRef.current = tab
+  const collapsedGroupsRef = useRef<ReadonlySet<string>>(collapsedGroups)
+  collapsedGroupsRef.current = collapsedGroups
   const selectedKeyRef = useRef<string | undefined>(undefined)
   selectedKeyRef.current = selectedKey
   const queryRef = useRef('')
@@ -134,6 +150,36 @@ export function useTriggerManagerViewState({
     queryTouched.current = true
     setQueryState(value)
   }, [])
+
+  const setFilter = useCallback(
+    (next: TriggerListFilter) => {
+      filterTouched.current = true
+      setFilterState(next)
+      if (next === 'all') {
+        void storage.remove(TriggerManagerViewKeys.filter, StorageScope.GLOBAL)
+      } else {
+        void storage.set(TriggerManagerViewKeys.filter, next, StorageScope.GLOBAL)
+      }
+    },
+    [storage],
+  )
+
+  const toggleGroup = useCallback(
+    (workspace: string) => {
+      collapsedGroupsTouched.current = true
+      const next = new Set(collapsedGroupsRef.current)
+      if (next.has(workspace)) next.delete(workspace)
+      else next.add(workspace)
+      collapsedGroupsRef.current = next
+      setCollapsedGroupsState(next)
+      if (next.size === 0) {
+        void storage.remove(TriggerManagerViewKeys.collapsedGroups, StorageScope.GLOBAL)
+      } else {
+        void storage.set(TriggerManagerViewKeys.collapsedGroups, [...next], StorageScope.GLOBAL)
+      }
+    },
+    [storage],
+  )
 
   const selectKey = useCallback(
     (key: string) => {
@@ -193,23 +239,33 @@ export function useTriggerManagerViewState({
       storage.get<string>(TriggerManagerViewKeys.query, StorageScope.GLOBAL),
       storage.get<string>(TriggerManagerViewKeys.selectedKey, StorageScope.GLOBAL),
       storage.get<unknown>(TriggerManagerViewKeys.tab, StorageScope.GLOBAL),
+      storage.get<unknown>(TriggerManagerViewKeys.filter, StorageScope.GLOBAL),
+      storage.get<unknown>(TriggerManagerViewKeys.collapsedGroups, StorageScope.GLOBAL),
       storage.get<number>(TriggerManagerViewKeys.listScrollTop, StorageScope.GLOBAL),
       ...TRIGGER_TABS.map((entry) =>
         storage.get<number>(TriggerManagerViewKeys.detailScrollTop(entry), StorageScope.GLOBAL),
       ),
     ]).then(
-      ([storedQuery, storedKey, storedTab, storedListTop, ...storedDetailTops]) => {
+      ([storedQuery, storedKey, storedTab, storedFilter, storedGroups, storedListTop, ...tops]) => {
         if (!active) return
         if (!queryTouched.current && typeof storedQuery === 'string') setQueryState(storedQuery)
         if (!selectionTouched.current && typeof storedKey === 'string' && storedKey.length > 0) {
           setSelectedKeyState(storedKey)
         }
         if (!tabTouched.current && isTriggerTab(storedTab)) setTabState(storedTab)
+        if (!filterTouched.current && isTriggerListFilter(storedFilter)) {
+          setFilterState(storedFilter)
+        }
+        const restoredGroups = parseCollapsedGroups(storedGroups)
+        if (!collapsedGroupsTouched.current && restoredGroups !== undefined) {
+          collapsedGroupsRef.current = restoredGroups
+          setCollapsedGroupsState(restoredGroups)
+        }
         if (typeof storedListTop === 'number' && storedListTop > 0) {
           listScrollTarget.current = storedListTop
         }
         TRIGGER_TABS.forEach((entry, index) => {
-          const top = storedDetailTops[index]
+          const top = tops[index]
           if (typeof top === 'number' && top > 0) detailPositions.current[entry] = top
         })
         restoreOk.current = true
@@ -345,5 +401,21 @@ export function useTriggerManagerViewState({
     }
   }, [detailRef, listReady, restoreDone, tab])
 
-  return { query, setQuery, selectedKey, selectKey, tab, switchTab }
+  return {
+    query,
+    setQuery,
+    filter,
+    setFilter,
+    collapsedGroups,
+    toggleGroup,
+    selectedKey,
+    selectKey,
+    tab,
+    switchTab,
+  }
+}
+
+function parseCollapsedGroups(value: unknown): ReadonlySet<string> | undefined {
+  if (!Array.isArray(value)) return undefined
+  return new Set(value.filter((entry): entry is string => typeof entry === 'string'))
 }

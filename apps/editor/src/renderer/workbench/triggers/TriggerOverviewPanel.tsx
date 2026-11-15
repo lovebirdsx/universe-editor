@@ -11,6 +11,7 @@ import { workspaceDisplayPath } from '../../../shared/triggers/configParse.js'
 import {
   formatTriggerDuration,
   summarizeTriggerSource,
+  triggerCanRun,
   triggerNeedsConfirmation,
   triggerSourceFacts,
   triggerSourceLabel,
@@ -31,9 +32,7 @@ export function TriggerOverviewPanel({ summary, actions }: TriggerOverviewPanelP
   const invalid = summary.status === 'invalid'
   const needsActivation = !summary.activationConfirmed && !invalid
   const pausedAll = summary.pausedAll
-  // Pausing only stops automatic scheduling; a manual run stays available unless
-  // all triggers are paused.
-  const canRun = !invalid && !needsActivation && !pausedAll && summary.offline !== true
+  const canRun = triggerCanRun(summary)
   const badge = triggerStatusBadge(summary)
   const facts = triggerSourceFacts(summary.source)
   const outcomeLabel = triggerRunOutcomeLabel(summary.lastRunOutcome)
