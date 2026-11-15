@@ -244,18 +244,21 @@ describe('getSubagentHiddenActivity', () => {
     })
   })
 
-  it('stays silent in full mode, while awaiting a decision, or once settled', () => {
-    expect(getSubagentHiddenActivity(task(), 'full', false)).toBeNull()
-    expect(getSubagentHiddenActivity(task(), 'onlyMessage', true)).toBeNull()
-    expect(
-      getSubagentHiddenActivity(task({ status: 'completed' }), 'onlyMessage', false),
-    ).toBeNull()
+  it('keeps a placeholder row while a running sub-agent has no step yet', () => {
     expect(
       getSubagentHiddenActivity(
         toolCall('task', { status: 'in_progress', subagent: true }),
         'onlyMessage',
         false,
       ),
+    ).toStrictEqual({ kind: 'thinking' })
+  })
+
+  it('stays silent in full mode, while awaiting a decision, or once settled', () => {
+    expect(getSubagentHiddenActivity(task(), 'full', false)).toBeNull()
+    expect(getSubagentHiddenActivity(task(), 'onlyMessage', true)).toBeNull()
+    expect(
+      getSubagentHiddenActivity(task({ status: 'completed' }), 'onlyMessage', false),
     ).toBeNull()
     expect(getSubagentHiddenActivity(task({ subagent: false }), 'onlyMessage', false)).toBeNull()
   })

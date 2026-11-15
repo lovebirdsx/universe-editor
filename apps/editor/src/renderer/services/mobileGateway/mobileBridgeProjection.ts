@@ -392,32 +392,31 @@ export function projectToolCall(call: AcpToolCall): MobileTimelineToolCallItem {
 }
 
 /**
- * The last child of a running sub-agent when the phone's only-message filter
- * would hide it — the wire counterpart of the desktop `getSubagentHiddenActivity`.
- * Visible tails (agent text, kept cards) yield nothing, like the desktop rule.
+ * The latest step of a running sub-agent for the card's activity row. The phone
+ * never renders a sub-agent's children, so unlike the desktop rule a visible
+ * child (agent text, a kept card) does not blank the row: agent text is skipped
+ * back to the step before it, and kept cards are described like any tool.
  */
 function projectSubagentTail(call: AcpToolCall): MobileSubagentTail | undefined {
   if (call.status !== 'pending' && call.status !== 'in_progress') return undefined
-  const tail = call.children?.[call.children.length - 1]
-  if (tail === undefined) return undefined
-  if (tail.kind === 'message') {
-    if (tail.message.role !== 'thought') return undefined
-    const line = firstNonEmptyLine(tail.message.text)
-    const summary = line.length > 0 ? firstLineSummary(line) : ''
-    return summary.length > 0
-      ? { kind: 'thought', summary: clampText(summary, MAX_REASON_LENGTH) }
-      : { kind: 'thought' }
+  const children = call.children ?? []
+  for (let i = children.length - 1; i >= 0; i--) {
+    const child = children[i]
+    if (child === undefined) continue
+    if (child.kind === 'message') {
+      if (child.message.role !== 'thought') continue
+      const line = firstNonEmptyLine(child.message.text)
+      const summary = line.length > 0 ? firstLineSummary(line) : ''
+      return summary.length > 0
+        ? { kind: 'thought', summary: clampText(summary, MAX_REASON_LENGTH) }
+        : { kind: 'thought' }
+    }
+    return projectSubagentToolTail(child.call)
   }
-  // Mirrors the desktop always-kept predicate in timelineCollapse.ts.
-  const child = tail.call
-  if (
-    child.subagent === true ||
-    (child.children?.length ?? 0) > 0 ||
-    child.requiresUserDecision === true ||
-    child.kind === 'switch_mode'
-  ) {
-    return undefined
-  }
+  return undefined
+}
+
+function projectSubagentToolTail(child: AcpToolCall): MobileSubagentTail {
   const projected = projectToolCall(child)
   const location = projected.locations?.[0]
   const diff = projected.diffs?.[0]

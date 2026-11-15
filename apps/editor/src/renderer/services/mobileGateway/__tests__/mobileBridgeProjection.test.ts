@@ -257,17 +257,28 @@ describe('projectToolCall sub-agent tail', () => {
     ).not.toHaveProperty('preview')
   })
 
-  it('omits the tail when only-message keeps the last child or the sub-agent settled', () => {
+  it('skips agent text back to the latest hidden step so the row never blanks', () => {
+    expect(
+      projectToolCall(task([thought('Planning'), childTool({ status: 'completed' }), childMessage]))
+        .subagentTail,
+    ).toStrictEqual({ kind: 'toolCall', title: 'Bash', toolKind: 'execute', status: 'completed' })
+    expect(projectToolCall(task([thought('Planning'), childMessage])).subagentTail).toEqual({
+      kind: 'thought',
+      summary: 'Planning',
+    })
+  })
+
+  it('describes kept child cards like any tool, since the phone hides every child', () => {
+    expect(
+      projectToolCall(task([childTool({ subagent: true, title: 'Nested agent' })])).subagentTail,
+    ).toMatchObject({ kind: 'toolCall', title: 'Nested agent' })
+    expect(
+      projectToolCall(task([childTool({ kind: 'switch_mode', title: 'Plan' })])).subagentTail,
+    ).toMatchObject({ kind: 'toolCall', title: 'Plan', toolKind: 'switch_mode' })
+  })
+
+  it('omits the tail without a step to describe or once the sub-agent settled', () => {
     expect(projectToolCall(task([childMessage]))).not.toHaveProperty('subagentTail')
-    expect(projectToolCall(task([childTool({ subagent: true })]))).not.toHaveProperty(
-      'subagentTail',
-    )
-    expect(projectToolCall(task([childTool({ requiresUserDecision: true })]))).not.toHaveProperty(
-      'subagentTail',
-    )
-    expect(projectToolCall(task([childTool({ kind: 'switch_mode' })]))).not.toHaveProperty(
-      'subagentTail',
-    )
     expect(projectToolCall(task([]))).not.toHaveProperty('subagentTail')
     expect(projectToolCall(task([childTool()], { status: 'completed' }))).not.toHaveProperty(
       'subagentTail',

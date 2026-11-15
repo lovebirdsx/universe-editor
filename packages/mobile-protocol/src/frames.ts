@@ -150,7 +150,7 @@ export interface MobileTimelineToolCallItem {
   settleReason?: string
   /** The failed result is a CLI-synthesized denial; show it as an upstream interruption. */
   syntheticDenial?: boolean
-  /** Last child of a running sub-agent, present only while only-message would hide it. */
+  /** Latest thought / tool step of a running sub-agent (agent text is skipped). */
   subagentTail?: MobileSubagentTail
 }
 

@@ -355,6 +355,33 @@ describe('Timeline sub-agent activity', () => {
     expect(screen.queryByTestId('session-subagent-activity')).toBeNull()
   })
 
+  it('keeps the row mounted while the sub-agent tail churns', () => {
+    const view = render(
+      <Timeline
+        sessionKey="1:s1"
+        timeline={[task()]}
+        displayMode="onlyMessage"
+        truncated={false}
+        client={client}
+      />,
+    )
+    const before = screen.getByTestId('session-subagent-activity')
+    const { subagentTail: _tail, ...withoutTail } = task()
+    view.rerender(
+      <Timeline
+        sessionKey="1:s1"
+        timeline={[withoutTail]}
+        displayMode="onlyMessage"
+        truncated={false}
+        client={client}
+      />,
+    )
+    expect(screen.getByTestId('session-subagent-activity')).toBe(before)
+    expect(screen.getByTestId('session-subagent-activity-primary').textContent).toBe(
+      strings.activityThinking,
+    )
+  })
+
   it('drops the row once the sub-agent settles', () => {
     renderTimeline([task({ status: 'completed' })], 'onlyMessage')
     expect(screen.queryByTestId('session-subagent-activity')).toBeNull()

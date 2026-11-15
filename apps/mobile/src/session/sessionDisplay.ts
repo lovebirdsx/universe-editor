@@ -137,8 +137,9 @@ export function getHiddenActivity(
 
 /**
  * Mirrors the desktop `getSubagentHiddenActivity`: a running sub-agent card's
- * own hidden last child, which the PC ships as `subagentTail` already filtered
- * by the only-message rule. A pending decision owns the footer instead.
+ * latest step, which the PC ships as `subagentTail`. The row stays mounted for
+ * the whole run (a placeholder while no step is known yet) so parallel cards do
+ * not jump as their tails churn. A pending decision owns the footer instead.
  */
 export function getSubagentHiddenActivity(
   item: MobileTimelineToolCallItem,
@@ -148,7 +149,7 @@ export function getSubagentHiddenActivity(
   if (awaitingDecision || preference === 'full' || item.subagent !== true) return null
   if (item.status !== 'pending' && item.status !== 'in_progress') return null
   const tail = item.subagentTail
-  if (tail === undefined) return null
+  if (tail === undefined) return { kind: 'thinking' }
   if (tail.kind === 'thought') {
     return tail.summary === undefined
       ? { kind: 'thinking' }

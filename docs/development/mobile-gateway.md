@@ -210,9 +210,11 @@ full-access 并提交持久授权选项。v24 增加触发器会话摘要：`Mob
 （`triggerName` / `verdict?` / `summary?` / `outcome?`），收件箱行显示「⚡ 触发器名」与判决摘要。
 v25 增加 `usage_changed` 增量（`usage?` 全量替换，缺省表示清空），会话头部据此实时显示上下文用量。
 v26 把触发器判决枚举收敛为 `info` / `escalate`：`MobileSessionSummary.automation.verdict?` 与 PC 历史同口径，旧的 `auto-approve` / `reject` 不再下发。
-v27 增加子 Agent 卡片的 `subagentTail?`：运行中子 Agent 的最后一个 child 会被「仅消息」隐藏时，PC
-下发其压缩形态（思考首行摘要，或工具的标题 / 状态 / 首个路径 / 秒表 / 失败原因字段），手机端在卡片
-底部显示该子 Agent 的当前进展，对齐桌面 `getSubagentHiddenActivity`。
+v27 增加子 Agent 卡片的 `subagentTail?`：运行中子 Agent 的最近一步（从末尾回溯、跳过 agent 文本的
+思考或工具 child），PC 下发其压缩形态（思考首行摘要，或工具的标题 / 状态 / 首个路径 / 秒表 / 失败原因
+字段），手机端在卡片底部显示该子 Agent 的当前进展。与桌面 `getSubagentHiddenActivity` 不同：手机不渲染
+任何 child，所以末尾是可见内容时不清空；该行在运行期间常驻（尚无步骤时显示「正在思考…」占位），避免多个
+并行子 Agent 卡片随 tail 变化反复增减高度而抖动。
 v28 增加会话重建帧 `session_restarting { ref }` / `session_replaced { ref, next }`（MCP 变更的「关闭+替换」不再被手机当成会话关闭，见 §4「会话重建」）。
 WS 建立后第一帧必须是
 `hello { protocolVersion, token, clientVersion, capabilities }`，服务端回
@@ -382,8 +384,8 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
   （`toolKind`、`status`、preview、diff 增删行数；可带 `subagent` / `requiresUserDecision`
   标记，手机端「仅消息」据此保留子 Agent、计划确认与需决策卡片；v8 另带可选的
   `startedAt` / `durationMs` / `settleReason` / `syntheticDenial`，用于底部当前进展行的
-  秒表与失败原因；v27 子 Agent 卡片另带可选 `subagentTail`，只在子 Agent 运行中且最后一个 child
-  会被「仅消息」隐藏时出现）/ `notice`
+  秒表与失败原因；v27 子 Agent 卡片另带可选 `subagentTail`，只在子 Agent 运行中且存在思考 / 工具
+  child 时出现）/ `notice`
   （compaction / resurrection）。`canFork` 在首条用户消息、只读会话或 agent 不支持 fork 时为
   false；`messageId` 只在 user 且非 autoRetry 时出现。
 - `session_delta.events`：`message_upsert`（`textAppend` 后缀或 `textReplace` 全量）、
