@@ -29,6 +29,7 @@ export function extractSlashQuery(text: string, caret: number): SlashQuery | nul
   return { query: text.slice(1, end), tokenEnd: end }
 }
 
+/** Ties keep the order of `commands`; callers may pre-sort by recent use. */
 export function filterSlashCommands(
   commands: readonly MobileAvailableCommand[],
   query: string,
@@ -54,6 +55,22 @@ export function filterSlashCommands(
     .filter((entry) => entry.score >= 0)
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .map((entry) => entry.command)
+}
+
+/**
+ * The command a prompt would execute: the first token of a prompt that starts
+ * with `/`, matched exactly (case-insensitively) against an advertised name.
+ * Skill names may start with `$`; the token stays opaque.
+ */
+export function matchSentSlashCommand(
+  text: string,
+  commands: readonly MobileAvailableCommand[],
+): MobileAvailableCommand | undefined {
+  const query = extractSlashQuery(text, 0)
+  if (query === null) return undefined
+  const key = query.query.toLowerCase()
+  if (key.length === 0) return undefined
+  return commands.find((command) => normalizeCommandName(command.name).toLowerCase() === key)
 }
 
 /**

@@ -5,6 +5,7 @@ import {
   extractSlashQuery,
   filterSlashCommands,
   formatCommandName,
+  matchSentSlashCommand,
 } from '../slashCommands.js'
 
 function command(name: string, description = ''): MobileAvailableCommand {
@@ -60,6 +61,48 @@ describe('filterSlashCommands', () => {
 
   it('returns nothing when no name or description matches', () => {
     expect(filterSlashCommands(commands, 'zzz')).toStrictEqual([])
+  })
+
+  it('keeps the caller order for equal scores', () => {
+    const forward = [command('review'), command('rewind')]
+    const reversed = [command('rewind'), command('review')]
+    expect(filterSlashCommands(forward, 're').map((entry) => entry.name)).toStrictEqual([
+      'review',
+      'rewind',
+    ])
+    expect(filterSlashCommands(reversed, 're').map((entry) => entry.name)).toStrictEqual([
+      'rewind',
+      'review',
+    ])
+  })
+})
+
+describe('matchSentSlashCommand', () => {
+  const commands = [command('diff'), command('$build')]
+
+  it('matches the first token of a slash prompt', () => {
+    expect(matchSentSlashCommand('/diff', commands)?.name).toBe('diff')
+    expect(matchSentSlashCommand('/diff more args', commands)?.name).toBe('diff')
+    expect(matchSentSlashCommand('/diff\nbody', commands)?.name).toBe('diff')
+    expect(matchSentSlashCommand('/diff ', commands)?.name).toBe('diff')
+  })
+
+  it('is case-insensitive and returns the advertised object', () => {
+    expect(matchSentSlashCommand('/DIFF now', commands)).toBe(commands[0])
+  })
+
+  it('keeps the $ prefix of skill names', () => {
+    expect(matchSentSlashCommand('/$build args', commands)?.name).toBe('$build')
+  })
+
+  it('ignores bare slashes, unknown names and non-command prompts', () => {
+    expect(matchSentSlashCommand('/', commands)).toBeUndefined()
+    expect(matchSentSlashCommand('/unknown', commands)).toBeUndefined()
+    expect(matchSentSlashCommand('diff', commands)).toBeUndefined()
+    expect(matchSentSlashCommand('hello /diff', commands)).toBeUndefined()
+    expect(matchSentSlashCommand('\n/diff', commands)).toBeUndefined()
+    expect(matchSentSlashCommand('//diff', commands)).toBeUndefined()
+    expect(matchSentSlashCommand('/diff', [])).toBeUndefined()
   })
 })
 

@@ -55,8 +55,15 @@ import {
   applySlashCommand,
   extractSlashQuery,
   filterSlashCommands,
+  matchSentSlashCommand,
   type SlashQuery,
 } from './slashCommands.js'
+import {
+  orderSlashCommandsByUsage,
+  readSlashUsage,
+  recordSlashUsage,
+  writeSlashUsage,
+} from './slashUsage.js'
 import { useAutoGrowTextarea } from './useAutoGrowTextarea.js'
 
 const MAX_ROWS = 6
@@ -240,6 +247,8 @@ export function Composer({
   const [focused, setFocused] = useState(false)
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
+  const [slashUsage, setSlashUsage] = useState<readonly string[]>(() => readSlashUsage())
+  const slashUsageRef = useRef(slashUsage)
   const [refDismissed, setRefDismissed] = useState(false)
   const [refIndex, setRefIndex] = useState(0)
   const [refSuggestions, setRefSuggestions] =
@@ -319,7 +328,10 @@ export function Composer({
   }, [prefill, sessionKey, textareaRef, closeSecondStep])
 
   const slash: SlashQuery | null = armed && !disabled ? extractSlashQuery(value, caret) : null
-  const slashMatches = slash === null ? NO_COMMANDS : filterSlashCommands(commands, slash.query)
+  const slashMatches =
+    slash === null
+      ? NO_COMMANDS
+      : filterSlashCommands(orderSlashCommandsByUsage(commands, slashUsage), slash.query)
   // An empty result keeps the panel open so the user can still switch modes;
   // Enter stays owned by the panel, matching the ref completion contract.
   const slashOpen = focused && !slashDismissed && slash !== null && commands.length > 0
@@ -1069,8 +1081,18 @@ export function Composer({
     }, 0)
   }
 
+  const rememberSentCommand = (name: string): void => {
+    const next = recordSlashUsage(slashUsageRef.current, name)
+    slashUsageRef.current = next
+    writeSlashUsage(next)
+    setSlashUsage(next)
+  }
+
   const send = async (): Promise<void> => {
     if (!canSend) return
+    // The textarea stays editable while onSend is in flight; record what was
+    // actually sent, not whatever is in the box when the RPC resolves.
+    const sentCommand = matchSentSlashCommand(value, commands)
     setSending(true)
     try {
       await onSend(
@@ -1080,6 +1102,7 @@ export function Composer({
         draftFileIds,
         collectPlacedRefs(value, placedRefs),
       )
+      if (sentCommand !== undefined) rememberSentCommand(sentCommand.name)
       setValue('')
       setPlacedRefs([])
       releaseAllPreviewUrls(previewUrls.current)

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { strings } from '../../strings.js'
 import { Composer, draftKey, legacyDraftKey, readDraft, writeDraft } from '../Composer.js'
 import type { ComposerProps } from '../Composer.js'
+import { SLASH_USAGE_STORAGE_KEY } from '../slashUsage.js'
 
 beforeEach(() => {
   sessionStorage.clear()
@@ -637,6 +638,139 @@ describe('Composer', () => {
       expect(screen.queryByTestId('composer-command-panel')).toBeNull()
       type(input, '/dif')
       expect(screen.getByTestId('composer-command-panel')).toBeTruthy()
+    })
+  })
+
+  describe('slash command recency', () => {
+    const commands = [
+      { name: 'diff', description: 'Review the working tree' },
+      { name: 'compact', description: 'Compact the conversation' },
+    ]
+
+    const type = (input: HTMLTextAreaElement, value: string): void => {
+      fireEvent.change(input, { target: { value } })
+    }
+
+    it('does not record a command that was only inserted', async () => {
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/di')
+
+      fireEvent.click(screen.getAllByTestId('composer-command-option')[0]!)
+      await waitFor(() => expect(input.value).toBe('/diff '))
+      expect(localStorage.getItem(SLASH_USAGE_STORAGE_KEY)).toBeNull()
+    })
+
+    it('moves a sent command to the front of the list', async () => {
+      const { onSend } = renderComposer({ commands })
+      const composer = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(composer)
+      type(composer, '/compact now')
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() => expect(onSend).toHaveBeenCalledWith('/compact now', [], [], [], []))
+      await waitFor(() => expect(composer.value).toBe(''))
+      expect(localStorage.getItem(SLASH_USAGE_STORAGE_KEY)).toBe('["compact"]')
+
+      type(composer, '/')
+      const options = screen.getAllByTestId('composer-command-option')
+      expect(options[0]?.textContent).toContain('/compact')
+      expect(options[1]?.textContent).toContain('/diff')
+    })
+
+    it('persists the order across a remount', async () => {
+      const { onSend, unmount } = renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/compact now')
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() => expect(onSend).toHaveBeenCalled())
+      await waitFor(() => expect(input.value).toBe(''))
+      unmount()
+
+      renderComposer({ commands })
+      const next = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(next)
+      type(next, '/')
+      expect(screen.getAllByTestId('composer-command-option')[0]?.textContent).toContain('/compact')
+    })
+
+    it('does not record plain prompts or unknown commands', async () => {
+      const { onSend } = renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+
+      type(input, 'hello phone')
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() => expect(input.value).toBe(''))
+      expect(localStorage.getItem(SLASH_USAGE_STORAGE_KEY)).toBeNull()
+
+      type(input, '/zzz')
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2))
+      await waitFor(() => expect(input.value).toBe(''))
+      expect(localStorage.getItem(SLASH_USAGE_STORAGE_KEY)).toBeNull()
+    })
+
+    it('does not record a failed send', async () => {
+      const onNotice = vi.fn()
+      const onSend = vi.fn(async () => {
+        throw new Error('send failed')
+      })
+      renderComposer({ commands, onSend, onNotice })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/compact now')
+      fireEvent.click(screen.getByTestId('composer-send'))
+
+      await waitFor(() => expect(onNotice).toHaveBeenCalled())
+      expect(localStorage.getItem(SLASH_USAGE_STORAGE_KEY)).toBeNull()
+    })
+
+    it('records a $ skill and ranks it first', async () => {
+      const skills = [
+        { name: 'diff', description: 'Review the working tree' },
+        { name: '$build', description: 'Build the project' },
+      ]
+      const { onSend } = renderComposer({ commands: skills })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/$build now')
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() => expect(onSend).toHaveBeenCalled())
+      await waitFor(() => expect(input.value).toBe(''))
+      expect(localStorage.getItem(SLASH_USAGE_STORAGE_KEY)).toBe('["$build"]')
+
+      type(input, '/')
+      expect(screen.getAllByTestId('composer-command-option')[0]?.textContent).toContain('/$build')
+    })
+
+    it('breaks filter ties by recency', async () => {
+      const tied = [
+        { name: 'review', description: '' },
+        { name: 'rewind', description: '' },
+      ]
+      const { onSend } = renderComposer({ commands: tied })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/rewind now')
+      fireEvent.click(screen.getByTestId('composer-send'))
+      await waitFor(() => expect(onSend).toHaveBeenCalled())
+      await waitFor(() => expect(input.value).toBe(''))
+
+      type(input, '/re')
+      const options = screen.getAllByTestId('composer-command-option')
+      expect(options[0]?.textContent).toContain('/rewind')
+      expect(options[1]?.textContent).toContain('/review')
+    })
+
+    it('reads an existing usage order at mount', () => {
+      localStorage.setItem(SLASH_USAGE_STORAGE_KEY, JSON.stringify(['compact']))
+      renderComposer({ commands })
+      const input = screen.getByTestId('composer-input') as HTMLTextAreaElement
+      fireEvent.focus(input)
+      type(input, '/')
+      expect(screen.getAllByTestId('composer-command-option')[0]?.textContent).toContain('/compact')
     })
   })
 
