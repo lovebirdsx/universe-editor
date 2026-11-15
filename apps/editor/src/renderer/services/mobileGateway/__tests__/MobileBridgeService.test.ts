@@ -390,8 +390,8 @@ function makeHarness(filesOverrides: Partial<IFileService> = {}): {
     isAvailable: vi.fn(() => false),
     hasDeliverableChanges: vi.fn(() => false),
     refreshDeliverableChanges: vi.fn(async () => false),
-    isDeliveryBusyForSession: vi.fn(() => false),
-    isDeliveryBusyForCwd: vi.fn(() => false),
+    isDeliveryBusyForSession: vi.fn(async () => false),
+    isDeliveryBusyForCwd: vi.fn(async () => false),
     preview: vi.fn(),
     start: vi.fn(),
     startInBackground: vi.fn(),
@@ -2545,7 +2545,7 @@ describe('MobileBridgeService commands', () => {
     }
     busy.add(makeSession('s1', { durableId: 'd1' }))
     busy.history.set([makeHistoryEntry('d1', { cwd: '/workspace/demo' })], undefined)
-    vi.mocked(busy.delivery.isDeliveryBusyForSession).mockReturnValue(true)
+    vi.mocked(busy.delivery.isDeliveryBusyForSession).mockResolvedValue(true)
 
     await expect(busy.service.deleteHistorySession('d1')).resolves.toMatchObject({
       ok: false,
@@ -4084,8 +4084,8 @@ describe('MobileBridgeService deliveries', () => {
   it('blocks prompts and new sessions while a delivery holds the worktree', async () => {
     const harness = makeHarness()
     harness.add(makeSession('s1', { durableId: 'd1' }))
-    vi.mocked(harness.delivery.isDeliveryBusyForSession).mockReturnValue(true)
-    vi.mocked(harness.delivery.isDeliveryBusyForCwd).mockReturnValue(true)
+    vi.mocked(harness.delivery.isDeliveryBusyForSession).mockResolvedValue(true)
+    vi.mocked(harness.delivery.isDeliveryBusyForCwd).mockResolvedValue(true)
 
     await expect(harness.service.sendPrompt('s1', 'hello')).resolves.toMatchObject({
       ok: false,
@@ -4099,7 +4099,7 @@ describe('MobileBridgeService deliveries', () => {
   it('refuses to delete a session whose delivery is still active', async () => {
     const harness = makeHarness()
     harness.add(makeSession('s1', { durableId: 'd1' }))
-    vi.mocked(harness.delivery.isDeliveryBusyForSession).mockReturnValue(true)
+    vi.mocked(harness.delivery.isDeliveryBusyForSession).mockResolvedValue(true)
 
     await expect(harness.service.deleteSession('s1')).resolves.toMatchObject({
       ok: false,

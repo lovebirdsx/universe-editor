@@ -123,6 +123,7 @@ function makeGit(overrides: Partial<ISessionDeliveryGit> = {}): ISessionDelivery
     acquireLock: vi.fn(async () => ({ ok: true, acquired: true })),
     heartbeatLock: vi.fn(async () => ({ ok: true, heartbeatAt: 'now' })),
     releaseLock: vi.fn(async () => ({ ok: true, released: true })),
+    probeLock: vi.fn(async () => ({ ok: true, active: false })),
     begin: vi.fn(async () => ({
       ok: true,
       mainHeadBefore: 'm1',
@@ -827,6 +828,38 @@ describe('SessionDeliveryService background push', () => {
     expect(service.getSummaryForSession('s1')?.canRetry).toBe(true)
   })
 
+  it('returns to awaiting_push when push_unverified left main on the delivery commit', async () => {
+    const git = makeGit({
+      inspect: vi.fn(async () => ({
+        ok: true as const,
+        ...inspectData({
+          repository: { ...inspectData().repository, mainHead: 'picked1' },
+        }),
+      })),
+      promoteAndPush: vi.fn(async () => ({
+        ok: false as const,
+        error: {
+          code: 'push_unverified' as const,
+          message: 'The push failed and the remote branch could not be verified.',
+        },
+      })),
+    })
+    const service = makeService({ git })
+    active = service
+    const deliveryId = await awaitingPush(service)
+
+    await service.confirmPushInBackground(deliveryId)
+
+    await vi.waitFor(() => {
+      expect(service.getSummaryForSession('s1')?.phase).toBe('awaiting_push')
+    })
+    expect(git.releaseLock).not.toHaveBeenCalled()
+    expect(service.getRecord(deliveryId)).toMatchObject({
+      tempWorktree: '/repo/.delivery/wt',
+      tempHead: 'picked1',
+    })
+  })
+
   it('keeps push_unverified distinct so the retry can confirm the landed push', async () => {
     const git = makeGit({
       promoteAndPush: vi.fn(async () => ({
@@ -1059,9 +1092,78 @@ describe('SessionDeliveryService guards', () => {
     const preview = await previewOf(active)
     await active.start('s1', preview.expectation)
 
-    expect(active.isDeliveryBusyForCwd('/repo/feature', undefined)).toBe(true)
-    expect(active.isDeliveryBusyForCwd('/repo', undefined)).toBe(true)
-    expect(active.isDeliveryBusyForCwd('/other', undefined)).toBe(false)
+    await expect(active.isDeliveryBusyForCwd('/repo/feature', undefined)).resolves.toBe(true)
+    await expect(active.isDeliveryBusyForCwd('/repo', undefined)).resolves.toBe(true)
+    await expect(active.isDeliveryBusyForCwd('/other', undefined)).resolves.toBe(false)
+  })
+
+  it('reports busy when a foreign directory lock is active without a local record', async () => {
+    const probeLock = vi.fn(async () => ({
+      ok: true as const,
+      active: true,
+      owner: {
+        pid: 4242,
+        hostname: 'DESKTOP-TEST',
+        startedAt: new Date(0).toISOString(),
+        heartbeatAt: new Date().toISOString(),
+        label: 'cli 4242',
+      },
+    }))
+    active = makeService({ git: makeGit({ probeLock }) })
+
+    await expect(active.isDeliveryBusyForCwd('/repo/feature', undefined)).resolves.toBe(true)
+    await expect(active.isDeliveryBusyForSession(makeSession())).resolves.toBe(true)
+    expect(probeLock).toHaveBeenCalledWith({ cwd: '/repo/feature' })
+  })
+
+  it('skips the lock probe while this window has an active delivery', async () => {
+    const probeLock = vi.fn(async () => ({ ok: true as const, active: true }))
+    const git = makeGit({ probeLock })
+    active = makeService({ git })
+    const preview = await previewOf(active)
+    await active.start('s1', preview.expectation)
+
+    await expect(active.isDeliveryBusyForCwd('/repo/feature', undefined)).resolves.toBe(true)
+    expect(probeLock).not.toHaveBeenCalled()
+  })
+
+  it('treats a failed lock probe as not busy and reuses the result briefly', async () => {
+    const probeLock = vi.fn(async () => ({
+      ok: false as const,
+      error: { code: 'git_failed' as const, message: 'probe unavailable' },
+    }))
+    active = makeService({ git: makeGit({ probeLock }) })
+
+    await expect(active.isDeliveryBusyForCwd('/repo/feature', undefined)).resolves.toBe(false)
+    await expect(active.isDeliveryBusyForCwd('/repo/feature', undefined)).resolves.toBe(false)
+    expect(probeLock).toHaveBeenCalledTimes(1)
+  })
+
+  it('describes the lock owner when starting a delivery hits lock_held', async () => {
+    const acquireLock = vi.fn(async () => ({
+      ok: true as const,
+      acquired: false,
+      owner: {
+        token: 'secret-token',
+        pid: 4242,
+        hostname: 'DESKTOP-TEST',
+        startedAt: new Date(0).toISOString(),
+        heartbeatAt: new Date().toISOString(),
+        label: 'cli 4242',
+      },
+    }))
+    active = makeService({ git: makeGit({ acquireLock }) })
+    const preview = await previewOf(active)
+
+    const started = await active.start('s1', preview.expectation)
+
+    expect(started.ok).toBe(false)
+    if (started.ok) return
+    expect(started.error.code).toBe('lock_held')
+    expect(started.error.message).toContain('cli 4242')
+    expect(started.error.message).toContain('pid 4242')
+    expect(started.error.message).toContain('DESKTOP-TEST')
+    expect(started.error.message).not.toContain('secret-token')
   })
 
   it('offers delivery for idle or idle-reaped dormant sessions', () => {

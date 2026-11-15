@@ -437,10 +437,11 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     this._draftSubscription = AcpPromptDraftCache.onDidChange((event) =>
       this._onDraftChanged(event),
     )
-    this._pendingWorkSweep = setInterval(
-      () => this._sweepPendingWork(),
-      MOBILE_PENDING_WORK_SWEEP_MS,
-    )
+    this._pendingWorkSweep = setInterval(() => {
+      void this._sweepPendingWork().catch((err: unknown) => {
+        this._logger.warn(`mobile pending-work sweep failed: ${String(err)}`)
+      })
+    }, MOBILE_PENDING_WORK_SWEEP_MS)
   }
 
   async stopStreaming(): Promise<void> {
@@ -1018,7 +1019,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
     if (session.readOnly) return fail('session_read_only', 'session is read-only')
-    if (this._delivery.isDeliveryBusyForSession(session)) {
+    if (await this._delivery.isDeliveryBusyForSession(session)) {
       return fail(
         'delivery_busy',
         'A delivery is running for this worktree; wait for it to finish before prompting.',
@@ -1406,7 +1407,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       if (token?.isCancellationRequested) return fail('internal', 'command cancelled')
     }
 
-    if (this._delivery.isDeliveryBusyForCwd(folder.fsPath, authority)) {
+    if (await this._delivery.isDeliveryBusyForCwd(folder.fsPath, authority)) {
       return fail(
         'delivery_busy',
         'A delivery is running for this repository; wait for it to finish before starting a session.',
@@ -1451,7 +1452,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const session = this._liveSession(localId)
     if (session === undefined) return fail('session_not_found', 'session is not live')
     if (session.readOnly) return fail('session_read_only', 'session is read-only')
-    if (this._delivery.isDeliveryBusyForSession(session)) {
+    if (await this._delivery.isDeliveryBusyForSession(session)) {
       return fail(
         'delivery_busy',
         'finish or undo the active delivery before deleting this session',
@@ -1486,7 +1487,7 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     const live = this._sessions.getById(durableId)
     if (live !== undefined && isResidentLive(live)) {
       if (live.readOnly) return fail('session_read_only', 'session is read-only')
-      if (this._delivery.isDeliveryBusyForSession(live)) {
+      if (await this._delivery.isDeliveryBusyForSession(live)) {
         return fail(
           'delivery_busy',
           'finish or undo the active delivery before deleting this session',
@@ -2346,12 +2347,12 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
     this._emit({ kind: 'inbox', upserts: [summary], removes: [] })
   }
 
-  private _sweepPendingWork(): void {
+  private async _sweepPendingWork(): Promise<void> {
     if (this._disposed || !this._streaming) return
     const seen = new Set<string>()
     for (const session of this._sessions.sessions.get()) {
       if (!isResidentLive(session) || !this._delivery.isAvailable(session)) continue
-      if (this._delivery.isDeliveryBusyForSession(session)) continue
+      if (await this._delivery.isDeliveryBusyForSession(session)) continue
       const key = this._pendingWorkKey(session)
       if (key === undefined || seen.has(key)) continue
       seen.add(key)

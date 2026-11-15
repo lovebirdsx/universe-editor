@@ -45,6 +45,7 @@ import {
   deliveryErrorFromGit,
   type DeliveryGitInspectData,
   type DeliveryGitPickData,
+  type DeliveryGitProbeLockData,
 } from './sessionDeliveryGit.js'
 import {
   ISessionDeliveryStore,
@@ -123,9 +124,9 @@ export interface ISessionDeliveryService {
     options?: { readonly force?: boolean },
   ): Promise<boolean>
   /** The session's own repo/worktrees are being delivered right now. */
-  isDeliveryBusyForSession(session: IAcpSession): boolean
+  isDeliveryBusyForSession(session: IAcpSession): Promise<boolean>
   /** A new prompt rooted at `cwd` on `authority` would race a delivery. */
-  isDeliveryBusyForCwd(cwd: string, authority?: string): boolean
+  isDeliveryBusyForCwd(cwd: string, authority?: string): Promise<boolean>
 }
 
 export const ISessionDeliveryService =
@@ -135,6 +136,11 @@ export const ISessionDeliveryService =
 export const DELIVERABLE_CHANGES_TTL_MS = 10_000
 /** Background probes must never pin an in-flight entry forever. */
 export const DELIVERABLE_CHANGES_TIMEOUT_MS = 10_000
+/**
+ * The directory lock is the only shared signal with the headless CLI and other
+ * windows, so busy guards on the prompt hot path reuse a probe for a few seconds.
+ */
+export const DELIVERY_LOCK_PROBE_TTL_MS = 3_000
 
 type RecordPatch = {
   readonly [K in keyof SessionDeliveryRecord]?: SessionDeliveryRecord[K] | undefined
@@ -153,6 +159,12 @@ interface DeliverableChangesEntry {
   /** Only the newest probe may write; a forced refresh supersedes an older one. */
   generation: number
   inFlight: Promise<boolean> | undefined
+}
+
+interface DeliveryLockProbeEntry {
+  value: DeliveryGitProbeLockData | undefined
+  checkedAt: number
+  inFlight: Promise<DeliveryGitProbeLockData | undefined> | undefined
 }
 
 interface PickAllResult {
@@ -201,6 +213,17 @@ function appendDetail(error: SessionDeliveryError, extra: string): SessionDelive
   }
 }
 
+/** Human-readable lock owner for user-facing errors; never includes the token. */
+function describeDeliveryLockOwner(owner: {
+  readonly pid: number
+  readonly hostname: string
+  readonly label?: string
+}): string {
+  const label = owner.label?.trim()
+  const process = `pid ${owner.pid} on ${owner.hostname}`
+  return label !== undefined && label.length > 0 ? `${label} (${process})` : process
+}
+
 function sameStrings(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false
   return a.every((value, index) => value === b[index])
@@ -229,6 +252,7 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
   private _writeChain: Promise<void> = Promise.resolve()
   private readonly _deliverableChanges = new Map<string, DeliverableChangesEntry>()
   private readonly _deliverableProbeTimers = new Set<ReturnType<typeof setTimeout>>()
+  private readonly _deliveryLockProbes = new Map<string, DeliveryLockProbeEntry>()
   /** Same-renderer guard: two confirms must not promote/push the same record. */
   private readonly _pushInFlight = new Set<string>()
   private _disposed = false
@@ -424,11 +448,14 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     })
     if (!lock.ok) return { ok: false, error: fromGitFailure(lock.error) }
     if (!lock.acquired) {
+      const owner = lock.owner
       return {
         ok: false,
         error: failure(
           'lock_held',
-          'Another window is delivering this repository. Close or finish that delivery first.',
+          owner !== undefined
+            ? `Another delivery is running for this repository (${describeDeliveryLockOwner(owner)}). Finish or stop it first.`
+            : 'Another window is delivering this repository. Close or finish that delivery first.',
         ),
       }
     }
@@ -763,6 +790,16 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
       })
       if (!promoted.ok) {
         const error = fromGitFailure(promoted.error)
+        if (error.code === 'push_unverified') {
+          // The engine could not prove whether the push landed and deliberately
+          // left main on the delivery commit. Verify the remote before deciding
+          // between syncing, awaiting_push (main moved, remote did not) and
+          // failed; the temp worktree stays for a retry in every case.
+          await this._failPushSafely(current.id, error)
+          const settled = this._records.get(current.id)?.phase
+          if (settled === 'synced' || settled === 'partial') return { ok: true, value: undefined }
+          return { ok: false, error }
+        }
         await this._releaseLock(current)
         // Keep the temp worktree: the extension restores main to the base commit,
         // so the user can retry the push from the delivery detail.
@@ -1095,12 +1132,95 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     return `${authority ?? ''}|${this._uriIdentity.getPathComparisonKey(cwd)}`
   }
 
-  isDeliveryBusyForSession(session: IAcpSession): boolean {
-    return this._activeRecordForSession(session) !== undefined
+  async isDeliveryBusyForSession(session: IAcpSession): Promise<boolean> {
+    if (this._activeRecordForSession(session) !== undefined) return true
+    const cwd = session.cwd
+    if (cwd === undefined || cwd.length === 0) return false
+    return this._isDeliveryLockBusy(cwd, session.authority)
   }
 
-  isDeliveryBusyForCwd(cwd: string, authority?: string): boolean {
-    return this._activeRecordForCwd(cwd, authority) !== undefined
+  async isDeliveryBusyForCwd(cwd: string, authority?: string): Promise<boolean> {
+    if (this._activeRecordForCwd(cwd, authority) !== undefined) return true
+    return this._isDeliveryLockBusy(cwd, authority)
+  }
+
+  /**
+   * Records only cover this window (and windows that shared their records). The
+   * repository lock is the shared truth with other windows and the headless CLI,
+   * so consult it when no record matches. A lock owned by this window's active
+   * delivery is filtered out by `probeLock`; without a record any live lock is
+   * necessarily competing with this caller.
+   */
+  private async _isDeliveryLockBusy(cwd: string, authority: string | undefined): Promise<boolean> {
+    const probe = await this._probeDeliveryLock(cwd, authority)
+    return probe?.active === true
+  }
+
+  private _ownLockTokens(): readonly string[] {
+    const tokens: string[] = []
+    for (const record of this._records.values()) {
+      if (!isActiveDeliveryPhase(record.phase)) continue
+      if (record.lockInstanceId !== this._instanceId) continue
+      if (record.lockToken !== undefined) tokens.push(record.lockToken)
+    }
+    return tokens.sort()
+  }
+
+  private _probeDeliveryLock(
+    cwd: string,
+    authority: string | undefined,
+  ): Promise<DeliveryGitProbeLockData | undefined> {
+    if (this._disposed) return Promise.resolve(undefined)
+    if (this._deliveryLockProbes.size > 64) {
+      const now = Date.now()
+      for (const [cachedKey, cached] of this._deliveryLockProbes) {
+        if (cached.inFlight === undefined && now - cached.checkedAt >= DELIVERY_LOCK_PROBE_TTL_MS) {
+          this._deliveryLockProbes.delete(cachedKey)
+        }
+      }
+    }
+    const ownTokens = this._ownLockTokens()
+    const key = `${authority ?? ''}|${this._uriIdentity.getPathComparisonKey(cwd)}|${ownTokens.join(',')}`
+    const existing = this._deliveryLockProbes.get(key)
+    if (existing?.inFlight !== undefined) return existing.inFlight
+    if (
+      existing?.value !== undefined &&
+      Date.now() - existing.checkedAt < DELIVERY_LOCK_PROBE_TTL_MS
+    ) {
+      return Promise.resolve(existing.value)
+    }
+    const entry: DeliveryLockProbeEntry = existing ?? {
+      value: undefined,
+      checkedAt: 0,
+      inFlight: undefined,
+    }
+    if (existing === undefined) this._deliveryLockProbes.set(key, entry)
+    const probe = this._git.probeLock({ cwd, ...(ownTokens.length > 0 ? { ownTokens } : {}) }).then(
+      (result) => {
+        entry.inFlight = undefined
+        entry.checkedAt = Date.now()
+        if (!result.ok) {
+          // A non-repository cwd is a definitive answer, not a probe failure;
+          // warning on it would spam the log for every non-repo session.
+          if (result.error.code !== 'not_a_repository') {
+            this._logger.warn(`delivery lock probe for ${cwd} failed: ${result.error.message}`)
+          }
+          entry.value = { active: false }
+        } else {
+          entry.value = result
+        }
+        return entry.value
+      },
+      (err: unknown) => {
+        entry.inFlight = undefined
+        entry.checkedAt = Date.now()
+        entry.value = { active: false }
+        this._logger.warn(`delivery lock probe for ${cwd} failed`, err)
+        return entry.value
+      },
+    )
+    entry.inFlight = probe
+    return probe
   }
 
   override dispose(): void {
@@ -1108,6 +1228,7 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     for (const timer of this._deliverableProbeTimers) clearTimeout(timer)
     this._deliverableProbeTimers.clear()
     this._deliverableChanges.clear()
+    this._deliveryLockProbes.clear()
     this._pushInFlight.clear()
     for (const timer of this._heartbeats.values()) clearInterval(timer)
     this._heartbeats.clear()
@@ -1690,6 +1811,8 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
     }
     if (!acquired.acquired) {
       const otherWindow = acquired.owner !== undefined && acquired.owner.token === record.lockToken
+      const owner = acquired.owner
+      const description = owner !== undefined ? ` (${describeDeliveryLockOwner(owner)})` : ''
       return {
         ok: false,
         record,
@@ -1697,8 +1820,8 @@ export class SessionDeliveryService extends Disposable implements ISessionDelive
         error: failure(
           'lock_held',
           otherWindow
-            ? 'Another window is still running this delivery.'
-            : 'Another delivery holds the lock for this repository.',
+            ? `Another window is still running this delivery${description}.`
+            : `Another delivery holds the lock for this repository${description}.`,
         ),
       }
     }

@@ -64,8 +64,8 @@ function makeGit(overrides: Partial<ISessionDeliveryGit> = {}): ISessionDelivery
 
 function makeDelivery(overrides: Partial<ISessionDeliveryService> = {}): ISessionDeliveryService {
   return {
-    isDeliveryBusyForSession: vi.fn(() => false),
-    isDeliveryBusyForCwd: vi.fn(() => false),
+    isDeliveryBusyForSession: vi.fn(async () => false),
+    isDeliveryBusyForCwd: vi.fn(async () => false),
     ...overrides,
   } as unknown as ISessionDeliveryService
 }
@@ -116,7 +116,7 @@ describe('SessionBranchPushService', () => {
 
   it('rejects while a delivery is running for the repository', async () => {
     const delivery = makeDelivery({
-      isDeliveryBusyForCwd: vi.fn(() => true),
+      isDeliveryBusyForCwd: vi.fn(async () => true),
     })
     const { service } = makeService({ session: makeSession(), delivery })
 

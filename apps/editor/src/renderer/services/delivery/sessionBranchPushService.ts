@@ -84,7 +84,7 @@ export class SessionBranchPushService extends Disposable implements ISessionBran
     sessionId: string,
   ): Promise<SessionBranchPushCommandResult<SessionBranchPushPreview>> {
     const session = this._sessions.getById(sessionId)
-    const guard = this._guardSession(session)
+    const guard = await this._guardSession(session)
     if (guard !== undefined) return { ok: false, error: guard }
 
     const inspected = await this._git.inspectPushBranch({
@@ -100,7 +100,7 @@ export class SessionBranchPushService extends Disposable implements ISessionBran
     expectation: SessionBranchPushExpectation,
   ): Promise<SessionBranchPushCommandResult<SessionBranchPushResult>> {
     const session = this._sessions.getById(sessionId)
-    const guard = this._guardSession(session)
+    const guard = await this._guardSession(session)
     if (guard !== undefined) return { ok: false, error: guard }
 
     const pushed = await this._git.pushBranch({
@@ -118,7 +118,9 @@ export class SessionBranchPushService extends Disposable implements ISessionBran
     return { ok: true, value: pushed }
   }
 
-  private _guardSession(session: IAcpSession | undefined): SessionDeliveryError | undefined {
+  private async _guardSession(
+    session: IAcpSession | undefined,
+  ): Promise<SessionDeliveryError | undefined> {
     if (session === undefined || isInternalSession(session)) {
       return failure('not_found', 'Unknown session.')
     }
@@ -129,8 +131,8 @@ export class SessionBranchPushService extends Disposable implements ISessionBran
       return failure('not_a_repository', 'The session has no working directory.')
     }
     if (
-      this._delivery.isDeliveryBusyForSession(session) ||
-      this._delivery.isDeliveryBusyForCwd(session.cwd, session.authority)
+      (await this._delivery.isDeliveryBusyForSession(session)) ||
+      (await this._delivery.isDeliveryBusyForCwd(session.cwd, session.authority))
     ) {
       return failure('busy', 'A delivery is running for this repository.')
     }

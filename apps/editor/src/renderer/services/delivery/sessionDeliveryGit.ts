@@ -184,6 +184,14 @@ export interface DeliveryGitAcquireLockData {
   readonly owner?: DeliveryGitLockOwner
 }
 
+export type DeliveryGitLockOwnerInfo = Omit<DeliveryGitLockOwner, 'token'>
+
+/** A foreign delivery lock observed through the read-only probe. */
+export interface DeliveryGitProbeLockData {
+  readonly active: boolean
+  readonly owner?: DeliveryGitLockOwnerInfo
+}
+
 export interface ISessionDeliveryGit {
   readonly _serviceBrand: undefined
   inspect(input: {
@@ -207,6 +215,10 @@ export interface ISessionDeliveryGit {
     commonDir: string
     token: string
   }): Promise<DeliveryGitResult<{ released: boolean }>>
+  probeLock(input: {
+    cwd: string
+    ownTokens?: readonly string[]
+  }): Promise<DeliveryGitResult<DeliveryGitProbeLockData>>
   begin(input: DeliveryGitBeginInput): Promise<DeliveryGitResult<DeliveryGitBeginData>>
   commitSource(input: {
     commonDir: string
@@ -361,6 +373,13 @@ export class SessionDeliveryGit implements ISessionDeliveryGit {
     token: string
   }): Promise<DeliveryGitResult<{ released: boolean }>> {
     return this._run<{ released: boolean }>('releaseLock', input)
+  }
+
+  probeLock(input: {
+    cwd: string
+    ownTokens?: readonly string[]
+  }): Promise<DeliveryGitResult<DeliveryGitProbeLockData>> {
+    return this._run<DeliveryGitProbeLockData>('probeLock', input)
   }
 
   begin(input: DeliveryGitBeginInput): Promise<DeliveryGitResult<DeliveryGitBeginData>> {
