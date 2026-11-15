@@ -7,8 +7,10 @@
  *    node scripts/github/ci-failures.mjs
  *    node scripts/github/ci-failures.mjs --repo owner/repo --workflow ci.yml --branch main
  *
- *  poll 只关心「main 最新一条 run 已完成且是 failure」。cancelled / success / skipped 不输出；
- *  最新 run 还在跑（含 rerun 中）时输出空，等它自己的结论，避免回落到更早的失败 run 白跑一轮。
+ *  poll 只关心「main 最新一条已完成 run 失败」。failure 直接输出；cancelled 只有在存在
+ *  失败 job / 失败步骤时才输出（本仓库 fast-lint 失败后会 `gh run cancel`，顶层结论是
+ *  cancelled）。success / skipped / 手动取消等不输出；最新 run 还在跑（含 rerun 中）时输出空，
+ *  等它自己的结论，避免回落到更早的失败 run 白跑一轮。
  *  key 用 `<runId>:<attempt>`：rerun 后 attempt 变化，会以新 key 再次触发。
  *
  *  只用 node 内置模块；gh 只负责取数，错误写 stderr、非零退出。
@@ -25,6 +27,9 @@ export const DEFAULT_LIMIT = 20
 
 const FAILED_JOB_LIMIT = 20
 const GH_MAX_BUFFER = 32 * 1024 * 1024
+// ci.yml 的 required-check 哨兵：其它 job 失败或被取消时它也失败，本身不代表失败面。
+// 手动取消整条 run 时可能只有它失败，不能据此唤醒修复 agent。
+const GATE_JOB_NAME = 'CI Gate'
 
 export function defaultRunGh(args) {
   const result = spawnSync('gh', args, {
@@ -88,19 +93,25 @@ function normalizeRun(raw) {
 }
 
 /**
- * 按 createdAt 取最新一条 run，只有它已完成且是 failure 时才返回。
- * 返回规范化后的 run 对象数组（0 或 1 条），便于测试与后续拼 poll item。
+ * 最新一条 run（按 createdAt）必须是 completed；还在排队 / 运行时不回落到更早的 run。
  */
-export function selectFailures(runs) {
+export function selectLatestCompletedRun(runs) {
   if (!Array.isArray(runs)) throw new Error('run 列表必须是数组')
   const latest = runs
     .filter((run) => run !== null && typeof run === 'object')
     .map(normalizeRun)
     .sort(compareRunsDesc)[0]
-  if (latest === undefined || latest.status !== 'completed' || latest.conclusion !== 'failure') {
-    return []
-  }
-  return [latest]
+  if (latest === undefined || latest.status !== 'completed') return undefined
+  return latest
+}
+
+/**
+ * 只返回顶层结论为 failure 的最新 run；cancelled 的判定需要 jobs 细节，由
+ * collectFailures() 处理。
+ */
+export function selectFailures(runs) {
+  const latest = selectLatestCompletedRun(runs)
+  return latest !== undefined && latest.conclusion === 'failure' ? [latest] : []
 }
 
 export function buildPollItem(run) {
@@ -142,22 +153,46 @@ export function fetchRuns({
   return parsed
 }
 
-export function fetchFailedJobs({ repo, runId, runGh = defaultRunGh }) {
+/**
+ * 汇总失败 job 与失败步骤。cancelled 的 job 也可能带着真实失败：本仓库 fast-lint 的
+ * guard 失败后会 `gh run cancel`，job 自身结论变成 cancelled，失败步骤仍是 failure。
+ */
+export function collectRunFailureDetails(jobs) {
+  if (!Array.isArray(jobs)) throw new Error('jobs 必须是数组')
+  const failedJobs = []
+  const failedSteps = []
+  for (const job of jobs) {
+    if (job === null || typeof job !== 'object') continue
+    const jobName = typeof job.name === 'string' && job.name !== '' ? job.name : undefined
+    if (jobName === undefined) continue
+    const steps = Array.isArray(job.steps) ? job.steps : []
+    const stepFailures = steps.filter(
+      (step) => step !== null && typeof step === 'object' && step.conclusion === 'failure',
+    )
+    if (job.conclusion === 'failure' || stepFailures.length > 0) failedJobs.push(jobName)
+    for (const step of stepFailures) {
+      if (typeof step.name === 'string' && step.name !== '') {
+        failedSteps.push(`${jobName}: ${step.name}`)
+      }
+    }
+  }
+  const uniqueJobs = [...new Set(failedJobs)]
+  const uniqueSteps = [...new Set(failedSteps)]
+  return {
+    hasFailure: uniqueJobs.some((name) => name !== GATE_JOB_NAME),
+    details: {
+      failedJobs: uniqueJobs.slice(0, FAILED_JOB_LIMIT),
+      failedJobCount: uniqueJobs.length,
+      ...(uniqueSteps.length === 0 ? {} : { failedSteps: uniqueSteps.slice(0, FAILED_JOB_LIMIT) }),
+    },
+  }
+}
+
+export function fetchRunFailures({ repo, runId, runGh = defaultRunGh }) {
   const stdout = runGh(['run', 'view', String(runId), '--repo', repo, '--json', 'jobs'])
   const parsed = parseJson(stdout, 'gh run view')
   if (!Array.isArray(parsed?.jobs)) throw new Error('gh run view 输出缺少 jobs 数组')
-  const failedJobs = [
-    ...new Set(
-      parsed.jobs
-        .filter((job) => job?.conclusion === 'failure')
-        .map((job) => job.name)
-        .filter((name) => typeof name === 'string' && name !== ''),
-    ),
-  ]
-  return {
-    failedJobs: failedJobs.slice(0, FAILED_JOB_LIMIT),
-    failedJobCount: failedJobs.length,
-  }
+  return collectRunFailureDetails(parsed.jobs)
 }
 
 export function collectFailures({
@@ -169,17 +204,26 @@ export function collectFailures({
   stderr = process.stderr,
 }) {
   const runs = fetchRuns({ repo, workflow, branch, limit, runGh })
-  const [failure] = selectFailures(runs)
-  if (failure === undefined) return []
+  const latest = selectLatestCompletedRun(runs)
+  if (latest === undefined) return []
+  const topLevelFailure = latest.conclusion === 'failure'
+  if (!topLevelFailure && latest.conclusion !== 'cancelled') return []
 
-  const item = buildPollItem(failure)
+  let failures
   try {
-    Object.assign(item, fetchFailedJobs({ repo, runId: failure.runId, runGh }))
+    failures = fetchRunFailures({ repo, runId: latest.runId, runGh })
   } catch (error) {
-    // 失败 job 列表只是诊断线索，取不到不影响触发；skill 会用 --log-failed 兜底。
-    stderr.write(`[ci-failures] 无法获取失败 job 列表: ${error.message}\n`)
+    if (topLevelFailure) {
+      // 失败 job 列表只是诊断线索，取不到不影响触发；skill 会用日志兜底。
+      stderr.write(`[ci-failures] 无法获取失败 job 列表: ${error.message}\n`)
+      return [buildPollItem(latest)]
+    }
+    // 取消的 run 没有 job 细节就无法区分 guard 失败与手动取消，宁可跳过。
+    stderr.write(`[ci-failures] 无法获取 job 列表，取消的 run 按无需处理跳过: ${error.message}\n`)
+    return []
   }
-  return [item]
+  if (!topLevelFailure && !failures.hasFailure) return []
+  return [{ ...buildPollItem(latest), ...failures.details }]
 }
 
 export function parseArgs(argv) {

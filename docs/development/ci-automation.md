@@ -21,7 +21,7 @@ poll: node scripts/github/ci-failures.mjs
 
 | 路径 | 作用 |
 | --- | --- |
-| `scripts/github/ci-failures.mjs` | poll 取数：只输出 main 上**最新一条已完成 run 是 failure** 的那一条；`selectFailures()` 是导出纯函数，便于单测。 |
+| `scripts/github/ci-failures.mjs` | poll 取数：只输出 main 上**最新一条已完成 run 失败**的那一条（`failure`，或带失败 job/step 的 `cancelled`）；`selectLatestCompletedRun()` / `selectFailures()` 是导出纯函数，便于单测。 |
 | `scripts/tracker/gate.mjs` | push 前范围闸门；`--refs-prefix ci#` 让每日配额按 `Refs: ci#` 独立计数（上限 3）。 |
 | `.claude/skills/fix-ci-failure/SKILL.md` | 自动修复流程（复核、防循环、flake 分流、修复、提交、推送、升级）。 |
 | `apps/editor/src/main/services/triggers/` | 触发器内核，**不需要改**；行为见[Agent 触发器](triggers.md)。 |
@@ -35,14 +35,22 @@ JSON 数组；凭据由 `gh` 自身管理，不写进仓库、触发器或日志
 databaseId,attempt,status,conclusion,headSha,displayTitle,url,createdAt,event`。
 
 - **只读 main、只读 `ci.yml`**（可用 `--workflow` / `--branch` / `--repo` 覆盖）。
-- 按 `createdAt` 取 main **最新一条 run**，只有它 `status=completed` 且 `conclusion=failure` 时才输出；
-  `cancelled` / `success` / `skipped` / `neutral` 都不输出。
+- 按 `createdAt` 取 main **最新一条 run**，只有它 `status=completed` 才继续：
+  - `conclusion=failure` → 输出；
+  - `conclusion=cancelled` → 再查该 run 的 jobs：只要存在 `CI Gate` 之外的失败 job，或 `CI Gate`
+    之外的失败步骤，就按失败输出。`CI Gate` 是 required-check 哨兵，手动取消整条 run 时可能只有
+    它失败，不能据此唤醒修复 agent。本仓库的 fast-lint 在廉价 guard 失败后会主动
+    `gh run cancel` 取消整条 run，所以顶层结论是 `cancelled`，真正的失败在 `Fast Lint / Guards`
+    的失败步骤 + `CI Gate` 的 failure；
+  - `success` / `skipped` / `neutral` / 没有任何失败 job-step 的 `cancelled`（手动取消等）→ 不输出。
 - 最新 run 还在跑（含 rerun 中）时输出 `[]`，等它自己的结论：失败会以它的 key 触发，变绿则无需处理；
   不会回落到更早的失败 run 白跑一轮。
 - poll key 是 `id = "<runId>:<attempt>"`。rerun 会提升 `attempt`，因此「同一 run 的第 2 次失败」
   会以新 key 再次触发；rerun 在跑期间该 run 不是 completed，不会重复触发。
-- 附带 `failedJobs`（`gh run view <runId> --json jobs` 中 `conclusion=failure` 的 job 名，最多 20 个）
-  与 `failedJobCount`；job 拉取失败只省略字段，不影响触发。
+- 附带 `failedJobs`（`conclusion=failure` 或含失败步骤的 job 名，最多 20 个）、`failedJobCount`，
+  以及 `failedSteps`（`<job>: <step>`，最多 20 个，没有失败步骤时省略）。
+  job 拉取失败时：`failure` run 仍输出（只是缺少这些字段），`cancelled` run 直接按无需处理跳过
+  （没有 job 细节就无法区分 guard 失败与手动取消）。
 - `gh run list --json` 的 `attempt` 字段已在本机 `gh 2.97.0` 核实存在；更老的 `gh` 若不支持该字段
   会直接报错，升级 `gh` 即可。
 
@@ -59,8 +67,12 @@ databaseId,attempt,status,conclusion,headSha,displayTitle,url,createdAt,event`�
     "url": "https://github.com/example/universe-editor/actions/runs/123456789",
     "createdAt": "2026-01-01T00:00:00Z",
     "event": "push",
-    "failedJobs": ["Fast Lint / Guards", "E2E (windows 1/4)"],
-    "failedJobCount": 2
+    "failedJobs": ["Fast Lint / Guards", "CI Gate"],
+    "failedJobCount": 2,
+    "failedSteps": [
+      "Fast Lint / Guards: Knowledge link check",
+      "CI Gate: Fail if any required job failed or was cancelled"
+    ]
   }
 ]
 ```
@@ -203,8 +215,8 @@ gate 泛化方式：`--refs-prefix tracker#|ci#` 选择配额前缀，`--daily-l
   `node scripts/github/ci-failures.mjs` 看是否输出 `[]`。配置推送后其它机器都要重新确认。
 - **脚本报 `gh ... 失败`**：`gh auth status` 检查登录与 scope；确认 `--repo` / origin 指向正确仓库、
   workflow 文件名确实是 `ci.yml`。
-- **一直是 `[]`**：main 最新一条 run 还在跑或不是 failure，或分支、
-  workflow 参数写错。
+- **一直是 `[]`**：main 最新一条 run 还在跑，或已成功 / 只是手动取消（没有失败 job-step），
+  或分支、workflow 参数写错。
 - **rerun 没反应**：token 缺 Actions 写权限，或该 run 已不可 rerun；看 `gh run rerun` 的 stderr。
 - **push 被 gate 拦下**：按违规项缩小改动；需要改禁改路径或超额时转人工。**不要** `--no-verify`
   或删除 hook。
