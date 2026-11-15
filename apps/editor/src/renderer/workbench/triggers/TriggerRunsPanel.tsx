@@ -12,7 +12,9 @@ import {
   IEditorGroupsService,
   IEditorService,
   IInstantiationService,
+  IStorageService,
   REMOTE_SCHEME,
+  StorageScope,
   localize,
 } from '@universe-editor/platform'
 import { Button, Select } from '@universe-editor/workbench-ui'
@@ -53,8 +55,18 @@ const OUTCOMES: readonly TriggerRunOutcome[] = [
   'failed',
 ]
 
+const OUTCOME_FILTER_STORAGE_KEY = 'triggerManager.runs.outcome'
+
+function isOutcomeFilter(value: unknown): value is OutcomeFilter {
+  return (
+    value === 'all' ||
+    (typeof value === 'string' && (OUTCOMES as readonly string[]).includes(value))
+  )
+}
+
 export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
   const triggers = useService(ITriggerMainService)
+  const storage = useService(IStorageService)
   const editors = useService(IEditorService)
   const sessions = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
@@ -67,7 +79,42 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [outcome, setOutcome] = useState<OutcomeFilter>('all')
+  const [restoreDone, setRestoreDone] = useState(false)
+  const filterTouched = useRef(false)
+  const restoreOk = useRef(false)
   const requestRef = useRef(0)
+
+  // The outcome filter survives a manager reopen; a value the user picked while the
+  // read was in flight wins over the stored one.
+  useEffect(() => {
+    let active = true
+    void storage.get<unknown>(OUTCOME_FILTER_STORAGE_KEY, StorageScope.GLOBAL).then(
+      (stored) => {
+        if (!active) return
+        if (!filterTouched.current && isOutcomeFilter(stored)) setOutcome(stored)
+        restoreOk.current = true
+        setRestoreDone(true)
+      },
+      () => {
+        if (!active) return
+        setRestoreDone(true)
+      },
+    )
+    return () => {
+      active = false
+    }
+  }, [storage])
+
+  useEffect(() => {
+    if (!restoreDone) return
+    if (!filterTouched.current && !restoreOk.current) return
+    void storage.set(OUTCOME_FILTER_STORAGE_KEY, outcome, StorageScope.GLOBAL)
+  }, [outcome, restoreDone, storage])
+
+  const changeOutcome = useCallback((next: OutcomeFilter) => {
+    filterTouched.current = true
+    setOutcome(next)
+  }, [])
 
   const load = useCallback(async () => {
     const token = ++requestRef.current
@@ -101,25 +148,32 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
     summaryKeyRef.current = summary.key
     previous.current = { running: summary.running, lastRunId: summary.lastRunId }
     setRuns([])
+    filterTouched.current = true
     setOutcome('all')
+    // Persist the reset too: the stored filter belongs to the trigger it was picked on.
+    void storage.set(OUTCOME_FILTER_STORAGE_KEY, 'all', StorageScope.GLOBAL)
     requestRef.current += 1
-  }, [summary.key, summary.running, summary.lastRunId])
+  }, [summary.key, summary.running, summary.lastRunId, storage])
 
   // The parent pushes a fresh summary when a run ends. Refresh exactly on the
   // transitions that mean "a new row exists", not on every summary update.
   useEffect(() => {
     const before = previous.current
     previous.current = { running: summary.running, lastRunId: summary.lastRunId }
+    if (!restoreDone) return
     const finished = before.running > 0 && summary.running === 0
     if (finished || before.lastRunId !== summary.lastRunId) void load()
-  }, [load, summary.lastRunId, summary.running])
+  }, [load, restoreDone, summary.lastRunId, summary.running])
 
+  // Wait for the stored filter before the first request, so a restored outcome does
+  // not first load with "all" and then issue a second request.
   useEffect(() => {
+    if (!restoreDone) return
     void load()
     return () => {
       requestRef.current += 1
     }
-  }, [load])
+  }, [load, restoreDone])
 
   const revealSession = useCallback(
     (entry: TriggerRunHistoryEntry) => {
@@ -178,7 +232,7 @@ export function TriggerRunsPanel({ summary }: TriggerRunsPanelProps) {
               label: triggerRunOutcomeLabel(value) ?? value,
             })),
           ]}
-          onChange={setOutcome}
+          onChange={changeOutcome}
           aria-label={localize('trigger.manager.runs.filter', 'Filter by outcome')}
           data-testid="trigger-manager-runs-filter"
         />

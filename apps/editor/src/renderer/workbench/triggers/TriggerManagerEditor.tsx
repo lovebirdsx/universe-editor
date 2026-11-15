@@ -3,7 +3,9 @@
  *  TriggerManagerEditor — the single manager tab (left: grouped trigger list with
  *  search and pause toggles; right: overview / configuration / run history).
  *  Data comes from ITriggerMainService only; a change event replaces the whole
- *  list, so selection is re-resolved against the fresh summaries.
+ *  list, so selection is re-resolved against the fresh summaries. Search, selection,
+ *  the active tab and scroll positions persist through IStorageService, so closing
+ *  and reopening the tab restores the previous view (see useTriggerManagerViewState).
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -40,12 +42,11 @@ import { TriggerOverviewPanel } from './TriggerOverviewPanel.js'
 import { TriggerRunsPanel } from './TriggerRunsPanel.js'
 import type { TriggerManagerActions } from './useTriggerActions.js'
 import { useTriggerActions } from './useTriggerActions.js'
+import { useTriggerManagerViewState, type TriggerTab } from './useTriggerManagerViewState.js'
 
 export interface TriggerManagerEditorProps {
   readonly input: IEditorInput
 }
-
-type TriggerTab = 'overview' | 'configuration' | 'runs'
 
 const TABS: readonly { readonly id: TriggerTab; readonly label: string }[] = [
   { id: 'overview', label: localize('trigger.manager.overview.title', 'Overview') },
@@ -69,15 +70,21 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
   const [summaries, setSummaries] = useState<readonly TriggerSummary[]>([])
   const [loaded, setLoaded] = useState(false)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
-  const [query, setQuery] = useState('')
-  const [selectedKey, setSelectedKey] = useState<string | undefined>(undefined)
-  const [tab, setTab] = useState<TriggerTab>('overview')
   const [now, setNow] = useState(() => Date.now())
   const [createOpen, setCreateOpen] = useState(false)
   const [pendingCreated, setPendingCreated] = useState<
     { readonly workspace: string; readonly id: string } | undefined
   >(undefined)
   const listRef = useRef<HTMLDivElement>(null)
+  const detailRef = useRef<HTMLDivElement>(null)
+  const selectionKeys = useMemo(() => new Set(summaries.map((entry) => entry.key)), [summaries])
+  const { query, setQuery, selectedKey, selectKey, tab, switchTab } = useTriggerManagerViewState({
+    input: managerInput,
+    listRef,
+    detailRef,
+    listReady: loaded,
+    selectionKeys,
+  })
 
   // Subscribe before the initial fetch: an update that lands between the fetch
   // and the subscription would otherwise be lost until the next change.
@@ -106,21 +113,6 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
     }
   }, [triggers])
 
-  // The pending selection is one-shot: consume it on mount and afterwards only
-  // listen for a duplicate open transferring a newer key.
-  useEffect(() => {
-    if (managerInput === undefined) return
-    const pending = managerInput.consumePendingSelection()
-    if (pending !== undefined) setSelectedKey(pending)
-    const subscription = managerInput.onDidChangeSelection((key) => {
-      // Delivered through the one-shot channel: clear it so a remount does not
-      // resurrect an old selection.
-      managerInput.consumePendingSelection()
-      setSelectedKey(key)
-    })
-    return () => subscription.dispose()
-  }, [managerInput])
-
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TIME_TICK_MS)
     return () => clearInterval(timer)
@@ -138,9 +130,9 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
     )
     if (match === undefined) return
     setPendingCreated(undefined)
-    setSelectedKey(match.key)
-    setTab('configuration')
-  }, [pendingCreated, summaries])
+    selectKey(match.key)
+    switchTab('configuration')
+  }, [pendingCreated, selectKey, summaries, switchTab])
 
   // If the new definition never reaches the list (watch failed / workspace
   // rejected it), stop treating it as pending instead of waiting forever.
@@ -180,13 +172,13 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
     focusedIndex: selectedIndex,
     onFocusChange: (index) => {
       const summary = filtered[index]
-      if (summary !== undefined) setSelectedKey(summary.key)
+      if (summary !== undefined) selectKey(summary.key)
     },
     getItemKey: (index) => filtered[index]?.key ?? String(index),
     getContainer: () => listRef.current,
     onActivate: (index) => {
       const summary = filtered[index]
-      if (summary !== undefined) setSelectedKey(summary.key)
+      if (summary !== undefined) selectKey(summary.key)
     },
     ariaLabel: localize('trigger.manager.list.label', 'Triggers'),
     focusSelectsFirst: false,
@@ -219,7 +211,7 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
           data-testid="trigger-manager-pending-banner"
           onClick={() => {
             const first = pendingConfirmation[0]
-            if (first !== undefined) setSelectedKey(first.key)
+            if (first !== undefined) selectKey(first.key)
           }}
         >
           <span className={styles['bannerIcon']}>⚠</span>
@@ -417,14 +409,18 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
                 role="tab"
                 aria-selected={tab === entry.id}
                 className={cx(styles['tab'], tab === entry.id && styles['tabActive'])}
-                onClick={() => setTab(entry.id)}
+                onClick={() => switchTab(entry.id)}
                 data-testid={`trigger-manager-tab-${entry.id}`}
               >
                 {entry.label}
               </button>
             ))}
           </div>
-          <div className={styles['detailBody']} data-testid="trigger-manager-detail">
+          <div
+            className={styles['detailBody']}
+            ref={detailRef}
+            data-testid="trigger-manager-detail"
+          >
             {selected === undefined ? (
               <div className={styles['state']} data-testid="trigger-manager-select-prompt">
                 {localize('trigger.manager.selectPrompt', 'Select a trigger to see its details.')}

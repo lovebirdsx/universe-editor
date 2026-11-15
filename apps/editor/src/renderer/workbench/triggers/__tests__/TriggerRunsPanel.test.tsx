@@ -5,14 +5,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
+  Emitter,
   IEditorGroupsService,
   IEditorService,
   IInstantiationService,
+  IStorageService,
   IUriIdentityService,
   InstantiationService,
   ServiceCollection,
+  StorageScope,
   observableValue,
 } from '@universe-editor/platform'
 import { ITriggerMainService } from '../../../../shared/ipc/triggerService.js'
@@ -83,11 +86,35 @@ function omit(
   return copy as unknown as TriggerRunHistoryEntry
 }
 
+class FakeStorage {
+  readonly entries = new Map<string, unknown>()
+  readonly get = vi.fn(async (key: string) => this.entries.get(key))
+  readonly set = vi.fn(async (key: string, value: unknown) => {
+    this.entries.set(key, value)
+  })
+  readonly remove = vi.fn(async (key: string) => {
+    this.entries.delete(key)
+  })
+  readonly onDidChangeWorkspaceScope = new Emitter<void>().event
+  readonly service = {
+    _serviceBrand: undefined,
+    get: this.get,
+    set: this.set,
+    remove: this.remove,
+    onDidChangeWorkspaceScope: this.onDidChangeWorkspaceScope,
+  } as unknown as IStorageService
+
+  constructor(initial: Readonly<Record<string, unknown>> = {}) {
+    for (const [key, value] of Object.entries(initial)) this.entries.set(key, value)
+  }
+}
+
 function renderPanel(
   options: {
     readonly runs?: readonly TriggerRunHistoryEntry[]
     readonly error?: Error
     readonly summary?: TriggerSummary
+    readonly storage?: FakeStorage
   } = {},
 ) {
   const listRuns = vi.fn(async (filter?: { outcome?: string }) => {
@@ -99,7 +126,9 @@ function renderPanel(
   })
   const openEditor = vi.fn(async (input: unknown) => input)
   const focusSessionInput = vi.fn()
+  const storage = options.storage ?? new FakeStorage()
   const services = new ServiceCollection()
+  services.set(IStorageService, storage.service)
   services.set(ITriggerMainService, {
     _serviceBrand: undefined,
     listRuns,
@@ -128,7 +157,7 @@ function renderPanel(
       <TriggerRunsPanel summary={options.summary ?? summary()} />
     </ServicesContext.Provider>,
   )
-  return { view, instantiation, listRuns, openEditor, focusSessionInput }
+  return { view, instantiation, listRuns, openEditor, focusSessionInput, storage }
 }
 
 describe('TriggerRunsPanel', () => {
@@ -269,5 +298,83 @@ describe('TriggerRunsPanel', () => {
     fireEvent.click(screen.getByTestId('trigger-manager-runs-view-report'))
 
     expect(harness.openEditor).toHaveBeenCalledTimes(1)
+  })
+
+  it('restores the stored outcome and uses it for the first request', async () => {
+    const storage = new FakeStorage({ 'triggerManager.runs.outcome': 'failed' })
+    const harness = renderPanel({
+      runs: [run(), run({ runId: 'run-2', outcome: 'failed' })],
+      storage,
+    })
+
+    expect(await screen.findAllByTestId('trigger-manager-runs-row')).toHaveLength(1)
+    expect(harness.listRuns).toHaveBeenCalledTimes(1)
+    expect(harness.listRuns).toHaveBeenCalledWith({
+      triggerKey: 'ws\0triage',
+      outcome: 'failed',
+      limit: 100,
+    })
+  })
+
+  it('persists the outcome filter picked by the user', async () => {
+    const storage = new FakeStorage()
+    renderPanel({ runs: [run()], storage })
+    await screen.findAllByTestId('trigger-manager-runs-row')
+
+    fireEvent.click(screen.getByTestId('trigger-manager-runs-filter'))
+    fireEvent.click(screen.getByRole('option', { name: 'Failed' }))
+
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.runs.outcome',
+        'failed',
+        StorageScope.GLOBAL,
+      ),
+    )
+  })
+
+  it('resets the filter to all when the trigger changes and ignores a late restore', async () => {
+    const entries: Record<string, unknown> = { 'triggerManager.runs.outcome': 'failed' }
+    const pending: Array<() => void> = []
+    const storage = new FakeStorage()
+    storage.get.mockImplementation(
+      (key: string) =>
+        new Promise((resolve) => {
+          pending.push(() => resolve(entries[key]))
+        }),
+    )
+    const harness = renderPanel({ storage })
+    expect(harness.listRuns).not.toHaveBeenCalled()
+
+    harness.view.rerender(
+      <ServicesContext.Provider value={harness.instantiation}>
+        <TriggerRunsPanel summary={summary({ key: 'ws\0other', id: 'other' })} />
+      </ServicesContext.Provider>,
+    )
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.runs.outcome',
+        'all',
+        StorageScope.GLOBAL,
+      ),
+    )
+
+    await act(async () => {
+      pending.splice(0).forEach((resolve) => resolve())
+    })
+
+    await waitFor(() => expect(harness.listRuns).toHaveBeenCalledTimes(1))
+    expect(harness.listRuns).toHaveBeenCalledWith({ triggerKey: 'ws\0other', limit: 100 })
+    expect(harness.listRuns).not.toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'failed' }),
+    )
+  })
+
+  it('ignores an unknown stored outcome', async () => {
+    const storage = new FakeStorage({ 'triggerManager.runs.outcome': 'bogus' })
+    const harness = renderPanel({ storage })
+
+    expect(await screen.findByTestId('trigger-manager-runs-empty')).toBeDefined()
+    expect(harness.listRuns).toHaveBeenCalledWith({ triggerKey: 'ws\0triage', limit: 100 })
   })
 })

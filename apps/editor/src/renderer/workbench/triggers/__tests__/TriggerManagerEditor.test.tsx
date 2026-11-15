@@ -21,11 +21,13 @@ import {
   INotificationService,
   IOutputService,
   IQuickInputService,
+  IStorageService,
   IUriIdentityService,
   IViewsService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
+  StorageScope,
   URI,
   observableValue,
 } from '@universe-editor/platform'
@@ -77,6 +79,30 @@ interface HarnessOptions {
   readonly summaries?: readonly TriggerSummary[]
   readonly inputOptions?: TriggerManagerEditorInputOptions
   readonly runs?: readonly import('../../../../shared/triggers/types.js').TriggerRunHistoryEntry[]
+  readonly storage?: FakeStorage
+}
+
+class FakeStorage {
+  readonly entries = new Map<string, unknown>()
+  readonly get = vi.fn(async (key: string) => this.entries.get(key))
+  readonly set = vi.fn(async (key: string, value: unknown) => {
+    this.entries.set(key, value)
+  })
+  readonly remove = vi.fn(async (key: string) => {
+    this.entries.delete(key)
+  })
+  readonly onDidChangeWorkspaceScope = new Emitter<void>().event
+  readonly service = {
+    _serviceBrand: undefined,
+    get: this.get,
+    set: this.set,
+    remove: this.remove,
+    onDidChangeWorkspaceScope: this.onDidChangeWorkspaceScope,
+  } as unknown as IStorageService
+
+  constructor(initial: Readonly<Record<string, unknown>> = {}) {
+    for (const [key, value] of Object.entries(initial)) this.entries.set(key, value)
+  }
 }
 
 class FakeFiles {
@@ -129,8 +155,10 @@ function renderEditor(options: HarnessOptions = {}) {
     },
   ])
   const files = new FakeFiles()
+  const storage = options.storage ?? new FakeStorage()
 
   const services = new ServiceCollection()
+  services.set(IStorageService, storage.service)
   services.set(ITriggerMainService, {
     _serviceBrand: undefined,
     listTriggers,
@@ -209,6 +237,7 @@ function renderEditor(options: HarnessOptions = {}) {
     input,
     view,
     files,
+    storage,
     listWorkspaces,
     setPaused,
     setAllPaused,
@@ -400,5 +429,205 @@ describe('TriggerManagerEditor', () => {
       summaries: [summary({ id: 'a', activationConfirmed: false, status: 'needs-confirmation' })],
     })
     await screen.findByTestId('trigger-manager-pending-banner')
+  })
+
+  it('restores the search term and selected trigger from storage', async () => {
+    const storage = new FakeStorage({
+      'triggerManager.view.query': 'a',
+      'triggerManager.view.selectedKey': 'b',
+    })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+
+    expect(await screen.findByDisplayValue('a')).toBeDefined()
+    await waitFor(() =>
+      expect(screen.getByTestId('trigger-manager-overview-name').textContent).toBe('Beta'),
+    )
+  })
+
+  it('restores the active tab from storage', async () => {
+    const storage = new FakeStorage({ 'triggerManager.view.tab': 'configuration' })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    expect(await screen.findByTestId('trigger-manager-config-readonly')).toBeDefined()
+    await waitFor(() =>
+      expect(
+        screen.getByTestId('trigger-manager-tab-configuration').getAttribute('aria-selected'),
+      ).toBe('true'),
+    )
+  })
+
+  it('keeps the pending selection over a stored one that resolves late', async () => {
+    const entries: Record<string, unknown> = { 'triggerManager.view.selectedKey': 'a' }
+    const pending: Array<() => void> = []
+    const storage = new FakeStorage()
+    storage.get.mockImplementation(
+      (key: string) =>
+        new Promise((resolve) => {
+          pending.push(() => resolve(entries[key]))
+        }),
+    )
+    renderEditor({ summaries: TWO_WORKSPACES, inputOptions: { pendingSelection: 'b' }, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+    expect(screen.getByTestId('trigger-manager-overview-name').textContent).toBe('Beta')
+
+    await act(async () => {
+      pending.splice(0).forEach((resolve) => resolve())
+    })
+
+    expect(screen.getByTestId('trigger-manager-overview-name').textContent).toBe('Beta')
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.selectedKey',
+        'b',
+        StorageScope.GLOBAL,
+      ),
+    )
+  })
+
+  it('does not persist defaults while the restore is in flight', async () => {
+    const entries: Record<string, unknown> = { 'triggerManager.view.query': 'beta' }
+    const pending: Array<() => void> = []
+    const storage = new FakeStorage()
+    storage.get.mockImplementation(
+      (key: string) =>
+        new Promise((resolve) => {
+          pending.push(() => resolve(entries[key]))
+        }),
+    )
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+    expect(storage.set).not.toHaveBeenCalled()
+
+    await act(async () => {
+      pending.splice(0).forEach((resolve) => resolve())
+    })
+    expect(await screen.findByDisplayValue('beta')).toBeDefined()
+  })
+
+  it('persists the search, selection and tab on interaction', async () => {
+    const storage = new FakeStorage()
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    fireEvent.change(screen.getByTestId('trigger-manager-search'), { target: { value: 'b' } })
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.query',
+        'b',
+        StorageScope.GLOBAL,
+      ),
+    )
+
+    fireEvent.click(rowByKey('b'))
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.selectedKey',
+        'b',
+        StorageScope.GLOBAL,
+      ),
+    )
+
+    fireEvent.click(screen.getByTestId('trigger-manager-tab-runs'))
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.tab',
+        'runs',
+        StorageScope.GLOBAL,
+      ),
+    )
+  })
+
+  it('falls back to overview when the stored tab is unknown', async () => {
+    const storage = new FakeStorage({ 'triggerManager.view.tab': 'unknown-tab' })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    await waitFor(() =>
+      expect(screen.getByTestId('trigger-manager-tab-overview').getAttribute('aria-selected')).toBe(
+        'true',
+      ),
+    )
+  })
+
+  it('clears a stored selection whose trigger is gone', async () => {
+    const storage = new FakeStorage({ 'triggerManager.view.selectedKey': 'gone' })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+
+    await waitFor(() =>
+      expect(storage.remove).toHaveBeenCalledWith(
+        'triggerManager.view.selectedKey',
+        StorageScope.GLOBAL,
+      ),
+    )
+    expect(screen.getByTestId('trigger-manager-overview-name').textContent).toBe('Alpha')
+  })
+
+  it('restores and persists the list scroll position', async () => {
+    const storage = new FakeStorage({ 'triggerManager.view.listScrollTop': 120 })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+    const list = screen.getByTestId('trigger-manager-list')
+    await waitFor(() => expect(list.scrollTop).toBe(120))
+
+    list.scrollTop = 48
+    fireEvent.scroll(list)
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.listScrollTop',
+        48,
+        StorageScope.GLOBAL,
+      ),
+    )
+  })
+
+  it('restores and persists the detail scroll per tab', async () => {
+    const storage = new FakeStorage({
+      'triggerManager.view.detailScroll.overview': 60,
+      'triggerManager.view.detailScroll.configuration': 20,
+    })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+    const detail = screen.getByTestId('trigger-manager-detail')
+    await waitFor(() => expect(detail.scrollTop).toBe(60))
+
+    detail.scrollTop = 30
+    fireEvent.scroll(detail)
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.detailScroll.overview',
+        30,
+        StorageScope.GLOBAL,
+      ),
+    )
+
+    fireEvent.click(screen.getByTestId('trigger-manager-tab-configuration'))
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.detailScroll.overview',
+        30,
+        StorageScope.GLOBAL,
+      ),
+    )
+    await waitFor(() => expect(detail.scrollTop).toBe(20))
+  })
+
+  it('resets the detail scroll when another trigger is selected', async () => {
+    const storage = new FakeStorage({ 'triggerManager.view.detailScroll.overview': 60 })
+    renderEditor({ summaries: TWO_WORKSPACES, storage })
+    await screen.findAllByTestId('trigger-manager-row')
+    const detail = screen.getByTestId('trigger-manager-detail')
+    await waitFor(() => expect(detail.scrollTop).toBe(60))
+
+    fireEvent.click(rowByKey('b'))
+    expect(detail.scrollTop).toBe(0)
+    await waitFor(() =>
+      expect(storage.set).toHaveBeenCalledWith(
+        'triggerManager.view.detailScroll.overview',
+        0,
+        StorageScope.GLOBAL,
+      ),
+    )
   })
 })

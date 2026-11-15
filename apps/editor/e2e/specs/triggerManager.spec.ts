@@ -255,4 +255,66 @@ test.describe('trigger manager', () => {
     await expect(page.getByTestId('trigger-manager-runs-row')).toContainText('Info')
     await expect(page.getByTestId('trigger-manager-runs-row')).toContainText('E2E trigger run')
   })
+
+  test('restores search, selection, tab and run filter after reopening @p1', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
+    await workbench.waitForRestored()
+    const config = `{
+  "version": 1,
+  "triggers": [
+${triggerEntry('alpha', 'Alpha Trigger')},
+${triggerEntry('beta', 'Beta Trigger')}
+  ]
+}
+`
+    await registerConfig(page, launchWorkspace.dir, config)
+    await expect.poll(async () => (await findTrigger(page, 'alpha'))?.status).toBe('paused')
+
+    await openManager(page)
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(2)
+
+    await page.getByTestId('trigger-manager-search').fill('Beta')
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(1)
+    await page.getByTestId('trigger-manager-row').click()
+    await page.getByTestId('trigger-manager-tab-configuration').click()
+    await expect(page.getByTestId('trigger-manager-config-name')).toHaveValue('Beta Trigger')
+    // Let the debounced search write land before closing the tab.
+    await page.waitForTimeout(400)
+
+    await workbench.runCommand('workbench.action.closeActiveEditor')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .not.toBe('trigger.manager')
+
+    await openManager(page)
+    await expect(page.getByTestId('trigger-manager-search')).toHaveValue('Beta')
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(1)
+    await expect(page.getByTestId('trigger-manager-row')).toHaveAttribute('aria-selected', 'true')
+    await expect(page.getByTestId('trigger-manager-tab-configuration')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    await expect(page.getByTestId('trigger-manager-config-name')).toHaveValue('Beta Trigger')
+
+    await page.getByTestId('trigger-manager-tab-runs').click()
+    await page.getByTestId('trigger-manager-runs-filter').click()
+    await page.getByRole('option', { name: 'Failed' }).click()
+    await expect(page.getByTestId('trigger-manager-runs-filter')).toContainText('Failed')
+
+    await workbench.runCommand('workbench.action.closeActiveEditor')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .not.toBe('trigger.manager')
+
+    await openManager(page)
+    await expect(page.getByTestId('trigger-manager-tab-runs')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    await expect(page.getByTestId('trigger-manager-runs-filter')).toContainText('Failed')
+  })
 })
