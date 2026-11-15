@@ -42,6 +42,7 @@ import {
   type SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
+import { SWARM_TRIGGER_EVENT_NAME } from '../../shared/triggers/swarmTriggerEvent.js'
 import type { TriggerSummary } from '../../shared/triggers/types.js'
 import { swarmIgnoreStore, splitIgnored } from '../services/swarm/swarmIgnoreStore.js'
 import {
@@ -185,7 +186,11 @@ export class SwarmReviewNotificationContribution
         // their own workspace identity.
         return folder === undefined
           ? Promise.resolve()
-          : this._triggerMain.reportSwarmNeedsAction(reviews, folder.toString())
+          : this._triggerMain.reportTriggerEvents(
+              SWARM_TRIGGER_EVENT_NAME,
+              reviews,
+              folder.toString(),
+            )
       },
       swarmUrl: () => this._swarmUrl(),
       swarmApiVersion: () => this._swarmApiVersion(),

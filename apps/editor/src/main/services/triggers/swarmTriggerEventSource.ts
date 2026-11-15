@@ -8,10 +8,8 @@ import type { TriggerPayloadValue } from '../../../shared/triggers/types.js'
 import {
   SWARM_TRIGGER_EVENT_NAME,
   type SwarmNeedsActionReview,
-} from '../../../shared/ipc/triggerService.js'
+} from '../../../shared/triggers/swarmTriggerEvent.js'
 import type { TriggerEventSource, TriggerEventSourceItem } from './triggerEventSources.js'
-
-export { SWARM_TRIGGER_EVENT_NAME }
 
 function isReview(value: unknown): value is SwarmNeedsActionReview {
   if (typeof value !== 'object' || value === null) return false

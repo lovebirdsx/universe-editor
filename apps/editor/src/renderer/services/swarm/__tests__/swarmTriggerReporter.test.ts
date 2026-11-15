@@ -6,7 +6,7 @@
 
 import type { SwarmReviewDto } from '@universe-editor/extensions-common'
 import { describe, expect, it, vi } from 'vitest'
-import type { SwarmNeedsActionReview } from '../../../../shared/ipc/triggerService.js'
+import type { SwarmNeedsActionReview } from '../../../../shared/triggers/swarmTriggerEvent.js'
 import type { TriggerSummary } from '../../../../shared/triggers/types.js'
 import {
   SWARM_NEEDS_ACTION_DESCRIPTION_MAX,

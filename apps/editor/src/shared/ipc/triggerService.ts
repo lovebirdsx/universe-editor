@@ -85,14 +85,6 @@ export interface ITriggerRunEventService {
     items: readonly unknown[],
     workspaceUri: string,
   ): Promise<void>
-  /**
-   * Compatibility facade for the Swarm reporter; equivalent to
-   * `reportTriggerEvents('swarm.reviewNeedsAction', reviews, workspaceFolder)`.
-   */
-  reportSwarmNeedsAction(
-    reviews: readonly SwarmNeedsActionReview[],
-    workspaceFolder: string,
-  ): Promise<void>
 }
 
 /** Workspace catalog lifecycle (create / rescan / remove the triggers.json). */
@@ -129,20 +121,6 @@ export interface ITriggerMainService
 }
 
 export const ITriggerMainService = createDecorator<ITriggerMainService>('triggerMainService')
-
-/** Event name shared by the reporter and main's event-source registry. */
-export const SWARM_TRIGGER_EVENT_NAME = 'swarm.reviewNeedsAction'
-
-export interface SwarmNeedsActionReview {
-  readonly reviewId: string
-  readonly author: string
-  readonly description: string
-  readonly state: string
-  /** Configured Swarm base URL, handed to the agent so its `swarm.mjs` calls hit the same server. */
-  readonly swarmUrl?: string
-  /** Configured Swarm REST API version segment, so the agent's calls match the same endpoint set. */
-  readonly swarmApiVersion?: string
-}
 
 export interface ITriggerRunHost {
   readonly _serviceBrand: undefined

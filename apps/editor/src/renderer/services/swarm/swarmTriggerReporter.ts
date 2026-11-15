@@ -12,7 +12,7 @@ import type { SwarmReviewDto } from '@universe-editor/extensions-common'
 import {
   SWARM_TRIGGER_EVENT_NAME,
   type SwarmNeedsActionReview,
-} from '../../../shared/ipc/triggerService.js'
+} from '../../../shared/triggers/swarmTriggerEvent.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
 
 /** Payload descriptions are truncated before crossing IPC (the prompt fence and

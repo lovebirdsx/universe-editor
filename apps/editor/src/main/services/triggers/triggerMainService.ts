@@ -71,10 +71,7 @@ import { TriggerScheduler } from './triggerScheduler.js'
 import { TriggerRunLedger } from './triggerRunLedger.js'
 import { TriggerCatalog } from './triggerCatalog.js'
 import { TriggerEventSourceRegistry, type TriggerEventSourceItem } from './triggerEventSources.js'
-import {
-  createSwarmTriggerEventSource,
-  SWARM_TRIGGER_EVENT_NAME,
-} from './swarmTriggerEventSource.js'
+import { createSwarmTriggerEventSource } from './swarmTriggerEventSource.js'
 import { RemoteIoUnavailableError } from './triggerErrors.js'
 import {
   LocalExecutionBackend,
@@ -755,15 +752,6 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     return authority === undefined
       ? this._localBackend.readReport(runId)
       : this._backendForAuthority(authority).readReport(runId)
-  }
-
-  async reportSwarmNeedsAction(
-    reviews: readonly unknown[],
-    workspaceFolder: string,
-  ): Promise<void> {
-    // Compatibility facade for the Swarm reporter; the generic path is the single
-    // implementation so newer event sources get identical baseline/dedupe semantics.
-    await this.reportTriggerEvents(SWARM_TRIGGER_EVENT_NAME, reviews, workspaceFolder)
   }
 
   async reportTriggerEvents(

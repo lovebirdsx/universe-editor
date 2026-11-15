@@ -82,7 +82,7 @@ TriggerMainService ── IPC facade / summary / audit / history / 装配
 
 | 通道 | 方向 | 契约 |
 | --- | --- | --- |
-| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`（由 query / control / run-event / workspace 四个子接口组合）：触发器与工作区列表、手动运行、暂停、激活确认（同时覆盖高权限模式）、`ensureConfigFile` / `rescanWorkspace` / `removeWorkspace`、运行目录、运行结束上报、`listRuns`（本机运行历史，按复合键与 outcome 过滤）、通用事件上报 `reportTriggerEvents(eventName, items, workspaceUri)`、兼容入口 `reportSwarmNeedsAction`、`readRunReport`（PC 按 runId + 可选 authority 读 `report.md`）/ `onDidChangeTriggers` |
+| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`（由 query / control / run-event / workspace 四个子接口组合）：触发器与工作区列表、手动运行、暂停、激活确认（同时覆盖高权限模式）、`ensureConfigFile` / `rescanWorkspace` / `removeWorkspace`、运行目录、运行结束上报、`listRuns`（本机运行历史，按复合键与 outcome 过滤）、通用事件上报 `reportTriggerEvents(eventName, items, workspaceUri)`、`readRunReport`（PC 按 runId + 可选 authority 读 `report.md`）/ `onDidChangeTriggers` |
 | `ServiceChannels.TriggerRunHost`（`'triggerRunHost'`） | main → renderer | `ITriggerRunHost`：`startRun` / `cancelRun` / `isWorkspaceTrusted` |
 | `RemoteChannels.TriggerPoll`（`'triggerPoll'`） | main → 远端 server | `IRemoteTriggerService`：`poll` / `createRunDir` / `readReport`。DTO 路径一律 URI；runDir 布局由 server 拥有，客户端只传 `clientId` / `runId` 与保留策略（`keep` / `protectedRunIds`），清理由 `createRunDir` 一并完成 |
 
@@ -98,7 +98,7 @@ TriggerMainService ── IPC facade / summary / audit / history / 装配
 | --- | --- |
 | `apps/editor/src/shared/triggers/` | 纯逻辑（无 node / electron 依赖）：`types.ts`（契约与默认值）、`configParse.ts`（校验 + 示例 + `TRIGGERS_SCHEMA`，parser 与 JSON schema 同源）、`configDocument.ts`（JSONC 定位 / 字段写回 / 行号）、`cron.ts`、`scheduler.ts`、`dedupe.ts`、`runQueue.ts`、`backoff.ts`、`promptTemplate.ts`、`verdict.ts`（`result.json` 解析与安全路径校验） |
 | `packages/node-services/src/triggers/` | main 与远端 server 共用：`triggerProtocol.ts`（`triggerPoll` 契约）、`pollCommandFetcher.ts`、`runDirectories.ts`、`sessionReportReader.ts` |
-| `apps/editor/src/shared/ipc/triggerService.ts` | `ITriggerQueryService` / `ITriggerControlService` / `ITriggerRunEventService` / `ITriggerWorkspaceService` 与组合 `ITriggerMainService`、`ITriggerRunHost` 契约、`SwarmNeedsActionReview`、`SWARM_TRIGGER_EVENT_NAME` |
+| `apps/editor/src/shared/ipc/triggerService.ts` | `ITriggerQueryService` / `ITriggerControlService` / `ITriggerRunEventService` / `ITriggerWorkspaceService` 与组合 `ITriggerMainService`、`ITriggerRunHost` 契约；Swarm 专属的 `SwarmNeedsActionReview` / `SWARM_TRIGGER_EVENT_NAME` 在 `shared/triggers/swarmTriggerEvent.ts` |
 | `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（IPC facade + 装配）、`triggerCatalog.ts`、`triggerScheduler.ts`、`pollRunner.ts`、`triggerRunLedger.ts`、`triggerWindowHub.ts`、`triggerStateRepository.ts`、`triggerExecutionBackend.ts`、`triggerEventSources.ts`、`swarmTriggerEventSource.ts`、`triggerErrors.ts`、`triggerWorkspaceRegistry.ts`（登记表）、`triggerIdentity.ts`（复合键）、`workspaceTrustReader.ts`（main 侧信任探针）、`triggersConfigFile.ts`（JSONC 读取 + 示例 + 用户设置读取）、`triggerHistoryStore.ts`（`history.jsonl` 追加 / 轮转 / 读取）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts`、`runReportReader.ts`（`SessionReportReader`：UUID / realpath / 符号链接 / 512 KB / 10s 超时安全读取，手机网关与 PC 共用） |
 | `apps/editor/src/renderer/services/triggers/` | `TriggerRunHost.ts`、`automatedSessionService.ts`、`automatedPermissionPolicy.ts`、`automatedRunWatcher.ts`（含 `result.json` 判决解析）、`triggerReportEditorInput.ts`（报告标签页的虚拟 EditorInput）、`triggerManagerEditorInput.ts`（管理器单例 tab + 待选触发器传递）、`triggerConfigFileService.ts`（`IFileService` 读 / 写 `triggers.json` + mtime 冲突）、`revealTriggerConfig.ts`（打开并定位到触发器所在行）、`triggerSessionRevealService.ts`（`showSession` 的会话切换） |
 | `apps/editor/src/renderer/workbench/triggers/` | `TriggerReportEditor.tsx`（报告标签页）、`TriggerManagerEditor.tsx`（标签页外壳）+ `TriggerListPanel.tsx` / `useTriggerListModel.ts`（左列表）、`useTriggerManagerViewState.ts`（视图状态持久化）、`TriggerOverviewPanel.tsx`、`TriggerConfigPanel.tsx`、`TriggerCreateWizard.tsx` + `triggerTemplates.ts`、`TriggerRunsPanel.tsx`、共用区块 `Trigger{Source,Session,Budget,Concurrency}Fields.tsx`、`triggerSources/`（触发源描述符）；样式按组件各自 `*.module.css`。`renderer/services/triggers/triggerPresentation.ts` 放状态徽标 / 工作区分组 / 计数（仅 renderer 使用） |
@@ -246,7 +246,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 
 内置事件源 `swarm.reviewNeedsAction`（`source: { type: 'event', event: 'swarm.reviewNeedsAction' }`）。
 
-- renderer 的 `SwarmReviewNotificationContribution` 在每次轮询后，经 `SwarmTriggerReporter` 把**当前显示的审核列表**（与通知同一 `_computeDisplayed` 口径，含忽略集、作者过滤、可批准过滤）上报 `reportSwarmNeedsAction`（兼容 facade，等价于 `reportTriggerEvents('swarm.reviewNeedsAction', ...)`）。
+- renderer 的 `SwarmReviewNotificationContribution` 在每次轮询后，经 `SwarmTriggerReporter` 把**当前显示的审核列表**（与通知同一 `_computeDisplayed` 口径，含忽略集、作者过滤、可批准过滤）经 `reportTriggerEvents(SWARM_TRIGGER_EVENT_NAME, reviews, workspaceUri)` 上报。
 - 仅当存在 `enabled && source.type === 'event' && source.event === 'swarm.reviewNeedsAction'` 的触发器时才上报，避免无触发器时的额外 IPC。
 - payload：`reviewId` / `author` / `description`（截断 2000 字符）/ `state` / `swarmUrl`（本机配置的 Swarm 基地址，可能缺省）/ `swarmApiVersion`（用户设置 `perforce.swarm.apiVersion` 有值时带上，可能缺省）。**不再为每条审核查详情，也没有 `version` / `updated`**：写操作由 Agent 侧 CLI 在需要时自行读取最新状态。
 - main 侧通用路径 `reportTriggerEvents(eventName, items, workspaceUri)`：

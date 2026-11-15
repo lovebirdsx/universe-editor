@@ -89,7 +89,6 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly readRunReport = vi.fn(
     async (): Promise<TriggerRunReportReadResult> => ({ kind: 'not-found' }),
   )
-  readonly reportSwarmNeedsAction = vi.fn(async (): Promise<void> => undefined)
 }
 
 interface FakeTrust {

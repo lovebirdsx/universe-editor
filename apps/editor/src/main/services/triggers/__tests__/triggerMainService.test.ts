@@ -9,11 +9,11 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
 import { URI, type ILogger, type IOpenWindowInfo } from '@universe-editor/platform'
-import { SWARM_TRIGGER_EVENT_NAME } from '../../../../shared/ipc/triggerService.js'
-import type {
-  ITriggerRunHost,
-  SwarmNeedsActionReview,
-} from '../../../../shared/ipc/triggerService.js'
+import type { ITriggerRunHost } from '../../../../shared/ipc/triggerService.js'
+import {
+  SWARM_TRIGGER_EVENT_NAME,
+  type SwarmNeedsActionReview,
+} from '../../../../shared/triggers/swarmTriggerEvent.js'
 import type { TriggerRunRequest, TriggerSummary } from '../../../../shared/triggers/types.js'
 import { MAX_TRIGGER_REPORT_BYTES } from '../../../../shared/triggers/types.js'
 import {
@@ -630,15 +630,24 @@ describe('TriggerMainService dedupe', () => {
     })
     await openGate(harness)
 
-    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1')],
+      localUri(harness.workspace),
+    )
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
 
-    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1')],
+      localUri(harness.workspace),
+    )
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
 
-    await harness.service.reportSwarmNeedsAction(
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
       [review('1'), review('2')],
       localUri(harness.workspace),
     )
@@ -649,7 +658,8 @@ describe('TriggerMainService dedupe', () => {
     expect(harness.requests[0]?.prompt).toContain('"swarmUrl":"https://swarm.example.com/branch_x"')
     expect(harness.requests[0]?.prompt).toContain('"swarmApiVersion":"v9"')
 
-    await harness.service.reportSwarmNeedsAction(
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
       [review('1'), review('2')],
       localUri(harness.workspace),
     )
@@ -706,13 +716,25 @@ describe('TriggerMainService dedupe', () => {
     })
     await openGate(harness)
     // First report seeds the baseline with review 0.
-    await harness.service.reportSwarmNeedsAction([review('0')], localUri(harness.workspace))
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('0')],
+      localUri(harness.workspace),
+    )
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
 
     await Promise.all([
-      harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace)),
-      harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace)),
+      harness.service.reportTriggerEvents(
+        SWARM_TRIGGER_EVENT_NAME,
+        [review('1')],
+        localUri(harness.workspace),
+      ),
+      harness.service.reportTriggerEvents(
+        SWARM_TRIGGER_EVENT_NAME,
+        [review('1')],
+        localUri(harness.workspace),
+      ),
     ])
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.requests[0]?.origin.eventKey).toBe('swarm:1')
@@ -2007,7 +2029,11 @@ describe('TriggerMainService backoff gate', () => {
       },
     })
     await openGate(harness)
-    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1')],
+      localUri(harness.workspace),
+    )
     await settle()
     expect(harness.startRun).not.toHaveBeenCalled()
     expect(
@@ -2018,7 +2044,11 @@ describe('TriggerMainService backoff gate', () => {
     ).toBe(false)
 
     await harness.clock.advance(2 * 60_000)
-    await harness.service.reportSwarmNeedsAction([review('1')], localUri(harness.workspace))
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1')],
+      localUri(harness.workspace),
+    )
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 
@@ -2501,7 +2531,11 @@ describe('TriggerMainService workspace activation gate', () => {
     )!.key
     await confirmTrigger(harness.service, secondKey)
 
-    await harness.service.reportSwarmNeedsAction([review('1')], URI.file(second).toString())
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1')],
+      URI.file(second).toString(),
+    )
 
     const state = await stateOf(harness)
     expect(state.triggers[secondKey]?.baselineDone).toBe(true)
@@ -2526,7 +2560,11 @@ describe('TriggerMainService workspace activation gate', () => {
       authority: 'dev',
       path: '/home/testuser/proj',
     })
-    await harness.service.reportSwarmNeedsAction([review('1')], remote.toString())
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1')],
+      remote.toString(),
+    )
     await settle()
 
     const state = await stateOf(harness)
@@ -2548,7 +2586,7 @@ describe('TriggerMainService workspace activation gate', () => {
     })
     await openGate(harness)
 
-    await harness.service.reportSwarmNeedsAction([review('1')], '')
+    await harness.service.reportTriggerEvents(SWARM_TRIGGER_EVENT_NAME, [review('1')], '')
     await settle()
 
     const state = await stateOf(harness)

@@ -13,7 +13,10 @@ import type {
   SwarmReviewDto,
   SwarmTransitionDto,
 } from '@universe-editor/extensions-common'
-import type { SwarmNeedsActionReview } from '../../../shared/ipc/triggerService.js'
+import {
+  SWARM_TRIGGER_EVENT_NAME,
+  type SwarmNeedsActionReview,
+} from '../../../shared/triggers/swarmTriggerEvent.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
 
 // Avoid pulling the editor/platform-heavy swarmActions graph; the contribution only
@@ -112,7 +115,7 @@ function fakeLoggerService() {
 function fakeTriggerMain() {
   return {
     listTriggers: vi.fn(async () => [] as readonly TriggerSummary[]),
-    reportSwarmNeedsAction: vi.fn(async () => undefined),
+    reportTriggerEvents: vi.fn(async () => undefined),
     onDidChangeTriggers: new Emitter<readonly TriggerSummary[]>().event,
   } as never
 }
@@ -238,12 +241,16 @@ async function setup(opts: SetupOpts = {}) {
 
   const triggerChange = new Emitter<readonly TriggerSummary[]>()
   const listTriggers = vi.fn(async () => opts.triggers ?? [])
-  const reportSwarmNeedsAction = vi.fn(
-    async (_reviews: readonly SwarmNeedsActionReview[], _workspaceUri: string) => undefined,
+  const reportTriggerEvents = vi.fn(
+    async (
+      _eventName: string,
+      _reviews: readonly SwarmNeedsActionReview[],
+      _workspaceUri: string,
+    ) => undefined,
   )
   const triggerMain = {
     listTriggers,
-    reportSwarmNeedsAction,
+    reportTriggerEvents,
     onDidChangeTriggers: triggerChange.event,
   } as never
 
@@ -274,7 +281,7 @@ async function setup(opts: SetupOpts = {}) {
     configValues,
     fireConfigChange,
     listTriggers,
-    reportSwarmNeedsAction,
+    reportTriggerEvents,
     triggerChange,
     logger,
     dispose: () => {
@@ -1301,7 +1308,8 @@ describe('SwarmReviewNotificationContribution', () => {
       })
       await t.refresh()
       await flush()
-      expect(t.reportSwarmNeedsAction).toHaveBeenCalledWith(
+      expect(t.reportTriggerEvents).toHaveBeenCalledWith(
+        SWARM_TRIGGER_EVENT_NAME,
         [
           {
             reviewId: '1',
@@ -1329,11 +1337,11 @@ describe('SwarmReviewNotificationContribution', () => {
         initialNeedsAction: [review('1')],
       })
       await flush()
-      t.reportSwarmNeedsAction.mockClear()
+      t.reportTriggerEvents.mockClear()
       await t.refresh()
       await flush()
-      expect(t.reportSwarmNeedsAction).toHaveBeenCalledTimes(1)
-      expect(t.reportSwarmNeedsAction.mock.calls[0]![1]).toBe(folder.toString())
+      expect(t.reportTriggerEvents).toHaveBeenCalledTimes(1)
+      expect(t.reportTriggerEvents.mock.calls[0]![2]).toBe(folder.toString())
       t.dispose()
     })
 
@@ -1344,7 +1352,7 @@ describe('SwarmReviewNotificationContribution', () => {
       })
       await t.refresh()
       await flush()
-      expect(t.reportSwarmNeedsAction).not.toHaveBeenCalled()
+      expect(t.reportTriggerEvents).not.toHaveBeenCalled()
       t.dispose()
     })
 
@@ -1355,7 +1363,7 @@ describe('SwarmReviewNotificationContribution', () => {
         initialNeedsAction: [review('1')],
       })
       await t.refresh()
-      expect(t.reportSwarmNeedsAction).not.toHaveBeenCalled()
+      expect(t.reportTriggerEvents).not.toHaveBeenCalled()
       t.dispose()
     })
 
@@ -1365,12 +1373,12 @@ describe('SwarmReviewNotificationContribution', () => {
         triggers: [triggerSummary()],
       })
       await flush()
-      expect(t.reportSwarmNeedsAction).toHaveBeenCalledTimes(1)
-      t.reportSwarmNeedsAction.mockClear()
+      expect(t.reportTriggerEvents).toHaveBeenCalledTimes(1)
+      t.reportTriggerEvents.mockClear()
       t.setDashboard([review('1'), review('2', { author: 'me' })], [review('2', { author: 'me' })])
       await t.refresh()
       await flush()
-      const payload = t.reportSwarmNeedsAction.mock.calls.at(-1)![0]
+      const payload = t.reportTriggerEvents.mock.calls.at(-1)![1]
       expect(payload.map((entry) => entry.reviewId)).toEqual(['1'])
       t.dispose()
     })
