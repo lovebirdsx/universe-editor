@@ -82,15 +82,16 @@ describe('parseDeliveryArgs', () => {
   })
 
   it('parses all supported options in both value forms', () => {
+    const absoluteCwd = process.platform === 'win32' ? 'X:/repo' : '/repo'
     expect(
       parseDeliveryArgs(
-        ['--message', 'feat: 摘要', '--dry-run', '--json', '--target=main', '--cwd', 'X:/repo'],
+        ['--message', 'feat: 摘要', '--dry-run', '--json', '--target=main', '--cwd', absoluteCwd],
         '/caller',
       ),
     ).toEqual({
       ok: true,
       options: {
-        cwd: 'X:/repo',
+        cwd: absoluteCwd,
         message: 'feat: 摘要',
         targetBranch: 'main',
         dryRun: true,
