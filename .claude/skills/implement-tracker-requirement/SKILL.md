@@ -86,8 +86,11 @@ clone（例如 `X:/workspace/ue-bot`）里。**一次运行只处理 prompt 中�
 
 ## 5. 推送
 
-提交与推送的安全约定沿用 `.claude/skills/commit-push-sync-worktrees/SKILL.md`：
-不 force、不 `--no-verify`、不推送不属于本次运行提交的内容。
+提交与推送的安全底线沿用 skill `deliver-to-main` 与 [交付流水线](../../../docs/development/delivery.md)：
+不 force push、不 `--no-verify`、不推送不属于本次运行提交的内容。`pnpm deliver` 在 main 与
+upstream 分叉时直接拒绝（`main_diverged`），需先人工处理；在子包目录调用时用 `pnpm -w deliver`。
+`push_unverified` / `push_failed` 表示 main 可能已停在交付提交，先核对远端，不要盲目重新交付。
+本 bot clone 流程仍按下文直接 `git push origin main`，仅在非快进时 rebase 一次。
 
 1. `git push origin main`。
 2. 被拒（非快进）时：

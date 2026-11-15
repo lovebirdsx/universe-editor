@@ -38,6 +38,7 @@ App 本体的发布（版本 bump、打包、上传，及 push `vX.Y.Z` tag 后�
 - [Git 提交信息规范](git-commit-msg-rule.md) — 提交格式、类型前缀（发布说明不再由提交生成，见下条）。
 - [远程开发（remote-ssh / WSL）](remote-dev.md) — daemon+TCP 传输与协议 bump 自愈链、URI/scheme 与 authority 规范形、部署链（tar/scp 盘符、bundle 哈希）、Windows 远端主机（平台探测 / cmd 契约 / WMI 逃 job kill / 路径展示）、WSL 直连、远端终端与 extension host、远端 agent 二进制受管下载、实机验收方法论与已知限制。
 - [手机网关（手机遥控 ACP 会话）](mobile-gateway.md) — PWA 遥控器定位与第一期范围、main 网关 + renderer 桥架构、快照/增量与 seq、协议包、双端审批仲裁与 plan 倒计时下沉、配对与安全、Tailscale/局域网传输档位、通知与里程碑（设计已定稿，未实现）。
+- [交付到 main（delivery）](delivery.md) — 手机与 CLI 共用的交付引擎：git 扩展交付原语 + 两套编排（renderer `SessionDeliveryService` / CLI `deliveryPipeline`）、共享目录锁、CLI 用法与退出码、撤销与失败恢复、三种 worktree 同步语义对照。
 - [Agent 触发器（Triggers）](triggers.md) — main 单例调度 + 窗口反向运行宿主；四类源（manual / schedule / poll / event）、持久去重与排队退避、单次激活确认（同时覆盖高权限模式）、自动化会话权限策略（覆盖个人自动放行、runDir 一次性放行）、预算与审批超时看门狗、`result.json` 判决（info / escalate）、Swarm 写操作由模板 CLI 自行完成、会话徽标与手机协议、30 条自动化历史上限。
 - [需求自动处理（tracker 自动化）](tracker-automation.md) — 零依赖 MCP 适配器（Stdio JSON-RPC + board 映射）、poll 触发器 + skill 的认领/分级/实现/推送链路、push 前范围闸门（文件数/行数/禁改路径/每日配额）与专用 bot clone 部署。
 - [CI 失败自动修复（GitHub Actions）](ci-automation.md) — 轮询 main 上最新失败的 `ci.yml` run、flake 先 rerun、回归本地修复、`Refs: ci#` 独立配额（3 条/24h）与 gate hook 的 `--refs-prefix` 泛化；专用 bot clone 与防循环规则。

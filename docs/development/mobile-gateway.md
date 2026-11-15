@@ -403,7 +403,7 @@ hasPendingElicitation / backgroundTaskCount / imageSupported? / updatedAt`（会
 | `session_busy`         | 会话正在运行，fork 被拒绝                                                        |
 | `rate_limited`         | 触发速率限制（含附件配额已满）                                                   |
 | `attachment_not_found` | 附件不存在、已过期或属于其他设备                                                 |
-| `delivery_busy`        | 同一仓库已有交付在运行（含其它窗口），或交付期间该 worktree 被占用、其会话被删除 |
+| `delivery_busy`        | 同一仓库已有交付在运行（含其它窗口或 CLI 持锁），或交付期间该仓库的会话被占用 / 删除 |
 | `delivery_not_found`   | 交付 id 不存在、已被清理，或不属于该会话                                         |
 | `delivery_conflict`    | main / 远端已移动、push 被拒或冲突无法自动解决，需要人工处理                     |
 | `delivery_unsupported` | 仓库形态不满足交付条件（bare / detached main / 无唯一 upstream / 合并提交等）    |
@@ -639,74 +639,18 @@ live 实例、尽力删除 agent transcript、写历史墓碑、关闭编辑器�
 `git.agentDelivery.*` 命令里完成；renderer 的 `SessionDeliveryService` 只做状态机与编排，
 main 与手机都不执行 git。
 
-**执行模型**：`startDelivery` 只执行 `_prepareStart`（session guard → `inspect` / expectation
-校验 → blockers → `acquireLock` → 写 record + 启动心跳），成功即返回 `{ deliveryId }`；
-`_runStart`（`begin` → 提交信息 / `commitSource` → cherry-pick → `awaiting_push`）以
-fire-and-forget 在 renderer 继续，手机确认页随即关闭，可自由浏览其它会话。后台链路整体
-try/catch，逃逸异常走 `_failDeliverySafely`：基于**最新** record 隔离执行
-`abortPick` / `restoreMain` / `releaseLock`，最终落 `failed`，失败状态经既有 inbox delta 下发。
-`confirmDeliveryPush` 同样拆成 `_prepareConfirmPush`（校验 → `_ensureLock` → 落 `pushing` 并等
-落盘）与 `_runPush`（`promoteAndPush` → `_syncRecord`）：手机在发命令前先关闭确认弹层，成功
-返回即表示推送已被受理，push 与 worktree 同步在后台继续。`_runPush` 的逃逸异常走
-`_failPushSafely`：先经 `_remoteDeliveryState` 复核远端（扩展 RPC 可能在 push 已成功后 reject），
-`pushed` 转同步、`local_only` 回到 `awaiting_push`，否则释放锁并落 `failed`；整条路径**保留临时
-worktree**，供「重试」再次推送。同实例用 `_pushInFlight` 防止重复确认，跨窗口仍由目录锁兜底。
-`retryDelivery` 的「重新交付」分支、失败推送重试分支同样后台执行；同步重试与撤销仍是同步命令。
+**命令受理语义**：`startDelivery` 在 session guard、`inspect` / expectation 校验、blockers、
+`acquireLock` 并落 record（含心跳）后即返回 `{ deliveryId }`；提交信息 side task 与
+`begin` / `commitSource` / cherry-pick 等在 renderer 后台继续，手机确认页随即关闭。
+`confirmDeliveryPush` 在落 `pushing` 后即返回，前移 main、push 与 worktree 同步在后台继续。
+手机在发命令前先关闭确认弹层，后续阶段经既有 inbox delta 下发。`retryDelivery` 的「重新交付」
+与失败推送重试分支同样后台执行；同步重试与撤销仍是同步命令。
 
-**流水线**（阶段即 `MobileDeliveryPhase`）：
-
-1. `preflighting`：`inspect`（可 fetch）后获取跨窗口/目录锁；main 必须干净、无进行中操作且
-   能从 upstream ff-only 前移；`begin` 记录 `mainHeadBefore` / `mainHeadAfter`。
-2. `committing`：源 worktree 干净则跳过。脏时基于原会话 fork 一个 **internal 只读 side task**
-   生成 commit message（imperative subject ≤72 字符，可带空行 + 简短 body）；renderer 把
-   `changeContext` 的 status + 文件 diff 附进 prompt，发送前后校验变更指纹一致；随后由编辑器
-   执行 `commitSource`（`git add -A` + `git commit`）。side task 失败 / 超时（90s）/ 空消息 /
-   指纹变化一律终止交付：不落固定文案、不继续 cherry-pick。
-3. `cherry_picking`：在 main worktree 同级创建 detached 临时 worktree
-   （`.universe-editor-delivery-worktrees/<shortId>`），逐个 cherry-pick 源分支相对 main 的提交；
-   空提交记入 `skippedEmpty`；合并提交 v1 直接 `delivery_unsupported`。
-4. `resolving_conflict`：冲突时创建一个隐藏的 internal 可写 ACP 会话（cwd = 临时 worktree），
-   提示只允许编辑冲突文件，最多 1 次。完成后扩展校验「修改文件集合 ⊆ 冲突文件集合」「无残留
-   冲突标记」「无未合并路径」，再 `git add -A` + `cherry-pick --continue`。任一步失败则 abort
-   临时树、恢复 main、阶段 `failed`。internal 会话的权限策略：只对 cwd 内的
-   `read/edit/delete/move/search` 选 `allow_once`（没有一次性选项就拒绝），
-   `execute/fetch/switch_mode/other` 一律拒绝，不写 `allow_always`，elicitation 直接 cancel。
-5. `awaiting_push`：全部提交就绪，main 仍停在交付前。手机详情页显示 commit 列表与「确认推送」。
-   **只有用户确认**才 `promoteAndPush`：写前再次校验 main 仍在该目标分支、HEAD 仍为 `baseSha`、
-   干净、`baseSha` 是 `tempHead` 祖先 → `reset --hard tempHead` → `git push`（绝不 `--force`）。
-   push 返回成功还不够：随后 fetch 并解析远端引用，必须等于 `tempHead`。验证 fetch 用较短超时
-   重试三次以吸收网络抖动；仍失败则记为 `push_unverified`（推送多半已落地，main 已前移时不自动
-   回滚），手机提示用户「重试」确认，而不是报成 `push_failed`。push 本身失败且 main 仍安全时
-   恢复 `baseSha`。
-   手机确认后弹层立即关闭，阶段转 `pushing`，后续 push 与 `syncing` 都在 renderer 后台执行；失败
-   保留临时 worktree，用户可在详情里「重试」。
-6. `syncing`：源 worktree 仅在 HEAD == `expectedSourceHead`、干净、无进行中时重置到新 main；
-   其他 worktree 只在「干净 + 无进行中 + 是 newHead 祖先」时快进，其余跳过并记录原因
-   （`skipped_dirty` / `skipped_in_progress` / `skipped_diverged` / `skipped_source_changed`）。
-7. `synced` / `partial`：全部成功，或部分 worktree 跳过 / 失败；main 已推送不回滚。
-
-**撤销**：`undoDelivery` 只允许最近一次交付。未推送：main 仍在期望 head 且干净时恢复到交付前；
-已推送：要求 main/upstream 仍等于 `pushedSha`，按逆序 `git revert --no-edit`，冲突则
-`revert --abort` 并失败，绝不 force push；成功后重新同步 worktree。撤销失败后记录
-`failedAction:'undo'`，手机「重试」继续撤销而不是转成重新交付。
-
-**失败原则**：任何一步失败都终止并清理；只有 main 仍在预期提交且干净时才 reset 恢复；绝不
-stash、绝不 reset 有独立提交的 worktree、绝不 force push。失败详情写进记录，手机可「重试」。
-
-**跨窗口互斥**：同一仓库同一时间只允许一个交付，三层防线：renderer 的
-`SessionDeliveryService` 内存记录（同窗口 guard）、hub 的 `getDeliveryContext` /
-`listActiveDeliveries` 跨窗口探测（路径身份比较，远程 authority 用字节前缀）、git 扩展的
-`<common-dir>/universe-editor/delivery.lock/owner.json` 目录锁（10 分钟 TTL + 心跳 + 同 host
-PID 存活判断，释放校验 token）。锁 owner 记录窗口实例 id：重启后的记录不复用持久化 token 直接
-心跳，而是重新尝试 acquire（被活窗口持有时保持 busy）；owner 缺失但目录刚创建（初始化窗口期）
-时视为占用中、不清理。交付期间，同 repo 源 / main worktree 的新 `sendPrompt` /
-`newSession` 被拒绝（`delivery_busy`），避免 agent 在交付中途改写源树；删除源会话同样被拒绝。
-
-**重启恢复**：`awaiting_push` 继续持有锁；`pushing` 只信远端状态——远端已是 `tempHead` 转同步，
-本地 main 已是 `tempHead` 但远端没有则回到 `awaiting_push`（可再次确认推送），其余 `failed`
-且不回滚；其它中间态 abort 临时树 + 恢复 main + `failed`。后台 push 的异常收尾
-（`_failPushSafely`）复用同一套 `_remoteDeliveryState` 判断，因此运行中出错与重启恢复的结论一致。
-源会话不在 live 时按 durable id 非激活恢复，让收件箱行重新出现；恢复失败则直接失败并释放锁。
+同一仓库同一时间只允许一个交付：手机入口与 `pnpm deliver` 共用
+`<common-dir>/universe-editor/delivery.lock`，冲突时返回 `delivery_busy`。CLI 持锁期间，手机对
+**同仓库**的 `sendPrompt` / `newSession` / `deleteSession` 也会被仓库级 `delivery_busy` 拒绝。
+交付引擎（git 扩展 delivery 原语）的流水线阶段、加锁与心跳、失败清理、重启恢复、撤销与 worktree
+同步语义见 [delivery.md](delivery.md)；本节以下只保留手机协议投影。
 
 **手机投影**：会话摘要带 `delivery?`（阶段、commit 数、可否推送/重试/撤销、同步计数）与
 `deliveryAvailable?`；收件箱行有 badge 与顶部汇总（进行中显示阶段 pill：单条显示阶段名，多条
@@ -739,9 +683,9 @@ Toast；首次观察只建立 baseline，重连 snapshot 不会误弹，不新�
 不按窗口收敛。实现见 `apps/mobile/src/inbox/deliveryOwnership.ts`；PC 端
 `SessionDeliveryService` 与协议不变。
 
-**刻意限制**：合并提交不支持；单次交付最多 200 个提交（preview 直接给 `unsupported` blocker）；
+**实现限制**：合并提交不支持；单次交付最多 200 个提交（preview 直接给 `unsupported` blocker）；
 main worktree 必须存在且不在 detached HEAD，目标分支须有唯一 upstream；v1 不做自动交付、
-自动 review 或分叉 worktree 自动 rebase。
+自动 review 或分叉 worktree 自动 rebase。完整限制与 CLI 行为见 [delivery.md](delivery.md)。
 
 ## 6e. 推送会话分支（协议 v16）
 
