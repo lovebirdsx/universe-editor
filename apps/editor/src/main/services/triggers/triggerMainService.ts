@@ -611,6 +611,17 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     return URI.file(file).toString()
   }
 
+  /**
+   * Re-run discovery for one workspace without touching its config file. Used by
+   * the manager so a `triggers.json` added after the workspace opened (pull /
+   * branch switch) gets registered without going through `ensureConfigFile`.
+   */
+  async rescanWorkspace(workspaceFolder: string): Promise<void> {
+    const folder = parseWorkspaceUri(workspaceFolder)
+    if (folder === undefined) return
+    await this._discoverWorkspace(folder)
+  }
+
   private async _ensureRemoteConfigFile(folder: URI): Promise<string> {
     const authority = this._workspaceAuthority(folder)
     const fileService = this._fileService

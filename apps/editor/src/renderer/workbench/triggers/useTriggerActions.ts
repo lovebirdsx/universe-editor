@@ -30,6 +30,7 @@ import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   confirmTriggerActivation,
   openTriggerConfig,
+  rescanTriggerWorkspace,
   runTriggerAction,
   runTriggerNow,
   setAllTriggersPaused,
@@ -46,6 +47,7 @@ export interface TriggerManagerActions {
   readonly setAllPaused: (paused: boolean) => Promise<void>
   readonly confirmActivation: (summary: TriggerSummary) => Promise<void>
   readonly openConfig: () => Promise<void>
+  readonly rescan: () => Promise<void>
   readonly revealInJson: (summary: TriggerSummary) => Promise<void>
   readonly showLog: () => Promise<void>
 }
@@ -112,6 +114,7 @@ export function useTriggerActions(): TriggerManagerActions {
       confirmActivation: (summary) =>
         runTriggerAction(services, () => confirmTriggerActivation(services, summary)),
       openConfig: () => runTriggerAction(services, () => openTriggerConfig(services)),
+      rescan: () => runTriggerAction(services, () => rescanTriggerWorkspace(services)),
       revealInJson: (summary) =>
         runTriggerAction(services, () =>
           revealTriggerConfig({ files, editors, editorService, groups, uriIdentity }, summary),

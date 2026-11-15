@@ -9,7 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { FileJson, Pause, Play, Plus, ScrollText } from 'lucide-react'
+import { FileJson, Pause, Play, Plus, RefreshCw, ScrollText } from 'lucide-react'
 import { localize, type IEditorInput, type URI } from '@universe-editor/platform'
 import {
   Badge,
@@ -72,6 +72,7 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [now, setNow] = useState(() => Date.now())
   const [createOpen, setCreateOpen] = useState(false)
+  const [rescanning, setRescanning] = useState(false)
   const [pendingCreated, setPendingCreated] = useState<
     { readonly workspace: string; readonly id: string } | undefined
   >(undefined)
@@ -85,6 +86,15 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
     listReady: loaded,
     selectionKeys,
   })
+
+  const runRescan = useCallback(async () => {
+    setRescanning(true)
+    try {
+      await actions.rescan()
+    } finally {
+      setRescanning(false)
+    }
+  }, [actions])
 
   // Subscribe before the initial fetch: an update that lands between the fetch
   // and the subscription would otherwise be lost until the next change.
@@ -113,6 +123,11 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
     }
   }, [triggers])
 
+  // A restored manager tab never runs the open command, so rescan here as well;
+  // main treats it as a read-only, idempotent discovery.
+  useEffect(() => {
+    void runRescan()
+  }, [runRescan])
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), TIME_TICK_MS)
     return () => clearInterval(timer)
@@ -288,7 +303,7 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
           </div>
 
           <div
-            {...navigation.containerProps}
+            {...(summaries.length > 0 ? navigation.containerProps : {})}
             ref={listRef}
             className={styles['list']}
             data-testid="trigger-manager-list"
@@ -306,8 +321,23 @@ export function TriggerManagerEditor({ input }: TriggerManagerEditorProps) {
               </div>
             )}
             {loaded && loadError === undefined && summaries.length === 0 && (
-              <div className={styles['state']} data-testid="trigger-manager-empty">
-                {localize('trigger.manager.empty', 'No triggers are configured yet.')}
+              <div className={styles['emptyState']} data-testid="trigger-manager-empty">
+                <div>{localize('trigger.manager.empty', 'No triggers are configured yet.')}</div>
+                <div className={styles['emptyHint']}>
+                  {localize(
+                    'trigger.manager.emptyHint',
+                    'If .universe-editor/triggers.json was added by a Git pull or branch switch, rescan the workspace.',
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  busy={rescanning}
+                  onClick={() => void runRescan()}
+                  data-testid="trigger-manager-rescan"
+                >
+                  <RefreshCw size={14} strokeWidth={1.75} />
+                  {localize('trigger.manager.rescan', 'Rescan')}
+                </Button>
               </div>
             )}
             {loaded && summaries.length > 0 && filtered.length === 0 && (

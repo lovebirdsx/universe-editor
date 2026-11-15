@@ -3,7 +3,7 @@
  *  Fake clock + fake window hosts + temp userData dirs; no Electron.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
@@ -207,6 +207,8 @@ interface HarnessOptions {
   readonly autoConfirm?: boolean
   /** Set false to keep first-seen triggers paused (default: resume them). */
   readonly autoResume?: boolean
+  /** Start without a workspace triggers.json (window opened before a pull). */
+  readonly skipConfigFile?: boolean
 }
 
 interface Harness {
@@ -238,16 +240,25 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
   const triggerDir = join(dir, 'triggers')
   await mkdir(triggerDir, { recursive: true })
   const configFile = join(workspace, '.universe-editor', 'triggers.json')
-  await mkdir(dirname(configFile), { recursive: true })
-  const config = {
-    version: 1,
-    triggers: options.triggers?.(workspace) ?? [],
+  if (options.skipConfigFile !== true) {
+    await mkdir(dirname(configFile), { recursive: true })
+    const config = {
+      version: 1,
+      triggers: options.triggers?.(workspace) ?? [],
+    }
+    await writeFile(configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
   }
-  await writeFile(configFile, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
   // The registry is what keeps a workspace scheduled after its windows close.
   await writeFile(
     join(triggerDir, 'workspaces.json'),
-    `${JSON.stringify({ version: 2, workspaces: [URI.file(workspace).toString()] }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        version: 2,
+        workspaces: options.skipConfigFile === true ? [] : [URI.file(workspace).toString()],
+      },
+      null,
+      2,
+    )}\n`,
     'utf8',
   )
   const state = typeof options.state === 'function' ? options.state(workspace) : options.state
@@ -1910,6 +1921,53 @@ describe('TriggerMainService list / pause', () => {
     expect(text).toContain('"version": 1')
     await harness.service.ensureConfigFile(workspace)
     expect(await readFile(harness.configFile, 'utf8')).toBe(text)
+  })
+})
+
+describe('TriggerMainService workspace rescan', () => {
+  function readRegistry(dir: string): Promise<{ workspaces: string[] }> {
+    return readFile(join(dir, 'triggers', 'workspaces.json'), 'utf8').then(
+      (text) => JSON.parse(text) as { workspaces: string[] },
+    )
+  }
+
+  it('discovers a triggers.json created after the workspace opened, idempotently', async () => {
+    const harness = await createHarness({ skipConfigFile: true, autoConfirm: false })
+    const workspace = URI.file(harness.workspace).toString()
+    expect(await harness.service.listTriggers()).toEqual([])
+
+    await mkdir(dirname(harness.configFile), { recursive: true })
+    await writeFile(
+      harness.configFile,
+      `${JSON.stringify({ version: 1, triggers: [makeTrigger(harness.workspace)] }, null, 2)}\n`,
+      'utf8',
+    )
+    await harness.service.rescanWorkspace(workspace)
+
+    const list = await harness.service.listTriggers()
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({
+      id: 'trigger-1',
+      paused: true,
+      activationConfirmed: false,
+    })
+    expect((await readRegistry(harness.dir)).workspaces).toEqual([workspace])
+
+    await harness.service.rescanWorkspace(workspace)
+    expect(await harness.service.listTriggers()).toHaveLength(1)
+    expect((await readRegistry(harness.dir)).workspaces).toEqual([workspace])
+  })
+
+  it('skips a missing config file without creating it', async () => {
+    const harness = await createHarness({ skipConfigFile: true })
+    const workspace = URI.file(harness.workspace).toString()
+
+    await harness.service.rescanWorkspace(workspace)
+    await harness.service.rescanWorkspace(workspace)
+
+    expect(await harness.service.listTriggers()).toEqual([])
+    await expect(stat(harness.configFile)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await readRegistry(harness.dir)).workspaces).toEqual([])
   })
 })
 

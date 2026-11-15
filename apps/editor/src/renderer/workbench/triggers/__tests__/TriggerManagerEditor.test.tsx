@@ -154,6 +154,7 @@ function renderEditor(options: HarnessOptions = {}) {
       triggerCount: 0,
     },
   ])
+  const rescanWorkspace = vi.fn(async () => undefined)
   const files = new FakeFiles()
   const storage = options.storage ?? new FakeStorage()
 
@@ -163,6 +164,7 @@ function renderEditor(options: HarnessOptions = {}) {
     _serviceBrand: undefined,
     listTriggers,
     listWorkspaces,
+    rescanWorkspace,
     ensureConfigFile: vi.fn(async () => ''),
     setPaused,
     setAllPaused,
@@ -244,6 +246,7 @@ function renderEditor(options: HarnessOptions = {}) {
     runNow,
     listTriggers,
     listRuns,
+    rescanWorkspace,
     subscriptionDispose,
     fireChange: (list: readonly TriggerSummary[]) => act(() => changeEmitter.fire(list)),
   }
@@ -629,5 +632,19 @@ describe('TriggerManagerEditor', () => {
         StorageScope.GLOBAL,
       ),
     )
+  })
+
+  it('rescans on mount and from the empty state', async () => {
+    const harness = renderEditor({ summaries: [] })
+    await screen.findByTestId('trigger-manager-empty')
+    const workspace = URI.file('X:/workspace').toString()
+    await waitFor(() => expect(harness.rescanWorkspace).toHaveBeenCalledWith(workspace))
+
+    harness.rescanWorkspace.mockClear()
+    fireEvent.click(screen.getByTestId('trigger-manager-rescan'))
+    await waitFor(() => expect(harness.rescanWorkspace).toHaveBeenCalledWith(workspace))
+
+    harness.fireChange([summary({ id: 'pulled', name: 'Pulled Trigger' })])
+    expect(await screen.findByTestId('trigger-manager-row')).toBeDefined()
   })
 })

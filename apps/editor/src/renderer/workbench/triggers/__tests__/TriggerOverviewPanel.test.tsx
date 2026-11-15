@@ -44,6 +44,7 @@ function makeActions(): TriggerManagerActions {
     setAllPaused: vi.fn(async () => undefined),
     confirmActivation: noop,
     openConfig: noop,
+    rescan: noop,
     revealInJson: noop,
     showLog: noop,
   }

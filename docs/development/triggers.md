@@ -7,7 +7,7 @@ Agent 触发器的实现说明：主进程单例调度器 + 每窗口反向运�
 ## 1. 定位与边界
 
 - **配置是工作区级的**：定义存在 `<workspace>/.universe-editor/triggers.json`（可提交入库），工作区由文件所在目录隐式确定，文件里没有 `workspace` 字段。全局并发上限属于机器资源，读用户设置 `triggers.maxConcurrentRuns`。工作区可以是本地文件夹，也可以是远程工作区（`remote-ssh://<authority>/<path>`）；两者共用同一套配置语义，差别只在「在哪执行」与「何时可调度」（见 §2 与 §4）。
-- **后台发现 = 打开过即登记**：窗口打开含该文件的工作区（或执行 `openConfig`）时，main 把工作区登记进 `<userData>/triggers/workspaces.json`，为它建配置读取通路；本地工作区在窗口关闭后继续调度，远程工作区则要求窗口保持打开（§4）。目录 / 文件消失时跳过并在日志体现。`workbench.action.triggers.removeWorkspace` 可把工作区移出登记表（停止调度）。登记表存**工作区 URI**（version 2，旧裸路径数据作废、不迁移）。
+- **后台发现 = 打开过即登记**：窗口打开含该文件的工作区、执行 `openConfig`，或打开触发器管理器（对调用窗口的当前工作区做一次幂等重扫；文件不存在只跳过、不创建）时，main 把工作区登记进 `<userData>/triggers/workspaces.json`，为它建配置读取通路；本地工作区在窗口关闭后继续调度，远程工作区则要求窗口保持打开（§4）。目录 / 文件消失时跳过并在日志体现。`workbench.action.triggers.removeWorkspace` 可把工作区移出登记表（停止调度）。登记表存**工作区 URI**（version 2，旧裸路径数据作废、不迁移）。
 - **本机激活闸门**：每条工作区触发器的定义指纹必须在本机确认一次（`workbench.action.triggers.confirmActivation`，存 `state.json` 的 `activationConfirmed`）。**这一次确认同时覆盖高权限模式**，`allowElevatedMode` 由它推导（见 §7）。未确认时不调度、不执行 poll 取数命令、不允许 `runNow`；定义一改指纹即失效。
 - **默认关闭**：`enabled` 缺省 `false`；全部关闭时不创建调度 / 轮询定时器（仅保留启动门控那一个定时器）。
 - **主进程单例**：调度、去重、状态、审计都在 main。renderer 只负责建会话、跑 Agent、收结果、解析判决。
@@ -136,7 +136,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 
 - **本地工作区**：`JsonConfigFileStore` 直接读 `<workspace>/.universe-editor/triggers.json`，由该目录 watcher 驱动外部编辑热加载。
 - **远程工作区**：同一份文件经远程文件服务读取，热加载由远端目录 watcher 驱动；每次远程 I/O 前先看该 authority 的连接状态，只有 `connected` 才发起（状态查询是同步读，不建连接、不触发 SSH bring-up），断连时 watcher 传输同步 dispose，避免旧代理在重连后继续悬挂。重连后重新挂载并重读配置。
-- 两种形态共用 `parseTriggersConfig()` / 指纹 / 无效配置降级规则（见上）；远程配置的「已打开窗口里新建文件不会自动登记」等发现语义与本地一致（见 §18）。
+- 两种形态共用 `parseTriggersConfig()` / 指纹 / 无效配置降级规则（见上）；远程配置的发现语义与本地一致：打开管理器会对调用窗口的当前工作区重扫，但后台仍不会在文件后创建时自动发现（见 §18）。
 
 ### 配置写回（管理器）
 
@@ -157,7 +157,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 ## 4. 启动门控与调度
 
 - `TriggerMainService` 构造后异步初始化：读 `state.json` → 从用户设置读并发上限 → `TriggerWorkspaceRegistry.load()` → 为每个登记工作区 `_attachWorkspace`（该工作区文件不存在则只保留登记、不建 store）→ `_armGate()`。
-- 登记表在窗口打开工作区时增长：`_discoverWorkspace(folder)` 会先 `_awaitReady()` 再登记，避免与初始化中的 `registry.load()` 快照互相覆盖。新登记的工作区立即建 store 并参与调度，即使窗口随后关闭。
+- 登记表在窗口打开工作区时增长：`_discoverWorkspace(folder)` 会先 `_awaitReady()` 再登记，避免与初始化中的 `registry.load()` 快照互相覆盖。打开触发器管理器时，renderer 通过 `rescanWorkspace(workspaceFolder)` 以调用窗口的当前工作区再次触发同一路径；复用既有幂等逻辑（`registry.register` 去重、`_attaching` 合并、已 attach 早退），文件不存在则跳过且不创建。新登记的工作区立即建 store 并参与调度，即使窗口随后关闭。
 - 用户设置 `triggers.maxConcurrentRuns`（1–10，默认 2）在 renderer 侧注册（`TriggersConfigurationContribution`，application 级设置）。main 启动时直接读 `<config dir>/settings.json`（`readMaxConcurrentRunsSetting`，jsonc-parser 带 `allowTrailingComma`），`IConfigLocationService.onDidChangeConfigDir` 时重读；之后用户在设置 UI 里的修改由 renderer 监听精确 key `triggers.maxConcurrentRuns`（`affectsConfiguration`）并调用 `ITriggerMainService.setMaxConcurrentRuns` 即时生效，main 侧再归一化并 drain 队列。main 没有 `IConfigurationService`，因此不直接订阅配置事件。
 - 门控截止时间 = `max(启动时刻 + 60s, 第一个窗口 host 注册时刻 + 60s)`（`startupGraceMs`）。`--background` 无窗口启动时只有第一项；此时触发会按需开隐藏窗口。
 - 门控开放后：
@@ -179,7 +179,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 - **poll**：offline 期间直接跳过，不执行命令、不记失败、不退避；重连后按原间隔继续。
 - **手动运行**：offline 时 `runNow` 直接报错（远程未连接），不排队、不留 pending。
 - **deferred**：事件已被接受、但在 run 启动前断连或窗口消失时，事件以 deferred 形态保留在 pending（释放 RunQueue 槽位、不 forget 去重 key、不记失败、不退避）；连接恢复且窗口回来时重放。
-- 远程工作区的发现仍发生在窗口打开工作区或执行 `openConfig` 时；窗口关闭后登记保留，但不调度。
+- 远程工作区的发现仍发生在窗口打开工作区、执行 `openConfig` 或打开管理器重扫当前工作区时；未连接时只 deferred，窗口关闭后登记保留，但不调度。
 
 ### schedule
 
@@ -505,7 +505,7 @@ Swarm 写操作由 Agent 通过 skill 自带的 CLI 完成（模板见 `docs/use
 
 | 类 | 命令 id | 面板名 |
 | --- | --- | --- |
-| `OpenTriggerManagerAction` | `workbench.action.triggers.openManager` | 触发器: 打开管理器（单例 tab；可选参数是复合键。已打开时先在所有分屏中定位已有 tab 并 reveal，再把选中项经 `select` / `updateFrom` 交给已挂载视图，不会在另一个分屏再开一份） |
+| `OpenTriggerManagerAction` | `workbench.action.triggers.openManager` | 触发器: 打开管理器（单例 tab；可选参数是复合键。打开时先对调用窗口的当前工作区做一次幂等重扫（文件不存在则跳过、不创建），已打开时再在所有分屏中定位已有 tab 并 reveal，把选中项经 `select` / `updateFrom` 交给已挂载视图，不会在另一个分屏再开一份） |
 | `ListTriggersAction` | `workbench.action.triggers.list` | 触发器: 列出触发器 |
 | `RunTriggerNowAction` | `workbench.action.triggers.runNow` | 触发器: 立即运行触发器… |
 | `PauseTriggerAction` | `workbench.action.triggers.pause` | 触发器: 暂停触发器… |
@@ -526,7 +526,7 @@ Swarm 写操作由 Agent 通过 skill 自带的 CLI 完成（模板见 `docs/use
 
 入口：命令 `workbench.action.triggers.openManager`、Sessions 标题栏按钮、状态栏条目、列表 QuickPick 的第一项。标签页身份由 `TriggerManagerEditorInput` 固定（`resource = universe:/triggerManager`）；`OpenTriggerManagerAction` 先在所有编辑器组里查找这个 input（`revealEditorInGroups`），命中就切换到该组并通过 selection 事件传复合键，未命中才经 `openPinnedSingletonEditor` 打开。
 
-- `TriggerManagerEditor`：订阅 `onDidChangeTriggers` **先于**首次 `listTriggers`，`cancelled` 标记防止卸载后 setState；左栏搜索 / 新建 / 全部暂停 / 打开配置 / 查看日志；列表按工作区分组，键盘上下导航走 `useFlatListNavigation`。行尾 `Toggle` 调 `setPaused`（不改 `enabled`），`pausedAll` 时禁用。
+- `TriggerManagerEditor`：订阅 `onDidChangeTriggers` **先于**首次 `listTriggers`，`cancelled` 标记防止卸载后 setState；挂载时还会调用一次 `rescanWorkspace`（覆盖启动恢复 tab、未走打开命令的路径），与 action 的调用重复也幂等。左栏搜索 / 新建 / 全部暂停 / 打开配置 / 查看日志；列表按工作区分组，键盘上下导航走 `useFlatListNavigation`；空状态提示可重新扫描并提供按钮（此时不启用 listbox role）。行尾 `Toggle` 调 `setPaused`（不改 `enabled`），`pausedAll` 时禁用。
 - `useTriggerManagerViewState`：管理器视图状态持久化，全部 `IStorageService` + `StorageScope.GLOBAL`（管理器是跨工作区视图，与当前工作区无关），不新建 service。key：`triggerManager.view.{query,selectedKey,tab,listScrollTop}` 与 `triggerManager.view.detailScroll.<tab>`。搜索词 200ms debounce（空串 `remove`）、选中复合键 / tab 立即写、滚动 200ms debounce 且卸载时 flush；详情滚动按 tab 存，切 tab 前 flush 旧位置。挂载时 `Promise.all` 异步恢复并用 `restoreDone` 门控回写（恢复完成前不写默认值）；`queryTouched` / `selectionTouched` / `tabTouched` 保证 pending selection（命令 / QuickPick 定位）和用户在恢复期间的操作优先；读失败（`restoreOk=false`）时不回写，避免清掉已存值。无效 tab 回落 `overview`；恢复的 selectedKey 不在当前列表（且列表非空）时清掉；切换触发器时详情回顶。运行历史的 outcome 过滤由 `TriggerRunsPanel` 自己持久化（`triggerManager.runs.outcome`，首次加载等恢复完成再发请求），切换触发器时重置为 `all` 并写回存储。
 - `TriggerOverviewPanel`：状态、闸门说明（激活（含高权限）/ 离线 / 自动暂停 / 默认暂停）、操作按钮（立即运行、暂停 / 恢复、激活确认、查看日志、在 JSON 中定位）。「立即运行」只受 `pausedAll` / 确认 / 离线 / invalid 限制，单触发器暂停不再禁用。「在 JSON 中定位」走 `revealTriggerConfig`，用 `configDocument.triggerSectionLine(..., 'trigger')` 定位到该条定义。
 - 激活确认（`confirmTriggerActivation`）在该触发器处于暂停（且非 `pausedAll`）时，改用 `IConfirmOptions.buttons` 提供「确认并恢复」（`choiceIndex === 0`，确认后调 `setPaused(key, false)`）与「仅确认」；否则维持单一 `primaryButton` 形态。对话框列出 agent / mode / skill / poll 命令 / MCP 服务器；agent / mode 未配置时展示编辑器的默认 ACP Agent 及它的保守默认模式（`CONSERVATIVE_MODE_BY_AGENT`），默认 Agent 没有保守默认模式时提示必须先显式配置 `mode`（不擅自挑一个宽松档）。`isElevatedModeId(mode)` 时给出高权限警告，事件源 + 高权限时警告更强。确认时把对话框展示的指纹回传给 `confirmActivation`，定义已变化则拒绝。
@@ -578,14 +578,15 @@ Swarm 写操作由 Agent 通过 skill 自带的 CLI 完成（模板见 `docs/use
 - main 服务测试用假窗口 host、假 `PollCommandFetcher`、假 `AuditLog`、假工作区信任探针，避免真实文件系统与 Electron；配置写进临时工作区的 `.universe-editor/triggers.json`，注册表写 `<dir>/triggers/workspaces.json`。
 - 激活闸门相关用例覆盖：未确认不调度 / 不跑 poll / `runNow` 拒绝；确认后指纹变化失效；两个工作区同名 id 的确认 / 暂停 / 移除互相隔离。
 - 默认暂停相关用例覆盖：首次发现的键初始 `paused: true`（不设 `autoPaused`）、已有键 `paused: false` 不被改写、重启不重判、暂停时 `runNow` 成功但定时不触发、`pausedAll` 仍拒绝 `runNow`、暂停只丢弃自动排队项而保留手动排队项、暂停状态下手动 pending 仍会重放；`RunQueue.remove` 有独立单测。测试 harness 默认在确认激活后显式 resume（可用 `autoResume: false` 观察默认暂停）。
+- 重扫用例覆盖：工作区打开时无文件、之后创建 `triggers.json` 再 `rescanWorkspace` 可发现；重复重扫不产生重复登记 / 重复触发器；无文件时重扫两次仍不创建文件（`skipConfigFile` harness 选项模拟窗口先打开的场景）。
 - 远程门禁用例覆盖：offline 时 `schedule` 不推进、重连后按 `onMissed` 处理（`skip` 丢弃 / `catch-up-once` 只补最近一次）、`poll` 跳过且不记失败、`runNow` 报错；已接受但启动前断连或窗口消失的事件以 deferred 保留在 pending（释放队列槽位、不 forget key、不退避），重连 + 窗口回来时重放；队列出队时若已离线，槽位立即释放并留待重放；连接状态 / 窗口存在性变化驱动 attach / detach；远程 runDir 带 clientId 命名空间且各客户端只清理自己的子目录（`createRunDir` 的保护集按同一 authority 的 active / queued / pending 收集，不依赖工作区 entry 是否还在）；远程报告只有 `connected` 时可读，否则 `unavailable`。
 - 会话启动测试用 `inMemoryAcpPair` 或假 session（见 `services/acp/CLAUDE.md` 测试套路）。
 - Swarm CLI 模板的单测在 `scripts/swarm/__tests__/swarm-cli.test.mjs`（`pnpm test:scripts`），覆盖参数解析、p4 ticket → Basic 头、投票版本选择、approve 守卫、「ticket 不出现在任何输出」的 RED LINE，以及两条超时路径（p4 `spawnSync` ETIMEDOUT / 被信号终止、fetch `AbortSignal.timeout` 超时只报 method + path）。
 
-E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/triggerManager.spec.ts`（`@p1`）覆盖管理器：命令打开的单例 tab、列表行、行内恢复 / 暂停、配置表单写回（注释保留 + 保存后回到待确认）、常驻状态栏条目（待确认时 `$(zap) N` + tooltip 摘要）及点击打开、一次真实运行后的运行历史行；`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：
+E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/triggerManager.spec.ts`（`@p1`）覆盖管理器：命令打开的单例 tab、列表行、行内恢复 / 暂停、配置表单写回（注释保留 + 保存后回到待确认）、常驻状态栏条目（待确认时 `$(zap) N` + tooltip 摘要）及点击打开、一次真实运行后的运行历史行；另有一条 `@regression` 覆盖“打开工作区时无 `triggers.json`、之后写入文件、空状态重新扫描后出现且仍待确认”。`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：远程 poll 取数、远端 runDir 创建与报告读取。断连 / deferred 语义由单元测试覆盖。本地场景包括：
 
 - 没有 `.universe-editor/triggers.json` 时不列出任何触发器、不创建会话；
-- 写文件后经 `openConfig` 登记工作区；
+- 写文件后经 `openConfig` 登记工作区；或打开管理器对当前工作区重扫（文件存在才登记，不存在只跳过、不创建）；
 - 未确认时 `runNow` 拒绝且不创建会话；确认后手动触发 → 用 echo agent 建一个 **inactive** 会话（不占用编辑区、不切 active），历史行带 `automation` 溯源，`firstPrompt` 含 `## 任务` 与空 payload 的「本次无外部事件数据。」提示，且不出现 `<event-data>` 围栏；
 - 激活确认覆盖高权限 mode：未确认时 `runNow` 拒绝；确认后 bypass 模式可直接运行（没有单独的 elevated 确认）；
 - 暂停的触发器仍可 `runNow`（手动覆盖暂停），运行结束后状态仍是「已暂停」；恢复后回到配置决定的状态。
@@ -620,7 +621,7 @@ pnpm e2e:smoke
 - **schema 与运行时校验仍有少量差异**：schema 不校验单文件内 `id` 唯一，也不校验 `session.cwd` 的路径形态；两者最终仍由 `parseTriggersConfig()` 兜底（非法条目进入 `invalid`）。`session` required、`budget` 三个正数（`exclusiveMinimum: 0`）、poll 的两种输出形态已与运行时对齐。
 - **指纹失效范围较大**：指纹覆盖整份触发器定义（含 `enabled` 与 `name`），改任何字段（包括只改 `prompt` 文案、启用触发器或改名）都会让激活确认（含高权限）失效，需要重新确认。这是有意的：否则仓库里一次 pull 就能把已确认的触发器悄悄打开或换个用途。
 - **运行中删除并重建 `.universe-editor` 目录会停止热加载**：`JsonConfigFileStore` 的目录 watcher 绑定在原目录上，重建后不再收到外部编辑事件；重新打开工作区、执行 openConfig 或重启编辑器即可恢复。
-- **已打开窗口里新建 `triggers.json` 不会自动登记**：发现发生在窗口打开工作区 / `openConfig` 时；手动创建文件后需执行一次「触发器: 打开配置」或重启编辑器。**
+- **已打开窗口里新建 `triggers.json` 不会自动发现**：后台没有监听工作区根目录的 watcher；发现发生在窗口打开工作区 / `openConfig` / 打开触发器管理器时。文件由 pull / 切分支带入后，打开管理器会自动重扫当前工作区（只读，不存在不创建）；也可以执行「触发器: 打开配置」或重启编辑器。**
 - **恢复自动化会话不保留 runDir 范围**：resume 后写 runDir 不再自动放行（只保留非路径限制）。
 - **runDir 自动放行不解析符号链接**：路径检查只做字面 `relativePathUnder`；若 `runDir` 内已有指向外部的符号链接，写它会被当成 runDir 内写入。当前安全性依赖「自动化会话不能无审批执行命令」这一前提——创建符号链接本身要走命令审批（§9）。
 - **运行目录保留 200 个**：超出按 mtime 删除，会跳过 active / queued / pending 的 runId，可能早于历史会话上限；需要长期留档请自行复制。
@@ -628,7 +629,7 @@ pnpm e2e:smoke
 - **远端 poll 依赖远端 PATH**：命令在远端执行，`node` / `gh` 等工具必须装在远端并在非交互 shell 的 PATH 中——本机 PATH、本地脚本与本地 node 运行时都不会带过去。WSL / Windows 远端经 `-lc` 或 WMI 启动时的 PATH 差异见 [remote-dev.md](remote-dev.md) §4 / §5。
 - **远端路径一律按大小写敏感比较**：远程工作区身份按远端文件系统语义。Windows 远端上同一个目录写成不同大小写会被视为**不同工作区**（各自登记、确认、暂停与调度）；这是与本地 Windows 工作区（大小写不敏感）的刻意差异。
 - **远端协议 v16**：`triggerPoll` 是新增远端通道（`REMOTE_PROTOCOL_VERSION` 15 → 16）。升级编辑器后旧 daemon 会握手失败（`protocol version 15 != 16`），重连会触发自动重部署；若未自动恢复，用 **Remote-SSH: 停止远程服务器** 后重开该工作区。
-- **登记表是本机状态**：`workspaces.json` 不入库；换机器后需要重新打开工作区（或 `openConfig`）才会重新登记。工作区目录被删除时调度器保留登记但跳过（日志告警），可用 `removeWorkspace` 清理。远程工作区的连接状态与运行目录也不入库，由本机与远端 server 各自维护。
+- **登记表是本机状态**：`workspaces.json` 不入库；换机器后需要重新打开工作区、打开管理器（会重扫当前工作区）或执行 `openConfig` 才会重新登记。工作区目录被删除时调度器保留登记但跳过（日志告警），可用 `removeWorkspace` 清理。远程工作区的连接状态与运行目录也不入库，由本机与远端 server 各自维护。
 - **e2e 覆盖范围有限**：本地 `triggers.spec.ts` 覆盖 manual / 激活闸门（同时覆盖高权限模式）/ 非法配置 / 暂停拒绝；`triggerManager.spec.ts` 覆盖管理器单例、列表、暂停开关、配置写回、状态栏与运行历史；远程 `remote.triggers.spec.ts` 用直连 server 覆盖 poll、runDir 与报告主链路（断连 / deferred 走单测）。schedule / event 的定时与外部依赖仍靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
 
 ## 19. 关键参考路径

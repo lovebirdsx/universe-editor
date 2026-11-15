@@ -237,6 +237,13 @@ export async function openTriggerConfig(services: TriggerActionServices): Promis
   await services.editors.openEditor(uri, { pinned: true })
 }
 
+/** Re-discover the window workspace; main skips a missing file and never creates it. */
+export async function rescanTriggerWorkspace(services: TriggerActionServices): Promise<void> {
+  const folder = services.workspace.current?.folder
+  if (folder === undefined) return
+  await services.triggers.rescanWorkspace(folder.toString())
+}
+
 export async function showTriggerLog(services: TriggerActionServices): Promise<void> {
   const descriptors = await services.logFiles.listLogFiles()
   const descriptor = descriptors.find((entry) => entry.channelId === TRIGGER_LOG_CHANNEL_ID)
@@ -462,8 +469,23 @@ export class OpenTriggerManagerAction extends Action2 {
     // await for side/new-window targets, but the accessor is already unused.
     const services = openTargetServicesFrom(accessor)
     const windowFocus = accessor.get(IWindowFocusService)
+    const triggers = accessor.get(ITriggerMainService)
+    const workspace = accessor.get(IWorkspaceService)
+    const logger = accessor.get(ILoggerService).createLogger({
+      id: 'triggerActions',
+      name: 'Triggers',
+    })
     const target = invocationOpenTarget()
     const triggerKey = typeof arg === 'string' && arg.length > 0 ? arg : undefined
+    // A pull or branch switch can add triggers.json after the window opened;
+    // main skips a missing file, so this stays read-only. Fire-and-forget: the
+    // manager refreshes through onDidChangeTriggers when discovery finishes.
+    const folder = workspace.current?.folder
+    if (folder !== undefined) {
+      void triggers.rescanWorkspace(folder.toString()).catch((err: unknown) => {
+        logger.warn(`trigger workspace rescan failed: ${errorMessage(err)}`)
+      })
+    }
     let existing: TriggerManagerEditorInput | undefined
     const revealed = revealEditorInGroups(
       services.groups,

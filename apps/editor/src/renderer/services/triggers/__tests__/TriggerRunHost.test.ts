@@ -80,6 +80,7 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly setAllPaused = vi.fn(async (): Promise<void> => undefined)
   readonly confirmActivation = vi.fn(async (): Promise<void> => undefined)
   readonly ensureConfigFile = vi.fn(async (): Promise<string> => 'file:///triggers.json')
+  readonly rescanWorkspace = vi.fn(async (): Promise<void> => undefined)
   readonly removeWorkspace = vi.fn(async (): Promise<void> => undefined)
   readonly readRunReport = vi.fn(
     async (): Promise<TriggerRunReportReadResult> => ({ kind: 'not-found' }),

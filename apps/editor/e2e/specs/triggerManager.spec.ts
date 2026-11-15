@@ -4,11 +4,12 @@
  *  configuration form writes through jsonc (comments survive) and invalidates the
  *  activation confirmation, the status-bar entry appears while something needs
  *  the user, and the run-history tab shows rows written at run end.
- *  The config lives in `<workspace>/.universe-editor/triggers.json`; the spec
- *  writes it before running "Open Configuration", which registers the workspace.
+ *  The config lives in `<workspace>/.universe-editor/triggers.json`; most tests
+ *  write it before running "Open Configuration", which registers the workspace.
+ *  The rescan regression creates it after the window opened instead.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Page } from '@playwright/test'
@@ -316,5 +317,34 @@ ${triggerEntry('beta', 'Beta Trigger')}
       'true',
     )
     await expect(page.getByTestId('trigger-manager-runs-filter')).toContainText('Failed')
+  })
+
+  test('the empty state rescans a config added after the workspace opened @regression', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
+    await workbench.waitForRestored()
+    const file = triggersConfigPath(launchWorkspace.dir)
+    expect(existsSync(file)).toBe(false)
+
+    await openManager(page)
+    await expect(page.getByTestId('trigger-manager-empty')).toBeVisible()
+    // Opening the manager is read-only: it must never create the config.
+    expect(existsSync(file)).toBe(false)
+
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, configWithComments(CONFIG_ID, 'Pulled Trigger'))
+    await page.getByTestId('trigger-manager-rescan').click()
+
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(1)
+    await expect(page.getByTestId('trigger-manager-row')).toContainText('Pulled Trigger')
+    await expect.poll(async () => (await findTrigger(page, CONFIG_ID))?.status).toBe('paused')
+    expect((await findTrigger(page, CONFIG_ID))?.activationConfirmed).toBe(false)
+
+    // Repeat opens reuse the tab and keep the list free of duplicates.
+    await page.evaluate((command) => window.__E2E__!.runCommand(command), MANAGER_COMMAND)
+    await expect(page.getByTestId('trigger-manager-row')).toHaveCount(1)
   })
 })

@@ -50,6 +50,12 @@ export interface ITriggerMainService {
    * a remote workspace must be connected.
    */
   ensureConfigFile(workspaceFolder?: string): Promise<string>
+  /**
+   * Re-run discovery for the calling window's workspace (URI string). Idempotent
+   * and read-only: a missing triggers.json is skipped, never created or overwritten.
+   * A remote workspace that is not connected is deferred, not connected implicitly.
+   */
+  rescanWorkspace(workspaceFolder: string): Promise<void>
   /** Stop watching a registered workspace (URI string) and drop its queued events. */
   removeWorkspace(workspace: string): Promise<void>
   /** Called by a window when its run reaches a terminal state. */

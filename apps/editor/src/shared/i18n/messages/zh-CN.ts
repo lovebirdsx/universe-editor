@@ -4360,6 +4360,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'trigger.manager.loading': '正在加载触发器…',
   'trigger.manager.loadFailed': '加载触发器失败：{error}',
   'trigger.manager.empty': '尚未配置任何触发器。',
+  'trigger.manager.emptyHint':
+    '如果 .universe-editor/triggers.json 是刚刚通过 Git 拉取或切换分支带入的，请重新扫描工作区。',
+  'trigger.manager.rescan': '重新扫描',
   'trigger.manager.emptyNoMatch': '没有匹配筛选条件的触发器。',
   'trigger.manager.selectPrompt': '选择一个触发器查看详情。',
   'trigger.manager.pendingBanner': '{count} 个触发器需要确认后才能运行',
