@@ -1,0 +1,14 @@
+/* Shared layout for source-parameter forms (muted explanatory notes + rows). */
+
+.note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--spacing-4);
+}

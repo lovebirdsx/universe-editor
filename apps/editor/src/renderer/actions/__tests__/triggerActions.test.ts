@@ -6,14 +6,19 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  FileSystemError,
   ICommandService,
   IDialogService,
+  IEditorGroupsService,
   IEditorResolverService,
+  IEditorService,
+  IFileService,
   ILayoutService,
   ILoggerService,
   INotificationService,
   IOutputService,
   IQuickInputService,
+  IUriIdentityService,
   IViewsService,
   IWorkspaceService,
   MenuId,
@@ -107,6 +112,11 @@ describe('OpenTriggersConfigAction', () => {
       // menu's "Open trigger manager" entry routes through the command).
       [ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() }],
       [IAcpAgentRegistry, { _serviceBrand: undefined, defaultAgentId: () => 'claude-code' }],
+      // The snapshot also carries the services used by the activation preview.
+      [IFileService, { _serviceBrand: undefined }],
+      [IEditorService, { _serviceBrand: undefined }],
+      [IEditorGroupsService, { _serviceBrand: undefined }],
+      [IUriIdentityService, { _serviceBrand: undefined }],
     ])
     const accessor = {
       get: (id: unknown) => {
@@ -173,14 +183,36 @@ describe('trigger confirmation dialogs', () => {
     const setPaused = vi.fn(async () => undefined)
     const confirm = vi.fn(async (_options: IConfirmOptions) => result)
     const notify = vi.fn()
+    const openEditor = vi.fn((input: unknown) => input)
+    const openConfig = vi.fn(async () => undefined)
+    const files = {
+      stat: vi.fn(async (): Promise<{ mtime: number }> => {
+        throw new FileSystemError('not found', 'ENOENT')
+      }),
+      readFileText: vi.fn(async (): Promise<string> => ''),
+    }
     const services = {
       triggers: { confirmActivation, setPaused },
       dialogs: { confirm },
       notifications: { notify },
       logger: { warn: vi.fn() },
       agents: { defaultAgentId: () => defaultAgentId },
+      files,
+      editorService: { openEditor },
+      editors: { openEditor: openConfig, createEditorInput: vi.fn((uri: URI) => ({ uri })) },
+      groups: { groups: [] },
+      uriIdentity: { isEqual: (a: URI, b: URI) => a.toString() === b.toString() },
     } as unknown as TriggerActionServices
-    return { services, confirm, confirmActivation, setPaused, notify }
+    return {
+      services,
+      confirm,
+      confirmActivation,
+      setPaused,
+      notify,
+      files,
+      openEditor,
+      openConfig,
+    }
   }
 
   it('offers Confirm and Resume when this is the last gate and the trigger is paused', async () => {
@@ -193,14 +225,21 @@ describe('trigger confirmation dialogs', () => {
     await confirmTriggerActivation(services, summary())
 
     const options = confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions
-    expect(options.buttons).toHaveLength(2)
+    expect(options.buttons).toHaveLength(3)
+    expect(options.buttons?.[0]).toBe('Confirm and Resume')
+    expect(options.buttons?.[1]).toBe('Confirm Only')
+    expect(options.buttons?.[2]).toBe('View Full Definition')
     expect(options.primaryButton).toBeUndefined()
     expect(confirmActivation).toHaveBeenCalledWith('ws\u0000alpha', 'fp-alpha')
     expect(setPaused).toHaveBeenCalledWith('ws\u0000alpha', false)
   })
 
   it('passes the fingerprint shown in the dialog so a changed definition is refused', async () => {
-    const { services, confirmActivation } = makeServices({ confirmed: true, choice: 'primary' })
+    const { services, confirmActivation } = makeServices({
+      confirmed: true,
+      choice: 'primary',
+      choiceIndex: 0,
+    })
 
     await confirmTriggerActivation(
       services,
@@ -223,15 +262,16 @@ describe('trigger confirmation dialogs', () => {
 
     await confirmTriggerActivation(services, summary())
 
-    expect((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).buttons).toHaveLength(2)
+    expect((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).buttons).toHaveLength(3)
     expect(confirmActivation).toHaveBeenCalledTimes(1)
     expect(setPaused).not.toHaveBeenCalled()
   })
 
-  it('stays a single-button dialog when the trigger is not paused', async () => {
+  it('keeps two buttons when the trigger is not paused', async () => {
     const { services, confirm, confirmActivation, setPaused } = makeServices({
       confirmed: true,
       choice: 'primary',
+      choiceIndex: 0,
     })
 
     await confirmTriggerActivation(
@@ -240,7 +280,7 @@ describe('trigger confirmation dialogs', () => {
     )
 
     const options = confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions
-    expect(options.buttons).toBeUndefined()
+    expect(options.buttons).toEqual(['Enable Trigger', 'View Full Definition'])
     expect(confirmActivation).toHaveBeenCalledTimes(1)
     expect(setPaused).not.toHaveBeenCalled()
   })
@@ -338,6 +378,68 @@ describe('trigger confirmation dialogs', () => {
     const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
     expect(detail).toContain('Agent: custom-agent')
     expect(detail).toContain('Must be configured explicitly')
+  })
+
+  it('previews the prompt, budget, concurrency and showSession from the full definition', async () => {
+    const { services, confirm, files } = makeServices({
+      confirmed: true,
+      choice: 'primary',
+      choiceIndex: 0,
+    })
+    const definition = {
+      version: 1,
+      triggers: [
+        {
+          id: 'alpha',
+          name: 'Alpha',
+          source: { type: 'manual' },
+          session: {
+            prompt: 'Summarize the day\nand mention every failure',
+            budget: { maxCostUsd: 2.5, timeoutMin: 45, approvalTimeoutMin: 1440 },
+          },
+          concurrency: 2,
+          overflow: 'drop',
+          showSession: true,
+        },
+      ],
+    }
+    files.stat.mockResolvedValue({ mtime: 1 })
+    files.readFileText.mockResolvedValue(JSON.stringify(definition))
+
+    await confirmTriggerActivation(
+      services,
+      summary({ paused: false, status: 'needs-confirmation' }),
+    )
+
+    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
+    expect(detail).toContain('Prompt: Summarize the day and mention every failure')
+    expect(detail).toContain('$2.50')
+    expect(detail).toContain('run timeout 45 min')
+    expect(detail).toContain('approval timeout 1440 min')
+    expect(detail).toContain('Concurrency: 2 · when busy: Drop')
+    expect(detail).toContain('Reveal the session while it runs: yes')
+  })
+
+  it('reveals the definition and asks again when View Full Definition is picked', async () => {
+    const { services, confirm, confirmActivation, openConfig } = makeServices({
+      confirmed: true,
+      choice: 'primary',
+      choiceIndex: 0,
+    })
+    confirm.mockResolvedValueOnce({
+      confirmed: true,
+      choice: 'primary',
+      choiceIndex: 1,
+    })
+
+    await confirmTriggerActivation(
+      services,
+      summary({ paused: false, status: 'needs-confirmation' }),
+    )
+
+    expect(openConfig).toHaveBeenCalledTimes(1)
+    expect(confirm).toHaveBeenCalledTimes(2)
+    expect(confirmActivation).toHaveBeenCalledTimes(1)
   })
 
   it('says no high-privilege warning for a non-elevated event trigger', async () => {

@@ -75,10 +75,13 @@ class FakeFileService {
   readonly files = new Map<string, string>()
   readonly directories = new Set<string>()
   readonly reads: string[] = []
+  /** When set, reads fail with this (a transport / IO failure, not ENOENT). */
+  readError: Error | undefined
   writes = 0
 
   async readFileText(uri: URI): Promise<string> {
     this.reads.push(uri.toString())
+    if (this.readError !== undefined) throw this.readError
     const text = this.files.get(uri.toString())
     if (text === undefined) throw Object.assign(new Error('not found'), { code: 'ENOENT' })
     return text
@@ -205,8 +208,30 @@ describe('RemoteTriggerConfigStore', () => {
     const state = await harness.store.load()
 
     expect(state.value.triggers).toEqual([])
+    expect(state.readFailed).toBe(true)
     expect(harness.files.reads).toEqual([])
     expect(harness.transports()).toBe(0)
+  })
+
+  it('reports a missing file separately from a failed read', async () => {
+    const harness = createStore()
+    stores.push(harness.store)
+    harness.files.files.set(CONFIG_URI.toString(), configText('remote-a'))
+    await harness.store.load()
+
+    harness.files.readError = new Error('tunnel reset')
+    const failed = await harness.store.load()
+    expect(failed.readFailed).toBe(true)
+    expect(failed.missing).toBeUndefined()
+    // The last snapshot survives a read failure.
+    expect(failed.value.triggers.map((trigger) => trigger.id)).toEqual(['remote-a'])
+
+    harness.files.readError = undefined
+    harness.files.files.delete(CONFIG_URI.toString())
+    const missing = await harness.store.load()
+    expect(missing.missing).toBe(true)
+    expect(missing.readFailed).toBeUndefined()
+    expect(missing.value.triggers).toEqual([])
   })
 
   it('reloads after a debounced watcher event and keeps the last valid config', async () => {

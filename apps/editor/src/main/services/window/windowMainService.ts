@@ -505,6 +505,10 @@ export class WindowMainService implements IWindowMainService {
       // orphan (the host's tsserver tree keeps running too). Reclaim exactly
       // this window's local processes.
       this._reclaimWindowProcesses(appServices, win.id, 'renderer-gone')
+      // Active trigger runs were started by the renderer that just died; nobody
+      // will report their end. Release their queue slots now (the host stays
+      // registered for the reloaded renderer).
+      appServices.triggers.failActiveRunsForWindow(win.id, 'crashed')
       if (e2eEnabled) return
       if (this._crashHandled.has(win.id)) return
       this._crashHandled.add(win.id)
@@ -605,6 +609,10 @@ export class WindowMainService implements IWindowMainService {
       this._auxiliaryWindows.disposeParent(win.id, 'parent-reload')
       appServices.diagnostics.invalidateWindowRenderer(win.id, 'window-reloaded')
       this._reclaimWindowProcesses(appServices, win.id, 'window-reloaded')
+      // A reload replaces the renderer that owns every active trigger run; it
+      // never reports their end, so fail them here. The host registration stays:
+      // the reloaded renderer serves the same reverse channel.
+      appServices.triggers.failActiveRunsForWindow(win.id, 'reloaded')
     })
 
     // Assigned after loadURL below; read by showWindow's cleanup. Declaration

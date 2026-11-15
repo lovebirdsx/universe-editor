@@ -9,9 +9,10 @@
 import { localize, type IQuickPickItem } from '@universe-editor/platform'
 import { workspaceDisplayPath } from '../../shared/triggers/configParse.js'
 import {
+  triggerNeedsConfirmation,
   triggerSourceLabel,
   triggerStatusLabel,
-} from '../../shared/triggers/triggerPresentation.js'
+} from '../services/triggers/triggerPresentation.js'
 import type { TriggerSummary } from '../../shared/triggers/types.js'
 import { relativeTime } from '../relativeTime.js'
 
@@ -30,7 +31,7 @@ export interface TriggerPickItem extends IQuickPickItem {
 
 export function buildTriggerPickItems(summaries: readonly TriggerSummary[]): TriggerPickItem[] {
   return summaries.map((summary) => {
-    const needsActivation = !summary.activationConfirmed && summary.status !== 'invalid'
+    const needsActivation = triggerNeedsConfirmation(summary)
     // The workspace path leads the description: two workspaces may define the same
     // trigger id, and the QuickPick must make them distinguishable. The summary
     // carries a workspace URI string; users see its friendly path.
@@ -129,7 +130,7 @@ export function buildTriggerActionItems(summary: TriggerSummary): TriggerActionP
       label: localize('triggers.action.runNow', 'Run now'),
     })
   }
-  if (!summary.activationConfirmed && summary.status !== 'invalid') {
+  if (triggerNeedsConfirmation(summary)) {
     items.push({
       id: 'confirmActivation',
       action: 'confirmActivation',
@@ -167,8 +168,6 @@ export function triggersForAction(
     case 'resume':
       return summaries.filter((summary) => summary.paused)
     case 'confirmActivation':
-      return summaries.filter(
-        (summary) => !summary.activationConfirmed && summary.status !== 'invalid',
-      )
+      return summaries.filter((summary) => triggerNeedsConfirmation(summary))
   }
 }

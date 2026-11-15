@@ -1,0 +1,14 @@
+/* Toggle row kept trigger-specific: label on the left, switch on the right. */
+
+.toggleField {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-4);
+  padding: var(--spacing-2) 0;
+}
+
+.label {
+  font-size: var(--font-size-sm);
+  color: var(--vscode-editor-mutedForeground);
+}

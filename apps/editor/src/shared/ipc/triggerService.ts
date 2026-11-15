@@ -1,16 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Agent trigger contracts. Two channels cooperate:
- *    - ITriggerMainService (forward, main impl, window-scoped wrapper tags the caller
- *      windowId): command palette / Sessions list talk to the single scheduler in main.
+ *    - ITriggerMainService (forward, app-singleton implementation in main): command
+ *      palette / Sessions list / the window's TriggerRunHost talk to the single
+ *      scheduler. Each window gets its own IPC channel, but the service instance is
+ *      shared and calls are not tagged with the caller's window id; the renderer
+ *      identifies itself where main needs it (workspace URI).
  *    - ITriggerRunHost (reverse, renderer impl): main asks the window that owns a
  *      trigger's workspace to start an automated session, and to report swarm events.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator, type Event } from '@universe-editor/platform'
 import type {
-  TriggerEvent,
-  TriggerPayloadValue,
   TriggerRunEnd,
   TriggerRunFilter,
   TriggerRunHistoryEntry,
@@ -20,14 +21,29 @@ import type {
   TriggerWorkspaceSummary,
 } from '../triggers/types.js'
 
-/** Every command argument is a composite workspace + trigger key, never a bare id. */
-export interface ITriggerMainService {
-  readonly _serviceBrand: undefined
+/** Read-only projections of the trigger catalog and run history. */
+export interface ITriggerQueryService {
   listTriggers(): Promise<readonly TriggerSummary[]>
   /** Registered workspaces; `workspace` is a workspace URI string, not a bare path. */
   listWorkspaces(): Promise<readonly TriggerWorkspaceSummary[]>
   /** Machine-local run directory (`<userData>/triggers/runs`); only local runs' reports live there. */
   getRunsDir(): Promise<string>
+  /**
+   * Machine-local run history (`<userData>/triggers/history.jsonl`), newest first.
+   * Malformed lines (hand-edited file) are skipped; `limit` defaults to 100, max 500.
+   */
+  listRuns(filter?: TriggerRunFilter): Promise<readonly TriggerRunHistoryEntry[]>
+  /**
+   * Read one run's `report.md` by run id. The file name and directory are
+   * rebuilt in main; callers never pass a path. `authority` selects the remote
+   * host whose run directory holds the report; it never triggers a connection.
+   */
+  readRunReport(runId: string, authority?: string): Promise<TriggerRunReportReadResult>
+  readonly onDidChangeTriggers: Event<readonly TriggerSummary[]>
+}
+
+/** User-initiated control-plane commands (pause / activation / manual runs). */
+export interface ITriggerControlService {
   /** Apply the `triggers.maxConcurrentRuns` setting change without restarting main. */
   setMaxConcurrentRuns(limit: number): Promise<void>
   /** Fire a manual event now (works for any source type; `enabled` is not required). */
@@ -42,6 +58,45 @@ export interface ITriggerMainService {
    * changed in the meantime, so an unseen definition is never confirmed.
    */
   confirmActivation(triggerKey: string, fingerprint: string): Promise<void>
+}
+
+/**
+ * Run lifecycle events reported by renderer windows. Every entry carries the
+ * reporting window's workspace URI: main's forward channel cannot identify the caller.
+ */
+export interface ITriggerRunEventService {
+  /**
+   * Acknowledge that this window's `TriggerRunHost` reverse channel is actually
+   * served. Main holds a proxy from window creation, before the renderer registers
+   * the handler, so runs are only routed to acknowledged windows. `workspaceFolder`
+   * is the window's current workspace URI string; main cannot infer the caller.
+   */
+  markHostReady(workspaceFolder: string): Promise<void>
+  /** Called by a window when its run reaches a terminal state. */
+  reportRunEnd(end: TriggerRunEnd): Promise<void>
+  /**
+   * Generic event-source report: `items` are the full list a window currently sees
+   * for `eventName`. Main maps each item through the registered event source (key
+   * extraction + payload shape), applies the persistent per-trigger dedupe and the
+   * first-report baseline, and scopes everything to `workspaceUri`.
+   */
+  reportTriggerEvents(
+    eventName: string,
+    items: readonly unknown[],
+    workspaceUri: string,
+  ): Promise<void>
+  /**
+   * Compatibility facade for the Swarm reporter; equivalent to
+   * `reportTriggerEvents('swarm.reviewNeedsAction', reviews, workspaceFolder)`.
+   */
+  reportSwarmNeedsAction(
+    reviews: readonly SwarmNeedsActionReview[],
+    workspaceFolder: string,
+  ): Promise<void>
+}
+
+/** Workspace catalog lifecycle (create / rescan / remove the triggers.json). */
+export interface ITriggerWorkspaceService {
   /**
    * Create `<workspace>/.universe-editor/triggers.json` with an example when absent,
    * register the workspace for background scheduling and return the file URI string.
@@ -58,36 +113,25 @@ export interface ITriggerMainService {
   rescanWorkspace(workspaceFolder: string): Promise<void>
   /** Stop watching a registered workspace (URI string) and drop its queued events. */
   removeWorkspace(workspace: string): Promise<void>
-  /** Called by a window when its run reaches a terminal state. */
-  reportRunEnd(end: TriggerRunEnd): Promise<void>
-  /**
-   * Machine-local run history (`<userData>/triggers/history.jsonl`), newest first.
-   * Malformed lines (hand-edited file) are skipped; `limit` defaults to 100, max 500.
-   */
-  listRuns(filter?: TriggerRunFilter): Promise<readonly TriggerRunHistoryEntry[]>
-  /**
-   * Read one run's `report.md` by run id. The file name and directory are
-   * rebuilt in main; callers never pass a path. `authority` selects the remote
-   * host whose run directory holds the report; it never triggers a connection.
-   */
-  readRunReport(runId: string, authority?: string): Promise<TriggerRunReportReadResult>
-  /**
-   * The full current "needs me" review list seen by a window's swarm poller (same
-   * filter as the sidebar notification). main applies the persistent per-trigger
-   * dedupe and the first-report baseline, so repeated or multi-window reports are harmless
-   * and reviews that appeared while the editor was closed still fire after a restart.
-   * `workspaceFolder` is the reporting window's workspace URI string (`URI.toString()`);
-   * main scopes the report to that workspace's triggers and rejects an unresolvable
-   * URI. A window without a folder must not report at all.
-   */
-  reportSwarmNeedsAction(
-    reviews: readonly SwarmNeedsActionReview[],
-    workspaceFolder: string,
-  ): Promise<void>
-  readonly onDidChangeTriggers: Event<readonly TriggerSummary[]>
+}
+
+/**
+ * Composition consumed by renderer windows; main implements it as a singleton.
+ * Every command argument is a composite workspace + trigger key, never a bare id.
+ */
+export interface ITriggerMainService
+  extends
+    ITriggerQueryService,
+    ITriggerControlService,
+    ITriggerRunEventService,
+    ITriggerWorkspaceService {
+  readonly _serviceBrand: undefined
 }
 
 export const ITriggerMainService = createDecorator<ITriggerMainService>('triggerMainService')
+
+/** Event name shared by the reporter and main's event-source registry. */
+export const SWARM_TRIGGER_EVENT_NAME = 'swarm.reviewNeedsAction'
 
 export interface SwarmNeedsActionReview {
   readonly reviewId: string
@@ -104,26 +148,16 @@ export interface ITriggerRunHost {
   readonly _serviceBrand: undefined
   /** Start the automated session and return once it exists (not when the run ends). */
   startRun(request: TriggerRunRequest): Promise<{ readonly sessionId: string }>
-  /** Cancel a run's active turn (pause-all with cancel, or shutdown). */
+  /**
+   * Cancel a run's active turn (screen watchdog / app shutdown). Pausing never
+   * cancels active runs; `setAllPaused` only stops new ones from starting.
+   */
   cancelRun(runId: string): Promise<void>
-  /** Whether this window's workspace is trusted (runs are refused in untrusted workspaces). */
-  isWorkspaceTrusted(): Promise<boolean>
+  /**
+   * Whether `workspace` (URI string) is trusted on this machine. Judged by the
+   * trigger's workspace, not by whatever folder the window currently shows.
+   */
+  isWorkspaceTrusted(workspace: string): Promise<boolean>
 }
 
 export const ITriggerRunHost = createDecorator<ITriggerRunHost>('triggerRunHost')
-
-export function swarmReviewEvent(
-  triggerId: string,
-  review: SwarmNeedsActionReview,
-  now: number,
-): TriggerEvent {
-  const payload: Record<string, TriggerPayloadValue> = {
-    reviewId: review.reviewId,
-    author: review.author,
-    description: review.description,
-    state: review.state,
-  }
-  if (review.swarmUrl !== undefined) payload['swarmUrl'] = review.swarmUrl
-  if (review.swarmApiVersion !== undefined) payload['swarmApiVersion'] = review.swarmApiVersion
-  return { triggerId, key: `swarm:${review.reviewId}`, payload, firedAt: now }
-}

@@ -1,0 +1,7 @@
+/* Shared rows for the session / budget / limits blocks. */
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--spacing-4);
+}

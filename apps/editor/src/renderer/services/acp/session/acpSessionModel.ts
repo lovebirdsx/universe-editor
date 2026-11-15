@@ -23,7 +23,7 @@ import type { SelectionContext } from '../promptContext.js'
 import type { PromptFileAttachment } from '../promptAttachment.js'
 import type { PromptImage } from '../promptImage.js'
 import type { PlacedRef } from '../promptRef.js'
-import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
+import type { AcpAutomationProfile, AcpSessionAutomation } from './acpAutomationProfile.js'
 
 export type AcpMessageRole = 'user' | 'agent' | 'thought'
 
@@ -693,18 +693,24 @@ export interface IAcpSession {
    */
   readonly internalWritable: boolean
   /**
-   * Trigger provenance when this session was started by an agent trigger.
-   * Automated sessions run under the restricted permission policy in
-   * `services/triggers/automatedPermissionPolicy.ts`. Undefined for
-   * user-started sessions (whose behavior is unchanged).
+   * Automation provenance when this session was started by an automated run.
+   * Opaque display metadata: ACP persists/returns it but never interprets it.
+   * The behaviour (permissions, plan policy, notification suppression) lives on
+   * {@link automationProfile}; undefined for user-started sessions.
    */
-  readonly automation: AutomationOrigin | undefined
+  readonly automation: AcpSessionAutomation | undefined
   /**
-   * Absolute run directory for an automated session. The permission sink
-   * auto-approves writes that stay inside it (and only those). Undefined for
-   * user-started sessions.
+   * Absolute run directory of an automated session (permission policy scope).
+   * Mirrors `automationProfile.origin.runDir`.
    */
   readonly automationRunDir: string | undefined
+  /**
+   * Policy bundle supplied by the module that started the run. Undefined for
+   * user-started sessions; resumed automated sessions get a restricted fallback
+   * profile (see `createRestoredAutomationProfile`). Optional on the interface so
+   * test stubs written before the profile existed still type-check.
+   */
+  readonly automationProfile?: AcpAutomationProfile | undefined
   /**
    * Static text appended to the agent's preset system prompt. Carried on every
    * later `session/load` / `session/resume` / reconnect handshake of this

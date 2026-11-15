@@ -68,10 +68,61 @@ export interface TriggerConfig {
   readonly overflow: TriggerOverflow
 }
 
+/**
+ * Stable codes for configuration validation errors. The renderer localizes by
+ * code; main / logs consume the accompanying readable `message`.
+ */
+export type TriggerConfigErrorCode =
+  | 'document.notObject'
+  | 'document.version'
+  | 'document.triggersNotArray'
+  | 'trigger.notObject'
+  | 'trigger.id.invalid'
+  | 'trigger.id.duplicate'
+  | 'request.field.boolean'
+  | 'request.field.nonEmptyString'
+  | 'request.field.string'
+  | 'request.field.integerRange'
+  | 'request.field.enum'
+  | 'request.field.positiveNumber'
+  | 'request.field.stringArray'
+  | 'source.notObject'
+  | 'source.type.invalid'
+  | 'source.schedule.mode'
+  | 'source.cron.invalid'
+  | 'source.poll.timeoutNotLessThanInterval'
+  | 'session.notObject'
+  | 'session.cwd.invalid'
+  | 'session.skill.invalid'
+  | 'session.promptOrSkill.required'
+  | 'session.budget.notObject'
+
+export type TriggerConfigErrorParams = Readonly<Record<string, string | number>>
+
+/**
+ * One validation error. `path` is relative to the trigger object (empty for a
+ * whole-trigger / whole-file error), so the form can highlight the owning field
+ * instead of matching English message prefixes.
+ */
+export interface TriggerConfigError {
+  readonly path: readonly (string | number)[]
+  readonly code: TriggerConfigErrorCode
+  readonly params: TriggerConfigErrorParams
+  /** Readable message for non-localizing consumers (main logs, QuickPick). */
+  readonly message: string
+}
+
 /** A trigger entry that failed validation; listed with its errors, never run. */
 export interface InvalidTriggerConfig {
   readonly id: string
+  /**
+   * Readable messages, kept as the compatibility surface for existing main-side
+   * consumers (`TriggerSummary.errors`, error logs). The localized manager uses
+   * {@link issues}.
+   */
   readonly errors: readonly string[]
+  /** Structured errors carrying path / code / params. */
+  readonly issues: readonly TriggerConfigError[]
 }
 
 /** One workspace's `.universe-editor/triggers.json`; trigger ids are unique inside it only. */
@@ -317,6 +368,8 @@ export interface TriggerSummary {
   readonly nextRunAt?: number
   readonly lastError?: string
   readonly errors?: readonly string[]
+  /** Structured counterpart of {@link errors} (path / code / params), for the manager UI. */
+  readonly issues?: readonly TriggerConfigError[]
   /** Synopsis of the most recent run (persisted in `state.json`, survives restarts). */
   readonly lastRunId?: string
   readonly lastSessionId?: string

@@ -19,7 +19,7 @@ import {
   triggerSourceFacts,
   triggerStatusBadge,
 } from '../triggerPresentation.js'
-import type { TriggerSummary } from '../types.js'
+import type { TriggerSummary } from '../../../../shared/triggers/types.js'
 
 function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
   const id = overrides.id ?? 'triage'

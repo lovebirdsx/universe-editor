@@ -20,7 +20,7 @@ import {
 import { Button, Select } from '@universe-editor/workbench-ui'
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
-import { formatTriggerDuration } from '../../../shared/triggers/triggerPresentation.js'
+import { formatTriggerDuration } from '../../services/triggers/triggerPresentation.js'
 import type {
   TriggerRunHistoryEntry,
   TriggerRunOutcome,
@@ -36,7 +36,7 @@ import { IWindowFocusService } from '../../services/windows/windowFocusService.j
 import { useService } from '../useService.js'
 import { automationVerdictLabel, triggerRunOutcomeLabel } from '../agents/automationLabels.js'
 import { errorText } from './triggerFormParts.js'
-import styles from './TriggerManager.module.css'
+import styles from './TriggerRunsPanel.module.css'
 
 export interface TriggerRunsPanelProps {
   readonly summary: TriggerSummary

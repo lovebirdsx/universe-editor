@@ -9,7 +9,10 @@
 
 import type { ILogger } from '@universe-editor/platform'
 import type { SwarmReviewDto } from '@universe-editor/extensions-common'
-import type { SwarmNeedsActionReview } from '../../../shared/ipc/triggerService.js'
+import {
+  SWARM_TRIGGER_EVENT_NAME,
+  type SwarmNeedsActionReview,
+} from '../../../shared/ipc/triggerService.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
 
 /** Payload descriptions are truncated before crossing IPC (the prompt fence and
@@ -21,7 +24,7 @@ export function hasEnabledSwarmTrigger(triggers: readonly TriggerSummary[]): boo
     (trigger) =>
       trigger.enabled &&
       trigger.source?.type === 'event' &&
-      trigger.source.event === 'swarm.reviewNeedsAction',
+      trigger.source.event === SWARM_TRIGGER_EVENT_NAME,
   )
 }
 

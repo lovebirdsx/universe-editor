@@ -2,24 +2,22 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Form draft model shared by the configuration panel and the create wizard.
  *  Drafts keep numeric inputs as strings so a half-typed value is never
- *  silently coerced; the raw object built here goes through the same
- *  `parseTriggersConfig` the scheduler uses, which is what produces every
- *  validation message shown in the UI.
+ *  silently coerced. Source-specific fields live in a discriminated `source`
+ *  draft owned by the descriptor registry; the raw object built here goes
+ *  through the same `parseTriggersConfig` the scheduler uses, which is what
+ *  produces every validation message shown in the UI.
  *--------------------------------------------------------------------------------------------*/
 
-import { parseTriggersConfig } from '../../../shared/triggers/configParse.js'
+import { parseTriggersConfig, triggerConfigError } from '../../../shared/triggers/configParse.js'
 import {
   TRIGGER_DEFAULTS,
-  TRIGGER_EVENT_NAMES,
   type TriggerConfig,
-  type TriggerEventName,
-  type TriggerOnMissed,
+  type TriggerConfigError,
   type TriggerOverflow,
+  type TriggerSourceType,
 } from '../../../shared/triggers/types.js'
-
-export type TriggerSourceType = TriggerConfig['source']['type']
-
-const DEFAULT_EVENT: TriggerEventName = TRIGGER_EVENT_NAMES[0] ?? 'swarm.reviewNeedsAction'
+import { triggerSourceDescriptor } from './triggerSources/index.js'
+import type { TriggerSourceDraft, TriggerSourceDraftPatch } from './triggerSources/types.js'
 
 export interface TriggerConfigDraft {
   readonly name: string
@@ -27,15 +25,7 @@ export interface TriggerConfigDraft {
   readonly showSession: boolean
   readonly concurrency: string
   readonly overflow: TriggerOverflow
-  readonly sourceType: TriggerSourceType
-  readonly cron: string
-  readonly everyMin: string
-  readonly onMissed: TriggerOnMissed
-  readonly intervalSec: string
-  readonly command: string
-  readonly pollTimeoutSec: string
-  readonly keyField: string
-  readonly eventName: TriggerEventName
+  readonly source: TriggerSourceDraft
   readonly agent: string
   readonly mode: string
   readonly model: string
@@ -57,24 +47,13 @@ export function toDraftNumber(value: string): number {
 }
 
 export function draftFromConfig(config: TriggerConfig): TriggerConfigDraft {
-  const source = config.source
-  const schedule = source.type === 'schedule' ? source : undefined
-  const poll = source.type === 'poll' ? source : undefined
   return {
     name: config.name,
     enabled: config.enabled,
     showSession: config.showSession,
     concurrency: String(config.concurrency),
     overflow: config.overflow,
-    sourceType: source.type,
-    cron: schedule?.cron ?? '',
-    everyMin: schedule?.everyMin === undefined ? '' : String(schedule.everyMin),
-    onMissed: schedule?.onMissed ?? 'skip',
-    intervalSec: poll === undefined ? '600' : String(poll.intervalSec),
-    command: poll?.fetch.command ?? '',
-    pollTimeoutSec: String(poll?.fetch.timeoutSec ?? TRIGGER_DEFAULTS.pollTimeoutSec),
-    keyField: poll?.keyField ?? 'id',
-    eventName: source.type === 'event' ? source.event : DEFAULT_EVENT,
+    source: triggerSourceDescriptor(config.source.type).fromConfig(config.source),
     agent: config.session.agent ?? '',
     mode: config.session.mode ?? '',
     model: config.session.model ?? '',
@@ -96,15 +75,7 @@ export function emptyDraft(): TriggerConfigDraft {
     showSession: false,
     concurrency: String(TRIGGER_DEFAULTS.concurrency),
     overflow: TRIGGER_DEFAULTS.overflow,
-    sourceType: 'manual',
-    cron: '',
-    everyMin: '',
-    onMissed: 'skip',
-    intervalSec: '600',
-    command: '',
-    pollTimeoutSec: String(TRIGGER_DEFAULTS.pollTimeoutSec),
-    keyField: 'id',
-    eventName: DEFAULT_EVENT,
+    source: triggerSourceDescriptor('manual').empty(),
     agent: '',
     mode: '',
     model: '',
@@ -117,27 +88,25 @@ export function emptyDraft(): TriggerConfigDraft {
   }
 }
 
-function buildSource(draft: TriggerConfigDraft): unknown {
-  switch (draft.sourceType) {
-    case 'manual':
-      return { type: 'manual' }
-    case 'event':
-      return { type: 'event', event: draft.eventName }
-    case 'schedule':
-      return draft.cron.trim().length > 0
-        ? { type: 'schedule', cron: draft.cron, onMissed: draft.onMissed }
-        : { type: 'schedule', everyMin: toDraftNumber(draft.everyMin), onMissed: draft.onMissed }
-    case 'poll':
-      return {
-        type: 'poll',
-        intervalSec: toDraftNumber(draft.intervalSec),
-        fetch: {
-          type: 'command',
-          command: draft.command,
-          timeoutSec: toDraftNumber(draft.pollTimeoutSec),
-        },
-        keyField: draft.keyField,
-      }
+/**
+ * Switch the source type: the new descriptor starts from its own defaults.
+ * Source parameter edits outside the `type` switch never cross descriptors.
+ */
+export function withSourceType(
+  draft: TriggerConfigDraft,
+  type: TriggerSourceType,
+): TriggerConfigDraft {
+  return { ...draft, source: triggerSourceDescriptor(type).empty() }
+}
+
+export function withSourcePatch(
+  draft: TriggerConfigDraft,
+  patch: TriggerSourceDraftPatch,
+): TriggerConfigDraft {
+  const { type: _type, ...fields } = patch
+  return {
+    ...draft,
+    source: { ...draft.source, ...fields } as TriggerSourceDraft,
   }
 }
 
@@ -164,7 +133,7 @@ export function buildRawTrigger(id: string, draft: TriggerConfigDraft): Record<s
     name: draft.name,
     enabled: draft.enabled,
     showSession: draft.showSession,
-    source: buildSource(draft),
+    source: triggerSourceDescriptor(draft.source.type).build(draft.source),
     session: buildSession(draft),
     concurrency: toDraftNumber(draft.concurrency),
     overflow: draft.overflow,
@@ -173,7 +142,9 @@ export function buildRawTrigger(id: string, draft: TriggerConfigDraft): Record<s
 
 export interface TriggerDraftValidation {
   readonly config: TriggerConfig | undefined
+  /** Readable messages (English); UI surfaces use `issues` for localization. */
   readonly errors: readonly string[]
+  readonly issues: readonly TriggerConfigError[]
 }
 
 export function validateTriggerDraft(
@@ -181,11 +152,19 @@ export function validateTriggerDraft(
   draft: TriggerConfigDraft,
 ): TriggerDraftValidation {
   const parsed = parseTriggersConfig({ version: 1, triggers: [buildRawTrigger(id, draft)] })
-  if (!parsed.ok) return { config: undefined, errors: [parsed.error] }
+  if (!parsed.ok) {
+    return { config: undefined, errors: [parsed.error], issues: [parsed.issue] }
+  }
   const invalid = parsed.config.invalid.find((entry) => entry.id === id)
-  if (invalid !== undefined) return { config: undefined, errors: invalid.errors }
+  if (invalid !== undefined) {
+    return { config: undefined, errors: invalid.errors, issues: invalid.issues }
+  }
   const config = parsed.config.triggers.find((entry) => entry.id === id)
   return config === undefined
-    ? { config: undefined, errors: ['the trigger could not be parsed'] }
-    : { config, errors: [] }
+    ? {
+        config: undefined,
+        errors: ['the trigger could not be parsed'],
+        issues: [triggerConfigError([], 'trigger.notObject', 'the trigger could not be parsed')],
+      }
+    : { config, errors: [], issues: [] }
 }

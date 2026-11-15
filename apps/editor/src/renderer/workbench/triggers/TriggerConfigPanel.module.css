@@ -1,0 +1,103 @@
+/* Trigger configuration form: section stack, header actions and read-only states. */
+
+.config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  max-width: 760px;
+}
+
+.configHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-5);
+}
+
+.configHeading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  min-width: 0;
+}
+
+.configHeaderActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.configSection {
+  padding-top: var(--spacing-4);
+  border-top: 1px solid var(--vscode-workbench-borderSubtle);
+}
+
+.overviewTitle {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+}
+
+.overviewSubtitle {
+  font-size: var(--font-size-sm);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.sectionTitle {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.state {
+  padding: var(--spacing-6) var(--spacing-5);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.placeholder {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  max-width: 640px;
+}
+
+.notice {
+  padding: var(--spacing-4) var(--spacing-5);
+  border: 1px solid var(--vscode-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--vscode-warning-background);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+
+.note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.errorList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-4) var(--spacing-7);
+  border: 1px solid var(--vscode-errorForeground);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+
+.fieldError {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-errorForeground);
+}

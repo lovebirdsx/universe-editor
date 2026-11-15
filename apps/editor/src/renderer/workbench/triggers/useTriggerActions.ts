@@ -87,6 +87,10 @@ export function useTriggerActions(): TriggerManagerActions {
       commands,
       logger,
       agents,
+      files,
+      editorService,
+      groups,
+      uriIdentity,
     }
   }, [
     triggers,
@@ -102,6 +106,10 @@ export function useTriggerActions(): TriggerManagerActions {
     commands,
     loggerService,
     agents,
+    files,
+    editorService,
+    groups,
+    uriIdentity,
   ])
 
   return useMemo<TriggerManagerActions>(

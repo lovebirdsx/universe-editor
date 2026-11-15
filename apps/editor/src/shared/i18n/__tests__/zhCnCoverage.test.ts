@@ -39,6 +39,7 @@ const SCAN_ROOTS = [
   'apps/editor/src',
   'packages/node-services/src',
   'packages/platform/src',
+  'packages/remote-server/src',
   'packages/workbench-ui/src',
 ]
 

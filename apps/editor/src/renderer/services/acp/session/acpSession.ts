@@ -69,7 +69,7 @@ import { getAgentCostStrategy, type AcpAgentCostStrategy } from './acpAgentCostS
 import { repriceForeignModelBreakdown } from './acpSessionCost.js'
 import { priceSessionModel, type IAcpSessionProviderContext } from './acpSessionProviderContext.js'
 import { inputTokensIncludeCached } from '../../../../shared/ai/catalog/index.js'
-import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
+import type { AcpAutomationProfile, AcpSessionAutomation } from './acpAutomationProfile.js'
 import {
   LIVE_INGESTION_BUDGET,
   MAX_AVAILABLE_COMMANDS,
@@ -1228,6 +1228,16 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private readonly _costStrategy: AcpAgentCostStrategy | undefined
 
+  /**
+   * Behaviour profile supplied for an automated session. ACP never imports the
+   * module that owns this policy; see {@link AcpAutomationProfile}.
+   */
+  readonly automationProfile: AcpAutomationProfile | undefined
+  /** Opaque provenance stored on the profile; undefined for user-started sessions. */
+  readonly automation: AcpSessionAutomation | undefined
+  /** Permission scope of the run, mirrored from the profile's persisted origin. */
+  readonly automationRunDir: string | undefined
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -1283,14 +1293,19 @@ export class AcpSession extends Disposable implements IAcpSession {
     readonly internal: boolean = false,
     /** Internal session that may edit files inside its cwd (conflict resolver). */
     readonly internalWritable: boolean = false,
-    /** Trigger provenance for an automated session; undefined = user-started. */
-    readonly automation: AutomationOrigin | undefined = undefined,
-    /** Absolute run directory of an automated session (permission policy scope). */
-    readonly automationRunDir: string | undefined = undefined,
+    /**
+     * Behaviour profile for an automated session, supplied by the module that
+     * started the run; undefined = user-started. ACP stores the profile's origin
+     * verbatim and otherwise only calls its policy methods.
+     */
+    automationProfile: AcpAutomationProfile | undefined = undefined,
     /** Static text appended to the agent's preset system prompt (claude fork). */
     readonly systemPromptAppend: string | undefined = undefined,
   ) {
     super()
+    this.automationProfile = automationProfile
+    this.automation = automationProfile?.origin
+    this.automationRunDir = automationProfile?.origin.runDir
     this._budgetHolder = {
       budgetId: id,
       residentBytes: () => this._residentBytes,

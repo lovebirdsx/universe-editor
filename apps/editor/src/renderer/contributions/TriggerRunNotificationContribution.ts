@@ -11,6 +11,7 @@ import {
   Disposable,
   ICommandService,
   IEditorGroupsService,
+  IHostService,
   IInstantiationService,
   ILoggerService,
   INotificationService,
@@ -21,12 +22,15 @@ import {
 } from '@universe-editor/platform'
 import type { TriggerRunEnd } from '../../shared/triggers/types.js'
 import { ViewTriggerReportAction } from '../actions/triggerActions.js'
+import { getAgentNotificationIcon } from '../services/acp/agentNotificationIcon.js'
 import { IAcpChatWidgetService } from '../services/acp/session/acpChatWidgetService.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import type { IAcpSession } from '../services/acp/session/acpSessionModel.js'
 import { revealSessionChat } from '../services/acp/session/revealSessionChat.js'
 import { IAutomatedSessionService } from '../services/triggers/automatedSessionService.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
+import { currentWorkbenchDocumentOrUndefined } from '../services/windows/workbenchDocuments.js'
+import { isDocumentFocused } from '../workbench/domUtils.js'
 
 export class TriggerRunNotificationContribution
   extends Disposable
@@ -42,6 +46,7 @@ export class TriggerRunNotificationContribution
     @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
     @IWindowFocusService private readonly _windowFocus: IWindowFocusService,
     @INotificationService private readonly _notification: INotificationService,
+    @IHostService private readonly _host: IHostService,
     @ICommandService private readonly _commands: ICommandService,
     @ILoggerService loggerService: ILoggerService,
   ) {
@@ -61,6 +66,14 @@ export class TriggerRunNotificationContribution
     const eventKey = session?.automation?.eventKey
     const summary = end.summary ?? ''
     const { severity, message } = describeRun(end, triggerName, summary)
+    // An in-app toast lives inside this renderer's document. In a hidden /
+    // minimized background window (the one main opens to run a local trigger)
+    // or a window the user is not looking at, nobody would see it — fall back
+    // to the OS notification channel so escalations still reach the user.
+    if (!isDocumentFocused(currentWorkbenchDocumentOrUndefined())) {
+      this._notifySystem(end, session, severity, message)
+      return
+    }
     const handle = this._notification.notify({
       severity,
       message,
@@ -88,6 +101,41 @@ export class TriggerRunNotificationContribution
         },
       ],
     })
+  }
+
+  /**
+   * OS-level fallback for runs that end while the window is not visible or not
+   * focused. Clicking the toast focuses the window main-side, then reveals the
+   * run's session here.
+   */
+  private _notifySystem(
+    end: TriggerRunEnd,
+    session: IAcpSession | undefined,
+    severity: Severity,
+    message: string,
+  ): void {
+    const title =
+      severity === Severity.Warning
+        ? localize('trigger.run.notify.systemWarningTitle', 'Trigger run needs attention')
+        : localize('trigger.run.notify.systemInfoTitle', 'Trigger run finished')
+    const icon = getAgentNotificationIcon(session?.agentId)
+    void this._host
+      .notify({
+        title,
+        body: message,
+        originWindow: { kind: 'workspace' },
+        ...(icon !== undefined ? { icon } : {}),
+      })
+      .then((result) => {
+        if (result.clicked) this._openSession(end, session)
+      })
+      .catch((err: unknown) => {
+        this._logger.warn(
+          `failed to show system notification for run ${end.runId}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        )
+      })
   }
 
   private _openSession(end: TriggerRunEnd, session: IAcpSession | undefined): void {

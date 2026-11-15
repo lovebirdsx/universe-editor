@@ -37,14 +37,18 @@ export function isProcessed(keys: ProcessedKeys, key: string): boolean {
   return Object.hasOwn(keys, key)
 }
 
-/** Keys whose session never started; re-enqueue them after a restart. */
-export function pendingQueued(keys: ProcessedKeys): string[] {
-  return Object.entries(keys)
-    .filter(([, entry]) => entry.status === 'queued')
-    .sort(
-      ([leftKey, left], [rightKey, right]) => left.at - right.at || leftKey.localeCompare(rightKey),
-    )
-    .map(([key]) => key)
+/**
+ * Keeps at most `limit` items from one fetch round. Poll output order is
+ * oldest → newest, so the tail is the newest slice; dropping the front bounds
+ * the round without evicting keys that were just recorded.
+ */
+export function newestItems<T>(
+  items: readonly T[],
+  limit: number,
+): { readonly items: readonly T[]; readonly dropped: number } {
+  const normalized = Math.max(0, Math.floor(limit))
+  if (items.length <= normalized) return { items, dropped: 0 }
+  return { items: items.slice(items.length - normalized), dropped: items.length - normalized }
 }
 
 /** Drops expired entries, then evicts the oldest until `limit` entries remain. */

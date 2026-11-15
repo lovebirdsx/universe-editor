@@ -1,0 +1,107 @@
+/* Trigger manager shell: banners, panes and detail pane tabs. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-foreground);
+}
+
+/* -- banners ------------------------------------------------------------- */
+
+.banner {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--spacing-4);
+  width: 100%;
+  padding: var(--spacing-4) var(--spacing-6);
+  border: none;
+  border-bottom: 1px solid var(--vscode-warning-border);
+  background: var(--vscode-warning-background);
+  color: var(--vscode-editor-foreground);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  text-align: left;
+}
+
+button.banner {
+  cursor: pointer;
+}
+
+button.banner:hover {
+  background: color-mix(
+    in srgb,
+    var(--vscode-warning-background) 75%,
+    var(--vscode-editor-foreground) 25%
+  );
+}
+
+.bannerIcon {
+  flex: 0 0 auto;
+}
+
+.bannerText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* -- panes --------------------------------------------------------------- */
+
+.panes {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.state {
+  padding: var(--spacing-6) var(--spacing-5);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+/* -- detail pane --------------------------------------------------------- */
+
+.detailPane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--spacing-2);
+  padding: 0 var(--spacing-6);
+  border-bottom: 1px solid var(--vscode-workbench-border);
+}
+
+.tab {
+  padding: var(--spacing-5) var(--spacing-4) var(--spacing-4);
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--vscode-editor-mutedForeground);
+  font-size: var(--font-size-base);
+  cursor: pointer;
+}
+
+.tab:hover {
+  color: var(--vscode-editor-foreground);
+}
+
+.tabActive {
+  border-bottom-color: var(--vscode-workbench-accent);
+  color: var(--vscode-editor-foreground);
+}
+
+.detailBody {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--spacing-6) var(--spacing-7) var(--spacing-8);
+}

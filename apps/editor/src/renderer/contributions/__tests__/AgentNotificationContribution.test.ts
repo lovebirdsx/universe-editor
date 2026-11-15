@@ -23,7 +23,7 @@ import type {
   AcpPendingPermission,
   AcpPendingElicitation,
 } from '../../services/acp/session/acpSession.js'
-import type { AutomationOrigin } from '../../../shared/triggers/types.js'
+import type { AcpAutomationProfile } from '../../services/acp/session/acpAutomationProfile.js'
 
 interface FakeSession {
   id: string
@@ -35,11 +35,21 @@ interface FakeSession {
   isDormant: ISettableObservable<boolean>
   backgroundTaskCount: ISettableObservable<number>
   sessionIdOnAgent: ISettableObservable<string | undefined>
-  automation?: AutomationOrigin
+  automationProfile?: AcpAutomationProfile
 }
 
-function automationOrigin(): AutomationOrigin {
-  return { triggerId: 'triage', triggerName: 'Swarm 分诊', eventKey: 'swarm:1', runId: 'run-1' }
+function automationProfile(): AcpAutomationProfile {
+  return {
+    origin: {
+      triggerId: 'triage',
+      triggerName: 'Swarm 分诊',
+      eventKey: 'swarm:1',
+      runId: 'run-1',
+    },
+    suppressCompletionNotify: true,
+    planPolicy: 'manual',
+    decidePermission: () => undefined,
+  }
 }
 
 function makeSession(id: string, title = id): FakeSession {
@@ -284,7 +294,7 @@ describe('AgentNotificationContribution', () => {
     it('suppresses the generic completion toast', async () => {
       const t = setup()
       const s = makeSession('a')
-      s.automation = automationOrigin()
+      s.automationProfile = automationProfile()
       t.addSession(s)
       s.status.set('running', undefined)
       s.status.set('idle', undefined)
@@ -295,7 +305,7 @@ describe('AgentNotificationContribution', () => {
     it('keeps permission, question and error notifications', () => {
       const t = setup()
       const s = makeSession('a')
-      s.automation = automationOrigin()
+      s.automationProfile = automationProfile()
       t.addSession(s)
       s.pendingPermission.set({ toolCallId: 't', title: 'x', options: [] } as never, undefined)
       expect(t.notify).toHaveBeenCalledTimes(1)

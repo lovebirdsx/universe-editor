@@ -4,6 +4,7 @@ import { parse } from 'jsonc-parser'
 import { describe, expect, it } from 'vitest'
 import {
   parseTriggersConfig,
+  parseTriggersConfigText,
   parseWorkspaceUri,
   TRIGGERS_CONFIG_EXAMPLE,
   workspaceDisplayPath,
@@ -12,6 +13,7 @@ import {
   isElevatedModeId,
   TRIGGER_DEFAULTS,
   type TriggerConfig,
+  type TriggerConfigError,
   type TriggersConfig,
 } from '../types.js'
 
@@ -29,10 +31,14 @@ function parseOk(raw: unknown): TriggersConfig {
 }
 
 function invalidErrors(trigger: unknown): readonly string[] {
+  return invalidIssues(trigger).map((issue) => issue.message)
+}
+
+function invalidIssues(trigger: unknown): readonly TriggerConfigError[] {
   const config = parseOk({ version: 1, triggers: [trigger] })
   expect(config.triggers).toHaveLength(0)
   expect(config.invalid).toHaveLength(1)
-  return config.invalid[0]?.errors ?? []
+  return config.invalid[0]?.issues ?? []
 }
 
 function firstTrigger(raw: unknown): TriggerConfig {
@@ -366,6 +372,111 @@ describe('parseTriggersConfig (session)', () => {
         key,
       ).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('parseTriggersConfig (structured errors)', () => {
+  it('carries path / code / params for field highlighting and localization', () => {
+    const issues = invalidIssues(rawTrigger({ session: { prompt: '' } }))
+    const issue = issues.find((entry) => entry.code === 'session.promptOrSkill.required')
+    expect(issue).toMatchObject({
+      path: ['session', 'prompt'],
+      params: {},
+    })
+    expect(issue?.message).toContain('"session" must set')
+  })
+
+  it('reports duplicate ids as a structured trigger-level issue', () => {
+    const config = parseOk({
+      version: 1,
+      triggers: [rawTrigger({ id: 'same' }), rawTrigger({ id: 'same' })],
+    })
+    const issue = config.invalid[0]?.issues.find((entry) => entry.code === 'trigger.id.duplicate')
+    expect(issue).toMatchObject({ path: ['id'], params: { id: 'same' } })
+    expect(config.invalid[0]?.errors).toEqual([issue?.message])
+  })
+
+  it('points poll field errors at their own paths', () => {
+    const issues = invalidIssues(
+      rawTrigger({
+        source: {
+          type: 'poll',
+          intervalSec: 30,
+          fetch: { type: 'command', command: '' },
+          keyField: 'id',
+        },
+      }),
+    )
+    expect(issues.find((entry) => entry.code === 'request.field.nonEmptyString')?.path).toEqual([
+      'source',
+      'fetch',
+      'command',
+    ])
+    expect(issues.find((entry) => entry.code === 'request.field.nonEmptyString')?.params).toEqual({
+      field: 'source.fetch.command',
+    })
+  })
+})
+
+describe('parseTriggersConfigText (JSON syntax errors)', () => {
+  it('reports the 1-based line and column of the first syntax error', () => {
+    const result = parseTriggersConfigText('{\n  "triggers": [\n}\n')
+    expect(result.kind).toBe('invalid')
+    if (result.kind !== 'invalid') return
+    expect(result.line).toBeGreaterThanOrEqual(2)
+    expect(result.column).toBeGreaterThanOrEqual(1)
+    expect(result.error).toContain(`line ${result.line}, column ${result.column}`)
+  })
+
+  it('keeps shape errors structured', () => {
+    const result = parseTriggersConfigText('{ "version": 2 }')
+    expect(result.kind).toBe('invalid')
+    if (result.kind !== 'invalid') return
+    expect(result.issue).toMatchObject({ code: 'document.version', path: ['version'] })
+  })
+})
+
+describe('parseTriggersConfig (prompt / poll cross-field rules)', () => {
+  it('requires a non-empty prompt when there is no skill', () => {
+    expect(invalidErrors(rawTrigger({ session: { prompt: '' } })).length).toBeGreaterThan(0)
+    expect(invalidErrors(rawTrigger({ session: { prompt: '   ' } })).length).toBeGreaterThan(0)
+    expect(firstTrigger(rawTrigger({ session: { prompt: ' go ' } })).session.prompt).toBe(' go ')
+  })
+
+  it('allows an empty prompt next to a skill', () => {
+    expect(
+      firstTrigger(rawTrigger({ session: { skill: 'triage', prompt: '' } })).session,
+    ).toMatchObject({ skill: 'triage', prompt: '' })
+  })
+
+  it('rejects a poll timeout that is not shorter than the interval', () => {
+    const source = (intervalSec: number, timeoutSec: number): unknown => ({
+      type: 'poll',
+      intervalSec,
+      fetch: { type: 'command', command: 'node fetch.js', timeoutSec },
+      keyField: 'id',
+    })
+    expect(invalidErrors(rawTrigger({ source: source(60, 60) })).join(' ')).toContain(
+      'must be less than',
+    )
+    expect(invalidErrors(rawTrigger({ source: source(60, 61) })).length).toBeGreaterThan(0)
+    expect(firstTrigger(rawTrigger({ source: source(60, 59) })).source).toMatchObject({
+      intervalSec: 60,
+      fetch: { timeoutSec: 59 },
+    })
+    // The default timeout (60s) does not fit a 30s interval.
+    expect(
+      invalidErrors(
+        rawTrigger({
+          source: {
+            type: 'poll',
+            intervalSec: 30,
+            fetch: { type: 'command', command: 'node fetch.js' },
+            keyField: 'id',
+          },
+        }),
+      ).length,
+    ).toBeGreaterThan(0)
   })
 })
 

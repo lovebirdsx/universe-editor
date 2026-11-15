@@ -1,0 +1,42 @@
+/* View-level modal surface. The backdrop reuses the theme's shadow color so it
+   dims consistently in light and dark themes. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-view-backdrop);
+  background: var(--vscode-widget-shadow);
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: var(--z-view-overlay);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  width: 520px;
+  max-width: calc(100vw - 48px);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: var(--spacing-7);
+  border: 1px solid var(--vscode-dialog-border);
+  border-radius: var(--radius-lg);
+  background: var(--vscode-dialog-background);
+  color: var(--vscode-dialog-foreground);
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, -50%);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-4);
+}

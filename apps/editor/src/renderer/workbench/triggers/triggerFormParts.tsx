@@ -1,39 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Small form pieces shared by the trigger configuration form and the create
- *  wizard. Kept out of workbench-ui because the labels / error wording are
- *  trigger-specific, not generic controls.
+ *  Thin editor-side wrappers over the workbench-ui form primitives, plus the
+ *  trigger-specific toggle row and the shared error message helper.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ReactNode } from 'react'
-import { Toggle } from '@universe-editor/workbench-ui'
-import styles from './TriggerManager.module.css'
+import { FormField, FormSection, Toggle } from '@universe-editor/workbench-ui'
+import styles from './triggerFormParts.module.css'
+
+export { FormField as Field, FormSection }
 
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
-}
-
-export function Field({
-  label,
-  error,
-  hint,
-  children,
-}: {
-  readonly label: string
-  readonly error?: string | undefined
-  readonly hint?: string | undefined
-  readonly children: ReactNode
-}) {
-  return (
-    <div className={styles['field']}>
-      <span className={styles['fieldLabel']}>{label}</span>
-      {children}
-      {error !== undefined && <span className={styles['fieldError']}>{error}</span>}
-      {error === undefined && hint !== undefined && (
-        <span className={styles['fieldHint']}>{hint}</span>
-      )}
-    </div>
-  )
 }
 
 export function ToggleField({
@@ -48,9 +25,10 @@ export function ToggleField({
   readonly testId: string
 }) {
   return (
-    <div className={styles['toggleField']}>
-      <span className={styles['fieldLabel']}>{label}</span>
-      <Toggle checked={checked} onChange={onChange} aria-label={label} data-testid={testId} />
-    </div>
+    <FormField label={label}>
+      <div className={styles['toggleField']}>
+        <Toggle checked={checked} onChange={onChange} aria-label={label} data-testid={testId} />
+      </div>
+    </FormField>
   )
 }

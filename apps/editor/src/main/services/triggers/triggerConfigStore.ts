@@ -33,6 +33,12 @@ import type { IRemoteConnectionService } from '../remote/remoteConnectionMainSer
 import { remoteFsPathToUri, remotePathFromUri } from '../remote/remoteUri.js'
 import type { JsonConfigFileState } from '../jsonConfig/jsonConfigFileStore.js'
 import {
+  systemTriggerClock,
+  unrefTimer,
+  type TriggerClock,
+  type TriggerTimerHandle,
+} from './triggerClock.js'
+import {
   createEmptyTriggersConfig,
   parseTriggersConfigText,
   serializeTriggersConfig,
@@ -43,8 +49,18 @@ import {
 /** The slice of JsonConfigFileStore the scheduler consumes; both implementations match. */
 export interface TriggerConfigStore extends IDisposable {
   readonly onDidChangeExternal: Event<JsonConfigFileState<TriggersConfig>>
-  load(): Promise<JsonConfigFileState<TriggersConfig>>
+  load(): Promise<TriggerConfigLoadState>
   reload(): Promise<JsonConfigFileState<TriggersConfig>>
+}
+
+/**
+ * Startup read result. `missing` (definitive absence) and `readFailed` (the
+ * transport / IO failed, so the file may still exist) are deliberately distinct:
+ * only the former may clear a workspace's last snapshot.
+ */
+export interface TriggerConfigLoadState extends JsonConfigFileState<TriggersConfig> {
+  readonly missing?: boolean
+  readonly readFailed?: boolean
 }
 
 const DEFAULT_DEBOUNCE_MS = 200
@@ -71,6 +87,8 @@ export interface RemoteTriggerConfigStoreOptions {
   readonly fileService: IFileService
   readonly connections: IRemoteConnectionService
   readonly debounceMs?: number
+  /** Defaults to host timers; the scheduler injects its fake-clock seam in tests. */
+  readonly clock?: TriggerClock
   /** Test seam: the default tunnels over a RemoteWatcherTransport. */
   readonly createWatcherClient?: () => WatcherProcessClient
 }
@@ -96,6 +114,7 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
   private readonly _fileService: IFileService
   private readonly _connections: IRemoteConnectionService
   private readonly _debounceMs: number
+  private readonly _clock: TriggerClock
   private readonly _createWatcherClient: () => WatcherProcessClient
 
   private _state: JsonConfigFileState<TriggersConfig> = { value: createEmptyTriggersConfig() }
@@ -104,7 +123,7 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
   private _watchId: number | undefined
   private _watchTarget: WatchTarget | undefined
   private _watchSubs: IDisposable[] = []
-  private _reloadTimer: NodeJS.Timeout | undefined
+  private _reloadTimer: TriggerTimerHandle | undefined
   private _disposed = false
 
   constructor(options: RemoteTriggerConfigStoreOptions) {
@@ -117,6 +136,7 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
     this._fileService = options.fileService
     this._connections = options.connections
     this._debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS
+    this._clock = options.clock ?? systemTriggerClock
     this._createWatcherClient =
       options.createWatcherClient ??
       (() => createRemoteWatcherClient(this._authority, this._connections, this._logger))
@@ -126,7 +146,7 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
     return this._state
   }
 
-  load(): Promise<JsonConfigFileState<TriggersConfig>> {
+  load(): Promise<TriggerConfigLoadState> {
     return this._enqueue(async () => {
       const next = await this._read('startup')
       this._state = next
@@ -149,7 +169,7 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
   override dispose(): void {
     this._disposed = true
     if (this._reloadTimer !== undefined) {
-      clearTimeout(this._reloadTimer)
+      this._clock.clearTimeout(this._reloadTimer)
       this._reloadTimer = undefined
     }
     const client = this._client
@@ -184,21 +204,27 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
     return this._connections.getState(this._authority) === 'connected'
   }
 
-  private async _read(mode: 'startup' | 'runtime'): Promise<JsonConfigFileState<TriggersConfig>> {
+  private async _read(mode: 'startup' | 'runtime'): Promise<TriggerConfigLoadState> {
     if (!this._isConnected()) {
       this._logger.debug(`remote trigger config read skipped (${this._authority} is not connected)`)
-      return mode === 'startup' ? { value: createEmptyTriggersConfig() } : this._state
+      return { value: this._state.value, readFailed: true }
     }
     let text: string
     try {
       text = await this._fileService.readFileText(this._fileUri)
     } catch (err) {
-      if (isNotFound(err)) return { value: createEmptyTriggersConfig() }
-      return this._invalidRead(mode, describeError(err))
+      if (isNotFound(err)) return { value: createEmptyTriggersConfig(), missing: true }
+      // A transport / IO failure is not "the file is gone": keep the last
+      // snapshot and let the scheduler retry instead of wiping the definitions.
+      return {
+        value: this._state.value,
+        error: describeError(err),
+        readFailed: true,
+      }
     }
     const parsed = parseTriggersConfigText(text)
     if (parsed.kind === 'ok') return { value: parsed.value }
-    if (parsed.kind === 'missing') return { value: createEmptyTriggersConfig() }
+    if (parsed.kind === 'missing') return { value: createEmptyTriggersConfig(), missing: true }
     return this._invalidRead(mode, parsed.error)
   }
 
@@ -289,11 +315,11 @@ export class RemoteTriggerConfigStore extends Disposable implements TriggerConfi
 
   private _scheduleReload(): void {
     if (this._disposed || this._reloadTimer !== undefined) return
-    const timer = setTimeout(() => {
+    const timer = this._clock.setTimeout(() => {
       this._reloadTimer = undefined
       void this._reloadAfterEvent()
     }, this._debounceMs)
-    timer.unref()
+    unrefTimer(timer)
     this._reloadTimer = timer
   }
 

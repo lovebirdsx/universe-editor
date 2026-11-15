@@ -258,6 +258,7 @@ function makeOpts() {
         registerWindowHost: () => {},
         unregisterWindowHost: () => {},
         setWindowProvider: () => {},
+        failActiveRunsForWindow: vi.fn(),
       } as never,
     },
     logService,
@@ -329,6 +330,28 @@ describe('WindowMainService', () => {
       grabRenderProcessGoneHandler()(undefined, { reason: 'clean-exit' })
       expect(errorSink.recordLocal).not.toHaveBeenCalled()
       expect(vi.mocked(dialog.showMessageBox)).not.toHaveBeenCalled()
+      expect(
+        (
+          opts.appServices.triggers as unknown as {
+            failActiveRunsForWindow: ReturnType<typeof vi.fn>
+          }
+        ).failActiveRunsForWindow,
+      ).not.toHaveBeenCalled()
+    })
+
+    it('releases the crashed renderer’s trigger runs', async () => {
+      const opts = makeOpts()
+      opts.e2eEnabled = true
+      const svc = makeService(opts)
+      const id = await svc.createWindow()
+      grabRenderProcessGoneHandler()(undefined, { reason: 'crashed' })
+      expect(
+        (
+          opts.appServices.triggers as unknown as {
+            failActiveRunsForWindow: ReturnType<typeof vi.fn>
+          }
+        ).failActiveRunsForWindow,
+      ).toHaveBeenCalledWith(id, 'crashed')
     })
 
     it('offers a reload dialog outside E2E and reloads on confirm', async () => {
@@ -394,6 +417,14 @@ describe('WindowMainService', () => {
         // end now, not at the next sample, which may never come.
         expect(svc.getRendererEpoch(id)).toBe(1)
         expect(invalidateWindowRenderer).toHaveBeenCalledWith(id, 'window-reloaded')
+        // Runs started by the replaced renderer can never report their end.
+        expect(
+          (
+            opts.appServices.triggers as unknown as {
+              failActiveRunsForWindow: ReturnType<typeof vi.fn>
+            }
+          ).failActiveRunsForWindow,
+        ).toHaveBeenCalledWith(id, 'reloaded')
       })
 
       it('leaves subframe and same-document navigations alone', async () => {

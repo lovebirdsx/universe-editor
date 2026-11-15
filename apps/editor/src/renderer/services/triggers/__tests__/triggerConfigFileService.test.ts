@@ -11,6 +11,7 @@ import {
   createTrigger,
   readTriggerConfig,
   saveTriggerConfig,
+  saveTriggerConfigRebased,
   triggersConfigUri,
 } from '../triggerConfigFileService.js'
 
@@ -40,6 +41,8 @@ class FakeFiles {
   readonly entries = new Map<string, { text: string; mtime: number }>()
   readonly directories = new Set<string>()
   readonly writes: string[] = []
+  readonly renames: { source: string; target: string }[] = []
+  renameSupported = true
   private clock = 100
 
   put(uri: URI, text: string): void {
@@ -79,6 +82,22 @@ class FakeFiles {
 
   async createDirectory(uri: URI): Promise<void> {
     this.directories.add(uri.toString())
+  }
+
+  async rename(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void> {
+    if (!this.renameSupported) throw new Error('rename not supported')
+    const entry = this.entries.get(source.toString())
+    if (entry === undefined) throw new FileSystemError('not found', 'ENOENT')
+    if (opts?.overwrite !== true && this.entries.has(target.toString())) {
+      throw new FileSystemError('already exists', 'EEXIST')
+    }
+    this.entries.delete(source.toString())
+    this.entries.set(target.toString(), { text: entry.text, mtime: ++this.clock })
+    this.renames.push({ source: source.toString(), target: target.toString() })
+  }
+
+  async delete(uri: URI): Promise<void> {
+    if (!this.entries.delete(uri.toString())) throw new FileSystemError('not found', 'ENOENT')
   }
 }
 
@@ -184,6 +203,56 @@ describe('saveTriggerConfig', () => {
     expect(store.writes).toHaveLength(0)
   })
 
+  it('detects a same-mtime content change before writing', async () => {
+    const store = files()
+    const base = await snapshot(store)
+    const entry = store.get(CONFIG_URI)
+    if (entry !== undefined) entry.text = '{"triggers": []}'
+
+    const result = await saveTriggerConfig(store, base, 'alpha', trigger({ name: 'New' }))
+    expect(result.kind).toBe('conflict')
+    expect(store.writes).toHaveLength(0)
+  })
+
+  it('serializes concurrent saves so the second one sees the first result', async () => {
+    const store = files()
+    const base = await snapshot(store)
+    const [first, second] = await Promise.all([
+      saveTriggerConfig(store, base, 'alpha', trigger({ name: 'First' })),
+      saveTriggerConfig(store, base, 'alpha', trigger({ name: 'Second' })),
+    ])
+
+    expect(first.kind).toBe('ok')
+    expect(second.kind).toBe('conflict')
+    expect(store.get(CONFIG_URI)?.text).toContain('"name": "First"')
+  })
+
+  it('replaces the file through a temporary file and rename', async () => {
+    const store = files()
+    const base = await snapshot(store)
+    const result = await saveTriggerConfig(store, base, 'alpha', trigger({ name: 'Atomic' }))
+
+    expect(result.kind).toBe('ok')
+    expect(store.renames).toHaveLength(1)
+    expect(store.renames[0]?.target).toBe(CONFIG_URI.toString())
+    expect(store.renames[0]?.source).toContain('.tmp-')
+    expect(store.get(CONFIG_URI)?.text).toContain('"name": "Atomic"')
+  })
+
+  it('falls back to a direct write when the provider cannot rename', async () => {
+    const store = files()
+    store.renameSupported = false
+    const base = await snapshot(store)
+    const result = await saveTriggerConfig(store, base, 'alpha', trigger({ name: 'Fallback' }))
+
+    expect(result.kind).toBe('ok')
+    expect(store.renames).toHaveLength(0)
+    expect(store.writes).toContain(CONFIG_URI.toString())
+    expect(store.get(CONFIG_URI)?.text).toContain('"name": "Fallback"')
+    const leftovers = [...store.entries.keys()].filter((key) => key.includes('.tmp-'))
+    expect(leftovers).toEqual([])
+  })
+
   it('reports missing-trigger when the id is no longer in the file', async () => {
     const store = files()
     const base = await snapshot(store)
@@ -226,6 +295,72 @@ describe('saveTriggerConfig', () => {
     const result = await saveTriggerConfig(store, base, 'alpha', trigger())
     expect(result).toEqual({ kind: 'ok', text: CONFIG_TEXT, mtime: base.mtime })
     expect(store.writes).toHaveLength(0)
+  })
+})
+
+describe('saveTriggerConfigRebased', () => {
+  async function snapshot(store: FakeFiles) {
+    store.put(CONFIG_URI, CONFIG_TEXT)
+    const base = await readTriggerConfig(store as unknown as IFileService, WORKSPACE)
+    if (base === undefined) throw new Error('snapshot missing')
+    return base
+  }
+
+  const externallyEdited = CONFIG_TEXT.replace('// Header comment.', '// Remote header.')
+    .replace('"enabled": false', '"enabled": true')
+    .replace('"prompt": "Do it"', '"prompt": "Remote prompt"')
+    .replace(
+      '    }\n  ]',
+      '    },\n    {\n      "id": "beta",\n      "name": "Beta",\n      "enabled": false,\n      "source": { "type": "manual" },\n      "session": { "prompt": "Beta task" }\n    }\n  ]',
+    )
+
+  it('applies the draft patch to the latest disk text and keeps unrelated changes', async () => {
+    const store = files()
+    const base = await snapshot(store)
+    store.put(CONFIG_URI, externallyEdited)
+
+    const result = await saveTriggerConfigRebased(
+      store,
+      base,
+      'alpha',
+      trigger({ name: 'Local' }),
+      { origin: trigger() },
+    )
+
+    expect(result.kind).toBe('ok')
+    const text = store.get(CONFIG_URI)?.text ?? ''
+    expect(text).toContain('"name": "Local", // inline comment')
+    expect(text).toContain('// Remote header.')
+    expect(text).toContain('"prompt": "Remote prompt"')
+    expect(text).toContain('"enabled": true')
+    expect(text).toContain('"id": "beta"')
+  })
+
+  it('reports fields also changed on disk and only overwrites them when asked', async () => {
+    const store = files()
+    const base = await snapshot(store)
+    store.put(CONFIG_URI, CONFIG_TEXT.replace('"name": "Alpha"', '"name": "Remote"'))
+
+    const conflict = await saveTriggerConfigRebased(
+      store,
+      base,
+      'alpha',
+      trigger({ name: 'Local' }),
+      { origin: trigger() },
+    )
+    expect(conflict).toEqual({ kind: 'field-conflict', fields: ['name'] })
+    expect(store.writes).toHaveLength(0)
+    expect(store.get(CONFIG_URI)?.text).toContain('"name": "Remote"')
+
+    const overwritten = await saveTriggerConfigRebased(
+      store,
+      base,
+      'alpha',
+      trigger({ name: 'Local' }),
+      { origin: trigger(), overwrite: true },
+    )
+    expect(overwritten.kind).toBe('ok')
+    expect(store.get(CONFIG_URI)?.text).toContain('"name": "Local"')
   })
 })
 
@@ -274,6 +409,21 @@ describe('createTrigger', () => {
     store.put(CONFIG_URI, '{ "triggers": [ { "id": "broken", "source": { "type": "nope" } } ] }')
     const result = await createTrigger(store, WORKSPACE, trigger({ id: 'broken' }))
     expect(result.kind).toBe('duplicate-id')
+  })
+
+  it('serializes concurrent appends instead of losing one definition', async () => {
+    const store = files()
+    store.put(CONFIG_URI, CONFIG_TEXT)
+    const [first, second] = await Promise.all([
+      createTrigger(store, WORKSPACE, trigger({ id: 'first' })),
+      createTrigger(store, WORKSPACE, trigger({ id: 'second' })),
+    ])
+
+    expect(first.kind).toBe('ok')
+    expect(second.kind).toBe('ok')
+    const text = store.get(CONFIG_URI)?.text ?? ''
+    expect(text).toContain('"first"')
+    expect(text).toContain('"second"')
   })
 
   it('refuses to write while the JSON editor has unsaved changes', async () => {

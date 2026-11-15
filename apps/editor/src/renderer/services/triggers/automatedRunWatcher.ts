@@ -233,7 +233,15 @@ export class AutomatedRunWatcher {
     const durationMs = Math.max(0, Math.round(this._activeTotal(this._now())))
     const costUsd = usdCost(this._session.usage.get())
     this._disposeTimers()
-    void this._finalize(outcome, error, durationMs, costUsd)
+    // Terminal bookkeeping must never leave an unhandled rejection: the run is
+    // already finished and its outcome is the only signal main receives.
+    void this._finalize(outcome, error, durationMs, costUsd).catch((err: unknown) => {
+      this._logger?.warn(
+        `failed to finalize run ${this._request.origin.runId}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      )
+    })
   }
 
   private async _finalize(
@@ -266,9 +274,12 @@ export class AutomatedRunWatcher {
       durationMs,
       ...(costUsd === undefined ? {} : { costUsd }),
     }
-    this._subscription?.dispose()
-    this._subscription = undefined
-    this._onRunEnd(end)
+    try {
+      this._onRunEnd(end)
+    } finally {
+      this._subscription?.dispose()
+      this._subscription = undefined
+    }
   }
 
   private _clearBudgetTimer(): void {

@@ -45,4 +45,13 @@ describe('triggerFingerprint', () => {
   it('produces a full SHA-256 digest', () => {
     expect(triggerFingerprint(trigger())).toMatch(/^[0-9a-f]{64}$/)
   })
+
+  it('memoizes a snapshot by object identity', () => {
+    const snapshot = trigger()
+    const digest = triggerFingerprint(snapshot)
+    // Config snapshots are immutable per load; mutating one in place must be
+    // invisible to the cache rather than trigger a re-hash on every summary pass.
+    ;(snapshot as unknown as { enabled: boolean }).enabled = false
+    expect(triggerFingerprint(snapshot)).toBe(digest)
+  })
 })

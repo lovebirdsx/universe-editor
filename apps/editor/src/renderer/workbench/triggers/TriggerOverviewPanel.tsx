@@ -16,11 +16,11 @@ import {
   triggerSourceFacts,
   triggerSourceLabel,
   triggerStatusBadge,
-} from '../../../shared/triggers/triggerPresentation.js'
+} from '../../services/triggers/triggerPresentation.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
 import { relativeTime } from '../../relativeTime.js'
 import { automationVerdictLabel, triggerRunOutcomeLabel } from '../agents/automationLabels.js'
-import styles from './TriggerManager.module.css'
+import styles from './TriggerOverviewPanel.module.css'
 import type { TriggerManagerActions } from './useTriggerActions.js'
 
 export interface TriggerOverviewPanelProps {

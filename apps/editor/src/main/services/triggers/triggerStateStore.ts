@@ -65,11 +65,19 @@ export function createEmptyTriggerStateFile(): TriggerStateFile {
   return { version: 2, pausedAll: false, triggers: {}, pending: [] }
 }
 
+/** Timer abstraction so tests can drive the debounce on a fake clock. */
+export interface TriggerStateTimers {
+  setTimeout(callback: () => void, ms: number): unknown
+  clearTimeout(handle: unknown): void
+}
+
 export interface TriggerStateStoreOptions {
   readonly file: string
   readonly logger: ILogger
   readonly now?: () => number
   readonly debounceMs?: number
+  /** Defaults to the host timers; the trigger scheduler injects its own clock. */
+  readonly timers?: TriggerStateTimers
 }
 
 const DEFAULT_DEBOUNCE_MS = 200
@@ -79,8 +87,9 @@ export class TriggerStateStore {
   private readonly _logger: ILogger
   private readonly _now: () => number
   private readonly _debounceMs: number
+  private readonly _timers: TriggerStateTimers
   private _state: TriggerStateFile = createEmptyTriggerStateFile()
-  private _timer: ReturnType<typeof setTimeout> | undefined
+  private _timer: unknown
   private _serial: Promise<void> = Promise.resolve()
   private _disposed = false
 
@@ -89,6 +98,10 @@ export class TriggerStateStore {
     this._logger = options.logger
     this._now = options.now ?? Date.now
     this._debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS
+    this._timers = options.timers ?? {
+      setTimeout: (callback, ms) => setTimeout(callback, ms),
+      clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    }
   }
 
   get state(): TriggerStateFile {
@@ -119,17 +132,24 @@ export class TriggerStateStore {
   /** Writes immediately if a write is pending; safe to call from dispose. */
   flush(): Promise<void> {
     if (this._timer !== undefined) {
-      clearTimeout(this._timer)
+      this._timers.clearTimeout(this._timer)
       this._timer = undefined
     }
     return this._enqueue(() => writeJsonAtomic(this._file, this._state))
+  }
+
+  /** Like {@link flush} but does not touch the disk when nothing is pending. */
+  flushIfPending(): Promise<void> {
+    if (this._timer !== undefined) return this.flush()
+    // A timer that already fired may still have its write in flight.
+    return this._serial
   }
 
   dispose(): void {
     if (this._disposed) return
     this._disposed = true
     if (this._timer !== undefined) {
-      clearTimeout(this._timer)
+      this._timers.clearTimeout(this._timer)
       this._timer = undefined
     }
     void this.flush().catch((err) =>
@@ -138,14 +158,14 @@ export class TriggerStateStore {
   }
 
   private _scheduleWrite(): void {
-    if (this._timer !== undefined) clearTimeout(this._timer)
-    this._timer = setTimeout(() => {
+    if (this._timer !== undefined) this._timers.clearTimeout(this._timer)
+    this._timer = this._timers.setTimeout(() => {
       this._timer = undefined
       void this._enqueue(() => writeJsonAtomic(this._file, this._state)).catch((err) =>
         this._logger.warn(`state.json write failed: ${describeError(err)}`),
       )
     }, this._debounceMs)
-    this._timer.unref?.()
+    ;(this._timer as { unref?: () => void } | undefined)?.unref?.()
   }
 
   private _enqueue(task: () => Promise<void>): Promise<void> {

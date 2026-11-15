@@ -78,7 +78,6 @@ import {
 } from '../acpClientService.js'
 import { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import { supportsSystemPromptAppend } from '../agentPromptCapabilities.js'
-import { TRIGGER_OUTPUT_CONTRACT_SYSTEM } from '../../../../shared/triggers/promptTemplate.js'
 import { IEnvironmentSnapshotService } from '../../../../shared/ipc/environmentSnapshotService.js'
 import {
   AcpSessionCreateProfiler,
@@ -196,11 +195,11 @@ import { selectOptionHasValue, snapshotConfigSelections } from '../configOptionL
 import { buildSideTaskModelOverrides, readSideTaskModels } from '../sideTaskConfig.js'
 import { IExtensionMcpServersService } from '../../extensions/extensionMcpServersService.js'
 import { IMcpServerEnablementService } from '../mcpServerEnablementService.js'
-import type { AutomationOrigin } from '../../../../shared/triggers/types.js'
 import {
-  decideAutomatedPermission,
-  visibleAutomatedPermissionOptions,
-} from '../../triggers/automatedPermissionPolicy.js'
+  createRestoredAutomationProfile,
+  visibleAutomationPermissionOptions,
+  type AcpAutomationProfile,
+} from './acpAutomationProfile.js'
 
 /**
  * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
@@ -275,16 +274,12 @@ export interface IAcpCreateSessionOptions {
    */
   readonly activate?: boolean
   /**
-   * Trigger provenance. An automated session runs under the restricted
-   * permission policy (`services/triggers/automatedPermissionPolicy.ts`);
-   * manual sessions leave this unset and keep their existing behavior.
+   * Behaviour profile for an automated run. The module that starts the run
+   * supplies its permission / plan / completion policy here; ACP only stores
+   * the profile's opaque origin metadata and calls its policy methods. Manual
+   * sessions leave this unset and keep their existing behavior.
    */
-  readonly automation?: AutomationOrigin
-  /**
-   * Absolute run directory of an automated session. Writes whose every target
-   * lies inside it are auto-approved once; nothing else is.
-   */
-  readonly automationRunDir?: string
+  readonly automationProfile?: AcpAutomationProfile
   /**
    * Extra `additionalDirectories` to advertise to the local agent (merged with
    * the editor's bundled agent-skills root). Ignored for remote sessions, whose
@@ -1054,6 +1049,10 @@ export class AcpSessionService
     const hh = String(now.getHours()).padStart(2, '0')
     const mm = String(now.getMinutes()).padStart(2, '0')
     const title = options?.title ?? `${agentName} ${hh}:${mm}`
+    // The contract can travel either as a generic option or inside the
+    // automation profile; the latter is what a resume reads back from history.
+    const systemPromptAppend =
+      options?.systemPromptAppend ?? options?.automationProfile?.systemPromptAppend
 
     // Build + publish the session synchronously with a stable local id so the
     // chat UI renders (and accepts input) immediately. The agent process spawn +
@@ -1071,13 +1070,10 @@ export class AcpSessionService
       ...(cwd !== undefined ? { cwd } : {}),
       ...(authority !== undefined ? { authority } : {}),
       ...(options?.aiFix === true ? { suppressConfigDefaults: true } : {}),
-      ...(options?.automation !== undefined ? { automation: options.automation } : {}),
-      ...(options?.automationRunDir !== undefined
-        ? { automationRunDir: options.automationRunDir }
+      ...(options?.automationProfile !== undefined
+        ? { automationProfile: options.automationProfile }
         : {}),
-      ...(options?.systemPromptAppend !== undefined
-        ? { systemPromptAppend: options.systemPromptAppend }
-        : {}),
+      ...(systemPromptAppend !== undefined ? { systemPromptAppend } : {}),
     })
     this._register(session)
     this._wireAuthGuidance(session)
@@ -1182,15 +1178,15 @@ export class AcpSessionService
   }
 
   /**
-   * The system-prompt append a resumed automated session must carry. Only the
-   * claude fork understands it; other agents ran with the contract inlined, so
-   * re-sending would be meaningless (and codex ignores it anyway).
+   * The system-prompt append a resumed automated session must carry. It was
+   * persisted with the automation origin at creation, so resume re-sends the
+   * exact same bytes the agent fork fingerprinted. Only agents advertising the
+   * capability receive it; others ran with the contract inlined.
    */
-  private _automationSystemPromptAppend(entry: AcpSessionHistoryEntry): string | undefined {
-    if (entry.automation === undefined) return undefined
-    return supportsSystemPromptAppend(this._registry.get(entry.agentId))
-      ? TRIGGER_OUTPUT_CONTRACT_SYSTEM
-      : undefined
+  private _resumeSystemPromptAppend(entry: AcpSessionHistoryEntry): string | undefined {
+    const append = entry.automation?.systemPromptAppend
+    if (append === undefined) return undefined
+    return supportsSystemPromptAppend(this._registry.get(entry.agentId)) ? append : undefined
   }
 
   /**
@@ -1338,6 +1334,7 @@ export class AcpSessionService
       // A toggled-while-connecting selection is pinned onto the row here; an
       // untouched session stores nothing (inherit semantics live on read).
       const liveSelection = session.mcpServerSelection.get()
+      const persistedSystemPromptAppend = session.systemPromptAppend
       this._history.add({
         agentId: resolvedAgentId,
         sessionIdOnAgent: result.sessionId,
@@ -1348,13 +1345,15 @@ export class AcpSessionService
         ...(liveSelection !== null ? { mcpServerNames: [...liveSelection] } : {}),
         ...(options?.aiFix === true ? { aiFix: true } : {}),
         ...(options?.internal === true ? { internal: true } : {}),
-        ...(options?.automation !== undefined
+        ...(options?.automationProfile !== undefined
           ? {
               automation: {
-                ...options.automation,
-                // Persisted so a resume keeps the runDir permission scope.
-                ...(options.automationRunDir !== undefined
-                  ? { runDir: options.automationRunDir }
+                ...options.automationProfile.origin,
+                // Persisted so a resume keeps the exact prompt fingerprint and
+                // the runDir permission scope.
+                ...(persistedSystemPromptAppend !== undefined &&
+                options.automationProfile.origin.systemPromptAppend === undefined
+                  ? { systemPromptAppend: persistedSystemPromptAppend }
                   : {}),
               },
             }
@@ -1595,10 +1594,10 @@ export class AcpSessionService
         throw new Error('Agent does not advertise agentCapabilities.loadSession — cannot resume')
       }
       const title = entry.title
-      // Automated sessions get the static trigger contract back on every
+      // Automated sessions get the persisted static contract back on every
       // resume: it is byte-identical by construction, so the fork's fingerprint
       // matches the session created before the editor restart.
-      const systemPromptAppend = this._automationSystemPromptAppend(entry)
+      const systemPromptAppend = this._resumeSystemPromptAppend(entry)
       // Construct the AcpSession BEFORE session/load so any session/update
       // notifications the agent emits during replay route to the right
       // session. Resumed sessions are keyed by the agent-issued id (id ===
@@ -1639,15 +1638,11 @@ export class AcpSessionService
         ...(entry.aiFix === true || entry.sideTaskOf !== undefined
           ? { suppressConfigDefaults: true }
           : {}),
-        // A resumed automated session keeps its restricted permission policy and
-        // the runDir scope persisted at creation.
+        // A resumed automated session keeps the restricted permission policy;
+        // its serializable origin (incl. runDir scope) comes from history and
+        // the rest of the profile falls back to the safe defaults.
         ...(entry.automation !== undefined
-          ? {
-              automation: entry.automation,
-              ...(entry.automation.runDir !== undefined
-                ? { automationRunDir: entry.automation.runDir }
-                : {}),
-            }
+          ? { automationProfile: createRestoredAutomationProfile(entry.automation) }
           : {}),
         ...(systemPromptAppend !== undefined ? { systemPromptAppend } : {}),
       })
@@ -2796,20 +2791,15 @@ export class AcpSessionService
       return { outcome: { outcome: 'cancelled' } }
     }
     if (session.internal) return this._resolveInternalPermission(params, session)
-    // Automated sessions override the user's personal auto-approval settings
-    // (docs/development/triggers.md): no generic kind approval, no plan-policy
-    // skip, no plan auto-execute countdown, and `allow_always` is neither offered
-    // nor persisted. The only silent approval is a one-shot write entirely inside
-    // the run directory.
-    const automated = session.automation !== undefined
-    const claudePlan = isClaudeAgent(session.agentId) && this._isPlanMode(session)
-    if (automated) {
-      const optionId = decideAutomatedPermission(
-        params,
-        session.automationRunDir,
-        session.authority,
-        this._uriIdentity,
-      )
+    // An automation profile overrides the user's personal auto-approval settings:
+    // its owner decides the only silent approvals, plan-policy skip is bypassed,
+    // plan auto-execute is off, and `allow_always` is neither offered nor
+    // persisted.
+    const automation = session.automationProfile
+    const claudePlan =
+      automation === undefined && isClaudeAgent(session.agentId) && this._isPlanMode(session)
+    if (automation !== undefined) {
+      const optionId = automation.decidePermission(params)
       if (optionId !== undefined) {
         this._telemetry.publicLog('acp.permission_automated_run_dir_approved', {
           kind: params.toolCall.kind ?? 'unknown',
@@ -2849,13 +2839,12 @@ export class AcpSessionService
         return auto
       }
     }
-    const allowAlways = automated
-      ? undefined
-      : params.options.find((o) => o.kind === 'allow_always')
+    const allowAlways =
+      automation !== undefined ? undefined : params.options.find((o) => o.kind === 'allow_always')
     // plan 审查的自动执行：设置非 off 且目标选项确实在本次 options 里才附加
     // （例如 ALLOW_BYPASS 关闭时 bypassPermissions 缺席，降级为普通弹卡）。
     // Automated sessions always wait for a human on the plan-approval card.
-    const autoResolveSpec = automated ? undefined : this._planAutoResolve(params)
+    const autoResolveSpec = automation !== undefined ? undefined : this._planAutoResolve(params)
     const requestId = generateUuid()
     return await new Promise<RequestPermissionResponse>((resolve) => {
       let settled = false
@@ -2891,7 +2880,7 @@ export class AcpSessionService
       ): void => {
         if (settled) return
         if (
-          !automated &&
+          automation === undefined &&
           allowAlways &&
           optionId === allowAlways.optionId &&
           params.toolCall.kind &&
@@ -2940,8 +2929,8 @@ export class AcpSessionService
         toolCallId: params.toolCall.toolCallId,
         title: params.toolCall.title ?? params.toolCall.toolCallId,
         ...(params.toolCall.kind != null ? { kind: params.toolCall.kind } : {}),
-        options: (automated
-          ? visibleAutomatedPermissionOptions(params.options)
+        options: (automation !== undefined
+          ? visibleAutomationPermissionOptions(params.options)
           : params.options
         ).map((o) => ({
           optionId: o.optionId,
@@ -3074,9 +3063,10 @@ export class AcpSessionService
    * the CLI.
    */
   private _planPolicy(sessionId: string): PlanPermissionPolicy {
-    // Automated sessions always wait for a human on plan approvals, regardless
-    // of the personal `planPermissionPolicy` / native-plan-auto setting.
-    if (this._findSession(sessionId)?.automation !== undefined) return 'manual'
+    // An automation profile owns plan approvals; unattended runs pin `manual`
+    // regardless of the personal `planPermissionPolicy` / native-plan-auto setting.
+    const automation = this._findSession(sessionId)?.automationProfile
+    if (automation !== undefined) return automation.planPolicy
     const existing = this._planPolicyBySession.get(sessionId)
     if (existing !== undefined) return existing
     const policy = readPlanPermissionPolicy(this._config)

@@ -67,6 +67,7 @@ import {
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
+import type { AcpAutomationProfile } from '../acpAutomationProfile.js'
 import {
   AcpSession,
   PLAN_AUTO_EXECUTE_DELAY_MS,
@@ -9336,10 +9337,17 @@ describe('AcpSessionService — automated session permissions', () => {
     return { svc, client, permission, config }
   }
 
-  async function connectAutomated(svc: AcpSessionService): Promise<IAcpSession> {
+  async function connectAutomated(
+    svc: AcpSessionService,
+    decidePermission: AcpAutomationProfile['decidePermission'] = () => undefined,
+  ): Promise<IAcpSession> {
     const session = await svc.createSession('claude-code', {
-      automation: ORIGIN,
-      automationRunDir: RUN_DIR,
+      automationProfile: {
+        origin: { ...ORIGIN, runDir: RUN_DIR },
+        suppressCompletionNotify: true,
+        planPolicy: 'manual',
+        decidePermission,
+      },
     })
     await session.whenConnected()
     return session
@@ -9433,23 +9441,24 @@ describe('AcpSessionService — automated session permissions', () => {
     expect(pending.autoResolve).toBeUndefined()
   })
 
-  it('auto-selects allow_once for an edit fully inside the run directory', async () => {
+  it('auto-selects the option chosen by the automation profile', async () => {
     const h = makeHarness()
-    const session = await connectAutomated(h.svc)
+    const decidePermission = vi.fn(() => 'once')
+    const session = await connectAutomated(h.svc, decidePermission)
 
-    const result = await h.svc.onRequestPermission(
-      permissionRequest(session, 'edit', [
-        { path: `${RUN_DIR}/result.json` },
-        { path: `${RUN_DIR}/report.md` },
-      ]),
-    )
+    const params = permissionRequest(session, 'edit', [
+      { path: `${RUN_DIR}/result.json` },
+      { path: `${RUN_DIR}/report.md` },
+    ])
+    const result = await h.svc.onRequestPermission(params)
 
     expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'once' } })
+    expect(decidePermission).toHaveBeenCalledWith(params)
     expect(session.pendingPermission.get()).toBeUndefined()
     expect(h.permission.persisted).toEqual([])
   })
 
-  it('shows a card when an edit leaves the run directory or uses ".."', async () => {
+  it('shows a card when the automation profile declines the request', async () => {
     const h = makeHarness()
     const session = await connectAutomated(h.svc)
 

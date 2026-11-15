@@ -1,14 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  TriggerCreateWizard — a four-step modal that appends a trigger definition to
- *  a workspace's triggers.json. Templates only prefill the source; everything
- *  remains editable. A missing file is created with an empty config, and
- *  validation runs through the same parser as the scheduler.
+ *  TriggerCreateWizard — a five-step modal that appends a trigger definition to
+ *  a workspace's triggers.json: template → basics → source parameters → session
+ *  → limits. Source templates prefill the source; skill templates additionally
+ *  prefill skill / prompt / budget and link to their guide. Everything remains
+ *  editable. A missing file is created with an empty config, and validation runs
+ *  through the same parser as the scheduler.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   IEditorGroupsService,
+  IEditorService,
   IFileService,
   INotificationService,
   IWorkspaceService,
@@ -17,27 +20,34 @@ import {
   URI,
   localize,
 } from '@universe-editor/platform'
-import {
-  Button,
-  FocusScopeOverlay,
-  Input,
-  Select,
-  Textarea,
-  Toggle,
-} from '@universe-editor/workbench-ui'
+import { Button, FormField, Input, ModalShell, Select } from '@universe-editor/workbench-ui'
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { parseTriggerDocument } from '../../../shared/triggers/configDocument.js'
 import { isValidTriggerId, workspaceDisplayPath } from '../../../shared/triggers/configParse.js'
+import { triggerConfigErrorText } from '../../services/triggers/triggerPresentation.js'
 import {
   createTrigger,
   isTriggerConfigEditorDirty,
   readTriggerConfig,
   triggersConfigUri,
 } from '../../services/triggers/triggerConfigFileService.js'
+import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
 import { useService } from '../useService.js'
-import { emptyDraft, validateTriggerDraft, type TriggerConfigDraft } from './triggerConfigDraft.js'
-import { Field, errorText } from './triggerFormParts.js'
-import styles from './TriggerManager.module.css'
+import {
+  emptyDraft,
+  validateTriggerDraft,
+  withSourcePatch,
+  withSourceType,
+  type TriggerConfigDraft,
+} from './triggerConfigDraft.js'
+import { errorText, ToggleField } from './triggerFormParts.js'
+import type { TriggerSourceDraft } from './triggerSources/types.js'
+import { TriggerBudgetFields } from './TriggerBudgetFields.js'
+import { TriggerConcurrencyFields } from './TriggerConcurrencyFields.js'
+import { TriggerSessionFields } from './TriggerSessionFields.js'
+import { TriggerSourceFields } from './TriggerSourceFields.js'
+import { TRIGGER_SKILL_TEMPLATES, type TriggerSkillTemplate } from './triggerTemplates.js'
+import styles from './TriggerCreateWizard.module.css'
 
 export interface TriggerCreateWizardProps {
   readonly onClose: () => void
@@ -45,15 +55,22 @@ export interface TriggerCreateWizardProps {
   readonly onCreated: (workspaceUri: URI, triggerId: string) => void
 }
 
-type TemplateId = 'manual' | 'schedule-cron' | 'schedule-interval' | 'poll' | 'swarm' | 'blank'
+type SourceTemplateId =
+  | 'manual'
+  | 'schedule-cron'
+  | 'schedule-interval'
+  | 'poll'
+  | 'swarm'
+  | 'blank'
 
-interface Template {
-  readonly id: TemplateId
+interface SourceTemplate {
+  readonly id: SourceTemplateId
   readonly label: string
   readonly description: string
+  readonly source: TriggerSourceDraft
 }
 
-const TEMPLATES: readonly Template[] = [
+const SOURCE_TEMPLATES: readonly SourceTemplate[] = [
   {
     id: 'manual',
     label: localize('trigger.manager.wizard.template.manual', 'Manual'),
@@ -61,6 +78,7 @@ const TEMPLATES: readonly Template[] = [
       'trigger.manager.wizard.template.manualDesc',
       'Runs only when you start it from the manager or a command.',
     ),
+    source: { type: 'manual' },
   },
   {
     id: 'schedule-cron',
@@ -69,11 +87,13 @@ const TEMPLATES: readonly Template[] = [
       'trigger.manager.wizard.template.cronDesc',
       'Runs on a cron expression, e.g. every weekday at 09:00.',
     ),
+    source: { type: 'schedule', cron: '0 9 * * 1', everyMin: '', onMissed: 'skip' },
   },
   {
     id: 'schedule-interval',
     label: localize('trigger.manager.wizard.template.interval', 'Scheduled (interval)'),
     description: localize('trigger.manager.wizard.template.intervalDesc', 'Runs every N minutes.'),
+    source: { type: 'schedule', cron: '', everyMin: '10', onMissed: 'skip' },
   },
   {
     id: 'poll',
@@ -82,6 +102,13 @@ const TEMPLATES: readonly Template[] = [
       'trigger.manager.wizard.template.pollDesc',
       'Runs when a command prints new items (a JSON array).',
     ),
+    source: {
+      type: 'poll',
+      intervalSec: '600',
+      command: 'node scripts/fetch.js',
+      pollTimeoutSec: '60',
+      keyField: 'id',
+    },
   },
   {
     id: 'swarm',
@@ -90,6 +117,7 @@ const TEMPLATES: readonly Template[] = [
       'trigger.manager.wizard.template.swarmDesc',
       'Runs once for every Swarm review that needs action (an event source).',
     ),
+    source: { type: 'event', eventName: 'swarm.reviewNeedsAction' },
   },
   {
     id: 'blank',
@@ -98,15 +126,20 @@ const TEMPLATES: readonly Template[] = [
       'trigger.manager.wizard.template.blankDesc',
       'Start from defaults and fill in every field yourself.',
     ),
+    source: { type: 'manual' },
   },
 ]
 
 const STEP_TITLES: readonly string[] = [
   localize('trigger.manager.wizard.step.template', 'Template'),
   localize('trigger.manager.wizard.step.basics', 'Basics'),
+  localize('trigger.manager.wizard.step.source', 'Trigger source'),
   localize('trigger.manager.wizard.step.session', 'Session'),
   localize('trigger.manager.wizard.step.limits', 'Limits and permissions'),
 ]
+
+const STEP_BASICS = 1
+const STEP_LIMITS = STEP_TITLES.length - 1
 
 interface WorkspaceOption {
   readonly uri: string
@@ -114,41 +147,17 @@ interface WorkspaceOption {
   readonly available: boolean
 }
 
-function templatePatch(template: TemplateId): Partial<TriggerConfigDraft> {
-  switch (template) {
-    case 'manual':
-    case 'blank':
-      return {
-        sourceType: 'manual',
-        cron: '',
-        everyMin: '',
-        onMissed: 'skip',
-        intervalSec: '600',
-        command: '',
-        pollTimeoutSec: '60',
-        keyField: 'id',
-      }
-    case 'schedule-cron':
-      return { sourceType: 'schedule', cron: '0 9 * * 1', everyMin: '', onMissed: 'skip' }
-    case 'schedule-interval':
-      return { sourceType: 'schedule', cron: '', everyMin: '10', onMissed: 'skip' }
-    case 'poll':
-      return {
-        sourceType: 'poll',
-        intervalSec: '600',
-        command: 'node scripts/fetch.js',
-        pollTimeoutSec: '60',
-        keyField: 'id',
-      }
-    case 'swarm':
-      return {
-        sourceType: 'event',
-        eventName: 'swarm.reviewNeedsAction',
-      }
+function skillTemplatePatch(template: TriggerSkillTemplate): Partial<TriggerConfigDraft> {
+  return {
+    source: template.source,
+    skill: template.skill,
+    prompt: template.prompt,
+    maxCostUsd: template.maxCostUsd,
+    timeoutMin: template.timeoutMin,
+    approvalTimeoutMin: template.approvalTimeoutMin,
+    ...(template.mode !== undefined ? { mode: template.mode } : {}),
   }
 }
-
-const STEP_COUNT = STEP_TITLES.length
 
 export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardProps) {
   const files = useService(IFileService)
@@ -157,9 +166,10 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
   const triggers = useService(ITriggerMainService)
   const groups = useService(IEditorGroupsService)
   const uriIdentity = useService(IUriIdentityService)
+  const editorService = useService(IEditorService)
 
   const [step, setStep] = useState(0)
-  const [template, setTemplate] = useState<TemplateId>('manual')
+  const [template, setTemplate] = useState<string>('manual')
   const [draft, setDraft] = useState<TriggerConfigDraft>(() => emptyDraft())
   const [id, setId] = useState('')
   const [workspaceValue, setWorkspaceValue] = useState('')
@@ -246,7 +256,9 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
           setExistingIds(new Set())
           setFileError(
             parsed.kind === 'invalid'
-              ? parsed.error
+              ? parsed.issue === undefined
+                ? parsed.error
+                : triggerConfigErrorText(parsed.issue)
               : localize('trigger.manager.wizard.fileMissing', 'triggers.json could not be read.'),
           )
           return
@@ -273,13 +285,30 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
     setDraft((current) => ({ ...current, ...patch }))
   }, [])
 
-  const chooseTemplate = useCallback(
-    (next: TemplateId) => {
-      setTemplate(next)
-      update(templatePatch(next))
+  const chooseSourceTemplate = useCallback(
+    (next: SourceTemplate) => {
+      setTemplate(next.id)
+      update({ source: next.source })
       setSubmitError(undefined)
     },
     [update],
+  )
+
+  const chooseSkillTemplate = useCallback(
+    (next: TriggerSkillTemplate) => {
+      setTemplate(next.id)
+      update(skillTemplatePatch(next))
+      setSubmitError(undefined)
+    },
+    [update],
+  )
+
+  const openTemplateDoc = useCallback(
+    (templateId: string, docId: string) => {
+      setTemplate(templateId)
+      editorService.openEditor(new DocEditorInput(docId), { pinned: true })
+    },
+    [editorService],
   )
 
   const trimmedId = id.trim()
@@ -312,6 +341,17 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
     [draft, trimmedId],
   )
 
+  const fieldError = useCallback(
+    (...paths: string[]): string | undefined => {
+      const issue = validation.issues.find((entry) => {
+        const key = entry.path.join('.')
+        return paths.some((path) => key === path || key.startsWith(`${path}.`))
+      })
+      return issue === undefined ? undefined : triggerConfigErrorText(issue)
+    },
+    [validation.issues],
+  )
+
   const basicsValid =
     idError === undefined &&
     nameError === undefined &&
@@ -320,7 +360,7 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
 
   const next = useCallback(() => {
     setSubmitError(undefined)
-    setStep((current) => Math.min(STEP_COUNT - 1, current + 1))
+    setStep((current) => Math.min(STEP_LIMITS, current + 1))
   }, [])
 
   const back = useCallback(() => {
@@ -335,13 +375,13 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
       return
     }
     if (idError !== undefined || nameError !== undefined || fileError !== undefined) {
-      setStep(1)
+      setStep(STEP_BASICS)
       return
     }
     const nextId = trimmedId
     const result = validateTriggerDraft(nextId, draft)
     if (result.config === undefined) {
-      setSubmitError(result.errors.join('; '))
+      setSubmitError(result.issues.map(triggerConfigErrorText).join('; '))
       return
     }
     const configUri = triggersConfigUri(workspaceUri)
@@ -393,7 +433,7 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
           )
           return
         case 'duplicate-id':
-          setStep(1)
+          setStep(STEP_BASICS)
           setSubmitError(
             localize(
               'trigger.manager.wizard.idDuplicate',
@@ -449,342 +489,14 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
   ])
 
   return (
-    <FocusScopeOverlay
-      visible
-      onEscape={() => {
-        if (!creating) onClose()
-      }}
-    >
-      <div
-        className={styles['dialogBackdrop']}
-        onClick={() => {
-          if (!creating) onClose()
-        }}
-      />
-      <div
-        className={styles['dialog']}
-        role="dialog"
-        aria-modal="true"
-        aria-label={localize('trigger.manager.wizard.title', 'New Trigger')}
-        data-testid="trigger-manager-wizard"
-      >
-        <h2 className={styles['dialogTitle']}>
-          {localize('trigger.manager.wizard.title', 'New Trigger')}
-        </h2>
-
-        <ol className={styles['wizardSteps']}>
-          {STEP_TITLES.map((title, index) => (
-            <li
-              key={title}
-              className={
-                index === step
-                  ? `${styles['wizardStep'] ?? ''} ${styles['wizardStepActive'] ?? ''}`
-                  : styles['wizardStep']
-              }
-              data-testid={`trigger-manager-wizard-step-${index}`}
-              data-active={index === step}
-            >
-              {title}
-            </li>
-          ))}
-        </ol>
-
-        <div className={styles['dialogBody']} data-testid={`trigger-manager-wizard-body-${step}`}>
-          {step === 0 && (
-            <div className={styles['templateGrid']}>
-              {TEMPLATES.map((entry) => (
-                <button
-                  key={entry.id}
-                  type="button"
-                  className={
-                    template === entry.id
-                      ? `${styles['templateCard'] ?? ''} ${styles['templateCardSelected'] ?? ''}`
-                      : styles['templateCard']
-                  }
-                  data-testid={`trigger-manager-wizard-template-${entry.id}`}
-                  aria-pressed={template === entry.id}
-                  onClick={() => chooseTemplate(entry.id)}
-                >
-                  <span className={styles['templateName']}>{entry.label}</span>
-                  <span className={styles['templateDescription']}>{entry.description}</span>
-                </button>
-              ))}
-            </div>
-          )}
-
-          {step === 1 && (
-            <>
-              <Field label={localize('trigger.manager.wizard.workspace', 'Workspace')}>
-                <Select<string>
-                  value={workspaceValue}
-                  disabled={loadingWorkspaces || options.length <= 1}
-                  onChange={setWorkspaceValue}
-                  options={options.map((option) => ({
-                    value: option.uri,
-                    label: option.label,
-                    disabled: !option.available,
-                  }))}
-                  aria-label={localize('trigger.manager.wizard.workspace', 'Workspace')}
-                  wrapItems
-                  data-testid="trigger-manager-wizard-workspace"
-                />
-              </Field>
-              {loadingWorkspaces && (
-                <p
-                  className={styles['note']}
-                  data-testid="trigger-manager-wizard-workspaces-loading"
-                >
-                  {localize('trigger.manager.wizard.loadingWorkspaces', 'Loading workspaces…')}
-                </p>
-              )}
-              {workspacesError !== undefined && (
-                <p className={styles['fieldError']}>
-                  {localize(
-                    'trigger.manager.wizard.workspacesFailed',
-                    'Could not list workspaces: {error}',
-                    {
-                      error: workspacesError,
-                    },
-                  )}
-                </p>
-              )}
-              {options.length === 0 && !loadingWorkspaces && workspacesError === undefined && (
-                <p className={styles['notice']} data-testid="trigger-manager-wizard-no-workspace">
-                  {localize(
-                    'trigger.manager.wizard.openWorkspaceFirst',
-                    'Open a folder workspace first. Trigger definitions live inside a workspace.',
-                  )}
-                </p>
-              )}
-              {fileError !== undefined && (
-                <p className={styles['fieldError']} data-testid="trigger-manager-wizard-file-error">
-                  {localize(
-                    'trigger.manager.wizard.fileInvalid',
-                    'This workspace triggers.json cannot be extended: {error}',
-                    { error: fileError },
-                  )}
-                </p>
-              )}
-              <Field
-                label={localize('trigger.manager.wizard.id', 'ID')}
-                error={idError}
-                hint={localize(
-                  'trigger.manager.wizard.idHint',
-                  'Unique inside the workspace; used in file and state names.',
-                )}
-              >
-                <Input
-                  value={id}
-                  invalid={trimmedId.length > 0 && idError !== undefined}
-                  onChange={(event) => setId(event.target.value)}
-                  placeholder="daily-digest"
-                  data-testid="trigger-manager-wizard-id"
-                />
-              </Field>
-              <Field label={localize('trigger.manager.wizard.name', 'Name')} error={nameError}>
-                <Input
-                  value={draft.name}
-                  invalid={nameError !== undefined}
-                  onChange={(event) => update({ name: event.target.value })}
-                  data-testid="trigger-manager-wizard-name"
-                />
-              </Field>
-              <div className={styles['toggleField']}>
-                <span className={styles['fieldLabel']}>
-                  {localize('trigger.manager.wizard.enabled', 'Enabled')}
-                </span>
-                <Toggle
-                  checked={draft.enabled}
-                  onChange={(enabled) => update({ enabled })}
-                  aria-label={localize('trigger.manager.wizard.enabled', 'Enabled')}
-                  data-testid="trigger-manager-wizard-enabled"
-                />
-              </div>
-              <p className={styles['note']}>
-                {localize(
-                  'trigger.manager.wizard.confirmNote',
-                  'A new trigger needs confirmation before it can run unattended.',
-                )}
-              </p>
-            </>
-          )}
-
-          {step === 2 && (
-            <>
-              <div className={styles['fieldRow']}>
-                <Field label={localize('trigger.manager.config.session.agent', 'Agent')}>
-                  <Input
-                    value={draft.agent}
-                    placeholder="claude-code"
-                    onChange={(event) => update({ agent: event.target.value })}
-                    data-testid="trigger-manager-wizard-agent"
-                  />
-                </Field>
-                <Field label={localize('trigger.manager.config.session.mode', 'Mode')}>
-                  <Input
-                    value={draft.mode}
-                    placeholder={localize(
-                      'trigger.manager.config.session.agentDefault',
-                      'Agent default',
-                    )}
-                    onChange={(event) => update({ mode: event.target.value })}
-                    data-testid="trigger-manager-wizard-mode"
-                  />
-                </Field>
-              </div>
-              <div className={styles['fieldRow']}>
-                <Field label={localize('trigger.manager.config.session.model', 'Model')}>
-                  <Input
-                    value={draft.model}
-                    onChange={(event) => update({ model: event.target.value })}
-                    data-testid="trigger-manager-wizard-model"
-                  />
-                </Field>
-                <Field label={localize('trigger.manager.config.session.cwd', 'Working directory')}>
-                  <Input
-                    value={draft.cwd}
-                    placeholder={localize('trigger.manager.config.session.cwdPlaceholder', '.')}
-                    onChange={(event) => update({ cwd: event.target.value })}
-                    data-testid="trigger-manager-wizard-cwd"
-                  />
-                </Field>
-              </div>
-              <Field
-                label={localize('trigger.manager.config.session.skill', 'Skill')}
-                hint={localize(
-                  'trigger.manager.config.session.skillHint',
-                  'A skill or a prompt is required.',
-                )}
-              >
-                <Input
-                  value={draft.skill}
-                  onChange={(event) => update({ skill: event.target.value })}
-                  data-testid="trigger-manager-wizard-skill"
-                />
-              </Field>
-              <Field label={localize('trigger.manager.config.session.prompt', 'Prompt')}>
-                <Textarea
-                  value={draft.prompt}
-                  rows={6}
-                  onChange={(event) => update({ prompt: event.target.value })}
-                  data-testid="trigger-manager-wizard-prompt"
-                />
-              </Field>
-              <div className={styles['toggleField']}>
-                <span className={styles['fieldLabel']}>
-                  {localize(
-                    'trigger.manager.config.showSession',
-                    'Reveal the session while it runs (visible windows only)',
-                  )}
-                </span>
-                <Toggle
-                  checked={draft.showSession}
-                  onChange={(showSession) => update({ showSession })}
-                  aria-label={localize(
-                    'trigger.manager.config.showSession',
-                    'Reveal the session while it runs (visible windows only)',
-                  )}
-                  data-testid="trigger-manager-wizard-show-session"
-                />
-              </div>
-            </>
-          )}
-
-          {step === 3 && (
-            <>
-              <Field
-                label={localize('trigger.manager.config.budget.maxCost', 'Maximum cost (USD)')}
-                hint={localize(
-                  'trigger.manager.config.budget.maxCostHint',
-                  'Empty = no cost limit.',
-                )}
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={draft.maxCostUsd}
-                  onChange={(event) => update({ maxCostUsd: event.target.value })}
-                  data-testid="trigger-manager-wizard-max-cost"
-                />
-              </Field>
-              <div className={styles['fieldRow']}>
-                <Field
-                  label={localize('trigger.manager.config.budget.timeout', 'Run timeout (minutes)')}
-                >
-                  <Input
-                    type="number"
-                    min={1}
-                    value={draft.timeoutMin}
-                    onChange={(event) => update({ timeoutMin: event.target.value })}
-                    data-testid="trigger-manager-wizard-timeout"
-                  />
-                </Field>
-                <Field
-                  label={localize(
-                    'trigger.manager.config.budget.approvalTimeout',
-                    'Approval timeout (minutes)',
-                  )}
-                >
-                  <Input
-                    type="number"
-                    min={1}
-                    value={draft.approvalTimeoutMin}
-                    onChange={(event) => update({ approvalTimeoutMin: event.target.value })}
-                    data-testid="trigger-manager-wizard-approval-timeout"
-                  />
-                </Field>
-              </div>
-              <div className={styles['fieldRow']}>
-                <Field label={localize('trigger.manager.config.concurrency', 'Concurrency')}>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={draft.concurrency}
-                    onChange={(event) => update({ concurrency: event.target.value })}
-                    data-testid="trigger-manager-wizard-concurrency"
-                  />
-                </Field>
-                <Field label={localize('trigger.manager.config.overflow', 'When busy')}>
-                  <Select<'queue' | 'drop'>
-                    value={draft.overflow}
-                    onChange={(overflow) => update({ overflow })}
-                    options={[
-                      {
-                        value: 'queue',
-                        label: localize('trigger.manager.config.overflow.queue', 'Queue'),
-                      },
-                      {
-                        value: 'drop',
-                        label: localize('trigger.manager.config.overflow.drop', 'Drop'),
-                      },
-                    ]}
-                    aria-label={localize('trigger.manager.config.overflow', 'When busy')}
-                    data-testid="trigger-manager-wizard-overflow"
-                  />
-                </Field>
-              </div>
-            </>
-          )}
-
-          {submitError !== undefined && (
-            <p className={styles['fieldError']} data-testid="trigger-manager-wizard-error">
-              {submitError}
-            </p>
-          )}
-          {step > 0 && validation.errors.length > 0 && submitError === undefined && (
-            <div className={styles['notice']} data-testid="trigger-manager-wizard-validation">
-              <ul className={styles['errorList']}>
-                {validation.errors.map((error) => (
-                  <li key={error}>{error}</li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
-
-        <div className={styles['dialogActions']}>
+    <ModalShell
+      title={localize('trigger.manager.wizard.title', 'New Trigger')}
+      onDismiss={onClose}
+      dismissDisabled={creating}
+      className={styles['wizardDialog']}
+      data-testid="trigger-manager-wizard"
+      footer={
+        <>
           <Button
             size="sm"
             disabled={creating}
@@ -798,11 +510,11 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
               {localize('trigger.manager.wizard.back', 'Back')}
             </Button>
           )}
-          {step < STEP_COUNT - 1 ? (
+          {step < STEP_LIMITS ? (
             <Button
               variant="primary"
               size="sm"
-              disabled={step === 1 ? !basicsValid : false}
+              disabled={step === STEP_BASICS ? !basicsValid : false}
               onClick={next}
               data-testid="trigger-manager-wizard-next"
             >
@@ -821,8 +533,250 @@ export function TriggerCreateWizard({ onClose, onCreated }: TriggerCreateWizardP
                 : localize('trigger.manager.wizard.create', 'Create trigger')}
             </Button>
           )}
-        </div>
+        </>
+      }
+    >
+      <ol className={styles['wizardSteps']}>
+        {STEP_TITLES.map((title, index) => (
+          <li
+            key={title}
+            className={
+              index === step
+                ? `${styles['wizardStep'] ?? ''} ${styles['wizardStepActive'] ?? ''}`
+                : styles['wizardStep']
+            }
+            data-testid={`trigger-manager-wizard-step-${index}`}
+            data-active={index === step}
+          >
+            {title}
+          </li>
+        ))}
+      </ol>
+
+      <div className={styles['dialogBody']} data-testid={`trigger-manager-wizard-body-${step}`}>
+        {step === 0 && (
+          <>
+            <div className={styles['templateGrid']}>
+              {SOURCE_TEMPLATES.map((entry) => (
+                <button
+                  key={entry.id}
+                  type="button"
+                  className={
+                    template === entry.id
+                      ? `${styles['templateCard'] ?? ''} ${styles['templateCardSelected'] ?? ''}`
+                      : styles['templateCard']
+                  }
+                  data-testid={`trigger-manager-wizard-template-${entry.id}`}
+                  aria-pressed={template === entry.id}
+                  onClick={() => chooseSourceTemplate(entry)}
+                >
+                  <span className={styles['templateName']}>{entry.label}</span>
+                  <span className={styles['templateDescription']}>{entry.description}</span>
+                </button>
+              ))}
+            </div>
+            <h3 className={styles['templateHeading']}>
+              {localize('trigger.manager.wizard.template.skillHeading', 'Skill templates')}
+            </h3>
+            <p className={styles['templateHint']}>
+              {localize(
+                'trigger.manager.wizard.template.skillHint',
+                'Prefill the skill, prompt, budget and source from a skill skeleton. Copy the skill into .claude/skills/ before running it.',
+              )}
+            </p>
+            <div className={styles['templateGrid']}>
+              {TRIGGER_SKILL_TEMPLATES.map((entry) => (
+                <div key={entry.id} className={styles['templateCardWrap']}>
+                  <button
+                    type="button"
+                    className={
+                      template === entry.id
+                        ? `${styles['templateCard'] ?? ''} ${styles['templateCardSelected'] ?? ''}`
+                        : styles['templateCard']
+                    }
+                    data-testid={`trigger-manager-wizard-template-skill-${entry.id}`}
+                    aria-pressed={template === entry.id}
+                    onClick={() => chooseSkillTemplate(entry)}
+                  >
+                    <span className={styles['templateName']}>{entry.label}</span>
+                    <span className={styles['templateDescription']}>{entry.description}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={styles['templateDocLink']}
+                    data-testid={`trigger-manager-wizard-template-docs-${entry.id}`}
+                    onClick={() => openTemplateDoc(entry.id, entry.docId)}
+                  >
+                    {localize('trigger.manager.wizard.template.viewDocs', 'View template guide')}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {step === STEP_BASICS && (
+          <>
+            <FormField label={localize('trigger.manager.wizard.workspace', 'Workspace')}>
+              <Select<string>
+                value={workspaceValue}
+                disabled={loadingWorkspaces || options.length <= 1}
+                onChange={setWorkspaceValue}
+                options={options.map((option) => ({
+                  value: option.uri,
+                  label: option.label,
+                  disabled: !option.available,
+                }))}
+                aria-label={localize('trigger.manager.wizard.workspace', 'Workspace')}
+                wrapItems
+                data-testid="trigger-manager-wizard-workspace"
+              />
+            </FormField>
+            {loadingWorkspaces && (
+              <p className={styles['note']} data-testid="trigger-manager-wizard-workspaces-loading">
+                {localize('trigger.manager.wizard.loadingWorkspaces', 'Loading workspaces…')}
+              </p>
+            )}
+            {workspacesError !== undefined && (
+              <p className={styles['fieldError']}>
+                {localize(
+                  'trigger.manager.wizard.workspacesFailed',
+                  'Could not list workspaces: {error}',
+                  { error: workspacesError },
+                )}
+              </p>
+            )}
+            {options.length === 0 && !loadingWorkspaces && workspacesError === undefined && (
+              <p className={styles['notice']} data-testid="trigger-manager-wizard-no-workspace">
+                {localize(
+                  'trigger.manager.wizard.openWorkspaceFirst',
+                  'Open a folder workspace first. Trigger definitions live inside a workspace.',
+                )}
+              </p>
+            )}
+            {fileError !== undefined && (
+              <p className={styles['fieldError']} data-testid="trigger-manager-wizard-file-error">
+                {localize(
+                  'trigger.manager.wizard.fileInvalid',
+                  'This workspace triggers.json cannot be extended: {error}',
+                  { error: fileError },
+                )}
+              </p>
+            )}
+            <FormField
+              label={localize('trigger.manager.wizard.id', 'ID')}
+              error={idError}
+              hint={localize(
+                'trigger.manager.wizard.idHint',
+                'Unique inside the workspace; used in file and state names.',
+              )}
+            >
+              <Input
+                value={id}
+                invalid={trimmedId.length > 0 && idError !== undefined}
+                onChange={(event) => setId(event.target.value)}
+                placeholder="daily-digest"
+                data-testid="trigger-manager-wizard-id"
+              />
+            </FormField>
+            <FormField label={localize('trigger.manager.wizard.name', 'Name')} error={nameError}>
+              <Input
+                value={draft.name}
+                invalid={nameError !== undefined}
+                onChange={(event) => update({ name: event.target.value })}
+                data-testid="trigger-manager-wizard-name"
+              />
+            </FormField>
+            <ToggleField
+              label={localize('trigger.manager.wizard.enabled', 'Enabled')}
+              checked={draft.enabled}
+              onChange={(enabled) => update({ enabled })}
+              testId="trigger-manager-wizard-enabled"
+            />
+            <p className={styles['note']}>
+              {localize(
+                'trigger.manager.wizard.confirmNote',
+                'A new trigger needs confirmation before it can run unattended.',
+              )}
+            </p>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            <p className={styles['note']}>
+              {localize(
+                'trigger.manager.wizard.sourceHint',
+                'These parameters decide when the trigger fires. They come from the template and can be edited.',
+              )}
+            </p>
+            <TriggerSourceFields
+              source={draft.source}
+              setSourceType={(type) => {
+                setTemplate('')
+                setDraft((current) => withSourceType(current, type))
+              }}
+              updateSource={(patch) => setDraft((current) => withSourcePatch(current, patch))}
+              fieldError={fieldError}
+              testIdPrefix="trigger-manager-wizard"
+            />
+          </>
+        )}
+
+        {step === 3 && (
+          <>
+            <TriggerSessionFields
+              draft={draft}
+              update={update}
+              fieldError={fieldError}
+              testIdPrefix="trigger-manager-wizard"
+            />
+            <ToggleField
+              label={localize(
+                'trigger.manager.config.showSession',
+                'Reveal the session while it runs (visible windows only)',
+              )}
+              checked={draft.showSession}
+              onChange={(showSession) => update({ showSession })}
+              testId="trigger-manager-wizard-show-session"
+            />
+          </>
+        )}
+
+        {step === STEP_LIMITS && (
+          <>
+            <TriggerBudgetFields
+              draft={draft}
+              update={update}
+              fieldError={fieldError}
+              testIdPrefix="trigger-manager-wizard"
+            />
+            <TriggerConcurrencyFields
+              draft={draft}
+              update={update}
+              fieldError={fieldError}
+              testIdPrefix="trigger-manager-wizard"
+            />
+          </>
+        )}
+
+        {submitError !== undefined && (
+          <p className={styles['fieldError']} data-testid="trigger-manager-wizard-error">
+            {submitError}
+          </p>
+        )}
+        {step > 0 && validation.issues.length > 0 && submitError === undefined && (
+          <div className={styles['notice']} data-testid="trigger-manager-wizard-validation">
+            <ul className={styles['errorList']}>
+              {validation.issues.map((issue, index) => (
+                <li key={`${issue.path.join('.')}:${issue.code}:${index}`}>
+                  {triggerConfigErrorText(issue)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
-    </FocusScopeOverlay>
+    </ModalShell>
   )
 }

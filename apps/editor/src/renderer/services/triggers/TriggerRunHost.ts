@@ -10,7 +10,9 @@
 import {
   Disposable,
   ILoggerService,
+  IWorkspaceService,
   IWorkspaceTrustManagementService,
+  URI,
   type ILogger,
 } from '@universe-editor/platform'
 import { ITriggerMainService, type ITriggerRunHost } from '../../../shared/ipc/triggerService.js'
@@ -27,6 +29,7 @@ export class TriggerRunHost extends Disposable implements ITriggerRunHost {
     @IAutomatedSessionService
     private readonly _sessions: IAutomatedSessionService,
     @ITriggerMainService private readonly _triggers: ITriggerMainService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IWorkspaceTrustManagementService
     private readonly _trust: IWorkspaceTrustManagementService,
     @ITriggerSessionRevealService
@@ -45,6 +48,23 @@ export class TriggerRunHost extends Disposable implements ITriggerRunHost {
         })
       }),
     )
+    // Main holds a proxy from window creation, before this service is registered
+    // on the channel: only after the ack may it route runs to this window.
+    this._register(this._workspace.onDidChangeWorkspace(() => void this._markHostReady()))
+    void this._markHostReady()
+  }
+
+  private async _markHostReady(): Promise<void> {
+    try {
+      await this._workspace.whenReady
+      const folder = this._workspace.current?.folder
+      if (folder === undefined) return
+      await this._triggers.markHostReady(folder.toString())
+    } catch (err) {
+      this._logger.warn(
+        `failed to acknowledge the trigger run host: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   }
 
   async startRun(request: TriggerRunRequest): Promise<{ readonly sessionId: string }> {
@@ -76,10 +96,17 @@ export class TriggerRunHost extends Disposable implements ITriggerRunHost {
     this._sessions.cancelRun(runId)
   }
 
-  async isWorkspaceTrusted(): Promise<boolean> {
+  async isWorkspaceTrusted(workspace: string): Promise<boolean> {
     await this._trust.workspaceTrustInitialized
-    const trusted = this._trust.isWorkspaceTrusted()
-    this._logger.debug(`workspace trusted: ${trusted}`)
+    const uri = URI.parse(workspace)
+    if (uri.scheme === '') {
+      this._logger.warn(`cannot judge trust for an invalid workspace uri: ${workspace}`)
+      return false
+    }
+    // Per URI, not the window's current folder: the run belongs to the trigger's
+    // workspace, which can differ from what this window shows by now.
+    const trusted = this._trust.getUriTrustInfo(uri).trusted
+    this._logger.debug(`workspace trusted (${workspace}): ${trusted}`)
     return trusted
   }
 }

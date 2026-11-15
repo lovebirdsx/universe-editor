@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, type INotificationService } from '@universe-editor/platform'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TriggerRunEnd } from '../../../shared/triggers/types.js'
 import { TriggerRunNotificationContribution } from '../TriggerRunNotificationContribution.js'
 
@@ -20,6 +20,21 @@ function runEnd(overrides: Partial<TriggerRunEnd> = {}): TriggerRunEnd {
   }
 }
 
+function setWindowVisible(visible: boolean): void {
+  vi.stubGlobal('document', {
+    hasFocus: () => visible,
+    visibilityState: visible ? 'visible' : 'hidden',
+  })
+}
+
+beforeEach(() => {
+  setWindowVisible(true)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 function setup() {
   const emitter = new Emitter<TriggerRunEnd>()
   const notify = vi.fn((_options: unknown) => ({
@@ -30,6 +45,8 @@ function setup() {
     dispose: () => {},
   }))
   const notification = { notify, dismiss: vi.fn() } as unknown as INotificationService
+  const notifySystem = vi.fn(async (_options: unknown) => ({ shown: true, clicked: false }))
+  const host = { notify: notifySystem }
   const commands = { executeCommand: vi.fn() }
   const sessions = {
     getById: () => ({
@@ -51,10 +68,11 @@ function setup() {
     { focusSessionInput: vi.fn() } as never,
     { focusGroup: vi.fn() } as never,
     notification,
+    host as never,
     commands as never,
     { createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) } as never,
   )
-  return { contribution, emitter, notify, commands }
+  return { contribution, emitter, notify, notifySystem, commands }
 }
 
 describe('TriggerRunNotificationContribution', () => {
@@ -112,6 +130,24 @@ describe('TriggerRunNotificationContribution', () => {
     expect(notify).not.toHaveBeenCalled()
   })
 
+  it('uses a system notification when the window is hidden or unfocused', async () => {
+    setWindowVisible(false)
+    const { emitter, notify, notifySystem } = setup()
+
+    emitter.fire(
+      runEnd({ verdict: 'escalate', summary: 'author pushed a new version', outcome: 'completed' }),
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(notify).not.toHaveBeenCalled()
+    expect(notifySystem).toHaveBeenCalledTimes(1)
+    expect(notifySystem.mock.calls[0]![0]).toMatchObject({
+      title: 'Trigger run needs attention',
+      body: 'Needs your action: Swarm triage · author pushed a new version',
+      originWindow: { kind: 'workspace' },
+    })
+  })
+
   it('falls back to the trigger id when the session is gone', () => {
     const emitter = new Emitter<TriggerRunEnd>()
     const notify = vi.fn((_options: unknown) => ({
@@ -129,6 +165,7 @@ describe('TriggerRunNotificationContribution', () => {
       { focusSessionInput: vi.fn() } as never,
       { focusGroup: vi.fn() } as never,
       { notify, dismiss: vi.fn() } as never,
+      { notify: vi.fn(async () => ({ shown: true, clicked: false })) } as never,
       { executeCommand: vi.fn() } as never,
       { createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) } as never,
     )

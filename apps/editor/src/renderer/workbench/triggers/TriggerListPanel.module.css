@@ -1,0 +1,237 @@
+/* Trigger manager list pane: toolbar, grouped trigger rows and empty states. */
+
+.listPane {
+  display: flex;
+  flex: 0 0 340px;
+  flex-direction: column;
+  min-width: 220px;
+  border-right: 1px solid var(--vscode-workbench-border);
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--spacing-3);
+  padding: var(--spacing-4) var(--spacing-5);
+  border-bottom: 1px solid var(--vscode-workbench-borderSubtle);
+}
+
+.search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--spacing-3) 0 var(--spacing-6);
+  outline: none;
+  scroll-padding-top: 28px;
+}
+
+.list:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.state {
+  padding: var(--spacing-6) var(--spacing-5);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--spacing-3);
+  padding: var(--spacing-6) var(--spacing-5);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.emptyHint {
+  max-width: 320px;
+  color: var(--vscode-descriptionForeground);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+/* -- grouped list -------------------------------------------------------- */
+
+.group {
+  display: flex;
+  flex-direction: column;
+}
+
+.groupHeader {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  width: 100%;
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-2);
+  border: none;
+  background: var(--vscode-editor-background);
+  color: var(--vscode-editor-mutedForeground);
+  font-family: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+
+.groupHeader:hover {
+  color: var(--vscode-editor-foreground);
+}
+
+.groupHeader:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.groupChevron {
+  flex: 0 0 auto;
+  opacity: 0.8;
+}
+
+.groupCount {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 var(--spacing-2);
+  border-radius: var(--radius-sm);
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: center;
+  text-transform: none;
+}
+
+.groupName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.groupOffline {
+  flex: 0 0 auto;
+  padding: 1px var(--spacing-2);
+  border: 1px solid var(--vscode-warning-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  padding: var(--spacing-2) var(--spacing-5);
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  scroll-margin-top: 28px;
+}
+
+.row:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.rowSelected {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.rowOffline {
+  opacity: 0.7;
+}
+
+.dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vscode-editor-mutedForeground);
+}
+
+.dotRunning {
+  background: var(--vscode-success-foreground);
+}
+
+.dotWarning {
+  background: var(--vscode-warning-border);
+}
+
+.dotError {
+  background: var(--vscode-errorForeground);
+}
+
+.dotMuted {
+  background: var(--vscode-editor-mutedForeground);
+  opacity: 0.55;
+}
+
+.rowMain {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rowTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  min-width: 0;
+}
+
+.rowName {
+  overflow: hidden;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.rowBadge {
+  flex: 0 0 auto;
+}
+
+.rowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1) var(--spacing-4);
+  font-size: var(--font-size-xs);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.rowActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--spacing-1);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.row:hover .rowActions,
+.row:focus-within .rowActions,
+.rowSelected .rowActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.rowSelected .rowMeta {
+  color: inherit;
+  opacity: 0.85;
+}

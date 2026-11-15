@@ -1,0 +1,156 @@
+/* Create-trigger wizard: step strip, template cards and inline notices. The
+   dialog surface itself comes from workbench-ui's ModalShell. */
+
+.wizardDialog {
+  width: 680px;
+}
+
+.wizardSteps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-2) var(--spacing-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-sm);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.wizardStep {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.wizardStep:not(:last-child)::after {
+  content: '›';
+  margin-left: var(--spacing-4);
+  opacity: 0.6;
+}
+
+.wizardStepActive {
+  color: var(--vscode-editor-foreground);
+  font-weight: var(--font-weight-medium);
+}
+
+.dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+
+.templateGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--spacing-3);
+}
+
+.templateCardWrap {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.templateCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  padding: var(--spacing-4);
+  border: 1px solid var(--vscode-workbench-border);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.templateCard:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.templateCardSelected {
+  border-color: var(--vscode-focusBorder);
+  background: var(--vscode-list-activeSelectionBackground);
+}
+
+.templateName {
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-medium);
+}
+
+.templateDescription {
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.templateCardSelected .templateDescription {
+  color: inherit;
+  opacity: 0.85;
+}
+
+.templateHeading {
+  margin: var(--spacing-3) 0 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-bold);
+}
+
+.templateHint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.templateDocLink {
+  align-self: flex-start;
+  margin-top: var(--spacing-2);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  font-family: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+
+.templateDocLink:hover {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: underline;
+}
+
+.note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}
+
+.notice {
+  padding: var(--spacing-4) var(--spacing-5);
+  border: 1px solid var(--vscode-warning-border);
+  border-radius: var(--radius-md);
+  background: var(--vscode-warning-background);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+
+.errorList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+  margin: 0;
+  padding: var(--spacing-4) var(--spacing-5) var(--spacing-4) var(--spacing-7);
+  border: 1px solid var(--vscode-errorForeground);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+}
+
+.fieldError {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-errorForeground);
+}

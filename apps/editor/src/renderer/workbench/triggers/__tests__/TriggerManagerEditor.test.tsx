@@ -41,6 +41,7 @@ import { IAcpSessionService } from '../../../services/acp/session/acpSessionServ
 import { IAcpSessionHistoryService } from '../../../services/acp/session/acpSessionHistory.js'
 import { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { IWindowFocusService } from '../../../services/windows/windowFocusService.js'
+import { triggersConfigUri } from '../../../services/triggers/triggerConfigFileService.js'
 import type { TriggerSummary } from '../../../../shared/triggers/types.js'
 import { ServicesContext } from '../../useService.js'
 import { TriggerManagerEditor } from '../TriggerManagerEditor.js'
@@ -80,6 +81,7 @@ interface HarnessOptions {
   readonly inputOptions?: TriggerManagerEditorInputOptions
   readonly runs?: readonly import('../../../../shared/triggers/types.js').TriggerRunHistoryEntry[]
   readonly storage?: FakeStorage
+  readonly configText?: string
 }
 
 class FakeStorage {
@@ -156,6 +158,9 @@ function renderEditor(options: HarnessOptions = {}) {
   ])
   const rescanWorkspace = vi.fn(async () => undefined)
   const files = new FakeFiles()
+  if (options.configText !== undefined) {
+    files.put(triggersConfigUri(URI.file('X:/workspace')), options.configText)
+  }
   const storage = options.storage ?? new FakeStorage()
 
   const services = new ServiceCollection()
@@ -270,6 +275,32 @@ const TWO_WORKSPACES = [
   summary({ id: 'a', name: 'Alpha', workspace: 'ws-1', workspaceName: 'alpha' }),
   summary({ id: 'b', name: 'Beta', workspace: 'ws-2', workspaceName: 'beta' }),
 ]
+
+const TWO_TRIGGERS_CONFIG = `{
+  "version": 1,
+  "triggers": [
+    {
+      "id": "a",
+      "name": "Alpha",
+      "source": { "type": "manual" },
+      "session": { "prompt": "Do alpha" }
+    },
+    {
+      "id": "b",
+      "name": "Beta",
+      "source": { "type": "manual" },
+      "session": { "prompt": "Do beta" }
+    }
+  ]
+}
+`
+
+function sameWorkspaceSummaries(): readonly TriggerSummary[] {
+  return [
+    summary({ id: 'a', name: 'Alpha', sourceType: 'manual', source: { type: 'manual' } }),
+    summary({ id: 'b', name: 'Beta', sourceType: 'manual', source: { type: 'manual' } }),
+  ]
+}
 
 describe('TriggerManagerEditor', () => {
   it('renders one group header per workspace and one row per trigger', async () => {
@@ -606,6 +637,87 @@ describe('TriggerManagerEditor', () => {
     expect(screen.getByTestId('trigger-manager-overview')).toBeDefined()
   })
 
+  it('keeps an unsaved configuration draft across tab and trigger switches', async () => {
+    renderEditor({ summaries: sameWorkspaceSummaries(), configText: TWO_TRIGGERS_CONFIG })
+    await screen.findAllByTestId('trigger-manager-row')
+    fireEvent.click(rowByKey('a'))
+    fireEvent.click(screen.getByTestId('trigger-manager-tab-configuration'))
+
+    const name = (await screen.findByTestId('trigger-manager-config-name')) as HTMLInputElement
+    await waitFor(() => expect(name.value).toBe('Alpha'))
+    fireEvent.change(name, { target: { value: 'Alpha edited' } })
+    await screen.findByTestId('trigger-manager-config-dirty')
+
+    fireEvent.click(screen.getByTestId('trigger-manager-tab-overview'))
+    fireEvent.click(screen.getByTestId('trigger-manager-tab-configuration'))
+    await waitFor(() =>
+      expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
+        'Alpha edited',
+      ),
+    )
+
+    fireEvent.click(rowByKey('b'))
+    await waitFor(() =>
+      expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
+        'Beta',
+      ),
+    )
+    fireEvent.click(rowByKey('a'))
+    await waitFor(() =>
+      expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
+        'Alpha edited',
+      ),
+    )
+    expect(screen.getByTestId('trigger-manager-config-dirty')).toBeDefined()
+  })
+
+  it('asks before closing the tab while a configuration draft is dirty', async () => {
+    const harness = renderEditor({
+      summaries: sameWorkspaceSummaries(),
+      configText: TWO_TRIGGERS_CONFIG,
+    })
+    await screen.findAllByTestId('trigger-manager-row')
+    fireEvent.click(rowByKey('a'))
+    fireEvent.click(screen.getByTestId('trigger-manager-tab-configuration'))
+
+    const name = (await screen.findByTestId('trigger-manager-config-name')) as HTMLInputElement
+    await waitFor(() => expect(name.value).toBe('Alpha'))
+
+    const cleanConfirm = vi.fn(async () => ({ confirmed: false, choice: 'cancel' as const }))
+    expect(
+      await harness.input.confirmClose?.({
+        confirm: cleanConfirm,
+      } as unknown as IDialogService),
+    ).toBe(true)
+    expect(cleanConfirm).not.toHaveBeenCalled()
+
+    fireEvent.change(name, { target: { value: 'Alpha edited' } })
+    await screen.findByTestId('trigger-manager-config-dirty')
+
+    const cancelConfirm = vi.fn(async (_options: unknown) => ({
+      confirmed: false,
+      choice: 'cancel' as const,
+    }))
+    expect(
+      await harness.input.confirmClose?.({
+        confirm: cancelConfirm,
+      } as unknown as IDialogService),
+    ).toBe(false)
+    expect(cancelConfirm.mock.calls[0]?.[0]).toMatchObject({
+      message: expect.stringContaining('unsaved'),
+    })
+
+    const discardConfirm = vi.fn(async (_options: unknown) => ({
+      confirmed: true,
+      choice: 'primary' as const,
+    }))
+    expect(
+      await harness.input.confirmClose?.({
+        confirm: discardConfirm,
+      } as unknown as IDialogService),
+    ).toBe(true)
+  })
+
   it('creates a trigger through the wizard and selects it when the list refreshes', async () => {
     const harness = renderEditor({ summaries: [summary({ id: 'alpha', name: 'Alpha' })] })
     await screen.findAllByTestId('trigger-manager-row')
@@ -620,6 +732,7 @@ describe('TriggerManagerEditor', () => {
     fireEvent.change(screen.getByTestId('trigger-manager-wizard-name'), {
       target: { value: 'Beta' },
     })
+    fireEvent.click(screen.getByTestId('trigger-manager-wizard-next'))
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-next'))
     fireEvent.change(screen.getByTestId('trigger-manager-wizard-prompt'), {
       target: { value: 'Do beta things' },

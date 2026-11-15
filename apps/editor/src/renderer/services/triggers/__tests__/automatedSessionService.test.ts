@@ -3,11 +3,15 @@
  *  refusal, prompt dispatch, and the end-of-run hand-off (history + event).
  *--------------------------------------------------------------------------------------------*/
 
-import { observableValue } from '@universe-editor/platform'
+import { observableValue, UriIdentityService } from '@universe-editor/platform'
 import type { ISettableObservable } from '@universe-editor/platform'
 import { describe, expect, it, vi } from 'vitest'
-import type { SessionConfigOption as SdkSessionConfigOption } from '@agentclientprotocol/sdk'
+import type {
+  RequestPermissionRequest,
+  SessionConfigOption as SdkSessionConfigOption,
+} from '@agentclientprotocol/sdk'
 import type { IAcpAgentRegistry } from '../../acp/acpAgentRegistry.js'
+import type { AcpAutomationProfile } from '../../acp/session/acpAutomationProfile.js'
 import type { IAcpSessionHistoryService } from '../../acp/session/acpSessionHistory.js'
 import type {
   AcpPendingElicitation,
@@ -123,6 +127,7 @@ function makeHarness(
     pendingPrompt?: boolean
     promptError?: string
     writeFileError?: string
+    historyError?: string
   } = {},
 ): Harness {
   const fake = makeFakeSession(options.initialMode ?? 'default', {
@@ -131,7 +136,9 @@ function makeHarness(
   })
   const createSession = vi.fn(async () => fake.session)
   const sessions = { createSession } as unknown as IAcpSessionService
-  const setAutomationResult = vi.fn()
+  const setAutomationResult = vi.fn(() => {
+    if (options.historyError !== undefined) throw new Error(options.historyError)
+  })
   const history = { setAutomationResult } as unknown as IAcpSessionHistoryService
   const readFileText = vi.fn(async () => options.resultRaw ?? '{"anything":true}')
   const writeFile = vi.fn(async () => {
@@ -143,6 +150,7 @@ function makeHarness(
     fakeRegistry(),
     history,
     files,
+    new UriIdentityService('linux'),
     new StubLoggerService(),
   )
   const ends: TriggerRunEnd[] = []
@@ -198,8 +206,14 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
       'claude-code',
       expect.objectContaining({
         configDesiredOverrides: { mode: 'bypassPermissions' },
-        automation: request().origin,
-        automationRunDir: request().runDir,
+        automationProfile: expect.objectContaining({
+          origin: expect.objectContaining({
+            ...request().origin,
+            runDir: request().runDir,
+          }),
+          suppressCompletionNotify: true,
+          planPolicy: 'manual',
+        }),
         additionalDirectories: [request().runDir],
         activate: false,
       }),
@@ -242,6 +256,7 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
       fakeRegistry(),
       { setAutomationResult: vi.fn() } as unknown as IAcpSessionHistoryService,
       { readFileText: vi.fn() } as never,
+      new UriIdentityService('linux'),
       new StubLoggerService(),
     )
     await expect(service.startAutomatedSession(request({ mode: 'default' }))).rejects.toThrow(
@@ -259,6 +274,7 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
       fakeRegistry('third-party'),
       { setAutomationResult: vi.fn() } as unknown as IAcpSessionHistoryService,
       { readFileText: vi.fn() } as never,
+      new UriIdentityService('linux'),
       new StubLoggerService(),
     )
     await expect(service.startAutomatedSession(request())).rejects.toThrow(/未知 agent/)
@@ -294,7 +310,13 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     await h.service.startAutomatedSession(request())
 
     const [, options] = h.createSession.mock.calls[0]!
-    expect(options).toMatchObject({ systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM })
+    expect(options).toMatchObject({
+      automationProfile: {
+        systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM,
+        origin: { systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM },
+      },
+    })
+    expect(Object.hasOwn(options as object, 'systemPromptAppend')).toBe(false)
     expect(h.prompts).toEqual(['do it (system contract)'])
 
     const audit = String(h.writeFile.mock.calls[0]?.[1])
@@ -314,6 +336,9 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
 
       const [, options] = h.createSession.mock.calls[0]!
       expect(Object.hasOwn(options as object, 'systemPromptAppend')).toBe(false)
+      const profile = (options as { automationProfile?: AcpAutomationProfile }).automationProfile
+      expect(Object.hasOwn(profile as object, 'systemPromptAppend')).toBe(false)
+      expect(Object.hasOwn(profile!.origin as object, 'systemPromptAppend')).toBe(false)
       expect(h.prompts).toEqual(['do it'])
 
       const audit = String(h.writeFile.mock.calls[0]?.[1])
@@ -394,6 +419,37 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
     )
   })
 
+  it('delegates permission decisions to the trigger path policy', async () => {
+    const h = makeHarness()
+    await h.service.startAutomatedSession(request())
+    const [, options] = h.createSession.mock.calls[0]!
+    const profile = (options as { automationProfile: AcpAutomationProfile }).automationProfile
+    const permission = (kind: string, path: string): RequestPermissionRequest =>
+      ({
+        sessionId: 'agent-1',
+        toolCall: { toolCallId: 'tc-1', title: 'write', kind, locations: [{ path }] },
+        options: [
+          { optionId: 'once', name: 'Once', kind: 'allow_once' },
+          { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+        ],
+      }) as unknown as RequestPermissionRequest
+
+    expect(profile.decidePermission(permission('edit', `${request().runDir}/result.json`))).toBe(
+      'once',
+    )
+    expect(profile.decidePermission(permission('edit', '/repo/src/a.ts'))).toBeUndefined()
+    expect(profile.decidePermission(permission('execute', `${request().runDir}/x`))).toBeUndefined()
+  })
+
+  it('still fires the terminal event when history bookkeeping throws', async () => {
+    const h = makeHarness({ historyError: 'state write failed' })
+    await h.service.startAutomatedSession(request())
+    await flush()
+    expect(h.setAutomationResult).toHaveBeenCalled()
+    expect(h.ends).toHaveLength(1)
+    expect(h.ends[0]).toMatchObject({ runId: 'run-1', outcome: 'completed' })
+  })
+
   it('runs a remote trigger on its own authority and reads/writes the remote run dir', async () => {
     const h = makeHarness({ resultRaw: '{"verdict":"info"}' })
     const authority = 'ssh-remote+host.example.com'
@@ -405,7 +461,9 @@ describe('AutomatedSessionService.startAutomatedSession', () => {
       expect.objectContaining({
         authority,
         cwd: '/home/user/repo',
-        automationRunDir: runDir,
+        automationProfile: expect.objectContaining({
+          origin: expect.objectContaining({ runDir }),
+        }),
         additionalDirectories: [runDir],
       }),
     )

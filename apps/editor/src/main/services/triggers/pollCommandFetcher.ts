@@ -11,7 +11,6 @@ export {
   POLL_MAX_STDOUT_BYTES,
   createPollCommandFetcher,
   describePollExecError,
-  killPollProcessTree as killProcessTree,
   parsePollStdout,
   toPayloadValue,
   type PollCommandFetcher,

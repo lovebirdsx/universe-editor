@@ -22,25 +22,24 @@ import {
   Severity,
   localize,
 } from '@universe-editor/platform'
-import { Badge, Button, Input, Select, Textarea } from '@universe-editor/workbench-ui'
+import { Badge, Button, FormSection, Input } from '@universe-editor/workbench-ui'
 import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
 import { parseWorkspaceUri } from '../../../shared/triggers/configParse.js'
-import { triggerEventLabel } from '../../../shared/triggers/triggerPresentation.js'
+import { triggerConfigErrorText } from '../../services/triggers/triggerPresentation.js'
 import {
   parseTriggerDocument,
   type TriggerConfigSection,
 } from '../../../shared/triggers/configDocument.js'
-import {
-  TRIGGER_EVENT_NAMES,
-  type TriggerEventName,
-  type TriggerOnMissed,
-  type TriggerOverflow,
-  type TriggerSummary,
+import type {
+  TriggerConfig,
+  TriggerConfigError,
+  TriggerSummary,
 } from '../../../shared/triggers/types.js'
 import {
   isTriggerConfigEditorDirty,
   readTriggerConfig,
   saveTriggerConfig,
+  saveTriggerConfigRebased,
   triggersConfigUri,
   type TriggerConfigSnapshot,
 } from '../../services/triggers/triggerConfigFileService.js'
@@ -50,22 +49,46 @@ import {
   buildRawTrigger,
   draftFromConfig,
   validateTriggerDraft,
+  withSourcePatch,
+  withSourceType,
   type TriggerConfigDraft as Draft,
 } from './triggerConfigDraft.js'
 import { Field, ToggleField, errorText } from './triggerFormParts.js'
-import styles from './TriggerManager.module.css'
+import styles from './TriggerConfigPanel.module.css'
+import { TriggerBudgetFields } from './TriggerBudgetFields.js'
+import { TriggerConcurrencyFields } from './TriggerConcurrencyFields.js'
+import { TriggerSessionFields } from './TriggerSessionFields.js'
+import { TriggerSourceFields } from './TriggerSourceFields.js'
+import type { TriggerSourceDraftPatch } from './triggerSources/types.js'
+
+/** Draft kept by the manager while the user switches tabs / triggers. */
+export interface TriggerConfigDraftState {
+  readonly draft: Draft
+  readonly dirty: boolean
+  /** Definition fingerprint the draft was based on; a mismatch means an external edit. */
+  readonly fingerprint: string
+  /** Definition the draft started from, so a later save can merge onto the latest disk text. */
+  readonly origin?: TriggerConfig
+}
 
 export interface TriggerConfigPanelProps {
   readonly summary: TriggerSummary
+  /** Preserved draft from an earlier visit to this trigger (manager-level). */
+  readonly draftState?: TriggerConfigDraftState | undefined
+  /** Reports the draft (only while dirty) so the manager can restore it later. */
+  readonly onDraftStateChange?: (state: TriggerConfigDraftState | undefined) => void
 }
-
-type SourceType = Draft['sourceType']
 
 type ReadonlyReason =
   | { readonly kind: 'no-workspace' }
   | { readonly kind: 'missing-file' }
-  | { readonly kind: 'root-invalid'; readonly message: string }
-  | { readonly kind: 'trigger-invalid'; readonly errors: readonly string[] }
+  | {
+      readonly kind: 'root-invalid'
+      readonly message: string
+      /** Present when the document parses but violates the config contract. */
+      readonly issue?: TriggerConfigError
+    }
+  | { readonly kind: 'trigger-invalid'; readonly issues: readonly TriggerConfigError[] }
   | { readonly kind: 'missing-trigger' }
 
 interface StatusMessage {
@@ -77,27 +100,21 @@ function signature(value: unknown): string {
   return JSON.stringify(value)
 }
 
-const SOURCE_TYPES: readonly { value: SourceType; label: string }[] = [
-  { value: 'manual', label: localize('triggers.source.manual', 'Manual') },
-  { value: 'schedule', label: localize('triggers.source.schedule', 'Schedule') },
-  { value: 'poll', label: localize('triggers.source.poll', 'Command poll') },
-  { value: 'event', label: localize('triggers.source.event', 'Event') },
-]
+function errorPath(issue: TriggerConfigError): string {
+  return issue.path.join('.')
+}
 
 /**
- * Fields whose change means the definition on disk changed too. Run-status
- * updates (running / lastRun*) are excluded so a busy scheduler does not make the
- * form stat + read the file on every event.
+ * The definition fingerprint covers every field the scheduler parses (name,
+ * enabled, source, session incl. prompt / budget / cwd / model / mcpServers,
+ * concurrency, overflow), so any external definition edit re-reads the file.
+ * Run-status updates (running / lastRun*) keep the same fingerprint and are
+ * ignored, and a trigger turning invalid is tracked separately because its
+ * summary carries an empty fingerprint.
  */
 function configSignature(summary: TriggerSummary): string {
   return JSON.stringify([
-    summary.name,
-    summary.enabled,
-    summary.sourceType,
-    summary.source ?? null,
-    summary.activationConfirmed,
-    summary.elevatedMode,
-    summary.errors ?? null,
+    summary.fingerprint,
     summary.status === 'invalid',
     summary.offline === true,
   ])
@@ -107,7 +124,11 @@ function isMissing(err: unknown): boolean {
   return err instanceof FileSystemError && err.code === 'ENOENT'
 }
 
-export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
+export function TriggerConfigPanel({
+  summary,
+  draftState,
+  onDraftStateChange,
+}: TriggerConfigPanelProps) {
   const files = useService(IFileService)
   const editors = useService(IEditorResolverService)
   const editorService = useService(IEditorService)
@@ -127,6 +148,7 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
   const [snapshot, setSnapshot] = useState<TriggerConfigSnapshot | undefined>(undefined)
   const [draft, setDraft] = useState<Draft | undefined>(undefined)
   const [baseline, setBaseline] = useState<Record<string, unknown> | undefined>(undefined)
+  const [originConfig, setOriginConfig] = useState<TriggerConfig | undefined>(undefined)
   const [readonlyReason, setReadonlyReason] = useState<ReadonlyReason | undefined>(undefined)
   const [loadError, setLoadError] = useState<string | undefined>(undefined)
   const [externalChange, setExternalChange] = useState(false)
@@ -137,10 +159,14 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
   snapshotRef.current = snapshot
   const summaryRef = useRef(summary)
   summaryRef.current = summary
+  const draftStateRef = useRef<TriggerConfigDraftState | undefined>(draftState)
+  draftStateRef.current = draftState
+  const baseFingerprintRef = useRef(summary.fingerprint)
   const selectionSignatureRef = useRef(configSignature(summary))
   const dirtyRef = useRef(false)
   const mountedRef = useRef(true)
   const readTokenRef = useRef(0)
+  const rebaseOnSaveRef = useRef(false)
 
   useEffect(() => {
     mountedRef.current = true
@@ -150,13 +176,15 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
   }, [])
 
   const applySnapshot = useCallback(
-    (next: TriggerConfigSnapshot | undefined) => {
+    (next: TriggerConfigSnapshot | undefined, options: { keepDraft?: boolean } = {}) => {
       setSnapshot(next)
       setExternalChange(false)
       setStatus(undefined)
+      rebaseOnSaveRef.current = false
       if (next === undefined) {
         setDraft(undefined)
         setBaseline(undefined)
+        setOriginConfig(undefined)
         setReadonlyReason({ kind: 'missing-file' })
         return
       }
@@ -164,9 +192,13 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
       if (parsed.kind !== 'ok') {
         setDraft(undefined)
         setBaseline(undefined)
+        setOriginConfig(undefined)
         setReadonlyReason({
           kind: 'root-invalid',
           message: parsed.kind === 'invalid' ? parsed.error : 'triggers.json is missing',
+          ...(parsed.kind === 'invalid' && parsed.issue !== undefined
+            ? { issue: parsed.issue }
+            : {}),
         })
         return
       }
@@ -174,24 +206,37 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
       if (config === undefined) {
         setDraft(undefined)
         setBaseline(undefined)
+        setOriginConfig(undefined)
         const invalid = parsed.value.invalid.find((entry) => entry.id === summary.id)
         setReadonlyReason(
           invalid === undefined
             ? { kind: 'missing-trigger' }
-            : { kind: 'trigger-invalid', errors: invalid.errors },
+            : { kind: 'trigger-invalid', issues: invalid.issues },
         )
         return
       }
-      const nextDraft = draftFromConfig(config)
-      setDraft(nextDraft)
-      setBaseline(buildRawTrigger(config.id, nextDraft))
+      // Keep a draft the user was editing in an earlier visit (tab / selection
+      // switch). Its base fingerprint detects an external edit that happened
+      // while the draft was parked.
+      const restored = options.keepDraft === true ? draftStateRef.current : undefined
+      setDraft(restored?.draft ?? draftFromConfig(config))
+      setBaseline(buildRawTrigger(config.id, draftFromConfig(config)))
+      setOriginConfig(restored?.origin ?? config)
+      baseFingerprintRef.current = restored?.fingerprint ?? summaryRef.current.fingerprint
       setReadonlyReason(undefined)
+      if (
+        restored !== undefined &&
+        restored.dirty &&
+        restored.fingerprint !== summaryRef.current.fingerprint
+      ) {
+        setExternalChange(true)
+      }
     },
     [summary.id],
   )
 
   const readFromDisk = useCallback(
-    async (auto: boolean): Promise<void> => {
+    async (auto: boolean, options: { keepDraft?: boolean } = {}): Promise<void> => {
       if (workspaceUri === undefined) return
       if (auto && summaryRef.current.offline === true) return
       const token = ++readTokenRef.current
@@ -220,7 +265,7 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
         setExternalChange(true)
         return
       }
-      applySnapshot(next)
+      applySnapshot(next, options)
     },
     [applySnapshot, files, workspaceUri],
   )
@@ -231,17 +276,20 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
     setSnapshot(undefined)
     setDraft(undefined)
     setBaseline(undefined)
+    setOriginConfig(undefined)
     setReadonlyReason(undefined)
     setExternalChange(false)
     setStatus(undefined)
     snapshotRef.current = undefined
+    baseFingerprintRef.current = summaryRef.current.fingerprint
     selectionSignatureRef.current = configSignature(summaryRef.current)
     if (workspaceUri === undefined) {
       setReadonlyReason({ kind: 'no-workspace' })
       setLoading(false)
       return
     }
-    void readFromDisk(false)
+    // A draft parked by the manager survives tab / selection switches.
+    void readFromDisk(false, { keepDraft: true })
   }, [readFromDisk, workspaceUri])
 
   useEffect(() => {
@@ -268,9 +316,25 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
     () => (draft === undefined ? undefined : validateTriggerDraft(summary.id, draft)),
     [draft, summary.id],
   )
-  const errors = validation?.errors ?? []
+  const issues = validation?.issues ?? []
   const canSave =
     dirty && validation?.config !== undefined && !saving && readonlyReason === undefined
+
+  // Keep the manager's per-trigger draft store in sync. Clean drafts are dropped:
+  // only unsaved edits need to survive tab / selection switches.
+  useEffect(() => {
+    if (draft === undefined || baseline === undefined) return
+    if (!dirty) {
+      onDraftStateChange?.(undefined)
+      return
+    }
+    onDraftStateChange?.({
+      draft,
+      dirty: true,
+      fingerprint: baseFingerprintRef.current,
+      ...(originConfig !== undefined ? { origin: originConfig } : {}),
+    })
+  }, [baseline, dirty, draft, onDraftStateChange, originConfig])
 
   const changedSections = useMemo(() => {
     if (rawDraft === undefined || baseline === undefined) {
@@ -303,10 +367,51 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
     [configUri, editorService, editors, groups, snapshot, summary.id, uriIdentity],
   )
 
-  const reload = useCallback(() => {
+  const confirmDiscard = useCallback(async (): Promise<boolean> => {
+    if (!dirtyRef.current) return true
+    const { confirmed } = await dialogs.confirm({
+      type: 'warning',
+      message: localize(
+        'trigger.manager.config.discardDraft',
+        'Discard your unsaved changes to trigger "{name}"?',
+        { name: summaryRef.current.name },
+      ),
+      primaryButton: localize('trigger.manager.config.discard', 'Discard'),
+    })
+    return confirmed
+  }, [dialogs])
+
+  const reload = useCallback(async () => {
     setStatus(undefined)
-    void readFromDisk(false)
-  }, [readFromDisk])
+    if (!(await confirmDiscard())) return
+    await readFromDisk(false)
+  }, [confirmDiscard, readFromDisk])
+
+  const revert = useCallback(async () => {
+    if (snapshot === undefined) return
+    if (!(await confirmDiscard())) return
+    applySnapshot(snapshot)
+  }, [applySnapshot, confirmDiscard, snapshot])
+
+  const keepEdits = useCallback(async () => {
+    // Keep the draft but move the snapshot to the latest disk text: later saves
+    // rebase the draft patch onto it instead of failing the stale-snapshot check.
+    rebaseOnSaveRef.current = true
+    setExternalChange(false)
+    setStatus(undefined)
+    if (workspaceUri === undefined) return
+    const before = snapshotRef.current
+    try {
+      const latest = await readTriggerConfig(files, workspaceUri)
+      // Another read or a completed save may have replaced the snapshot while
+      // this one was in flight; never regress the panel to older disk text.
+      if (!mountedRef.current || snapshotRef.current !== before || latest === undefined) return
+      snapshotRef.current = latest
+      setSnapshot(latest)
+    } catch {
+      // The save itself reads the latest text inside the write queue.
+    }
+  }, [files, workspaceUri])
 
   const jsonEditorDirty = useCallback((): boolean => {
     if (configUri === undefined) return false
@@ -347,10 +452,45 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
 
     setSaving(true)
     try {
-      const result = await saveTriggerConfig(files, snapshot, summary.id, next, {
-        isEditorDirty: jsonEditorDirty,
-      })
+      const write = async (overwrite: boolean) => {
+        if (rebaseOnSaveRef.current && originConfig !== undefined) {
+          return saveTriggerConfigRebased(files, snapshot, summary.id, next, {
+            isEditorDirty: jsonEditorDirty,
+            origin: originConfig,
+            ...(overwrite ? { overwrite: true } : {}),
+          })
+        }
+        return saveTriggerConfig(files, snapshot, summary.id, next, {
+          isEditorDirty: jsonEditorDirty,
+        })
+      }
+      let result = await write(false)
       if (!mountedRef.current) return
+      if (result.kind === 'field-conflict') {
+        const choice = await dialogs.confirm({
+          type: 'warning',
+          message: localize(
+            'trigger.manager.config.fieldConflict',
+            'These fields also changed in triggers.json: {fields}. Overwrite the disk values with your edits?',
+            { fields: result.fields.join(', ') },
+          ),
+          primaryButton: localize('trigger.manager.config.overwrite', 'Overwrite'),
+        })
+        if (!mountedRef.current) return
+        if (!choice.confirmed) {
+          setExternalChange(true)
+          setStatus({
+            tone: 'info',
+            text: localize(
+              'trigger.manager.config.fieldConflictCancelled',
+              'Save cancelled. Reload triggers.json or keep your edits.',
+            ),
+          })
+          return
+        }
+        result = await write(true)
+        if (!mountedRef.current) return
+      }
       switch (result.kind) {
         case 'ok': {
           applySnapshot({ uri: snapshot.uri, text: result.text, mtime: result.mtime })
@@ -398,6 +538,17 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
             }),
           })
           return
+        case 'field-conflict':
+          setExternalChange(true)
+          setStatus({
+            tone: 'error',
+            text: localize(
+              'trigger.manager.config.fieldConflictStill',
+              'These fields still conflict: {fields}. Reload triggers.json to continue.',
+              { fields: result.fields.join(', ') },
+            ),
+          })
+          return
       }
     } catch (err) {
       if (!mountedRef.current) return
@@ -423,6 +574,7 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
     files,
     jsonEditorDirty,
     notifications,
+    originConfig,
     snapshot,
     summary.id,
     summary.name,
@@ -445,7 +597,7 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
             error: loadError,
           })}
         </p>
-        <Button size="sm" onClick={reload} data-testid="trigger-manager-config-reload">
+        <Button size="sm" onClick={() => void reload()} data-testid="trigger-manager-config-reload">
           {localize('trigger.manager.config.reload', 'Reload')}
         </Button>
       </div>
@@ -461,10 +613,13 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
     )
   }
 
-  const fieldError = (...prefixes: string[]): string | undefined =>
-    errors.find((error) => prefixes.some((prefix) => error.startsWith(prefix)))
-
-  const cronMode: 'cron' | 'everyMin' = draft.cron.trim().length > 0 ? 'cron' : 'everyMin'
+  const fieldError = (...paths: string[]): string | undefined => {
+    const issue = issues.find((entry) => {
+      const key = errorPath(entry)
+      return paths.some((path) => key === path || key.startsWith(`${path}.`))
+    })
+    return issue === undefined ? undefined : triggerConfigErrorText(issue)
+  }
 
   return (
     <div className={styles['config']} data-testid="trigger-manager-config">
@@ -482,7 +637,7 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
           <Button
             size="sm"
             disabled={!dirty || saving}
-            onClick={() => applySnapshot(snapshot)}
+            onClick={() => void revert()}
             data-testid="trigger-manager-config-revert"
           >
             {localize('trigger.manager.config.revert', 'Revert')}
@@ -506,11 +661,22 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
           <span>
             {localize(
               'trigger.manager.config.externalChange',
-              'triggers.json was changed outside this form. Reload to pick up the new content; your local edits will be discarded.',
+              'triggers.json was changed outside this form. Reload to pick up the new content, or keep your local edits.',
             )}
           </span>
-          <Button size="sm" onClick={reload} data-testid="trigger-manager-config-external-reload">
+          <Button
+            size="sm"
+            onClick={() => void reload()}
+            data-testid="trigger-manager-config-external-reload"
+          >
             {localize('trigger.manager.config.reload', 'Reload')}
+          </Button>
+          <Button
+            size="sm"
+            onClick={() => void keepEdits()}
+            data-testid="trigger-manager-config-external-keep"
+          >
+            {localize('trigger.manager.config.keepDraft', 'Keep my edits')}
           </Button>
         </div>
       )}
@@ -524,11 +690,13 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
         </p>
       )}
 
-      {errors.length > 0 && (
+      {issues.length > 0 && (
         <div className={styles['notice']} data-testid="trigger-manager-config-errors">
           <ul className={styles['errorList']}>
-            {errors.map((error) => (
-              <li key={error}>{error}</li>
+            {issues.map((issue, index) => (
+              <li key={`${errorPath(issue)}:${issue.code}:${index}`}>
+                {triggerConfigErrorText(issue)}
+              </li>
             ))}
           </ul>
         </div>
@@ -542,10 +710,10 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
         <Field label={localize('trigger.manager.config.id', 'ID')}>
           <Input value={summary.id} readOnly disabled data-testid="trigger-manager-config-id" />
         </Field>
-        <Field label={localize('trigger.manager.config.name', 'Name')} error={fieldError('"name"')}>
+        <Field label={localize('trigger.manager.config.name', 'Name')} error={fieldError('name')}>
           <Input
             value={draft.name}
-            invalid={fieldError('"name"') !== undefined}
+            invalid={fieldError('name') !== undefined}
             onChange={(event) => update({ name: event.target.value })}
             data-testid="trigger-manager-config-name"
           />
@@ -565,38 +733,12 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
           onChange={(showSession) => update({ showSession })}
           testId="trigger-manager-config-show-session"
         />
-        <div className={styles['fieldRow']}>
-          <Field
-            label={localize('trigger.manager.config.concurrency', 'Concurrency')}
-            error={fieldError('"concurrency"')}
-            hint={localize('trigger.manager.config.concurrencyHint', '1–10')}
-          >
-            <Input
-              type="number"
-              min={1}
-              max={10}
-              value={draft.concurrency}
-              invalid={fieldError('"concurrency"') !== undefined}
-              onChange={(event) => update({ concurrency: event.target.value })}
-              data-testid="trigger-manager-config-concurrency"
-            />
-          </Field>
-          <Field label={localize('trigger.manager.config.overflow', 'When busy')}>
-            <Select<TriggerOverflow>
-              value={draft.overflow}
-              onChange={(overflow) => update({ overflow })}
-              options={[
-                {
-                  value: 'queue',
-                  label: localize('trigger.manager.config.overflow.queue', 'Queue'),
-                },
-                { value: 'drop', label: localize('trigger.manager.config.overflow.drop', 'Drop') },
-              ]}
-              aria-label={localize('trigger.manager.config.overflow', 'When busy')}
-              data-testid="trigger-manager-config-overflow"
-            />
-          </Field>
-        </div>
+        <TriggerConcurrencyFields
+          draft={draft}
+          update={update}
+          fieldError={fieldError}
+          testIdPrefix="trigger-manager-config"
+        />
       </Section>
 
       <Section
@@ -604,180 +746,19 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
         testId="source"
         onEditJson={() => openJson('source')}
       >
-        <Field label={localize('trigger.manager.config.sourceType', 'Type')}>
-          <Select<SourceType>
-            value={draft.sourceType}
-            onChange={(sourceType) => update({ sourceType })}
-            options={SOURCE_TYPES}
-            aria-label={localize('trigger.manager.config.sourceType', 'Type')}
-            data-testid="trigger-manager-config-source-type"
-          />
-        </Field>
-        {draft.sourceType === 'schedule' && (
-          <>
-            <div className={styles['fieldRow']}>
-              <Field label={localize('trigger.manager.config.schedule.mode', 'Schedule as')}>
-                <Select<'cron' | 'everyMin'>
-                  value={cronMode}
-                  onChange={(mode) =>
-                    update(
-                      mode === 'cron'
-                        ? {
-                            cron: draft.cron.trim().length > 0 ? draft.cron : '0 9 * * 1',
-                            everyMin: '',
-                          }
-                        : {
-                            everyMin: draft.everyMin.trim().length > 0 ? draft.everyMin : '10',
-                            cron: '',
-                          },
-                    )
-                  }
-                  options={[
-                    {
-                      value: 'cron',
-                      label: localize('trigger.manager.config.schedule.cron', 'Cron'),
-                    },
-                    {
-                      value: 'everyMin',
-                      label: localize('trigger.manager.config.schedule.interval', 'Interval'),
-                    },
-                  ]}
-                  aria-label={localize('trigger.manager.config.schedule.mode', 'Schedule as')}
-                  data-testid="trigger-manager-config-schedule-mode"
-                />
-              </Field>
-              <Field
-                label={
-                  cronMode === 'cron'
-                    ? localize('trigger.manager.config.schedule.cronExpression', 'Cron expression')
-                    : localize('trigger.manager.config.schedule.everyMinutes', 'Every N minutes')
-                }
-                error={fieldError('"source.cron"', '"source.everyMin"')}
-              >
-                {cronMode === 'cron' ? (
-                  <Input
-                    value={draft.cron}
-                    invalid={fieldError('"source.cron"') !== undefined}
-                    onChange={(event) => update({ cron: event.target.value })}
-                    data-testid="trigger-manager-config-cron"
-                  />
-                ) : (
-                  <Input
-                    type="number"
-                    min={1}
-                    value={draft.everyMin}
-                    invalid={fieldError('"source.everyMin"') !== undefined}
-                    onChange={(event) => update({ everyMin: event.target.value })}
-                    data-testid="trigger-manager-config-every-min"
-                  />
-                )}
-              </Field>
-            </div>
-            <Field label={localize('trigger.manager.config.schedule.onMissed', 'On missed runs')}>
-              <Select<TriggerOnMissed>
-                value={draft.onMissed}
-                onChange={(onMissed) => update({ onMissed })}
-                options={[
-                  {
-                    value: 'skip',
-                    label: localize('trigger.manager.source.onMissed.skip', 'skip'),
-                  },
-                  {
-                    value: 'catch-up-once',
-                    label: localize('trigger.manager.source.onMissed.catchUpOnce', 'catch up once'),
-                  },
-                ]}
-                aria-label={localize('trigger.manager.config.schedule.onMissed', 'On missed runs')}
-                data-testid="trigger-manager-config-on-missed"
-              />
-            </Field>
-          </>
-        )}
-        {draft.sourceType === 'poll' && (
-          <>
-            <div className={styles['fieldRow']}>
-              <Field
-                label={localize('trigger.manager.config.poll.interval', 'Poll interval (seconds)')}
-                error={fieldError('"source.intervalSec"')}
-              >
-                <Input
-                  type="number"
-                  min={30}
-                  value={draft.intervalSec}
-                  invalid={fieldError('"source.intervalSec"') !== undefined}
-                  onChange={(event) => update({ intervalSec: event.target.value })}
-                  data-testid="trigger-manager-config-poll-interval"
-                />
-              </Field>
-              <Field
-                label={localize('trigger.manager.config.poll.timeout', 'Command timeout (seconds)')}
-                error={fieldError('"source.fetch.timeoutSec"')}
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  max={600}
-                  value={draft.pollTimeoutSec}
-                  invalid={fieldError('"source.fetch.timeoutSec"') !== undefined}
-                  onChange={(event) => update({ pollTimeoutSec: event.target.value })}
-                  data-testid="trigger-manager-config-poll-timeout"
-                />
-              </Field>
-            </div>
-            <Field
-              label={localize(
-                'trigger.manager.config.poll.command',
-                'Command (prints a JSON array)',
-              )}
-              error={fieldError('"source.fetch.command"')}
-            >
-              <Input
-                value={draft.command}
-                invalid={fieldError('"source.fetch.command"') !== undefined}
-                onChange={(event) => update({ command: event.target.value })}
-                data-testid="trigger-manager-config-poll-command"
-              />
-            </Field>
-            <Field
-              label={localize('trigger.manager.config.poll.keyField', 'Event key field')}
-              error={fieldError('"source.keyField"')}
-            >
-              <Input
-                value={draft.keyField}
-                invalid={fieldError('"source.keyField"') !== undefined}
-                onChange={(event) => update({ keyField: event.target.value })}
-                data-testid="trigger-manager-config-poll-key-field"
-              />
-            </Field>
-          </>
-        )}
-        {draft.sourceType === 'event' && (
-          <Field label={localize('trigger.manager.config.event.name', 'Event')}>
-            <Select<TriggerEventName>
-              value={draft.eventName}
-              onChange={(eventName) => update({ eventName })}
-              options={TRIGGER_EVENT_NAMES.map((eventName) => ({
-                value: eventName,
-                label: triggerEventLabel(eventName),
-              }))}
-              aria-label={localize('trigger.manager.config.event.name', 'Event')}
-              data-testid="trigger-manager-config-event"
-            />
-          </Field>
-        )}
-        {(draft.sourceType === 'manual' || draft.sourceType === 'event') && (
-          <p className={styles['note']}>
-            {draft.sourceType === 'manual'
-              ? localize(
-                  'trigger.manager.config.source.manualNote',
-                  'Runs only when started manually (or by another command).',
-                )
-              : localize(
-                  'trigger.manager.config.source.swarmNote',
-                  'Runs once for every Swarm review that needs action.',
-                )}
-          </p>
-        )}
+        <TriggerSourceFields
+          source={draft.source}
+          setSourceType={(type) =>
+            setDraft((current) => (current === undefined ? current : withSourceType(current, type)))
+          }
+          updateSource={(patch: TriggerSourceDraftPatch) =>
+            setDraft((current) =>
+              current === undefined ? current : withSourcePatch(current, patch),
+            )
+          }
+          fieldError={fieldError}
+          testIdPrefix="trigger-manager-config"
+        />
       </Section>
 
       <Section
@@ -785,68 +766,12 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
         testId="session"
         onEditJson={() => openJson('session')}
       >
-        <div className={styles['fieldRow']}>
-          <Field label={localize('trigger.manager.config.session.agent', 'Agent')}>
-            <Input
-              value={draft.agent}
-              placeholder="claude-code"
-              onChange={(event) => update({ agent: event.target.value })}
-              data-testid="trigger-manager-config-agent"
-            />
-          </Field>
-          <Field label={localize('trigger.manager.config.session.mode', 'Mode')}>
-            <Input
-              value={draft.mode}
-              placeholder={localize('trigger.manager.config.session.agentDefault', 'Agent default')}
-              onChange={(event) => update({ mode: event.target.value })}
-              data-testid="trigger-manager-config-mode"
-            />
-          </Field>
-        </div>
-        <div className={styles['fieldRow']}>
-          <Field label={localize('trigger.manager.config.session.model', 'Model')}>
-            <Input
-              value={draft.model}
-              onChange={(event) => update({ model: event.target.value })}
-              data-testid="trigger-manager-config-model"
-            />
-          </Field>
-          <Field label={localize('trigger.manager.config.session.cwd', 'Working directory')}>
-            <Input
-              value={draft.cwd}
-              placeholder={localize('trigger.manager.config.session.cwdPlaceholder', '.')}
-              onChange={(event) => update({ cwd: event.target.value })}
-              data-testid="trigger-manager-config-cwd"
-            />
-          </Field>
-        </div>
-        <Field
-          label={localize('trigger.manager.config.session.skill', 'Skill')}
-          error={fieldError('"session.skill"')}
-          hint={localize(
-            'trigger.manager.config.session.skillHint',
-            'A skill or a prompt is required.',
-          )}
-        >
-          <Input
-            value={draft.skill}
-            invalid={fieldError('"session.skill"') !== undefined}
-            onChange={(event) => update({ skill: event.target.value })}
-            data-testid="trigger-manager-config-skill"
-          />
-        </Field>
-        <Field
-          label={localize('trigger.manager.config.session.prompt', 'Prompt')}
-          error={fieldError('"session.prompt"', '"session" must set')}
-        >
-          <Textarea
-            value={draft.prompt}
-            rows={6}
-            invalid={fieldError('"session.prompt"', '"session" must set') !== undefined}
-            onChange={(event) => update({ prompt: event.target.value })}
-            data-testid="trigger-manager-config-prompt"
-          />
-        </Field>
+        <TriggerSessionFields
+          draft={draft}
+          update={update}
+          fieldError={fieldError}
+          testIdPrefix="trigger-manager-config"
+        />
       </Section>
 
       <Section
@@ -854,52 +779,12 @@ export function TriggerConfigPanel({ summary }: TriggerConfigPanelProps) {
         testId="budget"
         onEditJson={() => openJson('budget')}
       >
-        <Field
-          label={localize('trigger.manager.config.budget.maxCost', 'Maximum cost (USD)')}
-          error={fieldError('"session.budget.maxCostUsd"')}
-          hint={localize('trigger.manager.config.budget.maxCostHint', 'Empty = no cost limit.')}
-        >
-          <Input
-            type="number"
-            min={0}
-            step="0.01"
-            value={draft.maxCostUsd}
-            invalid={fieldError('"session.budget.maxCostUsd"') !== undefined}
-            onChange={(event) => update({ maxCostUsd: event.target.value })}
-            data-testid="trigger-manager-config-max-cost"
-          />
-        </Field>
-        <div className={styles['fieldRow']}>
-          <Field
-            label={localize('trigger.manager.config.budget.timeout', 'Run timeout (minutes)')}
-            error={fieldError('"session.budget.timeoutMin"')}
-          >
-            <Input
-              type="number"
-              min={1}
-              value={draft.timeoutMin}
-              invalid={fieldError('"session.budget.timeoutMin"') !== undefined}
-              onChange={(event) => update({ timeoutMin: event.target.value })}
-              data-testid="trigger-manager-config-timeout"
-            />
-          </Field>
-          <Field
-            label={localize(
-              'trigger.manager.config.budget.approvalTimeout',
-              'Approval timeout (minutes)',
-            )}
-            error={fieldError('"session.budget.approvalTimeoutMin"')}
-          >
-            <Input
-              type="number"
-              min={1}
-              value={draft.approvalTimeoutMin}
-              invalid={fieldError('"session.budget.approvalTimeoutMin"') !== undefined}
-              onChange={(event) => update({ approvalTimeoutMin: event.target.value })}
-              data-testid="trigger-manager-config-approval-timeout"
-            />
-          </Field>
-        </div>
+        <TriggerBudgetFields
+          draft={draft}
+          update={update}
+          fieldError={fieldError}
+          testIdPrefix="trigger-manager-config"
+        />
       </Section>
     </div>
   )
@@ -928,13 +813,16 @@ function ReadonlyConfig({
         return localize(
           'trigger.manager.config.rootInvalid',
           'triggers.json cannot be parsed, so the form is read-only: {error}',
-          { error: reason.message },
+          {
+            error:
+              reason.issue === undefined ? reason.message : triggerConfigErrorText(reason.issue),
+          },
         )
       case 'trigger-invalid':
         return localize(
           'trigger.manager.config.triggerInvalid',
           'This trigger is invalid and cannot be edited here. Fix it in JSON: {errors}',
-          { errors: reason.errors.join('; ') },
+          { errors: reason.issues.map(triggerConfigErrorText).join('; ') },
         )
       case 'missing-trigger':
         return localize(
@@ -975,12 +863,11 @@ function Section({
   readonly children: ReactNode
 }) {
   return (
-    <section
+    <FormSection
+      title={title}
       className={styles['configSection']}
       data-testid={`trigger-manager-config-section-${testId}`}
-    >
-      <div className={styles['configSectionHeader']}>
-        <h3 className={styles['sectionTitle']}>{title}</h3>
+      actions={
         <Button
           size="sm"
           onClick={onEditJson}
@@ -989,8 +876,9 @@ function Section({
           <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
           {localize('trigger.manager.config.editInJson', 'Edit in JSON')}
         </Button>
-      </div>
+      }
+    >
       {children}
-    </section>
+    </FormSection>
   )
 }

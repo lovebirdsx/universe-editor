@@ -3,15 +3,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ChildProcess } from 'node:child_process'
+import { afterEach, describe, expect, it } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
 import type { ILogger } from '@universe-editor/platform'
+import { ProcessLifecycleRegistry } from '../../process/processLifecycle.js'
 import {
   createPollCommandFetcher,
   describePollExecError,
-  killPollProcessTree,
   parsePollStdout,
   POLL_MAX_PAYLOAD_VALUE_LENGTH,
   toPayloadValue,
@@ -48,6 +48,37 @@ function createLogger(): { logger: ILogger; warns: string[] } {
     flush: () => undefined,
   } as unknown as ILogger
   return { logger, warns }
+}
+
+async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  throw new Error('condition not met in time')
+}
+
+async function waitForPid(file: string): Promise<number> {
+  let pid = 0
+  await waitFor(() => {
+    try {
+      pid = Number(readFileSync(file, 'utf8'))
+    } catch {
+      return false
+    }
+    return Number.isInteger(pid) && pid > 0
+  })
+  return pid
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
 }
 
 describe('parsePollStdout', () => {
@@ -207,10 +238,38 @@ describe('createPollCommandFetcher', () => {
     if (!result.ok) expect(result.error).toContain('1 MB')
   })
 
-  it('never kills by pid once the child has exited (the pid may be recycled)', () => {
-    const kill = vi.fn()
-    const exited = { pid: 2147483646, exitCode: 0, signalCode: null, kill }
-    killPollProcessTree(exited as unknown as ChildProcess)
-    expect(kill).not.toHaveBeenCalled()
-  })
+  it('binds the shell to the lifecycle registry and aborts its whole tree', async () => {
+    const dir = await scriptDir(
+      [
+        "const fs = require('node:fs')",
+        "fs.writeFileSync('poll.pid', String(process.pid))",
+        'setTimeout(() => {}, 30000)',
+        '',
+      ].join('\n'),
+    )
+    const registry = new ProcessLifecycleRegistry()
+    const controller = new AbortController()
+    const fetch = createPollCommandFetcher(undefined, { lifecycle: { registry } })
+    try {
+      const pending = fetch({
+        command: 'node fetch.js',
+        cwd: dir,
+        timeoutSec: 30,
+        keyField: 'id',
+        signal: controller.signal,
+      })
+      const pid = await waitForPid(join(dir, 'poll.pid'))
+      await waitFor(() => registry.snapshot().some((entry) => entry.role === 'trigger-poll'))
+
+      controller.abort()
+      const result = await pending
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toContain('cancelled')
+
+      await waitFor(() => !isAlive(pid))
+      await waitFor(() => registry.snapshot().length === 0)
+    } finally {
+      registry.dispose()
+    }
+  }, 20_000)
 })

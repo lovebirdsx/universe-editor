@@ -15,8 +15,10 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import {
+  Disposable,
   URI,
   createNamedLogger,
+  localize,
   type ILogger,
   type ILoggerService,
 } from '@universe-editor/platform'
@@ -45,12 +47,15 @@ export interface RemoteTriggerServiceOptions {
   readonly fetcher?: PollCommandFetcher
 }
 
-export class RemoteTriggerService implements IRemoteTriggerService {
+export class RemoteTriggerService extends Disposable implements IRemoteTriggerService {
   private readonly _runsRoot: string
   private readonly _log: ILogger
   private readonly _fetch: PollCommandFetcher
+  /** In-flight polls; aborted (and their process trees killed) on dispose. */
+  private readonly _polls = new Set<AbortController>()
 
   constructor(options: RemoteTriggerServiceOptions) {
+    super()
     this._runsRoot = resolveTriggersRunsDir(options.dataDir)
     this._log = createNamedLogger(options.loggerService, {
       id: 'triggerPoll',
@@ -61,22 +66,42 @@ export class RemoteTriggerService implements IRemoteTriggerService {
 
   async poll(request: TriggerPollRequest): Promise<TriggerPollResult> {
     const { command, cwd, timeoutSec, keyField } = request
+    // Deterministic request problems come back as the protocol's `{ok:false}`
+    // instead of a rejection: a rejection is indistinguishable from a transport
+    // failure on the client, which then swallows it as "skipped" instead of
+    // recording a poll failure (with backoff) for the user.
     if (typeof command !== 'string' || command.trim() === '') {
-      throw new Error('triggerPoll.poll: command must be a non-empty string')
+      return this._rejectPoll(
+        localize('triggers.error.pollCommandRequired', 'The poll command is required'),
+      )
     }
     if (typeof keyField !== 'string' || keyField === '') {
-      throw new Error('triggerPoll.poll: keyField must be a non-empty string')
+      return this._rejectPoll(
+        localize('triggers.error.pollKeyFieldRequired', 'The poll key field is required'),
+      )
     }
     if (!isValidTriggerPollTimeout(timeoutSec)) {
-      throw new Error(`triggerPoll.poll: invalid timeoutSec ${String(timeoutSec)}`)
+      return this._rejectPoll(
+        localize('triggers.error.pollTimeoutInvalid', 'The poll timeout is invalid: {timeout}', {
+          timeout: String(timeoutSec),
+        }),
+      )
     }
     if (!URI.isUri(cwd)) {
-      throw new Error('triggerPoll.poll: cwd must be a URI')
+      return this._rejectPoll(
+        localize('triggers.error.pollWorkspaceInvalid', 'The poll workspace URI is invalid'),
+      )
     }
     // The codec already translated remote-ssh → file; anything else means the
     // caller sent a path the server cannot interpret as its own filesystem.
     if (cwd.scheme !== 'file') {
-      throw new Error(`triggerPoll.poll: cwd must be a file URI, got '${cwd.scheme}'`)
+      return this._rejectPoll(
+        localize(
+          'triggers.error.pollWorkspaceNotFile',
+          "The poll workspace must be a file URI, got '{scheme}'",
+          { scheme: cwd.scheme },
+        ),
+      )
     }
     let isDirectory = false
     try {
@@ -85,17 +110,46 @@ export class RemoteTriggerService implements IRemoteTriggerService {
       isDirectory = false
     }
     if (!isDirectory) {
-      throw new Error(`triggerPoll.poll: cwd is not an existing directory: ${cwd.fsPath}`)
+      return this._rejectPoll(
+        localize(
+          'triggers.error.pollWorkspaceMissing',
+          'The poll workspace directory does not exist on the remote host: {path}',
+          { path: cwd.fsPath },
+        ),
+      )
     }
 
     this._log.debug(`poll: running in ${cwd.fsPath} (timeout ${timeoutSec}s)`)
-    const result = await this._fetch({ command, cwd: cwd.fsPath, timeoutSec, keyField })
-    if (result.ok) {
-      this._log.debug(`poll: ${result.items.length} item(s) in ${cwd.fsPath}`)
-    } else {
-      this._log.warn(`poll failed in ${cwd.fsPath}: ${result.error}`)
+    const controller = new AbortController()
+    this._polls.add(controller)
+    try {
+      const result = await this._fetch({
+        command,
+        cwd: cwd.fsPath,
+        timeoutSec,
+        keyField,
+        signal: controller.signal,
+      })
+      if (result.ok) {
+        this._log.debug(`poll: ${result.items.length} item(s) in ${cwd.fsPath}`)
+      } else {
+        this._log.warn(`poll failed in ${cwd.fsPath}: ${result.error}`)
+      }
+      return result
+    } finally {
+      this._polls.delete(controller)
     }
-    return result
+  }
+
+  override dispose(): void {
+    for (const controller of this._polls) controller.abort()
+    this._polls.clear()
+    super.dispose()
+  }
+
+  private _rejectPoll(error: string): TriggerPollResult {
+    this._log.warn(`poll rejected: ${error}`)
+    return { ok: false, error }
   }
 
   async createRunDir(

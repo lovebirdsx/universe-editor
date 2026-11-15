@@ -9,6 +9,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import {
   FileSystemError,
   IEditorGroupsService,
+  IEditorService,
   IFileService,
   INotificationService,
   IUriIdentityService,
@@ -36,6 +37,7 @@ const CONFIG_URI = triggersConfigUri(WORKSPACE)
 class FakeFiles {
   readonly entries = new Map<string, { text: string; mtime: number }>()
   readonly directories: string[] = []
+  readonly renames: { source: string; target: string }[] = []
   private clock = 100
 
   put(uri: URI, text: string): void {
@@ -70,6 +72,21 @@ class FakeFiles {
   async createDirectory(uri: URI): Promise<void> {
     this.directories.push(uri.toString())
   }
+
+  async rename(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void> {
+    const entry = this.entries.get(source.toString())
+    if (entry === undefined) throw new FileSystemError('not found', 'ENOENT')
+    if (opts?.overwrite !== true && this.entries.has(target.toString())) {
+      throw new FileSystemError('already exists', 'EEXIST')
+    }
+    this.entries.delete(source.toString())
+    this.entries.set(target.toString(), { text: entry.text, mtime: ++this.clock })
+    this.renames.push({ source: source.toString(), target: target.toString() })
+  }
+
+  async delete(uri: URI): Promise<void> {
+    if (!this.entries.delete(uri.toString())) throw new FileSystemError('not found', 'ENOENT')
+  }
 }
 
 interface Harness {
@@ -88,6 +105,7 @@ function renderWizard(
   const onCreated = vi.fn()
   const onClose = vi.fn()
   const notify = vi.fn()
+  const openEditor = vi.fn()
   const ensureConfigFile = options.ensureFails
     ? vi.fn(async () => Promise.reject(new Error('register failed')))
     : vi.fn(async () => '')
@@ -121,6 +139,7 @@ function renderWizard(
   services.set(IUriIdentityService, {
     isEqual: (a: URI, b: URI) => a.toString() === b.toString(),
   } as unknown as IUriIdentityService)
+  services.set(IEditorService, { openEditor } as unknown as IEditorService)
 
   render(
     <ServicesContext.Provider value={new InstantiationService(services)}>
@@ -142,6 +161,10 @@ function fillBasics(id: string, name: string): void {
   })
 }
 
+function goToSource(): void {
+  fireEvent.click(screen.getByTestId('trigger-manager-wizard-next'))
+}
+
 function goToSession(): void {
   fireEvent.click(screen.getByTestId('trigger-manager-wizard-next'))
 }
@@ -154,7 +177,7 @@ function goToLimits(prompt: string): void {
 }
 
 describe('TriggerCreateWizard', () => {
-  it('walks the template → basics → session → limits steps', async () => {
+  it('walks the template → basics → source → session → limits steps', async () => {
     renderWizard()
     await waitFor(() => expect(screen.getByTestId('trigger-manager-wizard-body-0')).toBeDefined())
 
@@ -168,12 +191,61 @@ describe('TriggerCreateWizard', () => {
     expect((screen.getByTestId('trigger-manager-wizard-next') as HTMLButtonElement).disabled).toBe(
       false,
     )
-    goToSession()
+    goToSource()
     expect(screen.getByTestId('trigger-manager-wizard-body-2')).toBeDefined()
+    expect(screen.getByTestId('trigger-manager-wizard-source-type')).toBeDefined()
+
+    goToSession()
+    expect(screen.getByTestId('trigger-manager-wizard-body-3')).toBeDefined()
 
     goToLimits('Summarize the day')
-    expect(screen.getByTestId('trigger-manager-wizard-body-3')).toBeDefined()
+    expect(screen.getByTestId('trigger-manager-wizard-body-4')).toBeDefined()
     expect(screen.getByTestId('trigger-manager-wizard-create')).toBeDefined()
+  })
+
+  it('prefills a skill template and links to its guide', async () => {
+    const harness = renderWizard()
+    await waitFor(() => expect(screen.getByTestId('trigger-manager-wizard-body-0')).toBeDefined())
+
+    fireEvent.click(screen.getByTestId('trigger-manager-wizard-template-skill-biweekly-report'))
+    fireEvent.click(screen.getByTestId('trigger-manager-wizard-template-docs-biweekly-report'))
+    expect(harness.onClose).not.toHaveBeenCalled()
+
+    goToBasics()
+    fillBasics('biweekly', 'Biweekly report')
+    goToSource()
+    expect((screen.getByTestId('trigger-manager-wizard-cron') as HTMLInputElement).value).toBe(
+      '0 10 1,15 * *',
+    )
+    goToSession()
+    expect((screen.getByTestId('trigger-manager-wizard-skill') as HTMLInputElement).value).toBe(
+      'biweekly-report',
+    )
+    expect(
+      (screen.getByTestId('trigger-manager-wizard-prompt') as HTMLTextAreaElement).value,
+    ).toContain('双周报')
+    goToLimits('whatever')
+    expect((screen.getByTestId('trigger-manager-wizard-max-cost') as HTMLInputElement).value).toBe(
+      '2',
+    )
+  })
+
+  it('writes through a temporary file and atomically renames it into place', async () => {
+    const harness = renderWizard({ text: '{ "version": 1, "triggers": [] }' })
+    await waitFor(() => expect(screen.getByTestId('trigger-manager-wizard-body-0')).toBeDefined())
+
+    goToBasics()
+    fillBasics('daily', 'Daily digest')
+    goToSource()
+    goToSession()
+    goToLimits('Summarize the day')
+    fireEvent.click(screen.getByTestId('trigger-manager-wizard-create'))
+
+    await waitFor(() => expect(harness.onCreated).toHaveBeenCalledTimes(1))
+    expect(harness.store.renames).toHaveLength(1)
+    expect(harness.store.renames[0]?.target).toBe(CONFIG_URI.toString())
+    expect(harness.store.renames[0]?.source).toContain('.tmp-')
+    expect(harness.store.entries.has(harness.store.renames[0]?.source ?? '')).toBe(false)
   })
 
   it('creates a new triggers.json with the empty config header and the new trigger', async () => {
@@ -182,6 +254,7 @@ describe('TriggerCreateWizard', () => {
 
     goToBasics()
     fillBasics('daily', 'Daily digest')
+    goToSource()
     goToSession()
     goToLimits('Summarize the day')
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-create'))
@@ -204,6 +277,7 @@ describe('TriggerCreateWizard', () => {
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-template-poll'))
     goToBasics()
     fillBasics('reqs', 'Requisition poll')
+    goToSource()
     goToSession()
     goToLimits('Handle new requisitions')
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-create'))
@@ -222,6 +296,7 @@ describe('TriggerCreateWizard', () => {
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-template-swarm'))
     goToBasics()
     fillBasics('triage', 'Triage')
+    goToSource()
     goToSession()
     goToLimits('Triage the review')
 
@@ -276,6 +351,7 @@ describe('TriggerCreateWizard', () => {
 
     goToBasics()
     fillBasics('daily', 'Daily digest')
+    goToSource()
     goToSession()
     goToLimits('Summarize the day')
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-create'))
@@ -296,6 +372,7 @@ describe('TriggerCreateWizard', () => {
 
     goToBasics()
     fillBasics('daily', 'Daily digest')
+    goToSource()
     goToSession()
     goToLimits('Summarize the day')
     fireEvent.click(screen.getByTestId('trigger-manager-wizard-create'))
@@ -334,6 +411,7 @@ function servicesWithoutWorkspace(): void {
   services.set(IUriIdentityService, {
     isEqual: () => false,
   } as unknown as IUriIdentityService)
+  services.set(IEditorService, { openEditor: vi.fn() } as unknown as IEditorService)
   render(
     <ServicesContext.Provider value={new InstantiationService(services)}>
       <TriggerCreateWizard onClose={vi.fn()} onCreated={vi.fn()} />

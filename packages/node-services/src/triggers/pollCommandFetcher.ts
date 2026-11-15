@@ -10,8 +10,16 @@
  *  host-native path of the machine that runs the command.
  *--------------------------------------------------------------------------------------------*/
 
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { StringDecoder } from 'node:string_decoder'
 import { localize, type ILogger } from '@universe-editor/platform'
+import { ManagedChildProcess, type TreeKiller } from '../process/managedChildProcess.js'
+import {
+  APP_OWNER,
+  processGroupSpawnOptions,
+  type ProcessLifecycleRegistry,
+  type ProcessOwner,
+} from '../process/processLifecycle.js'
 import type { TriggerPayloadValue, TriggerPollItem, TriggerPollResult } from './triggerProtocol.js'
 
 export const POLL_MAX_STDOUT_BYTES = 1024 * 1024
@@ -23,6 +31,23 @@ export interface PollFetchRequest {
   readonly cwd: string
   readonly timeoutSec: number
   readonly keyField: string
+  /** Abort an in-flight poll (owner shutdown); the whole process tree is killed. */
+  readonly signal?: AbortSignal
+}
+
+/**
+ * Main-side lifecycle binding. The remote server has no registry (its trigger
+ * service owns the running set), so this stays optional; callers that have one
+ * must pass it.
+ */
+export interface PollFetcherLifecycle {
+  readonly registry: ProcessLifecycleRegistry
+  /** Defaults to the app owner: trigger scheduling outlives individual windows. */
+  readonly owner?: ProcessOwner
+}
+
+export interface PollFetcherOptions {
+  readonly lifecycle?: PollFetcherLifecycle
 }
 
 export type PollItem = TriggerPollItem
@@ -143,56 +168,97 @@ export function describePollExecError(err: ExecFailure, timeoutSec: number): str
       })
 }
 
-/**
- * `exec`-style shell execution left grandchildren alive on timeout (the shell was
- * killed, the real work kept running). Spawn explicitly and kill the whole tree:
- * `taskkill /T` on Windows, the process group on POSIX (`detached: true`).
- */
-export function killPollProcessTree(child: ChildProcess): void {
-  const pid = child.pid
-  // A dead child's pid can already belong to an unrelated process (Windows
-  // recycles pids fast), and `taskkill /T` would take that whole tree down.
-  if (pid === undefined || child.exitCode !== null || child.signalCode !== null) return
+/** Synchronous tree kill so a fail path settles before the caller cleans up. */
+const syncTreeKiller: TreeKiller = (pid) => {
   try {
-    if (process.platform === 'win32') {
-      // Synchronous: the caller reports the failure immediately, and an async
-      // taskkill could still be running when the run directory is cleaned up.
-      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
-        windowsHide: true,
-        stdio: 'ignore',
-      })
-    } else {
-      process.kill(-pid, 'SIGKILL')
-    }
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
+      windowsHide: true,
+      stdio: 'ignore',
+    })
   } catch {
     // The child may already be gone.
   }
-  try {
-    child.kill()
-  } catch {
-    // Same.
-  }
 }
 
-/** Default fetcher: shell command, workspace cwd, hard timeout, 1 MB stdout cap. */
-export function createPollCommandFetcher(logger?: ILogger): PollCommandFetcher {
+function pollCancelledError(): string {
+  return localize('triggers.error.pollCancelled', 'The poll command was cancelled')
+}
+
+/**
+ * Default fetcher: shell command, workspace cwd, hard timeout, 1 MB stdout cap.
+ *
+ * The child is wrapped in {@link ManagedChildProcess}: timeout / abort / the
+ * stdout cap force-kill the whole tree (`taskkill /T` on Windows, the POSIX
+ * process group). Main-side callers also bind it to the app owner in the process
+ * lifecycle registry; the remote server has none, so its trigger service tracks
+ * in-flight polls and aborts them on dispose (daemon shutdown / detach).
+ */
+export function createPollCommandFetcher(
+  logger?: ILogger,
+  options: PollFetcherOptions = {},
+): PollCommandFetcher {
   return (request) =>
     new Promise<PollFetchResult>((resolve) => {
-      let settled = false
+      if (request.signal?.aborted === true) {
+        resolve({ ok: false, error: pollCancelledError() })
+        return
+      }
+      const decoder = new StringDecoder('utf8')
       let output = ''
       let outputBytes = 0
+      let settled = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let detachAbort: (() => void) | undefined
+      const rawListeners: (() => void)[] = []
+
+      const raw = spawn(request.command, {
+        cwd: request.cwd,
+        shell: true,
+        windowsHide: true,
+        // A POSIX process group lets us kill the shell *and* its descendants.
+        ...processGroupSpawnOptions(),
+      })
+      const child = new ManagedChildProcess(raw, {
+        ...(logger === undefined ? {} : { logger }),
+        label: 'trigger-poll',
+        // shell: true wraps the command in cmd.exe on Windows; a plain kill would
+        // orphan the real command, so recurse the PID tree there.
+        treeKill: true,
+        processGroup: process.platform !== 'win32',
+        killTree: syncTreeKiller,
+        ...(options.lifecycle === undefined
+          ? {}
+          : {
+              lifecycle: {
+                registry: options.lifecycle.registry,
+                owner: options.lifecycle.owner ?? APP_OWNER,
+                role: 'trigger-poll',
+              },
+            }),
+      })
+      const detach = (): void => {
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          timer = undefined
+        }
+        detachAbort?.()
+        detachAbort = undefined
+        for (const off of rawListeners.splice(0)) off()
+      }
       const finish = (result: PollFetchResult): void => {
         if (settled) return
         settled = true
-        clearTimeout(timer)
+        detach()
+        child.dispose()
         resolve(result)
       }
       const fail = (error: string): void => {
         if (settled) return
-        killPollProcessTree(child)
+        child.hardKill()
         finish({ ok: false, error })
       }
-      const timer = setTimeout(
+
+      timer = setTimeout(
         () =>
           fail(
             localize('triggers.error.pollTimeout', 'The poll command timed out after {seconds}s', {
@@ -203,18 +269,20 @@ export function createPollCommandFetcher(logger?: ILogger): PollCommandFetcher {
       )
       timer.unref?.()
 
-      const child = spawn(request.command, {
-        cwd: request.cwd,
-        shell: true,
-        windowsHide: true,
-        // A POSIX process group lets us kill the shell *and* its descendants.
-        detached: process.platform !== 'win32',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      child.stdout?.setEncoding('utf8')
-      child.stdout?.on('data', (chunk: string) => {
+      const signal = request.signal
+      if (signal !== undefined) {
+        const onAbort = (): void => fail(pollCancelledError())
+        signal.addEventListener('abort', onAbort, { once: true })
+        detachAbort = () => signal.removeEventListener('abort', onAbort)
+      }
+
+      // The old `stdio: ['ignore', …]` handed the command EOF on stdin; a default
+      // pipe would leave a command that reads stdin waiting for the timeout.
+      child.endStdin()
+
+      child.onStdout((chunk: Buffer) => {
         if (settled) return
-        outputBytes += Buffer.byteLength(chunk)
+        outputBytes += chunk.byteLength
         if (outputBytes > POLL_MAX_STDOUT_BYTES) {
           fail(
             localize(
@@ -224,22 +292,16 @@ export function createPollCommandFetcher(logger?: ILogger): PollCommandFetcher {
           )
           return
         }
-        output += chunk
+        output += decoder.write(chunk)
       })
-      // Drain stderr so a chatty command cannot block on a full pipe; content is
-      // deliberately never logged.
-      child.stderr?.resume()
-      child.on('error', () =>
-        finish({
-          ok: false,
-          error: localize(
-            'triggers.error.pollCommandStart',
-            'The poll command could not be started',
-          ),
-        }),
-      )
-      child.on('close', (code, signal) => {
+      // ManagedChildProcess drains stderr unconditionally, so a chatty command
+      // cannot block on a full pipe; content is deliberately never logged.
+
+      // Parse on `close` (not `exit`): Node may still deliver buffered stdout
+      // after `exit`, which would truncate the JSON payload.
+      const onClose = (code: number | null, closeSignal: NodeJS.Signals | null): void => {
         if (settled) return
+        output += decoder.end()
         if (code === 0) {
           finish(parsePollStdout(output, request.keyField, logger))
           return
@@ -247,10 +309,27 @@ export function createPollCommandFetcher(logger?: ILogger): PollCommandFetcher {
         finish({
           ok: false,
           error: describePollExecError(
-            { ...(code === null ? {} : { code }), ...(signal === null ? {} : { signal }) },
+            {
+              ...(code === null ? {} : { code }),
+              ...(closeSignal === null ? {} : { signal: closeSignal }),
+            },
             request.timeoutSec,
           ),
         })
-      })
+      }
+      const onError = (): void =>
+        finish({
+          ok: false,
+          error: localize(
+            'triggers.error.pollCommandStart',
+            'The poll command could not be started',
+          ),
+        })
+      raw.on('close', onClose)
+      raw.on('error', onError)
+      rawListeners.push(
+        () => raw.off('close', onClose),
+        () => raw.off('error', onError),
+      )
     })
 }

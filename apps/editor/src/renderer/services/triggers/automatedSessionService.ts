@@ -11,6 +11,7 @@ import {
   Emitter,
   IFileService,
   ILoggerService,
+  IUriIdentityService,
   InstantiationType,
   URI,
   createDecorator,
@@ -22,6 +23,7 @@ import {
 import { IAcpAgentRegistry } from '../acp/acpAgentRegistry.js'
 import { supportsSystemPromptAppend } from '../acp/agentPromptCapabilities.js'
 import { isSessionModeCategory } from '../acp/configOptionLabel.js'
+import type { AcpAutomationProfile } from '../acp/session/acpAutomationProfile.js'
 import { IAcpSessionService } from '../acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../acp/session/acpSessionHistory.js'
 import type { IAcpSession } from '../acp/session/acpSessionModel.js'
@@ -33,6 +35,7 @@ import {
   type TriggerRunEnd,
   type TriggerRunRequest,
 } from '../../../shared/triggers/types.js'
+import { decideAutomatedPermission } from './automatedPermissionPolicy.js'
 import { AutomatedRunWatcher } from './automatedRunWatcher.js'
 
 export interface AutomatedRunStartResult {
@@ -98,6 +101,7 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     @IAcpAgentRegistry private readonly _registry: IAcpAgentRegistry,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IFileService private readonly _files: IFileService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -128,6 +132,21 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
     const descriptor = this._registry.get(agentId)
     const appendSystemContract = supportsSystemPromptAppend(descriptor)
     const firstPrompt = appendSystemContract ? request.promptForSystemContract : request.prompt
+    const systemPromptAppend = appendSystemContract ? TRIGGER_OUTPUT_CONTRACT_SYSTEM : undefined
+    // The trigger module owns the automation policy; ACP only receives this
+    // profile and never imports triggers itself.
+    const automationProfile: AcpAutomationProfile = {
+      origin: {
+        ...request.origin,
+        runDir: request.runDir,
+        ...(systemPromptAppend !== undefined ? { systemPromptAppend } : {}),
+      },
+      ...(systemPromptAppend !== undefined ? { systemPromptAppend } : {}),
+      suppressCompletionNotify: true,
+      planPolicy: 'manual',
+      decidePermission: (params) =>
+        decideAutomatedPermission(params, request.runDir, request.authority, this._uriIdentity),
+    }
     this._logger.debug(
       `trigger run ${runId} agent=${agentId} outputContract=${
         appendSystemContract ? 'system+inline-runDir' : 'inline'
@@ -142,10 +161,8 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
       // Not `internal`: an automated session is persisted and listed so the
       // user can inspect what the trigger did.
       title: `${request.origin.triggerName} · ${request.origin.eventKey}`,
-      automation: request.origin,
-      automationRunDir: request.runDir,
+      automationProfile,
       additionalDirectories: [request.runDir],
-      ...(appendSystemContract ? { systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM } : {}),
       ...(request.mcpServerNames !== undefined ? { mcpServerNames: request.mcpServerNames } : {}),
       ...(Object.keys(configDesiredOverrides).length > 0 ? { configDesiredOverrides } : {}),
     })
@@ -256,14 +273,23 @@ export class AutomatedSessionService extends Disposable implements IAutomatedSes
 
   private _handleRunEnd(end: TriggerRunEnd): void {
     this._runs.delete(end.runId)
-    if (end.sessionId !== undefined) {
-      this._history.setAutomationResult(end.sessionId, {
-        ...(end.verdict !== undefined ? { verdict: end.verdict } : {}),
-        ...(end.summary !== undefined ? { summary: end.summary } : {}),
-        outcome: end.outcome,
-      })
+    try {
+      if (end.sessionId !== undefined) {
+        this._history.setAutomationResult(end.sessionId, {
+          ...(end.verdict !== undefined ? { verdict: end.verdict } : {}),
+          ...(end.summary !== undefined ? { summary: end.summary } : {}),
+          outcome: end.outcome,
+        })
+      }
+    } catch (err) {
+      // History is bookkeeping; a failed write must not swallow the terminal
+      // outcome that main (reportRunEnd) and the notification contributions wait on.
+      this._logger.warn(
+        `failed to record end of run ${end.runId}: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    } finally {
+      this._onDidEndRun.fire(end)
     }
-    this._onDidEndRun.fire(end)
   }
 }
 

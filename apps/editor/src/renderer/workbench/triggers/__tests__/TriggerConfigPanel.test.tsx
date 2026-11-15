@@ -119,6 +119,20 @@ class FakeFiles {
   }
 
   async createDirectory(): Promise<void> {}
+
+  async rename(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void> {
+    const entry = this.entries.get(source.toString())
+    if (entry === undefined) throw new FileSystemError('not found', 'ENOENT')
+    if (opts?.overwrite !== true && this.entries.has(target.toString())) {
+      throw new FileSystemError('already exists', 'EEXIST')
+    }
+    this.entries.delete(source.toString())
+    this.entries.set(target.toString(), { text: entry.text, mtime: ++this.clock })
+  }
+
+  async delete(uri: URI): Promise<void> {
+    if (!this.entries.delete(uri.toString())) throw new FileSystemError('not found', 'ENOENT')
+  }
 }
 
 interface Harness {
@@ -177,7 +191,10 @@ function renderPanel(
     confirm,
     editorGroups,
     configText: () => store.get(CONFIG_URI)?.text ?? '',
-    fireChange: (list) => act(() => changeEmitter.fire(list ?? [summary({ name: 'Remote' })])),
+    fireChange: (list) =>
+      act(() =>
+        changeEmitter.fire(list ?? [summary({ fingerprint: 'fp-remote', name: 'Remote' })]),
+      ),
   }
 }
 
@@ -215,7 +232,8 @@ describe('TriggerConfigPanel', () => {
     expect(name.value).toBe('Changed')
 
     fireEvent.click(screen.getByTestId('trigger-manager-config-revert'))
-    expect(name.value).toBe('Alpha')
+    await waitFor(() => expect(name.value).toBe('Alpha'))
+    expect(harness.confirm).toHaveBeenCalledTimes(1)
     expect(screen.queryByTestId('trigger-manager-config-dirty')).toBeNull()
     expect(harness.configText()).toBe(CONFIG_TEXT)
   })
@@ -291,22 +309,31 @@ describe('TriggerConfigPanel', () => {
 
     await screen.findByTestId('trigger-manager-config-errors')
     expect(screen.getByTestId('trigger-manager-config-errors').textContent).toContain('"session"')
+    // The structured issue path highlights the offending field, not just the banner.
+    expect(screen.getByTestId('trigger-manager-config-prompt').getAttribute('aria-invalid')).toBe(
+      'true',
+    )
     expect((screen.getByTestId('trigger-manager-config-save') as HTMLButtonElement).disabled).toBe(
       true,
     )
   })
 
-  it('reloads automatically when the file changes and the form is clean', async () => {
+  it('reloads automatically when the definition fingerprint changes and the form is clean', async () => {
     const harness = renderPanel()
     await loaded()
 
-    harness.store.put(CONFIG_URI, CONFIG_TEXT.replace('"name": "Alpha"', '"name": "Renamed"'))
-    harness.fireChange()
+    // Prompt changes do not change the summary name, so only the definition
+    // fingerprint can tell the form that the file needs re-reading.
+    harness.store.put(CONFIG_URI, CONFIG_TEXT.replace('"Do it"', '"Do it now"'))
+    harness.fireChange([summary({ fingerprint: 'fp-remote', name: 'Alpha' })])
 
     await waitFor(() =>
-      expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
-        'Renamed',
-      ),
+      expect(
+        (screen.getByTestId('trigger-manager-config-prompt') as HTMLTextAreaElement).value,
+      ).toBe('Do it now'),
+    )
+    expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
+      'Alpha',
     )
   })
 
@@ -324,6 +351,93 @@ describe('TriggerConfigPanel', () => {
     expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
       'Local',
     )
+
+    fireEvent.click(screen.getByTestId('trigger-manager-config-external-keep'))
+    expect(screen.queryByTestId('trigger-manager-config-external-change')).toBeNull()
+    expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
+      'Local',
+    )
+
+    harness.store.put(CONFIG_URI, CONFIG_TEXT.replace('"name": "Alpha"', '"name": "Remote 2"'))
+    harness.fireChange([summary({ fingerprint: 'fp-remote-2', name: 'Remote 2' })])
+    await screen.findByTestId('trigger-manager-config-external-change')
+    fireEvent.click(screen.getByTestId('trigger-manager-config-external-reload'))
+
+    await waitFor(() =>
+      expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
+        'Remote 2',
+      ),
+    )
+    expect(harness.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('saves kept local edits on top of an external change to another field', async () => {
+    const harness = renderPanel()
+    await loaded()
+
+    fireEvent.change(screen.getByTestId('trigger-manager-config-name'), {
+      target: { value: 'Local' },
+    })
+    harness.store.put(CONFIG_URI, CONFIG_TEXT.replace('"Do it"', '"Do it now"'))
+    harness.fireChange()
+    await screen.findByTestId('trigger-manager-config-external-change')
+
+    fireEvent.click(screen.getByTestId('trigger-manager-config-external-keep'))
+    fireEvent.click(screen.getByTestId('trigger-manager-config-save'))
+
+    await waitFor(() => expect(harness.store.writes).toHaveLength(1))
+    expect(harness.confirm).toHaveBeenCalledTimes(1)
+    expect(harness.configText()).toContain('"name": "Local", // inline comment')
+    expect(harness.configText()).toContain('"prompt": "Do it now"')
+    expect(harness.configText()).toContain('// Header comment.')
+    expect((screen.getByTestId('trigger-manager-config-name') as HTMLInputElement).value).toBe(
+      'Local',
+    )
+  })
+
+  it('asks before overwriting a field that changed on disk too', async () => {
+    const harness = renderPanel()
+    await loaded()
+
+    fireEvent.change(screen.getByTestId('trigger-manager-config-name'), {
+      target: { value: 'Local' },
+    })
+    harness.store.put(CONFIG_URI, CONFIG_TEXT.replace('"name": "Alpha"', '"name": "Remote"'))
+    harness.fireChange()
+    await screen.findByTestId('trigger-manager-config-external-change')
+
+    fireEvent.click(screen.getByTestId('trigger-manager-config-external-keep'))
+    fireEvent.click(screen.getByTestId('trigger-manager-config-save'))
+
+    await waitFor(() => expect(harness.confirm).toHaveBeenCalledTimes(2))
+    expect(harness.confirm.mock.calls[1]?.[0]).toMatchObject({
+      message: expect.stringContaining('name'),
+    })
+    await waitFor(() => expect(harness.store.writes).toHaveLength(1))
+    expect(harness.configText()).toContain('"name": "Local"')
+  })
+
+  it('leaves the file untouched when the overwrite choice is declined', async () => {
+    const harness = renderPanel()
+    harness.confirm
+      .mockResolvedValueOnce({ confirmed: true, choice: 'primary' as const })
+      .mockResolvedValueOnce({ confirmed: false, choice: 'cancel' as const })
+    await loaded()
+
+    fireEvent.change(screen.getByTestId('trigger-manager-config-name'), {
+      target: { value: 'Local' },
+    })
+    harness.store.put(CONFIG_URI, CONFIG_TEXT.replace('"name": "Alpha"', '"name": "Remote"'))
+    harness.fireChange()
+    await screen.findByTestId('trigger-manager-config-external-change')
+
+    fireEvent.click(screen.getByTestId('trigger-manager-config-external-keep'))
+    fireEvent.click(screen.getByTestId('trigger-manager-config-save'))
+
+    await waitFor(() => expect(harness.confirm).toHaveBeenCalledTimes(2))
+    expect(harness.store.writes).toHaveLength(0)
+    expect(screen.getByTestId('trigger-manager-config-external-change')).toBeDefined()
+    expect(screen.getByTestId('trigger-manager-config-status').textContent).toContain('cancelled')
   })
 
   it('does not stat + read the file for run-status updates', async () => {
@@ -344,7 +458,7 @@ describe('TriggerConfigPanel', () => {
     await loaded()
 
     harness.store.readFails = true
-    harness.fireChange([summary({ name: 'Remote' })])
+    harness.fireChange([summary({ fingerprint: 'fp-remote', name: 'Remote' })])
 
     await waitFor(() => expect(harness.store.reads).toBe(2))
     expect(screen.queryByTestId('trigger-manager-config-load-error')).toBeNull()
@@ -358,7 +472,7 @@ describe('TriggerConfigPanel', () => {
     await loaded()
     const reads = harness.store.reads
 
-    harness.fireChange([summary({ offline: true, name: 'Remote' })])
+    harness.fireChange([summary({ offline: true, fingerprint: 'fp-remote', name: 'Remote' })])
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(harness.store.reads).toBe(reads)
@@ -373,6 +487,22 @@ describe('TriggerConfigPanel', () => {
     expect(screen.getByTestId('trigger-manager-config-readonly').textContent).toContain(
       'cannot be parsed',
     )
+  })
+
+  it('reports the line and column of a JSON syntax error', async () => {
+    renderPanel({ text: '{\n  \"triggers": [\n}\n' })
+    await screen.findByTestId('trigger-manager-config-readonly')
+    expect(screen.getByTestId('trigger-manager-config-readonly').textContent).toMatch(
+      /line \d+, column \d+/,
+    )
+  })
+
+  it('localizes document shape errors by code', async () => {
+    renderPanel({ text: '{ "version": 2 }' })
+    await screen.findByTestId('trigger-manager-config-readonly')
+    const text = screen.getByTestId('trigger-manager-config-readonly').textContent ?? ''
+    expect(text).toContain('configuration version must be 1')
+    expect(text).not.toContain('"version" must be 1')
   })
 
   it('is read-only and lists errors for an invalid trigger entry', async () => {

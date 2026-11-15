@@ -63,9 +63,22 @@ describe('triggers.json schema', () => {
     expect(triggerSchema().properties?.['concurrency']?.maximum).toBe(10)
   })
 
-  it('lets a session set either a prompt or a skill and describes the budget', () => {
+  it('lets a session set either a skill or a non-empty prompt and describes the budget', () => {
     const session = triggerSchema().properties?.['session']
-    expect(session?.anyOf).toEqual([{ required: ['prompt'] }, { required: ['skill'] }])
+    expect(session?.anyOf).toEqual([
+      // A skill alone is enough; the parser also accepts an empty prompt next to it.
+      { required: ['skill'] },
+      {
+        required: ['prompt'],
+        properties: { prompt: { type: 'string', minLength: 1, pattern: '\\S' } },
+      },
+    ])
+    // The property itself stays unconstrained: an empty prompt is legal with a skill.
+    const prompt = session?.properties?.['prompt'] as
+      | (IJSONSchema & { minLength?: number })
+      | undefined
+    expect(prompt).toMatchObject({ type: 'string' })
+    expect(prompt?.minLength).toBeUndefined()
     const budget = session?.properties?.['budget']
     expect(Object.keys(budget?.properties ?? {}).sort()).toEqual([
       'approvalTimeoutMin',

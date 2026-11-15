@@ -4,7 +4,7 @@ import {
   isProcessed,
   markQueued,
   markStarted,
-  pendingQueued,
+  newestItems,
   prune,
   type ProcessedKeys,
 } from '../dedupe.js'
@@ -30,15 +30,6 @@ describe('dedupe', () => {
     expect(forget(next, 'missing')).toBe(next)
   })
 
-  it('lists only queued keys in chronological order', () => {
-    let keys: ProcessedKeys = {}
-    keys = markQueued(keys, 'late', 300)
-    keys = markQueued(keys, 'early', 100)
-    keys = markStarted(keys, 'started', 50)
-    keys = markQueued(keys, 'middle', 200)
-    expect(pendingQueued(keys)).toEqual(['early', 'middle', 'late'])
-  })
-
   it('prunes expired keys by age', () => {
     let keys: ProcessedKeys = {}
     keys = markQueued(keys, 'old', 1_000)
@@ -56,5 +47,13 @@ describe('dedupe', () => {
 
   it('keeps nothing when the limit is zero', () => {
     expect(prune(markQueued({}, 'k', 1), 2, { limit: 0, ttlMs: 1_000 })).toEqual({})
+  })
+
+  it('keeps the newest items (output tail) when one round exceeds the limit', () => {
+    const items = ['a', 'b', 'c', 'd']
+    expect(newestItems(items, 2)).toEqual({ items: ['c', 'd'], dropped: 2 })
+    expect(newestItems(items, 4)).toEqual({ items, dropped: 0 })
+    expect(newestItems(items, 9)).toEqual({ items, dropped: 0 })
+    expect(newestItems(items, 0)).toEqual({ items: [], dropped: 4 })
   })
 })

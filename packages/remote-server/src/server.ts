@@ -227,7 +227,7 @@ export function createRemoteServer(
   )
   server.registerChannel(
     RemoteChannels.TriggerPoll,
-    ProxyChannel.fromService(new RemoteTriggerService({ dataDir, loggerService })),
+    ProxyChannel.fromService(disposables.add(new RemoteTriggerService({ dataDir, loggerService }))),
   )
 
   log.info(`[remote-server] channels assembled: ${Object.values(RemoteChannels).join(', ')}`)

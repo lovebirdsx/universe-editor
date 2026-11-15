@@ -89,7 +89,8 @@ import { stubLastSessionCwdServiceForTest } from './stubLastSessionCwdService.js
 import type { IAcpModelCandidateService } from '../../acpModelCandidateService.js'
 import { stubWindowsService } from './stubWindowsService.js'
 import { StubLoggerService } from '../../../../__tests__/_helpers/stubLoggerService.js'
-import { TRIGGER_OUTPUT_CONTRACT_SYSTEM } from '../../../../../shared/triggers/promptTemplate.js'
+
+const TEST_SYSTEM_PROMPT_APPEND = '## Contract\nwrite result.json'
 
 // ---------------------------------------------------------------------------
 // Stubs
@@ -564,8 +565,12 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
       runId: 'run-1',
     }
     const original = await svc.createSession('fake', {
-      automation,
-      automationRunDir: '/userData/triggers/runs/run-1',
+      automationProfile: {
+        origin: { ...automation, runDir: '/userData/triggers/runs/run-1' },
+        suppressCompletionNotify: true,
+        planPolicy: 'manual',
+        decidePermission: () => undefined,
+      },
     })
     await original.whenConnected()
     const sessionId = original.sessionIdOnAgent.get()!
@@ -593,9 +598,17 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
       runId: 'run-1',
     }
     const original = await svc.createSession('fake', {
-      automation,
-      automationRunDir: '/userData/triggers/runs/run-1',
-      systemPromptAppend: TRIGGER_OUTPUT_CONTRACT_SYSTEM,
+      automationProfile: {
+        origin: {
+          ...automation,
+          runDir: '/userData/triggers/runs/run-1',
+          systemPromptAppend: TEST_SYSTEM_PROMPT_APPEND,
+        },
+        systemPromptAppend: TEST_SYSTEM_PROMPT_APPEND,
+        suppressCompletionNotify: true,
+        planPolicy: 'manual',
+        decidePermission: () => undefined,
+      },
     })
     await original.whenConnected()
     const sessionId = original.sessionIdOnAgent.get()!
@@ -603,9 +616,9 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
 
     const resumed = await svc.resumeSession(sessionId)
 
-    expect(resumed.systemPromptAppend).toBe(TRIGGER_OUTPUT_CONTRACT_SYSTEM)
+    expect(resumed.systemPromptAppend).toBe(TEST_SYSTEM_PROMPT_APPEND)
     expect(built.client.connected[1]!.agent.loadSessionCalls[0]?._meta).toMatchObject({
-      systemPrompt: { append: TRIGGER_OUTPUT_CONTRACT_SYSTEM },
+      systemPrompt: { append: TEST_SYSTEM_PROMPT_APPEND },
     })
   })
 

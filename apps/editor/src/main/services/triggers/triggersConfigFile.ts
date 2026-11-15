@@ -80,7 +80,16 @@ export function serializeTriggersConfig(config: TriggersConfig): unknown {
       concurrency: trigger.concurrency,
       overflow: trigger.overflow,
     })),
-    invalid: config.invalid.map((entry) => ({ id: entry.id, errors: [...entry.errors] })),
+    invalid: config.invalid.map((entry) => ({
+      id: entry.id,
+      errors: [...entry.errors],
+      issues: entry.issues.map((issue) => ({
+        path: [...issue.path],
+        code: issue.code,
+        params: { ...issue.params },
+        message: issue.message,
+      })),
+    })),
   }
 }
 

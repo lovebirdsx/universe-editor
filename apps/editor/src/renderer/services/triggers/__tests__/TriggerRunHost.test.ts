@@ -7,8 +7,10 @@
 import {
   Emitter,
   LogLevel,
+  URI,
   type ILogger,
   type ILoggerService,
+  type IWorkspaceService,
   type IWorkspaceTrustManagementService,
 } from '@universe-editor/platform'
 import { describe, expect, it, vi } from 'vitest'
@@ -80,7 +82,9 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly setAllPaused = vi.fn(async (): Promise<void> => undefined)
   readonly confirmActivation = vi.fn(async (): Promise<void> => undefined)
   readonly ensureConfigFile = vi.fn(async (): Promise<string> => 'file:///triggers.json')
+  readonly reportTriggerEvents = vi.fn(async () => undefined)
   readonly rescanWorkspace = vi.fn(async (): Promise<void> => undefined)
+  readonly markHostReady = vi.fn(async (_workspace: string): Promise<void> => undefined)
   readonly removeWorkspace = vi.fn(async (): Promise<void> => undefined)
   readonly readRunReport = vi.fn(
     async (): Promise<TriggerRunReportReadResult> => ({ kind: 'not-found' }),
@@ -93,6 +97,8 @@ interface FakeTrust {
   readonly initialized: Promise<void>
   resolveInitialized: () => void
   trusted: boolean
+  /** Per-URI answers; anything else falls back to `trusted`. */
+  readonly uriTrust: Map<string, boolean>
 }
 
 function makeTrust(): FakeTrust {
@@ -105,11 +111,44 @@ function makeTrust(): FakeTrust {
     initialized,
     resolveInitialized: () => resolve(),
     trusted: false,
+    uriTrust: new Map(),
   }
   const service = {
     workspaceTrustInitialized: initialized,
     isWorkspaceTrusted: (): boolean => state.trusted,
+    getUriTrustInfo: (uri: URI) => ({
+      uri,
+      trusted: state.uriTrust.get(uri.toString()) ?? state.trusted,
+    }),
   } as unknown as IWorkspaceTrustManagementService
+  return Object.assign(state, { service })
+}
+
+interface FakeWorkspace {
+  readonly service: IWorkspaceService
+  readonly onDidChangeWorkspace: Emitter<IWorkspaceService['current']>
+  resolveReady: () => void
+  current: URI | undefined
+}
+
+function makeWorkspace(): FakeWorkspace {
+  let resolve!: () => void
+  const ready = new Promise<void>((r) => {
+    resolve = r
+  })
+  const change = new Emitter<IWorkspaceService['current']>()
+  const state = {
+    current: undefined as URI | undefined,
+    resolveReady: () => resolve(),
+    onDidChangeWorkspace: change,
+  }
+  const service = {
+    whenReady: ready,
+    get current() {
+      return state.current === undefined ? null : { folder: state.current, name: 'ws' }
+    },
+    onDidChangeWorkspace: change.event,
+  } as unknown as IWorkspaceService
   return Object.assign(state, { service })
 }
 
@@ -144,16 +183,18 @@ function setup(): {
   sessions: FakeAutomatedSessions
   main: FakeTriggerMain
   trust: FakeTrust
+  workspace: FakeWorkspace
   reveal: FakeReveal
   logger: CapturingLoggerService
 } {
   const sessions = new FakeAutomatedSessions()
   const main = new FakeTriggerMain()
   const trust = makeTrust()
+  const workspace = makeWorkspace()
   const reveal = new FakeReveal()
   const logger = new CapturingLoggerService()
-  const host = new TriggerRunHost(sessions, main, trust.service, reveal, logger)
-  return { host, sessions, main, trust, reveal, logger }
+  const host = new TriggerRunHost(sessions, main, workspace.service, trust.service, reveal, logger)
+  return { host, sessions, main, trust, workspace, reveal, logger }
 }
 
 describe('TriggerRunHost', () => {
@@ -194,7 +235,7 @@ describe('TriggerRunHost', () => {
   it('waits for trust initialization before answering', async () => {
     const { host, trust } = setup()
     trust.trusted = true
-    const answer = host.isWorkspaceTrusted()
+    const answer = host.isWorkspaceTrusted('file:///workspace')
     let settled = false
     void answer.then(() => {
       settled = true
@@ -204,6 +245,27 @@ describe('TriggerRunHost', () => {
 
     trust.resolveInitialized()
     await expect(answer).resolves.toBe(true)
+  })
+
+  it('judges trust by the trigger workspace URI, not the window folder', async () => {
+    const { host, trust } = setup()
+    trust.trusted = false
+    trust.uriTrust.set('remote-ssh://dev/home/testuser/proj', true)
+    trust.resolveInitialized()
+
+    await expect(host.isWorkspaceTrusted('remote-ssh://dev/home/testuser/proj')).resolves.toBe(true)
+    await expect(host.isWorkspaceTrusted('file:///other')).resolves.toBe(false)
+  })
+
+  it('acknowledges the run host once the workspace is known', async () => {
+    const { main, workspace } = setup()
+    workspace.current = URI.file('X:/workspace')
+    expect(main.markHostReady).not.toHaveBeenCalled()
+
+    workspace.resolveReady()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(main.markHostReady).toHaveBeenCalledWith(URI.file('X:/workspace').toString())
   })
 
   it('reports a finished run to main', async () => {

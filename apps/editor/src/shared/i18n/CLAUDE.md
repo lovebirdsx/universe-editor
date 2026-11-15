@@ -24,7 +24,7 @@ locale 取值：`workbench.language` 设 `auto` 时按系统 locale（`zh*`→`z
 
 ## 测试
 
-- `__tests__/zhCnCoverage.test.ts` —— 扫 `SCAN_ROOTS`（apps/editor、packages 的 node-services/platform/workbench-ui）下**每个字面量** `localize` key：① 新增会 localize 的包必须补进 `SCAN_ROOTS`；② 每个 key 有 zh-CN 条目；③ 译文不引入调用点没提供的 `{placeholder}`；④ `color.<id>` 与 agent 书签等动态族逐条覆盖。**改 key 名只动一边立刻红**。
+- `__tests__/zhCnCoverage.test.ts` —— 扫 `SCAN_ROOTS`（apps/editor、packages 的 node-services/platform/remote-server/workbench-ui）下**每个字面量** `localize` key：① 新增会 localize 的包必须补进 `SCAN_ROOTS`；② 每个 key 有 zh-CN 条目；③ 译文不引入调用点没提供的 `{placeholder}`；④ `color.<id>` 与 agent 书签等动态族逐条覆盖。**改 key 名只动一边立刻红**。
 - `__tests__/bugRecordingMessages.test.ts` —— bug 录制文案的 zh-CN 断言。
 - **扩展不在范围内**：`extensions/*` 走自己的 `package.nls.<locale>.json` / `src/nls.ts`，不进这张表。
 

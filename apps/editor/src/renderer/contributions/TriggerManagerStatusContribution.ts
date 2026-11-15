@@ -20,7 +20,7 @@ import {
   type IStatusBarEntryAccessor,
 } from '@universe-editor/platform'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
-import { summarizeTriggerCounts } from '../../shared/triggers/triggerPresentation.js'
+import { summarizeTriggerCounts } from '../services/triggers/triggerPresentation.js'
 import type { TriggerSummary } from '../../shared/triggers/types.js'
 import { OpenTriggerManagerAction } from '../actions/triggerActions.js'
 

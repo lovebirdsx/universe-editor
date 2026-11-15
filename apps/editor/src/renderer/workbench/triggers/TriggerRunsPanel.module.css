@@ -1,0 +1,76 @@
+/* Trigger run history: toolbar, table and empty/loading states. */
+
+.runs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-4);
+  max-width: 1040px;
+}
+
+.runsToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-4);
+}
+
+.runsTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal);
+}
+
+.runsTable th {
+  padding: var(--spacing-3) var(--spacing-4);
+  border-bottom: 1px solid var(--vscode-workbench-border);
+  color: var(--vscode-editor-mutedForeground);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  text-align: left;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.runsTable td {
+  padding: var(--spacing-4);
+  border-bottom: 1px solid var(--vscode-workbench-borderSubtle);
+  vertical-align: top;
+}
+
+.runsRow {
+  cursor: pointer;
+}
+
+.runsRow:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.runsRow:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.runsTime {
+  white-space: nowrap;
+}
+
+.runsSummary {
+  max-width: 340px;
+  overflow-wrap: anywhere;
+}
+
+.runsActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-2);
+  white-space: nowrap;
+}
+
+.state {
+  padding: var(--spacing-6) var(--spacing-5);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--vscode-editor-mutedForeground);
+}

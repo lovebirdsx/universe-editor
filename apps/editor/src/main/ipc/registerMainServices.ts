@@ -18,6 +18,7 @@ import { type IRendererSessionsService } from '../../shared/ipc/sessionSwitcher.
 import { type IMobileBridgeService } from '../../shared/ipc/mobileGatewayService.js'
 import { type ITriggerRunHost } from '../../shared/ipc/triggerService.js'
 import { createWindowScopedSessionSwitcher } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
+import { createWindowScopedTriggerMainService } from '../services/triggers/triggerMainService.js'
 import { createWindowScopedAcpHost } from '../services/acpHost/acpHostMainService.js'
 import { createWindowScopedAcpTerminal } from '../services/acpTerminal/acpTerminalMainService.js'
 import { createWindowScopedMcpClient } from '../services/mcpClient/mcpClientMainService.js'
@@ -155,7 +156,10 @@ export function bootstrapWindowIpc(
     ProxyChannel.fromService(createWindowScopedSessionSwitcher(app.sessionSwitcher, win.id)),
   )
   server.registerChannel(ServiceChannels.MobileGateway, ProxyChannel.fromService(app.mobileGateway))
-  server.registerChannel(ServiceChannels.Triggers, ProxyChannel.fromService(app.triggers))
+  server.registerChannel(
+    ServiceChannels.Triggers,
+    ProxyChannel.fromService(createWindowScopedTriggerMainService(app.triggers, win.id)),
+  )
 
   const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(
     client.getChannel(ServiceChannels.Lifecycle),

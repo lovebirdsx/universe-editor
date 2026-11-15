@@ -6,20 +6,23 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { promises as fs } from 'node:fs'
+import { promises as fs, readFileSync } from 'node:fs'
 import path from 'node:path'
 import {
   ChannelPair,
   InMemoryMessagePassingProtocol,
+  NullLogger,
   ProxyChannel,
   URI,
   createBinaryCodec,
   createRemoteURITransformer,
   RemoteChannels,
+  type ILoggerService,
 } from '@universe-editor/platform'
 import type { IRemoteTriggerService } from '@universe-editor/node-services'
 import { mkTempDir } from '@universe-editor/temp-root'
 import { createRemoteServer } from '../server.js'
+import { RemoteTriggerService } from '../triggerService.js'
 
 const AUTHORITY = 'testhost'
 const CLIENT_ID = 'testuser-install-1'
@@ -102,6 +105,47 @@ async function seedRun(
   return runDir
 }
 
+function createLoggerService(): ILoggerService {
+  const logger = new NullLogger()
+  return {
+    _serviceBrand: undefined,
+    createLogger: () => logger,
+    setLevel: () => undefined,
+    getLevel: () => logger.level,
+  }
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('condition not met in time')
+}
+
+async function waitForPidFile(file: string): Promise<number> {
+  let pid = 0
+  await waitForCondition(() => {
+    try {
+      pid = Number(readFileSync(file, 'utf8'))
+    } catch {
+      return false
+    }
+    return Number.isInteger(pid) && pid > 0
+  })
+  return pid
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
 describe('remote triggerPoll channel', () => {
   it('runs a poll command in a workspace on the server host', async () => {
     const dataDir = await makeTempRoot()
@@ -124,27 +168,54 @@ describe('remote triggerPoll channel', () => {
     }
   })
 
-  it('fails loud on a missing cwd or a non-file URI', async () => {
+  it('returns deterministic errors for a missing cwd or a non-file URI', async () => {
     const dataDir = await makeTempRoot()
     const { triggers, dispose } = connect({ dataDir })
     try {
-      await expect(
-        triggers.poll({
-          command: 'node -v',
-          cwd: URI.file(path.join(dataDir, 'missing')),
-          timeoutSec: 5,
-          keyField: 'id',
-        }),
-      ).rejects.toThrow(/not an existing directory/)
+      const missing = await triggers.poll({
+        command: 'node -v',
+        cwd: URI.file(path.join(dataDir, 'missing')),
+        timeoutSec: 5,
+        keyField: 'id',
+      })
+      expect(missing.ok).toBe(false)
+      if (!missing.ok) expect(missing.error).toMatch(/does not exist on the remote host/)
 
-      await expect(
-        triggers.poll({
-          command: 'node -v',
-          cwd: URI.parse('remote-ssh://testhost/home/testuser/project'),
-          timeoutSec: 5,
-          keyField: 'id',
-        }),
-      ).rejects.toThrow(/file URI/)
+      const wrongScheme = await triggers.poll({
+        command: 'node -v',
+        cwd: URI.parse('remote-ssh://testhost/home/testuser/project'),
+        timeoutSec: 5,
+        keyField: 'id',
+      })
+      expect(wrongScheme.ok).toBe(false)
+      if (!wrongScheme.ok) expect(wrongScheme.error).toMatch(/file URI/)
+    } finally {
+      dispose()
+    }
+  })
+
+  it('returns deterministic errors for invalid poll requests', async () => {
+    const dataDir = await makeTempRoot()
+    const workspace = await makeTempRoot()
+    const { triggers, dispose } = connect({ dataDir })
+    try {
+      const emptyCommand = await triggers.poll({
+        command: '   ',
+        cwd: URI.file(workspace),
+        timeoutSec: 5,
+        keyField: 'id',
+      })
+      expect(emptyCommand.ok).toBe(false)
+      if (!emptyCommand.ok) expect(emptyCommand.error).toMatch(/command is required/)
+
+      const emptyKeyField = await triggers.poll({
+        command: 'node -v',
+        cwd: URI.file(workspace),
+        timeoutSec: 5,
+        keyField: '',
+      })
+      expect(emptyKeyField.ok).toBe(false)
+      if (!emptyKeyField.ok) expect(emptyKeyField.error).toMatch(/key field is required/)
     } finally {
       dispose()
     }
@@ -255,25 +326,63 @@ describe('remote triggerPoll channel', () => {
     }
   })
 
-  it('rejects poll timeouts outside the client schema range', async () => {
+  it('returns a deterministic error for poll timeouts outside the client schema range', async () => {
     const dataDir = await makeTempRoot()
     const workspace = await makeTempRoot()
     const { triggers, dispose } = connect({ dataDir })
     try {
       for (const timeoutSec of [0, -1, 601, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-        await expect(
-          triggers.poll({
-            command: 'node -v',
-            cwd: URI.file(workspace),
-            timeoutSec,
-            keyField: 'id',
-          }),
-        ).rejects.toThrow(/invalid timeoutSec/)
+        const result = await triggers.poll({
+          command: 'node -v',
+          cwd: URI.file(workspace),
+          timeoutSec,
+          keyField: 'id',
+        })
+        expect(result.ok).toBe(false)
+        if (!result.ok) expect(result.error).toMatch(/timeout is invalid/)
       }
     } finally {
       dispose()
     }
   })
+
+  it('kills in-flight polls when the service is disposed', async () => {
+    const dataDir = await makeTempRoot()
+    const workspace = await makeTempRoot()
+    await fs.writeFile(
+      path.join(workspace, 'hang.js'),
+      [
+        "const fs = require('node:fs')",
+        "fs.writeFileSync('hang.pid', String(process.pid))",
+        'setTimeout(() => {}, 60000)',
+        '',
+      ].join('\n'),
+      'utf8',
+    )
+    const service = new RemoteTriggerService({
+      dataDir,
+      loggerService: createLoggerService(),
+    })
+    try {
+      const pending = service.poll({
+        command: 'node hang.js',
+        cwd: URI.file(workspace),
+        timeoutSec: 60,
+        keyField: 'id',
+      })
+      const pid = await waitForPidFile(path.join(workspace, 'hang.pid'))
+      expect(isAlive(pid)).toBe(true)
+
+      service.dispose()
+      const result = await pending
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error).toMatch(/cancelled/)
+
+      await waitForCondition(() => !isAlive(pid))
+    } finally {
+      service.dispose()
+    }
+  }, 20_000)
 
   it('carries report bytes over the base64 JSON codec too', async () => {
     const dataDir = await makeTempRoot()

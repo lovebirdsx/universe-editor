@@ -10,13 +10,16 @@ import {
   Action2,
   ICommandService,
   IDialogService,
+  IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
+  IFileService,
   ILayoutService,
   ILoggerService,
   INotificationService,
   IOutputService,
   IQuickInputService,
+  IUriIdentityService,
   IViewsService,
   IWorkspaceService,
   MenuId,
@@ -24,15 +27,19 @@ import {
   URI,
   localize,
   localize2,
-  type IConfirmResult,
   type ILogger,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { ILogFilesService } from '../../shared/ipc/services.js'
 import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
-import { workspaceDisplayPath } from '../../shared/triggers/configParse.js'
-import { summarizeTriggerSource } from '../../shared/triggers/triggerPresentation.js'
-import { CONSERVATIVE_MODE_BY_AGENT, type TriggerSummary } from '../../shared/triggers/types.js'
+import { workspaceDisplayPath, parseWorkspaceUri } from '../../shared/triggers/configParse.js'
+import { parseTriggerDocument } from '../../shared/triggers/configDocument.js'
+import { summarizeTriggerSource } from '../services/triggers/triggerPresentation.js'
+import {
+  CONSERVATIVE_MODE_BY_AGENT,
+  type TriggerConfig,
+  type TriggerSummary,
+} from '../../shared/triggers/types.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionService } from '../services/acp/session/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../services/acp/session/acpSessionHistory.js'
@@ -48,6 +55,8 @@ import {
   fallbackTriggerName,
 } from '../services/triggers/triggerReportEditorInput.js'
 import { TriggerManagerEditorInput } from '../services/triggers/triggerManagerEditorInput.js'
+import { readTriggerConfig } from '../services/triggers/triggerConfigFileService.js'
+import { revealTriggerConfig } from '../services/triggers/revealTriggerConfig.js'
 import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { ACP_CHAT_SESSION_GROUP, resolveSessionTargetId } from './_agentShared.js'
@@ -78,6 +87,10 @@ export interface TriggerActionServices {
   readonly commands: ICommandService
   readonly logger: ILogger
   readonly agents: IAcpAgentRegistry
+  readonly files: IFileService
+  readonly editorService: IEditorService
+  readonly groups: IEditorGroupsService
+  readonly uriIdentity: IUriIdentityService
 }
 
 /** Snapshot taken before the first await — the ServicesAccessor dies with it. */
@@ -96,6 +109,10 @@ function triggerActionServices(accessor: ServicesAccessor): TriggerActionService
     commands: accessor.get(ICommandService),
     logger: accessor.get(ILoggerService).createLogger({ id: 'triggerActions', name: 'Triggers' }),
     agents: accessor.get(IAcpAgentRegistry),
+    files: accessor.get(IFileService),
+    editorService: accessor.get(IEditorService),
+    groups: accessor.get(IEditorGroupsService),
+    uriIdentity: accessor.get(IUriIdentityService),
   }
 }
 
@@ -273,19 +290,6 @@ function offersResume(summary: TriggerSummary): boolean {
   return summary.paused && !summary.pausedAll
 }
 
-function resumeAwareButtons(
-  offerResume: boolean,
-  primaryLabel: string,
-): { buttons: readonly string[] } | { primaryButton: string } {
-  if (!offerResume) return { primaryButton: primaryLabel }
-  return {
-    buttons: [
-      localize('triggers.confirm.resume', 'Confirm and Resume'),
-      localize('triggers.confirm.only', 'Confirm Only'),
-    ],
-  }
-}
-
 function resumeAwareDetail(detail: string, offerResume: boolean): string {
   if (!offerResume) return detail
   return `${detail}\n\n${localize(
@@ -294,16 +298,47 @@ function resumeAwareDetail(detail: string, offerResume: boolean): string {
   )}`
 }
 
-function confirmationChoice(
-  result: IConfirmResult,
-  offerResume: boolean,
-): { readonly proceed: boolean; readonly resume: boolean } {
-  if (!offerResume) return { proceed: result.confirmed, resume: false }
-  return { proceed: result.choiceIndex !== undefined, resume: result.choiceIndex === 0 }
+const PROMPT_PREVIEW_LIMIT = 200
+
+function promptPreview(prompt: string): string {
+  const oneLine = prompt.replace(/\s+/g, ' ').trim()
+  return oneLine.length <= PROMPT_PREVIEW_LIMIT
+    ? oneLine
+    : `${oneLine.slice(0, PROMPT_PREVIEW_LIMIT - 1)}…`
+}
+
+/**
+ * The summary carries only the surface fields; prompt, budget and concurrency are
+ * confirmed too (the fingerprint binds the whole definition), so read the full
+ * definition from the workspace file. A missing / stale file degrades to the
+ * summary-only detail instead of blocking the confirmation.
+ */
+async function readActivationDefinition(
+  services: TriggerActionServices,
+  summary: TriggerSummary,
+): Promise<TriggerConfig | undefined> {
+  const workspaceUri = parseWorkspaceUri(summary.workspace)
+  if (workspaceUri === undefined) return undefined
+  try {
+    const snapshot = await readTriggerConfig(services.files, workspaceUri)
+    if (snapshot === undefined) return undefined
+    const parsed = parseTriggerDocument(snapshot.text)
+    if (parsed.kind !== 'ok') return undefined
+    return parsed.value.triggers.find((entry) => entry.id === summary.id)
+  } catch (err) {
+    services.logger.warn(
+      `could not read the trigger definition for confirmation: ${errorMessage(err)}`,
+    )
+    return undefined
+  }
 }
 
 /** Every setting the confirmation binds, so the user sees exactly what runs. */
-function activationDetail(summary: TriggerSummary, defaultAgentId: string): string {
+function activationDetail(
+  summary: TriggerSummary,
+  defaultAgentId: string,
+  definition: TriggerConfig | undefined,
+): string {
   const session = summary.session
   const notSet = localize('triggers.confirmActivation.notSet', 'Not set')
   const configuredAgent = session?.agent
@@ -332,6 +367,45 @@ function activationDetail(summary: TriggerSummary, defaultAgentId: string): stri
     localize('triggers.confirmActivation.definition.skill', 'Skill: {skill}', {
       skill: session?.skill ?? notSet,
     }),
+    ...(definition !== undefined
+      ? [
+          localize('triggers.confirmActivation.definition.prompt', 'Prompt: {prompt}', {
+            prompt: promptPreview(definition.session.prompt) || notSet,
+          }),
+          localize(
+            'triggers.confirmActivation.definition.budget',
+            'Budget: {cost} · run timeout {timeout} min · approval timeout {approval} min',
+            {
+              cost:
+                definition.session.budget.maxCostUsd === null
+                  ? localize('triggers.confirmActivation.noCostLimit', 'no cost limit')
+                  : `$${definition.session.budget.maxCostUsd.toFixed(2)}`,
+              timeout: definition.session.budget.timeoutMin,
+              approval: definition.session.budget.approvalTimeoutMin,
+            },
+          ),
+          localize(
+            'triggers.confirmActivation.definition.concurrency',
+            'Concurrency: {concurrency} · when busy: {overflow}',
+            {
+              concurrency: definition.concurrency,
+              overflow:
+                definition.overflow === 'drop'
+                  ? localize('trigger.manager.config.overflow.drop', 'Drop')
+                  : localize('trigger.manager.config.overflow.queue', 'Queue'),
+            },
+          ),
+          localize(
+            'triggers.confirmActivation.definition.showSession',
+            'Reveal the session while it runs: {value}',
+            {
+              value: definition.showSession
+                ? localize('triggers.confirmActivation.yes', 'yes')
+                : localize('triggers.confirmActivation.no', 'no'),
+            },
+          ),
+        ]
+      : []),
     ...(summary.source?.type === 'poll'
       ? [
           localize('triggers.confirmActivation.definition.pollCommand', 'Poll command: {command}', {
@@ -380,39 +454,71 @@ export async function confirmTriggerActivation(
 ): Promise<void> {
   const offerResume = offersResume(summary)
   // Resolved synchronously before the dialog awaits: the dialog must show the
-  // agent that will actually run, not a hard-coded fallback.
+  // agent that will actually run, not a hard-coded fallback. The full definition
+  // read is the only async step before the loop; a failure degrades gracefully.
   const defaultAgentId = services.agents.defaultAgentId()
-  const result = await services.dialogs.confirm({
-    type: 'warning',
-    message: localize(
-      'triggers.confirmActivation.message',
-      'Enable trigger "{name}" from workspace "{workspace}"?',
-      { name: summary.name, workspace: workspaceDisplayPath(summary.workspace) },
-    ),
-    detail: resumeAwareDetail(activationDetail(summary, defaultAgentId), offerResume),
-    ...resumeAwareButtons(
-      offerResume,
-      localize('triggers.confirmActivation.primary', 'Enable Trigger'),
-    ),
-  })
-  const choice = confirmationChoice(result, offerResume)
-  if (!choice.proceed) return
-  await services.triggers.confirmActivation(summary.key, summary.fingerprint)
-  if (choice.resume) await services.triggers.setPaused(summary.key, false)
-  services.notifications.notify({
-    severity: Severity.Info,
-    message: choice.resume
-      ? localize(
-          'triggers.confirmActivation.doneResumed',
-          'Trigger "{name}" was confirmed and resumed.',
-          { name: summary.name },
-        )
-      : localize(
-          'triggers.confirmActivation.done',
-          'Trigger "{name}" was confirmed and may now run.',
-          { name: summary.name },
-        ),
-  })
+  const definition = await readActivationDefinition(services, summary)
+  const detail = resumeAwareDetail(
+    activationDetail(summary, defaultAgentId, definition),
+    offerResume,
+  )
+  const buttons = offerResume
+    ? [
+        localize('triggers.confirm.resume', 'Confirm and Resume'),
+        localize('triggers.confirm.only', 'Confirm Only'),
+        localize('triggers.confirmActivation.viewDefinition', 'View Full Definition'),
+      ]
+    : [
+        localize('triggers.confirmActivation.primary', 'Enable Trigger'),
+        localize('triggers.confirmActivation.viewDefinition', 'View Full Definition'),
+      ]
+  const viewDefinitionIndex = buttons.length - 1
+  for (;;) {
+    const result = await services.dialogs.confirm({
+      type: 'warning',
+      message: localize(
+        'triggers.confirmActivation.message',
+        'Enable trigger "{name}" from workspace "{workspace}"?',
+        { name: summary.name, workspace: workspaceDisplayPath(summary.workspace) },
+      ),
+      detail,
+      buttons,
+    })
+    if (result.choiceIndex === undefined) return
+    if (result.choiceIndex === viewDefinitionIndex) {
+      // The dialog is modal; close it, reveal the definition, then ask again so
+      // the confirmation is never granted from a view the user cannot inspect.
+      await revealTriggerConfig(
+        {
+          files: services.files,
+          editors: services.editors,
+          editorService: services.editorService,
+          groups: services.groups,
+          uriIdentity: services.uriIdentity,
+        },
+        summary,
+      )
+      continue
+    }
+    const resume = offerResume && result.choiceIndex === 0
+    await services.triggers.confirmActivation(summary.key, summary.fingerprint)
+    if (resume) await services.triggers.setPaused(summary.key, false)
+    services.notifications.notify({
+      severity: Severity.Info,
+      message: resume
+        ? localize(
+            'triggers.confirmActivation.doneResumed',
+            'Trigger "{name}" was confirmed and resumed.',
+            { name: summary.name },
+          )
+        : localize(
+            'triggers.confirmActivation.done',
+            'Trigger "{name}" was confirmed and may now run.',
+            { name: summary.name },
+          ),
+    })
+    return
+  }
 }
 
 async function executeItemAction(

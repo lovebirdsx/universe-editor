@@ -13,7 +13,7 @@ import { requestOwnerFrame } from '@universe-editor/workbench-ui'
 import {
   isTriggerListFilter,
   type TriggerListFilter,
-} from '../../../shared/triggers/triggerPresentation.js'
+} from '../../services/triggers/triggerPresentation.js'
 import type { TriggerManagerEditorInput } from '../../services/triggers/triggerManagerEditorInput.js'
 import { useService } from '../useService.js'
 

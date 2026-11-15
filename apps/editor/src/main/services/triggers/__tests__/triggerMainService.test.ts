@@ -3,18 +3,24 @@
  *  Fake clock + fake window hosts + temp userData dirs; no Electron.
  *--------------------------------------------------------------------------------------------*/
 
+import { existsSync } from 'node:fs'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
 import { URI, type ILogger, type IOpenWindowInfo } from '@universe-editor/platform'
+import { SWARM_TRIGGER_EVENT_NAME } from '../../../../shared/ipc/triggerService.js'
 import type {
   ITriggerRunHost,
   SwarmNeedsActionReview,
 } from '../../../../shared/ipc/triggerService.js'
 import type { TriggerRunRequest, TriggerSummary } from '../../../../shared/triggers/types.js'
 import { MAX_TRIGGER_REPORT_BYTES } from '../../../../shared/triggers/types.js'
-import { TriggerMainService, type TriggerClock } from '../triggerMainService.js'
+import {
+  createWindowScopedTriggerMainService,
+  TriggerMainService,
+  type TriggerClock,
+} from '../triggerMainService.js'
 import { triggerKeyFor } from '../triggerIdentity.js'
 import type { PollCommandFetcher, PollFetchResult } from '../pollCommandFetcher.js'
 
@@ -209,6 +215,12 @@ interface HarnessOptions {
   readonly autoResume?: boolean
   /** Start without a workspace triggers.json (window opened before a pull). */
   readonly skipConfigFile?: boolean
+  /** Renderer run-host acknowledgement (default: the host acks right after registering). */
+  readonly hostReady?: boolean
+  /** Hard cap on one trigger's dedupe keys (defaults to the production constant). */
+  readonly processedKeyLimit?: number
+  /** Leave the host trust probe pending forever, exercising the pre-start timeout. */
+  readonly trustProbeHangs?: boolean
 }
 
 interface Harness {
@@ -230,6 +242,7 @@ interface Harness {
   readonly openWindows: IOpenWindowInfo[]
   readonly requests: TriggerRunRequest[]
   registerHost(windowId?: number): void
+  markHostReady(folder?: string): void
   releaseStartRun(): void
 }
 
@@ -288,7 +301,10 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     if (options.startRunError !== undefined) throw options.startRunError
     return { sessionId: `session-${requests.length}` }
   })
-  const isWorkspaceTrusted = vi.fn(async () => options.trusted ?? true)
+  const isWorkspaceTrusted = vi.fn(async (_workspace: string): Promise<boolean> => {
+    if (options.trustProbeHangs === true) return await new Promise<boolean>(() => undefined)
+    return options.trusted ?? true
+  })
   const cancelRun = vi.fn(async () => undefined)
   const host: ITriggerRunHost = {
     _serviceBrand: undefined,
@@ -313,6 +329,9 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     stateDebounceMs: options.stateDebounceMs ?? 0,
     readMaxConcurrentRuns: async () => options.maxConcurrentRuns ?? 2,
     isWorkspaceTrusted: async () => options.machineTrusted ?? true,
+    ...(options.processedKeyLimit === undefined
+      ? {}
+      : { processedKeyLimit: options.processedKeyLimit }),
     uuid: (() => {
       let counter = 0
       // UUID-shaped so the state loader keeps replayed pending records.
@@ -325,6 +344,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     const windowId = 2
     openWindows.push({ id: windowId, folder: folder.toJSON(), name: 'opened' })
     service.registerWindowHost(windowId, host, folder)
+    if (options.hostReady !== false) void service.markHostReady(folder.toString())
   })
   service.setWindowProvider({
     getOpenWindowInfos: () => openWindows,
@@ -336,6 +356,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
       openWindows.push({ id: windowId, folder: URI.file(workspace).toJSON(), name: 'ws' })
     }
     service.registerWindowHost(windowId, host, URI.file(workspace))
+    if (options.hostReady !== false) void service.markHostReady(localUri(workspace))
   }
   if (options.registerHost !== false) registerHost()
 
@@ -372,6 +393,7 @@ async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
     openWindows,
     requests,
     registerHost,
+    markHostReady: (folder?: string) => void service.markHostReady(folder ?? localUri(workspace)),
     releaseStartRun: () => releaseStart?.(),
   }
 }
@@ -411,7 +433,7 @@ interface RawState {
     Record<
       string,
       {
-        readonly processed: Record<string, unknown>
+        readonly processed: Record<string, { readonly at?: number; readonly status?: string }>
         readonly baselineDone?: boolean
         readonly sourceFingerprint?: string
         readonly activationConfirmed?: string
@@ -421,8 +443,16 @@ interface RawState {
   >
 }
 
-function stateOf(service: TriggerMainService): RawState {
-  return (service as unknown as { _state: RawState })._state
+/**
+ * Runtime state is private now: flush through the public API and read the file
+ * that survives a restart, which is also what the scheduler itself trusts.
+ */
+async function stateOf(harness: {
+  readonly service: TriggerMainService
+  readonly dir: string
+}): Promise<RawState> {
+  await harness.service.listTriggers()
+  return JSON.parse(await readFile(join(harness.dir, 'triggers', 'state.json'), 'utf8')) as RawState
 }
 
 describe('TriggerMainService scheduling', () => {
@@ -579,7 +609,8 @@ describe('TriggerMainService dedupe', () => {
       getOpenWindowInfos: () => harness.openWindows,
       openWindowForFolderInBackground: async () => undefined,
     })
-    restarted.registerWindowHost(1, harness.host)
+    restarted.registerWindowHost(1, harness.host, URI.file(harness.workspace))
+    await restarted.markHostReady(localUri(harness.workspace))
     await restarted.initialize()
     await harness.clock.advance(GRACE_MS)
     await settle()
@@ -624,6 +655,44 @@ describe('TriggerMainService dedupe', () => {
     )
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('maps generic event reports through the registered source and skips malformed items', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, {
+          id: 'swarm',
+          source: { type: 'event', event: 'swarm.reviewNeedsAction' },
+        }),
+      ],
+    })
+    await openGate(harness)
+    const folder = localUri(harness.workspace)
+
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1'), review('1'), { reviewId: 42, author: 'x', description: '', state: 'new' }],
+      folder,
+    )
+    await settle()
+    expect(harness.startRun).not.toHaveBeenCalled()
+    let state = await stateOf(harness)
+    expect(state.triggers[harness.keyOf('swarm')]?.baselineDone).toBe(true)
+    expect(state.triggers[harness.keyOf('swarm')]?.processed?.['swarm:1']).toBeDefined()
+
+    await harness.service.reportTriggerEvents(
+      SWARM_TRIGGER_EVENT_NAME,
+      [review('1'), review('2'), review('2')],
+      folder,
+    )
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    expect(harness.requests[0]?.origin.eventKey).toBe('swarm:2')
+
+    await harness.service.reportTriggerEvents('unknown.event', [review('3')], folder)
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(1)
+    state = await stateOf(harness)
+    expect(state.triggers[harness.keyOf('swarm')]?.processed?.['swarm:3']).toBeUndefined()
   })
 
   it('produces a single run for two concurrent reports of the same review', async () => {
@@ -730,7 +799,8 @@ describe('TriggerMainService queueing', () => {
       getOpenWindowInfos: () => harness.openWindows,
       openWindowForFolderInBackground: async () => harness.openWindow(URI.file(harness.workspace)),
     })
-    restarted.registerWindowHost(1, harness.host)
+    restarted.registerWindowHost(1, harness.host, URI.file(harness.workspace))
+    await restarted.markHostReady(localUri(harness.workspace))
     await restarted.initialize()
     await harness.clock.advance(GRACE_MS)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
@@ -1049,6 +1119,57 @@ describe('TriggerMainService failures', () => {
     expect(item.consecutiveFailures).toBe(1)
   })
 
+  it('times out an unresponsive trust probe and releases the slot', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace)],
+      startRunTimeoutMs: 1_000,
+      trustProbeHangs: true,
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.isWorkspaceTrusted).toHaveBeenCalledTimes(1))
+
+    await harness.clock.advance(1_000)
+    await settle()
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.running).toBe(0)
+    expect(item.consecutiveFailures).toBe(1)
+    expect(item.lastError).toContain('did not respond')
+    expect(harness.startRun).not.toHaveBeenCalled()
+    expect((await stateOf(harness)).pending).toEqual([])
+  })
+
+  it('accounts for a run that reports its end before startRun returns', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace)],
+      startRunTimeoutMs: 10_000,
+      holdStartRun: true,
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    const request = harness.requests[0]!
+
+    // The renderer reports the terminal state while main is still awaiting startRun.
+    await harness.service.reportRunEnd({
+      runId: request.origin.runId,
+      triggerId: 'trigger-1',
+      outcome: 'completed',
+    })
+    await settle()
+    harness.releaseStartRun()
+    await settle()
+
+    // The late session is cancelled, but the event is accounted as started so a
+    // restart never replays it from its still-queued pending record.
+    expect(harness.cancelRun).toHaveBeenCalledWith(request.origin.runId)
+    const state = await stateOf(harness)
+    expect(state.pending).toEqual([])
+    expect(state.triggers[harness.key]?.processed[request.origin.eventKey]?.status).toBe('started')
+  })
+
   it('fails a run whose window closes', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [makeTrigger(workspace)],
@@ -1230,7 +1351,7 @@ describe('TriggerMainService activation covers elevated mode', () => {
     await expect(harness.service.confirmActivation(harness.key, shown.fingerprint)).rejects.toThrow(
       /definition changed/,
     )
-    expect(stateOf(harness.service).triggers[harness.key]?.activationConfirmed).toBeUndefined()
+    expect((await stateOf(harness)).triggers[harness.key]?.activationConfirmed).toBeUndefined()
     await expect(harness.service.runNow(harness.key)).rejects.toThrow(/Confirm this trigger/)
   })
 })
@@ -1302,9 +1423,139 @@ describe('TriggerMainService poll source', () => {
     expect(item.status).toBe('paused')
     expect(harness.notify).toHaveBeenCalledTimes(1)
   })
+
+  it('never overlaps two poll commands of the same trigger and re-arms from completion', async () => {
+    let resolveFetch!: (result: PollFetchResult) => void
+    const fetch = vi.fn<PollCommandFetcher>(
+      () =>
+        new Promise<PollFetchResult>((resolve) => {
+          resolveFetch = resolve
+        }),
+    )
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+    })
+    await openGate(harness)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+
+    // The command outlives its interval: the wake-up must not start a second run.
+    await harness.clock.advance(30_000)
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    resolveFetch({ ok: true, items: [] })
+    await settle()
+    // Next poll is one full interval after completion, not after the start.
+    expect(summary(await harness.service.listTriggers(), 'trigger-1').nextRunAt).toBe(
+      harness.clock.now() + 30_000,
+    )
+    await harness.clock.advance(29_999)
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await harness.clock.advance(1)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps only the newest items when one poll round exceeds the dedupe limit', async () => {
+    const limit = 3
+    let items: Array<{ key: string; payload: Record<string, string> }> = []
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { concurrency: 3, source: pollSource() })],
+      fetch,
+      maxConcurrentRuns: 3,
+      processedKeyLimit: limit,
+    })
+    await openGate(harness)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    items = ['A', 'B', 'C', 'D', 'E'].map((key) => ({ key, payload: { id: key } }))
+    await harness.clock.advance(30_000)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(3))
+    // Concurrent starts finish in file-read order, so compare the selected set.
+    expect(harness.requests.map((request) => request.origin.eventKey).sort()).toEqual([
+      'poll:C',
+      'poll:D',
+      'poll:E',
+    ])
+    expect(harness.loggerLines.some((line) => line.includes('recording 2 older poll item'))).toBe(
+      true,
+    )
+  })
+
+  it('records every baseline item, including the truncated prefix', async () => {
+    const limit = 3
+    let items = ['A', 'B', 'C', 'D', 'E'].map((key) => ({ key, payload: { id: key } }))
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+      processedKeyLimit: limit,
+    })
+    await openGate(harness)
+    expect(harness.startRun).not.toHaveBeenCalled()
+    expect(
+      harness.loggerLines.some((line) => line.includes('baseline recorded items=5 dropped=2')),
+    ).toBe(true)
+
+    const state = await stateOf(harness)
+    const processed = state.triggers[harness.keyOf('trigger-1')]?.processed ?? {}
+    expect(Object.keys(processed).sort()).toEqual([
+      'poll:A',
+      'poll:B',
+      'poll:C',
+      'poll:D',
+      'poll:E',
+    ])
+    expect(processed['poll:A']?.at).toBeLessThan(processed['poll:E']?.at ?? 0)
+
+    // A shorter round puts the previously dropped keys inside the newest-N
+    // window. They must stay suppressed, not fire as brand-new events.
+    items = ['A', 'B'].map((key) => ({ key, payload: { id: key } }))
+    await harness.clock.advance(30_000)
+    await settle()
+    expect(harness.startRun).not.toHaveBeenCalled()
+  })
+
+  it('never refires a truncated poll item when a later shorter round exposes it', async () => {
+    const limit = 3
+    let items: Array<{ key: string; payload: Record<string, string> }> = []
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { concurrency: 10, source: pollSource() })],
+      fetch,
+      maxConcurrentRuns: 10,
+      processedKeyLimit: limit,
+    })
+    await openGate(harness)
+    expect(fetch).toHaveBeenCalledTimes(1)
+
+    items = ['A', 'B', 'C', 'D', 'E'].map((key) => ({ key, payload: { id: key } }))
+    await harness.clock.advance(30_000)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(3))
+    expect(harness.requests.map((request) => request.origin.eventKey).sort()).toEqual([
+      'poll:C',
+      'poll:D',
+      'poll:E',
+    ])
+
+    items = ['A', 'B'].map((key) => ({ key, payload: { id: key } }))
+    await harness.clock.advance(30_000)
+    await settle()
+    expect(harness.startRun).toHaveBeenCalledTimes(3)
+  })
 })
 
 describe('TriggerMainService window routing', () => {
+  it('stamps the sender window on ack through the per-window channel', async () => {
+    const harness = await createHarness({ registerHost: false })
+    const scoped = createWindowScopedTriggerMainService(harness.service, 7)
+    const markHostReady = vi.spyOn(harness.service, 'markHostReady')
+    await scoped.markHostReady(localUri(harness.workspace))
+    expect(markHostReady).toHaveBeenCalledWith(localUri(harness.workspace), 7)
+  })
+
   it('uses a window that is already open and never opens a new one', async () => {
     const harness = await createHarness({
       triggers: (workspace) => [makeTrigger(workspace)],
@@ -1314,6 +1565,28 @@ describe('TriggerMainService window routing', () => {
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
     expect(harness.openWindow).not.toHaveBeenCalled()
     expect(harness.requests[0]?.cwd).toBe(harness.workspace)
+    // Trust is judged for the trigger's workspace URI, not the window's current folder.
+    expect(harness.isWorkspaceTrusted).toHaveBeenCalledWith(localUri(harness.workspace))
+  })
+
+  it('does not hand a run to a window before its renderer host acknowledges', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      hostReady: false,
+      hostWaitTimeoutMs: 15,
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key)
+    await settle(20)
+    expect(harness.startRun).not.toHaveBeenCalled()
+    const failed = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(failed.lastError).toContain('Timed out')
+    expect(failed.consecutiveFailures).toBe(1)
+
+    // The renderer finally registers its TriggerRunHost and acknowledges.
+    harness.markHostReady()
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
   })
 
   it('opens a background window when none is open, then waits for its host', async () => {
@@ -1365,7 +1638,7 @@ describe('TriggerMainService pause gate', () => {
     await settle()
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
     const firstKey = harness.requests[0]!.origin.eventKey
-    const processed = stateOf(harness.service).triggers[harness.key]?.processed
+    const processed = (await stateOf(harness)).triggers[harness.key]?.processed
     expect(Object.keys(processed ?? {})).toHaveLength(2)
 
     await harness.service.setPaused(harness.key, true)
@@ -1376,7 +1649,7 @@ describe('TriggerMainService pause gate', () => {
     expect(item.running).toBe(1)
     expect(item.consecutiveFailures).toBe(0)
 
-    const state = stateOf(harness.service)
+    const state = await stateOf(harness)
     expect(state.pending).toEqual([])
     expect(Object.keys(state.triggers[harness.key]?.processed ?? {})).toEqual([firstKey])
     expect(harness.startRun).toHaveBeenCalledTimes(1)
@@ -1390,11 +1663,11 @@ describe('TriggerMainService pause gate', () => {
     })
     await harness.service.runNow(harness.key)
     await settle()
-    expect(stateOf(harness.service).pending).toHaveLength(1)
+    expect((await stateOf(harness)).pending).toHaveLength(1)
 
     await harness.service.setPaused(harness.key, true)
     await settle()
-    expect(stateOf(harness.service).pending).toHaveLength(1)
+    expect((await stateOf(harness)).pending).toHaveLength(1)
 
     await harness.service.setMaxConcurrentRuns(1)
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
@@ -1450,7 +1723,7 @@ describe('TriggerMainService first-seen pause', () => {
     expect(item.status).toBe('paused')
     expect(harness.loggerLines.some((line) => line.includes('first seen'))).toBe(true)
     // A manually paused trigger is not the failure-driven auto pause.
-    expect(stateOf(harness.service).triggers[harness.key]?.paused).toBe(true)
+    expect((await stateOf(harness)).triggers[harness.key]?.paused).toBe(true)
   })
 
   it('keeps an existing key unpaused when the state file says so', async () => {
@@ -1540,13 +1813,36 @@ describe('TriggerMainService window reload / watchdog', () => {
     await settle()
     expect(summary(await harness.service.listTriggers(), 'trigger-1').queued).toBe(1)
 
-    harness.service.registerWindowHost(1, harness.host)
+    harness.service.registerWindowHost(1, harness.host, URI.file(harness.workspace))
+    await harness.service.markHostReady(localUri(harness.workspace))
     // The reload released the slot, so the queued run started on the new host.
     await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
     const item = summary(await harness.service.listTriggers(), 'trigger-1')
     expect(item.lastError).toContain('reloaded')
     expect(item.consecutiveFailures).toBe(1)
     expect(item.running).toBe(1)
+  })
+
+  it('fails a crashed window’s active runs while keeping its host registered', async () => {
+    const harness = await createHarness({
+      maxConcurrentRuns: 1,
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+
+    harness.service.failActiveRunsForWindow(1, 'crashed')
+    await settle()
+    const item = summary(await harness.service.listTriggers(), 'trigger-1')
+    expect(item.running).toBe(0)
+    expect(item.consecutiveFailures).toBe(1)
+    expect(item.lastError).toContain('crashed')
+
+    // The registration survives: the reloaded renderer reuses the same channel.
+    await harness.service.markHostReady(localUri(harness.workspace))
+    await harness.service.runNow(harness.key)
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(2))
   })
 
   it('fails a run that never reports its end and asks its host to cancel', async () => {
@@ -1716,7 +2012,7 @@ describe('TriggerMainService backoff gate', () => {
     expect(harness.startRun).not.toHaveBeenCalled()
     expect(
       Object.hasOwn(
-        stateOf(harness.service).triggers[harness.keyOf('swarm')]?.processed ?? {},
+        (await stateOf(harness)).triggers[harness.keyOf('swarm')]?.processed ?? {},
         'swarm:1',
       ),
     ).toBe(false)
@@ -1805,7 +2101,7 @@ describe('TriggerMainService baseline reset', () => {
     })
     await harness.service.initialize()
     await settle()
-    const state = stateOf(harness.service)
+    const state = await stateOf(harness)
     expect(state.triggers[harness.key]?.baselineDone).toBe(false)
     expect(state.triggers[harness.key]?.processed).toEqual({})
     expect(state.triggers[harness.key]?.sourceFingerprint).toBe(currentFingerprint)
@@ -1833,7 +2129,7 @@ describe('TriggerMainService baseline reset', () => {
     })
     await harness.service.initialize()
     await settle()
-    const state = stateOf(harness.service)
+    const state = await stateOf(harness)
     expect(state.triggers[harness.key]?.baselineDone).toBe(true)
     expect(state.triggers[harness.key]?.processed).toEqual({
       'poll:A': { at: START, status: 'started' },
@@ -1908,6 +2204,20 @@ describe('TriggerMainService list / pause', () => {
     })
     await settle()
     expect(harness.startRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('ensureConfigFile refuses a workspace no window holds and the registry does not know', async () => {
+    const harness = await createHarness()
+    const outside = URI.file(join(harness.dir, 'outside')).toString()
+    await expect(harness.service.ensureConfigFile(outside)).rejects.toThrow(
+      /not open|not registered/,
+    )
+    expect(existsSync(join(harness.dir, 'outside', '.universe-editor', 'triggers.json'))).toBe(
+      false,
+    )
+    expect((await harness.service.listWorkspaces()).map((entry) => entry.workspace)).toEqual([
+      URI.file(harness.workspace).toString(),
+    ])
   })
 
   it('ensureConfigFile writes the JSONC example once and returns its URI', async () => {
@@ -2082,6 +2392,8 @@ describe('TriggerMainService workspace activation gate', () => {
       JSON.stringify({ version: 1, triggers: [makeTrigger(second)] }),
       'utf8',
     )
+    // The window reports the folder before the wizard asks main to register it.
+    harness.service.noteWindowWorkspace(URI.file(second), 3)
     const uri = await harness.service.ensureConfigFile(URI.file(second).toString())
     expect(uri).toContain('.universe-editor/triggers.json')
 
@@ -2133,10 +2445,10 @@ describe('TriggerMainService workspace activation gate', () => {
     await openGate(harness)
     await harness.service.runNow(harness.keyOf('first'))
     await harness.service.runNow(harness.keyOf('second'))
-    expect(stateOf(harness.service).pending).toHaveLength(2)
+    expect((await stateOf(harness)).pending).toHaveLength(2)
 
     await harness.service.removeWorkspace(URI.file(harness.workspace).toString())
-    expect(stateOf(harness.service).pending).toEqual([])
+    expect((await stateOf(harness)).pending).toEqual([])
     expect(await harness.service.listTriggers()).toEqual([])
     harness.releaseStartRun()
     await settle()
@@ -2152,7 +2464,7 @@ describe('TriggerMainService workspace activation gate', () => {
     const fingerprint = (await harness.service.listTriggers())[0]!.fingerprint
     await harness.service.confirmActivation(nonCanonical, fingerprint)
 
-    const state = stateOf(harness.service)
+    const state = await stateOf(harness)
     expect(Object.keys(state.triggers)).toEqual([harness.key])
     expect(state.triggers[harness.key]?.activationConfirmed).toBeDefined()
   })
@@ -2182,6 +2494,7 @@ describe('TriggerMainService workspace activation gate', () => {
       }),
       'utf8',
     )
+    harness.service.noteWindowWorkspace(URI.file(second), 4)
     await harness.service.ensureConfigFile(URI.file(second).toString())
     const secondKey = (await harness.service.listTriggers()).find(
       (entry) => entry.workspace === URI.file(second).toString(),
@@ -2190,7 +2503,7 @@ describe('TriggerMainService workspace activation gate', () => {
 
     await harness.service.reportSwarmNeedsAction([review('1')], URI.file(second).toString())
 
-    const state = stateOf(harness.service)
+    const state = await stateOf(harness)
     expect(state.triggers[secondKey]?.baselineDone).toBe(true)
     expect(state.triggers[harness.keyOf('swarm-a')]?.baselineDone).toBe(false)
     expect(state.triggers[harness.keyOf('swarm-a')]?.processed?.['swarm:1']).toBeUndefined()
@@ -2216,7 +2529,7 @@ describe('TriggerMainService workspace activation gate', () => {
     await harness.service.reportSwarmNeedsAction([review('1')], remote.toString())
     await settle()
 
-    const state = stateOf(harness.service)
+    const state = await stateOf(harness)
     expect(state.triggers[harness.keyOf('swarm')]?.baselineDone).not.toBe(true)
     expect(state.triggers[harness.keyOf('swarm')]?.processed?.['swarm:1']).toBeUndefined()
     expect(harness.startRun).not.toHaveBeenCalled()
@@ -2238,14 +2551,60 @@ describe('TriggerMainService workspace activation gate', () => {
     await harness.service.reportSwarmNeedsAction([review('1')], '')
     await settle()
 
-    const state = stateOf(harness.service)
+    const state = await stateOf(harness)
     expect(state.triggers[harness.keyOf('swarm')]?.baselineDone).not.toBe(true)
     expect(harness.startRun).not.toHaveBeenCalled()
     expect(
       harness.loggerLines.some(
-        (line) => line.startsWith('warn:') && line.includes('swarm report ignored'),
+        (line) => line.startsWith('warn:') && line.includes('trigger event report ignored'),
       ),
     ).toBe(true)
+  })
+})
+
+describe('TriggerMainService change notifications', () => {
+  it('coalesces a synchronous burst into one stable summary snapshot', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    const events: (readonly TriggerSummary[])[] = []
+    const subscription = harness.service.onDidChangeTriggers((list) => events.push(list))
+    try {
+      await Promise.all([
+        harness.service.setAllPaused(true),
+        harness.service.setPaused(harness.key, true),
+      ])
+      await settle()
+      expect(events).toHaveLength(1)
+      expect(events[0]?.every((entry) => entry.paused === true)).toBe(true)
+    } finally {
+      subscription.dispose()
+    }
+  })
+
+  it('does not emit when a change leaves the summary snapshot untouched', async () => {
+    const harness = await createHarness({
+      autoConfirm: false,
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    const [summary] = await harness.service.listTriggers()
+    expect(summary).toBeDefined()
+    const events: (readonly TriggerSummary[])[] = []
+    const subscription = harness.service.onDidChangeTriggers((list) => events.push(list))
+    try {
+      await harness.service.confirmActivation(summary!.key, summary!.fingerprint)
+      await settle()
+      expect(events).toHaveLength(1)
+      // Same fingerprint again: activationConfirmed already equals it, so the
+      // summaries are byte-identical and the notification must be suppressed.
+      await harness.service.confirmActivation(summary!.key, summary!.fingerprint)
+      await settle()
+      expect(events).toHaveLength(1)
+    } finally {
+      subscription.dispose()
+    }
   })
 })
 

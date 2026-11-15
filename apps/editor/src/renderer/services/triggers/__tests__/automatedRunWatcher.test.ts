@@ -471,6 +471,29 @@ describe('AutomatedRunWatcher', () => {
     expect(ends[0]!.summary).toContain('未产出结构化结果：')
   })
 
+  it('logs instead of rejecting when the terminal callback throws', async () => {
+    const clock = new FakeClock()
+    const fake = makeSession()
+    const warnings: string[] = []
+    const watcher = new AutomatedRunWatcher({
+      request: makeRequest(),
+      session: fake.session,
+      readResultFile: async () => undefined,
+      onRunEnd: () => {
+        throw new Error('sink down')
+      },
+      logger: { warn: (message) => warnings.push(message) },
+      now: clock.now,
+      setTimeout: clock.setTimeout,
+      clearTimeout: clock.clearTimeout,
+    })
+    watcher.start()
+    fake.status.set('running', undefined)
+    watcher.notifyTurnSettled()
+    await flush()
+    expect(warnings.some((message) => message.includes('failed to finalize run run-1'))).toBe(true)
+  })
+
   it('parses the result file of a completed run', async () => {
     const clock = new FakeClock()
     const fake = makeSession()

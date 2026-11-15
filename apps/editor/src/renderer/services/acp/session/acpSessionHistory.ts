@@ -41,26 +41,13 @@ import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { AcpPlanEntry } from './acpSessionModel.js'
 import { isPromptEchoTitle } from './acpSessionTitleEcho.js'
 import type {
-  AutomationOrigin,
-  TriggerRunOutcome,
-  TriggerVerdictKind,
-} from '../../../../shared/triggers/types.js'
+  AcpAutomationOutcome,
+  AcpAutomationVerdict,
+  AcpSessionAutomation,
+  AcpSessionAutomationResult,
+} from './acpAutomationProfile.js'
 
-/** Provenance of a session started by an agent trigger, plus its verdict result. */
-export type AcpSessionAutomation = AutomationOrigin & {
-  /** Permission scope of the run; restored on resume so runDir writes stay auto-approved. */
-  readonly runDir?: string
-  readonly verdict?: TriggerVerdictKind
-  readonly summary?: string
-  readonly outcome?: TriggerRunOutcome
-}
-
-/** The mutable half of {@link AcpSessionAutomation}, as written by the run watcher. */
-export interface AcpSessionAutomationResult {
-  readonly verdict?: TriggerVerdictKind
-  readonly summary?: string
-  readonly outcome?: TriggerRunOutcome
-}
+export type { AcpSessionAutomation, AcpSessionAutomationResult } from './acpAutomationProfile.js'
 
 /**
  * Which sessions the agent session history surfaces:
@@ -1234,14 +1221,7 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.automation === undefined) return
     const nextAutomation: AcpSessionAutomation = {
-      triggerId: cur.automation.triggerId,
-      triggerName: cur.automation.triggerName,
-      ...(cur.automation.workspaceName !== undefined
-        ? { workspaceName: cur.automation.workspaceName }
-        : {}),
-      eventKey: cur.automation.eventKey,
-      runId: cur.automation.runId,
-      ...(cur.automation.runDir !== undefined ? { runDir: cur.automation.runDir } : {}),
+      ...cur.automation,
       ...(result.verdict !== undefined ? { verdict: result.verdict } : {}),
       ...(result.summary !== undefined ? { summary: result.summary } : {}),
       ...(result.outcome !== undefined ? { outcome: result.outcome } : {}),
@@ -1709,11 +1689,14 @@ function isValidAutomation(v: unknown): v is AcpSessionAutomation {
     typeof o['eventKey'] === 'string' &&
     typeof o['runId'] === 'string' &&
     (o['runDir'] === undefined || typeof o['runDir'] === 'string') &&
+    (o['systemPromptAppend'] === undefined || typeof o['systemPromptAppend'] === 'string') &&
     (o['verdict'] === undefined ||
-      (typeof o['verdict'] === 'string' && TRIGGER_VERDICT_KINDS.has(o['verdict']))) &&
+      (typeof o['verdict'] === 'string' &&
+        TRIGGER_VERDICT_KINDS.has(o['verdict'] as AcpAutomationVerdict))) &&
     (o['summary'] === undefined || typeof o['summary'] === 'string') &&
     (o['outcome'] === undefined ||
-      (typeof o['outcome'] === 'string' && TRIGGER_RUN_OUTCOMES.has(o['outcome'])))
+      (typeof o['outcome'] === 'string' &&
+        TRIGGER_RUN_OUTCOMES.has(o['outcome'] as AcpAutomationOutcome)))
   )
 }
 
@@ -1725,6 +1708,7 @@ function sameAutomation(a: AcpSessionAutomation, b: AcpSessionAutomation): boole
     a.eventKey === b.eventKey &&
     a.runId === b.runId &&
     a.runDir === b.runDir &&
+    a.systemPromptAppend === b.systemPromptAppend &&
     a.verdict === b.verdict &&
     a.summary === b.summary &&
     a.outcome === b.outcome

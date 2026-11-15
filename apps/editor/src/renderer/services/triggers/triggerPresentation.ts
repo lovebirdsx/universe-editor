@@ -7,12 +7,14 @@
 
 import { localize } from '@universe-editor/platform'
 import type {
+  TriggerConfigError,
+  TriggerConfigErrorParams,
   TriggerEventName,
   TriggerSourceConfig,
   TriggerSourceType,
   TriggerStatus,
   TriggerSummary,
-} from './types.js'
+} from '../../../shared/triggers/types.js'
 
 /** Display name per editor-pushed event; adding an event means adding one entry. */
 const TRIGGER_EVENT_LABELS: Record<TriggerEventName, string> = {
@@ -24,6 +26,131 @@ const TRIGGER_EVENT_LABELS: Record<TriggerEventName, string> = {
 
 export function triggerEventLabel(event: TriggerEventName): string {
   return TRIGGER_EVENT_LABELS[event]
+}
+
+function errorParam(
+  params: TriggerConfigErrorParams,
+  key: string,
+  fallback: string | number = '',
+): string {
+  const value = params[key]
+  return value === undefined ? String(fallback) : String(value)
+}
+
+/**
+ * Localized text for one validation error. The renderer keys off the stable
+ * `code`; `message` (English, produced by the parser) is only a fallback for
+ * codes introduced by a newer build.
+ */
+export function triggerConfigErrorText(error: TriggerConfigError): string {
+  const field = errorParam(error.params, 'field')
+  switch (error.code) {
+    case 'document.notObject':
+      return localize(
+        'trigger.config.error.documentNotObject',
+        'triggers.json must contain a JSON object.',
+      )
+    case 'document.version':
+      return localize(
+        'trigger.config.error.version',
+        'The configuration version must be {expected}.',
+        { expected: errorParam(error.params, 'expected', 1) },
+      )
+    case 'document.triggersNotArray':
+      return localize('trigger.config.error.triggersNotArray', '"triggers" must be an array.')
+    case 'trigger.notObject':
+      return localize('trigger.config.error.triggerNotObject', 'Each trigger must be an object.')
+    case 'trigger.id.invalid':
+      return localize('trigger.config.error.idInvalid', 'The trigger id must match {pattern}.', {
+        pattern: errorParam(error.params, 'pattern'),
+      })
+    case 'trigger.id.duplicate':
+      return localize('trigger.config.error.idDuplicate', 'Duplicate trigger id "{id}".', {
+        id: errorParam(error.params, 'id'),
+      })
+    case 'request.field.boolean':
+      return localize('trigger.config.error.boolean', '"{field}" must be a boolean.', { field })
+    case 'request.field.nonEmptyString':
+      return localize(
+        'trigger.config.error.nonEmptyString',
+        '"{field}" must be a non-empty string.',
+        { field },
+      )
+    case 'request.field.string':
+      return localize('trigger.config.error.string', '"{field}" must be a string.', { field })
+    case 'request.field.integerRange':
+      return localize(
+        'trigger.config.error.integerRange',
+        '"{field}" must be an integer between {min} and {max}.',
+        {
+          field,
+          min: errorParam(error.params, 'min'),
+          max: errorParam(error.params, 'max'),
+        },
+      )
+    case 'request.field.enum':
+      return localize('trigger.config.error.enum', '"{field}" must be one of {allowed}.', {
+        field,
+        allowed: errorParam(error.params, 'allowed'),
+      })
+    case 'request.field.positiveNumber':
+      return localize(
+        'trigger.config.error.positiveNumber',
+        '"{field}" must be a positive number.',
+        { field },
+      )
+    case 'request.field.stringArray':
+      return localize(
+        'trigger.config.error.stringArray',
+        '"{field}" must be an array of non-empty strings.',
+        { field },
+      )
+    case 'source.notObject':
+      return localize('trigger.config.error.notObject', '"{field}" must be an object.', { field })
+    case 'source.type.invalid':
+      return localize('trigger.config.error.enum', '"{field}" must be one of {allowed}.', {
+        field,
+        allowed: errorParam(error.params, 'allowed'),
+      })
+    case 'source.schedule.mode':
+      return localize(
+        'trigger.config.error.scheduleMode',
+        '"source" must set exactly one of "cron" / "everyMin".',
+      )
+    case 'source.cron.invalid':
+      return localize('trigger.config.error.cronInvalid', '"source.cron" is invalid: {reason}', {
+        reason: errorParam(error.params, 'reason'),
+      })
+    case 'source.poll.timeoutNotLessThanInterval':
+      return localize(
+        'trigger.config.error.pollTimeout',
+        '"source.fetch.timeoutSec" ({timeoutSec}s) must be less than "source.intervalSec" ({intervalSec}s).',
+        {
+          timeoutSec: errorParam(error.params, 'timeoutSec'),
+          intervalSec: errorParam(error.params, 'intervalSec'),
+        },
+      )
+    case 'session.notObject':
+      return localize('trigger.config.error.notObject', '"{field}" must be an object.', { field })
+    case 'session.cwd.invalid':
+      return localize(
+        'trigger.config.error.cwd',
+        '"session.cwd" must be a relative path inside the workspace (no "..").',
+      )
+    case 'session.skill.invalid':
+      return localize('trigger.config.error.skill', 'The skill name must match {pattern}.', {
+        pattern: errorParam(error.params, 'pattern'),
+      })
+    case 'session.promptOrSkill.required':
+      return localize(
+        'trigger.config.error.promptRequired',
+        '"session" must set "skill" or a non-empty "prompt".',
+      )
+    case 'session.budget.notObject':
+      return localize('trigger.config.error.notObject', '"{field}" must be an object.', { field })
+    default:
+      return error.message
+  }
 }
 
 export function triggerStatusLabel(status: TriggerStatus): string {
