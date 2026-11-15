@@ -1261,6 +1261,11 @@ input:focus-visible {
   flex-direction: column;
   gap: 6px;
   font-size: 14px;
+  max-height: 40vh;
+  max-height: 40dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .plan-entry {
