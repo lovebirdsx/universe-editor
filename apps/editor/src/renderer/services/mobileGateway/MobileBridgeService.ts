@@ -446,8 +446,8 @@ export class MobileBridgeService extends Disposable implements IMobileBridgeServ
       }),
     )
     this._syncNow()
-    this._draftSubscription = AcpPromptDraftCache.onDidChange((event) =>
-      this._onDraftChanged(event),
+    this._draftSubscription = this._register(
+      AcpPromptDraftCache.onDidChange((event) => this._onDraftChanged(event)),
     )
     this._pendingWorkSweep = setInterval(() => {
       void this._sweepPendingWork().catch((err: unknown) => {

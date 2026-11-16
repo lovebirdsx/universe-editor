@@ -9,10 +9,13 @@ import {
 import {
   CancellationTokenSource,
   DeferredPromise,
+  DisposableTracker,
   Emitter,
   Event,
+  markAsSingleton,
   normalizePlatform,
   observableValue,
+  setDisposableTracker,
   URI,
   UriIdentityService,
   type IEditorGroupsService,
@@ -563,6 +566,27 @@ describe('MobileBridgeService', () => {
     expect(harness.events.filter((event) => event.kind === 'draft')).toStrictEqual([
       { kind: 'draft', localId: 's1', draft: { text: 'hi', images: [] } },
     ])
+  })
+
+  it('parents streaming subscriptions to the bridge so a live stream is no teardown leak', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    const harness = makeHarness()
+    try {
+      // The workbench store is a singleton: a bridge still streaming outlives the
+      // root unmount the e2e teardown leak gate performs, so anything it owns
+      // must root through it instead of dangling as an unparented disposable.
+      markAsSingleton(harness.service)
+      harness.add(makeSession('s1'))
+      await harness.service.startStreaming()
+      // Other harness emitters leak on their own; pin the one this test is about.
+      expect(tracker.computeLeakingDisposables()?.details ?? '').not.toContain(
+        'MobileBridgeService.startStreaming',
+      )
+    } finally {
+      harness.service.dispose()
+      setDisposableTracker(null)
+    }
   })
 
   it('applies a phone draft to the cache without echoing it back', async () => {
