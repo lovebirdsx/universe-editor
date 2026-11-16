@@ -84,13 +84,30 @@ describe('ESC routing via contextKey: CloseQuickInputAction vs FocusActiveEditor
     )
   })
 
-  it('ESC has no match when neither when-clause is satisfied', () => {
+  it('routes ESC to FocusActiveEditorGroupAction when no editor is open but focus is in a view', () => {
     disposables.push(registerAction2(FocusActiveEditorGroupAction))
     disposables.push(registerAction2(CloseQuickInputAction))
     const ctx = new ContextKeyService()
-    // hasActiveEditor=false + quickInputVisible=false → both bindings filtered out.
+    // The empty editor area still needs Escape to leave view lists: their
+    // Ctrl+K alias would otherwise make Ctrl+K chords unreachable.
     ctx.createKey<boolean>('hasActiveEditor', false)
     ctx.createKey<boolean>('quickInputVisible', false)
+    ctx.createKey<string>('focusedView', 'workbench.view.explorer.tree')
+
+    expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBe(
+      FocusActiveEditorGroupAction.ID,
+    )
+  })
+
+  it('leaves ESC unhandled with no editor and no focused view', () => {
+    disposables.push(registerAction2(FocusActiveEditorGroupAction))
+    disposables.push(registerAction2(CloseQuickInputAction))
+    const ctx = new ContextKeyService()
+    // Title-bar menus/dropdowns handle Escape themselves; the global fallback
+    // must not steal it just because no editor is open.
+    ctx.createKey<boolean>('hasActiveEditor', false)
+    ctx.createKey<boolean>('quickInputVisible', false)
+    ctx.createKey<string>('focusedView', '')
 
     expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBeUndefined()
   })

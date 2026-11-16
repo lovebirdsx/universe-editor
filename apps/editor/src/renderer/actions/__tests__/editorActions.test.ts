@@ -790,16 +790,38 @@ describe('FocusActiveEditorGroupAction', () => {
   afterEach(() => {
     while (disposables.length > 0) disposables.pop()?.dispose()
     FileEditorRegistry._resetForTests()
+    document.body.innerHTML = ''
   })
+
+  function mountGroupBody(groupId: number): HTMLElement {
+    const group = document.createElement('div')
+    group.setAttribute('data-group-id', String(groupId))
+    const body = document.createElement('div')
+    body.setAttribute('data-testid', 'editor-group-body')
+    body.tabIndex = -1
+    group.appendChild(body)
+    document.body.appendChild(group)
+    return body
+  }
 
   it('registers escape keybinding and is f1', () => {
     disposables.push(registerAction2(FocusActiveEditorGroupAction))
     expect(KeybindingsRegistry.resolveKeybinding('escape')).toBe(FocusActiveEditorGroupAction.ID)
-    expect(
-      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
-        (i) => 'command' in i && i.command === FocusActiveEditorGroupAction.ID,
-      ),
-    ).toBe(true)
+
+    // Escape must still match with an empty editor area so view lists can hand
+    // focus back to the editor and start Ctrl+K chords.
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('hasActiveEditor', false)
+    ctx.createKey<string>('focusedView', 'workbench.view.explorer.tree')
+    expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBe(
+      FocusActiveEditorGroupAction.ID,
+    )
+
+    const paletteItem = MenuRegistry.getMenuItems(MenuId.CommandPalette).find(
+      (i) => 'command' in i && i.command === FocusActiveEditorGroupAction.ID,
+    )
+    expect(paletteItem).toBeDefined()
+    expect(paletteItem?.when).toBeUndefined()
   })
 
   it('run() calls focus() on the active Monaco editor when a FileEditorInput is active', () => {
@@ -922,6 +944,48 @@ describe('FocusActiveEditorGroupAction', () => {
   it('run() is a no-op when the active editor is not a FileEditorInput', () => {
     const svc = new EditorGroupsService()
     svc.activeGroup.openEditor(new TestEditor('x'))
+    expect(() => exec(FocusActiveEditorGroupAction, svc)).not.toThrow()
+  })
+
+  it('run() focuses the active group body when no editor is open', () => {
+    const svc = new EditorGroupsService()
+    const body = mountGroupBody(svc.activeGroup.id)
+
+    exec(FocusActiveEditorGroupAction, svc)
+
+    expect(document.activeElement).toBe(body)
+  })
+
+  it('run() focuses the active split group body, not the first group', () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, 3 /* Right */)
+    const firstBody = mountGroupBody(first.id)
+    const secondBody = mountGroupBody(second.id)
+    svc.activateGroup(second)
+
+    exec(FocusActiveEditorGroupAction, svc)
+
+    expect(document.activeElement).toBe(secondBody)
+    expect(document.activeElement).not.toBe(firstBody)
+  })
+
+  it('run() brings the window owning the active group forward when no editor is open', () => {
+    const svc = new EditorGroupsService()
+    const aux = svc.createAuxiliaryPart({ activate: true })
+    const body = mountGroupBody(aux.activeGroup.id)
+    const focusGroup = vi.spyOn(FakeWindowFocusService.prototype, 'focusGroup')
+    try {
+      exec(FocusActiveEditorGroupAction, svc)
+      expect(focusGroup).toHaveBeenCalledWith(aux.activeGroup)
+      expect(document.activeElement).toBe(body)
+    } finally {
+      focusGroup.mockRestore()
+    }
+  })
+
+  it('run() does not throw when no editor and no group body are present', () => {
+    const svc = new EditorGroupsService()
     expect(() => exec(FocusActiveEditorGroupAction, svc)).not.toThrow()
   })
 })

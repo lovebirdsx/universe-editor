@@ -342,7 +342,9 @@ export function focusEditorInput(
   return focusGroupBody(contextKeyService, groupId)
 }
 
-function focusGroupBody(contextKeyService: IContextKeyService, groupId?: number): boolean {
+export function focusGroupBody(contextKeyService: IContextKeyService, groupId?: number): boolean {
+  // renderer-node tests and early bootstrap can call this without a document.
+  if (typeof document === 'undefined') return false
   const body = findGroupBody(groupId)
   if (!body) return false
   body.focus()

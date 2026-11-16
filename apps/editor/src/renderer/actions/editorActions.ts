@@ -31,7 +31,7 @@ import {
 import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfirm.js'
 import { cloneEditorInputForSplit } from '../services/editor/cloneEditorInput.js'
 import { activateGroupAndFocus } from '../services/editor/activateGroupAndFocus.js'
-import { focusEditorInput } from '../services/editor/editorFocus.js'
+import { focusEditorInput, focusGroupBody } from '../services/editor/editorFocus.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
 import { IClosedEditorsService } from '../services/editor/ClosedEditorsService.js'
 import { HtmlPreviewInput } from '../services/editor/HtmlPreviewInput.js'
@@ -881,20 +881,30 @@ export class FocusActiveEditorGroupAction extends Action2 {
         primary: 'escape',
         // `!whenFocus`: the keybindings editor's inline when editor owns Escape
         // while it is open (dismiss suggestions, then cancel the edit).
-        when: '!quickInputVisible && !editorFocus && !terminalFocus && !whenFocus',
+        // Without an editor, only view surfaces need escaping (their Ctrl+K
+        // alias swallows the chord); title-bar menus keep their own Escape.
+        when: `(hasActiveEditor || focusedView != '') && !quickInputVisible && !editorFocus && !terminalFocus && !whenFocus`,
       },
-      precondition: 'hasActiveEditor',
+      // No `hasActiveEditor` precondition: the command must stay available with
+      // an empty editor area so Escape can leave view lists.
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
     const group = accessor.get(IEditorGroupsService).activeGroup
-    const activeEditor = group.activeEditor
-    if (!activeEditor) return
+    const contextKeyService = accessor.get(IContextKeyService)
     // The active group may be the last-used auxiliary window while focus sits in
     // the main Explorer (Ctrl+Shift+E round trip): bring that window forward too.
+    // This also switches the active workbench document before the body lookup.
     accessor.get(IWindowFocusService).focusGroup(group)
-    focusEditorInput(activeEditor, accessor.get(IContextKeyService))
+    const activeEditor = group.activeEditor
+    if (activeEditor) {
+      focusEditorInput(activeEditor, contextKeyService)
+      return
+    }
+    // The editor-area Part root has no tabIndex, so focusPart() cannot move DOM
+    // focus. Target the always-rendered group body (Welcome fallback) instead.
+    focusGroupBody(contextKeyService, group.id)
   }
 }
 

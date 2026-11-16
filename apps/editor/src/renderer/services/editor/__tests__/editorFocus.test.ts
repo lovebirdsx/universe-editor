@@ -10,6 +10,7 @@ import {
   bridgeEditorColumnSelection,
   focusEditorInput,
   focusEditorNextFrame,
+  focusGroupBody,
   installEditorFocusDerivation,
   syncEditorFocusContext,
 } from '../editorFocus.js'
@@ -106,6 +107,33 @@ describe('focusEditorInput — non-Monaco editors', () => {
   it('returns false when no group body is present and the editor cannot self-focus', () => {
     const cks = new ContextKeyService()
     expect(focusEditorInput(new NonMonacoInput(), cks, 99)).toBe(false)
+  })
+})
+
+describe('focusGroupBody', () => {
+  beforeEach(() => {
+    document.body.innerHTML = ''
+  })
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('focuses the requested group body among several rendered groups', () => {
+    const cks = new ContextKeyService()
+    mountGroupBody(1)
+    const second = mountGroupBody(2)
+
+    expect(focusGroupBody(cks, 2)).toBe(true)
+    expect(document.activeElement).toBe(second)
+  })
+
+  it('returns false when the requested group body is absent', () => {
+    const cks = new ContextKeyService()
+    const first = mountGroupBody(1)
+    first.focus()
+
+    expect(focusGroupBody(cks, 99)).toBe(false)
+    expect(document.activeElement).toBe(first)
   })
 })
 

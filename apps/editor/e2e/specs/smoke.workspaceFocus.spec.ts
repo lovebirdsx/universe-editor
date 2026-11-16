@@ -51,6 +51,41 @@ test.describe('@p1 workspace focus restore', () => {
   })
 })
 
+test.describe('escape with no editor', () => {
+  test('Escape-with-no-editor: Explorer focus returns to the editor area so Ctrl+K chords start @regression', async ({
+    page,
+    workbench,
+  }) => {
+    const tmpDir = mkTempDir('universe-editor-e2e-esc-')
+
+    await workbench.waitForRestored()
+    await expect.poll(() => workbench.getActiveEditorUri()).toBeUndefined()
+    await workbench.waitForBootstrapFocusSettled()
+
+    await workbench.openWorkspace(tmpDir)
+    await expect
+      .poll(() => workbench.getCurrentWorkspacePath(), { timeout: 5_000 })
+      .toBe(tmpDir.replace(/\\/g, '/'))
+    await expect.poll(() => workbench.getContextKey<boolean>('hasActiveEditor')).toBe(false)
+    // Startup focus restore can land in the Output panel on a fresh launch; use
+    // the real shortcut so the premise (Explorer owns focus) does not depend on
+    // which surface the restored frame happened to focus.
+    await page.keyboard.press('Control+Shift+E')
+    await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(EXPLORER_TREE)
+
+    // The Explorer tree consumes Ctrl+K as "move up" while it owns focus. Escape
+    // must still reach the editor area with no tab open, or the chord is dead.
+    await page.keyboard.press('Escape')
+    await expect.poll(() => workbench.getContextKey<string>('focusedPart')).toBe('editorArea')
+
+    // Repo-default "Open Keyboard Shortcuts (JSON)" chord. The harness points
+    // UNIVERSE_VSCODE_KEYBINDINGS_PATH at an empty list, so no host overrides.
+    await page.keyboard.press('Control+k')
+    await page.keyboard.press('Control+k')
+    await expect.poll(() => workbench.getContextKey<boolean>('hasActiveEditor')).toBe(true)
+  })
+})
+
 coldTest.describe('cold-start terminal focus', () => {
   coldTest(
     'a fresh window keeps terminalFocus false so physical Ctrl+P opens quick access @regression',
