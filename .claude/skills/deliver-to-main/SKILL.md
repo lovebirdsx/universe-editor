@@ -1,12 +1,11 @@
 ---
 name: deliver-to-main
 description: 把当前 worktree 交付到 main（与手机「交付到 main」同一引擎的 CLI 入口）
-disable-model-invocation: true
 ---
 
 # 交付当前 worktree 到 main
 
-手动调用。`pnpm deliver` 走内置 git 扩展的交付引擎，与手机「交付到 main」共用锁和 worktree 同步规则；完整语义见 [交付流水线](../../../docs/development/delivery.md)。
+`pnpm deliver` 走内置 git 扩展的交付引擎，与手机「交付到 main」共用锁和 worktree 同步规则；完整语义见 [交付流水线](../../../docs/development/delivery.md)。
 
 ## 流程
 
