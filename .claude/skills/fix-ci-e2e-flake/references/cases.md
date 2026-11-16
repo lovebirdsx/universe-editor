@@ -731,6 +731,14 @@ expect(stats.recent.some((o) => o.channel === 'sessionChangesStore' && o.name ==
 教训：a) `@serial` 不只是「CI 会单开一趟」的提示，而是**调度契约**——任何 `ONLY_TAG` 专用趟都可能是并行趟，必须显式排除；b) 「本进程已确认资源可读」挡不住另一个进程随后覆写，跨 worker 的 OS 资源只能靠调度隔离，不能靠断言/轮询加固；c) 看到「同文件其它 `@serial` 用例在另一 worker 同时段运行」就应先查 tag 分流，而不是剪贴板实现；d) 只跑一条 spec 时 `ONLY_TAG` 过滤后可能为 0（Playwright 报 No tests found），验证分流用 `--list` 或补 `--pass-with-no-tests`。
 锚：`packages/e2e-harness/src/playwrightConfig.ts`（`grepOptions` 的 ONLY_TAG 分支）；`packages/e2e-harness/src/__tests__/playwrightConfig.test.ts`；`apps/editor/e2e/specs/smoke.acpFragmentCopy.spec.ts`；`.github/workflows/ci.yml`（Linux/Windows 的 `@regression` 与 `@serial` 趟）；`docs/development/testing.md`（tag 体系）。
 
+**案例 117 — teardown 泄漏门报 bridge 的草稿缓存订阅：长活服务 + 订阅只记字段没进 DisposableStore（泄漏门误报）；修=把订阅 `_register` 到服务**
+信号：`mobile.gateway.spec.ts:1630` @p1「reads project roots and remembers the created directory」在 ubuntu shard 1/2 **initial+retry 同形态**，被测断言全过、只挂在 teardown 泄漏门，栈固定 `toDisposable → Emitter._event [as onDidChange] → MobileBridgeService$1.startStreaming`；而**同一 headSha 8 小时前整条 CI 全绿**——判据是「stopStreaming 有没有赶在 teardown 前到达」的时序，不是回归。
+根因：`startStreaming()` 里 `this._draftSubscription = AcpPromptDraftCache.onDidChange(...)` 只存普通字段、没进任何 DisposableStore（同函数的 `_rootWatcher`、`startAttention` 的 `_attentionSubscription` 都 `_register` 了，只有这处漏）。tracker 判定「活着且 root 链不通向 singleton 即泄漏」，而 spec 的 `ws.close()` → main 停流 → renderer `stopStreaming` 与 teardown 的 `expectNoLeaks` 赛跑，迟到即误报：桥服务挂在 markAsSingleton 的 workbenchStore 上合法长活，React unmount 不会释放它。
+修（产品一行 + 单测）：订阅改 `this._register(AcpPromptDraftCache.onDidChange(...))`，root 链挂到 workbenchStore，与 `_attentionSubscription` 同范式；`stopStreaming` 里的 `?.dispose()` 语义不变。单测用独立 `DisposableTracker` + `markAsSingleton(service)`，`startStreaming()` 后断言泄漏详情不含 `MobileBridgeService.startStreaming`（修复前必红、修复后绿）。
+教训：a) **长活服务里「记字段 + 手动 dispose」的订阅是泄漏门误报源**——服务存活期间它就是无父 root，任何一次 teardown 早于 stop 都会报；先判断「宿主是否该死没死」（本条与案例 80 都是宿主合法长活）。b) 同一生命周期函数里有的订阅 `_register`、有的裸字段，就是遗漏指纹，先对齐既有范式。c) 「断言全过 + 栈在自家 Emitter 订阅帧 + 同 sha 早前全绿」= 时序泄漏而非回归，别去改 spec 的等待或加 `waitForTimeout`。
+锚：`apps/editor/src/renderer/services/mobileGateway/MobileBridgeService.ts`（`startStreaming` 的 `_register`）；`apps/editor/src/renderer/services/mobileGateway/__tests__/MobileBridgeService.test.ts`（tracker 断言）；`apps/editor/src/renderer/main.tsx`（`workbenchStore = markAsSingleton(...)`、`snapshotLeaks`）；`apps/editor/e2e/specs/mobile.gateway.spec.ts`。
+
+
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
 - DnD 用例稳定化（显式等待 drop 完成态），稳定后摘 `@flaky`（案例 46）。
