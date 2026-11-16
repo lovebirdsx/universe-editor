@@ -1705,7 +1705,7 @@ test.describe('@p0 auxiliary editor windows', () => {
       await expect.poll(async () => (await auxWindows(page)).length).toBe(0)
     })
 
-    test('quick navigate keeps modifier release and Ctrl+P/N in the auxiliary document', async ({
+    test('quick navigate keeps modifier release and Ctrl+J/K in the auxiliary document', async ({
       electronApp,
       workbench,
       page,
@@ -1734,10 +1734,13 @@ test.describe('@p0 auxiliary editor windows', () => {
       const overlay = child.locator('[data-testid="quick-input-overlay"]')
       await expect(overlay).toBeVisible()
 
-      // Ctrl+N / Ctrl+P 由拥有该面板的窗口处理。
+      // Ctrl+J / Ctrl+K 由拥有该面板的窗口处理；Ctrl+P/N 不再是面板别名。
       const initial = await selectedIndex()
-      await child.keyboard.press('n')
+      await child.keyboard.press('j')
       await expect.poll(selectedIndex).not.toBe(initial)
+      await child.keyboard.press('k')
+      await expect.poll(selectedIndex).toBe(initial)
+      await child.keyboard.press('n')
       await child.keyboard.press('p')
       await expect.poll(selectedIndex).toBe(initial)
 

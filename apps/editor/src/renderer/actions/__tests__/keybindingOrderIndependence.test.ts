@@ -2,10 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Regression lock for the keybinding 去顺序化 change: context-scoped bindings
  *  (Explorer undo/redo, Quick Input escape, ACP prompt-suggestion, in-session
- *  find, Outline navigation) now carry an explicit weight above the default
- *  WorkbenchContrib. This test proves the scoped binding wins over a competing
- *  default-weight global binding *regardless of registration order* — the whole
- *  point of moving off the fragile newest-wins tie-break.
+ *  find) now carry an explicit weight above the default WorkbenchContrib. This
+ *  test proves the scoped binding wins over a competing default-weight global
+ *  binding *regardless of registration order* — the whole point of moving off
+ *  the fragile newest-wins tie-break.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -39,12 +39,6 @@ import {
 import { CancelAgentTurnAction } from '../agentSessionActions.js'
 import { CancelExplorerMultiSelectionAction } from '../explorerSelectionActions.js'
 import { MarkdownPreviewFindCloseAction } from '../markdownActions.js'
-import {
-  OutlineNavigateDownAction,
-  OutlineNavigateLeftAction,
-  OutlineNavigateRightAction,
-  OutlineNavigateUpAction,
-} from '../outlineActions.js'
 
 /**
  * A conflicting global command bound to the same key at the DEFAULT weight
@@ -148,41 +142,6 @@ const SCENARIOS: readonly Scenario[] = [
     context: { acpChatFocused: true, acpChatTurnRunning: true },
     scoped: CancelAgentTurnAction,
     scopedId: CancelAgentTurnAction.ID,
-  },
-  {
-    name: 'Outline navigate down (ctrl+n) beats global ctrl+n',
-    key: 'ctrl+n',
-    context: { focusedView: 'workbench.view.outline.main' },
-    scoped: OutlineNavigateDownAction,
-    scopedId: OutlineNavigateDownAction.ID,
-  },
-  {
-    name: 'Outline navigate down alias (ctrl+j) beats global ctrl+j',
-    key: 'ctrl+j',
-    context: { focusedView: 'workbench.view.outline.main' },
-    scoped: OutlineNavigateDownAction,
-    scopedId: OutlineNavigateDownAction.ID,
-  },
-  {
-    name: 'Outline navigate up (ctrl+p) beats global ctrl+p',
-    key: 'ctrl+p',
-    context: { focusedView: 'workbench.view.outline.main' },
-    scoped: OutlineNavigateUpAction,
-    scopedId: OutlineNavigateUpAction.ID,
-  },
-  {
-    name: 'Outline navigate left alias (ctrl+h) beats global ctrl+h',
-    key: 'ctrl+h',
-    context: { focusedView: 'workbench.view.outline.main' },
-    scoped: OutlineNavigateLeftAction,
-    scopedId: OutlineNavigateLeftAction.ID,
-  },
-  {
-    name: 'Outline navigate right alias (ctrl+l) beats global ctrl+l',
-    key: 'ctrl+l',
-    context: { focusedView: 'workbench.view.outline.main' },
-    scoped: OutlineNavigateRightAction,
-    scopedId: OutlineNavigateRightAction.ID,
   },
   {
     name: 'Explorer cancel multi-selection (escape) beats global escape',

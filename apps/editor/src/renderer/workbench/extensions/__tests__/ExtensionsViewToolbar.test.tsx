@@ -163,14 +163,19 @@ describe('ExtensionsViewToolbar', () => {
 
     fireEvent.keyDown(builtinItem(), { key: 'j', ctrlKey: true })
     expect(document.activeElement).toBe(updatesItem())
-    fireEvent.keyDown(updatesItem(), { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(updatesItem(), { key: 'j', ctrlKey: true })
     expect(document.activeElement).toBe(screen.getByTestId('extensions-menu-check-for-updates'))
     fireEvent.keyDown(screen.getByTestId('extensions-menu-check-for-updates'), {
       key: 'k',
       ctrlKey: true,
     })
     expect(document.activeElement).toBe(updatesItem())
-    fireEvent.keyDown(updatesItem(), { key: 'p', ctrlKey: true })
+    fireEvent.keyDown(updatesItem(), { key: 'k', ctrlKey: true })
+    expect(document.activeElement).toBe(builtinItem())
+
+    // Ctrl+N/P are no longer aliases and must not move the menu cursor.
+    fireEvent.keyDown(builtinItem(), { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(builtinItem(), { key: 'p', ctrlKey: true })
     expect(document.activeElement).toBe(builtinItem())
   })
 })

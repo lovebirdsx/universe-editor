@@ -42,7 +42,7 @@ test.describe('@p1 workspace focus restore', () => {
     await expect.poll(() => workbench.getContextKey<string>('focusedView')).toBe(EXPLORER_TREE)
     await expect.poll(() => workbench.getContextKey<boolean>('terminalFocus')).toBe(false)
 
-    // Ctrl+P now steps the focused Explorer tree (see smoke.explorerSelection),
+    // Ctrl+J/K now step the focused Explorer tree (see smoke.explorerSelection),
     // so the palette proves the dispatcher still receives physical shortcuts;
     // terminalFocus === false above guards the original regression.
     await page.keyboard.press('Control+Shift+P')

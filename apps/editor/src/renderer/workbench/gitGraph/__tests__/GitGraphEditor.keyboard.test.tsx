@@ -267,7 +267,7 @@ describe('GitGraphEditor keyboard navigation', () => {
     expect(bridgeCalls(executeCommand)).toHaveLength(3)
   })
 
-  it('Ctrl+P/N/J/K move the selection like ArrowUp/ArrowDown', async () => {
+  it('Ctrl+J/K move the selection like ArrowDown/ArrowUp', async () => {
     const { container } = renderEditor()
     await flush()
 
@@ -278,15 +278,21 @@ describe('GitGraphEditor keyboard navigation', () => {
     await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_B])
 
-    fireEvent.keyDown(body, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(body, { key: 'j', ctrlKey: true })
     await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_C])
 
-    fireEvent.keyDown(body, { key: 'p', ctrlKey: true })
+    fireEvent.keyDown(body, { key: 'k', ctrlKey: true })
     await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_B])
 
     fireEvent.keyDown(body, { key: 'k', ctrlKey: true })
+    await flush()
+    expect(gitGraphViewState.selection).toEqual([HASH_A])
+
+    // Ctrl+N/P are no longer graph aliases — they stay with the global commands.
+    fireEvent.keyDown(body, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(body, { key: 'p', ctrlKey: true })
     await flush()
     expect(gitGraphViewState.selection).toEqual([HASH_A])
   })

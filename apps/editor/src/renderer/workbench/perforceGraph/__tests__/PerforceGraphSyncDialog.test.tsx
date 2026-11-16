@@ -136,12 +136,24 @@ describe('PerforceGraphSyncDialog', () => {
 
     fireEvent.keyDown(boxes[0]!, { key: 'j', ctrlKey: true })
     expect(document.activeElement).toBe(boxes[1])
-    fireEvent.keyDown(boxes[1]!, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(boxes[1]!, { key: 'j', ctrlKey: true })
     expect(document.activeElement).toBe(boxes[2])
     fireEvent.keyDown(boxes[2]!, { key: 'k', ctrlKey: true })
     expect(document.activeElement).toBe(boxes[1])
-    fireEvent.keyDown(boxes[1]!, { key: 'p', ctrlKey: true })
+    fireEvent.keyDown(boxes[1]!, { key: 'k', ctrlKey: true })
     expect(document.activeElement).toBe(boxes[0])
+
+    // Ctrl+N/P are not dialog aliases; the dispatcher must ignore them here too.
+    fireEvent.keyDown(boxes[0]!, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(boxes[0]!, { key: 'p', ctrlKey: true })
+    expect(document.activeElement).toBe(boxes[0])
+  })
+
+  it('marks itself as a renderer dialog so the global dispatcher stays out', () => {
+    renderDialog()
+    expect(
+      screen.getByTestId('perforceGraph-syncDialog').hasAttribute('data-renderer-dialog'),
+    ).toBe(true)
   })
 
   it('toggles a row with Space', () => {

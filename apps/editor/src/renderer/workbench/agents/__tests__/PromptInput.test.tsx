@@ -847,10 +847,15 @@ describe('PromptInput — slash popover navigation (via widget handle)', () => {
 
     fireEvent.keyDown(ta, { key: 'j', ctrlKey: true })
     expect(screen.getAllByRole('option')[1]?.getAttribute('aria-selected')).toBe('true')
-    fireEvent.keyDown(ta, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(ta, { key: 'j', ctrlKey: true })
     expect(screen.getAllByRole('option')[2]?.getAttribute('aria-selected')).toBe('true')
     fireEvent.keyDown(ta, { key: 'k', ctrlKey: true })
     expect(screen.getAllByRole('option')[1]?.getAttribute('aria-selected')).toBe('true')
+    fireEvent.keyDown(ta, { key: 'k', ctrlKey: true })
+    expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
+
+    // Ctrl+N/P stay with the global commands and never step the suggestions.
+    fireEvent.keyDown(ta, { key: 'n', ctrlKey: true })
     fireEvent.keyDown(ta, { key: 'p', ctrlKey: true })
     expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
   })

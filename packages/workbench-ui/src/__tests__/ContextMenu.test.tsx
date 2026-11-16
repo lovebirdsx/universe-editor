@@ -538,7 +538,7 @@ describe('ContextMenu submenus', () => {
       expect(screen.queryByText('Nested')).toBeNull()
     })
 
-    it('steps with Ctrl+N and Ctrl+P, aliasing the arrow keys', () => {
+    it('steps with Ctrl+J and Ctrl+K, aliasing the arrow keys', () => {
       const root = asMenuId('test.submenu.keys.ctrlstep')
       track(MenuRegistry.addMenuItem(root, { command: 'a.cmd', title: 'A', group: '1_a' }))
       track(MenuRegistry.addMenuItem(root, { command: 'b.cmd', title: 'B', group: '2_b' }))
@@ -553,22 +553,27 @@ describe('ContextMenu submenus', () => {
       )
       const menu = screen.getByRole('menu')
 
-      expect(pressWith({ key: 'n', ctrlKey: true })).toBe(true)
+      expect(pressWith({ key: 'j', ctrlKey: true })).toBe(true)
       expect(activeLabel(menu)).toBe('A')
-      // Index 1 is the group separator, so B is next. Ctrl+J is the vim alias.
+      // Index 1 is the group separator, so B is next.
       pressWith({ key: 'j', ctrlKey: true })
       expect(activeLabel(menu)).toBe('B')
-      pressWith({ key: 'n', ctrlKey: true })
+      pressWith({ key: 'j', ctrlKey: true })
       expect(activeLabel(menu)).toBe('A')
-      pressWith({ key: 'n', ctrlKey: true })
+      pressWith({ key: 'j', ctrlKey: true })
       expect(activeLabel(menu)).toBe('B')
 
       pressWith({ key: 'k', ctrlKey: true })
       expect(activeLabel(menu)).toBe('A')
-      pressWith({ key: 'p', ctrlKey: true })
+      pressWith({ key: 'k', ctrlKey: true })
       expect(activeLabel(menu)).toBe('B')
       // CapsLock reports an upper-case letter with no Shift held.
-      pressWith({ key: 'N', ctrlKey: true })
+      pressWith({ key: 'K', ctrlKey: true })
+      expect(activeLabel(menu)).toBe('A')
+
+      // Ctrl+N/P are not navigation aliases; they stay with the global commands.
+      expect(pressWith({ key: 'n', ctrlKey: true })).toBe(false)
+      expect(pressWith({ key: 'p', ctrlKey: true })).toBe(false)
       expect(activeLabel(menu)).toBe('A')
     })
 
@@ -642,11 +647,14 @@ describe('ContextMenu submenus', () => {
 
       // Bare letters aren't ours, and neither is any extra modifier stripe:
       // these must reach the workbench (command palette, new window, AltGr, …).
+      // Ctrl+N/P are ordinary global commands again, never menu aliases.
       for (const init of [
         { key: 'n' },
         { key: 'p' },
         { key: 'h' },
         { key: 'l' },
+        { key: 'n', ctrlKey: true },
+        { key: 'p', ctrlKey: true },
         { key: 'p', ctrlKey: true, shiftKey: true },
         { key: 'n', ctrlKey: true, shiftKey: true },
         { key: 'h', ctrlKey: true, shiftKey: true },
@@ -824,10 +832,10 @@ describe('ContextMenu submenus', () => {
 
       // The level the highlight sits on no longer has rows. An arrow keeps
       // falling through to the view underneath — that is how it reaches the tree
-      // — but an alias stays swallowed, or Ctrl+P would open quick open on top of
-      // a menu that is plainly still on screen.
+      // — but an alias stays swallowed, or Ctrl+J would toggle the panel on top
+      // of a menu that is plainly still on screen.
       expect(pressWith({ key: 'ArrowDown' })).toBe(false)
-      expect(pressWith({ key: 'p', ctrlKey: true })).toBe(true)
+      expect(pressWith({ key: 'j', ctrlKey: true })).toBe(true)
       // The same applies to the open gesture: there is no row to run, and it
       // must not reach the tree/list underneath.
       expect(pressWith({ key: 'Enter', ctrlKey: true })).toBe(true)

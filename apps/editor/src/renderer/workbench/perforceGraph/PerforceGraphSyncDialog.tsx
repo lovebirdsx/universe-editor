@@ -101,9 +101,11 @@ export function PerforceGraphSyncDialog({
     if (e.key === 'Enter' && !isButtonTarget(e.target)) confirm()
   }
 
-  // Ctrl+P/N/J/K mirror ArrowUp/ArrowDown. The focused rows are checkboxes —
+  // Ctrl+J/K mirror ArrowDown/ArrowUp. The focused rows are checkboxes —
   // editable targets — so the layer opts into editable focus; dialog priority
-  // keeps them ahead of any list underneath the modal.
+  // keeps them ahead of any list underneath the modal. Ctrl+P/N are deliberately
+  // unclaimed here and stay with the global commands outside this dialog; the
+  // `data-renderer-dialog` marker below makes the dispatcher ignore them inside.
   useCtrlNavigationLayer({
     kind: 'dialog',
     allowEditableFocus: true,
@@ -140,6 +142,7 @@ export function PerforceGraphSyncDialog({
       <div
         role="dialog"
         aria-modal="true"
+        data-renderer-dialog=""
         className={styles['pickerDialog']}
         data-testid="perforceGraph-syncDialog"
         onKeyDown={onDialogKeyDown}

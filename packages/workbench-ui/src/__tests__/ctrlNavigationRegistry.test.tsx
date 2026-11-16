@@ -1,7 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for the shared Ctrl-alias arbitration. The registry is the one place that
- *  decides which surface a Ctrl+P/N/J/K/H/L stroke belongs to.
+ *  decides which surface a Ctrl+J/K/H/L stroke belongs to. Ctrl+P/N are not
+ *  aliases at all — they stay with Quick Open / New File.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -75,16 +76,14 @@ function press(
 }
 
 describe('useCtrlNavigationLayer — routing', () => {
-  it('routes Ctrl+N/J to down and Ctrl+P/K to up on an active list', () => {
+  it('routes Ctrl+J to down and Ctrl+K to up on an active list', () => {
     const onMove = vi.fn()
     render(<Layer kind="list" onMove={onMove} />)
     const surface = document.querySelector('[data-testid="surface"]') as HTMLElement
     surface.focus()
 
     for (const [key, direction] of [
-      ['n', 'down'],
       ['j', 'down'],
-      ['p', 'up'],
       ['k', 'up'],
     ] as const) {
       onMove.mockClear()
@@ -92,6 +91,17 @@ describe('useCtrlNavigationLayer — routing', () => {
       expect(onMove).toHaveBeenCalledTimes(1)
       expect(onMove).toHaveBeenCalledWith(direction, expect.anything())
     }
+  })
+
+  it('leaves Ctrl+N/P unclaimed so Quick Open / New File stay global', () => {
+    const onMove = vi.fn()
+    render(<Layer kind="list" onMove={onMove} />)
+    const surface = document.querySelector('[data-testid="surface"]') as HTMLElement
+    surface.focus()
+
+    expect(press('n')).toBe(true)
+    expect(press('p')).toBe(true)
+    expect(onMove).not.toHaveBeenCalled()
   })
 
   it('rejects extra modifiers, bare letters and non-alias Ctrl strokes', () => {

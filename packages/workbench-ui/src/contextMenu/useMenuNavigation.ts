@@ -6,10 +6,11 @@
  *  (`aria-activedescendant`) rather than DOM focus, so the tree or list that
  *  raised the menu keeps its own focus ring and selection.
  *
- *  The Ctrl movement aliases (Ctrl+P/N/J/K/H/L) are *not* handled here: menus
- *  paint with virtual focus, so a per-menu window listener would race with the
- *  list underneath. `ctrlNavigationRegistry` owns those strokes and gives the
- *  menu top priority while it is open.
+ *  The Ctrl movement aliases (Ctrl+J/K up-down, Ctrl+H/L left-right) are *not*
+ *  handled here: menus paint with virtual focus, so a per-menu window listener
+ *  would race with the list underneath. `ctrlNavigationRegistry` owns those
+ *  strokes and gives the menu top priority while it is open. Ctrl+P/N stay with
+ *  the global Quick Open / New File commands.
  *
  *  Shared by `ContextMenu` (MenuRegistry-driven) and `ListMenu` (item-driven) so
  *  the two can never drift apart.

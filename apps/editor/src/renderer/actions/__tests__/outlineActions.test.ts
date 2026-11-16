@@ -1,10 +1,11 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for outlineActions — emacs Ctrl+P/N/B/F navigation commands.
+ *  Tests for outlineActions — user-bindable outline navigation commands.
  *
- *  The core guarantee: these bindings win the same keystroke over the global
- *  Ctrl+P (quick open) / Ctrl+N (new file) / … *only* when the Outline tree holds
- *  focus (`focusedView == 'workbench.view.outline.main'`), and route to the
- *  currently-registered OutlineNavigatorRegistry navigator.
+ *  The core guarantee: the four commands are registered and route to the
+ *  currently-registered OutlineNavigatorRegistry navigator, but they carry NO
+ *  default keybinding. While the tree is focused Ctrl+J/K/H/L are claimed by
+ *  ctrlNavigationRegistry at window capture; Ctrl+P/N stay with the global
+ *  Quick Open / New File commands.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -24,10 +25,15 @@ import {
   OutlineNavigateLeftAction,
   OutlineNavigateRightAction,
 } from '../outlineActions.js'
-import { FindReplaceInFileAction } from '../searchActions.js'
 import { OutlineNavigatorRegistry } from '../../workbench/outline/outlineNavigatorRegistry.js'
 
 const OUTLINE_VIEW = 'workbench.view.outline.main'
+const ALL_ACTIONS = [
+  OutlineNavigateUpAction,
+  OutlineNavigateDownAction,
+  OutlineNavigateLeftAction,
+  OutlineNavigateRightAction,
+] as const
 
 describe('Outline navigation Action2s', () => {
   const disposables: IDisposable[] = []
@@ -42,62 +48,29 @@ describe('Outline navigation Action2s', () => {
     return svc
   }
 
-  it('registers command + keybinding for each direction', () => {
-    for (const A of [
-      OutlineNavigateUpAction,
-      OutlineNavigateDownAction,
-      OutlineNavigateLeftAction,
-      OutlineNavigateRightAction,
-    ]) {
+  it('registers a command for each direction', () => {
+    for (const A of ALL_ACTIONS) {
       disposables.push(registerAction2(A))
       expect(CommandsRegistry.getCommand(A.ID)).toBeDefined()
     }
   })
 
-  it('Ctrl+P/N/J/B/F/H/L resolve to the outline commands when the outline is focused', () => {
-    disposables.push(registerAction2(OutlineNavigateUpAction))
-    disposables.push(registerAction2(OutlineNavigateDownAction))
-    disposables.push(registerAction2(OutlineNavigateLeftAction))
-    disposables.push(registerAction2(OutlineNavigateRightAction))
+  it('declares no default keybinding', () => {
+    for (const A of ALL_ACTIONS) disposables.push(registerAction2(A))
+    const ids = new Set<string>(ALL_ACTIONS.map((A) => A.ID))
+    expect(KeybindingsRegistry.getAllKeybindings().filter((kb) => ids.has(kb.command))).toEqual([])
+  })
+
+  it('does not resolve any old emacs alias even when the outline is focused', () => {
+    for (const A of ALL_ACTIONS) disposables.push(registerAction2(A))
     const c = ctx(OUTLINE_VIEW)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+p', c)).toBe(OutlineNavigateUpAction.ID)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+n', c)).toBe(OutlineNavigateDownAction.ID)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+j', c)).toBe(OutlineNavigateDownAction.ID)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+b', c)).toBe(OutlineNavigateLeftAction.ID)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+f', c)).toBe(OutlineNavigateRightAction.ID)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+h', c)).toBe(OutlineNavigateLeftAction.ID)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+l', c)).toBe(OutlineNavigateRightAction.ID)
-  })
-
-  it('Ctrl+H stays on the outline while focused, and keeps Replace elsewhere', () => {
-    disposables.push(registerAction2(OutlineNavigateLeftAction))
-    disposables.push(registerAction2(FindReplaceInFileAction))
-
-    const outline = ctx(OUTLINE_VIEW)
-    outline.set('hasActiveEditor', true)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+h', outline)).toBe(
-      OutlineNavigateLeftAction.ID,
-    )
-
-    const explorer = ctx('workbench.view.explorer.tree')
-    explorer.set('hasActiveEditor', true)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+h', explorer)).toBe(
-      FindReplaceInFileAction.ID,
-    )
-  })
-
-  it('does NOT claim Ctrl+P when focus is elsewhere (global quick open wins)', () => {
-    disposables.push(registerAction2(OutlineNavigateUpAction))
-    const c = ctx('workbench.view.explorer.tree')
-    // No other binding registered here → outline binding simply must not match.
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+p', c)).toBeUndefined()
+    for (const key of ['ctrl+p', 'ctrl+n', 'ctrl+j', 'ctrl+b', 'ctrl+f', 'ctrl+h', 'ctrl+l']) {
+      expect(KeybindingsRegistry.resolveKeybinding(key, c)).toBeUndefined()
+    }
   })
 
   it('handlers route to the registered navigator', async () => {
-    disposables.push(registerAction2(OutlineNavigateUpAction))
-    disposables.push(registerAction2(OutlineNavigateDownAction))
-    disposables.push(registerAction2(OutlineNavigateLeftAction))
-    disposables.push(registerAction2(OutlineNavigateRightAction))
+    for (const A of ALL_ACTIONS) disposables.push(registerAction2(A))
     const navigate = vi.fn()
     OutlineNavigatorRegistry.register({ navigate })
 

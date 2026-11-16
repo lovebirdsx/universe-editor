@@ -591,33 +591,23 @@ describe('QuickPickPanel keyboard', () => {
     expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
   })
 
-  it('Ctrl+N moves focus to next item and Enter accepts it', () => {
+  it('leaves Ctrl+N/P to the workbench — they no longer move the list', () => {
     const onAccept = vi.fn()
     render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
     const input = screen.getByTestId('quick-input-field')
-    const event = createEvent.keyDown(input, { key: 'n', ctrlKey: true })
+    const down = createEvent.keyDown(input, { key: 'n', ctrlKey: true })
+    const up = createEvent.keyDown(input, { key: 'p', ctrlKey: true })
 
-    fireEvent(input, event)
+    fireEvent(input, down)
+    fireEvent(input, up)
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(event.defaultPrevented).toBe(true)
-    expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
+    expect(down.defaultPrevented).toBe(false)
+    expect(up.defaultPrevented).toBe(false)
+    expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: false, alt: false })
   })
 
-  it('Ctrl+P moves focus to previous item and wraps', () => {
-    const onAccept = vi.fn()
-    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
-    const input = screen.getByTestId('quick-input-field')
-    const event = createEvent.keyDown(input, { key: 'p', ctrlKey: true })
-
-    fireEvent(input, event)
-    fireEvent.keyDown(input, { key: 'Enter' })
-
-    expect(event.defaultPrevented).toBe(true)
-    expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
-  })
-
-  it('Ctrl+J and Ctrl+K move like Ctrl+N and Ctrl+P', () => {
+  it('Ctrl+J and Ctrl+K move down and up', () => {
     const onAccept = vi.fn()
     render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
     const input = screen.getByTestId('quick-input-field')
@@ -1515,43 +1505,68 @@ describe('QuickPickPanel quick navigate locked mode', () => {
     expect(onItemRemove).toHaveBeenCalledWith(items[0])
   })
 
-  it('moves with Ctrl+P/N/J/K while locked', () => {
+  it('moves with Ctrl+J/K while locked', () => {
     render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
 
     fireEvent.keyDown(field(), { key: 'j', ctrlKey: true })
     expect(selectedRow()?.textContent).toContain('Go to Line')
-    fireEvent.keyDown(field(), { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(field(), { key: 'j', ctrlKey: true })
     expect(selectedRow()?.textContent).toContain('Format Document')
     fireEvent.keyDown(field(), { key: 'k', ctrlKey: true })
     expect(selectedRow()?.textContent).toContain('Go to Line')
-    fireEvent.keyDown(field(), { key: 'p', ctrlKey: true })
+    fireEvent.keyDown(field(), { key: 'k', ctrlKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+  })
+
+  it('leaves Ctrl+N/P unclaimed while locked', () => {
+    render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
+
+    const down = createEvent.keyDown(field(), { key: 'n', ctrlKey: true })
+    fireEvent(field(), down)
+    expect(down.defaultPrevented).toBe(false)
+    expect(selectedRow()?.textContent).toContain('Format Document')
+
+    const up = createEvent.keyDown(field(), { key: 'p', ctrlKey: true })
+    fireEvent(field(), up)
+    expect(up.defaultPrevented).toBe(false)
     expect(selectedRow()?.textContent).toContain('Format Document')
   })
 
   // The title-bar capsule opens the Alt+S picker without holding a modifier, so
   // bare letters must move instead of merely being swallowed.
-  it('moves with bare P/N/J/K while locked without a modifier', () => {
+  it('moves with bare J/K while locked without a modifier', () => {
     render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
 
     fireEvent.keyDown(field(), { key: 'j' })
     expect(selectedRow()?.textContent).toContain('Go to Line')
-    fireEvent.keyDown(field(), { key: 'n' })
+    fireEvent.keyDown(field(), { key: 'j' })
     expect(selectedRow()?.textContent).toContain('Format Document')
     fireEvent.keyDown(field(), { key: 'k' })
     expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'k' })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+
+    // Bare P/N are not aliases and must not move.
+    fireEvent.keyDown(field(), { key: 'n' })
+    expect(selectedRow()?.textContent).toContain('Format Document')
     fireEvent.keyDown(field(), { key: 'p' })
     expect(selectedRow()?.textContent).toContain('Format Document')
   })
 
-  it('moves with Alt+P/N/J/K while the Alt gesture holds the modifier', () => {
+  it('moves with Alt+J/K while the Alt gesture holds the modifier', () => {
     render(<QuickPickPanel state={altState()} onClose={() => undefined} />)
 
     fireEvent.keyDown(field(), { key: 'j', altKey: true })
     expect(selectedRow()?.textContent).toContain('Go to Line')
-    fireEvent.keyDown(field(), { key: 'n', altKey: true })
+    fireEvent.keyDown(field(), { key: 'j', altKey: true })
     expect(selectedRow()?.textContent).toContain('Format Document')
     fireEvent.keyDown(field(), { key: 'k', altKey: true })
     expect(selectedRow()?.textContent).toContain('Go to Line')
+    fireEvent.keyDown(field(), { key: 'k', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
+
+    fireEvent.keyDown(field(), { key: 'n', altKey: true })
+    expect(selectedRow()?.textContent).toContain('Format Document')
     fireEvent.keyDown(field(), { key: 'p', altKey: true })
     expect(selectedRow()?.textContent).toContain('Format Document')
   })
@@ -1571,7 +1586,7 @@ describe('QuickPickPanel quick navigate locked mode', () => {
     expect(selectedRow()?.textContent).toContain('Format Document')
   })
 
-  it('lets bare P/N/J/K type once Enter handed the field over', () => {
+  it('lets bare J/K type once Enter handed the field over', () => {
     render(<QuickPickPanel state={navigateState()} onClose={() => undefined} />)
     fireEvent.keyDown(field(), { key: 'Enter' })
 

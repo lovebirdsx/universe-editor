@@ -140,10 +140,7 @@ test.describe('@p1 explorer selection feedback', () => {
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 
-  test('Ctrl+P/N/J/K walk the tree without leaking to quick open, new file or panel', async ({
-    workbench,
-    page,
-  }) => {
+  test('Ctrl+J/K walk the tree; Ctrl+P/N stay global', async ({ workbench, page }) => {
     const tmpDir = mkTempDir('ue2-sel-ctrl-')
     await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'a')
     await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'b')
@@ -163,20 +160,30 @@ test.describe('@p1 explorer selection feedback', () => {
     const expectSelected = (name: string) =>
       expect.poll(() => selected.textContent()).toContain(name)
 
-    // Ctrl+N / Ctrl+J step down, Ctrl+K / Ctrl+P step back up. Every one of
-    // them has a global meaning (new file, toggle panel, chord, quick open)
-    // that must not fire while the tree itself holds focus.
-    await page.keyboard.press('Control+n')
+    // Ctrl+J steps down, Ctrl+K steps back up. Both have a global meaning
+    // (toggle panel, chord leader) that must not fire while the tree itself
+    // holds focus.
+    await page.keyboard.press('Control+j')
     await expectSelected('beta.txt')
     await page.keyboard.press('Control+j')
     await expectSelected('gamma.txt')
     await page.keyboard.press('Control+k')
     await expectSelected('beta.txt')
-    await page.keyboard.press('Control+p')
+    await page.keyboard.press('Control+k')
     await expectSelected('alpha.txt')
 
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
     await expect.poll(() => workbench.getActiveEditorUri()).toContain('alpha.txt')
+
+    // Ctrl+P is no longer a tree alias: with the tree still focused it must open
+    // Quick Open. Ctrl+N likewise creates a file again (left to the unit tests —
+    // pressing it here would leave an untitled editor for the next assertion).
+    await page.keyboard.press('Control+p')
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('quickInputVisible'), { timeout: 5000 })
+      .toBe(true)
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
 
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })

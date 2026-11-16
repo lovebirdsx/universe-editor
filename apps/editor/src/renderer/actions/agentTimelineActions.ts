@@ -615,8 +615,10 @@ export class CycleAcpTimelineCollapseAction extends Action2 {
 //
 // `ctrl+k` is deliberately absent: it is the app's chord leader (ctrl+k ctrl+s,
 // …), and resolveKeystroke checks chord prefixes before single strokes, so a
-// single-stroke ctrl+k here would be shadowed. ctrl+n/ctrl+p (the keys VSCode's
-// own suggest widget uses) plus arrows cover navigation cleanly.
+// single-stroke ctrl+k here would be shadowed. PromptInput's window-capture
+// overlay layer claims Ctrl+J/K while the popover is open, so these Action2s
+// only add the arrow fallbacks plus ctrl+j for down. ctrl+p/ctrl+n stay with
+// the global Quick Open / New File commands.
 // ---------------------------------------------------------------------------
 
 export class SelectNextAcpPromptSuggestionAction extends Action2 {
@@ -628,7 +630,6 @@ export class SelectNextAcpPromptSuggestionAction extends Action2 {
       category: CATEGORY,
       keybinding: [
         { primary: 'down', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
-        { primary: 'ctrl+n', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
         { primary: 'ctrl+j', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
       ],
     })
@@ -648,10 +649,7 @@ export class SelectPreviousAcpPromptSuggestionAction extends Action2 {
         'Select Previous Suggestion',
       ),
       category: CATEGORY,
-      keybinding: [
-        { primary: 'up', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
-        { primary: 'ctrl+p', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
-      ],
+      keybinding: { primary: 'up', when: 'acpPromptPopupVisible', weight: ACP_SCOPED_KEY_WEIGHT },
     })
   }
   override run(accessor: ServicesAccessor): void {

@@ -2,11 +2,11 @@
  *  Outline keyboard navigation smoke (P1).
  *
  *  Verifies the REAL keyboard path the unit tests can't reach: arrows / Enter go
- *  through the focused Tree, while the emacs Ctrl+P/N/B/F aliases must survive the
- *  global keybinding handler — which claims Ctrl+P (quick open) / Ctrl+N (new file)
- *  in the document capture phase for every other focus. They only reach the
- *  outline navigator because their bindings are gated on
- *  `focusedView == 'workbench.view.outline.main'` and registered to win the tie.
+ *  through the focused Tree, while Ctrl+J/K/H/L must survive the global
+ *  keybinding handler — which would otherwise claim Ctrl+J (toggle panel),
+ *  Ctrl+K (chord leader), Ctrl+H (replace) and Ctrl+L (line select). The
+ *  window-capture ctrlNavigationRegistry claims them while the tree holds DOM
+ *  focus. Ctrl+P/N are NOT outline aliases: they stay with Quick Open / New File.
  *
  *  Uses JSON symbols (in-renderer worker, no LSP cold start) for a fast, stable
  *  tree. `scripts` is an expandable row (child `build`), so we can exercise
@@ -37,7 +37,7 @@ const selectedName = () => {
 }
 
 test.describe('@p1 outline keyboard navigation', () => {
-  test('arrows and emacs Ctrl+P/N/B/F/H/L drive the outline selection', async ({
+  test('arrows and Ctrl+J/K/H/L drive the outline; Ctrl+P stays global', async ({
     page,
     workbench,
   }) => {
@@ -70,65 +70,51 @@ test.describe('@p1 outline keyboard navigation', () => {
     await page.keyboard.press('ArrowDown')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['version'])
 
-    // Ctrl+N → down. This is the critical assertion: globally Ctrl+N is New File;
-    // it must NOT create an untitled editor here, only move the outline selection.
-    await page.keyboard.press('Control+n')
-    await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
-
-    // Ctrl+P → up, back to version (globally quick open — must not open it).
-    await page.keyboard.press('Control+p')
-    await expect.poll(() => page.evaluate(selectedName)).toEqual(['version'])
-    await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
-
-    // Ctrl+J / Ctrl+K are the emacs twins. Ctrl+J globally toggles the panel and
-    // Ctrl+K starts a chord; the focused tree must claim both.
+    // Ctrl+J → down. Globally Ctrl+J toggles the panel; it must NOT fire here,
+    // only move the outline selection.
     await page.keyboard.press('Control+j')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
+    await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
+
+    // Ctrl+K → up, back to version (globally the chord leader).
     await page.keyboard.press('Control+k')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['version'])
-
-    // Down to the expandable `scripts` row, then Ctrl+F to expand and descend.
-    await page.keyboard.press('Control+n')
-    await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
-    // Collapse via Ctrl+B, then re-expand + descend via Ctrl+F.
-    await page.keyboard.press('Control+b')
-    await expect(outline.getByRole('treeitem', { name: 'build' })).toHaveCount(0)
-    await page.keyboard.press('Control+f')
-    await expect(outline.getByRole('treeitem', { name: 'build' })).toBeVisible()
-    await page.keyboard.press('Control+f')
-    await expect.poll(() => page.evaluate(selectedName)).toEqual(['build'])
-    // Ctrl+B from the child steps back to the parent.
-    await page.keyboard.press('Control+b')
+    await page.keyboard.press('Control+j')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
 
-    // Ctrl+H / Ctrl+L mirror Ctrl+B / Ctrl+F: collapse, expand, descend, ascend.
+    // Collapse via Ctrl+H, then re-expand + descend via Ctrl+L.
     await page.keyboard.press('Control+h')
     await expect(outline.getByRole('treeitem', { name: 'build' })).toHaveCount(0)
     await page.keyboard.press('Control+l')
     await expect(outline.getByRole('treeitem', { name: 'build' })).toBeVisible()
     await page.keyboard.press('Control+l')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['build'])
+    // Ctrl+H from the child steps back to the parent.
     await page.keyboard.press('Control+h')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
 
-    // The filter box is editable, so the Tree layer steps aside; the Action2
-    // fallback must keep Ctrl+H/L on the outline instead of Replace / line
-    // select. `i` matches scripts and build, so the pruned tree keeps both.
+    // The filter box is editable, so the Tree layer steps aside and Ctrl+J/K/H/L
+    // keep their global meaning — there is no Action2 fallback any more. `i`
+    // matches scripts and build, so the pruned tree keeps both.
     await page.keyboard.press('i')
     // Scope to the Outline's part: the Output panel has a "Filter" placeholder too.
     const filter = page.getByTestId('part-secondarysidebar').getByPlaceholder('Filter')
     await expect(filter).toBeFocused()
     await expect(filter).toHaveValue('i')
-    await page.keyboard.press('Control+h')
-    await expect(outline.getByRole('treeitem', { name: 'build' })).toHaveCount(0)
-    await page.keyboard.press('Control+l')
-    await expect(outline.getByRole('treeitem', { name: 'build' })).toBeVisible()
-    await page.keyboard.press('Control+l')
-    await expect.poll(() => page.evaluate(selectedName)).toEqual(['build'])
-    await page.keyboard.press('Control+h')
+
+    // Ctrl+J now toggles the panel and must not move the outline selection.
+    await page.keyboard.press('Control+j')
     await expect.poll(() => page.evaluate(selectedName)).toEqual(['scripts'])
-    // Still typing into the filter, not into an editor find widget.
-    await expect(filter).toBeFocused()
+    await expect(filter).toHaveValue('i')
+
+    // Ctrl+P is a plain global command again: Quick Open opens even while the
+    // filter input has focus.
+    await page.keyboard.press('Control+p')
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('quickInputVisible'), { timeout: 5000 })
+      .toBe(true)
+    await page.keyboard.press('Escape')
+    await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
     await expect(filter).toHaveValue('i')
   })
 })

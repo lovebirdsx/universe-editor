@@ -23,7 +23,7 @@ Keyboard Shortcuts 编辑器（对标 VSCode `keybindingsEditor`）的 **model �
 
 在浮层里录制/捕获按键（Define 浮层的 getKeybinding、Record Keys）必须用 **`window` capture 的 keydown + `stopPropagation()` / `preventDefault()`**，让事件在到达全局面之前就被本浮层消费。
 
-原因：全局键盘分发器是 `workbench/useGlobalKeybindingHandler.ts` 的**单个 document capture 监听器**，命中的键在那里就被吞掉，浮层（Floating UI / React，都在更晚的阶段）根本收不到。同源的先例：workbench-ui `overlay/AnchoredSurface.tsx` 的 Escape 关闭、`useOverlayListNavigation` 的 Ctrl+P/N/H/L 别名——都靠 window capture 抢到键；反过来，React `onKeyDown` 或 document 层监听在这类场景一律失效。
+原因：全局键盘分发器是 `workbench/useGlobalKeybindingHandler.ts` 的**单个 document capture 监听器**，命中的键在那里就被吞掉，浮层（Floating UI / React，都在更晚的阶段）根本收不到。同源的先例：workbench-ui `overlay/AnchoredSurface.tsx` 的 Escape 关闭、`useOverlayListNavigation` 的 Ctrl+J/K/H/L 别名——都靠 window capture 抢到键；反过来，React `onKeyDown` 或 document 层监听在这类场景一律失效。
 
 ## 常见任务
 

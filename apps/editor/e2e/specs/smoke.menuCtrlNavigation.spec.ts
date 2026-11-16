@@ -1,13 +1,14 @@
 /*---------------------------------------------------------------------------------------------
- *  Smoke spec: Ctrl+P/N/H/L inside an open context menu.
+ *  Smoke spec: Ctrl+J/K inside an open context menu.
  *
  *  The unit tests drive the menu through happy-dom, which has no workbench
  *  keybinding handler on `document` capture — the whole point of taking these
  *  keys at the *window* capture phase is beating that handler, and only a real
- *  press proves it. So the assertions here are the leak guards: Ctrl+N must move
- *  the menu highlight without creating an untitled editor, Ctrl+P without
- *  opening quick open. The last step closes the menu and checks Ctrl+P is quick
- *  open again — the listener is torn down with the menu, not merely narrow.
+ *  press proves it. So the assertions here are the leak guards: Ctrl+J must move
+ *  the menu highlight without toggling the panel, Ctrl+K without starting a
+ *  chord. Ctrl+P/N are no longer menu aliases; the last step closes the menu and
+ *  checks Ctrl+P opens quick open even while the tree is still focused — the
+ *  listener is torn down with the menu, and P never belonged to it.
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'node:path'
@@ -21,7 +22,7 @@ import { mkTempDir } from '@universe-editor/e2e-harness'
 const RESTORE_WINDOW_MS = 1700
 
 test.describe('@p1 menu ctrl navigation', () => {
-  test('Ctrl+P/N drive an open menu without leaking to quick open or new file', async ({
+  test('Ctrl+J/K drive an open menu without leaking to panel or chord', async ({
     workbench,
     page,
   }) => {
@@ -54,23 +55,22 @@ test.describe('@p1 menu ctrl navigation', () => {
     const first = (await active.textContent()) ?? ''
     expect(first).not.toBe('')
 
-    // Ctrl+N → the menu's own down step. Globally Ctrl+N is New File: the press
-    // must not reach it, and must not open quick open either.
-    await page.keyboard.press('Control+n')
+    // Ctrl+J → the menu's own down step. Globally Ctrl+J toggles the panel: the
+    // press must not reach it, and must not open quick open either.
+    await page.keyboard.press('Control+j')
     await expect(menus).toHaveCount(1)
     await expect(active).not.toHaveText(first)
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(editorBefore)
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
 
-    // Ctrl+P → back up to where we started (globally quick open).
-    await page.keyboard.press('Control+p')
+    // Ctrl+K → back up to where we started (globally the chord leader, so the
+    // menu must claim it before chord-first resolution runs).
+    await page.keyboard.press('Control+k')
     await expect(menus).toHaveCount(1)
     await expect(active).toHaveText(first)
     await expect.poll(() => workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
 
-    // Ctrl+J / Ctrl+K are the emacs twins of Ctrl+N / Ctrl+P. Ctrl+J globally
-    // toggles the panel and Ctrl+K starts a chord, so the menu must own them:
-    // the highlight steps regardless, which only happens when the registry
+    // Ctrl+J steps down again. The highlight moves only when the registry
     // claimed the stroke before the dispatcher ran.
     await page.keyboard.press('Control+j')
     await expect(menus).toHaveCount(1)
@@ -103,13 +103,11 @@ test.describe('@p1 menu ctrl navigation', () => {
     await expect(cursor).toHaveCount(0)
     await expect(page.locator('[role="menuitem"][data-active="mouse"]')).toHaveCount(1)
 
-    // Closed menu = its layer is gone. The tree is still focused, so Ctrl+P now
-    // belongs to the shared list layer (it steps the tree instead of opening
-    // quick open). Move focus out of the list: the global meaning returns, which
-    // proves the aliases only shadowed it while a list surface owned the keys.
+    // Closed menu = its layer is gone. Ctrl+P was never a menu alias, so it
+    // opens quick open even with the tree still focused — proving the global
+    // meaning never depended on focus leaving the list.
     await page.keyboard.press('Escape')
     await expect(menus).toHaveCount(0)
-    await workbench.focusActiveEditorGroup()
     await page.keyboard.press('Control+p')
     await expect
       .poll(() => workbench.getContextKey<boolean>('quickInputVisible'), { timeout: 5000 })

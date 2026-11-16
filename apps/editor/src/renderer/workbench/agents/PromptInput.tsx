@@ -1221,7 +1221,7 @@ export function PromptInput({
     onPopoverOpenChange?.(popoverOpen)
   }, [onPopoverOpenChange, popoverOpen])
 
-  // Ctrl+P/N/J/K step the suggestion list. Window capture is the only way to
+  // Ctrl+J/K step the suggestion list. Window capture is the only way to
   // claim Ctrl+K (chord-first resolution would otherwise start a chord), and
   // scoping to the form keeps an unfocused session's stale popover from eating
   // keystrokes in the focused one. The Monaco textarea is editable, hence

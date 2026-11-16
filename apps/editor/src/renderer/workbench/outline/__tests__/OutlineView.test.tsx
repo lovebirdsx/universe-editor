@@ -605,9 +605,9 @@ describe('OutlineView — context menu', () => {
 
 // Keyboard navigation parity with Explorer: Enter jumps to the symbol (does NOT
 // toggle non-leaf rows); expand/collapse is driven by Left/Right arrows. The
-// emacs Ctrl+P/N/B/F aliases are real commands (see outlineActions) routed
-// through OutlineNavigatorRegistry — exercised here via the registry the way the
-// global keybinding handler drives it in the running app.
+// user-bindable `outline.navigate.*` commands (see outlineActions, no default
+// keys) are routed through OutlineNavigatorRegistry — exercised here via the
+// registry the way a user keybinding would drive them in the running app.
 describe('OutlineView — keyboard navigation', () => {
   function makeTree() {
     const child = makeSymbol('Child', { line: 2 })
@@ -670,35 +670,35 @@ describe('OutlineView — keyboard navigation', () => {
     expect(rowByLabel('Parent').getAttribute('aria-expanded')).toBe('true')
   })
 
-  it('emacs Ctrl+N/P (via the navigator) move the selection down/up', () => {
+  it('outline.navigate down/up (via the navigator) move the selection', () => {
     makeTree()
     const view = treeEl()
     act(() => view.focus())
     expect(selectedLabels()).toEqual(['Parent'])
 
     const nav = () => OutlineNavigatorRegistry.current
-    act(() => nav()!.navigate('down')) // Ctrl+N
+    act(() => nav()!.navigate('down'))
     expect(selectedLabels()).toEqual(['Child'])
     act(() => nav()!.navigate('down'))
     expect(selectedLabels()).toEqual(['Tail'])
-    act(() => nav()!.navigate('up')) // Ctrl+P
+    act(() => nav()!.navigate('up'))
     expect(selectedLabels()).toEqual(['Child'])
   })
 
-  it('emacs Ctrl+B/F (via the navigator) collapse/expand and traverse', () => {
+  it('outline.navigate left/right (via the navigator) collapse/expand and traverse', () => {
     makeTree()
     const view = treeEl()
     act(() => view.focus())
     expect(selectedLabels()).toEqual(['Parent'])
 
     const nav = () => OutlineNavigatorRegistry.current
-    act(() => nav()!.navigate('left')) // Ctrl+B → collapse Parent
+    act(() => nav()!.navigate('left')) // collapse Parent
     expect(screen.queryByText('Child')).toBeNull()
-    act(() => nav()!.navigate('right')) // Ctrl+F → expand Parent
+    act(() => nav()!.navigate('right')) // expand Parent
     expect(screen.getByText('Child')).toBeTruthy()
-    act(() => nav()!.navigate('right')) // Ctrl+F → into first child
+    act(() => nav()!.navigate('right')) // into first child
     expect(selectedLabels()).toEqual(['Child'])
-    act(() => nav()!.navigate('left')) // Ctrl+B → back to parent
+    act(() => nav()!.navigate('left')) // back to parent
     expect(selectedLabels()).toEqual(['Parent'])
   })
 })

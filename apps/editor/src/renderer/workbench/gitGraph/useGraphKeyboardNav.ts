@@ -9,8 +9,9 @@
  *  and payload caching are preserved. Only the listed navigation keys are
  *  handled (and prevented) — everything else bubbles up untouched.
  *
- *  Ctrl+P/N/J/K are the same up/down movement, claimed by the shared
- *  `ctrlNavigationRegistry` while the graph container holds focus.
+ *  Ctrl+J/K are the same down/up movement, claimed by the shared
+ *  `ctrlNavigationRegistry` while the graph container holds focus. Ctrl+P/N
+ *  stay with the global Quick Open / New File commands.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, type KeyboardEvent, type RefObject } from 'react'

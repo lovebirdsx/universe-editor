@@ -8,18 +8,19 @@
  *  have to agree, or the same stroke would step one and leave the other to the
  *  global keybinding handler.
  *
- *  `n`/`p` are the emacs pair; `j`/`k` the vim pair. Both are accepted so a list
- *  answers the same stroke whichever muscle memory the user brings. `Ctrl+K`
+ *  Only the vim pair is claimed: `j`/`k` down/up, `h`/`l` left/right. The emacs
+ *  `p`/`n` pair is deliberately absent — those strokes stay with the global
+ *  Quick Open / New File commands everywhere, including list surfaces. `Ctrl+K`
  *  cannot be a normal keybinding: the registry resolves chord prefixes before
  *  single strokes, so every `ctrl+k ...` chord would shadow it. Consumers claim
  *  these strokes on window capture instead (see `ctrlNavigationRegistry`).
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * The letters with a directional meaning; `n`/`j` = down, `p`/`k` = up,
- * `l`/`h` = right/left.
+ * The letters with a directional meaning; `j` = down, `k` = up,
+ * `h`/`l` = left/right.
  */
-export type CtrlNavigationKey = 'h' | 'j' | 'k' | 'l' | 'n' | 'p'
+export type CtrlNavigationKey = 'h' | 'j' | 'k' | 'l'
 
 /** The direction a Ctrl navigation alias stands for. */
 export type CtrlNavigationDirection = 'up' | 'down' | 'left' | 'right'
@@ -51,9 +52,7 @@ export interface CtrlNavigationKeyEvent {
 export function ctrlNavigationKey(e: CtrlNavigationKeyEvent): CtrlNavigationKey | undefined {
   if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return undefined
   const key = e.key.toLowerCase()
-  return key === 'h' || key === 'j' || key === 'k' || key === 'l' || key === 'n' || key === 'p'
-    ? key
-    : undefined
+  return key === 'h' || key === 'j' || key === 'k' || key === 'l' ? key : undefined
 }
 
 /** The direction this stroke moves a list, or `undefined` when it is not an alias. */
@@ -61,10 +60,8 @@ export function ctrlNavigationDirection(
   e: CtrlNavigationKeyEvent,
 ): CtrlNavigationDirection | undefined {
   switch (ctrlNavigationKey(e)) {
-    case 'n':
     case 'j':
       return 'down'
-    case 'p':
     case 'k':
       return 'up'
     case 'h':

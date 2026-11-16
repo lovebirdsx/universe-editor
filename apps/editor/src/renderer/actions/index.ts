@@ -1005,9 +1005,9 @@ registerAction2(ListSessionBookmarksAction)
 registerAction2(ClearSessionBookmarksAction)
 for (const action of agentContextActions) registerAction2(action)
 
-// Outline — emacs-style navigation (Ctrl+P/N/B/F). These carry an explicit
-// higher weight so they beat the global Ctrl+P / Ctrl+N / Ctrl+B bindings
-// whenever `focusedView == 'workbench.view.outline.main'`, regardless of order.
+// Outline — navigation commands with NO default keybinding. While the tree is
+// focused Ctrl+J/K/H/L are claimed by ctrlNavigationRegistry at window capture;
+// these commands stay registered so users can bind outline.navigate.* themselves.
 registerAction2(OutlineNavigateUpAction)
 registerAction2(OutlineNavigateDownAction)
 registerAction2(OutlineNavigateLeftAction)

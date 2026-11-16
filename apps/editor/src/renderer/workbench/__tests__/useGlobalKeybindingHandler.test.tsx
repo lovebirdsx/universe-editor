@@ -547,23 +547,33 @@ describe('useGlobalKeybindingHandler — QuickInput isolation', () => {
     return input
   }
 
-  it('leaves Ctrl+N for QuickInput navigation without executing the workbench command', () => {
-    const { executeCommand, instantiation } = createHarness()
-    disposables.push(
-      KeybindingsRegistry.registerKeybinding({
-        key: 'ctrl+n',
-        command: 'workbench.action.files.newUntitledFile',
-      }),
-    )
-    const input = showQuickInput(instantiation)
-    mountHost(instantiation)
+  it.each(['n', 'p'])(
+    'swallows Ctrl+%s while Quick Input is open without executing the workbench command',
+    (key) => {
+      const { executeCommand, instantiation } = createHarness()
+      disposables.push(
+        KeybindingsRegistry.registerKeybinding({
+          key: `ctrl+${key}`,
+          command: 'test.globalClaim',
+        }),
+      )
+      disposables.push(CommandsRegistry.registerCommand('test.globalClaim', () => {}))
+      const input = showQuickInput(instantiation)
+      mountHost(instantiation)
 
-    const { preventDefault, stopPropagation } = dispatch({ ctrlKey: true, key: 'n', from: input })
+      const { preventDefault, stopPropagation } = dispatch({
+        ctrlKey: true,
+        key,
+        from: input,
+      })
 
-    expect(executeCommand).not.toHaveBeenCalled()
-    expect(preventDefault).not.toHaveBeenCalled()
-    expect(stopPropagation).not.toHaveBeenCalled()
-  })
+      // Ctrl+P/N are no longer picker aliases: the modal branch resolves them
+      // against the global registry, swallows the stroke, and runs nothing.
+      expect(executeCommand).not.toHaveBeenCalled()
+      expect(preventDefault).toHaveBeenCalled()
+      expect(stopPropagation).toHaveBeenCalled()
+    },
+  )
 
   it.each(['j', 'k'])(
     'leaves Ctrl+%s for QuickInput navigation without executing the workbench command',
@@ -590,8 +600,6 @@ describe('useGlobalKeybindingHandler — QuickInput isolation', () => {
   it.each([
     ['j', 'KeyJ'],
     ['k', 'KeyK'],
-    ['n', 'KeyN'],
-    ['p', 'KeyP'],
   ])('leaves Alt+%s for the locked QuickPick list', (key, code) => {
     const { executeCommand, instantiation } = createHarness()
     disposables.push(
@@ -798,22 +806,24 @@ describe('useGlobalKeybindingHandler — popover nav routing by contextKey', () 
     )
   }
 
-  // The prompt suggestion commands register their navigation keys (Ctrl+J/N/P,
+  // The prompt suggestion commands register their navigation keys (Ctrl+J,
   // arrows, Tab, Enter, Escape) with `when: acpPromptPopupVisible`, last, so the
   // newest-wins resolver routes those keys to them while the popover is open and
-  // lets any global binding win otherwise. There is no hardcoded handler
-  // special-case (the old `isNavPopupOwnedKey` pass-through is gone).
-  it('routes Ctrl+N to the popover command only while acpPromptPopupVisible is true', () => {
+  // lets any global binding win otherwise. Ctrl+N/P are no longer suggestion
+  // aliases — they stay with the global Quick Open / New File commands. There is
+  // no hardcoded handler special-case (the old `isNavPopupOwnedKey` pass-through
+  // is gone).
+  it('routes Ctrl+J to the popover command only while acpPromptPopupVisible is true', () => {
     const { executeCommand, instantiation } = createHarness()
     const contextKeyService = instantiation.invokeFunction((a) => a.get(IContextKeyService))
     const popupVisible = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
 
     disposables.push(
-      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+n', command: 'test.global' }),
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+j', command: 'test.global' }),
     )
     disposables.push(
       KeybindingsRegistry.registerKeybinding({
-        key: 'ctrl+n',
+        key: 'ctrl+j',
         command: 'test.popoverNext',
         when: 'acpPromptPopupVisible',
       }),
@@ -827,14 +837,14 @@ describe('useGlobalKeybindingHandler — popover nav routing by contextKey', () 
     // Popover open → routes to the suggestion command, consuming the key so the
     // textarea never sees it.
     popupVisible.set(true)
-    const open = dispatch({ ctrlKey: true, key: 'n', from: ta })
+    const open = dispatch({ ctrlKey: true, key: 'j', from: ta })
     expect(executeCommand).toHaveBeenLastCalledWith('test.popoverNext')
     expect(open.preventDefault).toHaveBeenCalled()
     expect(open.stopPropagation).toHaveBeenCalled()
 
     // Popover closed → the global binding wins again.
     popupVisible.set(false)
-    dispatch({ ctrlKey: true, key: 'n', from: ta })
+    dispatch({ ctrlKey: true, key: 'j', from: ta })
     expect(executeCommand).toHaveBeenLastCalledWith('test.global')
   })
 })

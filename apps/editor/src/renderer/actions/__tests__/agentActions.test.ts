@@ -653,18 +653,14 @@ describe('Agent prompt suggestion popover actions', () => {
     expect(KeybindingsRegistry.resolveKeybinding('down', ctx)).toBe(
       SelectNextAcpPromptSuggestionAction.ID,
     )
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+n', ctx)).toBe(
-      SelectNextAcpPromptSuggestionAction.ID,
-    )
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+j', ctx)).toBe(
       SelectNextAcpPromptSuggestionAction.ID,
     )
     expect(KeybindingsRegistry.resolveKeybinding('up', ctx)).toBe(
       SelectPreviousAcpPromptSuggestionAction.ID,
     )
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+p', ctx)).toBe(
-      SelectPreviousAcpPromptSuggestionAction.ID,
-    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+n', ctx)).toBeUndefined()
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+p', ctx)).toBeUndefined()
     expect(KeybindingsRegistry.resolveKeybinding('tab', ctx)).toBe(
       AcceptAcpPromptSuggestionAction.ID,
     )

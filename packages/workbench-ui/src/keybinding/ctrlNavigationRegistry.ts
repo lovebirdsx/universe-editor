@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ctrlNavigationRegistry — one window-capture listener per document that routes the
- *  Ctrl movement aliases (Ctrl+P/N/J/K/H/L) to the innermost active list surface.
+ *  Ctrl movement aliases (Ctrl+J/K/H/L) to the innermost active list surface.
  *
  *  A listener per component does not work here. Menus paint with virtual focus
  *  (`aria-activedescendant`), so DOM focus stays on the tree or list underneath;
@@ -12,11 +12,12 @@
  *
  *  Window capture is required. The workbench keybinding dispatcher listens on
  *  document capture and resolves chord prefixes before single strokes, so
- *  Ctrl+P/N/J/K are claimed by their global commands (quick open, new file,
- *  toggle panel) and Ctrl+K starts every Ctrl+K chord. Only a window-capture
- *  listener runs early enough to turn those strokes into list movement. The
- *  price, accepted by design: while a list/menu/overlay owns the keyboard,
- *  Ctrl+K chords are unavailable.
+ *  Ctrl+J is claimed by Toggle Panel and Ctrl+K starts every Ctrl+K chord;
+ *  Ctrl+H/L otherwise fall through to Replace / line selection. Only a
+ *  window-capture listener runs early enough to turn those strokes into list
+ *  movement. Ctrl+P/N are deliberately absent: they stay with Quick Open / New
+ *  File everywhere, including list surfaces. The price, accepted by design:
+ *  while a list/menu/overlay owns the keyboard, Ctrl+K chords are unavailable.
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useEffect, useRef } from 'react'

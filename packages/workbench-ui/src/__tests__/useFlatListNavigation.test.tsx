@@ -111,21 +111,26 @@ describe('useFlatListNavigation — navigation keys', () => {
     expect(onFocusChange).not.toHaveBeenCalled()
   })
 
-  it('moves with Ctrl+P/N/J/K while the container holds focus', () => {
+  it('moves with Ctrl+J/K while the container holds focus', () => {
     render(<Harness focusedIndex={0} />)
     act(() => list().focus())
 
     fireEvent.keyDown(list(), { key: 'j', ctrlKey: true })
     expect(selected()).toEqual(['row-1'])
-    fireEvent.keyDown(list(), { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(list(), { key: 'j', ctrlKey: true })
     expect(selected()).toEqual(['row-2'])
     fireEvent.keyDown(list(), { key: 'k', ctrlKey: true })
     expect(selected()).toEqual(['row-1'])
-    fireEvent.keyDown(list(), { key: 'p', ctrlKey: true })
+    fireEvent.keyDown(list(), { key: 'k', ctrlKey: true })
     expect(selected()).toEqual(['row-0'])
 
-    // Claimed even at the boundary: the stroke must not reach quick open.
-    expect(fireEvent.keyDown(list(), { key: 'p', ctrlKey: true })).toBe(false)
+    // Claimed even at the boundary: the stroke must not reach the global command.
+    expect(fireEvent.keyDown(list(), { key: 'k', ctrlKey: true })).toBe(false)
+    expect(selected()).toEqual(['row-0'])
+
+    // Ctrl+N/P are no longer claimed and must not move the cursor.
+    expect(fireEvent.keyDown(list(), { key: 'n', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(list(), { key: 'p', ctrlKey: true })).toBe(true)
     expect(selected()).toEqual(['row-0'])
   })
 

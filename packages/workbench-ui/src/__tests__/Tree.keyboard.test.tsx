@@ -231,7 +231,7 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     model.dispose()
   })
 
-  it('moves with Ctrl+P/N/J/K while the tree holds focus', () => {
+  it('moves with Ctrl+J/K while the tree holds focus', () => {
     const model = makeModel()
     renderTree(model)
     act(() => model.setSelection(['0'], '0'))
@@ -239,17 +239,22 @@ describe('Tree — arrow navigation drives model.navigate', () => {
 
     fireEvent.keyDown(view(), { key: 'j', ctrlKey: true })
     expect(selected()).toEqual(['0/0'])
-    fireEvent.keyDown(view(), { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(view(), { key: 'j', ctrlKey: true })
     expect(selected()).toEqual(['1'])
     fireEvent.keyDown(view(), { key: 'k', ctrlKey: true })
     expect(selected()).toEqual(['0/0'])
-    fireEvent.keyDown(view(), { key: 'p', ctrlKey: true })
+    fireEvent.keyDown(view(), { key: 'k', ctrlKey: true })
     expect(selected()).toEqual(['0'])
 
     // The registry claims the stroke even when the cursor cannot move, so the
-    // document-capture dispatcher never turns it into quick open / new file.
+    // document-capture dispatcher never turns it into the global command.
     act(() => model.setSelection(['0'], '0'))
-    expect(fireEvent.keyDown(view(), { key: 'p', ctrlKey: true })).toBe(false)
+    expect(fireEvent.keyDown(view(), { key: 'k', ctrlKey: true })).toBe(false)
+    expect(selected()).toEqual(['0'])
+
+    // Ctrl+N/P are no longer claimed: Quick Open / New File see them again.
+    expect(fireEvent.keyDown(view(), { key: 'n', ctrlKey: true })).toBe(true)
+    expect(fireEvent.keyDown(view(), { key: 'p', ctrlKey: true })).toBe(true)
     expect(selected()).toEqual(['0'])
     model.dispose()
   })
@@ -276,7 +281,7 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     model.dispose()
   })
 
-  it('leaves Ctrl+P/N/J/K/H/L to a focused row input', () => {
+  it('leaves Ctrl+J/K/H/L to a focused row input', () => {
     const model = makeModel()
     render(
       <Tree<Node>
@@ -298,6 +303,10 @@ describe('Tree — arrow navigation drives model.navigate', () => {
     expect(fireEvent.keyDown(input, { key: 'h', ctrlKey: true, bubbles: true })).toBe(true)
     expect(model.isExpanded('0')).toBe(true)
     expect(fireEvent.keyDown(input, { key: 'l', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(selected()).toEqual(['0'])
+    // Ctrl+N/P are not tree aliases either; they stay with the global commands.
+    expect(fireEvent.keyDown(input, { key: 'n', ctrlKey: true, bubbles: true })).toBe(true)
+    expect(fireEvent.keyDown(input, { key: 'p', ctrlKey: true, bubbles: true })).toBe(true)
     expect(selected()).toEqual(['0'])
     model.dispose()
   })

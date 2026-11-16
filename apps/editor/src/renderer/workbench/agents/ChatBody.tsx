@@ -696,10 +696,11 @@ function ChatScroll({
     [scrollContainerRef],
   )
 
-  // Ctrl+P/N/J/K move through the timeline like Alt+J/K. Scoped to the scroll
+  // Ctrl+J/K move through the timeline like Alt+J/K. Scoped to the scroll
   // container (`focus: 'within'`), with editable targets excluded by default so
   // the find widget keeps its own keys. The prompt input lives outside this
-  // container and handles the aliases for its suggestion popover.
+  // container and handles the aliases for its suggestion popover. Ctrl+P/N stay
+  // with the global Quick Open / New File commands.
   useCtrlNavigationLayer({
     kind: 'list',
     focus: 'within',

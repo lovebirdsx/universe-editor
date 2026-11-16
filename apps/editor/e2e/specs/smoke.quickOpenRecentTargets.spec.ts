@@ -133,8 +133,8 @@ test.describe('@p0 quick open recent targets', () => {
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(previous)
   })
 
-  // Ctrl+N / Ctrl+P 是按住修饰键时的列表导航，必须移动松手接受所消费的同一个高亮。
-  test('Ctrl+N and Ctrl+P walk the highlight before release accepts', async ({
+  // Ctrl+J / Ctrl+K 是按住修饰键时的列表导航，必须移动松手接受所消费的同一个高亮。
+  test('Ctrl+J and Ctrl+K walk the highlight before release accepts', async ({
     page,
     workbench,
   }) => {
@@ -154,13 +154,18 @@ test.describe('@p0 quick open recent targets', () => {
     await expect(selected).toContainText(previous!.split('/').pop() ?? '')
     const initial = await selected.textContent()
 
-    await page.keyboard.press('n')
+    await page.keyboard.press('j')
     await expect.poll(() => selected.textContent()).not.toBe(initial)
+    await page.keyboard.press('k')
+    await expect.poll(() => selected.textContent()).toBe(initial)
+
+    // Bare N/P are no longer picker aliases and must not move the highlight.
+    await page.keyboard.press('n')
     await page.keyboard.press('p')
     await expect.poll(() => selected.textContent()).toBe(initial)
 
-    // Ctrl+J / Ctrl+K are the same down/up steps. Ctrl+K would otherwise be the
-    // chord leader; the locked picker must claim it before the dispatcher.
+    // Ctrl+K would otherwise be the chord leader; the locked picker claims it
+    // before the dispatcher. Ctrl+J would otherwise toggle the panel.
     await page.keyboard.press('j')
     await expect.poll(() => selected.textContent()).not.toBe(initial)
     await page.keyboard.press('k')

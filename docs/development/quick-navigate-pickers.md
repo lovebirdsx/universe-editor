@@ -20,20 +20,20 @@
 
 | 入口 | 可用的上 / 下键 |
 |---|---|
-| 任意 picker（含 `Ctrl+Tab`、解锁后） | `Ctrl+P` / `Ctrl+K` 上，`Ctrl+N` / `Ctrl+J` 下（走 `ctrlNavigationDirection`） |
-| `Alt+S` 手势（`modifier: 'alt'`，按住 Alt） | `Alt+P` / `Alt+K` 上，`Alt+N` / `Alt+J` 下 |
-| 无修饰键打开的 picker（标题栏会话药丸） | 裸 `P` / `K` 上，`N` / `J` 下 |
+| 任意 picker（含 `Ctrl+Tab`、解锁后） | `Ctrl+K` 上，`Ctrl+J` 下（走 `ctrlNavigationDirection`） |
+| `Alt+S` 手势（`modifier: 'alt'`，按住 Alt） | `Alt+K` 上，`Alt+J` 下 |
+| 无修饰键打开的 picker（标题栏会话药丸） | 裸 `K` 上，`J` 下 |
 
-- Alt 路径先看 `e.key`，再按物理 `e.code`（`KeyP/KeyK/KeyN/KeyJ`）兜底：macOS 的 Option+字母会组合成 `∆`、`˚` 等字符。AltGr 在 Windows/Linux 报 `Ctrl+Alt`，被 `quickNavigateStep` 与 `isQuickNavigateModifierHeld` 双重排除。
-- 锁定态裸键移动只在 `locked` 分支生效；按 Enter 解锁后，裸 `P/N/J/K` 恢复为键入过滤，Ctrl 别名仍可移动（Alt 别名只在锁定态生效，解锁后松开 Alt 的组合交给输入框）。
-- `useGlobalKeybindingHandler.ts` 的 `isQuickInputOwnedKey` 必须同步放行这些组合（Ctrl+P/N/J/K、Alt+P/N/J/K，含 macOS 的 `code` 兜底），否则 document capture 会先执行「转到文件 / 新建文件 / 切换底栏」或进入 `Ctrl+K` 和弦。QuickInput 不接 `ctrlNavigationRegistry`——锁定、readOnly、释放即接受的语义只有面板自己知道。
+- Alt 路径先看 `e.key`，再按物理 `e.code`（`KeyK/KeyJ`）兜底：macOS 的 Option+字母会组合成 `∆`、`˚` 等字符。AltGr 在 Windows/Linux 报 `Ctrl+Alt`，被 `quickNavigateStep` 与 `isQuickNavigateModifierHeld` 双重排除。
+- 锁定态裸键移动只在 `locked` 分支生效；按 Enter 解锁后，裸 `J/K/P/N` 恢复为键入过滤，Ctrl 别名仍可移动（Alt 别名只在锁定态生效，解锁后松开 Alt 的组合交给输入框）。
+- `useGlobalKeybindingHandler.ts` 的 `isQuickInputOwnedKey` 必须同步放行这些组合（Ctrl+J/K、Alt+J/K，含 macOS 的 `code` 兜底），否则 document capture 会先执行「切换底栏」或进入 `Ctrl+K` 和弦。`Ctrl+P/N` 不放行：面板可见时它们会被 dispatcher 的模态分支吞掉且不执行，既不移动面板也不会打开 Quick Open / New File。QuickInput 不接 `ctrlNavigationRegistry`——锁定、readOnly、释放即接受的语义只有面板自己知道。
 
 ## 边界三：面板在哪个文档，键就归哪个文档
 
 辅助窗口是独立 realm，同一个面板可能渲染进任意文档：
 
 - 修饰键 keyup 必须注册在 `targetDocument` 上；主文档收不到辅助窗口的按键。
-- `Ctrl+P` / `Ctrl+N` / `Ctrl+K` / `Ctrl+J`（列表上下移动）走输入框的 React `onKeyDown`，不会跨 realm；但全局 keybinding dispatcher 会在捕获阶段先看到它们。`isQuickInputOwnedKey` 依赖 `isEditableTarget(e.target)` 放行——该判定必须按形状识别跨 realm 输入框（见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)），否则辅助窗口里 `Ctrl+N` 会执行「新建文件」、`Ctrl+P` 会重开快速打开，列表一步也不动。
+- `Ctrl+J` / `Ctrl+K`（列表上下移动）走输入框的 React `onKeyDown`，不会跨 realm；但全局 keybinding dispatcher 会在捕获阶段先看到它们。`isQuickInputOwnedKey` 依赖 `isEditableTarget(e.target)` 放行——该判定必须按形状识别跨 realm 输入框（见 [auxiliary-editor-windows.md](auxiliary-editor-windows.md)），否则辅助窗口里 `Ctrl+K` 会进入和弦、`Ctrl+J` 会执行「切换底栏」，列表一步也不动。`Ctrl+P/N` 不再需要放行：它们在模态面板里被吞掉且不执行。
 - 锁定态下这些别名只移动高亮（`preventDefault` 吃掉默认行为），松开修饰键接受的仍是移动后的行。
 
 消费者：`apps/editor/src/renderer/actions/editorActions.ts`（Ctrl+Tab）、`apps/editor/src/renderer/actions/agentSessionActions.ts`（Alt+S / Alt+Shift+S）。

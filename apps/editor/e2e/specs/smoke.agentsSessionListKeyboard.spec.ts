@@ -122,17 +122,21 @@ test.describe('@p1 agents session list keyboard navigation', () => {
     await page.keyboard.press('Home')
     expect(await page.evaluate(cursorRowIds)).toEqual(first)
 
-    // Ctrl+J / Ctrl+K (emacs) pair with Ctrl+N / Ctrl+P. Each has a global
-    // meaning while the list holds focus, so the list must claim all four.
+    // Ctrl+J / Ctrl+K are the movement aliases. Each has a global meaning while
+    // the list holds focus (toggle panel / chord leader), so the list must claim
+    // both. Ctrl+P/N are not aliases: P opens Quick Open even from the list.
     await page.keyboard.press('Control+j')
     expect(await page.evaluate(cursorRowIds)).toEqual(second)
     await page.keyboard.press('Control+k')
     expect(await page.evaluate(cursorRowIds)).toEqual(first)
-    await page.keyboard.press('Control+n')
-    expect(await page.evaluate(cursorRowIds)).toEqual(second)
-    await page.keyboard.press('Control+p')
-    expect(await page.evaluate(cursorRowIds)).toEqual(first)
     expect(await workbench.getContextKey<boolean>('quickInputVisible')).toBe(false)
+
+    await page.keyboard.press('Control+p')
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('quickInputVisible'), { timeout: 5000 })
+      .toBe(true)
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
   })
 
   test('Enter opens the session under the cursor', async ({ page, workbench }) => {

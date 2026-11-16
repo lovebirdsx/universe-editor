@@ -44,6 +44,7 @@ export function ModalShell({
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel ?? title}
+        data-renderer-dialog=""
         data-testid={testId}
       >
         <h2 className={styles['title']}>{title}</h2>

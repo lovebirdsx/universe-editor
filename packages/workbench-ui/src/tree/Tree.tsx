@@ -469,11 +469,12 @@ export function Tree<T>(props: ITreeProps<T>) {
     dispatchKeyboardContextMenu(row ?? root, row !== null)
   }, [])
 
-  // Ctrl+P/N/J/K step the tree exactly like ArrowUp/ArrowDown, and Ctrl+H/L
-  // mirror ArrowLeft/ArrowRight (collapse / go to parent, expand / enter first
-  // child). The registry claims them on window capture, before the global
-  // quick-open/new-file/replace/select-line bindings. `within` (not the list
-  // default `self`) matches the arrow keys: row controls such as Search's
+  // Ctrl+J/K step the tree exactly like ArrowDown/ArrowUp, and Ctrl+H/L mirror
+  // ArrowLeft/ArrowRight (collapse / go to parent, expand / enter first child).
+  // The registry claims them on window capture, before the global
+  // toggle-panel/chord-leader/replace/select-line bindings. Ctrl+P/N are not
+  // claimed — Quick Open / New File keep them everywhere. `within` (not the
+  // list default `self`) matches the arrow keys: row controls such as Search's
   // collapse / replace-all buttons keep DOM focus on the button, and the
   // keydown still reaches the container. Editable targets are rejected
   // separately, so a row's inline editor keeps its keys.

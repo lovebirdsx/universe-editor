@@ -269,33 +269,35 @@ describe('useOverlayListNavigation', () => {
 
   // The Ctrl movement aliases are taken on WINDOW capture, ahead of the workbench
   // keybinding dispatcher — the phase AnchoredSurface uses for Escape, and for
-  // the same reason: these strokes have real global bindings (quick open, new
-  // file, replace) that would otherwise swallow them before React saw them.
-  // happy-dom has no dispatcher, so what these cases pin down is the hook's own
-  // contract: the mapping, the swallow-when-declined rule, and ownership.
+  // the same reason: these strokes have real global bindings (toggle panel,
+  // chord leader, replace) that would otherwise swallow them before React saw
+  // them. Ctrl+P/N are deliberately left to the global Quick Open / New File
+  // commands. happy-dom has no dispatcher, so what these cases pin down is the
+  // hook's own contract: the mapping, the swallow-when-declined rule, and
+  // ownership.
   describe('Ctrl movement aliases', () => {
-    it('steps with Ctrl+N/J / Ctrl+P/K exactly like the arrows, wrapping too', () => {
+    it('steps with Ctrl+J/K exactly like the arrows, wrapping too', () => {
       render(<Harness />)
-      fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
       expect(active()).toBe(1)
       fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
       expect(active()).toBe(2)
       fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
       expect(active()).toBe(1)
-      fireEvent.keyDown(window, { key: 'p', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
       expect(active()).toBe(0)
       // Past the top it wraps, because that is what ArrowUp does on this list.
-      fireEvent.keyDown(window, { key: 'p', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
       expect(active()).toBe(LABELS.length - 1)
     })
 
     it('takes the end-of-list exits on the aliases as well', () => {
       const onExitDown = vi.fn()
       render(<Harness itemCount={2} wrap={false} onExitDown={onExitDown} />)
-      fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
       expect(active()).toBe(1)
       // Clamped at the last row — that is the exit, exactly as ArrowDown there.
-      fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
       expect(active()).toBe(1)
       expect(onExitDown).toHaveBeenCalledTimes(1)
     })
@@ -333,13 +335,13 @@ describe('useOverlayListNavigation', () => {
       document.body.append(elsewhere)
       try {
         elsewhere.focus()
-        fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+        fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
         expect(active()).toBe(0)
       } finally {
         elsewhere.remove()
       }
       popup().focus()
-      fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
       expect(active()).toBe(1)
     })
 
@@ -353,7 +355,7 @@ describe('useOverlayListNavigation', () => {
       // The body takes the focus as it mounts, exactly as it does in the panel.
       expect(document.activeElement).toBe(screen.getByTestId('inner'))
 
-      fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
       expect(screen.getByTestId('inner-1').getAttribute('data-active')).toBe('true')
       expect(screen.getByTestId('outer-0').getAttribute('data-active')).toBe('true')
 
@@ -372,14 +374,17 @@ describe('useOverlayListNavigation', () => {
       fireEvent.keyDown(window, { key: 'n', ctrlKey: true, shiftKey: true })
       fireEvent.keyDown(window, { key: 'p', ctrlKey: true, altKey: true })
       fireEvent.keyDown(window, { key: 'p', metaKey: true })
+      // Plain Ctrl+N/P now belong to Quick Open / New File, not this list.
+      fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+      fireEvent.keyDown(window, { key: 'p', ctrlKey: true })
       expect(active()).toBe(0)
     })
 
     it('ignores the aliases mid-composition', () => {
       render(<Harness />)
-      fireEvent.keyDown(window, { key: 'n', ctrlKey: true, isComposing: true })
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true, isComposing: true })
       expect(active()).toBe(0)
-      fireEvent.keyDown(window, { key: 'n', ctrlKey: true, keyCode: 229 })
+      fireEvent.keyDown(window, { key: 'j', ctrlKey: true, keyCode: 229 })
       expect(active()).toBe(0)
     })
   })
@@ -401,11 +406,11 @@ describe('useOverlayListNavigation — owner window', () => {
       )
 
     expect(activeIn()).toBe(0)
-    fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'j', ctrlKey: true })
     expect(activeIn()).toBe(1)
 
     // 主窗口的监听不能替另一个 document 的 popup 处理按键。
-    fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
     expect(activeIn()).toBe(1)
   })
 })

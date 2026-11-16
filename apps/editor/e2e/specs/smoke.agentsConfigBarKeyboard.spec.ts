@@ -25,10 +25,10 @@
  *    - with the bar squeezed narrow, Alt+<n> reaches an entry that folded into
  *      the "…" panel: the panel opens with that row expanded and the cursor
  *      inside its option list
- *    - the Ctrl movement aliases (Ctrl+N/P = down/up, Ctrl+H/L = collapse/open
+ *    - the Ctrl movement aliases (Ctrl+J/K = down/up, Ctrl+H/L = collapse/open
  *      the row, or walk the trigger row when no surface is up) work inside an
- *      open surface without reaching quick open, and are gone again once it
- *      closes
+ *      open surface without reaching the panel toggle / chord leader, and are
+ *      gone again once it closes
  *    - whenever a surface hands the cursor back, the focus context keys the chords
  *      are gated on agree with the DOM (see expectFocusKeysAgreeWithDom)
  *
@@ -286,16 +286,17 @@ test.describe('@p0 agents config bar keyboard', () => {
       'claude-opus-4-6-longterm-support',
     )
 
-    // Ctrl+P / Ctrl+N are the emacs aliases a context menu already answers, taken
-    // here on window capture so quick open / new file never see them. The cursor
-    // is inside the expanded body, so they must step its options — and the
-    // panel's own row listener must stay out of it: both are on window capture at
-    // once, so ownership (not registration order) has to decide.
-    await page.keyboard.press('Control+p')
+    // Ctrl+K / Ctrl+J are the movement aliases, taken here on window capture so
+    // the chord leader and the panel toggle never see them. The cursor is inside
+    // the expanded body, so they must step its options — and the panel's own row
+    // listener must stay out of it: both are on window capture at once, so
+    // ownership (not registration order) has to decide. Ctrl+P/N are no longer
+    // aliases; they stay with Quick Open / New File.
+    await page.keyboard.press('Control+k')
     await expect(modelRow.locator('..').locator('[role="option"][data-active="true"]')).toHaveText(
       'opus-4-6',
     )
-    await page.keyboard.press('Control+n')
+    await page.keyboard.press('Control+j')
     await expect(modelRow.locator('..').locator('[role="option"][data-active="true"]')).toHaveText(
       'claude-opus-4-6-longterm-support',
     )
@@ -337,7 +338,7 @@ test.describe('@p0 agents config bar keyboard', () => {
 
     // A folded entry commits like an inline one: the panel ends outright — no
     // row left expanded behind a caret that has already moved on — and the caret
-    // goes back to the prompt. Ctrl+P is used rather than ArrowUp because on the
+    // goes back to the prompt. Ctrl+K is used rather than ArrowUp because on the
     // body's first row an up arrow is the exit that collapses the body.
     await focusSessionEditor(page)
     await page.keyboard.press('Alt+1')
@@ -345,7 +346,7 @@ test.describe('@p0 agents config bar keyboard', () => {
     await expect(modelRow).toHaveAttribute('aria-expanded', 'true')
     const bodyCursor = modelRow.locator('..').locator('[role="option"][data-active="true"]')
     await expect(bodyCursor).toHaveText('claude-opus-4-6-longterm-support')
-    await page.keyboard.press('Control+p')
+    await page.keyboard.press('Control+k')
     await expect(bodyCursor).toHaveText('opus-4-6')
     await page.keyboard.press('Enter')
     await expect(panel).toBeHidden({ timeout: 5000 })

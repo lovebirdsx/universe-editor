@@ -1,13 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  OutlineNavigatorRegistry — the live navigation handle for the focused Outline
- *  tree, so view-level keyboard commands can drive it.
+ *  tree, so view-level commands can drive it.
  *
  *  The Outline tree's arrow/Enter keys are handled inside the generic <Tree>
- *  (the event reaches the focused container). But emacs-style Ctrl+P/N/B/F are
- *  claimed by the global keybinding handler in the document capture phase before
- *  they ever reach the tree, so they must be real commands. Those commands are
- *  gated on `focusedView == 'workbench.view.outline.main'` and routed here to the
+ *  (the event reaches the focused container), and while the tree holds DOM focus
+ *  Ctrl+J/K/H/L are claimed by `ctrlNavigationRegistry` at the window capture
+ *  phase. The `outline.navigate.*` commands therefore have no default keybinding;
+ *  they exist only so users can bind them, gated on
+ *  `focusedView == 'workbench.view.outline.main'` and routed here to the
  *  currently-mounted OutlineView. Mirrors AcpSessionOutlineRegistry.
  *--------------------------------------------------------------------------------------------*/
 

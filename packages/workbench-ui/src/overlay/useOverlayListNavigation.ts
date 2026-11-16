@@ -19,15 +19,17 @@
  *  onKeyDown never sees it. Hosts wire `onEscape` to AnchoredSurface's `onEscape`
  *  instead, where returning true peels one level and keeps the surface open.
  *
- *  The Ctrl movement aliases (Ctrl+N/P/J/K = down/up, Ctrl+H/L = left/right —
- *  the emacs/vim strokes every context menu already answers) are claimed by
+ *  The Ctrl movement aliases (Ctrl+J/K = down/up, Ctrl+H/L = left/right — the
+ *  vim strokes every context menu already answers) are claimed by
  *  `ctrlNavigationRegistry`, for the same reason menus use it: they *are*
- *  global bindings (quick open, new file, toggle panel, replace, line select),
- *  so the dispatcher would preventDefault + stopPropagation them on document
- *  capture and the React handler would never run. The registry takes them on
- *  window capture and routes each stroke to the *innermost* overlay holding
- *  focus — a nested pair (the overflow panel's rows and an expanded row's body)
- *  are both live at once, and a plain `contains` test would let both answer.
+ *  global bindings (toggle panel, chord leader, replace, line select), so the
+ *  dispatcher would preventDefault + stopPropagation them on document capture
+ *  and the React handler would never run. Ctrl+P/N are deliberately absent;
+ *  they stay with the global Quick Open / New File commands. The registry takes
+ *  the claimed strokes on window capture and routes each one to the *innermost*
+ *  overlay holding focus — a nested pair (the overflow panel's rows and an
+ *  expanded row's body) are both live at once, and a plain `contains` test
+ *  would let both answer.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -207,8 +209,8 @@ export function useOverlayListNavigation(
   }, [])
 
   // One implementation of the index arithmetic for every stroke that moves the
-  // cursor — the six navigation keys and the Ctrl+N/P aliases alike — so wrap and
-  // the end-of-list exits cannot drift between the paths that reach them. Returns
+  // cursor — arrows/Home/End and the Ctrl+J/K aliases alike — so wrap and the
+  // end-of-list exits cannot drift between the paths that reach them. Returns
   // whether the key was the list's to take.
   const applyIndexKey = useCallback((key: string): boolean => {
     const { count: total, wrap = true } = optionsRef.current

@@ -183,12 +183,13 @@ export function useFlatListNavigation(options: IUseFlatListNavigationOptions): I
     [revealRow],
   )
 
-  // Ctrl+P/N/J/K are the same movement as ArrowUp/ArrowDown, and Ctrl+H/L as
+  // Ctrl+J/K are the same movement as ArrowDown/ArrowUp, and Ctrl+H/L as
   // ArrowLeft/ArrowRight when the host supplies `onMoveHorizontal`. The registry
-  // claims them on window capture (ahead of quick open / new file / replace /
-  // select-line) and only while the container itself is the active element —
-  // the same rule as the React handler below, so a row's inline input keeps its
-  // own keystrokes.
+  // claims them on window capture (ahead of toggle panel / chord leader /
+  // replace / select-line) and only while the container itself is the active
+  // element — the same rule as the React handler below, so a row's inline input
+  // keeps its own keystrokes. Ctrl+P/N stay with the global Quick Open / New
+  // File commands.
   useCtrlNavigationLayer({
     kind: 'list',
     directions:

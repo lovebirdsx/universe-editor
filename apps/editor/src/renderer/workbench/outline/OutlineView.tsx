@@ -139,8 +139,9 @@ export function OutlineView() {
     useCallback(() => containerRef.current, []),
   )
 
-  // Expose the tree's arrow-navigation to the emacs Ctrl+P/N/B/F commands, which
-  // the global keybinding handler claims before the keys can reach the tree.
+  // Expose the tree's arrow-navigation to the user-bindable `outline.navigate.*`
+  // commands (the commands have no default keys; the tree's own arrows and the
+  // ctrlNavigationRegistry layers cover built-in keyboard navigation).
   useEffect(() => {
     const d = OutlineNavigatorRegistry.register({
       navigate: (direction) => model.navigate(direction),

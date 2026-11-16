@@ -163,7 +163,7 @@ describe('ListMenu', () => {
       expect(activeLabel(menu)).toBe('A')
     })
 
-    it('steps with Ctrl+N/J and Ctrl+P/K, like the MenuRegistry-driven menu', () => {
+    it('steps with Ctrl+J and Ctrl+K, like the MenuRegistry-driven menu', () => {
       renderMenu(
         [
           { kind: 'item', label: 'A', run: vi.fn() },
@@ -179,7 +179,7 @@ describe('ListMenu', () => {
       })
       expect(activeLabel(menu)).toBe('B')
       act(() => {
-        fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
+        fireEvent.keyDown(window, { key: 'j', ctrlKey: true })
       })
       expect(activeLabel(menu)).toBe('A')
       act(() => {
@@ -187,6 +187,13 @@ describe('ListMenu', () => {
       })
       expect(activeLabel(menu)).toBe('B')
       act(() => {
+        fireEvent.keyDown(window, { key: 'k', ctrlKey: true })
+      })
+      expect(activeLabel(menu)).toBe('A')
+
+      // Ctrl+N/P are no longer aliases — they reach the workbench untouched.
+      act(() => {
+        fireEvent.keyDown(window, { key: 'n', ctrlKey: true })
         fireEvent.keyDown(window, { key: 'p', ctrlKey: true })
       })
       expect(activeLabel(menu)).toBe('A')

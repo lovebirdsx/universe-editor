@@ -2,7 +2,7 @@
  *  useMenuNavigation — 键盘归属跟随菜单自己的 window。
  *
  *  菜单可能 portal 进辅助窗口；capture 监听必须挂在该窗口上，否则那里的方向键
- *  与 Ctrl+P/N 到不了菜单，而主窗口打开的菜单反而会响应发给辅助窗口的按键。
+ *  与 Ctrl+J/K 到不了菜单，而主窗口打开的菜单反而会响应发给辅助窗口的按键。
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -59,7 +59,12 @@ describe('useMenuNavigation — owner window', () => {
     fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'ArrowDown' })
     expect(activeIndex()).toBe(1)
 
+    // Ctrl+N/P stay global: no menu movement.
     fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'n', ctrlKey: true })
+    fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'p', ctrlKey: true })
+    expect(activeIndex()).toBe(1)
+
+    fireEvent.keyDown(win as unknown as globalThis.Window, { key: 'j', ctrlKey: true })
     expect(activeIndex()).toBe(0)
   })
 

@@ -120,10 +120,10 @@ function ExtensionsMenu({
 }: ExtensionsMenuProps) {
   const rect = anchor.getBoundingClientRect()
 
-  // Ctrl+P/N/J/K drive the same roving focus as the arrows. A registry layer
+  // Ctrl+J/K drive the same roving focus as the arrows. A registry layer
   // (rather than the surface's onKeyDown) is required because the global
-  // dispatcher would otherwise turn Ctrl+K into the chord leader and Ctrl+P/N
-  // into quick open / new file.
+  // dispatcher would otherwise turn Ctrl+K into the chord leader and Ctrl+J
+  // into the panel toggle. Ctrl+P/N are not aliases — they stay global.
   useCtrlNavigationLayer({
     kind: 'menu',
     directions: ['up', 'down'],

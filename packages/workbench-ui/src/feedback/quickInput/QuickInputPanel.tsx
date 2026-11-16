@@ -466,7 +466,7 @@ function isQuickNavigateModifierHeld(
   return modifier === 'alt' ? e.altKey && !e.ctrlKey : e.ctrlKey && !e.altKey
 }
 
-/** The letter rows a locked quick-navigate picker walks with P/N/J/K. */
+/** The letter rows a locked quick-navigate picker walks with J/K. */
 type QuickNavigateStep = 'up' | 'down'
 
 /**
@@ -483,14 +483,12 @@ function quickNavigateStep(
   if (e.ctrlKey || e.metaKey || e.shiftKey) return undefined
   if (requireAlt !== e.altKey) return undefined
   const key = e.key.toLowerCase()
-  if (key === 'n' || key === 'j') return 'down'
-  if (key === 'p' || key === 'k') return 'up'
+  if (key === 'j') return 'down'
+  if (key === 'k') return 'up'
   if (!e.altKey) return undefined
   switch (e.code) {
-    case 'KeyN':
     case 'KeyJ':
       return 'down'
-    case 'KeyP':
     case 'KeyK':
       return 'up'
     default:
@@ -978,11 +976,13 @@ export function QuickPickPanel({
         setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, e.shiftKey ? -1 : 1))
         return
       }
-      // Move the locked list with the same aliases as any picker: Ctrl+P/N/J/K.
-      // The Alt+S gesture keeps Alt held, so it also accepts Alt+P/N/J/K; a
+      // Move the locked list with the same aliases as any picker: Ctrl+J/K.
+      // The Alt+S gesture keeps Alt held, so it also accepts Alt+J/K; a
       // picker opened without a modifier (the title-bar capsule) accepts bare
-      // P/N/J/K. Enter has already handed the field over before a bare letter
-      // could reach this branch, so filtering is never stolen.
+      // J/K. Enter has already handed the field over before a bare letter
+      // could reach this branch, so filtering is never stolen. Ctrl+P/N are not
+      // aliases — the dispatcher's modal branch swallows them while the picker
+      // is open, so they neither move nor reach Quick Open / New File.
       const ctrlStep = ctrlNavigationDirection(e)
       const heldStep =
         quickNavigate !== undefined && isQuickNavigateModifierHeld(e, quickNavigate.modifier)
@@ -1000,7 +1000,7 @@ export function QuickPickPanel({
       }
       // Swallow printable characters (Space included): the field is readOnly, so they
       // would go nowhere anyway, and they must not double as the way out of the locked
-      // state. Navigation keys, Delete, Ctrl+N/P/J/K and Ctrl+X fall through below.
+      // state. Navigation keys, Delete, Ctrl+J/K and Ctrl+X fall through below.
       if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
         e.preventDefault()
         return
@@ -1433,9 +1433,11 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
       state.onInput?.(value)
       onClose()
     } else {
-      // The picker's list answers Ctrl+N/P/J/K. A plain text prompt has no
-      // list to move, so it holds those rather than letting quick open /
-      // new file / toggle panel (or the Ctrl+K chord) fire behind the dialog.
+      // The picker's list answers Ctrl+J/K. A plain text prompt has no list to
+      // move, so it holds those rather than letting toggle panel (or the Ctrl+K
+      // chord) fire behind the dialog. Ctrl+P/N are ordinary global commands;
+      // the dispatcher's quickInputVisible branch swallows them while this
+      // modal is open, so they never reach Quick Open / New File from here.
       if (ctrlNavigationKey(e) !== undefined) e.preventDefault()
     }
   }
