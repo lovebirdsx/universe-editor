@@ -83,13 +83,19 @@ function ConfigureLayoutDropdown() {
       }
     }
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      // An open dropdown owns Escape. The global keybinding dispatcher listens on
+      // the document in the capture phase and claims any resolvable binding
+      // (e.g. editor-focus escape), so a bubble-phase listener here never runs.
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
     }
     window.addEventListener('mousedown', handleMouseDown)
-    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown, true)
     return () => {
       window.removeEventListener('mousedown', handleMouseDown)
-      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keydown', handleKeyDown, true)
     }
   }, [open])
 

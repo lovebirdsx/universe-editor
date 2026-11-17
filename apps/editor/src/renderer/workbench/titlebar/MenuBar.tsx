@@ -71,10 +71,16 @@ export function MenuBar() {
   useEffect(() => {
     if (!openMenu) return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpenMenu(null)
+      if (e.key !== 'Escape') return
+      // An open menu owns Escape. The global keybinding dispatcher listens on the
+      // document in the capture phase and claims any resolvable binding (e.g.
+      // editor-focus escape), so a bubble-phase listener here never runs.
+      e.preventDefault()
+      e.stopPropagation()
+      setOpenMenu(null)
     }
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [openMenu])
 
   const handleToggle = useCallback((label: string) => {

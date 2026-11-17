@@ -62,6 +62,23 @@ test.describe('@p1 titlebar', () => {
     await expect(page.getByRole('menuitem', { name: 'Toggle Panel' })).toHaveCount(0)
   })
 
+  test('Escape closes the layout dropdown while a global escape binding resolves', async ({
+    page,
+    workbench,
+  }) => {
+    // With an editor open the global Escape binding (focus the editor area)
+    // resolves as soon as focus leaves the editor — e.g. after clicking the
+    // trigger. The open dropdown must still own Escape instead of staying open.
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect.poll(() => workbench.getContextKey<boolean>('hasActiveEditor')).toBe(true)
+
+    await page.getByTestId('titlebar-layout-menu').click()
+    await expect(page.getByRole('menuitem', { name: 'Toggle Panel' })).toBeVisible()
+
+    await page.keyboard.press('Escape')
+    await expect(page.getByRole('menuitem', { name: 'Toggle Panel' })).toHaveCount(0)
+  })
+
   test('agent pill is always visible', async ({ page }) => {
     // The AI entry moved to the status bar (statusbar-entry-ai); the title bar
     // keeps only the per-session agent pill.

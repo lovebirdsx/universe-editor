@@ -116,6 +116,7 @@ description: 诊断并修复 CI 偶发、本地稳过的 Playwright e2e 失败�
 - `@regression @serial` 用例在 CI **regression 趟** initial 挂/retry 过、seed 后 poll 已确认剪贴板可读仍无 chip/timeline 元素、同 spec 另一个 `@serial` 用例在另一 worker 同窗口写 OS 剪贴板=ONLY_TAG 并行趟漏排 @serial（tag 调度契约缺口），在共享 config 的 `ONLY_TAG` 分支自动并入 `grepInvert` → 案例 116
 
 - 断言全过只挂 teardown 泄漏门、栈在长活服务的自有订阅、同一 sha 早前全绿=`stop` 与 teardown 赛跑 + 订阅没进 DisposableStore（误报），把订阅 `_register` 到服务 → 案例 117
+- 标题栏下拉按 Escape 不关、received 恒 1 且 retry 同形态、失败提交与被测模块无关=全局键位在 document **capture** 阶段命中即 `stopPropagation`，弹窗只在 window 冒泡监听收不到；改成打开中的菜单在 window capture 抢占该键，并用「开编辑器后点击 + Escape」做确定性回归 → 案例 118
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

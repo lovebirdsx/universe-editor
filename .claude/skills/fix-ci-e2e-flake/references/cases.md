@@ -738,6 +738,13 @@ expect(stats.recent.some((o) => o.channel === 'sessionChangesStore' && o.name ==
 教训：a) **长活服务里「记字段 + 手动 dispose」的订阅是泄漏门误报源**——服务存活期间它就是无父 root，任何一次 teardown 早于 stop 都会报；先判断「宿主是否该死没死」（本条与案例 80 都是宿主合法长活）。b) 同一生命周期函数里有的订阅 `_register`、有的裸字段，就是遗漏指纹，先对齐既有范式。c) 「断言全过 + 栈在自家 Emitter 订阅帧 + 同 sha 早前全绿」= 时序泄漏而非回归，别去改 spec 的等待或加 `waitForTimeout`。
 锚：`apps/editor/src/renderer/services/mobileGateway/MobileBridgeService.ts`（`startStreaming` 的 `_register`）；`apps/editor/src/renderer/services/mobileGateway/__tests__/MobileBridgeService.test.ts`（tracker 断言）；`apps/editor/src/renderer/main.tsx`（`workbenchStore = markAsSingleton(...)`、`snapshotLeaks`）；`apps/editor/e2e/specs/mobile.gateway.spec.ts`。
 
+**案例 118 — 标题栏下拉的 Escape 被全局键位分发器吞掉：window 冒泡监听收不到（CI 空窗口靠 bootstrap 抢焦触发，本地开编辑器必现）**
+信号：`smoke.titlebar`「configure layout dropdown lists visibility commands and closes on Escape」仅 CI ubuntu 2/2 挂，`toHaveCount(0)` received 恒 1（24 次采样卡值）、initial+retry 同形态；**失败提交是 ACP-only（与本 spec 无关），本地同 spec 4/4 绿**。本地可确定性复现：开一个 untitled 编辑器后点 ▾ 再按 Escape → `hasActiveEditor=true / editorFocus=false`（点击把焦点移出编辑器），received 恒 1。
+根因：全局键位分发器在 `document` **捕获**阶段解析，命中即 `preventDefault + stopPropagation`（`useGlobalKeybindingHandler` 的 `runResolution`）；标题栏 LayoutControls / MenuBar 的关闭监听挂在 `window` **冒泡**阶段，事件到不了。Escape 的 `FocusActiveEditorGroupAction` 绑定 when 扩成 `(hasActiveEditor || focusedView != '') && !quickInputVisible && !editorFocus && !terminalFocus && !whenFocus` 后，空窗口里 bootstrap 焦点恢复把焦点抢到 Explorer 树（`focusedView` 非空）也会命中——CI 偶发即「点击后、Escape 前 restore 落地」的竞态；开编辑器后的点击则稳定命中。
+修（产品，两处同族）：打开的下拉在 `window` **捕获**阶段监听 Escape，命中即 `preventDefault + stopPropagation` 再关闭——window capture 早于 document capture，打开中的菜单独占该键（对标 VSCode：菜单拥有 Escape）。整类扫：titlebar 下仅此两处 keydown 关闭逻辑，一并改。回归：`smoke.titlebar` 新增「Escape closes the layout dropdown while a global escape binding resolves」（开 untitled 编辑器再点击 + Escape；修复前本地必红、修复后绿）。
+教训：a) **全局 keybinding 在 document capture 阶段 `stopPropagation` 会吞掉所有下游冒泡监听**——自持关闭键的浮层要么在 window capture 抢在它前面，要么落进 `[data-floating-ui-portal]` 的放行判据。b) 「失败提交与失败模块无关 + 本地稳过 + received 卡错值」不等于 flake：按失败形态在本地构造「上下文键命中全局绑定」的路径，能把它变成确定性复现。c) 临时复现 spec 验证完即删，把场景固化为正式回归用例，别只加 gating 掩盖。
+锚：`apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts`（document capture + `stopPropagation`）；`apps/editor/src/renderer/workbench/titlebar/LayoutControls.tsx` / `MenuBar.tsx`（window capture 关闭）；`apps/editor/src/renderer/actions/editorActions.ts`（`FocusActiveEditorGroupAction` 的 escape when）；`apps/editor/e2e/specs/smoke.titlebar.spec.ts`（回归用例）。
+
 
 ---
 - `@parcel/watcher` Windows 多 worker 竞态的长期根治（升级 / 换 watcher / 进一步隔离），替代长期 `--workers=1`（案例 12/16/26/44 的 `@serial` 都是它的 workaround）。
