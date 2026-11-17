@@ -91,12 +91,12 @@ test('isForbiddenPath: 覆盖所有禁改路径族', () => {
 })
 
 test('resolveThresholds: 默认硬上限，只允许调低', () => {
-  assert.deepEqual(resolveThresholds(), { maxFiles: 8, maxLines: 300 })
+  assert.deepEqual(resolveThresholds(), { maxFiles: 40, maxLines: 1000 })
   assert.deepEqual(resolveThresholds({ maxFiles: 4, maxLines: 100 }), {
     maxFiles: 4,
     maxLines: 100,
   })
-  assert.throws(() => resolveThresholds({ maxFiles: 9 }), /不能超过硬上限/)
+  assert.throws(() => resolveThresholds({ maxFiles: 41 }), /不能超过硬上限/)
   assert.throws(() => resolveThresholds({ maxLines: 0 }), /正整数/)
   assert.throws(() => resolveThresholds({ maxFiles: 1.5 }), /正整数/)
 })

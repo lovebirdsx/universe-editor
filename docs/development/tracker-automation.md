@@ -325,8 +325,9 @@ curl -s https://tracker.example.com/mcp \
   指令；自动化只通过受控工具写回状态，不自动 `done`。
 - **凭据不进仓库**：配置在用户目录，示例统一用 `tracker.example.com`、`testuser`、
   `X:/workspace`；PAT 不写进触发器、日志或评论。
-- **推送有闸门**：`gate.mjs` 限制 merge commit、文件数、行数、二进制、禁改路径与每日配额；
-  skill 禁止 force push、`--no-verify` 和删除 hook。
+- **推送有闸门**：`gate.mjs` 限制 merge commit、文件数（40）、行数（1000）、二进制、禁改路径与
+  每日配额；超限时 skill 保留本地提交并交人工决定，不自动压缩范围；skill 禁止 force push、
+  `--no-verify` 和删除 hook。
 - **失败要留痕**：认领后的任何失败都应 `comment_requirement` 说明，避免需求悬空。
 
 ## 排障

@@ -48,7 +48,7 @@ clone（例如 `X:/workspace/ue-bot`）里。**一次运行只处理 prompt 中�
 只有同时满足以下条件才继续自动实现：
 
 - 目标与验收标准明确，不需要产品决策；
-- 预计改动不超过 `8` 个文件、增删不超过 `300` 行；
+- 预计改动不超过 `40` 个文件、增删不超过 `1000` 行；
 - 不触碰 `scripts/tracker/gate.mjs` 的禁改路径（锁文件、`package.json`、CI、发布/服务脚本、`vendor/`、配置包、`.env*`、`CLAUDE.md`、`scripts/tracker/**`、`.universe-editor/triggers.json` 等）；
 - 能用仓库现有测试方式验证，不需要新增外部服务或凭据。
 
@@ -80,8 +80,11 @@ clone（例如 `X:/workspace/ue-bot`）里。**一次运行只处理 prompt 中�
    - 末尾空一行加 `Refs: tracker#<id>`；
    - 不加 `Co-Authored-By` 等 AI/工具署名。
 5. 提交后运行 `node scripts/tracker/gate.mjs`。
-   - 不通过时修改并 amend 尚未推送的提交，或缩小改动范围；
-   - 仍不通过 → 用 `<runId>:failure` 评论说明违规项并停止；
+   - 超限（文件数 / 行数超过阈值）时**不要推送，也不要为过 gate 压缩或丢弃改动**：提交保留
+     在本地，用 `<runId>:failure` 评论说明违规项、本地 commit sha 与改动概况，等用户决定
+     后续处理（调整、授权推送或放弃），然后停止；
+   - 其它违规（merge commit、二进制、禁改路径、每日配额）先修复并 amend 尚未推送的提交；
+     仍不通过 → 用 `<runId>:failure` 评论说明违规项并停止，提交保留在本地；
    - **禁止**用 `--no-verify` 或删除 hook 绕过 gate。
 
 ## 5. 推送

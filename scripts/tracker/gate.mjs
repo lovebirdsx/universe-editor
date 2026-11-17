@@ -27,8 +27,8 @@ import {
 import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export const HARD_MAX_FILES = 8
-export const HARD_MAX_LINES = 300
+export const HARD_MAX_FILES = 40
+export const HARD_MAX_LINES = 1000
 export const DEFAULT_BASE = 'origin/main'
 export const DEFAULT_REFS_PREFIX = 'tracker#'
 export const DAILY_COMMIT_LIMITS = Object.freeze({ 'tracker#': 5, 'ci#': 3 })
@@ -408,8 +408,8 @@ function usage() {
     [
       '用法: node scripts/tracker/gate.mjs [选项]',
       '  --base <ref>          基准（默认 origin/main）',
-      '  --max-files <n>       文件数上限（默认 8，不能调高）',
-      '  --max-lines <n>       增删行上限（默认 300，不能调高）',
+      '  --max-files <n>       文件数上限（默认 40，不能调高）',
+      '  --max-lines <n>       增删行上限（默认 1000，不能调高）',
       '  --refs-prefix <前缀>  每日配额统计的提交前缀：tracker#（默认，上限 5）或 ci#（上限 3）',
       '  --daily-limit <n>     每日提交上限（只能调低）',
       '  --install-hook        写入 .git/hooks/pre-push（把 --refs-prefix 写进 hook）',

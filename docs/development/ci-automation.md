@@ -187,7 +187,7 @@ node scripts/tracker/gate.mjs --install-hook --refs-prefix ci#
 2. **rerun 回环**：疑似 flake 且 `attempt == 1` 才 rerun；`attempt >= 2` 的 e2e 失败走
    `fix-ci-e2e-flake` 做真正的鲁棒性修复。rerun 后的新 attempt 才是下一次事件的 key。
 3. **提交配额**：gate 对 `Refs: ci#` 单独计 24 小时上限 **3** 条（tracker# 仍是 5 条，互不影响）。
-   文件数 8 / 增删行 300 / 禁改路径（`.github/**`、锁文件、`package.json`、发布与服务脚本、
+   文件数 40 / 增删行 1000 / 禁改路径（`.github/**`、锁文件、`package.json`、发布与服务脚本、
    `vendor/`、配置包、`.env*`、`CLAUDE.md` 等）与二进制限制不变，阈值只能调低。
    需要改 `.github/**`、超阈值或拆提交绕过时，skill 一律 `escalate`。
 
