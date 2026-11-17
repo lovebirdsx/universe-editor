@@ -135,7 +135,9 @@ export function ElicitationCard({ session }: { session: IAcpSession }) {
   const pending = useObservable(session.pendingElicitation)
   if (!pending) return null
   if (pending.request.mode === 'url' && pending.urlState) {
-    return <UrlElicitationCard pending={pending} urlState={pending.urlState} />
+    return (
+      <UrlElicitationCard sessionId={session.id} pending={pending} urlState={pending.urlState} />
+    )
   }
   return <FormElicitationCard session={session} pending={pending} />
 }
@@ -207,6 +209,28 @@ function ElicitationShell({
   )
 }
 
+/**
+ * Header fold for one pending request, kept in the draft cache rather than local
+ * state so an editor-group tab switch (which unmounts this card) restores the
+ * fold like it restores the draft input. A new request starts expanded.
+ */
+function useElicitationCollapse(sessionId: string, requestKey: string): [boolean, () => void] {
+  const [stateKey, setStateKey] = useState(requestKey)
+  const [collapsed, setCollapsed] = useState(
+    () => AcpElicitationDraftCache.loadCollapsed(sessionId, requestKey) ?? false,
+  )
+  if (requestKey !== stateKey) {
+    setStateKey(requestKey)
+    setCollapsed(AcpElicitationDraftCache.loadCollapsed(sessionId, requestKey) ?? false)
+  }
+  const toggle = (): void => {
+    const next = !collapsed
+    setCollapsed(next)
+    AcpElicitationDraftCache.saveCollapsed(sessionId, requestKey, next)
+  }
+  return [collapsed, toggle]
+}
+
 /** Split a URL into (prefix, host, rest) so the domain can be highlighted. */
 function splitUrlForDisplay(url: string): { prefix: string; host: string; rest: string } | null {
   try {
@@ -218,9 +242,11 @@ function splitUrlForDisplay(url: string): { prefix: string; host: string; rest: 
 }
 
 function UrlElicitationCard({
+  sessionId,
   pending,
   urlState,
 }: {
+  sessionId: string
   pending: AcpPendingElicitation
   urlState: ISettableObservable<AcpUrlElicitationState>
 }) {
@@ -232,18 +258,14 @@ function UrlElicitationCard({
   const url = typeof rawUrl === 'string' ? rawUrl : ''
   const parts = useMemo(() => splitUrlForDisplay(url), [url])
 
-  // A fresh elicitation resets the fold so it never opens collapsed.
+  // Fold keyed by request: a fresh elicitation opens expanded.
   const rawElicitationId = 'elicitationId' in request ? request.elicitationId : undefined
   const elicitationId = typeof rawElicitationId === 'string' ? rawElicitationId : undefined
-  const collapseKey = elicitationId ?? `msg:${request.message ?? ''}`
-  const [collapseStateKey, setCollapseStateKey] = useState(collapseKey)
-  const [collapsed, setCollapsed] = useState(false)
-  if (collapseKey !== collapseStateKey) {
-    setCollapseStateKey(collapseKey)
-    setCollapsed(false)
-  }
+  const collapseKey = elicitationDraftKey(elicitationId, request.message ?? '')
+  const [collapsed, toggleCollapse] = useElicitationCollapse(sessionId, collapseKey)
 
   const close = (): void => {
+    AcpElicitationDraftCache.clear(sessionId, collapseKey)
     if (state === 'consent') {
       pending.cancel()
     } else {
@@ -257,6 +279,7 @@ function UrlElicitationCard({
     pending.resolve({ action: 'accept' })
   }
   const decline = (): void => {
+    AcpElicitationDraftCache.clear(sessionId, collapseKey)
     pending.resolve({ action: 'decline' })
   }
 
@@ -264,7 +287,7 @@ function UrlElicitationCard({
     <ElicitationShell
       message={request.message}
       collapsed={collapsed}
-      onToggleCollapse={() => setCollapsed((c) => !c)}
+      onToggleCollapse={toggleCollapse}
       onClose={close}
     >
       {state === 'consent' && (
@@ -357,12 +380,11 @@ function FormElicitationCard({
   )
   const [error, setError] = useState<string | null>(null)
   // Fold is per-elicitation and defaults open so a new question is never missed.
-  const [collapsed, setCollapsed] = useState(false)
+  const [collapsed, toggleCollapse] = useElicitationCollapse(session.id, draftKey)
   if (draftKey !== stateKey) {
     setStateKey(draftKey)
     setValues(initialValues(fields, AcpElicitationDraftCache.load(session.id, draftKey)))
     setError(null)
-    setCollapsed(false)
   }
 
   useEffect(() => {
@@ -416,7 +438,7 @@ function FormElicitationCard({
     <ElicitationShell
       message={request.message}
       collapsed={collapsed}
-      onToggleCollapse={() => setCollapsed((c) => !c)}
+      onToggleCollapse={toggleCollapse}
       onClose={close}
     >
       {request.mode !== 'form' && (

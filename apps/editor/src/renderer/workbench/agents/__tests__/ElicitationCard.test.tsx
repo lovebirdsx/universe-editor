@@ -345,6 +345,21 @@ describe('ElicitationCard — collapse', () => {
     )
   })
 
+  it('keeps a collapsed card folded across a session/editor switch and back', () => {
+    const h = makePending(formRequest({ toolCallId: 'tc-1' }))
+    const { rerender } = render(renderCard(makeSession('A', h.pending)))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.queryByTestId('acp-elicitation-input-name')).toBeNull()
+
+    // Switching the group's editor unmounts ChatBody (and this card); coming
+    // back must not pop the question open again.
+    rerender(renderCard(makeSession('B', h.pending)))
+    expect(screen.getByTestId('acp-elicitation-input-name')).toBeTruthy()
+    rerender(renderCard(makeSession('A', h.pending)))
+    expect(screen.queryByTestId('acp-elicitation-input-name')).toBeNull()
+  })
+
   it('a new elicitation defaults to expanded', () => {
     const h = makePending(formRequest({ toolCallId: 'tc-1' }))
     const { rerender } = render(renderCard(makeSession('A', h.pending)))
@@ -694,6 +709,19 @@ describe('ElicitationCard — url mode', () => {
 
     fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
     expect(screen.getByTestId('acp-elicitation-url')).toBeTruthy()
+  })
+
+  it('keeps a collapsed consent card folded across a session/editor switch and back', () => {
+    const h = makeUrlPending()
+    const { rerender } = render(renderUrlCard(makeSession('A', h.pending), h.opener))
+
+    fireEvent.click(screen.getByTestId('acp-elicitation-collapse'))
+    expect(screen.queryByTestId('acp-elicitation-url')).toBeNull()
+
+    rerender(renderUrlCard(makeSession('B', h.pending), h.opener))
+    expect(screen.getByTestId('acp-elicitation-url')).toBeTruthy()
+    rerender(renderUrlCard(makeSession('A', h.pending), h.opener))
+    expect(screen.queryByTestId('acp-elicitation-url')).toBeNull()
   })
 
   it('confirm opens the link via the opener and settles accept', () => {
