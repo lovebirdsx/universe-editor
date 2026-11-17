@@ -7,7 +7,7 @@
  *  transaction. Previously this bookkeeping was duplicated in six call sites of
  *  AcpSessionService (create / resume-success / resume-rollback / close /
  *  workspace-swap / setActive), each hand-rolling its own `transaction(...)` and
- *  active-reselection — a recurring source of split-brain bugs (the
+ *  active bookkeeping — a recurring source of split-brain bugs (the
  *  workspace-swap ordering hazard is documented at its call site).
  *
  *  This class is intentionally behaviour-free: no IPC, no telemetry, no
@@ -129,8 +129,14 @@ export class AcpSessionRegistry {
 
   /**
    * Remove the session with local id `localId`. If it was the active session,
-   * reselect the first remaining session (or clear when none remain). All in
-   * one transaction.
+   * clear the active pointers — never reselect another live session. Editor-tab
+   * activation is owned by the editor group's MRU handoff; promoting a session
+   * here would make AgentsActiveSessionSyncContribution open a tab the user
+   * never asked for. Trigger sessions are the common case: they stay live in
+   * the background with no tab, so closing the one opened tab used to turn into
+   * the next background session (the "tab became another session" bug). The
+   * forward sync still retargets when the group's own MRU activation lands on
+   * another session's tab. All in one transaction.
    */
   remove(localId: string): void {
     transaction((tx) => {
@@ -140,9 +146,8 @@ export class AcpSessionRegistry {
         tx,
       )
       if (this._activeSessionId.get() === localId) {
-        const next = this._sessions.find((s) => !s.internal)
-        this._activeSessionId.set(next?.id, tx)
-        this._activeSession.set(next, tx)
+        this._activeSessionId.set(undefined, tx)
+        this._activeSession.set(undefined, tx)
       }
     })
   }

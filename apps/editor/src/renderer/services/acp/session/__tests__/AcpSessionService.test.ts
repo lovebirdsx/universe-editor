@@ -1209,14 +1209,41 @@ describe('AcpSessionService', () => {
     expect(history.get('agent-1')?.plan).toBeUndefined()
   })
 
-  it('closeSession removes the session and falls back to the next active one', async () => {
+  it('closeSession removes the session and clears the active pointer instead of activating another', async () => {
     const a = await svc.createSession()
     const b = await svc.createSession()
     await svc.closeSession(b.id)
     expect(svc.sessions.get().map((x) => x.id)).toEqual([a.id])
-    expect(svc.activeSessionId.get()).toBe(a.id)
+    expect(svc.activeSessionId.get()).toBeUndefined()
+    expect(svc.activeSession.get()).toBeUndefined()
     await svc.closeSession(a.id)
     expect(svc.activeSessionId.get()).toBeUndefined()
+  })
+
+  it('closing the active session leaves a background trigger-style session live but inactive', async () => {
+    const background = await svc.createSession(undefined, { activate: false })
+    const active = await svc.createSession()
+    await active.whenConnected()
+    expect(svc.activeSessionId.get()).toBe(active.id)
+
+    await svc.closeSession(active.id)
+
+    expect(svc.sessions.get().map((x) => x.id)).toEqual([background.id])
+    expect(svc.activeSessionId.get()).toBeUndefined()
+    expect(svc.activeSession.get()).toBeUndefined()
+    // The background session itself is untouched — only the active pointer moved.
+    expect(svc.getById(background.id)).toBe(background)
+  })
+
+  it('closing a background session leaves the active pointer untouched', async () => {
+    const background = await svc.createSession(undefined, { activate: false })
+    const active = await svc.createSession()
+    await active.whenConnected()
+
+    await svc.closeSession(background.id)
+
+    expect(svc.sessions.get().map((x) => x.id)).toEqual([active.id])
+    expect(svc.activeSessionId.get()).toBe(active.id)
   })
 
   it('cancelTurn sends a session/cancel notification to the agent', async () => {

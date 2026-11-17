@@ -101,18 +101,19 @@ describe('AcpSessionRegistry', () => {
     expect(r.activeSession.get()).toBeUndefined()
   })
 
-  it('remove() drops the session and reselects active when it was active', () => {
+  it('remove() of the active session clears the pointer instead of selecting a background one', () => {
     const r = new AcpSessionRegistry()
     const a = fakeSession('a')
     const b = fakeSession('b')
     r.add(a, { activate: true })
     r.add(b, { activate: false })
-    r.setActive('a')
     r.remove('a')
     expect(r.sessions.get()).toEqual([b])
-    // falls back to the first remaining session
-    expect(r.activeSessionId.get()).toBe('b')
-    expect(r.activeSession.get()).toBe(b)
+    // Never promote a live-but-tabless session: the editor group owns tab
+    // activation, and AgentsActiveSessionSyncContribution would otherwise open
+    // b's tab in place of the closed one (trigger sessions are exactly this).
+    expect(r.activeSessionId.get()).toBeUndefined()
+    expect(r.activeSession.get()).toBeUndefined()
   })
 
   it('remove() of a non-active session leaves active untouched', () => {
