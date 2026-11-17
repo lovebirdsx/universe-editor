@@ -942,6 +942,31 @@ describe('AcpClientService — remote binary injection', () => {
     }
   })
 
+  it('skips the preparing toast for a silent connect even while a download runs', async () => {
+    h = makeService()
+    // The background hydrate path (`silent: true`) must never surface UI, not
+    // even when a download event races the resolve.
+    h.claudeResolve.mockImplementationOnce(async () => {
+      h.claudeProgress.fire({
+        downloads: [{ version: '1.0.0', received: 20, total: 100, background: false }],
+        authority: REMOTE,
+      })
+      return { path: '/remote/bin/claude' }
+    })
+
+    const conn = await h.svc.connect('claude-code', {
+      cwd: CWD,
+      authority: REMOTE,
+      leaseFor: SESSION_ID,
+      silent: true,
+    })
+    try {
+      expect(h.progressReports).toEqual([])
+    } finally {
+      conn.dispose()
+    }
+  })
+
   it('forwards the manual version policy once the user unlocked version selection', async () => {
     h = makeService({ config: { 'acp.allowManualBinaryVersion': true } })
     h.claudeResolve.mockResolvedValueOnce({ path: '/remote/bin/claude' })
@@ -967,7 +992,6 @@ describe('AcpClientService — remote binary injection', () => {
     ): IClaudeBinaryDownloadEvent['downloads'] => [{ version, received, total: 100, background }]
     h.claudeResolve.mockImplementationOnce(async () => {
       h.claudeProgress.fire({ downloads: downloading(20) })
-      h.claudeProgress.fire({ downloads: downloading(40), authority: 'ssh-remote+other' })
       h.claudeProgress.fire({ downloads: downloading(50), authority: REMOTE })
       // A background prefetch racing the spawn must not drive the notification.
       h.claudeProgress.fire({
@@ -977,6 +1001,8 @@ describe('AcpClientService — remote binary injection', () => {
         ],
         authority: REMOTE,
       })
+      // Another host's event arriving last must not overwrite the spawn's own.
+      h.claudeProgress.fire({ downloads: downloading(40), authority: 'ssh-remote+other' })
       return { path: '/remote/bin/claude' }
     })
 
@@ -987,10 +1013,10 @@ describe('AcpClientService — remote binary injection', () => {
     })
     try {
       const pctReports = h.progressReports.filter((r) => r.increment !== undefined)
-      expect(pctReports.map((r) => r.message)).toEqual([
-        expect.stringContaining('50%'),
-        expect.stringContaining('60%'),
-      ])
+      // The notification mounts only after the first download event; the whole
+      // mock fires synchronously, so only the latest state is replayed.
+      expect(pctReports.map((r) => r.message)).toEqual([expect.stringContaining('60%')])
+      expect(h.progressReports.every((r) => !r.message.includes('99%'))).toBe(true)
     } finally {
       conn.dispose()
     }

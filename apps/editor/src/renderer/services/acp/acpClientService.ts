@@ -546,6 +546,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       authority,
       this._claudeBinary.onDidChangeDownload,
       () => this._claudeBinary.resolve(opts),
+      silent,
     )
     // The native CLI's first-run onboarding decides whether to auto-start the
     // OAuth browser flow by probing process env only — it never sees the
@@ -611,6 +612,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       authority,
       this._codexBinary.onDidChangeDownload,
       () => this._codexBinary.resolve(opts),
+      silent,
     )
 
     // acp.codex.apiKey is a local-host credential — it must never cross the
@@ -645,13 +647,16 @@ export class AcpClientService extends Disposable implements IAcpClientService {
   }
 
   /**
-   * Runs a binary resolve inside a progress notification, forwarding download
-   * progress from the service's onDidChangeDownload stream. `authority` scopes
-   * the subscription: a local resolve reacts only to authority-less events and a
-   * remote resolve only to events carrying its own authority, so a local and a
-   * remote download racing each other don't drive each other's notifications.
+   * Resolves a binary, showing a progress notification only once a download is
+   * actually in flight and forwarding the service's onDidChangeDownload stream
+   * into it — waiting for a remote connection or resolving an already-installed
+   * binary stays silent. `authority` scopes the subscription: a local resolve
+   * reacts only to authority-less events and a remote resolve only to events
+   * carrying its own authority, so a local and a remote download racing each
+   * other don't drive each other's notifications. Silent connects (background
+   * hydrate / transcript lookup) never surface UI at all.
    */
-  private _resolveBinaryWithProgress(
+  private async _resolveBinaryWithProgress(
     title: string,
     label: string,
     authority: string | undefined,
@@ -664,35 +669,73 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       readonly authority?: string
     }>,
     resolve: () => Promise<{ path: string }>,
+    silent: boolean,
   ): Promise<{ path: string }> {
+    // A silent connect is a background probe (session-list hydrate, transcript
+    // lookup) and must never surface UI: otherwise the "Preparing …" toast stays
+    // up for the whole first remote connection handshake.
+    if (silent) return resolve()
+
+    // Only a real download warrants the toast. A resolve also covers waiting for
+    // a remote connection to come up (first SSH connect / server install) and
+    // the already-installed fast path; surfacing "Preparing …" for those made
+    // the first open of a remote workspace toast something the user never asked
+    // for. Watch the download stream first and mount the notification only once
+    // one has actually started.
+    let latest: { readonly received: number; readonly total: number } | undefined
+    let markStarted = (): void => undefined
+    const started = new Promise<void>((resolveStarted) => {
+      markStarted = resolveStarted
+    })
+    const probe = onDownload((e) => {
+      if (e.authority !== authority) return
+      // An idle prefetch may be running alongside this spawn; the notification
+      // is about the spawn, so prefer the download the user is actually waiting on.
+      const download = e.downloads.find((d) => !d.background) ?? e.downloads[0]
+      if (!download) return
+      latest = download
+      markStarted()
+    })
+    const resolved = resolve()
+    await Promise.race([
+      resolved.then(
+        () => undefined,
+        () => undefined,
+      ),
+      started,
+    ])
+    probe.dispose()
+    const first = latest
+    if (first === undefined) return resolved
+
     return this._progress.withProgress(
       { location: ProgressLocation.Notification, title, source: 'acp' },
       async (progress) => {
         let lastPct = 0
+        const report = (download: { readonly received: number; readonly total: number }): void => {
+          if (download.total > 0) {
+            const pct = Math.min(100, Math.floor((download.received / download.total) * 100))
+            progress.report({
+              message: `Downloading ${label}… ${pct}%`,
+              increment: Math.max(0, pct - lastPct),
+            })
+            lastPct = pct
+          } else {
+            progress.report({
+              message: `Downloading ${label}… ${Math.floor(download.received / 1048576)} MB`,
+            })
+          }
+        }
+        report(first)
         const sub = this._entriesStore.add(
           onDownload((e) => {
             if (e.authority !== authority) return
-            // An idle prefetch may be running alongside this spawn; the
-            // notification is about the spawn, so prefer the download the user
-            // is actually waiting on.
             const download = e.downloads.find((d) => !d.background) ?? e.downloads[0]
-            if (!download) return
-            if (download.total > 0) {
-              const pct = Math.min(100, Math.floor((download.received / download.total) * 100))
-              progress.report({
-                message: `Downloading ${label}… ${pct}%`,
-                increment: Math.max(0, pct - lastPct),
-              })
-              lastPct = pct
-            } else {
-              progress.report({
-                message: `Downloading ${label}… ${Math.floor(download.received / 1048576)} MB`,
-              })
-            }
+            if (download) report(download)
           }),
         )
         try {
-          return await resolve()
+          return await resolved
         } finally {
           this._entriesStore.delete(sub)
         }
