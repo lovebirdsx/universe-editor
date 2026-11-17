@@ -26,6 +26,7 @@ import type {
   AutomatedRunStartResult,
   IAutomatedSessionService,
 } from '../automatedSessionService.js'
+import type { IUserSettingsSyncService } from '../../configuration/UserSettingsSync.js'
 import type { ITriggerSessionRevealService } from '../triggerSessionRevealService.js'
 import { TriggerRunHost } from '../TriggerRunHost.js'
 
@@ -65,6 +66,23 @@ class FakeAutomatedSessions implements IAutomatedSessionService {
 class FakeReveal implements ITriggerSessionRevealService {
   declare readonly _serviceBrand: undefined
   readonly revealOnRunStart = vi.fn((_sessionId: string, _showSession: boolean): void => undefined)
+}
+
+interface FakeUserSettings {
+  readonly service: IUserSettingsSyncService
+  resolveInitialized: () => void
+}
+
+function makeUserSettings(): FakeUserSettings {
+  let resolve!: () => void
+  const initialized = new Promise<void>((r) => {
+    resolve = r
+  })
+  const service = {
+    whenInitialized: initialized,
+    initialize: async (): Promise<void> => undefined,
+  } as unknown as IUserSettingsSyncService
+  return { service, resolveInitialized: () => resolve() }
 }
 
 class FakeTriggerMain implements ITriggerMainService {
@@ -183,6 +201,7 @@ function setup(): {
   main: FakeTriggerMain
   trust: FakeTrust
   workspace: FakeWorkspace
+  userSettings: FakeUserSettings
   reveal: FakeReveal
   logger: CapturingLoggerService
 } {
@@ -190,10 +209,19 @@ function setup(): {
   const main = new FakeTriggerMain()
   const trust = makeTrust()
   const workspace = makeWorkspace()
+  const userSettings = makeUserSettings()
   const reveal = new FakeReveal()
   const logger = new CapturingLoggerService()
-  const host = new TriggerRunHost(sessions, main, workspace.service, trust.service, reveal, logger)
-  return { host, sessions, main, trust, workspace, reveal, logger }
+  const host = new TriggerRunHost(
+    sessions,
+    main,
+    workspace.service,
+    trust.service,
+    userSettings.service,
+    reveal,
+    logger,
+  )
+  return { host, sessions, main, trust, workspace, userSettings, reveal, logger }
 }
 
 describe('TriggerRunHost', () => {
@@ -257,11 +285,28 @@ describe('TriggerRunHost', () => {
   })
 
   it('acknowledges the run host once the workspace is known', async () => {
-    const { main, workspace } = setup()
+    const { main, workspace, userSettings } = setup()
     workspace.current = URI.file('X:/workspace')
+    userSettings.resolveInitialized()
     expect(main.markHostReady).not.toHaveBeenCalled()
 
     workspace.resolveReady()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(main.markHostReady).toHaveBeenCalledWith(URI.file('X:/workspace').toString())
+  })
+
+  it('waits for user settings hydration before acknowledging the host', async () => {
+    const { main, workspace, userSettings } = setup()
+    workspace.current = URI.file('X:/workspace')
+    workspace.resolveReady()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(main.markHostReady).not.toHaveBeenCalled()
+
+    userSettings.resolveInitialized()
+    await Promise.resolve()
     await Promise.resolve()
     await Promise.resolve()
     expect(main.markHostReady).toHaveBeenCalledWith(URI.file('X:/workspace').toString())

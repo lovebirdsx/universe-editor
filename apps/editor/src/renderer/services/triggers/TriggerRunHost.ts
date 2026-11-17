@@ -17,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import { ITriggerMainService, type ITriggerRunHost } from '../../../shared/ipc/triggerService.js'
 import type { TriggerRunRequest } from '../../../shared/triggers/types.js'
+import { IUserSettingsSyncService } from '../configuration/UserSettingsSync.js'
 import { IAutomatedSessionService } from './automatedSessionService.js'
 import { ITriggerSessionRevealService } from './triggerSessionRevealService.js'
 
@@ -32,6 +33,7 @@ export class TriggerRunHost extends Disposable implements ITriggerRunHost {
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IWorkspaceTrustManagementService
     private readonly _trust: IWorkspaceTrustManagementService,
+    @IUserSettingsSyncService private readonly _userSettings: IUserSettingsSyncService,
     @ITriggerSessionRevealService
     private readonly _reveal: ITriggerSessionRevealService,
     @ILoggerService loggerService: ILoggerService,
@@ -56,7 +58,10 @@ export class TriggerRunHost extends Disposable implements ITriggerRunHost {
 
   private async _markHostReady(): Promise<void> {
     try {
-      await this._workspace.whenReady
+      // Settings hydration is a separate fire-and-forget chain: acking before it
+      // lands lets the first run resolve an empty `acp.mcpServers` layer, which
+      // silently drops its whole MCP whitelist.
+      await Promise.all([this._workspace.whenReady, this._userSettings.whenInitialized])
       const folder = this._workspace.current?.folder
       if (folder === undefined) return
       await this._triggers.markHostReady(folder.toString())
