@@ -31,7 +31,12 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { ILogFilesService } from '../../shared/ipc/services.js'
-import { ITriggerMainService } from '../../shared/ipc/triggerService.js'
+import {
+  ITriggerMainService,
+  type TriggerPollPreview,
+  type TriggerPollPreviewItem,
+  type TriggerPollPreviewUnavailableReason,
+} from '../../shared/ipc/triggerService.js'
 import { workspaceDisplayPath, parseWorkspaceUri } from '../../shared/triggers/configParse.js'
 import { parseTriggerDocument } from '../../shared/triggers/configDocument.js'
 import { summarizeTriggerSource } from '../services/triggers/triggerPresentation.js'
@@ -207,18 +212,136 @@ async function pickTriggerForAction(
   return pickTrigger(services, candidates, pickId, placeholder())
 }
 
-export async function runTriggerNow(
+const POLL_UNAVAILABLE_TEXT: Record<TriggerPollPreviewUnavailableReason, () => string> = {
+  'all-paused': () => localize('triggers.error.allPaused', 'All triggers are paused'),
+  offline: () =>
+    localize(
+      'triggers.error.remoteNotConnected',
+      'The remote host for this trigger is not connected. Reconnect and try again.',
+    ),
+  'needs-confirmation': () =>
+    localize(
+      'triggers.error.needsConfirmation',
+      'Confirm this trigger before running it (it comes from a workspace configuration file)',
+    ),
+  'window-missing': () =>
+    localize(
+      'triggers.manual.poll.windowMissing',
+      'No window holds this remote workspace, so the poll command was not run.',
+    ),
+  'workspace-not-trusted': () =>
+    localize('triggers.error.workspaceUntrusted', 'The workspace is not trusted.'),
+  'poll-in-progress': () =>
+    localize(
+      'triggers.manual.poll.inProgress',
+      'This trigger is already polling. Try again in a moment.',
+    ),
+  'poll-failed': () =>
+    localize('triggers.manual.poll.unavailable', 'Could not read events for this trigger.'),
+  'poll-skipped': () =>
+    localize(
+      'triggers.manual.poll.skipped',
+      'The poll command could not run (the remote host is unavailable or did not answer).',
+    ),
+}
+
+function pollUnavailableMessage(
+  reason: TriggerPollPreviewUnavailableReason,
+  detail: string | undefined,
+): string {
+  if (reason === 'poll-failed') {
+    return localize('triggers.manual.poll.failed', 'The poll command failed: {error}', {
+      error: detail ?? localize('triggers.manual.poll.failedUnknown', 'unknown error'),
+    })
+  }
+  return POLL_UNAVAILABLE_TEXT[reason]()
+}
+
+function buildPollPickItems(items: readonly TriggerPollPreviewItem[]) {
+  return items.map((item) => ({
+    id: item.key,
+    label: item.processed
+      ? `${item.value}${localize('triggers.manual.poll.processed', ' (already processed)')}`
+      : item.value,
+    ...(item.title === undefined ? {} : { description: item.title }),
+  }))
+}
+
+async function pickPollEvent(
   services: TriggerActionServices,
-  summary: TriggerSummary,
-): Promise<void> {
-  services.logger.info(`requesting manual run of trigger ${summary.id} (${summary.workspace})`)
-  await services.triggers.runNow(summary.key)
+  items: readonly TriggerPollPreviewItem[],
+): Promise<TriggerPollPreviewItem | undefined> {
+  const selected = await services.quickInput.pick(buildPollPickItems(items), {
+    id: 'workbench.triggers.pollEvent',
+    placeholder: localize('triggers.manual.poll.pick', 'Select an event to run this trigger with'),
+    matchOnDescription: true,
+  })
+  if (selected === undefined) return undefined
+  return items.find((item) => item.key === selected.id)
+}
+
+function notifyRunQueued(services: TriggerActionServices, summary: TriggerSummary): void {
   services.notifications.notify({
     severity: Severity.Info,
     message: localize('triggers.runRequested', 'Trigger "{name}" was queued to run.', {
       name: summary.name,
     }),
   })
+}
+
+export async function runTriggerNow(
+  services: TriggerActionServices,
+  summary: TriggerSummary,
+): Promise<void> {
+  services.logger.info(`requesting manual run of trigger ${summary.id} (${summary.workspace})`)
+  if (summary.sourceType !== 'poll') {
+    await services.triggers.runNow(summary.key)
+    notifyRunQueued(services, summary)
+    return
+  }
+
+  const reading = services.notifications.notify({
+    severity: Severity.Info,
+    message: localize('triggers.manual.poll.reading', 'Reading poll events…'),
+    sticky: true,
+  })
+  let preview: TriggerPollPreview
+  try {
+    preview = await services.triggers.previewPollEvents(summary.key)
+  } finally {
+    services.notifications.dismiss(reading.id)
+  }
+
+  if (preview.kind === 'unsupported') {
+    services.logger.warn(
+      `trigger ${summary.id}: poll preview is unsupported; running without an event payload`,
+    )
+    await services.triggers.runNow(summary.key)
+    notifyRunQueued(services, summary)
+    return
+  }
+  if (preview.kind === 'unavailable') {
+    services.notifications.notify({
+      severity: Severity.Warning,
+      message: pollUnavailableMessage(preview.reason, preview.detail),
+    })
+    return
+  }
+  if (preview.items.length === 0) {
+    services.notifications.notify({
+      severity: Severity.Info,
+      message: localize('triggers.manual.poll.empty', 'The poll command returned no events.'),
+    })
+    return
+  }
+
+  const picked = await pickPollEvent(services, preview.items)
+  if (picked === undefined) return
+  await services.triggers.runNow(summary.key, {
+    payload: picked.payload,
+    sourceKey: picked.key,
+  })
+  notifyRunQueued(services, summary)
 }
 
 export async function setTriggerPaused(

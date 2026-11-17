@@ -8,7 +8,7 @@
  *  it before running "Open Configuration", which registers the workspace.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Page } from '@playwright/test'
@@ -20,6 +20,7 @@ const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', '
 
 const MANUAL_ID = 'e2e-manual'
 const ELEVATED_ID = 'e2e-elevated'
+const POLL_ID = 'e2e-poll'
 const INVALID_ID = 'Bad Id'
 
 test.use({
@@ -89,6 +90,37 @@ function manualTrigger(id: string = MANUAL_ID): Record<string, unknown> {
     source: { type: 'manual' },
     // An unknown agent has no conservative default, so the mode must be explicit.
     session: { agent: 'echo', mode: 'plan', prompt: 'Handle this E2E trigger event' },
+    concurrency: 1,
+    overflow: 'queue',
+  }
+}
+
+function pollScript(): string {
+  return [
+    'process.stdout.write(JSON.stringify([',
+    "  { id: 'item-1', title: 'Fix flaky test', runId: '123' },",
+    "  { id: 'item-2', title: 'Other item' },",
+    ']))',
+    '',
+  ].join('\n')
+}
+
+function nodeCommand(script: string): string {
+  return `"${process.execPath}" ${script}`
+}
+
+function pollTrigger(): Record<string, unknown> {
+  return {
+    id: POLL_ID,
+    name: 'E2E Poll Trigger',
+    enabled: false,
+    source: {
+      type: 'poll',
+      intervalSec: 30,
+      keyField: 'id',
+      fetch: { type: 'command', command: nodeCommand('poll.js'), timeoutSec: 20 },
+    },
+    session: { agent: 'echo', mode: 'plan', prompt: 'Handle poll {{event.title}}' },
     concurrency: 1,
     overflow: 'queue',
   }
@@ -234,6 +266,83 @@ test.describe('agent triggers', () => {
     expect(await page.evaluate(() => window.__E2E__!.getActiveEditorTypeId())).toBe(
       'trigger.report',
     )
+  })
+
+  test('a poll trigger previews fetched items and runs the selected one with event data @p0', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    if (launchWorkspace === undefined) throw new Error('workspaceSeeder must pin a workspace')
+    await workbench.waitForRestored()
+    await workbench.runCommand('workbench.trust.grant')
+    await installEchoAgent(page)
+    writeFileSync(join(launchWorkspace.dir, 'poll.js'), pollScript())
+    await writeTriggersConfig(page, launchWorkspace.dir, [pollTrigger()])
+    await waitForTriggerStatus(page, POLL_ID, 'paused')
+
+    const key = await triggerKey(page, POLL_ID)
+    await page.evaluate((triggerKey) => window.__E2E__!.confirmTriggerActivation(triggerKey), key)
+    await waitForActivationConfirmed(page, POLL_ID)
+    await page.evaluate((triggerKey) => window.__E2E__!.setTriggerPaused(triggerKey, false), key)
+    await waitForTriggerStatus(page, POLL_ID, 'disabled')
+
+    // The command waits for the QuickPick, so never await it here.
+    await page.evaluate((triggerKey) => {
+      void window.__E2E__!.runCommand('workbench.action.triggers.runNow', triggerKey)
+    }, key)
+    await workbench.quickInput.waitForVisible()
+    const item = workbench.quickInput.dialog.getByRole('option', { name: /item-1/ })
+    await expect(item).toContainText('Fix flaky test')
+    await item.click()
+    await workbench.quickInput.waitForHidden()
+
+    await expect
+      .poll(
+        async () =>
+          (await activeAutomationRow(page, POLL_ID))?.firstPrompt?.includes('<event-data'),
+        { timeout: 30_000 },
+      )
+      .toBe(true)
+    const row = await activeAutomationRow(page, POLL_ID)
+    expect(row).toBeDefined()
+    expect(row!.automation.eventKey).toMatch(/^manual:/)
+    const prompt = row!.firstPrompt!
+    expect(prompt).toContain('Handle poll Fix flaky test')
+    expect(prompt).toContain('"runId":"123"')
+    expect(prompt).not.toContain('本次无外部事件数据')
+
+    // The selected poll key is persisted as consumed; the other item is not.
+    await listTriggers(page)
+    const runsDir = await page.evaluate(() => window.__E2E__!.getTriggersRunsDir())
+    const stateFile = join(dirname(runsDir), 'state.json')
+    interface RawState {
+      readonly triggers?: Record<
+        string,
+        {
+          readonly processed?: Record<string, unknown>
+          readonly baselineDone?: boolean
+        }
+      >
+    }
+    const readState = (): RawState => JSON.parse(readFileSync(stateFile, 'utf8')) as RawState
+    await expect
+      .poll(() => Object.hasOwn(readState().triggers?.[key]?.processed ?? {}, 'poll:item-1'))
+      .toBe(true)
+    const state = readState()
+    expect(Object.hasOwn(state.triggers?.[key]?.processed ?? {}, 'poll:item-2')).toBe(false)
+    expect(state.triggers?.[key]?.baselineDone).not.toBe(true)
+
+    // Previewing again marks the consumed item and remains selectable.
+    await page.evaluate((triggerKey) => {
+      void window.__E2E__!.runCommand('workbench.action.triggers.runNow', triggerKey)
+    }, key)
+    await workbench.quickInput.waitForVisible()
+    await expect(workbench.quickInput.dialog.getByRole('option', { name: /item-1/ })).toContainText(
+      /already processed/i,
+    )
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
   })
 
   test('an elevated-mode trigger needs the single activation confirmation before it runs @p0', async ({

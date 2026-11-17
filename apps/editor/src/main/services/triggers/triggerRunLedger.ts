@@ -116,7 +116,12 @@ export class TriggerRunLedger {
   async acceptEvent(
     trigger: RoutedTrigger,
     event: TriggerEvent,
-    options: { ignoreBackoff?: boolean; manual?: boolean } = {},
+    options: {
+      ignoreBackoff?: boolean
+      manual?: boolean
+      /** Poll keys already represented by this manual event; mark them processed too. */
+      consumeKeys?: readonly string[]
+    } = {},
   ): Promise<boolean> {
     if (this._disposed) return false
     const host = this._host
@@ -146,6 +151,12 @@ export class TriggerRunLedger {
       return false
     }
 
+    // Only keys this call actually reserves may be rolled back below; a key a
+    // concurrent poll already marked must survive a staging failure.
+    const consumeKeys = [
+      ...new Set((options.consumeKeys ?? []).filter((key) => !isProcessed(state.processed, key))),
+    ]
+
     const pending: PendingRun = {
       runId: host.uuid(),
       triggerKey: trigger.key,
@@ -157,6 +168,7 @@ export class TriggerRunLedger {
     // Reserve the key synchronously, before the await below: two concurrent
     // reports must not both pass the dedupe check.
     host.markProcessed(trigger.key, event.key, 'queued')
+    for (const key of consumeKeys) host.markProcessed(trigger.key, key, 'queued')
     try {
       await host.writePendingPayload(pending.runId, event)
     } catch (err) {
@@ -164,6 +176,7 @@ export class TriggerRunLedger {
         `trigger ${trigger.id}: cannot stage event ${event.key}: ${describeError(err)}`,
       )
       host.forgetKey(trigger.key, event.key)
+      for (const key of consumeKeys) host.forgetKey(trigger.key, key)
       host.recordFailure(
         trigger,
         localize('triggers.error.pendingWriteFailed', 'Could not stage the trigger event on disk'),

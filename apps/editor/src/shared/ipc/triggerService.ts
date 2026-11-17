@@ -12,6 +12,7 @@
 
 import { createDecorator, type Event } from '@universe-editor/platform'
 import type {
+  TriggerPayloadValue,
   TriggerRunEnd,
   TriggerRunFilter,
   TriggerRunHistoryEntry,
@@ -42,12 +43,59 @@ export interface ITriggerQueryService {
   readonly onDidChangeTriggers: Event<readonly TriggerSummary[]>
 }
 
+/** Renderer-supplied event for a manual run; main re-validates every field. */
+export interface TriggerManualEvent {
+  readonly payload: Readonly<Record<string, TriggerPayloadValue>>
+  /** Poll item dedupe key (`poll:<id>`); consumed only for poll sources. */
+  readonly sourceKey?: string
+}
+
+export type TriggerPollPreviewUnavailableReason =
+  | 'all-paused'
+  | 'offline'
+  | 'needs-confirmation'
+  | 'window-missing'
+  | 'workspace-not-trusted'
+  | 'poll-in-progress'
+  | 'poll-failed'
+  | 'poll-skipped'
+
+export interface TriggerPollPreviewItem {
+  /** `poll:<id>`; also the QuickPick id and the {@link TriggerManualEvent.sourceKey}. */
+  readonly key: string
+  /** `payload[keyField]` as text, falling back to the raw item key. */
+  readonly value: string
+  /** `payload.title` when it is a string. */
+  readonly title?: string
+  readonly payload: Readonly<Record<string, TriggerPayloadValue>>
+  readonly processed: boolean
+}
+
+export type TriggerPollPreview =
+  | { readonly kind: 'ok'; readonly items: readonly TriggerPollPreviewItem[] }
+  | {
+      readonly kind: 'unavailable'
+      readonly reason: TriggerPollPreviewUnavailableReason
+      /** Diagnostic text (raw poll error / transport reason); never shown as-is. */
+      readonly detail?: string
+    }
+  | { readonly kind: 'unsupported' }
+
 /** User-initiated control-plane commands (pause / activation / manual runs). */
 export interface ITriggerControlService {
   /** Apply the `triggers.maxConcurrentRuns` setting change without restarting main. */
   setMaxConcurrentRuns(limit: number): Promise<void>
-  /** Fire a manual event now (works for any source type; `enabled` is not required). */
-  runNow(triggerKey: string): Promise<void>
+  /**
+   * Fire a manual event now (works for any source type; `enabled` is not required).
+   * For poll sources `event.sourceKey` is also marked processed so the next poll
+   * does not consume the same item again.
+   */
+  runNow(triggerKey: string, event?: TriggerManualEvent): Promise<void>
+  /**
+   * Run one read-only poll fetch so a manual run can pick an item. Does not write
+   * baseline / dedupe / failure state; the chosen item is consumed by `runNow`.
+   */
+  previewPollEvents(triggerKey: string): Promise<TriggerPollPreview>
   setPaused(triggerKey: string, paused: boolean): Promise<void>
   setAllPaused(paused: boolean): Promise<void>
   /**

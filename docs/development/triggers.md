@@ -82,7 +82,7 @@ TriggerMainService ── IPC facade / summary / audit / history / 装配
 
 | 通道 | 方向 | 契约 |
 | --- | --- | --- |
-| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`（由 query / control / run-event / workspace 四个子接口组合）：触发器与工作区列表、手动运行、暂停、激活确认（同时覆盖高权限模式）、`ensureConfigFile` / `rescanWorkspace` / `removeWorkspace`、运行目录、运行结束上报、`listRuns`（本机运行历史，按复合键与 outcome 过滤）、通用事件上报 `reportTriggerEvents(eventName, items, workspaceUri)`、`readRunReport`（PC 按 runId + 可选 authority 读 `report.md`）/ `onDidChangeTriggers` |
+| `ServiceChannels.Triggers`（`'triggers'`） | renderer → main | `ITriggerMainService`（由 query / control / run-event / workspace 四个子接口组合）：触发器与工作区列表、手动运行（`runNow(triggerKey, event?)`，poll 源可带选中条目的 payload 与 `sourceKey`）/ 手动预览 poll 事件（`previewPollEvents`，只读执行一次取数）、暂停、激活确认（同时覆盖高权限模式）、`ensureConfigFile` / `rescanWorkspace` / `removeWorkspace`、运行目录、运行结束上报、`listRuns`（本机运行历史，按复合键与 outcome 过滤）、通用事件上报 `reportTriggerEvents(eventName, items, workspaceUri)`、`readRunReport`（PC 按 runId + 可选 authority 读 `report.md`）/ `onDidChangeTriggers` |
 | `ServiceChannels.TriggerRunHost`（`'triggerRunHost'`） | main → renderer | `ITriggerRunHost`：`startRun` / `cancelRun` / `isWorkspaceTrusted` |
 | `RemoteChannels.TriggerPoll`（`'triggerPoll'`） | main → 远端 server | `IRemoteTriggerService`：`poll` / `createRunDir` / `readReport`。DTO 路径一律 URI；runDir 布局由 server 拥有，客户端只传 `clientId` / `runId` 与保留策略（`keep` / `protectedRunIds`），清理由 `createRunDir` 一并完成 |
 
@@ -99,7 +99,7 @@ TriggerMainService ── IPC facade / summary / audit / history / 装配
 | `apps/editor/src/shared/triggers/` | 纯逻辑（无 node / electron 依赖）：`types.ts`（契约与默认值）、`configParse.ts`（校验 + 示例 + `TRIGGERS_SCHEMA`，parser 与 JSON schema 同源）、`configDocument.ts`（JSONC 定位 / 字段写回 / 行号）、`cron.ts`、`scheduler.ts`、`dedupe.ts`、`runQueue.ts`、`backoff.ts`、`promptTemplate.ts`、`verdict.ts`（`result.json` 解析与安全路径校验） |
 | `packages/node-services/src/triggers/` | main 与远端 server 共用：`triggerProtocol.ts`（`triggerPoll` 契约）、`pollCommandFetcher.ts`、`runDirectories.ts`、`sessionReportReader.ts` |
 | `apps/editor/src/shared/ipc/triggerService.ts` | `ITriggerQueryService` / `ITriggerControlService` / `ITriggerRunEventService` / `ITriggerWorkspaceService` 与组合 `ITriggerMainService`、`ITriggerRunHost` 契约；Swarm 专属的 `SwarmNeedsActionReview` / `SWARM_TRIGGER_EVENT_NAME` 在 `shared/triggers/swarmTriggerEvent.ts` |
-| `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（IPC facade + 装配）、`triggerCatalog.ts`、`triggerScheduler.ts`、`pollRunner.ts`、`triggerRunLedger.ts`、`triggerWindowHub.ts`、`triggerStateRepository.ts`、`triggerExecutionBackend.ts`、`triggerEventSources.ts`、`swarmTriggerEventSource.ts`、`triggerErrors.ts`、`triggerWorkspaceRegistry.ts`（登记表）、`triggerIdentity.ts`（复合键）、`workspaceTrustReader.ts`（main 侧信任探针）、`triggersConfigFile.ts`（JSONC 读取 + 示例 + 用户设置读取）、`triggerHistoryStore.ts`（`history.jsonl` 追加 / 轮转 / 读取）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts`、`runReportReader.ts`（`SessionReportReader`：UUID / realpath / 符号链接 / 512 KB / 10s 超时安全读取，手机网关与 PC 共用） |
+| `apps/editor/src/main/services/triggers/` | `triggerMainService.ts`（IPC facade + 装配）、`triggerCatalog.ts`、`triggerScheduler.ts`、`pollRunner.ts`、`triggerRunLedger.ts`、`triggerManualPayload.ts`（手动运行 payload / sourceKey 清洗）、`triggerWindowHub.ts`、`triggerStateRepository.ts`、`triggerExecutionBackend.ts`、`triggerEventSources.ts`、`swarmTriggerEventSource.ts`、`triggerErrors.ts`、`triggerWorkspaceRegistry.ts`（登记表）、`triggerIdentity.ts`（复合键）、`workspaceTrustReader.ts`（main 侧信任探针）、`triggersConfigFile.ts`（JSONC 读取 + 示例 + 用户设置读取）、`triggerHistoryStore.ts`（`history.jsonl` 追加 / 轮转 / 读取）、`triggerStateStore.ts`、`pollCommandFetcher.ts`、`electronNotifier.ts`、`runReportReader.ts`（`SessionReportReader`：UUID / realpath / 符号链接 / 512 KB / 10s 超时安全读取，手机网关与 PC 共用） |
 | `apps/editor/src/renderer/services/triggers/` | `TriggerRunHost.ts`、`automatedSessionService.ts`、`automatedPermissionPolicy.ts`、`automatedRunWatcher.ts`（含 `result.json` 判决解析）、`triggerReportEditorInput.ts`（报告标签页的虚拟 EditorInput）、`triggerManagerEditorInput.ts`（管理器单例 tab + 待选触发器传递）、`triggerConfigFileService.ts`（`IFileService` 读 / 写 `triggers.json` + mtime 冲突）、`revealTriggerConfig.ts`（打开并定位到触发器所在行）、`triggerSessionRevealService.ts`（`showSession` 的会话切换） |
 | `apps/editor/src/renderer/workbench/triggers/` | `TriggerReportEditor.tsx`（报告标签页）、`TriggerManagerEditor.tsx`（标签页外壳）+ `TriggerListPanel.tsx` / `useTriggerListModel.ts`（左列表）、`useTriggerManagerViewState.ts`（视图状态持久化）、`TriggerOverviewPanel.tsx`、`TriggerConfigPanel.tsx`、`TriggerCreateWizard.tsx` + `triggerTemplates.ts`、`TriggerRunsPanel.tsx`、共用区块 `Trigger{Source,Session,Budget,Concurrency}Fields.tsx`、`triggerSources/`（触发源描述符）；样式按组件各自 `*.module.css`。`renderer/services/triggers/triggerPresentation.ts` 放状态徽标 / 工作区分组 / 计数（仅 renderer 使用） |
 | `apps/editor/src/renderer/actions/triggerActions.ts` + `triggerPickItems.ts` | 命令面板与 QuickPick 文案；`OpenTriggerManagerAction` 打开单例管理器 |
@@ -232,6 +232,8 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
   - 其它字段经 `toPayloadValue` 归一：字符串 / 布尔 / 有限数字原样；对象 / 数组 `JSON.stringify` 后截断 4000 字符；`null` / `undefined` 丢弃；
   - 错误文本本地化，不把 stdout 写进日志。
 
+**手动预览**：`previewPollEvents(triggerKey)` 为 poll 源执行一次与自动轮询相同的 `fetchPoll`，供 renderer 弹条目选择器。门顺序：全局暂停 → 离线 → 未激活确认 → 远程无窗口 → 工作区未信任 → `PollRunner.isPolling`；命中即返回 `unavailable(reason)`，与自动轮询同口径（尤其信任判定不通过时**完全不 spawn 命令**）。取数成功只映射 `poll:<key>` / keyField 值 / `title` / `processed`（读去重状态），**不写 baseline、不标记 `processed`、不记失败、不退避**；`poll-failed` / `poll-skipped` 仅作为返回值，不调用 `recordFailure`。`isPolling` 是尽力而为的预检查（不占共享轮询锁），检查与 fetch 启动之间仍有极小竞态；预览不调用 `finishPoll`，不改变自动轮询锚点。单触发器暂停 / 禁用 / 退避不阻止预览（与手动运行一致）。
+
 ### 失败退避门
 
 `recordFailure` 写入 `backoffUntil` 后，`isRunnable` 会把退避期内的触发器视为不可运行（`manual` 事件与用户 `runNow` 除外）：
@@ -266,6 +268,7 @@ state 的 per-trigger 记录、pending、RunQueue、运行请求、日志关联�
 
 - **先记 key 再写 pending**：`TriggerRunLedger.acceptEvent` 在 `await writeJsonAtomic` **之前**同步写 `queued`（占位），并发上报不会双双通过去重检查；写盘失败则 `forget(key)` 回滚。
 - 启动 / 排队失败、队列丢弃、窗口关闭 / reload 导致失败 → `forget(key)`，之后同一 key 可重新触发。
+- **手动运行消费 poll 条目**：poll 源的 `runNow(triggerKey, { payload, sourceKey })` 把选中条目的 `poll:<key>` 作为 `consumeKeys` 传给 ledger。ledger 在同步占位段里先用已捕获的 `state.processed` 过滤掉已处理 key，再与 `manual:` 事件 key 一起写 `queued`（并发上报仍不会双双通过）；pending 负载写盘失败时两者一同 `forget`。运行期（队列丢弃、启动前 not-runnable 等）不回滚——已消费即消费。
 - 重启后 `pending` 里 status 仍为 `queued` 的记录会重新入队；`started` 的绝不重放。
 - 事件负载不写 `state.json`，而是单独写 `pending/<runId>.json`（`TriggerEvent` 的 JSON），run 开始后删除。
 - 去重 key 每触发器上限 2000、TTL 30 天。
@@ -317,6 +320,7 @@ startRun
 - **激活闸门**：工作区来源的每条触发器必须在本机确认过一次（`state.activationConfirmed === triggerFingerprint`）。未确认时 `isRunnable` 返回 false，`runNow` 直接抛「先确认再运行」，poll 命令完全不执行（`PollRunner` 在 spawn 前就返回），QuickPick 状态显示「待确认」。确认入口是 `confirmActivation(triggerKey, fingerprint)`（`workbench.action.triggers.confirmActivation` 与列表里的「确认工作区触发器」动作）：`fingerprint` 是确认对话框展示时的定义指纹，main 在写入前与当前指纹比对，不一致则拒绝并返回「触发器定义已变化，请重新查看后再确认。」——防止对话框打开期间定义被外部修改（TOCTOU）。定义指纹一变，旧确认自动失效。该闸门同时覆盖高权限模式；`allowElevatedMode` 由它推导，不另设确认步骤。
 - **暂停只阻止自动调度**：`setPaused(triggerKey, true)` 只丢弃该触发器**自动**来源的排队项并 `forget` 其 key（不计失败），手动来源（`manual:` 前缀）的排队项保留；`setAllPaused(true)` 是紧急停止，清空全部排队项（含手动）。`state.pending` 里尚未入队的记录不会被删除，恢复 / 全局恢复 / 完成激活确认后都会再跑一次 `replayPendingRuns`，把此前保留的 pending 记录入队。
 - **暂停与手动运行**：`runNow` 不再因单触发器暂停被拒绝，`acceptEvent` / `isRunnable` 对 `manual: true` / `manual:` 前缀放行 `state.paused`；`pausedAll` 仍一律拒绝。手动运行结束后不改变 `paused`（成功上报只清 `autoPaused`）。
+- **手动事件可携带事件数据**：`runNow(triggerKey, event?)` 接受 payload 与可选 `sourceKey`；main 经 `triggerManualPayload.ts` 只保留合法字段名（`^[A-Za-z0-9_]{1,64}$`）的标量值（字符串截断 4000、最多 64 个字段），非法 `sourceKey`（须匹配 `/^poll:[^\u0000\r\n]{1,512}$/u`）只记 debug 并忽略。`sourceKey` 仅在 poll 源下进入 `consumeKeys`；事件 key 仍是 `manual:<uuid>`——`isManualEventKey` 的暂停 / 退避放行依赖该前缀，不能改成 `poll:`。
 - **窗口关闭 / reload**：`unregisterWindowHost` 与同 `windowId` 的**二次 `registerWindowHost`**（renderer reload）都会把它负责的 active run 标为失败（`The window ... closed / reloaded`），释放槽位。**登记表不受影响**：本地工作区继续调度、需要时会重新开后台窗口；远程工作区不会后台开窗，因此在窗口重新打开且连接 `connected` 之前不再调度。
 - **running 看门狗**：run 启动后按 `budget.timeoutMin + budget.approvalTimeoutMin + 10 分钟宽限` 设时；到期仍未 `reportRunEnd` → 记失败、释放槽位，并调用该窗口的 `host.cancelRun`（若 host 还在）。`reportRunEnd` 会清掉定时器。
 - **运行结束**：renderer `TriggerRunHost` 订阅 `AutomatedSessionService.onDidEndRun`，调 `reportRunEnd`。main：
@@ -352,7 +356,7 @@ startRun
 - `agentId` / `model` / `mcpServerNames`：会话启动参数；未配置的项由 renderer / 用户设置决定。
 - `showSession`：该触发器的 `showSession`，renderer 据此决定会话启动后是否切过去（仍要求窗口可见）。
 
-事件数据不再单独作为 `payload` 字段传递：`_buildRunRequest` 已把它渲染进 `prompt` / `promptForSystemContract` 的 `<event-data>` 围栏（`{{event.*}}` 占位符也在此时替换）。`TriggerRunRequest` 没有 `sourceType` / `payload`，renderer 也不再据此执行任何动作。
+事件数据不再单独作为 `payload` 字段传递：`_buildRunRequest` 已把它渲染进 `prompt` / `promptForSystemContract` 的 `<event-data>` 围栏（`{{event.*}}` 占位符也在此时替换）。手动运行同样可携带 payload（poll 源另带 `sourceKey`），清洗后进入同一个围栏。`TriggerRunRequest` 没有 `sourceType` / `payload`，renderer 也不再据此执行任何动作。
 
 ### 两种输出契约与能力表
 
@@ -542,7 +546,7 @@ Swarm 写操作由 Agent 通过 skill 自带的 CLI 完成（模板见 `docs/use
 | `RemoveTriggerWorkspaceAction` | `workbench.action.triggers.removeWorkspace` | 触发器: 移除工作区…（列表 → 确认 → 停止调度） |
 | `ViewTriggerReportAction` | `workbench.action.triggers.viewReport` | 触发器: 查看触发器运行报告 |
 
-`triggerPickItems.ts` 是纯函数，集中状态 / 来源标签、运行计数、上次 / 下次运行、错误与 ⚠ 标记；description 以所在工作区名开头（多工作区同名 id 时靠它区分），未确认的触发器额外显示「待确认」动作与 detail 提示。`RunTriggerNowAction` 支持直接传复合键（供列表 / e2e 调用）。
+`triggerPickItems.ts` 是纯函数，集中状态 / 来源标签、运行计数、上次 / 下次运行、错误与 ⚠ 标记；description 以所在工作区名开头（多工作区同名 id 时靠它区分），未确认的触发器额外显示「待确认」动作与 detail 提示。`RunTriggerNowAction` 支持直接传复合键（供列表 / e2e 调用）。对 poll 源先调 `previewPollEvents` 执行一次取数（期间显示 sticky「正在读取轮询事件…」通知），再以条目弹 QuickPick（`id = poll:<key>`、`label = keyField 值`、`description = title`，已处理条目追加后缀但**仍可选**）；选中后调 `runNow(key, { payload, sourceKey })`，取消则静默。`unavailable` 按 reason 显示提示（`poll-failed` 带 detail），空列表与 `unsupported` 分别提示 / 回退直接运行；预览永不写去重或退避。
 
 > 异步 `run` 必须在第一个 `await` 前用 `triggerActionServices(accessor)` 取完 service 快照——`ServicesAccessor` 在 await 后失效（见根 CLAUDE.md 红线）。
 
@@ -604,14 +608,16 @@ Swarm 写操作由 Agent 通过 skill 自带的 CLI 完成（模板见 `docs/use
 - 默认暂停相关用例覆盖：首次发现的键初始 `paused: true`（不设 `autoPaused`）、已有键 `paused: false` 不被改写、重启不重判、暂停时 `runNow` 成功但定时不触发、`pausedAll` 仍拒绝 `runNow`、暂停只丢弃自动排队项而保留手动排队项、暂停状态下手动 pending 仍会重放；`RunQueue.remove` 有独立单测。测试 harness 默认在确认激活后显式 resume（可用 `autoResume: false` 观察默认暂停）。
 - 重扫用例覆盖：工作区打开时无文件、之后创建 `triggers.json` 再 `rescanWorkspace` 可发现；重复重扫不产生重复登记 / 重复触发器；无文件时重扫两次仍不创建文件（`skipConfigFile` harness 选项模拟窗口先打开的场景）。
 - 远程门禁用例覆盖：offline 时 `schedule` 不推进、重连后按 `onMissed` 处理（`skip` 丢弃 / `catch-up-once` 只补最近一次）、`poll` 跳过且不记失败、`runNow` 报错；已接受但启动前断连或窗口消失的事件以 deferred 保留在 pending（释放队列槽位、不 forget key、不退避），重连 + 窗口回来时重放；队列出队时若已离线，槽位立即释放并留待重放；连接状态 / 窗口存在性变化驱动 attach / detach；远程 runDir 带 clientId 命名空间且各客户端只清理自己的子目录（`createRunDir` 的保护集按同一 authority 的 active / queued / pending 收集，不依赖工作区 entry 是否还在）；远程报告只有 `connected` 时可读，否则 `unavailable`。
+- 手动事件数据用例：`triggerManualPayload.test.ts` 覆盖字段名 / 标量 / 截断 / 字段数上限 / `__proto__` 与 `sourceKey` 正则；`triggerMainService.test.ts` 新 describe 覆盖 `previewPollEvents` 的各门（非 poll / 全局暂停 / 未确认 / 未信任 / 远程离线 / 轮询中 / 取数失败 / 空列表）且不写 baseline / processed / 失败，以及 `runNow` 带 payload 与 `sourceKey` 的渲染、只消费未处理 key、非 poll 源忽略 `sourceKey`、pending 写盘失败回滚两个 key；`triggerActions.test.ts` 覆盖 renderer 的读取通知 / 各 reason 文案 / 空列表 / 取消 / `unsupported` 回退 / 选中后传参。
 - 会话启动测试用 `inMemoryAcpPair` 或假 session（见 `services/acp/CLAUDE.md` 测试套路）。
 - Swarm CLI 模板的单测在 `scripts/swarm/__tests__/swarm-cli.test.mjs`（`pnpm test:scripts`），覆盖参数解析、p4 ticket → Basic 头、投票版本选择、approve 守卫、「ticket 不出现在任何输出」的 RED LINE，以及两条超时路径（p4 `spawnSync` ETIMEDOUT / 被信号终止、fetch `AbortSignal.timeout` 超时只报 method + path）。
 
-E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径；`apps/editor/e2e/specs/triggerManager.spec.ts`（`@p1`）覆盖管理器：命令打开的单例 tab、列表行、行内恢复 / 暂停、组折叠与状态筛选、配置表单写回（注释保留 + 保存后回到待确认）、常驻状态栏条目（待确认时 `$(zap) N` + tooltip 摘要）及点击打开、一次真实运行后的运行历史行；另有一条 `@regression` 覆盖“打开工作区时无 `triggers.json`、之后写入文件、空状态重新扫描后出现且仍待确认”。`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：manual 事件运行、真实 poll 命令（基线 + 下一间隔产生运行）、远端 runDir 创建与报告读取，以及未信任远程工作区完全不执行 poll 命令。断连 / deferred 语义由单元测试覆盖。本地场景包括：
+E2E：`apps/editor/e2e/specs/triggers.spec.ts`（`@p0` 冒烟 + 一条 `@regression`）覆盖本地手动事件路径（含 poll 源手动预览：真实取数 → QuickPick 选条目 → 运行带 `<event-data>` → 选中条目写入 `processed`）；`apps/editor/e2e/specs/triggerManager.spec.ts`（`@p1`）覆盖管理器：命令打开的单例 tab、列表行、行内恢复 / 暂停、组折叠与状态筛选、配置表单写回（注释保留 + 保存后回到待确认）、常驻状态栏条目（待确认时 `$(zap) N` + tooltip 摘要）及点击打开、一次真实运行后的运行历史行；另有一条 `@regression` 覆盖“打开工作区时无 `triggers.json`、之后写入文件、空状态重新扫描后出现且仍待确认”。`apps/editor/e2e/specs/remote.triggers.spec.ts`（`@regression`，`UNIVERSE_REMOTE_SERVER_CMD` 直连，参考 `remote.acp.spec.ts`）覆盖远程工作区的触发器主链路：manual 事件运行、真实 poll 命令（基线 + 下一间隔产生运行）、远端 runDir 创建与报告读取，以及未信任远程工作区完全不执行 poll 命令。断连 / deferred 语义由单元测试覆盖。本地场景包括：
 
 - 没有 `.universe-editor/triggers.json` 时不列出任何触发器、不创建会话；
 - 写文件后经 `openConfig` 登记工作区；或打开管理器对当前工作区重扫（文件存在才登记，不存在只跳过、不创建）；
 - 未确认时 `runNow` 拒绝且不创建会话；确认后手动触发 → 用 echo agent 建一个 **inactive** 会话（不占用编辑区、不切 active），历史行带 `automation` 溯源，`firstPrompt` 含 `## 任务` 与空 payload 的「本次无外部事件数据。」提示，且不出现 `<event-data>` 围栏；
+- poll 源「立即运行」：命令先执行一次取数并弹条目选择器；选中 item-1 后以其 payload 渲染 `<event-data>`（含 `runId`），事件 key 仍是 `manual:`；`state.json` 只标记 `poll:item-1`、不建基线，item-2 仍未处理；再次预览时 item-1 标为已处理且仍可选，Escape 取消不产生运行；
 - 激活确认覆盖高权限 mode：未确认时 `runNow` 拒绝；确认后 bypass 模式可直接运行（没有单独的 elevated 确认）；
 - 暂停的触发器仍可 `runNow`（手动覆盖暂停），运行结束后状态仍是「已暂停」；恢复后回到配置决定的状态。
 - 非法配置条目出现在列表里、带错误、`runNow` 拒绝。
@@ -654,12 +660,15 @@ pnpm e2e:smoke
 - **远端路径一律按大小写敏感比较**：远程工作区身份按远端文件系统语义。Windows 远端上同一个目录写成不同大小写会被视为**不同工作区**（各自登记、确认、暂停与调度）；这是与本地 Windows 工作区（大小写不敏感）的刻意差异。
 - **远端协议 v16**：`triggerPoll` 是新增远端通道（`REMOTE_PROTOCOL_VERSION` 15 → 16）。升级编辑器后旧 daemon 会握手失败（`protocol version 15 != 16`），重连会触发自动重部署；若未自动恢复，用 **Remote-SSH: 停止远程服务器** 后重开该工作区。
 - **登记表是本机状态**：`workspaces.json` 不入库；换机器后需要重新打开工作区、打开管理器（会重扫当前工作区）或执行 `openConfig` 才会重新登记。工作区目录被删除时调度器保留登记但跳过（日志告警），可用 `removeWorkspace` 清理。远程工作区的连接状态与运行目录也不入库，由本机与远端 server 各自维护。
+- **手动预览与自动 poll 存在非原子竞态**：预览后、用户选择前，自动轮询可能已消费同一条目；此时 `sourceKey` 已是 `processed`，手动运行不会再标记，但事件仍以 `manual:` 运行（用户显式操作优先）。预览不改变自动轮询节奏，`isPolling` 检查与 fetch 启动之间也仍有极小窗口。
+- **手动事件被运行期丢弃不回滚 `sourceKey`**：队列 overflow、启动前 not-runnable 等路径只 `forget` 事件 key，已消费的 poll 条目保持已处理（「已消费即消费」）；只有 pending 负载写盘失败会同时回滚两者。
 - **e2e 覆盖范围有限**：本地 `triggers.spec.ts` 覆盖 manual / 激活闸门（同时覆盖高权限模式）/ 非法配置 / 暂停拒绝；`triggerManager.spec.ts` 覆盖管理器单例、列表、暂停开关、配置写回、状态栏与运行历史；远程 `remote.triggers.spec.ts` 用直连 server 覆盖 manual 运行、真实 poll（含未信任工作区零执行）、runDir 与报告主链路（断连 / deferred 走单测）。schedule / event 的定时与外部依赖仍靠单测（假时钟 / 假 fetcher / 假 reporter），没有真实端到端用例。
 
 ## 19. 关键参考路径
 
 - `apps/editor/src/main/services/triggers/triggerFingerprint.ts` — main 侧 SHA-256 定义指纹（确认闸门绑定它）
 - `apps/editor/src/main/services/triggers/triggerMainService.ts` — 调度、去重、队列、窗口路由、审计、激活闸门
+- `apps/editor/src/main/services/triggers/triggerManualPayload.ts` — 手动运行 payload / `sourceKey` 清洗（字段名、标量、截断、数量上限）
 - `apps/editor/src/main/services/triggers/triggerWorkspaceRegistry.ts` — 本机工作区登记表（`workspaces.json`）
 - `apps/editor/src/main/services/triggers/triggerHistoryStore.ts` — 运行历史 `history.jsonl` 的追加 / 轮转 / 过滤读取
 - `apps/editor/src/main/services/triggers/triggerIdentity.ts` — 工作区 + id 复合键

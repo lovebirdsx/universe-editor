@@ -26,7 +26,13 @@ import {
   type IFileService,
   type ILogger,
 } from '@universe-editor/platform'
-import type { ITriggerMainService, ITriggerRunHost } from '../../../shared/ipc/triggerService.js'
+import type {
+  ITriggerMainService,
+  ITriggerRunHost,
+  TriggerManualEvent,
+  TriggerPollPreview,
+  TriggerPollPreviewItem,
+} from '../../../shared/ipc/triggerService.js'
 import {
   isElevatedModeId,
   MAX_TRIGGER_REPORT_BYTES,
@@ -77,10 +83,12 @@ import {
   LocalExecutionBackend,
   RemoteExecutionBackend,
   workspaceAuthorityOf,
+  type BackendPollOutcome,
   type TriggerExecutionBackend,
 } from './triggerExecutionBackend.js'
 import type { RoutedTrigger } from './triggerTypes.js'
 import { createPollCommandFetcher, type PollCommandFetcher } from './pollCommandFetcher.js'
+import { sanitizeManualPayload, sanitizeManualSourceKey } from './triggerManualPayload.js'
 import { SessionReportReader } from './runReportReader.js'
 import { TriggerHistoryStore } from './triggerHistoryStore.js'
 import { getMachineId } from '../host/machineId.js'
@@ -418,7 +426,7 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
     this._logger.info(`trigger concurrency limit: ${normalized} (settings change)`)
   }
 
-  async runNow(triggerKey: string): Promise<void> {
+  async runNow(triggerKey: string, manualEvent?: TriggerManualEvent): Promise<void> {
     await this._awaitReady()
     const trigger = this._catalog.requireTrigger(triggerKey)
     if (this._stateRepo.state.pausedAll) {
@@ -440,17 +448,101 @@ export class TriggerMainService extends Disposable implements ITriggerMainServic
         ),
       )
     }
+    const payload = sanitizeManualPayload(manualEvent?.payload)
+    const sourceKey = sanitizeManualSourceKey(manualEvent?.sourceKey)
+    if (manualEvent?.sourceKey !== undefined && sourceKey === undefined) {
+      this._logger.debug(`trigger ${trigger.id}: ignored a malformed manual source key`)
+    }
+    const consumeKeys = trigger.source.type === 'poll' && sourceKey !== undefined ? [sourceKey] : []
     const event: TriggerEvent = {
       triggerId: trigger.id,
       key: `manual:${this._uuid()}`,
-      payload: {},
+      payload,
       firedAt: this._clock.now(),
     }
-    this._logger.info(`trigger ${trigger.id} (${trigger.workspace}): manual event ${event.key}`)
+    this._logger.info(
+      `trigger ${trigger.id} (${trigger.workspace}): manual event ${event.key}` +
+        (consumeKeys.length > 0 ? ` consume=${consumeKeys.length}` : ''),
+    )
     // A user-initiated run is an explicit override of the failure backoff and of
     // this trigger's pause: pausing only stops automatic scheduling. The global
     // pause stays an emergency stop and still rejects it above.
-    await this._ledger.acceptEvent(trigger, event, { ignoreBackoff: true, manual: true })
+    await this._ledger.acceptEvent(trigger, event, {
+      ignoreBackoff: true,
+      manual: true,
+      ...(consumeKeys.length > 0 ? { consumeKeys } : {}),
+    })
+  }
+
+  async previewPollEvents(triggerKey: string): Promise<TriggerPollPreview> {
+    await this._awaitReady()
+    const trigger = this._catalog.requireTrigger(triggerKey)
+    const source = trigger.source
+    if (source.type !== 'poll') return { kind: 'unsupported' }
+    if (this._stateRepo.state.pausedAll) {
+      return { kind: 'unavailable', reason: 'all-paused' }
+    }
+    if (this._catalog.isWorkspaceOffline(trigger)) {
+      return { kind: 'unavailable', reason: 'offline' }
+    }
+    if (!this._isActivated(trigger)) {
+      return { kind: 'unavailable', reason: 'needs-confirmation' }
+    }
+    if (this._catalog.remoteWindowMissing(trigger)) {
+      return { kind: 'unavailable', reason: 'window-missing' }
+    }
+    // The preview actually spawns fetch.command with the user's privileges, so it
+    // must pass the same trust gate as the automatic poll.
+    if (!(await this._trustedForPoll(trigger.workspaceUri.toString()))) {
+      return { kind: 'unavailable', reason: 'workspace-not-trusted' }
+    }
+    // Best effort: an automatic poll that starts right after this check can still
+    // overlap. Fetch commands are expected to be read-only.
+    if (this._pollRunner.isPolling(trigger.key)) {
+      return { kind: 'unavailable', reason: 'poll-in-progress' }
+    }
+
+    let outcome: BackendPollOutcome
+    try {
+      outcome = await this._backendFor(trigger).fetchPoll(trigger, source)
+    } catch (err) {
+      const detail = describeError(err)
+      this._logger.warn(`trigger ${trigger.id}: manual poll preview failed: ${detail}`)
+      return { kind: 'unavailable', reason: 'poll-failed', detail }
+    }
+    if (outcome.kind === 'skipped') {
+      this._logger.info(`trigger ${trigger.id}: manual poll preview skipped (${outcome.reason})`)
+      return { kind: 'unavailable', reason: 'poll-skipped', detail: outcome.reason }
+    }
+    if (!outcome.result.ok) {
+      this._logger.warn(
+        `trigger ${trigger.id}: manual poll preview failed: ${outcome.result.error}`,
+      )
+      return { kind: 'unavailable', reason: 'poll-failed', detail: outcome.result.error }
+    }
+
+    // Read-only: neither baselineDone nor processed nor failure/backoff change
+    // here. Only the item the user actually runs is consumed, by `runNow`.
+    const processed = this._stateFor(trigger.key).processed
+    let processedCount = 0
+    const items: TriggerPollPreviewItem[] = outcome.result.items.map((item) => {
+      const key = `poll:${item.key}`
+      const alreadyProcessed = isProcessed(processed, key)
+      if (alreadyProcessed) processedCount += 1
+      const raw = item.payload[source.keyField]
+      const title = item.payload['title']
+      return {
+        key,
+        value: raw === undefined ? item.key : String(raw),
+        ...(typeof title === 'string' ? { title } : {}),
+        payload: item.payload,
+        processed: alreadyProcessed,
+      }
+    })
+    this._logger.info(
+      `trigger ${trigger.id}: manual poll preview items=${items.length} processed=${processedCount}`,
+    )
+    return { kind: 'ok', items }
   }
 
   async setPaused(triggerKey: string, paused: boolean): Promise<void> {

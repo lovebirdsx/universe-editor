@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkTempDir } from '@universe-editor/temp-root'
 import { URI, type ILogger, type IOpenWindowInfo } from '@universe-editor/platform'
-import type { ITriggerRunHost } from '../../../../shared/ipc/triggerService.js'
+import type { ITriggerRunHost, TriggerManualEvent } from '../../../../shared/ipc/triggerService.js'
 import {
   SWARM_TRIGGER_EVENT_NAME,
   type SwarmNeedsActionReview,
@@ -438,6 +438,8 @@ interface RawState {
         readonly sourceFingerprint?: string
         readonly activationConfirmed?: string
         readonly paused?: boolean
+        readonly consecutiveFailures?: number
+        readonly backoffUntil?: number
       }
     >
   >
@@ -2643,6 +2645,270 @@ describe('TriggerMainService change notifications', () => {
     } finally {
       subscription.dispose()
     }
+  })
+})
+
+describe('TriggerMainService manual poll preview', () => {
+  it('returns unsupported for a non-poll source without fetching', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+      fetch,
+    })
+    await openGate(harness)
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'unsupported',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('reports the global pause without fetching', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { enabled: false, source: pollSource() })],
+      fetch,
+    })
+    await openGate(harness)
+    await harness.service.setAllPaused(true)
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: 'all-paused',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('reports an unconfirmed trigger without fetching', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+      autoConfirm: false,
+    })
+    await openGate(harness)
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: 'needs-confirmation',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('reports an untrusted workspace without fetching', async () => {
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items: [] }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+      machineTrusted: false,
+    })
+    await openGate(harness)
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: 'workspace-not-trusted',
+    })
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('previews a disabled, paused and backing-off poll source without writing state', async () => {
+    const items = [
+      { key: 'item-1', payload: { id: 7, title: 'Fix flaky' } },
+      { key: 'item-2', payload: { id: 'item-2', title: 42 } },
+    ]
+    const fetch = vi.fn<PollCommandFetcher>(async () => ({ ok: true, items }))
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { enabled: false, source: pollSource() })],
+      fetch,
+      state: {
+        version: 2,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: { 'poll:item-2': { at: START, status: 'started' } },
+            paused: true,
+            consecutiveFailures: 1,
+            baselineDone: false,
+            backoffUntil: START + GRACE_MS + 10 * 60_000,
+          },
+        },
+        pending: [],
+      },
+    })
+    await openGate(harness)
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'ok',
+      items: [
+        {
+          key: 'poll:item-1',
+          value: '7',
+          title: 'Fix flaky',
+          payload: { id: 7, title: 'Fix flaky' },
+          processed: false,
+        },
+        {
+          key: 'poll:item-2',
+          value: 'item-2',
+          payload: { id: 'item-2', title: 42 },
+          processed: true,
+        },
+      ],
+    })
+    expect(fetch).toHaveBeenCalledTimes(1)
+    const state = await stateOf(harness)
+    expect(state.triggers[harness.key]?.baselineDone).toBe(false)
+    expect(Object.keys(state.triggers[harness.key]?.processed ?? {})).toEqual(['poll:item-2'])
+  })
+
+  it('returns an empty item list when the poll has nothing', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch: async () => ({ ok: true, items: [] }),
+    })
+    await openGate(harness)
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'ok',
+      items: [],
+    })
+  })
+
+  it('surfaces a fetch failure without recording a failure or backoff', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { enabled: false, source: pollSource() })],
+      fetch: async () => ({ ok: false, error: 'boom' }),
+    })
+    await openGate(harness)
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: 'poll-failed',
+      detail: 'boom',
+    })
+    const state = await stateOf(harness)
+    expect(state.triggers[harness.key]?.consecutiveFailures).toBe(0)
+    expect(state.triggers[harness.key]?.backoffUntil).toBeUndefined()
+  })
+
+  it('refuses to preview while an automatic poll is in flight', async () => {
+    let release: (() => void) | undefined
+    const fetch = vi.fn<PollCommandFetcher>(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
+      return { ok: true, items: [] }
+    })
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { source: pollSource() })],
+      fetch,
+    })
+    await openGate(harness)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    await expect(harness.service.previewPollEvents(harness.key)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: 'poll-in-progress',
+    })
+    release?.()
+    await settle()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('runs with the selected payload and consumes the poll key', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [
+        makeTrigger(workspace, {
+          enabled: false,
+          source: pollSource(),
+          session: { prompt: 'Handle {{event.title}} run {{event.runId}}', budget: BUDGET },
+        }),
+      ],
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key, {
+      payload: {
+        id: 'item-1',
+        title: 'Fix flaky',
+        runId: '123',
+        'bad-name': 'drop me',
+        nested: { drop: true },
+        nan: Number.NaN,
+      } as unknown as TriggerManualEvent['payload'],
+      sourceKey: 'poll:item-1',
+    })
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    const prompt = harness.requests[0]!.prompt
+    expect(prompt).toContain('<event-data')
+    expect(prompt).toContain('"id":"item-1"')
+    expect(prompt).toContain('"title":"Fix flaky"')
+    expect(prompt).toContain('Handle Fix flaky run 123')
+    expect(prompt).not.toContain('bad-name')
+    expect(prompt).not.toContain('nested')
+    expect(prompt).not.toContain('"nan"')
+    const state = await stateOf(harness)
+    const processed = state.triggers[harness.key]?.processed ?? {}
+    expect(Object.keys(processed)).toContain('poll:item-1')
+    expect(Object.keys(processed).some((key) => key.startsWith('manual:'))).toBe(true)
+  })
+
+  it('does not re-mark an already processed poll key', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { enabled: false, source: pollSource() })],
+      state: {
+        version: 2,
+        pausedAll: false,
+        triggers: {
+          'trigger-1': {
+            processed: {
+              'poll:item-1': { at: START - 5_000, status: 'started' },
+            },
+            paused: false,
+            consecutiveFailures: 0,
+            baselineDone: true,
+          },
+        },
+        pending: [],
+      },
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key, {
+      payload: { id: 'item-1' },
+      sourceKey: 'poll:item-1',
+    })
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    const state = await stateOf(harness)
+    expect(state.triggers[harness.key]?.processed['poll:item-1']).toEqual({
+      at: START - 5_000,
+      status: 'started',
+    })
+  })
+
+  it('ignores a consumed poll key for a non-poll source', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace)],
+    })
+    await openGate(harness)
+    await harness.service.runNow(harness.key, {
+      payload: {},
+      sourceKey: 'poll:item-1',
+    })
+    await vi.waitFor(() => expect(harness.startRun).toHaveBeenCalledTimes(1))
+    const state = await stateOf(harness)
+    const processed = state.triggers[harness.key]?.processed ?? {}
+    expect(Object.keys(processed)).not.toContain('poll:item-1')
+  })
+
+  it('rolls back both keys when staging the manual payload fails', async () => {
+    const harness = await createHarness({
+      triggers: (workspace) => [makeTrigger(workspace, { enabled: false, source: pollSource() })],
+    })
+    await openGate(harness)
+    const pendingDir = join(harness.dir, 'triggers', 'pending')
+    await rm(pendingDir, { recursive: true, force: true })
+    await writeFile(pendingDir, 'not a directory', 'utf8')
+
+    await harness.service.runNow(harness.key, {
+      payload: { id: 'item-1' },
+      sourceKey: 'poll:item-1',
+    })
+    await settle()
+    expect(harness.startRun).not.toHaveBeenCalled()
+    const state = await stateOf(harness)
+    expect(Object.keys(state.triggers[harness.key]?.processed ?? {})).toEqual([])
+    expect(state.triggers[harness.key]?.consecutiveFailures).toBe(1)
   })
 })
 

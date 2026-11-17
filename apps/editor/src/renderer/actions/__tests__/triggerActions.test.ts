@@ -25,13 +25,18 @@ import {
   MenuRegistry,
   REMOTE_SCHEME,
   URI,
+  Severity,
   registerAction2,
   type IConfirmOptions,
   type IConfirmResult,
   type IDisposable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { ITriggerMainService } from '../../../shared/ipc/triggerService.js'
+import {
+  ITriggerMainService,
+  type TriggerPollPreview,
+  type TriggerPollPreviewItem,
+} from '../../../shared/ipc/triggerService.js'
 import { ILogFilesService } from '../../../shared/ipc/services.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
@@ -39,6 +44,8 @@ import {
   OpenTriggersConfigAction,
   ViewTriggerReportAction,
   confirmTriggerActivation,
+  runTriggerAction,
+  runTriggerNow,
   type TriggerActionServices,
 } from '../triggerActions.js'
 
@@ -441,22 +448,201 @@ describe('trigger confirmation dialogs', () => {
     expect(confirm).toHaveBeenCalledTimes(2)
     expect(confirmActivation).toHaveBeenCalledTimes(1)
   })
+})
 
-  it('says no high-privilege warning for a non-elevated event trigger', async () => {
-    const { services, confirm } = makeServices({ confirmed: true, choice: 'primary' })
+describe('runTriggerNow', () => {
+  const ITEM: TriggerPollPreviewItem = {
+    key: 'poll:item-1',
+    value: 'item-1',
+    title: 'Fix flaky',
+    payload: { id: 'item-1', title: 'Fix flaky' },
+    processed: false,
+  }
+  const PROCESSED: TriggerPollPreviewItem = {
+    key: 'poll:item-2',
+    value: 'item-2',
+    payload: { id: 'item-2' },
+    processed: true,
+  }
 
-    await confirmTriggerActivation(
-      services,
-      summary({
-        paused: false,
-        sourceType: 'event',
-        source: { type: 'event', event: 'swarm.reviewNeedsAction' },
-        session: { agent: 'claude-code', mode: 'default' },
-      }),
+  function summary(overrides: Partial<TriggerSummary> = {}): TriggerSummary {
+    return {
+      key: 'ws\u0000poller',
+      id: 'poller',
+      name: 'Poller',
+      fingerprint: 'fp-poller',
+      workspace: 'file:///X:/workspace',
+      workspaceName: 'workspace',
+      sourceType: 'poll',
+      source: {
+        type: 'poll',
+        intervalSec: 30,
+        fetch: { type: 'command', command: 'node poll.js', timeoutSec: 10 },
+        keyField: 'id',
+      },
+      status: 'idle',
+      enabled: true,
+      paused: false,
+      pausedAll: false,
+      autoPaused: false,
+      activationConfirmed: true,
+      elevatedMode: false,
+      running: 0,
+      queued: 0,
+      consecutiveFailures: 0,
+      ...overrides,
+    }
+  }
+
+  function makeServices(
+    preview: TriggerPollPreview,
+    picked: { readonly id: string } | null = { id: ITEM.key },
+  ) {
+    const runNow = vi.fn(async () => undefined)
+    const previewPollEvents = vi.fn(async (_triggerKey: string) => preview)
+    const pick = vi.fn(async (_items: readonly unknown[]) => picked ?? undefined)
+    const notify = vi.fn((_opts: unknown) => ({ id: 'notification-1' }))
+    const dismiss = vi.fn()
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), trace: vi.fn() }
+    const services = {
+      triggers: { runNow, previewPollEvents },
+      quickInput: { pick },
+      notifications: { notify, dismiss },
+      logger,
+    } as unknown as TriggerActionServices
+    return { services, runNow, previewPollEvents, pick, notify, dismiss }
+  }
+
+  function notificationAt(
+    notify: ReturnType<typeof makeServices>['notify'],
+    index: number,
+  ): { severity: Severity; message: string; sticky?: boolean } {
+    return notify.mock.calls[index]?.[0] as {
+      severity: Severity
+      message: string
+      sticky?: boolean
+    }
+  }
+
+  it('runs non-poll sources directly without previewing', async () => {
+    const { services, runNow, previewPollEvents, notify } = makeServices({
+      kind: 'ok',
+      items: [],
+    })
+
+    await runTriggerNow(services, summary({ sourceType: 'manual', source: { type: 'manual' } }))
+
+    expect(previewPollEvents).not.toHaveBeenCalled()
+    expect(runNow).toHaveBeenCalledWith('ws\u0000poller')
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(notificationAt(notify, 0).severity).toBe(Severity.Info)
+    expect(notificationAt(notify, 0).message).toContain('queued to run')
+  })
+
+  it('previews, picks an item, and runs with its payload and source key', async () => {
+    const { services, runNow, previewPollEvents, pick, notify, dismiss } = makeServices({
+      kind: 'ok',
+      items: [ITEM, PROCESSED],
+    })
+
+    await runTriggerNow(services, summary())
+
+    expect(previewPollEvents).toHaveBeenCalledWith('ws\u0000poller')
+    expect(notificationAt(notify, 0)).toMatchObject({
+      severity: Severity.Info,
+      sticky: true,
+    })
+    expect(dismiss).toHaveBeenCalledWith('notification-1')
+    const [items, options] = pick.mock.calls[0] as unknown as [
+      readonly { id: string; label: string; description?: string }[],
+      { id: string; matchOnDescription: boolean },
+    ]
+    expect(items[0]).toEqual({
+      id: 'poll:item-1',
+      label: 'item-1',
+      description: 'Fix flaky',
+    })
+    expect(String(items[1]?.label)).toContain('already processed')
+    expect(options).toMatchObject({
+      id: 'workbench.triggers.pollEvent',
+      matchOnDescription: true,
+    })
+    expect(runNow).toHaveBeenCalledWith('ws\u0000poller', {
+      payload: ITEM.payload,
+      sourceKey: ITEM.key,
+    })
+    expect(notificationAt(notify, 1).message).toContain('queued to run')
+  })
+
+  it('stops silently when the item picker is cancelled', async () => {
+    const { services, runNow, pick, notify, dismiss } = makeServices(
+      { kind: 'ok', items: [ITEM] },
+      null,
     )
 
-    const detail = String((confirm.mock.calls[0]?.[0] as unknown as IConfirmOptions).detail)
-    expect(detail).toContain('Trigger source:')
-    expect(detail).not.toContain('High-privilege mode')
+    await runTriggerNow(services, summary())
+
+    expect(pick).toHaveBeenCalledTimes(1)
+    expect(runNow).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(dismiss).toHaveBeenCalledWith('notification-1')
+  })
+
+  it('warns for unavailable previews without opening the picker', async () => {
+    const paused = makeServices({ kind: 'unavailable', reason: 'all-paused' })
+    await runTriggerNow(paused.services, summary())
+    expect(paused.pick).not.toHaveBeenCalled()
+    expect(paused.runNow).not.toHaveBeenCalled()
+    expect(notificationAt(paused.notify, 1)).toMatchObject({
+      severity: Severity.Warning,
+      message: 'All triggers are paused',
+    })
+
+    const failed = makeServices({
+      kind: 'unavailable',
+      reason: 'poll-failed',
+      detail: 'boom',
+    })
+    await runTriggerNow(failed.services, summary())
+    expect(failed.pick).not.toHaveBeenCalled()
+    expect(failed.runNow).not.toHaveBeenCalled()
+    expect(notificationAt(failed.notify, 1).severity).toBe(Severity.Warning)
+    expect(notificationAt(failed.notify, 1).message).toContain('boom')
+  })
+
+  it('tells the user when the poll returned no events', async () => {
+    const { services, runNow, pick, notify } = makeServices({ kind: 'ok', items: [] })
+
+    await runTriggerNow(services, summary())
+
+    expect(pick).not.toHaveBeenCalled()
+    expect(runNow).not.toHaveBeenCalled()
+    expect(notificationAt(notify, 1).severity).toBe(Severity.Info)
+    expect(notificationAt(notify, 1).message).toContain('no events')
+  })
+
+  it('falls back to a plain run when the summary claims poll but main says unsupported', async () => {
+    const { services, runNow, notify } = makeServices({ kind: 'unsupported' })
+
+    await runTriggerNow(services, summary())
+
+    expect(runNow).toHaveBeenCalledWith('ws\u0000poller')
+    expect(notificationAt(notify, 1).message).toContain('queued to run')
+  })
+
+  it('reports a rejected preview through the shared command error path', async () => {
+    const { services, previewPollEvents, notify, dismiss } = makeServices({
+      kind: 'ok',
+      items: [],
+    })
+    previewPollEvents.mockRejectedValueOnce(new Error('rpc down'))
+
+    await runTriggerAction(services, () => runTriggerNow(services, summary()))
+
+    expect(dismiss).toHaveBeenCalledWith('notification-1')
+    const errorCall = notify.mock.calls
+      .map(([opts]) => opts as { severity: Severity; message: string })
+      .find((opts) => opts.severity === Severity.Error)
+    expect(errorCall?.message).toContain('rpc down')
   })
 })

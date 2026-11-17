@@ -14,7 +14,10 @@ import {
   type IWorkspaceTrustManagementService,
 } from '@universe-editor/platform'
 import { describe, expect, it, vi } from 'vitest'
-import type { ITriggerMainService } from '../../../../shared/ipc/triggerService.js'
+import type {
+  ITriggerMainService,
+  TriggerPollPreview,
+} from '../../../../shared/ipc/triggerService.js'
 import type {
   TriggerRunEnd,
   TriggerRunHistoryEntry,
@@ -96,6 +99,9 @@ class FakeTriggerMain implements ITriggerMainService {
   readonly getRunsDir = vi.fn(async (): Promise<string> => 'X:/workspace/triggers/runs')
   readonly setMaxConcurrentRuns = vi.fn(async (): Promise<void> => undefined)
   readonly runNow = vi.fn(async (): Promise<void> => undefined)
+  readonly previewPollEvents = vi.fn(
+    async (): Promise<TriggerPollPreview> => ({ kind: 'unsupported' }),
+  )
   readonly setPaused = vi.fn(async (): Promise<void> => undefined)
   readonly setAllPaused = vi.fn(async (): Promise<void> => undefined)
   readonly confirmActivation = vi.fn(async (): Promise<void> => undefined)

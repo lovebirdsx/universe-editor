@@ -648,6 +648,42 @@ describe('TriggerMainService remote poll', () => {
     expect(summary?.consecutiveFailures).toBe(0)
     expect(summary?.lastError).toBeUndefined()
   })
+
+  it('previews nothing while the remote host is offline', async () => {
+    const harness = await createHarness({
+      config: configText('remote-poll', { source: pollSource() }),
+    })
+    await discoverAndConfirm(harness)
+    const key = triggerKeyFor(WORKSPACE.toString(), 'remote-poll')
+    harness.connections.setState('reconnecting')
+    await settle()
+
+    await expect(harness.service.previewPollEvents(key)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: 'offline',
+    })
+    expect(harness.poll).not.toHaveBeenCalled()
+  })
+
+  it('reports a rejected preview poll as skipped without a failure', async () => {
+    const harness = await createHarness({
+      config: configText('remote-poll', { source: pollSource() }),
+      pollImpl: async () => {
+        throw new Error('channel closed')
+      },
+    })
+    await discoverAndConfirm(harness)
+    const key = triggerKeyFor(WORKSPACE.toString(), 'remote-poll')
+
+    await expect(harness.service.previewPollEvents(key)).resolves.toEqual({
+      kind: 'unavailable',
+      reason: 'poll-skipped',
+      detail: expect.stringContaining('channel closed'),
+    })
+    const [summary] = await harness.service.listTriggers()
+    expect(summary?.consecutiveFailures).toBe(0)
+    expect(summary?.lastError).toBeUndefined()
+  })
 })
 
 describe('TriggerMainService remote run pipeline', () => {
