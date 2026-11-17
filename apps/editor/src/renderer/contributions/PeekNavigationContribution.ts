@@ -32,28 +32,31 @@
  *     lags one keystroke behind. Instead we hook the tree's own
  *     `onDidChangeFocus`: it fires exactly when the KeyboardController lands the
  *     move, so mirroring there is correct by construction.
+ *
+ * 3. Ctrl+H/J/K/L move the tree like the arrow keys (left collapses or steps to
+ *    the parent, right expands or enters the first child). These strokes cannot
+ *    be plain keybindings: Ctrl+K is a chord leader and the global dispatcher
+ *    runs in the document capture phase without checking `defaultPrevented`.
+ *    We claim them here in window capture, mirror focus onto selection
+ *    synchronously, and stop propagation before the global dispatcher sees them.
+ *
+ *    Unlike a bare arrow press, these handlers are invoked by us and land their
+ *    focus change synchronously, so there is no pending-focus dance. Ctrl+P/N
+ *    are deliberately not mapped: they stay with Quick Open / New File on every
+ *    surface. The cost, shared with every workbench list, is that the Ctrl+K
+ *    chord cannot start while the peek tree has focus.
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, toDisposable, type IWorkbenchContribution } from '@universe-editor/platform'
-import { isHTMLElementLike } from '@universe-editor/workbench-ui'
-import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
+import { ctrlNavigationDirection, isHTMLElementLike } from '@universe-editor/workbench-ui'
+import { MonacoLoader, type MonacoListService } from '../workbench/editor/monaco/MonacoLoader.js'
 import { installPerWorkbenchDocument } from '../services/windows/workbenchDocumentEvents.js'
 
 const PREVIEW_NAV_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End'])
 
 export class PeekNavigationContribution extends Disposable implements IWorkbenchContribution {
   private _executeCommand: (<T = unknown>(id: string, ...args: unknown[]) => Promise<T>) | undefined
-  private _listService:
-    | {
-        readonly lastFocusedList:
-          | {
-              getFocus(): unknown[]
-              setSelection(items: unknown[], browserEvent?: unknown): void
-              onDidChangeFocus(listener: () => void): { dispose(): void }
-            }
-          | undefined
-      }
-    | undefined
+  private _listService: MonacoListService | undefined
   private _pendingFocusMirror: { dispose(): void } | undefined
 
   constructor() {
@@ -66,6 +69,65 @@ export class PeekNavigationContribution extends Disposable implements IWorkbench
     })
 
     const onKeyDown = (doc: Document, e: KeyboardEvent): void => {
+      // IME composition owns every keystroke until it commits.
+      if (e.isComposing || e.keyCode === 229) return
+      // An earlier window-capture listener already acted on this stroke.
+      if (e.defaultPrevented) return
+
+      const ctrlDirection = ctrlNavigationDirection(e)
+      if (ctrlDirection !== undefined) {
+        // The peek can live in an auxiliary window; use that document's focus.
+        const active = doc.activeElement
+        if (!isHTMLElementLike(active) || !active.closest('.ref-tree')) return
+        // lastFocusedList is renderer-wide and can still point at another
+        // editor group's tree; only move the tree that owns the focused element.
+        const list = this._listService?.lastFocusedList
+        if (!list || !list.getHTMLElement().contains(active)) return
+        // ReferencesTree extends AsyncDataTree, which wraps the actual
+        // AbstractTree focus/collapse controller; the arrow methods live there.
+        const tree = list.tree
+        if (!tree) return
+
+        // Window capture runs before the document-capture global dispatcher,
+        // which deliberately no longer checks defaultPrevented — stopping
+        // propagation is what keeps Ctrl+J from toggling the panel and Ctrl+K
+        // from entering chord mode. Same claim pattern as ctrlNavigationRegistry.
+        e.preventDefault()
+        e.stopPropagation()
+        e.stopImmediatePropagation()
+
+        // A bare-arrow press at a boundary may have left a mirror pending.
+        this._pendingFocusMirror?.dispose()
+        this._pendingFocusMirror = undefined
+
+        const before = list.getFocus()[0]
+        switch (ctrlDirection) {
+          case 'down':
+            tree.focusNext(1, false, e)
+            break
+          case 'up':
+            tree.focusPrevious(1, false, e)
+            break
+          case 'left':
+            tree.onLeftArrow?.(e)
+            break
+          case 'right':
+            tree.onRightArrow?.(e)
+            break
+        }
+
+        // These calls move focus synchronously (unlike the bubble-phase
+        // KeyboardController behind the bare arrows), so mirror right away.
+        // Passing the keyboard event keeps preserveFocus: the navigator takes
+        // its preview branch and focus stays on the tree.
+        const focused = list.getFocus()
+        const element = focused[0]
+        if (element === undefined || element === before) return
+        list.setSelection(focused, e)
+        list.reveal(element)
+        return
+      }
+
       if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return
       // The peek can live in an auxiliary window; use that document's focus.
       const active = doc.activeElement

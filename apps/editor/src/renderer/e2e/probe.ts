@@ -138,6 +138,7 @@ import {
   type E2ENotification,
   type E2EOutlineRetentionStats,
   type E2ERecentTarget,
+  type E2EReferencePeekState,
   type E2EScmDecoration,
   type E2ETerminalLink,
   type E2ETimelineItem,
@@ -690,6 +691,30 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     isReferencePeekFocused: () => {
       const active = document.activeElement
       return active instanceof HTMLElement && active.closest('.ref-tree') != null
+    },
+    getReferencePeekState: async (): Promise<E2EReferencePeekState | undefined> => {
+      const monacoNs = MonacoLoader.peek()
+      if (!monacoNs) return undefined
+      const focused = (await MonacoLoader.getListService()).lastFocusedList?.getFocus()[0] as
+        | {
+            uri?: { toString(): string }
+            range?: { startLineNumber: number }
+          }
+        | undefined
+      // The preview is monaco's embedded editor inside the peek zone; it is in
+      // getEditors() like any other code editor.
+      const preview = monacoNs.editor
+        .getEditors()
+        .find((editor) => editor.getDomNode()?.closest('.reference-zone-widget') != null)
+      const previewModel = preview?.getModel()
+      const previewPosition = preview?.getPosition()
+      if (focused === undefined && preview === undefined) return undefined
+      return {
+        ...(focused?.uri !== undefined && { focusedUri: focused.uri.toString() }),
+        ...(focused?.range !== undefined && { focusedLine: focused.range.startLineNumber }),
+        ...(previewModel != null && { previewUri: previewModel.uri.toString() }),
+        ...(previewPosition != null && { previewLine: previewPosition.lineNumber }),
+      }
     },
     getStatusBarEntries: (): E2EStatusBarEntry[] =>
       services.statusBarService.entries.get().map(({ id, entry }) => ({

@@ -77,6 +77,37 @@ export interface MonacoLanguageFeaturesService {
   readonly codeActionProvider: MonacoLanguageFeatureRegistry<monaco.languages.CodeActionProvider>
 }
 
+/**
+ * The slice of monaco's internal list/tree widget API the peek keyboard bridge
+ * needs. `AsyncDataTree` (the peek's `ReferencesTree`) wraps the focus and
+ * collapse controller in `tree`; the same methods do not exist on the outer
+ * wrapper.
+ */
+export interface MonacoTreeInternals {
+  getFocus(): unknown[]
+  setSelection(items: unknown[], browserEvent?: unknown): void
+  focusNext(count?: number, loop?: boolean, browserEvent?: unknown): void
+  focusPrevious(count?: number, loop?: boolean, browserEvent?: unknown): void
+  /** Collapse the focused node, or step out to its parent when already collapsed. */
+  onLeftArrow?(e: KeyboardEvent): void
+  /** Expand the focused node, or step into its first child when already expanded. */
+  onRightArrow?(e: KeyboardEvent): void
+}
+
+export interface MonacoListWidget {
+  getFocus(): unknown[]
+  setSelection(items: unknown[], browserEvent?: unknown): void
+  onDidChangeFocus(listener: () => void): { dispose(): void }
+  reveal(location: unknown, relativeTop?: number): void
+  getHTMLElement(): HTMLElement
+  /** Present on `AsyncDataTree` (which `ReferencesTree` extends). */
+  readonly tree?: MonacoTreeInternals
+}
+
+export interface MonacoListService {
+  readonly lastFocusedList: MonacoListWidget | undefined
+}
+
 let _monaco: typeof monaco | undefined
 let _monacoPromise: Promise<typeof monaco> | undefined
 let _logger: ILogger = new NullLogger()
@@ -472,29 +503,13 @@ export const MonacoLoader = {
    * monaco lacks the workbench list keybindings that normally do this. Resolves
    * after monaco has initialized.
    */
-  async getListService(): Promise<{
-    readonly lastFocusedList:
-      | {
-          getFocus(): unknown[]
-          setSelection(items: unknown[], browserEvent?: unknown): void
-          onDidChangeFocus(listener: () => void): { dispose(): void }
-        }
-      | undefined
-  }> {
+  async getListService(): Promise<MonacoListService> {
     await loadMonaco()
     const [{ StandaloneServices }, { IListService }] = await Promise.all([
       import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'),
       import('monaco-editor/esm/vs/platform/list/browser/listService.js'),
     ])
-    return StandaloneServices.get<{
-      readonly lastFocusedList:
-        | {
-            getFocus(): unknown[]
-            setSelection(items: unknown[], browserEvent?: unknown): void
-            onDidChangeFocus(listener: () => void): { dispose(): void }
-          }
-        | undefined
-    }>(IListService)
+    return StandaloneServices.get<MonacoListService>(IListService)
   },
 }
 

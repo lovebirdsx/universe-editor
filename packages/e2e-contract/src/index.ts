@@ -980,6 +980,18 @@ export type E2ETriggerRunReport =
     }
   | { readonly kind: 'not-found' | 'too-large' | 'unavailable' }
 
+/** Focused reference and inline preview state of an open references peek. */
+export interface E2EReferencePeekState {
+  /** Source URI of the focused leaf reference; absent when focus is a group header. */
+  readonly focusedUri?: string
+  /** 1-based start line of the focused leaf reference. */
+  readonly focusedLine?: number
+  /** URI shown by the peek's inline preview editor. */
+  readonly previewUri?: string
+  /** 1-based line the inline preview editor is placed at. */
+  readonly previewLine?: number
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -1022,6 +1034,12 @@ export interface E2EProbe {
    * into the editor (which would corrupt the doc before the peek mounts).
    */
   isReferencePeekFocused(): boolean
+  /**
+   * Snapshot of the references peek's focused reference and inline preview.
+   * Proves that keyboard navigation moves both the tree cursor and the preview.
+   * Returns undefined when no peek is open (or monaco has not loaded).
+   */
+  getReferencePeekState(): Promise<E2EReferencePeekState | undefined>
   /** Snapshot of currently visible status bar entries. */
   getStatusBarEntries(): E2EStatusBarEntry[]
   /** Non-dismissed notifications (toast + center), newest last. */

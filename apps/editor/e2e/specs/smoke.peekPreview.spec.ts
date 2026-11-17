@@ -126,4 +126,93 @@ test.describe('@p1 references peek preview', () => {
       )
       .toMatchObject({ filled: true })
   })
+
+  test('Ctrl+J/K move the focused reference and the live preview', async ({
+    page,
+    workbench,
+    launchWorkspace,
+  }) => {
+    test.slow()
+    if (!launchWorkspace) throw new Error('workspaceSeeder must provide launchWorkspace')
+    await workbench.waitForRestored()
+    await page.evaluate(() => window.__E2E__!.updateConfigValue('editor.codeLens', true))
+    await page.evaluate(() =>
+      window.__E2E__!.updateConfigValue('js/ts.referencesCodeLens.enabled', true),
+    )
+
+    await page.evaluate(
+      (fsPath) => window.__E2E__!.openFileUri(fsPath),
+      launchWorkspace.file('lib.ts'),
+    )
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
+      .toBe('typescript')
+
+    // Wait for tsserver to resolve the references CodeLens, so the provider is
+    // warm before we ask for references directly.
+    await expect
+      .poll(
+        async () => {
+          const lenses = await page.evaluate(() => window.__E2E__!.getRenderedCodeLenses())
+          return lenses.find((l) => l.line === 1)?.commandId ?? ''
+        },
+        { timeout: 30000, intervals: [500, 1000, 1000, 2000] },
+      )
+      .toBe('editor.action.showReferences')
+
+    // Open the peek through the command path: clicking the CodeLens leaves focus
+    // on the lens itself, so the tree never owns the keyboard.
+    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 17))
+    await page.evaluate(
+      () => void window.__E2E__!.runCommand('editor.action.referenceSearch.trigger'),
+    )
+
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.isReferencePeekFocused()), {
+        timeout: 15000,
+        intervals: [250, 500, 500, 1000],
+      })
+      .toBe(true)
+
+    // Wait for the peek to mount and land focus on a leaf reference.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () => (await window.__E2E__!.getReferencePeekState())?.focusedLine),
+        { timeout: 15000, intervals: [250, 500, 500, 1000] },
+      )
+      .toEqual(expect.any(Number))
+
+    const initial = await page.evaluate(() => window.__E2E__!.getReferencePeekState())
+    expect(initial?.previewLine).toBe(initial?.focusedLine)
+    expect(initial?.previewUri).toBe(initial?.focusedUri)
+
+    // `helper` has references in lib.ts (below the declaration) and main.ts.
+    // The peek starts on the nearest one, so Ctrl+J must move to a different line.
+    await page.keyboard.press('Control+j')
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () => (await window.__E2E__!.getReferencePeekState())?.focusedLine),
+        { timeout: 10000 },
+      )
+      .not.toBe(initial?.focusedLine)
+
+    const moved = await page.evaluate(() => window.__E2E__!.getReferencePeekState())
+    expect(moved?.previewLine).toBe(moved?.focusedLine)
+    expect(moved?.previewUri).toBe(moved?.focusedUri)
+
+    await page.keyboard.press('Control+k')
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () => (await window.__E2E__!.getReferencePeekState())?.focusedLine),
+        { timeout: 10000 },
+      )
+      .toBe(initial?.focusedLine)
+
+    const back = await page.evaluate(() => window.__E2E__!.getReferencePeekState())
+    expect(back?.previewLine).toBe(back?.focusedLine)
+  })
 })
