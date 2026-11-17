@@ -45,8 +45,10 @@ import {
   isKeyboardContextMenu,
   type ITreeFocusSource,
   type ITreeRowRenderContext,
+  type ITreeStickyRowRenderContext,
   type IVisibleNode,
 } from '@universe-editor/workbench-ui'
+import { ChevronDown } from 'lucide-react'
 import {
   IExplorerTreeService,
   type ExplorerTreeService,
@@ -64,6 +66,7 @@ import { IScmWorkingTreeHintService } from '../../services/scm/ScmWorkingTreeHin
 import { resolveRowDecoration } from '../../services/scm/rowDecoration.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
+import { FileIcon } from '../files/fileIconTheme.js'
 import { confirmOpenFile } from '../../services/editor/largeFileGuard.js'
 import { resolveOpenTarget, type OpenModifiers } from '../../services/editor/openTarget.js'
 import { openUriWithTarget } from '../../services/editor/openWithTarget.js'
@@ -83,6 +86,33 @@ const EMPTY_IGNORED_VERSION: IObservable<number> = observableValue('emptyScmIgno
 const EMPTY_HINT_VERSION: IObservable<number> = observableValue('emptyScmWorkingTreeHintVersion', 0)
 
 const EMPTY_BEHIND_VERSION: IObservable<number> = observableValue('emptyScmBehindHintVersion', 0)
+
+/**
+ * Presentation-only copy of a folder row for the sticky stack. It must carry no
+ * `data-row-key`, drag props or row handlers: `Tree` keeps one DOM element per
+ * row key, and the pinned copy only feeds the click-through shell above it.
+ */
+function ExplorerStickyRow({
+  entry,
+  name,
+  indentPadding,
+}: {
+  readonly entry: IExplorerEntry
+  readonly name: string
+  readonly indentPadding: number
+}) {
+  return (
+    <div className={styles['row']} style={{ paddingLeft: `${indentPadding}px` }}>
+      <span className={styles['chevron']} aria-hidden="true">
+        <ChevronDown size={16} strokeWidth={1.75} />
+      </span>
+      <span className={styles['icon']} aria-hidden="true">
+        <FileIcon resource={entry.resource} isDirectory expanded size={16} />
+      </span>
+      <span className={styles['label']}>{name}</span>
+    </div>
+  )
+}
 
 export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
@@ -345,6 +375,17 @@ export function ExplorerView() {
           className={styles['view'] ?? ''}
           virtualizationThreshold={threshold}
           renderRow={renderRow}
+          renderStickyRow={(ctx: ITreeStickyRowRenderContext<IExplorerEntry>) => (
+            <ExplorerStickyRow
+              entry={ctx.node.element}
+              name={
+                ctx.node.id === rootKey
+                  ? workspaceName
+                  : (ctx.node.element.compactName ?? ctx.node.element.name)
+              }
+              indentPadding={ctx.indentPadding}
+            />
+          )}
           onVisibleNodesChange={onVisibleNodesChange}
           modifierActivation
           onActivate={(node, opts) => {

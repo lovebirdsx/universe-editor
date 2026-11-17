@@ -52,12 +52,14 @@ import {
   requestOwnerFrame,
   type OwnerFrame,
 } from '../dom/ownerWindow.js'
+import treeStyles from './Tree.module.css'
 
 const PAGE_STEP = 10
 const DEFAULT_ROW_HEIGHT = 22
 const DEFAULT_THRESHOLD = 200
 const DEFAULT_INDENT_WIDTH = 12
 const DEFAULT_INDENT_BASE = 6
+const DEFAULT_MAX_STICKY_ROWS = 5
 /** Slack rows on each side of the viewport in the visible-window report; mirrors VirtualList's overscan. */
 const VISIBLE_OVERSCAN = 5
 
@@ -102,6 +104,13 @@ export interface ITreeRowRenderContext<T> {
   readonly onClickRow: (e: ReactMouseEvent) => void
   /** Virtualization positioning style — pass through to the row root when present. */
   readonly style?: CSSProperties | undefined
+}
+
+/** Context for a pinned sticky-scroll row (see `renderStickyRow`). */
+export interface ITreeStickyRowRenderContext<T> {
+  readonly node: IVisibleNode<T>
+  /** Left padding in px derived from depth — apply to the row root. */
+  readonly indentPadding: number
 }
 
 export interface ITreeProps<T> {
@@ -172,6 +181,21 @@ export interface ITreeProps<T> {
    */
   readonly onVisibleNodesChange?: (nodes: readonly IVisibleNode<T>[]) => void
   /**
+   * Enables VSCode-style sticky scroll: the ancestor chain of the row at the
+   * viewport's top edge is pinned there, one row per depth, so a scrolled
+   * folder tree still shows which folders the visible rows live under.
+   *
+   * Pinned rows render through this hook instead of `renderRow` on purpose:
+   * a copy of the real row would duplicate its `data-row-key` (breaking the
+   * "one element per row key" invariant) and drag it into row handlers the
+   * pin must not run. Render a presentation-only row — no `data-row-key`, no
+   * `role`/`aria-*`, no drag or click handlers. Clicking a pinned row scrolls
+   * its real row back to the top edge.
+   */
+  readonly renderStickyRow?: (ctx: ITreeStickyRowRenderContext<T>) => ReactNode
+  /** Cap on simultaneously pinned rows (default 5); also capped at half the viewport. */
+  readonly maxStickyRows?: number
+  /**
    * Stable key identifying this logical view; when set, the tree's scroll
    * position is saved on unmount and restored on remount through
    * ScrollStateCache (survives container switches, not a window reload).
@@ -205,6 +229,8 @@ export function Tree<T>(props: ITreeProps<T>) {
     onVisibleNodesChange,
     activateNonLeafOnEnter = false,
     modifierActivation = false,
+    renderStickyRow,
+    maxStickyRows = DEFAULT_MAX_STICKY_ROWS,
     scrollStateKey,
     scrollStatePersister,
   } = props
@@ -426,6 +452,129 @@ export function Tree<T>(props: ITreeProps<T>) {
 
   const watchVisibleWindow = onVisibleNodesChange !== undefined
 
+  // Sticky scroll: resolve the ancestor chain of the row at the viewport's top
+  // edge from visible depths — a parent is the nearest preceding row one level
+  // up. State only moves when the chain itself changes, so scrolling inside one
+  // row never re-renders the tree.
+  const [stickyIds, setStickyIds] = useState<readonly string[]>([])
+  const stickyKeyRef = useRef('')
+  const stickyFrameRef = useRef<OwnerFrame | undefined>(undefined)
+  const maxStickyRowsRef = useRef(maxStickyRows)
+  maxStickyRowsRef.current = maxStickyRows
+
+  const measureSticky = useStableCallback((): void => {
+    const scroller = containerRef.current
+    const nodes = visibleRef.current
+    let next: readonly string[] = []
+    // Same pre-layout guard as the visible-window report: a clientHeight that
+    // spans the whole content is not a viewport.
+    if (scroller && nodes.length > 0 && hasTrustworthyViewport(scroller)) {
+      const viewport = scroller.clientHeight
+      if (viewport > 0) {
+        const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+        const top = scroller.scrollTop
+        let first = nodes.length - 1
+        if (resolve === undefined) {
+          first = Math.min(nodes.length - 1, Math.max(0, Math.floor(top / fallback)))
+        } else {
+          let offset = 0
+          for (let i = 0; i < nodes.length; i++) {
+            const size = sizeAt(i)
+            if (offset + size > top) {
+              first = i
+              break
+            }
+            offset += size
+          }
+        }
+        const chain: number[] = []
+        let wantDepth = (nodes[first]?.depth ?? 0) - 1
+        for (let i = first - 1; i >= 0 && wantDepth >= 0; i--) {
+          const candidate = nodes[i]
+          if (candidate !== undefined && candidate.depth === wantDepth) {
+            chain.unshift(i)
+            wantDepth -= 1
+          }
+        }
+        // Shrink from the outermost end: when the stack has to fit, the nearest
+        // ancestors are the ones answering "where am I".
+        const picked: number[] = []
+        let height = 0
+        const limit = Math.max(1, maxStickyRowsRef.current)
+        for (let i = chain.length - 1; i >= 0; i--) {
+          if (picked.length >= limit) break
+          const index = chain[i]!
+          const size = sizeAt(index)
+          if (picked.length > 0 && height + size > viewport / 2) break
+          picked.unshift(index)
+          height += size
+        }
+        next = picked.flatMap((index) => {
+          const node = nodes[index]
+          return node === undefined ? [] : [node.id]
+        })
+      }
+    }
+    const key = next.join('\n')
+    if (key === stickyKeyRef.current) return
+    stickyKeyRef.current = key
+    setStickyIds(next)
+  })
+
+  const scheduleSticky = useStableCallback((): void => {
+    if (stickyFrameRef.current !== undefined) return
+    const scroller = containerRef.current
+    if (!scroller) return
+    stickyFrameRef.current = requestOwnerFrame(scroller, () => {
+      stickyFrameRef.current = undefined
+      measureSticky()
+    })
+  })
+
+  const watchSticky = renderStickyRow !== undefined
+
+  useEffect(() => {
+    if (!watchSticky) return
+    const scroller = containerRef.current
+    if (!scroller) return
+    scroller.addEventListener('scroll', scheduleSticky, { passive: true })
+    // A resize moves the top edge without scrolling, and is the only signal
+    // when a hidden pane (no viewport) comes back.
+    const ResizeObserverCtor = getOwnerResizeObserver(scroller)
+    const observer = ResizeObserverCtor ? new ResizeObserverCtor(scheduleSticky) : null
+    observer?.observe(scroller)
+    scheduleSticky()
+    return () => {
+      scroller.removeEventListener('scroll', scheduleSticky)
+      observer?.disconnect()
+      cancelOwnerFrame(stickyFrameRef.current)
+      stickyFrameRef.current = undefined
+      stickyKeyRef.current = ''
+    }
+  }, [watchSticky, scheduleSticky])
+
+  // Structure changes move the rows under the top edge (expand / collapse /
+  // reload), and no scroll event follows.
+  useEffect(() => {
+    if (watchSticky) scheduleSticky()
+  }, [watchSticky, visibleNodes, scheduleSticky])
+
+  // Jumping back is a plain scroll of this tree's own scroller (same geometry
+  // as the reveal path — never `scrollIntoView`, which would move ancestors).
+  const jumpToSticky = useStableCallback((id: string): void => {
+    const scroller = containerRef.current
+    if (!scroller) return
+    const index = visibleRef.current.findIndex((node) => node.id === id)
+    if (index < 0) return
+    const { rowHeight: fallback, getRowHeight: resolve } = rowHeightRef.current
+    let top = fallback * index
+    if (resolve !== undefined) {
+      top = 0
+      for (let i = 0; i < index; i++) top += sizeAt(i)
+    }
+    scroller.scrollTop = top
+  })
+
   useEffect(() => {
     if (!watchVisibleWindow) return
     // The ref callback runs before effects, so the container is always there on
@@ -636,6 +785,22 @@ export function Tree<T>(props: ITreeProps<T>) {
     </Fragment>
   )
 
+  // Resolve the pinned chain against the current visible rows on every render:
+  // ids recorded by a rAF can outlive the structure that produced them.
+  const stickyRows: { node: IVisibleNode<T>; indentPadding: number; height: number }[] = []
+  if (watchSticky) {
+    for (const id of stickyIds) {
+      const index = visibleNodes.findIndex((node) => node.id === id)
+      const node = index >= 0 ? visibleNodes[index] : undefined
+      if (node === undefined) continue
+      stickyRows.push({
+        node,
+        indentPadding: node.depth * indentWidth + indentBase,
+        height: sizeAt(index),
+      })
+    }
+  }
+
   return (
     <div
       ref={setContainer}
@@ -669,6 +834,25 @@ export function Tree<T>(props: ITreeProps<T>) {
           }
         : {})}
     >
+      {stickyRows.length > 0 && renderStickyRow !== undefined && (
+        <div className={treeStyles['stickyOverlay']} aria-hidden="true">
+          <div className={treeStyles['stickyStack']}>
+            {stickyRows.map(({ node, indentPadding, height }) => (
+              <div
+                key={node.id}
+                className={treeStyles['stickyRow']}
+                style={{ height: `${height}px` }}
+                data-testid="tree-sticky-row"
+                onClick={() => jumpToSticky(node.id)}
+              >
+                <div className={treeStyles['stickyRowContent']} inert={true}>
+                  {renderStickyRow({ node, indentPadding })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {containerReady && (
         <VirtualList
           items={visibleNodes}

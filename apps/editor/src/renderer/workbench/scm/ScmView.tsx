@@ -844,6 +844,56 @@ const ScmGroupRow = memo(function ScmGroupRow({
 
 // --- Provider --------------------------------------------------------------
 
+/**
+ * Presentation-only copy of a group / folder row for `Tree`'s sticky stack: no
+ * `data-row-key`, no role, no handlers — the tree keeps one DOM element per row
+ * key and the pinned copy only feeds the click-through shell above it.
+ */
+function ScmStickyRow({
+  node,
+  indentPadding,
+}: {
+  readonly node: ScmNode
+  readonly indentPadding: number
+}) {
+  if (node.kind === 'group') {
+    const GroupIcon = resolveIcon(groupIconName(node.groupId))
+    return (
+      <div className={styles['groupHeader']} style={{ paddingLeft: indentPadding }}>
+        <span className={styles['chevron']} aria-hidden="true">
+          <ChevronDown size={16} strokeWidth={1.75} />
+        </span>
+        {GroupIcon ? (
+          <GroupIcon
+            size={16}
+            strokeWidth={1.75}
+            className={styles['groupIcon']}
+            aria-hidden="true"
+          />
+        ) : null}
+        <span className={styles['groupLabel']}>{node.label}</span>
+        <span className={styles['groupCount']}>{node.count}</span>
+      </div>
+    )
+  }
+  // Ancestors are always groups or folders; the file branch is only here so the
+  // union stays type-honest.
+  const label = node.kind === 'folder' ? node.name : basename(node.resource.resourceUri)
+  return (
+    <div className={styles['folder']} style={{ paddingLeft: indentPadding }}>
+      <ChevronDown size={16} strokeWidth={1.75} className={styles['chevron']} aria-hidden="true" />
+      <FileIcon
+        resource={URI.file(label)}
+        className={styles['fileIcon']}
+        isDirectory
+        expanded
+        size={16}
+      />
+      <span className={styles['folderLabel']}>{label}</span>
+    </div>
+  )
+}
+
 function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; revision: number }) {
   const scm = useService(IScmService)
   const commandService = useService(ICommandService)
@@ -1328,6 +1378,9 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         indentBase={0}
         modifierActivation
         renderRow={renderRow}
+        renderStickyRow={(ctx) => (
+          <ScmStickyRow node={ctx.node.element} indentPadding={ctx.indentPadding} />
+        )}
         onActivate={(node, opts) => {
           const n = node.element
           if (n.kind !== 'file' || !n.resource.command) return

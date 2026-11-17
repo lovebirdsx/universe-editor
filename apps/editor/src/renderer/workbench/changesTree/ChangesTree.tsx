@@ -255,6 +255,33 @@ function FolderRowInner<TEntry>({
 }
 const FolderRow = memo(FolderRowInner) as typeof FolderRowInner
 
+/**
+ * Presentation-only copy of a folder row for `Tree`'s sticky stack: no
+ * `data-row-key`, no role, no handlers — the tree keeps one DOM element per row
+ * key and the pinned copy only feeds the click-through shell above it.
+ */
+function StickyFolderRow({
+  label,
+  indentPadding,
+}: {
+  readonly label: string
+  readonly indentPadding: number
+}) {
+  return (
+    <div className={styles['folder']} style={{ paddingLeft: indentPadding }}>
+      <ChevronDown size={16} strokeWidth={1.75} className={styles['chevron']} aria-hidden="true" />
+      <FileIcon
+        resource={URI.file(label)}
+        className={styles['fileIcon']}
+        isDirectory
+        expanded
+        size={16}
+      />
+      <span className={styles['folderLabel']}>{label}</span>
+    </div>
+  )
+}
+
 export function ChangesTree<TEntry>({
   items,
   viewMode,
@@ -528,6 +555,15 @@ export function ChangesTree<TEntry>({
         modifierActivation
         rootRef={treeRef}
         renderRow={renderRow}
+        renderStickyRow={(ctx) => {
+          const node = ctx.node.element
+          return (
+            <StickyFolderRow
+              label={node.kind === 'folder' ? node.name : stableDescribe(node.item.entry).label}
+              indentPadding={ctx.indentPadding}
+            />
+          )
+        }}
         onFocus={onTreeFocus}
         {...(scrollStateKey !== undefined ? { scrollStateKey } : {})}
         onActivate={(node, opts) => {

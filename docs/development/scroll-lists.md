@@ -58,6 +58,15 @@
 
 > **现状**：SettingsEditor 的 TOC scroll spy 已改用 `VirtualListHandle.getItemIndexAtOffset(scrollTop + 40)`（虚拟化器实测坐标），不再维护独立的 `estimateSize` 偏移表——修复前两者在 `measureDynamically` 下会漂移，点击靠下分组会高亮到更靠前的分组。恢复侧仍是纯 `scrollTop`（`useScrollRestore`），上面第 1 条的风险仍在；末组因底部 clamp 无法顶到视口顶、高亮落在前组仍是固有行为，e2e 断言须避开末尾组。
 
+## 6. Sticky 父级行（`Tree` 的 `renderStickyRow`）
+
+`Tree` 支持 VSCode 式的粘性滚动：视口顶边那一行的**祖先链**钉在列表顶部，每个深度一行。几何由 `Tree` 自己算（`visibleNodes` 的 depth + `scrollTop`，与 reveal 同一套行高公式），视图只负责画。
+
+两个非显然约束：
+
+- **钉住的行必须走 `renderStickyRow`，不要复用 `renderRow`**：复用会让同一个 `data-row-key` 在 DOM 里出现两次，违反本文开头的「每格一行、key 唯一」不变量（`findRowElement` 的键盘右键菜单、e2e 的行选择器都会撞上）；钉住的行只喂给 `Tree` 的点击外壳，点击 = 把真实行滚回顶部。
+- **钉住的内容是纯展示**：`Tree` 把它放进 `inert` 容器并设 `pointer-events: none`（布局上用零高度 sticky 子节点 + 绝对定位栈，与聊天时间线的 `StickyScrollOverlay` 同构）。所以视图给的 `renderStickyRow` 不要挂 `role` / `aria-*` / 事件处理器，也不要有可聚焦控件。背景必须不透明（§1）——行会从它下面滚过。
+
 ## 排查套路
 
 怀疑是残影（而不是 DOM 缺陷）时，在出问题的窗口里打开 DevTools 跑：

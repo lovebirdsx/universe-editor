@@ -1,0 +1,43 @@
+/* Sticky scroll (see `renderStickyRow`). Zero-height sticky child of the
+   scroller so the pinned stack never shifts the content, and the overlay paints
+   above the rows — but only inside this view's own stacking context, hence a
+   literal layer below the workbench ladder. The opaque backdrop is required:
+   rows scroll underneath the stack (docs/development/scroll-lists.md). */
+.stickyOverlay {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  flex: 0 0 auto;
+  height: 0;
+  pointer-events: none;
+}
+
+.stickyStack {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  pointer-events: none;
+}
+
+.stickyRow {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+  background-color: var(--view-background, transparent);
+}
+
+.stickyRow:hover {
+  background-color: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+/* The pinned row is a presentation-only copy: it must never take pointer events
+   or tab focus (the shell above owns the click that jumps back). */
+.stickyRowContent {
+  height: 100%;
+  pointer-events: none;
+}
