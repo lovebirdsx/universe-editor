@@ -7,6 +7,7 @@
  *   - activeEditorLanguageId / activeEditorTypeId                (active editor attributes)
  *   - inKeybindings                                              (active editor is Keyboard Shortcuts)
  *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
+ *   - acpSessionHasAutomation                                    (active session was trigger-started)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorTextFocus                                            (Monaco text input focus)
  *   - acpPromptInputFocused                                      (ACP session prompt input focus)
@@ -51,6 +52,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { MergeEditorInput } from '../services/editor/MergeEditorInput.js'
+import { AcpSessionEditorInput } from '../services/acp/session/acpSessionEditorInput.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import { IWorkbenchWindowService } from '../services/windows/workbenchWindowService.js'
 
@@ -124,6 +126,13 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       'diffEditorHasOpenableFile',
       false,
     )
+    // Mirrors the per-group scoped key of the same name (editorScopedContextValues).
+    // The command palette resolves `when` against this root one, so "View Trigger
+    // Run Report" stays listed only while a trigger-started session is in front.
+    const acpSessionHasAutomation = contextKeyService.createKey<boolean>(
+      'acpSessionHasAutomation',
+      false,
+    )
     const isInMergeEditor = contextKeyService.createKey<boolean>('isInMergeEditor', false)
     // True while the Keyboard Shortcuts editor is the active editor.
     const inKeybindings = contextKeyService.createKey<boolean>('inKeybindings', false)
@@ -151,6 +160,9 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
         diffEditorHasOpenableFile.set(isDiff && editor.openableResource !== undefined)
         isInMergeEditor.set(editor instanceof MergeEditorInput)
         textCompareEditorVisible.set(isDiff)
+        acpSessionHasAutomation.set(
+          editor instanceof AcpSessionEditorInput ? editor.hasAutomation.read(reader) : false,
+        )
       }),
     )
 

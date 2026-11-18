@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   ContextKeyService,
   Emitter,
+  Event,
   IFileService,
   LifecyclePhase,
   LifecycleService,
@@ -13,6 +14,13 @@ import {
 import { ContextKeyContribution } from '../ContextKeyContribution.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
+import type { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
+import type {
+  AcpSessionHistoryEntry,
+  IAcpSessionHistoryService,
+} from '../../services/acp/session/acpSessionHistory.js'
+import type { IAcpChatWidgetService } from '../../services/acp/session/acpChatWidgetService.js'
 
 function makeLayoutStub(initial?: Partial<Record<PartId, boolean>>) {
   const visible = observableValue<Readonly<Record<PartId, boolean>>>('layout', {
@@ -146,6 +154,52 @@ function makeWorkbenchWindowsStub(initialCount = 1) {
       removeWindow.fire({})
     },
   }
+}
+
+function historyEntry(automation?: AcpSessionHistoryEntry['automation']): AcpSessionHistoryEntry {
+  return {
+    id: 'durable-1',
+    agentId: 'fake',
+    sessionIdOnAgent: 'durable-1',
+    title: 'session',
+    createdAt: 1,
+    lastUsedAt: 1,
+    ...(automation !== undefined ? { automation } : {}),
+  }
+}
+
+function makeSessionInput() {
+  const entries = observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', [])
+  const history = {
+    _serviceBrand: undefined,
+    entries,
+    get: (id: string) => entries.get().find((entry) => entry.id === id),
+  } as unknown as IAcpSessionHistoryService
+  const sessions = {
+    _serviceBrand: undefined,
+    getById: () => undefined,
+  } as unknown as IAcpSessionService
+  const chatWidget = {
+    _serviceBrand: undefined,
+    focusSession: () => false,
+  } as unknown as IAcpChatWidgetService
+  const workspace = {
+    _serviceBrand: undefined,
+    current: null,
+    onDidChangeWorkspace: Event.None,
+  }
+  const uriIdentity = { _serviceBrand: undefined, platform: 'linux' }
+  const input = new AcpSessionEditorInput(
+    'durable-1',
+    'fake',
+    undefined,
+    sessions,
+    history,
+    chatWidget,
+    workspace as never,
+    uriIdentity as never,
+  )
+  return { input, entries }
 }
 
 interface FakeEditor {
@@ -403,6 +457,70 @@ describe('ContextKeyContribution', () => {
     expect(ctx.get('isInDiffEditor')).toBe(false)
     expect(ctx.get('diffEditorHasOpenableFile')).toBe(false)
     ctx.dispose()
+  })
+
+  it('exposes acpSessionHasAutomation on the root service for the command palette', () => {
+    // The per-group scoped key of the same name drives the tab context menu;
+    // the command palette resolves against the root key, so it must be seeded
+    // here — and follow history hydration without an editor switch.
+    const ctx = new ContextKeyService()
+    const editor = makeEditorStub()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      editor as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
+    )
+    expect(ctx.get('acpSessionHasAutomation')).toBe(false)
+
+    const { input, entries } = makeSessionInput()
+    editor.activeEditor.set(input, undefined)
+    expect(ctx.get('acpSessionHasAutomation')).toBe(false)
+
+    entries.set(
+      [
+        historyEntry({
+          triggerId: 'triage',
+          triggerName: 'Triage',
+          eventKey: 'swarm:1',
+          runId: 'run-1',
+        }),
+      ],
+      undefined,
+    )
+    expect(ctx.get('acpSessionHasAutomation')).toBe(true)
+
+    editor.activeEditor.set({ id: 'file:///repo/a.ts' }, undefined)
+    expect(ctx.get('acpSessionHasAutomation')).toBe(false)
+    ctx.dispose()
+    input.dispose()
+  })
+
+  it('leaves acpSessionHasAutomation false for an ordinary session', () => {
+    const ctx = new ContextKeyService()
+    const editor = makeEditorStub()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      editor as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+      makeWorkspaceStub() as never,
+      makeWorkbenchWindowsStub() as never,
+    )
+    const { input, entries } = makeSessionInput()
+    editor.activeEditor.set(input, undefined)
+    entries.set([historyEntry()], undefined)
+    expect(ctx.get('acpSessionHasAutomation')).toBe(false)
+    ctx.dispose()
+    input.dispose()
   })
 
   it('seeds VSCode-parity editor keys with defaults', () => {

@@ -64,7 +64,11 @@ import { readTriggerConfig } from '../services/triggers/triggerConfigFileService
 import { revealTriggerConfig } from '../services/triggers/revealTriggerConfig.js'
 import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
 import { IWindowFocusService } from '../services/windows/windowFocusService.js'
-import { ACP_CHAT_SESSION_GROUP, resolveSessionTargetId } from './_agentShared.js'
+import {
+  ACP_CHAT_SESSION_GROUP,
+  ACP_SESSION_EDITOR_ACTIVE_WHEN,
+  resolveSessionTargetId,
+} from './_agentShared.js'
 import {
   buildTriggerActionItems,
   buildTriggerPickItems,
@@ -784,11 +788,17 @@ export interface ViewTriggerReportArgs {
   readonly eventKey?: string
 }
 
+// The palette row uses the root `acpSessionHasAutomation` (seeded by
+// ContextKeyContribution). A `precondition` would also AND into the two context
+// menus and make "View Report" disappear from ordinary trigger sessions there.
+const TRIGGER_REPORT_PALETTE_WHEN = `${ACP_SESSION_EDITOR_ACTIVE_WHEN} && acpSessionHasAutomation`
+
 /**
  * Opens the read-only report tab for one trigger run. Target resolution follows
  * the session commands: explicit `sessionId`, the clicked tab's `resource`, the
  * active session tab, then the active session. The notification passes a runId
- * so the report remains reachable when its session is already gone.
+ * so the report remains reachable when its session is already gone. The palette
+ * row is listed only while a trigger-started session is in front.
  */
 export class ViewTriggerReportAction extends Action2 {
   static readonly ID = 'workbench.action.triggers.viewReport'
@@ -813,6 +823,10 @@ export class ViewTriggerReportAction extends Action2 {
           group: '1_session',
           order: 3,
           title: localize2('acp.sessions.viewReport', 'View Report'),
+        },
+        {
+          id: MenuId.CommandPalette,
+          when: TRIGGER_REPORT_PALETTE_WHEN,
         },
       ],
       f1: false,

@@ -39,6 +39,7 @@ import {
 } from '../../../shared/ipc/triggerService.js'
 import { ILogFilesService } from '../../../shared/ipc/services.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
+import { ACP_SESSION_EDITOR_ACTIVE_WHEN } from '../_agentShared.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   OpenTriggersConfigAction,
@@ -68,7 +69,7 @@ function whenOf(menuId: MenuId): string | undefined {
 }
 
 describe('ViewTriggerReportAction menu entries', () => {
-  it('offers View Report on trigger-started chats and session tabs', () => {
+  it('offers View Report on trigger-started chats, session tabs and the command palette', () => {
     registration = registerAction2(ViewTriggerReportAction)
 
     expect(menuItem(MenuId.AcpChatContext)).toMatchObject({ group: '3_session', order: 6 })
@@ -78,6 +79,10 @@ describe('ViewTriggerReportAction menu entries', () => {
     const tabWhen = whenOf(MenuId.EditorTabContext) ?? ''
     expect(tabWhen).toContain("activeEditorType == 'acp.session'")
     expect(tabWhen).toContain('acpSessionHasAutomation')
+
+    const paletteWhen = whenOf(MenuId.CommandPalette) ?? ''
+    expect(paletteWhen).toContain(ACP_SESSION_EDITOR_ACTIVE_WHEN)
+    expect(paletteWhen).toContain('acpSessionHasAutomation')
   })
 })
 

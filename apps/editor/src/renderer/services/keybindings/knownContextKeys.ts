@@ -71,6 +71,7 @@ const SEEDED_CONTEXT_KEYS: readonly string[] = [
   'activeEditorTypeId',
   'isInDiffEditor',
   'diffEditorHasOpenableFile',
+  'acpSessionHasAutomation',
   'isInMergeEditor',
   'inKeybindings',
   'textCompareEditorVisible',

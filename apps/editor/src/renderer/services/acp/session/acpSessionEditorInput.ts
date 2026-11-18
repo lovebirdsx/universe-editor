@@ -48,6 +48,9 @@ export class AcpSessionEditorInput extends EditorInput {
   private readonly _sideTaskCount: ISettableObservable<number>
   /** Direct side tasks forked off this session; drives the tab's count hint. */
   readonly sideTaskCount: IObservable<number>
+  private readonly _hasAutomation: ISettableObservable<boolean>
+  /** True when an agent trigger started this session; drives the palette / tab menus. */
+  readonly hasAutomation: IObservable<boolean>
 
   /**
    * `agentId` is captured at construction so a stale serialized input — left
@@ -70,6 +73,8 @@ export class AcpSessionEditorInput extends EditorInput {
     this.hasSubdirCwd = this._hasSubdirCwd
     this._sideTaskCount = observableValue<number>(`acpSessionSideTaskCount:${sessionId}`, 0)
     this.sideTaskCount = this._sideTaskCount
+    this._hasAutomation = observableValue<boolean>(`acpSessionHasAutomation:${sessionId}`, false)
+    this.hasAutomation = this._hasAutomation
     this._lastTitle =
       initialTitle !== undefined && initialTitle.length > 0
         ? truncateSessionTitle(initialTitle)
@@ -80,6 +85,8 @@ export class AcpSessionEditorInput extends EditorInput {
     this._titleSub = autorun((r) => {
       // Subscribe to entries so history-side renames also trigger us.
       this._history.entries.read(r)
+      // History hydration can reveal the automation after the tab was built.
+      this._hasAutomation.set(this._computeHasAutomation(), undefined)
       // history.title 优先于 live.title——后者是构造时锁定的死字符串，rename 后并不会更新。
       // 没拿到 title 时不要回落到 sessionId 覆盖构造期写入的 initialTitle / _computeTitle 结果。
       const title = resolveLiveSessionTitle(this._history, this._sessions, this.sessionId)
@@ -174,8 +181,8 @@ export class AcpSessionEditorInput extends EditorInput {
     return this._history.get(this._durableSessionId())?.archived === true
   }
 
-  /** True when an agent trigger started this session, for the tab context-menu `when`. */
-  get hasAutomation(): boolean {
+  /** True when an agent trigger started this session; drives the tab / palette `when`. */
+  private _computeHasAutomation(): boolean {
     return (
       this._sessions.getById(this.sessionId)?.automation !== undefined ||
       this._history.get(this._durableSessionId())?.automation !== undefined
