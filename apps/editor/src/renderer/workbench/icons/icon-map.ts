@@ -96,6 +96,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { CONTAINER_ICON_MAP } from './containerIcons.js'
+import { VimInsertIcon, VimNormalIcon } from './vimModeIcons.js'
 
 const ICON_MAP: Record<string, LucideIcon> = {
   ...CONTAINER_ICON_MAP,
@@ -212,6 +213,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // Status bar entries.
   bell: Bell,
   shield: Shield,
+  'vim-normal': VimNormalIcon,
+  'vim-insert': VimInsertIcon,
 }
 
 export function resolveIcon(name: string | undefined): LucideIcon | undefined {

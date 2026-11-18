@@ -72,7 +72,7 @@ React 列表 / 菜单 / 浮层的唯一入口是 `packages/workbench-ui/src/keyb
 
 **`Ctrl+H/J/K/L` 不走 Vim**：Normal 模式下它们仍归工作台（替换 / 切换底栏 / 和弦 / 扩选），Vim 只认领 `Ctrl+F/B/D/U`；Insert 模式完全放行。
 
-**状态栏**：`vim-mode` 条目只在编辑器文本聚焦且开启时存在（`editor.vimMode.showStatusBar` 可关）。用户可见键位见 `docs/user/zh-CN/reference/editor-shortcuts.md` 的「Vim 模式」一节。
+**状态栏**：右侧的 `vim-mode` 图标条目（Normal/Insert 两种徽标）只在任意窗口的编辑器文本聚焦且开启时存在（`editor.vimMode.showStatusBar` 可关）。用户可见键位见 `docs/user/zh-CN/reference/editor-shortcuts.md` 的「Vim 模式」一节。
 
 ## 焦点类上下文键：一律 DOM 派生
 

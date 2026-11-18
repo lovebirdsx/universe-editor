@@ -342,7 +342,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: true,
             description: localize(
               'settings.editor.vimMode.showStatusBar.description',
-              'Show the current Vim mode (-- NORMAL -- / -- INSERT --) in the status bar while an editor has text focus.',
+              'Show the current Vim mode as a status-bar icon while an editor has text focus.',
             ),
           },
         },

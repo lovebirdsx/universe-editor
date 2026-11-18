@@ -67,9 +67,9 @@ async function setVimModeEnabled(page: Page, enabled: boolean): Promise<void> {
     .toBe(enabled)
 }
 
-async function statusText(page: Page): Promise<string | undefined> {
+async function statusIcon(page: Page): Promise<string | undefined> {
   const entries = await page.evaluate(() => window.__E2E__!.getStatusBarEntries())
-  return entries.find((entry) => entry.entryId === 'vim-mode')?.text
+  return entries.find((entry) => entry.entryId === 'vim-mode')?.icon
 }
 
 /** Open one temp file through a real workspace so Monaco's text focus lands. */
@@ -96,7 +96,7 @@ test.describe('@p1 vim mode', () => {
     await openEditor(page, workbench)
     await setVimModeEnabled(page, true)
 
-    await expect.poll(() => statusText(page)).toBe('-- NORMAL --')
+    await expect.poll(() => statusIcon(page)).toBe('vim-normal')
 
     await test.step('hjkl move by character and line', async () => {
       await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
@@ -137,11 +137,11 @@ test.describe('@p1 vim mode', () => {
       await setText(page, BODY)
       await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
       await page.keyboard.press('i')
-      await expect.poll(() => statusText(page)).toBe('-- INSERT --')
+      await expect.poll(() => statusIcon(page)).toBe('vim-insert')
       await page.keyboard.type('X')
       await expect.poll(() => text(page)).toBe(`X${BODY}`)
       await page.keyboard.press('Escape')
-      await expect.poll(() => statusText(page)).toBe('-- NORMAL --')
+      await expect.poll(() => statusIcon(page)).toBe('vim-normal')
     })
 
     await test.step('dd deletes the line, p pastes it back, u undoes the paste', async () => {
@@ -175,7 +175,7 @@ test.describe('@p1 vim mode', () => {
     await openEditor(page, workbench)
     await setVimModeEnabled(page, true)
     await setVimModeEnabled(page, false)
-    await expect.poll(() => statusText(page)).toBeUndefined()
+    await expect.poll(() => statusIcon(page)).toBeUndefined()
 
     await setText(page, BODY)
     await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))

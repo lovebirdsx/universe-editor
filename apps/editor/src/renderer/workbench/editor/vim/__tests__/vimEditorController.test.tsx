@@ -39,7 +39,7 @@ function createFakeConfig(initial: Record<string, unknown>): FakeConfig {
   }
 }
 
-function createFakeEditor(lines: string[]) {
+function createFakeEditor(lines: string[], doc: Document = document) {
   let selection: VimRange = {
     startLineNumber: 1,
     startColumn: 1,
@@ -48,8 +48,8 @@ function createFakeEditor(lines: string[]) {
   }
   const focusListeners: (() => void)[] = []
   const blurListeners: (() => void)[] = []
-  const container = document.createElement('div')
-  document.body.appendChild(container)
+  const container = doc.createElement('div')
+  doc.body.appendChild(container)
   const model = {
     getLineCount: () => lines.length,
     getLineContent: (line: number) => lines[line - 1] ?? '',
@@ -196,6 +196,34 @@ describe('createVimEditorController', () => {
     fake.focus()
     expect(controller.handleKeyDown(key('j', { isComposing: true }))).toBe(false)
     controller.dispose()
+  })
+
+  it('shows the icon entry for an editor in an auxiliary-window document', () => {
+    // Auxiliary windows portal their editor DOM into a separate document but
+    // share the main renderer's status-bar service; the entry must follow that
+    // editor's focus too (regression: it used to be limited to the main document).
+    const auxDocument = document.implementation.createHTMLDocument('auxiliary')
+    const fake = createFakeEditor(['abc'], auxDocument)
+    const statusBar = createStatusBar()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      contextKeyService: createContext() as never,
+      statusBarService: statusBar as never,
+    })
+
+    fake.focus()
+
+    expect(statusBar.records).toHaveLength(1)
+    expect(statusBar.records[0]?.entry).toMatchObject({
+      icon: 'vim-normal',
+      text: '',
+      alignment: 1,
+    })
+    controller.handleKeyDown(key('i'))
+    expect(statusBar.records[0]?.entry).toMatchObject({ icon: 'vim-insert' })
+    controller.dispose()
+    auxDocument.body.removeChild(fake.container)
   })
 
   it('resets to Normal when the configuration is disabled', () => {

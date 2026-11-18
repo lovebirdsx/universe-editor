@@ -129,7 +129,7 @@
 - 设置里把 `editor.vimMode.enabled` 设为 `true`；
 - 命令面板执行「切换 Vim 模式」（命令 id `workbench.action.toggleVimMode`）。
 
-默认关闭；关闭时本文其余键位表保持原样。开启且编辑器持有文本焦点时，状态栏左侧显示当前模式（`-- NORMAL --` / `-- INSERT --`）；不需要这个指示可把 `editor.vimMode.showStatusBar` 设为 `false`。
+默认关闭；关闭时本文其余键位表保持原样。开启且任意窗口的编辑器持有文本焦点时，状态栏右侧显示当前模式图标（Normal 为 `N`、Insert 为 `I`，悬停可查看说明，点击可切换 Vim 模式）；不需要这个指示可把 `editor.vimMode.showStatusBar` 设为 `false`。
 
 ### Normal 模式
 

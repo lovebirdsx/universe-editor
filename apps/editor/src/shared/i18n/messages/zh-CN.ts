@@ -368,8 +368,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'panel.restore': '还原底栏大小',
   'sidebar.empty': '没有注册任何视图。',
   'titleBar.empty': '（空）',
-  'vim.status.insert': '-- INSERT --',
-  'vim.status.normal': '-- NORMAL --',
+  'vim.status.insert': 'Vim: 插入模式（点击切换）',
+  'vim.status.normal': 'Vim: 普通模式（点击切换）',
   'view.aiDebug': 'AI 调试',
   'view.commitChanges': '提交变更',
   'view.files': '文件',
@@ -1282,7 +1282,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.editor.vimMode.enabled.description':
     '在代码编辑器与列表导航中启用 Vim 键位（Normal / Insert 双模式）。Normal 模式下 h/j/k/l 移动、w/b/e 按词跳转、gg/G 跳到首末行、Ctrl+F/B/D/U 翻页。',
   'settings.editor.vimMode.showStatusBar.description':
-    '编辑器持有文本焦点时，在状态栏显示当前 Vim 模式（-- NORMAL -- / -- INSERT --）。',
+    '编辑器持有文本焦点时，在状态栏显示当前 Vim 模式的图标。',
   'settings.files.nativeDialog.enable.description':
     '打开文件/文件夹及保存时使用操作系统文件对话框，而不是内置对话框。',
   'settings.issueReporter': '问题报告器',

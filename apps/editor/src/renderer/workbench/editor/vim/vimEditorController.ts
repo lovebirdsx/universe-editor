@@ -14,6 +14,7 @@ import {
   type IConfigurationService,
   type IContextKeyService,
   type IDisposable,
+  type IStatusBarEntry,
   type IStatusBarEntryAccessor,
   type IStatusBarService,
 } from '@universe-editor/platform'
@@ -73,17 +74,27 @@ export function createVimEditorController(
 
   const disposables: IDisposable[] = []
 
-  function isMainDocument(): boolean {
-    return editor.getContainerDomNode().ownerDocument === document
-  }
-
   function showStatusBar(): boolean {
     return (
-      enabled &&
-      textFocused &&
-      isMainDocument() &&
-      configService.get<boolean>('editor.vimMode.showStatusBar') !== false
+      enabled && textFocused && configService.get<boolean>('editor.vimMode.showStatusBar') !== false
     )
+  }
+
+  function statusEntryData(): IStatusBarEntry {
+    return {
+      id: VIM_STATUS_ENTRY_ID,
+      // Icon-only: the glyph carries the mode, the tooltip names it. The old
+      // `-- NORMAL --` text was too loud for a persistent status-bar slot.
+      text: '',
+      icon: state.mode === 'insert' ? 'vim-insert' : 'vim-normal',
+      tooltip:
+        state.mode === 'insert'
+          ? localize('vim.status.insert', 'Vim: Insert (click to toggle)')
+          : localize('vim.status.normal', 'Vim: Normal (click to toggle)'),
+      alignment: StatusBarAlignment.Right,
+      priority: VIM_STATUS_PRIORITY,
+      command: 'workbench.action.toggleVimMode',
+    }
   }
 
   function disposeStatusEntry(): void {
@@ -96,27 +107,12 @@ export function createVimEditorController(
       disposeStatusEntry()
       return
     }
-    const text =
-      state.mode === 'insert'
-        ? localize('vim.status.insert', '-- INSERT --')
-        : localize('vim.status.normal', '-- NORMAL --')
+    const entry = statusEntryData()
     if (statusEntry === undefined) {
-      statusEntry = statusBarService.addEntry({
-        id: VIM_STATUS_ENTRY_ID,
-        text,
-        alignment: StatusBarAlignment.Left,
-        priority: VIM_STATUS_PRIORITY,
-        command: 'workbench.action.toggleVimMode',
-      })
+      statusEntry = statusBarService.addEntry(entry)
       return
     }
-    statusEntry.update({
-      id: VIM_STATUS_ENTRY_ID,
-      text,
-      alignment: StatusBarAlignment.Left,
-      priority: VIM_STATUS_PRIORITY,
-      command: 'workbench.action.toggleVimMode',
-    })
+    statusEntry.update(entry)
   }
 
   function syncContextKeys(): void {
