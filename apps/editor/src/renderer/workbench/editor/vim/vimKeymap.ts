@@ -237,7 +237,33 @@ export function reduceVimKey(state: VimState, input: VimKeyInput): VimKeyResult 
     return motion(state, key as VimMotion)
   }
 
+  // Vim's `d/`, `dn` and `dN` are operator + search-motion combinations; this
+  // core has no search motion yet, so cancel the operator instead of silently
+  // treating the search key as text or leaving the operator pending.
+  if (
+    state.pendingOperator !== null &&
+    (key === '/' || key === '?' || key === 'n' || key === 'N')
+  ) {
+    return { state: idle(state), command: null, handled: true }
+  }
+
   switch (key) {
+    case '/':
+      return emit(state, {
+        type: 'search-open',
+        direction: 'forward',
+        count: Math.max(1, state.count),
+      })
+    case '?':
+      return emit(state, {
+        type: 'search-open',
+        direction: 'backward',
+        count: Math.max(1, state.count),
+      })
+    case 'n':
+      return emit(state, { type: 'search-repeat', reverse: false, count: Math.max(1, state.count) })
+    case 'N':
+      return emit(state, { type: 'search-repeat', reverse: true, count: Math.max(1, state.count) })
     case 'i':
       return emit(state, { type: 'enter-insert', placement: 'before' })
     case 'I':

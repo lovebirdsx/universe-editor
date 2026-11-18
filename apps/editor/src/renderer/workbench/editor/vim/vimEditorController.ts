@@ -24,12 +24,21 @@ import { clampNormalPosition, firstNonBlankColumn, resolveMotion } from './vimMo
 import { linewiseRange, resolveOperatorRange } from './vimOperators.js'
 import { getVimRegister, setVimRegister } from './vimRegisters.js'
 import {
+  findVimMatch,
+  getLastVimSearch,
+  oppositeSearchDirection,
+  setLastVimSearch,
+  type VimSearchMatch,
+} from './vimSearch.js'
+import { createVimSearchWidget, type VimSearchWidget } from './vimSearchWidget.js'
+import {
   INITIAL_VIM_STATE,
   type VimCommand,
   type VimEditor,
   type VimMotion,
   type VimPosition,
   type VimRange,
+  type VimSearchDirection,
   type VimState,
   type VimTextModel,
 } from './vimTypes.js'
@@ -84,6 +93,19 @@ export function createVimEditorController(
     configService.get<boolean>('editor.vimMode.autoSwitchInputMethod') !== false
   let textFocused = false
   let statusEntry: IStatusBarEntryAccessor | undefined
+  let searchWidget: VimSearchWidget | null = null
+  let searchOrigin: VimPosition | null = null
+  let searchDirection: VimSearchDirection = 'forward'
+  let searchOpenCount = 1
+  let searchFocused = false
+  let searchDecorations: ReturnType<VimEditor['createDecorationsCollection']> | null = null
+  let closingSearch = false
+
+  function setSearchFocused(next: boolean): void {
+    if (searchFocused === next) return
+    searchFocused = next
+    contextKeyService.set('vimSearchFocused', next)
+  }
 
   const disposables: IDisposable[] = []
 
@@ -270,7 +292,255 @@ export function createVimEditorController(
     }
   }
 
+  function ensureSearchWidget(): VimSearchWidget {
+    if (searchWidget !== null) return searchWidget
+    const widget = createVimSearchWidget(editor)
+    widget.input.addEventListener('keydown', onSearchKeyDown)
+    widget.input.addEventListener('input', onSearchInput)
+    widget.input.addEventListener('focus', onSearchFocus)
+    widget.input.addEventListener('blur', onSearchBlur)
+    searchWidget = widget
+    return widget
+  }
+
+  function onSearchKeyDown(event: KeyboardEvent): void {
+    // Let the IME commit/cancel the composition with Enter/Escape first.
+    if (event.isComposing || event.keyCode === 229) return
+    // The document-capture dispatcher runs before this handler; the
+    // `vimSearchFocused` context key keeps the Find family from claiming these.
+    // Swallow them here as well so an inactive Find binding (or Monaco's own
+    // container listener) cannot close the box and discard the typed pattern.
+    const findKey =
+      (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey
+        ? event.key.toLowerCase()
+        : ''
+    if (findKey === 'f' || findKey === 'h' || event.key === 'F3') {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      commitSearch()
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      event.stopPropagation()
+      event.stopImmediatePropagation()
+      cancelSearch()
+    }
+  }
+
+  function onSearchFocus(): void {
+    setSearchFocused(true)
+  }
+
+  function onSearchInput(event: Event): void {
+    if ((event as InputEvent).isComposing) return
+    previewSearch()
+  }
+
+  /**
+   * Clicking away closes the box. Keep the visible preview and remember its
+   * pattern so `n` continues the search the user just typed; a miss (or an
+   * empty box) restores the cursor instead, because there is nothing to keep.
+   */
+  function onSearchBlur(): void {
+    if (closingSearch) return
+    const widget = searchWidget
+    const origin = searchOrigin
+    const model = editor.getModel()
+    if (widget === null || origin === null || model === null) {
+      closeSearch(false, false)
+      return
+    }
+    const query = widget.input.value
+    const match =
+      query.length === 0
+        ? null
+        : findVimMatch(model, origin, query, {
+            direction: searchDirection,
+            count: searchOpenCount,
+          })
+    if (match === null) {
+      closeSearch(true, false)
+      return
+    }
+    setLastVimSearch({ text: query, direction: searchDirection })
+    moveToSearchMatch(match, query)
+    closeSearch(false, false, true)
+  }
+
+  function setSearchHighlight(match: VimSearchMatch, query: string): void {
+    searchDecorations ??= editor.createDecorationsCollection()
+    searchDecorations.set([
+      {
+        range: {
+          startLineNumber: match.line,
+          startColumn: match.column,
+          endLineNumber: match.line,
+          endColumn: match.column + query.length,
+        },
+        options: { inlineClassName: 'vim-search-match' },
+      },
+    ])
+  }
+
+  function clearSearchHighlight(): void {
+    searchDecorations?.clear()
+  }
+
+  function moveToSearchMatch(match: VimSearchMatch, query: string): void {
+    setPosition({ line: match.line, column: match.column })
+    setSearchHighlight(match, query)
+  }
+
+  /**
+   * Hide the box and drop its transient state. `restoreOrigin` puts the cursor
+   * back where the search started (Esc); `refocus` returns text focus to Monaco
+   * so Normal-mode keystrokes resume (Enter/Esc, but not a blur away);
+   * `keepHighlight` leaves the confirmed match marked after the box closes.
+   */
+  function closeSearch(restoreOrigin: boolean, refocus: boolean, keepHighlight = false): void {
+    if (closingSearch) return
+    closingSearch = true
+    try {
+      const origin = searchOrigin
+      searchOrigin = null
+      searchWidget?.clearHint()
+      searchWidget?.hide()
+      setSearchFocused(false)
+      if (!keepHighlight) clearSearchHighlight()
+      if (restoreOrigin && origin !== null) setPosition(origin)
+      if (refocus) editor.focus()
+    } finally {
+      closingSearch = false
+    }
+  }
+
+  function openSearch(direction: VimSearchDirection, count: number): void {
+    if (editor.getModel() === null) return
+    closeSearch(false, false)
+    searchOrigin = primaryPosition()
+    searchDirection = direction
+    searchOpenCount = Math.max(1, count)
+    const widget = ensureSearchWidget()
+    widget.setDirection(direction)
+    widget.setValue('')
+    widget.clearHint()
+    widget.show()
+    queueMicrotask(() => {
+      if (searchOrigin === null) return
+      widget.input.focus()
+      widget.input.select()
+    })
+  }
+
+  function previewSearch(): void {
+    const widget = searchWidget
+    const origin = searchOrigin
+    const model = editor.getModel()
+    if (widget === null || origin === null || model === null) return
+    const query = widget.input.value
+    if (query.length === 0) {
+      setPosition(origin)
+      clearSearchHighlight()
+      widget.clearHint()
+      return
+    }
+    const match = findVimMatch(model, origin, query, {
+      direction: searchDirection,
+      count: searchOpenCount,
+    })
+    if (match === null) {
+      setPosition(origin)
+      clearSearchHighlight()
+      widget.showHint(localize('vim.search.noMatch', 'No match'))
+      return
+    }
+    widget.clearHint()
+    moveToSearchMatch(match, query)
+  }
+
+  function commitSearch(): void {
+    const widget = searchWidget
+    const origin = searchOrigin
+    if (widget === null || origin === null) return
+    const last = getLastVimSearch()
+    const typed = widget.input.value
+    const query = typed.length > 0 ? typed : (last?.text ?? '')
+    if (query.length === 0) {
+      widget.showHint(localize('vim.search.noPrevious', 'No previous search'))
+      return
+    }
+    setLastVimSearch({ text: query, direction: searchDirection })
+    const model = editor.getModel()
+    if (model === null) return
+    const match = findVimMatch(model, origin, query, {
+      direction: searchDirection,
+      count: searchOpenCount,
+    })
+    if (match === null) {
+      setPosition(origin)
+      clearSearchHighlight()
+      widget.showHint(localize('vim.search.noMatch', 'No match'))
+      return
+    }
+    moveToSearchMatch(match, query)
+    closeSearch(false, true, true)
+  }
+
+  function cancelSearch(): void {
+    closeSearch(true, true)
+  }
+
+  function repeatSearch(reverse: boolean, count: number): void {
+    const last = getLastVimSearch()
+    const model = editor.getModel()
+    if (last === null || model === null) return
+    const direction = reverse ? oppositeSearchDirection(last.direction) : last.direction
+    const match = findVimMatch(model, primaryPosition(), last.text, {
+      direction,
+      count,
+    })
+    if (match === null) return
+    moveToSearchMatch(match, last.text)
+  }
+
+  function executeSearchCommand(
+    command: Extract<VimCommand, { type: 'search-open' } | { type: 'search-repeat' }>,
+  ): void {
+    if (command.type === 'search-open') {
+      openSearch(command.direction, command.count)
+      return
+    }
+    repeatSearch(command.reverse, command.count)
+  }
+
+  function disposeSearch(): void {
+    if (searchWidget !== null) {
+      searchWidget.input.removeEventListener('keydown', onSearchKeyDown)
+      searchWidget.input.removeEventListener('input', onSearchInput)
+      searchWidget.input.removeEventListener('focus', onSearchFocus)
+      searchWidget.input.removeEventListener('blur', onSearchBlur)
+    }
+    closeSearch(false, false)
+    searchWidget?.dispose()
+    searchWidget = null
+    clearSearchHighlight()
+    searchDecorations = null
+  }
+
   function executeCommand(command: VimCommand): void {
+    if (command.type === 'search-open' || command.type === 'search-repeat') {
+      executeSearchCommand(command)
+      return
+    }
+
     const model = editor.getModel()
     if (!model) return
     const from = primaryPosition()
@@ -489,6 +759,7 @@ export function createVimEditorController(
   })
   const modelSubscription = editor.onDidChangeModel(() => {
     state = INITIAL_VIM_STATE
+    closeSearch(false, false)
     syncContextKeys()
     syncStatusBar()
   })
@@ -499,6 +770,7 @@ export function createVimEditorController(
       enabled = configService.get<boolean>('editor.vimMode.enabled') === true
       if (!enabled) {
         state = INITIAL_VIM_STATE
+        closeSearch(false, false)
       }
       syncContextKeys()
       syncStatusBar()
@@ -525,6 +797,7 @@ export function createVimEditorController(
     dispose: () => {
       for (const disposable of disposables) disposable.dispose()
       disposables.length = 0
+      disposeSearch()
       disposeStatusEntry()
       // Only the controller holding text focus may leave English: main's saved
       // input method is shared, so a background group's disposal must not yank

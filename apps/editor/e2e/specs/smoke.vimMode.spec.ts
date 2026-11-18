@@ -193,6 +193,70 @@ test.describe('@p1 vim mode', () => {
     })
   })
 
+  test('Normal-mode search: / ? n N with live preview', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+    await workbench.waitForBootstrapFocusSettled()
+    await openEditor(page, workbench)
+    await setVimModeEnabled(page, true)
+
+    const body = 'bar one\nfoo two\nbaz foo\n'
+    await setText(page, body)
+    await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(1, 1))
+
+    await test.step('/ previews matches and Enter confirms', async () => {
+      await page.keyboard.press('/')
+      await page.keyboard.type('foo')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+      await page.keyboard.press('Enter')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+      await expect.poll(() => statusIcon(page)).toBe('vim-normal')
+      await expect.poll(() => workbench.getContextKey<string>('vimMode')).toBe('normal')
+      await expect.poll(() => workbench.getContextKey<boolean>('findWidgetVisible')).toBe(false)
+    })
+
+    await test.step('n and N repeat with wrap-around', async () => {
+      await page.keyboard.press('n')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 3, column: 5 })
+      await page.keyboard.press('n')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+      await page.keyboard.press('N')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 3, column: 5 })
+    })
+
+    await test.step('/ skips the match under the cursor', async () => {
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 1))
+      await page.keyboard.press('/')
+      await page.keyboard.type('foo')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 3, column: 5 })
+      await page.keyboard.press('Escape')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+    })
+
+    await test.step('? searches backward', async () => {
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(3, 5))
+      await page.keyboard.press('Shift+/')
+      await page.keyboard.type('foo')
+      await page.keyboard.press('Enter')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 1 })
+      await page.keyboard.press('n')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 3, column: 5 })
+    })
+
+    await test.step('Escape restores the search origin', async () => {
+      await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(2, 5))
+      await page.keyboard.press('/')
+      await page.keyboard.type('foo')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 3, column: 5 })
+      await page.keyboard.press('Escape')
+      await expect.poll(() => cursor(page)).toEqual({ lineNumber: 2, column: 5 })
+    })
+
+    // Searching must never type into the buffer.
+    await expect.poll(() => text(page)).toBe(body)
+    await expect.poll(() => workbench.getContextKey<boolean>('findWidgetVisible')).toBe(false)
+  })
+
   test('turning the setting off restores plain typing', async ({ page, workbench }) => {
     await workbench.waitForRestored()
     await workbench.waitForBootstrapFocusSettled()

@@ -2,8 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { monaco } from '../../monaco/MonacoLoader.js'
 import { createVimEditorController } from '../vimEditorController.js'
+import { getLastVimSearch, resetVimSearchForTests } from '../vimSearch.js'
 import type { VimEditor, VimRange } from '../vimTypes.js'
 
 interface FakeConfig {
@@ -48,6 +50,10 @@ function createFakeEditor(lines: string[], doc: Document = document) {
   }
   const focusListeners: (() => void)[] = []
   const blurListeners: (() => void)[] = []
+  const modelListeners: (() => void)[] = []
+  const overlays: monaco.editor.IOverlayWidget[] = []
+  const decorationSets: monaco.editor.IModelDeltaDecoration[][] = []
+  let decorationClears = 0
   const container = doc.createElement('div')
   doc.body.appendChild(container)
   const model = {
@@ -56,6 +62,15 @@ function createFakeEditor(lines: string[], doc: Document = document) {
     getValueInRange: (range: VimRange) =>
       (lines[range.startLineNumber - 1] ?? '').slice(range.startColumn - 1, range.endColumn - 1),
     getEOL: () => '\n',
+  }
+  const decorations = {
+    set: vi.fn((next: monaco.editor.IModelDeltaDecoration[]) => {
+      decorationSets.push(next)
+      return []
+    }),
+    clear: vi.fn(() => {
+      decorationClears++
+    }),
   }
   const editor: VimEditor = {
     getModel: () => model,
@@ -85,14 +100,36 @@ function createFakeEditor(lines: string[], doc: Document = document) {
       blurListeners.push(listener)
       return { dispose: () => undefined }
     },
-    onDidChangeModel: () => ({ dispose: () => undefined }),
+    onDidChangeModel: (listener) => {
+      modelListeners.push(listener)
+      return { dispose: () => undefined }
+    },
+    focus: vi.fn(() => {
+      focusListeners.forEach((listener) => listener())
+    }),
+    addOverlayWidget: vi.fn((widget: monaco.editor.IOverlayWidget) => {
+      overlays.push(widget)
+      container.appendChild(widget.getDomNode())
+    }),
+    removeOverlayWidget: vi.fn((widget: monaco.editor.IOverlayWidget) => {
+      const index = overlays.indexOf(widget)
+      if (index >= 0) overlays.splice(index, 1)
+      widget.getDomNode().remove()
+    }),
+    createDecorationsCollection: vi.fn(
+      () => decorations as unknown as monaco.editor.IEditorDecorationsCollection,
+    ),
   }
   return {
     editor,
     focus: () => focusListeners.forEach((listener) => listener()),
     blur: () => blurListeners.forEach((listener) => listener()),
+    modelChange: () => modelListeners.forEach((listener) => listener()),
     selection: () => selection,
     container,
+    overlays: () => overlays,
+    decorationSets: () => decorationSets,
+    decorationClears: () => decorationClears,
   }
 }
 
@@ -139,6 +176,8 @@ function createInputMethodService() {
 }
 
 describe('createVimEditorController', () => {
+  beforeEach(() => resetVimSearchForTests())
+
   it('does nothing while disabled', () => {
     const fake = createFakeEditor(['abc', 'def'])
     const controller = createVimEditorController({
@@ -411,5 +450,247 @@ describe('createVimEditorController', () => {
       },
     ])
     controller.dispose()
+  })
+
+  function createSearchHarness(lines: string[]) {
+    const fake = createFakeEditor(lines)
+    const context = createContext()
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: createFakeConfig({ 'editor.vimMode.enabled': true }) as never,
+      contextKeyService: context as never,
+      statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
+    })
+    fake.focus()
+    return { fake, controller, context }
+  }
+
+  async function openSearchBox(
+    fake: ReturnType<typeof createFakeEditor>,
+    controller: ReturnType<typeof createVimEditorController>,
+    keyValue: string,
+  ): Promise<HTMLInputElement> {
+    expect(controller.handleKeyDown(key(keyValue))).toBe(true)
+    const overlay = fake.overlays()[0]
+    expect(overlay).toBeDefined()
+    const input = overlay!.getDomNode().querySelector('input')
+    expect(input).not.toBeNull()
+    await vi.waitFor(() => expect(document.activeElement).toBe(input))
+    // The real editor loses text focus when the input takes it; mirror that so
+    // the controller stops claiming Normal-mode strokes while typing.
+    fake.blur()
+    return input as HTMLInputElement
+  }
+
+  function type(input: HTMLInputElement, value: string): void {
+    input.value = value
+    input.dispatchEvent(new Event('input'))
+  }
+
+  function press(input: HTMLInputElement, keyValue: string): void {
+    input.dispatchEvent(
+      new KeyboardEvent('keydown', { key: keyValue, bubbles: true, cancelable: true }),
+    )
+  }
+
+  it('opens a find-style box, previews matches and commits on Enter', async () => {
+    const { fake, controller, context } = createSearchHarness(['one foo', 'two foo', 'three foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    expect(input.closest('.vim-search-widget')).not.toBeNull()
+    expect(context.get('vimSearchFocused')).toBe(true)
+
+    type(input, 'foo')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 5 })
+    expect(fake.decorationSets().at(-1)?.[0]?.options).toMatchObject({
+      inlineClassName: 'vim-search-match',
+    })
+
+    press(input, 'Enter')
+    expect(fake.overlays()[0]?.getDomNode().hidden).toBe(true)
+    expect(fake.editor.focus).toHaveBeenCalled()
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 5 })
+    expect(context.get('vimSearchFocused')).toBe(false)
+    controller.dispose()
+  })
+
+  it('repeats with n / N, honors counts and wraps', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo', 'foo', 'foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    // `/` skips the match under the cursor, exactly like Vim.
+    press(input, 'Enter')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 3, startColumn: 1 })
+    controller.handleKeyDown(key('3'))
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    controller.handleKeyDown(key('N'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('searches backward with ? and wraps', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo', 'foo'])
+    controller.handleKeyDown(key('G'))
+    const input = await openSearchBox(fake, controller, '?')
+    type(input, 'foo')
+    press(input, 'Enter')
+    // `?` skips the match under the cursor and lands on the previous one.
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 3, startColumn: 1 })
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('restores the origin on Escape', async () => {
+    const { fake, controller } = createSearchHarness(['foo bar', 'foo baz'])
+    controller.handleKeyDown(key('j'))
+    controller.handleKeyDown(key('$'))
+    const origin = fake.selection()
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+
+    press(input, 'Escape')
+    expect(fake.selection()).toEqual(origin)
+    expect(fake.overlays()[0]?.getDomNode().hidden).toBe(true)
+    expect(fake.editor.focus).toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  it('keeps the box open and shows a hint when nothing matches', async () => {
+    const { fake, controller } = createSearchHarness(['foo'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'zzz')
+    const node = fake.overlays()[0]!.getDomNode()
+    expect(node.querySelector('.vim-search-hint')?.textContent).toBeTruthy()
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+
+    press(input, 'Enter')
+    expect(node.hidden).toBe(false)
+    expect(node.querySelector('.vim-search-hint')?.textContent).toBeTruthy()
+    controller.dispose()
+  })
+
+  it('reuses the last pattern for an empty Enter', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo'])
+    let input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    press(input, 'Enter')
+
+    input = await openSearchBox(fake, controller, '/')
+    press(input, 'Enter')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    controller.handleKeyDown(key('n'))
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('commits the visible preview when the box loses focus', async () => {
+    const { fake, controller, context } = createSearchHarness(['foo bar'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    const clears = fake.decorationClears()
+
+    input.dispatchEvent(new Event('blur'))
+    expect(fake.overlays()[0]?.getDomNode().hidden).toBe(true)
+    // The confirmed match stays marked; only an explicit cancel clears it.
+    expect(fake.decorationClears()).toBe(clears)
+    expect(getLastVimSearch()).toEqual({ text: 'foo', direction: 'forward' })
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+    expect(context.get('vimSearchFocused')).toBe(false)
+    controller.dispose()
+  })
+
+  it('restores the origin when blurring with no match', async () => {
+    const { fake, controller } = createSearchHarness(['foo bar'])
+    controller.handleKeyDown(key('l'))
+    controller.handleKeyDown(key('l'))
+    const origin = fake.selection()
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'zzz')
+
+    input.dispatchEvent(new Event('blur'))
+    expect(fake.overlays()[0]?.getDomNode().hidden).toBe(true)
+    expect(fake.selection()).toEqual(origin)
+    controller.dispose()
+  })
+
+  it('ignores input events while the IME composition is still open', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo'])
+    const input = await openSearchBox(fake, controller, '/')
+
+    input.value = 'fo'
+    const composing = new Event('input') as InputEvent
+    Object.defineProperty(composing, 'isComposing', { value: true })
+    input.dispatchEvent(composing)
+    expect(fake.selection()).toMatchObject({ startLineNumber: 1, startColumn: 1 })
+
+    type(input, 'foo')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 2, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('swallows the Find family keys while the box owns focus', async () => {
+    const { fake, controller } = createSearchHarness(['foo bar', 'foo baz'])
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    const before = fake.selection()
+
+    const event = new KeyboardEvent('keydown', {
+      key: 'f',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    input.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(fake.overlays()[0]?.getDomNode().hidden).toBe(false)
+    expect(input.value).toBe('foo')
+    expect(fake.selection()).toEqual(before)
+    controller.dispose()
+  })
+
+  it('applies a count typed before / to the search', async () => {
+    const { fake, controller } = createSearchHarness(['foo', 'foo', 'foo', 'foo'])
+    controller.handleKeyDown(key('3'))
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 4, startColumn: 1 })
+
+    press(input, 'Enter')
+    expect(fake.selection()).toMatchObject({ startLineNumber: 4, startColumn: 1 })
+    controller.dispose()
+  })
+
+  it('cleans up on model change, disable and dispose', async () => {
+    const fake = createFakeEditor(['foo'])
+    const config = createFakeConfig({ 'editor.vimMode.enabled': true })
+    const controller = createVimEditorController({
+      editor: fake.editor,
+      configService: config as never,
+      contextKeyService: createContext() as never,
+      statusBarService: createStatusBar() as never,
+      inputMethodService: createInputMethodService() as never,
+    })
+    fake.focus()
+    const input = await openSearchBox(fake, controller, '/')
+    type(input, 'foo')
+    fake.modelChange()
+    expect(fake.overlays()[0]?.getDomNode().hidden).toBe(true)
+
+    config.set('editor.vimMode.enabled', false)
+    ;(config as unknown as { fire(key: string): void }).fire('editor.vimMode.enabled')
+    controller.dispose()
+    expect(fake.overlays()).toHaveLength(0)
   })
 })

@@ -1,0 +1,46 @@
+.vim-search-widget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60%;
+  margin: 8px 16px 0 0;
+  padding: 3px 8px;
+  border: 1px solid var(--vscode-editorGroup-border);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background);
+  color: var(--vscode-editor-foreground);
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+  font: 12px monospace;
+}
+
+.vim-search-widget[hidden] {
+  display: none;
+}
+
+.vim-search-prefix {
+  opacity: 0.8;
+}
+
+.vim-search-input {
+  flex: 1;
+  min-width: 140px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--vscode-input-foreground);
+  font: inherit;
+}
+
+.vim-search-hint {
+  color: var(--vscode-errorForeground);
+  white-space: nowrap;
+}
+
+.vim-search-hint:empty {
+  display: none;
+}
+
+.vim-search-match {
+  background-color: var(--vscode-editor-findMatchBackground);
+}

@@ -295,6 +295,50 @@ describe('reduceVimKey', () => {
     expect(result.handled).toBe(false)
     expect(result.state.pendingOperator).toBeNull()
   })
+
+  it('opens forward and backward search, carrying the count', () => {
+    expect(press(INITIAL_VIM_STATE, '/').command).toEqual({
+      type: 'search-open',
+      direction: 'forward',
+      count: 1,
+    })
+    expect(press(INITIAL_VIM_STATE, '?').command).toEqual({
+      type: 'search-open',
+      direction: 'backward',
+      count: 1,
+    })
+    expect(press(press(INITIAL_VIM_STATE, '3').state, '/').command).toEqual({
+      type: 'search-open',
+      direction: 'forward',
+      count: 3,
+    })
+    expect(press(INITIAL_VIM_STATE, '/').handled).toBe(true)
+  })
+
+  it('repeats search with n / N and honors counts', () => {
+    expect(press(INITIAL_VIM_STATE, 'n').command).toEqual({
+      type: 'search-repeat',
+      reverse: false,
+      count: 1,
+    })
+    expect(press(INITIAL_VIM_STATE, 'N').command).toEqual({
+      type: 'search-repeat',
+      reverse: true,
+      count: 1,
+    })
+    const counted = press(press(INITIAL_VIM_STATE, '3').state, 'n')
+    expect(counted.command).toEqual({ type: 'search-repeat', reverse: false, count: 3 })
+  })
+
+  it('cancels a pending operator instead of combining it with search', () => {
+    const armed = press(INITIAL_VIM_STATE, 'd').state
+    for (const searchKey of ['/', '?', 'n', 'N']) {
+      const result = press(armed, searchKey)
+      expect(result.handled).toBe(true)
+      expect(result.command).toBeNull()
+      expect(result.state.pendingOperator).toBeNull()
+    }
+  })
 })
 
 describe('isVimPagingStroke', () => {

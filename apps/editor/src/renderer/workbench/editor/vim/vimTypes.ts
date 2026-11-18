@@ -6,9 +6,14 @@
  *  keymap and motions can be unit-tested under node without an editor instance.
  *--------------------------------------------------------------------------------------------*/
 
+import type { monaco } from '../monaco/MonacoLoader.js'
+
 export type VimMode = 'normal' | 'insert'
 
 export type VimOperator = 'd' | 'y'
+
+/** Direction of a `/` or `?` search. */
+export type VimSearchDirection = 'forward' | 'backward'
 
 /** A motion is linewise when it targets whole lines (j/k/gg/G/{/}), charwise otherwise. */
 export type VimMotionKind = 'linewise' | 'charwise'
@@ -77,6 +82,14 @@ export type VimCommand =
   | { readonly type: 'paste'; readonly count: number; readonly before: boolean }
   | { readonly type: 'undo' }
   | { readonly type: 'join-lines'; readonly count: number }
+  /** `/` and `?`: open the search box in the given direction. */
+  | {
+      readonly type: 'search-open'
+      readonly direction: VimSearchDirection
+      readonly count: number
+    }
+  /** `n` and `N`: repeat the last search; `reverse` flips its direction. */
+  | { readonly type: 'search-repeat'; readonly reverse: boolean; readonly count: number }
 
 export interface VimKeyInput {
   readonly key: string
@@ -155,4 +168,10 @@ export interface VimEditor {
   onDidFocusEditorText(listener: () => void): { dispose(): void }
   onDidBlurEditorText(listener: () => void): { dispose(): void }
   onDidChangeModel(listener: () => void): { dispose(): void }
+  focus(): void
+  addOverlayWidget(widget: monaco.editor.IOverlayWidget): void
+  removeOverlayWidget(widget: monaco.editor.IOverlayWidget): void
+  createDecorationsCollection(
+    decorations?: monaco.editor.IModelDeltaDecoration[],
+  ): monaco.editor.IEditorDecorationsCollection
 }

@@ -70,6 +70,13 @@ function resolveSearchViewHost(
  */
 const FIND_PRECONDITION = 'editorFocus || hasActiveEditor'
 
+/**
+ * The Vim `/`/`?` box is a real input inside `.monaco-editor`, so `editorFocus`
+ * stays true and Ctrl+F/F3 would otherwise close it and discard the typed
+ * pattern. The controller raises this key while that input owns the keyboard.
+ */
+const VIM_SEARCH_IDLE = '!vimSearchFocused'
+
 /** Single-line selection text from the active editor, for seeding the search box. */
 function readEditorSelection(accessor: ServicesAccessor): string {
   const groups = accessor.get(IEditorGroupsService)
@@ -195,7 +202,7 @@ export class FindInFileAction extends Action2 {
       id: FindInFileAction.ID,
       title: localize2('action.find.title', 'Find'),
       category: localize2('command.category.editor', 'Editor'),
-      keybinding: { primary: 'ctrl+f' },
+      keybinding: { primary: 'ctrl+f', when: VIM_SEARCH_IDLE },
       precondition: FIND_PRECONDITION,
       f1: true,
     })
@@ -212,7 +219,7 @@ export class FindReplaceInFileAction extends Action2 {
       id: FindReplaceInFileAction.ID,
       title: localize2('action.replace.title', 'Replace'),
       category: localize2('command.category.editor', 'Editor'),
-      keybinding: { primary: 'ctrl+h' },
+      keybinding: { primary: 'ctrl+h', when: VIM_SEARCH_IDLE },
       precondition: FIND_PRECONDITION,
       f1: true,
     })
@@ -229,7 +236,7 @@ export class FindNextAction extends Action2 {
       id: FindNextAction.ID,
       title: localize2('action.findNext.title', 'Find Next'),
       category: localize2('command.category.editor', 'Editor'),
-      keybinding: { primary: 'f3' },
+      keybinding: { primary: 'f3', when: VIM_SEARCH_IDLE },
       precondition: FIND_PRECONDITION,
       f1: true,
     })
@@ -246,7 +253,7 @@ export class FindPreviousAction extends Action2 {
       id: FindPreviousAction.ID,
       title: localize2('action.findPrevious.title', 'Find Previous'),
       category: localize2('command.category.editor', 'Editor'),
-      keybinding: { primary: 'shift+f3' },
+      keybinding: { primary: 'shift+f3', when: VIM_SEARCH_IDLE },
       precondition: FIND_PRECONDITION,
       f1: true,
     })
