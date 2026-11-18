@@ -319,6 +319,7 @@ function SessionRow({
   onRename,
   onToggleArchive,
   onTogglePin,
+  onOpenReport,
   onContextMenu,
   rowProps,
   rate,
@@ -338,6 +339,8 @@ function SessionRow({
   onRename: (() => void) | undefined
   onToggleArchive: () => void
   onTogglePin: () => void
+  /** Opens the trigger-run report; absent for sessions no trigger started. */
+  onOpenReport: (() => void) | undefined
   onContextMenu: (e: ReactMouseEvent) => void
   /** Identity + ARIA + focus-on-click from useFlatListNavigation. */
   rowProps: IFlatListRowProps
@@ -420,15 +423,20 @@ function SessionRow({
             count={sideTaskCount}
             testId={`session-row-${entry.id}-side-task-count`}
           />
-          {automationLabel !== undefined ? (
-            <Zap
-              size={12}
-              strokeWidth={2}
+          {automationLabel !== undefined && onOpenReport !== undefined ? (
+            <button
+              type="button"
               className={styles['sessionRowAutomation']}
               data-testid={`session-row-${entry.id}-automation`}
               aria-label={automationLabel}
               data-tooltip={automationLabel}
-            />
+              onClick={(e) => {
+                e.stopPropagation()
+                onOpenReport()
+              }}
+            >
+              <Zap size={12} strokeWidth={2} />
+            </button>
           ) : null}
           {isPinned ? (
             <Pin
@@ -1056,6 +1064,14 @@ export function SessionListBody({
                     { sessionId: entry.id },
                   )
                 }
+            const onOpenReport =
+              entry.automation !== undefined
+                ? () => {
+                    void commandService.executeCommand(ViewTriggerReportAction.ID, {
+                      sessionId: entry.id,
+                    })
+                  }
+                : undefined
             const onRemove = () => {
               void (async () => {
                 // Snapshot the subtree before the confirmation dialog: it can
@@ -1124,17 +1140,13 @@ export function SessionListBody({
                     run: onRename,
                   })
                 }
-                if (entry.automation !== undefined) {
+                if (onOpenReport !== undefined) {
                   items.push({
                     kind: 'item',
                     id: 'view-report',
                     icon: 'open-preview',
                     label: localize('acp.sessions.viewReport', 'View Report'),
-                    run: () => {
-                      void commandService.executeCommand(ViewTriggerReportAction.ID, {
-                        sessionId: entry.id,
-                      })
-                    },
+                    run: onOpenReport,
                   })
                 }
                 // A history-only row has no local message list; forking it from
@@ -1232,6 +1244,7 @@ export function SessionListBody({
                 onRename={onRename}
                 onToggleArchive={onToggleArchive}
                 onTogglePin={onTogglePin}
+                onOpenReport={onOpenReport}
                 onContextMenu={openContextMenu}
                 rowProps={nav.getRowProps(index)}
                 onActivate={() => activateEntry(entry)}

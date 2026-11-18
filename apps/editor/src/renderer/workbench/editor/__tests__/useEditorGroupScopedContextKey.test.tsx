@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { StrictMode, type ReactNode } from 'react'
 import { renderHook } from '@testing-library/react'
+import { act } from 'react'
 import {
   ContextKeyService,
   EditorInput,
+  Event,
   GroupDirection,
   IContextKeyService,
   IUriIdentityService,
@@ -11,8 +13,16 @@ import {
   ServiceCollection,
   URI,
   UriIdentityService,
+  observableValue,
   type IDisposable,
 } from '@universe-editor/platform'
+import { AcpSessionEditorInput } from '../../../services/acp/session/acpSessionEditorInput.js'
+import type { IAcpSessionService } from '../../../services/acp/session/acpSessionService.js'
+import type {
+  AcpSessionHistoryEntry,
+  IAcpSessionHistoryService,
+} from '../../../services/acp/session/acpSessionHistory.js'
+import type { IAcpChatWidgetService } from '../../../services/acp/session/acpChatWidgetService.js'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { ServicesContext } from '../../useService.js'
 import { useEditorGroupScopedContextKey } from '../useEditorGroupScopedContextKey.js'
@@ -120,5 +130,65 @@ describe('useEditorGroupScopedContextKey — per-group position keys', () => {
     expect(result.current.get('hasActiveEditor')).toBe(false)
     expect(result.current.get('editorIsOpen')).toBe(false)
     expect(result.current.get('activeEditorGroupEmpty')).toBe(true)
+  })
+})
+
+function makeSessionInput() {
+  const entries = observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', [])
+  const history = {
+    _serviceBrand: undefined,
+    entries,
+    get: (id: string) => entries.get().find((entry) => entry.id === id),
+  } as unknown as IAcpSessionHistoryService
+  const sessions = {
+    _serviceBrand: undefined,
+    getById: () => undefined,
+  } as unknown as IAcpSessionService
+  const chatWidget = { _serviceBrand: undefined } as unknown as IAcpChatWidgetService
+  const workspace = { _serviceBrand: undefined, current: null, onDidChangeWorkspace: Event.None }
+  const input = new AcpSessionEditorInput(
+    'durable-1',
+    'fake',
+    undefined,
+    sessions,
+    history,
+    chatWidget,
+    workspace as never,
+    { _serviceBrand: undefined, platform: 'linux' } as never,
+  )
+  disposables.push(input)
+  return { input, entries }
+}
+
+describe('useEditorGroupScopedContextKey — session automation', () => {
+  it('follows acpSessionHasAutomation when history hydrates after the tab is active', () => {
+    const groups = setup()
+    const g1 = groups.activeGroup
+    const { input, entries } = makeSessionInput()
+    g1.openEditor(input)
+
+    const { result } = renderHook(() => useEditorGroupScopedContextKey(g1), {
+      wrapper: makeWrapper(),
+    })
+    expect(result.current.get('acpSessionHasAutomation')).toBe(false)
+
+    act(() => {
+      entries.set(
+        [
+          {
+            id: 'durable-1',
+            agentId: 'fake',
+            sessionIdOnAgent: 'durable-1',
+            title: 'session',
+            createdAt: 1,
+            lastUsedAt: 1,
+            automation: { triggerId: 't', triggerName: 'T', eventKey: 'e', runId: 'r' },
+          } as AcpSessionHistoryEntry,
+        ],
+        undefined,
+      )
+    })
+
+    expect(result.current.get('acpSessionHasAutomation')).toBe(true)
   })
 })

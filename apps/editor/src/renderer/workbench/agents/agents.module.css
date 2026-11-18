@@ -2182,7 +2182,18 @@
 
 .sessionRowAutomation {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: none;
   color: var(--vscode-charts-purple, #b180d7);
+  cursor: pointer;
+}
+
+.sessionRowAutomation:hover {
+  background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
 }
 
 .sessionRowAutomationSummary {
@@ -2599,6 +2610,23 @@
 .sideTaskParentChip:hover {
   background: var(--vscode-list-hoverBackground, #2a2d2e);
   color: inherit;
+}
+
+/* Trigger-run report entry; purple matches the Sessions list trigger badge. */
+.triggerReportChip {
+  composes: sideTaskParentChip;
+}
+
+.triggerReportChip > svg {
+  color: var(--vscode-charts-purple, #b180d7);
+}
+
+.triggerReportChipVerdict {
+  font-weight: 600;
+}
+
+.triggerReportChip[data-verdict='escalate'] .triggerReportChipVerdict {
+  color: var(--vscode-editorWarning-foreground, #cca700);
 }
 
 /* Scope badge pinned above the chat: the sub-project directory an agent session

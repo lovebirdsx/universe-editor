@@ -826,6 +826,12 @@ export class ViewTriggerReportAction extends Action2 {
           title: localize2('acp.sessions.viewReport', 'View Report'),
         },
         {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}' && acpSessionHasAutomation`,
+          group: 'navigation',
+          order: 6,
+        },
+        {
           id: MenuId.CommandPalette,
           when: TRIGGER_REPORT_PALETTE_WHEN,
         },
@@ -839,6 +845,7 @@ export class ViewTriggerReportAction extends Action2 {
     const editors = accessor.get(IEditorService)
     const sessions = accessor.get(IAcpSessionService)
     const history = accessor.get(IAcpSessionHistoryService)
+    const groups = accessor.get(IEditorGroupsService)
     const args = argsRecord(arg)
     const explicitRunId = stringArg(args, 'runId')
     // A notification supplies the run id; never borrow an unrelated active
@@ -846,7 +853,7 @@ export class ViewTriggerReportAction extends Action2 {
     const sessionId =
       explicitRunId !== undefined
         ? stringArg(args, 'sessionId')
-        : resolveSessionTargetId(args, editors, sessions)
+        : (groupSessionId(args, groups) ?? resolveSessionTargetId(args, editors, sessions))
     const live = sessionId !== undefined ? sessions.getById(sessionId) : undefined
     const durableId = live?.sessionIdOnAgent.get() ?? sessionId
     const historyEntry = durableId !== undefined ? history.get(durableId) : undefined
@@ -882,6 +889,16 @@ export class ViewTriggerReportAction extends Action2 {
       { pinned: true },
     )
   }
+}
+
+/** The editor title passes its own group, which need not be the workbench-active one. */
+function groupSessionId(
+  args: Record<string, unknown>,
+  groups: IEditorGroupsService,
+): string | undefined {
+  if (typeof args['groupId'] !== 'number') return undefined
+  const editor = groups.getGroup(args['groupId'])?.activeEditor
+  return editor instanceof AcpSessionEditorInput ? editor.sessionId : undefined
 }
 
 function argsRecord(value: unknown): Record<string, unknown> {

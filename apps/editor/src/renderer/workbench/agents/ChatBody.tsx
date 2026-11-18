@@ -94,6 +94,7 @@ import { RecoveryBar } from './RecoveryBar.js'
 import { StickyPlanBar } from './StickyPlanBar.js'
 import { StickyUserMessageBar } from './StickyUserMessageBar.js'
 import { SessionCwdPill } from './SessionCwdPill.js'
+import { TriggerReportChip } from './TriggerReportChip.js'
 import { SideTasksBar, SideTaskQuoteBar, SideTaskParentBar } from './SideTasksBar.js'
 import { PromptInput } from './PromptInput.js'
 import { ForeignSessionFooter } from './ForeignSessionPreview.js'
@@ -583,6 +584,7 @@ function ChatSessionBody({
               scrollContainerRef={scrollContainerRef}
               handleRef={handleRef}
             />
+            <TriggerReportChip key={`report:${session.id}`} session={session} />
             <SideTaskParentBar key={`parent:${session.id}`} session={session} />
             <SideTaskQuoteBar key={`quote:${session.id}`} session={session} />
             <SideTasksBar key={`sideTasks:${session.id}`} session={session} />

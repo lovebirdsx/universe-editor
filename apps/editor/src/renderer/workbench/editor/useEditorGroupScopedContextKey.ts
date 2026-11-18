@@ -14,12 +14,14 @@ import {
   IUriIdentityService,
   JSONContributionRegistry,
   markAsSingleton,
+  MutableDisposable,
   type IEditorGroup,
   type IScopedContextKeyService,
 } from '@universe-editor/platform'
 import { IDirtyDiffNavigationService } from '../../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../../services/scm/ScmDecorationsService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import { useRemoteAuthority } from '../useRemoteAuthority.js'
 import { useOptionalService, useService } from '../useService.js'
 import { editorScopedContextValues } from './editorScopedContext.js'
@@ -67,10 +69,27 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       const values = readValues()
       for (const [key, value] of Object.entries(values)) s.set(key, value)
     }
-    sync()
+    // History hydration can reveal a session's automation after its tab is
+    // already active; the editor title's "View Report" button depends on it.
+    const automationWatch = new MutableDisposable()
+    const watchAutomation = () => {
+      const editor = group.activeEditor
+      if (!(editor instanceof AcpSessionEditorInput)) {
+        automationWatch.clear()
+        sync()
+        return
+      }
+      // The autorun's first run performs the sync for this editor change.
+      automationWatch.value = autorun((reader) => {
+        editor.hasAutomation.read(reader)
+        sync()
+      })
+    }
+    watchAutomation() // also performs the initial sync
     const d = markAsSingleton(
       combinedDisposable(
-        group.onDidActiveEditorChange(sync),
+        automationWatch,
+        group.onDidActiveEditorChange(watchAutomation),
         group.onDidChangeModel(sync),
         dirtyDiff?.onDidChangeState(sync) ?? { dispose: () => {} },
         scmDecorations

@@ -1515,6 +1515,24 @@ describe('SessionListBody — automation provenance', () => {
     })
   })
 
+  it('opens the report from the trigger badge without activating the row', () => {
+    addEntry(harness.history, 'auto-1', 'triggered session', 1000, 'fake', '/work', {
+      automation: {
+        triggerId: 'swarm-triage',
+        triggerName: 'Swarm 分诊',
+        eventKey: 'swarm:42',
+        runId: 'run-1',
+      },
+    })
+
+    fireEvent.click(screen.getByTestId('session-row-auto-1-automation'))
+
+    expect(harness.executeCommand).toHaveBeenCalledWith('workbench.action.triggers.viewReport', {
+      sessionId: 'auto-1',
+    })
+    expect(sessionTabs(harness.groups)).toEqual([])
+  })
+
   it('hides View Report on a manual row', () => {
     addEntry(harness.history, 'manual-1', 'manual session', 1000)
     fireEvent.contextMenu(screen.getByTestId('session-row-manual-1'), { detail: 1 })

@@ -41,6 +41,9 @@ import { ILogFilesService } from '../../../shared/ipc/services.js'
 import type { TriggerSummary } from '../../../shared/triggers/types.js'
 import { ACP_SESSION_EDITOR_ACTIVE_WHEN } from '../_agentShared.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
+import { IAcpSessionService } from '../../services/acp/session/acpSessionService.js'
+import { IAcpSessionHistoryService } from '../../services/acp/session/acpSessionHistory.js'
+import { AcpSessionEditorInput } from '../../services/acp/session/acpSessionEditorInput.js'
 import {
   OpenTriggersConfigAction,
   ViewTriggerReportAction,
@@ -83,6 +86,51 @@ describe('ViewTriggerReportAction menu entries', () => {
     const paletteWhen = whenOf(MenuId.CommandPalette) ?? ''
     expect(paletteWhen).toContain(ACP_SESSION_EDITOR_ACTIVE_WHEN)
     expect(paletteWhen).toContain('acpSessionHasAutomation')
+
+    expect(menuItem(MenuId.EditorTitle)).toMatchObject({ group: 'navigation' })
+    const titleWhen = whenOf(MenuId.EditorTitle) ?? ''
+    expect(titleWhen).toContain("activeEditorType == 'acp.session'")
+    expect(titleWhen).toContain('acpSessionHasAutomation')
+  })
+
+  it("opens the report of the clicked title bar group's session, not the active one", () => {
+    const groupSession = Object.assign(Object.create(AcpSessionEditorInput.prototype), {
+      sessionId: 'group-session',
+    }) as AcpSessionEditorInput
+    const activeSession = Object.assign(Object.create(AcpSessionEditorInput.prototype), {
+      sessionId: 'active-session',
+    }) as AcpSessionEditorInput
+    const openEditor = vi.fn()
+    const automation = (runId: string) => ({
+      triggerId: 't',
+      triggerName: 'T',
+      eventKey: 'e',
+      runId,
+    })
+    const services = new Map<unknown, unknown>([
+      [IEditorService, { activeEditor: { get: () => activeSession }, openEditor }],
+      [IAcpSessionService, { getById: () => undefined, activeSession: { get: () => undefined } }],
+      [
+        IAcpSessionHistoryService,
+        {
+          get: (id: string) =>
+            id === 'group-session'
+              ? { automation: automation('run-group') }
+              : { automation: automation('run-active') },
+        },
+      ],
+      [
+        IEditorGroupsService,
+        { getGroup: (id: number) => (id === 2 ? { activeEditor: groupSession } : undefined) },
+      ],
+    ])
+    const accessor = { get: (id: unknown) => services.get(id) } as unknown as ServicesAccessor
+
+    new ViewTriggerReportAction().run(accessor, { groupId: 2 })
+
+    expect(openEditor).toHaveBeenCalledTimes(1)
+    const input = openEditor.mock.calls[0]?.[0] as { target?: unknown }
+    expect(input.target).toMatchObject({ runId: 'run-group', sessionId: 'group-session' })
   })
 })
 
